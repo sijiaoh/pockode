@@ -19,8 +19,22 @@ export default function SessionsTab() {
 		createSession,
 		deleteSession,
 		refresh,
+		hasMore,
+		isLoadingMore,
+		pageError,
+		autoLoad,
+		hasPaged,
+		loadMore,
+		retryLoadMore,
 	} = useSession({ routeSessionId });
 	const { isActive } = useSidebarRefresh("sessions", refresh);
+
+	// One control in every state, so pressing it after a failure is the retry.
+	const handleLoadMore = useCallback(() => {
+		if (pageError) retryLoadMore();
+		loadMore();
+	}, [pageError, retryLoadMore, loadMore]);
+
 	const handleSelectSession = useCallback(
 		(id: string) => {
 			navigate(
@@ -74,6 +88,12 @@ export default function SessionsTab() {
 						currentSessionId={currentSessionId}
 						onSelectSession={handleSelectSession}
 						onDeleteSession={deleteSession}
+						hasMore={hasMore}
+						isLoadingMore={isLoadingMore}
+						pageError={pageError}
+						autoLoad={autoLoad}
+						hasPaged={hasPaged}
+						onLoadMore={handleLoadMore}
 					/>
 				)}
 			</div>

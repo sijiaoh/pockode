@@ -515,6 +515,8 @@ isolate itself, following `gitPanelStore`'s shape; no app code calls it.
 
 ## 7. Deliberately not done
 
+- **Paging.** Not here: the archive pages and the `Current` segment does not,
+  for reasons that belong with the other list's — [list-paging-ui.md](list-paging-ui.md).
 - **Search or filter over the archive.** One tap reaches it and it is sorted
   newest-first; a project large enough to need search is not a project this page
   has, and a search box would cost the screen its simplest line.

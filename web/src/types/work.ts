@@ -106,14 +106,48 @@ export interface Comment {
 	created_at: string;
 }
 
+/**
+ * The `Current` segment of the project list: every row it draws plus everything
+ * those rows make claims about — a story's tasks for its `{closed}/{total}`, a
+ * task's story for its `in: <title>` — and nothing closed. The archive is
+ * fetched a page at a time (`work.list.archive`).
+ *
+ * `Current` itself is never paged: its group counts and the Project tab's
+ * attention dot are read off it, and an "is there any" asked of a page answers
+ * no for a list nobody has read that far (docs/list-paging-ui.md §2.1, §4.1).
+ */
 export interface WorkListSubscribeResult {
+	items: WorkListItem[];
+	/**
+	 * How many rows of the *Not running* group the server held back. The group's
+	 * heading adds it to the rows it received, so the count it shows stays the
+	 * whole group's; absent or zero means the group arrived whole.
+	 */
+	not_running_hidden?: number;
+}
+
+/** One page of the archive, and the cursor that reaches the page after it. */
+export interface WorkListArchiveResult {
+	items: WorkListItem[];
+	/** Opaque — handed back to the server unread. */
+	next_cursor?: string;
+	has_more?: boolean;
+}
+
+/** The `Current` segment with the *Not running* cap lifted, replacing it. */
+export interface WorkListEarlierResult {
 	items: WorkListItem[];
 }
 
 export type WorkListChangedNotification =
 	| { id: string; operation: "create" | "update"; work: WorkListItem }
 	| { id: string; operation: "delete"; workId: string }
-	| { id: string; operation: "sync"; works: WorkListItem[] };
+	| {
+			id: string;
+			operation: "sync";
+			works: WorkListItem[];
+			not_running_hidden?: number;
+	  };
 
 /**
  * What a work item consumed, as the sessions beneath it reported it.
@@ -150,6 +184,16 @@ export interface WorkDetailSubscribeResult {
 	usage: WorkUsage;
 	/** Derived like the row's, and on the detail for the same reason usage is. */
 	activity: Activity;
+	/**
+	 * Every task under this item, and the story above it.
+	 *
+	 * They come with the detail rather than being looked up in the work list,
+	 * because that list is the `Current` segment and holds no closed work: a
+	 * closed story opened from the archive — or reloaded on — would otherwise
+	 * look childless (docs/list-paging-ui.md §2.2).
+	 */
+	children: WorkListItem[];
+	parent?: WorkListItem;
 }
 
 export interface WorkDetailChangedNotification {
@@ -158,4 +202,6 @@ export interface WorkDetailChangedNotification {
 	comments: Comment[];
 	usage: WorkUsage;
 	activity: Activity;
+	children: WorkListItem[];
+	parent?: WorkListItem;
 }

@@ -6,6 +6,7 @@ import type {
 	Work,
 	WorkDetailChangedNotification,
 	WorkDetailSubscribeResult,
+	WorkListItem,
 	WorkUsage,
 } from "../types/work";
 import { useSubscription } from "./useSubscription";
@@ -26,6 +27,11 @@ export function useWorkDetailSubscription(workId: string) {
 	// Null only before the first snapshot: the server always sends a usage, so a
 	// work item that spent nothing carries an empty aggregate rather than none.
 	const [usage, setUsage] = useState<WorkUsage | null>(null);
+	// The two relations the page draws. They arrive with the detail rather than
+	// being read out of the work list, which is the `Current` segment and holds
+	// no closed work (docs/list-paging-ui.md §2.2).
+	const [children, setChildren] = useState<WorkListItem[]>([]);
+	const [parent, setParent] = useState<WorkListItem | null>(null);
 	const [loading, setLoading] = useState(true);
 	const [error, setError] = useState<string | null>(null);
 
@@ -38,6 +44,8 @@ export function useWorkDetailSubscription(workId: string) {
 			setActivity("idle");
 			setComments([]);
 			setUsage(null);
+			setChildren([]);
+			setParent(null);
 			setLoading(true);
 			setError(null);
 		}
@@ -55,6 +63,8 @@ export function useWorkDetailSubscription(workId: string) {
 			setActivity(normalizeActivity(params.activity));
 			setComments(params.comments);
 			setUsage(params.usage);
+			setChildren(params.children ?? []);
+			setParent(params.parent ?? null);
 		},
 		[],
 	);
@@ -64,6 +74,8 @@ export function useWorkDetailSubscription(workId: string) {
 		setActivity(normalizeActivity(initial.activity));
 		setComments(initial.comments);
 		setUsage(initial.usage);
+		setChildren(initial.children ?? []);
+		setParent(initial.parent ?? null);
 		setLoading(false);
 		setError(null);
 	}, []);
@@ -73,6 +85,8 @@ export function useWorkDetailSubscription(workId: string) {
 		setActivity("idle");
 		setComments([]);
 		setUsage(null);
+		setChildren([]);
+		setParent(null);
 		setLoading(true);
 		setError(null);
 	}, []);
@@ -96,7 +110,16 @@ export function useWorkDetailSubscription(workId: string) {
 	);
 
 	return useMemo(
-		() => ({ work, activity, comments, usage, loading, error }),
-		[work, activity, comments, usage, loading, error],
+		() => ({
+			work,
+			activity,
+			comments,
+			usage,
+			children,
+			parent,
+			loading,
+			error,
+		}),
+		[work, activity, comments, usage, children, parent, loading, error],
 	);
 }

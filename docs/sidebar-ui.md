@@ -392,6 +392,10 @@ are flagged here rather than left where they were diagnosed:
   `Sheet` and every sheet in the app benefits — including
   `WorktreeCreateSheet`, which belongs to neither panel. The root cause is
   written up once, in [git-ui.md](git-ui.md#branch).
+- **The session list pages, and that is written up elsewhere.** It is not a
+  Files or Git rule, and it applies to the project screen too, so the session
+  sidebar's infinite scroll — and what it does to the live updates the list is
+  pushed — lives in [list-paging-ui.md](list-paging-ui.md).
 - **Sticky group headers are still owed a check on a real device.** The
   reasoning behind them is from source and spec, not from a rendered page.
   [git-ui.md](git-ui.md#group-headers) states the check and the one-line

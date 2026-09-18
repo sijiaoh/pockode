@@ -101,6 +101,39 @@ func TestFileStore_List(t *testing.T) {
 	}
 }
 
+// Paging cuts the list at a cursor, and a cursor into an order that is not
+// total cannot say where it is. Two sessions created inside the same clock tick
+// are the case that has no recency to go on.
+func TestFileStore_List_OrdersTiesByID(t *testing.T) {
+	store, _ := NewFileStore(t.TempDir())
+
+	at := time.Now()
+	for _, id := range []string{"session-a", "session-b", "session-c"} {
+		sess, err := store.Create(ctx, id, CreateSpec{})
+		if err != nil {
+			t.Fatalf("create: %v", err)
+		}
+		if err := store.updateMeta(ctx, sess.ID, func(m *SessionMeta) (bool, error) {
+			m.UpdatedAt = at
+			return true, nil
+		}); err != nil {
+			t.Fatalf("stamp: %v", err)
+		}
+	}
+
+	sessions, err := store.List()
+	if err != nil {
+		t.Fatalf("List failed: %v", err)
+	}
+	got := []string{sessions[0].ID, sessions[1].ID, sessions[2].ID}
+	want := []string{"session-c", "session-b", "session-a"}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("order = %v, want %v", got, want)
+		}
+	}
+}
+
 func TestFileStore_Delete(t *testing.T) {
 	store, _ := NewFileStore(t.TempDir())
 

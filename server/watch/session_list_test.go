@@ -125,10 +125,11 @@ func TestSessionListWatcher_Subscribe(t *testing.T) {
 	}
 	w := NewSessionListWatcher(store, nil)
 
-	sessions, err := w.Subscribe("client-1", nil, SessionListFilter{})
+	snapshot, err := w.Subscribe("client-1", nil, SessionListFilter{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
+	sessions := snapshot.Sessions
 
 	if len(sessions) != 2 {
 		t.Errorf("expected 2 sessions, got %d", len(sessions))
@@ -456,10 +457,11 @@ func TestSessionListWatcher_Subscribe_RowsCarryTheirWorkID(t *testing.T) {
 	store, works := sessionsWithOneWorkSession()
 	w := NewSessionListWatcher(store, works)
 
-	items, err := w.Subscribe("client-1", nil, SessionListFilter{})
+	snapshot, err := w.Subscribe("client-1", nil, SessionListFilter{})
 	if err != nil {
 		t.Fatalf("subscribe: %v", err)
 	}
+	items := snapshot.Sessions
 
 	byID := map[string]string{}
 	for _, item := range items {
@@ -477,10 +479,11 @@ func TestSessionListWatcher_Subscribe_ExcludeWorkSessions(t *testing.T) {
 	store, works := sessionsWithOneWorkSession()
 	w := NewSessionListWatcher(store, works)
 
-	items, err := w.Subscribe("client-1", nil, SessionListFilter{ExcludeWorkSessions: true})
+	snapshot, err := w.Subscribe("client-1", nil, SessionListFilter{ExcludeWorkSessions: true})
 	if err != nil {
 		t.Fatalf("subscribe: %v", err)
 	}
+	items := snapshot.Sessions
 
 	if len(items) != 1 || items[0].ID != "sess-chat" {
 		t.Fatalf("expected only the plain chat session, got %+v", items)

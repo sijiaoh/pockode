@@ -278,6 +278,8 @@ func (h *rpcMethodHandler) handleWorkDetailSubscribe(ctx context.Context, conn *
 		Comments: detail.Comments,
 		Usage:    detail.Usage,
 		Activity: detail.Activity,
+		Children: detail.Children,
+		Parent:   detail.Parent,
 	}
 
 	if err := conn.Reply(ctx, req.ID, result); err != nil {
@@ -292,7 +294,7 @@ func (h *rpcMethodHandler) handleWorkListSubscribe(ctx context.Context, conn *js
 	}
 
 	notifier := h.state.getNotifier()
-	items, err := h.workListWatcher.Subscribe(id, notifier)
+	snapshot, err := h.workListWatcher.Subscribe(id, notifier)
 	if err != nil {
 		h.replySubscriptionError(ctx, conn, req.ID, err, "failed to subscribe to work list")
 		return
@@ -301,10 +303,61 @@ func (h *rpcMethodHandler) handleWorkListSubscribe(ctx context.Context, conn *js
 	h.log.Debug("subscribed", "watcher", "work list", "watchId", id)
 
 	result := rpc.WorkListSubscribeResult{
-		Items: items,
+		Items:            snapshot.Items,
+		NotRunningHidden: snapshot.NotRunningHidden,
 	}
 
 	if err := conn.Reply(ctx, req.ID, result); err != nil {
 		h.log.Error("failed to send work list subscribe response", "error", err)
+	}
+}
+
+// handleWorkListArchive serves one page of closed work.
+//
+// It names the subscription rather than standing alone so that a page and the
+// list it belongs to cannot come apart, and so that an id the server has
+// dropped is refused as invalid params — which tells the client to subscribe
+// afresh instead of offering a Retry that can only fail again.
+func (h *rpcMethodHandler) handleWorkListArchive(ctx context.Context, conn *jsonrpc2.Conn, req *jsonrpc2.Request) {
+	var params rpc.WorkListArchiveParams
+	if err := unmarshalParams(req, &params); err != nil {
+		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "invalid params")
+		return
+	}
+
+	page, err := h.workListWatcher.Archive(params.ID, params.Cursor, params.Limit)
+	if err != nil {
+		h.replyListPageError(ctx, conn, req.ID, err, "failed to read the work archive page")
+		return
+	}
+
+	result := rpc.WorkListArchiveResult{
+		Items:      page.Items,
+		NextCursor: page.NextCursor,
+		HasMore:    page.HasMore,
+	}
+
+	if err := conn.Reply(ctx, req.ID, result); err != nil {
+		h.log.Error("failed to send work list archive response", "error", err)
+	}
+}
+
+// handleWorkListEarlier serves the `Current` segment with the *Not running* cap
+// lifted — one press, the whole group, no cursor.
+func (h *rpcMethodHandler) handleWorkListEarlier(ctx context.Context, conn *jsonrpc2.Conn, req *jsonrpc2.Request) {
+	var params rpc.WorkListEarlierParams
+	if err := unmarshalParams(req, &params); err != nil {
+		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "invalid params")
+		return
+	}
+
+	items, err := h.workListWatcher.Earlier(params.ID)
+	if err != nil {
+		h.replyListPageError(ctx, conn, req.ID, err, "failed to read the earlier work")
+		return
+	}
+
+	if err := conn.Reply(ctx, req.ID, rpc.WorkListEarlierResult{Items: items}); err != nil {
+		h.log.Error("failed to send work list earlier response", "error", err)
 	}
 }

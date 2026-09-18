@@ -232,6 +232,83 @@ Key design points:
 - **Worktree switch handling**: Automatically resubscribes when worktree changes (since the server cleans up subscriptions for the old worktree)
 - **Connection state**: Triggers reset on disconnect, automatically recovers on reconnect
 
+### Paging a Subscribed List
+
+Two of the subscribed lists grow without limit — the session sidebar and the
+project screen's closed archive — and neither is sent whole any more. Each grew
+a *fetch* beside its push: an ordinary request the client makes when it wants
+more, answered once. Nothing here is a second subscription, and no page is ever
+pushed.
+
+| Method | Scope | Params | Result |
+|---|---|---|---|
+| `session.list.page` | worktree | `id`, `cursor?`, `limit?` | `sessions`, `next_cursor?`, `has_more?` |
+| `work.list.archive` | app | `id`, `cursor?`, `limit?` | `items`, `next_cursor?`, `has_more?` |
+| `work.list.earlier` | app | `id` | `items` |
+
+**`id` names a subscription, and is not a repeat of its parameters.** The
+session list is narrowed by `exclude_work_sessions`, and that narrowing is held
+on the subscription for its whole life
+([the filter is the server's](subscription-system.md#which-sessions-belong-to-work)).
+A page asked for by repeating the filter is a page of whatever list the client
+*said*, which is not necessarily the list its snapshot came from; a page asked
+for by subscription id cannot be a page of a different list.
+
+The work list is narrowed by nothing, and still takes the id, for the half of
+the reason that applies to both: it makes a subscription the server has dropped
+a *refusal* rather than a silently different answer, which is the signal the
+client needs to subscribe afresh
+([subscription-system.md](subscription-system.md#paging-and-pushing-on-one-list)).
+
+- **`cursor`** is opaque. It comes from a previous `next_cursor` and goes back
+  unread; empty asks for the first page. `next_cursor` is absent exactly when
+  `has_more` is false, so "no next page" is one value on the wire and not two.
+- **`limit`** is optional: zero takes the server's default (30 for sessions, 20
+  for the archive), and anything above the cap is clamped rather than refused —
+  the same bargain as [history paging](../agent-chat.md#history-paging), where
+  the page a client gets is still correct and the cursor still says there is
+  more.
+- **`work.list.earlier`** has neither, because a cap is not a page: one request
+  lifts it, and there is no second one (§4.1 of
+  [list-paging-ui.md](../list-paging-ui.md#41-current-is-loaded-whole-and-that-is-the-design)).
+
+**Three things are refused as `InvalidParams`**: a subscription id the server no
+longer holds, a cursor it did not hand out, and a negative page size — the last
+two only on the two methods that take them. They are grouped because a client
+does the same thing with all three, which is subscribe afresh, and the opposite
+of what it does with any other error, which is offer a Retry. A Retry over a
+request that will be refused the same way forever is a button that cannot work.
+
+#### What the two lists grew
+
+Adding a field to a result needs no coordinated deploy ([Growing a reply](#growing-a-reply)),
+and everything here is an addition:
+
+| Message | Field | What it says |
+|---|---|---|
+| `session.list.subscribe` result | `next_cursor?`, `has_more?` | Where the first page ends |
+| `session.list.subscribe` result | `has_unread` | Whether anything in the **whole** list, narrowed by this subscription's filter, is unread |
+| `session.list.changed` — `create` / `update` / `delete` | `has_unread?` | The same fact, re-answered. Absent means the server could not read it, and the client keeps the answer it has |
+| `session.list.changed` — `sync` | `next_cursor?`, `has_more?`, `has_unread?` | A resync carries back as much of the list as that subscriber had loaded, not a first page |
+| `work.list.subscribe` result | `not_running_hidden?` | How many *Not running* rows the cap held back, so the group's heading can still show the whole group's count |
+| `work.list.changed` — `sync` | `not_running_hidden?` | The same, on a resync |
+| `work.detail.subscribe` result, `work.detail.changed` | `children`, `parent?` | Every task under this item, and the story above it |
+
+`has_unread` and `not_running_hidden` are the same kind of field and are there
+for the same reason: **a count or an "is there any" may never be derived from a
+page**, and both are read by a badge that is an *absence* of a signal. A sidebar
+badge computed over one page tells a user nothing is waiting when the list has
+merely not been read that far. They are facts that come *with* the list rather
+than things a client counts for itself.
+
+`children` / `parent` on `work.detail` are the archive's other consequence.
+`work.list` is now the `Current` segment and holds no closed work, so a closed
+story reached from the archive — or reloaded on, which is a daily act on a
+shareable URL — would look childless while its own row states `{closed}/{total}
+tasks` over exactly those children. The detail page therefore stops reading the
+list for them and answers for its own subtree
+([work-system.md](work-system.md#the-list-holds-rows-the-detail-page-holds-the-item)).
+
 ### Reconnection Recovery
 
 During `reconnecting` state, `useSubscription` preserves existing data while invalidating subscription IDs. When the connection is restored:
@@ -249,10 +326,10 @@ This pattern ensures:
 
 | Subscription | Returns Initial Data | Recovery Strategy |
 |--------------|---------------------|-------------------|
-| `session.list.subscribe` | ✅ Full list | `onSubscribed` replaces state |
+| `session.list.subscribe` | ✅ First page of the list | `onSubscribed` replaces state ([paging](#paging-a-subscribed-list)) |
 | `session.detail.subscribe` | ✅ Full session metadata | `onSubscribed` replaces state |
-| `work.list.subscribe` | ✅ Full list | `onSubscribed` replaces state |
-| `work.detail.subscribe` | ✅ Full details | `onSubscribed` replaces state |
+| `work.list.subscribe` | ✅ The `Current` segment | `onSubscribed` replaces state ([why it is not paged](../list-paging-ui.md#41-current-is-loaded-whole-and-that-is-the-design)) |
+| `work.detail.subscribe` | ✅ Full details, with `children` / `parent` | `onSubscribed` replaces state |
 | `settings.subscribe` | ✅ Full settings | `onSubscribed` replaces state |
 | `agent_role.list.subscribe` | ✅ Full list | `onSubscribed` replaces state |
 | `chat.messages.subscribe` | ✅ Newest history page | `onSubscribed` replaces state ([paging](../agent-chat.md#history-paging)) |

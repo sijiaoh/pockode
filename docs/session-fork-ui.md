@@ -459,15 +459,15 @@ the parent, the same row renders as plain text, not a button — there is nowher
 to go, and offering the tap would promise a session it cannot name.
 
 What it says in that case is the one thing the client is entitled to claim, and
-that depends on the task-session filter (`selectUnlistedSessionName`): with
-nothing hidden, an absent parent *has* been deleted — *"Forked from a deleted
-session"*. With task sessions hidden it has not necessarily, because the list is
-narrowed by the server and a work session is absent from it whether it exists or
-not
-([subscription-system.md](code/subscription-system.md#which-sessions-belong-to-work)).
-A fork of a work session has exactly that for a parent, so the row says only
-*"Forked from a session that is not in the list"*. The same rule spells the
-sidebar row's screen-reader text below.
+it is the same sentence however the list is narrowed: *"Forked from a session
+that is not in the list"* (`UNLISTED_SESSION_NAME`). It never says *deleted*,
+because absence is never evidence of deletion here. The list is narrowed by the
+server, so a work session is missing from it whether it exists or not
+([subscription-system.md](code/subscription-system.md#which-sessions-belong-to-work))
+— and a fork of a work session has exactly that for a parent. It is also only
+one page, so a row can be missing simply because the reader has not scrolled
+that far ([list-paging-ui.md](list-paging-ui.md#23-an-absence-is-not-evidence)).
+The same wording spells the sidebar row's screen-reader text below.
 
 The transcript's top, not the chat header: the header belongs to the project
 title (`MainContainer title={projectTitle}`), and more to the point, "this

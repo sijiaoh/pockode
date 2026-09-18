@@ -68,6 +68,8 @@ const renderWithWork = (work: Work, activity: Activity = "idle") => {
 		work,
 		activity,
 		comments: [],
+		children: [],
+		parent: null,
 		loading: false,
 		error: null,
 	});
@@ -133,6 +135,7 @@ describe("WorkDetailOverlay", () => {
 			comments: [],
 			loading: false,
 			error: null,
+			children: [],
 		});
 
 		render(
@@ -158,14 +161,18 @@ describe("WorkDetailOverlay", () => {
 		expectToAppearBefore(tasksHeading, commentsHeading);
 	});
 
-	// The open item comes from the detail subscription, but its children are
-	// other work items — the list store is the only thing that knows them, and it
-	// carries rows alone.
-	it("lists a story's children from the work list store", async () => {
+	// A story's children come with its detail, not out of the work list: that
+	// list is the `Current` segment and holds no closed work, so a closed story
+	// read from the archive would otherwise look childless
+	// (docs/list-paging-ui.md §2.2).
+	it("lists a story's children from its own detail", async () => {
 		const user = userEvent.setup();
 		const onOpenWorkDetail = vi.fn();
-		useWorkStore.setState({
-			works: [
+		mockUseWorkDetailSubscription.mockReturnValue({
+			work: createWork(),
+			activity: "idle",
+			comments: [],
+			children: [
 				{
 					id: "task-1",
 					type: "task",
@@ -177,13 +184,7 @@ describe("WorkDetailOverlay", () => {
 					updated_at: "2026-03-04T00:00:00Z",
 				},
 			],
-			isLoading: false,
-			error: null,
-		});
-		mockUseWorkDetailSubscription.mockReturnValue({
-			work: createWork(),
-			activity: "idle",
-			comments: [],
+			parent: null,
 			loading: false,
 			error: null,
 		});
@@ -216,6 +217,7 @@ describe("WorkDetailOverlay", () => {
 			comments: [],
 			loading: false,
 			error: null,
+			children: [],
 		});
 
 		render(
@@ -251,6 +253,7 @@ describe("WorkDetailOverlay", () => {
 				comments: [],
 				loading: false,
 				error: null,
+				children: [],
 			});
 
 			render(
@@ -271,27 +274,22 @@ describe("WorkDetailOverlay", () => {
 			const user = userEvent.setup();
 			const onBack = vi.fn();
 			const onOpenWorkDetail = vi.fn();
-			useWorkStore.setState({
-				works: [
-					{
-						id: "story-1",
-						type: "story",
-						agent_role_id: "role-1",
-						title: "Cluster mode",
-						status: "active",
-						activity: "running",
-						updated_at: "2026-03-04T00:00:00Z",
-					},
-				],
-				isLoading: false,
-				error: null,
-			});
 			mockUseWorkDetailSubscription.mockReturnValue({
+				parent: {
+					id: "story-1",
+					type: "story",
+					agent_role_id: "role-1",
+					title: "Cluster mode",
+					status: "active",
+					activity: "running",
+					updated_at: "2026-03-04T00:00:00Z",
+				},
 				work: createWork({ type: "task", parent_id: "story-1" }),
 				activity: "idle",
 				comments: [],
 				loading: false,
 				error: null,
+				children: [],
 			});
 
 			render(
@@ -335,6 +333,7 @@ describe("WorkDetailOverlay", () => {
 			},
 			loading: false,
 			error: null,
+			children: [],
 		});
 
 		render(
@@ -362,6 +361,7 @@ describe("WorkDetailOverlay", () => {
 			comments: [],
 			loading: false,
 			error: null,
+			children: [],
 		});
 
 		render(
@@ -389,6 +389,7 @@ describe("WorkDetailOverlay", () => {
 			comments: [],
 			loading: false,
 			error: null,
+			children: [],
 		});
 
 		render(

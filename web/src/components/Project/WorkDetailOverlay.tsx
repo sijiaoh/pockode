@@ -16,7 +16,6 @@ import { useRoleNameMap } from "../../hooks/useRoleNameMap";
 import { useWorkDetailSubscription } from "../../hooks/useWorkDetailSubscription";
 import type { Activity } from "../../lib/activity";
 import { useAgentRoleStore } from "../../lib/agentRoleStore";
-import { useWorkStore } from "../../lib/workStore";
 import { useWSStore } from "../../lib/wsStore";
 import type { AgentRole } from "../../types/agentRole";
 import type { Comment, Work, WorkListItem, WorkType } from "../../types/work";
@@ -51,20 +50,14 @@ export default function WorkDetailOverlay({
 	onNavigateToSession,
 	onOpenWorkDetail,
 }: Props) {
-	const { work, activity, comments, usage, loading, error } =
+	// Children and parent come with the detail, not out of the work list: that
+	// list is the `Current` segment and holds no closed work, so a closed story
+	// read from the archive would look childless (docs/list-paging-ui.md §2.2).
+	const { work, activity, comments, usage, children, parent, loading, error } =
 		useWorkDetailSubscription(workId);
 
-	const works = useWorkStore((s) => s.works);
 	const roles = useAgentRoleStore((s) => s.roles);
 	const roleNameMap = useRoleNameMap();
-	const children = useMemo(
-		() => works.filter((w) => w.parent_id === workId),
-		[works, workId],
-	);
-	const parent = useMemo(
-		() => (work?.parent_id ? works.find((w) => w.id === work.parent_id) : null),
-		[works, work],
-	);
 	const role = useMemo(
 		() =>
 			work?.agent_role_id

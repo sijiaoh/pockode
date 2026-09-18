@@ -78,10 +78,11 @@ func TestWorkListWatcher_Subscribe(t *testing.T) {
 	}
 	w := NewWorkListWatcher(store, nil)
 
-	items, err := w.Subscribe("client-1", nil)
+	snapshot, err := w.Subscribe("client-1", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
+	items := snapshot.Items
 	if len(items) != 2 {
 		t.Errorf("expected 2 items, got %d", len(items))
 	}
@@ -97,10 +98,11 @@ func TestWorkListWatcher_Subscribe(t *testing.T) {
 func TestWorkListWatcher_SubscribeToAnEmptyStoreSendsAnEmptyList(t *testing.T) {
 	w := NewWorkListWatcher(&mockWorkStore{}, nil)
 
-	items, err := w.Subscribe("client-1", nil)
+	snapshot, err := w.Subscribe("client-1", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
+	items := snapshot.Items
 
 	// Asserted on the wire shape rather than on `items != nil`: the wire is what
 	// the contract is about, and a nil slice is only wrong once it is marshalled.
@@ -316,12 +318,12 @@ func TestWorkListWatcher_PushesARowWhenItsSessionsTurnMoves(t *testing.T) {
 	defer w.Stop()
 
 	notifier := &captureNotifier{}
-	items, err := w.Subscribe("client-1", notifier)
+	snapshot, err := w.Subscribe("client-1", notifier)
 	if err != nil {
 		t.Fatalf("subscribe: %v", err)
 	}
-	if items[0].Activity != work.ActivityIdle {
-		t.Fatalf("activity on subscribe = %q, want idle", items[0].Activity)
+	if snapshot.Items[0].Activity != work.ActivityIdle {
+		t.Fatalf("activity on subscribe = %q, want idle", snapshot.Items[0].Activity)
 	}
 
 	w.OnSessionChange(session.SessionChangeEvent{

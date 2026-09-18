@@ -1,6 +1,7 @@
 package watch
 
 import (
+	"fmt"
 	"log/slog"
 	"sync"
 	"sync/atomic"
@@ -182,11 +183,16 @@ func (w *WorkListWatcher) notifySync() {
 		return
 	}
 
+	// Cut once and shared: a sync goes to every subscriber at the same moment,
+	// and this list is not narrowed per subscriber.
+	current, hidden := currentSegment(items, NotRunningCap)
+
 	w.NotifyAll("work.list.changed", func(sub *Subscription) any {
 		return workListSyncParams{
-			ID:        sub.ID,
-			Operation: "sync",
-			Works:     items,
+			ID:               sub.ID,
+			Operation:        "sync",
+			Works:            current,
+			NotRunningHidden: hidden,
 		}
 	})
 
@@ -200,15 +206,9 @@ func (w *WorkListWatcher) notifySync() {
 // slice and not nil: a client with no work items is sent `[]`, which it can
 // iterate, rather than `null`, which it cannot.
 func (w *WorkListWatcher) listRows() ([]rpc.WorkListItem, error) {
-	works, err := w.store.List()
+	items, err := w.readRows()
 	if err != nil {
 		return nil, err
-	}
-
-	resolver := work.NewActivityResolver(w.turnSource)
-	items := make([]rpc.WorkListItem, len(works))
-	for i, item := range works {
-		items[i] = rpc.NewWorkListItem(item, resolver.Activity(item))
 	}
 
 	w.sentActivityMu.Lock()
@@ -223,27 +223,105 @@ func (w *WorkListWatcher) listRows() ([]rpc.WorkListItem, error) {
 	return items, nil
 }
 
+// readRows is listRows without the record of what has been sent: for the reads
+// that answer one client and push nothing. Recording a list nobody was notified
+// of would suppress the very pushes that would have told them about it.
+func (w *WorkListWatcher) readRows() ([]rpc.WorkListItem, error) {
+	works, err := w.store.List()
+	if err != nil {
+		return nil, err
+	}
+
+	resolver := work.NewActivityResolver(w.turnSource)
+	items := make([]rpc.WorkListItem, len(works))
+	for i, item := range works {
+		items[i] = rpc.NewWorkListItem(item, resolver.Activity(item))
+	}
+	return items, nil
+}
+
 // Subscribe registers a subscriber under the client-chosen id and returns the
 // current work list.
 //
 // Registered before the list is read, so a change landing between the two is
 // notified rather than lost; see BaseWatcher.AddSubscription.
-func (w *WorkListWatcher) Subscribe(id string, notifier Notifier) ([]rpc.WorkListItem, error) {
+func (w *WorkListWatcher) Subscribe(id string, notifier Notifier) (WorkListSnapshot, error) {
 	sub := &Subscription{
 		ID:       id,
 		Notifier: notifier,
 	}
 	if err := w.AddSubscription(sub); err != nil {
-		return nil, err
+		return WorkListSnapshot{}, err
 	}
 
 	items, err := w.listRows()
 	if err != nil {
 		w.RemoveSubscription(id)
+		return WorkListSnapshot{}, err
+	}
+
+	current, hidden := currentSegment(items, NotRunningCap)
+	return WorkListSnapshot{Items: current, NotRunningHidden: hidden}, nil
+}
+
+// Archive serves one page of closed work to the subscription that asked.
+//
+// Nothing is remembered about which page a subscriber is on, and nothing is
+// pushed to it: the page the user asked for is the page they keep, a work
+// closed while they are on page 3 belongs at the top of page 1, and nobody is
+// waiting on the archive (docs/list-paging-ui.md §4.3).
+func (w *WorkListWatcher) Archive(id, cursor string, limit int) (WorkListArchivePage, error) {
+	if w.GetSubscription(id) == nil {
+		return WorkListArchivePage{}, fmt.Errorf("%w: %s", ErrSubscriptionNotFound, id)
+	}
+
+	items, err := w.readRows()
+	if err != nil {
+		return WorkListArchivePage{}, err
+	}
+
+	rows, next, hasMore, err := archiveSegment(items, cursor, limit)
+	if err != nil {
+		return WorkListArchivePage{}, err
+	}
+
+	return WorkListArchivePage{
+		Items:      rows,
+		NextCursor: cursorString(next, hasMore),
+		HasMore:    hasMore,
+	}, nil
+}
+
+// Earlier serves the `Current` segment with the *Not running* cap lifted. It is
+// the whole segment rather than the difference, because a cap is not a page:
+// the client replaces what it holds, and there is no second press to keep in
+// step with.
+func (w *WorkListWatcher) Earlier(id string) ([]rpc.WorkListItem, error) {
+	if w.GetSubscription(id) == nil {
+		return nil, fmt.Errorf("%w: %s", ErrSubscriptionNotFound, id)
+	}
+
+	items, err := w.readRows()
+	if err != nil {
 		return nil, err
 	}
 
-	return items, nil
+	current, _ := currentSegment(items, 0)
+	return current, nil
+}
+
+// WorkListSnapshot is the `Current` segment as a subscription's first answer;
+// see rpc.WorkListSubscribeResult.
+type WorkListSnapshot struct {
+	Items            []rpc.WorkListItem
+	NotRunningHidden int
+}
+
+// WorkListArchivePage is one page of the closed archive.
+type WorkListArchivePage struct {
+	Items      []rpc.WorkListItem
+	NextCursor string
+	HasMore    bool
 }
 
 type workListChangedParams struct {
@@ -257,6 +335,9 @@ type workListSyncParams struct {
 	ID        string             `json:"id"`
 	Operation string             `json:"operation"`
 	Works     []rpc.WorkListItem `json:"works"`
+	// NotRunningHidden is over the whole group, never over what was sent; see
+	// rpc.WorkListSubscribeResult.
+	NotRunningHidden int `json:"not_running_hidden,omitempty"`
 }
 
 // OnWorkChange implements work.OnChangeListener.

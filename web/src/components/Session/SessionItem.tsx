@@ -3,7 +3,7 @@ import { memo } from "react";
 import { isWorkActive, sessionActivity } from "../../lib/activity";
 import {
 	selectSessionTitle,
-	selectUnlistedSessionName,
+	UNLISTED_SESSION_NAME,
 	useSessionStore,
 } from "../../lib/sessionStore";
 import { useWorkStore } from "../../lib/workStore";
@@ -46,11 +46,10 @@ const SessionItem = memo(function SessionItem({
 	const forkedFrom = session.forked_from?.session_id;
 	// Resolved against the list rather than copied onto the fork, so a rename
 	// shows through. A parent with no row is not necessarily gone — what may be
-	// said about it is `selectUnlistedSessionName`'s call, not this row's.
+	// said about it is `UNLISTED_SESSION_NAME`'s call, not this row's.
 	const parentTitle = useSessionStore((s) =>
 		forkedFrom ? selectSessionTitle(forkedFrom)(s) : null,
 	);
-	const unlistedName = useSessionStore(selectUnlistedSessionName);
 
 	// The row names its own work, so this looks the item up by id rather than
 	// scanning the list for one that names this session: which sessions belong to
@@ -79,7 +78,7 @@ const SessionItem = memo(function SessionItem({
 						    than as the row's aria-label, which would replace the whole
 						    name and take the row's own state indicator down with it. */}
 						<span className="sr-only">
-							, forked from {parentTitle ?? unlistedName}
+							, forked from {parentTitle ?? UNLISTED_SESSION_NAME}
 						</span>
 					</>
 				) : (

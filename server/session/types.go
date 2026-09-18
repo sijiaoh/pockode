@@ -222,6 +222,11 @@ type SessionMeta struct {
 	Usage Usage `json:"usage"`
 }
 
+// Cursor is this session's position in the list's sort order. See ListCursor.
+func (m SessionMeta) Cursor() ListCursor {
+	return ListCursor{UpdatedAt: m.UpdatedAt, ID: m.ID}
+}
+
 // Operation represents the type of change to the session list.
 type Operation string
 

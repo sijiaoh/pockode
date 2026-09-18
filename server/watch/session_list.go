@@ -2,6 +2,7 @@ package watch
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"sync/atomic"
 
@@ -32,12 +33,74 @@ func (f SessionListFilter) keeps(item rpc.SessionListItem) bool {
 	return item.WorkID == "" || !f.ExcludeWorkSessions
 }
 
+// sessionListState is everything a session list subscription remembers: the
+// narrowing it asked for, and how much of the list it has been sent.
+//
+// The second is what a resync needs. A resync replaces the whole list, and
+// replacing a reader five pages down with a first page strands them past the
+// end of a list that just got shorter under them — so the server has to know
+// how much to hand back (docs/list-paging-ui.md §3.4). It is counted here
+// rather than asked of the client, because a resync is a push and there is
+// nobody to ask at the moment it goes out.
+//
+// It is an approximation by design: a create or a delete moves what the client
+// holds by a row without a page being fetched. A resync that restores a row too
+// few or too many is the paging equivalent of a rounding error, and the cap
+// below dwarfs it.
+type sessionListState struct {
+	filter SessionListFilter
+	// loaded is the number of rows the subscriber holds from the top of the
+	// list. Written by the subscribe, by every page served, and by every resync;
+	// all of those run on one goroutine per subscription except the resync, so
+	// it is atomic.
+	loaded atomic.Int64
+}
+
 // filterOf reads back the filter a subscription was registered with. A
 // subscription from anywhere else — a test notifying directly — filters nothing,
 // which is what the list did before there was a filter at all.
 func filterOf(sub *Subscription) SessionListFilter {
-	f, _ := sub.Filter.(SessionListFilter)
-	return f
+	if state := stateOf(sub); state != nil {
+		return state.filter
+	}
+	return SessionListFilter{}
+}
+
+func stateOf(sub *Subscription) *sessionListState {
+	state, _ := sub.Filter.(*sessionListState)
+	return state
+}
+
+// record replaces the count with what a fresh snapshot or resync just sent.
+func (s *sessionListState) record(rows int) {
+	if s == nil {
+		return
+	}
+	s.loaded.Store(int64(rows))
+}
+
+// add counts a page served on top of what the subscriber already had.
+func (s *sessionListState) add(rows int) {
+	if s == nil {
+		return
+	}
+	s.loaded.Add(int64(rows))
+}
+
+// resyncLimit is how many rows a subscriber gets back when the list is
+// re-sent: what it had, never less than a page and never more than the cap.
+func (s *sessionListState) resyncLimit() int {
+	if s == nil {
+		return session.MaxListPageSize
+	}
+	loaded := int(s.loaded.Load())
+	if loaded < session.DefaultListPageSize {
+		return session.DefaultListPageSize
+	}
+	if loaded > session.MaxListPageSize {
+		return session.MaxListPageSize
+	}
+	return loaded
 }
 
 // sessionListEvent is a union of the two changes that alter a row: the session
@@ -190,9 +253,11 @@ func (w *SessionListWatcher) pushSession(op session.Operation, meta session.Sess
 	item := rpc.NewSessionListItem(meta, workID)
 	previous, known := w.works.remember(item.ID, item.WorkID)
 	retract := !known || previous == ""
+	unread := w.unreadFlags()
 
 	w.NotifyAll("session.list.changed", func(sub *Subscription) any {
-		if !filterOf(sub).keeps(item) {
+		filter := filterOf(sub)
+		if !filter.keeps(item) {
 			if !retract {
 				return nil
 			}
@@ -200,24 +265,92 @@ func (w *SessionListWatcher) pushSession(op session.Operation, meta session.Sess
 				ID:        sub.ID,
 				Operation: string(session.OperationDelete),
 				SessionID: item.ID,
+				HasUnread: unread.forFilter(filter),
 			}
 		}
 		return sessionListChangedParams{
 			ID:        sub.ID,
 			Operation: string(op),
 			Session:   &item,
+			HasUnread: unread.forFilter(filter),
 		}
 	})
 }
 
 func (w *SessionListWatcher) pushRemoval(sessionID string) {
+	unread := w.unreadFlags()
+
 	w.NotifyAll("session.list.changed", func(sub *Subscription) any {
 		return sessionListChangedParams{
 			ID:        sub.ID,
 			Operation: string(session.OperationDelete),
 			SessionID: sessionID,
+			HasUnread: unread.forFilter(filterOf(sub)),
 		}
 	})
+}
+
+// unreadTally is "is anything unread", for each of the two narrowings of the
+// list, or nothing at all when it could not be read.
+//
+// It rides along on every notification because the sidebar's tab badge is an
+// "is there any" over the whole list, and a page cannot answer that: an unread
+// session is one an agent finished with while nobody was looking, which is
+// exactly the session a reader has not scrolled to (docs/list-paging-ui.md
+// §2.1).
+type unreadTally struct {
+	known bool
+	all   bool
+	plain bool
+}
+
+// forFilter is nil when there is no answer, which leaves the client holding the
+// last one it was given. A badge that guesses is worse than a badge that is a
+// moment stale — and the next event carries the answer.
+func (t unreadTally) forFilter(filter SessionListFilter) *bool {
+	if !t.known {
+		return nil
+	}
+	value := t.all
+	if filter.ExcludeWorkSessions {
+		value = t.plain
+	}
+	return &value
+}
+
+// unreadFlags reads the whole list for unread sessions.
+//
+// The work index is only consulted when something is unread at all, which on a
+// list nobody has left unread is the whole of the work: the narrowed answer
+// cannot differ from the unnarrowed one when the unnarrowed one is already no.
+func (w *SessionListWatcher) unreadFlags() unreadTally {
+	sessions, err := w.store.List()
+	if err != nil {
+		slog.Error("failed to read sessions for the unread flag", "error", err)
+		return unreadTally{}
+	}
+
+	unread := make([]session.SessionMeta, 0, 4)
+	for _, sess := range sessions {
+		if sess.Unread {
+			unread = append(unread, sess)
+		}
+	}
+	if len(unread) == 0 {
+		return unreadTally{known: true}
+	}
+
+	workIDs, err := w.works.bySession()
+	if err != nil {
+		slog.Error("failed to read work items for the unread flag", "error", err)
+		return unreadTally{}
+	}
+	for _, sess := range unread {
+		if workIDs[sess.ID] == "" {
+			return unreadTally{known: true, all: true, plain: true}
+		}
+	}
+	return unreadTally{known: true, all: true}
 }
 
 // listRows reads the whole session list and resolves each row's work item,
@@ -289,16 +422,34 @@ func (w *SessionListWatcher) notifySync() {
 	// Both narrowings built once rather than per subscriber: there are only two,
 	// and a sync goes to every subscriber at once.
 	plain := filterRows(items, SessionListFilter{ExcludeWorkSessions: true})
+	unread := w.unreadFlags()
 
 	w.NotifyAll("session.list.changed", func(sub *Subscription) any {
+		filter := filterOf(sub)
 		sessions := items
-		if filterOf(sub).ExcludeWorkSessions {
+		if filter.ExcludeWorkSessions {
 			sessions = plain
 		}
+		// As much of the list as this subscriber had, not the first page of it:
+		// a resync that hands a reader five pages down a single page strands
+		// them past the end of a list that just got shorter under them
+		// (docs/list-paging-ui.md §3.4).
+		state := stateOf(sub)
+		sessions, next, hasMore, err := session.PageList(sessions, rpc.SessionListItem.Cursor, "", state.resyncLimit())
+		if err != nil {
+			// Only a malformed cursor or a negative limit gets here, and this
+			// call has neither.
+			slog.Error("failed to cut a resync page", "error", err)
+			return nil
+		}
+		state.record(len(sessions))
 		return sessionListSyncParams{
-			ID:        sub.ID,
-			Operation: "sync",
-			Sessions:  sessions,
+			ID:         sub.ID,
+			Operation:  "sync",
+			Sessions:   sessions,
+			NextCursor: cursorString(next, hasMore),
+			HasMore:    hasMore,
+			HasUnread:  unread.forFilter(filter),
 		}
 	})
 
@@ -311,23 +462,98 @@ func (w *SessionListWatcher) notifySync() {
 //
 // Registered before the list is read, so a change landing between the two is
 // notified rather than lost; see BaseWatcher.AddSubscription.
-func (w *SessionListWatcher) Subscribe(id string, notifier Notifier, filter SessionListFilter) ([]rpc.SessionListItem, error) {
+func (w *SessionListWatcher) Subscribe(id string, notifier Notifier, filter SessionListFilter) (SessionListSnapshot, error) {
+	state := &sessionListState{filter: filter}
 	sub := &Subscription{
 		ID:       id,
-		Filter:   filter,
+		Filter:   state,
 		Notifier: notifier,
 	}
 	if err := w.AddSubscription(sub); err != nil {
-		return nil, err
+		return SessionListSnapshot{}, err
 	}
 
 	items, err := w.listRows()
 	if err != nil {
 		w.RemoveSubscription(id)
-		return nil, err
+		return SessionListSnapshot{}, err
 	}
 
-	return filterRows(items, filter), nil
+	page, next, hasMore, err := session.PageList(filterRows(items, filter), rpc.SessionListItem.Cursor, "", 0)
+	if err != nil {
+		w.RemoveSubscription(id)
+		return SessionListSnapshot{}, err
+	}
+	state.record(len(page))
+
+	// A snapshot has nowhere to put "could not tell", and no last answer for the
+	// client to keep: no is the honest default — a badge that is missing for a
+	// moment, rather than one claiming something waits.
+	hasUnread := false
+	if flag := w.unreadFlags().forFilter(filter); flag != nil {
+		hasUnread = *flag
+	}
+
+	return SessionListSnapshot{
+		Sessions:   page,
+		NextCursor: cursorString(next, hasMore),
+		HasMore:    hasMore,
+		HasUnread:  hasUnread,
+	}, nil
+}
+
+// Page serves the rows after the cursor, to the subscription that asked — which
+// is what carries the filter, so that a page and the snapshot it extends cannot
+// be pages of two different lists.
+func (w *SessionListWatcher) Page(id, cursor string, limit int) (SessionListPage, error) {
+	sub := w.GetSubscription(id)
+	if sub == nil {
+		return SessionListPage{}, fmt.Errorf("%w: %s", ErrSubscriptionNotFound, id)
+	}
+	state := stateOf(sub)
+
+	items, err := w.listRows()
+	if err != nil {
+		return SessionListPage{}, err
+	}
+
+	rows, next, hasMore, err := session.PageList(
+		filterRows(items, filterOf(sub)), rpc.SessionListItem.Cursor, cursor, limit)
+	if err != nil {
+		return SessionListPage{}, err
+	}
+	state.add(len(rows))
+
+	return SessionListPage{
+		Sessions:   rows,
+		NextCursor: cursorString(next, hasMore),
+		HasMore:    hasMore,
+	}, nil
+}
+
+// cursorString is empty when there is no next page, so that "no cursor" is one
+// value on the wire rather than two.
+func cursorString(c session.ListCursor, hasMore bool) string {
+	if !hasMore {
+		return ""
+	}
+	return c.String()
+}
+
+// SessionListSnapshot is the first page of the list and the two facts a page
+// cannot be asked for; see rpc.SessionListSubscribeResult.
+type SessionListSnapshot struct {
+	Sessions   []rpc.SessionListItem
+	NextCursor string
+	HasMore    bool
+	HasUnread  bool
+}
+
+// SessionListPage is one page beyond the first.
+type SessionListPage struct {
+	Sessions   []rpc.SessionListItem
+	NextCursor string
+	HasMore    bool
 }
 
 type sessionListChangedParams struct {
@@ -335,12 +561,19 @@ type sessionListChangedParams struct {
 	Operation string               `json:"operation"`
 	Session   *rpc.SessionListItem `json:"session,omitempty"`
 	SessionID string               `json:"sessionId,omitempty"`
+	// HasUnread is over the whole list, never over what the client holds; see
+	// unreadTally. Absent means the server could not read it, and the client
+	// keeps the answer it has.
+	HasUnread *bool `json:"has_unread,omitempty"`
 }
 
 type sessionListSyncParams struct {
-	ID        string                `json:"id"`
-	Operation string                `json:"operation"`
-	Sessions  []rpc.SessionListItem `json:"sessions"`
+	ID         string                `json:"id"`
+	Operation  string                `json:"operation"`
+	Sessions   []rpc.SessionListItem `json:"sessions"`
+	NextCursor string                `json:"next_cursor,omitempty"`
+	HasMore    bool                  `json:"has_more,omitempty"`
+	HasUnread  *bool                 `json:"has_unread,omitempty"`
 }
 
 // HandleProcessStateChange marks a session unread. That and nothing else.

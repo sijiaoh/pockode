@@ -280,7 +280,7 @@ func (h *rpcMethodHandler) handleSessionListSubscribe(ctx context.Context, conn 
 	id := params.ID
 	notifier := h.state.getNotifier()
 	filter := watch.SessionListFilter{ExcludeWorkSessions: params.ExcludeWorkSessions}
-	sessions, err := wt.SessionListWatcher.Subscribe(id, notifier, filter)
+	snapshot, err := wt.SessionListWatcher.Subscribe(id, notifier, filter)
 	if err != nil {
 		h.replySubscriptionError(ctx, conn, req.ID, err, "failed to subscribe to session list")
 		return
@@ -289,11 +289,45 @@ func (h *rpcMethodHandler) handleSessionListSubscribe(ctx context.Context, conn 
 	h.log.Debug("subscribed", "watcher", "session list", "watchId", id)
 
 	result := rpc.SessionListSubscribeResult{
-		Sessions: sessions,
+		Sessions:   snapshot.Sessions,
+		NextCursor: snapshot.NextCursor,
+		HasMore:    snapshot.HasMore,
+		HasUnread:  snapshot.HasUnread,
 	}
 
 	if err := conn.Reply(ctx, req.ID, result); err != nil {
 		h.log.Error("failed to send session list subscribe response", "error", err)
+	}
+}
+
+// handleSessionListPage serves the rows after the one a client can see at the
+// bottom of its list.
+//
+// It is a request rather than a notification because the client asks for it,
+// and it names the subscription rather than repeating its filter: the narrowing
+// is held on the subscription so that a page and the snapshot it extends cannot
+// be pages of two different lists (rpc.SessionListPageParams).
+func (h *rpcMethodHandler) handleSessionListPage(ctx context.Context, conn *jsonrpc2.Conn, req *jsonrpc2.Request, wt *worktree.Worktree) {
+	var params rpc.SessionListPageParams
+	if err := unmarshalParams(req, &params); err != nil {
+		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "invalid params")
+		return
+	}
+
+	page, err := wt.SessionListWatcher.Page(params.ID, params.Cursor, params.Limit)
+	if err != nil {
+		h.replyListPageError(ctx, conn, req.ID, err, "failed to read the next session list page")
+		return
+	}
+
+	result := rpc.SessionListPageResult{
+		Sessions:   page.Sessions,
+		NextCursor: page.NextCursor,
+		HasMore:    page.HasMore,
+	}
+
+	if err := conn.Reply(ctx, req.ID, result); err != nil {
+		h.log.Error("failed to send session list page response", "error", err)
 	}
 }
 

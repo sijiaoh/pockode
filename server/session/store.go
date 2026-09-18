@@ -287,9 +287,7 @@ func (s *FileStore) List() ([]SessionMeta, error) {
 	result := make([]SessionMeta, len(s.sessions))
 	copy(result, s.sessions)
 
-	sort.Slice(result, func(i, j int) bool {
-		return result[i].UpdatedAt.After(result[j].UpdatedAt)
-	})
+	sort.Slice(result, ListOrder(result, SessionMeta.Cursor))
 
 	return result, nil
 }

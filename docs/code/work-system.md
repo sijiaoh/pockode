@@ -1035,11 +1035,14 @@ case — the rules are in
 ```typescript
 // web/src/lib/workStore.ts
 interface WorkStore {
-    works: WorkListItem[];
+    works: WorkListItem[];        // the Current segment
+    notRunningHidden: number;     // rows the cap held back, so the heading can still count them
+    archive: WorkListItem[];      // one page of closed work, fetched on demand
     isLoading: boolean;
     error: string | null;
+    // ...plus the cursor stack the archive pager walks
 
-    setWorks: (works: WorkListItem[]) => void;
+    setWorks: (works: WorkListItem[], notRunningHidden?: number) => void;
     updateWorks: (updater: (old: WorkListItem[]) => WorkListItem[]) => void;
     setError: (error: string) => void;
     reset: () => void;
@@ -1054,15 +1057,64 @@ session detail each carry their own `work_id`, and `session.list.subscribe`
 narrows the list when asked to
 ([subscription-system.md](subscription-system.md#which-sessions-belong-to-work)).
 Inverting the work list to answer it here is the arrangement that section
-argues against, and the reason is the store above: a list that pages cannot
-answer a question about a session it has not reached.
+argues against, and the reason is the store above: this store holds the
+`Current` segment and one archive page, so it cannot answer a question about a
+work item the user has not paged to.
 
 What a session row does read from this store is what its work is *waiting for*
 — `sessionActivity` in `web/src/lib/activity.ts`, and only the `wait` of a work
 that is `active`. That is a lookup by the id the row carries, not a scan for an
-item that names the row, so a work the store has not paged in costs the row its
+item that names the row, so a work the store does not hold costs the row its
 wait and nothing else: the row is still in the right list, still says what its
 own turn is doing, and still links to the right work.
+
+### The List Is the `Current` Segment
+
+`work.list` no longer answers with every work item. It answers with the
+**`Current` segment**: every row that screen draws, plus everything those rows
+make claims about, and no closed work at all. The archive is a separate, paged
+fetch ([websocket-rpc.md](websocket-rpc.md#paging-a-subscribed-list)), and
+`workStore` keeps it in its own field — the two halves obey opposite rules, one
+pushed to and one never
+([subscription-system.md](subscription-system.md#the-two-lists-update-live-in-opposite-ways)).
+
+Three consequences worth stating on their own, because each is easy to undo:
+
+- **A page is not a set of rows; it is a set of rows plus everything they
+  assert.** A story's row says `{n} active` and `{closed}/{total} tasks` over
+  *all* its children, including closed tasks that get no row anywhere, and a
+  task's row prints `in: <parent title>`. So a story and its tasks are always on
+  the same side of a cut — in `Current`, and again on whichever archive page the
+  story lands on.
+- **`Current` is never paged, and that is the design.** Its group counts and the
+  Project tab's attention dot are read off it, and an "is there any" asked of a
+  page answers *no* for a list nobody has read that far. The question it exists
+  to answer — what needs a person — also has a naturally small answer.
+- **The detail page no longer reads the list for its subtree** — see
+  [the next section](#the-list-holds-rows-the-detail-page-holds-the-item).
+
+The one group of `Current` that grows without limit is *Not running* (`open` and
+`stopped` work, which nothing closes), so that group alone is capped and the
+overflow is fetched by one press of "Show earlier work".
+
+**The cap is deliberately soft.** `NotRunningCap` is 50, but what the cap drops
+is whole stories — a story cannot be dropped without its tasks, since it keeps
+them all for its own roll-up — and a story holding a task that *is* a row is
+skipped rather than dropped. Skipping it means the group can come back slightly
+over the cap when there are not enough droppable stories. That is the intended
+trade: **"*Needs you* is never truncated" is the stronger invariant**, and a
+number that is approximate costs a little bandwidth, while a row that vanishes
+costs a user the one thing this screen exists to tell them. Nothing should read
+the cap as an exact bound on the rows that arrive.
+
+`hasCurrentRow` (`server/watch/work_list_segment.go`) and `rowGroup`
+(`web/src/components/Project/WorkListOverlay.tsx`) are mirrors of each other,
+and have to be: deciding what to *fetch* means knowing what is drawn. They are
+deliberately asymmetric on a status or type neither side recognises — the server
+sends the row, the client does not draw it. Sending a row nobody draws costs one
+row; withholding one that would have been drawn makes a work item unreachable,
+and a hand-edited or corrupted index must not be one more way for that to
+happen.
 
 ### The List Holds Rows, the Detail Page Holds the Item
 
@@ -1078,11 +1130,17 @@ The split decides where each surface reads from:
   never from the store** — and not just the detail-only fields, but every field
   of it, `title` and `status` included. Taking those off the row instead would
   give one item on one page two sources that can disagree.
-- **It still reads the store for the parts of the page that are about *other*
-  work items**: the parent's title above the heading, a story's child rows, and
-  the child count the delete confirmation names. The detail subscription speaks
-  for one item, so those can only come from the list — and a row is all they
-  need.
+- **The two relations it draws — its children and its parent — arrive with the
+  detail, not out of the store.** They used to be filtered out of the work list,
+  which was correct while that list was every work item. It is now the `Current`
+  segment and holds no closed work, so a closed story opened from the archive,
+  or simply reloaded on, would show no tasks while its own row claims
+  `{closed}/{total}` over them — and reloading is a daily act on a URL people
+  share. A story bounds its own children and its detail page does not page them,
+  so the detail is the natural place to answer for them; the alternative was a
+  page stitching two arrays together and being wrong whenever one of them was a
+  page. The cost is a few extra rows on every detail notification, bounded by
+  one story's task count.
 - **The list side never wanted the dropped fields.** `WorkListOverlay`,
   `ProjectTab`'s attention dot, `WorktreeBadge` / `isWorktreeBound` and the
   session row's wait lookup read none of them, which is why narrowing the store

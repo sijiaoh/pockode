@@ -12,6 +12,10 @@ import (
 var (
 	ErrSubscriptionIDRequired = errors.New("subscription id is required")
 	ErrSubscriptionIDInUse    = errors.New("subscription id already in use")
+	// ErrSubscriptionNotFound reports a request against a subscription that is
+	// not open — a page asked for after an unsubscribe, or under an id that was
+	// never registered.
+	ErrSubscriptionNotFound = errors.New("no such subscription")
 )
 
 type Subscription struct {

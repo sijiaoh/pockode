@@ -17,6 +17,7 @@ import (
 	"github.com/pockode/server/filetransfer"
 	"github.com/pockode/server/logger"
 	"github.com/pockode/server/rpc"
+	"github.com/pockode/server/session"
 	"github.com/pockode/server/settings"
 	"github.com/pockode/server/watch"
 	"github.com/pockode/server/work"
@@ -445,6 +446,12 @@ func (h *rpcMethodHandler) Handle(ctx context.Context, conn *jsonrpc2.Conn, req 
 	case "work.list.subscribe":
 		h.handleWorkListSubscribe(ctx, conn, req)
 		return
+	case "work.list.archive":
+		h.handleWorkListArchive(ctx, conn, req)
+		return
+	case "work.list.earlier":
+		h.handleWorkListEarlier(ctx, conn, req)
+		return
 	case "work.list.unsubscribe":
 		h.handleWatcherUnsubscribe(ctx, conn, req, h.workListWatcher, "work list")
 		return
@@ -518,6 +525,8 @@ func (h *rpcMethodHandler) Handle(ctx context.Context, conn *jsonrpc2.Conn, req 
 		h.handleSessionMarkRead(ctx, conn, req, wt)
 	case "session.list.subscribe":
 		h.handleSessionListSubscribe(ctx, conn, req, wt)
+	case "session.list.page":
+		h.handleSessionListPage(ctx, conn, req, wt)
 	case "session.list.unsubscribe":
 		h.handleWatcherUnsubscribe(ctx, conn, req, wt.SessionListWatcher, "session list")
 	case "session.detail.subscribe":
@@ -658,6 +667,25 @@ func (h *rpcMethodHandler) handleAuth(ctx context.Context, conn *jsonrpc2.Conn, 
 	if err := conn.Reply(ctx, req.ID, result); err != nil {
 		h.log.Error("failed to send auth response", "error", err)
 	}
+}
+
+// replyListPageError splits the two kinds of refusal a request for a page of a
+// list gets, and is shared by every one of them (session.list.page,
+// work.list.archive, work.list.earlier) so that the three cannot drift into
+// disagreeing about which failures a client may retry.
+//
+// A subscription the server no longer holds, a cursor it did not hand out and a
+// negative page size are the client's to get right and will refuse the same way
+// forever — which is what tells it to subscribe afresh rather than offer a
+// Retry. Everything else is worth asking again.
+func (h *rpcMethodHandler) replyListPageError(ctx context.Context, conn *jsonrpc2.Conn, id jsonrpc2.ID, err error, fallbackMsg string) {
+	if errors.Is(err, watch.ErrSubscriptionNotFound) ||
+		errors.Is(err, session.ErrInvalidListCursor) ||
+		errors.Is(err, session.ErrInvalidListLimit) {
+		h.replyError(ctx, conn, id, jsonrpc2.CodeInvalidParams, err.Error())
+		return
+	}
+	h.replyInternalError(ctx, conn, id, fallbackMsg, err)
 }
 
 // replyInternalError reports a server-side failure to both the server log and

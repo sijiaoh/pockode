@@ -46,9 +46,9 @@ Pockode uses Zustand for state management, pure reducers for event processing, a
 | Store | Purpose | Key Pattern |
 |-------|---------|-------------|
 | wsStore | WebSocket, RPC, subscriptions | Single hub for all communication |
-| sessionStore | Chat session list, as the server narrowed it | State/Actions interface split; an absence in it is not proof a session is gone ([why](subscription-system.md#what-the-client-gives-up-by-letting-the-server-filter)) |
+| sessionStore | Chat session list — one page of it, as the server narrowed it | State/Actions interface split; an absence in it is not proof a session is gone ([why](subscription-system.md#what-the-client-gives-up-by-letting-the-server-filter)) |
 | sessionDetailStore | The open session's own metadata, and whether it exists at all | One session at a time, read through a selector that checks whose it is |
-| workStore | Work list rows | State/Actions interface split |
+| workStore | The project list's `Current` segment, and the one archive page on screen | State/Actions interface split; the two halves are separate fields because only one of them is pushed to |
 | agentRoleStore | AI roles | State/Actions interface split |
 | agentOptionsStore | Selectable models and effort levels per agent | Fetched once per connection, not subscribed |
 | settingsStore | App settings, and why they are missing when they are | Holds the subscription's `refresh` too: the Retry is far below the hook that owns it |
@@ -90,7 +90,7 @@ interface SessionState {
   // belongs to the worktree being left.
   isReloading: boolean;
 }
-interface SessionActions { setSessions(s: SessionListItem[]): void; }
+interface SessionActions { setSessions(page: SessionPage, isResync?: boolean): void; }
 export type SessionStore = SessionState & SessionActions;
 ```
 
@@ -129,6 +129,55 @@ subscribeThemeRegistry(() => {
   useThemeStore.setState({ theme: "abyss" });
 });
 ```
+
+### Neither List Store Holds a List Any More
+
+Both list stores used to hold everything the server had. Now each holds as much
+as the user has asked for, and the difference shows up in the fields that had to
+be added around the rows — every one of them is there because something on
+screen used to be derivable from the array and no longer is.
+
+**`sessionStore` holds a prefix that grows.** `nextCursor` says where the next
+page starts (`null` once the list has been read to its end), and `hasUnread`
+carries the sidebar badge, which must come from the server: it is an "is there
+any" over the whole list, and an unread session is by definition one an agent
+finished with while nobody was looking — exactly the session a reader has not
+scrolled to. `generation` is bumped whenever the list is replaced wholesale, and
+a page that was in flight across a resync, a worktree switch or a filter change
+is dropped on arrival rather than spliced into a list it does not belong to.
+
+`setSessions` takes an `isResync` flag because two different events replace the
+list and they mean opposite things by a short answer. A *snapshot* is a new list
+— a first subscribe, a refresh, another worktree, a flipped filter — and a new
+list that happens to be shorter says nothing about the reader. A *resync* is the
+same list handed back at the reader's own depth, so a short one means the cap
+cut it, and the sentinel's auto-loading is switched off: the browser clamps the
+reader to the list's new end, where an armed sentinel would immediately ask for
+the next page and undo the cap. The button stays. Deriving this from "shorter
+than before" alone — the first attempt — silently disarmed paging every time
+someone switched worktree or flipped the filter.
+
+**`workStore` holds two lists that answer to opposite rules**, which is why they
+are separate fields rather than one array with a predicate over it. `works` is
+pushed to, and every change to any work item reaches it — including changes to
+rows it does not hold, which are upserted rather than dropped, since a work that
+starts needing a person must be able to light the attention dot from outside
+what was fetched. `archive` is the mirror image: fetched, and pushed nothing but
+a correction to a row already on the page the user is reading.
+
+The archive pager walks with `archiveCursors: string[]`, a stack the *client*
+keeps — entry 0 is always `""`, and "Older" pushes the cursor the server just
+returned. Stepping back is then handing back a cursor already used, so the
+server never learns to page backwards and the pager can honestly say `Page 2`
+while being unable to say `Page 2 of 7`. Landing a page truncates the stack to
+that page, or walking back and forward again would reuse a cursor from a deeper
+walk and skip the page just left. `archiveAttempt` records the page last *asked*
+for, which after a failed "Older" is not the page on screen — Retry has to
+re-ask for the one that never arrived, not the one the user is reading.
+
+The reasoning behind all of it — cursors, the two update strategies, what the
+server only approximates — is
+[subscription-system.md](subscription-system.md#paging-and-pushing-on-one-list).
 
 ### Why a Store for Panel UI State
 

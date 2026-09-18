@@ -1,7 +1,7 @@
 import { GitBranch } from "lucide-react";
 import {
 	selectSessionTitle,
-	selectUnlistedSessionName,
+	UNLISTED_SESSION_NAME,
 	useSessionStore,
 } from "../../lib/sessionStore";
 
@@ -19,13 +19,12 @@ interface Props {
  *
  * The parent's title is resolved from the session list rather than copied onto
  * the fork, so a rename shows through. A parent the list has no row for is not
- * necessarily deleted any more — `selectUnlistedSessionName` is what decides
+ * necessarily deleted any more — `UNLISTED_SESSION_NAME` is what decides
  * what may be claimed — so the banner states that much instead of linking to a
  * name it does not have.
  */
 function ForkOriginBanner({ parentSessionId, onOpenParent }: Props) {
 	const parentTitle = useSessionStore(selectSessionTitle(parentSessionId));
-	const unlistedName = useSessionStore(selectUnlistedSessionName);
 
 	const line = "flex items-center justify-center gap-1.5 text-xs";
 
@@ -33,7 +32,7 @@ function ForkOriginBanner({ parentSessionId, onOpenParent }: Props) {
 		return (
 			<div className={`${line} py-2 text-th-text-muted`}>
 				<GitBranch className="size-3 shrink-0" aria-hidden="true" />
-				Forked from {unlistedName}
+				Forked from {UNLISTED_SESSION_NAME}
 			</div>
 		);
 	}

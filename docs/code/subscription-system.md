@@ -609,6 +609,143 @@ shell will not mount the panel until the session resolves, and the subscription
 that would resolve it was inside the panel. The panel still reads the store and
 nothing else, so there is still one holder for one session.
 
+### Paging and Pushing on One List
+
+The session sidebar and the closed archive are fetched a page at a time
+([list-paging-ui.md](../list-paging-ui.md) is the interaction design; the wire
+shape is [websocket-rpc.md](websocket-rpc.md#paging-a-subscribed-list)). Both
+are also subscriptions that keep pushing, so each list has two sources at once,
+and the decisions below are all about keeping them from contradicting each
+other.
+
+**A page is asked for by subscription id, not by repeating the query.** The
+session list is narrowed per subscription, and a page fetched under a filter the
+client restated is a page of whatever list the client named — which need not be
+the list its snapshot came from. Binding the page to the subscription makes that
+impossible to express. It also gives the one error worth distinguishing a
+natural home: an id the server has dropped is `InvalidParams`, and a client
+answers it by subscribing afresh rather than by offering a Retry over a request
+that is going to be refused the same way forever.
+
+**The cut happens after the narrowing, never before.** `SessionListWatcher.Page`
+reads the list, filters it, and only then takes a page; reversed, a page of 30
+arrives as however many of those 30 survived the filter — a list that thins out
+as the user scrolls, for no reason they can see.
+
+#### A cursor is a position, not a row
+
+`session.ListCursor` is `<updatedAt.UnixNano>.<id>`, and what it names is a
+place in the sort order rather than a row. That is the whole point. The session
+list is sorted by `updated_at` and that key moves *while the user scrolls*, so a
+page asked for by offset — "the next 30 after 60" — silently skips rows and
+repeats rows as sessions bump to the top behind the request. A skipped row here
+is a conversation the user cannot reach by scrolling and has no way to learn was
+skipped.
+
+Because it is a position, the row it was taken from may be deleted or may jump
+to the top of the list, and the next page is still exactly the rows that follow
+that place. The client dedupes by id on top of that: the cursor removes the
+systematic error, not every race.
+
+Two properties the order has to have for a cursor to mean anything:
+
+- **It must be total.** Two sessions written in the same millisecond — a fork
+  and its parent, a batch of work sessions — would otherwise come back in
+  whichever order the sort left them, and a cursor into an order that is not
+  total cannot say where it is. Hence the id as tiebreaker, in the cursor and in
+  `session.ListOrder` alike.
+- **It must be compared the way the cursor is written.** `ListOrder` compares
+  `UnixNano` rather than using `time.After`, because the two disagree:
+  `time.After` consults the monotonic clock when both values carry one, and a
+  session read back from disk carries none. The cursor is a wall-clock instant,
+  so the order has to be one too.
+
+`rpc.SessionListItem.Cursor` and `rpc.WorkListItem.Cursor` are the only places
+that build one, so a row and the record it came from cannot disagree about where
+a row sits.
+
+#### The two lists update live in opposite ways
+
+They are not two instances of one rule, and treating them as one would break
+whichever of them was second.
+
+| | Session sidebar | Closed archive |
+|---|---|---|
+| Shape | One list that grows downwards | Discrete pages the user walks |
+| A row on screen changes | Updated in place, **never moved** | Updated in place |
+| Something new appears | Prepended — it genuinely is the newest | **Nothing.** It belongs at the top of page 1; the page the user asked for is the page they keep |
+| A row not held changes | Ignored; it lands in its right place the next time the order is computed | Ignored |
+| A row is deleted | Removed at once — it is the answer to an action | Removed; the page stays one row short until the user moves |
+| Refreshed on its own | Never | Never. No "new items" chip, no auto-refresh |
+
+Recency reordering therefore happens **on a load, never on an event**, which is
+the rule `FileStore.AddUsage` already keeps on the server for its own reason:
+moving a session to the top every time a turn is metered would reorder the list
+behind the user's back. Paging turns that from good manners into a requirement,
+because the reader may be two hundred rows down.
+
+The archive's whole column follows from one fact the session list cannot claim:
+**nobody is waiting on the archive.** So it earns none of the machinery for
+staying current — `WorkListWatcher` remembers nothing about which page a
+subscriber is on and pushes it nothing, and the one exception in the table above
+(a row on the page changing) is a row staying accurate, never a row appearing,
+moving, or being announced.
+
+#### What the server remembers, and what it only approximates
+
+A resync re-sends the list, and replacing a reader five pages down with a first
+page strands them past the end of a list that just got shorter under them. So a
+session list subscription counts `loaded` — how many rows that subscriber holds
+— and a resync hands back that many, floored at one page and capped at five
+([why five](../list-paging-ui.md#34-a-resync-must-restore-what-the-user-had)).
+It is counted on the server rather than asked of the client because a resync is
+a push: there is nobody to ask at the moment it goes out.
+
+`loaded` is deliberately approximate. A create or a delete moves what the client
+holds by a row with no page being fetched, and a client can ask for the same
+page twice. Both drift, both are corrected by the next snapshot or sync, and the
+cap dwarfs either.
+
+`not_running_hidden` is approximate in the mirror-image way, and the frontend is
+the reason: a `work.list.changed` update for a row the client does not hold is
+**upserted, not dropped**. A work that was held back by the cap and then starts
+needing a person has to arrive — dropping it is precisely how the project's
+attention dot would stay dark on a project that needs one. The count then
+over-states by that row until the next snapshot corrects it. A number that is
+one too high for a moment is a cheaper error than a signal that never comes.
+
+#### A page is a read, and must not be recorded as a push
+
+A work list row carries the work's derived `activity`, which moves with the turn
+of its session — and a session is touched several times a turn without that
+value changing. So `WorkListWatcher` keeps `sentActivity`, the activity last put
+on the wire per work item, and skips an event that would repeat one. That record
+is per work item rather than per subscriber, which is sound only while it names
+what *every* subscriber holds.
+
+Hence the split: `listRows` (subscribe and sync, which do reach everyone) writes
+it, and the paging methods read through `readRows`, which does not. Recording a
+read that answered one client would suppress the very push that would have told
+all the others.
+
+This is the same rule, and the same failure, as the session work-index
+([which sessions belong to work](#which-sessions-belong-to-work)): it goes wrong
+silently, in a client that was simply never sent something.
+
+#### "No page has loaded yet" belongs to a subscription
+
+The archive is fetched on demand, so after a resubscribe something has to ask
+for its first page again — and "the segment is open and no page has landed"
+cannot be that trigger on its own. It is already true at the instant the dead
+subscription is thrown away, so re-asking then fetches against the id that just
+turned out to be dead, forever.
+
+`workStore` therefore carries a `pagingGeneration`, bumped every time a
+subscription is bound to the paging actions, and the effect that fetches the
+first page depends on it. The fact that matters is not "nothing is loaded" but
+"nothing is loaded *for this subscription*" — an unowned absence is not
+actionable, and acting on one is a request loop.
+
 ## Frontend
 
 `useSubscription` owns every subscription's lifecycle; the sections after it are

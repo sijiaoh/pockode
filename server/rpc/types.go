@@ -419,6 +419,13 @@ func NewSessionListItem(meta session.SessionMeta, workID string) SessionListItem
 	}
 }
 
+// Cursor is this row's position in the list's sort order, and what a client
+// hands back to ask for the rows after it. The row and the session it was built
+// from produce the same cursor, because both read the same two fields.
+func (i SessionListItem) Cursor() session.ListCursor {
+	return session.ListCursor{UpdatedAt: i.UpdatedAt, ID: i.ID}
+}
+
 // SessionListSubscribeParams is a session list subscription, plus the narrowing
 // that holds for as long as it lives: the snapshot it returns and every
 // notification it is sent afterwards obey the same filter.
@@ -436,8 +443,47 @@ type SessionListSubscribeParams struct {
 	ExcludeWorkSessions bool `json:"exclude_work_sessions,omitempty"`
 }
 
+// SessionListSubscribeResult is the first page of the list, plus the two facts
+// a page cannot be asked for: where it ends, and whether anything outside it is
+// unread.
 type SessionListSubscribeResult struct {
 	Sessions []SessionListItem `json:"sessions"`
+	// NextCursor is the position to ask for the next page from, and is empty
+	// when there is no next page. Opaque: hand it back unread
+	// (session.ListCursor).
+	NextCursor string `json:"next_cursor,omitempty"`
+	HasMore    bool   `json:"has_more,omitempty"`
+	// HasUnread is over the whole list, narrowed by the same filter, and never
+	// over the page. The sidebar's tab badge is an "is there any", so deriving
+	// it from a page is not a smaller answer but a wrong one — a list that has
+	// simply not been read that far telling the user there is nothing waiting
+	// (docs/list-paging-ui.md §2.1).
+	HasUnread bool `json:"has_unread"`
+}
+
+// SessionListPageParams asks for the rows after the one the client can see at
+// the bottom of what it has.
+//
+// It names a subscription rather than repeating its narrowing: a page fetched
+// under a different filter from the snapshot is a page of a different list, and
+// the filter is already held for the life of the subscription
+// (SessionListSubscribeParams.ExcludeWorkSessions).
+type SessionListPageParams struct {
+	// ID is the subscription to page, as returned to the client by its own
+	// subscribe call.
+	ID string `json:"id"`
+	// Cursor is what the previous page reported as NextCursor. Empty asks for
+	// the first page again.
+	Cursor string `json:"cursor,omitempty"`
+	// Limit is the page size; zero takes the server's default and anything
+	// above its cap is clamped (session.ClampListLimit).
+	Limit int `json:"limit,omitempty"`
+}
+
+type SessionListPageResult struct {
+	Sessions   []SessionListItem `json:"sessions"`
+	NextCursor string            `json:"next_cursor,omitempty"`
+	HasMore    bool              `json:"has_more,omitempty"`
 }
 
 // Session detail watch (subscription for a single session's metadata)
@@ -730,7 +776,71 @@ func NewWorkListItem(w work.Work, activity work.Activity) WorkListItem {
 	}
 }
 
+// Cursor is this row's position in the archive's sort order, and what a client
+// hands back to ask for the page after it. Only the archive is ordered by
+// UpdatedAt — the `Current` segment keeps the store's creation order and is
+// never paged — so nothing else reads this.
+func (i WorkListItem) Cursor() session.ListCursor {
+	return session.ListCursor{UpdatedAt: i.UpdatedAt, ID: i.ID}
+}
+
+// WorkListSubscribeResult is the `Current` segment of the project list: every
+// row it draws plus everything those rows make claims about, and nothing
+// closed. The archive is fetched a page at a time (WorkListArchiveParams).
+//
+// `Current` itself is not paged, and must not be: its group counts and the
+// Project tab's attention dot are read off it, and an "is there any" asked of a
+// page answers no for a list nobody has read that far
+// (docs/list-paging-ui.md §2.1, §4.1).
 type WorkListSubscribeResult struct {
+	Items []WorkListItem `json:"items"`
+	// NotRunningHidden is how many rows of the *Not running* group were held
+	// back by the cap. The group's heading adds it to the rows it received, so
+	// the count it shows is the whole group's; zero means the group arrived
+	// whole. Fetch the rest with work.list.earlier.
+	NotRunningHidden int `json:"not_running_hidden,omitempty"`
+}
+
+// WorkListArchiveParams asks for one page of closed work.
+//
+// It names a subscription for the same reason SessionListPageParams does: a
+// page is served against the list the subscription is following, and an id the
+// server no longer holds is the client's signal to subscribe afresh rather than
+// to retry.
+type WorkListArchiveParams struct {
+	// ID is the work list subscription, as returned to the client by its own
+	// subscribe call.
+	ID string `json:"id"`
+	// Cursor is what a previous page reported as NextCursor. Empty asks for the
+	// first page. Opaque: hand it back unread (session.ListCursor).
+	//
+	// There is no cursor for the page *before* this one, and none is needed:
+	// walking back is the client handing back a cursor it already used. That is
+	// also why the pager can say `Page 2` and never `Page 2 of 7`.
+	Cursor string `json:"cursor,omitempty"`
+	// Limit is the page size; zero takes the server's default (20) and anything
+	// above its cap is clamped.
+	Limit int `json:"limit,omitempty"`
+}
+
+// WorkListArchiveResult is one page of the archive: the closed stories on it,
+// followed by the tasks those rows speak for, which get no rows of their own.
+type WorkListArchiveResult struct {
+	Items      []WorkListItem `json:"items"`
+	NextCursor string         `json:"next_cursor,omitempty"`
+	HasMore    bool           `json:"has_more,omitempty"`
+}
+
+// WorkListEarlierParams asks for the `Current` segment with nothing held back,
+// which is what "Show earlier work" presses. A cap is not a page: there is no
+// cursor and no second request.
+type WorkListEarlierParams struct {
+	ID string `json:"id"`
+}
+
+// WorkListEarlierResult is the whole `Current` segment, replacing what the
+// subscription's snapshot sent rather than extending it.
+type WorkListEarlierResult struct {
 	Items []WorkListItem `json:"items"`
 }
 
@@ -761,6 +871,16 @@ type WorkDetailSubscribeResult struct {
 	// Activity rides here for the same reason Usage does: it is derived from
 	// something the work record knows nothing about — the turn of its session.
 	Activity work.Activity `json:"activity"`
+	// Children is every task under this item, and Parent the story above it.
+	//
+	// They are here rather than read out of the work list because that list is
+	// the `Current` segment and holds no closed work: a closed story opened from
+	// the archive, or reloaded on, would otherwise look childless — while its
+	// own row states `{closed}/{total} tasks` over exactly these
+	// (docs/list-paging-ui.md §2.2). The detail is the one place a story's tasks
+	// are listed, so it answers for them itself.
+	Children []WorkListItem `json:"children"`
+	Parent   *WorkListItem  `json:"parent,omitempty"`
 }
 
 // AgentRole namespace

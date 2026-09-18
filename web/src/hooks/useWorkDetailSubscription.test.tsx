@@ -67,12 +67,14 @@ describe("useWorkDetailSubscription", () => {
 				comments: [],
 				usage: usageOf(1_000),
 				activity: "idle",
+				children: [],
 			},
 			"work-2": {
 				work: work("work-2"),
 				comments: [],
 				usage: usageOf(50),
 				activity: "idle",
+				children: [],
 			},
 		};
 	});
@@ -99,6 +101,7 @@ describe("useWorkDetailSubscription", () => {
 				comments: [],
 				usage: usageOf(1_500),
 				activity: "idle",
+				children: [],
 			});
 		});
 
@@ -125,6 +128,7 @@ describe("useWorkDetailSubscription", () => {
 				comments: [],
 				usage: usageOf(1_000),
 				activity: "needs_message",
+				children: [],
 			});
 		});
 		expect(result.current.activity).toBe("needs_message");

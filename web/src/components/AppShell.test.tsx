@@ -119,7 +119,10 @@ const mockSubscribe = vi.fn(
 		const all = worktreeSessions[wt] ?? [];
 		return {
 			id: `watch-${wt}`,
-			initial: excludeWorkSessions ? all.filter((s) => !s.work_id) : all,
+			initial: {
+				sessions: excludeWorkSessions ? all.filter((s) => !s.work_id) : all,
+				has_unread: false,
+			},
 		};
 	},
 );
@@ -261,7 +264,7 @@ describe("AppShell when the automatic session create fails", () => {
 	it("reports a failed manual create without losing the open session", async () => {
 		mockSubscribe.mockImplementationOnce(async () => ({
 			id: "watch-main",
-			initial: [session("m1")],
+			initial: { sessions: [session("m1")], has_unread: false },
 		}));
 		vi.mocked(wsActions.createSession).mockRejectedValueOnce(
 			new Error("worktree is dirty"),
@@ -381,7 +384,10 @@ describe("AppShell cross-worktree navigation", () => {
 			const all = worktreeSessions[wt] ?? [];
 			return {
 				id: `watch-${wt}`,
-				initial: excludeWorkSessions ? all.filter((s) => !s.work_id) : all,
+				initial: {
+					sessions: excludeWorkSessions ? all.filter((s) => !s.work_id) : all,
+					has_unread: false,
+				},
 			};
 		});
 

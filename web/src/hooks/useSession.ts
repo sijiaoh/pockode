@@ -1,5 +1,5 @@
 import { useMutation } from "@tanstack/react-query";
-import { useCallback, useMemo, useRef } from "react";
+import { useCallback, useRef } from "react";
 import {
 	selectSessionDetailStatus,
 	useSessionDetailStore,
@@ -23,6 +23,12 @@ export function useSession({
 	const isLoading = useSessionStore((s) => s.isLoading);
 	const isSuccess = useSessionStore((s) => s.isSuccess);
 	const isReloading = useSessionStore((s) => s.isReloading);
+	const hasMore = useSessionStore((s) => s.nextCursor !== null);
+	const isLoadingMore = useSessionStore((s) => s.isLoadingMore);
+	const pageError = useSessionStore((s) => s.pageError);
+	const autoLoad = useSessionStore((s) => s.autoLoad);
+	const hasPaged = useSessionStore((s) => s.hasPaged);
+	const retryLoadMore = useSessionStore((s) => s.retryLoadMore);
 	const showTaskSessions = useSessionStore((s) => s.showTaskSessions);
 	const updateSessions = useSessionStore((s) => s.updateSessions);
 	// The filter is the server's, so the toggle is a subscription parameter
@@ -30,12 +36,16 @@ export function useSession({
 	// mean holding the whole work list to invert it, which makes this list wrong
 	// for as long as that list is incomplete — and a work list that pages is
 	// never complete (docs/code/subscription-system.md#which-sessions-belong-to-work).
-	const { refresh } = useSessionSubscription(enabled, !showTaskSessions);
-
-	const hasAnyUnread = useMemo(
-		() => sessions.some((s) => s.unread),
-		[sessions],
+	const { refresh, loadMore } = useSessionSubscription(
+		enabled,
+		!showTaskSessions,
 	);
+
+	// The server's answer over the whole list, not `sessions.some(...)`: the list
+	// is a page, and an unread session is one an agent finished with while nobody
+	// was looking — exactly the session nobody has scrolled to
+	// (docs/list-paging-ui.md §2.1).
+	const hasAnyUnread = useSessionStore((s) => s.hasUnread);
 
 	const createMutation = useMutation({
 		mutationFn: wsActions.createSession,
@@ -114,6 +124,13 @@ export function useSession({
 	return {
 		sessions,
 		hasAnyUnread,
+		hasMore,
+		isLoadingMore,
+		pageError,
+		autoLoad,
+		hasPaged,
+		loadMore,
+		retryLoadMore,
 		currentSessionId,
 		currentSession,
 		isRouteSessionResolved,

@@ -5,6 +5,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/pockode/server/rpc"
 	"github.com/pockode/server/session"
 	"github.com/pockode/server/work"
 )
@@ -48,12 +49,49 @@ type detailEvent struct {
 }
 
 // WorkDetail is everything a work.detail subscriber is sent: the work item, its
-// comments, what its subtree consumed, and what it is doing.
+// comments, what its subtree consumed, what it is doing, and the two relations
+// its page draws.
+//
+// Children and Parent ride here rather than being looked up in the work list,
+// because that list is the `Current` segment and closed work is not in it: a
+// closed story read out of the archive — or reached by reloading the page on
+// it — would otherwise look childless, and a story's `{closed}/{total}` is a
+// claim over children that get no rows anywhere (docs/list-paging-ui.md §2.2).
+// The detail is the one place a story's tasks are listed, and it now answers
+// for them itself.
 type WorkDetail struct {
 	Work     work.Work
 	Comments []work.Comment
 	Usage    work.Usage
 	Activity work.Activity
+	Children []rpc.WorkListItem
+	Parent   *rpc.WorkListItem
+}
+
+// relatives reads the rows a detail page draws besides the item itself: the
+// item's children, and the story it belongs to.
+//
+// Allocated to zero length rather than left nil, so a work with no children is
+// sent `[]`, which a client can iterate, and not `null`, which it cannot.
+func (w *WorkDetailWatcher) relatives(item work.Work) ([]rpc.WorkListItem, *rpc.WorkListItem, error) {
+	items, err := w.store.List()
+	if err != nil {
+		return nil, nil, err
+	}
+
+	resolver := work.NewActivityResolver(w.turnSource)
+	children := make([]rpc.WorkListItem, 0, 4)
+	var parent *rpc.WorkListItem
+	for _, other := range items {
+		switch {
+		case other.ParentID == item.ID:
+			children = append(children, rpc.NewWorkListItem(other, resolver.Activity(other)))
+		case item.ParentID != "" && other.ID == item.ParentID:
+			row := rpc.NewWorkListItem(other, resolver.Activity(other))
+			parent = &row
+		}
+	}
+	return children, parent, nil
 }
 
 // NewWorkDetailWatcher builds the watcher. usageSource is where the subtree's
@@ -127,7 +165,7 @@ func (w *WorkDetailWatcher) notifyChange(event detailEvent) {
 func (w *WorkDetailWatcher) notifyForWorkID(workID string, fromSession bool) {
 	// This watcher receives every work/comment change in the app, but detail
 	// subscriptions normally exist only for the one work item a client has open.
-	// Skip the store reads (two linear scans + allocation) when nobody is
+	// Skip the store reads (several linear scans + allocation) when nobody is
 	// watching this work_id.
 	if !w.HasSubscriptionForKey(workID) {
 		return
@@ -160,6 +198,8 @@ func (w *WorkDetailWatcher) notifyDetail(sub *Subscription, detail WorkDetail) {
 		Comments: detail.Comments,
 		Usage:    detail.Usage,
 		Activity: detail.Activity,
+		Children: detail.Children,
+		Parent:   detail.Parent,
 	}}
 	if err := sub.Notifier.Notify(w.Context(), n); err != nil {
 		slog.Debug("failed to notify detail subscriber", "id", sub.ID, "error", err)
@@ -234,11 +274,19 @@ func (w *WorkDetailWatcher) buildDetail(workID string) (WorkDetail, bool) {
 		return WorkDetail{}, false
 	}
 
+	children, parent, err := w.relatives(item)
+	if err != nil {
+		slog.Error("failed to read work relatives for detail notification", "error", err, "workId", workID)
+		return WorkDetail{}, false
+	}
+
 	return WorkDetail{
 		Work:     item,
 		Comments: comments,
 		Usage:    usage,
 		Activity: work.NewActivityResolver(w.turnSource).Activity(item),
+		Children: children,
+		Parent:   parent,
 	}, true
 }
 
@@ -350,11 +398,24 @@ func (w *WorkDetailWatcher) Subscribe(id, workID string, notifier Notifier) (Wor
 
 	activity := work.NewActivityResolver(w.turnSource).Activity(item)
 
+	children, parent, err := w.relatives(item)
+	if err != nil {
+		w.RemoveSubscription(id)
+		return WorkDetail{}, err
+	}
+
 	// The reply carries both derived parts, so the subscriber already has them:
 	// a session change that moves neither is then not worth a notification.
 	w.rememberSent(id, usage, activity)
 
-	return WorkDetail{Work: item, Comments: comments, Usage: usage, Activity: activity}, nil
+	return WorkDetail{
+		Work:     item,
+		Comments: comments,
+		Usage:    usage,
+		Activity: activity,
+		Children: children,
+		Parent:   parent,
+	}, nil
 }
 
 type workDetailChangedParams struct {
@@ -366,6 +427,10 @@ type workDetailChangedParams struct {
 	// is not a field of the work item.
 	Usage    work.Usage    `json:"usage"`
 	Activity work.Activity `json:"activity"`
+	// Children and Parent are the two relations the page draws, and are here
+	// rather than looked up in the work list for the reason WorkDetail gives.
+	Children []rpc.WorkListItem `json:"children"`
+	Parent   *rpc.WorkListItem  `json:"parent,omitempty"`
 }
 
 // OnWorkChange implements work.OnChangeListener.

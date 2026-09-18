@@ -668,3 +668,39 @@ func TestWorkDetailWatcher_ResendsWhenOnlyTheActivityMoved(t *testing.T) {
 		t.Errorf("activity = %q, want running", params.Activity)
 	}
 }
+
+// A story's detail is the one place its tasks are listed, and it answers for
+// them itself: the work list is the `Current` segment and holds no closed work,
+// so a closed story read out of the archive would otherwise look childless
+// (docs/list-paging-ui.md §2.2).
+func TestWorkDetailWatcher_CarriesItsChildrenAndItsParent(t *testing.T) {
+	store := &mockDetailStore{works: []work.Work{
+		{ID: "story", Type: work.WorkTypeStory, Status: work.StatusClosed, Title: "Story"},
+		{ID: "t1", Type: work.WorkTypeTask, ParentID: "story", Status: work.StatusClosed, Title: "One"},
+		{ID: "t2", Type: work.WorkTypeTask, ParentID: "story", Status: work.StatusClosed, Title: "Two"},
+		{ID: "other", Type: work.WorkTypeStory, Status: work.StatusOpen, Title: "Other"},
+	}}
+	w := NewWorkDetailWatcher(store, newMockUsageSource(), nil)
+
+	detail, err := w.Subscribe("client-1", "story", nil)
+	if err != nil {
+		t.Fatalf("subscribe: %v", err)
+	}
+	if got := len(detail.Children); got != 2 {
+		t.Errorf("children = %d, want 2", got)
+	}
+	if detail.Parent != nil {
+		t.Errorf("a top-level story has no parent, got %+v", detail.Parent)
+	}
+
+	child, err := w.Subscribe("client-2", "t1", nil)
+	if err != nil {
+		t.Fatalf("subscribe to the task: %v", err)
+	}
+	if len(child.Children) != 0 {
+		t.Errorf("a task has no children, got %d", len(child.Children))
+	}
+	if child.Parent == nil || child.Parent.ID != "story" {
+		t.Errorf("parent = %+v, want the story", child.Parent)
+	}
+}

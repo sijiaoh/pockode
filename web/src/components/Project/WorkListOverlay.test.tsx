@@ -39,8 +39,34 @@ const createWork = (overrides: Partial<WorkListItem>): WorkListItem => ({
 	...overrides,
 });
 
-function setWorks(works: WorkListItem[]) {
-	useWorkStore.setState({ works, isLoading: false, error: null });
+function setWorks(works: WorkListItem[], notRunningHidden = 0) {
+	useWorkStore.setState({
+		works,
+		notRunningHidden,
+		isLoading: false,
+		error: null,
+		isEarlierLoading: false,
+		earlierError: null,
+	});
+}
+
+/**
+ * One page of the archive, as the server hands it over: already in order, and
+ * carrying the tasks its rows speak for. The client never re-sorts it.
+ */
+function setArchivePage(
+	archive: WorkListItem[],
+	{ page = 0, nextCursor = null as string | null } = {},
+) {
+	useWorkStore.setState({
+		archive,
+		archivePage: page,
+		archiveCursors: page === 0 ? [""] : ["", "cursor-1"],
+		archiveNextCursor: nextCursor,
+		archiveLoaded: true,
+		isArchiveLoading: false,
+		archiveError: null,
+	});
 }
 
 function renderList() {
@@ -78,6 +104,7 @@ function groupOf(title: string): string {
 describe("WorkListOverlay", () => {
 	beforeEach(() => {
 		setWorks([]);
+		setArchivePage([]);
 		projectPanelActions.reset();
 	});
 
@@ -108,6 +135,8 @@ describe("WorkListOverlay", () => {
 	});
 
 	it("names the story a task left, whatever state that story is in", () => {
+		// The closed story comes with the `Current` segment for exactly this: its
+		// task's row prints its name and can get it from nowhere else (§2.2).
 		setWorks([
 			createWork({ id: "s1", title: "Cluster mode", status: "closed" }),
 			createWork({
@@ -296,14 +325,8 @@ describe("WorkListOverlay", () => {
 	// long scroll.
 	it("keeps closed work out of Current and lists it under Closed, newest first", async () => {
 		const user = userEvent.setup();
-		setWorks([
-			createWork({
-				id: "older",
-				title: "Older Story",
-				status: "closed",
-				activity: "closed",
-				updated_at: "2026-03-01T00:00:00Z",
-			}),
+		setWorks([createWork({ id: "s1", title: "Never started" })]);
+		setArchivePage([
 			createWork({
 				id: "newer",
 				title: "Newer Story",
@@ -311,8 +334,16 @@ describe("WorkListOverlay", () => {
 				activity: "closed",
 				updated_at: "2026-03-05T00:00:00Z",
 			}),
+			createWork({
+				id: "older",
+				title: "Older Story",
+				status: "closed",
+				activity: "closed",
+				updated_at: "2026-03-01T00:00:00Z",
+			}),
 			// A finished task is looked for inside its story, so it is a row in
-			// neither segment (§6).
+			// neither segment (§6) — it comes with the page for the count on its
+			// story's row and nothing else.
 			createWork({
 				id: "t1",
 				type: "task",
@@ -321,7 +352,6 @@ describe("WorkListOverlay", () => {
 				status: "closed",
 				activity: "closed",
 			}),
-			createWork({ id: "s1", title: "Never started" }),
 		]);
 
 		renderList();
@@ -336,14 +366,14 @@ describe("WorkListOverlay", () => {
 
 	it("dates the archive it sorts, and nothing else", async () => {
 		const user = userEvent.setup();
-		setWorks([
+		setWorks([createWork({ id: "s1", title: "Never started" })]);
+		setArchivePage([
 			createWork({
 				id: "closed",
 				title: "Older Story",
 				status: "closed",
 				activity: "closed",
 			}),
-			createWork({ id: "s1", title: "Never started" }),
 		]);
 
 		renderList();
@@ -357,7 +387,7 @@ describe("WorkListOverlay", () => {
 	// cannot live in the component.
 	it("remembers the segment across a trip into a detail page", async () => {
 		const user = userEvent.setup();
-		setWorks([
+		setArchivePage([
 			createWork({
 				id: "closed",
 				title: "Older Story",
@@ -440,6 +470,127 @@ describe("WorkListOverlay", () => {
 		expect(screen.getByRole("button", { name: "New Story" })).toBeVisible();
 		await user.click(screen.getByRole("button", { name: "Closed" }));
 		expect(screen.getByRole("button", { name: "New Story" })).toBeVisible();
+	});
+
+	// §4.1 and check 11: a heading reading `Not running 50` over a group of 120
+	// is not a smaller number, it is a wrong one.
+	it("counts the whole Not running group, and offers the rest above the rows", () => {
+		setWorks(
+			[
+				createWork({ id: "s1", title: "Never started" }),
+				createWork({ id: "s2", title: "Also never started" }),
+			],
+			118,
+		);
+
+		renderList();
+
+		expect(
+			screen.getByRole("heading", { level: 2, name: /Not running/ }),
+		).toHaveTextContent("Not running120");
+		const control = screen.getByRole("button", { name: /Show earlier work/ });
+		const firstRow = screen.getByRole("heading", {
+			level: 3,
+			name: "Never started",
+		});
+		expect(
+			control.compareDocumentPosition(firstRow) &
+				Node.DOCUMENT_POSITION_FOLLOWING,
+		).toBeTruthy();
+	});
+
+	it("offers nothing to show earlier when the group arrived whole", () => {
+		setWorks([createWork({ id: "s1", title: "Never started" })]);
+
+		renderList();
+
+		expect(
+			screen.queryByRole("button", { name: /Show earlier work/ }),
+		).toBeNull();
+	});
+
+	// The two segments genuinely overlap: a closed story with a stopped task is
+	// on the archive page *and* in the `Current` segment, which carries it so
+	// that its task's row can print `in: <title>`. Counted twice, the story's own
+	// row would claim twice the tasks it has.
+	it("counts a story's tasks once when it is in both segments", async () => {
+		const user = userEvent.setup();
+		const story = createWork({
+			id: "s1",
+			title: "Cluster mode",
+			status: "closed",
+			activity: "closed",
+		});
+		const stoppedTask = createWork({
+			id: "t1",
+			type: "task",
+			parent_id: "s1",
+			title: "Wire the relay",
+			status: "stopped",
+			activity: "stopped",
+		});
+		const closedTask = createWork({
+			id: "t2",
+			type: "task",
+			parent_id: "s1",
+			title: "A finished task",
+			status: "closed",
+			activity: "closed",
+		});
+		setWorks([story, stoppedTask]);
+		setArchivePage([story, stoppedTask, closedTask]);
+
+		renderList();
+		await user.click(screen.getByRole("button", { name: "Closed" }));
+
+		expect(screen.getByText("1/2 tasks")).toBeInTheDocument();
+	});
+
+	// §4.2 and check 8.
+	describe("the archive pager", () => {
+		const closedRow = createWork({
+			id: "closed",
+			title: "Older Story",
+			status: "closed",
+			activity: "closed",
+		});
+
+		it("does not render when there is only one page", async () => {
+			const user = userEvent.setup();
+			setArchivePage([closedRow]);
+
+			renderList();
+			await user.click(screen.getByRole("button", { name: "Closed" }));
+
+			expect(
+				screen.queryByRole("navigation", { name: "Archive pages" }),
+			).toBeNull();
+		});
+
+		it("disables each button at its end of the list rather than removing it", async () => {
+			const user = userEvent.setup();
+			setArchivePage([closedRow], { nextCursor: "cursor-1" });
+
+			renderList();
+			await user.click(screen.getByRole("button", { name: "Closed" }));
+
+			expect(screen.getByText("Page 1")).toBeInTheDocument();
+			expect(screen.getByRole("button", { name: "Newer" })).toBeDisabled();
+			expect(screen.getByRole("button", { name: "Older" })).toBeEnabled();
+		});
+
+		it("says which page it is on, and never how many there are", async () => {
+			const user = userEvent.setup();
+			setArchivePage([closedRow], { page: 1 });
+
+			renderList();
+			await user.click(screen.getByRole("button", { name: "Closed" }));
+
+			expect(screen.getByText("Page 2")).toBeInTheDocument();
+			expect(screen.queryByText(/Page 2 of/)).toBeNull();
+			expect(screen.getByRole("button", { name: "Newer" })).toBeEnabled();
+			expect(screen.getByRole("button", { name: "Older" })).toBeDisabled();
+		});
 	});
 
 	describe("with nothing to show", () => {

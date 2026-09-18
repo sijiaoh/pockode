@@ -6,9 +6,9 @@ export type SessionMode = "default" | "yolo";
 
 /**
  * Where a forked session came from. Only the parent's id: the client resolves
- * it against the session list it already holds, and a parent that is gone from
- * that list is exactly the "forked from a deleted session" case. Copying the
- * title here instead would keep showing the old one after a rename.
+ * it against the session list it already holds, and a parent that list has no
+ * row for is named by `UNLISTED_SESSION_NAME` rather than claimed to be gone.
+ * Copying the title here instead would keep showing the old one after a rename.
  */
 export interface ForkOrigin {
 	session_id: string;
@@ -513,14 +513,49 @@ export interface SessionForkParams {
 	title?: string;
 }
 
-export interface SessionListSubscribeResult {
+/**
+ * How far a page of the session list reaches, and what the rest of the list is
+ * doing.
+ *
+ * `next_cursor` is opaque: it names the position the next page starts at, and
+ * is handed back unread. It is absent exactly when `has_more` is false — asking
+ * for more must mean "the sessions after this one" and never "skip the first
+ * N", because the list is sorted by `updated_at` and that moves while the user
+ * scrolls (docs/list-paging-ui.md §3.3).
+ */
+export interface SessionListPage {
 	sessions: SessionListItem[];
+	next_cursor?: string;
+	has_more?: boolean;
 }
 
+export interface SessionListSubscribeResult extends SessionListPage {
+	/**
+	 * Whether anything in the *whole* list is unread, never just the page. The
+	 * sidebar's tab badge is an "is there any", and a page cannot answer that: an
+	 * unread session is one an agent finished with while nobody was looking,
+	 * which is exactly the session nobody has scrolled to
+	 * (docs/list-paging-ui.md §2.1).
+	 */
+	has_unread: boolean;
+}
+
+export type SessionListPageResult = SessionListPage;
+
 export type SessionListChangedNotification =
-	| { id: string; operation: "create" | "update"; session: SessionListItem }
-	| { id: string; operation: "delete"; sessionId: string }
-	| { id: string; operation: "sync"; sessions: SessionListItem[] };
+	| {
+			id: string;
+			operation: "create" | "update";
+			session: SessionListItem;
+			/** Absent when the server could not read it; keep the last answer. */
+			has_unread?: boolean;
+	  }
+	| { id: string; operation: "delete"; sessionId: string; has_unread?: boolean }
+	| ({
+			id: string;
+			operation: "sync";
+			has_unread?: boolean;
+	  } & SessionListPage);
 
 /**
  * One session's persistent metadata, as `session.detail.subscribe` reports it

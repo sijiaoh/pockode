@@ -1,5 +1,5 @@
-import { AlertCircle, Loader2, Plus } from "lucide-react";
-import { useCallback, useMemo, useState } from "react";
+import { AlertCircle, ChevronUp, Loader2, Plus } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRoleNameMap } from "../../hooks/useRoleNameMap";
 import { type Activity, needsUser } from "../../lib/activity";
 import {
@@ -7,13 +7,22 @@ import {
 	useProjectPanelStore,
 	type WorkSegment,
 } from "../../lib/projectPanelStore";
-import { useWorkStore } from "../../lib/workStore";
+import { useWorkStore, workPagingActions } from "../../lib/workStore";
 import type { WorkListItem } from "../../types/work";
 import { ActivityIcon } from "../ui";
 import BackToChatButton from "../ui/BackToChatButton";
 import BottomActionBar from "../ui/BottomActionBar";
+import ArchivePager from "./ArchivePager";
 import CreateWorkSheet from "./CreateWorkSheet";
 import WorkRow from "./WorkRow";
+
+/**
+ * `scrollTop` rather than `scrollTo`: the element does not need smooth
+ * behaviour here, and the property is the one every environment implements.
+ */
+function scrollToTop(ref: React.RefObject<HTMLDivElement | null>) {
+	if (ref.current) ref.current.scrollTop = 0;
+}
 
 interface Props {
 	onBack: () => void;
@@ -38,9 +47,57 @@ export default function WorkListOverlay({
 	const works = useWorkStore((s) => s.works);
 	const isLoading = useWorkStore((s) => s.isLoading);
 	const error = useWorkStore((s) => s.error);
+	const notRunningHidden = useWorkStore((s) => s.notRunningHidden);
+	const isEarlierLoading = useWorkStore((s) => s.isEarlierLoading);
+	const earlierError = useWorkStore((s) => s.earlierError);
+	const archive = useWorkStore((s) => s.archive);
+	const archivePage = useWorkStore((s) => s.archivePage);
+	const archiveCursors = useWorkStore((s) => s.archiveCursors);
+	const archiveNextCursor = useWorkStore((s) => s.archiveNextCursor);
+	const archiveLoaded = useWorkStore((s) => s.archiveLoaded);
+	const archiveAttempt = useWorkStore((s) => s.archiveAttempt);
+	const archiveError = useWorkStore((s) => s.archiveError);
+	const pagingGeneration = useWorkStore((s) => s.pagingGeneration);
 	const roleNameMap = useRoleNameMap();
 	const segment = useProjectPanelStore((s) => s.segment);
 	const [creating, setCreating] = useState(false);
+	const scrollRef = useRef<HTMLDivElement | null>(null);
+
+	// The archive is fetched, never pushed, so the first page is asked for the
+	// first time the segment is looked at — and not before: a user who never
+	// opens it never pays for it.
+	//
+	// `pagingGeneration` is in the dependencies because a resubscribe leaves the
+	// archive unloaded on purpose, and it is what says the absence belongs to a
+	// subscription that can actually answer.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: pagingGeneration is an intentional trigger — a fresh subscription is what makes the missing first page fetchable again
+	useEffect(() => {
+		if (segment !== "closed" || archiveLoaded) return;
+		workPagingActions.loadArchivePage(0, "");
+	}, [segment, archiveLoaded, pagingGeneration]);
+
+	// A page is a new set of rows, and reading it from the middle is not a thing
+	// anyone asked for (docs/list-paging-ui.md §4.2).
+	useEffect(() => {
+		if (segment === "closed") scrollToTop(scrollRef);
+	}, [segment]);
+
+	const goOlder = useCallback(() => {
+		if (!archiveNextCursor) return;
+		scrollToTop(scrollRef);
+		workPagingActions.loadArchivePage(archivePage + 1, archiveNextCursor);
+	}, [archivePage, archiveNextCursor]);
+
+	const goNewer = useCallback(() => {
+		if (archivePage === 0) return;
+		scrollToTop(scrollRef);
+		// Walking back is handing back a cursor already used, which is what lets
+		// the server stay one-directional.
+		workPagingActions.loadArchivePage(
+			archivePage - 1,
+			archiveCursors[archivePage - 1] ?? "",
+		);
+	}, [archivePage, archiveCursors]);
 
 	const handleCreated = useCallback(
 		(workId: string) => {
@@ -50,9 +107,23 @@ export default function WorkListOverlay({
 		[onOpenWorkDetail],
 	);
 
+	// Over both lists: a story's row states `{closed}/{total} tasks` over its
+	// children, and an archive page arrives with the tasks its rows speak for
+	// (docs/list-paging-ui.md §2.2).
+	//
+	// Deduplicated by id, because the two lists genuinely overlap: a closed story
+	// with a stopped task is on the archive page *and* in the `Current` segment,
+	// which carries it so that its task's row can print `in: <title>`. Counted
+	// twice, its own row would then claim twice the tasks it has.
+	const known = useMemo(() => {
+		const byId = new Map<string, WorkListItem>();
+		for (const w of [...works, ...archive]) byId.set(w.id, w);
+		return [...byId.values()];
+	}, [works, archive]);
+
 	const tasksByParentId = useMemo(() => {
 		const map = new Map<string, WorkListItem[]>();
-		for (const w of works) {
+		for (const w of known) {
 			if (w.type === "task" && w.parent_id) {
 				const list = map.get(w.parent_id);
 				if (list) {
@@ -63,11 +134,11 @@ export default function WorkListOverlay({
 			}
 		}
 		return map;
-	}, [works]);
+	}, [known]);
 
 	const titleById = useMemo(
-		() => new Map(works.map((w) => [w.id, w.title])),
-		[works],
+		() => new Map(known.map((w) => [w.id, w.title])),
+		[known],
 	);
 
 	const groups = useMemo(() => {
@@ -91,14 +162,12 @@ export default function WorkListOverlay({
 		});
 	}, [works]);
 
+	// The order is the server's, not re-derived here: the page was cut along a
+	// cursor into that order, and a client sorting it again would answer ties
+	// differently from the cut it is showing.
 	const closedStories = useMemo(
-		() =>
-			works
-				.filter((w) => w.type === "story" && w.status === "closed")
-				// The one list sorted by anything: "when did this finish" is the only
-				// question the archive is asked.
-				.sort((a, b) => b.updated_at.localeCompare(a.updated_at)),
-		[works],
+		() => archive.filter((w) => w.type === "story" && w.status === "closed"),
+		[archive],
 	);
 
 	const renderRow = (work: WorkListItem) => (
@@ -136,7 +205,7 @@ export default function WorkListOverlay({
 			    wherever the list has been scrolled to. */}
 			<SegmentedControl segment={segment} />
 
-			<div className="min-h-0 flex-1 overflow-auto p-2">
+			<div ref={scrollRef} className="min-h-0 flex-1 overflow-auto p-2">
 				{isLoading ? (
 					<div className="flex items-center justify-center py-8">
 						<Loader2 className="size-5 animate-spin text-th-text-muted" />
@@ -147,14 +216,44 @@ export default function WorkListOverlay({
 						<p>{error}</p>
 					</div>
 				) : segment === "closed" ? (
-					closedStories.length === 0 ? (
-						// No action to offer here, so none is written.
-						<p className="py-8 text-center text-sm text-th-text-muted">
-							Nothing finished yet.
-						</p>
-					) : (
-						<div className="space-y-0.5">{closedStories.map(renderRow)}</div>
-					)
+					<>
+						{/* Above the rows rather than instead of them: a page that did
+						    not arrive is no reason to take away the one the user was
+						    reading, and Retry asks for the page that failed, which is
+						    not always the page on screen. */}
+						{archiveError && (
+							<div className="flex flex-col items-center gap-2 py-4 text-center text-sm text-th-error">
+								<AlertCircle className="size-5" />
+								<p role="alert">{archiveError}</p>
+								<button
+									type="button"
+									onClick={() =>
+										workPagingActions.loadArchivePage(
+											archiveAttempt.page,
+											archiveAttempt.cursor,
+										)
+									}
+									className="min-h-[44px] rounded-lg px-4 text-sm text-th-text-primary hover:bg-th-bg-tertiary focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent"
+								>
+									Retry
+								</button>
+							</div>
+						)}
+						{!archiveLoaded ? (
+							!archiveError && (
+								<div className="flex items-center justify-center py-8">
+									<Loader2 className="size-5 animate-spin text-th-text-muted" />
+								</div>
+							)
+						) : closedStories.length === 0 ? (
+							// No action to offer here, so none is written.
+							<p className="py-8 text-center text-sm text-th-text-muted">
+								Nothing finished yet.
+							</p>
+						) : (
+							<div className="space-y-0.5">{closedStories.map(renderRow)}</div>
+						)}
+					</>
 				) : groups.length === 0 ? (
 					<div className="py-8 text-center text-sm text-th-text-muted">
 						<p>Nothing on the go.</p>
@@ -164,13 +263,50 @@ export default function WorkListOverlay({
 					<div className="space-y-2">
 						{groups.map(({ group, rows }) => (
 							<section key={group}>
-								<GroupHeading group={group} count={rows.length} />
+								<GroupHeading
+									group={group}
+									// The whole group's, not the number of rows fetched: a
+									// heading reading `Not running 50` over a group of 120 is
+									// not a smaller number, it is a wrong one
+									// (docs/list-paging-ui.md §4.1).
+									count={
+										group === "not_running"
+											? rows.length + notRunningHidden
+											: rows.length
+									}
+								/>
+								{group === "not_running" && notRunningHidden > 0 && (
+									// Above the rows, because it is the only control on this
+									// screen that leads backwards and it points the way it
+									// leads: the rows it fetches are the oldest, taken off the
+									// front of a group that is in creation order.
+									<ShowEarlierWork
+										count={notRunningHidden}
+										isLoading={isEarlierLoading}
+										error={earlierError}
+									/>
+								)}
 								<div className="space-y-0.5">{rows.map(renderRow)}</div>
 							</section>
 						))}
 					</div>
 				)}
 			</div>
+
+			{/* Fixed above the bottom bar rather than at the end of the list, and
+			    absent entirely while there is only one page (docs/list-paging-ui.md
+			    §4.2, sidebar-ui.md principle 1). */}
+			{segment === "closed" &&
+				archiveLoaded &&
+				(archivePage > 0 || archiveNextCursor !== null) && (
+					<ArchivePager
+						page={archivePage}
+						hasNewer={archivePage > 0}
+						hasOlder={archiveNextCursor !== null}
+						onNewer={goNewer}
+						onOlder={goOlder}
+					/>
+				)}
 
 			{/* Fixed, and in both segments: creating is the most frequent action on
 			    this screen, it does not depend on the list having loaded, and the
@@ -300,6 +436,47 @@ function rowGroup(work: WorkListItem): WorkGroup | null {
 	// under two labels, and the row's glyph already tells them apart.
 	if (work.status === "stopped") return "not_running";
 	return work.type === "story" ? "not_running" : null;
+}
+
+/**
+ * The one control that leads backwards: it fetches the oldest rows of *Not
+ * running*, which the server held back above a generous number
+ * (docs/list-paging-ui.md §4.1).
+ *
+ * It is a cap being lifted, not a page being turned — one press loads all of
+ * them, and the control is gone afterwards, so there is no second press and
+ * nothing that says how far back it goes.
+ */
+function ShowEarlierWork({
+	count,
+	isLoading,
+	error,
+}: {
+	count: number;
+	isLoading: boolean;
+	error: string | null;
+}) {
+	return (
+		<div className="flex flex-col">
+			{error && (
+				<p role="alert" className="px-3 py-1 text-xs text-th-error">
+					{error}
+				</p>
+			)}
+			<button
+				type="button"
+				onClick={() => workPagingActions.loadEarlier()}
+				className="flex min-h-[44px] w-full items-center justify-center gap-2 rounded-lg text-sm text-th-text-muted transition-colors hover:bg-th-bg-tertiary hover:text-th-text-primary focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent"
+			>
+				{isLoading ? (
+					<Loader2 className="size-4 animate-spin" />
+				) : (
+					<ChevronUp className="size-4" />
+				)}
+				{error ? "Retry" : `Show earlier work (${count})`}
+			</button>
+		</div>
+	);
 }
 
 /**

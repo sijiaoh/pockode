@@ -23,7 +23,19 @@ function SessionsTab({
 	onDeleteSession,
 	isSwitchingWorktree,
 }: Props) {
-	const { sessions, isLoading, isReloading, refresh } = useSession();
+	const {
+		sessions,
+		isLoading,
+		isReloading,
+		refresh,
+		hasMore,
+		isLoadingMore,
+		pageError,
+		autoLoad,
+		hasPaged,
+		loadMore,
+		retryLoadMore,
+	} = useSession();
 
 	// The list on screen belongs to the worktree the user is leaving. Selecting a
 	// row from it would navigate to a session that doesn't exist in the new
@@ -42,6 +54,22 @@ function SessionsTab({
 		return refresh();
 	}, [isStale, refresh]);
 	const { isActive } = useSidebarRefresh("sessions", refreshUnlessStale);
+
+	// The sentinel is one control in every state, so pressing it after a failure
+	// has to be the retry: clearing the error is what re-arms auto-loading, and
+	// the request is the same one either way.
+	//
+	// Barred while the list is stale for the same reason a refresh is: it would
+	// page a subscription bound to the worktree being left, and the answer —
+	// rows of the old worktree, or the refusal of a subscription that switch has
+	// already ended — lands on a list about to be replaced either way. The
+	// observer is disarmed alongside it, because `inert` stops the tap but not
+	// the scroll that arms it.
+	const handleLoadMore = useCallback(() => {
+		if (isStale) return;
+		if (pageError) retryLoadMore();
+		loadMore();
+	}, [isStale, pageError, retryLoadMore, loadMore]);
 
 	// Delayed while a list is on screen, so a switch that lands quickly stays
 	// visually still. The first load has nothing to hold, so it goes straight to
@@ -78,6 +106,12 @@ function SessionsTab({
 							currentSessionId={currentSessionId}
 							onSelectSession={onSelectSession}
 							onDeleteSession={onDeleteSession}
+							hasMore={hasMore}
+							isLoadingMore={isLoadingMore}
+							pageError={pageError}
+							autoLoad={autoLoad && !isStale}
+							hasPaged={hasPaged}
+							onLoadMore={handleLoadMore}
 						/>
 					</div>
 				)}

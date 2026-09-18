@@ -67,9 +67,11 @@ All methods use JSON-RPC 2.0 over WebSocket. Work and agent_role methods are **a
 | `work.reopen` | `WorkReopenParams` | `{}` | Reopen a closed work item (closed → active) |
 | `work.comment.list` | `WorkCommentListParams` | `{comments: Comment[]}` | List comments on a work item |
 | `work.comment.update` | `WorkCommentUpdateParams` | `Comment` | Update a comment's body |
-| `work.detail.subscribe` | `WorkDetailSubscribeParams` | `{work, comments, usage}` | Subscribe to a single work item + comments + the token usage of its subtree ([why usage is here and not on `Work`](../code/work-system.md#usage-aggregation)) |
+| `work.detail.subscribe` | `WorkDetailSubscribeParams` | `{work, comments, usage, activity, children, parent?}` | Subscribe to a single work item + comments + the token usage of its subtree ([why usage is here and not on `Work`](../code/work-system.md#usage-aggregation)) and the two relations its page draws ([why they are not read off the list](../code/work-system.md#the-list-holds-rows-the-detail-page-holds-the-item)) |
 | `work.detail.unsubscribe` | `{id}` | `{}` | Unsubscribe from work detail |
-| `work.list.subscribe` | `SubscribeParams` | `{items: WorkListItem[]}` | Subscribe + get current snapshot ([what a row carries](#work-list-rows-vs-work-detail)) |
+| `work.list.subscribe` | `SubscribeParams` | `{items: WorkListItem[], not_running_hidden?}` | Subscribe + get the **`Current` segment**, which holds no closed work ([what a row carries](#work-list-rows-vs-work-detail), [why it is a segment](#the-list-is-two-segments)) |
+| `work.list.archive` | `WorkListArchiveParams` | `{items: WorkListItem[], next_cursor?, has_more?}` | One page of closed work, served against an open list subscription |
+| `work.list.earlier` | `{id}` | `{items: WorkListItem[]}` | The `Current` segment again with the *Not running* cap lifted |
 | `work.list.unsubscribe` | `{id}` | `{}` | Unsubscribe |
 
 #### Agent Role
@@ -95,7 +97,8 @@ WorkReopenParams          { id }
 WorkCommentListParams     { work_id }
 WorkCommentUpdateParams   { id, body }
 WorkDetailSubscribeParams { id, work_id }
-WorkListItem              { id, type, parent_id?, agent_role_id?, title, status, session_id?, worktree?, updated_at }
+WorkListArchiveParams     { id, cursor?, limit? }   // id names the subscription, not a fresh query
+WorkListItem              { id, type, parent_id?, agent_role_id?, title, status, activity, wait?, session_id?, worktree?, updated_at }
 
 SubscribeParams           { id }   // the whole of a subscribe with no other arguments
 
@@ -105,6 +108,21 @@ AgentRoleDeleteParams   { id }
 ```
 
 Defined in `server/rpc/types.go`.
+
+### The List Is Two Segments
+
+`work.list.subscribe` does not answer with every work item. It answers with the
+`Current` segment — the rows that screen draws plus everything those rows make
+claims about — and never with closed work, which is fetched a page at a time
+through `work.list.archive`. `not_running_hidden` says how many rows of the one
+unbounded group the server held back, so the group's heading can still show the
+whole group's count rather than the number of rows that arrived.
+
+Both paging methods take the **subscription's** id rather than repeating a
+query, and both refuse an unknown id, a malformed cursor and a negative limit as
+`InvalidParams` — which a client answers by subscribing afresh, not by offering
+a Retry. The design is [list-paging-ui.md](../list-paging-ui.md); the mechanics
+are [code/subscription-system.md](../code/subscription-system.md#paging-and-pushing-on-one-list).
 
 ### Work List Rows vs Work Detail
 
@@ -120,6 +138,8 @@ needs:
 | `parent_id` | builds that tree; also walks a work up to its root |
 | `agent_role_id` | the role name shown on the row |
 | `title`, `status` | the row itself |
+| `activity` | the row's glyph, and which group it is in — the one thing a row draws that a client cannot compute, since the list spans worktrees and a client holds turn state only for the one it has open ([lifecycle-ui](../lifecycle-ui.md) §1.3). It is also what the Project tab's attention dot is read off, and what the server's own `Current` cut consults so that a row needing a person is never held back |
+| `wait` | what an active work is waiting for; the agent's stated reason belongs to the detail, where there is room to show it |
 | `session_id` | the row's **Chat** shortcut |
 | `worktree` | the row's worktree badge (the list spans every worktree) |
 | `updated_at` | orders the closed group |

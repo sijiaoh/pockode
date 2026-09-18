@@ -31,8 +31,8 @@ describe("ForkOriginBanner", () => {
 	});
 
 	// Not a button: there is nowhere to go, and offering the tap anyway would
-	// promise a session that is gone.
-	it("degrades to plain text when the parent has been deleted", () => {
+	// promise a session the list cannot produce.
+	it("degrades to plain text when the parent has no row", () => {
 		render(
 			<ForkOriginBanner
 				parentSessionId="parent-session"
@@ -41,27 +41,27 @@ describe("ForkOriginBanner", () => {
 		);
 
 		expect(
-			screen.getByText("Forked from a deleted session"),
+			screen.getByText("Forked from a session that is not in the list"),
 		).toBeInTheDocument();
 		expect(screen.queryByRole("button")).toBeNull();
 	});
 
-	// An absent parent is only proof of deletion while nothing is being hidden.
-	// The list is narrowed server-side, and a fork of a work session has for its
-	// parent exactly the kind of session that narrowing removes — so with the
-	// filter on the banner must not call a living session deleted.
-	it("does not call the parent deleted while task sessions are hidden", () => {
-		useSessionStore.setState({ showTaskSessions: false });
-		render(
-			<ForkOriginBanner
-				parentSessionId="parent-session"
-				onOpenParent={vi.fn()}
-			/>,
-		);
+	// An absence is never evidence, whatever the filter is doing: the list is
+	// narrowed server-side *and* it is a page, so a missing row means the parent
+	// is hidden, or further down than the user has read — never that it is gone
+	// (docs/list-paging-ui.md §2.3).
+	it("never calls the parent deleted, filter or no filter", () => {
+		for (const showTaskSessions of [true, false]) {
+			useSessionStore.setState({ sessions: [], showTaskSessions });
+			const { unmount } = render(
+				<ForkOriginBanner
+					parentSessionId="parent-session"
+					onOpenParent={vi.fn()}
+				/>,
+			);
 
-		expect(screen.queryByText(/deleted/)).toBeNull();
-		expect(
-			screen.getByText("Forked from a session that is not in the list"),
-		).toBeInTheDocument();
+			expect(screen.queryByText(/deleted/)).toBeNull();
+			unmount();
+		}
 	});
 });

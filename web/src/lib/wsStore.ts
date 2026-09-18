@@ -24,7 +24,7 @@ import type {
 	SessionDetailChangedNotification,
 	SessionDetailSubscribeResult,
 	SessionListChangedNotification,
-	SessionListItem,
+	SessionListPageResult,
 	SessionListSubscribeResult,
 } from "../types/message";
 import type {
@@ -35,8 +35,9 @@ import type {
 import type {
 	WorkDetailChangedNotification,
 	WorkDetailSubscribeResult,
+	WorkListArchiveResult,
 	WorkListChangedNotification,
-	WorkListItem,
+	WorkListEarlierResult,
 	WorkListSubscribeResult,
 } from "../types/work";
 import { getWebSocketUrl } from "../utils/config";
@@ -125,7 +126,18 @@ export interface WatchActions {
 	sessionListSubscribe: (
 		callback: (params: SessionListChangedNotification) => void,
 		excludeWorkSessions?: boolean,
-	) => Promise<WatchSubscribeResult<SessionListItem[]>>;
+	) => Promise<WatchSubscribeResult<SessionListSubscribeResult>>;
+	/**
+	 * The rows after `cursor`, for the list that subscription is following.
+	 * Asked for by subscription id rather than by repeating the filter: the
+	 * narrowing is held on the subscription, so a page and the snapshot it
+	 * extends cannot be pages of two different lists.
+	 */
+	sessionListPage: (
+		subscriptionId: string,
+		cursor: string,
+		limit?: number,
+	) => Promise<SessionListPageResult>;
 	sessionListUnsubscribe: (id: string) => Promise<void>;
 	sessionDetailSubscribe: (
 		sessionId: string,
@@ -148,7 +160,15 @@ export interface WatchActions {
 	settingsUnsubscribe: (id: string) => Promise<void>;
 	workListSubscribe: (
 		callback: (params: WorkListChangedNotification) => void,
-	) => Promise<WatchSubscribeResult<WorkListItem[]>>;
+	) => Promise<WatchSubscribeResult<WorkListSubscribeResult>>;
+	/** Fetches one page of the closed archive; an empty cursor asks for the first. */
+	workListArchive: (
+		subscriptionId: string,
+		cursor: string,
+		limit?: number,
+	) => Promise<WorkListArchiveResult>;
+	/** Lifts the *Not running* cap. One call, the whole group, no cursor. */
+	workListEarlier: (subscriptionId: string) => Promise<WorkListEarlierResult>;
 	workListUnsubscribe: (id: string) => Promise<void>;
 	workDetailSubscribe: (
 		workId: string,
@@ -941,7 +961,26 @@ export const useWSStore = create<WSState>((set, get) => ({
 				sessionListWatchCallbacks,
 				callback,
 			);
-			return { id, initial: (result as SessionListSubscribeResult).sessions };
+			return { id, initial: result as SessionListSubscribeResult };
+		},
+
+		// The page is asked for by subscription id, not by repeating the filter:
+		// the narrowing is held on the subscription, so a page and the snapshot it
+		// extends cannot be pages of two different lists.
+		sessionListPage: async (
+			subscriptionId: string,
+			cursor: string,
+			limit?: number,
+		) => {
+			const client = getClient();
+			if (!client) {
+				throw new Error("Not connected");
+			}
+			return (await client.request("session.list.page", {
+				id: subscriptionId,
+				cursor,
+				...(limit === undefined ? {} : { limit }),
+			})) as SessionListPageResult;
 		},
 
 		sessionListUnsubscribe: (id: string) =>
@@ -1022,7 +1061,38 @@ export const useWSStore = create<WSState>((set, get) => ({
 				workListWatchCallbacks,
 				callback,
 			);
-			return { id, initial: (result as WorkListSubscribeResult).items };
+			return { id, initial: result as WorkListSubscribeResult };
+		},
+
+		// Both of these ask by subscription id rather than standing alone: a page
+		// is served against the list the subscription follows, and an id the
+		// server has dropped comes back as invalid params — which is the client's
+		// signal to subscribe afresh rather than to offer a Retry that can only
+		// fail the same way.
+		workListArchive: async (
+			subscriptionId: string,
+			cursor: string,
+			limit?: number,
+		) => {
+			const client = getClient();
+			if (!client) {
+				throw new Error("Not connected");
+			}
+			return (await client.request("work.list.archive", {
+				id: subscriptionId,
+				cursor,
+				...(limit === undefined ? {} : { limit }),
+			})) as WorkListArchiveResult;
+		},
+
+		workListEarlier: async (subscriptionId: string) => {
+			const client = getClient();
+			if (!client) {
+				throw new Error("Not connected");
+			}
+			return (await client.request("work.list.earlier", {
+				id: subscriptionId,
+			})) as WorkListEarlierResult;
 		},
 
 		workListUnsubscribe: (id: string) =>
