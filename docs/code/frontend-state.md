@@ -321,6 +321,14 @@ a fork of the joined message has to cut. The older half's anchor stands in only
 when the newer one never got one, a message without an anchor being one the user
 cannot fork from at all.
 
+The joined message keeps the newer half's **id** as well, the bubble being keyed
+on it, and that one is load-bearing outside the reducer: it is why the
+transcript pins its scroll position to the second message it holds rather than
+the first — the first being the only one a seam can grow older content inside,
+and a bubble that grows under the pin holds nothing still
+([agent-chat.md](../agent-chat.md#reading-a-page-on-the-client)). Moving the
+identity to the older half would move that pin, not just rename a key.
+
 ### Tool Runs
 
 Every tool call in a turn — a `Bash`, a `Read`, a subagent — is one

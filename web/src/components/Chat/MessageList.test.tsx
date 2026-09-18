@@ -193,12 +193,27 @@ const ROW_HEIGHT = 100;
  * is expressed.
  */
 function stretchRows(factor: number) {
+	layoutRows(() => ROW_HEIGHT * factor);
+}
+
+/**
+ * Lays the rows out from a height per row, for the cases where they are not all
+ * the same: a page merged into the message it landed above grows that one row
+ * and no other.
+ */
+function layoutRows(height: (messageId: string) => number) {
 	Object.defineProperty(HTMLElement.prototype, "offsetTop", {
 		configurable: true,
 		get(this: HTMLElement) {
 			if (!this.dataset.messageId) return 0;
-			const rows = [...document.querySelectorAll("[data-message-id]")];
-			return rows.indexOf(this) * ROW_HEIGHT * factor;
+			let top = 0;
+			for (const row of document.querySelectorAll<HTMLElement>(
+				"[data-message-id]",
+			)) {
+				if (row === this) break;
+				top += height(row.dataset.messageId ?? "");
+			}
+			return top;
 		},
 	});
 }
@@ -574,6 +589,122 @@ describe("MessageList history paging", () => {
 		expect(scroller.scrollTop).toBe(3 * ROW_HEIGHT);
 	});
 
+	it("holds the view still when the page is merged into the message it lands above", () => {
+		const { scroller, rerender, props, viewport } = renderPaging();
+		// The reader is looking at the second row, with the first one just above
+		// the top edge.
+		scroller.scrollTop = ROW_HEIGHT;
+
+		triggerHistorySentinel();
+
+		// The page's last message and this transcript's first one are two halves of
+		// one turn, so they are spliced into one bubble that keeps the first one's
+		// id: the list is the same length, and the row grows by the two rows'
+		// worth of older content now inside it.
+		layoutRows((id) => (id === "m1" ? 3 * ROW_HEIGHT : ROW_HEIGHT));
+		viewport.contentHeight = 1400;
+		rerender(
+			<MessageList {...props} messages={loaded} loadedHistoryPages={1} />,
+		);
+
+		// Pinned to the row that grew, the view would not move at all and the whole
+		// transcript would drop two rows down the screen.
+		expect(scroller.scrollTop).toBe(3 * ROW_HEIGHT);
+	});
+
+	it("restores to where the reader left the view, not to where they asked from", () => {
+		const { scroller, rerender, props } = renderPaging();
+		scroller.scrollTop = 5 * ROW_HEIGHT;
+
+		triggerHistorySentinel();
+		// The flick that brought the sentinel into view carries on afterwards, and
+		// the page is still in flight. Where it comes to rest is where the page has
+		// to land the reader.
+		dragTo(scroller, 2 * ROW_HEIGHT);
+
+		rerender(
+			<MessageList {...props} messages={pagedIn} loadedHistoryPages={1} />,
+		);
+
+		expect(scroller.scrollTop).toBe(4 * ROW_HEIGHT);
+	});
+
+	it("counts growth above the pin once when it lands between the request and a scroll", () => {
+		const { scroller, rerender, props, viewport } = renderPaging();
+		scroller.scrollTop = ROW_HEIGHT;
+
+		triggerHistorySentinel();
+
+		// A late event — a tool result that belongs to a turn already on screen —
+		// grows the first message while the page is still in flight. `overflow-
+		// anchor: none` means the view does not follow it, so the reader's content
+		// has moved down the screen under them.
+		layoutRows((id) => (id === "m1" ? 3 * ROW_HEIGHT : ROW_HEIGHT));
+		viewport.contentHeight = 1200;
+		// They then scroll, so the offset the pin remembers is read after that
+		// growth. Pairing it with the row position read before would charge the
+		// restore for the same 200px twice.
+		dragTo(scroller, 350);
+
+		layoutRows((id) => (id === "m1" ? 3 * ROW_HEIGHT : ROW_HEIGHT));
+		viewport.contentHeight = 1400;
+		rerender(
+			<MessageList {...props} messages={pagedIn} loadedHistoryPages={1} />,
+		);
+
+		// Two rows landed above the pin, and only those two rows may move the view.
+		expect(scroller.scrollTop).toBe(350 + 2 * ROW_HEIGHT);
+	});
+
+	it("refuses a page while the one that landed is still settling", () => {
+		vi.useFakeTimers();
+		const { scroller, rerender, props, onLoadMoreHistory } = renderPaging();
+		scroller.scrollTop = ROW_HEIGHT;
+		triggerHistorySentinel();
+
+		rerender(
+			<MessageList {...props} messages={pagedIn} loadedHistoryPages={1} />,
+		);
+
+		// The page is still settling, and each correction can carry the sentinel
+		// back over the top edge. A crossing the corrections caused is not a page
+		// the reader asked for — and one such crossing per correction is the
+		// stutter this gate exists to stop.
+		triggerHistorySentinel();
+		expect(onLoadMoreHistory).toHaveBeenCalledTimes(1);
+
+		act(() => vi.advanceTimersByTime(SETTLED));
+		expect(onLoadMoreHistory).toHaveBeenCalledTimes(2);
+	});
+
+	it("drops a page in flight when paging starts over rather than restoring against it", () => {
+		vi.useFakeTimers();
+		const { scroller, rerender, props } = renderPaging();
+		scroller.scrollTop = ROW_HEIGHT;
+		triggerHistorySentinel();
+
+		// One page lands, and the next is asked for once its restore settles.
+		rerender(
+			<MessageList {...props} messages={pagedIn} loadedHistoryPages={1} />,
+		);
+		act(() => vi.advanceTimersByTime(SETTLED));
+		expect(scroller.scrollTop).toBe(3 * ROW_HEIGHT);
+
+		// That page never arrives: the connection drops and re-subscribing lands
+		// back on the newest page, which starts the page count over. Rows the pin
+		// knows are in there, at offsets it was never measured against — restoring
+		// would move the reader for a page that was dropped, not delivered.
+		rerender(
+			<MessageList
+				{...props}
+				messages={pagedIn.slice(1)}
+				loadedHistoryPages={0}
+			/>,
+		);
+
+		expect(scroller.scrollTop).toBe(3 * ROW_HEIGHT);
+	});
+
 	it("keeps correcting the restore while the page that landed is still rendering", () => {
 		const { scroller, rerender, props } = renderPaging();
 		scroller.scrollTop = ROW_HEIGHT;
@@ -589,7 +720,9 @@ describe("MessageList history paging", () => {
 		// any of that, so on its own it now sits a page-worth too high.
 		stretchRows(2);
 		triggerResize(contentBox(scroller));
-		expect(scroller.scrollTop).toBe(ROW_HEIGHT + 4 * ROW_HEIGHT);
+		// The anchored row started at the top edge of the view (it sat one row
+		// down, and so did the view), and taller rows have to leave it there.
+		expect(scroller.scrollTop).toBe(3 * 2 * ROW_HEIGHT);
 
 		// Once the reader takes over, the view is theirs: a late correction here
 		// would pull them off whatever they scrolled to.
@@ -724,6 +857,13 @@ describe("MessageList history paging", () => {
 		// Paging stopping is not something to keep to itself.
 		expect(warn).toHaveBeenCalled();
 
+		// One arming buys one request. The corrections a settling page makes carry
+		// the sentinel back over the top edge, and a report of such a crossing can
+		// be delivered after the stall is set — with nothing left watching, it
+		// cannot buy a page the stall just refused.
+		triggerHistorySentinel();
+		expect(onLoadMoreHistory).toHaveBeenCalledTimes(1);
+
 		// Not a dead end: the reader asking for more starts it again, and one
 		// gesture buys one page, which is what the runaway never had.
 		fireEvent.wheel(scroller);
@@ -743,7 +883,7 @@ describe("MessageList history paging", () => {
 		rerender(
 			<MessageList
 				{...props}
-				messages={[textMessage("older1"), textMessage("older2"), loaded[1]]}
+				messages={[textMessage("older1"), textMessage("older2"), loaded[0]]}
 				loadedHistoryPages={1}
 			/>,
 		);

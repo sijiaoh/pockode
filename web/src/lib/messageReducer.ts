@@ -1535,7 +1535,9 @@ export function prependHistoryPage(
 	const merged: AssistantMessage = {
 		// Keeps the head's identity rather than the tail's: MessageList keys on it,
 		// so adopting the older id would remount the bubble and throw away whatever
-		// the user had expanded inside it — and the scroll anchor is pinned to it.
+		// the user had expanded inside it. Load-bearing outside this file too: it is
+		// why the transcript pins its scroll position one message below the head
+		// rather than to it (docs/agent-chat.md#reading-a-page-on-the-client).
 		...head,
 		...(endedAtBoundary ? { status: tail.status, error: tail.error } : {}),
 		parts: endedAtBoundary ? settleRunningToolParts(joined) : joined,

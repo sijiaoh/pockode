@@ -390,7 +390,12 @@ export function useChatMessages({
 			// hands it back again: pages paged in before a reconnect are gone, so
 			// the paging state starts over with them.
 			historyGenerationRef.current++;
+			// Both halves of "a page is on its way", or the flag left standing
+			// would be read as one: the request this generation bump discards
+			// skips its own reset, having learnt it no longer speaks for this
+			// transcript.
 			isLoadingMoreRef.current = false;
+			setIsLoadingMoreHistory(false);
 			// Keyed on the cursor rather than on `has_more`: the cursor is what
 			// an earlier page is actually asked for with, so the sentinel can
 			// never be left offering a page there is no way to request.
