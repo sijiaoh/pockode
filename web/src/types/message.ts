@@ -112,6 +112,33 @@ export type ToolRunStatus =
 	| "interrupted";
 
 /**
+ * One fetch of an earlier call's output, recorded on the call it read.
+ *
+ * Keyed by the fetching call's own `tool_use_id`, never simply appended: a
+ * history page replayed over a transcript that already holds it sends the same
+ * `tool_result` a second time, and appending would draw that one fetch twice.
+ */
+export interface ToolFetch {
+	/** The `tool_use_id` of the call that fetched this. */
+	id: string;
+	/**
+	 * What came back, under the same two names a run's own outcome uses and read
+	 * the same way — `contents` when it is there, `result` otherwise
+	 * (`toolRunText`). Naming them anything else here would be a second spelling
+	 * of one rule, and a reader who checked `result` alone would report an image
+	 * as an empty fetch.
+	 *
+	 * Both absent is the third case and a real one: the fetch never returned,
+	 * because the turn was cut short. An empty `result` means it returned and
+	 * had nothing to say, which is a different sentence.
+	 */
+	result?: string;
+	contents?: ContentBlock[];
+	/** The fetch failed. Says nothing about the task it was trying to read. */
+	isError?: boolean;
+}
+
+/**
  * One tool call and everything known about it, subagent calls included: a Task
  * *is* a tool call, and keeping a second shape for it meant two status
  * machines and two settle-on-interrupt paths for one thing. `TaskItem` stays,
@@ -151,6 +178,17 @@ export interface ToolRun {
 	placeholderResult?: string;
 	/** Set once the call is known to have left work running past the turn. */
 	fromBackground?: boolean;
+	/**
+	 * What later calls fetched back of this call's task, oldest first (Claude's
+	 * `TaskOutput`). Derived from persisted `tool_result` records, unlike
+	 * `activity` and `output`, so a replayed run still has it.
+	 *
+	 * Kept apart from `result`: that is this call's own outcome, handed to the
+	 * agent when the call returned, while a fetch is a second call reading the
+	 * task afterwards. Folding one into the other would assert the agent saw
+	 * something it never did.
+	 */
+	fetches?: ToolFetch[];
 	/**
 	 * How long the call took, when the engine reported it as a figure (Codex
 	 * does, Claude does not). Never inferred from arrival times: a replayed

@@ -201,6 +201,8 @@ interface ToolRun {
     contents?: ContentBlock[]
     /** Set when the result above is a background outcome, not what the agent read. */
     fromBackground?: boolean
+    /** What later calls fetched of this call's task, oldest first. Replay-safe. */
+    fetches?: ToolFetch[]
     /** How long the call took, when the engine says so. Replay-safe; Claude sends none. */
     durationMs?: number
     exitCode?: number
@@ -256,6 +258,45 @@ each with a reason:
   own buttons.
 - **No status field on `EventRecord`.** Every input to the derivation above is a
   record the client already has.
+
+### A call about an earlier call
+
+Claude's `TaskOutput` fetches the output of a task started earlier. Its input
+names a `task_id` — the CLI's own key for the task — and nothing else, so on its
+own it joins to nothing: the transcript's key is the `tool_use_id`, and the map
+between the two exists only inside the adapter, where `task_started` delivered
+both at once ([the task lifecycle](code/agent-integration.md#the-task-lifecycle)).
+
+So the adapter answers the question while it still can, and the `tool_call`
+record carries `origin_tool_use_id`: **the call this call is about.** A client
+that has it can show the fetched output on the row that started the work instead
+of as an unconnected row quoting an opaque id.
+
+Three things this is deliberately not:
+
+- **Not a second join key.** One tool run is still one `tool_use_id`, and the
+  fetch is a tool run of its own like any other. This field points *from* one run
+  *to* another; it does not merge them.
+- **Not a `tool_result` on the original call.** That was the tempting shortcut
+  and it is wrong twice over: the reducer lets a later result supersede an
+  earlier one, so the original call's real outcome would be overwritten by
+  something the agent never read — and it would settle on the wire what the row
+  should show, which is the frontend's decision everywhere else in this document
+  (same reason as "No `title` or `detail` field").
+- **Not reliable, by construction.** The adapter forgets a task the moment it
+  reports its outcome, and remembers nothing across a restart, so a fetch against
+  a task that already settled — or that a previous process started — resolves to
+  nothing and the field is absent. **Absent is the ordinary case, not an error
+  path**: a client has to read a fetch with no origin as a perfectly good call
+  that simply stands alone.
+
+Nothing else emits it. Codex has no work that outlives its turn, so it has no
+tool shaped like this one.
+
+What the frontend does with it — when a fetch is filed under the row it names,
+when it keeps a row of its own, and why that is decided as the call arrives
+rather than when its result does — is in
+[code/frontend-state.md](code/frontend-state.md#a-fetch-filed-under-the-call-it-reads).
 
 ### `tool_activity` is not persisted
 

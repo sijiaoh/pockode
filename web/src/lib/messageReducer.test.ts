@@ -2478,6 +2478,217 @@ describe("messageReducer", () => {
 			]);
 		});
 
+		// TaskOutput: a call whose whole job is to read an earlier call's task.
+		// The server resolves which call that is (`origin_tool_use_id`) because
+		// only the adapter can turn a task id into a tool_use_id.
+		describe("a call that fetches an earlier call's output", () => {
+			const fetchCall = (toolUseId: string, originToolUseId?: string) => ({
+				type: "tool_call" as const,
+				toolUseId,
+				toolName: "TaskOutput",
+				toolInput: { task_id: "bg_1" },
+				...(originToolUseId ? { originToolUseId } : {}),
+			});
+
+			const backgrounded = (): Message[] => {
+				let messages: Message[] = [streamingRun()];
+				messages = applyServerEvent(messages, call("t1"));
+				messages = applyServerEvent(messages, {
+					type: "tool_result",
+					toolUseId: "t1",
+					toolResult: "Running in background with ID: bg_1",
+					isError: false,
+					subtype: "background_started",
+				});
+				return messages;
+			};
+
+			it("carries the call it reads through normalization", () => {
+				expect(
+					normalizeEvent({
+						type: "tool_call",
+						tool_use_id: "f1",
+						tool_name: "TaskOutput",
+						tool_input: { task_id: "bg_1" },
+						origin_tool_use_id: "t1",
+					}),
+				).toMatchObject({ originToolUseId: "t1" });
+			});
+
+			it("files the fetch on the call it reads instead of taking a row", () => {
+				let messages = backgrounded();
+				messages = applyServerEvent(messages, fetchCall("f1", "t1"));
+				messages = applyServerEvent(messages, {
+					type: "tool_result",
+					toolUseId: "f1",
+					toolResult: "tick 418",
+					isError: false,
+				});
+
+				const run = runsOf(messages[0])[0];
+				// Untouched by the fetch: the task is still running, and what this
+				// call handed the agent is still the placeholder.
+				expect(run).toMatchObject({
+					id: "t1",
+					status: "background",
+					fetches: [{ id: "f1", result: "tick 418" }],
+				});
+				expect(run.result).toBeUndefined();
+			});
+
+			// The common case, not a fallback: the tracker drops a task once it
+			// settles, and one a previous process started was never in it.
+			it("keeps its own row when the call it reads cannot be named", () => {
+				let messages = backgrounded();
+				messages = applyServerEvent(messages, fetchCall("f1"));
+				messages = applyServerEvent(messages, {
+					type: "tool_result",
+					toolUseId: "f1",
+					toolResult: "tick 418",
+					isError: false,
+				});
+
+				const runs = runsOf(messages[0]);
+				expect(runs).toMatchObject([
+					{ id: "t1" },
+					{ id: "f1", name: "TaskOutput", status: "success" },
+				]);
+				expect(runs[0].fetches).toBeUndefined();
+			});
+
+			// Nor when the row it names is simply not on this page of history.
+			it("keeps its own row when the call it reads is not loaded", () => {
+				let messages: Message[] = [streamingRun()];
+				messages = applyServerEvent(messages, fetchCall("f1", "t1"));
+
+				expect(runsOf(messages[0])).toMatchObject([{ id: "f1" }]);
+			});
+
+			// TaskOutput's semantics do not say whether it returns the whole
+			// output or what is new since last time, so neither concatenating the
+			// texts nor keeping only the newest can be done without lying. Each
+			// fetch stays its own entry.
+			it("keeps every fetch of the same task, oldest first", () => {
+				let messages = backgrounded();
+				for (const [id, text] of [
+					["f1", "tick 1"],
+					["f2", "tick 207"],
+					["f3", "tick 418"],
+				]) {
+					messages = applyServerEvent(messages, fetchCall(id, "t1"));
+					messages = applyServerEvent(messages, {
+						type: "tool_result",
+						toolUseId: id,
+						toolResult: text,
+						isError: false,
+					});
+				}
+
+				expect(runsOf(messages[0])[0].fetches).toEqual([
+					{ id: "f1", result: "tick 1" },
+					{ id: "f2", result: "tick 207" },
+					{ id: "f3", result: "tick 418" },
+				]);
+			});
+
+			// Some CLIs re-send a call after it was approved, and one announced
+			// twice is still one fetch — including after its result has landed,
+			// which the second announcement must not wipe.
+			it("files a re-sent fetch once, keeping what it already brought back", () => {
+				let messages = backgrounded();
+				messages = applyServerEvent(messages, fetchCall("f1", "t1"));
+				messages = applyServerEvent(messages, {
+					type: "tool_result",
+					toolUseId: "f1",
+					toolResult: "tick 418",
+					isError: false,
+				});
+				messages = applyServerEvent(messages, fetchCall("f1", "t1"));
+
+				expect(runsOf(messages[0])).toMatchObject([{ id: "t1" }]);
+				expect(runsOf(messages[0])[0].fetches).toEqual([
+					{ id: "f1", result: "tick 418" },
+				]);
+			});
+
+			// Paging backwards replays every result over each older page it pulls
+			// in, so the same record arrives again. Appended blindly it would draw
+			// one fetch twice — which is exactly what the rule above must not be
+			// confused with.
+			it("updates the entry a replayed result already wrote", () => {
+				let messages = backgrounded();
+				messages = applyServerEvent(messages, fetchCall("f1", "t1"));
+				const result = {
+					type: "tool_result" as const,
+					toolUseId: "f1",
+					toolResult: "tick 418",
+					isError: false,
+				};
+				messages = applyServerEvent(messages, result);
+				messages = applyServerEvent(messages, result);
+
+				expect(runsOf(messages[0])[0].fetches).toEqual([
+					{ id: "f1", result: "tick 418" },
+				]);
+			});
+
+			// An interrupted turn takes its pending calls down with it, and this
+			// one brought nothing back. The entry stays outputless so that a
+			// renderer has nothing to draw for it.
+			it("leaves a fetch that never returned carrying nothing", () => {
+				let messages = backgrounded();
+				messages = applyServerEvent(messages, fetchCall("f1", "t1"));
+				messages = applyServerEvent(messages, { type: "interrupted" });
+
+				expect(runsOf(messages[0])[0].fetches).toEqual([{ id: "f1" }]);
+			});
+
+			// The fetch failed, not the task: the row keeps saying what the task
+			// is doing, and only the entry says the read went wrong.
+			it("marks a failed fetch without failing the call it reads", () => {
+				let messages = backgrounded();
+				messages = applyServerEvent(messages, fetchCall("f1", "t1"));
+				messages = applyServerEvent(messages, {
+					type: "tool_result",
+					toolUseId: "f1",
+					toolResult: "No such task: bg_1",
+					isError: true,
+				});
+
+				expect(runsOf(messages[0])).toMatchObject([
+					{
+						status: "background",
+						fetches: [{ id: "f1", isError: true }],
+					},
+				]);
+			});
+
+			// Absorbing the only part of a turn leaves a bubble with nothing in
+			// it. Handled in the state layer, by the same rule that drops a turn
+			// the agent never wrote into: no renderer has to know about it.
+			it("leaves no empty bubble behind when it was the turn's only part", () => {
+				let messages = backgrounded();
+				messages = applyServerEvent(messages, { type: "done" });
+				messages = applyServerEvent(messages, {
+					type: "message",
+					content: "how is it going",
+				});
+				messages = applyServerEvent(messages, fetchCall("f1", "t1"));
+				messages = applyServerEvent(messages, {
+					type: "tool_result",
+					toolUseId: "f1",
+					toolResult: "tick 418",
+					isError: false,
+				});
+				messages = applyServerEvent(messages, { type: "done" });
+
+				expect(messages.map((m) => m.role)).toEqual(["assistant", "user"]);
+				expect(runsOf(messages[0])[0].fetches).toMatchObject([
+					{ result: "tick 418" },
+				]);
+			});
+		});
+
 		describe("live progress", () => {
 			const activity = (
 				toolUseId: string,
@@ -3033,6 +3244,58 @@ describe("messageReducer", () => {
 				expect(partsOf(caught[caught.length - 1])).toMatchObject([
 					{ type: "tool_call", tool: { status: "success" } },
 				]);
+			});
+
+			// §2.1: which side of the join a fetch lands on is decided when its
+			// call arrives and never revisited. Paging backwards can bring the
+			// call it reads into view long afterwards, and the row that is
+			// already drawn does not then go and move — the transcript's one
+			// unbreakable rule is that nothing vanishes from under the reader.
+			it("leaves a fetch that already drew its own row where it is", () => {
+				const fetchResult = {
+					type: "tool_result",
+					tool_use_id: "f1",
+					tool_result: "tick 418",
+				};
+				// Replayed on its own, this page could not name the call it reads.
+				const current = replayHistory([
+					{
+						type: "tool_call",
+						tool_use_id: "f1",
+						tool_name: "TaskOutput",
+						tool_input: { task_id: "bg_1" },
+						origin_tool_use_id: "t1",
+					},
+					fetchResult,
+				]);
+
+				const older = replayHistory([
+					{ type: "message", content: "run it in the background" },
+					{ type: "tool_call", tool_use_id: "t1", tool_name: "Bash" },
+					{
+						type: "tool_result",
+						tool_use_id: "t1",
+						tool_result: "Running in background with ID: bg_1",
+						subtype: "background_started",
+					},
+				]);
+
+				const paged = prependHistoryPage(older, current, {
+					backReferences: [fetchResult],
+				});
+
+				const runs = paged.flatMap((message) =>
+					partsOf(message)
+						.filter((part) => part.type === "tool_call")
+						.map((part) => part.tool),
+				);
+				expect(runs).toMatchObject([
+					{ id: "t1", status: "background" },
+					{ id: "f1", status: "success", result: "tick 418" },
+				]);
+				// And the older page's run did not quietly acquire it either: the
+				// result replayed over that page names a fetch it never filed.
+				expect(runs[0].fetches).toBeUndefined();
 			});
 
 			it("retires a question the user has already answered", () => {

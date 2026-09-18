@@ -137,4 +137,17 @@ describe("toolSummary", () => {
 			toolSummary("Grep", { pattern: "TODO", path: "src" }, WORK_DIR).detail,
 		).toBe('"TODO" in src');
 	});
+
+	// The fallback lands on the same field only because `Object.values` happens
+	// to return it first: another string in the input and this row would be
+	// named after the wrong thing.
+	it("names a task fetch by the task it reads, whatever else is in the input", () => {
+		expect(
+			toolSummary(
+				"TaskOutput",
+				{ block: "true", timeout: 30000, task_id: "bsbvhgo40" },
+				WORK_DIR,
+			),
+		).toMatchObject({ title: "TaskOutput", detail: "bsbvhgo40", mono: true });
+	});
 });

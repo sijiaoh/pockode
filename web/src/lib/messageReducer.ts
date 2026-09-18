@@ -12,6 +12,7 @@ import type {
 	ServerNotification,
 	SessionTurn,
 	SystemMessageMeta,
+	ToolFetch,
 	ToolRun,
 	UserMessage,
 } from "../types/message";
@@ -59,6 +60,13 @@ export type NormalizedEvent =
 			toolUseId: string;
 			toolName: string;
 			toolInput: unknown;
+			/**
+			 * The earlier call this one reads the output of, resolved by the
+			 * adapter because only it can turn a `task_id` into a `tool_use_id`.
+			 * Absent is ordinary, not an error: a task that has already settled,
+			 * or one a previous process started, can no longer be named.
+			 */
+			originToolUseId?: string;
 	  }
 	| {
 			type: "tool_result";
@@ -179,6 +187,7 @@ export function normalizeEvent(
 				toolUseId: record.tool_use_id as string,
 				toolName: record.tool_name as string,
 				toolInput: record.tool_input,
+				originToolUseId: record.origin_tool_use_id as string | undefined,
 			};
 		case "tool_result":
 			return {
@@ -588,6 +597,21 @@ function applyEvent(
 	// would open an empty assistant bubble for it.
 	if (event.type === "background_wait") {
 		return messages;
+	}
+
+	// A call that only reads an earlier call's task belongs *on* that call, not
+	// beside it: its own row would sit a screenful below the work it describes
+	// with nothing but an opaque id to tie the two together. So it never reaches
+	// the transcript at all — unless the row it names is not loaded, and then it
+	// falls through to become an ordinary row, which is a common case rather
+	// than a fallback (docs/code/frontend-state.md).
+	if (event.type === "tool_call" && event.originToolUseId) {
+		const absorbed = absorbFetchCall(
+			messages,
+			event.originToolUseId,
+			event.toolUseId,
+		);
+		if (absorbed) return absorbed;
 	}
 
 	// Tool result updates existing tool_call across all messages (may arrive after interrupt)
@@ -1109,12 +1133,116 @@ function updateRunById(
 	return messages;
 }
 
+/**
+ * Files a call that reads an earlier call's task under that call, and returns
+ * null when no row for it is loaded.
+ *
+ * Decided once, here, as the call arrives — never re-decided when its result
+ * does. The `tool_call` comes first and its `tool_result` seconds later, so a
+ * rule that waited for the result would draw a row and then take it away again,
+ * and a row disappearing under the user is what the transcript may never do
+ * (docs/tool-call-ui.md). By the same token a fetch that kept its own row keeps
+ * it for good: paging backwards may bring the origin row into view afterwards,
+ * and the row above it does not then go and move.
+ */
+function absorbFetchCall(
+	messages: Message[],
+	originToolUseId: string,
+	fetchToolUseId: string,
+): Message[] | null {
+	for (let i = messages.length - 1; i >= 0; i--) {
+		const msg = messages[i];
+		if (msg.role !== "assistant") continue;
+		const partIndex = findToolRunIndex(msg.parts, originToolUseId);
+		if (partIndex === -1) continue;
+
+		const part = msg.parts[partIndex];
+		if (part.type !== "tool_call") continue; // Type guard - never happens
+		const run = part.tool;
+		// Already filed — the same call announced twice. Absorbed all the same:
+		// what this returns is the absence of a row, not an entry.
+		if (run.fetches?.some((fetch) => fetch.id === fetchToolUseId)) {
+			return messages;
+		}
+
+		const parts = [...msg.parts];
+		parts[partIndex] = {
+			...part,
+			tool: {
+				...run,
+				fetches: [...(run.fetches ?? []), { id: fetchToolUseId }],
+			},
+		};
+		const updated = [...messages];
+		updated[i] = { ...msg, parts };
+		return updated;
+	}
+	return null;
+}
+
+/**
+ * Records what a fetch brought back, on the run it was filed under.
+ *
+ * This is the whole of how the reducer remembers an absorbed call: the entry
+ * `absorbFetchCall` left behind is the mapping from the fetching call's id back
+ * to the run, so its result — which names only its own call — still has
+ * somewhere to go. Written by id rather than appended, so the same record
+ * replayed with a second page of history updates the entry instead of doubling
+ * it.
+ *
+ * Returns null when this result names no fetch, which is every ordinary result
+ * and also a fetch that kept its own row.
+ */
+function applyFetchResult(
+	messages: Message[],
+	event: Extract<NormalizedEvent, { type: "tool_result" }>,
+): Message[] | null {
+	for (let i = messages.length - 1; i >= 0; i--) {
+		const msg = messages[i];
+		if (msg.role !== "assistant") continue;
+		const partIndex = msg.parts.findIndex(
+			(part) =>
+				part.type === "tool_call" &&
+				part.tool.fetches?.some((fetch) => fetch.id === event.toolUseId),
+		);
+		if (partIndex === -1) continue;
+
+		const part = msg.parts[partIndex];
+		if (part.type !== "tool_call") continue; // Type guard - never happens
+		const fetched: ToolFetch = {
+			id: event.toolUseId,
+			result: event.toolResult,
+			...(event.contents ? { contents: event.contents } : {}),
+			// The fetch failed, not the task it was reading: the run keeps its own
+			// status, and only this entry says anything went wrong.
+			...(event.isError ? { isError: true } : {}),
+		};
+		const parts = [...msg.parts];
+		parts[partIndex] = {
+			...part,
+			tool: {
+				...part.tool,
+				fetches: part.tool.fetches?.map((fetch) =>
+					fetch.id === event.toolUseId ? fetched : fetch,
+				),
+			},
+		};
+		const updated = [...messages];
+		updated[i] = { ...msg, parts };
+		return updated;
+	}
+	return null;
+}
+
 function updateToolResult(
 	messages: Message[],
 	event: Extract<NormalizedEvent, { type: "tool_result" }>,
 ): Message[] {
-	return updateRunById(messages, event.toolUseId, (run) =>
-		settleToolRun(run, event),
+	// A fetch's own id names no row — its call was absorbed — so it is looked up
+	// among the fetches before the rows.
+	return (
+		applyFetchResult(messages, event) ??
+		updateRunById(messages, event.toolUseId, (run) => settleToolRun(run, event))
 	);
 }
 
