@@ -54,6 +54,7 @@ serverinfo/             # 服务器运行时信息（server.json）
 rpc/                    # RPC 消息类型定义
 session/                # Session 存储 + 清理
 settings/               # 设置存储
+spa/                    # SPA 静态文件服务：路径解析（缺失的 assets 返回 404，其余回落 index.html）与缓存策略（assets immutable，入口文档 no-cache），main 与 cluster 共用
 startup/                # 启动横幅
 static/                 # 静态文件（构建后的前端资源）
 watch/                  # 实时订阅（WebSocket 通知的分发引擎）

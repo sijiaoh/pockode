@@ -13,7 +13,6 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/pockode/server/agent"
@@ -99,14 +98,10 @@ func newSPAHandler(apiHandler http.Handler) http.Handler {
 			return
 		}
 
-		cleanPath := strings.TrimPrefix(path, "/")
-		if cleanPath == "" {
-			cleanPath = "index.html"
-		}
-
-		// Check if file exists (including .br version), otherwise fall back to index.html for SPA routing
-		if !spa.FileExists(subFS, cleanPath) && !spa.FileExists(subFS, cleanPath+".br") {
-			cleanPath = "index.html"
+		cleanPath, ok := spa.ResolvePath(subFS, path)
+		if !ok {
+			http.NotFound(w, r)
+			return
 		}
 
 		spa.ServeFileWithBrotli(w, r, subFS, cleanPath)

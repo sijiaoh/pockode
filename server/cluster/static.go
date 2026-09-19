@@ -4,7 +4,6 @@ import (
 	"io/fs"
 	"log/slog"
 	"net/http"
-	"strings"
 
 	"github.com/pockode/server/spa"
 )
@@ -25,13 +24,10 @@ func newSPAHandler(apiHandler http.Handler) http.Handler {
 			return
 		}
 
-		cleanPath := strings.TrimPrefix(path, "/")
-		if cleanPath == "" {
-			cleanPath = "index.html"
-		}
-
-		if !spa.FileExists(subFS, cleanPath) && !spa.FileExists(subFS, cleanPath+".br") {
-			cleanPath = "index.html"
+		cleanPath, ok := spa.ResolvePath(subFS, path)
+		if !ok {
+			http.NotFound(w, r)
+			return
 		}
 
 		spa.ServeFileWithBrotli(w, r, subFS, cleanPath)
