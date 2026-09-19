@@ -45,7 +45,13 @@ frozen:
 - **Top-level work** captures the frontend's *current* worktree the first time
   it starts (`handleWorkStart` → `store.SetWorktree`). It is not captured at
   create time, because a story may be created long before the user picks the
-  worktree they want it to run in.
+  worktree they want it to run in. An agent has no current worktree to capture,
+  so its `work_start` takes the name as an argument instead and creates the
+  worktree when it does not exist yet (`Registry.EnsureWorktree`, branch = name)
+  — the same `SetWorktree` call, reached with the name said out loud rather than
+  read off the connection. Only a story may name one: a task has already
+  inherited its story's, and the argument is refused on one rather than silently
+  splitting a subtree across two worktrees.
 - **Child work** inherits its parent's worktree at create time (`store.Create`).
   Children are usually created by the parent's already-running agent, so the
   parent's worktree is fixed by then. A child pre-created under a still-open
@@ -58,7 +64,9 @@ frozen:
 - **Immutable once started** — `SetWorktree` only mutates a work while its status
   is still `open`; any later call is rejected. Assigning the *same* value is a
   no-op, so a main-worktree story that goes open → start → stop → start does not
-  trip the immutability guard on restart.
+  trip the immutability guard on restart. An agent naming a *different* worktree
+  in `work_start` therefore has the whole call rejected: the story is neither
+  moved nor restarted, rather than quietly starting where it already lives.
 
 **Why immutable**: a session's process, cwd, and session files live in a
 specific worktree. Moving a work mid-flight would strand its running session and
@@ -357,7 +365,7 @@ AI agents interact with the Work system through MCP (Model Context Protocol) too
 | `work_get` | Get full details including body | `id` |
 | `work_update` | Modify title/body/role | `id`, fields to update |
 | `work_delete` | Delete (cascades to children) | `id` |
-| `work_start` | Begin execution | `id` |
+| `work_start` | Begin execution | `id`, `worktree?` (story only) |
 | `work_needs_input` | Pause for user input | `id`, `reason` |
 | `work_wait` | Pause for child work completion | `id`, `reason?` |
 | `work_reopen` | Reopen a closed work item | `id` |

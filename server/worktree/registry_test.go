@@ -360,6 +360,71 @@ func TestCreate_NoSkipReportedWhenHookRuns(t *testing.T) {
 	}
 }
 
+func TestEnsureWorktree_CreatesThenReuses(t *testing.T) {
+	dir := initGitRepo(t)
+	r := NewRegistry(dir, "")
+
+	created, _, err := r.EnsureWorktree("feature")
+	if err != nil {
+		t.Fatalf("EnsureWorktree() failed: %v", err)
+	}
+	if !created {
+		t.Error("created = false on first call, want true")
+	}
+
+	info, err := r.Resolve("feature")
+	if err != nil {
+		t.Fatalf("Resolve() failed after EnsureWorktree: %v", err)
+	}
+	if want := filepath.Join(r.worktreesDir(), "feature"); info != want {
+		t.Errorf("Resolve() = %q, want %q", info, want)
+	}
+	// The branch defaults to the name, so a caller with only a name gets the
+	// same worktree the create UI would have made.
+	if got := r.List(); !hasWorktree(got, "feature", "feature") {
+		t.Errorf("List() = %+v, want a worktree \"feature\" on branch \"feature\"", got)
+	}
+
+	created, _, err = r.EnsureWorktree("feature")
+	if err != nil {
+		t.Fatalf("second EnsureWorktree() failed: %v", err)
+	}
+	if created {
+		t.Error("created = true on second call, want false (already exists)")
+	}
+}
+
+// Another Registry over the same repository — the UI's, or another agent's —
+// may have created the worktree since this one last listed. Ensure means
+// ensure, so a warm-but-stale cache must not turn an existing worktree into a
+// failed `git worktree add`.
+func TestEnsureWorktree_ReusesWorktreeCreatedBehindTheCache(t *testing.T) {
+	dir := initGitRepo(t)
+	stale := NewRegistry(dir, "")
+	stale.List() // warm the cache while "feature" does not exist yet
+
+	if _, _, err := NewRegistry(dir, "").EnsureWorktree("feature"); err != nil {
+		t.Fatalf("EnsureWorktree() failed: %v", err)
+	}
+
+	created, _, err := stale.EnsureWorktree("feature")
+	if err != nil {
+		t.Fatalf("EnsureWorktree() on a stale registry failed: %v", err)
+	}
+	if created {
+		t.Error("created = true, want false (the worktree already exists on disk)")
+	}
+}
+
+func hasWorktree(list []Info, name, branch string) bool {
+	for _, info := range list {
+		if info.Name == name && info.Branch == branch {
+			return true
+		}
+	}
+	return false
+}
+
 func TestDelete_Success(t *testing.T) {
 	dir := initGitRepo(t)
 	r := NewRegistry(dir, "")

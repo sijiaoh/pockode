@@ -11,6 +11,7 @@ import (
 	"github.com/pockode/server/agentrole"
 	"github.com/pockode/server/settings"
 	"github.com/pockode/server/work"
+	"github.com/pockode/server/worktree"
 )
 
 // ErrUnknownTool indicates a tools/call referenced a tool that does not exist.
@@ -52,6 +53,14 @@ type SettingsStore interface {
 	Update(settings.Settings) error
 }
 
+// WorktreeProvisioner makes a named worktree usable, creating it when it does
+// not exist yet. It is the one worktree operation the AI can reach, and
+// worktree.Registry — the same implementation behind the worktree.create RPC —
+// is what satisfies it.
+type WorktreeProvisioner interface {
+	EnsureWorktree(name string) (created bool, setupHookSkip *worktree.SetupHookSkip, err error)
+}
+
 // Executor runs MCP tool calls against the live server stores. It is the
 // in-process counterpart to the stdio proxy: the proxy (running inside the AI
 // CLI subprocess) forwards each tool call over HTTP, and the Executor performs
@@ -62,17 +71,19 @@ type Executor struct {
 	agentRoleStore agentrole.Store
 	workOps        *work.Operations
 	settingsStore  SettingsStore
+	worktrees      WorktreeProvisioner
 }
 
 // NewExecutor creates an Executor. workOps performs every work transition and
 // its side effects — the same operations the WebSocket layer calls, which is
 // what keeps a tool call and a tap on a button the same act; it is required
 // whenever any work_* tool is reachable. settingsStore keeps the default agent
-// role in sync on reset; a nil settingsStore skips that update. Nils are
-// tolerated only where the corresponding tools are unreachable (e.g. narrow
-// tests).
-func NewExecutor(workStore work.Store, agentRoleStore agentrole.Store, workOps *work.Operations, settingsStore SettingsStore) *Executor {
-	return &Executor{workStore: workStore, agentRoleStore: agentRoleStore, workOps: workOps, settingsStore: settingsStore}
+// role in sync on reset; a nil settingsStore skips that update. worktrees
+// prepares the worktree work_start names, and like workOps is required
+// whenever the work_* tools are reachable. Nils are tolerated only where the
+// corresponding tools are unreachable (e.g. narrow tests).
+func NewExecutor(workStore work.Store, agentRoleStore agentrole.Store, workOps *work.Operations, settingsStore SettingsStore, worktrees WorktreeProvisioner) *Executor {
+	return &Executor{workStore: workStore, agentRoleStore: agentRoleStore, workOps: workOps, settingsStore: settingsStore, worktrees: worktrees}
 }
 
 // Execute runs the named tool and returns its text result. It returns a
@@ -327,10 +338,19 @@ func (e *Executor) workDelete(ctx context.Context, args json.RawMessage) (string
 
 func (e *Executor) workStart(ctx context.Context, args json.RawMessage) (string, error) {
 	var params struct {
-		ID string `json:"id"`
+		ID       string `json:"id"`
+		Worktree string `json:"worktree"`
 	}
 	if err := json.Unmarshal(args, &params); err != nil {
 		return "", userErrorf("invalid arguments: %w", err)
+	}
+
+	var note string
+	if params.Worktree != "" {
+		var err error
+		if note, err = e.assignWorktree(ctx, params.ID, params.Worktree); err != nil {
+			return "", err
+		}
 	}
 
 	w, err := e.workOps.StartWork(ctx, params.ID)
@@ -338,7 +358,49 @@ func (e *Executor) workStart(ctx context.Context, args json.RawMessage) (string,
 		return "", err
 	}
 
-	return fmt.Sprintf("Started work %s (session: %s)", w.ID, w.SessionID), nil
+	return fmt.Sprintf("Started work %s (session: %s)%s", w.ID, w.SessionID, note), nil
+}
+
+// assignWorktree pins a story to the named worktree, creating the worktree
+// first when it does not exist yet, and returns what the caller should be told
+// beyond "started": which worktree it is in, whether it had to be created, and
+// whether the setup hook was skipped while creating it.
+//
+// The pinning goes through the store before the worktree is created so the
+// store stays the only place that decides whether a work may still change
+// worktree; a work left pinned by a failed creation is still open, and the next
+// start retries the creation.
+func (e *Executor) assignWorktree(ctx context.Context, id, name string) (string, error) {
+	w, found, err := e.workStore.Get(id)
+	if err != nil {
+		return "", err
+	}
+	if !found {
+		return "", userErrorf("work %s not found", id)
+	}
+	// A subtree shares one worktree: a task runs where its story runs, decided
+	// when the story started, and there is nothing left here to choose.
+	if w.ParentID != "" {
+		return "", userErrorf("work %s is a task: only a story can choose a worktree, and a task runs in the worktree of the story it belongs to. Start its story %s in %q instead", id, w.ParentID, name)
+	}
+
+	if err := e.workStore.SetWorktree(ctx, id, name); err != nil {
+		return "", err
+	}
+
+	created, skip, err := e.worktrees.EnsureWorktree(name)
+	if err != nil {
+		return "", fmt.Errorf("prepare worktree %q: %w", name, err)
+	}
+
+	note := fmt.Sprintf(" in worktree %q", name)
+	if created {
+		note += " (created)"
+	}
+	if skip != nil {
+		note += fmt.Sprintf(". Its setup hook did not run: %s (%s)", skip.Reason, skip.Hint)
+	}
+	return note, nil
 }
 
 func (e *Executor) workNeedsInput(ctx context.Context, args json.RawMessage) (string, error) {

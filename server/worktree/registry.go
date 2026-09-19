@@ -252,6 +252,38 @@ func (r *Registry) Create(name, branch, baseBranch string) (Info, *SetupHookSkip
 	return info, skipped, nil
 }
 
+// EnsureWorktree makes the worktree named name usable, creating it when it does
+// not exist yet. The branch defaults to the name, which is the same default the
+// create UI applies, so a caller who has only a name does not have to invent a
+// branch. It reports whether it created the worktree, and hands back the
+// SetupHookSkip from Create for the same reason Create returns it: a worktree
+// whose setup hook never ran is indistinguishable from a prepared one.
+func (r *Registry) EnsureWorktree(name string) (bool, *SetupHookSkip, error) {
+	if name == "" {
+		return false, nil, errors.New("name cannot be empty")
+	}
+
+	// Decide on a fresh listing rather than the TTL cache: a worktree created
+	// seconds ago (by the UI, or by another agent) would otherwise read as
+	// missing here and send Create at a path git already has, failing a start
+	// that should have been a no-op.
+	r.invalidateCache()
+
+	_, err := r.Resolve(name)
+	if err == nil {
+		return false, nil, nil
+	}
+	if !errors.Is(err, ErrWorktreeNotFound) {
+		return false, nil, err
+	}
+
+	_, skip, err := r.Create(name, name, "")
+	if err != nil {
+		return false, nil, err
+	}
+	return true, skip, nil
+}
+
 func (r *Registry) Delete(name string) error {
 	if name == "" {
 		return ErrMainWorktree

@@ -13,6 +13,7 @@ import (
 	"github.com/pockode/server/agentrole"
 	"github.com/pockode/server/settings"
 	"github.com/pockode/server/work"
+	"github.com/pockode/server/worktree"
 )
 
 // stubWorkStarter satisfies work.WorkStartHandler without creating real
@@ -28,6 +29,23 @@ var errStartFailed = errors.New("start handler failed")
 type failingWorkStarter struct{ err error }
 
 func (f failingWorkStarter) HandleWorkStart(context.Context, work.Work) error { return f.err }
+
+// stubWorktrees stands in for the worktree registry: it records the names
+// work_start asked to prepare, and reports each one as newly created unless a
+// test set skip or err.
+type stubWorktrees struct {
+	asked []string
+	skip  *worktree.SetupHookSkip
+	err   error
+}
+
+func (s *stubWorktrees) EnsureWorktree(name string) (bool, *worktree.SetupHookSkip, error) {
+	s.asked = append(s.asked, name)
+	if s.err != nil {
+		return false, nil, s.err
+	}
+	return true, s.skip, nil
+}
 
 // stubNotifier satisfies WorkNotifier as a no-op.
 type stubNotifier struct{}
@@ -78,7 +96,7 @@ func newStoresWithRole(t *testing.T, role agentrole.AgentRole) (work.Store, agen
 func newExecWithRole(t *testing.T, role agentrole.AgentRole) (*Executor, work.Store, string) {
 	t.Helper()
 	store, arStore, settingsStore, roleID := newStoresWithRole(t, role)
-	return NewExecutor(store, arStore, work.NewOperations(store, stubWorkStarter{}, stubNotifier{}, agentrole.Steps{Store: arStore}), settingsStore), store, roleID
+	return NewExecutor(store, arStore, work.NewOperations(store, stubWorkStarter{}, stubNotifier{}, agentrole.Steps{Store: arStore}), settingsStore, &stubWorktrees{}), store, roleID
 }
 
 func newTestExec(t *testing.T) testExec {
@@ -937,7 +955,7 @@ func TestExecute_UnknownTool(t *testing.T) {
 // not get stuck active with a dangling session.
 func TestWorkStart_RollbackOnHandlerFailure(t *testing.T) {
 	store, arStore, settingsStore, roleID := newStoresWithRole(t, agentrole.AgentRole{Name: "Eng", RolePrompt: "x"})
-	exec := NewExecutor(store, arStore, work.NewOperations(store, failingWorkStarter{err: errStartFailed}, stubNotifier{}, agentrole.Steps{Store: arStore}), settingsStore)
+	exec := NewExecutor(store, arStore, work.NewOperations(store, failingWorkStarter{err: errStartFailed}, stubNotifier{}, agentrole.Steps{Store: arStore}), settingsStore, &stubWorktrees{})
 
 	created := callTool(t, exec, "work_create", map[string]string{
 		"type": "story", "title": "Story", "agent_role_id": roleID,
@@ -965,7 +983,7 @@ func TestStepDone_NotifiesNextStep(t *testing.T) {
 		Name: "Eng", RolePrompt: "x", Steps: []string{"Plan", "Build"},
 	})
 	spy := &spyNotifier{}
-	exec := NewExecutor(store, arStore, work.NewOperations(store, stubWorkStarter{}, spy, agentrole.Steps{Store: arStore}), settingsStore)
+	exec := NewExecutor(store, arStore, work.NewOperations(store, stubWorkStarter{}, spy, agentrole.Steps{Store: arStore}), settingsStore, &stubWorktrees{})
 
 	storyID := extractID(t, toolText(callTool(t, exec, "work_create", map[string]string{
 		"type": "story", "title": "S", "agent_role_id": roleID,
@@ -992,7 +1010,7 @@ func TestStepDone_NoNotifyOnClose(t *testing.T) {
 		Name: "Eng", RolePrompt: "x", Steps: []string{"Only"},
 	})
 	spy := &spyNotifier{}
-	exec := NewExecutor(store, arStore, work.NewOperations(store, stubWorkStarter{}, spy, agentrole.Steps{Store: arStore}), settingsStore)
+	exec := NewExecutor(store, arStore, work.NewOperations(store, stubWorkStarter{}, spy, agentrole.Steps{Store: arStore}), settingsStore, &stubWorktrees{})
 
 	storyID := extractID(t, toolText(callTool(t, exec, "work_create", map[string]string{
 		"type": "story", "title": "S", "agent_role_id": roleID,
@@ -1012,7 +1030,7 @@ func TestStepDone_NoNotifyOnClose(t *testing.T) {
 func TestWorkReopen_NotifiesReopen(t *testing.T) {
 	store, arStore, settingsStore, roleID := newStoresWithRole(t, agentrole.AgentRole{Name: "Eng", RolePrompt: "x"})
 	spy := &spyNotifier{}
-	exec := NewExecutor(store, arStore, work.NewOperations(store, stubWorkStarter{}, spy, agentrole.Steps{Store: arStore}), settingsStore)
+	exec := NewExecutor(store, arStore, work.NewOperations(store, stubWorkStarter{}, spy, agentrole.Steps{Store: arStore}), settingsStore, &stubWorktrees{})
 
 	id := extractID(t, toolText(callTool(t, exec, "work_create", map[string]string{
 		"type": "story", "title": "S", "agent_role_id": roleID,
@@ -1038,7 +1056,7 @@ func TestAgentRoleResetDefaults_UpdatesDefaultRole(t *testing.T) {
 	if err := settingsStore.Update(settings.Settings{DefaultAgentRoleID: "stale-role-id"}); err != nil {
 		t.Fatal(err)
 	}
-	exec := NewExecutor(store, arStore, work.NewOperations(store, stubWorkStarter{}, stubNotifier{}, agentrole.Steps{Store: arStore}), settingsStore)
+	exec := NewExecutor(store, arStore, work.NewOperations(store, stubWorkStarter{}, stubNotifier{}, agentrole.Steps{Store: arStore}), settingsStore, &stubWorktrees{})
 
 	if res := callTool(t, exec, "agent_role_reset_defaults", map[string]string{}); res.IsError {
 		t.Fatalf("unexpected error: %s", toolText(res))
@@ -1189,7 +1207,7 @@ func TestWorkDelete_CascadesToSessionsLikeTheUsersDelete(t *testing.T) {
 	ops := work.NewOperations(store, stubWorkStarter{}, stubNotifier{}, agentrole.Steps{Store: arStore})
 	deleter := &countingDeleter{}
 	ops.SetSessionDeleter(deleter)
-	exec := NewExecutor(store, arStore, ops, settingsStore)
+	exec := NewExecutor(store, arStore, ops, settingsStore, &stubWorktrees{})
 
 	result := callTool(t, exec, "work_create", map[string]string{
 		"type": "story", "title": "Test Story", "agent_role_id": roleID,
@@ -1205,5 +1223,110 @@ func TestWorkDelete_CascadesToSessionsLikeTheUsersDelete(t *testing.T) {
 
 	if len(deleter.sessionIDs) != 1 || deleter.sessionIDs[0] != "sess-1" {
 		t.Errorf("cascaded to %v, want [sess-1]", deleter.sessionIDs)
+	}
+}
+
+// --- work_start's worktree argument ---
+
+// newExecWithWorktrees builds an executor over a stub registry the test can
+// inspect, which is what the worktree argument's behavior is observed through.
+func newExecWithWorktrees(t *testing.T) (*Executor, work.Store, string, *stubWorktrees) {
+	t.Helper()
+	store, arStore, settingsStore, roleID := newStoresWithRole(t, agentrole.AgentRole{Name: "Eng", RolePrompt: "x"})
+	worktrees := &stubWorktrees{}
+	ops := work.NewOperations(store, stubWorkStarter{}, stubNotifier{}, agentrole.Steps{Store: arStore})
+	return NewExecutor(store, arStore, ops, settingsStore, worktrees), store, roleID, worktrees
+}
+
+func TestWorkStart_WorktreePinsStoryAndCreatesIt(t *testing.T) {
+	exec, store, roleID, worktrees := newExecWithWorktrees(t)
+
+	storyID := extractID(t, toolText(callTool(t, exec, "work_create", map[string]string{
+		"type": "story", "title": "S", "agent_role_id": roleID,
+	})))
+
+	res := callTool(t, exec, "work_start", map[string]string{"id": storyID, "worktree": "feature-x"})
+	if res.IsError {
+		t.Fatalf("unexpected error: %s", toolText(res))
+	}
+	if !strings.Contains(toolText(res), "feature-x") {
+		t.Errorf("result = %q, want it to name the worktree", toolText(res))
+	}
+
+	if !slices.Equal(worktrees.asked, []string{"feature-x"}) {
+		t.Errorf("prepared %v, want [feature-x]", worktrees.asked)
+	}
+	if w, _, _ := store.Get(storyID); w.Worktree != "feature-x" {
+		t.Errorf("story worktree = %q, want %q", w.Worktree, "feature-x")
+	}
+}
+
+// A task runs where its story runs, so there is nothing for it to choose — and
+// honoring the argument would split one subtree across two worktrees.
+func TestWorkStart_WorktreeRejectedForTask(t *testing.T) {
+	exec, store, roleID, worktrees := newExecWithWorktrees(t)
+
+	storyID := extractID(t, toolText(callTool(t, exec, "work_create", map[string]string{
+		"type": "story", "title": "S", "agent_role_id": roleID,
+	})))
+	taskID := extractID(t, toolText(callTool(t, exec, "work_create", map[string]string{
+		"type": "task", "title": "T", "agent_role_id": roleID, "parent_id": storyID,
+	})))
+
+	res := callTool(t, exec, "work_start", map[string]string{"id": taskID, "worktree": "feature-x"})
+	if !res.IsError {
+		t.Fatal("expected an error result for a task")
+	}
+	if !strings.Contains(toolText(res), "story") {
+		t.Errorf("error = %q, want it to explain that only a story chooses a worktree", toolText(res))
+	}
+
+	if len(worktrees.asked) != 0 {
+		t.Errorf("prepared %v, want nothing created for a rejected start", worktrees.asked)
+	}
+	if w, _, _ := store.Get(taskID); w.Status != work.StatusOpen {
+		t.Errorf("task status = %q, want open (not started)", w.Status)
+	}
+}
+
+// A worktree whose setup hook was skipped looks exactly like a prepared one, so
+// the skip has to reach the agent that asked for the worktree.
+func TestWorkStart_ReportsSkippedSetupHook(t *testing.T) {
+	exec, _, roleID, worktrees := newExecWithWorktrees(t)
+	worktrees.skip = &worktree.SetupHookSkip{Reason: "bash not found", Hint: "delete the hook"}
+
+	storyID := extractID(t, toolText(callTool(t, exec, "work_create", map[string]string{
+		"type": "story", "title": "S", "agent_role_id": roleID,
+	})))
+
+	res := callTool(t, exec, "work_start", map[string]string{"id": storyID, "worktree": "feature-x"})
+	if res.IsError {
+		t.Fatalf("unexpected error: %s", toolText(res))
+	}
+	if !strings.Contains(toolText(res), "bash not found") {
+		t.Errorf("result = %q, want it to report the skipped setup hook", toolText(res))
+	}
+}
+
+// A story must not start in a worktree that could not be prepared: the session
+// would be created against a directory that is not there.
+func TestWorkStart_WorktreeCreationFailureDoesNotStart(t *testing.T) {
+	exec, store, roleID, worktrees := newExecWithWorktrees(t)
+	worktrees.err = errors.New("git worktree add: exit status 128")
+
+	storyID := extractID(t, toolText(callTool(t, exec, "work_create", map[string]string{
+		"type": "story", "title": "S", "agent_role_id": roleID,
+	})))
+
+	res := callTool(t, exec, "work_start", map[string]string{"id": storyID, "worktree": "feature-x"})
+	if !res.IsError {
+		t.Fatal("expected an error result when the worktree cannot be prepared")
+	}
+	if !strings.Contains(toolText(res), "exit status 128") {
+		t.Errorf("error = %q, want it to carry why the worktree could not be prepared", toolText(res))
+	}
+
+	if w, _, _ := store.Get(storyID); w.Status != work.StatusOpen {
+		t.Errorf("story status = %q, want open (not started)", w.Status)
 	}
 }

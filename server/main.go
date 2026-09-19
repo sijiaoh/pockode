@@ -381,7 +381,7 @@ Flags:
 		slog.Error("failed to generate MCP token", "error", err)
 		os.Exit(1)
 	}
-	mcpHandler := mcp.NewAPIHandler(mcp.NewExecutor(workStore, agentRoleStore, workOps, settingsStore), mcpToken)
+	mcpHandler := mcp.NewAPIHandler(mcp.NewExecutor(workStore, agentRoleStore, workOps, settingsStore, registry), mcpToken)
 
 	wsHandler := ws.NewRPCHandler(cred.Password, sessions, version, devMode, commandStore, worktreeManager, settingsStore, workStore, workOps, workEngine, agentRoleStore)
 	transferHandler := filetransfer.NewHandler(registry, slog.Default())

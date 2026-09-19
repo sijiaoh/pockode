@@ -20,7 +20,7 @@ The MCP server runs as a stdio JSON-RPC 2.0 subprocess, spawned per Claude sessi
 | `work_create` | `type`, `title`, `agent_role_id` | `parent_id`, `body` | Confirmation string with ID |
 | `work_update` | `id` | `title`, `body`, `agent_role_id` | Confirmation string |
 | `work_delete` | `id` | — | Confirmation string |
-| `work_start` | `id` | — | Confirmation string with session ID |
+| `work_start` | `id` | `worktree` | Confirmation string with session ID |
 | `work_needs_input` | `id`, `reason` | — | Confirmation string |
 | `work_wait` | `id` | `reason` | Confirmation string |
 | `work_reopen` | `id` | — | Confirmation string |
@@ -41,7 +41,7 @@ Similarly, `agent_role_list` excludes `role_prompt` — use `agent_role_get` to 
 ### Behavior Notes
 
 - **`work_create`**: Requires `agent_role_id` (validated to exist). Stories are top-level; tasks require `parent_id`.
-- **`work_start`**: Requires the work item to have an `agent_role_id`. Atomically transitions to `active` and attaches a session ID via `Store.Claim` (a fresh UUIDv7, or the existing session on restart), then creates the session and sends the kickoff via `WorkStartHandler` (in-process).
+- **`work_start`**: Requires the work item to have an `agent_role_id`. Atomically transitions to `active` and attaches a session ID via `Store.Claim` (a fresh UUIDv7, or the existing session on restart), then creates the session and sends the kickoff via `WorkStartHandler` (in-process). The optional `worktree` names the git worktree to run in, and is settled *before* that transition so the session starts in it: the name is pinned via `Store.SetWorktree`, then `Registry.EnsureWorktree` creates the worktree (branch = name) if it does not exist yet, through the same path the `worktree.create` RPC uses — setup hook included, and a skipped hook is reported in the confirmation string. Only a **story** may name one; on a task the call is refused without starting anything, because a task runs in the worktree of the story it belongs to. Naming a *different* worktree for an already-started story fails the call too, rather than starting it where it already lives ([work-system](../code/work-system.md#worktree-binding)).
 - **`step_done`**: Calls `Store.StepDone()`. Work items advance to the next configured step, or close when no steps remain. Use `work_wait`, not `step_done`, to pause while child work is still open.
 - **`work_needs_input`**: Calls `Operations.NeedsInput()`. The work stays `active` and records that it is waiting on the user, with the agent's `reason` shown verbatim on the detail page.
 - **`work_wait`**: Calls `Operations.Wait()`. The same wait, cleared by a child closing instead of by a person; its optional `reason` is shown the same way. Unlike `work_needs_input` it can be **refused**: a child closing is the only thing that ends this wait, so a work with no child running would wait forever, and the error names which children could be started instead ([workflow-engine](workflow-engine.md#wait)).

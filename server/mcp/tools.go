@@ -90,7 +90,8 @@ var toolDefinitions = []toolDefinition{
 		InputSchema: inputSchema{
 			Type: "object",
 			Properties: map[string]propertySchema{
-				"id": {Type: "string", Description: "Work item ID to start"},
+				"id":       {Type: "string", Description: "Work item ID to start"},
+				"worktree": {Type: "string", Description: "Name of the git worktree to run this story in, created (with a branch of the same name) if it does not exist yet. Only a story takes this: a task always runs in the worktree of the story it belongs to. Omit it to run in the worktree the story is already assigned to (the main one, unless it was set elsewhere)."},
 			},
 			Required: []string{"id"},
 		},
