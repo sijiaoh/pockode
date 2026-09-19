@@ -1098,7 +1098,7 @@ jobs:
             install_sh > out.txt 2> err.txt || fail "the install failed: $(cat err.txt)"
             printf '%s\n' 'Downloading Pockode for linux/amd64...' \
               "Installing to $TARGET..." \
-              "Done! Run 'pockode -auth-token YOUR_PASSWORD' to get started." > wanted.txt
+              "Done! Run 'pockode -password YOUR_PASSWORD' to get started." > wanted.txt
             diff -u wanted.txt out.txt || fail "a successful install changed what it prints"
           }
           check() {

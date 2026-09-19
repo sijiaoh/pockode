@@ -1,10 +1,16 @@
+import type { AuthCredential } from "@pockode/shared";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("@pockode/shared", () => ({
+vi.mock("@pockode/shared", async (importOriginal) => ({
+	...(await importOriginal<typeof import("@pockode/shared")>()),
 	getWebSocketUrl: () => "ws://localhost/ws",
 }));
 
-const TEST_TOKEN = "test-token";
+const TEST_PASSWORD: AuthCredential = {
+	kind: "password",
+	value: "test-password",
+};
+const TEST_SESSION_TOKEN = "test-session-token";
 
 let mockWsInstances: MockWebSocket[] = [];
 let currentMockWs: MockWebSocket | null = null;
@@ -31,7 +37,7 @@ class MockWebSocket {
 				this.simulateMessage({
 					jsonrpc: "2.0",
 					id: parsed.id,
-					result: { version: "test" },
+					result: { version: "test", session_token: TEST_SESSION_TOKEN },
 				});
 			});
 		}
@@ -62,6 +68,22 @@ class MockWebSocket {
 	// dead cluster onclose lands seconds later. The default mock fires it
 	// synchronously, which hides every bug that needs a socket to outlive its
 	// own close() call.
+	// Answers auth with a refusal carrying the machine-readable reason clients
+	// branch on.
+	mockAuthFailure(reason: string) {
+		this.send = vi.fn((data: string) => {
+			const parsed = JSON.parse(data);
+			if (parsed.id !== undefined && parsed.method === "auth") {
+				queueMicrotask(() => {
+					this.simulateMessage({
+						jsonrpc: "2.0",
+						id: parsed.id,
+						error: { code: -32600, message: "refused", data: { reason } },
+					});
+				});
+			}
+		});
+	}
 	mockSlowClose() {
 		this.close = vi.fn(() => {
 			this.readyState = MockWebSocket.CLOSING;
@@ -77,6 +99,9 @@ const OriginalWebSocket = globalThis.WebSocket;
 
 beforeEach(() => {
 	vi.resetModules();
+	// authStore is module state the connection layer writes the issued session
+	// token into; a fresh module reads this back on import.
+	localStorage.clear();
 	vi.useFakeTimers();
 	mockWsInstances = [];
 	currentMockWs = null;
@@ -92,19 +117,60 @@ async function getStore() {
 	return module.useWSStore;
 }
 
-async function connectAndAuth(token = TEST_TOKEN) {
+async function connectAndAuth(credential: AuthCredential = TEST_PASSWORD) {
 	const useWSStore = await getStore();
-	useWSStore.getState().actions.connect(token);
+	useWSStore.getState().actions.connect(credential);
 	currentMockWs?.simulateOpen();
 	await vi.runAllTimersAsync();
 	expect(useWSStore.getState().status).toBe("connected");
 	return useWSStore;
 }
 
+describe("wsStore credentials", () => {
+	// The password is meant to leave the browser once and never be needed again;
+	// a reconnect that still reached for it would be the whole exchange undone.
+	it("swaps the password for the session token it is given", async () => {
+		const useWSStore = await connectAndAuth();
+		const { useAuthStore } = await import("./authStore");
+
+		expect(useAuthStore.getState()).toMatchObject({
+			sessionToken: TEST_SESSION_TOKEN,
+			password: null,
+		});
+
+		currentMockWs?.simulateClose();
+		await vi.advanceTimersByTimeAsync(3000);
+		const reconnected = currentMockWs;
+		reconnected?.simulateOpen();
+
+		const frame = JSON.parse(String(reconnected?.send.mock.calls[0][0]));
+		expect(frame.params).toEqual({ session_token: TEST_SESSION_TOKEN });
+		expect(useWSStore.getState().status).toBe("reconnecting");
+	});
+
+	// Nothing the user did is wrong, so this must not land on the terminal
+	// "auth_failed" screen the way a bad password does.
+	it("drops an expired session quietly rather than failing auth", async () => {
+		const useWSStore = await getStore();
+		const { authActions, useAuthStore } = await import("./authStore");
+		authActions.rememberSession("stale-session");
+
+		useWSStore
+			.getState()
+			.actions.connect({ kind: "session_token", value: "stale-session" });
+		currentMockWs?.mockAuthFailure("session_expired");
+		currentMockWs?.simulateOpen();
+		await vi.runAllTimersAsync();
+
+		expect(useAuthStore.getState().sessionToken).toBeNull();
+		expect(useWSStore.getState().status).toBe("disconnected");
+	});
+});
+
 describe("wsStore reconnect", () => {
 	it("shows connecting on the initial connect", async () => {
 		const useWSStore = await getStore();
-		useWSStore.getState().actions.connect(TEST_TOKEN);
+		useWSStore.getState().actions.connect(TEST_PASSWORD);
 		expect(useWSStore.getState().status).toBe("connecting");
 	});
 
@@ -140,8 +206,8 @@ describe("wsStore reconnect", () => {
 		// Simulates React StrictMode double-invoking App's connect effect: the
 		// second call must be a no-op, not open a second socket that orphans and
 		// leaks the first while flashing the UI.
-		useWSStore.getState().actions.connect(TEST_TOKEN);
-		useWSStore.getState().actions.connect(TEST_TOKEN);
+		useWSStore.getState().actions.connect(TEST_PASSWORD);
+		useWSStore.getState().actions.connect(TEST_PASSWORD);
 		expect(mockWsInstances.length).toBe(1);
 
 		currentMockWs?.simulateOpen();
@@ -155,7 +221,7 @@ describe("wsStore reconnect", () => {
 	it("ignores a connect while already connected", async () => {
 		const useWSStore = await connectAndAuth();
 
-		useWSStore.getState().actions.connect(TEST_TOKEN);
+		useWSStore.getState().actions.connect(TEST_PASSWORD);
 
 		expect(mockWsInstances.length).toBe(1);
 		expect(useWSStore.getState().status).toBe("connected");
@@ -182,11 +248,11 @@ describe("wsStore reconnect", () => {
 
 	// The cloud can accept the browser's socket while the tunnel behind it is
 	// dead, so auth is sent and never answered. That is a network problem, not a
-	// credential problem: "auth_failed" would put the user on the token screen.
+	// credential problem: "auth_failed" would put the user on the password screen.
 	it("retries when auth is never answered instead of failing auth", async () => {
 		const useWSStore = await getStore();
 
-		useWSStore.getState().actions.connect(TEST_TOKEN);
+		useWSStore.getState().actions.connect(TEST_PASSWORD);
 		if (currentMockWs) {
 			currentMockWs.send = vi.fn();
 		}
@@ -213,7 +279,7 @@ describe("wsStore reconnect", () => {
 		const superseded = currentMockWs;
 		expect(mockWsInstances.length).toBe(2);
 
-		useWSStore.getState().actions.connect(TEST_TOKEN);
+		useWSStore.getState().actions.connect(TEST_PASSWORD);
 		expect(superseded?.close).toHaveBeenCalled();
 		expect(mockWsInstances.length).toBe(3);
 
@@ -239,7 +305,7 @@ describe("wsStore reconnect", () => {
 		superseded?.mockSlowClose();
 
 		useWSStore.getState().actions.disconnect();
-		useWSStore.getState().actions.connect(TEST_TOKEN);
+		useWSStore.getState().actions.connect(TEST_PASSWORD);
 
 		const replacement = currentMockWs;
 		expect(replacement).not.toBe(superseded);

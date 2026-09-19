@@ -187,7 +187,7 @@ const submitStart = (user: ReturnType<typeof userEvent.setup>) =>
 		within(screen.getByRole("dialog")).getByRole("button", { name: "Start" }),
 	);
 
-describe("NodeCard: the start token", () => {
+describe("NodeCard: the start password", () => {
 	// Captured before anything stubs it, so the one test that installs a
 	// refusing clipboard cannot leak it into the tests that follow.
 	const pristineClipboard = Object.getOwnPropertyDescriptor(
@@ -203,12 +203,12 @@ describe("NodeCard: the start token", () => {
 		}
 	});
 
-	it("asks for a token the first time, and generates one on request", async () => {
+	it("asks for a password the first time, and generates one on request", async () => {
 		const user = userEvent.setup();
 		const { onStart } = renderCard(makeNode("stopped"));
 
 		await user.click(screen.getByRole("button", { name: "Start" }));
-		const field = screen.getByLabelText("Auth token");
+		const field = screen.getByLabelText("Node password");
 		expect(field).toHaveValue("");
 
 		await user.click(screen.getByRole("button", { name: "Generate" }));
@@ -222,20 +222,22 @@ describe("NodeCard: the start token", () => {
 		expect(onStart).toHaveBeenCalledWith("n1", generated);
 	});
 
-	// The token is 32 random characters typed by hand on a phone. Throwing it
+	// The password is 32 random characters typed by hand on a phone. Throwing it
 	// away on the one outcome where it is still needed is how this used to work.
-	it("keeps the sheet and the token when the start fails", async () => {
+	it("keeps the sheet and the password when the start fails", async () => {
 		const user = userEvent.setup();
 		renderCard(makeNode("stopped"), {
 			onStart: vi.fn().mockResolvedValue(false),
 		});
 
 		await user.click(screen.getByRole("button", { name: "Start" }));
-		await user.type(screen.getByLabelText("Auth token"), "hunter2hunter2");
+		await user.type(screen.getByLabelText("Node password"), "hunter2hunter2");
 		await submitStart(user);
 
 		await waitFor(() =>
-			expect(screen.getByLabelText("Auth token")).toHaveValue("hunter2hunter2"),
+			expect(screen.getByLabelText("Node password")).toHaveValue(
+				"hunter2hunter2",
+			),
 		);
 	});
 
@@ -258,7 +260,7 @@ describe("NodeCard: the start token", () => {
 		expect(screen.getByRole("alert")).toHaveTextContent("permission denied");
 	});
 
-	it("starts on one tap once the session has a token, with no sheet", async () => {
+	it("starts on one tap once the session has a password, with no sheet", async () => {
 		const user = userEvent.setup();
 		let finish: (started: boolean) => void = () => {};
 		const onStart = vi.fn(
@@ -267,29 +269,34 @@ describe("NodeCard: the start token", () => {
 					finish = resolve;
 				}),
 		);
-		renderCard(makeNode("stopped"), { savedToken: "saved-token", onStart });
+		renderCard(makeNode("stopped"), {
+			savedPassword: "saved-password",
+			onStart,
+		});
 
 		await user.click(screen.getByRole("button", { name: /Start/ }));
 
-		expect(screen.queryByLabelText("Auth token")).not.toBeInTheDocument();
-		expect(onStart).toHaveBeenCalledWith("n1", "saved-token");
-		// Which token the one tap used is not something to leave the user
+		expect(screen.queryByLabelText("Node password")).not.toBeInTheDocument();
+		expect(onStart).toHaveBeenCalledWith("n1", "saved-password");
+		// Which password the one tap used is not something to leave the user
 		// guessing about, so it is said where the node's other runtime facts are.
-		expect(screen.getByText("Using the saved node token")).toBeInTheDocument();
+		expect(
+			screen.getByText("Using the saved node password"),
+		).toBeInTheDocument();
 
 		finish(true);
 		await waitFor(() =>
 			expect(
-				screen.queryByText("Using the saved node token"),
+				screen.queryByText("Using the saved node password"),
 			).not.toBeInTheDocument(),
 		);
 	});
 
-	// The generated token exists nowhere else and the field is masked, so a
+	// The generated password exists nowhere else and the field is masked, so a
 	// clipboard that is simply absent — every non-secure context, which is where
 	// a self-hosted cluster often lives — would otherwise lose a secret the user
 	// needs again to sign in to the server it starts.
-	it("shows the token to be written down when the clipboard refuses", async () => {
+	it("shows the password to be written down when the clipboard refuses", async () => {
 		const user = userEvent.setup();
 		Object.defineProperty(navigator, "clipboard", {
 			configurable: true,
@@ -301,8 +308,9 @@ describe("NodeCard: the start token", () => {
 
 		await user.click(screen.getByRole("button", { name: "Start" }));
 		await user.click(screen.getByRole("button", { name: "Generate" }));
-		const generated = (screen.getByLabelText("Auth token") as HTMLInputElement)
-			.value;
+		const generated = (
+			screen.getByLabelText("Node password") as HTMLInputElement
+		).value;
 		await user.click(screen.getByRole("button", { name: "Copy" }));
 
 		expect(await screen.findByText(generated)).toBeInTheDocument();
@@ -314,8 +322,9 @@ describe("NodeCard: the start token", () => {
 
 		await user.click(screen.getByRole("button", { name: "Start" }));
 		await user.click(screen.getByRole("button", { name: "Generate" }));
-		const generated = (screen.getByLabelText("Auth token") as HTMLInputElement)
-			.value;
+		const generated = (
+			screen.getByLabelText("Node password") as HTMLInputElement
+		).value;
 		await user.click(screen.getByRole("button", { name: "Copy" }));
 
 		expect(await screen.findByText("Copied")).toBeInTheDocument();
@@ -323,26 +332,26 @@ describe("NodeCard: the start token", () => {
 		expect(await navigator.clipboard.readText()).toBe(generated);
 	});
 
-	it("keeps a way back to the sheet once a token is saved", async () => {
+	it("keeps a way back to the sheet once a password is saved", async () => {
 		const user = userEvent.setup();
-		renderCard(makeNode("stopped"), { savedToken: "saved-token" });
+		renderCard(makeNode("stopped"), { savedPassword: "saved-password" });
 
 		await openMenu(user);
 		await user.click(
-			screen.getByRole("button", { name: "Start with a different token…" }),
+			screen.getByRole("button", { name: "Start with a different password…" }),
 		);
 
-		expect(screen.getByLabelText("Auth token")).toHaveValue("");
+		expect(screen.getByLabelText("Node password")).toHaveValue("");
 	});
 
-	it("offers no such menu item before a token is saved", async () => {
+	it("offers no such menu item before a password is saved", async () => {
 		const user = userEvent.setup();
 		renderCard(makeNode("stopped"));
 
 		await openMenu(user);
 
 		expect(
-			screen.queryByRole("button", { name: /different token/ }),
+			screen.queryByRole("button", { name: /different password/ }),
 		).not.toBeInTheDocument();
 	});
 });

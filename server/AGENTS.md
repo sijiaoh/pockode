@@ -8,7 +8,7 @@ Go 1.25 + net/http + github.com/coder/websocket
 
 ```bash
 # 开发
-go run . --auth-token=xxx --dev          # 运行（开发模式，不 serve 静态文件）
+go run . --password=xxx --dev            # 运行（开发模式，不 serve 静态文件）
 go test ./...                            # 测试
 gofmt -w .                               # 格式化
 go vet ./...                             # 静态检查
@@ -39,6 +39,7 @@ agent/                  # Agent 抽象（接口, 事件, 进程管理, 注册表
 agentrole/              # AgentRole 存储 + 类型定义
 apiroute/               # 本进程 API 路径判定（SPA handler 与 relay 代理共用）
 attachments/            # 按 session 存放事件里以 id 引用的内容（内容寻址）
+authsession/            # 登录会话：密码换取的 session token + 密码指纹（sessions.json）
 chat/                   # Chat 客户端
 command/                # 命令存储
 contents/               # 文件内容获取
@@ -47,7 +48,8 @@ filetransfer/           # 文件上传 / 下载 HTTP 端点
 git/                    # Git 操作
 logger/                 # 结构化日志 (slog)
 mcp/                    # MCP：stdio 代理客户端 + 服务端 Executor/APIHandler
-middleware/             # Token 认证中间件
+middleware/             # 密码 / session token 认证中间件
+password/               # 服务器密码的来源（--password / POCKODE_PASSWORD + 弃用别名）
 process/                # 进程管理器
 relay/                  # NAT 穿透：yamux over WSS 隧道 + 本地反向代理
 serverinfo/             # 服务器运行时信息（server.json）
@@ -171,7 +173,8 @@ if err := json.Unmarshal(data, &parsed); err != nil {
 
 | 参数 | 必需 | 默认 | 说明 |
 |------|:----:|------|------|
-| `--auth-token` | ✓ | — | API 认证令牌（未设时回退到环境变量 `POCKODE_AUTH_TOKEN`；env 方式可避免 token 出现在进程 argv 中被同机其他用户读取）|
+| `--password` | ✓ | — | Web UI 密码（未设时回退到环境变量 `POCKODE_PASSWORD`；env 方式可避免密码出现在进程 argv 中被同机其他用户读取）|
+| `--auth-token` | | — | `--password` 的弃用别名（对应 env `POCKODE_AUTH_TOKEN`），启动时告警，`v0.20.0` 移除。新旧同名参数取值不同时直接启动失败 |
 | `--port` | | `9870` | 服务端口 |
 | `--work` | | `.` | 工作目录 |
 | `--data` | | `<work>/.pockode` | 数据目录 |
@@ -223,7 +226,7 @@ if err := json.Unmarshal(data, &parsed); err != nil {
 | `started_at` | string | 启动时间（RFC3339 格式） |
 | `local_url` | string | 本地访问 URL（可选） |
 | `remote_url` | string | Relay 远程访问 URL（可选） |
-| `token` | string | 本地 API（MCP）认证 token，每次启动随机生成，区别于用户的 `--auth-token`，不写入磁盘外的任何位置 |
+| `token` | string | 本地 API（MCP）认证 token，每次启动随机生成，区别于用户的 `--password`，不写入磁盘外的任何位置 |
 
 生命周期：启动时写入 → 运行期间保持 → 优雅关闭时删除
 

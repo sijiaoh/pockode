@@ -118,7 +118,7 @@ describe("MyComponent", () => {
 
 ## 边界
 
-✅ **Always**: `pnpm -w run lint` + `pnpm run build` + `pnpm run test` · 函数组件 · Props 定义类型 · 直接调 HTTP API 时用 `lib/api.ts` 的 `apiUrl()` / `authHeaders()` / `fetchWithAuth()`，401 走 `logoutIfUnauthorized()`（token 拼装与登出规则全站只有这一处）
+✅ **Always**: `pnpm -w run lint` + `pnpm run build` + `pnpm run test` · 函数组件 · Props 定义类型 · 直接调 HTTP API 时用 `lib/api.ts` 的 `apiUrl()` / `authHeaders()` / `fetchWithAuth()`，401 走 `logoutIfUnauthorized()`（凭证拼装与登出规则全站只有这一处）
 
 ⚠️ **Ask First**: 添加 pnpm 依赖 · 修改 Vite/TS 配置 · 新建全局 store
 

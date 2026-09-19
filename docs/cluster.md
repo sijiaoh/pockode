@@ -12,7 +12,7 @@ Mobile App  ──►  Relay Server (cloud)  ◀──  Host (cluster mode)
 
 Cluster mode focuses on:
 - WebSocket JSON-RPC endpoint
-- Token-based authentication
+- Password authentication, exchanged for a session token
 - Relay connectivity for NAT traversal
 - Node management (project directories)
 - Embedded SPA frontend
@@ -80,7 +80,7 @@ The file is deleted when the server shuts down gracefully.
 
 **Operations:**
 
-- **Start**: Spawns a new Pockode process for the node (requires auth token).
+- **Start**: Spawns a new Pockode process for the node (requires the node's password).
   A stale `server.json` is removed before the process is spawned: the wait for
   the node to come up is a wait for that file to appear, and a leftover one
   would answer it on the first read — reporting a node started that never was
@@ -95,15 +95,15 @@ The file is deleted when the server shuts down gracefully.
   to get it) and refuses a node whose process is alive, because that file is how
   the rest of the system reaches a running server
 
-**How the spawned node receives its token:** the cluster passes the auth token to
-each node server through the `POCKODE_AUTH_TOKEN` environment variable, never as a
-`--auth-token` command-line flag. On Linux a process's argv is world-readable via
+**How the spawned node receives its password:** the cluster passes it to each
+node server through the `POCKODE_PASSWORD` environment variable, never as a
+`--password` command-line flag. On Linux a process's argv is world-readable via
 `/proc/<pid>/cmdline` and `ps`, so any local user on a shared cluster host could
-otherwise read the token — and because spawned nodes enable the relay by default,
-that token grants full remote read/write and AI execution over the project. The
+otherwise read it — and because spawned nodes enable the relay by default, that
+password grants full remote read/write and AI execution over the project. The
 environment (`/proc/<pid>/environ`) is readable only by the owner and root. See
 [Authentication](code/authentication.md) for the full model. Implemented in
-`server/cluster/node/process.go` (`nodeEnv`) and `server/authtoken/`.
+`server/cluster/node/process.go` (`nodeEnv`) and `server/password/`.
 
 If `node.stop` cannot find the saved process, the backend removes any stale
 `server.json` state it can clean up and returns `"node not running"` — stopping
@@ -148,15 +148,15 @@ finally agree.
 ## Usage
 
 ```bash
-# Required: authentication token
-./pockode cluster --auth-token=your-secret-token
+# Required: the password the cluster UI asks for
+./pockode cluster --password=your-secret-password
 ```
 
 ## Command Line Arguments
 
 | Argument | Default | Description |
 |----------|---------|-------------|
-| `--auth-token` | (required) | Authentication token for WebSocket connections (falls back to the `POCKODE_AUTH_TOKEN` environment variable when the flag is unset) |
+| `--password` | (required) | Password for the cluster UI (falls back to the `POCKODE_PASSWORD` environment variable when the flag is unset; `--auth-token` / `POCKODE_AUTH_TOKEN` are deprecated aliases — see [Authentication](code/authentication.md#where-the-password-comes-from)) |
 | `--port` | `9871` | HTTP server port |
 | `--data` | `~/.pockode-cluster` | Data directory |
 | `--relay` | `true` | Enable relay for remote access (`-relay=false` to disable) |
@@ -169,6 +169,7 @@ Data is stored in `~/.pockode-cluster/` (created automatically if it doesn't exi
 | File | Content |
 |------|---------|
 | `nodes/index.json` | Node registry |
+| `sessions.json` | Live login sessions and the password fingerprint that expires them when the password changes ([Authentication](code/authentication.md#sessions-what-the-browser-keeps)) |
 
 ## Endpoints
 
@@ -185,26 +186,38 @@ Uses JSON-RPC 2.0 over WebSocket. All connections must authenticate before calli
 ### Authentication
 
 ```json
-// Request
-{"jsonrpc": "2.0", "method": "auth", "params": {"token": "your-secret-token"}, "id": 1}
+// Request — exactly one of password / session_token
+{"jsonrpc": "2.0", "method": "auth", "params": {"password": "your-secret-password"}, "id": 1}
+{"jsonrpc": "2.0", "method": "auth", "params": {"session_token": "<43 chars>"}, "id": 1}
 
 // Success response
-{"jsonrpc": "2.0", "result": {"version": "1.0.0"}, "id": 1}
+{"jsonrpc": "2.0", "result": {"version": "1.0.0", "session_token": "<43 chars>"}, "id": 1}
 
 // Failure response
-{"jsonrpc": "2.0", "error": {"code": -32600, "message": "invalid token"}, "id": 1}
+{"jsonrpc": "2.0", "error": {"code": -32600, "message": "invalid password",
+                             "data": {"reason": "invalid_password"}}, "id": 1}
 ```
 
-Unauthenticated requests receive `"not authenticated"` error and the connection is closed.
+The cluster speaks the same `auth` exchange as a node server, refusal reasons
+included — password in, session token back, the same token returned unchanged
+when it is what was sent. It is described once, in
+[Authentication → Sessions](code/authentication.md#sessions-what-the-browser-keeps).
 
-### Token Persistence (Frontend)
+A request that arrives before `auth` is refused with reason
+`not_authenticated` and the connection is closed.
 
-The cluster frontend persists the auth token to `localStorage` under `cluster_auth_token`. This enables:
+### Session Persistence (Frontend)
 
-- Automatic reconnection on page reload
-- Session continuity without re-entering token
+The cluster frontend keeps the **session token** the cluster issued in
+`localStorage` under `cluster_auth_session_token`; the password itself is held in
+memory only, until that token replaces it. This is what survives a reload and
+lets the tab reconnect without asking again.
 
-The key differs from main mode (`auth_token`) to avoid conflicts when both modes share the same browser origin.
+The key differs from main mode (`auth_session_token`) to avoid conflicts when
+both modes share the same browser origin. The pre-rename key that held the
+password itself (`cluster_auth_token`) is deleted on start — each frontend
+clears its own, and only its own; see
+[Authentication → Sessions](code/authentication.md#sessions-what-the-browser-keeps).
 
 ### Frontend UX
 
@@ -214,14 +227,18 @@ section describes what it does; the reasoning behind that shape, and the
 alternatives that were rejected on the way to it, are in
 [cluster-ui.md](cluster-ui.md).
 
-- **Token screen.** The field can be revealed, and says where the token comes
-  from (the `--auth-token` the cluster was started with). A cluster token is
-  long and random and usually typed on a phone keyboard; typing it blind and
-  being turned away is the worst way to learn a character was wrong. A token the
-  cluster rejects leads to an "Authentication failed" screen carrying the
-  server's own message; its Try Again is what discards the stored token and
-  returns here, so a token that failed for a reason other than being wrong is
-  not thrown away on the user's behalf.
+- **Password screen.** The field can be revealed, and says where the password
+  comes from (the `--password` the cluster was started with). It is usually
+  typed on a phone keyboard; typing it blind and being turned away is the worst
+  way to learn a character was wrong. A password the cluster rejects leads to an
+  "Authentication failed" screen carrying the server's own message; its Try
+  Again clears the stored credential and returns here. A stored session token
+  the cluster no longer knows is a different case and is handled silently: it is
+  dropped and the password screen comes back with nothing to apologise for,
+  because the user did nothing wrong. A `?password=` query parameter skips this
+  screen and is stripped from the URL immediately, so a bookmark can carry it
+  instead of a phone keyboard (`?token=` is the pre-rename spelling, still read
+  for one deprecation period).
 - **Connecting** uses a full-screen loading state, held back 300 ms so a connect
   that is about to succeed says nothing at all. If it never succeeds the screen
   changes to "Cluster unreachable" with a Retry, because retries run for as long
@@ -253,7 +270,7 @@ alternatives that were rejected on the way to it, are in
   since a phone on mobile data cannot reach `localhost`; `Local` appears beside
   it only when both URLs exist. A running node that reported no address at all
   says so rather than offering a button that leads nowhere. Stop (running only),
-  *Start with a different token…* (on a stopped or stale node, once a token is
+  *Start with a different password…* (on a stopped or stale node, once one is
   remembered), Edit and Delete live in the card's overflow menu.
 - **Stale nodes are a recoverable state**: the card says the server exited
   without cleaning up and that nothing is running, and offers **Start** (which
@@ -285,18 +302,19 @@ alternatives that were rejected on the way to it, are in
   them.
 - **The cluster version** is printed after the last card rather than pinned to
   the viewport corner, where it floated over whatever scrolled underneath it.
-- **Start's token is remembered for the session, in memory only.** It is the
-  token the *spawned node server* uses for its own auth, not the cluster token,
-  so it is never defaulted from `cluster_auth_token`: one leaked node must not
-  hand over the cluster. The first Start of a session opens a sheet offering
-  **Generate** (32 random characters) and **Copy** — and if the clipboard is
-  unavailable, as it is outside a secure context, the token is shown in full so
-  it can be written down rather than lost; every later Start is one tap, and the
-  card says "Using the saved node token" while it runs. The overflow menu keeps
-  **Start with a different token…** as the way back to the sheet. A token is
-  remembered only once it has actually started something, and a failed start
-  leaves the sheet, the typed token and the reason on screen. A reload asks once
-  more — the price of not making a second secret durable in browser storage.
+- **Start's password is remembered for the session, in memory only.** It is the
+  password the *spawned node server* uses for its own auth, not the cluster's
+  own, so it is never defaulted from the cluster credential: one leaked node
+  must not hand over the cluster. The first Start of a session opens a sheet
+  offering **Generate** (32 random characters) and **Copy** — and if the
+  clipboard is unavailable, as it is outside a secure context, the password is
+  shown in full so it can be written down rather than lost; every later Start is
+  one tap, and the card says "Using the saved node password" while it runs. The
+  overflow menu keeps **Start with a different password…** as the way back to
+  the sheet. A password is remembered only once it has actually started
+  something, and a failed start leaves the sheet, the typed password and the
+  reason on screen. A reload asks once more — the price of not making a second
+  secret durable in browser storage.
 
 ### Available Methods
 
@@ -311,7 +329,7 @@ After authentication:
 | `node.update` | Updates a node (params: `{id, path?, name?, create_missing_dir?}`) |
 | `node.delete` | Deletes a node (params: `{id}`) |
 | `node.status` | Returns node status (params: `{id}`) |
-| `node.start` | Starts a node's server (params: `{id, token}`) |
+| `node.start` | Starts a node's server (params: `{id, password}`; the pre-rename `token` is still accepted) |
 | `node.stop` | Stops a node's server (params: `{id}`) |
 | `node.cleanup` | Removes a stale node's leftover `server.json` (params: `{id}`); returns the node's status |
 

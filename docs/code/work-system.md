@@ -440,7 +440,7 @@ it to `server.json` alongside the port. Being a credential, it goes into a data
 directory restricted to the current user (see
 [Authentication → Credentials on Disk](authentication.md#credentials-on-disk));
 a `0600` mode would protect it on unix only.
-It is distinct from the user-facing `--auth-token` (which is never written to
+It is distinct from the user-facing `--password` (which is never written to
 disk) and lives only for the lifetime of the process. `middleware.Auth` bypasses
 the exact `/api/mcp/tools/call` route; the `APIHandler` verifies the local token
 itself. The endpoint is loopback-only in practice — the relay explicitly refuses

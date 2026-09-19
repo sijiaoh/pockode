@@ -13,7 +13,7 @@ vi.mock("../utils/config", () => ({
 const logout = vi.fn();
 
 vi.mock("./authStore", () => ({
-	authActions: { getToken: () => "test-token", logout: () => logout() },
+	authActions: { getBearer: () => "test-token", logout: () => logout() },
 }));
 
 /** A 206 carrying `body` as the bytes `[start, start + body.length)` of `total`. */

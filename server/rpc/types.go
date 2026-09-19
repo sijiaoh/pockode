@@ -48,9 +48,17 @@ type SubscribeParams struct {
 	ID string `json:"id"`
 }
 
+// AuthParams carries exactly one credential: the password the user typed, or
+// the session token a previous auth issued in exchange for it. Sending both is
+// refused rather than resolved by precedence, so that a client cannot end up
+// authenticated by a credential it did not think it was using.
 type AuthParams struct {
-	Token    string `json:"token"`
-	Worktree string `json:"worktree,omitempty"` // empty = main worktree
+	Password string `json:"password"`
+	// Token is the pre-rename name of Password, accepted for one deprecation
+	// period because a PWA cached on a phone may still be sending it.
+	Token        string `json:"token"`
+	SessionToken string `json:"session_token"`
+	Worktree     string `json:"worktree,omitempty"` // empty = main worktree
 }
 
 type AuthResult struct {
@@ -64,6 +72,51 @@ type AuthResult struct {
 	// It is the same on every route: the relay tunnel streams a request body and
 	// imposes no ceiling of its own.
 	MaxUploadSize int64 `json:"max_upload_size"`
+	// SessionToken is what the client stores in place of the password. It is a
+	// freshly issued token when the client authenticated with a password, and
+	// the very same token it sent when it authenticated with one — never a
+	// rotation, because two concurrent connections from one tab would then
+	// invalidate each other's credential. So a client can store it
+	// unconditionally without tracking how it logged in.
+	SessionToken string `json:"session_token"`
+}
+
+// The reasons an auth request is refused. Clients branch on these rather than
+// on the message, which is prose and free to change.
+const (
+	// AuthReasonInvalidPassword: the password is wrong. The user stays on the
+	// password screen and is told so.
+	AuthReasonInvalidPassword = "invalid_password"
+	// AuthReasonSessionExpired: the stored session token is unknown or past its
+	// idle window. The client drops it and asks for the password again — with
+	// no error shown, because nothing the user did was wrong.
+	AuthReasonSessionExpired = "session_expired"
+	// AuthReasonNotAuthenticated: some other method arrived before auth.
+	AuthReasonNotAuthenticated = "not_authenticated"
+	// AuthReasonWorktreeNotFound: the credential was accepted but the worktree
+	// the request asked to bind to is gone — a client holding a stale name, for
+	// instance. The client retries against the main worktree. Stated rather than
+	// left as "a refusal with no reason", so that the retry is triggered by this
+	// case being present and not by the credential cases being absent.
+	AuthReasonWorktreeNotFound = "worktree_not_found"
+)
+
+// AuthErrorData is the `data` member of the JSON-RPC error an auth refusal
+// replies with.
+type AuthErrorData struct {
+	Reason string `json:"reason"`
+}
+
+// OrLegacy picks the current spelling of a renamed request field, falling back
+// to the deprecated one. Three fields were renamed together — `auth`'s
+// credential in both the server and the cluster, and `node.start`'s — and all
+// three honour the old name for the same deprecation period, so the rule lives
+// in one place rather than once per call site.
+func OrLegacy(current, deprecated string) string {
+	if current != "" {
+		return current
+	}
+	return deprecated
 }
 
 type MessageParams struct {

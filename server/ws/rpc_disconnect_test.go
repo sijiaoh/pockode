@@ -32,7 +32,7 @@ func newKilledClient(t *testing.T, env *testEnv) *killedClient {
 	}
 	c := &killedClient{t: t, env: env, conn: conn}
 
-	if resp := c.call("auth", rpc.AuthParams{Token: "test-token"}); resp.Error != nil {
+	if resp := c.call("auth", rpc.AuthParams{Password: testPassword}); resp.Error != nil {
 		t.Fatalf("auth failed: %s", resp.Error.Message)
 	}
 	return c

@@ -18,6 +18,7 @@ import (
 	"github.com/pockode/server/command"
 	"github.com/pockode/server/contents"
 	"github.com/pockode/server/git"
+	"github.com/pockode/server/internal/authsessiontest"
 	"github.com/pockode/server/internal/unwritabletest"
 	"github.com/pockode/server/rpc"
 	"github.com/pockode/server/session"
@@ -28,6 +29,9 @@ import (
 )
 
 var bgCtx = context.Background()
+
+// testPassword is what every test environment here authenticates with.
+const testPassword = "test-password"
 
 // opTimeout bounds one websocket send or receive. Large enough that a slow
 // machine never trips it, small enough that a genuinely stuck server fails with
@@ -154,7 +158,7 @@ func newTestEnvWithAgent(t *testing.T, mock *mockAgent, ag agent.Agent, workDir 
 	workOps := work.NewOperations(workStore, workStarter, workEngine, agentrole.Steps{Store: agentRoleStore})
 	workOps.SetSessionDeleter(worktreeManager)
 
-	h := NewRPCHandler("test-token", "test", true, cmdStore, worktreeManager, settingsStore, workStore, workOps, workEngine, agentRoleStore)
+	h := NewRPCHandler(testPassword, authsessiontest.New(), "test", true, cmdStore, worktreeManager, settingsStore, workStore, workOps, workEngine, agentRoleStore)
 	server := httptest.NewServer(h)
 
 	// No deadline of its own: every read and write is bounded individually (see
@@ -185,7 +189,7 @@ func newTestEnvWithAgent(t *testing.T, mock *mockAgent, ag agent.Agent, workDir 
 	}
 
 	// Authenticate
-	resp := env.call("auth", rpc.AuthParams{Token: "test-token"})
+	resp := env.call("auth", rpc.AuthParams{Password: testPassword})
 	if resp.Error != nil {
 		t.Fatalf("auth failed: %s", resp.Error.Message)
 	}
@@ -501,7 +505,11 @@ func getWorkOrFail(t *testing.T, env *testEnv, workID string) work.Work {
 	return w
 }
 
-func TestHandler_Auth_InvalidToken(t *testing.T) {
+// newAuthTestServer builds the smallest handler that can answer an auth
+// request, for the tests that need a connection that has NOT authenticated —
+// which newTestEnv, by construction, cannot give them.
+func newAuthTestServer(t *testing.T, password string, sessions SessionStore) *httptest.Server {
+	t.Helper()
 	dataDir := t.TempDir()
 	workDir := t.TempDir()
 	cmdStore, _ := command.NewStore(dataDir)
@@ -509,26 +517,32 @@ func TestHandler_Auth_InvalidToken(t *testing.T) {
 	workStore, _ := work.NewFileStore(dataDir)
 	registry := worktree.NewRegistry(workDir, dataDir)
 	worktreeManager := worktree.NewManager(registry, mockRegistry(&mockAgent{}), dataDir, session.LeaseBudgets{Idle: 10 * time.Minute})
-	defer worktreeManager.Shutdown()
-
+	t.Cleanup(worktreeManager.Shutdown)
 	agentRoleStore, _ := agentrole.NewFileStore(dataDir)
 	workStarter := worktree.NewWorkStarter(worktreeManager, agentRoleStore, settingsStore)
 	workOps := work.NewOperations(workStore, workStarter, nil, nil)
-	h := NewRPCHandler("secret-token", "test", true, cmdStore, worktreeManager, settingsStore, workStore, workOps, work.NewEngine(workStore, work.DefaultMaxNudges), agentRoleStore)
-	server := httptest.NewServer(h)
-	defer server.Close()
 
+	h := NewRPCHandler(password, sessions, "test", true, cmdStore, worktreeManager, settingsStore, workStore, workOps, work.NewEngine(workStore, work.DefaultMaxNudges), agentRoleStore)
+	server := httptest.NewServer(h)
+	t.Cleanup(server.Close)
+	return server
+}
+
+// callOnce sends one request over a fresh connection and returns the reply. A
+// fresh connection per call is the point: every refusal below closes the
+// connection, and the first request is the only one a connection gets.
+func callOnce(t *testing.T, serverURL, method string, params any) rpcResponse {
+	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), opTimeout)
 	defer cancel()
 
-	conn, err := dialTestClient(ctx, server.URL)
+	conn, err := dialTestClient(ctx, serverURL)
 	if err != nil {
 		t.Fatalf("failed to connect: %v", err)
 	}
 	defer conn.Close(websocket.StatusNormalClosure, "")
 
-	req := rpcRequest{JSONRPC: "2.0", ID: 1, Method: "auth", Params: rpc.AuthParams{Token: "wrong-token"}}
-	data, _ := json.Marshal(req)
+	data, _ := json.Marshal(rpcRequest{JSONRPC: "2.0", ID: 1, Method: method, Params: params})
 	if err := conn.Write(ctx, websocket.MessageText, data); err != nil {
 		t.Fatalf("failed to send: %v", err)
 	}
@@ -537,67 +551,139 @@ func TestHandler_Auth_InvalidToken(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to read: %v", err)
 	}
-
 	var resp rpcResponse
 	if err := json.Unmarshal(respData, &resp); err != nil {
 		t.Fatalf("failed to unmarshal: %v", err)
 	}
+	return resp
+}
 
+func authReason(t *testing.T, resp rpcResponse) string {
+	t.Helper()
 	if resp.Error == nil {
-		t.Error("expected auth to fail")
+		t.Fatalf("expected an error reply, got result %s", resp.Result)
 	}
-	if !strings.Contains(resp.Error.Message, "invalid token") {
-		t.Errorf("expected 'invalid token' error, got %q", resp.Error.Message)
+	if resp.Error.Data == nil {
+		t.Fatalf("error %q carries no data; clients branch on data.reason", resp.Error.Message)
+	}
+	var data rpc.AuthErrorData
+	if err := json.Unmarshal(*resp.Error.Data, &data); err != nil {
+		t.Fatalf("unmarshal error data: %v", err)
+	}
+	return data.Reason
+}
+
+// A refusal must say which kind it is in a field, because the two kinds lead to
+// different UI: a wrong password is the user's mistake and is shown, an expired
+// session is not and is swallowed.
+func TestHandler_Auth_Refusals(t *testing.T) {
+	sessions := authsessiontest.New()
+	live, err := sessions.Issue()
+	if err != nil {
+		t.Fatalf("Issue: %v", err)
+	}
+	server := newAuthTestServer(t, testPassword, sessions)
+
+	tests := []struct {
+		name       string
+		method     string
+		params     any
+		wantReason string
+	}{
+		{
+			name:       "wrong password",
+			method:     "auth",
+			params:     rpc.AuthParams{Password: "wrong-password"},
+			wantReason: rpc.AuthReasonInvalidPassword,
+		},
+		{
+			name:       "unknown session token",
+			method:     "auth",
+			params:     rpc.AuthParams{SessionToken: live + "-tampered"},
+			wantReason: rpc.AuthReasonSessionExpired,
+		},
+		{
+			name:       "some other method first",
+			method:     "chat.messages.subscribe",
+			params:     rpc.ChatMessagesSubscribeParams{ID: "client-1", SessionID: "sess"},
+			wantReason: rpc.AuthReasonNotAuthenticated,
+		},
+		{
+			// The one refusal the credential was fine for. It is named so that
+			// the client's retry against main is driven by this reason being
+			// present, not by the credential reasons being absent.
+			name:       "worktree that no longer exists",
+			method:     "auth",
+			params:     rpc.AuthParams{Password: testPassword, Worktree: "gone"},
+			wantReason: rpc.AuthReasonWorktreeNotFound,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			resp := callOnce(t, server.URL, tt.method, tt.params)
+			if got := authReason(t, resp); got != tt.wantReason {
+				t.Errorf("reason = %q, want %q", got, tt.wantReason)
+			}
+		})
 	}
 }
 
-func TestHandler_Auth_FirstMessageMustBeAuth(t *testing.T) {
-	dataDir := t.TempDir()
-	workDir := t.TempDir()
-	cmdStore, _ := command.NewStore(dataDir)
-	settingsStore, _ := settings.NewStore(dataDir)
-	workStore, _ := work.NewFileStore(dataDir)
-	registry := worktree.NewRegistry(workDir, dataDir)
-	worktreeManager := worktree.NewManager(registry, mockRegistry(&mockAgent{}), dataDir, session.LeaseBudgets{Idle: 10 * time.Minute})
-	defer worktreeManager.Shutdown()
-	agentRoleStore, _ := agentrole.NewFileStore(dataDir)
-
-	workStarter := worktree.NewWorkStarter(worktreeManager, agentRoleStore, settingsStore)
-	workOps := work.NewOperations(workStore, workStarter, nil, nil)
-	h := NewRPCHandler("test-token", "test", true, cmdStore, worktreeManager, settingsStore, workStore, workOps, work.NewEngine(workStore, work.DefaultMaxNudges), agentRoleStore)
-	server := httptest.NewServer(h)
-	defer server.Close()
-
-	ctx, cancel := context.WithTimeout(context.Background(), opTimeout)
-	defer cancel()
-
-	conn, err := dialTestClient(ctx, server.URL)
+// Sending both credentials has no safe reading: whichever the server picked,
+// the client would believe it was authenticated by the other one.
+func TestHandler_Auth_BothCredentialsRefused(t *testing.T) {
+	sessions := authsessiontest.New()
+	live, err := sessions.Issue()
 	if err != nil {
-		t.Fatalf("failed to connect: %v", err)
+		t.Fatalf("Issue: %v", err)
 	}
-	defer conn.Close(websocket.StatusNormalClosure, "")
+	server := newAuthTestServer(t, testPassword, sessions)
 
-	req := rpcRequest{JSONRPC: "2.0", ID: 1, Method: "chat.messages.subscribe", Params: rpc.ChatMessagesSubscribeParams{ID: "client-1", SessionID: "sess"}}
-	data, _ := json.Marshal(req)
-	if err := conn.Write(ctx, websocket.MessageText, data); err != nil {
-		t.Fatalf("failed to send: %v", err)
+	resp := callOnce(t, server.URL, "auth", rpc.AuthParams{Password: testPassword, SessionToken: live})
+	if resp.Error == nil || resp.Error.Code != jsonrpc2.CodeInvalidParams {
+		t.Fatalf("got %+v, want an invalid-params error", resp.Error)
+	}
+}
+
+// The whole point of the exchange: the password buys a token, and the token is
+// what every later connection sends — handed back unchanged, so a client can
+// store the field without tracking how it authenticated.
+func TestHandler_Auth_PasswordIssuesReusableSessionToken(t *testing.T) {
+	server := newAuthTestServer(t, testPassword, authsessiontest.New())
+
+	resp := callOnce(t, server.URL, "auth", rpc.AuthParams{Password: testPassword})
+	if resp.Error != nil {
+		t.Fatalf("auth with password failed: %v", resp.Error)
+	}
+	var first rpc.AuthResult
+	if err := json.Unmarshal(resp.Result, &first); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if first.SessionToken == "" {
+		t.Fatal("auth with a password returned no session token")
 	}
 
-	_, respData, err := conn.Read(ctx)
-	if err != nil {
-		t.Fatalf("failed to read: %v", err)
+	resp = callOnce(t, server.URL, "auth", rpc.AuthParams{SessionToken: first.SessionToken})
+	if resp.Error != nil {
+		t.Fatalf("auth with the issued session token failed: %v", resp.Error)
 	}
+	var second rpc.AuthResult
+	if err := json.Unmarshal(resp.Result, &second); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if second.SessionToken != first.SessionToken {
+		t.Errorf("session token = %q, want it returned unchanged (%q)", second.SessionToken, first.SessionToken)
+	}
+}
 
-	var resp rpcResponse
-	if err := json.Unmarshal(respData, &resp); err != nil {
-		t.Fatalf("failed to unmarshal: %v", err)
-	}
+// A PWA cached on a phone before the rename still sends `token`, and must keep
+// working for the deprecation period.
+func TestHandler_Auth_AcceptsDeprecatedTokenParam(t *testing.T) {
+	server := newAuthTestServer(t, testPassword, authsessiontest.New())
 
-	if resp.Error == nil {
-		t.Error("expected auth to fail")
-	}
-	if !strings.Contains(resp.Error.Message, "first request must be auth") {
-		t.Errorf("expected 'first request must be auth' error, got %q", resp.Error.Message)
+	resp := callOnce(t, server.URL, "auth", rpc.AuthParams{Token: testPassword})
+	if resp.Error != nil {
+		t.Fatalf("auth with the deprecated token param failed: %v", resp.Error)
 	}
 }
 

@@ -14,7 +14,7 @@ for arg in "$@"; do
 done
 
 # Configuration (can be overridden via environment variables for convenience)
-AUTH_TOKEN="${AUTH_TOKEN:-dev-token}"
+PASSWORD="${POCKODE_PASSWORD:-dev-password}"
 # Resolve to absolute path (relative paths break when subprocesses cd)
 WORK_DIR="$(cd "${WORK_DIR:-$PROJECT_DIR}" && pwd)"
 LOG_LEVEL="${LOG_LEVEL:-debug}"
@@ -30,7 +30,7 @@ if [ "$CLUSTER_MODE" = true ]; then
     echo "Starting cluster dev environment..."
     echo "  Backend:  http://localhost:$SERVER_PORT"
     echo "  Frontend: http://localhost:$WEB_PORT"
-    echo "  Token:    $AUTH_TOKEN"
+    echo "  Password: $PASSWORD"
     echo ""
 
     # Export port for web dev server
@@ -38,7 +38,7 @@ if [ "$CLUSTER_MODE" = true ]; then
 
     cd "$PROJECT_DIR"
     pnpm exec concurrently --kill-others -n server,web -c blue,green \
-        "cd server && go run . cluster --auth-token \"$AUTH_TOKEN\" --port $SERVER_PORT --relay=$RELAY_ENABLED --relay-frontend-port $RELAY_FRONTEND_PORT --cloud-url \"$CLOUD_URL\" --dev" \
+        "cd server && go run . cluster --password \"$PASSWORD\" --port $SERVER_PORT --relay=$RELAY_ENABLED --relay-frontend-port $RELAY_FRONTEND_PORT --cloud-url \"$CLOUD_URL\" --dev" \
         "cd web-cluster && pnpm run dev"
 else
     # Normal mode configuration
@@ -50,7 +50,7 @@ else
     echo "Starting dev environment..."
     echo "  Backend:  http://localhost:$SERVER_PORT"
     echo "  Frontend: http://localhost:$WEB_PORT"
-    echo "  Token:    $AUTH_TOKEN"
+    echo "  Password: $PASSWORD"
     echo ""
 
     # Export port for web dev server
@@ -58,6 +58,6 @@ else
 
     cd "$PROJECT_DIR"
     pnpm exec concurrently --kill-others -n server,web -c blue,green \
-        "cd server && go run . --auth-token \"$AUTH_TOKEN\" --port $SERVER_PORT --work \"$WORK_DIR\" --relay=$RELAY_ENABLED --relay-frontend-port $RELAY_FRONTEND_PORT --cloud-url \"$CLOUD_URL\" --log-level $LOG_LEVEL --dev" \
+        "cd server && go run . --password \"$PASSWORD\" --port $SERVER_PORT --work \"$WORK_DIR\" --relay=$RELAY_ENABLED --relay-frontend-port $RELAY_FRONTEND_PORT --cloud-url \"$CLOUD_URL\" --log-level $LOG_LEVEL --dev" \
         "cd web && pnpm run dev"
 fi

@@ -11,6 +11,7 @@ import (
 	"github.com/pockode/server/agent"
 	"github.com/pockode/server/agent/claude"
 	"github.com/pockode/server/agent/codex"
+	"github.com/pockode/server/authsession"
 	"github.com/pockode/server/cluster/node"
 	"github.com/pockode/server/internal/netutil"
 	"github.com/pockode/server/internal/shutdown"
@@ -22,19 +23,24 @@ import (
 const DefaultPort = 9871
 
 type Config struct {
-	Port              int
-	AuthToken         string
-	DataDir           string
-	RelayEnabled      bool
-	RelayFrontendPort int
-	CloudURL          string
-	Version           string
-	DevMode           bool
+	Port     int
+	Password string
+	// PasswordDeprecationWarning is logged once at startup when the password
+	// arrived through a deprecated flag or environment variable. It is carried
+	// in rather than logged by the caller because logging is only configured
+	// below, inside Run.
+	PasswordDeprecationWarning string
+	DataDir                    string
+	RelayEnabled               bool
+	RelayFrontendPort          int
+	CloudURL                   string
+	Version                    string
+	DevMode                    bool
 }
 
 func Run(cfg Config) error {
-	if cfg.AuthToken == "" {
-		return fmt.Errorf("AuthToken is required")
+	if cfg.Password == "" {
+		return fmt.Errorf("password is required")
 	}
 
 	logger.Init(logger.Config{
@@ -45,6 +51,9 @@ func Run(cfg Config) error {
 	port := netutil.FindAvailablePort(cfg.Port)
 
 	log := slog.Default().With("mode", "cluster")
+	if cfg.PasswordDeprecationWarning != "" {
+		log.Warn(cfg.PasswordDeprecationWarning)
+	}
 	log.Info("starting cluster mode", "port", port, "dataDir", cfg.DataDir, "relayEnabled", cfg.RelayEnabled, "devMode", cfg.DevMode)
 
 	nodeStore, err := node.NewFileStore(cfg.DataDir)
@@ -54,15 +63,23 @@ func Run(cfg Config) error {
 
 	processManager := node.NewProcessManager()
 
+	// A cluster authenticates its own frontend exactly as a server does, out of
+	// its own data directory; the nodes it starts keep their own, separate
+	// sessions.
+	sessions, err := authsession.NewStore(cfg.DataDir, cfg.Password)
+	if err != nil {
+		return fmt.Errorf("failed to create session store: %w", err)
+	}
+
 	// Cluster mode never runs an AI CLI itself, but the nodes it starts are this
-	// same executable and inherit this environment (nodeEnv only swaps the auth
-	// token), so they search the same PATH and the same install directories.
+	// same executable and inherit this environment (nodeEnv only swaps the
+	// password), so they search the same PATH and the same install directories.
 	// Checking here is the only place the answer reaches the user: nodes are
 	// started detached, so their own banners go to a log nobody is watching.
 	agentStatuses := agent.CheckBinaries(log, claude.Binary, codex.Binary)
 
-	wsHandler := newWSHandler(cfg.AuthToken, cfg.Version, cfg.DevMode, nodeStore, processManager, log)
-	handler := newHandler(cfg.AuthToken, cfg.DevMode, wsHandler)
+	wsHandler := newWSHandler(cfg.Password, sessions, cfg.Version, cfg.DevMode, nodeStore, processManager, log)
+	handler := newHandler(cfg.Password, sessions, cfg.DevMode, wsHandler)
 
 	srv := &http.Server{
 		Addr:    ":" + strconv.Itoa(port),
@@ -133,6 +150,9 @@ func Run(cfg Config) error {
 		defer cancel()
 		if err := srv.Shutdown(ctx); err != nil {
 			log.Error("server shutdown error", "error", err)
+		}
+		if err := sessions.Flush(); err != nil {
+			log.Error("failed to persist sessions", "error", err)
 		}
 		close(shutdownDone)
 	}()

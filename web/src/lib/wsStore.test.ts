@@ -1,3 +1,4 @@
+import type { AuthCredential } from "@pockode/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // Mock config module
@@ -5,7 +6,11 @@ vi.mock("../utils/config", () => ({
 	getWebSocketUrl: vi.fn(() => "ws://localhost/ws"),
 }));
 
-const TEST_TOKEN = "test-token";
+const TEST_PASSWORD: AuthCredential = {
+	kind: "password",
+	value: "test-password",
+};
+const TEST_SESSION_TOKEN = "test-session-token";
 
 // Mirrors RECONNECT_MAX_DELAY_MS in wsStore; not exported, since the ceiling is
 // an implementation detail everywhere except here.
@@ -56,7 +61,7 @@ class MockWebSocket {
 			queueMicrotask(() => {
 				let result: Record<string, unknown> = {};
 				if (parsed.method === "auth") {
-					result = { version: "test" };
+					result = { version: "test", session_token: TEST_SESSION_TOKEN };
 				} else if (parsed.method === "chat.messages.subscribe") {
 					result = {
 						id: "sub-1",
@@ -128,7 +133,7 @@ class MockWebSocket {
 			result,
 		});
 	}
-	mockAuthFailure() {
+	mockAuthFailure(reason = "invalid_password") {
 		this.send = vi.fn((data: string) => {
 			const parsed = JSON.parse(data);
 			if (parsed.id !== undefined && parsed.method === "auth") {
@@ -136,7 +141,7 @@ class MockWebSocket {
 					this.simulateMessage({
 						jsonrpc: "2.0",
 						id: parsed.id,
-						error: { code: -32600, message: "Invalid token" },
+						error: { code: -32600, message: "refused", data: { reason } },
 					});
 				});
 			}
@@ -164,6 +169,10 @@ beforeEach(() => {
 afterEach(async () => {
 	const { resetWSStore } = await import("./wsStore");
 	resetWSStore();
+	// The store under test now writes the session token it is handed straight
+	// into authStore, which is module state and outlives one case.
+	const { authActions } = await import("./authStore");
+	authActions.logout();
 
 	vi.restoreAllMocks();
 
@@ -198,11 +207,11 @@ function fireRecoveryEvents() {
 	document.dispatchEvent(new Event("visibilitychange"));
 }
 
-async function connectAndAuth(token = TEST_TOKEN) {
+async function connectAndAuth(credential: AuthCredential = TEST_PASSWORD) {
 	const wsActions = await getWsActions();
 	const useWSStore = await getUseWSStore();
 
-	wsActions.connect(token);
+	wsActions.connect(credential);
 	getMockWs()?.simulateOpen();
 	await vi.runAllTimersAsync();
 	expect(useWSStore.getState().status).toBe("connected");
@@ -222,7 +231,7 @@ describe("wsStore", { timeout: 20_000 }, () => {
 				statusChanges.push(state.status);
 			});
 
-			wsActions.connect(TEST_TOKEN);
+			wsActions.connect(TEST_PASSWORD);
 			expect(statusChanges).toContain("connecting");
 
 			getMockWs()?.simulateOpen();
@@ -234,7 +243,7 @@ describe("wsStore", { timeout: 20_000 }, () => {
 		it("sends auth RPC request on open", async () => {
 			const wsActions = await getWsActions();
 
-			wsActions.connect(TEST_TOKEN);
+			wsActions.connect(TEST_PASSWORD);
 			getMockWs()?.simulateOpen();
 
 			expect(getMockWs()?.send).toHaveBeenCalled();
@@ -242,14 +251,14 @@ describe("wsStore", { timeout: 20_000 }, () => {
 			const sentData = JSON.parse(ws?.send.mock.calls[0][0] ?? "{}");
 			expect(sentData.jsonrpc).toBe("2.0");
 			expect(sentData.method).toBe("auth");
-			expect(sentData.params).toEqual({ token: TEST_TOKEN });
+			expect(sentData.params).toEqual({ password: TEST_PASSWORD.value });
 		});
 
 		it("sets status to auth_failed on auth failure", async () => {
 			const wsActions = await getWsActions();
 			const useWSStore = await getUseWSStore();
 
-			wsActions.connect(TEST_TOKEN);
+			wsActions.connect(TEST_PASSWORD);
 			const ws = getMockWs();
 			ws?.mockAuthFailure();
 			ws?.simulateOpen();
@@ -258,11 +267,81 @@ describe("wsStore", { timeout: 20_000 }, () => {
 			expect(useWSStore.getState().status).toBe("auth_failed");
 		});
 
-		it("sets status to error when no token", async () => {
+		// The password is meant to leave the browser once and never be needed
+		// again; a reconnect that still reached for it would be the whole point of
+		// the exchange undone.
+		it("swaps the password for the session token it is given", async () => {
+			const wsActions = await getWsActions();
+			const { useAuthStore } = await import("./authStore");
+
+			wsActions.connect(TEST_PASSWORD);
+			getMockWs()?.simulateOpen();
+			await vi.runAllTimersAsync();
+
+			expect(useAuthStore.getState()).toMatchObject({
+				sessionToken: TEST_SESSION_TOKEN,
+				password: null,
+			});
+
+			getMockWs()?.simulateClose();
+			await vi.runAllTimersAsync();
+			const reconnected = getMockWs();
+			reconnected?.simulateOpen();
+
+			const frame = JSON.parse(reconnected?.send.mock.calls[0][0] ?? "{}");
+			expect(frame.params).toEqual({ session_token: TEST_SESSION_TOKEN });
+		});
+
+		// Nothing the user did is wrong, so this must not land on the terminal
+		// "auth_failed" screen the way a bad password does.
+		it("drops an expired session quietly rather than failing auth", async () => {
+			const wsActions = await getWsActions();
+			const useWSStore = await getUseWSStore();
+			const { authActions, useAuthStore } = await import("./authStore");
+			authActions.rememberSession("stale-session");
+
+			wsActions.connect({ kind: "session_token", value: "stale-session" });
+			const ws = getMockWs();
+			ws?.mockAuthFailure("session_expired");
+			ws?.simulateOpen();
+			await vi.runAllTimersAsync();
+
+			expect(useAuthStore.getState().sessionToken).toBeNull();
+			expect(useWSStore.getState().status).toBe("disconnected");
+		});
+
+		// The two halves of one rule: a refusal that names the worktree is retried
+		// against main, and a refusal that names the credential is not — retrying
+		// the latter would throw away the worktree the user was in and fail again
+		// anyway. The pair is here because the retry is triggered by a positive
+		// match on the reason, and nothing else in the file would notice if that
+		// match started answering the wrong cases.
+		it.each([
+			{ reason: "worktree_not_found", retries: true },
+			{ reason: "invalid_password", retries: false },
+		])("retries against main only for $reason", async ({ reason, retries }) => {
+			const wsActions = await getWsActions();
+			const { worktreeActions } = await import("./worktreeStore");
+			worktreeActions.setCurrent("gone");
+
+			try {
+				wsActions.connect(TEST_PASSWORD);
+				const ws = getMockWs();
+				ws?.mockAuthFailure(reason);
+				ws?.simulateOpen();
+				await vi.runAllTimersAsync();
+
+				expect(mockWsInstances.length).toBe(retries ? 2 : 1);
+			} finally {
+				worktreeActions.reset();
+			}
+		});
+
+		it("sets status to error when the credential is empty", async () => {
 			const wsActions = await getWsActions();
 			const useWSStore = await getUseWSStore();
 
-			wsActions.connect("");
+			wsActions.connect({ kind: "password", value: "" });
 
 			expect(useWSStore.getState().status).toBe("error");
 		});
@@ -270,10 +349,10 @@ describe("wsStore", { timeout: 20_000 }, () => {
 		it("ignores connect() when already connecting", async () => {
 			const wsActions = await getWsActions();
 
-			wsActions.connect(TEST_TOKEN);
+			wsActions.connect(TEST_PASSWORD);
 			const firstWs = getMockWs();
 
-			wsActions.connect(TEST_TOKEN);
+			wsActions.connect(TEST_PASSWORD);
 			// Should not create a new WebSocket
 			expect(mockWsInstances.length).toBe(1);
 			expect(firstWs?.close).not.toHaveBeenCalled();
@@ -284,7 +363,7 @@ describe("wsStore", { timeout: 20_000 }, () => {
 			const connectedWs = getMockWs();
 
 			const wsActions = await getWsActions();
-			wsActions.connect(TEST_TOKEN);
+			wsActions.connect(TEST_PASSWORD);
 
 			// Should not create a new WebSocket
 			expect(mockWsInstances.length).toBe(1);
@@ -296,11 +375,11 @@ describe("wsStore", { timeout: 20_000 }, () => {
 			const useWSStore = await getUseWSStore();
 
 			// Force error state by calling connect with empty token
-			wsActions.connect("");
+			wsActions.connect({ kind: "password", value: "" });
 			expect(useWSStore.getState().status).toBe("error");
 
 			// Attempting to connect should be ignored
-			wsActions.connect(TEST_TOKEN);
+			wsActions.connect(TEST_PASSWORD);
 			expect(useWSStore.getState().status).toBe("error");
 			expect(mockWsInstances.length).toBe(0);
 		});
@@ -309,7 +388,7 @@ describe("wsStore", { timeout: 20_000 }, () => {
 			const wsActions = await getWsActions();
 
 			// First connection closes
-			wsActions.connect(TEST_TOKEN);
+			wsActions.connect(TEST_PASSWORD);
 			getMockWs()?.simulateOpen();
 			await vi.runAllTimersAsync();
 			getMockWs()?.simulateClose();
@@ -507,7 +586,7 @@ describe("wsStore", { timeout: 20_000 }, () => {
 			const listener = vi.fn();
 
 			const unsubscribe = useWSStore.subscribe(listener);
-			wsActions.connect(TEST_TOKEN);
+			wsActions.connect(TEST_PASSWORD);
 			expect(listener).toHaveBeenCalled();
 
 			listener.mockClear();
@@ -527,7 +606,7 @@ describe("wsStore", { timeout: 20_000 }, () => {
 			useWSStore.subscribe(listener1);
 			useWSStore.subscribe(listener2);
 
-			wsActions.connect(TEST_TOKEN);
+			wsActions.connect(TEST_PASSWORD);
 
 			expect(listener1).toHaveBeenCalled();
 			expect(listener2).toHaveBeenCalled();
@@ -931,7 +1010,7 @@ describe("wsStore", { timeout: 20_000 }, () => {
 			const wsActions = await getWsActions();
 			const useWSStore = await getUseWSStore();
 
-			wsActions.connect(TEST_TOKEN);
+			wsActions.connect(TEST_PASSWORD);
 			getMockWs()?.mockAuthFailure();
 			getMockWs()?.simulateOpen();
 			await vi.runAllTimersAsync();
@@ -950,7 +1029,7 @@ describe("wsStore", { timeout: 20_000 }, () => {
 			const wsActions = await getWsActions();
 			const useWSStore = await getUseWSStore();
 
-			wsActions.connect(TEST_TOKEN);
+			wsActions.connect(TEST_PASSWORD);
 			getMockWs()?.mockNoResponse();
 			getMockWs()?.simulateOpen();
 
@@ -966,7 +1045,7 @@ describe("wsStore", { timeout: 20_000 }, () => {
 			const wsActions = await getWsActions();
 			const useWSStore = await getUseWSStore();
 
-			wsActions.connect(TEST_TOKEN);
+			wsActions.connect(TEST_PASSWORD);
 			// onerror is always followed by onclose; onerror does not change status
 			getMockWs()?.simulateError();
 			expect(useWSStore.getState().status).toBe("connecting");
@@ -1010,7 +1089,7 @@ describe("wsStore", { timeout: 20_000 }, () => {
 			const wsActions = await getWsActions();
 			const useWSStore = await getUseWSStore();
 
-			wsActions.connect(TEST_TOKEN);
+			wsActions.connect(TEST_PASSWORD);
 			getMockWs()?.mockAuthFailure();
 			getMockWs()?.simulateOpen();
 

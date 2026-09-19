@@ -25,9 +25,21 @@ import (
 	"github.com/sourcegraph/jsonrpc2"
 )
 
+// SessionStore is what an RPC handler needs of the session store to exchange a
+// password for a durable credential; authsession.Store implements it. Package
+// cluster's handler needs exactly this and shares the declaration rather than
+// restating it.
+type SessionStore interface {
+	// Issue returns a new session token.
+	Issue() (string, error)
+	// Validate reports whether a token names a live session, and marks it used.
+	Validate(token string) bool
+}
+
 // RPCHandler handles JSON-RPC 2.0 over WebSocket.
 type RPCHandler struct {
-	token                string
+	password             string
+	sessions             SessionStore
 	version              string
 	devMode              bool
 	commandStore         *command.Store
@@ -43,7 +55,7 @@ type RPCHandler struct {
 	agentRoleListWatcher *watch.AgentRoleListWatcher
 }
 
-func NewRPCHandler(token, version string, devMode bool, commandStore *command.Store, worktreeManager *worktree.Manager, settingsStore *settings.Store, workStore work.Store, workOps *work.Operations, workEngine *work.Engine, agentRoleStore agentrole.Store) *RPCHandler {
+func NewRPCHandler(password string, sessions SessionStore, version string, devMode bool, commandStore *command.Store, worktreeManager *worktree.Manager, settingsStore *settings.Store, workStore work.Store, workOps *work.Operations, workEngine *work.Engine, agentRoleStore agentrole.Store) *RPCHandler {
 	settingsWatcher := watch.NewSettingsWatcher(settingsStore)
 	settingsWatcher.Start()
 
@@ -66,7 +78,8 @@ func NewRPCHandler(token, version string, devMode bool, commandStore *command.St
 	agentRoleListWatcher.Start()
 
 	return &RPCHandler{
-		token:                token,
+		password:             password,
+		sessions:             sessions,
 		version:              version,
 		devMode:              devMode,
 		commandStore:         commandStore,
@@ -369,7 +382,7 @@ func (h *rpcMethodHandler) Handle(ctx context.Context, conn *jsonrpc2.Conn, req 
 	// Auth must be the first request
 	if !h.isAuthenticated() {
 		if req.Method != "auth" {
-			h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidRequest, "first request must be auth")
+			h.replyAuthError(ctx, conn, req.ID, "first request must be auth", rpc.AuthReasonNotAuthenticated)
 			conn.Close()
 			return
 		}
@@ -618,17 +631,18 @@ func (h *rpcMethodHandler) handleAuth(ctx context.Context, conn *jsonrpc2.Conn, 
 		return
 	}
 
-	if subtle.ConstantTimeCompare([]byte(params.Token), []byte(h.token)) != 1 {
-		h.log.Warn("invalid auth token")
-		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidRequest, "invalid token")
-		conn.Close()
+	existingSession, ok := h.checkCredentials(ctx, conn, req, params)
+	if !ok {
 		return
 	}
 
 	wt, err := h.worktreeManager.Get(params.Worktree)
 	if err != nil {
 		h.log.Warn("worktree not found", "worktree", params.Worktree, "error", err)
-		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "worktree not found")
+		// Still CodeInvalidParams — the params really are wrong, and only the
+		// machine-readable reason is new.
+		h.replyErrorData(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "worktree not found",
+			rpc.AuthErrorData{Reason: rpc.AuthReasonWorktreeNotFound})
 		conn.Close()
 		return
 	}
@@ -653,6 +667,19 @@ func (h *rpcMethodHandler) handleAuth(ctx context.Context, conn *jsonrpc2.Conn, 
 		h.worktreeManager.Release(prevWorktree)
 	}
 
+	// Issuing only now, after the worktree is bound, is what keeps a client that
+	// keeps asking for a worktree that no longer exists from burning a session
+	// slot per attempt — and evicting live sessions once it has burned fifty.
+	sessionToken := existingSession
+	if sessionToken == "" {
+		var err error
+		if sessionToken, err = h.sessions.Issue(); err != nil {
+			h.replyInternalError(ctx, conn, req.ID, "failed to issue session token", err)
+			conn.Close()
+			return
+		}
+	}
+
 	h.setAuthenticated()
 	h.log.Info("authenticated", "worktree", wt.Name, "workDir", wt.WorkDir)
 
@@ -663,10 +690,55 @@ func (h *rpcMethodHandler) handleAuth(ctx context.Context, conn *jsonrpc2.Conn, 
 		WorkDir:       wt.WorkDir,
 		WorktreeName:  wt.Name,
 		MaxUploadSize: filetransfer.MaxUploadSize,
+		SessionToken:  sessionToken,
 	}
 	if err := conn.Reply(ctx, req.ID, result); err != nil {
 		h.log.Error("failed to send auth response", "error", err)
 	}
+}
+
+// checkCredentials verifies the one credential the client sent. It returns the
+// session token the client authenticated with, or "" when it sent a password
+// and a token must be issued for it — deliberately not issuing one here, so
+// that nothing is spent before the rest of handleAuth has succeeded. Every
+// refusal closes the connection and is reported as ok=false.
+func (h *rpcMethodHandler) checkCredentials(ctx context.Context, conn *jsonrpc2.Conn, req *jsonrpc2.Request, params rpc.AuthParams) (string, bool) {
+	// Token is the pre-rename spelling of Password; a cached PWA may still be
+	// sending it. See rpc.AuthParams.
+	password := rpc.OrLegacy(params.Password, params.Token)
+
+	if password != "" && params.SessionToken != "" {
+		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "password and session_token are mutually exclusive")
+		conn.Close()
+		return "", false
+	}
+
+	if params.SessionToken != "" {
+		if !h.sessions.Validate(params.SessionToken) {
+			h.log.Info("rejected an expired or unknown session token")
+			h.replyAuthError(ctx, conn, req.ID, "session expired", rpc.AuthReasonSessionExpired)
+			conn.Close()
+			return "", false
+		}
+		return params.SessionToken, true
+	}
+
+	if subtle.ConstantTimeCompare([]byte(password), []byte(h.password)) != 1 {
+		h.log.Warn("invalid password")
+		h.replyAuthError(ctx, conn, req.ID, "invalid password", rpc.AuthReasonInvalidPassword)
+		conn.Close()
+		return "", false
+	}
+
+	return "", true
+}
+
+// replyAuthError carries a machine-readable reason alongside the message, so a
+// client can tell "your password is wrong" (stay on the password screen with an
+// error) from "your stored session is gone" (drop it and ask for the password,
+// silently) without matching on English prose.
+func (h *rpcMethodHandler) replyAuthError(ctx context.Context, conn *jsonrpc2.Conn, id jsonrpc2.ID, message, reason string) {
+	h.replyErrorData(ctx, conn, id, jsonrpc2.CodeInvalidRequest, message, rpc.AuthErrorData{Reason: reason})
 }
 
 // replyListPageError splits the two kinds of refusal a request for a page of a

@@ -1,6 +1,6 @@
 import { Sheet, Spinner } from "@pockode/shared";
 import { useEffect, useId, useRef, useState } from "react";
-import { generateNodeToken } from "../lib/nodeToken";
+import { generateNodePassword } from "../lib/nodePassword";
 import type { NodeStatus, NodeWithStatus } from "../types/node";
 import { displayPath, splitTail } from "../utils/path";
 import { formatUptime } from "../utils/time";
@@ -19,13 +19,13 @@ interface Props {
 	onEdit: (node: NodeWithStatus) => void;
 	onDelete: (id: string, options?: { stopFirst?: boolean }) => Promise<void>;
 	/** Resolves to whether the node actually started. */
-	onStart: (id: string, token: string) => Promise<boolean>;
+	onStart: (id: string, password: string) => Promise<boolean>;
 	/**
-	 * The token this session has already started a node with, if any. Present
-	 * means Start needs no sheet: one tap, and the sheet is only reached
-	 * deliberately through the overflow menu.
+	 * The password this session has already started a node with, if any.
+	 * Present means Start needs no sheet: one tap, and the sheet is only
+	 * reached deliberately through the overflow menu.
 	 */
-	savedToken?: string | null;
+	savedPassword?: string | null;
 	onStop: (id: string) => Promise<void>;
 	onCleanup: (id: string) => Promise<void>;
 }
@@ -97,7 +97,7 @@ export function NodeCard({
 	onStart,
 	onStop,
 	onCleanup,
-	savedToken,
+	savedPassword,
 }: Props) {
 	const [menuView, setMenuView] = useState<MenuView | null>(null);
 	const [startSheetOpen, setStartSheetOpen] = useState(false);
@@ -107,12 +107,12 @@ export function NodeCard({
 	// Start. Repeating it in the sheet unprompted reads as "your start failed"
 	// before a start has been attempted.
 	const [startFailed, setStartFailed] = useState(false);
-	const [token, setToken] = useState("");
+	const [password, setPassword] = useState("");
 	// Two delete kinds rather than one: the running-node sheet draws both a
 	// "Stop and delete" and a "Delete anyway", and a single flag would spin the
 	// one the user did not press. Start is split for the same reason — which
-	// token a start is using is the difference, and it is the card, not a second
-	// flag kept in step with this one, that has to say so.
+	// password a start is using is the difference, and it is the card, not a
+	// second flag kept in step with this one, that has to say so.
 	const [actionLoading, setActionLoading] = useState<
 		"start" | "startSaved" | "stop" | "cleanup" | "delete" | "stopDelete" | null
 	>(null);
@@ -142,11 +142,11 @@ export function NodeCard({
 	);
 
 	const starting = actionLoading === "start" || actionLoading === "startSaved";
-	// A start running on the remembered token says so where the rest of the
-	// node's runtime facts go, so the one tap is not silent about which token it
-	// used. A node being started is never running, so nothing is displaced.
+	// A start running on the remembered password says so where the rest of the
+	// node's runtime facts go, so the one tap is not silent about which password
+	// it used. A node being started is never running, so nothing is displaced.
 	const metaLine =
-		actionLoading === "startSaved" ? "Using the saved node token" : meta;
+		actionLoading === "startSaved" ? "Using the saved node password" : meta;
 
 	const closeMenu = () => setMenuView(null);
 
@@ -180,7 +180,7 @@ export function NodeCard({
 	};
 
 	// The sheet is kept open when the start fails. Closing it would throw away a
-	// token the user typed by hand on a phone, for the one outcome where they
+	// password the user typed by hand on a phone, for the one outcome where they
 	// still need it.
 	const start = (value: string, kind: "start" | "startSaved") => {
 		setStartFailed(false);
@@ -188,7 +188,7 @@ export function NodeCard({
 			const started = await onStart(node.id, value);
 			if (started) {
 				setStartSheetOpen(false);
-				setToken("");
+				setPassword("");
 			} else {
 				setStartFailed(true);
 			}
@@ -203,15 +203,15 @@ export function NodeCard({
 	};
 
 	const handleStartPressed = () => {
-		if (savedToken) {
-			void start(savedToken, "startSaved");
+		if (savedPassword) {
+			void start(savedPassword, "startSaved");
 			return;
 		}
 		openStartSheet();
 	};
 
 	const confirmStart = () => {
-		const trimmed = token.trim();
+		const trimmed = password.trim();
 		if (!trimmed) return;
 		void start(trimmed, "start");
 	};
@@ -343,7 +343,7 @@ export function NodeCard({
 								Stop
 							</button>
 						)}
-						{status !== "running" && savedToken && (
+						{status !== "running" && savedPassword && (
 							<button
 								type="button"
 								onClick={() => {
@@ -352,7 +352,7 @@ export function NodeCard({
 								}}
 								className={`${MENU_ITEM} text-th-text-primary`}
 							>
-								Start with a different token…
+								Start with a different password…
 							</button>
 						)}
 						<button
@@ -478,14 +478,14 @@ export function NodeCard({
 				<StartNodeSheet
 					nodeName={node.name}
 					error={startFailed ? error : undefined}
-					token={token}
+					password={password}
 					loading={actionLoading === "start"}
-					onTokenChange={setToken}
+					onPasswordChange={setPassword}
 					onConfirm={confirmStart}
 					onCancel={() => {
 						if (actionLoading !== null) return;
 						setStartSheetOpen(false);
-						setToken("");
+						setPassword("");
 					}}
 				/>
 			)}
@@ -502,9 +502,9 @@ interface StartNodeSheetProps {
 	 * gone wrong.
 	 */
 	error?: string;
-	token: string;
+	password: string;
 	loading: boolean;
-	onTokenChange: (token: string) => void;
+	onPasswordChange: (password: string) => void;
 	onConfirm: () => void;
 	onCancel: () => void;
 }
@@ -512,9 +512,9 @@ interface StartNodeSheetProps {
 function StartNodeSheet({
 	nodeName,
 	error,
-	token,
+	password,
 	loading,
-	onTokenChange,
+	onPasswordChange,
 	onConfirm,
 	onCancel,
 }: StartNodeSheetProps) {
@@ -531,18 +531,19 @@ function StartNodeSheet({
 	}, []);
 
 	const handleGenerate = () => {
-		onTokenChange(generateNodeToken());
+		onPasswordChange(generateNodePassword());
 		setCopyState("idle");
 		inputRef.current?.focus();
 	};
 
-	// A generated token exists nowhere else, so a copy that fails silently hands
-	// the user a secret they can neither read (the field is masked) nor retrieve.
+	// A generated password exists nowhere else, so a copy that fails silently
+	// hands the user a secret they can neither read (the field is masked) nor
+	// retrieve.
 	// `navigator.clipboard` is absent outside a secure context, which is exactly
 	// where a self-hosted cluster is often reached, so this path is real.
 	const handleCopy = async () => {
 		try {
-			await navigator.clipboard.writeText(token);
+			await navigator.clipboard.writeText(password);
 			setCopyState("copied");
 		} catch {
 			setCopyState("failed");
@@ -551,7 +552,7 @@ function StartNodeSheet({
 
 	const handleSubmit = (e: React.FormEvent) => {
 		e.preventDefault();
-		if (!token.trim() || loading) return;
+		if (!password.trim() || loading) return;
 		onConfirm();
 	};
 
@@ -573,7 +574,7 @@ function StartNodeSheet({
 					</button>
 					<button
 						type="submit"
-						disabled={loading || !token.trim()}
+						disabled={loading || !password.trim()}
 						className={`${PRIMARY_BUTTON} flex-1`}
 					>
 						{loading && <Spinner size="h-4 w-4" />}
@@ -595,22 +596,23 @@ function StartNodeSheet({
 				)}
 				<p className="text-sm text-th-text-secondary">
 					Used by the Pockode server started in this project. It is not the
-					cluster token. Remembered until this tab is reloaded.
+					cluster password. Remembered until this tab is reloaded.
 				</p>
 				<div>
 					<label
 						htmlFor={inputId}
 						className="mb-1 block text-sm text-th-text-secondary"
 					>
-						Auth token
+						Node password
 					</label>
 					<input
 						ref={inputRef}
 						id={inputId}
 						type="password"
-						value={token}
+						autoComplete="new-password"
+						value={password}
 						onChange={(e) => {
-							onTokenChange(e.target.value);
+							onPasswordChange(e.target.value);
 							setCopyState("idle");
 						}}
 						disabled={loading}
@@ -628,7 +630,7 @@ function StartNodeSheet({
 						<button
 							type="button"
 							onClick={handleCopy}
-							disabled={loading || !token}
+							disabled={loading || !password}
 							className={NEUTRAL_BUTTON}
 						>
 							Copy
@@ -650,11 +652,11 @@ function StartNodeSheet({
 					{/* Revealed only when the copy failed, and only because there is no
 					    other way out: "select the field and copy it yourself" is not
 					    advice a masked input can take — browsers block copying from a
-					    password field — and this token is needed again to sign in to the
-					    server it starts. Asking for it is what unmasks it. */}
+					    password field — and this password is needed again to sign in to
+					    the server it starts. Asking for it is what unmasks it. */}
 					{copyState === "failed" && (
 						<code className="mt-2 block break-all rounded-lg border border-th-border bg-th-bg-primary p-2 font-mono text-xs text-th-text-primary">
-							{token}
+							{password}
 						</code>
 					)}
 				</div>

@@ -124,5 +124,5 @@ evidence rather than on taste.
 | A search field over the list | A real cluster passes roughly 20 nodes. Groups plus sticky headers carry a few dozen fine. |
 | Pull-to-refresh | Somebody asks. It needs `react-pull-to-refreshify`; the 5 s poll and the visibility catch-up cover the same ground for free. |
 | `node.check_path` | The "I only find out at submit" friction is reported in real use — and then only with the duplicated rule and the check/submit gap above accepted openly. |
-| Persisting the node start token to `localStorage` | Re-entering it after a reload turns out to grate. It adds no new *class* of exposure (that storage already holds the cluster token) but does make a second secret durable, so it wants a reason, not a guess. |
+| Persisting the node start password to `localStorage` | Re-entering it after a reload turns out to grate. It adds no new *class* of exposure (that storage already holds the cluster's session token) but does make a second secret durable, so it wants a reason, not a guess. |
 | Migrating `web`'s two remaining hand-rolled body-scroll locks (`web/src/components/Files/UploadConflictDialog.tsx`, `web/src/components/ui/ResponsivePanel.tsx`) to `useLockBodyScroll` | It is pure `web` work, not cluster work. Correct today only because neither has an overlay it can stack with — which is fragile, not safe. |

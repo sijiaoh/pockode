@@ -262,4 +262,4 @@ sudo chmod 0755 "$STAGED"
 sudo mv "$STAGED" "$INSTALL_DIR/$BINARY_NAME"
 STAGED=""
 
-echo "Done! Run 'pockode -auth-token YOUR_PASSWORD' to get started."
+echo "Done! Run 'pockode -password YOUR_PASSWORD' to get started."

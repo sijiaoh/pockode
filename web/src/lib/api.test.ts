@@ -7,7 +7,7 @@ vi.mock("../utils/config", () => ({
 
 vi.mock("./authStore", () => ({
 	authActions: {
-		getToken: vi.fn(() => "test-token"),
+		getBearer: vi.fn(() => "test-token"),
 	},
 }));
 

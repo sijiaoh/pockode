@@ -23,7 +23,7 @@ type Info struct {
 	RemoteURL string `json:"remote_url,omitempty"`
 	// Token authenticates local clients (e.g. the MCP subprocess) against the
 	// server's local API. It is randomly generated at each startup, so it never
-	// outlives the process and is not the user-facing --auth-token.
+	// outlives the process and is not the user-facing --password.
 	Token string `json:"token,omitempty"`
 }
 

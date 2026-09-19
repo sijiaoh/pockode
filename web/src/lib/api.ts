@@ -24,13 +24,13 @@ export function apiUrl(path: string): string {
  * rather than a JSON one — still authenticate through this single place.
  */
 export function authHeaders(): Record<string, string> {
-	return { Authorization: `Bearer ${authActions.getToken()}` };
+	return { Authorization: `Bearer ${authActions.getBearer()}` };
 }
 
 /**
- * Ends the session when the server rejects the token.
+ * Ends the session when the server rejects the credential.
  *
- * A rejected token is not one request's problem: every other call would fail
+ * A rejected credential is not one request's problem: every other call would fail
  * the same way, so the app returns to the login screen instead of reporting a
  * failure the user cannot act on. Queries reach the same outcome through the
  * query cache subscriber in `queryClient.ts`; requests that bypass react-query

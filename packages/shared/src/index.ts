@@ -21,7 +21,12 @@ export {
 	createAuthStore,
 } from "./stores/index.ts";
 export {
+	type AuthCredential,
+	type AuthCredentialParams,
+	type AuthFailureReason,
+	authFailureReason,
 	BREAKPOINTS,
+	credentialParams,
 	getWebSocketUrl,
 	hasCoarsePointer,
 	MEDIA_QUERIES,

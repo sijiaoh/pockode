@@ -14,7 +14,7 @@ vi.mock("../utils/config", () => ({
 const logout = vi.fn();
 
 vi.mock("./authStore", () => ({
-	authActions: { getToken: () => "test-token", logout: () => logout() },
+	authActions: { getBearer: () => "test-token", logout: () => logout() },
 }));
 
 /** Stands in for `XMLHttpRequest`, which jsdom has no server to answer. */
@@ -225,7 +225,7 @@ describe("uploadFile", () => {
 		await expect(done).rejects.toThrow("Upload failed with HTTP 502");
 	});
 
-	it("ends the session when the token is refused", async () => {
+	it("ends the session when the credential is refused", async () => {
 		const done = uploadFile(request());
 		only().respond(401, "unauthorized");
 

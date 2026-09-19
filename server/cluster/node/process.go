@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/pockode/server/authtoken"
+	"github.com/pockode/server/password"
 	"github.com/pockode/server/serverinfo"
 )
 
@@ -36,13 +36,13 @@ func NewProcessManager() *ProcessManager {
 
 // Start starts a pockode process for the given node.
 //
-// The token is required and passed via the POCKODE_AUTH_TOKEN environment
+// The password is required and passed via the POCKODE_PASSWORD environment
 // variable rather than a command-line flag, so it never appears in the child's
 // argv (which is world-readable on Linux through /proc/<pid>/cmdline and `ps`).
-// Returns an error if token is empty or if the node is already running.
-func (pm *ProcessManager) Start(n Node, token string) error {
-	if token == "" {
-		return fmt.Errorf("%w: token is required", ErrInvalidNode)
+// Returns an error if the password is empty or if the node is already running.
+func (pm *ProcessManager) Start(n Node, nodePassword string) error {
+	if nodePassword == "" {
+		return fmt.Errorf("%w: password is required", ErrInvalidNode)
 	}
 
 	dataDir := filepath.Join(n.Path, ".pockode")
@@ -69,11 +69,11 @@ func (pm *ProcessManager) Start(n Node, token string) error {
 		return fmt.Errorf("failed to get executable path: %w", err)
 	}
 
-	// Pass the token through the environment, not argv, so it stays out of
+	// Pass the password through the environment, not argv, so it stays out of
 	// /proc/<pid>/cmdline and `ps` output.
 	cmd := exec.Command(exePath)
 	cmd.Dir = n.Path
-	cmd.Env = nodeEnv(os.Environ(), token)
+	cmd.Env = nodeEnv(os.Environ(), nodePassword)
 
 	// Set platform-specific process attributes
 	setProcessDetached(cmd)
@@ -244,18 +244,21 @@ func (pm *ProcessManager) GetNodeStatus(n Node) NodeStatus {
 	}
 }
 
-// nodeEnv returns base with the auth-token env var set to token, dropping any
-// inherited value for that key so the child sees exactly one, unambiguous token.
-func nodeEnv(base []string, token string) []string {
-	prefix := authtoken.EnvVar + "="
+// nodeEnv returns base with the password env var set to nodePassword, dropping
+// any inherited value under either spelling so the child sees exactly one,
+// unambiguous credential — the deprecated name is stripped too, because leaving
+// it there would hand the child a second answer to the same question.
+func nodeEnv(base []string, nodePassword string) []string {
+	prefix := password.EnvVar + "="
+	legacyPrefix := password.LegacyEnvVar + "="
 	env := make([]string, 0, len(base)+1)
 	for _, kv := range base {
-		if strings.HasPrefix(kv, prefix) {
+		if strings.HasPrefix(kv, prefix) || strings.HasPrefix(kv, legacyPrefix) {
 			continue
 		}
 		env = append(env, kv)
 	}
-	return append(env, prefix+token)
+	return append(env, prefix+nodePassword)
 }
 
 // getExecutablePath returns the path to the pockode executable.

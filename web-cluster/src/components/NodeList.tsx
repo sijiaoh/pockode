@@ -1,9 +1,9 @@
 import { Spinner } from "@pockode/shared";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
-	getSessionNodeToken,
-	rememberSessionNodeToken,
-} from "../lib/nodeToken";
+	getSessionNodePassword,
+	rememberSessionNodePassword,
+} from "../lib/nodePassword";
 import { useWSStore } from "../lib/wsStore";
 import type { NodeStatus, NodeWithStatus } from "../types/node";
 import { PRIMARY_BUTTON } from "./buttons";
@@ -56,10 +56,10 @@ export function NodeList() {
 	// user has to act on, so it stays until they dismiss it or until the next
 	// action on the same node succeeds.
 	const [nodeErrors, setNodeErrors] = useState<Record<string, string>>({});
-	// Mirrored from the module so the cards re-render the moment a token is
+	// Mirrored from the module so the cards re-render the moment a password is
 	// remembered. The module, not this state, is what survives the list
 	// unmounting on a dropped connection.
-	const [savedToken, setSavedToken] = useState(getSessionNodeToken);
+	const [savedPassword, setSavedPassword] = useState(getSessionNodePassword);
 	const [formOpen, setFormOpen] = useState(false);
 	const [editingNode, setEditingNode] = useState<NodeWithStatus | null>(null);
 	const [cleaningAll, setCleaningAll] = useState(false);
@@ -215,16 +215,16 @@ export function NodeList() {
 		[fetchNodes, clearNodeError, setNodeError],
 	);
 
-	// A token is only worth remembering once it has actually started something:
-	// remembering a rejected one would turn every later Start into a silent
-	// one-tap failure, which is worse than being asked.
-	const handleStart = async (id: string, token: string) => {
+	// A password is only worth remembering once it has actually started
+	// something: remembering a rejected one would turn every later Start into a
+	// silent one-tap failure, which is worse than being asked.
+	const handleStart = async (id: string, password: string) => {
 		const started = await runNodeAction(id, "Could not start this node", () =>
-			actions.startNode({ id, token }),
+			actions.startNode({ id, password }),
 		);
 		if (started) {
-			rememberSessionNodeToken(token);
-			setSavedToken(token);
+			rememberSessionNodePassword(password);
+			setSavedPassword(password);
 		}
 		return started;
 	};
@@ -421,7 +421,7 @@ export function NodeList() {
 												key={node.id}
 												node={node}
 												error={nodeErrors[node.id]}
-												savedToken={savedToken}
+												savedPassword={savedPassword}
 												onDismissError={clearNodeError}
 												onEdit={handleEdit}
 												onDelete={handleDelete}

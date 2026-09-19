@@ -7,7 +7,7 @@ import (
 )
 
 // Exposes /health, /ws, and static file endpoints.
-func newHandler(token string, devMode bool, wsHandler *wsHandler) http.Handler {
+func newHandler(password string, sessions middleware.SessionValidator, devMode bool, wsHandler *wsHandler) http.Handler {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
@@ -17,7 +17,7 @@ func newHandler(token string, devMode bool, wsHandler *wsHandler) http.Handler {
 
 	mux.Handle("GET /ws", wsHandler)
 
-	authedMux := middleware.Auth(token)(mux)
+	authedMux := middleware.Auth(password, sessions)(mux)
 
 	if !devMode {
 		return newSPAHandler(authedMux)
