@@ -627,9 +627,11 @@ reason — the written label is the honest name of the group. The rows keep thei
 own precise leaf, which is where the distinction belongs.
 
 Within a row the vocabulary is the row's own: `ActivityIcon` for the glyph,
-`ACTIVITY_VIEW[...].label` in the title's `aria-label` and in the row's first
-meta slot, and the left accent bar keyed off the leaves — warning for any
-`needsUser` leaf, error for `stopped`, none otherwise.
+`ACTIVITY_VIEW[...].label` in the title's `aria-label` and in the row's state meta
+slot — written on every row, and in plain text rather than the leaf's tone, for
+the contrast reasons in [project-ui.md §3](project-ui.md#3-the-row) — and the left
+edge keyed off the leaves: warning for any `needsUser` leaf, error for `stopped`,
+the card's own border colour otherwise.
 
 ### 6.2 Detail page
 

@@ -175,7 +175,7 @@ export default function WorkListOverlay({
 			key={work.id}
 			work={work}
 			tasks={work.type === "story" ? tasksByParentId.get(work.id) : undefined}
-			// Slot 2 is the list's, not the row's: a task is here because it left
+			// Slot 1 is the list's, not the row's: a task is here because it left
 			// its story, and without the story's name it is a title with no
 			// context (docs/project-ui.md §3.1).
 			parentTitle={
@@ -251,7 +251,7 @@ export default function WorkListOverlay({
 								Nothing finished yet.
 							</p>
 						) : (
-							<div className="space-y-0.5">{closedStories.map(renderRow)}</div>
+							<div className="space-y-2">{closedStories.map(renderRow)}</div>
 						)}
 					</>
 				) : groups.length === 0 ? (
@@ -260,7 +260,7 @@ export default function WorkListOverlay({
 						<p>Start with a story — the button below.</p>
 					</div>
 				) : (
-					<div className="space-y-2">
+					<div className="space-y-4">
 						{groups.map(({ group, rows }) => (
 							<section key={group}>
 								<GroupHeading
@@ -286,7 +286,7 @@ export default function WorkListOverlay({
 										error={earlierError}
 									/>
 								)}
-								<div className="space-y-0.5">{rows.map(renderRow)}</div>
+								<div className="space-y-2">{rows.map(renderRow)}</div>
 							</section>
 						))}
 					</div>
@@ -457,7 +457,11 @@ function ShowEarlierWork({
 	error: string | null;
 }) {
 	return (
-		<div className="flex flex-col">
+		// `mb-2` for the same reason the rows are `space-y-2`: this button is a
+		// 44px hit area and so is the whole of the row under it, and neighbouring
+		// targets owe each other 8px on a coarse pointer
+		// (docs/responsive-ui.md#hit-areas-and-spacing).
+		<div className="mb-2 flex flex-col">
 			{error && (
 				<p role="alert" className="px-3 py-1 text-xs text-th-error">
 					{error}

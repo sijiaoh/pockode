@@ -665,7 +665,7 @@ function ChildrenSection({
 			{tasks.length === 0 ? (
 				<p className="py-2 text-sm text-th-text-muted">No tasks yet</p>
 			) : (
-				<div className="space-y-0.5">
+				<div className="space-y-2">
 					{tasks.map((child) => (
 						// The same row the project list draws, minus its parent slot:
 						// every row here is a task of the story on screen
@@ -685,7 +685,11 @@ function ChildrenSection({
 					))}
 				</div>
 			)}
-			<div className="mt-1">
+			{/* Clear of the last row by more than the rows are of each other: it is
+			    a 44px hit area next to another one, which owes it 8px on a coarse
+			    pointer (docs/responsive-ui.md#hit-areas-and-spacing), and it is not
+			    a task, so reading as one more of them would be a lie. */}
+			<div className="mt-3">
 				<button
 					type="button"
 					onClick={() => setAddingTask(true)}

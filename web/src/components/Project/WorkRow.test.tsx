@@ -31,10 +31,26 @@ const work = (overrides: Partial<WorkListItem> = {}): WorkListItem => ({
 	...overrides,
 });
 
-/** The line of facts under the title, as the user reads it left to right. */
+/**
+ * The line of facts under the title, in the order it is read left to right. This
+ * is `textContent`, so it is what a screen reader gets: the `in` before a parent
+ * title is the `sr-only` word standing in for the decorative arrow.
+ */
 function metaLine(): string {
 	const role = screen.getByText("Engineer");
 	return role.closest("div")?.textContent ?? "";
+}
+
+/**
+ * The card the row draws itself as — the element that carries its depth and its
+ * left edge. Scoped to one render, because these cases draw two rows to compare
+ * them and `screen` spans both.
+ */
+function card(container: HTMLElement): HTMLElement {
+	const heading = within(container).getByRole("heading");
+	const root = heading.closest(".rounded-lg");
+	if (!(root instanceof HTMLElement)) throw new Error("the row drew no card");
+	return root;
 }
 
 function renderRow(props: Partial<Parameters<typeof WorkRow>[0]> = {}) {
@@ -58,7 +74,7 @@ function renderRow(props: Partial<Parameters<typeof WorkRow>[0]> = {}) {
 				{...next}
 			/>,
 		);
-	return { onOpen, onOpenChat, rerenderRow };
+	return { onOpen, onOpenChat, rerenderRow, container: view.container };
 }
 
 describe("WorkRow", () => {
@@ -130,7 +146,7 @@ describe("WorkRow", () => {
 			roleName: "Engineer",
 		});
 
-		expect(metaLine()).toBe("Needs answer·in: Cluster mode·feature-x·Engineer");
+		expect(metaLine()).toBe("in Cluster mode·Needs answer·feature-x·Engineer");
 	});
 
 	it("rolls its children up into the story's own line", () => {
@@ -144,7 +160,7 @@ describe("WorkRow", () => {
 			],
 		});
 
-		expect(metaLine()).toBe("Engineer·1 active·1/3 tasks");
+		expect(metaLine()).toBe("Running·Engineer·1 active·1/3 tasks");
 	});
 
 	// §3.1: the story detail's children section drops the parent slot, and that
@@ -155,15 +171,97 @@ describe("WorkRow", () => {
 			roleName: "Engineer",
 		});
 
-		expect(metaLine()).toBe("Engineer");
+		expect(metaLine()).toBe("Running·Engineer");
 	});
 
-	// The bar already says someone is blocked; slot 1 says what kind of answer is
-	// wanted, which only the needs-you leaves have.
-	it("writes no activity label for a work nobody is waiting on", () => {
-		renderRow({ work: work({ status: "stopped", activity: "stopped" }) });
+	// The states nothing is waiting on the user for used to be told apart by a
+	// 14px glyph and nothing else, which is the half of "every row looks the
+	// same" that survived reading the rows one by one. Every one of the seven
+	// leaves that reaches a row — the other three are the `needsUser` ones, which
+	// always wrote their label — including `closed`, which only the story
+	// detail's Tasks section draws but draws for real: the children it lists are
+	// the same ones its `{closed}/{total}` counts.
+	//
+	// Each is paired with the status it actually arrives with (`deriveActivity`):
+	// a row whose two fields disagree is a row the server never sends, and
+	// pinning the label on one proves nothing.
+	it.each([
+		["running", "active", "Running"],
+		["waiting_children", "active", "Waiting on subtasks"],
+		["background", "active", "Background task"],
+		["idle", "active", "Idle"],
+		["stopped", "stopped", "Stopped"],
+		["open", "open", "Open"],
+		["closed", "closed", "Closed"],
+	] as const)("writes the state of a %s row too", (activity, status, label) => {
+		renderRow({ work: work({ status, activity }) });
 
-		expect(screen.queryByText("Stopped")).toBeNull();
+		expect(screen.getByText(label)).toBeInTheDocument();
+	});
+
+	// The tone would be saying nothing in the five light variants, where
+	// `text-th-warning` is under AA against the card (docs/project-ui.md §3 has the
+	// numbers): the hue lives on the left edge and the glyph, which owe only the
+	// 3:1 non-text floor.
+	it("writes the state in text colour rather than the leaf's tone", () => {
+		renderRow({
+			work: work({ activity: "needs_answer", wait: "user" }),
+		});
+
+		expect(screen.getByText("Needs answer")).toHaveClass(
+			"text-th-text-secondary",
+		);
+	});
+
+	// Depth is decided by the work, not by the screen, so the list and the story
+	// detail's Tasks section indent the same rows.
+	it("sets a task a level in from a story", () => {
+		expect(
+			card(renderRow({ work: work({ type: "task" }) }).container),
+		).toHaveClass("ml-4");
+		expect(card(renderRow({ work: work() }).container)).not.toHaveClass("ml-4");
+	});
+
+	// A task row's only channel for "which story is this under" is this slot, and
+	// the line clips from the right.
+	it("names the parent before anything else on the line", () => {
+		renderRow({
+			work: work({ type: "task", activity: "needs_answer", wait: "user" }),
+			parentTitle: "Cluster mode",
+			roleName: "Engineer",
+		});
+
+		expect(metaLine()).toMatch(/^in Cluster mode·/);
+		expect(screen.getByText("Cluster mode").parentElement).toHaveClass(
+			"text-th-text-secondary",
+		);
+	});
+
+	// The arrow that replaced the words `in:` is decorative, so without them the
+	// line reads as a bare title that could equally be a role or a worktree —
+	// spoken, not drawn, because on screen the arrow is the whole point.
+	it("keeps the word the arrow stands for, for a screen reader", () => {
+		const { container } = renderRow({
+			work: work({ type: "task" }),
+			parentTitle: "Cluster mode",
+		});
+
+		const spoken = container.querySelectorAll(".sr-only");
+		expect([...spoken].map((el) => el.textContent)).toEqual(["in "]);
+	});
+
+	// A transparent left edge in a column of bordered cards reads as a card
+	// missing a side; the hue is what varies, not whether the edge is there.
+	it("keeps the left edge on a row nothing is blocked on", () => {
+		expect(card(renderRow({ work: work() }).container)).toHaveClass(
+			"border-l-th-border",
+		);
+		expect(
+			card(
+				renderRow({ work: work({ activity: "needs_answer", wait: "user" }) })
+					.container,
+			),
+		).toHaveClass("border-l-th-warning");
 	});
 
 	it("dates a row only where the list is sorted by it", () => {

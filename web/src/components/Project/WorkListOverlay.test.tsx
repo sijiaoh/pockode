@@ -152,7 +152,7 @@ describe("WorkListOverlay", () => {
 		renderList();
 
 		expect(groupOf("Wire the relay")).toBe("Not running");
-		expect(screen.getByText("in: Cluster mode")).toBeInTheDocument();
+		expect(screen.getByText("Cluster mode")).toBeInTheDocument();
 	});
 
 	// A running, idle, open or closed task has nobody waiting on it, so it is

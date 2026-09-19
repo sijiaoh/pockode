@@ -194,6 +194,34 @@ The count is the number of **rows** in the group. It is not a number of work
 items in some tree — the tasks folded into a story row are counted in that row's
 own meta line (§3), where they can be told apart from it.
 
+**The spacing between rows is what separates them, and widening it is what does
+the work.** Rows are 8px apart (`space-y-2`) and groups 16px (`space-y-4`), up
+from 2px and 8px. What matters is the gap the reader actually sees, which is not
+that number alone: a row's `pb-1` sits under its line 2, and its 44px title box
+(the touch target, [responsive-ui.md](responsive-ui.md#hit-areas-and-spacing))
+leaves about 12px of air under the title before line 2 begins. Measured text to
+text, that makes it **about 26px between two works against 12px inside one**,
+where it used to be about 18 against the same 12.
+
+The old pair is the diagnosis in one line: the gap between two objects was
+barely wider than the gap inside one, and an eye given that resolves the column
+as a single paragraph of text rather than as N cards — which no amount of colour
+poured over it can undo. The 12px inside a row cannot be taken back, because it
+is what the 44px target leaves, so the only direction left was outward. That
+direction happens to be free: space is the one channel here that costs no
+contrast at all, and [§3](#3-the-row)'s table is why it had to be the one
+carrying the weight — the card's own fill and border measure too close to the
+surfaces behind them to be leaned on, felt though they are.
+
+The 8px is also the number this app already owed here and was not paying. A
+row's whole card is a tap target (§3), and neighbouring targets owe each other
+**8px under a coarse pointer**
+([responsive-ui.md](responsive-ui.md#hit-areas-and-spacing)) — at 2px apart every
+tap near a seam was a coin flip between two works. The same floor applies to the
+two controls that sit in the row flow rather than in a row: `Show earlier work`
+above a group's rows, and `Add Task` under the story detail's, both 44px targets
+against a card. They carry their own clearance for that reason.
+
 A group with no rows is not rendered, header and all. No group re-sorts itself
 on an activity change: rows keep the order the list arrives in (creation order),
 so a work that starts or blocks while the list is being read stays where the
@@ -218,10 +246,63 @@ can do, line two is what is true, and line three — when it is there — is wha
 happened when you last tried.**
 
 ```
-line 1:  [glyph]  Title, truncated to one line        [💬]  [⏹]
-line 2:  Needs answer · in: Story name · main · Engineer · 1 active · 2/5 tasks
-line 3:  invalid work: work is already running
+story:  line 1:  [glyph]  Title, truncated to one line        [💬]  [⏹]
+        line 2:  Running · main · Engineer · 1 active · 2/5 tasks
+        line 3:  invalid work: work is already running
+
+task:       line 1:  [glyph]  Title, truncated to one line    [💬]  [⏹]
+            line 2:  ↳ Story name · Needs answer · main · Engineer
 ```
+
+**The row is a card, and a task's card sits a level in.** `bg-th-bg-secondary`
+on the same `bg-th-bg-primary` page is the "a block on the page" idiom the
+detail page's sections already use; the `border-th-border` hairline is this
+row's addition, because a fill that close to the page behind it needs an edge to
+be read as one (the table below). Then `ml-4` when `work.type === "task"`.
+Neither of those is what makes the rows read as separate objects; the spacing in
+§2.3 is. `hover:bg-th-bg-tertiary` is unchanged, and is exactly one step up from
+the new resting state.
+
+The indent is decided by **the work** and not by the screen, which is what lets
+one rule serve both surfaces without breaking §3.1: in the list a task sits in
+from the stories around it, and in the story detail's Tasks section — where every
+row is a task — the whole block sits in under its heading, which is what it is.
+
+**No connector line into the indent.** In the list a task's parent story is
+almost never the row above it: the two are usually in different groups, and when
+they do share one (both waiting on the user, §6) the arrival order does not put
+them next to each other either. A line pointing up would be pointing at another
+work. The indent claims "one level down", nothing more; slot 1 names what it is
+down from.
+
+**What contrast this row is allowed to spend**, and the reason the rest of this
+section is shaped the way it is. Measured over all ten theme variants in
+`web/src/index.css` (five hues × light and dark), against the card rather than
+the page, because the card is what a row is drawn on now. **This table is the
+only place the row's numbers are written down** — the rest of this page and the
+code both point here instead of restating them, because a number copied
+somewhere else is a number that goes stale where nobody is looking.
+
+| Channel | All ten | Light five | Usable as |
+|---|---|---|---|
+| `text-th-text-secondary` | 8.91–12.66 | 8.91–9.83 | ✅ load-bearing — tiers 1 and 2 |
+| `text-th-text-muted` | 5.26–6.22 | 5.26–5.53 | ✅ load-bearing — the attribute tier |
+| Space, indent, glyph shape | — | — | ✅ costs no contrast at all |
+| `bg-th-bg-secondary` card vs page | 1.04–1.09 | 1.04–1.07 | ⚠️ felt, never relied on |
+| `border-th-border` vs card | 1.19–1.59 | 1.19–1.29 | ⚠️ felt, never relied on |
+| `text-th-warning`, and the warning edge | 1.71–12.22 | **1.71–2.73** | ❌ under AA 4.5 *and* under the 3:1 non-text floor in light |
+| `text-th-error`, and the error edge | 3.36–6.76 | **3.36–4.49** | ❌ under AA 4.5 in light; clears 3:1 |
+| `bg-th-warning/5`, `bg-th-error/5` — the row's old tints, removed | 1.03–1.11 | 1.03–1.08 | ❌ nothing was ever drawn |
+
+Two conclusions everything below rests on. **The palette is deliberately
+low-contrast, so what separates one row from the next cannot be surface contrast
+— it is space, which costs none** (§2.3). And **hue cannot carry "classify at a
+glance" in the light themes**, so the hierarchy is space, position, glyph and
+text tier, with hue only reinforcing. The warning edge does not even clear 3:1 in
+light; it is kept because it is the one channel that reads before a word does,
+and only because the state is *also* written in words on every row — never
+because the hue is sufficient on its own. That ceiling is a token-layer debt,
+recorded in `ActivityBadge.tsx` and out of this section's reach.
 
 **Line 1** — the activity glyph (`ActivityIcon`, the row's own precise leaf), the
 title, and up to two trailing controls:
@@ -254,27 +335,61 @@ glyph on the left of the row already says what the button on the right will do.
 its last caller went: an unreachable branch is still measured, and its chip was
 the register's entry for a control no user could reach.
 
-**Line 2** is a single line of muted text, no wrapping, built from a fixed slot
-order. Each slot has one rule for when it appears, and the group never changes
-it; when the line is too narrow, the rightmost slots truncate first, which is
-why the order is what it is.
+**Line 2** is a single line, no wrapping, built from a fixed slot order. Each
+slot has one rule for when it appears, and the group never changes it; when the
+line is too narrow, the rightmost slots truncate first, which is why the order is
+what it is. The line is **two tiers, not seven equals**: slots 1 and 2 are
+`text-th-text-secondary`, the rest keep the container's `text-th-text-muted`.
+Both clear AA in every variant (the table above) — the tiers are a difference in
+weight, not one tier reaching for legibility the other gives up.
 
-| # | Slot | When | Why here |
-|---|---|---|---|
-| 1 | Activity label, warning tone | `needsUser(activity)` | What kind of answer is wanted — pick an option, allow, or write a message — is the first thing the user needs and the only thing that decides where they are going next. |
-| 2 | `in: <parent title>` | the row is a task | A task row only exists here because it left its story (§2.2); without this it is a title with no context. |
-| 3 | `WorktreeBadge` | the work's worktree is fixed | The list is global across worktrees; the badge and its visibility rule are the old row's unchanged, including staying off rows whose worktree can still change. Its hit area is not: see the hit-area note below. |
-| 4 | Role name | the work has a role | Who is doing it. |
-| 5 | `{n} active` | the row is a story with active children | The only thing lost by not nesting tasks is "something under here is moving", and this is it — in the same words the detail page's children header uses. |
-| 6 | `{closed}/{total} tasks` | the row is a story with children | Progress. |
-| 7 | Relative `updated_at` | the `Closed` segment only | The archive is sorted by it, and a sort key the user cannot see is a list in no order at all. |
+| # | Slot | When | Tier | Why here |
+|---|---|---|---|---|
+| 1 | `↳ <parent title>` | the row is a task | structure | A task row only exists here because it left its story (§2.2); without this it is a title with no context. The corner arrow is the shape of depth, and it buys about 20px of title width over the words `in:` — but only on screen: the arrow is `aria-hidden`, so an `sr-only` `in` keeps the relationship for a screen reader, which would otherwise hear a bare title indistinguishable from the role and worktree slots beside it. |
+| 2 | Activity label | **every row** | state | Which of the ten leaves this is. |
+| 3 | `WorktreeBadge` | the work's worktree is fixed | attribute | The list is global across worktrees; the badge and its visibility rule are the old row's unchanged, including staying off rows whose worktree can still change. Its hit area is not: see the hit-area note below. |
+| 4 | Role name | the work has a role | attribute | Who is doing it. |
+| 5 | `{n} active` | the row is a story with active children | attribute | The only thing lost by not nesting tasks is "something under here is moving", and this is it — in the same words the detail page's children header uses. |
+| 6 | `{closed}/{total} tasks` | the row is a story with children | attribute | Progress. |
+| 7 | Relative `updated_at`, `ml-auto` | the `Closed` segment only | attribute | The archive is sorted by it, and a sort key the user cannot see is a list in no order at all. Right-aligned so it reads as a column: a date at a different x on every row is a sort order the user has to reconstruct. It is the one slot with no leading `·` — the gap already separates it, and a middot left floating mid-line reads as a slot that failed. |
 
-**A left accent bar marks the rows that need a person**, as before: warning for
-any `needsUser` leaf, error for `stopped`, nothing otherwise. It survives the
-redesign unchanged because it is the one thing that works at a glance, before
-any word is read — and it is why slot 1 does not need a "Stopped" label to go
-with it. The bar says someone is blocked; slot 1 says what kind of answer is
-wanted, which only the `needsUser` leaves have.
+**Slot 1 comes before slot 2, and that overrules the order this section used to
+give them.** Putting the state first was right while the state had exactly one
+channel; it now has three — this word, the left edge, the glyph — while "which
+story is this task under" still has one. The two only ever compete on a task row
+inside *Needs you*.
+
+**The activity label is written on every row.** `Running` repeating the *In
+progress* heading above it is the cost. The gain is that `Waiting on subtasks`,
+`Background task` and `Idle` stop being separated by nothing but a 14px glyph —
+that is the half of "the list is one undifferentiated block" that survived
+reading the rows one at a time — and it follows the rule the rest of this section
+is built on: a slot that appears in one group and not another is a slot the user
+has to re-find. It also means line 2 is never empty, so a resting card is two
+lines on every row rather than one or two depending on the data — one rhythm
+down the list. Line 3 is the one thing that can still change a card's height,
+and only while a command has just failed.
+
+**The label is not tinted with the leaf's tone.** `text-th-warning` on the card
+is far under AA 4.5 in every light variant (the table), so a hue there would be
+saying nothing in half the themes — and the previous slot 1 carried exactly that
+defect, which this fixes as a side effect. The hue stays on the left edge and
+the glyph, which owe only the 3:1 non-text floor.
+
+**The left edge is always 2px and only its hue changes**: warning for any
+`needsUser` leaf, error for `stopped`, `border-th-border` otherwise. One coloured
+edge in a column of neutral ones is what reads before a word does; the edge it
+replaces went *transparent* on a neutral row, which on a bordered card reads as a
+card missing a side. The edge and the label do not repeat each other: the edge
+answers "is this stuck", across groups and without reading, and the label answers
+"stuck on which of the ten things", within a group.
+
+**No tint behind the edge.** The `bg-th-warning/5` and `bg-th-error/5` fills are
+gone, for either of two reasons alone: they are the bottom row of the table, so
+no variant ever drew anything with them; and they would now be a second
+`background-color` on the element that carries the card's own
+`bg-th-bg-secondary`, where the winner is decided by Tailwind's stylesheet order
+rather than by the component.
 
 **Line 3 — the command that failed.** Present only while the row's own lifecycle
 command has failed and nothing has been done about it since: one line of
@@ -291,6 +406,12 @@ wraps and it clips from the right, which is how the slots truncate — so a
 sentence put there arrives as its first two words. The line that fixes "the
 failure has no words" cannot be the line whose job is to drop them. **Nothing
 about line 2 is relaxed to make room: the error never goes there.**
+
+`text-th-error` on the card is under AA 4.5 in the five light variants (the
+table above). That is **pre-existing and deliberately not patched here** (§7): the fix is to reselect the token, not to give this one
+paragraph a different colour from every other error message in the app.
+`role="alert"` means the message reaches a screen reader regardless, which is why
+it is a contrast defect and not a lost message.
 
 It wraps because the list is the only place it is ever written. The row and the
 detail page hold separate command state, and the list unmounts on the way into a
@@ -384,11 +505,11 @@ that is not a belt-and-braces).
 Slot 3 is the row's third interactive thing and the one that is **not** 44px.
 The badge reaches its 44 with a transparent overlay that leaves its own box, and
 line 2 clips — that is how the slots truncate from the right — so in a row the
-badge is its 20px box and the line's padding, about 26px. Deliberate: 11px below it is inside the next row, whose
-whole area is another work's target, and a band where aiming at one work
-switches worktree is worse than a small badge. A miss here opens the work, which
-is where its worktree is written anyway
-([responsive-ui.md, blind spot 9](responsive-ui.md#the-automated-gates)).
+badge is its 20px box and the line's padding, about 26px. Deliberate, and a miss
+here opens the work, which is where its worktree is written anyway
+([responsive-ui.md, blind spot 9](responsive-ui.md#the-automated-gates), which
+also records that the wider row spacing in §2.3 retired half of the original
+reason).
 
 ### 3.1 One row, two screens
 
@@ -398,7 +519,7 @@ slots — not two row implementations that drift. Every slot rule above decides
 itself from the work, with one exception, and the exception is decided by the
 **screen** rather than by the group:
 
-- Slot 2, `in: <parent title>`, is passed off on the Tasks section. Every row
+- Slot 1, `↳ <parent title>`, is passed off on the Tasks section. Every row
   there is a task of the story on screen, and naming it on each row is noise.
 
 That is the whole difference. A task row in *Needs you* and the same task's row
@@ -501,10 +622,10 @@ isolate itself, following `gitPanelStore`'s shape; no app code calls it.
 
 | Case | Behaviour |
 |---|---|
-| A task needs the user and its parent story also does | Two rows in *Needs you*; the task's slot 2 names the story. |
+| A task needs the user and its parent story also does | Two rows in *Needs you*; the task's slot 1 names the story. |
 | A story is `waiting_children` while a child needs the user | Story in *In progress* with its `Clock` leaf, child in *Needs you* above it. This is the arrangement §2.2 exists for. |
 | A `stopped` task under an `active` story | Task row in *Not running*, story row in *In progress*. The task's own control is Restart. |
-| A needs-you or stopped task whose parent is `open` or `closed` | It still gets its row; slot 2 names the parent whatever state the parent is in. The list does not ask a parent's permission to show a task that needs a person. |
+| A needs-you or stopped task whose parent is `open` or `closed` | It still gets its row; slot 1 names the parent whatever state the parent is in. The list does not ask a parent's permission to show a task that needs a person. |
 | A work changes group while on screen | It moves. Nothing else reorders (§2.3). |
 | A closed task under a story that is not closed | No row, in either segment. It is inside its story, which is where a finished task is looked for. |
 | A work in another worktree | Badge in slot 3; the Chat control switches worktree, exactly as the old row's did. |
@@ -528,6 +649,15 @@ isolate itself, following `gitPanelStore`'s shape; no app code calls it.
 - **Grouping by worktree or role.** Both are slots on the row and neither is a
   question this list is asked; the group axis is state, and it has one.
 - **Any change to the agent-role screens.**
+- **Reselecting `--th-warning` and `--th-error`.** The contrast table in §3 is
+  where this page hits its ceiling: in the five light variants the warning hue
+  on the card clears neither AA 4.5 for text nor the 3:1 non-text floor, and the
+  error hue clears 3:1 but not AA. So the hierarchy here is built to not need
+  hue (space, indent, glyph, text tier), and hue only reinforces. Going further means **changing the tokens**, which is a palette
+  decision with trade-offs across every screen and a person to make them, not
+  something to fold into a row redesign. `ActivityBadge.tsx` has carried a note
+  saying the same thing; this is the second surface to reach the same wall, which
+  is the argument for a token task of its own rather than a third workaround.
 
 ## 8. What the implementation had to get right
 
@@ -547,6 +677,11 @@ The checks, in the order they would fail, and where each one is now:
 | 10 | A failed row command prints its message on the row, and the control keeps its own action label rather than wearing the error | `WorkRow.test.tsx` for the message and the label together, `WorkPrimaryAction.test.tsx` for the button on its own |
 | 11 | The message goes when the work's status changes under it without the row changing group | `WorkRow.test.tsx` |
 | 12 | The message is the control's accessible description while it is there, and the attribute is *absent* — not pointing at nothing — while it is not | `WorkRow.test.tsx`, in the same case as check 10. It asserts the missing attribute rather than an empty description, because a dangling id and no attribute compute the same empty description: assert the description and a dangling id passes |
+| 13 | A task's card is indented and a story's is not, on both surfaces | `WorkRow.test.tsx` — the indent is read off the work, so one case covers both screens |
+| 14 | Slot 1 is the parent, ahead of the state, and in the structure tier | `WorkRow.test.tsx` |
+| 15 | Every row writes its activity label, including the leaves nothing is waiting on the user for, and it is never tinted with the leaf's tone | `WorkRow.test.tsx`, a case each for `running`, `waiting_children`, `background`, `idle`, `stopped`, `open` and `closed` — all seven leaves that used to write nothing and can reach a row (`closed` only through the story detail's Tasks section, which lists the same children its `{closed}/{total}` counts). Each is paired with the status it actually arrives with, because a row whose two fields disagree is one the server never sends |
+| 16 | The left edge is present on a neutral row (`border-l-th-border`) rather than transparent, and takes the hue on a blocked one | `WorkRow.test.tsx` |
+| 17 | The parent relationship survives the arrow being decorative: the `sr-only` `in` is there, and it is the *only* `sr-only` text on the row | `WorkRow.test.tsx`, which asserts the whole set rather than its presence — a second one added later would mean a second glyph was replaced by a silent one |
 
 Check 6 was the one that reached the end of the rewrite untested. It had been
 written down as the behaviour that was already right and could be lost while the
@@ -555,7 +690,19 @@ passes `onBack={parent ? () => onOpenWorkDetail(parent.id) : onBack}` — but
 until the review nothing asserted it, which is exactly how the next rewrite
 would have dropped it. Both destinations are asserted now.
 
-Both gates named in the design went red and were answered rather than silenced:
+Checks 13–17 came with the visual-hierarchy pass. Two of them are the cases where
+the *old* assertion was that something is absent, which is the kind that
+disappears quietly (15 and 16), and one is a defect the redesign introduced and
+review caught rather than the design anticipating it (17: swapping the words `in:`
+for a glyph took the only thing that told a screen reader this slot from the role
+and worktree slots beside it, all three being bare titles). `WorkRow.test.tsx` asserted
+"writes no activity label for a work nobody is waiting on" and
+`WorkListOverlay.test.tsx` looked for the literal text `in: Cluster mode`, so both
+were rewritten against the rules above rather than deleted — a removed assertion
+is indistinguishable from one that never existed.
+
+Both gates named in the original design went red and were answered rather than
+silenced:
 
 - **`web/tests/touchTarget.test.ts`** compares the control register in
   [responsive-ui.md](responsive-ui.md#outside-the-floor-today) against the code.
