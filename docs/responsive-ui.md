@@ -971,13 +971,19 @@ Known blind spots, recorded as they are rather than as they should be:
    caller with `overflow` clipping between itself and the badge takes it back
    — and `WorkRow`'s meta line clips, because clipping its slots from the right
    is how the line truncates. The badge is ~26px in a work row for that reason
-   (the box plus the line's padding), **deliberately**: 11px below it is 5px inside the next row, whose whole area
-   is another work's tap target, so the reach would have invented a band where
-   aiming at one work switches worktree. That is re-check 2 above answering
-   *no*, and the graceful failure is what makes it affordable — a miss opens
-   the work, which is where its worktree is written. **R2**: the header's
-   worktree switcher is the same-screen route that clears the floor. On the
-   work detail page nothing clips at that distance, so the badge is 44 there.
+   (the box plus the line's padding), and it is left that way **deliberately**.
+   The reason has changed once and is worth keeping straight. While work rows sat
+   2px apart, 11px below the badge was 5px inside the *next* row, whose whole
+   area is another work's tap target: restoring the reach would have invented a
+   band where aiming at one work switches worktree, which is re-check 2 above
+   answering *no*. Rows are 8px apart now (project-ui.md §2.3), so those 11px
+   land in the gap and reach no other target — that argument has been retired
+   rather than inherited. What still holds is the mechanical half (the clip is
+   how the line truncates, and the overlay lives inside the clip) plus the
+   graceful failure: a miss opens the work, which is where its worktree is
+   written. **R2**: the header's worktree switcher is the same-screen route that
+   clears the floor. On the work detail page nothing clips at that distance, so
+   the badge is 44 there.
 
 ### The manual check that cannot be automated
 

@@ -68,8 +68,8 @@ and on every notification after it.
 A story's row states `{n} active` and `{closed}/{total} tasks` over its children
 (project-ui.md §3), and those children include tasks that get no row of their
 own — a closed task under an open story is counted here and listed nowhere. A
-task row, in turn, prints `in: <parent title>` and can only get that word from
-its parent.
+task row, in turn, names its parent story, and can only get that name from the
+parent itself.
 
 **A page is therefore not a set of rows; it is a set of rows plus everything
 those rows make claims about.** Whatever unit a page is cut along, a story and

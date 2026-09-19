@@ -1,4 +1,4 @@
-import { MessageSquare } from "lucide-react";
+import { CornerDownRight, MessageSquare } from "lucide-react";
 import { type ReactNode, useId } from "react";
 import { ACTIVITY_VIEW, needsUser } from "../../lib/activity";
 import type { WorkListItem } from "../../types/work";
@@ -19,7 +19,7 @@ interface Props {
 	 */
 	tasks?: WorkListItem[];
 	/**
-	 * Slot 2. The list passes a task's parent title; the story detail's children
+	 * Slot 1. The list passes a task's parent title; the story detail's children
 	 * section passes nothing, because every row there is a task of the story on
 	 * screen and naming it once per row is noise (docs/project-ui.md §3.1). It is
 	 * the one slot decided by the screen rather than by the work.
@@ -75,35 +75,69 @@ export default function WorkRow({
 		useWorkCommand(work, activeTasks);
 	const errorId = useId();
 
-	// The bar keys off the leaves rather than the fields behind them: warning for
-	// any of the three ways a work waits on the user, error for one the engine
-	// has let go of. It is the only thing on the row that reads before a word
-	// does, which is why slot 1 never has to spell "Stopped" out.
-	const accentClass = isNeedsUser
-		? "border-th-warning bg-th-warning/5"
+	// The left edge is always drawn and only its hue changes: warning for any of
+	// the three ways a work waits on the user, error for one the engine has let
+	// go of, the card's own border colour otherwise. One coloured edge in a column
+	// of neutral ones is what reads before a word does; a *transparent* edge in a
+	// column of bordered cards reads as a card missing a side instead.
+	//
+	// It carries no tint behind it. The `/5` fills it used to be paired with drew
+	// nothing in any theme variant (docs/project-ui.md §3 holds the measurements,
+	// once), and they would now collide with the card's own `bg-th-bg-secondary`:
+	// two `background-color` declarations on one element, whose winner is decided
+	// by stylesheet order rather than by this file.
+	const edgeClass = isNeedsUser
+		? "border-l-th-warning"
 		: isStopped
-			? "border-th-error bg-th-error/5"
-			: "border-transparent";
+			? "border-l-th-error"
+			: "border-l-th-border";
 
 	// Fixed order, one appearance rule each, and the line clips from the right —
-	// which is what puts the answer the user owes first and the timestamp last.
-	const slots: { key: string; node: ReactNode }[] = [];
-	if (isNeedsUser) {
+	// which is what puts depth and state first and the timestamp last.
+	const slots: { key: string; node: ReactNode; pushedRight?: boolean }[] = [];
+	if (parentTitle) {
+		// Ahead of the state, which overrules the order docs/project-ui.md §3 gave
+		// these two: that order was right while the state had exactly one channel,
+		// and the state now has three (this word, the left edge, the glyph) while
+		// "which story is this task under" still has only this one. The two only
+		// ever compete on a task row inside *Needs you*.
+		//
+		// The corner arrow replaces the words `in:` on screen — it is the shape of
+		// depth, and it buys about 20px of title width on a 320px screen. On screen
+		// only: the arrow is `aria-hidden`, so the word it stands for is kept
+		// `sr-only`. Without it the line is a bare `Cluster mode`, which a screen
+		// reader cannot tell from the role and worktree slots beside it — those are
+		// bare titles too, and the arrow was the only thing distinguishing this one.
 		slots.push({
-			key: "activity",
+			key: "parent",
 			node: (
-				<span className="text-th-warning">
-					{ACTIVITY_VIEW[work.activity].label}
+				<span className="flex items-center gap-1 text-th-text-secondary">
+					<CornerDownRight className="size-3 shrink-0" aria-hidden="true" />
+					<span className="sr-only">in </span>
+					<span className="max-w-[10rem] truncate">{parentTitle}</span>
 				</span>
 			),
 		});
 	}
-	if (parentTitle) {
-		slots.push({
-			key: "parent",
-			node: <span className="max-w-[10rem] truncate">in: {parentTitle}</span>,
-		});
-	}
+	// On every row, not just the ones waiting on the user. `Running` repeating its
+	// group heading is the cost; the gain is that `Waiting on subtasks`,
+	// `Background task` and `Idle` stop being distinguishable only by a 14px
+	// glyph, which is the half of "everything looks the same" that survived
+	// reading the rows one by one. It also gives every card a second line, so the
+	// list has one rhythm instead of a height that depends on the data.
+	//
+	// Not tinted with the leaf's tone: `text-th-warning` on the card is far under
+	// AA 4.5 in every light variant (docs/project-ui.md §3 has the numbers), so the
+	// tone would be saying nothing in half the themes. The hue stays on the two
+	// channels that owe only the 3:1 non-text floor — the edge and the glyph.
+	slots.push({
+		key: "activity",
+		node: (
+			<span className="text-th-text-secondary">
+				{ACTIVITY_VIEW[work.activity].label}
+			</span>
+		),
+	});
 	if (hasWorktreeBadge) {
 		slots.push({
 			key: "worktree",
@@ -115,11 +149,8 @@ export default function WorkRow({
 			// inside the badge, so the meta line's clip takes it back, leaving the
 			// 20px box and the line's own padding — about 26px. Deliberate, and
 			// the second of the two re-checks every reaching overlay owes
-			// (docs/responsive-ui.md, blind spot 9): 11px below the badge is 5px
-			// inside the *next* row, whose whole area is another work's target, so
-			// the reach would have invented a band where aiming at one work
-			// switches worktree. A miss here opens the work instead, which is
-			// where its worktree is written anyway.
+			// (docs/responsive-ui.md, blind spot 9). A miss here opens the work
+			// instead, which is where its worktree is written anyway.
 			node: (
 				<span className="relative z-10">
 					<WorktreeBadge work={work} className="max-w-[8rem]" />
@@ -149,8 +180,11 @@ export default function WorkRow({
 		});
 	}
 	if (showUpdatedAt) {
+		// Pushed to the right edge so the sort key reads as a column: a date per row
+		// at a different x is a sort the user has to reconstruct.
 		slots.push({
 			key: "updated",
+			pushedRight: true,
 			node: <span>{formatRelativeDate(work.updated_at)}</span>,
 		});
 	}
@@ -158,8 +192,23 @@ export default function WorkRow({
 	const Heading = headingLevel === 4 ? "h4" : "h3";
 
 	return (
+		// A filled, bordered card, and indented when the work is a task. The fill is
+		// this project's existing "a block on the page" idiom (WorkDetailOverlay's
+		// sections, on the same `bg-th-bg-primary` page). It is worth almost nothing
+		// against that page — docs/project-ui.md §3 has the measurement — so it is
+		// *not* what separates one row from the next; the space between them is
+		// (§2.3 there).
+		// `hover:bg-th-bg-tertiary` is unchanged: once the resting state is
+		// secondary, tertiary is exactly the next step up.
+		//
+		// The indent is decided by the work and not by the screen, so one rule
+		// serves both surfaces: in the list a task sits a level in from the stories
+		// around it, and in the story detail's Tasks section — where every row is a
+		// task — the whole block sits in under its heading, which is what it is.
 		<div
-			className={`relative rounded-lg border-l-2 px-2 hover:bg-th-bg-tertiary ${accentClass}`}
+			className={`relative rounded-lg border border-th-border border-l-2 bg-th-bg-secondary px-2 hover:bg-th-bg-tertiary ${edgeClass}${
+				work.type === "task" ? " ml-4" : ""
+			}`}
 		>
 			<div className="flex min-h-[44px] items-center gap-2">
 				{/* Decorative: the title below names the leaf in the same breath, and
@@ -206,24 +255,30 @@ export default function WorkRow({
 				</div>
 			</div>
 
-			{slots.length > 0 && (
-				// The clip is what makes the line truncate from the right, and it
-				// clips focus rings too — the worktree badge's is a `ring-2`
-				// box-shadow with no room above it, or to its left when it is the
-				// first slot. The 2px of padding is that room, and the matching
-				// negative margins keep the row exactly as tall and as wide as it
-				// was: half a focus ring is the one kind worse than none.
-				<div className="-mx-0.5 -mt-0.5 flex items-center gap-1.5 overflow-hidden whitespace-nowrap px-0.5 pt-0.5 pb-1 text-xs text-th-text-muted">
-					{slots.map((slot, i) => (
-						// The separator belongs to the slot that follows it, so a slot
-						// that is absent takes its separator with it.
-						<span key={slot.key} className="flex shrink-0 items-center gap-1.5">
-							{i > 0 && <span aria-hidden="true">&middot;</span>}
-							{slot.node}
-						</span>
-					))}
-				</div>
-			)}
+			{/* Always rendered — the state word is unconditional, so every card is
+			    exactly two lines tall. The clip is what makes the line truncate from
+			    the right, and it clips focus rings too — the worktree badge's is a
+			    `ring-2` box-shadow with no room above it, or to its left when it is
+			    the first slot. The 2px of padding is that room, and the matching
+			    negative margins keep the row exactly as tall and as wide as it was:
+			    half a focus ring is the one kind worse than none. */}
+			<div className="-mx-0.5 -mt-0.5 flex items-center gap-1.5 overflow-hidden whitespace-nowrap px-0.5 pt-0.5 pb-1 text-xs text-th-text-muted">
+				{slots.map((slot, i) => (
+					// The separator belongs to the slot that follows it, so a slot
+					// that is absent takes its separator with it — and a slot pushed to
+					// the far end drops it, because the gap is already the separator and
+					// a `·` left floating mid-line reads as a slot that failed to render.
+					<span
+						key={slot.key}
+						className={`flex shrink-0 items-center gap-1.5${slot.pushedRight ? " ml-auto" : ""}`}
+					>
+						{i > 0 && !slot.pushedRight && (
+							<span aria-hidden="true">&middot;</span>
+						)}
+						{slot.node}
+					</span>
+				))}
+			</div>
 
 			{error && (
 				// Wrapping rather than clamping: the list is the only place this is
