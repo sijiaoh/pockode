@@ -25,6 +25,26 @@ var ErrSessionNotFound = errors.New("session not found")
 // run, which is worse than saying so.
 var ErrSessionNotRunning = errors.New("session is no longer running, send a message to continue")
 
+// ErrTurnAwaitingAnswer is returned when a message arrives while the turn is
+// blocked on a permission request or a question, which is the one state a
+// message cannot be delivered in.
+//
+// Messages sent while a turn is merely *running* are fine and go straight
+// through: both CLIs Pockode ships fold one into the running turn, which ends
+// once for both messages (agent.Session.SendMessage). A CLI holding a request
+// open is different — it is inside a tool call waiting for that answer and
+// reads nothing else until it arrives. Measured on claude-code 2.1.263 and
+// codex-cli 0.153.0: neither produced a single further event in the four
+// minutes after a message was sent instead of an answer.
+//
+// So the message is refused rather than accepted. Accepting it would take the
+// request off the user's screen — a prompt handed to the agent abandons whatever
+// it was holding open (session.ReduceTurn's SignalPrompt) — leaving a turn open
+// that only the answer to a now-unanswerable request could ever end, and no
+// lease to collect it unless the operator set --turn-timeout. The user still has
+// both ways forward: answer the request, or stop the turn and then send.
+var ErrTurnAwaitingAnswer = errors.New("this turn is waiting for an answer to the request on screen: answer it, or stop the turn, then send")
+
 // ErrForkAnchorOutOfRange is returned when the anchor names no record of the
 // source session's history.
 var ErrForkAnchorOutOfRange = errors.New("fork anchor is outside the session's history")
@@ -109,6 +129,19 @@ func (c *Client) sendEvent(ctx context.Context, sessionID string, event agent.Me
 	proc, err := c.getOrCreateProcess(ctx, sessionID)
 	if err != nil {
 		return session.NoHistorySeq, err
+	}
+
+	// Before the append, not after: a refused message must leave no trace. A
+	// record written here would be in the transcript on the next reload of a
+	// conversation the agent never heard it in, which is a worse answer than the
+	// error — the send failed, and only the client that tried knows that.
+	//
+	// Asked of the process rather than of the agent, and asked for every sender:
+	// a kickoff or an auto-continuation lands in the same silence a typed message
+	// does, and a work nudged into a session that is holding a question open is
+	// nudged into nothing.
+	if proc.TurnState().AwaitingUserAnswer() {
+		return session.NoHistorySeq, ErrTurnAwaitingAnswer
 	}
 
 	// Persist message to history

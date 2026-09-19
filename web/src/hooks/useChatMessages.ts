@@ -1,13 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { IDLE_TURN } from "../lib/activity";
 import {
+	appendUserMessage,
 	applyServerEvent,
 	applyToolActivitySnapshot,
-	closePreviousTurn,
 	isBackReference,
 	isTurnTerminal,
 	type NormalizedEvent,
 	normalizeEvent,
+	openAssistantIndex,
 	prependHistoryPage,
 	readHistorySeq,
 	replayHistory,
@@ -67,10 +68,18 @@ interface UseChatMessagesReturn {
 	loadedHistoryPages: number;
 	loadMoreHistory: () => Promise<void>;
 	/**
-	 * Whether a turn is open: the composer is blocked and Stop is on screen for
-	 * exactly this (docs/lifecycle-ui.md §2.3).
+	 * Whether a turn is open: Stop is on screen for exactly this, and the settings
+	 * controls are locked for it (docs/lifecycle-ui.md §2.3). It is no longer what
+	 * decides whether the composer can send — see `ChatPanel`.
 	 */
 	turnOpen: boolean;
+	/**
+	 * Whether the message the transcript ends on is one somebody typed — here or
+	 * in another tab — that went into a turn already running, and so has no reply
+	 * bubble of its own yet. Purely derived from the transcript's tail and the
+	 * turn; it clears itself.
+	 */
+	isSendPending: boolean;
 	/** What the session is doing, for the surfaces that need more than a boolean. */
 	turn: SessionTurn;
 	/**
@@ -524,15 +533,14 @@ export function useChatMessages({
 				createdAt: new Date(),
 			};
 
-			// Same turn handling a broadcast message gets: a locally echoed message
-			// starts a new turn too, so whatever the agent was mid-way through is
-			// closed out and an unanswered placeholder does not linger as a blank
-			// bubble above the one just added.
-			setMessages((prev) => [
-				...closePreviousTurn(prev),
-				userMessage,
-				assistantMessage,
-			]);
+			// The same shaping a broadcast message gets, from the same function: a
+			// message sent into a running turn neither closes that turn's bubble nor
+			// gets a placeholder of its own, while one sent to an idle agent opens a
+			// turn. The placeholder is passed as a thunk because the mid-turn shape
+			// does not want one.
+			setMessages((prev) =>
+				appendUserMessage(prev, userMessage, () => assistantMessage),
+			);
 
 			try {
 				// The server's reply is where this client learns the seq of its own
@@ -551,18 +559,41 @@ export function useChatMessages({
 					error instanceof Error && error.message
 						? error.message
 						: "Unknown error";
-				setMessages((prev) =>
-					prev.map((m): Message => {
-						if (m.role === "assistant" && m.id === assistantMessageId) {
-							return {
-								...m,
-								status: "error",
-								error: `Failed to send message: ${reason}`,
-							};
-						}
-						return m;
-					}),
-				);
+				const failure = `Failed to send message: ${reason}`;
+				setMessages((prev) => {
+					// The message opened a turn, so the placeholder standing in for the
+					// reply is where the failure belongs.
+					if (prev.some((m) => m.id === assistantMessageId)) {
+						return prev.map((m): Message => {
+							if (m.role === "assistant" && m.id === assistantMessageId) {
+								return { ...m, status: "error", error: failure };
+							}
+							return m;
+						});
+					}
+
+					// No placeholder means one of two things, and only the message itself
+					// tells them apart: it went into a turn that was already running — no
+					// placeholder is made for those — or the transcript on screen is no
+					// longer the one it was sent to, the user having switched sessions
+					// while the call was in flight. Reporting into that one would be
+					// reporting into somebody else's conversation.
+					const sentAt = prev.findIndex((m) => m.id === userMessageId);
+					if (sentAt === -1) return prev;
+
+					// Below the message it failed to deliver rather than at the end,
+					// which by now may be several messages further down. Saying nothing
+					// is the one option ruled out: the server does refuse a mid-turn send
+					// while a permission or question is waiting, and the message would
+					// otherwise sit in the transcript looking delivered.
+					const reported = [...prev];
+					reported.splice(sentAt + 1, 0, {
+						...assistantMessage,
+						status: "error",
+						error: failure,
+					});
+					return reported;
+				});
 				return false;
 			}
 		},
@@ -605,13 +636,36 @@ export function useChatMessages({
 
 	// Whether a turn is open, and the optimistic half is load-bearing: between the
 	// user pressing send and the server reporting `running` there is a round trip,
-	// and a composer watching only the turn would leave them a live send button
-	// and no Stop for the length of it. What the turn removes is the half that was
-	// never reliable — inferring liveness from the last bubble's status and a
-	// `process_ended` that a restart never wrote (docs/lifecycle-ui.md §2.3).
+	// and a surface watching only the turn would leave them without Stop for the
+	// length of it. What the turn removes is the half that was never reliable —
+	// inferring liveness from the last bubble's status and a `process_ended` that
+	// a restart never wrote (docs/lifecycle-ui.md §2.3).
+	//
+	// `sending` is the status of a placeholder this client made and the server has
+	// yet to say anything about; located by the open bubble rather than by the end
+	// of the list, because a second message typed inside that same round trip is
+	// appended below it and would otherwise cancel the optimism that message needs
+	// most.
+	const openIndex = openAssistantIndex(messages);
+	const open = openIndex >= 0 ? messages[openIndex] : undefined;
+	const hasUnansweredEcho =
+		open?.role === "assistant" && open.status === "sending";
+	const turnOpen = hasUnansweredEcho || turn.phase !== "idle";
+
+	// Whether the message the transcript ends on went into a turn that was already
+	// running. Derived, never recorded: the record says what was typed at that
+	// moment and cannot also carry whether the agent has picked it up — that half
+	// changes, and a copy inside the record would start lying the moment it did
+	// (AGENTS.md, "events are events, state is state"). Reading it back out of the
+	// transcript costs nothing and is always current: the turn ending, or the
+	// agent opening its own bubble below, retires it on its own.
+	//
+	// Any tab's message counts, because any tab's message reaches the same CLI and
+	// steers the same turn. Kickoff, restart and auto-continue arrive as
+	// `role: "user"` too, but nobody typed those, so they get no receipt.
 	const last = messages[messages.length - 1];
-	const lastIsSending = last?.role === "assistant" && last.status === "sending";
-	const turnOpen = lastIsSending || turn.phase !== "idle";
+	const isSendPending =
+		turnOpen && last?.role === "user" && last.source !== "system";
 
 	// One path for every session setting. Nothing is applied here: the new value
 	// reaches the screen through the session detail subscription, so a rejected
@@ -673,6 +727,7 @@ export function useChatMessages({
 		loadedHistoryPages,
 		loadMoreHistory,
 		turnOpen,
+		isSendPending,
 		turn,
 		mode,
 		agentType,

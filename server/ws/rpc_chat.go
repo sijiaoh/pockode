@@ -252,14 +252,16 @@ func (h *rpcMethodHandler) replyErrorForChat(ctx context.Context, conn *jsonrpc2
 	if errors.Is(err, chat.ErrSessionNotFound) {
 		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "session not found")
 	} else if errors.Is(err, chat.ErrSessionNotRunning) ||
+		errors.Is(err, chat.ErrTurnAwaitingAnswer) ||
 		errors.Is(err, process.ErrRequestNotPending) ||
 		errors.Is(err, chat.ErrForkAnchorOutOfRange) ||
 		errors.Is(err, chat.ErrForkAnchorNoHistory) ||
 		errors.Is(err, chat.ErrForkUnsupported) {
 		// The request does not fit the session's history, state or agent — a prompt
-		// whose process is gone or which is no longer being waited on, a fork
-		// anchored past the end of the history or at the very first message, a
-		// fork of a session whose agent cannot be forked.
+		// whose process is gone or which is no longer being waited on, a message
+		// sent into a turn that is holding a request open, a fork anchored past
+		// the end of the history or at the very first message, a fork of a
+		// session whose agent cannot be forked.
 		// The message names what was wrong, and none of them is a server fault.
 		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, err.Error())
 	} else {

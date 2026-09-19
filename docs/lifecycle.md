@@ -110,6 +110,21 @@ both.
 Each also ends with the death of the process that raised it, which is the one
 thing all three share and the subject of the paragraph after next.
 
+**A message may be sent into a turn that is running, but not into one that is
+blocked on a person.** The first half is cheap: both CLIs fold a mid-turn message
+into the turn already running, so it shares that turn's single ending and the
+reducer needs no rule of its own for it — `prompt` on an open turn leaves it
+open. The second half is why `chat.ErrTurnAwaitingAnswer` exists. A CLI holding a
+permission request or a question open is inside the tool call waiting for that
+answer and reads nothing else, and accepting the message would take the card off
+the user's screen — a prompt abandons whatever the turn was holding open — leaving
+a turn open that only the answer to a now-unanswerable request could end, and no
+lease to collect it unless the operator set `--turn-timeout`. So the send path
+refuses instead, for every sender: an auto-continuation nudged into a session
+that is holding a question open is nudged into the same silence a typed message
+would be. Both ways forward stay open — answer the request, or stop the turn and
+then send.
+
 **A background wait is a blocker rather than a kind of running**, and that is the
 direct repair of the two-hour spinner. The turn is openly parked; the surfaces
 say so; and the reaper can budget it because the model finally knows it is
@@ -369,11 +384,33 @@ default path needs no fork fallback, the degraded answer must carry the question
 text with it, and the authority on what became of a prompt is Pockode's own
 history rather than the CLI's transcript.
 
+**What a CLI does with a message sent into a turn it is already working on was
+measured too**, on the same two versions but through a live session rather than a
+killed one: a second message sent while the first turn was mid-tool-call, and a
+message sent instead of answering a permission request.
+
+| Claim | What was observed |
+|---|---|
+| A message sent while the turn is *running* reaches the agent | Yes, on both CLIs, and it **steers** that turn instead of starting a second one — the turn acted on it and then ended once |
+| A message sent while the turn is *blocked on a request* reaches the agent | **No**, on both CLIs. Not one further event arrived in the four minutes after it, and the request was still answerable at the end of that — answering it finished the turn normally |
+| A *stop* pressed while the turn is blocked on a request lands | Yes, on both CLIs, and quickly — claude-code withdrew the request and ended the turn in about a tenth of a second; Codex's adapter answers the outstanding approval with `cancel` first, which is what unblocks it there. This is what makes the second half of "answer it, or stop the turn" true, and it replaces what used to be listed below as unknown |
+
+The second row is the whole reason the send path refuses a message in that state
+rather than letting it through ([above](#session-one-reducer)), and the first is
+why it lets one through in every other state. All three are re-checked by the
+shared integration suite (`MidTurnMessage`, `MidTurnMessageWhileBlocked`,
+`InterruptWhileBlocked`), so a CLI upgrade that changes any of these answers
+fails a test rather than a user's session.
+
+The third row does not retire the grace backstop in `requestStop`: what it
+measures is that a *working* CLI acts on a stop it is blocked under, and the
+backstop is there for one that is wedged, which no measurement can rule out.
+
 **The boundaries of what was measured matter as much as the result.** These are
 each CLI's current behaviour, not a protocol guarantee, and they expire the way
 every finding in [tool-call-model.md](tool-call-model.md) and
 [agent-integration.md § Protocol Baselines](code/agent-integration.md#protocol-baselines)
-does — re-run them when a CLI is upgraded. Three things were specifically *not*
+does — re-run them when a CLI is upgraded. Two things were specifically *not*
 established:
 
 - **Resume across a long wall-clock gap.** Only resume across a process death was
@@ -382,9 +419,6 @@ established:
   is an hour rather than day-scale.
 - **Two dangling tool calls in one turn**, as a parallel tool call killed midway
   would produce.
-- **Whether Claude's interrupt releases a control request it is blocking on.**
-  The grace backstop exists because this is unknown: either the CLI ends the
-  turn or the process does, so the outcome is bounded rather than assumed.
 
 ## Known limits, kept on purpose
 
@@ -410,6 +444,21 @@ reader recognises a decision rather than a gap.
   it properly would need a "when was this work last started" field, and the only
   field that could carry it also moves when somebody edits a title — which would
   swallow stops that should land, a worse bug than the one being fixed.
+- **A system message refused for a request on screen is not held for later.**
+  A step advance, an auto-continuation or a restart sent while the session is
+  blocked on a permission request or a question is refused like any other
+  message (`chat.ErrTurnAwaitingAnswer`) rather than queued until the card
+  clears. The engine's own nudges log a warning and drop it; a restart fails the
+  start it belongs to and rolls the claim back. A kickoff creates the session it
+  sends into, so it cannot meet a blocker at all. It is reachable but narrow —
+  an ending expires every blocker, so it takes a request raised *after* the turn
+  ended, or one raised by a parallel tool call while the agent's own `step_done`
+  is running.
+  Holding the message instead would mean a second place where a prompt waits,
+  outside the turn state that is meant to be the only one, and it would be lost
+  with the process anyway. The alternative before the refusal existed was worse,
+  not better: the message was written into the transcript and handed to a CLI
+  that never read it, which is the same loss with a record claiming otherwise.
 - **There is no cap on how many processes may exist.** Both available rules for
   what to do at the cap are worse than the problem
   ([agent-integration.md](code/agent-integration.md#why-there-is-no-cap-on-how-many-processes-exist)).

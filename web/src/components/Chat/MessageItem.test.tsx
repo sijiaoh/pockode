@@ -164,7 +164,7 @@ describe("MessageItem", () => {
 		expect(screen.getByRole("status")).toBeInTheDocument();
 	});
 
-	it("shows spinner for the last streaming message", () => {
+	it("shows spinner for the streaming message the turn is writing into", () => {
 		const message: Message = {
 			id: "3",
 			role: "assistant",
@@ -173,11 +173,27 @@ describe("MessageItem", () => {
 			createdAt: new Date(),
 		};
 
-		render(<MessageItem sessionId="session-1" message={message} isLast />);
+		render(<MessageItem sessionId="session-1" message={message} isOpenTurn />);
 		expect(screen.getByRole("status")).toBeInTheDocument();
 	});
 
-	it("shows no indicator for streaming message that is no longer last", () => {
+	// A message sent mid-reply is appended below the reply it went into, so the
+	// reply still being written is no longer last. Reading position would take its
+	// spinner away at the moment the user has just asked it something.
+	it("keeps the spinner on the open turn under a message sent into it", () => {
+		const message: Message = {
+			id: "3",
+			role: "assistant",
+			parts: [{ type: "text", content: "half an answer" }],
+			status: "streaming",
+			createdAt: new Date(),
+		};
+
+		render(<MessageItem sessionId="session-1" message={message} isOpenTurn />);
+		expect(screen.getByRole("status")).toBeInTheDocument();
+	});
+
+	it("shows no indicator for a streaming message the turn has moved on from", () => {
 		const message: Message = {
 			id: "3",
 			role: "assistant",
@@ -186,10 +202,14 @@ describe("MessageItem", () => {
 			createdAt: new Date(),
 		};
 
-		// When a new message is added, the previous streaming message becomes !isLast
-		// In this case, no indicator is shown - the message content stands on its own
+		// A bubble left streaming that no open turn is writing into says nothing
+		// rather than claiming to still be running; the content stands on its own.
 		render(
-			<MessageItem sessionId="session-1" message={message} isLast={false} />,
+			<MessageItem
+				sessionId="session-1"
+				message={message}
+				isOpenTurn={false}
+			/>,
 		);
 		expect(screen.queryByRole("status")).not.toBeInTheDocument();
 		expect(screen.queryByText("Process ended")).not.toBeInTheDocument();

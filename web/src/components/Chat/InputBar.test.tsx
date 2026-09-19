@@ -96,18 +96,42 @@ describe("InputBar", () => {
 		expect(onSend).not.toHaveBeenCalled();
 	});
 
-	// The agent's stdin belongs to the turn under way, so a message sent into one
-	// would either be dropped or arrive in an order nobody chose
-	// (docs/lifecycle-ui.md §2.3). Enter is the path that matters: it never goes
-	// near the button, so a rule written only on `disabled` is a rule the
-	// keyboard does not have.
+	// An open turn is not a reason to refuse: a message sent mid-reply steers the
+	// running turn and joins the answer being written (docs/lifecycle-ui.md §2.3).
+	// The states that *do* refuse reach the bar as `canSend={false}`, decided by
+	// the host — the bar itself must not add a second rule on top of it, or it
+	// would refuse sends the server would have accepted.
 	describe("while a turn is open", () => {
-		it("refuses to send, by button and by Enter alike", () => {
+		it("sends, by button and by Enter alike", () => {
 			const onSend = vi.fn();
 			render(<InputBar sessionId={TEST_SESSION_ID} onSend={onSend} turnOpen />);
 
 			const textarea = screen.getByRole("textbox");
-			fireEvent.change(textarea, { target: { value: "queued?" } });
+			fireEvent.change(textarea, { target: { value: "also look at X" } });
+
+			expect(screen.getByRole("button", { name: /Send/ })).not.toBeDisabled();
+			fireEvent.keyDown(textarea, { key: "Enter" });
+			expect(onSend).toHaveBeenCalledWith("also look at X");
+		});
+
+		// Enter is the path that matters when the host does refuse: it never goes
+		// near the button, so a rule written only on `disabled` is a rule the
+		// keyboard does not have.
+		it("refuses both ways once the host withdraws canSend", () => {
+			const onSend = vi.fn();
+			render(
+				<InputBar
+					sessionId={TEST_SESSION_ID}
+					onSend={onSend}
+					canSend={false}
+					turnOpen
+				/>,
+			);
+
+			const textarea = screen.getByRole("textbox");
+			fireEvent.change(textarea, {
+				target: { value: "answer the card first" },
+			});
 
 			expect(screen.getByRole("button", { name: /Send/ })).toBeDisabled();
 			fireEvent.keyDown(textarea, { key: "Enter" });
@@ -118,7 +142,12 @@ describe("InputBar", () => {
 		// has to survive it.
 		it("keeps the draft typeable", () => {
 			render(
-				<InputBar sessionId={TEST_SESSION_ID} onSend={() => {}} turnOpen />,
+				<InputBar
+					sessionId={TEST_SESSION_ID}
+					onSend={() => {}}
+					canSend={false}
+					turnOpen
+				/>,
 			);
 
 			const textarea = screen.getByRole("textbox");

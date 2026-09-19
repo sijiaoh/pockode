@@ -1455,7 +1455,7 @@ client passes.
 |--------|--------|-------|
 | Protocol | stream-json, one JSON object per line | JSON-RPC 2.0 over stdio (`codex app-server`) |
 | Turn boundary | one `result` frame | `turn/started` … `turn/completed` |
-| A message sent mid-turn | queued behind the running turn | **steers** it: both messages share one turn and therefore one ending |
+| A message sent mid-turn | **steers** the running turn: both messages share one turn and therefore one ending | the same, and a change from the MCP channel it replaced (below) |
 | Permission requests | `control_request` / `can_use_tool` | server→client JSON-RPC *requests*, answered with a `decision` |
 | Interrupt | `control_request` / `interrupt` | `turn/interrupt {threadId, turnId}` |
 | Session recovery | `claude_resume.json` + a recovery ladder ([above](#session-recovery-ladder)) | `codex_resume.json` + `thread/resume` ([below](#thread-recovery)) |
@@ -1468,6 +1468,22 @@ app-server answers both inside the turn already running, and the second
 better of the two — nothing the agent had already done is thrown away — but it is
 why `agent.Session.SendMessage` promises nothing about endings *per message*, and
 why Codex's adapter counts nothing per message either.
+
+Claude's half of that row said **queued** until it was measured, and it was
+wrong: on claude-code 2.1.263 a mid-turn message steers the running turn just as
+Codex's does — the turn acted on the new instruction at its next step and then
+ended once. So neither adapter needs a rule for two endings, and the row is one
+behaviour rather than two.
+
+The row says nothing about a turn that is **blocked** on a permission request or
+a question, because there is nothing an adapter can do about it: the CLI is
+inside the tool call waiting for that answer and does not read its input at all.
+A message sent then is not delivered on either CLI — no event for four minutes,
+with the request still answerable at the end of it — so the refusal lives one
+layer up, in the send path (`chat.ErrTurnAwaitingAnswer`), where a caller can
+still be told. `MidTurnMessage` and `MidTurnMessageWhileBlocked` in the shared
+integration suite are what keep both halves honest across a CLI upgrade; the
+reasoning is in [lifecycle.md](../lifecycle.md#session-one-reducer).
 
 ### Startup
 
@@ -2565,10 +2581,13 @@ the only withdrawal available: the data a proper answer needs
 (`PermissionRequestData`, `QuestionRequestData`) comes from the card in the
 client, not from anything the server keeps. Codex answers its outstanding
 approval with a cancel before it stops the turn ([Approvals](#approvals)); Claude
-has no equivalent, and whether its interrupt releases a control request it is
-blocking on has not been measured. That unknown is exactly what the grace
-backstop is for — either the CLI ends the turn or the process does — so it is
-bounded rather than assumed.
+needs no equivalent, because its CLI acts on the interrupt while it is blocked on
+a control request — measured on claude-code 2.1.263, which withdrew the request
+and ended the turn in about a tenth of a second, and re-checked by the shared
+suite's `InterruptWhileBlocked`. The grace backstop is still there, but for a
+different case than it was written for: a CLI that is wedged rather than merely
+blocked. Either the CLI ends the turn or the process does, so the outcome is
+bounded either way.
 
 **A background wait is the one expiry nobody can be asked about**: the CLI is not
 listening, it is waiting on work of its own. The ending is delivered on its

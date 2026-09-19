@@ -61,7 +61,7 @@ func newForkFixture(t *testing.T, ag *forkingAgent, history []agent.EventRecord)
 	if ag != nil {
 		registry.Register(session.AgentTypeClaude, ag)
 	} else {
-		registry.Register(session.AgentTypeClaude, mockAgent{})
+		registry.Register(session.AgentTypeClaude, &mockAgent{})
 	}
 	pm := process.NewManager(registry, t.TempDir(), t.TempDir(), "", store, session.LeaseBudgets{Idle: time.Minute})
 	t.Cleanup(pm.Shutdown)

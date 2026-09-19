@@ -383,6 +383,37 @@ own turn ([lifecycle-ui.md](../lifecycle-ui.md#23-chat-composer-and-stop)) — b
 the transcript still shows what it is given, and two bubbles for one turn is a
 transcript that disagrees with itself about when the turn ended.
 
+Both of those questions — which bubble is this turn writing into, and has the turn
+ended — used to be answered by reading the last message, and **neither can be any
+more.** A message may be sent into a turn that is already running, and it is
+appended *below* the reply being written
+([lifecycle-ui.md §2.3](../lifecycle-ui.md#23-chat-composer-and-stop)), so the last
+element is routinely not the open bubble — nor even the last assistant bubble, since
+a send the server refuses leaves its reason underneath as well. Both therefore scan
+backwards: `openAssistantIndex` for the bubble an open turn is writing into (the last
+assistant still `sending` or `streaming`), and the last assistant of any status for
+whether the turn *ended*, which is what the lateness rule above tests. At most one
+bubble is ever open — a turn opens one only when `openAssistantIndex` finds none — so
+scanning past closed ones cannot pick the wrong turn.
+
+`openAssistantIndex` answers one more question that used to be read off position:
+which bubble may show a spinner. `MessageList` computes it once and hands each row
+`isOpenTurn`, replacing an `isLast` that agreed with it only until a message could
+land underneath the reply it went into — after which the reply still being written
+was no longer last, and lost its spinner at the moment the user had just asked it
+something. The bubbles that are *not* the open turn still show nothing, which is
+what keeps a reply the turn has moved on from claiming to be running.
+
+That search is also what makes the turn's own ending the *only* thing that closes its
+bubble. A user message arriving underneath used to close it as a side effect, and that
+side effect was quietly doing double duty as a backstop for a `done` that never
+arrived; mid-turn sending had to remove it. The dependency is now single and explicit
+— without `done` / `interrupted` / `error`, two turns' output grows into one bubble —
+which is why `messageReducer.test.ts` states it as a test of its own rather than
+leaving it a thing everyone assumed. The net that is unchanged, and the one that
+matters in practice, is the subscribe-time settle: `turn` finalises whatever is still
+`streaming` ([lifecycle-ui.md §2.4](../lifecycle-ui.md#24-recovering-a-dangling-turn-after-a-restart)).
+
 The same lateness decides where a fork can cut. A message carries the `anchorSeq`
 of the last history record folded into it, and the reducer stamps it on the
 newest message only — `applyServerEvent` is the one path both replayed

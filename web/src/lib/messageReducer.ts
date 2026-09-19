@@ -477,6 +477,37 @@ export function createAssistantMessage(
 	};
 }
 
+/** Index of the last assistant bubble, whatever state it is in. -1 for none. */
+function lastAssistantIndex(messages: Message[]): number {
+	for (let i = messages.length - 1; i >= 0; i--) {
+		if (messages[i].role === "assistant") return i;
+	}
+	return -1;
+}
+
+/**
+ * Index of the bubble the open turn is writing into — the last assistant still
+ * `sending` or `streaming` — or -1 when no turn is writing.
+ *
+ * Deliberately not "the last message, if it is an open assistant", and not even
+ * "the last assistant, if it is open": a message sent while the agent is
+ * mid-reply is appended below that reply, and a send that then fails leaves its
+ * reason below that. Either would hide the running turn behind them, and the
+ * `done` meant for it would be dropped as belonging to no one — leaving a
+ * spinner nothing could stop.
+ *
+ * At most one bubble is ever open, so scanning past closed ones cannot pick the
+ * wrong turn: a turn only opens a bubble when this returns -1.
+ */
+export function openAssistantIndex(messages: Message[]): number {
+	for (let i = messages.length - 1; i >= 0; i--) {
+		const m = messages[i];
+		if (m.role !== "assistant") continue;
+		if (m.status === "sending" || m.status === "streaming") return i;
+	}
+	return -1;
+}
+
 /**
  * Writes a record's seq onto the message it was folded into, so a fork can name
  * that message as its cut point (docs/session-fork-ui.md).
@@ -514,9 +545,10 @@ function stampAnchorSeq(
  * server has recorded it, and the broadcast that would carry its seq is the one
  * the sender is excluded from, so the number arrives separately — in the reply to
  * `chat.message` — after the bubble is on screen. Stamped by id rather than by
- * position because a user message is never the last element (the turn it opens
- * leaves an empty assistant placeholder behind it) and because the agent may have
- * streamed several messages in while the call was in flight.
+ * position because the message is rarely the last element by the time the seq
+ * lands: opening a turn leaves an empty assistant placeholder behind it, sending
+ * into a running turn leaves the reply above still growing, and either way the
+ * agent may have streamed several messages in while the call was in flight.
  *
  * Returns the list untouched when there is nothing to stamp — no seq, or the
  * message is gone because the user switched sessions, whose history this seq
@@ -547,8 +579,8 @@ export function applyServerEvent(
 ): Message[] {
 	// User message or system-driven message (history replay or broadcast)
 	if (event.type === "message") {
-		// Stamped inside applyUserMessage rather than by stampAnchorSeq: the turn
-		// this message opens leaves an empty assistant placeholder behind it, so
+		// Stamped inside applyUserMessage rather than by stampAnchorSeq: when the
+		// message opens a turn it is followed by an empty assistant placeholder, so
 		// the last element is not the one holding the record.
 		return applyUserMessage(messages, event.content, {
 			source: event.origin,
@@ -632,13 +664,20 @@ function applyEvent(
 		event.type === "done" ||
 		event.type === "error";
 
-	// Only append to the last message if it's an assistant message that's sending/streaming.
-	// This prevents content from going into the wrong bubble when multiple messages are sent
-	// before the first response arrives.
-	const last = messages[messages.length - 1];
-	const hasActiveAssistant =
-		last?.role === "assistant" &&
-		(last.status === "sending" || last.status === "streaming");
+	// The turn's own bubble, wherever it sits. It is not always the last message:
+	// a message sent mid-turn lands *below* the reply still being written, and
+	// that reply belongs to the turn that was already running, not to what the
+	// user just typed. So a turn's bubble is opened by its first content event
+	// and closed by its terminal event — never by a user message coming in
+	// underneath it (docs/lifecycle-ui.md §2.3).
+	//
+	// This is the one thing keeping two turns' output apart: without `done` /
+	// `interrupted` / `error` arriving, the next turn would grow into this
+	// bubble. `messageReducer.test.ts` states that dependency as a test, because
+	// it used to be covered by a second, accidental rule — a user message closed
+	// the previous turn — that mid-turn sending had to remove.
+	const openIndex = openAssistantIndex(messages);
+	const hasActiveAssistant = openIndex >= 0;
 
 	// Output the CLI was already producing when the turn was cut short still
 	// arrives afterwards — a Task subagent's last words are the common case.
@@ -653,18 +692,24 @@ function applyEvent(
 	// runs out of budget Pockode delivers the end of turn itself, and the CLI
 	// may genuinely resume output afterwards — that output is a live turn and
 	// must still light up the spinner.
+	//
+	// Read off the last assistant rather than the last message for the same
+	// reason as above: a message sent mid-turn sits below the bubble the trailing
+	// output belongs to.
+	const endedIndex = lastAssistantIndex(messages);
+	const ended = endedIndex >= 0 ? messages[endedIndex] : undefined;
 	const turnEnded =
-		last?.role === "assistant" &&
-		(last.status === "interrupted" ||
-			last.status === "error" ||
-			last.status === "process_ended");
+		ended?.role === "assistant" &&
+		(ended.status === "interrupted" ||
+			ended.status === "error" ||
+			ended.status === "process_ended");
 	const isLateContent = !hasActiveAssistant && turnEnded && !isTerminalEvent;
 
 	let updated: Message[];
 	let index: number;
 	if (hasActiveAssistant || isLateContent) {
 		updated = [...messages];
-		index = updated.length - 1;
+		index = hasActiveAssistant ? openIndex : endedIndex;
 	} else {
 		if (isTerminalEvent) {
 			// No active message to terminate — but still expire pending dialogs on process end
@@ -673,20 +718,14 @@ function applyEvent(
 			}
 			return messages;
 		}
-		// For content events, create new assistant message to hold orphan event.
-		// Remove empty sending messages and complete any streaming messages.
-		updated = messages
-			.map((m): Message | null => {
-				if (m.role === "assistant" && m.status === "sending") {
-					return null; // Remove empty sending messages
-				}
-				if (m.role === "assistant" && m.status === "streaming") {
-					return { ...m, status: "complete" };
-				}
-				return m;
-			})
-			.filter((m): m is Message => m !== null);
-		updated = [...updated, createAssistantMessage()];
+		// Content with no turn to belong to opens one. This is the path a message
+		// sent mid-turn takes when the turn it went into ends and the agent then
+		// answers it, and the path the first content of any turn takes.
+		//
+		// Nothing is swept up first: reaching here means `openAssistantIndex` found
+		// no bubble open anywhere, so there is no earlier turn left running to
+		// close out.
+		updated = [...messages, createAssistantMessage()];
 		index = updated.length - 1;
 	}
 
@@ -1369,11 +1408,16 @@ function isEmptyPlaceholder(message: Message): boolean {
 	);
 }
 
-// Closes out whatever the agent was mid-way through, so an incoming message
-// starts a fresh turn instead of appending to the previous one. Every message
-// leaves a placeholder behind for the reply it provokes; the ones the agent
-// never wrote into are dropped here rather than left as blank bubbles.
-export function closePreviousTurn(messages: Message[]): Message[] {
+// Declares that nothing is running any more: every bubble still open is settled
+// as `complete`, and the ones the agent never wrote into are dropped rather than
+// left as blank bubbles.
+//
+// Called where something other than a turn's own ending says the turn is over:
+// a message arriving at an idle agent (`appendUserMessage`), and a page of
+// history whose last turn ended in the page above it (`prependHistoryPage`). A
+// turn that is genuinely still running is never put through here — a message
+// sent into one joins it instead.
+function closePreviousTurn(messages: Message[]): Message[] {
 	return messages
 		.map((m): Message => {
 			if (
@@ -1387,14 +1431,42 @@ export function closePreviousTurn(messages: Message[]): Message[] {
 		.filter((m) => !isEmptyPlaceholder(m));
 }
 
-// Finalizes any streaming assistant before adding new user message
+/**
+ * Puts a message the agent is being given at the end of the transcript, in one
+ * of the two shapes a message can take:
+ *
+ * - **Nothing running.** The message opens a turn, so whatever the agent was
+ *   mid-way through is closed out and `placeholder()` is left behind for the
+ *   reply it provokes.
+ * - **A turn running.** The message was sent into that turn — the CLIs steer the
+ *   running turn with whatever arrives mid-reply — so the reply above keeps
+ *   growing where it is and the message is simply appended below it. No
+ *   placeholder is made, and `placeholder()` is not called: the reply to *this*
+ *   message, if the agent writes a separate one, opens its own bubble once the
+ *   turn ends. The bubble that is missing here is what `useChatMessages` reads
+ *   back as "sent while the agent was working", so do not add one.
+ *
+ * Both callers come through here — the broadcast path below and the local
+ * optimistic echo in `useChatMessages`, which needs to name the two messages it
+ * appends so it can stamp a seq onto one and a failure onto the other. Writing
+ * the rule once is the point: the two paths drifting apart is exactly how the
+ * transcript starts claiming one turn's output answered another turn's message.
+ */
+export function appendUserMessage(
+	messages: Message[],
+	userMessage: UserMessage,
+	placeholder: () => AssistantMessage,
+): Message[] {
+	if (openAssistantIndex(messages) >= 0) return [...messages, userMessage];
+	return [...closePreviousTurn(messages), userMessage, placeholder()];
+}
+
+/** `appendUserMessage` for a message arriving as a record, which names nothing. */
 export function applyUserMessage(
 	messages: Message[],
 	content: string,
 	options?: UserMessageOptions,
 ): Message[] {
-	const finalized = closePreviousTurn(messages);
-
 	const userMessage: UserMessage = {
 		id: generateUUID(),
 		role: "user",
@@ -1410,7 +1482,9 @@ export function applyUserMessage(
 			: {}),
 	};
 
-	return [...finalized, userMessage, createAssistantMessage()];
+	return appendUserMessage(messages, userMessage, () =>
+		createAssistantMessage(),
+	);
 }
 
 /**

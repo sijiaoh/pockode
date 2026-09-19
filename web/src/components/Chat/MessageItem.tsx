@@ -611,7 +611,13 @@ interface Props {
 	 * whether a fork anchored here has any conversation behind it to keep.
 	 */
 	isFirst?: boolean;
-	isLast?: boolean;
+	/**
+	 * This bubble is the one the open turn is writing into, which is what makes a
+	 * spinner on it true. Not the same as `isLast` since a message sent mid-reply
+	 * is appended below the reply it went into — that reply is still being written
+	 * and has to keep saying so (docs/lifecycle-ui.md §2.3).
+	 */
+	isOpenTurn?: boolean;
 	isCodex?: boolean;
 	onPermissionRespond?: (
 		request: PermissionRequest,
@@ -661,7 +667,7 @@ const MessageItem = memo(function MessageItem({
 	sessionId,
 	onOpenFile,
 	isFirst,
-	isLast,
+	isOpenTurn,
 	isCodex,
 	onPermissionRespond,
 	onQuestionRespond,
@@ -767,7 +773,14 @@ const MessageItem = memo(function MessageItem({
 				{message.status === "sending" && (
 					<Spinner variant="current" className="mt-2" />
 				)}
-				{message.status === "streaming" && isLast && (
+				{/* Keyed on being the open turn rather than on being last. The two
+				    agreed until a message could be sent mid-reply; now the reply
+				    that is still growing routinely has that message under it, and
+				    reading position would take its spinner away at the one moment
+				    the user has just asked it something. A bubble left `streaming`
+				    that is *not* the open turn gets nothing, which is what stopped
+				    a superseded reply from claiming to still be running. */}
+				{message.status === "streaming" && isOpenTurn && (
 					<Spinner variant="current" className="mt-2" />
 				)}
 				{message.status === "error" && (

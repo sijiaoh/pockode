@@ -68,6 +68,15 @@ func RunIntegrationTests(t *testing.T, newAgent func() Agent, opts IntegrationTe
 	t.Run("Interrupt", func(t *testing.T) {
 		testInterrupt(t, newAgent())
 	})
+	t.Run("MidTurnMessage", func(t *testing.T) {
+		testMidTurnMessage(t, newAgent())
+	})
+	t.Run("MidTurnMessageWhileBlocked", func(t *testing.T) {
+		testMidTurnMessageWhileBlocked(t, newAgent())
+	})
+	t.Run("InterruptWhileBlocked", func(t *testing.T) {
+		testInterruptWhileBlocked(t, newAgent())
+	})
 	t.Run("Usage", func(t *testing.T) {
 		testUsage(t, newAgent())
 	})
@@ -891,4 +900,254 @@ func truncate(s string, maxLen int) string {
 		return s
 	}
 	return s[:maxLen] + "..."
+}
+
+// midTurnMarker is the word the mid-turn message asks for. Distinctive so that
+// its presence in the transcript can only come from the second message having
+// been read.
+const midTurnMarker = "BANANA"
+
+// midTurnQuietWindow is how long "the CLI is not listening" is asserted over.
+//
+// Long enough to be a real claim rather than a race — both CLIs answer an
+// ordinary message in two to three seconds — and it is an upper bound on
+// nothing: the measured silence is unbounded (four minutes on claude-code
+// 2.1.263 and codex-cli 0.153.0, which is where the send path's refusal comes
+// from).
+const midTurnQuietWindow = 20 * time.Second
+
+// testMidTurnMessage is the contract the composer stays unlocked against: a
+// message sent while a turn is being worked on reaches the agent, and it lands
+// in the turn already running rather than starting a second one.
+//
+// One ending is the assertion that matters to the rest of the server. Turn state
+// is what everything downstream reads (session.ReduceTurn), and an agent that
+// answered a mid-turn message in a turn of its own would end twice — which the
+// work engine reads as two turns finishing, and nudges twice for.
+func testMidTurnMessage(t *testing.T, a Agent) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*integrationTimeout)
+	defer cancel()
+
+	sess, err := a.Start(ctx, StartOptions{
+		WorkDir:    t.TempDir(),
+		DataDir:    t.TempDir(),
+		Mode:       session.ModeYolo,
+		DisableMCP: true,
+	})
+	if err != nil {
+		t.Fatalf("Start failed: %v", err)
+	}
+	defer sess.Close()
+
+	// A turn long enough to still be running when the second message arrives,
+	// made of tool calls rather than text so that there is a moment to aim at.
+	if err := sess.SendMessage("Run this exact bash command three times in a row, one tool call each: sleep 8. " +
+		"After each one, say which round you just finished."); err != nil {
+		t.Fatalf("SendMessage failed: %v", err)
+	}
+
+	sent := false
+	dones := 0
+	sawMarker := false
+
+	for {
+		var quiet <-chan time.Time
+		if dones == 1 {
+			// The turn has ended once. Anything further would be a second
+			// ending, so the wait for one is what closes this test.
+			quiet = time.After(midTurnQuietWindow)
+		}
+
+		select {
+		case event, ok := <-sess.Events():
+			if !ok {
+				t.Fatalf("channel closed after %d endings, marker seen: %v", dones, sawMarker)
+			}
+			requireFields(t, event)
+
+			switch e := event.(type) {
+			case ToolResultEvent:
+				if sent {
+					continue
+				}
+				sent = true
+				if err := sess.SendMessage(
+					"Change of plan: stop what you are doing and reply with just the word " + midTurnMarker + "."); err != nil {
+					t.Fatalf("mid-turn SendMessage failed: %v", err)
+				}
+			case TextEvent:
+				if strings.Contains(e.Content, midTurnMarker) {
+					sawMarker = true
+				}
+			case ErrorEvent:
+				t.Fatalf("error event: %s", e.Error)
+			case DoneEvent:
+				dones++
+				if dones > 1 {
+					t.Fatalf("the mid-turn message was answered in a turn of its own: %d endings, want one", dones)
+				}
+				if !sent {
+					t.Fatal("the turn ended before the mid-turn message could be sent; the prompt is not long enough to test anything")
+				}
+				if !sawMarker {
+					t.Errorf("the turn ended without acting on the mid-turn message (no %q in the transcript)", midTurnMarker)
+				}
+			}
+
+		case <-quiet:
+			return
+
+		case <-ctx.Done():
+			t.Fatalf("timeout after %d endings, marker seen: %v", dones, sawMarker)
+		}
+	}
+}
+
+// testMidTurnMessageWhileBlocked is the one state a message cannot be delivered
+// in, and the reason chat.ErrTurnAwaitingAnswer refuses one rather than letting
+// it through.
+//
+// A CLI holding a permission request open is inside the tool call waiting for
+// that answer: it reads nothing else, so a message sent instead of an answer
+// produces no event at all. The request itself survives — answering it after the
+// ignored message still finishes the turn — which is what makes refusing the
+// message the right answer instead of a session nobody can talk to.
+func testMidTurnMessageWhileBlocked(t *testing.T, a Agent) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*integrationTimeout)
+	defer cancel()
+
+	target := newApprovalTarget(t)
+	sess, err := a.Start(ctx, StartOptions{WorkDir: t.TempDir(), DataDir: t.TempDir(), DisableMCP: true})
+	if err != nil {
+		t.Fatalf("Start failed: %v", err)
+	}
+	defer sess.Close()
+
+	if err := sess.SendMessage(escapeSandboxPrompt(target)); err != nil {
+		t.Fatalf("SendMessage failed: %v", err)
+	}
+
+	var pending PermissionRequestData
+	blocked := false
+	answered := false
+
+	for {
+		var quiet <-chan time.Time
+		if blocked && !answered {
+			quiet = time.After(midTurnQuietWindow)
+		}
+
+		select {
+		case event, ok := <-sess.Events():
+			if !ok {
+				t.Fatalf("channel closed before the turn finished (blocked=%v answered=%v)", blocked, answered)
+			}
+			requireFields(t, event)
+
+			// Read before the switch below, so that the request being raised is
+			// not itself counted as something that arrived after it.
+			if blocked && !answered {
+				t.Fatalf("a %s event arrived while the request was open, and nothing arrived when this was measured. "+
+					"Either the CLI now reads a message sent instead of an answer — in which case "+
+					"chat.ErrTurnAwaitingAnswer refuses one for a reason that no longer holds — or it re-sent the request "+
+					"it is still waiting on. Find out which before changing either side", event.EventType())
+			}
+
+			switch e := event.(type) {
+			case PermissionRequestEvent:
+				blocked = true
+				pending = permissionDataFromEvent(e)
+				if err := sess.SendMessage(
+					"Never mind that, forget it. Reply with just the word " + midTurnMarker + "."); err != nil {
+					t.Fatalf("mid-turn SendMessage failed: %v", err)
+				}
+			case ErrorEvent:
+				t.Fatalf("error event: %s", e.Error)
+			case DoneEvent:
+				if !answered {
+					t.Fatal("the turn ended while the request was still unanswered")
+				}
+				return
+			}
+
+		case <-quiet:
+			// Nothing came, which is the finding. The request is still the only
+			// way forward, so answering it is what ends the turn.
+			answered = true
+			if err := sess.SendPermissionResponse(pending, PermissionAllow); err != nil {
+				t.Fatalf("failed to answer the request the message could not overtake: %v", err)
+			}
+
+		case <-ctx.Done():
+			t.Fatalf("timeout (blocked=%v answered=%v)", blocked, answered)
+		}
+	}
+}
+
+// testInterruptWhileBlocked is the other half of the refusal: a message cannot
+// overtake a request on screen, so the user is told to answer it or stop the
+// turn (chat.ErrTurnAwaitingAnswer) — and this is what makes the second half of
+// that sentence true.
+//
+// A CLI blocked on a request is not looking at an interrupt either, so it is not
+// obvious that a stop lands at all. Both handle it, for different reasons:
+// Codex's adapter answers the outstanding approval with `cancel` before asking
+// the turn to stop (see SendInterrupt), and Claude's CLI acts on the control
+// request itself — measured on claude-code 2.1.263, which withdrew the request
+// and ended the turn in about a tenth of a second.
+func testInterruptWhileBlocked(t *testing.T, a Agent) {
+	ctx, cancel := context.WithTimeout(context.Background(), integrationTimeout)
+	defer cancel()
+
+	target := newApprovalTarget(t)
+	sess, err := a.Start(ctx, StartOptions{WorkDir: t.TempDir(), DataDir: t.TempDir(), DisableMCP: true})
+	if err != nil {
+		t.Fatalf("Start failed: %v", err)
+	}
+	defer sess.Close()
+
+	if err := sess.SendMessage(escapeSandboxPrompt(target)); err != nil {
+		t.Fatalf("SendMessage failed: %v", err)
+	}
+
+	stopped := false
+
+	for {
+		select {
+		case event, ok := <-sess.Events():
+			if !ok {
+				t.Fatalf("channel closed before the turn ended (stop sent: %v)", stopped)
+			}
+			requireFields(t, event)
+
+			switch e := event.(type) {
+			case PermissionRequestEvent:
+				if stopped {
+					continue
+				}
+				stopped = true
+				if err := sess.SendInterrupt(); err != nil {
+					t.Fatalf("SendInterrupt failed: %v", err)
+				}
+			case InterruptedEvent:
+				if !stopped {
+					t.Fatal("interrupted before the stop was sent")
+				}
+				return
+			case ErrorEvent:
+				t.Fatalf("error event: %s", e.Error)
+			case DoneEvent:
+				// Not an ending this test accepts: a stop that is answered by
+				// the turn finishing normally means the tool ran after all, and
+				// the whole point is that it did not.
+				t.Fatalf("the turn ended with done rather than interrupted (stop sent: %v)", stopped)
+			}
+
+		case <-ctx.Done():
+			if !stopped {
+				t.Fatal("no permission request ever arrived, so nothing was blocked to stop; the sandbox let the write through")
+			}
+			t.Fatal("the stop never landed on a turn blocked on a request")
+		}
+	}
 }

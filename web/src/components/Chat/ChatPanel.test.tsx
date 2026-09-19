@@ -15,6 +15,7 @@ import type {
 	ServerNotification,
 	SessionDetail,
 	SessionMode,
+	SessionTurn,
 } from "../../types/message";
 import type { AgentType } from "../../types/settings";
 import type { WorkListItem } from "../../types/work";
@@ -380,6 +381,294 @@ describe("ChatPanel", () => {
 			await waitFor(() => {
 				expect(screen.getByText(/not found in \$PATH/)).toBeInTheDocument();
 			});
+		});
+	});
+
+	// "A turn is open" stopped being a reason to refuse: both CLIs steer the
+	// running turn with what arrives mid-reply. What refuses now is a request
+	// owning the agent's next line of input — the server refuses those too, and
+	// sending over one used to hang the turn for good (docs/lifecycle-ui.md §2.3).
+	describe("sending while the agent is working", () => {
+		const setTurn = (
+			phase: SessionTurn["phase"],
+			blockers?: SessionTurn["blockers"],
+		) =>
+			act(() => {
+				acceptSetting({
+					turn: {
+						phase,
+						open: phase !== "idle",
+						since: "2024-01-01T00:00:00Z",
+						blockers,
+					},
+				});
+			});
+
+		const permission = {
+			kind: "permission" as const,
+			request_id: "p1",
+			raised_at: "2024-01-01T00:00:00Z",
+		};
+		const question = {
+			kind: "question" as const,
+			request_id: "q1",
+			raised_at: "2024-01-01T00:00:00Z",
+		};
+		const background = {
+			kind: "background" as const,
+			raised_at: "2024-01-01T00:00:00Z",
+		};
+
+		it.each<[string, SessionTurn["phase"], SessionTurn["blockers"]]>([
+			["running", "running", undefined],
+			["blocked on background work", "blocked", [background]],
+		])("sends while the turn is %s", async (_label, phase, blockers) => {
+			const user = userEvent.setup();
+			render(<ChatPanel {...defaultProps} />);
+			await waitForHistoryLoad();
+			setTurn(phase, blockers);
+
+			await user.type(screen.getByRole("textbox"), "Also look at X");
+			await user.click(screen.getByRole("button", { name: /Send/ }));
+
+			expect(mockState.sendMessage).toHaveBeenCalledWith(
+				"test-session",
+				"Also look at X",
+			);
+		});
+
+		// Stop stays on screen throughout: sending into a turn is not an
+		// alternative to ending it, and the two controls sit in different rows.
+		it("keeps Stop alongside Send", async () => {
+			const user = userEvent.setup();
+			render(<ChatPanel {...defaultProps} />);
+			await waitForHistoryLoad();
+			setTurn("running");
+			await user.type(screen.getByRole("textbox"), "Also look at X");
+
+			expect(screen.getByRole("button", { name: /Send/ })).toBeEnabled();
+			expect(screen.getByRole("button", { name: /Stop/ })).toBeInTheDocument();
+		});
+
+		it.each<[string, SessionTurn["blockers"]]>([
+			["permission", [permission]],
+			["question", [question]],
+		])("refuses while a %s request owns the input", async (_kind, blockers) => {
+			const user = userEvent.setup();
+			render(<ChatPanel {...defaultProps} />);
+			await waitForHistoryLoad();
+			setTurn("blocked", blockers);
+
+			await user.type(screen.getByRole("textbox"), "never mind");
+			expect(screen.getByRole("button", { name: /Send/ })).toBeDisabled();
+
+			// A disabled control with no reason on screen is a silent failure.
+			expect(
+				screen.getByText(/Answer above or Stop before sending\./),
+			).toBeInTheDocument();
+			expect(mockState.sendMessage).not.toHaveBeenCalled();
+		});
+
+		// The optimistic half of `turnOpen` covers the round trip between pressing
+		// send and the server reporting `running`. A second message typed inside
+		// that same round trip is appended below the placeholder rather than making
+		// one of its own, so a check that only looked at the end of the transcript
+		// would take Stop away exactly when the user has sent twice and most needs
+		// it.
+		it("keeps Stop through a second send made before the server answers", async () => {
+			const user = userEvent.setup();
+			render(<ChatPanel {...defaultProps} />);
+			await waitForHistoryLoad();
+
+			await user.type(screen.getByRole("textbox"), "first");
+			await user.click(screen.getByRole("button", { name: /Send/ }));
+			expect(screen.getByRole("button", { name: /Stop/ })).toBeInTheDocument();
+
+			// Still no word from the server: the turn is reported idle throughout.
+			await user.type(screen.getByRole("textbox"), "second");
+			await user.click(screen.getByRole("button", { name: /Send/ }));
+
+			expect(screen.getByRole("button", { name: /Stop/ })).toBeInTheDocument();
+		});
+
+		// There is no placeholder for a mid-turn send to fail in, and a refusal is
+		// reachable — the server refuses one sent while a permission or question is
+		// waiting, and the request can be raised in the moment between the check and
+		// the send. The message must not be left looking delivered.
+		it("reports a refused mid-turn send under the message it refused", async () => {
+			const user = userEvent.setup();
+			render(<ChatPanel {...defaultProps} />);
+			await waitForHistoryLoad();
+
+			await user.type(screen.getByRole("textbox"), "Hi");
+			await user.click(screen.getByRole("button", { name: /Send/ }));
+			setTurn("running");
+			act(() => {
+				mockState.onNotification?.({ type: "text", content: "Working on it" });
+			});
+
+			// Held open so the transcript can move on underneath the call, which is
+			// what decides whether the reason lands beside its message or wherever
+			// the end happens to be by the time it arrives.
+			let refuse: (reason: Error) => void = () => {};
+			mockState.sendMessage.mockReturnValueOnce(
+				new Promise((_resolve, reject) => {
+					refuse = reject;
+				}),
+			);
+			await user.type(screen.getByRole("textbox"), "Also look at X");
+			await user.click(screen.getByRole("button", { name: /Send/ }));
+
+			act(() => {
+				mockState.onNotification?.({
+					type: "message",
+					content: "sent from another tab",
+				});
+			});
+			act(() => {
+				refuse(
+					new Error(
+						"this turn is waiting for an answer to the request on screen",
+					),
+				);
+			});
+
+			const reason = "waiting for an answer to the request on screen";
+			await waitFor(() => {
+				expect(screen.getByText(new RegExp(reason))).toBeInTheDocument();
+			});
+
+			// Beside the message it could not deliver, not at the end of a
+			// transcript that has moved on past it.
+			const transcript = document.body.textContent ?? "";
+			expect(transcript.indexOf("Also look at X")).toBeLessThan(
+				transcript.indexOf(reason),
+			);
+			expect(transcript.indexOf(reason)).toBeLessThan(
+				transcript.indexOf("sent from another tab"),
+			);
+
+			// The turn it failed to reach is untouched and still running.
+			act(() => {
+				mockState.onNotification?.({ type: "text", content: " — carrying on" });
+			});
+			expect(
+				screen.getByText("Working on it — carrying on"),
+			).toBeInTheDocument();
+		});
+
+		// The other reason a mid-turn send finds no placeholder to fail in, and the
+		// one that must not be mistaken for the first: the transcript on screen is
+		// no longer the one the message was sent to. Reporting into it would put a
+		// failure from one conversation into another.
+		it("says nothing when the session was switched under a failed send", async () => {
+			const user = userEvent.setup();
+			const { rerender } = render(
+				<ChatPanel {...defaultProps} sessionId="previous" />,
+			);
+			await waitForHistoryLoad();
+
+			await user.type(screen.getByRole("textbox"), "Hi");
+			await user.click(screen.getByRole("button", { name: /Send/ }));
+			setTurn("running");
+			act(() => {
+				mockState.onNotification?.({ type: "text", content: "Working on it" });
+			});
+
+			let refuse: (reason: Error) => void = () => {};
+			mockState.sendMessage.mockReturnValueOnce(
+				new Promise((_resolve, reject) => {
+					refuse = reject;
+				}),
+			);
+			await user.type(screen.getByRole("textbox"), "Also look at X");
+			await user.click(screen.getByRole("button", { name: /Send/ }));
+
+			rerender(<ChatPanel {...defaultProps} sessionId="destination" />);
+			await waitForHistoryLoad();
+
+			// Awaited rather than a bare `act`: the rejection is handled on a
+			// microtask, so a synchronous flush would assert on a transcript the
+			// failure had not reached yet and pass whatever the code did with it.
+			const reason = "waiting for an answer to the request on screen";
+			await act(async () => {
+				refuse(new Error(reason));
+			});
+
+			expect(screen.queryByText(new RegExp(reason))).not.toBeInTheDocument();
+			expect(screen.queryByText("Also look at X")).not.toBeInTheDocument();
+		});
+
+		// The reply the message went into is still being written, and the bubble
+		// has to keep saying so. It stops being the last row the moment the message
+		// lands under it, so anything reading position takes the spinner away
+		// exactly when the user has just asked the agent something.
+		it("keeps the reply spinning under the message sent into it", async () => {
+			const user = userEvent.setup();
+			render(<ChatPanel {...defaultProps} />);
+			await waitForHistoryLoad();
+
+			await user.type(screen.getByRole("textbox"), "Hi");
+			await user.click(screen.getByRole("button", { name: /Send/ }));
+			setTurn("running");
+			act(() => {
+				mockState.onNotification?.({ type: "text", content: "Working on it" });
+			});
+			// By label: the list's own scroll-position output is a `status` too.
+			expect(screen.getByLabelText("Loading")).toBeInTheDocument();
+
+			await user.type(screen.getByRole("textbox"), "Also look at X");
+			await user.click(screen.getByRole("button", { name: /Send/ }));
+
+			await screen.findByText("Also look at X");
+			expect(screen.getByLabelText("Loading")).toBeInTheDocument();
+
+			// And it goes when the turn does, rather than spinning on.
+			act(() => {
+				mockState.onNotification?.({ type: "done" });
+			});
+			expect(screen.queryByLabelText("Loading")).not.toBeInTheDocument();
+		});
+
+		// The only receipt a mid-turn send gets: nothing new appears under the
+		// message, because the reply above it goes on growing.
+		it("acknowledges a message that went into the running turn", async () => {
+			const user = userEvent.setup();
+			render(<ChatPanel {...defaultProps} />);
+			await waitForHistoryLoad();
+
+			await user.type(screen.getByRole("textbox"), "Hi");
+			await user.click(screen.getByRole("button", { name: /Send/ }));
+			setTurn("running");
+			act(() => {
+				mockState.onNotification?.({ type: "text", content: "Working on it" });
+			});
+
+			await user.type(screen.getByRole("textbox"), "Also look at X");
+			await user.click(screen.getByRole("button", { name: /Send/ }));
+
+			await waitFor(() => {
+				expect(
+					screen.getByText("Sent into the reply the agent is working on."),
+				).toBeInTheDocument();
+			});
+
+			// The reply carries on in the bubble it was already in, above the new
+			// message, and the receipt goes when the turn ends.
+			act(() => {
+				mockState.onNotification?.({ type: "text", content: " — and X" });
+			});
+			expect(screen.getByText("Working on it — and X")).toBeInTheDocument();
+
+			act(() => {
+				mockState.onNotification?.({ type: "done" });
+				acceptSetting({
+					turn: { phase: "idle", open: false, since: "2024-01-01T00:00:00Z" },
+				});
+			});
+			expect(
+				screen.queryByText("Sent into the reply the agent is working on."),
+			).not.toBeInTheDocument();
 		});
 	});
 

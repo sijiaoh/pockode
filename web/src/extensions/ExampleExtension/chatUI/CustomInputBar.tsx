@@ -2,11 +2,17 @@ import { Send } from "lucide-react";
 import { useState } from "react";
 import type { InputBarProps } from "../../../lib/registries/chatUIRegistry";
 
+/**
+ * Send is permanent — including while a turn is running, which the agent accepts
+ * as steering for the reply it is writing. Stop is not here: the host's action
+ * bar above owns it, so a destructive 44px target never sits next to Send under
+ * a thumb (docs/responsive-ui.md). `turnOpen` and `onStop` are still offered, for
+ * an extension that draws its own action bar instead.
+ */
 export default function CustomInputBar({
 	onSend,
 	canSend = true,
-	turnOpen,
-	onStop,
+	disabled = false,
 }: InputBarProps) {
 	const [input, setInput] = useState("");
 
@@ -26,33 +32,25 @@ export default function CustomInputBar({
 
 	return (
 		<div className="flex items-center gap-2 border-t border-th-border bg-th-bg-secondary p-3">
+			{/* `disabled`, not `canSend`: typing is never blocked, so a draft written
+			    while the connection is down survives it. `canSend` gates the send. */}
 			<input
 				type="text"
 				value={input}
 				onChange={(e) => setInput(e.target.value)}
 				onKeyDown={handleKeyDown}
 				placeholder="Type a message..."
-				disabled={!canSend}
+				disabled={disabled}
 				className="flex-1 rounded-full border border-th-border bg-th-bg-primary px-4 py-2 text-sm text-th-text-primary placeholder:text-th-text-muted focus:outline-none focus:ring-2 focus:ring-th-accent"
 			/>
-			{turnOpen && onStop ? (
-				<button
-					type="button"
-					onClick={onStop}
-					className="rounded-full bg-th-error px-4 py-2 text-sm text-th-text-inverse"
-				>
-					Stop
-				</button>
-			) : (
-				<button
-					type="button"
-					onClick={handleSend}
-					disabled={!canSend || !input.trim()}
-					className="flex size-9 items-center justify-center rounded-full bg-th-accent text-th-text-inverse disabled:opacity-50 pointer-coarse:size-11"
-				>
-					<Send className="size-5" />
-				</button>
-			)}
+			<button
+				type="button"
+				onClick={handleSend}
+				disabled={disabled || !canSend || !input.trim()}
+				className="flex size-9 items-center justify-center rounded-full bg-th-accent text-th-text-inverse disabled:opacity-50 pointer-coarse:size-11"
+			>
+				<Send className="size-5" />
+			</button>
 		</div>
 	);
 }
