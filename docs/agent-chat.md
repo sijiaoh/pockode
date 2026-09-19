@@ -35,7 +35,7 @@ React SPA ──WebSocket──▶ Go Server ──spawn──▶ AI CLI (subpro
 ## Data Flow
 
 1. User sends message → `chat.message` RPC
-2. ChatClient persists message to session history, forwards to `Process.SendMessage()`
+2. ChatClient persists message to session history, forwards to `Process.SendMessage()` — unless the turn is holding a permission request or a question open, the one state a message cannot be delivered in, which is refused as `InvalidParams` with nothing written ([lifecycle.md](lifecycle.md#session-one-reducer)). A turn merely *running* is not refused; the message steers it.
 3. Agent subprocess receives via stdin, processes, emits stream-json events
 4. Events are parsed into typed `AgentEvent`s (Text, ToolCall, ToolResult, Error, PermissionRequest, AskUserQuestion, Done, etc.)
 5. Events are broadcast to all WebSocket subscribers and persisted to session history

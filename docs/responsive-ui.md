@@ -538,9 +538,9 @@ noticed. One representation with a test on it is the only thing that ends that.
      paste the expected side of its diff. Do not edit by hand. -->
 
 ```text
-52 controls render text, state no height of their own and carry no touch-target.
+51 controls render text, state no height of their own and carry no touch-target.
 
-28 state their own font size, so the height below is exact: 16–40px.
+27 state their own font size, so the height below is exact: 16–40px.
 24 inherit it, so the height below is an upper bound — the ancestor that
   sets it may well set a smaller one: 24–48px.
 
@@ -562,7 +562,6 @@ noticed. One representation with a test on it is the only thing that ends that.
   36px  exact  web/src/components/Files/UploadConflictDialog.tsx ×3
   36px  exact  web/src/components/Settings/SettingsNav.tsx
   36px  exact  web/src/extensions/ExampleExtension/chatUI/CustomEmptyState.tsx
-  36px  exact  web/src/extensions/ExampleExtension/chatUI/CustomInputBar.tsx
   40px  bound  web/src/components/Chat/AskUserQuestionItem.tsx
   40px  bound  web/src/components/Chat/ForkOriginBanner.tsx
   40px  bound  web/src/components/Chat/MessageItem.tsx ×4

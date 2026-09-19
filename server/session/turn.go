@@ -256,6 +256,14 @@ func ReduceTurn(state TurnState, in TurnInput) TurnTransition {
 		// Sending instead of answering abandons whatever was on screen. The
 		// process is still alive, but the prompt it was holding open has been
 		// overtaken, and the turn that follows is a new one.
+		//
+		// The send path does not let a user reach this with a permission request
+		// or a question outstanding — the CLI would not read the message anyway
+		// (chat.ErrTurnAwaitingAnswer) — so what this rule covers in practice is
+		// a background wait being overtaken, and the race in which a request is
+		// raised between that check and this input. The rule stays general
+		// because the reducer is where a blocker's fate is decided, and a
+		// blocker nobody can answer must not survive as one.
 		expired = next.Blockers
 		next.Blockers = nil
 		next.Open = true

@@ -115,10 +115,19 @@ type Session interface {
 	Events() <-chan AgentEvent
 
 	// SendMessage sends a new message to the agent. Callers may send before the
-	// current turn has ended; what happens then is up to the CLI. Claude queues
-	// the message; Codex steers the running turn with it, so the two messages
-	// share one turn and therefore one ending (verified on codex-cli 0.153.0 —
-	// the second turn/start returns the id of the turn already running).
+	// current turn has ended, and both CLIs Pockode ships do the same thing with
+	// one: they steer the running turn rather than starting a second one, so the
+	// two messages share one turn and therefore one ending. Measured on
+	// claude-code 2.1.263 and codex-cli 0.153.0 — Codex's second turn/start
+	// returns the id of the turn already running, and Claude's turn acts on the
+	// new message and then ends once. Nothing here counts endings per message.
+	//
+	// The exception is a turn blocked on a permission request or a question: the
+	// CLI is inside the tool call waiting for that answer and reads nothing else
+	// until it arrives, so a message sent then is not delivered at all — neither
+	// CLI produced a single further event in the four minutes after one. The
+	// send path refuses those rather than letting them vanish; see
+	// chat.ErrTurnAwaitingAnswer.
 	SendMessage(prompt string) error
 
 	// SendPermissionResponse sends a permission response to the agent.

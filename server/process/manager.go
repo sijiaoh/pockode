@@ -780,10 +780,13 @@ func (m *Manager) enforce(p *Process, lease session.Lease, now time.Time) {
 		// it is the only withdrawal available: answering the prompt properly
 		// needs the request data, which lives on the card in the client and not
 		// in anything the server keeps. Codex answers its outstanding approval
-		// with a cancel before it stops the turn; Claude has no equivalent, and
-		// whether its interrupt releases a control request it is blocking on has
-		// not been measured — which is precisely what the grace backstop in
-		// requestStop is for. Either way the wait ends.
+		// with a cancel before it stops the turn; Claude needs no equivalent —
+		// its CLI acts on the interrupt while it is blocked on a control
+		// request, withdrawing that request and ending the turn (measured on
+		// claude-code 2.1.263; the shared integration suite's
+		// InterruptWhileBlocked keeps it honest). The grace backstop in
+		// requestStop stays for the CLI that is wedged rather than merely
+		// blocked. Either way the wait ends.
 		//
 		// The answer is not lost with it. A question that expired can still be
 		// sent as an ordinary message afterwards, which is why an hour is a
@@ -1138,6 +1141,18 @@ func (p *Process) getLastActive() time.Time {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return p.lastActive
+}
+
+// TurnState is what this process's session is doing right now.
+//
+// Exported for the send path, which has to know what the agent is in the middle
+// of before handing it anything: a CLI holding a permission request open is not
+// reading its input at all (see chat.ErrTurnAwaitingAnswer). Everything else
+// outside this package reads the turn off the session store, which is the same
+// value — this is here so that a caller deciding whether to send does not have
+// to re-read the store the send is about to write.
+func (p *Process) TurnState() session.TurnState {
+	return p.turnState()
 }
 
 // State is the session's turn seen through the two values a process has always

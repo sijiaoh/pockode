@@ -299,18 +299,54 @@ any work is behind it.
 
 ### 2.2 Chat: the blocker strip
 
-One line between the transcript and `InputBar`, present only while
-`phase == "blocked"`. It borrows `ForkOriginBanner`'s chrome — centred, `text-xs`,
-`size-3` glyph, muted — because both are one-line statements about the transcript
-rather than controls, and the pane should have one vocabulary for them. It sits
-below the list (not at the top like the fork banner) because it describes the
-transcript's *end*.
+One line between the transcript and `InputBar`, saying why the agent is quiet —
+or, when it is not quiet, that a message reached the reply it is working on. It
+borrows `ForkOriginBanner`'s chrome — centred, `text-xs`, `size-3` glyph, muted —
+because both are one-line statements about the transcript rather than controls,
+and the pane should have one vocabulary for them. It sits below the list (not at
+the top like the fork banner) because it describes the transcript's *end*.
 
-| Blocker | Copy | Trailing action |
+Four things it can say, in the order it prefers them:
+
+| State | Copy | Trailing action |
 |---|---|---|
-| `question` | "Waiting for your answer." | "Jump to question" |
-| `permission` | "Waiting for your permission." | "Jump to request" |
+| `permission` | "Waiting for your permission. Answer above or Stop before sending." | "Jump to request" |
+| `question` | "Waiting for your answer. Answer above or Stop before sending." | "Jump to question" |
+| a message went into a turn already open | "Sent into the reply the agent is working on." | — |
 | `background` | "Waiting on a background task — nothing to answer." | "Details" (expands) |
+
+The first two rows keep the precedence the activity derivation uses (§1.2), and
+their second sentence is the same sentence for both because it explains the same
+thing: these are the only two turn states Send is refused in (§2.3), and a disabled
+control with no reason on screen is the silent failure this project forbids.
+
+The third row is a **receipt**, and it is the only one the user's own action
+produces. A message sent mid-reply gets no other acknowledgement — the reply above
+it keeps growing and nothing new appears under it — so a message that landed and a
+message that vanished look identical without this line. It is ranked above
+`background` on purpose: sending *is* allowed during a background wait, and "nothing
+to answer" is the older news of the two, so the other order would leave the one
+state where a message lands with nothing said about it at all. It is ranked below
+the two prompts because the agent can raise a request after the message went in,
+and then both are true at once — the session being stuck is the more urgent of the
+two facts.
+
+The receipt is derived, never stored: it is `turnOpen` plus "the last thing in the
+transcript is a message the user or another client sent" (`isSendPending` in
+`useChatMessages`). There is no queue, no flag on the record, and nothing to go
+stale — the moment the agent writes a bubble under that message, or the turn ends,
+the line is gone by arithmetic rather than by cleanup. A system-driven message
+(kickoff, step advance, auto-continuation) is excluded: the user did not send it,
+so there is nothing to give them a receipt for.
+
+The copy says "working on" rather than "writing" because `turnOpen`'s optimistic half
+(§2.3) makes this line reachable a moment before the agent has written anything at
+all: two messages typed inside one round trip put the second one here while the
+server has yet to report the first. "Writing" would be the kind of small lie that
+costs the line its only job, which is to be believed about where a message went.
+
+Whichever it says, it is one bordered row, so the composer moves by at most one
+line's height however many of the four states hold.
 
 "Jump to question" reuses `PendingQuestionPill`'s jump (scroll, ring, focus the
 header row) via the leading blocker's `request_id`; the strip does not
@@ -353,36 +389,69 @@ path), which is where a deadline belongs.
 is replaced by
 
 ```
-turnOpen = lastIsSending || turn.phase != "idle"
+turnOpen = hasUnansweredEcho || turn.phase != "idle"
 ```
 
 The optimistic half stays, and dropping it would be the one regression easiest to
 ship by accident: between the user pressing send and the server reporting
-`running` there is a round trip, and a composer that only watched `turn` would
-leave the user with a live send button and no Stop for the length of it. What the
-`turn` half removes is the part that was never reliable — inferring liveness from
-the last message's status and a `process_ended` that a restart never wrote.
+`running` there is a round trip, and a surface watching only `turn` would leave
+them with no Stop for the length of it.
 
-The Stop button exists whenever a turn is open:
+`hasUnansweredEcho` is the placeholder this client opened and the server has yet to
+say anything about — located wherever it sits in the transcript rather than at the
+tail, because a second message sent inside that same round trip is appended *below*
+it (§2.2). An optimistic half that insisted on the tail would go false exactly then,
+taking Stop off the screen at the moment two messages are in flight and it is wanted
+most. What the `turn` half removes is the part that was never reliable — inferring
+liveness from the last message's status and a `process_ended` that a restart never
+wrote.
+
+`turnOpen` governs Stop, the Escape shortcut and the model / mode / effort
+selectors. It is **not** the composer's gate, and the table below is where those two
+questions part company:
 
 | `phase` | Stop button | Escape shortcut | Send | Composer hint |
 |---|---|---|---|---|
 | `idle` | hidden | inactive | enabled | — |
-| `running` | shown | active | disabled | — |
+| `running` | shown | active | enabled | the strip, once a message has gone in |
 | `blocked(question)` | shown | active | disabled | the strip |
 | `blocked(permission)` | shown | active | disabled | the strip |
-| `blocked(background)` | shown | active | disabled | the strip |
+| `blocked(background)` | shown | active | enabled | the strip |
 
-Send stays disabled for every open turn, including blocked ones: the process is
-alive and its stdin is owned by the pending request, so a typed message would
-either be dropped or arrive in an order nobody chose. The user's two exits are
-the card and Stop, and both are on screen. Typing is never blocked — only
-sending — so a drafted message survives the wait. Model / mode / effort
-selectors stay disabled for the whole open turn, as they are today.
+**An open turn is not a reason to refuse a send.** A message typed while the agent
+is mid-reply *steers* the turn already running: it joins the answer being written
+and shares that turn's single ending, on both CLIs — measured rather than reasoned
+about, and recorded once in
+[lifecycle.md § What was measured rather than assumed](lifecycle.md#what-was-measured-rather-than-assumed).
+A message sent under a `background` blocker is accepted for a different reason
+rather than the same one: there the CLI is between turns and reads what arrives, and
+the wait is asking nobody for anything, so the message simply overtakes it — the
+blocker expires, the strip's background line goes with it, and the turn stays open
+throughout. Send needs to know neither of these reasons, which is the point: one
+rule covers both.
 
-The one case where an *un*blocked composer matters is an expired card, and that
-is a different session state: the process is gone, so `phase` is `idle` and the
-composer is live. §5.
+**A permission request or a question is the exception, and a hard one.** A CLI
+holding one open is inside the tool call waiting for that answer and reads nothing
+else, so the message is not delivered at all; worse, accepting it would take the
+card off the user's screen, leaving a turn that only an answer nobody can give any
+more could end. The server refuses it for that reason, as `-32602`
+([lifecycle.md](lifecycle.md#session-one-reducer)), and refuses it for every sender
+rather than for the composer alone. So an unblocked composer here would not be a
+more permissive Pockode; it would be a hung session. The user's two exits are the
+card and Stop — both on screen, and Stop is measured to land even from under a
+request — and the strip states them on the line above the composer (§2.2), because
+a greyed Send that says nothing is the silent failure the project forbids.
+
+Typing is never blocked in any of these states — only sending — so a drafted
+message survives the wait. Model / mode / effort selectors stay disabled for the
+whole open turn, as they are today — and mid-turn sending is a reason they stay
+that way rather than an argument against it: a message that joins the turn already
+running is answered by the engine and mode that turn started under, so offering to
+change them beside it would offer something that cannot take effect.
+
+An expired card is untouched by all of this and stays the case it always was: the
+process is gone, so `phase` is `idle`, the composer is live for the ordinary
+reason, and the degraded answer goes as a plain message. §5.
 
 ### 2.4 Recovering a dangling turn after a restart
 
@@ -776,6 +845,9 @@ a user who stopped one subtask restart two things.
 | Turn ends while the row is on screen | `running` → `idle` after the settle delay, one static glyph to another; no flash, because the glyph does not change |
 | Both a question and a background task live | `blockers` is a set, permission > question > background decides the leaf; the strip states the question, which is the one with something to press |
 | Fork of a session mid-turn | the fork starts at `phase: idle`, so it has a live composer and no Stop button on its first frame |
+| Message sent into a running turn | it joins the reply being written, so the transcript ends on the message with no bubble under it and the strip says so (§2.2). The reply above keeps growing where it is — a mid-turn message never closes it (§2.3) — and keeps its own spinner, which asks whether the bubble is the open turn rather than whether it is the last row. Position used to answer both; a message landing underneath is what separated them |
+| Message sent a moment before a request appears | the accepted message takes the card off screen and the turn is left waiting for an answer nobody can give. Stop recovers it — the half of the strip's advice that survives the card going away, and measured to land from under a request. The window is between the server's check and the prompt reaching the turn state, is milliseconds wide, and is accepted on purpose rather than closed with a lock spanning the CLI's stdin (`session.ReduceTurn`, `SignalPrompt`) |
+| Send refused because a request is on screen | the reason is reported as a bubble directly under the message it refused, not at the end of a transcript that may have moved on since. A refusal shown nowhere would leave the message looking delivered, which is the failure shape §2.3 forbids |
 | Work stopped by the nudge limit | `stopped`, plus the engine's comment saying so. Chat shows nothing extra — the transcript already ends where the agent stopped answering |
 | Work closed while a question is pending | question → `cancelled`, reason `work_closed` (§5.1); the card explains it rather than sitting pending forever |
 | Server restart with a blocked turn | blockers expire on process death and are written to history, so on reconnect the cards read Expired and the composer is live |
@@ -872,6 +944,18 @@ The chat half has landed with it. The blocker strip is mounted (§2.2), and the
 expired cards read the structured `reason` (§5): the three banners per card are
 in `AskUserQuestionItem` and `MessageItem`, `work_closed` is the one that leaves
 a question read-only, and the degraded answer carries its question with it.
+
+Sending into an open turn has landed with it, and what it changed here is which
+question `turnOpen` answers. It no longer gates the composer; the one state that
+still refuses — a permission or question blocker owning the agent's next line of
+input — is computed in `ChatPanel` and folded into the `canSend` the bar already had,
+rather than arriving as a second prop saying the same thing, which is how two props
+start disagreeing. The transcript's rule moved with it: a turn's bubble is opened by
+its first content and closed by its terminal event, never by a user message landing
+underneath it
+([frontend-state.md](code/frontend-state.md#turn-boundaries-and-late-events)). That is
+what lets the reply above a mid-turn message keep growing where it is, and what makes
+the strip's receipt a derivation rather than a stored flag.
 
 Two smaller things in this document are worth knowing where they live. An answer
 to a prompt the session is no longer waiting on is refused by the *server*

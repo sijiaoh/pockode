@@ -9,6 +9,7 @@ import {
 	useRef,
 	useState,
 } from "react";
+import { openAssistantIndex } from "../../lib/messageReducer";
 import { useChatUIConfig } from "../../lib/registries/chatUIRegistry";
 import type {
 	AskUserQuestionRequest,
@@ -343,6 +344,11 @@ function MessageList({
 	}, [cancelRestoreWindow]);
 
 	const totalCount = messages.length;
+	// Which bubble the open turn is writing into, so a reply can say it is still
+	// being written wherever it sits. Position stopped answering that when a
+	// message sent mid-reply began landing *below* the reply it went into
+	// (docs/lifecycle-ui.md §2.3): the last row is then the message, not the turn.
+	const openIndex = openAssistantIndex(messages);
 	// Scroll container is only mounted when messages are non-empty (see early return below).
 	// Effects that attach to the container must re-run on this transition.
 	const hasMessages = totalCount > 0;
@@ -891,7 +897,6 @@ function MessageList({
 						</p>
 					)}
 					{messages.map((message, index) => {
-						const isLast = index === totalCount - 1;
 						return (
 							<div
 								key={message.id}
@@ -904,7 +909,7 @@ function MessageList({
 									// Top of the loaded transcript is the session's own start
 									// only once there are no older pages left above it.
 									isFirst={index === 0 && !hasMoreHistory}
-									isLast={isLast}
+									isOpenTurn={index === openIndex}
 									isCodex={isCodex}
 									onPermissionRespond={onPermissionRespond}
 									onQuestionRespond={onQuestionRespond}

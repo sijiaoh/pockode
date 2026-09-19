@@ -8,12 +8,25 @@ export interface AvatarProps {
 export interface InputBarProps {
 	sessionId: string;
 	onSend: (content: string) => void;
+	/**
+	 * The only switch for "can this be sent right now". Typing is never affected
+	 * by it — a draft written while the connection is down or history is loading
+	 * has to survive the wait. Use `disabled` to close the bar entirely.
+	 */
 	canSend?: boolean;
 	disabled?: boolean;
 	/**
 	 * Whether a turn is open — running, or blocked on something only the user or
-	 * the agent's own background work can clear. Sending is refused while it is,
-	 * typing is not (docs/lifecycle-ui.md §2.3).
+	 * the agent's own background work can clear.
+	 *
+	 * Not a reason to refuse a send: a message sent mid-reply steers the running
+	 * turn and joins the answer being written (docs/lifecycle-ui.md §2.3). The one
+	 * state that does refuse — a permission or question request owning the agent's
+	 * next line of input — reaches the bar as `canSend={false}`, already decided by
+	 * the host. A bar that refuses on `turnOpen` is refusing sends the server would
+	 * have accepted.
+	 *
+	 * Offered so a custom bar can *say* something about the open turn.
 	 */
 	turnOpen?: boolean;
 	onStop?: () => void;

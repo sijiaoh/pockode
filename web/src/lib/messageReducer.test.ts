@@ -1440,7 +1440,9 @@ describe("messageReducer", () => {
 				expect((messages[0] as AssistantMessage).status).toBe("complete");
 			});
 
-			it("removes empty sending and creates new message when last is not active", () => {
+			// The reply goes to the message that is still waiting for one, not to
+			// the one typed underneath it while the agent had yet to say anything.
+			it("answers into the placeholder above a message sent since", () => {
 				const a1: AssistantMessage = {
 					id: "a1",
 					role: "assistant",
@@ -1459,12 +1461,12 @@ describe("messageReducer", () => {
 					type: "text",
 					content: "Response",
 				});
-				expect(messages).toHaveLength(2); // a1 removed
-				expect(messages[0]).toBe(user);
-				expect(messages[1].role).toBe("assistant"); // new assistant message
-				expect((messages[1] as AssistantMessage).parts).toEqual([
+				expect(messages).toHaveLength(2);
+				expect(messages[0].id).toBe("a1");
+				expect((messages[0] as AssistantMessage).parts).toEqual([
 					{ type: "text", content: "Response" },
 				]);
+				expect(messages[1]).toBe(user);
 			});
 		});
 
@@ -1483,7 +1485,9 @@ describe("messageReducer", () => {
 				expect((messages[1] as AssistantMessage).status).toBe("streaming");
 			});
 
-			it("finalizes streaming assistant before adding broadcast message", () => {
+			// Another tab sending mid-reply reaches the same CLI and steers the same
+			// turn, so it shapes the transcript exactly as a local send does.
+			it("leaves a streaming assistant open under a broadcast message", () => {
 				const streaming: AssistantMessage = {
 					id: "msg-1",
 					role: "assistant",
@@ -1495,14 +1499,12 @@ describe("messageReducer", () => {
 					type: "message",
 					content: "New message from another tab",
 				});
-				expect(messages).toHaveLength(3);
-				expect(messages[0].role).toBe("assistant");
-				expect((messages[0] as AssistantMessage).status).toBe("complete"); // finalized
+				expect(messages).toHaveLength(2);
+				expect((messages[0] as AssistantMessage).status).toBe("streaming");
 				expect(messages[1].role).toBe("user");
 				expect((messages[1] as UserMessage).content).toBe(
 					"New message from another tab",
 				);
-				expect(messages[2].role).toBe("assistant");
 			});
 		});
 
@@ -1625,12 +1627,15 @@ describe("messageReducer", () => {
 			expect(messages).toHaveLength(3);
 		});
 
-		it("finalizes a streaming assistant before the event", () => {
+		// The turn that is writing ends on its own ending, not on the next message
+		// arriving below it — a system-driven message is no different.
+		it("leaves a streaming assistant open above the event", () => {
 			const streaming = applyServerEvent([], { type: "text", content: "hi" });
 			const messages = applyServerEvent(streaming, kickoff);
 
-			expect((messages[0] as AssistantMessage).status).toBe("complete");
+			expect((messages[0] as AssistantMessage).status).toBe("streaming");
 			expect((messages[1] as UserMessage).source).toBe("system");
+			expect(messages).toHaveLength(2);
 		});
 
 		it("treats history recorded without a work_id the same way", () => {
@@ -1687,13 +1692,17 @@ describe("messageReducer", () => {
 			expect(messages.map((m) => m.role)).toEqual(["user", "assistant"]);
 		});
 
-		it("drops one the agent left mid-turn without writing to", () => {
+		// Not dropped: it is the open turn, and the follow-up went into that turn.
+		// It is emptiness plus an *ending* that makes a placeholder disposable, and
+		// the ending has not arrived — see "drops a turn that ends on done having
+		// written nothing" below for where it gets collected.
+		it("keeps one the agent is still free to write into", () => {
 			const messages = applyUserMessage(
 				[placeholder("streaming")],
 				"Follow up",
 			);
 
-			expect(messages.map((m) => m.role)).toEqual(["user", "assistant"]);
+			expect(messages.map((m) => m.role)).toEqual(["assistant", "user"]);
 		});
 
 		it("keeps one the agent did write into", () => {
@@ -1728,15 +1737,20 @@ describe("messageReducer", () => {
 			expect((messages[0] as AssistantMessage).status).toBe(status);
 		});
 
+		// The second one arrives into the turn the first opened, so the first's
+		// placeholder stays — and is collected when that turn ends having written
+		// nothing, which is what leaves no blank bubble behind.
 		it("leaves no blank bubble between two system messages", () => {
 			let messages = applyServerEvent([], systemMessage);
 			messages = applyServerEvent(messages, systemMessage);
-
 			expect(messages.map((m) => m.role)).toEqual([
 				"user",
-				"user",
 				"assistant",
+				"user",
 			]);
+
+			messages = applyServerEvent(messages, { type: "done" });
+			expect(messages.map((m) => m.role)).toEqual(["user", "user"]);
 		});
 
 		// A turn can also end at the tail of the transcript with nothing written:
@@ -1774,7 +1788,11 @@ describe("messageReducer", () => {
 			expect(assistant.parts).toEqual([]);
 		});
 
-		it("finalizes streaming assistant before adding user message", () => {
+		// The whole of the mid-turn send: the reply being written belongs to the
+		// turn that was already running, not to what was just typed, so it is
+		// neither closed nor given a sibling placeholder — it keeps growing where
+		// it is and the message lands underneath it.
+		it("leaves a streaming reply open and appends below it", () => {
 			const streaming: AssistantMessage = {
 				id: "msg-1",
 				role: "assistant",
@@ -1782,10 +1800,161 @@ describe("messageReducer", () => {
 				status: "streaming",
 				createdAt: new Date(),
 			};
-			const messages = applyUserMessage([streaming], "Follow up");
+			const messages = applyUserMessage([streaming], "Also look at X");
+
+			expect(messages).toHaveLength(2);
+			expect((messages[0] as AssistantMessage).status).toBe("streaming");
+			expect(messages[1].role).toBe("user");
+		});
+	});
+
+	// A turn's bubble is opened by its first content event and closed by its
+	// terminal event — never by a user message arriving underneath it.
+	describe("turn boundaries with a message sent mid-turn", () => {
+		const midTurn = () => {
+			const messages = applyServerEvent([], {
+				type: "text",
+				content: "first half",
+			});
+			return applyUserMessage(messages, "Also look at X");
+		};
+
+		it("keeps streaming into the reply above the message", () => {
+			const messages = applyServerEvent(midTurn(), {
+				type: "text",
+				content: " second half",
+			});
+
+			expect(messages).toHaveLength(2);
+			expect(partsOf(messages[0])).toEqual([
+				{ type: "text", content: "first half second half" },
+			]);
+			expect(messages[1].role).toBe("user");
+		});
+
+		it("still closes that reply on the turn's own ending", () => {
+			const messages = applyServerEvent(midTurn(), { type: "done" });
+
 			expect((messages[0] as AssistantMessage).status).toBe("complete");
 			expect(messages[1].role).toBe("user");
-			expect(messages[2].role).toBe("assistant");
+			expect(messages).toHaveLength(2);
+		});
+
+		it("opens a fresh bubble for what comes after the ending", () => {
+			let messages = applyServerEvent(midTurn(), { type: "done" });
+			messages = applyServerEvent(messages, {
+				type: "text",
+				content: "about X",
+			});
+
+			expect(messages).toHaveLength(3);
+			expect(messages[1].role).toBe("user");
+			expect(partsOf(messages[2])).toEqual([
+				{ type: "text", content: "about X" },
+			]);
+		});
+
+		// The dependency this design accepts, stated so that breaking it breaks a
+		// red test rather than a silent assumption: a user message used to close
+		// the previous turn as well, which doubled as a backstop for a lost `done`.
+		// That backstop is gone — `done` is now the only thing separating one
+		// turn's output from the next's.
+		it("merges two turns into one bubble when the ending is lost", () => {
+			let messages = midTurn();
+			messages = applyServerEvent(messages, {
+				type: "text",
+				content: " about X",
+			});
+
+			expect(messages).toHaveLength(2);
+			expect(partsOf(messages[0])).toEqual([
+				{ type: "text", content: "first half about X" },
+			]);
+		});
+
+		// The mid-turn rule fixes an older misplacement on the way past: two
+		// messages sent back to back used to drop the first one's placeholder, so
+		// the first reply landed under the second message.
+		it("answers two messages sent back to back in their own bubbles", () => {
+			let messages = applyUserMessage([], "first");
+			messages = applyUserMessage(messages, "second");
+			expect(messages.map((m) => m.role)).toEqual([
+				"user",
+				"assistant",
+				"user",
+			]);
+
+			messages = applyServerEvent(messages, {
+				type: "text",
+				content: "answer to first",
+			});
+			expect(partsOf(messages[1])).toEqual([
+				{ type: "text", content: "answer to first" },
+			]);
+
+			messages = applyServerEvent(messages, { type: "done" });
+			messages = applyServerEvent(messages, {
+				type: "text",
+				content: "answer to second",
+			});
+			expect(messages.map((m) => m.role)).toEqual([
+				"user",
+				"assistant",
+				"user",
+				"assistant",
+			]);
+			expect(partsOf(messages[3])).toEqual([
+				{ type: "text", content: "answer to second" },
+			]);
+		});
+
+		// A refused send leaves its reason below the message, so the running turn
+		// is no longer the last assistant in the list. Finding it anyway is what
+		// keeps its `done` from being dropped as belonging to no one, which would
+		// leave a spinner nothing on screen could stop.
+		it("keeps writing to the running turn under a failed send's reason", () => {
+			const failed: AssistantMessage = {
+				id: "send-failed",
+				role: "assistant",
+				parts: [],
+				status: "error",
+				error: "Failed to send message: connection lost",
+				createdAt: new Date(),
+			};
+			let messages = [...midTurn(), failed];
+
+			messages = applyServerEvent(messages, {
+				type: "text",
+				content: " second half",
+			});
+			expect(partsOf(messages[0])).toEqual([
+				{ type: "text", content: "first half second half" },
+			]);
+
+			messages = applyServerEvent(messages, { type: "done" });
+			expect((messages[0] as AssistantMessage).status).toBe("complete");
+			expect(messages.map((m) => m.role)).toEqual([
+				"assistant",
+				"user",
+				"assistant",
+			]);
+		});
+
+		// Output the CLI was already producing when the turn was cut short belongs
+		// to the turn it was cut from, which is the bubble above the message — not
+		// to the message, which the agent never got to.
+		it("keeps output trailing an interrupt in the interrupted bubble", () => {
+			let messages = applyServerEvent(midTurn(), { type: "interrupted" });
+			messages = applyServerEvent(messages, {
+				type: "text",
+				content: " trailing",
+			});
+
+			expect(messages).toHaveLength(2);
+			expect((messages[0] as AssistantMessage).status).toBe("interrupted");
+			expect(partsOf(messages[0])).toEqual([
+				{ type: "text", content: "first half trailing" },
+			]);
 		});
 	});
 
@@ -1976,10 +2145,15 @@ describe("messageReducer", () => {
 			).toBeUndefined();
 		});
 
-		it("handles incomplete assistant without done event", () => {
+		// Turn boundaries survive replay because `done` does: the second message
+		// went into the first turn, and only its ending starts a new bubble. (What
+		// happens when that ending is missing is stated once, in "turn boundaries
+		// with a message sent mid-turn".)
+		it("splits turns on done rather than on the messages between them", () => {
 			const history = [
 				{ type: "message", content: "First" },
 				{ type: "text", content: "Partial..." },
+				{ type: "done" },
 				{ type: "message", content: "Second" },
 				{ type: "text", content: "Complete" },
 				{ type: "done" },
@@ -1995,8 +2169,11 @@ describe("messageReducer", () => {
 		});
 
 		it("includes system messages as content parts", () => {
+			// The banner's own turn ends before the message: nothing else closes a
+			// bubble now, so without the `done` the reply would grow into it.
 			const history = [
 				{ type: "system", content: "Welcome!" },
+				{ type: "done" },
 				{ type: "message", content: "Hello" },
 				{ type: "text", content: "Hi!" },
 				{ type: "done" },

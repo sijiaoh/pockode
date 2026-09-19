@@ -52,7 +52,7 @@ describe("BlockerStrip", () => {
 			/>,
 		);
 
-		expect(screen.getByText("Waiting for your answer.")).toBeInTheDocument();
+		expect(screen.getByText(/Waiting for your answer\./)).toBeInTheDocument();
 		await user.click(screen.getByRole("button", { name: "Jump to question" }));
 		expect(onJump).toHaveBeenCalledWith("q1");
 	});
@@ -70,7 +70,7 @@ describe("BlockerStrip", () => {
 		);
 
 		expect(
-			screen.getByText("Waiting for your permission."),
+			screen.getByText(/Waiting for your permission\./),
 		).toBeInTheDocument();
 		await user.click(screen.getByRole("button", { name: "Jump to request" }));
 		expect(onJump).toHaveBeenCalledWith("p1");
@@ -98,6 +98,85 @@ describe("BlockerStrip", () => {
 		);
 		// Stated as a time, never as a countdown to a lease the user cannot change.
 		expect(detail.textContent).toMatch(/since \d{1,2}:\d{2}/);
+	});
+
+	// A disabled Send with no reason on screen is a silent failure. The strip is
+	// the only place that reason can go, so the sentence is part of the refusal,
+	// not decoration.
+	it.each<[string, TurnBlocker]>([
+		["question", question],
+		["permission", permission],
+	])("says why sending is refused during a %s", (_kind, blocker) => {
+		render(
+			<BlockerStrip
+				turn={turn("blocked", [blocker])}
+				onJumpToRequest={vi.fn()}
+			/>,
+		);
+
+		expect(
+			screen.getByText(/Answer above or Stop before sending\./),
+		).toBeInTheDocument();
+	});
+
+	// The receipt for a message sent into a running turn. Without it the reply
+	// above simply keeps growing and nothing appears under the message, so a send
+	// that landed and a send that vanished look identical.
+	describe("a message sent into the running turn", () => {
+		it("is acknowledged while the turn runs on", () => {
+			render(
+				<BlockerStrip
+					turn={turn("running")}
+					onJumpToRequest={vi.fn()}
+					sendPending
+				/>,
+			);
+
+			expect(
+				screen.getByText("Sent into the reply the agent is working on."),
+			).toBeInTheDocument();
+		});
+
+		// Sending *is* allowed during a background wait, so this is the one state
+		// where the receipt has to outrank a blocker — otherwise a message lands
+		// there with no acknowledgement at all.
+		it("outranks a background wait", () => {
+			render(
+				<BlockerStrip
+					turn={turn("blocked", [background])}
+					onJumpToRequest={vi.fn()}
+					sendPending
+				/>,
+			);
+
+			expect(
+				screen.getByText("Sent into the reply the agent is working on."),
+			).toBeInTheDocument();
+			expect(screen.queryByText(/nothing to answer/)).not.toBeInTheDocument();
+		});
+
+		// A prompt is what the session is stuck on and what sending is refused
+		// for; the receipt can wait. Reachable because a request can be raised
+		// after the message went in.
+		it.each<[string, TurnBlocker]>([
+			["question", question],
+			["permission", permission],
+		])("yields to a %s", (_kind, blocker) => {
+			render(
+				<BlockerStrip
+					turn={turn("blocked", [blocker])}
+					onJumpToRequest={vi.fn()}
+					sendPending
+				/>,
+			);
+
+			expect(
+				screen.queryByText("Sent into the reply the agent is working on."),
+			).not.toBeInTheDocument();
+			expect(
+				screen.getByText(/Answer above or Stop before sending\./),
+			).toBeInTheDocument();
+		});
 	});
 
 	// There is no per-task kill: the model gives the host no way to end one task

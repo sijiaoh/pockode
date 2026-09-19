@@ -452,6 +452,10 @@ func TestReduceTurnProcessDeathExpiresAPromptWithNoTurn(t *testing.T) {
 // Sending a message instead of answering abandons the prompt: the answer is not
 // coming, so the blocker expires rather than lingering for one that never
 // arrives.
+//
+// The send path refuses a user's message in this state (chat.ErrTurnAwaitingAnswer),
+// because the CLI would not read it — but the rule is the reducer's and holds for
+// every way a prompt can arrive, including the race that check cannot close.
 func TestReduceTurnPromptOvertakesAnUnansweredBlocker(t *testing.T) {
 	state := drive(TurnState{},
 		in(SignalPrompt, 0),

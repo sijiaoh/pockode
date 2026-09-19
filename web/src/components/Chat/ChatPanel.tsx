@@ -174,6 +174,7 @@ function ChatPanel({
 		loadedHistoryPages,
 		loadMoreHistory,
 		turnOpen,
+		isSendPending,
 		turn,
 		mode,
 		agentType,
@@ -212,6 +213,21 @@ function ChatPanel({
 	// fast resolve restart the delay and produce a longer blank than no delay.
 	const isChatPending = !isSessionResolved || isLoadingHistory;
 	const showSkeleton = useDelayedFlag(isChatPending, SKELETON_DELAY_MS);
+
+	// The one thing that still refuses a send. An open turn is not it — both CLIs
+	// steer the running turn with whatever arrives — but a permission or question
+	// request owns the agent's next line of input: a message sent over it expires
+	// the card without the CLI ever reading either, which used to hang the turn
+	// for good, so the server refuses it too (docs/lifecycle-ui.md §2.3). The
+	// user's exits are the card itself and Stop, and both are on screen.
+	//
+	// A background wait is deliberately not here: nobody has to answer it, the CLI
+	// is between turns and reads what arrives.
+	const promptOwnsInput =
+		turn.phase === "blocked" &&
+		(turn.blockers ?? []).some(
+			(b) => b.kind === "permission" || b.kind === "question",
+		);
 
 	const markSessionRead = useWSStore((s) => s.actions.markSessionRead);
 
@@ -537,7 +553,11 @@ function ChatPanel({
 			{/* Why the agent is quiet, stated where the transcript ends
 			    (docs/lifecycle-ui.md §2.2). */}
 			{!overlay && !isChatPending && (
-				<BlockerStrip turn={turn} onJumpToRequest={handleJumpToRequest} />
+				<BlockerStrip
+					turn={turn}
+					onJumpToRequest={handleJumpToRequest}
+					sendPending={isSendPending}
+				/>
 			)}
 			{/* Session action bar */}
 			{!overlay && settingError && (
@@ -632,7 +652,7 @@ function ChatPanel({
 				<InputBar
 					sessionId={sessionId}
 					onSend={handleSend}
-					canSend={status === "connected" && !isChatPending}
+					canSend={status === "connected" && !isChatPending && !promptOwnsInput}
 					disabled={!isSessionResolved}
 					turnOpen={turnOpen}
 					onStop={handleInterrupt}

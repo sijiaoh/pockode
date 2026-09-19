@@ -31,11 +31,10 @@ interface Props {
 	 */
 	disabled?: boolean;
 	/**
-	 * A turn is under way, so the agent's stdin belongs to it. Sending is refused
-	 * — a message would either be dropped or arrive in an order nobody chose —
-	 * but typing is not, so a draft written during the wait survives it
-	 * (docs/lifecycle-ui.md §2.3). The user's exits are the card on screen and
-	 * Stop, and both are visible while this holds.
+	 * A turn is under way — read only for what a bar chooses to *say* about it,
+	 * never to refuse a send. `InputBarProps` in the chat UI registry states why;
+	 * this bar has nothing left to do with it, and takes it only because the host
+	 * passes one prop set to whichever bar is installed.
 	 */
 	turnOpen?: boolean;
 }
@@ -49,7 +48,6 @@ function InputBar({
 	onSend,
 	canSend = true,
 	disabled = false,
-	turnOpen = false,
 }: Props) {
 	const input = useInputStore((state) => state.inputs[sessionId] ?? "");
 	const isPrimaryPointerCoarse = useHasCoarsePointer();
@@ -146,14 +144,13 @@ function InputBar({
 		[setInput],
 	);
 
-	// One gate for both ways to send. The button's `disabled` is the affordance,
-	// not the guard: Enter reaches `handleSend` without going near it, so a rule
-	// written only on the button is a rule the keyboard does not have.
-	const canSubmit = canSend && !turnOpen;
-
+	// `canSend` is checked here rather than only on the button, because the button
+	// is the affordance and not the guard: Enter reaches this without going near
+	// it, so a rule written only on `disabled` is a rule the keyboard does not
+	// have.
 	const handleSend = useCallback(() => {
 		const trimmed = input.trim();
-		if (trimmed && canSubmit) {
+		if (trimmed && canSend) {
 			saveToHistory(trimmed);
 			resetNavigation();
 			onSend(trimmed);
@@ -166,7 +163,7 @@ function InputBar({
 	}, [
 		input,
 		onSend,
-		canSubmit,
+		canSend,
 		sessionId,
 		saveToHistory,
 		resetNavigation,
@@ -355,7 +352,7 @@ function InputBar({
 				<button
 					type="button"
 					onClick={handleSend}
-					disabled={disabled || !canSubmit || !input.trim()}
+					disabled={disabled || !canSend || !input.trim()}
 					className="h-9 rounded-lg bg-th-accent px-3 pointer-coarse:h-11 text-th-accent-text hover:bg-th-accent-hover disabled:cursor-not-allowed disabled:opacity-50 sm:px-4"
 				>
 					Send
