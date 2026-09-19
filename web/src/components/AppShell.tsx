@@ -508,7 +508,7 @@ function AppShell() {
 		if (wsStatus === "error" || wsStatus === "reconnecting") {
 			return (
 				<div
-					className="flex h-dvh flex-col items-center justify-center gap-4 bg-th-bg-primary"
+					className="flex min-h-dvh flex-col items-center justify-center gap-4 bg-th-bg-primary"
 					role="alert"
 				>
 					<div className="text-th-text-muted">
@@ -531,7 +531,7 @@ function AppShell() {
 		if (createError) {
 			return (
 				<div
-					className="flex h-dvh flex-col items-center justify-center gap-4 bg-th-bg-primary px-6 text-center"
+					className="flex min-h-dvh flex-col items-center justify-center gap-4 bg-th-bg-primary px-6 text-center"
 					role="alert"
 				>
 					<div className="text-th-text-muted">
@@ -554,7 +554,7 @@ function AppShell() {
 		return (
 			// biome-ignore lint/a11y/useSemanticElements: loading indicator is not a form output
 			<div
-				className="flex h-dvh items-center justify-center bg-th-bg-primary"
+				className="flex min-h-dvh items-center justify-center bg-th-bg-primary"
 				role="status"
 				aria-label="Loading"
 			>
@@ -564,7 +564,11 @@ function AppShell() {
 	}
 
 	return (
-		<div className="flex h-dvh flex-col">
+		// Clips because it is exactly the viewport: a descendant that grew the
+		// document would make the page itself the scroll container an inner
+		// list's overscroll chains into
+		// (docs/responsive-ui.md § Who owns the scroll boundary).
+		<div className="flex h-dvh flex-col overflow-hidden">
 			{createError && (
 				// Wraps rather than truncates: the reason is server text of any
 				// length, and the narrow screens this app targets are exactly where
