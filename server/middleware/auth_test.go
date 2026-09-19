@@ -3,13 +3,20 @@ package middleware
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
-func TestAuth(t *testing.T) {
-	const validToken = "test-token"
+// fakeSessions accepts exactly one session token.
+type fakeSessions struct{ valid string }
 
-	handler := Auth(validToken)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+func (f fakeSessions) Validate(token string) bool { return token != "" && token == f.valid }
+
+func TestAuth(t *testing.T) {
+	const password = "test-password"
+	const sessionToken = "test-session-token"
+
+	handler := Auth(password, fakeSessions{valid: sessionToken})(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("ok"))
 	}))
@@ -45,15 +52,21 @@ func TestAuth(t *testing.T) {
 			wantStatus: http.StatusUnauthorized,
 		},
 		{
-			name:       "invalid token",
+			name:       "invalid credential",
 			path:       "/api/ping",
-			authHeader: "Bearer wrong-token",
+			authHeader: "Bearer wrong-password",
 			wantStatus: http.StatusUnauthorized,
 		},
 		{
-			name:       "valid token",
+			name:       "password",
 			path:       "/api/ping",
-			authHeader: "Bearer " + validToken,
+			authHeader: "Bearer " + password,
+			wantStatus: http.StatusOK,
+		},
+		{
+			name:       "session token",
+			path:       "/api/ping",
+			authHeader: "Bearer " + sessionToken,
 			wantStatus: http.StatusOK,
 		},
 	}
@@ -70,6 +83,11 @@ func TestAuth(t *testing.T) {
 
 			if rec.Code != tt.wantStatus {
 				t.Errorf("got status %d, want %d", rec.Code, tt.wantStatus)
+			}
+			// Every refusal reads the same, so a caller cannot learn from the
+			// reply whether the header was missing, malformed or simply wrong.
+			if tt.wantStatus == http.StatusUnauthorized && strings.TrimSpace(rec.Body.String()) != "Invalid credentials" {
+				t.Errorf("got body %q, want %q", rec.Body.String(), "Invalid credentials")
 			}
 		})
 	}

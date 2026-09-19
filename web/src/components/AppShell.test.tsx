@@ -207,7 +207,7 @@ describe("AppShell when the server is unreachable", () => {
 			isLoading: true,
 			isSuccess: false,
 		});
-		useAuthStore.setState({ token: "test-token" });
+		useAuthStore.setState({ sessionToken: "test-session-token" });
 		ws.status = "reconnecting";
 		return () => {
 			ws.status = "connected";
@@ -235,7 +235,7 @@ describe("AppShell when the automatic session create fails", () => {
 			isLoading: true,
 			isSuccess: false,
 		});
-		useAuthStore.setState({ token: "test-token" });
+		useAuthStore.setState({ sessionToken: "test-session-token" });
 	});
 
 	it("attempts once, shows the reason, and creates on retry", async () => {
@@ -302,7 +302,7 @@ describe("AppShell cross-worktree navigation", () => {
 			showTaskSessions: false,
 		});
 		useWorkStore.setState({ works: [] });
-		useAuthStore.setState({ token: "test-token" });
+		useAuthStore.setState({ sessionToken: "test-session-token" });
 		// Mimic wsStore's worktree switch handling: once the switch RPC completes,
 		// the session list resubscribes against the new worktree.
 		unsubscribeSwitch = worktreeActions.onWorktreeChange(() => {
@@ -443,7 +443,7 @@ describe("AppShell sidebar form and its switch", () => {
 			showTaskSessions: false,
 		});
 		useWorkStore.setState({ works: [] });
-		useAuthStore.setState({ token: "test-token" });
+		useAuthStore.setState({ sessionToken: "test-session-token" });
 		ws.status = "connected";
 	});
 

@@ -1,3 +1,4 @@
+import type { AuthCredentialParams } from "@pockode/shared";
 import type { ContentBlock } from "./content";
 import type { AgentType } from "./settings";
 import type { WorkType } from "./work";
@@ -385,8 +386,8 @@ export interface AskUserQuestionRequest {
 
 // JSON-RPC 2.0 Request Params (Client → Server)
 
-export interface AuthParams {
-	token: string;
+/** The credential (see `AuthCredentialParams`) plus the worktree to bind to. */
+export interface AuthParams extends AuthCredentialParams {
 	worktree?: string;
 }
 
@@ -444,6 +445,13 @@ export interface AuthResult {
 	 * from this reply rather than hard-coded (see docs/file.md#transfer).
 	 */
 	max_upload_size: number;
+	/**
+	 * What the client stores in place of the password: freshly issued when it
+	 * authenticated with a password, and the very same token it sent when it
+	 * authenticated with one. Never a rotation, so it can be stored
+	 * unconditionally without tracking how the connection logged in.
+	 */
+	session_token: string;
 }
 
 export interface MessageParams {

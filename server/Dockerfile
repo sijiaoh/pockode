@@ -64,6 +64,6 @@ EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
     CMD curl -f http://localhost:8080/health || exit 1
 
-# Default command with required --auth-token to be overridden at runtime
+# Default command; the required --password (or POCKODE_PASSWORD) is supplied at runtime
 ENTRYPOINT ["/usr/local/bin/server"]
 CMD ["--port=8080", "--work=/workspace"]

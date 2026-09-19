@@ -143,7 +143,7 @@ function parseErrorBody(text: string): ErrorBody {
 }
 
 function toUploadError(status: number, text: string): UploadError {
-	// A rejected token is the end of the session rather than of this upload;
+	// A rejected credential is the end of the session rather than of this upload;
 	// saying so and returning to login beats a banner naming a status code.
 	if (logoutIfUnauthorized(status)) {
 		return new UploadError("Your session has expired. Sign in again.", {

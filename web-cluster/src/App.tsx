@@ -1,7 +1,8 @@
 import { Spinner } from "@pockode/shared";
 import { useEffect, useState } from "react";
+import { useShallow } from "zustand/react/shallow";
 import { NodeList } from "./components";
-import { authActions, useAuthStore } from "./lib/authStore";
+import { authActions, selectCredential, useAuthStore } from "./lib/authStore";
 import { useWSStore } from "./lib/wsStore";
 
 /**
@@ -12,16 +13,19 @@ import { useWSStore } from "./lib/wsStore";
  */
 const CONNECTING_SPINNER_DELAY_MS = 300;
 
-function getTokenFromUrl(): string | null {
+function getPasswordFromUrl(): string | null {
 	const params = new URLSearchParams(window.location.search);
-	return params.get("token");
+	// TODO: Drop the `token` spelling in v0.20.0, with the rest of the
+	// auth-token deprecations; a bookmarked link may still carry it.
+	return params.get("password") ?? params.get("token");
 }
 
 export default function App() {
 	const { status, errorMessage, actions, version } = useWSStore();
-	const token = useAuthStore((state) => state.token);
-	const [tokenInput, setTokenInput] = useState("");
-	const [tokenVisible, setTokenVisible] = useState(false);
+	// A fresh object per call, hence useShallow; see selectCredential.
+	const credential = useAuthStore(useShallow(selectCredential));
+	const [passwordInput, setPasswordInput] = useState("");
+	const [passwordVisible, setPasswordVisible] = useState(false);
 	const [inputError, setInputError] = useState<string | null>(null);
 	const [connectingVisible, setConnectingVisible] = useState(false);
 
@@ -38,32 +42,32 @@ export default function App() {
 	}, [status]);
 
 	useEffect(() => {
-		const urlToken = getTokenFromUrl();
-		if (urlToken) {
-			authActions.login(urlToken);
-			// Remove token from URL for security
+		const urlPassword = getPasswordFromUrl();
+		if (urlPassword) {
+			authActions.login(urlPassword);
+			// Remove the password from the URL for security
 			window.history.replaceState({}, "", window.location.pathname);
 		}
 	}, []);
 
 	useEffect(() => {
-		if (token && status === "disconnected") {
-			actions.connect(token);
+		if (credential && status === "disconnected") {
+			actions.connect(credential);
 		}
-	}, [token, status, actions]);
+	}, [credential, status, actions]);
 
-	const handleSubmitToken = (e: React.FormEvent) => {
+	const handleSubmitPassword = (e: React.FormEvent) => {
 		e.preventDefault();
-		const trimmed = tokenInput.trim();
+		const trimmed = passwordInput.trim();
 		if (!trimmed) {
-			setInputError("Auth token is required.");
+			setInputError("Password is required.");
 			return;
 		}
 		setInputError(null);
 		authActions.login(trimmed);
 	};
 
-	if (!token) {
+	if (!credential) {
 		return (
 			<div className="flex min-h-dvh items-center justify-center bg-th-bg-primary p-4">
 				<div className="w-full max-w-sm">
@@ -74,25 +78,26 @@ export default function App() {
 						Connect to your cluster instance.
 					</p>
 
-					<form onSubmit={handleSubmitToken} className="mt-8">
+					<form onSubmit={handleSubmitPassword} className="mt-8">
 						<label
-							htmlFor="token"
+							htmlFor="password"
 							className="mb-1 block text-sm text-th-text-secondary"
 						>
-							Auth Token
+							Password
 						</label>
-						{/* A token is long, random and usually typed on a phone
-						    keyboard; typing it blind is the worst moment in the
+						{/* A cluster password is long, random and usually typed on a
+						    phone keyboard; typing it blind is the worst moment in the
 						    product, so it can be read back. */}
 						<div className="relative">
 							<input
-								id="token"
-								type={tokenVisible ? "text" : "password"}
-								value={tokenInput}
-								onChange={(e) => setTokenInput(e.target.value)}
-								placeholder="Enter your token"
+								id="password"
+								type={passwordVisible ? "text" : "password"}
+								autoComplete="current-password"
+								value={passwordInput}
+								onChange={(e) => setPasswordInput(e.target.value)}
+								placeholder="Enter your password"
 								className="min-h-[44px] w-full rounded-lg border border-th-border bg-th-bg-secondary py-2 pl-3 pr-16 font-mono text-sm text-th-text-primary placeholder:font-sans placeholder:text-th-text-muted focus:border-th-border-focus focus:outline-none"
-								aria-describedby="token-help"
+								aria-describedby="password-help"
 								autoCapitalize="off"
 								autoCorrect="off"
 								spellCheck={false}
@@ -100,19 +105,19 @@ export default function App() {
 							/>
 							<button
 								type="button"
-								onClick={() => setTokenVisible((visible) => !visible)}
+								onClick={() => setPasswordVisible((visible) => !visible)}
 								className="touch-target absolute inset-y-0 right-0 flex items-center px-3 text-xs font-medium text-th-text-secondary hover:text-th-text-primary"
 							>
-								{tokenVisible ? "Hide" : "Show"}
+								{passwordVisible ? "Hide" : "Show"}
 							</button>
 						</div>
 						{/* Described by the field rather than merely placed under it:
-						    where the token comes from is the answer to the question the
-						    field raises, and a reader who never sees the layout would
-						    otherwise never be given it. */}
-						<p id="token-help" className="mt-1 text-xs text-th-text-muted">
-							The <code className="font-mono">--auth-token</code> you started
-							the cluster with.
+						    where the password comes from is the answer to the question
+						    the field raises, and a reader who never sees the layout
+						    would otherwise never be given it. */}
+						<p id="password-help" className="mt-1 text-xs text-th-text-muted">
+							The <code className="font-mono">--password</code> you started the
+							cluster with.
 						</p>
 						{inputError && (
 							<p className="mt-2 text-sm text-th-error">{inputError}</p>
@@ -166,14 +171,14 @@ export default function App() {
 					Authentication failed
 				</h2>
 				<p className="text-sm text-th-text-secondary">
-					{errorMessage || "Check the cluster token and try again."}
+					{errorMessage || "Check the cluster password and try again."}
 				</p>
 				<button
 					type="button"
 					onClick={() => {
 						actions.disconnect();
 						authActions.logout();
-						setTokenInput("");
+						setPasswordInput("");
 					}}
 					className="mt-4 min-h-[44px] rounded-lg bg-th-accent px-4 py-2 text-sm font-medium text-th-accent-text hover:bg-th-accent-hover"
 				>
@@ -214,7 +219,7 @@ export default function App() {
 				</p>
 				<button
 					type="button"
-					onClick={() => actions.connect(token)}
+					onClick={() => actions.connect(credential)}
 					className="mt-4 min-h-[44px] rounded-lg bg-th-accent px-4 py-2 text-sm font-medium text-th-accent-text hover:bg-th-accent-hover"
 				>
 					Retry

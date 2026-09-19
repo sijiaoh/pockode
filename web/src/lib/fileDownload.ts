@@ -60,7 +60,7 @@ function downloadUrl(path: string, worktree: string): string {
  * and the status stands in for it.
  */
 async function readError(response: Response): Promise<Error> {
-	// A rejected token is the end of the session rather than of this download;
+	// A rejected credential is the end of the session rather than of this download;
 	// saying so and returning to login beats a banner naming a status code.
 	if (logoutIfUnauthorized(response.status)) {
 		return new Error("Your session has expired. Sign in again.");

@@ -1,6 +1,12 @@
-import { getWebSocketUrl } from "@pockode/shared";
+import {
+	type AuthCredential,
+	authFailureReason,
+	credentialParams,
+	getWebSocketUrl,
+} from "@pockode/shared";
 import { JSONRPCClient, JSONRPCErrorException } from "json-rpc-2.0";
 import { create } from "zustand";
+import { authActions } from "./authStore";
 import { createNodeActions, type NodeActions } from "./rpc";
 
 const RPC_TIMEOUT_MS = 30000;
@@ -42,10 +48,12 @@ type ConnectionStatus =
 
 interface AuthResult {
 	version: string;
+	/** What the client stores in place of the password. */
+	session_token: string;
 }
 
 interface RPCActions extends NodeActions {
-	connect: (token: string) => void;
+	connect: (credential: AuthCredential) => void;
 	disconnect: () => void;
 	retryNow: () => void;
 }
@@ -68,14 +76,14 @@ interface WSState {
 interface InternalState {
 	socket: WebSocket | null;
 	client: JSONRPCClient | null;
-	token: string | null;
+	credential: AuthCredential | null;
 	reconnectTimeout: ReturnType<typeof setTimeout> | null;
 }
 
 const internal: InternalState = {
 	socket: null,
 	client: null,
-	token: null,
+	credential: null,
 	reconnectTimeout: null,
 };
 
@@ -102,11 +110,11 @@ export const useWSStore = create<WSState>()((set, get) => {
 	};
 
 	const scheduleReconnect = () => {
-		// Without a token there is nothing to retry with; that needs the user.
-		if (!internal.token) {
+		// Without a credential there is nothing to retry with; that needs the user.
+		if (!internal.credential) {
 			set({
 				status: "error",
-				errorMessage: "No token to reconnect with",
+				errorMessage: "No credential to reconnect with",
 			});
 			return;
 		}
@@ -116,13 +124,13 @@ export const useWSStore = create<WSState>()((set, get) => {
 		const delay = reconnectDelay(attempts);
 
 		internal.reconnectTimeout = setTimeout(() => {
-			if (internal.token) {
-				connectInternal(internal.token);
+			if (internal.credential) {
+				connectInternal(internal.credential);
 			}
 		}, delay);
 	};
 
-	const connectInternal = (token: string) => {
+	const connectInternal = (credential: AuthCredential) => {
 		clearReconnectTimeout();
 
 		// A previous socket may still be opening — the unreachable screen's Retry
@@ -147,7 +155,7 @@ export const useWSStore = create<WSState>()((set, get) => {
 		if (get().status !== "reconnecting") {
 			set({ status: "connecting", errorMessage: null });
 		}
-		internal.token = token;
+		internal.credential = credential;
 
 		const socket = new WebSocket(getWebSocketUrl());
 		internal.socket = socket;
@@ -159,7 +167,19 @@ export const useWSStore = create<WSState>()((set, get) => {
 			try {
 				const result: AuthResult = await client
 					.timeout(RPC_TIMEOUT_MS)
-					.request("auth", { token });
+					.request("auth", credentialParams(credential));
+
+				// The password — if that is what got us in — has done its job and is
+				// replaced by the token the server issued, so a reconnect never needs
+				// it again. A server too old to issue one leaves the credential as it
+				// was.
+				if (result.session_token) {
+					internal.credential = {
+						kind: "session_token",
+						value: result.session_token,
+					};
+					authActions.rememberSession(result.session_token);
+				}
 
 				set({
 					status: "connected",
@@ -170,10 +190,22 @@ export const useWSStore = create<WSState>()((set, get) => {
 			} catch (err) {
 				// Not a rejection: the request timed out or the socket died mid-auth.
 				// Close (a no-op if it is already gone) and let onclose run the normal
-				// reconnect path instead of showing a dead-end token screen.
+				// reconnect path instead of showing a dead-end password screen.
 				if (!isAuthRejection(err)) {
 					console.warn("Auth did not complete, retrying:", err);
 					socket.close();
+					return;
+				}
+
+				// A stored session the cluster no longer knows is nobody's mistake:
+				// drop it and fall back to the password screen without an error.
+				if (authFailureReason(err) === "session_expired") {
+					authActions.forgetSession();
+					internal.credential = null;
+					// Status before close, as in disconnect(): onclose must see
+					// "disconnected" and not schedule a reconnect on the way past.
+					set({ status: "disconnected", errorMessage: null });
+					internal.socket?.close();
 					return;
 				}
 
@@ -238,7 +270,7 @@ export const useWSStore = create<WSState>()((set, get) => {
 		reconnectAttempts: 0,
 		actions: {
 			...nodeActions,
-			connect: (token: string) => {
+			connect: (credential: AuthCredential) => {
 				// A socket is already active or being established; don't open a
 				// second one. Without this guard a re-entrant connect (e.g. React
 				// StrictMode double-invoking App's connect effect, which captures a
@@ -251,22 +283,22 @@ export const useWSStore = create<WSState>()((set, get) => {
 					return;
 				}
 				set({ reconnectAttempts: 0 });
-				connectInternal(token);
+				connectInternal(credential);
 			},
 			// Deliberately not connect(): that resets the attempt counter, and a
 			// hand-pressed retry that also fails should resume the backoff where it
 			// was rather than restart it from one second. connectInternal disarms
 			// the pending timer itself.
 			retryNow: () => {
-				if (!internal.token) return;
-				connectInternal(internal.token);
+				if (!internal.credential) return;
+				connectInternal(internal.credential);
 			},
 			disconnect: () => {
 				clearReconnectTimeout();
-				internal.token = null;
-				// Auto-reconnect is already off: token is cleared and onclose bails on
-				// "disconnected". Reset so a later connect() starts at the short end of
-				// the backoff. Mirrors the web client.
+				internal.credential = null;
+				// Auto-reconnect is already off: the credential is cleared and
+				// onclose bails on "disconnected". Reset so a later connect() starts
+				// at the short end of the backoff. Mirrors the web client.
 				//
 				// Set status BEFORE closing so onclose sees "disconnected" and skips
 				// scheduleReconnect(); otherwise closing a connected socket would flip

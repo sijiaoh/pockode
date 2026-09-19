@@ -1,11 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("./wsStore", () => ({
-	wsActions: {
-		disconnect: vi.fn(),
-	},
-}));
-
 // Same as wsStore/queryClient: the dynamic import of the module under test is
 // what outruns the 5s default under load, not anything these cases wait for.
 describe("authStore", { timeout: 20_000 }, () => {
@@ -19,49 +13,107 @@ describe("authStore", { timeout: 20_000 }, () => {
 	});
 
 	describe("initial state", () => {
-		it("token is set when it exists in storage", async () => {
-			localStorage.setItem("auth_token", "test-token");
+		it("restores the session token from storage", async () => {
+			localStorage.setItem("auth_session_token", "stored-session");
 
 			const { useAuthStore } = await import("./authStore");
-			expect(useAuthStore.getState().token).toBe("test-token");
+			expect(useAuthStore.getState().sessionToken).toBe("stored-session");
 		});
 
-		it("token is null when no token in storage", async () => {
-			const { useAuthStore } = await import("./authStore");
-			expect(useAuthStore.getState().token).toBeNull();
+		it("starts with no credential when storage is empty", async () => {
+			const { useAuthStore, authActions } = await import("./authStore");
+
+			expect(useAuthStore.getState().sessionToken).toBeNull();
+			expect(authActions.getCredential()).toBeNull();
+		});
+
+		// The password used to be what was stored. An install that still has one
+		// sitting in localStorage must not keep carrying it.
+		it("wipes a password left behind by an older version", async () => {
+			localStorage.setItem("auth_token", "the-users-password");
+
+			await import("./authStore");
+
+			expect(localStorage.getItem("auth_token")).toBeNull();
 		});
 	});
 
 	describe("authActions", () => {
-		it("login saves token to storage and state", async () => {
+		it("keeps the typed password out of storage", async () => {
 			const { useAuthStore, authActions } = await import("./authStore");
 
-			authActions.login("new-token");
+			authActions.login("hunter2");
 
-			expect(localStorage.getItem("auth_token")).toBe("new-token");
-			expect(useAuthStore.getState().token).toBe("new-token");
+			expect(useAuthStore.getState().password).toBe("hunter2");
+			expect(localStorage.getItem("auth_session_token")).toBeNull();
+			expect(authActions.getCredential()).toEqual({
+				kind: "password",
+				value: "hunter2",
+			});
 		});
 
-		it("logout disconnects WebSocket, clears token from storage and state", async () => {
-			const { wsActions } = await import("./wsStore");
+		it("replaces the password with the issued session token", async () => {
 			const { useAuthStore, authActions } = await import("./authStore");
 
-			authActions.login("token");
-			authActions.logout();
+			authActions.login("hunter2");
+			authActions.rememberSession("issued-session");
 
-			expect(wsActions.disconnect).toHaveBeenCalled();
-			expect(localStorage.getItem("auth_token")).toBeNull();
-			expect(useAuthStore.getState().token).toBeNull();
+			expect(localStorage.getItem("auth_session_token")).toBe("issued-session");
+			expect(useAuthStore.getState().password).toBeNull();
+			expect(authActions.getCredential()).toEqual({
+				kind: "session_token",
+				value: "issued-session",
+			});
+			expect(authActions.getBearer()).toBe("issued-session");
 		});
 
-		it("getToken returns current token", async () => {
+		it("forgetSession drops the stored token", async () => {
+			const { useAuthStore, authActions } = await import("./authStore");
+
+			authActions.rememberSession("issued-session");
+			authActions.forgetSession();
+
+			expect(localStorage.getItem("auth_session_token")).toBeNull();
+			expect(useAuthStore.getState().sessionToken).toBeNull();
+		});
+
+		// The one thing that separates forgetSession from logout, and the reason
+		// the cluster's `?password=` link still works after its session lapses:
+		// a load that has both a restored token and a password waiting behind it
+		// falls back to the password rather than to the login screen. Only this
+		// order reaches it — `rememberSession` wipes the password, so a password
+		// typed *after* a token was issued is already gone.
+		it("falls back to a waiting password when the token is dropped", async () => {
+			localStorage.setItem("auth_session_token", "stale-session");
 			const { authActions } = await import("./authStore");
 
-			authActions.login("my-token");
-			expect(authActions.getToken()).toBe("my-token");
+			authActions.login("hunter2");
+			expect(authActions.getCredential()).toEqual({
+				kind: "session_token",
+				value: "stale-session",
+			});
 
+			authActions.forgetSession();
+
+			expect(authActions.getCredential()).toEqual({
+				kind: "password",
+				value: "hunter2",
+			});
+		});
+
+		it("logout clears both credentials", async () => {
+			const { useAuthStore, authActions } = await import("./authStore");
+
+			authActions.login("hunter2");
+			authActions.rememberSession("issued-session");
 			authActions.logout();
-			expect(authActions.getToken()).toBe("");
+
+			expect(localStorage.getItem("auth_session_token")).toBeNull();
+			expect(useAuthStore.getState()).toMatchObject({
+				sessionToken: null,
+				password: null,
+			});
+			expect(authActions.getBearer()).toBe("");
 		});
 	});
 });

@@ -579,7 +579,7 @@ noticed. One representation with a test on it is the only thing that ends that.
   40px  exact  web/src/extensions/ExampleExtension/sidebarUI/CustomSidebarContent.tsx
   44px  bound  web/src/components/Chat/ModeSelector.tsx
   44px  bound  web/src/components/Worktree/WorktreeDropdown.tsx
-  48px  bound  web/src/components/Auth/TokenInput.tsx
+  48px  bound  web/src/components/Auth/PasswordInput.tsx
   48px  bound  web/src/components/Chat/CommandPalette.tsx
   48px  bound  web/src/components/Session/SessionsTab.tsx
   48px  bound  web/src/extensions/ExampleExtension/sidebarUI/SessionsTab.tsx

@@ -232,7 +232,7 @@ func TestIsRunning_Running(t *testing.T) {
 
 // --- Start ---
 
-func TestStart_EmptyToken(t *testing.T) {
+func TestStart_EmptyPassword(t *testing.T) {
 	pm := NewProcessManager()
 	node := Node{
 		ID:   "test-id",
@@ -241,9 +241,9 @@ func TestStart_EmptyToken(t *testing.T) {
 
 	err := pm.Start(node, "")
 	if err == nil {
-		t.Error("Start() with empty token should return error")
+		t.Error("Start() with empty password should return error")
 	}
-	if err.Error() != "invalid node: token is required" {
+	if err.Error() != "invalid node: password is required" {
 		t.Errorf("unexpected error: %v", err)
 	}
 }
@@ -262,7 +262,7 @@ func TestStart_AlreadyRunning(t *testing.T) {
 		Path: nodeDir,
 	}
 
-	err := pm.Start(node, "test-token")
+	err := pm.Start(node, "test-password")
 	if err != ErrNodeAlreadyRunning {
 		t.Errorf("Start() on running node should return ErrNodeAlreadyRunning, got: %v", err)
 	}
@@ -270,35 +270,40 @@ func TestStart_AlreadyRunning(t *testing.T) {
 
 // --- nodeEnv ---
 
-func TestNodeEnv_SetsTokenAndPreservesBase(t *testing.T) {
+func TestNodeEnv_SetsPasswordAndPreservesBase(t *testing.T) {
 	base := []string{"PATH=/usr/bin", "HOME=/home/user"}
-	env := nodeEnv(base, "secret-token")
+	env := nodeEnv(base, "secret-password")
 
 	for _, kv := range base {
 		if !containsEnv(env, kv) {
 			t.Errorf("nodeEnv dropped base entry %q", kv)
 		}
 	}
-	if !containsEnv(env, "POCKODE_AUTH_TOKEN=secret-token") {
-		t.Errorf("nodeEnv did not set token env var, got %v", env)
+	if !containsEnv(env, "POCKODE_PASSWORD=secret-password") {
+		t.Errorf("nodeEnv did not set the password env var, got %v", env)
 	}
 }
 
-func TestNodeEnv_OverridesInheritedToken(t *testing.T) {
-	base := []string{"POCKODE_AUTH_TOKEN=stale", "PATH=/usr/bin"}
+// A child that inherited either spelling would be given two answers to the same
+// question, and which one it obeys depends on its own build's precedence rules.
+func TestNodeEnv_OverridesInheritedCredentials(t *testing.T) {
+	base := []string{"POCKODE_PASSWORD=stale", "POCKODE_AUTH_TOKEN=stale-legacy", "PATH=/usr/bin"}
 	env := nodeEnv(base, "fresh")
 
 	count := 0
 	for _, kv := range env {
 		if strings.HasPrefix(kv, "POCKODE_AUTH_TOKEN=") {
+			t.Errorf("nodeEnv kept the deprecated env var %q", kv)
+		}
+		if strings.HasPrefix(kv, "POCKODE_PASSWORD=") {
 			count++
-			if kv != "POCKODE_AUTH_TOKEN=fresh" {
-				t.Errorf("token env = %q, want POCKODE_AUTH_TOKEN=fresh", kv)
+			if kv != "POCKODE_PASSWORD=fresh" {
+				t.Errorf("password env = %q, want POCKODE_PASSWORD=fresh", kv)
 			}
 		}
 	}
 	if count != 1 {
-		t.Errorf("expected exactly one token env entry, got %d", count)
+		t.Errorf("expected exactly one password env entry, got %d", count)
 	}
 }
 
@@ -644,7 +649,7 @@ func TestStart_WaitsForTheNodeItStartedRatherThanTheFileItFound(t *testing.T) {
 	n := Node{ID: "test-id", Path: nodeDir}
 
 	// The helper inherits these: Start hands the child os.Environ() plus the
-	// node's token.
+	// node's password.
 	t.Setenv(helperEnv, helperWritesServerInfo)
 	t.Setenv(helperReadyEnv, filepath.Join(t.TempDir(), "helper-ready"))
 	t.Setenv(helperDataDirEnv, dataDir)
@@ -652,7 +657,7 @@ func TestStart_WaitsForTheNodeItStartedRatherThanTheFileItFound(t *testing.T) {
 	pm := &ProcessManager{executablePath: os.Args[0]}
 	t.Cleanup(func() { _ = pm.Stop(n) })
 
-	if err := pm.Start(n, "test-token"); err != nil {
+	if err := pm.Start(n, "test-password"); err != nil {
 		t.Fatalf("Start() = %v, want nil", err)
 	}
 

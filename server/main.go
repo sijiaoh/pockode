@@ -21,7 +21,7 @@ import (
 	"github.com/pockode/server/agent/codex"
 	"github.com/pockode/server/agentrole"
 	"github.com/pockode/server/apiroute"
-	"github.com/pockode/server/authtoken"
+	"github.com/pockode/server/authsession"
 	"github.com/pockode/server/cluster"
 	"github.com/pockode/server/command"
 	"github.com/pockode/server/filetransfer"
@@ -33,6 +33,7 @@ import (
 	"github.com/pockode/server/logger"
 	"github.com/pockode/server/mcp"
 	"github.com/pockode/server/middleware"
+	"github.com/pockode/server/password"
 	"github.com/pockode/server/relay"
 	"github.com/pockode/server/serverinfo"
 	"github.com/pockode/server/session"
@@ -49,7 +50,7 @@ var version = "dev"
 //go:embed static/*
 var staticFS embed.FS
 
-func newHandler(token string, devMode bool, wsHandler *ws.RPCHandler, mcpHandler http.Handler, transferHandler *filetransfer.Handler) http.Handler {
+func newHandler(serverPassword string, sessions middleware.SessionValidator, devMode bool, wsHandler *ws.RPCHandler, mcpHandler http.Handler, transferHandler *filetransfer.Handler) http.Handler {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
@@ -71,10 +72,10 @@ func newHandler(token string, devMode bool, wsHandler *ws.RPCHandler, mcpHandler
 
 	// Local MCP API. middleware.Auth bypasses this exact route; mcpHandler
 	// self-auths with the locally-generated MCP token instead of the user
-	// --auth-token. The relay also refuses to forward it (loopback-only).
+	// password. The relay also refuses to forward it (loopback-only).
 	mux.Handle("POST "+mcp.APIPath, mcpHandler)
 
-	authedMux := middleware.Auth(token)(mux)
+	authedMux := middleware.Auth(serverPassword, sessions)(mux)
 
 	if !devMode {
 		return newSPAHandler(authedMux)
@@ -138,7 +139,8 @@ func main() {
 	}
 
 	portFlag := flag.Int("port", defaultPort, "server port")
-	tokenFlag := flag.String("auth-token", "", "authentication token (required; or set "+authtoken.EnvVar+")")
+	passwordFlag := flag.String("password", "", "password for the web UI (required; or set "+password.EnvVar+")")
+	legacyPasswordFlag := flag.String("auth-token", "", "deprecated alias for --password (removed in "+password.RemovalVersion+")")
 	workDirFlag := flag.String("work", ".", "working directory")
 	dataDirFlag := flag.String("data", "", "data directory (default: <work>/.pockode)")
 	devModeFlag := flag.Bool("dev", false, "enable development mode")
@@ -190,9 +192,13 @@ Flags:
 
 	port := netutil.FindAvailablePort(*portFlag)
 
-	token := authtoken.Load(*tokenFlag)
-	if token == "" {
-		slog.Error("auth token is required: set --auth-token or the " + authtoken.EnvVar + " environment variable")
+	cred, err := password.Load(*passwordFlag, *legacyPasswordFlag)
+	if err != nil {
+		slog.Error(err.Error())
+		os.Exit(1)
+	}
+	if cred.Password == "" {
+		slog.Error("a password is required: pass --password <password>, or set the " + password.EnvVar + " environment variable (which keeps it out of the process argv)")
 		os.Exit(1)
 	}
 
@@ -236,6 +242,19 @@ Flags:
 		LogFormat: *logFormatFlag,
 		LogFile:   pathutil.ExpandTilde(*logFileFlag),
 	})
+
+	if cred.DeprecationWarning != "" {
+		slog.Warn(cred.DeprecationWarning)
+	}
+
+	// Sessions are loaded before anything can authenticate. This is also where a
+	// changed password takes effect: every session issued under the old one is
+	// dropped here.
+	sessions, err := authsession.NewStore(dataDir, cred.Password)
+	if err != nil {
+		slog.Error("failed to initialize session store", "error", err)
+		os.Exit(1)
+	}
 
 	if *gitEnabledFlag {
 		gitCfg := git.Config{
@@ -361,7 +380,7 @@ Flags:
 
 	// Local API token for the MCP subprocess. Randomly generated per startup and
 	// published to server.json, so it never outlives the process and is distinct
-	// from the user-facing --auth-token.
+	// from the user-facing password.
 	mcpToken, err := generateToken()
 	if err != nil {
 		slog.Error("failed to generate MCP token", "error", err)
@@ -369,9 +388,9 @@ Flags:
 	}
 	mcpHandler := mcp.NewAPIHandler(mcp.NewExecutor(workStore, agentRoleStore, workOps, settingsStore), mcpToken)
 
-	wsHandler := ws.NewRPCHandler(token, version, devMode, commandStore, worktreeManager, settingsStore, workStore, workOps, workEngine, agentRoleStore)
+	wsHandler := ws.NewRPCHandler(cred.Password, sessions, version, devMode, commandStore, worktreeManager, settingsStore, workStore, workOps, workEngine, agentRoleStore)
 	transferHandler := filetransfer.NewHandler(registry, slog.Default())
-	handler := newHandler(token, devMode, wsHandler, mcpHandler, transferHandler)
+	handler := newHandler(cred.Password, sessions, devMode, wsHandler, mcpHandler, transferHandler)
 
 	portStr := strconv.Itoa(port)
 	srv := &http.Server{
@@ -443,6 +462,9 @@ Flags:
 			slog.Error("server shutdown error", "error", err)
 		}
 		wsHandler.Stop()
+		if err := sessions.Flush(); err != nil {
+			slog.Error("failed to persist sessions", "error", err)
+		}
 		workEngine.Stop()
 		worktreeManager.Shutdown()
 		settingsStore.StopWatching()
@@ -532,7 +554,8 @@ func runMCP() {
 func runCluster() {
 	clusterFlags := flag.NewFlagSet("cluster", flag.ExitOnError)
 	portFlag := clusterFlags.Int("port", cluster.DefaultPort, "server port")
-	tokenFlag := clusterFlags.String("auth-token", "", "authentication token (required; or set "+authtoken.EnvVar+")")
+	passwordFlag := clusterFlags.String("password", "", "password for the web UI (required; or set "+password.EnvVar+")")
+	legacyPasswordFlag := clusterFlags.String("auth-token", "", "deprecated alias for --password (removed in "+password.RemovalVersion+")")
 	dataDirFlag := clusterFlags.String("data", "", "data directory (default: ~/.pockode-cluster)")
 	relayFlag := clusterFlags.Bool("relay", true, "relay for remote access (use -relay=false to disable)")
 	relayFrontendPortFlag := clusterFlags.Int("relay-frontend-port", 0, "relay frontend port (default: same as server port)")
@@ -540,9 +563,13 @@ func runCluster() {
 	devModeFlag := clusterFlags.Bool("dev", false, "enable development mode")
 	clusterFlags.Parse(os.Args[2:])
 
-	token := authtoken.Load(*tokenFlag)
-	if token == "" {
-		fmt.Fprintln(os.Stderr, "Error: auth token is required: set --auth-token or the "+authtoken.EnvVar+" environment variable")
+	cred, err := password.Load(*passwordFlag, *legacyPasswordFlag)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "Error: "+err.Error())
+		os.Exit(1)
+	}
+	if cred.Password == "" {
+		fmt.Fprintln(os.Stderr, "Error: a password is required: pass --password <password>, or set the "+password.EnvVar+" environment variable (which keeps it out of the process argv)")
 		os.Exit(1)
 	}
 
@@ -561,14 +588,17 @@ func runCluster() {
 	}
 
 	cfg := cluster.Config{
-		Port:              *portFlag,
-		AuthToken:         token,
-		DataDir:           dataDir,
-		RelayEnabled:      *relayFlag,
-		RelayFrontendPort: *relayFrontendPortFlag,
-		CloudURL:          *cloudURLFlag,
-		Version:           version,
-		DevMode:           *devModeFlag,
+		Port:     *portFlag,
+		Password: cred.Password,
+		// Logging is not configured until cluster.Run initializes it, so the
+		// warning is handed over rather than emitted here.
+		PasswordDeprecationWarning: cred.DeprecationWarning,
+		DataDir:                    dataDir,
+		RelayEnabled:               *relayFlag,
+		RelayFrontendPort:          *relayFrontendPortFlag,
+		CloudURL:                   *cloudURLFlag,
+		Version:                    version,
+		DevMode:                    *devModeFlag,
 	}
 
 	if err := cluster.Run(cfg); err != nil {

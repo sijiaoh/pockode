@@ -39,7 +39,7 @@ Your powerful dev machine sits at home. With Pockode, you can use it from anywhe
 curl -fsSL https://pockode.com/install.sh | sh
 
 # Run (on your dev machine, in your project directory)
-pockode -auth-token YOUR_PASSWORD
+pockode -password YOUR_PASSWORD
 ```
 
 **Windows**
@@ -49,7 +49,7 @@ pockode -auth-token YOUR_PASSWORD
 irm https://pockode.com/install.ps1 | iex
 
 # Run (on your dev machine, in your project directory)
-pockode -auth-token YOUR_PASSWORD
+pockode -password YOUR_PASSWORD
 ```
 
 The Windows installer needs no administrator rights; open a new terminal afterwards so `PATH` picks it up.

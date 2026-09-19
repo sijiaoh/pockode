@@ -1,6 +1,7 @@
 import { useIsExpanded } from "@pockode/shared";
 import { useNavigate } from "@tanstack/react-router";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useShallow } from "zustand/react/shallow";
 import { useAgentOptions } from "../hooks/useAgentOptions";
 import { useAgentRoleSubscription } from "../hooks/useAgentRoleSubscription";
 import { useFileDropGuard } from "../hooks/useFileDropGuard";
@@ -10,28 +11,23 @@ import { useSessionDetailSubscription } from "../hooks/useSessionDetailSubscript
 import { useSettingsSubscription } from "../hooks/useSettingsSubscription";
 import { useWorkSubscription } from "../hooks/useWorkSubscription";
 import { useWorktree } from "../hooks/useWorktree";
-import {
-	authActions,
-	selectHasAuthToken,
-	useAuthStore,
-} from "../lib/authStore";
+import { authActions, selectCredential, useAuthStore } from "../lib/authStore";
 import { buildNavigation, overlayToNavigation } from "../lib/navigation";
 import { useWorktreeStore, worktreeActions } from "../lib/worktreeStore";
 import { useWSStore, wsActions } from "../lib/wsStore";
-import TokenInput from "./Auth/TokenInput";
+import PasswordInput from "./Auth/PasswordInput";
 import { ChatPanel } from "./Chat";
 import { SessionSidebar } from "./Session";
 import { ReconnectBanner } from "./ui";
 
 function AppShell() {
-	const hasAuthToken = useAuthStore(selectHasAuthToken);
 	const wsStatus = useWSStore((state) => state.status);
 	const navigate = useNavigate();
 	const isExpanded = useIsExpanded();
 	const [sidebarOpen, setSidebarOpen] = useState(false);
 
 	// Here rather than in `MainContainer`, which only exists once a session has
-	// resolved: the token screen, the loading screen and the "can't reach the
+	// resolved: the password screen, the loading screen and the "can't reach the
 	// server" screen are all screens someone can drop a file on, and every one of
 	// them would be replaced by it.
 	useFileDropGuard();
@@ -43,7 +39,12 @@ function AppShell() {
 	} = useRouteState();
 	const storeWorktree = useWorktreeStore((state) => state.current);
 
-	const token = useAuthStore((state) => state.token);
+	// A fresh object per call, hence useShallow; see selectCredential.
+	const credential = useAuthStore(useShallow(selectCredential));
+	const isAuthenticated = credential !== null;
+	// Why the last attempt was refused. Local because it is about one visit to
+	// the password screen, not about the credential the store keeps.
+	const [authError, setAuthError] = useState<string | null>(null);
 
 	// Sync URL worktree to store (URL is source of truth). This drives the
 	// WebSocket rebind and session-list resubscribe via worktree switch listeners.
@@ -73,13 +74,24 @@ function AppShell() {
 
 	// biome-ignore lint/correctness/useExhaustiveDependencies: intentionally exclude wsStatus to avoid bypassing retry delay
 	useEffect(() => {
-		if (token && wsStatus === "disconnected") {
-			wsActions.connect(token);
+		if (credential && wsStatus === "disconnected") {
+			wsActions.connect(credential);
 		}
-	}, [token]);
+	}, [credential]);
+
+	// The other half of the pair above, and the reason authStore can stay a leaf
+	// module: logging out — from here, from a 401 anywhere in the app, from the
+	// Settings button — is the credential going away, and the socket has to go
+	// with it.
+	useEffect(() => {
+		if (!credential) {
+			wsActions.disconnect();
+		}
+	}, [credential]);
 
 	useEffect(() => {
 		if (wsStatus === "auth_failed") {
+			setAuthError("Authentication failed — check your password.");
 			authActions.logout();
 		}
 	}, [wsStatus]);
@@ -88,12 +100,12 @@ function AppShell() {
 		worktrees,
 		isSuccess: isWorktreesLoaded,
 		isGitRepo,
-	} = useWorktree({ enabled: hasAuthToken });
+	} = useWorktree({ enabled: isAuthenticated });
 
-	useSettingsSubscription(hasAuthToken);
-	useWorkSubscription(hasAuthToken);
-	useAgentRoleSubscription(hasAuthToken);
-	useAgentOptions(hasAuthToken);
+	useSettingsSubscription(isAuthenticated);
+	useWorkSubscription(isAuthenticated);
+	useAgentRoleSubscription(isAuthenticated);
+	useAgentOptions(isAuthenticated);
 
 	// Redirect to main when URL worktree doesn't exist in worktree list
 	useEffect(() => {
@@ -137,7 +149,7 @@ function AppShell() {
 		clearCreateError,
 		deleteSession,
 		updateTitle,
-	} = useSession({ enabled: hasAuthToken, routeSessionId });
+	} = useSession({ enabled: isAuthenticated, routeSessionId });
 
 	// Whether the server is in a position to answer about this session at all:
 	// the connection is bound to the worktree the URL names, and its session
@@ -254,8 +266,9 @@ function AppShell() {
 		urlWorktree,
 	]);
 
-	const handleTokenSubmit = (token: string) => {
-		authActions.login(token);
+	const handlePasswordSubmit = (password: string) => {
+		setAuthError(null);
+		authActions.login(password);
 	};
 
 	const handleOpenSidebar = useCallback(() => {
@@ -478,8 +491,8 @@ function AppShell() {
 	// not found in $PATH" and a dropped connection must not read the same.
 	const createErrorMessage = createError?.message || "Unknown error";
 
-	if (!hasAuthToken) {
-		return <TokenInput onSubmit={handleTokenSubmit} />;
+	if (!isAuthenticated) {
+		return <PasswordInput onSubmit={handlePasswordSubmit} error={authError} />;
 	}
 
 	const showShell =

@@ -1,7 +1,7 @@
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { forgetSessionNodeToken } from "../lib/nodeToken";
+import { forgetSessionNodePassword } from "../lib/nodePassword";
 import type { NodeWithStatus } from "../types/node";
 import { NodeList, POLL_INTERVAL_MS } from "./NodeList";
 
@@ -135,10 +135,10 @@ async function cardFor(name: string) {
 	return within(heading.closest("div.rounded-lg") as HTMLElement);
 }
 
-describe("NodeList: the session's node token", () => {
+describe("NodeList: the session's node password", () => {
 	beforeEach(() => {
 		// Module state, so it outlives a render and would leak between tests.
-		forgetSessionNodeToken();
+		forgetSessionNodePassword();
 		actions.listNodes.mockResolvedValue([
 			stoppedNode("n1", "my-app"),
 			stoppedNode("n2", "other-app"),
@@ -157,7 +157,7 @@ describe("NodeList: the session's node token", () => {
 		await user.click(
 			(await cardFor("my-app")).getByRole("button", { name: "Start" }),
 		);
-		await user.type(screen.getByLabelText("Auth token"), "node-token");
+		await user.type(screen.getByLabelText("Node password"), "node-password");
 		await user.click(
 			within(screen.getByRole("dialog")).getByRole("button", { name: "Start" }),
 		);
@@ -165,7 +165,7 @@ describe("NodeList: the session's node token", () => {
 		await waitFor(() =>
 			expect(actions.startNode).toHaveBeenCalledWith({
 				id: "n1",
-				token: "node-token",
+				password: "node-password",
 			}),
 		);
 
@@ -173,24 +173,24 @@ describe("NodeList: the session's node token", () => {
 			(await cardFor("other-app")).getByRole("button", { name: "Start" }),
 		);
 
-		expect(screen.queryByLabelText("Auth token")).not.toBeInTheDocument();
+		expect(screen.queryByLabelText("Node password")).not.toBeInTheDocument();
 		expect(actions.startNode).toHaveBeenLastCalledWith({
 			id: "n2",
-			token: "node-token",
+			password: "node-password",
 		});
 	});
 
-	// A rejected token that got remembered would turn every later Start into a
+	// A rejected password that got remembered would turn every later Start into a
 	// silent one-tap failure — worse than being asked again.
-	it("does not remember a token the backend rejected", async () => {
+	it("does not remember a password the backend rejected", async () => {
 		const user = userEvent.setup();
-		actions.startNode.mockRejectedValue(new Error("invalid token"));
+		actions.startNode.mockRejectedValue(new Error("invalid password"));
 		render(<NodeList />);
 
 		await user.click(
 			(await cardFor("my-app")).getByRole("button", { name: "Start" }),
 		);
-		await user.type(screen.getByLabelText("Auth token"), "wrong-token");
+		await user.type(screen.getByLabelText("Node password"), "wrong-password");
 		await user.click(
 			within(screen.getByRole("dialog")).getByRole("button", { name: "Start" }),
 		);
@@ -201,11 +201,11 @@ describe("NodeList: the session's node token", () => {
 		// so an error rendered solely behind it would be a start that failed
 		// silently as far as the user can see.
 		expect(
-			within(screen.getByRole("dialog")).getByText(/invalid token/),
+			within(screen.getByRole("dialog")).getByText(/invalid password/),
 		).toBeInTheDocument();
 
 		// Out of the still-open sheet first: the next card is behind it, and a
-		// click that only landed on the overlay would let a remembered token go
+		// click that only landed on the overlay would let a remembered password go
 		// unnoticed.
 		await user.click(
 			within(screen.getByRole("dialog")).getByRole("button", {
@@ -220,7 +220,7 @@ describe("NodeList: the session's node token", () => {
 			(await cardFor("other-app")).getByRole("button", { name: "Start" }),
 		);
 
-		expect(await screen.findByLabelText("Auth token")).toBeInTheDocument();
+		expect(await screen.findByLabelText("Node password")).toBeInTheDocument();
 		expect(actions.startNode).toHaveBeenCalledTimes(1);
 	});
 });

@@ -350,18 +350,31 @@ Client                              Server
   ├───────────────────────────────────▶│   WebSocket handshake
   │◀───────────────────────────────────┤
   │                                    │
-  │   auth { token, worktree? }        │
-  ├───────────────────────────────────▶│   Validate token
+  │   auth { password | session_token, │
+  │          worktree? }               │
+  ├───────────────────────────────────▶│   Validate the one credential
   │                                    │   Bind to worktree
+  │                                    │   Issue a session token
   │   { version, title, work_dir,      │
   │     worktree_name,                 │
-  │     max_upload_size }              │
+  │     max_upload_size,               │
+  │     session_token }                │
   │◀───────────────────────────────────┤
   │                                    │
   │   (Authenticated - can send other requests)
 ```
 
-- Token uses constant-time comparison to prevent timing attacks
+- Exactly one credential: the password the user typed, or the `session_token` a
+  previous `auth` returned in exchange for it. Both at once is `invalid_params`
+- Both are compared in constant time to prevent timing attacks
+- The reply always carries a `session_token` — freshly issued for a password,
+  the same one back for a token — so a client stores it unconditionally
+- A refusal carries `data.reason`, and clients branch on that rather than on the
+  message: `invalid_password` keeps the user on the password screen with the
+  error, `session_expired` drops the stored token and returns there silently,
+  `not_authenticated` means a method arrived before `auth`, and
+  `worktree_not_found` — the one refusal the credential was fine for — sends the
+  client back to the main worktree for one retry
 - Optionally specify worktree; uses main worktree if not specified
 - Authentication response includes version number for detecting client/server version mismatch
 - `max_upload_size` is the ceiling on one HTTP upload request in bytes, sent so a
@@ -373,7 +386,7 @@ Client                              Server
   every route — the relay tunnel streams a request body and imposes no ceiling
   of its own.
 
-For where the server's token comes from (`--auth-token` / `POCKODE_AUTH_TOKEN`) and the overall trust model, see [Authentication](authentication.md).
+For where the server's password comes from (`--password` / `POCKODE_PASSWORD`), how a session token is issued and expired, and the overall trust model, see [Authentication](authentication.md).
 
 ### Binding a Worktree vs. Disconnect
 
@@ -452,16 +465,19 @@ type ConnectionStatus =
   | "connected"    // Authenticated and ready
   | "disconnected" // Intentionally closed (no auto-reconnect)
   | "reconnecting" // Connection lost, retrying with backoff
-  | "auth_failed"  // Server rejected the token
-  | "error";       // No token to connect with (needs user intervention)
+  | "auth_failed"  // Server rejected the credential
+  | "error";       // No credential to connect with (needs user intervention)
 ```
 
 **Key distinction**: `disconnected` indicates an intentional disconnect (user action), while `reconnecting` indicates an unexpected connection loss that triggers automatic recovery.
 
 Besides the intentional `disconnected`, `auth_failed` and `error` are the only
 states that stop retrying, so both are deliberately narrow. `error` means there is
-no token to retry *with*; a connection that merely keeps failing stays in
-`reconnecting` indefinitely rather than escalating to either of them.
+no credential to retry *with*; a connection that merely keeps failing stays in
+`reconnecting` indefinitely rather than escalating to either of them. A rejected
+*session token* reaches neither: it is nobody's mistake, so the token is dropped
+and the status goes to `disconnected`, which is the password screen with no
+error on it.
 
 ### Auto-Reconnect
 

@@ -234,10 +234,11 @@ already speaks for files: `Content-Disposition`
 for a download, `multipart/form-data` for an upload, `Range` for reading a large
 file in pieces.
 
-Both routes sit behind the same bearer-token middleware as the rest of `/api`
-(`Authorization: Bearer <token>`) — they carry no auth of their own. A download
-therefore cannot be a plain `<a href>`; the client fetches it with the header
-and saves the response itself.
+Both routes sit behind the same bearer middleware as the rest of `/api`
+(`Authorization: Bearer <credential>` — a session token from the app, the
+password from a script) — they carry no auth of their own. A download therefore
+cannot be a plain `<a href>`; the client fetches it with the header and saves
+the response itself.
 
 Both take an optional `worktree` query parameter (omitted or empty = the main
 worktree), matching the worktree a WebSocket connection binds at auth.
@@ -275,7 +276,7 @@ the response has no freshness of its own, and a browser may derive one from
 yesterday — and answer the next download from its own cache with the content
 from before the last edit, which nothing on either side would notice. Refusing
 storage also keeps workspace files out of the disk cache, which outlives the
-token that could read them.
+session that could read them.
 
 A `Range` request is answered with `206` and `Content-Range`. That is not just
 an extra: it is what gives the client a progress indication, and what lets a
@@ -612,8 +613,8 @@ under a card that says the file cannot be shown.
 The bearer header is why this cannot be a plain link (see
 [Transfer](#transfer)): the response is fetched, assembled into a Blob, and
 handed to the browser as an object URL. A `401` ends the session rather than the
-download — the token every other request carries has just been refused — so it
-logs out instead of showing a banner naming a status code.
+download — the credential every other request carries has just been refused —
+so it logs out instead of showing a banner naming a status code.
 
 **Reads are always chunked**, 4 MiB per `Range` request. What it buys now is a
 bound on memory — the assembly holds one chunk at a time rather than a whole
@@ -937,7 +938,7 @@ Three things about drag and drop are not optional:
   outside a drop zone would otherwise be opened by the browser, replacing the
   whole app — not an edge case, but what happens every time someone misses. It
   sits on the root route component and not on `MainContainer`, which only exists
-  once a session has resolved: the token screen, the loading screen and the
+  once a session has resolved: the password screen, the loading screen and the
   "can't reach the server" screen are all droppable too. It runs in the
   **capture phase** so a real drop zone, whose handler runs later on the way
   back up, can still claim the drag with `dropEffect = "copy"`; everywhere else

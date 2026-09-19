@@ -36,7 +36,7 @@ export interface NodeUpdateParams {
 
 export interface NodeStartParams {
 	id: string;
-	token: string;
+	password: string;
 }
 
 export interface NodeStopParams {

@@ -11,8 +11,12 @@ services:
       - "${PORT:-80}:8080"
     command:
       - "--port=8080"
-      - "--auth-token=${AUTH_TOKEN}"
       - "--work=/workspace"
+    # Through the environment rather than as a --password flag: a flag lands in
+    # the container's argv, which `docker inspect` and every process in the
+    # container can read.
+    environment:
+      POCKODE_PASSWORD: "${POCKODE_PASSWORD:?set POCKODE_PASSWORD to the password for the web UI}"
     volumes:
       - workspace-data:/workspace
       - claude-config:/home/pockode/.claude

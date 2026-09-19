@@ -366,7 +366,7 @@ func TestAppFlowOverACompressedConnection(t *testing.T) {
 		method string
 		params any
 	}{
-		{"auth", rpc.AuthParams{Token: "test-token"}},
+		{"auth", rpc.AuthParams{Password: testPassword}},
 		{"worktree.list", struct{}{}},
 		{"session.create", nil},
 		// An empty result stays under 126 bytes whatever the compression mode,
@@ -438,7 +438,7 @@ func TestALargeResponseLeavesAsASingleFrame(t *testing.T) {
 	sample := incompressibleFile(t, env.getMainWorktree().WorkDir, 256*1024)
 
 	c := dialRaw(t, env.server.URL, browserOffer)
-	c.call(1, "auth", rpc.AuthParams{Token: "test-token"})
+	c.call(1, "auth", rpc.AuthParams{Password: testPassword})
 	msg := c.call(2, "file.get", rpc.FileGetParams{Path: sample})
 
 	if !msg.compressed {
@@ -465,7 +465,7 @@ func TestStreamedNotificationsShareACompressionWindow(t *testing.T) {
 	env := newTestEnv(t, &mockAgent{})
 
 	c := dialRaw(t, env.server.URL, browserOffer)
-	c.call(1, "auth", rpc.AuthParams{Token: "test-token"})
+	c.call(1, "auth", rpc.AuthParams{Password: testPassword})
 
 	sessionID := "01a06f8e-0000-7000-8000-000000000001"
 	wt := env.getMainWorktree()
@@ -519,7 +519,7 @@ func TestClientThatOffersNoCompressionIsServedUncompressed(t *testing.T) {
 		t.Fatalf("Sec-WebSocket-Extensions = %q, want empty", got)
 	}
 
-	c.call(1, "auth", rpc.AuthParams{Token: "test-token"})
+	c.call(1, "auth", rpc.AuthParams{Password: testPassword})
 	msg := c.call(2, "file.get", rpc.FileGetParams{Path: sample})
 	if msg.compressed {
 		t.Fatal("server compressed for a client that did not offer the extension")

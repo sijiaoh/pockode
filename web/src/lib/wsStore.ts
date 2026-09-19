@@ -1,4 +1,9 @@
 import {
+	type AuthCredential,
+	authFailureReason,
+	credentialParams,
+} from "@pockode/shared";
+import {
 	createJSONRPCErrorResponse,
 	JSONRPCClient,
 	JSONRPCErrorCode,
@@ -42,6 +47,7 @@ import type {
 } from "../types/work";
 import { getWebSocketUrl } from "../utils/config";
 import { generateUUID } from "../utils/uuid";
+import { authActions } from "./authStore";
 import {
 	type AgentActions,
 	type AgentRoleActions,
@@ -78,7 +84,7 @@ export type ConnectionStatus =
 	| "error";
 
 interface ConnectionActions {
-	connect: (token: string) => void;
+	connect: (credential: AuthCredential) => void;
 	disconnect: () => void;
 	/** Skip the remaining backoff and attempt to reconnect immediately. */
 	retryNow: () => void;
@@ -213,7 +219,7 @@ interface WSState {
 // Module-level state for mutable objects (not reactive)
 let ws: WebSocket | null = null;
 let rpcClients: RPCClients | null = null;
-let currentToken: string | null = null;
+let currentCredential: AuthCredential | null = null;
 let reconnectTimeout: number | undefined;
 // Worktree-scoped watch callbacks.
 // Their server-side watchers live on the worktree and are torn down when the
@@ -330,8 +336,8 @@ function reconnectDelay(attempt: number): number {
  * rest of a 30 second backoff is pointless.
  *
  * The "reconnecting" check is not just throttling. connect() does not guard
- * against "auth_failed", and the token outlives the rejection, so without it
- * every wake-up would re-offer a token the server has already refused.
+ * against "auth_failed", and the credential outlives the rejection, so without
+ * it every wake-up would re-offer one the server has already refused.
  */
 function listenForRecovery(): void {
 	if (typeof window === "undefined") return;
@@ -690,10 +696,10 @@ export const useWSStore = create<WSState>((set, get) => ({
 	maxUploadSize: 0,
 
 	actions: {
-		connect: (token: string) => {
+		connect: (credential: AuthCredential) => {
 			const currentStatus = get().status;
-			// "error" now means only "no token to connect with", which genuinely
-			// needs the user; a connection that keeps failing stays in
+			// "error" now means only "no credential to connect with", which
+			// genuinely needs the user; a connection that keeps failing stays in
 			// "reconnecting" and retries on its own.
 			if (
 				currentStatus === "connecting" ||
@@ -703,7 +709,7 @@ export const useWSStore = create<WSState>((set, get) => ({
 				return;
 			}
 
-			if (!token) {
+			if (!credential.value) {
 				set({ status: "error" });
 				return;
 			}
@@ -717,7 +723,7 @@ export const useWSStore = create<WSState>((set, get) => ({
 			}
 
 			const isReconnecting = currentStatus === "reconnecting";
-			currentToken = token;
+			currentCredential = credential;
 			// Keep "reconnecting" status to preserve UI state during reconnection
 			if (!isReconnecting) {
 				set({ status: "connecting" });
@@ -733,9 +739,21 @@ export const useWSStore = create<WSState>((set, get) => ({
 				try {
 					const currentWorktree = worktreeActions.getCurrent();
 					const result = (await clients.withTimeout.request("auth", {
-						token,
+						...credentialParams(credential),
 						worktree: currentWorktree || undefined,
 					} as AuthParams)) as AuthResult;
+
+					// From here on the password — if that is what got us in — has done
+					// its job and is replaced everywhere by the token the server issued,
+					// so a reconnect never needs it again. A server too old to issue one
+					// leaves the credential as it was.
+					if (result.session_token) {
+						currentCredential = {
+							kind: "session_token",
+							value: result.session_token,
+						};
+						authActions.rememberSession(result.session_token);
+					}
 
 					if (result.version !== APP_VERSION) {
 						console.info(
@@ -764,9 +782,24 @@ export const useWSStore = create<WSState>((set, get) => ({
 						return;
 					}
 
+					const reason = authFailureReason(error);
+
+					// A stored session the server no longer knows is nobody's mistake:
+					// drop it and fall back to the password screen without an error.
+					if (reason === "session_expired") {
+						authActions.forgetSession();
+						currentCredential = null;
+						set({ status: "disconnected" });
+						socket.close(1000, "session_expired");
+						return;
+					}
+
 					const currentWorktree = worktreeActions.getCurrent();
-					// If auth failed with a specific worktree, reset to main and retry
-					if (currentWorktree) {
+					// The credential was fine and only the worktree is gone: fall back
+					// to main and retry. Matched on the reason being this one rather
+					// than on the credential reasons being absent, so that a reason
+					// added later cannot silently switch the retry off.
+					if (currentWorktree && reason === "worktree_not_found") {
 						console.warn(
 							"Auth failed with worktree, retrying with main:",
 							currentWorktree,
@@ -775,7 +808,9 @@ export const useWSStore = create<WSState>((set, get) => ({
 						worktreeNotFoundListener?.();
 						socket.close(1000, "auth_retry");
 						// Retry connection with main worktree
-						setTimeout(() => get().actions.connect(token), 100);
+						setTimeout(() => {
+							if (currentCredential) get().actions.connect(currentCredential);
+						}, 100);
 						return;
 					}
 					console.error("WebSocket auth failed:", error);
@@ -836,8 +871,9 @@ export const useWSStore = create<WSState>((set, get) => ({
 					return;
 				}
 
-				// Without a token there is nothing to retry with; that needs the user.
-				if (!currentToken) {
+				// Without a credential there is nothing to retry with; that needs the
+				// user.
+				if (!currentCredential) {
 					set({ status: "error" });
 					return;
 				}
@@ -846,8 +882,8 @@ export const useWSStore = create<WSState>((set, get) => ({
 				const attempts = get().reconnectAttempts;
 				set({ status: "reconnecting", reconnectAttempts: attempts + 1 });
 				reconnectTimeout = window.setTimeout(() => {
-					if (currentToken) {
-						get().actions.connect(currentToken);
+					if (currentCredential) {
+						get().actions.connect(currentCredential);
 					}
 				}, reconnectDelay(attempts));
 			};
@@ -860,12 +896,12 @@ export const useWSStore = create<WSState>((set, get) => ({
 				clearTimeout(reconnectTimeout);
 				reconnectTimeout = undefined;
 			}
-			currentToken = null;
+			currentCredential = null;
 			// Set status BEFORE closing so onclose sees "disconnected" and does
 			// not treat an intentional close as a drop worth reconnecting.
 			//
 			// Auto-reconnect is already off: onclose bails on "disconnected" and
-			// the pending timer checks currentToken. Reset the attempt count so a
+			// the pending timer checks currentCredential. Reset the attempt count so a
 			// later connect() starts at the short end of the backoff.
 			set({ status: "disconnected", reconnectAttempts: 0 });
 			if (ws) {
@@ -884,12 +920,12 @@ export const useWSStore = create<WSState>((set, get) => ({
 		},
 
 		retryNow: () => {
-			if (!currentToken) return;
+			if (!currentCredential) return;
 			// connect() disarms the pending retry itself. The attempt counter is
 			// deliberately left alone: an immediate retry that also fails should
 			// resume the backoff where it was, not restart it, or a series of
 			// recovery events could retry without limit.
-			get().actions.connect(currentToken);
+			get().actions.connect(currentCredential);
 		},
 
 		fsSubscribe: async (path: string, callback: () => void) => {
@@ -1153,16 +1189,16 @@ export const useWSStore = create<WSState>((set, get) => ({
 }));
 
 /**
- * Reconnect WebSocket with current token.
+ * Reconnect WebSocket with the current credential.
  * Used as a fallback when worktree.switch RPC fails.
  */
 export function reconnectWebSocket(): void {
-	if (!currentToken) return;
-	const token = currentToken;
+	if (!currentCredential) return;
+	const credential = currentCredential;
 	wsActions.disconnect();
 	// Small delay to ensure clean disconnect before reconnecting
 	setTimeout(() => {
-		useWSStore.getState().actions.connect(token);
+		useWSStore.getState().actions.connect(credential);
 	}, 100);
 }
 
@@ -1246,7 +1282,7 @@ export function resetWSStore() {
 		ws = null;
 	}
 	rpcClients = null;
-	currentToken = null;
+	currentCredential = null;
 	if (reconnectTimeout) {
 		clearTimeout(reconnectTimeout);
 		reconnectTimeout = undefined;

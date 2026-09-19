@@ -13,22 +13,29 @@ import (
 	"github.com/google/uuid"
 	"github.com/pockode/server/cluster/node"
 	"github.com/pockode/server/logger"
+	"github.com/pockode/server/rpc"
 	"github.com/pockode/server/ws"
 	"github.com/sourcegraph/jsonrpc2"
 )
 
-// AuthParams mirrors rpc.AuthParams but without worktree (cluster mode doesn't use worktrees).
+// AuthParams mirrors rpc.AuthParams but without worktree (cluster mode doesn't
+// use worktrees). See rpc.AuthParams for why the two credentials are exclusive
+// and why Token is still accepted.
 type AuthParams struct {
-	Token string `json:"token"`
+	Password     string `json:"password"`
+	Token        string `json:"token"`
+	SessionToken string `json:"session_token"`
 }
 
 // AuthResult mirrors rpc.AuthResult but with cluster-specific fields.
 type AuthResult struct {
-	Version string `json:"version"`
+	Version      string `json:"version"`
+	SessionToken string `json:"session_token"`
 }
 
 type wsHandler struct {
-	token          string
+	password       string
+	sessions       ws.SessionStore
 	version        string
 	devMode        bool
 	nodeStore      node.Store
@@ -36,9 +43,10 @@ type wsHandler struct {
 	log            *slog.Logger
 }
 
-func newWSHandler(token, version string, devMode bool, nodeStore node.Store, processManager *node.ProcessManager, log *slog.Logger) *wsHandler {
+func newWSHandler(password string, sessions ws.SessionStore, version string, devMode bool, nodeStore node.Store, processManager *node.ProcessManager, log *slog.Logger) *wsHandler {
 	return &wsHandler{
-		token:          token,
+		password:       password,
+		sessions:       sessions,
 		version:        version,
 		devMode:        devMode,
 		nodeStore:      nodeStore,
@@ -76,7 +84,8 @@ func (h *wsHandler) handleStream(ctx context.Context, stream jsonrpc2.ObjectStre
 	log.Info("new connection")
 
 	handler := &clusterRPCHandler{
-		token:          h.token,
+		password:       h.password,
+		sessions:       h.sessions,
 		version:        h.version,
 		nodeStore:      h.nodeStore,
 		processManager: h.processManager,
@@ -90,7 +99,8 @@ func (h *wsHandler) handleStream(ctx context.Context, stream jsonrpc2.ObjectStre
 }
 
 type clusterRPCHandler struct {
-	token          string
+	password       string
+	sessions       ws.SessionStore
 	version        string
 	nodeStore      node.Store
 	processManager *node.ProcessManager
@@ -106,7 +116,7 @@ func (h *clusterRPCHandler) Handle(ctx context.Context, conn *jsonrpc2.Conn, req
 
 	if !authenticated {
 		if req.Method != "auth" {
-			h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidRequest, "not authenticated")
+			h.replyAuthError(ctx, conn, req.ID, "first request must be auth", rpc.AuthReasonNotAuthenticated)
 			conn.Close()
 			return
 		}
@@ -151,10 +161,8 @@ func (h *clusterRPCHandler) handleAuth(ctx context.Context, conn *jsonrpc2.Conn,
 		return
 	}
 
-	if subtle.ConstantTimeCompare([]byte(params.Token), []byte(h.token)) != 1 {
-		h.log.Warn("invalid auth token")
-		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidRequest, "invalid token")
-		conn.Close()
+	sessionToken, ok := h.authenticate(ctx, conn, req, params)
+	if !ok {
 		return
 	}
 
@@ -165,17 +173,73 @@ func (h *clusterRPCHandler) handleAuth(ctx context.Context, conn *jsonrpc2.Conn,
 	h.log.Info("authenticated")
 
 	result := AuthResult{
-		Version: h.version,
+		Version:      h.version,
+		SessionToken: sessionToken,
 	}
 	if err := conn.Reply(ctx, req.ID, result); err != nil {
 		h.log.Error("failed to send auth response", "error", err)
 	}
 }
 
+// authenticate is the cluster's copy of the server's credential check; see
+// (*rpcMethodHandler).checkCredentials in package ws for the reasoning behind
+// the exclusivity rule and the no-rotation policy. The two are separate because
+// the two handlers share no connection state at all, not because they may
+// diverge. This one issues the token itself, because unlike the server's there
+// is no worktree still to bind that could fail after the check.
+func (h *clusterRPCHandler) authenticate(ctx context.Context, conn *jsonrpc2.Conn, req *jsonrpc2.Request, params AuthParams) (string, bool) {
+	password := rpc.OrLegacy(params.Password, params.Token)
+
+	if password != "" && params.SessionToken != "" {
+		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "password and session_token are mutually exclusive")
+		conn.Close()
+		return "", false
+	}
+
+	if params.SessionToken != "" {
+		if !h.sessions.Validate(params.SessionToken) {
+			h.log.Info("rejected an expired or unknown session token")
+			h.replyAuthError(ctx, conn, req.ID, "session expired", rpc.AuthReasonSessionExpired)
+			conn.Close()
+			return "", false
+		}
+		return params.SessionToken, true
+	}
+
+	if subtle.ConstantTimeCompare([]byte(password), []byte(h.password)) != 1 {
+		h.log.Warn("invalid password")
+		h.replyAuthError(ctx, conn, req.ID, "invalid password", rpc.AuthReasonInvalidPassword)
+		conn.Close()
+		return "", false
+	}
+
+	sessionToken, err := h.sessions.Issue()
+	if err != nil {
+		h.log.Error("failed to issue session token", "error", err)
+		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInternalError, "failed to issue session token")
+		conn.Close()
+		return "", false
+	}
+	return sessionToken, true
+}
+
 func (h *clusterRPCHandler) replyError(ctx context.Context, conn *jsonrpc2.Conn, id jsonrpc2.ID, code int64, message string) {
+	h.replyErrorData(ctx, conn, id, code, message, nil)
+}
+
+// replyAuthError attaches the machine-readable reason clients branch on; see
+// rpc.AuthErrorData.
+func (h *clusterRPCHandler) replyAuthError(ctx context.Context, conn *jsonrpc2.Conn, id jsonrpc2.ID, message, reason string) {
+	h.replyErrorData(ctx, conn, id, jsonrpc2.CodeInvalidRequest, message, rpc.AuthErrorData{Reason: reason})
+}
+
+func (h *clusterRPCHandler) replyErrorData(ctx context.Context, conn *jsonrpc2.Conn, id jsonrpc2.ID, code int64, message string, data any) {
 	err := &jsonrpc2.Error{
 		Code:    code,
 		Message: message,
+	}
+	if data != nil {
+		err.SetError(data)
 	}
 	if replyErr := conn.ReplyWithError(ctx, id, err); replyErr != nil {
 		h.log.Error("failed to send error response", "error", replyErr)
@@ -217,7 +281,13 @@ type NodeStatusParams struct {
 }
 
 type NodeStartParams struct {
-	ID    string `json:"id"`
+	ID string `json:"id"`
+	// Password is what the spawned node will require of its own clients. The
+	// cluster frontend generates it per browser session and keeps it in memory
+	// only, so a node's credential never reaches disk.
+	Password string `json:"password"`
+	// Token is the pre-rename name of Password, accepted for one deprecation
+	// period.
 	Token string `json:"token"`
 }
 
@@ -436,7 +506,7 @@ func (h *clusterRPCHandler) handleNodeStart(ctx context.Context, conn *jsonrpc2.
 		return
 	}
 
-	if err := h.processManager.Start(n, params.Token); err != nil {
+	if err := h.processManager.Start(n, rpc.OrLegacy(params.Password, params.Token)); err != nil {
 		if errors.Is(err, node.ErrNodeAlreadyRunning) {
 			h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "node already running")
 			return

@@ -127,7 +127,7 @@ Then run `pockode` from the project directory you want to work in — that is wh
 it operates on by default (`--work`) — and scan the QR code it prints:
 
 ```bash
-pockode -auth-token YOUR_PASSWORD
+pockode -password YOUR_PASSWORD
 ```
 
 The script downloads the binary for your OS and architecture and moves it into
@@ -193,7 +193,7 @@ irm https://pockode.com/install.ps1 | iex
 Then start it in your project directory and scan the QR code, exactly as above:
 
 ```powershell
-pockode -auth-token YOUR_PASSWORD
+pockode -password YOUR_PASSWORD
 ```
 
 The script puts `pockode.exe` in `%LOCALAPPDATA%\Programs\Pockode` and adds that
