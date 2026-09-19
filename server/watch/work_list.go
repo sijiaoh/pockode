@@ -185,14 +185,15 @@ func (w *WorkListWatcher) notifySync() {
 
 	// Cut once and shared: a sync goes to every subscriber at the same moment,
 	// and this list is not narrowed per subscriber.
-	current, hidden := currentSegment(items, NotRunningCap)
+	current, hidden := currentSegment(items, CurrentGroupCap)
 
 	w.NotifyAll("work.list.changed", func(sub *Subscription) any {
 		return workListSyncParams{
-			ID:               sub.ID,
-			Operation:        "sync",
-			Works:            current,
-			NotRunningHidden: hidden,
+			ID:            sub.ID,
+			Operation:     "sync",
+			Works:         current,
+			StoppedHidden: hidden.Stopped,
+			OpenHidden:    hidden.Open,
 		}
 	})
 
@@ -260,8 +261,8 @@ func (w *WorkListWatcher) Subscribe(id string, notifier Notifier) (WorkListSnaps
 		return WorkListSnapshot{}, err
 	}
 
-	current, hidden := currentSegment(items, NotRunningCap)
-	return WorkListSnapshot{Items: current, NotRunningHidden: hidden}, nil
+	current, hidden := currentSegment(items, CurrentGroupCap)
+	return WorkListSnapshot{Items: current, Hidden: hidden}, nil
 }
 
 // Archive serves one page of closed work to the subscription that asked.
@@ -292,10 +293,14 @@ func (w *WorkListWatcher) Archive(id, cursor string, limit int) (WorkListArchive
 	}, nil
 }
 
-// Earlier serves the `Current` segment with the *Not running* cap lifted. It is
-// the whole segment rather than the difference, because a cap is not a page:
-// the client replaces what it holds, and there is no second press to keep in
-// step with.
+// Earlier serves the `Current` segment with both group caps lifted. It is the
+// whole segment rather than the difference, because a cap is not a page: the
+// client replaces what it holds, and there is no second press to keep in step
+// with.
+//
+// Both caps at once, even when only one group asked: one press lifts the lid on
+// the segment, so when two groups each offer the control, either of them clears
+// both (docs/list-paging-ui.md §4.1).
 func (w *WorkListWatcher) Earlier(id string) ([]rpc.WorkListItem, error) {
 	if w.GetSubscription(id) == nil {
 		return nil, fmt.Errorf("%w: %s", ErrSubscriptionNotFound, id)
@@ -313,8 +318,8 @@ func (w *WorkListWatcher) Earlier(id string) ([]rpc.WorkListItem, error) {
 // WorkListSnapshot is the `Current` segment as a subscription's first answer;
 // see rpc.WorkListSubscribeResult.
 type WorkListSnapshot struct {
-	Items            []rpc.WorkListItem
-	NotRunningHidden int
+	Items  []rpc.WorkListItem
+	Hidden CurrentHidden
 }
 
 // WorkListArchivePage is one page of the closed archive.
@@ -335,9 +340,10 @@ type workListSyncParams struct {
 	ID        string             `json:"id"`
 	Operation string             `json:"operation"`
 	Works     []rpc.WorkListItem `json:"works"`
-	// NotRunningHidden is over the whole group, never over what was sent; see
+	// Each is over its whole group, never over what was sent; see
 	// rpc.WorkListSubscribeResult.
-	NotRunningHidden int `json:"not_running_hidden,omitempty"`
+	StoppedHidden int `json:"stopped_hidden,omitempty"`
+	OpenHidden    int `json:"open_hidden,omitempty"`
 }
 
 // OnWorkChange implements work.OnChangeListener.

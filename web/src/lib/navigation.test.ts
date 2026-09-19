@@ -302,3 +302,31 @@ describe("overlayToNavigation", () => {
 		});
 	});
 });
+
+// docs/project-ui.md §5. `Current` is the absence of the parameter, so that one
+// state has one URL and the Project button's plain `/works` means `Current`.
+describe("the work list segment in the URL", () => {
+	it("writes nothing for Current and the word for Closed", () => {
+		expect(
+			overlayToNavigation({ type: "work-list", segment: "current" }, "", null),
+		).toEqual({ to: "/works" });
+
+		expect(
+			overlayToNavigation({ type: "work-list", segment: "closed" }, "", null),
+		).toEqual({ to: "/works", search: { segment: "closed" } });
+	});
+
+	it("carries the segment into a work detail, beside the session", () => {
+		expect(
+			overlayToNavigation(
+				{ type: "work-detail", workId: "w1", segment: "closed" },
+				"feature-x",
+				"sess123",
+			),
+		).toEqual({
+			to: "/w/$worktree/works/$workId",
+			params: { workId: "w1", worktree: "feature-x" },
+			search: { session: "sess123", segment: "closed" },
+		});
+	});
+});

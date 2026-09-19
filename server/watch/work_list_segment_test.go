@@ -13,6 +13,12 @@ func row(id string, t work.WorkType, status work.WorkStatus, activity work.Activ
 	return rpc.WorkListItem{ID: id, Type: t, Status: status, Activity: activity}
 }
 
+// updated stamps a row, for the tests about which end of a group the cap eats.
+func updated(item rpc.WorkListItem, at time.Time) rpc.WorkListItem {
+	item.UpdatedAt = at
+	return item
+}
+
 func child(id, parent string, t work.WorkType, status work.WorkStatus, activity work.Activity) rpc.WorkListItem {
 	item := row(id, t, status, activity)
 	item.ParentID = parent
@@ -49,10 +55,10 @@ func TestCurrentSegment_CarriesWhatItsRowsSpeakFor(t *testing.T) {
 		child("archived-task", "archived", work.WorkTypeTask, work.StatusClosed, work.ActivityClosed),
 	}
 
-	kept, hidden := currentSegment(items, NotRunningCap)
+	kept, hidden := currentSegment(items, CurrentGroupCap)
 
-	if hidden != 0 {
-		t.Errorf("hidden = %d, want 0", hidden)
+	if hidden != (CurrentHidden{}) {
+		t.Errorf("hidden = %+v, want nothing held back", hidden)
 	}
 	for _, id := range []string{"story", "done", "quiet"} {
 		if !contains(kept, id) {
@@ -74,49 +80,116 @@ func TestCurrentSegment_CarriesTheParentATaskRowNames(t *testing.T) {
 		child("stuck", "archived", work.WorkTypeTask, work.StatusActive, work.ActivityNeedsMessage),
 	}
 
-	kept, _ := currentSegment(items, NotRunningCap)
+	kept, _ := currentSegment(items, CurrentGroupCap)
 
 	if !contains(kept, "stuck") || !contains(kept, "archived") {
 		t.Errorf("a task row must arrive with its parent, got %v", ids(kept))
 	}
 }
 
-// The cap takes rows off the *front* of *Not running*: that group is in
-// creation order, and the end of it is the work created most recently — the
-// rows a user would notice missing within the hour (docs/list-paging-ui.md
-// §4.1).
-func TestCurrentSegment_CapDropsTheOldestNotRunningRows(t *testing.T) {
+// The cap eats the bottom of the group as the user sees it: rows are listed
+// `updated_at` newest first, so what goes is what was touched longest ago —
+// never the story somebody edited this morning, whenever it happened to be
+// created (docs/list-paging-ui.md §4.1, docs/project-ui.md §2.3).
+func TestCurrentSegment_CapDropsTheLeastRecentlyUpdated(t *testing.T) {
+	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	// Created oldest first, touched in the opposite order: under the creation
+	// order this used to drop by, exactly the wrong two would go.
 	var items []rpc.WorkListItem
 	for i := range 6 {
-		items = append(items, row(fmt.Sprintf("idle-%d", i), work.WorkTypeStory, work.StatusOpen, work.ActivityOpen))
+		items = append(items, updated(
+			row(fmt.Sprintf("idle-%d", i), work.WorkTypeStory, work.StatusOpen, work.ActivityOpen),
+			base.Add(time.Duration(6-i)*time.Hour),
+		))
 	}
 
 	kept, hidden := currentSegment(items, 4)
 
-	if hidden != 2 {
-		t.Fatalf("hidden = %d, want 2", hidden)
+	if hidden.Open != 2 {
+		t.Fatalf("open hidden = %d, want 2", hidden.Open)
 	}
-	if got, want := ids(kept), []string{"idle-2", "idle-3", "idle-4", "idle-5"}; fmt.Sprint(got) != fmt.Sprint(want) {
+	if got, want := ids(kept), []string{"idle-0", "idle-1", "idle-2", "idle-3"}; fmt.Sprint(got) != fmt.Sprint(want) {
 		t.Errorf("kept %v, want %v", got, want)
 	}
 }
 
+// The two capped groups are capped apart: each has its own allowance and its
+// own hidden count, because each is one heading on screen and a heading's count
+// is the rows it received plus the rows held back from *it*.
+func TestCurrentSegment_CapsEachGroupOnItsOwn(t *testing.T) {
+	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	var items []rpc.WorkListItem
+	for i := range 4 {
+		items = append(items, updated(
+			row(fmt.Sprintf("stopped-%d", i), work.WorkTypeStory, work.StatusStopped, work.ActivityStopped),
+			base.Add(time.Duration(i)*time.Hour),
+		))
+	}
+	for i := range 3 {
+		items = append(items, updated(
+			row(fmt.Sprintf("open-%d", i), work.WorkTypeStory, work.StatusOpen, work.ActivityOpen),
+			base.Add(time.Duration(i)*time.Hour),
+		))
+	}
+
+	kept, hidden := currentSegment(items, 2)
+
+	if hidden.Stopped != 2 || hidden.Open != 1 {
+		t.Fatalf("hidden = %+v, want 2 stopped and 1 open", hidden)
+	}
+	if got, want := ids(kept), []string{"stopped-2", "stopped-3", "open-1", "open-2"}; fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Errorf("kept %v, want %v", got, want)
+	}
+}
+
+// A stopped *task* is a row of the *Stopped* group and counts towards its cap,
+// but can never be the row that goes: its story keeps every one of its tasks
+// anyway, for the `{closed}/{total}` on its own row. So the hidden count is
+// only ever stopped stories — which is also the half of the group that grows
+// without bound.
+func TestCurrentSegment_StoppedCapDropsOnlyStories(t *testing.T) {
+	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	items := []rpc.WorkListItem{
+		updated(row("live", work.WorkTypeStory, work.StatusActive, work.ActivityRunning), base.Add(3*time.Hour)),
+		updated(child("stuck-a", "live", work.WorkTypeTask, work.StatusStopped, work.ActivityStopped), base),
+		updated(child("stuck-b", "live", work.WorkTypeTask, work.StatusStopped, work.ActivityStopped), base.Add(time.Hour)),
+		updated(row("old-story", work.WorkTypeStory, work.StatusStopped, work.ActivityStopped), base.Add(2*time.Hour)),
+	}
+
+	kept, hidden := currentSegment(items, 2)
+
+	if hidden.Stopped != 1 {
+		t.Fatalf("stopped hidden = %d, want 1", hidden.Stopped)
+	}
+	if contains(kept, "old-story") {
+		t.Errorf("the only droppable row should have gone, got %v", ids(kept))
+	}
+	for _, id := range []string{"stuck-a", "stuck-b"} {
+		if !contains(kept, id) {
+			t.Errorf("%q is a task and cannot be dropped, got %v", id, ids(kept))
+		}
+	}
+}
+
 // *Needs you* and *In progress* are never capped and never truncated: they are
-// the two groups the screen exists for.
+// the two groups the screen exists for. Two rows in each against a cap of one,
+// so a cap that reached them would have to drop one of each.
 func TestCurrentSegment_CapNeverTouchesTheOtherGroups(t *testing.T) {
 	items := []rpc.WorkListItem{
 		row("waiting", work.WorkTypeStory, work.StatusActive, work.ActivityNeedsMessage),
+		row("asking", work.WorkTypeStory, work.StatusActive, work.ActivityNeedsAnswer),
 		row("running", work.WorkTypeStory, work.StatusActive, work.ActivityIdle),
+		row("busy", work.WorkTypeStory, work.StatusActive, work.ActivityRunning),
 		row("idle-a", work.WorkTypeStory, work.StatusOpen, work.ActivityOpen),
 		row("idle-b", work.WorkTypeStory, work.StatusStopped, work.ActivityStopped),
 	}
 
 	kept, hidden := currentSegment(items, 1)
 
-	if hidden != 1 {
-		t.Fatalf("hidden = %d, want 1", hidden)
+	if hidden != (CurrentHidden{}) {
+		t.Fatalf("hidden = %+v, want nothing held back: the two capped groups are at their cap", hidden)
 	}
-	for _, id := range []string{"waiting", "running", "idle-b"} {
+	for _, id := range []string{"waiting", "asking", "running", "busy", "idle-a", "idle-b"} {
 		if !contains(kept, id) {
 			t.Errorf("%q must survive the cap, got %v", id, ids(kept))
 		}
@@ -125,18 +198,19 @@ func TestCurrentSegment_CapNeverTouchesTheOtherGroups(t *testing.T) {
 
 // Dropping a story drops its tasks with it, so a story whose own task is a row
 // is not droppable at all — the row would go with it, and *Needs you* is never
-// truncated.
+// truncated. It is passed over even when it is the oldest thing in the group.
 func TestCurrentSegment_CapSpares_AStoryWhoseTaskIsARow(t *testing.T) {
+	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	items := []rpc.WorkListItem{
-		row("oldest", work.WorkTypeStory, work.StatusStopped, work.ActivityStopped),
-		child("stuck", "oldest", work.WorkTypeTask, work.StatusActive, work.ActivityNeedsAnswer),
-		row("newer", work.WorkTypeStory, work.StatusOpen, work.ActivityOpen),
+		updated(row("oldest", work.WorkTypeStory, work.StatusStopped, work.ActivityStopped), base),
+		updated(child("stuck", "oldest", work.WorkTypeTask, work.StatusActive, work.ActivityNeedsAnswer), base),
+		updated(row("newer", work.WorkTypeStory, work.StatusStopped, work.ActivityStopped), base.Add(time.Hour)),
 	}
 
 	kept, hidden := currentSegment(items, 1)
 
-	if hidden != 1 {
-		t.Fatalf("hidden = %d, want 1", hidden)
+	if hidden.Stopped != 1 {
+		t.Fatalf("stopped hidden = %d, want 1", hidden.Stopped)
 	}
 	if !contains(kept, "oldest") || !contains(kept, "stuck") {
 		t.Errorf("a story holding a row must survive the cap, got %v", ids(kept))
@@ -155,8 +229,8 @@ func TestCurrentSegment_NoCapHoldsNothingBack(t *testing.T) {
 
 	kept, hidden := currentSegment(items, 0)
 
-	if hidden != 0 || len(kept) != 80 {
-		t.Errorf("uncapped segment = %d rows, hidden %d; want 80 and 0", len(kept), hidden)
+	if hidden != (CurrentHidden{}) || len(kept) != 80 {
+		t.Errorf("uncapped segment = %d rows, hidden %+v; want 80 and nothing held back", len(kept), hidden)
 	}
 }
 
@@ -171,8 +245,8 @@ func TestCurrentSegment_KeepsAnUnrecognisedStatus(t *testing.T) {
 
 	kept, hidden := currentSegment(items, 1)
 
-	if hidden != 0 {
-		t.Errorf("hidden = %d, want 0: only recognised groups are capped", hidden)
+	if hidden != (CurrentHidden{}) {
+		t.Errorf("hidden = %+v, want nothing: only recognised groups are capped", hidden)
 	}
 	if !contains(kept, "odd") {
 		t.Errorf("an unrecognised status must keep its row, got %v", ids(kept))

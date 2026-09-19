@@ -15,7 +15,11 @@ const row = (overrides: Partial<WorkListItem> = {}): WorkListItem => ({
 });
 
 let notify: ((p: WorkListChangedNotification) => void) | null = null;
-let snapshot: { items: WorkListItem[]; not_running_hidden?: number } = {
+let snapshot: {
+	items: WorkListItem[];
+	stopped_hidden?: number;
+	open_hidden?: number;
+} = {
 	items: [],
 };
 
@@ -55,12 +59,12 @@ describe("useWorkSubscription", () => {
 	});
 
 	it("takes the count of what the snapshot held back", async () => {
-		snapshot = { items: [row()], not_running_hidden: 12 };
+		snapshot = { items: [row()], stopped_hidden: 4, open_hidden: 12 };
 
 		await subscribed();
 
 		await waitFor(() =>
-			expect(useWorkStore.getState().notRunningHidden).toBe(12),
+			expect(useWorkStore.getState().hidden).toEqual({ stopped: 4, open: 12 }),
 		);
 	});
 
@@ -69,7 +73,7 @@ describe("useWorkSubscription", () => {
 	// dropping that update is exactly how the Project tab's attention dot would
 	// go dark on a project that needs one (docs/list-paging-ui.md §2.1).
 	it("takes in an update for a work it was never sent", async () => {
-		snapshot = { items: [row({ id: "shown" })], not_running_hidden: 3 };
+		snapshot = { items: [row({ id: "shown" })], open_hidden: 3 };
 		await subscribed();
 		await waitFor(() => expect(useWorkStore.getState().works).toHaveLength(1));
 
@@ -132,9 +136,12 @@ describe("useWorkSubscription", () => {
 			});
 		});
 
-		const archive = useWorkStore.getState().archive;
-		expect(archive.map((w) => w.id)).toEqual(["old"]);
-		expect(archive[0].title).toBe("Renamed after the fact");
+		const state = useWorkStore.getState();
+		expect(state.archive.map((w) => w.id)).toEqual(["old"]);
+		expect(state.archive[0].title).toBe("Renamed after the fact");
+		// The closed story it did not add is not dropped on the floor either: the
+		// page it belongs to is marked stale, which is what re-asks for it.
+		expect(state.archiveStale).toBe(true);
 	});
 
 	it("drops a deleted work from the archive page it is on", async () => {
@@ -158,22 +165,59 @@ describe("useWorkSubscription", () => {
 		expect(useWorkStore.getState().archive).toEqual([]);
 	});
 
-	it("takes the held-back count from a resync too", async () => {
-		snapshot = { items: [row()], not_running_hidden: 5 };
+	// `Current` holds no closed work, so neither of the two wholesale replacements
+	// below says a word about the archive — and a work that closed inside the gap
+	// each of them exists to cover would reach it through no other door.
+	it("treats a resync as a reason to re-read the archive", async () => {
+		snapshot = { items: [] };
 		await subscribed();
+		act(() => {
+			useWorkStore
+				.getState()
+				.setArchivePage(
+					0,
+					"",
+					[row({ id: "old", status: "closed", activity: "closed" })],
+					null,
+				);
+			// The subscription's own snapshot has already marked it once (below);
+			// this is the page standing fresh, which is what a sync has to spoil.
+			useWorkStore.setState({ archiveStale: false });
+		});
+		expect(useWorkStore.getState().archiveStale).toBe(false);
+
+		act(() => {
+			notify?.({ id: "watch-1", operation: "sync", works: [] });
+		});
+
+		expect(useWorkStore.getState().archiveStale).toBe(true);
+	});
+
+	// A reconnect opens a new subscription over a page the old one fetched.
+	it("treats a snapshot the same way", async () => {
+		snapshot = { items: [] };
+		await subscribed();
+
 		await waitFor(() =>
-			expect(useWorkStore.getState().notRunningHidden).toBe(5),
+			expect(useWorkStore.getState().archiveStale).toBe(true),
 		);
+	});
+
+	it("takes the held-back count from a resync too", async () => {
+		snapshot = { items: [row()], open_hidden: 5 };
+		await subscribed();
+		await waitFor(() => expect(useWorkStore.getState().hidden.open).toBe(5));
 
 		act(() => {
 			notify?.({
 				id: "watch-1",
 				operation: "sync",
 				works: [row({ id: "a" })],
-				not_running_hidden: 9,
+				stopped_hidden: 2,
+				open_hidden: 9,
 			});
 		});
 
-		expect(useWorkStore.getState().notRunningHidden).toBe(9);
+		expect(useWorkStore.getState().hidden).toEqual({ stopped: 2, open: 9 });
 	});
 });

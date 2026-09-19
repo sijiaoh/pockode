@@ -805,7 +805,9 @@ type WorkListItem struct {
 	Wait      work.WorkWait `json:"wait,omitempty"`
 	SessionID string        `json:"session_id,omitempty"`
 	Worktree  string        `json:"worktree,omitempty"`
-	// UpdatedAt is what the closed group is ordered by.
+	// UpdatedAt is what every list of work is ordered by, newest first — both
+	// segments and every group of `Current` — and what each row prints so that
+	// the order can be read off the screen (docs/project-ui.md §2.3, §3).
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
@@ -829,10 +831,13 @@ func NewWorkListItem(w work.Work, activity work.Activity) WorkListItem {
 	}
 }
 
-// Cursor is this row's position in the archive's sort order, and what a client
-// hands back to ask for the page after it. Only the archive is ordered by
-// UpdatedAt — the `Current` segment keeps the store's creation order and is
-// never paged — so nothing else reads this.
+// Cursor is this row's position in the list's sort order, and what a client
+// hands back to ask for the page after it.
+//
+// Only the archive *pages*, so only the archive hands one back. The order it
+// names is every list's, though: `Current` is drawn in it too, and its cap is
+// cut along it (currentSegment), which is why both sides of that cut agree on
+// a tie.
 func (i WorkListItem) Cursor() session.ListCursor {
 	return session.ListCursor{UpdatedAt: i.UpdatedAt, ID: i.ID}
 }
@@ -847,11 +852,14 @@ func (i WorkListItem) Cursor() session.ListCursor {
 // (docs/list-paging-ui.md §2.1, §4.1).
 type WorkListSubscribeResult struct {
 	Items []WorkListItem `json:"items"`
-	// NotRunningHidden is how many rows of the *Not running* group were held
-	// back by the cap. The group's heading adds it to the rows it received, so
-	// the count it shows is the whole group's; zero means the group arrived
-	// whole. Fetch the rest with work.list.earlier.
-	NotRunningHidden int `json:"not_running_hidden,omitempty"`
+	// StoppedHidden and OpenHidden are how many rows of the *Stopped* and *Not
+	// running* groups were held back by their caps. Each group's heading adds
+	// its own to the rows it received, so the count it shows is the whole
+	// group's; zero means that group arrived whole. One number per group
+	// because one number spanning two headings would make at least one of them
+	// wrong. Fetch the rest — of both groups at once — with work.list.earlier.
+	StoppedHidden int `json:"stopped_hidden,omitempty"`
+	OpenHidden    int `json:"open_hidden,omitempty"`
 }
 
 // WorkListArchiveParams asks for one page of closed work.

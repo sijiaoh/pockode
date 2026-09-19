@@ -119,11 +119,14 @@ export interface Comment {
 export interface WorkListSubscribeResult {
 	items: WorkListItem[];
 	/**
-	 * How many rows of the *Not running* group the server held back. The group's
-	 * heading adds it to the rows it received, so the count it shows stays the
-	 * whole group's; absent or zero means the group arrived whole.
+	 * How many rows of the *Stopped* and *Not running* groups the server held
+	 * back. Each group's heading adds its own to the rows it received, so the
+	 * count it shows stays that whole group's; absent or zero means that group
+	 * arrived whole. One number per group, because one number spanning two
+	 * headings would make at least one of them wrong.
 	 */
-	not_running_hidden?: number;
+	stopped_hidden?: number;
+	open_hidden?: number;
 }
 
 /** One page of the archive, and the cursor that reaches the page after it. */
@@ -134,7 +137,7 @@ export interface WorkListArchiveResult {
 	has_more?: boolean;
 }
 
-/** The `Current` segment with the *Not running* cap lifted, replacing it. */
+/** The `Current` segment with both group caps lifted, replacing it. */
 export interface WorkListEarlierResult {
 	items: WorkListItem[];
 }
@@ -146,7 +149,8 @@ export type WorkListChangedNotification =
 			id: string;
 			operation: "sync";
 			works: WorkListItem[];
-			not_running_hidden?: number;
+			stopped_hidden?: number;
+			open_hidden?: number;
 	  };
 
 /**

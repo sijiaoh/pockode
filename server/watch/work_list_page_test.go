@@ -25,7 +25,7 @@ func closedStoryWork(id string, updatedAt time.Time) work.Work {
 
 func TestWorkListWatcher_SubscribeCapsNotRunningAndSaysHowMuchItHeldBack(t *testing.T) {
 	store := &mockWorkStore{}
-	for i := range NotRunningCap + 3 {
+	for i := range CurrentGroupCap + 3 {
 		store.works = append(store.works, openStory(fmt.Sprintf("s%02d", i)))
 	}
 	w := NewWorkListWatcher(store, nil)
@@ -35,15 +35,15 @@ func TestWorkListWatcher_SubscribeCapsNotRunningAndSaysHowMuchItHeldBack(t *test
 		t.Fatalf("subscribe: %v", err)
 	}
 
-	if len(snapshot.Items) != NotRunningCap {
-		t.Errorf("sent %d rows, want the cap %d", len(snapshot.Items), NotRunningCap)
+	if len(snapshot.Items) != CurrentGroupCap {
+		t.Errorf("sent %d rows, want the cap %d", len(snapshot.Items), CurrentGroupCap)
 	}
-	if snapshot.NotRunningHidden != 3 {
-		t.Errorf("hidden = %d, want 3", snapshot.NotRunningHidden)
+	if snapshot.Hidden.Open != 3 {
+		t.Errorf("hidden = %d, want 3", snapshot.Hidden.Open)
 	}
 	// The count the heading shows is rows + hidden, so it is the whole group's
 	// either way (docs/list-paging-ui.md §4.1).
-	if len(snapshot.Items)+snapshot.NotRunningHidden != NotRunningCap+3 {
+	if len(snapshot.Items)+snapshot.Hidden.Open != CurrentGroupCap+3 {
 		t.Error("rows plus hidden must be the whole group")
 	}
 }
@@ -58,7 +58,7 @@ func TestWorkListWatcher_SubscribeNeverHidesWorkThatNeedsTheUser(t *testing.T) {
 		ID: "waiting", Type: work.WorkTypeStory, Status: work.StatusActive,
 		Title: "waiting", Wait: work.WaitUser,
 	})
-	for i := range NotRunningCap * 2 {
+	for i := range CurrentGroupCap * 2 {
 		store.works = append(store.works, openStory(fmt.Sprintf("s%02d", i)))
 	}
 	w := NewWorkListWatcher(store, nil)
@@ -84,7 +84,7 @@ func TestWorkListWatcher_SubscribeNeverHidesWorkThatNeedsTheUser(t *testing.T) {
 
 func TestWorkListWatcher_EarlierHoldsNothingBack(t *testing.T) {
 	store := &mockWorkStore{}
-	for i := range NotRunningCap + 5 {
+	for i := range CurrentGroupCap + 5 {
 		store.works = append(store.works, openStory(fmt.Sprintf("s%02d", i)))
 	}
 	w := NewWorkListWatcher(store, nil)
@@ -96,8 +96,8 @@ func TestWorkListWatcher_EarlierHoldsNothingBack(t *testing.T) {
 	if err != nil {
 		t.Fatalf("earlier: %v", err)
 	}
-	if len(items) != NotRunningCap+5 {
-		t.Errorf("earlier returned %d rows, want the whole group %d", len(items), NotRunningCap+5)
+	if len(items) != CurrentGroupCap+5 {
+		t.Errorf("earlier returned %d rows, want the whole group %d", len(items), CurrentGroupCap+5)
 	}
 }
 
@@ -195,7 +195,7 @@ func TestWorkListWatcher_ReadingAPageDoesNotSwallowTheNextNotification(t *testin
 // other, and it says how much it held back.
 func TestWorkListWatcher_SyncSendsTheCappedCurrentSegment(t *testing.T) {
 	store := &mockWorkStore{}
-	for i := range NotRunningCap + 2 {
+	for i := range CurrentGroupCap + 2 {
 		store.works = append(store.works, openStory(fmt.Sprintf("s%02d", i)))
 	}
 	store.works = append(store.works, closedStoryWork("archived", time.Now()))
@@ -213,9 +213,9 @@ func TestWorkListWatcher_SyncSendsTheCappedCurrentSegment(t *testing.T) {
 	waitForNotification(t, notifier, 1)
 
 	var params struct {
-		Operation        string             `json:"operation"`
-		Works            []rpc.WorkListItem `json:"works"`
-		NotRunningHidden int                `json:"not_running_hidden"`
+		Operation  string             `json:"operation"`
+		Works      []rpc.WorkListItem `json:"works"`
+		OpenHidden int                `json:"open_hidden"`
 	}
 	if err := json.Unmarshal(notifier.last(), &params); err != nil {
 		t.Fatalf("unmarshal: %v", err)
@@ -223,11 +223,11 @@ func TestWorkListWatcher_SyncSendsTheCappedCurrentSegment(t *testing.T) {
 	if params.Operation != "sync" {
 		t.Fatalf("operation = %q, want sync", params.Operation)
 	}
-	if len(params.Works) != NotRunningCap {
-		t.Errorf("sync carried %d rows, want the cap %d", len(params.Works), NotRunningCap)
+	if len(params.Works) != CurrentGroupCap {
+		t.Errorf("sync carried %d rows, want the cap %d", len(params.Works), CurrentGroupCap)
 	}
-	if params.NotRunningHidden != 2 {
-		t.Errorf("hidden = %d, want 2", params.NotRunningHidden)
+	if params.OpenHidden != 2 {
+		t.Errorf("hidden = %d, want 2", params.OpenHidden)
 	}
 	if contains(params.Works, "archived") {
 		t.Error("closed work belongs to the archive, not to a sync of Current")

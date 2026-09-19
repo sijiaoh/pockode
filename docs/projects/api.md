@@ -69,9 +69,9 @@ All methods use JSON-RPC 2.0 over WebSocket. Work and agent_role methods are **a
 | `work.comment.update` | `WorkCommentUpdateParams` | `Comment` | Update a comment's body |
 | `work.detail.subscribe` | `WorkDetailSubscribeParams` | `{work, comments, usage, activity, children, parent?}` | Subscribe to a single work item + comments + the token usage of its subtree ([why usage is here and not on `Work`](../code/work-system.md#usage-aggregation)) and the two relations its page draws ([why they are not read off the list](../code/work-system.md#the-list-holds-rows-the-detail-page-holds-the-item)) |
 | `work.detail.unsubscribe` | `{id}` | `{}` | Unsubscribe from work detail |
-| `work.list.subscribe` | `SubscribeParams` | `{items: WorkListItem[], not_running_hidden?}` | Subscribe + get the **`Current` segment**, which holds no closed work ([what a row carries](#work-list-rows-vs-work-detail), [why it is a segment](#the-list-is-two-segments)) |
+| `work.list.subscribe` | `SubscribeParams` | `{items: WorkListItem[], stopped_hidden?, open_hidden?}` | Subscribe + get the **`Current` segment**, which holds no closed work ([what a row carries](#work-list-rows-vs-work-detail), [why it is a segment](#the-list-is-two-segments)) |
 | `work.list.archive` | `WorkListArchiveParams` | `{items: WorkListItem[], next_cursor?, has_more?}` | One page of closed work, served against an open list subscription |
-| `work.list.earlier` | `{id}` | `{items: WorkListItem[]}` | The `Current` segment again with the *Not running* cap lifted |
+| `work.list.earlier` | `{id}` | `{items: WorkListItem[]}` | The `Current` segment again with both group caps lifted |
 | `work.list.unsubscribe` | `{id}` | `{}` | Unsubscribe |
 
 #### Agent Role
@@ -114,9 +114,10 @@ Defined in `server/rpc/types.go`.
 `work.list.subscribe` does not answer with every work item. It answers with the
 `Current` segment — the rows that screen draws plus everything those rows make
 claims about — and never with closed work, which is fetched a page at a time
-through `work.list.archive`. `not_running_hidden` says how many rows of the one
-unbounded group the server held back, so the group's heading can still show the
-whole group's count rather than the number of rows that arrived.
+through `work.list.archive`. `stopped_hidden` and `open_hidden` say how many
+rows each of the two unbounded groups had held back, so each group's heading can
+still show that whole group's count rather than the number of rows that arrived.
+One number per group: the headings are separate, so the counts have to be.
 
 Both paging methods take the **subscription's** id rather than repeating a
 query, and both refuse an unknown id, a malformed cursor and a negative limit as

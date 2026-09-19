@@ -1,7 +1,7 @@
 import { useMatch, useParams } from "@tanstack/react-router";
 import { ROUTES, WT_ROUTES } from "../lib/routes";
 import type { OverlaySearchParams } from "../router";
-import type { OverlayState } from "../types/overlay";
+import type { OverlayState, WorkSegment } from "../types/overlay";
 
 export interface RouteInfo {
 	overlay: OverlayState;
@@ -16,6 +16,14 @@ export interface RouteInfo {
 export function useCurrentWorktree(): string {
 	const params = useParams({ strict: false });
 	return (params as { worktree?: string }).worktree ?? "";
+}
+
+/**
+ * `Current` is the absence of the parameter, so anything that is not the one
+ * word `closed` — including a URL that never carried it — is `Current`.
+ */
+function readSegment(search: OverlaySearchParams): WorkSegment {
+	return search.segment === "closed" ? "closed" : "current";
 }
 
 export function useRouteState(): RouteInfo {
@@ -202,7 +210,7 @@ export function useRouteState(): RouteInfo {
 		const search = (workDetailMatch?.search ??
 			wtWorkDetailMatch?.search) as OverlaySearchParams;
 		return {
-			overlay: { type: "work-detail", workId },
+			overlay: { type: "work-detail", workId, segment: readSegment(search) },
 			sessionId: search.session ?? null,
 			worktree,
 		};
@@ -212,7 +220,7 @@ export function useRouteState(): RouteInfo {
 		const search = (worksMatch?.search ??
 			wtWorksMatch?.search) as OverlaySearchParams;
 		return {
-			overlay: { type: "work-list" },
+			overlay: { type: "work-list", segment: readSegment(search) },
 			sessionId: search.session ?? null,
 			worktree,
 		};

@@ -87,6 +87,93 @@ describe("the work store's wire boundary", () => {
 	});
 });
 
+describe("the archive page going stale", () => {
+	beforeEach(() => {
+		vi.clearAllMocks();
+		useWorkStore.getState().reset();
+		workPagingActions.unbind();
+	});
+
+	const closedStory = (id: string) =>
+		row({ id, type: "story", status: "closed", activity: "closed" });
+
+	// The reported bug: a work closes, leaves `Current` because it is closed,
+	// and never reaches the archive because the archive is only ever fetched.
+	// Nothing was wrong with the push — what was missing was anything that made
+	// the page on screen ask again.
+	it("marks the page stale when a story closes off it", () => {
+		useWorkStore.getState().setArchivePage(0, "", [closedStory("old")], null);
+
+		useWorkStore.getState().updateArchiveRow(closedStory("just-finished"));
+
+		const state = useWorkStore.getState();
+		expect(state.archiveStale).toBe(true);
+		// Stale, not inserted: the archive is a page, and a row landing in it
+		// unasked is a page the server never cut (docs/list-paging-ui.md §4.3).
+		expect(state.archive.map((w) => w.id)).toEqual(["old"]);
+	});
+
+	// A running story is pushed on every turn. If those marked the page stale it
+	// would re-fetch itself all day for a list nobody is waiting on.
+	it("leaves it alone for rows that are not archive rows", () => {
+		useWorkStore.getState().setArchivePage(0, "", [closedStory("old")], null);
+
+		useWorkStore.getState().updateArchiveRow(row({ id: "busy" }));
+		useWorkStore
+			.getState()
+			.updateArchiveRow(row({ id: "story", type: "story" }));
+		useWorkStore
+			.getState()
+			.updateArchiveRow(row({ id: "task", status: "closed" }));
+
+		expect(useWorkStore.getState().archiveStale).toBe(false);
+	});
+
+	it("keeps a row it does hold accurate rather than marking it stale", () => {
+		useWorkStore.getState().setArchivePage(0, "", [closedStory("old")], null);
+
+		useWorkStore
+			.getState()
+			.updateArchiveRow({ ...closedStory("old"), title: "Renamed" });
+
+		const state = useWorkStore.getState();
+		expect(state.archiveStale).toBe(false);
+		expect(state.archive[0].title).toBe("Renamed");
+	});
+
+	// The server cuts the page when it reads the request, so a work that closes
+	// while the request is in flight is not in the answer. Clearing on arrival
+	// would swallow it and put the bug back.
+	it("survives a fetch that went out before it", async () => {
+		workPagingActions.bind("watch-1", vi.fn());
+		useWorkStore.getState().setArchivePage(0, "", [closedStory("old")], null);
+		mockArchive.mockImplementationOnce(async () => {
+			useWorkStore.getState().updateArchiveRow(closedStory("just-finished"));
+			return { items: [closedStory("old")], has_more: false };
+		});
+
+		await workPagingActions.loadArchivePage(0, "");
+
+		expect(useWorkStore.getState().archiveStale).toBe(true);
+	});
+
+	it("is answered by the page the fetch brings back", async () => {
+		workPagingActions.bind("watch-1", vi.fn());
+		useWorkStore.getState().setArchivePage(0, "", [closedStory("old")], null);
+		useWorkStore.getState().updateArchiveRow(closedStory("just-finished"));
+		mockArchive.mockResolvedValueOnce({
+			items: [closedStory("just-finished"), closedStory("old")],
+			has_more: false,
+		});
+
+		await workPagingActions.loadArchivePage(0, "");
+
+		const state = useWorkStore.getState();
+		expect(state.archiveStale).toBe(false);
+		expect(state.archive.map((w) => w.id)).toEqual(["just-finished", "old"]);
+	});
+});
+
 describe("the work list's two fetches", () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
@@ -259,7 +346,9 @@ describe("the work list's two fetches", () => {
 
 	it("clears the earlier fetch when it is the one that finds the subscription gone", async () => {
 		workPagingActions.bind("watch-1", vi.fn());
-		useWorkStore.getState().setWorks([row({ id: "s1" })], 7);
+		useWorkStore
+			.getState()
+			.setWorks([row({ id: "s1" })], { stopped: 0, open: 7 });
 		mockEarlier.mockRejectedValueOnce(
 			new JSONRPCErrorException("gone", JSONRPCErrorCode.InvalidParams),
 		);
@@ -273,9 +362,11 @@ describe("the work list's two fetches", () => {
 
 	// A cap is not a page: one press replaces the segment with the whole of it,
 	// and the control that asked is gone afterwards.
-	it("lifts the Not running cap in one call", async () => {
+	it("lifts both group caps in one call", async () => {
 		workPagingActions.bind("watch-1", vi.fn());
-		useWorkStore.getState().setWorks([row({ id: "s1" })], 7);
+		useWorkStore
+			.getState()
+			.setWorks([row({ id: "s1" })], { stopped: 4, open: 7 });
 		mockEarlier.mockResolvedValueOnce({
 			items: [row({ id: "s0" }), row({ id: "s1" })],
 		});
@@ -284,12 +375,15 @@ describe("the work list's two fetches", () => {
 
 		const state = useWorkStore.getState();
 		expect(state.works.map((w) => w.id)).toEqual(["s0", "s1"]);
-		expect(state.notRunningHidden).toBe(0);
+		// Both, from one press: it is the lid coming off the segment, not a page.
+		expect(state.hidden).toEqual({ stopped: 0, open: 0 });
 	});
 
 	it("keeps the list on screen when showing earlier work fails", async () => {
 		workPagingActions.bind("watch-1", vi.fn());
-		useWorkStore.getState().setWorks([row({ id: "s1" })], 7);
+		useWorkStore
+			.getState()
+			.setWorks([row({ id: "s1" })], { stopped: 0, open: 7 });
 		mockEarlier.mockRejectedValueOnce(new Error("socket closed"));
 
 		await workPagingActions.loadEarlier();
@@ -299,6 +393,6 @@ describe("the work list's two fetches", () => {
 		// Not `error`: that one replaces the list with a failure message.
 		expect(state.error).toBeNull();
 		expect(state.works).toHaveLength(1);
-		expect(state.notRunningHidden).toBe(7);
+		expect(state.hidden).toEqual({ stopped: 0, open: 7 });
 	});
 });

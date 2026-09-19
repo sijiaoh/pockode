@@ -1044,13 +1044,17 @@ case — the rules are in
 // web/src/lib/workStore.ts
 interface WorkStore {
     works: WorkListItem[];        // the Current segment
-    notRunningHidden: number;     // rows the cap held back, so the heading can still count them
+    hidden: WorkListHidden;       // { stopped, open }: rows each cap held back,
+                                  // so each heading can still count its whole group
     archive: WorkListItem[];      // one page of closed work, fetched on demand
     isLoading: boolean;
     error: string | null;
-    // ...plus the cursor stack the archive pager walks
+    // ...plus the cursor stack the archive pager walks, and `archiveStale`:
+    // the page admitting a closed story appeared behind it, which is what makes
+    // the Closed segment ask again
+    // (subscription-system.md#nobody-is-waiting-on-it-is-not-nobody-ever-looks-at-it)
 
-    setWorks: (works: WorkListItem[], notRunningHidden?: number) => void;
+    setWorks: (works: WorkListItem[], hidden?: WorkListHidden) => void;
     updateWorks: (updater: (old: WorkListItem[]) => WorkListItem[]) => void;
     setError: (error: string) => void;
     reset: () => void;
@@ -1101,19 +1105,30 @@ Three consequences worth stating on their own, because each is easy to undo:
 - **The detail page no longer reads the list for its subtree** — see
   [the next section](#the-list-holds-rows-the-detail-page-holds-the-item).
 
-The one group of `Current` that grows without limit is *Not running* (`open` and
-`stopped` work, which nothing closes), so that group alone is capped and the
-overflow is fetched by one press of "Show earlier work".
+Two groups of `Current` grow without limit, since nothing closes either by
+itself: *Stopped* and *Not running*. Those two are capped, each on its own
+budget and each reporting its own hidden count — a heading shows "rows received
+plus rows held back", so one number across two headings would make at least one
+of them wrong. One press of "Show earlier work" fetches the overflow of both:
+`work.list.earlier` re-sends the segment uncapped, and takes no group argument.
 
-**The cap is deliberately soft.** `NotRunningCap` is 50, but what the cap drops
-is whole stories — a story cannot be dropped without its tasks, since it keeps
-them all for its own roll-up — and a story holding a task that *is* a row is
-skipped rather than dropped. Skipping it means the group can come back slightly
-over the cap when there are not enough droppable stories. That is the intended
-trade: **"*Needs you* is never truncated" is the stronger invariant**, and a
-number that is approximate costs a little bandwidth, while a row that vanishes
-costs a user the one thing this screen exists to tell them. Nothing should read
-the cap as an exact bound on the rows that arrive.
+Both caps cut along the order the client lists the rows in — `updated_at`
+newest first, the archive's own order, borrowed from `session.ListOrder` rather
+than restated so the two cannot disagree on a tie — and eat from the end. What
+goes is the tail of what the user sees, never a work they just touched.
+
+**The cap is deliberately soft.** `CurrentGroupCap` is 50 for each group, but
+what the cap drops is whole stories — a story cannot be dropped without its
+tasks, since it keeps them all for its own roll-up — and a story holding a task
+that *is* a row is skipped rather than dropped. Skipping it means the group can
+come back slightly over the cap when there are not enough droppable stories.
+That is the intended trade: **"*Needs you* is never truncated" is the stronger
+invariant**, and a number that is approximate costs a little bandwidth, while a
+row that vanishes costs a user the one thing this screen exists to tell them.
+Nothing should read the cap as an exact bound on the rows that arrive — least of
+all on *Stopped*, where tasks are rows of their own, which makes that group's cap
+the softest of the two ([the shape of
+it](../list-paging-ui.md#41-current-is-loaded-whole-and-that-is-the-design)).
 
 `hasCurrentRow` (`server/watch/work_list_segment.go`) and `rowGroup`
 (`web/src/components/Project/WorkListOverlay.tsx`) are mirrors of each other,

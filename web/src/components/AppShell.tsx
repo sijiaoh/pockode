@@ -15,6 +15,7 @@ import { authActions, selectCredential, useAuthStore } from "../lib/authStore";
 import { buildNavigation, overlayToNavigation } from "../lib/navigation";
 import { useWorktreeStore, worktreeActions } from "../lib/worktreeStore";
 import { useWSStore, wsActions } from "../lib/wsStore";
+import type { WorkSegment } from "../types/overlay";
 import PasswordInput from "./Auth/PasswordInput";
 import { ChatPanel } from "./Chat";
 import { SessionSidebar } from "./Session";
@@ -428,24 +429,64 @@ function AppShell() {
 		);
 	}, [navigate, urlWorktree, currentSessionId]);
 
+	// The segment the screen is currently standing in, for the navigations that
+	// continue a visit rather than start one. Read off the URL because that is
+	// now the only place it lives (docs/project-ui.md §5).
+	const workSegment =
+		overlay?.type === "work-list" || overlay?.type === "work-detail"
+			? overlay.segment
+			: "current";
+
+	// The Project entry button. Always `Current`: the button is an entrance, and
+	// an entrance that lands somewhere different depending on what the user last
+	// tapped is an entrance nobody can predict.
 	const handleOpenWorkList = useCallback(() => {
 		setSidebarOpen(false);
 		navigate(
-			overlayToNavigation({ type: "work-list" }, urlWorktree, currentSessionId),
+			overlayToNavigation(
+				{ type: "work-list", segment: "current" },
+				urlWorktree,
+				currentSessionId,
+			),
 		);
 	}, [navigate, urlWorktree, currentSessionId]);
 
-	const handleOpenWorkDetail = useCallback(
-		(workId: string) => {
+	// Back out of a work detail, which is a return rather than an entrance: it
+	// goes to the segment the reader opened the work from.
+	const handleBackToWorkList = useCallback(() => {
+		navigate(
+			overlayToNavigation(
+				{ type: "work-list", segment: workSegment },
+				urlWorktree,
+				currentSessionId,
+			),
+		);
+	}, [navigate, urlWorktree, currentSessionId, workSegment]);
+
+	const handleSelectWorkSegment = useCallback(
+		(segment: WorkSegment) => {
 			navigate(
 				overlayToNavigation(
-					{ type: "work-detail", workId },
+					{ type: "work-list", segment },
 					urlWorktree,
 					currentSessionId,
 				),
 			);
 		},
 		[navigate, urlWorktree, currentSessionId],
+	);
+
+	const handleOpenWorkDetail = useCallback(
+		(workId: string) => {
+			navigate(
+				overlayToNavigation(
+					{ type: "work-detail", workId, segment: workSegment },
+					urlWorktree,
+					currentSessionId,
+				),
+			);
+		},
+		[navigate, urlWorktree, currentSessionId, workSegment],
 	);
 
 	const handleOpenAgentRoleList = useCallback(() => {
@@ -631,7 +672,9 @@ function AppShell() {
 					onSelectSession={handleSelectSession}
 					onOpenWorkDetail={handleOpenWorkDetail}
 					onOpenFile={handleSelectFile}
-					onOpenWorkList={handleOpenWorkList}
+					onOpenWorkList={handleBackToWorkList}
+					workSegment={workSegment}
+					onSelectWorkSegment={handleSelectWorkSegment}
 					onOpenAgentRoleList={handleOpenAgentRoleList}
 					onOpenAgentRoleDetail={handleOpenAgentRoleDetail}
 				/>
