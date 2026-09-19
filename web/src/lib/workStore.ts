@@ -3,6 +3,20 @@ import type { WorkListItem } from "../types/work";
 import { normalizeActivity } from "./activity";
 import { isInvalidParamsRejection, wsActions } from "./wsStore";
 
+/**
+ * How many rows each capped group of `Current` is short, keyed by the group the
+ * server caps rather than by the heading that shows it: `open` is the whole of
+ * *Not running* now that *Stopped* has its own group, and naming it after the
+ * status keeps this the same word the wire uses.
+ */
+export interface WorkListHidden {
+	stopped: number;
+	open: number;
+}
+
+/** Frozen, because it is handed out as the default on every reset. */
+const NOTHING_HIDDEN: WorkListHidden = Object.freeze({ stopped: 0, open: 0 });
+
 interface WorkState {
 	/**
 	 * The `Current` segment, whole: every row it draws plus everything those
@@ -11,21 +25,24 @@ interface WorkState {
 	 * answers no for a list nobody has read that far
 	 * (docs/list-paging-ui.md §2.1, §4.1).
 	 *
-	 * The one thing it can be short of is the oldest of *Not running*; see
-	 * `notRunningHidden`.
+	 * The one thing it can be short of is the least recently updated of
+	 * *Stopped* and of *Not running*; see `hidden`.
 	 */
 	works: WorkListItem[];
 	/**
-	 * How many *Not running* rows the server held back. The group's heading adds
-	 * it to the rows it has, so the count it shows is the whole group's; zero
-	 * means nothing is missing and no control is offered.
+	 * How many rows the server held back, per capped group. That group's heading
+	 * adds its own number to the rows it has, so the count it shows is the whole
+	 * group's; zero means nothing is missing and no control is offered.
+	 *
+	 * One number per group rather than one total: each is a heading on screen,
+	 * and a single number spanning two of them would make at least one wrong.
 	 *
 	 * An approximation by one row in one case: a hidden work that changes is
 	 * pushed to the client and added to `works` — which is right, since dropping
 	 * an update is how a work that starts needing a person would go unnoticed —
 	 * while this count still counts it. The next snapshot or sync corrects it.
 	 */
-	notRunningHidden: number;
+	hidden: WorkListHidden;
 	isLoading: boolean;
 	error: string | null;
 	/**
@@ -61,6 +78,21 @@ interface WorkState {
 	 * fetch of the oldest rows must not blank the list the user is reading. */
 	earlierError: string | null;
 	/**
+	 * Whether the page on screen may no longer say what the server would: a
+	 * closed story it does not hold has been pushed, or the whole of `Current`
+	 * has been handed back (see `markArchiveStale`).
+	 *
+	 * The archive is fetched and never pushed to, and §4.3 settles what a close
+	 * does to a page someone is reading: nothing — "it is gone the next time the
+	 * page is loaded". This is what makes that sentence true. Without it the
+	 * page's lifetime is the *subscription's*, not the visit's, so a work that
+	 * closed after the archive was first opened reached neither half of the
+	 * screen — gone from `Current` because it is closed, absent from the archive
+	 * because the archive is only ever fetched — until the user reloaded the
+	 * app. That is the whole of the reported bug.
+	 */
+	archiveStale: boolean;
+	/**
 	 * Bumped every time a subscription is bound to the paging actions.
 	 *
 	 * The archive is fetched on demand, so something has to ask for the first
@@ -76,7 +108,7 @@ interface WorkState {
 interface WorkActions {
 	/** Replaces the `Current` segment: a snapshot, a resync, or the uncapped
 	 * answer to "Show earlier work". */
-	setWorks: (works: WorkListItem[], notRunningHidden?: number) => void;
+	setWorks: (works: WorkListItem[], hidden?: WorkListHidden) => void;
 	updateWorks: (updater: (old: WorkListItem[]) => WorkListItem[]) => void;
 	setError: (error: string) => void;
 	beginArchiveLoad: (page: number, cursor: string) => void;
@@ -98,10 +130,25 @@ interface WorkActions {
 	 * cost a reconnect already pays.
 	 */
 	resubscribing: () => void;
-	/** Keeps a row of the page on screen accurate while the user reads it. The
-	 * archive is fetched, never pushed to — this is the one exception, and it
-	 * changes a row rather than adding or moving one. */
+	/**
+	 * Takes a pushed row to the archive, which can mean one of two things and
+	 * never a third: a row already on the page stays accurate while the user
+	 * reads it, and a closed story that is *not* on it marks the page stale.
+	 * Neither adds or moves a row — the archive is fetched, never pushed to
+	 * (§4.3).
+	 */
 	updateArchiveRow: (row: WorkListItem) => void;
+	/**
+	 * Records that the page on screen may have missed something, without saying
+	 * what.
+	 *
+	 * For the two moments that replace the `Current` segment wholesale — a
+	 * subscription's snapshot, and a resync after dropped events. Neither says a
+	 * word about closed work (`Current` holds none), so a work that closed while
+	 * the client was disconnected, or during the gap a resync exists to paper
+	 * over, reaches the archive through no other door.
+	 */
+	markArchiveStale: () => void;
 	/** Drops a deleted work from the archive page it is on. A page is a window,
 	 * not a quota: it stays one row short until the user moves. */
 	removeFromArchive: (workId: string) => void;
@@ -123,19 +170,20 @@ const initialArchive = () => ({
 	archiveError: null as string | null,
 	isEarlierLoading: false,
 	earlierError: null as string | null,
+	archiveStale: false,
 });
 
 export const useWorkStore = create<WorkStore>((set, get) => ({
 	works: [],
-	notRunningHidden: 0,
+	hidden: NOTHING_HIDDEN,
 	isLoading: true,
 	error: null,
 	pagingGeneration: 0,
 	...initialArchive(),
-	setWorks: (works, notRunningHidden = 0) =>
+	setWorks: (works, hidden = NOTHING_HIDDEN) =>
 		set({
 			works: works.map(normalizeWorkRow),
-			notRunningHidden,
+			hidden,
 			isLoading: false,
 			error: null,
 			isEarlierLoading: false,
@@ -149,6 +197,11 @@ export const useWorkStore = create<WorkStore>((set, get) => ({
 			isArchiveLoading: true,
 			archiveAttempt: { page, cursor },
 			archiveError: null,
+			// Cleared as the request goes out, not as its answer lands: the server
+			// cuts the page when it reads, so a work that closes while the request
+			// is in flight is not in the answer — and clearing on arrival would
+			// swallow it.
+			archiveStale: false,
 		}),
 	setArchivePage: (page, cursor, items, nextCursor) =>
 		set((state) => {
@@ -178,12 +231,25 @@ export const useWorkStore = create<WorkStore>((set, get) => ({
 	// projects have no archive page open at all.
 	updateArchiveRow: (row) => {
 		const { archive } = get();
-		if (!archive.some((w) => w.id === row.id)) return;
+		if (!archive.some((w) => w.id === row.id)) {
+			// Only a closed story is a row of the archive, so only a closed story
+			// can make a page that does not hold it wrong. An active story being
+			// pushed on every turn must not, or the segment would re-fetch itself
+			// all day for a list nobody is waiting on.
+			if (row.type === "story" && row.status === "closed") {
+				get().markArchiveStale();
+			}
+			return;
+		}
 		set({
 			archive: archive.map((w) =>
 				w.id === row.id ? normalizeWorkRow(row) : w,
 			),
 		});
+	},
+	markArchiveStale: () => {
+		if (get().archiveStale) return;
+		set({ archiveStale: true });
 	},
 	removeFromArchive: (workId) => {
 		const { archive } = get();
@@ -193,7 +259,7 @@ export const useWorkStore = create<WorkStore>((set, get) => ({
 	reset: () =>
 		set({
 			works: [],
-			notRunningHidden: 0,
+			hidden: NOTHING_HIDDEN,
 			isLoading: true,
 			error: null,
 			...initialArchive(),
@@ -312,8 +378,9 @@ export const workPagingActions = {
 	},
 
 	/**
-	 * Lifts the *Not running* cap. A cap is not a page: this replaces the
-	 * `Current` segment with the whole of it, and there is no second press.
+	 * Lifts the cap on both capped groups — either group's control asks for the
+	 * same thing. A cap is not a page: this replaces the `Current` segment with
+	 * the whole of it, and there is no second press.
 	 */
 	loadEarlier: async () => {
 		const subscription = paging;
@@ -323,7 +390,9 @@ export const workPagingActions = {
 		store.beginEarlierLoad();
 		try {
 			const result = await wsActions.workListEarlier(subscription.id);
-			useWorkStore.getState().setWorks(result.items, 0);
+			// Nothing hidden either side of it: one press lifts both caps, so
+			// both controls go at once.
+			useWorkStore.getState().setWorks(result.items);
 		} catch (error) {
 			if (isInvalidParamsRejection(error)) {
 				workPagingActions.unbind();

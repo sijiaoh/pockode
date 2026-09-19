@@ -271,6 +271,9 @@ client needs to subscribe afresh
 - **`work.list.earlier`** has neither, because a cap is not a page: one request
   lifts it, and there is no second one (§4.1 of
   [list-paging-ui.md](../list-paging-ui.md#41-current-is-loaded-whole-and-that-is-the-design)).
+  It takes no group either, though `Current` has two capped groups: it re-sends
+  the whole segment uncapped, so one press from either group's control lifts
+  both. A lid, not a page.
 
 **Three things are refused as `InvalidParams`**: a subscription id the server no
 longer holds, a cursor it did not hand out, and a negative page size — the last
@@ -290,11 +293,11 @@ and everything here is an addition:
 | `session.list.subscribe` result | `has_unread` | Whether anything in the **whole** list, narrowed by this subscription's filter, is unread |
 | `session.list.changed` — `create` / `update` / `delete` | `has_unread?` | The same fact, re-answered. Absent means the server could not read it, and the client keeps the answer it has |
 | `session.list.changed` — `sync` | `next_cursor?`, `has_more?`, `has_unread?` | A resync carries back as much of the list as that subscriber had loaded, not a first page |
-| `work.list.subscribe` result | `not_running_hidden?` | How many *Not running* rows the cap held back, so the group's heading can still show the whole group's count |
-| `work.list.changed` — `sync` | `not_running_hidden?` | The same, on a resync |
+| `work.list.subscribe` result | `stopped_hidden?`, `open_hidden?` | How many rows each capped group of `Current` — *Stopped* and *Not running* — held back, so each group's heading can still show that whole group's count. One field per group, because one number spanning two headings would make at least one of them wrong |
+| `work.list.changed` — `sync` | `stopped_hidden?`, `open_hidden?` | The same, on a resync |
 | `work.detail.subscribe` result, `work.detail.changed` | `children`, `parent?` | Every task under this item, and the story above it |
 
-`has_unread` and `not_running_hidden` are the same kind of field and are there
+`has_unread` and the two hidden counts are the same kind of field and are there
 for the same reason: **a count or an "is there any" may never be derived from a
 page**, and both are read by a badge that is an *absence* of a signal. A sidebar
 badge computed over one page tells a user nothing is waiting when the list has

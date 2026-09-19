@@ -673,10 +673,10 @@ whichever of them was second.
 |---|---|---|
 | Shape | One list that grows downwards | Discrete pages the user walks |
 | A row on screen changes | Updated in place, **never moved** | Updated in place |
-| Something new appears | Prepended — it genuinely is the newest | **Nothing.** It belongs at the top of page 1; the page the user asked for is the page they keep |
-| A row not held changes | Ignored; it lands in its right place the next time the order is computed | Ignored |
+| Something new appears | Prepended — it genuinely is the newest | **Never inserted.** It belongs at the top of page 1; the page the user asked for is the page they keep |
+| A row not held changes | Ignored; it lands in its right place the next time the order is computed | Ignored, with one exception: a **closed story**, which is the one thing the page would have held had it been cut now. That is recorded as the page being stale |
 | A row is deleted | Removed at once — it is the answer to an action | Removed; the page stays one row short until the user moves |
-| Refreshed on its own | Never | Never. No "new items" chip, no auto-refresh |
+| Refreshed on its own | Never | Never on an event. A stale page is re-fetched when the segment is looked at — see below |
 
 Recency reordering therefore happens **on a load, never on an event**, which is
 the rule `FileStore.AddUsage` already keeps on the server for its own reason:
@@ -687,9 +687,50 @@ because the reader may be two hundred rows down.
 The archive's whole column follows from one fact the session list cannot claim:
 **nobody is waiting on the archive.** So it earns none of the machinery for
 staying current — `WorkListWatcher` remembers nothing about which page a
-subscriber is on and pushes it nothing, and the one exception in the table above
-(a row on the page changing) is a row staying accurate, never a row appearing,
-moving, or being announced.
+subscriber is on and pushes it nothing, and the exceptions in the table above
+are a row staying accurate and a page admitting it is out of date, never a row
+appearing, moving, or being announced.
+
+##### "Nobody is waiting on it" is not "nobody ever looks at it"
+
+Both exceptions in that column are client-side, and the second one was missing
+for a while — with a consequence nobody would guess from the column, because it
+is not about the archive at all. `Current` drops a work the moment it closes, so
+for the seconds between a work finishing and the archive next being *fetched*,
+that work is on neither half of the screen. If nothing ever re-fetches, those
+seconds are the rest of the session: the user watches work disappear into a list
+it never comes out of, and only a reload — which resubscribes, which resets the
+paging state — brings it back. Every individual rule above was being kept.
+
+So `workStore` carries `archiveStale`, set when a closed story is pushed that
+the page on screen does not hold — and on the two moments that replace `Current`
+wholesale, a snapshot and a resync, because neither of those says a word about
+closed work either: a reconnect opens a new subscription over a page the old one
+fetched, and a resync exists precisely because some event was dropped. The
+Closed segment being on screen is what turns any of it into a request. Four
+properties are load-bearing:
+
+- **Only a closed story sets it.** That is the only kind of row the archive
+  draws (`archiveSegment` on the server cuts exactly those). A running story is
+  pushed on every turn of its session, and if those counted, the segment would
+  re-fetch itself all day for the one list nobody is waiting on.
+- **The page re-asked for is the one the reader is on**, not the first. A close
+  lands at the top of page 1 and cannot move a window further down the same
+  order, so page 3 comes back as page 3 — the promise in the table survives, and
+  the refresh is free in every case except the one the user actually reported.
+- **It is cleared when the request goes out, not when the answer lands.** The
+  server cuts the page as it reads, so a work closing mid-flight is not in that
+  answer; clearing on arrival would swallow exactly the event the mechanism
+  exists for.
+- **It never fires over a page that failed.** Starting a fetch clears the
+  archive's error, and the Retry beside it is rendered from that error — so a
+  refresh here would withdraw the one control answering the failure the reader
+  is looking at, and silently re-point `archiveAttempt` at a page they never
+  asked for. The reader's explicit Retry outranks a refresh nobody requested.
+
+What this deliberately is *not* is an insert. A client that puts a row at the
+top of page 1 by itself is holding 21 rows, a cursor that no longer names its
+own end, and an order it had to invent.
 
 #### What the server remembers, and what it only approximates
 
@@ -706,13 +747,15 @@ holds by a row with no page being fetched, and a client can ask for the same
 page twice. Both drift, both are corrected by the next snapshot or sync, and the
 cap dwarfs either.
 
-`not_running_hidden` is approximate in the mirror-image way, and the frontend is
-the reason: a `work.list.changed` update for a row the client does not hold is
-**upserted, not dropped**. A work that was held back by the cap and then starts
-needing a person has to arrive — dropping it is precisely how the project's
-attention dot would stay dark on a project that needs one. The count then
-over-states by that row until the next snapshot corrects it. A number that is
-one too high for a moment is a cheaper error than a signal that never comes.
+`stopped_hidden` and `open_hidden` — one per capped group of `Current`, because
+each group's heading adds its own to the rows it received — are approximate in
+the mirror-image way, and the frontend is the reason: a `work.list.changed`
+update for a row the client does not hold is **upserted, not dropped**. A work
+that was held back by a cap and then starts needing a person has to arrive —
+dropping it is precisely how the project's attention dot would stay dark on a
+project that needs one. That group's count then over-states by that row until
+the next snapshot corrects it. A number that is one too high for a moment is a
+cheaper error than a signal that never comes.
 
 #### A page is a read, and must not be recorded as a push
 

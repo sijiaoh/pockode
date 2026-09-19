@@ -10,6 +10,12 @@ import { ROUTES, WT_CHILD_ROUTES, WT_ROUTES } from "./lib/routes";
 const overlaySearchSchema = z.object({
 	session: z.string().optional(),
 	mode: z.enum(["edit"]).optional(),
+	// Which half of the project list is on screen (docs/project-ui.md §5). Only
+	// `closed` is ever written — `current` is the absence of the parameter, so
+	// one state has one URL. `current` is accepted as well, so that a URL which
+	// spells the default out still resolves; anything else fails the schema,
+	// as `mode` does.
+	segment: z.enum(["current", "closed"]).optional(),
 });
 
 export type OverlaySearchParams = z.infer<typeof overlaySearchSchema>;

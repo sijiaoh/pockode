@@ -303,8 +303,9 @@ func (h *rpcMethodHandler) handleWorkListSubscribe(ctx context.Context, conn *js
 	h.log.Debug("subscribed", "watcher", "work list", "watchId", id)
 
 	result := rpc.WorkListSubscribeResult{
-		Items:            snapshot.Items,
-		NotRunningHidden: snapshot.NotRunningHidden,
+		Items:         snapshot.Items,
+		StoppedHidden: snapshot.Hidden.Stopped,
+		OpenHidden:    snapshot.Hidden.Open,
 	}
 
 	if err := conn.Reply(ctx, req.ID, result); err != nil {
@@ -342,8 +343,8 @@ func (h *rpcMethodHandler) handleWorkListArchive(ctx context.Context, conn *json
 	}
 }
 
-// handleWorkListEarlier serves the `Current` segment with the *Not running* cap
-// lifted — one press, the whole group, no cursor.
+// handleWorkListEarlier serves the `Current` segment with both group caps
+// lifted — one press, both groups whole, no cursor.
 func (h *rpcMethodHandler) handleWorkListEarlier(ctx context.Context, conn *jsonrpc2.Conn, req *jsonrpc2.Request) {
 	var params rpc.WorkListEarlierParams
 	if err := unmarshalParams(req, &params); err != nil {

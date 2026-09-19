@@ -35,7 +35,8 @@ page — its archive does*. Paging the rest of that screen would page the one
 list in the app whose job is to say that something needs a person, and §2.1 is
 why that cannot be a page. The half of the work list that actually grows without
 limit is the archive, so that is the half that pages; the other half gets a cap
-on its one unbounded group (§4.1) and keeps every promise it makes today.
+on each of its two unbounded groups (§4.1) and keeps every promise it makes
+today.
 
 ## 2. What a page may never break
 
@@ -278,26 +279,52 @@ what `Current` needs, because its story's row counts it, even though it gets no
 row in either segment and is not in the archive either. The rows are not the
 payload.
 
-What is not bounded is *Not running* — `open` and `stopped` work accumulates,
-and nothing closes it. So:
+What is not bounded is the work nobody is driving: `open` work piles up in
+*Not running*, and `stopped` work piles up in *Stopped* — nudges run out, runs
+abort, users press Stop — and nothing closes either by itself. So:
 
-> **The cap is on that group alone.** Above a generous number of rows (see §5),
-> *Not running* arrives short, and **the rows it is missing are taken off the
-> front of it** — one control, in one group, fetching the rest. *Needs you* and
-> *In progress* are never capped and never truncated: they are the two groups the
-> screen exists for, and a "show more" under either of them is a list telling the
-> user it has more work for them and declining to say what.
+> **The cap is on those two groups, each on its own.** Above a generous number
+> of rows (see §5), a capped group arrives short, and **the rows it is missing
+> are taken off the bottom of it**. *Needs you* and *In progress* are never
+> capped and never truncated: they are the two groups the screen exists for, and
+> a "show more" under either of them is a list telling the user it has more work
+> for them and declining to say what.
 
-Off the front, and not off the end, because the group is in creation order
-(project-ui.md §2.3) and the end of it is the work created most recently — the
-rows a user would notice missing within the hour. Dropping the front hides the
-oldest, keeps the order of everything that is left, and invents no sort: this
-group does not acquire a sort key it did not have. The control therefore sits
-**above** the group's rows, directly under its heading, and reads **"Show earlier
-work"** — it is the only control on the screen that leads backwards, and it is in
-the direction it leads.
+**Each capped group gets its own cap and its own hidden count**, because a
+group's heading shows "rows received plus rows held back" (below): one number
+spanning two headings would make at least one of them wrong. They share the same
+*number*, though — there is no reason for the two to hold different amounts, and
+two numbers would be two things to explain.
 
-It is a cap on what is *fetched*, not on what is rendered. A cap that only hides
+*Stopped* is capped even though every row in it wants a person. The cap limits
+what a single subscription *ships*, not what is on the screen — fifty rows is
+already several screens either way — and a group that accumulates and is never
+capped is the unbounded group moved to the top of the list rather than removed.
+The promise survives the cap because the heading counts the whole group and the
+control fetches the rest; *Needs you* is exempt not because "groups that want you
+may not be capped" but because it cannot accumulate — every row in it has a live
+agent waiting.
+
+Off the bottom, and not off the front, because both groups are shown
+`updated_at` newest first (project-ui.md §2.3), so the bottom is the least
+recently touched — and a work the user just touched must not be the one that
+vanishes. The same rule cuts the archive's pages, so both cuts in this document
+follow the order the reader is looking at. The control sits **above** the
+group's rows, directly under its heading, and reads **"Show earlier work"**: it
+points the way it leads.
+
+**Both controls can be on screen at once, and either one lifts both caps.**
+`work.list.earlier` re-sends the whole `Current` segment uncapped — it is a lid
+coming off, not a page being turned (§5) — so pressing one makes both
+disappear. That is the right shape for a lid and the reason the request takes no
+group argument. One consequence has to be handled rather than inherited: the
+request is a single action, so a *failure* is one failure. The error and the
+Retry it becomes are rendered under the first group offering the control only;
+the second keeps saying "Show earlier work", and pressing it asks for exactly
+the same thing. Two copies would announce one failure twice to a screen reader
+and leave two buttons reading `Retry` with nothing to tell them apart.
+
+The cap is on what is *fetched*, not on what is rendered. A cap that only hides
 rows already in the client leaves the weight this whole change exists to remove
 exactly where it was.
 
@@ -310,10 +337,18 @@ count for itself.
 **And the number is a soft cap, deliberately.** What gets dropped is whole
 stories — a story cannot be dropped without its tasks, because it keeps every
 one of them for the roll-up on its own row (§2.2), so dropping the tasks alone
-saves nothing. But a story may hold a task that is itself a *Needs you* row, and
+saves nothing. But a story may hold a task that is itself a row of its own, and
 dropping that story would take the row with it. Those stories are skipped
 instead, so when there are not enough droppable ones left the group arrives a
 little over the number.
+
+"Only stories are droppable" bites hardest on *Stopped*, and the shape of it is
+worth knowing: a stopped **task** is never dropped, so that group's hidden count
+is only ever made of stopped stories, and a project with many stopped tasks under
+few stopped stories is effectively uncapped there. That is not a defect — what
+accumulates without limit is stopped stories, and the number of stopped tasks is
+bounded by the stories holding them — but it means how hard the cap bites on
+*Stopped* depends on the shape of the data.
 
 That is the right way round. "*Needs you* and *In progress* are never capped and
 never truncated" above is an **invariant**; the number is a **budget**; and of
@@ -384,7 +419,7 @@ the segment itself.
 | Event | Behaviour |
 |---|---|
 | A row on the page changes | Updates in place |
-| A work is closed while the user is on page 3 | **Nothing.** It belongs at the top of page 1; the page the user asked for is the page they keep |
+| A work is closed while the user is on page 3 | **Nothing moves.** It belongs at the top of page 1; the page the user asked for is the page they keep. The page is re-asked for along its own cursor, which is a window further down the same order, so the rows that come back are the rows that were there |
 | A work on the page is reopened | The row stays, and stays accurate — it is a row about a work item, and the work item still exists. It is gone the next time the page is loaded |
 | A row is deleted | It goes, and the page is one row short until the user moves. A page is a window, not a quota |
 
@@ -392,6 +427,44 @@ No "new items" banner, and no auto-refresh. Nobody is waiting on the archive, an
 a chip announcing that something finished is a notification wearing a list
 control's clothes — [lifecycle-ui.md](lifecycle-ui.md) owns where finishing is
 announced.
+
+**"The next time the page is loaded" has to be something that happens.** Twice
+above, a row is wrong until then; if nothing ever reloads the page, "until then"
+is "until the app is reloaded", and the archive is a list that a user watched
+work disappear into and never come out of. That was the first real bug here: the
+page's lifetime was the *subscription's*, so a work closing after the segment
+had been opened once reached neither half of the screen — gone from `Current`
+because it is closed, absent from the archive because the archive is only ever
+fetched.
+
+So a close is recorded as *the page on screen no longer says what the server
+would*, and the segment being on screen is what turns that into a request. The
+same record is made for the two moments that hand back the whole of `Current` —
+reconnecting, and a resync after a dropped event — because neither of those
+mentions closed work either, and a work that finished inside the gap they exist
+to cover would otherwise fall through both halves of the screen. It is not made
+over a page that *failed*: the reader is looking at an error and a Retry, and a
+refresh would take both away to answer something they did not ask about. The
+page asked for is the one the reader is on, never the first: a close lands at the
+top of page 1 and cannot move a window further down. It is therefore free in
+every case but the one that matters — a reader on page 1, who sees the work they
+just finished, which is the whole of the report.
+
+What must **not** be built out of this is an insert. A row landing in the archive
+unasked is a page the server never cut: a client that puts a row at the top of
+page 1 by itself has a page of 21 rows, a cursor that no longer names its own
+end, and a sort it had to invent — which is the same argument §4.2 makes for the
+pager and §2.1 makes for counts.
+
+**The subscription itself is not scoped to this screen, and cannot be.** The
+watcher behind `Current` is opened with the app and closed with it, because the
+Project tab's attention dot is read off what it delivers (§2.1) — a watcher that
+ran only while the list was open would leave the dot dark on a project that needs
+a person, which is the exact failure §2.1 exists to forbid. What does get a
+lifetime is the archive *page*, above: it is fetched when the segment is looked
+at and re-fetched when it stops being true, and the paging state is released with
+the subscription it was served against (§4.2's cursors are that subscription's,
+not the app's).
 
 The `Current` segment, being unpaged, keeps every live behaviour it has today
 unchanged. That is the second reason to leave it alone: the one screen in the app
@@ -404,7 +477,7 @@ not acquire a page the news can land behind.
 |---|---|---|
 | Session list, first page and every page after | **30** | A phone sidebar shows about 11 rows: `SessionListSkeleton` is built to match the row and draws it at 56px, over `SidebarListItem`'s 44px floor. 30 is two and a half screens: enough that the sentinel is never already on screen at rest — which would make the first page ask for the second one before the user has done anything — and small enough that the first paint is not waiting on rows nobody scrolls to. Held to one number rather than a larger first page: a first page big enough to matter is a first page big enough to be the problem |
 | Session list, resync cap | **5 pages** | §3.4. The point where recovering the user's position costs more than putting them at the top of the list |
-| *Not running* cap | **50 rows** | High enough that an ordinary project never sees the control, low enough to stop the group from being the whole screen. It is a cap, not a page: pressing it once loads the rest, and there is no second press |
+| *Stopped* cap, *Not running* cap | **50 rows each** | High enough that an ordinary project never sees the control, low enough to stop either group from being the whole screen. One number for both: there is no reason for them to hold different amounts. It is a cap, not a page: pressing it once loads the rest of *both* groups, and there is no second press |
 | Closed archive page | **20** | The pager is fixed (§4.2), so page size is not constrained by reaching it — only by how long a page takes to scan. At 20 a page is about two screens: short enough to be read as one page, long enough that walking a real archive is not all thumb work |
 
 Chat history's 50 (`session.DefaultHistoryPageSize`) is deliberately not matched.
@@ -450,8 +523,11 @@ The checks, in the order they would fail:
 | 7 | A resync while scrolled deep does not strand the user past the end of the list (§3.4) |
 | 8 | The archive pager does not render when there is one page, and each button is disabled rather than removed at its end (§4.2) |
 | 9 | Changing archive page returns the scroll to the top (§4.2) |
+| 9a | A work that closes while the app is open is in the archive the next time the Closed segment is looked at, with no reload (§4.3) |
 | 10 | A session created while the reader is far down the list does not slide the rows under them — the scroll anchoring §3.2 relies on is on, and no `overflow-anchor: none` has been copied over from the transcript |
-| 11 | *Not running*'s count is the whole group's, not the number of rows fetched, and "Show earlier work" sits above the rows rather than below them (§4.1) |
+| 11 | Each capped group's count is that whole group's, not the number of rows fetched, and "Show earlier work" sits above the rows rather than below them (§4.1) |
+| 11a | The rows a cap holds back are the least recently updated of that group — the bottom of what the reader sees — and the two capped groups cannot spend each other's budget (§4.1) |
+| 11b | Two groups offering "Show earlier work" at once produce one error message and one Retry between them when the fetch fails (§4.1) |
 | 12 | Opening an old session that is outside the loaded range still opens, still resolves its title, and does not manufacture a row (§3.2) |
 | 13 | Nothing calls a session "deleted" on the strength of its absence from a list that can be partial (§2.3) |
 | 14 | Every new control clears the hit-area floor ([responsive-ui.md](responsive-ui.md#hit-areas-and-spacing)) |

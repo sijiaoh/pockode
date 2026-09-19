@@ -30,22 +30,43 @@ import type { SessionListChangedNotification } from "../types/message";
 // the destination rather than the session left behind. `onOpenSidebar` is
 // reported as well: whether the header gets a hamburger is decided here, not in
 // the header (see MainContainer's Props).
+// The work-list wiring is reported too: which segment the shell hands down, and
+// the three navigations that read it back (switch segment, open a work, come
+// back out of one). They are the shell's, not the list's.
 vi.mock("./Chat", () => ({
 	ChatPanel: ({
 		sessionId,
 		isSessionResolved,
 		onOpenSidebar,
+		workSegment,
+		onSelectWorkSegment,
+		onOpenWorkDetail,
+		onOpenWorkList,
 	}: {
 		sessionId: string;
 		isSessionResolved: boolean;
 		onOpenSidebar?: () => void;
+		workSegment?: string;
+		onSelectWorkSegment?: (segment: "current" | "closed") => void;
+		onOpenWorkDetail?: (workId: string) => void;
+		onOpenWorkList?: () => void;
 	}) => (
 		<div
 			data-testid="chat-panel"
 			data-resolved={String(isSessionResolved)}
 			data-can-open-sidebar={String(Boolean(onOpenSidebar))}
+			data-work-segment={workSegment}
 		>
 			{sessionId}
+			<button type="button" onClick={() => onSelectWorkSegment?.("closed")}>
+				Show Closed
+			</button>
+			<button type="button" onClick={() => onOpenWorkDetail?.("w1")}>
+				Open w1
+			</button>
+			<button type="button" onClick={() => onOpenWorkList?.()}>
+				Back to list
+			</button>
 		</div>
 	),
 }));
@@ -56,10 +77,12 @@ vi.mock("./Session", () => ({
 	SessionSidebar: ({
 		currentSessionId,
 		onCreateSession,
+		onOpenWorkList,
 		isExpanded,
 	}: {
 		currentSessionId: string | null;
 		onCreateSession: () => void;
+		onOpenWorkList: () => void;
 		isExpanded: boolean;
 	}) => (
 		<div
@@ -69,6 +92,9 @@ vi.mock("./Session", () => ({
 		>
 			<button type="button" onClick={onCreateSession}>
 				New Chat
+			</button>
+			<button type="button" onClick={onOpenWorkList}>
+				Project
 			</button>
 		</div>
 	),
@@ -487,5 +513,97 @@ describe("AppShell sidebar form and its switch", () => {
 			"data-can-open-sidebar",
 			String(!expanded),
 		);
+	});
+});
+
+// docs/project-ui.md §5: the segment is a place in the URL, so Back walks the
+// user's own choices and a link to the archive opens the archive. The shell
+// owns every one of these navigations.
+//
+// Worktree A, because the shell adopts that worktree's existing session rather
+// than creating one — and the adoption is itself worth having under the test:
+// it rewrites the URL, and the segment has to survive that rewrite.
+describe("AppShell work list segment", () => {
+	beforeEach(() => {
+		vi.clearAllMocks();
+		resetWorktreeStore();
+		useSessionDetailStore.getState().clear();
+		useSessionStore.setState({
+			sessions: [],
+			isLoading: true,
+			isSuccess: false,
+			showTaskSessions: false,
+		});
+		useWorkStore.setState({ works: [] });
+		useAuthStore.setState({ sessionToken: "test-session-token" });
+	});
+
+	const segmentOnScreen = () =>
+		screen.getByTestId("chat-panel").getAttribute("data-work-segment");
+
+	const segmentInUrl = (router: ReturnType<typeof renderAppShell>) =>
+		(router.state.location.search as { segment?: string }).segment;
+
+	it("opens the archive when the URL says so, and keeps it through the session redirect", async () => {
+		const router = renderAppShell("/w/A/works?segment=closed");
+
+		await waitFor(() => expect(segmentOnScreen()).toBe("closed"));
+		await waitFor(() =>
+			expect(router.state.location.pathname).toBe("/w/A/works"),
+		);
+		expect(segmentInUrl(router)).toBe("closed");
+	});
+
+	it("leaves a history entry per switch, so Back returns the previous choice", async () => {
+		const user = userEvent.setup();
+		const router = renderAppShell("/w/A/works");
+
+		await waitFor(() => expect(segmentOnScreen()).toBe("current"));
+		await user.click(screen.getByRole("button", { name: "Show Closed" }));
+
+		await waitFor(() => expect(segmentOnScreen()).toBe("closed"));
+		expect(segmentInUrl(router)).toBe("closed");
+
+		router.history.back();
+
+		await waitFor(() => expect(segmentOnScreen()).toBe("current"));
+		// `Current` is the absence of the parameter, not `segment=current`.
+		expect(segmentInUrl(router)).toBeUndefined();
+	});
+
+	// The entrance is an entrance: it goes to `Current` whatever the reader was
+	// last looking at, which is the whole reason nothing remembers the choice.
+	it("lands on Current from the Project button even while the archive is open", async () => {
+		const user = userEvent.setup();
+		const router = renderAppShell("/w/A/works?segment=closed");
+
+		await waitFor(() => expect(segmentOnScreen()).toBe("closed"));
+		await user.click(screen.getByRole("button", { name: "Project" }));
+
+		await waitFor(() => expect(segmentOnScreen()).toBe("current"));
+		expect(router.state.location.pathname).toBe("/w/A/works");
+		expect(segmentInUrl(router)).toBeUndefined();
+	});
+
+	// The list unmounts on the way into a work, so without carrying the segment
+	// the trip out would hand an archive reader back to `Current`.
+	it("returns to the segment a work was opened from", async () => {
+		const user = userEvent.setup();
+		const router = renderAppShell("/w/A/works?segment=closed");
+
+		await waitFor(() => expect(segmentOnScreen()).toBe("closed"));
+		await user.click(screen.getByRole("button", { name: "Open w1" }));
+
+		await waitFor(() =>
+			expect(router.state.location.pathname).toBe("/w/A/works/w1"),
+		);
+		expect(segmentInUrl(router)).toBe("closed");
+
+		await user.click(screen.getByRole("button", { name: "Back to list" }));
+
+		await waitFor(() =>
+			expect(router.state.location.pathname).toBe("/w/A/works"),
+		);
+		expect(segmentInUrl(router)).toBe("closed");
 	});
 });

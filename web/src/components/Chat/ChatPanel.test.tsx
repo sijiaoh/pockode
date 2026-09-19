@@ -1006,7 +1006,7 @@ describe("ChatPanel", () => {
 			rerender(
 				<ChatPanel
 					{...defaultProps}
-					overlay={{ type: "work-list" }}
+					overlay={{ type: "work-list", segment: "current" }}
 					onCloseOverlay={vi.fn()}
 				/>,
 			);

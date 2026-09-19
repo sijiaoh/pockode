@@ -12,7 +12,7 @@ import { useSubscription } from "./useSubscription";
  *
  * What it delivers is the `Current` segment, whole and always whole
  * (docs/list-paging-ui.md §4.1). The two things that are fetched — a page of
- * the closed archive, and the *Not running* rows the snapshot held back — are
+ * the closed archive, and the rows the snapshot's group caps held back — are
  * `workPagingActions`, bound to this subscription for as long as it is open.
  */
 export function useWorkSubscription(enabled: boolean) {
@@ -23,6 +23,7 @@ export function useWorkSubscription(enabled: boolean) {
 	const updateWorks = useWorkStore((s) => s.updateWorks);
 	const updateArchiveRow = useWorkStore((s) => s.updateArchiveRow);
 	const removeFromArchive = useWorkStore((s) => s.removeFromArchive);
+	const markArchiveStale = useWorkStore((s) => s.markArchiveStale);
 	const setError = useWorkStore((s) => s.setError);
 	const reset = useWorkStore((s) => s.reset);
 
@@ -50,15 +51,30 @@ export function useWorkSubscription(enabled: boolean) {
 
 	const applySnapshot = useCallback(
 		(initial: WorkListSubscribeResult) => {
-			setWorks(initial.items, initial.not_running_hidden ?? 0);
+			setWorks(initial.items, {
+				stopped: initial.stopped_hidden ?? 0,
+				open: initial.open_hidden ?? 0,
+			});
+			// A snapshot is the whole of `Current` and not one word about the
+			// archive, so a work that closed while this client was away — a
+			// reconnect opens a new subscription over a page fetched by the old one
+			// — arrives through nothing else.
+			markArchiveStale();
 		},
-		[setWorks],
+		[setWorks, markArchiveStale],
 	);
 
 	const handleNotification = useCallback(
 		(params: WorkListChangedNotification) => {
 			if (params.operation === "sync") {
-				setWorks(params.works, params.not_running_hidden ?? 0);
+				setWorks(params.works, {
+					stopped: params.stopped_hidden ?? 0,
+					open: params.open_hidden ?? 0,
+				});
+				// A sync follows a dropped event, and one of the dropped ones may
+				// have been a close — which this carries no trace of, since
+				// `Current` holds no closed work.
+				markArchiveStale();
 				return;
 			}
 			if (params.operation === "delete") {
@@ -69,9 +85,10 @@ export function useWorkSubscription(enabled: boolean) {
 			const row = params.work;
 			// One upsert for create and update alike. An update for a row the client
 			// does not hold is not noise to drop: the snapshot leaves out closed
-			// work and the oldest of *Not running*, and a work in either group that
-			// starts needing a person has to arrive — dropping it is exactly how the
-			// attention dot would go dark on a project that needs one
+			// work and the least recently updated of the two capped groups, and a
+			// work in any of them that starts needing a person has to arrive —
+			// dropping it is exactly how the attention dot would go dark on a
+			// project that needs one
 			// (docs/list-paging-ui.md §2.1). A row nothing draws costs a place in an
 			// array.
 			updateWorks((old) =>
@@ -79,11 +96,19 @@ export function useWorkSubscription(enabled: boolean) {
 					? old.map((w) => (w.id === row.id ? row : w))
 					: [...old, row],
 			);
-			// The archive is fetched and never pushed to, with one exception: a row
-			// already on the page the user is reading stays accurate (§4.3).
+			// The archive is fetched and never pushed to. Two things a push may
+			// still do to it, and no third: keep a row already on the page the user
+			// is reading accurate, and tell a page that does not hold this closed
+			// story that it was cut too early (§4.3).
 			updateArchiveRow(row);
 		},
-		[setWorks, updateWorks, updateArchiveRow, removeFromArchive],
+		[
+			setWorks,
+			updateWorks,
+			updateArchiveRow,
+			removeFromArchive,
+			markArchiveStale,
+		],
 	);
 
 	const handleError = useCallback(

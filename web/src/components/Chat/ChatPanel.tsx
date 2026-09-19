@@ -17,7 +17,7 @@ import type {
 	HistorySeq,
 	PermissionRequest,
 } from "../../types/message";
-import type { OverlayState } from "../../types/overlay";
+import type { OverlayState, WorkSegment } from "../../types/overlay";
 import { resolveForkAnchor } from "../../utils/forkAnchor";
 import { buildForkTitle } from "../../utils/forkTitle";
 import { FileEditor, FileView } from "../Files";
@@ -120,6 +120,8 @@ interface Props {
 	 */
 	onOpenFile?: (path: string) => void;
 	onOpenWorkList?: () => void;
+	workSegment?: WorkSegment;
+	onSelectWorkSegment?: (segment: WorkSegment) => void;
 	onOpenAgentRoleList?: () => void;
 	onOpenAgentRoleDetail?: (roleId: string) => void;
 }
@@ -138,6 +140,8 @@ function ChatPanel({
 	onOpenWorkDetail,
 	onOpenFile,
 	onOpenWorkList,
+	workSegment = "current",
+	onSelectWorkSegment,
 	onOpenAgentRoleList,
 	onOpenAgentRoleDetail,
 }: Props) {
@@ -511,6 +515,8 @@ function ChatPanel({
 			case "work-list":
 				return (
 					<WorkListOverlay
+						segment={workSegment}
+						onSelectSegment={onSelectWorkSegment ?? noop}
 						onBack={onCloseOverlay ?? noop}
 						onOpenWorkDetail={onOpenWorkDetail ?? noop}
 						onNavigateToSession={onNavigateToSession ?? noop}

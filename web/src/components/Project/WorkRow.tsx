@@ -27,7 +27,11 @@ interface Props {
 	parentTitle?: string;
 	/** Slot 4, resolved by the screen from the role map it already holds. */
 	roleName?: string;
-	/** Slot 7. The `Closed` segment is sorted by this, so only it shows it. */
+	/**
+	 * Slot 7. Shown wherever the rows are sorted by it — both segments of the
+	 * list — and not on the story detail's Tasks section, which is in the order
+	 * the story was broken down in (docs/project-ui.md §3, slot 7).
+	 */
 	showUpdatedAt?: boolean;
 	/**
 	 * What the title is a heading of: `h3` under the list's group headings, `h4`

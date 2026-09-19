@@ -173,7 +173,7 @@ export interface WatchActions {
 		cursor: string,
 		limit?: number,
 	) => Promise<WorkListArchiveResult>;
-	/** Lifts the *Not running* cap. One call, the whole group, no cursor. */
+	/** Lifts both group caps. One call, both groups whole, no cursor. */
 	workListEarlier: (subscriptionId: string) => Promise<WorkListEarlierResult>;
 	workListUnsubscribe: (id: string) => Promise<void>;
 	workDetailSubscribe: (

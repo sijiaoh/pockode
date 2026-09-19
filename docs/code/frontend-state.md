@@ -18,7 +18,6 @@ Pockode uses Zustand for state management, pure reducers for event processing, a
 │  ├─ inputStore (localStorage)                               │   │
 │  ├─ filesSearchStore (localStorage)                         │   │
 │  ├─ gitPanelStore                                           │   │
-│  ├─ projectPanelStore                                       │   │
 │  ├─ gitSyncStore                                            │   │
 │  ├─ gitWriteStore                                           │   │
 │  └─ worktreeStore + listeners                               │   │
@@ -56,7 +55,6 @@ Pockode uses Zustand for state management, pure reducers for event processing, a
 | inputStore | Draft text, per session | persist middleware |
 | filesSearchStore | File search options | localStorage init |
 | gitPanelStore | Git panel UI state (History expanded) | Session-scoped override |
-| projectPanelStore | Which segment of the project list is shown | Outlives the screen, which unmounts into a work detail |
 | gitSyncStore | The fetch/pull/push in flight in each worktree, and how the last one ended | Keyed by worktree; outlives the sheet that started the run |
 | gitWriteStore | Each worktree's serial queue of stage/unstage/discard writes, and the paths they have pending | Keyed by worktree; one write at a time, so two taps cannot race |
 | worktreeStore | Current worktree, and whether the server can run the setup hook | External listener pattern |
@@ -163,7 +161,10 @@ pushed to, and every change to any work item reaches it — including changes to
 rows it does not hold, which are upserted rather than dropped, since a work that
 starts needing a person must be able to light the attention dot from outside
 what was fetched. `archive` is the mirror image: fetched, and pushed nothing but
-a correction to a row already on the page the user is reading.
+a correction to a row already on the page the user is reading — plus
+`archiveStale`, which is not a row at all but the page admitting a closed story
+has appeared behind it, and is what makes the Closed segment ask again
+([why](subscription-system.md#nobody-is-waiting-on-it-is-not-nobody-ever-looks-at-it)).
 
 The archive pager walks with `archiveCursors: string[]`, a stack the *client*
 keeps — entry 0 is always `""`, and "Older" pushes the cursor the server just
@@ -210,16 +211,17 @@ tree, which is where the answer usually comes from; a stale choice restored
 across restarts would outlive the situation that produced it. See
 [git-ui.md](../git-ui.md#history).
 
-`projectPanelStore` is the same argument with the remount guaranteed rather
-than conditional: it holds which segment of the project list — `Current` or
-`Closed` — is on screen, and the list unmounts every time a row is opened, so
-component state would hand a user browsing the archive back to `Current` on the
-way out of every work they looked at. The URL is the other tempting home and is
-worse: the segment filters one screen rather than naming a place, and as a route
-every tap would become a history entry, so Back would walk the user through
-their own filter changes instead of leaving the list. Not persisted either — a
-user who reloads is starting over, and `Current` is where starting over belongs
-(see [project-ui.md](../project-ui.md#5-where-the-segment-is-remembered)).
+Which segment of the project list is on screen — `Current` or `Closed` — used
+to be a store here (`projectPanelStore`) and is **not state at all any more**:
+it is in the URL. There is no third option in between. Component state would
+hand a user browsing the archive back to `Current` every time they opened a
+work, which is why a store was reached for; but the store bought that at the
+price of a segment no link could name and a Back button that skipped the whole
+visit. Back stepping through the user's own filter changes turned out to be the
+behaviour users asked for by name, and it is the one a browser gives for free.
+The round trip into a work is paid for in the URL instead: the detail carries
+the segment it was opened from, which a store never had to and a component never
+could. See [project-ui.md](../project-ui.md#5-where-the-segment-lives).
 
 ### Why a Run in Flight Is a Store
 

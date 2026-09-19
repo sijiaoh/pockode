@@ -1,4 +1,4 @@
-import type { OverlayState } from "../types/overlay";
+import type { OverlayState, WorkSegment } from "../types/overlay";
 import { ROUTES, WT_ROUTES } from "./routes";
 
 export const SETUP_HOOK_PATH = ".pockode/worktree-setup.sh";
@@ -55,6 +55,7 @@ interface NavToWorkListOverlay {
 	type: "overlay";
 	worktree: string;
 	overlayType: "work-list";
+	segment: WorkSegment;
 	sessionId: string | null;
 }
 
@@ -63,6 +64,7 @@ interface NavToWorkDetailOverlay {
 	worktree: string;
 	overlayType: "work-detail";
 	workId: string;
+	segment: WorkSegment;
 	sessionId: string | null;
 }
 
@@ -101,6 +103,28 @@ interface NavigationResult {
 	params?: Record<string, string>;
 	search?: Record<string, string>;
 	replace?: boolean;
+}
+
+/**
+ * The query most overlay routes carry: the chat underneath it, and — on the two
+ * work routes — which segment of the list the reader is in. The file routes
+ * build their own, because they also carry `mode`.
+ *
+ * `Current` is the *absence* of `segment` rather than `segment=current`, so that
+ * the default landing place has exactly one URL; it is what lets the Project
+ * entry button's plain `/works` mean `Current` on its own
+ * (docs/project-ui.md §5). A query with nothing in it is left off the result
+ * entirely rather than handed over empty.
+ */
+function assignSearch(
+	result: NavigationResult,
+	sessionId: string | null,
+	segment?: WorkSegment,
+) {
+	const search: Record<string, string> = {};
+	if (sessionId) search.session = sessionId;
+	if (segment === "closed") search.segment = segment;
+	if (Object.keys(search).length > 0) result.search = search;
 }
 
 /**
@@ -175,6 +199,7 @@ export function overlayToNavigation(
 					type: "overlay" as const,
 					worktree,
 					overlayType: "work-list" as const,
+					segment: overlay.segment,
 					sessionId,
 				};
 			case "work-detail":
@@ -183,6 +208,7 @@ export function overlayToNavigation(
 					worktree,
 					overlayType: "work-detail" as const,
 					workId: overlay.workId,
+					segment: overlay.segment,
 					sessionId,
 				};
 			case "agent-role-list":
@@ -241,18 +267,14 @@ export function buildNavigation(
 				if (!isMain) {
 					result.params.worktree = target.worktree;
 				}
-				if (target.sessionId) {
-					result.search = { session: target.sessionId };
-				}
+				assignSearch(result, target.sessionId);
 			} else if (target.overlayType === "work-detail") {
 				result.to = isMain ? ROUTES.workDetail : WT_ROUTES.workDetail;
 				result.params = { workId: target.workId };
 				if (!isMain) {
 					result.params.worktree = target.worktree;
 				}
-				if (target.sessionId) {
-					result.search = { session: target.sessionId };
-				}
+				assignSearch(result, target.sessionId, target.segment);
 			} else if (
 				target.overlayType === "settings" ||
 				target.overlayType === "work-list" ||
@@ -268,18 +290,18 @@ export function buildNavigation(
 				if (!isMain) {
 					result.params = { worktree: target.worktree };
 				}
-				if (target.sessionId) {
-					result.search = { session: target.sessionId };
-				}
+				assignSearch(
+					result,
+					target.sessionId,
+					target.overlayType === "work-list" ? target.segment : undefined,
+				);
 			} else if (target.overlayType === "commit") {
 				result.to = isMain ? ROUTES.commit : WT_ROUTES.commit;
 				result.params = { _splat: target.hash };
 				if (!isMain) {
 					result.params.worktree = target.worktree;
 				}
-				if (target.sessionId) {
-					result.search = { session: target.sessionId };
-				}
+				assignSearch(result, target.sessionId);
 			} else if (
 				target.overlayType === "commit-diff" ||
 				target.overlayType === "commit-file"
@@ -291,9 +313,7 @@ export function buildNavigation(
 				if (!isMain) {
 					result.params.worktree = target.worktree;
 				}
-				if (target.sessionId) {
-					result.search = { session: target.sessionId };
-				}
+				assignSearch(result, target.sessionId);
 			} else {
 				const routeMap = {
 					staged: isMain ? ROUTES.staged : WT_ROUTES.staged,

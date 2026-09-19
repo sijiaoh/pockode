@@ -117,8 +117,8 @@ Activates both `useWorkSubscription` and `useAgentRoleSubscription`.
 
 **What it draws:**
 
-1. A `Current` / `Closed` segmented control under the header and outside the scroll area. The chosen segment lives in `projectPanelStore`, not in component state and not in the URL ([why](../code/frontend-state.md#why-a-store-for-panel-ui-state))
-2. Inside `Current`, three inert sticky group headings — *Needs you*, *In progress*, *Not running* — whose membership is the single `rowGroup()` function in the file. `Closed` is the archive: closed stories, flat, `updated_at` newest first
+1. A `Current` / `Closed` segmented control under the header and outside the scroll area. The chosen segment is a prop, read from the URL by `AppShell` and written back by tapping ([why](../project-ui.md#5-where-the-segment-lives)); this screen holds none of it
+2. Inside `Current`, four inert sticky group headings — *Stopped*, *Needs you*, *In progress*, *Not running* — whose membership is the single `rowGroup()` function in the file, and whose order is the single `GROUP_ORDER` constant beside it. Every group is sorted `updated_at` newest first by `lib/workOrder.ts`, which is also the order the server cuts both its caps and the archive's pages along. `Closed` is the archive: closed stories, flat, same order, sorted by the server and never re-sorted here
 3. Every row is `WorkRow` (below). The screen draws no row of its own, nothing expands and no group collapses
 4. Loading, subscription failure and both empty states are the scroll area's; the segmented control and the bottom bar stay usable through all three
 5. A fixed `BottomActionBar` with `New Story`, which opens `CreateWorkSheet`

@@ -167,17 +167,17 @@ func TestHandler_ListPaging_MalformedCursorIsTheClientsToFix(t *testing.T) {
 func TestHandler_WorkListEarlier_ReturnsTheWholeGroup(t *testing.T) {
 	env := newTestEnv(t, &mockAgent{})
 
-	total := watch.NotRunningCap + 2
+	total := watch.CurrentGroupCap + 2
 	for i := range total {
 		createStory(t, env, string(rune('a'+i%26))+"-story")
 	}
 
 	snapshot := subscribeWorkList(t, env, "client-1")
-	if len(snapshot.Items) != watch.NotRunningCap {
-		t.Fatalf("snapshot carried %d rows, want the cap %d", len(snapshot.Items), watch.NotRunningCap)
+	if len(snapshot.Items) != watch.CurrentGroupCap {
+		t.Fatalf("snapshot carried %d rows, want the cap %d", len(snapshot.Items), watch.CurrentGroupCap)
 	}
-	if snapshot.NotRunningHidden != 2 {
-		t.Fatalf("not_running_hidden = %d, want 2", snapshot.NotRunningHidden)
+	if snapshot.OpenHidden != 2 {
+		t.Fatalf("open_hidden = %d, want 2", snapshot.OpenHidden)
 	}
 
 	resp := env.call("work.list.earlier", rpc.WorkListEarlierParams{ID: "client-1"})

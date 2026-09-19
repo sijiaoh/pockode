@@ -1,8 +1,9 @@
-import { render, screen } from "@testing-library/react";
+import { act, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { useState } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { projectPanelActions } from "../../lib/projectPanelStore";
-import { useWorkStore } from "../../lib/workStore";
+import { useWorkStore, workPagingActions } from "../../lib/workStore";
+import type { WorkSegment } from "../../types/overlay";
 import type { WorkListItem } from "../../types/work";
 import WorkListOverlay from "./WorkListOverlay";
 
@@ -39,10 +40,10 @@ const createWork = (overrides: Partial<WorkListItem>): WorkListItem => ({
 	...overrides,
 });
 
-function setWorks(works: WorkListItem[], notRunningHidden = 0) {
+function setWorks(works: WorkListItem[], hidden = { stopped: 0, open: 0 }) {
 	useWorkStore.setState({
 		works,
-		notRunningHidden,
+		hidden,
 		isLoading: false,
 		error: null,
 		isEarlierLoading: false,
@@ -66,15 +67,45 @@ function setArchivePage(
 		archiveLoaded: true,
 		isArchiveLoading: false,
 		archiveError: null,
+		archiveStale: false,
 	});
 }
 
-function renderList() {
+const noop = () => {};
+
+/**
+ * The screen takes the segment from its caller — in the app, from the URL. This
+ * stands in for that caller so that a segment tap here shows what the reader
+ * would see after the navigation it asks for; the URL round trip itself is
+ * `AppShell`'s and is tested there.
+ */
+function SegmentHarness({
+	initial,
+	onOpenWorkDetail,
+	onNavigateToSession,
+}: {
+	initial: WorkSegment;
+	onOpenWorkDetail: (workId: string) => void;
+	onNavigateToSession: (sessionId: string, worktree: string) => void;
+}) {
+	const [segment, setSegment] = useState<WorkSegment>(initial);
+	return (
+		<WorkListOverlay
+			segment={segment}
+			onSelectSegment={setSegment}
+			onBack={noop}
+			onOpenWorkDetail={onOpenWorkDetail}
+			onNavigateToSession={onNavigateToSession}
+		/>
+	);
+}
+
+function renderList({ segment = "current" as WorkSegment } = {}) {
 	const onOpenWorkDetail = vi.fn();
 	const onNavigateToSession = vi.fn();
 	const view = render(
-		<WorkListOverlay
-			onBack={vi.fn()}
+		<SegmentHarness
+			initial={segment}
 			onOpenWorkDetail={onOpenWorkDetail}
 			onNavigateToSession={onNavigateToSession}
 		/>,
@@ -105,7 +136,6 @@ describe("WorkListOverlay", () => {
 	beforeEach(() => {
 		setWorks([]);
 		setArchivePage([]);
-		projectPanelActions.reset();
 	});
 
 	// §2.2: the group's promise is that what is in it is for the user to do, so
@@ -151,7 +181,7 @@ describe("WorkListOverlay", () => {
 
 		renderList();
 
-		expect(groupOf("Wire the relay")).toBe("Not running");
+		expect(groupOf("Wire the relay")).toBe("Stopped");
 		expect(screen.getByText("Cluster mode")).toBeInTheDocument();
 	});
 
@@ -190,14 +220,30 @@ describe("WorkListOverlay", () => {
 		expect(screen.getByText("1/2 tasks")).toBeInTheDocument();
 	});
 
-	// §2.3: `open` and `stopped` differ in how they got there, not in what the
-	// user does about them.
-	it("holds the work nothing is happening to in one group", () => {
+	// §2.3: `open` is "nobody has started this", `stopped` is "something that
+	// was started broke off". One count over both is neither a backlog nor a
+	// list of debts, so they are two groups — and the debts are the ones at the
+	// top of the screen.
+	it("lifts stopped work into its own group above the rest", () => {
 		setWorks([
-			createWork({ id: "s1", title: "Never started", status: "open" }),
 			createWork({
-				id: "s2",
+				id: "s1",
+				title: "Wants an answer",
+				status: "active",
+				activity: "needs_message",
+			}),
+			createWork({ id: "s2", title: "Never started", status: "open" }),
+			createWork({
+				id: "s3",
 				title: "Handed back",
+				status: "stopped",
+				activity: "stopped",
+			}),
+			createWork({
+				id: "t1",
+				type: "task",
+				parent_id: "s1",
+				title: "A stopped task",
 				status: "stopped",
 				activity: "stopped",
 			}),
@@ -205,11 +251,61 @@ describe("WorkListOverlay", () => {
 
 		renderList();
 
+		// Stories and tasks alike: what puts a row here is the status.
+		expect(groupOf("Handed back")).toBe("Stopped");
+		expect(groupOf("A stopped task")).toBe("Stopped");
 		expect(groupOf("Never started")).toBe("Not running");
-		expect(groupOf("Handed back")).toBe("Not running");
+		expect(
+			screen.queryAllByRole("heading", { level: 2 }).map((h) => h.textContent),
+		).toEqual(["Stopped2", "Needs you1", "Not running1"]);
 		expect(
 			screen.getByRole("button", { name: 'Restart "Handed back"' }),
 		).toBeInTheDocument();
+	});
+
+	// Nothing stopped is the ordinary case, and it has to cost nothing: no
+	// heading, and no gap where one would have been.
+	it("draws no Stopped heading when nothing is stopped", () => {
+		setWorks([
+			createWork({
+				id: "s1",
+				title: "Wants an answer",
+				status: "active",
+				activity: "needs_message",
+			}),
+		]);
+
+		renderList();
+
+		expect(
+			screen.queryAllByRole("heading", { level: 2 }).map((h) => h.textContent),
+		).toEqual(["Needs you1"]);
+	});
+
+	// §6.1: the top of a group is what happened most recently. It matters most
+	// in *Stopped*, where "handed back a minute ago" and "broken since last
+	// week" are two different jobs.
+	it("lists each group most recently updated first", () => {
+		setWorks([
+			createWork({
+				id: "s1",
+				title: "Stale",
+				status: "stopped",
+				activity: "stopped",
+				updated_at: "2026-03-04T01:00:00Z",
+			}),
+			createWork({
+				id: "s2",
+				title: "Fresh",
+				status: "stopped",
+				activity: "stopped",
+				updated_at: "2026-03-04T02:00:00Z",
+			}),
+		]);
+
+		renderList();
+
+		expect(rowTitles()).toEqual(["Fresh", "Stale"]);
 	});
 
 	// A stale stopped work at the top of *Needs you* would teach the user that
@@ -364,7 +460,9 @@ describe("WorkListOverlay", () => {
 		expect(screen.queryAllByRole("heading", { level: 2 })).toEqual([]);
 	});
 
-	it("dates the archive it sorts, and nothing else", async () => {
+	// §3, slot 7: both segments are ordered by `updated_at` now, and a sort key
+	// the reader cannot see is not an order they can read.
+	it("dates the rows of both segments", async () => {
 		const user = userEvent.setup();
 		setWorks([createWork({ id: "s1", title: "Never started" })]);
 		setArchivePage([
@@ -377,16 +475,87 @@ describe("WorkListOverlay", () => {
 		]);
 
 		renderList();
-		expect(screen.queryByText(/ago|just now|yesterday/)).toBeNull();
+		expect(screen.getByText(/ago|just now|yesterday/)).toBeInTheDocument();
 
 		await user.click(screen.getByRole("button", { name: "Closed" }));
 		expect(screen.getByText(/ago|just now|yesterday/)).toBeInTheDocument();
 	});
 
-	// §5: the screen unmounts on the way into a work detail, so the choice
-	// cannot live in the component.
-	it("remembers the segment across a trip into a detail page", async () => {
+	// The reported bug, from the user's end: a work finishes, leaves `Current`
+	// because it is closed, and the Closed segment goes on showing the page it
+	// was cut before that. §4.3's "it is gone the next time the page is loaded"
+	// only means something if something loads the page again.
+	it("asks for the page again once a work has closed behind it", async () => {
 		const user = userEvent.setup();
+		const load = vi
+			.spyOn(workPagingActions, "loadArchivePage")
+			.mockResolvedValue(undefined);
+		setArchivePage(
+			[
+				createWork({
+					id: "older",
+					title: "Older Story",
+					status: "closed",
+					activity: "closed",
+				}),
+			],
+			{ page: 1 },
+		);
+
+		renderList();
+		await user.click(screen.getByRole("button", { name: "Closed" }));
+		expect(load).not.toHaveBeenCalled();
+
+		act(() => {
+			useWorkStore.getState().updateArchiveRow(
+				createWork({
+					id: "just-finished",
+					title: "Just finished",
+					status: "closed",
+					activity: "closed",
+				}),
+			);
+		});
+
+		// The page the reader is on, not the first: a close belongs at the top of
+		// page 1 and cannot move a window further down the archive.
+		expect(load).toHaveBeenCalledWith(1, "cursor-1");
+		load.mockRestore();
+	});
+
+	// Any fetch starting clears the error and the Retry with it, so a refresh
+	// that ran here would withdraw the answer to the failure the reader is
+	// looking at — and re-point Retry at a page they did not ask for.
+	it("leaves a failed page's Retry alone when a work closes elsewhere", async () => {
+		const user = userEvent.setup();
+		setArchivePage([
+			createWork({
+				id: "older",
+				title: "Older Story",
+				status: "closed",
+				activity: "closed",
+			}),
+		]);
+		useWorkStore.setState({ archiveError: "Failed to load the archive: nope" });
+		const load = vi
+			.spyOn(workPagingActions, "loadArchivePage")
+			.mockResolvedValue(undefined);
+
+		renderList();
+		await user.click(screen.getByRole("button", { name: "Closed" }));
+
+		act(() => {
+			useWorkStore.getState().markArchiveStale();
+		});
+
+		expect(load).not.toHaveBeenCalled();
+		expect(screen.getByRole("button", { name: "Retry" })).toBeInTheDocument();
+		load.mockRestore();
+	});
+
+	// §5: the segment is the caller's now, so a screen handed `closed` shows the
+	// archive on its first paint — which is what a reload or a shared link does.
+	it("opens on the archive when it is handed the closed segment", () => {
 		setArchivePage([
 			createWork({
 				id: "closed",
@@ -396,17 +565,35 @@ describe("WorkListOverlay", () => {
 			}),
 		]);
 
-		const { unmount } = renderList();
-		await user.click(screen.getByRole("button", { name: "Closed" }));
-		unmount();
-
-		renderList();
+		renderList({ segment: "closed" });
 
 		expect(screen.getByRole("button", { name: "Closed" })).toHaveAttribute(
 			"aria-pressed",
 			"true",
 		);
 		expect(rowTitles()).toEqual(["Older Story"]);
+	});
+
+	it("asks its caller for the segment rather than switching itself", async () => {
+		const user = userEvent.setup();
+		const onSelectSegment = vi.fn();
+		render(
+			<WorkListOverlay
+				segment="current"
+				onSelectSegment={onSelectSegment}
+				onBack={vi.fn()}
+				onOpenWorkDetail={vi.fn()}
+				onNavigateToSession={vi.fn()}
+			/>,
+		);
+
+		await user.click(screen.getByRole("button", { name: "Closed" }));
+
+		expect(onSelectSegment).toHaveBeenCalledWith("closed");
+		expect(screen.getByRole("button", { name: "Current" })).toHaveAttribute(
+			"aria-pressed",
+			"true",
+		);
 	});
 
 	it("navigates to a work's chat using the work's own worktree", async () => {
@@ -480,7 +667,7 @@ describe("WorkListOverlay", () => {
 				createWork({ id: "s1", title: "Never started" }),
 				createWork({ id: "s2", title: "Also never started" }),
 			],
-			118,
+			{ stopped: 0, open: 118 },
 		);
 
 		renderList();
@@ -497,6 +684,67 @@ describe("WorkListOverlay", () => {
 			control.compareDocumentPosition(firstRow) &
 				Node.DOCUMENT_POSITION_FOLLOWING,
 		).toBeTruthy();
+	});
+
+	// Each capped group counts and offers its own, because each is one heading
+	// and one number spanning two of them would make at least one wrong. One
+	// press still lifts both caps — it is the lid coming off the segment.
+	it("offers each capped group its own count and control", () => {
+		setWorks(
+			[
+				createWork({ id: "s1", title: "Never started" }),
+				createWork({
+					id: "s2",
+					title: "Handed back",
+					status: "stopped",
+					activity: "stopped",
+				}),
+			],
+			{ stopped: 4, open: 118 },
+		);
+
+		renderList();
+
+		expect(
+			screen.getByRole("heading", { level: 2, name: /Stopped/ }),
+		).toHaveTextContent("Stopped5");
+		expect(
+			screen.getByRole("heading", { level: 2, name: /Not running/ }),
+		).toHaveTextContent("Not running119");
+		expect(
+			screen
+				.getAllByRole("button", { name: /Show earlier work/ })
+				.map((b) => b.textContent),
+		).toEqual(["Show earlier work (4)", "Show earlier work (118)"]);
+	});
+
+	// The two controls ask for the same thing, so a failure of that one ask is
+	// one message, not one per group.
+	it("reports a failed Show earlier work once", () => {
+		setWorks(
+			[
+				createWork({ id: "s1", title: "Never started" }),
+				createWork({
+					id: "s2",
+					title: "Handed back",
+					status: "stopped",
+					activity: "stopped",
+				}),
+			],
+			{ stopped: 4, open: 118 },
+		);
+		useWorkStore.setState({ earlierError: "socket closed" });
+
+		renderList();
+
+		expect(screen.getAllByRole("alert").map((a) => a.textContent)).toEqual([
+			"socket closed",
+		]);
+		expect(
+			screen
+				.getAllByRole("button", { name: /Show earlier work|Retry/ })
+				.map((b) => b.textContent),
+		).toEqual(["Retry", "Show earlier work (118)"]);
 	});
 
 	it("offers nothing to show earlier when the group arrived whole", () => {

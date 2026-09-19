@@ -51,6 +51,7 @@ document is what it expands to.
 | Screen | Route | What it is |
 |---|---|---|
 | Project | `/works` | Every work that needs a person or is under way. One column. |
+| Project, archive | `/works?segment=closed` | The same screen filtered to finished work (§5). |
 | Work detail | `/works/$workId` | One story or task, its children, its comments. |
 
 Both routes carry the usual `/w/<worktree>` prefix outside main, as every route
@@ -66,14 +67,16 @@ work in different tabs at different times. A user cannot learn where something
 
 The one genuine split is not between states but between **use cases**: triaging
 live work and looking something up in the archive. That is a filter over one
-list, not a second location, so it is a segmented control (§2.1) and not a tab —
-and it is not in the URL (§5).
+list, not a second location, so it is a segmented control (§2.1) and not a tab.
+The filter is still spelled in the URL — `/works?segment=closed` — because a
+filter nobody can link to or step back out of is a filter the browser cannot
+help with (§5).
 
 **Back from a work detail returns to the list**, and from a task to its parent
 story's detail first — both already true and both kept. It is worth writing down
-because it is what makes the *Current* / *Closed* choice a filter rather than a
-location (§5): the trip into a detail and out again is the one thing that choice
-has to survive, and Back is not where the segment is remembered.
+because the trip into a detail and out again is the one thing the *Current* /
+*Closed* choice has to survive, and §5 says how: the detail's URL carries the
+segment it was opened from.
 
 ## 2. The Project screen
 
@@ -83,11 +86,14 @@ has to survive, and Back is not where the segment is remembered.
 ├──────────────────────────────────────┤
 │  [ Current ]   Closed                │  segmented control, sticky
 ├──────────────────────────────────────┤
-│ ⏸ Needs you                      2   │  group header, sticky, inert
+│ ⏹ Stopped                        1   │  group header, sticky, inert
+│   ◦ Rewrite the tunnel retry     💬↺ │
+│     Stopped · main · Engineer    2h  │
+│ ⏸ Needs you                      2   │
 │   ◦ Wire the relay handshake     💬⏹ │
-│     Needs answer · main · Engineer   │
-│   ◦ Rebuild the project page     💬⏹ │
-│     Needs input · in: Cluster mode   │
+│     Needs answer · main · Eng.   5m  │
+│    ◦ Rebuild the project page    💬⏹ │
+│      ↳ Cluster mode · Needs inp. 12m │
 │ ⏵ In progress                    3   │
 │   ...                                │
 │ ○ Not running                    4   │
@@ -156,31 +162,70 @@ Nothing is listed twice: a story row never contains child rows, so a story in
 different things, each with its own action. A task row names its parent in its
 meta line (§3) so it is never orphaned.
 
-### 2.3 Three groups, and why three
+### 2.3 Four groups, and why four
 
 Inside `Current`, in this order:
 
 | Group | Contains | Header glyph | The question it answers |
 |---|---|---|---|
+| **Stopped** | `status == stopped` — stories *and* tasks | `CircleStop` error | What was handed back to me? |
 | **Needs you** | `status == active` and `needsUser(activity)` — stories *and* tasks | `CirclePause` warning | What is blocked on me? |
 | **In progress** | every other `active` story | `CircleDot` accent | What is being handled without me? |
-| **Not running** | `status == open` or `status == stopped` stories, plus `stopped` tasks | `Circle` muted | What is nothing happening to? |
+| **Not running** | `status == open` stories | `Circle` muted | What has never been started? |
 
-Two questions decide the group, and they are asked in this order: **is an engine
-driving this work, and if it is, is it blocked on the user?** That is the whole
-rule. It replaces four groups whose order needed a paragraph of justification
-between `stopped` and `open`, because those two differ in how they got there and
-not in what the user does about them — the row's own control is the same control
-under both labels, Start and Restart (lifecycle-ui.md §3), and the row's own
-glyph already tells a hollow `Circle` from a red `CircleStop`. Merging them
-costs the user nothing they were reading off the header and saves them a group.
+Two questions decide the group, and they are asked in this order: **has this
+work been handed back to a person, and if not, is an engine driving it, blocked
+on the user?** The status is asked before the activity, so a stopped work is in
+*Stopped* whatever its last activity says — that activity describes a turn that
+has already ended and predicts nothing about the next one.
 
-**`stopped` stays out of *Needs you*, deliberately.** It does need a human, but
-it needs one whenever the human gets to it, and a stale stopped work parked at
-the top of *Needs you* would teach the user that the group's count is not a
-number of things to do. That is the same argument lifecycle-ui.md §4 makes for
-keeping `stopped` out of the attention dot, applied to the place a count is
-read.
+`stopped` and `open` used to share *Not running*, on the argument that they
+differ in how they got there and not in what the user does about them: the row's
+own control is the same control under both labels, Start and Restart
+(lifecycle-ui.md §3). That is true on the axis of *what to do* and misses the
+other axis entirely.
+
+- `open` has **never been started**. Nothing is wrong with a work sitting there;
+  it is the backlog.
+- `stopped` has **run and been handed back**. A line that was already moving is
+  broken, and no agent will touch it until a person does.
+
+One group holding both has a count that is neither a backlog size nor a number
+of things gone wrong. Splitting them gives the top of the list back its meaning:
+*Stopped* is a group that should be empty, and an empty group is not drawn at
+all (below), so on a healthy project the list still opens on *Needs you* exactly
+as it did.
+
+**Which work gets a row did not change** — §2.2's rule is untouched, and a
+stopped task already had a row of its own. Only the group it is counted in, and
+where that group sits, are different.
+
+***Stopped* leads, and *Needs you* is second.** It is the one group where
+nothing at all happens until a person acts; *Needs you* at least has an agent
+alive and waiting, which resumes the moment it is answered. The case against is
+real — an idling agent costs time too — so the order is one constant
+(`GROUP_ORDER`) and swapping the first two entries is a one-line change. The
+trigger for making it: a *Stopped* group that sits at five or more rows for days
+and pushes *Needs you* off the first screen.
+
+**`stopped` still stays out of *Needs you*, deliberately.** It does need a
+human, but it needs one whenever the human gets to it, and a stale stopped work
+counted into *Needs you* would teach the user that that group's count is not a
+number of things waiting on them right now. That is the same argument
+lifecycle-ui.md §4 makes for keeping `stopped` out of the attention dot, applied
+to the place a count is read. It is not weakened by the split: *Stopped* gets
+its own heading and its own count, it does not join anyone else's.
+
+**Nothing on the row changes because of the split.** A stopped row already
+carries three channels — the 2px `border-l-th-error`, the error-toned
+`CircleStop`, and the word `Stopped` in slot 2 — and its position under an
+error-toned heading at the top of the list is the fourth. A row's appearance is
+decided by the work and never by which group it was sorted into (§3.1); making
+the row read its group would give one work two looks across this screen and the
+story detail's Tasks list. Nor does the group need a divider or a fill of its
+own: what separates it from the groups below is the rhythm the rest of the list
+already has (below), plus its sticky heading — the only error-toned heading in
+the column.
 
 Group headers are **inert**: a glyph, a label, a count, and no collapse toggle.
 A heading element, not a button — which is also what lets a screen reader jump
@@ -222,12 +267,46 @@ two controls that sit in the row flow rather than in a row: `Show earlier work`
 above a group's rows, and `Add Task` under the story detail's, both 44px targets
 against a card. They carry their own clearance for that reason.
 
-A group with no rows is not rendered, header and all. No group re-sorts itself
-on an activity change: rows keep the order the list arrives in (creation order),
-so a work that starts or blocks while the list is being read stays where the
-user's eye left it, and only a change of *group* moves it. The `Closed` segment
-is the one place sorted by anything, `updated_at` newest first, because "when
-did this finish" is the only question the archive is asked.
+A group with no rows is not rendered, header and all — which is the whole of
+*Stopped*'s empty state. No congratulation, no "all clear": the group simply is
+not there, and there is no gap where it would have been.
+
+**Every group is sorted `updated_at` newest first**, ties to the higher id,
+which is the newer work (ids are uuid v7). This overrules the rule this section
+used to give — "rows keep the order the list arrives in, so a work that starts
+or blocks while the list is being read stays where the user's eye left it" —
+and the trade is worth stating both ways:
+
+- **What it buys.** The top of a group is what most recently happened. That
+  matters most in *Stopped*, where "handed back to me a minute ago" and "broken
+  since last week" are the same row under any other order.
+- **What it costs.** A group re-sorts under the reader when an `updated_at`
+  moves. It moves on lifecycle events — start, claim, stop, activate, wait,
+  nudge, step done, reopen, an edit to the title or body — and **not** on a
+  comment, so an agent writing its way through a turn does not make its story
+  jump. The churn is therefore roughly per step and lands almost entirely in
+  *In progress*; *Stopped* and *Not running* barely move at all.
+- **No cleverness in between.** Nothing freezes the order while the list is
+  scrolled: an order that depends on when the user last scrolled is harder to
+  explain than one that re-sorts.
+
+Newest first also means the longest-stopped work sinks to the bottom of
+*Stopped*. That is accepted: the group's goal is to be empty rather than to be
+worked oldest-first, and every row prints its own age (§3 slot 7), so how far
+the backlog has slipped is readable.
+
+The `Closed` segment keeps the order it always had, `updated_at` newest first,
+served by the server and never re-sorted on the client (its pages are cut along
+that order, so a second sort here would disagree with the cut it is drawing).
+The one thing the change bought there is that **both segments now share one
+order**, so moving between them is not switching between two ideas of what
+"first" means.
+
+One thing is deliberately *not* sorted this way: the **Tasks list on a story's
+detail page**, which keeps creation order. It draws the same `WorkRow`, so
+"unifying" it is a tempting one-line change — it is wrong. This screen is a pile
+of unrelated work, where recency is the most useful order; a story's tasks are
+the steps it was broken into, and creation order is the plan.
 
 ### 2.4 Empty, loading, failed
 
@@ -247,11 +326,11 @@ happened when you last tried.**
 
 ```
 story:  line 1:  [glyph]  Title, truncated to one line        [💬]  [⏹]
-        line 2:  Running · main · Engineer · 1 active · 2/5 tasks
+        line 2:  Running · main · Engineer · 1 active · 2/5 tasks    3m
         line 3:  invalid work: work is already running
 
 task:       line 1:  [glyph]  Title, truncated to one line    [💬]  [⏹]
-            line 2:  ↳ Story name · Needs answer · main · Engineer
+            line 2:  ↳ Story name · Needs answer · main · Engineer   1h
 ```
 
 **The row is a card, and a task's card sits a level in.** `bg-th-bg-secondary`
@@ -351,7 +430,7 @@ weight, not one tier reaching for legibility the other gives up.
 | 4 | Role name | the work has a role | attribute | Who is doing it. |
 | 5 | `{n} active` | the row is a story with active children | attribute | The only thing lost by not nesting tasks is "something under here is moving", and this is it — in the same words the detail page's children header uses. |
 | 6 | `{closed}/{total} tasks` | the row is a story with children | attribute | Progress. |
-| 7 | Relative `updated_at`, `ml-auto` | the `Closed` segment only | attribute | The archive is sorted by it, and a sort key the user cannot see is a list in no order at all. Right-aligned so it reads as a column: a date at a different x on every row is a sort order the user has to reconstruct. It is the one slot with no leading `·` — the gap already separates it, and a middot left floating mid-line reads as a slot that failed. |
+| 7 | Relative `updated_at`, `ml-auto` | **both segments** of the list | attribute | Every list here is sorted by it (§2.3), and a sort key the user cannot see is a list in no order at all. Right-aligned so it reads as a column: a date at a different x on every row is a sort order the user has to reconstruct. It is the one slot with no leading `·` — the gap already separates it, and a middot left floating mid-line reads as a slot that failed. The story detail's Tasks list does not draw it: that list is in creation order (§2.3), so there is no sort key there to show. |
 
 **Slot 1 comes before slot 2, and that overrules the order this section used to
 give them.** Putting the state first was right while the state had exactly one
@@ -598,25 +677,41 @@ a real workflow and this costs it a trip back, which is the deliberate trade: a
 task usually needs a brief too, and one rule for creation is worth more than the
 one workflow where landing on the detail is not what was wanted.
 
-## 5. Where the segment is remembered
+## 5. Where the segment lives
 
-The chosen segment is **UI state in a store, not a route**, following the
-precedent of `web/src/lib/gitPanelStore.ts` — a small `projectPanelStore` with
-one field.
+The chosen segment is **in the URL**: `Current` is `/works`, `Closed` is
+`/works?segment=closed`. Nothing else holds it — not component state, not a
+store.
 
-- **Not component state.** The screen unmounts on the way into a detail page, so
-  a user browsing the archive would be returned to `Current` by the trip out and
-  back.
-- **Not the URL.** It is a filter on one screen rather than a place, and in the
-  URL every segment tap becomes a history entry: Back would step through the
-  user's filter changes instead of leaving the list, which is the single most
-  irritating thing a mobile page can do. Nothing needs to deep-link to the
-  archive.
+It was a store (`projectPanelStore`) first, on the reasoning that the segment
+filters one screen rather than naming a place and that Back should leave the
+list rather than walk back through filter changes. Both halves turned out to be
+wrong in use:
 
-Nothing persists it, so a reload starts on `Current` — the store is created
-fresh with the module, and a user who reloads is starting over, which is where
-starting over belongs. The `reset()` beside the setter is there so a test can
-isolate itself, following `gitPanelStore`'s shape; no app code calls it.
+- **Back walking the choices is the point.** A segment tap is the only thing on
+  this screen that changes what is on it, so Back with nowhere else to go is
+  Back that does nothing. Users reported the missing history entry as the bug.
+- **The archive is a place.** A reload, a bookmark or a link to `Closed` lands
+  on `Closed`, which a store could not offer at all.
+
+Three consequences, each of which is a rule rather than an accident:
+
+- **`Current` is the absence of the parameter, never `segment=current`.** One
+  state, one URL — and it is what makes the Project entry button's plain
+  `/works` mean `Current` without the button having to say so.
+- **The Project entry button always lands on `Current`.** It is an entrance, and
+  an entrance that opens somewhere different depending on what the user last
+  tapped is an entrance nobody can predict. This is the behaviour the store's
+  "nothing persists it" gave on a reload only; now it holds on every tap.
+- **A work detail carries the segment it was opened from.** The list unmounts on
+  the way in, so `/works/$workId?segment=closed` is how Back reaches the archive
+  the reader left instead of resetting them to `Current`. The parameter draws
+  nothing on the detail page; it is the same device as `session`, which every
+  overlay route already carries to remember the chat underneath it.
+
+`AppShell` reads the segment off the route and passes it down, and owns all
+three navigations (switch, open, back) — a component that routes itself is a
+second place worktree-aware URLs get built (§4).
 
 ## 6. Edge cases
 
@@ -624,9 +719,9 @@ isolate itself, following `gitPanelStore`'s shape; no app code calls it.
 |---|---|
 | A task needs the user and its parent story also does | Two rows in *Needs you*; the task's slot 1 names the story. |
 | A story is `waiting_children` while a child needs the user | Story in *In progress* with its `Clock` leaf, child in *Needs you* above it. This is the arrangement §2.2 exists for. |
-| A `stopped` task under an `active` story | Task row in *Not running*, story row in *In progress*. The task's own control is Restart. |
+| A `stopped` task under an `active` story | Task row in *Stopped*, story row in *In progress*. The task's own control is Restart. |
 | A needs-you or stopped task whose parent is `open` or `closed` | It still gets its row; slot 1 names the parent whatever state the parent is in. The list does not ask a parent's permission to show a task that needs a person. |
-| A work changes group while on screen | It moves. Nothing else reorders (§2.3). |
+| A work changes group while on screen | It moves, and so does everything whose `updated_at` moved with it — its group is sorted newest first (§2.3). |
 | A closed task under a story that is not closed | No row, in either segment. It is inside its story, which is where a finished task is looked for. |
 | A work in another worktree | Badge in slot 3; the Chat control switches worktree, exactly as the old row's did. |
 | A title too long for one line | Truncates. The detail page is one tap away and has the whole of it. |
@@ -666,10 +761,10 @@ The checks, in the order they would fail, and where each one is now:
 | # | Check | Held by |
 |---|---|---|
 | 1 | A task with `needs_answer` is its own row in *Needs you*, and its story is not | `WorkListOverlay.test.tsx` |
-| 2 | A `stopped` task is in *Not running* with a Restart control | `WorkListOverlay.test.tsx` — the group on a stopped task, the Restart control on a stopped story, the row being the same component either way — and `WorkPrimaryAction.test.tsx` for the label itself |
+| 2 | A `stopped` story and a `stopped` task are both in *Stopped*, which is the first group, and the control on them is Restart | `WorkListOverlay.test.tsx` — the group and the group order, the row being the same component either way — and `WorkPrimaryAction.test.tsx` for the label itself |
 | 3 | No row renders a chevron or a collapse toggle, and no group heading is a button | `WorkListOverlay.test.tsx`, `WorkRow.test.tsx` |
 | 4 | `work.create` resolving lands on the new work's detail; rejecting leaves the sheet open with the error and does not navigate | `CreateWorkSheet.test.tsx` for the sheet, `WorkListOverlay.test.tsx` and `WorkDetailOverlay.test.tsx` for each caller's wiring |
-| 5 | Switching segment and then entering and leaving a detail returns to the chosen segment | `WorkListOverlay.test.tsx` |
+| 5 | Switching segment and then entering and leaving a detail returns to the chosen segment | `AppShell.test.tsx`, which owns the routing the segment now lives in (§5); `WorkListOverlay.test.tsx` holds only that the list asks for a switch rather than performing one |
 | 6 | Back from a story detail reaches `/works`, and from a task detail its parent story | `WorkDetailOverlay.test.tsx` |
 | 7 | Both row controls are 44 × 44 under a coarse pointer | `web/tests/touchTarget.test.ts`, which reads every icon-only control |
 | 8 | The list and the story detail's Tasks section render the same row component, and only Tasks drops the parent slot | `WorkRow.test.tsx` (the slot), by construction elsewhere |
@@ -682,6 +777,9 @@ The checks, in the order they would fail, and where each one is now:
 | 15 | Every row writes its activity label, including the leaves nothing is waiting on the user for, and it is never tinted with the leaf's tone | `WorkRow.test.tsx`, a case each for `running`, `waiting_children`, `background`, `idle`, `stopped`, `open` and `closed` — all seven leaves that used to write nothing and can reach a row (`closed` only through the story detail's Tasks section, which lists the same children its `{closed}/{total}` counts). Each is paired with the status it actually arrives with, because a row whose two fields disagree is one the server never sends |
 | 16 | The left edge is present on a neutral row (`border-l-th-border`) rather than transparent, and takes the hue on a blocked one | `WorkRow.test.tsx` |
 | 17 | The parent relationship survives the arrow being decorative: the `sr-only` `in` is there, and it is the *only* `sr-only` text on the row | `WorkRow.test.tsx`, which asserts the whole set rather than its presence — a second one added later would mean a second glyph was replaced by a silent one |
+| 18 | A project with nothing stopped renders no *Stopped* heading at all — not an empty one, not a gap — and opens on *Needs you* | `WorkListOverlay.test.tsx` |
+| 19 | Each group is in `updated_at` order, newest first, and the comparison is of times rather than of strings — two timestamps written with different UTC offsets sort by instant, not by spelling | `workOrder.test.ts` for the rule, `WorkListOverlay.test.tsx` for the list actually using it |
+| 20 | Each capped group's heading counts its own hidden rows, and one failure to fetch them prints one message with one Retry however many groups are offering the control | `WorkListOverlay.test.tsx`; the server half is `work_list_segment_test.go` (see [list-paging-ui.md §4.1](list-paging-ui.md#41-current-is-loaded-whole-and-that-is-the-design)) |
 
 Check 6 was the one that reached the end of the rewrite untested. It had been
 written down as the behaviour that was already right and could be lost while the

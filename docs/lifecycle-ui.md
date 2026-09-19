@@ -541,9 +541,11 @@ Deliberately outside the dot:
 - **`stopped`.** A stopped work needs a human, but it needs one *whenever the
   human gets to it*; a dot that only clears when someone restarts every stale
   work is permanent, and a permanent dot is not a signal. Stopped work is found
-  through the list's *Not running* group, which is also why that group and not
-  *Needs you* is where it sits
-  ([project-ui.md §2.3](project-ui.md#23-three-groups-and-why-three)).
+  through the list's *Stopped* group, which sits at the top of the list and is
+  the same argument in the other direction: it is given its own heading and its
+  own count rather than being folded into *Needs you*, whose count has to stay a
+  number of things waiting on the user right now
+  ([project-ui.md §2.3](project-ui.md#23-four-groups-and-why-four)).
 
 ## 5. Expiry
 
@@ -682,12 +684,14 @@ is here.
 `Activity`.** A list that regrouped on every phase change would reorder itself
 while being read. A work moving in or out of *Needs you* is the one movement
 worth the disruption, since it is the one the user is waiting for. That one
-predicate is also enough to draw the whole list: the three groups are "is an
-engine driving this work, and if it is, is it blocked on the user", and the
-archive is `status == closed` and lives in its own segment rather than a group.
-*Needs you* is first, where the old status order put `in_progress` first: a list
-of work is a list of things to do, and the things needing a person come before
-the things running by themselves.
+predicate is also enough to draw the whole list: the four groups are "has this
+been handed back to a person, and if not, is an engine driving it, blocked on
+the user", and the archive is `status == closed` and lives in its own segment
+rather than a group. The status is asked before the activity, so a `stopped`
+work is in *Stopped* whatever leaf it stopped on — that leaf describes a turn
+already over. *Stopped* and then *Needs you* come before the rest, where the old
+status order put `in_progress` first: a list of work is a list of things to do,
+and the things needing a person come before the things running by themselves.
 
 **A group heading's glyph is fixed per group, not taken from the rows inside
 it.** *Needs you* holds three different leaves, and a heading that borrowed one
