@@ -74,7 +74,7 @@ export default Dialog;
 - `pointer-fine` / `pointer-coarse` 是 Tailwind 内置 variant 名，两份 `index.css` 里的 `@custom-variant` 是刻意覆盖：删掉不是「少一条规则」，而是悄悄换成内置的主指针语义
 - hover 揭示只能「加」不能「还」：隐藏与揭示两半必须同挂 `pointer-fine:`，用 `opacity` 而非 `display`，并配 `group-focus-within` 孪生
 - 指针事件按用途选：手势跟踪用 `pointerdown/move/up` + `setPointerCapture`；outside-click 用 `click`（走 `useOutsideClick`），不用 `pointerdown`（触摸滚动会误关）
-- 全屏用 `h-dvh`（动态视口高度）
+- 滚动边界只有一个主人：**外壳**（就是视口那一层，全站只该有一个，现在是 `AppShell`）写 `h-dvh` 且必须 `overflow-hidden`；外壳里的子元素**不许重复写视口高度**，高度由所在行给。**独立整页**（加载 / 错误 / 密码这类自己就是一整页的屏）写 `min-h-dvh`，长文案该能滚到。整屏跟着内层列表一起动，说明有个不该可滚的祖先可滚了 —— 去改那个祖先，不要给列表加 `overscroll-behavior` 把滚动链堵在下面一层。规则与理由见 [docs/responsive-ui.md](../docs/responsive-ui.md#who-owns-the-scroll-boundary)，`viewportHeight.test.ts` 守拼写这一半
 - **主题**：必须用 `th-` 前缀颜色，禁止硬编码（详见 `index.css` 中的主题定义）
 
 ### Zustand

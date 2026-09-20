@@ -18,7 +18,7 @@ function PasswordInput({ onSubmit, error }: Props) {
 	};
 
 	return (
-		<div className="flex h-dvh items-center justify-center bg-th-bg-primary">
+		<div className="flex min-h-dvh items-center justify-center bg-th-bg-primary">
 			<form onSubmit={handleSubmit} className="w-full max-w-md p-6">
 				<h1 className="mb-6 text-center text-2xl font-bold text-th-text-primary">
 					Pockode

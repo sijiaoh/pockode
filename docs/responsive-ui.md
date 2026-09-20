@@ -10,11 +10,12 @@ That is the other half of the same confusion: a layout threshold picked by
 imagining a desktop, and resize code only a mouse could drive.
 
 This document holds the rules that came out of fixing that. It covers the width
-ladder, the two pointer gates, hover reveal, hit areas, and which event
-primitive to use for which job. It does **not** cover any single panel's shape:
-[sidebar-ui.md](sidebar-ui.md) owns what the two sidebar panels share, including
-the visual weight rungs this file sizes hit areas against and the narrow-width
-rule for what fits **inside** a 240px container.
+ladder, the two pointer gates, hover reveal, hit areas, which event primitive to
+use for which job, and which box owns the scroll boundary. It does **not** cover
+any single panel's shape: [sidebar-ui.md](sidebar-ui.md) owns what the two
+sidebar panels share, including the visual weight rungs this file sizes hit
+areas against and the narrow-width rule for what fits **inside** a 240px
+container.
 
 > **The dividing line with sidebar-ui.md:** if a number is a **viewport** width,
 > it belongs here. If it is a **container** width, it belongs to that
@@ -845,6 +846,73 @@ Both activation-detection hazards live once, in
 `packages/shared/src/hooks/useOutsideClick.ts`, along with why its callback is
 read through a ref. Call sites supply only their own definition of "inside".
 
+## Who owns the scroll boundary
+
+**One box is the viewport, and it clips. Everything else takes its height from
+its parent.** In `web` that box is the shell `AppShell` returns — `flex h-dvh
+flex-col overflow-hidden` — and it should stay the only `h-dvh` in either front
+end; today it is. Every other viewport-tall screen is written `min-h-dvh`, which
+is a different claim: *this screen is the page, and the page may scroll.*
+
+The rule is worth stating because the bug it prevents is invisible until it is
+not. The expanded sidebar restated `h-dvh` on its column, but that column sits
+in a row the shell had already shortened by whatever stood above it — the
+reconnect banner, the create-session error. The column therefore ran past the
+bottom of the row by exactly the banner's height, and with nothing clipping on
+the way up, that overflow made the **document** a scroll container. Nothing on
+screen said so: every panel in this layout does its own scrolling, so the page
+has nowhere to go until a reader reaches the end of one of them. Then the wheel
+chains out of the file-search results into the document and the whole screen
+slides up by however much overflowed. With no banner there is no overflow at
+all, which is why it read as intermittent rather than as a layout fault.
+
+Two separate things were wrong, and both halves are the rule:
+
+- **A child of the shell never restates the viewport height.** It takes its
+  height from the row, the way the chat panel beside the sidebar always has.
+  Repeating `h-dvh` inside a shell is a claim about the window made by a box
+  that is no longer the window.
+- **The shell clips.** That is the backstop rather than the fix for one column:
+  it is exactly the viewport, so nothing inside it may grow the document, and
+  the next component to state a height carelessly cannot resurrect this bug.
+  Clipping the shell does not clip what covers the page: an overlay leaves it
+  either by portalling out to `body` — `Sheet` and `ConfirmDialog` do, and
+  `ResponsivePanel` does in its mobile branch only, its desktop branch staying
+  inline and *meant* to be clipped — or by being `position: fixed`, which an
+  ancestor's `overflow` clips only when that ancestor is its containing block,
+  and nothing on the way down to the drawer transforms. Which escape a new
+  overlay takes is a property of the branch that renders, not of the component:
+  `ResponsivePanel` is both.
+
+**`overscroll-behavior` is not the answer to "the page moved".** It decides
+where a scroll chain *ends*; it cannot decide whether the page should have been
+scrollable in the first place. Once the shell clips, no chain reaches the page
+however long it runs — so the property on whichever list a reader happened to
+be in is not what holds the page still, and reaching for it there leaves the
+scrollable ancestor in place for the next list to find. Where it does earn its
+keep is a chain that legitimately reaches the page: the
+`overscroll-behavior-y: contain` both stylesheets put on `html, body`, which
+stops pull-to-refresh from reloading the app mid-scroll. That is a browser
+gesture, not a layout mistake. (`MessageList` carries `overscroll-y-contain`
+too. It predates the clip and is harmless, but it is not what holds the
+boundary, and copying it onto the next list would not hold one either.) So when
+a wheel moves something you did not expect: find the ancestor that is
+scrollable and should not be, rather than stopping the chain one level below
+it.
+
+The screens that **are** the page keep scrolling, on purpose. Loading, error and
+password each fill the window and own it; a server error of any length has to
+stay reachable, and `min-h-dvh` is the spelling that says so. Pinning one of
+these instead is not merely the wrong word for it: a centred box that cannot
+grow puts the overflow on both sides at once, so a long enough error starts
+*above* the top of the scrollable area, where no amount of scrolling reaches
+its first line. All of `web-cluster` is of this kind — it has no shell at all,
+and every one of its screens is `min-h-dvh`.
+
+The spelling half of this — pin and contain, or say `min-h-*` — is held by
+`viewportHeight.test.ts` in the gates below, which also records the two things a
+source scan cannot see.
+
 ## The automated gates
 
 These are more reliable than a checklist and are the real self-check for any PR
@@ -866,6 +934,7 @@ of the source — and it has to hold for components nobody has written yet.
 | `web/src/components/ui/Sheet.test.tsx` | Drawer sits at the bottom, modal is centred, and both follow the one hook |
 | `web/src/test/outsideClick.test.tsx` | A click outside dismisses and one inside does not; touch scrolling does not; the click that opened the overlay does not; the listener survives a host re-render |
 | `web/src/test/responsive.test.tsx` | The ladder's absolute numbers; all three pointer gates read together on a touchscreen laptop; and that a gate is subscribed rather than sampled once, so a resize or a mouse plugged in mid-session re-renders |
+| `web/tests/viewportHeight.test.ts` | Every box that pins its height to the viewport — `h-dvh` and its family, the arbitrary `h-[100dvh]` and `h-[calc(100vh-3rem)]` spellings, and any of them behind a variant prefix — keeps its own overflow to itself, or else is written `min-h-*`. `overflow-hidden` clips and `overflow-y-auto` scrolls internally, and both answer the rule just as squarely; what must not exist is the third thing, a viewport-tall box that neither contains its overflow nor admits it scrolls ([why](#who-owns-the-scroll-boundary)). Read one class list per branch, so an `overflow-hidden` in the other arm of a ternary cannot answer for the arm that pins |
 | `web/tests/sourceScan.test.ts` | Each scanned root still resolves to files, so an absent-violation assertion cannot pass by reading nothing; and every root outside a project's own directory — `packages/shared`, reached through a workspace link that Tailwind's automatic source detection does not enter — is named by an `@source` in each stylesheet that claims to compile it |
 
 Known blind spots, recorded as they are rather than as they should be:

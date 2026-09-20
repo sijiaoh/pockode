@@ -92,8 +92,12 @@ function Sidebar({ isOpen, onClose, children, isExpanded }: Props) {
 	// Expanded: a persistent column in the flex layout
 	if (isExpanded) {
 		return (
+			// No height of its own: the row gives it, the way the chat panel
+			// beside it takes its own. Restating `h-dvh` here made the column
+			// outrun a row the shell had already shortened by its banners
+			// (docs/responsive-ui.md § Who owns the scroll boundary).
 			<div
-				className="relative flex h-dvh shrink-0 flex-col border-r border-th-border bg-th-bg-secondary"
+				className="relative flex shrink-0 flex-col border-r border-th-border bg-th-bg-secondary"
 				style={{ width }}
 			>
 				<div className="flex flex-1 flex-col overflow-hidden">{children}</div>
