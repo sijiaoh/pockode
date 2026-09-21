@@ -1,12 +1,21 @@
 import type { OverlayState, WorkSegment } from "../types/overlay";
 import { ROUTES, WT_ROUTES } from "./routes";
+import { SESSION_VIEW_PARAM } from "./sessionView";
 
 export const SETUP_HOOK_PATH = ".pockode/worktree-setup.sh";
 
 interface NavToSession {
 	type: "session";
+	/** The worktree the user stands in, which is the one in the path. */
 	worktree: string;
 	sessionId: string;
+	/**
+	 * Which worktree to read the session out of, when that is not `worktree`.
+	 * Becomes the `from` parameter — see SESSION_VIEW_PARAM. Undefined leaves it
+	 * off, which is the ordinary session URL; the empty string is a value (the
+	 * main worktree), not an absence.
+	 */
+	viewWorktree?: string;
 }
 
 interface NavToOverlayBase {
@@ -256,6 +265,9 @@ export function buildNavigation(
 					worktree: target.worktree,
 					sessionId: target.sessionId,
 				};
+			}
+			if (target.viewWorktree !== undefined) {
+				result.search = { [SESSION_VIEW_PARAM]: target.viewWorktree };
 			}
 			break;
 		}

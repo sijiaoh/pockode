@@ -28,6 +28,34 @@ describe("buildNavigation", () => {
 				params: { worktree: "feature-x", sessionId: "abc123" },
 			});
 		});
+
+		it("names the worktree a session is read out of", () => {
+			const result = buildNavigation({
+				type: "session",
+				worktree: "feature-x",
+				sessionId: "abc123",
+				viewWorktree: "old-fix",
+			});
+
+			// The path still names where the user is standing — Files and Git stay
+			// with it — and only the query says where the transcript comes from.
+			expect(result).toEqual({
+				to: "/w/$worktree/s/$sessionId",
+				params: { worktree: "feature-x", sessionId: "abc123" },
+				search: { from: "old-fix" },
+			});
+		});
+
+		it("keeps the empty source worktree, which names main", () => {
+			const result = buildNavigation({
+				type: "session",
+				worktree: "feature-x",
+				sessionId: "abc123",
+				viewWorktree: "",
+			});
+
+			expect(result.search).toEqual({ from: "" });
+		});
 	});
 
 	describe("overlay", () => {

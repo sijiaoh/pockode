@@ -81,8 +81,7 @@ func (i *sessionWorkIndex) resolveErr(sessionID string) (string, error) {
 }
 
 // bySession indexes the whole work store by session id, for the paths that
-// resolve a whole list and would otherwise read it once per row. Session ids are
-// unique across worktrees, so the index needs no worktree filter.
+// resolve a whole list and would otherwise read it once per row.
 func (i *sessionWorkIndex) bySession() (map[string]string, error) {
 	if i.source == nil {
 		return nil, nil
@@ -91,13 +90,7 @@ func (i *sessionWorkIndex) bySession() (map[string]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	byID := make(map[string]string, len(works))
-	for _, item := range works {
-		if item.SessionID != "" {
-			byID[item.SessionID] = item.ID
-		}
-	}
-	return byID, nil
+	return work.IDsBySession(works), nil
 }
 
 func (i *sessionWorkIndex) alreadySent(sessionID, workID string) bool {

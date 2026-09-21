@@ -6,7 +6,15 @@ import { uploadFile } from "../../lib/fileUpload";
 import { uploadActions } from "../../lib/uploadStore";
 import SessionSidebar from "./SessionSidebar";
 
-const wsState = { maxUploadSize: 0 };
+const wsState = {
+	maxUploadSize: 0,
+	// The sessions tab asks which worktrees still hold sessions, but only once
+	// the filter leaves this worktree — which it never does here.
+	actions: {
+		sessionViewWorktrees: vi.fn(),
+		sessionViewList: vi.fn(),
+	},
+};
 
 vi.mock("../../lib/wsStore", () => ({
 	useWSStore: Object.assign(

@@ -28,9 +28,14 @@ interface Props {
 	isOpen: boolean;
 	onClose: () => void;
 	currentSessionId: string | null;
-	onSelectSession: (id: string) => void;
+	/**
+	 * Both take the worktree the row's session is read from, and null for this
+	 * worktree's own — which is every row until the sidebar filter spans
+	 * worktrees (see `SessionItem`).
+	 */
+	onSelectSession: (id: string, worktree: string | null) => void;
 	onCreateSession: () => void;
-	onDeleteSession: (id: string) => void;
+	onDeleteSession: (id: string, worktree: string | null) => void;
 	onSelectDiffFile: (path: string, staged: boolean) => void;
 	/** Closes the content area when the diff it shows is discarded away. */
 	onCloseDiffFile: () => void;
@@ -146,8 +151,8 @@ function SessionSidebar({
 	);
 
 	const handleSelectSession = useCallback(
-		(id: string) => {
-			onSelectSession(id);
+		(id: string, worktree: string | null) => {
+			onSelectSession(id, worktree);
 			if (!isExpanded) onClose();
 		},
 		[onSelectSession, isExpanded, onClose],

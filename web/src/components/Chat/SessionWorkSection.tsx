@@ -1,12 +1,17 @@
 import { ExternalLink } from "lucide-react";
-import {
-	selectSessionDetail,
-	useSessionDetailStore,
-} from "../../lib/sessionDetailStore";
+import type { SessionDetail } from "../../types/message";
 import { PanelSection } from "../ui";
 
 interface Props {
-	sessionId: string;
+	/**
+	 * The session's own detail, and null until it arrives. Handed down rather
+	 * than read from `sessionDetailStore` here: that store holds the *bound*
+	 * worktree's open session, and a session read out of another worktree is
+	 * deliberately kept out of it — reading it here would have silently dropped
+	 * the way back to the work on exactly the screen a work is the usual way
+	 * into (`useViewedSession`).
+	 */
+	detail: SessionDetail | null;
 	/** Optional: an embedder may not offer the work pages at all. */
 	onOpenWorkDetail?: (workId: string) => void;
 	/** The panel is a navigation target away from itself, so it closes first. */
@@ -26,16 +31,13 @@ interface Props {
  * The binding is read off the open session's detail, which is the only source
  * that can speak for *this* session: the sidebar hides exactly the sessions
  * that have a work, so the one this panel describes usually has no row
- * (docs/code/subscription-system.md#which-sessions-belong-to-work). Reading it
- * here rather than in `SessionInfoButton` keeps the subscription in the leaf,
- * as `WorktreeBadge` does.
+ * (docs/code/subscription-system.md#which-sessions-belong-to-work).
  */
-function SessionWorkSection({ sessionId, onOpenWorkDetail, onClose }: Props) {
-	// Null while the detail is loading and null again once it is gone, and
-	// null for any other session — so nothing here ever asserts "no work" from
-	// an absence. `null` rather than an empty node: `PanelSection`'s rule is a
-	// `:first-child` rule, and an empty div would give Usage a stray divider.
-	const detail = useSessionDetailStore(selectSessionDetail(sessionId));
+function SessionWorkSection({ detail, onOpenWorkDetail, onClose }: Props) {
+	// Null while the detail is loading and null again once it is gone, so
+	// nothing here ever asserts "no work" from an absence. `null` rather than an
+	// empty node: `PanelSection`'s rule is a `:first-child` rule, and an empty
+	// div would give Usage a stray divider.
 	const workId = detail?.work_id;
 	if (!workId || !onOpenWorkDetail) return null;
 

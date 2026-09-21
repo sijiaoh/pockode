@@ -16,6 +16,10 @@ export {
 export { createFileActions, type FileActions } from "./file";
 export { createGitActions, type GitActions } from "./git";
 export { createSessionActions, type SessionActions } from "./session";
+export {
+	createSessionViewActions,
+	type SessionViewActions,
+} from "./sessionView";
 export { createSettingsActions, type SettingsActions } from "./settings";
 export { createWorkActions, type WorkActions } from "./work";
 export { createWorktreeActions, type WorktreeActions } from "./worktree";

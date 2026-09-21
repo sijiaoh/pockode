@@ -1,7 +1,6 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { useSessionDetailStore } from "../../lib/sessionDetailStore";
+import { describe, expect, it, vi } from "vitest";
 import { makeSessionDetail } from "../../test/sessionFixtures";
 import SessionWorkSection from "./SessionWorkSection";
 
@@ -13,12 +12,7 @@ const bound = () =>
 	});
 
 describe("SessionWorkSection", () => {
-	beforeEach(() => {
-		useSessionDetailStore.getState().clear();
-	});
-
 	it("opens the work this session runs, closing the panel first", async () => {
-		useSessionDetailStore.getState().setDetail("s1", bound());
 		const calls: string[] = [];
 		const onOpenWorkDetail = vi.fn(() => calls.push("open"));
 		const onClose = vi.fn(() => calls.push("close"));
@@ -26,7 +20,7 @@ describe("SessionWorkSection", () => {
 
 		render(
 			<SessionWorkSection
-				sessionId="s1"
+				detail={bound()}
 				onOpenWorkDetail={onOpenWorkDetail}
 				onClose={onClose}
 			/>,
@@ -45,13 +39,9 @@ describe("SessionWorkSection", () => {
 	});
 
 	it("renders nothing for a session that runs no work", () => {
-		useSessionDetailStore
-			.getState()
-			.setDetail("s1", makeSessionDetail({ id: "s1" }));
-
 		const { container } = render(
 			<SessionWorkSection
-				sessionId="s1"
+				detail={makeSessionDetail({ id: "s1" })}
 				onOpenWorkDetail={vi.fn()}
 				onClose={vi.fn()}
 			/>,
@@ -67,7 +57,7 @@ describe("SessionWorkSection", () => {
 	it("renders nothing while the detail has not arrived", () => {
 		const { container } = render(
 			<SessionWorkSection
-				sessionId="s1"
+				detail={null}
 				onOpenWorkDetail={vi.fn()}
 				onClose={vi.fn()}
 			/>,
@@ -77,26 +67,9 @@ describe("SessionWorkSection", () => {
 		expect(screen.queryByText("Work")).not.toBeInTheDocument();
 	});
 
-	// The store holds one session at a time and the route can move ahead of it.
-	it("renders nothing while the detail belongs to another session", () => {
-		useSessionDetailStore.getState().setDetail("other", bound());
-
-		const { container } = render(
-			<SessionWorkSection
-				sessionId="s1"
-				onOpenWorkDetail={vi.fn()}
-				onClose={vi.fn()}
-			/>,
-		);
-
-		expect(container).toBeEmptyDOMElement();
-	});
-
 	it("renders nothing when the embedder offers no work pages", () => {
-		useSessionDetailStore.getState().setDetail("s1", bound());
-
 		const { container } = render(
-			<SessionWorkSection sessionId="s1" onClose={vi.fn()} />,
+			<SessionWorkSection detail={bound()} onClose={vi.fn()} />,
 		);
 
 		expect(container).toBeEmptyDOMElement();

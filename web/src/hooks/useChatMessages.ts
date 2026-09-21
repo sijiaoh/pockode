@@ -40,6 +40,7 @@ import { toAnswerParams } from "../utils/answerMessage";
 import { isTypedByUser } from "../utils/messageSource";
 import { generateUUID } from "../utils/uuid";
 import { useSubscription } from "./useSubscription";
+import type { ViewedSession } from "./useViewedSession";
 
 export type { ConnectionStatus } from "../lib/wsStore";
 
@@ -51,6 +52,21 @@ interface UseChatMessagesOptions {
 	 * switch) targets a session the server can't see yet.
 	 */
 	enabled?: boolean;
+	/**
+	 * Set when the transcript is read out of another worktree instead of being
+	 * subscribed to in the bound one (`useViewedSession`). Its newest page is
+	 * installed the way a subscription's snapshot is, and earlier pages are
+	 * asked for with `session_view.history` — identical records, identical
+	 * paging, identical reply shape, so everything below this line is the same
+	 * code. What changes is that there is no subscription, so nothing arrives
+	 * after that page; and that its `detail` stands in for `sessionDetailStore`,
+	 * which holds the bound worktree's open session and knows nothing about
+	 * this one.
+	 *
+	 * Must be referentially stable across renders that do not change it; the
+	 * hook hands back a memoized object.
+	 */
+	viewedSession?: ViewedSession | null;
 }
 
 interface UseChatMessagesReturn {
@@ -144,6 +160,7 @@ const {
 	chatMessagesSubscribe,
 	chatMessagesHistory,
 	chatMessagesUnsubscribe,
+	sessionViewHistory,
 } = useWSStore.getState().actions;
 
 /** One call's progress since the last frame, in the records' own semantics. */
@@ -211,7 +228,12 @@ function newestSeq(history: unknown[]): HistorySeq | undefined {
 export function useChatMessages({
 	sessionId,
 	enabled = true,
+	viewedSession,
 }: UseChatMessagesOptions): UseChatMessagesReturn {
+	const isView = viewedSession != null;
+	// Only read when `isView`; "" is a worktree — the main one — so the fallback
+	// is a placeholder the type needs, not a default that means anything.
+	const sourceWorktree = viewedSession?.worktree ?? "";
 	const [messages, setMessages] = useState<Message[]>([]);
 	const [isLoadingHistory, setIsLoadingHistory] = useState(true);
 	const [settingError, setSettingError] = useState<string | null>(null);
@@ -255,7 +277,8 @@ export function useChatMessages({
 	// subscription carries them any more — both used to, and reading settings
 	// from more than one of them is how a rejected model change came back as two
 	// answers that disagreed.
-	const sessionDetail = useSessionDetailStore(selectSessionDetail(sessionId));
+	const liveDetail = useSessionDetailStore(selectSessionDetail(sessionId));
+	const sessionDetail = isView ? viewedSession.detail : liveDetail;
 
 	// One source for what the session is doing, and it is the live one: the
 	// detail subscription reports every turn change as it happens. The chat
@@ -264,7 +287,12 @@ export function useChatMessages({
 	//
 	// Idle until that first snapshot: a client that has not been told anything is
 	// running is not entitled to draw a Stop button.
-	const turn = sessionDetail?.turn ?? IDLE_TURN;
+	//
+	// A viewed transcript is idle for good. Whatever the session was doing when
+	// it was read is already out of date — nothing is pushed here — and a turn
+	// reported as open would arm a Stop this screen cannot deliver and hold
+	// bubbles streaming that will never receive another byte.
+	const turn = isView ? IDLE_TURN : (sessionDetail?.turn ?? IDLE_TURN);
 
 	// Placeholders for the round trip before the first snapshot: never another
 	// session's values, because the selector above hands back nothing until the
@@ -457,7 +485,7 @@ export function useChatMessages({
 		chatMessagesUnsubscribe,
 		handleNotification,
 		{
-			enabled,
+			enabled: enabled && !isView,
 			// A session belongs to its worktree, so switching does end this
 			// subscription server-side — but it ends the session with it, and
 			// `enabled` has already gone false by then. Resubscribing on switch
@@ -469,6 +497,28 @@ export function useChatMessages({
 		},
 	);
 
+	// The viewed transcript's newest page, installed the way a subscription's
+	// snapshot is. `turn` is idle rather than the session's own: see `turn`
+	// above. It is what settles the bubbles of a transcript cut off mid-stream,
+	// and here nothing is ever going to continue one.
+	useEffect(() => {
+		if (!viewedSession) return;
+		// Both reads, not just the page: the two go out together, so waiting for
+		// the slower one costs nothing, and mounting the transcript before the
+		// metadata lands would draw it as the wrong agent's for a frame — the
+		// same one continuous wait the live path makes of resolving a session and
+		// loading its history.
+		if (!viewedSession.isSettled) return;
+		if (viewedSession.page) {
+			handleSubscribed({ ...viewedSession.page, turn: IDLE_TURN });
+			return;
+		}
+		// The read answered without a page. The wait is over either way — leaving
+		// the spinner up would promise a transcript that is not coming; the reason
+		// reaches the screen through `viewedSession` itself.
+		setIsLoadingHistory(false);
+	}, [viewedSession, handleSubscribed]);
+
 	const loadMoreHistory = useCallback(async () => {
 		const beforeSeq = nextBeforeSeqRef.current;
 		if (isLoadingMoreRef.current || beforeSeq === undefined) return;
@@ -478,7 +528,9 @@ export function useChatMessages({
 		setIsLoadingMoreHistory(true);
 		setHistoryError(null);
 		try {
-			const page = await chatMessagesHistory(sessionId, beforeSeq);
+			const page = isView
+				? await sessionViewHistory(sourceWorktree, sessionId, beforeSeq)
+				: await chatMessagesHistory(sessionId, beforeSeq);
 			if (historyGenerationRef.current !== generation) return;
 
 			const older = replayHistory(page.history);
@@ -516,7 +568,7 @@ export function useChatMessages({
 				setIsLoadingMoreHistory(false);
 			}
 		}
-	}, [sessionId]);
+	}, [sessionId, isView, sourceWorktree]);
 
 	const sendUserMessageHandler = useCallback(
 		async (

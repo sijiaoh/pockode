@@ -22,6 +22,7 @@ React SPA ──WebSocket──▶ Go Server ──spawn──▶ AI CLI (subpro
 |-------|------|------|
 | RPC handlers | `server/ws/rpc_chat.go` | `chat.message`, `chat.interrupt`, `chat.messages.subscribe` / `chat.messages.history` ([paging](#history-paging)), permission responses |
 | Session config | `server/ws/rpc_session.go` | `session.set_agent_type` / `set_mode` / `set_model` / `set_effort`, each closing the running process because a CLI is told these only at launch; `session.models` and `session.efforts` list the choices ([models](code/agent-integration.md#session-models), [effort](code/agent-integration.md#session-effort)). None of them answer with the new value: the settings in force reach the panel through `session.detail` ([why](code/subscription-system.md#why-a-session-is-two-subscriptions)) |
+| Another worktree's sessions | `server/ws/rpc_session_view.go` | `session_view.*` — reading (and discarding) a session stored under a worktree the connection is not in, including one that no longer exists ([how](#sessions-outlive-their-worktree)) |
 | Attachments | `server/ws/rpc_attachment.go` | `attachment.get` — the content a chat event references by id, answered in `file.get`'s own shape so one client path renders both ([why](code/agent-integration.md#content-blocks-and-attachments)) |
 | Chat client | `server/chat/client.go` | Session coordination, message persistence, event broadcast; `SendMessageExcluding` (user) and `SendSystemMessage` (system automation) share one persist+broadcast path |
 | Agent interface | `server/agent/agent.go` | `Session` and `AgentEvent` interfaces |
@@ -447,3 +448,44 @@ that covers half of one problem and adds a coordination problem is not a saving.
 Session metadata and chat history are stored under the session data directory. History is JSON Lines of `EventRecord`s appended on each event. Both agents record where their side of the conversation lives, and reopen it on the next launch. Claude keeps its provider-side session ID in `claude_resume.json` as soon as the CLI reports it, and falls back through a recovery ladder (plain resume → fork → new session) when a launch turns out to be unresumable, so a session cannot be permanently stuck by a first turn that failed ([code/agent-integration.md](code/agent-integration.md#session-recovery-ladder)). Codex keeps a thread id in `codex_resume.json` and reopens the thread from the rollout file the CLI wrote to disk; when that file is gone the session starts a new thread and says so ([code/agent-integration.md](code/agent-integration.md#thread-recovery)). Pockode's own transcript survives either way; what a resume decides is whether the *agent* still has the context.
 
 A session can also be **forked**: `session.fork` starts a new session from a copy of the source's transcript, cut to the moment before the message the user picked — which keeps that message when the agent said it, and drops it when the user did, because the fork returns to before they sent it ([session-fork-ui.md](session-fork-ui.md#the-rule)). The source is left untouched. Whether the agent comes along is that agent's own declared answer, and it is a stronger question than resuming: both shipped agents can follow a fork to a chosen point inside a conversation — Claude to a message, Codex to a turn — and an agent that could not would have its forks refused rather than handing back a session whose agent has never seen the conversation filling its screen ([code/agent-integration.md](code/agent-integration.md#session-forking), UI in [session-fork-ui.md](session-fork-ui.md)).
+
+## Sessions Outlive Their Worktree
+
+Session data is stored per worktree, and deleting a worktree deliberately leaves
+it in place ([why](code/work-system.md#what-a-deletion-leaves-behind)). A session
+is therefore readable from anywhere else in the project, and never continuable — `session_view.*` is the namespace that reads it,
+and it has no method that can say anything to a session
+([why it is app-scoped, and what the one non-read is for](websocket-rpc-design.md#method-naming-convention)).
+
+| Method | Params | Result |
+|--------|--------|--------|
+| `session_view.worktrees` | — | `worktrees`: `worktree`, `exists`, `session_count` |
+| `session_view.list` | `worktree`, `exclude_work_sessions?`, `cursor?`, `limit?` | `sessions`, `next_cursor?`, `has_more` |
+| `session_view.get` | `worktree`, `session_id` | `session` |
+| `session_view.history` | `worktree`, `session_id`, `before_seq?`, `limit?` | `history`, `has_more`, `next_before_seq?` |
+| `session_view.attachment` | `worktree`, `session_id`, `id` | `file` |
+| `session_view.delete` | `worktree`, `session_id` | — |
+
+- `worktree` is a name and `""` is the main worktree. It is checked with
+  `filepath.IsLocal` before it becomes a path, since these are the paths that
+  deliberately skip the registry (`server/AGENTS.md`).
+- The rows, the detail, the cursors and the history page are **the same shapes
+  `session.list.page` and `chat.messages.history` answer with**, deliberately, so
+  a client renders and pages a viewed session with the code it already has.
+- `session_view.worktrees` lists every worktree that still holds sessions,
+  deleted ones included; `exists` is what separates "switch to it" from "read it".
+  A worktree with no sessions is not listed, so one disappears from the list when
+  its last session goes — and what is then left on disk is
+  [work-system.md](code/work-system.md#what-a-deletion-leaves-behind)'s to say.
+- **Nothing here subscribes.** What is read belongs to a conversation the reader
+  cannot take part in, so there is no update to follow; a client that changes
+  something through `session_view.delete` re-reads rather than waiting to be told
+  ([work-system.md](code/work-system.md#what-a-deletion-leaves-behind) for why
+  there is nobody to notify along that path).
+- A worktree recreated under a deleted one's name **inherits its sessions**. The
+  data is keyed by name and nothing moves it: the alternative is renaming
+  somebody's data behind their back to keep two eras of the same branch apart.
+
+What the user sees of all this — the sidebar filter, the read-only screen, and
+what deleting means from there — is
+[cross-worktree-session-ui.md](cross-worktree-session-ui.md).

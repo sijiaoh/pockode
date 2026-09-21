@@ -1,6 +1,7 @@
 import { Link } from "@tanstack/react-router";
-import { GitBranch } from "lucide-react";
+import { Archive, GitBranch } from "lucide-react";
 import { useWorktreeDisplay } from "../../hooks/useWorktreeDisplay";
+import { useWorktreeList } from "../../hooks/useWorktreeList";
 import { buildNavigation } from "../../lib/navigation";
 import { isWorktreeBound, useWorkStore } from "../../lib/workStore";
 import { useIsGitRepo } from "../../lib/worktreeStore";
@@ -43,8 +44,34 @@ function WorktreeBadge({ work, className }: Props) {
 	const { worktree } = work;
 	const { displayName, isMain } = useWorktreeDisplay(worktree);
 	const visible = useWorktreeBadgeVisible(work);
+	const worktrees = useWorktreeList();
 
 	if (!visible) return null;
+
+	// Deleting a worktree leaves its sessions behind, so a work can outlive the
+	// worktree it names. An empty list is one that has not landed rather than a
+	// machine with no worktrees — the same reading AppShell's redirect guard
+	// takes.
+	const isGone =
+		!isMain &&
+		worktrees.length > 0 &&
+		!worktrees.some((w) => w.name === worktree);
+
+	if (isGone) {
+		// A name, not a link: there is nowhere to go. And `Archive` rather than an
+		// error colour — a deleted worktree is unusual, not a failure
+		// (docs/sidebar-ui.md).
+		return (
+			<span
+				className={`inline-flex min-w-0 items-center gap-1 rounded px-1.5 py-0.5 text-[11px] text-th-text-muted ${className ?? ""}`}
+				title={displayName}
+			>
+				<Archive className="size-3 shrink-0" aria-hidden="true" />
+				<span className="truncate">{displayName}</span>
+				<span className="sr-only">, deleted worktree</span>
+			</span>
+		);
+	}
 
 	const label = isMain ? "Open main worktree" : `Open worktree ${displayName}`;
 

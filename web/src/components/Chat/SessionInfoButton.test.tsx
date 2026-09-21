@@ -1,9 +1,8 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { useSessionDetailStore } from "../../lib/sessionDetailStore";
+import { describe, expect, it, vi } from "vitest";
 import { makeSessionDetail } from "../../test/sessionFixtures";
-import type { SessionUsage } from "../../types/message";
+import type { SessionDetail, SessionUsage } from "../../types/message";
 import SessionInfoButton from "./SessionInfoButton";
 
 const empty: SessionUsage = {
@@ -23,13 +22,29 @@ const spent: SessionUsage = {
 	context_window: 200_000,
 };
 
-async function open(usage?: SessionUsage, isForked = false) {
+/**
+ * The detail the panel describes. `usage` undefined stands for the round trip
+ * that has not landed, which the panel says out loud; `detail` null is the same
+ * gap one step earlier.
+ */
+function detailWith(
+	usage?: SessionUsage,
+	isForked = false,
+	workId?: string,
+): SessionDetail {
+	return makeSessionDetail({
+		id: "s1",
+		usage,
+		work_id: workId,
+		...(isForked ? { forked_from: { session_id: "parent" } } : {}),
+	});
+}
+
+async function open(usage?: SessionUsage, isForked = false, workId?: string) {
 	const user = userEvent.setup();
 	render(
 		<SessionInfoButton
-			sessionId="s1"
-			usage={usage}
-			isForked={isForked}
+			detail={detailWith(usage, isForked, workId)}
 			onOpenWorkDetail={vi.fn()}
 		/>,
 	);
@@ -41,9 +56,6 @@ const sectionTitles = () =>
 	screen.getAllByRole("heading", { level: 3 }).map((h) => h.textContent);
 
 describe("SessionInfoButton", () => {
-	beforeEach(() => {
-		useSessionDetailStore.getState().clear();
-	});
 	it("opens before anything has been reported, and says so", async () => {
 		await open(empty);
 
@@ -149,22 +161,27 @@ describe("SessionInfoButton", () => {
 	// What this session is comes before what it has spent, and the sections
 	// themselves know nothing about where they sit.
 	it("puts the work this session runs above its usage", async () => {
-		useSessionDetailStore
-			.getState()
-			.setDetail("s1", makeSessionDetail({ id: "s1", work_id: "work-1" }));
-
-		await open(spent);
+		await open(spent, false, "work-1");
 
 		expect(sectionTitles()).toEqual(["Work", "Usage"]);
 	});
 
 	it("leaves usage first on a session that runs no work", async () => {
-		useSessionDetailStore
-			.getState()
-			.setDetail("s1", makeSessionDetail({ id: "s1" }));
-
 		await open(spent);
 
+		expect(sectionTitles()).toEqual(["Usage"]);
+	});
+
+	// The panel is handed its detail rather than reading the store, because on a
+	// session viewed out of another worktree the store has no entry for it — and
+	// a work is the usual way onto that screen, so losing the way back would be
+	// losing it exactly where it is needed.
+	it("waits for a detail that has not arrived at all", async () => {
+		const user = userEvent.setup();
+		render(<SessionInfoButton detail={null} onOpenWorkDetail={vi.fn()} />);
+		await user.click(screen.getByRole("button", { name: "Session info" }));
+
+		expect(screen.getByText("Loading…")).toBeInTheDocument();
 		expect(sectionTitles()).toEqual(["Usage"]);
 	});
 });

@@ -18,9 +18,10 @@ import (
 )
 
 type Store interface {
-	// Session metadata (memory only)
-	List() ([]SessionMeta, error)
-	Get(sessionID string) (SessionMeta, bool, error)
+	// Reader is the looking half: List, Get and GetHistory. Embedded rather
+	// than restated so that a store and the read-only view of a data directory
+	// nobody has open cannot drift apart — one read path serves both.
+	Reader
 
 	// Session metadata (with I/O)
 	Create(ctx context.Context, sessionID string, spec CreateSpec) (SessionMeta, error)
@@ -44,7 +45,6 @@ type Store interface {
 	AddUsage(ctx context.Context, sessionID string, report UsageReport) error
 
 	// History persistence
-	GetHistory(ctx context.Context, sessionID string) ([]json.RawMessage, error)
 	// AppendToHistory appends a JSON-serializable record to history (does not
 	// update timestamp) and returns the record's sequence number: its 1-based
 	// position in the history GetHistory returns. Sending that number to clients
@@ -212,7 +212,16 @@ func (s *FileStore) readIndexFromDisk() (indexData, error) {
 		return indexData{Sessions: []SessionMeta{}}, nil
 	}
 
-	// Migrate: ensure all sessions have valid defaults
+	migrateIndex(&idx)
+
+	return idx, nil
+}
+
+// migrateIndex brings what was read off disk up to what this build expects,
+// in memory. Shared by the store and by the readers that have none
+// (readIndexFile), so that a session reads the same either way.
+func migrateIndex(idx *indexData) {
+	// Ensure all sessions have valid defaults.
 	for i := range idx.Sessions {
 		idx.Sessions[i].AgentType = ResolveAgentType(idx.Sessions[i].AgentType)
 		if idx.Sessions[i].Mode == "" {
@@ -226,8 +235,6 @@ func (s *FileStore) readIndexFromDisk() (indexData, error) {
 	if idx.Version < 1 {
 		dropStaleClaudeContext(idx.Sessions)
 	}
-
-	return idx, nil
 }
 
 // dropStaleClaudeContext forgets a context reading taken by the build that read
@@ -616,7 +623,14 @@ func (s *FileStore) SetUnread(ctx context.Context, sessionID string, unread bool
 }
 
 func (s *FileStore) historyPath(sessionID string) string {
-	return filepath.Join(s.dataDir, "sessions", sessionID, "history.jsonl")
+	return historyPath(s.dataDir, sessionID)
+}
+
+// historyPath locates a session's transcript without a store, for the same
+// reason indexPath does: the store and the readers that have none must not
+// disagree about where it is.
+func historyPath(dataDir, sessionID string) string {
+	return filepath.Join(dataDir, "sessions", sessionID, "history.jsonl")
 }
 
 func (s *FileStore) GetHistory(ctx context.Context, sessionID string) ([]json.RawMessage, error) {
@@ -628,7 +642,14 @@ func (s *FileStore) GetHistory(ctx context.Context, sessionID string) ([]json.Ra
 	// immutable path, and AppendToHistory writes it lock-free. Taking s.mu here
 	// would only block metadata writers for the whole (potentially large) scan
 	// without protecting anything.
-	path := s.historyPath(sessionID)
+	return readHistory(s.dataDir, sessionID)
+}
+
+// readHistory reads one session's transcript out of a data directory, skipped
+// records reported in the transcript itself. Shared with DirReader, so a
+// history read without a store is the same history.
+func readHistory(dataDir, sessionID string) ([]json.RawMessage, error) {
+	path := historyPath(dataDir, sessionID)
 	records, stats, err := filestore.ReadJSONL(path, filestore.DefaultMaxLineBytes)
 	if err != nil {
 		return nil, err

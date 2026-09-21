@@ -191,6 +191,12 @@ interface Props {
 	onOpenSession?: (sessionId: string) => void;
 	/** Must be stable: it reaches the memoized `MessageItem`. */
 	onForkMessage?: (messageId: string) => void;
+	/**
+	 * The transcript belongs to another worktree and can only be read. Only the
+	 * empty state needs telling: everything else here already goes quiet when
+	 * the handler it would call is withheld.
+	 */
+	isReadOnly?: boolean;
 }
 
 function MessageList({
@@ -212,6 +218,7 @@ function MessageList({
 	forkedFromSessionId,
 	onOpenSession,
 	onForkMessage,
+	isReadOnly = false,
 }: Props) {
 	const { EmptyState: CustomEmptyState } = useChatUIConfig();
 	const scrollRef = useRef<HTMLDivElement>(null);
@@ -678,6 +685,15 @@ function MessageList({
 		) : null;
 
 	if (messages.length === 0) {
+		// An invitation on a screen with no composer is worse than no line at
+		// all: the bar below has just said this conversation cannot be added to.
+		if (isReadOnly) {
+			return (
+				<div className="flex min-h-0 flex-1 items-center justify-center text-th-text-muted">
+					<p>Nothing was said in this conversation.</p>
+				</div>
+			);
+		}
 		if (CustomEmptyState) {
 			return <CustomEmptyState onHintClick={onHintClick} />;
 		}

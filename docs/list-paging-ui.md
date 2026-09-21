@@ -261,6 +261,24 @@ screen"; paging is the answer to "too many rows fetched", which is the actual
 report. They compose later if a 30-row page ever proves too heavy to render, and
 nothing in §3 forbids it.
 
+### 3.6 When the sidebar is showing another worktree's sessions
+
+The sidebar's worktree filter can point it at a worktree the user is not standing
+in, or at all of them at once, and what it lists then is **not the subscribed
+list** — it is a one-shot read per worktree, merged on the client. Everything §3
+promises still has to hold, but two of the promises have to be re-earned by hand
+because no single request can make them across sources: the list may only show
+rows it can prove nothing will be inserted above (§2.4), and it dedupes by id
+(§3.3). Nothing is pushed to it, so it is re-read only when the user asks and
+never in the background — installing a round replaces the list and would cost a
+reader their depth. That list, and the filter that selects it, are
+[cross-worktree-session-ui.md](cross-worktree-session-ui.md#all-worktrees-is-merged-on-the-client).
+
+Changing that filter is unlike the five things §3.2 lists as recomputing the
+order from the top: it does not touch the subscribed list at all, which stays
+subscribed and keeps its depth underneath, because what it changes is *which
+list is on screen*. Changing it back shows that list exactly as it was left.
+
 ## 4. The project list — the archive pages, the rest does not
 
 ### 4.1 Current is loaded whole, and that is the design

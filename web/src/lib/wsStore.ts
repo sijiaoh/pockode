@@ -62,12 +62,14 @@ import {
 	createFileActions,
 	createGitActions,
 	createSessionActions,
+	createSessionViewActions,
 	createSettingsActions,
 	createWorkActions,
 	createWorktreeActions,
 	type FileActions,
 	type GitActions,
 	type SessionActions,
+	type SessionViewActions,
 	type SettingsActions,
 	type WorkActions,
 	type WorktreeActions,
@@ -194,6 +196,7 @@ type RPCActions = ConnectionActions &
 	ChatActions &
 	CommandActions &
 	SessionActions &
+	SessionViewActions &
 	SettingsActions &
 	FileActions &
 	GitActions &
@@ -659,6 +662,7 @@ const attachmentActions = createAttachmentActions(getClient);
 const chatActions = createChatActions(getClient, getAgentStartClient);
 const commandActions = createCommandActions(getClient);
 const sessionActions = createSessionActions(getClient);
+const sessionViewActions = createSessionViewActions(getClient);
 const settingsActions = createSettingsActions(getClient);
 const fileActions = createFileActions(getClient);
 const gitActions = createGitActions(getClient);
@@ -1180,6 +1184,7 @@ export const useWSStore = create<WSState>((set, get) => ({
 		...chatActions,
 		...commandActions,
 		...sessionActions,
+		...sessionViewActions,
 		...settingsActions,
 		...fileActions,
 		...gitActions,

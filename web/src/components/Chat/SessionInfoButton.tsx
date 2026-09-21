@@ -1,17 +1,21 @@
 import { useIsExpanded } from "@pockode/shared";
 import { Info } from "lucide-react";
 import { useCallback, useRef, useState } from "react";
-import type { SessionUsage } from "../../types/message";
+import type { SessionDetail } from "../../types/message";
 import ResponsivePanel from "../ui/ResponsivePanel";
 import SessionUsageSection from "./SessionUsageSection";
 import SessionWorkSection from "./SessionWorkSection";
 
 interface Props {
-	/** Which session the panel describes; its sections read their own data. */
-	sessionId: string;
-	/** Undefined until the session's detail arrives; the panel says so. */
-	usage?: SessionUsage;
-	isForked: boolean;
+	/**
+	 * What the panel describes, and null until it arrives — which is a state the
+	 * sections say out loud rather than hide.
+	 *
+	 * The caller resolves it, because which detail speaks for the session on
+	 * screen is the caller's to know: a session read out of another worktree has
+	 * one of its own and no entry in `sessionDetailStore` (`useViewedSession`).
+	 */
+	detail: SessionDetail | null;
 	/** Absent when the embedder has no work pages to open. */
 	onOpenWorkDetail?: (workId: string) => void;
 }
@@ -30,12 +34,7 @@ interface Props {
  * rather than a glance; announcing that without a tap is its own signal's job
  * (an inline warning above the input bar), not this button's.
  */
-function SessionInfoButton({
-	sessionId,
-	usage,
-	isForked,
-	onOpenWorkDetail,
-}: Props) {
+function SessionInfoButton({ detail, onOpenWorkDetail }: Props) {
 	const [isOpen, setIsOpen] = useState(false);
 	const triggerRef = useRef<HTMLButtonElement>(null);
 	const isExpanded = useIsExpanded();
@@ -78,11 +77,14 @@ function SessionInfoButton({
 					{/* Before Usage: what this session is comes before what it has
 					    spent. */}
 					<SessionWorkSection
-						sessionId={sessionId}
+						detail={detail}
 						onOpenWorkDetail={onOpenWorkDetail}
 						onClose={handleClose}
 					/>
-					<SessionUsageSection usage={usage} isForked={isForked} />
+					<SessionUsageSection
+						usage={detail?.usage}
+						isForked={detail?.forked_from !== undefined}
+					/>
 				</div>
 			</ResponsivePanel>
 		</div>

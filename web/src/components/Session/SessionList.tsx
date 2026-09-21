@@ -1,12 +1,15 @@
-import type { SessionListItem } from "../../types/message";
+import type { SessionRow } from "../../lib/sessionFilter";
 import SessionItem from "./SessionItem";
 import SessionListSentinel from "./SessionListSentinel";
 
 interface Props {
-	sessions: SessionListItem[];
+	rows: SessionRow[];
 	currentSessionId: string | null;
-	onSelectSession: (id: string) => void;
-	onDeleteSession: (id: string) => void;
+	/** Both take the row's worktree, null for this one; see `SessionItem`. */
+	onSelectSession: (id: string, worktree: string | null) => void;
+	onDeleteSession: (id: string, worktree: string | null) => void;
+	/** What to say when there is nothing to list; the filter decides. */
+	emptyMessage: string;
 	/** The end of the list; see `SessionListSentinel`. */
 	hasMore: boolean;
 	isLoadingMore: boolean;
@@ -17,10 +20,11 @@ interface Props {
 }
 
 function SessionList({
-	sessions,
+	rows,
 	currentSessionId,
 	onSelectSession,
 	onDeleteSession,
+	emptyMessage,
 	hasMore,
 	isLoadingMore,
 	pageError,
@@ -28,11 +32,9 @@ function SessionList({
 	hasPaged,
 	onLoadMore,
 }: Props) {
-	if (sessions.length === 0 && !hasMore) {
+	if (rows.length === 0 && !hasMore) {
 		return (
-			<div className="p-4 text-center text-th-text-muted">
-				No conversations yet
-			</div>
+			<div className="p-4 text-center text-th-text-muted">{emptyMessage}</div>
 		);
 	}
 
@@ -44,10 +46,11 @@ function SessionList({
 		// hand; a list that does no measuring of its own must not disable the
 		// thing that measures for it (docs/list-paging-ui.md §3.2).
 		<div className="flex flex-col gap-1 p-2">
-			{sessions.map((session) => (
+			{rows.map(({ session, origin }) => (
 				<SessionItem
 					key={session.id}
 					session={session}
+					origin={origin}
 					isActive={session.id === currentSessionId}
 					onSelect={onSelectSession}
 					onDelete={onDeleteSession}
@@ -59,7 +62,7 @@ function SessionList({
 				error={pageError}
 				autoLoad={autoLoad}
 				hasPaged={hasPaged}
-				loadedCount={sessions.length}
+				loadedCount={rows.length}
 				onLoadMore={onLoadMore}
 			/>
 		</div>

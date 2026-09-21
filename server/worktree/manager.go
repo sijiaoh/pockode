@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"sort"
 	"sync"
 	"time"
 
@@ -178,28 +180,129 @@ func (m *Manager) ResolveQuestions(name string) (chat.Questions, func(), error) 
 // DeleteSessions implements work.SessionDeleter: the sessions of a deleted work
 // go with it, processes first.
 //
-// Unlike StopSession and RetireSession this one loads the worktree it is given,
-// because the records to remove are on disk whether or not anybody has the
-// worktree open — and a session left behind is unreachable, its work being the
-// only way into it.
+// Unlike StopSession and RetireSession this one reaches sessions nobody has
+// open, because the records to remove are on disk whether or not anybody has
+// the worktree open — and a session left behind is unreachable, its work being
+// the only way into it. That includes a worktree that no longer exists: its
+// sessions are deliberately kept (ForceShutdown), so this is one of the two
+// outlets that keep what is kept from being everything.
 func (m *Manager) DeleteSessions(ctx context.Context, worktree string, sessionIDs []string) {
 	if len(sessionIDs) == 0 {
 		return
 	}
 
-	wt, err := m.Get(worktree)
+	deleteOne, done, err := m.sessionDeleter(worktree)
 	if err != nil {
-		slog.Warn("could not get worktree for session cleanup", "worktree", worktree, "error", err)
+		slog.Warn("could not reach a worktree's sessions for cleanup", "worktree", worktree, "error", err)
 		return
 	}
-	defer m.Release(wt)
+	defer done()
 
 	for _, sid := range sessionIDs {
-		wt.ProcessManager.Close(sid)
-		if err := wt.SessionStore.Delete(ctx, sid); err != nil {
+		if err := deleteOne(ctx, sid); err != nil {
 			slog.Warn("failed to delete session during work cleanup", "sessionId", sid, "error", err)
 		}
 	}
+}
+
+// DeleteSession removes one session's stored data, whatever became of the
+// worktree it belongs to. It is how a session is deleted by hand, including one
+// whose worktree is gone: what cannot be continued must still be discardable,
+// or the data a deletion keeps is kept forever.
+func (m *Manager) DeleteSession(ctx context.Context, worktree, sessionID string) error {
+	deleteOne, done, err := m.sessionDeleter(worktree)
+	if err != nil {
+		return err
+	}
+	defer done()
+
+	return deleteOne(ctx, sessionID)
+}
+
+// sessionDeleter resolves how the named worktree's sessions are deleted, and
+// what has to happen once the caller is finished.
+//
+// A worktree that still exists is loaded and deleted through, because a session
+// there may have a live process to close, and its store owns the directory —
+// writing underneath it would be undone by its next write. One that is gone has
+// neither, so its index is rewritten on disk directly, and the directory itself
+// is then dropped if that was its last session.
+func (m *Manager) sessionDeleter(name string) (func(context.Context, string) error, func(), error) {
+	wt, err := m.Get(name)
+	if err == nil {
+		return func(ctx context.Context, sessionID string) error {
+				wt.ProcessManager.Close(sessionID)
+				return wt.SessionStore.Delete(ctx, sessionID)
+			}, func() {
+				m.Release(wt)
+			}, nil
+	}
+	if !errors.Is(err, ErrWorktreeNotFound) {
+		// Anything else — a directory that is no longer a git repository, a
+		// worktree that exists but could not be built — is not "it was deleted",
+		// and deleting its sessions from under a store that may yet open is not
+		// the way to handle it.
+		return nil, nil, fmt.Errorf("get worktree %q to delete a session: %w", name, err)
+	}
+
+	dir, dirErr := m.SessionDataDir(name)
+	if dirErr != nil {
+		return nil, nil, dirErr
+	}
+	// Nothing is notified along this branch, and there is nobody to notify: the
+	// worktree's watchers stopped with it, and the work engine's interest in a
+	// deleted session is to stop the work that was waiting in it — which a
+	// worktree with unclosed work cannot be deleted while.
+	return func(ctx context.Context, sessionID string) error {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			return session.DeleteInDir(dir, sessionID)
+		}, func() {
+			m.pruneEmptySessionData(name, dir)
+		}, nil
+}
+
+// pruneEmptySessionData removes a deleted worktree's data directory once the
+// last session in it is gone.
+//
+// SessionSources already stops offering a worktree with no sessions, so this is
+// not what makes it disappear from the list — it is what keeps the deletion
+// from leaving an empty directory per worktree that ever existed, growing with
+// nothing in it.
+//
+// Only for a worktree that is gone, which is why it asks the registry rather
+// than trusting its caller: an existing worktree's directory holds live state
+// beyond the sessions (agent session state, history) and may have a store open
+// on it. The main worktree's directory is the project's own and is never
+// touched.
+func (m *Manager) pruneEmptySessionData(name, dir string) {
+	if name == "" {
+		return
+	}
+
+	// Before the registry, which may have to ask git: a worktree that still has
+	// sessions is the ordinary case and is answered by one file read.
+	sessions, err := session.NewDirReader(dir).List()
+	if err != nil {
+		slog.Warn("could not check whether a deleted worktree still has sessions",
+			"worktree", name, "error", err)
+		return
+	}
+	if len(sessions) > 0 {
+		return
+	}
+
+	if _, err := m.registry.Resolve(name); err == nil {
+		return
+	}
+
+	if err := os.RemoveAll(dir); err != nil {
+		slog.Warn("failed to remove the data directory of a deleted worktree",
+			"worktree", name, "error", err)
+		return
+	}
+	slog.Info("removed the data directory of a deleted worktree with no sessions left", "worktree", name)
 }
 
 // SessionTurns implements work.TurnSource, so a work's activity can be derived
@@ -407,8 +510,20 @@ func (m *Manager) Release(wt *Worktree) {
 	}
 }
 
-// ForceShutdown immediately shuts down a worktree, notifies all subscribers,
-// and removes the worktree's data directory from .pockode.
+// ForceShutdown immediately shuts down a worktree and notifies all subscribers.
+//
+// The worktree's data directory is deliberately left in place. A work usually
+// runs in a worktree of its own and the worktree is cleaned up once the work is
+// done — so removing the data here destroyed the conversation that produced the
+// result, with no way back. What is left is readable from anywhere else in the
+// project (see SessionReader) and never writable: the worktree is marked
+// deleted, which is what refuses everything a connection still bound to it
+// might send.
+//
+// It is not meant to accumulate forever either: a session's data goes when the
+// work item that owns it is deleted, or when the session itself is deleted.
+// Both outlets go on working afterwards (see DeleteSession), and the directory
+// itself goes with the last session in it (pruneEmptySessionData).
 func (m *Manager) ForceShutdown(name string) {
 	m.mu.Lock()
 	wt, exists := m.worktrees[name]
@@ -418,15 +533,16 @@ func (m *Manager) ForceShutdown(name string) {
 	m.mu.Unlock()
 
 	if exists {
+		wt.MarkDeleted()
 		wt.NotifyAll(context.Background(), "worktree.deleted", rpc.WorktreeDeletedParams{Name: name})
 		wt.Stop()
 		slog.Info("worktree force shutdown", "name", name)
 	}
 
-	wtDataDir := filepath.Join(m.dataDir, "worktrees", name)
-	if err := os.RemoveAll(wtDataDir); err != nil {
-		slog.Warn("failed to remove worktree data directory", "path", wtDataDir, "error", err)
-	}
+	// The directory is kept for the sessions in it, so a worktree whose sessions
+	// were all deleted before it was has nothing to keep. Outside the branch
+	// above: a worktree nobody had open is just as likely to be the empty one.
+	m.pruneEmptySessionData(name, m.dataDirFor(name))
 }
 
 func (m *Manager) Shutdown() {
@@ -470,15 +586,120 @@ func dataDirFor(dataDir, name string) string {
 // watchers, process manager, git watches — and hold it alive on a reference,
 // because someone opened a page showing numbers.
 func (m *Manager) SessionUsages(name string) (map[string]session.Usage, error) {
-	// The name comes from a stored work item rather than from the registry —
-	// Get/Resolve is what normally vouches for it, and this path deliberately
-	// skips both so that a worktree nobody is using still answers. So the name is
-	// checked here before it becomes a path: filepath.IsLocal rejects both `..`
-	// escapes and Windows device names (see server/AGENTS.md).
-	if name != "" && !filepath.IsLocal(name) {
-		return nil, fmt.Errorf("worktree name %q is not a directory name", name)
+	dir, err := m.SessionDataDir(name)
+	if err != nil {
+		return nil, err
 	}
-	return session.ReadUsages(m.dataDirFor(name))
+	return session.ReadUsages(dir)
+}
+
+// SessionDataDir is where the named worktree's sessions are stored, whether or
+// not that worktree still exists.
+//
+// The name may come from a stored work item or straight off the wire rather
+// than from the registry — Get/Resolve is what normally vouches for it, and the
+// cross-worktree read paths deliberately skip both, so that a worktree nobody
+// is using (or one that is gone) still answers. So the name is checked here
+// before it becomes a path: filepath.IsLocal rejects both `..` escapes and
+// Windows device names (see server/AGENTS.md).
+func (m *Manager) SessionDataDir(name string) (string, error) {
+	if name != "" && !filepath.IsLocal(name) {
+		return "", fmt.Errorf("worktree name %q is not a directory name", name)
+	}
+	return m.dataDirFor(name), nil
+}
+
+// SessionReader is how one worktree reads another's sessions: the live store
+// when that worktree is loaded, the index on disk when it is not — which
+// includes every worktree that has been deleted.
+//
+// A Reader and not a Store, and that is the whole design. Sessions belonging to
+// a worktree other than the one the client is in are shown, never continued:
+// there is no execution environment to continue them in, and for a worktree
+// that still exists the client is expected to switch to it rather than talk to
+// it from outside. Refusing that is structural here rather than a rule every
+// handler has to remember.
+//
+// Reading through the live store when there is one matters for the same reason
+// SessionTurns does it: the store is the current value, and a second FileStore
+// over a directory that already has one is exactly what FileStore forbids.
+func (m *Manager) SessionReader(name string) (session.Reader, error) {
+	if wt, ok := m.loaded(name); ok {
+		return wt.SessionStore, nil
+	}
+	dir, err := m.SessionDataDir(name)
+	if err != nil {
+		return nil, err
+	}
+	return session.NewDirReader(dir), nil
+}
+
+// SessionSource is one worktree that still has sessions stored under it.
+type SessionSource struct {
+	// Name is the worktree's name; "" is the main worktree.
+	Name string
+	// Exists reports whether the worktree itself is still there. A source that
+	// does not exist can only be read; one that does can be switched to and
+	// used normally.
+	//
+	// A worktree recreated under the name of a deleted one exists again, and
+	// inherits the stored sessions by doing so — the data is keyed by name and
+	// nothing moves it. That is deliberate: the alternative is renaming
+	// somebody's data behind their back to keep two eras apart, and the two
+	// eras are the same branch under the same name.
+	Exists bool
+	// SessionCount is how many sessions are stored. A source with none is not
+	// reported at all, so an emptied directory stops offering itself as a place
+	// to look.
+	SessionCount int
+}
+
+// SessionSources lists every worktree that still has session data, existing or
+// deleted, so a client can offer them as places to read from.
+func (m *Manager) SessionSources() ([]SessionSource, error) {
+	existing := make(map[string]bool)
+	for _, info := range m.registry.List() {
+		existing[info.Name] = true
+	}
+
+	names := []string{""}
+	entries, err := os.ReadDir(filepath.Join(m.dataDir, "worktrees"))
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return nil, fmt.Errorf("read worktree data directories: %w", err)
+	}
+	for _, entry := range entries {
+		if entry.IsDir() {
+			names = append(names, entry.Name())
+		}
+	}
+
+	sources := make([]SessionSource, 0, len(names))
+	for _, name := range names {
+		reader, err := m.SessionReader(name)
+		if err != nil {
+			// A directory whose name is not a worktree name cannot have been
+			// written by us; it says nothing about the worktrees that are.
+			slog.Warn("skipping an unreadable session source", "worktree", name, "error", err)
+			continue
+		}
+		sessions, err := reader.List()
+		if err != nil {
+			// One unreadable worktree must not hide the sessions another has.
+			slog.Warn("could not read a worktree's sessions", "worktree", name, "error", err)
+			continue
+		}
+		if len(sessions) == 0 {
+			continue
+		}
+		sources = append(sources, SessionSource{
+			Name:         name,
+			Exists:       existing[name],
+			SessionCount: len(sessions),
+		})
+	}
+
+	sort.Slice(sources, func(i, j int) bool { return sources[i].Name < sources[j].Name })
+	return sources, nil
 }
 
 func (m *Manager) create(name, workDir string) (*Worktree, error) {

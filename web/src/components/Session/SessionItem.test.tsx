@@ -46,6 +46,7 @@ function seedWork(status: WorkStatus, wait?: WorkWait) {
 
 function renderRow(
 	overrides: Partial<ReturnType<typeof makeSessionListItem>> = {},
+	props: Partial<React.ComponentProps<typeof SessionItem>> = {},
 ) {
 	return render(
 		<SessionItem
@@ -60,6 +61,7 @@ function renderRow(
 			isActive={false}
 			onSelect={vi.fn()}
 			onDelete={vi.fn()}
+			{...props}
 		/>,
 	);
 }
@@ -188,5 +190,51 @@ describe("deleting a session", () => {
 
 		await user.click(screen.getByRole("button", { name: /delete/i }));
 		expect(screen.queryByText(/will stop/)).toBeNull();
+	});
+});
+
+// A row only names a worktree when the list spans more than one; the name never
+// replaces the timestamp, which is what the list is sorted by.
+describe("a row read out of another worktree", () => {
+	it("names the worktree beside the time", () => {
+		renderRow(
+			{ turn: turn("idle"), updated_at: AT },
+			{ origin: { worktree: "old-fix", exists: false, label: "old-fix" } },
+		);
+
+		expect(screen.getByText("old-fix")).toBeInTheDocument();
+		expect(screen.getByText(/·/)).toBeInTheDocument();
+	});
+
+	it("says in words that the worktree is gone", () => {
+		renderRow(
+			{ turn: turn("idle") },
+			{ origin: { worktree: "old-fix", exists: false, label: "old-fix" } },
+		);
+
+		expect(screen.getByText(", deleted worktree")).toBeInTheDocument();
+	});
+
+	// The row is the only delete entrance a session of a deleted worktree has,
+	// and it has to say which worktree so the shell can call the right method.
+	it("hands its worktree to both handlers", async () => {
+		const user = userEvent.setup();
+		const onSelect = vi.fn();
+		const onDelete = vi.fn();
+		renderRow(
+			{ turn: turn("idle") },
+			{
+				origin: { worktree: "old-fix", exists: false, label: "old-fix" },
+				onSelect,
+				onDelete,
+			},
+		);
+
+		await user.click(screen.getByText("Chat"));
+		expect(onSelect).toHaveBeenCalledWith("s1", "old-fix");
+
+		await user.click(screen.getByRole("button", { name: "Delete Chat" }));
+		await user.click(screen.getByRole("button", { name: "Delete" }));
+		expect(onDelete).toHaveBeenCalledWith("s1", "old-fix");
 	});
 });

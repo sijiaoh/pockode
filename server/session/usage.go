@@ -1,13 +1,5 @@
 package session
 
-import (
-	"encoding/json"
-	"errors"
-	"fmt"
-	"io/fs"
-	"os"
-)
-
 // TokenUsage counts the tokens a conversation consumed, on Anthropic's
 // convention: InputTokens counts only what was actually sent to the model,
 // with the tokens served from cache and the tokens written into it counted
@@ -147,29 +139,16 @@ func (u Usage) equal(o Usage) bool {
 // second one for a directory that already has an owner. Reading the file is
 // safe and current — the index is written atomically, and every usage write
 // persists it before notifying anyone, so it is never behind the change that
-// prompted the read.
-//
-// No lock, on purpose: locking cannot make the read see a newer version than it
-// happens to arrive at, and would create a .lock file in a directory this
-// caller only wants to look at (see server/AGENTS.md).
-//
-// A directory with no index yet has no sessions, which is not an error.
+// prompted the read. Why it takes no lock, and why a directory with no index
+// yet is not an error: DirReader, which is what it reads through.
 func ReadUsages(dataDir string) (map[string]Usage, error) {
-	data, err := os.ReadFile(indexPath(dataDir))
-	if errors.Is(err, fs.ErrNotExist) {
-		return nil, nil
-	}
+	sessions, err := NewDirReader(dataDir).List()
 	if err != nil {
-		return nil, fmt.Errorf("read session index: %w", err)
+		return nil, err
 	}
 
-	var idx indexData
-	if err := json.Unmarshal(data, &idx); err != nil {
-		return nil, fmt.Errorf("parse session index: %w", err)
-	}
-
-	usages := make(map[string]Usage, len(idx.Sessions))
-	for _, meta := range idx.Sessions {
+	usages := make(map[string]Usage, len(sessions))
+	for _, meta := range sessions {
 		usages[meta.ID] = meta.Usage
 	}
 	return usages, nil

@@ -31,6 +31,7 @@ Method names are organized using the `namespace.method` format, solving two prob
 |-----------|-------|---------|
 | `chat.*` | worktree | `ws/rpc_chat.go` |
 | `session.*` | worktree | `ws/rpc_session.go` |
+| `session_view.*` | app | `ws/rpc_session_view.go` |
 | `file.*` | worktree | `ws/rpc_file.go` |
 | `attachment.*` | worktree | `ws/rpc_attachment.go` |
 | `git.*` | worktree | `ws/rpc_git.go` |
@@ -44,6 +45,13 @@ Method names are organized using the `namespace.method` format, solving two prob
 
 - **Worktree scope**: Operations that depend on the current working directory (files, Git, etc.)
 - **App scope**: Global operations across worktrees (settings, project management, etc.)
+
+`session_view.*` is the one namespace that reads a worktree other than the bound
+one — its sessions outlive it, deletion included — so every method names the
+worktree it reads from and binding one says nothing about which of them may be
+called. Why that makes those sessions read-only, and what its single non-read is
+for, is in [websocket-rpc-design.md](../websocket-rpc-design.md#method-naming-convention);
+what a user does with them is [cross-worktree-session-ui.md](../cross-worktree-session-ui.md).
 
 ### Frontend Implementation Pattern
 
@@ -426,6 +434,27 @@ each reply. What a stale bind did to the session list is in
 Code: `server/ws/rpc.go` (`bindWorktree`, `trackSubscription`, `cleanup`),
 `server/ws/rpc_worktree.go` (`handleWorktreeSwitch`); regression coverage in
 `server/ws/rpc_lifecycle_test.go`.
+
+### A Binding Whose Worktree Was Deleted
+
+A connection stays bound to a worktree that is deleted under it: the `Worktree`
+object outlives the deletion, because connections still hold it and its session
+store still reads. So the binding is where that has to stop meaning anything, and
+every worktree-scoped method is refused for a worktree marked deleted
+(`Worktree.MarkDeleted` / `Deleted`, checked in `ws/rpc.go` before the
+worktree-scoped switch). Everything below that point would act on a working tree
+that is gone — a message would spawn a CLI in a directory that does not exist, a
+git command would fail halfway, a subscription would follow watchers that have
+already stopped.
+
+**Refused by the server, not left to the client that received `worktree.deleted`**,
+because a client is not what makes it true. The rejection names the switch the
+user has to make, and says that the worktree's sessions are still readable through
+`session_view.*` — which needs no binding, and is the app-scoped namespace above.
+
+The check is per instance rather than per name: a worktree recreated under a
+deleted one's name is a new object, and only the instance that was deleted stays
+deleted, for as long as anything still holds it.
 
 ### Handlers Wait for Connection State
 

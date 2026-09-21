@@ -487,12 +487,52 @@ func (h *rpcMethodHandler) Handle(ctx context.Context, conn *jsonrpc2.Conn, req 
 	case "agent_role.list.unsubscribe":
 		h.handleWatcherUnsubscribe(ctx, conn, req, h.agentRoleListWatcher, "agent role list")
 		return
+	// session_view namespace (app-level): another worktree's sessions, read-only
+	// but for the delete that keeps what a deleted worktree left from being kept
+	// forever (see rpc.SessionViewDeleteParams)
+	case "session_view.worktrees":
+		h.handleSessionViewWorktrees(ctx, conn, req)
+		return
+	case "session_view.list":
+		h.handleSessionViewList(ctx, conn, req)
+		return
+	case "session_view.get":
+		h.handleSessionViewGet(ctx, conn, req)
+		return
+	case "session_view.history":
+		h.handleSessionViewHistory(ctx, conn, req)
+		return
+	case "session_view.attachment":
+		h.handleSessionViewAttachment(ctx, conn, req)
+		return
+	case "session_view.delete":
+		h.handleSessionViewDelete(ctx, conn, req)
+		return
 	}
 
 	// All other methods require a valid worktree
 	wt := h.state.getWorktree()
 	if wt == nil {
 		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidRequest, "no worktree bound")
+		return
+	}
+
+	// A connection stays bound to a worktree that is deleted under it — the
+	// object survives, and its session store still reads — so this is where that
+	// binding stops meaning anything. Everything below acts on a working tree
+	// that is gone: a message would spawn a CLI in a directory that does not
+	// exist, a git command would fail halfway through, a subscription would
+	// follow watchers that have already stopped.
+	//
+	// Refused here rather than left to the client that gets worktree.deleted,
+	// because a client is not what makes it true. What the worktree left behind
+	// is read through the session_view namespace above, which is read-only and
+	// needs no binding.
+	if wt.Deleted() {
+		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidRequest,
+			"worktree "+wt.Name+" has been deleted; switch to another worktree. "+
+				"Its sessions are still stored and still readable (session_view.*), "+
+				"but nothing can run in a worktree that no longer exists")
 		return
 	}
 

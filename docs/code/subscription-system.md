@@ -980,6 +980,16 @@ subscription that would resolve it sits behind the resolution. `canLoadSession`
 is the weaker flag that breaks the cycle, and it is weaker in exactly one way:
 it does not ask whether the session exists.
 
+**A session read out of another worktree has none of this**, because it has no
+subscription at all: the connection is not bound to the worktree that owns it, so
+neither the chat subscription nor this one can speak for it. Its metadata and the
+newest page of its transcript are two one-shot reads, kept out of
+`sessionDetailStore` for the reason that store exists — it holds the *bound*
+worktree's open session and clears when that subscription resets
+([frontend-state.md](frontend-state.md#server-cache-vs-store)). What the screen
+does with that, including why it is read-only, is
+[cross-worktree-session-ui.md](../cross-worktree-session-ui.md).
+
 ### Why the Controls Wait for the Session to Describe Itself
 
 Until the first `session.detail` snapshot arrives, `useChatMessages` — reading

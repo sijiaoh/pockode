@@ -21,6 +21,7 @@ Method names use the `namespace.method` format with namespaces.
 | `auth` | — | `ws/rpc.go` |
 | `chat.*` | worktree | `ws/rpc_chat.go` |
 | `session.*` | worktree | `ws/rpc_session.go` |
+| `session_view.*` | app | `ws/rpc_session_view.go` |
 | `file.*` | worktree | `ws/rpc_file.go` |
 | `attachment.*` | worktree | `ws/rpc_attachment.go` |
 | `git.*` | worktree | `ws/rpc_git.go` |
@@ -34,6 +35,22 @@ Method names use the `namespace.method` format with namespaces.
 
 - **worktree scope**: Methods bound to the current worktree
 - **app scope**: Methods independent of any worktree
+
+`session_view.*` is the one namespace that reads a worktree other than the bound
+one, so it is app-scoped and every method names the worktree it reads from. It
+exists because session data outlives its worktree: deleting a worktree leaves
+its conversations in place, and they are then read from wherever the client
+happens to be. Nothing in it changes a conversation — that is what makes those
+sessions read-only, rather than a rule the client is trusted to keep.
+
+Its one non-read is `session_view.delete`, and it is the same rule seen from the
+other side: data kept past a worktree's deletion has to stay deletable, or what
+a deletion keeps is kept forever. Read-only is about what can be said to a
+session, not about whether the record must be preserved.
+
+The methods themselves are listed in
+[agent-chat.md](agent-chat.md#sessions-outlive-their-worktree); what a user does
+with them is [cross-worktree-session-ui.md](cross-worktree-session-ui.md).
 
 Subscriptions use the `*.subscribe` / `*.unsubscribe` pattern. Server notifications use the `*.changed` pattern.
 

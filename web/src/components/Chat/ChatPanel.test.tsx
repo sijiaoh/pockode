@@ -1,4 +1,11 @@
-import { act, render, screen, waitFor, within } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import {
+	act,
+	render as rtlRender,
+	screen,
+	waitFor,
+	within,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useAgentOptionsStore } from "../../lib/agentOptionsStore";
@@ -23,6 +30,29 @@ import ChatPanel from "./ChatPanel";
 
 // Mock scrollTo (not available in jsdom)
 Element.prototype.scrollTo = vi.fn();
+
+/**
+ * The panel reads two things request/response — a viewed session's metadata and
+ * its transcript — so it needs a query client whether or not a test exercises
+ * them. A fresh client per render keeps one test's cached answer out of the
+ * next one.
+ */
+function render(ui: React.ReactElement) {
+	const queryClient = new QueryClient({
+		defaultOptions: {
+			// `retryDelay`, not `retry`: these reads decide for themselves how many
+			// attempts a failure is worth — a refusal none, anything else a few —
+			// so switching retries off here would not reach them. Removing the wait
+			// between attempts does, and leaves the behaviour under test intact.
+			queries: { retry: false, retryDelay: 0 },
+		},
+	});
+	return rtlRender(ui, {
+		wrapper: ({ children }) => (
+			<QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+		),
+	});
+}
 
 // Mock Project overlays to avoid router dependency
 vi.mock("../Project", () => ({
@@ -62,6 +92,12 @@ const mockState = vi.hoisted(() => ({
 	),
 	startWork: vi.fn(() => Promise.resolve()),
 	forkSession: vi.fn(),
+	// The read-only pair: one session's metadata and one page of its transcript,
+	// out of a worktree the connection is not bound to.
+	sessionViewGet: vi.fn(),
+	sessionViewHistory: vi.fn(),
+	/** Whether the server *refused* a read, as opposed to failing to answer. */
+	isInvalidParamsRejection: vi.fn(() => false),
 	// The agents the server declares. The fork UI here is tested on an agent that
 	// can be forked; the refusal has its own test below.
 	listAgents: vi.fn(() =>
@@ -97,6 +133,8 @@ vi.mock("../../lib/wsStore", () => {
 		startWork: mockState.startWork,
 		forkSession: mockState.forkSession,
 		listAgents: mockState.listAgents,
+		sessionViewGet: mockState.sessionViewGet,
+		sessionViewHistory: mockState.sessionViewHistory,
 	});
 
 	// One actions object for the whole file, not a fresh one per read: a hook
@@ -113,7 +151,13 @@ vi.mock("../../lib/wsStore", () => {
 
 	mockStore.getState = () => state;
 
-	return { useWSStore: mockStore, wsActions: actions };
+	// Reached by the viewed-session read, which has to tell "not there" from
+	// "could not ask".
+	return {
+		useWSStore: mockStore,
+		wsActions: actions,
+		isInvalidParamsRejection: mockState.isInvalidParamsRejection,
+	};
 });
 
 vi.mock("../../utils/uuid", () => ({
@@ -193,6 +237,14 @@ describe("ChatPanel", () => {
 		);
 		mockState.chatMessagesUnsubscribe.mockResolvedValue(undefined);
 		mockState.forkSession.mockReset();
+		mockState.isInvalidParamsRejection.mockReturnValue(false);
+		mockState.sessionViewGet.mockResolvedValue(
+			makeSessionDetail({ id: "test-session", title: "Old Chat" }),
+		);
+		mockState.sessionViewHistory.mockResolvedValue({
+			history: [],
+			has_more: false,
+		});
 		useSessionStore.setState({ sessions: [] });
 		useInputStore.setState({ inputs: {} });
 		useWorkStore.getState().reset();
@@ -2156,6 +2208,335 @@ describe("ChatPanel", () => {
 			});
 			await user.click(banner);
 			expect(onSelectSession).toHaveBeenCalledWith("parent-session");
+		});
+	});
+	// A session whose data is read out of another worktree. Everything about the
+	// screen that says "you cannot write here" is decided by the `view` prop
+	// alone; the server refuses a write either way, so this is presentation.
+	describe("when the session is read out of another worktree", () => {
+		const deleted = { worktree: "old-fix", exists: false, label: "old-fix" };
+		const elsewhere = {
+			worktree: "feature-x",
+			exists: true,
+			label: "feature-x",
+		};
+
+		it("reads the transcript through session_view, not the chat subscription", async () => {
+			mockState.sessionViewHistory.mockResolvedValue({
+				history: [{ type: "message", content: "What did we decide?", seq: 1 }],
+				has_more: false,
+			});
+
+			render(
+				<ChatPanel
+					{...defaultProps}
+					sessionTitle=""
+					isSessionResolved={false}
+					view={deleted}
+				/>,
+			);
+
+			expect(
+				await screen.findByText("What did we decide?"),
+			).toBeInTheDocument();
+			expect(mockState.sessionViewHistory).toHaveBeenCalledWith(
+				"old-fix",
+				"test-session",
+			);
+			// Subscribing would ask the bound worktree about a session it has never
+			// heard of — and would promise updates that cannot come.
+			expect(mockState.chatMessagesSubscribe).not.toHaveBeenCalled();
+		});
+
+		it("replaces the composer with a statement of why there is none", async () => {
+			render(
+				<ChatPanel
+					{...defaultProps}
+					sessionTitle=""
+					isSessionResolved={false}
+					view={deleted}
+				/>,
+			);
+			await waitForHistoryLoad();
+
+			expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
+			expect(
+				screen.queryByRole("button", { name: /Send/ }),
+			).not.toBeInTheDocument();
+			expect(
+				screen.getByText(/the worktree "old-fix" no longer exists/i),
+			).toBeInTheDocument();
+		});
+
+		it("says whose session it is, above the transcript", async () => {
+			render(
+				<ChatPanel
+					{...defaultProps}
+					sessionTitle=""
+					isSessionResolved={false}
+					view={deleted}
+				/>,
+			);
+			await waitForHistoryLoad();
+
+			expect(
+				screen.getByText(/Session from "old-fix" \(deleted\)/),
+			).toBeInTheDocument();
+		});
+
+		it("offers the way back into a worktree that still exists", async () => {
+			const user = userEvent.setup();
+			const onOpenSessionThere = vi.fn();
+			render(
+				<ChatPanel
+					{...defaultProps}
+					sessionTitle=""
+					isSessionResolved={false}
+					view={elsewhere}
+					onOpenSessionThere={onOpenSessionThere}
+				/>,
+			);
+			await waitForHistoryLoad();
+
+			await user.click(
+				screen.getByRole("button", {
+					name: "Open this session in worktree feature-x",
+				}),
+			);
+			expect(onOpenSessionThere).toHaveBeenCalled();
+		});
+
+		it("offers no way back into a worktree that is gone", async () => {
+			render(
+				<ChatPanel
+					{...defaultProps}
+					sessionTitle=""
+					isSessionResolved={false}
+					view={deleted}
+					onOpenSessionThere={vi.fn()}
+				/>,
+			);
+			await waitForHistoryLoad();
+
+			expect(
+				screen.queryByRole("button", { name: /Open this session/ }),
+			).not.toBeInTheDocument();
+		});
+
+		it("drops the controls that would change the session, keeping Session info", async () => {
+			render(
+				<ChatPanel
+					{...defaultProps}
+					sessionTitle=""
+					isSessionResolved={false}
+					view={deleted}
+				/>,
+			);
+			await waitForHistoryLoad();
+
+			// Removed rather than disabled: there is no execution environment to
+			// come back.
+			expect(
+				screen.queryByRole("button", { name: /Agent:/ }),
+			).not.toBeInTheDocument();
+			expect(
+				screen.queryByRole("button", { name: /Mode:/ }),
+			).not.toBeInTheDocument();
+			expect(
+				screen.getByRole("button", { name: "Session info" }),
+			).toBeInTheDocument();
+		});
+
+		// The openers a transcript carries for answering back, none of which has
+		// a process to reach. A permission card is already settled by the idle
+		// turn a viewed transcript is read under; the question card is not — its
+		// status comes from the records themselves — so "Answer this" survived
+		// into a screen whose answer sheet is not even rendered.
+		it("offers nothing to answer a question the transcript left pending", async () => {
+			mockState.sessionViewHistory.mockResolvedValue({
+				history: [
+					{
+						type: "question_posted",
+						request_id: "req-1",
+						questions: [{ header: "Which branch?", question: "Which branch?" }],
+						seq: 1,
+					},
+				],
+				has_more: false,
+			});
+			const user = userEvent.setup();
+
+			render(
+				<ChatPanel
+					{...defaultProps}
+					sessionTitle=""
+					isSessionResolved={false}
+					view={deleted}
+				/>,
+			);
+
+			// The card is still there and still says the question went unanswered;
+			// what is gone is the control that claims it can be answered now.
+			const card = await screen.findByRole("button", { name: /Question/ });
+			await user.click(card);
+			expect(
+				screen.queryByRole("button", { name: "Answer this" }),
+			).not.toBeInTheDocument();
+		});
+
+		it("offers no Allow or Deny on a permission the transcript left pending", async () => {
+			mockState.sessionViewHistory.mockResolvedValue({
+				history: [
+					{
+						type: "permission_request",
+						request_id: "req-1",
+						tool_name: "Bash",
+						tool_input: { command: "rm -rf /" },
+						tool_use_id: "tool-1",
+						seq: 1,
+					},
+				],
+				has_more: false,
+			});
+
+			render(
+				<ChatPanel
+					{...defaultProps}
+					sessionTitle=""
+					isSessionResolved={false}
+					view={deleted}
+				/>,
+			);
+
+			expect(await screen.findByText("Bash")).toBeInTheDocument();
+			expect(
+				screen.queryByRole("button", { name: "Allow" }),
+			).not.toBeInTheDocument();
+			expect(
+				screen.queryByRole("button", { name: "Deny" }),
+			).not.toBeInTheDocument();
+		});
+
+		// The bar below has just said this conversation cannot be added to.
+		it("does not invite a conversation it has no composer for", async () => {
+			render(
+				<ChatPanel
+					{...defaultProps}
+					sessionTitle=""
+					isSessionResolved={false}
+					view={deleted}
+				/>,
+			);
+			await waitForHistoryLoad();
+
+			expect(
+				screen.getByText("Nothing was said in this conversation."),
+			).toBeInTheDocument();
+			expect(
+				screen.queryByText("Start a conversation..."),
+			).not.toBeInTheDocument();
+		});
+
+		// A work's chat link is the usual way onto this screen, so the row back to
+		// that work is the one thing Session info is kept open for here. It comes
+		// off the viewed session's own detail — the detail store holds the bound
+		// worktree's session and has no entry for this one.
+		it("keeps the way back to the work the viewed session runs", async () => {
+			const user = userEvent.setup();
+			const onOpenWorkDetail = vi.fn();
+			mockState.sessionViewGet.mockResolvedValue(
+				makeSessionDetail({
+					id: "test-session",
+					title: "Old Chat",
+					work_id: "work-1",
+				}),
+			);
+
+			render(
+				<ChatPanel
+					{...defaultProps}
+					sessionTitle=""
+					isSessionResolved={false}
+					view={deleted}
+					onOpenWorkDetail={onOpenWorkDetail}
+				/>,
+			);
+			await waitForHistoryLoad();
+
+			await user.click(screen.getByRole("button", { name: "Session info" }));
+			await user.click(screen.getByRole("button", { name: "Old Chat" }));
+
+			expect(onOpenWorkDetail).toHaveBeenCalledWith("work-1");
+		});
+
+		it("says so when the session is not there, rather than showing nothing", async () => {
+			mockState.isInvalidParamsRejection.mockReturnValue(true);
+			mockState.sessionViewGet.mockRejectedValue(
+				new Error("session not found"),
+			);
+			mockState.sessionViewHistory.mockRejectedValue(
+				new Error("session not found"),
+			);
+
+			render(
+				<ChatPanel
+					{...defaultProps}
+					sessionTitle=""
+					isSessionResolved={false}
+					view={deleted}
+				/>,
+			);
+
+			// An empty transcript would read as "they never said anything".
+			expect(await screen.findByRole("alert")).toHaveTextContent(
+				'This session is not in "old-fix" any more.',
+			);
+		});
+
+		// The two reads answer one question — can this conversation be read — so a
+		// transcript that failed while the metadata arrived must not come out as a
+		// conversation in which nobody said anything.
+		it("says so when the transcript alone could not be read", async () => {
+			mockState.sessionViewHistory.mockRejectedValue(
+				new Error("failed to read session history"),
+			);
+
+			render(
+				<ChatPanel
+					{...defaultProps}
+					sessionTitle=""
+					isSessionResolved={false}
+					view={deleted}
+				/>,
+			);
+
+			expect(await screen.findByRole("alert")).toHaveTextContent(
+				"failed to read session history",
+			);
+		});
+
+		it("takes its title from its own metadata, there being no row for it", async () => {
+			mockState.isInvalidParamsRejection.mockReturnValue(false);
+			mockState.sessionViewGet.mockResolvedValue(
+				makeSessionDetail({ id: "test-session", title: "Old Chat" }),
+			);
+
+			render(
+				<ChatPanel
+					{...defaultProps}
+					sessionTitle=""
+					isSessionResolved={false}
+					view={deleted}
+				/>,
+			);
+			await waitForHistoryLoad();
+
+			await waitFor(() =>
+				expect(mockState.sessionViewGet).toHaveBeenCalledWith(
+					"old-fix",
+					"test-session",
+				),
+			);
 		});
 	});
 });

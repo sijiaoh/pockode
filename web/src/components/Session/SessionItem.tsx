@@ -1,6 +1,7 @@
-import { GitBranch } from "lucide-react";
+import { Archive, GitBranch } from "lucide-react";
 import { memo } from "react";
 import { isWorkActive, sessionActivity } from "../../lib/activity";
+import type { SessionOrigin } from "../../lib/sessionFilter";
 import {
 	selectSessionTitle,
 	UNLISTED_SESSION_NAME,
@@ -32,13 +33,23 @@ function formatDate(dateString: string): string {
 
 interface Props {
 	session: SessionListItem;
+	/**
+	 * The worktree the session is read out of, and null when that is the one the
+	 * user is standing in — which is every row until the filter spans worktrees.
+	 *
+	 * The handlers take it back rather than looking it up: what opening and
+	 * deleting this row mean depend on it, and a row of a worktree that is gone
+	 * goes through a different call than a row of this one.
+	 */
+	origin?: SessionOrigin | null;
 	isActive: boolean;
-	onSelect: (id: string) => void;
-	onDelete: (id: string) => void;
+	onSelect: (id: string, worktree: string | null) => void;
+	onDelete: (id: string, worktree: string | null) => void;
 }
 
 const SessionItem = memo(function SessionItem({
 	session,
+	origin = null,
 	isActive,
 	onSelect,
 	onDelete,
@@ -93,17 +104,45 @@ const SessionItem = memo(function SessionItem({
 					/>
 				) : undefined
 			}
-			subtitle={formatDate(session.updated_at)}
+			// The worktree goes in the subtitle rather than a second left slot: the
+			// left slot is the fork glyph's, and a fork read out of another
+			// worktree would need two of them. The name is the only thing here
+			// allowed to truncate — a row that ate its own timestamp to fit a
+			// worktree name would lose the one thing the list is sorted by.
+			subtitle={
+				origin ? (
+					<span className="flex min-w-0 items-center gap-1">
+						{origin.exists ? (
+							<GitBranch
+								className="size-3 shrink-0 text-th-text-muted"
+								aria-hidden="true"
+							/>
+						) : (
+							<Archive
+								className="size-3 shrink-0 text-th-text-muted"
+								aria-hidden="true"
+							/>
+						)}
+						<span className="truncate">{origin.label}</span>
+						{!origin.exists && (
+							<span className="sr-only">, deleted worktree</span>
+						)}
+						<span className="shrink-0">· {formatDate(session.updated_at)}</span>
+					</span>
+				) : (
+					formatDate(session.updated_at)
+				)
+			}
 			isActive={isActive}
 			unread={session.unread}
 			activity={activity}
 			unansweredQuestions={session.unanswered_questions}
-			onSelect={() => onSelect(session.id)}
+			onSelect={() => onSelect(session.id, origin?.worktree ?? null)}
 			actions={
 				<DeleteButton
 					itemName={session.title}
 					itemType="session"
-					onDelete={() => onDelete(session.id)}
+					onDelete={() => onDelete(session.id, origin?.worktree ?? null)}
 					// A session delete stops the work bound to it — the place an
 					// answer would have gone is the thing being removed. Saying so
 					// is the difference between a destructive action and a silent

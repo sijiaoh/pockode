@@ -974,6 +974,24 @@ func (s *FileStore) persistIndex() error {
 
 // --- Helpers ---
 
+// IDsBySession indexes work items by the session each one runs, for the readers
+// that resolve a whole list of sessions and would otherwise look each one up
+// separately. Work with no session is left out; session ids are unique across
+// worktrees, so the index needs no worktree filter.
+//
+// Work.SessionID is the relation itself — a session never stores which work it
+// belongs to (rpc.SessionListItem.WorkID) — so this is the one place that
+// inverts it.
+func IDsBySession(works []Work) map[string]string {
+	byID := make(map[string]string, len(works))
+	for _, item := range works {
+		if item.SessionID != "" {
+			byID[item.SessionID] = item.ID
+		}
+	}
+	return byID
+}
+
 // UnclosedWorkByWorktree returns the works assigned to the given worktree whose
 // status is not closed, preserving list order. A worktree with any such work
 // must not be deleted, since its sessions are still live or resumable.

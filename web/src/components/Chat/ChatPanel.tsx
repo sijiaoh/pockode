@@ -4,6 +4,7 @@ import { useChatMessages } from "../../hooks/useChatMessages";
 import { SKELETON_DELAY_MS, useDelayedFlag } from "../../hooks/useDelayedFlag";
 import { useForkSession } from "../../hooks/useForkSession";
 import { useForkSupport } from "../../hooks/useForkSupport";
+import { useViewedSession } from "../../hooks/useViewedSession";
 import { takeAnswerIntent } from "../../lib/answerIntent";
 import { inputActions } from "../../lib/inputStore";
 import { useChatUIConfig } from "../../lib/registries/chatUIRegistry";
@@ -12,6 +13,7 @@ import {
 	useSessionDetailStore,
 } from "../../lib/sessionDetailStore";
 import { useSessionStore } from "../../lib/sessionStore";
+import { type SessionView, SessionViewProvider } from "../../lib/sessionView";
 import { useWSStore } from "../../lib/wsStore";
 import type {
 	HistorySeq,
@@ -40,7 +42,9 @@ import DefaultInputBar from "./InputBar";
 import type { PromptError } from "./MessageItem";
 import MessageList, { type MessageListHandle } from "./MessageList";
 import ModeSelector from "./ModeSelector";
+import ReadOnlyBar from "./ReadOnlyBar";
 import SessionInfoButton from "./SessionInfoButton";
+import SessionOriginBar from "./SessionOriginBar";
 
 const noop = () => {};
 
@@ -126,6 +130,15 @@ interface Props {
 	onSelectWorkSegment?: (segment: WorkSegment) => void;
 	onOpenAgentRoleList?: () => void;
 	onOpenAgentRoleDetail?: (roleId: string) => void;
+	/**
+	 * Set when the session's data is being read out of another worktree, which
+	 * is the whole of what makes this screen read-only: the data comes from
+	 * `session_view.*`, which cannot say anything to a session. `isSessionResolved`
+	 * says nothing here — the bound worktree has never heard of this session.
+	 */
+	view?: SessionView | null;
+	/** Opens the viewed session in its own worktree; see `ReadOnlyBar`. */
+	onOpenSessionThere?: () => void;
 }
 
 function ChatPanel({
@@ -146,7 +159,10 @@ function ChatPanel({
 	onSelectWorkSegment,
 	onOpenAgentRoleList,
 	onOpenAgentRoleDetail,
+	view = null,
+	onOpenSessionThere,
 }: Props) {
+	const isReadOnly = view !== null;
 	const projectTitle = useWSStore((state) => state.projectTitle);
 	const {
 		InputBar: CustomInputBar,
@@ -163,7 +179,16 @@ function ChatPanel({
 	// will not mount this panel until it does. Everything below —
 	// `useChatMessages`' settings included — reads the same store entry, so the
 	// settings and where the conversation was forked from stay one snapshot.
-	const sessionDetail = useSessionDetailStore(selectSessionDetail(sessionId));
+	const liveDetail = useSessionDetailStore(selectSessionDetail(sessionId));
+	// A viewed session has no row, no subscription and no entry in the detail
+	// store, which holds the bound worktree's open session. Its metadata is read
+	// once instead, and everything below reads whichever of the two applies.
+	const viewedSession = useViewedSession(
+		view?.worktree ?? "",
+		sessionId,
+		isReadOnly,
+	);
+	const sessionDetail = viewedSession ? viewedSession.detail : liveDetail;
 
 	// The row is the fast source — it is on screen before the detail lands — but
 	// there is no row for a session the task-session filter hides, which is every
@@ -202,7 +227,10 @@ function ChatPanel({
 		resetPrompt,
 	} = useChatMessages({
 		sessionId,
-		enabled: isSessionResolved,
+		// A viewed session resolves through its own read rather than through the
+		// bound worktree's session list, which will never have a row for it.
+		enabled: isReadOnly || isSessionResolved,
+		viewedSession,
 	});
 
 	// The three settings controls all read the session's own metadata, which
@@ -215,7 +243,7 @@ function ChatPanel({
 	// One continuous wait, deliberately: resolving the session and loading its
 	// history are two phases of the same gap. Timing them separately would let a
 	// fast resolve restart the delay and produce a longer blank than no delay.
-	const isChatPending = !isSessionResolved || isLoadingHistory;
+	const isChatPending = (!isReadOnly && !isSessionResolved) || isLoadingHistory;
 	const showSkeleton = useDelayedFlag(isChatPending, SKELETON_DELAY_MS);
 
 	// The one thing that still refuses a send. An open turn is not it — both CLIs
@@ -236,10 +264,12 @@ function ChatPanel({
 	// Subscribe already marks read server-side, but we also need to mark read
 	// when returning from an overlay (where new messages may have arrived).
 	useEffect(() => {
-		if (!overlay && isSessionResolved) {
+		// Not for a viewed session: unread belongs to the worktree that owns the
+		// session, and the connection is not bound to it.
+		if (!overlay && !isReadOnly && isSessionResolved) {
 			markSessionRead(sessionId).catch(() => {});
 		}
-	}, [sessionId, isSessionResolved, overlay, markSessionRead]);
+	}, [sessionId, isSessionResolved, isReadOnly, overlay, markSessionRead]);
 
 	const handleSend = useCallback(
 		(content: string) => {
@@ -417,10 +447,10 @@ function ChatPanel({
 	// not a URL: a route that opened the sheet would re-open it on every reload
 	// and every share of the link (docs/answering-ui.md §4).
 	useEffect(() => {
-		if (isChatPending) return;
+		if (isChatPending || isReadOnly) return;
 		const intent = takeAnswerIntent(sessionId);
 		if (intent) setAnswerAnchor({ requestId: intent.requestId });
-	}, [sessionId, isChatPending]);
+	}, [sessionId, isChatPending, isReadOnly]);
 
 	const unanswered = turn.unanswered ?? [];
 
@@ -462,6 +492,25 @@ function ChatPanel({
 
 	const renderContent = () => {
 		if (!overlay) {
+			// A read the server refused, said out loud rather than left as an empty
+			// transcript: the reader would otherwise conclude the conversation was
+			// empty, which is the one thing a failure must not be allowed to say.
+			if (
+				view &&
+				viewedSession &&
+				(viewedSession.isMissing || viewedSession.error)
+			) {
+				return (
+					<div
+						role="alert"
+						className="flex min-h-0 flex-1 items-center justify-center px-6 text-center text-sm text-th-text-muted"
+					>
+						{viewedSession.isMissing
+							? `This session is not in "${view.label}" any more.`
+							: viewedSession.error}
+					</div>
+				);
+			}
 			// Defer mounting until history loads so initial scroll-to-bottom works.
 			// An unresolved session waits here too, so a switch shows the destination
 			// empty rather than the previous session's messages.
@@ -480,9 +529,20 @@ function ChatPanel({
 					loadedHistoryPages={loadedHistoryPages}
 					onLoadMoreHistory={loadMoreHistory}
 					isCodex={agentType === "codex"}
-					onPermissionRespond={handlePermissionRespond}
-					onAnswerQuestion={handleAnswerQuestion}
-					onHintClick={handleSend}
+					// The openers a transcript carries for answering back, all
+					// withheld on a viewed session for the one reason: there is no
+					// process there to hear any of them. Each card already draws
+					// itself without a control when it is given none — a pending
+					// card that offers nothing is the truth here, not the dead end
+					// it would be in a live session. The question card is the one
+					// that needs this: its status comes from the records, not from
+					// the turn, so "Answer this" otherwise survives into a screen
+					// whose answer sheet is not rendered at all. The other two are
+					// the same statement made where it cannot drift.
+					onPermissionRespond={isReadOnly ? undefined : handlePermissionRespond}
+					onAnswerQuestion={isReadOnly ? undefined : handleAnswerQuestion}
+					onHintClick={isReadOnly ? undefined : handleSend}
+					isReadOnly={isReadOnly}
 					promptError={promptError ?? undefined}
 					onOpenWorkDetail={onOpenWorkDetail}
 					onOpenFile={onOpenFile}
@@ -495,7 +555,7 @@ function ChatPanel({
 					// navigation would move this gate onto fork's own row instead
 					// (docs/session-fork-ui.md, "Which rows reserve a slot").
 					onForkMessage={
-						onSelectSession && forkSupport !== "none"
+						!isReadOnly && onSelectSession && forkSupport !== "none"
 							? handleStartFork
 							: undefined
 					}
@@ -566,135 +626,148 @@ function ChatPanel({
 	};
 
 	return (
-		<MainContainer
-			title={projectTitle}
-			onOpenSidebar={onOpenSidebar}
-			onOpenSettings={onOpenSettings}
-		>
-			{!overlay && ChatTopContent && <ChatTopContent sessionId={sessionId} />}
-			{renderContent()}
-			{/* What needs the user, stated where the transcript ends
-			    (docs/lifecycle-ui.md §2.2). */}
-			{!overlay && !isChatPending && (
-				<AttentionStrip
-					turn={turn}
-					onJumpToRequest={handleJumpToRequest}
-					onAnswer={handleOpenAnswerSheet}
-					sendPending={isSendPending}
-				/>
-			)}
-			{/* Session action bar */}
-			{!overlay && settingError && (
-				<SettingErrorBar message={settingError} onDismiss={clearSettingError} />
-			)}
-			{!overlay && (
-				<div className="flex shrink-0 items-center justify-between border-t border-th-border bg-th-bg-secondary px-3 py-1.5">
-					{/* gap-2, not tighter: three neighbouring hit areas now sit in this
-					    row, and 8px between them is the coarse-pointer floor. */}
-					<div className="flex min-w-0 items-center gap-2">
-						{CustomEngineSelector === null ? null : (
-							<Engine
-								agentType={agentType}
-								model={model}
-								effort={effort}
-								onAgentTypeChange={setAgentType}
-								onModelChange={setModel}
-								onEffortChange={setEffort}
-								hasSessionSettings={hasSessionSettings}
-								isSessionActivated={isSessionActivated}
-								disabled={!hasSessionSettings || turnOpen}
-							/>
-						)}
-						{CustomModeSelector === null ? null : CustomModeSelector ? (
-							<CustomModeSelector
-								mode={mode}
-								agentType={agentType}
-								onModeChange={setMode}
-								hasSessionSettings={hasSessionSettings}
-								disabled={!hasSessionSettings || turnOpen}
-							/>
+		<SessionViewProvider value={view}>
+			<MainContainer
+				title={projectTitle}
+				onOpenSidebar={onOpenSidebar}
+				onOpenSettings={onOpenSettings}
+			>
+				{!overlay && ChatTopContent && <ChatTopContent sessionId={sessionId} />}
+				{!overlay && view && <SessionOriginBar view={view} />}
+				{renderContent()}
+				{/* What needs the user, stated where the transcript ends
+				    (docs/lifecycle-ui.md §2.2). */}
+				{!overlay && !isChatPending && !isReadOnly && (
+					<AttentionStrip
+						turn={turn}
+						onJumpToRequest={handleJumpToRequest}
+						onAnswer={handleOpenAnswerSheet}
+						sendPending={isSendPending}
+					/>
+				)}
+				{/* Session action bar */}
+				{!overlay && settingError && (
+					<SettingErrorBar
+						message={settingError}
+						onDismiss={clearSettingError}
+					/>
+				)}
+				{!overlay && (
+					<div className="flex shrink-0 items-center justify-between border-t border-th-border bg-th-bg-secondary px-3 py-1.5">
+						{/* gap-2, not tighter: three neighbouring hit areas now sit in this
+						    row, and 8px between them is the coarse-pointer floor. */}
+						<div className="flex min-w-0 items-center gap-2">
+							{/* Removed rather than disabled on a viewed session: disabled
+							    reads as "not just now", and what is missing is the
+							    execution environment itself. */}
+							{isReadOnly || CustomEngineSelector === null ? null : (
+								<Engine
+									agentType={agentType}
+									model={model}
+									effort={effort}
+									onAgentTypeChange={setAgentType}
+									onModelChange={setModel}
+									onEffortChange={setEffort}
+									hasSessionSettings={hasSessionSettings}
+									isSessionActivated={isSessionActivated}
+									disabled={!hasSessionSettings || turnOpen}
+								/>
+							)}
+							{isReadOnly ||
+							CustomModeSelector === null ? null : CustomModeSelector ? (
+								<CustomModeSelector
+									mode={mode}
+									agentType={agentType}
+									onModeChange={setMode}
+									hasSessionSettings={hasSessionSettings}
+									disabled={!hasSessionSettings || turnOpen}
+								/>
+							) : (
+								<ModeSelector
+									mode={mode}
+									agentType={agentType}
+									onModeChange={setMode}
+									hasSessionSettings={hasSessionSettings}
+									disabled={!hasSessionSettings || turnOpen}
+								/>
+							)}
+							{/* Gated on the route naming a session at all, not on its data:
+							    the button is permanent for the session it belongs to — it
+							    waits through a switch, showing "Loading…" — but there is no
+							    session to describe when the route names none. */}
+							{sessionId !== "" && (
+								<SessionInfoButton
+									detail={sessionDetail}
+									onOpenWorkDetail={onOpenWorkDetail}
+								/>
+							)}
+						</div>
+						{/* Stop exists for every open turn, blocked ones included: the
+						    process is alive, and Stop is one of the user's two exits from
+						    a blocked turn — the card being the other. */}
+						{turnOpen && !isReadOnly ? (
+							CustomStopButton === null ? null : CustomStopButton ? (
+								<CustomStopButton onStop={handleInterrupt} />
+							) : (
+								<button
+									type="button"
+									onClick={handleInterrupt}
+									aria-label="Stop"
+									className="flex size-9 shrink-0 items-center justify-center rounded bg-th-error pointer-coarse:size-11 text-th-text-inverse transition-all hover:opacity-90 active:scale-95"
+								>
+									<Square className="size-3.5 fill-current" />
+								</button>
+							)
 						) : (
-							<ModeSelector
-								mode={mode}
-								agentType={agentType}
-								onModeChange={setMode}
-								hasSessionSettings={hasSessionSettings}
-								disabled={!hasSessionSettings || turnOpen}
-							/>
-						)}
-						{/* Gated on the route naming a session at all, not on its data:
-						    the button is permanent for the session it belongs to — it
-						    waits through a switch, showing "Loading…" — but there is no
-						    session to describe when the route names none. */}
-						{sessionId !== "" && (
-							<SessionInfoButton
-								sessionId={sessionId}
-								usage={sessionDetail?.usage}
-								isForked={sessionDetail?.forked_from !== undefined}
-								onOpenWorkDetail={onOpenWorkDetail}
-							/>
+							<div className="size-8 shrink-0" />
 						)}
 					</div>
-					{/* Stop exists for every open turn, blocked ones included: the
-					    process is alive, and Stop is one of the user's two exits from
-					    a blocked turn — the card being the other. */}
-					{turnOpen ? (
-						CustomStopButton === null ? null : CustomStopButton ? (
-							<CustomStopButton onStop={handleInterrupt} />
-						) : (
-							<button
-								type="button"
-								onClick={handleInterrupt}
-								aria-label="Stop"
-								className="flex size-9 shrink-0 items-center justify-center rounded bg-th-error pointer-coarse:size-11 text-th-text-inverse transition-all hover:opacity-90 active:scale-95"
-							>
-								<Square className="size-3.5 fill-current" />
-							</button>
-						)
+				)}
+				{/* Gone if the anchor left the transcript — a session deleted, a
+				    worktree switched away from. There is nothing left to confirm. */}
+				{forkTarget && forkAnchor && (
+					<ForkSessionSheet
+						anchor={forkAnchor.message}
+						droppedCount={forkAnchor.droppedCount}
+						agentType={agentType}
+						defaultTitle={forkTarget.defaultTitle}
+						isForking={isForking}
+						error={forkError}
+						onFork={(title) =>
+							handleFork(forkAnchor.anchorSeq, title, forkAnchor.droppedText)
+						}
+						onClose={handleCloseFork}
+					/>
+				)}
+				{/* Mounted under the panel, so a session switch takes it with it. Not
+				    rendered behind an overlay: the overlay has replaced the transcript
+				    the sheet belongs to. */}
+				{!overlay && !isReadOnly && answerAnchor && (
+					<AnswerSheet
+						sessionId={sessionId}
+						unanswered={unanswered}
+						anchorRequestId={answerAnchor.requestId}
+						onSend={handleSendAnswers}
+						onClose={handleCloseAnswerSheet}
+					/>
+				)}
+				{!isInputBarHidden(overlay) &&
+					(view ? (
+						<ReadOnlyBar view={view} onOpenThere={onOpenSessionThere} />
 					) : (
-						<div className="size-8 shrink-0" />
-					)}
-				</div>
-			)}
-			{/* Gone if the anchor left the transcript — a session deleted, a
-			    worktree switched away from. There is nothing left to confirm. */}
-			{forkTarget && forkAnchor && (
-				<ForkSessionSheet
-					anchor={forkAnchor.message}
-					droppedCount={forkAnchor.droppedCount}
-					agentType={agentType}
-					defaultTitle={forkTarget.defaultTitle}
-					isForking={isForking}
-					error={forkError}
-					onFork={(title) =>
-						handleFork(forkAnchor.anchorSeq, title, forkAnchor.droppedText)
-					}
-					onClose={handleCloseFork}
-				/>
-			)}
-			{/* Mounted under the panel, so a session switch takes it with it. Not
-			    rendered behind an overlay: the overlay has replaced the transcript
-			    the sheet belongs to. */}
-			{!overlay && answerAnchor && (
-				<AnswerSheet
-					sessionId={sessionId}
-					unanswered={unanswered}
-					anchorRequestId={answerAnchor.requestId}
-					onSend={handleSendAnswers}
-					onClose={handleCloseAnswerSheet}
-				/>
-			)}
-			{!isInputBarHidden(overlay) && (
-				<InputBar
-					sessionId={sessionId}
-					onSend={handleSend}
-					canSend={status === "connected" && !isChatPending && !promptOwnsInput}
-					disabled={!isSessionResolved}
-					turnOpen={turnOpen}
-					onStop={handleInterrupt}
-				/>
-			)}
-		</MainContainer>
+						<InputBar
+							sessionId={sessionId}
+							onSend={handleSend}
+							canSend={
+								status === "connected" && !isChatPending && !promptOwnsInput
+							}
+							disabled={!isSessionResolved}
+							turnOpen={turnOpen}
+							onStop={handleInterrupt}
+						/>
+					))}
+			</MainContainer>
+		</SessionViewProvider>
 	);
 }
 

@@ -1,12 +1,21 @@
 import { useMatch, useParams } from "@tanstack/react-router";
 import { ROUTES, WT_ROUTES } from "../lib/routes";
-import type { OverlaySearchParams } from "../router";
+import type { OverlaySearchParams, SessionSearchParams } from "../router";
 import type { OverlayState, WorkSegment } from "../types/overlay";
 
 export interface RouteInfo {
 	overlay: OverlayState;
 	sessionId: string | null;
 	worktree: string; // "" = main
+	/**
+	 * Which worktree the named session's data is read from, and null when the
+	 * URL does not say — which means the worktree in the path, the ordinary
+	 * case. Only the session routes can carry it; see SESSION_VIEW_PARAM.
+	 *
+	 * Null rather than undefined because "" is a value here: it names the main
+	 * worktree, the way `session_view.*` takes it.
+	 */
+	viewWorktree: string | null;
 }
 
 /**
@@ -120,7 +129,14 @@ export function useRouteState(): RouteInfo {
 	const sessionId =
 		sessionMatch?.params.sessionId ?? wtSessionMatch?.params.sessionId ?? null;
 	if (sessionId) {
-		return { overlay: null, sessionId, worktree };
+		const search = (sessionMatch?.search ??
+			wtSessionMatch?.search) as SessionSearchParams;
+		return {
+			overlay: null,
+			sessionId,
+			worktree,
+			viewWorktree: search.from ?? null,
+		};
 	}
 
 	const stagedPath = stagedMatch?.params._splat ?? wtStagedMatch?.params._splat;
@@ -131,6 +147,7 @@ export function useRouteState(): RouteInfo {
 			overlay: { type: "diff", path: stagedPath, staged: true },
 			sessionId: search.session ?? null,
 			worktree,
+			viewWorktree: null,
 		};
 	}
 
@@ -143,6 +160,7 @@ export function useRouteState(): RouteInfo {
 			overlay: { type: "diff", path: unstagedPath, staged: false },
 			sessionId: search.session ?? null,
 			worktree,
+			viewWorktree: null,
 		};
 	}
 
@@ -154,6 +172,7 @@ export function useRouteState(): RouteInfo {
 			overlay: { type: "file", path: filePath, edit: search.mode === "edit" },
 			sessionId: search.session ?? null,
 			worktree,
+			viewWorktree: null,
 		};
 	}
 
@@ -165,6 +184,7 @@ export function useRouteState(): RouteInfo {
 			overlay: { type: "commit", hash: commitHash },
 			sessionId: search.session ?? null,
 			worktree,
+			viewWorktree: null,
 		};
 	}
 
@@ -178,6 +198,7 @@ export function useRouteState(): RouteInfo {
 			overlay: { type: "commit-diff", hash, path },
 			sessionId: search.session ?? null,
 			worktree,
+			viewWorktree: null,
 		};
 	}
 
@@ -191,6 +212,7 @@ export function useRouteState(): RouteInfo {
 			overlay: { type: "commit-file", hash, path },
 			sessionId: search.session ?? null,
 			worktree,
+			viewWorktree: null,
 		};
 	}
 
@@ -201,6 +223,7 @@ export function useRouteState(): RouteInfo {
 			overlay: { type: "settings" },
 			sessionId: search.session ?? null,
 			worktree,
+			viewWorktree: null,
 		};
 	}
 
@@ -213,6 +236,7 @@ export function useRouteState(): RouteInfo {
 			overlay: { type: "work-detail", workId, segment: readSegment(search) },
 			sessionId: search.session ?? null,
 			worktree,
+			viewWorktree: null,
 		};
 	}
 
@@ -223,6 +247,7 @@ export function useRouteState(): RouteInfo {
 			overlay: { type: "work-list", segment: readSegment(search) },
 			sessionId: search.session ?? null,
 			worktree,
+			viewWorktree: null,
 		};
 	}
 
@@ -236,6 +261,7 @@ export function useRouteState(): RouteInfo {
 			overlay: { type: "agent-role-detail", roleId },
 			sessionId: search.session ?? null,
 			worktree,
+			viewWorktree: null,
 		};
 	}
 
@@ -246,8 +272,9 @@ export function useRouteState(): RouteInfo {
 			overlay: { type: "agent-role-list" },
 			sessionId: search.session ?? null,
 			worktree,
+			viewWorktree: null,
 		};
 	}
 
-	return { overlay: null, sessionId: null, worktree };
+	return { overlay: null, sessionId: null, worktree, viewWorktree: null };
 }

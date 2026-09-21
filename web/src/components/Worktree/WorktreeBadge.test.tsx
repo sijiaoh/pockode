@@ -101,6 +101,22 @@ describe("WorktreeBadge", () => {
 		).toHaveTextContent("Default");
 	});
 
+	// A work outlives the worktree it ran in, because deleting a worktree keeps
+	// its sessions. The badge still says where the work happened — it just has
+	// nowhere to send anyone.
+	it("names a deleted worktree without linking to it", async () => {
+		mockWorktrees = [
+			{ name: "", path: "/repo", branch: "main", is_main: true },
+		];
+		renderStartedBadge("old-fix");
+
+		await waitFor(() =>
+			expect(screen.queryByRole("link")).not.toBeInTheDocument(),
+		);
+		expect(screen.getByText("old-fix")).toBeInTheDocument();
+		expect(screen.getByText(", deleted worktree")).toBeInTheDocument();
+	});
+
 	it("renders nothing for an unstarted top-level work", () => {
 		const { container } = renderBadge(
 			makeWork({ status: "open", worktree: "feat-login" }),

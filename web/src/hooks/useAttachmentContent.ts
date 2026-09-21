@@ -1,5 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { DEFAULT_RETRY_COUNT } from "../lib/queryClient";
+import { useSessionView } from "../lib/sessionView";
 import { isRPCTimeout, useWSStore } from "../lib/wsStore";
 import type { AttachmentSource } from "../types/content";
 import type { FileContent } from "../types/contents";
@@ -13,10 +14,20 @@ import { contentsQueryKey } from "./useContents";
  * directory and never both, and the blocks that reach here always name a file —
  * so the entry the two hooks share only ever holds a `FileContent`.
  */
-export function attachmentQueryKey(source: AttachmentSource) {
-	return source.kind === "attachment"
+export function attachmentQueryKey(
+	source: AttachmentSource,
+	/**
+	 * The worktree the bytes are read from, for a transcript being viewed from
+	 * outside. Part of the key because the same session id names a different
+	 * directory there — and because a path, the other branch, is always the
+	 * bound worktree's.
+	 */
+	viewWorktree?: string,
+) {
+	if (source.kind !== "attachment") return contentsQueryKey(source.path);
+	return viewWorktree === undefined
 		? (["attachment", source.sessionId, source.id] as const)
-		: contentsQueryKey(source.path);
+		: (["attachment", viewWorktree, source.sessionId, source.id] as const);
 }
 
 /**
@@ -30,13 +41,24 @@ export function attachmentQueryKey(source: AttachmentSource) {
  */
 export function useAttachmentContent(source: AttachmentSource, enabled = true) {
 	const getAttachment = useWSStore((state) => state.actions.getAttachment);
+	const sessionViewAttachment = useWSStore(
+		(state) => state.actions.sessionViewAttachment,
+	);
 	const getFile = useWSStore((state) => state.actions.getFile);
+	// A transcript read out of another worktree keeps its pictures: the bytes
+	// live beside the records, and `attachment.get` would look for them in the
+	// bound worktree, which is not where they are. The one thing deep in the
+	// message tree that has to know where it is reading from — hence a context
+	// rather than a prop through every memoized row.
+	const view = useSessionView();
 
 	return useQuery<FileContent>({
-		queryKey: attachmentQueryKey(source),
+		queryKey: attachmentQueryKey(source, view?.worktree),
 		queryFn: async () => {
 			if (source.kind === "attachment") {
-				return getAttachment(source.sessionId, source.id);
+				return view
+					? sessionViewAttachment(view.worktree, source.sessionId, source.id)
+					: getAttachment(source.sessionId, source.id);
 			}
 			const result = await getFile(source.path);
 			// Only a directory answers without one, and a block never names a

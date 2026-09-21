@@ -1,6 +1,6 @@
 import { useNavigate } from "@tanstack/react-router";
 import { Plus } from "lucide-react";
-import { useCallback } from "react";
+import { useCallback, useMemo } from "react";
 import { useSidebarRefresh } from "../../../components/Layout";
 import SessionList from "../../../components/Session/SessionList";
 import { useRouteState } from "../../../hooks/useRouteState";
@@ -28,6 +28,13 @@ export default function SessionsTab() {
 		retryLoadMore,
 	} = useSession({ routeSessionId });
 	const { isActive } = useSidebarRefresh("sessions", refresh);
+
+	// This tab shows the worktree the user is in and nothing else, so no row
+	// carries an origin — the cross-worktree filter is the main sidebar's.
+	const rows = useMemo(
+		() => sessions.map((session) => ({ session, origin: null })),
+		[sessions],
+	);
 
 	// One control in every state, so pressing it after a failure is the retry.
 	const handleLoadMore = useCallback(() => {
@@ -84,7 +91,8 @@ export default function SessionsTab() {
 					<div className="p-4 text-center text-th-text-muted">Loading...</div>
 				) : (
 					<SessionList
-						sessions={sessions}
+						rows={rows}
+						emptyMessage="No conversations yet"
 						currentSessionId={currentSessionId}
 						onSelectSession={handleSelectSession}
 						onDeleteSession={deleteSession}

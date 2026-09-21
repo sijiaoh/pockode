@@ -1,7 +1,9 @@
 import { useIsExpanded } from "@pockode/shared";
+import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
+import { invalidateSessionViewQueries } from "../hooks/sessionViewQueries";
 import { useAgentOptions } from "../hooks/useAgentOptions";
 import { useAgentRoleSubscription } from "../hooks/useAgentRoleSubscription";
 import { useFileDropGuard } from "../hooks/useFileDropGuard";
@@ -13,6 +15,9 @@ import { useWorkSubscription } from "../hooks/useWorkSubscription";
 import { useWorktree } from "../hooks/useWorktree";
 import { authActions, selectCredential, useAuthStore } from "../lib/authStore";
 import { buildNavigation, overlayToNavigation } from "../lib/navigation";
+import { filterShowing, isVisibleUnder } from "../lib/sessionFilter";
+import { useSessionStore } from "../lib/sessionStore";
+import { resolveSessionView } from "../lib/sessionView";
 import { useWorktreeStore, worktreeActions } from "../lib/worktreeStore";
 import { useWSStore, wsActions } from "../lib/wsStore";
 import type { WorkSegment } from "../types/overlay";
@@ -24,6 +29,7 @@ import { ReconnectBanner } from "./ui";
 function AppShell() {
 	const wsStatus = useWSStore((state) => state.status);
 	const navigate = useNavigate();
+	const queryClient = useQueryClient();
 	const isExpanded = useIsExpanded();
 	const [sidebarOpen, setSidebarOpen] = useState(false);
 
@@ -37,6 +43,7 @@ function AppShell() {
 		overlay,
 		sessionId: routeSessionId,
 		worktree: urlWorktree,
+		viewWorktree,
 	} = useRouteState();
 	const storeWorktree = useWorktreeStore((state) => state.current);
 
@@ -103,6 +110,18 @@ function AppShell() {
 		isGitRepo,
 	} = useWorktree({ enabled: isAuthenticated });
 
+	// Which worktree the open session's data is read from, when that is not the
+	// worktree the user is standing in. Recomputed every render rather than
+	// captured: the source worktree can be deleted — or recreated under the same
+	// name — while its session is on screen, and both strips say so.
+	const sessionView = useMemo(
+		() => resolveSessionView(viewWorktree ?? undefined, urlWorktree, worktrees),
+		[viewWorktree, urlWorktree, worktrees],
+	);
+	// Until the worktree list has landed, "deleted" cannot be told from "not
+	// asked yet", and the strips would claim the wrong one for a frame.
+	const isSessionViewReady = !isGitRepo || isWorktreesLoaded;
+
 	useSettingsSubscription(isAuthenticated);
 	useWorkSubscription(isAuthenticated);
 	useAgentRoleSubscription(isAuthenticated);
@@ -150,7 +169,15 @@ function AppShell() {
 		clearCreateError,
 		deleteSession,
 		updateTitle,
-	} = useSession({ enabled: isAuthenticated, routeSessionId });
+	} = useSession({
+		enabled: isAuthenticated,
+		// A viewed session belongs to another worktree, so this worktree's list
+		// has no row for it and no subscription can resolve it. Withholding the id
+		// is what keeps the recovery below from reading its absence as "deleted"
+		// and redirecting off the screen the user just opened; the transcript is
+		// fed from `sessionView` instead.
+		routeSessionId: sessionView ? null : routeSessionId,
+	});
 
 	// Whether the server is in a position to answer about this session at all:
 	// the connection is bound to the worktree the URL names, and its session
@@ -183,8 +210,15 @@ function AppShell() {
 	// back to the full-screen "Loading..." would blank the whole app between two
 	// sessions. Only the shell is kept — the previous session's content is not,
 	// which is what the panel below renders the destination's placeholder for.
+	//
+	// A viewed session resolves through its own read instead: this worktree's
+	// session list will never have a row for it, so `isSessionResolved` cannot
+	// speak for it. What it waits for is the worktree list, which is what says
+	// whether the source worktree is still there — and therefore what the two
+	// read-only strips say.
+	const isScreenResolved = sessionView ? isSessionViewReady : isSessionResolved;
 	const hasRenderedShell = useRef(false);
-	if (isSessionResolved) {
+	if (isScreenResolved) {
 		hasRenderedShell.current = true;
 	}
 
@@ -192,8 +226,18 @@ function AppShell() {
 	// update (new message, state change over WebSocket). Read them from a ref inside
 	// handleDeleteSession so its identity stays stable and doesn't defeat the memo on
 	// every SessionItem row.
-	const deleteSessionCtxRef = useRef({ sessions, currentSessionId });
-	deleteSessionCtxRef.current = { sessions, currentSessionId };
+	const deleteSessionCtxRef = useRef({
+		sessions,
+		currentSessionId,
+		viewedSessionId: null as string | null,
+	});
+	deleteSessionCtxRef.current = {
+		sessions,
+		currentSessionId,
+		// The session the read-only screen is showing, which has no row in this
+		// worktree's list and so is not `currentSessionId`.
+		viewedSessionId: sessionView ? routeSessionId : null,
+	};
 
 	// A switch resolves through several transient renders (worktree store sync →
 	// session list reload → redirect/create). Treat all of them as "in transition"
@@ -206,6 +250,7 @@ function AppShell() {
 
 	useEffect(() => {
 		if (worktreeSwitchInFlight) return;
+		if (sessionView) return;
 		if (redirectSessionId) {
 			// When overlay is active, preserve it and only update session query param
 			const navResult = overlay
@@ -219,11 +264,37 @@ function AppShell() {
 		}
 	}, [
 		worktreeSwitchInFlight,
+		sessionView,
 		redirectSessionId,
 		navigate,
 		urlWorktree,
 		overlay,
 	]);
+
+	// Opening a session the sidebar filter has no row for moves the filter to
+	// where that session is — once, at the moment of navigation.
+	//
+	// Without it, arriving at a deleted worktree's session from a work leaves a
+	// sidebar whose every row belongs to somewhere else and none of which is
+	// selected. It is deliberately not kept in step afterwards: the filter is the
+	// user's from then on, even if they point it somewhere the open session has
+	// no row in.
+	const navigatedRef = useRef<string | null>(null);
+	useEffect(() => {
+		if (!routeSessionId) return;
+		// The view, not the raw parameter: `?from=` naming the worktree in the
+		// path is an ordinary session (SESSION_VIEW_PARAM), and its rows are this
+		// worktree's.
+		const origin = sessionView ? sessionView.worktree : null;
+		const arrival = `${urlWorktree}\u0000${routeSessionId}\u0000${origin ?? ""}\u0000${origin === null ? "" : "v"}`;
+		if (navigatedRef.current === arrival) return;
+		navigatedRef.current = arrival;
+
+		const { worktreeFilter, setWorktreeFilter } = useSessionStore.getState();
+		if (!isVisibleUnder(worktreeFilter, origin)) {
+			setWorktreeFilter(filterShowing(origin));
+		}
+	}, [routeSessionId, urlWorktree, sessionView]);
 
 	// A create that failed in the worktree we left must not be reported against
 	// the one we entered, nor keep the effect below from creating a session there.
@@ -238,6 +309,9 @@ function AppShell() {
 	// minute. One attempt, then the error screen hands the retry back to the user.
 	useEffect(() => {
 		if (worktreeSwitchInFlight) return;
+		// Nothing is missing: the screen is showing another worktree's session, and
+		// creating one here would navigate away from it.
+		if (sessionView) return;
 		if (createError) return;
 		if (needsNewSession) {
 			createSession()
@@ -260,6 +334,7 @@ function AppShell() {
 		}
 	}, [
 		worktreeSwitchInFlight,
+		sessionView,
 		needsNewSession,
 		createError,
 		createSession,
@@ -284,18 +359,46 @@ function AppShell() {
 		if (isExpanded) setSidebarOpen(false);
 	}, [isExpanded]);
 
+	/**
+	 * Where a session that lives in `worktree` opens.
+	 *
+	 * In its own worktree while that worktree is still there — an ordinary,
+	 * writable session, and the app switches to it. Once it is not, the session
+	 * data is all that is left, so it opens where the user already stands and is
+	 * read from there (`viewWorktree`). Both entrances to another worktree's
+	 * session — a row of the sidebar, a work's chat link — decide it here, so
+	 * they cannot decide it differently.
+	 */
+	const sessionTarget = useCallback(
+		(sessionId: string, worktree: string) => {
+			const isGone =
+				isWorktreesLoaded &&
+				worktree !== "" &&
+				!worktrees.some((w) => w.name === worktree);
+			return isGone
+				? ({
+						type: "session" as const,
+						worktree: urlWorktree,
+						sessionId,
+						viewWorktree: worktree,
+					} as const)
+				: ({ type: "session" as const, worktree, sessionId } as const);
+		},
+		[isWorktreesLoaded, worktrees, urlWorktree],
+	);
+
 	const handleSelectSession = useCallback(
-		(id: string) => {
+		(id: string, worktree: string | null) => {
 			navigate(
-				buildNavigation({
-					type: "session",
-					worktree: urlWorktree,
-					sessionId: id,
-				}),
+				buildNavigation(
+					worktree === null
+						? { type: "session", worktree: urlWorktree, sessionId: id }
+						: sessionTarget(id, worktree),
+				),
 			);
 			setSidebarOpen(false);
 		},
-		[navigate, urlWorktree],
+		[navigate, urlWorktree, sessionTarget],
 	);
 
 	const handleCreateSession = useCallback(async () => {
@@ -324,8 +427,30 @@ function AppShell() {
 	}, [clearCreateError, handleCreateSession]);
 
 	const handleDeleteSession = useCallback(
-		async (id: string) => {
-			const { sessions, currentSessionId } = deleteSessionCtxRef.current;
+		async (id: string, worktree: string | null) => {
+			const { sessions, currentSessionId, viewedSessionId } =
+				deleteSessionCtxRef.current;
+
+			// A row of another worktree — or of one that is gone — is deleted by
+			// name rather than through the connection's own worktree, and nothing
+			// is pushed afterwards, so the lists it was in are re-read here.
+			if (worktree !== null) {
+				await wsActions.sessionViewDelete(worktree, id);
+				invalidateSessionViewQueries(queryClient);
+				if (viewedSessionId === id) {
+					// The screen is reading the conversation that just went. There is
+					// no neighbour to fall back to — this worktree's list is not the
+					// list the row came from.
+					navigate(
+						buildNavigation(
+							{ type: "home", worktree: urlWorktree },
+							{ replace: true },
+						),
+					);
+				}
+				return;
+			}
+
 			const isCurrentSession = id === currentSessionId;
 			const remaining = sessions.filter((s) => s.id !== id);
 
@@ -344,7 +469,7 @@ function AppShell() {
 				);
 			}
 		},
-		[deleteSession, navigate, urlWorktree],
+		[deleteSession, navigate, urlWorktree, queryClient],
 	);
 
 	const handleSelectDiffFile = useCallback(
@@ -516,17 +641,51 @@ function AppShell() {
 	const handleNavigateToSession = useCallback(
 		// Use the work's own worktree, not the current URL worktree: sessions are
 		// worktree-scoped, so opening a work in another worktree must switch to it.
+		//
+		// Unless that worktree is gone. Its sessions are not — deleting a worktree
+		// deliberately leaves them — so the conversation is opened where the user
+		// already is and read from there, rather than the URL bouncing back to
+		// main as a worktree that does not exist used to make it do.
 		(sessionId: string, worktree: string) => {
+			navigate(buildNavigation(sessionTarget(sessionId, worktree)));
+		},
+		[navigate, sessionTarget],
+	);
+
+	/**
+	 * Opens another session of the transcript on screen — the parent a fork came
+	 * from, or a fork just made. It stays in whatever view the screen is in: the
+	 * other session lives in the same worktree as this one, viewed or not.
+	 *
+	 * Not `handleSelectSession`, which is the sidebar's: those rows are this
+	 * worktree's own sessions and must open as ordinary, writable ones.
+	 */
+	const handleSelectChatSession = useCallback(
+		(id: string) => {
+			setSidebarOpen(false);
 			navigate(
 				buildNavigation({
 					type: "session",
-					worktree,
-					sessionId,
+					worktree: urlWorktree,
+					sessionId: id,
+					...(sessionView ? { viewWorktree: sessionView.worktree } : {}),
 				}),
 			);
 		},
-		[navigate],
+		[navigate, urlWorktree, sessionView],
 	);
+
+	/** Leaves the viewed session for the real one, in the worktree that owns it. */
+	const handleOpenSessionThere = useCallback(() => {
+		if (!sessionView || !routeSessionId) return;
+		navigate(
+			buildNavigation({
+				type: "session",
+				worktree: sessionView.worktree,
+				sessionId: routeSessionId,
+			}),
+		);
+	}, [navigate, sessionView, routeSessionId]);
 
 	// The server's own wording is the whole point here: "claude: executable file
 	// not found in $PATH" and a dropped connection must not read the same.
@@ -537,7 +696,7 @@ function AppShell() {
 	}
 
 	const showShell =
-		isSessionResolved ||
+		isScreenResolved ||
 		(hasRenderedShell.current && inTransition && wsStatus === "connected");
 
 	if (!showShell) {
@@ -642,7 +801,11 @@ function AppShell() {
 				<SessionSidebar
 					isOpen={sidebarOpen}
 					onClose={() => setSidebarOpen(false)}
-					currentSessionId={currentSessionId}
+					// The session on screen, whichever list it came from. A viewed
+					// one has no row in this worktree's list and so is not
+					// `currentSessionId` — but the filter has moved to the list it
+					// does have a row in, and that row is the one to highlight.
+					currentSessionId={sessionView ? routeSessionId : currentSessionId}
 					onSelectSession={handleSelectSession}
 					onCreateSession={handleCreateSession}
 					onDeleteSession={handleDeleteSession}
@@ -662,7 +825,11 @@ function AppShell() {
 					isSwitchingWorktree={worktreeSwitchInFlight}
 				/>
 				<ChatPanel
-					sessionId={currentSessionId ?? ""}
+					view={sessionView}
+					onOpenSessionThere={handleOpenSessionThere}
+					sessionId={
+						sessionView ? (routeSessionId ?? "") : (currentSessionId ?? "")
+					}
 					sessionTitle={currentSession?.title ?? ""}
 					isSessionResolved={isSessionResolved}
 					onUpdateTitle={(title) => {
@@ -673,7 +840,7 @@ function AppShell() {
 					overlay={overlay}
 					onCloseOverlay={handleCloseOverlay}
 					onNavigateToSession={handleNavigateToSession}
-					onSelectSession={handleSelectSession}
+					onSelectSession={handleSelectChatSession}
 					onOpenWorkDetail={handleOpenWorkDetail}
 					onOpenFile={handleSelectFile}
 					onOpenWorkList={handleBackToWorkList}

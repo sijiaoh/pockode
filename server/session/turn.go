@@ -1,13 +1,6 @@
 package session
 
-import (
-	"encoding/json"
-	"errors"
-	"fmt"
-	"io/fs"
-	"os"
-	"time"
-)
+import "time"
 
 // TurnPhase is what a session is doing right now, in three values that cover
 // everything: it is producing output, it is stuck on something only someone
@@ -666,28 +659,18 @@ func NormalizeTurn(state TurnState, now time.Time) TurnTransition {
 // live in worktrees nobody has opened. Building a store for one would start
 // watchers, a process manager and git watches because somebody looked at a row.
 //
-// Every state is normalised on the way out (NormalizeTurn). A directory nobody
-// has opened has no processes, so a turn the file still reports as running is a
-// turn the last run left behind — the same repair FileStore does on load, minus
-// the writing, which belongs to whoever owns the file.
+// Every state is normalised on the way out, by the DirReader it reads through:
+// a directory nobody has opened has no processes, so a turn the file still
+// reports as running is a turn the last run left behind.
 func ReadTurns(dataDir string) (map[string]TurnState, error) {
-	data, err := os.ReadFile(indexPath(dataDir))
-	if errors.Is(err, fs.ErrNotExist) {
-		return nil, nil
-	}
+	sessions, err := NewDirReader(dataDir).List()
 	if err != nil {
-		return nil, fmt.Errorf("read session index: %w", err)
+		return nil, err
 	}
 
-	var idx indexData
-	if err := json.Unmarshal(data, &idx); err != nil {
-		return nil, fmt.Errorf("parse session index: %w", err)
-	}
-
-	now := time.Now()
-	turns := make(map[string]TurnState, len(idx.Sessions))
-	for _, meta := range idx.Sessions {
-		turns[meta.ID] = NormalizeTurn(meta.Turn, now).State
+	turns := make(map[string]TurnState, len(sessions))
+	for _, meta := range sessions {
+		turns[meta.ID] = meta.Turn
 	}
 	return turns, nil
 }

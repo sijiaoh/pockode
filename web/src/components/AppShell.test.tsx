@@ -42,6 +42,8 @@ vi.mock("./Chat", () => ({
 		onSelectWorkSegment,
 		onOpenWorkDetail,
 		onOpenWorkList,
+		onNavigateToSession,
+		view,
 	}: {
 		sessionId: string;
 		isSessionResolved: boolean;
@@ -50,14 +52,28 @@ vi.mock("./Chat", () => ({
 		onSelectWorkSegment?: (segment: "current" | "closed") => void;
 		onOpenWorkDetail?: (workId: string) => void;
 		onOpenWorkList?: () => void;
+		onNavigateToSession?: (sessionId: string, worktree: string) => void;
+		view?: { worktree: string; exists: boolean } | null;
 	}) => (
 		<div
 			data-testid="chat-panel"
 			data-resolved={String(isSessionResolved)}
 			data-can-open-sidebar={String(Boolean(onOpenSidebar))}
 			data-work-segment={workSegment}
+			// Absent rather than empty when there is no view: "" is a worktree here.
+			data-view-worktree={view?.worktree}
+			data-view-exists={view ? String(view.exists) : undefined}
 		>
 			{sessionId}
+			<button
+				type="button"
+				onClick={() => onNavigateToSession?.("gone-session", "old-fix")}
+			>
+				Open a deleted worktree's session
+			</button>
+			<button type="button" onClick={() => onNavigateToSession?.("b1", "B")}>
+				Open a live worktree's session
+			</button>
 			<button type="button" onClick={() => onSelectWorkSegment?.("closed")}>
 				Show Closed
 			</button>
@@ -72,16 +88,21 @@ vi.mock("./Chat", () => ({
 }));
 
 // The sidebar reports the row it would highlight, and fires onCreateSession for
-// the manual "+" path.
+// the manual "+" path. Its rows can also belong to another worktree now, so it
+// offers one of each: what opening and deleting them mean is the shell's.
 vi.mock("./Session", () => ({
 	SessionSidebar: ({
 		currentSessionId,
 		onCreateSession,
+		onSelectSession,
+		onDeleteSession,
 		onOpenWorkList,
 		isExpanded,
 	}: {
 		currentSessionId: string | null;
 		onCreateSession: () => void;
+		onSelectSession: (id: string, worktree: string | null) => void;
+		onDeleteSession: (id: string, worktree: string | null) => void;
 		onOpenWorkList: () => void;
 		isExpanded: boolean;
 	}) => (
@@ -95,6 +116,21 @@ vi.mock("./Session", () => ({
 			</button>
 			<button type="button" onClick={onOpenWorkList}>
 				Project
+			</button>
+			<button
+				type="button"
+				onClick={() => onSelectSession("gone-session", "old-fix")}
+			>
+				Open a deleted worktree's row
+			</button>
+			<button type="button" onClick={() => onSelectSession("b1", "B")}>
+				Open a live worktree's row
+			</button>
+			<button
+				type="button"
+				onClick={() => onDeleteSession("gone-session", "old-fix")}
+			>
+				Delete a deleted worktree's row
 			</button>
 		</div>
 	),
@@ -196,6 +232,7 @@ vi.mock("../lib/wsStore", async (importOriginal) => ({
 	wsActions: {
 		createSession: vi.fn(),
 		disconnect: vi.fn(),
+		sessionViewDelete: vi.fn(async () => {}),
 	},
 }));
 
@@ -605,5 +642,219 @@ describe("AppShell work list segment", () => {
 			expect(router.state.location.pathname).toBe("/w/A/works"),
 		);
 		expect(segmentInUrl(router)).toBe("closed");
+	});
+});
+
+// A worktree's sessions outlive the worktree. The URL keeps saying where the
+// user is standing — Files and Git stay with it — and one query parameter says
+// where the transcript is read from.
+describe("AppShell reading a session of another worktree", () => {
+	beforeEach(() => {
+		vi.clearAllMocks();
+		resetWorktreeStore();
+		useSessionDetailStore.getState().clear();
+		useSessionStore.setState({
+			sessions: [],
+			isLoading: true,
+			isSuccess: false,
+			showTaskSessions: false,
+		});
+		useWorkStore.setState({ works: [] });
+		useAuthStore.setState({ sessionToken: "test-session-token" });
+	});
+
+	const panel = () => screen.getByTestId("chat-panel");
+
+	// Before this, a work in a deleted worktree could not be opened at all: the
+	// URL named a worktree that was gone and the shell bounced it to main.
+	it("opens a work's session in place when its worktree is gone", async () => {
+		const user = userEvent.setup();
+		const router = renderAppShell("/w/A/s/a1");
+
+		await waitFor(() => expect(panel()).toHaveTextContent("a1"));
+		await user.click(
+			screen.getByRole("button", { name: "Open a deleted worktree's session" }),
+		);
+
+		await waitFor(() =>
+			expect(panel()).toHaveAttribute("data-view-worktree", "old-fix"),
+		);
+		// Still standing in A: only the transcript comes from elsewhere.
+		expect(router.state.location.pathname).toBe("/w/A/s/gone-session");
+		expect(router.state.location.search).toEqual({ from: "old-fix" });
+		expect(panel()).toHaveAttribute("data-view-exists", "false");
+		expect(panel()).toHaveTextContent("gone-session");
+	});
+
+	// The other half of the same handler, unchanged: a worktree that is still
+	// there is switched to, because the session can be talked to there.
+	it("switches worktree for a work whose worktree still exists", async () => {
+		const user = userEvent.setup();
+		const router = renderAppShell("/w/A/s/a1");
+
+		await waitFor(() => expect(panel()).toHaveTextContent("a1"));
+		await user.click(
+			screen.getByRole("button", { name: "Open a live worktree's session" }),
+		);
+
+		await waitFor(() =>
+			expect(router.state.location.pathname).toBe("/w/B/s/b1"),
+		);
+		expect(panel()).not.toHaveAttribute("data-view-worktree");
+	});
+
+	// The list of this worktree has no row for the session named, and used to
+	// read that absence as "deleted" and redirect to its own first session.
+	it("keeps the URL instead of recovering to a session of its own", async () => {
+		const router = renderAppShell("/w/A/s/gone-session?from=old-fix");
+
+		await waitFor(() =>
+			expect(panel()).toHaveAttribute("data-view-worktree", "old-fix"),
+		);
+		expect(router.state.location.pathname).toBe("/w/A/s/gone-session");
+		expect(router.state.location.search).toEqual({ from: "old-fix" });
+		expect(panel()).toHaveTextContent("gone-session");
+		// Files and Git follow the worktree the connection is bound to, which the
+		// parameter must not move.
+		expect(useWorktreeStore.getState().current).toBe("A");
+	});
+
+	// "" is the main worktree on the wire, so it has to survive the round trip
+	// through the URL as a value rather than collapsing into an absent parameter.
+	it("reads the main worktree's copy when the parameter is empty", async () => {
+		renderAppShell("/w/A/s/m1?from=");
+
+		await waitFor(() =>
+			expect(panel()).toHaveAttribute("data-view-worktree", ""),
+		);
+		expect(useWorktreeStore.getState().current).toBe("A");
+	});
+
+	// Otherwise "Open there" would flash a read-only screen on its way out of one.
+	it("is an ordinary session when the source is the worktree in the path", async () => {
+		renderAppShell("/w/A/s/a1?from=A");
+
+		await waitFor(() => expect(panel()).toHaveTextContent("a1"));
+		expect(panel()).not.toHaveAttribute("data-view-worktree");
+		expect(panel()).toHaveAttribute("data-resolved", "true");
+	});
+
+	// A row of a worktree that is gone: there is nowhere to switch to, so it
+	// opens where the user is standing and is read from there.
+	it("opens a sidebar row of a deleted worktree without moving the user", async () => {
+		const user = userEvent.setup();
+		const router = renderAppShell("/w/A/s/a1");
+
+		await waitFor(() => expect(panel()).toHaveTextContent("a1"));
+		await user.click(
+			screen.getByRole("button", { name: "Open a deleted worktree's row" }),
+		);
+
+		await waitFor(() =>
+			expect(panel()).toHaveAttribute("data-view-worktree", "old-fix"),
+		);
+		expect(router.state.location.pathname).toBe("/w/A/s/gone-session");
+		expect(useWorktreeStore.getState().current).toBe("A");
+	});
+
+	// A row of a worktree that is still there opens as an ordinary session,
+	// because it can still be talked to — reading a running session out of a
+	// screen that cannot follow it is the case this avoids.
+	it("switches worktree for a sidebar row that still has one", async () => {
+		const user = userEvent.setup();
+		const router = renderAppShell("/w/A/s/a1");
+
+		await waitFor(() => expect(panel()).toHaveTextContent("a1"));
+		await user.click(
+			screen.getByRole("button", { name: "Open a live worktree's row" }),
+		);
+
+		await waitFor(() =>
+			expect(router.state.location.pathname).toBe("/w/B/s/b1"),
+		);
+		expect(panel()).not.toHaveAttribute("data-view-worktree");
+	});
+
+	// The delete button on such a row stays live: the data outlives the
+	// worktree, so it needs a way out. It cannot go through the connection's own
+	// worktree, which is not the one the row belongs to.
+	it("deletes a row of another worktree by naming that worktree", async () => {
+		const user = userEvent.setup();
+		renderAppShell("/w/A/s/a1");
+
+		await waitFor(() => expect(panel()).toHaveTextContent("a1"));
+		await user.click(
+			screen.getByRole("button", { name: "Delete a deleted worktree's row" }),
+		);
+
+		await waitFor(() =>
+			expect(wsActions.sessionViewDelete).toHaveBeenCalledWith(
+				"old-fix",
+				"gone-session",
+			),
+		);
+	});
+
+	// Deleting the conversation on screen leaves nothing to read, and this
+	// worktree's list holds no neighbour to fall back to — so it goes home, and
+	// the shell's own recovery takes it from there.
+	it("leaves the screen when the session it is reading is deleted", async () => {
+		const user = userEvent.setup();
+		const router = renderAppShell("/w/A/s/gone-session?from=old-fix");
+
+		await waitFor(() =>
+			expect(panel()).toHaveAttribute("data-view-worktree", "old-fix"),
+		);
+		await user.click(
+			screen.getByRole("button", { name: "Delete a deleted worktree's row" }),
+		);
+
+		await waitFor(() =>
+			expect(router.state.location.pathname).not.toContain("gone-session"),
+		);
+		expect(router.state.location.search).toEqual({});
+		expect(panel()).not.toHaveAttribute("data-view-worktree");
+	});
+
+	// The other half of moving the filter: the list it moved to has a row for
+	// the session on screen, and that row is the one highlighted.
+	it("highlights the viewed session in the sidebar", async () => {
+		renderAppShell("/w/A/s/gone-session?from=old-fix");
+
+		await waitFor(() =>
+			expect(screen.getByTestId("session-sidebar")).toHaveAttribute(
+				"data-current-session",
+				"gone-session",
+			),
+		);
+	});
+
+	// Otherwise the sidebar opens on a list where nothing is selected, and the
+	// conversation on screen appears in none of it.
+	it("moves the sidebar filter to the worktree the session is read from", async () => {
+		renderAppShell("/w/A/s/gone-session?from=old-fix");
+
+		await waitFor(() =>
+			expect(useSessionStore.getState().worktreeFilter).toEqual({
+				kind: "worktree",
+				worktree: "old-fix",
+			}),
+		);
+	});
+
+	// The same rule the other way: an ordinary session has no row in a filter
+	// pointing somewhere else, so opening one brings the filter back.
+	it("brings the filter back when an ordinary session is opened", async () => {
+		useSessionStore.setState({
+			worktreeFilter: { kind: "worktree", worktree: "old-fix" },
+		});
+
+		renderAppShell("/w/A/s/a1");
+
+		await waitFor(() =>
+			expect(useSessionStore.getState().worktreeFilter).toEqual({
+				kind: "current",
+			}),
+		);
 	});
 });

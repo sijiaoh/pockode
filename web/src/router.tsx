@@ -20,6 +20,18 @@ const overlaySearchSchema = z.object({
 
 export type OverlaySearchParams = z.infer<typeof overlaySearchSchema>;
 
+/**
+ * The session routes carry one parameter, and only they do: which worktree the
+ * session's data is read out of. `""` is the main worktree, so the value is
+ * accepted empty and an absent parameter is the ordinary case — see
+ * SESSION_VIEW_PARAM in lib/sessionView.ts for the whole convention.
+ */
+const sessionSearchSchema = z.object({
+	from: z.string().optional(),
+});
+
+export type SessionSearchParams = z.infer<typeof sessionSearchSchema>;
+
 const rootRoute = createRootRoute({
 	component: AppShell,
 });
@@ -33,6 +45,7 @@ const indexRoute = createRoute({
 const sessionRoute = createRoute({
 	getParentRoute: () => rootRoute,
 	path: ROUTES.session,
+	validateSearch: (search) => sessionSearchSchema.parse(search),
 });
 
 const stagedDiffRoute = createRoute({
@@ -115,6 +128,7 @@ const wtIndexRoute = createRoute({
 const wtSessionRoute = createRoute({
 	getParentRoute: () => worktreeLayoutRoute,
 	path: WT_CHILD_ROUTES.session,
+	validateSearch: (search) => sessionSearchSchema.parse(search),
 });
 
 const wtStagedDiffRoute = createRoute({

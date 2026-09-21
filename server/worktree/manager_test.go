@@ -9,42 +9,33 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pockode/server/agent"
 	"github.com/pockode/server/session"
 	"github.com/pockode/server/watch"
 	"github.com/pockode/server/work"
 )
 
-func TestForceShutdown_RemovesDataDirectory(t *testing.T) {
+// Deleting a worktree must not destroy the conversations that happened in it.
+// A work usually runs in a worktree of its own and that worktree is cleaned up
+// once the work is done, so removing the data here threw away the record of the
+// work as part of tidying up after it.
+func TestForceShutdown_KeepsSessionData(t *testing.T) {
 	dataDir := t.TempDir()
-	worktreesDir := filepath.Join(dataDir, "worktrees")
-	wtDataDir := filepath.Join(worktreesDir, "feature-1")
-
-	// Create the data directory structure
-	if err := os.MkdirAll(filepath.Join(wtDataDir, "sessions"), 0755); err != nil {
-		t.Fatalf("failed to create test directory: %v", err)
-	}
-
-	// Create a test file inside
-	testFile := filepath.Join(wtDataDir, "sessions", "test.json")
-	if err := os.WriteFile(testFile, []byte("{}"), 0644); err != nil {
-		t.Fatalf("failed to create test file: %v", err)
-	}
-
-	m := &Manager{
-		dataDir:   dataDir,
-		worktrees: make(map[string]*Worktree),
-	}
+	m := &Manager{dataDir: dataDir, worktrees: make(map[string]*Worktree)}
+	createSessionIn(t, m, "feature-1", "sess-1")
 
 	m.ForceShutdown("feature-1")
 
-	// Verify the data directory is removed
-	if _, err := os.Stat(wtDataDir); !os.IsNotExist(err) {
-		t.Errorf("worktree data directory still exists after ForceShutdown")
+	reader, err := m.SessionReader("feature-1")
+	if err != nil {
+		t.Fatalf("SessionReader: %v", err)
 	}
-
-	// Verify the parent worktrees directory still exists
-	if _, err := os.Stat(worktreesDir); os.IsNotExist(err) {
-		t.Errorf("parent worktrees directory was unexpectedly removed")
+	sessions, err := reader.List()
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(sessions) != 1 || sessions[0].ID != "sess-1" {
+		t.Errorf("sessions after deleting the worktree = %+v, want the one that was there", sessions)
 	}
 }
 
@@ -225,5 +216,174 @@ func TestStartupTurns_ReadsEveryWorktreesIndexFromDisk(t *testing.T) {
 	}
 	if _, err := turns.SessionTurns(filepath.Join("..", "escape")); err == nil {
 		t.Error("a name that escapes the data dir was accepted")
+	}
+}
+
+// The sessions of a deleted work go with it. Before this they only went while
+// their worktree still existed — and a work whose worktree was cleaned up when
+// it finished is exactly the work most likely to be deleted afterwards, so the
+// data kept past the worktree's deletion had no way out at all.
+func TestDeleteSessions_ReachesAWorktreeThatIsGone(t *testing.T) {
+	m, dataDir := managerOverDeletedWorktree(t, "feature-x", "sess-1", "sess-2")
+
+	m.DeleteSessions(context.Background(), "feature-x", []string{"sess-1"})
+
+	if got := sessionIDsIn(t, m, "feature-x"); len(got) != 1 || got[0] != "sess-2" {
+		t.Errorf("sessions after deleting a work's session = %v, want only sess-2", got)
+	}
+	if _, err := os.Stat(filepath.Join(dataDir, "worktrees", "feature-x", "sessions", "sess-1")); !os.IsNotExist(err) {
+		t.Errorf("the deleted session's directory is still there: %v", err)
+	}
+}
+
+// A session that belongs to no work item is deleted by hand, and a worktree
+// that no longer exists is precisely where such a session is stranded: it can
+// never be continued, so deleting it is the only thing left to do with it.
+func TestDeleteSession_ReachesAWorktreeThatIsGone(t *testing.T) {
+	m, _ := managerOverDeletedWorktree(t, "feature-x", "sess-1", "sess-2")
+
+	if err := m.DeleteSession(context.Background(), "feature-x", "sess-1"); err != nil {
+		t.Fatalf("DeleteSession: %v", err)
+	}
+
+	if got := sessionIDsIn(t, m, "feature-x"); len(got) != 1 || got[0] != "sess-2" {
+		t.Errorf("sessions after a manual delete = %v, want only sess-2", got)
+	}
+	sources, err := m.SessionSources()
+	if err != nil {
+		t.Fatalf("SessionSources: %v", err)
+	}
+	if len(sources) != 1 || sources[0].Name != "feature-x" || sources[0].SessionCount != 1 || sources[0].Exists {
+		t.Errorf("sources = %+v, want the deleted worktree with one session left", sources)
+	}
+}
+
+// Once the last session of a deleted worktree is gone there is nothing left to
+// read there, so the worktree stops being offered as a place to look — and the
+// directory it was stored in goes too, rather than staying empty forever.
+func TestDeleteSession_LastOneTakesTheDeletedWorktreeWithIt(t *testing.T) {
+	m, dataDir := managerOverDeletedWorktree(t, "feature-x", "sess-1")
+
+	if err := m.DeleteSession(context.Background(), "feature-x", "sess-1"); err != nil {
+		t.Fatalf("DeleteSession: %v", err)
+	}
+
+	sources, err := m.SessionSources()
+	if err != nil {
+		t.Fatalf("SessionSources: %v", err)
+	}
+	if len(sources) != 0 {
+		t.Errorf("sources = %+v, want none: the only worktree with data has none left", sources)
+	}
+	if _, err := os.Stat(filepath.Join(dataDir, "worktrees", "feature-x")); !os.IsNotExist(err) {
+		t.Errorf("the emptied data directory is still there: %v", err)
+	}
+}
+
+// A session in a worktree that still exists is deleted through that worktree's
+// store — the one thing allowed to write its directory, and the only thing that
+// can close a process the session may still have running.
+func TestDeleteSession_GoesThroughTheStoreOfAnExistingWorktree(t *testing.T) {
+	repo := initGitRepo(t)
+	dataDir := t.TempDir()
+	registry := NewRegistry(repo, dataDir)
+	if _, _, err := registry.EnsureWorktree("feature-x"); err != nil {
+		t.Fatalf("EnsureWorktree: %v", err)
+	}
+	m := NewManager(registry, agent.NewRegistry(), dataDir, session.LeaseBudgets{})
+	t.Cleanup(m.Shutdown)
+
+	wt, err := m.Get("feature-x")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	defer m.Release(wt)
+	if _, err := wt.SessionStore.Create(context.Background(), "sess-1", session.CreateSpec{}); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	if err := m.DeleteSession(context.Background(), "feature-x", "sess-1"); err != nil {
+		t.Fatalf("DeleteSession: %v", err)
+	}
+
+	// Read back through the live store: a delete written underneath it would be
+	// invisible here, and would come back the next time it persisted.
+	sessions, err := wt.SessionStore.List()
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(sessions) != 0 {
+		t.Errorf("sessions = %+v, want none", sessions)
+	}
+	if _, err := os.Stat(m.dataDirFor("feature-x")); err != nil {
+		t.Errorf("the data directory of a worktree that still exists was removed: %v", err)
+	}
+}
+
+// managerOverDeletedWorktree leaves the named worktree's sessions stored with
+// the worktree itself gone — the state deleting a worktree leaves behind.
+func managerOverDeletedWorktree(t *testing.T, name string, sessionIDs ...string) (*Manager, string) {
+	t.Helper()
+	repo := initGitRepo(t)
+	dataDir := t.TempDir()
+	registry := NewRegistry(repo, dataDir)
+	if _, _, err := registry.EnsureWorktree(name); err != nil {
+		t.Fatalf("EnsureWorktree: %v", err)
+	}
+
+	m := &Manager{registry: registry, dataDir: dataDir, worktrees: make(map[string]*Worktree)}
+	for _, sessionID := range sessionIDs {
+		createSessionIn(t, m, name, sessionID)
+	}
+
+	if err := registry.Delete(name); err != nil {
+		t.Fatalf("delete worktree %q: %v", name, err)
+	}
+	m.ForceShutdown(name)
+	return m, dataDir
+}
+
+func sessionIDsIn(t *testing.T, m *Manager, worktree string) []string {
+	t.Helper()
+	reader, err := m.SessionReader(worktree)
+	if err != nil {
+		t.Fatalf("SessionReader(%q): %v", worktree, err)
+	}
+	sessions, err := reader.List()
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	ids := make([]string, len(sessions))
+	for i, sess := range sessions {
+		ids[i] = sess.ID
+	}
+	return ids
+}
+
+// Deleting a worktree keeps its directory for the sessions in it. One whose
+// sessions were all deleted while it was still alive has none to keep, and is
+// not entitled to an empty directory for the life of the project.
+func TestForceShutdown_RemovesADataDirectoryWithNoSessionsLeft(t *testing.T) {
+	repo := initGitRepo(t)
+	dataDir := t.TempDir()
+	registry := NewRegistry(repo, dataDir)
+	if _, _, err := registry.EnsureWorktree("feature-x"); err != nil {
+		t.Fatalf("EnsureWorktree: %v", err)
+	}
+	m := &Manager{registry: registry, dataDir: dataDir, worktrees: make(map[string]*Worktree)}
+
+	// A store with nothing in it is what a worktree looks like once its last
+	// session has been deleted through it.
+	if _, err := session.NewFileStore(m.dataDirFor("feature-x")); err != nil {
+		t.Fatalf("session.NewFileStore: %v", err)
+	}
+
+	if err := registry.Delete("feature-x"); err != nil {
+		t.Fatalf("delete worktree: %v", err)
+	}
+	m.ForceShutdown("feature-x")
+
+	if _, err := os.Stat(m.dataDirFor("feature-x")); !os.IsNotExist(err) {
+		t.Errorf("the data directory of a deleted worktree with no sessions is still there: %v", err)
 	}
 }

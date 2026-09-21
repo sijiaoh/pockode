@@ -45,7 +45,7 @@ Pockode uses Zustand for state management, pure reducers for event processing, a
 | Store | Purpose | Key Pattern |
 |-------|---------|-------------|
 | wsStore | WebSocket, RPC, subscriptions | Single hub for all communication |
-| sessionStore | Chat session list — one page of it, as the server narrowed it | State/Actions interface split; an absence in it is not proof a session is gone ([why](subscription-system.md#what-the-client-gives-up-by-letting-the-server-filter)) |
+| sessionStore | Chat session list — one page of it, as the server narrowed it — and the two filters over it | State/Actions interface split; an absence in it is not proof a session is gone ([why](subscription-system.md#what-the-client-gives-up-by-letting-the-server-filter)). The worktree filter is the one field here that can mean *the list on screen is not this store's* |
 | sessionDetailStore | The open session's own metadata, and whether it exists at all | One session at a time, read through a selector that checks whose it is |
 | workStore | The project list's `Current` segment, and the one archive page on screen | State/Actions interface split; the two halves are separate fields because only one of them is pushed to |
 | agentRoleStore | AI roles | State/Actions interface split |
@@ -314,6 +314,31 @@ The catch is scope: those caches are keyed by query key, not by worktree, so
 switch completes. A worktree-scoped query missing from that list keeps serving
 the previous worktree's data — paths that look fine until they 404 on open —
 and it is the easy step to forget when adding a query.
+
+The `session_view.*` reads are the deliberate exception, and the reason is in the
+key rather than in the list: each one names the worktree it read from
+(`["session-view-detail", worktree, sessionId]`, and the list's key carries its
+set of sources), so a switch cannot make a cached entry mean the wrong worktree —
+there is no such thing as "the previous worktree's" answer to a question that
+names its worktree out loud. The source list (`session_view.worktrees`) is the
+one key with no worktree in it, and needs none: it answers for the project, not
+for whichever worktree the connection happens to be bound to. They also decline the staleness half of what
+react-query offers — `staleTime: Infinity`, no background refetch — because
+nothing pushes to them, and because installing a page replaces a list wholesale
+and restarts its paging: a refetch behind the reader's back would cost them every
+earlier page they had pulled in and buy the same rows back. They are re-read when the user
+does something that asks for it, through `invalidateSessionViewQueries` —
+invalidated, never reset, so the rows stay on screen while every round the reader
+had pulled in is asked again ([cross-worktree-session-ui.md](../cross-worktree-session-ui.md#refreshing-and-why-it-is-never-automatic)).
+
+A viewed session's metadata is read the same way and deliberately **not** written
+into `sessionDetailStore`. That store holds *the bound worktree's open session*
+and clears whenever its subscription resets; another worktree's session put there
+would be erased by a reset that has nothing to do with it. For the same reason one
+hook holds both of its reads (`useViewedSession`): the screen asks one question —
+*can this conversation be read* — and a metadata read that succeeded while the
+transcript failed would answer it as an empty conversation, which is the one thing
+a failure must not be allowed to say.
 
 `agentOptionsStore` is the one store filled by a plain request/response call. The
 per-agent model and effort lists are constants compiled into the server, so

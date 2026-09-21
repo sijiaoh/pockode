@@ -1229,6 +1229,51 @@ before retrying — a bare refusal would not be actionable.
 rejects an empty name earlier (and `registry.Delete("")` returns
 `ErrMainWorktree`), so this check never governs main.
 
+### What a Deletion Leaves Behind
+
+The protection above is about *unclosed* work. Once the work is closed the
+worktree may go — and the sessions under it stay: `Manager.ForceShutdown`
+deliberately keeps the worktree's data directory. A work usually runs in a
+worktree of its own and that worktree is cleaned up as soon as the work is done,
+so removing the conversation with it destroyed the record of how the result was
+produced, with no way back. What is left is readable from anywhere else in the
+project and never writable (see
+[agent-chat.md](../agent-chat.md#sessions-outlive-their-worktree) for the methods
+that read it, and [websocket-rpc.md](websocket-rpc.md#a-binding-whose-worktree-was-deleted)
+for what a connection still bound to the deleted worktree may do — nothing).
+
+**It is not meant to accumulate forever, so both deletion outlets go on working
+across a deleted worktree.** `DeleteWork`'s cascade (see
+[Commands](#commands)) reaches its sessions through `Manager.DeleteSessions`,
+which no longer gives up when the worktree is **gone**: an existing one is still
+deleted *through*, because a session there may have a live process to close and
+its store owns the directory, while a deleted one's index is rewritten on disk
+directly. Only `ErrWorktreeNotFound` takes that second branch — any other failure
+(a directory that is no longer a git repository, a worktree that exists but will
+not load) is still a failure, because deleting records from under a store that may
+yet open them is not a way of handling one. A session that belongs to no work is
+deleted by hand through the same fork in the road, reached by `session_view.delete`
+because a connection cannot be bound to a worktree that is not there.
+
+The emptied directory goes with the last session in it, so a project does not
+accumulate one empty directory per worktree that ever existed. Only a **deleted**
+worktree's: a live one's directory holds more than sessions and may have a store
+open on it, and the main worktree's *is* the project's `.pockode`. Deleting the
+worktree checks the same thing, so a worktree whose sessions were all deleted
+before it was leaves nothing behind either.
+
+Nothing is notified along the on-disk path, and there is nobody to notify: the
+worktree's watchers stopped with it, and the work engine's interest in a deleted
+session is to stop the work that was waiting in it — which the protection above
+means cannot exist. A client that deletes this way re-reads instead of waiting to
+be told.
+
+One consequence to know about: a closed work whose session is deleted this way
+keeps the `session_id` in its record, so its detail points at a session that is
+not there. That is what `session.delete` has always done, and the protection
+above is what keeps the live case ("an open work whose worktree is gone") from
+arising at all.
+
 ## Usage Aggregation
 
 A work item's detail reports what it consumed: its **own** session's share, and
@@ -1478,9 +1523,9 @@ Design decisions specific to this display:
 
 - **A work whose worktree is not decided yet shows no badge at all**, since a badge would assert a binding that can still change. What counts as decided follows from *Worktree Binding* above: a work that is no longer `open` is already frozen, and an `open` one is decided the moment its **root** starts and propagates the captured worktree down. So an open work is judged by its root, not by itself — that is what keeps the badge on an open task under a running story while hiding it for the same task under a story that has not started.
 - **The badge resolves that verdict itself rather than being told it.** `isWorktreeBound` (`workStore.ts`) owns the rule and `WorktreeBadge` reads it through a `useWorkStore` selector, so no call site can forget it. Reaching the root needs the whole work list, which is why the badge subscribes to the store instead of taking the verdict as a prop. When an ancestor is missing from that list (subscription not synced yet), the walk stops at the deepest known one and *its* status decides — with the two-level hierarchy `validParents` enforces, that means falling back to the work's own status, which errs toward hiding.
-- **The binding is read-only, but the badge is a navigation link.** The worktree binding is frozen once a work starts (see *Worktree Binding*), so — unlike the editable role — the badge never *reassigns* a work's worktree. It is, however, a clickable `<Link>` (target from `buildNavigation({ type: "home", worktree })`) that jumps to that worktree's root URL (main → `/`, feature → `/w/<worktree>/`), letting the user pivot from the mixed global list straight into the context of any work's worktree. It carries no work/chat context — just the worktree switch — and uses real anchor semantics (middle-click / open-in-new-tab) rather than a button.
+- **The binding is read-only, but the badge is a navigation link.** The worktree binding is frozen once a work starts (see *Worktree Binding*), so — unlike the editable role — the badge never *reassigns* a work's worktree. It is, however — for as long as that worktree exists (see below) — a clickable `<Link>` (target from `buildNavigation({ type: "home", worktree })`) that jumps to that worktree's root URL (main → `/`, feature → `/w/<worktree>/`), letting the user pivot from the mixed global list straight into the context of any work's worktree. It carries no work/chat context — just the worktree switch — and uses real anchor semantics (middle-click / open-in-new-tab) rather than a button.
 - **Stories and tasks are treated alike — the work's type is not part of the rule.** Visibility is the binding verdict above and nothing else, so every place the badge appears asks `useWorktreeBadgeVisible` the same question: the list's rows, the story detail's Tasks rows (the same `WorkRow`) and the detail header. Type did decide it on the list once, and the reason was sound for the list it was written for: a task was reachable only by expanding its story, so its badge would have restated the story badge directly above it. Neither half of that survives. A task that needs a person now gets a row of its own (docs/project-ui.md §2.2) with no story row above it — usually in a different group, and even in the same group nothing puts the two adjacent — and a task detail can be opened without its story on screen at all. A story subtree does normally share one worktree, but a task started ahead of its story (see *Worktree Binding*) is the case where it does not, and that is exactly the kind of task the list promotes.
-- **Feature name comes straight from the stored `Worktree` string**, so a work still shows its original worktree name even after that worktree is deleted — no lookup against the live worktree list is needed.
+- **Feature name comes straight from the stored `Worktree` string**, so a work still shows its original worktree name even after that worktree is deleted. The live worktree list is consulted for one thing only: whether that worktree is still there. Once it is not, the badge is a muted `Archive` marker instead of a link — there is nowhere to go, and the link used to bounce off the redirect guard back to main (the glyph and the ban on `th-error` for this state are [cross-worktree-session-ui.md](../cross-worktree-session-ui.md#gitbranch-and-archive)). An empty list reads as *not loaded yet* rather than *no worktrees*, the same reading the redirect guard takes.
 - **Empty `Worktree` (main) resolves to the main branch name**, matching `WorktreeSwitcher`, and falls back to a neutral `Default` until the worktree list loads (never a guessed `main`/`master` literal). Only this main path reads the worktree list, and it reuses the existing `["worktrees"]` react-query cache read-only rather than opening a new subscription. On non-git projects the main badge renders nothing, since there is no worktree concept to show.
 - **Visual hierarchy encodes the exception.** A feature worktree is accented (it is the noteworthy case, and accent doubles as the app's interactive/link color, so the chip also reads as clickable); the main worktree is muted, matching that it is the silent default.
 
@@ -1498,6 +1543,15 @@ worktree-scoped watchers (see
 
 `AppShell` deliberately does **not** redirect to home when the URL's worktree
 changes: a cross-worktree session URL is legitimate and must open.
+
+**Unless that worktree is gone.** Its sessions are not (see [What a Deletion
+Leaves Behind](#what-a-deletion-leaves-behind)), so the conversation opens where
+the user already stands and is read from there — a read-only screen — rather than
+the URL bouncing back to main as a worktree that does not exist made it do. Both
+ways into another worktree's session, a work's chat link and a sidebar row, decide
+that in one place in `AppShell`, so they cannot decide it differently; the URL
+convention and the screen are
+[cross-worktree-session-ui.md](../cross-worktree-session-ui.md).
 
 The subtle part is `useSession`'s recovery effects (`redirectSessionId` /
 `needsNewSession`). They are *not* a safe fallback during the switch itself.
@@ -1549,13 +1603,20 @@ no section at all: `WorkStarter` creates the session from the work's own
 session a user made — a session without one will never grow one later, and a
 disabled row would be claiming otherwise.
 
-The row reads `work_id` off the **open session's detail**
-(`sessionDetailStore`), never off the session list and never by scanning the
-work list for a work that names this session. Both of those fail exactly here:
-the sidebar filter hides the sessions that have a work, so the open session
-usually has no row to read, and an inverted lookup goes silently wrong the
-moment the work list is incomplete
+The row reads `work_id` off the **open session's detail**, never off the
+session list and never by scanning the work list for a work that names this
+session. Both of those fail exactly here: the sidebar filter hides the sessions
+that have a work, so the open session usually has no row to read, and an
+inverted lookup goes silently wrong the moment the work list is incomplete
 ([subscription-system.md](subscription-system.md#which-sessions-belong-to-work)).
+
+*Which* detail is the chat panel's to resolve, and the row is handed it rather
+than reading `sessionDetailStore` itself. That store holds the **bound**
+worktree's open session, and a session read out of another worktree is
+deliberately kept out of it
+([cross-worktree-session-ui.md](../cross-worktree-session-ui.md)) — reading the
+store here would drop this row on exactly the screen a work's chat link is the
+usual way onto.
 No detail yet — loading, disconnected, or held for a session the route has just
 left — draws nothing rather than a skeleton: this section's whole content is one
 link, and a placeholder for it would advertise a destination that may not exist.

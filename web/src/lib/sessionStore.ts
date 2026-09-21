@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import type { SessionListItem } from "../types/message";
+import { CURRENT_WORKTREE_FILTER, type SessionFilter } from "./sessionFilter";
 
 const SHOW_TASK_SESSIONS_KEY = "show-task-sessions";
 
@@ -74,6 +75,20 @@ interface SessionState {
 	 * and the subscription is opened somewhere else entirely.
 	 */
 	showTaskSessions: boolean;
+	/**
+	 * Which worktree's sessions the sidebar lists.
+	 *
+	 * Beside `showTaskSessions` because it is the other half of one filter, and
+	 * unlike it in every other respect: it is **not persisted**, and it resets on
+	 * a worktree switch (`beginReload`). Going to look at another worktree's
+	 * conversations is an act, not a preference — remembering it would open the
+	 * sidebar on somebody else's list days later, with no sign of why.
+	 *
+	 * Anything but `current` is read through `session_view.*`, which has no
+	 * subscription: `sessions` below is then not the list on screen. Only
+	 * `current` is both.
+	 */
+	worktreeFilter: SessionFilter;
 }
 
 /** One page of the list, as both the snapshot and a resync deliver it. */
@@ -116,6 +131,7 @@ interface SessionActions {
 	/** Soft reset for worktree switch: keep sessions, mark list as reloading. */
 	beginReload: () => void;
 	toggleShowTaskSessions: () => void;
+	setWorktreeFilter: (filter: SessionFilter) => void;
 	reset: () => void;
 }
 
@@ -134,6 +150,7 @@ export const useSessionStore = create<SessionStore>((set) => ({
 	isSuccess: false,
 	isReloading: false,
 	showTaskSessions: loadShowTaskSessions(),
+	worktreeFilter: CURRENT_WORKTREE_FILTER,
 	setSessions: (page, isResync = false) =>
 		set((state) => ({
 			sessions: page.sessions,
@@ -187,13 +204,24 @@ export const useSessionStore = create<SessionStore>((set) => ({
 	retryLoadMore: () => set({ pageError: null, autoLoad: true }),
 	// Keep isLoading false so views that show data (e.g. the session sidebar) keep
 	// rendering the retained list instead of flashing a spinner during the switch.
-	beginReload: () => set({ isSuccess: false, isReloading: true }),
+	//
+	// The worktree filter goes back to `current` here: switching worktree means
+	// the user has arrived where they were going, and a sidebar still showing a
+	// third worktree's list would be answering a question they have stopped
+	// asking.
+	beginReload: () =>
+		set({
+			isSuccess: false,
+			isReloading: true,
+			worktreeFilter: CURRENT_WORKTREE_FILTER,
+		}),
 	toggleShowTaskSessions: () =>
 		set((state) => {
 			const next = !state.showTaskSessions;
 			localStorage.setItem(SHOW_TASK_SESSIONS_KEY, String(next));
 			return { showTaskSessions: next };
 		}),
+	setWorktreeFilter: (worktreeFilter) => set({ worktreeFilter }),
 	reset: () =>
 		set((state) => ({
 			sessions: [],

@@ -1013,3 +1013,132 @@ type AgentRoleDeleteParams struct {
 type AgentRoleListSubscribeResult struct {
 	Items []agentrole.AgentRole `json:"items"`
 }
+
+// SessionView namespace
+//
+// A worktree's sessions outlive the worktree: deleting one leaves its
+// conversations, attachments and all, exactly where they were. This namespace
+// is how they are read afterwards — and, more generally, how a client sitting
+// in one worktree reads the sessions stored under another.
+//
+// Every method here names the worktree it reads from, and all but one of them
+// only read. Nothing here changes a conversation, and that is the whole of how
+// "these sessions are read-only" is enforced: writing goes through the
+// worktree-scoped namespaces, which act on the worktree the connection is bound
+// to and refuse a session id they do not own. Continuing a conversation in a
+// worktree that no longer exists is not a thing the wire can express.
+//
+// The exception is session_view.delete, and it is not a hole in that rule.
+// Read-only describes what can be said to a session, not whether the record has
+// to be kept: a deleted worktree's sessions are kept on purpose, so there has to
+// be a way to throw them away, and the delete every other session reaches
+// through (session.delete) acts only on the bound worktree.
+//
+// App scope: the methods are about a worktree the connection is not in, so
+// binding one says nothing about which of them may be called.
+
+// SessionViewWorktreesResult lists every worktree that still has session data.
+type SessionViewWorktreesResult struct {
+	Worktrees []SessionViewWorktree `json:"worktrees"`
+}
+
+// SessionViewWorktree is one worktree a client may read sessions from.
+type SessionViewWorktree struct {
+	// Worktree is the name; "" is the main worktree. It is what every other
+	// session_view method's Worktree field takes.
+	Worktree string `json:"worktree"`
+	// Exists reports whether the worktree itself is still there. It is what
+	// tells a client which of the two things to do with a row: a worktree that
+	// exists is switched to and used normally, one that does not can only be
+	// read. A worktree recreated under a deleted one's name exists again and
+	// carries the old sessions with it — the data is keyed by name.
+	Exists bool `json:"exists"`
+	// SessionCount is how many sessions are stored. A worktree with none is not
+	// listed at all, so deleting the last session of a deleted worktree takes it
+	// out of the list.
+	SessionCount int `json:"session_count"`
+}
+
+// SessionViewListParams asks for a page of one worktree's session list.
+//
+// Unlike session.list.subscribe there is no subscription behind it: what is
+// read here belongs to another worktree, and a client watching it from outside
+// would be watching a conversation it cannot take part in. So the narrowing
+// travels with each request rather than being held for a subscription's life.
+type SessionViewListParams struct {
+	// Worktree names the worktree to read from; "" is the main worktree.
+	Worktree string `json:"worktree"`
+	// ExcludeWorkSessions drops every session that belongs to a work item, the
+	// same narrowing SessionListSubscribeParams carries and for the same reason.
+	ExcludeWorkSessions bool `json:"exclude_work_sessions,omitempty"`
+	// Cursor is what the previous page reported as NextCursor; empty asks for
+	// the first page. Opaque (session.ListCursor).
+	Cursor string `json:"cursor,omitempty"`
+	// Limit is the page size; zero takes the server's default and anything above
+	// its cap is clamped (session.ClampListLimit).
+	Limit int `json:"limit,omitempty"`
+}
+
+type SessionViewListResult struct {
+	Sessions   []SessionListItem `json:"sessions"`
+	NextCursor string            `json:"next_cursor,omitempty"`
+	HasMore    bool              `json:"has_more,omitempty"`
+}
+
+// SessionViewGetParams reads one session's metadata out of another worktree.
+type SessionViewGetParams struct {
+	Worktree  string `json:"worktree"`
+	SessionID string `json:"session_id"`
+}
+
+type SessionViewGetResult struct {
+	Session SessionDetail `json:"session"`
+}
+
+// SessionViewHistoryParams asks for a page of one session's transcript out of
+// another worktree. It pages exactly as ChatMessagesHistoryParams does, so a
+// client scrolls a read-only transcript with the code it already has.
+type SessionViewHistoryParams struct {
+	Worktree  string `json:"worktree"`
+	SessionID string `json:"session_id"`
+	// BeforeSeq is exclusive; zero asks for the newest page. See
+	// ChatMessagesHistoryParams.BeforeSeq.
+	BeforeSeq session.HistorySeq `json:"before_seq,omitempty"`
+	// Limit follows ChatMessagesSubscribeParams.Limit.
+	Limit int `json:"limit,omitempty"`
+}
+
+type SessionViewHistoryResult struct {
+	History       []json.RawMessage  `json:"history"`
+	HasMore       bool               `json:"has_more"`
+	NextBeforeSeq session.HistorySeq `json:"next_before_seq,omitempty"`
+}
+
+// SessionViewAttachmentParams reads content a chat event references by id, out
+// of another worktree's session. Same content, same result shape and the same
+// confinement as AttachmentGetParams — only the directory it resolves in is
+// named by the request rather than by the bound worktree.
+type SessionViewAttachmentParams struct {
+	Worktree  string `json:"worktree"`
+	SessionID string `json:"session_id"`
+	ID        string `json:"id"`
+}
+
+type SessionViewAttachmentResult struct {
+	File *contents.FileContent `json:"file"`
+}
+
+// SessionViewDeleteParams discards one session stored under another worktree,
+// including one whose worktree no longer exists.
+//
+// It removes what session.delete removes — the record, its transcript and its
+// attachments — and differs only in that the worktree travels with the request,
+// because the connection cannot be bound to one that is gone.
+//
+// There is no notification: what is read through this namespace is read without
+// a subscription, so a client that deletes a session asks again for what it is
+// showing.
+type SessionViewDeleteParams struct {
+	Worktree  string `json:"worktree"`
+	SessionID string `json:"session_id"`
+}

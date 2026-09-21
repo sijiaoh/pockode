@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"sync/atomic"
 
 	"github.com/pockode/server/chat"
 	"github.com/pockode/server/process"
@@ -32,9 +33,31 @@ type Worktree struct {
 
 	watchers []watch.Watcher // for unified lifecycle management
 
+	// deleted is set when the worktree this holds was removed from disk. The
+	// object outlives that moment — connections are still bound to it, and its
+	// session store still reads — so it is what tells those connections that
+	// nothing here may be written to or talked to any more. See
+	// Manager.ForceShutdown and the guard in ws.
+	deleted atomic.Bool
+
 	mu          sync.Mutex // protects subscribers only
 	refCount    int        // protected by Manager.mu, not Worktree.mu
 	subscribers map[watch.Notifier]struct{}
+}
+
+// MarkDeleted records that the worktree is gone from disk.
+func (w *Worktree) MarkDeleted() {
+	w.deleted.Store(true)
+}
+
+// Deleted reports whether the worktree this object stands for is gone.
+//
+// The answer is about this instance and not about the name: deleting a worktree
+// drops it from the manager's map, so a worktree recreated under the same name
+// is a new object that is not deleted, while this one stays deleted for as long
+// as anything still holds it.
+func (w *Worktree) Deleted() bool {
+	return w.deleted.Load()
 }
 
 func (w *Worktree) Subscribe(notifier watch.Notifier) {
