@@ -138,7 +138,8 @@ func (h *rpcMethodHandler) handleMessage(ctx context.Context, conn *jsonrpc2.Con
 
 	log.Info("received prompt", "length", len(params.Content))
 
-	seq, err := wt.ChatClient.SendMessageExcluding(ctx, params.SessionID, params.Content, h.state.getNotifier())
+	seq, err := wt.ChatClient.SendMessageAnswering(ctx, params.SessionID, params.Content,
+		chatAnswers(params.Answering), h.state.getNotifier())
 	if err != nil {
 		h.replyErrorForChat(ctx, conn, req, params.SessionID, err)
 		return
@@ -149,13 +150,45 @@ func (h *rpcMethodHandler) handleMessage(ctx context.Context, conn *jsonrpc2.Con
 	// no session, a CLI that would not start, an answer to a prompt nobody is
 	// waiting on any more — handed it nothing, and a work resumed for it would
 	// be left active with no turn coming to end it.
-	h.workEngine.HandleUserMessage(params.SessionID)
+	//
+	// A message that answers posted questions is the narrower of the two inputs:
+	// it gives the work its nudge allowance back but leaves a wait on subtasks
+	// alone, because answering what the agent asked is not a subtask closing.
+	// Which one this is depends on what the *client sent*, not on what the send
+	// resolved: an empty `answering` is a person typing, and that redirects the
+	// work as any message does (see Engine.HandleUserAnswer).
+	if len(params.Answering) > 0 {
+		h.workEngine.HandleUserAnswer(params.SessionID)
+	} else {
+		h.workEngine.HandleUserMessage(params.SessionID)
+	}
 
 	// This connection is the one excluded from the broadcast, so the reply is
 	// where it learns its own message's seq (see rpc.MessageResult).
 	if err := conn.Reply(ctx, req.ID, rpc.MessageResult{Seq: seq}); err != nil {
 		log.Error("failed to send response", "error", err)
 	}
+}
+
+// chatAnswers narrows the wire shape of an answer to the one the chat client
+// takes. The two are separate types for the reason rpc.MessageParams is not
+// chat's own: what a client may send is decided at the boundary, not by
+// whatever the domain type happens to hold.
+func chatAnswers(answering []rpc.QuestionAnswerParams) []chat.Answer {
+	if len(answering) == 0 {
+		return nil
+	}
+	out := make([]chat.Answer, len(answering))
+	for i, a := range answering {
+		out[i] = chat.Answer{
+			RequestID: a.RequestID,
+			Answers:   a.Answers,
+			Text:      a.Text,
+			Declined:  a.Declined,
+			Note:      a.Note,
+		}
+	}
+	return out
 }
 
 func (h *rpcMethodHandler) handleInterrupt(ctx context.Context, conn *jsonrpc2.Conn, req *jsonrpc2.Request, wt *worktree.Worktree) {
@@ -217,35 +250,6 @@ func (h *rpcMethodHandler) handlePermissionResponse(ctx context.Context, conn *j
 	}
 }
 
-func (h *rpcMethodHandler) handleQuestionResponse(ctx context.Context, conn *jsonrpc2.Conn, req *jsonrpc2.Request, wt *worktree.Worktree) {
-	var params rpc.QuestionResponseParams
-	if err := unmarshalParams(req, &params); err != nil {
-		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "invalid params")
-		return
-	}
-
-	log := h.log.With("sessionId", params.SessionID)
-
-	data := agent.QuestionRequestData{
-		RequestID: params.RequestID,
-		ToolUseID: params.ToolUseID,
-	}
-
-	if err := wt.ChatClient.SendQuestionResponse(ctx, params.SessionID, data, params.Answers); err != nil {
-		h.replyErrorForChat(ctx, conn, req, params.SessionID, err)
-		return
-	}
-
-	// After the send; see handleMessage.
-	h.workEngine.HandleUserMessage(params.SessionID)
-
-	log.Info("sent question response", "cancelled", params.Answers == nil)
-
-	if err := conn.Reply(ctx, req.ID, struct{}{}); err != nil {
-		log.Error("failed to send response", "error", err)
-	}
-}
-
 // replyErrorForChat maps the errors chat.Client returns to RPC codes. Used by the
 // chat methods and by session.fork, which goes through the same client.
 func (h *rpcMethodHandler) replyErrorForChat(ctx context.Context, conn *jsonrpc2.Conn, req *jsonrpc2.Request, sessionID string, err error) {
@@ -253,12 +257,17 @@ func (h *rpcMethodHandler) replyErrorForChat(ctx context.Context, conn *jsonrpc2
 		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "session not found")
 	} else if errors.Is(err, chat.ErrSessionNotRunning) ||
 		errors.Is(err, chat.ErrTurnAwaitingAnswer) ||
+		errors.Is(err, chat.ErrQuestionNotPending) ||
+		errors.Is(err, chat.ErrAnswerShape) ||
 		errors.Is(err, process.ErrRequestNotPending) ||
 		errors.Is(err, chat.ErrForkAnchorOutOfRange) ||
 		errors.Is(err, chat.ErrForkAnchorNoHistory) ||
 		errors.Is(err, chat.ErrForkUnsupported) {
 		// The request does not fit the session's history, state or agent — a prompt
 		// whose process is gone or which is no longer being waited on, a message
+		// answering a question somebody already resolved (the text names every
+		// such request id and what became of it, which is what lets a client grey
+		// those answers out and keep the rest of the draft), a message
 		// sent into a turn that is holding a request open, a fork anchored past
 		// the end of the history or at the very first message, a fork of a
 		// session whose agent cannot be forked.

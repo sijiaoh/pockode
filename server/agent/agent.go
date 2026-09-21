@@ -24,12 +24,6 @@ type PermissionRequestData struct {
 	PermissionSuggestions []PermissionUpdate
 }
 
-// QuestionRequestData contains the data needed to send a question response.
-type QuestionRequestData struct {
-	RequestID string
-	ToolUseID string
-}
-
 // StartOptions contains options for starting an agent session.
 type StartOptions struct {
 	WorkDir string
@@ -45,9 +39,13 @@ type StartOptions struct {
 	// of worktree — a worktree's DataDir has no server.json. Empty falls back to
 	// DataDir (single-dir setups and tests that don't split the two).
 	MCPServerDir string
-	SessionID    string
-	Resume       bool
-	Mode         session.Mode
+	// Worktree is the name of the worktree this session lives in, empty for the
+	// main one. Not a path: it is the identity the MCP proxy reports alongside
+	// SessionID, and the same name the work store and the registry use.
+	Worktree  string
+	SessionID string
+	Resume    bool
+	Mode      session.Mode
 	// Model is the agent-specific model id (session.ModelsForAgent). Empty means
 	// pass no model flag and let the CLI pick.
 	Model string
@@ -122,20 +120,16 @@ type Session interface {
 	// returns the id of the turn already running, and Claude's turn acts on the
 	// new message and then ends once. Nothing here counts endings per message.
 	//
-	// The exception is a turn blocked on a permission request or a question: the
-	// CLI is inside the tool call waiting for that answer and reads nothing else
-	// until it arrives, so a message sent then is not delivered at all — neither
-	// CLI produced a single further event in the four minutes after one. The
-	// send path refuses those rather than letting them vanish; see
+	// The exception is a turn blocked on a permission request: the CLI is inside
+	// the tool call waiting for that decision and reads nothing else until it
+	// arrives, so a message sent then is not delivered at all — neither CLI
+	// produced a single further event in the four minutes after one. The send path
+	// refuses those rather than letting them vanish; see
 	// chat.ErrTurnAwaitingAnswer.
 	SendMessage(prompt string) error
 
 	// SendPermissionResponse sends a permission response to the agent.
 	SendPermissionResponse(data PermissionRequestData, choice PermissionChoice) error
-
-	// SendQuestionResponse sends answers to user questions.
-	// If answers is nil, the question is cancelled (deny response sent).
-	SendQuestionResponse(data QuestionRequestData, answers map[string]string) error
 
 	// SendInterrupt sends an interrupt signal to stop the current task.
 	// This is a soft stop that preserves the session for future messages.

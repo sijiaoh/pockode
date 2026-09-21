@@ -26,8 +26,8 @@ var ErrSessionNotFound = errors.New("session not found")
 var ErrSessionNotRunning = errors.New("session is no longer running, send a message to continue")
 
 // ErrTurnAwaitingAnswer is returned when a message arrives while the turn is
-// blocked on a permission request or a question, which is the one state a
-// message cannot be delivered in.
+// blocked on a permission request, which is the one state a message cannot be
+// delivered in — including a message answering a posted question.
 //
 // Messages sent while a turn is merely *running* are fine and go straight
 // through: both CLIs Pockode ships fold one into the running turn, which ends
@@ -66,28 +66,35 @@ var ErrForkAnchorNoHistory = errors.New("there is no conversation before this me
 // just because the Pockode side of it would have worked.
 var ErrForkUnsupported = errors.New("this session's agent does not support forking")
 
-// MessageBroadcastFunc broadcasts a user message to all session subscribers,
-// optionally excluding one notifier. seq is where the message landed in the
-// session's history, so subscribers can name that record later, or
+// EventBroadcastFunc broadcasts a record Pockode wrote itself to all session
+// subscribers, optionally excluding one notifier. seq is where the record landed
+// in the session's history, so subscribers can name it later, or
 // session.NoHistorySeq when it was not recorded and there is nothing to name.
 // The exclude parameter is typed as any to avoid importing the watch package;
 // the wiring code casts it.
-type MessageBroadcastFunc func(sessionID string, event agent.MessageEvent, seq session.HistorySeq, exclude any)
+//
+// It takes a record rather than one event type because the records that need it
+// are no longer only messages: a question Pockode posts on an agent's behalf,
+// and its withdrawal, are written here too and never pass through the process's
+// event stream, so this is the only way they reach an open chat before the next
+// reload.
+type EventBroadcastFunc func(sessionID string, record agent.EventRecord, seq session.HistorySeq, exclude any)
 
 // Client coordinates chat operations across session and process management.
 // It is the single entry point for programmatic chat interactions.
 type Client struct {
 	store     session.Store
 	pm        *process.Manager
-	broadcast MessageBroadcastFunc
+	broadcast EventBroadcastFunc
 }
 
 func NewClient(store session.Store, pm *process.Manager) *Client {
 	return &Client{store: store, pm: pm}
 }
 
-// SetBroadcaster sets the function used to broadcast user messages to subscribers.
-func (c *Client) SetBroadcaster(fn MessageBroadcastFunc) {
+// SetBroadcaster sets the function used to broadcast server-written records to
+// subscribers.
+func (c *Client) SetBroadcaster(fn EventBroadcastFunc) {
 	c.broadcast = fn
 }
 
@@ -138,7 +145,7 @@ func (c *Client) sendEvent(ctx context.Context, sessionID string, event agent.Me
 	//
 	// Asked of the process rather than of the agent, and asked for every sender:
 	// a kickoff or an auto-continuation lands in the same silence a typed message
-	// does, and a work nudged into a session that is holding a question open is
+	// does, and a work nudged into a session that is holding a request open is
 	// nudged into nothing.
 	if proc.TurnState().AwaitingUserAnswer() {
 		return session.NoHistorySeq, ErrTurnAwaitingAnswer
@@ -161,7 +168,7 @@ func (c *Client) sendEvent(ctx context.Context, sessionID string, event agent.Me
 	}
 
 	if c.broadcast != nil {
-		c.broadcast(sessionID, event, seq, exclude)
+		c.broadcast(sessionID, event.ToRecord(), seq, exclude)
 	}
 
 	return seq, nil
@@ -184,28 +191,6 @@ func (c *Client) SendPermissionResponse(ctx context.Context, sessionID string, d
 	}
 	if _, err := c.store.AppendToHistory(ctx, sessionID, agent.NewEventRecord(event)); err != nil {
 		slog.Error("failed to persist permission response", "sessionId", sessionID, "error", err)
-	}
-
-	return nil
-}
-
-func (c *Client) SendQuestionResponse(ctx context.Context, sessionID string, data agent.QuestionRequestData, answers map[string]string) error {
-	proc, err := c.liveProcess(sessionID)
-	if err != nil {
-		return err
-	}
-
-	if err := proc.SendQuestionResponse(data, answers); err != nil {
-		return err
-	}
-
-	// Persist response to history
-	event := agent.QuestionResponseEvent{
-		RequestID: data.RequestID,
-		Answers:   answers,
-	}
-	if _, err := c.store.AppendToHistory(ctx, sessionID, agent.NewEventRecord(event)); err != nil {
-		slog.Error("failed to persist question response", "sessionId", sessionID, "error", err)
 	}
 
 	return nil
@@ -304,6 +289,10 @@ func (c *Client) Fork(ctx context.Context, sourceID string, anchor session.Histo
 		// session that has run — which is what Activated guards: switching its
 		// agent type would throw that context away.
 		Activated: agent.HistoryActivatesSession(history),
+		// Read out of the copied records, not off the source's live list: what
+		// the fork inherits is what was unanswered *at the cut*, and the source
+		// may have answered three of them since. See agent.UnansweredQuestions.
+		Unanswered: agent.UnansweredQuestions(history),
 	})
 	if err != nil {
 		return session.SessionMeta{}, fmt.Errorf("create forked session: %w", err)
@@ -417,14 +406,18 @@ func choiceToString(choice agent.PermissionChoice) string {
 	}
 }
 
-// isUserMessageRecord reports whether a history record is a message the user
-// sent, as opposed to one Pockode wrote itself.
+// isUserMessageRecord reports whether a history record is a message that came
+// into the session from outside it, as opposed to one Pockode wrote itself.
 //
-// EventTypeMessage carries both — a typed prompt and a work kickoff or step
-// advance — and only Origin tells them apart. Today's clients offer no fork
-// action on Pockode's own annotations, but the rule about where a fork cuts is
-// this function's to state, not something to infer from what a client happens
-// to send.
+// EventTypeMessage carries both — a typed prompt, another agent's answer to a
+// posted question, a work kickoff or step advance — and only Origin tells them
+// apart. An agent's answer counts here with the typed ones, and that is the
+// point of the test being on `system` rather than on "the user": a fork cuts
+// around what entered the conversation, whoever supplied it, and an answer is
+// as much a thing the session was told as a sentence somebody typed. Today's
+// clients offer no fork action on Pockode's own annotations, but the rule about
+// where a fork cuts is this function's to state, not something to infer from
+// what a client happens to send.
 //
 // A record that does not parse is not a user message: TruncateHistory keeps
 // such records as they are, and silently shortening the fork over a parse

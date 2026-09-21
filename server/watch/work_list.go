@@ -25,13 +25,14 @@ type WorkListWatcher struct {
 	eventCh    chan listEvent
 	dirty      atomic.Bool // set when an event is dropped; triggers full sync
 
-	// sentActivityMu guards sentActivity: the activity last put on the wire for
-	// each work item. A session is touched at the end of every turn, marked
-	// unread, credited with usage; almost none of that moves an activity, and a
-	// row pushed to every subscriber for each of them would be the most frequent
+	// sentActivityMu guards sentActivity: the derived state last put on the wire
+	// for each work item — what it was doing, and how many questions it was
+	// waiting on. A session is touched at the end of every turn, marked unread,
+	// credited with usage; almost none of that moves either of them, and a row
+	// pushed to every subscriber for each of them would be the most frequent
 	// notification in the app.
 	sentActivityMu sync.Mutex
-	sentActivity   map[string]work.Activity
+	sentActivity   map[string]work.RowState
 }
 
 // listEvent is a union of the two changes that alter a row: the work item
@@ -56,7 +57,7 @@ func NewWorkListWatcher(store work.Store, turnSource work.TurnSource) *WorkListW
 		store:        store,
 		turnSource:   turnSource,
 		eventCh:      make(chan listEvent, 64),
-		sentActivity: make(map[string]work.Activity),
+		sentActivity: make(map[string]work.RowState),
 	}
 	store.AddOnChangeListener(w)
 	return w
@@ -102,8 +103,8 @@ func (w *WorkListWatcher) notifyChange(event work.ChangeEvent) {
 	// per subscription, and the row is read-only from here on.
 	var row *rpc.WorkListItem
 	if event.Op != work.OperationDelete {
-		item := rpc.NewWorkListItem(event.Work, work.NewActivityResolver(w.turnSource).Activity(event.Work))
-		w.rememberActivity(item.ID, item.Activity)
+		item := rpc.NewWorkListItem(event.Work, work.NewActivityResolver(w.turnSource).RowState(event.Work))
+		w.rememberActivity(item.ID, rowStateOf(item))
 		row = &item
 	}
 
@@ -127,15 +128,16 @@ func (w *WorkListWatcher) notifySessionChange(meta session.SessionMeta) {
 		return // A plain chat session, belonging to no work item.
 	}
 
-	activity := work.DeriveActivity(item, meta.Turn)
-	if w.activityAlreadySent(item.ID, activity) {
+	state := work.RowStateFor(item, meta.Turn)
+	if w.activityAlreadySent(item.ID, state) {
 		return
 	}
-	w.rememberActivity(item.ID, activity)
+	w.rememberActivity(item.ID, state)
 
-	row := rpc.NewWorkListItem(item, activity)
+	row := rpc.NewWorkListItem(item, state)
 	w.push(work.OperationUpdate, item.ID, &row)
-	slog.Debug("notified work activity change", "workId", item.ID, "activity", activity)
+	slog.Debug("notified work activity change", "workId", item.ID,
+		"activity", state.Activity, "unansweredQuestions", state.UnansweredQuestions)
 }
 
 func (w *WorkListWatcher) push(op work.Operation, workID string, row *rpc.WorkListItem) {
@@ -152,17 +154,23 @@ func (w *WorkListWatcher) push(op work.Operation, workID string, row *rpc.WorkLi
 	})
 }
 
-func (w *WorkListWatcher) activityAlreadySent(workID string, activity work.Activity) bool {
+func (w *WorkListWatcher) activityAlreadySent(workID string, state work.RowState) bool {
 	w.sentActivityMu.Lock()
 	defer w.sentActivityMu.Unlock()
 	sent, found := w.sentActivity[workID]
-	return found && sent == activity
+	return found && sent == state
 }
 
-func (w *WorkListWatcher) rememberActivity(workID string, activity work.Activity) {
+func (w *WorkListWatcher) rememberActivity(workID string, state work.RowState) {
 	w.sentActivityMu.Lock()
 	defer w.sentActivityMu.Unlock()
-	w.sentActivity[workID] = activity
+	w.sentActivity[workID] = state
+}
+
+// rowStateOf reads a row's derived state back off the row, so that what is
+// remembered as sent is exactly what went out.
+func rowStateOf(item rpc.WorkListItem) work.RowState {
+	return work.RowState{Activity: item.Activity, UnansweredQuestions: item.UnansweredQuestions}
 }
 
 func (w *WorkListWatcher) forget(workID string) {
@@ -215,9 +223,9 @@ func (w *WorkListWatcher) listRows() ([]rpc.WorkListItem, error) {
 	w.sentActivityMu.Lock()
 	// Replaced rather than merged: this is the whole list, so anything not in it
 	// no longer exists.
-	w.sentActivity = make(map[string]work.Activity, len(items))
+	w.sentActivity = make(map[string]work.RowState, len(items))
 	for _, item := range items {
-		w.sentActivity[item.ID] = item.Activity
+		w.sentActivity[item.ID] = rowStateOf(item)
 	}
 	w.sentActivityMu.Unlock()
 
@@ -236,7 +244,7 @@ func (w *WorkListWatcher) readRows() ([]rpc.WorkListItem, error) {
 	resolver := work.NewActivityResolver(w.turnSource)
 	items := make([]rpc.WorkListItem, len(works))
 	for i, item := range works {
-		items[i] = rpc.NewWorkListItem(item, resolver.Activity(item))
+		items[i] = rpc.NewWorkListItem(item, resolver.RowState(item))
 	}
 	return items, nil
 }

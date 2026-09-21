@@ -122,6 +122,34 @@ func OrLegacy(current, deprecated string) string {
 type MessageParams struct {
 	SessionID string `json:"session_id"`
 	Content   string `json:"content"`
+	// Answering are the posted questions this message answers. Absent for an
+	// ordinary message.
+	//
+	// The whole message is refused if any entry names a question that is no
+	// longer waiting for an answer (chat.ErrQuestionNotPending, reported as
+	// CodeInvalidParams with every such request id named). Content is one
+	// string written for all of them together, so there is no half of it to
+	// deliver — see chat.Client.SendMessageAnswering.
+	Answering []QuestionAnswerParams `json:"answering,omitempty"`
+}
+
+// QuestionAnswerParams is one question answered by the message carrying it.
+// Either Declined, or something in Answers or Text: a question is answered, or
+// deliberately not answered, and "answered with nothing" is neither.
+type QuestionAnswerParams struct {
+	RequestID string `json:"request_id"`
+	// Answers are option labels the question offered, and only those. Each one
+	// is checked against the question.
+	Answers []string `json:"answers,omitempty"`
+	// Text is what the user wrote themselves: the whole answer to a question
+	// that offered no options, or the "Other" beside ones it did. It is
+	// recorded apart from Answers so the agent can tell its own options from
+	// the user's own words.
+	Text string `json:"text,omitempty"`
+	// Declined says the user will not answer this one. The agent is told.
+	Declined bool `json:"declined,omitempty"`
+	// Note is the optional line the user added beside a decline.
+	Note string `json:"note,omitempty"`
 }
 
 // MessageResult tells the sender where its own message landed in the session's
@@ -151,13 +179,6 @@ type PermissionResponseParams struct {
 	ToolInput             json.RawMessage          `json:"tool_input,omitempty"`
 	ToolUseID             string                   `json:"tool_use_id,omitempty"`
 	PermissionSuggestions []agent.PermissionUpdate `json:"permission_suggestions,omitempty"`
-}
-
-type QuestionResponseParams struct {
-	SessionID string            `json:"session_id"`
-	RequestID string            `json:"request_id"`
-	ToolUseID string            `json:"tool_use_id"`
-	Answers   map[string]string `json:"answers"` // nil = cancel
 }
 
 // Session management
@@ -448,9 +469,21 @@ type SessionListItem struct {
 	// and, being volatile process state, arrived on their own schedule. This one
 	// is persisted with the session, so a row is drawn the same whether or not a
 	// process exists.
-	Turn       session.TurnState   `json:"turn"`
-	Unread     bool                `json:"unread"`
-	ForkedFrom *session.ForkOrigin `json:"forked_from,omitempty"`
+	Turn session.TurnState `json:"turn"`
+	// UnansweredQuestions is how many questions this session is waiting on
+	// answers to. It is `len(turn.unanswered)` and nothing else — derived here,
+	// at the one place a row is built, so it cannot drift from the list it
+	// counts.
+	//
+	// It is spelled out rather than left to the client because a row only ever
+	// needs the number: it draws a glyph and a count beside the activity
+	// indicator, and every surface that does that should be reading one field
+	// rather than measuring an array it otherwise ignores. Work rows, which
+	// carry no turn at all, have the same field for the same reason
+	// (WorkListItem.UnansweredQuestions).
+	UnansweredQuestions int                 `json:"unanswered_questions,omitempty"`
+	Unread              bool                `json:"unread"`
+	ForkedFrom          *session.ForkOrigin `json:"forked_from,omitempty"`
 }
 
 // NewSessionListItem builds the row for a session. Every producer of a row goes
@@ -462,13 +495,14 @@ type SessionListItem struct {
 // layer — see watch.SessionListWatcher.
 func NewSessionListItem(meta session.SessionMeta, workID string) SessionListItem {
 	return SessionListItem{
-		ID:         meta.ID,
-		WorkID:     workID,
-		Title:      meta.Title,
-		UpdatedAt:  meta.UpdatedAt,
-		Turn:       meta.Turn,
-		Unread:     meta.Unread,
-		ForkedFrom: meta.ForkedFrom,
+		ID:                  meta.ID,
+		WorkID:              workID,
+		Title:               meta.Title,
+		UpdatedAt:           meta.UpdatedAt,
+		Turn:                meta.Turn,
+		UnansweredQuestions: len(meta.Turn.Unanswered),
+		Unread:              meta.Unread,
+		ForkedFrom:          meta.ForkedFrom,
 	}
 }
 
@@ -701,13 +735,6 @@ type PermissionRequestParams struct {
 	PermissionSuggestions []agent.PermissionUpdate `json:"permission_suggestions,omitempty"`
 }
 
-type AskUserQuestionParams struct {
-	SessionID string                  `json:"session_id"`
-	RequestID string                  `json:"request_id"`
-	ToolUseID string                  `json:"tool_use_id"`
-	Questions []agent.AskUserQuestion `json:"questions"`
-}
-
 // Agent namespace
 
 // AgentInfo describes one registered agent type: what the server knows about it
@@ -800,6 +827,13 @@ type WorkListItem struct {
 	// list is scoped to one, so a client does not hold the turn state of a
 	// session in a worktree it has not opened (docs/lifecycle-ui.md §1.3).
 	Activity work.Activity `json:"activity"`
+	// UnansweredQuestions is how many questions this work's session is waiting
+	// on answers to — the second dimension of "needs you", beside Activity.
+	// Zero is absent.
+	//
+	// A count, not the questions: see work.RowState. The list itself is on
+	// work.detail.
+	UnansweredQuestions int `json:"unanswered_questions,omitempty"`
 	// Wait is what an active work is waiting for; the reason the agent gave for
 	// it belongs to the detail, where there is room to show it.
 	Wait      work.WorkWait `json:"wait,omitempty"`
@@ -815,19 +849,20 @@ type WorkListItem struct {
 // through here so that narrowing work.Work down to a row is decided in one
 // place. The activity is passed in rather than derived here, because deriving
 // it reads the session layer — see watch.WorkListWatcher.
-func NewWorkListItem(w work.Work, activity work.Activity) WorkListItem {
+func NewWorkListItem(w work.Work, state work.RowState) WorkListItem {
 	return WorkListItem{
-		ID:          w.ID,
-		Type:        w.Type,
-		ParentID:    w.ParentID,
-		AgentRoleID: w.AgentRoleID,
-		Title:       w.Title,
-		Status:      w.Status,
-		Activity:    activity,
-		Wait:        w.Wait,
-		SessionID:   w.SessionID,
-		Worktree:    w.Worktree,
-		UpdatedAt:   w.UpdatedAt,
+		ID:                  w.ID,
+		Type:                w.Type,
+		ParentID:            w.ParentID,
+		AgentRoleID:         w.AgentRoleID,
+		Title:               w.Title,
+		Status:              w.Status,
+		Activity:            state.Activity,
+		UnansweredQuestions: state.UnansweredQuestions,
+		Wait:                w.Wait,
+		SessionID:           w.SessionID,
+		Worktree:            w.Worktree,
+		UpdatedAt:           w.UpdatedAt,
 	}
 }
 
@@ -932,6 +967,11 @@ type WorkDetailSubscribeResult struct {
 	// Activity rides here for the same reason Usage does: it is derived from
 	// something the work record knows nothing about — the turn of its session.
 	Activity work.Activity `json:"activity"`
+	// PendingQuestions are the questions this work's session has asked and
+	// nobody has answered, oldest first. The list itself and not a count,
+	// because the detail is the one surface with room to show what is being
+	// asked — a row gets WorkListItem.UnansweredQuestions instead.
+	PendingQuestions []session.PendingQuestion `json:"pending_questions,omitempty"`
 	// Children is every task under this item, and Parent the story above it.
 	//
 	// They are here rather than read out of the work list because that list is

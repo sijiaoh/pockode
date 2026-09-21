@@ -253,8 +253,13 @@ files that say which is which: `utils/messageActions.ts` answers the first,
   both rare: the server could not persist the record, or it is too old to answer
   `chat.message` with a seq at all — for such a server, every message this tab
   sends stays unaddressable until a reload.
-- A message holding a pending permission request or question is not a settled
-  transcript to cut at (`pending-request`).
+- A message holding a pending permission request is not a settled transcript to
+  cut at (`pending-request`). A posted question is deliberately **not** one of
+  these: it belongs to the session rather than to the message, the fork
+  inherits it with its `request_id`, and the fork can answer it
+  ([answering-ui.md §7](answering-ui.md#7-edge-cases)). A legacy
+  `ask_user_question` card is not one either — nothing can answer it in the
+  source session, so cutting above it takes nothing away.
 - A user message that opens the *session* has nothing behind it to keep
   (`nothing-before`, *The rule*). This one needs the message's *position*, which
   is why it is `resolveForkAnchor`'s answer and not `isForkableMessage`'s — and
@@ -538,7 +543,7 @@ go and act on:
 | --- | --- | --- |
 | **`nothing-before`** | A user message that opens the session: nothing before it to keep | *"Nothing before this message to keep."* |
 | **`no-anchor-seq`** | The server never gave this message a seq, so it cannot be named as the cut point | *"This message has no saved position to fork from."* |
-| **`pending-request`** | The message holds a permission request or question nobody has answered | *"Respond to the request in this message first."* |
+| **`pending-request`** | The message holds a permission request nobody has answered | *"Respond to the request in this message first."* |
 
 The table's order is the order the reasons are asked in, and it carries as much
 of the design as the names do. A message can be in more than one of these states

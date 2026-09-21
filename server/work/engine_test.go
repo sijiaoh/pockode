@@ -89,6 +89,50 @@ func (r *recordingTerminator) snapshot() []terminated {
 	return append([]terminated(nil), r.calls...)
 }
 
+// stubTurns is the session layer as the engine sees it: which sessions have
+// questions nobody has answered. Locked, because the engine reads it from the
+// follow-up goroutines as well as from the caller's.
+type stubTurns struct {
+	mu         sync.Mutex
+	unanswered map[string]int
+	err        error
+}
+
+func newStubTurns() *stubTurns {
+	return &stubTurns{unanswered: make(map[string]int)}
+}
+
+func (s *stubTurns) SessionTurns(string) (map[string]session.TurnState, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.err != nil {
+		return nil, s.err
+	}
+	turns := make(map[string]session.TurnState, len(s.unanswered))
+	for sessionID, n := range s.unanswered {
+		questions := make([]session.PendingQuestion, n)
+		for i := range questions {
+			questions[i] = session.PendingQuestion{RequestID: sessionID + "-q"}
+		}
+		turns[sessionID] = session.TurnState{Phase: session.PhaseIdle, Unanswered: questions}
+	}
+	return turns, nil
+}
+
+// post makes sessionID look like one whose agent asked the user something and
+// carried on.
+func (s *stubTurns) post(sessionID string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.unanswered[sessionID]++
+}
+
+func (s *stubTurns) answer(sessionID string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.unanswered, sessionID)
+}
+
 type fixedSteps []string
 
 func (f fixedSteps) GetSteps(string) ([]string, error) { return f, nil }
@@ -100,6 +144,7 @@ type engineFixture struct {
 	engine     *Engine
 	sender     *recordingSender
 	terminator *recordingTerminator
+	turns      *stubTurns
 }
 
 func newEngineFixture(t *testing.T) *engineFixture {
@@ -122,11 +167,13 @@ func newRecoveryFixture(t *testing.T) *engineFixture {
 	engine := NewEngine(store, DefaultMaxNudges)
 	sender := &recordingSender{}
 	terminator := &recordingTerminator{}
+	turns := newStubTurns()
 	engine.SetSender(sender)
 	engine.SetSessionTerminator(terminator)
+	engine.SetTurnSource(turns)
 	t.Cleanup(engine.Stop)
 
-	return &engineFixture{store: store, engine: engine, sender: sender, terminator: terminator}
+	return &engineFixture{store: store, engine: engine, sender: sender, terminator: terminator, turns: turns}
 }
 
 // startedStory creates a story, starts it on a known session and returns it.
@@ -231,23 +278,74 @@ func TestEngine_StopsAWorkWhoseTurnWasAborted(t *testing.T) {
 }
 
 func TestEngine_LeavesAWaitingWorkAloneWhenItsTurnEnds(t *testing.T) {
-	for _, wait := range []WorkWait{WaitUser, WaitChild} {
-		t.Run(string(wait), func(t *testing.T) {
-			f := newEngineFixture(t)
-			story := f.startedStory(t, "sess-1")
-			if err := f.store.SetWait(context.Background(), story.ID, wait, "because"); err != nil {
-				t.Fatalf("SetWait: %v", err)
-			}
+	f := newEngineFixture(t)
+	story := f.startedStory(t, "sess-1")
+	waitOnChild(t, f.store, story.ID)
 
-			f.engine.HandleTurnEnded("sess-1", session.OutcomeCompleted)
+	f.engine.HandleTurnEnded("sess-1", session.OutcomeCompleted)
 
-			if f.sender.count() != 0 {
-				t.Errorf("nudged a work that said what it is waiting for (%d messages)", f.sender.count())
-			}
-			if got := getWork(t, f.store, story.ID); got.Wait != wait || got.NudgeCount != 0 {
-				t.Errorf("wait/nudges = %q/%d, want %q/0", got.Wait, got.NudgeCount, wait)
-			}
-		})
+	if f.sender.count() != 0 {
+		t.Errorf("nudged a work that said what it is waiting for (%d messages)", f.sender.count())
+	}
+	if got := getWork(t, f.store, story.ID); got.Wait != WaitChild || got.NudgeCount != 0 {
+		t.Errorf("wait/nudges = %q/%d, want child/0", got.Wait, got.NudgeCount)
+	}
+}
+
+// The second reason an ending is not an accident, and the one that is not on the
+// work at all: the agent asked the user something and stopped. Nobody is nudged
+// and no allowance is spent, because the answer is what carries on from here.
+func TestEngine_LeavesAWorkWithUnansweredQuestionsAloneWhenItsTurnEnds(t *testing.T) {
+	f := newEngineFixture(t)
+	story := f.startedStory(t, "sess-1")
+	f.turns.post("sess-1")
+
+	f.engine.HandleTurnEnded("sess-1", session.OutcomeCompleted)
+
+	if f.sender.count() != 0 {
+		t.Errorf("nudged a work whose agent is waiting for an answer (%d messages)", f.sender.count())
+	}
+	got := getWork(t, f.store, story.ID)
+	if got.Status != StatusActive || got.Wait != WaitNone || got.NudgeCount != 0 {
+		t.Errorf("work = %q/%q/%d, want active, no wait, no nudge spent",
+			got.Status, got.Wait, got.NudgeCount)
+	}
+}
+
+// The moment the last question is resolved the work is back to an ordinary one,
+// and an ending of it is back to being an accident. Nothing has to be told: the
+// engine reads the list when it needs the answer, so it cannot be stale.
+func TestEngine_NudgesOnceTheQuestionsAreAnswered(t *testing.T) {
+	f := newEngineFixture(t)
+	story := f.startedStory(t, "sess-1")
+	f.turns.post("sess-1")
+	f.engine.HandleTurnEnded("sess-1", session.OutcomeCompleted)
+
+	f.turns.answer("sess-1")
+	f.engine.HandleTurnEnded("sess-1", session.OutcomeCompleted)
+
+	if got := f.sender.subtypes(); len(got) != 1 || got[0] != MessageSubtypeAutoContinue {
+		t.Errorf("messages = %v, want one nudge", got)
+	}
+	if got := getWork(t, f.store, story.ID); got.NudgeCount != 1 {
+		t.Errorf("nudges = %d, want 1 — only the second ending spent one", got.NudgeCount)
+	}
+}
+
+// Not knowing must not be read as "no questions": a nudge that should not have
+// been sent spends the allowance that ends in a stop.
+func TestEngine_DoesNotNudgeWhenTheSessionLayerCannotBeRead(t *testing.T) {
+	f := newEngineFixture(t)
+	story := f.startedStory(t, "sess-1")
+	f.turns.err = errors.New("index is not json")
+
+	f.engine.HandleTurnEnded("sess-1", session.OutcomeCompleted)
+
+	if f.sender.count() != 0 {
+		t.Errorf("nudged on an unreadable session (%d messages)", f.sender.count())
+	}
+	if got := getWork(t, f.store, story.ID); got.NudgeCount != 0 {
+		t.Errorf("nudges = %d, want none spent on a guess", got.NudgeCount)
 	}
 }
 
@@ -272,10 +370,7 @@ func TestEngine_IgnoresATurnEndingOnAWorkItDoesNotDrive(t *testing.T) {
 func TestEngine_AUserMessageClearsTheWaitAndTheNudges(t *testing.T) {
 	f := newEngineFixture(t)
 	story := f.startedStory(t, "sess-1")
-	if err := f.store.SetWait(context.Background(), story.ID, WaitUser, "which database?"); err != nil {
-		t.Fatalf("SetWait: %v", err)
-	}
-	f.engine.HandleTurnEnded("sess-1", session.OutcomeCompleted) // no nudge; it is waiting
+	waitOnChild(t, f.store, story.ID)
 	if _, err := f.store.RecordNudge(context.Background(), story.ID); err != nil {
 		t.Fatalf("RecordNudge: %v", err)
 	}
@@ -283,9 +378,66 @@ func TestEngine_AUserMessageClearsTheWaitAndTheNudges(t *testing.T) {
 	f.engine.HandleUserMessage("sess-1")
 
 	got := getWork(t, f.store, story.ID)
-	if got.Status != StatusActive || got.Wait != WaitNone || got.WaitReason != "" || got.NudgeCount != 0 {
-		t.Errorf("work = %q/%q/%q/%d, want active with nothing left over",
-			got.Status, got.Wait, got.WaitReason, got.NudgeCount)
+	if got.Status != StatusActive || got.Wait != WaitNone || got.NudgeCount != 0 {
+		t.Errorf("work = %q/%q/%d, want active with nothing left over",
+			got.Status, got.Wait, got.NudgeCount)
+	}
+}
+
+// --- input 3: the user answered what the agent asked ---
+
+// An answer is not general-purpose attention: it answers the one thing the agent
+// asked, and a story waiting for its subtasks is still waiting for exactly that.
+// Clearing the wait would resume a story with nothing to do, then nudge it for
+// having nothing to do.
+func TestEngine_AnAnswerClearsTheNudgesButNotTheChildWait(t *testing.T) {
+	f := newEngineFixture(t)
+	story := f.startedStory(t, "sess-1")
+	waitOnChild(t, f.store, story.ID)
+	if _, err := f.store.RecordNudge(context.Background(), story.ID); err != nil {
+		t.Fatalf("RecordNudge: %v", err)
+	}
+
+	f.engine.HandleUserAnswer("sess-1")
+
+	got := getWork(t, f.store, story.ID)
+	if got.Wait != WaitChild {
+		t.Errorf("wait = %q, want it still waiting on its subtasks — no subtask closed", got.Wait)
+	}
+	if got.NudgeCount != 0 {
+		t.Errorf("nudges = %d, want the allowance back: a person just acted on this work", got.NudgeCount)
+	}
+}
+
+// A stopped work is woken by an answer as by any message. The narrowing above is
+// about the wait, not about the status: nothing in "the user answered" says the
+// work should stay handed back.
+func TestEngine_AnAnswerRevivesAStoppedWork(t *testing.T) {
+	f := newEngineFixture(t)
+	story := f.startedStory(t, "sess-1")
+	if err := f.store.Stop(context.Background(), story.ID); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+
+	f.engine.HandleUserAnswer("sess-1")
+
+	if got := getWork(t, f.store, story.ID); got.Status != StatusActive {
+		t.Errorf("status = %q, want %q", got.Status, StatusActive)
+	}
+}
+
+// A closed work is not woken by anything but work_reopen, answer or not.
+func TestEngine_AnAnswerLeavesAClosedWorkClosed(t *testing.T) {
+	f := newEngineFixture(t)
+	story := f.startedStory(t, "sess-1")
+	if _, err := f.store.StepDone(context.Background(), story.ID, 0); err != nil {
+		t.Fatalf("StepDone: %v", err)
+	}
+
+	f.engine.HandleUserAnswer("sess-1")
+
+	if got := getWork(t, f.store, story.ID); got.Status != StatusClosed {
+		t.Errorf("status = %q, want %q", got.Status, StatusClosed)
 	}
 }
 
@@ -326,9 +478,7 @@ func TestEngine_ChildClosureWakesAParentWaitingOnIt(t *testing.T) {
 	story := f.startedStory(t, "sess-parent")
 	task := createTask(t, f.store, story.ID, "T")
 	startWorkWithSession(t, f.store, task.ID, "sess-child")
-	if err := f.store.SetWait(context.Background(), story.ID, WaitChild, "waiting on T"); err != nil {
-		t.Fatalf("SetWait: %v", err)
-	}
+	setChildWait(t, f.store, story.ID)
 
 	if _, err := f.store.StepDone(context.Background(), task.ID, 0); err != nil {
 		t.Fatalf("StepDone on the child: %v", err)
@@ -349,30 +499,21 @@ func TestEngine_ChildClosureWakesAParentWaitingOnIt(t *testing.T) {
 	}
 }
 
-// A parent waiting on the *user* has not been handed what it was waiting for, so
-// its wait stands — the child's news reaches its transcript either way.
-func TestEngine_ChildClosureLeavesAParentWaitingOnTheUser(t *testing.T) {
+// A parent that declared no wait is told its child closed and told that nothing
+// was cleared — it was not waiting, so there is nothing to ask for again.
+func TestEngine_ChildClosureTellsAParentThatWasNotWaiting(t *testing.T) {
 	f := newEngineFixture(t)
 	story := f.startedStory(t, "sess-parent")
 	task := createTask(t, f.store, story.ID, "T")
 	startWorkWithSession(t, f.store, task.ID, "sess-child")
-	if err := f.store.SetWait(context.Background(), story.ID, WaitUser, "which database?"); err != nil {
-		t.Fatalf("SetWait: %v", err)
-	}
 
 	if _, err := f.store.StepDone(context.Background(), task.ID, 0); err != nil {
 		t.Fatalf("StepDone on the child: %v", err)
 	}
 
 	waitFor(t, func() bool { return f.sender.count() > 0 })
-	if got := getWork(t, f.store, story.ID); got.Wait != WaitUser {
-		t.Errorf("parent wait = %q, want it still waiting on the user", got.Wait)
-	}
-	// And is not told otherwise: a parent that believed its wait was cleared
-	// would call work_wait and overwrite a wait on a person with one on its
-	// subtasks, so the user would stop being shown as the one being waited for.
 	if strings.Contains(f.sender.contents()[0], "cleared your wait") {
-		t.Error("a parent still waiting on the user was told its wait was cleared")
+		t.Error("a parent that was not waiting was told its wait was cleared")
 	}
 }
 
@@ -434,9 +575,7 @@ func TestEngine_ClearsAWaitNothingCouldEnd(t *testing.T) {
 			story := f.startedStory(t, "sess-parent")
 			task := createTask(t, f.store, story.ID, "T")
 			startWorkWithSession(t, f.store, task.ID, "sess-child")
-			if err := f.store.SetWait(context.Background(), story.ID, WaitChild, "waiting on T"); err != nil {
-				t.Fatalf("SetWait: %v", err)
-			}
+			setChildWait(t, f.store, story.ID)
 
 			tc.leave(t, f, task.ID)
 
@@ -472,9 +611,7 @@ func TestEngine_LeavesAWaitAloneWhileAnotherSubtaskRuns(t *testing.T) {
 	startWorkWithSession(t, f.store, stopped.ID, "sess-child-1")
 	running := createTask(t, f.store, story.ID, "T2")
 	startWorkWithSession(t, f.store, running.ID, "sess-child-2")
-	if err := f.store.SetWait(context.Background(), story.ID, WaitChild, "waiting on both"); err != nil {
-		t.Fatalf("SetWait: %v", err)
-	}
+	setChildWait(t, f.store, story.ID)
 
 	if err := f.store.Stop(context.Background(), stopped.ID); err != nil {
 		t.Fatalf("Stop: %v", err)
@@ -510,9 +647,7 @@ func TestEngine_OnlyTheCallerThatClearedTheWaitSends(t *testing.T) {
 	story := f.startedStory(t, "sess-parent")
 	task := createTask(t, f.store, story.ID, "T")
 	startWorkWithSession(t, f.store, task.ID, "sess-child")
-	if err := f.store.SetWait(context.Background(), story.ID, WaitChild, "waiting on T"); err != nil {
-		t.Fatalf("SetWait: %v", err)
-	}
+	setChildWait(t, f.store, story.ID)
 	loser := NewEngine(lostTheRace{f.store}, DefaultMaxNudges)
 	loser.SetSender(f.sender)
 	t.Cleanup(loser.Stop)
@@ -527,34 +662,24 @@ func TestEngine_OnlyTheCallerThatClearedTheWaitSends(t *testing.T) {
 	}
 }
 
-// A parent waiting on the *user* has not been stranded by anything: its wait is
-// cleared by a person, who is always reachable. Clearing it would drop the one
-// record telling the user they are the one being waited for.
+// A parent that declared no wait has not been stranded by anything: nothing was
+// waiting, so nothing needs rescuing and nothing needs saying.
 func TestEngine_LeavesAParentNotWaitingOnChildrenAlone(t *testing.T) {
-	for _, wait := range []WorkWait{WaitUser, WaitNone} {
-		t.Run(string("wait="+wait), func(t *testing.T) {
-			f := newEngineFixture(t)
-			story := f.startedStory(t, "sess-parent")
-			task := createTask(t, f.store, story.ID, "T")
-			startWorkWithSession(t, f.store, task.ID, "sess-child")
-			if wait != WaitNone {
-				if err := f.store.SetWait(context.Background(), story.ID, wait, "which database?"); err != nil {
-					t.Fatalf("SetWait: %v", err)
-				}
-			}
+	f := newEngineFixture(t)
+	story := f.startedStory(t, "sess-parent")
+	task := createTask(t, f.store, story.ID, "T")
+	startWorkWithSession(t, f.store, task.ID, "sess-child")
 
-			if err := f.store.Stop(context.Background(), task.ID); err != nil {
-				t.Fatalf("Stop: %v", err)
-			}
+	if err := f.store.Stop(context.Background(), task.ID); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
 
-			waitFor(t, func() bool { return len(f.terminator.snapshot()) > 0 })
-			if got := f.sender.count(); got != 0 {
-				t.Errorf("sent %d messages, want none", got)
-			}
-			if got := getWork(t, f.store, story.ID); got.Wait != wait {
-				t.Errorf("parent wait = %q, want it left at %q", got.Wait, wait)
-			}
-		})
+	waitFor(t, func() bool { return len(f.terminator.snapshot()) > 0 })
+	if got := f.sender.count(); got != 0 {
+		t.Errorf("sent %d messages, want none", got)
+	}
+	if got := getWork(t, f.store, story.ID); got.Wait != WaitNone {
+		t.Errorf("parent wait = %q, want it left with none", got.Wait)
 	}
 }
 
@@ -566,9 +691,7 @@ func TestEngine_DeletingAWholeStoryStrandsNobody(t *testing.T) {
 	story := f.startedStory(t, "sess-parent")
 	task := createTask(t, f.store, story.ID, "T")
 	startWorkWithSession(t, f.store, task.ID, "sess-child")
-	if err := f.store.SetWait(context.Background(), story.ID, WaitChild, "waiting on T"); err != nil {
-		t.Fatalf("SetWait: %v", err)
-	}
+	setChildWait(t, f.store, story.ID)
 
 	if err := f.store.Delete(context.Background(), story.ID); err != nil {
 		t.Fatalf("Delete: %v", err)
@@ -622,9 +745,7 @@ func TestEngine_StopsAWaitingParentItCannotReach(t *testing.T) {
 			story := f.startedStory(t, "sess-parent")
 			task := createTask(t, f.store, story.ID, "T")
 			startWorkWithSession(t, f.store, task.ID, "sess-child")
-			if _, err := f.store.SetChildWait(context.Background(), story.ID, "waiting on T"); err != nil {
-				t.Fatalf("SetChildWait: %v", err)
-			}
+			setChildWait(t, f.store, story.ID)
 
 			tt.leave(t, f, task.ID)
 
@@ -657,9 +778,7 @@ func TestEngine_LeavesAnUnreachableParentThatStillHasASubtask(t *testing.T) {
 	startWorkWithSession(t, f.store, stopping.ID, "sess-1")
 	running := createTask(t, f.store, story.ID, "T2")
 	startWorkWithSession(t, f.store, running.ID, "sess-2")
-	if _, err := f.store.SetChildWait(context.Background(), story.ID, "waiting on both"); err != nil {
-		t.Fatalf("SetChildWait: %v", err)
-	}
+	setChildWait(t, f.store, story.ID)
 
 	if err := f.store.Stop(context.Background(), stopping.ID); err != nil {
 		t.Fatalf("Stop: %v", err)
@@ -696,9 +815,7 @@ func TestEngine_StopsAParentWhoseChildReportCouldNotBeSent(t *testing.T) {
 	startWorkWithSession(t, f.store, closing.ID, "sess-1")
 	running := createTask(t, f.store, story.ID, "T2")
 	startWorkWithSession(t, f.store, running.ID, "sess-2")
-	if _, err := f.store.SetChildWait(context.Background(), story.ID, "waiting on both"); err != nil {
-		t.Fatalf("SetChildWait: %v", err)
-	}
+	setChildWait(t, f.store, story.ID)
 
 	if _, err := f.store.StepDone(context.Background(), closing.ID, 0); err != nil {
 		t.Fatalf("StepDone: %v", err)
@@ -731,9 +848,7 @@ func TestEngine_StopsAParentWhoseStrandedWaitNewsCouldNotBeSent(t *testing.T) {
 	story := f.startedStory(t, "sess-parent")
 	task := createTask(t, f.store, story.ID, "T")
 	startWorkWithSession(t, f.store, task.ID, "sess-child")
-	if _, err := f.store.SetChildWait(context.Background(), story.ID, "waiting on T"); err != nil {
-		t.Fatalf("SetChildWait: %v", err)
-	}
+	setChildWait(t, f.store, story.ID)
 
 	if err := f.store.Stop(context.Background(), task.ID); err != nil {
 		t.Fatalf("Stop: %v", err)
@@ -752,15 +867,19 @@ func TestEngine_StopsAParentWhoseStrandedWaitNewsCouldNotBeSent(t *testing.T) {
 // --- input 4: the session was deleted ---
 
 func TestEngine_StopsAWorkWhoseSessionWasDeleted(t *testing.T) {
-	for _, wait := range []WorkWait{WaitNone, WaitUser, WaitChild} {
+	for _, wait := range []WorkWait{WaitNone, WaitChild} {
 		t.Run(string("wait="+wait), func(t *testing.T) {
 			f := newEngineFixture(t)
 			story := f.startedStory(t, "sess-1")
-			if wait != WaitNone {
-				if err := f.store.SetWait(context.Background(), story.ID, wait, "because"); err != nil {
-					t.Fatalf("SetWait: %v", err)
-				}
+			if wait == WaitChild {
+				task := createTask(t, f.store, story.ID, "T")
+				startWorkWithSession(t, f.store, task.ID, "sess-child")
+				setChildWait(t, f.store, story.ID)
 			}
+			// And a question outstanding, which is the other reason an ending is
+			// left alone — a deleted session takes away the place its answer
+			// would have arrived.
+			f.turns.post("sess-1")
 
 			f.engine.OnSessionChange(session.SessionChangeEvent{
 				Op:      session.OperationDelete,
@@ -790,26 +909,20 @@ func TestEngine_RecoverStartup(t *testing.T) {
 
 	driven := f.startedStory(t, "sess-driven")
 
-	waitingOnUser := createStory(t, f.store, "waiting on the user")
-	startWorkWithSession(t, f.store, waitingOnUser.ID, "sess-user")
-	if err := f.store.SetWait(context.Background(), waitingOnUser.ID, WaitUser, "which database?"); err != nil {
-		t.Fatalf("SetWait: %v", err)
-	}
+	askedTheUser := createStory(t, f.store, "asking the user something")
+	startWorkWithSession(t, f.store, askedTheUser.ID, "sess-asked")
+	f.turns.post("sess-asked")
 
 	// A `child` wait only survives a restart if a child does, and the only child
 	// that survives one is a child that is itself waiting.
 	waitingOnChild := createStory(t, f.store, "waiting on its children")
 	startWorkWithSession(t, f.store, waitingOnChild.ID, "sess-child")
-	survivingChild := createTask(t, f.store, waitingOnChild.ID, "asking the user something")
+	survivingChild := createTask(t, f.store, waitingOnChild.ID, "asking the user something too")
 	startWorkWithSession(t, f.store, survivingChild.ID, "sess-grandchild")
-	if err := f.store.SetWait(context.Background(), survivingChild.ID, WaitUser, "which database?"); err != nil {
-		t.Fatalf("SetWait: %v", err)
-	}
-	if _, err := f.store.SetChildWait(context.Background(), waitingOnChild.ID, ""); err != nil {
-		t.Fatalf("SetChildWait: %v", err)
-	}
+	f.turns.post("sess-grandchild")
+	setChildWait(t, f.store, waitingOnChild.ID)
 
-	f.engine.RecoverStartup()
+	f.engine.RecoverStartup(f.turns)
 
 	// The one nothing will wake: no process survives a restart, so the turn it
 	// was carrying is never going to end.
@@ -823,7 +936,7 @@ func TestEngine_RecoverStartup(t *testing.T) {
 
 	// The two whose wake-up call comes from outside the session, and therefore
 	// survives the restart along with them.
-	for _, kept := range []Work{waitingOnUser, waitingOnChild, survivingChild} {
+	for _, kept := range []Work{askedTheUser, waitingOnChild, survivingChild} {
 		if got := getWork(t, f.store, kept.ID); got.Status != StatusActive {
 			t.Errorf("%q = %q, want it left active — what it waits for outlives the process",
 				kept.Title, got.Status)
@@ -846,11 +959,9 @@ func TestEngine_RecoverStartupStopsAWaitItsOwnStopsStranded(t *testing.T) {
 	story := f.startedStory(t, "sess-story")
 	task := createTask(t, f.store, story.ID, "the last subtask")
 	startWorkWithSession(t, f.store, task.ID, "sess-task")
-	if _, err := f.store.SetChildWait(context.Background(), story.ID, ""); err != nil {
-		t.Fatalf("SetChildWait: %v", err)
-	}
+	setChildWait(t, f.store, story.ID)
 
-	f.engine.RecoverStartup()
+	f.engine.RecoverStartup(f.turns)
 
 	if got := getWork(t, f.store, task.ID); got.Status != StatusStopped {
 		t.Fatalf("the subtask = %q, want %q", got.Status, StatusStopped)
@@ -866,6 +977,29 @@ func TestEngine_RecoverStartupStopsAWaitItsOwnStopsStranded(t *testing.T) {
 	bodies := f.commentBodies(t, story.ID)
 	if len(bodies) != 1 || !strings.Contains(bodies[0], "no agent process survives a server restart") {
 		t.Errorf("comments = %v, want one saying its subtasks did not survive the restart", bodies)
+	}
+}
+
+// A story whose `child` wait is stranded is stopped even though it also has a
+// question outstanding, and that is the rule rather than a gap in it: nothing is
+// left that could end the wait, the engine never nudges a waiting work, and an
+// answer clears the nudge count rather than the wait. Stopping is what makes it
+// findable — and the question survives the stop, so answering it still wakes the
+// work.
+func TestEngine_RecoverStartupStopsAStrandedWaitEvenWithQuestionsOutstanding(t *testing.T) {
+	f := newRecoveryFixture(t)
+
+	story := f.startedStory(t, "sess-story")
+	task := createTask(t, f.store, story.ID, "the last subtask")
+	startWorkWithSession(t, f.store, task.ID, "sess-task")
+	setChildWait(t, f.store, story.ID)
+	f.turns.post("sess-story")
+
+	f.engine.RecoverStartup(f.turns)
+
+	got := getWork(t, f.store, story.ID)
+	if got.Status != StatusStopped || got.Wait != WaitNone {
+		t.Errorf("story = %q/%q, want stopped with its wait cleared", got.Status, got.Wait)
 	}
 }
 
@@ -935,11 +1069,9 @@ func TestEngine_TerminatesTheSessionOfWorkThatLeftActive(t *testing.T) {
 
 func TestEngine_LeavesTheSessionOfAWorkStillBeingDriven(t *testing.T) {
 	f := newEngineFixture(t)
-	story := f.startedStory(t, "sess-1")
+	f.startedStory(t, "sess-1")
 
-	if err := f.store.SetWait(context.Background(), story.ID, WaitUser, "which database?"); err != nil {
-		t.Fatalf("SetWait: %v", err)
-	}
+	f.turns.post("sess-1")
 	f.engine.HandleTurnEnded("sess-1", session.OutcomeCompleted)
 
 	if calls := f.terminator.snapshot(); len(calls) != 0 {
@@ -1046,5 +1178,163 @@ func TestEngine_ChildClosureLeavesAStoppedParentAlone(t *testing.T) {
 	}
 	if got := getWork(t, f.store, story.ID); got.Status != StatusStopped {
 		t.Errorf("parent = %q, want it left %q", got.Status, StatusStopped)
+	}
+}
+
+// --- a subtask's question reaching its story ---
+
+func childQuestion() session.PendingQuestion {
+	return session.PendingQuestion{
+		RequestID: "req-1", Header: "Database", Question: "Which database?",
+		Options: []session.QuestionOption{{Label: "Postgres"}, {Label: "SQLite"}},
+	}
+}
+
+// TestEngine_ASubtaskQuestionReachesItsStory: a story often knows what its
+// subtask is asking about, so it is shown the question and told the two ways
+// forward.
+func TestEngine_ASubtaskQuestionReachesItsStory(t *testing.T) {
+	f := newEngineFixture(t)
+	story := f.startedStory(t, "sess-parent")
+	task := createTask(t, f.store, story.ID, "Wire the store")
+	startWorkWithSession(t, f.store, task.ID, "sess-child")
+
+	f.engine.HandleQuestionPosted("sess-child", childQuestion())
+
+	waitFor(t, func() bool { return f.sender.count() > 0 })
+	if got := f.sender.subtypes(); len(got) != 1 || got[0] != MessageSubtypeChildQuestion {
+		t.Fatalf("sent %v, want one child-question message", got)
+	}
+	body := f.sender.contents()[0]
+	for _, want := range []string{"Which database?", "req-1", "Postgres", "question_answer", "question_post"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("message does not contain %q; it is the story's only copy of the question", want)
+		}
+	}
+}
+
+// TestEngine_ASubtaskQuestionLeavesTheParentsWaitAlone is the rule that tells
+// this message from child_done: a `child` wait ends when a subtask closes, and
+// a subtask asking a question is not that. The subtask is still running, and a
+// story that answers and ends its turn is still waiting for exactly what it was.
+func TestEngine_ASubtaskQuestionLeavesTheParentsWaitAlone(t *testing.T) {
+	f := newEngineFixture(t)
+	story := f.startedStory(t, "sess-parent")
+	task := createTask(t, f.store, story.ID, "Wire the store")
+	startWorkWithSession(t, f.store, task.ID, "sess-child")
+	setChildWait(t, f.store, story.ID)
+
+	f.engine.HandleQuestionPosted("sess-child", childQuestion())
+
+	waitFor(t, func() bool { return f.sender.count() > 0 })
+	got := getWork(t, f.store, story.ID)
+	if got.Wait != WaitChild || got.Status != StatusActive {
+		t.Errorf("parent = %q/%q, want it still waiting on its subtasks", got.Status, got.Wait)
+	}
+	if !strings.Contains(f.sender.contents()[0], "you still are") {
+		t.Error("the story was not told its wait is untouched")
+	}
+}
+
+// A stopped story has been handed back to a person and Pockode sends it
+// nothing: a message would spawn a CLI and set it working on a story somebody
+// took back. Nothing is retried — the question is still on the subtask, where
+// the user can see it.
+func TestEngine_ASubtaskQuestionIsNotDeliveredToAStoppedStory(t *testing.T) {
+	f := newEngineFixture(t)
+	story := f.startedStory(t, "sess-parent")
+	task := createTask(t, f.store, story.ID, "Wire the store")
+	startWorkWithSession(t, f.store, task.ID, "sess-child")
+	if err := f.store.Stop(context.Background(), story.ID); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+
+	f.engine.HandleQuestionPosted("sess-child", childQuestion())
+	f.engine.Stop() // waits for the follow-up, so "nothing was sent" is decidable
+
+	if got := f.sender.count(); got != 0 {
+		t.Errorf("sent %d messages, want none into a stopped story", got)
+	}
+	if got := getWork(t, f.store, story.ID); got.Status != StatusStopped {
+		t.Errorf("story = %q, want it left stopped", got.Status)
+	}
+}
+
+// A question from a task with no story above it is nobody's news.
+func TestEngine_AQuestionFromAStoryGoesNowhere(t *testing.T) {
+	f := newEngineFixture(t)
+	f.startedStory(t, "sess-1")
+
+	f.engine.HandleQuestionPosted("sess-1", childQuestion())
+	f.engine.Stop()
+
+	if got := f.sender.count(); got != 0 {
+		t.Errorf("sent %d messages, want none — there is no parent to tell", got)
+	}
+}
+
+// TestEngine_AnUndeliverableSubtaskQuestionChangesNothing: unlike the two
+// notifications that clear a wait, this one is not owed to anybody. A story
+// whose turn is held open by a permission request simply does not get it, and
+// is neither stopped nor retried.
+func TestEngine_AnUndeliverableSubtaskQuestionChangesNothing(t *testing.T) {
+	f := newEngineFixture(t)
+	f.engine.SetSender(failingSender{})
+	story := f.startedStory(t, "sess-parent")
+	task := createTask(t, f.store, story.ID, "Wire the store")
+	startWorkWithSession(t, f.store, task.ID, "sess-child")
+	setChildWait(t, f.store, story.ID)
+
+	f.engine.HandleQuestionPosted("sess-child", childQuestion())
+	f.engine.Stop()
+
+	got := getWork(t, f.store, story.ID)
+	if got.Status != StatusActive || got.Wait != WaitChild {
+		t.Errorf("story = %q/%q, want it untouched", got.Status, got.Wait)
+	}
+	if bodies := f.commentBodies(t, story.ID); len(bodies) != 0 {
+		t.Errorf("comments = %v, want none: nothing was lost", bodies)
+	}
+}
+
+// --- an agent's answer ---
+
+// An agent's answer gives the work its nudge allowance back, exactly as a
+// person's does.
+func TestEngine_AnAgentAnswerResetsTheNudgeAllowance(t *testing.T) {
+	f := newEngineFixture(t)
+	story := f.startedStory(t, "sess-1")
+	if _, err := f.store.RecordNudge(context.Background(), story.ID); err != nil {
+		t.Fatalf("RecordNudge: %v", err)
+	}
+
+	f.engine.HandleAgentAnswer("sess-1")
+
+	if got := getWork(t, f.store, story.ID); got.NudgeCount != 0 {
+		t.Errorf("nudge count = %d, want the allowance back", got.NudgeCount)
+	}
+}
+
+// TestEngine_AnAgentAnswerLeavesAWaitAndAStopAlone: the narrowing of
+// HandleUserAnswer. A `child` wait is not what was answered, and a stopped work
+// was handed to a *person* — an agent's answer is not them coming back.
+func TestEngine_AnAgentAnswerLeavesAWaitAndAStopAlone(t *testing.T) {
+	f := newEngineFixture(t)
+	story := f.startedStory(t, "sess-parent")
+	task := createTask(t, f.store, story.ID, "T")
+	startWorkWithSession(t, f.store, task.ID, "sess-child")
+	setChildWait(t, f.store, story.ID)
+
+	f.engine.HandleAgentAnswer("sess-parent")
+	if got := getWork(t, f.store, story.ID); got.Wait != WaitChild {
+		t.Errorf("wait = %q, want it kept: no subtask closed", got.Wait)
+	}
+
+	if err := f.store.Stop(context.Background(), story.ID); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+	f.engine.HandleAgentAnswer("sess-parent")
+	if got := getWork(t, f.store, story.ID); got.Status != StatusStopped {
+		t.Errorf("status = %q, want it left stopped", got.Status)
 	}
 }

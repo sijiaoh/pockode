@@ -63,7 +63,7 @@ func newForkFixture(t *testing.T, ag *forkingAgent, history []agent.EventRecord)
 	} else {
 		registry.Register(session.AgentTypeClaude, &mockAgent{})
 	}
-	pm := process.NewManager(registry, t.TempDir(), t.TempDir(), "", store, session.LeaseBudgets{Idle: time.Minute})
+	pm := process.NewManager(registry, "", t.TempDir(), t.TempDir(), "", store, session.LeaseBudgets{Idle: time.Minute})
 	t.Cleanup(pm.Shutdown)
 
 	ctx := context.Background()
@@ -540,5 +540,69 @@ func TestFork_UsesTheGivenTitle(t *testing.T) {
 
 	if meta.Title != "Try the other approach" {
 		t.Errorf("title = %q, want the given one", meta.Title)
+	}
+}
+
+// TestFork_InheritsTheQuestionsOpenAtTheCut is the rule for questions across a
+// fork, and it is stated in terms of the cut rather than of "now" on purpose.
+//
+// Three questions are asked; the first is answered before the cut and the third
+// is asked after it. The fork inherits exactly the second — the one the copied
+// records leave open — with its request id unchanged, so answering it in the
+// fork names the same question the card in the fork's transcript shows.
+func TestFork_InheritsTheQuestionsOpenAtTheCut(t *testing.T) {
+	asked := func(id string) agent.EventRecord {
+		return agent.NewEventRecord(agent.QuestionPostedEvent{
+			RequestID: id,
+			Question:  agent.AskUserQuestion{Header: id, Question: "Which " + id + "?"},
+			AskedAt:   time.Unix(1700000000, 0).UTC(),
+		})
+	}
+
+	f := newForkFixture(t, &forkingAgent{carried: true}, []agent.EventRecord{
+		{Type: agent.EventTypeMessage, Content: "go"},
+		asked("req-1"),
+		asked("req-2"),
+		agent.NewEventRecord(agent.MessageEvent{
+			Content:   "Answering req-1",
+			Answering: []agent.QuestionAnswer{{RequestID: "req-1", Answers: []string{"yes"}}},
+		}),
+		{Type: agent.EventTypeText, Content: "carrying on"},
+		asked("req-3"),
+	})
+
+	// Cut after "carrying on": req-3 was never asked yet, req-1 is answered.
+	fork, err := f.client.Fork(context.Background(), "source", f.seqs[4], "")
+	if err != nil {
+		t.Fatalf("Fork: %v", err)
+	}
+
+	meta, found, err := f.store.Get(fork.ID)
+	if err != nil || !found {
+		t.Fatalf("Get fork = %v/%v", found, err)
+	}
+	if len(meta.Turn.Unanswered) != 1 || meta.Turn.Unanswered[0].RequestID != "req-2" {
+		t.Fatalf("fork's unanswered = %+v, want only req-2", meta.Turn.Unanswered)
+	}
+	if meta.Turn.Unanswered[0].Question != "Which req-2?" {
+		t.Errorf("question = %q, want the text the card in the fork also shows", meta.Turn.Unanswered[0].Question)
+	}
+	// The fork inherits a question; it does not ask it again, and nothing about
+	// the copied conversation is a turn the fork owes an ending for.
+	if meta.Turn.Phase != session.PhaseIdle {
+		t.Errorf("phase = %q, want a fork to be born idle whatever it inherited", meta.Turn.Phase)
+	}
+
+	// The source is untouched: the fork took a copy of the records, not the
+	// questions themselves.
+	source, _, err := f.store.Get("source")
+	if err != nil {
+		t.Fatalf("Get source: %v", err)
+	}
+	if len(source.Turn.Unanswered) != 0 {
+		// The source never had them on its live list in this fixture — the
+		// records were appended directly — which is exactly the asymmetry the
+		// derivation exists for.
+		t.Errorf("source's unanswered = %+v, want the fork to have changed nothing here", source.Turn.Unanswered)
 	}
 }

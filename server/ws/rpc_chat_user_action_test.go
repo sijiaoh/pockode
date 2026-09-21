@@ -10,11 +10,15 @@ import (
 	"github.com/pockode/server/work"
 )
 
-// Every entry point that counts as a user message clears the work's wait,
-// whichever way the work was waiting. They are three separate call sites, so a
-// new one forgetting to say so is exactly the kind of omission this pins down.
+// Every entry point that counts as a user message clears the work's wait. They
+// are three separate call sites, so a new one forgetting to say so is exactly
+// the kind of omission this pins down.
+//
+// The WaitNone half of the table is not filler: it is the case where there is
+// nothing to clear, and it pins that these paths still leave the work active
+// rather than moving it anywhere.
 func TestHandler_UserMessage_ClearsTheWait(t *testing.T) {
-	for _, paused := range []work.WorkWait{work.WaitUser, work.WaitChild} {
+	for _, paused := range []work.WorkWait{work.WaitNone, work.WaitChild} {
 		for _, action := range []struct {
 			name   string
 			method string
@@ -30,11 +34,8 @@ func TestHandler_UserMessage_ClearsTheWait(t *testing.T) {
 			{"permission_response", "chat.permission_response", func(s string) any {
 				return rpc.PermissionResponseParams{SessionID: s, RequestID: "req-1", Choice: "allow"}
 			}, agent.PermissionRequestEvent{RequestID: "req-1", ToolName: "Bash"}},
-			{"question_response", "chat.question_response", func(s string) any {
-				return rpc.QuestionResponseParams{SessionID: s, RequestID: "req-1", Answers: map[string]string{"q": "a"}}
-			}, agent.AskUserQuestionEvent{RequestID: "req-1"}},
 		} {
-			t.Run(string(paused)+"/"+action.name, func(t *testing.T) {
+			t.Run("wait="+string(paused)+"/"+action.name, func(t *testing.T) {
 				env := newTestEnv(t, &mockAgent{})
 				workID, sessionID := startWorkWaiting(t, env, paused)
 				if action.raises != nil {
@@ -61,8 +62,8 @@ func TestHandler_UserMessage_ClearsTheWait(t *testing.T) {
 // here would walk a waiting work into stopped. Reading handleInterrupt cannot
 // tell an omission from a decision; this test can.
 func TestHandler_Interrupt_LeavesTheWaitAlone(t *testing.T) {
-	for _, paused := range []work.WorkWait{work.WaitUser, work.WaitChild} {
-		t.Run(string(paused), func(t *testing.T) {
+	for _, paused := range []work.WorkWait{work.WaitNone, work.WaitChild} {
+		t.Run("wait="+string(paused), func(t *testing.T) {
 			env := newTestEnv(t, &mockAgent{})
 			workID, sessionID := startWorkWaiting(t, env, paused)
 
@@ -83,36 +84,22 @@ func TestHandler_Interrupt_LeavesTheWaitAlone(t *testing.T) {
 // back to Expired instead of leaving the optimistic answer on screen
 // (docs/lifecycle-ui.md §8).
 func TestHandler_Answer_RefusedWhenNobodyIsWaiting(t *testing.T) {
-	for _, tt := range []struct {
-		name   string
-		method string
-		params func(sessionID string) any
-	}{
-		{"permission_response", "chat.permission_response", func(s string) any {
-			return rpc.PermissionResponseParams{SessionID: s, RequestID: "gone", Choice: "allow"}
-		}},
-		{"question_response", "chat.question_response", func(s string) any {
-			return rpc.QuestionResponseParams{SessionID: s, RequestID: "gone", Answers: map[string]string{"q": "a"}}
-		}},
-	} {
-		t.Run(tt.name, func(t *testing.T) {
-			env := newTestEnv(t, &mockAgent{})
-			workID, sessionID := startWorkWaiting(t, env, work.WaitUser)
+	env := newTestEnv(t, &mockAgent{})
+	workID, sessionID := startWorkWaiting(t, env, work.WaitChild)
 
-			resp := env.call(tt.method, tt.params(sessionID))
-			if resp.Error == nil {
-				t.Fatal("answering a prompt nobody is waiting on was accepted")
-			}
-			if !strings.Contains(resp.Error.Message, "no longer waiting") {
-				t.Errorf("error = %q, want the server's own reason", resp.Error.Message)
-			}
-
-			// And the work is still parked: a refused answer handed the agent
-			// nothing, so there is no turn for a resumed work to wait on.
-			requireWorkWait(t, env, workID, work.WaitUser,
-				"a refused answer is not the user handing the session something to go on")
-		})
+	resp := env.call("chat.permission_response",
+		rpc.PermissionResponseParams{SessionID: sessionID, RequestID: "gone", Choice: "allow"})
+	if resp.Error == nil {
+		t.Fatal("answering a prompt nobody is waiting on was accepted")
 	}
+	if !strings.Contains(resp.Error.Message, "no longer waiting") {
+		t.Errorf("error = %q, want the server's own reason", resp.Error.Message)
+	}
+
+	// And the work is still parked: a refused answer handed the agent nothing, so
+	// there is no turn for a resumed work to wait on.
+	requireWorkWait(t, env, workID, work.WaitChild,
+		"a refused answer is not the user handing the session something to go on")
 }
 
 // The same rule for the plain message path: what resumes a work is the agent
@@ -122,7 +109,7 @@ func TestHandler_Answer_RefusedWhenNobodyIsWaiting(t *testing.T) {
 func TestHandler_Message_LeavesTheWaitWhenTheSendFails(t *testing.T) {
 	mock := &mockAgent{}
 	env := newTestEnv(t, mock)
-	workID, sessionID := startWorkWaiting(t, env, work.WaitUser)
+	workID, sessionID := startWorkWaiting(t, env, work.WaitChild)
 
 	// A message with no process behind it starts one, and this one will not
 	// start — an expired login, a provider outage, a broken CLI path.
@@ -134,6 +121,6 @@ func TestHandler_Message_LeavesTheWaitWhenTheSendFails(t *testing.T) {
 		t.Fatal("a send that could not start its agent was reported as success")
 	}
 
-	requireWorkWait(t, env, workID, work.WaitUser,
+	requireWorkWait(t, env, workID, work.WaitChild,
 		"a message that never reached the agent is not the user handing it something to go on")
 }

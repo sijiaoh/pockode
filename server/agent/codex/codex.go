@@ -298,17 +298,6 @@ func (s *appSession) SendPermissionResponse(data agent.PermissionRequestData, ch
 	return nil
 }
 
-// SendQuestionResponse is not applicable for Codex: nothing in this package
-// emits AskUserQuestionEvent, so no answer can ever arrive here.
-//
-// The app-server protocol does have a counterpart (`item/tool/requestUserInput`,
-// marked EXPERIMENTAL in the schema), but wiring it up is a feature of its own
-// rather than part of moving channels; handleRequestUserInput declines it for
-// now.
-func (s *appSession) SendQuestionResponse(data agent.QuestionRequestData, answers map[string]string) error {
-	return nil
-}
-
 // SendInterrupt stops the running turn, or the one about to start.
 //
 // turn/interrupt has to name a turn, and the id only arrives with turn/started —
@@ -551,10 +540,20 @@ func (s *appSession) adoptThread(result json.RawMessage) error {
 func (s *appSession) buildThreadParams() map[string]interface{} {
 	overrides := map[string]interface{}{}
 	if !s.opts.DisableMCP {
+		// The proxy is spawned per thread, so it can be told which session it
+		// speaks for right here (see mcp.Caller). An empty worktree name is the
+		// main worktree, which the proxy assumes when not told.
+		args := []string{"mcp", "--data-dir", s.opts.MCPDir()}
+		if s.opts.SessionID != "" {
+			args = append(args, "--session-id", s.opts.SessionID)
+		}
+		if s.opts.Worktree != "" {
+			args = append(args, "--worktree", s.opts.Worktree)
+		}
 		overrides["mcp_servers"] = map[string]interface{}{
 			"pockode": map[string]interface{}{
 				"command": s.exe,
-				"args":    []string{"mcp", "--data-dir", s.opts.MCPDir()},
+				"args":    args,
 			},
 		}
 	}

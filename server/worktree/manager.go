@@ -2,6 +2,7 @@ package worktree
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -35,20 +36,29 @@ type Manager struct {
 	// sessionChangeListeners are registered on every worktree's session store,
 	// the ones already built and the ones built later.
 	sessionChangeListeners []session.OnChangeListener
+	// questions is the project-wide index of request ids still waiting for an
+	// answer. It is one of the manager's own session listeners rather than
+	// something main wires up: it is what makes LocateQuestions answerable, and
+	// a manager whose index nobody registered would answer "no such question"
+	// about every question there is.
+	questions *questionIndex
 
 	mu        sync.Mutex
 	worktrees map[string]*Worktree
 }
 
 func NewManager(registry *Registry, agents *agent.Registry, dataDir string, budgets session.LeaseBudgets) *Manager {
-	return &Manager{
+	m := &Manager{
 		registry:        registry,
 		agents:          agents,
 		dataDir:         dataDir,
 		leaseBudgets:    budgets,
 		WorktreeWatcher: watch.NewWorktreeWatcher(registry.MainDir()),
 		worktrees:       make(map[string]*Worktree),
+		questions:       newQuestionIndex(),
 	}
+	m.sessionChangeListeners = append(m.sessionChangeListeners, m.questions)
+	return m
 }
 
 // AgentForkSupports returns what every registered agent declares about being
@@ -110,10 +120,59 @@ func (m *Manager) StopSession(worktree, sessionID string) {
 
 // RetireSession implements work.SessionTerminator: a closed work's session may
 // finish what it was saying and then ends. See process.Manager.RetireSession.
+//
+// The process half only touches a worktree that is already loaded, for the
+// reason StopSession gives; the questions half cannot work that way, for the
+// reason WithdrawQuestions gives. A question on a closed work is one the user
+// can never clear, because the surfaces that offer it are gone with the work.
 func (m *Manager) RetireSession(worktree, sessionID string) {
 	if wt, ok := m.loaded(worktree); ok {
 		wt.ProcessManager.RetireSession(sessionID)
 	}
+	m.WithdrawQuestions(worktree, sessionID, agent.ReasonWorkClosed)
+}
+
+// WithdrawQuestions implements work.QuestionWithdrawer: it takes back every
+// question the session is still waiting on, saying why.
+//
+// A worktree that is not loaded is loaded for this, and only for this — but only
+// when the index on disk already says there is something to withdraw, so the
+// ordinary case still costs one file read. That is the opposite of StopSession's
+// rule and has to be: a process cannot exist in an unloaded worktree, while a
+// posted question outlives every process and is just as likely to be sitting in
+// one nobody has opened.
+func (m *Manager) WithdrawQuestions(worktree, sessionID string, reason agent.CancelReason) {
+	turns, err := m.SessionTurns(worktree)
+	if err != nil {
+		slog.Warn("could not read sessions to withdraw a session's questions",
+			"worktree", worktree, "sessionId", sessionID, "reason", reason, "error", err)
+		return
+	}
+	if len(turns[sessionID].Unanswered) == 0 {
+		return
+	}
+
+	wt, err := m.Get(worktree)
+	if err != nil {
+		slog.Warn("could not get worktree to withdraw a session's questions",
+			"worktree", worktree, "sessionId", sessionID, "reason", reason, "error", err)
+		return
+	}
+	defer m.Release(wt)
+
+	wt.ChatClient.WithdrawQuestions(context.Background(), sessionID, reason)
+}
+
+// ResolveQuestions returns the named worktree's question service plus the
+// release func that drops the worktree reference once the call completes. It is
+// how the MCP executor reaches the session a tool call came from: an agent's
+// caller identity names a worktree, and the sessions live per worktree.
+func (m *Manager) ResolveQuestions(name string) (chat.Questions, func(), error) {
+	wt, err := m.Get(name)
+	if err != nil {
+		return nil, nil, fmt.Errorf("get worktree %q for questions: %w", name, err)
+	}
+	return wt.ChatClient, func() { m.Release(wt) }, nil
 }
 
 // DeleteSessions implements work.SessionDeleter: the sessions of a deleted work
@@ -162,12 +221,61 @@ func (m *Manager) SessionTurns(name string) (map[string]session.TurnState, error
 		return turns, nil
 	}
 
-	// The name comes from a stored work item rather than from the registry, so
-	// it is checked before it becomes a path — see SessionUsages.
+	return readTurns(m.dataDir, name)
+}
+
+// readTurns reads one worktree's session index straight off disk.
+//
+// The name comes from a stored work item rather than from the registry, so it
+// is checked before it becomes a path — see SessionUsages.
+func readTurns(dataDir, name string) (map[string]session.TurnState, error) {
 	if name != "" && !filepath.IsLocal(name) {
 		return nil, fmt.Errorf("worktree name %q is not a directory name", name)
 	}
-	return session.ReadTurns(m.dataDirFor(name))
+	return session.ReadTurns(dataDirFor(dataDir, name))
+}
+
+// StartupTurns is a work.TurnSource that answers only from disk, for the one
+// caller that needs one before a Manager exists: work.Engine.RecoverStartup
+// runs before the worktree manager is built, deliberately (see main.go).
+//
+// Reading the file is not a compromise there, it is the whole truth: no process
+// survived the restart, so nothing holds a turn state newer than what was
+// written.
+type StartupTurns struct{ DataDir string }
+
+func (t StartupTurns) SessionTurns(name string) (map[string]session.TurnState, error) {
+	return readTurns(t.DataDir, name)
+}
+
+// ErrSessionNotFound reports that no worktree owns the given session.
+var ErrSessionNotFound = errors.New("session not found in any worktree")
+
+// ResolveSessionWorktree answers which worktree a session lives in. Sessions are
+// stored per worktree and nothing else maps one to the other, so anything holding
+// a bare session id — a caller identity reported over MCP, a record keyed by
+// session — needs this to reach the store that owns it.
+//
+// It goes through SessionTurns, so a loaded worktree answers from its live store
+// and the rest are read off their index on disk: resolving a session must not
+// build every worktree in the project. The scan is over worktrees, not sessions,
+// and only runs when something arrives without a worktree name.
+func (m *Manager) ResolveSessionWorktree(sessionID string) (string, error) {
+	if sessionID == "" {
+		return "", ErrSessionNotFound
+	}
+	for _, info := range m.registry.List() {
+		turns, err := m.SessionTurns(info.Name)
+		if err != nil {
+			// One unreadable worktree must not hide a session another one has.
+			slog.Warn("could not read sessions while resolving worktree", "worktree", info.Name, "error", err)
+			continue
+		}
+		if _, ok := turns[sessionID]; ok {
+			return info.Name, nil
+		}
+	}
+	return "", fmt.Errorf("%w: %s", ErrSessionNotFound, sessionID)
 }
 
 // loaded reports the worktree of that name only if it already exists, without
@@ -219,6 +327,9 @@ func (m *Manager) AddSessionChangeListener(l session.OnChangeListener) {
 }
 
 func (m *Manager) Start() error {
+	// Before the watcher, so that the first thing anything can ask about a
+	// question is answered from disk rather than from an empty map.
+	m.rebuildQuestionIndex()
 	return m.WorktreeWatcher.Start()
 }
 
@@ -340,10 +451,14 @@ func (m *Manager) Shutdown() {
 // agent session state, its history. The main worktree ("") keeps it directly in
 // the data dir; the others get a subdirectory each.
 func (m *Manager) dataDirFor(name string) string {
+	return dataDirFor(m.dataDir, name)
+}
+
+func dataDirFor(dataDir, name string) string {
 	if name == "" {
-		return m.dataDir
+		return dataDir
 	}
-	return filepath.Join(m.dataDir, "worktrees", name)
+	return filepath.Join(dataDir, "worktrees", name)
 }
 
 // SessionUsages implements work.SessionUsageSource, so a work item's detail can
@@ -383,7 +498,7 @@ func (m *Manager) create(name, workDir string) (*Worktree, error) {
 	// The process manager's data dir is this worktree's own (wtDataDir), so agent
 	// session state lands next to the session store. MCP discovery still points at
 	// the main data dir (m.dataDir), the only place server.json is written.
-	processManager := process.NewManager(m.agents, workDir, wtDataDir, m.dataDir, sessionStore, m.leaseBudgets)
+	processManager := process.NewManager(m.agents, name, workDir, wtDataDir, m.dataDir, sessionStore, m.leaseBudgets)
 	processManager.SetMessageListener(chatMessagesWatcher)
 	sessionListWatcher.SetViewingChecker(chatMessagesWatcher)
 	processManager.SetOnStateChange(sessionListWatcher.HandleProcessStateChange)
@@ -398,12 +513,12 @@ func (m *Manager) create(name, workDir string) (*Worktree, error) {
 	}
 
 	chatClient := chat.NewClient(sessionStore, processManager)
-	chatClient.SetBroadcaster(func(sessionID string, event agent.MessageEvent, seq session.HistorySeq, exclude any) {
+	chatClient.SetBroadcaster(func(sessionID string, record agent.EventRecord, seq session.HistorySeq, exclude any) {
 		var n watch.Notifier
 		if exclude != nil {
 			n = exclude.(watch.Notifier)
 		}
-		chatMessagesWatcher.NotifyMessage(sessionID, event, seq, n)
+		chatMessagesWatcher.NotifyRecord(sessionID, record, seq, n)
 	})
 
 	wt := &Worktree{

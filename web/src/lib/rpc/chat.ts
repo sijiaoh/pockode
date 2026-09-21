@@ -5,7 +5,7 @@ import type {
 	MessageParams,
 	MessageResult,
 	PermissionResponseParams,
-	QuestionResponseParams,
+	QuestionAnswerParams,
 } from "../../types/message";
 import { readHistorySeq } from "../messageReducer";
 
@@ -18,10 +18,16 @@ export interface ChatActions {
 	sendMessage: (
 		sessionId: string,
 		content: string,
+		/**
+		 * The posted questions this message answers. The server validates the
+		 * whole set against the session's live list before delivering anything
+		 * and refuses the message outright when any entry is no longer pending —
+		 * see `MessageParams.answering`.
+		 */
+		answering?: QuestionAnswerParams[],
 	) => Promise<HistorySeq | undefined>;
 	interrupt: (sessionId: string) => Promise<void>;
 	permissionResponse: (params: PermissionResponseParams) => Promise<void>;
-	questionResponse: (params: QuestionResponseParams) => Promise<void>;
 }
 
 /**
@@ -47,12 +53,14 @@ export function createChatActions(
 		sendMessage: async (
 			sessionId: string,
 			content: string,
+			answering?: QuestionAnswerParams[],
 		): Promise<HistorySeq | undefined> => {
 			const result = (await requireClient(getAgentStartClient).request(
 				"chat.message",
 				{
 					session_id: sessionId,
 					content,
+					...(answering && answering.length > 0 ? { answering } : {}),
 				} as MessageParams,
 			)) as MessageResult | undefined;
 			// Decoded by the same reader as a seq arriving on a notification, because
@@ -72,10 +80,6 @@ export function createChatActions(
 			params: PermissionResponseParams,
 		): Promise<void> => {
 			await requireClient().request("chat.permission_response", params);
-		},
-
-		questionResponse: async (params: QuestionResponseParams): Promise<void> => {
-			await requireClient().request("chat.question_response", params);
 		},
 	};
 }

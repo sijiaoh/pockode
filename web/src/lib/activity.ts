@@ -2,8 +2,6 @@ import {
 	Circle,
 	CircleCheck,
 	CircleDot,
-	CircleHelp,
-	CirclePause,
 	CircleStop,
 	Clock,
 	Hourglass,
@@ -14,7 +12,7 @@ import type { SessionTurn } from "../types/message";
 import type { WorkListItem, WorkStatus } from "../types/work";
 
 /**
- * The only state any surface paints. Ten leaves, and there is never more than
+ * The only state any surface paints. Eight leaves, and there is never more than
  * one at a time: the layers it is derived from are each exclusive
  * (docs/lifecycle-ui.md §1.1).
  *
@@ -25,9 +23,7 @@ import type { WorkListItem, WorkStatus } from "../types/work";
 export type Activity =
 	| "open"
 	| "running"
-	| "needs_answer"
 	| "needs_permission"
-	| "needs_message"
 	| "background"
 	| "waiting_children"
 	| "idle"
@@ -63,16 +59,19 @@ interface ActivityView {
 /**
  * One glyph and one tone per leaf.
  *
- * Four of these choices carry weight (docs/lifecycle-ui.md §1.1):
+ * Three of these choices carry weight (docs/lifecycle-ui.md §1.1):
  * `running` and `idle` share `CircleDot` because they are the same thing — a
  * live, engine-driven work — differing only in whether a turn is open, so a
- * settling turn does not make a row appear to change identity. The three
- * "needs you" leaves share one hue, which is what makes the attention dot
- * possible, but keep their own glyph because what the user has to *do* differs
- * in each. `background` is deliberately quiet: there is nothing to do and
- * nothing is stuck, and a louder tone would re-create the two-hour spinner this
- * redesign removes. `waiting_children` keeps accent, because it is a structural
- * state read on purpose.
+ * settling turn does not make a row appear to change identity. `background` is
+ * deliberately quiet: there is nothing to do and nothing is stuck, and a louder
+ * tone would re-create the two-hour spinner this redesign removes.
+ * `waiting_children` keeps accent, because it is a structural state read on
+ * purpose.
+ *
+ * `needs_permission` is the only leaf left in the warning hue, and it is the
+ * whole of what an activity can say about the user being waited on. The other
+ * dimension — questions waiting for an answer — is not an activity and is never
+ * folded into one; see {@link needsAttention}.
  */
 export const ACTIVITY_VIEW: Record<Activity, ActivityView> = {
 	open: { Icon: Circle, tone: "muted", label: "Open", ariaLabel: "Open" },
@@ -82,23 +81,11 @@ export const ACTIVITY_VIEW: Record<Activity, ActivityView> = {
 		label: "Running",
 		ariaLabel: "Agent is running",
 	},
-	needs_answer: {
-		Icon: CircleHelp,
-		tone: "warning",
-		label: "Needs answer",
-		ariaLabel: "Waiting for your answer",
-	},
 	needs_permission: {
 		Icon: Lock,
 		tone: "warning",
 		label: "Needs permission",
 		ariaLabel: "Waiting for your permission",
-	},
-	needs_message: {
-		Icon: CirclePause,
-		tone: "warning",
-		label: "Needs input",
-		ariaLabel: "Waiting for your message",
 	},
 	background: {
 		Icon: Hourglass,
@@ -146,20 +133,29 @@ export function normalizeActivity(raw: unknown): Activity {
 }
 
 /**
- * Whether the user is the one being waited on. Exactly the three warning
- * leaves, and the whole of what an attention dot means anywhere in the app
- * (docs/lifecycle-ui.md §4).
+ * Whether the user is the one being waited on, across both dimensions: the one
+ * activity leaf that waits on them, and the questions the session has posted and
+ * nobody has answered (docs/lifecycle-ui.md §4).
+ *
+ * Two dimensions rather than one, because they are genuinely independent — an
+ * agent that posts a question carries on running, so its activity says
+ * `running` while the user still owes it an answer. Folding the question count
+ * into the activity would make a running work claim to be idle.
+ *
+ * They are merged here and only here, for the surfaces that need a single bit:
+ * the attention dot, the left edge of a row, the *Needs you* group. Anywhere a
+ * user can act on one of the two, both are drawn side by side instead — a dot
+ * cannot be aimed at, so it owes only the one bit.
  *
  * `background` and `waiting_children` are deliberately outside it: there is
  * nothing to do, and a dot meaning "something is happening" is a dot the user
  * learns to ignore.
  */
-export function needsUser(activity: Activity): boolean {
-	return (
-		activity === "needs_answer" ||
-		activity === "needs_permission" ||
-		activity === "needs_message"
-	);
+export function needsAttention(
+	activity: Activity,
+	unansweredQuestions = 0,
+): boolean {
+	return unansweredQuestions > 0 || activity === "needs_permission";
 }
 
 /**
@@ -189,15 +185,14 @@ export function isWorkActive(status: WorkStatus): boolean {
  *
  * Why the phase outranks the wait rather than the other way round: a wait is a
  * standing intention, a phase is a fact about this second. An agent that calls
- * `work_needs_input` and then keeps writing for another ten seconds *is*
- * running, and the row should say so; the moment the turn settles the wait takes
- * over. The alternative needs a priority table between two kinds of waiting that
+ * `work_wait` and then keeps writing for another ten seconds *is* running, and
+ * the row should say so; the moment the turn settles the wait takes over. The
+ * alternative needs a priority table between two kinds of waiting that
  * legitimately coexist, and every entry in such a table is an arbitrary choice
  * someone later "fixes".
  *
- * Permission outranks question when both are live: a permission request cannot
- * degrade into a message the way an expired question can, so it is the one whose
- * deadline costs something.
+ * Permission outranks background when both are live: background is the one
+ * nobody can act on, and those are the only two blockers a turn has.
  *
  * The server evaluates this same rule for work rows, which is where a row's
  * `activity` comes from (server/work/activity.go): a work list spans worktrees,
@@ -219,11 +214,9 @@ export function deriveActivity(
 	if (turn?.phase === "blocked") {
 		const kinds = turn.blockers?.map((blocker) => blocker.kind) ?? [];
 		if (kinds.includes("permission")) return "needs_permission";
-		if (kinds.includes("question")) return "needs_answer";
 		return "background";
 	}
 
-	if (work?.wait === "user") return "needs_message";
 	if (work?.wait === "child") return "waiting_children";
 	return "idle";
 }

@@ -91,9 +91,9 @@ segment it was opened from.
 │     Stopped · main · Engineer    2h  │
 │ ⏸ Needs you                      2   │
 │   ◦ Wire the relay handshake     💬⏹ │
-│     Needs answer · main · Eng.   5m  │
+│     Running · 1 to answer · main 5m  │
 │    ◦ Rebuild the project page    💬⏹ │
-│      ↳ Cluster mode · Needs inp. 12m │
+│      ↳ Cluster mode · Needs perm 12m │
 │ ⏵ In progress                    3   │
 │   ...                                │
 │ ○ Not running                    4   │
@@ -140,8 +140,10 @@ is what the archive is.
 > **A row exists for every story, and for every task that needs a person.**
 > Everything else about a task is rolled up into its story's row.
 
-"Needs a person" is `needsUser(activity)` or `status == "stopped"` — the two
-ways a task can be stuck with nobody coming for it. A task that is running,
+"Needs a person" is `needsAttention` — `needs_permission`, or any unanswered
+question ([lifecycle-ui.md §1.4](lifecycle-ui.md#14-the-three-components)) — or
+`status == "stopped"`: the two ways a task can be stuck with nobody coming for
+it. A task that is running,
 idle, open or closed has nobody waiting on it, so it is its story's business and
 is reached through the story.
 
@@ -169,7 +171,7 @@ Inside `Current`, in this order:
 | Group | Contains | Header glyph | The question it answers |
 |---|---|---|---|
 | **Stopped** | `status == stopped` — stories *and* tasks | `CircleStop` error | What was handed back to me? |
-| **Needs you** | `status == active` and `needsUser(activity)` — stories *and* tasks | `CirclePause` warning | What is blocked on me? |
+| **Needs you** | `status == active` and `needsAttention` — stories *and* tasks | `CirclePause` warning | What is waiting on me? |
 | **In progress** | every other `active` story | `CircleDot` accent | What is being handled without me? |
 | **Not running** | `status == open` stories | `Circle` muted | What has never been started? |
 
@@ -330,7 +332,7 @@ story:  line 1:  [glyph]  Title, truncated to one line        [💬]  [⏹]
         line 3:  invalid work: work is already running
 
 task:       line 1:  [glyph]  Title, truncated to one line    [💬]  [⏹]
-            line 2:  ↳ Story name · Needs answer · main · Engineer   1h
+            line 2:  ↳ Story name · Running · 1 to answer · main     1h
 ```
 
 **The row is a card, and a task's card sits a level in.** `bg-th-bg-secondary`
@@ -395,9 +397,11 @@ Tapping the row anywhere else opens the detail. The title is the tap target and
 takes all the space the two controls leave.
 
 The detail is the right landing even for a *Needs you* row, and not a detour on
-the way to the chat: it is the one place the agent's own `wait_reason` is shown
-verbatim (lifecycle-ui.md §6.2), which is what tells the user *what* is being
-asked. The Chat control on line 1 is there for the user who already knows.
+the way to the chat: it is the one place the questions themselves are written out
+([lifecycle-ui.md §6.2](lifecycle-ui.md#62-detail-page)), which is what tells the
+user *what* is being asked, and it carries its own `Answer` button through to the
+chat for the user who has read them. The Chat control on line 1 is there for the
+user who already knows.
 
 Each icon control names its work in its accessible label — `Open chat for
 "<title>"`, `Start "<title>"` — because a screen reader walking a list of rows
@@ -425,7 +429,8 @@ weight, not one tier reaching for legibility the other gives up.
 | # | Slot | When | Tier | Why here |
 |---|---|---|---|---|
 | 1 | `↳ <parent title>` | the row is a task | structure | A task row only exists here because it left its story (§2.2); without this it is a title with no context. The corner arrow is the shape of depth, and it buys about 20px of title width over the words `in:` — but only on screen: the arrow is `aria-hidden`, so an `sr-only` `in` keeps the relationship for a screen reader, which would otherwise hear a bare title indistinguishable from the role and worktree slots beside it. |
-| 2 | Activity label | **every row** | state | Which of the ten leaves this is. |
+| 2 | Activity label | **every row** | state | Which of the eight leaves this is ([lifecycle-ui.md §1.1](lifecycle-ui.md#11-activity)). |
+| 2b | `1 to answer` / `{n} to answer` | `unanswered_questions > 0` | state | The second dimension. It sits against the activity label rather than replacing it, because a work can be `Running` and still owe two answers — that pair is the whole reason the `needs_answer` leaf was deleted ([answering-ui.md](answering-ui.md)). Short because line 2 clips from the right and this slot is near the front of it. |
 | 3 | `WorktreeBadge` | the work's worktree is fixed | attribute | The list is global across worktrees; the badge and its visibility rule are the old row's unchanged, including staying off rows whose worktree can still change. Its hit area is not: see the hit-area note below. |
 | 4 | Role name | the work has a role | attribute | Who is doing it. |
 | 5 | `{n} active` | the row is a story with active children | attribute | The only thing lost by not nesting tasks is "something under here is moving", and this is it — in the same words the detail page's children header uses. |
@@ -455,8 +460,10 @@ saying nothing in half the themes — and the previous slot 1 carried exactly th
 defect, which this fixes as a side effect. The hue stays on the left edge and
 the glyph, which owe only the 3:1 non-text floor.
 
-**The left edge is always 2px and only its hue changes**: warning for any
-`needsUser` leaf, error for `stopped`, `border-th-border` otherwise. One coloured
+**The left edge is always 2px and only its hue changes**: warning when
+`needsAttention` holds — `needs_permission`, or any unanswered question
+([lifecycle-ui.md §1.4](lifecycle-ui.md#14-the-three-components)) — error for
+`stopped`, `border-th-border` otherwise. One coloured
 edge in a column of neutral ones is what reads before a word does; the edge it
 replaces went *transparent* on a neutral row, which on a bordered card reads as a
 card missing a side. The edge and the label do not repeat each other: the edge
@@ -568,7 +575,7 @@ is gone. Children are listed in exactly one place, the story's detail page,
 which already has that section.
 
 **No child-rollup attention dot on a story row either.** It fired when the story
-or any of its tasks satisfied `needsUser`, and both halves are now rows of their
+or any of its tasks satisfied `needsAttention`, and both halves are now rows of their
 own in the group above it: the dot would point at something already on screen.
 The dot on the sidebar's ProjectTab is unaffected and its rule
 (lifecycle-ui.md §4) does not change — it is read when the list is *not* on
@@ -760,7 +767,7 @@ The checks, in the order they would fail, and where each one is now:
 
 | # | Check | Held by |
 |---|---|---|
-| 1 | A task with `needs_answer` is its own row in *Needs you*, and its story is not | `WorkListOverlay.test.tsx` |
+| 1 | A task with an unanswered question is its own row in *Needs you*, and its story is not | `WorkListOverlay.test.tsx` |
 | 2 | A `stopped` story and a `stopped` task are both in *Stopped*, which is the first group, and the control on them is Restart | `WorkListOverlay.test.tsx` — the group and the group order, the row being the same component either way — and `WorkPrimaryAction.test.tsx` for the label itself |
 | 3 | No row renders a chevron or a collapse toggle, and no group heading is a button | `WorkListOverlay.test.tsx`, `WorkRow.test.tsx` |
 | 4 | `work.create` resolving lands on the new work's detail; rejecting leaves the sheet open with the error and does not navigate | `CreateWorkSheet.test.tsx` for the sheet, `WorkListOverlay.test.tsx` and `WorkDetailOverlay.test.tsx` for each caller's wiring |

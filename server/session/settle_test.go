@@ -105,7 +105,7 @@ func TestTurnSettlerIgnoresABlockedTurn(t *testing.T) {
 	settler, _ := newTestSettler(t, settleNeverDelay)
 
 	state := drive(TurnState{}, in(SignalPrompt, 0))
-	settler.Observe("sess-1", ReduceTurn(state, inReq(SignalQuestionRaised, "req-1", 1)))
+	settler.Observe("sess-1", ReduceTurn(state, inReq(SignalPermissionRaised, "req-1", 1)))
 
 	expectWaitingOn(t, settler, "sess-1", "")
 }

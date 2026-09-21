@@ -1,5 +1,5 @@
 import type { Activity } from "../lib/activity";
-import type { TokenUsage } from "./message";
+import type { PendingQuestion, TokenUsage } from "./message";
 
 export type WorkType = "story" | "task";
 
@@ -17,8 +17,14 @@ export type WorkStatus = "open" | "active" | "stopped" | "closed";
  * What an active work is waiting for, as its agent declared it. Absent means it
  * is waiting for nothing. Orthogonal to the status: a waiting work is still
  * being driven, it simply must not be nudged.
+ *
+ * One value, because there is one thing an agent can declare a wait on. It used
+ * to be two: a wait on the *user* was `work_needs_input`, and it is gone — a
+ * question an agent asks is now a question on the session's own unanswered list
+ * (`unanswered_questions`), which is state the user can act on rather than a
+ * sentence on a detail page.
  */
-export type WorkWait = "user" | "child";
+export type WorkWait = "child";
 
 /**
  * One row of the work list, as `work.list.subscribe` sends it: what drawing a
@@ -50,6 +56,14 @@ export interface WorkListItem {
 	activity: Activity;
 	/** What an active work is waiting for; the agent's reason is on the detail. */
 	wait?: WorkWait;
+	/**
+	 * How many questions this work's session is waiting on an answer to — the
+	 * second dimension a row paints beside its activity (docs/project-ui.md §3,
+	 * slot 2b). Only ever non-zero while the work is `active` or `stopped`:
+	 * closing a work withdraws its questions, and an `open` one has no session.
+	 * Absent means none.
+	 */
+	unanswered_questions?: number;
 	session_id?: string;
 	/** Worktree the work runs in (empty/undefined = main). Read-only, captured by backend. */
 	worktree?: string;
@@ -70,12 +84,6 @@ export interface WorkListItem {
 export interface Work extends Omit<WorkListItem, "activity"> {
 	body?: string;
 	current_step?: number;
-	/**
-	 * Why the agent is waiting, in its own words. Free text, shown verbatim on
-	 * the detail page — it is the only place the user can read what the agent
-	 * actually wants.
-	 */
-	wait_reason?: string;
 	created_at: string;
 }
 
@@ -189,6 +197,12 @@ export interface WorkDetailSubscribeResult {
 	/** Derived like the row's, and on the detail for the same reason usage is. */
 	activity: Activity;
 	/**
+	 * The questions this work's session has asked and nobody has answered,
+	 * oldest first. The list rather than a count, because the detail is the one
+	 * surface with room to show what is being asked (docs/answering-ui.md §1).
+	 */
+	pending_questions?: PendingQuestion[];
+	/**
 	 * Every task under this item, and the story above it.
 	 *
 	 * They come with the detail rather than being looked up in the work list,
@@ -206,6 +220,8 @@ export interface WorkDetailChangedNotification {
 	comments: Comment[];
 	usage: WorkUsage;
 	activity: Activity;
+	/** The same field, and the same rule, as on the subscribe result. */
+	pending_questions?: PendingQuestion[];
 	children: WorkListItem[];
 	parent?: WorkListItem;
 }

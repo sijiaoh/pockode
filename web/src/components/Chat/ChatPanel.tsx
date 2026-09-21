@@ -4,6 +4,7 @@ import { useChatMessages } from "../../hooks/useChatMessages";
 import { SKELETON_DELAY_MS, useDelayedFlag } from "../../hooks/useDelayedFlag";
 import { useForkSession } from "../../hooks/useForkSession";
 import { useForkSupport } from "../../hooks/useForkSupport";
+import { takeAnswerIntent } from "../../lib/answerIntent";
 import { inputActions } from "../../lib/inputStore";
 import { useChatUIConfig } from "../../lib/registries/chatUIRegistry";
 import {
@@ -13,9 +14,9 @@ import {
 import { useSessionStore } from "../../lib/sessionStore";
 import { useWSStore } from "../../lib/wsStore";
 import type {
-	AskUserQuestionRequest,
 	HistorySeq,
 	PermissionRequest,
+	QuestionAnswerRecord,
 } from "../../types/message";
 import type { OverlayState, WorkSegment } from "../../types/overlay";
 import { resolveForkAnchor } from "../../utils/forkAnchor";
@@ -30,7 +31,8 @@ import {
 	WorkListOverlay,
 } from "../Project";
 import { SettingsPage } from "../Settings";
-import BlockerStrip from "./BlockerStrip";
+import AnswerSheet from "./AnswerSheet";
+import AttentionStrip from "./AttentionStrip";
 import ChatSkeleton from "./ChatSkeleton";
 import EngineSelector from "./EngineSelector";
 import ForkSessionSheet from "./ForkSessionSheet";
@@ -192,13 +194,11 @@ function ChatPanel({
 		sendUserMessage,
 		interrupt,
 		permissionResponse,
-		questionResponse,
 		setMode,
 		setAgentType,
 		setModel,
 		setEffort,
 		updatePermissionStatus,
-		updateQuestionStatus,
 		resetPrompt,
 	} = useChatMessages({
 		sessionId,
@@ -229,9 +229,7 @@ function ChatPanel({
 	// is between turns and reads what arrives.
 	const promptOwnsInput =
 		turn.phase === "blocked" &&
-		(turn.blockers ?? []).some(
-			(b) => b.kind === "permission" || b.kind === "question",
-		);
+		(turn.blockers ?? []).some((b) => b.kind === "permission");
 
 	const markSessionRead = useWSStore((s) => s.actions.markSessionRead);
 
@@ -316,35 +314,6 @@ function ChatPanel({
 		],
 	);
 
-	const handleQuestionRespond = useCallback(
-		(
-			request: AskUserQuestionRequest,
-			answers: Record<string, string> | null,
-		) => {
-			setPromptError(null);
-			questionResponse({
-				session_id: sessionId,
-				request_id: request.requestId,
-				tool_use_id: request.toolUseId,
-				answers,
-			}).catch((error) => reportPromptFailure(request.requestId, error));
-
-			// Update message state to reflect the response
-			const newStatus = answers === null ? "cancelled" : "answered";
-			updateQuestionStatus(request.requestId, newStatus, answers ?? undefined);
-		},
-		[questionResponse, sessionId, updateQuestionStatus, reportPromptFailure],
-	);
-
-	// Sending clears the card's error: the message it produces is the answer now.
-	const handleSendAsMessage = useCallback(
-		(content: string) => {
-			setPromptError(null);
-			sendUserMessage(content);
-		},
-		[sendUserMessage],
-	);
-
 	const handleInterrupt = useCallback(() => {
 		interrupt();
 	}, [interrupt]);
@@ -413,6 +382,55 @@ function ChatPanel({
 		[forkSession, sessionId, onSelectSession],
 	);
 
+	// Whether the answer sheet is open, and which question it opens on. Held
+	// here because the sheet is a portal answering for the whole session, not for
+	// any one bubble, and because three separate openers reach it
+	// (docs/answering-ui.md §4).
+	//
+	// `null` is closed. `{}` is open with no anchor, which is what the strip
+	// asks for: the sheet then opens on the oldest question.
+	const [answerAnchor, setAnswerAnchor] = useState<{
+		requestId?: string;
+	} | null>(null);
+
+	const handleOpenAnswerSheet = useCallback(() => setAnswerAnchor({}), []);
+	const handleAnswerQuestion = useCallback(
+		(requestId: string) => setAnswerAnchor({ requestId }),
+		[],
+	);
+	const handleCloseAnswerSheet = useCallback(() => setAnswerAnchor(null), []);
+
+	// The sheet belongs to one session's questions, so a switch closes it. During
+	// render rather than in an effect, for the reason `useChatMessages` resets
+	// there: an effect runs after the frame carrying the new session id has been
+	// committed, and that frame would show the previous session's questions under
+	// the new session's chat. The drafts are keyed by session and are untouched.
+	const [sheetSessionId, setSheetSessionId] = useState(sessionId);
+	if (sheetSessionId !== sessionId) {
+		setSheetSessionId(sessionId);
+		setAnswerAnchor(null);
+	}
+
+	// The one-shot intent set by whatever navigated here. Consumed once the
+	// session's history is in, so the sheet does not open over a skeleton and
+	// then have to find its anchor in a transcript that is not there yet. It is
+	// not a URL: a route that opened the sheet would re-open it on every reload
+	// and every share of the link (docs/answering-ui.md §4).
+	useEffect(() => {
+		if (isChatPending) return;
+		const intent = takeAnswerIntent(sessionId);
+		if (intent) setAnswerAnchor({ requestId: intent.requestId });
+	}, [sessionId, isChatPending]);
+
+	const unanswered = turn.unanswered ?? [];
+
+	const handleSendAnswers = useCallback(
+		async (content: string, answering: QuestionAnswerRecord[]) => {
+			await sendUserMessage(content, answering);
+		},
+		[sendUserMessage],
+	);
+
 	// The jump lives with the scroll container; the strip below the list asks for
 	// it rather than reimplementing it.
 	const messageListRef = useRef<MessageListHandle>(null);
@@ -423,7 +441,7 @@ function ChatPanel({
 	const forkAnchor = forkTarget
 		? resolveForkAnchor(messages, forkTarget.messageId, hasMoreHistory)
 		: null;
-	const isSheetOpen = Boolean(forkAnchor);
+	const isSheetOpen = Boolean(forkAnchor) || answerAnchor !== null;
 
 	useEffect(() => {
 		const handleKeyDown = (e: KeyboardEvent) => {
@@ -463,9 +481,8 @@ function ChatPanel({
 					onLoadMoreHistory={loadMoreHistory}
 					isCodex={agentType === "codex"}
 					onPermissionRespond={handlePermissionRespond}
-					onQuestionRespond={handleQuestionRespond}
+					onAnswerQuestion={handleAnswerQuestion}
 					onHintClick={handleSend}
-					onSendAsMessage={handleSendAsMessage}
 					promptError={promptError ?? undefined}
 					onOpenWorkDetail={onOpenWorkDetail}
 					onOpenFile={onOpenFile}
@@ -556,12 +573,13 @@ function ChatPanel({
 		>
 			{!overlay && ChatTopContent && <ChatTopContent sessionId={sessionId} />}
 			{renderContent()}
-			{/* Why the agent is quiet, stated where the transcript ends
+			{/* What needs the user, stated where the transcript ends
 			    (docs/lifecycle-ui.md §2.2). */}
 			{!overlay && !isChatPending && (
-				<BlockerStrip
+				<AttentionStrip
 					turn={turn}
 					onJumpToRequest={handleJumpToRequest}
+					onAnswer={handleOpenAnswerSheet}
 					sendPending={isSendPending}
 				/>
 			)}
@@ -652,6 +670,18 @@ function ChatPanel({
 						handleFork(forkAnchor.anchorSeq, title, forkAnchor.droppedText)
 					}
 					onClose={handleCloseFork}
+				/>
+			)}
+			{/* Mounted under the panel, so a session switch takes it with it. Not
+			    rendered behind an overlay: the overlay has replaced the transcript
+			    the sheet belongs to. */}
+			{!overlay && answerAnchor && (
+				<AnswerSheet
+					sessionId={sessionId}
+					unanswered={unanswered}
+					anchorRequestId={answerAnchor.requestId}
+					onSend={handleSendAnswers}
+					onClose={handleCloseAnswerSheet}
 				/>
 			)}
 			{!isInputBarHidden(overlay) && (

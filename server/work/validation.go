@@ -35,7 +35,7 @@ var (
 // index — must not be one more way to lock a work item out of its own agent.
 
 // ValidateProgress checks that a work item can be moved along by its agent:
-// step_done, work_wait, work_needs_input, stopping, or a liveness sync.
+// step_done, work_wait, stopping, or a liveness sync.
 func ValidateProgress(status WorkStatus) error {
 	switch status {
 	case StatusOpen:

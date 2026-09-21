@@ -15,31 +15,18 @@ import (
 // no idea what to do with, leaving a session that claims to be running with
 // nothing coming to end it.
 func TestAnswer_RefusedWhenTheSessionIsNoLongerWaiting(t *testing.T) {
-	for _, tt := range []struct {
-		name string
-		send func(*Process) error
-	}{
-		{"question", func(p *Process) error {
-			return p.SendQuestionResponse(agent.QuestionRequestData{RequestID: "gone"}, map[string]string{"q": "a"})
-		}},
-		{"permission", func(p *Process) error {
-			return p.SendPermissionResponse(agent.PermissionRequestData{RequestID: "gone"}, agent.PermissionAllow)
-		}},
-	} {
-		t.Run(tt.name, func(t *testing.T) {
-			_, mock, _, proc := startedTurn(t, leaseTestBudgets)
-			sess := mock.session(t, "sess-1")
+	_, mock, _, proc := startedTurn(t, leaseTestBudgets)
+	sess := mock.session(t, "sess-1")
 
-			if err := tt.send(proc); !errors.Is(err, ErrRequestNotPending) {
-				t.Errorf("err = %v, want %v", err, ErrRequestNotPending)
-			}
-			if got := sess.answers.Load(); got != 0 {
-				t.Errorf("the answer reached the CLI %d times, want 0", got)
-			}
-			if turn := proc.turnState(); !turn.Open {
-				t.Error("a refused answer must leave the turn as it was")
-			}
-		})
+	err := proc.SendPermissionResponse(agent.PermissionRequestData{RequestID: "gone"}, agent.PermissionAllow)
+	if !errors.Is(err, ErrRequestNotPending) {
+		t.Errorf("err = %v, want %v", err, ErrRequestNotPending)
+	}
+	if got := sess.answers.Load(); got != 0 {
+		t.Errorf("the answer reached the CLI %d times, want 0", got)
+	}
+	if turn := proc.turnState(); !turn.Open {
+		t.Error("a refused answer must leave the turn as it was")
 	}
 }
 
@@ -49,10 +36,10 @@ func TestAnswer_AcceptedWhileThePromptIsLive(t *testing.T) {
 	_, mock, _, proc := startedTurn(t, leaseTestBudgets)
 	sess := mock.session(t, "sess-1")
 
-	sess.emit(t, agent.AskUserQuestionEvent{RequestID: "req-1"})
+	sess.emit(t, agent.PermissionRequestEvent{RequestID: "req-1", ToolName: "Bash"})
 	waitUntil(t, "the prompt", func() bool { return proc.turnState().AwaitingAnswerTo("req-1") })
 
-	if err := proc.SendQuestionResponse(agent.QuestionRequestData{RequestID: "req-1"}, map[string]string{"q": "a"}); err != nil {
+	if err := proc.SendPermissionResponse(agent.PermissionRequestData{RequestID: "req-1"}, agent.PermissionAllow); err != nil {
 		t.Fatalf("answering a live prompt failed: %v", err)
 	}
 	if got := sess.answers.Load(); got != 1 {
@@ -71,17 +58,15 @@ func TestExpiry_RecordsThePromptsThatDiedWithTheProcess(t *testing.T) {
 	m, mock, store, proc := startedTurn(t, leaseTestBudgets)
 	sess := mock.session(t, "sess-1")
 
-	sess.emit(t, agent.AskUserQuestionEvent{RequestID: "req-1"})
-	sess.emit(t, agent.PermissionRequestEvent{RequestID: "req-2", ToolName: "Bash"})
-	waitUntil(t, "both prompts", func() bool { return len(proc.turnState().Blockers) == 2 })
+	sess.emit(t, agent.PermissionRequestEvent{RequestID: "req-1", ToolName: "Bash"})
+	sess.emit(t, agent.BackgroundWaitEvent{})
+	waitUntil(t, "both blockers", func() bool { return len(proc.turnState().Blockers) == 2 })
 
 	m.Close("sess-1")
 
-	for _, requestID := range []string{"req-1", "req-2"} {
-		waitUntil(t, "the expiry of "+requestID, func() bool {
-			return expiryReasonFor(t, store, requestID) == agent.ReasonProcessEnded
-		})
-	}
+	waitUntil(t, "the expiry of req-1", func() bool {
+		return expiryReasonFor(t, store, "req-1") == agent.ReasonProcessEnded
+	})
 }
 
 // A background wait is not a card: nobody raised it with the user and nobody was
@@ -114,7 +99,7 @@ func TestExpiry_ATimeoutDoesNotLeakOntoTheNextPrompt(t *testing.T) {
 	m, mock, store, proc := startedTurn(t, leaseTestBudgets)
 	sess := mock.session(t, "sess-1")
 
-	sess.emit(t, agent.AskUserQuestionEvent{RequestID: "first"})
+	sess.emit(t, agent.PermissionRequestEvent{RequestID: "first", ToolName: "Bash"})
 	waitUntil(t, "the first prompt", func() bool { return proc.turnState().AwaitingAnswerTo("first") })
 
 	m.reapLeasesAsOf(pastBudget(leaseTestBudgets.Answer))
@@ -123,7 +108,7 @@ func TestExpiry_ATimeoutDoesNotLeakOntoTheNextPrompt(t *testing.T) {
 	sess.emit(t, agent.RequestCancelledEvent{RequestID: "first"})
 	waitUntil(t, "the withdrawal", func() bool { return !proc.turnState().AwaitingAnswerTo("first") })
 
-	sess.emit(t, agent.AskUserQuestionEvent{RequestID: "second"})
+	sess.emit(t, agent.PermissionRequestEvent{RequestID: "second", ToolName: "Bash"})
 	waitUntil(t, "the second prompt", func() bool { return proc.turnState().AwaitingAnswerTo("second") })
 
 	m.Close("sess-1")
@@ -165,7 +150,7 @@ func TestExpiry_IsAnnouncedAfterTheEventThatCausedIt(t *testing.T) {
 	m.SetMessageListener(listener)
 	sess := mock.session(t, "sess-1")
 
-	sess.emit(t, agent.AskUserQuestionEvent{RequestID: "req-1"})
+	sess.emit(t, agent.PermissionRequestEvent{RequestID: "req-1", ToolName: "Bash"})
 	waitUntil(t, "the prompt", func() bool { return proc.turnState().AwaitingAnswerTo("req-1") })
 
 	sess.emit(t, agent.InterruptedEvent{})

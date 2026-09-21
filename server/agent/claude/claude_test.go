@@ -2,7 +2,6 @@ package claude
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"io"
 	"log/slog"
@@ -17,6 +16,7 @@ import (
 
 	"github.com/pockode/server/agent"
 	"github.com/pockode/server/attachments"
+	"github.com/pockode/server/session"
 )
 
 // parseTestLine mirrors streamOutput's decode-then-parse path so tests can feed
@@ -26,16 +26,27 @@ func parseTestLine(log *slog.Logger, line []byte, pendingRequests *sync.Map) []a
 }
 
 func parseTestLineWithDecline(log *slog.Logger, line []byte, pendingRequests *sync.Map, decline declineFunc) []agent.AgentEvent {
-	return parseTestLineFull(log, line, pendingRequests, &backgroundTaskTracker{}, decline)
+	return parseTestLineFull(log, line, pendingRequests, &backgroundTaskTracker{}, testRefusals(decline, nil))
+}
+
+// testRefusals fills in whichever half a test does not care about.
+func testRefusals(decline declineFunc, denyTool denyToolFunc) controlRefusals {
+	if decline == nil {
+		decline = func(string, string) {}
+	}
+	if denyTool == nil {
+		denyTool = func(string, string, string) {}
+	}
+	return controlRefusals{decline: decline, denyTool: denyTool}
 }
 
 // parseTestLineWithTracker feeds lines through a caller-owned background task
 // tracker, so a test can replay a whole sequence against one CLI process.
 func parseTestLineWithTracker(log *slog.Logger, line []byte, backgroundTasks *backgroundTaskTracker) []agent.AgentEvent {
-	return parseTestLineFull(log, line, &sync.Map{}, backgroundTasks, func(string, string) {})
+	return parseTestLineFull(log, line, &sync.Map{}, backgroundTasks, testRefusals(nil, nil))
 }
 
-func parseTestLineFull(log *slog.Logger, line []byte, pendingRequests *sync.Map, backgroundTasks *backgroundTaskTracker, decline declineFunc) []agent.AgentEvent {
+func parseTestLineFull(log *slog.Logger, line []byte, pendingRequests *sync.Map, backgroundTasks *backgroundTaskTracker, refusals controlRefusals) []agent.AgentEvent {
 	if len(line) == 0 {
 		return nil
 	}
@@ -43,7 +54,7 @@ func parseTestLineFull(log *slog.Logger, line []byte, pendingRequests *sync.Map,
 	if err := json.Unmarshal(line, &event); err != nil {
 		return []agent.AgentEvent{agent.TextEvent{Content: string(line)}}
 	}
-	return parseLine(log, line, event, pendingRequests, backgroundTasks, decline, attachments.Store{})
+	return parseLine(log, line, event, pendingRequests, backgroundTasks, refusals, attachments.Store{})
 }
 
 // observeLine decodes a raw line and forwards it to observe (test helper).
@@ -332,20 +343,11 @@ func TestParseLine(t *testing.T) {
 			}},
 		},
 		{
-			name:  "control_request AskUserQuestion tool",
-			input: `{"type":"control_request","request_id":"req-q-123","request":{"subtype":"can_use_tool","tool_name":"AskUserQuestion","tool_use_id":"toolu_q_abc","input":{"questions":[{"question":"Which library?","header":"Library","options":[{"label":"A","description":"Option A"}],"multiSelect":false}]}}}`,
-			expected: []agent.AgentEvent{agent.AskUserQuestionEvent{
-				RequestID: "req-q-123",
-				ToolUseID: "toolu_q_abc",
-				Questions: []agent.AskUserQuestion{
-					{
-						Question:    "Which library?",
-						Header:      "Library",
-						Options:     []agent.QuestionOption{{Label: "A", Description: "Option A"}},
-						MultiSelect: false,
-					},
-				},
-			}},
+			// Never surfaced as a question: the CLI's own ask-the-user tool does
+			// not reach a Pockode user, so it is refused and the user is told.
+			name:     "control_request AskUserQuestion tool",
+			input:    `{"type":"control_request","request_id":"req-q-123","request":{"subtype":"can_use_tool","tool_name":"AskUserQuestion","tool_use_id":"toolu_q_abc","input":{"questions":[{"question":"Which library?","header":"Library","options":[{"label":"A","description":"Option A"}],"multiSelect":false}]}}}`,
+			expected: []agent.AgentEvent{agent.CLIQuestionRefusedWarning("Claude")},
 		},
 		{
 			name:     "system init event with session_id is filtered",
@@ -431,31 +433,6 @@ func agentEventEqual(a, b agent.AgentEvent) bool {
 	case agent.RequestCancelledEvent:
 		bv, ok := b.(agent.RequestCancelledEvent)
 		return ok && av.RequestID == bv.RequestID
-	case agent.AskUserQuestionEvent:
-		bv, ok := b.(agent.AskUserQuestionEvent)
-		if !ok || av.RequestID != bv.RequestID || av.ToolUseID != bv.ToolUseID {
-			return false
-		}
-		if len(av.Questions) != len(bv.Questions) {
-			return false
-		}
-		for i := range av.Questions {
-			if av.Questions[i].Question != bv.Questions[i].Question ||
-				av.Questions[i].Header != bv.Questions[i].Header ||
-				av.Questions[i].MultiSelect != bv.Questions[i].MultiSelect {
-				return false
-			}
-			if len(av.Questions[i].Options) != len(bv.Questions[i].Options) {
-				return false
-			}
-			for j := range av.Questions[i].Options {
-				if av.Questions[i].Options[j].Label != bv.Questions[i].Options[j].Label ||
-					av.Questions[i].Options[j].Description != bv.Questions[i].Options[j].Description {
-					return false
-				}
-			}
-		}
-		return true
 	case agent.SystemEvent:
 		bv, ok := b.(agent.SystemEvent)
 		return ok && av.Content == bv.Content
@@ -526,34 +503,58 @@ func TestParseLine_FailedFirstTurnLeavesSessionSwitchable(t *testing.T) {
 	}
 }
 
-func TestParseLine_AskUserQuestionStoresPendingInput(t *testing.T) {
-	pendingRequests := &sync.Map{}
+// buildArgs already keeps AskUserQuestion out of the model's hands, so this
+// covers the CLI that stops honouring that flag: the question is refused where
+// the CLI waits for it, with the one refusal text both CLIs use, and the user
+// gets a record of a question they were never shown.
+//
+// The deny must not interrupt — see cliSession.denyTool for what the CLI does
+// with the message otherwise — and it must name the tool_use_id, which is how
+// the CLI matches the refusal to the call.
+func TestParseLine_AskUserQuestionIsRefusedRatherThanAsked(t *testing.T) {
 	input := `{"type":"control_request","request_id":"req-q-store","request":{"subtype":"can_use_tool","tool_name":"AskUserQuestion","tool_use_id":"toolu_q","input":{"questions":[{"question":"q?","header":"H","options":[{"label":"a","description":"d"}],"multiSelect":false}]}}}`
 
-	results := parseTestLine(testLogger(), []byte(input), pendingRequests)
-	if len(results) != 1 {
-		t.Fatalf("expected 1 event, got %d", len(results))
-	}
-	if _, ok := results[0].(agent.AskUserQuestionEvent); !ok {
-		t.Fatalf("expected AskUserQuestionEvent, got %T", results[0])
-	}
+	var gotRequestID, gotToolUseID, gotMessage string
+	var denials int
+	refusals := testRefusals(nil, func(requestID, toolUseID, message string) {
+		denials++
+		gotRequestID, gotToolUseID, gotMessage = requestID, toolUseID, message
+	})
 
-	stored, ok := pendingRequests.Load("req-q-store")
-	if !ok {
-		t.Fatal("expected pending input to be stored")
+	results := parseTestLineFull(testLogger(), []byte(input), &sync.Map{}, &backgroundTaskTracker{}, refusals)
+
+	if denials != 1 || gotRequestID != "req-q-store" || gotToolUseID != "toolu_q" {
+		t.Fatalf("denials = %d on request %q / tool use %q, want one on req-q-store / toolu_q",
+			denials, gotRequestID, gotToolUseID)
 	}
-	marker, ok := stored.(pendingQuestionMarker)
-	if !ok {
-		t.Fatalf("expected pendingQuestionMarker, got %T", stored)
+	if gotMessage != agent.CLIQuestionRefusal {
+		t.Errorf("deny message = %q, want the shared refusal text", gotMessage)
 	}
-	var parsed struct {
-		Questions []agent.AskUserQuestion `json:"questions"`
+	if len(results) != 1 {
+		t.Fatalf("expected one event, got %+v", results)
 	}
-	if err := json.Unmarshal(marker.Input, &parsed); err != nil {
-		t.Fatalf("stored input is not valid JSON: %v", err)
+	warning, ok := results[0].(agent.WarningEvent)
+	if !ok || warning.Code != agent.CLIQuestionRefusedCode {
+		t.Fatalf("expected the user to be warned, got %#v", results[0])
 	}
-	if len(parsed.Questions) != 1 || parsed.Questions[0].Question != "q?" {
-		t.Errorf("stored input does not preserve questions: %+v", parsed.Questions)
+}
+
+// The shape the CLI is sent, rather than the fact that something was sent.
+// interrupt is what decides whether the refusal text survives at all.
+func TestToolDenial_DoesNotInterruptTheTurn(t *testing.T) {
+	content := toolDenial("toolu_q", agent.CLIQuestionRefusal)
+	if content.Behavior != "deny" {
+		t.Errorf("behavior = %q, want deny", content.Behavior)
+	}
+	if content.Interrupt {
+		t.Error("the deny interrupts the turn; the CLI then replaces the message with its own and aborts")
+	}
+	data, err := json.Marshal(content)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if strings.Contains(string(data), "interrupt") {
+		t.Errorf("the response carries an interrupt field: %s", data)
 	}
 }
 
@@ -589,13 +590,6 @@ func TestParseLine_UnservableControlRequestIsDeclined(t *testing.T) {
 			name:  "request whose body is not an object",
 			input: `{"type":"control_request","request_id":"req-broken","request":"nonsense"}`,
 			want:  "req-broken",
-		},
-		{
-			// The one shape that reaches here through can_use_tool: a question
-			// whose input the CLI has restructured.
-			name:  "AskUserQuestion with unreadable input",
-			input: `{"type":"control_request","request_id":"req-q","request":{"subtype":"can_use_tool","tool_name":"AskUserQuestion","input":{"questions":"not-a-list"}}}`,
-			want:  "req-q",
 		},
 	}
 
@@ -670,20 +664,19 @@ func TestSession_DeclineControlRequest(t *testing.T) {
 	}
 }
 
-func TestParseLine_ControlCancelRemovesPendingQuestion(t *testing.T) {
-	pendingRequests := &sync.Map{}
-	pendingRequests.Store("req-cancel", pendingQuestionMarker{Input: json.RawMessage(`{"questions":[]}`)})
-
-	results := parseTestLine(testLogger(), []byte(`{"type":"control_cancel_request","request_id":"req-cancel"}`), pendingRequests)
+// A cancel from the CLI is a withdrawal of whatever it had open, and the only
+// thing it can still have open is a permission request.
+func TestParseLine_ControlCancelWithdrawsTheRequest(t *testing.T) {
+	results := parseTestLine(testLogger(), []byte(`{"type":"control_cancel_request","request_id":"req-cancel"}`), &sync.Map{})
 	if len(results) != 1 {
 		t.Fatalf("expected 1 event, got %d", len(results))
 	}
-	if _, ok := results[0].(agent.RequestCancelledEvent); !ok {
+	cancelled, ok := results[0].(agent.RequestCancelledEvent)
+	if !ok {
 		t.Fatalf("expected RequestCancelledEvent, got %T", results[0])
 	}
-
-	if _, ok := pendingRequests.Load("req-cancel"); ok {
-		t.Error("expected pending question entry to be deleted after cancel")
+	if cancelled.RequestID != "req-cancel" {
+		t.Errorf("request id = %q, want req-cancel", cancelled.RequestID)
 	}
 }
 
@@ -1170,171 +1163,6 @@ func TestSession_SendMessage(t *testing.T) {
 	}
 }
 
-func TestSession_SendQuestionResponse(t *testing.T) {
-	var buf bytes.Buffer
-	pending := &sync.Map{}
-	originalInput := json.RawMessage(`{"questions":[{"question":"Which library?","header":"Library","options":[{"label":"date-fns","description":"d"}],"multiSelect":false}]}`)
-	pending.Store("req-q-456", pendingQuestionMarker{Input: originalInput})
-
-	sess := &cliSession{
-		log:             testLogger(),
-		stdin:           nopWriteCloser{&buf},
-		pendingRequests: pending,
-	}
-
-	data := agent.QuestionRequestData{
-		RequestID: "req-q-456",
-		ToolUseID: "toolu_q",
-	}
-	answers := map[string]string{
-		"Which library?": "date-fns",
-		"Which format?":  "Other: custom",
-	}
-
-	err := sess.SendQuestionResponse(data, answers)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	var response controlResponse
-	if err := json.Unmarshal(buf.Bytes(), &response); err != nil {
-		t.Fatalf("failed to unmarshal response: %v", err)
-	}
-	if response.Response.RequestID != "req-q-456" {
-		t.Errorf("expected request_id 'req-q-456', got %q", response.Response.RequestID)
-	}
-	if response.Response.Response.Behavior != "allow" {
-		t.Errorf("expected behavior 'allow', got %q", response.Response.Response.Behavior)
-	}
-
-	var updatedInput struct {
-		Questions []agent.AskUserQuestion `json:"questions"`
-		Answers   map[string]string       `json:"answers"`
-	}
-	if err := json.Unmarshal(response.Response.Response.UpdatedInput, &updatedInput); err != nil {
-		t.Fatalf("failed to unmarshal updatedInput: %v", err)
-	}
-	if updatedInput.Answers["Which library?"] != "date-fns" {
-		t.Errorf("expected answer 'date-fns', got %q", updatedInput.Answers["Which library?"])
-	}
-	// The SDK requires the original `questions` field to remain in updatedInput.
-	if len(updatedInput.Questions) != 1 || updatedInput.Questions[0].Question != "Which library?" {
-		t.Errorf("expected questions to be preserved, got %+v", updatedInput.Questions)
-	}
-
-	// Pending entry should be consumed so a duplicate response doesn't echo it again.
-	if _, ok := pending.Load("req-q-456"); ok {
-		t.Error("expected pending question entry to be removed after response")
-	}
-}
-
-// Claude may send `"input": null` (Unmarshal into our struct succeeds with
-// nil Questions). The raw `null` bytes get stored in the marker and must not
-// panic the merge step.
-func TestSession_SendQuestionResponse_NullInput(t *testing.T) {
-	var buf bytes.Buffer
-	pending := &sync.Map{}
-	pending.Store("req-q-null", pendingQuestionMarker{Input: json.RawMessage(`null`)})
-
-	sess := &cliSession{
-		log:             testLogger(),
-		stdin:           nopWriteCloser{&buf},
-		pendingRequests: pending,
-	}
-
-	err := sess.SendQuestionResponse(agent.QuestionRequestData{
-		RequestID: "req-q-null",
-		ToolUseID: "toolu_q",
-	}, map[string]string{"q": "a"})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	var response controlResponse
-	if err := json.Unmarshal(buf.Bytes(), &response); err != nil {
-		t.Fatalf("failed to unmarshal response: %v", err)
-	}
-	var updatedInput map[string]any
-	if err := json.Unmarshal(response.Response.Response.UpdatedInput, &updatedInput); err != nil {
-		t.Fatalf("failed to unmarshal updatedInput: %v", err)
-	}
-	if _, ok := updatedInput["answers"]; !ok {
-		t.Error("expected answers field present after JSON null input")
-	}
-}
-
-func TestSession_SendQuestionResponse_NoPendingInput(t *testing.T) {
-	var buf bytes.Buffer
-	sess := &cliSession{
-		log:             testLogger(),
-		stdin:           nopWriteCloser{&buf},
-		pendingRequests: &sync.Map{},
-	}
-
-	data := agent.QuestionRequestData{
-		RequestID: "req-q-orphan",
-		ToolUseID: "toolu_q",
-	}
-	answers := map[string]string{"q": "a"}
-
-	if err := sess.SendQuestionResponse(data, answers); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	var response controlResponse
-	if err := json.Unmarshal(buf.Bytes(), &response); err != nil {
-		t.Fatalf("failed to unmarshal response: %v", err)
-	}
-	if response.Response.Response.Behavior != "allow" {
-		t.Errorf("expected behavior 'allow', got %q", response.Response.Response.Behavior)
-	}
-	var updatedInput map[string]any
-	if err := json.Unmarshal(response.Response.Response.UpdatedInput, &updatedInput); err != nil {
-		t.Fatalf("failed to unmarshal updatedInput: %v", err)
-	}
-	if _, ok := updatedInput["answers"]; !ok {
-		t.Error("expected answers field present even without pending input")
-	}
-}
-
-func TestSession_SendQuestionResponse_Cancel(t *testing.T) {
-	var buf bytes.Buffer
-	sess := &cliSession{
-		log:             testLogger(),
-		stdin:           nopWriteCloser{&buf},
-		pendingRequests: &sync.Map{},
-	}
-
-	data := agent.QuestionRequestData{
-		RequestID: "req-q-cancel",
-		ToolUseID: "toolu_q_cancel",
-	}
-	err := sess.SendQuestionResponse(data, nil)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	var response controlResponse
-	if err := json.Unmarshal(buf.Bytes(), &response); err != nil {
-		t.Fatalf("failed to unmarshal response: %v", err)
-	}
-	if response.Response.RequestID != "req-q-cancel" {
-		t.Errorf("expected request_id 'req-q-cancel', got %q", response.Response.RequestID)
-	}
-	if response.Response.Response.Behavior != "deny" {
-		t.Errorf("expected behavior 'deny', got %q", response.Response.Response.Behavior)
-	}
-	if response.Response.Response.ToolUseID != "toolu_q_cancel" {
-		t.Errorf("expected toolUseID 'toolu_q_cancel', got %q", response.Response.Response.ToolUseID)
-	}
-	if response.Response.Response.UpdatedInput != nil {
-		t.Error("expected updatedInput to be nil for cancel")
-	}
-	if !response.Response.Response.Interrupt {
-		t.Error("expected interrupt to be true for cancel")
-	}
-}
-
 func TestExtractEventsFromText(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -1442,9 +1270,8 @@ func TestExtractEventsFromText(t *testing.T) {
 	}
 }
 
-// readMCPDataDir parses an mcp-config.json and returns the pockode server's
-// --data-dir argument.
-func readMCPDataDir(t *testing.T, path string) string {
+// readMCPArgs parses an mcp-config.json and returns the pockode proxy's args.
+func readMCPArgs(t *testing.T, path string) []string {
 	t.Helper()
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -1460,62 +1287,88 @@ func readMCPDataDir(t *testing.T, path string) string {
 	if err := json.Unmarshal(data, &cfg); err != nil {
 		t.Fatalf("parse mcp-config: %v", err)
 	}
-	args := cfg.McpServers.Pockode.Args
-	for i, a := range args {
-		if a == "--data-dir" && i+1 < len(args) {
-			return args[i+1]
-		}
-	}
-	t.Fatalf("no --data-dir in mcp-config args %v", args)
-	return ""
+	return cfg.McpServers.Pockode.Args
 }
 
-func TestEnsureMCPConfig_PointsAtGivenDir(t *testing.T) {
-	dir := t.TempDir()
-	path, err := ensureMCPConfig(dir)
-	if err != nil {
-		t.Fatalf("ensureMCPConfig: %v", err)
-	}
-	if got := filepath.Dir(path); got != dir {
-		t.Errorf("mcp-config written to %s, want under %s", path, dir)
-	}
-	if got := readMCPDataDir(t, path); got != dir {
-		t.Errorf("--data-dir = %s, want %s", got, dir)
-	}
-}
+// TestWriteMCPConfig_CarriesIdentity locks both halves of what the config says:
+// where the server is, and who is calling it. The dirs are deliberately split
+// the way a named worktree splits them — session state in the worktree's data
+// dir, server.json in the main one — because pointing the proxy at the worktree
+// dir would leave the agent with no work_* tools at all.
+func TestWriteMCPConfig_CarriesIdentity(t *testing.T) {
+	dataDir := t.TempDir()
+	serverDir := t.TempDir()
 
-// TestStart_MCPConfigUsesServerDir locks the worktree fix: for a named worktree,
-// DataDir (session state) and MCPServerDir (server.json) differ, and the MCP
-// proxy must be pointed at the server dir — the worktree DataDir has no
-// server.json. ensureMCPConfig runs before the process spawns, so this holds
-// whether or not the claude binary is installed.
-func TestStart_MCPConfigUsesServerDir(t *testing.T) {
-	sessionDir := t.TempDir() // per-worktree data dir
-	serverDir := t.TempDir()  // main data dir holding server.json
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	sess, _ := New().Start(ctx, agent.StartOptions{
-		WorkDir:      t.TempDir(),
-		DataDir:      sessionDir,
+	path, remove, err := writeMCPConfig(agent.StartOptions{
+		DataDir:      dataDir,
 		MCPServerDir: serverDir,
 		SessionID:    "s1",
+		Worktree:     "feature-x",
 	})
-	if sess != nil {
-		sess.Close()
+	if err != nil {
+		t.Fatalf("writeMCPConfig: %v", err)
 	}
 
-	// The MCP config must land in the server dir, pointing at the server dir.
-	serverCfg := filepath.Join(serverDir, "mcp-config.json")
-	if _, err := os.Stat(serverCfg); err != nil {
-		t.Fatalf("mcp-config not written to server dir: %v", err)
+	if want := sessionDir(dataDir, "s1"); filepath.Dir(path) != want {
+		t.Errorf("mcp-config written to %s, want a file in %s", path, want)
 	}
-	if got := readMCPDataDir(t, serverCfg); got != serverDir {
-		t.Errorf("--data-dir = %s, want server dir %s", got, serverDir)
+	args := readMCPArgs(t, path)
+	for _, tc := range [][2]string{
+		{"--data-dir", serverDir},
+		{"--session-id", "s1"},
+		{"--worktree", "feature-x"},
+	} {
+		if !hasFlagValue(args, tc[0], tc[1]) {
+			t.Errorf("args %v missing %s %s", args, tc[0], tc[1])
+		}
 	}
-	// It must NOT be written to the per-worktree session dir.
-	if _, err := os.Stat(filepath.Join(sessionDir, "mcp-config.json")); err == nil {
-		t.Errorf("mcp-config unexpectedly written to session dir %s", sessionDir)
+
+	// The config is only good for the process it was written for, so the spawn
+	// takes it away again.
+	remove()
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Errorf("mcp-config still present after remove: %v", err)
+	}
+}
+
+// TestWriteMCPConfig_MainWorktreeIsUnnamed: the main worktree has no name, and
+// passing an empty --worktree would make the proxy's flags depend on which
+// worktree it happens to be in.
+func TestWriteMCPConfig_MainWorktreeIsUnnamed(t *testing.T) {
+	path, _, err := writeMCPConfig(agent.StartOptions{DataDir: t.TempDir(), SessionID: "s1"})
+	if err != nil {
+		t.Fatalf("writeMCPConfig: %v", err)
+	}
+	for _, arg := range readMCPArgs(t, path) {
+		if arg == "--worktree" {
+			t.Errorf("main worktree session passed --worktree: %v", readMCPArgs(t, path))
+		}
+	}
+}
+
+// TestWriteMCPConfig_PerProcessRun: a replaced process cleans up while its
+// successor is already starting, so two runs of the same session must not share
+// a file name — otherwise that cleanup deletes the config the successor's CLI
+// has not read yet, and it comes up with no work_* tools.
+func TestWriteMCPConfig_PerProcessRun(t *testing.T) {
+	dataDir := t.TempDir()
+	opts := agent.StartOptions{DataDir: dataDir, SessionID: "s1"}
+
+	first, removeFirst, err := writeMCPConfig(opts)
+	if err != nil {
+		t.Fatalf("writeMCPConfig first run: %v", err)
+	}
+	second, _, err := writeMCPConfig(opts)
+	if err != nil {
+		t.Fatalf("writeMCPConfig second run: %v", err)
+	}
+	if first == second {
+		t.Fatalf("both runs of the session wrote %s", first)
+	}
+
+	removeFirst()
+	if _, err := os.Stat(second); err != nil {
+		t.Errorf("the replaced process removed its successor's config: %v", err)
 	}
 }
 
@@ -1527,6 +1380,17 @@ func hasFlagValue(args []string, flag, value string) bool {
 		}
 	}
 	return false
+}
+
+// The tool is disabled on every launch, not just the default mode: yolo turns
+// permission prompts off, and a question is not a permission prompt.
+func TestBuildArgs_DisablesTheCLIsOwnQuestionTool(t *testing.T) {
+	for _, mode := range []session.Mode{session.ModeDefault, session.ModeYolo} {
+		args := buildArgs(agent.StartOptions{Mode: mode}, claudeLaunch{})
+		if !hasFlagValue(args, "--disallowedTools", "AskUserQuestion") {
+			t.Errorf("mode %q: expected --disallowedTools AskUserQuestion in %v", mode, args)
+		}
+	}
 }
 
 func TestBuildArgs_ModelAndEffort(t *testing.T) {

@@ -34,9 +34,6 @@ func (s *idleSession) SendMessage(string) error        { return nil }
 func (s *idleSession) SendPermissionResponse(agent.PermissionRequestData, agent.PermissionChoice) error {
 	return nil
 }
-func (s *idleSession) SendQuestionResponse(agent.QuestionRequestData, map[string]string) error {
-	return nil
-}
 func (s *idleSession) SendInterrupt() error { return nil }
 func (s *idleSession) Close()               { close(s.events) }
 
@@ -63,7 +60,7 @@ func newStarterEnv(t *testing.T, defaults settings.Settings, seed ...agentrole.A
 	agents := agent.NewRegistry()
 	agents.Register(session.AgentTypeClaude, idleAgent{})
 	agents.Register(session.AgentTypeCodex, idleAgent{})
-	pm := process.NewManager(agents, t.TempDir(), dataDir, "", sessionStore, session.LeaseBudgets{Idle: time.Minute})
+	pm := process.NewManager(agents, "", t.TempDir(), dataDir, "", sessionStore, session.LeaseBudgets{Idle: time.Minute})
 	t.Cleanup(pm.Shutdown)
 
 	wt := &Worktree{

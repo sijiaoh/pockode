@@ -5,7 +5,7 @@ import {
 	ACTIVITY_VIEW,
 	type Activity,
 	deriveActivity,
-	needsUser,
+	needsAttention,
 	sessionActivity,
 } from "./activity";
 
@@ -34,8 +34,8 @@ describe("deriveActivity", () => {
 	it("draws a session with no work from its turn alone", () => {
 		expect(deriveActivity(undefined, turn("running"))).toBe("running");
 		expect(deriveActivity(undefined, turn("idle"))).toBe("idle");
-		expect(deriveActivity(undefined, turn("blocked", ["question"]))).toBe(
-			"needs_answer",
+		expect(deriveActivity(undefined, turn("blocked", ["permission"]))).toBe(
+			"needs_permission",
 		);
 	});
 });
@@ -55,40 +55,46 @@ describe("sessionActivity", () => {
 	// conversation, and it is what tells the user a session they are not looking
 	// at is waiting on them.
 	it("shows an active work's wait", () => {
-		expect(sessionActivity(turn("idle"), work("active", "user"))).toBe(
-			"needs_message",
-		);
 		expect(sessionActivity(turn("idle"), work("active", "child"))).toBe(
 			"waiting_children",
 		);
 	});
 
 	it("draws a session with no work from its turn alone", () => {
-		expect(sessionActivity(turn("blocked", ["question"]), undefined)).toBe(
-			"needs_answer",
+		expect(sessionActivity(turn("blocked", ["permission"]), undefined)).toBe(
+			"needs_permission",
 		);
 	});
 });
 
-describe("needsUser", () => {
+describe("needsAttention", () => {
 	// A dot that means "something is happening" is a dot the user learns to
 	// ignore, which is what made the old needs-input dot worthless.
-	it("is exactly the three leaves the user can clear", () => {
-		const flagged = (Object.keys(ACTIVITY_VIEW) as Activity[]).filter(
-			needsUser,
+	it("is exactly the one leaf the user can clear", () => {
+		const flagged = (Object.keys(ACTIVITY_VIEW) as Activity[]).filter((a) =>
+			needsAttention(a),
 		);
-		expect(flagged.sort()).toEqual([
-			"needs_answer",
-			"needs_message",
-			"needs_permission",
-		]);
+		expect(flagged).toEqual(["needs_permission"]);
 	});
 
-	it("keeps the warning hue and the predicate in step", () => {
+	it("keeps the warning hue and the activity half of the predicate in step", () => {
 		for (const activity of Object.keys(ACTIVITY_VIEW) as Activity[]) {
 			expect(ACTIVITY_VIEW[activity].tone === "warning").toBe(
-				needsUser(activity),
+				needsAttention(activity),
 			);
 		}
+	});
+
+	// The second dimension is independent of the first, which is the whole
+	// reason it exists: an agent that posts a question carries on running.
+	it("is true for an unanswered question whatever the activity says", () => {
+		for (const activity of Object.keys(ACTIVITY_VIEW) as Activity[]) {
+			expect(needsAttention(activity, 1)).toBe(true);
+		}
+	});
+
+	it("reads no questions as no questions", () => {
+		expect(needsAttention("running", 0)).toBe(false);
+		expect(needsAttention("running")).toBe(false);
 	});
 });

@@ -58,7 +58,7 @@ func newBackgroundLossStore(opts agent.StartOptions) backgroundLossStore {
 	if opts.SessionID == "" || opts.DataDir == "" {
 		return backgroundLossStore{}
 	}
-	return backgroundLossStore{path: filepath.Join(opts.DataDir, "sessions", opts.SessionID, backgroundLossFile)}
+	return backgroundLossStore{path: filepath.Join(sessionDir(opts.DataDir, opts.SessionID), backgroundLossFile)}
 }
 
 // backgroundLossRecord is what one dead process left behind: how many tasks it

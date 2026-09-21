@@ -71,8 +71,8 @@ func (t *toolActivity) observe(event agent.AgentEvent) {
 		// definition.
 		//
 		// These three and not every AwaitsUserInput event: a permission request
-		// and a question pause a turn that is still running, and the call they
-		// are about is precisely one still in flight.
+		// pauses a turn that is still running, and the call it is about is
+		// precisely one still in flight.
 		t.activityMu.Lock()
 		defer t.activityMu.Unlock()
 		for id := range t.latest {

@@ -10,7 +10,10 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/pockode/server/agent"
 	"github.com/pockode/server/agentrole"
+	"github.com/pockode/server/chat"
+	"github.com/pockode/server/session"
 	"github.com/pockode/server/settings"
 	"github.com/pockode/server/work"
 	"github.com/pockode/server/worktree"
@@ -47,7 +50,92 @@ func (s *stubWorktrees) EnsureWorktree(name string) (bool, *worktree.SetupHookSk
 	return true, s.skip, nil
 }
 
-// stubNotifier satisfies WorkNotifier as a no-op.
+// stubSessions stands in for the session layer the question tools reach. The
+// zero value knows no sessions and no questions, which is what every test that
+// never posts one needs.
+type stubSessions struct {
+	questions  *stubQuestions
+	turns      map[string]map[string]session.TurnState
+	located    map[string][]worktree.QuestionLocation
+	worktreeOf map[string]string
+	askedFor   []string
+	resolveErr error
+}
+
+func (s *stubSessions) ResolveQuestions(name string) (chat.Questions, func(), error) {
+	s.askedFor = append(s.askedFor, name)
+	if s.resolveErr != nil {
+		return nil, nil, s.resolveErr
+	}
+	if s.questions == nil {
+		s.questions = &stubQuestions{}
+	}
+	return s.questions, func() {}, nil
+}
+
+func (s *stubSessions) SessionTurns(name string) (map[string]session.TurnState, error) {
+	return s.turns[name], nil
+}
+
+func (s *stubSessions) LocateQuestions(requestID string) []worktree.QuestionLocation {
+	return s.located[requestID]
+}
+
+func (s *stubSessions) ResolveSessionWorktree(sessionID string) (string, error) {
+	name, found := s.worktreeOf[sessionID]
+	if !found {
+		return "", worktree.ErrSessionNotFound
+	}
+	return name, nil
+}
+
+// stubQuestions records what the tools asked the chat layer to do.
+type stubQuestions struct {
+	posted    []chat.QuestionSpec
+	postedFor []string
+	cancelled []string
+	answered  []stubAnswer
+	postErr   error
+	cancelErr error
+	answerErr error
+}
+
+// stubAnswer is one delivered answer: what was said, to which session, by whom.
+type stubAnswer struct {
+	sessionID string
+	answer    chat.Answer
+	by        agent.QuestionResolver
+}
+
+func (q *stubQuestions) PostQuestion(_ context.Context, sessionID string, spec chat.QuestionSpec) (session.PendingQuestion, error) {
+	if q.postErr != nil {
+		return session.PendingQuestion{}, q.postErr
+	}
+	q.posted = append(q.posted, spec)
+	q.postedFor = append(q.postedFor, sessionID)
+	return session.PendingQuestion{
+		RequestID: "req-1", Header: spec.Header, Question: spec.Question,
+		Options: spec.Options, MultiSelect: spec.MultiSelect,
+	}, nil
+}
+
+func (q *stubQuestions) AnswerQuestion(_ context.Context, sessionID string, a chat.Answer, by agent.QuestionResolver) error {
+	if q.answerErr != nil {
+		return q.answerErr
+	}
+	q.answered = append(q.answered, stubAnswer{sessionID: sessionID, answer: a, by: by})
+	return nil
+}
+
+func (q *stubQuestions) CancelQuestion(_ context.Context, _, requestID string) error {
+	if q.cancelErr != nil {
+		return q.cancelErr
+	}
+	q.cancelled = append(q.cancelled, requestID)
+	return nil
+}
+
+// stubNotifier satisfies work.Notifier as a no-op.
 type stubNotifier struct{}
 
 func (stubNotifier) NotifyStepDone(work.Work) {}
@@ -96,7 +184,7 @@ func newStoresWithRole(t *testing.T, role agentrole.AgentRole) (work.Store, agen
 func newExecWithRole(t *testing.T, role agentrole.AgentRole) (*Executor, work.Store, string) {
 	t.Helper()
 	store, arStore, settingsStore, roleID := newStoresWithRole(t, role)
-	return NewExecutor(store, arStore, work.NewOperations(store, stubWorkStarter{}, stubNotifier{}, agentrole.Steps{Store: arStore}), settingsStore, &stubWorktrees{}), store, roleID
+	return NewExecutor(store, arStore, work.NewOperations(store, stubWorkStarter{}, stubNotifier{}, agentrole.Steps{Store: arStore}), settingsStore, &stubWorktrees{}, &stubSessions{}), store, roleID
 }
 
 func newTestExec(t *testing.T) testExec {
@@ -122,7 +210,7 @@ func callTool(t *testing.T, e *Executor, name string, args interface{}) result {
 	if err != nil {
 		t.Fatal(err)
 	}
-	text, err := e.Execute(context.Background(), name, raw)
+	text, err := e.Execute(context.Background(), Caller{}, name, raw)
 	if err != nil {
 		return result{Text: "Error: " + err.Error(), IsError: true}
 	}
@@ -491,60 +579,39 @@ func TestWorkStart_NoAgentRole(t *testing.T) {
 	}
 }
 
-// --- Tool: work_needs_input ---
+// --- Tool: work_needs_input (retired) ---
 
-func TestWorkNeedsInput(t *testing.T) {
+// It is still registered, and answering it with a user error rather than
+// removing it is the point: an agent whose context still carries the old
+// lifecycle rules gets the sentence naming question_post instead of "unknown
+// tool", and can act on it in the same turn.
+func TestWorkNeedsInput_IsRetiredAndNamesWhatReplacedIt(t *testing.T) {
 	ts := newTestExec(t)
 
 	createResult := callTool(t, ts.exec, "work_create", map[string]string{
 		"type": "story", "title": "Story", "agent_role_id": ts.roleID,
 	})
 	id := extractID(t, toolText(createResult))
-
 	callTool(t, ts.exec, "work_start", map[string]string{"id": id})
 
 	result := callTool(t, ts.exec, "work_needs_input", map[string]string{
 		"id": id, "reason": "Need clarification on requirements",
 	})
 
-	if result.IsError {
-		t.Fatalf("unexpected error: %s", toolText(result))
+	if !result.IsError {
+		t.Fatalf("work_needs_input was accepted: %s", toolText(result))
 	}
-	text := toolText(result)
-	if !strings.Contains(text, "waiting for user input") {
-		t.Errorf("result = %q, want to contain 'waiting for user input'", text)
-	}
-	if !strings.Contains(text, "Need clarification on requirements") {
-		t.Errorf("result = %q, want to contain reason", text)
+	if !strings.Contains(toolText(result), "question_post") {
+		t.Errorf("result = %q, want it to name question_post", toolText(result))
 	}
 
+	// And it moved nothing: the work is exactly as the agent left it.
 	w, found, err := ts.store.Get(id)
 	if err != nil || !found {
-		t.Fatal("work not found after work_needs_input")
+		t.Fatal("work not found")
 	}
-	if w.Status != work.StatusActive || w.Wait != work.WaitUser {
-		t.Errorf("status/wait = %q/%q, want active/user", w.Status, w.Wait)
-	}
-	// The agent's own words reach the work record, which is the only place the
-	// user can read what it actually wants.
-	if w.WaitReason != "Need clarification on requirements" {
-		t.Errorf("wait_reason = %q, want the reason the tool was given", w.WaitReason)
-	}
-}
-
-func TestWorkNeedsInput_NotActive(t *testing.T) {
-	ts := newTestExec(t)
-
-	createResult := callTool(t, ts.exec, "work_create", map[string]string{
-		"type": "story", "title": "Story", "agent_role_id": ts.roleID,
-	})
-	id := extractID(t, toolText(createResult))
-
-	result := callTool(t, ts.exec, "work_needs_input", map[string]string{
-		"id": id, "reason": "some reason",
-	})
-	if !result.IsError {
-		t.Error("expected error for work_needs_input from open status")
+	if w.Status != work.StatusActive || w.Wait != work.WaitNone {
+		t.Errorf("status/wait = %q/%q, want active with no wait", w.Status, w.Wait)
 	}
 }
 
@@ -940,7 +1007,7 @@ func TestStepDone_ClosesAStoryWhoseSubtasksAreDone(t *testing.T) {
 
 func TestExecute_UnknownTool(t *testing.T) {
 	ts := newTestExec(t)
-	_, err := ts.exec.Execute(context.Background(), "nonexistent_tool", json.RawMessage(`{}`))
+	_, err := ts.exec.Execute(context.Background(), Caller{}, "nonexistent_tool", json.RawMessage(`{}`))
 	if err == nil {
 		t.Fatal("expected error for unknown tool")
 	}
@@ -955,7 +1022,7 @@ func TestExecute_UnknownTool(t *testing.T) {
 // not get stuck active with a dangling session.
 func TestWorkStart_RollbackOnHandlerFailure(t *testing.T) {
 	store, arStore, settingsStore, roleID := newStoresWithRole(t, agentrole.AgentRole{Name: "Eng", RolePrompt: "x"})
-	exec := NewExecutor(store, arStore, work.NewOperations(store, failingWorkStarter{err: errStartFailed}, stubNotifier{}, agentrole.Steps{Store: arStore}), settingsStore, &stubWorktrees{})
+	exec := NewExecutor(store, arStore, work.NewOperations(store, failingWorkStarter{err: errStartFailed}, stubNotifier{}, agentrole.Steps{Store: arStore}), settingsStore, &stubWorktrees{}, &stubSessions{})
 
 	created := callTool(t, exec, "work_create", map[string]string{
 		"type": "story", "title": "Story", "agent_role_id": roleID,
@@ -983,7 +1050,7 @@ func TestStepDone_NotifiesNextStep(t *testing.T) {
 		Name: "Eng", RolePrompt: "x", Steps: []string{"Plan", "Build"},
 	})
 	spy := &spyNotifier{}
-	exec := NewExecutor(store, arStore, work.NewOperations(store, stubWorkStarter{}, spy, agentrole.Steps{Store: arStore}), settingsStore, &stubWorktrees{})
+	exec := NewExecutor(store, arStore, work.NewOperations(store, stubWorkStarter{}, spy, agentrole.Steps{Store: arStore}), settingsStore, &stubWorktrees{}, &stubSessions{})
 
 	storyID := extractID(t, toolText(callTool(t, exec, "work_create", map[string]string{
 		"type": "story", "title": "S", "agent_role_id": roleID,
@@ -1010,7 +1077,7 @@ func TestStepDone_NoNotifyOnClose(t *testing.T) {
 		Name: "Eng", RolePrompt: "x", Steps: []string{"Only"},
 	})
 	spy := &spyNotifier{}
-	exec := NewExecutor(store, arStore, work.NewOperations(store, stubWorkStarter{}, spy, agentrole.Steps{Store: arStore}), settingsStore, &stubWorktrees{})
+	exec := NewExecutor(store, arStore, work.NewOperations(store, stubWorkStarter{}, spy, agentrole.Steps{Store: arStore}), settingsStore, &stubWorktrees{}, &stubSessions{})
 
 	storyID := extractID(t, toolText(callTool(t, exec, "work_create", map[string]string{
 		"type": "story", "title": "S", "agent_role_id": roleID,
@@ -1030,7 +1097,7 @@ func TestStepDone_NoNotifyOnClose(t *testing.T) {
 func TestWorkReopen_NotifiesReopen(t *testing.T) {
 	store, arStore, settingsStore, roleID := newStoresWithRole(t, agentrole.AgentRole{Name: "Eng", RolePrompt: "x"})
 	spy := &spyNotifier{}
-	exec := NewExecutor(store, arStore, work.NewOperations(store, stubWorkStarter{}, spy, agentrole.Steps{Store: arStore}), settingsStore, &stubWorktrees{})
+	exec := NewExecutor(store, arStore, work.NewOperations(store, stubWorkStarter{}, spy, agentrole.Steps{Store: arStore}), settingsStore, &stubWorktrees{}, &stubSessions{})
 
 	id := extractID(t, toolText(callTool(t, exec, "work_create", map[string]string{
 		"type": "story", "title": "S", "agent_role_id": roleID,
@@ -1056,7 +1123,7 @@ func TestAgentRoleResetDefaults_UpdatesDefaultRole(t *testing.T) {
 	if err := settingsStore.Update(settings.Settings{DefaultAgentRoleID: "stale-role-id"}); err != nil {
 		t.Fatal(err)
 	}
-	exec := NewExecutor(store, arStore, work.NewOperations(store, stubWorkStarter{}, stubNotifier{}, agentrole.Steps{Store: arStore}), settingsStore, &stubWorktrees{})
+	exec := NewExecutor(store, arStore, work.NewOperations(store, stubWorkStarter{}, stubNotifier{}, agentrole.Steps{Store: arStore}), settingsStore, &stubWorktrees{}, &stubSessions{})
 
 	if res := callTool(t, exec, "agent_role_reset_defaults", map[string]string{}); res.IsError {
 		t.Fatalf("unexpected error: %s", toolText(res))
@@ -1098,14 +1165,14 @@ func TestEveryAdvertisedToolIsDispatchable(t *testing.T) {
 	for _, td := range toolDefinitions {
 		// Empty args: a handler may reject them as a user error, but it must not
 		// report the tool itself as unknown.
-		_, err := ts.exec.Execute(context.Background(), td.Name, json.RawMessage("{}"))
+		_, err := ts.exec.Execute(context.Background(), Caller{}, td.Name, json.RawMessage("{}"))
 		if errors.Is(err, ErrUnknownTool) {
 			t.Errorf("tool %q is advertised via tools/list but not dispatched by Execute", td.Name)
 		}
 	}
 	// Negative control: an unadvertised name must be reported as unknown, so the
 	// assertion above can actually fail.
-	if _, err := ts.exec.Execute(context.Background(), "definitely_not_a_tool", json.RawMessage("{}")); !errors.Is(err, ErrUnknownTool) {
+	if _, err := ts.exec.Execute(context.Background(), Caller{}, "definitely_not_a_tool", json.RawMessage("{}")); !errors.Is(err, ErrUnknownTool) {
 		t.Errorf("unknown tool: got %v, want ErrUnknownTool", err)
 	}
 }
@@ -1207,7 +1274,7 @@ func TestWorkDelete_CascadesToSessionsLikeTheUsersDelete(t *testing.T) {
 	ops := work.NewOperations(store, stubWorkStarter{}, stubNotifier{}, agentrole.Steps{Store: arStore})
 	deleter := &countingDeleter{}
 	ops.SetSessionDeleter(deleter)
-	exec := NewExecutor(store, arStore, ops, settingsStore, &stubWorktrees{})
+	exec := NewExecutor(store, arStore, ops, settingsStore, &stubWorktrees{}, &stubSessions{})
 
 	result := callTool(t, exec, "work_create", map[string]string{
 		"type": "story", "title": "Test Story", "agent_role_id": roleID,
@@ -1235,7 +1302,7 @@ func newExecWithWorktrees(t *testing.T) (*Executor, work.Store, string, *stubWor
 	store, arStore, settingsStore, roleID := newStoresWithRole(t, agentrole.AgentRole{Name: "Eng", RolePrompt: "x"})
 	worktrees := &stubWorktrees{}
 	ops := work.NewOperations(store, stubWorkStarter{}, stubNotifier{}, agentrole.Steps{Store: arStore})
-	return NewExecutor(store, arStore, ops, settingsStore, worktrees), store, roleID, worktrees
+	return NewExecutor(store, arStore, ops, settingsStore, worktrees, &stubSessions{}), store, roleID, worktrees
 }
 
 func TestWorkStart_WorktreePinsStoryAndCreatesIt(t *testing.T) {

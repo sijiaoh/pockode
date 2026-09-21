@@ -67,10 +67,15 @@ type SessionTerminator interface {
 const DefaultMaxNudges = 3
 
 // Engine drives work items. It is the only thing that moves a work item without
-// being told to by a person or by an agent, and it has exactly five inputs:
+// being told to by a person or by an agent, and it has exactly eight inputs:
 //
 //   - HandleTurnEnded — a turn of the work's session settled.
 //   - HandleUserMessage — the user handed the session something to go on.
+//   - HandleUserAnswer — the user answered questions the agent had posted.
+//   - HandleAgentAnswer — another agent answered a question this session's
+//     agent had posted.
+//   - HandleQuestionPosted — this session's agent posted a question, which the
+//     story above it may be able to answer.
 //   - OnWorkChange (a child leaving active) — a subtask finished, or stopped
 //     being something its parent's wait could be waiting for.
 //   - OnSessionChange (a deletion) — the work's session was deleted.
@@ -85,6 +90,7 @@ type Engine struct {
 	resolver     atomic.Pointer[SenderResolver]
 	stepProvider atomic.Pointer[StepProvider]
 	terminator   atomic.Pointer[SessionTerminator]
+	turns        atomic.Pointer[TurnSource]
 	ctx          context.Context
 	cancel       context.CancelFunc
 	maxNudges    int
@@ -176,6 +182,14 @@ func (e *Engine) SetSessionTerminator(t SessionTerminator) {
 	e.terminator.Store(&t)
 }
 
+// SetTurnSource installs where the engine reads a session's unanswered
+// questions. Without one every session reads as having none, which is what the
+// narrow tests in this package want and what a server that cannot see the
+// session layer honestly knows.
+func (e *Engine) SetTurnSource(t TurnSource) {
+	e.turns.Store(&t)
+}
+
 func (e *Engine) getResolver() SenderResolver {
 	if p := e.resolver.Load(); p != nil {
 		return *p
@@ -195,6 +209,47 @@ func (e *Engine) getTerminator() SessionTerminator {
 		return *p
 	}
 	return nil
+}
+
+func (e *Engine) getTurnSource() TurnSource {
+	if p := e.turns.Load(); p != nil {
+		return *p
+	}
+	return nil
+}
+
+// awaitingAnswers reports whether this work's session has posted questions
+// nobody has answered.
+//
+// It is the one thing a session knows that the work record does not, and the
+// only thing the engine asks the session layer for. Read live, at the moment the
+// decision is taken, rather than carried on the turn ending: an ending is held
+// back for the settle delay, and a question answered inside it must not still
+// look outstanding — nor must one posted inside it look absent.
+func (e *Engine) awaitingAnswers(w Work) bool {
+	if w.SessionID == "" {
+		return false
+	}
+	source := e.getTurnSource()
+	if source == nil {
+		// No source is not the same as a source that failed, and the two answer
+		// oppositely on purpose. A missing source is a deliberate configuration —
+		// the narrow tests in this package — and reading it as "everything has
+		// questions" would switch nudging off entirely. A source that *failed* is
+		// a session that exists and cannot be read, below.
+		return false
+	}
+	turns, err := source.SessionTurns(w.Worktree)
+	if err != nil {
+		// Not knowing is not a reason to nudge: a nudge that should not have
+		// been sent spends the allowance that ends in a stop. The honest answer
+		// to an unreadable session is "leave it alone", and the work is still
+		// reachable — a person can restart it, and an answer still wakes it.
+		slog.Warn("could not read a session's questions when its turn ended",
+			"workId", w.ID, "sessionId", w.SessionID, "worktree", w.Worktree, "error", err)
+		return true
+	}
+	return len(turns[w.SessionID].Unanswered) > 0
 }
 
 // resolveSender resolves the sender for the given worktree. Returns ok=false
@@ -257,10 +312,20 @@ const nudgeLimitComment = "Stopped automatically: the agent ended its turn witho
 //   - aborted — the turn was taken away rather than finished, by a user
 //     interrupt or by the death of the process carrying it. Carrying on is the
 //     one thing nobody asked for, so the work stops.
-//   - completed or failed, with a wait — the agent said what it is waiting for.
-//     Leave it alone; the wait's own event will wake it.
-//   - completed or failed, with no wait — the agent stopped without saying it
-//     was done. Nudge it, and stop the work once the allowance runs out.
+//   - completed or failed, with something outstanding — a wait on subtasks, or a
+//     question nobody has answered. Leave it alone; whatever it is waiting for
+//     wakes it when it arrives.
+//   - completed or failed, with nothing outstanding — the agent stopped without
+//     saying it was done. Nudge it, and stop the work once the allowance runs
+//     out.
+//
+// The two things that "leave it alone" reads are kept apart because they are
+// kept in different places and for good reason. A wait is on the work, declared
+// by the agent about the work. An unanswered question is on the *session*: the
+// agent posted it and carried on, Pockode is holding it, and the answer arrives
+// as an ordinary message. They are orthogonal — a story can be waiting on its
+// subtasks and have a question outstanding at once — and either one alone is
+// enough to make this ending unsurprising.
 //
 // A failed turn is nudged like a completed one on purpose: an agent whose turn
 // errored has usually lost a tool call, not the thread, and the nudge limit is
@@ -296,6 +361,14 @@ func (e *Engine) HandleTurnEnded(sessionID string, outcome session.TurnOutcome) 
 	if w.Wait != WaitNone {
 		slog.Debug("turn ended on a work that is waiting, leaving it alone",
 			"workId", w.ID, "wait", w.Wait)
+		return
+	}
+
+	// Asked after the wait, because it is the one that costs a read of the
+	// session layer and the two answers are the same "leave it alone".
+	if e.awaitingAnswers(*w) {
+		slog.Debug("turn ended on a work whose questions are unanswered, leaving it alone",
+			"workId", w.ID, "sessionId", sessionID)
 		return
 	}
 
@@ -347,11 +420,14 @@ func (e *Engine) sendAutoContinuation(w Work, nudge int) {
 
 // --- Input 2: the user handed the session something to go on ---
 
-// HandleUserMessage records that the user acted on this session: a message, a
-// permission answer, a question answer. The work behind it goes back to active
-// with its wait and its nudge count cleared — a person is the one thing every
-// wait is defined to be woken by, and their attention is what the allowance was
-// counting down to in the first place.
+// HandleUserMessage records that the user handed this session something to go
+// on: a typed message, a permission answer. The work behind it goes back to
+// active with its wait and its nudge count cleared — a person is the one thing
+// every wait is defined to be woken by, and their attention is what the
+// allowance was counting down to in the first place.
+//
+// A message that *answers posted questions* is the one exception, and it has its
+// own input (HandleUserAnswer).
 //
 // Interrupt is deliberately not this event, even though a user pressed it: it
 // takes the turn away rather than handing the session something, and the abort
@@ -387,7 +463,174 @@ func (e *Engine) HandleUserMessage(sessionID string) {
 		"workId", w.ID, "from", w.Status, "wait", w.Wait, "sessionId", sessionID)
 }
 
-// --- Input 3: a child work left active ---
+// --- Input 3: the user answered questions the agent had posted ---
+
+// HandleUserAnswer records that the user answered — or refused to answer —
+// questions this session's agent posted. It is a message like any other, and it
+// does one less thing than HandleUserMessage on purpose: the nudge allowance
+// starts over, and a wait on subtasks is left exactly where it was.
+//
+// The reason is that an answer is not general-purpose attention. The agent asked
+// one specific thing and went on working; a story that afterwards declared it
+// was waiting for its subtasks to close is still waiting for exactly that, and
+// no subtask closed. Clearing the wait would resume a story with nothing to do
+// and then nudge it for having nothing to do. Typing a message *without*
+// answering anything is different and still clears the wait — that is a person
+// redirecting the work, which is the one thing a `child` wait yields to besides
+// a subtask closing.
+//
+// A stopped work is woken, as by any message: the answer is a person acting on
+// it, and nothing about the answer says it should stay handed back. That is why
+// this goes through Activate rather than ClearNudges when the work is not
+// active — the narrowing is about the wait, not about the status.
+func (e *Engine) HandleUserAnswer(sessionID string) {
+	if !e.enter() {
+		return
+	}
+	defer e.leave()
+
+	w, found := e.findWork(sessionID)
+	if !found || ValidateProgress(w.Status) != nil {
+		return
+	}
+	if w.Status != StatusActive {
+		if err := e.store.Activate(e.ctx, w.ID); err != nil {
+			if e.ctx.Err() == nil {
+				slog.Warn("failed to activate work on an answer",
+					"workId", w.ID, "from", w.Status, "error", err)
+			}
+			return
+		}
+		slog.Info("work activated by an answer", "workId", w.ID, "from", w.Status, "sessionId", sessionID)
+		return
+	}
+
+	if w.NudgeCount == 0 {
+		return
+	}
+	if err := e.store.ClearNudges(e.ctx, w.ID); err != nil {
+		if e.ctx.Err() == nil {
+			slog.Warn("failed to clear the nudge count on an answer", "workId", w.ID, "error", err)
+		}
+		return
+	}
+	slog.Info("nudge allowance reset by an answer", "workId", w.ID, "sessionId", sessionID)
+}
+
+// --- Input 4: another agent answered ---
+
+// HandleAgentAnswer records that an agent — not the user — answered a question
+// this session's agent had posted (the question_answer tool).
+//
+// It does the smaller half of HandleUserAnswer: the nudge allowance starts
+// over, and nothing else moves. A `child` wait is left alone for the reason
+// given there, and the *status* is left alone for one this path adds: only a
+// person hands a work back, so only a person takes it off the shelf again. An
+// agent's answer waking a stopped work would be an agent starting work
+// somebody stopped, which is why question_answer refuses to deliver into one
+// at all — this is the second half of that rule, stated where the status is
+// owned.
+func (e *Engine) HandleAgentAnswer(sessionID string) {
+	if !e.enter() {
+		return
+	}
+	defer e.leave()
+
+	w := e.findActiveWork(sessionID)
+	if w == nil || w.NudgeCount == 0 {
+		return
+	}
+	if err := e.store.ClearNudges(e.ctx, w.ID); err != nil {
+		if e.ctx.Err() == nil {
+			slog.Warn("failed to clear the nudge count on an agent's answer", "workId", w.ID, "error", err)
+		}
+		return
+	}
+	slog.Info("nudge allowance reset by an agent's answer", "workId", w.ID, "sessionId", sessionID)
+}
+
+// --- Input 5: an agent posted a question ---
+
+// HandleQuestionPosted passes a subtask's question up to the story above it.
+//
+// A story knows things its subtasks do not — what it decided, what a sibling
+// already settled, what the user told it an hour ago — so a subtask asking
+// "which database?" is often a question the story can simply answer, and the
+// user never has to be interrupted at all. The story decides: it answers with
+// question_answer, or asks the user itself with question_post.
+//
+// What this deliberately does *not* do is clear the parent's `child` wait. That
+// wait is ended by a subtask closing and nothing else; a subtask asking a
+// question is not one closing, and the subtask carries on either way. So a
+// story that answers and ends its turn is still waiting for exactly what it was
+// waiting for, and is not nudged for it. That is the mirror image of
+// notifyParentOfChild, which does clear it, because there the thing the wait
+// was for has happened.
+func (e *Engine) HandleQuestionPosted(sessionID string, q session.PendingQuestion) {
+	if !e.enter() {
+		return
+	}
+	defer e.leave()
+
+	child, found := e.findWork(sessionID)
+	if !found || child.ParentID == "" {
+		return
+	}
+	e.goFollowUp(func() { e.notifyParentOfChildQuestion(child, q) })
+}
+
+// notifyParentOfChildQuestion delivers one subtask question to its story.
+//
+// Nothing is retried and nothing is stopped when it cannot be delivered — a
+// stopped or closed parent, a parent whose turn is held open by a permission
+// request — and that is the difference from the two notifications below it.
+// Those two carry news a waiting parent is *owed*: the wait is cleared by them,
+// so an undelivered one leaves a work waiting for something that already
+// happened. This one clears nothing. The question stays on the subtask, where
+// the user can see it and answer it, and the parent's wait is exactly as it
+// was. The way back is the person's: restarting or reopening the story tells it
+// to go and look at its subtasks' unanswered questions (work_get).
+func (e *Engine) notifyParentOfChildQuestion(child Work, q session.PendingQuestion) {
+	parent, found, err := e.store.Get(child.ParentID)
+	if err != nil {
+		slog.Warn("failed to get parent work for a child's question", "parentId", child.ParentID, "error", err)
+		return
+	}
+	if !found || parent.SessionID == "" {
+		return
+	}
+	if parent.Status != StatusActive {
+		slog.Debug("a subtask asked a question under a parent the engine is not driving",
+			"parentId", parent.ID, "parentStatus", parent.Status, "childId", child.ID)
+		return
+	}
+
+	sender, release, ok := e.resolveSender(parent.Worktree)
+	if !ok {
+		slog.Warn("could not reach a story with its subtask's question",
+			"parentId", parent.ID, "childId", child.ID, "requestId", q.RequestID)
+		return
+	}
+	defer release()
+
+	msg := BuildChildQuestionMessage(parent, child.Title, child.ID, q)
+	meta := NewMessageMeta(parent, parent.CurrentStep+1, e.stepCount(parent))
+	meta.Child = &agent.ChildInfo{ID: child.ID, Title: child.Title}
+	if err := sender.SendSystemMessage(e.ctx, parent.SessionID, msg, MessageSubtypeChildQuestion, meta); err != nil {
+		if e.ctx.Err() != nil {
+			return
+		}
+		// Warn and stop there: the user can still answer this question, and the
+		// parent has lost nothing it was holding.
+		slog.Warn("failed to pass a subtask's question to its story",
+			"parentId", parent.ID, "childId", child.ID, "requestId", q.RequestID, "error", err)
+		return
+	}
+	slog.Info("subtask question passed to its story",
+		"parentId", parent.ID, "childId", child.ID, "requestId", q.RequestID)
+}
+
+// --- Input 6: a child work left active ---
 
 // OnWorkChange implements OnChangeListener. Two things are read off a work
 // changing: a child leaving active, which its parent may have to be told about,
@@ -502,8 +745,8 @@ func (e *Engine) notifyParentOfChild(child Work) {
 	defer release()
 
 	// A parent waiting on its children has been handed what it was waiting for.
-	// A parent waiting on the *user* has not, so its wait stands — the child's
-	// news arrives in the transcript either way.
+	// A parent that declared no wait has nothing to be cleared — it was already
+	// being driven — and the child's news arrives in the transcript either way.
 	waitCleared := parent.Wait == WaitChild
 	if waitCleared {
 		if err := e.store.Activate(e.ctx, parent.ID); err != nil {
@@ -674,7 +917,7 @@ func (e *Engine) failedToReach(parentID, reason, comment string) {
 	e.stop(parentID, reason, comment)
 }
 
-// --- Input 4: the session was deleted ---
+// --- Input 7: the session was deleted ---
 
 // deletedSessionComment explains a stop whose cause is no longer on screen: the
 // chat the work ran in is gone, so there is nothing for the user to open and
@@ -703,7 +946,7 @@ func (e *Engine) OnSessionChange(event session.SessionChangeEvent) {
 	})
 }
 
-// --- Input 5: startup ---
+// --- Input 8: startup ---
 
 // orphanedWorkComment explains a stop nobody asked for. Background tasks are
 // called out because they are the part a user is least likely to expect to have
@@ -721,11 +964,19 @@ const strandedWaitComment = "Stopped automatically: this work was waiting for it
 // RecoverStartup deals with the work a previous run left active. Call it at
 // startup, before any session can be created.
 //
-// A work with no wait was being carried by a process that no longer exists, and
-// nothing is going to end the turn it was in the middle of: it stops, and says
-// why. A work that declared a wait is left exactly as it is — what it is waiting
-// for outlives the process, because both a person and a closing child reach it
-// from outside the session. That is the difference the old code could not
+// turns is where a session's unanswered questions are read from, and it is a
+// parameter rather than the engine's own TurnSource because of when this runs:
+// before the worktree manager exists (see main.go, where that order is
+// deliberate). What is passed is a reader of the session index on disk, which is
+// exactly right here — no process survived the restart, so no worktree holds a
+// value newer than the file.
+//
+// A work with nothing outstanding was being carried by a process that no longer
+// exists, and nothing is going to end the turn it was in the middle of: it
+// stops, and says why. A work that declared a wait, or whose session has a
+// question nobody answered, is left exactly as it is — what it is waiting for
+// outlives the process, because a closing child and a person's answer both reach
+// it from outside the session. That is the difference the old code could not
 // express, and why every paused work used to come back from a restart stopped.
 //
 // The catch is that the first half invalidates the second: stopping a subtask is
@@ -735,15 +986,24 @@ const strandedWaitComment = "Stopped automatically: this work was waiting for it
 // against them, and ordering is what produced the bug this exists to close: the
 // engine is not yet a listener on the work store when RecoverStartup runs (see
 // main.go, where that order is deliberate), so its own stops reach nobody.
-func (e *Engine) RecoverStartup() {
+func (e *Engine) RecoverStartup(turns TurnSource) {
 	works, err := e.store.List()
 	if err != nil {
 		slog.Warn("failed to list works for startup recovery", "error", err)
 		return
 	}
 
+	// One resolver for the whole pass: it reads each worktree's session index
+	// once, and a restart is exactly the moment when nothing is changing
+	// underneath it.
+	resolver := NewActivityResolver(turns)
 	for _, w := range works {
 		if w.Status != StatusActive || w.Wait != WaitNone {
+			continue
+		}
+		if len(resolver.PendingQuestions(w)) > 0 {
+			slog.Info("work left active with questions outstanding, keeping it",
+				"workId", w.ID, "sessionId", w.SessionID)
 			continue
 		}
 		e.stop(w.ID, "server restarted while the work was active", orphanedWorkComment)
@@ -761,7 +1021,14 @@ func (e *Engine) RecoverStartup() {
 // while a work waiting on children sits in *Active* alongside the ones that are
 // really running (docs/lifecycle-ui.md §6.1).
 //
-// A `user` wait is untouched: a person is not something a restart takes away.
+// A work with questions outstanding is *not* exempt here, and that is not an
+// oversight. This pass is only about works that declared a `child` wait, and
+// such a work is stuck whatever else is true of it: nothing is left that could
+// end the wait, the engine does not nudge a waiting work, and an answer to one
+// of its questions clears the nudge count rather than the wait
+// (HandleUserAnswer). Stopping is what makes it findable — and the questions
+// survive the stop, so the user is still offered them and answering one wakes
+// the work.
 //
 // One pass is enough, and that rests on a fact this package enforces rather than
 // on luck: a `child` wait is only ever set by Store.SetChildWait, which requires

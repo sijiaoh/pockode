@@ -8,7 +8,8 @@ import type {
 	Message,
 	MessageOrigin,
 	PermissionUpdate,
-	QuestionStatus,
+	QuestionAnswerRecord,
+	QuestionRecordStatus,
 	ServerNotification,
 	SessionTurn,
 	SystemMessageMeta,
@@ -16,6 +17,7 @@ import type {
 	ToolRun,
 	UserMessage,
 } from "../types/message";
+import { lookupAnswer, parseAnswer } from "../utils/questionAnswer";
 import { generateUUID } from "../utils/uuid";
 import { parseContentBlocks } from "./contentBlocks";
 
@@ -25,23 +27,44 @@ import { parseContentBlocks } from "./contentBlocks";
 function normalizeOrigin(raw: unknown): MessageOrigin | undefined {
 	if (raw === "system" || raw === "work") return "system";
 	if (raw === "user") return "user";
+	if (raw === "agent") return "agent";
 	return undefined;
 }
 
-// The three reasons a prompt can stop waiting for an answer, checked at the wire
+// The four reasons a card can stop waiting for an answer, checked at the wire
 // boundary like every other closed set: a value this build does not know reads
 // as no reason at all, which is a banner that is true of all of them — never a
-// card that renders nothing.
+// card that renders nothing. Which reasons can reach which card is `ExpiryReason`.
 const EXPIRY_REASONS: readonly string[] = [
 	"process_ended",
 	"timeout",
 	"work_closed",
+	"step_done",
 ];
 
 function normalizeExpiryReason(raw: unknown): ExpiryReason | undefined {
 	return typeof raw === "string" && EXPIRY_REASONS.includes(raw)
 		? (raw as ExpiryReason)
 		: undefined;
+}
+
+// Boundary defense for one question's shape: the Go encoder emits `null` for a
+// nil `options` slice, and a record may carry none at all.
+function normalizeQuestion(raw: AskUserQuestion | undefined): AskUserQuestion {
+	return {
+		question: raw?.question ?? "",
+		header: raw?.header ?? "",
+		options: raw?.options ?? [],
+		multiSelect: raw?.multiSelect ?? false,
+	};
+}
+
+// The `answering` entries of a message record. Absent and empty mean the same
+// thing — an ordinary message — and both read as undefined so nothing
+// downstream has to tell them apart.
+function normalizeAnswering(raw: unknown): QuestionAnswerRecord[] | undefined {
+	if (!Array.isArray(raw) || raw.length === 0) return undefined;
+	return raw as QuestionAnswerRecord[];
 }
 
 // A cancelled question is stored with a nil answers map, and `omitempty` on the
@@ -118,6 +141,8 @@ export type NormalizedEvent =
 			origin?: MessageOrigin;
 			subtype?: string;
 			meta?: SystemMessageMeta;
+			/** The posted questions this message answers; see QuestionAnswerRecord. */
+			answering?: QuestionAnswerRecord[];
 	  }
 	| {
 			type: "permission_request";
@@ -136,14 +161,28 @@ export type NormalizedEvent =
 			type: "request_cancelled";
 			requestId: string;
 			reason?: ExpiryReason;
+			resolvedAt?: string;
 	  }
 	| {
-			type: "ask_user_question";
+			/**
+			 * A question the CLI asked through its own blocking tool. Read from old
+			 * transcripts and never produced: Pockode refuses that tool now
+			 * (`agent.CLIQuestionRefusal`). It could carry several questions at once.
+			 */
+			type: "legacy_question";
 			requestId: string;
 			toolUseId: string;
 			questions: AskUserQuestion[];
 	  }
 	| {
+			/** One question the agent posted through `question_post`. */
+			type: "question_posted";
+			requestId: string;
+			question: AskUserQuestion;
+			askedAt?: string;
+	  }
+	| {
+			/** The answer to a `legacy_question`, from the same old transcripts. */
 			type: "question_response";
 			requestId: string;
 			answers: Record<string, string> | null;
@@ -164,7 +203,7 @@ export type NormalizedEvent =
  * "position zero".
  *
  * Not absent for history written before seqs existed: replay stamps every
- * unaddressed record by position (session.StampHistorySeq).
+ * unaddressed record by position (session.stampHistorySeq).
  */
 export function readHistorySeq(e: unknown): HistorySeq | undefined {
 	const seq = (e as Record<string, unknown> | undefined)?.seq;
@@ -238,6 +277,7 @@ export function normalizeEvent(
 				origin: normalizeOrigin(record.origin),
 				subtype: record.subtype as string | undefined,
 				meta: record.meta as SystemMessageMeta | undefined,
+				answering: normalizeAnswering(record.answering),
 			};
 		case "permission_request":
 			return {
@@ -261,10 +301,24 @@ export function normalizeEvent(
 				type: "request_cancelled",
 				requestId: record.request_id as string,
 				reason: normalizeExpiryReason(record.reason),
+				resolvedAt: record.resolved_at as string | undefined,
+			};
+		case "question_posted":
+			return {
+				type: "question_posted",
+				requestId: record.request_id as string,
+				// The server writes exactly one, in a one-element list so that this
+				// and the CLI's own prompt share a renderer. A record with none
+				// names nothing answerable; the empty question keeps the card
+				// drawable rather than crashing the transcript over it.
+				question: normalizeQuestion(
+					(record.questions as AskUserQuestion[] | undefined)?.[0],
+				),
+				askedAt: record.asked_at as string | undefined,
 			};
 		case "ask_user_question":
 			return {
-				type: "ask_user_question",
+				type: "legacy_question",
 				requestId: record.request_id as string,
 				toolUseId: record.tool_use_id as string,
 				// Boundary defense for shape drift across the WS contract: the
@@ -317,6 +371,28 @@ function findToolRunIndex(parts: ContentPart[], toolUseId: string): number {
 	return parts.findIndex(
 		(part) => part.type === "tool_call" && part.tool.id === toolUseId,
 	);
+}
+
+/**
+ * The `question_post` tool row a `question_posted` record belongs to, or -1.
+ *
+ * Joined by position rather than by `tool_use_id`, because there is none to
+ * join on: a `question_post` call reaches the server over HTTP from the MCP
+ * endpoint, and the CLI's id for the tool use is not in that request. What the
+ * server does guarantee is when the record is written — during the call — so
+ * the record always falls between that call's `tool_call` and its
+ * `tool_result`. The last unreturned call whose name ends in `question_post` is
+ * therefore this question's, and a join that misses simply leaves two rows
+ * rather than getting one wrong (docs/tool-call-ui.md).
+ */
+function openQuestionPostIndex(parts: ContentPart[]): number {
+	for (let i = parts.length - 1; i >= 0; i--) {
+		const part = parts[i];
+		if (part.type !== "tool_call") continue;
+		if (part.tool.status !== "running") continue;
+		if (part.tool.name.endsWith("question_post")) return i;
+	}
+	return -1;
 }
 
 function applyToolCall(
@@ -423,30 +499,52 @@ export function applyEventToParts(
 			updated[index] = permissionPart;
 			return updated;
 		}
-		case "ask_user_question": {
-			const questionPart: ContentPart = {
-				type: "ask_user_question",
-				request: {
-					requestId: event.requestId,
-					toolUseId: event.toolUseId,
-					questions: event.questions,
-				},
+		case "legacy_question": {
+			// One card per question rather than one card carrying several. The new
+			// records are one question each, so this is what makes an old transcript
+			// render through the same component as a new one — and the shared
+			// `request_id` is right, not a collision: an answer to that request
+			// settled every question in it at once.
+			const cards: ContentPart[] = event.questions.map((question) => ({
+				type: "question_record",
+				record: { requestId: event.requestId, question },
 				status: "pending",
-			};
-			// Claude asks through a regular AskUserQuestion tool call: the CLI
-			// emits tool_call for it immediately before the question, and a
-			// tool_result echoing the answers after. All three describe one tool
-			// use, and the question card already renders the whole interaction, so
-			// take the tool_call's place rather than sit beside a card duplicating
-			// it. The trailing tool_result then matches no tool_call and is
-			// dropped as an orphan.
+				legacy: true,
+			}));
+			// The CLI emitted tool_call for its ask tool immediately before the
+			// question and a tool_result echoing the answers after. All of it
+			// describes one tool use and the cards already render the interaction,
+			// so they take the tool_call's place rather than sit beside a row
+			// duplicating it. The trailing tool_result then matches no tool_call and
+			// is dropped as an orphan.
 			const toolCallIndex = event.toolUseId
 				? findToolRunIndex(parts, event.toolUseId)
 				: -1;
-			if (toolCallIndex === -1) return [...parts, questionPart];
+			if (toolCallIndex === -1) return [...parts, ...cards];
 
 			const updated = [...parts];
-			updated[toolCallIndex] = questionPart;
+			updated.splice(toolCallIndex, 1, ...cards);
+			return updated;
+		}
+		case "question_posted": {
+			const questionPart: ContentPart = {
+				type: "question_record",
+				record: {
+					requestId: event.requestId,
+					question: event.question,
+					askedAt: event.askedAt,
+				},
+				status: "pending",
+			};
+			// The card takes the tool row's place, the same generalisation
+			// `permission_request` and `ask_user_question` make above: both rows
+			// describe one act, and drawing them side by side is the duplication
+			// tool-call-ui.md removed once already.
+			const index = openQuestionPostIndex(parts);
+			if (index === -1) return [...parts, questionPart];
+
+			const updated = [...parts];
+			updated[index] = questionPart;
 			return updated;
 		}
 		case "system":
@@ -579,14 +677,22 @@ export function applyServerEvent(
 ): Message[] {
 	// User message or system-driven message (history replay or broadcast)
 	if (event.type === "message") {
+		// The cards first: the questions this message answers may be anywhere in
+		// the transcript, and settling them before the bubble is appended keeps
+		// the pass over `messages` off the message just added, which answers
+		// nothing of its own.
+		const settled = event.answering
+			? applyAnswering(messages, event.answering)
+			: messages;
 		// Stamped inside applyUserMessage rather than by stampAnchorSeq: when the
 		// message opens a turn it is followed by an empty assistant placeholder, so
 		// the last element is not the one holding the record.
-		return applyUserMessage(messages, event.content, {
+		return applyUserMessage(settled, event.content, {
 			source: event.origin,
 			subtype: event.subtype,
 			meta: event.meta,
 			anchorSeq: seq,
+			answering: event.answering,
 		});
 	}
 
@@ -610,16 +716,11 @@ function applyEvent(
 		return applyCancellation(messages, event.requestId, event.reason);
 	}
 
-	// Question response updates existing ask_user_question across all messages
+	// Replay only: the answer to a question the CLI's own tool asked, which
+	// nothing produces any more. It settles the legacy cards that share its
+	// request id.
 	if (event.type === "question_response") {
-		const newStatus: QuestionStatus =
-			event.answers === null ? "cancelled" : "answered";
-		return updateQuestionStatus(
-			messages,
-			event.requestId,
-			newStatus,
-			event.answers,
-		);
+		return settleLegacyQuestion(messages, event.requestId, event.answers);
 	}
 
 	// The turn parking on background work says nothing about the transcript: the
@@ -793,11 +894,19 @@ function applyEvent(
 }
 
 /**
- * Retires the dialogs nothing can answer any more.
+ * Retires the permission requests nothing can decide any more.
  *
  * `stillLive` names the requests the session still lists as blockers, and a card
- * not in it has lost the process that would take its answer. Omitting it retires
- * every pending card, which is what a `process_ended` record means.
+ * not in it has lost the process that would take its decision. Omitting it
+ * retires every pending one, which is what a `process_ended` record means.
+ *
+ * **Permission cards only, and that is the point of the design this replaced.** A
+ * question card belongs to the session rather than to the process that asked, so
+ * a process ending is not an ending for it — nothing here may touch one, and the
+ * only things that settle one are records naming it (see `applyCancellation`,
+ * `settleLegacyQuestion`). A legacy card nothing settled stays `pending` and says
+ * in its own body that it can no longer be answered, which is a truer statement
+ * than `expired` ever was and does not need this function to make it.
  */
 export function expirePendingDialogs(
 	messages: Message[],
@@ -819,14 +928,6 @@ export function expirePendingDialogs(
 				changed = true;
 				return { ...part, status: "expired" as const, reason };
 			}
-			if (
-				part.type === "ask_user_question" &&
-				part.status === "pending" &&
-				!isLive(part.request.requestId)
-			) {
-				changed = true;
-				return { ...part, status: "expired" as const, reason };
-			}
 			return part;
 		});
 
@@ -840,7 +941,8 @@ export function expirePendingDialogs(
 /**
  * Retires the prompt this cancellation names, and records why.
  *
- * Both prompt kinds in one pass: a request id belongs to exactly one card.
+ * Both card kinds in one pass: a request id belongs to exactly one of them, and
+ * a withdrawal is the one thing that can settle either.
  *
  * **A card that is already expired still takes the reason**, and that is the
  * case this is written for rather than an afterthought. The same expiry reaches
@@ -864,24 +966,23 @@ function applyCancellation(
 
 		let changed = false;
 		const updatedParts = msg.parts.map((part) => {
-			if (
-				part.type !== "permission_request" &&
-				part.type !== "ask_user_question"
-			) {
-				return part;
+			// A posted question is withdrawn, never expired: it belongs to the
+			// session rather than to the process that asked it, so the only thing
+			// that retires it is something naming it (docs/answering-ui.md §6). A
+			// legacy card is settled the same way — its CLI withdrawing the
+			// question is the one thing that can still name it.
+			if (part.type === "question_record") {
+				if (part.record.requestId !== requestId) return part;
+				if (part.status !== "pending") return part;
+				changed = true;
+				return { ...part, status: "cancelled" as const, reason };
 			}
+			if (part.type !== "permission_request") return part;
 			if (part.request.requestId !== requestId) return part;
 
 			if (part.status === "pending") {
 				changed = true;
-				return part.type === "permission_request"
-					? { ...part, status: "expired" as const, reason }
-					: {
-							...part,
-							status: "expired" as const,
-							answers: undefined,
-							reason,
-						};
+				return { ...part, status: "expired" as const, reason };
 			}
 			if (part.status === "expired" && reason && part.reason === undefined) {
 				changed = true;
@@ -898,14 +999,18 @@ function applyCancellation(
 }
 
 /**
- * Puts a prompt card back to unanswered, whatever it currently says.
+ * Puts a permission card back to undecided, whatever it currently says.
  *
- * The one caller is an answer the server refused: this client had already
+ * The one caller is a decision the server refused: this client had already
  * written the optimistic outcome, and the refusal means it never happened.
  * Unlike every other transition here this one does not guard on `pending`,
  * because the status it is correcting is one this client wrote a moment ago and
- * no longer believes. Any answer is cleared with it — an answer nothing received
- * is not one.
+ * no longer believes.
+ *
+ * A permission card is the only kind that needs this. A refused *answer* takes
+ * its whole optimistic echo with it — the message bubble and all — because the
+ * server wrote nothing and delivered nothing (`useChatMessages.sendUserMessage`),
+ * so there is no half-applied outcome left to undo.
  *
  * **Which** unanswered status is the caller's to decide, and it is not a detail:
  * a refusal because the process is gone leaves a card nothing can ever answer,
@@ -924,14 +1029,11 @@ export function resetPromptRequest(
 		let changed = false;
 		const updatedParts = msg.parts.map((part) => {
 			const isTarget =
-				(part.type === "permission_request" ||
-					part.type === "ask_user_question") &&
+				part.type === "permission_request" &&
 				part.request.requestId === requestId;
 			if (!isTarget || part.status === status) return part;
 			changed = true;
-			return part.type === "permission_request"
-				? { ...part, status }
-				: { ...part, status, answers: undefined };
+			return { ...part, status };
 		});
 
 		if (!changed) return msg;
@@ -970,31 +1072,123 @@ export function updatePermissionRequestStatus(
 	return anyChanged ? updated : messages;
 }
 
-export function updateQuestionStatus(
+/**
+ * Settles the posted-question cards a message answered.
+ *
+ * The message record is the answer record — there is no second one per question
+ * — so this is the only thing that ever moves a card from `pending` to
+ * `answered` or `declined`. It guards on `pending`: a card something else has
+ * already resolved keeps what resolved it, because that is what happened first
+ * and nothing arriving later can know better.
+ */
+export function applyAnswering(
 	messages: Message[],
-	requestId: string,
-	newStatus: QuestionStatus,
-	answers: Record<string, string> | null,
+	answering: QuestionAnswerRecord[],
 ): Message[] {
+	const byRequest = new Map(answering.map((a) => [a.request_id, a]));
 	let anyChanged = false;
 	const updated = messages.map((msg) => {
 		if (msg.role !== "assistant") return msg;
 
 		let changed = false;
 		const updatedParts = msg.parts.map((part) => {
-			if (
-				part.type === "ask_user_question" &&
-				part.request.requestId === requestId &&
-				part.status === "pending"
-			) {
-				changed = true;
-				return {
-					...part,
-					status: newStatus,
-					answers: answers ?? undefined,
-				};
+			if (part.type !== "question_record" || part.status !== "pending") {
+				return part;
 			}
-			return part;
+			const answer = byRequest.get(part.record.requestId);
+			if (!answer) return part;
+			changed = true;
+			const status: QuestionRecordStatus = answer.declined
+				? "declined"
+				: "answered";
+			return { ...part, status, answer };
+		});
+
+		if (!changed) return msg;
+		anyChanged = true;
+		return { ...msg, parts: updatedParts };
+	});
+	return anyChanged ? updated : messages;
+}
+
+/**
+ * Replays one {@link isBackReference} record over a page of older history.
+ *
+ * Every back-reference but one settles something and adds nothing, which is
+ * what makes replaying them free. The exception is a message that answers
+ * posted questions: the message itself belongs where it was written, a page
+ * above, and only the half that settles the card is true down here.
+ */
+export function applyBackReference(
+	messages: Message[],
+	record: unknown,
+): Message[] {
+	const event = normalizeEvent(record as Record<string, unknown>);
+	if (event.type === "message") {
+		return event.answering
+			? applyAnswering(messages, event.answering)
+			: messages;
+	}
+	return applyServerEvent(messages, event);
+}
+
+/**
+ * Settles the legacy cards a `question_response` record names.
+ *
+ * `answers` is the old flat shape: one string per question, keyed by question
+ * text, with the labels picked joined by `", "` and any free text behind
+ * `"Other: "`. It is parsed back into the halves a card draws with
+ * ({@link parseAnswer}), so an old answer fills the form in exactly as a new one
+ * does — which is the whole reason these records still go through the same
+ * component. A null map is the CLI having cancelled its own question.
+ */
+function settleLegacyQuestion(
+	messages: Message[],
+	requestId: string,
+	answers: Record<string, string> | null,
+): Message[] {
+	const isTarget = (part: ContentPart) =>
+		part.type === "question_record" &&
+		!!part.legacy &&
+		part.record.requestId === requestId &&
+		part.status === "pending";
+
+	let anyChanged = false;
+	const updated = messages.map((msg) => {
+		if (msg.role !== "assistant") return msg;
+
+		// How many questions the record being settled carried, which is what
+		// lookupAnswer needs to decide whether a single unmatched entry can only be
+		// this question's. Counted from the cards because that is where the record's
+		// questions went — one card each — and getting it wrong the other way would
+		// put one answer on all of them.
+		const questionCount = msg.parts.filter(isTarget).length;
+
+		let changed = false;
+		const updatedParts = msg.parts.map((part) => {
+			if (!isTarget(part) || part.type !== "question_record") return part;
+			changed = true;
+			if (answers === null) {
+				return { ...part, status: "cancelled" as const };
+			}
+			const question = part.record.question;
+			const flat = lookupAnswer(question, answers, questionCount);
+			const selection = parseAnswer(flat, question.options);
+			return {
+				...part,
+				status: "answered" as const,
+				answer: {
+					request_id: requestId,
+					header: question.header,
+					question: question.question,
+					answers: selection.labels,
+					...(selection.otherText ? { text: selection.otherText } : {}),
+					// The old records carry no per-answer clock, and the card only
+					// draws the question's own time. Left empty rather than filled in
+					// with now, which would claim a moment that is not the answer's.
+					answered_at: "",
+				},
+			};
 		});
 
 		if (!changed) return msg;
@@ -1389,6 +1583,8 @@ interface UserMessageOptions {
 	subtype?: string;
 	meta?: SystemMessageMeta;
 	anchorSeq?: HistorySeq;
+	/** The posted questions this message answers; see QuestionAnswerRecord. */
+	answering?: QuestionAnswerRecord[];
 }
 
 /**
@@ -1476,10 +1672,14 @@ export function applyUserMessage(
 		...(options?.anchorSeq !== undefined
 			? { anchorSeq: options.anchorSeq }
 			: {}),
-		// Only tag system-driven messages; a plain user message stays source-less.
+		// Only tag the messages a person did not type; a plain user message stays
+		// source-less. An agent's answer carries no subtype or meta — what there
+		// is to say about it is on the answers themselves.
 		...(options?.source === "system"
 			? { source: options.source, subtype: options.subtype, meta: options.meta }
 			: {}),
+		...(options?.source === "agent" ? { source: options.source } : {}),
+		...(options?.answering ? { answering: options.answering } : {}),
 	};
 
 	return appendUserMessage(messages, userMessage, () =>
@@ -1599,7 +1799,15 @@ function finalizeStreamingMessages(
 }
 
 export function isBackReference(record: unknown): boolean {
-	const type = (record as Record<string, unknown> | null)?.type;
+	const fields = record as Record<string, unknown> | null;
+	const type = fields?.type;
+	// A message is kept for one half of itself only: the questions it answers
+	// may have been asked pages below. An ordinary message settles nothing and
+	// must never be replayed, which would put a second copy of it on screen —
+	// see applyBackReference for how the two halves are told apart.
+	if (type === "message") {
+		return Array.isArray(fields?.answering) && fields.answering.length > 0;
+	}
 	return typeof type === "string" && BACK_REFERENCE_TYPES.has(type);
 }
 
@@ -1708,10 +1916,7 @@ export function prependHistoryPage(
 	// part of it that is true here.
 	closed = closePreviousTurn(closed);
 	for (const record of catchUp.backReferences ?? []) {
-		closed = applyServerEvent(
-			closed,
-			normalizeEvent(record as Record<string, unknown>),
-		);
+		closed = applyBackReference(closed, record);
 	}
 	if (catchUp.turn) {
 		closed = retireAgainstTurn(closed, catchUp.turn);

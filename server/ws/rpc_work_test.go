@@ -655,7 +655,7 @@ func TestHandler_WorkListSubscribe_WithItems(t *testing.T) {
 // first notification moved it.
 func TestHandler_WorkDetailSubscribe_CarriesTheActivity(t *testing.T) {
 	env := newTestEnv(t, &mockAgent{})
-	workID, _ := startWorkWaiting(t, env, work.WaitUser)
+	workID, _ := startWorkWaiting(t, env, work.WaitChild)
 
 	resp := env.call("work.detail.subscribe", rpc.WorkDetailSubscribeParams{
 		ID:     "watch-1",
@@ -669,8 +669,8 @@ func TestHandler_WorkDetailSubscribe_CarriesTheActivity(t *testing.T) {
 	if err := json.Unmarshal(resp.Result, &result); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	if result.Activity != work.ActivityNeedsMessage {
-		t.Errorf("activity = %q, want %q", result.Activity, work.ActivityNeedsMessage)
+	if result.Activity != work.ActivityWaitingChildren {
+		t.Errorf("activity = %q, want %q", result.Activity, work.ActivityWaitingChildren)
 	}
 }
 

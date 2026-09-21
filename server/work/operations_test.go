@@ -5,6 +5,8 @@ import (
 	"errors"
 	"strings"
 	"testing"
+
+	"github.com/pockode/server/agent"
 )
 
 // recordingStarter captures the context it was called with (for the detach
@@ -220,11 +222,11 @@ func TestOperations_Wait_AcceptedWhileASubtaskRuns(t *testing.T) {
 	startWork(t, store, child.ID)
 	ops := NewOperations(store, nil, nil, nil)
 
-	if err := ops.Wait(context.Background(), story.ID, "for Reducer"); err != nil {
+	if err := ops.Wait(context.Background(), story.ID); err != nil {
 		t.Fatalf("Wait: %v", err)
 	}
-	if got := getWork(t, store, story.ID); got.Wait != WaitChild || got.WaitReason != "for Reducer" {
-		t.Errorf("wait = %q/%q, want child/\"for Reducer\"", got.Wait, got.WaitReason)
+	if got := getWork(t, store, story.ID); got.Wait != WaitChild {
+		t.Errorf("wait = %q, want child", got.Wait)
 	}
 }
 
@@ -281,13 +283,13 @@ func TestOperations_Wait_RefusesWhenNothingCouldEndIt(t *testing.T) {
 			tc.setup(t, store, story.ID)
 			ops := NewOperations(store, nil, nil, nil)
 
-			err := ops.Wait(context.Background(), story.ID, "for my tasks")
+			err := ops.Wait(context.Background(), story.ID)
 			if !errors.Is(err, ErrInvalidWork) {
 				t.Fatalf("err = %v, want an ErrInvalidWork refusal", err)
 			}
 			// The three properties of docs/lifecycle-ui.md §7, plus what is in
 			// the way: the other ways out and the plain statement of no effect.
-			wants := append(tc.wants, "work_needs_input", "step_done", "The wait was not set")
+			wants := append(tc.wants, "question_post", "step_done", "The wait was not set")
 			for _, want := range wants {
 				if !strings.Contains(err.Error(), want) {
 					t.Errorf("refusal %q does not mention %q", err, want)
@@ -341,6 +343,109 @@ func TestOperations_StepDone_ClosesWhenNoChildIsActive(t *testing.T) {
 	}
 	if got := getWork(t, store, story.ID); got.Status != StatusClosed {
 		t.Errorf("status = %q, want closed", got.Status)
+	}
+}
+
+// recordingWithdrawer is what a completed step takes back.
+type recordingWithdrawer struct {
+	calls []withdrawal
+}
+
+type withdrawal struct {
+	worktree  string
+	sessionID string
+	reason    agent.CancelReason
+}
+
+func (r *recordingWithdrawer) WithdrawQuestions(worktree, sessionID string, reason agent.CancelReason) {
+	r.calls = append(r.calls, withdrawal{worktree: worktree, sessionID: sessionID, reason: reason})
+}
+
+// A question asked during a step is about that step. Once the step is done the
+// agent has moved past what it was asking, so the answer would arrive for work
+// it has already finished — and the user would be asked for nothing.
+func TestOperations_StepDone_WithdrawsTheStepsQuestions(t *testing.T) {
+	store := newTestStore(t)
+	story := createStory(t, store, "Build")
+	startWorkWithSession(t, store, story.ID, "sess-1")
+	questions := &recordingWithdrawer{}
+	ops := NewOperations(store, nil, nil, fixedSteps{"first", "second"})
+	ops.SetQuestionWithdrawer(questions)
+
+	if _, _, err := ops.StepDone(context.Background(), story.ID); err != nil {
+		t.Fatalf("StepDone: %v", err)
+	}
+
+	if len(questions.calls) != 1 {
+		t.Fatalf("withdrawals = %+v, want exactly one", questions.calls)
+	}
+	got := questions.calls[0]
+	if got.sessionID != "sess-1" || got.reason != agent.ReasonStepDone {
+		t.Errorf("withdrawal = %+v, want sess-1 withdrawn as step_done", got)
+	}
+}
+
+// The step that *closes* the work does not, and that is not an oversight: the
+// close retires the session, and retiring withdraws them with the reason that
+// says more — nobody is coming back to this chat at all. Two withdrawals for one
+// question would race over which reason the user reads.
+func TestOperations_StepDone_LeavesTheClosingStepToTheRetirement(t *testing.T) {
+	store := newTestStore(t)
+	story := createStory(t, store, "Build")
+	startWorkWithSession(t, store, story.ID, "sess-1")
+	questions := &recordingWithdrawer{}
+	ops := NewOperations(store, nil, nil, fixedSteps{"only"})
+	ops.SetQuestionWithdrawer(questions)
+
+	if _, _, err := ops.StepDone(context.Background(), story.ID); err != nil {
+		t.Fatalf("StepDone: %v", err)
+	}
+
+	if got := getWork(t, store, story.ID); got.Status != StatusClosed {
+		t.Fatalf("status = %q, want closed", got.Status)
+	}
+	if len(questions.calls) != 0 {
+		t.Errorf("withdrawals = %+v, want none — closing is what withdraws them", questions.calls)
+	}
+}
+
+// A refused step_done moves nothing, questions included: the step is not over.
+func TestOperations_StepDone_WithdrawsNothingWhenItIsRefused(t *testing.T) {
+	store := newTestStore(t)
+	story := createStory(t, store, "Build")
+	startWorkWithSession(t, store, story.ID, "sess-1")
+	child := createTask(t, store, story.ID, "Reducer")
+	startWork(t, store, child.ID)
+	questions := &recordingWithdrawer{}
+	ops := NewOperations(store, nil, nil, fixedSteps{"only"})
+	ops.SetQuestionWithdrawer(questions)
+
+	if _, _, err := ops.StepDone(context.Background(), story.ID); !errors.Is(err, ErrInvalidWork) {
+		t.Fatalf("err = %v, want the refusal", err)
+	}
+	if len(questions.calls) != 0 {
+		t.Errorf("withdrawals = %+v, want none", questions.calls)
+	}
+}
+
+// Stopping is the other end of the same question. A stopped work is handed back
+// to a person, and the questions are exactly what that person is being handed —
+// they survive the stop and survive the restart after it, which is why nothing
+// here withdraws anything.
+func TestOperations_StopWork_WithdrawsNothing(t *testing.T) {
+	store := newTestStore(t)
+	story := createStory(t, store, "Build")
+	startWorkWithSession(t, store, story.ID, "sess-1")
+	questions := &recordingWithdrawer{}
+	ops := NewOperations(store, nil, nil, nil)
+	ops.SetQuestionWithdrawer(questions)
+
+	if err := ops.StopWork(context.Background(), story.ID); err != nil {
+		t.Fatalf("StopWork: %v", err)
+	}
+
+	if len(questions.calls) != 0 {
+		t.Errorf("withdrawals = %+v, want none — the questions are what the user is handed", questions.calls)
 	}
 }
 

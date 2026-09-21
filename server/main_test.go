@@ -53,7 +53,7 @@ func newTestServer(t *testing.T, serverPassword, mcpToken string) (http.Handler,
 	workOps := work.NewOperations(workStore, workStarter, nil, nil)
 	workOps.SetSessionDeleter(scopeManager)
 	wsHandler := ws.NewRPCHandler(serverPassword, sessions, "test", true, cmdStore, scopeManager, settingsStore, workStore, workOps, work.NewEngine(workStore, work.DefaultMaxNudges), agentRoleStore)
-	mcpHandler := mcp.NewAPIHandler(mcp.NewExecutor(workStore, agentRoleStore, workOps, settingsStore, registry), mcpToken)
+	mcpHandler := mcp.NewAPIHandler(mcp.NewExecutor(workStore, agentRoleStore, workOps, settingsStore, registry, scopeManager), mcpToken)
 	transferHandler := filetransfer.NewHandler(registry, slog.Default())
 
 	return newHandler(serverPassword, sessions, true, wsHandler, mcpHandler, transferHandler), workDir, sessions

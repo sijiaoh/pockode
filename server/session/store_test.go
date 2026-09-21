@@ -508,6 +508,40 @@ func TestFileStore_AppendToHistoryNumbersRecords(t *testing.T) {
 	}
 }
 
+// TestStampHistorySeq_KeepsFieldsThisBuildHasNoNameFor: replay adds a seq and
+// changes nothing else, including fields agent.EventRecord has no field for.
+//
+// That is what lets the struct drop a field a record on disk still carries — the
+// legacy question_response record's `answers` map is the case this was written
+// for. Nothing in Go reads it, so there is no field for it, and the client still
+// gets it verbatim because this round-trips through a raw field map rather than
+// through EventRecord.
+func TestStampHistorySeq_KeepsFieldsThisBuildHasNoNameFor(t *testing.T) {
+	legacy := json.RawMessage(
+		`{"type":"question_response","request_id":"q-1","answers":{"Which?":"React"}}`,
+	)
+
+	stamped := stampHistorySeq([]json.RawMessage{legacy}, 7)
+
+	var rec struct {
+		Seq     HistorySeq        `json:"seq"`
+		Type    string            `json:"type"`
+		Answers map[string]string `json:"answers"`
+	}
+	if err := json.Unmarshal(stamped[0], &rec); err != nil {
+		t.Fatalf("record does not parse: %v", err)
+	}
+	if rec.Seq != 7 {
+		t.Errorf("seq = %d, want 7", rec.Seq)
+	}
+	if rec.Type != "question_response" {
+		t.Errorf("type = %q, want it preserved", rec.Type)
+	}
+	if rec.Answers["Which?"] != "React" {
+		t.Errorf("answers = %v, want the map preserved verbatim", rec.Answers)
+	}
+}
+
 // TestStampHistorySeq: the numbers a client is given for replayed history have to
 // be the same ones AppendToHistory handed out, or a fork point taken from
 // replayed history would name a different record than one taken from a live event.

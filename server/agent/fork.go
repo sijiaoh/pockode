@@ -187,6 +187,12 @@ func danglesAfterCut(rec EventRecord, settledTools, settledRequests map[string]s
 		_, settled := settledRequests[rec.RequestID]
 		return !settled
 	default:
+		// question_posted is deliberately not here, and it is the one case where
+		// an unclosed pair must be kept. A prompt the CLI raised belongs to the
+		// process that raised it, so one left open by the cut is a call nobody
+		// can ever return; a posted question belongs to the session, so one left
+		// open by the cut is a question the fork inherits and can still answer
+		// (see UnansweredQuestions).
 		return false
 	}
 }

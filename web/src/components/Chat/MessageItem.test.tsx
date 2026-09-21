@@ -25,6 +25,152 @@ describe("MessageItem", () => {
 		expect(screen.getByText("Hello AI")).toBeInTheDocument();
 	});
 
+	// The bubble is drawn from `answering`, never from the `content` string the
+	// agent reads — so every half of an answer the record keeps has to be read
+	// here, or a user watches their own words vanish on send.
+	describe("a message that answered posted questions", () => {
+		const answering = (
+			entry: Record<string, unknown>,
+		): Extract<Message, { role: "user" }> => ({
+			id: "am-1",
+			role: "user",
+			content: "Answering:\n\nQ: Which database?\nA: whatever",
+			status: "complete",
+			createdAt: new Date(),
+			answering: [
+				{
+					request_id: "r1",
+					header: "Database",
+					question: "Which database?",
+					answered_at: "2026-01-02T14:05:00Z",
+					...entry,
+				},
+			],
+		});
+
+		it("draws the question beside the labels that were picked", () => {
+			render(
+				<MessageItem
+					sessionId="session-1"
+					message={answering({ answers: ["Postgres"] })}
+				/>,
+			);
+			expect(screen.getByText("Database")).toBeInTheDocument();
+			expect(screen.getByText("Which database?")).toBeInTheDocument();
+			expect(screen.getByText("Postgres")).toBeInTheDocument();
+		});
+
+		// The whole answer to a question that offered no options lives in `text`,
+		// so a bubble reading only `answers` shows an empty line — which is every
+		// free-text answer there is.
+		it("draws what the user wrote themselves", () => {
+			render(
+				<MessageItem
+					sessionId="session-1"
+					message={answering({ answers: [], text: "use SQLite" })}
+				/>,
+			);
+			expect(screen.getByText("use SQLite")).toBeInTheDocument();
+		});
+
+		it("draws a label and the user's own words together", () => {
+			render(
+				<MessageItem
+					sessionId="session-1"
+					message={answering({ answers: ["Node"], text: "pin it to 22" })}
+				/>,
+			);
+			expect(screen.getByText("Node · pin it to 22")).toBeInTheDocument();
+		});
+
+		it("says a decline is one, with the note when there was one", () => {
+			render(
+				<MessageItem
+					sessionId="session-1"
+					message={answering({ declined: true, note: "asked ops" })}
+				/>,
+			);
+			expect(screen.getByText("Not answering — asked ops")).toBeInTheDocument();
+		});
+	});
+
+	// An answer another agent gave through `question_answer`. The reader never
+	// saw the question, so the one thing this must not do is read as something
+	// they said.
+	describe("an answer given by another agent", () => {
+		const byAgent = (
+			resolvedBy: Record<string, unknown>,
+		): Extract<Message, { role: "user" }> => ({
+			id: "aa-1",
+			role: "user",
+			content: "Answering — not the user…",
+			status: "complete",
+			createdAt: new Date(),
+			source: "agent",
+			answering: [
+				{
+					request_id: "r1",
+					header: "Database",
+					question: "Which database?",
+					answers: ["Postgres"],
+					answered_at: "2026-01-02T14:05:00Z",
+					resolved_by: { kind: "agent", ...resolvedBy },
+				},
+			],
+		});
+
+		it("names the work that answered, and says it was not the reader", () => {
+			render(
+				<MessageItem
+					sessionId="session-1"
+					message={byAgent({ work_id: "w1", title: "Ship the API" })}
+				/>,
+			);
+			expect(
+				screen.getByText(
+					'Answered by the agent working on "Ship the API" — not by you.',
+				),
+			).toBeInTheDocument();
+			// Still the answer itself: the reader has to be able to read what was
+			// said, which is why this is not folded into a work-event line.
+			expect(screen.getByText("Which database?")).toBeInTheDocument();
+			expect(screen.getByText("Postgres")).toBeInTheDocument();
+		});
+
+		// A plain chat session has no work to name, and the sentence still has to
+		// make its point.
+		it("still says it was another agent when there is no work to name", () => {
+			render(<MessageItem sessionId="session-1" message={byAgent({})} />);
+			expect(
+				screen.getByText("Answered by another agent — not by you."),
+			).toBeInTheDocument();
+		});
+
+		// Not an expected state — the origin is set by the same call that fills
+		// `answering` — but the one thing this shape exists to prevent is an
+		// answer being read as the user's, and falling back to the bubble is
+		// exactly that.
+		it("keeps saying so even with no answers to draw", () => {
+			render(
+				<MessageItem
+					sessionId="session-1"
+					message={{
+						id: "aa-2",
+						role: "user",
+						content: "Answering — not the user…",
+						status: "complete",
+						createdAt: new Date(),
+						source: "agent",
+					}}
+				/>,
+			);
+			expect(
+				screen.getByText("Answered by another agent — not by you."),
+			).toBeInTheDocument();
+			expect(screen.getByText("Answering — not the user…")).toBeInTheDocument();
+		});
+	});
+
 	describe("work event", () => {
 		const systemMessage = (
 			overrides: Partial<Extract<Message, { role: "user" }>> = {},

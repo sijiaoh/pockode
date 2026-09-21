@@ -28,14 +28,13 @@ func TestWorkListRowCarriesExactlyItsFields(t *testing.T) {
 		Title:       "Some task",
 		Body:        "the instructions",
 		Status:      work.StatusActive,
-		Wait:        work.WaitUser,
-		WaitReason:  "which database?",
+		Wait:        work.WaitChild,
 		SessionID:   "sess-1",
 		Worktree:    "wt",
 		CurrentStep: 2,
 		CreatedAt:   time.Unix(1, 0),
 		UpdatedAt:   time.Unix(2, 0),
-	}, work.ActivityNeedsMessage))
+	}, work.RowState{Activity: work.ActivityWaitingChildren}))
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
@@ -64,10 +63,10 @@ func TestWorkListRowCarriesExactlyItsFields(t *testing.T) {
 	if strings.Contains(string(row), "the instructions") {
 		t.Errorf("list row carries the work body: %s", row)
 	}
-	// The wait's reason is the detail's, for the same reason the body is: a row
-	// has nowhere to show free text the agent wrote.
-	if strings.Contains(string(row), "which database?") {
-		t.Errorf("list row carries the wait reason: %s", row)
+	// The body is the detail's: a row has nowhere to show free text the agent
+	// wrote.
+	if strings.Contains(string(row), "the instructions") {
+		t.Errorf("list row carries the body: %s", row)
 	}
 }
 
@@ -79,14 +78,13 @@ func TestWorkDetailCarriesTheFieldsTheListDropped(t *testing.T) {
 		Title:       "Some story",
 		Body:        "the instructions",
 		CurrentStep: 2,
-		WaitReason:  "which database?",
 		CreatedAt:   time.Unix(1, 0),
 	}})
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
 
-	for _, want := range []string{`"body":"the instructions"`, `"current_step":2`, `"created_at"`, `"wait_reason":"which database?"`} {
+	for _, want := range []string{`"body":"the instructions"`, `"current_step":2`, `"created_at"`} {
 		if !strings.Contains(string(result), want) {
 			t.Errorf("detail result is missing %s: %s", want, result)
 		}

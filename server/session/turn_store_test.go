@@ -107,7 +107,7 @@ func TestFileStore_ForkStartsIdle(t *testing.T) {
 	if _, err := store.ApplyTurn(ctx, "source", TurnInput{Signal: SignalPrompt, At: at(0)}); err != nil {
 		t.Fatalf("ApplyTurn failed: %v", err)
 	}
-	if _, err := store.ApplyTurn(ctx, "source", TurnInput{Signal: SignalQuestionRaised, RequestID: "req-1", At: at(1)}); err != nil {
+	if _, err := store.ApplyTurn(ctx, "source", TurnInput{Signal: SignalPermissionRaised, RequestID: "req-1", At: at(1)}); err != nil {
 		t.Fatalf("ApplyTurn failed: %v", err)
 	}
 	source, _, err := store.Get("source")
@@ -120,7 +120,7 @@ func TestFileStore_ForkStartsIdle(t *testing.T) {
 		t.Fatalf("CreateFork failed: %v", err)
 	}
 
-	// Nothing is producing output for the fork, and the question in the source
+	// Nothing is producing output for the fork, and the prompt in the source
 	// can only be answered by the source's own process.
 	if fork.Turn.InProgress() {
 		t.Errorf("fork turn = %+v, want idle", fork.Turn)

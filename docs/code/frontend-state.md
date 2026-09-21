@@ -355,12 +355,22 @@ ServerNotification (snake_case)
 
 ### Message Variants
 
-`Message` is exactly `UserMessage | AssistantMessage`. Pockode's own annotations
-— the prompts the Work engine sends — are not a third variant: they are user
-messages tagged `source: "system"`, rendered as a collapsed line instead of a
-bubble (see
+`Message` is exactly `UserMessage | AssistantMessage`. Two other things arrive
+as user messages rather than as variants of their own, each tagged with a
+`source`: Pockode's own annotations — the prompts the Work engine sends,
+`source: "system"` — drawn as a collapsed line instead of a bubble (see
 [work-system.md](work-system.md#rendering-in-the-transcript) for why the
-transcript holds no aggregate of them).
+transcript holds no aggregate of them), and an answer another agent gave through
+`question_answer`, `source: "agent"`, drawn as a named block
+([answering-ui.md](../answering-ui.md#an-answer-another-agent-gave)).
+
+A typed message is the one with **no** `source` at all, which is what
+`isTypedByUser` (`web/src/utils/messageSource.ts`) asks. Two behaviours are
+about the person at the keyboard rather than about the message's role — following
+the transcript to the tail on send, and the delivery receipt — and both go
+through that predicate. The fork menu deliberately does not: a fork cuts around
+anything that entered the conversation, whoever supplied it, which is the line
+the server draws too (`chat.isUserMessageRecord`).
 
 The consequence to know before touching the reducer: **`status` is not a common
 field.** Only assistant messages carry one, so anything asking about it has to
@@ -372,9 +382,14 @@ A turn starts from a `message` event and ends on `done` / `interrupted` /
 `error` / `process_ended`, leaving its message at the matching status
 (`complete` for `done`). Every prompt is persisted and broadcast by the
 server, so the client always sees the `message` that opens a turn — and a turn
-cut short takes its pending permission and question dialogs down with it, so no
-answer can resume it either. That makes the rule for content arriving after an
-ending unambiguous: it belongs to the turn that just ended.
+cut short takes its pending permission requests down with it, so no answer can
+resume it either. That makes the rule for content arriving after an ending
+unambiguous: it belongs to the turn that just ended.
+
+A posted question is deliberately **not** taken down with it. It belongs to the
+session rather than to the turn, so it is still waiting when the next process
+starts — and it never held this turn open in the first place
+([answering-ui.md §6](../answering-ui.md#6-the-record-card-in-the-stream)).
 
 That matters because the CLI keeps talking for a moment after a turn is cut
 short — a Task subagent's last output is the usual source. Such content is
@@ -470,8 +485,10 @@ way every other row's title is ([tool-call-model.md](../tool-call-model.md)).
 **One part per `tool_use_id`.** A `permission_request` *takes the place* of the
 `tool_call` part it names, rather than sitting beside it: while the user is
 deciding, the machine is waiting for *them*, and a row spinning above the card
-would say the opposite. The same join `ask_user_question` makes, for the same
-reason — all of it describes one tool use.
+would say the opposite. A `question_posted` record does the same to the
+`question_post` tool row, joined by position rather than by id
+([answering-ui.md §6](../answering-ui.md#6-the-record-card-in-the-stream)) —
+either way it is one act, not two rows.
 
 **A card the user has not answered is that call's row**, whichever order the
 two arrive in: Claude announces the call and then asks (the card replaces the

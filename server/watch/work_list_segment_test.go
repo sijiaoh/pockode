@@ -72,12 +72,29 @@ func TestCurrentSegment_CarriesWhatItsRowsSpeakFor(t *testing.T) {
 	}
 }
 
+// The second dimension earns a task its own row too. An agent that posted a
+// question and went on working is `running`, so a rule reading the activity
+// alone would roll this task up into its story and leave the question
+// unreachable from the list.
+func TestHasCurrentRow_ATaskWithAQuestionEarnsOne(t *testing.T) {
+	quiet := child("quiet", "story", work.WorkTypeTask, work.StatusActive, work.ActivityRunning)
+	if hasCurrentRow(quiet) {
+		t.Error("a running task needing nobody draws a row of its own")
+	}
+
+	asking := quiet
+	asking.UnansweredQuestions = 1
+	if !hasCurrentRow(asking) {
+		t.Error("a running task with a question waiting draws no row, so the question is unreachable from the list")
+	}
+}
+
 // A task that left its story prints `in: <parent title>`, and can only get that
 // word from the parent — even when the parent is closed and has no row here.
 func TestCurrentSegment_CarriesTheParentATaskRowNames(t *testing.T) {
 	items := []rpc.WorkListItem{
 		row("archived", work.WorkTypeStory, work.StatusClosed, work.ActivityClosed),
-		child("stuck", "archived", work.WorkTypeTask, work.StatusActive, work.ActivityNeedsMessage),
+		child("stuck", "archived", work.WorkTypeTask, work.StatusActive, work.ActivityNeedsPermission),
 	}
 
 	kept, _ := currentSegment(items, CurrentGroupCap)
@@ -176,8 +193,8 @@ func TestCurrentSegment_StoppedCapDropsOnlyStories(t *testing.T) {
 // so a cap that reached them would have to drop one of each.
 func TestCurrentSegment_CapNeverTouchesTheOtherGroups(t *testing.T) {
 	items := []rpc.WorkListItem{
-		row("waiting", work.WorkTypeStory, work.StatusActive, work.ActivityNeedsMessage),
-		row("asking", work.WorkTypeStory, work.StatusActive, work.ActivityNeedsAnswer),
+		row("waiting", work.WorkTypeStory, work.StatusActive, work.ActivityNeedsPermission),
+		row("asking", work.WorkTypeStory, work.StatusActive, work.ActivityNeedsPermission),
 		row("running", work.WorkTypeStory, work.StatusActive, work.ActivityIdle),
 		row("busy", work.WorkTypeStory, work.StatusActive, work.ActivityRunning),
 		row("idle-a", work.WorkTypeStory, work.StatusOpen, work.ActivityOpen),
@@ -203,7 +220,7 @@ func TestCurrentSegment_CapSpares_AStoryWhoseTaskIsARow(t *testing.T) {
 	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	items := []rpc.WorkListItem{
 		updated(row("oldest", work.WorkTypeStory, work.StatusStopped, work.ActivityStopped), base),
-		updated(child("stuck", "oldest", work.WorkTypeTask, work.StatusActive, work.ActivityNeedsAnswer), base),
+		updated(child("stuck", "oldest", work.WorkTypeTask, work.StatusActive, work.ActivityNeedsPermission), base),
 		updated(row("newer", work.WorkTypeStory, work.StatusStopped, work.ActivityStopped), base.Add(time.Hour)),
 	}
 

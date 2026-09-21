@@ -46,7 +46,7 @@ than one place, and the copies were maintained rather than derived.
 |---|---|---|
 | Process | That it exists, and an event stream | Any turn state, any lifetime of its own |
 | Session | One `TurnState` — phase, blockers, when the phase started, how the last turn ended — persisted | Any `needs_input` flag; that is derived |
-| Work | `status`, `wait`, the wait's reason, the consecutive nudge count, the current step | Any mirror of what the process is doing |
+| Work | `status`, `wait`, the consecutive nudge count, the current step | Any mirror of what the process is doing; anything about a question, which belongs to the session |
 
 **The dependency runs one way: process → session → work.** A process feeds
 events into its session's reducer; the work layer reads sessions and never the
@@ -97,33 +97,35 @@ Three things about the state are load-bearing:
   CLI resumed". One function translates, and nothing else in the server reads
   event types to decide what a session is doing.
 
-Three blockers, and the list is closed on purpose: a fourth kind would have to
-answer two questions before it could be added, because these three differ on
-both.
+Two blockers, and the list is closed on purpose: a third kind would have to
+answer two questions before it could be added, because these two differ on both.
 
 | Blocker | Cleared by | What expiring it costs |
 |---|---|---|
-| `permission` | the user's answer, or the agent withdrawing it | the request is a denial and the tool does not run |
-| `question` | the same two | nothing final — the answer can still arrive as a message |
+| `permission` | the user's decision, or the agent withdrawing it | the request is a denial and the tool does not run |
 | `background` | the agent producing content again; nobody answers it | the task itself, which is gone |
 
-Each also ends with the death of the process that raised it, which is the one
-thing all three share and the subject of the paragraph after next.
+Both also end with the death of the process that raised it, which is the one
+thing they share and the subject of the paragraph after next.
+
+It was three: the CLIs' own blocking question was one. That is gone in both
+directions — Pockode refuses the tool where it arrives, and a question an agent
+asks through `question_post` belongs to the session and blocks nothing.
 
 **A message may be sent into a turn that is running, but not into one that is
 blocked on a person.** The first half is cheap: both CLIs fold a mid-turn message
 into the turn already running, so it shares that turn's single ending and the
 reducer needs no rule of its own for it — `prompt` on an open turn leaves it
 open. The second half is why `chat.ErrTurnAwaitingAnswer` exists. A CLI holding a
-permission request or a question open is inside the tool call waiting for that
-answer and reads nothing else, and accepting the message would take the card off
-the user's screen — a prompt abandons whatever the turn was holding open — leaving
-a turn open that only the answer to a now-unanswerable request could end, and no
-lease to collect it unless the operator set `--turn-timeout`. So the send path
-refuses instead, for every sender: an auto-continuation nudged into a session
-that is holding a question open is nudged into the same silence a typed message
-would be. Both ways forward stay open — answer the request, or stop the turn and
-then send.
+permission request open is inside the tool call waiting for that decision and
+reads nothing else, and accepting the message would take the card off the user's
+screen — a prompt abandons whatever the turn was holding open — leaving a turn open
+that only the answer to a now-unanswerable request could end, and no lease to
+collect it unless the operator set `--turn-timeout`. So the send path refuses
+instead, for every sender: an auto-continuation nudged into a session in that
+state is nudged into the same silence a typed message would be, and so is a
+message answering a posted question. Both ways forward stay open — decide the
+request, or stop the turn and then send.
 
 **A background wait is a blocker rather than a kind of running**, and that is the
 direct repair of the two-hour spinner. The turn is openly parked; the surfaces
@@ -135,9 +137,9 @@ it**, and that is not a policy — it is what a blocker already is, in both of i
 shapes. A request id is only meaningful on the stdio connection that issued it, so a
 prompt whose process is gone is unanswerable *as a prompt*; background work dies
 with the CLI that started it. So the death of a process expires every blocker it
-raised, and what becomes of an expired question
-([below](#an-expired-question-is-not-a-lost-answer)) is a question the session
-layer has to answer rather than dodge.
+raised, and what becomes of one
+([below](#nothing-a-person-has-to-do-holds-a-process-open-except-a-permission)) is
+a question the session layer has to answer rather than dodge.
 
 **A turn's ending is reported exactly once**, even though agents announce it
 twice — Claude acknowledges an interrupt and then ends the same turn again with
@@ -164,7 +166,7 @@ expiry does.
 | Lease | Held until | Default | What expiry does |
 |---|---|---|---|
 | turn in progress | the turn ends | none (`--turn-timeout`) | interrupt the turn |
-| blocked on a person | the prompt is answered or withdrawn | 1h (`--answer-timeout`) | withdraw the prompt |
+| blocked on a person | the permission request is decided or withdrawn | 1h (`--answer-timeout`) | withdraw the request |
 | parked on background work | the CLI produces content again | 24h (`--background-timeout`) | end the turn (warning, then done) |
 | idle | the next message | 5m (`--idle-timeout`) | close the process |
 
@@ -222,14 +224,23 @@ values this replaces (`in_progress`, `needs_input`, `waiting`) were exactly
 `active` crossed with a wait, which is why converting the stored ones needed no
 guessing and no migration script.
 
-Beside the status, an active work carries a **`wait`** — `user`
-(`work_needs_input`) or `child` (`work_wait`) — which only the agent can
-declare, with free text of its own saying why. A waiting work is still
-`active`: the engine still
-owns it, it simply must not be nudged to carry on. Both waits are cleared by
-something that arrives from *outside* the session, which is what lets them
-survive a restart when a work with no wait cannot — and is also why a wait is
-only accepted while something that could end it still exists (below).
+Beside the status, an active work carries a **`wait`** — `child` (`work_wait`),
+the only value — which only the agent can declare. A waiting work is still
+`active`: the engine still owns it, it simply must not be nudged to carry on. It
+is cleared by something that arrives from *outside* the session, which is what
+lets it survive a restart when a work waiting for nothing cannot — and is also
+why a wait is only accepted while something that could end it still exists
+(below).
+
+**Waiting for a person is not one of these, and that is the second half of the
+repair.** It was, once: a `user` wait with free text saying why, which was the
+worst version of a question — no structure, no record in the transcript, and
+nowhere to answer it from. An agent asks now (`question_post`), the question
+lives on the *session* beside the turn state, the agent carries on working, and
+the answer arrives as an ordinary message. The engine reads that list where it
+used to read the flag, so a turn ending with a question outstanding is still not
+an accident. Nothing about it is on the work record, because nothing about it is
+a fact about the work.
 
 **Every transition into or out of `active` clears the wait and the nudge count.**
 No path leaves a stale wait for the next one to trip over, and no status says
@@ -247,28 +258,38 @@ wait means), its process goes at the idle lease, and `waiting_children` is
 deliberately outside the attention dot — it would wait forever and tell nobody.
 The refusal is the exact complement of the `step_done` that would close a work
 whose subtasks are still running, so the way out each of those two errors names
-is one the other admits. A `user` wait needs no such check: a person can always
-be asked.
+is one the other admits. `child` is the only wait there is, so this check has
+nothing else to cover: a question needs none of it, because nothing about it is
+on the work record and a person can always be asked.
 
-**The engine has five inputs and no special cases beside them**: a turn ended, a
-user handed the session something to go on, a child work left `active`, a session
-was deleted, the server started. Everything the old `AutoResumer` and `StatusSyncer`
-did with process state changes turned out to be a rule about a turn ending,
-which is what the engine reads instead.
+**The engine has eight inputs and no special cases beside them**: a turn ended,
+a user handed the session something to go on, the user answered a posted
+question, another agent answered one, an agent posted one, a child work left
+`active`, a session was deleted, the server started. Everything the old
+`AutoResumer` and `StatusSyncer` did with process state changes turned out to be
+a rule about a turn ending, which is what the engine reads instead.
+
+The three about questions are inputs rather than commands, and the distinction
+is the one the list is built on: a command is somebody telling a work what to
+be, while an input is something that *happened to its session* and that the
+engine alone decides what to do about
+([code/work-system.md](code/work-system.md#the-work-engine)).
 
 Two of them decide more than the rest:
 
-- **An aborted turn stops the work; a completed one with no wait gets nudged**,
-  up to a bounded allowance kept on the work record itself, so a restart hands a
-  stuck agent no fresh allowance. An aborted turn was taken away rather than
-  finished, and carrying on is the one thing nobody asked for.
+- **An aborted turn stops the work; a completed one with nothing outstanding
+  gets nudged**, up to a bounded allowance kept on the work record itself, so a
+  restart hands a stuck agent no fresh allowance. An aborted turn was taken away
+  rather than finished, and carrying on is the one thing nobody asked for. Two
+  separate things count as outstanding and either is enough: a `child` wait on
+  the work, and a question on its session that nobody has answered.
 - **At startup, a work is preserved when something that outlives the dead
-  process can still end its wait, and stopped when nothing can.** A person can —
-  so a work waiting on the user is kept — and so can a child work that is itself
-  still `active`; a work with no wait was being carried by a process that no
-  longer exists, and nothing is left to end its turn. This is the distinction the
-  old model had no way to draw, which is why every paused work used to come back
-  from a restart stopped.
+  process can still reach it, and stopped when nothing can.** A person can — so
+  a work whose session has a question waiting is kept — and so can a child work
+  that is itself still `active`; a work with nothing outstanding was being
+  carried by a process that no longer exists, and nothing is left to end its
+  turn. This is the distinction the old model had no way to draw, which is why
+  every paused work used to come back from a restart stopped.
 
   Those stops are also what can empty a `child` wait, since the subtask they
   stop may be the last one running — so **startup re-examines the waits as a
@@ -296,7 +317,7 @@ cannot declare one — so every system message carries one lifecycle passage
 rather than each send site restating the half it remembers, which is exactly how
 the old vocabulary survived in prompts after it had left the code. The one thing
 in it an agent could never work out for itself is that a question asked in chat
-holds a CLI process open while `work_needs_input` does not
+holds a CLI process open while `question_post` does not
 ([work-system.md § Prompt Format](code/work-system.md#prompt-format)).
 
 Details: [work-system.md § Four Statuses and a Wait](code/work-system.md#four-statuses-and-a-wait),
@@ -312,7 +333,7 @@ nowhere:
 > for when nothing is happening.
 
 The phase outranks the wait because a wait is a standing intention and a phase is
-a fact about this second: an agent that calls `work_needs_input` and then keeps
+a fact about this second: an agent that calls `work_wait` and then keeps
 writing for ten seconds *is* running, and the moment the turn settles the wait
 takes over. The alternative needs a priority table between two kinds of waiting
 that legitimately coexist, and every entry in such a table is an arbitrary choice
@@ -328,32 +349,44 @@ on the other side. This is the one thing in the lifecycle that could not be a
 single implementation, and the shared fixture is what keeps "two
 implementations" from meaning "two rules".
 
-The ten leaves, their glyphs and where each is painted are
+`Activity` is not the whole of what a surface draws, either: "this work has
+questions nobody has answered" is a second, independent dimension, carried
+beside it rather than folded into it — an agent that asked something and went on
+working is *running* and needs a person, and one value cannot say both.
+
+The leaves, their glyphs and where each is painted are
 [lifecycle-ui.md § 1](lifecycle-ui.md#1-the-vocabulary); the server side is
 [work-system.md § Activity](code/work-system.md#activity).
 
-## An expired question is not a lost answer
+## Nothing a person has to do holds a process open, except a permission
 
 The lease table can take a process away from an unanswered prompt, so the model
-owes an answer to "what happens to the answer". It is different for the two
-kinds, and the difference is not a preference:
+owes an answer to "what happens to the answer". There is one kind of prompt left
+that it can happen to, and the answer for it is blunt: **a permission cannot be
+granted afterwards.** A permission that was not granted is a denial, whichever way
+the waiting ended, so an expired permission request is read-only and states its
+outcome.
 
-- **A question can still be answered afterwards**, as an ordinary message that
-  starts a new turn. The message carries the original question with it, because
-  the agent's own record of having asked is gone.
-- **A permission cannot.** A permission that was not granted is a denial,
-  whichever way the waiting ended, so an expired permission request is read-only
-  and states its outcome.
+An hour is affordable anyway, because losing the process costs one cold resume and
+nothing more — measured, not assumed (below).
 
-That asymmetry is what makes an hour affordable for the answer lease. Losing the
-process costs one cold resume; it does not cost the answer.
+**A question an agent asks is outside all of this, and the measurement below is
+the reason it could be.** A late answer sent as an ordinary message is understood,
+so a question never needed to hold a process open at all. `question_post` records
+it on the session instead: no lease is measured against it, no process is kept
+alive for it, and there is no expiry to explain — a posted question is simply
+unanswered until somebody answers it, declines it, or the agent withdraws it. It
+survives a process dying, a restart, a stop and a fork.
 
-Three things can end a prompt without anybody answering it — the process ended,
-the answer lease ran out, the work above the session closed — and the client is
-told which, on a record of its own, because "why did this stop waiting for me" is
-one question with three quite different next steps. A fourth case is that the
-server cannot say which happened, and that is an answer rather than a gap: the
-card then states what is true of all three.
+The CLIs' own blocking question used to be the other half of the `blocked on a
+person` row, and it is gone in both directions: Pockode refuses that tool where it
+arrives, so no CLI question ever waits
+([agent-integration.md](code/agent-integration.md#refusing-the-clis-own-question)).
+
+Two things can end a permission request without anybody deciding it — the process
+ended, the answer lease ran out — and the client is told which, on a record of its
+own. A third case is that the server cannot say, and that is an answer rather than
+a gap: the card then states what is true of both.
 
 Details: [agent-integration.md § What Becomes of an Expired Prompt](code/agent-integration.md#what-becomes-of-an-expired-prompt)
 and [lifecycle-ui.md § 5](lifecycle-ui.md#5-expiry).
@@ -446,7 +479,7 @@ reader recognises a decision rather than a gap.
   swallow stops that should land, a worse bug than the one being fixed.
 - **A system message refused for a request on screen is not held for later.**
   A step advance, an auto-continuation or a restart sent while the session is
-  blocked on a permission request or a question is refused like any other
+  blocked on a permission request is refused like any other
   message (`chat.ErrTurnAwaitingAnswer`) rather than queued until the card
   clears. The engine's own nudges log a warning and drop it; a restart fails the
   start it belongs to and rolls the claim back. A kickoff creates the session it
@@ -479,8 +512,8 @@ reader recognises a decision rather than a gap.
 
 | Document | Covers |
 |---|---|
-| [lifecycle-ui.md](lifecycle-ui.md) | The presentation layer: the ten activities, the blocker strip, expired cards, work list grouping, button rules |
+| [lifecycle-ui.md](lifecycle-ui.md) | The presentation layer: the eight activities, the attention strip, unanswered questions as a second dimension, work list grouping, button rules |
 | [code/agent-integration.md](code/agent-integration.md) | The process and session layers in code: the reducer, the lease table, expiry records, retirement, restart repair, and both CLI adapters |
-| [code/work-system.md](code/work-system.md) | The work layer in code: statuses and transitions, the engine's five inputs, the command surface, prompts |
+| [code/work-system.md](code/work-system.md) | The work layer in code: statuses and transitions, the engine's eight inputs, the command surface, prompts |
 | [projects/workflow-engine.md](projects/workflow-engine.md) | The same engine from the project system's side, with the prompt builders |
 | [agent-event.md](agent-event.md) | The event stream the reducer's signals are translated from |

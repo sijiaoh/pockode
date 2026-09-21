@@ -73,7 +73,7 @@ func TestSessionListItemCarriesTheTurn(t *testing.T) {
 			Phase: session.PhaseBlocked,
 			Open:  true,
 			Blockers: []session.Blocker{
-				{Kind: session.BlockerQuestion, RequestID: "req-7", RaisedAt: raised},
+				{Kind: session.BlockerPermission, RequestID: "req-7", RaisedAt: raised},
 			},
 			Since: raised,
 		},
@@ -86,7 +86,7 @@ func TestSessionListItemCarriesTheTurn(t *testing.T) {
 
 	// The request id is what the chat's blocker strip jumps to the card with, so
 	// it has to survive the narrowing.
-	for _, wanted := range []string{`"phase":"blocked"`, `"kind":"question"`, `"request_id":"req-7"`} {
+	for _, wanted := range []string{`"phase":"blocked"`, `"kind":"permission"`, `"request_id":"req-7"`} {
 		if !strings.Contains(string(row), wanted) {
 			t.Errorf("list row is missing %s: %s", wanted, row)
 		}

@@ -17,6 +17,7 @@ import (
 type Client struct {
 	baseURL string
 	token   string
+	caller  Caller
 	http    *http.Client
 }
 
@@ -33,7 +34,10 @@ func (e *APIError) Error() string { return e.Message }
 // NewClientFromServerInfo reads server.json from dataDir and builds a client
 // pointed at the running server's local API. The MCP subprocess is always
 // spawned by a running server, so a missing server.json is an error.
-func NewClientFromServerInfo(dataDir string) (*Client, error) {
+//
+// caller is the identity this proxy process was spawned with; it rides along on
+// every tool call.
+func NewClientFromServerInfo(dataDir string, caller Caller) (*Client, error) {
 	info, err := serverinfo.Read(dataDir)
 	if err != nil {
 		return nil, fmt.Errorf("read server.json: %w", err)
@@ -53,6 +57,7 @@ func NewClientFromServerInfo(dataDir string) (*Client, error) {
 	return &Client{
 		baseURL: strings.TrimRight(baseURL, "/"),
 		token:   info.Token,
+		caller:  caller,
 		// Bounded so a wedged server can't hang the tool call (and the AI) forever.
 		// Generous because work_start spawns an agent process server-side; normal
 		// calls finish in well under a second.
@@ -64,7 +69,7 @@ func NewClientFromServerInfo(dataDir string) (*Client, error) {
 // response is reported as *APIError; a tool whose handler failed comes back as
 // a normal response with IsError set.
 func (c *Client) CallTool(ctx context.Context, name string, args json.RawMessage) (toolCallResponse, error) {
-	body, err := json.Marshal(toolCallRequest{Name: name, Arguments: args})
+	body, err := json.Marshal(toolCallRequest{Name: name, Arguments: args, Caller: c.caller})
 	if err != nil {
 		return toolCallResponse{}, fmt.Errorf("marshal tool call: %w", err)
 	}

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { AskUserQuestion, QuestionOption } from "../types/message";
-import { formatAnswer, lookupAnswer, parseAnswer } from "./questionAnswer";
+import { lookupAnswer, parseAnswer } from "./questionAnswer";
 
 const options = (...labels: string[]): QuestionOption[] =>
 	labels.map((label) => ({ label, description: "" }));
@@ -99,19 +99,20 @@ describe("parseAnswer", () => {
 		});
 	});
 
-	it("round-trips whatever the form submits", () => {
-		const opts = options("Yes, always", "React Native");
-		const selection = {
+	// The shape the old writer produced, which is what these strings are read
+	// back from. There is no round-trip test any more because there is no writer:
+	// an answer today keeps its labels and the user's own words apart on the wire,
+	// so this format only ever arrives from history.
+	it("reads back a full answer with commas on both sides", () => {
+		expect(
+			parseAnswer(
+				"Yes, always, React Native, Other: note, with comma",
+				options("Yes, always", "React Native"),
+			),
+		).toEqual({
 			labels: ["Yes, always", "React Native"],
 			otherText: "note, with comma",
-		};
-		expect(parseAnswer(formatAnswer(selection), opts)).toEqual(selection);
-	});
-});
-
-describe("formatAnswer", () => {
-	it("drops a picked but empty Other", () => {
-		expect(formatAnswer({ labels: ["A"], otherText: "  " })).toBe("A");
+		});
 	});
 });
 

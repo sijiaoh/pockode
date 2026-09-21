@@ -1,6 +1,6 @@
 import { CornerDownRight, MessageSquare } from "lucide-react";
 import { type ReactNode, useId } from "react";
-import { ACTIVITY_VIEW, needsUser } from "../../lib/activity";
+import { ACTIVITY_VIEW, needsAttention } from "../../lib/activity";
 import type { WorkListItem } from "../../types/work";
 import { formatRelativeDate } from "../../utils/relativeTime";
 import { ActivityIcon } from "../ui";
@@ -68,7 +68,8 @@ export default function WorkRow({
 	onOpen,
 	onOpenChat,
 }: Props) {
-	const isNeedsUser = needsUser(work.activity);
+	const unanswered = work.unanswered_questions ?? 0;
+	const isNeedsUser = needsAttention(work.activity, unanswered);
 	const isStopped = work.status === "stopped";
 	const sessionId = work.session_id;
 	const totalTasks = tasks?.length ?? 0;
@@ -79,9 +80,10 @@ export default function WorkRow({
 		useWorkCommand(work, activeTasks);
 	const errorId = useId();
 
-	// The left edge is always drawn and only its hue changes: warning for any of
-	// the three ways a work waits on the user, error for one the engine has let
-	// go of, the card's own border colour otherwise. One coloured edge in a column
+	// The left edge is always drawn and only its hue changes: warning for either
+	// way a work waits on the user — a blocking prompt, or a question it posted
+	// and carried on from — error for one the engine has let go of, the card's
+	// own border colour otherwise. One coloured edge in a column
 	// of neutral ones is what reads before a word does; a *transparent* edge in a
 	// column of bordered cards reads as a card missing a side instead.
 	//
@@ -142,6 +144,22 @@ export default function WorkRow({
 			</span>
 		),
 	});
+	if (unanswered > 0) {
+		// Immediately after the activity label and in the same tier, so the line
+		// reads as one sentence: `Running · 1 to answer`. Deliberately not a
+		// glyph of its own — swapping `CircleDot` for `CircleHelp` would fold the
+		// two dimensions back into one, and the whole point is that a running
+		// agent can be waiting on an answer at the same time
+		// (docs/project-ui.md §3, slot 2b).
+		slots.push({
+			key: "unanswered",
+			node: (
+				<span className="text-th-text-secondary">
+					{unanswered === 1 ? "1 to answer" : `${unanswered} to answer`}
+				</span>
+			),
+		});
+	}
 	if (hasWorktreeBadge) {
 		slots.push({
 			key: "worktree",

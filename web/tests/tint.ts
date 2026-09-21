@@ -31,8 +31,8 @@ import { repoPath, sourceFiles } from "./sourceScan";
  * `th-text-muted` is a different case and no longer a token-layer one: it now
  * clears AA over every surface the app paints and `NON_TEXT_FLOOR` as a border,
  * and no `bg-th-text-muted` tint carries text any more — the one that did, the
- * expired chip in `AskUserQuestionItem`, was the self-tint `BANNED_FOREGROUNDS`
- * names and is now an opaque `bg-th-bg-tertiary`. What it would still fail is
+ * question card's settled chip in `QuestionRecordItem`, was the self-tint
+ * `BANNED_FOREGROUNDS` names and is now an opaque `bg-th-bg-tertiary`. What it would still fail is
  * `MAX_TINT_ALPHA`: `Sheet`'s drag handle is `bg-th-text-muted/30`, and no
  * value of the token can lift it — the extreme token, black or white at 30%
  * over the sheet's own surface, reaches about 2.1 in the light variants and 2.7

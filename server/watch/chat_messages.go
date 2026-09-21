@@ -227,9 +227,11 @@ func (w *ChatMessagesWatcher) IsViewing(sessionID string) bool {
 	return len(w.sessionToIDs[sessionID]) > 0
 }
 
-// NotifyMessage broadcasts a user message to all session subscribers except the sender.
-// This is used when a client sends a message to notify other clients (e.g., other tabs)
-// watching the same session.
-func (w *ChatMessagesWatcher) NotifyMessage(sessionID string, event agent.MessageEvent, seq session.HistorySeq, exclude Notifier) {
-	w.notifyEvent(sessionID, event.ToRecord(), seq, exclude)
+// NotifyRecord broadcasts a record the server wrote itself to all session
+// subscribers except the given one. It is how a record that never passes
+// through a process's event stream — a message a client sent, a question
+// Pockode posted on an agent's behalf, its withdrawal — reaches the other
+// clients watching the same session without waiting for a reload.
+func (w *ChatMessagesWatcher) NotifyRecord(sessionID string, record agent.EventRecord, seq session.HistorySeq, exclude Notifier) {
+	w.notifyEvent(sessionID, record, seq, exclude)
 }

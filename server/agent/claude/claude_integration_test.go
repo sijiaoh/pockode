@@ -3,12 +3,15 @@
 package claude
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -753,5 +756,212 @@ waitForKill:
 		case <-ctx.Done():
 			t.Fatal("timeout waiting for the lost background task to be reported")
 		}
+	}
+}
+
+// --- The CLI's own question tool ---
+//
+// Two facts about the installed CLI that the rest of the question design rests
+// on, and that nothing in Go can hold up on its own. Both drive the binary
+// directly rather than through Agent: the first needs the CLI's account of its
+// own tool list, which Pockode's parser drops, and the second needs an
+// AskUserQuestion request, which a session started the normal way can no longer
+// produce — buildArgs has disabled the tool.
+
+// claudeLine starts the CLI on args, feeds it prompt, and hands each output line
+// to see until see returns true or the context runs out. The process is killed
+// on the way out, so a test can stop at the first line it cares about instead of
+// paying for a whole turn.
+func claudeLine(t *testing.T, ctx context.Context, args []string, prompt string, see func(line []byte, stdin io.Writer) bool) {
+	t.Helper()
+
+	proc, err := agent.StartProcess(ctx, testLogger(), Binary, args, t.TempDir())
+	if err != nil {
+		t.Fatalf("start the CLI: %v", err)
+	}
+	defer proc.Terminate()
+
+	msg := `{"type":"user","message":{"role":"user","content":[{"type":"text","text":` +
+		mustJSONString(t, prompt) + `}]}}` + "\n"
+	if _, err := proc.Stdin.Write([]byte(msg)); err != nil {
+		t.Fatalf("write the prompt: %v", err)
+	}
+
+	lines := make(chan []byte)
+	go func() {
+		defer close(lines)
+		// The same reader production uses, so a line this test cannot read is a
+		// line the session could not have read either.
+		scanner := agent.NewLineScanner(proc.Stdout, agent.MaxLineBytes)
+		for scanner.Scan() {
+			line := append([]byte(nil), scanner.Bytes()...)
+			select {
+			case lines <- line:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+
+	for {
+		select {
+		case line, ok := <-lines:
+			if !ok {
+				t.Fatal("the CLI stopped producing output before the test was satisfied")
+			}
+			if see(line, proc.Stdin) {
+				return
+			}
+		case <-ctx.Done():
+			t.Fatal("timed out waiting for the CLI")
+		}
+	}
+}
+
+// withAskToolEnabled strips the flag that disables the CLI's question tool, so a
+// test can obtain the request the production launch no longer produces.
+func withAskToolEnabled(args []string) []string {
+	var kept []string
+	for i := 0; i < len(args); i++ {
+		if args[i] == "--disallowedTools" {
+			i++
+			continue
+		}
+		kept = append(kept, args[i])
+	}
+	return kept
+}
+
+func mustJSONString(t *testing.T, s string) string {
+	t.Helper()
+	data, err := json.Marshal(s)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	return string(data)
+}
+
+// TestIntegration_AskToolIsOffTheModelsToolList is the first line of defence,
+// checked against the CLI rather than against our own flag list.
+//
+// The init frame is the CLI's own statement of which tools this session has, so
+// it answers the question outright: not "was the flag accepted" but "can the
+// model see the tool". Both directions are asserted, because only the pair
+// distinguishes "the flag works" from "the tool was never there anyway" — and if
+// the CLI ever stops offering AskUserQuestion at all, the second half fails and
+// says so instead of leaving a flag nobody knows is dead.
+//
+// Near-free: init arrives before the model is reached, and the process is killed
+// on the first line.
+func TestIntegration_AskToolIsOffTheModelsToolList(t *testing.T) {
+	toolList := func(t *testing.T, args []string) []string {
+		t.Helper()
+		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		defer cancel()
+
+		var tools []string
+		claudeLine(t, ctx, args, "hi", func(line []byte, _ io.Writer) bool {
+			var frame struct {
+				Type    string   `json:"type"`
+				Subtype string   `json:"subtype"`
+				Tools   []string `json:"tools"`
+			}
+			if err := json.Unmarshal(line, &frame); err != nil {
+				return false
+			}
+			if frame.Type != "system" || frame.Subtype != "init" {
+				return false
+			}
+			tools = frame.Tools
+			return true
+		})
+		if len(tools) == 0 {
+			t.Fatal("the CLI's init frame carries no tool list; this test can no longer tell either way")
+		}
+		return tools
+	}
+
+	args := buildArgs(agent.StartOptions{}, claudeLaunch{})
+	if slices.Contains(toolList(t, args), disallowedAskTool) {
+		t.Errorf("%s is still on the model's tool list; --disallowedTools no longer disables it", disallowedAskTool)
+	}
+
+	// Same launch with the one flag removed, to show it is the flag doing it.
+	if !slices.Contains(toolList(t, withAskToolEnabled(args)), disallowedAskTool) {
+		t.Errorf("%s is absent without the flag too; the flag is no longer what keeps it away", disallowedAskTool)
+	}
+}
+
+// TestIntegration_DenyingTheAskToolLetsTheTurnCarryOn is the second line of
+// defence: what happens if a CLI stops honouring the flag and asks anyway.
+//
+// The refusal is only worth sending if the model reads it and keeps working, and
+// that hangs entirely on the deny not interrupting. Measured on claude 2.1.263,
+// which is why toolDenial leaves interrupt out: with interrupt set the CLI
+// discards the message, substitutes "STOP what you are doing and wait for the
+// user", and aborts the turn — the exact outcome question_post exists to avoid.
+//
+// Driven with the tool deliberately re-enabled, since that is the only way to
+// obtain the request this answers.
+func TestIntegration_DenyingTheAskToolLetsTheTurnCarryOn(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
+	defer cancel()
+
+	args := withAskToolEnabled(buildArgs(agent.StartOptions{Mode: session.ModeYolo}, claudeLaunch{}))
+
+	prompt := "Use the AskUserQuestion tool to ask me whether I prefer Python or Go, with those two options. " +
+		"If the tool fails, do not call it again: say what it told you, then stop."
+
+	var denied, sawRefusalBack bool
+	claudeLine(t, ctx, args, prompt, func(line []byte, stdin io.Writer) bool {
+		var frame struct {
+			Type      string `json:"type"`
+			RequestID string `json:"request_id"`
+			Request   *struct {
+				Subtype   string `json:"subtype"`
+				ToolName  string `json:"tool_name"`
+				ToolUseID string `json:"tool_use_id"`
+			} `json:"request"`
+		}
+		if err := json.Unmarshal(line, &frame); err != nil {
+			return false
+		}
+
+		if frame.Type == "control_request" && frame.Request != nil &&
+			frame.Request.Subtype == "can_use_tool" && frame.Request.ToolName == disallowedAskTool {
+			denied = true
+			response, err := json.Marshal(controlResponse{
+				Type: "control_response",
+				Response: controlResponsePayload{
+					Subtype:   "success",
+					RequestID: frame.RequestID,
+					Response:  toolDenial(frame.Request.ToolUseID, agent.CLIQuestionRefusal),
+				},
+			})
+			if err != nil {
+				t.Fatalf("marshal the denial: %v", err)
+			}
+			if _, err := stdin.Write(append(response, '\n')); err != nil {
+				t.Fatalf("send the denial: %v", err)
+			}
+			return false
+		}
+
+		// The refusal reaching the model verbatim is the whole point: a denial
+		// the CLI rewrote would tell it to stop rather than to ask another way.
+		if bytes.Contains(line, []byte("question_post instead")) && frame.Type == "user" {
+			sawRefusalBack = true
+		}
+
+		// The turn ending at all is the other half. An interrupting denial never
+		// gets here.
+		return frame.Type == "result"
+	})
+
+	if !denied {
+		t.Fatal("the CLI never asked to use its question tool, so nothing was measured")
+	}
+	if !sawRefusalBack {
+		t.Error("the refusal text did not reach the model; the CLI replaced it")
 	}
 }

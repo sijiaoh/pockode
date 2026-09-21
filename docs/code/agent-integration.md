@@ -12,10 +12,9 @@ Pockode integrates AI Agents (Claude and Codex) through subprocess management. T
                                 ▼
 ┌─────────────────────────────────────────────────────────────────────┐
 │  ws/rpc_chat.go                                                      │
-│  ├─ chat.message → ChatClient.SendMessageExcluding()                │
+│  ├─ chat.message → ChatClient.SendMessageAnswering()                │
 │  ├─ chat.interrupt → ChatClient.Interrupt()                         │
-│  ├─ chat.permission_response → ChatClient.SendPermissionResponse()  │
-│  └─ chat.question_response → ChatClient.SendQuestionResponse()      │
+│  └─ chat.permission_response → ChatClient.SendPermissionResponse()  │
 └───────────────────────────────┬─────────────────────────────────────┘
                                 │
                                 ▼
@@ -73,7 +72,6 @@ type Session interface {
     Events() <-chan AgentEvent       // Event stream
     SendMessage(prompt string) error // Send user message
     SendPermissionResponse(...)      // Respond to permission request
-    SendQuestionResponse(...)        // Respond to question
     SendInterrupt() error            // Interrupt AI
     Close()                          // Close session
 }
@@ -95,7 +93,8 @@ Events are divided into four categories:
 | **Content** | `text`, `tool_call`, `tool_result`, `system`, `warning`, `raw`, `command_output` | AI-generated content |
 | **Terminal** | `done`, `error`, `interrupted`, `process_ended` | Marks end of AI turn |
 | **Permission** | `permission_request`, `permission_response`, `request_cancelled` | Tool execution authorization |
-| **Q&A** | `ask_user_question`, `question_response` | AI-initiated questions |
+| **Questions** | `question_posted` | a question the agent asked through `question_post`. Nothing waits on it; the answer arrives as a `message` carrying `answering` |
+| **Legacy** | `ask_user_question`, `question_response` | the CLI's own blocking question, read from old transcripts and never written ([agent-event.md](../agent-event.md#legacy-ask_user_question-and-question_response)) |
 
 ```go
 // agent/event.go
@@ -117,7 +116,7 @@ inspects event types.
 ```go
 // agent/event.go
 func (e EventType) Persisted() bool            // everything except tool_activity
-func (e EventType) AwaitsUserInput() bool      // done, error, interrupted, permission_request, ask_user_question
+func (e EventType) AwaitsUserInput() bool      // done, error, interrupted, permission_request
 func (e EventType) IndicatesAgentActivity() bool
 func (e EventType) ActivatesSession() bool
 ```
@@ -125,7 +124,7 @@ func (e EventType) ActivatesSession() bool
 - `Persisted` — this belongs in session history. Decides whether
   `streamEvents` writes a record before broadcasting.
 - `AwaitsUserInput` — the turn stopped: it finished, failed, was aborted, or is
-  blocked on a permission or question. Now only decides whether the session's
+  blocked on a permission request. Now only decides whether the session's
   `UpdatedAt` is touched; what the turn *becomes* is `session.ReduceTurn`'s
   answer ([Turn State](#turn-state)).
 - `IndicatesAgentActivity` — a turn is under way. Separates a `system` frame or a
@@ -347,11 +346,19 @@ anchor. It does not look busy in the meantime — the spinner is gated on a live
 process, and a fresh fork has none.
 
 Events the cut left half of go the other way — `agent.TruncateHistory` drops a
-tool call whose result fell after the anchor, and a permission or question prompt
-whose answer did. Extending the cut forward to the answer instead would copy back
-part of the very turn the user forked away from. Only an event with an ID to pair
-on can dangle; one without could not have been paired before the fork either, so
-dropping it would remove history the source still shows.
+tool call whose result fell after the anchor, and a permission request or a
+legacy `ask_user_question` whose answer did. Extending the cut forward to the
+answer instead would copy back part of the very turn the user forked away from.
+Only an event with an ID to pair on can dangle; one without could not have been
+paired before the fork either, so dropping it would remove history the source
+still shows.
+
+**A `question_posted` record is deliberately kept**, and it is the one unclosed
+pair that must be. A prompt the CLI raised belongs to the process that raised
+it, so one the cut leaves open is a call nobody can ever return; a posted
+question belongs to the *session*, so one the cut leaves open is a question the
+fork inherits with its `request_id` and can still answer
+([A fork inherits what was open at the cut](#a-fork-inherits-what-was-open-at-the-cut)).
 
 **The source's current state is not part of the hand-off.** `ForkOptions` carries
 the cut history and the directories, and nothing about whether the source has
@@ -408,7 +415,10 @@ type EventRecord struct {
     PermissionSuggestions []PermissionUpdate `json:"permission_suggestions,omitempty"`
     Questions             []AskUserQuestion  `json:"questions,omitempty"`
     Choice                string             `json:"choice,omitempty"`
-    Answers               map[string]string  `json:"answers,omitempty"`
+    Reason                CancelReason       `json:"reason,omitempty"`
+    AskedAt               *time.Time         `json:"asked_at,omitempty"`
+    ResolvedAt            *time.Time         `json:"resolved_at,omitempty"`
+    Answering             []QuestionAnswer   `json:"answering,omitempty"`
     Origin                MessageOrigin      `json:"origin,omitempty"`
     Subtype               string             `json:"subtype,omitempty"`
     Meta                  *MessageMeta       `json:"meta,omitempty"`
@@ -421,6 +431,20 @@ type EventRecord struct {
 ```
 
 **Design Decision**: A single format avoids type conversion errors during serialization/deserialization.
+
+**A field a record on disk carries need not be here.** The legacy
+`question_response` record's `answers` map is the case: nothing in Go reads it, so
+it has no field, and the client still gets it verbatim — replay adds a `seq` and
+changes nothing else, because `session.stampHistorySeq` round-trips through a raw
+field map rather than through this struct
+(`TestStampHistorySeq_KeepsFieldsThisBuildHasNoNameFor`). What this struct is the
+single source of truth for is the records Pockode *writes*.
+
+`AskedAt` and `ResolvedAt` are pointers, and that is not a style choice:
+`omitempty` does nothing for a struct, so a plain `time.Time` would put
+`"asked_at":"0001-01-01T00:00:00Z"` on every record in every transcript and on
+every notification — two junk fields per event, for two fields that mean something
+on two event types.
 
 `ProviderMessageID` is the agent's own id for the piece of its conversation this
 event was parsed out of. It is a fact the event arrived with rather than Pockode
@@ -720,6 +744,350 @@ fixtures agree with the parser instead of with the CLI, which is how the
 `exec_command_end` output fields and the patch-approval routing stayed wrong since
 Codex v0.44 with green tests the whole time.
 
+## MCP Caller Identity
+
+Every agent reaches the server's `work_*` and `agent_role_*` tools through the
+same stdio proxy (`pockode mcp`, see [server/AGENTS.md](../../server/AGENTS.md)),
+and until the proxy is told otherwise it has no idea who is calling: the model
+has to name every id itself. So the spawn tells it. Both CLIs get the same two
+flags alongside `--data-dir`:
+
+```
+pockode mcp --data-dir <main data dir> --session-id <session> --worktree <name>
+```
+
+`--worktree` is omitted for the main worktree, which has no name; an empty value
+would make the flags depend on where the session happens to run. The proxy holds
+the pair as an `mcp.Caller` and sends it in the body of every forwarded tool
+call, so the `Executor` is handed the caller of each call rather than an
+Executor-wide identity — one Executor serves every session at once.
+
+**It is self-reported, not a credential.** The local API is loopback-only
+(`apiroute.IsLocalOnly`, and the relay refuses to forward `/api/mcp/*`) and its
+token already authorizes every tool, so claiming another session's id buys
+nothing. Nothing about it is an authorization decision.
+
+**The two CLIs carry it differently** because their spawns differ: Codex takes
+the whole server definition inline per thread, while Claude reads a config file
+— which is what makes that file a per-process-run file
+([stream-json Protocol](#stream-json-protocol)).
+
+**A session is found by session id alone** through
+`worktree.Manager.ResolveSessionWorktree`: sessions are stored per worktree and
+nothing else maps one to the other, so anything holding a bare session id has to
+scan the worktrees — loaded ones answer from their live store, the rest from
+their on-disk index, and resolving a session never builds a worktree.
+
+## Posted Questions
+
+An agent can ask the user something **without stopping for the answer**:
+`question_post` records one question and returns straight away with a
+`request_id`. The answer — or the user's refusal to answer — arrives later as an
+ordinary message, in a turn of its own, possibly long after the turn that asked
+has ended. This is a different thing from the CLIs' own blocking prompt
+(`ask_user_question`), which holds the tool call open and dies with the process —
+and which no longer reaches a user at all ([Refusing the CLIs' Own
+Question](#refusing-the-clis-own-question)).
+
+**A posted question is state, its asking is a record, and the two must not be
+confused.** The pair is written by `chat.Client.PostQuestion`:
+
+| | Where | What it says |
+|---|---|---|
+| The asking | a `question_posted` record in the transcript | a question was asked, with its text and options, at this moment. Never changes. |
+| The waiting | `session.TurnState.Unanswered` | nobody has answered it *yet*. Disappears the moment somebody does. |
+
+The record goes in first. One written with no state behind it is a card nobody
+is waiting on — visible, wrong, repairable; state with no record behind it is a
+question a fork could not inherit and a transcript could not explain.
+
+**One question per call, one `request_id` per question.** An answer names a
+question, and so does a refusal to answer one, so a record covering three
+questions leaves "I will not answer the second" with no subject. Older
+transcripts hold `ask_user_question` records carrying several at once; they came
+from the CLI's blocking prompt.
+
+### Retired: the paths this replaced
+
+Recorded so they do not become blanks nobody knows about.
+
+- **`chat.question_response`**, and the whole chain behind it —
+  `ChatClient.SendQuestionResponse`, `Process.SendQuestionResponse`, the
+  `Session` interface method, both adapters' implementations, and the
+  `AskUserQuestionEvent` that fed them. Gone: nothing can produce a CLI question
+  any more, so nothing could ever arrive to be answered. The `question` blocker,
+  the `needs_answer` activity leaf and the answer lease's question half went with
+  them.
+- **`ask_user_question` and `question_response` records** are still *read*, and the
+  client draws them through the same card a posted question gets
+  ([agent-event.md](../agent-event.md#legacy-ask_user_question-and-question_response)).
+  A legacy card nothing settled says in words that it can no longer be answered,
+  which is what replaced the `expired` question status and its table of reasons.
+- **The `work_needs_input` MCP tool keeps a stub on purpose.** It moves no state
+  and answers every call with a user error naming `question_post`
+  ([work-system.md](work-system.md#work-tools)). The *capability* is what was
+  deleted — `wait=user` and `Work.WaitReason` are gone — but an agent whose context
+  still carries the old lifecycle rules will call it, and the difference between
+  that sentence and "unknown tool" is whether it can put itself right in the same
+  turn. Its wording, `question_post`'s reply and `agent.CLIQuestionRefusal` are
+  held to the same claims by `mcp.TestAskingTheUser_TheThreeTextsMakeTheSameClaims`.
+
+### Refusing the CLIs' Own Question
+
+Every CLI Pockode drives ships an ask-the-user tool of its own — Claude's
+`AskUserQuestion`, Codex's `request_user_input` — and neither reaches a Pockode
+user. Both block the turn on an answer that would have to come from a surface
+Pockode does not offer, which is exactly what `question_post` exists to replace.
+
+Two lines of defence, in that order:
+
+1. **Keep the tool out of the model's hands.** Claude's `buildArgs` passes
+   `--disallowedTools AskUserQuestion`. Measured on claude 2.1.263:
+   `--permission-prompt-tool stdio` is what puts `AskUserQuestion` on the
+   session's tool list in the first place, and this flag takes it back off — the
+   model is never told the tool exists, in default mode and in yolo alike.
+   `TestIntegration_AskToolIsOffTheModelsToolList` asserts both directions
+   against the installed CLI, because only the pair tells "the flag works" apart
+   from "the tool was never there".
+2. **Answer where the model is waiting.** codex-cli 0.153.0 offers no equivalent
+   switch — nothing in `thread/start`, and `disabled_tools` is a per-MCP-server
+   setting, not one for the CLI's built-ins — so the refusal is all there is.
+   Claude keeps its refusal too, for the CLI version that stops honouring the
+   flag.
+
+**One reason text, `agent.CLIQuestionRefusal`, shared by both.** It says the same
+three things as the `question_post` tool result and the `work_needs_input`
+retirement notice — posted and it returns, nothing waits on you, the answer comes
+back as a message — so an agent meeting all three does not have to work out
+whether they describe one mechanism or three.
+
+**The refusal is not silent.** Both sides emit
+`agent.CLIQuestionRefusedWarning`, a user-visible record: something happened in
+the user's session — the agent asked them something they will never see — and
+without it the only trace is a failed tool row (Claude) or nothing at all
+(Codex).
+
+**The deny must not interrupt**, and that is a measurement rather than a
+preference. On claude 2.1.263, a `can_use_tool` denial with `interrupt: true`
+makes the CLI **discard** the message, substitute its own *"STOP what you are
+doing and wait for the user"*, and abort the turn (`error_during_execution`).
+With `interrupt` absent, the message reaches the model verbatim as an `is_error`
+tool result and the turn carries on — which is the whole point, since the message
+is an instruction to ask a different way. `SendPermissionResponse` keeps the
+interrupting form on purpose: a person pressing **Deny** means stop.
+`toolDenial` is the shape, and
+`TestIntegration_DenyingTheAskToolLetsTheTurnCarryOn` drives the real CLI through
+it.
+
+**Codex's reply has one slot.** `ToolRequestUserInputResponse` is a map of
+question id to a list of answer strings — no "declined" field, nothing else — so
+the refusal *is* the answer to every question asked. An empty answers map would
+read as "asked, and nothing came back", which says nothing about what to do next.
+The tool is marked EXPERIMENTAL, which is why the shape is pinned in
+`schema_integration_test.go` against the schema the CLI generates for itself.
+
+**codex-cli 0.153.0 does not send `requestUserInput` at all under Pockode's
+thread parameters**, and that was measured rather than assumed: prompted to ask
+the user something, it puts the question in an ordinary `agentMessage`
+(`delivery: "async"`, with a `questions` field) and ends the turn. Turning on
+the `default_mode_request_user_input` feature flag did not change it. So the
+Codex half of this refusal is a path with no observed traffic, kept because the
+flag being flipped upstream is a version bump away and the cost of not having it
+then is a turn that never ends. What cannot be observed on this version is
+whether the model, told to use `question_post`, does — so nothing here claims it
+does, and the shared integration test asserts only what holds on both CLIs: no
+question event reaches the user, and the turn ends by itself.
+
+An async `agentMessage` question is not handled specially and is **not** in the
+unanswered list: it reads as a message, which is where this design puts free
+prose anyway. Taking it over as a structured record would be its own piece of
+work, and it would first have to answer how an answer gets back to Codex — a
+question this mechanism does not have to ask, since it owns both ends.
+
+### Why the list is on the turn but is not a blocker
+
+`TurnState.Unanswered` sits next to `TurnState.Blockers` and behaves in the
+opposite way, which is the whole of the design:
+
+- A **blocker** belongs to the process incarnation that raised it. Only that
+  process can take the answer, so every signal that ends a process or a turn
+  expires it (`session.ReduceTurn`).
+- A **posted question** belongs to the *session*. Pockode holds it, the answer
+  comes back as a message, and neither a turn ending nor a reaped CLI nor a
+  server restart makes it any less unanswered. So every signal that clears
+  blockers leaves it alone, and there is no `expired` state for it to reach.
+
+It also does not touch `Phase`: the agent asked and carried on, so the session is
+running, idle or blocked exactly as it would have been. Nothing is stuck, the
+composer is not shut, and no lease is waiting on it.
+
+Two signals move it, and nothing else may: `question_posted` (carrying the
+question) and `question_resolved` (carrying the id). One signal covers all three
+ways out — answered, declined, withdrawn — because the list only records *that* a
+question is outstanding. Which of the three it was is a fact about the past, and
+facts about the past are in the transcript.
+
+### Answering
+
+Answers ride on the message that carries them: `chat.message` takes an
+`answering` array, and the message record keeps it (`EventRecord.Answering`).
+There is no second record per question — a second account of one act could
+disagree with the first.
+
+**An answer keeps the agent's own words and the user's apart.** An `answering`
+entry has both `answers` and `text`:
+
+| Field | Holds | Checked against the question? |
+|---|---|---|
+| `answers` | option labels the question offered, and only those | yes — every one of them |
+| `text` | what the user wrote themselves: **Other** beside a set of options, or the whole answer to a question that offered none | no |
+
+The label check is the whole point of the split, and it is narrower than it looks.
+What it stops is the agent being told it was handed back a choice it never gave —
+a label nobody was offered would read in its transcript as its own word. It does
+**not** stop the user saying something else: free text is what the user said,
+recorded as such, and a user faced with three options that do not fit who types
+*"use SQLite"* is answering, not declining. `chat.validateAnswer` enforces the
+rest of the shape unchanged — a label must be in the question's table, a
+non-`multi_select` question takes one answer in total (a label and a sentence
+being two), and whitespace is not an answer, which is what `declined` is for.
+
+The two halves also stay apart in the prose, which is the only thing the CLI
+reads: free text is written as *"and, in their own words: …"* rather than listed
+beside the labels (`web/src/utils/answerMessage.ts`). An unmarked sentence there
+would undo structurally what the check guards.
+
+**The whole message is validated before anything is delivered, and one bad entry
+refuses all of it.** The content is a single string written for every answer
+together, so there is no half of it to deliver: a message trimmed to the
+questions that still needed answering would reach the agent as prose answering a
+question it already had an answer to. A refusal is `CodeInvalidParams` and names
+every request that is no longer pending along with what became of it
+("answered by the user at …", "answered by the agent working on «…» at …",
+"withdrawn by the agent at …"), which is what lets a client grey out exactly
+those answers and keep the rest of the draft.
+
+Finding out what became of a question is the *one* read of records allowed to be
+about a question's fate, and it is not a second source of truth: whether a
+question is still open has already been answered by the turn state, and the only
+reason to be in the transcript is that the answer was no.
+
+### An agent may answer, and the record says who did
+
+`question_answer` lets an agent answer a question **another** agent posted: a
+story usually knows what its subtask is asking about, and a question it can
+settle is a question the user never has to be interrupted by ([A subtask's
+question reaches its story](work-system.md#input-5-a-subtasks-question-reaches-its-story)).
+
+Any agent may answer any question but its own, which is the rule the other tools
+already follow: the local token authorizes everything, the dangerous acts go
+through permission rather than through questions, and whoever has the answer is
+who should give it. Answering *your own* is the one refusal — that is not
+answering, it is withdrawing badly, and `question_cancel` says so honestly.
+
+**An agent answers or it does nothing; it never declines.** There is no
+`declined` input on this tool and no prose for one, because declining is a
+person's sentence — *"I am not answering this"* is a decision about being asked,
+which nobody but the person asked can make. An agent that does not know the
+answer leaves the question where it is, for the user or for another agent, and
+that costs nothing: a question is not holding anything open.
+
+Everything below the prose is the path a person's answer takes:
+`chat.Client.AnswerQuestion` shares `deliverAnswers` with `SendMessageAnswering`,
+so the same checks run in the same order, the same record is written, and the
+question leaves the unanswered list the same way. Two things differ, and each is
+there to stop one specific misreading:
+
+| | What it is | Why |
+|---|---|---|
+| `QuestionAnswer.ResolvedBy` | `{kind, work_id, title}` on the answer entry | who answered used to be derivable from the record type — an `answering` entry meant the user, a `request_cancelled` record meant the agent — and this tool is what broke that inference. Absent on records written before it existed, which were all the user's; every record written now sets it, the user's included. |
+| `MessageOriginAgent` on the message | the `agent` origin | a user bubble would claim the person said something they never saw; the system line would read as Pockode annotating itself. The client draws it as a named block instead ([answering-ui.md](../answering-ui.md#an-answer-another-agent-gave)). |
+
+**The prose leads with who answered**, because the prose is the whole of what the
+receiving CLI reads — `answering` never reaches it — and an agent acting on "the
+user chose Postgres" when no user has seen the question is the one failure this
+tool could cause. The `Q:`/`A:` shape under that lead is deliberately the one a
+person's answer arrives in.
+
+Two refusals are about *reaching* the question rather than about the answer:
+
+- **More than one session is waiting on that `request_id`.** A fork carries a
+  question across with its id, so both copies are open and answering one leaves
+  the other asking. Nothing can pick between them, so the caller is made to, with
+  `session_id`; the refusal lists the candidates.
+- **The work that asked is `stopped`.** Delivering starts a turn, so an agent's
+  answer would set a work running again behind the person who took it back —
+  the same rule that keeps the engine from telling a stopped parent that a child
+  closed. The question is not lost: the user can still answer it, and a stop
+  withdraws nothing.
+
+The delivery is synchronous through a cold start when it has to be: a question
+outlives the process that asked it, so the commonest target has none, and the
+tool returns only once the answer is with the agent.
+
+### Withdrawing
+
+`question_cancel` is the agent taking its own question back — it worked the
+answer out, or the user answered in the chat instead. Nothing is sent to anyone;
+the card simply stops asking. That is the difference from a *decline*, which is
+a person answering "I will not answer this" and does reach the agent.
+
+Pockode also withdraws on the agent's behalf, in two cases, and each says which
+on the record:
+
+| Cause | `reason` | Why |
+|---|---|---|
+| the work above the session closed | `work_closed` ([Retiring a Closed Work's Session](#retiring-a-closed-works-session)) | a question left pending on a finished work is one the user can never clear |
+| a step completed with questions still waiting | `step_done` (`work.Operations`) | the agent has moved past what it was asking about, so an answer would arrive for a step that is over |
+
+A **stopped** work withdraws nothing, and that is the deliberate opposite: a
+stopped work has been handed back to a person, and its questions are among the
+things that person may want to answer. They outlive the stop, the restart, and
+every process in between.
+
+The client draws both causes as a sentence under "The agent withdrew this
+question." — still true, since both are Pockode withdrawing on its behalf — and
+draws nothing extra for an absent reason, which is the `question_cancel` case.
+
+So a card has four states and only four: **pending**, **answered**, **declined**,
+**cancelled**.
+
+### Finding a question by id alone
+
+`worktree.Manager.LocateQuestions` answers "which sessions is this request
+waiting in", across every worktree. It is backed by an index that is a **projection**,
+never a second source of truth: it is a session-change listener, so it is
+rebuilt from the list a change already carries rather than patched by an add and
+a remove somebody could forget. At startup it is filled from each worktree's
+on-disk session index — unlike a blocker, a posted question does not expire
+because the server stopped — which reads one file per worktree and builds none of
+them.
+
+The worktree is deliberately *not* stored in it: it is derivable from the session
+(`ResolveSessionWorktree`), and a copy would be a second fact to keep right.
+
+**One id can name several sessions**, which is why the index holds a set and the
+lookup returns a list. A fork copies the questions it inherits with their ids
+unchanged (see below), so the moment a session with an open question is forked
+there are two places that id is waiting and nothing decides which is the real
+one. Callers say what they do with several rather than being handed the first:
+`question_cancel` asks whether the caller is among them, `question_answer`
+refuses and lists them.
+
+### A fork inherits what was open at the cut
+
+A fork is the one place a question's state is derived from records
+(`agent.UnansweredQuestions`), and it has to be: what crosses is what was
+unanswered **at the cut**, which is not the same set as what is unanswered in the
+source now — the source has gone on answering since. The request ids are
+unchanged, so answering an inherited question names the same question the card in
+the fork's transcript shows.
+
+For the same reason a `question_posted` record left unclosed by the cut is
+*kept*, where an unanswered CLI prompt is dropped: a prompt nobody can answer is
+a call that never returns, while a question the fork can still answer is the
+point.
+
 ## Claude Implementation
 
 ### stream-json Protocol
@@ -774,12 +1142,26 @@ An empty model or effort is how a session says "let the CLI pick", so neither
 flag is passed at all in that case; see [Session Models](#session-models) and
 [Session Effort](#session-effort).
 
-`mcp-config.json` is written atomically because it is rewritten on *every*
-session start, yet it lives in the shared main data dir rather than per session. A
-plain write truncates the file first, so a second session starting at that moment
-would hand its CLI a half-written config and that agent would come up with no
-`work_*` tools at all — a failure with no error message anywhere. Replacing the
-file by rename removes the window.
+**The MCP config belongs to one process run.** It is written as
+`mcp-config-<random>.json` in the session's own directory, passed to that CLI,
+and removed when the process ends. Two reasons, and both of them are failures
+with no error message anywhere:
+
+- It names the session being spawned (`--session-id`, plus `--worktree` for a
+  named worktree), which is the identity every tool call then carries — see
+  [MCP Caller Identity](#mcp-caller-identity). One file shared by all sessions
+  would hand whichever session started last to all of them.
+- The name is unique per run, not per session, because a replaced process
+  unwinds asynchronously: its successor is spawned while the predecessor's
+  goroutine is still running its cleanup (`process.Manager.dropProcess`). A
+  shared name would let that cleanup delete the file the successor's CLI has not
+  read yet, and a CLI that finds no config comes up with no `work_*` tools at
+  all.
+
+It is still written atomically, for the reason every state file here is
+([server/AGENTS.md](../../server/AGENTS.md)): a truncated config is a config
+that loses the agent its tools. A hard crash leaves the file behind; it goes
+with the session's directory when the session is deleted.
 
 `StartOptions` carries two directories because they answer different questions.
 `DataDir` is the session's own data dir (`claude_resume.json`, history) — for a
@@ -886,7 +1268,7 @@ The `fresh` warning is emitted from the streaming goroutine rather than from
 exists would deadlock; it also has to come after `ReadStderr` starts draining, or
 a CLI that fills the stderr pipe wedges while the warning waits.
 
-Like `mcp-config.json`, `claude_resume.json` is written with
+Like the MCP config, `claude_resume.json` is written with
 `filestore.WriteFileAtomic` — a half-written one would silently cost the user the
 ability to resume that session. It is not on a hot path — it changes when the
 provider ID changes or the ladder moves — so the fsync costs nothing measurable.
@@ -1018,7 +1400,8 @@ recording one is precisely what stops a session being unstarted.
 | `assistant` | anything else | `TextEvent` + `ToolCallEvent` |
 | `user` | — | `ToolResultEvent` |
 | `result` | any | `InterruptedEvent`, `ErrorEvent`, or `DoneEvent` (see below) |
-| `control_request` | `can_use_tool` | `PermissionRequestEvent` or `AskUserQuestionEvent` |
+| `control_request` | `can_use_tool`, `tool_name` is `AskUserQuestion` | `WarningEvent` + a `deny` that does not interrupt ([why](#refusing-the-clis-own-question)) |
+| `control_request` | `can_use_tool` | `PermissionRequestEvent` |
 | `control_request` | anything else | `WarningEvent` + a `control_response` error (the CLI blocks until answered) |
 | `control_response` | — | `InterruptedEvent` (only for interrupts we sent) |
 | `control_cancel_request` | — | `RequestCancelledEvent` |
@@ -1065,9 +1448,11 @@ banner and denial dialog, which Pockode does not.
 A `control_request` from the CLI is a *request*, not a notification: the CLI blocks
 until it gets a `control_response`. Pockode serves exactly one subtype
 (`can_use_tool`) and answers **everything else** with an error: a subtype no
-version of this code has seen, a request with no body, a body of the wrong shape,
-and an `AskUserQuestion` whose `input` it cannot read. Dropping a request with a
-debug log is the worst available failure — it costs nothing visible and hangs the
+version of this code has seen, a request with no body, and a body of the wrong
+shape. An `AskUserQuestion` is answered too, but as a tool denial rather than a
+protocol error — the request was served, and the answer is no.
+
+Dropping a request with a debug log is the worst available failure — it costs nothing visible and hangs the
 conversation forever, with neither the user nor the log saying a request went
 unanswered, and there is no path back from it. Answering an error is recoverable
 by comparison: the CLI fails that one call and the turn goes on. That is also why
@@ -1385,7 +1770,7 @@ type interruptRequest struct {
 }
 ```
 
-Pending control requests we need to correlate later are tracked via `pendingRequests *sync.Map`. The map holds interrupt markers (matched against incoming `control_response` to emit `InterruptedEvent`) and AskUserQuestion markers (remembering the original tool input so `SendQuestionResponse` can echo it back as the SDK requires). The two marker kinds live in disjoint ID namespaces — interrupt IDs are crypto-random hex strings we generate, while AskUserQuestion IDs are assigned by the CLI — so handlers can type-assert without coordinating.
+Pending control requests we need to correlate later are tracked via `pendingRequests *sync.Map`. It holds interrupt markers and nothing else, matched against an incoming `control_response` to emit `InterruptedEvent`. It used to hold a second kind — the original `AskUserQuestion` tool input, to echo back with an answer — and that is gone with the answer path: the question is refused where it arrives, so no answer can arrive to need it. Which is also why `control_cancel_request` no longer deletes from this map: the ids in it are ones Pockode generated, in a namespace disjoint from the CLI's, so a cancel from the CLI could never name one.
 
 ## Codex Implementation
 
@@ -1515,7 +1900,8 @@ notification dispatch does not already drop by default.
 carry a `config` map that overrides `config.toml` for this thread only, and
 `mcp_servers.pockode` there is what gives the agent its `work_*` tools — the
 counterpart of Claude's `--mcp-config`, with no file to write and therefore none
-of the atomic-rewrite problem that one has. `model_reasoning_effort` rides in the
+of the lifetime problem that one has: the spawn is already per thread, so the
+caller identity (`--session-id`, `--worktree`) goes straight into it. `model_reasoning_effort` rides in the
 same way, for a different reason ([Session Effort](#session-effort)).
 
 **`threadSource` says whose thread this is, and does not say it where you would
@@ -1668,7 +2054,8 @@ to say keeps arriving while the user decides.
 serve gets a definite reply rather than silence: an MCP elicitation is declined
 (the one server Pockode installs never elicits, so it can only come from one the
 user configured in Codex themselves), a `granular` permission grant hands back an
-empty permission set, `item/tool/requestUserInput` hands back no answers, and
+empty permission set, `item/tool/requestUserInput` is answered with the refusal
+text ([Refusing the CLIs' Own Question](#refusing-the-clis-own-question)), and
 anything unrecognised gets `-32601`. Refusing costs one call; not answering hangs
 the turn for the life of the process. Unrecognised methods are logged at **warn**,
 not debug — the protocol still defines the v1 `execCommandApproval` /
@@ -1866,11 +2253,11 @@ the prompt reads from there.
 These are choices, recorded so they do not become blanks nobody knows about.
 
 - **`item/tool/requestUserInput`** is Codex's counterpart to Claude's
-  AskUserQuestion, and Pockode already has the surface for it
-  (`AskUserQuestionEvent`). It is not wired up: it is a feature of its own rather
-  than part of changing channels, and the schema marks it EXPERIMENTAL, so what it
-  would be wired *to* is not settled. It is declined rather than ignored, so the
-  model is told nobody answered and carries on.
+  AskUserQuestion, and it is not wired to the user — deliberately, and
+  permanently: `question_post` is what replaced it. It is answered with the
+  refusal text rather than ignored — and on 0.153.0 it is never sent in the
+  first place ([Refusing the CLIs' Own
+  Question](#refusing-the-clis-own-question)).
 - **`thread/settings/update`** can change model and reasoning effort without
   restarting the process — something Claude cannot do. Pockode still restarts, so
   the two agents keep one code path; the win is now cheap in any case, since the
@@ -2251,9 +2638,10 @@ pure function.
 type TurnState struct {
     Phase       TurnPhase   // idle | running | blocked
     Open        bool        // a turn is under way behind whatever is in its way
-    Blockers    []Blocker   // permission | question | background
+    Blockers    []Blocker   // permission | background
     Since       time.Time   // when this phase was entered
     LastOutcome TurnOutcome // completed | failed | aborted, for the turn that ended
+    Unanswered  []PendingQuestion // questions posted and not yet answered
 }
 
 func ReduceTurn(state TurnState, in TurnInput) TurnTransition
@@ -2270,16 +2658,18 @@ forget the other. The old model kept `Open` as a second flag on the process for
 the same reason it exists now; what changed is that it is an input to one rule
 rather than a rule of its own.
 
-Three blockers, one per thing that can stand in a turn's way. The two prompts
-share a way out and differ in what expiring one costs
-([lifecycle.md](../lifecycle.md#session-one-reducer)); the background one shares
-neither:
+Two blockers, one per thing that can stand in a turn's way. One of them is a
+person and one of them is not, and nothing else about them is shared:
 
 | Blocker | Raised by | Cleared by |
 |---|---|---|
-| `permission` | `permission_request` | the user's answer, `request_cancelled`, or the death of the process that raised it |
-| `question` | `ask_user_question` | the same three |
+| `permission` | `permission_request` | the user's decision, `request_cancelled`, or the death of the process that raised it |
 | `background` | `background_wait` | the agent producing **content** again ([Background Waits](#background-waits)) |
+
+It used to be three: the CLI's own blocking question was one. That is gone in both
+directions — the tool is refused where it arrives ([Refusing the CLIs' Own
+Question](#refusing-the-clis-own-question)), and a question an agent asks through
+`question_post` is not a blocker at all.
 
 A `system` frame or a live progress line produces `SignalNoise`, which moves
 nothing at all. It must not clear a `background` blocker (the task list changing
@@ -2287,6 +2677,11 @@ nothing at all. It must not clear a `background` blocker (the task list changing
 and it must not open a turn either: noise keeps arriving after a turn is over — a
 background task that outlived its budget goes on reporting progress — and a turn
 nothing started is a turn nothing will end.
+
+`Unanswered` is the one field that is not about the turn in front of it, and it
+is the deliberate opposite of a blocker in every respect: it belongs to the
+session rather than to a process, it survives every ending, and it does not
+affect `Phase` at all. See [Posted Questions](#posted-questions).
 
 A blocker belongs to the process incarnation that raised it and never outlives
 it ([A Prompt Belongs to the Process That Raised It](#a-prompt-belongs-to-the-process-that-raised-it)).
@@ -2343,7 +2738,7 @@ it. What is left is `process.viewTurn`:
 
 | Turn | State |
 |---|---|
-| a `permission` or `question` blocker, whatever else is true | `idle` |
+| a `permission` blocker, whatever else is true | `idle` |
 | otherwise, a turn is open (running, or blocked on `background`) | `running` |
 | otherwise | `idle` |
 
@@ -2389,24 +2784,22 @@ from history after a restart, with the card still on screen. Two rules elsewhere
 exist to keep that window as narrow as the premise allows, and they point in
 opposite directions for the same reason:
 
-- **While the server runs, the process is kept for the answer — for an hour.** A
-  prompt gets a lease of its own rather than being collected with the idle ones
-  ([The Lease Table](#the-lease-table)), because only that process can still take
-  the answer. The hour is not the premise weakening: when it runs out the prompt
-  is *withdrawn* rather than left to answer nowhere, and the answer is not lost
-  with it — a question that expired can still be sent as an ordinary message
-  afterwards, which is exactly what makes an hour affordable. A permission
-  request is the one that is final, because a permission that expires is a
-  denial.
+- **While the server runs, the process is kept for the decision — for an hour.** A
+  permission request gets a lease of its own rather than being collected with the
+  idle ones ([The Lease Table](#the-lease-table)), because only that process can
+  still take the decision. When the hour runs out the request is *withdrawn*
+  rather than left to answer nowhere, and that is final: a permission nobody
+  granted is a denial. An hour is affordable because losing the process costs one
+  cold resume, not because the decision could be given later.
 - **Across a restart, the blocker expires and the transcript says so.** The
   session store reduces every stored turn with `SignalProcessEnded` when it loads
   the index, and appends the `process_ended` record the killed run never wrote
-  (see [Restart Repair](#restart-repair)), so the cards read Expired. The work
-  layer needs no rule of its own for this: a work waiting on the *user* is
-  waiting on `work_needs_input`, which nothing in the session knows about and
-  which a message answers whenever the user gets to it — while a work that was
-  merely being carried by the dead process is stopped at startup
-  ([work-system.md](work-system.md#input-5-startup)).
+  (see [Restart Repair](#restart-repair)), so the cards read Expired. A **posted
+  question is not one of these cards** and survives untouched: it belongs to the
+  session rather than to the process, so a work whose agent asked something is
+  kept active at startup and a message answers it whenever the user gets to it —
+  while a work that was merely being carried by the dead process is stopped
+  ([work-system.md](work-system.md#input-8-startup)).
 
 **Both rules stand on this premise and have to be revisited if it changes.** The
 change to watch for is a CLI re-offering its outstanding prompts to a resumed
@@ -2436,8 +2829,9 @@ So `session.FileStore` repairs it at load, in two parts:
   rule.
 - **The transcript**, which gets the `process_ended` record the killed run never
   wrote. That record is what a replaying client reads to mark a pending
-  permission card or question `expired`; without it a restarted server shows
-  prompts that look answerable and are not.
+  permission card `expired`; without it a restarted server shows requests that
+  look decidable and are not. It deliberately does *not* touch a question card —
+  that card is not a prompt a process holds open.
 
 Sessions that were idle are left completely alone, and so are sessions written by
 a build from before turn state existed: those read back with no turn, an absent
@@ -2578,8 +2972,8 @@ there. See [What Becomes of an Expired Prompt](#what-becomes-of-an-expired-promp
 
 **Withdrawing an unanswered prompt is what an interrupt already is**, and it is
 the only withdrawal available: the data a proper answer needs
-(`PermissionRequestData`, `QuestionRequestData`) comes from the card in the
-client, not from anything the server keeps. Codex answers its outstanding
+(`PermissionRequestData`) comes from the card in the client, not from anything
+the server keeps. Codex answers its outstanding
 approval with a cancel before it stops the turn ([Approvals](#approvals)); Claude
 needs no equivalent, because its CLI acts on the interrupt while it is blocked on
 a control request — measured on claude-code 2.1.263, which withdrew the request
@@ -2667,15 +3061,22 @@ and, where Pockode can say it, why:
 |---|---|
 | the process ended — reaped, crashed, killed with the server | `process_ended` |
 | the answer lease ran out | `timeout` |
-| the work above the session closed | `work_closed` (written by the retirement, not here) |
 | the turn simply ended, or the user sent a message instead of answering | absent |
 
+The one blocker left with a request id is a permission request, so this table is
+about permission cards alone. `CancelReason` has two more values — `work_closed`
+and `step_done` — and they belong to posted questions and are written elsewhere,
+by the work layer that knows those facts. Nothing produces both kinds for one
+record: a permission request is the only thing a process holds open, so it is the
+only thing that can run out of time or die with one, while a posted question can
+only be withdrawn deliberately.
+
 **The record is Pockode's own, and it has to be.** The CLI is killed with
-SIGKILL, so its transcript may not hold even the assistant message that raised
-the question; and without a record, a client paging back through history would
-replay the card as still pending long after nothing could answer it. The turn
-state alone cannot cover it either — it says which prompts are still live, not
-what became of the others.
+SIGKILL, so its transcript may not hold even the frame that raised the request;
+and without a record, a client paging back through history would replay the card
+as still pending long after nothing could decide it. The turn state alone cannot
+cover it either — it says which requests are still live, not what became of the
+others.
 
 Two things about how it is written. It is **not injected**: the blocker is
 already gone from the turn state, so there is nothing left to reduce, and this is
@@ -2697,29 +3098,29 @@ true of all of them ([lifecycle-ui.md §5](../lifecycle-ui.md#5-expiry)).
 
 #### An Answer Nobody Is Waiting For
 
-The other side of the same fact: `Process.SendPermissionResponse` and
-`SendQuestionResponse` refuse a request the session's turn does not list as a
-blocker (`process.ErrRequestNotPending`). It covers the card that expired a
-moment ago, the process that was replaced by a successor which never saw the
-request, and the answer that lost a race to another client.
+The other side of the same fact: `Process.SendPermissionResponse` refuses a
+request the session's turn does not list as a blocker
+(`process.ErrRequestNotPending`). It covers the card that expired a moment ago,
+the process that was replaced by a successor which never saw the request, and the
+decision that lost a race to another client.
 
 Refused rather than forwarded, because forwarding is worse than it looks: a live
 CLI handed an answer to a request it has forgotten does nothing with it, while
 Pockode would have recorded a turn as started — a session claiming to be running
 with nothing coming to end it. The refusal carries its own reason to the client,
-which is what puts the card back to Expired; a question there can still be sent
-as an ordinary message, a permission cannot.
+which is what puts the card back to Expired. There is no second route from there:
+a permission that was not granted is a denial.
 
 It is a check, not a lock: two clients answering at the same instant can both
 pass it, and the second answer is then the CLI's business as it was before. What
 it removes is the answer that arrives *after* the prompt stopped being one,
 which is the case that left a turn open with nothing to close it.
 
-The same fact governs the work layer's side of these three handlers: the
-WebSocket message, permission and question methods all call
-`Engine.HandleUserMessage` **after** the send, because what resumes a work is
-the agent having been handed something to go on. A send that failed handed it
-nothing.
+The same fact governs the work layer's side of both handlers: the WebSocket
+message and permission methods call `Engine.HandleUserMessage` (or, for a message
+carrying `answering`, `Engine.HandleUserAnswer`) **after** the send, because what
+resumes a work is the agent having been handed something to go on. A send that
+failed handed it nothing.
 
 ### Retiring a Closed Work's Session
 
@@ -2741,6 +3142,11 @@ session":
   `request_cancelled` event, so it is recorded, reduced and broadcast exactly
   like one the agent sent itself, and the client needs no second way to learn a
   card is dead.
+- **Every question posted with `question_post` is withdrawn**, with the same
+  `reason: work_closed`. Unlike a prompt on screen this one is not the process's
+  to lose: a posted question outlives every process, so it is withdrawn through
+  the session store whether or not anybody has that worktree open. Left standing,
+  it would sit on a finished work with none of the surfaces that offer it left.
 - **A turn that ends inside the grace ends the process with it.**
 - **The grace is a deadline, not a budget activity extends.** A background task
   started on the way out does not buy the session another day; `workCloseGrace`
@@ -2792,10 +3198,12 @@ is the one that is allowed to be keyed on the id.
 
 `reason` is a field on the cancellation record, shared with expiry, because "why
 did this stop waiting for me" is one question:
-`process_ended` | `timeout` | `work_closed`. All three are produced, each by
-exactly one place — the process ending, the answer lease, and the work layer's
-retirement — and a fourth case, where none of them can be named, writes no
-reason at all ([What Becomes of an Expired Prompt](#what-becomes-of-an-expired-prompt)).
+`process_ended` | `timeout` | `work_closed` | `step_done`. All four are produced,
+each by exactly one place — the process ending, the answer lease, the work layer's
+retirement, and a step being completed — and a fifth case, where none of them can
+be named, writes no reason at all ([What Becomes of an Expired
+Prompt](#what-becomes-of-an-expired-prompt)). The first two belong to a permission
+request and the last two to a posted question; no record ever carries one of each.
 
 ## Session Management
 
@@ -3044,14 +3452,13 @@ failing to boot.
 **Naming a record.** A client that needs to point at one record — forking is so
 far the only caller — quotes back a `session.HistorySeq`: the record's 1-based
 position in what `GetHistory` returns. The server hands the number out, on
-replayed history (`StampHistorySeq`) and on every `chat.*` notification of a
+replayed history (`stampHistorySeq`) and on every `chat.*` notification of a
 persisted event alike, and the client only ever reads it back.
 
 **Counting records client-side is the trap the number exists to close.**
-`chat.Client.SendPermissionResponse` and `SendQuestionResponse` append to history
-without broadcasting, so a client's own counter drifts by one for every
-permission or question answered in the session — silently, and a fork would then
-cut somewhere the user never chose. For the same reason the seqs a client knows
+`chat.Client.SendPermissionResponse` appends to history without broadcasting, so a
+client's own counter drifts by one for every permission decided in the session —
+silently, and a fork would then cut somewhere the user never chose. For the same reason the seqs a client knows
 are sparse, which is harmless: it can only anchor on a record it has seen.
 Broadcasting those responses to fill the gaps would trade a harmless hole for a
 real one.

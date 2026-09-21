@@ -154,7 +154,7 @@ describe("WorkListOverlay", () => {
 				parent_id: "s1",
 				title: "Wire the relay",
 				status: "active",
-				activity: "needs_answer",
+				activity: "needs_permission",
 			}),
 		]);
 
@@ -162,6 +162,36 @@ describe("WorkListOverlay", () => {
 
 		expect(groupOf("Wire the relay")).toBe("Needs you");
 		expect(groupOf("Cluster mode")).toBe("In progress");
+	});
+
+	// The second dimension, and the one case an activity cannot express: the agent
+	// posted a question and carried on, so its task is `running` *and* needs a
+	// person. Without this, the task has no row of its own and the question cannot
+	// be reached from the list at all. The server's `hasCurrentRow` decides what to
+	// fetch by the same predicate (`work.RowState.NeedsAttention`), so the two have
+	// to agree or a fetched row goes undrawn.
+	it("gives a running task with an unanswered question its own row", () => {
+		setWorks([
+			createWork({
+				id: "s1",
+				title: "Cluster mode",
+				status: "active",
+				activity: "running",
+			}),
+			createWork({
+				id: "t1",
+				type: "task",
+				parent_id: "s1",
+				title: "Wire the relay",
+				status: "active",
+				activity: "running",
+				unanswered_questions: 1,
+			}),
+		]);
+
+		renderList();
+
+		expect(groupOf("Wire the relay")).toBe("Needs you");
 	});
 
 	it("names the story a task left, whatever state that story is in", () => {
@@ -230,7 +260,7 @@ describe("WorkListOverlay", () => {
 				id: "s1",
 				title: "Wants an answer",
 				status: "active",
-				activity: "needs_message",
+				activity: "needs_permission",
 			}),
 			createWork({ id: "s2", title: "Never started", status: "open" }),
 			createWork({
@@ -271,7 +301,7 @@ describe("WorkListOverlay", () => {
 				id: "s1",
 				title: "Wants an answer",
 				status: "active",
-				activity: "needs_message",
+				activity: "needs_permission",
 			}),
 		]);
 
@@ -350,9 +380,9 @@ describe("WorkListOverlay", () => {
 		).toHaveTextContent("In progress1");
 	});
 
-	// Grouping reads `status` plus the single needsUser predicate, never the
-	// full activity: a list that regrouped on every phase change would reorder
-	// itself while being read.
+	// Grouping reads `status` plus the single `needsAttention` predicate, never
+	// the full activity: a list that regrouped on every phase change would
+	// reorder itself while being read.
 	it("keeps an active work in one group whatever its turn is doing", () => {
 		setWorks([
 			createWork({

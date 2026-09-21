@@ -31,10 +31,15 @@ const (
 	PhaseBlocked TurnPhase = "blocked"
 )
 
-// BlockerKind names the three things a turn can be stuck on. The list is
-// closed on purpose: each kind has a different thing that clears it and a
-// different thing to do when it expires, so a fourth would need both answers
-// before it could be added.
+// BlockerKind names the two things a turn can be stuck on. The list is closed
+// on purpose: each kind has a different thing that clears it and a different
+// thing to do when it expires, so a third would need both answers before it
+// could be added.
+//
+// A question is not one of them, and that is the point of the design this
+// replaced. A blocker belongs to the process that raised it and dies with it; a
+// question an agent posts belongs to the session and outlives every process,
+// every turn and every restart — see TurnState.Unanswered.
 type BlockerKind string
 
 const (
@@ -42,9 +47,6 @@ const (
 	// Cleared by an answer, by the agent withdrawing it, or by the death of the
 	// process that raised it.
 	BlockerPermission BlockerKind = "permission"
-	// BlockerQuestion is an AskUserQuestion on screen with no answer yet.
-	// Cleared the same three ways.
-	BlockerQuestion BlockerKind = "question"
 	// BlockerBackground is a turn parked on work that outlives the tool call
 	// that started it. Nobody is going to answer it: it is cleared by the agent
 	// producing content again, which is what resuming looks like.
@@ -124,6 +126,22 @@ type TurnState struct {
 	// new turn starts. Reading it while Open is true would therefore be reading
 	// about nothing.
 	LastOutcome TurnOutcome `json:"last_outcome,omitempty"`
+	// Unanswered are the questions this session has asked and nobody has
+	// answered yet, oldest first.
+	//
+	// It is on the turn state but it is not a blocker, and the difference is the
+	// whole point of it. A blocker belongs to the process incarnation that
+	// raised it and dies with it, because only that process can take the answer.
+	// A posted question belongs to the *session*: Pockode holds it, the answer
+	// arrives later as an ordinary message, and neither the CLI ending its turn
+	// nor the process being reaped nor the server restarting makes it any less
+	// unanswered. So every signal that clears Blockers leaves this alone, and
+	// there is no `expired` state for a question to reach.
+	//
+	// It also does not affect Phase: a session with a question outstanding is
+	// running, idle or blocked exactly as it would have been without one.
+	// Nothing is stuck — the agent posted it and carried on.
+	Unanswered []PendingQuestion `json:"unanswered,omitempty"`
 }
 
 // TurnSignal is one thing that happened to a session, in the vocabulary the
@@ -159,10 +177,8 @@ const (
 	// noise keeps arriving after a turn is over, and a turn nothing started is a
 	// turn nothing will end.
 	SignalNoise TurnSignal = "noise"
-	// SignalPermissionRaised and SignalQuestionRaised carry the RequestID an
-	// answer will name.
+	// SignalPermissionRaised carries the RequestID an answer will name.
 	SignalPermissionRaised TurnSignal = "permission_raised"
-	SignalQuestionRaised   TurnSignal = "question_raised"
 	// SignalBackgroundParked is the turn being parked on background work.
 	SignalBackgroundParked TurnSignal = "background_parked"
 	// SignalRequestCancelled is the agent withdrawing a prompt it no longer
@@ -175,6 +191,16 @@ const (
 	SignalDone        TurnSignal = "done"
 	SignalFailed      TurnSignal = "failed"
 	SignalInterrupted TurnSignal = "interrupted"
+	// SignalQuestionPosted is a question Pockode has taken charge of, carried on
+	// TurnInput.Question. Unlike SignalPermissionRaised it blocks nothing: the
+	// agent went on working, and the answer will reach it as a message.
+	SignalQuestionPosted TurnSignal = "question_posted"
+	// SignalQuestionResolved is a posted question leaving the unanswered list,
+	// named by TurnInput.RequestID. One signal for all three ways out —
+	// answered, declined, withdrawn by the agent — because the list only records
+	// that a question is outstanding, and which of the three it was is a fact
+	// about the past, kept in the transcript where facts about the past belong.
+	SignalQuestionResolved TurnSignal = "question_resolved"
 	// SignalProcessEnded is the process going away — reaped, closed, crashed, or
 	// killed with the server. Every blocker it raised expires with it, and a
 	// turn still open when it arrives was aborted.
@@ -187,6 +213,10 @@ type TurnInput struct {
 	// RequestID names the prompt a raise, an answer or a cancellation is about.
 	// Ignored by every other signal.
 	RequestID string
+	// Question is the question SignalQuestionPosted is about. Ignored by every
+	// other signal, and required by that one — a posted signal without it moves
+	// nothing.
+	Question *PendingQuestion
 	// At is when this happened. Supplied by the caller rather than read from the
 	// clock inside so that the reducer stays a function of its arguments.
 	At time.Time
@@ -233,6 +263,7 @@ func ReduceTurn(state TurnState, in TurnInput) TurnTransition {
 
 	next := state
 	next.Blockers = cloneBlockers(state.Blockers)
+	next.Unanswered = cloneQuestions(state.Unanswered)
 
 	var expired []Blocker
 	ended := false
@@ -258,7 +289,7 @@ func ReduceTurn(state TurnState, in TurnInput) TurnTransition {
 		// overtaken, and the turn that follows is a new one.
 		//
 		// The send path does not let a user reach this with a permission request
-		// or a question outstanding — the CLI would not read the message anyway
+		// outstanding — the CLI would not read the message anyway
 		// (chat.ErrTurnAwaitingAnswer) — so what this rule covers in practice is
 		// a background wait being overtaken, and the race in which a request is
 		// raised between that check and this input. The rule stays general
@@ -303,11 +334,6 @@ func ReduceTurn(state TurnState, in TurnInput) TurnTransition {
 			Kind: BlockerPermission, RequestID: in.RequestID, RaisedAt: in.At,
 		})
 
-	case SignalQuestionRaised:
-		next.Blockers = addBlocker(next.Blockers, Blocker{
-			Kind: BlockerQuestion, RequestID: in.RequestID, RaisedAt: in.At,
-		})
-
 	case SignalBackgroundParked:
 		next.Blockers = addBlocker(next.Blockers, Blocker{
 			Kind: BlockerBackground, RaisedAt: in.At,
@@ -331,6 +357,20 @@ func ReduceTurn(state TurnState, in TurnInput) TurnTransition {
 		if ended {
 			next.LastOutcome = outcomeFor(in.Signal)
 		}
+
+	case SignalQuestionPosted:
+		// Appended, never replacing: a session can hold several questions at
+		// once, and they are drawn oldest first.
+		if in.Question != nil {
+			next.Unanswered = addQuestion(next.Unanswered, *in.Question)
+		}
+
+	case SignalQuestionResolved:
+		// Naming a question that is not listed removes nothing, which is what
+		// makes withdrawing one idempotent — two callers can reach the same
+		// question at once (a user answering as the agent withdraws it), and the
+		// loser must not be an error.
+		next.Unanswered = dropQuestion(next.Unanswered, in.RequestID)
 
 	case SignalProcessEnded:
 		expired = next.Blockers
@@ -430,6 +470,44 @@ func dropRequest(blockers []Blocker, requestID string) []Blocker {
 	return kept
 }
 
+// addQuestion appends unless the same request is already listed. Posting is the
+// only caller and ids are server-generated, so this cannot happen by accident —
+// it is here because a list that could hold one question twice would need two
+// answers to clear it, and that failure is silent.
+func addQuestion(questions []PendingQuestion, q PendingQuestion) []PendingQuestion {
+	for _, existing := range questions {
+		if existing.RequestID == q.RequestID {
+			return questions
+		}
+	}
+	return append(questions, q)
+}
+
+func dropQuestion(questions []PendingQuestion, requestID string) []PendingQuestion {
+	if requestID == "" {
+		return questions
+	}
+	kept := questions[:0]
+	for _, q := range questions {
+		if q.RequestID != requestID {
+			kept = append(kept, q)
+		}
+	}
+	if len(kept) == 0 {
+		return nil
+	}
+	return kept
+}
+
+func cloneQuestions(questions []PendingQuestion) []PendingQuestion {
+	if len(questions) == 0 {
+		return nil
+	}
+	out := make([]PendingQuestion, len(questions))
+	copy(out, questions)
+	return out
+}
+
 func cloneBlockers(blockers []Blocker) []Blocker {
 	if len(blockers) == 0 {
 		return nil
@@ -454,6 +532,17 @@ func (t TurnState) equal(other TurnState) bool {
 			return false
 		}
 	}
+	// Only the identities and the order: a question's text never changes once
+	// posted, so two lists naming the same requests in the same order are the
+	// same list.
+	if len(t.Unanswered) != len(other.Unanswered) {
+		return false
+	}
+	for i := range t.Unanswered {
+		if t.Unanswered[i].RequestID != other.Unanswered[i].RequestID {
+			return false
+		}
+	}
 	return true
 }
 
@@ -467,6 +556,16 @@ func (t TurnState) equal(other TurnState) bool {
 // for: index entries from builds before this field.
 func NewTurnState(now time.Time) TurnState {
 	return TurnState{Phase: PhaseIdle, Since: now}
+}
+
+// withUnanswered is NewTurnState's one accepted addition: the questions a fork
+// inherits, which are part of the state it is born in rather than something
+// that happens to it afterwards. A signal per question would be the same
+// end state reached through four index writes and four notifications, each
+// showing a half-built fork to every client watching (see ForkSpec).
+func (t TurnState) withUnanswered(questions []PendingQuestion) TurnState {
+	t.Unanswered = cloneQuestions(questions)
+	return t
 }
 
 // withPhaseDefaulted reads an absent phase as idle, which is what it means: a
@@ -505,13 +604,27 @@ func (t TurnState) AwaitingAnswerTo(requestID string) bool {
 	return false
 }
 
+// PendingQuestionFor returns the posted question with this request id, if it is
+// still unanswered.
+func (t TurnState) PendingQuestionFor(requestID string) (PendingQuestion, bool) {
+	if requestID == "" {
+		return PendingQuestion{}, false
+	}
+	for _, q := range t.Unanswered {
+		if q.RequestID == requestID {
+			return q, true
+		}
+	}
+	return PendingQuestion{}, false
+}
+
 // AwaitingUserAnswer reports whether the turn is stuck on something only a
 // person can clear. This is what the session's old NeedsInput flag used to be
 // stored as, and deriving it is why that flag is gone: a stored copy had to be
 // cleared by whoever cleared the thing it described, from three different
 // places, and a missed one left a session marked as waiting forever.
 func (t TurnState) AwaitingUserAnswer() bool {
-	return t.BlockedOn(BlockerPermission) || t.BlockedOn(BlockerQuestion)
+	return t.BlockedOn(BlockerPermission)
 }
 
 // WaitingForBackground reports whether the turn is parked on background work.

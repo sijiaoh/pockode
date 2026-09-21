@@ -4,7 +4,6 @@ import (
 	"strconv"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/pockode/server/session"
 )
@@ -32,7 +31,7 @@ func TestBuildKickoffMessage_Task(t *testing.T) {
 	assertContains(t, msg, "task-1", "work ID")
 	assertContains(t, msg, "agent role", "agent-role-driven lifecycle instruction")
 	assertContains(t, msg, "`step_done` with ID task-1", "step_done instruction")
-	assertContains(t, msg, "`work_needs_input` with ID task-1", "needs-input instruction")
+	assertContains(t, msg, "`question_post` is how you ask", "how to reach the user")
 
 	if strings.Contains(msg, "COORDINATOR") {
 		t.Error("task message should not contain story coordination rules")
@@ -97,35 +96,24 @@ func TestLifecycleRules_QuoteTheLimitsTheServerActuallyKeeps(t *testing.T) {
 	msg := BuildKickoffMessage(Work{ID: "t1", Type: WorkTypeTask, AgentRoleID: testRoleID, Title: "T"})
 
 	assertContains(t, msg, "after "+strconv.Itoa(DefaultMaxNudges)+" of those in a row", "the nudge allowance")
-	assertContains(t, msg, "("+humanDuration(session.DefaultAnswerBudget)+" by default)", "the answer budget")
 }
 
-func TestHumanDuration(t *testing.T) {
-	for _, tc := range []struct {
-		in   time.Duration
-		want string
-	}{
-		{time.Hour, "an hour"},
-		{3 * time.Hour, "3 hours"},
-		{time.Minute, "a minute"},
-		{90 * time.Second, "1m30s"},
-		{30 * time.Minute, "30 minutes"},
-	} {
-		if got := humanDuration(tc.in); got != tc.want {
-			t.Errorf("humanDuration(%s) = %q, want %q", tc.in, got, tc.want)
-		}
-	}
-}
-
-// The chat-versus-work guidance is the one piece of the redesign an agent can
-// only learn from the prompt: nothing about AskUserQuestion tells it that the
-// question holds a process open.
-func TestLifecycleRules_SendLongWaitsToWorkNeedsInput(t *testing.T) {
+// The two things an agent can only learn from the prompt, because nothing in
+// either tool's own description says them: that its CLI's own ask-the-user tool
+// is refused here, and that ending a turn with a posted question outstanding is
+// not the accident an ordinary quiet ending is.
+//
+// The first is worth saying even though the model cannot see that tool in a
+// Claude session — buildArgs takes it off the list — because the refusal is what
+// happens if a CLI ever stops honouring the flag, and because Codex's
+// counterpart is refused at the protocol rather than hidden.
+func TestLifecycleRules_SendLongWaitsToQuestionPost(t *testing.T) {
 	msg := BuildKickoffMessage(Work{ID: "t1", Type: WorkTypeTask, AgentRoleID: testRoleID, Title: "T"})
 
-	assertContains(t, msg, "AskUserQuestion", "the tool the guidance is about")
-	assertContains(t, msg, "a turn ended that way stops the work", "the cost of an unanswered question")
-	assertContains(t, msg, "call `work_needs_input` and end the turn", "what to do instead")
+	assertContains(t, msg, "does not reach the user here", "that the CLI's own ask tool goes nowhere")
+	assertContains(t, msg, "question_post", "what to do instead")
+	assertContains(t, msg, "does not nudge you and does not spend your allowance",
+		"that a posted question makes an ending unsurprising")
 }
 
 func TestBuildKickoffMessage_RoleRefComesFirst(t *testing.T) {
@@ -449,6 +437,8 @@ func TestEverySystemMessage_SpeaksTheCurrentVocabulary(t *testing.T) {
 		messages[prefix+" step_advance"] = BuildStepAdvanceMessage(w, "Do B", 2, 2)
 		messages[prefix+" reopen"] = BuildReopenMessage(w)
 	}
+	messages["child_question"] = BuildChildQuestionMessage(story, "Child", "c1",
+		session.PendingQuestion{RequestID: "req-1", Header: "Database", Question: "Which?"})
 	messages["child_done"] = BuildChildCompletionMessage(story, "Child", "c1", true)
 	messages["child_done, wait standing"] = BuildChildCompletionMessage(story, "Child", "c1", false)
 	for _, exit := range []childExit{childDeleted, childStopped, childNotStarted} {
@@ -478,9 +468,9 @@ func TestBuildChildCompletionMessage_TellsTheParentItsWaitIsGone(t *testing.T) {
 	assertContains(t, msg, "This message cleared your wait", "the cleared wait")
 	assertContains(t, msg, "call work_wait with ID s1 again", "how to wait again")
 
-	// A parent waiting on the *user* keeps its wait (Engine.notifyParentOfChild),
-	// and must not be told to replace it with a wait on its subtasks: the user
-	// would stop being shown as the one being waited for.
+	// A parent that never declared a wait has none to be cleared
+	// (Engine.notifyParentOfChild), and must not be told to "wait again": it was
+	// working, and work_wait is rejected outright once no subtask is running.
 	standing := BuildChildCompletionMessage(story, "Write the parser", "c1", false)
 	if strings.Contains(standing, "cleared your wait") {
 		t.Error("a parent whose wait still stands is told it was cleared")
@@ -501,4 +491,54 @@ func TestBuildRestartMessage_SendsAStoryToRereadItsTasks(t *testing.T) {
 	assertContains(t, msg, "While a story is stopped Pockode sends it nothing", "why re-reading is needed")
 	assertContains(t, msg, "work_list", "how to re-read the tasks")
 	assertContains(t, msg, "work_comment_list", "how to read the reports")
+}
+
+// TestBuildChildQuestionMessage_HandsTheStoryTheWholeQuestion: the story cannot
+// fetch it — the question is on the subtask's session, not on its work item —
+// so everything needed to answer travels in the message.
+func TestBuildChildQuestionMessage_HandsTheStoryTheWholeQuestion(t *testing.T) {
+	story := Work{ID: "s1", Type: WorkTypeStory, AgentRoleID: testRoleID, Title: "S"}
+	q := session.PendingQuestion{
+		RequestID: "req-7", Header: "Database", Question: "Which database?",
+		Options:     []session.QuestionOption{{Label: "Postgres"}, {Label: "SQLite"}},
+		MultiSelect: true,
+	}
+
+	msg := BuildChildQuestionMessage(story, "Write the parser", "c1", q)
+
+	assertContains(t, msg, "Write the parser", "child title")
+	assertContains(t, msg, "Which database?", "the question itself")
+	assertContains(t, msg, "req-7", "the request id, which is all question_answer takes")
+	assertContains(t, msg, "Postgres | SQLite", "the options it may pick from")
+	assertContains(t, msg, "more than one may be picked", "that it is multi-select")
+	assertContains(t, msg, "question_answer", "the way to answer it")
+	assertContains(t, msg, "question_post", "the way to ask the user instead")
+	// The one thing an agent cannot work out from the tools: this message did
+	// not end its wait.
+	assertContains(t, msg, "if you were waiting for your subtasks you still are", "that the wait stands")
+
+	// A question with no options must not print an empty "Options:" line, and
+	// must not point at `answers`: there is no list for a label to come from,
+	// and the server refuses one.
+	plain := BuildChildQuestionMessage(story, "Write the parser", "c1",
+		session.PendingQuestion{RequestID: "req-8", Header: "Name", Question: "What name?"})
+	if strings.Contains(plain, "Options:") {
+		t.Error("a question that offered nothing still printed an options line")
+	}
+	if strings.Contains(plain, "`answers`") {
+		t.Error("a question that offered nothing still offered the labels field")
+	}
+	assertContains(t, plain, "offered nothing to pick", "where the answer goes instead")
+}
+
+// The subtask-question rules are a story's: only a story has subtasks that
+// could ask.
+func TestLifecycleRules_TellOnlyAStoryAboutItsSubtasksQuestions(t *testing.T) {
+	story := Work{ID: "s1", Type: WorkTypeStory, AgentRoleID: testRoleID, Title: "S"}
+	task := Work{ID: "t1", Type: WorkTypeTask, ParentID: "s1", AgentRoleID: testRoleID, Title: "T"}
+
+	assertContains(t, lifecycleRules(story), "question_answer", "a story is told it may answer for its subtasks")
+	if strings.Contains(lifecycleRules(task), "question_answer") {
+		t.Error("a task is offered a tool it has no subtask to point at")
+	}
 }

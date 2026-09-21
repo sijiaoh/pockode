@@ -95,12 +95,12 @@ describe("settleAgainstTurn", () => {
 
 	const asked = () =>
 		replayHistory([
-			{ type: "message", content: "Ask me" },
+			{ type: "message", content: "Allow it?" },
 			{
-				type: "ask_user_question",
-				request_id: "q1",
+				type: "permission_request",
+				request_id: "p1",
+				tool_name: "Bash",
 				tool_use_id: "t1",
-				questions: sampleQuestions,
 			},
 		]);
 
@@ -108,11 +108,11 @@ describe("settleAgainstTurn", () => {
 		const settled = settleAgainstTurn(
 			asked(),
 			turnState("blocked", {
-				blockers: [{ kind: "question", request_id: "q1", raised_at: "" }],
+				blockers: [{ kind: "permission", request_id: "p1", raised_at: "" }],
 			}),
 		);
 		expect(partsOf(settled.at(-1) as Message)).toMatchObject([
-			{ type: "ask_user_question", status: "pending" },
+			{ type: "permission_request", status: "pending" },
 		]);
 	});
 
@@ -126,7 +126,7 @@ describe("settleAgainstTurn", () => {
 			}),
 		);
 		expect(partsOf(settled.at(-1) as Message)).toMatchObject([
-			{ type: "ask_user_question", status: "expired" },
+			{ type: "permission_request", status: "expired" },
 		]);
 	});
 });
@@ -268,7 +268,7 @@ describe("messageReducer", () => {
 			});
 		});
 
-		it("normalizes ask_user_question event", () => {
+		it("normalizes a legacy ask_user_question record", () => {
 			const event = normalizeEvent({
 				type: "ask_user_question",
 				request_id: "q-1",
@@ -276,7 +276,7 @@ describe("messageReducer", () => {
 				questions: sampleQuestions,
 			});
 			expect(event).toEqual({
-				type: "ask_user_question",
+				type: "legacy_question",
 				requestId: "q-1",
 				toolUseId: "toolu_q_1",
 				questions: sampleQuestions,
@@ -290,7 +290,7 @@ describe("messageReducer", () => {
 				tool_use_id: "toolu_q_1",
 			});
 			expect(event).toEqual({
-				type: "ask_user_question",
+				type: "legacy_question",
 				requestId: "q-1",
 				toolUseId: "toolu_q_1",
 				questions: [],
@@ -314,7 +314,7 @@ describe("messageReducer", () => {
 			};
 			const event = normalizeEvent(payload);
 			expect(event).toEqual({
-				type: "ask_user_question",
+				type: "legacy_question",
 				requestId: "q-1",
 				toolUseId: "toolu_q_1",
 				questions: [
@@ -464,27 +464,27 @@ describe("messageReducer", () => {
 			]);
 		});
 
-		it("adds ask_user_question as pending", () => {
+		// One card per question, not one card carrying the array: the records
+		// written today are one question each, and sharing the renderer is the
+		// whole reason an old transcript still draws.
+		it("adds a legacy question as one pending card per question", () => {
 			const parts = applyEventToParts([], {
-				type: "ask_user_question",
+				type: "legacy_question",
 				requestId: "q-1",
 				toolUseId: "toolu_q_1",
 				questions: sampleQuestions,
 			});
 			expect(parts).toEqual([
 				{
-					type: "ask_user_question",
-					request: {
-						requestId: "q-1",
-						toolUseId: "toolu_q_1",
-						questions: sampleQuestions,
-					},
+					type: "question_record",
+					record: { requestId: "q-1", question: sampleQuestions[0] },
 					status: "pending",
+					legacy: true,
 				},
 			]);
 		});
 
-		it("replaces the AskUserQuestion tool_call with the question part", () => {
+		it("replaces the ask tool's tool_call with the cards", () => {
 			const withToolCall = applyEventToParts([], {
 				type: "tool_call",
 				toolUseId: "toolu_q_1",
@@ -492,25 +492,22 @@ describe("messageReducer", () => {
 				toolInput: { questions: sampleQuestions },
 			});
 			const parts = applyEventToParts(withToolCall, {
-				type: "ask_user_question",
+				type: "legacy_question",
 				requestId: "q-1",
 				toolUseId: "toolu_q_1",
 				questions: sampleQuestions,
 			});
 			expect(parts).toEqual([
 				{
-					type: "ask_user_question",
-					request: {
-						requestId: "q-1",
-						toolUseId: "toolu_q_1",
-						questions: sampleQuestions,
-					},
+					type: "question_record",
+					record: { requestId: "q-1", question: sampleQuestions[0] },
 					status: "pending",
+					legacy: true,
 				},
 			]);
 		});
 
-		it("keeps unrelated tool_calls when the question part is added", () => {
+		it("keeps unrelated tool_calls when the cards are added", () => {
 			const parts = applyEventToParts(
 				[
 					{
@@ -524,7 +521,7 @@ describe("messageReducer", () => {
 					},
 				],
 				{
-					type: "ask_user_question",
+					type: "legacy_question",
 					requestId: "q-1",
 					toolUseId: "toolu_q_1",
 					questions: sampleQuestions,
@@ -532,7 +529,7 @@ describe("messageReducer", () => {
 			);
 			expect(parts).toHaveLength(2);
 			expect(parts[0]).toMatchObject({ type: "tool_call" });
-			expect(parts[1]).toMatchObject({ type: "ask_user_question" });
+			expect(parts[1]).toMatchObject({ type: "question_record", legacy: true });
 		});
 
 		it("adds warning as new part", () => {
@@ -751,17 +748,18 @@ describe("messageReducer", () => {
 			});
 		});
 
-		it("updates ask_user_question status to expired on request_cancelled", () => {
+		it("updates permission_request status to expired on request_cancelled", () => {
 			const initial: AssistantMessage = {
 				id: "msg-1",
 				role: "assistant",
 				parts: [
 					{
-						type: "ask_user_question",
+						type: "permission_request",
 						request: {
 							requestId: "q-1",
+							toolName: "Bash",
+							toolInput: { command: "ls" },
 							toolUseId: "toolu_q_1",
-							questions: sampleQuestions,
 						},
 						status: "pending",
 					},
@@ -776,7 +774,7 @@ describe("messageReducer", () => {
 			});
 			const assistant = messages[0] as AssistantMessage;
 			expect(assistant.parts[0]).toMatchObject({
-				type: "ask_user_question",
+				type: "permission_request",
 				status: "expired",
 				// Why it expired travels with it: the card says which of the three
 				// things happened, and only this one makes it unanswerable.
@@ -793,11 +791,12 @@ describe("messageReducer", () => {
 				role: "assistant",
 				parts: [
 					{
-						type: "ask_user_question",
+						type: "permission_request",
 						request: {
 							requestId: "q-1",
+							toolName: "Bash",
+							toolInput: { command: "ls" },
 							toolUseId: "toolu_q_1",
-							questions: sampleQuestions,
 						},
 						status: "expired",
 					},
@@ -823,11 +822,12 @@ describe("messageReducer", () => {
 				role: "assistant",
 				parts: [
 					{
-						type: "ask_user_question",
+						type: "permission_request",
 						request: {
 							requestId: "q-1",
+							toolName: "Bash",
+							toolInput: { command: "ls" },
 							toolUseId: "toolu_q_1",
-							questions: sampleQuestions,
 						},
 						status: "expired",
 						reason: "work_closed",
@@ -906,19 +906,18 @@ describe("messageReducer", () => {
 			expect(messages[0]).toBe(initial);
 		});
 
-		it("ignores late question_response on already-expired question", () => {
+		// A legacy card the CLI withdrew is settled, and a response arriving after
+		// cannot reopen it.
+		it("ignores a question_response for a card already cancelled", () => {
 			const initial: AssistantMessage = {
 				id: "msg-1",
 				role: "assistant",
 				parts: [
 					{
-						type: "ask_user_question",
-						request: {
-							requestId: "q-1",
-							toolUseId: "toolu_q_1",
-							questions: sampleQuestions,
-						},
-						status: "expired",
+						type: "question_record",
+						record: { requestId: "q-1", question: sampleQuestions[0] },
+						legacy: true,
+						status: "cancelled",
 					},
 				],
 				status: "interrupted",
@@ -932,18 +931,18 @@ describe("messageReducer", () => {
 			expect(messages[0]).toBe(initial);
 		});
 
-		it("updates ask_user_question status on question_response with answers", () => {
+		// The old flat answer string is parsed back into the halves a card draws,
+		// so an answer given a year ago fills the read-only form in exactly as
+		// today's does.
+		it("answers a legacy card from the old flat answer string", () => {
 			const initial: AssistantMessage = {
 				id: "msg-1",
 				role: "assistant",
 				parts: [
 					{
-						type: "ask_user_question",
-						request: {
-							requestId: "q-1",
-							toolUseId: "toolu_q_1",
-							questions: sampleQuestions,
-						},
+						type: "question_record",
+						record: { requestId: "q-1", question: sampleQuestions[0] },
+						legacy: true,
 						status: "pending",
 					},
 				],
@@ -955,26 +954,51 @@ describe("messageReducer", () => {
 				requestId: "q-1",
 				answers: { "Which library?": "React" },
 			});
-			const assistant = messages[0] as AssistantMessage;
-			expect(assistant.parts[0]).toMatchObject({
-				type: "ask_user_question",
+			expect((messages[0] as AssistantMessage).parts[0]).toMatchObject({
+				type: "question_record",
 				status: "answered",
-				answers: { "Which library?": "React" },
+				answer: { answers: ["React"] },
 			});
 		});
 
-		it("updates ask_user_question status on question_response with null (cancelled)", () => {
+		// The free text half of the same string, which the old format put behind
+		// `Other: `. It lands in `text`, not in `answers` — a label the question
+		// never offered would read as one it did.
+		it("puts a legacy Other answer in text rather than among the labels", () => {
 			const initial: AssistantMessage = {
 				id: "msg-1",
 				role: "assistant",
 				parts: [
 					{
-						type: "ask_user_question",
-						request: {
-							requestId: "q-1",
-							toolUseId: "toolu_q_1",
-							questions: sampleQuestions,
-						},
+						type: "question_record",
+						record: { requestId: "q-1", question: sampleQuestions[0] },
+						legacy: true,
+						status: "pending",
+					},
+				],
+				status: "streaming",
+				createdAt: new Date(),
+			};
+			const messages = applyServerEvent([initial], {
+				type: "question_response",
+				requestId: "q-1",
+				answers: { "Which library?": "Other: Svelte, actually" },
+			});
+			expect((messages[0] as AssistantMessage).parts[0]).toMatchObject({
+				status: "answered",
+				answer: { answers: [], text: "Svelte, actually" },
+			});
+		});
+
+		it("cancels a legacy card on a question_response with null answers", () => {
+			const initial: AssistantMessage = {
+				id: "msg-1",
+				role: "assistant",
+				parts: [
+					{
+						type: "question_record",
+						record: { requestId: "q-1", question: sampleQuestions[0] },
+						legacy: true,
 						status: "pending",
 					},
 				],
@@ -986,9 +1010,8 @@ describe("messageReducer", () => {
 				requestId: "q-1",
 				answers: null,
 			});
-			const assistant = messages[0] as AssistantMessage;
-			expect(assistant.parts[0]).toMatchObject({
-				type: "ask_user_question",
+			expect((messages[0] as AssistantMessage).parts[0]).toMatchObject({
+				type: "question_record",
 				status: "cancelled",
 			});
 		});
@@ -999,12 +1022,9 @@ describe("messageReducer", () => {
 				role: "assistant",
 				parts: [
 					{
-						type: "ask_user_question",
-						request: {
-							requestId: "q-1",
-							toolUseId: "toolu_q_1",
-							questions: sampleQuestions,
-						},
+						type: "question_record",
+						record: { requestId: "q-1", question: sampleQuestions[0] },
+						legacy: true,
 						status: "pending",
 					},
 				],
@@ -1015,11 +1035,6 @@ describe("messageReducer", () => {
 				type: "question_response",
 				requestId: "non-existent",
 				answers: { "Which library?": "React" },
-			});
-			const assistant = messages[0] as AssistantMessage;
-			expect(assistant.parts[0]).toMatchObject({
-				type: "ask_user_question",
-				status: "pending",
 			});
 			expect(messages[0]).toBe(initial);
 		});
@@ -1051,18 +1066,24 @@ describe("messageReducer", () => {
 			});
 		});
 
-		it("expires pending ask_user_question on process_ended", () => {
+		// A question card is not a prompt a process holds open, and a process ending
+		// is not an ending for it. That goes for a legacy card too: it is already
+		// unanswerable and says so, and expiring it would be the second way of
+		// saying one thing.
+		it("leaves a question card alone on process_ended", () => {
 			const initial: AssistantMessage = {
 				id: "msg-1",
 				role: "assistant",
 				parts: [
 					{
-						type: "ask_user_question",
-						request: {
-							requestId: "q-1",
-							toolUseId: "toolu_q_1",
-							questions: sampleQuestions,
-						},
+						type: "question_record",
+						record: { requestId: "q-1", question: sampleQuestions[0] },
+						status: "pending",
+					},
+					{
+						type: "question_record",
+						record: { requestId: "q-2", question: sampleQuestions[0] },
+						legacy: true,
 						status: "pending",
 					},
 				],
@@ -1070,14 +1091,9 @@ describe("messageReducer", () => {
 				createdAt: new Date(),
 			};
 			const messages = applyServerEvent([initial], { type: "process_ended" });
-			const assistant = messages[0] as AssistantMessage;
-			expect(assistant.parts[0]).toMatchObject({
-				type: "ask_user_question",
-				status: "expired",
-				// The record is the reason: every card still open when a process
-				// ends lost the only thing that could have taken its answer.
-				reason: "process_ended",
-			});
+			// Compared part by part: process_ended also finishes the streaming
+			// bubble, so the message object itself is a new one either way.
+			expect(partsOf(messages[0])).toEqual(initial.parts);
 		});
 
 		it("does not expire already-resolved dialogs on process_ended", () => {
@@ -1096,14 +1112,10 @@ describe("messageReducer", () => {
 						status: "allowed",
 					},
 					{
-						type: "ask_user_question",
-						request: {
-							requestId: "q-1",
-							toolUseId: "toolu_q_1",
-							questions: sampleQuestions,
-						},
+						type: "question_record",
+						record: { requestId: "q-1", question: sampleQuestions[0] },
+						legacy: true,
 						status: "answered",
-						answers: { "Which library?": "React" },
 					},
 				],
 				status: "streaming",
@@ -1116,7 +1128,7 @@ describe("messageReducer", () => {
 				status: "allowed",
 			});
 			expect(assistant.parts[1]).toMatchObject({
-				type: "ask_user_question",
+				type: "question_record",
 				status: "answered",
 			});
 		});
@@ -1136,15 +1148,6 @@ describe("messageReducer", () => {
 						},
 						status: "pending",
 					},
-					{
-						type: "ask_user_question",
-						request: {
-							requestId: "q-1",
-							toolUseId: "toolu_q_1",
-							questions: sampleQuestions,
-						},
-						status: "pending",
-					},
 				],
 				status: "interrupted",
 				createdAt: new Date(),
@@ -1155,10 +1158,6 @@ describe("messageReducer", () => {
 			const assistant = messages[0] as AssistantMessage;
 			expect(assistant.parts[0]).toMatchObject({
 				type: "permission_request",
-				status: "expired",
-			});
-			expect(assistant.parts[1]).toMatchObject({
-				type: "ask_user_question",
 				status: "expired",
 			});
 		});
@@ -1524,6 +1523,29 @@ describe("messageReducer", () => {
 					subtype: "kickoff",
 					meta: { title: "My work", step: { current: 1, total: 3 } },
 				});
+			});
+
+			// An answer another agent gave is neither a user bubble nor a system
+			// line, and the bubble has to be able to tell: `source` is what it
+			// reads, so the origin must survive normalisation and be carried onto
+			// the message.
+			it("carries an agent origin through to the message", () => {
+				const messages = applyServerEvent([], {
+					type: "message",
+					content: "Answering — not the user…",
+					origin: "agent",
+					answering: [
+						{
+							request_id: "r1",
+							answers: ["Postgres"],
+							answered_at: "2026-01-02T14:05:00Z",
+							resolved_by: { kind: "agent", work_id: "w1", title: "Ship it" },
+						},
+					],
+				});
+				const message = messages[0];
+				expect(message.role === "user" && message.source).toBe("agent");
+				expect(message.role === "user" && message.answering).toHaveLength(1);
 			});
 
 			it("normalizes legacy 'work' origin to 'system' (backward compat)", () => {
@@ -2251,7 +2273,7 @@ describe("messageReducer", () => {
 			});
 		});
 
-		it("replays ask_user_question with answered response", () => {
+		it("replays a legacy question with its answered response", () => {
 			const history = [
 				{ type: "message", content: "Help me choose" },
 				{
@@ -2271,13 +2293,14 @@ describe("messageReducer", () => {
 			const messages = replayHistory(history);
 			const assistant = messages[1] as AssistantMessage;
 			expect(assistant.parts[0]).toMatchObject({
-				type: "ask_user_question",
+				type: "question_record",
+				legacy: true,
 				status: "answered",
-				answers: { "Which library?": "React" },
+				answer: { answers: ["React"] },
 			});
 		});
 
-		it("replays the full AskUserQuestion tool sequence as a single part", () => {
+		it("replays the full legacy ask tool sequence as a single part", () => {
 			const history = [
 				{ type: "message", content: "Help me choose" },
 				{
@@ -2309,13 +2332,14 @@ describe("messageReducer", () => {
 			const assistant = messages[1] as AssistantMessage;
 			expect(assistant.parts).toHaveLength(1);
 			expect(assistant.parts[0]).toMatchObject({
-				type: "ask_user_question",
+				type: "question_record",
+				legacy: true,
 				status: "answered",
-				answers: { "Which library?": "React" },
+				answer: { answers: ["React"] },
 			});
 		});
 
-		it("replays ask_user_question with cancelled response", () => {
+		it("replays a legacy question with a cancelled response", () => {
 			const history = [
 				{ type: "message", content: "Help me choose" },
 				{
@@ -2330,14 +2354,15 @@ describe("messageReducer", () => {
 			const messages = replayHistory(history);
 			const assistant = messages[1] as AssistantMessage;
 			expect(assistant.parts[0]).toMatchObject({
-				type: "ask_user_question",
+				type: "question_record",
+				legacy: true,
 				status: "cancelled",
 			});
 		});
 
 		// What the server actually persists on cancel: a nil answers map, which
 		// `omitempty` then strips from the record.
-		it("replays ask_user_question as cancelled when answers key is absent", () => {
+		it("replays a legacy question as cancelled when the answers key is absent", () => {
 			const history = [
 				{ type: "message", content: "Help me choose" },
 				{
@@ -2352,12 +2377,13 @@ describe("messageReducer", () => {
 			const messages = replayHistory(history);
 			const assistant = messages[1] as AssistantMessage;
 			expect(assistant.parts[0]).toMatchObject({
-				type: "ask_user_question",
+				type: "question_record",
+				legacy: true,
 				status: "cancelled",
 			});
 		});
 
-		it("keeps pending status for ask_user_question without response", () => {
+		it("keeps a legacy question pending when nothing answered it", () => {
 			const history = [
 				{ type: "message", content: "Help me choose" },
 				{
@@ -2370,7 +2396,8 @@ describe("messageReducer", () => {
 			const messages = replayHistory(history);
 			const assistant = messages[1] as AssistantMessage;
 			expect(assistant.parts[0]).toMatchObject({
-				type: "ask_user_question",
+				type: "question_record",
+				legacy: true,
 				status: "pending",
 			});
 		});
@@ -2384,12 +2411,6 @@ describe("messageReducer", () => {
 					tool_name: "Bash",
 					tool_input: { command: "ls" },
 					tool_use_id: "tool-1",
-				},
-				{
-					type: "ask_user_question",
-					request_id: "q-1",
-					tool_use_id: "toolu_q_1",
-					questions: sampleQuestions,
 				},
 			];
 			// Simulate: replay returns pending dialogs (no process_ended in history)
@@ -2405,10 +2426,6 @@ describe("messageReducer", () => {
 				type: "permission_request",
 				status: "expired",
 			});
-			expect(assistant.parts[1]).toMatchObject({
-				type: "ask_user_question",
-				status: "expired",
-			});
 		});
 
 		it("expires pending dialogs on process_ended during replay", () => {
@@ -2421,22 +2438,12 @@ describe("messageReducer", () => {
 					tool_input: { command: "ls" },
 					tool_use_id: "tool-1",
 				},
-				{
-					type: "ask_user_question",
-					request_id: "q-1",
-					tool_use_id: "toolu_q_1",
-					questions: sampleQuestions,
-				},
 				{ type: "process_ended" },
 			];
 			const messages = replayHistory(history);
 			const assistant = messages[1] as AssistantMessage;
 			expect(assistant.parts[0]).toMatchObject({
 				type: "permission_request",
-				status: "expired",
-			});
-			expect(assistant.parts[1]).toMatchObject({
-				type: "ask_user_question",
 				status: "expired",
 			});
 		});
@@ -3475,7 +3482,7 @@ describe("messageReducer", () => {
 				expect(runs[0].fetches).toBeUndefined();
 			});
 
-			it("retires a question the user has already answered", () => {
+			it("retires a legacy question the user had already answered", () => {
 				const older = replayHistory([
 					{
 						type: "ask_user_question",
@@ -3495,21 +3502,21 @@ describe("messageReducer", () => {
 					],
 				});
 				expect(partsOf(caught[caught.length - 1])).toMatchObject([
-					{ type: "ask_user_question", status: "answered" },
+					{ type: "question_record", status: "answered" },
 				]);
 			});
 
 			it("retires what a later process end left open without claiming the turn ended there", () => {
-				// The process died long after this page. The question it stranded has
+				// The process died long after this page. The request it stranded has
 				// to be retired, but the turn itself was still running at this point
 				// and did not end that way.
 				const older = replayHistory([
-					{ type: "message", content: "Ask me" },
+					{ type: "message", content: "Do it" },
 					{
-						type: "ask_user_question",
-						request_id: "q1",
+						type: "permission_request",
+						request_id: "p1",
+						tool_name: "Bash",
 						tool_use_id: "t1",
-						questions: sampleQuestions,
 					},
 					{ type: "text", content: "half an answer" },
 				]);
@@ -3521,7 +3528,7 @@ describe("messageReducer", () => {
 				const turn = caught[caught.length - 1];
 				expect(turn).toMatchObject({ status: "complete" });
 				expect(partsOf(turn)).toMatchObject([
-					{ type: "ask_user_question", status: "expired" },
+					{ type: "permission_request", status: "expired" },
 					{ type: "text" },
 				]);
 			});
@@ -3530,12 +3537,12 @@ describe("messageReducer", () => {
 				// process_ended a restart repair writes lands at the end of the
 				// transcript, pages further back learn nothing from it.
 				const older = replayHistory([
-					{ type: "message", content: "Ask me" },
+					{ type: "message", content: "Do it" },
 					{
-						type: "ask_user_question",
-						request_id: "q1",
+						type: "permission_request",
+						request_id: "p1",
+						tool_name: "Bash",
 						tool_use_id: "t1",
-						questions: sampleQuestions,
 					},
 				]);
 
@@ -3544,7 +3551,7 @@ describe("messageReducer", () => {
 				});
 
 				expect(partsOf(caught[caught.length - 1])).toMatchObject([
-					{ type: "ask_user_question", status: "expired" },
+					{ type: "permission_request", status: "expired" },
 				]);
 			});
 		});

@@ -301,10 +301,10 @@ carry was saying at 2.23:1.
 
 Four chips take the fill without a border, and the test for them is whether the
 border would add the hue or only a box: `Chat/TaskItem.tsx` sits beside an
-accent label and an accent icon already, the two in
-`Chat/AskUserQuestionItem.tsx` are inline and a border would push the line
-height around, and the upload destination bar in `Files/FilesTab.tsx` spans the
-panel, where a border reads as a frame around the row rather than as a chip.
+accent label and an accent icon already, the two in `Chat/QuestionForm.tsx` are
+inline and a border would push the line height around, and the upload
+destination bar in `Files/FilesTab.tsx` spans the panel, where a border reads as
+a frame around the row rather than as a chip.
 They are `common/Highlight.tsx`'s shape — tint plus body colour — and none of
 them asks the fill to carry meaning its words do not, so nothing is lost by the
 border being absent. The upload bar keeps one thing more. The other three sit
@@ -338,8 +338,8 @@ token values rather than on how they are written, which is a palette decision
 and not this rule's. Muted is left out for a different reason and no longer a
 token-layer one: it clears AA over every surface the app paints and the
 non-text floor as a border, and no `bg-th-text-muted` tint carries text any
-more — the one that did, the expired chip in `Chat/AskUserQuestionItem.tsx`,
-is an opaque `bg-th-bg-tertiary` now. What it would still fail is the alpha
+more — the one that did, the question card's settled chip, is an opaque
+`bg-th-bg-tertiary` now (`Chat/QuestionRecordItem.tsx`). What it would still fail is the alpha
 ceiling, since the shared `Sheet`'s drag handle is `bg-th-text-muted/30` and no
 value of the token can lift it: the extreme token, black or white at 30% over
 the sheet's own surface, reaches about 2.1 in the light variants and 2.7 in

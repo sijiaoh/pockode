@@ -77,6 +77,13 @@ export interface SessionListItem {
 	 */
 	turn: SessionTurn;
 	unread: boolean;
+	/**
+	 * How many questions this session is waiting on an answer to. The count and
+	 * not the list: thirty rows do not need thirty question texts to draw thirty
+	 * glyphs, and the list itself rides on `turn` for the one session that is
+	 * open. Absent means none.
+	 */
+	unanswered_questions?: number;
 	/** Absent on a session that was created rather than forked. */
 	forked_from?: ForkOrigin;
 }
@@ -206,20 +213,51 @@ export interface ToolRun {
 }
 
 /**
- * Why a prompt stopped waiting for its answer, for the cards that can no longer
- * be answered as one (docs/lifecycle-ui.md §5). One type for both prompt kinds,
- * because "why did this stop waiting for me" is one question.
+ * Why a card stopped waiting for its answer (docs/lifecycle-ui.md §5). One type
+ * for both card kinds, because "why did this stop waiting for me" is one
+ * question — but no reason reaches both, and each card draws only the ones that
+ * can reach it:
+ *
+ * | Reason | Reaches | Written by |
+ * |---|---|---|
+ * | `process_ended` | a permission card | the process going away |
+ * | `timeout` | a permission card | the answer lease running out |
+ * | `work_closed` | either | the work layer retiring a closed work's session |
+ * | `step_done` | a question card | a step being completed while the question waited |
  *
  * Absent is a real answer and the common one: a turn that simply ended, or a
  * user who sent a message instead of answering, leaves a card nothing can
  * answer for a reason the server cannot name. The banner then says what is true
  * of all of them rather than guessing.
  */
-export type ExpiryReason = "process_ended" | "timeout" | "work_closed";
+export type ExpiryReason =
+	| "process_ended"
+	| "timeout"
+	| "work_closed"
+	| "step_done";
 
 export type PermissionStatus = "pending" | "allowed" | "denied" | "expired";
 
-export type QuestionStatus = "pending" | "answered" | "cancelled" | "expired";
+/**
+ * How a posted question stands, derived by the reducer from the records that
+ * name its `request_id` (docs/answering-ui.md §6).
+ *
+ * There is no `expired`: a posted question belongs to the session, not to the
+ * process that asked it, so a process ending is not an ending for the question.
+ */
+export type QuestionRecordStatus =
+	| "pending"
+	| "answered"
+	| "declined"
+	| "cancelled";
+
+/** The `question_posted` record: what was asked, and when. */
+export interface QuestionRecord {
+	requestId: string;
+	question: AskUserQuestion;
+	/** Absent on a record written without one; see the server's `asked_at`. */
+	askedAt?: string;
+}
 
 export type ContentPart =
 	| { type: "text"; content: string }
@@ -234,19 +272,45 @@ export type ContentPart =
 			reason?: ExpiryReason;
 	  }
 	| {
-			type: "ask_user_question";
-			request: AskUserQuestionRequest;
-			status: QuestionStatus;
-			answers?: Record<string, string>;
-			/** Only ever set alongside `expired`; see ExpiryReason. */
+			/**
+			 * The record of a question the agent posted through `question_post`.
+			 * A record and nothing more: it holds no form and no live state, and
+			 * whether the question is still open is the turn's answer, not this
+			 * card's (docs/answering-ui.md §6).
+			 */
+			type: "question_record";
+			record: QuestionRecord;
+			status: QuestionRecordStatus;
+			/** What was said back. Set on `answered` and `declined`. */
+			answer?: QuestionAnswerRecord;
+			/** Absent reason on a `cancelled` card means the agent withdrew it. */
 			reason?: ExpiryReason;
+			/**
+			 * Set on a card read from an `ask_user_question` record: the CLI's own
+			 * blocking question, from a transcript written before Pockode stopped
+			 * letting a CLI ask one.
+			 *
+			 * It renders as a record like any other, and an answered one even fills
+			 * its form in, but a `pending` one can never be answered — the process
+			 * that was holding the tool call open is long gone — so the card says so
+			 * instead of offering a way in.
+			 */
+			legacy?: boolean;
 	  }
 	| { type: "raw"; content: string }
 	| { type: "command_output"; content: string };
 
-// Origin of a message: user-typed vs. Pockode's own system automation.
-// Absent/"user" = a normal user message (backward compatible with old history).
-export type MessageOrigin = "user" | "system";
+/**
+ * Origin of a message: user-typed, Pockode's own system automation, or another
+ * agent putting something into this session. Absent/`"user"` = a normal user
+ * message (backward compatible with old history).
+ *
+ * `"agent"` is today only an answer given through `question_answer`. It is
+ * neither of the other two: a user bubble would claim the person said it, and
+ * the system line would read as Pockode's own annotation. Who answered is on
+ * the answer itself (`QuestionAnswerRecord.resolved_by`).
+ */
+export type MessageOrigin = "user" | "system" | "agent";
 
 export interface SystemMessageStep {
 	current: number;
@@ -295,6 +359,12 @@ export interface UserMessage {
 	source?: MessageOrigin;
 	subtype?: string;
 	meta?: SystemMessageMeta;
+	/**
+	 * The posted questions this message answers, when it answers any. The bubble
+	 * is drawn from these rather than from `content`, which is the same facts
+	 * flattened for the agent to read (docs/answering-ui.md §3).
+	 */
+	answering?: QuestionAnswerRecord[];
 }
 
 export interface AssistantMessage {
@@ -368,7 +438,13 @@ export interface PermissionRequest {
 
 export interface QuestionOption {
 	label: string;
-	description: string;
+	/**
+	 * Optional: a live question omits it when the agent gave none
+	 * (`session.QuestionOption`), while a record from the CLI's own prompt
+	 * always carries the key and may carry an empty string. Both mean the same
+	 * thing to a reader, so neither draws a line.
+	 */
+	description?: string;
 }
 
 export interface AskUserQuestion {
@@ -378,10 +454,91 @@ export interface AskUserQuestion {
 	multiSelect: boolean;
 }
 
-export interface AskUserQuestionRequest {
-	requestId: string;
-	toolUseId: string;
-	questions: AskUserQuestion[];
+/**
+ * One question an agent posted and nobody has answered yet.
+ *
+ * It is *state*, not a record: it rides on the session's turn, arrives with
+ * every subscription that carries one, and disappears the moment the question
+ * is resolved. The card in the transcript is the immutable half of the same
+ * event and is never read to find out whether a question is still open
+ * (docs/answering-ui.md §1).
+ *
+ * One `question_post` is one question and one `request_id`, which is what makes
+ * "decline this one" a sentence with a subject.
+ */
+export interface PendingQuestion {
+	request_id: string;
+	/** The short label the agent gave it; the chip on every surface. */
+	header: string;
+	question: string;
+	/** Empty means free text — the shape `work_needs_input` took. */
+	options?: QuestionOption[];
+	multi_select?: boolean;
+	asked_at: string;
+}
+
+/**
+ * Who answered a question (`QuestionAnswerRecord.resolved_by`).
+ *
+ * `work_id` and `title` are the *answering* work, copied into the record for
+ * the same reason the header and the question are: the reader is a bubble in
+ * someone else's transcript, and that work is not one it can look up. Both are
+ * absent for a user, and for an agent running in a session no work owns.
+ */
+export interface QuestionResolver {
+	kind: "user" | "agent";
+	work_id?: string;
+	title?: string;
+}
+
+/**
+ * One question a message answered, as the message record carries it.
+ *
+ * `header` and `question` travel with the answer rather than being resolved
+ * from the question's own record: the bubble is drawn from this alone, and the
+ * card that asked may be thousands of records back — outside every page this
+ * client will ever load.
+ */
+export interface QuestionAnswerRecord {
+	request_id: string;
+	header?: string;
+	question?: string;
+	/**
+	 * The option labels picked, and only ever labels the question offered. Empty
+	 * when the user answered in their own words, and when declined.
+	 */
+	answers?: string[];
+	/**
+	 * What the user wrote themselves: the whole answer to a question that offered
+	 * no options, or the **Other** beside ones it did.
+	 *
+	 * Apart from `answers` because the agent has to be able to tell them apart —
+	 * a label is its own word handed back, this is the user's. That is also why
+	 * the server checks one against the question and never the other.
+	 */
+	text?: string;
+	declined?: boolean;
+	/** The optional line the user added beside a decline. */
+	note?: string;
+	/**
+	 * Who gave this answer. Absent on records written before an agent could
+	 * answer at all, which were all the user's — so absent reads as the user,
+	 * and every record written now says which it is outright.
+	 */
+	resolved_by?: QuestionResolver;
+	answered_at: string;
+}
+
+/**
+ * One question answered by a `chat.message`, as the client states it.
+ * Either `declined`, or something in `answers` or `text`.
+ */
+export interface QuestionAnswerParams {
+	request_id: string;
+	answers?: string[];
+	text?: string;
+	declined?: boolean;
+	note?: string;
 }
 
 // JSON-RPC 2.0 Request Params (Client → Server)
@@ -457,6 +614,13 @@ export interface AuthResult {
 export interface MessageParams {
 	session_id: string;
 	content: string;
+	/**
+	 * The posted questions this message answers. The server validates every
+	 * entry against the session's live list before delivering anything and
+	 * refuses the whole message with `-32602` naming the ones that are no longer
+	 * pending — the body is one string, so there is no half of it to deliver.
+	 */
+	answering?: QuestionAnswerParams[];
 }
 
 /**
@@ -487,13 +651,6 @@ export interface PermissionResponseParams {
 	tool_input: unknown;
 	permission_suggestions?: PermissionUpdate[];
 	choice: "deny" | "allow" | "always_allow";
-}
-
-export interface QuestionResponseParams {
-	session_id: string;
-	request_id: string;
-	tool_use_id: string;
-	answers: Record<string, string> | null; // null = cancel
 }
 
 export interface SessionDeleteParams {
@@ -620,7 +777,14 @@ export interface SessionDetailSubscribeResult {
 /** What a turn is stuck on. Only one kind is ever the user's to clear twice
  * over: `permission` and `question` need an answer, `background` needs the
  * agent's own work to finish. */
-export type TurnBlockerKind = "permission" | "question" | "background";
+/**
+ * The two things a turn can be stuck on.
+ *
+ * A question an agent posts is deliberately not one of them: it belongs to the
+ * session, outlives every process and every turn, and blocks nothing — the agent
+ * carries on working. It rides on `SessionTurn.unanswered` instead.
+ */
+export type TurnBlockerKind = "permission" | "background";
 
 export interface TurnBlocker {
 	kind: TurnBlockerKind;
@@ -650,6 +814,13 @@ export interface SessionTurn {
 	/** How the previous turn ended. Cleared the moment a new one starts, so it
 	 * says nothing while `phase` is not `idle`. */
 	last_outcome?: TurnOutcome;
+	/**
+	 * The questions this session has asked and nobody has answered yet, oldest
+	 * first. Deliberately not a blocker: it does not affect `phase`, it survives
+	 * every process ending, and the composer is not disabled for it — the agent
+	 * asked and carried on (docs/answering-ui.md §1).
+	 */
+	unanswered?: PendingQuestion[];
 }
 
 /** A deleted session reports no metadata; `deleted` is set exactly then. */
@@ -773,6 +944,7 @@ export type ServerMethod =
 	| "background_wait"
 	| "permission_request"
 	| "ask_user_question"
+	| "question_posted"
 	| "request_cancelled"
 	| "system"
 	| "message"
@@ -786,6 +958,8 @@ export type ServerNotification =
 			origin?: MessageOrigin;
 			subtype?: string;
 			meta?: SystemMessageMeta;
+			/** The posted questions this message answers; see QuestionAnswerRecord. */
+			answering?: QuestionAnswerRecord[];
 	  }
 	| {
 			type: "tool_call";
@@ -866,6 +1040,18 @@ export type ServerNotification =
 			questions: AskUserQuestion[];
 	  }
 	| {
+			/**
+			 * A question the agent posted through `question_post`. One question per
+			 * record; `questions` is a one-element list so a client draws it with
+			 * the same renderer the CLI's own prompt uses.
+			 */
+			type: "question_posted";
+			request_id: string;
+			questions: AskUserQuestion[];
+			/** Absent on a record written without one. */
+			asked_at?: string;
+	  }
+	| {
 			type: "request_cancelled";
 			request_id: string;
 			/**
@@ -873,6 +1059,11 @@ export type ServerNotification =
 			 * longer needs an answer and did not say why.
 			 */
 			reason?: ExpiryReason;
+			/**
+			 * When the withdrawal happened. Absent on a cancellation forwarded from
+			 * a CLI, which does not timestamp them.
+			 */
+			resolved_at?: string;
 	  }
 	| { type: "system"; content: string }
 	| { type: "command_output"; content: string };

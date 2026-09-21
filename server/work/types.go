@@ -52,17 +52,24 @@ const (
 // it. It is orthogonal to status: a work waiting on something is still active —
 // the engine still owns it — it simply must not be nudged to carry on.
 //
-// Only two things can be waited for, and both are cleared by something that
-// arrives from outside the session: a person answering, a child work closing.
-// A turn's own blockers (a question on screen, a background task) are the
-// session's business and are never recorded here.
+// One thing can be waited for, and it is cleared by something that arrives from
+// outside the session: a child work closing. A turn's own blockers (a permission
+// request on screen, a background task) are the session's business and are never
+// recorded here.
+//
+// Waiting on the *user* used to be the second value, and it is gone. An agent
+// that needs something from a person posts a question instead (the question_post
+// tool): the question is state on the session, the answer arrives as an ordinary
+// message, and the agent is free to carry on in the meantime — none of which a
+// flag on the work could say. What the flag was actually for — "do not nudge
+// this" — is read off the session's unanswered list now, which is the thing that
+// knows (Engine.HandleTurnEnded).
 type WorkWait string
 
 const (
 	// WaitNone is the zero value on purpose: a work that declared no wait is
 	// simply working.
 	WaitNone  WorkWait = ""
-	WaitUser  WorkWait = "user"
 	WaitChild WorkWait = "child"
 )
 
@@ -78,21 +85,21 @@ type Work struct {
 	// waiting for nothing. Meaningless on any other status, and cleared by every
 	// transition that leaves active.
 	Wait WorkWait `json:"wait,omitempty"`
-	// WaitReason is the agent's own words for why it is waiting, and it is shown
-	// to the user verbatim on the work's detail page. It is the only place the
-	// user can read what the agent actually wants — the reason it asks for is
-	// free text, because no fixed vocabulary could carry it.
-	WaitReason string `json:"wait_reason,omitempty"`
 	// NudgeCount is how many times in a row the engine has told this work's agent
 	// to carry on without the agent moving the work along. When it runs out the
 	// work is stopped rather than nudged forever.
 	//
 	// It is cleared by every transition into or out of active (clearDrive), which
 	// is exactly what counts as progress here: a step advance, a user message, a
-	// reopen, a child closing under a parent that was waiting for one. A child
-	// closing under a parent that was *not* waiting for it is deliberately not on
-	// that list — the parent is told, but it was already being nudged for going
-	// quiet, and the news does not answer the question the allowance is counting.
+	// reopen, a child closing under a parent that was waiting for one. An answer
+	// to a posted question clears it too, but by itself (ClearNudges): the answer
+	// is the user's attention, which is what the allowance was counting down to,
+	// and it is not a transition — the work was never anything but active.
+	//
+	// A child closing under a parent that was *not* waiting for it is deliberately
+	// not on that list — the parent is told, but it was already being nudged for
+	// going quiet, and the news does not answer the question the allowance is
+	// counting.
 	//
 	// Persisted rather than kept in memory per session, so that a server restart
 	// does not hand a stuck agent a fresh allowance.
@@ -123,7 +130,7 @@ type ChangeEvent struct {
 // OnChangeListener receives notifications when Work items change.
 //
 // Contract: OnWorkChange is called outside the store's mutex, but listeners
-// that call back into the store (e.g. Engine.handleChildClosed)
+// that call back into the store (e.g. Engine.notifyParentOfChild)
 // MUST do so in a separate goroutine to avoid re-entrant deadlock:
 // notify → listener → store.Update → notify would deadlock if synchronous.
 type OnChangeListener interface {
@@ -155,17 +162,20 @@ type WorkStartHandler interface {
 // The statuses it replaces were exactly this model flattened: in_progress,
 // needs_input and waiting were one status (active) and three waits, which is
 // what made them a single enum in the first place. So the old values are not
-// guessed at — each maps to the pair it always meant.
+// guessed at — each maps to the pair it always meant, except needs_input, whose
+// wait no longer exists.
 //
 // An unrecognised status is left alone rather than repaired: a hand-edited or
 // corrupted index is not something to silently rewrite, and every guard in this
 // package names the statuses it rejects rather than the ones it admits.
 func (w Work) Normalize() Work {
 	switch string(w.Status) {
-	case "in_progress":
+	case "in_progress", "needs_input":
+		// The two were distinct once: needs_input meant a `user` wait, which no
+		// longer exists. There is nothing to map it to and nothing lost — what
+		// such a work was waiting for was a message, and a message wakes it either
+		// way.
 		w.Status, w.Wait = StatusActive, WaitNone
-	case "needs_input":
-		w.Status, w.Wait = StatusActive, WaitUser
 	case "waiting":
 		w.Status, w.Wait = StatusActive, WaitChild
 	}
@@ -173,7 +183,7 @@ func (w Work) Normalize() Work {
 	// else it is a leftover that would show the user a work "waiting for you"
 	// that nothing will ever resume.
 	if w.Status != StatusActive {
-		w.Wait, w.WaitReason = WaitNone, ""
+		w.Wait = WaitNone
 	}
 	return w
 }

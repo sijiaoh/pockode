@@ -15,8 +15,9 @@ import { hasMessageActions } from "./messageActions";
  *   leaving a server too old to answer with one and a record that could not be
  *   persisted — and that last one no reload can name, because the message does
  *   not survive it either.
- * - `pending-request`: the message holds a permission request or a question
- *   nobody has answered, so it is not a settled transcript to cut at.
+ * - `pending-request`: the message holds a permission request nobody has
+ *   answered, so it is not a settled transcript to cut at. A posted question is
+ *   deliberately not one of these — see `forkUnavailableReason`.
  *
  * Neither is a verdict on the message itself, which is why they disable the
  * fork row rather than remove it.
@@ -45,11 +46,13 @@ export function forkUnavailableReason(
 	// Only an assistant turn can be holding one: the requests are the agent's.
 	if (message.role === "user") return undefined;
 
+	// A permission request only, deliberately. A posted question is not a request
+	// the fork would strand: it belongs to the session, the fork inherits it, and
+	// the fork can answer it (agent.UnansweredQuestions). A legacy card is not one
+	// either — nothing can answer it in the source session, so cutting above it
+	// takes nothing away.
 	return message.parts.some(
-		(part) =>
-			(part.type === "permission_request" ||
-				part.type === "ask_user_question") &&
-			part.status === "pending",
+		(part) => part.type === "permission_request" && part.status === "pending",
 	)
 		? "pending-request"
 		: undefined;

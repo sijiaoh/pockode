@@ -186,10 +186,35 @@ be in the list twice and the index was what kept React from collapsing them.
 Adding a spinner to that first row is what turned the duplication from untidy
 into false — it would say the machine is busy while the machine is waiting for
 the user. The precedent was already in the reducer, one case away:
-`ask_user_question` finds the `tool_call` part with its `toolUseId` and takes its
-place, because "all three describe one tool use". `permission_request` carries
+`ask_user_question` — the CLI's own question, now read from old transcripts
+only — finds the `tool_call` part with its `toolUseId` and takes its place,
+because "all three describe one tool use". `permission_request` carries
 `toolUseId` for exactly the same join. Generalising it removed the duplicate rows
 and the index suffix with them.
+
+**A question record takes its row the same way.** `question_post` succeeds
+immediately — it is not blocked on the user, so it never wears the waiting rung —
+but the question it posted becomes a card that the user reads and that carries a
+status ([answering-ui.md §6](answering-ui.md#6-the-record-card-in-the-stream)).
+The card replaces the row, like the other two — but it joins **by position**,
+not on `tool_use_id`, and that is forced rather than chosen: a `question_post`
+call reaches the server over HTTP from the MCP endpoint, whose body carries the
+calling session and worktree and not the CLI's id for the tool use. So the
+`question_posted` record has no `tool_use_id` to join on. What the server does
+guarantee is *when* the record is written — during the call — so the record
+always falls between that call's `tool_call` and its `tool_result`, and the last
+unreturned call whose name ends in `question_post` is the one that posted it.
+That is an invariant the server holds itself, rather than an assumption about
+the order in which a CLI emits its own frames.
+
+A join that misses leaves two rows, which is untidy and not wrong. Drawing both
+on purpose would be: `question_post  Which database…  ✓` directly above a card
+saying the same thing in more words is the duplication this section removed once
+already, re-introduced by a tool whose whole output *is* the card.
+
+The difference from the permission card is what the card is allowed to do:
+a permission card holds buttons because the call is waiting on them, a question
+card holds none because the call is over and the answer goes somewhere else.
 
 **Taking the row means the reducer has to give it back**, and that rule is not in
 this design because it is not a drawing decision: claude 2.1.263 does **not**

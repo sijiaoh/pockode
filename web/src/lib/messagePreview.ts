@@ -25,8 +25,8 @@ function partPreview(part: ContentPart): string {
 				: part.tool.name;
 		case "permission_request":
 			return part.request.toolName;
-		case "ask_user_question":
-			return part.request.questions[0]?.header ?? "";
+		case "question_record":
+			return part.record.question.header;
 		// A `system` or `raw` part is the CLI's own bookkeeping rendered verbatim;
 		// quoting it back would identify the message by its least legible half.
 		default:

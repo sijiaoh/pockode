@@ -328,6 +328,126 @@ describe("ChatPanel", () => {
 		});
 	});
 
+	// The whole answering path, end to end: the strip offers it, the sheet sends
+	// it, and the card in the transcript settles. The last of those is the one
+	// this client has to do itself — the sender is left out of the broadcast
+	// that carries its own message, so nothing is coming to settle the card
+	// (docs/answering-ui.md §3).
+	describe("answering a posted question", () => {
+		const question = {
+			request_id: "q1",
+			header: "Database",
+			question: "Which database should I use?",
+			options: [
+				{ label: "Postgres", description: "Managed" },
+				{ label: "SQLite", description: "One file" },
+			],
+			multi_select: false,
+			asked_at: "2026-01-02T14:02:00Z",
+		};
+
+		const seedUnansweredQuestion = () => {
+			mockState.mockHistory = [
+				{ type: "message", content: "go", seq: 1 },
+				{
+					type: "question_posted",
+					request_id: "q1",
+					questions: [
+						{
+							question: question.question,
+							header: question.header,
+							options: question.options,
+							multiSelect: false,
+						},
+					],
+					asked_at: question.asked_at,
+					seq: 2,
+				},
+			];
+			acceptSetting({
+				turn: {
+					phase: "idle",
+					open: false,
+					since: "",
+					unanswered: [question],
+				},
+			});
+		};
+
+		it("answers from the strip and settles the card in the transcript", async () => {
+			const user = userEvent.setup();
+			seedUnansweredQuestion();
+			render(<ChatPanel {...defaultProps} />);
+			await waitForHistoryLoad();
+
+			// The card is a record: it says Pending and holds no form.
+			expect(screen.getByText("Pending")).toBeInTheDocument();
+
+			expect(
+				screen.getByText("1 question is waiting for your answer."),
+			).toBeInTheDocument();
+			await user.click(screen.getByRole("button", { name: "Answer" }));
+
+			// Scoped to the sheet: the composer below it has a Send of its own.
+			const sheet = within(screen.getByRole("dialog"));
+			await user.click(sheet.getByRole("radio", { name: /SQLite/ }));
+			await user.click(sheet.getByRole("button", { name: "Send" }));
+
+			expect(mockState.sendMessage).toHaveBeenCalledWith(
+				"test-session",
+				"Answering:\n\nQ: Which database should I use?\nA: SQLite",
+				[{ request_id: "q1", answers: ["SQLite"] }],
+			);
+			expect(await screen.findByText("Answered")).toBeInTheDocument();
+			expect(screen.queryByText("Pending")).not.toBeInTheDocument();
+		});
+
+		// Nothing was written and nothing was delivered, so the transcript must
+		// look exactly as it did — no phantom message, no error bubble under it.
+		it("takes its echo back when the server refuses the whole message", async () => {
+			const user = userEvent.setup();
+			mockState.sendMessage.mockRejectedValueOnce(
+				new Error(
+					"that question is not waiting for an answer: q1 (answered by the user at 14:05)",
+				),
+			);
+			seedUnansweredQuestion();
+			render(<ChatPanel {...defaultProps} />);
+			await waitForHistoryLoad();
+
+			await user.click(screen.getByRole("button", { name: "Answer" }));
+			const sheet = within(screen.getByRole("dialog"));
+			await user.click(sheet.getByRole("radio", { name: /SQLite/ }));
+			await user.click(sheet.getByRole("button", { name: "Send" }));
+
+			expect(
+				await screen.findByText("Already answered elsewhere."),
+			).toBeInTheDocument();
+			expect(screen.queryByText("Answering:")).not.toBeInTheDocument();
+			expect(screen.getByText("Pending")).toBeInTheDocument();
+		});
+
+		// A posted question does not block the turn, so nothing about sending is
+		// refused while one is open.
+		it("leaves the composer alone", async () => {
+			const user = userEvent.setup();
+			seedUnansweredQuestion();
+			render(<ChatPanel {...defaultProps} />);
+			await waitForHistoryLoad();
+
+			await user.type(screen.getByRole("textbox"), "an ordinary message");
+			await user.click(screen.getByRole("button", { name: /Send/ }));
+
+			// It answers nothing: no `answering`, and the card stays Pending.
+			expect(mockState.sendMessage).toHaveBeenCalledWith(
+				"test-session",
+				"an ordinary message",
+				undefined,
+			);
+			expect(screen.getByText("Pending")).toBeInTheDocument();
+		});
+	});
+
 	describe("sending messages", () => {
 		it("sends message via RPC with session_id and content", async () => {
 			const user = userEvent.setup();
@@ -338,9 +458,11 @@ describe("ChatPanel", () => {
 			await user.type(textarea, "Hello AI");
 			await user.click(screen.getByRole("button", { name: /Send/ }));
 
+			// An ordinary message answers nothing, so the third argument is absent.
 			expect(mockState.sendMessage).toHaveBeenCalledWith(
 				"test-session",
 				"Hello AI",
+				undefined,
 			);
 			expect(screen.getByText("Hello AI")).toBeInTheDocument();
 		});
@@ -409,11 +531,6 @@ describe("ChatPanel", () => {
 			request_id: "p1",
 			raised_at: "2024-01-01T00:00:00Z",
 		};
-		const question = {
-			kind: "question" as const,
-			request_id: "q1",
-			raised_at: "2024-01-01T00:00:00Z",
-		};
 		const background = {
 			kind: "background" as const,
 			raised_at: "2024-01-01T00:00:00Z",
@@ -434,6 +551,7 @@ describe("ChatPanel", () => {
 			expect(mockState.sendMessage).toHaveBeenCalledWith(
 				"test-session",
 				"Also look at X",
+				undefined,
 			);
 		});
 
@@ -450,14 +568,14 @@ describe("ChatPanel", () => {
 			expect(screen.getByRole("button", { name: /Stop/ })).toBeInTheDocument();
 		});
 
-		it.each<[string, SessionTurn["blockers"]]>([
-			["permission", [permission]],
-			["question", [question]],
-		])("refuses while a %s request owns the input", async (_kind, blockers) => {
+		// A permission request is the one thing left that owns the agent's next line
+		// of input. A posted question does not: the agent carried on working, so the
+		// composer stays live and the answer travels as an ordinary message.
+		it("refuses while a permission request owns the input", async () => {
 			const user = userEvent.setup();
 			render(<ChatPanel {...defaultProps} />);
 			await waitForHistoryLoad();
-			setTurn("blocked", blockers);
+			setTurn("blocked", [permission]);
 
 			await user.type(screen.getByRole("textbox"), "never mind");
 			expect(screen.getByRole("button", { name: /Send/ })).toBeDisabled();
@@ -1017,67 +1135,33 @@ describe("ChatPanel", () => {
 		});
 	});
 
-	describe("ask user question", () => {
-		it("shows inline question and sends answer response", async () => {
-			const user = userEvent.setup();
-			render(<ChatPanel {...defaultProps} />);
-			await waitForHistoryLoad();
-
-			act(() => {
-				mockState.onNotification?.({
-					type: "ask_user_question",
-					request_id: "q-1",
-					tool_use_id: "toolu_q_1",
-					questions: [
-						{
-							question: "Which library?",
-							header: "Library",
-							options: [
-								{ label: "React", description: "UI library" },
-								{ label: "Vue", description: "Progressive framework" },
-							],
-							multiSelect: false,
-						},
+	// Transcripts written before Pockode stopped letting a CLI ask its own
+	// blocking question still hold `ask_user_question` records. They render through
+	// the same card a posted question gets, so an old conversation reads the way it
+	// always did — but a pending one says it can no longer be answered, because the
+	// process that was holding that tool call open is long gone.
+	describe("a legacy CLI question in history", () => {
+		const legacyQuestion = {
+			type: "ask_user_question",
+			request_id: "q-2",
+			tool_use_id: "toolu_q_2",
+			questions: [
+				{
+					question: "Which library?",
+					header: "Library",
+					options: [
+						{ label: "React", description: "UI library" },
+						{ label: "Vue", description: "Progressive framework" },
 					],
-				});
-			});
-
-			// Inline question displays in message flow (no dialog role)
-			expect(screen.getByText("Which library?")).toBeInTheDocument();
-			// Header "Library" appears both in collapsed view and expanded view
-			expect(screen.getAllByText("Library")).toHaveLength(2);
-
-			// Select an option and submit
-			await user.click(screen.getByText("React"));
-			await user.click(screen.getByRole("button", { name: /Submit/i }));
-
-			expect(mockState.questionResponse).toHaveBeenCalledWith({
-				session_id: "test-session",
-				request_id: "q-1",
-				tool_use_id: "toolu_q_1",
-				answers: { "Which library?": "React" },
-			});
-		});
+					multiSelect: false,
+				},
+			],
+		};
 
 		it("restores the answered form when replaying history", async () => {
 			const user = userEvent.setup();
 			mockState.mockHistory = [
-				{
-					type: "ask_user_question",
-					request_id: "q-2",
-					tool_use_id: "toolu_q_2",
-					questions: [
-						{
-							question: "Which library?",
-							header: "Library",
-							options: [
-								{ label: "React", description: "UI library" },
-								{ label: "Vue", description: "Progressive framework" },
-							],
-							multiSelect: false,
-						},
-					],
-				},
+				legacyQuestion,
 				{
 					type: "question_response",
 					request_id: "q-2",
@@ -1098,8 +1182,22 @@ describe("ChatPanel", () => {
 			expect(chosen).toBeDisabled();
 		});
 
-		// A cancelled question is persisted with a nil answers map, which the Go
-		// encoder strips entirely — so the key is absent, not null.
+		// Nothing can answer it, so the card says so rather than offering a way in
+		// to a sheet the question is not in.
+		it("says an unanswered one can no longer be answered", async () => {
+			const user = userEvent.setup();
+			mockState.mockHistory = [legacyQuestion, { type: "done" }];
+
+			render(<ChatPanel {...defaultProps} />);
+			await waitForHistoryLoad();
+
+			expect(screen.getByText("Pending")).toBeInTheDocument();
+			await user.click(screen.getByRole("button", { name: /Library/ }));
+
+			expect(screen.getByText(/can no longer be answered/)).toBeInTheDocument();
+			expect(screen.queryByRole("button", { name: "Answer this" })).toBeNull();
+		});
+
 		it("shows a cancelled question as cancelled when replaying history", async () => {
 			mockState.mockHistory = [
 				{

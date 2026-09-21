@@ -119,6 +119,22 @@ func TestIntegration_ProtocolSchemaStillFitsWhatWeSend(t *testing.T) {
 		requireItemVariant(t, dir, "commandExecution", "command", "commandActions")
 	})
 
+	// handleRequestUserInput answers every question with the refusal text, and
+	// this is the shape it has to fit: a map of question id to a list of answer
+	// strings, and a `questions` array whose entries are identified by `id`. The
+	// tool is EXPERIMENTAL, which is exactly why it is pinned here — a renamed
+	// field would leave the refusal unreadable and the turn waiting on an answer
+	// that never comes, with nothing else in the session saying so.
+	t.Run("requestUserInput still answers by question id", func(t *testing.T) {
+		requireRequired(t, dir, "ToolRequestUserInputResponse.json", "answers")
+		answer := schemaDefinition(t, dir, "ToolRequestUserInputResponse.json", "ToolRequestUserInputAnswer")
+		assertRequired(t, "ToolRequestUserInputAnswer", jsonStrings(answer["required"]), []string{"answers"})
+
+		requireRequired(t, dir, "ToolRequestUserInputParams.json", "questions")
+		question := schemaDefinition(t, dir, "ToolRequestUserInputParams.json", "ToolRequestUserInputQuestion")
+		assertRequired(t, "ToolRequestUserInputQuestion", jsonStrings(question["required"]), []string{"id"})
+	})
+
 	// web/src/lib/codexChanges.ts renders exactly these three and shows
 	// "Unsupported change type" for anything else, so a fourth would reach the
 	// user as a blank row in an approval prompt.

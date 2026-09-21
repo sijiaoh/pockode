@@ -20,7 +20,7 @@ func TestRetire_CancelsThePromptsNobodyWillAnswer(t *testing.T) {
 	m, mock, store, proc := startedTurn(t, leaseTestBudgets)
 	sess := mock.session(t, "sess-1")
 
-	sess.emit(t, agent.AskUserQuestionEvent{RequestID: "req-1"})
+	sess.emit(t, agent.PermissionRequestEvent{RequestID: "req-1", ToolName: "Bash"})
 	sess.emit(t, agent.PermissionRequestEvent{RequestID: "req-2", ToolName: "Bash"})
 	waitUntil(t, "both prompts", func() bool { return len(proc.turnState().Blockers) == 2 })
 
@@ -74,7 +74,7 @@ func TestRetire_IsIdempotent(t *testing.T) {
 	sess := mock.session(t, "sess-1")
 
 	m.RetireSession("sess-1")
-	sess.emit(t, agent.AskUserQuestionEvent{RequestID: "req-1"})
+	sess.emit(t, agent.PermissionRequestEvent{RequestID: "req-1", ToolName: "Bash"})
 	waitUntil(t, "the prompt to be withdrawn", func() bool {
 		return cancellationsFor(t, store, "req-1") == 1
 	})
@@ -112,7 +112,7 @@ func TestRetire_CancelsAPromptRaisedInsideTheGrace(t *testing.T) {
 	sess := mock.session(t, "sess-1")
 
 	m.RetireSession("sess-1")
-	sess.emit(t, agent.AskUserQuestionEvent{RequestID: "late"})
+	sess.emit(t, agent.PermissionRequestEvent{RequestID: "late", ToolName: "Bash"})
 
 	waitUntil(t, "the late prompt to be withdrawn", func() bool {
 		turn := proc.turnState()
@@ -177,7 +177,7 @@ func TestRetire_APromptCancelsTheRetirement(t *testing.T) {
 	}
 
 	// And the prompts of that new turn are nobody's to withdraw any more.
-	sess.emit(t, agent.AskUserQuestionEvent{RequestID: "req-1"})
+	sess.emit(t, agent.PermissionRequestEvent{RequestID: "req-1", ToolName: "Bash"})
 	waitUntil(t, "the question", func() bool { return len(proc.turnState().Blockers) == 1 })
 	if got := cancellationsFor(t, store, "req-1"); got != 0 {
 		t.Errorf("withdrew %d prompts of a revived session, want none", got)

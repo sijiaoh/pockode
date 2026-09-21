@@ -15,8 +15,7 @@ A unit of work — either a **story** (top-level, wire type `"story"`) or a **ta
 | title         | string       | Short description (required)                           |
 | body          | string?      | Detailed description or instructions                   |
 | status        | WorkStatus   | `open` / `active` / `stopped` / `closed` — what the engine may do with it (see below) |
-| wait          | WorkWait?    | What an active work is waiting for: `user` or `child`; absent means nothing |
-| wait_reason   | string?      | Why, in the agent's own words; shown verbatim on the detail page |
+| wait          | WorkWait?    | What an active work is waiting for: `child`, the only value; absent means nothing. Waiting on a *person* is not recorded here — the agent posts a question instead ([work-system.md](../code/work-system.md#four-statuses-and-a-wait)) |
 | nudge_count   | int?         | Consecutive nudges with no progress; reset by anything that counts as progress |
 | session_id    | string?      | Agent session ID (set on start, preserved through stop/closed) |
 | current_step  | int?         | 0-indexed step index (only when agent role has steps)  |
@@ -114,7 +113,8 @@ the wait and the session's turn state
 
 Old index values (`in_progress`, `needs_input`, `waiting`) are normalised on
 load — those three were exactly this model flattened, so each maps to the status
-and wait it always meant. There is no migration script.
+and wait it always meant, except `needs_input`, whose `user` wait no longer
+exists and which lands on plain `active`. There is no migration script.
 
 ## Persistence
 
@@ -236,8 +236,10 @@ If `persistIndex` fails, the in-memory state is reverted to match the on-disk st
 | Start         | `(ctx, id, sessionID) → (Work, error)` | Transitions to `active`, sets sessionID; rejected when already `active` or `closed` |
 | Stop          | `(ctx, id) → error`                    | Transitions any live status → `stopped`                         |
 | StepDone      | `(ctx, id, totalSteps) → (bool, error)` | Work items advance to the next step or close when no steps remain; an advance also restores `active` |
-| SetWait       | `(ctx, id, wait, reason) → error`      | Records what an active work is waiting for; `WaitNone` clears it |
+| SetChildWait  | `(ctx, id) → (set bool, error)`        | Records the wait on child work; refuses when no child is active, reporting *whether it set one* rather than erroring — only the caller can say why in the agent's terms |
+| ClearChildWaitIfStranded | `(ctx, id) → (cleared bool, error)` | Ends a wait no child can end any more, leaving the work active with its allowance reset |
 | Activate      | `(ctx, id) → error`                    | → `active` with the wait and the nudge count cleared (preserves sessionID) |
+| ClearNudges   | `(ctx, id) → error`                    | The narrower half of `Activate` — the allowance back, the wait untouched — for an answer to a posted question, which is attention without being a transition ([workflow-engine.md](workflow-engine.md#the-work-engine)) |
 | RecordNudge   | `(ctx, id) → (int, error)`             | Counts one nudge and returns the total; the limit is the engine's |
 | Reopen        | `(ctx, id) → error`                    | Transitions `closed` → `active` (reopens closed item)           |
 | RollbackStart | `(ctx, id, sessionID, wasRestart) → error` | Reverts the start that claimed `sessionID` (fresh → `open`; restart → `stopped`) |

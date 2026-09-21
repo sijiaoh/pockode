@@ -77,11 +77,11 @@ describe("what a session row says it is waiting for", () => {
 		expect(screen.getByLabelText("Agent is running")).toBeInTheDocument();
 	});
 
-	// Three separate "needs you" leaves, because what the user has to *do*
-	// differs in each. Collapsing them back into one is the field this redesign
-	// removes (docs/lifecycle-ui.md §1.1).
+	// The two blockers a turn has, each named for what the user has to do about
+	// it — and only one of them is something to do at all. A question is not here:
+	// it does not block a turn, and it is drawn as a second indicator beside the
+	// activity rather than as one of these (docs/lifecycle-ui.md §1.1).
 	it.each<[TurnBlocker["kind"], string]>([
-		["question", "Waiting for your answer"],
 		["permission", "Waiting for your permission"],
 		["background", "Waiting on a background task"],
 	])("names a %s blocker as %s", (kind, label) => {
@@ -89,19 +89,17 @@ describe("what a session row says it is waiting for", () => {
 		expect(screen.getByLabelText(label)).toBeInTheDocument();
 	});
 
-	it("names a work waiting on the user, which the turn cannot say", () => {
-		seedWork("active", "user");
+	it("names a work waiting on its subtasks, which the turn cannot say", () => {
+		seedWork("active", "child");
 		renderRow({ turn: turn("idle") });
-		expect(
-			screen.getByLabelText("Waiting for your message"),
-		).toBeInTheDocument();
+		expect(screen.getByLabelText("Waiting on subtasks")).toBeInTheDocument();
 	});
 
 	// A wait is a standing intention, a phase is a fact about this second: an
-	// agent that asks for input and keeps writing is running, and the row says so
+	// agent that declares a wait and keeps writing is running, and the row says so
 	// until the turn settles (docs/lifecycle-ui.md §1.2).
 	it("lets a live turn outrank that wait", () => {
-		seedWork("active", "user");
+		seedWork("active", "child");
 		renderRow({ turn: turn("running") });
 		expect(screen.getByLabelText("Agent is running")).toBeInTheDocument();
 	});
@@ -123,17 +121,48 @@ describe("what a session row says it is waiting for", () => {
 	// it still names the session — a stale `session_id` on a work the engine has
 	// moved on from used to put that work's wait on an unrelated row.
 	it("ignores a work that names it when the row claims none", () => {
-		seedWork("active", "user");
+		seedWork("active", "child");
 		renderRow({ turn: turn("idle"), work_id: undefined });
 		expect(screen.queryByLabelText(/Waiting/)).toBeNull();
 	});
 
-	// Precedence collapses to two lines: anything but idle is the activity, and
-	// idle falls through to the unread dot.
+	// Precedence collapses to three tiers: anything but idle is the activity,
+	// idle falls through to the unread dot, and the question glyph is a second
+	// dimension beside all of it.
 	it("falls back to the unread mark when nothing is waiting", () => {
 		const { container } = renderRow({ turn: turn("idle"), unread: true });
 		expect(screen.queryByLabelText(/Waiting|running/)).toBeNull();
 		expect(container.querySelector(".bg-th-accent")).toBeInTheDocument();
+	});
+
+	// An agent that posts a question carries on running, so the two are true at
+	// once and one glyph cannot say both.
+	it("draws the questions beside the activity, not instead of it", () => {
+		renderRow({ turn: turn("running"), unanswered_questions: 2 });
+		expect(screen.getByLabelText("Agent is running")).toBeInTheDocument();
+		expect(
+			screen.getByLabelText("2 questions waiting for your answer"),
+		).toBeInTheDocument();
+	});
+
+	// 1 is the common case and the one that most needs the width, so the glyph
+	// stands alone — the label says the number either way.
+	it("draws one question as a glyph alone", () => {
+		renderRow({ turn: turn("idle"), unanswered_questions: 1 });
+		const mark = screen.getByLabelText("1 question waiting for your answer");
+		expect(mark).toBeInTheDocument();
+		expect(mark.textContent).toBe("");
+	});
+
+	// The unread dot is the quietest thing a row can say; a question waiting is
+	// not, and two marks for one row would be one too many.
+	it("lets a waiting question stand in for the unread mark", () => {
+		const { container } = renderRow({
+			turn: turn("idle"),
+			unread: true,
+			unanswered_questions: 1,
+		});
+		expect(container.querySelector(".bg-th-accent")).toBeNull();
 	});
 });
 

@@ -1,6 +1,7 @@
 package mcp
 
 import (
+	"context"
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
@@ -20,6 +21,9 @@ const maxRequestBody = 1 << 20
 type toolCallRequest struct {
 	Name      string          `json:"name"`
 	Arguments json.RawMessage `json:"arguments,omitempty"`
+	// Caller is who is calling, as the proxy process was told at spawn time.
+	// Its zero value means the proxy was started without an identity.
+	Caller Caller `json:"caller"`
 }
 
 // toolCallResponse is the server's reply for a successfully dispatched tool.
@@ -31,14 +35,22 @@ type toolCallResponse struct {
 	IsError bool   `json:"is_error,omitempty"`
 }
 
+// ToolExecutor runs one tool call on behalf of a caller. *Executor is the
+// implementation; the interface is what lets the transport — auth, the caller
+// identity it carries, error mapping — be tested without the stores every tool
+// needs behind it.
+type ToolExecutor interface {
+	Execute(ctx context.Context, caller Caller, name string, args json.RawMessage) (string, error)
+}
+
 // APIHandler serves the local MCP API. It authenticates with a dedicated token
 // (see serverinfo) and dispatches tool calls to the Executor.
 type APIHandler struct {
-	executor *Executor
+	executor ToolExecutor
 	token    string
 }
 
-func NewAPIHandler(executor *Executor, token string) *APIHandler {
+func NewAPIHandler(executor ToolExecutor, token string) *APIHandler {
 	return &APIHandler{executor: executor, token: token}
 }
 
@@ -56,7 +68,7 @@ func (h *APIHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	text, err := h.executor.Execute(r.Context(), req.Name, req.Arguments)
+	text, err := h.executor.Execute(r.Context(), req.Caller, req.Name, req.Arguments)
 	if err != nil {
 		if errors.Is(err, ErrUnknownTool) {
 			writeJSONError(w, http.StatusBadRequest, err.Error())

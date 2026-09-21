@@ -148,7 +148,7 @@ func main() {
 	turnTimeoutFlag := flag.Duration("turn-timeout", leaseDefaults.Turn,
 		"how long a turn may run before it is interrupted (0 for no limit)")
 	answerTimeoutFlag := flag.Duration("answer-timeout", leaseDefaults.Answer,
-		"how long a question or permission request waits for an answer before it is withdrawn (0 for no limit)")
+		"how long a permission request waits for a decision before it is withdrawn (0 for no limit)")
 	backgroundTimeoutFlag := flag.Duration("background-timeout", leaseDefaults.Background,
 		"how long a turn parked on background work waits for the CLI to resume before it is ended (0 for no limit)")
 	relayFlag := flag.Bool("relay", true, "relay for remote access (use -relay=false to disable)")
@@ -324,7 +324,12 @@ Flags:
 	// The price is that the stops it makes are heard by nobody, so RecoverStartup
 	// re-examines the waits those stops emptied out itself rather than trusting
 	// an event to arrive.
-	workEngine.RecoverStartup()
+	//
+	// The questions a session is waiting on are part of that decision — a work
+	// whose agent asked something is waiting for a person, who a restart does not
+	// take away — so they are read off the session index on disk, which is all
+	// there is to read: no process survived to hold a newer value.
+	workEngine.RecoverStartup(worktree.StartupTurns{DataDir: dataDir})
 
 	// Set PM as default agent role on first launch
 	if pmID := agentRoleStore.SeededPMRoleID(); pmID != "" {
@@ -356,12 +361,16 @@ Flags:
 	// terminations to the process manager of that worktree.
 	workEngine.SetSenderResolver(worktreeManager)
 	workEngine.SetSessionTerminator(worktreeManager)
+	// And where it reads whether a session has questions nobody has answered,
+	// which is what tells an ending that looks like an agent going quiet from one
+	// that is the agent waiting for a person.
+	workEngine.SetTurnSource(worktreeManager)
 	// Listening starts only now, once the engine can act on what it hears. The
 	// other order would drop every change that arrived in between, and a dropped
 	// change is a wait nothing comes back to.
 	workStore.AddOnChangeListener(workEngine)
 	// A deleted session takes away the place every answer would have gone, which
-	// is one of the engine's five inputs.
+	// is one of the engine's six inputs.
 	worktreeManager.AddSessionChangeListener(workEngine)
 	workStarter := worktree.NewWorkStarter(worktreeManager, agentRoleStore, settingsStore)
 	// Single implementation of every work command, shared by the WebSocket
@@ -369,6 +378,8 @@ Flags:
 	workOps := work.NewOperations(workStore, workStarter, workEngine, steps)
 	// Deleting a work deletes the sessions under it, on both entry points.
 	workOps.SetSessionDeleter(worktreeManager)
+	// A completed step withdraws the questions asked during it.
+	workOps.SetQuestionWithdrawer(worktreeManager)
 	if err := worktreeManager.Start(); err != nil {
 		slog.Warn("failed to start worktree manager", "error", err)
 	}
@@ -381,7 +392,11 @@ Flags:
 		slog.Error("failed to generate MCP token", "error", err)
 		os.Exit(1)
 	}
-	mcpHandler := mcp.NewAPIHandler(mcp.NewExecutor(workStore, agentRoleStore, workOps, settingsStore, registry), mcpToken)
+	mcpExecutor := mcp.NewExecutor(workStore, agentRoleStore, workOps, settingsStore, registry, worktreeManager)
+	// A question an agent posts, and an answer another agent gives, are both
+	// things that happen to a work item; the engine is what they are reported to.
+	mcpExecutor.SetWorkEngine(workEngine)
+	mcpHandler := mcp.NewAPIHandler(mcpExecutor, mcpToken)
 
 	wsHandler := ws.NewRPCHandler(cred.Password, sessions, version, devMode, commandStore, worktreeManager, settingsStore, workStore, workOps, workEngine, agentRoleStore)
 	transferHandler := filetransfer.NewHandler(registry, slog.Default())
@@ -523,6 +538,11 @@ func initStores(dataDir string) (*stores, error) {
 func runMCP() {
 	mcpFlags := flag.NewFlagSet("mcp", flag.ExitOnError)
 	dataDirFlag := mcpFlags.String("data-dir", "", "data directory (required)")
+	// Who this proxy speaks for. Written into the spawn by the agent that starts
+	// the CLI, so tools can act on the calling session without the model naming
+	// it. Optional: a proxy started by hand has no session.
+	sessionIDFlag := mcpFlags.String("session-id", "", "session the calling CLI runs (optional)")
+	worktreeFlag := mcpFlags.String("worktree", "", "worktree that session lives in (optional; empty is the main worktree)")
 	mcpFlags.Parse(os.Args[2:])
 
 	dataDir := *dataDirFlag
@@ -533,7 +553,8 @@ func runMCP() {
 
 	// Client mode: discover the running server from server.json and forward tool
 	// calls over its local API. The MCP process owns no stores and no watcher.
-	client, err := mcp.NewClientFromServerInfo(dataDir)
+	caller := mcp.Caller{SessionID: *sessionIDFlag, Worktree: *worktreeFlag}
+	client, err := mcp.NewClientFromServerInfo(dataDir, caller)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)

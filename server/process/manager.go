@@ -56,6 +56,10 @@ type Manager struct {
 	// proxy to discover. Single server per process, so this is always the main
 	// data dir, even for a named worktree whose dataDir differs.
 	mcpServerDir string
+	// worktree is the name of the worktree this manager's sessions live in,
+	// empty for the main one. Handed to every CLI it spawns, which reports it
+	// back as the MCP caller's identity.
+	worktree     string
 	sessionStore session.Store
 	// budgets is how long a session may hold its process in each kind of wait.
 	// The whole of this manager's lifecycle policy; see runLeaseReaper.
@@ -155,13 +159,15 @@ type Process struct {
 }
 
 // NewManager creates a new manager whose processes live under the given lease
-// budgets. dataDir is this worktree's own data dir (session-scoped agent state);
+// budgets. worktree is the name of the worktree it serves (empty for the main
+// one); dataDir is that worktree's own data dir (session-scoped agent state);
 // mcpServerDir is where the server publishes server.json for the MCP proxy (the
 // main data dir).
-func NewManager(agents *agent.Registry, workDir, dataDir, mcpServerDir string, store session.Store, budgets session.LeaseBudgets) *Manager {
+func NewManager(agents *agent.Registry, worktree, workDir, dataDir, mcpServerDir string, store session.Store, budgets session.LeaseBudgets) *Manager {
 	ctx, cancel := context.WithCancel(context.Background())
 	m := &Manager{
 		agents:       agents,
+		worktree:     worktree,
 		workDir:      workDir,
 		dataDir:      dataDir,
 		mcpServerDir: mcpServerDir,
@@ -253,6 +259,7 @@ func (m *Manager) GetOrCreateProcess(ctx context.Context, meta session.SessionMe
 		WorkDir:      m.workDir,
 		DataDir:      m.dataDir,
 		MCPServerDir: m.mcpServerDir,
+		Worktree:     m.worktree,
 		SessionID:    sessionID,
 		Resume:       meta.Activated,
 		Mode:         meta.Mode,
@@ -536,9 +543,13 @@ const workCloseGrace = 2 * time.Minute
 //
 // Three things follow from "nobody is coming back to this session":
 //
-//   - Every prompt on screen is cancelled with ReasonWorkClosed, now and for as
-//     long as the retirement lasts. A question raised inside the grace would
-//     otherwise sit pending forever on a work the user has finished with.
+//   - Every permission request on screen is cancelled with ReasonWorkClosed, now
+//     and for as long as the retirement lasts. One raised inside the grace would
+//     otherwise hold a process open for a decision on work the user has finished
+//     with. The *questions* of a closing session are withdrawn separately, by the
+//     work layer that knows the work closed (worktree.Manager.RetireSession) —
+//     they belong to the session rather than to this process, so they outlive it
+//     and cannot be reached from here.
 //   - A turn that ends inside the grace ends the process with it.
 //   - The grace is a deadline, not a budget that activity extends: a background
 //     task started on the way out does not buy the session another day.
@@ -788,10 +799,9 @@ func (m *Manager) enforce(p *Process, lease session.Lease, now time.Time) {
 		// requestStop stays for the CLI that is wedged rather than merely
 		// blocked. Either way the wait ends.
 		//
-		// The answer is not lost with it. A question that expired can still be
-		// sent as an ordinary message afterwards, which is why an hour is a
-		// budget worth having (session.DefaultAnswerBudget); only a permission
-		// request is final, because a permission that expires is a denial.
+		// A permission request is the only thing this can expire, and expiring
+		// one is final: a permission nobody granted is a denial. That is why the
+		// budget is an hour rather than a day (session.DefaultAnswerBudget).
 		//
 		// Noted before the stop is asked for, because the stop is what ends the
 		// prompts: whichever way the turn goes away from here, the cards it
@@ -949,15 +959,6 @@ func (p *Process) SendPermissionResponse(data agent.PermissionRequestData, choic
 	return p.agentSession.SendPermissionResponse(data, choice)
 }
 
-// SendQuestionResponse answers a question, clearing that question's blocker.
-func (p *Process) SendQuestionResponse(data agent.QuestionRequestData, answers map[string]string) error {
-	if !p.turnState().AwaitingAnswerTo(data.RequestID) {
-		return ErrRequestNotPending
-	}
-	p.answerPrompt(data.RequestID)
-	return p.agentSession.SendQuestionResponse(data, answers)
-}
-
 // SendInterrupt sends an interrupt signal to the agent. The turn is not ended
 // here: the InterruptedEvent that comes back on the stream is what ends it, and
 // a stop the CLI never acts on must not leave the session claiming otherwise.
@@ -993,9 +994,9 @@ func (p *Process) signal(sig session.TurnSignal, requestID string) {
 // answer, as an ordinary request_cancelled record carrying the reason.
 //
 // It is the only record of a blocker's fate, and Pockode's own: the CLI is
-// killed with SIGKILL, so its transcript may not hold even the message that
-// raised the question, and a client that pages back through history would
-// otherwise replay a card as still pending long after nothing could answer it.
+// killed with SIGKILL, so its transcript may not hold even the frame that raised
+// the request, and a client that pages back through history would otherwise
+// replay a card as still pending long after nothing could decide it.
 //
 // Written directly rather than injected, for two reasons. The blocker is
 // already gone from the turn state, so there is nothing left to reduce — this
@@ -1261,8 +1262,6 @@ func turnInputFor(event agent.AgentEvent) (session.TurnInput, bool) {
 	switch e := event.(type) {
 	case agent.PermissionRequestEvent:
 		in.Signal, in.RequestID = session.SignalPermissionRaised, e.RequestID
-	case agent.AskUserQuestionEvent:
-		in.Signal, in.RequestID = session.SignalQuestionRaised, e.RequestID
 	case agent.RequestCancelledEvent:
 		in.Signal, in.RequestID = session.SignalRequestCancelled, e.RequestID
 	case agent.BackgroundWaitEvent:

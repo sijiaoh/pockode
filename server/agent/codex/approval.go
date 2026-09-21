@@ -248,17 +248,41 @@ func (s *appSession) cancelPendingApprovals() {
 	})
 }
 
-// handleRequestUserInput declines Codex's ask-the-user tool.
+// handleRequestUserInput refuses Codex's own ask-the-user tool.
 //
-// It is the counterpart of Claude's AskUserQuestion, and Pockode already has the
-// surface for it (AskUserQuestionEvent). It is not wired up here because it is a
-// feature of its own, not part of moving channels — and because the schema marks
-// it EXPERIMENTAL, so what it would be wired to is not settled yet. Declining is
-// the honest placeholder: the model is told nobody answered and carries on,
-// where silence would hang the turn.
+// It is the counterpart of Claude's AskUserQuestion, and it never reaches a
+// Pockode user for the same reason: it blocks the turn on an answer that would
+// have to come from a surface Pockode does not offer, while question_post gets
+// the same question to the user without holding anything open.
+//
+// Claude's is disabled at launch and this is not, because codex-cli 0.153.0
+// offers no switch for it: nothing in thread/start, and `disabled_tools` is a
+// per-MCP-server setting rather than one for the CLI's built-ins. So the refusal
+// is all there is, and it goes where the model is waiting.
+//
+// The reply has exactly one slot — a list of answer strings per question id
+// (ToolRequestUserInputResponse in the CLI's own schema, asserted in
+// schema_integration_test.go) — so the refusal is the answer to every question
+// asked. There is no field for "declined", and an empty answers map would read
+// as "asked, and nothing came back", which says nothing about what to do next.
 func (s *appSession) handleRequestUserInput(msg rpcMessage) {
-	s.log.Info("declining codex requestUserInput: Pockode does not ask Codex's questions yet")
-	// `answers` is required and is a map of question id to answer; an empty one
-	// is "asked, and nothing came back".
-	s.sendRPCResponse(*msg.ID, map[string]interface{}{"answers": map[string]interface{}{}}, nil)
+	var params struct {
+		Questions []struct {
+			ID string `json:"id"`
+		} `json:"questions"`
+	}
+	if err := json.Unmarshal(msg.Params, &params); err != nil {
+		// An answer keyed by nothing is still better than no reply at all, which
+		// is a turn waiting for the rest of the process's life.
+		s.log.Warn("could not read codex requestUserInput, refusing it unkeyed", "error", err)
+	}
+
+	answers := make(map[string]interface{}, len(params.Questions))
+	for _, q := range params.Questions {
+		answers[q.ID] = map[string]interface{}{"answers": []string{agent.CLIQuestionRefusal}}
+	}
+
+	s.log.Info("refusing codex requestUserInput", "questions", len(answers))
+	s.sendRPCResponse(*msg.ID, map[string]interface{}{"answers": answers}, nil)
+	s.emitEvent(agent.CLIQuestionRefusedWarning("Codex"))
 }

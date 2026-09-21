@@ -174,6 +174,54 @@ func TestBuildThreadParams_MCPServers(t *testing.T) {
 	}
 }
 
+// The proxy is spawned per thread, so the session it speaks for is named right
+// in the spawn; a tool call then arrives at the server knowing who made it.
+func TestBuildThreadParams_MCPArgsCarryIdentity(t *testing.T) {
+	sess := &appSession{
+		opts: agent.StartOptions{
+			WorkDir:   "/tmp/work",
+			DataDir:   "/tmp/data",
+			SessionID: "s1",
+			Worktree:  "feature-x",
+			Mode:      session.ModeDefault,
+		},
+		exe: "/usr/local/bin/pockode",
+	}
+
+	args := sess.buildThreadParams()["config"].(map[string]interface{})["mcp_servers"].(map[string]interface{})["pockode"].(map[string]interface{})["args"].([]string)
+	for _, want := range [][2]string{{"--session-id", "s1"}, {"--worktree", "feature-x"}} {
+		if !hasFlagValue(args, want[0], want[1]) {
+			t.Errorf("args %v missing %s %s", args, want[0], want[1])
+		}
+	}
+}
+
+// The main worktree has no name, so it is not passed: an empty --worktree would
+// make the flags depend on where the session happens to run.
+func TestBuildThreadParams_MainWorktreeIsUnnamed(t *testing.T) {
+	sess := &appSession{
+		opts: agent.StartOptions{WorkDir: "/tmp/work", DataDir: "/tmp/data", SessionID: "s1"},
+		exe:  "/usr/local/bin/pockode",
+	}
+
+	args := sess.buildThreadParams()["config"].(map[string]interface{})["mcp_servers"].(map[string]interface{})["pockode"].(map[string]interface{})["args"].([]string)
+	for _, arg := range args {
+		if arg == "--worktree" {
+			t.Errorf("main worktree session passed --worktree: %v", args)
+		}
+	}
+}
+
+// hasFlagValue reports whether args contains flag followed by value.
+func hasFlagValue(args []string, flag, value string) bool {
+	for i := 0; i+1 < len(args); i++ {
+		if args[i] == flag && args[i+1] == value {
+			return true
+		}
+	}
+	return false
+}
+
 func TestBuildThreadParams_MCPDirFallsBackToDataDir(t *testing.T) {
 	// Without a split (single-dir setups), the MCP proxy uses DataDir.
 	sess := &appSession{
@@ -1169,6 +1217,8 @@ func TestInitialize_DeclaresTheExperimentalAPI(t *testing.T) {
 // Every request the CLI makes has to be answered: an unanswered one leaves the
 // turn waiting for a reply that is never coming. These are the ones Pockode has
 // no surface for, so what matters is that each gets a definite answer.
+// requestUserInput is answered too, but with content of its own — see the test
+// below it.
 func TestServerRequests_AreAlwaysAnswered(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -1184,14 +1234,6 @@ func TestServerRequests_AreAlwaysAnswered(t *testing.T) {
 			method: "mcpServer/elicitation/request",
 			params: `{"serverName":"other","message":"Pick one"}`,
 			want:   `"action":"decline"`,
-		},
-		{
-			// Codex's AskUserQuestion counterpart. `answers` is required, and an
-			// empty one is "asked, and nothing came back".
-			name:   "requestUserInput",
-			method: "item/tool/requestUserInput",
-			params: `{"threadId":"t","turnId":"u","itemId":"i","isBlocking":true,"questions":[]}`,
-			want:   `"answers":{}`,
 		},
 		{
 			// Only reachable under the granular approval policy, which Pockode
@@ -1231,6 +1273,58 @@ func TestServerRequests_AreAlwaysAnswered(t *testing.T) {
 				t.Errorf("reply = %s, want it to contain %s", reply, tt.want)
 			}
 		})
+	}
+}
+
+// Codex's counterpart of AskUserQuestion. It is answered rather than left
+// waiting, the answer to every question is the one refusal text both CLIs use,
+// and the user gets a record of a question they were never shown — without which
+// this refusal is invisible to them, since nothing else in the session says it
+// happened.
+func TestRequestUserInput_IsAnsweredWithTheRefusalAndWarnsTheUser(t *testing.T) {
+	sess := newTestSession()
+	defer sess.cancel()
+	writer := &recordingWriteCloser{}
+	sess.stdin = writer
+
+	id := int64(11)
+	sess.handleServerRequest(rpcMessage{ID: &id, Method: "item/tool/requestUserInput", Params: json.RawMessage(
+		`{"threadId":"t","turnId":"u","itemId":"i","isBlocking":true,"questions":[` +
+			`{"id":"q1","header":"Library","question":"Which one?"},` +
+			`{"id":"q2","header":"Database","question":"Which one?"}]}`)})
+
+	writer.mu.Lock()
+	reply := string(writer.writes[len(writer.writes)-1])
+	writer.mu.Unlock()
+
+	var parsed struct {
+		Result struct {
+			Answers map[string]struct {
+				Answers []string `json:"answers"`
+			} `json:"answers"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal([]byte(reply), &parsed); err != nil {
+		t.Fatalf("parse the reply %s: %v", reply, err)
+	}
+	if len(parsed.Result.Answers) != 2 {
+		t.Fatalf("answers = %+v, want one per question", parsed.Result.Answers)
+	}
+	for _, qid := range []string{"q1", "q2"} {
+		got := parsed.Result.Answers[qid].Answers
+		if len(got) != 1 || got[0] != agent.CLIQuestionRefusal {
+			t.Errorf("answer for %s = %v, want the shared refusal text", qid, got)
+		}
+	}
+
+	warned := false
+	for _, ev := range drainEvents(sess.events) {
+		if w, ok := ev.(agent.WarningEvent); ok && w.Code == agent.CLIQuestionRefusedCode {
+			warned = true
+		}
+	}
+	if !warned {
+		t.Error("the user was not told the agent had asked them something they never saw")
 	}
 }
 

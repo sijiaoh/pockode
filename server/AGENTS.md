@@ -181,7 +181,7 @@ if err := json.Unmarshal(data, &parsed); err != nil {
 | `--dev` | | `false` | 开发模式（启用时不 serve 静态文件） |
 | `--idle-timeout` | | `5m` | 空闲进程保留多久后回收（`0` 表示不设预算）|
 | `--turn-timeout` | | `0` | 一个 turn 最长可以跑多久，超时发 interrupt（`0` 表示不设预算）|
-| `--answer-timeout` | | `1h` | 提问 / 权限请求等多久后替用户撤回（`0` 表示不设预算）|
+| `--answer-timeout` | | `1h` | 权限请求等多久后替用户撤回（`0` 表示不设预算）。只管权限请求：代理提的问题挂在 session 上、不占进程，没有预算可言 |
 | `--background-timeout` | | `24h` | turn 停在后台任务上等多久后结束（`0` 表示不设预算）|
 | `--relay` | | `true` | 启用 relay 远程访问（`-relay=false` 禁用） |
 | `--relay-frontend-port` | | 同 server port | Relay 转发前端请求的目标端口 |
@@ -232,7 +232,7 @@ if err := json.Unmarshal(data, &parsed); err != nil {
 
 ### MCP 本地 API
 
-MCP 子进程为客户端模式：由 AI CLI 通过 `pockode mcp --data-dir <dir>` 启动，从 `server.json` 读取 `local_url` 和 `token`，将工具调用通过 HTTP（`POST /api/mcp/tools/call`，Bearer token）转发给主服务器执行（`server/mcp/` 的 `Executor`）。子进程不直接读写文件或启动 watcher。`middleware.Auth` 仅对该精确路由放行，由 `APIHandler` 自行校验本地 token；relay 拒绝转发 `/api/mcp/*`，因此该接口实际仅 loopback 可达。
+MCP 子进程为客户端模式：由 AI CLI 通过 `pockode mcp --data-dir <dir> [--session-id <id>] [--worktree <name>]` 启动，从 `server.json` 读取 `local_url` 和 `token`，将工具调用通过 HTTP（`POST /api/mcp/tools/call`，Bearer token）转发给主服务器执行（`server/mcp/` 的 `Executor`）。`--session-id` / `--worktree` 是 spawn 时写入的调用方身份（`mcp.Caller`），随每次调用带上，让工具作用于调用来源的 session 而不必由模型填 id；它是自报的来源标识，不是凭据（见 [docs/code/agent-integration.md](../docs/code/agent-integration.md#mcp-caller-identity)）。子进程不直接读写文件或启动 watcher。`middleware.Auth` 仅对该精确路由放行，由 `APIHandler` 自行校验本地 token；relay 拒绝转发 `/api/mcp/*`，因此该接口实际仅 loopback 可达。
 
 ## 边界
 

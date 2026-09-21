@@ -19,7 +19,7 @@ var testBudgets = LeaseBudgets{
 // instant its own budget is measured from. This is the whole table.
 func TestLeaseForNamesWhatHoldsTheProcess(t *testing.T) {
 	prompted := drive(TurnState{}, in(SignalPrompt, 1))
-	blocked := drive(prompted, inReq(SignalQuestionRaised, "req-1", 2))
+	blocked := drive(prompted, inReq(SignalPermissionRaised, "req-1", 2))
 	parked := drive(prompted, in(SignalBackgroundParked, 3))
 	ended := drive(prompted, in(SignalDone, 4))
 
@@ -69,7 +69,7 @@ func TestLeaseForPutsThePersonFirst(t *testing.T) {
 func TestLeaseForMeasuresFromTheOldestBlocker(t *testing.T) {
 	turn := drive(TurnState{},
 		in(SignalPrompt, 1),
-		inReq(SignalQuestionRaised, "req-1", 2),
+		inReq(SignalPermissionRaised, "req-1", 2),
 		inReq(SignalPermissionRaised, "req-2", 5),
 	)
 
@@ -99,7 +99,7 @@ func TestLeaseForIdleFollowsActivity(t *testing.T) {
 // a user does to it — and nothing that touched it before — may shorten or extend
 // the budget the wait itself sets.
 func TestLeaseForIgnoresActivityWhileWaiting(t *testing.T) {
-	turn := drive(TurnState{}, in(SignalPrompt, 1), inReq(SignalQuestionRaised, "req-1", 2))
+	turn := drive(TurnState{}, in(SignalPrompt, 1), inReq(SignalPermissionRaised, "req-1", 2))
 
 	lease := testBudgets.LeaseFor(turn, at(8))
 	if !lease.Since.Equal(at(2)) {

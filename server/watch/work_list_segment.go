@@ -65,8 +65,10 @@ func hasCurrentRow(item rpc.WorkListItem) bool {
 		return false
 	case work.StatusActive:
 		// A task earns a row only by needing a person; everything else about it
-		// is rolled up into its story's row.
-		return item.Activity.NeedsUser() || item.Type != work.WorkTypeTask
+		// is rolled up into its story's row. Both dimensions count — a task whose
+		// agent asked a question and went on working needs a person just as much
+		// as one whose turn is stuck (work.RowState.NeedsAttention).
+		return rowStateOf(item).NeedsAttention() || item.Type != work.WorkTypeTask
 	case work.StatusOpen:
 		return item.Type != work.WorkTypeTask
 	}

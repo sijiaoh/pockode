@@ -274,12 +274,13 @@ func (h *rpcMethodHandler) handleWorkDetailSubscribe(ctx context.Context, conn *
 	h.log.Debug("subscribed", "watcher", "work detail", "watchId", params.ID, "workId", params.WorkID)
 
 	result := rpc.WorkDetailSubscribeResult{
-		Work:     detail.Work,
-		Comments: detail.Comments,
-		Usage:    detail.Usage,
-		Activity: detail.Activity,
-		Children: detail.Children,
-		Parent:   detail.Parent,
+		Work:             detail.Work,
+		Comments:         detail.Comments,
+		Usage:            detail.Usage,
+		Activity:         detail.Activity,
+		PendingQuestions: detail.PendingQuestions,
+		Children:         detail.Children,
+		Parent:           detail.Parent,
 	}
 
 	if err := conn.Reply(ctx, req.ID, result); err != nil {

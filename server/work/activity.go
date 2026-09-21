@@ -12,8 +12,13 @@ import (
 // happening right now. Nothing on screen may spell a state out of those parts
 // itself — see docs/lifecycle-ui.md.
 //
-// Ten leaves, and there is never more than one: the layers it is derived from
+// Eight leaves, and there is never more than one: the layers it is derived from
 // are each exclusive.
+//
+// It is not the whole of what a row draws. "This work has questions waiting for
+// an answer" is a second, independent dimension — an agent that posted one and
+// carried on is *running* and has something for the user — and it is counted
+// beside this rather than folded into it (RowState).
 type Activity string
 
 const (
@@ -21,14 +26,8 @@ const (
 	ActivityOpen Activity = "open"
 	// ActivityRunning is a turn producing output.
 	ActivityRunning Activity = "running"
-	// ActivityNeedsAnswer is a turn blocked on a question the user has to answer.
-	ActivityNeedsAnswer Activity = "needs_answer"
 	// ActivityNeedsPermission is a turn blocked on a permission request.
 	ActivityNeedsPermission Activity = "needs_permission"
-	// ActivityNeedsMessage is the work itself waiting on the user, because its
-	// agent said so (work_needs_input). Unlike the two above, nothing in the
-	// session is holding a turn open for it.
-	ActivityNeedsMessage Activity = "needs_message"
 	// ActivityBackground is a turn parked on work that outlives the tool call
 	// that started it. Nothing for the user to do, and nothing is stuck.
 	ActivityBackground Activity = "background"
@@ -43,16 +42,17 @@ const (
 	ActivityClosed Activity = "closed"
 )
 
-// NeedsUser reports whether the user is the one holding this work up. It is the
-// single predicate behind every attention dot, and it is exactly the three
-// "needs you" leaves — a background wait and a wait on children are things
-// happening, not things to do.
+// NeedsUser reports whether the user is the one holding this work up. It is
+// exactly one leaf now — a permission request — because a background wait and a
+// wait on children are things happening rather than things to do, and a question
+// an agent posted holds nothing up at all.
+//
+// It is therefore not the whole of the attention dot: a work with unanswered
+// questions needs the user too, and no activity can say so (see RowState). The
+// dot is the one place the two dimensions are merged, and that merge belongs to
+// whatever is drawing it, not here.
 func (a Activity) NeedsUser() bool {
-	switch a {
-	case ActivityNeedsAnswer, ActivityNeedsPermission, ActivityNeedsMessage:
-		return true
-	}
-	return false
+	return a == ActivityNeedsPermission
 }
 
 // DeriveActivity is the rule, and the whole of it:
@@ -65,10 +65,10 @@ func (a Activity) NeedsUser() bool {
 // turns, because for a work item the two are the same nothing.
 //
 // Phase outranks wait rather than the other way round: a wait is a standing
-// intention, a phase is a fact about this second. An agent that calls
-// work_needs_input and then keeps writing for another ten seconds *is* running,
-// and the row should say so; the moment the turn settles the wait takes over.
-// The alternative needs a priority table between two kinds of waiting that can
+// intention, a phase is a fact about this second. An agent that calls work_wait
+// and then keeps writing for another ten seconds *is* running, and the row
+// should say so; the moment the turn settles the wait takes over. The
+// alternative needs a priority table between two kinds of waiting that can
 // legitimately coexist, and every entry in such a table is an arbitrary choice
 // someone later "fixes".
 //
@@ -96,30 +96,68 @@ func DeriveActivity(w Work, turn session.TurnState) Activity {
 	}
 
 	// Idle, or no session at all.
-	switch w.Wait {
-	case WaitUser:
-		return ActivityNeedsMessage
-	case WaitChild:
+	if w.Wait == WaitChild {
 		return ActivityWaitingChildren
 	}
 	return ActivityIdle
 }
 
 // blockedActivity picks the leaf for a blocked turn. Permission outranks
-// question because a permission request cannot be answered late — it expires as
-// a denial — so it is the wait with something to lose. Background is last
-// because it is the only one nobody can act on.
+// background because background is the one nobody can act on — and those are
+// the only two blockers left, now that a question belongs to the session rather
+// than to a turn.
 func blockedActivity(turn session.TurnState) Activity {
-	leaf := ActivityBackground
 	for _, b := range turn.Blockers {
-		switch b.Kind {
-		case session.BlockerPermission:
+		if b.Kind == session.BlockerPermission {
 			return ActivityNeedsPermission
-		case session.BlockerQuestion:
-			leaf = ActivityNeedsAnswer
 		}
 	}
-	return leaf
+	return ActivityBackground
+}
+
+// RowState is everything a work row draws that the work record does not know:
+// what the item is doing, and how many of its questions are waiting for the
+// user.
+//
+// The two travel together because they are read from one place — the turn of
+// the session the work runs in — and because a row that pushed only when the
+// first of them moved would go stale the moment the second did.
+//
+// A count rather than the questions themselves. A row prints "2 to answer" and
+// nothing more, while every subscriber holds the whole project's list and is
+// sent a row whenever any item changes; the questions themselves are on the
+// detail, for the one item a client has open (rpc.WorkDetailSubscribeResult).
+type RowState struct {
+	Activity Activity
+	// UnansweredQuestions is how many questions the work's session has asked
+	// and nobody has answered.
+	UnansweredQuestions int
+}
+
+// NeedsAttention reports whether the user is the one this work is waiting on,
+// across both dimensions: a turn stuck on something only they can clear, or a
+// question of the agent's that nobody has answered.
+//
+// This is the merge, and it happens once, here. Activity.NeedsUser is half of
+// it and cannot be the whole: an agent that posted a question and carried on is
+// *running*, and a predicate reading only the activity would say nobody is
+// needed.
+func (s RowState) NeedsAttention() bool {
+	return s.Activity.NeedsUser() || s.UnansweredQuestions > 0
+}
+
+// RowStateFor derives a row's state from a work item and the turn of the
+// session it runs in — the zero turn when it has no session.
+func RowStateFor(w Work, turn session.TurnState) RowState {
+	state := RowState{Activity: DeriveActivity(w, turn)}
+	if w.Status == StatusActive || w.Status == StatusStopped {
+		// A closed or never-started work draws no count. Closing withdraws the
+		// questions beneath it (worktree.Manager.RetireSession), and an open one
+		// has no session to have asked any — so a non-zero count on either would
+		// be a leftover rather than something to act on.
+		state.UnansweredQuestions = len(turn.Unanswered)
+	}
+	return state
 }
 
 // TurnSource resolves the turn state of every session in a worktree.
@@ -158,6 +196,17 @@ func NewActivityResolver(source TurnSource) *ActivityResolver {
 // Activity derives one work item's activity.
 func (r *ActivityResolver) Activity(w Work) Activity {
 	return DeriveActivity(w, r.turnFor(w))
+}
+
+// RowState derives everything one work item's row draws from the session layer.
+func (r *ActivityResolver) RowState(w Work) RowState {
+	return RowStateFor(w, r.turnFor(w))
+}
+
+// PendingQuestions are the questions one work item's session is waiting on
+// answers to, for the detail view that lists them in full.
+func (r *ActivityResolver) PendingQuestions(w Work) []session.PendingQuestion {
+	return r.turnFor(w).Unanswered
 }
 
 func (r *ActivityResolver) turnFor(w Work) session.TurnState {

@@ -82,9 +82,6 @@ func (s *mockSession) sentPrompts() []string {
 func (s *mockSession) SendPermissionResponse(agent.PermissionRequestData, agent.PermissionChoice) error {
 	return nil
 }
-func (s *mockSession) SendQuestionResponse(agent.QuestionRequestData, map[string]string) error {
-	return nil
-}
 func (s *mockSession) SendInterrupt() error { return nil }
 func (s *mockSession) Close()               { close(s.events) }
 
@@ -101,7 +98,7 @@ func newTestManagerWithAgent(t *testing.T, store session.Store) (*process.Manage
 	ag := &mockAgent{}
 	registry := agent.NewRegistry()
 	registry.Register(session.AgentTypeClaude, ag)
-	return process.NewManager(registry, t.TempDir(), "", "", store, session.LeaseBudgets{Idle: time.Minute}), ag
+	return process.NewManager(registry, "", t.TempDir(), "", "", store, session.LeaseBudgets{Idle: time.Minute}), ag
 }
 
 // TestClient_RequestsNeedingLiveProcess covers what happens to a prompt whose
@@ -123,14 +120,6 @@ func TestClient_RequestsNeedingLiveProcess(t *testing.T) {
 			call: func(c *Client) error {
 				return c.SendPermissionResponse(context.Background(), "sess",
 					agent.PermissionRequestData{RequestID: "r1"}, agent.PermissionAllow)
-			},
-			want: ErrSessionNotRunning,
-		},
-		{
-			name: "question response",
-			call: func(c *Client) error {
-				return c.SendQuestionResponse(context.Background(), "sess",
-					agent.QuestionRequestData{RequestID: "r1"}, map[string]string{"a": "b"})
 			},
 			want: ErrSessionNotRunning,
 		},
@@ -211,7 +200,7 @@ func TestClient_MessageWithNoRecordHasNoAddress(t *testing.T) {
 
 	client := NewClient(store, pm)
 	broadcastSeq := session.HistorySeq(-1)
-	client.SetBroadcaster(func(_ string, _ agent.MessageEvent, seq session.HistorySeq, _ any) {
+	client.SetBroadcaster(func(_ string, _ agent.EventRecord, seq session.HistorySeq, _ any) {
 		broadcastSeq = seq
 	})
 

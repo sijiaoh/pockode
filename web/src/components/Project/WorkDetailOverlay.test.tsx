@@ -3,8 +3,10 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Activity } from "../../lib/activity";
 import { useAgentRoleStore } from "../../lib/agentRoleStore";
+import { clearAnswerIntent, takeAnswerIntent } from "../../lib/answerIntent";
 import { useWorkStore } from "../../lib/workStore";
 import type { AgentRole } from "../../types/agentRole";
+import type { PendingQuestion } from "../../types/message";
 import type { Work } from "../../types/work";
 import WorkDetailOverlay from "./WorkDetailOverlay";
 
@@ -63,13 +65,18 @@ function expectToAppearBefore(first: Node, second: Node) {
 	).toBeTruthy();
 }
 
-const renderWithWork = (work: Work, activity: Activity = "idle") => {
+const renderWithWork = (
+	work: Work,
+	activity: Activity = "idle",
+	pendingQuestions: PendingQuestion[] = [],
+) => {
 	mockUseWorkDetailSubscription.mockReturnValue({
 		work,
 		activity,
 		comments: [],
 		children: [],
 		parent: null,
+		pendingQuestions,
 		loading: false,
 		error: null,
 	});
@@ -133,6 +140,7 @@ describe("WorkDetailOverlay", () => {
 			work: createWork(),
 			activity: "idle",
 			comments: [],
+			pendingQuestions: [],
 			loading: false,
 			error: null,
 			children: [],
@@ -185,6 +193,7 @@ describe("WorkDetailOverlay", () => {
 				},
 			],
 			parent: null,
+			pendingQuestions: [],
 			loading: false,
 			error: null,
 		});
@@ -215,6 +224,7 @@ describe("WorkDetailOverlay", () => {
 			work: createWork(),
 			activity: "idle",
 			comments: [],
+			pendingQuestions: [],
 			loading: false,
 			error: null,
 			children: [],
@@ -251,6 +261,7 @@ describe("WorkDetailOverlay", () => {
 				work: createWork(),
 				activity: "idle",
 				comments: [],
+				pendingQuestions: [],
 				loading: false,
 				error: null,
 				children: [],
@@ -287,6 +298,7 @@ describe("WorkDetailOverlay", () => {
 				work: createWork({ type: "task", parent_id: "story-1" }),
 				activity: "idle",
 				comments: [],
+				pendingQuestions: [],
 				loading: false,
 				error: null,
 				children: [],
@@ -331,6 +343,7 @@ describe("WorkDetailOverlay", () => {
 				},
 				descendant_count: 5,
 			},
+			pendingQuestions: [],
 			loading: false,
 			error: null,
 			children: [],
@@ -359,6 +372,7 @@ describe("WorkDetailOverlay", () => {
 			work: createWork({ body: undefined }),
 			activity: "idle",
 			comments: [],
+			pendingQuestions: [],
 			loading: false,
 			error: null,
 			children: [],
@@ -387,6 +401,7 @@ describe("WorkDetailOverlay", () => {
 			work: createWork(),
 			activity: "idle",
 			comments: [],
+			pendingQuestions: [],
 			loading: false,
 			error: null,
 			children: [],
@@ -424,18 +439,16 @@ describe("the wait line", () => {
 		});
 	});
 
-	it("shows the agent's reason verbatim", () => {
-		renderWithWork(
-			createWork({
-				status: "active",
-				wait: "user",
-				wait_reason: "Which database should I use, Postgres or SQLite?",
-			}),
-		);
+	// A wait on the *user* is no longer a line of the agent's free text: it is a
+	// question like any other, and it is drawn by the section below where it can
+	// be answered rather than only read (docs/answering-ui.md §4).
+	// The wait on the user, and the free-text reason that went with it, are gone
+	// from the wire as well as from here: what the agent wants is a question on the
+	// session's unanswered list, which this page draws as a block of its own.
+	it("says nothing about a wait on the user", () => {
+		const { container } = renderWithWork(createWork({ status: "active" }));
 
-		expect(
-			screen.getByText("Which database should I use, Postgres or SQLite?"),
-		).toBeInTheDocument();
+		expect(container.textContent).not.toMatch(/waiting for you|Needs input/i);
 	});
 
 	it("says what a wait on subtasks is, which has no reason to show", () => {
@@ -457,9 +470,116 @@ describe("the wait line", () => {
 	// nothing is going to deliver.
 	it("says nothing about a stopped work", () => {
 		const { container } = renderWithWork(
-			createWork({ status: "stopped", wait: "user", wait_reason: "answer me" }),
+			createWork({ status: "stopped", wait: "child" }),
 		);
 
-		expect(container.textContent).not.toMatch(/answer me/);
+		expect(container.textContent).not.toMatch(/Waiting/);
+	});
+});
+
+const question: PendingQuestion = {
+	request_id: "q1",
+	header: "Database",
+	question: "Which database should I use?",
+	options: [
+		{ label: "Postgres", description: "Managed" },
+		{ label: "SQLite", description: "One file" },
+	],
+	multi_select: false,
+	asked_at: "2026-01-02T14:02:00Z",
+};
+
+describe("the unanswered questions section", () => {
+	beforeEach(() => {
+		mockUseWorkDetailSubscription.mockReset();
+		useWorkStore.setState({ works: [], isLoading: false, error: null });
+		useAgentRoleStore.setState({
+			roles: [createRole()],
+			isLoading: false,
+			error: null,
+		});
+		clearAnswerIntent();
+	});
+
+	// Read-only on purpose: answering is a conversation, and this page has no
+	// transcript to watch it happen in.
+	it("shows what is being asked, and offers no form", () => {
+		renderWithWork(
+			createWork({ status: "active", session_id: "s1" }),
+			"running",
+			[question],
+		);
+
+		expect(
+			screen.getByText("Which database should I use?"),
+		).toBeInTheDocument();
+		expect(screen.getByText("Postgres · SQLite")).toBeInTheDocument();
+		expect(screen.queryByRole("radio")).toBeNull();
+	});
+
+	// The list is empty exactly when it should be — closing a work withdraws its
+	// questions — so "while the list is non-empty" is both shorter and right.
+	it("shows them on a stopped work too", () => {
+		renderWithWork(
+			createWork({ status: "stopped", session_id: "s1" }),
+			"stopped",
+			[question],
+		);
+
+		expect(
+			screen.getByText("Which database should I use?"),
+		).toBeInTheDocument();
+	});
+
+	it("says nothing when nothing is waiting", () => {
+		const { container } = renderWithWork(
+			createWork({ status: "active", session_id: "s1" }),
+		);
+
+		expect(container.textContent).not.toMatch(/waiting for your answer/i);
+	});
+
+	// The intent decides, not the destination: `Open Chat` leads to the same
+	// place and never opens the sheet.
+	it("carries the intent to answer into the chat it navigates to", async () => {
+		const user = userEvent.setup();
+		const onNavigateToSession = vi.fn();
+		mockUseWorkDetailSubscription.mockReturnValue({
+			work: createWork({ status: "active", session_id: "s1" }),
+			activity: "running",
+			comments: [],
+			children: [],
+			parent: null,
+			pendingQuestions: [question],
+			loading: false,
+			error: null,
+		});
+		render(
+			<WorkDetailOverlay
+				workId="work-1"
+				onBack={vi.fn()}
+				onNavigateToSession={onNavigateToSession}
+				onOpenWorkDetail={vi.fn()}
+			/>,
+		);
+
+		await user.click(screen.getByRole("button", { name: "Answer" }));
+		expect(onNavigateToSession).toHaveBeenCalledWith("s1", "");
+		expect(takeAnswerIntent("s1")).toEqual({
+			sessionId: "s1",
+			requestId: "q1",
+		});
+	});
+
+	it("leaves Open Chat as a way to look, never a way to answer", async () => {
+		const user = userEvent.setup();
+		renderWithWork(
+			createWork({ status: "active", session_id: "s1" }),
+			"running",
+			[question],
+		);
+
+		await user.click(screen.getByRole("button", { name: "Open Chat" }));
+		expect(takeAnswerIntent("s1")).toBeNull();
 	});
 });

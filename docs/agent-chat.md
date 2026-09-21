@@ -20,7 +20,7 @@ React SPA ──WebSocket──▶ Go Server ──spawn──▶ AI CLI (subpro
 
 | Layer | Path | Role |
 |-------|------|------|
-| RPC handlers | `server/ws/rpc_chat.go` | `chat.message`, `chat.interrupt`, `chat.messages.subscribe` / `chat.messages.history` ([paging](#history-paging)), permission/question responses |
+| RPC handlers | `server/ws/rpc_chat.go` | `chat.message`, `chat.interrupt`, `chat.messages.subscribe` / `chat.messages.history` ([paging](#history-paging)), permission responses |
 | Session config | `server/ws/rpc_session.go` | `session.set_agent_type` / `set_mode` / `set_model` / `set_effort`, each closing the running process because a CLI is told these only at launch; `session.models` and `session.efforts` list the choices ([models](code/agent-integration.md#session-models), [effort](code/agent-integration.md#session-effort)). None of them answer with the new value: the settings in force reach the panel through `session.detail` ([why](code/subscription-system.md#why-a-session-is-two-subscriptions)) |
 | Attachments | `server/ws/rpc_attachment.go` | `attachment.get` — the content a chat event references by id, answered in `file.get`'s own shape so one client path renders both ([why](code/agent-integration.md#content-blocks-and-attachments)) |
 | Chat client | `server/chat/client.go` | Session coordination, message persistence, event broadcast; `SendMessageExcluding` (user) and `SendSystemMessage` (system automation) share one persist+broadcast path |
@@ -28,16 +28,16 @@ React SPA ──WebSocket──▶ Go Server ──spawn──▶ AI CLI (subpro
 | Claude impl | `server/agent/claude/claude.go` | Claude CLI subprocess, stream-json parsing, MCP server config |
 | Process manager | `server/process/manager.go` | Process lifecycle, event stream, lease reaper |
 | Frontend panel | `web/src/components/Chat/ChatPanel.tsx` | Message list, input bar, engine (agent + model + effort) and mode selectors, and the session info button — the action bar's third control, whose panel holds what this session has spent ([usage-display-ui.md](usage-display-ui.md)) |
-| Transcript | `web/src/components/Chat/MessageList.tsx` | Rendering the loaded messages, and every scroll decision made over them: [following the tail](#following-the-tail), the sentinel and anchor behind [history paging](#history-paging), and the jump to an unanswered question ([pending-question-entry.md](pending-question-entry.md)) |
-| Chat hook | `web/src/hooks/useChatMessages.ts` | Message state, streaming, permission/question handling |
-| RPC actions | `web/src/lib/rpc/chat.ts` | `sendMessage`, `interrupt`, `permissionResponse`, `questionResponse` |
+| Transcript | `web/src/components/Chat/MessageList.tsx` | Rendering the loaded messages, and every scroll decision made over them: [following the tail](#following-the-tail), the sentinel and anchor behind [history paging](#history-paging), and the jump to a pending permission request ([lifecycle-ui.md §2.2](lifecycle-ui.md#22-chat-the-attention-strip)) |
+| Chat hook | `web/src/hooks/useChatMessages.ts` | Message state, streaming, permission handling, and the session's unanswered questions |
+| RPC actions | `web/src/lib/rpc/chat.ts` | `sendMessage` (which carries `answering` when it is an answer, [answering-ui.md §3](answering-ui.md#3-the-answer-sheet)), `interrupt`, `permissionResponse` |
 
 ## Data Flow
 
 1. User sends message → `chat.message` RPC
-2. ChatClient persists message to session history, forwards to `Process.SendMessage()` — unless the turn is holding a permission request or a question open, the one state a message cannot be delivered in, which is refused as `InvalidParams` with nothing written ([lifecycle.md](lifecycle.md#session-one-reducer)). A turn merely *running* is not refused; the message steers it.
+2. ChatClient persists message to session history, forwards to `Process.SendMessage()` — unless the turn is holding a permission request open, the one state a message cannot be delivered in, which is refused as `InvalidParams` with nothing written ([lifecycle.md](lifecycle.md#session-one-reducer)). A turn merely *running* is not refused; the message steers it.
 3. Agent subprocess receives via stdin, processes, emits stream-json events
-4. Events are parsed into typed `AgentEvent`s (Text, ToolCall, ToolResult, Error, PermissionRequest, AskUserQuestion, Done, etc.)
+4. Events are parsed into typed `AgentEvent`s (Text, ToolCall, ToolResult, Error, PermissionRequest, Done, etc.)
 5. Events are broadcast to all WebSocket subscribers and persisted to session history
 6. On `Done` event, process transitions to `idle`
 
@@ -47,7 +47,7 @@ Besides user-typed messages, the Work system pushes automatic prompts to the sam
 
 See [agent-event.md](agent-event.md) for the full event type catalog, data flow, and frontend processing pipeline.
 
-An `AskUserQuestion` blocks the agent until it is answered, yet its card is easily pushed out of view by whatever the agent streams next. How chat keeps an unanswered question reachable is in [pending-question-entry.md](pending-question-entry.md).
+A question does not block the agent, and its card is pushed out of view — often out of the loaded pages entirely — by whatever the agent streams next. So answering does not happen on the card: the unanswered questions are session state, reached from a strip above the composer and answered in a sheet. That whole surface is [answering-ui.md](answering-ui.md); the card in the stream is only the record of what was asked.
 
 ## History Paging
 
@@ -105,10 +105,15 @@ otherwise have to know what a record means.
 **A page does not know what happened after it.** A tool call whose result is one
 page newer replays as still running; a question answered later replays as still
 waiting. The client keeps every record that settles something recorded earlier —
-tool results, permission and question responses, cancellations, process ends —
-and replays them over each older page it pulls in. They are all "update it
-wherever it is" operations, so replaying them costs nothing when the target is
-not in that page either.
+tool results, permission responses, cancellations, process ends, and a message
+carrying `answering` — and replays them over each older page it pulls in. They
+are all "update it wherever it is" operations, so replaying them costs nothing
+when the target is not in that page either.
+
+The last of those is the only one kept for *half* of itself. An ordinary message
+must never be replayed — that would draw a second copy of it — so what is
+replayed is the settling it does and not the message, which is what keeps one
+record from being two bubbles.
 
 Order matters inside that repair: the page's trailing turn is closed *first*.
 The records that ended it are in the page above, so left as it replayed it would
@@ -207,8 +212,8 @@ computed from — which is the exception and not the rule
 window after the page lands and the correction is repeated as the new content
 settles, until the window closes or the view is deliberately taken elsewhere —
 by the user scrolling, or by one of the scrolls started in code that carry an
-intent of their own (the scroll-to-bottom button, a jump to a pending question,
-the pin after a message is sent). From that point the view belongs to whatever
+intent of their own (the scroll-to-bottom button, a jump to a pending permission
+request, the pin after a message is sent). From that point the view belongs to whatever
 took it there, and a correction would pull it back off.
 
 **Nothing asks for the next page until the one that landed has moved the view.**
@@ -282,13 +287,13 @@ following switched off behind it.
 Only the user's own scrolling moves the intent, which is why the gestures that
 scroll the container are listened to alongside the scroll events they cause: a
 scroll event says where the view went, and the gesture says whose doing it was.
-Every scroll started in code — the button, the jump to a pending question, the
-pin after a message is sent — declares its own intent at the point it is
-started, and is not allowed to have it overwritten by wherever it lands. A jump
-to a question near the end of the transcript is the case that makes this
+Every scroll started in code — the button, the jump to a pending permission
+request, the pin after a message is sent — declares its own intent at the point
+it is started, and is not allowed to have it overwritten by wherever it lands. A
+jump to a request near the end of the transcript is the case that makes this
 concrete: it comes to rest at the tail, and reading that arrival as the user
-asking to follow again would let the next reflow drag the question they just
-asked to see straight back off the screen.
+asking to follow again would let the next reflow drag the card they just asked
+to see straight back off the screen.
 
 Re-pinning is driven by a `ResizeObserver` watching **both** boxes. The content
 growing is the obvious half; the container shrinking is the half that is easy to

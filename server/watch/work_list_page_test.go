@@ -56,12 +56,15 @@ func TestWorkListWatcher_SubscribeNeverHidesWorkThatNeedsTheUser(t *testing.T) {
 	store := &mockWorkStore{}
 	store.works = append(store.works, work.Work{
 		ID: "waiting", Type: work.WorkTypeStory, Status: work.StatusActive,
-		Title: "waiting", Wait: work.WaitUser,
+		Title: "waiting", SessionID: "s-waiting",
 	})
 	for i := range CurrentGroupCap * 2 {
 		store.works = append(store.works, openStory(fmt.Sprintf("s%02d", i)))
 	}
-	w := NewWorkListWatcher(store, nil)
+	w := NewWorkListWatcher(store, (&turnSourceStub{}).set("s-waiting", session.TurnState{
+		Phase: session.PhaseBlocked, Open: true,
+		Blockers: []session.Blocker{{Kind: session.BlockerPermission, RequestID: "req-1"}},
+	}))
 
 	snapshot, err := w.Subscribe("client-1", nil)
 	if err != nil {
@@ -158,7 +161,8 @@ func TestWorkListWatcher_ReadingAPageDoesNotSwallowTheNextNotification(t *testin
 		ID: "w1", Type: work.WorkTypeStory, Status: work.StatusActive,
 		Title: "w1", SessionID: "s1",
 	}}}
-	w := NewWorkListWatcher(store, nil)
+	turns := &turnSourceStub{}
+	w := NewWorkListWatcher(store, turns)
 	w.Start()
 	defer w.Stop()
 
@@ -169,7 +173,8 @@ func TestWorkListWatcher_ReadingAPageDoesNotSwallowTheNextNotification(t *testin
 
 	// The change the subscriber has not been told about yet, read by a page
 	// request before any notification goes out.
-	store.works[0].Wait = work.WaitUser
+	running := session.TurnState{Phase: session.PhaseRunning, Open: true}
+	turns.set("s1", running)
 	if _, err := w.Archive("client-1", "", 0); err != nil {
 		t.Fatalf("archive: %v", err)
 	}
@@ -178,7 +183,7 @@ func TestWorkListWatcher_ReadingAPageDoesNotSwallowTheNextNotification(t *testin
 	// so the page read must not have counted as a send.
 	w.OnSessionChange(session.SessionChangeEvent{
 		Op:      session.OperationUpdate,
-		Session: session.SessionMeta{ID: "s1"},
+		Session: session.SessionMeta{ID: "s1", Turn: running},
 	})
 	waitForNotification(t, notifier, 1)
 
@@ -186,8 +191,8 @@ func TestWorkListWatcher_ReadingAPageDoesNotSwallowTheNextNotification(t *testin
 	if err := json.Unmarshal(notifier.last(), &params); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	if params.Work == nil || params.Work.Activity != work.ActivityNeedsMessage {
-		t.Errorf("notification = %+v, want the needs_message row", params.Work)
+	if params.Work == nil || params.Work.Activity != work.ActivityRunning {
+		t.Errorf("notification = %+v, want the running row", params.Work)
 	}
 }
 

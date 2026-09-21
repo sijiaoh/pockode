@@ -193,8 +193,8 @@ that way: a status with no button is a work item the user cannot act on at all.
 **Which buttons exist is decided by the status, never by the activity.** A button
 that appears and disappears as turns settle is a button the user cannot aim at,
 which is exactly how a work stuck in a stale live status became unstoppable.
-Stop is shown for every `active` work, including one waiting on the user and one
-parked on a background task: `active` means the engine is driving it, and Stop
+Stop is shown for every `active` work, including one waiting on its subtasks,
+one owing the user an answer and one parked on a background task: `active` means the engine is driving it, and Stop
 means stop driving it. What a *confirmation* says may read the activity — by then
 the user has aimed, and what they are about to lose depends on what is happening
 (docs/lifecycle-ui.md §3).

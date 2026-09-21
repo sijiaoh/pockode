@@ -511,8 +511,6 @@ func (h *rpcMethodHandler) Handle(ctx context.Context, conn *jsonrpc2.Conn, req 
 		h.handleInterrupt(ctx, conn, req, wt)
 	case "chat.permission_response":
 		h.handlePermissionResponse(ctx, conn, req, wt)
-	case "chat.question_response":
-		h.handleQuestionResponse(ctx, conn, req, wt)
 	// session namespace
 	case "session.create":
 		h.handleSessionCreate(ctx, conn, req, wt)

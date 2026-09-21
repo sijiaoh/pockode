@@ -67,6 +67,30 @@ func doneWork(t *testing.T, s *FileStore, id string) {
 	}
 }
 
+// setChildWait parks a work on its subtasks, failing the test if the store
+// refuses — which it does whenever none of them is active, and which is a fixture
+// mistake rather than the thing under test.
+func setChildWait(t *testing.T, s *FileStore, id string) {
+	t.Helper()
+	set, err := s.SetChildWait(context.Background(), id)
+	if err != nil {
+		t.Fatalf("SetChildWait %s: %v", id, err)
+	}
+	if !set {
+		t.Fatalf("SetChildWait %s: refused; the fixture has no active subtask", id)
+	}
+}
+
+// waitOnChild gives a story a running subtask and parks it on that subtask. Two
+// steps rather than one because a `child` wait is only ever set when there is a
+// child to wait for, which is the rule SetChildWait exists to enforce.
+func waitOnChild(t *testing.T, s *FileStore, storyID string) {
+	t.Helper()
+	child := createTask(t, s, storyID, "Reducer")
+	startWork(t, s, child.ID)
+	setChildWait(t, s, storyID)
+}
+
 func getWork(t *testing.T, s *FileStore, id string) Work {
 	t.Helper()
 	w, found, err := s.Get(id)
@@ -285,21 +309,15 @@ func TestClaim_RestartReusesSession(t *testing.T) {
 // one thing ValidateStartable exists to refuse. The user is offered Stop for
 // such a work, never Restart (docs/lifecycle-ui.md §3).
 func TestClaim_RejectsAWaitingWork(t *testing.T) {
-	for _, wait := range []WorkWait{WaitUser, WaitChild} {
-		t.Run(string(wait), func(t *testing.T) {
-			s := newTestStore(t)
-			story := createStory(t, s, "S")
-			if _, _, err := s.Claim(context.Background(), story.ID); err != nil {
-				t.Fatalf("first Claim: %v", err)
-			}
-			if err := s.SetWait(context.Background(), story.ID, wait, "because"); err != nil {
-				t.Fatalf("SetWait: %v", err)
-			}
+	s := newTestStore(t)
+	story := createStory(t, s, "S")
+	if _, _, err := s.Claim(context.Background(), story.ID); err != nil {
+		t.Fatalf("first Claim: %v", err)
+	}
+	waitOnChild(t, s, story.ID)
 
-			if _, _, err := s.Claim(context.Background(), story.ID); err == nil {
-				t.Fatal("Claim on a waiting work succeeded; it is already running")
-			}
-		})
+	if _, _, err := s.Claim(context.Background(), story.ID); err == nil {
+		t.Fatal("Claim on a waiting work succeeded; it is already running")
 	}
 }
 
@@ -506,9 +524,7 @@ func TestStart_ClearsTheWaitAndTheNudges(t *testing.T) {
 	s := newTestStore(t)
 	story := createStory(t, s, "S")
 	startWorkWithSession(t, s, story.ID, "session-1")
-	if err := s.SetWait(context.Background(), story.ID, WaitUser, "tell me which database"); err != nil {
-		t.Fatalf("SetWait: %v", err)
-	}
+	waitOnChild(t, s, story.ID)
 	if _, err := s.RecordNudge(context.Background(), story.ID); err != nil {
 		t.Fatalf("RecordNudge: %v", err)
 	}
@@ -520,8 +536,8 @@ func TestStart_ClearsTheWaitAndTheNudges(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Start: %v", err)
 	}
-	if w.Wait != WaitNone || w.WaitReason != "" || w.NudgeCount != 0 {
-		t.Errorf("wait/reason/nudges = %q/%q/%d, want none", w.Wait, w.WaitReason, w.NudgeCount)
+	if w.Wait != WaitNone || w.NudgeCount != 0 {
+		t.Errorf("wait/nudges = %q/%d, want none", w.Wait, w.NudgeCount)
 	}
 }
 
@@ -580,10 +596,10 @@ func TestMarkRunning_FromAnyLiveStatus(t *testing.T) {
 		pause func(*FileStore, string) error
 	}{
 		{"stopped", func(s *FileStore, id string) error { return s.Stop(context.Background(), id) }},
-		{"wait_on_user", func(s *FileStore, id string) error {
-			return s.SetWait(context.Background(), id, WaitUser, "waiting on the user")
+		{"wait_on_children", func(s *FileStore, id string) error {
+			waitOnChild(t, s, id)
+			return nil
 		}},
-		{"wait_on_children", func(s *FileStore, id string) error { return s.SetWait(context.Background(), id, WaitChild, "") }},
 		{"active", func(*FileStore, string) error { return nil }},
 	}
 
@@ -652,8 +668,8 @@ func TestReopen_RejectsNonClosedStatus(t *testing.T) {
 			status: StatusStopped,
 		},
 		{
-			name:   "wait_on_user",
-			setup:  func(id string) { startWork(t, s, id); s.SetWait(ctx, id, WaitUser, "waiting on the user") },
+			name:   "wait_on_children",
+			setup:  func(id string) { startWork(t, s, id); waitOnChild(t, s, id) },
 			status: StatusActive,
 		},
 	}
@@ -685,53 +701,13 @@ func TestReopen_NotFound(t *testing.T) {
 
 // --- wait transitions ---
 
-func TestTransition_ActiveToWaitOnUser(t *testing.T) {
-	s := newTestStore(t)
-	story := createStory(t, s, "S")
-	startWork(t, s, story.ID)
-
-	if err := s.SetWait(context.Background(), story.ID, WaitUser, "waiting on the user"); err != nil {
-		t.Fatalf("active → waiting on the user: %v", err)
-	}
-	got := getWork(t, s, story.ID)
-	if got.Status != StatusActive || got.Wait != WaitUser {
-		t.Errorf("status/wait = %q/%q, want %q/%q", got.Status, got.Wait, StatusActive, WaitUser)
-	}
-}
-
-func TestTransition_WaitOnUserToStopped(t *testing.T) {
-	s := newTestStore(t)
-	story := createStory(t, s, "S")
-	startWork(t, s, story.ID)
-
-	s.SetWait(context.Background(), story.ID, WaitUser, "waiting on the user")
-
-	if err := s.Stop(context.Background(), story.ID); err != nil {
-		t.Fatalf("waiting on the user → stopped: %v", err)
-	}
-	got := getWork(t, s, story.ID)
-	if got.Status != StatusStopped {
-		t.Errorf("status = %q, want %q", got.Status, StatusStopped)
-	}
-}
-
-func TestTransition_Invalid_OpenToWaitOnUser(t *testing.T) {
-	s := newTestStore(t)
-	story := createStory(t, s, "S")
-
-	if err := s.SetWait(context.Background(), story.ID, WaitUser, "waiting on the user"); err == nil {
-		t.Fatal("expected error for open → waiting on the user")
-	}
-}
-
 func TestTransition_ActiveToWaitOnChildren(t *testing.T) {
 	s := newTestStore(t)
 	story := createStory(t, s, "S")
 	startWork(t, s, story.ID)
 
-	if err := s.SetWait(context.Background(), story.ID, WaitChild, ""); err != nil {
-		t.Fatalf("active → waiting on children: %v", err)
-	}
+	waitOnChild(t, s, story.ID)
+
 	got := getWork(t, s, story.ID)
 	if got.Status != StatusActive || got.Wait != WaitChild {
 		t.Errorf("status/wait = %q/%q, want %q/%q", got.Status, got.Wait, StatusActive, WaitChild)
@@ -743,7 +719,7 @@ func TestTransition_WaitOnChildrenToStopped(t *testing.T) {
 	story := createStory(t, s, "S")
 	startWork(t, s, story.ID)
 
-	s.SetWait(context.Background(), story.ID, WaitChild, "")
+	waitOnChild(t, s, story.ID)
 
 	if err := s.Stop(context.Background(), story.ID); err != nil {
 		t.Fatalf("waiting → stopped: %v", err)
@@ -757,52 +733,19 @@ func TestTransition_WaitOnChildrenToStopped(t *testing.T) {
 func TestTransition_Invalid_OpenToWaitOnChildren(t *testing.T) {
 	s := newTestStore(t)
 	story := createStory(t, s, "S")
+	child := createTask(t, s, story.ID, "T")
+	startWork(t, s, child.ID)
 
-	if err := s.SetWait(context.Background(), story.ID, WaitChild, ""); err == nil {
+	if _, err := s.SetChildWait(context.Background(), story.ID); err == nil {
 		t.Fatal("expected error for open → waiting on children")
 	}
 }
 
-func TestParentCanWaitWhenChildNotClosed(t *testing.T) {
-	s := newTestStore(t)
-	story := createStory(t, s, "S")
-	task := createTask(t, s, story.ID, "T")
-	startWork(t, s, story.ID)
-	startWork(t, s, task.ID)
-
-	// Task starts waiting on children of its own
-	s.SetWait(context.Background(), task.ID, WaitChild, "")
-
-	if err := s.SetWait(context.Background(), story.ID, WaitChild, ""); err != nil {
-		t.Fatalf("story should be able to wait on its children: %v", err)
-	}
-	got := getWork(t, s, story.ID)
-	if got.Status != StatusActive || got.Wait != WaitChild {
-		t.Errorf("status/wait = %q/%q, want %q/%q", got.Status, got.Wait, StatusActive, WaitChild)
-	}
-}
-
-func TestParentCanWaitWhenChildWaitsOnUser(t *testing.T) {
-	s := newTestStore(t)
-	story := createStory(t, s, "S")
-	task := createTask(t, s, story.ID, "T")
-	startWork(t, s, story.ID)
-	startWork(t, s, task.ID)
-
-	// Put the task on a wait of its own
-	s.SetWait(context.Background(), task.ID, WaitUser, "waiting on the user")
-
-	// Parent should wait on its children rather than close
-	if err := s.SetWait(context.Background(), story.ID, WaitChild, ""); err != nil {
-		t.Fatalf("story should be able to wait on its children: %v", err)
-	}
-	got := getWork(t, s, story.ID)
-	if got.Status != StatusActive || got.Wait != WaitChild {
-		t.Errorf("status/wait = %q/%q, want %q/%q", got.Status, got.Wait, StatusActive, WaitChild)
-	}
-}
-
-func TestParentWaiting_WhenChildStopped(t *testing.T) {
+// A stopped subtask is not something a wait could be waiting for: only a subtask
+// *closing* ends a `child` wait, and a stopped one is not going to close by
+// itself. The refusal is the store's; the sentence explaining it to the agent is
+// Operations.waitRefusal's.
+func TestParentWaiting_RefusedWhenTheOnlyChildIsStopped(t *testing.T) {
 	s := newTestStore(t)
 	story := createStory(t, s, "S")
 	task := createTask(t, s, story.ID, "T")
@@ -812,13 +755,15 @@ func TestParentWaiting_WhenChildStopped(t *testing.T) {
 	// Stop the task (simulates agent crash or retry limit)
 	s.Stop(context.Background(), task.ID)
 
-	// Parent should use waiting to wait for child
-	if err := s.SetWait(context.Background(), story.ID, WaitChild, ""); err != nil {
-		t.Fatalf("story should be able to wait on its children: %v", err)
+	set, err := s.SetChildWait(context.Background(), story.ID)
+	if err != nil {
+		t.Fatalf("SetChildWait: %v", err)
 	}
-	got := getWork(t, s, story.ID)
-	if got.Status != StatusActive || got.Wait != WaitChild {
-		t.Errorf("status/wait = %q/%q, want %q/%q", got.Status, got.Wait, StatusActive, WaitChild)
+	if set {
+		t.Error("the story was parked on a subtask that is not going to close")
+	}
+	if got := getWork(t, s, story.ID); got.Wait != WaitNone {
+		t.Errorf("wait = %q, want none", got.Wait)
 	}
 }
 
@@ -830,7 +775,7 @@ func TestStepDone_ChildClosesWhileParentWaiting(t *testing.T) {
 	startWork(t, s, task.ID)
 
 	// Parent enters waiting for child
-	s.SetWait(context.Background(), story.ID, WaitChild, "")
+	setChildWait(t, s, story.ID)
 
 	doneWork(t, s, task.ID)
 
@@ -867,9 +812,7 @@ func TestStory_UsesWaitingForPendingChildren(t *testing.T) {
 	startWork(t, s, task.ID)
 
 	// Story uses waiting to wait for child completion
-	if err := s.SetWait(context.Background(), story.ID, WaitChild, ""); err != nil {
-		t.Fatalf("SetWait: %v", err)
-	}
+	setChildWait(t, s, story.ID)
 	got := getWork(t, s, story.ID)
 	if got.Status != StatusActive || got.Wait != WaitChild {
 		t.Errorf("status/wait = %q/%q, want %q/%q", got.Status, got.Wait, StatusActive, WaitChild)
@@ -906,7 +849,7 @@ func TestParentWaiting_StaysWaitingWhenChildrenClose(t *testing.T) {
 	startWork(t, s, task2.ID)
 
 	// Parent enters waiting for children
-	s.SetWait(context.Background(), story.ID, WaitChild, "")
+	setChildWait(t, s, story.ID)
 
 	// Complete task1 → closed; parent stays waiting (the engine handles wakeup)
 	doneWork(t, s, task1.ID)
@@ -1658,15 +1601,8 @@ func TestStepDone_AdvancesFromStaleLiveStatus(t *testing.T) {
 				t.Fatalf("Stop: %v", err)
 			}
 		}},
-		{"wait_on_user", func(s *FileStore, id string) {
-			if err := s.SetWait(context.Background(), id, WaitUser, "waiting on the user"); err != nil {
-				t.Fatalf("SetWait: %v", err)
-			}
-		}},
 		{"wait_on_children", func(s *FileStore, id string) {
-			if err := s.SetWait(context.Background(), id, WaitChild, ""); err != nil {
-				t.Fatalf("SetWait: %v", err)
-			}
+			waitOnChild(t, s, id)
 		}},
 	}
 
@@ -1729,12 +1665,12 @@ func TestSetChildWait(t *testing.T) {
 		startWork(t, store, story.ID)
 		createTask(t, store, story.ID, "never started")
 
-		set, err := store.SetChildWait(context.Background(), story.ID, "on my tasks")
+		set, err := store.SetChildWait(context.Background(), story.ID)
 		if err != nil || set {
 			t.Fatalf("set = %v/%v, want false/nil", set, err)
 		}
-		if got := getWork(t, store, story.ID); got.Wait != WaitNone || got.WaitReason != "" {
-			t.Errorf("wait = %q/%q; a refused wait writes nothing", got.Wait, got.WaitReason)
+		if got := getWork(t, store, story.ID); got.Wait != WaitNone {
+			t.Errorf("wait = %q; a refused wait writes nothing", got.Wait)
 		}
 	})
 
@@ -1748,13 +1684,13 @@ func TestSetChildWait(t *testing.T) {
 			t.Fatalf("Stop: %v", err)
 		}
 
-		set, err := store.SetChildWait(context.Background(), story.ID, "on T")
+		set, err := store.SetChildWait(context.Background(), story.ID)
 		if err != nil || !set {
 			t.Fatalf("set = %v/%v, want true/nil", set, err)
 		}
 		got := getWork(t, store, story.ID)
-		if got.Status != StatusActive || got.Wait != WaitChild || got.WaitReason != "on T" {
-			t.Errorf("story = %q/%q/%q, want active/child/\"on T\"", got.Status, got.Wait, got.WaitReason)
+		if got.Status != StatusActive || got.Wait != WaitChild {
+			t.Errorf("story = %q/%q, want active/child", got.Status, got.Wait)
 		}
 	})
 
@@ -1763,14 +1699,14 @@ func TestSetChildWait(t *testing.T) {
 		story := createStory(t, store, "S")
 		doneWork(t, store, story.ID)
 
-		if _, err := store.SetChildWait(context.Background(), story.ID, ""); !errors.Is(err, ErrInvalidWork) {
+		if _, err := store.SetChildWait(context.Background(), story.ID); !errors.Is(err, ErrInvalidWork) {
 			t.Errorf("err = %v, want ErrInvalidWork: a closed work is reopened, not waited on", err)
 		}
 	})
 
 	t.Run("reports a missing work as not found", func(t *testing.T) {
 		store := newTestStore(t)
-		if _, err := store.SetChildWait(context.Background(), "nope", ""); !errors.Is(err, ErrWorkNotFound) {
+		if _, err := store.SetChildWait(context.Background(), "nope"); !errors.Is(err, ErrWorkNotFound) {
 			t.Errorf("err = %v, want ErrWorkNotFound", err)
 		}
 	})
@@ -1789,9 +1725,7 @@ func TestClearChildWaitIfStranded(t *testing.T) {
 		startWork(t, store, story.ID)
 		child := createTask(t, store, story.ID, "T")
 		startWork(t, store, child.ID)
-		if err := store.SetWait(context.Background(), story.ID, WaitChild, "on T"); err != nil {
-			t.Fatalf("SetWait: %v", err)
-		}
+		setChildWait(t, store, story.ID)
 		return store, getWork(t, store, story.ID), child
 	}
 
@@ -1828,10 +1762,10 @@ func TestClearChildWaitIfStranded(t *testing.T) {
 		}
 	})
 
-	t.Run("leaves a wait on the user alone", func(t *testing.T) {
+	t.Run("leaves a work that declared no wait alone", func(t *testing.T) {
 		store, story, child := newWaitingStory(t)
-		if err := store.SetWait(context.Background(), story.ID, WaitUser, "which database?"); err != nil {
-			t.Fatalf("SetWait: %v", err)
+		if err := store.Activate(context.Background(), story.ID); err != nil {
+			t.Fatalf("Activate: %v", err)
 		}
 		if err := store.Stop(context.Background(), child.ID); err != nil {
 			t.Fatalf("Stop: %v", err)
@@ -1839,26 +1773,23 @@ func TestClearChildWaitIfStranded(t *testing.T) {
 
 		cleared, err := store.ClearChildWaitIfStranded(context.Background(), story.ID)
 		if err != nil || cleared {
-			t.Fatalf("cleared = %v/%v, want false/nil", cleared, err)
-		}
-		if got := getWork(t, store, story.ID); got.Wait != WaitUser {
-			t.Errorf("wait = %q; a person is always reachable, so that wait is never stranded", got.Wait)
+			t.Fatalf("cleared = %v/%v, want false/nil; there was no wait to strand", cleared, err)
 		}
 	})
 }
 
-// work_wait / work_needs_input must not be lockable by a stale stopped either:
-// the agent reporting what it is waiting on is running, whatever status says.
+// work_wait must not be lockable by a stale stopped either: the agent reporting
+// what it is waiting on is running, whatever status says.
 func TestLiveStatusSetters_AcceptStoppedSource(t *testing.T) {
 	tests := []struct {
 		name string
 		mark func(*FileStore, string) error
 		want WorkWait
 	}{
-		{"wait_on_user", func(s *FileStore, id string) error {
-			return s.SetWait(context.Background(), id, WaitUser, "waiting on the user")
-		}, WaitUser},
-		{"wait_on_children", func(s *FileStore, id string) error { return s.SetWait(context.Background(), id, WaitChild, "") }, WaitChild},
+		{"wait_on_children", func(s *FileStore, id string) error {
+			waitOnChild(t, s, id)
+			return nil
+		}, WaitChild},
 		{"running", func(s *FileStore, id string) error { return s.Activate(context.Background(), id) }, WaitNone},
 	}
 
@@ -1943,12 +1874,14 @@ func TestStepDone_FiresUpdateEvent(t *testing.T) {
 
 // The whole of the work index's migration: old values are read as what they
 // always meant. The three statuses this replaces were this model flattened —
-// one status and three waits — which is why none of it is a guess.
+// one status and three waits — which is why none of it is a guess. The `user`
+// wait is gone now, so needs_input lands on plain active: a message is what
+// wakes such a work either way.
 func TestFileStore_NormalisesOldStatusesOnLoad(t *testing.T) {
 	dir := t.TempDir()
 	index := `{"works":[
 		{"id":"w1","type":"story","title":"driven","status":"in_progress","agent_role_id":"r"},
-		{"id":"w2","type":"story","title":"waiting on the user","status":"needs_input","agent_role_id":"r"},
+		{"id":"w2","type":"story","title":"was waiting on the user","status":"needs_input","agent_role_id":"r"},
 		{"id":"w3","type":"story","title":"waiting on children","status":"waiting","agent_role_id":"r"},
 		{"id":"w4","type":"story","title":"stopped","status":"stopped","agent_role_id":"r"},
 		{"id":"w5","type":"story","title":"closed","status":"closed","agent_role_id":"r"}
@@ -1970,7 +1903,7 @@ func TestFileStore_NormalisesOldStatusesOnLoad(t *testing.T) {
 		wait   WorkWait
 	}{
 		"w1": {StatusActive, WaitNone},
-		"w2": {StatusActive, WaitUser},
+		"w2": {StatusActive, WaitNone},
 		"w3": {StatusActive, WaitChild},
 		"w4": {StatusStopped, WaitNone},
 		"w5": {StatusClosed, WaitNone},
@@ -1987,9 +1920,9 @@ func TestFileStore_NormalisesOldStatusesOnLoad(t *testing.T) {
 // behind would show the user a work "waiting for you" that nothing will resume.
 func TestNormalizeDropsAWaitOnWorkThatIsNotActive(t *testing.T) {
 	for _, status := range []WorkStatus{StatusOpen, StatusStopped, StatusClosed} {
-		got := Work{Status: status, Wait: WaitUser, WaitReason: "which database?"}.Normalize()
-		if got.Wait != WaitNone || got.WaitReason != "" {
-			t.Errorf("%s kept wait %q/%q", status, got.Wait, got.WaitReason)
+		got := Work{Status: status, Wait: WaitChild}.Normalize()
+		if got.Wait != WaitNone {
+			t.Errorf("%s kept wait %q", status, got.Wait)
 		}
 	}
 }
@@ -2054,14 +1987,10 @@ func TestLiveStatusSetters_NoopLeavesTheRecordUntouched(t *testing.T) {
 	s := newTestStore(t)
 	story := createStory(t, s, "S")
 	startWork(t, s, story.ID)
-	if err := s.SetWait(context.Background(), story.ID, WaitUser, "which database?"); err != nil {
-		t.Fatalf("SetWait: %v", err)
-	}
+	waitOnChild(t, s, story.ID)
 	before := getWork(t, s, story.ID)
 
-	if err := s.SetWait(context.Background(), story.ID, WaitUser, "which database?"); err != nil {
-		t.Fatalf("repeated SetWait: %v", err)
-	}
+	setChildWait(t, s, story.ID)
 
 	if got := getWork(t, s, story.ID); got != before {
 		t.Errorf("record = %+v, want it unchanged from %+v", got, before)

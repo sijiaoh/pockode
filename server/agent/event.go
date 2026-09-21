@@ -1,28 +1,43 @@
 package agent
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"time"
+)
 
 // EventType defines the type of agent event.
 type EventType string
 
 const (
-	EventTypeText               EventType = "text"
-	EventTypeToolCall           EventType = "tool_call"
-	EventTypeToolResult         EventType = "tool_result"
-	EventTypeWarning            EventType = "warning"
-	EventTypeError              EventType = "error"
-	EventTypeDone               EventType = "done"
-	EventTypeInterrupted        EventType = "interrupted"
-	EventTypePermissionRequest  EventType = "permission_request"
-	EventTypeRequestCancelled   EventType = "request_cancelled"
+	EventTypeText              EventType = "text"
+	EventTypeToolCall          EventType = "tool_call"
+	EventTypeToolResult        EventType = "tool_result"
+	EventTypeWarning           EventType = "warning"
+	EventTypeError             EventType = "error"
+	EventTypeDone              EventType = "done"
+	EventTypeInterrupted       EventType = "interrupted"
+	EventTypePermissionRequest EventType = "permission_request"
+	EventTypeRequestCancelled  EventType = "request_cancelled"
+	// EventTypeAskUserQuestion is read, never written: it is the CLI's own
+	// blocking question, which Pockode no longer lets a CLI ask (see
+	// agent.CLIQuestionRefusal). Transcripts written before that still hold
+	// these, and fork truncation still has to recognise one left unanswered.
 	EventTypeAskUserQuestion    EventType = "ask_user_question"
 	EventTypeSystem             EventType = "system"
 	EventTypeProcessEnded       EventType = "process_ended"
 	EventTypeMessage            EventType = "message"             // User message
 	EventTypePermissionResponse EventType = "permission_response" // User permission response
-	EventTypeQuestionResponse   EventType = "question_response"   // User question response
-	EventTypeRaw                EventType = "raw"                 // Unprocessed CLI output
-	EventTypeCommandOutput      EventType = "command_output"      // Local command output (e.g., /context)
+	// EventTypeQuestionResponse is read, never written: the answer to an
+	// EventTypeAskUserQuestion, from the same transcripts. Only the *type* is read
+	// here — fork truncation needs to know such a record settles a request — and
+	// the answers it carries are the client's to draw, off the raw record. There
+	// is deliberately no field for them on EventRecord: nothing in Go reads them,
+	// and replay preserves every field a record has on disk whether this struct
+	// knows about it or not (session.stampHistorySeq round-trips through a raw
+	// field map). The shape is written down in docs/agent-event.md.
+	EventTypeQuestionResponse EventType = "question_response"
+	EventTypeRaw              EventType = "raw"            // Unprocessed CLI output
+	EventTypeCommandOutput    EventType = "command_output" // Local command output (e.g., /context)
 	// EventTypeToolActivity reports what a tool call that has not returned is
 	// doing right now. The only event Pockode broadcasts without recording;
 	// see Persisted.
@@ -30,6 +45,9 @@ const (
 	// EventTypeBackgroundWait says the turn has been parked on work that
 	// outlives the tool call that started it. See BackgroundWaitEvent.
 	EventTypeBackgroundWait EventType = "background_wait"
+	// EventTypeQuestionPosted is a question an agent handed to Pockode to ask on
+	// its behalf. See QuestionPostedEvent.
+	EventTypeQuestionPosted EventType = "question_posted"
 )
 
 // Persisted returns true for the events that belong in session history.
@@ -49,24 +67,28 @@ func (e EventType) Persisted() bool {
 }
 
 // AwaitsUserInput returns true for the events after which the agent produces
-// nothing until someone acts: the three that end a turn and the two that block
+// nothing until someone acts: the three that end a turn and the one that blocks
 // it on a person.
 //
 // - done: AI completed its response
 // - error: fatal error occurred (e.g., CLI crash)
 // - interrupted: user interrupted the AI
 // - permission_request: AI is asking for permission (user action required)
-// - ask_user_question: AI is asking a question (user action required)
+//
+// A question is deliberately not here. The only question an agent can ask now is
+// one it posts through question_post, and nothing waits for that answer — the
+// turn carries on, and the session's unanswered list holds the question after
+// the turn is over.
 //
 // It no longer decides what the turn becomes — session.ReduceTurn does, and it
-// tells these five apart because they do not all mean the same thing there. What
+// tells these four apart because they do not all mean the same thing there. What
 // is left of this predicate is the question they do share: the two callers ask
 // it to refresh the session's timestamp, and to disarm a background wait that
 // an ending has overtaken.
 func (e EventType) AwaitsUserInput() bool {
 	switch e {
 	case EventTypeDone, EventTypeError, EventTypeInterrupted,
-		EventTypePermissionRequest, EventTypeAskUserQuestion:
+		EventTypePermissionRequest:
 		return true
 	default:
 		return false
@@ -451,22 +473,30 @@ func (e PermissionRequestEvent) ToRecord() EventRecord {
 // with the process that raised it. One field for both, because "why did this
 // stop waiting for me" is one question.
 //
-// Only ReasonWorkClosed is produced today; the other two are the shapes the
-// session layer already has cases for, and the client's copy for them lands
-// with the code that fills them in.
+// Two of the four belong to a permission request and two to a posted question,
+// and nothing produces both kinds for one record: a permission request is the
+// only thing a process holds open, so it is the only thing that can run out of
+// time or die with one, while a posted question belongs to the session and can
+// only be withdrawn deliberately.
 type CancelReason string
 
 const (
-	// ReasonProcessEnded is the process that raised the prompt going away —
-	// reaped, crashed, or killed with the server.
+	// ReasonProcessEnded is the process that raised a permission request going
+	// away — reaped, crashed, or killed with the server.
 	ReasonProcessEnded CancelReason = "process_ended"
-	// ReasonTimeout is the answer lease running out (see session.LeaseAnswer).
+	// ReasonTimeout is a permission request's answer lease running out (see
+	// session.LeaseAnswer).
 	ReasonTimeout CancelReason = "timeout"
 	// ReasonWorkClosed is the work above the session having been closed. Nobody
 	// is coming back to answer, so the prompt is withdrawn rather than left
-	// pending forever — and unlike the other two this one is a fact about the
-	// work layer, which is why the work engine is what produces it.
+	// pending forever — and unlike the first two this one is a fact about the
+	// work layer, which is why the work layer is what produces it.
 	ReasonWorkClosed CancelReason = "work_closed"
+	// ReasonStepDone is the step the question was asked during having been
+	// completed. The work carries on, so this is the softer of the two work-layer
+	// reasons: the agent has moved past what it was asking about, and an answer
+	// to it would arrive for a step that is over.
+	ReasonStepDone CancelReason = "step_done"
 )
 
 type RequestCancelledEvent struct {
@@ -475,31 +505,155 @@ type RequestCancelledEvent struct {
 	// it no longer needs an answer and did not say why, and inventing one would
 	// be worse than saying nothing.
 	Reason CancelReason
+	// At is when the withdrawal happened, and is only set for the posted
+	// questions Pockode withdraws itself (the question_cancel tool, a work
+	// closing). A cancellation forwarded from a CLI leaves it zero: the CLI does
+	// not timestamp them, and the record would then be claiming the moment
+	// Pockode happened to parse the frame. Same job as
+	// QuestionAnswer.AnsweredAt — it is what a later attempt to act on the
+	// question is refused with.
+	At time.Time
 }
 
 func (RequestCancelledEvent) EventType() EventType { return EventTypeRequestCancelled }
 func (RequestCancelledEvent) isAgentEvent()        {}
 
 func (e RequestCancelledEvent) ToRecord() EventRecord {
-	return EventRecord{Type: e.EventType(), RequestID: e.RequestID, Reason: e.Reason}
+	return EventRecord{Type: e.EventType(), RequestID: e.RequestID, Reason: e.Reason, ResolvedAt: optionalTime(e.At)}
 }
 
-type AskUserQuestionEvent struct {
+// QuestionPostedEvent is one question an agent asked through the question_post
+// tool, recorded at the moment it was asked.
+//
+// One question per record, and therefore one request id per question: an answer
+// names a question, and so does a refusal to answer one, so a record covering
+// three questions leaves "I will not answer the second" with no subject. Older
+// transcripts hold ask_user_question records carrying several at once — those came
+// from the CLI's own blocking prompt, and the client draws each of their questions
+// as a card of this shape, sharing the one request id they were asked under.
+//
+// It is the immutable half of a posted question. That it is still unanswered is
+// not in here and must never be: that is state, it changes, and it lives on the
+// session's turn (session.PendingQuestion).
+//
+// Written by the server rather than parsed out of a CLI's stream, so it never
+// reaches session.ReduceTurn through process.turnInputFor — the turn signal is
+// applied by whoever wrote the record.
+type QuestionPostedEvent struct {
 	RequestID string
-	ToolUseID string
-	Questions []AskUserQuestion
+	Question  AskUserQuestion
+	AskedAt   time.Time
 }
 
-func (AskUserQuestionEvent) EventType() EventType { return EventTypeAskUserQuestion }
-func (AskUserQuestionEvent) isAgentEvent()        {}
+func (QuestionPostedEvent) EventType() EventType { return EventTypeQuestionPosted }
+func (QuestionPostedEvent) isAgentEvent()        {}
 
-func (e AskUserQuestionEvent) ToRecord() EventRecord {
+func (e QuestionPostedEvent) ToRecord() EventRecord {
 	return EventRecord{
 		Type:      e.EventType(),
 		RequestID: e.RequestID,
-		ToolUseID: e.ToolUseID,
-		Questions: e.Questions,
+		// A one-element list rather than a field of its own, so that a client
+		// draws a posted question with the same code it draws the CLI's own.
+		Questions: []AskUserQuestion{e.Question},
+		AskedAt:   optionalTime(e.AskedAt),
 	}
+}
+
+// QuestionAnswer is one question answered — or deliberately not answered — by
+// the message that carries it (MessageEvent.Answering).
+//
+// The message *is* the answer record: there is no second record per question,
+// because a second one would be a second account of the same act, and the two
+// could disagree about a question answered while the transcript was being
+// written.
+//
+// Header and Question are copied in rather than resolved from the question's
+// own record. A client renders the bubble from this alone, and the record that
+// asked may be thousands of messages back — outside every page it will ever
+// load — so a bubble that had to find it would be a bubble that sometimes says
+// nothing.
+type QuestionAnswer struct {
+	RequestID string `json:"request_id"`
+	Header    string `json:"header,omitempty"`
+	Question  string `json:"question,omitempty"`
+	// Answers are option labels the question itself offered, and only ever
+	// those. Empty when the user answered in their own words, and when
+	// Declined.
+	Answers []string `json:"answers,omitempty"`
+	// Text is what the user wrote themselves — the whole answer to a question
+	// that offered no options, or the "Other" beside ones it did.
+	//
+	// Kept apart from Answers rather than appended to it so that the agent can
+	// tell the two apart. An option label is the agent's own word handed back;
+	// this is the user's. Putting them in one list would let a string the agent
+	// never offered read as one it did, which is the one thing the label check
+	// in chat.validateAnswer exists to prevent.
+	Text string `json:"text,omitempty"`
+	// Declined says the user chose not to answer this question. It is an answer
+	// in the sense that matters — the agent is told, and stops waiting — which
+	// is why it travels with the ones that are.
+	Declined bool `json:"declined,omitempty"`
+	// Note is what the user added beside a decline. Optional and free text.
+	Note string `json:"note,omitempty"`
+	// ResolvedBy says who gave this answer.
+	//
+	// It used to be derivable and no longer is. While the only answer was a
+	// person's, the record type *was* the answer — an entry like this one meant
+	// the user, and a request_cancelled record meant the agent that asked — and
+	// that inference is what the question_answer tool broke: an agent can now
+	// answer another agent's question, and the record it writes is this one.
+	//
+	// Absent on records written before the tool existed, which were all the
+	// user's; every record written now sets it, including the user's own. The
+	// legacy reading is a rule about old transcripts, not a default worth
+	// leaning on twice.
+	ResolvedBy *QuestionResolver `json:"resolved_by,omitempty"`
+	// AnsweredAt is when this was sent. Recorded per entry rather than per
+	// message because it is the only timestamp a question's fate has: an
+	// EventRecord carries no clock, and "answered by the user at 14:02" is what
+	// a later attempt to answer the same question is refused with.
+	//
+	// Always set, so no `omitempty` to be misread: it would do nothing for a
+	// struct anyway, and claiming otherwise is how the two fields on
+	// EventRecord went wrong.
+	AnsweredAt time.Time `json:"answered_at"`
+}
+
+// ResolverKind says which kind of answerer a QuestionResolver names.
+type ResolverKind string
+
+const (
+	// ResolverUser is a person answering in the chat.
+	ResolverUser ResolverKind = "user"
+	// ResolverAgent is another agent answering through the question_answer
+	// tool. It is never the agent that asked: answering your own question would
+	// record an answer nobody gave, and the tool refuses it.
+	ResolverAgent ResolverKind = "agent"
+)
+
+// QuestionResolver names who answered a question (QuestionAnswer.ResolvedBy).
+//
+// WorkID and Title are the *answering* work, and they are copied in for the
+// same reason QuestionAnswer copies the header and the question: the reader is
+// a bubble in someone else's transcript, and the work that answered is not one
+// it can look up. They are empty for a user, and also for an agent running in a
+// session no work owns — a plain chat can answer too, and has no title to give.
+type QuestionResolver struct {
+	Kind   ResolverKind `json:"kind"`
+	WorkID string       `json:"work_id,omitempty"`
+	Title  string       `json:"title,omitempty"`
+}
+
+// UserResolver is who a question answered in the chat was answered by.
+func UserResolver() QuestionResolver { return QuestionResolver{Kind: ResolverUser} }
+
+// optionalTime is how a moment reaches an EventRecord: the zero time means the
+// event carried none, and an absent field is the honest way to record that.
+func optionalTime(at time.Time) *time.Time {
+	if at.IsZero() {
+		return nil
+	}
+	return &at
 }
 
 type SystemEvent struct {
@@ -557,6 +711,16 @@ const (
 	// than typed by the user. The work engine is the current producer; other
 	// system sources may emit these in the future.
 	MessageOriginSystem MessageOrigin = "system"
+	// MessageOriginAgent marks a message another agent put into this session:
+	// today, an answer to a posted question given through question_answer.
+	//
+	// It is its own origin rather than either of the other two because it is
+	// neither. Drawn as a user bubble it would claim the person said something
+	// they did not; folded into the system line it would read as Pockode's own
+	// annotation, and the answer would lose the one fact that matters about it.
+	// Who exactly answered is on the answer itself (QuestionAnswer.ResolvedBy),
+	// which is where a reader of the *record* needs it.
+	MessageOriginAgent MessageOrigin = "agent"
 )
 
 // StepInfo is a 1-indexed step position carried by a system message's summary.
@@ -602,6 +766,11 @@ type MessageEvent struct {
 	Origin  MessageOrigin
 	Subtype string
 	Meta    *MessageMeta
+	// Answering are the posted questions this message answers, if any. The
+	// content still carries the answers in prose — that is what the agent reads
+	// — and this is the structured copy a client draws the bubble from, so a
+	// bubble never has to parse the prose back apart.
+	Answering []QuestionAnswer
 }
 
 func (MessageEvent) EventType() EventType { return EventTypeMessage }
@@ -609,11 +778,12 @@ func (MessageEvent) isAgentEvent()        {}
 
 func (e MessageEvent) ToRecord() EventRecord {
 	return EventRecord{
-		Type:    e.EventType(),
-		Content: e.Content,
-		Origin:  e.Origin,
-		Subtype: e.Subtype,
-		Meta:    e.Meta,
+		Type:      e.EventType(),
+		Content:   e.Content,
+		Origin:    e.Origin,
+		Subtype:   e.Subtype,
+		Meta:      e.Meta,
+		Answering: e.Answering,
 	}
 }
 
@@ -631,23 +801,6 @@ func (e PermissionResponseEvent) ToRecord() EventRecord {
 		Type:      e.EventType(),
 		RequestID: e.RequestID,
 		Choice:    e.Choice,
-	}
-}
-
-// QuestionResponseEvent is for history replay only, not sent as RPC notification.
-type QuestionResponseEvent struct {
-	RequestID string
-	Answers   map[string]string // nil = cancelled
-}
-
-func (QuestionResponseEvent) EventType() EventType { return EventTypeQuestionResponse }
-func (QuestionResponseEvent) isAgentEvent()        {}
-
-func (e QuestionResponseEvent) ToRecord() EventRecord {
-	return EventRecord{
-		Type:      e.EventType(),
-		RequestID: e.RequestID,
-		Answers:   e.Answers,
 	}
 }
 

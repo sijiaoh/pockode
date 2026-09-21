@@ -539,13 +539,13 @@ noticed. One representation with a test on it is the only thing that ends that.
      paste the expected side of its diff. Do not edit by hand. -->
 
 ```text
-51 controls render text, state no height of their own and carry no touch-target.
+49 controls render text, state no height of their own and carry no touch-target.
 
 27 state their own font size, so the height below is exact: 16–40px.
-24 inherit it, so the height below is an upper bound — the ancestor that
+22 inherit it, so the height below is an upper bound — the ancestor that
   sets it may well set a smaller one: 24–48px.
 
-11 are under the 36px fine-pointer floor.
+9 are under the 36px fine-pointer floor.
 6 reach the 44px coarse floor, 0 of them on a read height.
 0 state type this scan cannot read, listed as 0px and `unread`.
 
@@ -554,7 +554,6 @@ noticed. One representation with a test on it is the only thing that ends that.
   20px  exact  web/src/components/Worktree/WorktreeCreateSheet.tsx
   24px  bound  web/src/components/Settings/sections/AppearanceSections.tsx
   28px  bound  web/src/components/Chat/MessageItem.tsx
-  32px  bound  web/src/components/Chat/AskUserQuestionItem.tsx ×2
   32px  bound  web/src/components/Chat/MessageItem.tsx ×3
   32px  bound  web/src/components/ui/ContentView.tsx
   36px  exact  packages/shared/src/components/ConfirmDialog.tsx ×2
@@ -563,9 +562,9 @@ noticed. One representation with a test on it is the only thing that ends that.
   36px  exact  web/src/components/Files/UploadConflictDialog.tsx ×3
   36px  exact  web/src/components/Settings/SettingsNav.tsx
   36px  exact  web/src/extensions/ExampleExtension/chatUI/CustomEmptyState.tsx
-  40px  bound  web/src/components/Chat/AskUserQuestionItem.tsx
   40px  bound  web/src/components/Chat/ForkOriginBanner.tsx
   40px  bound  web/src/components/Chat/MessageItem.tsx ×4
+  40px  bound  web/src/components/Chat/QuestionRecordItem.tsx
   40px  bound  web/src/components/Chat/TaskItem.tsx
   40px  bound  web/src/components/Worktree/WorktreeSwitcher.tsx
   40px  bound  web/src/components/common/SidebarListItem.tsx
@@ -619,10 +618,9 @@ counterexample to this one.
 The block above is the whole list. What the shortest of them *are*, since a file
 name does not say what a control is for:
 
-- **`Chat/MessageItem`** and **`Chat/AskUserQuestionItem`** — Allow, Always
-  Allow and Deny on a permission request; Cancel and Submit on a question; the
-  Details link out to a work item. Answering the agent is the most consequential
-  thing either screen does, and none of these clears the fine floor.
+- **`Chat/MessageItem`** — Allow, Always Allow and Deny on a permission request,
+  and the Details link out to a work item. Deciding for the agent is the most
+  consequential thing that screen does, and none of these clears the fine floor.
 - **`Project/WorkDetailOverlay`** — the link up to the parent work, under the
   heading of a task. The header's Back button on that same screen goes to the
   same place and is already 44 (`onBack={() => onOpenWorkDetail(parent.id)}`,
@@ -742,7 +740,10 @@ it is the next batch rather than an open question.
 Written down so the next reader does not grade it again.
 
 - **Batch 2 — R0, the chat transcript.** `MessageItem`'s Deny, Always Allow and
-  Allow; `AskUserQuestionItem`'s Cancel and Submit. All R0 (b).
+  Allow. All R0 (b). The question card's Cancel and Submit were in this batch and
+  are out of it: answering happens in the answer sheet now, whose own controls
+  clear the floor, and the card that replaced it holds no form at all
+  ([answering-ui.md](answering-ui.md)).
 - **Batch 3 — R1, text targets centred in a tall row.** `AgentRoleListOverlay`,
   `MessageItem`'s Details link, `ContentView`'s path button. They share a
   *structural* cause — a 44px row using `items-center` to centre a 20px text

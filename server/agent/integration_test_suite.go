@@ -19,30 +19,20 @@ import (
 // fails on latency rather than on behaviour.
 const integrationTimeout = 120 * time.Second
 
-// IntegrationTestOptions configures which tests to skip.
+// IntegrationTestOptions carries the few behaviours the suite cannot require of
+// every CLI.
 type IntegrationTestOptions struct {
-	SkipEvents []EventType
-
 	// DenyEndsInterrupted requires a denied permission to end the turn with an
 	// interrupted event rather than a plain done. Opt-in because only some CLIs
 	// report the denial as an abort.
 	DenyEndsInterrupted bool
 }
 
-func shouldSkip(opts IntegrationTestOptions, eventType EventType) bool {
-	for _, skip := range opts.SkipEvents {
-		if skip == eventType {
-			return true
-		}
-	}
-	return false
-}
-
 // RunIntegrationTests runs the full integration test suite for any Agent implementation.
 // Tests run sequentially to avoid overloading the system with too many Claude CLI processes.
 func RunIntegrationTests(t *testing.T, newAgent func() Agent, opts IntegrationTestOptions) {
 	t.Run("Chat", func(t *testing.T) {
-		runChatTests(t, newAgent, opts)
+		runChatTests(t, newAgent)
 	})
 	t.Run("PermissionAllow", func(t *testing.T) {
 		testPermissionAllow(t, newAgent())
@@ -53,11 +43,8 @@ func RunIntegrationTests(t *testing.T, newAgent func() Agent, opts IntegrationTe
 	t.Run("PermissionAlwaysAllow", func(t *testing.T) {
 		testPermissionAlwaysAllow(t, newAgent())
 	})
-	t.Run("AskUserQuestionFlow", func(t *testing.T) {
-		if shouldSkip(opts, EventTypeAskUserQuestion) {
-			t.Skip("skipped by IntegrationTestOptions")
-		}
-		testAskUserQuestionFlow(t, newAgent())
+	t.Run("CLIQuestionNeverReachesTheUser", func(t *testing.T) {
+		testCLIQuestionNeverReachesTheUser(t, newAgent())
 	})
 	t.Run("MultiTurn", func(t *testing.T) {
 		testMultiTurn(t, newAgent())
@@ -242,7 +229,7 @@ func staticPrompt(prompt string) func(*testing.T) string {
 	return func(*testing.T) string { return prompt }
 }
 
-func runChatTests(t *testing.T, newAgent func() Agent, opts IntegrationTestOptions) {
+func runChatTests(t *testing.T, newAgent func() Agent) {
 	cases := []chatCase{
 		{
 			name:       "TextEvent",
@@ -267,11 +254,6 @@ func runChatTests(t *testing.T, newAgent func() Agent, opts IntegrationTestOptio
 			expectType: EventTypePermissionRequest,
 		},
 		{
-			name:       "AskUserQuestionEvent",
-			prompt:     staticPrompt("Use AskUserQuestion to ask if I like bread. Two options: Yes and No."),
-			expectType: EventTypeAskUserQuestion,
-		},
-		{
 			name:       "ToolCallEvent/yolo",
 			prompt:     staticPrompt("Run this exact bash command: echo hi"),
 			expectType: EventTypeToolCall,
@@ -283,19 +265,10 @@ func runChatTests(t *testing.T, newAgent func() Agent, opts IntegrationTestOptio
 			expectType: EventTypeToolResult,
 			mode:       session.ModeYolo,
 		},
-		{
-			name:       "AskUserQuestionEvent/yolo",
-			prompt:     staticPrompt("Use AskUserQuestion to ask if I like bread. Two options: Yes and No."),
-			expectType: EventTypeAskUserQuestion,
-			mode:       session.ModeYolo,
-		},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if shouldSkip(opts, tc.expectType) {
-				t.Skip("skipped by IntegrationTestOptions")
-			}
 			runChatScenario(t, newAgent(), tc)
 		})
 	}
@@ -340,19 +313,6 @@ func runChatScenario(t *testing.T, a Agent, tc chatCase) {
 			case PermissionRequestEvent:
 				if err := sess.SendPermissionResponse(permissionDataFromEvent(e), PermissionAllow); err != nil {
 					t.Fatalf("failed to send permission response: %v", err)
-				}
-			case AskUserQuestionEvent:
-				if len(e.Questions) > 0 && len(e.Questions[0].Options) > 0 {
-					answers := map[string]string{
-						e.Questions[0].Question: e.Questions[0].Options[0].Label,
-					}
-					data := QuestionRequestData{
-						RequestID: e.RequestID,
-						ToolUseID: e.ToolUseID,
-					}
-					if err := sess.SendQuestionResponse(data, answers); err != nil {
-						t.Fatalf("failed to send question response: %v", err)
-					}
 				}
 			case ErrorEvent:
 				t.Fatalf("error event: %s", e.Error)
@@ -565,9 +525,21 @@ func testPermissionAlwaysAllow(t *testing.T, a Agent) {
 	}
 }
 
-// testAskUserQuestionFlow verifies the complete AskUserQuestion flow:
-// Question → Answer → Text response mentioning the answer → Done
-func testAskUserQuestionFlow(t *testing.T, a Agent) {
+// testCLIQuestionNeverReachesTheUser is the contract every CLI Pockode drives
+// has to keep: its own ask-the-user tool does not put a question in front of a
+// Pockode user, and the turn does not hang waiting for one.
+//
+// It lives in the shared suite rather than per-CLI because the two halves are
+// reached differently and the guarantee is the same. Claude's tool is disabled
+// at launch, so the model never calls it; Codex has no such switch, so its
+// request_user_input is answered with the refusal. Either way the session must
+// come out the same: no question event, and a turn that ends on its own.
+//
+// It is also the drift check. A CLI upgrade that re-enables the tool, renames
+// the flag, or changes the request's shape fails here — rather than in a user's
+// session, where the failure is a turn stuck forever on an answer nobody can
+// give.
+func testCLIQuestionNeverReachesTheUser(t *testing.T, a Agent) {
 	ctx, cancel := context.WithTimeout(context.Background(), integrationTimeout)
 	defer cancel()
 
@@ -577,14 +549,15 @@ func testAskUserQuestionFlow(t *testing.T, a Agent) {
 	}
 	defer sess.Close()
 
-	prompt := `Use the AskUserQuestion tool to ask me what programming language I prefer: Python or Go. Provide exactly two options.`
+	// Named tools rather than "ask me": the point is to push the model at the
+	// built-in one, and each CLI only has the name of its own.
+	prompt := "Ask me whether I prefer Python or Go, with exactly those two options. " +
+		"Use your built-in AskUserQuestion or request_user_input tool to ask. Then stop."
 	if err := sess.SendMessage(prompt); err != nil {
 		t.Fatalf("SendMessage failed: %v", err)
 	}
 
-	var questionEvents, doneEvents, errorEvents int
-	var selectedAnswer string
-	var responseText strings.Builder
+	var refusalWarnings, dones int
 
 eventLoop:
 	for {
@@ -594,83 +567,46 @@ eventLoop:
 				break eventLoop
 			}
 			requireFields(t, event)
+			t.Logf("event: %s", event.EventType())
+
 			switch e := event.(type) {
-			case AskUserQuestionEvent:
-				questionEvents++
-				t.Logf("ask_user_question: request_id=%s, questions=%d", e.RequestID, len(e.Questions))
-
-				if len(e.Questions) == 0 {
-					t.Fatalf("expected at least 1 question, got 0")
+			case WarningEvent:
+				if e.Code == CLIQuestionRefusedCode {
+					refusalWarnings++
+					t.Logf("refused a CLI question: %s", e.Message)
 				}
-				if len(e.Questions) != 1 {
-					t.Errorf("expected 1 question, got %d", len(e.Questions))
-				}
-
-				q := e.Questions[0]
-				t.Logf("  question: %s (options=%d, multiSelect=%v)", q.Question, len(q.Options), q.MultiSelect)
-
-				if len(q.Options) != 2 {
-					t.Errorf("expected 2 options, got %d", len(q.Options))
-				}
-
-				optionLabels := make(map[string]bool)
-				for _, opt := range q.Options {
-					optionLabels[opt.Label] = true
-					t.Logf("    option: %s - %s", opt.Label, truncate(opt.Description, 50))
-				}
-				if !optionLabels["Python"] {
-					t.Error("expected option 'Python' not found")
-				}
-				if !optionLabels["Go"] {
-					t.Error("expected option 'Go' not found")
-				}
-
-				selectedAnswer = q.Options[0].Label
-				answers := map[string]string{q.Question: selectedAnswer}
-
-				data := QuestionRequestData{
-					RequestID: e.RequestID,
-					ToolUseID: e.ToolUseID,
-				}
-				if err := sess.SendQuestionResponse(data, answers); err != nil {
-					t.Errorf("failed to send question response: %v", err)
-				}
-
-			case TextEvent:
-				responseText.WriteString(e.Content)
-				t.Logf("text: %s", truncate(e.Content, 100))
-
-			case DoneEvent:
-				doneEvents++
-				break eventLoop
-
 			case ErrorEvent:
-				errorEvents++
 				t.Errorf("error event: %s", e.Error)
-
+			case DoneEvent:
+				dones++
+				break eventLoop
 			case PermissionRequestEvent:
-				t.Errorf("unexpected permission_request for tool: %s", e.ToolName)
+				// Nothing here needs a tool, but a model that reaches for one
+				// must not leave the turn blocked on an unanswered prompt.
+				if err := sess.SendPermissionResponse(permissionDataFromEvent(e), PermissionAllow); err != nil {
+					t.Fatalf("failed to send permission response: %v", err)
+				}
 			}
 		case <-ctx.Done():
-			t.Fatal("timeout waiting for events")
+			// The failure this whole test exists to catch: a question was asked,
+			// nobody could answer it, and the turn never ended.
+			t.Fatal("the turn never ended; a CLI question is waiting for an answer that cannot come")
 		}
 	}
 
-	t.Logf("summary: question_events=%d, done_events=%d, error_events=%d", questionEvents, doneEvents, errorEvents)
-
-	if questionEvents != 1 {
-		t.Errorf("expected exactly 1 ask_user_question event, got %d (retries indicate response format error)", questionEvents)
+	if dones != 1 {
+		t.Errorf("expected the turn to end once, got %d done events", dones)
 	}
-	if doneEvents != 1 {
-		t.Errorf("expected 1 done event, got %d", doneEvents)
-	}
-	if errorEvents > 0 {
-		t.Errorf("expected 0 error events, got %d", errorEvents)
-	}
-	response := responseText.String()
-	if !strings.Contains(strings.ToLower(response), strings.ToLower(selectedAnswer)) {
-		t.Errorf("expected response to mention selected answer %q, got: %s", selectedAnswer, truncate(response, 200))
-	}
+	// "No question reached the user" is no longer asserted here because it is no
+	// longer possible to assert: there is no event a CLI question could arrive
+	// as. That half of the guarantee is the compiler's now, and this test keeps
+	// the half a type cannot hold — that the turn ends by itself when the model
+	// is pushed straight at the tool.
+	//
+	// The refusal count is not asserted as >0 either: the tool being invisible to
+	// the model is the better outcome and produces no warning at all. What
+	// matters is that a refusal, when it happens, is not silent.
+	t.Logf("summary: refusal warnings=%d, done=%d", refusalWarnings, dones)
 }
 
 // testMultiTurn verifies that a second message continues the same conversation.
@@ -870,19 +806,6 @@ func requireFields(t *testing.T, event AgentEvent) {
 		requireNonEmpty(t, "RequestID", e.RequestID)
 		requireNonEmpty(t, "ToolName", e.ToolName)
 		requireNonEmpty(t, "ToolUseID", e.ToolUseID)
-	case AskUserQuestionEvent:
-		requireNonEmpty(t, "RequestID", e.RequestID)
-		if len(e.Questions) == 0 {
-			t.Error("missing required field: Questions")
-		}
-		for i, q := range e.Questions {
-			if q.Question == "" {
-				t.Errorf("Questions[%d]: missing required field: Question", i)
-			}
-			if len(q.Options) == 0 {
-				t.Errorf("Questions[%d]: missing required field: Options", i)
-			}
-		}
 	case ErrorEvent:
 		requireNonEmpty(t, "Error", e.Error)
 	}

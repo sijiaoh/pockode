@@ -45,16 +45,19 @@ type Store interface {
 	// session loses its lease. Allowed from any live status.
 	Stop(ctx context.Context, id string) error
 
-	// SetWait records what an active work is waiting for, in the agent's own
-	// words. WaitNone clears it. The work stays active either way — a wait says
-	// "do not nudge me", not "stop driving me".
-	SetWait(ctx context.Context, id string, wait WorkWait, reason string) error
-
 	// Activate says a person or a child just handed this work something to go on:
 	// it becomes active, its wait is cleared and its nudge allowance starts over.
 	// SessionID is left untouched. Rejected only for open (never started; use
 	// Start) and closed (use Reopen).
 	Activate(ctx context.Context, id string) error
+
+	// ClearNudges gives an active work its full nudge allowance back and changes
+	// nothing else. It is the narrower half of Activate, for the one event that
+	// is the user's attention without being a transition: an answer to a posted
+	// question. The work was already active — the agent posted the question and
+	// carried on — and a wait on its subtasks is not something the answer ended,
+	// so neither may be touched.
+	ClearNudges(ctx context.Context, id string) error
 
 	// SetChildWait records a wait on child work, and refuses when no child of
 	// the work is active — reporting whether it set one rather than returning an
@@ -62,14 +65,13 @@ type Store interface {
 	// terms. Errors are the ordinary ones: a missing work, or a status that
 	// admits no progress at all.
 	//
-	// Separate from SetWait, and taken under the store lock, for the reason
-	// ClearChildWaitIfStranded is: checking first and setting afterwards leaves
-	// a window in which the last active child stops, the engine looks at a
-	// parent that is not waiting yet and rightly does nothing, and the wait then
-	// lands with nothing left that could ever end it. That is the exact failure
-	// both methods exist to prevent, so neither may be assembled from a read and
-	// a write.
-	SetChildWait(ctx context.Context, id string, reason string) (set bool, err error)
+	// Taken under the store lock, for the reason ClearChildWaitIfStranded is:
+	// checking first and setting afterwards leaves a window in which the last
+	// active child stops, the engine looks at a parent that is not waiting yet
+	// and rightly does nothing, and the wait then lands with nothing left that
+	// could ever end it. That is the exact failure both methods exist to
+	// prevent, so neither may be assembled from a read and a write.
+	SetChildWait(ctx context.Context, id string) (set bool, err error)
 
 	// ClearChildWaitIfStranded ends a wait on child work when no child of the
 	// work is active, and reports whether this call was the one that ended it.
@@ -472,18 +474,17 @@ func (s *FileStore) setLiveStatus(id string, action string, mutate func(*Work) b
 // clearDrive drops everything that only means something while the engine is
 // driving this work: what it was waiting for, and how many nudges it has had.
 //
-// Every transition into or out of active goes through it, with two deliberate
-// exceptions — SetWait and SetChildWait, whose whole purpose is to *state* a
-// wait and which therefore assign it instead. So no path leaves a stale wait
-// behind for the next one to trip over: each one either clears the wait or says
-// what it is.
+// Every transition into or out of active goes through it, with one deliberate
+// exception — SetChildWait, whose whole purpose is to *state* a wait and which
+// therefore assigns it instead. So no path leaves a stale wait behind for the
+// next one to trip over: each one either clears the wait or says what it is.
 //
-// Those two leave the nudge count where it is, and nothing can spend it there: a
+// That one leaves the nudge count where it is, and nothing can spend it there: a
 // work with a wait is never nudged (Engine.HandleTurnEnded returns on it), and
 // every other way a wait ends comes back through clearDrive, which zeroes the
 // count in the same breath.
 func (w *Work) clearDrive() {
-	w.Wait, w.WaitReason, w.NudgeCount = WaitNone, "", 0
+	w.Wait, w.NudgeCount = WaitNone, 0
 }
 
 func (s *FileStore) Stop(_ context.Context, id string) error {
@@ -500,22 +501,6 @@ func (s *FileStore) Stop(_ context.Context, id string) error {
 	})
 }
 
-func (s *FileStore) SetWait(_ context.Context, id string, wait WorkWait, reason string) error {
-	return s.setLiveStatus(id, "set the wait of", func(w *Work) bool {
-		// Declaring a wait is the agent reporting on a work it is running, so it
-		// also says the work is active — the same reason StepDone does.
-		if w.Status == StatusActive && w.Wait == wait && w.WaitReason == reason {
-			return false
-		}
-		w.Status = StatusActive
-		w.Wait, w.WaitReason = wait, reason
-		if wait == WaitNone {
-			w.WaitReason = ""
-		}
-		return true
-	})
-}
-
 func (s *FileStore) Activate(_ context.Context, id string) error {
 	return s.setLiveStatus(id, "activate", func(w *Work) bool {
 		if w.Status == StatusActive && w.Wait == WaitNone && w.NudgeCount == 0 {
@@ -523,6 +508,16 @@ func (s *FileStore) Activate(_ context.Context, id string) error {
 		}
 		w.Status = StatusActive
 		w.clearDrive()
+		return true
+	})
+}
+
+func (s *FileStore) ClearNudges(_ context.Context, id string) error {
+	return s.setLiveStatus(id, "clear the nudge count of", func(w *Work) bool {
+		if w.Status != StatusActive || w.NudgeCount == 0 {
+			return false
+		}
+		w.NudgeCount = 0
 		return true
 	})
 }
@@ -536,7 +531,7 @@ func (s *FileStore) Activate(_ context.Context, id string) error {
 // HasActiveChild is the condition, and it is written once for both. "Is there
 // still something that could close" is one question; a wait set on one answer
 // and cleared on another would be a wait that argues with itself.
-func (s *FileStore) SetChildWait(_ context.Context, id string, reason string) (bool, error) {
+func (s *FileStore) SetChildWait(_ context.Context, id string) (bool, error) {
 	s.worksMu.Lock()
 
 	idx := s.findIndex(id)
@@ -555,17 +550,17 @@ func (s *FileStore) SetChildWait(_ context.Context, id string, reason string) (b
 
 	// Already exactly this wait: a repeat is not news, and re-announcing an
 	// unchanged record would wake every subscriber with a change event that
-	// carries none. Same no-op rule as SetWait.
-	if w := s.works[idx]; w.Status == StatusActive && w.Wait == WaitChild && w.WaitReason == reason {
+	// carries none.
+	if w := s.works[idx]; w.Status == StatusActive && w.Wait == WaitChild {
 		s.worksMu.Unlock()
 		return true, nil
 	}
 
 	next := s.works[idx]
 	// Declaring a wait is the agent reporting on a work it is running, so it
-	// also says the work is active — the same reason SetWait does it.
+	// also says the work is active — the same reason StepDone does.
 	next.Status = StatusActive
-	next.Wait, next.WaitReason = WaitChild, reason
+	next.Wait = WaitChild
 	next.UpdatedAt = time.Now()
 
 	prev := s.snapshotWorks()

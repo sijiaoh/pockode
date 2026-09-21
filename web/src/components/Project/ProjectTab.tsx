@@ -1,5 +1,5 @@
 import { ListChecks, UserCog } from "lucide-react";
-import { needsUser } from "../../lib/activity";
+import { needsAttention } from "../../lib/activity";
 import { useWorkStore } from "../../lib/workStore";
 import { useSidebarRefresh } from "../Layout";
 import { ActivityDot } from "../ui";
@@ -20,7 +20,7 @@ export default function ProjectTab({
 	// worktree this client has never loaded — a dot that lit only for the open
 	// worktree would be a dot that means two different things.
 	const hasNeedsUser = useWorkStore((s) =>
-		s.works.some((w) => needsUser(w.activity)),
+		s.works.some((w) => needsAttention(w.activity, w.unanswered_questions)),
 	);
 
 	return (

@@ -37,38 +37,76 @@ func New() *Agent {
 	return &Agent{}
 }
 
-// ensureMCPConfig writes the MCP config file and returns its path.
-// The config points to the current binary with the "mcp" subcommand.
-func ensureMCPConfig(dataDir string) (string, error) {
+// mcpConfigPrefix starts the name of a process run's MCP config, written in the
+// session's own data dir next to the rest of its per-session agent state.
+const mcpConfigPrefix = "mcp-config-"
+
+// writeMCPConfig writes the MCP config for one process run and returns its path
+// together with the func that removes it.
+//
+// Two properties, both load-bearing:
+//
+// It carries the identity of the session being spawned (see mcp.Caller), so it
+// cannot be one file shared by every session: that file would hand whichever
+// session started last to all of them.
+//
+// Its name is unique per process run, not per session, because a replaced
+// process unwinds asynchronously — the successor is spawned while the
+// predecessor's goroutine is still running its cleanup (see
+// process.Manager.dropProcess). Sharing one name per session would let that
+// cleanup delete the file the successor's CLI has not read yet, and a CLI that
+// finds no config comes up with no work_* tools at all, silently.
+//
+// A hard crash leaves the file behind; it is removed with the session's
+// directory when the session is deleted.
+func writeMCPConfig(opts agent.StartOptions) (string, func(), error) {
 	exe, err := os.Executable()
 	if err != nil {
-		return "", fmt.Errorf("resolve executable path: %w", err)
+		return "", nil, fmt.Errorf("resolve executable path: %w", err)
+	}
+
+	args := []string{"mcp", "--data-dir", opts.MCPDir()}
+	if opts.SessionID != "" {
+		args = append(args, "--session-id", opts.SessionID)
+	}
+	// Empty is the main worktree, which the proxy assumes when not told.
+	if opts.Worktree != "" {
+		args = append(args, "--worktree", opts.Worktree)
 	}
 
 	config := map[string]interface{}{
 		"mcpServers": map[string]interface{}{
 			"pockode": map[string]interface{}{
 				"command": exe,
-				"args":    []string{"mcp", "--data-dir", dataDir},
+				"args":    args,
 			},
 		},
 	}
 
 	data, err := json.MarshalIndent(config, "", "  ")
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 
-	// Written atomically because every session start rewrites this shared file:
-	// a plain write truncates it, and a CLI that another session is spawning at
-	// that instant would read the truncated JSON and lose its MCP tools.
-	configPath := filepath.Join(dataDir, "mcp-config.json")
+	// generateRequestID is just a random hex string; here it is what makes the
+	// name unique to this run.
+	runID := generateRequestID()
+	configPath := filepath.Join(sessionDir(opts.DataDir, opts.SessionID), mcpConfigPrefix+runID+".json")
 	if err := filestore.WriteFileAtomic(configPath, data, 0644); err != nil {
-		return "", err
+		return "", nil, err
 	}
 
-	return configPath, nil
+	return configPath, func() {
+		if err := os.Remove(configPath); err != nil && !os.IsNotExist(err) {
+			slog.Warn("failed to remove mcp config", "path", configPath, "error", err)
+		}
+	}, nil
 }
+
+// disallowedAskTool is the CLI's own ask-the-user tool, by the name the CLI
+// knows it under — it is both the value --disallowedTools takes and the
+// tool_name a can_use_tool request carries, which is why there is one constant.
+const disallowedAskTool = "AskUserQuestion"
 
 // buildArgs assembles every CLI flag that follows from the session's own state.
 // The MCP config flag is added by Start instead: it needs a file written to
@@ -81,8 +119,18 @@ func buildArgs(opts agent.StartOptions, launch claudeLaunch) []string {
 	}
 
 	// Always use permission-prompt-tool so we receive control_request events
-	// (including AskUserQuestion) regardless of mode.
+	// regardless of mode. It is also what turns AskUserQuestion on, which is why
+	// the flag below has to turn it back off.
 	args = append(args, "--permission-prompt-tool", "stdio")
+
+	// Keep the CLI's own ask-the-user tool out of the model's hands: it holds the
+	// turn open waiting for an answer Pockode has nowhere to collect, and
+	// question_post is the whole of what it would have been for. Measured on
+	// claude 2.1.263: --permission-prompt-tool puts AskUserQuestion in the
+	// session's tool list, and this removes it again — the model is not told it
+	// exists rather than being refused after asking. parseControlRequest still
+	// refuses one, for the CLI version where this stops working.
+	args = append(args, "--disallowedTools", disallowedAskTool)
 	if opts.Mode == session.ModeYolo {
 		args = append(args, "--permission-mode", "bypassPermissions")
 	}
@@ -128,17 +176,20 @@ func (a *Agent) Start(ctx context.Context, opts agent.StartOptions) (agent.Sessi
 	// Add MCP config for work management tools (unless disabled for testing).
 	// The proxy must reach the single running server, whose server.json lives in
 	// the main data dir — not this session's per-worktree DataDir.
+	removeMCPConfig := func() {}
 	if !opts.DisableMCP {
-		mcpConfigPath, err := ensureMCPConfig(opts.MCPDir())
+		mcpConfigPath, remove, err := writeMCPConfig(opts)
 		if err != nil {
 			cancel()
 			return nil, fmt.Errorf("failed to create MCP config: %w", err)
 		}
+		removeMCPConfig = remove
 		claudeArgs = append(claudeArgs, "--mcp-config", mcpConfigPath)
 	}
 
 	proc, err := agent.StartProcess(procCtx, log, Binary, claudeArgs, opts.WorkDir)
 	if err != nil {
+		removeMCPConfig()
 		cancel()
 		return nil, fmt.Errorf("failed to start claude: %w", err)
 	}
@@ -190,6 +241,9 @@ func (a *Agent) Start(ctx context.Context, opts agent.StartOptions) (agent.Sessi
 		}()
 		defer close(events)
 		defer cancel()
+		// The config is only good for this process run: it names the session the
+		// spawn was for, and the CLI has already read it.
+		defer removeMCPConfig()
 
 		// Drain stderr before anything can block on the event channel: the
 		// warning below waits for a consumer, and a CLI that fills the stderr
@@ -206,7 +260,7 @@ func (a *Agent) Start(ctx context.Context, opts agent.StartOptions) (agent.Sessi
 			lossStore.clear(log)
 		}
 
-		streamOutput(procCtx, log, proc.Stdout, events, pendingRequests, resumeState, backgroundTasks, usage, sess.declineControlRequest, attachmentStore)
+		streamOutput(procCtx, log, proc.Stdout, events, pendingRequests, resumeState, backgroundTasks, usage, sess.refusals(), attachmentStore)
 		agent.WaitForProcess(procCtx, log, proc, stderrCh, events)
 		resumeState.processExited(procCtx.Err() != nil)
 
@@ -310,77 +364,6 @@ func (s *cliSession) SendPermissionResponse(data agent.PermissionRequestData, ch
 	return s.sendControlResponse(data.RequestID, content)
 }
 
-// SendQuestionResponse sends answers to user questions.
-// If answers is nil, sends a cancel (deny) response.
-//
-// The Claude SDK's AskUserQuestion tool expects the updatedInput to retain
-// the original input fields (notably `questions`) and add `answers`. Sending
-// just `{"answers": ...}` causes the SDK to crash internally with
-// "Cannot destructure property 'answers' from null or undefined value" and
-// then retry the tool call — re-asking the same question.
-func (s *cliSession) SendQuestionResponse(data agent.QuestionRequestData, answers map[string]string) error {
-	// Always consume the stored input — even on cancel — so the map doesn't leak.
-	originalInput := s.takePendingQuestionInput(data.RequestID)
-
-	var content controlResponseContent
-
-	if answers == nil {
-		content = controlResponseContent{
-			Behavior:  "deny",
-			Message:   "User cancelled the question",
-			Interrupt: true,
-			ToolUseID: data.ToolUseID,
-		}
-	} else {
-		updatedInput, err := buildQuestionUpdatedInput(originalInput, answers)
-		if err != nil {
-			return err
-		}
-		content = controlResponseContent{
-			Behavior:     "allow",
-			ToolUseID:    data.ToolUseID,
-			UpdatedInput: updatedInput,
-		}
-	}
-
-	return s.sendControlResponse(data.RequestID, content)
-}
-
-// takePendingQuestionInput removes and returns the original input stored for
-// the given question request. Returns nil if no input was stored (e.g. after a
-// control_cancel_request raced ahead of the user's response).
-func (s *cliSession) takePendingQuestionInput(requestID string) json.RawMessage {
-	v, ok := s.pendingRequests.LoadAndDelete(requestID)
-	if !ok {
-		return nil
-	}
-	return v.(pendingQuestionMarker).Input
-}
-
-// buildQuestionUpdatedInput merges user-provided answers into the original
-// AskUserQuestion tool input. The SDK requires the full original input
-// (including `questions`) plus the `answers` field; missing fields cause the
-// tool to fail and re-ask.
-func buildQuestionUpdatedInput(originalInput json.RawMessage, answers map[string]string) (json.RawMessage, error) {
-	var merged map[string]interface{}
-	if len(originalInput) > 0 {
-		if err := json.Unmarshal(originalInput, &merged); err != nil {
-			return nil, fmt.Errorf("failed to parse pending question input: %w", err)
-		}
-	}
-	// Unmarshaling a JSON `null` (or missing input) leaves merged nil; ensure
-	// we have a writable map before assigning the answers field.
-	if merged == nil {
-		merged = map[string]interface{}{}
-	}
-	merged["answers"] = answers
-	data, err := json.Marshal(merged)
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal updated input: %w", err)
-	}
-	return data, nil
-}
-
 func (s *cliSession) sendControlResponse(requestID string, content controlResponseContent) error {
 	response := controlResponse{
 		Type: "control_response",
@@ -398,6 +381,37 @@ func (s *cliSession) sendControlResponse(requestID string, content controlRespon
 
 	s.log.Debug("sending control response")
 	return s.writeStdin(data)
+}
+
+// refusals hands parsing the two ways this session says no.
+func (s *cliSession) refusals() controlRefusals {
+	return controlRefusals{decline: s.declineControlRequest, denyTool: s.denyTool}
+}
+
+// denyTool refuses a tool the model asked to use, without interrupting.
+//
+// Interrupt is deliberately absent, and it is not a detail. Measured on claude
+// 2.1.263: with interrupt true the CLI throws `message` away and substitutes its
+// own "STOP what you are doing and wait for the user" text, then aborts the turn
+// (result subtype error_during_execution). With it false, `message` reaches the
+// model verbatim as an is_error tool_result and the turn carries on — which is
+// the whole point here, since the message is an instruction to ask a different
+// way. SendPermissionResponse keeps the interrupting form: a person pressing
+// Deny means stop.
+func (s *cliSession) denyTool(requestID, toolUseID, message string) {
+	if err := s.sendControlResponse(requestID, toolDenial(toolUseID, message)); err != nil {
+		s.log.Error("failed to deny a tool the CLI asked to use", "error", err, "requestId", requestID)
+	}
+}
+
+// toolDenial is the response content for that deny, split out so a test can
+// assert on the shape the CLI is actually sent.
+func toolDenial(toolUseID, message string) controlResponseContent {
+	return controlResponseContent{
+		Behavior:  "deny",
+		Message:   message,
+		ToolUseID: toolUseID,
+	}
 }
 
 // declineControlRequest answers a control request we cannot service with a
@@ -427,13 +441,6 @@ func (s *cliSession) declineControlRequest(requestID, message string) {
 // interruptMarker is stored in pendingRequests to identify interrupt responses.
 // Needed because control_response only contains request_id, not the request type.
 type interruptMarker struct{}
-
-// pendingQuestionMarker is stored in pendingRequests so we can echo the
-// original AskUserQuestion tool input back when responding. The SDK requires
-// the full original input plus an `answers` field.
-type pendingQuestionMarker struct {
-	Input json.RawMessage
-}
 
 // SendInterrupt sends an interrupt signal to stop the current task.
 func (s *cliSession) SendInterrupt() error {
@@ -496,7 +503,7 @@ func (s *cliSession) writeStdin(data []byte) error {
 	return err
 }
 
-func streamOutput(ctx context.Context, log *slog.Logger, stdout io.Reader, events chan<- agent.AgentEvent, pendingRequests *sync.Map, resumeState *claudeResumeStateManager, backgroundTasks *backgroundTaskTracker, usage *usageObserver, decline declineFunc, store attachments.Store) {
+func streamOutput(ctx context.Context, log *slog.Logger, stdout io.Reader, events chan<- agent.AgentEvent, pendingRequests *sync.Map, resumeState *claudeResumeStateManager, backgroundTasks *backgroundTaskTracker, usage *usageObserver, refusals controlRefusals, store attachments.Store) {
 	scanner := agent.NewLineScanner(stdout, agent.MaxLineBytes)
 
 	for scanner.Scan() {
@@ -506,7 +513,7 @@ func streamOutput(ctx context.Context, log *slog.Logger, stdout io.Reader, event
 		}
 
 		if scanner.Truncated() {
-			for _, ev := range oversizedLineEvents(log, line, scanner.Len(), decline) {
+			for _, ev := range oversizedLineEvents(log, line, scanner.Len(), refusals.decline) {
 				select {
 				case events <- ev:
 				case <-ctx.Done():
@@ -534,7 +541,7 @@ func streamOutput(ctx context.Context, log *slog.Logger, stdout io.Reader, event
 		}
 		usage.observe(line, event)
 
-		for _, ev := range parseLine(log, line, event, pendingRequests, backgroundTasks, decline, store) {
+		for _, ev := range parseLine(log, line, event, pendingRequests, backgroundTasks, refusals, store) {
 			select {
 			case events <- ev:
 			case <-ctx.Done():
@@ -720,7 +727,13 @@ func (m *claudeResumeStateManager) path() string {
 // sessions no manager owns yet: a fork reads the state of the session it came
 // from and seeds the state of the one being created.
 func resumeStatePath(dataDir, sessionID string) string {
-	return filepath.Join(dataDir, "sessions", sessionID, resumeStateFile)
+	return filepath.Join(sessionDir(dataDir, sessionID), resumeStateFile)
+}
+
+// sessionDir is where everything this agent keeps per session lives, under the
+// data dir that owns the session.
+func sessionDir(dataDir, sessionID string) string {
+	return filepath.Join(dataDir, "sessions", sessionID)
 }
 
 // resolve decides how to launch the CLI, based on the recovery stage left
@@ -949,7 +962,7 @@ type controlResponsePayload struct {
 }
 
 type controlResponseContent struct {
-	// Permission/Question response fields
+	// Permission response fields
 	Behavior           string                   `json:"behavior,omitempty"`
 	Message            string                   `json:"message,omitempty"`
 	Interrupt          bool                     `json:"interrupt,omitempty"`
@@ -1019,10 +1032,23 @@ type cliContentBlock struct {
 // protocol-level error. Injected so parsing stays independent of the session.
 type declineFunc func(requestID, message string)
 
+// denyToolFunc answers a can_use_tool request with "no" — the request was
+// served, and the answer is that the tool may not run. Distinct from
+// declineFunc: an error says Pockode could not handle the request at all, a deny
+// is a handled request the model gets a tool error for and carries on from.
+type denyToolFunc func(requestID, toolUseID, message string)
+
+// controlRefusals is the pair of ways Pockode says no to a control request,
+// carried together because parseControlRequest picks between them per request.
+type controlRefusals struct {
+	decline  declineFunc
+	denyTool denyToolFunc
+}
+
 // parseLine converts one already-decoded stream-json envelope into agent events.
 // line is retained for the cases (assistant, result, control_*) that decode a
 // superset struct.
-func parseLine(log *slog.Logger, line []byte, event cliEvent, pendingRequests *sync.Map, backgroundTasks *backgroundTaskTracker, decline declineFunc, store attachments.Store) []agent.AgentEvent {
+func parseLine(log *slog.Logger, line []byte, event cliEvent, pendingRequests *sync.Map, backgroundTasks *backgroundTaskTracker, refusals controlRefusals, store attachments.Store) []agent.AgentEvent {
 	switch event.Type {
 	case "assistant":
 		return parseAssistantEvent(log, line, event, backgroundTasks)
@@ -1036,11 +1062,11 @@ func parseLine(log *slog.Logger, line []byte, event cliEvent, pendingRequests *s
 	case "system":
 		return parseSystemEvent(log, line, event, backgroundTasks)
 	case "control_request":
-		return parseControlRequest(log, line, pendingRequests, decline)
+		return parseControlRequest(log, line, refusals)
 	case "control_response":
 		return parseControlResponse(log, line, pendingRequests)
 	case "control_cancel_request":
-		return parseControlCancelRequest(log, line, pendingRequests)
+		return parseControlCancelRequest(log, line)
 	case "progress", "tool_progress", "tool_use_summary", "rate_limit_event",
 		"auth_status", "prompt_suggestion", "command_lifecycle":
 		// Telemetry and host-control frames that carry nothing for the transcript;
@@ -1143,7 +1169,7 @@ var unsupportedControlSubtypes = map[string]string{
 	"host_auth_token_refresh": "host auth token refresh",
 }
 
-func parseControlRequest(log *slog.Logger, line []byte, pendingRequests *sync.Map, decline declineFunc) []agent.AgentEvent {
+func parseControlRequest(log *slog.Logger, line []byte, refusals controlRefusals) []agent.AgentEvent {
 	var req controlRequest
 	if err := json.Unmarshal(line, &req); err != nil {
 		// The line is valid JSON — streamOutput decoded it already — so this is a
@@ -1157,40 +1183,23 @@ func parseControlRequest(log *slog.Logger, line []byte, pendingRequests *sync.Ma
 			log.Warn("cannot answer an unreadable control request, the turn may hang")
 			return nil
 		}
-		return declineUnservable(log, decline, partial.RequestID, "", "a request Pockode could not read")
+		return declineUnservable(log, refusals.decline, partial.RequestID, "", "a request Pockode could not read")
 	}
 
 	if req.Request == nil {
-		return declineUnservable(log, decline, req.RequestID, "", "a request with no request data")
+		return declineUnservable(log, refusals.decline, req.RequestID, "", "a request with no request data")
 	}
 
 	switch req.Request.Subtype {
 	case "can_use_tool":
-		// AskUserQuestion is sent as can_use_tool with tool_name="AskUserQuestion"
-		if req.Request.ToolName == "AskUserQuestion" {
-			var input struct {
-				Questions []agent.AskUserQuestion `json:"questions"`
-			}
-			if err := json.Unmarshal(req.Request.Input, &input); err != nil {
-				// A question we cannot render is still a question the CLI waits
-				// on, and the shape of `input` is exactly the kind of thing a new
-				// CLI changes. Declining costs the user this one question;
-				// returning nil costs them the conversation.
-				log.Warn("failed to parse AskUserQuestion input from CLI", "error", err)
-				return declineUnservable(log, decline, req.RequestID, req.Request.Subtype, "a question Pockode could not read")
-			}
-
-			// Remember the original input so SendQuestionResponse can echo it
-			// back merged with user answers — the SDK rejects a response that
-			// drops the original `questions` field.
-			pendingRequests.Store(req.RequestID, pendingQuestionMarker{Input: req.Request.Input})
-
-			log.Info("AskUserQuestion received", "requestId", req.RequestID)
-			return []agent.AgentEvent{agent.AskUserQuestionEvent{
-				RequestID: req.RequestID,
-				ToolUseID: req.Request.ToolUseID,
-				Questions: input.Questions,
-			}}
+		// AskUserQuestion is sent as can_use_tool with tool_name="AskUserQuestion".
+		// buildArgs disables the tool, so reaching here means a CLI that no longer
+		// honours that flag — refuse it rather than let the turn hang on an answer
+		// that is never coming.
+		if req.Request.ToolName == disallowedAskTool {
+			log.Warn("refusing the CLI's own ask-the-user tool", "requestId", req.RequestID)
+			refusals.denyTool(req.RequestID, req.Request.ToolUseID, agent.CLIQuestionRefusal)
+			return []agent.AgentEvent{agent.CLIQuestionRefusedWarning("Claude")}
 		}
 
 		log.Info("tool permission request", "tool", req.Request.ToolName, "requestId", req.RequestID)
@@ -1207,7 +1216,7 @@ func parseControlRequest(log *slog.Logger, line []byte, pendingRequests *sync.Ma
 		if !named {
 			capability = req.Request.Subtype
 		}
-		return declineUnservable(log, decline, req.RequestID, req.Request.Subtype, capability)
+		return declineUnservable(log, refusals.decline, req.RequestID, req.Request.Subtype, capability)
 	}
 }
 
@@ -1267,17 +1276,15 @@ type controlCancelRequest struct {
 	RequestID string `json:"request_id"`
 }
 
-func parseControlCancelRequest(log *slog.Logger, line []byte, pendingRequests *sync.Map) []agent.AgentEvent {
+// Nothing of the CLI's is held pending any more, so there is no map to clean up
+// here: pendingRequests holds only the interrupts Pockode itself sent, under ids
+// from its own namespace, which a cancel from the CLI can never name.
+func parseControlCancelRequest(log *slog.Logger, line []byte) []agent.AgentEvent {
 	var req controlCancelRequest
 	if err := json.Unmarshal(line, &req); err != nil {
 		log.Warn("failed to parse control cancel request from CLI", "error", err)
 		return nil
 	}
-
-	// Drop any stored question input — the SDK no longer expects a response.
-	// Cancel only matches request IDs the CLI sent us; interrupt IDs are
-	// generated on our side and live in a disjoint namespace.
-	pendingRequests.Delete(req.RequestID)
 
 	log.Debug("control cancel request received", "requestId", req.RequestID)
 	return []agent.AgentEvent{agent.RequestCancelledEvent{RequestID: req.RequestID}}

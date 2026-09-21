@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { type Activity, normalizeActivity } from "../lib/activity";
 import { useWSStore } from "../lib/wsStore";
+import type { PendingQuestion } from "../types/message";
 import type {
 	Comment,
 	Work,
@@ -32,6 +33,12 @@ export function useWorkDetailSubscription(workId: string) {
 	// no closed work (docs/list-paging-ui.md §2.2).
 	const [children, setChildren] = useState<WorkListItem[]>([]);
 	const [parent, setParent] = useState<WorkListItem | null>(null);
+	// The questions this item's session is waiting on. Beside the work for the
+	// same reason `activity` is: they belong to the session, which the stored
+	// record knows nothing about (docs/answering-ui.md §1).
+	const [pendingQuestions, setPendingQuestions] = useState<PendingQuestion[]>(
+		[],
+	);
 	const [loading, setLoading] = useState(true);
 	const [error, setError] = useState<string | null>(null);
 
@@ -46,6 +53,7 @@ export function useWorkDetailSubscription(workId: string) {
 			setUsage(null);
 			setChildren([]);
 			setParent(null);
+			setPendingQuestions([]);
 			setLoading(true);
 			setError(null);
 		}
@@ -65,6 +73,7 @@ export function useWorkDetailSubscription(workId: string) {
 			setUsage(params.usage);
 			setChildren(params.children ?? []);
 			setParent(params.parent ?? null);
+			setPendingQuestions(params.pending_questions ?? []);
 		},
 		[],
 	);
@@ -76,6 +85,7 @@ export function useWorkDetailSubscription(workId: string) {
 		setUsage(initial.usage);
 		setChildren(initial.children ?? []);
 		setParent(initial.parent ?? null);
+		setPendingQuestions(initial.pending_questions ?? []);
 		setLoading(false);
 		setError(null);
 	}, []);
@@ -87,6 +97,7 @@ export function useWorkDetailSubscription(workId: string) {
 		setUsage(null);
 		setChildren([]);
 		setParent(null);
+		setPendingQuestions([]);
 		setLoading(true);
 		setError(null);
 	}, []);
@@ -117,9 +128,20 @@ export function useWorkDetailSubscription(workId: string) {
 			usage,
 			children,
 			parent,
+			pendingQuestions,
 			loading,
 			error,
 		}),
-		[work, activity, comments, usage, children, parent, loading, error],
+		[
+			work,
+			activity,
+			comments,
+			usage,
+			children,
+			parent,
+			pendingQuestions,
+			loading,
+			error,
+		],
 	);
 }

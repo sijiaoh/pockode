@@ -171,7 +171,7 @@ func TestReduceTurnPermissionBlocks(t *testing.T) {
 func TestReduceTurnAnswerResumesTheTurn(t *testing.T) {
 	state := drive(TurnState{},
 		in(SignalPrompt, 0),
-		inReq(SignalQuestionRaised, "req-1", 1),
+		inReq(SignalPermissionRaised, "req-1", 1),
 	)
 
 	got := ReduceTurn(state, inReq(SignalAnswered, "req-1", 2))
@@ -255,7 +255,7 @@ func TestReduceTurnRepeatedRequestIDIsOneBlocker(t *testing.T) {
 func TestReduceTurnPromptAfterTheTurnEndedStillBlocks(t *testing.T) {
 	state := drive(TurnState{}, in(SignalPrompt, 0), in(SignalDone, 1))
 
-	got := ReduceTurn(state, inReq(SignalQuestionRaised, "req-1", 2))
+	got := ReduceTurn(state, inReq(SignalPermissionRaised, "req-1", 2))
 
 	if got.State.Phase != PhaseBlocked {
 		t.Fatalf("phase = %q, want blocked", got.State.Phase)
@@ -394,7 +394,7 @@ func TestReduceTurnOneBackgroundBlockerPerSession(t *testing.T) {
 func TestReduceTurnProcessDeathExpiresBlockersAndAbortsTheTurn(t *testing.T) {
 	state := drive(TurnState{},
 		in(SignalPrompt, 0),
-		inReq(SignalQuestionRaised, "req-1", 1),
+		inReq(SignalPermissionRaised, "req-1", 1),
 		in(SignalBackgroundParked, 2),
 	)
 
@@ -459,7 +459,7 @@ func TestReduceTurnProcessDeathExpiresAPromptWithNoTurn(t *testing.T) {
 func TestReduceTurnPromptOvertakesAnUnansweredBlocker(t *testing.T) {
 	state := drive(TurnState{},
 		in(SignalPrompt, 0),
-		inReq(SignalQuestionRaised, "req-1", 1),
+		inReq(SignalPermissionRaised, "req-1", 1),
 	)
 
 	got := ReduceTurn(state, in(SignalPrompt, 2))
@@ -474,10 +474,38 @@ func TestReduceTurnPromptOvertakesAnUnansweredBlocker(t *testing.T) {
 
 // --- Normalization ---
 
+// A session index written before the `question` blocker was removed can still
+// hold one, and a blocker kind this build does not know must not survive the load
+// — a turn reporting a blocker nothing can clear is a session stuck forever.
+// Nothing special is needed for it: the restart repair clears *every* blocker,
+// whatever its kind, because none of them outlives its process.
+func TestNormalizeTurnClearsABlockerKindThisBuildNoLongerHas(t *testing.T) {
+	stored := TurnState{
+		Phase: PhaseBlocked,
+		Open:  true,
+		Blockers: []Blocker{
+			{Kind: BlockerKind("question"), RequestID: "old-1", RaisedAt: at(1)},
+		},
+		Since: at(1),
+	}
+
+	got := NormalizeTurn(stored, at(10))
+
+	if len(got.State.Blockers) != 0 {
+		t.Fatalf("blockers = %+v, want the stored one gone", got.State.Blockers)
+	}
+	if got.State.Phase != PhaseIdle {
+		t.Fatalf("phase = %q, want idle", got.State.Phase)
+	}
+	if len(got.Expired) != 1 || got.Expired[0].RequestID != "old-1" {
+		t.Fatalf("expired = %+v, want it reported so the card is settled", got.Expired)
+	}
+}
+
 func TestNormalizeTurnAbortsWhatTheRestartTookAway(t *testing.T) {
 	stored := drive(TurnState{},
 		in(SignalPrompt, 0),
-		inReq(SignalQuestionRaised, "req-1", 1),
+		inReq(SignalPermissionRaised, "req-1", 1),
 	)
 
 	got := NormalizeTurn(stored, at(10))
@@ -489,7 +517,7 @@ func TestNormalizeTurnAbortsWhatTheRestartTookAway(t *testing.T) {
 		t.Fatalf("outcome = %q, want aborted", got.State.LastOutcome)
 	}
 	if len(got.Expired) != 1 {
-		t.Fatalf("expired = %+v, want the question nobody can answer now", got.Expired)
+		t.Fatalf("expired = %+v, want the prompt nobody can answer now", got.Expired)
 	}
 	if !got.Changed {
 		t.Fatal("the stored state was wrong and has been repaired")

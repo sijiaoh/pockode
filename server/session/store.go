@@ -398,7 +398,13 @@ func (s *FileStore) CreateFork(ctx context.Context, sessionID string, fork ForkS
 		// because only the process that raised one takes its answer. A fork that
 		// inherited a running phase would sit there waiting for an ending no
 		// process owes it.
-		Turn: NewTurnState(now),
+		//
+		// Unanswered questions are the one thing that does cross, and for the
+		// opposite reason: they belong to the session rather than to a process,
+		// and the ones that cross are exactly the ones still open *at the cut* —
+		// read out of the copied records by the caller, not off the source's
+		// live state, which has moved on since (ForkSpec.Unanswered).
+		Turn: NewTurnState(now).withUnanswered(fork.Unanswered),
 	}
 
 	if err := s.insertLocked(session); err != nil {

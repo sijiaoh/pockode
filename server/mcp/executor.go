@@ -9,6 +9,8 @@ import (
 	"strings"
 
 	"github.com/pockode/server/agentrole"
+	"github.com/pockode/server/chat"
+	"github.com/pockode/server/session"
 	"github.com/pockode/server/settings"
 	"github.com/pockode/server/work"
 	"github.com/pockode/server/worktree"
@@ -42,7 +44,13 @@ func isUserError(err error) bool {
 	}
 	return errors.Is(err, work.ErrWorkNotFound) ||
 		errors.Is(err, work.ErrInvalidWork) ||
-		errors.Is(err, work.ErrCommentNotFound)
+		errors.Is(err, work.ErrCommentNotFound) ||
+		// A question the agent asked about is gone, or it asked one nobody
+		// could have answered. Both are things an agent gets wrong in the
+		// ordinary course of running, not faults of this server.
+		errors.Is(err, chat.ErrQuestionNotPending) ||
+		errors.Is(err, chat.ErrAnswerShape) ||
+		errors.Is(err, chat.ErrSessionNotFound)
 }
 
 // SettingsStore is the slice of the settings store the executor needs to keep
@@ -61,6 +69,22 @@ type WorktreeProvisioner interface {
 	EnsureWorktree(name string) (created bool, setupHookSkip *worktree.SetupHookSkip, err error)
 }
 
+// WorkEngine is the part of work.Engine the question tools reach: what happens
+// to a work item when its agent posts a question, and when somebody answers
+// one. Satisfied by *work.Engine.
+//
+// It is here rather than reached through work.Operations because neither of
+// these is a command anybody issued against a work item — they are things that
+// happened to its session, which is what the engine's inputs are.
+type WorkEngine interface {
+	// HandleQuestionPosted passes a subtask's question up to the story above
+	// it, if it has one and that story is running.
+	HandleQuestionPosted(sessionID string, q session.PendingQuestion)
+	// HandleAgentAnswer gives the answered work its nudge allowance back, as a
+	// user's answer does.
+	HandleAgentAnswer(sessionID string)
+}
+
 // Executor runs MCP tool calls against the live server stores. It is the
 // in-process counterpart to the stdio proxy: the proxy (running inside the AI
 // CLI subprocess) forwards each tool call over HTTP, and the Executor performs
@@ -72,6 +96,16 @@ type Executor struct {
 	workOps        *work.Operations
 	settingsStore  SettingsStore
 	worktrees      WorktreeProvisioner
+	sessions       Sessions
+	workEngine     WorkEngine
+}
+
+// SetWorkEngine installs what the question tools report to. Left unset, a
+// question posted reaches no parent story and an answer resets no nudge
+// allowance — which is what the narrow tests in this package want; the server
+// always sets it.
+func (e *Executor) SetWorkEngine(engine WorkEngine) {
+	e.workEngine = engine
 }
 
 // NewExecutor creates an Executor. workOps performs every work transition and
@@ -80,15 +114,20 @@ type Executor struct {
 // whenever any work_* tool is reachable. settingsStore keeps the default agent
 // role in sync on reset; a nil settingsStore skips that update. worktrees
 // prepares the worktree work_start names, and like workOps is required
-// whenever the work_* tools are reachable. Nils are tolerated only where the
-// corresponding tools are unreachable (e.g. narrow tests).
-func NewExecutor(workStore work.Store, agentRoleStore agentrole.Store, workOps *work.Operations, settingsStore SettingsStore, worktrees WorktreeProvisioner) *Executor {
-	return &Executor{workStore: workStore, agentRoleStore: agentRoleStore, workOps: workOps, settingsStore: settingsStore, worktrees: worktrees}
+// whenever the work_* tools are reachable. sessions is the session layer the
+// question_* tools act on, and is required whenever those are reachable. Nils
+// are tolerated only where the corresponding tools are unreachable (e.g. narrow
+// tests).
+func NewExecutor(workStore work.Store, agentRoleStore agentrole.Store, workOps *work.Operations, settingsStore SettingsStore, worktrees WorktreeProvisioner, sessions Sessions) *Executor {
+	return &Executor{workStore: workStore, agentRoleStore: agentRoleStore, workOps: workOps, settingsStore: settingsStore, worktrees: worktrees, sessions: sessions}
 }
 
 // Execute runs the named tool and returns its text result. It returns a
 // wrapped ErrUnknownTool when the name is not recognized.
-func (e *Executor) Execute(ctx context.Context, name string, args json.RawMessage) (string, error) {
+//
+// caller is the session the call came from; it is passed per call rather than
+// held on the Executor because one Executor serves every session at once.
+func (e *Executor) Execute(ctx context.Context, caller Caller, name string, args json.RawMessage) (string, error) {
 	switch name {
 	case "work_list":
 		return e.workList(args)
@@ -122,6 +161,12 @@ func (e *Executor) Execute(ctx context.Context, name string, args json.RawMessag
 		return e.agentRoleGet(args)
 	case "agent_role_reset_defaults":
 		return e.agentRoleResetDefaults(ctx)
+	case "question_post":
+		return e.questionPost(ctx, caller, args)
+	case "question_cancel":
+		return e.questionCancel(ctx, caller, args)
+	case "question_answer":
+		return e.questionAnswer(ctx, caller, args)
 	default:
 		return "", fmt.Errorf("%w: %s", ErrUnknownTool, name)
 	}
@@ -161,6 +206,12 @@ type workSummary struct {
 type workDetail struct {
 	workSummary
 	Body string `json:"body,omitempty"`
+	// PendingQuestions are the questions this work's session has asked and
+	// nobody has answered. They are on the detail rather than the summary for
+	// the same reason Body is — they are the item's own content, not a fact a
+	// list of other people's work needs — and they are here at all so an agent
+	// reading a work it did not run can see what it is waiting on.
+	PendingQuestions []session.PendingQuestion `json:"pending_questions,omitempty"`
 }
 
 // newWorkSummary narrows a work item to its summary. Both tools go through here
@@ -312,13 +363,31 @@ func (e *Executor) workGet(args json.RawMessage) (string, error) {
 	}
 
 	b, err := json.Marshal(workDetail{
-		workSummary: newWorkSummary(w),
-		Body:        w.Body,
+		workSummary:      newWorkSummary(w),
+		Body:             w.Body,
+		PendingQuestions: e.pendingQuestions(w),
 	})
 	if err != nil {
 		return "", fmt.Errorf("marshal work item: %w", err)
 	}
 	return string(b), nil
+}
+
+// pendingQuestions reads the unanswered questions of the session a work runs
+// in, or none when it has no session, no session layer to ask, or a worktree
+// that cannot be read. A work item whose questions cannot be listed is still
+// worth returning: none of the rest of the detail depends on them.
+func (e *Executor) pendingQuestions(w work.Work) []session.PendingQuestion {
+	if w.SessionID == "" || e.sessions == nil {
+		return nil
+	}
+	turns, err := e.sessions.SessionTurns(w.Worktree)
+	if err != nil {
+		slog.Warn("could not read session turns for work_get",
+			"workId", w.ID, "worktree", w.Worktree, "error", err)
+		return nil
+	}
+	return turns[w.SessionID].Unanswered
 }
 
 func (e *Executor) workDelete(ctx context.Context, args json.RawMessage) (string, error) {
@@ -403,20 +472,20 @@ func (e *Executor) assignWorktree(ctx context.Context, id, name string) (string,
 	return note, nil
 }
 
-func (e *Executor) workNeedsInput(ctx context.Context, args json.RawMessage) (string, error) {
-	var params struct {
-		ID     string `json:"id"`
-		Reason string `json:"reason"`
-	}
-	if err := json.Unmarshal(args, &params); err != nil {
-		return "", userErrorf("invalid arguments: %w", err)
-	}
-
-	if err := e.workOps.NeedsInput(ctx, params.ID, params.Reason); err != nil {
-		return "", err
-	}
-
-	return fmt.Sprintf("Work %s is now waiting for user input: %s", params.ID, params.Reason), nil
+// workNeedsInput is retired and answers with the way to do what it did.
+//
+// It parked the work on a free-text reason shown on its detail page, which was
+// the worst version of a question: no structure, no record in the transcript,
+// and nowhere to answer it from. question_post is the whole of what replaced it,
+// and it is strictly more — the agent can go on working while it waits.
+//
+// The tool is still registered so that an agent carrying the old lifecycle rules
+// in its context is told this rather than "unknown tool", and it is a user error
+// rather than a failure: nothing broke, and the next call is the right one.
+func (e *Executor) workNeedsInput(context.Context, json.RawMessage) (string, error) {
+	return "", userErrorf("work_needs_input is retired: ask the user with question_post instead. " +
+		"It returns as soon as the question is posted — you can carry on working, or end your turn without being nudged — " +
+		"and the answer arrives as a message in this chat")
 }
 
 func (e *Executor) workReopen(ctx context.Context, args json.RawMessage) (string, error) {
@@ -437,16 +506,12 @@ func (e *Executor) workReopen(ctx context.Context, args json.RawMessage) (string
 func (e *Executor) workWait(ctx context.Context, args json.RawMessage) (string, error) {
 	var params struct {
 		ID string `json:"id"`
-		// Reason is optional and free text, shown to the user on the work's
-		// detail page — the same field work_needs_input fills in, because the
-		// two are one wait with two people clearing it.
-		Reason string `json:"reason"`
 	}
 	if err := json.Unmarshal(args, &params); err != nil {
 		return "", userErrorf("invalid arguments: %w", err)
 	}
 
-	if err := e.workOps.Wait(ctx, params.ID, params.Reason); err != nil {
+	if err := e.workOps.Wait(ctx, params.ID); err != nil {
 		return "", err
 	}
 

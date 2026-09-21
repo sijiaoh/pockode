@@ -2,6 +2,7 @@ package watch
 
 import (
 	"log/slog"
+	"strings"
 	"sync"
 	"sync/atomic"
 
@@ -37,6 +38,11 @@ type WorkDetailWatcher struct {
 type sentDetail struct {
 	sentUsage    work.Usage
 	sentActivity work.Activity
+	// sentQuestions is the request ids of the pending questions last sent, in
+	// order and joined. The ids and not a count: a question answered while
+	// another is posted leaves the count where it was, and the detail lists the
+	// questions themselves, so that change has to reach the subscriber.
+	sentQuestions string
 }
 
 // detailEvent is a union of the three changes that alter a work item's detail:
@@ -64,8 +70,11 @@ type WorkDetail struct {
 	Comments []work.Comment
 	Usage    work.Usage
 	Activity work.Activity
-	Children []rpc.WorkListItem
-	Parent   *rpc.WorkListItem
+	// PendingQuestions are the questions the item's session is waiting on
+	// answers to, in full: the detail is the one surface with room for them.
+	PendingQuestions []session.PendingQuestion
+	Children         []rpc.WorkListItem
+	Parent           *rpc.WorkListItem
 }
 
 // relatives reads the rows a detail page draws besides the item itself: the
@@ -85,9 +94,9 @@ func (w *WorkDetailWatcher) relatives(item work.Work) ([]rpc.WorkListItem, *rpc.
 	for _, other := range items {
 		switch {
 		case other.ParentID == item.ID:
-			children = append(children, rpc.NewWorkListItem(other, resolver.Activity(other)))
+			children = append(children, rpc.NewWorkListItem(other, resolver.RowState(other)))
 		case item.ParentID != "" && other.ID == item.ParentID:
-			row := rpc.NewWorkListItem(other, resolver.Activity(other))
+			row := rpc.NewWorkListItem(other, resolver.RowState(other))
 			parent = &row
 		}
 	}
@@ -183,23 +192,24 @@ func (w *WorkDetailWatcher) notifyForWorkID(workID string, fromSession bool) {
 		// Judged per subscription, not per work_id: two clients can be on the same
 		// work item at different aggregations, and telling one of them must not
 		// leave the other stale.
-		if fromSession && w.usageAlreadySent(sub.ID, detail.Usage) && !w.activityMoved(sub.ID, detail.Activity) {
+		if fromSession && w.usageAlreadySent(sub.ID, detail.Usage) && !w.derivedMoved(sub.ID, detail) {
 			continue
 		}
-		w.rememberSent(sub.ID, detail.Usage, detail.Activity)
+		w.rememberSent(sub.ID, detail)
 		w.notifyDetail(sub, detail)
 	}
 }
 
 func (w *WorkDetailWatcher) notifyDetail(sub *Subscription, detail WorkDetail) {
 	n := Notification{Method: "work.detail.changed", Params: workDetailChangedParams{
-		ID:       sub.ID,
-		Work:     detail.Work,
-		Comments: detail.Comments,
-		Usage:    detail.Usage,
-		Activity: detail.Activity,
-		Children: detail.Children,
-		Parent:   detail.Parent,
+		ID:               sub.ID,
+		Work:             detail.Work,
+		Comments:         detail.Comments,
+		Usage:            detail.Usage,
+		Activity:         detail.Activity,
+		PendingQuestions: detail.PendingQuestions,
+		Children:         detail.Children,
+		Parent:           detail.Parent,
 	}}
 	if err := sub.Notifier.Notify(w.Context(), n); err != nil {
 		slog.Debug("failed to notify detail subscriber", "id", sub.ID, "error", err)
@@ -280,13 +290,15 @@ func (w *WorkDetailWatcher) buildDetail(workID string) (WorkDetail, bool) {
 		return WorkDetail{}, false
 	}
 
+	resolver := work.NewActivityResolver(w.turnSource)
 	return WorkDetail{
-		Work:     item,
-		Comments: comments,
-		Usage:    usage,
-		Activity: work.NewActivityResolver(w.turnSource).Activity(item),
-		Children: children,
-		Parent:   parent,
+		Work:             item,
+		Comments:         comments,
+		Usage:            usage,
+		Activity:         resolver.Activity(item),
+		PendingQuestions: resolver.PendingQuestions(item),
+		Children:         children,
+		Parent:           parent,
 	}, true
 }
 
@@ -299,20 +311,39 @@ func (w *WorkDetailWatcher) usageAlreadySent(subID string, usage work.Usage) boo
 	return found && sent.sentUsage.Equal(usage)
 }
 
-// activityMoved is the other half of the same question, and the reason a session
+// derivedMoved is the other half of the same question, and the reason a session
 // change is not judged on money alone: a turn starting spends nothing and is the
-// most visible thing that can happen to an open work item.
-func (w *WorkDetailWatcher) activityMoved(subID string, activity work.Activity) bool {
+// most visible thing that can happen to an open work item — and so is a question
+// appearing on it.
+func (w *WorkDetailWatcher) derivedMoved(subID string, detail WorkDetail) bool {
 	w.sentUsageMu.Lock()
 	defer w.sentUsageMu.Unlock()
 	sent, found := w.sentUsage[subID]
-	return found && sent.sentActivity != activity
+	if !found {
+		return false
+	}
+	return sent.sentActivity != detail.Activity ||
+		sent.sentQuestions != questionFingerprint(detail.PendingQuestions)
 }
 
-func (w *WorkDetailWatcher) rememberSent(subID string, usage work.Usage, activity work.Activity) {
+func (w *WorkDetailWatcher) rememberSent(subID string, detail WorkDetail) {
 	w.sentUsageMu.Lock()
 	defer w.sentUsageMu.Unlock()
-	w.sentUsage[subID] = sentDetail{sentUsage: usage, sentActivity: activity}
+	w.sentUsage[subID] = sentDetail{
+		sentUsage:     detail.Usage,
+		sentActivity:  detail.Activity,
+		sentQuestions: questionFingerprint(detail.PendingQuestions),
+	}
+}
+
+// questionFingerprint is the pending list reduced to what can change about it:
+// which questions, in what order. A question's text never changes once posted.
+func questionFingerprint(questions []session.PendingQuestion) string {
+	ids := make([]string, len(questions))
+	for i, q := range questions {
+		ids[i] = q.RequestID
+	}
+	return strings.Join(ids, "\n")
 }
 
 // Unsubscribe also forgets what that subscription was sent — otherwise the map
@@ -352,7 +383,7 @@ func (w *WorkDetailWatcher) notifySyncAll() {
 		if !ok {
 			continue
 		}
-		w.rememberSent(sub.ID, d.Usage, d.Activity)
+		w.rememberSent(sub.ID, d)
 		w.notifyDetail(sub, d)
 	}
 
@@ -396,7 +427,7 @@ func (w *WorkDetailWatcher) Subscribe(id, workID string, notifier Notifier) (Wor
 		return WorkDetail{}, err
 	}
 
-	activity := work.NewActivityResolver(w.turnSource).Activity(item)
+	resolver := work.NewActivityResolver(w.turnSource)
 
 	children, parent, err := w.relatives(item)
 	if err != nil {
@@ -404,18 +435,19 @@ func (w *WorkDetailWatcher) Subscribe(id, workID string, notifier Notifier) (Wor
 		return WorkDetail{}, err
 	}
 
-	// The reply carries both derived parts, so the subscriber already has them:
-	// a session change that moves neither is then not worth a notification.
-	w.rememberSent(id, usage, activity)
-
-	return WorkDetail{
-		Work:     item,
-		Comments: comments,
-		Usage:    usage,
-		Activity: activity,
-		Children: children,
-		Parent:   parent,
-	}, nil
+	detail := WorkDetail{
+		Work:             item,
+		Comments:         comments,
+		Usage:            usage,
+		Activity:         resolver.Activity(item),
+		PendingQuestions: resolver.PendingQuestions(item),
+		Children:         children,
+		Parent:           parent,
+	}
+	// The reply carries every derived part, so the subscriber already has them:
+	// a session change that moves none of them is then not worth a notification.
+	w.rememberSent(id, detail)
+	return detail, nil
 }
 
 type workDetailChangedParams struct {
@@ -427,6 +459,9 @@ type workDetailChangedParams struct {
 	// is not a field of the work item.
 	Usage    work.Usage    `json:"usage"`
 	Activity work.Activity `json:"activity"`
+	// PendingQuestions is the same field, and the same rule, as
+	// rpc.WorkDetailSubscribeResult.PendingQuestions.
+	PendingQuestions []session.PendingQuestion `json:"pending_questions,omitempty"`
 	// Children and Parent are the two relations the page draws, and are here
 	// rather than looked up in the work list for the reason WorkDetail gives.
 	Children []rpc.WorkListItem `json:"children"`

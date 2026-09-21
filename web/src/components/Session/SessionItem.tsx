@@ -97,6 +97,7 @@ const SessionItem = memo(function SessionItem({
 			isActive={isActive}
 			unread={session.unread}
 			activity={activity}
+			unansweredQuestions={session.unanswered_questions}
 			onSelect={() => onSelect(session.id)}
 			actions={
 				<DeleteButton

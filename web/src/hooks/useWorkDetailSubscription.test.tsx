@@ -127,11 +127,11 @@ describe("useWorkDetailSubscription", () => {
 				work: work("work-1"),
 				comments: [],
 				usage: usageOf(1_000),
-				activity: "needs_message",
+				activity: "needs_permission",
 				children: [],
 			});
 		});
-		expect(result.current.activity).toBe("needs_message");
+		expect(result.current.activity).toBe("needs_permission");
 	});
 
 	// The switch is a render apart from the new item's snapshot; what is held in

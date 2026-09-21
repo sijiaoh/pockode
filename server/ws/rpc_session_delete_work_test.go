@@ -15,7 +15,7 @@ import (
 // The stop is the engine's, reached through the session store's own deletion
 // event, so it lands a moment after the reply rather than inside the handler.
 func TestHandler_SessionDelete_StopsItsWork(t *testing.T) {
-	for _, wait := range []work.WorkWait{work.WaitUser, work.WaitChild, work.WaitNone} {
+	for _, wait := range []work.WorkWait{work.WaitChild, work.WaitNone} {
 		t.Run(string("wait="+wait), func(t *testing.T) {
 			env := newTestEnv(t, &mockAgent{})
 			workID, sessionID := startWorkWaiting(t, env, wait)

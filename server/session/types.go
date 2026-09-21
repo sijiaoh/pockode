@@ -48,8 +48,8 @@ const (
 	ModeDefault Mode = "default" // Normal mode with permission prompts
 	// Each agent gives up its own gate: Claude runs with
 	// --permission-mode bypassPermissions, Codex with approval-policy "never"
-	// and its sandbox at danger-full-access. See agent/claude/claude.go and
-	// agent/codex/codex.go buildStartConfig.
+	// and its sandbox at danger-full-access. See claude.buildArgs and
+	// codex.appSession.buildThreadParams.
 	ModeYolo Mode = "yolo"
 	// ModePlan Mode = "plan"    // Planning mode (future)
 )
@@ -172,6 +172,11 @@ type ForkSpec struct {
 	// Activated reports whether the copied history already holds agent output,
 	// which makes the fork a session that has run — see SessionMeta.Activated.
 	Activated bool
+	// Unanswered are the questions still open at the point the copy was cut,
+	// derived from the copied records themselves (agent.UnansweredQuestions).
+	// Their request ids are unchanged: the fork inherits the questions, it does
+	// not ask them again.
+	Unanswered []PendingQuestion
 }
 
 // SessionMeta holds metadata for a chat session.

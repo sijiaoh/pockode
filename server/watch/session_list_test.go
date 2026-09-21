@@ -366,7 +366,7 @@ func TestSessionListWatcher_RowCarriesTheStoredTurn(t *testing.T) {
 		Turn: session.TurnState{
 			Phase:    session.PhaseBlocked,
 			Open:     true,
-			Blockers: []session.Blocker{{Kind: session.BlockerQuestion, RequestID: "req-1", RaisedAt: raised}},
+			Blockers: []session.Blocker{{Kind: session.BlockerPermission, RequestID: "req-1", RaisedAt: raised}},
 			Since:    raised,
 		},
 	}

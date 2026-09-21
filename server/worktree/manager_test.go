@@ -2,6 +2,7 @@ package worktree
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"sync"
@@ -144,5 +145,85 @@ func TestOnWorkChange_ReachesTheSessionWatchersOfTheWorksWorktree(t *testing.T) 
 	}
 	if got := detailNotifier.calls(); got != 1 {
 		t.Errorf("notified the detail %d times, want once — a work belongs to one worktree", got)
+	}
+}
+
+// createSessionIn records a session in the on-disk index of the given worktree,
+// the way a real session start does.
+func createSessionIn(t *testing.T, m *Manager, worktree, sessionID string) {
+	t.Helper()
+	store, err := session.NewFileStore(m.dataDirFor(worktree))
+	if err != nil {
+		t.Fatalf("session store for worktree %q: %v", worktree, err)
+	}
+	if _, err := store.Create(context.Background(), sessionID, session.CreateSpec{}); err != nil {
+		t.Fatalf("create session %s: %v", sessionID, err)
+	}
+}
+
+// Sessions are stored per worktree, so anything holding a bare session id — an
+// MCP caller's identity, a record keyed by session — can only reach the store
+// that owns it through this.
+func TestResolveSessionWorktree(t *testing.T) {
+	repo := initGitRepo(t)
+	dataDir := t.TempDir()
+	registry := NewRegistry(repo, dataDir)
+	if _, _, err := registry.EnsureWorktree("feature-x"); err != nil {
+		t.Fatalf("EnsureWorktree: %v", err)
+	}
+
+	m := &Manager{registry: registry, dataDir: dataDir, worktrees: make(map[string]*Worktree)}
+	createSessionIn(t, m, "", "main-session")
+	createSessionIn(t, m, "feature-x", "feature-session")
+
+	for sessionID, want := range map[string]string{"main-session": "", "feature-session": "feature-x"} {
+		got, err := m.ResolveSessionWorktree(sessionID)
+		if err != nil {
+			t.Fatalf("ResolveSessionWorktree(%q): %v", sessionID, err)
+		}
+		if got != want {
+			t.Errorf("ResolveSessionWorktree(%q) = %q, want %q", sessionID, got, want)
+		}
+	}
+
+	if _, err := m.ResolveSessionWorktree("no-such-session"); !errors.Is(err, ErrSessionNotFound) {
+		t.Errorf("unknown session: err = %v, want ErrSessionNotFound", err)
+	}
+	// An empty id belongs to nobody; it must not resolve to the main worktree.
+	if _, err := m.ResolveSessionWorktree(""); !errors.Is(err, ErrSessionNotFound) {
+		t.Errorf("empty session id: err = %v, want ErrSessionNotFound", err)
+	}
+}
+
+// StartupTurns is what work.Engine.RecoverStartup reads, and it runs before any
+// Manager exists — so it has to answer for the main worktree and the named ones
+// alike, straight off the file, with nothing built.
+func TestStartupTurns_ReadsEveryWorktreesIndexFromDisk(t *testing.T) {
+	dataDir := t.TempDir()
+	m := &Manager{dataDir: dataDir, worktrees: make(map[string]*Worktree)}
+	createSessionIn(t, m, "", "sess-main")
+	createSessionIn(t, m, "feature-x", "sess-feature")
+
+	turns := StartupTurns{DataDir: dataDir}
+	for _, tt := range []struct{ worktree, sessionID string }{
+		{"", "sess-main"},
+		{"feature-x", "sess-feature"},
+	} {
+		got, err := turns.SessionTurns(tt.worktree)
+		if err != nil {
+			t.Fatalf("SessionTurns(%q): %v", tt.worktree, err)
+		}
+		if _, found := got[tt.sessionID]; !found {
+			t.Errorf("SessionTurns(%q) = %+v, want it to name %s", tt.worktree, got, tt.sessionID)
+		}
+	}
+
+	// A worktree with no sessions is not an error; a name that is not a
+	// directory name is, because it is about to become a path.
+	if got, err := turns.SessionTurns("nobody"); err != nil || len(got) != 0 {
+		t.Errorf("SessionTurns(\"nobody\") = %+v/%v, want empty/nil", got, err)
+	}
+	if _, err := turns.SessionTurns(filepath.Join("..", "escape")); err == nil {
+		t.Error("a name that escapes the data dir was accepted")
 	}
 }

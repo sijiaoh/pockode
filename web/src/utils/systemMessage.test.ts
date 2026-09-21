@@ -44,6 +44,17 @@ describe("workEventWording", () => {
 		).toEqual({ label: "Wait cleared", summary: "Sub task" });
 	});
 
+	// And again for a subtask's question: the story is the receiver, the subtask
+	// is what the line is about.
+	it("names the child for a subtask's question", () => {
+		expect(
+			workEventWording("child_question", {
+				title: "Parent story",
+				child: { id: "c1", title: "Sub task" },
+			}),
+		).toEqual({ label: "Subtask asked", summary: "Sub task" });
+	});
+
 	it("leaves an auto-continue's summary blank", () => {
 		expect(workEventWording("auto_continue", { title: "Ship it" })).toEqual({
 			label: "Continued",

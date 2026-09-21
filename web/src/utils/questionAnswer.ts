@@ -1,6 +1,12 @@
 import type { AskUserQuestion, QuestionOption } from "../types/message";
 
-/** A user's answer to one question, in the shape the form renders it. */
+/**
+ * A user's answer to one question, in the shape the form renders it.
+ *
+ * This module is otherwise about reading the legacy flat answer format back; this
+ * type and {@link EMPTY_SELECTION} are what `QuestionForm` speaks, and both paths
+ * end here.
+ */
 export interface QuestionSelection {
 	labels: string[];
 	/** null = the "Other" option was not used. */
@@ -12,26 +18,21 @@ export const EMPTY_SELECTION: QuestionSelection = {
 	otherText: null,
 };
 
-// Wire format produced when submitting an answer: labels joined by ", ",
-// with an optional trailing `Other: <free text>` entry.
+// The flat answer format of the CLI's own blocking question: labels joined by
+// ", ", with an optional trailing `Other: <free text>` entry. **Read only.**
+// Nothing writes it any more — an answer today keeps its labels and the user's
+// own words in separate fields (`QuestionAnswerRecord`) — but transcripts written
+// before that hold it, and it is the only trace of what those answers were.
 const OTHER_PREFIX = "Other: ";
 const SEPARATOR = ", ";
 
-export function formatAnswer(selection: QuestionSelection): string {
-	const parts = [...selection.labels];
-	// A picked-but-empty "Other" carries no answer, so it is left out entirely.
-	if (selection.otherText !== null && selection.otherText.trim() !== "") {
-		parts.push(`${OTHER_PREFIX}${selection.otherText}`);
-	}
-	return parts.join(SEPARATOR);
-}
-
 /**
- * Answers are only ever persisted as the flat string produced by formatAnswer,
- * so restoring a card requires parsing it back. Splitting on ", " is not safe:
- * option labels may contain commas and free text almost always does. Instead
- * consume known labels greedily from the start, then treat everything after
- * `Other: ` (or anything unrecognized) as free text so user input is never lost.
+ * Parses a legacy flat answer back into the two halves a form draws.
+ *
+ * Splitting on ", " is not safe: option labels may contain commas and free text
+ * almost always does. Instead consume known labels greedily from the start, then
+ * treat everything after `Other: ` (or anything unrecognized) as free text so
+ * nothing the user typed is lost.
  */
 export function parseAnswer(
 	answer: string | undefined,
@@ -81,11 +82,13 @@ export function parseAnswer(
 }
 
 /**
- * The map is always written by the client that answered, keyed by question text
- * (see handleSubmit) and persisted verbatim — so the first lookup normally hits.
- * The rest is graceful degradation for a record read back from disk: degrade
- * through the plausible keys, and report a miss rather than silently rendering
- * an answered card as if nothing had been picked.
+ * Finds one question's answer in a legacy `question_response` map.
+ *
+ * The map was written by whichever client answered, keyed by question text, and
+ * persisted verbatim — so the first lookup normally hits. The rest is graceful
+ * degradation for a record nobody can go back and fix: degrade through the
+ * plausible keys, and report a miss rather than silently rendering an answered
+ * card as if nothing had been picked.
  */
 export function lookupAnswer(
 	question: AskUserQuestion,

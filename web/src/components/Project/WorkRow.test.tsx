@@ -139,14 +139,15 @@ describe("WorkRow", () => {
 		renderRow({
 			work: work({
 				type: "task",
-				activity: "needs_answer",
-				wait: "user",
+				activity: "needs_permission",
 			}),
 			parentTitle: "Cluster mode",
 			roleName: "Engineer",
 		});
 
-		expect(metaLine()).toBe("in Cluster mode·Needs answer·feature-x·Engineer");
+		expect(metaLine()).toBe(
+			"in Cluster mode·Needs permission·feature-x·Engineer",
+		);
 	});
 
 	it("rolls its children up into the story's own line", () => {
@@ -177,7 +178,8 @@ describe("WorkRow", () => {
 	// The states nothing is waiting on the user for used to be told apart by a
 	// 14px glyph and nothing else, which is the half of "every row looks the
 	// same" that survived reading the rows one by one. Every one of the seven
-	// leaves that reaches a row — the other three are the `needsUser` ones, which
+	// leaves that reaches a row — the other three are the `needsAttention` ones,
+	// which
 	// always wrote their label — including `closed`, which only the story
 	// detail's Tasks section draws but draws for real: the children it lists are
 	// the same ones its `{closed}/{total}` counts.
@@ -199,16 +201,54 @@ describe("WorkRow", () => {
 		expect(screen.getByText(label)).toBeInTheDocument();
 	});
 
+	// The second dimension: how many questions the work has posted, beside the
+	// activity rather than instead of it. Folding them into one glyph would make
+	// a running agent claim to be idle, which is exactly what it is not.
+	it("writes what is waiting to be answered after the state", () => {
+		renderRow({
+			work: work({ activity: "running", unanswered_questions: 1 }),
+			roleName: "Engineer",
+		});
+
+		expect(metaLine()).toBe("Running·1 to answer·Engineer");
+	});
+
+	it("counts them when there is more than one", () => {
+		renderRow({
+			work: work({ activity: "running", unanswered_questions: 3 }),
+			roleName: "Engineer",
+		});
+
+		expect(metaLine()).toBe("Running·3 to answer·Engineer");
+	});
+
+	it("says nothing when there are none", () => {
+		renderRow({
+			work: work({ activity: "running", unanswered_questions: 0 }),
+			roleName: "Engineer",
+		});
+
+		expect(metaLine()).toBe("Running·Engineer");
+	});
+
+	// The edge is the one place the two dimensions merge into a single bit.
+	it("marks the edge for a running work with a question outstanding", () => {
+		const { container } = renderRow({
+			work: work({ activity: "running", unanswered_questions: 1 }),
+		});
+		expect(card(container)).toHaveClass("border-l-th-warning");
+	});
+
 	// The tone would be saying nothing in the five light variants, where
 	// `text-th-warning` is under AA against the card (docs/project-ui.md §3 has the
 	// numbers): the hue lives on the left edge and the glyph, which owe only the
 	// 3:1 non-text floor.
 	it("writes the state in text colour rather than the leaf's tone", () => {
 		renderRow({
-			work: work({ activity: "needs_answer", wait: "user" }),
+			work: work({ activity: "needs_permission" }),
 		});
 
-		expect(screen.getByText("Needs answer")).toHaveClass(
+		expect(screen.getByText("Needs permission")).toHaveClass(
 			"text-th-text-secondary",
 		);
 	});
@@ -226,7 +266,7 @@ describe("WorkRow", () => {
 	// the line clips from the right.
 	it("names the parent before anything else on the line", () => {
 		renderRow({
-			work: work({ type: "task", activity: "needs_answer", wait: "user" }),
+			work: work({ type: "task", activity: "needs_permission" }),
 			parentTitle: "Cluster mode",
 			roleName: "Engineer",
 		});
@@ -258,8 +298,7 @@ describe("WorkRow", () => {
 		);
 		expect(
 			card(
-				renderRow({ work: work({ activity: "needs_answer", wait: "user" }) })
-					.container,
+				renderRow({ work: work({ activity: "needs_permission" }) }).container,
 			),
 		).toHaveClass("border-l-th-warning");
 	});

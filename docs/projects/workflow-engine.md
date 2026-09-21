@@ -27,12 +27,17 @@ must not be nudged.
 | Wait | Set by | Cleared by |
 |---|---|---|
 | none | every transition into active | — |
-| `user` | `work_needs_input` | a user message |
 | `child` | `work_wait` | a child work closing, or a user message — or the engine, when no child is left that could close |
 
-`WaitReason` is the agent's own words for why, shown verbatim on the detail
-page. `NudgeCount` is how many times in a row the engine has told the agent to
-carry on with nothing to show for it.
+**Waiting on a person is not a wait.** An agent that needs something from the
+user posts a question (`question_post`); the question lives on the session, the
+agent carries on working, and the answer arrives as an ordinary message. The
+engine reads the session's unanswered list directly, so a turn ending with one
+outstanding is not nudged either ([work-system.md](../code/work-system.md#input-1-a-turn-ended)).
+The `user` wait and its `wait_reason` are gone.
+
+`NudgeCount` is how many times in a row the engine has told the agent to carry on
+with nothing to show for it.
 
 A wait on children is ended by a child closing and by nothing else, so it is
 checked at both ends: `work_wait` is refused when no child of the work is
@@ -40,7 +45,7 @@ running, and a wait whose last running child leaves *without* closing is cleared
 by the engine with a message saying what became of it. Either case would
 otherwise leave a coordinator waiting forever, and waiting quietly — the engine
 does not nudge a waiting work
-([work-system.md](../code/work-system.md#input-3-a-child-work-left-active)).
+([work-system.md](../code/work-system.md#input-6-a-child-work-left-active)).
 
 ## Status Transitions
 
@@ -57,10 +62,10 @@ why the pair is shaped that way.
 | `open`    | `active`  | `Store.Claim` (fresh start — no session yet) |
 | `active` / `stopped` | `open`    | `Store.RollbackStart` (fresh start failed) |
 | `active` / `stopped` | `stopped` | `Store.RollbackStart` (restart failed)     |
-| live      | `active` + wait | `Store.SetWait` (`work_needs_input`) |
 | live with an active child | `active` + `child` | `Store.SetChildWait` (`work_wait`; refused when no child is running) |
 | live      | `stopped` | `Store.Stop` (user Stop, aborted turn, nudge limit, deleted session, startup recovery) |
 | live      | `active`  | `Store.Activate` (a user message, a child closing) |
+| `active`  | `active`  | `Store.ClearNudges` (an answer to a posted question — the allowance only) |
 | `active` + `child` | `active`  | `Store.ClearChildWaitIfStranded` (the last child that could close left active without closing) |
 | `stopped` | `active`  | `Store.Claim` (restart — the work already owns a session, which is reused) |
 | live      | `active`  | `Store.StepDone` (steps remain — the advance also repairs a stale status) |
@@ -105,21 +110,24 @@ and continue orchestration.
 ## The Work Engine
 
 `work.Engine` is the only thing that moves a work item without being asked to. It
-has five inputs and no special cases beside them:
+has eight inputs and no special cases beside them:
 
 | Input | What it does |
 |---|---|
-| A turn ended | aborted → `stopped`; otherwise nudge, unless the work declared a wait; `stopped` once the allowance runs out |
+| A turn ended | aborted → `stopped`; otherwise nudge, unless the work declared a wait or has a question nobody has answered; `stopped` once the allowance runs out |
 | A user message | back to `active`, wait and nudges cleared |
+| The user answered a posted question | nudges cleared, and a `child` wait deliberately left standing — no subtask closed |
+| Another agent answered one (`question_answer`) | nudges cleared, and nothing else: only a person takes a `stopped` work off the shelf |
+| An agent posted a question | passed up to an *active* parent story as `child_question`, which clears nothing and is never retried |
 | A child work left `active` | a child that *closed*: tell an *active* parent and clear a `child` wait; a child that left any other way: clear a `child` wait nothing is left to end, and wake the parent to decide |
 | The session was deleted | → `stopped` |
-| Server startup | `active` with no wait → `stopped` + comment; a work waiting on the user is preserved; a work waiting on children is preserved only while one of them is still `active`, and otherwise `stopped` + comment |
+| Server startup | `active` with no wait → `stopped` + comment; a work with an unanswered question is preserved; a work waiting on children is preserved only while one of them is still `active`, and otherwise `stopped` + comment |
 
-The full reasoning for each — including why a work waiting on the user survives a
-restart and a driven one does not, and why startup *stops* the parent that a
-running server would *wake* — is in
-[work-system.md](../code/work-system.md#the-work-engine). Two properties worth
-naming here:
+The full reasoning for each — including why a work with a question outstanding
+survives a restart and a driven one does not, why a stranded wait stops the work
+even so, and why startup *stops* the parent that a running server would *wake*
+— is in [work-system.md](../code/work-system.md#the-work-engine). Two properties
+worth naming here:
 
 - **It hears a *settled* turn ending**, from `session.TurnSettler`, not a process
   state change. Every rule that used to read a process state turned out to be a
@@ -142,9 +150,8 @@ have identical effects.
 | `StartWork` | `Claim` | `WorkStartHandler` creates the session and sends the kickoff; rolls back on failure. Detached context, so a caller timeout cannot orphan a half-created session |
 | `StopWork` | `Stop` | the process ends with the transition |
 | `ReopenWork` | `Reopen` | reopen nudge (`NotifyReopen`) |
-| `StepDone` | `StepDone` | next-step prompt while steps remain (`NotifyStepDone`) |
-| `NeedsInput` | `SetWait(user, reason)` | — |
-| `Wait` | `SetWait(child, reason)` | — |
+| `StepDone` | `StepDone` | next-step prompt while steps remain (`NotifyStepDone`); an advance withdraws the questions posted during the step |
+| `Wait` | `SetChildWait` | refused when no subtask of the work is running |
 
 Process termination is deliberately not one of these side effects: it belongs to
 the transition rather than to the command that caused it, so the engine's own
@@ -226,7 +233,7 @@ an existing one.
 
 ## Prompt Builders
 
-Six prompt builders generate messages for different lifecycle events. All share a common base structure:
+The prompt builders generate messages for different lifecycle events. All share a common base structure:
 
 **Base (`buildBase`):**
 - Agent role reference (instructs agent to fetch its role via `agent_role_get`)
@@ -236,11 +243,14 @@ Six prompt builders generate messages for different lifecycle events. All share 
   - **Task with parent:** Read the parent's comments before starting, and report results back with `work_comment_add`, because the story agent does not read this chat.
   - **Task without parent:** nothing extra.
 - The lifecycle rules (`lifecycle_rules`), identical for every work Pockode
-  drives: what the four statuses mean, that `work_needs_input` / `work_wait` are
-  the only ways to declare a wait, that a turn ends with one of those or
-  `step_done`, that a turn ending with neither is nudged and stops the work after
-  the allowance, and that a long wait belongs to `work_needs_input` rather than to
-  a question holding the process open. It is written once here so no send site
+  drives: what the four statuses mean, that `question_post` is how the agent
+  reaches a person and that it waits for nothing, that a story waits for its
+  subtasks with `work_wait`, that a story shown one of its subtasks' questions
+  may answer it with `question_answer` without its own wait being touched, that a
+  turn ends cleanly with `step_done` or with
+  something outstanding, that a turn ending with neither is nudged and stops the
+  work after the allowance, and that a long wait belongs to `question_post` rather
+  than to a chat question holding the process open. It is written once here so no send site
   can drift into its own version of the rules — see
   [work-system.md](../code/work-system.md#prompt-format).
 
@@ -272,18 +282,30 @@ arrives, and the message says so — the work has no wait now and is nudged as
 usual. It never left `active`; a waiting work is active, which is what the
 lifecycle section in the same message says.
 
+### BuildChildQuestionMessage
+
+Base + one question a subtask posted, quoted whole — header, question, options,
+and the `request_id` that `question_answer` takes. It is quoted rather than
+referenced because the story cannot fetch it: the question lives on the
+subtask's *session*, not on its work item.
+
+The story is offered the two ways forward — answer it, or ask the user itself —
+and told which one is not on offer: guessing. The last line says the message
+changed nothing else, because an agent handed something to do otherwise assumes
+its wait is over, and this one clears no wait.
+
 ### BuildRestartMessage
 
 Base + a restart nudge appropriate to the work type:
-- **Story:** "Your story was stopped and is now being restarted. While a story is stopped Pockode sends it nothing…" — the story has to re-read `work_list` and `work_comment_list`, because a stopped parent is never told that a child closed.
+- **Story:** "Your story was stopped and is now being restarted. While a story is stopped Pockode sends it nothing…" — the story has to re-read `work_list` and `work_comment_list`, and its tasks' unanswered questions with `work_get`, because a stopped parent is never told that a child closed or that one asked something.
 - **Task:** "Your task was stopped and is now being restarted. Review what you have done so far…"
 
 ### BuildAutoContinuationMessage
 
 Base + a nudge appropriate to the work type, which names the three things the
 engine was looking for and did not get:
-- **Story:** "Your last turn ended without moving this story along: no step_done, no work_needs_input, no work_wait…"
-- **Task:** "Your last turn ended without moving this task along: no step_done, no work_needs_input…"
+- **Story:** "Your last turn ended without moving this story along: no step_done, no work_wait, and no question waiting for an answer…"
+- **Task:** "Your last turn ended without moving this task along: no step_done, and no question waiting for an answer…"
 
 ### BuildAutoContinuationMessageWithSteps
 
@@ -299,7 +321,8 @@ Step N of M
 That turn ended on step N of M without saying where the work stands.
 Check if you have completed the current step:
 - If YES: Call step_done with ID xxx to proceed to the next step or close the work.
-- If NO and you are blocked: Say what you are waiting for with work_needs_input or work_wait.
+- If NO and you are blocked on the user: Ask them with question_post, then carry on or end the turn.
+- If NO and you are a story blocked on your subtasks: Call work_wait with ID xxx.
 - If NO: Continue working on this step.
 ```
 

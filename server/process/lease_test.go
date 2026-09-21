@@ -37,7 +37,7 @@ func startedTurn(t *testing.T, budgets session.LeaseBudgets) (*Manager, *mockAge
 	t.Helper()
 	store, _ := session.NewFileStore(t.TempDir())
 	mock := &mockAgent{}
-	m := NewManager(mockRegistry(mock), "/tmp", "", "", store, budgets)
+	m := NewManager(mockRegistry(mock), "", "/tmp", "", "", store, budgets)
 	t.Cleanup(m.Shutdown)
 
 	proc, _, err := m.GetOrCreateProcess(context.Background(), createActivatedSession(t, store, "sess-1"))
@@ -134,45 +134,39 @@ func TestLease_BackgroundExpiryLeavesTheProcessToTheIdleLease(t *testing.T) {
 	}
 }
 
-// A prompt nobody answered is withdrawn on the user's behalf, which is what an
-// interrupt is: Codex cancels the outstanding approval before it stops the turn,
-// and Claude's interrupt releases the control request it is blocking on.
+// A permission request nobody decided is withdrawn on the user's behalf, which
+// is what an interrupt is: Codex cancels the outstanding approval before it
+// stops the turn, and Claude's interrupt releases the control request it is
+// blocking on.
+//
+// One case rather than a table: a permission request is the only thing left that
+// holds a turn open waiting for a person.
 func TestLease_UnansweredPromptIsWithdrawn(t *testing.T) {
-	for _, tt := range []struct {
-		name  string
-		event agent.AgentEvent
-	}{
-		{"question", agent.AskUserQuestionEvent{RequestID: "req-1"}},
-		{"permission", agent.PermissionRequestEvent{RequestID: "req-1"}},
-	} {
-		t.Run(tt.name, func(t *testing.T) {
-			m, mock, store, proc := startedTurn(t, leaseTestBudgets)
+	m, mock, store, proc := startedTurn(t, leaseTestBudgets)
 
-			sess := mock.session(t, "sess-1")
-			sess.emit(t, tt.event)
-			waitUntil(t, "the prompt", func() bool { return holdOf(proc) == session.LeaseAnswer })
+	sess := mock.session(t, "sess-1")
+	sess.emit(t, agent.PermissionRequestEvent{RequestID: "req-1"})
+	waitUntil(t, "the prompt", func() bool { return holdOf(proc) == session.LeaseAnswer })
 
-			m.reapLeasesAsOf(pastBudget(leaseTestBudgets.Answer))
+	m.reapLeasesAsOf(pastBudget(leaseTestBudgets.Answer))
 
-			if got := sess.interrupts.Load(); got != 1 {
-				t.Errorf("interrupts = %d, want 1", got)
-			}
-			if warning := lastWarning(t, store, "sess-1"); warning.Code != answerTimeoutCode {
-				t.Errorf("warning code = %q, want %q", warning.Code, answerTimeoutCode)
-			}
-			// The turn is not written down as over here: the InterruptedEvent
-			// coming back is what ends it, the same as a user's own Stop.
-			sess.emit(t, agent.InterruptedEvent{})
-			waitUntil(t, "the turn to end", func() bool { return holdOf(proc) == session.LeaseIdle })
-
-			// And the card says which of the three things happened to it. The
-			// user is the one who ran out of time; a banner saying the process
-			// died would send them looking for a fault that was not there.
-			waitUntil(t, "the expiry to be recorded", func() bool {
-				return expiryReasonFor(t, store, "req-1") == agent.ReasonTimeout
-			})
-		})
+	if got := sess.interrupts.Load(); got != 1 {
+		t.Errorf("interrupts = %d, want 1", got)
 	}
+	if warning := lastWarning(t, store, "sess-1"); warning.Code != answerTimeoutCode {
+		t.Errorf("warning code = %q, want %q", warning.Code, answerTimeoutCode)
+	}
+	// The turn is not written down as over here: the InterruptedEvent coming
+	// back is what ends it, the same as a user's own Stop.
+	sess.emit(t, agent.InterruptedEvent{})
+	waitUntil(t, "the turn to end", func() bool { return holdOf(proc) == session.LeaseIdle })
+
+	// And the card says which of the three things happened to it. The user is the
+	// one who ran out of time; a banner saying the process died would send them
+	// looking for a fault that was not there.
+	waitUntil(t, "the expiry to be recorded", func() bool {
+		return expiryReasonFor(t, store, "req-1") == agent.ReasonTimeout
+	})
 }
 
 // expiryReasonFor reports the reason on the last request_cancelled record for
@@ -382,7 +376,7 @@ func TestLease_OneZeroBudgetDoesNotDisarmTheRest(t *testing.T) {
 	m, mock, _, proc := startedTurn(t, budgets)
 	sess := mock.session(t, "sess-1")
 
-	sess.emit(t, agent.AskUserQuestionEvent{RequestID: "req-1"})
+	sess.emit(t, agent.PermissionRequestEvent{RequestID: "req-1"})
 	waitUntil(t, "the prompt", func() bool { return holdOf(proc) == session.LeaseAnswer })
 
 	m.reapLeasesAsOf(pastBudget(budgets.Answer))

@@ -16,13 +16,13 @@ The MCP server runs as a stdio JSON-RPC 2.0 subprocess, spawned per Claude sessi
 | Tool | Required Params | Optional Params | Returns |
 |------|----------------|-----------------|---------|
 | `work_list` | — | `parent_id` | JSON array of `{id, type, parent_id?, agent_role_id?, status, title}` |
-| `work_get` | `id` | — | `{id, type, parent_id?, agent_role_id?, status, title, body?}` |
+| `work_get` | `id` | — | `{id, type, parent_id?, agent_role_id?, status, title, body?, pending_questions?}` |
 | `work_create` | `type`, `title`, `agent_role_id` | `parent_id`, `body` | Confirmation string with ID |
 | `work_update` | `id` | `title`, `body`, `agent_role_id` | Confirmation string |
 | `work_delete` | `id` | — | Confirmation string |
 | `work_start` | `id` | `worktree` | Confirmation string with session ID |
-| `work_needs_input` | `id`, `reason` | — | Confirmation string |
-| `work_wait` | `id` | `reason` | Confirmation string |
+| `work_needs_input` | `id`, `reason` | — | **Retired**: an error naming `question_post` |
+| `work_wait` | `id` | — | Confirmation string |
 | `work_reopen` | `id` | — | Confirmation string |
 | `step_done` | `id` | — | Confirmation string |
 | `work_comment_add` | `work_id`, `body` | — | Confirmation string with comment ID |
@@ -31,6 +31,9 @@ The MCP server runs as a stdio JSON-RPC 2.0 subprocess, spawned per Claude sessi
 | `agent_role_list` | — | — | JSON array of `{id, name}` |
 | `agent_role_get` | `id` | — | `{id, name, role_prompt}` |
 | `agent_role_reset_defaults` | — | — | Confirmation string |
+| `question_post` | `question`, `header` | `options`, `multi_select` | Confirmation string with the `request_id` |
+| `question_answer` | `request_id` | `answers`, `text`, `session_id` | Confirmation string |
+| `question_cancel` | `request_id` | — | Confirmation string |
 
 ### Security: Prompt Injection Prevention
 
@@ -42,12 +45,15 @@ Similarly, `agent_role_list` excludes `role_prompt` — use `agent_role_get` to 
 
 - **`work_create`**: Requires `agent_role_id` (validated to exist). Stories are top-level; tasks require `parent_id`.
 - **`work_start`**: Requires the work item to have an `agent_role_id`. Atomically transitions to `active` and attaches a session ID via `Store.Claim` (a fresh UUIDv7, or the existing session on restart), then creates the session and sends the kickoff via `WorkStartHandler` (in-process). The optional `worktree` names the git worktree to run in, and is settled *before* that transition so the session starts in it: the name is pinned via `Store.SetWorktree`, then `Registry.EnsureWorktree` creates the worktree (branch = name) if it does not exist yet, through the same path the `worktree.create` RPC uses — setup hook included, and a skipped hook is reported in the confirmation string. Only a **story** may name one; on a task the call is refused without starting anything, because a task runs in the worktree of the story it belongs to. Naming a *different* worktree for an already-started story fails the call too, rather than starting it where it already lives ([work-system](../code/work-system.md#worktree-binding)).
-- **`step_done`**: Calls `Store.StepDone()`. Work items advance to the next configured step, or close when no steps remain. Use `work_wait`, not `step_done`, to pause while child work is still open.
-- **`work_needs_input`**: Calls `Operations.NeedsInput()`. The work stays `active` and records that it is waiting on the user, with the agent's `reason` shown verbatim on the detail page.
-- **`work_wait`**: Calls `Operations.Wait()`. The same wait, cleared by a child closing instead of by a person; its optional `reason` is shown the same way. Unlike `work_needs_input` it can be **refused**: a child closing is the only thing that ends this wait, so a work with no child running would wait forever, and the error names which children could be started instead ([workflow-engine](workflow-engine.md#wait)).
+- **`step_done`**: Calls `Operations.StepDone()`. Work items advance to the next configured step, or close when no steps remain. Use `work_wait`, not `step_done`, to pause while child work is still open. An advance **withdraws the questions posted during the step** (reason `step_done`): the agent has moved past what it was asking about. The step that closes the work does not — closing retires the session, which withdraws them with reason `work_closed`.
+- **`work_needs_input`**: **Retired.** It parked the work on a free-text reason shown on the detail page; `question_post` replaced it, and why that is strictly better is [lifecycle](../lifecycle.md#work-four-intentions). The tool is still registered and answers every call with an error naming `question_post`, so an agent whose context still carries the old lifecycle rules is not told "unknown tool"; it moves nothing.
+- **`work_wait`**: Calls `Operations.Wait()`. A story's wait on its subtasks, cleared by one of them closing. It can be **refused**: a child closing is the only thing that ends this wait, so a work with no child running would wait forever, and the error names which children could be started instead ([workflow-engine](workflow-engine.md#wait)).
 - **`work_reopen`**: Calls `Operations.ReopenWork()`. Transitions `closed → active`. Use when you need to add more child work items or continue working on a completed item.
-- **Accepted statuses**: `step_done` / `work_wait` / `work_needs_input` only require that the work is started and not closed, so a stale `stopped` never blocks the agent. Two of them have a second condition that is about the work's *children* rather than its status: `step_done` is refused when it would close a work whose subtasks are still running, and `work_wait` when none of them is. `work_start` is the one with a different rule: it also accepts `open`, but rejects a work that is already `active` — including one that is waiting, for which the user is offered Stop rather than Restart. See [workflow-engine](workflow-engine.md#status-transitions).
+- **Accepted statuses**: `step_done` / `work_wait` only require that the work is started and not closed, so a stale `stopped` never blocks the agent. Both have a second condition that is about the work's *children* rather than its status: `step_done` is refused when it would close a work whose subtasks are still running, and `work_wait` when none of them is. `work_start` is the one with a different rule: it also accepts `open`, but rejects a work that is already `active` — including one that is waiting, for which the user is offered Stop rather than Restart. See [workflow-engine](workflow-engine.md#status-transitions).
 - **`work_update`**: Uses pointer fields (`*string`) to distinguish "not provided" from "set to empty". Only updates data fields (title, body, agent_role_id).
+- **`question_answer`**: Answers a question **another** session posted, for the case where the answer is already known and the user need not be interrupted — a story answering its subtask ([work-system](../code/work-system.md#input-5-a-subtasks-question-reaches-its-story)). Any agent may answer any question except one its own session posted, which is a withdrawal (`question_cancel`) wearing the wrong name. The answer is recorded with who gave it and arrives in the asking session as a message that says so, so nothing there mistakes it for the user's. Refused when more than one session is waiting on that `request_id` — a fork carries a question across with its id, and the refusal lists the candidates for `session_id` — and refused when the work that asked is `stopped`, because delivering would set a work running again behind the person who stopped it. It returns only once the answer has reached the asking agent, which may mean starting that agent's process first.
+
+- **`question_post` / `question_cancel`**: The two tools that act on the **session the call came from** rather than on an id the model supplies, which is what the MCP caller identity is for ([agent-integration](../code/agent-integration.md#mcp-caller-identity)); a call that arrived without one is refused, because an agent started by hand has no chat to ask into. `question_post` returns immediately — the answer arrives later as an ordinary message — and posts exactly one question per call, so that declining one of several has a subject. It is refused on a **closed** work: nobody is coming back to that chat. `question_cancel` withdraws a question the same session posted, sends nothing to anyone, and is refused for a question that is already answered, declined or withdrawn — with what became of it in the error. There is deliberately **no tool that lists questions**: a list would only invite polling inside the turn the agent was told not to wait in. See [agent-integration](../code/agent-integration.md#posted-questions).
 
 ## WebSocket RPC
 
@@ -67,7 +73,7 @@ All methods use JSON-RPC 2.0 over WebSocket. Work and agent_role methods are **a
 | `work.reopen` | `WorkReopenParams` | `{}` | Reopen a closed work item (closed → active) |
 | `work.comment.list` | `WorkCommentListParams` | `{comments: Comment[]}` | List comments on a work item |
 | `work.comment.update` | `WorkCommentUpdateParams` | `Comment` | Update a comment's body |
-| `work.detail.subscribe` | `WorkDetailSubscribeParams` | `{work, comments, usage, activity, children, parent?}` | Subscribe to a single work item + comments + the token usage of its subtree ([why usage is here and not on `Work`](../code/work-system.md#usage-aggregation)) and the two relations its page draws ([why they are not read off the list](../code/work-system.md#the-list-holds-rows-the-detail-page-holds-the-item)) |
+| `work.detail.subscribe` | `WorkDetailSubscribeParams` | `{work, comments, usage, activity, pending_questions?, children, parent?}` | Subscribe to a single work item + comments + the token usage of its subtree ([why usage is here and not on `Work`](../code/work-system.md#usage-aggregation)) and the two relations its page draws ([why they are not read off the list](../code/work-system.md#the-list-holds-rows-the-detail-page-holds-the-item)) |
 | `work.detail.unsubscribe` | `{id}` | `{}` | Unsubscribe from work detail |
 | `work.list.subscribe` | `SubscribeParams` | `{items: WorkListItem[], stopped_hidden?, open_hidden?}` | Subscribe + get the **`Current` segment**, which holds no closed work ([what a row carries](#work-list-rows-vs-work-detail), [why it is a segment](#the-list-is-two-segments)) |
 | `work.list.archive` | `WorkListArchiveParams` | `{items: WorkListItem[], next_cursor?, has_more?}` | One page of closed work, served against an open list subscription |
@@ -98,7 +104,8 @@ WorkCommentListParams     { work_id }
 WorkCommentUpdateParams   { id, body }
 WorkDetailSubscribeParams { id, work_id }
 WorkListArchiveParams     { id, cursor?, limit? }   // id names the subscription, not a fresh query
-WorkListItem              { id, type, parent_id?, agent_role_id?, title, status, activity, wait?, session_id?, worktree?, updated_at }
+WorkListItem              { id, type, parent_id?, agent_role_id?, title, status, activity, unanswered_questions?, wait?, session_id?, worktree?, updated_at }
+PendingQuestion           { request_id, header, question, options?, multi_select?, asked_at }
 
 SubscribeParams           { id }   // the whole of a subscribe with no other arguments
 
@@ -139,6 +146,7 @@ needs:
 | `parent_id` | builds that tree; also walks a work up to its root |
 | `agent_role_id` | the role name shown on the row |
 | `title`, `status` | the row itself |
+| `unanswered_questions` | how many questions the work's agent has asked and nobody has answered — the second dimension of "needs you", beside `activity` rather than folded into it, since an agent can be running *and* waiting on an answer. A count only: the questions themselves are on the detail ([agent-integration](../code/agent-integration.md#posted-questions)) |
 | `activity` | the row's glyph, and which group it is in — the one thing a row draws that a client cannot compute, since the list spans worktrees and a client holds turn state only for the one it has open ([lifecycle-ui](../lifecycle-ui.md) §1.3). It is also what the Project tab's attention dot is read off, and what the server's own `Current` cut consults so that a row needing a person is never held back |
 | `wait` | what an active work is waiting for; the agent's stated reason belongs to the detail, where there is room to show it |
 | `session_id` | the row's **Chat** shortcut |

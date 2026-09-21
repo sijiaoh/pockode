@@ -1,14 +1,8 @@
-import {
-	act,
-	fireEvent,
-	render,
-	screen,
-	waitFor,
-} from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { createRef } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { Message, QuestionStatus } from "../../types/message";
+import type { Message } from "../../types/message";
 import MessageList, { type MessageListHandle } from "./MessageList";
 
 vi.mock("../../lib/wsStore", () => ({
@@ -143,44 +137,13 @@ function contentBox(scroller: HTMLElement): Element {
 	return el;
 }
 
-function questionCard(requestId: string): HTMLElement | null {
+function permissionCard(requestId: string): HTMLElement | null {
 	for (const el of document.querySelectorAll<HTMLElement>(
-		"[data-question-request-id]",
+		"[data-permission-request-id]",
 	)) {
-		if (el.dataset.questionRequestId === requestId) return el;
+		if (el.dataset.permissionRequestId === requestId) return el;
 	}
 	return null;
-}
-
-function reportVisibility(
-	requestId: string,
-	visible: boolean,
-	direction: "up" | "down" = "up",
-) {
-	const header = questionCard(requestId)?.querySelector(
-		"[data-question-header]",
-	);
-	if (!header) throw new Error(`no rendered question card for ${requestId}`);
-
-	const rootTop = 100;
-	const entry = {
-		target: header,
-		intersectionRatio: visible ? 1 : 0,
-		isIntersecting: visible,
-		rootBounds: { top: rootTop } as DOMRectReadOnly,
-		boundingClientRect: {
-			top: direction === "up" ? rootTop - 50 : rootTop + 500,
-		} as DOMRectReadOnly,
-		intersectionRect: {} as DOMRectReadOnly,
-		time: 0,
-	} as IntersectionObserverEntry;
-
-	for (const observer of MockIntersectionObserver.instances) {
-		if (!observer.targets.has(header)) continue;
-		act(() => {
-			observer.callback([entry], observer as unknown as IntersectionObserver);
-		});
-	}
 }
 
 /** Height every message row is given below, so scroll maths has numbers. */
@@ -247,14 +210,13 @@ function scrollContainer(): HTMLElement {
 
 /**
  * Scrolls the top-of-history sentinel into view, as reading back up does. It is
- * the only observed node outside a question card, which is what tells the two
- * apart. It stays in view until a test says otherwise, so that any observer
+ * the only node the list observes at all now, so nothing has to be told apart
+ * from it. It stays in view until a test says otherwise, so that any observer
  * armed afterwards reports it the way a real one would.
  */
 function triggerHistorySentinel() {
 	for (const observer of MockIntersectionObserver.instances) {
 		for (const target of observer.targets) {
-			if (target.closest("[data-question-request-id]")) continue;
 			MockIntersectionObserver.inView.add(target);
 			act(() => {
 				observer.callback(
@@ -271,11 +233,7 @@ function sentinelLeftView() {
 	MockIntersectionObserver.inView.clear();
 }
 
-function questionMessage(
-	id: string,
-	requestId: string,
-	status: QuestionStatus = "pending",
-): Message {
+function questionMessage(id: string, requestId: string): Message {
 	return {
 		id,
 		role: "assistant",
@@ -283,20 +241,17 @@ function questionMessage(
 		createdAt: new Date(),
 		parts: [
 			{
-				type: "ask_user_question",
-				request: {
+				type: "question_record",
+				record: {
 					requestId,
-					toolUseId: `tool-${requestId}`,
-					questions: [
-						{
-							question: "Which one?",
-							header: `Pick ${requestId}`,
-							options: [{ label: "A", description: "a" }],
-							multiSelect: false,
-						},
-					],
+					question: {
+						question: "Which one?",
+						header: `Pick ${requestId}`,
+						options: [{ label: "A", description: "a" }],
+						multiSelect: false,
+					},
 				},
-				status,
+				status: "pending",
 			},
 		],
 	};
@@ -336,15 +291,6 @@ function permissionMessage(id: string, requestId: string): Message {
 		],
 	};
 }
-
-const pill = () =>
-	screen.queryByRole("button", { name: /unanswered question/i });
-
-// Showing the pill is debounced by 250ms of real time, and these tests render a
-// fair amount of DOM; the default 1000ms leaves no headroom on a loaded machine
-// and turns every wait for the pill into a flake.
-const findPill = (name: string) =>
-	screen.findByRole("button", { name }, { timeout: 3000 });
 
 function userMessage(id: string): Message {
 	return {
@@ -389,144 +335,88 @@ afterEach(() => {
 	vi.restoreAllMocks();
 });
 
-describe("MessageList pending question pill", () => {
-	it("stays hidden while the question is in view", async () => {
-		renderList([questionMessage("m1", "r1")]);
-		reportVisibility("r1", true);
-
-		// Long enough for the show debounce to have fired.
-		await new Promise((resolve) => setTimeout(resolve, 400));
-		expect(pill()).not.toBeInTheDocument();
-
-		// Proves the absence above came from the visibility rule and not from a
-		// debounce that simply had not run yet.
-		reportVisibility("r1", false);
-		expect(await findPill("Jump to unanswered question")).toBeInTheDocument();
-	});
-
-	it("stays hidden until the observer has reported on a rendered question", async () => {
-		renderList([questionMessage("m1", "r1")]);
-
-		// No intersection callback yet. A rendered card is assumed on screen, so
-		// the pill must not flash over a question the user may be looking at.
-		await new Promise((resolve) => setTimeout(resolve, 400));
-		expect(pill()).not.toBeInTheDocument();
-	});
-
-	it("appears once the question scrolls out of view", async () => {
-		renderList([questionMessage("m1", "r1")]);
-		reportVisibility("r1", false);
-
-		expect(await findPill("Jump to unanswered question")).toBeInTheDocument();
-		expect(screen.getByText("Question waiting")).toBeInTheDocument();
-	});
-
-	it("disappears once the question is answered", async () => {
-		const { rerender } = renderList([questionMessage("m1", "r1")]);
-		reportVisibility("r1", false);
-		await findPill("Jump to unanswered question");
-
-		rerender(
+// The attention strip reaches the card holding the turn up through this jump, and
+// it lives below the list, so the list exposes the one it already owns rather
+// than a second scroll-and-highlight being written beside it
+// (docs/lifecycle-ui.md §2.2).
+//
+// A permission request is the only card it reaches: answering a posted question
+// happens in the sheet, and there is deliberately no jump to a question card
+// (docs/answering-ui.md §8).
+describe("the jump the attention strip borrows", () => {
+	it("reaches a permission request, focus included", () => {
+		const ref = createRef<MessageListHandle>();
+		render(
 			<MessageList
+				ref={ref}
 				sessionId="session-1"
-				messages={[questionMessage("m1", "r1", "answered")]}
+				messages={[permissionMessage("m1", "p1")]}
 			/>,
 		);
-		await waitFor(() => expect(pill()).not.toBeInTheDocument());
-	});
 
-	it("counts only the questions that are out of view, and jumps to the first", async () => {
-		renderList([questionMessage("m1", "r1"), questionMessage("m2", "r2")]);
-		reportVisibility("r1", false);
-		reportVisibility("r2", true);
+		act(() => ref.current?.jumpToRequest("p1"));
 
-		const button = await findPill("Jump to unanswered question");
-		expect(screen.getByText("Question waiting")).toBeInTheDocument();
-
-		await userEvent.click(button);
+		const card = permissionCard("p1");
 		expect(Element.prototype.scrollIntoView).toHaveBeenCalled();
-		expect(questionCard("r1")).toHaveClass("question-highlight");
+		expect(card).toHaveClass("jump-highlight");
+		// Without a focus move the jump is one a keyboard user cannot perceive.
+		expect(card?.querySelector("button")).toHaveFocus();
+	});
+
+	it("moves the highlight rather than leaving it on the previous target", () => {
+		const ref = createRef<MessageListHandle>();
+		render(
+			<MessageList
+				ref={ref}
+				sessionId="session-1"
+				messages={[
+					permissionMessage("m1", "p1"),
+					permissionMessage("m2", "p2"),
+				]}
+			/>,
+		);
+
+		act(() => ref.current?.jumpToRequest("p1"));
+		expect(permissionCard("p1")).toHaveClass("jump-highlight");
+
+		act(() => ref.current?.jumpToRequest("p2"));
+		expect(permissionCard("p2")).toHaveClass("jump-highlight");
+		expect(permissionCard("p1")).not.toHaveClass("jump-highlight");
+	});
+
+	// A question card carries no jump handle at all, so the jump finds nothing
+	// and — this is the part worth pinning — does nothing: it must not move the
+	// view or drop the follow flag on the strength of an id it cannot place.
+	it("does nothing for a request id no card carries", () => {
+		const ref = createRef<MessageListHandle>();
+		render(
+			<MessageList
+				ref={ref}
+				sessionId="session-1"
+				messages={[questionMessage("m1", "r1")]}
+			/>,
+		);
+
+		act(() => ref.current?.jumpToRequest("r1"));
+
+		expect(Element.prototype.scrollIntoView).not.toHaveBeenCalled();
 		expect(
-			questionCard("r1")?.querySelector("[data-question-header]"),
-		).toHaveFocus();
+			screen.queryByRole("button", { name: "Scroll to bottom" }),
+		).toBeNull();
 	});
 
-	// The blocker strip reaches both kinds of prompt through the same jump, and
-	// it lives below the list, so the list exposes the one it already owns rather
-	// than a second scroll-and-highlight being written beside it
-	// (docs/lifecycle-ui.md §2.2).
-	describe("the jump the blocker strip borrows", () => {
-		it("reaches a permission request, focus included", () => {
-			const ref = createRef<MessageListHandle>();
-			render(
-				<MessageList
-					ref={ref}
-					sessionId="session-1"
-					messages={[permissionMessage("m1", "p1")]}
-				/>,
-			);
-
-			act(() => ref.current?.jumpToRequest("p1"));
-
-			const card = document.querySelector<HTMLElement>(
-				"[data-permission-request-id]",
-			);
-			expect(Element.prototype.scrollIntoView).toHaveBeenCalled();
-			expect(card).toHaveClass("question-highlight");
-			// A permission card has no header row of its own; the row that opens it
-			// is the same thing one step less explicitly. Without a focus move the
-			// jump is one a keyboard user cannot perceive.
-			expect(card?.querySelector("button")).toHaveFocus();
-		});
-
-		it("reaches a question, and is the same jump the pill makes", () => {
-			const ref = createRef<MessageListHandle>();
-			render(
-				<MessageList
-					ref={ref}
-					sessionId="session-1"
-					messages={[questionMessage("m1", "r1")]}
-				/>,
-			);
-
-			act(() => ref.current?.jumpToRequest("r1"));
-
-			expect(questionCard("r1")).toHaveClass("question-highlight");
-			expect(
-				questionCard("r1")?.querySelector("[data-question-header]"),
-			).toHaveFocus();
-		});
-	});
-
-	it("moves the highlight rather than leaving it on the previous target", async () => {
-		renderList([questionMessage("m1", "r1"), questionMessage("m2", "r2")]);
-		reportVisibility("r1", false);
-		reportVisibility("r2", false);
-
-		const button = await findPill("Jump to 2 unanswered questions");
-		await userEvent.click(button);
-		expect(questionCard("r1")).toHaveClass("question-highlight");
-
-		// The first question is now in view, so the pill points at the second.
-		reportVisibility("r1", true);
-		await userEvent.click(await findPill("Jump to unanswered question"));
-
-		expect(questionCard("r2")).toHaveClass("question-highlight");
-		expect(questionCard("r1")).not.toHaveClass("question-highlight");
-	});
-
-	it("jumps to a question that is loaded but out of view", async () => {
+	it("drops the at-bottom flag so a jump is not scrolled away", () => {
+		const ref = createRef<MessageListHandle>();
 		const messages: Message[] = [
-			questionMessage("m0", "r1"),
+			permissionMessage("m0", "p1"),
 			...Array.from({ length: 80 }, (_, i) => textMessage(`m${i + 1}`)),
 		];
-		renderList(messages);
-		reportVisibility("r1", false);
+		render(<MessageList ref={ref} sessionId="session-1" messages={messages} />);
 
-		await userEvent.click(await findPill("Jump to unanswered question"));
+		act(() => ref.current?.jumpToRequest("p1"));
 
 		expect(Element.prototype.scrollIntoView).toHaveBeenCalled();
-		expect(questionCard("r1")).toHaveClass("question-highlight");
+		expect(permissionCard("p1")).toHaveClass("jump-highlight");
 		// Proxy for the internal at-bottom flag having been dropped: an auto-follow
 		// that still believed the user was at the tail would scroll straight back
 		// down over the jump.
@@ -1004,12 +894,56 @@ describe("MessageList following the tail", () => {
 		expect(scroller.scrollTop).toBe(1500);
 	});
 
-	it("does not resume following when a jump lands near the tail", async () => {
-		const question = questionMessage("q1", "r1");
+	// Sending is an explicit return to the tail — the reader just wrote at the
+	// bottom — and the two things that arrive as `role: "user"` without anybody
+	// typing must not be mistaken for that. An agent's answer to a posted
+	// question is the second of them, and it can arrive at any moment while the
+	// reader is deliberately somewhere else in the transcript.
+	it.each([
+		["typed by the user", userMessage("sent")],
+		[
+			"an answer another agent gave",
+			{
+				...userMessage("answered"),
+				source: "agent" as const,
+				answering: [
+					{
+						request_id: "r1",
+						answers: ["Postgres"],
+						answered_at: "2026-01-02T14:05:00Z",
+						resolved_by: { kind: "agent" as const },
+					},
+				],
+			},
+		],
+		[
+			"one of Pockode's own",
+			{
+				...userMessage("kickoff"),
+				source: "system" as const,
+				subtype: "kickoff",
+			},
+		],
+	])("follows the tail only for a message %s", (name, message) => {
+		const { rerender, scroller, viewport } = renderFollowing();
+		dragTo(scroller, 200);
+
+		rerender(
+			<MessageList sessionId="session-1" messages={[...transcript, message]} />,
+		);
+		viewport.contentHeight = 1400;
+		triggerResize(contentBox(scroller));
+
+		expect(scroller.scrollTop).toBe(name === "typed by the user" ? 1400 : 200);
+	});
+
+	it("does not resume following when a jump lands near the tail", () => {
+		const ref = createRef<MessageListHandle>();
 		render(
 			<MessageList
+				ref={ref}
 				sessionId="session-1"
-				messages={[...transcript, question]}
+				messages={[...transcript, permissionMessage("q1", "p1")]}
 			/>,
 		);
 		const scroller = scrollContainer();
@@ -1018,11 +952,10 @@ describe("MessageList following the tail", () => {
 			viewportHeight: 500,
 		});
 		dragTo(scroller, 200);
-		reportVisibility("r1", false);
 
-		await userEvent.click(await findPill("Jump to unanswered question"));
+		act(() => ref.current?.jumpToRequest("p1"));
 
-		// The jump is aimed at a question close to the end of the transcript, so
+		// The jump is aimed at a card close to the end of the transcript, so
 		// the scroll it starts comes to rest at the tail. That is the jump's doing,
 		// not the user's, and must not be read as them choosing to follow again.
 		scroller.scrollTop = 500;

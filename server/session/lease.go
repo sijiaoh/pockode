@@ -78,14 +78,17 @@ const (
 	// exists as a knob for an operator who would rather cap it than be surprised
 	// by a machine held overnight.
 	DefaultTurnBudget = time.Duration(0)
-	// DefaultAnswerBudget is an hour. Not because an answer stops being useful —
-	// it does not: killing the process costs one cold resume and nothing else,
-	// which was measured rather than assumed (both CLIs resume cleanly from a
-	// SIGKILL that left a dangling tool_use in the transcript, and a late answer
-	// sent as an ordinary message is understood). What the hour buys is the
-	// other side of that trade: a person who has not answered within an hour is
-	// not in the middle of answering, and until they do the process is a CLI
-	// holding memory to wait.
+	// DefaultAnswerBudget is an hour, and it is a permission request's budget
+	// only: nothing else waits on a person any more.
+	//
+	// An hour rather than longer is not because a decision stops being useful.
+	// Killing the process costs one cold resume and nothing else, which was
+	// measured rather than assumed — both CLIs resume cleanly from a SIGKILL
+	// that left a dangling tool_use in the transcript, and a late answer sent as
+	// an ordinary message is understood. What the hour buys is the other side of
+	// that trade: a person who has not decided within an hour is not in the
+	// middle of deciding, and until they do the process is a CLI holding memory
+	// to wait.
 	//
 	// Deliberately not day-scale. The resume behaviour was only verified across
 	// a process death, not across a day of one — transcript expiry and
@@ -196,12 +199,13 @@ func oldestBlocker(blockers []Blocker, matches func(BlockerKind) bool) (time.Tim
 	return oldest, found
 }
 
-// isPrompt is the pair of blockers a person clears. They share a lease because
-// they share the thing being waited for; what they do not share is what an
-// expiry costs, which is why only one of them is recoverable afterwards (see
-// DefaultAnswerBudget).
+// isPrompt is the blocker a person clears. It was a pair — a permission request
+// and the CLI's own blocking question — and is one now that a question an agent
+// asks belongs to the session rather than to a process. Nothing holds a process
+// open waiting for a question to be answered, so nothing here has to budget for
+// one.
 func isPrompt(kind BlockerKind) bool {
-	return kind == BlockerPermission || kind == BlockerQuestion
+	return kind == BlockerPermission
 }
 
 func isBackground(kind BlockerKind) bool {

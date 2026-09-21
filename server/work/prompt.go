@@ -3,11 +3,9 @@ package work
 import (
 	"bytes"
 	_ "embed"
-	"strconv"
 	"strings"
 	"sync"
 	"text/template"
-	"time"
 
 	"github.com/pockode/server/agent"
 	"github.com/pockode/server/session"
@@ -23,6 +21,11 @@ const (
 	MessageSubtypeStepAdvance  = "step_advance"
 	MessageSubtypeReopen       = "reopen"
 	MessageSubtypeChildDone    = "child_done"
+	// MessageSubtypeChildQuestion is a question one of this story's subtasks
+	// posted, passed up in case the story can answer it without the user.
+	// Unlike the two below it, it clears no wait: the subtask carries on, and
+	// nothing the story was waiting for has happened.
+	MessageSubtypeChildQuestion = "child_question"
 	// MessageSubtypeWaitStranded is the counterpart of child_done for the case
 	// where nothing is going to close: the parent's wait on its subtasks has
 	// nothing left that could end it.
@@ -66,6 +69,7 @@ type promptTemplates struct {
 	TaskAutoContinueNudge  string `yaml:"task_auto_continue_nudge"`
 	StepAutoContinueNudge  string `yaml:"step_auto_continue_nudge"`
 	ChildCompletionNudge   string `yaml:"child_completion_nudge"`
+	ChildQuestionNudge     string `yaml:"child_question_nudge"`
 	StrandedWaitNudge      string `yaml:"stranded_wait_nudge"`
 	StepAdvanceSection     string `yaml:"step_advance_section"`
 	CurrentStepSection     string `yaml:"current_step_section"`
@@ -127,34 +131,10 @@ func roleReference(agentRoleID string) string {
 // deadline the server does not keep.
 func lifecycleRules(w Work) string {
 	return render(prompts.LifecycleRules, map[string]any{
-		"ID":           w.ID,
-		"IsStory":      w.Type == WorkTypeStory,
-		"MaxNudges":    DefaultMaxNudges,
-		"AnswerBudget": humanDuration(session.DefaultAnswerBudget),
+		"ID":        w.ID,
+		"IsStory":   w.Type == WorkTypeStory,
+		"MaxNudges": DefaultMaxNudges,
 	})
-}
-
-// humanDuration writes a duration the way a sentence addressed to an agent
-// needs it. time.Duration.String() gives "1h0m0s", which reads as a machine
-// value the agent may well repeat back to the user.
-func humanDuration(d time.Duration) string {
-	switch {
-	case d >= time.Hour && d%time.Hour == 0:
-		return pluralize(int(d/time.Hour), "hour", "an")
-	case d >= time.Minute && d%time.Minute == 0:
-		return pluralize(int(d/time.Minute), "minute", "a")
-	default:
-		return d.String()
-	}
-}
-
-// article is part of pluralize's job because the two units it serves take
-// different ones: "an hour", "a minute".
-func pluralize(n int, unit, article string) string {
-	if n == 1 {
-		return article + " " + unit
-	}
-	return strconv.Itoa(n) + " " + unit + "s"
 }
 
 // buildBase builds the common message shared by all prompt types.
@@ -273,12 +253,13 @@ func BuildAutoContinuationMessageWithSteps(w Work, steps []string, currentStep i
 // BuildChildCompletionMessage tells a parent that one of its children closed.
 //
 // waitCleared says whether this closure ended the parent's wait, and it is a
-// parameter rather than a read of parent.Wait because only the caller knows:
-// the engine clears a wait on children and deliberately leaves a wait on the
-// *user* standing (Engine.notifyParentOfChild). Telling a parent its wait is
-// gone when it is not would invite it to call work_wait and overwrite a wait on
-// a person with one on its subtasks — the user would stop being told they are
-// the one being waited for.
+// parameter rather than a read of parent.Wait because the caller reads that
+// field before the transition and this runs after it
+// (Engine.notifyParentOfChild). It is false for a parent that had declared no
+// wait — a story still working through its own turn when a subtask happened to
+// close. Telling that one its wait was cleared would name something it never
+// had, and invite it to "wait again" with work_wait when it has nothing it is
+// ready to stop for.
 func BuildChildCompletionMessage(parent Work, childTitle, childID string, waitCleared bool) string {
 	base := buildBase(parent)
 
@@ -287,6 +268,35 @@ func BuildChildCompletionMessage(parent Work, childTitle, childID string, waitCl
 		"ChildID":     childID,
 		"ID":          parent.ID,
 		"WaitCleared": waitCleared,
+	})
+
+	return base + "\n\n" + nudge
+}
+
+// BuildChildQuestionMessage tells a story that one of its subtasks asked the
+// user something, and hands it the two ways forward.
+//
+// The question is quoted in full, options and all, because the story is being
+// asked to consider answering it and cannot fetch it: the question lives on the
+// subtask's session, not on the work item. The request id travels with it as
+// the only thing question_answer takes.
+func BuildChildQuestionMessage(parent Work, childTitle, childID string, q session.PendingQuestion) string {
+	base := buildBase(parent)
+
+	labels := make([]string, 0, len(q.Options))
+	for _, o := range q.Options {
+		labels = append(labels, o.Label)
+	}
+
+	nudge := render(prompts.ChildQuestionNudge, map[string]any{
+		"ChildTitle":  childTitle,
+		"ChildID":     childID,
+		"ID":          parent.ID,
+		"Header":      q.Header,
+		"Question":    q.Question,
+		"RequestID":   q.RequestID,
+		"Options":     strings.Join(labels, " | "),
+		"MultiSelect": q.MultiSelect,
 	})
 
 	return base + "\n\n" + nudge

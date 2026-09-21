@@ -1,7 +1,7 @@
 import { AlertCircle, ChevronUp, Loader2, Plus } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRoleNameMap } from "../../hooks/useRoleNameMap";
-import { type Activity, needsUser } from "../../lib/activity";
+import { type Activity, needsAttention } from "../../lib/activity";
 import { byUpdatedDesc } from "../../lib/workOrder";
 import {
 	useWorkStore,
@@ -500,17 +500,18 @@ const HIDDEN_KEY: Partial<Record<WorkGroup, keyof WorkListHidden>> = {
  * The leaf each heading borrows its glyph and tone from.
  *
  * Fixed per group and never taken from the rows inside it: *Needs you* holds
- * three different leaves, and a heading wearing one of them would mislabel the
- * other two. The rows keep their own precise leaf, which is where the
- * distinction belongs — so these are drawn `decorative`, with the written label
- * as the only thing announced.
+ * rows waiting on a permission decision and rows with questions outstanding, and
+ * the second of those is not an activity at all — a heading wearing either row's
+ * glyph would mislabel the rest. The rows keep their own precise leaf, which is
+ * where the distinction belongs, so these are drawn `decorative` with the
+ * written label as the only thing announced.
  */
 const GROUP_GLYPH: Record<WorkGroup, Activity> = {
 	// The one group whose heading glyph is necessarily every row's as well,
 	// since the leaf *is* the membership rule. Still fixed here rather than read
 	// off a row: the rule is the rule.
 	stopped: "stopped",
-	needs_you: "needs_message",
+	needs_you: "needs_permission",
 	in_progress: "running",
 	not_running: "open",
 };
@@ -519,8 +520,8 @@ const GROUP_GLYPH: Record<WorkGroup, Activity> = {
  * Which group a work is a row in, or `null` when it gets no row of its own.
  *
  * A row exists for every story, and for every task that needs a person —
- * `needsUser` or `stopped`, the two ways a task can be stuck with nobody coming
- * for it. Everything else about a task is rolled up into its story's row
+ * `needsAttention` or `stopped`, the two ways a task can be stuck with nobody
+ * coming for it. Everything else about a task is rolled up into its story's row
  * (docs/project-ui.md §2.2). Which items get rows is untouched by the split of
  * *Stopped* out of *Not running*: the same rows exist, in different groups.
  *
@@ -537,7 +538,8 @@ function rowGroup(work: WorkListItem): WorkGroup | null {
 	// its last activity was says nothing about what happens next.
 	if (work.status === "stopped") return "stopped";
 	if (work.status === "active") {
-		if (needsUser(work.activity)) return "needs_you";
+		if (needsAttention(work.activity, work.unanswered_questions))
+			return "needs_you";
 		return work.type === "story" ? "in_progress" : null;
 	}
 	return work.type === "story" ? "not_running" : null;

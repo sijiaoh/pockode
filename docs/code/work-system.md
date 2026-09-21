@@ -74,8 +74,9 @@ its history, so the worktree is pinned for the work's whole life. Restart and
 reopen therefore reuse the recorded worktree rather than re-reading the
 frontend's current one.
 
-This binding is what lets `WorkStarter`/`WorkStopper` and session cleanup act on
-`worktreeManager.Get(w.Worktree)` instead of always the main worktree, and it is
+This binding is what lets `WorkStarter`, the engine's `SessionTerminator` and
+session cleanup act on `worktreeManager.Get(w.Worktree)` instead of always the
+main worktree, and it is
 the ownership signal behind worktree-deletion protection (below).
 
 One consumer leans on the *normally* in "an entire story subtree normally shares
@@ -106,7 +107,7 @@ to rather than repeated here; the model all three share is
 ```
                          ┌──── the engine drives it ────┐
 open ───── Start ───────►│            active            │──── StepDone ────► closed
-                         │   wait: none | user | child  │                      │
+                         │      wait: none | child      │                      │
                          └──────────────────────────────┘                      │
                               ▲                  │                             │
                               │                  │ Stop / abort / nudge limit  │
@@ -135,20 +136,25 @@ time one was missed, and four separate mechanisms existed to repair them.
 | Wait | Set by | Cleared by |
 |------|--------|------------|
 | none | every transition into active | — |
-| `user` | `work_needs_input` | a user message |
-| `child` | `work_wait` | a child work closing, or a user message — or the engine, when no child is left that could close ([input 3](#input-3-a-child-work-left-active)) |
+| `child` | `work_wait` | a child work closing, or a user message — or the engine, when no child is left that could close ([input 6](#input-6-a-child-work-left-active)) |
 
 A wait is orthogonal to the status: a waiting work is still **active** — the
-engine still owns it — it simply must not be nudged to carry on. Both waits are
-cleared by something that arrives from *outside* the session, which is why they
-survive a server restart while a work with no wait does not
-([startup](#input-5-startup)).
+engine still owns it — it simply must not be nudged to carry on. It is cleared
+by something that arrives from *outside* the session, which is why it survives a
+server restart while a work with nothing outstanding does not
+([startup](#input-8-startup)).
 
-`WaitReason` rides with it: free text, in the agent's own words, shown verbatim
-on the work's detail page. It is the only place the user can read what the agent
-actually wants, and no fixed vocabulary could carry it.
+**There was a second value, `user`, and it is gone** — with `WaitReason`, the
+free-text line that went with it. An agent that needs something from a person
+posts a question instead (`question_post`, [Question Tools](#question-tools));
+why that is strictly better, and not merely different, is
+[lifecycle.md § Work: four intentions](../lifecycle.md#work-four-intentions).
 
-`NudgeCount` is the third field the engine keeps: how many times in a row it has
+What that flag actually did for the engine — "do not nudge this" — is read off
+the session's unanswered list now, by the thing that knows
+([input 1](#input-1-a-turn-ended)).
+
+`NudgeCount` is the other field the engine keeps: how many times in a row it has
 told the agent to carry on without the work moving. Persisted rather than held
 in memory per session, so a restart does not hand a stuck agent a fresh
 allowance.
@@ -158,7 +164,7 @@ allowance.
 table beside them to drift out of sync:
 
 - `ValidateProgress` — may the agent move this work along (`step_done`,
-  `work_wait`, `work_needs_input`, stop, a liveness sync)? `active` and
+  `work_wait`, stop, a liveness sync)? `active` and
   `stopped` qualify; `open` and `closed` do not, and each names its way in.
   A `stopped` work is admitted on purpose: an agent able to call `step_done` is
   running whatever the status claims, and gating on it is how a work that had
@@ -166,8 +172,8 @@ table beside them to drift out of sync:
 - `ValidateStartable` — may a session be started for this work? Also admits
   `open` (the fresh-start case) and rejects `active`, so a running work is never
   started twice — which is also what resolves concurrent `Claim`s to a single
-  winner. A work waiting on the user is `active`, so Restart is not offered for
-  it; Stop is (docs/lifecycle-ui.md §3).
+  winner. A work waiting on its subtasks is `active`, so Restart is not offered
+  for it; Stop is (docs/lifecycle-ui.md §3).
 
 | Status | SessionID | CurrentStep |
 |-------|-----------|-------------|
@@ -190,7 +196,7 @@ encapsulates its validation and its bookkeeping.
 | `SetWait(id, wait, reason)` | live → active with that wait | Record what the agent is waiting for (`WaitNone` clears it) |
 | `SetChildWait(id, reason)` | live with an active child → active + `child` | The same for a wait on subtasks, which is refused — *reported*, not an error — when no subtask is running |
 | `Activate(id)` | live → active, wait and nudges cleared | Someone handed the work something to go on |
-| `ClearChildWaitIfStranded(id)` | `active` + `child` with no active child → active, wait and nudges cleared | The same, for a wait nothing could end — and it *reports* whether this call was the one that ended it, which is what it is for ([input 3](#a-wait-nothing-could-end)) |
+| `ClearChildWaitIfStranded(id)` | `active` + `child` with no active child → active, wait and nudges cleared | The same, for a wait nothing could end — and it *reports* whether this call was the one that ended it, which is what it is for ([input 6](#a-wait-nothing-could-end)) |
 | `RecordNudge(id)` | counts one nudge, returns the total | The engine compares it against its own limit |
 | `Reopen(id)` | closed → active | Reopen a closed item to add children or continue |
 | `RollbackStart(id, wasRestart)` | active → open/stopped | Undo a failed start |
@@ -203,7 +209,7 @@ written through `setLiveStatus`, and for one reason: their condition is about th
 work *and its children*, while `setLiveStatus` hands a mutate func the single
 record it is changing. Written that way each would have to read the children
 outside the lock, and that read is the bug they exist to remove — see
-[input 3](#a-wait-nothing-could-end). They share one predicate,
+[input 6](#a-wait-nothing-could-end). They share one predicate,
 `work.HasActiveChild`: "is there still something that could close" is one
 question, and a wait set on one answer and cleared on another would be a wait
 that argues with itself.
@@ -230,7 +236,7 @@ refused.
 
 `stopped` is admitted beside `active` there for a reason that is not
 hypothetical. A kickoff that fails deletes the session it created, and the engine
-stops the work of a deleted session ([input 4](#input-4-the-session-was-deleted))
+stops the work of a deleted session ([input 7](#input-7-the-session-was-deleted))
 — so that stop and this rollback race, in either order. With the session id as
 the identity both orders converge: the stop lands first and the rollback still
 undoes it, or the rollback lands first and the stop finds no work owning that
@@ -239,7 +245,7 @@ session at all.
 ### Activity
 
 `Activity` is what a work is *doing*, as one value, and it is derived —
-never stored. Ten leaves; the rule, in full:
+never stored. Eight leaves; the rule, in full:
 
 > The session says what is happening; the work's wait says what it is waiting
 > for when nothing is happening.
@@ -248,17 +254,23 @@ never stored. Ten leaves; the rule, in full:
 activity(work, turn):
   status open / closed / stopped -> open / closed / stopped
   turn.phase == running          -> running
-  turn.phase == blocked          -> permission > question > background
+  turn.phase == blocked          -> permission > background
   otherwise (idle, or no turn):
-    wait user  -> needs_message
     wait child -> waiting_children
     otherwise  -> idle
 ```
 
 Phase outranks wait because a wait is a standing intention and a phase is a fact
-about this second: an agent that calls `work_needs_input` and then keeps writing
-for ten seconds *is* running. Permission outranks question because a permission
-request cannot be answered late — it expires as a denial.
+about this second: an agent that calls `work_wait` and then keeps writing for ten
+seconds *is* running. Permission outranks background because background is the one
+nobody can act on — and those are the only two blockers a turn has.
+
+`needs_answer` was a ninth leaf and is gone with the CLI's own blocking question.
+Its replacement is not a leaf at all: a question an agent posts leaves the work
+`running`, and what says so is the count below.
+
+Nothing here says "this work is waiting for a person", and that is the second
+dimension's job, not this one's — see below.
 
 **It is computed on the server for work rows** (`server/work/activity.go`,
 carried on `rpc.WorkListItem.activity` and on the detail). The work list is
@@ -274,6 +286,42 @@ Reading the turn of a worktree nobody has opened is what `work.TurnSource`
 (implemented by `worktree.Manager`) is for: a loaded worktree answers from its
 session store, an unloaded one from its index on disk — building a worktree
 because somebody looked at a row is exactly what that avoids.
+
+### Unanswered Questions
+
+Activity is not the only thing a row reads off the session layer. A work whose
+agent posted a question with `question_post` has something waiting for the user
+*and* may be running at the same time, so the two are carried side by side
+(`work.RowState`) rather than folded into one value — a row forced to pick would
+be wrong either way.
+
+| Surface | Field | Why |
+|---|---|---|
+| work row (`rpc.WorkListItem`) | `unanswered_questions: number` | a row prints `Running · 2 to answer`, and every subscriber is sent a row whenever any item changes |
+| work detail | `pending_questions: PendingQuestion[]` | the one surface with room to show what is being asked |
+| session row (`rpc.SessionListItem`) | `unanswered_questions: number` | `len(turn.unanswered)`, derived where the row is built so it cannot drift |
+| `work_get` (MCP) | `pending_questions` | on the detail, not the summary, for the reason `body` is |
+
+The count is only drawn for `active` and `stopped` work. Closing a work
+withdraws the questions beneath it, and an open one has no session to have asked
+any, so a count on either would be a leftover nobody can act on.
+
+**`RowState.NeedsAttention` is where the two dimensions merge, and the only
+place they do**: `Activity.NeedsUser() || UnansweredQuestions > 0`. On the server
+it decides whether an active *task* earns a row of its own in the `Current`
+segment (`watch.hasCurrentRow`) — a task whose agent posted a question and went
+on working reads as `running`, and a rule looking only at the activity would roll
+it up into its story and leave the question unreachable from the list. The client
+mirrors the same predicate for the attention dot and the *Needs you* group
+([lifecycle-ui.md §1.4](../lifecycle-ui.md#14-the-three-components)).
+
+Everywhere with room for two things — a session row, a work row's second line —
+draws them side by side instead. The merge is only for places that need a single
+bit.
+
+The mechanics of a posted question — where the list lives, what moves it, what a
+fork inherits — are in
+[agent-integration.md](agent-integration.md#posted-questions).
 
 ### Step Completion
 
@@ -366,13 +414,46 @@ AI agents interact with the Work system through MCP (Model Context Protocol) too
 | `work_update` | Modify title/body/role | `id`, fields to update |
 | `work_delete` | Delete (cascades to children) | `id` |
 | `work_start` | Begin execution | `id`, `worktree?` (story only) |
-| `work_needs_input` | Pause for user input | `id`, `reason` |
-| `work_wait` | Pause for child work completion | `id`, `reason?` |
+| `work_needs_input` | **Retired.** Answers with an error naming `question_post` | `id`, `reason` |
+| `work_wait` | Pause for child work completion | `id` |
 | `work_reopen` | Reopen a closed work item | `id` |
 | `step_done` | Advance work step or close work | `id` |
 | `work_comment_add` | Add progress note | `work_id`, `body` |
 | `work_comment_list` | List comments | `work_id` |
 | `work_comment_update` | Update comment text | `id`, `body` |
+
+`work_needs_input` is still listed, and that is the whole of what it is for now:
+an agent whose context still carries the old lifecycle rules is answered with a
+sentence naming `question_post` rather than with "unknown tool", so it can act on
+it in the same turn. It moves nothing. The entry goes for good once nothing can
+still be holding those rules.
+
+### Question Tools
+
+These act on the session the call came from rather than on an id the model
+names, which is why they need the caller identity
+([MCP Caller Identity](agent-integration.md#mcp-caller-identity)) and are refused
+outright for a call that arrived without one — an agent started by hand has no
+chat to ask into, and no identity to be recorded as having answered.
+
+| Tool | Purpose | Key Parameters |
+|------|---------|----------------|
+| `question_post` | Ask the user one question and carry on; returns a `request_id` | `question`, `header`, `options?`, `multi_select?` |
+| `question_answer` | Answer a question **another** session posted | `request_id`, `answers?`, `text?`, `session_id?` |
+| `question_cancel` | Withdraw a question the same session posted | `request_id` |
+
+`question_answer` is the only one of the three that acts on somebody else's
+session — the caller's identity is what is recorded as the answerer, not what is
+acted on. It refuses to answer the caller's *own* question, which is a
+withdrawal wearing the wrong tool's name.
+
+There is deliberately **no tool that lists questions**: the answer arrives as a
+message, so a list would only invite an agent to poll for it inside the turn it
+was told not to wait in. For the same reason the `question_post` description
+carries the whole contract — an ordinary session gets no system prompt, so the
+description is the only place it can be said.
+
+See [Posted Questions](agent-integration.md#posted-questions).
 
 ### Agent Role Tools
 
@@ -386,9 +467,10 @@ Two of these return less than their name suggests: `work_list` omits the body an
 **A tool description is a prompt.** It is all an agent knows about a status it
 never sees the code for, so the descriptions carry the same vocabulary as
 `lifecycle_rules`: `work_list` glosses the four statuses it returns,
-`work_needs_input` says what it is preferred over and why, `work_wait` says that
+`question_post` carries its whole contract (see below), `work_wait` says that
 the news of a child closing clears the wait *and* that a wait with no subtask
-running is rejected, and `step_done` says it is not a way to pause. The two
+running is rejected, and `step_done` says it is not a way to pause and that
+completing a step withdraws the questions asked during it. The two
 rejections are named rather than left to be discovered, and in both of the
 places a rule can be read *before* it is hit: here, and in the lifecycle section
 every engine message carries ([Prompt Format](#prompt-format)). `mcp/tools_test.go`
@@ -462,7 +544,7 @@ auth failures are surfaced to the AI rather than failing silently.
 ## The Work Engine
 
 `work.Engine` is the only thing that moves a work item without being told to by a
-person or by an agent. It has exactly five inputs, and no special cases beside
+person or by an agent. It has exactly eight inputs, and no special cases beside
 them. What the old `AutoResumer` and `StatusSyncer` did with process state
 changes is gone: a process state is not a work state, and every rule that read
 one turned out to be a rule about a turn ending — which is what the engine reads
@@ -472,6 +554,9 @@ instead.
 |---|---|
 | A turn ended | `session.TurnSettler` → `process.Manager.SetOnTurnEnded` |
 | The user handed the session something to go on | the three chat RPCs |
+| The user answered a posted question | `chat.message` with `answering` |
+| Another agent answered a posted question | the `question_answer` MCP tool |
+| An agent posted a question | the `question_post` MCP tool |
 | A child work left active | the work store's own change event |
 | The session was deleted | the session store's own change event |
 | The server started | `RecoverStartup`, before any session exists |
@@ -485,11 +570,26 @@ a moment and drops it if the session comes back
 sees an ending that was immediately superseded, and needs no settle delay,
 activation counter or in-flight bookkeeping of its own.
 
-| Outcome | Wait | What happens |
+| Outcome | Outstanding | What happens |
 |---|---|---|
-| `aborted` | any | → `stopped` |
-| `completed` / `failed` | `user` or `child` | nothing; its own event will wake it |
-| `completed` / `failed` | none | nudge; → `stopped` once the allowance is spent |
+| `aborted` | anything | → `stopped` |
+| `completed` / `failed` | a `child` wait, or an unanswered question | nothing; whatever it is waiting for wakes it |
+| `completed` / `failed` | nothing | nudge; → `stopped` once the allowance is spent |
+
+**Two different things read as "leave it alone", and they are kept apart because
+they are kept in different places.** A wait is on the work, declared by the agent
+about the work. An unanswered question is on the *session*: the agent posted it
+and carried on, Pockode is holding it, and the answer will arrive as an ordinary
+message. They are orthogonal — a story can be waiting on its subtasks and have a
+question outstanding at once — and either alone makes this ending unsurprising.
+
+The questions are read **live**, through `work.TurnSource`, at the moment the
+decision is taken rather than carried on the ending. An ending is held back for
+the settle delay, and a question answered inside that window must not still look
+outstanding — nor must one posted inside it look absent. A session the turn
+source cannot read counts as *having* questions: not knowing is not a reason to
+nudge, because a nudge that should not have been sent spends the allowance that
+ends in a stop.
 
 An aborted turn was taken away rather than finished — a user interrupt, a denied
 permission, the death of the process carrying it. Carrying on is the one thing
@@ -505,7 +605,7 @@ simply found stopped after a run of empty turns.
 **The count lives on the work record**, not in a map keyed by session. It
 survives a restart (a stuck agent gets no fresh allowance) and it is reset by
 everything that counts as progress: a step advance, a user message, a reopen, a
-child closing, a start.
+child closing, a start, an answer.
 
 ### Input 2: a user message
 
@@ -525,7 +625,63 @@ not:
   closure). They put a message into a session, but they are not a person looking
   at the work, and each already clears what it means to clear.
 
-### Input 3: a child work left active
+### Input 3: the user answered a posted question
+
+A `chat.message` carrying `answering` is a message like any other, and it does
+one less thing than input 2 on purpose: the nudge allowance starts over
+(`Store.ClearNudges`) and a `child` wait is left exactly where it was.
+
+An answer is not general-purpose attention. The agent asked one specific thing
+and went on working; a story that afterwards declared it was waiting for its
+subtasks is still waiting for exactly that, and no subtask closed. Clearing the
+wait would resume a story with nothing to do and then nudge it for having
+nothing to do. Typing a message *without* answering anything is different and
+still clears the wait — that is a person redirecting the work, which is the one
+thing a `child` wait yields to besides a subtask closing.
+
+The fork is taken in the handler, on what the client sent rather than on what the
+send resolved to: an empty `answering` is a person typing. A stopped work is
+woken either way — the narrowing is about the wait, not about the status.
+
+### Input 4: another agent answered
+
+`question_answer` delivers one agent's answer into the session that asked
+([agent-integration.md](agent-integration.md#an-agent-may-answer-and-the-record-says-who-did)),
+and `Engine.HandleAgentAnswer` does the smaller half of input 3: the nudge
+allowance starts over and nothing else moves.
+
+The **status** is left alone too, which input 3 does not do. Only a person hands
+a work back, so only a person takes it off the shelf again — an agent's answer
+waking a `stopped` work would be one agent restarting what another person
+stopped. The tool refuses to deliver into a stopped work at all; this is the
+same rule stated where the status is owned.
+
+### Input 5: a subtask's question reaches its story
+
+A story usually knows what its subtask is asking about — it decided it, or a
+sibling settled it — so a question posted by a work with a parent is passed up as
+a `child_question` message carrying the question and its `request_id`. The story
+answers with `question_answer`, or asks the user itself with `question_post`, or
+leaves it for the user to answer on the subtask.
+
+**It clears no wait.** A `child` wait ends when a subtask *closes*, and a subtask
+asking a question is not that — the subtask carries on either way. So a story
+that answers and ends its turn is still waiting for exactly what it was waiting
+for, and is not nudged for it. That is the mirror of input 6, which does clear
+the wait, because there the thing being waited for has happened. The message says
+so in words, because an agent handed something to do otherwise assumes its wait
+is over.
+
+**Nothing is retried and nothing is stopped when it cannot be delivered** — a
+stopped or closed story, one whose turn is held open by a permission request.
+That is the other half of the same difference: the two notifications below carry
+news a waiting parent is *owed*, so an undelivered one leaves it waiting for
+something that already happened. This one takes nothing away. The question stays
+on the subtask, where the user can see it and answer it, and the way back is a
+person's — the restart and reopen prompts tell a story to read its subtasks'
+unanswered questions (`work_get`).
+
+### Input 6: a child work left active
 
 The engine hears every work change, and a child leaving `active` is one of two
 things it reads off them (the other is
@@ -539,7 +695,7 @@ not other subtasks are still running.
 |---|---|---|---|
 | `open` | — | — | No — no agent session started yet |
 | `active` | `child` | wait cleared | Yes |
-| `active` | `user` / none | — | Yes |
+| `active` | none | — | Yes |
 | `stopped` | — | — | No — see below |
 | `closed` | — | — | No — a child closing is no reason to reopen it |
 
@@ -581,7 +737,7 @@ with the news. **Stopping a parent whose agent is reachable would be worse than
 the bug**: it takes away the recovery that costs nobody anything — the agent
 restarting the subtask itself — and makes a user who stopped one subtask restart
 two things. That holds exactly as long as there *is* an agent to wake, which is
-why the two cases below, and [input 5](#input-5-startup), stop instead.
+why the two cases below, and [input 8](#input-8-startup), stop instead.
 
 Three ways a child can leave without closing, and the message names which,
 because the way back differs:
@@ -630,7 +786,7 @@ that never could have ended. Both decisions are taken in the store, by the same
 predicate, for the same reason — neither may be assembled from a read and a
 write.
 
-### Input 4: the session was deleted
+### Input 7: the session was deleted
 
 A deleted session takes away the place every answer and every nudge would have
 gone, so the work above it stops — including one that was *waiting*, which is the
@@ -643,20 +799,20 @@ rather than being a special case in one RPC handler. Deleting a *work* needs no
 such rule: it cascades into its sessions, so no work is left behind to lie about
 its status.
 
-### Input 5: startup
+### Input 8: startup
 
 `RecoverStartup` runs once, before any session exists.
 
 | At startup | Outcome | Why |
 |---|---|---|
-| `active`, no wait | → `stopped` + comment | Its process is gone and nothing will end the turn it was carrying |
-| `active`, waiting on the user | preserved | The answer comes from outside the session and still reaches it |
+| `active`, nothing outstanding | → `stopped` + comment | Its process is gone and nothing will end the turn it was carrying |
+| `active`, a question nobody has answered | preserved | The answer comes from outside the session and still reaches it |
 | `active`, waiting on children, a child still `active` | preserved | That child still wakes it when it closes |
 | `active`, waiting on children, none left `active` | → `stopped` + comment | Nothing is left that could end the wait — usually because the first row just stopped its last subtask |
 
 This is the difference the old model could not express, and why every paused work
-used to come back from a restart stopped. What a wait is waiting for outlives the
-process by construction; a work with no wait has nothing left to wake it.
+used to come back from a restart stopped. What a work is waiting for outlives the
+process by construction; a work waiting for nothing has nothing left to wake it.
 
 The stop gets a comment, since nobody asked for it and the background tasks the
 work may have been waiting on died with the server. A preserved work gets none —
@@ -673,6 +829,15 @@ a story left waiting on a subtask that startup had already stopped sat `active`
 forever, with no nudge, no process, and nothing on screen to distinguish it from
 the stories that were really running.
 
+**It also beats the second row: a work whose wait has nothing left to end it is
+stopped even with a question outstanding.** A wait is not something an answer
+ends — answering clears the nudge count and leaves the wait exactly where it was
+([input 3](#input-3-the-user-answered-a-posted-question)) — so a work left
+`active` here would sit on that wait for good, exactly the state this pass
+exists to end. It takes nothing from the question either: questions outlive a
+stop, the user is still offered them, and answering one wakes the work like any
+other message.
+
 One pass is enough, and that rests on a fact the package enforces rather than on
 luck: a `child` wait only ever comes from `SetChildWait`, which requires an
 active child, so only a type that can *have* children can hold one — and today
@@ -681,7 +846,7 @@ pass, so no stop in it can strand another wait.
 `TestOnlyTopLevelWorkCanHaveChildren` fails the day the hierarchy grows a
 level, which is when this has to become a loop to a fixed point.
 
-**Startup stops where [input 3](#a-wait-nothing-could-end) wakes, and the two
+**Startup stops where [input 6](#a-wait-nothing-could-end) wakes, and the two
 agree rather than contradict.** Waking hands the decision to the agent, which
 presumes there is an agent: at startup every process died with the last run, so
 there is nobody to decide and nothing to tell. Stopping is also what keeps it
@@ -693,10 +858,13 @@ work needing a person *now* (§4).
 The prompts a restart destroys are the session layer's business, not the work
 layer's: a killed process's blockers expire through the reducer and a
 `process_ended` record lands in the transcript, so the cards read Expired
-([agent-integration.md](agent-integration.md#restart-repair)). A work waiting on
-the user is *not* waiting on one of those cards — it is waiting on
-`work_needs_input`, which nothing in the session knows about, and which a user
-message answers whenever they get to it.
+([agent-integration.md](agent-integration.md#restart-repair)). A **posted
+question is not one of those cards** and survives untouched: it belongs to the
+session rather than to the process, and the message carrying its answer reaches
+the work whenever the user gets to it. That is why recovery keeps such a work
+active, and why it reads the unanswered list straight off the session index on
+disk (`worktree.StartupTurns`) — recovery runs before the worktree manager
+exists, and with no process left alive the file *is* the live value.
 
 ### The session lease
 
@@ -735,20 +903,19 @@ work a restart stops.
 
 ### Commands
 
-The seven things a person or an agent can ask for live in `work.Operations`, and
+The six things a person or an agent can ask for live in `work.Operations`, and
 both transports go through it — the WebSocket handler (user actions) and the MCP
 `Executor` (AI actions). A user-triggered command and an AI-triggered one are
-therefore the same command and cannot drift apart; before, stop and needs_input
-had an implementation each, and every bug found in one had to be found again in
-the other.
+therefore the same command and cannot drift apart; before, the waits and stop had
+an implementation each, and every bug found in one had to be found again in the
+other.
 
 | Command | Store transition | Side effect |
 |---|---|---|
 | `StartWork` | `Claim` (atomic restart/session decision) | `WorkStartHandler` creates the session and sends the kickoff; rolls back on failure |
 | `StopWork` | `Stop` | the process ends with the transition |
 | `ReopenWork` | `Reopen` | reopen nudge |
-| `StepDone` | `StepDone` | next-step prompt while steps remain; refused when it would close a work whose subtasks are still active |
-| `NeedsInput` | `SetWait(user, reason)` | — |
+| `StepDone` | `StepDone` | next-step prompt while steps remain; withdraws the step's questions; refused when it would close a work whose subtasks are still active |
 | `Wait` | `SetChildWait` | refused when no subtask of the work is running |
 | `DeleteWork` | `Delete` (the subtree) | the subtree's sessions and their processes go with it |
 
@@ -779,7 +946,19 @@ looks at a parent that is not waiting yet and rightly does nothing, and the wait
 then lands with nothing left that could ever end it — the exact failure this
 whole rule exists to prevent, rebuilt out of two correct halves.
 
-`NeedsInput` has no such refusal and needs none: a person can always be asked.
+**A completed step withdraws the questions asked during it**
+(`QuestionWithdrawer`, implemented by `worktree.Manager`, reason `step_done`). A
+question is about the step it was asked in; once the step is over the agent has
+moved past it, and an answer would arrive for work already finished while the
+user was asked for nothing. Only on an *advance* — the step that closes the work
+is left to the retirement, which withdraws them with the reason that says more
+(`work_closed`, [the session lease](#the-session-lease)); doing both would write
+two withdrawals for one question and race over which reason the user reads.
+
+**Stopping withdraws nothing**, and that is the deliberate opposite. A stopped
+work has been handed back to a person, and the questions are exactly what that
+person is being handed: they survive the stop, survive the restart after it, and
+answering one wakes the work like any other message.
 
 Process termination is deliberately **not** in `Operations`: it belongs to the
 transition, not to the command that caused it (see
@@ -794,7 +973,7 @@ step_done ──► Operations.StepDone()
             yes        no
               │        │
               ▼        ▼
-       CurrentStep++   Close work ──► the parent is told (input 3)
+       CurrentStep++   Close work ──► the parent is told (input 6)
               │                       the session is retired (the lease)
               ▼
        Engine.NotifyStepDone() ──► send next-step prompt
@@ -1015,7 +1194,7 @@ total is incomplete" marker that `unpriced_session_count` carries, instead of a
 log line.
 
 **Usage changes without the work item changing**, so `WorkDetailWatcher` also
-listens to every worktree's session store (`Manager.SetSessionChangeListener`)
+listens to every worktree's session store (`Manager.AddSessionChangeListener`)
 and, on a session change, re-sends the detail of the work item owning that
 session **and of every work item above it** — each ancestor's total includes it.
 Sessions belonging to no work item (plain chats) cost nothing, and the walk is
@@ -1340,11 +1519,12 @@ with `work_comment_add`" — and then `lifecycle_rules`, which every work driven
 Pockode gets verbatim.
 
 **`lifecycle_rules` is the single place the agent-facing lifecycle is written.**
-It says what the four statuses mean, that a wait is something only the agent can
-declare (`work_needs_input` / `work_wait`, both reasons shown to the user on the
-detail page), that exactly two things end a turn cleanly — `step_done`, or a
-declared wait — and what happens when neither is said: a nudge, and `stopped`
-once the allowance is spent. "I still have work to do" is deliberately not
+It says what the four statuses mean, that `question_post` is how the agent
+reaches a person — posted and returned, nothing waiting on it, the answer
+arriving later as a message — that a story's wait on its subtasks is `work_wait`,
+that exactly two things end a turn cleanly (`step_done`, or something
+outstanding) and what happens when neither is true: a nudge, and `stopped` once
+the allowance is spent. "I still have work to do" is deliberately not
 offered as a third way to end a turn; it is the nudged case, and listing it as an
 ending would have promised an agent a safety it does not have. For a story it
 also names **both** subtask refusals, in the one sentence that already pairs the
@@ -1357,26 +1537,31 @@ Before it existed the same rules were restated in four per-type templates, which
 is exactly how the prompts came to describe a work model — `in_progress`,
 "needs_input" — that the store had stopped producing.
 
-Two of its numbers are rendered from the constants that govern the behaviour
-(`DefaultMaxNudges`, `session.DefaultAnswerBudget`) rather than typed into the
-YAML, so a prompt cannot promise an allowance the engine does not give.
-`humanDuration` writes the budget as "an hour" rather than `1h0m0s`, because the
-agent may repeat it to the user. The answer budget is quoted **as the default**,
-not as the deadline in force: it is an operator flag (`--answer-timeout`, `0`
-disabling it entirely) and prompt building has no access to the running
-configuration, so a bare number here would be false on any server that changed
-it. The nudge allowance has no flag, so it is stated flatly.
+Its one number is rendered from the constant that governs the behaviour
+(`DefaultMaxNudges`) rather than typed into the YAML, so a prompt cannot promise
+an allowance the engine does not give. It is stated flatly because it has no
+operator flag to be overridden by.
 
-`IsStory` gates the two paragraphs about children: only a story can have any, so
-a task is never offered `work_wait`.
+**There used to be a second, and it went when questions stopped holding a
+process open.** The answer budget was quoted here so an agent knew how long its
+question would be waited on; `question_post` waits for nothing, so there is no
+deadline to tell it about. `--answer-timeout` now governs permission requests
+alone, which the agent is not the one waiting on.
 
-**Long waits versus short questions.** The section closes by telling the agent
-where a wait belongs. A question asked in the chat blocks the turn and holds the
-process open; unanswered past the answer budget it is cancelled on the user's
-behalf, and the aborted turn *stops the work*. `work_needs_input` costs none of
-that — the process can be collected, and the answer counts whenever it arrives.
-The agent cannot derive this from anywhere else: nothing about `AskUserQuestion`
-says it is holding a CLI open.
+`IsStory` gates the sections about children: only a story can have any, so a task
+is never offered `work_wait`.
+
+**Two things the agent cannot derive from any tool description.** First, that
+its CLI's own ask-the-user tool does not reach the user here: Pockode refuses it
+and points the agent back at `question_post`
+([agent-integration.md](agent-integration.md#refusing-the-clis-own-question)), so
+a question asked that way is a turn spent for nothing. This is worth saying even
+though a Claude session cannot see that tool at all — `buildArgs` takes it off the
+list — because the refusal is what happens if a CLI stops honouring the flag, and
+because Codex's counterpart is refused at the protocol rather than hidden.
+Second, that ending a turn with a posted question outstanding is not the accident
+an ordinary quiet ending is: Pockode does not nudge and does not spend the
+allowance. `prompt_test.go` holds both sentences.
 
 **The story restart nudge sends the agent to re-read its tasks**, and that is
 load-bearing rather than politeness: a stopped parent is deliberately not told
@@ -1386,11 +1571,9 @@ when a child closes (*A Child Closing*), so re-reading `work_list` and
 **The child-done nudge says that it cleared the wait — when it did.** Being told
 about one child resumes a parent that was waiting on its children, so a story
 with other tasks still running has to call `work_wait` again, otherwise its next
-silent turn reads as an agent that stopped by accident. A parent waiting on the
-*user* keeps its wait (*A Child Closing*) and is told none of this: an agent that
-believed its wait was gone would replace a wait on a person with one on its
-subtasks, and the user would stop being shown as the one being waited for. Which
-of the two happened is passed to `BuildChildCompletionMessage` by the engine
+silent turn reads as an agent that stopped by accident. A parent that declared no
+wait is told the child closed and told that nothing was cleared — there was
+nothing to ask for again. Which of the two happened is passed to `BuildChildCompletionMessage` by the engine
 rather than re-derived from `parent.Wait`, so the message and the transition are
 decided once.
 
@@ -1503,7 +1686,7 @@ the work was being nudged along after it had already stopped.
 
 A work-driven prompt is byte-for-byte indistinguishable from a user-typed message once it reaches the agent — same stdin, same `message` event. To let the frontend tell them apart, they are sent via `chat.Client.SendSystemMessage` (not the plain user path), which stamps the `MessageEvent` with `origin: "system"`, a `subtype`, and a `meta` summary. The origin is `"system"` rather than `"work"` because it marks a message produced by Pockode itself; the Work engine is today's only such producer, but the concept is source-agnostic. The user path leaves `origin` empty, so old history stays a normal user message — backward compatible by omission. (For why this reuses the `message` event rather than a new event type, see [agent-event.md](../agent-event.md#message-origin-user-vs-system).)
 
-A system-driven message is refused in exactly one state, like any other: while the session is blocked on a permission request or a question, because the CLI is not reading its input there ([lifecycle.md](../lifecycle.md#session-one-reducer)). The engine's senders — auto-continuation, step advance, reopen, child closure — log a warning and drop it; a restart fails the start it belongs to and rolls the claim back. A kickoff is the one that cannot meet this at all, since it sends into a session it has just created. Nothing holds the message for the card to clear, and [lifecycle.md § Known limits](../lifecycle.md#known-limits-kept-on-purpose) says why that is the accepted answer rather than the cheap one.
+A system-driven message is refused in exactly one state, like any other: while the session is blocked on a permission request, because the CLI is not reading its input there ([lifecycle.md](../lifecycle.md#session-one-reducer)). The engine's senders — auto-continuation, step advance, reopen, child closure — log a warning and drop it; a restart fails the start it belongs to and rolls the claim back. A kickoff is the one that cannot meet this at all, since it sends into a session it has just created. Nothing holds the message for the card to clear, and [lifecycle.md § Known limits](../lifecycle.md#known-limits-kept-on-purpose) says why that is the accepted answer rather than the cheap one.
 
 **Subtypes** (`server/work/prompt.go`) — one per send site, so the frontend can pick a word without parsing the prompt. `web/src/utils/systemMessage.ts` is the single source of that wording, and it decides both halves of a line together: which title belongs on a line depends on the same subtype the action word does.
 
@@ -1514,6 +1697,7 @@ A system-driven message is refused in exactly one state, like any other: while t
 | `auto_continue` | the engine's nudge | Continued | *(blank)* |
 | `step_advance` | `Engine.NotifyStepDone` | Step N/M | work title |
 | `reopen` | `Engine.NotifyReopen` | Reopened | work title |
+| `child_question` | the engine passing a subtask's question up | Subtask asked | child title |
 | `child_done` | the engine telling a parent | Subtask done | child title |
 | `wait_stranded` | the engine clearing a wait nothing could end | Wait cleared | child title |
 | *(unknown or absent)* | — | System Message | work title |
@@ -1525,7 +1709,9 @@ Every action word states a finished fact — something started, continued, reach
 - **`auto_continue` says nothing else.** It is the one subtype that repeats, and repeating the same title is the least informative line there is; blank keeps it visually weightless.
 - **`child_done` names the child.** The message is delivered to the parent but reports on the subtask, so the parent's own title is noise next to it.
 
-**Meta summary** — `NewMessageMeta(w, step, total)` builds that data so the UI never has to read the prompt body (whose first lines are always the MCP boilerplate prefix). It carries `work_id` / `work_type` / `title` from `w`, plus `step` when the send site has real step context (`total > 0` and `1 <= step <= total`); `child_done` additionally carries `child: {id, title}`, so the line can name the finished subtask without parsing the prompt.
+- **`child_question` names the child for the same reason**, and its action word is what the subtask did rather than what the story must do: the story may answer it, ask the user, or leave it, and a line promising any one of those would be wrong most of the time.
+
+**Meta summary** — `NewMessageMeta(w, step, total)` builds that data so the UI never has to read the prompt body (whose first lines are always the MCP boilerplate prefix). It carries `work_id` / `work_type` / `title` from `w`, plus `step` when the send site has real step context (`total > 0` and `1 <= step <= total`); `child_done`, `child_question` and `wait_stranded` additionally carry `child: {id, title}`, so the line can name the subtask without parsing the prompt.
 
 Every subtype fills `step`, including the three whose prompt body never restates one — `restart`, `reopen` and `child_done` append only their nudge (see *Prompt Format*). Summary and body answer different questions: the body says what the agent has to act on, the summary says where the work stood, and the UI needs the latter even when the prompt withholds it. `step` is omitted only when there is genuinely no position to report — a stepless role, a failed step lookup (`stepCount` answers 0 for both, since a missing step provider must not block a message), or a `current_step` left out of range by a role whose steps were shortened afterwards.
 
@@ -1560,7 +1746,7 @@ Three consequences worth stating outright, so none of them is later "fixed" back
 
 A message that *opens a turn* leaves an empty assistant message behind it — a system message drives the agent just as a user message does, and the placeholder is where the reply streams in. When the agent answers with nothing at all, that placeholder would render as a blank box, so it is dropped at either of the two moments its fate is settled: when the next message arrives to an idle agent (`closePreviousTurn`) and when a terminal event ends the turn. An agent that goes quiet under repeated auto-continuation produces a run of them, which is why this is worth doing at all.
 
-A message that goes into a turn *already open* — one whose bubble is still `sending` or `streaming`, which is the test `appendUserMessage` applies rather than asking the turn's phase — makes no placeholder at all, and that is the point rather than an omission: the reply being written belongs to the turn that was already under way, so the message is simply appended below it and the agent's own reply, if it writes a separate one, opens its own bubble when that turn ends ([lifecycle-ui.md §2.3](../lifecycle-ui.md#23-chat-composer-and-stop)). The missing placeholder is itself the signal the chat reads back to say "sent into the reply the agent is working on" ([lifecycle-ui.md §2.2](../lifecycle-ui.md#22-chat-the-blocker-strip)), so adding one here as a kindness would take that receipt away.
+A message that goes into a turn *already open* — one whose bubble is still `sending` or `streaming`, which is the test `appendUserMessage` applies rather than asking the turn's phase — makes no placeholder at all, and that is the point rather than an omission: the reply being written belongs to the turn that was already under way, so the message is simply appended below it and the agent's own reply, if it writes a separate one, opens its own bubble when that turn ends ([lifecycle-ui.md §2.3](../lifecycle-ui.md#23-chat-composer-and-stop)). The missing placeholder is itself the signal the chat reads back to say "sent into the reply the agent is working on" ([lifecycle-ui.md §2.2](../lifecycle-ui.md#22-chat-the-attention-strip)), so adding one here as a kindness would take that receipt away.
 
 The condition (`isEmptyPlaceholder`) is `parts` empty **and** status `complete`, and the second half is not incidental: `interrupted`, `error` and `process_ended` say their whole message in the status line, so an empty body is exactly when they matter. Dropping those would hide an aborted turn from the user — and an interrupt is the case that produces them most. (The terminal sweep clears one more thing, older than this rule and unrelated to it: a bubble still `sending` when the turn ended, meaning the send never produced anything at all.)
 
@@ -1600,7 +1786,7 @@ work_context: |
 | `work_context` | All messages | `Title`, `ID` |
 | `story_behavior_rules` | Story kickoff | (none) |
 | `task_rules_with_parent` | Task with parent | `ParentID` |
-| `lifecycle_rules` | All messages | `ID`, `IsStory`, `MaxNudges`, `AnswerBudget` |
+| `lifecycle_rules` | All messages | `ID`, `IsStory`, `MaxNudges` |
 | `story_restart_nudge` | Story restart | (none) |
 | `task_restart_nudge` | Task restart | (none) |
 | `story_auto_continue_nudge` | Story auto-continuation | (none) |
@@ -1609,6 +1795,8 @@ work_context: |
 | `child_completion_nudge` | Waiting parent resume | `ChildTitle`, `ChildID`, `ID` |
 | `story_reopen_nudge` | Story reopen | (none) |
 | `task_reopen_nudge` | Task reopen | (none) |
+| `child_question_nudge` | A subtask's question passed up | `ChildTitle`, `ChildID`, `ID`, `Header`, `Question`, `RequestID`, `Options`, `MultiSelect` |
+| `stranded_wait_nudge` | A wait nothing could end | `ChildTitle`, `ChildID`, `ID`, `Exit` |
 | `step_advance_section` | Step advance | `PrevStep`, `TotalSteps`, `CurrentStep`, `StepPrompt`, `ID` |
 | `current_step_section` | Initial step display | `CurrentStep`, `TotalSteps`, `StepPrompt`, `ID` |
 

@@ -1,5 +1,6 @@
 import {
 	AlertTriangle,
+	Bot,
 	Check,
 	ChevronRight,
 	CircleHelp,
@@ -12,7 +13,6 @@ import { useChatUIConfig } from "../../lib/registries/chatUIRegistry";
 import { isTaskTool, toolSummary } from "../../lib/toolSummary";
 import { useWSStore } from "../../lib/wsStore";
 import type {
-	AskUserQuestionRequest,
 	ContentPart,
 	ExpiryReason,
 	Message,
@@ -21,6 +21,7 @@ import type {
 	PermissionStatus,
 	PermissionUpdate,
 	PermissionUpdateDestination,
+	QuestionAnswerRecord,
 	SystemMessageMeta,
 } from "../../types/message";
 import { forkUnavailableReason } from "../../utils/forkAnchor";
@@ -32,9 +33,9 @@ import {
 	Spinner,
 	useEverExpanded,
 } from "../ui";
-import AskUserQuestionItem from "./AskUserQuestionItem";
 import { MarkdownContent } from "./MarkdownContent";
 import MessageMenuTrigger, { type ForkBlocked } from "./MessageMenuTrigger";
+import QuestionRecordItem from "./QuestionRecordItem";
 import TaskItem from "./TaskItem";
 import ToolCallItem from "./ToolCallItem";
 import { ToolRow } from "./ToolRow";
@@ -324,7 +325,13 @@ function hasRules(
 // the same outcome — the tool did not run — because a permission that is not
 // granted is a denial whichever way the waiting ended; what differs is why
 // nobody was asked again (docs/lifecycle-ui.md §5.2).
-const PERMISSION_EXPIRY_COPY: Record<ExpiryReason, string> = {
+//
+// `Partial`, not `Record`: `ExpiryReason` spans both card kinds and `step_done`
+// reaches only a question card, so the absent key *is* the statement that it
+// cannot arrive here. A row invented to satisfy the type would be a sentence for
+// a case that never happens, and the fallback below already covers a reason this
+// build does not recognise.
+const PERMISSION_EXPIRY_COPY: Partial<Record<ExpiryReason, string>> = {
 	process_ended:
 		"The agent's process ended before this was answered, so it counted as a denial and the tool did not run.",
 	timeout:
@@ -333,7 +340,8 @@ const PERMISSION_EXPIRY_COPY: Record<ExpiryReason, string> = {
 		"This request was cancelled because the work was closed. The tool did not run.",
 };
 
-// Said when the reason is unknown, and true of all three.
+// Said when the reason is unknown or is not one this card can carry, and true of
+// all of them.
 const PERMISSION_EXPIRY_FALLBACK =
 	"The agent stopped waiting for this request, so it counted as a denial and the tool did not run.";
 
@@ -388,9 +396,12 @@ function PermissionRequestItem({
 	const { Icon, color } = statusConfig[status];
 
 	return (
-		// The data attribute is how MessageList finds this card when the blocker
-		// strip jumps to it; scroll-mt-14 clears the pending-question pill, which
-		// floats at the top of the list and can outlive the jump.
+		// The data attribute is how MessageList finds this card when the attention
+		// strip jumps to it — the one card that is a jump target. `scroll-mt-14` is
+		// clearance above where `scrollIntoView({block: "start"})` lands: a card
+		// flush against the top edge reads as cut off rather than arrived at. It
+		// used to be there to clear the pending-question pill, which floated there
+		// and is gone.
 		<div
 			data-permission-request-id={request.requestId}
 			className={`scroll-mt-14 rounded text-xs ${isPending ? "border border-th-warning bg-th-warning/10" : "bg-th-bg-secondary"}`}
@@ -420,9 +431,8 @@ function PermissionRequestItem({
 					    chrome (docs/lifecycle-ui.md §5.2). */}
 					{status === "expired" && (
 						<div className="mb-2 rounded bg-th-bg-tertiary px-2 py-1.5 text-th-text-muted">
-							{reason
-								? PERMISSION_EXPIRY_COPY[reason]
-								: PERMISSION_EXPIRY_FALLBACK}
+							{(reason && PERMISSION_EXPIRY_COPY[reason]) ??
+								PERMISSION_EXPIRY_FALLBACK}
 						</div>
 					)}
 					{planContent && <MarkdownContent content={planContent} />}
@@ -487,7 +497,7 @@ function PermissionRequestItem({
 					<button
 						type="button"
 						onClick={() => onRespond(request, "allow")}
-						className="rounded bg-th-accent px-2 py-1 text-th-bg hover:opacity-90"
+						className="rounded bg-th-accent px-2 py-1 text-th-accent-text hover:opacity-90"
 					>
 						Allow
 					</button>
@@ -506,11 +516,12 @@ interface ContentPartItemProps {
 		request: PermissionRequest,
 		choice: PermissionChoice,
 	) => void;
-	onQuestionRespond?: (
-		request: AskUserQuestionRequest,
-		answers: Record<string, string> | null,
-	) => void;
-	onSendAsMessage?: (content: string) => void;
+	/**
+	 * Opens the answer sheet on one question. It is the record card's only
+	 * control, and the card holds no state of its own for it — it calls the same
+	 * opener the strip does (docs/answering-ui.md §4).
+	 */
+	onAnswerQuestion?: (requestId: string) => void;
 	/** The failed answer, by request id; see `PromptError`. */
 	promptError?: PromptError;
 }
@@ -530,8 +541,7 @@ function ContentPartItem({
 	onOpenFile,
 	isCodex,
 	onPermissionRespond,
-	onQuestionRespond,
-	onSendAsMessage,
+	onAnswerQuestion,
 	promptError,
 }: ContentPartItemProps) {
 	if (part.type === "text") {
@@ -556,20 +566,15 @@ function ContentPartItem({
 			/>
 		);
 	}
-	if (part.type === "ask_user_question") {
+	if (part.type === "question_record") {
 		return (
-			<AskUserQuestionItem
-				request={part.request}
+			<QuestionRecordItem
+				record={part.record}
 				status={part.status}
+				answer={part.answer}
 				reason={part.reason}
-				savedAnswers={part.answers}
-				onRespond={onQuestionRespond}
-				onSendAsMessage={onSendAsMessage}
-				error={
-					promptError?.requestId === part.request.requestId
-						? promptError.message
-						: undefined
-				}
+				legacy={part.legacy}
+				onAnswer={onAnswerQuestion}
 			/>
 		);
 	}
@@ -623,12 +628,8 @@ interface Props {
 		request: PermissionRequest,
 		choice: PermissionChoice,
 	) => void;
-	onQuestionRespond?: (
-		request: AskUserQuestionRequest,
-		answers: Record<string, string> | null,
-	) => void;
-	/** Must be stable: this component is memoized. */
-	onSendAsMessage?: (content: string) => void;
+	/** Opens the answer sheet. Must be stable: this component is memoized. */
+	onAnswerQuestion?: (requestId: string) => void;
 	promptError?: PromptError;
 	onOpenWorkDetail?: (workId: string) => void;
 	/**
@@ -662,6 +663,131 @@ function forkBlockedReason(
 	return forkUnavailableReason(message);
 }
 
+/**
+ * The body of a message that answered posted questions: the user's bubble, and
+ * the named block an agent's answer gets instead of one (AgentAnswerItem).
+ * Both hosts draw the same thing, because what was said is the same either way;
+ * only who said it differs, and that is the host's to state.
+ *
+ * Drawn from the `answering` entries rather than from `content`, which is the
+ * same facts flattened into `Q:` / `A:` lines for the agent to read — a
+ * structure the user already saw as a form and should not have to read back as
+ * prose. The header and the question travel with each entry, so this needs
+ * nothing from the card that asked; that card may be pages away or not loaded
+ * at all (docs/answering-ui.md §3).
+ *
+ * There is deliberately no link back to it. A link that works only when the
+ * target happens to be paged in is worse than none — and an answered card
+ * holds the filled-in form anyway, for a reader who scrolls up to it.
+ */
+function AnsweringBody({ answering }: { answering: QuestionAnswerRecord[] }) {
+	return (
+		<div className="space-y-2">
+			{answering.map((entry) => (
+				<div key={entry.request_id} className="min-w-0">
+					{/* Outlined rather than filled, and the question is not faded.
+					    The reasoning is about the tightest of the two hosts, the
+					    user bubble, and a border derived from the text colour is
+					    what makes one chip safe on both.
+					    `--th-user-bubble` under `--th-user-bubble-text` is a pair
+					    `contrast.test.ts` guards, and it is tuned close to the floor:
+					    4.83–5.38 in eight of the ten variants. A tint moves the
+					    backdrop and `opacity-80` moves the foreground, and either one
+					    takes those eight under AA (measured: 3.64–3.97). A border
+					    derived from the text colour moves neither — the chip keeps
+					    its shape and every word on it keeps the ratio that was
+					    checked. */}
+					{entry.header && (
+						<span className="inline-block rounded border border-current/40 px-1.5 py-0.5 text-xs">
+							{entry.header}
+						</span>
+					)}
+					{entry.question && (
+						<p className="mt-1 break-words text-xs">{entry.question}</p>
+					)}
+					<p className="mt-0.5 break-words whitespace-pre-wrap">
+						{answerText(entry)}
+					</p>
+				</div>
+			))}
+		</div>
+	);
+}
+
+/**
+ * An answer another agent gave, in place of the user bubble it is not.
+ *
+ * It is drawn on the left of the conversation and named, because the one thing
+ * a reader must not conclude is that they answered this themselves — they never
+ * saw the question, and the question card two screens up says `Answered` either
+ * way. The naming comes off the answers (`resolved_by`), which is the record
+ * that knows; the message's origin only says it was not the user.
+ *
+ * It is not folded into the work-event line like a system message: an answer is
+ * conversation, not Pockode annotating itself, and the reader has to be able to
+ * read what was said.
+ */
+function AgentAnswerItem({
+	content,
+	answering,
+}: {
+	content: string;
+	answering: QuestionAnswerRecord[] | undefined;
+}) {
+	return (
+		<div className="rounded border border-th-border bg-th-bg-secondary p-2.5 text-xs text-th-text-secondary sm:p-3">
+			<p className="mb-2 flex items-center gap-1.5 text-th-text-muted">
+				<Bot className="size-3.5 shrink-0" />
+				{answeredByLine(answering)}
+			</p>
+			{/* The answers, or the prose the agent was sent when there are none
+			    to draw. The fallback is not an expected state — the origin is set
+			    by the same call that fills `answering` — but the one thing this
+			    shape exists to prevent is an answer read as the user's, and
+			    falling back to the bubble would do exactly that. */}
+			{answering ? (
+				<AnsweringBody answering={answering} />
+			) : (
+				<p className="whitespace-pre-wrap">{content}</p>
+			)}
+		</div>
+	);
+}
+
+/**
+ * Who this block says answered.
+ *
+ * One line for the whole block rather than one per entry: a single call answers
+ * a single question today, and were that ever to change, every entry in one
+ * message still came from the one agent that sent it.
+ */
+function answeredByLine(answering: QuestionAnswerRecord[] | undefined): string {
+	const by = answering?.find(
+		(entry) => entry.resolved_by?.kind === "agent",
+	)?.resolved_by;
+	return by?.title
+		? `Answered by the agent working on "${by.title}" — not by you.`
+		: "Answered by another agent — not by you.";
+}
+
+/**
+ * What the user said, both halves of it.
+ *
+ * The record keeps option labels and the user's own words apart so the *agent*
+ * can tell them apart; the prose it reads marks the second as such
+ * (`answerMessage.ts`). Here they are simply joined: this is the user reading
+ * their own answer back, and which half a word came from is not a distinction
+ * they need drawn for them.
+ */
+function answerText(entry: QuestionAnswerRecord): string {
+	if (entry.declined) {
+		const note = entry.note?.trim();
+		return note ? `Not answering — ${note}` : "Not answering.";
+	}
+	const text = entry.text?.trim();
+	return [...(entry.answers ?? []), ...(text ? [text] : [])].join(" · ");
+}
+
 const MessageItem = memo(function MessageItem({
 	message,
 	sessionId,
@@ -670,8 +796,7 @@ const MessageItem = memo(function MessageItem({
 	isOpenTurn,
 	isCodex,
 	onPermissionRespond,
-	onQuestionRespond,
-	onSendAsMessage,
+	onAnswerQuestion,
 	promptError,
 	onOpenWorkDetail,
 	onForkMessage,
@@ -697,6 +822,25 @@ const MessageItem = memo(function MessageItem({
 	) : null;
 
 	if (message.role === "user") {
+		// An agent's answer is neither a bubble nor an event line; see
+		// AgentAnswerItem. It keeps the slot for the same reason the event line
+		// does — it is full-bleed, and the row has to end where the bubbles do.
+		if (message.source === "agent") {
+			const answer = (
+				<AgentAnswerItem
+					content={message.content}
+					answering={message.answering}
+				/>
+			);
+			return slot ? (
+				<div className="flex items-start gap-2">
+					<div className="min-w-0 flex-1">{answer}</div>
+					{slot}
+				</div>
+			) : (
+				answer
+			);
+		}
 		// System-driven messages render as a collapsed event line, not a bubble.
 		if (message.source === "system") {
 			const event = (
@@ -724,7 +868,11 @@ const MessageItem = memo(function MessageItem({
 				<div
 					className={`chat-bubble max-w-full min-w-0 overflow-hidden rounded-lg bg-th-user-bubble p-2.5 text-th-user-bubble-text sm:p-3 ${userBubbleClass}`}
 				>
-					<p className="whitespace-pre-wrap">{message.content}</p>
+					{message.answering ? (
+						<AnsweringBody answering={message.answering} />
+					) : (
+						<p className="whitespace-pre-wrap">{message.content}</p>
+					)}
 				</div>
 				{UserAvatar && <UserAvatar className="size-10 shrink-0" />}
 			</div>
@@ -747,8 +895,11 @@ const MessageItem = memo(function MessageItem({
 							const key =
 								part.type === "permission_request"
 									? part.request.requestId
-									: part.type === "ask_user_question"
-										? part.request.requestId
+									: part.type === "question_record"
+										? // Not unique on its own for a legacy record, which
+											// could carry several questions under one request id;
+											// the index disambiguates those.
+											`${part.record.requestId}-${index}`
 										: part.type === "tool_call"
 											? part.tool.id
 											: `${part.type}-${index}`;
@@ -760,8 +911,7 @@ const MessageItem = memo(function MessageItem({
 									onOpenFile={onOpenFile}
 									isCodex={isCodex}
 									onPermissionRespond={onPermissionRespond}
-									onQuestionRespond={onQuestionRespond}
-									onSendAsMessage={onSendAsMessage}
+									onAnswerQuestion={onAnswerQuestion}
 									promptError={promptError}
 								/>
 							);

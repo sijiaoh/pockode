@@ -191,7 +191,7 @@ func TestWorkListWatcher_DirtyFlag_SyncsAfterDrop(t *testing.T) {
 		BaseWatcher:  NewBaseWatcher(),
 		store:        store,
 		eventCh:      make(chan listEvent, 1),
-		sentActivity: make(map[string]work.Activity),
+		sentActivity: make(map[string]work.RowState),
 	}
 	store.AddOnChangeListener(w)
 

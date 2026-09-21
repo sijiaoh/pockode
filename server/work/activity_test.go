@@ -64,14 +64,18 @@ func TestDeriveActivity(t *testing.T) {
 	}
 }
 
-// The attention dot's whole definition. It is deliberately narrower than "not
-// idle": a dot that also means "something is happening" is a dot users learn to
-// ignore, and that habit is what made the old needs-input dot worthless.
-func TestNeedsUserIsTheThreeLeavesTheUserCanActOn(t *testing.T) {
+// Half of the attention dot's definition — the other half is the unanswered
+// question count, which no activity can express. It is deliberately narrower
+// than "not idle": a dot that also means "something is happening" is a dot users
+// learn to ignore, and that habit is what made the old needs-input dot
+// worthless.
+//
+// The map lists every leaf on purpose. Adding one is then a compile-time
+// question about whether the user is the one holding it up, rather than a leaf
+// that quietly defaults to "no".
+func TestNeedsUserIsTheOneLeafTheUserCanActOn(t *testing.T) {
 	want := map[Activity]bool{
-		ActivityNeedsAnswer:     true,
 		ActivityNeedsPermission: true,
-		ActivityNeedsMessage:    true,
 		ActivityOpen:            false,
 		ActivityRunning:         false,
 		ActivityBackground:      false,
@@ -107,7 +111,7 @@ func TestActivityResolverReadsEachWorktreeOnce(t *testing.T) {
 	source := &fakeTurnSource{turns: map[string]map[string]session.TurnState{
 		"": {"s1": {Phase: session.PhaseRunning}},
 		"feature": {"s2": {Phase: session.PhaseBlocked, Blockers: []session.Blocker{
-			{Kind: session.BlockerQuestion, RequestID: "req-1"},
+			{Kind: session.BlockerPermission, RequestID: "req-1"},
 		}}},
 	}}
 	resolver := NewActivityResolver(source)
@@ -117,7 +121,7 @@ func TestActivityResolverReadsEachWorktreeOnce(t *testing.T) {
 		{ID: "w2", Status: StatusActive, SessionID: "unknown"},
 		{ID: "w3", Status: StatusActive, SessionID: "s2", Worktree: "feature"},
 	}
-	want := []Activity{ActivityRunning, ActivityIdle, ActivityNeedsAnswer}
+	want := []Activity{ActivityRunning, ActivityIdle, ActivityNeedsPermission}
 
 	for i, w := range works {
 		if got := resolver.Activity(w); got != want[i] {

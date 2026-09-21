@@ -5,35 +5,21 @@ import {
 	useEffect,
 	useImperativeHandle,
 	useLayoutEffect,
-	useMemo,
 	useRef,
 	useState,
 } from "react";
 import { openAssistantIndex } from "../../lib/messageReducer";
 import { useChatUIConfig } from "../../lib/registries/chatUIRegistry";
-import type {
-	AskUserQuestionRequest,
-	Message,
-	PermissionRequest,
-} from "../../types/message";
-import { findPendingQuestions } from "../../utils/pendingQuestions";
+import type { Message, PermissionRequest } from "../../types/message";
+import { isTypedByUser } from "../../utils/messageSource";
 import { Spinner } from "../ui";
 import ForkOriginBanner from "./ForkOriginBanner";
 import MessageItem, {
 	type PermissionChoice,
 	type PromptError,
 } from "./MessageItem";
-import PendingQuestionPill from "./PendingQuestionPill";
 
 const AT_BOTTOM_THRESHOLD = 50;
-/**
- * A question header row is only "seen" when it is fully in view: a sliver of a
- * card peeking in at the edge tells the user nothing. Just under 1 to absorb
- * sub-pixel rounding.
- */
-const QUESTION_VISIBLE_RATIO = 0.99;
-/** Streaming output reflows constantly; showing instantly would flicker. */
-const PILL_SHOW_DELAY_MS = 250;
 const HIGHLIGHT_DURATION_MS = 1500;
 /**
  * How long a restored page keeps being corrected after it lands. The restore is
@@ -44,29 +30,24 @@ const HIGHLIGHT_DURATION_MS = 1500;
  * has since moved somewhere themselves.
  */
 const RESTORE_SETTLE_MS = 500;
-const HIGHLIGHT_CLASS = "question-highlight";
-
-interface QuestionVisibility {
-	visible: boolean;
-	direction: "up" | "down";
-}
+const HIGHLIGHT_CLASS = "jump-highlight";
 
 // Attribute lookup rather than a `[data-...="id"]` selector so request ids never
 // need CSS escaping.
 //
-// Both kinds of prompt answer to the same jump: they are the two things a
-// session can be blocked on that a user can clear, and the blocker strip names
-// whichever one is live by its request id alone.
+// A permission request is the only kind of card this reaches, because it is the
+// only thing left that holds a turn up and therefore the only thing the strip
+// names by request id. A posted question is reached by the answer sheet instead,
+// which is where answering happens — there is deliberately no jump to a question
+// card (docs/answering-ui.md §8).
 function findRequestCard(
 	root: HTMLElement,
 	requestId: string,
 ): HTMLElement | null {
 	for (const card of root.querySelectorAll<HTMLElement>(
-		"[data-question-request-id], [data-permission-request-id]",
+		"[data-permission-request-id]",
 	)) {
-		const id =
-			card.dataset.questionRequestId ?? card.dataset.permissionRequestId;
-		if (id === requestId) return card;
+		if (card.dataset.permissionRequestId === requestId) return card;
 	}
 	return null;
 }
@@ -172,8 +153,9 @@ function prefersReducedMotion(): boolean {
  * What the transcript can be asked to do from outside it.
  *
  * Jumping to a card is scroll work, and the scroll container lives here — so the
- * blocker strip, which sits below the list, asks rather than reimplements. It is
- * the same jump the pending-question pill makes from inside.
+ * attention strip, which sits below the list, asks rather than reimplements. It
+ * is the only caller, and a permission card is the only thing it can reach
+ * (`findRequestCard`).
  */
 export interface MessageListHandle {
 	jumpToRequest: (requestId: string) => void;
@@ -196,14 +178,10 @@ interface Props {
 		request: PermissionRequest,
 		choice: PermissionChoice,
 	) => void;
-	onQuestionRespond?: (
-		request: AskUserQuestionRequest,
-		answers: Record<string, string> | null,
-	) => void;
-	/** Sends a message; used by the empty state's hints and by an expired question. */
+	/** Sends a message; used by the empty state's hints. */
 	onHintClick?: (hint: string) => void;
-	/** Must be stable: it reaches the memoized `MessageItem`. */
-	onSendAsMessage?: (content: string) => void;
+	/** Opens the answer sheet on one question; see `QuestionRecordItem`. */
+	onAnswerQuestion?: (requestId: string) => void;
 	promptError?: PromptError;
 	onOpenWorkDetail?: (workId: string) => void;
 	/** Opens a work-directory file in the Files viewer. Must be stable. */
@@ -226,9 +204,8 @@ function MessageList({
 	onLoadMoreHistory,
 	isCodex,
 	onPermissionRespond,
-	onQuestionRespond,
+	onAnswerQuestion,
 	onHintClick,
-	onSendAsMessage,
 	promptError,
 	onOpenWorkDetail,
 	onOpenFile,
@@ -551,10 +528,11 @@ function MessageList({
 
 		// Sending a message is an explicit return to the tail: the user has just
 		// written at the end of the conversation, so that is where they are reading
-		// next, even if they had scrolled away. System-driven rows are nobody's
-		// gesture and say nothing about intent.
+		// next, even if they had scrolled away. Rows nobody typed — Pockode's own,
+		// another agent's answer — are nobody's gesture and say nothing about
+		// intent.
 		const last = messages[totalCount - 1];
-		if (last.role === "user" && last.source !== "system") {
+		if (isTypedByUser(last)) {
 			followRef.current = true;
 			userScrolledRef.current = false;
 			setShowScrollButton(false);
@@ -598,120 +576,6 @@ function MessageList({
 		observer.observe(scrollEl);
 		return () => observer.disconnect();
 	}, [hasMessages]);
-
-	const pendingQuestions = useMemo(
-		() => findPendingQuestions(messages),
-		[messages],
-	);
-	// Identity of the pending set, so effects re-run when a question is added or
-	// answered but not on every streamed token.
-	const pendingKey = pendingQuestions.map((q) => q.requestId).join("\u0000");
-	// biome-ignore lint/correctness/useExhaustiveDependencies: keyed by pendingKey so the set stays identical while the ids do
-	const pendingIds = useMemo(
-		() => new Set(pendingQuestions.map((q) => q.requestId)),
-		[pendingKey],
-	);
-
-	const [questionVisibility, setQuestionVisibility] = useState<
-		Record<string, QuestionVisibility>
-	>({});
-
-	// Questions with no entry are unobservable — not rendered yet — and count as
-	// hidden, which is exactly the case this pill exists for.
-	const hiddenPending = pendingQuestions.filter(
-		({ requestId }) => !questionVisibility[requestId]?.visible,
-	);
-	const hiddenCount = hiddenPending.length;
-	const target = hiddenPending[0];
-	// A question that is not rendered is always earlier than the viewport.
-	const direction = target
-		? (questionVisibility[target.requestId]?.direction ?? "up")
-		: "up";
-
-	// Observe the collapsed header row of every pending card: an expanded card can
-	// be taller than the viewport and would never reach the full-visibility
-	// threshold, while the header row is both short and the card's entry point.
-	// biome-ignore lint/correctness/useExhaustiveDependencies: loadedHistoryPages/hasMessages are triggers — they change which question nodes exist
-	useEffect(() => {
-		const scrollEl = scrollRef.current;
-		if (!scrollEl) return;
-
-		const headers = new Map<string, Element>();
-		for (const card of scrollEl.querySelectorAll<HTMLElement>(
-			"[data-question-request-id]",
-		)) {
-			const requestId = card.dataset.questionRequestId;
-			if (!requestId || !pendingIds.has(requestId)) continue;
-			const header = card.querySelector("[data-question-header]");
-			if (header) headers.set(requestId, header);
-		}
-
-		// Rebuild the map around the cards that actually exist: drop questions whose
-		// node is gone (answered) so a stale "visible" can never suppress the pill,
-		// and seed the ones that have just appeared.
-		setQuestionVisibility((prev) => {
-			let changed = Object.keys(prev).length !== headers.size;
-			const next: Record<string, QuestionVisibility> = {};
-			for (const requestId of headers.keys()) {
-				const known = prev[requestId];
-				if (known) {
-					next[requestId] = known;
-					continue;
-				}
-				// A rendered card counts as on screen until the observer says
-				// otherwise, because starting from hidden would flash the pill over a
-				// question already in front of the user whenever the first callback
-				// lands after the show debounce. Guessing this way round only ever
-				// costs one callback of delay, and a question with no node at all
-				// still gets no entry, so "not rendered means hidden" is untouched.
-				next[requestId] = { visible: true, direction: "up" };
-				changed = true;
-			}
-			// This effect re-runs on every appended message; keeping prev when nothing
-			// moved avoids a needless re-render.
-			return changed ? next : prev;
-		});
-
-		if (headers.size === 0) return;
-
-		const observer = new IntersectionObserver(
-			(entries) => {
-				setQuestionVisibility((prev) => {
-					const next = { ...prev };
-					for (const entry of entries) {
-						const card = entry.target.closest<HTMLElement>(
-							"[data-question-request-id]",
-						);
-						const requestId = card?.dataset.questionRequestId;
-						if (!requestId) continue;
-						next[requestId] = {
-							visible: entry.intersectionRatio >= QUESTION_VISIBLE_RATIO,
-							direction:
-								entry.rootBounds &&
-								entry.boundingClientRect.top >= entry.rootBounds.top
-									? "down"
-									: "up",
-						};
-					}
-					return next;
-				});
-			},
-			{ root: scrollEl, threshold: [0, QUESTION_VISIBLE_RATIO] },
-		);
-
-		for (const header of headers.values()) observer.observe(header);
-		return () => observer.disconnect();
-	}, [hasMessages, pendingIds, loadedHistoryPages]);
-
-	const [showPill, setShowPill] = useState(false);
-	useEffect(() => {
-		if (hiddenCount === 0) {
-			setShowPill(false);
-			return;
-		}
-		const timer = setTimeout(() => setShowPill(true), PILL_SHOW_DELAY_MS);
-		return () => clearTimeout(timer);
-	}, [hiddenCount]);
 
 	const highlightRef = useRef<{
 		card: HTMLElement;
@@ -770,15 +634,10 @@ function MessageList({
 			// preventScroll: the browser's own focus scroll would fight the smooth
 			// scroll started above.
 			//
-			// A permission card has no header row of its own — its first button is
-			// the row that opens it, which is the same thing one step less
-			// explicitly. Without the fallback, jumping to a permission request
-			// would move the view and not the focus, which is a jump a keyboard
-			// user cannot perceive.
-			const focusTarget =
-				card.querySelector<HTMLElement>("[data-question-header]") ??
-				card.querySelector<HTMLElement>("button");
-			focusTarget?.focus({ preventScroll: true });
+			// The card's first button is the row that opens it, which is as close as
+			// a permission card has to a header. Without moving the focus, the jump
+			// is one a keyboard user cannot perceive.
+			card.querySelector<HTMLElement>("button")?.focus({ preventScroll: true });
 		},
 		[clearHighlight, abandonRestoreWindow],
 	);
@@ -786,12 +645,6 @@ function MessageList({
 	useImperativeHandle(ref, () => ({ jumpToRequest: scrollToRequest }), [
 		scrollToRequest,
 	]);
-
-	// Every loaded message is rendered, and a question the server has not sent yet
-	// is not among `pendingQuestions` at all, so the target always has a node.
-	const handlePillClick = useCallback(() => {
-		if (target) scrollToRequest(target.requestId);
-	}, [target, scrollToRequest]);
 
 	const handleScrollToBottom = useCallback(() => {
 		const el = scrollRef.current;
@@ -912,8 +765,7 @@ function MessageList({
 									isOpenTurn={index === openIndex}
 									isCodex={isCodex}
 									onPermissionRespond={onPermissionRespond}
-									onQuestionRespond={onQuestionRespond}
-									onSendAsMessage={onSendAsMessage}
+									onAnswerQuestion={onAnswerQuestion}
 									promptError={promptError}
 									onOpenWorkDetail={onOpenWorkDetail}
 									onOpenFile={onOpenFile}
@@ -924,19 +776,6 @@ function MessageList({
 					})}
 				</div>
 			</div>
-
-			{/* <output> is an implicit live region, and it stays mounted at all
-			    times: a live region that appears together with its content is not
-			    announced by most screen readers. */}
-			<output className="pointer-events-none absolute top-2 left-1/2 z-10 -translate-x-1/2 sm:top-3">
-				{showPill && target && (
-					<PendingQuestionPill
-						count={hiddenCount}
-						direction={direction}
-						onClick={handlePillClick}
-					/>
-				)}
-			</output>
 
 			{showScrollButton && (
 				<button

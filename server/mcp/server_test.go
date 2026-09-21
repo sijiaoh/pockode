@@ -181,3 +181,53 @@ func TestProxyToolCall_AuthFailure(t *testing.T) {
 		t.Error("expected isError result for auth failure")
 	}
 }
+
+// --- Caller identity ---
+
+// recordingExecutor captures the identity the transport handed it.
+type recordingExecutor struct{ caller Caller }
+
+func (e *recordingExecutor) Execute(_ context.Context, caller Caller, _ string, _ json.RawMessage) (string, error) {
+	e.caller = caller
+	return "ok", nil
+}
+
+// newProxyToRecorder wires a proxy carrying the given identity to an API whose
+// executor only records the call.
+func newProxyToRecorder(t *testing.T, caller Caller) (*Server, *recordingExecutor) {
+	t.Helper()
+	rec := &recordingExecutor{}
+	httpSrv := httptest.NewServer(NewAPIHandler(rec, "secret"))
+	t.Cleanup(httpSrv.Close)
+
+	client := &Client{baseURL: httpSrv.URL, token: "secret", caller: caller, http: httpSrv.Client()}
+	return NewServer(client, "test"), rec
+}
+
+// The identity the CLI was spawned with has to reach the executor on every
+// call, because that is how a tool acts on the calling session without the
+// model naming it.
+func TestProxyToolCall_CarriesCallerIdentity(t *testing.T) {
+	want := Caller{SessionID: "s1", Worktree: "feature-x"}
+	s, rec := newProxyToRecorder(t, want)
+
+	if resp := callToolViaProxy(t, s, "work_list", map[string]string{}); resp.Error != nil {
+		t.Fatalf("unexpected RPC error: %+v", resp.Error)
+	}
+	if rec.caller != want {
+		t.Errorf("caller = %+v, want %+v", rec.caller, want)
+	}
+}
+
+// A proxy started without an identity — by hand, or outside a session — reaches
+// the executor as an unknown caller rather than as some other session.
+func TestProxyToolCall_WithoutIdentity(t *testing.T) {
+	s, rec := newProxyToRecorder(t, Caller{})
+
+	if resp := callToolViaProxy(t, s, "work_list", map[string]string{}); resp.Error != nil {
+		t.Fatalf("unexpected RPC error: %+v", resp.Error)
+	}
+	if rec.caller != (Caller{}) {
+		t.Errorf("caller = %+v, want an unidentified one", rec.caller)
+	}
+}

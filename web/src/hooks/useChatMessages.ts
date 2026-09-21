@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { IDLE_TURN } from "../lib/activity";
 import {
 	appendUserMessage,
+	applyAnswering,
 	applyServerEvent,
 	applyToolActivitySnapshot,
 	isBackReference,
@@ -16,7 +17,6 @@ import {
 	settleAgainstTurn,
 	stampMessageAnchorSeq,
 	updatePermissionRequestStatus,
-	updateQuestionStatus as updateQuestionStatusReducer,
 } from "../lib/messageReducer";
 import {
 	selectSessionDetail,
@@ -29,14 +29,15 @@ import type {
 	HistorySeq,
 	Message,
 	PermissionResponseParams,
-	QuestionResponseParams,
-	QuestionStatus,
+	QuestionAnswerRecord,
 	ServerNotification,
 	SessionMode,
 	SessionTurn,
 	UserMessage,
 } from "../types/message";
 import type { AgentType } from "../types/settings";
+import { toAnswerParams } from "../utils/answerMessage";
+import { isTypedByUser } from "../utils/messageSource";
 import { generateUUID } from "../utils/uuid";
 import { useSubscription } from "./useSubscription";
 
@@ -107,10 +108,19 @@ interface UseChatMessagesReturn {
 	 */
 	settingError: string | null;
 	clearSettingError: () => void;
-	sendUserMessage: (content: string) => Promise<boolean>;
+	/**
+	 * Sends a message, optionally answering posted questions. An answering send
+	 * is all-or-nothing: the server validates every entry before delivering
+	 * anything, and a refusal leaves the transcript exactly as it was — so this
+	 * rethrows for those rather than reporting into the transcript, because the
+	 * surface that has to hear about it is the sheet holding the drafts.
+	 */
+	sendUserMessage: (
+		content: string,
+		answering?: QuestionAnswerRecord[],
+	) => Promise<boolean>;
 	interrupt: () => Promise<void>;
 	permissionResponse: (params: PermissionResponseParams) => Promise<void>;
-	questionResponse: (params: QuestionResponseParams) => Promise<void>;
 	setMode: (mode: SessionMode) => Promise<void>;
 	setAgentType: (agentType: AgentType) => Promise<void>;
 	setModel: (model: string) => Promise<void>;
@@ -120,15 +130,12 @@ interface UseChatMessagesReturn {
 		status: "allowed" | "denied",
 	) => void;
 	/**
-	 * Undoes the optimistic outcome on a card the server refused an answer for.
-	 * Both kinds of prompt, because the refusal is the same fact about both.
+	 * Undoes the optimistic outcome on a permission card the server refused a
+	 * decision for. Only permission cards reach it: an answer to a posted question
+	 * travels as a message, and a refused one takes its whole echo with it (see
+	 * `sendUserMessage`).
 	 */
 	resetPrompt: (requestId: string, status: "pending" | "expired") => void;
-	updateQuestionStatus: (
-		requestId: string,
-		status: QuestionStatus,
-		answers?: Record<string, string>,
-	) => void;
 }
 
 // Actions are stable references - get once at module level
@@ -512,7 +519,14 @@ export function useChatMessages({
 	}, [sessionId]);
 
 	const sendUserMessageHandler = useCallback(
-		async (content: string): Promise<boolean> => {
+		async (
+			content: string,
+			answering?: QuestionAnswerRecord[],
+		): Promise<boolean> => {
+			// Normalised once, so "present" and "non-empty" cannot come apart: an
+			// empty list would otherwise echo a bubble drawn from no answers, send
+			// no `answering`, and take the wrong branch on failure.
+			const answers = answering?.length ? answering : undefined;
 			const userMessageId = generateUUID();
 			const assistantMessageId = generateUUID();
 
@@ -522,6 +536,9 @@ export function useChatMessages({
 				content,
 				status: "complete",
 				createdAt: new Date(),
+				// Echoed with the bubble so an answer draws as answers rather than
+				// as the flattened text the agent reads.
+				...(answers ? { answering: answers } : {}),
 			};
 
 			// Empty assistant message ready to receive streaming content
@@ -548,11 +565,35 @@ export function useChatMessages({
 				// Without it the bubble just added could not be forked from until the
 				// session was reloaded. An older server sends none, which simply leaves
 				// the message unaddressable, as every locally sent one used to be.
-				const seq = await sendMessage(sessionId, content);
-				setMessages((prev) => stampMessageAnchorSeq(prev, userMessageId, seq));
+				const seq = await sendMessage(
+					sessionId,
+					content,
+					answers && toAnswerParams(answers),
+				);
+				setMessages((prev) => {
+					const stamped = stampMessageAnchorSeq(prev, userMessageId, seq);
+					// The cards this message settled, and this client has to settle
+					// them itself: the sender is left out of the broadcast that
+					// carries the record, so nothing else is coming to do it. Only
+					// after the send — a refused answer settles nothing.
+					return answers ? applyAnswering(stamped, answers) : stamped;
+				});
 				return true;
 			} catch (error) {
 				console.error("Failed to send message:", error);
+				// An answering send is refused whole — nothing was written, nothing
+				// was delivered, and the questions are all still open — so the echo
+				// is taken back out rather than left looking sent with a failure
+				// pinned under it. The sheet is where the reason belongs: it holds
+				// the drafts, and it is what the user is looking at.
+				if (answers) {
+					setMessages((prev) =>
+						prev.filter(
+							(m) => m.id !== userMessageId && m.id !== assistantMessageId,
+						),
+					);
+					throw error;
+				}
 				// The server's reason is what tells a missing CLI apart from a dropped
 				// connection; without it every failure reads the same.
 				const reason =
@@ -616,24 +657,6 @@ export function useChatMessages({
 		[],
 	);
 
-	const updateQuestionStatus = useCallback(
-		(
-			requestId: string,
-			newStatus: QuestionStatus,
-			answers?: Record<string, string>,
-		) => {
-			setMessages((prev) =>
-				updateQuestionStatusReducer(
-					prev,
-					requestId,
-					newStatus,
-					answers ?? null,
-				),
-			);
-		},
-		[],
-	);
-
 	// Whether a turn is open, and the optimistic half is load-bearing: between the
 	// user pressing send and the server reporting `running` there is a round trip,
 	// and a surface watching only the turn would leave them without Stop for the
@@ -662,10 +685,10 @@ export function useChatMessages({
 	//
 	// Any tab's message counts, because any tab's message reaches the same CLI and
 	// steers the same turn. Kickoff, restart and auto-continue arrive as
-	// `role: "user"` too, but nobody typed those, so they get no receipt.
+	// `role: "user"` too, and so does another agent's answer, but nobody typed
+	// those, so they get no receipt.
 	const last = messages[messages.length - 1];
-	const isSendPending =
-		turnOpen && last?.role === "user" && last.source !== "system";
+	const isSendPending = turnOpen && last !== undefined && isTypedByUser(last);
 
 	// One path for every session setting. Nothing is applied here: the new value
 	// reaches the screen through the session detail subscription, so a rejected
@@ -744,13 +767,11 @@ export function useChatMessages({
 			[actions, sessionId],
 		),
 		permissionResponse: actions.permissionResponse,
-		questionResponse: actions.questionResponse,
 		setMode,
 		setAgentType,
 		setModel,
 		setEffort,
 		updatePermissionStatus,
-		updateQuestionStatus,
 		resetPrompt,
 	};
 }

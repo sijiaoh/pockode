@@ -35,15 +35,9 @@
     },
     {
       "name": "a running turn outranks a declared wait",
-      "work": { "status": "active", "wait": "user" },
+      "work": { "status": "active", "wait": "child" },
       "turn": { "phase": "running" },
       "want": "running"
-    },
-    {
-      "name": "a turn blocked on a question",
-      "work": { "status": "active" },
-      "turn": { "phase": "blocked", "blockers": ["question"] },
-      "want": "needs_answer"
     },
     {
       "name": "a turn blocked on a permission request",
@@ -52,9 +46,9 @@
       "want": "needs_permission"
     },
     {
-      "name": "permission outranks question: it cannot be answered late",
+      "name": "permission outranks background: only one of them can be acted on",
       "work": { "status": "active" },
-      "turn": { "phase": "blocked", "blockers": ["question", "permission"] },
+      "turn": { "phase": "blocked", "blockers": ["background", "permission"] },
       "want": "needs_permission"
     },
     {
@@ -62,18 +56,6 @@
       "work": { "status": "active" },
       "turn": { "phase": "blocked", "blockers": ["background"] },
       "want": "background"
-    },
-    {
-      "name": "a question outranks a background wait: one of them can be acted on",
-      "work": { "status": "active" },
-      "turn": { "phase": "blocked", "blockers": ["background", "question"] },
-      "want": "needs_answer"
-    },
-    {
-      "name": "an idle turn on a work waiting for the user",
-      "work": { "status": "active", "wait": "user" },
-      "turn": { "phase": "idle" },
-      "want": "needs_message"
     },
     {
       "name": "an idle turn on a work waiting for its children",
@@ -94,8 +76,8 @@
     },
     {
       "name": "a wait with no session is still a wait",
-      "work": { "status": "active", "wait": "user" },
-      "want": "needs_message"
+      "work": { "status": "active", "wait": "child" },
+      "want": "waiting_children"
     }
   ]
 }

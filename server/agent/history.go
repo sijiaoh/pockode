@@ -1,6 +1,9 @@
 package agent
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"time"
+)
 
 // EventRecord is the serialized form of an AgentEvent.
 // Used for persistence (history storage) and notifications (WebSocket).
@@ -26,12 +29,28 @@ type EventRecord struct {
 	Code                  string             `json:"code,omitempty"`
 	RequestID             string             `json:"request_id,omitempty"`
 	PermissionSuggestions []PermissionUpdate `json:"permission_suggestions,omitempty"`
-	Questions             []AskUserQuestion  `json:"questions,omitempty"`
-	Choice                string             `json:"choice,omitempty"`
+	// Questions is a question_posted record's one question, in a one-element
+	// list so that it and the legacy ask_user_question records — which could
+	// carry several — share one renderer.
+	Questions []AskUserQuestion `json:"questions,omitempty"`
+	Choice    string            `json:"choice,omitempty"`
 	// Reason says why a request stopped waiting for an answer; see CancelReason.
-	Reason  CancelReason      `json:"reason,omitempty"`
-	Answers map[string]string `json:"answers,omitempty"`
-	Origin  MessageOrigin     `json:"origin,omitempty"`
+	Reason CancelReason `json:"reason,omitempty"`
+	// AskedAt is when a question_posted record's question was asked, and
+	// ResolvedAt when a request_cancelled record's question was withdrawn. Both
+	// are absent on records Pockode did not write itself; see
+	// RequestCancelledEvent.At.
+	//
+	// Pointers, and that is not a style choice: `omitempty` does nothing for a
+	// struct, so a plain time.Time would put `"asked_at":"0001-01-01T00:00:00Z"`
+	// on every record in every transcript and on every notification — two junk
+	// fields per event, for two fields that mean something on two event types.
+	AskedAt    *time.Time `json:"asked_at,omitempty"`
+	ResolvedAt *time.Time `json:"resolved_at,omitempty"`
+	// Answering are the posted questions a message record answers; see
+	// QuestionAnswer.
+	Answering []QuestionAnswer `json:"answering,omitempty"`
+	Origin    MessageOrigin    `json:"origin,omitempty"`
 	// Subtype says what kind of record this is within its type, for the two
 	// types that have kinds: a system-origin message (see MessageEvent), and a
 	// tool result that is not the whole story (see ToolResultBackgroundStarted).

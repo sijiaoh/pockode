@@ -2,7 +2,7 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import type { SessionTurn, TurnBlocker } from "../../types/message";
-import BlockerStrip from "./BlockerStrip";
+import AttentionStrip from "./AttentionStrip";
 
 function turn(
 	phase: SessionTurn["phase"],
@@ -16,11 +16,6 @@ function turn(
 	};
 }
 
-const question: TurnBlocker = {
-	kind: "question",
-	request_id: "q1",
-	raised_at: "2026-01-02T14:02:00Z",
-};
 const permission: TurnBlocker = {
 	kind: "permission",
 	request_id: "p1",
@@ -31,40 +26,53 @@ const background: TurnBlocker = {
 	raised_at: "2026-01-02T14:02:00Z",
 };
 
-describe("BlockerStrip", () => {
+function unanswered(n: number) {
+	return Array.from({ length: n }, (_, i) => ({
+		request_id: `u${i}`,
+		header: "Database",
+		question: "Which database should I use?",
+		options: [],
+		multi_select: false,
+		asked_at: "2026-01-02T14:02:00Z",
+	}));
+}
+
+describe("AttentionStrip", () => {
 	it.each<[SessionTurn["phase"], TurnBlocker[] | undefined]>([
 		["idle", undefined],
 		["running", undefined],
 	])("says nothing while the turn is %s", (phase, blockers) => {
 		const { container } = render(
-			<BlockerStrip turn={turn(phase, blockers)} onJumpToRequest={vi.fn()} />,
+			<AttentionStrip turn={turn(phase, blockers)} onJumpToRequest={vi.fn()} />,
 		);
 		expect(container).toBeEmptyDOMElement();
 	});
 
-	it("jumps to the question holding the turn up", async () => {
+	it("jumps to the permission request holding the turn up", async () => {
 		const user = userEvent.setup();
 		const onJump = vi.fn();
 		render(
-			<BlockerStrip
-				turn={turn("blocked", [question])}
+			<AttentionStrip
+				turn={turn("blocked", [permission])}
 				onJumpToRequest={onJump}
 			/>,
 		);
 
-		expect(screen.getByText(/Waiting for your answer\./)).toBeInTheDocument();
-		await user.click(screen.getByRole("button", { name: "Jump to question" }));
-		expect(onJump).toHaveBeenCalledWith("q1");
+		expect(
+			screen.getByText(/Waiting for your permission\./),
+		).toBeInTheDocument();
+		await user.click(screen.getByRole("button", { name: "Jump to request" }));
+		expect(onJump).toHaveBeenCalledWith("p1");
 	});
 
-	// Permission outranks question, and the strip names the one it jumps to — the
-	// same precedence the activity derivation uses.
-	it("speaks for the permission when both are live", async () => {
+	// Permission outranks background — the same precedence the activity derivation
+	// uses, and for the same reason: one of them has something to press.
+	it("speaks for the permission when a background wait is live too", async () => {
 		const user = userEvent.setup();
 		const onJump = vi.fn();
 		render(
-			<BlockerStrip
-				turn={turn("blocked", [question, permission])}
+			<AttentionStrip
+				turn={turn("blocked", [background, permission])}
 				onJumpToRequest={onJump}
 			/>,
 		);
@@ -81,7 +89,7 @@ describe("BlockerStrip", () => {
 	it("explains a background wait on request", async () => {
 		const user = userEvent.setup();
 		render(
-			<BlockerStrip
+			<AttentionStrip
 				turn={turn("blocked", [background])}
 				onJumpToRequest={vi.fn()}
 			/>,
@@ -100,16 +108,98 @@ describe("BlockerStrip", () => {
 		expect(detail.textContent).toMatch(/since \d{1,2}:\d{2}/);
 	});
 
+	describe("the unanswered questions row", () => {
+		it("counts them and offers the one way to answer", async () => {
+			const user = userEvent.setup();
+			const onAnswer = vi.fn();
+			render(
+				<AttentionStrip
+					turn={{ ...turn("idle"), unanswered: unanswered(2) }}
+					onJumpToRequest={vi.fn()}
+					onAnswer={onAnswer}
+				/>,
+			);
+
+			expect(
+				screen.getByText("2 questions are waiting for your answer."),
+			).toBeInTheDocument();
+			await user.click(screen.getByRole("button", { name: "Answer" }));
+			expect(onAnswer).toHaveBeenCalled();
+		});
+
+		// Sending is not refused while a posted question is open: the agent may
+		// be running, and a typed message is an ordinary message. A sentence
+		// about sending here would be inventing a restriction to explain.
+		it("says nothing about sending", () => {
+			render(
+				<AttentionStrip
+					turn={{ ...turn("idle"), unanswered: unanswered(1) }}
+					onJumpToRequest={vi.fn()}
+					onAnswer={vi.fn()}
+				/>,
+			);
+			expect(
+				screen.getByText("1 question is waiting for your answer."),
+			).toBeInTheDocument();
+			expect(screen.queryByText(/before sending/)).not.toBeInTheDocument();
+		});
+
+		// No "nothing to answer", no empty frame.
+		it("does not exist at zero", () => {
+			const { container } = render(
+				<AttentionStrip
+					turn={{ ...turn("idle"), unanswered: [] }}
+					onJumpToRequest={vi.fn()}
+					onAnswer={vi.fn()}
+				/>,
+			);
+			expect(container).toBeEmptyDOMElement();
+		});
+
+		// Permission is the only row the composer is disabled under, and the only
+		// state in which the server refuses the answer message itself.
+		it("yields to a permission request", () => {
+			render(
+				<AttentionStrip
+					turn={{
+						...turn("blocked", [permission]),
+						unanswered: unanswered(1),
+					}}
+					onJumpToRequest={vi.fn()}
+					onAnswer={vi.fn()}
+				/>,
+			);
+			expect(
+				screen.getByText(/Waiting for your permission\./),
+			).toBeInTheDocument();
+			expect(
+				screen.queryByRole("button", { name: "Answer" }),
+			).not.toBeInTheDocument();
+		});
+
+		// It is the one row with something to *do* that is not already on screen.
+		it("outranks the send receipt", () => {
+			render(
+				<AttentionStrip
+					turn={{ ...turn("running"), unanswered: unanswered(1) }}
+					onJumpToRequest={vi.fn()}
+					onAnswer={vi.fn()}
+					sendPending
+				/>,
+			);
+			expect(
+				screen.getByRole("button", { name: "Answer" }),
+			).toBeInTheDocument();
+		});
+	});
+
 	// A disabled Send with no reason on screen is a silent failure. The strip is
 	// the only place that reason can go, so the sentence is part of the refusal,
 	// not decoration.
-	it.each<[string, TurnBlocker]>([
-		["question", question],
-		["permission", permission],
-	])("says why sending is refused during a %s", (_kind, blocker) => {
+	it("says why sending is refused during a permission request", () => {
 		render(
-			<BlockerStrip
-				turn={turn("blocked", [blocker])}
+			<AttentionStrip
+				turn={turn("blocked", [permission])}
 				onJumpToRequest={vi.fn()}
 			/>,
 		);
@@ -125,7 +215,7 @@ describe("BlockerStrip", () => {
 	describe("a message sent into the running turn", () => {
 		it("is acknowledged while the turn runs on", () => {
 			render(
-				<BlockerStrip
+				<AttentionStrip
 					turn={turn("running")}
 					onJumpToRequest={vi.fn()}
 					sendPending
@@ -142,7 +232,7 @@ describe("BlockerStrip", () => {
 		// there with no acknowledgement at all.
 		it("outranks a background wait", () => {
 			render(
-				<BlockerStrip
+				<AttentionStrip
 					turn={turn("blocked", [background])}
 					onJumpToRequest={vi.fn()}
 					sendPending
@@ -158,13 +248,10 @@ describe("BlockerStrip", () => {
 		// A prompt is what the session is stuck on and what sending is refused
 		// for; the receipt can wait. Reachable because a request can be raised
 		// after the message went in.
-		it.each<[string, TurnBlocker]>([
-			["question", question],
-			["permission", permission],
-		])("yields to a %s", (_kind, blocker) => {
+		it("yields to a permission request", () => {
 			render(
-				<BlockerStrip
-					turn={turn("blocked", [blocker])}
+				<AttentionStrip
+					turn={turn("blocked", [permission])}
 					onJumpToRequest={vi.fn()}
 					sendPending
 				/>,
@@ -183,7 +270,7 @@ describe("BlockerStrip", () => {
 	// without ending the turn, so the strip must not offer one.
 	it("offers nothing to press against the task itself", () => {
 		render(
-			<BlockerStrip
+			<AttentionStrip
 				turn={turn("blocked", [background])}
 				onJumpToRequest={vi.fn()}
 			/>,

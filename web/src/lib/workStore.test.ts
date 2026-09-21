@@ -79,7 +79,7 @@ describe("the work store's wire boundary", () => {
 	// A row it leaves alone is returned unchanged, so the rows React is diffing
 	// keep their identity across a notification that did not touch them.
 	it("returns a recognised row as it arrived", () => {
-		const untouched = row({ id: "w2", activity: "needs_answer" });
+		const untouched = row({ id: "w2", activity: "needs_permission" });
 
 		useWorkStore.getState().setWorks([untouched]);
 

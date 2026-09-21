@@ -37,7 +37,13 @@ UI (attachment strip scrolled into view)
 
 ### AgentEvent Interface
 
-`server/agent/event.go` — Sealed interface (unexported marker method) with 19 concrete implementations.
+`server/agent/event.go` — Sealed interface (unexported marker method) with 18 concrete implementations.
+
+**There are 20 `EventType` constants and 18 event structs, and the gap is the
+point.** `ask_user_question` and `question_response` are types nothing can
+produce any more, kept because old transcripts hold records of them and a reader
+of history still has to recognise one (see Legacy below). A type with no event
+behind it is exactly what "read, never written" looks like in Go.
 
 ```go
 type AgentEvent interface {
@@ -56,7 +62,8 @@ type AgentEvent interface {
 | Wait | `background_wait` (the turn parked on work outliving its tool call) | No |
 | Terminal | `done`, `interrupted`, `error`, `process_ended` | Yes |
 | Permission | `permission_request`, `permission_response`, `request_cancelled` | No |
-| Question | `ask_user_question`, `question_response` | No |
+| Question | `question_posted` (`request_cancelled` withdraws one; the answer is a `message`) | No |
+| Legacy | `ask_user_question`, `question_response` — read from old transcripts, never written | No |
 | Message | `message` (user-typed or system-driven; persisted + broadcast) | No |
 
 Terminal events end the current message response. Non-terminal events are appended to the active assistant message.
@@ -102,27 +109,89 @@ The `message` event covers both messages a user types and the automatic prompts 
 
 | Field | Meaning |
 |-------|---------|
-| `Origin` | `""`/`"user"` = user-typed; `"system"` = Pockode system automation (currently the Work system) |
+| `Origin` | `""`/`"user"` = user-typed; `"system"` = Pockode system automation (currently the Work system); `"agent"` = another agent's answer to a posted question (`question_answer`) |
 | `Subtype` | For system messages, which prompt produced it (`kickoff`, `restart`, …) |
 | `Meta` | For system messages, a `{work_id, work_type, title, step?, child?}` summary the UI renders from instead of the prompt body |
 
 **Why an origin field, not a new `EventType`**: user and system messages are the same kind of thing — text sent to the agent on stdin, replayed identically on resume. A distinct event type would fork the send/persist/replay path for no behavioral gain. All three fields are `omitempty`, so history written before they existed loads as a plain user message — backward compatible by omission. The producing side (subtype catalog, tagging call sites, and legacy-value normalization) and how the frontend renders the result are documented in [code/work-system.md](code/work-system.md#work-messages-in-chat).
 
-#### Question Answers (`question_response`)
+#### Questions and Their Answers
 
-`Answers` is a `map[string]string` — one entry per question, keyed by the question text, whose value is the chosen option labels joined with `", "`, plus a trailing `Other: <free text>` entry when the user typed one. A `nil` map means the user cancelled instead of answering.
+A question an agent asks is a `question_posted` record; the answer is not a
+record of its own but part of the `message` that carries it, in `answering`. One
+question per record and one `request_id` per question — an answer names a
+question and so does a refusal to answer one, so a record covering three
+questions leaves "I will not answer the second" with no subject. The mechanism is
+[code/agent-integration.md § Posted
+Questions](code/agent-integration.md#posted-questions).
 
-**A cancelled question reaches consumers as an absent `answers` key, not as `null`.** The `chat.question_response` RPC that submits an answer does spell cancellation as an explicit `null`, but the record written from it does not: `Answers` is `omitempty`, so a nil map drops the key entirely. And the record is all any consumer ever sees — unlike the events streamed from the agent, `question_response` is only persisted, never broadcast, so it surfaces on the replay path alone. Code that tests only for `null` therefore misses cancellation entirely and shows the question as answered. The `omitempty` stays despite that sharp edge: `EventRecord` is one flat struct shared by every event type, so dropping it would put `"answers": null` on every text and tool record, while history already on disk would keep the omitted form regardless. Absence is unambiguous because the map carries one entry per question — a card with questions to answer cannot produce the empty map that would serialize identically.
+An `answering` entry keeps the option labels the user picked and what they wrote
+themselves in **separate fields** — `answers` and `text`:
 
-The value string is not only a display form: it is handed to the CLI as-is (merged back into the original tool input, see [code/agent-integration.md](code/agent-integration.md#bidirectional-communication)) and it is the only trace history keeps. An answered card re-renders the same form, disabled, with the user's picks highlighted — and on the replay path that string is all it has to reconstruct them from.
+```jsonc
+{ "type": "message", "content": "Answering:\n\nQ: Which database?\nA: Postgres",
+  "answering": [ { "request_id": "...", "header": "Database", "question": "Which database?",
+                   "answers": ["Postgres"],        // labels the question offered, and only those
+                   "text": "and SQLite in tests",  // the user's own words: Other, or a free-text answer
+                   "declined": false, "note": "", "answered_at": "RFC3339" } ] }
+```
 
-So the frontend parses the string back into selections (`web/src/utils/questionAnswer.ts`) rather than persisting a structured copy beside it: the copy would be missing on exactly the replay path that needs it, and one answer with two representations can disagree with itself. The price is that the join is load-bearing rather than cosmetic, and it cannot be undone by splitting on `", "` — option labels may contain commas and free text usually does. That is why formatting and parsing live in one module, held together by a round-trip test.
+**Two fields rather than one list, because the agent has to be able to tell them
+apart.** A label is the agent's own word handed back to it, and the server checks
+every one of them against the question it answers — a label nobody was offered
+would read in the transcript as an option the agent had given. Free text is under
+no such rule: it is what the user said, recorded as such. Folding the two into
+one list would make the check meaningless, since any string could then claim to
+be a label.
+
+What reaches the CLI is the `content` string alone; `answering` is Pockode's own
+structure and is never sent. So the prose has to say in words what the record
+says structurally, and it does — free text is written as *"and, in their own
+words: …"* rather than beside the labels unmarked
+(`web/src/utils/answerMessage.ts`).
+
+An entry also carries `resolved_by` — `{"kind": "user"}`, or `{"kind": "agent",
+"work_id": "...", "title": "..."}` when another agent answered through
+`question_answer`. It is a field rather than an inference because it used to be
+one: while only a person could answer, the *record type* said who — an `answering`
+entry meant the user and a `request_cancelled` record meant the agent. Absent on
+records written before that stopped being true, which were all the user's. A
+message carrying an agent's answers is itself marked `"origin": "agent"`, for the
+same reason in the other direction: a reader must not take it for something the
+user said.
+
+#### Legacy: `ask_user_question` and `question_response`
+
+Transcripts written before Pockode stopped letting a CLI ask its own blocking
+question still hold these two, and both are **read, never written**. The client
+renders an `ask_user_question` record through the same card a `question_posted`
+gets — one card per question, since a legacy record could carry several under one
+`request_id` — and a `question_response` naming that id settles them.
+
+`question_response` carries an `answers` object, a `map[string]string`: one entry per
+question, keyed by the question text, whose value is the labels picked joined with
+`", "` plus a trailing `Other: <free text>` entry. The client parses that string
+back into the two halves a card draws (`web/src/utils/questionAnswer.ts`), which
+is why the parser is still there. A `nil` map means the CLI cancelled the question
+instead, and it arrives as an **absent key rather than `null`** — the field was
+written `omitempty`, and that was right: `EventRecord` is one flat struct
+shared by every event type, so dropping it would have put `"answers": null` on
+every text and tool record ever written.
+
+A legacy card that nothing settled stays `pending` and says so in words: the
+process that was holding its tool call open is long gone, so there is no way to
+answer it and the card offers none.
 
 ### EventRecord (Serialization)
 
 `server/agent/history.go` — Flat struct used for both persistence and wire format. Each event type populates only its relevant fields; the rest are zero-valued and omitted from JSON.
 
-Key fields: `Type`, `Content`, `ToolName`, `ToolInput`, `ToolResult`, `Error`, `RequestID`, `PermissionSuggestions`, `Questions`, `Answers`, and (for system-driven `message` events) `Origin`, `Subtype`, `Meta`.
+Key fields: `Type`, `Content`, `ToolName`, `ToolInput`, `ToolResult`, `Error`, `RequestID`, `PermissionSuggestions`, `Questions`, `Reason`, `AskedAt`, `ResolvedAt`, `Answering`, and (for system-driven `message` events) `Origin`, `Subtype`, `Meta`.
+
+Two field-level decisions worth knowing before adding one — why `AskedAt` and
+`ResolvedAt` are pointers, and why a field a record on disk carries (the legacy
+`answers` map) need not be here at all — are with the struct itself, in
+[code/agent-integration.md § EventRecord](code/agent-integration.md#eventrecord-unified-event-format).
 
 A `tool_result` also uses `Subtype`, for the three kinds of result that are not
 simply "what the call produced", and carries `DurationMs` / `ExitCode` when the
@@ -208,11 +277,17 @@ event folds into a part its own id does not name:
 - `tool_activity` updates the run it names and is dropped when there is none on
   screen. It never enters history, so replay has none of it, and a row is
   readable without it.
-- `ask_user_question` takes the place of its `tool_call` part. Claude asks
-  through a regular `AskUserQuestion` tool call, so one question arrives as
-  `tool_call` → `ask_user_question` → `question_response` → `tool_result`. The
-  question card renders the questions and the answers, and the trailing
-  `tool_result` matches no `tool_call` and is dropped as an orphan.
+- `question_posted` takes the place of the `question_post` tool row, matched by
+  position rather than by id: the record is written *during* that MCP call, so it
+  necessarily falls between the call's `tool_call` and its `tool_result`. There is
+  no id to join on — an MCP call reaches the server over HTTP and the CLI's
+  `tool_use_id` is not in it. Missing the take-over costs two rows saying one
+  thing, which is a degradation rather than an error.
+- `ask_user_question` (legacy) takes the place of its `tool_call` part by id.
+  Claude asked through a regular tool call, so one question arrived as
+  `tool_call` → `ask_user_question` → `question_response` → `tool_result`; the
+  cards render the questions and the answers, and the trailing `tool_result`
+  matches no `tool_call` and is dropped as an orphan.
 - `tool_call` **carrying `origin_tool_use_id`** folds into the part that *other*
   id names instead of drawing one of its own. Claude's `TaskOutput` is a call
   whose whole content is an earlier call's output, so a row of its own would sit

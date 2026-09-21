@@ -48,18 +48,19 @@ func TestToolDefinitions_WorkListExplainsEveryStatusItReturns(t *testing.T) {
 	}
 }
 
-// The one piece of guidance the redesign exists to give: a long wait belongs to
-// the work, not to a question holding a process open.
-func TestToolDefinitions_NeedsInputIsOfferedInsteadOfABlockingQuestion(t *testing.T) {
+// The retired tool is still listed, and what it says is the whole reason to
+// keep listing it: an agent that still has the old lifecycle rules in its
+// context has to be sent to question_post rather than told the tool is unknown.
+func TestToolDefinitions_NeedsInputIsRetiredAndPointsAtQuestionPost(t *testing.T) {
 	for _, def := range toolDefinitions {
 		if def.Name != "work_needs_input" {
 			continue
 		}
-		if !strings.Contains(def.Description, "AskUserQuestion") {
-			t.Error("work_needs_input does not say what it is preferred over")
+		if !strings.Contains(def.Description, "question_post") {
+			t.Error("work_needs_input does not name what replaced it")
 		}
-		if !strings.Contains(strings.ToLower(def.InputSchema.Properties["reason"].Description), "shown") {
-			t.Error("the reason does not say it is shown to the user")
+		if !strings.Contains(strings.ToLower(def.Description), "retired") {
+			t.Error("work_needs_input does not say it is retired")
 		}
 		return
 	}
@@ -80,7 +81,7 @@ func TestToolDefinitions_BothSubtaskRefusalsAreAnnounced(t *testing.T) {
 
 	for _, c := range []struct{ tool, wayOut string }{
 		{tool: "step_done", wayOut: "work_wait"},
-		{tool: "work_wait", wayOut: "work_needs_input"},
+		{tool: "work_wait", wayOut: "question_post"},
 	} {
 		desc, ok := descriptions[c.tool]
 		if !ok {

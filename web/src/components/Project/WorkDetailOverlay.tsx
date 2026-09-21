@@ -16,8 +16,10 @@ import { useRoleNameMap } from "../../hooks/useRoleNameMap";
 import { useWorkDetailSubscription } from "../../hooks/useWorkDetailSubscription";
 import type { Activity } from "../../lib/activity";
 import { useAgentRoleStore } from "../../lib/agentRoleStore";
+import { requestAnswerSheet } from "../../lib/answerIntent";
 import { useWSStore } from "../../lib/wsStore";
 import type { AgentRole } from "../../types/agentRole";
+import type { PendingQuestion } from "../../types/message";
 import type { Comment, Work, WorkListItem, WorkType } from "../../types/work";
 import { formatStepCount, getStepProgress } from "../../utils/workSteps";
 import { MarkdownContent } from "../Chat/MarkdownContent";
@@ -53,8 +55,17 @@ export default function WorkDetailOverlay({
 	// Children and parent come with the detail, not out of the work list: that
 	// list is the `Current` segment and holds no closed work, so a closed story
 	// read from the archive would look childless (docs/list-paging-ui.md §2.2).
-	const { work, activity, comments, usage, children, parent, loading, error } =
-		useWorkDetailSubscription(workId);
+	const {
+		work,
+		activity,
+		comments,
+		usage,
+		children,
+		parent,
+		pendingQuestions,
+		loading,
+		error,
+	} = useWorkDetailSubscription(workId);
 
 	const roles = useAgentRoleStore((s) => s.roles);
 	const roleNameMap = useRoleNameMap();
@@ -116,6 +127,12 @@ export default function WorkDetailOverlay({
 						</div>
 						<WaitLine work={work} />
 					</div>
+
+					<PendingQuestionsSection
+						work={work}
+						questions={pendingQuestions}
+						onNavigateToSession={onNavigateToSession}
+					/>
 
 					<RoleSection work={work} />
 
@@ -329,20 +346,97 @@ function ActionBar({
 /**
  * What the work is waiting for, under the badges.
  *
- * For a wait on the user this is the agent's own words (`wait_reason`), shown
- * verbatim: it is the only place in the app where the user can read what the
- * agent actually wants, and no fixed vocabulary could carry it. Absent
- * otherwise — an empty row would say "waiting" about a work that is not.
+ * Only the wait on subtasks is left here. A wait on the *user* used to be the
+ * agent's free-text reason, shown verbatim; it is now a question like any other
+ * and is drawn by the section below, where it can be answered rather than only
+ * read (docs/answering-ui.md §4).
  */
 function WaitLine({ work }: { work: Work }) {
-	if (work.status !== "active" || !work.wait) return null;
+	if (work.status !== "active" || work.wait !== "child") return null;
+	return (
+		<p className="mt-2 text-xs text-th-text-secondary">
+			Waiting for its subtasks to finish.
+		</p>
+	);
+}
 
-	const text =
-		work.wait === "user"
-			? work.wait_reason || "Waiting for your message."
-			: "Waiting for its subtasks to finish.";
+/**
+ * The questions this work's session is waiting on, and one way to answer them.
+ *
+ * Read-only on purpose. Answering is a conversation — the user has to see what
+ * happens next — so a form here would be a second answering path on a page with
+ * no transcript to watch. The button navigates to the chat and opens the sheet
+ * there, which is the one surface that answers.
+ *
+ * Shown whenever the list is non-empty, under any status. That is a shorter
+ * rule than "while active" and never wrong: closing a work withdraws its
+ * questions, so the list is empty exactly when it should be, and a `stopped`
+ * work with questions outstanding is precisely the one a person has been handed
+ * back and needs to see them on.
+ */
+function PendingQuestionsSection({
+	work,
+	questions,
+	onNavigateToSession,
+}: {
+	work: Work;
+	questions: PendingQuestion[];
+	onNavigateToSession: (sessionId: string, worktree: string) => void;
+}) {
+	if (questions.length === 0) return null;
+	const sessionId = work.session_id;
 
-	return <p className="mt-2 text-xs text-th-text-secondary">{text}</p>;
+	const handleAnswer = () => {
+		if (!sessionId) return;
+		// The intent, not the destination, is what opens the sheet: `Open Chat`
+		// below leads to the same place and never opens it. One-shot and not a
+		// URL, so a reload of that chat does not re-open it.
+		requestAnswerSheet({
+			sessionId,
+			requestId: questions[0].request_id,
+		});
+		onNavigateToSession(sessionId, work.worktree ?? "");
+	};
+
+	return (
+		<div>
+			<h3 className="mb-1 text-xs font-medium uppercase text-th-text-muted">
+				Waiting for your answer ({questions.length})
+			</h3>
+			<div className="space-y-2">
+				{questions.map((question) => (
+					<div
+						key={question.request_id}
+						className="rounded-lg bg-th-bg-secondary px-3 py-2"
+					>
+						<span className="inline-block rounded bg-th-accent/20 px-1.5 py-0.5 text-xs text-th-text-primary">
+							{question.header}
+						</span>
+						<p className="mt-1 break-words text-sm text-th-text-primary">
+							{question.question}
+						</p>
+						{(question.options ?? []).length > 0 && (
+							<p className="mt-1 break-words text-xs text-th-text-muted">
+								{(question.options ?? [])
+									.map((option) => option.label)
+									.join(" · ")}
+							</p>
+						)}
+					</div>
+				))}
+			</div>
+			{sessionId && (
+				<button
+					type="button"
+					onClick={handleAnswer}
+					className="mt-2 flex min-h-[44px] w-full items-center justify-center gap-2 rounded-lg bg-th-accent px-4 text-sm font-medium text-th-accent-text"
+				>
+					<MessageSquare className="size-4" />
+					Answer
+				</button>
+			)}
+		</div>
+	);
 }
 
 function InlineEditableTitle({ work }: { work: Work }) {

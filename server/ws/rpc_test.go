@@ -422,9 +422,24 @@ func startWorkWaiting(t *testing.T, env *testEnv, wait work.WorkWait) (workID, s
 		t.Fatal("expected a session after start")
 	}
 
-	if wait != work.WaitNone {
-		if err := env.workStore.SetWait(bgCtx, story.ID, wait, "because"); err != nil {
+	if wait == work.WaitChild {
+		// A `child` wait is only ever set when there is a subtask that could end
+		// it, so the fixture has to make one — see work.Store.SetChildWait.
+		childResp := env.call("work.create", rpc.WorkCreateParams{
+			Type:        work.WorkTypeTask,
+			ParentID:    story.ID,
+			AgentRoleID: env.testRoleID,
+			Title:       "Subtask",
+		})
+		var child work.Work
+		if err := json.Unmarshal(childResp.Result, &child); err != nil {
 			t.Fatal(err)
+		}
+		if _, err := env.workStore.Start(bgCtx, child.ID, "child-session"); err != nil {
+			t.Fatal(err)
+		}
+		if set, err := env.workStore.SetChildWait(bgCtx, story.ID); err != nil || !set {
+			t.Fatalf("SetChildWait = %v/%v, want true/nil", set, err)
 		}
 	}
 
@@ -1047,47 +1062,6 @@ func TestHandler_ActivatedSession_ResumeTrue(t *testing.T) {
 
 	if starts := mock.starts(); len(starts) != 1 || !starts[0].resume {
 		t.Errorf("expected resume=true, got %+v", starts)
-	}
-}
-
-func TestHandler_AskUserQuestion(t *testing.T) {
-	mock := &mockAgent{
-		events: []agent.AgentEvent{
-			agent.AskUserQuestionEvent{
-				RequestID: "req-q-123",
-				ToolUseID: "toolu_q_123",
-				Questions: []agent.AskUserQuestion{
-					{
-						Question:    "Which library?",
-						Header:      "Library",
-						Options:     []agent.QuestionOption{{Label: "A", Description: "Option A"}},
-						MultiSelect: false,
-					},
-				},
-			},
-			agent.DoneEvent{},
-		},
-	}
-	env := newTestEnv(t, mock)
-	env.getMainWorktree().SessionStore.Create(bgCtx, "sess", session.CreateSpec{})
-
-	env.subscribeChatMessages("sess")
-	env.sendMessage("sess", "ask me")
-	notif := env.awaitNotification("chat.ask_user_question")
-
-	var params rpc.AskUserQuestionParams
-	if err := json.Unmarshal(notif.Params, &params); err != nil {
-		t.Fatalf("failed to unmarshal params: %v", err)
-	}
-
-	if params.RequestID != "req-q-123" {
-		t.Errorf("expected request_id 'req-q-123', got %q", params.RequestID)
-	}
-	if len(params.Questions) != 1 {
-		t.Errorf("expected 1 question, got %d", len(params.Questions))
-	}
-	if params.Questions[0].Question != "Which library?" {
-		t.Errorf("expected question 'Which library?', got %q", params.Questions[0].Question)
 	}
 }
 

@@ -84,7 +84,7 @@ describe("useWorkSubscription", () => {
 				work: row({
 					id: "hidden",
 					status: "active",
-					activity: "needs_message",
+					activity: "needs_permission",
 				}),
 			});
 		});

@@ -18,7 +18,7 @@ type midTurnFixture struct {
 	client     *Client
 	agent      *mockAgent
 	pm         *process.Manager
-	broadcasts []agent.MessageEvent
+	broadcasts []agent.EventRecord
 }
 
 func newMidTurnFixture(t *testing.T) *midTurnFixture {
@@ -37,8 +37,8 @@ func newMidTurnFixture(t *testing.T) *midTurnFixture {
 	}
 
 	f := &midTurnFixture{store: store, client: NewClient(store, pm), agent: ag, pm: pm}
-	f.client.SetBroadcaster(func(_ string, event agent.MessageEvent, _ session.HistorySeq, _ any) {
-		f.broadcasts = append(f.broadcasts, event)
+	f.client.SetBroadcaster(func(_ string, record agent.EventRecord, _ session.HistorySeq, _ any) {
+		f.broadcasts = append(f.broadcasts, record)
 	})
 	return f
 }
@@ -78,6 +78,29 @@ func (f *midTurnFixture) waitForPhase(t *testing.T, want session.TurnPhase) {
 		time.Sleep(time.Millisecond)
 	}
 	t.Fatalf("timed out waiting for phase %q, still %q", want, f.phase(t))
+}
+
+// waitForRecords waits for the transcript to hold at least n records and
+// returns the count.
+//
+// The phase is not a signal that a record has landed: a process applies the turn
+// state *before* it appends the record, deliberately, so that anything seeing a
+// record sees the state it caused already settled (process.Process.handleEvent).
+// That makes the record the signal an event has been processed, and the phase
+// the earlier of the two — a test that counted records after waiting on a phase
+// would sometimes count one too few, and then see it arrive during the
+// assertion it was making about something else.
+func (f *midTurnFixture) waitForRecords(t *testing.T, n int) int {
+	t.Helper()
+	deadline := time.Now().Add(15 * time.Second)
+	for time.Now().Before(deadline) {
+		if got := f.historyLen(t); got >= n {
+			return got
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for %d history records, have %d", n, f.historyLen(t))
+	return 0
 }
 
 func (f *midTurnFixture) historyLen(t *testing.T) int {
@@ -148,21 +171,20 @@ func TestClient_MessageDuringABackgroundWaitGoesThrough(t *testing.T) {
 }
 
 // TestClient_MessageRefusedWhileARequestIsOnScreen covers the one state a
-// message cannot be delivered in. A CLI holding a permission request or a
-// question open is inside the tool call waiting for that answer and reads
-// nothing else, so accepting the message would take the card off the user's
-// screen (session.ReduceTurn's SignalPrompt) and leave a turn open that nothing
-// could then end.
+// message cannot be delivered in. A CLI holding a permission request open is
+// inside the tool call waiting for that decision and reads nothing else, so
+// accepting the message would take the card off the user's screen
+// (session.ReduceTurn's SignalPrompt) and leave a turn open that nothing could
+// then end.
 //
 // Every sender is refused, not just the user's: an auto-continuation nudged into
-// a session that is holding a question open is nudged into the same silence.
+// a session that is holding a request open is nudged into the same silence.
 func TestClient_MessageRefusedWhileARequestIsOnScreen(t *testing.T) {
 	tests := []struct {
 		name  string
 		raise agent.AgentEvent
 	}{
 		{"permission request", agent.PermissionRequestEvent{RequestID: "req-1", ToolName: "Bash"}},
-		{"question", agent.AskUserQuestionEvent{RequestID: "req-1"}},
 	}
 
 	senders := []struct {
@@ -187,7 +209,8 @@ func TestClient_MessageRefusedWhileARequestIsOnScreen(t *testing.T) {
 				sess.events <- tt.raise
 				f.waitForPhase(t, session.PhaseBlocked)
 
-				before := f.historyLen(t)
+				// The message that started the turn, and the request itself.
+				before := f.waitForRecords(t, 2)
 				broadcasts := len(f.broadcasts)
 
 				if err := sender.send(f.client); !errors.Is(err, ErrTurnAwaitingAnswer) {

@@ -24,7 +24,7 @@ func TestManagerRecordsUsageAgainstItsSession(t *testing.T) {
 	}
 
 	mock := &mockAgent{}
-	m := NewManager(mockRegistry(mock), "/tmp", "", "", store, idleOnly(10*time.Minute))
+	m := NewManager(mockRegistry(mock), "", "/tmp", "", "", store, idleOnly(10*time.Minute))
 	defer m.Shutdown()
 
 	for _, id := range []string{"sess-1", "sess-2"} {
@@ -75,7 +75,7 @@ func TestManagerDropsUsageForDeletedSession(t *testing.T) {
 		t.Fatalf("NewFileStore: %v", err)
 	}
 	mock := &mockAgent{}
-	m := NewManager(mockRegistry(mock), "/tmp", "", "", store, idleOnly(10*time.Minute))
+	m := NewManager(mockRegistry(mock), "", "/tmp", "", "", store, idleOnly(10*time.Minute))
 	defer m.Shutdown()
 
 	if _, _, err := m.GetOrCreateProcess(context.Background(), session.SessionMeta{ID: "gone", AgentType: session.AgentTypeClaude}); err != nil {
@@ -95,7 +95,7 @@ func TestManagerAlwaysInstallsUsageCallback(t *testing.T) {
 		t.Fatalf("NewFileStore: %v", err)
 	}
 	mock := &mockAgent{}
-	m := NewManager(mockRegistry(mock), "/tmp", "", "", store, idleOnly(10*time.Minute))
+	m := NewManager(mockRegistry(mock), "", "/tmp", "", "", store, idleOnly(10*time.Minute))
 	defer m.Shutdown()
 
 	if _, _, err := m.GetOrCreateProcess(context.Background(), session.SessionMeta{ID: "sess-1", AgentType: session.AgentTypeClaude}); err != nil {
