@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 
 	"github.com/pockode/server/agent"
@@ -131,7 +132,7 @@ func (e *Executor) questionCancel(ctx context.Context, caller Caller, args json.
 			who = "other sessions"
 		}
 		return "", userErrorf("question %s was posted by %s (%s) and only the session that posted a question may withdraw it",
-			params.RequestID, who, strings.Join(sessionIDs(at), ", "))
+			params.RequestID, who, e.describeCandidates(at))
 	}
 
 	questions, release, err := e.sessions.ResolveQuestions(caller.Worktree)
@@ -196,20 +197,6 @@ func (e *Executor) questionAnswer(ctx context.Context, caller Caller, args json.
 		return "", userErrorf("session %s is your own, and an agent may not answer a question in its own session: that would record an answer nobody gave. If it is your question and you no longer need it, withdraw it with question_cancel", target.SessionID)
 	}
 
-	// A stopped work has been handed back to a person, and a message into its
-	// session starts a turn — so delivering here would set an agent working on
-	// work somebody took back, which is the one thing `stopped` exists to
-	// prevent. The same rule keeps the engine from telling a stopped parent
-	// that a child closed. The question is not lost: it survives the stop, and
-	// the user can still answer it.
-	w, hasWork, err := e.workStore.FindBySessionID(target.SessionID)
-	if err != nil {
-		return "", fmt.Errorf("find the work that asked: %w", err)
-	}
-	if hasWork && w.Status == work.StatusStopped {
-		return "", userErrorf("work %s asked that question and is stopped, so an agent's answer would set it running again behind the person who stopped it. Leave it to the user, or restart the work first", w.ID)
-	}
-
 	by, err := e.answerer(caller.SessionID)
 	if err != nil {
 		return "", err
@@ -239,9 +226,12 @@ func (e *Executor) questionAnswer(ctx context.Context, caller Caller, args json.
 	}
 
 	// After the delivery, for the reason the WebSocket handler gives: a work
-	// whose agent was handed nothing must not have its allowance given back.
+	// whose agent was handed nothing must not be woken or have its allowance
+	// given back. This is the same input a user's answer goes through — the
+	// answer started a turn either way, and a work whose session is running
+	// has to be active for the engine to drive it and to see the turn out.
 	if e.workEngine != nil {
-		e.workEngine.HandleAgentAnswer(target.SessionID)
+		e.workEngine.HandleAnswer(target.SessionID)
 	}
 
 	return fmt.Sprintf("Answer delivered to the session that asked (request_id: %s). It arrives there as a message saying you answered it, not the user, and the question is no longer waiting for anyone.", params.RequestID), nil
@@ -288,7 +278,7 @@ func (e *Executor) answerTarget(params questionAnswerParams) (worktree.QuestionL
 		return worktree.QuestionLocation{}, userErrorf("question %s is not waiting for an answer in any session: it has been answered, declined or withdrawn, or it was never asked. Pass session_id as well to be told which", params.RequestID)
 	default:
 		return worktree.QuestionLocation{}, userErrorf("question %s is waiting for an answer in more than one session (%s) — a fork carries a question across with its id — so say which one you are answering with session_id",
-			params.RequestID, strings.Join(sessionIDs(at), ", "))
+			params.RequestID, e.describeCandidates(at))
 	}
 }
 
@@ -336,12 +326,36 @@ func locatedIn(at []worktree.QuestionLocation, sessionID string) bool {
 	return false
 }
 
-func sessionIDs(at []worktree.QuestionLocation) []string {
-	out := make([]string, 0, len(at))
+// describeCandidates names every session a request id is open in, with the work
+// running in each.
+//
+// A refusal that listed bare session ids would be asking the agent to choose by
+// the one fact it does not have: it meets a question through the work around it
+// — a subtask's question arrives naming the subtask, work_get lists the
+// questions of the item asked for — and a session id appears nowhere in either.
+// The work id and title are what it can recognise, and recognising one is the
+// whole point of listing them.
+//
+// A session running no work is named bare, which is the honest answer for a
+// plain chat. So is one whose work could not be read: the caller is already
+// being refused, and the worst a failed lookup may cost is a vaguer sentence —
+// it is logged rather than returned, because failing the refusal itself would
+// leave the agent with no account of what was wrong at all.
+func (e *Executor) describeCandidates(at []worktree.QuestionLocation) string {
+	parts := make([]string, 0, len(at))
 	for _, l := range at {
-		out = append(out, l.SessionID)
+		part := l.SessionID
+		w, found, err := e.workStore.FindBySessionID(l.SessionID)
+		switch {
+		case err != nil:
+			slog.Warn("could not name the work behind a candidate session",
+				"sessionId", l.SessionID, "error", err)
+		case found:
+			part = fmt.Sprintf("%s, running work %s %q", l.SessionID, w.ID, w.Title)
+		}
+		parts = append(parts, part)
 	}
-	return out
+	return strings.Join(parts, "; ")
 }
 
 func questionSpec(params questionPostParams) (chat.QuestionSpec, error) {

@@ -437,8 +437,11 @@ func TestEverySystemMessage_SpeaksTheCurrentVocabulary(t *testing.T) {
 		messages[prefix+" step_advance"] = BuildStepAdvanceMessage(w, "Do B", 2, 2)
 		messages[prefix+" reopen"] = BuildReopenMessage(w)
 	}
-	messages["child_question"] = BuildChildQuestionMessage(story, "Child", "c1",
+	messages["child_question"] = BuildChildQuestionMessage(story, "Child", "c1", "sess-c1",
 		session.PendingQuestion{RequestID: "req-1", Header: "Database", Question: "Which?"})
+	messages["child_question_reminder"] = BuildChildQuestionReminderMessage(story, []childQuestion{
+		{ChildID: "c1", ChildTitle: "Child", SessionID: "sess-c1", RequestID: "req-1", Header: "Database", Question: "Which?"},
+	})
 	messages["child_done"] = BuildChildCompletionMessage(story, "Child", "c1", true)
 	messages["child_done, wait standing"] = BuildChildCompletionMessage(story, "Child", "c1", false)
 	for _, exit := range []childExit{childDeleted, childStopped, childNotStarted} {
@@ -504,11 +507,14 @@ func TestBuildChildQuestionMessage_HandsTheStoryTheWholeQuestion(t *testing.T) {
 		MultiSelect: true,
 	}
 
-	msg := BuildChildQuestionMessage(story, "Write the parser", "c1", q)
+	msg := BuildChildQuestionMessage(story, "Write the parser", "c1", "sess-c1", q)
 
 	assertContains(t, msg, "Write the parser", "child title")
 	assertContains(t, msg, "Which database?", "the question itself")
-	assertContains(t, msg, "req-7", "the request id, which is all question_answer takes")
+	assertContains(t, msg, "req-7", "the request id")
+	// The other half of the question's identity. Without it a story answering a
+	// question a fork left in two sessions spends a refused call finding out.
+	assertContains(t, msg, "sess-c1", "the session the question is waiting in")
 	assertContains(t, msg, "Postgres | SQLite", "the options it may pick from")
 	assertContains(t, msg, "more than one may be picked", "that it is multi-select")
 	assertContains(t, msg, "question_answer", "the way to answer it")
@@ -520,7 +526,7 @@ func TestBuildChildQuestionMessage_HandsTheStoryTheWholeQuestion(t *testing.T) {
 	// A question with no options must not print an empty "Options:" line, and
 	// must not point at `answers`: there is no list for a label to come from,
 	// and the server refuses one.
-	plain := BuildChildQuestionMessage(story, "Write the parser", "c1",
+	plain := BuildChildQuestionMessage(story, "Write the parser", "c1", "sess-c1",
 		session.PendingQuestion{RequestID: "req-8", Header: "Name", Question: "What name?"})
 	if strings.Contains(plain, "Options:") {
 		t.Error("a question that offered nothing still printed an options line")
@@ -541,4 +547,64 @@ func TestLifecycleRules_TellOnlyAStoryAboutItsSubtasksQuestions(t *testing.T) {
 	if strings.Contains(lifecycleRules(task), "question_answer") {
 		t.Error("a task is offered a tool it has no subtask to point at")
 	}
+}
+
+// Leaving a subtask's question alone used to be offered as a third way, and is
+// not one: the story is the coordinator, Pockode nudges it for an unanswered
+// one, and a story that keeps ignoring it is stopped.
+func TestBuildChildQuestionMessage_DoesNotOfferToLeaveIt(t *testing.T) {
+	story := Work{ID: "s1", Type: WorkTypeStory, AgentRoleID: testRoleID, Title: "S"}
+
+	msg := BuildChildQuestionMessage(story, "Write the parser", "c1", "sess-c1",
+		session.PendingQuestion{RequestID: "req-7", Header: "Database", Question: "Which database?"})
+
+	if strings.Contains(msg, "or leave it") {
+		t.Error("the story is still told it may leave its subtask's question")
+	}
+	assertContains(t, msg, "do not leave it", "that ignoring it is not offered")
+	// The rule itself is stated once, in the lifecycle section every message
+	// carries. This is the message's own job: say that this question is not
+	// optional, and point at the section that says what it costs.
+	assertContains(t, lifecycleRules(story), "Ignoring it is not a third way", "the one place the rule lives")
+	// Asking the user is the way out of a decision it cannot make, and it has to
+	// read as ordinary — otherwise the only thing left is guessing.
+	assertContains(t, lifecycleRules(story), "ordinary thing to do", "that asking the user is not a failure")
+}
+
+// The engine stops holding a story responsible for a subtask a person stopped
+// (Engine.childrenAwaitingAnswers reads only active children), and these rules
+// are the only place a story could learn that answering one anyway would set
+// that subtask running again. Both halves have to say the same thing, so the
+// bound is pinned here beside the engine's test for it.
+func TestLifecycleRules_BoundASubtasksQuestionToARunningSubtask(t *testing.T) {
+	story := Work{ID: "s1", Type: WorkTypeStory, AgentRoleID: testRoleID, Title: "S"}
+
+	rules := lifecycleRules(story)
+
+	assertContains(t, rules, "is not yours", "that a stopped subtask's question is not the story's")
+	assertContains(t, rules, "work_start", "the way to make it the story's again")
+}
+
+// TestBuildChildQuestionReminderMessage_QuotesEveryQuestion: the story cannot
+// fetch them — they live on its subtasks' sessions — and it is being asked to
+// settle each, so each arrives whole and with both halves of its identity.
+func TestBuildChildQuestionReminderMessage_QuotesEveryQuestion(t *testing.T) {
+	story := Work{ID: "s1", Type: WorkTypeStory, AgentRoleID: testRoleID, Title: "S"}
+
+	msg := BuildChildQuestionReminderMessage(story, []childQuestion{
+		{ChildID: "c1", ChildTitle: "Write the parser", SessionID: "sess-c1", RequestID: "req-1", Header: "Database", Question: "Which database?"},
+		{ChildID: "c2", ChildTitle: "Wire the store", SessionID: "sess-c2", RequestID: "req-2", Header: "Name", Question: "What name?"},
+	})
+
+	for _, want := range []string{
+		"Write the parser", "c1", "sess-c1", "req-1", "Which database?",
+		"Wire the store", "c2", "sess-c2", "req-2", "What name?",
+	} {
+		assertContains(t, msg, want, "a question the story has to settle")
+	}
+	assertContains(t, msg, "question_answer", "the way to answer it")
+	assertContains(t, msg, "question_post", "the way to ask the user instead")
+	// The same thing the first message says, and for the same reason: a nudge is
+	// otherwise read as "your wait is over, get on with it".
+	assertContains(t, msg, "if you were waiting you still are", "that the wait stands")
 }

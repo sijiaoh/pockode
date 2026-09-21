@@ -94,10 +94,13 @@ type stubQuestions struct {
 	posted    []chat.QuestionSpec
 	postedFor []string
 	cancelled []string
-	answered  []stubAnswer
-	postErr   error
-	cancelErr error
-	answerErr error
+	// cancelledFor is the session each withdrawal was asked of, which is the
+	// whole of "a session may only withdraw its own copy".
+	cancelledFor []string
+	answered     []stubAnswer
+	postErr      error
+	cancelErr    error
+	answerErr    error
 }
 
 // stubAnswer is one delivered answer: what was said, to which session, by whom.
@@ -127,11 +130,12 @@ func (q *stubQuestions) AnswerQuestion(_ context.Context, sessionID string, a ch
 	return nil
 }
 
-func (q *stubQuestions) CancelQuestion(_ context.Context, _, requestID string) error {
+func (q *stubQuestions) CancelQuestion(_ context.Context, sessionID, requestID string) error {
 	if q.cancelErr != nil {
 		return q.cancelErr
 	}
 	q.cancelled = append(q.cancelled, requestID)
+	q.cancelledFor = append(q.cancelledFor, sessionID)
 	return nil
 }
 

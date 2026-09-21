@@ -266,7 +266,7 @@ var toolDefinitions = []toolDefinition{
 					Items:       &propertySchema{Type: "string"},
 				},
 				"text":       {Type: "string", Description: "The answer in your own words. This is the whole answer to a question that offered no options; beside options it is the \"other\" answer, and only a multi-select question takes it together with a label."},
-				"session_id": {Type: "string", Description: "The session whose question this is. Needed only when the same question is open in more than one session, which the error will tell you."},
+				"session_id": {Type: "string", Description: "The session the question is waiting in. A question is the pair (session_id, request_id), not the request id alone: a fork copies the questions it inherits with their ids unchanged, so one id can be waiting in two sessions at once, both still asking. It may be left out while the id is waiting in one session only — that one is answered. When more than one is, the call is refused and lists the candidates with the work each is running; call again naming the one you mean. Nothing picks for you, because answering the other leaves the question you meant still waiting."},
 			},
 			Required: []string{"request_id"},
 		},
@@ -274,7 +274,8 @@ var toolDefinitions = []toolDefinition{
 	{
 		Name: "question_cancel",
 		Description: "Withdraw a question you posted with question_post, because you no longer need the answer — you worked it out, or the user already answered it in the chat. " +
-			"The card stops asking and nothing is sent to anyone. A question that has already been answered, declined or withdrawn cannot be withdrawn again, and the error says what became of it.",
+			"The card stops asking and nothing is sent to anyone. A question that has already been answered, declined or withdrawn cannot be withdrawn again, and the error says what became of it. " +
+			"It withdraws the copy in your own session, which is the only one it can: a fork carries an unanswered question into the new session with its id unchanged, and that copy belongs to that session's agent.",
 		InputSchema: inputSchema{
 			Type: "object",
 			Properties: map[string]propertySchema{

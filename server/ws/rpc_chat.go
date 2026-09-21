@@ -156,9 +156,9 @@ func (h *rpcMethodHandler) handleMessage(ctx context.Context, conn *jsonrpc2.Con
 	// alone, because answering what the agent asked is not a subtask closing.
 	// Which one this is depends on what the *client sent*, not on what the send
 	// resolved: an empty `answering` is a person typing, and that redirects the
-	// work as any message does (see Engine.HandleUserAnswer).
+	// work as any message does (see Engine.HandleAnswer).
 	if len(params.Answering) > 0 {
-		h.workEngine.HandleUserAnswer(params.SessionID)
+		h.workEngine.HandleAnswer(params.SessionID)
 	} else {
 		h.workEngine.HandleUserMessage(params.SessionID)
 	}

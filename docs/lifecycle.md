@@ -262,18 +262,26 @@ is one the other admits. `child` is the only wait there is, so this check has
 nothing else to cover: a question needs none of it, because nothing about it is
 on the work record and a person can always be asked.
 
-**The engine has eight inputs and no special cases beside them**: a turn ended,
-a user handed the session something to go on, the user answered a posted
-question, another agent answered one, an agent posted one, a child work left
-`active`, a session was deleted, the server started. Everything the old
-`AutoResumer` and `StatusSyncer` did with process state changes turned out to be
-a rule about a turn ending, which is what the engine reads instead.
+**The engine has seven inputs and no special cases beside them**: a turn ended,
+a user handed the session something to go on, a posted question was answered, an
+agent posted one, a child work left `active`, a session was deleted, the server
+started. Everything the old `AutoResumer` and `StatusSyncer` did with process
+state changes turned out to be a rule about a turn ending, which is what the
+engine reads instead.
 
-The three about questions are inputs rather than commands, and the distinction
+The two about questions are inputs rather than commands, and the distinction
 is the one the list is built on: a command is somebody telling a work what to
 be, while an input is something that *happened to its session* and that the
 engine alone decides what to do about
 ([code/work-system.md](code/work-system.md#the-work-engine)).
+
+**Answering is one of those two, not two of them, whoever answered.** The user's
+answer and another agent's (`question_answer`) reach the work as the same event,
+because either one hands the agent what it stopped for and a turn starts on the
+back of it — and a work whose session is running has to be `active` or nothing
+is driving it. Who answered is a fact the transcript keeps; it is not a fact
+about the status. It was two inputs once, and what the split cost is
+[code/work-system.md](code/work-system.md#input-3-a-posted-question-was-answered).
 
 Two of them decide more than the rest:
 
@@ -282,7 +290,14 @@ Two of them decide more than the rest:
   restart hands a stuck agent no fresh allowance. An aborted turn was taken away
   rather than finished, and carrying on is the one thing nobody asked for. Two
   separate things count as outstanding and either is enough: a `child` wait on
-  the work, and a question on its session that nobody has answered.
+  the work, and a question on its session that nobody has answered. A story is
+  read for a third, and this one is *nudged* for rather than left alone: an
+  unanswered question on one of its **active** subtasks, which it is the
+  coordinator of and must either answer or take to the user itself. The three
+  are read in a fixed order, the story's own questions first, and that order is
+  the whole of what keeps a story already asking on its subtask's behalf from
+  being nudged for that subtask
+  ([code/work-system.md](code/work-system.md#input-1-a-turn-ended)).
 - **At startup, a work is preserved when something that outlives the dead
   process can still reach it, and stopped when nothing can.** A person can — so
   a work whose session has a question waiting is kept — and so can a child work
@@ -514,6 +529,6 @@ reader recognises a decision rather than a gap.
 |---|---|
 | [lifecycle-ui.md](lifecycle-ui.md) | The presentation layer: the eight activities, the attention strip, unanswered questions as a second dimension, work list grouping, button rules |
 | [code/agent-integration.md](code/agent-integration.md) | The process and session layers in code: the reducer, the lease table, expiry records, retirement, restart repair, and both CLI adapters |
-| [code/work-system.md](code/work-system.md) | The work layer in code: statuses and transitions, the engine's eight inputs, the command surface, prompts |
+| [code/work-system.md](code/work-system.md) | The work layer in code: statuses and transitions, the engine's seven inputs, the command surface, prompts |
 | [projects/workflow-engine.md](projects/workflow-engine.md) | The same engine from the project system's side, with the prompt builders |
 | [agent-event.md](agent-event.md) | The event stream the reducer's signals are translated from |

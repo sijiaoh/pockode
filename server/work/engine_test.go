@@ -384,7 +384,7 @@ func TestEngine_AUserMessageClearsTheWaitAndTheNudges(t *testing.T) {
 	}
 }
 
-// --- input 3: the user answered what the agent asked ---
+// --- input 3: the questions the agent asked were answered ---
 
 // An answer is not general-purpose attention: it answers the one thing the agent
 // asked, and a story waiting for its subtasks is still waiting for exactly that.
@@ -398,20 +398,21 @@ func TestEngine_AnAnswerClearsTheNudgesButNotTheChildWait(t *testing.T) {
 		t.Fatalf("RecordNudge: %v", err)
 	}
 
-	f.engine.HandleUserAnswer("sess-1")
+	f.engine.HandleAnswer("sess-1")
 
 	got := getWork(t, f.store, story.ID)
 	if got.Wait != WaitChild {
 		t.Errorf("wait = %q, want it still waiting on its subtasks — no subtask closed", got.Wait)
 	}
 	if got.NudgeCount != 0 {
-		t.Errorf("nudges = %d, want the allowance back: a person just acted on this work", got.NudgeCount)
+		t.Errorf("nudges = %d, want the allowance back: the agent was handed what it asked for", got.NudgeCount)
 	}
 }
 
-// A stopped work is woken by an answer as by any message. The narrowing above is
-// about the wait, not about the status: nothing in "the user answered" says the
-// work should stay handed back.
+// A stopped work is woken by an answer as by any message, whoever gave it: the
+// answer starts a turn in that session either way, and a work whose session is
+// running has to be active for the engine to drive it and to see the turn out.
+// The narrowing above is about the wait, not about the status.
 func TestEngine_AnAnswerRevivesAStoppedWork(t *testing.T) {
 	f := newEngineFixture(t)
 	story := f.startedStory(t, "sess-1")
@@ -419,7 +420,7 @@ func TestEngine_AnAnswerRevivesAStoppedWork(t *testing.T) {
 		t.Fatalf("Stop: %v", err)
 	}
 
-	f.engine.HandleUserAnswer("sess-1")
+	f.engine.HandleAnswer("sess-1")
 
 	if got := getWork(t, f.store, story.ID); got.Status != StatusActive {
 		t.Errorf("status = %q, want %q", got.Status, StatusActive)
@@ -434,7 +435,7 @@ func TestEngine_AnAnswerLeavesAClosedWorkClosed(t *testing.T) {
 		t.Fatalf("StepDone: %v", err)
 	}
 
-	f.engine.HandleUserAnswer("sess-1")
+	f.engine.HandleAnswer("sess-1")
 
 	if got := getWork(t, f.store, story.ID); got.Status != StatusClosed {
 		t.Errorf("status = %q, want %q", got.Status, StatusClosed)
@@ -1183,7 +1184,7 @@ func TestEngine_ChildClosureLeavesAStoppedParentAlone(t *testing.T) {
 
 // --- a subtask's question reaching its story ---
 
-func childQuestion() session.PendingQuestion {
+func subtaskQuestion() session.PendingQuestion {
 	return session.PendingQuestion{
 		RequestID: "req-1", Header: "Database", Question: "Which database?",
 		Options: []session.QuestionOption{{Label: "Postgres"}, {Label: "SQLite"}},
@@ -1199,7 +1200,7 @@ func TestEngine_ASubtaskQuestionReachesItsStory(t *testing.T) {
 	task := createTask(t, f.store, story.ID, "Wire the store")
 	startWorkWithSession(t, f.store, task.ID, "sess-child")
 
-	f.engine.HandleQuestionPosted("sess-child", childQuestion())
+	f.engine.HandleQuestionPosted("sess-child", subtaskQuestion())
 
 	waitFor(t, func() bool { return f.sender.count() > 0 })
 	if got := f.sender.subtypes(); len(got) != 1 || got[0] != MessageSubtypeChildQuestion {
@@ -1224,7 +1225,7 @@ func TestEngine_ASubtaskQuestionLeavesTheParentsWaitAlone(t *testing.T) {
 	startWorkWithSession(t, f.store, task.ID, "sess-child")
 	setChildWait(t, f.store, story.ID)
 
-	f.engine.HandleQuestionPosted("sess-child", childQuestion())
+	f.engine.HandleQuestionPosted("sess-child", subtaskQuestion())
 
 	waitFor(t, func() bool { return f.sender.count() > 0 })
 	got := getWork(t, f.store, story.ID)
@@ -1249,7 +1250,7 @@ func TestEngine_ASubtaskQuestionIsNotDeliveredToAStoppedStory(t *testing.T) {
 		t.Fatalf("Stop: %v", err)
 	}
 
-	f.engine.HandleQuestionPosted("sess-child", childQuestion())
+	f.engine.HandleQuestionPosted("sess-child", subtaskQuestion())
 	f.engine.Stop() // waits for the follow-up, so "nothing was sent" is decidable
 
 	if got := f.sender.count(); got != 0 {
@@ -1265,7 +1266,7 @@ func TestEngine_AQuestionFromAStoryGoesNowhere(t *testing.T) {
 	f := newEngineFixture(t)
 	f.startedStory(t, "sess-1")
 
-	f.engine.HandleQuestionPosted("sess-1", childQuestion())
+	f.engine.HandleQuestionPosted("sess-1", subtaskQuestion())
 	f.engine.Stop()
 
 	if got := f.sender.count(); got != 0 {
@@ -1285,7 +1286,7 @@ func TestEngine_AnUndeliverableSubtaskQuestionChangesNothing(t *testing.T) {
 	startWorkWithSession(t, f.store, task.ID, "sess-child")
 	setChildWait(t, f.store, story.ID)
 
-	f.engine.HandleQuestionPosted("sess-child", childQuestion())
+	f.engine.HandleQuestionPosted("sess-child", subtaskQuestion())
 	f.engine.Stop()
 
 	got := getWork(t, f.store, story.ID)
@@ -1297,44 +1298,157 @@ func TestEngine_AnUndeliverableSubtaskQuestionChangesNothing(t *testing.T) {
 	}
 }
 
-// --- an agent's answer ---
+// --- input 1, continued: a subtask of this story is waiting on an answer ---
 
-// An agent's answer gives the work its nudge allowance back, exactly as a
-// person's does.
-func TestEngine_AnAgentAnswerResetsTheNudgeAllowance(t *testing.T) {
+// startedSubtask gives the story a running subtask on a known session, which is
+// what it takes for that subtask to have a question of its own.
+func (f *engineFixture) startedSubtask(t *testing.T, storyID, title, sessionID string) Work {
+	t.Helper()
+	task := createTask(t, f.store, storyID, title)
+	startWorkWithSession(t, f.store, task.ID, sessionID)
+	return getWork(t, f.store, task.ID)
+}
+
+// Row one of the rule: the subtask is waiting and the story is not. Being shown
+// a subtask's question and doing nothing about it is the one thing a
+// coordinator may not do, so the story is nudged — and told what it is being
+// nudged about, which the ordinary nudge cannot say.
+func TestEngine_NudgesAStoryThatLeftItsSubtasksQuestionAlone(t *testing.T) {
 	f := newEngineFixture(t)
-	story := f.startedStory(t, "sess-1")
-	if _, err := f.store.RecordNudge(context.Background(), story.ID); err != nil {
-		t.Fatalf("RecordNudge: %v", err)
+	story := f.startedStory(t, "sess-parent")
+	task := f.startedSubtask(t, story.ID, "Wire the store", "sess-child")
+	f.turns.post("sess-child")
+
+	f.engine.HandleTurnEnded("sess-parent", session.OutcomeCompleted)
+
+	if f.sender.count() != 1 {
+		t.Fatalf("sent %v, want one nudge about the subtask's question", f.sender.subtypes())
 	}
-
-	f.engine.HandleAgentAnswer("sess-1")
-
-	if got := getWork(t, f.store, story.ID); got.NudgeCount != 0 {
-		t.Errorf("nudge count = %d, want the allowance back", got.NudgeCount)
+	body := f.sender.contents()[0]
+	for _, want := range []string{task.ID, "Wire the store", "sess-child-q", "session_id: sess-child", "question_answer", "question_post"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("the nudge does not contain %q; it is what the story has to act on", want)
+		}
+	}
+	if got := getWork(t, f.store, story.ID); got.NudgeCount != 1 {
+		t.Errorf("nudges = %d, want 1 — this one spends the allowance like any other", got.NudgeCount)
 	}
 }
 
-// TestEngine_AnAgentAnswerLeavesAWaitAndAStopAlone: the narrowing of
-// HandleUserAnswer. A `child` wait is not what was answered, and a stopped work
-// was handed to a *person* — an agent's answer is not them coming back.
-func TestEngine_AnAgentAnswerLeavesAWaitAndAStopAlone(t *testing.T) {
+// Row two: the story is asking the user on its subtask's behalf. That is the
+// answer to "I cannot decide this", so it is an ordinary ending — and the story
+// must never be stopped for it, which is why this is asked before the subtasks
+// are.
+func TestEngine_LeavesAStoryAskingOnItsSubtasksBehalfAlone(t *testing.T) {
 	f := newEngineFixture(t)
 	story := f.startedStory(t, "sess-parent")
-	task := createTask(t, f.store, story.ID, "T")
-	startWorkWithSession(t, f.store, task.ID, "sess-child")
+	f.startedSubtask(t, story.ID, "Wire the store", "sess-child")
+	f.turns.post("sess-child")
+	f.turns.post("sess-parent")
+
+	for range DefaultMaxNudges + 1 {
+		f.engine.HandleTurnEnded("sess-parent", session.OutcomeCompleted)
+	}
+
+	if f.sender.count() != 0 {
+		t.Errorf("nudged a story that is asking the user (%v)", f.sender.subtypes())
+	}
+	got := getWork(t, f.store, story.ID)
+	if got.Status != StatusActive || got.NudgeCount != 0 {
+		t.Errorf("story = %q/%d, want active with nothing spent", got.Status, got.NudgeCount)
+	}
+}
+
+// The order the two are read in, stated on its own: a `child` wait is the
+// commonest state for a story that has just been shown a subtask's question,
+// and it does not excuse leaving that question alone. "Nothing to do until a
+// subtask closes" is untrue while a subtask is waiting on this story.
+func TestEngine_NudgesAWaitingStoryForItsSubtasksQuestion(t *testing.T) {
+	f := newEngineFixture(t)
+	story := f.startedStory(t, "sess-parent")
+	f.startedSubtask(t, story.ID, "Wire the store", "sess-child")
 	setChildWait(t, f.store, story.ID)
+	f.turns.post("sess-child")
 
-	f.engine.HandleAgentAnswer("sess-parent")
+	f.engine.HandleTurnEnded("sess-parent", session.OutcomeCompleted)
+
+	if f.sender.count() != 1 {
+		t.Fatalf("sent %v, want the waiting story nudged about the question", f.sender.subtypes())
+	}
+	// The nudge asks for an answer, not for the wait to be given up: nothing
+	// here is a subtask closing.
 	if got := getWork(t, f.store, story.ID); got.Wait != WaitChild {
-		t.Errorf("wait = %q, want it kept: no subtask closed", got.Wait)
+		t.Errorf("wait = %q, want it left on the subtasks", got.Wait)
+	}
+	if !strings.Contains(f.sender.contents()[0], "if you were waiting you still are") {
+		t.Error("the story was not told its wait is untouched")
+	}
+}
+
+// The allowance is one allowance: a story that goes on ignoring its subtask is
+// handed back to a person, like any other agent that stops acting on what it is
+// told. The comment has to name what is still outstanding, because the subtask
+// is still waiting and the user is the one who can answer it now.
+func TestEngine_StopsAStoryThatKeepsIgnoringItsSubtasksQuestion(t *testing.T) {
+	f := newEngineFixture(t)
+	story := f.startedStory(t, "sess-parent")
+	f.startedSubtask(t, story.ID, "Wire the store", "sess-child")
+	f.turns.post("sess-child")
+
+	for range DefaultMaxNudges + 1 {
+		f.engine.HandleTurnEnded("sess-parent", session.OutcomeCompleted)
 	}
 
-	if err := f.store.Stop(context.Background(), story.ID); err != nil {
-		t.Fatalf("Stop: %v", err)
-	}
-	f.engine.HandleAgentAnswer("sess-parent")
 	if got := getWork(t, f.store, story.ID); got.Status != StatusStopped {
-		t.Errorf("status = %q, want it left stopped", got.Status)
+		t.Errorf("status = %q, want %q once the allowance is spent", got.Status, StatusStopped)
+	}
+	bodies := f.commentBodies(t, story.ID)
+	if len(bodies) != 1 || !strings.Contains(bodies[0], "still waiting for that answer") {
+		t.Errorf("comments = %v, want one naming the question nobody answered", bodies)
+	}
+}
+
+// The moment the question is settled the story is an ordinary one again, and its
+// empty endings are ordinary accidents. Nothing is told: the list is read live,
+// so it cannot go on saying "unanswered" after the answer.
+func TestEngine_NudgesOrdinarilyOnceTheSubtasksQuestionIsSettled(t *testing.T) {
+	f := newEngineFixture(t)
+	story := f.startedStory(t, "sess-parent")
+	f.startedSubtask(t, story.ID, "Wire the store", "sess-child")
+	f.turns.post("sess-child")
+	f.engine.HandleTurnEnded("sess-parent", session.OutcomeCompleted)
+
+	f.turns.answer("sess-child")
+	f.engine.HandleTurnEnded("sess-parent", session.OutcomeCompleted)
+
+	if f.sender.count() != 2 {
+		t.Fatalf("sent %d messages, want the reminder and then an ordinary nudge", f.sender.count())
+	}
+	if !strings.Contains(f.sender.contents()[1], "no work_wait") {
+		t.Error("the second ending was not read as an ordinary empty turn")
+	}
+}
+
+// Only an active subtask's question is the story's to settle. A person who
+// stops a subtask has taken it back: it is not blocked on an answer any more,
+// and an answer would restart it — so nudging the story about it would turn one
+// stop the user asked for into pressure on the story, and possibly a second
+// stop. The question is still the user's to answer where it was asked.
+func TestEngine_LeavesAStoppedSubtasksQuestionToTheUser(t *testing.T) {
+	f := newEngineFixture(t)
+	story := f.startedStory(t, "sess-parent")
+	task := f.startedSubtask(t, story.ID, "Wire the store", "sess-child")
+	f.turns.post("sess-child")
+	if err := f.store.Stop(context.Background(), task.ID); err != nil {
+		t.Fatalf("Stop the subtask: %v", err)
+	}
+
+	f.engine.HandleTurnEnded("sess-parent", session.OutcomeCompleted)
+
+	if got := f.sender.subtypes(); len(got) != 1 || got[0] != MessageSubtypeAutoContinue {
+		t.Fatalf("sent %v, want one ordinary nudge", got)
+	}
+	if strings.Contains(f.sender.contents()[0], "still waiting on questions") {
+		t.Error("the story was pushed to answer for a subtask a person had stopped")
 	}
 }

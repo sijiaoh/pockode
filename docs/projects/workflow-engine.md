@@ -45,7 +45,7 @@ running, and a wait whose last running child leaves *without* closing is cleared
 by the engine with a message saying what became of it. Either case would
 otherwise leave a coordinator waiting forever, and waiting quietly — the engine
 does not nudge a waiting work
-([work-system.md](../code/work-system.md#input-6-a-child-work-left-active)).
+([work-system.md](../code/work-system.md#input-5-a-child-work-left-active)).
 
 ## Status Transitions
 
@@ -110,14 +110,13 @@ and continue orchestration.
 ## The Work Engine
 
 `work.Engine` is the only thing that moves a work item without being asked to. It
-has eight inputs and no special cases beside them:
+has seven inputs and no special cases beside them:
 
 | Input | What it does |
 |---|---|
-| A turn ended | aborted → `stopped`; otherwise nudge, unless the work declared a wait or has a question nobody has answered; `stopped` once the allowance runs out |
+| A turn ended | aborted → `stopped`; otherwise read in order — a question of its own leaves it alone, an *active* subtask's unanswered question earns its own nudge, a `child` wait leaves it alone, nothing at all earns the ordinary nudge; `stopped` once the shared allowance runs out |
 | A user message | back to `active`, wait and nudges cleared |
-| The user answered a posted question | nudges cleared, and a `child` wait deliberately left standing — no subtask closed |
-| Another agent answered one (`question_answer`) | nudges cleared, and nothing else: only a person takes a `stopped` work off the shelf |
+| A posted question was answered, by the user or by another agent (`question_answer`) | nudges cleared and a `stopped` work woken, the same either way; a `child` wait deliberately left standing — no subtask closed |
 | An agent posted a question | passed up to an *active* parent story as `child_question`, which clears nothing and is never retried |
 | A child work left `active` | a child that *closed*: tell an *active* parent and clear a `child` wait; a child that left any other way: clear a `child` wait nothing is left to end, and wake the parent to decide |
 | The session was deleted | → `stopped` |
@@ -246,12 +245,15 @@ The prompt builders generate messages for different lifecycle events. All share 
   drives: what the four statuses mean, that `question_post` is how the agent
   reaches a person and that it waits for nothing, that a story waits for its
   subtasks with `work_wait`, that a story shown one of its subtasks' questions
-  may answer it with `question_answer` without its own wait being touched, that a
-  turn ends cleanly with `step_done` or with
-  something outstanding, that a turn ending with neither is nudged and stops the
-  work after the allowance, and that a long wait belongs to `question_post` rather
-  than to a chat question holding the process open. It is written once here so no send site
-  can drift into its own version of the rules — see
+  must settle it — `question_answer` if it knows the answer, `question_post` to
+  the user if it does not, and ignoring it is not a third way — that the same
+  rule stops at a *stopped* subtask, whose question is not the story's to
+  answer, that neither of the two touches its own wait, that a turn ends
+  cleanly with `step_done` or with something outstanding, that a turn ending
+  with neither is nudged and stops the work after the allowance, and that a
+  long wait belongs to `question_post` rather than to a chat question holding
+  the process open. It is written once here so no send site can drift into its
+  own version of the rules — see
   [work-system.md](../code/work-system.md#prompt-format).
 
 ### BuildKickoffMessage
@@ -285,14 +287,31 @@ lifecycle section in the same message says.
 ### BuildChildQuestionMessage
 
 Base + one question a subtask posted, quoted whole — header, question, options,
-and the `request_id` that `question_answer` takes. It is quoted rather than
-referenced because the story cannot fetch it: the question lives on the
-subtask's *session*, not on its work item.
+and the pair that names it: the `request_id` and the subtask's `session_id`. It
+is quoted rather than referenced because the story cannot fetch it: the question
+lives on the subtask's *session*, not on its work item. Both halves of the
+identity travel because a fork can leave one `request_id` waiting in two
+sessions, and one id costs less than the refused call the story would otherwise
+spend finding that out
+([work-system.md](../code/work-system.md#question-tools)).
 
 The story is offered the two ways forward — answer it, or ask the user itself —
-and told which one is not on offer: guessing. The last line says the message
-changed nothing else, because an agent handed something to do otherwise assumes
-its wait is over, and this one clears no wait.
+and told which two are not on offer: guessing, and leaving it. The last line
+says the message changed nothing else, because an agent handed something to do
+otherwise assumes its wait is over, and this one clears no wait.
+
+### BuildChildQuestionReminderMessage
+
+Base + every question the story's *active* subtasks are still waiting on, each
+quoted whole with its `request_id` and `session_id`, for the same reason one is
+in the message above: the story cannot fetch them, and it is being asked to
+decide about each.
+
+It is a **nudge**, not news — it spends the story's allowance and a run of them
+ends in a stop — which is why it is sent with the `auto_continue` subtype rather
+than `child_question`, and why the engine builds it from the live list at the
+moment a turn ends rather than from anything it remembered
+([work-system.md](../code/work-system.md#input-1-a-turn-ended)).
 
 ### BuildRestartMessage
 
@@ -304,7 +323,7 @@ Base + a restart nudge appropriate to the work type:
 
 Base + a nudge appropriate to the work type, which names the three things the
 engine was looking for and did not get:
-- **Story:** "Your last turn ended without moving this story along: no step_done, no work_wait, and no question waiting for an answer…"
+- **Story:** "Your last turn ended without moving this story along: no step_done, no work_wait, and no question waiting for an answer — yours or a subtask's…"
 - **Task:** "Your last turn ended without moving this task along: no step_done, and no question waiting for an answer…"
 
 ### BuildAutoContinuationMessageWithSteps

@@ -50,7 +50,7 @@ lifecycle_rules: |
 
   - `open` — never started.
   - `active` — Pockode is driving it. That is this work, right now.
-  - `stopped` — handed back to a person. No agent runs for it until someone restarts it.
+  - `stopped` — handed back to a person. No agent runs for it until it is restarted, which a person does — or an answer to a question it asked does, if it is still waiting on one.
   - `closed` — finished.
 
   ### Asking the user something
@@ -67,18 +67,25 @@ lifecycle_rules: |
 
   ### When a subtask asks the user something
 
-  Pockode passes your subtasks' questions up to you, because you often know the answer already — you decided it, or a sibling task settled it. If you know it, answer with `question_answer` (the request id comes with the question); the subtask is told the answer came from you and not from the user. If you do not know it, do not guess: ask the user yourself with `question_post`, or leave it — they can see the subtask's question and answer it there.
+  Pockode passes your subtasks' questions up to you, because you often know the answer already — you decided it, or a sibling task settled it. You are their coordinator, so settling it is yours to do, in one of exactly two ways:
 
-  Neither of those touches your wait. A subtask asking a question is not a subtask closing, so if you were waiting for your subtasks you still are, and you may answer and end the turn without being nudged.
+  - You know the answer: give it with `question_answer` (a question is named by the session it is waiting in and its request id, both of which come with it). The subtask is told the answer came from you and not from the user.
+  - You do not know it: do not guess, and do not leave it sitting there. Ask the user yourself with `question_post`. That is what deciding you cannot decide looks like, and it is an ordinary thing to do.
+
+  Ignoring it is not a third way. If a turn of yours ends while a subtask is still waiting on a question and you have none of your own outstanding, Pockode nudges you for it and spends your allowance — so a story that keeps ignoring one is stopped. Asking the user takes you out of that: while a question of yours is unanswered, Pockode reads your subtask's question as one you are handling.
+
+  All of that is about a subtask that is *running*. A question left on a subtask that is **stopped** is not yours: a person took that subtask back, and answering would set it running again behind them. If this story still needs that subtask, start it again with `work_start` — then its questions are yours.
+
+  Neither of the two touches your wait. A subtask asking a question is not a subtask closing, so if you were waiting for your subtasks you still are, and you may answer and end the turn without being nudged.
   {{end}}
   ### Ending a turn
 
   A turn may end cleanly in two ways, and only these two:
 
   - **You said the step is done** — `step_done` with ID {{.ID}}: the current step is complete, or the whole work is if your agent role defines no steps. Your agent role's instructions decide when that is. Completing a step withdraws any questions you posted during it.
-  - **Something is outstanding** — a question of yours that nobody has answered yet{{if .IsStory}}, or a `work_wait`{{end}}. You do not have to do anything extra: Pockode looks.
+  - **Something is outstanding** — a question of yours that nobody has answered yet{{if .IsStory}}, or a `work_wait`{{end}}. You do not have to do anything extra: Pockode looks.{{if .IsStory}} A `work_wait` does not cover a subtask's question you have left unsettled: Pockode looks at those too, and nudges you for one whichever way your turn ended.{{end}}
 
-  If you still have work to do, keep doing it in this turn. A turn that ends with neither of the above reads to Pockode as an agent that stopped by accident, so it sends you a message telling you to carry on; after {{.MaxNudges}} of those in a row it gives up and moves the work to `stopped`, where nothing happens until a person restarts it. Going quiet is not free: finish, ask, or say what you are waiting for.
+  If you still have work to do, keep doing it in this turn. A turn that ends with neither of the above reads to Pockode as an agent that stopped by accident, so it sends you a message telling you to carry on; after {{.MaxNudges}} of those in a row it gives up and moves the work to `stopped`, where nothing happens until someone restarts it. Going quiet is not free: finish, ask, or say what you are waiting for.
   {{if .IsStory}}
   A story is not finished while its tasks are still running: wait for them with `work_wait`. Pockode rejects a `step_done` that would close a story with active subtasks, and rejects a `work_wait` when none of them is running — the two are exact opposites, so whichever one you need is the one that is open to you.
   {{end}}
@@ -88,7 +95,7 @@ lifecycle_rules: |
 story_restart_nudge: |
   Your story was stopped and is now being restarted. While a story is stopped Pockode sends it nothing, so its tasks may have moved on without you: start by re-reading them with work_list (parent_id = this story's ID) and their reports with work_comment_list, then continue according to your agent role instructions.
 
-  Check their questions too. A task's unanswered questions are in its work_get, and any a task asked while you were stopped never reached you — if you know an answer, give it with question_answer.
+  Check their questions too. A task's unanswered questions are in its work_get, and any a task asked while you were stopped never reached you. Each one on a task that is still running is yours to settle: question_answer if you know the answer, question_post to the user if you do not.
 
 # Task restart nudge
 task_restart_nudge: |
@@ -96,7 +103,7 @@ task_restart_nudge: |
 
 # Nudge sent when a turn ended without the agent saying anything about the work.
 story_auto_continue_nudge: |
-  Your last turn ended without moving this story along: no step_done, no work_wait, and no question waiting for an answer. Review your tasks and carry on — or, if you are blocked on the user, ask them with question_post. Pockode cannot tell the difference between the two on its own, and stops the story if this keeps repeating.
+  Your last turn ended without moving this story along: no step_done, no work_wait, and no question waiting for an answer — yours or a subtask's. Review your tasks and carry on — or, if you are blocked on the user, ask them with question_post. Pockode cannot tell the difference between the two on its own, and stops the story if this keeps repeating.
 
 task_auto_continue_nudge: |
   Your last turn ended without moving this task along: no step_done, and no question waiting for an answer. Review what you have done so far and carry on — or, if you are blocked on the user, ask them with question_post. Pockode cannot tell the difference between the two on its own, and stops the task if this keeps repeating.
@@ -115,7 +122,7 @@ step_auto_continue_nudge: |
 
 # Story reopen nudge (when a closed story is reopened)
 story_reopen_nudge: |
-  This story has been reopened: it was closed, and someone wants more from it. Review the current tasks and their reports, work out what is still needed, create new tasks as necessary, then continue according to your agent role instructions. Read your tasks' unanswered questions with work_get while you are there: a question a task asked while this story was closed never reached you, and you may know the answer (question_answer).
+  This story has been reopened: it was closed, and someone wants more from it. Review the current tasks and their reports, work out what is still needed, create new tasks as necessary, then continue according to your agent role instructions. Read your tasks' unanswered questions with work_get while you are there: closing a task withdraws its questions, so one still waiting belongs to a task that did not close, and it never reached you.
 
 # Task reopen nudge (when a closed task is reopened)
 task_reopen_nudge: |
@@ -140,19 +147,48 @@ child_completion_nudge: |
 # declared one, is still waiting for exactly what it was. The last line says so,
 # because an agent told "here is something to do" otherwise assumes its wait is
 # over.
-# Placeholders: {{.ChildTitle}}, {{.ChildID}}, {{.ID}}, {{.Header}},
-# {{.Question}}, {{.RequestID}}, {{.Options}}, {{.MultiSelect}}
+#
+# The session id travels with the request id because the pair is what names a
+# question (the question_answer tool says the same): a fork leaves one request
+# id waiting in two sessions, and a story given only the id would spend a call
+# finding that out. One id is cheaper than a refused call and a retry.
+# Placeholders: {{.ChildTitle}}, {{.ChildID}}, {{.Header}}, {{.Question}},
+# {{.RequestID}}, {{.ChildSessionID}}, {{.Options}}, {{.MultiSelect}}
 child_question_nudge: |
-  Task "{{.ChildTitle}}" (ID: {{.ChildID}}) has asked the user a question. You are being shown it because you may already know the answer.
+  Task "{{.ChildTitle}}" (ID: {{.ChildID}}) has asked the user a question. You are being shown it because you are the task's coordinator: you may already know the answer, and if you do not, deciding what happens to this question is yours.
 
   {{.Header}}: {{.Question}}
   {{if .Options}}Options: {{.Options}}{{if .MultiSelect}} (more than one may be picked){{end}}
   {{end}}Request ID: {{.RequestID}}
+  Session ID: {{.ChildSessionID}}
 
-  - If you know the answer, give it with question_answer (request_id above; {{if .Options}}`answers` for the labels you pick from the list, `text` for anything in your own words{{else}}`text` — this question offered nothing to pick, so the answer is your own words{{end}}). The task is told the answer came from you, not from the user.
-  - If you do not know, do not guess. Ask the user yourself with question_post, or leave it — the user can see the task's question and answer it there.
+  - If you know the answer, give it with question_answer (request_id and session_id above — naming both saves a refused call when a fork left the same request id waiting in two sessions; {{if .Options}}`answers` for the labels you pick from the list, `text` for anything in your own words{{else}}`text` — this question offered nothing to pick, so the answer is your own words{{end}}). The task is told the answer came from you, not from the user.
+  - If you do not know, do not guess — and do not leave it: ask the user yourself with question_post. Your own question is how a story says "I cannot decide this", and it is what tells Pockode you are handling this one.
 
   This message changes nothing else: the task is still running, and if you were waiting for your subtasks you still are. Answering is not a reason to stop waiting.
+
+# Sent to a story whose turn ended while a subtask of its is still waiting on a
+# question, and the story has posted none of its own. It is a nudge, not news:
+# it spends the story's allowance, and the run of them ends in a stop.
+#
+# The questions are quoted rather than counted because the story cannot fetch
+# them — they live on the subtasks' sessions, not on their work items — and each
+# carries the pair that names it.
+# Placeholders: {{.Questions}} (ChildTitle, ChildID, SessionID, RequestID,
+# Header, Question)
+child_question_reminder_nudge: |
+  Your turn ended while your subtasks are still waiting on questions you have neither answered nor taken to the user:
+  {{range .Questions}}
+  - Task "{{.ChildTitle}}" (ID: {{.ChildID}}) — {{.Header}}: {{.Question}}
+    request_id: {{.RequestID}}, session_id: {{.SessionID}}
+  {{- end}}
+
+  A subtask's question is yours to settle — you are its coordinator, and it is blocked on an answer. Do one of these now, for each of them:
+
+  - Answer it with question_answer, naming that request_id and session_id.
+  - If you cannot decide it, ask the user with question_post. That is the way out, not a failure.
+
+  Neither ends your wait on your subtasks: a subtask asking a question is not a subtask closing, so if you were waiting you still are. Doing nothing is the one thing that is not available — it is what this story is stopped for if it keeps repeating.
 
 # Sent to a parent whose wait on its subtasks has nothing left that could end
 # it: the last one left active without closing. The wait is cleared by this

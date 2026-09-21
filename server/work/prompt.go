@@ -55,24 +55,25 @@ var promptsYAML []byte
 
 // promptTemplates holds parsed templates from prompts.yaml.
 type promptTemplates struct {
-	PockodeMCPPrefix       string `yaml:"pockode_mcp_prefix"`
-	RoleReference          string `yaml:"role_reference"`
-	WorkContext            string `yaml:"work_context"`
-	StoryBehaviorRules     string `yaml:"story_behavior_rules"`
-	TaskRulesWithParent    string `yaml:"task_rules_with_parent"`
-	LifecycleRules         string `yaml:"lifecycle_rules"`
-	StoryRestartNudge      string `yaml:"story_restart_nudge"`
-	TaskRestartNudge       string `yaml:"task_restart_nudge"`
-	StoryReopenNudge       string `yaml:"story_reopen_nudge"`
-	TaskReopenNudge        string `yaml:"task_reopen_nudge"`
-	StoryAutoContinueNudge string `yaml:"story_auto_continue_nudge"`
-	TaskAutoContinueNudge  string `yaml:"task_auto_continue_nudge"`
-	StepAutoContinueNudge  string `yaml:"step_auto_continue_nudge"`
-	ChildCompletionNudge   string `yaml:"child_completion_nudge"`
-	ChildQuestionNudge     string `yaml:"child_question_nudge"`
-	StrandedWaitNudge      string `yaml:"stranded_wait_nudge"`
-	StepAdvanceSection     string `yaml:"step_advance_section"`
-	CurrentStepSection     string `yaml:"current_step_section"`
+	PockodeMCPPrefix           string `yaml:"pockode_mcp_prefix"`
+	RoleReference              string `yaml:"role_reference"`
+	WorkContext                string `yaml:"work_context"`
+	StoryBehaviorRules         string `yaml:"story_behavior_rules"`
+	TaskRulesWithParent        string `yaml:"task_rules_with_parent"`
+	LifecycleRules             string `yaml:"lifecycle_rules"`
+	StoryRestartNudge          string `yaml:"story_restart_nudge"`
+	TaskRestartNudge           string `yaml:"task_restart_nudge"`
+	StoryReopenNudge           string `yaml:"story_reopen_nudge"`
+	TaskReopenNudge            string `yaml:"task_reopen_nudge"`
+	StoryAutoContinueNudge     string `yaml:"story_auto_continue_nudge"`
+	TaskAutoContinueNudge      string `yaml:"task_auto_continue_nudge"`
+	StepAutoContinueNudge      string `yaml:"step_auto_continue_nudge"`
+	ChildCompletionNudge       string `yaml:"child_completion_nudge"`
+	ChildQuestionNudge         string `yaml:"child_question_nudge"`
+	ChildQuestionReminderNudge string `yaml:"child_question_reminder_nudge"`
+	StrandedWaitNudge          string `yaml:"stranded_wait_nudge"`
+	StepAdvanceSection         string `yaml:"step_advance_section"`
+	CurrentStepSection         string `yaml:"current_step_section"`
 }
 
 var prompts promptTemplates
@@ -278,9 +279,11 @@ func BuildChildCompletionMessage(parent Work, childTitle, childID string, waitCl
 //
 // The question is quoted in full, options and all, because the story is being
 // asked to consider answering it and cannot fetch it: the question lives on the
-// subtask's session, not on the work item. The request id travels with it as
-// the only thing question_answer takes.
-func BuildChildQuestionMessage(parent Work, childTitle, childID string, q session.PendingQuestion) string {
+// subtask's session, not on the work item. Both halves of the question's
+// identity travel with it — the session it is waiting in and its request id —
+// because a fork can leave one request id waiting in two sessions, and a story
+// given only the id would have to spend a refused call to find that out.
+func BuildChildQuestionMessage(parent Work, childTitle, childID, childSessionID string, q session.PendingQuestion) string {
 	base := buildBase(parent)
 
 	labels := make([]string, 0, len(q.Options))
@@ -289,15 +292,31 @@ func BuildChildQuestionMessage(parent Work, childTitle, childID string, q sessio
 	}
 
 	nudge := render(prompts.ChildQuestionNudge, map[string]any{
-		"ChildTitle":  childTitle,
-		"ChildID":     childID,
-		"ID":          parent.ID,
-		"Header":      q.Header,
-		"Question":    q.Question,
-		"RequestID":   q.RequestID,
-		"Options":     strings.Join(labels, " | "),
-		"MultiSelect": q.MultiSelect,
+		"ChildTitle":     childTitle,
+		"ChildID":        childID,
+		"ChildSessionID": childSessionID,
+		"Header":         q.Header,
+		"Question":       q.Question,
+		"RequestID":      q.RequestID,
+		"Options":        strings.Join(labels, " | "),
+		"MultiSelect":    q.MultiSelect,
 	})
+
+	return base + "\n\n" + nudge
+}
+
+// BuildChildQuestionReminderMessage tells a story that its subtasks are still
+// waiting on questions it has neither answered nor taken to the user.
+//
+// Every question is quoted rather than counted, for the same reason the first
+// message quotes one: the story cannot fetch them, and it is being asked to
+// decide about each. Each carries both halves of a question's identity — the
+// session it is waiting in and its request id — so that a story with several
+// can answer them without a refusal telling it which is which.
+func BuildChildQuestionReminderMessage(parent Work, pending []childQuestion) string {
+	base := buildBase(parent)
+
+	nudge := render(prompts.ChildQuestionReminderNudge, map[string]any{"Questions": pending})
 
 	return base + "\n\n" + nudge
 }

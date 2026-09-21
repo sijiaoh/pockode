@@ -801,6 +801,23 @@ The record goes in first. One written with no state behind it is a card nobody
 is waiting on — visible, wrong, repairable; state with no record behind it is a
 question a fork could not inherit and a transcript could not explain.
 
+**A question is named by the pair `(session_id, request_id)`, and the
+`request_id` alone does not name one.** A fork copies the questions that were
+open at the cut with their ids unchanged ([A fork inherits what was open at the
+cut](#a-fork-inherits-what-was-open-at-the-cut)), so one `request_id` is then
+waiting in two sessions at once and nothing decides which is the real one. That
+is the design — an answer has to name the same question the card in the fork's
+transcript shows — and not a collision to repair. So every operation on a
+question locates it by both halves, with the session either named by the caller
+or the caller's own: answering, declining, withdrawing, and the engine's own
+reading of what is outstanding. Every lookup by id alone answers with a *list*
+and makes its caller say what it does with several
+([Finding a question by id alone](#finding-a-question-by-id-alone)). The single
+place the pair may be given as half of itself is the `question_answer` tool,
+which lets an agent leave `session_id` out while exactly one session is waiting
+and refuses the call the moment more than one is
+([work-system.md](work-system.md#question-tools)).
+
 **One question per call, one `request_id` per question.** An answer names a
 question, and so does a refusal to answer one, so a record covering three
 questions leaves "I will not answer the second" with no subject. Older
@@ -977,7 +994,7 @@ reason to be in the transcript is that the answer was no.
 `question_answer` lets an agent answer a question **another** agent posted: a
 story usually knows what its subtask is asking about, and a question it can
 settle is a question the user never has to be interrupted by ([A subtask's
-question reaches its story](work-system.md#input-5-a-subtasks-question-reaches-its-story)).
+question reaches its story](work-system.md#input-4-a-subtasks-question-reaches-its-story)).
 
 Any agent may answer any question but its own, which is the rule the other tools
 already follow: the local token authorizes everything, the dangerous acts go
@@ -1009,17 +1026,20 @@ user chose Postgres" when no user has seen the question is the one failure this
 tool could cause. The `Q:`/`A:` shape under that lead is deliberately the one a
 person's answer arrives in.
 
-Two refusals are about *reaching* the question rather than about the answer:
+One refusal is about *reaching* the question rather than about the answer:
+**more than one session is waiting on that `request_id`.** A fork carries a
+question across with its id, so both copies are open and answering one leaves
+the other asking. Nothing can pick between them, so the caller is made to, with
+`session_id`. The refusal lists the candidates naming the **work** running in
+each, because the work is the half of the pair an agent can recognise — it met
+this question through the work around it, and a session id appears nowhere it
+looked ([work-system.md](work-system.md#question-tools)).
 
-- **More than one session is waiting on that `request_id`.** A fork carries a
-  question across with its id, so both copies are open and answering one leaves
-  the other asking. Nothing can pick between them, so the caller is made to, with
-  `session_id`; the refusal lists the candidates.
-- **The work that asked is `stopped`.** Delivering starts a turn, so an agent's
-  answer would set a work running again behind the person who took it back —
-  the same rule that keeps the engine from telling a stopped parent that a child
-  closed. The question is not lost: the user can still answer it, and a stop
-  withdraws nothing.
+**There was a second, and it is gone**: a refusal to deliver into a `stopped`
+work at all. A `stopped` work is now answered like any other, and the answer
+wakes it — by the same input the user's own answers go through, and for the
+reason given where the status is owned
+([work-system.md](work-system.md#input-3-a-posted-question-was-answered)).
 
 The delivery is synchronous through a cold start when it has to be: a question
 outlives the process that asked it, so the commonest target has none, and the
@@ -2799,7 +2819,7 @@ opposite directions for the same reason:
   session rather than to the process, so a work whose agent asked something is
   kept active at startup and a message answers it whenever the user gets to it —
   while a work that was merely being carried by the dead process is stopped
-  ([work-system.md](work-system.md#input-8-startup)).
+  ([work-system.md](work-system.md#input-7-startup)).
 
 **Both rules stand on this premise and have to be revisited if it changes.** The
 change to watch for is a CLI re-offering its outstanding prompts to a resumed
@@ -3118,7 +3138,7 @@ which is the case that left a turn open with nothing to close it.
 
 The same fact governs the work layer's side of both handlers: the WebSocket
 message and permission methods call `Engine.HandleUserMessage` (or, for a message
-carrying `answering`, `Engine.HandleUserAnswer`) **after** the send, because what
+carrying `answering`, `Engine.HandleAnswer`) **after** the send, because what
 resumes a work is the agent having been handed something to go on. A send that
 failed handed it nothing.
 

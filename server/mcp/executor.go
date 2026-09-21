@@ -80,9 +80,10 @@ type WorkEngine interface {
 	// HandleQuestionPosted passes a subtask's question up to the story above
 	// it, if it has one and that story is running.
 	HandleQuestionPosted(sessionID string, q session.PendingQuestion)
-	// HandleAgentAnswer gives the answered work its nudge allowance back, as a
-	// user's answer does.
-	HandleAgentAnswer(sessionID string)
+	// HandleAnswer wakes the answered work and gives it its nudge allowance
+	// back. It is the same input the user's own answers go through: an answer
+	// starts a turn there whoever gave it.
+	HandleAnswer(sessionID string)
 }
 
 // Executor runs MCP tool calls against the live server stores. It is the

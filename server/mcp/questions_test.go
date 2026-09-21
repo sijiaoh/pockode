@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 
@@ -560,30 +561,33 @@ func TestQuestionAnswer_RefusesAnUnknownSession(t *testing.T) {
 	}
 }
 
-// TestQuestionAnswer_RefusesAStoppedWork: a stopped work was handed back to a
-// person, and a message into its session would set it running again behind
-// them. The user can still answer the question themselves.
-func TestQuestionAnswer_RefusesAStoppedWork(t *testing.T) {
+// TestQuestionAnswer_DeliversToAStoppedWork: the answer starts a turn in that
+// session whoever gave it, so refusing here would only leave the work stopped
+// while its agent ran. It is delivered, and the work layer is told — which is
+// what puts the work back to active.
+func TestQuestionAnswer_DeliversToAStoppedWork(t *testing.T) {
 	exec, sessions, store, roleID := newQuestionExec(t)
 	workID := startedWork(t, store, roleID, "Ship the API", "sess-2")
 	if err := store.Stop(context.Background(), workID); err != nil {
 		t.Fatalf("stop work: %v", err)
 	}
+	engine := &spyEngine{}
+	exec.SetWorkEngine(engine)
 	sessions.located = map[string][]worktree.QuestionLocation{
 		"req-1": {{SessionID: "sess-2"}},
 	}
 
-	_, err := callAs(t, exec, callerInMain, "question_answer", map[string]any{
+	if _, err := callAs(t, exec, callerInMain, "question_answer", map[string]any{
 		"request_id": "req-1", "answers": []string{"Postgres"},
-	})
-	if err == nil || !strings.Contains(err.Error(), "is stopped") {
-		t.Fatalf("error = %v, want a refusal naming the stopped work", err)
+	}); err != nil {
+		t.Fatalf("question_answer: %v", err)
 	}
-	if !strings.Contains(err.Error(), workID) {
-		t.Errorf("error = %q, want it to name which work", err)
+
+	if len(sessions.questions.answered) != 1 || sessions.questions.answered[0].sessionID != "sess-2" {
+		t.Fatalf("answered = %+v, want the stopped work's session", sessions.questions.answered)
 	}
-	if sessions.questions != nil {
-		t.Error("the answer reached a stopped work's session")
+	if !slices.Equal(engine.answered, []string{"sess-2"}) {
+		t.Errorf("engine told about %v, want the stopped work's session so it goes back to active", engine.answered)
 	}
 }
 
@@ -616,7 +620,7 @@ func (s *spyEngine) HandleQuestionPosted(sessionID string, q session.PendingQues
 	s.posted = append(s.posted, q)
 }
 
-func (s *spyEngine) HandleAgentAnswer(sessionID string) {
+func (s *spyEngine) HandleAnswer(sessionID string) {
 	s.answered = append(s.answered, sessionID)
 }
 
@@ -681,5 +685,71 @@ func TestQuestionAnswer_ReportsNothingWhenTheDeliveryFailed(t *testing.T) {
 	}
 	if len(engine.answered) != 0 {
 		t.Errorf("answered = %v, want nothing reported for an undelivered answer", engine.answered)
+	}
+}
+
+// A refusal is only useful if the candidates can be told apart, and a session id
+// is not something an agent has ever been shown: it meets the question through
+// the work around it. So each candidate is named with the work running in it,
+// and one running none is still listed.
+func TestQuestionAnswer_CandidateSessionsAreNamedByTheirWork(t *testing.T) {
+	exec, sessions, store, roleID := newQuestionExec(t)
+	forked := startedWork(t, store, roleID, "Move the parser", "sess-3")
+	sessions.located = map[string][]worktree.QuestionLocation{
+		"req-1": {{SessionID: "sess-2"}, {SessionID: "sess-3", Worktree: "feature-x"}},
+	}
+
+	_, err := callAs(t, exec, callerInMain, "question_answer", map[string]any{
+		"request_id": "req-1", "answers": []string{"Postgres"},
+	})
+	if err == nil {
+		t.Fatal("question_answer answered an ambiguous request id")
+	}
+	for _, want := range []string{forked, "Move the parser", "sess-2"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error = %q, want it to name %q", err, want)
+		}
+	}
+}
+
+// The session_id description is the only account of the pair rule an agent gets
+// — ordinary sessions have no system prompt — so the claims it cannot derive are
+// pinned, not the wording: that a fork is what puts one id in two sessions, that
+// leaving the argument out is allowed, and that an ambiguous id is refused
+// rather than guessed at.
+func TestQuestionAnswer_SessionIDDescribesThePairRule(t *testing.T) {
+	var answer *toolDefinition
+	for i := range toolDefinitions {
+		if toolDefinitions[i].Name == "question_answer" {
+			answer = &toolDefinitions[i]
+		}
+	}
+	if answer == nil {
+		t.Fatal("question_answer is not advertised")
+	}
+	if slices.Contains(answer.InputSchema.Required, "session_id") {
+		t.Error("session_id is required, so the token-saving half of the rule is gone")
+	}
+	for _, want := range []string{"fork", "more than one", "refused"} {
+		if !strings.Contains(answer.InputSchema.Properties["session_id"].Description, want) {
+			t.Errorf("the session_id description does not say %q", want)
+		}
+	}
+}
+
+// A fork leaves the same request id open in two sessions, and a caller that
+// holds one of them is withdrawing its own copy — ordinary, and no business of
+// the other session's, which keeps asking until its own agent is done with it.
+func TestQuestionCancel_AForkLeavesTheOtherCopyAlone(t *testing.T) {
+	exec, sessions, _, _ := newQuestionExec(t)
+	sessions.located = map[string][]worktree.QuestionLocation{
+		"req-1": {{SessionID: "sess-1"}, {SessionID: "sess-2", Worktree: "feature-x"}},
+	}
+
+	if _, err := callAs(t, exec, callerInMain, "question_cancel", map[string]any{"request_id": "req-1"}); err != nil {
+		t.Fatalf("question_cancel: %v", err)
+	}
+	if got := sessions.questions.cancelledFor; len(got) != 1 || got[0] != "sess-1" {
+		t.Errorf("withdrawn from %v, want the caller's own session only", got)
 	}
 }
