@@ -188,6 +188,90 @@ Three things to know before reading it red:
   returned — and so whether the gate's 120s cap is enough — is outside what any
   test here can say. Only a real release answers it.
 
+## Agent CLIs: the suite that spends money
+
+The other suite neither entry point runs is the agent integration tests, and it
+is held back differently: `//go:build integration` keeps it out of every
+untagged build, so `go test ./...` does not compile it, let alone run it. The
+commands that do, and the requirement that each CLI be logged in, are in
+[server/AGENTS.md](../server/AGENTS.md). What that file does not say is what
+running them costs.
+
+**Every turn in it is a real API call.** `TestIntegration_ReportsCost` prints
+one of the prices — `turn cost: 0.0725 USD`, for a turn whose whole prompt is
+"Reply with just the word one." — and a full run is a few dozen of them. The
+shared suite alone sends twenty messages per CLI (fourteen turns that run to
+completion, plus six across the four interrupt and mid-turn scenarios), before
+either package's own tests. Measured end to end, green and with nothing skipped:
+`ok … 239.822s` for `agent/claude`, `ok … 352.377s` for `agent/codex`. That is
+also the whole reason CI does not run it — there is no CLI on the runner and no
+account to bill if there were — so a green CI says nothing whatever about this
+suite.
+
+### Anchor `-run` at both ends
+
+The cheapest mistake on this page to avoid, and one this repository has already
+paid for:
+
+```sh
+go test -tags=integration ./agent/claude -run 'TestIntegration/Interrupt$'    # wrong
+go test -tags=integration ./agent/claude -run '^TestIntegration$/^Interrupt$' # right
+```
+
+`-run` splits its argument on `/` and matches each element as an *unanchored*
+regexp, so the first command's `TestIntegration` also matches
+`TestIntegration_ReportsCost`, `TestIntegration_BackgroundTaskDoesNotEndTheTurn`
+and every other top-level `TestIntegration_*` in the package. Those then run in
+full: they have no subtests, so the second element filters nothing out of them.
+The scenario asked for takes a few seconds; the accident bills for most of a
+run.
+
+The two entry points are not named alike either — Claude's is `TestIntegration`,
+Codex's is `TestCodexIntegration` — so a pattern carried from one package to the
+other matches nothing. That one at least fails cheaply.
+
+### Skip is not a pass, and it is not a failure
+
+Eight places give up rather than assert — three in the shared scenarios, five
+in Claude's own tests, none in Codex's. Only the first turns on a capability;
+the other seven turn on what the model chose to do this time, which is why the
+list can be empty on one run and not on the next.
+
+| Where | It skips when |
+|---|---|
+| `ForkFromTheMiddle` (`server/agent/integration_test_suite.go`) | the agent implements no `SessionForker` — never true in this repository, where both do |
+| `Interrupt` (same file) | the turn ended before producing anything to aim a stop at |
+| `Interrupt` (same file) | the stop was sent and the turn ran to completion anyway |
+| `TestIntegration_NoInternalSystemNoise` (`server/agent/claude/claude_integration_test.go`) | the model never called the Agent tool, so the turn had no subagent to report progress for |
+| `TestIntegration_BackgroundTaskDoesNotEndTheTurn` (same file) | the model waited on the task in-turn, so the background wait was never entered |
+| `TestIntegration_StopDuringBackgroundWait` (same file) | the turn ended before any background wait began |
+| `TestIntegration_StopDuringBackgroundWait` (same file) | the model never ended its turn on a background task, so Stop was never pressed |
+| `TestIntegration_LostBackgroundTasksAreReportedOnRestart` (same file) | the turn ended without leaving a background task running |
+
+A skip is the honest report of a run that proved nothing, and it is the right
+answer for all eight: none of these tests can tell "the behaviour is broken"
+apart from "the model did not do the thing this run". But it follows that a
+scenario which skips every time is not covered by anything, and nothing goes red
+to say so. **Read the skip lines of a run, not just its last line.** The
+measured runs above skipped none of the eight, and that is luck rather than a
+property — particularly for the four background-task rows, which turn on whether
+the model felt like backgrounding anything.
+
+### The silent pass this suite used to carry
+
+`Interrupt` is where that distinction was bought. It used to sleep two seconds,
+send a stop, and count a turn that had already finished as a pass — the
+[silent-pass](#four-kinds-of-red) row exactly, with a price tag. The margin was
+not theoretical: left uninterrupted, the turn it drives finishes in 4.7 seconds
+on this machine, so the sleep had about two seconds of room and the run went
+green on whichever side of it landed. It now aims the stop at the first event
+that proves the turn is in flight, and the two ways a turn can end anyway are
+the two `Interrupt` rows in the table above. Mutation-verified: with
+`SendInterrupt` commented out it skips, where before it passed.
+
+That is the shape worth copying whenever a test depends on something that may
+not happen — the branch where it did not happen has to say so, not return.
+
 ## Verification that verifies
 
 Several times during this work a command ran, exited 0, and had not checked the

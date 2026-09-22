@@ -29,6 +29,10 @@ go test -tags=integration ./agent/codex -v
 `IntegrationTestOptions` 显式表达。往共用套件里加场景意味着它对两个 CLI 都必须成立；
 只对某个 CLI 成立的断言放进该 CLI 自己的 `*_integration_test.go`。
 
+跑之前先读 [docs/testing.md](../docs/testing.md#agent-clis-the-suite-that-spends-money)：
+每个 turn 都是真金白银，`-run` 必须两头锚定（否则一条想跑单个场景的命令会跑光整个包），
+Skip 清单也在那里。
+
 ## 结构
 
 ```

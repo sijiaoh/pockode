@@ -32,6 +32,7 @@ func TestIntegration_ClaudeCliAvailable(t *testing.T) {
 func TestIntegration(t *testing.T) {
 	agent.RunIntegrationTests(t, func() agent.Agent { return New() }, agent.IntegrationTestOptions{
 		DenyEndsInterrupted: true,
+		ForkedSessions:      checkForkedSessions,
 	})
 }
 
@@ -90,13 +91,34 @@ func TestIntegration_ReportsCost(t *testing.T) {
 	}
 }
 
-// TestIntegration_NoInternalSystemNoise locks the system-event allowlist. Even a
-// single bash call makes the CLI emit internal bookkeeping events (init,
-// task_started, task_notification, thinking_tokens); none of them belong in the
-// transcript, so a plain tool turn must produce no system event at all.
+// subagentTool is what the CLI calls the Task tool on the wire — measured on
+// claude 2.1.278, where the tool_use block and the heartbeat frames both name
+// "Agent" while the prompt and the docs say "Task".
+const subagentTool = "Agent"
+
+// TestIntegration_NoInternalSystemNoise locks what the CLI's internal
+// bookkeeping frames turn into, from both sides. A turn that runs a subagent
+// emits every one of them (init, thinking_tokens, task_started, task_progress,
+// task_updated, task_notification): none belongs in the transcript, so the turn
+// must produce no system event at all — and task_progress must instead come out
+// as the tool activity the UI's long-running row reads.
+//
+// The activity half is required here rather than on any simpler turn because
+// task_progress is the only path on which this adapter produces tool activity,
+// and the CLI sends that frame for a subagent (and a backgrounded MCP task) but
+// never for a shell command — see docs/tool-call-ui.md, and measured again on
+// claude 2.1.278: a backgrounded bash task reports task_started, task_updated
+// and task_notification and not a single progress frame. So neither the
+// background-task tests nor an ordinary bash turn can stand in for this one.
+// Nothing records the event either, which is what makes requiring it worth a
+// turn's assertions: a renamed field in the frame would leave the row silently
+// frozen, with no error anywhere.
 func TestIntegration_NoInternalSystemNoise(t *testing.T) {
-	// A real turn that calls a tool routinely takes 45-55s.
-	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	// A subagent is a turn inside a turn: two models take their own tool calls
+	// in sequence, so a slow run here has far more room to be slow than a plain
+	// tool turn, even though a fast one (measured: 11s) beats several of those.
+	// The ceiling only decides how a stuck run is reported, so it is generous.
+	ctx, cancel := context.WithTimeout(context.Background(), 240*time.Second)
 	defer cancel()
 
 	sess, err := New().Start(ctx, agent.StartOptions{
@@ -110,10 +132,22 @@ func TestIntegration_NoInternalSystemNoise(t *testing.T) {
 	}
 	defer sess.Close()
 
-	if err := sess.SendMessage("Run this exact bash command: echo hi"); err != nil {
+	// The subagent has to take at least one tool call of its own: the CLI sends a
+	// progress frame per tool use the subagent makes, and none for a subagent
+	// that only talks.
+	if err := sess.SendMessage("Use the Task tool to launch exactly one general-purpose subagent. " +
+		"Tell it to run this exact bash command twice, as two separate Bash calls: echo hi\n" +
+		"Then have it report what the command printed. Run no command yourself."); err != nil {
 		t.Fatalf("SendMessage failed: %v", err)
 	}
 
+	// The Task tool reaches the stream under its own name, so a run where the
+	// model did the work itself is told apart from one where the progress frames
+	// went missing. Every tool name is kept, not just the one: the CLI owns these
+	// strings, and a rename would otherwise turn this test into a permanent skip
+	// that says nothing about why.
+	var calledTools []string
+	var spawnedSubagent, sawActivity bool
 	for {
 		select {
 		case event, ok := <-sess.Events():
@@ -123,9 +157,29 @@ func TestIntegration_NoInternalSystemNoise(t *testing.T) {
 			switch e := event.(type) {
 			case agent.SystemEvent:
 				t.Errorf("unexpected system event in transcript: %s", e.Content)
+			case agent.ToolCallEvent:
+				calledTools = append(calledTools, e.ToolName)
+				if e.ToolName == subagentTool {
+					spawnedSubagent = true
+				}
+			case agent.ToolActivityEvent:
+				agent.RequireEventFields(t, e)
+				sawActivity = true
 			case agent.ErrorEvent:
 				t.Fatalf("error event: %s", e.Error)
 			case agent.DoneEvent:
+				if !spawnedSubagent {
+					// Skipped rather than failed: the model choosing to do the
+					// work itself is a behaviour miss, not a regression. The
+					// allowlist half above is unaffected — a system event has
+					// already called Errorf, and a failed test reports FAIL even
+					// when it goes on to skip.
+					t.Skipf("the model never called the %s tool, so the turn had no subagent to report progress for; the tools it did call were %v",
+						subagentTool, calledTools)
+				}
+				if !sawActivity {
+					t.Error("the subagent's progress never arrived as tool activity; a long-running call would sit there showing nothing")
+				}
 				return
 			}
 		case <-ctx.Done():
@@ -176,41 +230,7 @@ func TestIntegration_RecoversBurnedSessionID(t *testing.T) {
 // runTurn drives one complete message through a real CLI process.
 func runTurn(t *testing.T, workDir, dataDir, sessionID string, resume bool) {
 	t.Helper()
-	runPrompt(t, workDir, dataDir, sessionID, resume, "Reply with exactly: ok")
-}
-
-// runPrompt drives one complete message through a real CLI process and returns
-// everything the agent said.
-func runPrompt(t *testing.T, workDir, dataDir, sessionID string, resume bool, prompt string) string {
-	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
-	defer cancel()
-
-	sess, err := New().Start(ctx, agent.StartOptions{
-		WorkDir:    workDir,
-		DataDir:    dataDir,
-		SessionID:  sessionID,
-		Resume:     resume,
-		Mode:       session.ModeYolo,
-		DisableMCP: true,
-	})
-	if err != nil {
-		t.Fatalf("Start failed: %v", err)
-	}
-	defer sess.Close()
-
-	return textOf(turnOn(t, ctx, sess, prompt))
-}
-
-// textOf is what the agent said in a turn.
-func textOf(events []agent.AgentEvent) string {
-	var said strings.Builder
-	for _, event := range events {
-		if text, ok := event.(agent.TextEvent); ok {
-			said.WriteString(text.Content)
-		}
-	}
-	return said.String()
+	agent.RunPrompt(t, New(), workDir, dataDir, sessionID, resume, "Reply with exactly: ok")
 }
 
 // TestIntegration_ForkSessionCarriesContext is the check behind the whole
@@ -241,9 +261,9 @@ func TestIntegration_ForkSessionCarriesContext(t *testing.T) {
 	// between, which would otherwise leave a real CLI running.
 	defer source.Close()
 
-	kept := turnOn(t, ctx, source, "Remember this word: BANANA. Reply with exactly: ok")
+	kept := agent.TurnOn(t, ctx, source, "Remember this word: BANANA. Reply with exactly: ok")
 	sourceState := readIntegrationResumeState(t, dataDir, sourceID)
-	awaitProviderMessage(t, sourceState.SessionID, lastProviderMessageID(t, kept))
+	awaitProviderMessage(t, sourceState.SessionID, lastProviderMessageID(t, kept.Records))
 	// Closed before the fork, so this is the case the test is named for: a whole
 	// conversation with nothing still running behind it.
 	source.Close()
@@ -257,7 +277,7 @@ func TestIntegration_ForkSessionCarriesContext(t *testing.T) {
 		DataDir:         dataDir,
 		SourceSessionID: sourceID,
 		SessionID:       forkID,
-		History:         recordsOf(t, kept),
+		History:         kept.Records,
 	})
 	if err != nil {
 		t.Fatalf("ForkSession: %v", err)
@@ -267,7 +287,7 @@ func TestIntegration_ForkSessionCarriesContext(t *testing.T) {
 	}
 
 	const question = "What word did I ask you to remember? Reply with exactly that word."
-	said := runPrompt(t, workDir, dataDir, forkID, true, question)
+	said := agent.RunPrompt(t, New(), workDir, dataDir, forkID, true, question)
 	if !strings.Contains(said, "BANANA") {
 		t.Fatalf("the forked session did not remember the conversation, it said: %s", said)
 	}
@@ -288,132 +308,40 @@ func TestIntegration_ForkSessionCarriesContext(t *testing.T) {
 	}
 }
 
-// TestIntegration_ForkSessionCarriesContextFromTheMiddle is the check behind the
-// two claims that make a fork worth taking from anywhere in a conversation:
-// --resume-session-at really does cut the replayed conversation at the message
-// the fork was taken from, and pinning the cut to a message really does make a
-// source whose process is still running — and still writing to its own
-// transcript — safe to fork from.
+// checkForkedSessions is Claude's half of the shared fork scenario: where the
+// two sessions' conversations ended up, which the suite cannot ask about because
+// only this package knows a conversation is a provider session with a transcript
+// on disk.
 //
-// It is the same shape as the whole-conversation test above and deliberately
-// harder: the source keeps two turns, the fork keeps only the first, and the
-// source is left running throughout.
-func TestIntegration_ForkSessionCarriesContextFromTheMiddle(t *testing.T) {
-	// Three real turns on the source plus one on the fork; measured at ~90s.
-	ctx, cancel := context.WithTimeout(context.Background(), 480*time.Second)
-	defer cancel()
+// The source's transcript is where the two ways a fork can damage it would
+// show: a plain --resume instead of --fork-session would have appended the new
+// session's turn to the source's own conversation, and a cut applied to the
+// source rather than to the replay would have taken the turn it went on to have
+// after being forked from.
+func checkForkedSessions(t *testing.T, check agent.ForkCheck) {
+	sourceState := readIntegrationResumeState(t, check.DataDir, check.SourceSessionID)
+	forkState := readIntegrationResumeState(t, check.DataDir, check.ForkSessionID)
 
-	workDir := t.TempDir()
-	dataDir := t.TempDir()
-	sourceID := uuid.Must(uuid.NewV7()).String()
-
-	source, err := New().Start(ctx, agent.StartOptions{
-		WorkDir:    workDir,
-		DataDir:    dataDir,
-		SessionID:  sourceID,
-		Mode:       session.ModeYolo,
-		DisableMCP: true,
-	})
-	if err != nil {
-		t.Fatalf("Start source failed: %v", err)
+	if forkState.SessionID == sourceState.SessionID {
+		t.Fatalf("the fork claimed the source's provider session %q", sourceState.SessionID)
 	}
-	defer source.Close()
-
-	kept := turnOn(t, ctx, source, "Remember this word: BANANA. Reply with exactly: ok")
-	anchor := lastProviderMessageID(t, kept)
-	dropped := turnOn(t, ctx, source, "Now also remember this word: KIWI. Reply with exactly: ok")
-	if lastProviderMessageID(t, dropped) == anchor {
-		t.Fatal("the second turn reused the first turn's message id, so the cut proves nothing")
+	if forkState.Recovery != recoveryNone {
+		t.Errorf("recovery = %q after a successful turn, want empty", forkState.Recovery)
 	}
 
-	// The history the fork gets: the source's records up to the anchor. The
-	// source process is still up and has already written past that point.
-	forkID := uuid.Must(uuid.NewV7()).String()
-	carried, err := New().ForkSession(ctx, agent.ForkOptions{
-		WorkDir:         workDir,
-		DataDir:         dataDir,
-		SourceSessionID: sourceID,
-		SessionID:       forkID,
-		History:         recordsOf(t, kept),
-	})
-	if err != nil {
-		t.Fatalf("ForkSession: %v", err)
-	}
-	if !carried {
-		t.Fatal("a fork with a message to cut at reported no carried context")
-	}
-
-	// The source keeps talking after the fork was taken. Nothing it says now may
-	// reach the new session either.
-	turnOn(t, ctx, source, "Now also remember this word: PAPAYA. Reply with exactly: ok")
-
-	const question = "What words did I ask you to remember? List every one of them."
-	said := runPrompt(t, workDir, dataDir, forkID, true, question)
-	if !strings.Contains(said, "BANANA") {
-		t.Fatalf("the fork did not remember the conversation up to the cut, it said: %s", said)
-	}
-	for _, past := range []string{"KIWI", "PAPAYA"} {
-		if strings.Contains(said, past) {
-			t.Fatalf("the fork knows %s, which the source said after the cut; it said: %s", past, said)
-		}
-	}
-
-	sourceState := readIntegrationResumeState(t, dataDir, sourceID)
 	transcript := readProviderTranscript(t, sourceState.SessionID)
-	if strings.Contains(transcript, question) {
+	if strings.Contains(transcript, check.ForkQuestion) {
 		t.Error("the fork's turn was written into the source session's transcript")
 	}
-	if !strings.Contains(transcript, "PAPAYA") {
+	if !strings.Contains(transcript, check.PostForkTurn) {
 		t.Error("the source lost the turn it took after being forked from")
 	}
 }
 
-// turnOn sends one message to an already running session and returns the events
-// of that turn, up to and including its ending.
-func turnOn(t *testing.T, ctx context.Context, sess agent.Session, prompt string) []agent.AgentEvent {
+// lastProviderMessageID is the message a fork of this turn would be cut at.
+func lastProviderMessageID(t *testing.T, records []json.RawMessage) string {
 	t.Helper()
-	if err := sess.SendMessage(prompt); err != nil {
-		t.Fatalf("SendMessage failed: %v", err)
-	}
-
-	var turn []agent.AgentEvent
-	for {
-		select {
-		case event, ok := <-sess.Events():
-			if !ok {
-				t.Fatal("channel closed before done event")
-			}
-			turn = append(turn, event)
-			switch e := event.(type) {
-			case agent.ErrorEvent:
-				t.Fatalf("error event: %s", e.Error)
-			case agent.DoneEvent:
-				return turn
-			}
-		case <-ctx.Done():
-			t.Fatal("timeout waiting for done event")
-		}
-	}
-}
-
-// recordsOf serializes events the way a session's history holds them, which is
-// the only form ForkSession reads them in.
-func recordsOf(t *testing.T, events []agent.AgentEvent) []json.RawMessage {
-	t.Helper()
-	records := make([]json.RawMessage, 0, len(events))
-	for _, event := range events {
-		raw, err := json.Marshal(agent.NewEventRecord(event))
-		if err != nil {
-			t.Fatalf("marshal record: %v", err)
-		}
-		records = append(records, raw)
-	}
-	return records
-}
-
-func lastProviderMessageID(t *testing.T, events []agent.AgentEvent) string {
-	t.Helper()
-	id := forkAnchorMessage(recordsOf(t, events))
+	id := forkAnchorMessage(records)
 	if id == "" {
 		t.Fatal("no event in the turn carried a CLI message id")
 	}

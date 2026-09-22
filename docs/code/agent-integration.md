@@ -1321,8 +1321,8 @@ its own and the rung resets, exactly as a recovery would.
 anything.** `--resume` alone replays a conversation in full; adding it keeps the
 transcript entry with that uuid, drops everything after it, and does so before the
 session is forked. Both facts were measured against claude 2.1.263 and are pinned
-by `TestIntegration_ForkSessionCarriesContextFromTheMiddle`: a fork taken at the
-first of two turns knows the first and has never heard of the second.
+by the shared suite's `ForkFromTheMiddle`: a fork taken at the first of two turns
+knows the first and has never heard of the second.
 
 Pinning by *message* rather than by *time* is also why the source's own state
 stopped mattering. Whatever its process appends to its transcript — while the
@@ -2251,7 +2251,18 @@ whole, which is why they are the one event type Pockode never records — losing
 one costs a moment of liveness and nothing else
 ([tool-call-model.md](../tool-call-model.md#tool_activity-is-not-persisted)).
 A schema integration test asserts both still carry the fields read here, so the
-day upstream renames one it fails loudly rather than going quiet. Reasoning, plans and the turn's accumulated diff are listed by choice
+day upstream renames one it fails loudly rather than going quiet.
+
+A delta is only sent for output a command produces while it is still holding the
+call open. One that finishes at once carries its whole output on `item/completed`
+and sends no delta at all — in every approval mode, and whether or not the
+sandbox escalated to an approval, because none of those change the execution path
+(measured against codex-cli 0.153.0: `echo hi` produced no delta in any of them,
+while the same output spread a second apart produced one per line but the last).
+That is why the shared suite requires the event of a command that prints and then
+keeps running, rather than of `echo hi`.
+
+Reasoning, plans and the turn's accumulated diff are listed by choice
 rather than by accident — they carry real information Pockode has no surface for
 yet, and their whole form is dropped alongside their increments, so they are not
 increments of anything rendered.
