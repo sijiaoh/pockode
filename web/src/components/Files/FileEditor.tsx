@@ -107,24 +107,34 @@ function FileEditor({ path, onBack }: Props) {
 				error={displayError}
 				onBack={onBack}
 			>
-				{saveError && (
-					<div className="border-b border-th-error/20 bg-th-error/10 px-4 py-2 text-sm text-th-error">
-						{saveError}
-					</div>
-				)}
-				<Editor
-					value={content}
-					onValueChange={setContent}
-					highlight={highlight}
-					padding={16}
-					disabled={isSaving}
-					className="editor-root"
-					style={{
-						fontSize,
-						lineHeight: 1.5,
-					}}
-					textareaClassName="editor-textarea"
-				/>
+				{/* `min-h-full` fills the scroll area even for a short file and `grow`
+				    hands the spare height to the editor, whose textarea covers its whole
+				    root. That is what turns the blank space under a one-line file into
+				    part of the textarea, so a tap there enters editing instead of hitting
+				    nothing. `grow` and not `flex-1`: a `flex-basis: 0` would size this
+				    column from the viewport rather than from the file, leaving a long
+				    file clipped by the root's `overflow: hidden` with nothing to scroll
+				    — see `.editor-root` in index.css. */}
+				<div className="flex min-h-full flex-col">
+					{saveError && (
+						<div className="border-b border-th-error/20 bg-th-error/10 px-4 py-2 text-sm text-th-error">
+							{saveError}
+						</div>
+					)}
+					<Editor
+						value={content}
+						onValueChange={setContent}
+						highlight={highlight}
+						padding={16}
+						disabled={isSaving}
+						className="editor-root grow"
+						style={{
+							fontSize,
+							lineHeight: 1.5,
+						}}
+						textareaClassName="editor-textarea"
+					/>
+				</div>
 			</ContentView>
 			<BottomActionBar>
 				<div className="flex items-center justify-between">

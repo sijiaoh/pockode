@@ -936,8 +936,17 @@ samp {
 /* =============================================================================
  * FILE EDITOR (react-simple-code-editor)
  *
- * react-simple-code-editor uses position: absolute for textarea/pre overlay.
- * The root div has position: relative and handles scrolling.
+ * This class lands on the library's root: position: relative, overflow: hidden,
+ * its height set by the in-flow <pre>, with the textarea laid over it at
+ * position: absolute and height: 100%. Two consequences worth knowing before
+ * touching the height here:
+ *
+ * - The root's height is the editing hit area. A gap below it still looks like
+ *   the editor but belongs to no textarea, so a tap there does nothing, which
+ *   is why FileEditor stretches the root to fill the scroll area.
+ * - overflow: hidden also means the root never scrolls (ContentView does) and
+ *   that it gets no automatic minimum size as a flex item, so a flex-basis of 0
+ *   on it clips a long file away rather than being caught by min-height: auto.
  * ============================================================================= */
 
 .editor-root {
