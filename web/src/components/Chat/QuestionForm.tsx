@@ -27,7 +27,7 @@ export interface QuestionFormProps {
 
 /**
  * The one and only renderer for a question, used by every surface that draws
- * one: the answer sheet's blocks, the record card's read-only body, and the
+ * one: the answer panel's blocks, the record card's read-only body, and the
  * CLI's own blocking prompt. Sharing it is what keeps an answered card looking
  * exactly like the form that was filled in.
  *

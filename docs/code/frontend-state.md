@@ -16,6 +16,7 @@ Pockode uses Zustand for state management, pure reducers for event processing, a
 │  UI State Layer                                                 │
 │  ├─ themeStore ◀─────── subscribeThemeRegistry              │   │
 │  ├─ inputStore (localStorage)                               │   │
+│  ├─ questionDraftStore (localStorage)                       │   │
 │  ├─ filesSearchStore (localStorage)                         │   │
 │  ├─ gitPanelStore                                           │   │
 │  ├─ gitSyncStore                                            │   │
@@ -53,6 +54,7 @@ Pockode uses Zustand for state management, pure reducers for event processing, a
 | settingsStore | App settings, and why they are missing when they are | Holds the subscription's `refresh` too: the Retry is far below the hook that owns it |
 | authStore | The credential to connect with: the session token that survives a reload, or the password just typed | localStorage init; a leaf module written to by wsStore, never the other way round |
 | inputStore | Draft text, per session | persist middleware |
+| questionDraftStore | What has been typed into each unanswered question, per session | persist middleware, plus a second map: what came out of storage waits there until the session's unanswered list vouches for it, so an answer to a withdrawn question can never reach the screen ([answering-ui.md §5](../answering-ui.md#5-drafts)) |
 | filesSearchStore | File search options | localStorage init |
 | gitPanelStore | Git panel UI state (History expanded) | Session-scoped override |
 | gitSyncStore | The fetch/pull/push in flight in each worktree, and how the last one ended | Keyed by worktree; outlives the sheet that started the run |

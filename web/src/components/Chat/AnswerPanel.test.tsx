@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useQuestionDraftStore } from "../../lib/questionDraftStore";
 import type { PendingQuestion } from "../../types/message";
-import AnswerSheet from "./AnswerSheet";
+import AnswerPanel from "./AnswerPanel";
 
 const database: PendingQuestion = {
 	request_id: "r1",
@@ -26,29 +26,36 @@ const region: PendingQuestion = {
 	asked_at: "2026-01-02T14:03:00Z",
 };
 
-function renderSheet(
+function renderPanel(
 	unanswered: PendingQuestion[],
 	onSend = vi.fn().mockResolvedValue(undefined),
 ) {
 	const onClose = vi.fn();
 	const result = render(
-		<AnswerSheet
+		<AnswerPanel
 			sessionId="s1"
 			unanswered={unanswered}
 			onSend={onSend}
 			onClose={onClose}
+			takeFocus
 		/>,
 	);
 	return { ...result, onSend, onClose };
 }
 
+// jsdom does not scroll. Where a jump lands is the browser's business; that it
+// is asked for, and asked for again, is this component's.
+const scrollIntoView = vi.fn();
+Element.prototype.scrollIntoView = scrollIntoView;
+
 beforeEach(() => {
 	useQuestionDraftStore.setState({ drafts: {} });
+	scrollIntoView.mockClear();
 });
 
-describe("AnswerSheet", () => {
+describe("AnswerPanel", () => {
 	it("titles itself with the live count and counts what is ready", () => {
-		renderSheet([database, region]);
+		renderPanel([database, region]);
 		expect(screen.getByText("2 questions")).toBeInTheDocument();
 		expect(screen.getByText("0 of 2 ready")).toBeInTheDocument();
 	});
@@ -56,7 +63,7 @@ describe("AnswerSheet", () => {
 	// A question with no options is the shape a free-text request takes, and it
 	// needs no second surface and no second copy.
 	it("draws a question with no options as free text", () => {
-		renderSheet([region]);
+		renderPanel([region]);
 		expect(screen.getByPlaceholderText("Your answer")).toBeInTheDocument();
 	});
 
@@ -65,7 +72,7 @@ describe("AnswerSheet", () => {
 	// answering this". Recording the first as the second would tell the agent the
 	// user refused and throw away the most useful sentence on the screen.
 	it("offers an Other row beside a question's options", () => {
-		renderSheet([database]);
+		renderPanel([database]);
 		expect(screen.getByRole("radio", { name: /Other/ })).toBeInTheDocument();
 		expect(screen.getAllByRole("radio")).toHaveLength(3);
 	});
@@ -75,7 +82,7 @@ describe("AnswerSheet", () => {
 	// it is not there to stop the user saying something else.
 	it("sends what the user typed apart from the labels", async () => {
 		const user = userEvent.setup();
-		const { onSend } = renderSheet([database]);
+		const { onSend } = renderPanel([database]);
 
 		await user.click(screen.getByRole("radio", { name: /Other/ }));
 		await user.type(
@@ -98,7 +105,7 @@ describe("AnswerSheet", () => {
 	// refused is the dead end this whole design exists to remove.
 	it("does not count a ticked but empty Other as ready", async () => {
 		const user = userEvent.setup();
-		renderSheet([database]);
+		renderPanel([database]);
 
 		await user.click(screen.getByRole("radio", { name: /Other/ }));
 
@@ -108,7 +115,7 @@ describe("AnswerSheet", () => {
 
 	it("sends nothing but the labels the question offered when Other is unused", async () => {
 		const user = userEvent.setup();
-		const { onSend } = renderSheet([
+		const { onSend } = renderPanel([
 			{ ...database, multi_select: true, request_id: "r1" },
 		]);
 
@@ -127,7 +134,7 @@ describe("AnswerSheet", () => {
 	// it would answer with something they have taken back.
 	it("does not send Other text the user has since unpicked", async () => {
 		const user = userEvent.setup();
-		const { onSend } = renderSheet([database]);
+		const { onSend } = renderPanel([database]);
 
 		await user.click(screen.getByRole("radio", { name: /Other/ }));
 		await user.type(
@@ -145,7 +152,7 @@ describe("AnswerSheet", () => {
 
 	it("sends one message for every block that is ready", async () => {
 		const user = userEvent.setup();
-		const { onSend } = renderSheet([database, region]);
+		const { onSend } = renderPanel([database, region]);
 
 		await user.click(screen.getByRole("radio", { name: /SQLite/ }));
 		await user.click(screen.getByRole("button", { name: "Send" }));
@@ -166,7 +173,7 @@ describe("AnswerSheet", () => {
 	// One question the user cannot decide must not hold up the two they can.
 	it("leaves what was not submitted in the list", async () => {
 		const user = userEvent.setup();
-		const { onClose } = renderSheet([database, region]);
+		const { onClose } = renderPanel([database, region]);
 
 		await user.click(screen.getByRole("radio", { name: /SQLite/ }));
 		await user.click(screen.getByRole("button", { name: "Send" }));
@@ -177,7 +184,7 @@ describe("AnswerSheet", () => {
 
 	it("clears a draft only once its own submit lands", async () => {
 		const user = userEvent.setup();
-		renderSheet([database]);
+		renderPanel([database]);
 
 		await user.click(screen.getByRole("radio", { name: /SQLite/ }));
 		expect(useQuestionDraftStore.getState().drafts.s1?.r1.labels).toEqual([
@@ -197,7 +204,7 @@ describe("AnswerSheet", () => {
 					"that question is not waiting for an answer: r1 (answered by the user at 14:05)",
 				),
 			);
-		renderSheet([database], onSend);
+		renderPanel([database], onSend);
 
 		await user.click(screen.getByRole("radio", { name: /SQLite/ }));
 		await user.click(screen.getByRole("button", { name: "Send" }));
@@ -222,7 +229,7 @@ describe("AnswerSheet", () => {
 					"this turn is waiting for an answer to the request on screen: answer it, or stop the turn, then send",
 				),
 			);
-		renderSheet([database], onSend);
+		renderPanel([database], onSend);
 
 		await user.click(screen.getByRole("radio", { name: /SQLite/ }));
 		await user.click(screen.getByRole("button", { name: "Send" }));
@@ -243,7 +250,7 @@ describe("AnswerSheet", () => {
 	// and because it travels as a message it wakes the agent up.
 	it("sends a decline with its note", async () => {
 		const user = userEvent.setup();
-		const { onSend } = renderSheet([region]);
+		const { onSend } = renderPanel([region]);
 
 		await user.click(screen.getByRole("checkbox", { name: /Won't answer/ }));
 		await user.type(
@@ -259,7 +266,7 @@ describe("AnswerSheet", () => {
 
 	it("does not clear what was picked when the user ticks Won't answer", async () => {
 		const user = userEvent.setup();
-		renderSheet([database]);
+		renderPanel([database]);
 
 		await user.click(screen.getByRole("radio", { name: /SQLite/ }));
 		await user.click(screen.getByRole("checkbox", { name: /Won't answer/ }));
@@ -269,21 +276,22 @@ describe("AnswerSheet", () => {
 		]);
 	});
 
-	// A sheet that vanished under a finger would make its own disappearance the
+	// A panel that vanished under a finger would make its own disappearance the
 	// notification that somebody else answered.
 	it("stays open and offers a way out when the list empties from elsewhere", () => {
-		const { rerender, onClose } = renderSheet([database]);
+		const { rerender, onClose } = renderPanel([database]);
 		rerender(
-			<AnswerSheet
+			<AnswerPanel
 				sessionId="s1"
 				unanswered={[]}
 				onSend={vi.fn()}
 				onClose={onClose}
+				takeFocus
 			/>,
 		);
 		expect(onClose).not.toHaveBeenCalled();
 		expect(screen.getByText("Nothing left to answer.")).toBeInTheDocument();
-		// Two buttons say Close here — the sheet's own × and the footer's — and
+		// Two buttons say Close here — the panel's own × and the footer's — and
 		// both do the same thing. The footer's is the one that replaced Send.
 		expect(screen.queryByRole("button", { name: "Send" })).toBeNull();
 		expect(screen.getAllByRole("button", { name: "Close" })).toHaveLength(2);
@@ -291,18 +299,19 @@ describe("AnswerSheet", () => {
 
 	it("closes itself once a submit leaves nothing behind", async () => {
 		const user = userEvent.setup();
-		const { rerender, onClose, onSend } = renderSheet([database]);
+		const { rerender, onClose, onSend } = renderPanel([database]);
 
 		await user.click(screen.getByRole("radio", { name: /SQLite/ }));
 		await user.click(screen.getByRole("button", { name: "Send" }));
 		expect(onSend).toHaveBeenCalled();
 
 		rerender(
-			<AnswerSheet
+			<AnswerPanel
 				sessionId="s1"
 				unanswered={[]}
 				onSend={onSend}
 				onClose={onClose}
+				takeFocus
 			/>,
 		);
 		expect(onClose).toHaveBeenCalled();
@@ -310,13 +319,14 @@ describe("AnswerSheet", () => {
 
 	// A block that held nothing is not a loss, so nothing is announced.
 	it("drops a block that leaves holding no draft", () => {
-		const { rerender, onClose } = renderSheet([database, region]);
+		const { rerender, onClose } = renderPanel([database, region]);
 		rerender(
-			<AnswerSheet
+			<AnswerPanel
 				sessionId="s1"
 				unanswered={[region]}
 				onSend={vi.fn()}
 				onClose={onClose}
+				takeFocus
 			/>,
 		);
 		expect(
@@ -329,15 +339,16 @@ describe("AnswerSheet", () => {
 
 	it("keeps a block that leaves holding a draft, until the user dismisses it", async () => {
 		const user = userEvent.setup();
-		const { rerender, onClose } = renderSheet([database, region]);
+		const { rerender, onClose } = renderPanel([database, region]);
 
 		await user.click(screen.getByRole("radio", { name: /SQLite/ }));
 		rerender(
-			<AnswerSheet
+			<AnswerPanel
 				sessionId="s1"
 				unanswered={[region]}
 				onSend={vi.fn()}
 				onClose={onClose}
+				takeFocus
 			/>,
 		);
 
@@ -359,5 +370,107 @@ describe("AnswerSheet", () => {
 			screen.queryByText("Which database should I use?"),
 		).not.toBeInTheDocument();
 		expect(useQuestionDraftStore.getState().drafts.s1?.r1).toBeUndefined();
+	});
+
+	// A slow relay would otherwise leave the user with no way to tell a submit
+	// that went out from one that was cancelled on the way.
+	it("cannot be closed while a submit is in flight", async () => {
+		const user = userEvent.setup();
+		let deliver: (() => void) | undefined;
+		const onSend = vi.fn(
+			() =>
+				new Promise<void>((resolve) => {
+					deliver = resolve;
+				}),
+		);
+		const { onClose } = renderPanel([database], onSend);
+
+		await user.click(screen.getByRole("radio", { name: /SQLite/ }));
+		await user.click(screen.getByRole("button", { name: "Send" }));
+
+		const close = screen.getByRole("button", { name: "Close" });
+		expect(close).toBeDisabled();
+		await user.keyboard("{Escape}");
+		expect(onClose).not.toHaveBeenCalled();
+
+		deliver?.();
+		await screen.findByText("1 answer sent.");
+	});
+
+	// Focus lands on the panel itself, not on its first control: first in the
+	// DOM is the close button, and landing there would read out "Close" and put
+	// one stray Enter between the user and the questions they came for.
+	it("reads itself out when the user asked for it", () => {
+		renderPanel([database]);
+		expect(screen.getByRole("region", { name: "1 question" })).toHaveFocus();
+	});
+
+	// The other half of `takeFocus`: nothing on screen moves the caret when the
+	// panel was not asked for. The composer stays typeable, which is the whole
+	// reason it is not a modal.
+	it("leaves the caret alone when nobody asked for it", () => {
+		render(
+			<>
+				{/* biome-ignore lint/a11y/noAutofocus: stands in for the composer the user was typing in. */}
+				<textarea autoFocus data-testid="composer" />
+				<AnswerPanel
+					sessionId="s1"
+					unanswered={[database]}
+					onSend={vi.fn()}
+					onClose={vi.fn()}
+					takeFocus={false}
+				/>
+			</>,
+		);
+		expect(screen.getByTestId("composer")).toHaveFocus();
+	});
+
+	// The panel shows itself and then stays up, so a user naming a question —
+	// from the work detail's `Answer` — is usually naming it to a panel that is
+	// already open, and on a second naming it would otherwise sit still.
+	it("scrolls to each question a user names, not only the first", () => {
+		const { rerender } = render(
+			<AnswerPanel
+				sessionId="s1"
+				unanswered={[database, region]}
+				anchorRequestId="r1"
+				onSend={vi.fn()}
+				onClose={vi.fn()}
+				takeFocus
+			/>,
+		);
+		expect(scrollIntoView).toHaveBeenCalledTimes(1);
+
+		rerender(
+			<AnswerPanel
+				sessionId="s1"
+				unanswered={[database, region]}
+				anchorRequestId="r2"
+				onSend={vi.fn()}
+				onClose={vi.fn()}
+				takeFocus
+			/>,
+		);
+		expect(scrollIntoView).toHaveBeenCalledTimes(2);
+	});
+
+	// Escape is the chat's interrupt, and this panel is up for as long as a
+	// question is open. It takes the one press aimed at itself and marks it
+	// handled, so the listener above it leaves that press alone — and every
+	// press made outside the panel still interrupts.
+	it("closes on Escape from inside, and claims that key press", async () => {
+		const user = userEvent.setup();
+		const seen: boolean[] = [];
+		const listener = (e: KeyboardEvent) => seen.push(e.defaultPrevented);
+		document.addEventListener("keydown", listener);
+		try {
+			const { onClose } = renderPanel([database]);
+			await user.click(screen.getByRole("radio", { name: /SQLite/ }));
+			await user.keyboard("{Escape}");
+			expect(onClose).toHaveBeenCalled();
+			expect(seen).toEqual([true]);
+		} finally {
+			document.removeEventListener("keydown", listener);
+		}
 	});
 });

@@ -10,7 +10,9 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useAgentOptionsStore } from "../../lib/agentOptionsStore";
 import { useAgentRoleStore } from "../../lib/agentRoleStore";
+import { clearAnswerIntent, requestAnswerPanel } from "../../lib/answerIntent";
 import { useInputStore } from "../../lib/inputStore";
+import { useQuestionDraftStore } from "../../lib/questionDraftStore";
 import { useSessionDetailStore } from "../../lib/sessionDetailStore";
 import { useSessionStore } from "../../lib/sessionStore";
 import { useWorkStore } from "../../lib/workStore";
@@ -53,6 +55,15 @@ function render(ui: React.ReactElement) {
 		),
 	});
 }
+
+// Mocked for the same reason the Project overlays below are: it reads the
+// route, and this suite renders no router. The file overlay is the one used
+// here that leaves the composer mounted, which is what makes it the honest
+// stand-in for "an overlay came and went".
+vi.mock("../Files", () => ({
+	FileView: () => <div data-testid="file-view" />,
+	FileEditor: () => <div data-testid="file-editor" />,
+}));
 
 // Mock Project overlays to avoid router dependency
 vi.mock("../Project", () => ({
@@ -189,6 +200,10 @@ const seedSessionDetail = (overrides: Partial<SessionDetail> = {}) => {
  * session's own subscription. Nothing applies a setting locally, so a fake that
  * merely resolved would leave the control showing the old value forever.
  */
+// jsdom does not scroll. Where the jump lands is MessageList's own test; here
+// it only has to not throw.
+Element.prototype.scrollIntoView = vi.fn();
+
 const acceptSetting = (overrides: Partial<SessionDetail>) => {
 	if (!mockState.sessionDetail) throw new Error("no session detail seeded");
 	mockState.sessionDetail = { ...mockState.sessionDetail, ...overrides };
@@ -247,6 +262,8 @@ describe("ChatPanel", () => {
 		});
 		useSessionStore.setState({ sessions: [] });
 		useInputStore.setState({ inputs: {} });
+		useQuestionDraftStore.setState({ drafts: {}, restorable: {} });
+		clearAnswerIntent();
 		useWorkStore.getState().reset();
 		useAgentRoleStore.getState().reset();
 		// Stands in for the one options fetch the app shell does. Only Claude has
@@ -398,6 +415,13 @@ describe("ChatPanel", () => {
 			asked_at: "2026-01-02T14:02:00Z",
 		};
 
+		/**
+		 * The answer panel. A region rather than a dialog, and deliberately: it
+		 * covers the transcript and nothing else, so the composer, the strip and
+		 * the bars below it stay usable — which `aria-modal` would deny.
+		 */
+		const answerPanel = () => screen.getByRole("region", { name: /question/ });
+
 		const seedUnansweredQuestion = () => {
 			mockState.mockHistory = [
 				{ type: "message", content: "go", seq: 1 },
@@ -426,7 +450,55 @@ describe("ChatPanel", () => {
 			});
 		};
 
-		it("answers from the strip and settles the card in the transcript", async () => {
+		/** What a reload leaves behind: a stored draft, not vouched for yet. */
+		const seedStoredDraft = (requestId: string) =>
+			useQuestionDraftStore.setState({
+				restorable: {
+					"test-session": {
+						[requestId]: {
+							labels: ["SQLite"],
+							text: "",
+							otherPicked: false,
+							declined: false,
+							note: "",
+						},
+					},
+				},
+			});
+
+		// The half of the persistence rule the user sees: what they typed before
+		// the reload is on the block again, because the list the page came back to
+		// still carries that question (docs/answering-ui.md §5).
+		it("puts a stored draft back when the arriving list still carries its question", async () => {
+			seedStoredDraft("q1");
+			seedUnansweredQuestion();
+			render(<ChatPanel {...defaultProps} />);
+			await waitForHistoryLoad();
+
+			const panel = within(answerPanel());
+			expect(panel.getByRole("radio", { name: /SQLite/ })).toBeChecked();
+			expect(panel.getByText("1 of 1 ready")).toBeInTheDocument();
+		});
+
+		// The other half, and the reason persisting is safe at all: the question
+		// was answered or withdrawn while the page was away, so its block never
+		// appears and the draft goes without a word.
+		it("drops a stored draft the arriving list has no question for", async () => {
+			seedStoredDraft("gone");
+			seedUnansweredQuestion();
+			render(<ChatPanel {...defaultProps} />);
+			await waitForHistoryLoad();
+
+			await waitFor(() =>
+				expect(useQuestionDraftStore.getState().drafts["test-session"]).toEqual(
+					{},
+				),
+			);
+			const panel = within(answerPanel());
+			expect(panel.getByRole("radio", { name: /SQLite/ })).not.toBeChecked();
+		});
+
+		it("shows itself for a waiting question and settles the card in the transcript", async () => {
 			const user = userEvent.setup();
 			seedUnansweredQuestion();
 			render(<ChatPanel {...defaultProps} />);
@@ -435,15 +507,16 @@ describe("ChatPanel", () => {
 			// The card is a record: it says Pending and holds no form.
 			expect(screen.getByText("Pending")).toBeInTheDocument();
 
-			expect(
-				screen.getByText("1 question is waiting for your answer."),
-			).toBeInTheDocument();
-			await user.click(screen.getByRole("button", { name: "Answer" }));
+			// Nothing was pressed to get here. The question is on screen because
+			// it is waiting, which is the whole of the rule.
+			expect(answerPanel()).toBeInTheDocument();
+			// And the app put it there, so the caret is left where it was.
+			expect(answerPanel()).not.toHaveFocus();
 
-			// Scoped to the sheet: the composer below it has a Send of its own.
-			const sheet = within(screen.getByRole("dialog"));
-			await user.click(sheet.getByRole("radio", { name: /SQLite/ }));
-			await user.click(sheet.getByRole("button", { name: "Send" }));
+			// Scoped to the panel: the composer below it has a Send of its own.
+			const panel = within(answerPanel());
+			await user.click(panel.getByRole("radio", { name: /SQLite/ }));
+			await user.click(panel.getByRole("button", { name: "Send" }));
 
 			expect(mockState.sendMessage).toHaveBeenCalledWith(
 				"test-session",
@@ -467,16 +540,210 @@ describe("ChatPanel", () => {
 			render(<ChatPanel {...defaultProps} />);
 			await waitForHistoryLoad();
 
-			await user.click(screen.getByRole("button", { name: "Answer" }));
-			const sheet = within(screen.getByRole("dialog"));
-			await user.click(sheet.getByRole("radio", { name: /SQLite/ }));
-			await user.click(sheet.getByRole("button", { name: "Send" }));
+			const panel = within(answerPanel());
+			await user.click(panel.getByRole("radio", { name: /SQLite/ }));
+			await user.click(panel.getByRole("button", { name: "Send" }));
 
 			expect(
 				await screen.findByText("Already answered elsewhere."),
 			).toBeInTheDocument();
 			expect(screen.queryByText("Answering:")).not.toBeInTheDocument();
 			expect(screen.getByText("Pending")).toBeInTheDocument();
+		});
+
+		// The one thing that makes this a panel and not the full-screen drawer it
+		// used to be: it covers the conversation and stops there.
+		it("covers the transcript without reaching the composer", async () => {
+			const user = userEvent.setup();
+			seedUnansweredQuestion();
+			render(<ChatPanel {...defaultProps} />);
+			await waitForHistoryLoad();
+
+			expect(answerPanel()).toBeInTheDocument();
+
+			// Not merely present: usable, and used. The Send picked here is the
+			// composer's — the panel has one of its own, which is the point.
+			await user.type(screen.getByRole("textbox"), "meanwhile");
+			const composerSend = screen
+				.getAllByRole("button", { name: /^Send/ })
+				.filter((button) => !answerPanel().contains(button));
+			expect(composerSend).toHaveLength(1);
+			await user.click(composerSend[0]);
+			expect(mockState.sendMessage).toHaveBeenCalledWith(
+				"test-session",
+				"meanwhile",
+				undefined,
+			);
+			expect(answerPanel()).toBeInTheDocument();
+		});
+
+		// With no focus trap over it, the covered transcript would otherwise keep
+		// every one of its controls in the Tab order — ahead of the panel — and in
+		// the accessibility tree, while being invisible.
+		it("takes the covered transcript out of reach", async () => {
+			const user = userEvent.setup();
+			seedUnansweredQuestion();
+			render(<ChatPanel {...defaultProps} />);
+			await waitForHistoryLoad();
+
+			expect(screen.getByText("Pending").closest("[inert]")).not.toBeNull();
+
+			// And gives it back the moment the panel is out of the way.
+			await user.click(
+				within(answerPanel()).getByRole("button", { name: "Close" }),
+			);
+			expect(screen.getByText("Pending").closest("[inert]")).toBeNull();
+		});
+
+		// The panel is the strip's second row, said in full. Closing gives the row
+		// back, and its Answer button is the one way back in — there is no second
+		// button anywhere.
+		it("trades the strip's question row for the panel, and back", async () => {
+			const user = userEvent.setup();
+			seedUnansweredQuestion();
+			render(<ChatPanel {...defaultProps} />);
+			await waitForHistoryLoad();
+
+			expect(
+				screen.queryByText("1 question is waiting for your answer."),
+			).not.toBeInTheDocument();
+
+			await user.click(
+				within(answerPanel()).getByRole("button", { name: "Close" }),
+			);
+			expect(
+				screen.queryByRole("region", { name: /question/ }),
+			).not.toBeInTheDocument();
+			expect(
+				screen.getByText("1 question is waiting for your answer."),
+			).toBeInTheDocument();
+
+			await user.click(screen.getByRole("button", { name: "Answer" }));
+			expect(answerPanel()).toBeInTheDocument();
+		});
+
+		// Whether the panel is open is held, never read off the unanswered list.
+		// Derived, it would vanish in the frame the last question is answered from
+		// another tab — taking a half-typed answer with it.
+		it("stays up when the last question is answered from somewhere else", async () => {
+			seedUnansweredQuestion();
+			render(<ChatPanel {...defaultProps} />);
+			await waitForHistoryLoad();
+
+			act(() =>
+				acceptSetting({
+					turn: {
+						phase: "idle",
+						open: false,
+						since: "",
+						unanswered: [],
+					},
+				}),
+			);
+
+			expect(answerPanel()).toBeInTheDocument();
+			expect(screen.getByText("Nothing left to answer.")).toBeInTheDocument();
+		});
+
+		// The panel stays up when a permission request arrives over it — nothing
+		// vanishes under the user's hand. But the card the strip then offers to
+		// jump to is underneath the panel and `inert`, so the jump has to bring
+		// it out: a button that scrolls something unreachable is the dead end
+		// this surface exists to remove.
+		it("gets out of the way of a jump to a covered request", async () => {
+			const user = userEvent.setup();
+			seedUnansweredQuestion();
+			render(<ChatPanel {...defaultProps} />);
+			await waitForHistoryLoad();
+
+			act(() => {
+				mockState.onNotification?.({
+					type: "permission_request",
+					request_id: "req-9",
+					tool_name: "Edit",
+					tool_input: { file_path: "/etc/hosts" },
+					tool_use_id: "tool-9",
+				});
+			});
+			act(() =>
+				acceptSetting({
+					turn: {
+						phase: "blocked",
+						open: true,
+						since: "2024-01-01T00:00:00Z",
+						blockers: [
+							{
+								kind: "permission",
+								request_id: "req-9",
+								raised_at: "2024-01-01T00:00:00Z",
+							},
+						],
+						unanswered: [question],
+					},
+				}),
+			);
+			// The panel is not what closes under a permission request.
+			expect(answerPanel()).toBeInTheDocument();
+
+			await user.click(screen.getByRole("button", { name: "Jump to request" }));
+
+			expect(
+				screen.queryByRole("region", { name: /question/ }),
+			).not.toBeInTheDocument();
+			expect(screen.getByRole("button", { name: "Allow" })).toBeInTheDocument();
+			expect(screen.getByText("Allow").closest("[inert]")).toBeNull();
+		});
+
+		// The panel outlives an overlay, but the tap that opened it does not:
+		// coming back from a file or a diff is the app re-showing the panel, and
+		// an automatic re-show must not pull the caret out of the composer.
+		it("stops taking focus once an overlay has been through", async () => {
+			const user = userEvent.setup();
+			seedUnansweredQuestion();
+			const { rerender } = render(<ChatPanel {...defaultProps} />);
+			await waitForHistoryLoad();
+
+			// Asked for by hand, so it is read out: close it and press Answer.
+			await user.click(
+				within(answerPanel()).getByRole("button", { name: "Close" }),
+			);
+			await user.click(screen.getByRole("button", { name: "Answer" }));
+			expect(answerPanel()).toHaveFocus();
+
+			rerender(
+				<ChatPanel
+					{...defaultProps}
+					overlay={{ type: "file", path: "a.ts" }}
+				/>,
+			);
+			rerender(<ChatPanel {...defaultProps} />);
+
+			// Back, because closing it was never asked for — but it is the app
+			// that brought it back, so the caret stays where the user left it.
+			expect(answerPanel()).toBeInTheDocument();
+			expect(answerPanel()).not.toHaveFocus();
+		});
+
+		// The work detail is an overlay over this very panel, so its `Answer` on a
+		// question of the session already on screen navigates nowhere but out of
+		// the overlay. The intent still has to be read, or that entry point does
+		// nothing at all.
+		it("opens on the question the work detail named, with no session switch", async () => {
+			seedUnansweredQuestion();
+			const { rerender } = render(
+				<ChatPanel
+					{...defaultProps}
+					overlay={{ type: "work-detail", workId: "w1", segment: "current" }}
+				/>,
+			);
+			await waitForHistoryLoad();
+
+			requestAnswerPanel({ sessionId: "test-session", requestId: "q1" });
+			rerender(<ChatPanel {...defaultProps} />);
+
+			expect(answerPanel()).toBeInTheDocument();
+			// A user action, so it is read out rather than left to be noticed.
+			expect(answerPanel()).toHaveFocus();
 		});
 
 		// A posted question does not block the turn, so nothing about sending is
@@ -488,7 +755,12 @@ describe("ChatPanel", () => {
 			await waitForHistoryLoad();
 
 			await user.type(screen.getByRole("textbox"), "an ordinary message");
-			await user.click(screen.getByRole("button", { name: /Send/ }));
+			// The panel has a Send of its own; this one is the composer's.
+			await user.click(
+				screen
+					.getAllByRole("button", { name: /^Send/ })
+					.filter((button) => !answerPanel().contains(button))[0],
+			);
 
 			// It answers nothing: no `answering`, and the card stays Pending.
 			expect(mockState.sendMessage).toHaveBeenCalledWith(
@@ -497,6 +769,233 @@ describe("ChatPanel", () => {
 				undefined,
 			);
 			expect(screen.getByText("Pending")).toBeInTheDocument();
+		});
+
+		// Closing says "not now", and it is worth exactly that: this one stretch
+		// of looking at this chat. An unanswered question is where the work has
+		// stopped, so going away and coming back puts it back on screen — the
+		// rule is one sentence and takes no exceptions, least of all for the
+		// overlays that sit right on top of the chat (docs/answering-ui.md §4).
+		describe("after the user closes it", () => {
+			const closeThePanel = async (
+				user: ReturnType<typeof userEvent.setup>,
+			) => {
+				await user.click(
+					within(answerPanel()).getByRole("button", { name: "Close" }),
+				);
+				expect(
+					screen.queryByRole("region", { name: /question/ }),
+				).not.toBeInTheDocument();
+			};
+
+			it("stays closed for the rest of this visit", async () => {
+				const user = userEvent.setup();
+				seedUnansweredQuestion();
+				render(<ChatPanel {...defaultProps} />);
+				await waitForHistoryLoad();
+				await closeThePanel(user);
+
+				// The same list arriving again is not a new question, and must not
+				// undo what the user just did.
+				act(() =>
+					acceptSetting({
+						turn: {
+							phase: "idle",
+							open: false,
+							since: "",
+							unanswered: [question],
+						},
+					}),
+				);
+				expect(
+					screen.queryByRole("region", { name: /question/ }),
+				).not.toBeInTheDocument();
+				expect(
+					screen.getByText("1 question is waiting for your answer."),
+				).toBeInTheDocument();
+			});
+
+			// A question that arrived while the panel was up has been shown, so the
+			// close covers it too. Counting only what was there when the panel
+			// opened would put the panel straight back up on the next render.
+			it("stays closed over a question that arrived while it was up", async () => {
+				const user = userEvent.setup();
+				seedUnansweredQuestion();
+				render(<ChatPanel {...defaultProps} />);
+				await waitForHistoryLoad();
+
+				act(() =>
+					acceptSetting({
+						turn: {
+							phase: "idle",
+							open: false,
+							since: "",
+							unanswered: [
+								question,
+								{ ...question, request_id: "q2", header: "Cache" },
+							],
+						},
+					}),
+				);
+				expect(within(answerPanel()).getByText("Cache")).toBeInTheDocument();
+
+				await closeThePanel(user);
+				expect(
+					screen.queryByRole("region", { name: /question/ }),
+				).not.toBeInTheDocument();
+			});
+
+			it("comes back after a look at another session", async () => {
+				const user = userEvent.setup();
+				seedUnansweredQuestion();
+				const { rerender } = render(<ChatPanel {...defaultProps} />);
+				await waitForHistoryLoad();
+				await closeThePanel(user);
+
+				rerender(<ChatPanel {...defaultProps} sessionId="elsewhere" />);
+				await waitForHistoryLoad();
+				rerender(<ChatPanel {...defaultProps} />);
+				await waitForHistoryLoad();
+
+				expect(answerPanel()).toBeInTheDocument();
+			});
+
+			it("comes back after an overlay over the transcript", async () => {
+				const user = userEvent.setup();
+				seedUnansweredQuestion();
+				const { rerender } = render(<ChatPanel {...defaultProps} />);
+				await waitForHistoryLoad();
+				await closeThePanel(user);
+
+				rerender(
+					<ChatPanel
+						{...defaultProps}
+						overlay={{ type: "file", path: "a.ts" }}
+					/>,
+				);
+				rerender(<ChatPanel {...defaultProps} />);
+
+				expect(answerPanel()).toBeInTheDocument();
+				// Brought back by the app, so it does not take the caret.
+				expect(answerPanel()).not.toHaveFocus();
+			});
+
+			it("comes back when the work list leads back into the session", async () => {
+				const user = userEvent.setup();
+				seedUnansweredQuestion();
+				const { rerender } = render(<ChatPanel {...defaultProps} />);
+				await waitForHistoryLoad();
+				await closeThePanel(user);
+
+				// The way in from a work item or a notification: an overlay closes
+				// and the session changes in the same step.
+				rerender(
+					<ChatPanel
+						{...defaultProps}
+						sessionId="elsewhere"
+						overlay={{ type: "work-list", segment: "current" }}
+					/>,
+				);
+				rerender(<ChatPanel {...defaultProps} />);
+				await waitForHistoryLoad();
+
+				expect(answerPanel()).toBeInTheDocument();
+			});
+
+			it("comes back after a reload", async () => {
+				const user = userEvent.setup();
+				seedUnansweredQuestion();
+				const { unmount } = render(<ChatPanel {...defaultProps} />);
+				await waitForHistoryLoad();
+				await closeThePanel(user);
+
+				// A reload keeps nothing of this: the flag is memory, and memory is
+				// what the page just threw away.
+				unmount();
+				render(<ChatPanel {...defaultProps} />);
+				await waitForHistoryLoad();
+
+				expect(answerPanel()).toBeInTheDocument();
+			});
+
+			it("comes back for a question it has not shown before", async () => {
+				const user = userEvent.setup();
+				seedUnansweredQuestion();
+				render(<ChatPanel {...defaultProps} />);
+				await waitForHistoryLoad();
+				await closeThePanel(user);
+
+				act(() =>
+					acceptSetting({
+						turn: {
+							phase: "idle",
+							open: false,
+							since: "",
+							unanswered: [
+								question,
+								{ ...question, request_id: "q2", header: "Cache" },
+							],
+						},
+					}),
+				);
+
+				// "Not now" was said about what was on screen at the time. This one
+				// was not.
+				expect(answerPanel()).toBeInTheDocument();
+			});
+		});
+
+		// The server refuses an answer while a permission request is outstanding,
+		// so a panel opened over one could only be typed into and then turned
+		// away. The strip's first row is what has to be dealt with first.
+		describe("while a permission request is waiting", () => {
+			const blockOnPermission = () =>
+				acceptSetting({
+					turn: {
+						phase: "blocked",
+						open: true,
+						since: "2024-01-01T00:00:00Z",
+						blockers: [
+							{
+								kind: "permission",
+								request_id: "req-9",
+								raised_at: "2024-01-01T00:00:00Z",
+							},
+						],
+						unanswered: [question],
+					},
+				});
+
+			it("does not show itself", async () => {
+				seedUnansweredQuestion();
+				blockOnPermission();
+				render(<ChatPanel {...defaultProps} />);
+				await waitForHistoryLoad();
+
+				expect(
+					screen.queryByRole("region", { name: /question/ }),
+				).not.toBeInTheDocument();
+			});
+
+			it("shows itself as soon as the permission is dealt with", async () => {
+				seedUnansweredQuestion();
+				blockOnPermission();
+				render(<ChatPanel {...defaultProps} />);
+				await waitForHistoryLoad();
+
+				act(() =>
+					acceptSetting({
+						turn: {
+							phase: "idle",
+							open: false,
+							since: "",
+							unanswered: [question],
+						},
+					}),
+				);
+
+				expect(answerPanel()).toBeInTheDocument();
+			});
 		});
 	});
 
@@ -2351,7 +2850,7 @@ describe("ChatPanel", () => {
 		// a process to reach. A permission card is already settled by the idle
 		// turn a viewed transcript is read under; the question card is not — its
 		// status comes from the records themselves — so "Answer this" survived
-		// into a screen whose answer sheet is not even rendered.
+		// into a screen whose answer panel is not even rendered.
 		it("offers nothing to answer a question the transcript left pending", async () => {
 			mockState.sessionViewHistory.mockResolvedValue({
 				history: [

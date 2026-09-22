@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { persist } from "zustand/middleware";
 
 /**
  * What the user has put into one question's block, before it is sent.
@@ -48,25 +49,81 @@ export const EMPTY_DRAFT: QuestionDraft = {
 interface QuestionDraftState {
 	/** `sessionId` → `request_id` → what was typed. */
 	drafts: Record<string, Record<string, QuestionDraft>>;
+	/**
+	 * What came back out of storage and has not been vouched for yet, in the
+	 * same shape. A draft sits here until its session's unanswered list arrives:
+	 * the list is the only thing that can say whether the question it answers is
+	 * still open, and nothing may go on screen before it does.
+	 *
+	 * A session is in one of the two maps, never both: `restore` empties its
+	 * entry here as it fills the other. Nothing writes to `drafts` for a session
+	 * still waiting, because writing means typing into a block, and a block only
+	 * exists once the list it came from has arrived.
+	 */
+	restorable: Record<string, Record<string, QuestionDraft>>;
 }
 
-export const useQuestionDraftStore = create<QuestionDraftState>(() => ({
-	drafts: {},
-}));
+/** Where the drafts live, beside the composer's own (`input_drafts`). */
+const STORAGE_KEY = "question_drafts";
 
 /**
- * The drafts of one session's answer sheet, in memory only.
+ * Everything that belongs in storage: the vouched-for drafts, plus the ones
+ * still waiting to be checked, exactly as they came out.
+ *
+ * The waiting half has to be written back too. Storage holds every session at
+ * once and is rewritten whole on each change, so leaving out the sessions this
+ * page has not opened would make typing in one session delete the drafts of all
+ * the others.
+ *
+ * A session left holding nothing is dropped instead of stored empty: every
+ * session ever answered in passes through here, and an empty entry each would
+ * grow without ever being read.
+ */
+function toStorage(
+	state: QuestionDraftState,
+): Record<string, Record<string, QuestionDraft>> {
+	const sessions = { ...state.restorable };
+	for (const [sessionId, session] of Object.entries(state.drafts)) {
+		const merged = { ...sessions[sessionId], ...session };
+		if (Object.keys(merged).length === 0) delete sessions[sessionId];
+		else sessions[sessionId] = merged;
+	}
+	return sessions;
+}
+
+export const useQuestionDraftStore = create<QuestionDraftState>()(
+	persist(
+		() => ({
+			drafts: {},
+			restorable: {},
+		}),
+		{
+			name: STORAGE_KEY,
+			partialize: (state) => ({ drafts: toStorage(state) }),
+			// What was stored is held back in `restorable` rather than restored
+			// outright: see `restore`.
+			merge: (persisted, current) => ({
+				...current,
+				restorable:
+					(persisted as Partial<QuestionDraftState> | undefined)?.drafts ?? {},
+			}),
+		},
+	),
+);
+
+/**
+ * The drafts of one session's answer panel.
  *
  * A store rather than component state because every host of a draft unmounts
- * under the user: the sheet closes on a stray backdrop tap, the chat pane is
- * replaced whenever an overlay takes it, and the user switches sessions and
- * comes back. Component state loses the draft to all three, and the first of
- * them is a single mis-aimed thumb.
+ * under the user: the panel closes, the chat pane is replaced whenever an
+ * overlay takes it, and the user switches sessions and comes back. Component
+ * state loses the draft to all three.
  *
- * It is **not** persisted. What a draft has to survive is a refused submit and
- * a dropped socket, neither of which reloads the page; writing it to
- * `localStorage` would resurrect an answer to a question withdrawn two days
- * ago, on a card that no longer exists.
+ * It is persisted to `localStorage`, so a reload keeps what was typed, and the
+ * question a draft answers is checked before any of it is shown again — see
+ * `restore`. That check is what makes persisting safe: the danger was never the
+ * storage, it was putting an answer back on screen for a question withdrawn two
+ * days ago.
  *
  * Two things clear one, and both are the user's own act: its submit succeeding,
  * and the user dismissing a block whose question something else has already
@@ -75,6 +132,41 @@ export const useQuestionDraftStore = create<QuestionDraftState>(() => ({
  * prevent (docs/answering-ui.md §5).
  */
 export const questionDraftActions = {
+	/**
+	 * Hands a session's stored drafts to its unanswered list to be vouched for,
+	 * once, on the list's first arrival.
+	 *
+	 * A draft is put back only if that list still carries its `request_id`;
+	 * every other one is dropped, storage included, and silently — the block it
+	 * belonged to is not on screen and never will be, so there is nothing to
+	 * tell the user about and nothing they could do. This is what keeps the old
+	 * promise: text is only ever deleted out of sight of the person who typed it
+	 * when they can no longer see the question either (docs/answering-ui.md §5).
+	 *
+	 * Drafts typed since the page loaded win over the stored copy and are never
+	 * dropped here, whatever the list says: their block may be on screen right
+	 * now, grey and holding an answer the user is still looking at.
+	 */
+	restore(sessionId: string, liveRequestIds: string[]): void {
+		useQuestionDraftStore.setState((state) => {
+			const waiting = state.restorable[sessionId];
+			if (!waiting) return state;
+			const live = new Set(liveRequestIds);
+			const vouched: Record<string, QuestionDraft> = {};
+			for (const [requestId, draft] of Object.entries(waiting)) {
+				if (live.has(requestId)) vouched[requestId] = draft;
+			}
+			const { [sessionId]: _checked, ...restorable } = state.restorable;
+			return {
+				restorable,
+				drafts: {
+					...state.drafts,
+					[sessionId]: { ...vouched, ...state.drafts[sessionId] },
+				},
+			};
+		});
+	},
+
 	set(sessionId: string, requestId: string, draft: QuestionDraft): void {
 		useQuestionDraftStore.setState((state) => ({
 			drafts: {

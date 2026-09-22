@@ -1,6 +1,5 @@
-import { Sheet } from "@pockode/shared";
 import { X } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 import {
 	EMPTY_DRAFT,
 	isDraftDirty,
@@ -38,6 +37,14 @@ interface Props {
 	 */
 	onSend: (content: string, answering: QuestionAnswerRecord[]) => Promise<void>;
 	onClose: () => void;
+	/**
+	 * Whether a user action is what named the question on screen. Only then does
+	 * the panel take focus. Most of the time it is up because a question is
+	 * waiting and not because anyone asked for it, and a panel that grabs the
+	 * caret out of the composer somebody is typing in has stolen it
+	 * (docs/answering-ui.md §4).
+	 */
+	takeFocus: boolean;
 }
 
 /** A block the user can still see, whether or not its question is still open. */
@@ -69,18 +76,28 @@ const ALREADY_ANSWERED = "Already answered elsewhere.";
  * One block per `request_id`, oldest first, in one flat scroll. Not a wizard: a
  * wizard hides how much is left, forbids answering out of order, and turns two
  * questions into four taps.
+ *
+ * It fills the transcript's rectangle and nothing more — it is not a modal, and
+ * every modal habit is deliberately absent: no portal, no backdrop, no body
+ * scroll lock, no focus trap, no document-level Escape. The composer, the strip
+ * and the bars below it stay visible and usable while it is up, which is the
+ * whole point of it, and each of those habits would take one of them away.
+ * Positioning is `absolute inset-0` against the wrapper `ChatPanel` puts around
+ * the list, so the rectangle follows a resize, a soft keyboard and an error bar
+ * appearing without this component knowing any of them happened.
  */
-function AnswerSheet({
+function AnswerPanel({
 	sessionId,
 	unanswered,
 	anchorRequestId,
 	onSend,
 	onClose,
+	takeFocus,
 }: Props) {
 	const drafts = useQuestionDraftStore(selectSessionDrafts(sessionId));
 	// Blocks that can no longer be answered but are still on screen, keyed by
 	// request id. Held here rather than derived, because what they are is a fact
-	// about this sheet's own history: the question was answerable when the sheet
+	// about this panel's own history: the question was answerable when the panel
 	// last saw it, and the user has typed into it since. The question is kept
 	// with the message — the list may no longer carry it, and then this is the
 	// only copy left of what the user was answering.
@@ -88,7 +105,7 @@ function AnswerSheet({
 	const [sending, setSending] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 	// How many blocks the last submit carried, so the body can say so until the
-	// next change. Zero means nothing has been sent from this sheet yet.
+	// next change. Zero means nothing has been sent from this panel yet.
 	const [sentCount, setSentCount] = useState(0);
 
 	// Questions that were on screen last render, so a departure can be told from
@@ -168,17 +185,26 @@ function AnswerSheet({
 		.map((b) => b.question.request_id);
 
 	const bodyRef = useRef<HTMLDivElement>(null);
-	// Scrolls the question the opener named into view, once. It never filters:
-	// a sheet holding one of three open questions would be a second, partial
-	// answer to "what is waiting on me".
-	const anchoredRef = useRef(false);
+	// Scrolls the question the opener named into view, once per naming. It never
+	// filters: a panel holding one of three open questions would be a second,
+	// partial answer to "what is waiting on me".
+	//
+	// Once *per naming* rather than once per panel, because the panel now shows
+	// itself and stays up for as long as a question does: a user who names a
+	// second question from the work detail is asking to be taken to that one,
+	// and a panel that had already scrolled for the first would sit still.
+	const anchoredRef = useRef<string | null>(null);
 	useEffect(() => {
-		if (anchoredRef.current || !anchorRequestId) return;
+		if (!anchorRequestId) {
+			anchoredRef.current = null;
+			return;
+		}
+		if (anchoredRef.current === anchorRequestId) return;
 		const target = bodyRef.current?.querySelector(
 			`[data-answer-block="${CSS.escape(anchorRequestId)}"]`,
 		);
 		if (!target) return;
-		anchoredRef.current = true;
+		anchoredRef.current = anchorRequestId;
 		target.scrollIntoView({ block: "start" });
 	}, [anchorRequestId]);
 
@@ -260,8 +286,8 @@ function AnswerSheet({
 	}, [liveBlocks, readyIds, drafts, onSend, sessionId]);
 
 	// Closes only when the submit left nothing behind. Anything still open —
-	// not submitted, or asked while the sheet was up — keeps it open, and a list
-	// emptied from elsewhere never closes it: a sheet that vanishes under a
+	// not submitted, or asked while the panel was up — keeps it open, and a list
+	// emptied from elsewhere never closes it: a panel that vanishes under a
 	// finger is worse than one that explains itself.
 	useEffect(() => {
 		if (sentCount > 0 && blocks.length === 0) onClose();
@@ -270,22 +296,85 @@ function AnswerSheet({
 	const title =
 		unanswered.length === 1 ? "1 question" : `${unanswered.length} questions`;
 
+	const titleId = useId();
+	const rootRef = useRef<HTMLElement>(null);
+
+	// On the edge where a user action asks for this panel, not while one holds.
+	// The edge and not the mount, because the panel now shows itself the moment
+	// a question arrives: by the time the work detail's `Answer` names one, the
+	// panel it names is usually already up, and a mount-only read would leave
+	// that entry point silent. Holding `takeFocus` true across re-renders takes
+	// nothing, so no re-render can pull the caret out of a field being typed in.
+	// `preventScroll` so nothing behind the panel moves; the panel itself is
+	// what is read out, its title first.
+	const tookFocusRef = useRef(false);
+	useEffect(() => {
+		if (takeFocus && !tookFocusRef.current) {
+			rootRef.current?.focus({ preventScroll: true });
+		}
+		tookFocusRef.current = takeFocus;
+	}, [takeFocus]);
+
+	// Escape belongs to whatever has focus, not to the window: ChatPanel's own
+	// document listener turns Escape into an interrupt, and this panel is up for
+	// as long as a question is open, so swallowing it there would take the
+	// interrupt away for good. Claiming the key here — React's synthetic
+	// listener sits below `document`, and ChatPanel's returns on
+	// `defaultPrevented` — leaves Escape an interrupt everywhere outside the
+	// panel, this one press excepted.
+	const handleKeyDown = (e: React.KeyboardEvent) => {
+		if (e.key !== "Escape") return;
+		// Same reason as the disabled ×: a slow relay must not leave the user
+		// unsure whether their answers went out.
+		if (sending) return;
+		e.preventDefault();
+		onClose();
+	};
+
 	return (
-		<Sheet
-			title={title}
-			onClose={onClose}
-			dismissible={!sending}
-			footer={
-				<Footer
-					ready={readyIds.length}
-					total={liveBlocks.length}
-					sending={sending}
-					onSend={handleSend}
-					onClose={onClose}
-				/>
-			}
+		// No `role="dialog" aria-modal`: the rest of the screen is genuinely
+		// usable, and claiming otherwise would have a screen reader say it is not.
+		// A named <section> is a region already, which is the landmark this is.
+		// outline-none: it takes focus only to announce itself.
+		<section
+			ref={rootRef}
+			tabIndex={-1}
+			aria-labelledby={titleId}
+			onKeyDown={handleKeyDown}
+			className="absolute inset-0 z-10 flex flex-col bg-th-bg-secondary outline-none"
 		>
-			<div ref={bodyRef} className="p-4 space-y-4">
+			{/* Header, footer and the close button wear the same classes as
+			    `Sheet`'s, copied rather than shared: what makes them look alike is
+			    the tokens, and a `variant` on a shared modal would make every
+			    reader of `Sheet` — in both frontends — check which half they are in
+			    first. */}
+			<div className="flex shrink-0 items-center justify-between border-b border-th-border px-4 py-3">
+				<h2
+					id={titleId}
+					className="min-w-0 truncate text-base font-bold text-th-text-primary"
+				>
+					{title}
+				</h2>
+				<button
+					type="button"
+					onClick={onClose}
+					disabled={sending}
+					aria-label="Close"
+					className="touch-target -my-1.5 -mr-1 flex size-9 shrink-0 items-center justify-center rounded text-th-text-muted hover:bg-th-bg-tertiary hover:text-th-text-primary disabled:cursor-not-allowed disabled:opacity-50"
+				>
+					<X className="size-5" />
+				</button>
+			</div>
+			{/* overscroll-y-contain: an overscroll at either end stops here rather
+			    than leaving the panel — on touch that is the browser's own
+			    rubber-band and pull-to-refresh, reached by flicking through the
+			    last question. The transcript's scroller carries the same class for
+			    the same reason; it is a sibling of this one, not an ancestor, so
+			    chaining could never have reached it. */}
+			<div
+				ref={bodyRef}
+				className="min-h-0 flex-1 overflow-y-auto overscroll-y-contain p-4 space-y-4"
+			>
 				{sentCount > 0 && (
 					<p className="text-xs text-th-text-muted">
 						{sentCount === 1 ? "1 answer sent." : `${sentCount} answers sent.`}
@@ -310,7 +399,16 @@ function AnswerSheet({
 					/>
 				))}
 			</div>
-		</Sheet>
+			<div className="flex shrink-0 gap-3 border-t border-th-border p-4">
+				<Footer
+					ready={readyIds.length}
+					total={liveBlocks.length}
+					sending={sending}
+					onSend={handleSend}
+					onClose={onClose}
+				/>
+			</div>
+		</section>
 	);
 }
 
@@ -497,7 +595,7 @@ function QuestionBlock({
  * the server's own text by `web/tests/serverRefusalCopy.test.ts`: reword the Go
  * error and this stops matching, and what the user would then be shown is the
  * half of that sentence written for somebody else — "answer it, or stop the
- * turn, then send", about a card that is not in this sheet.
+ * turn, then send", about a card that is not in this panel.
  */
 export const TURN_AWAITING_ANSWER_MARKER =
 	"waiting for an answer to the request on screen";
@@ -533,4 +631,4 @@ function answersOf(
 	};
 }
 
-export default AnswerSheet;
+export default AnswerPanel;

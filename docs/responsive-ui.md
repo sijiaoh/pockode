@@ -741,7 +741,7 @@ Written down so the next reader does not grade it again.
 
 - **Batch 2 — R0, the chat transcript.** `MessageItem`'s Deny, Always Allow and
   Allow. All R0 (b). The question card's Cancel and Submit were in this batch and
-  are out of it: answering happens in the answer sheet now, whose own controls
+  are out of it: answering happens in the answer panel now, whose own controls
   clear the floor, and the card that replaced it holds no form at all
   ([answering-ui.md](answering-ui.md)).
 - **Batch 3 — R1, text targets centred in a tall row.** `AgentRoleListOverlay`,

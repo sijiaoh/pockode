@@ -31,7 +31,7 @@ interface Props {
 	 */
 	legacy?: boolean;
 	/**
-	 * Opens the answer sheet on this question. Absent when the host cannot
+	 * Opens the answer panel on this question. Absent when the host cannot
 	 * answer — a card whose session is not the one on screen — and the body then
 	 * states what is being asked and stops there.
 	 */

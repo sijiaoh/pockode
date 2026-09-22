@@ -517,7 +517,7 @@ interface ContentPartItemProps {
 		choice: PermissionChoice,
 	) => void;
 	/**
-	 * Opens the answer sheet on one question. It is the record card's only
+	 * Opens the answer panel on one question. It is the record card's only
 	 * control, and the card holds no state of its own for it — it calls the same
 	 * opener the strip does (docs/answering-ui.md §4).
 	 */
@@ -628,7 +628,7 @@ interface Props {
 		request: PermissionRequest,
 		choice: PermissionChoice,
 	) => void;
-	/** Opens the answer sheet. Must be stable: this component is memoized. */
+	/** Opens the answer panel. Must be stable: this component is memoized. */
 	onAnswerQuestion?: (requestId: string) => void;
 	promptError?: PromptError;
 	onOpenWorkDetail?: (workId: string) => void;

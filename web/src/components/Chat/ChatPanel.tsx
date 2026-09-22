@@ -1,5 +1,11 @@
 import { AlertTriangle, Square, X } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import {
+	useCallback,
+	useEffect,
+	useLayoutEffect,
+	useRef,
+	useState,
+} from "react";
 import { useChatMessages } from "../../hooks/useChatMessages";
 import { SKELETON_DELAY_MS, useDelayedFlag } from "../../hooks/useDelayedFlag";
 import { useForkSession } from "../../hooks/useForkSession";
@@ -7,6 +13,7 @@ import { useForkSupport } from "../../hooks/useForkSupport";
 import { useViewedSession } from "../../hooks/useViewedSession";
 import { takeAnswerIntent } from "../../lib/answerIntent";
 import { inputActions } from "../../lib/inputStore";
+import { questionDraftActions } from "../../lib/questionDraftStore";
 import { useChatUIConfig } from "../../lib/registries/chatUIRegistry";
 import {
 	selectSessionDetail,
@@ -33,7 +40,7 @@ import {
 	WorkListOverlay,
 } from "../Project";
 import { SettingsPage } from "../Settings";
-import AnswerSheet from "./AnswerSheet";
+import AnswerPanel from "./AnswerPanel";
 import AttentionStrip from "./AttentionStrip";
 import ChatSkeleton from "./ChatSkeleton";
 import EngineSelector from "./EngineSelector";
@@ -412,47 +419,179 @@ function ChatPanel({
 		[forkSession, sessionId, onSelectSession],
 	);
 
-	// Whether the answer sheet is open, and which question it opens on. Held
-	// here because the sheet is a portal answering for the whole session, not for
-	// any one bubble, and because three separate openers reach it
-	// (docs/answering-ui.md §4).
+	// Whether the answer panel is open. Held rather than derived from
+	// `unanswered.length`, which is the obvious shortcut and a lossy one: the
+	// panel has to stay up saying "Nothing left to answer." when the last
+	// question is answered from somewhere else, because the user may be halfway
+	// through typing into it (docs/answering-ui.md §3). A derived flag would
+	// take it, and their words, away in that very frame.
 	//
-	// `null` is closed. `{}` is open with no anchor, which is what the strip
-	// asks for: the sheet then opens on the oldest question.
+	// It lives here because the panel answers for the whole session rather than
+	// for any one bubble, and because three separate openers reach it
+	// (docs/answering-ui.md §4).
+	const [answerPanelOpen, setAnswerPanelOpen] = useState(false);
+	// Which question the panel opens on, and — by being there at all — that a
+	// user action is what opened it, which is what decides whether the panel
+	// takes focus. `null` is "nobody named a question": the panel opens on the
+	// oldest one and leaves the caret where it is.
 	const [answerAnchor, setAnswerAnchor] = useState<{
 		requestId?: string;
 	} | null>(null);
+	// The questions this stretch of looking at the chat has already put on
+	// screen. Closing the panel lasts exactly one such stretch: every way out of
+	// it — switching sessions, reloading the page, opening an overlay over the
+	// transcript — empties this set, so whatever is still unanswered on the way
+	// back reads as unseen and the panel comes up again, even if the user closed
+	// it by hand. An unanswered question is where the work has stopped, and a
+	// close says "not now"; going away and coming back is what ends that "now"
+	// (docs/answering-ui.md §4).
+	//
+	// Within one stretch it is the whole of the difference between a question
+	// the user has already dismissed the panel over and one that has just
+	// arrived: only the second opens it again.
+	const seenQuestionIdsRef = useRef<Set<string>>(new Set());
 
-	const handleOpenAnswerSheet = useCallback(() => setAnswerAnchor({}), []);
-	const handleAnswerQuestion = useCallback(
-		(requestId: string) => setAnswerAnchor({ requestId }),
-		[],
+	const openAnswerPanel = useCallback((requestId?: string) => {
+		setAnswerPanelOpen(true);
+		setAnswerAnchor({ requestId });
+	}, []);
+	const handleOpenAnswerPanel = useCallback(
+		() => openAnswerPanel(),
+		[openAnswerPanel],
 	);
-	const handleCloseAnswerSheet = useCallback(() => setAnswerAnchor(null), []);
+	const handleAnswerQuestion = useCallback(
+		(requestId: string) => openAnswerPanel(requestId),
+		[openAnswerPanel],
+	);
+	const handleCloseAnswerPanel = useCallback(() => {
+		setAnswerPanelOpen(false);
+		setAnswerAnchor(null);
+	}, []);
 
-	// The sheet belongs to one session's questions, so a switch closes it. During
+	// The panel belongs to one session's questions, so a switch closes it — and
+	// the destination opens its own below, for its own questions. During
 	// render rather than in an effect, for the reason `useChatMessages` resets
 	// there: an effect runs after the frame carrying the new session id has been
 	// committed, and that frame would show the previous session's questions under
 	// the new session's chat. The drafts are keyed by session and are untouched.
-	const [sheetSessionId, setSheetSessionId] = useState(sessionId);
-	if (sheetSessionId !== sessionId) {
-		setSheetSessionId(sessionId);
+	//
+	// `panelReset` keeps the auto-open below out of this render: the state it
+	// would read is the one being thrown away here, and the re-render this
+	// setState causes arrives before anything is painted.
+	const [panelSessionId, setPanelSessionId] = useState(sessionId);
+	let panelReset = false;
+	if (panelSessionId !== sessionId) {
+		setPanelSessionId(sessionId);
+		setAnswerPanelOpen(false);
 		setAnswerAnchor(null);
+		seenQuestionIdsRef.current = new Set();
+		panelReset = true;
+	}
+
+	// An overlay replaces the transcript, and takes the panel with it. The
+	// anchor does not survive that: it stands for a tap on `Answer` that has
+	// been served, and the panel coming back when the overlay closes is the
+	// app's doing rather than the user's — so it must neither scroll to that
+	// question again nor take the caret out of the composer
+	// (docs/answering-ui.md §4). That it comes back is not in question: a
+	// closed panel does not survive the trip either (see the seen set below).
+	const overlayOpen = Boolean(overlay);
+	const [panelOverlayOpen, setPanelOverlayOpen] = useState(overlayOpen);
+	if (panelOverlayOpen !== overlayOpen) {
+		setPanelOverlayOpen(overlayOpen);
+		if (overlayOpen) {
+			setAnswerAnchor(null);
+			// An overlay is the user looking at something else, so the stretch a
+			// close belonged to ends here: closing the overlay is re-entering the
+			// chat, and re-entering re-opens. The rule gets no exception for
+			// overlays — that is where a rule this short starts to rot.
+			seenQuestionIdsRef.current = new Set();
+		}
+		panelReset = true;
 	}
 
 	// The one-shot intent set by whatever navigated here. Consumed once the
-	// session's history is in, so the sheet does not open over a skeleton and
+	// session's history is in, so the panel does not open over a skeleton and
 	// then have to find its anchor in a transcript that is not there yet. It is
-	// not a URL: a route that opened the sheet would re-open it on every reload
+	// not a URL: a route that opened the panel would re-open it on every reload
 	// and every share of the link (docs/answering-ui.md §4).
+	//
+	// `overlayOpen` is in the list because the work detail is itself an overlay
+	// over this panel: pressing `Answer` on a question of the session already on
+	// screen navigates out of the overlay and changes nothing else, so without
+	// it the intent would never be read and that entry point would do nothing at
+	// all. Re-running costs nothing — the intent is one-shot and names the
+	// session it belongs to.
 	useEffect(() => {
-		if (isChatPending || isReadOnly) return;
+		if (isChatPending || isReadOnly || overlayOpen) return;
 		const intent = takeAnswerIntent(sessionId);
-		if (intent) setAnswerAnchor({ requestId: intent.requestId });
-	}, [sessionId, isChatPending, isReadOnly]);
+		if (intent) openAnswerPanel(intent.requestId);
+	}, [sessionId, isChatPending, isReadOnly, overlayOpen, openAnswerPanel]);
 
 	const unanswered = turn.unanswered ?? [];
+
+	// The panel shows itself. Nothing has to be pressed to read a question, and
+	// the one way it stays down is the user having closed it during this same
+	// stretch of looking at this chat.
+	//
+	// The gate: a question waiting, the chat itself on screen (a read-only
+	// session has no panel, a pending one has a skeleton), and no permission
+	// request in the way. That last one is here because the server refuses an
+	// answer while a permission request is outstanding, so a panel opened over
+	// it could only be typed into and then turned away — the strip's first row
+	// is what has to be dealt with instead. (A panel *already* open is left
+	// alone when one arrives: docs/answering-ui.md §7. That is why this only
+	// ever sets the flag, never clears it.)
+	//
+	// During render, not in an effect: an effect would paint one frame of
+	// uncovered transcript first, and the panel appearing a beat after the chat
+	// reads as something the app did rather than as the state it was in.
+	//
+	// Only the open branch writes the set, and it says one thing: what is on
+	// screen has been seen. Opening leaves it alone and lets the very next
+	// render — the one this setState causes, before anything is painted — do
+	// the writing, so a render that runs twice (StrictMode does that) cannot
+	// mark a question seen without it having been shown.
+	//
+	// `setAnswerPanelOpen` alone, never `openAnswerPanel`: that one also sets
+	// the anchor, and an anchor is what tells the panel to take focus. Nobody
+	// named a question here, and the user may be typing in the composer.
+	if (!panelReset && !overlayOpen) {
+		if (answerPanelOpen) {
+			// Otherwise closing the panel on a question that arrived while it was
+			// open would bring it straight back up.
+			for (const q of unanswered) seenQuestionIdsRef.current.add(q.request_id);
+		} else if (
+			!isReadOnly &&
+			!isChatPending &&
+			!promptOwnsInput &&
+			unanswered.some((q) => !seenQuestionIdsRef.current.has(q.request_id))
+		) {
+			setAnswerPanelOpen(true);
+		}
+	}
+
+	// Drafts read back from storage are only put on screen once this session's
+	// unanswered list has arrived and is seen to still carry their question;
+	// anything else is dropped, storage included. Here rather than in the panel
+	// because the panel is only mounted while it is open, and a draft left by a
+	// question that has since been answered has to be cleared out whether or not
+	// the user opens it (docs/answering-ui.md §5).
+	//
+	// `isSessionDetailLoaded` is the whole of the check and not a nicety: until
+	// that first snapshot `turn` is a placeholder carrying no list at all, and
+	// reading its absent list as an empty one would discard every draft the page
+	// was reloaded to keep.
+	//
+	// A layout effect, so a panel that is already open is repainted with the
+	// draft in it rather than showing one frame of empty fields first.
+	useLayoutEffect(() => {
+		if (isReadOnly || !isSessionDetailLoaded) return;
+		questionDraftActions.restore(
+			sessionId,
+			(turn.unanswered ?? []).map((q) => q.request_id),
+		);
+	}, [sessionId, isReadOnly, isSessionDetailLoaded, turn.unanswered]);
 
 	const handleSendAnswers = useCallback(
 		async (content: string, answering: QuestionAnswerRecord[]) => {
@@ -464,14 +603,26 @@ function ChatPanel({
 	// The jump lives with the scroll container; the strip below the list asks for
 	// it rather than reimplementing it.
 	const messageListRef = useRef<MessageListHandle>(null);
+	// Closing the panel is part of the jump, not a side effect of it. The only
+	// caller is the strip's permission row, and a permission request can arrive
+	// while the panel is up — which is exactly when the card being jumped to is
+	// covered by it and `inert`. Scrolling something the user cannot see or
+	// press is the dead end this whole surface exists to remove; the drafts
+	// survive the close, so the cost is one tap on `Answer` afterwards.
 	const handleJumpToRequest = useCallback((requestId: string) => {
+		setAnswerPanelOpen(false);
+		setAnswerAnchor(null);
 		messageListRef.current?.jumpToRequest(requestId);
 	}, []);
 
 	const forkAnchor = forkTarget
 		? resolveForkAnchor(messages, forkTarget.messageId, hasMoreHistory)
 		: null;
-	const isSheetOpen = Boolean(forkAnchor) || answerAnchor !== null;
+	// The answer panel is deliberately not counted: it is not a modal and does
+	// not own the window's keys. It claims the one Escape pressed inside itself
+	// and leaves every other one an interrupt — which matters because it is open
+	// for as long as a question is, and that is the ordinary state.
+	const isSheetOpen = Boolean(forkAnchor);
 
 	useEffect(() => {
 		const handleKeyDown = (e: KeyboardEvent) => {
@@ -517,49 +668,80 @@ function ChatPanel({
 			if (isChatPending) {
 				return <ChatSkeleton showRows={showSkeleton} />;
 			}
+			// The panel is positioned against this wrapper rather than portalled to
+			// the body, so the rectangle it fills is the transcript's own — no
+			// header height, composer height or strip height to measure, and two of
+			// those change because of this very feature. `relative` belongs here
+			// and not on `MessageList`, whose empty-conversation branches have no
+			// `relative` of their own for the panel to escape through.
+			//
+			// Living in this branch also means the panel cannot be drawn over an
+			// overlay or a skeleton without anyone having to remember to say so.
 			return (
-				<MessageList
-					key={sessionId}
-					ref={messageListRef}
-					sessionId={sessionId}
-					messages={messages}
-					hasMoreHistory={hasMoreHistory}
-					isLoadingMoreHistory={isLoadingMoreHistory}
-					historyError={historyError}
-					loadedHistoryPages={loadedHistoryPages}
-					onLoadMoreHistory={loadMoreHistory}
-					isCodex={agentType === "codex"}
-					// The openers a transcript carries for answering back, all
-					// withheld on a viewed session for the one reason: there is no
-					// process there to hear any of them. Each card already draws
-					// itself without a control when it is given none — a pending
-					// card that offers nothing is the truth here, not the dead end
-					// it would be in a live session. The question card is the one
-					// that needs this: its status comes from the records, not from
-					// the turn, so "Answer this" otherwise survives into a screen
-					// whose answer sheet is not rendered at all. The other two are
-					// the same statement made where it cannot drift.
-					onPermissionRespond={isReadOnly ? undefined : handlePermissionRespond}
-					onAnswerQuestion={isReadOnly ? undefined : handleAnswerQuestion}
-					onHintClick={isReadOnly ? undefined : handleSend}
-					isReadOnly={isReadOnly}
-					promptError={promptError ?? undefined}
-					onOpenWorkDetail={onOpenWorkDetail}
-					onOpenFile={onOpenFile}
-					forkedFromSessionId={forkedFromSessionId}
-					onOpenSession={onSelectSession}
-					// Forking without a way to open the result would leave the user in
-					// the parent with no sign anything happened, so the menu waits for
-					// a host that can navigate. Today that withholds the whole slot,
-					// fork being the only row in the menu; a second action needing no
-					// navigation would move this gate onto fork's own row instead
-					// (docs/session-fork-ui.md, "Which rows reserve a slot").
-					onForkMessage={
-						!isReadOnly && onSelectSession && forkSupport !== "none"
-							? handleStartFork
-							: undefined
-					}
-				/>
+				<div className="relative flex min-h-0 flex-1 flex-col">
+					{/* The list is covered, never unmounted: its scroll position is
+					    what the user gets back on closing the panel, and re-mounting
+					    would reload the history and lose it. `inert` rather than
+					    `pointer-events-none`, because with no focus trap above them
+					    every hidden button would otherwise still be in the Tab order —
+					    ahead of the panel — and still in the accessibility tree. */}
+					<div inert={answerPanelOpen} className="flex min-h-0 flex-1 flex-col">
+						<MessageList
+							key={sessionId}
+							ref={messageListRef}
+							sessionId={sessionId}
+							messages={messages}
+							hasMoreHistory={hasMoreHistory}
+							isLoadingMoreHistory={isLoadingMoreHistory}
+							historyError={historyError}
+							loadedHistoryPages={loadedHistoryPages}
+							onLoadMoreHistory={loadMoreHistory}
+							isCodex={agentType === "codex"}
+							// The openers a transcript carries for answering back, all
+							// withheld on a viewed session for the one reason: there is no
+							// process there to hear any of them. Each card already draws
+							// itself without a control when it is given none — a pending
+							// card that offers nothing is the truth here, not the dead end
+							// it would be in a live session. The question card is the one
+							// that needs this: its status comes from the records, not from
+							// the turn, so "Answer this" otherwise survives into a screen
+							// whose answer panel is not rendered at all. The other two are
+							// the same statement made where it cannot drift.
+							onPermissionRespond={
+								isReadOnly ? undefined : handlePermissionRespond
+							}
+							onAnswerQuestion={isReadOnly ? undefined : handleAnswerQuestion}
+							onHintClick={isReadOnly ? undefined : handleSend}
+							isReadOnly={isReadOnly}
+							promptError={promptError ?? undefined}
+							onOpenWorkDetail={onOpenWorkDetail}
+							onOpenFile={onOpenFile}
+							forkedFromSessionId={forkedFromSessionId}
+							onOpenSession={onSelectSession}
+							// Forking without a way to open the result would leave the user in
+							// the parent with no sign anything happened, so the menu waits for
+							// a host that can navigate. Today that withholds the whole slot,
+							// fork being the only row in the menu; a second action needing no
+							// navigation would move this gate onto fork's own row instead
+							// (docs/session-fork-ui.md, "Which rows reserve a slot").
+							onForkMessage={
+								!isReadOnly && onSelectSession && forkSupport !== "none"
+									? handleStartFork
+									: undefined
+							}
+						/>
+					</div>
+					{!isReadOnly && answerPanelOpen && (
+						<AnswerPanel
+							sessionId={sessionId}
+							unanswered={unanswered}
+							anchorRequestId={answerAnchor?.requestId}
+							takeFocus={answerAnchor !== null}
+							onSend={handleSendAnswers}
+							onClose={handleCloseAnswerPanel}
+						/>
+					)}
+				</div>
 			);
 		}
 
@@ -641,7 +823,13 @@ function ChatPanel({
 					<AttentionStrip
 						turn={turn}
 						onJumpToRequest={handleJumpToRequest}
-						onAnswer={handleOpenAnswerSheet}
+						onAnswer={handleOpenAnswerPanel}
+						// Driven by the same flag that draws the panel, so the row goes
+						// and the panel appears in one frame. Told rather than derived
+						// inside the strip: a frame where both are on screen moves the
+						// composer down and straight back up, and one open is then two
+						// visible jumps.
+						answerPanelOpen={answerPanelOpen}
 						sendPending={isSendPending}
 					/>
 				)}
@@ -737,18 +925,6 @@ function ChatPanel({
 							handleFork(forkAnchor.anchorSeq, title, forkAnchor.droppedText)
 						}
 						onClose={handleCloseFork}
-					/>
-				)}
-				{/* Mounted under the panel, so a session switch takes it with it. Not
-				    rendered behind an overlay: the overlay has replaced the transcript
-				    the sheet belongs to. */}
-				{!overlay && !isReadOnly && answerAnchor && (
-					<AnswerSheet
-						sessionId={sessionId}
-						unanswered={unanswered}
-						anchorRequestId={answerAnchor.requestId}
-						onSend={handleSendAnswers}
-						onClose={handleCloseAnswerSheet}
 					/>
 				)}
 				{!isInputBarHidden(overlay) &&

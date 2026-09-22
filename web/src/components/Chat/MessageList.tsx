@@ -37,7 +37,7 @@ const HIGHLIGHT_CLASS = "jump-highlight";
 //
 // A permission request is the only kind of card this reaches, because it is the
 // only thing left that holds a turn up and therefore the only thing the strip
-// names by request id. A posted question is reached by the answer sheet instead,
+// names by request id. A posted question is reached by the answer panel instead,
 // which is where answering happens — there is deliberately no jump to a question
 // card (docs/answering-ui.md §8).
 function findRequestCard(
@@ -180,7 +180,7 @@ interface Props {
 	) => void;
 	/** Sends a message; used by the empty state's hints. */
 	onHintClick?: (hint: string) => void;
-	/** Opens the answer sheet on one question; see `QuestionRecordItem`. */
+	/** Opens the answer panel on one question; see `QuestionRecordItem`. */
 	onAnswerQuestion?: (requestId: string) => void;
 	promptError?: PromptError;
 	onOpenWorkDetail?: (workId: string) => void;

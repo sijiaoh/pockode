@@ -421,7 +421,7 @@ re-implement it: the scroll container is there, and a second implementation of a
 scroll-and-highlight is a second set of edge cases.
 
 It is the **only** jump left on this strip, and the only one in the app: the
-question row's action opens the answer sheet instead, and the pending-question
+question row's action opens the answer panel instead, and the pending-question
 pill is deleted, because both existed to reach the place answering happened and
 answering does not happen in the transcript any more
 ([answering-ui.md](answering-ui.md)). A question record card therefore carries no
@@ -517,7 +517,7 @@ card and Stop — both on screen, and Stop is measured to land even from under a
 request — and the strip states them on the line above the composer (§2.2), because
 a greyed Send that says nothing is the silent failure the project forbids. The
 same refusal covers an *answer* submitted while a permission request is open,
-which is why the strip ranks permission above questions and why the answer sheet
+which is why the strip ranks permission above questions and why the answer panel
 reports that refusal rather than swallowing it
 ([answering-ui.md §7](answering-ui.md#7-edge-cases)).
 
@@ -699,7 +699,7 @@ All of it is gone, and the reason is worth keeping: **that design existed becaus
 a question was owned by a process.** It is owned by the session now. A process
 dying, a lease running out and a work being stopped no longer end anything — the
 question is still in the session's unanswered list when the next process starts,
-and the answer sheet still offers it. What replaced "send it as a message" is
+and the answer panel still offers it. What replaced "send it as a message" is
 that the real answer path never became unavailable.
 
 Two of the three endings survive under other names and are not expiry:
@@ -838,15 +838,17 @@ place the redesign is trying to separate them.
   free-text box, no per-question buttons. Answering is a conversation — it
   produces a message in a session, the agent replies in that session, and half
   the reason to answer at all is to see what happens next. A form here would be a
-  second answer path to keep in step with the sheet, on a page with no transcript
+  second answer path to keep in step with the panel, on a page with no transcript
   to show the result in.
 
   One **Answer** button for the block, and only when the work has a
-  `session_id`. It navigates to the chat *and* opens the sheet, anchored to the
-  first question — the one case in the app where arriving somewhere opens a sheet,
-  because the tap that got there said "answer", not "show me this conversation"
-  ([answering-ui.md §4](answering-ui.md#4-where-the-sheet-is-opened-from)). The
-  plain `Open Chat` control beside it is unchanged and never opens the sheet.
+  `session_id`. It navigates to the chat and names the first question, which is
+  what the answer panel anchors and reads itself out on — the panel puts itself
+  up on arrival either way, so what this button carries is *which* question, the
+  one thing showing itself cannot work out
+  ([answering-ui.md §4](answering-ui.md#4-when-the-panel-is-up)). The plain
+  `Open Chat` control beside it is unchanged: it names no question, so the panel
+  comes up on the oldest one and takes no focus.
 - Children section header gains an active count — "{n} active" — whenever any
   child is `active`. This is what makes both §7 rejections legible without a
   second explanation: it is the same count each of them turns on, and "0 active"
@@ -977,7 +979,7 @@ a user who stopped one subtask restart two things.
 | Message sent a moment before a request appears | the accepted message takes the card off screen and the turn is left waiting for an answer nobody can give. Stop recovers it — the half of the strip's advice that survives the card going away, and measured to land from under a request. The window is between the server's check and the prompt reaching the turn state, is milliseconds wide, and is accepted on purpose rather than closed with a lock spanning the CLI's stdin (`session.ReduceTurn`, `SignalPrompt`) |
 | Send refused because a request is on screen | the reason is reported as a bubble directly under the message it refused, not at the end of a transcript that may have moved on since. A refusal shown nowhere would leave the message looking delivered, which is the failure shape §2.3 forbids |
 | Work stopped by the nudge limit | `stopped`, plus the engine's comment saying so. Chat shows nothing extra — the transcript already ends where the agent stopped answering |
-| Work closed, or its step advanced, while a question is unanswered | The engine cancels it; the card reads `Cancelled` and says the agent's work moved on. The sheet's block behaves as a withdrawal ([answering-ui.md §7](answering-ui.md#7-edge-cases)) |
+| Work closed, or its step advanced, while a question is unanswered | The engine cancels it; the card reads `Cancelled` and says the agent's work moved on. The panel's block behaves as a withdrawal ([answering-ui.md §7](answering-ui.md#7-edge-cases)) |
 | Work stopped by the user while a question is unanswered | Nothing happens to the question. Stop hands the work to a person, and the question is one of the things that person may want to answer. Its detail page still shows it (§6.2), and answering it reactivates the work the way any message does — there is no restart prompt in the way, which is the existing rule rather than a new one |
 | Server restart with a blocked turn | blockers expire on process death and are written to history, so on reconnect the permission cards read Expired and the composer is live. Unanswered questions are untouched: they are turn state on disk, not a blocker, and they are still listed when the next process starts |
 | `activity` the client does not know | normalised to `idle` at the wire boundary; an unknown state must not blank a row |
@@ -1015,7 +1017,7 @@ Three of `web/tests/`'s scans read this work without being told to, and two new
 controls are what they will land on:
 
 - **Hit areas.** The attention strip's trailing actions ("Jump to request",
-  "Answer", "Details"), the answer sheet's option rows and its per-question
+  "Answer", "Details"), the answer panel's option rows and its per-question
   "Won't answer" checkbox, and the list row's Restart button are interactive and
   must clear the floor in
   [responsive-ui.md](responsive-ui.md#hit-areas-and-spacing). The row's button is
@@ -1023,8 +1025,8 @@ controls are what they will land on:
   the register's deferred list at all. The strip's actions carry text, so they owe
   only the height — `touch-target` over a `text-xs` line, which is the shape the
   strip already uses and the one thing worth keeping from the pill it replaced.
-  The sheet's option rows are the exception and take a real
-  `pointer-coarse:min-h-11` box rather than an overlay: a sheet has room to grow
+  The panel's option rows are the exception and take a real
+  `pointer-coarse:min-h-11` box rather than an overlay: a panel has room to grow
   the box, and a real box is always simpler.
 - **Indicators are not controls.** `ActivityIcon` and `ActivityDot` render no
   button and take no handler anywhere in this design; a 12px glyph that could be
@@ -1045,9 +1047,9 @@ controls are what they will land on:
 | `web/src/components/ui/StatusIcon.tsx`, `StatusBadge.tsx` | deleted |
 | `web/src/components/common/SidebarListItem.tsx` | `activity` + `unread` replace three booleans. It is a `web` component, not a `@pockode/shared` one — `web-cluster` has no sessions and no work, so nothing here is shared code |
 | `web/src/components/Session/SessionItem.tsx` | looks the row's own `work_id` up in `workStore` and passes `sessionActivity` (§1.2) |
-| `web/src/components/Chat/ChatPanel.tsx` | `turn.phase` replaces `isStreaming`; mounts the attention strip and the answer sheet |
+| `web/src/components/Chat/ChatPanel.tsx` | `turn.phase` replaces `isStreaming`; mounts the attention strip and the answer panel |
 | `web/src/components/Chat/AttentionStrip.tsx` | renamed from `BlockerStrip.tsx` — §2.2 |
-| `web/src/components/Chat/AnswerSheet.tsx` | new — [answering-ui.md §3](answering-ui.md#3-the-answer-sheet) |
+| `web/src/components/Chat/AnswerPanel.tsx` | new — [answering-ui.md §3](answering-ui.md#3-the-answer-panel) |
 | `web/src/components/Chat/QuestionRecordItem.tsx` | replaces `AskUserQuestionItem.tsx` — a record card: four states, no form ([answering-ui.md §6](answering-ui.md#6-the-record-card-in-the-stream)) |
 | `web/src/components/Chat/MessageItem.tsx` | permission card's expired banners |
 | `web/src/hooks/useChatMessages.ts` | `isProcessRunning` bookkeeping replaced by §2.4 |

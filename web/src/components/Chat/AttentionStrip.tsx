@@ -7,11 +7,20 @@ interface Props {
 	/** Scrolls the transcript to the card that is holding the turn up. */
 	onJumpToRequest: (requestId: string) => void;
 	/**
-	 * Opens the answer sheet. The strip is the one entry point to it that is
-	 * always on screen, which is why this row's action is a button rather than
-	 * the underlined text the other three wear.
+	 * Opens the answer panel. The strip is the one way back into it once it has
+	 * been closed, which is why this row's action is a button rather than the
+	 * underlined text the other three wear.
 	 */
 	onAnswer?: () => void;
+	/**
+	 * Whether the answer panel is up. Its row then does not exist: the panel is
+	 * already that sentence, in full and on screen, and this row would be it
+	 * said twice — with a button that reopens what is open.
+	 *
+	 * Passed in rather than worked out here, so the row and the panel change in
+	 * the same frame (docs/answering-ui.md).
+	 */
+	answerPanelOpen?: boolean;
 	/**
 	 * A typed message went into a turn that was already running. The only receipt
 	 * it gets: the reply above it keeps growing and nothing new appears under it,
@@ -82,6 +91,7 @@ function AttentionStrip({
 	turn,
 	onJumpToRequest,
 	onAnswer,
+	answerPanelOpen,
 	sendPending,
 }: Props) {
 	const [expanded, setExpanded] = useState(false);
@@ -140,8 +150,10 @@ function AttentionStrip({
 	// exists to explain a disabled Send; there is no disabled control here, so a
 	// sentence would be inventing a restriction in order to explain it.
 	//
-	// At zero the row does not exist. No "nothing to answer", no empty frame.
-	if (unanswered > 0 && onAnswer) {
+	// At zero the row does not exist. No "nothing to answer", no empty frame —
+	// and none held open for the panel either, which is why the panel being up
+	// takes the row away rather than blanking it.
+	if (unanswered > 0 && onAnswer && !answerPanelOpen) {
 		return (
 			<div className={STRIP_FRAME}>
 				<div className={STRIP_LINE}>

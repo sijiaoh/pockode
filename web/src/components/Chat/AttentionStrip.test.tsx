@@ -177,6 +177,74 @@ describe("AttentionStrip", () => {
 			).not.toBeInTheDocument();
 		});
 
+		// The panel is that sentence already, said in full. The row comes back
+		// intact the moment the panel is closed, which is what makes its Answer
+		// button the one way back in.
+		it("stands down while the answer panel is up, and returns when it closes", () => {
+			const { rerender } = render(
+				<AttentionStrip
+					turn={{ ...turn("idle"), unanswered: unanswered(2) }}
+					onJumpToRequest={vi.fn()}
+					onAnswer={vi.fn()}
+					answerPanelOpen
+				/>,
+			);
+			expect(
+				screen.queryByText("2 questions are waiting for your answer."),
+			).not.toBeInTheDocument();
+			expect(
+				screen.queryByRole("button", { name: "Answer" }),
+			).not.toBeInTheDocument();
+
+			rerender(
+				<AttentionStrip
+					turn={{ ...turn("idle"), unanswered: unanswered(2) }}
+					onJumpToRequest={vi.fn()}
+					onAnswer={vi.fn()}
+					answerPanelOpen={false}
+				/>,
+			);
+			expect(
+				screen.getByText("2 questions are waiting for your answer."),
+			).toBeInTheDocument();
+			expect(
+				screen.getByRole("button", { name: "Answer" }),
+			).toBeInTheDocument();
+		});
+
+		// Standing down is not a blank frame held open for the panel: the whole
+		// strip goes, and the composer moves up by that one line.
+		it("leaves no empty frame behind when it stands down", () => {
+			const { container } = render(
+				<AttentionStrip
+					turn={{ ...turn("idle"), unanswered: unanswered(1) }}
+					onJumpToRequest={vi.fn()}
+					onAnswer={vi.fn()}
+					answerPanelOpen
+				/>,
+			);
+			expect(container).toBeEmptyDOMElement();
+		});
+
+		// The panel says nothing about a permission request, so the row that does
+		// is unaffected by it being up.
+		it("still speaks for a permission request while the panel is up", () => {
+			render(
+				<AttentionStrip
+					turn={{
+						...turn("blocked", [permission]),
+						unanswered: unanswered(1),
+					}}
+					onJumpToRequest={vi.fn()}
+					onAnswer={vi.fn()}
+					answerPanelOpen
+				/>,
+			);
+			expect(
+				screen.getByText(/Waiting for your permission\./),
+			).toBeInTheDocument();
+		});
+
 		// It is the one row with something to *do* that is not already on screen.
 		it("outranks the send receipt", () => {
 			render(

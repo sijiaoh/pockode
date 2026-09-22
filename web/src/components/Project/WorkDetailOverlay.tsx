@@ -16,7 +16,7 @@ import { useRoleNameMap } from "../../hooks/useRoleNameMap";
 import { useWorkDetailSubscription } from "../../hooks/useWorkDetailSubscription";
 import type { Activity } from "../../lib/activity";
 import { useAgentRoleStore } from "../../lib/agentRoleStore";
-import { requestAnswerSheet } from "../../lib/answerIntent";
+import { requestAnswerPanel } from "../../lib/answerIntent";
 import { useWSStore } from "../../lib/wsStore";
 import type { AgentRole } from "../../types/agentRole";
 import type { PendingQuestion } from "../../types/message";
@@ -365,7 +365,7 @@ function WaitLine({ work }: { work: Work }) {
  *
  * Read-only on purpose. Answering is a conversation — the user has to see what
  * happens next — so a form here would be a second answering path on a page with
- * no transcript to watch. The button navigates to the chat and opens the sheet
+ * no transcript to watch. The button navigates to the chat and opens the panel
  * there, which is the one surface that answers.
  *
  * Shown whenever the list is non-empty, under any status. That is a shorter
@@ -388,10 +388,12 @@ function PendingQuestionsSection({
 
 	const handleAnswer = () => {
 		if (!sessionId) return;
-		// The intent, not the destination, is what opens the sheet: `Open Chat`
-		// below leads to the same place and never opens it. One-shot and not a
-		// URL, so a reload of that chat does not re-open it.
-		requestAnswerSheet({
+		// The chat shows the panel by itself; what this adds is the question the
+		// user pressed on — scrolled to, and read out. `Open Chat` below leads to
+		// the same place, names none, and gets the oldest one without the caret
+		// moving. One-shot and not a URL, so a reload of that chat does not
+		// re-fire it.
+		requestAnswerPanel({
 			sessionId,
 			requestId: questions[0].request_id,
 		});
