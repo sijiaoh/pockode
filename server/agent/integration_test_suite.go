@@ -12,11 +12,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/pockode/server/session"
 )
 
-// A single real turn that calls a tool routinely takes 45-55s, so a 60s budget
-// fails on latency rather than on behaviour.
+// Generous on purpose: this only ever decides how a stuck run is reported, and a
+// budget picked close to the measured times (a turn that calls a tool ran 7-8s on
+// claude and 18-26s on codex) would turn a loaded machine into a red suite.
 const integrationTimeout = 120 * time.Second
 
 // IntegrationTestOptions carries the few behaviours the suite cannot require of
@@ -26,13 +29,58 @@ type IntegrationTestOptions struct {
 	// interrupted event rather than a plain done. Opt-in because only some CLIs
 	// report the denial as an abort.
 	DenyEndsInterrupted bool
+
+	// ForkedSessions, when set, is called at the end of the fork-from-the-middle
+	// scenario. Forking is an Agent contract and the experiment is the same for
+	// every CLI, but where each of the two sessions goes on living is recorded in
+	// a form only that CLI's own package can read — a provider session id, a
+	// thread id — so that half is checked there.
+	ForkedSessions func(t *testing.T, check ForkCheck)
+
+	// StreamsCommandOutput requires a foreground command that prints something
+	// to report that output as tool activity while it is still running. It also
+	// picks which command the chat scenario runs, because a CLI can only stream
+	// output it has not already finished producing — see runChatTests for the
+	// shape that leaves something to stream.
+	//
+	// Opt-in because only some CLIs stream a running call at all: Claude reports
+	// progress for a subagent and never for a shell command, background or
+	// foreground, so requiring it of an ordinary bash call would fail there for
+	// a reason that is not a defect — its own package requires the event on a
+	// turn that runs a subagent instead. The CLIs that do stream need it
+	// required somewhere, because tool activity is the one event Pockode
+	// broadcasts without recording: a renamed field stops the UI's
+	// long-running row from updating and nothing anywhere reports an error.
+	StreamsCommandOutput bool
+}
+
+// ForkCheck names what a CLI needs to look up its own record of the fork the
+// shared scenario has just taken.
+type ForkCheck struct {
+	DataDir         string
+	SourceSessionID string
+	ForkSessionID   string
+
+	// ForkQuestion is the prompt only the forked session was sent, and
+	// PostForkTurn the prompt the source alone was sent after the fork was
+	// taken. A CLI that can read the source's own transcript can look for both
+	// there: the question appearing in it means the fork's turn was written into
+	// the source's conversation, and the post-fork prompt missing from it means
+	// the source lost the turn it took after being forked from.
+	//
+	// Whole prompts rather than the words they carry, because the scenario goes
+	// on to ask the source to name every word it was given: its answer puts all
+	// three of them back into the transcript, so searching for one of the words
+	// would find it whether or not the turn that introduced it survived.
+	ForkQuestion string
+	PostForkTurn string
 }
 
 // RunIntegrationTests runs the full integration test suite for any Agent implementation.
 // Tests run sequentially to avoid overloading the system with too many Claude CLI processes.
 func RunIntegrationTests(t *testing.T, newAgent func() Agent, opts IntegrationTestOptions) {
 	t.Run("Chat", func(t *testing.T) {
-		runChatTests(t, newAgent)
+		runChatTests(t, newAgent, opts)
 	})
 	t.Run("PermissionAllow", func(t *testing.T) {
 		testPermissionAllow(t, newAgent())
@@ -49,6 +97,9 @@ func RunIntegrationTests(t *testing.T, newAgent func() Agent, opts IntegrationTe
 	t.Run("MultiTurn", func(t *testing.T) {
 		testMultiTurn(t, newAgent())
 	})
+	t.Run("ForkFromTheMiddle", func(t *testing.T) {
+		testForkFromTheMiddle(t, newAgent, opts)
+	})
 	t.Run("YoloNoPermission", func(t *testing.T) {
 		testYoloNoPermission(t, newAgent())
 	})
@@ -63,9 +114,6 @@ func RunIntegrationTests(t *testing.T, newAgent func() Agent, opts IntegrationTe
 	})
 	t.Run("InterruptWhileBlocked", func(t *testing.T) {
 		testInterruptWhileBlocked(t, newAgent())
-	})
-	t.Run("Usage", func(t *testing.T) {
-		testUsage(t, newAgent())
 	})
 }
 
@@ -124,147 +172,96 @@ func (c *usageCollector) snapshot(t *testing.T) (session.Usage, int) {
 	return meta.Usage, reports
 }
 
-// testUsage verifies that a real CLI's own accounting reaches the session store:
-// that something is reported at all, that a second turn adds to the stored total
-// instead of replacing it, and that the context window is reported.
+// checkTurnUsage asserts everything one turn's accounting has to satisfy on its
+// own and returns the stored total, which the caller compares across turns.
 //
-// The figures are read back out of a real session store rather than summed by the
-// test, so the accumulation rules are the ones that actually run.
-//
-// Two turns rather than one, because the failure this guards against is silent
-// with one: both CLIs report cumulative totals, so a second turn storing the
-// reported figure instead of the increment looks perfectly plausible until the
-// numbers are compared across turns.
-//
-// The assertions are all "more than nothing" and "more than before" — the exact
-// figures belong to the model and the prompt, and pinning them would make this
-// test fail on a price change or a system prompt edit.
-func testUsage(t *testing.T, a Agent) {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*integrationTimeout)
-	defer cancel()
+// Every failure here is an Errorf, never a Fatalf: this shares its two turns with
+// an assertion about the conversation itself, and a fatal would end the scenario
+// before that one was ever reached — so broken accounting would leave no verdict
+// at all on whether the second message continued the conversation. The two
+// claims are independent and each has to be able to fail on its own.
+func checkTurnUsage(t *testing.T, collector *usageCollector, turn int) session.Usage {
+	t.Helper()
 
-	collector := newUsageCollector(t)
-	sess, err := a.Start(ctx, StartOptions{
-		WorkDir:    t.TempDir(),
-		DataDir:    t.TempDir(),
-		DisableMCP: true,
-		OnUsage:    collector.collect,
-	})
-	if err != nil {
-		t.Fatalf("Start failed: %v", err)
+	usage, reports := collector.snapshot(t)
+	t.Logf("usage after turn %d: %d reports, %+v", turn, reports, usage)
+
+	if reports == 0 {
+		t.Errorf("usage: turn %d reported no usage at all", turn)
 	}
-	defer sess.Close()
-
-	var afterFirstTurn session.Usage
-	turn := 1
-
-	if err := sess.SendMessage("Reply with just the word one."); err != nil {
-		t.Fatalf("SendMessage failed: %v", err)
+	if usage.Total() == 0 {
+		t.Errorf("usage: turn %d counted no tokens: %+v", turn, usage)
 	}
-
-	for {
-		select {
-		case event, ok := <-sess.Events():
-			if !ok {
-				t.Fatalf("channel closed during turn %d", turn)
-			}
-			switch e := event.(type) {
-			case ErrorEvent:
-				t.Fatalf("turn %d error event: %s", turn, e.Error)
-			case DoneEvent:
-				usage, reports := collector.snapshot(t)
-				t.Logf("turn %d: %d reports, usage %+v", turn, reports, usage)
-
-				if reports == 0 {
-					t.Fatalf("turn %d reported no usage at all", turn)
-				}
-				if usage.Total() == 0 {
-					t.Fatalf("turn %d counted no tokens: %+v", turn, usage)
-				}
-				if usage.OutputTokens == 0 {
-					t.Errorf("turn %d counted no output tokens: %+v", turn, usage)
-				}
-				if usage.ContextWindow == 0 {
-					t.Error("no context window reported")
-				}
-				if usage.ContextTokens == 0 {
-					t.Error("no context size reported")
-				}
-				if usage.ContextTokens > usage.ContextWindow {
-					t.Errorf("context %d exceeds the window %d", usage.ContextTokens, usage.ContextWindow)
-				}
-
-				if turn == 2 {
-					if usage.Total() <= afterFirstTurn.Total() {
-						t.Errorf("second turn added nothing: %d tokens after turn 1, %d after turn 2 — "+
-							"the CLI's cumulative total is being stored instead of its increment",
-							afterFirstTurn.Total(), usage.Total())
-					}
-					return
-				}
-
-				afterFirstTurn = usage
-				turn = 2
-				if err := sess.SendMessage("Now reply with just the word two."); err != nil {
-					t.Fatalf("SendMessage failed for the second turn: %v", err)
-				}
-			}
-
-		case <-ctx.Done():
-			t.Fatalf("timeout during turn %d", turn)
-		}
+	if usage.OutputTokens == 0 {
+		t.Errorf("usage: turn %d counted no output tokens: %+v", turn, usage)
 	}
+	if usage.ContextWindow == 0 {
+		t.Errorf("usage: turn %d reported no context window", turn)
+	}
+	if usage.ContextTokens == 0 {
+		t.Errorf("usage: turn %d reported no context size", turn)
+	}
+	if usage.ContextTokens > usage.ContextWindow {
+		t.Errorf("usage: turn %d context %d exceeds the window %d", turn, usage.ContextTokens, usage.ContextWindow)
+	}
+	return usage
 }
 
+// chatCase is one session that has to produce a set of events before its turn
+// ends. A set rather than one event, because a prompt that draws two of them
+// draws both in the same turn: asserting them one session each pays twice for
+// the same conversation.
 type chatCase struct {
-	name string
-	// prompt is built per run because the approval cases need a fresh
-	// out-of-sandbox path that only that run may write to.
-	prompt     func(t *testing.T) string
-	expectType EventType
-	mode       session.Mode
+	name        string
+	prompt      string
+	expectTypes []EventType
 }
 
-func staticPrompt(prompt string) func(*testing.T) string {
-	return func(*testing.T) string { return prompt }
-}
+func runChatTests(t *testing.T, newAgent func() Agent, opts IntegrationTestOptions) {
+	// A bash call is a tool call and its result, so the turn that runs one is
+	// also where a streaming CLI owes a tool activity: the event needs no second
+	// conversation to appear.
+	//
+	// What it does need is a command that is still running after it has printed.
+	// `echo hi` never is: measured against codex-cli 0.153.0, a command that
+	// finishes at once carries its whole output on the completion frame and
+	// sends no delta whatsoever — in every approval mode, and whether or not the
+	// sandbox escalated, since none of those change the execution path. What
+	// changes it is having output to report while the command still holds the
+	// call open, so the prompt below prints a line and then goes on sleeping.
+	// Printing everything and *then* sleeping would not do: the last line of a
+	// run is folded into the completion frame the same way (three lines a second
+	// apart produced two deltas, not three), which is also why five lines rather
+	// than the three that were measured — the count is margin, not a threshold.
+	//
+	// The CLIs that owe no activity keep `echo hi`: the sleeps buy them nothing
+	// and every second of them is paid on every run.
+	commandPrompt := "Run this exact bash command: echo hi"
+	commandEvents := []EventType{EventTypeToolCall, EventTypeToolResult}
+	if opts.StreamsCommandOutput {
+		commandPrompt = `Run this exact bash command: for i in 1 2 3 4 5; do echo "line $i"; sleep 1; done`
+		commandEvents = append(commandEvents, EventTypeToolActivity)
+	}
 
-func runChatTests(t *testing.T, newAgent func() Agent) {
 	cases := []chatCase{
 		{
-			name:       "TextEvent",
-			prompt:     staticPrompt("Hi"),
-			expectType: EventTypeText,
+			name:        "TextEvent",
+			prompt:      "Hi",
+			expectTypes: []EventType{EventTypeText},
 		},
 		{
-			name:       "ToolCallEvent",
-			prompt:     staticPrompt("Run this exact bash command: echo hi"),
-			expectType: EventTypeToolCall,
+			name:        "ToolCallAndResultEvents",
+			prompt:      commandPrompt,
+			expectTypes: commandEvents,
 		},
-		{
-			name:       "ToolResultEvent",
-			prompt:     staticPrompt("Run this exact bash command: echo hi"),
-			expectType: EventTypeToolResult,
-		},
-		{
-			name: "PermissionRequestEvent",
-			prompt: func(t *testing.T) string {
-				return escapeSandboxPrompt(newApprovalTarget(t))
-			},
-			expectType: EventTypePermissionRequest,
-		},
-		{
-			name:       "ToolCallEvent/yolo",
-			prompt:     staticPrompt("Run this exact bash command: echo hi"),
-			expectType: EventTypeToolCall,
-			mode:       session.ModeYolo,
-		},
-		{
-			name:       "ToolResultEvent/yolo",
-			prompt:     staticPrompt("Run this exact bash command: echo hi"),
-			expectType: EventTypeToolResult,
-			mode:       session.ModeYolo,
-		},
+		// PermissionRequestEvent has no case of its own: the prompt and the
+		// response would be testPermissionAllow's, which already asserts the
+		// event and then checks what answering it did.
+		//
+		// Nor do the two tool events have a yolo variant here. The mode changes
+		// whether a call is asked about, not what a call looks like, and
+		// testYoloNoPermission runs a tool call in yolo mode already — so it
+		// asserts the two events on the turn it was going to run anyway.
 	}
 
 	for _, tc := range cases {
@@ -275,56 +272,62 @@ func runChatTests(t *testing.T, newAgent func() Agent) {
 }
 
 func runChatScenario(t *testing.T, a Agent, tc chatCase) {
-	prompt := tc.prompt(t)
-
 	ctx, cancel := context.WithTimeout(context.Background(), integrationTimeout)
 	defer cancel()
 
-	sess, err := a.Start(ctx, StartOptions{WorkDir: t.TempDir(), DataDir: t.TempDir(), Mode: tc.mode, DisableMCP: true})
+	sess, err := a.Start(ctx, StartOptions{WorkDir: t.TempDir(), DataDir: t.TempDir(), DisableMCP: true})
 	if err != nil {
 		t.Fatalf("Start failed: %v", err)
 	}
 	defer sess.Close()
 
-	if err := sess.SendMessage(prompt); err != nil {
+	if err := sess.SendMessage(tc.prompt); err != nil {
 		t.Fatalf("SendMessage failed: %v", err)
 	}
 
-	found := false
+	seen := make(map[EventType]bool, len(tc.expectTypes))
+	missing := func() []EventType {
+		var out []EventType
+		for _, want := range tc.expectTypes {
+			if !seen[want] {
+				out = append(out, want)
+			}
+		}
+		return out
+	}
 
 	for {
 		select {
 		case event, ok := <-sess.Events():
 			if !ok {
-				if !found {
-					t.Fatalf("channel closed before %s event received", tc.expectType)
+				if left := missing(); len(left) > 0 {
+					t.Fatalf("channel closed before %v received", left)
 				}
 				return
 			}
 
-			requireFields(t, event)
+			RequireEventFields(t, event)
 			t.Logf("event: %s", event.EventType())
-
-			if event.EventType() == tc.expectType {
-				found = true
-			}
+			seen[event.EventType()] = true
 
 			switch e := event.(type) {
 			case PermissionRequestEvent:
+				// Not asserted here, but a tool call in the default mode may be
+				// asked about, and an unanswered request never ends the turn.
 				if err := sess.SendPermissionResponse(permissionDataFromEvent(e), PermissionAllow); err != nil {
 					t.Fatalf("failed to send permission response: %v", err)
 				}
 			case ErrorEvent:
 				t.Fatalf("error event: %s", e.Error)
 			case DoneEvent:
-				if !found {
-					t.Fatalf("DoneEvent reached but %s event never received", tc.expectType)
+				if left := missing(); len(left) > 0 {
+					t.Fatalf("DoneEvent reached but %v never received", left)
 				}
 				return
 			}
 
 		case <-ctx.Done():
-			t.Fatalf("timeout waiting for %s event", tc.expectType)
+			t.Fatalf("timeout waiting for %v", missing())
 		}
 	}
 }
@@ -412,7 +415,7 @@ eventLoop:
 			if !ok {
 				break eventLoop
 			}
-			requireFields(t, event)
+			RequireEventFields(t, event)
 			switch e := event.(type) {
 			case ToolCallEvent:
 				out.toolCalls++
@@ -566,7 +569,7 @@ eventLoop:
 			if !ok {
 				break eventLoop
 			}
-			requireFields(t, event)
+			RequireEventFields(t, event)
 			t.Logf("event: %s", event.EventType())
 
 			switch e := event.(type) {
@@ -609,17 +612,43 @@ eventLoop:
 	t.Logf("summary: refusal warnings=%d, done=%d", refusalWarnings, dones)
 }
 
-// testMultiTurn verifies that a second message continues the same conversation.
+// testMultiTurn verifies that a second message continues the same conversation,
+// and on the same two turns that a real CLI's own accounting reaches the session
+// store: that something is reported at all, that a second turn adds to the
+// stored total instead of replacing it, and that the context window is reported.
 //
-// Every other test sends a single message, which is why a CLI renaming the
-// identifier that routes follow-up turns can break every conversation without a
-// single test failing: the reply is rejected inside a successful response, so
-// the turn still ends in a plain done event.
+// Two claims in one scenario because both need exactly the same thing — a tiny
+// two-turn conversation — and differ only in what they read off it. The
+// conversation half is why a second message is sent at all: every other test
+// sends a single message, which is why a CLI renaming the identifier that
+// routes follow-up turns can break every conversation without a single test
+// failing, since the reply is rejected inside a successful response and the turn
+// still ends in a plain done event. The accounting half needs the second turn
+// for its own reason: both CLIs report cumulative totals, so a second turn
+// storing the reported figure instead of the increment looks perfectly
+// plausible until the numbers are compared across turns.
+//
+// Neither group can hide the other: the usage assertions are all non-fatal (see
+// checkTurnUsage) so a broken accounting still lets the conversation reach its
+// own verdict, and their messages are prefixed so a red run says which claim
+// broke. What does end the scenario early is the turn itself failing — an error
+// or an interrupt — and then there is no turn for either group to read. The
+// usage figures are read back out of a
+// real session store rather than summed here, so the accumulation rules are the
+// ones that actually run, and every usage assertion is "more than nothing" or
+// "more than before" — the exact figures belong to the model and the prompt, and
+// pinning them would make this fail on a price change or a system prompt edit.
 func testMultiTurn(t *testing.T, a Agent) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*integrationTimeout)
 	defer cancel()
 
-	sess, err := a.Start(ctx, StartOptions{WorkDir: t.TempDir(), DataDir: t.TempDir(), DisableMCP: true})
+	collector := newUsageCollector(t)
+	sess, err := a.Start(ctx, StartOptions{
+		WorkDir:    t.TempDir(),
+		DataDir:    t.TempDir(),
+		DisableMCP: true,
+		OnUsage:    collector.collect,
+	})
 	if err != nil {
 		t.Fatalf("Start failed: %v", err)
 	}
@@ -632,6 +661,7 @@ func testMultiTurn(t *testing.T, a Agent) {
 	const secondTurn = "What number did I ask you to remember? Reply with the number only."
 	turn := 1
 	var response strings.Builder
+	var afterFirstTurn session.Usage
 
 	for {
 		select {
@@ -639,7 +669,7 @@ func testMultiTurn(t *testing.T, a Agent) {
 			if !ok {
 				t.Fatalf("channel closed during turn %d", turn)
 			}
-			requireFields(t, event)
+			RequireEventFields(t, event)
 
 			switch e := event.(type) {
 			case TextEvent:
@@ -652,13 +682,25 @@ func testMultiTurn(t *testing.T, a Agent) {
 			case InterruptedEvent:
 				t.Fatalf("turn %d ended as interrupted", turn)
 			case DoneEvent:
+				usage := checkTurnUsage(t, collector, turn)
+
 				if turn == 2 {
+					// Only meaningful if turn 1 counted something. Comparing two
+					// zeros would report a second failure for the one cause
+					// checkTurnUsage has already named.
+					if afterFirstTurn.Total() > 0 && usage.Total() <= afterFirstTurn.Total() {
+						t.Errorf("usage: second turn added nothing: %d tokens after turn 1, %d after turn 2 — "+
+							"the CLI's cumulative total is being stored instead of its increment",
+							afterFirstTurn.Total(), usage.Total())
+					}
 					if !strings.Contains(response.String(), "31415") {
 						t.Errorf("second turn lost the conversation: expected the number back, got %q",
 							truncate(response.String(), 200))
 					}
 					return
 				}
+
+				afterFirstTurn = usage
 				turn = 2
 				if err := sess.SendMessage(secondTurn); err != nil {
 					t.Fatalf("SendMessage failed for the second turn: %v", err)
@@ -671,10 +713,138 @@ func testMultiTurn(t *testing.T, a Agent) {
 	}
 }
 
+// The words the fork experiment turns on. The source is given them in order and
+// the fork is taken after the first, so which of the three a session names is
+// the whole of what says where its conversation was cut.
+const (
+	forkKeptWord     = "BANANA"
+	forkDroppedWord  = "KIWI"
+	forkPostForkWord = "PAPAYA"
+)
+
+// forkQuestion is asked only of the fork and sourceQuestion only of the source.
+// Two wordings for one question, because forkQuestion is handed to
+// IntegrationTestOptions.ForkedSessions as the one text that exists nowhere but
+// in the fork's conversation: a single wording asked of both would sit in the
+// source's own record legitimately, and a CLI searching for it there could no
+// longer tell pollution from the source answering its own question.
+const (
+	forkQuestion   = "Which words were you told to remember? Name every single one of them."
+	sourceQuestion = "What words did I ask you to remember? List every one of them."
+)
+
+// postForkPrompt is the turn the source takes after the fork has been taken, and
+// the whole of it is what IntegrationTestOptions.ForkedSessions is handed — see
+// ForkCheck.PostForkTurn for why the word inside it would not do.
+const postForkPrompt = "Now also remember this word: " + forkPostForkWord + ". Reply with exactly: ok"
+
+// testForkFromTheMiddle is the check behind the two claims that make a fork
+// worth taking from anywhere in a conversation: the agent really does cut the
+// conversation it carries at the point the fork was taken from, and pinning the
+// cut to that point really does make a source whose process is still running —
+// and still adding to its own conversation — safe to fork from.
+//
+// It is in the shared suite because ForkSession is an Agent contract, not a
+// CLI's: the two halves are reached differently (Claude replays its provider
+// session with --resume-session-at, Codex asks for a `thread/fork` at a turn id)
+// and the experiment they have to pass is the same one. What only the CLI can
+// check — which conversation each session ends up on — is opts.ForkedSessions.
+func testForkFromTheMiddle(t *testing.T, newAgent func() Agent, opts IntegrationTestOptions) {
+	forker, ok := newAgent().(SessionForker)
+	if !ok {
+		t.Skip("this agent implements no SessionForker, so there is no fork to take")
+	}
+
+	// Four real turns on the source plus one on the fork.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*integrationTimeout)
+	defer cancel()
+
+	workDir := t.TempDir()
+	dataDir := t.TempDir()
+	sourceID := uuid.Must(uuid.NewV7()).String()
+
+	source, err := newAgent().Start(ctx, StartOptions{
+		WorkDir:    workDir,
+		DataDir:    dataDir,
+		SessionID:  sourceID,
+		Mode:       session.ModeYolo,
+		DisableMCP: true,
+	})
+	if err != nil {
+		t.Fatalf("Start source failed: %v", err)
+	}
+	defer source.Close()
+
+	kept := TurnOn(t, ctx, source, "Remember this word: "+forkKeptWord+". Reply with exactly: ok")
+	anchor := LastProviderMessageID(kept.Records)
+	if anchor == "" {
+		t.Fatal("no event in the turn carried an id the fork could be cut at")
+	}
+	dropped := TurnOn(t, ctx, source, "Now also remember this word: "+forkDroppedWord+". Reply with exactly: ok")
+	if LastProviderMessageID(dropped.Records) == anchor {
+		t.Fatal("the second turn reused the first turn's id, so the cut proves nothing")
+	}
+
+	// The history the fork gets, in the form chat.Client.Fork hands it over: the
+	// source's records up to the anchor. The source process is still up and has
+	// already written past that point.
+	forkID := uuid.Must(uuid.NewV7()).String()
+	carried, err := forker.ForkSession(ctx, ForkOptions{
+		WorkDir:         workDir,
+		DataDir:         dataDir,
+		SourceSessionID: sourceID,
+		SessionID:       forkID,
+		History:         kept.Records,
+	})
+	if err != nil {
+		t.Fatalf("ForkSession: %v", err)
+	}
+	if !carried {
+		t.Fatal("a fork with a message to cut at reported no carried context")
+	}
+
+	// The source keeps talking after the fork was taken. Nothing it says now may
+	// reach the new session either.
+	TurnOn(t, ctx, source, postForkPrompt)
+
+	said := RunPrompt(t, newAgent(), workDir, dataDir, forkID, true, forkQuestion)
+	if !strings.Contains(said, forkKeptWord) {
+		t.Fatalf("the fork did not remember the conversation up to the cut, it said: %s", said)
+	}
+	for _, past := range []string{forkDroppedWord, forkPostForkWord} {
+		if strings.Contains(said, past) {
+			t.Fatalf("the fork knows %s, which the source said after the cut; it said: %s", past, said)
+		}
+	}
+
+	// The source is untouched by any of it, the fork's own turn included — which
+	// is why this is asked after that turn and not before it.
+	said = TurnOn(t, ctx, source, sourceQuestion).Said
+	for _, word := range []string{forkKeptWord, forkDroppedWord, forkPostForkWord} {
+		if !strings.Contains(said, word) {
+			t.Errorf("the source lost %s from its own conversation, it said: %s", word, said)
+		}
+	}
+
+	if opts.ForkedSessions != nil {
+		opts.ForkedSessions(t, ForkCheck{
+			DataDir:         dataDir,
+			SourceSessionID: sourceID,
+			ForkSessionID:   forkID,
+			ForkQuestion:    forkQuestion,
+			PostForkTurn:    postForkPrompt,
+		})
+	}
+}
+
 // testYoloNoPermission verifies that yolo mode skips permission prompts. It asks
 // for the same sandbox escape the approval tests use, so passing means yolo
 // really lifted the sandbox — a command the sandbox would have allowed anyway
 // would prove nothing about the mode.
+//
+// It is also where the two tool events are asserted under yolo, rather than in a
+// session of their own: the escape is a tool call, so this turn produces the
+// call and its result whether or not anything looks at them.
 func testYoloNoPermission(t *testing.T, a Agent) {
 	target := newApprovalTarget(t)
 
@@ -691,6 +861,8 @@ func testYoloNoPermission(t *testing.T, a Agent) {
 		t.Fatalf("SendMessage failed: %v", err)
 	}
 
+	var sawToolCall, sawToolResult bool
+
 eventLoop:
 	for {
 		select {
@@ -698,10 +870,14 @@ eventLoop:
 			if !ok {
 				break eventLoop
 			}
-			requireFields(t, event)
+			RequireEventFields(t, event)
 			t.Logf("event: %s", event.EventType())
 
 			switch e := event.(type) {
+			case ToolCallEvent:
+				sawToolCall = true
+			case ToolResultEvent:
+				sawToolResult = true
 			case PermissionRequestEvent:
 				t.Fatalf("unexpected permission_request in yolo mode: tool=%s", e.ToolName)
 			case ErrorEvent:
@@ -717,11 +893,34 @@ eventLoop:
 	if !approvalTargetExists(t, target) {
 		t.Error("yolo mode asked for nothing but the out-of-sandbox file was never written")
 	}
+	if !sawToolCall {
+		t.Error("no tool_call event in yolo mode, though the turn ran a command")
+	}
+	if !sawToolResult {
+		t.Error("no tool_result event in yolo mode, though the turn ran a command")
+	}
 }
 
 // testInterrupt verifies that SendInterrupt stops the current task.
+//
+// The interrupt is aimed at the first event that proves a turn is being worked on
+// rather than at a fixed delay: that is the earliest moment there is anything to
+// stop, and so the moment with the most turn left to cut short. A sleep long
+// enough to be safe on a loaded machine is long enough to miss a fast turn
+// entirely — measured, this prompt finishes in under five seconds, which the old
+// two-second sleep left almost no margin against.
+//
+// A turn that ends anyway is not a pass. Nothing was interrupted, so there is no
+// evidence either way about SendInterrupt, and reporting that as success is how
+// this test used to go green without asserting anything.
 func testInterrupt(t *testing.T, a Agent) {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	// The suite's ordinary budget rather than a tighter one of its own: an
+	// interrupted turn is short — measured at 4s on claude and 15-30s on codex,
+	// most of the latter being startup — so the deadline only ever decides how a
+	// failure is reported, and a hand-picked 30s made that report depend on how
+	// busy the machine was. Codex has already been seen at 30s: the old budget
+	// was not margin at all.
+	ctx, cancel := context.WithTimeout(context.Background(), integrationTimeout)
 	defer cancel()
 
 	sess, err := a.Start(ctx, StartOptions{WorkDir: t.TempDir(), DataDir: t.TempDir(), DisableMCP: true})
@@ -734,39 +933,74 @@ func testInterrupt(t *testing.T, a Agent) {
 		t.Fatalf("SendMessage failed: %v", err)
 	}
 
-	// Wait for some output, then interrupt
-	time.Sleep(2 * time.Second)
+	sent := false
 
-	if err := sess.SendInterrupt(); err != nil {
-		t.Fatalf("SendInterrupt failed: %v", err)
-	}
-
-	var interruptedEvents int
-
-eventLoop:
 	for {
 		select {
 		case event, ok := <-sess.Events():
 			if !ok {
-				break eventLoop
+				t.Fatalf("channel closed before the turn ended (stop sent: %v)", sent)
 			}
-			switch event.(type) {
+
+			switch e := event.(type) {
 			case InterruptedEvent:
-				interruptedEvents++
-				break eventLoop
-			case DoneEvent:
-				t.Log("done event received before interrupted - task may have completed before interrupt was sent")
+				if !sent {
+					t.Fatal("interrupted before the stop was sent")
+				}
 				return
+
+			case DoneEvent:
+				// Skipped, not passed, and not failed either: whether the turn
+				// outran the stop or ignored it is not something this test can
+				// tell apart, so it reports that it proved nothing.
+				if !sent {
+					t.Skip("the turn ended before it produced anything to aim a stop at; " +
+						"the CLI answered before any output arrived")
+				}
+				t.Skip("the turn ran to completion after the stop was sent, so nothing was interrupted; " +
+					"either it was already finishing or the stop was ignored — rerun, and if it always ends here, " +
+					"SendInterrupt is the suspect")
+
+			case ErrorEvent:
+				// Terminal, so waiting for an interrupted event after it would
+				// only ever time out, and the timeout would name the wrong cause.
+				t.Fatalf("error event: %s", e.Error)
+
+			case TextEvent, ToolCallEvent, ToolResultEvent, ToolActivityEvent, PermissionRequestEvent:
+				// The turn is provably in flight: these can only come from the
+				// CLI working on the message. A request also has to be one of
+				// them — nobody here answers it, so a turn blocked on one would
+				// otherwise sit there until the deadline.
+				if !sent {
+					sent = true
+					t.Logf("stopping the turn on its first event: %T", event)
+					if err := sess.SendInterrupt(); err != nil {
+						t.Fatalf("SendInterrupt failed: %v", err)
+					}
+				}
+
+			case WarningEvent:
+				// Measured, not hypothetical: codex-cli emits one of these
+				// before the turn produces anything. Logged rather than aimed
+				// at, and logged with its message because a warning is the kind
+				// of thing worth reading when this test does end up red.
+				t.Logf("warning event: %s (%s)", e.Message, e.Code)
+
 			default:
+				// A system frame, the process ending, and anything else the CLI
+				// can emit before it has read the message. Stopping a turn that
+				// has not started is the race this test was changed to stop
+				// having, so these are recorded and nothing more.
 				t.Logf("event: %T", event)
 			}
+
 		case <-ctx.Done():
+			if !sent {
+				t.Fatal("the turn never produced an event showing it was in flight, so there was never anything to stop " +
+					"(any events that did arrive are logged above)")
+			}
 			t.Fatal("timeout waiting for interrupted event")
 		}
-	}
-
-	if interruptedEvents != 1 {
-		t.Errorf("expected 1 interrupted event, got %d", interruptedEvents)
 	}
 }
 
@@ -781,9 +1015,14 @@ func permissionDataFromEvent(e PermissionRequestEvent) PermissionRequestData {
 	}
 }
 
-// requireFields validates that expected fields are non-empty for each event type.
+// RequireEventFields validates that expected fields are non-empty for each event type.
 // This ensures the agent implementation's JSON schema matches our parsing expectations.
-func requireFields(t *testing.T, event AgentEvent) {
+//
+// Exported so that a per-CLI test covering an event the shared suite cannot
+// reach — Claude's tool activity, which a subagent's progress produces and a
+// shell command never does, background or foreground — checks the same shape
+// rather than restating it.
+func RequireEventFields(t *testing.T, event AgentEvent) {
 	t.Helper()
 	switch e := event.(type) {
 	case TextEvent:
@@ -886,7 +1125,7 @@ func testMidTurnMessage(t *testing.T, a Agent) {
 			if !ok {
 				t.Fatalf("channel closed after %d endings, marker seen: %v", dones, sawMarker)
 			}
-			requireFields(t, event)
+			RequireEventFields(t, event)
 
 			switch e := event.(type) {
 			case ToolResultEvent:
@@ -965,7 +1204,7 @@ func testMidTurnMessageWhileBlocked(t *testing.T, a Agent) {
 			if !ok {
 				t.Fatalf("channel closed before the turn finished (blocked=%v answered=%v)", blocked, answered)
 			}
-			requireFields(t, event)
+			RequireEventFields(t, event)
 
 			// Read before the switch below, so that the request being raised is
 			// not itself counted as something that arrived after it.
@@ -1041,7 +1280,7 @@ func testInterruptWhileBlocked(t *testing.T, a Agent) {
 			if !ok {
 				t.Fatalf("channel closed before the turn ended (stop sent: %v)", stopped)
 			}
-			requireFields(t, event)
+			RequireEventFields(t, event)
 
 			switch e := event.(type) {
 			case PermissionRequestEvent:

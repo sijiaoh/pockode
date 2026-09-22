@@ -3,16 +3,12 @@
 package codex
 
 import (
-	"context"
-	"encoding/json"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/pockode/server/agent"
-	"github.com/pockode/server/session"
 )
 
 // TestIntegration_ResumesAcrossProcesses is the check behind the whole change.
@@ -26,7 +22,7 @@ func TestIntegration_ResumesAcrossProcesses(t *testing.T) {
 	dataDir := t.TempDir()
 	sessionID := uuid.Must(uuid.NewV7()).String()
 
-	runPrompt(t, workDir, dataDir, sessionID, false,
+	agent.RunPrompt(t, New(), workDir, dataDir, sessionID, false,
 		"Remember this code word: BANANA-42. Reply with exactly: ok")
 
 	state, found := newResumeStateStore(
@@ -36,7 +32,7 @@ func TestIntegration_ResumesAcrossProcesses(t *testing.T) {
 	}
 
 	// A brand new process, resuming only from what was written to disk.
-	said := runPrompt(t, workDir, dataDir, sessionID, true,
+	said := agent.RunPrompt(t, New(), workDir, dataDir, sessionID, true,
 		"What was the code word I gave you? Reply with just the word, or UNKNOWN if you were never given one.")
 	if !strings.Contains(said, "BANANA-42") {
 		t.Fatalf("the resumed session does not remember the code word, it said: %q", said)
@@ -64,7 +60,7 @@ func TestIntegration_UnresumableThreadDegrades(t *testing.T) {
 	dead := uuid.Must(uuid.NewV7()).String()
 	newResumeStateStore(agent.StartOptions{DataDir: dataDir, SessionID: sessionID}, testLogger()).record(dead)
 
-	warnings := runPromptCollectingWarnings(t, workDir, dataDir, sessionID, true, "Reply with exactly: ok")
+	warnings := agent.RunPromptCollecting(t, New(), workDir, dataDir, sessionID, true, "Reply with exactly: ok").Warnings
 
 	var warned bool
 	for _, w := range warnings {
@@ -82,61 +78,20 @@ func TestIntegration_UnresumableThreadDegrades(t *testing.T) {
 	}
 }
 
-// TestIntegration_ForksAtATurn is stage two's own check, and it is the probe's
-// experiment run through Pockode rather than against the CLI directly: a fork
-// taken before the second code word was given must remember the first and not
-// the second, while the session it was forked from remembers both.
+// checkForkedSessions is Codex's half of the shared fork scenario: which thread
+// each session came out on, which the suite cannot ask about because only this
+// package knows a conversation is an app-server thread.
 //
-// It is what proves the two halves meet — the turn ids stamped on events are
-// the ones `thread/fork` accepts as `lastTurnId` — which no unit test can, since
-// both halves are Pockode's own and would agree with each other on any value.
-func TestIntegration_ForksAtATurn(t *testing.T) {
-	workDir := t.TempDir()
-	dataDir := t.TempDir()
-	sourceID := uuid.Must(uuid.NewV7()).String()
-
-	// The fork point: everything the agent said up to here is what the forked
-	// session keeps, and chat.Client.Fork would have cut the prompt that follows.
-	kept := runPromptCollecting(t, workDir, dataDir, sourceID, false,
-		"Remember this code word: APPLE-1. Reply with exactly: ok").records
-	runPrompt(t, workDir, dataDir, sourceID, true,
-		"Here is a second code word: ZEBRA-7. Reply with exactly: ok")
-
-	forkID := uuid.Must(uuid.NewV7()).String()
-	carried, err := New().ForkSession(context.Background(), agent.ForkOptions{
-		WorkDir:         workDir,
-		DataDir:         dataDir,
-		SourceSessionID: sourceID,
-		SessionID:       forkID,
-		History:         kept,
-	})
-	if err != nil {
-		t.Fatalf("ForkSession failed: %v", err)
-	}
-	if !carried {
-		t.Fatal("the fork carried no context, though the kept history was recorded with turn ids")
-	}
-
-	const question = "List every code word you have been given, separated by spaces. Reply with just the words, or NONE if you were never given any."
-
-	said := runPrompt(t, workDir, dataDir, forkID, true, question)
-	if !strings.Contains(said, "APPLE-1") {
-		t.Errorf("the fork does not remember the turn it was taken at, it said: %q", said)
-	}
-	if strings.Contains(said, "ZEBRA-7") {
-		t.Errorf("the fork remembers a turn taken after the fork point, it said: %q", said)
-	}
-
-	// The source is untouched by all of it.
-	said = runPrompt(t, workDir, dataDir, sourceID, true, question)
-	if !strings.Contains(said, "APPLE-1") || !strings.Contains(said, "ZEBRA-7") {
-		t.Errorf("the source lost part of its own conversation, it said: %q", said)
-	}
-
+// It is also what proves the two halves of a Codex fork meet — the turn ids
+// stamped on events are the ones `thread/fork` accepts as `lastTurnId` — which
+// no unit test can, since both halves are Pockode's own and would agree with
+// each other on any value.
+func checkForkedSessions(t *testing.T, check agent.ForkCheck) {
 	sourceState, _ := newResumeStateStore(
-		agent.StartOptions{DataDir: dataDir, SessionID: sourceID}, testLogger()).load()
+		agent.StartOptions{DataDir: check.DataDir, SessionID: check.SourceSessionID}, testLogger()).load()
 	forkState, _ := newResumeStateStore(
-		agent.StartOptions{DataDir: dataDir, SessionID: forkID}, testLogger()).load()
+		agent.StartOptions{DataDir: check.DataDir, SessionID: check.ForkSessionID}, testLogger()).load()
+
 	if forkState.ThreadID == "" || forkState.ThreadID == sourceState.ThreadID {
 		t.Errorf("fork thread = %q, source thread = %q; want the fork on a thread of its own",
 			forkState.ThreadID, sourceState.ThreadID)
@@ -145,80 +100,5 @@ func TestIntegration_ForksAtATurn(t *testing.T) {
 	// than forking the source over again.
 	if forkState.ForkAtTurnID != "" {
 		t.Errorf("fork intent = %q, want it retired once the fork was taken", forkState.ForkAtTurnID)
-	}
-}
-
-// promptRun is what one turn through a real CLI process produced.
-type promptRun struct {
-	said     string
-	warnings []agent.WarningEvent
-	// records are the turn's events as history stores them — the form a fork
-	// reads to find the turn it was taken at.
-	records []json.RawMessage
-}
-
-// runPrompt drives one complete message through a real CLI process and returns
-// everything the agent said.
-func runPrompt(t *testing.T, workDir, dataDir, sessionID string, resume bool, prompt string) string {
-	t.Helper()
-	return runPromptCollecting(t, workDir, dataDir, sessionID, resume, prompt).said
-}
-
-func runPromptCollectingWarnings(t *testing.T, workDir, dataDir, sessionID string, resume bool, prompt string) []agent.WarningEvent {
-	t.Helper()
-	return runPromptCollecting(t, workDir, dataDir, sessionID, resume, prompt).warnings
-}
-
-func runPromptCollecting(t *testing.T, workDir, dataDir, sessionID string, resume bool, prompt string) promptRun {
-	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
-	defer cancel()
-
-	sess, err := New().Start(ctx, agent.StartOptions{
-		WorkDir:   workDir,
-		DataDir:   dataDir,
-		SessionID: sessionID,
-		Resume:    resume,
-		// Yolo, so no approval prompt can block a turn nobody is watching.
-		Mode:       session.ModeYolo,
-		DisableMCP: true,
-	})
-	if err != nil {
-		t.Fatalf("Start failed: %v", err)
-	}
-	defer sess.Close()
-
-	if err := sess.SendMessage(prompt); err != nil {
-		t.Fatalf("SendMessage failed: %v", err)
-	}
-
-	var said strings.Builder
-	run := promptRun{}
-	for {
-		select {
-		case event, ok := <-sess.Events():
-			if !ok {
-				t.Fatal("channel closed before done event")
-			}
-			raw, err := json.Marshal(event.ToRecord())
-			if err != nil {
-				t.Fatalf("marshal record: %v", err)
-			}
-			run.records = append(run.records, raw)
-
-			switch e := event.(type) {
-			case agent.TextEvent:
-				said.WriteString(e.Content)
-			case agent.WarningEvent:
-				run.warnings = append(run.warnings, e)
-			case agent.ErrorEvent:
-				t.Fatalf("error event: %s", e.Error)
-			case agent.DoneEvent:
-				run.said = said.String()
-				return run
-			}
-		case <-ctx.Done():
-			t.Fatal("timeout waiting for done event")
-		}
 	}
 }
