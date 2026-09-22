@@ -28,13 +28,18 @@ function Sidebar({ isOpen, onClose, children, isExpanded }: Props) {
 	const [isDragging, setIsDragging] = useState(false);
 
 	// Escape closes the drawer; in the expanded tier the column is not dismissable.
+	// The press is marked handled, because the drawer opens from the session
+	// header — which stays lit under the chat's answer panel — and that panel
+	// waits until `window` to ask so this answer is in by then
+	// (docs/answering-ui.md §4, "Who owns Escape"). Without the mark, one press
+	// would close the drawer and a panel behind it the user cannot even see.
 	useEffect(() => {
 		if (isExpanded) return;
 
 		const handleKeyDown = (e: KeyboardEvent) => {
-			if (e.key === "Escape" && isOpen) {
-				onClose();
-			}
+			if (e.key !== "Escape" || e.defaultPrevented || !isOpen) return;
+			e.preventDefault();
+			onClose();
 		};
 		document.addEventListener("keydown", handleKeyDown);
 		return () => document.removeEventListener("keydown", handleKeyDown);

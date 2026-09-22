@@ -53,28 +53,47 @@ function ResponsivePanel({
 	const titleId = useId();
 	const mobile = !isExpanded;
 
-	useOutsideClick(isOpen, (target) => {
+	// Claiming the click is the other half of claiming Escape below, and is
+	// needed for the same reason: above the expanded tier this is a dropdown
+	// anchored to its trigger with no backdrop of its own, so the click that
+	// dismisses it lands on whatever is behind — which may be a surface that
+	// reads a press there as "put me away" too. `stopPropagation` only where it
+	// actually closes: a click it lets through is not its to take.
+	useOutsideClick(isOpen, (target, event) => {
 		// Ignore clicks on trigger
 		if (triggerRef?.current?.contains(target)) {
 			return;
 		}
 
-		// Ignore clicks inside portaled dialogs (e.g., confirmation modals)
-		if (target.closest('[role="dialog"]')) {
+		// Ignore clicks inside portaled dialogs (e.g., confirmation modals).
+		// `aria-modal` and not `role="dialog"` alone: the chat's answer panel is
+		// a dialog over one rectangle that deliberately leaves the rest of the
+		// screen usable, and this header sits in that rest — a press in it is an
+		// ordinary press elsewhere, not a modal holding this panel open behind
+		// something the user cannot leave.
+		if (target.closest('[role="dialog"][aria-modal="true"]')) {
 			return;
 		}
 
 		if (panelRef.current && !panelRef.current.contains(target)) {
+			event.stopPropagation();
 			onClose();
 		}
 	});
 
-	// Close on Escape
+	// Close on Escape, and mark the press handled. This panel opens from the
+	// session header and the composer row, and those stay live under surfaces
+	// that claim Escape for themselves — today the chat's answer panel, which
+	// waits until `window` to ask exactly so that this answer is in by then.
+	// Without the mark, one press would put away both this panel and one the
+	// user was not even looking at.
 	useEffect(() => {
 		if (!isOpen) return;
 
 		const handleEscape = (e: KeyboardEvent) => {
-			if (e.key === "Escape") onClose();
+			if (e.key !== "Escape" || e.defaultPrevented) return;
+			e.preventDefault();
+			onClose();
 		};
 
 		document.addEventListener("keydown", handleEscape);

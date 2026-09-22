@@ -1,4 +1,4 @@
-import { act, render, screen, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useQuestionDraftStore } from "../../lib/questionDraftStore";
@@ -55,84 +55,49 @@ beforeEach(() => {
 
 describe("AnswerPanel", () => {
 	// jsdom lays nothing out, so the shape can only be read off the classes it
-	// is written in — worth pinning all the same, because filling the rectangle
-	// is the exact thing this panel was reshaped away from: a user who opens a
-	// session and sees nothing of it does not know where they are.
-	it("sits on the bottom edge of the rectangle rather than filling it", () => {
+	// is written in — worth pinning all the same, because both halves of it are
+	// what the panel was reshaped for: a card the user's eye lands on, over a
+	// backdrop that stops at the transcript's edges.
+	it("is a centred card over a backdrop that covers the transcript", () => {
 		renderPanel([database]);
-		const panel = screen.getByRole("region", { name: /question/ });
-		expect(panel).toHaveClass("absolute", "inset-x-0", "bottom-0");
-		// Capped, so conversation is always left showing; uncapped in the other
-		// direction, so one short question is a card and not a wall.
-		expect(panel).toHaveClass("max-h-[70%]");
-		expect(panel).not.toHaveClass("inset-0");
+		const panel = screen.getByRole("dialog", { name: /question/ });
+		// Capped against the rectangle, so it cannot grow past the conversation
+		// it is centred in; uncapped in the other direction, so one short
+		// question is a card and not a wall.
+		expect(panel).toHaveClass("max-h-[85%]", "max-w-md", "rounded-xl");
 		expect(panel).not.toHaveClass("h-full");
+
+		// The backdrop is `absolute`, never `fixed`: it is positioned against
+		// ChatPanel's wrapper around the transcript, so the composer, the strip
+		// and the session header below and above it stay lit.
+		const backdrop = screen.getByTestId("answer-panel-backdrop");
+		expect(backdrop).toHaveClass("absolute", "inset-0", "bg-th-bg-overlay");
+		expect(backdrop).not.toHaveClass("fixed");
+
+		// Not `aria-modal`: those three are still reachable, and saying otherwise
+		// would take them away from a screen reader alone.
+		expect(panel).not.toHaveAttribute("aria-modal");
 	});
 
-	// The number the transcript below keeps its tail above. Reported on mount and
-	// not only from the observer: the observer's first call is asynchronous, and
-	// the frame the panel appears in would otherwise paint the last message
-	// underneath it.
-	it("reports its height on arrival and whenever it changes", () => {
-		const resized: ResizeObserverCallback[] = [];
-		vi.stubGlobal(
-			"ResizeObserver",
-			class {
-				constructor(callback: ResizeObserverCallback) {
-					resized.push(callback);
-				}
-				observe() {}
-				unobserve() {}
-				disconnect() {}
-			},
-		);
-		let height = 240;
-		// jsdom lays nothing out, so the one number this reports has to be
-		// supplied. Its own descriptor is put back afterwards rather than deleted:
-		// deleting would leave every later test in this file without `offsetHeight`
-		// at all.
-		const offsetHeight = Object.getOwnPropertyDescriptor(
-			HTMLElement.prototype,
-			"offsetHeight",
-		);
-		Object.defineProperty(HTMLElement.prototype, "offsetHeight", {
-			configurable: true,
-			get: () => height,
-		});
-		const onHeightChange = vi.fn();
+	// The backdrop is what makes "outside" mean anything, so pressing it is the
+	// dismissal every user of a dimmed screen already expects.
+	it("closes when the backdrop is pressed", async () => {
+		const user = userEvent.setup();
+		const { onClose } = renderPanel([database]);
+		await user.click(screen.getByTestId("answer-panel-backdrop"));
+		expect(onClose).toHaveBeenCalled();
+	});
 
-		try {
-			render(
-				<AnswerPanel
-					sessionId="s1"
-					unanswered={[database]}
-					onSend={vi.fn()}
-					onClose={vi.fn()}
-					takeFocus={false}
-					onHeightChange={onHeightChange}
-				/>,
-			);
-			expect(onHeightChange).toHaveBeenLastCalledWith(240);
-
-			// A second question arrives, a note field opens: the height is the
-			// content's, so one measurement would go stale.
-			height = 420;
-			act(() =>
-				resized[0]?.([], undefined as unknown as globalThis.ResizeObserver),
-			);
-			expect(onHeightChange).toHaveBeenLastCalledWith(420);
-		} finally {
-			if (offsetHeight) {
-				Object.defineProperty(
-					HTMLElement.prototype,
-					"offsetHeight",
-					offsetHeight,
-				);
-			} else {
-				Reflect.deleteProperty(HTMLElement.prototype, "offsetHeight");
-			}
-			vi.unstubAllGlobals();
-		}
+	// Selecting a question's text by dragging past the edge of the card ends
+	// with the pointer over the backdrop, but `click` fires on what the press
+	// and the release have in common — the centring container, not the backdrop
+	// — and reading a dismissal out of that would take the panel away mid-drag.
+	it("stays put when a press only ends over the backdrop", () => {
+		const { onClose } = renderPanel([database]);
+		const container = screen.getByTestId("answer-panel-backdrop").parentElement;
+		if (!container) throw new Error("backdrop has no container");
+		fireEvent.click(container);
+		expect(onClose).not.toHaveBeenCalled();
 	});
 
 	it("titles itself with the live count and counts what is ready", () => {
@@ -472,6 +437,7 @@ describe("AnswerPanel", () => {
 		const close = screen.getByRole("button", { name: "Close" });
 		expect(close).toBeDisabled();
 		await user.keyboard("{Escape}");
+		await user.click(screen.getByTestId("answer-panel-backdrop"));
 		expect(onClose).not.toHaveBeenCalled();
 
 		deliver?.();
@@ -483,7 +449,7 @@ describe("AnswerPanel", () => {
 	// one stray Enter between the user and the questions they came for.
 	it("reads itself out when the user asked for it", () => {
 		renderPanel([database]);
-		expect(screen.getByRole("region", { name: "1 question" })).toHaveFocus();
+		expect(screen.getByRole("dialog", { name: "1 question" })).toHaveFocus();
 	});
 
 	// The other half of `takeFocus`: nothing on screen moves the caret when the
@@ -535,23 +501,33 @@ describe("AnswerPanel", () => {
 		expect(scrollIntoView).toHaveBeenCalledTimes(2);
 	});
 
-	// Escape is the chat's interrupt, and this panel is up for as long as a
-	// question is open. It takes the one press aimed at itself and marks it
-	// handled, so the listener above it leaves that press alone — and every
-	// press made outside the panel still interrupts.
-	it("closes on Escape from inside, and claims that key press", async () => {
+	// Escape is the chat's interrupt everywhere else, and the panel takes it for
+	// as long as it is up: it does not hold focus, so the press that means "put
+	// this away" is usually made at the composer or at the dimmed transcript,
+	// and reading it as an interrupt would end the agent's turn for good.
+	// ChatPanel stands its own listener down to match.
+	it("closes on Escape pressed anywhere while it is up", async () => {
 		const user = userEvent.setup();
-		const seen: boolean[] = [];
-		const listener = (e: KeyboardEvent) => seen.push(e.defaultPrevented);
-		document.addEventListener("keydown", listener);
+		const { onClose } = renderPanel([database]);
+		act(() => document.body.focus());
+		await user.keyboard("{Escape}");
+		expect(onClose).toHaveBeenCalled();
+	});
+
+	// Whatever is drawn over this panel — a portalled dialog — owns the key
+	// first, or one press would dismiss both.
+	it("leaves an Escape another surface has already handled alone", async () => {
+		const user = userEvent.setup();
+		const claim = (e: KeyboardEvent) => {
+			if (e.key === "Escape") e.preventDefault();
+		};
+		document.addEventListener("keydown", claim);
 		try {
 			const { onClose } = renderPanel([database]);
-			await user.click(screen.getByRole("radio", { name: /SQLite/ }));
 			await user.keyboard("{Escape}");
-			expect(onClose).toHaveBeenCalled();
-			expect(seen).toEqual([true]);
+			expect(onClose).not.toHaveBeenCalled();
 		} finally {
-			document.removeEventListener("keydown", listener);
+			document.removeEventListener("keydown", claim);
 		}
 	});
 });

@@ -1,12 +1,5 @@
 import { X } from "lucide-react";
-import {
-	useCallback,
-	useEffect,
-	useId,
-	useLayoutEffect,
-	useRef,
-	useState,
-} from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 import {
 	EMPTY_DRAFT,
 	isDraftDirty,
@@ -45,22 +38,14 @@ interface Props {
 	onSend: (content: string, answering: QuestionAnswerRecord[]) => Promise<void>;
 	onClose: () => void;
 	/**
-	 * Whether a user action is what named the question on screen. Only then does
-	 * the panel take focus. Most of the time it is up because a question is
-	 * waiting and not because anyone asked for it, and a panel that grabs the
-	 * caret out of the composer somebody is typing in has stolen it
+	 * Whether the panel should read itself out. True when a user action named
+	 * the question on screen, and when the panel's own arrival has just cost the
+	 * document its focus — `ChatPanel` decides both. Most of the time it is
+	 * neither: the panel is up because a question is waiting, and a panel that
+	 * grabs the caret out of the composer somebody is typing in has stolen it
 	 * (docs/answering-ui.md §4).
 	 */
 	takeFocus: boolean;
-	/**
-	 * Reports how tall the panel currently is, so the transcript underneath can
-	 * hold its own tail above it (docs/answering-ui.md §3). The panel measures
-	 * *itself* and hands the number to a sibling — it still measures nothing
-	 * about the header, the strip or the composer, which is what the `absolute`
-	 * positioning is there to avoid. Must be stable: a new function each render
-	 * would tear down and rebuild the observer behind it.
-	 */
-	onHeightChange?: (height: number) => void;
 }
 
 /** A block the user can still see, whether or not its question is still open. */
@@ -93,22 +78,29 @@ const ALREADY_ANSWERED = "Already answered elsewhere.";
  * wizard hides how much is left, forbids answering out of order, and turns two
  * questions into four taps.
  *
- * It is a drawer sitting on the bottom edge of the transcript's rectangle,
- * never taller than 70% of it: the height is what the content needs, so one
- * short question is a small card. The 30% that is always left over is what
- * tells the user they are still in their session, and it stays live — readable,
- * scrollable, pressable — which is why there is no scrim over it.
+ * It is a card centred in the transcript's rectangle over a backdrop that
+ * dims it, at one shape and one size at every width: the height is what the
+ * content needs, capped at 85% of the rectangle, so one short question is a
+ * small card rather than a wall.
  *
- * It is not a modal, and every modal habit is deliberately absent: no portal,
- * no backdrop, no body scroll lock, no focus trap, no document-level Escape.
- * The composer, the strip and the bars below it stay visible and usable while
- * it is up, which is the whole point of it, and each of those habits would take
- * one of them away.
+ * The backdrop covers the transcript and nothing else. The session header
+ * above it, and the strip, the session bar and the composer below it, stay
+ * lit, reachable and usable — dimming those would make this a modal over the
+ * whole app, and the composer in particular is where the user says something
+ * the questions did not ask for.
+ *
+ * It is a modal over that one rectangle and borrows exactly the habits that
+ * follow from a backdrop: dismiss on backdrop press, and Escape claimed for the
+ * window (ChatPanel stands its interrupt down while this is up — pressing
+ * Escape at a dimmed transcript must not end the agent's turn). It takes none
+ * of the rest, because what is behind the backdrop is not the whole page: no
+ * portal, no body scroll lock, no focus trap, and no `aria-modal`, which would
+ * tell a screen reader that a composer it can still Tab into is not there.
  *
  * Positioning is `absolute` against the wrapper `ChatPanel` puts around the
- * list, and the cap is a percentage of it, so the drawer follows a resize, a
- * soft keyboard and an error bar appearing without this component knowing any
- * of them happened — and still leaves the same share of conversation showing.
+ * list, and the cap is a percentage of it, so the card and the backdrop follow
+ * a resize, a soft keyboard and an error bar appearing without this component
+ * knowing any of them happened, and without measuring anybody's height.
  */
 function AnswerPanel({
 	sessionId,
@@ -117,7 +109,6 @@ function AnswerPanel({
 	onSend,
 	onClose,
 	takeFocus,
-	onHeightChange,
 }: Props) {
 	const drafts = useQuestionDraftStore(selectSessionDrafts(sessionId));
 	// Blocks that can no longer be answered but are still on screen, keyed by
@@ -324,26 +315,6 @@ function AnswerPanel({
 	const titleId = useId();
 	const rootRef = useRef<HTMLElement>(null);
 
-	// The height goes to the transcript below, which uses it to keep its tail
-	// above this panel. An observer rather than one measurement, because the
-	// height is the content's: it changes as questions arrive and leave, as a
-	// refusal line appears, as a declined block opens its note field.
-	//
-	// The first report is in this layout effect and not left to the observer:
-	// the observer's first callback is asynchronous, so the frame the panel
-	// appears in would still have an inset of zero and paint the last message
-	// underneath it.
-	useLayoutEffect(() => {
-		const el = rootRef.current;
-		if (!el || !onHeightChange) return;
-		onHeightChange(el.offsetHeight);
-		const observer = new ResizeObserver(() => {
-			onHeightChange(el.offsetHeight);
-		});
-		observer.observe(el);
-		return () => observer.disconnect();
-	}, [onHeightChange]);
-
 	// On the edge where a user action asks for this panel, not while one holds.
 	// The edge and not the mount, because the panel now shows itself the moment
 	// a question arrives: by the time the work detail's `Answer` names one, the
@@ -360,108 +331,169 @@ function AnswerPanel({
 		tookFocusRef.current = takeFocus;
 	}, [takeFocus]);
 
-	// Escape belongs to whatever has focus, not to the window: ChatPanel's own
-	// document listener turns Escape into an interrupt, and this panel is up for
-	// as long as a question is open, so swallowing it there would take the
-	// interrupt away for good. Claiming the key here — React's synthetic
-	// listener sits below `document`, and ChatPanel's returns on
-	// `defaultPrevented` — leaves Escape an interrupt everywhere outside the
-	// panel, this one press excepted.
-	const handleKeyDown = (e: React.KeyboardEvent) => {
-		if (e.key !== "Escape") return;
-		// Same reason as the disabled ×: a slow relay must not leave the user
-		// unsure whether their answers went out.
+	// Closing on Escape, backdrop and × is one action under three names, and all
+	// three stand down mid-send: a slow relay must not leave the user unsure
+	// whether their answers went out.
+	const handleDismiss = useCallback(() => {
 		if (sending) return;
-		e.preventDefault();
 		onClose();
-	};
+	}, [sending, onClose]);
+
+	// Escape closes the panel rather than interrupting the agent's turn, and it
+	// is claimed for the window rather than on the panel's own element: the
+	// panel shows itself without taking focus, so the press usually lands on the
+	// composer or on nothing at all. `ChatPanel` counts this panel among the
+	// surfaces that own the key and stands its interrupt down for as long as it
+	// is up — which is the point of moving the key here. A user pressing Escape
+	// at a dimmed transcript means "put this away"; reading it as an interrupt
+	// would end the turn, and that cannot be taken back, while the mistake in
+	// this direction costs one more press.
+	//
+	// On `window` and not on `document`, so that this is the *last* surface
+	// asked. Anything drawn over this panel dismisses on a document listener of
+	// its own — the session-info panel the lit header opens is the one that can
+	// really be over it — and those listeners are registered after this one, so
+	// asking `defaultPrevented` at the document would ask it before they have
+	// run and put two surfaces away with one press. `window` is past every one
+	// of them in the bubble path, whatever order they were added in.
+	useEffect(() => {
+		const handleEscape = (e: KeyboardEvent) => {
+			if (e.key !== "Escape" || e.defaultPrevented) return;
+			handleDismiss();
+		};
+		window.addEventListener("keydown", handleEscape);
+		return () => window.removeEventListener("keydown", handleEscape);
+	}, [handleDismiss]);
+
+	// The backdrop press is read on `window` for the same reason Escape is, and
+	// it is the same press: the header's dropdowns above the expanded tier and
+	// the composer's command palette at every width are anchored to their
+	// triggers with no backdrop of their own, so dismissing one is a click on
+	// the dimmed transcript — this backdrop. Those dismissals run on `document`
+	// and claim the click, which only takes it off the path if this panel is
+	// asked afterwards; a React `onClick` here would be asked *first*, React 19
+	// delegating to the root container, and one press would put away both.
+	//
+	// Comparing against the backdrop element rather than asking whether the
+	// target is outside the card keeps the press that starts on a question's
+	// text and ends past the edge — selecting it by dragging — from dismissing:
+	// `click` then fires on the common ancestor, which is the container, not
+	// this. `Sheet` separates the layers for the same reason.
+	const backdropRef = useRef<HTMLDivElement>(null);
+	useEffect(() => {
+		const handleClick = (e: MouseEvent) => {
+			if (e.target !== backdropRef.current) return;
+			handleDismiss();
+		};
+		window.addEventListener("click", handleClick);
+		return () => window.removeEventListener("click", handleClick);
+	}, [handleDismiss]);
 
 	return (
-		// No `role="dialog" aria-modal`: the rest of the screen is genuinely
-		// usable, and claiming otherwise would have a screen reader say it is not.
-		// A named <section> is a region already, which is the landmark this is.
-		// outline-none: it takes focus only to announce itself.
-		<section
-			ref={rootRef}
-			tabIndex={-1}
-			aria-labelledby={titleId}
-			onKeyDown={handleKeyDown}
-			// Sitting on the bottom edge rather than filling the rectangle, and
-			// capped at a share of it rather than at a number of pixels: a
-			// percentage needs no font size, no row height and no measurement of
-			// the rectangle to leave conversation showing, and it goes on leaving
-			// the same share of it when the soft keyboard halves the screen.
-			// No `h-full`, so a single short question is a small card rather than
-			// a wall. The rounding, shadow and colour are `Sheet`'s own values;
-			// its drag handle is not copied, there being nothing to drag here.
-			className="absolute inset-x-0 bottom-0 z-10 flex max-h-[70%] flex-col overflow-hidden rounded-t-2xl border-t border-th-border bg-th-bg-secondary shadow-xl outline-none"
-		>
-			{/* Header, footer and the close button wear the same classes as
-			    `Sheet`'s, copied rather than shared: what makes them look alike is
-			    the tokens, and a `variant` on a shared modal would make every
-			    reader of `Sheet` — in both frontends — check which half they are in
-			    first. */}
-			<div className="flex shrink-0 items-center justify-between border-b border-th-border px-4 py-3">
-				<h2
-					id={titleId}
-					className="min-w-0 truncate text-base font-bold text-th-text-primary"
-				>
-					{title}
-				</h2>
-				<button
-					type="button"
-					onClick={onClose}
-					disabled={sending}
-					aria-label="Close"
-					className="touch-target -my-1.5 -mr-1 flex size-9 shrink-0 items-center justify-center rounded text-th-text-muted hover:bg-th-bg-tertiary hover:text-th-text-primary disabled:cursor-not-allowed disabled:opacity-50"
-				>
-					<X className="size-5" />
-				</button>
-			</div>
-			{/* overscroll-y-contain: an overscroll at either end stops here rather
-			    than leaving the panel — on touch that is the browser's own
-			    rubber-band and pull-to-refresh, reached by flicking through the
-			    last question. The transcript's scroller carries the same class for
-			    the same reason; it is a sibling of this one, not an ancestor, so
-			    chaining could never have reached it. */}
+		// `absolute inset-0` against ChatPanel's wrapper, so this covers the
+		// transcript and stops at its edges. `z-10` is enough: the list below
+		// carries no stacking of its own, and the portalled sheets — z-50, z-70 —
+		// still come out over this one.
+		<div className="absolute inset-0 z-10 flex items-center justify-center">
+			{/* The backdrop is its own layer under the card, not a handler on
+			    this container: what it dims is exactly what a press on it puts
+			    away. The press itself is read on `window` above. */}
 			<div
-				ref={bodyRef}
-				className="min-h-0 flex-1 overflow-y-auto overscroll-y-contain p-4 space-y-4"
+				ref={backdropRef}
+				data-testid="answer-panel-backdrop"
+				className="absolute inset-0 bg-th-bg-overlay"
+				aria-hidden="true"
+			/>
+			{/* `role="dialog"` without `aria-modal`: this is modal over the
+			    transcript alone, and `aria-modal` would hide the composer, the
+			    strip and the header from a screen reader that can still reach all
+			    three. outline-none: it takes focus only to announce itself. */}
+			<section
+				ref={rootRef}
+				role="dialog"
+				tabIndex={-1}
+				aria-labelledby={titleId}
+				// Centred, capped at a share of the rectangle rather than at a
+				// number of pixels: a percentage needs no font size, no row height
+				// and no measurement of anything to stay inside the transcript, and
+				// it goes on doing so when the soft keyboard halves the screen. No
+				// `h-full`, so a single short question is a small card rather than a
+				// wall. The width, rounding, shadow and colour are `Sheet`'s own
+				// centred values; its drag handle is not copied, there being nothing
+				// to drag here.
+				className="relative mx-4 flex max-h-[85%] w-full max-w-md flex-col overflow-hidden rounded-xl bg-th-bg-secondary shadow-xl outline-none"
 			>
-				{sentCount > 0 && (
-					<p className="text-xs text-th-text-muted">
-						{sentCount === 1 ? "1 answer sent." : `${sentCount} answers sent.`}
-					</p>
-				)}
-				{error && (
-					<p role="alert" className="text-xs text-th-error">
-						{error}
-					</p>
-				)}
-				{blocks.length === 0 && (
-					<p className="text-sm text-th-text-muted">Nothing left to answer.</p>
-				)}
-				{blocks.map((block) => (
-					<QuestionBlock
-						key={block.question.request_id}
-						block={block}
-						draft={drafts[block.question.request_id] ?? EMPTY_DRAFT}
+				{/* Header, footer and the close button wear the same classes as
+				    `Sheet`'s, copied rather than shared: what makes them look alike
+				    is the tokens, and a `variant` on a shared modal would make every
+				    reader of `Sheet` — in both frontends — check which half they are
+				    in first. */}
+				<div className="flex shrink-0 items-center justify-between border-b border-th-border px-4 py-3">
+					<h2
+						id={titleId}
+						className="min-w-0 truncate text-base font-bold text-th-text-primary"
+					>
+						{title}
+					</h2>
+					<button
+						type="button"
+						onClick={handleDismiss}
 						disabled={sending}
-						onChange={update}
-						onDismiss={dismiss}
+						aria-label="Close"
+						className="touch-target -my-1.5 -mr-1 flex size-9 shrink-0 items-center justify-center rounded text-th-text-muted hover:bg-th-bg-tertiary hover:text-th-text-primary disabled:cursor-not-allowed disabled:opacity-50"
+					>
+						<X className="size-5" />
+					</button>
+				</div>
+				{/* overscroll-y-contain: an overscroll at either end stops here
+				    rather than leaving the panel — on touch that is the browser's own
+				    rubber-band and pull-to-refresh, reached by flicking through the
+				    last question. The transcript's scroller carries the same class
+				    for the same reason; it is a sibling of this one, not an ancestor,
+				    so chaining could never have reached it. */}
+				<div
+					ref={bodyRef}
+					className="min-h-0 flex-1 overflow-y-auto overscroll-y-contain p-4 space-y-4"
+				>
+					{sentCount > 0 && (
+						<p className="text-xs text-th-text-muted">
+							{sentCount === 1
+								? "1 answer sent."
+								: `${sentCount} answers sent.`}
+						</p>
+					)}
+					{error && (
+						<p role="alert" className="text-xs text-th-error">
+							{error}
+						</p>
+					)}
+					{blocks.length === 0 && (
+						<p className="text-sm text-th-text-muted">
+							Nothing left to answer.
+						</p>
+					)}
+					{blocks.map((block) => (
+						<QuestionBlock
+							key={block.question.request_id}
+							block={block}
+							draft={drafts[block.question.request_id] ?? EMPTY_DRAFT}
+							disabled={sending}
+							onChange={update}
+							onDismiss={dismiss}
+						/>
+					))}
+				</div>
+				<div className="flex shrink-0 gap-3 border-t border-th-border p-4">
+					<Footer
+						ready={readyIds.length}
+						total={liveBlocks.length}
+						sending={sending}
+						onSend={handleSend}
+						onClose={onClose}
 					/>
-				))}
-			</div>
-			<div className="flex shrink-0 gap-3 border-t border-th-border p-4">
-				<Footer
-					ready={readyIds.length}
-					total={liveBlocks.length}
-					sending={sending}
-					onSend={handleSend}
-					onClose={onClose}
-				/>
-			</div>
-		</section>
+				</div>
+			</section>
+		</div>
 	);
 }
 

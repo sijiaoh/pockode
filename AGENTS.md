@@ -85,6 +85,16 @@ restore each other's `overflow` and leave the page permanently unscrollable.
 Anything in this package that covers the page uses it; exporting it would invite
 a third, separate counter, which is the bug itself.
 
+`useOutsideClick` hands its callback the event beside the target, and an overlay
+with no backdrop of its own has to `stopPropagation` on the press it closes on:
+without a backdrop that press carries on to whatever is behind, which may read a
+press there as its own dismissal too, so one press puts away two panels. Only
+the caller knows a click was a dismissal at all — and only on the press it
+actually closes on, since a click it lets through is not its to take — so
+claiming has to be the caller's; the hook filters nothing. The convention, and
+which surfaces are exposed to it, live in
+[docs/answering-ui.md](docs/answering-ui.md#who-owns-the-dismissing-click).
+
 The responsive exports are the single source for the width ladder and the two
 pointer gates; both stylesheets are checked against them. Width decides where
 things go, pointer decides whether they can be reached — see

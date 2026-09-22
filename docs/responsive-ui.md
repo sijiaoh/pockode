@@ -845,7 +845,10 @@ tracking, and it is unaffected.
 
 Both activation-detection hazards live once, in
 `packages/shared/src/hooks/useOutsideClick.ts`, along with why its callback is
-read through a ref. Call sites supply only their own definition of "inside".
+read through a ref. Call sites supply only their own definition of "inside" —
+and, because only they know a click was a dismissal at all, whether to claim it
+off the bubble path so one press dismisses one overlay (see
+docs/answering-ui.md#who-owns-the-dismissing-click).
 
 ## Who owns the scroll boundary
 

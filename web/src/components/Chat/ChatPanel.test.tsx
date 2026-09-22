@@ -1,3 +1,4 @@
+import { MEDIA_QUERIES } from "@pockode/shared";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
 	act,
@@ -146,6 +147,10 @@ vi.mock("../../lib/wsStore", () => {
 		listAgents: mockState.listAgents,
 		sessionViewGet: mockState.sessionViewGet,
 		sessionViewHistory: mockState.sessionViewHistory,
+		// The composer's command palette, which is one of the surfaces that can
+		// be open over the answer panel. An empty list still draws it.
+		listCommands: () => Promise.resolve([]),
+		invalidateCommandCache: vi.fn(),
 	});
 
 	// One actions object for the whole file, not a fresh one per read: a hook
@@ -416,12 +421,12 @@ describe("ChatPanel", () => {
 		};
 
 		/**
-		 * The answer panel. A region rather than a dialog, and deliberately: it
-		 * covers the bottom of the transcript and nothing else, so the rest of
-		 * the transcript, the composer, the strip and the bars stay usable —
-		 * which `aria-modal` would deny.
+		 * The answer panel. A dialog, because a backdrop dims the transcript
+		 * behind it — but without `aria-modal`, because that backdrop stops at
+		 * the transcript's edges and the composer, the strip and the bars stay
+		 * usable, which `aria-modal` would deny.
 		 */
-		const answerPanel = () => screen.getByRole("region", { name: /question/ });
+		const answerPanel = () => screen.getByRole("dialog", { name: /question/ });
 
 		const seedUnansweredQuestion = () => {
 			mockState.mockHistory = [
@@ -552,8 +557,9 @@ describe("ChatPanel", () => {
 			expect(screen.getByText("Pending")).toBeInTheDocument();
 		});
 
-		// The one thing that makes this a panel and not the full-screen drawer it
-		// used to be: it stops at the bottom of the transcript's rectangle.
+		// Where the backdrop stops. Dimming the composer as well would make this
+		// a modal over the whole app, and the composer is where the user says
+		// the thing none of the questions asked for.
 		it("does not reach the composer", async () => {
 			const user = userEvent.setup();
 			seedUnansweredQuestion();
@@ -578,87 +584,255 @@ describe("ChatPanel", () => {
 			expect(answerPanel()).toBeInTheDocument();
 		});
 
-		// The panel leaves the top of the transcript showing, and what is showing
-		// has to be usable: an `inert` over it would tell a screen reader that
-		// controls the user can plainly see are not there. The card's own
-		// `Answer this` is the case that proves it — with the panel already up it
-		// is no longer a way in but a way to *this one*, and it still works.
-		it("leaves the transcript under it live", async () => {
-			const user = userEvent.setup();
+		// The backdrop dims the transcript and swallows every press meant for it,
+		// so `inert` is the same statement made to a keyboard and a screen
+		// reader: without it every dimmed control would still be in the Tab
+		// order — ahead of the panel, there being no focus trap — and still in
+		// the accessibility tree, which for a conversation nobody can press
+		// would be a lie.
+		it("puts the transcript out of reach under the backdrop", async () => {
 			seedUnansweredQuestion();
 			render(<ChatPanel {...defaultProps} />);
 			await waitForHistoryLoad();
 
 			expect(answerPanel()).toBeInTheDocument();
-			expect(screen.getByText("Pending").closest("[inert]")).toBeNull();
+			const card = screen.getByText("Pending").closest("[inert]");
+			expect(card).not.toBeNull();
+			// The panel is not inside what it covers, or it would be inert too.
+			expect(card?.contains(answerPanel())).toBe(false);
+		});
 
-			// Nothing named a question, so the panel showed itself without taking
-			// the caret; pressing the card's button is a naming, and that does.
-			expect(answerPanel()).not.toHaveFocus();
-			const card = screen
-				.getAllByRole("button", { name: /Database/ })
-				.find((button) => !answerPanel().contains(button));
-			if (!card) throw new Error("no question card in the transcript");
-			await user.click(card);
-			await user.click(screen.getByRole("button", { name: "Answer this" }));
+		// `inert` blurs whatever was focused inside the transcript, and the
+		// browser drops that focus on `<body>` — Tab would then restart at the
+		// top of the page instead of entering the panel that took it away. The
+		// panel catches it, and only in this one case: focus held in the
+		// composer, the strip or the header stays where it is.
+		it("catches the focus the transcript loses to it", async () => {
+			const user = userEvent.setup();
+			seedUnansweredQuestion();
+			render(<ChatPanel {...defaultProps} />);
+			await waitForHistoryLoad();
+
+			await user.click(
+				within(answerPanel()).getByRole("button", { name: "Close" }),
+			);
+			// A control of the transcript's own, focused the way a keyboard user
+			// reaches one.
+			const card = screen.getAllByRole("button", { name: /Database/ })[0];
+			act(() => card.focus());
+			expect(card).toHaveFocus();
+
+			// A second question arrives, which opens the panel over it.
+			act(() =>
+				acceptSetting({
+					turn: {
+						phase: "idle",
+						open: false,
+						since: "",
+						unanswered: [
+							question,
+							{ ...question, request_id: "q2", header: "Region" },
+						],
+					},
+				}),
+			);
+
 			expect(answerPanel()).toHaveFocus();
 		});
 
-		// The panel's own height is what the transcript keeps its tail above, and
-		// it has to leave with the panel. The inset comes from the same
-		// expression that decides the panel is drawn at all, rather than from a
-		// state cleared by hand: four separate acts close this panel, and the one
-		// that forgot to clear would leave a strip of blank transcript under it
-		// for the rest of the visit (docs/answering-ui.md §3).
-		it("holds the transcript's tail above itself, and lets go on closing", async () => {
+		// The rescue is worth exactly the arrival that caused it. An overlay
+		// unmounts the panel and brings it back with nobody having asked, and a
+		// rescue held over from before would have it announce itself then — the
+		// one thing an automatic re-show must not do.
+		it("does not carry the rescue through an overlay", async () => {
 			const user = userEvent.setup();
-			// jsdom lays nothing out, so the one number the panel reports has to be
-			// supplied; its own descriptor goes back afterwards rather than being
-			// deleted, which would leave later tests without `offsetHeight` at all.
-			const offsetHeight = Object.getOwnPropertyDescriptor(
-				HTMLElement.prototype,
-				"offsetHeight",
-			);
-			Object.defineProperty(HTMLElement.prototype, "offsetHeight", {
-				configurable: true,
-				get: () => 300,
-			});
+			seedUnansweredQuestion();
+			const { rerender } = render(<ChatPanel {...defaultProps} />);
+			await waitForHistoryLoad();
 
+			await user.click(
+				within(answerPanel()).getByRole("button", { name: "Close" }),
+			);
+			const card = screen.getAllByRole("button", { name: /Database/ })[0];
+			act(() => card.focus());
+			act(() =>
+				acceptSetting({
+					turn: {
+						phase: "idle",
+						open: false,
+						since: "",
+						unanswered: [
+							question,
+							{ ...question, request_id: "q2", header: "Region" },
+						],
+					},
+				}),
+			);
+			expect(answerPanel()).toHaveFocus();
+
+			rerender(
+				<ChatPanel
+					{...defaultProps}
+					overlay={{ type: "file", path: "a.ts" }}
+				/>,
+			);
+			rerender(<ChatPanel {...defaultProps} />);
+
+			expect(answerPanel()).toBeInTheDocument();
+			expect(answerPanel()).not.toHaveFocus();
+		});
+
+		// Escape does one thing per press. The session header stays lit beside
+		// the panel, so what it opens sits over the panel and claims the key
+		// first — without that, one press would put away a panel the user was
+		// not even looking at.
+		it("leaves Escape to whatever the lit header has opened over it", async () => {
+			const user = userEvent.setup();
+			seedUnansweredQuestion();
+			render(<ChatPanel {...defaultProps} />);
+			await waitForHistoryLoad();
+
+			await user.click(screen.getByRole("button", { name: "Session info" }));
+			const info = () => screen.queryByRole("dialog", { name: "Session info" });
+			expect(info()).toBeInTheDocument();
+
+			await user.keyboard("{Escape}");
+			expect(info()).not.toBeInTheDocument();
+			expect(answerPanel()).toBeInTheDocument();
+		});
+
+		// The composer row stays lit too, and its mode dropdown is not a
+		// `ResponsivePanel` — it claims the key on its own line. Same press, same
+		// rule: whatever is over the panel answers for it.
+		it("leaves Escape to the mode dropdown the lit composer has opened", async () => {
+			const user = userEvent.setup();
+			seedUnansweredQuestion();
+			render(<ChatPanel {...defaultProps} />);
+			await waitForHistoryLoad();
+
+			await user.click(screen.getByRole("button", { name: "Default" }));
+			expect(screen.getByText("YOLO")).toBeInTheDocument();
+
+			await user.keyboard("{Escape}");
+			expect(screen.queryByText("YOLO")).not.toBeInTheDocument();
+			expect(answerPanel()).toBeInTheDocument();
+		});
+
+		// The same rule, and the same press, on the pointer side. Above the
+		// expanded tier the header's panel is a dropdown anchored to its trigger
+		// with no backdrop of its own, so the click that dismisses it lands on
+		// the one thing dimmed behind it — this panel's backdrop. Everything
+		// else that can be opened over the panel portals a backdrop of its own
+		// and never reaches this one; this tier of this panel is the whole of
+		// the overlap, and it costs the user an Answer they did not mean to
+		// give up.
+		it("leaves a backdrop press to the dropdown the lit header has opened", async () => {
+			const user = userEvent.setup();
+			const narrow = window.matchMedia;
+			window.matchMedia = (query: string) =>
+				({
+					...narrow(query),
+					matches: query === MEDIA_QUERIES.atLeastExpanded,
+				}) as MediaQueryList;
 			try {
 				seedUnansweredQuestion();
 				render(<ChatPanel {...defaultProps} />);
 				await waitForHistoryLoad();
 
-				// The transcript's scroller, told apart from the panel's own by
-				// which of the two contains it. Neither carries a role.
-				const transcriptScroller = () => {
-					const el = Array.from(
-						document.querySelectorAll<HTMLElement>(".overflow-y-auto"),
-					).find((candidate) => !answerPanel().contains(candidate));
-					if (!el) throw new Error("no transcript scroller");
-					return el;
-				};
-				expect(transcriptScroller().style.paddingBottom).toBe("300px");
+				await user.click(screen.getByRole("button", { name: "Session info" }));
+				const info = () =>
+					screen.queryByRole("dialog", { name: "Session info" });
+				expect(info()).toBeInTheDocument();
 
-				const scroller = transcriptScroller();
-				await user.click(
-					within(answerPanel()).getByRole("button", { name: "Close" }),
-				);
-				expect(
-					screen.queryByRole("region", { name: /question/ }),
-				).not.toBeInTheDocument();
-				expect(scroller.style.paddingBottom).toBe("0px");
+				await user.click(screen.getByTestId("answer-panel-backdrop"));
+				expect(info()).not.toBeInTheDocument();
+				expect(answerPanel()).toBeInTheDocument();
 			} finally {
-				if (offsetHeight) {
-					Object.defineProperty(
-						HTMLElement.prototype,
-						"offsetHeight",
-						offsetHeight,
-					);
-				} else {
-					Reflect.deleteProperty(HTMLElement.prototype, "offsetHeight");
-				}
+				window.matchMedia = narrow;
 			}
+		});
+
+		// The other direction of the same rule. The panel is a dialog, but only
+		// over the transcript: the header it leaves lit is ordinary screen, so a
+		// press in the panel has to dismiss what the header has open — the
+		// exemption that spares a confirmation modal must not spare this.
+		it("closes the lit header's dropdown when the press lands in it", async () => {
+			const user = userEvent.setup();
+			const narrow = window.matchMedia;
+			window.matchMedia = (query: string) =>
+				({
+					...narrow(query),
+					matches: query === MEDIA_QUERIES.atLeastExpanded,
+				}) as MediaQueryList;
+			try {
+				seedUnansweredQuestion();
+				render(<ChatPanel {...defaultProps} />);
+				await waitForHistoryLoad();
+
+				await user.click(screen.getByRole("button", { name: "Session info" }));
+				const info = () =>
+					screen.queryByRole("dialog", { name: "Session info" });
+				expect(info()).toBeInTheDocument();
+
+				const panel = answerPanel();
+				if (!panel) throw new Error("the panel should be up");
+				await user.click(panel);
+				expect(info()).not.toBeInTheDocument();
+				expect(answerPanel()).toBeInTheDocument();
+			} finally {
+				window.matchMedia = narrow;
+			}
+		});
+
+		// The composer's palette is the other one, and unlike the header's
+		// dropdown it hangs with no backdrop at every width, not on wide screens
+		// alone.
+		it("leaves a backdrop press to the palette the lit composer has opened", async () => {
+			const user = userEvent.setup();
+			seedUnansweredQuestion();
+			render(<ChatPanel {...defaultProps} />);
+			await waitForHistoryLoad();
+
+			await user.click(screen.getByLabelText("Toggle commands"));
+			const palette = () => screen.queryByRole("listbox");
+			await waitFor(() => expect(palette()).toBeInTheDocument());
+
+			await user.click(screen.getByTestId("answer-panel-backdrop"));
+			expect(palette()).not.toBeInTheDocument();
+			expect(answerPanel()).toBeInTheDocument();
+		});
+
+		// Escape is the chat's interrupt, and that is not what a user pressing it
+		// at a dimmed transcript means. The panel owns the key while it is up,
+		// ChatPanel's own listener stands down, and the press that follows the
+		// panel's departure interrupts as it always did — the mistake in this
+		// direction costs one press, and in the other it ends the agent's turn
+		// for good.
+		it("takes Escape from the interrupt while it is up", async () => {
+			const user = userEvent.setup();
+			seedUnansweredQuestion();
+			render(<ChatPanel {...defaultProps} />);
+			await waitForHistoryLoad();
+			// An open turn, so an interrupt is on offer at all.
+			act(() =>
+				acceptSetting({
+					turn: {
+						phase: "running",
+						open: true,
+						since: "2024-01-01T00:00:00Z",
+						unanswered: [question],
+					},
+				}),
+			);
+
+			await user.keyboard("{Escape}");
+			expect(
+				screen.queryByRole("dialog", { name: /question/ }),
+			).not.toBeInTheDocument();
+			expect(mockState.interrupt).not.toHaveBeenCalled();
+
+			await user.keyboard("{Escape}");
+			expect(mockState.interrupt).toHaveBeenCalled();
 		});
 
 		// The panel is the strip's second row, said in full. Closing gives the row
@@ -678,7 +852,7 @@ describe("ChatPanel", () => {
 				within(answerPanel()).getByRole("button", { name: "Close" }),
 			);
 			expect(
-				screen.queryByRole("region", { name: /question/ }),
+				screen.queryByRole("dialog", { name: /question/ }),
 			).not.toBeInTheDocument();
 			expect(
 				screen.getByText("1 question is waiting for your answer."),
@@ -713,9 +887,9 @@ describe("ChatPanel", () => {
 
 		// The panel stays up when a permission request arrives over it — nothing
 		// vanishes under the user's hand. But the card the strip offers to jump
-		// to carries Allow, Deny and the tool input under them, so it wants the
-		// whole rectangle rather than whatever the panel leaves over; the jump
-		// closes the panel, which costs nothing but a tap on `Answer`.
+		// to is behind the backdrop and `inert`, so this row is the only way left
+		// to reach it at all; the jump closes the panel, which costs nothing but
+		// a tap on `Answer`.
 		it("gets out of the way of a jump to a covered request", async () => {
 			const user = userEvent.setup();
 			seedUnansweredQuestion();
@@ -754,7 +928,7 @@ describe("ChatPanel", () => {
 			await user.click(screen.getByRole("button", { name: "Jump to request" }));
 
 			expect(
-				screen.queryByRole("region", { name: /question/ }),
+				screen.queryByRole("dialog", { name: /question/ }),
 			).not.toBeInTheDocument();
 			expect(screen.getByRole("button", { name: "Allow" })).toBeInTheDocument();
 		});
@@ -849,7 +1023,7 @@ describe("ChatPanel", () => {
 					within(answerPanel()).getByRole("button", { name: "Close" }),
 				);
 				expect(
-					screen.queryByRole("region", { name: /question/ }),
+					screen.queryByRole("dialog", { name: /question/ }),
 				).not.toBeInTheDocument();
 			};
 
@@ -873,7 +1047,7 @@ describe("ChatPanel", () => {
 					}),
 				);
 				expect(
-					screen.queryByRole("region", { name: /question/ }),
+					screen.queryByRole("dialog", { name: /question/ }),
 				).not.toBeInTheDocument();
 				expect(
 					screen.getByText("1 question is waiting for your answer."),
@@ -906,7 +1080,7 @@ describe("ChatPanel", () => {
 
 				await closeThePanel(user);
 				expect(
-					screen.queryByRole("region", { name: /question/ }),
+					screen.queryByRole("dialog", { name: /question/ }),
 				).not.toBeInTheDocument();
 			});
 
@@ -1038,7 +1212,7 @@ describe("ChatPanel", () => {
 				await waitForHistoryLoad();
 
 				expect(
-					screen.queryByRole("region", { name: /question/ }),
+					screen.queryByRole("dialog", { name: /question/ }),
 				).not.toBeInTheDocument();
 			});
 

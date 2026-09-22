@@ -22,10 +22,17 @@ import { useEffect, useRef } from "react";
  * the listener down and re-schedule it on every render of the panel behind the
  * overlay — once per keystroke while the command palette is open — and would
  * make each of them memoise a callback to avoid that.
+ *
+ * The event comes with it so that a caller which decides to dismiss can claim
+ * the gesture — `stopPropagation`, keeping it from a surface listening further
+ * along the bubble path, which is how one press puts away one panel rather
+ * than every panel that happens to be open. Whether a click is a dismissal is
+ * the caller's judgement, so claiming it has to be the caller's too; see
+ * docs/answering-ui.md §4.
  */
 export function useOutsideClick(
 	active: boolean,
-	onOutside: (target: Element) => void,
+	onOutside: (target: Element, event: MouseEvent) => void,
 ): void {
 	const latest = useRef(onOutside);
 	latest.current = onOutside;
@@ -33,7 +40,8 @@ export function useOutsideClick(
 	useEffect(() => {
 		if (!active) return;
 
-		const handleClick = (e: MouseEvent) => latest.current(e.target as Element);
+		const handleClick = (e: MouseEvent) =>
+			latest.current(e.target as Element, e);
 
 		const timeoutId = setTimeout(() => {
 			document.addEventListener("click", handleClick);

@@ -115,9 +115,14 @@ function InputBar({
 		textareaRef.current?.focus();
 	}, []);
 
-	// Outside click detection
-	useOutsideClick(isPaletteOpen, (target) => {
+	// Outside click detection. The palette hangs over the composer with no
+	// backdrop, at every width, so the click that dismisses it reaches whatever
+	// is behind — the chat's answer panel dims the transcript and treats a press
+	// there as its own dismissal. Claiming it keeps one press to one panel; the
+	// palette's Escape does the same with `preventDefault`.
+	useOutsideClick(isPaletteOpen, (target, event) => {
 		if (containerRef.current && !containerRef.current.contains(target)) {
+			event.stopPropagation();
 			closePalette();
 		}
 	});

@@ -8,10 +8,19 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // Deliberately an inline callback, which is what the real call sites pass: a
 // fresh closure every render.
-function Overlay({ onOutside }: { onOutside: () => void }) {
+function Overlay({
+	onOutside,
+	claims,
+}: {
+	onOutside: () => void;
+	claims?: boolean;
+}) {
 	const panelRef = useRef<HTMLDivElement>(null);
-	useOutsideClick(true, (target) => {
-		if (panelRef.current && !panelRef.current.contains(target)) onOutside();
+	useOutsideClick(true, (target, event) => {
+		if (panelRef.current && !panelRef.current.contains(target)) {
+			if (claims) event.stopPropagation();
+			onOutside();
+		}
 	});
 	return (
 		<>
@@ -85,6 +94,40 @@ describe("useOutsideClick", () => {
 		act(() => screen.getByText("outside").click());
 
 		expect(onOutside).toHaveBeenCalled();
+	});
+
+	// The other half of "one gesture, one panel": the answer panel reads a press
+	// on the dimmed transcript as its own dismissal, from `window`, so a
+	// dropdown dismissing on the same press has to take it off the path. The
+	// hook cannot do that on the caller's behalf — only the caller knows the
+	// click was a dismissal at all — so it hands over the event.
+	it("lets the caller claim the click it dismisses on", () => {
+		const onOutside = vi.fn();
+		const onWindow = vi.fn();
+		window.addEventListener("click", onWindow);
+		render(<Overlay onOutside={onOutside} claims />);
+		settle();
+
+		act(() => screen.getByText("outside").click());
+		window.removeEventListener("click", onWindow);
+
+		expect(onOutside).toHaveBeenCalled();
+		expect(onWindow).not.toHaveBeenCalled();
+	});
+
+	// And only the press it claims: a click it lets through is not its to take.
+	it("leaves a click it ignores on its way", () => {
+		const onOutside = vi.fn();
+		const onWindow = vi.fn();
+		window.addEventListener("click", onWindow);
+		render(<Overlay onOutside={onOutside} claims />);
+		settle();
+
+		act(() => screen.getByText("inside").click());
+		window.removeEventListener("click", onWindow);
+
+		expect(onOutside).not.toHaveBeenCalled();
+		expect(onWindow).toHaveBeenCalled();
 	});
 
 	// The click that opens an overlay is still propagating when the effect runs,

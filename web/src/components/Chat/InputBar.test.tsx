@@ -609,6 +609,35 @@ describe("InputBar", () => {
 			expect(textarea).toHaveValue("/he");
 		});
 
+		// The palette hangs over the composer with no backdrop of its own, so the
+		// click that dismisses it carries on to whatever is behind — and the
+		// chat's answer panel reads a press on the dimmed transcript as its own
+		// dismissal, from `window`. One press, one panel: the palette takes the
+		// click it acts on off the path, the way its Escape already does.
+		it("claims the outside click it closes on", async () => {
+			const onWindowClick = vi.fn();
+			window.addEventListener("click", onWindowClick);
+			try {
+				render(<InputBar sessionId={TEST_SESSION_ID} onSend={() => {}} />);
+
+				const textarea = screen.getByRole("textbox");
+				fireEvent.change(textarea, { target: { value: "/he" } });
+				await waitFor(() => {
+					expect(screen.getByRole("listbox")).toBeInTheDocument();
+				});
+				// The hook attaches a task after opening, so the click that
+				// opened the palette cannot close it again.
+				await waitFor(() => {});
+
+				fireEvent.click(document.body);
+
+				expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
+				expect(onWindowClick).not.toHaveBeenCalled();
+			} finally {
+				window.removeEventListener("click", onWindowClick);
+			}
+		});
+
 		it("reopens palette when clicking trigger button after dismiss", async () => {
 			render(<InputBar sessionId={TEST_SESSION_ID} onSend={() => {}} />);
 

@@ -55,14 +55,19 @@ function ModeSelector({
 	const currentInfo = getSessionModeInfo(mode, agentType);
 	const currentColors = ICON_COLORS[mode] ?? ICON_COLORS.default;
 
-	// Close dropdown on Escape key
+	// Close dropdown on Escape, and mark the press handled: this sits in the
+	// composer row, which stays lit under surfaces that claim Escape for
+	// themselves — today the chat's answer panel, which waits until `window` to
+	// ask exactly so this answer is in by then (docs/answering-ui.md §4, "Who
+	// owns Escape"). Without the mark, one press would close this dropdown and a
+	// panel the user was not even looking at.
 	useEffect(() => {
 		if (!isOpen) return;
 
 		const handleKeyDown = (e: KeyboardEvent) => {
-			if (e.key === "Escape") {
-				setIsOpen(false);
-			}
+			if (e.key !== "Escape" || e.defaultPrevented) return;
+			e.preventDefault();
+			setIsOpen(false);
 		};
 
 		document.addEventListener("keydown", handleKeyDown);
