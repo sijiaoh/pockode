@@ -1,4 +1,4 @@
-import { render, screen, within } from "@testing-library/react";
+import { act, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useQuestionDraftStore } from "../../lib/questionDraftStore";
@@ -54,6 +54,87 @@ beforeEach(() => {
 });
 
 describe("AnswerPanel", () => {
+	// jsdom lays nothing out, so the shape can only be read off the classes it
+	// is written in — worth pinning all the same, because filling the rectangle
+	// is the exact thing this panel was reshaped away from: a user who opens a
+	// session and sees nothing of it does not know where they are.
+	it("sits on the bottom edge of the rectangle rather than filling it", () => {
+		renderPanel([database]);
+		const panel = screen.getByRole("region", { name: /question/ });
+		expect(panel).toHaveClass("absolute", "inset-x-0", "bottom-0");
+		// Capped, so conversation is always left showing; uncapped in the other
+		// direction, so one short question is a card and not a wall.
+		expect(panel).toHaveClass("max-h-[70%]");
+		expect(panel).not.toHaveClass("inset-0");
+		expect(panel).not.toHaveClass("h-full");
+	});
+
+	// The number the transcript below keeps its tail above. Reported on mount and
+	// not only from the observer: the observer's first call is asynchronous, and
+	// the frame the panel appears in would otherwise paint the last message
+	// underneath it.
+	it("reports its height on arrival and whenever it changes", () => {
+		const resized: ResizeObserverCallback[] = [];
+		vi.stubGlobal(
+			"ResizeObserver",
+			class {
+				constructor(callback: ResizeObserverCallback) {
+					resized.push(callback);
+				}
+				observe() {}
+				unobserve() {}
+				disconnect() {}
+			},
+		);
+		let height = 240;
+		// jsdom lays nothing out, so the one number this reports has to be
+		// supplied. Its own descriptor is put back afterwards rather than deleted:
+		// deleting would leave every later test in this file without `offsetHeight`
+		// at all.
+		const offsetHeight = Object.getOwnPropertyDescriptor(
+			HTMLElement.prototype,
+			"offsetHeight",
+		);
+		Object.defineProperty(HTMLElement.prototype, "offsetHeight", {
+			configurable: true,
+			get: () => height,
+		});
+		const onHeightChange = vi.fn();
+
+		try {
+			render(
+				<AnswerPanel
+					sessionId="s1"
+					unanswered={[database]}
+					onSend={vi.fn()}
+					onClose={vi.fn()}
+					takeFocus={false}
+					onHeightChange={onHeightChange}
+				/>,
+			);
+			expect(onHeightChange).toHaveBeenLastCalledWith(240);
+
+			// A second question arrives, a note field opens: the height is the
+			// content's, so one measurement would go stale.
+			height = 420;
+			act(() =>
+				resized[0]?.([], undefined as unknown as globalThis.ResizeObserver),
+			);
+			expect(onHeightChange).toHaveBeenLastCalledWith(420);
+		} finally {
+			if (offsetHeight) {
+				Object.defineProperty(
+					HTMLElement.prototype,
+					"offsetHeight",
+					offsetHeight,
+				);
+			} else {
+				Reflect.deleteProperty(HTMLElement.prototype, "offsetHeight");
+			}
+			vi.unstubAllGlobals();
+		}
+	});
+
 	it("titles itself with the live count and counts what is ready", () => {
 		renderPanel([database, region]);
 		expect(screen.getByText("2 questions")).toBeInTheDocument();

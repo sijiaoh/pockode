@@ -873,6 +873,55 @@ describe("MessageList following the tail", () => {
 		expect(scroller.scrollTop).toBe(1000);
 	});
 
+	// The answer panel sits on the bottom edge of this rectangle and says how
+	// tall it is. The padding alone would leave the tail exactly that far below
+	// the fold — `scrollTop` does not move when padding is added — so the frame
+	// the panel appears in would cover the newest message and stop following.
+	it("holds the tail above whatever covers the bottom of the rectangle", () => {
+		const { scroller, viewport, rerender } = renderFollowing();
+
+		// A real scroller counts its bottom padding in `scrollHeight`; jsdom has
+		// to be told, so the stub grows by the inset the rerender below adds.
+		viewport.contentHeight = 1300;
+		rerender(
+			<MessageList
+				sessionId="session-1"
+				messages={transcript}
+				bottomInset={300}
+			/>,
+		);
+
+		expect(scroller.style.paddingBottom).toBe("300px");
+		expect(scroller.scrollTop).toBe(1300);
+		expect(
+			screen.queryByRole("button", { name: "Scroll to bottom" }),
+		).toBeNull();
+	});
+
+	// The reader who has scrolled away keeps their place: the inset is not a
+	// reason to drag them back to the tail.
+	it("leaves a view that is not at the tail where it is", () => {
+		const { scroller, viewport, rerender } = renderFollowing();
+		dragTo(scroller, 200);
+
+		// As above: the padding the inset adds is part of `scrollHeight`.
+		viewport.contentHeight = 1300;
+		rerender(
+			<MessageList
+				sessionId="session-1"
+				messages={transcript}
+				bottomInset={300}
+			/>,
+		);
+
+		expect(scroller.scrollTop).toBe(200);
+		// And the way back to the tail is lifted clear of what covers it, or it
+		// would be the one control the panel hides.
+		expect(
+			screen.getByRole("button", { name: "Scroll to bottom" }),
+		).toHaveStyle({ bottom: "316px" });
+	});
+
 	it("keeps the scroll-to-bottom button following as the content settles", async () => {
 		const { scroller, viewport } = renderFollowing();
 		dragTo(scroller, 200);

@@ -397,7 +397,7 @@ describe("ChatPanel", () => {
 		});
 	});
 
-	// The whole answering path, end to end: the strip offers it, the sheet sends
+	// The whole answering path, end to end: the strip offers it, the panel sends
 	// it, and the card in the transcript settles. The last of those is the one
 	// this client has to do itself — the sender is left out of the broadcast
 	// that carries its own message, so nothing is coming to settle the card
@@ -417,8 +417,9 @@ describe("ChatPanel", () => {
 
 		/**
 		 * The answer panel. A region rather than a dialog, and deliberately: it
-		 * covers the transcript and nothing else, so the composer, the strip and
-		 * the bars below it stay usable — which `aria-modal` would deny.
+		 * covers the bottom of the transcript and nothing else, so the rest of
+		 * the transcript, the composer, the strip and the bars stay usable —
+		 * which `aria-modal` would deny.
 		 */
 		const answerPanel = () => screen.getByRole("region", { name: /question/ });
 
@@ -552,8 +553,8 @@ describe("ChatPanel", () => {
 		});
 
 		// The one thing that makes this a panel and not the full-screen drawer it
-		// used to be: it covers the conversation and stops there.
-		it("covers the transcript without reaching the composer", async () => {
+		// used to be: it stops at the bottom of the transcript's rectangle.
+		it("does not reach the composer", async () => {
 			const user = userEvent.setup();
 			seedUnansweredQuestion();
 			render(<ChatPanel {...defaultProps} />);
@@ -577,22 +578,87 @@ describe("ChatPanel", () => {
 			expect(answerPanel()).toBeInTheDocument();
 		});
 
-		// With no focus trap over it, the covered transcript would otherwise keep
-		// every one of its controls in the Tab order — ahead of the panel — and in
-		// the accessibility tree, while being invisible.
-		it("takes the covered transcript out of reach", async () => {
+		// The panel leaves the top of the transcript showing, and what is showing
+		// has to be usable: an `inert` over it would tell a screen reader that
+		// controls the user can plainly see are not there. The card's own
+		// `Answer this` is the case that proves it — with the panel already up it
+		// is no longer a way in but a way to *this one*, and it still works.
+		it("leaves the transcript under it live", async () => {
 			const user = userEvent.setup();
 			seedUnansweredQuestion();
 			render(<ChatPanel {...defaultProps} />);
 			await waitForHistoryLoad();
 
-			expect(screen.getByText("Pending").closest("[inert]")).not.toBeNull();
-
-			// And gives it back the moment the panel is out of the way.
-			await user.click(
-				within(answerPanel()).getByRole("button", { name: "Close" }),
-			);
+			expect(answerPanel()).toBeInTheDocument();
 			expect(screen.getByText("Pending").closest("[inert]")).toBeNull();
+
+			// Nothing named a question, so the panel showed itself without taking
+			// the caret; pressing the card's button is a naming, and that does.
+			expect(answerPanel()).not.toHaveFocus();
+			const card = screen
+				.getAllByRole("button", { name: /Database/ })
+				.find((button) => !answerPanel().contains(button));
+			if (!card) throw new Error("no question card in the transcript");
+			await user.click(card);
+			await user.click(screen.getByRole("button", { name: "Answer this" }));
+			expect(answerPanel()).toHaveFocus();
+		});
+
+		// The panel's own height is what the transcript keeps its tail above, and
+		// it has to leave with the panel. The inset comes from the same
+		// expression that decides the panel is drawn at all, rather than from a
+		// state cleared by hand: four separate acts close this panel, and the one
+		// that forgot to clear would leave a strip of blank transcript under it
+		// for the rest of the visit (docs/answering-ui.md §3).
+		it("holds the transcript's tail above itself, and lets go on closing", async () => {
+			const user = userEvent.setup();
+			// jsdom lays nothing out, so the one number the panel reports has to be
+			// supplied; its own descriptor goes back afterwards rather than being
+			// deleted, which would leave later tests without `offsetHeight` at all.
+			const offsetHeight = Object.getOwnPropertyDescriptor(
+				HTMLElement.prototype,
+				"offsetHeight",
+			);
+			Object.defineProperty(HTMLElement.prototype, "offsetHeight", {
+				configurable: true,
+				get: () => 300,
+			});
+
+			try {
+				seedUnansweredQuestion();
+				render(<ChatPanel {...defaultProps} />);
+				await waitForHistoryLoad();
+
+				// The transcript's scroller, told apart from the panel's own by
+				// which of the two contains it. Neither carries a role.
+				const transcriptScroller = () => {
+					const el = Array.from(
+						document.querySelectorAll<HTMLElement>(".overflow-y-auto"),
+					).find((candidate) => !answerPanel().contains(candidate));
+					if (!el) throw new Error("no transcript scroller");
+					return el;
+				};
+				expect(transcriptScroller().style.paddingBottom).toBe("300px");
+
+				const scroller = transcriptScroller();
+				await user.click(
+					within(answerPanel()).getByRole("button", { name: "Close" }),
+				);
+				expect(
+					screen.queryByRole("region", { name: /question/ }),
+				).not.toBeInTheDocument();
+				expect(scroller.style.paddingBottom).toBe("0px");
+			} finally {
+				if (offsetHeight) {
+					Object.defineProperty(
+						HTMLElement.prototype,
+						"offsetHeight",
+						offsetHeight,
+					);
+				} else {
+					Reflect.deleteProperty(HTMLElement.prototype, "offsetHeight");
+				}
+			}
 		});
 
 		// The panel is the strip's second row, said in full. Closing gives the row
@@ -646,10 +712,10 @@ describe("ChatPanel", () => {
 		});
 
 		// The panel stays up when a permission request arrives over it — nothing
-		// vanishes under the user's hand. But the card the strip then offers to
-		// jump to is underneath the panel and `inert`, so the jump has to bring
-		// it out: a button that scrolls something unreachable is the dead end
-		// this surface exists to remove.
+		// vanishes under the user's hand. But the card the strip offers to jump
+		// to carries Allow, Deny and the tool input under them, so it wants the
+		// whole rectangle rather than whatever the panel leaves over; the jump
+		// closes the panel, which costs nothing but a tap on `Answer`.
 		it("gets out of the way of a jump to a covered request", async () => {
 			const user = userEvent.setup();
 			seedUnansweredQuestion();
@@ -691,7 +757,6 @@ describe("ChatPanel", () => {
 				screen.queryByRole("region", { name: /question/ }),
 			).not.toBeInTheDocument();
 			expect(screen.getByRole("button", { name: "Allow" })).toBeInTheDocument();
-			expect(screen.getByText("Allow").closest("[inert]")).toBeNull();
 		});
 
 		// The panel outlives an overlay, but the tap that opened it does not:
@@ -1734,7 +1799,7 @@ describe("ChatPanel", () => {
 		});
 
 		// Nothing can answer it, so the card says so rather than offering a way in
-		// to a sheet the question is not in.
+		// to a panel the question is not in.
 		it("says an unanswered one can no longer be answered", async () => {
 			const user = userEvent.setup();
 			mockState.mockHistory = [legacyQuestion, { type: "done" }];

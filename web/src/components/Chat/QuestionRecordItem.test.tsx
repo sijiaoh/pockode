@@ -104,7 +104,7 @@ describe("QuestionRecordItem", () => {
 
 	// A card that states `Pending` and offers nothing is a dead end. It holds no
 	// state of its own — it calls the same opener the strip does.
-	it("offers the sheet from a pending body, and nothing else", async () => {
+	it("offers the panel from a pending body, and nothing else", async () => {
 		const user = userEvent.setup();
 		const onAnswer = vi.fn();
 		render(

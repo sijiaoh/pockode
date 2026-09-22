@@ -1,5 +1,12 @@
 import { X } from "lucide-react";
-import { useCallback, useEffect, useId, useRef, useState } from "react";
+import {
+	useCallback,
+	useEffect,
+	useId,
+	useLayoutEffect,
+	useRef,
+	useState,
+} from "react";
 import {
 	EMPTY_DRAFT,
 	isDraftDirty,
@@ -45,6 +52,15 @@ interface Props {
 	 * (docs/answering-ui.md §4).
 	 */
 	takeFocus: boolean;
+	/**
+	 * Reports how tall the panel currently is, so the transcript underneath can
+	 * hold its own tail above it (docs/answering-ui.md §3). The panel measures
+	 * *itself* and hands the number to a sibling — it still measures nothing
+	 * about the header, the strip or the composer, which is what the `absolute`
+	 * positioning is there to avoid. Must be stable: a new function each render
+	 * would tear down and rebuild the observer behind it.
+	 */
+	onHeightChange?: (height: number) => void;
 }
 
 /** A block the user can still see, whether or not its question is still open. */
@@ -77,14 +93,22 @@ const ALREADY_ANSWERED = "Already answered elsewhere.";
  * wizard hides how much is left, forbids answering out of order, and turns two
  * questions into four taps.
  *
- * It fills the transcript's rectangle and nothing more — it is not a modal, and
- * every modal habit is deliberately absent: no portal, no backdrop, no body
- * scroll lock, no focus trap, no document-level Escape. The composer, the strip
- * and the bars below it stay visible and usable while it is up, which is the
- * whole point of it, and each of those habits would take one of them away.
- * Positioning is `absolute inset-0` against the wrapper `ChatPanel` puts around
- * the list, so the rectangle follows a resize, a soft keyboard and an error bar
- * appearing without this component knowing any of them happened.
+ * It is a drawer sitting on the bottom edge of the transcript's rectangle,
+ * never taller than 70% of it: the height is what the content needs, so one
+ * short question is a small card. The 30% that is always left over is what
+ * tells the user they are still in their session, and it stays live — readable,
+ * scrollable, pressable — which is why there is no scrim over it.
+ *
+ * It is not a modal, and every modal habit is deliberately absent: no portal,
+ * no backdrop, no body scroll lock, no focus trap, no document-level Escape.
+ * The composer, the strip and the bars below it stay visible and usable while
+ * it is up, which is the whole point of it, and each of those habits would take
+ * one of them away.
+ *
+ * Positioning is `absolute` against the wrapper `ChatPanel` puts around the
+ * list, and the cap is a percentage of it, so the drawer follows a resize, a
+ * soft keyboard and an error bar appearing without this component knowing any
+ * of them happened — and still leaves the same share of conversation showing.
  */
 function AnswerPanel({
 	sessionId,
@@ -93,6 +117,7 @@ function AnswerPanel({
 	onSend,
 	onClose,
 	takeFocus,
+	onHeightChange,
 }: Props) {
 	const drafts = useQuestionDraftStore(selectSessionDrafts(sessionId));
 	// Blocks that can no longer be answered but are still on screen, keyed by
@@ -299,6 +324,26 @@ function AnswerPanel({
 	const titleId = useId();
 	const rootRef = useRef<HTMLElement>(null);
 
+	// The height goes to the transcript below, which uses it to keep its tail
+	// above this panel. An observer rather than one measurement, because the
+	// height is the content's: it changes as questions arrive and leave, as a
+	// refusal line appears, as a declined block opens its note field.
+	//
+	// The first report is in this layout effect and not left to the observer:
+	// the observer's first callback is asynchronous, so the frame the panel
+	// appears in would still have an inset of zero and paint the last message
+	// underneath it.
+	useLayoutEffect(() => {
+		const el = rootRef.current;
+		if (!el || !onHeightChange) return;
+		onHeightChange(el.offsetHeight);
+		const observer = new ResizeObserver(() => {
+			onHeightChange(el.offsetHeight);
+		});
+		observer.observe(el);
+		return () => observer.disconnect();
+	}, [onHeightChange]);
+
 	// On the edge where a user action asks for this panel, not while one holds.
 	// The edge and not the mount, because the panel now shows itself the moment
 	// a question arrives: by the time the work detail's `Answer` names one, the
@@ -341,7 +386,15 @@ function AnswerPanel({
 			tabIndex={-1}
 			aria-labelledby={titleId}
 			onKeyDown={handleKeyDown}
-			className="absolute inset-0 z-10 flex flex-col bg-th-bg-secondary outline-none"
+			// Sitting on the bottom edge rather than filling the rectangle, and
+			// capped at a share of it rather than at a number of pixels: a
+			// percentage needs no font size, no row height and no measurement of
+			// the rectangle to leave conversation showing, and it goes on leaving
+			// the same share of it when the soft keyboard halves the screen.
+			// No `h-full`, so a single short question is a small card rather than
+			// a wall. The rounding, shadow and colour are `Sheet`'s own values;
+			// its drag handle is not copied, there being nothing to drag here.
+			className="absolute inset-x-0 bottom-0 z-10 flex max-h-[70%] flex-col overflow-hidden rounded-t-2xl border-t border-th-border bg-th-bg-secondary shadow-xl outline-none"
 		>
 			{/* Header, footer and the close button wear the same classes as
 			    `Sheet`'s, copied rather than shared: what makes them look alike is

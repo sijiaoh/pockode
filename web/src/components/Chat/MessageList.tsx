@@ -197,6 +197,14 @@ interface Props {
 	 * the handler it would call is withheld.
 	 */
 	isReadOnly?: boolean;
+	/**
+	 * How much of the bottom of this rectangle something else is covering —
+	 * today only the answer panel, which reports its own height. The transcript
+	 * keeps its tail above that much, so what the panel leaves showing is the
+	 * live end of the conversation rather than settled scrollback
+	 * (docs/answering-ui.md §3).
+	 */
+	bottomInset?: number;
 }
 
 function MessageList({
@@ -219,6 +227,7 @@ function MessageList({
 	onOpenSession,
 	onForkMessage,
 	isReadOnly = false,
+	bottomInset = 0,
 }: Props) {
 	const { EmptyState: CustomEmptyState } = useChatUIConfig();
 	const scrollRef = useRef<HTMLDivElement>(null);
@@ -552,6 +561,23 @@ function MessageList({
 		}
 	}, [totalCount]);
 
+	// The inset grows the scroller's padding, which moves the tail away from the
+	// view without moving `scrollTop`: the frame the panel appears in would
+	// otherwise leave the last message exactly the panel's height below the fold,
+	// far enough past the threshold that following stops and the scroll-to-bottom
+	// button appears. Re-pinning is not a nicety here, it is what makes the
+	// padding do its job.
+	//
+	// A layout effect, so the correction is in the same paint as the padding
+	// that needs it; `useEffect` would show one frame with the tail covered.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: bottomInset is the trigger, not a value the body reads — the same shape as the two effects above
+	useLayoutEffect(() => {
+		const el = scrollRef.current;
+		if (!el || !followRef.current) return;
+		el.scrollTop = el.scrollHeight;
+		setShowScrollButton(false);
+	}, [bottomInset]);
+
 	// Auto-scroll on content growth (streaming text within existing messages)
 	// biome-ignore lint/correctness/useExhaustiveDependencies: hasMessages triggers re-observe when scroll container mounts
 	useEffect(() => {
@@ -710,8 +736,14 @@ function MessageList({
 			    by hand: left on, it rewrites scrollTop under the paging restore and
 			    the follow effects, and Safari does not implement it at all, so the
 			    two would not even disagree the same way on each platform. */}
+			{/* The padding goes on the scroller and not on the content box: with
+			    `border-box` it shortens the scroller's *content* box, which is what
+			    the content box's `min-h-full` resolves against, so a conversation
+			    too short to scroll comes to rest on the inset's top edge instead of
+			    being pushed through the bottom of the view. */}
 			<div
 				ref={scrollRef}
+				style={{ paddingBottom: bottomInset }}
 				className="h-full overflow-x-hidden overflow-y-auto overscroll-y-contain [overflow-anchor:none]"
 			>
 				<div
@@ -797,7 +829,12 @@ function MessageList({
 				<button
 					type="button"
 					onClick={handleScrollToBottom}
-					className="absolute bottom-4 left-1/2 flex size-9 -translate-x-1/2 items-center justify-center rounded-full border border-th-border bg-th-bg-primary text-th-text-secondary pointer-coarse:size-11 shadow-xl transition-colors hover:bg-th-bg-secondary hover:text-th-text-primary"
+					// Lifted clear of whatever covers the bottom of the rectangle. The
+					// offset is here rather than in a class because it is a sum: 16px
+					// is where it sits when nothing covers anything, and a class as
+					// well would be a second, disagreeing answer.
+					style={{ bottom: 16 + bottomInset }}
+					className="absolute left-1/2 flex size-9 -translate-x-1/2 items-center justify-center rounded-full border border-th-border bg-th-bg-primary text-th-text-secondary pointer-coarse:size-11 shadow-xl transition-colors hover:bg-th-bg-secondary hover:text-th-text-primary"
 					aria-label="Scroll to bottom"
 				>
 					<ArrowDown className="h-5 w-5" aria-hidden="true" />

@@ -305,10 +305,11 @@ speak:
   come out `no`, beside a host that cannot navigate and an agent that cannot fork
   ([session-fork-ui.md](session-fork-ui.md#which-rows-reserve-a-slot)).
 - **`AttentionStrip` and the answer panel are not rendered.** An unanswered
-  question cannot be answered from here — and the panel putting itself up over
-  the conversation ([answering-ui.md §4](answering-ui.md#4-when-the-panel-is-up))
-  is gated on the same read-only check, so nothing arrives over a transcript
-  that is here to be read.
+  question cannot be answered from here — and the panel putting itself up on
+  the foot of the conversation
+  ([answering-ui.md §4](answering-ui.md#4-when-the-panel-is-up)) is gated on the
+  same read-only check, so nothing arrives over a transcript that is here to be
+  read.
 - **The openers inside the transcript go with them.** A question card's
   `Answer this`, a permission card's `Allow`/`Deny`, and the empty state's
   hints are all withheld by giving the list no handler for them — each card

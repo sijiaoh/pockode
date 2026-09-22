@@ -48,7 +48,7 @@ Besides user-typed messages, the Work system pushes automatic prompts to the sam
 
 See [agent-event.md](agent-event.md) for the full event type catalog, data flow, and frontend processing pipeline.
 
-A question does not block the agent, and its card is pushed out of view — often out of the loaded pages entirely — by whatever the agent streams next. So answering does not happen on the card: the unanswered questions are session state, reached from a strip above the composer and answered in a sheet. That whole surface is [answering-ui.md](answering-ui.md); the card in the stream is only the record of what was asked.
+A question does not block the agent, and its card is pushed out of view — often out of the loaded pages entirely — by whatever the agent streams next. So answering does not happen on the card: the unanswered questions are session state, answered in a drawer that puts itself up on the bottom edge of the transcript — leaving the conversation above it readable — and reached again, once it is closed, from a strip above the composer. That whole surface is [answering-ui.md](answering-ui.md); the card in the stream is only the record of what was asked.
 
 ## History Paging
 
@@ -302,6 +302,14 @@ miss and just as common, because the input box grows as it is typed into, an
 error bar can appear above it, and the software keyboard takes half the screen —
 none of which change the content's height while all of them push the tail out of
 view.
+
+The answer panel is the one thing that takes the tail away without either box
+changing: it is a drawer *over* the bottom of the container rather than a box
+above or below it, so neither observation sees it. `MessageList` is told instead
+— `bottomInset`, the panel's own reported height — and pads its scroller by that
+much, lifts the scroll-to-bottom button by it, and re-pins in a layout effect
+when it changes, so the correction lands in the same paint as the padding that
+needs it ([answering-ui.md §3](answering-ui.md#3-the-answer-panel)).
 
 The browser's own scroll anchoring is turned off on the container. The anchoring
 here is written by hand, for paging as much as for the tail, and leaving the

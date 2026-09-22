@@ -126,10 +126,12 @@ as a side effect, and the strip would then take itself to be a chat with no way
 to answer at all and fall through to row 3 or 4.
 
 **Row 1's "Jump to request" closes the panel before it jumps.** A permission
-request can arrive while the panel is up (§7), and the card it scrolls to is
-then lying underneath it and `inert` — scrolling something the user can neither
-see nor press is the dead end this surface exists to remove. Closing costs
-nothing: the drafts stay (§5), and the panel is one tap away afterwards.
+request can arrive while the panel is up (§7), and a permission card carries
+Allow, Deny and the tool input under them: it wants the whole rectangle, not
+whatever the drawer has left over. (Since the transcript under the drawer is
+live, a card that happens to be showing *can* be approved in place — but the
+jump is for the one that is not.) Closing costs nothing: the drafts stay (§5),
+and the panel is one tap away afterwards.
 
 **The panel changes the strip's height by one line, and that is left alone.**
 Row 2 goes when the panel opens and comes back when it closes, so the composer
@@ -175,16 +177,27 @@ nothing it renders nothing — unchanged.
 
 ## 3. The answer panel
 
-`web/src/components/Chat/AnswerPanel.tsx`. It fills the **transcript's
-rectangle** and nothing else: a scrolling body between a fixed header and
-footer, drawn on `bg-th-bg-secondary`, covering the conversation and stopping
-there.
+`web/src/components/Chat/AnswerPanel.tsx`. It is a **drawer on the bottom edge
+of the transcript's rectangle**: a scrolling body between a fixed header and
+footer, drawn on `bg-th-bg-secondary` with `Sheet`'s rounded top and shadow,
+never taller than **70% of that rectangle** and usually shorter, because its
+height is whatever the questions need.
+
+The 30% it always leaves is the point of the shape. A panel that filled the
+rectangle answered "what is waiting on me" and lost the answer to "where am I":
+the user tapped into a session and the session was not on the screen. A strip
+and a composer are not a substitute — they say what can be done next, not what
+has been happening.
 
 ```
 ┌──────────────────────────────────────────────┐
 │ session header                               │ ← not covered
 ├──────────────────────────────────────────────┤
-│ 2 questions                              [×] │ ← the panel starts here
+│ …their conversation — never less than 30%    │ ← not covered, and live:
+│ of this rectangle, ending in whatever the    │   readable, scrollable,
+│ agent is writing right now                   │   pressable
+├──────────────────────────────────────────────┤
+│ 2 questions                              [×] │ ← the drawer starts here
 ├──────────────────────────────────────────────┤
 │ [Database]                            14:02  │
 │ Which database should I use?                 │
@@ -202,7 +215,7 @@ there.
 │  answering this.                             │
 │  [ already said it above______________ ]     │
 ├──────────────────────────────────────────────┤
-│ 2 of 2 ready                        [ Send ] │ ← the panel ends here
+│ 2 of 2 ready                        [ Send ] │ ← the drawer ends here
 ├──────────────────────────────────────────────┤
 │ AttentionStrip (row 2 absent — §2)           │ ← not covered
 │ engine · mode                         [Stop] │ ← not covered
@@ -215,16 +228,16 @@ there.
 That one sentence decides most of this section. The old sheet covered the
 whole screen, and every modal habit it had was a consequence of covering it:
 the backdrop, the body-scroll lock, the focus trap, the window-wide Escape, the
-grab for focus on open. Cover only the transcript and each of those stops
-describing anything and starts taking away something the user can still see is
-there.
+grab for focus on open. Cover only the bottom of the transcript and each of
+those stops describing anything and starts taking away something the user can
+still see is there.
 
 So they are gone, one by one:
 
 | Modal habit | Why it is absent |
 |---|---|
-| portal + `fixed inset-0` | It is `absolute inset-0` inside the wrapper around the message list. That rectangle already exists and already follows a window resize, a soft keyboard and an error bar appearing; a fixed panel would have to be told the header's height, the strip's, the composer's and the error bar's, and the strip's changes *because* of this panel (§2) |
-| backdrop, and closing by tapping it | There is no backdrop — outside the panel are the header, the strip, the bars and the composer, and every one of them is a live control. A tap there does that control's job. This also retires the one-thumb close the old sheet had — a stray backdrop tap used to close the sheet, and now closing is a deliberate act: the `×`, or Escape with the focus inside the panel |
+| portal + `fixed inset-0` | It is `absolute inset-x-0 bottom-0` inside the wrapper around the message list, capped at `max-h-[70%]` of it. That rectangle already exists and already follows a window resize, a soft keyboard and an error bar appearing; a fixed panel would have to be told the header's height, the strip's, the composer's and the error bar's, and the strip's changes *because* of this panel (§2). The cap being a percentage is the same argument one level down: the share of conversation left showing is constant without anything measuring anything, soft keyboard included |
+| backdrop, and closing by tapping it | There is no backdrop — outside the panel are the header, the conversation it leaves showing, the strip, the bars and the composer, and every one of them is live. A tap there does that control's job. This also retires the one-thumb close the old sheet had — a stray backdrop tap used to close the sheet, and now closing is a deliberate act: the `×`, or Escape with the focus inside the panel |
 | body-scroll lock | Only one region is covered; the page below it is the user's to scroll |
 | focus trap | Tab runs out of the footer into the strip, the bars and the composer. That is what "the composer stays usable" means on a keyboard |
 | document-level Escape | Escape is the chat's interrupt. The panel listens on its own root and calls `preventDefault`, so Escape closes the panel when the focus is inside it and interrupts the agent everywhere else. A panel that is up most of the time must not take a key off the whole window |
@@ -243,26 +256,86 @@ pull-to-refresh, both a flick past the last question away. It is not the
 transcript underneath that this protects: that scroller is a *sibling* of this
 one rather than an ancestor, and scroll chaining only ever travels up.
 
-**The covered transcript is `inert`.** With no focus trap, every button in it —
-expand toggles, `Answer this`, the fork menu — would otherwise still be in the
-tab order, and *ahead* of the panel, so a keyboard user would walk through
-dozens of invisible controls to reach the questions. `inert` and not
-`pointer-events-none`: the thing being said is "this is not operable right now",
-and that sentence is addressed to the accessibility tree as much as to the
-pointer.
+**The transcript under the drawer is live, not `inert`.** It was `inert` while
+the panel filled the rectangle, and what it said was true then: none of that
+transcript could be seen, so taking it out of reach cost nothing and kept dozens
+of invisible controls out of the tab order. A drawer leaves 30% of it visible,
+and `inert` over something the user can plainly see is a lie told to the
+accessibility tree. It is gone, and three things follow:
+
+- A **keyboard walks the transcript's controls before reaching the panel.** That
+  is the shape this app already has — the composer and the strip have always sat
+  below a long transcript — and it is not worth a skip link or a DOM order that
+  disagrees with the visual one. Every entry point that *names* a question moves
+  the focus into the panel (§4), and the panel is a named region, so landmark
+  navigation reaches it in one jump.
+- A visible card's **`Answer this` works while the panel is up**, which is no
+  longer a way in but a way to *that one* — the edge §4 already defines: scroll
+  to its block and take focus.
+- A permission card that happens to be showing can be **approved without closing
+  the panel**.
+
+**No scrim over what is left showing.** Dimming it would be the backdrop under
+another name: it would invite a tap-outside-to-close that must not exist (the
+things outside are live controls), and the visible conversation is there *to be
+read*, which is exactly what dimming takes back.
+
+### The transcript keeps its tail above the panel
+
+A drawer on the bottom edge covers the bottom of the transcript, and the bottom
+of a transcript is the part that is alive: the agent writes there. Left alone,
+the 30% on show would be settled scrollback and "you can still see your
+conversation" would be a false claim.
+
+So the panel measures **itself** and reports its height (`onHeightChange`);
+`ChatPanel` passes it to `MessageList` as `bottomInset`, which does three
+things with it:
+
+1. `padding-bottom` on the **scroll container**, not on the content box. With
+   `border-box` the padding shortens the container's content box, which is what
+   the content box's `min-h-full` resolves against, so a conversation too short
+   to scroll comes to rest on the drawer's top edge instead of being pushed
+   through the bottom of the view.
+2. **Re-pins to the tail** when the inset changes, in a layout effect. Adding
+   padding does not move `scrollTop`: without this the frame the panel appears
+   in leaves the last message exactly the panel's height below the fold — far
+   enough past `AT_BOTTOM_THRESHOLD` that following stops and the
+   scroll-to-bottom button appears. This is not a refinement, it is what makes
+   the padding work.
+3. **Lifts the scroll-to-bottom button** by the same amount, or the drawer would
+   hide the one control that undoes being scrolled away.
+
+This is a measurement, and the table above spends a row arguing against
+measuring — but what it argues against is measuring *other people*: the header,
+the strip and the composer, two of which change because of this panel. A
+component measuring itself and handing the number to its sibling stays local and
+self-correcting, and needs no layout knowledge anywhere.
+
+**The height is reported once on mount and then by a `ResizeObserver`.** The
+height is the content's, so it changes as questions arrive and leave; and the
+observer's first callback is asynchronous, so leaving the mount frame to it
+would paint one frame with the tail covered.
+
+**The inset comes from the same expression as the panel's rendering**
+(`answerPanelShown`), never from a state cleared alongside it. Four separate
+acts close the panel, and a read-only session never opens one at all; a height
+cleared by hand would eventually be left behind by one of those five paths, and
+the transcript would keep a strip of blank space under it forever.
 
 ### One shape at every width
 
-Compact, regular and expanded all draw the same panel filling the same
-rectangle. No `sm:`, no `lg:`, no `useIsExpanded()`.
+Compact, regular and expanded all draw the same drawer on the bottom edge of the
+same rectangle. No `sm:`, no `lg:`, no `useIsExpanded()`.
 
 Width decides layout *form* ([responsive-ui.md](responsive-ui.md)), and here
 there is no second form to decide between: the transcript is one column at every
-tier, and "fill the transcript" means the same thing in all three. The old
-sheet's split — drawer below the expanded tier, centred dialog at and above it —
-was `Sheet` being modal in two ways; a centred dialog brings the backdrop and
-the modal feel back with it, which would be keeping half of what this section
-just removed.
+tier, and "sit on the bottom of that column" means the same thing in all three —
+note that at the expanded tier the rectangle is already narrowed by the sidebar,
+so filling its width is never filling the screen's. The old sheet's split —
+drawer below the expanded tier, centred dialog at and above it — was `Sheet`
+being modal in two ways; a centred dialog brings the backdrop and the modal
+feel back with it, which would be keeping half of what this section just
+removed.
 
 **No `max-w` on the text either.** On a wide screen the question lines run as
 wide as the column, exactly as the assistant's paragraphs in the transcript
@@ -280,11 +353,13 @@ project would have to work out which branch they are in for the sake of one
 caller in one project. That fails both of the bars `AGENTS.md` sets for shared
 code.
 
-What is left to duplicate is three lines of Tailwind and one boolean. Three
-lines of repetition are cheaper than an API surface spanning two projects, and
-because those three lines copy `Sheet`'s own values the panel looks exactly like
-every sheet in the app — consistency from the tokens, which is where it belongs.
-`Sheet` itself is untouched, and its other callers with it.
+What is left to duplicate is a few lines of Tailwind and one boolean. That
+repetition is cheaper than an API surface spanning two projects, and because
+those lines copy `Sheet`'s own values — `rounded-t-2xl`, `shadow-xl`,
+`bg-th-bg-secondary`, the header and footer borders and padding — the panel
+looks exactly like every sheet in the app. Consistency from the tokens, which is
+where it belongs. The one value deliberately *not* copied is the drag handle
+(§8). `Sheet` itself is untouched, and its other callers with it.
 
 ### What it draws
 
@@ -459,10 +534,12 @@ keeping in view. The old rule was *never opens by itself*, because the old sheet
 covered the **whole screen** (§3): arriving at a chat behind a full-screen drawer
 meant dismissing it before the thing the user navigated for was even visible, and
 the tap that brought them there had to be undone. That argument was about
-covering everything. The panel covers the transcript, leaves the composer, the
-strip and the bars alive, and closes with one control — so the argument no longer
-reaches it, and what is left is the principle at the top of this document: a
-question that nobody is looking at is work that has stopped.
+covering everything. This drawer covers the bottom of the transcript, leaves the
+rest of it — and the composer, the strip and the bars — alive, and closes with
+one control, so arriving at the chat shows the conversation *and* the question
+in the same frame: there is nothing to dismiss before the thing the user
+navigated for is visible. What is left is the principle at the top of this
+document: a question that nobody is looking at is work that has stopped.
 
 The gate is three facts, all of them about whether answering is possible at all:
 
@@ -521,7 +598,7 @@ record would have no way to stop lying about it.
 |---|---|---|
 | the strip's **Answer** (row 2) | the way back in after a close — one line above the composer, never scrolled away | the first unanswered question |
 | the work detail's **Answer** | **take me to this one**: navigates to the chat, scrolls that question into view and reads the panel out | that question |
-| a pending record card's **Answer this** | secondary — the card is under the panel and `inert`, so it is within reach only after a close | that card's question |
+| a pending record card's **Answer this** | **take me to this one**, from the transcript the drawer leaves showing — available whether or not the panel is already up, because that transcript is live (§3) | that card's question |
 
 "Anchored" means the panel scrolls that block into view. It never filters: a
 panel holding one of three open questions would be a second, partial answer to
@@ -757,7 +834,7 @@ to carry.
 | Fork | The fork's session has its own unanswered list, with the inherited `request_id`s. The panel is the fork's panel and needs no rule of its own — including the case where the original was answered after the fork point and the copy is open again |
 | A question whose card has not been paged in | Answerable. That is the whole design: the panel reads the list, not the transcript. The `Answer this` opener does not exist for it, because its card is not on screen to hold one |
 | An agent answers the question (`question_answer`) | The block leaves the panel by the two rules above; the card reads `Answered`, and the answering message is drawn as the named block of §6 rather than as a user bubble |
-| A permission request arrives while the panel is up | The panel **does not close** — it may hold half-typed answers, and a surface that disappears under the user is worse than one that explains itself. The strip shows row 1 instead of row 2 (which is not rendered anyway while the panel is up), a submit is refused with the line above, and "Jump to request" closes the panel on its way to the card (§2) |
+| A permission request arrives while the panel is up | The panel **does not close** — it may hold half-typed answers, and a surface that disappears under the user is worse than one that explains itself. The strip shows row 1 instead of row 2 (which is not rendered anyway while the panel is up), and a submit is refused with the line above. If the card is in the part of the transcript the drawer leaves showing it can be answered where it is; otherwise "Jump to request" closes the panel on its way to it (§2) |
 | Reduced motion | The panel's anchor scroll degrades, as every scroll in this app does. There is nothing else to degrade: the panel has no enter or leave animation (§8) |
 
 ## 8. Deliberately not done
@@ -771,14 +848,21 @@ to carry.
   has already resolved. A silent dismiss would leave an agent waiting on
   something the user has decided is gone, which is the shape of failure this
   project forbids.
-- **No translucency, no frosted glass.** Answering does not need the conversation
-  visible behind it, and the only thing that would cost is legibility of the one
-  thing that has to be read.
-- **No height cap that leaves a few lines of conversation showing.** Same reason,
-  plus "a few lines" is a number that would have to be derived from the content's
-  height, the region's height and the type size, and would drift as any of the
-  three changed — for a need nobody has.
-- **No touching the transcript's scroll position when the panel opens.** The
+- **No translucency, no frosted glass.** The conversation is visible *beside*
+  the panel (§3), which is the need that was actually there; seeing it *through*
+  the panel would cost the legibility of the one thing that has to be read and
+  buy nothing back.
+- **No swipe-to-dismiss, and no drag handle.** The drawer shape invites both,
+  and both are wrong here: the body scrolls vertically, so a downward flick is
+  as likely to mean "back to the previous question" as "close", and the panel
+  is full of form controls a mis-close would take half an answer out of.
+  Closing is the `×` or Escape. A handle with no drag behind it promises a
+  gesture that does not exist.
+- **No third, minimised form** — a bubble, a pill, a collapsed bar. Closed plus
+  the strip's row 2 **Answer** already is that form, and it has one state
+  instead of two.
+- **No touching the transcript's scroll position when the panel opens**, beyond
+  the one re-pin that keeps the tail out from under the panel (§3). The
   transcript stays mounted underneath and keeps its place, so closing the panel
   returns the user to the screen they left, unmoved. Moving it would make
   "close it for a second" an act with a cost.
@@ -817,11 +901,11 @@ silent, and this design simply never enters it.
 | File | Role |
 |---|---|
 | `web/src/components/Chat/AttentionStrip.tsx` | renamed from `BlockerStrip.tsx`; gains row 2, an `onAnswer` prop, and the `answerPanelOpen` that withholds row 2 while the panel is up (§2) |
-| `web/src/components/Chat/AnswerPanel.tsx` | the panel, its blocks, the footer (§3); it covers the transcript's rectangle and is not a modal |
+| `web/src/components/Chat/AnswerPanel.tsx` | the panel, its blocks, the footer (§3); a drawer on the bottom edge of the transcript's rectangle, capped at 70% of it, reporting its own height upwards, and not a modal |
 | `web/src/components/Chat/QuestionForm.tsx` | extracted from `AskUserQuestionItem.tsx`; the one renderer of a question, across every host that draws one — including the third shape, a textarea for a question with no options |
 | `web/src/components/Chat/QuestionRecordItem.tsx` | replaces `AskUserQuestionItem.tsx` — the record card: four states, no form, collapsed by default, `Answer this` in the body (§6), and the one card a legacy `ask_user_question` record draws through |
-| `web/src/components/Chat/ChatPanel.tsx` | holds whether the panel is up, what it is anchored to, and the ids this visit has shown; wraps the message list so the panel has a rectangle and takes it `inert` while covered; consumes the navigation intent of §4 |
-| `web/src/components/Chat/MessageList.tsx` | loses the pill, its observer, its debounce and its live region; keeps the jump, narrowed to permission cards (`.jump-highlight`, renamed from `.question-highlight` now that no question card is a target) |
+| `web/src/components/Chat/ChatPanel.tsx` | holds whether the panel is up, what it is anchored to, its reported height and the ids this visit has shown; wraps the message list so the panel has a rectangle, and derives the panel's rendering and the list's `bottomInset` from one expression (§3); consumes the navigation intent of §4 |
+| `web/src/components/Chat/MessageList.tsx` | loses the pill, its observer, its debounce and its live region; keeps the jump, narrowed to permission cards (`.jump-highlight`, renamed from `.question-highlight` now that no question card is a target); takes `bottomInset` and keeps its tail, and its scroll-to-bottom button, above it (§3) |
 | `web/src/components/Chat/MessageItem.tsx` | the answering message's bubble — one entry per `answering` element — and, for an `agent` origin, the named block that replaces it (§6) |
 | `web/src/utils/messageSource.ts` | new — `isTypedByUser`, the one place "a person typed this" is decided: a `role: "user"` message may be Pockode's own or another agent's answer, and neither should follow the transcript to the tail or claim the delivery receipt |
 | `web/src/lib/answerIntent.ts` | the one-shot navigation intent of §4 — *take me to this question*, not *open the panel* — deliberately not a route |
