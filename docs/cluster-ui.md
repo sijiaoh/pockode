@@ -57,6 +57,20 @@ screen.
 
 ## What was rejected, and why
 
+**A password in the URL, so that a bookmark could sign you in.** The panel used
+to accept `?password=` (and `?token=`, its pre-rename spelling), strip it back
+out of the address bar and go straight to the node list. That was removed, and
+the stripping is why: it cleans the one copy we can reach and none of the
+others. By the time the page runs, the browser has already put the whole URL in
+history and in address-bar autocomplete, the bookmark or shared link the visit
+came from still holds it, and on a phone all of that syncs to the user's other
+devices. Behind that password is arbitrary code execution on the host
+([code/authentication.md](code/authentication.md#trust-model)); what the
+shortcut bought was not typing it a second time. Something that expires and
+can be revoked may be traded for that convenience — the session token is
+exactly that, and is why a reload does not ask again — but the password itself
+may not.
+
 **A filter or a search field over the list.** The list groups instead. A filter
 hides nodes behind a control and leaves a dead end whenever it matches nothing,
 and the summary chips that used to sit above the flat list had the same failing

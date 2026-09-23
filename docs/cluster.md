@@ -251,10 +251,9 @@ alternatives that were rejected on the way to it, are in
   Again clears the stored credential and returns here. A stored session token
   the cluster no longer knows is a different case and is handled silently: it is
   dropped and the password screen comes back with nothing to apologise for,
-  because the user did nothing wrong. A `?password=` query parameter skips this
-  screen and is stripped from the URL immediately, so a bookmark can carry it
-  instead of a phone keyboard (`?token=` is the pre-rename spelling, still read
-  for one deprecation period).
+  because the user did nothing wrong. This field is the only place the password
+  is ever supplied; one carried in the URL was rejected, for reasons in
+  [cluster-ui.md](cluster-ui.md#what-was-rejected-and-why).
 - **Connecting** uses a full-screen loading state, held back 300 ms so a connect
   that is about to succeed says nothing at all. If it never succeeds the screen
   changes to "Cluster unreachable" with a Retry, because retries run for as long

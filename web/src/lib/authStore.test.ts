@@ -67,38 +67,19 @@ describe("authStore", { timeout: 20_000 }, () => {
 			expect(authActions.getBearer()).toBe("issued-session");
 		});
 
+		// Dropping a lapsed token leaves nothing behind to connect with: the
+		// password it was exchanged for is long gone, so the user is back at the
+		// password screen rather than silently retrying with a stale secret.
 		it("forgetSession drops the stored token", async () => {
 			const { useAuthStore, authActions } = await import("./authStore");
 
+			authActions.login("hunter2");
 			authActions.rememberSession("issued-session");
 			authActions.forgetSession();
 
 			expect(localStorage.getItem("auth_session_token")).toBeNull();
 			expect(useAuthStore.getState().sessionToken).toBeNull();
-		});
-
-		// The one thing that separates forgetSession from logout, and the reason
-		// the cluster's `?password=` link still works after its session lapses:
-		// a load that has both a restored token and a password waiting behind it
-		// falls back to the password rather than to the login screen. Only this
-		// order reaches it — `rememberSession` wipes the password, so a password
-		// typed *after* a token was issued is already gone.
-		it("falls back to a waiting password when the token is dropped", async () => {
-			localStorage.setItem("auth_session_token", "stale-session");
-			const { authActions } = await import("./authStore");
-
-			authActions.login("hunter2");
-			expect(authActions.getCredential()).toEqual({
-				kind: "session_token",
-				value: "stale-session",
-			});
-
-			authActions.forgetSession();
-
-			expect(authActions.getCredential()).toEqual({
-				kind: "password",
-				value: "hunter2",
-			});
+			expect(authActions.getCredential()).toBeNull();
 		});
 
 		it("logout clears both credentials", async () => {

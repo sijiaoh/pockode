@@ -2,6 +2,7 @@ import { act, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import App from "./App";
+import { authActions } from "./lib/authStore";
 
 const wsState = {
 	status: "disconnected",
@@ -31,6 +32,8 @@ afterEach(() => {
 	wsState.status = "disconnected";
 	authState.sessionToken = null;
 	authState.password = null;
+	// The URL is shared by every case in the file, and one of them writes to it.
+	window.history.replaceState({}, "", "/");
 	vi.clearAllMocks();
 });
 
@@ -74,6 +77,18 @@ describe("the password screen", () => {
 		render(<App />);
 
 		expect(screen.queryByLabelText("Password")).toBeNull();
+	});
+
+	// The cluster used to sign a visitor in from a `?password=` (or `?token=`)
+	// in the URL; docs/cluster-ui.md says why that was removed. The parameters
+	// now mean nothing — including in a bookmark saved while they still worked.
+	it("ignores a password in the URL", () => {
+		window.history.replaceState({}, "", "/?password=hunter2&token=hunter2");
+
+		render(<App />);
+
+		expect(screen.getByLabelText("Password")).toBeInTheDocument();
+		expect(authActions.login).not.toHaveBeenCalled();
 	});
 });
 
