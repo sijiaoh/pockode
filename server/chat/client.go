@@ -151,6 +151,10 @@ func (c *Client) sendEvent(ctx context.Context, sessionID string, event agent.Me
 		return session.NoHistorySeq, ErrTurnAwaitingAnswer
 	}
 
+	// Minted here, once, for every sender: it goes into the record, to the agent
+	// that can carry it, and into the read point that names this message later.
+	event.MessageID = uuid.NewString()
+
 	// Persist message to history
 	seq, err := c.store.AppendToHistory(ctx, sessionID, agent.NewEventRecord(event))
 	if err != nil {
@@ -161,9 +165,13 @@ func (c *Client) sendEvent(ctx context.Context, sessionID string, event agent.Me
 		// address, so nothing below may pass one on: a seq nobody can resolve would
 		// send a later fork to whatever record eventually takes that number.
 		seq = session.NoHistorySeq
+		// The id goes with it. There is no record carrying this id, so a read
+		// point naming it would name nothing.
+		event.MessageID = ""
 	}
 
-	if err := proc.SendMessage(event.Content); err != nil {
+	openedTurn, err := proc.SendMessage(agent.Prompt{Text: event.Content, ID: event.MessageID})
+	if err != nil {
 		return session.NoHistorySeq, err
 	}
 
@@ -171,7 +179,43 @@ func (c *Client) sendEvent(ctx context.Context, sessionID string, event agent.Me
 		c.broadcast(sessionID, event.ToRecord(), seq, exclude)
 	}
 
+	// A message that joined a turn already under way is the one that needs a
+	// boundary drawn: what the agent produces from here answers it rather than
+	// the message above. One that opened its turn has nothing above it to cut
+	// away. See agent.MessageIngestedEvent.
+	//
+	// seq.Valid() is the third condition and not a formality: a message whose
+	// own record could not be written is not in the transcript, so a boundary
+	// drawn for it would cut a conversation nothing in it asked a question of.
+	if seq.Valid() && !openedTurn && !proc.ReportsMessageIngest() {
+		c.noteIngested(ctx, sessionID, event.MessageID)
+	}
+
 	return seq, nil
+}
+
+// noteIngested writes the read point for an agent that cannot report its own:
+// the message has been handed over, and that moment is the earliest the agent
+// could have taken it in. See agent.MessageIngestedEvent for why that
+// approximation is the right direction to be wrong in.
+//
+// Written here rather than injected into the process's event stream so that it
+// lands after the message it is about has been announced. History would hold
+// them in the right order either way — the message was appended first — but a
+// subscriber would be told the agent had read a message it had not yet been
+// told about.
+//
+// A failed append is logged and nothing more. The message was delivered and the
+// turn is under way; losing the boundary costs the reader a bubble break on the
+// next reload, which is not worth failing a send that succeeded.
+func (c *Client) noteIngested(ctx context.Context, sessionID, messageID string) {
+	record := agent.NewEventRecord(agent.MessageIngestedEvent{MessageID: messageID})
+	seq, err := c.store.AppendToHistory(ctx, sessionID, record)
+	if err != nil {
+		slog.Error("failed to persist the message read point", "sessionId", sessionID, "error", err)
+		return
+	}
+	c.broadcastRecord(sessionID, record, seq)
 }
 
 func (c *Client) SendPermissionResponse(ctx context.Context, sessionID string, data agent.PermissionRequestData, choice agent.PermissionChoice) error {

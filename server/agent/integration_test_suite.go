@@ -281,7 +281,7 @@ func runChatScenario(t *testing.T, a Agent, tc chatCase) {
 	}
 	defer sess.Close()
 
-	if err := sess.SendMessage(tc.prompt); err != nil {
+	if err := sess.SendMessage(Prompt{Text: tc.prompt}); err != nil {
 		t.Fatalf("SendMessage failed: %v", err)
 	}
 
@@ -401,7 +401,7 @@ func runApprovalScenario(t *testing.T, a Agent, choice PermissionChoice) approva
 	}
 	defer sess.Close()
 
-	if err := sess.SendMessage(escapeSandboxPrompt(target)); err != nil {
+	if err := sess.SendMessage(Prompt{Text: escapeSandboxPrompt(target)}); err != nil {
 		t.Fatalf("SendMessage failed: %v", err)
 	}
 
@@ -556,7 +556,7 @@ func testCLIQuestionNeverReachesTheUser(t *testing.T, a Agent) {
 	// built-in one, and each CLI only has the name of its own.
 	prompt := "Ask me whether I prefer Python or Go, with exactly those two options. " +
 		"Use your built-in AskUserQuestion or request_user_input tool to ask. Then stop."
-	if err := sess.SendMessage(prompt); err != nil {
+	if err := sess.SendMessage(Prompt{Text: prompt}); err != nil {
 		t.Fatalf("SendMessage failed: %v", err)
 	}
 
@@ -654,7 +654,7 @@ func testMultiTurn(t *testing.T, a Agent) {
 	}
 	defer sess.Close()
 
-	if err := sess.SendMessage("Remember this number: 31415. Reply with just OK."); err != nil {
+	if err := sess.SendMessage(Prompt{Text: "Remember this number: 31415. Reply with just OK."}); err != nil {
 		t.Fatalf("SendMessage failed: %v", err)
 	}
 
@@ -702,7 +702,7 @@ func testMultiTurn(t *testing.T, a Agent) {
 
 				afterFirstTurn = usage
 				turn = 2
-				if err := sess.SendMessage(secondTurn); err != nil {
+				if err := sess.SendMessage(Prompt{Text: secondTurn}); err != nil {
 					t.Fatalf("SendMessage failed for the second turn: %v", err)
 				}
 			}
@@ -857,7 +857,7 @@ func testYoloNoPermission(t *testing.T, a Agent) {
 	}
 	defer sess.Close()
 
-	if err := sess.SendMessage(escapeSandboxPrompt(target)); err != nil {
+	if err := sess.SendMessage(Prompt{Text: escapeSandboxPrompt(target)}); err != nil {
 		t.Fatalf("SendMessage failed: %v", err)
 	}
 
@@ -929,7 +929,7 @@ func testInterrupt(t *testing.T, a Agent) {
 	}
 	defer sess.Close()
 
-	if err := sess.SendMessage("Count from 1 to 100, one number per line"); err != nil {
+	if err := sess.SendMessage(Prompt{Text: "Count from 1 to 100, one number per line"}); err != nil {
 		t.Fatalf("SendMessage failed: %v", err)
 	}
 
@@ -1078,14 +1078,71 @@ const midTurnMarker = "BANANA"
 // from).
 const midTurnQuietWindow = 20 * time.Second
 
+// midTurnOpenerID and midTurnMessageID are Pockode's own ids for the two
+// messages, in the form the send path mints them. An agent that can carry an id
+// through echoes the second one back at its read point, which is the only thing
+// that says *which* message a boundary belongs to when several are queued.
+//
+// The opener carries one as well, and that is the point of it: an echo of the
+// turn's first message has to be passed over because it is the turn's first,
+// not because it happened to carry nothing to identify it. Sending the opener
+// without an id would let a broken skip look correct.
+const (
+	midTurnOpenerID  = "pockode-msg-opener"
+	midTurnMessageID = "pockode-msg-midturn"
+)
+
+// midTurnReadPoints is what one turn showed about its boundary, gathered as the
+// turn runs and judged once it is over. A struct rather than the five loose
+// values it used to be: three of them are ints that mean entirely different
+// things, and passing them positionally is a transposition away from an
+// assertion that reads well and checks something else.
+type midTurnReadPoints struct {
+	// records counts the events so far that history keeps
+	// (EventType.Persisted), so that the two indices below are positions in the
+	// stream a client replays rather than in the live one. The two differ by the
+	// events nothing records, and a boundary that held in only one of them would
+	// give a reloading tab a different transcript from the one that watched the
+	// turn happen.
+	records int
+
+	// seen counts the read points the session reported, and id is the message
+	// the last of them named.
+	seen int
+	id   string
+
+	// point and marker are the records the boundary and the answer to the
+	// mid-turn message landed at, or -1 for one that never arrived — or, for the
+	// boundary, arrived as an event history does not keep.
+	point  int
+	marker int
+}
+
 // testMidTurnMessage is the contract the composer stays unlocked against: a
-// message sent while a turn is being worked on reaches the agent, and it lands
-// in the turn already running rather than starting a second one.
+// message sent while a turn is being worked on reaches the agent, it lands in
+// the turn already running rather than starting a second one, and the transcript
+// shows its answer below it rather than above.
 //
 // One ending is the assertion that matters to the rest of the server. Turn state
 // is what everything downstream reads (session.ReduceTurn), and an agent that
 // answered a mid-turn message in a turn of its own would end twice — which the
 // work engine reads as two turns finishing, and nudges twice for.
+//
+// Where that one turn's output is cut in two is the other half, and only a real
+// CLI can answer it: the boundary is agent.MessageIngestedEvent, which an agent
+// that reports its own read point emits from the CLI's echo of the message.
+// Everything about that — that the echo comes at all, that it comes *before* the
+// answer rather than after, that the id survives the round trip, and that the
+// message which opened the turn does not produce one — is CLI behaviour, and
+// there is nothing below this level that can check it. The unit tests hold the
+// server's side of it (agent/codex/appserver_test.go, chat/ingest_test.go); this
+// holds the CLI's.
+//
+// An agent that reports nothing has the read point written for it at the moment
+// the message is handed over (chat.Client.sendEvent), which is a server-side
+// decision with no CLI behaviour in it — so what is checked here is the one
+// thing that would make that write wrong: that the session does not also emit a
+// read point of its own, which would cut the transcript twice for one message.
 func testMidTurnMessage(t *testing.T, a Agent) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*integrationTimeout)
 	defer cancel()
@@ -1101,16 +1158,25 @@ func testMidTurnMessage(t *testing.T, a Agent) {
 	}
 	defer sess.Close()
 
+	// Which of the two shapes this agent is. Asked of the session rather than of
+	// the CLI's name, because that is the same question chat.Client asks before
+	// deciding to write the read point itself.
+	_, reportsIngest := sess.(MessageIngestReporter)
+
 	// A turn long enough to still be running when the second message arrives,
 	// made of tool calls rather than text so that there is a moment to aim at.
-	if err := sess.SendMessage("Run this exact bash command three times in a row, one tool call each: sleep 8. " +
-		"After each one, say which round you just finished."); err != nil {
+	if err := sess.SendMessage(Prompt{
+		Text: "Run this exact bash command three times in a row, one tool call each: sleep 8. " +
+			"After each one, say which round you just finished.",
+		ID: midTurnOpenerID,
+	}); err != nil {
 		t.Fatalf("SendMessage failed: %v", err)
 	}
 
 	sent := false
 	dones := 0
 	sawMarker := false
+	cut := midTurnReadPoints{point: -1, marker: -1}
 
 	for {
 		var quiet <-chan time.Time
@@ -1127,19 +1193,42 @@ func testMidTurnMessage(t *testing.T, a Agent) {
 			}
 			RequireEventFields(t, event)
 
+			record := -1
+			if event.EventType().Persisted() {
+				record = cut.records
+				cut.records++
+			}
+
 			switch e := event.(type) {
 			case ToolResultEvent:
 				if sent {
 					continue
 				}
 				sent = true
-				if err := sess.SendMessage(
-					"Change of plan: stop what you are doing and reply with just the word " + midTurnMarker + "."); err != nil {
+				if err := sess.SendMessage(Prompt{
+					Text: "Change of plan: stop what you are doing and reply with just the word " + midTurnMarker + ".",
+					ID:   midTurnMessageID,
+				}); err != nil {
 					t.Fatalf("mid-turn SendMessage failed: %v", err)
+				}
+			case MessageIngestedEvent:
+				cut.seen++
+				cut.point = record
+				cut.id = e.MessageID
+				if !reportsIngest {
+					t.Errorf("the session emitted a read point though it does not implement MessageIngestReporter, " +
+						"so the send path has written one too and the transcript is cut twice for one message")
+				}
+				if !sent {
+					t.Error("a read point arrived for the message that opened the turn; nothing had been said yet, " +
+						"so it marks a boundary where the message record already is (see claimTurnOpener)")
 				}
 			case TextEvent:
 				if strings.Contains(e.Content, midTurnMarker) {
 					sawMarker = true
+					if cut.marker < 0 {
+						cut.marker = record
+					}
 				}
 			case ErrorEvent:
 				t.Fatalf("error event: %s", e.Error)
@@ -1157,11 +1246,51 @@ func testMidTurnMessage(t *testing.T, a Agent) {
 			}
 
 		case <-quiet:
+			cut.check(t, reportsIngest)
 			return
 
 		case <-ctx.Done():
 			t.Fatalf("timeout after %d endings, marker seen: %v", dones, sawMarker)
 		}
+	}
+}
+
+// check holds what the turn as a whole has to show about the boundary, as
+// opposed to what each event has to show as it arrives.
+func (c midTurnReadPoints) check(t *testing.T, reportsIngest bool) {
+	t.Helper()
+
+	if !reportsIngest {
+		// Already reported per event if it happened; this is the count, for a
+		// run where several arrived.
+		if c.seen != 0 {
+			t.Errorf("got %d read points from an agent that reports none", c.seen)
+		}
+		return
+	}
+
+	if c.seen != 1 {
+		t.Fatalf("got %d read points, want exactly one: the turn was sent one mid-turn message, "+
+			"and a client cuts the transcript once per read point", c.seen)
+	}
+	if c.id != midTurnMessageID {
+		t.Errorf("the read point names message %q, want %q: the id Pockode sent the message with did not survive "+
+			"the round trip, so nothing says which of several queued messages was read", c.id, midTurnMessageID)
+	}
+	if c.point < 0 {
+		// Asserted rather than assumed, because every comparison below passes
+		// when it is not: a boundary history does not keep is a boundary a
+		// reloading client never sees, and -1 sorts before every real record.
+		t.Fatalf("the read point arrived as an event history does not keep, so the split exists only for the tab "+
+			"that watched the turn (EventType.Persisted for %s)", EventTypeMessageIngested)
+	}
+	if c.marker < 0 {
+		// The turn-level miss is already reported at the ending; nothing to add.
+		return
+	}
+	if c.marker < c.point {
+		t.Errorf("the answer to the mid-turn message is record %d and the read point is record %d, so a client "+
+			"replaying the session draws the answer above the question it answers", c.marker, c.point)
 	}
 }
 
@@ -1185,7 +1314,7 @@ func testMidTurnMessageWhileBlocked(t *testing.T, a Agent) {
 	}
 	defer sess.Close()
 
-	if err := sess.SendMessage(escapeSandboxPrompt(target)); err != nil {
+	if err := sess.SendMessage(Prompt{Text: escapeSandboxPrompt(target)}); err != nil {
 		t.Fatalf("SendMessage failed: %v", err)
 	}
 
@@ -1219,8 +1348,7 @@ func testMidTurnMessageWhileBlocked(t *testing.T, a Agent) {
 			case PermissionRequestEvent:
 				blocked = true
 				pending = permissionDataFromEvent(e)
-				if err := sess.SendMessage(
-					"Never mind that, forget it. Reply with just the word " + midTurnMarker + "."); err != nil {
+				if err := sess.SendMessage(Prompt{Text: "Never mind that, forget it. Reply with just the word " + midTurnMarker + "."}); err != nil {
 					t.Fatalf("mid-turn SendMessage failed: %v", err)
 				}
 			case ErrorEvent:
@@ -1268,7 +1396,7 @@ func testInterruptWhileBlocked(t *testing.T, a Agent) {
 	}
 	defer sess.Close()
 
-	if err := sess.SendMessage(escapeSandboxPrompt(target)); err != nil {
+	if err := sess.SendMessage(Prompt{Text: escapeSandboxPrompt(target)}); err != nil {
 		t.Fatalf("SendMessage failed: %v", err)
 	}
 

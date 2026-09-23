@@ -60,7 +60,7 @@ func TestIntegration_ReportsCost(t *testing.T) {
 	}
 	defer sess.Close()
 
-	if err := sess.SendMessage("Reply with just the word one."); err != nil {
+	if err := sess.SendMessage(agent.Prompt{Text: "Reply with just the word one."}); err != nil {
 		t.Fatalf("SendMessage failed: %v", err)
 	}
 
@@ -135,9 +135,9 @@ func TestIntegration_NoInternalSystemNoise(t *testing.T) {
 	// The subagent has to take at least one tool call of its own: the CLI sends a
 	// progress frame per tool use the subagent makes, and none for a subagent
 	// that only talks.
-	if err := sess.SendMessage("Use the Task tool to launch exactly one general-purpose subagent. " +
+	if err := sess.SendMessage(agent.Prompt{Text: "Use the Task tool to launch exactly one general-purpose subagent. " +
 		"Tell it to run this exact bash command twice, as two separate Bash calls: echo hi\n" +
-		"Then have it report what the command printed. Run no command yourself."); err != nil {
+		"Then have it report what the command printed. Run no command yourself."}); err != nil {
 		t.Fatalf("SendMessage failed: %v", err)
 	}
 
@@ -453,9 +453,9 @@ func TestIntegration_BackgroundTaskDoesNotEndTheTurn(t *testing.T) {
 	}
 	defer sess.Close()
 
-	if err := sess.SendMessage("Use the Bash tool with run_in_background: true to run exactly: sleep 20; echo MARKER_DONE . " +
+	if err := sess.SendMessage(agent.Prompt{Text: "Use the Bash tool with run_in_background: true to run exactly: sleep 20; echo MARKER_DONE . " +
 		"Do NOT poll or wait for it. Immediately end your turn with the single word STARTED. " +
-		"Later when you are notified that it finished, reply RESUMED followed by its output."); err != nil {
+		"Later when you are notified that it finished, reply RESUMED followed by its output."}); err != nil {
 		t.Fatalf("SendMessage failed: %v", err)
 	}
 
@@ -520,9 +520,9 @@ func TestIntegration_StopDuringBackgroundWait(t *testing.T) {
 	defer sess.Close()
 
 	// Long enough that the task is certainly still running when Stop is pressed.
-	if err := sess.SendMessage("Use the Bash tool with run_in_background: true to run exactly: sleep 120; echo MARKER_DONE . " +
+	if err := sess.SendMessage(agent.Prompt{Text: "Use the Bash tool with run_in_background: true to run exactly: sleep 120; echo MARKER_DONE . " +
 		"Do NOT poll or wait for it. Immediately end your turn with the single word STARTED. " +
-		"Later when you are notified that it finished, reply RESUMED followed by its output."); err != nil {
+		"Later when you are notified that it finished, reply RESUMED followed by its output."}); err != nil {
 		t.Fatalf("SendMessage failed: %v", err)
 	}
 
@@ -600,9 +600,9 @@ func TestIntegration_LostBackgroundTasksAreReportedOnRestart(t *testing.T) {
 		t.Fatalf("Start failed: %v", err)
 	}
 
-	if err := sess.SendMessage("Use the Bash tool with run_in_background: true to run exactly: sleep 120; echo MARKER_DONE . " +
+	if err := sess.SendMessage(agent.Prompt{Text: "Use the Bash tool with run_in_background: true to run exactly: sleep 120; echo MARKER_DONE . " +
 		"Do NOT poll or wait for it. Immediately end your turn with the single word STARTED. " +
-		"Later when you are notified that it finished, reply RESUMED followed by its output."); err != nil {
+		"Later when you are notified that it finished, reply RESUMED followed by its output."}); err != nil {
 		t.Fatalf("SendMessage failed: %v", err)
 	}
 

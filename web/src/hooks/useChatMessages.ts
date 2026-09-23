@@ -728,12 +728,13 @@ export function useChatMessages({
 	const turnOpen = hasUnansweredEcho || turn.phase !== "idle";
 
 	// Whether the message the transcript ends on went into a turn that was already
-	// running. Derived, never recorded: the record says what was typed at that
-	// moment and cannot also carry whether the agent has picked it up — that half
-	// changes, and a copy inside the record would start lying the moment it did
-	// (AGENTS.md, "events are events, state is state"). Reading it back out of the
-	// transcript costs nothing and is always current: the turn ending, or the
-	// agent opening its own bubble below, retires it on its own.
+	// running and is still unread. Derived, never recorded: the record says what
+	// was typed at that moment and cannot also carry whether the agent has picked
+	// it up — that half changes, and a copy inside the record would start lying
+	// the moment it did (AGENTS.md, "events are events, state is state"). Reading
+	// it back out of the transcript costs nothing and is always current: the turn
+	// ending retires it, and so does the read point, which puts a bubble under
+	// this message as soon as the agent reaches it (`message_ingested`).
 	//
 	// Any tab's message counts, because any tab's message reaches the same CLI and
 	// steers the same turn. Kickoff, restart and auto-continue arrive as

@@ -463,7 +463,7 @@ func TestFork_WhileSourceIsRunning(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetOrCreateProcess: %v", err)
 	}
-	if err := proc.SendMessage("keep going"); err != nil {
+	if _, err := proc.SendMessage(agent.Prompt{Text: "keep going"}); err != nil {
 		t.Fatalf("SendMessage: %v", err)
 	}
 

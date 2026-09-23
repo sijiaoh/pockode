@@ -30,7 +30,7 @@ func (idleAgent) Start(context.Context, agent.StartOptions) (agent.Session, erro
 type idleSession struct{ events chan agent.AgentEvent }
 
 func (s *idleSession) Events() <-chan agent.AgentEvent { return s.events }
-func (s *idleSession) SendMessage(string) error        { return nil }
+func (s *idleSession) SendMessage(agent.Prompt) error  { return nil }
 func (s *idleSession) SendPermissionResponse(agent.PermissionRequestData, agent.PermissionChoice) error {
 	return nil
 }

@@ -31,11 +31,11 @@ func (s *mockSession) Events() <-chan agent.AgentEvent {
 // consumer side instead would leave every "was the agent asked to do X?"
 // assertion racing the consumer goroutine, since the RPC that triggered the
 // send returns as soon as the prompt is queued.
-func (s *mockSession) SendMessage(prompt string) error {
-	s.owner.recordMessage(s.sessionID, prompt)
+func (s *mockSession) SendMessage(prompt agent.Prompt) error {
+	s.owner.recordMessage(s.sessionID, prompt.Text)
 
 	select {
-	case s.messageQueue <- prompt:
+	case s.messageQueue <- prompt.Text:
 		return nil
 	case <-s.ctx.Done():
 		return s.ctx.Err()

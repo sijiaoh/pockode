@@ -48,6 +48,9 @@ const (
 	// EventTypeQuestionPosted is a question an agent handed to Pockode to ask on
 	// its behalf. See QuestionPostedEvent.
 	EventTypeQuestionPosted EventType = "question_posted"
+	// EventTypeMessageIngested says the agent has taken in a message that
+	// reached it while it was already working. See MessageIngestedEvent.
+	EventTypeMessageIngested EventType = "message_ingested"
 )
 
 // Persisted returns true for the events that belong in session history.
@@ -766,6 +769,10 @@ type MessageEvent struct {
 	Origin  MessageOrigin
 	Subtype string
 	Meta    *MessageMeta
+	// MessageID is Pockode's own id for this message, minted where the message
+	// is sent (chat.Client.sendEvent) so that a later message_ingested record can
+	// name the message the agent read. See EventRecord.MessageID.
+	MessageID string
 	// Answering are the posted questions this message answers, if any. The
 	// content still carries the answers in prose — that is what the agent reads
 	// — and this is the structured copy a client draws the bubble from, so a
@@ -784,7 +791,51 @@ func (e MessageEvent) ToRecord() EventRecord {
 		Subtype:   e.Subtype,
 		Meta:      e.Meta,
 		Answering: e.Answering,
+		MessageID: e.MessageID,
 	}
+}
+
+// MessageIngestedEvent says the agent has taken in a message that arrived while
+// it was already working, and that everything it produces from here answers
+// that message rather than the one before it.
+//
+// It is the one signal a client needs to know where to cut: a message sent
+// mid-turn is steered into the running turn, so the turn's own ending says
+// nothing about which message the output belongs to (agent.Session.SendMessage).
+// One turn has one ending; it can have any number of these.
+//
+// The agents differ in what they can report and the difference stops here.
+// Codex echoes a message back when it reads it, so this is written from that
+// echo and is exact. Claude reports nothing of the kind, so Pockode writes it
+// the moment the message is handed over, which cuts slightly early — a little of
+// what was already being written lands under the new message. That is the
+// conservative direction: the alternative shows the whole answer to a question
+// above the question. Which agent did which is deliberately not on the record.
+//
+// It is only written for a message that arrived mid-turn. One that started its
+// turn has nothing above it to cut away, so a signal for it would only add a
+// boundary where the message record already is.
+type MessageIngestedEvent struct {
+	// MessageID names the message record the agent took in. Empty when the id
+	// could not be established — an agent whose echo carries none, or a message
+	// whose own record failed to be written.
+	//
+	// Not what a client cuts on, and it must not become that: the record's
+	// position already says which message was read, while the client that *sent*
+	// a message is never told the id minted for it — it is the one subscriber
+	// excluded from that broadcast (chat.Client.sendEvent) — so a transcript laid
+	// out by this id would differ between the sending tab and every other tab,
+	// and differ again after a reload. It is recorded because it is what the echo
+	// carried and the only thing that says *which* of several queued messages a
+	// read point belongs to.
+	MessageID string
+}
+
+func (MessageIngestedEvent) EventType() EventType { return EventTypeMessageIngested }
+func (MessageIngestedEvent) isAgentEvent()        {}
+
+func (e MessageIngestedEvent) ToRecord() EventRecord {
+	return EventRecord{Type: e.EventType(), MessageID: e.MessageID}
 }
 
 // PermissionResponseEvent is for history replay only, not sent as RPC notification.

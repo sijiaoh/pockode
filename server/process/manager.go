@@ -943,10 +943,30 @@ func (p *Process) noteAgent(note string) {
 // work's chat at any time. Without this, the turn they started would be ended by
 // a timer armed before it existed. The work stays closed either way; what the
 // session's process is worth from then on is the ordinary idle lease's business.
-func (p *Process) SendMessage(prompt string) error {
+//
+// It reports whether the prompt opened a turn or joined one already running,
+// which is what decides whether the message has a read point
+// (agent.MessageIngestedEvent): one that opened its turn has nothing above it to
+// cut away. Answered by the reducer, which applies the prompt, rather than by
+// reading the turn state beforehand — two sends reaching one idle session would
+// both believe they started it, and the second message would lose its boundary.
+// False when the send failed, which is the safe way round: nothing was
+// delivered, so nothing may claim it was read.
+func (p *Process) SendMessage(prompt agent.Prompt) (openedTurn bool, err error) {
 	p.retiring.Store(false)
-	p.startTurn()
-	return p.agentSession.SendMessage(prompt)
+	openedTurn = p.startTurn()
+	if err = p.agentSession.SendMessage(prompt); err != nil {
+		return false, err
+	}
+	return openedTurn, nil
+}
+
+// ReportsMessageIngest reports whether this session's agent says for itself when
+// it has read a message, which is what decides whether the send path has to
+// write that signal for it. See agent.MessageIngestReporter.
+func (p *Process) ReportsMessageIngest() bool {
+	_, ok := p.agentSession.(agent.MessageIngestReporter)
+	return ok
 }
 
 // SendPermissionResponse answers a permission request, which clears the blocker
@@ -966,9 +986,10 @@ func (p *Process) SendInterrupt() error {
 	return p.agentSession.SendInterrupt()
 }
 
-// startTurn records that a prompt has been handed to the agent.
-func (p *Process) startTurn() {
-	p.signal(session.SignalPrompt, "")
+// startTurn records that a prompt has been handed to the agent, and reports
+// whether that prompt opened the turn rather than joining one already under way.
+func (p *Process) startTurn() bool {
+	return p.signal(session.SignalPrompt, "")
 }
 
 // answerPrompt records that the user has answered the prompt with this id.
@@ -979,15 +1000,19 @@ func (p *Process) answerPrompt(requestID string) {
 // signal is the send path's way into the reducer, for the things that happen to
 // a session without an agent event to carry them: a prompt going out, an answer
 // going back.
-func (p *Process) signal(sig session.TurnSignal, requestID string) {
+//
+// It reports whether the signal opened a turn; see session.TurnTransition.
+// A closed process reduces nothing, so it opened nothing either.
+func (p *Process) signal(sig session.TurnSignal, requestID string) bool {
 	if p.closed.Load() {
-		return
+		return false
 	}
 	ctx := context.Background()
 	in := session.TurnInput{Signal: sig, RequestID: requestID, At: time.Now()}
 	transition := p.applyTurn(ctx, in)
 	p.manager.emitTurn(p.sessionID, transition)
 	p.recordExpiries(ctx, slog.With("sessionId", p.sessionID), in.Signal, transition.Expired)
+	return transition.Started
 }
 
 // recordExpiries writes what became of each prompt this input ended without an

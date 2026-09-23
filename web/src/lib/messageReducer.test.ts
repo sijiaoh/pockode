@@ -1980,6 +1980,253 @@ describe("messageReducer", () => {
 		});
 	});
 
+	// The one rule the transcript has for splitting a turn into two bubbles: the
+	// agent has read the message that arrived mid-reply, so what it writes next
+	// answers *that* message and belongs under it. Whichever CLI is behind it —
+	// the record is the same, and no branch here asks which one
+	// (docs/code/agent-integration.md#the-read-point).
+	describe("the read point", () => {
+		const midTurn = () => {
+			const messages = applyServerEvent([], {
+				type: "text",
+				content: "first half",
+			});
+			return applyUserMessage(messages, "Also look at X");
+		};
+
+		// Recognised, and reduced to the boundary it is: an unhandled type falls
+		// back to `raw`, which would put the record's own JSON on screen as a
+		// message. `message_id` is dropped with it — the cut is made by position,
+		// not by joining on that id.
+		it("is a boundary, not content", () => {
+			expect(
+				normalizeEvent({ type: "message_ingested", message_id: "m-1" }),
+			).toEqual({ type: "message_ingested" });
+		});
+
+		it("answers below the message instead of above it", () => {
+			let messages = applyServerEvent(midTurn(), {
+				type: "message_ingested",
+			});
+			messages = applyServerEvent(messages, {
+				type: "text",
+				content: "about X",
+			});
+
+			expect(messages.map((m) => m.role)).toEqual([
+				"assistant",
+				"user",
+				"assistant",
+			]);
+			// The half written before the read point stays where it was: it was
+			// never an answer to this message, and it is finished.
+			expect(partsOf(messages[0])).toEqual([
+				{ type: "text", content: "first half" },
+			]);
+			expect((messages[0] as AssistantMessage).status).toBe("complete");
+			expect(partsOf(messages[2])).toEqual([
+				{ type: "text", content: "about X" },
+			]);
+		});
+
+		// A message sent before the agent had written a word: the bubble it cuts
+		// is empty, and an empty bubble is dropped rather than left as a blank box
+		// above the message.
+		it("leaves no blank bubble behind when nothing was written yet", () => {
+			let messages = applyUserMessage([], "first");
+			messages = applyUserMessage(messages, "second");
+			messages = applyServerEvent(messages, { type: "message_ingested" });
+
+			expect(messages.map((m) => m.role)).toEqual([
+				"user",
+				"user",
+				"assistant",
+			]);
+			expect(partsOf(messages[2])).toEqual([]);
+		});
+
+		// The turn's opening message gets no such record from the server, and a
+		// build that wrote one anyway must not cost the transcript an empty bubble
+		// above the first message: the placeholder it cuts is empty, so it is
+		// dropped as the replacement is opened.
+		it("costs no extra bubble on a turn's opening message", () => {
+			const opened = applyUserMessage([], "first");
+			const cut = applyServerEvent(opened, { type: "message_ingested" });
+
+			expect(cut.map((m) => m.role)).toEqual(["user", "assistant"]);
+			expect(partsOf(cut[1])).toEqual([]);
+		});
+
+		// Unconditional even with nothing open: a page of history that begins at a
+		// read point has nothing to cut here — the bubble it cut is in the page
+		// below — and the bubble opened for it is what says where the page starts.
+		it("opens a bubble even when nothing is open to cut", () => {
+			const messages = applyServerEvent([], { type: "message_ingested" });
+
+			expect(messages.map((m) => m.role)).toEqual(["assistant"]);
+			expect((messages[0] as AssistantMessage).openedAtReadPoint).toBe(true);
+		});
+
+		// Two messages queued into one running turn, each read at its own point.
+		// Each answer starts where the agent picked that message up; what the
+		// split cannot promise is sentence-level attribution, since the model
+		// routinely folds both answers into one paragraph.
+		it("gives each queued message its own bubble", () => {
+			let messages = midTurn();
+			messages = applyUserMessage(messages, "And Y");
+			messages = applyServerEvent(messages, { type: "message_ingested" });
+			messages = applyServerEvent(messages, {
+				type: "text",
+				content: "about X",
+			});
+			messages = applyServerEvent(messages, { type: "message_ingested" });
+			messages = applyServerEvent(messages, {
+				type: "text",
+				content: "about Y",
+			});
+
+			expect(messages.map((m) => m.role)).toEqual([
+				"assistant",
+				"user",
+				"user",
+				"assistant",
+				"assistant",
+			]);
+			expect(partsOf(messages[3])).toEqual([
+				{ type: "text", content: "about X" },
+			]);
+			expect(partsOf(messages[4])).toEqual([
+				{ type: "text", content: "about Y" },
+			]);
+		});
+
+		// The cut can land in the middle of a tool call: on the agent that reports
+		// no read point of its own the record is written at the moment of
+		// delivery, which is typically while a command is still running. The call
+		// stays where it was and its result still settles it — but an aborted turn
+		// is the case where no result is coming, and the ending only ever swept
+		// the bubble it landed in, so the call would spin for ever in the bubble
+		// the turn had already moved past.
+		it("settles a call the cut left behind when the turn is aborted", () => {
+			let messages = applyServerEvent([], {
+				type: "text",
+				content: "first half",
+			});
+			messages = applyServerEvent(messages, {
+				type: "tool_call",
+				toolUseId: "tool-1",
+				toolName: "Bash",
+				toolInput: { command: "sleep 8" },
+			});
+			messages = applyUserMessage(messages, "Also look at X");
+			messages = applyServerEvent(messages, { type: "message_ingested" });
+			messages = applyServerEvent(messages, { type: "interrupted" });
+
+			const cutBubble = messages[0] as AssistantMessage;
+			const call = cutBubble.parts[1];
+			if (call.type !== "tool_call") {
+				throw new Error(
+					`expected the call to still be there, got ${call.type}`,
+				);
+			}
+			expect(call.tool.status).toBe("interrupted");
+		});
+
+		// A page boundary can fall on a read point, and then the page above opens
+		// on a bubble no message event preceded — the same shape as content
+		// trailing a turn cut in half by the page size, which `prependHistoryPage`
+		// joins back onto the page below. Joining *this* one would undo the cut and
+		// put the second message's answer back in the first message's bubble, which
+		// is the bug the whole story is about, reappearing once per page boundary.
+		it("keeps the cut when a page boundary falls on it", () => {
+			// Two messages queued into one running turn, read one after the other,
+			// with the page boundary between the two read points.
+			const older = replayHistory([
+				{ type: "message", content: "do the thing" },
+				{ type: "text", content: "first half" },
+				{ type: "message", content: "Also look at X" },
+				{ type: "message", content: "And Y" },
+				{ type: "message_ingested", message_id: "m-2" },
+				{ type: "text", content: "about X" },
+			]);
+			const newer = replayHistory([
+				{ type: "message_ingested", message_id: "m-3" },
+				{ type: "text", content: "about Y" },
+				{ type: "done" },
+			]);
+
+			const joined = prependHistoryPage(older, newer);
+
+			expect(partsOf(joined[joined.length - 2])).toEqual([
+				{ type: "text", content: "about X" },
+			]);
+			expect(partsOf(joined[joined.length - 1])).toEqual([
+				{ type: "text", content: "about Y" },
+			]);
+		});
+
+		// The join that must still happen: a boundary falling *inside* the bubble a
+		// read point opened leaves the rest of it leading the page above, and that
+		// is one bubble in two halves.
+		it("still joins a bubble a boundary cut in half", () => {
+			const older = replayHistory([
+				{ type: "message", content: "do the thing" },
+				{ type: "text", content: "first half" },
+				{ type: "message", content: "Also look at X" },
+				{ type: "message_ingested", message_id: "m-2" },
+				{ type: "text", content: "about " },
+			]);
+			const newer = replayHistory([
+				{ type: "text", content: "X" },
+				{ type: "done" },
+			]);
+
+			const joined = prependHistoryPage(older, newer);
+
+			expect(joined.map((m) => m.role)).toEqual([
+				"user",
+				"assistant",
+				"user",
+				"assistant",
+			]);
+			expect(partsOf(joined[3])).toEqual([
+				{ type: "text", content: "about X" },
+			]);
+		});
+
+		// The acceptance criterion the whole design hangs on: the split lives in
+		// history, so a refresh reads back what the live stream drew.
+		it("replays to the same split the live stream drew", () => {
+			const records = [
+				{ type: "message", content: "do the thing" },
+				{ type: "text", content: "first half" },
+				{ type: "message", content: "Also look at X" },
+				{ type: "message_ingested", message_id: "m-2" },
+				{ type: "text", content: "about X" },
+				{ type: "done" },
+			];
+
+			const live = records.reduce<Message[]>(
+				(acc, record) =>
+					applyServerEvent(acc, normalizeEvent(record), undefined, {
+						live: true,
+					}),
+				[],
+			);
+			const replayed = replayHistory(records);
+
+			const shape = (messages: Message[]) =>
+				messages.map((m) => ({ role: m.role, parts: partsOf(m) }));
+			expect(shape(replayed)).toEqual(shape(live));
+			expect(shape(replayed)).toEqual([
+				{ role: "user", parts: [] },
+				{ role: "assistant", parts: [{ type: "text", content: "first half" }] },
+				{ role: "user", parts: [] },
+				{ role: "assistant", parts: [{ type: "text", content: "about X" }] },
+			]);
+		});
+	});
+
 	// A turn parking on background work is recorded so the *session* can say the
 	// agent is waiting rather than thinking
 	// (docs/code/agent-integration.md#background-waits). Drawing it is not wired
@@ -2167,9 +2414,12 @@ describe("messageReducer", () => {
 			).toBeUndefined();
 		});
 
-		// Turn boundaries survive replay because `done` does: the second message
-		// went into the first turn, and only its ending starts a new bubble. (What
-		// happens when that ending is missing is stated once, in "turn boundaries
+		// Turn boundaries survive replay because `done` does. A message is not
+		// itself a boundary: here the second one arrives after the ending, which
+		// is what closed the bubble above it. One sent *into* a turn gets its
+		// bubble from the read point instead ("the read point"), never from the
+		// ending — one turn has one ending but any number of bubbles. (What
+		// happens when the ending is missing is stated once, in "turn boundaries
 		// with a message sent mid-turn".)
 		it("splits turns on done rather than on the messages between them", () => {
 			const history = [

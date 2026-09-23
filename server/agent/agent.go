@@ -120,13 +120,19 @@ type Session interface {
 	// returns the id of the turn already running, and Claude's turn acts on the
 	// new message and then ends once. Nothing here counts endings per message.
 	//
+	// One ending per turn is not one *answer* per turn, and reading it as that
+	// is what this signature's ID field exists to correct: the agent reads the
+	// second message partway through the turn and answers it from there, so a
+	// turn can hold the answers to several messages. Where the boundary between
+	// them falls is MessageIngestedEvent's business.
+	//
 	// The exception is a turn blocked on a permission request: the CLI is inside
 	// the tool call waiting for that decision and reads nothing else until it
 	// arrives, so a message sent then is not delivered at all — neither CLI
 	// produced a single further event in the four minutes after one. The send path
 	// refuses those rather than letting them vanish; see
 	// chat.ErrTurnAwaitingAnswer.
-	SendMessage(prompt string) error
+	SendMessage(prompt Prompt) error
 
 	// SendPermissionResponse sends a permission response to the agent.
 	SendPermissionResponse(data PermissionRequestData, choice PermissionChoice) error
@@ -147,6 +153,40 @@ type Session interface {
 
 	// Close terminates the agent process and releases resources.
 	Close()
+}
+
+// Prompt is one message on its way to the agent.
+//
+// A struct rather than the string it used to be because a message is not only
+// its text: Pockode needs to be able to recognise the agent reading this
+// particular one later, and an agent that can say so says it in terms of the id
+// it was handed here.
+type Prompt struct {
+	// Text is what the agent reads.
+	Text string
+	// ID is Pockode's own id for the message record this text came from, for an
+	// agent that can carry an id through and echo it back when it reads the
+	// message (see MessageIngestReporter). An agent that cannot has nothing to do
+	// with it. Empty when the message has no record to name — nothing downstream
+	// may then claim it does.
+	ID string
+}
+
+// MessageIngestReporter is implemented by agent sessions that say for
+// themselves when the agent has taken a message in, by emitting a
+// MessageIngestedEvent.
+//
+// It exists so that the difference between the CLIs stops inside the server. An
+// agent that implements this is the only one that knows its own read point, so
+// Pockode must not guess one for it; an agent that does not gets the
+// conservative approximation written for it at the moment the message is handed
+// over (chat.Client.sendEvent). Clients are told neither way: they see one kind
+// of record and follow one rule.
+//
+// The marker method carries no information because there is none to carry:
+// either the events arrive or they do not.
+type MessageIngestReporter interface {
+	ReportsMessageIngest()
 }
 
 // SessionNotifier is implemented by agent sessions that can carry a message from

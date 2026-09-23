@@ -318,23 +318,31 @@ func (s *cliSession) takeNote() string {
 }
 
 // SendMessage sends a message to Claude.
-func (s *cliSession) SendMessage(prompt string) error {
+//
+// Prompt.ID goes nowhere: the stream-json user message has no field to carry a
+// client id, and nothing Claude sends back names the message it is answering —
+// the only user-direction frames it produces are tool results, and a message
+// steered into a running turn is never echoed (measured on claude-code 2.1.263).
+// So this session does not implement agent.MessageIngestReporter and the send
+// path writes the read point for it; see agent.MessageIngestedEvent.
+func (s *cliSession) SendMessage(prompt agent.Prompt) error {
+	text := prompt.Text
 	if note := s.takeNote(); note != "" {
-		prompt = fmt.Sprintf("<system-reminder>%s</system-reminder>\n\n%s", note, prompt)
+		text = fmt.Sprintf("<system-reminder>%s</system-reminder>\n\n%s", note, text)
 	}
 
 	msg := userMessage{
 		Type: "user",
 		Message: userContent{
 			Role:    "user",
-			Content: []textContent{{Type: "text", Text: prompt}},
+			Content: []textContent{{Type: "text", Text: text}},
 		},
 	}
 	data, err := json.Marshal(msg)
 	if err != nil {
 		return fmt.Errorf("failed to marshal message: %w", err)
 	}
-	s.log.Debug("sending prompt", "length", len(prompt))
+	s.log.Debug("sending prompt", "length", len(text))
 	return s.writeStdin(data)
 }
 

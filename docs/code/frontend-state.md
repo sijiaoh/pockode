@@ -448,10 +448,25 @@ was no longer last, and lost its spinner at the moment the user had just asked i
 something. The bubbles that are *not* the open turn still show nothing, which is
 what keeps a reply the turn has moved on from claiming to be running.
 
-That search is also what makes the turn's own ending the *only* thing that closes its
-bubble. A user message arriving underneath used to close it as a side effect, and that
-side effect was quietly doing double duty as a backstop for a `done` that never
-arrived; mid-turn sending had to remove it. The dependency is now single and explicit
+That search is also what leaves only two things able to close a bubble: the turn's own
+ending, and the read point. A user message arriving underneath used to close it as a
+side effect, and that side effect was quietly doing double duty as a backstop for a
+`done` that never arrived; mid-turn sending had to remove it. A message closes the
+bubble when the *agent reads it* instead — a `message_ingested` record, which is a
+boundary and nothing else: the bubble above is finished where it stood and a fresh one
+opens at the end of the transcript, under the message, for everything written
+afterwards ([agent-integration.md](agent-integration.md#the-read-point)). One turn has
+one ending, but not one bubble; the two facts were conflated for as long as a mid-turn
+message had nowhere of its own to be answered. The record's `message_id` is not used
+to place that bubble — the client that sent the message never learns the id the server
+minted for it, so joining on it would lay out the sending tab differently from every
+other tab and differently again after a refresh, which is the one thing the split must
+keep identical. Records apply in order, so the end of the transcript already *is*
+under the message that was read. With several messages queued into one turn that
+costs adjacency and nothing else: each answer still begins at its own read point,
+below the queue rather than tucked in between the messages in it.
+
+The `done` dependency is therefore still single and explicit
 — without `done` / `interrupted` / `error`, two turns' output grows into one bubble —
 which is why `messageReducer.test.ts` states it as a test of its own rather than
 leaving it a thing everyone assumed. The net that is unchanged, and the one that
@@ -479,7 +494,9 @@ resuming afterwards is a genuinely live turn.
 
 History arrives one page at a time, so a turn can also be cut in two by a page
 boundary rather than by an ending. The halves are rejoined where the pages meet
-([agent-chat.md](../agent-chat.md#reading-a-page-on-the-client)), and the joined
+([agent-chat.md](../agent-chat.md#reading-a-page-on-the-client)) — unless the
+newer page opens at a read point, which is a cut the reducer made on purpose and
+marks on the bubble (`openedAtReadPoint`) so the seam does not undo it. The joined
 message keeps the newer half's anchor: it names the later record, which is where
 a fork of the joined message has to cut. The older half's anchor stands in only
 when the newer one never got one, a message without an anchor being one the user

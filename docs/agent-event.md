@@ -65,6 +65,7 @@ type AgentEvent interface {
 | Question | `question_posted` (`request_cancelled` withdraws one; the answer is a `message`) | No |
 | Legacy | `ask_user_question`, `question_response` — read from old transcripts, never written | No |
 | Message | `message` (user-typed or system-driven; persisted + broadcast) | No |
+| Read point | `message_ingested` (the agent has taken in a message sent mid-turn) | No |
 
 Terminal events end the current message response. Non-terminal events are appended to the active assistant message.
 
@@ -114,6 +115,41 @@ The `message` event covers both messages a user types and the automatic prompts 
 | `Meta` | For system messages, a `{work_id, work_type, title, step?, child?}` summary the UI renders from instead of the prompt body |
 
 **Why an origin field, not a new `EventType`**: user and system messages are the same kind of thing — text sent to the agent on stdin, replayed identically on resume. A distinct event type would fork the send/persist/replay path for no behavioral gain. All three fields are `omitempty`, so history written before they existed loads as a plain user message — backward compatible by omission. The producing side (subtype catalog, tagging call sites, and legacy-value normalization) and how the frontend renders the result are documented in [code/work-system.md](code/work-system.md#work-messages-in-chat).
+
+#### The Read Point (`message_ingested`)
+
+A message sent while a turn is running is steered into that turn rather than
+starting a second one, so one turn has one ending but any number of messages
+inside it. The ending therefore cannot say which message the output belongs to,
+and without a second signal a client has to guess — the guess it used to make
+was that everything until the ending answered the *first* message, which put the
+answer to a mid-turn question above the question.
+
+`message_ingested` is that signal: the agent has taken in the message named by
+`message_id`, so what follows the record answers that message. It is written
+only for a message that arrived mid-turn — one that started its turn has nothing
+above it to cut away — and it is a recorded event rather than live state, which
+is what makes the split survive a reload, a resubscribe and a second device.
+
+The two CLIs can say very different amounts about this, **and the difference
+stops in the server**. Codex echoes a message back as a `userMessage` item when
+it reads it, carrying the id Pockode sent with the turn (`clientUserMessageId`
+→ `clientId`), so the record is written from the echo and the boundary is exact.
+Claude reports nothing of the kind, so Pockode writes the record itself at the
+moment of delivery — a little of what was already being written lands under the
+new message, which is the conservative direction to be wrong in. A client is
+told neither which agent it is talking to nor which of the two produced the
+record: it sees one kind of record and follows one rule. An agent that gains an
+echo later is a change to that agent alone
+(`agent.MessageIngestReporter`).
+
+What it cannot promise: the model answers both messages in one breath often
+enough that a sentence in the new bubble may still be about the old one. The cut
+is by position in the stream, never by sentence — and deliberately not finer,
+because nothing on the wire attributes a sentence to a message. Only the model
+knows, and it does not say, so a finer split could only be guessed at; a
+transcript that is confidently wrong about who a sentence answers is worse than
+one that is coarsely right about where the answering began.
 
 #### Questions and Their Answers
 
@@ -187,6 +223,21 @@ answer it and the card offers none.
 `server/agent/history.go` — Flat struct used for both persistence and wire format. Each event type populates only its relevant fields; the rest are zero-valued and omitted from JSON.
 
 Key fields: `Type`, `Content`, `ToolName`, `ToolInput`, `ToolResult`, `Error`, `RequestID`, `PermissionSuggestions`, `Questions`, `Reason`, `AskedAt`, `ResolvedAt`, `Answering`, and (for system-driven `message` events) `Origin`, `Subtype`, `Meta`.
+
+`MessageID` is on two record types and joins them: Pockode's own id for a
+message, carried by the `message` record and quoted by the `message_ingested`
+record that says the agent read it. It is what names *which* of several messages
+queued into one turn was read, which position cannot say.
+
+**It is not what a client cuts the transcript on**, and the transcript is the
+only consumer so far: a read point is applied where it sits, so the cut lands
+under the newest message anyway, and the client that sent a message is never
+told the id minted for it — it is the one subscriber excluded from that
+broadcast. Laying a transcript out by this id would therefore give the sending
+tab a different transcript from every other tab, and a different one again after
+a reload ([code/frontend-state.md](code/frontend-state.md)). It is empty on every
+record written before the field existed, and a `message_ingested` without one
+still marks the boundary it sits at.
 
 Two field-level decisions worth knowing before adding one — why `AskedAt` and
 `ResolvedAt` are pointers, and why a field a record on disk carries (the legacy

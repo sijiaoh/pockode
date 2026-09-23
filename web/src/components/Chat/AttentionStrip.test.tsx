@@ -277,10 +277,12 @@ describe("AttentionStrip", () => {
 		).toBeInTheDocument();
 	});
 
-	// The receipt for a message sent into a running turn. Without it the reply
-	// above simply keeps growing and nothing appears under the message, so a send
-	// that landed and a send that vanished look identical.
-	describe("a message sent into the running turn", () => {
+	// The receipt for a message sent into a running turn the agent has yet to
+	// read. For that stretch the reply above simply keeps growing and nothing
+	// appears under the message, so a send that landed and a send that vanished
+	// look identical. The read point ends it by putting a bubble under the
+	// message, which is what clears `sendPending` upstream.
+	describe("a message the agent has not read yet", () => {
 		it("is acknowledged while the turn runs on", () => {
 			render(
 				<AttentionStrip
@@ -291,7 +293,7 @@ describe("AttentionStrip", () => {
 			);
 
 			expect(
-				screen.getByText("Sent into the reply the agent is working on."),
+				screen.getByText("Sent — the agent has not read it yet."),
 			).toBeInTheDocument();
 		});
 
@@ -308,7 +310,7 @@ describe("AttentionStrip", () => {
 			);
 
 			expect(
-				screen.getByText("Sent into the reply the agent is working on."),
+				screen.getByText("Sent — the agent has not read it yet."),
 			).toBeInTheDocument();
 			expect(screen.queryByText(/nothing to answer/)).not.toBeInTheDocument();
 		});
@@ -326,7 +328,7 @@ describe("AttentionStrip", () => {
 			);
 
 			expect(
-				screen.queryByText("Sent into the reply the agent is working on."),
+				screen.queryByText("Sent — the agent has not read it yet."),
 			).not.toBeInTheDocument();
 			expect(
 				screen.getByText(/Answer above or Stop before sending\./),

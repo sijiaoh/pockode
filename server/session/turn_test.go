@@ -58,6 +58,45 @@ func TestReduceTurnPromptStartsTurn(t *testing.T) {
 	if got.Ended {
 		t.Fatal("starting a turn does not end one")
 	}
+	if !got.Started {
+		t.Fatal("a prompt on an idle session starts the turn")
+	}
+}
+
+// Started is what the send path asks instead of looking at the turn state
+// beforehand, so it has to be false for every prompt that joined a turn rather
+// than opening one — that is the message whose read point has to be recorded
+// (agent.MessageIngestedEvent). A background wait counts as a turn under way:
+// the content above the message was produced for the message before it.
+func TestReduceTurnPromptJoiningATurnDoesNotStartOne(t *testing.T) {
+	tests := []struct {
+		name  string
+		state TurnState
+	}{
+		{"running", drive(TurnState{}, in(SignalPrompt, 0))},
+		{"parked on background work", drive(TurnState{}, in(SignalPrompt, 0), in(SignalBackgroundParked, 1))},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if !tt.state.InProgress() {
+				t.Fatalf("setup: the turn is not under way: %+v", tt.state)
+			}
+			if got := ReduceTurn(tt.state, in(SignalPrompt, 2)); got.Started {
+				t.Error("a prompt handed to a turn already under way did not start it")
+			}
+		})
+	}
+}
+
+// A prompt after the turn ended opens a new one, which is the case that keeps
+// this from being "has this session ever run".
+func TestReduceTurnPromptAfterAnEndingStartsANewTurn(t *testing.T) {
+	state := drive(TurnState{}, in(SignalPrompt, 0), in(SignalDone, 1))
+
+	if got := ReduceTurn(state, in(SignalPrompt, 2)); !got.Started {
+		t.Error("a prompt to an idle session starts a turn, whatever came before")
+	}
 }
 
 func TestReduceTurnSinceHoldsWhileThePhaseDoes(t *testing.T) {

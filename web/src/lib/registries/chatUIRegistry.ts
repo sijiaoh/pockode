@@ -20,11 +20,12 @@ export interface InputBarProps {
 	 * the agent's own background work can clear.
 	 *
 	 * Not a reason to refuse a send: a message sent mid-reply steers the running
-	 * turn and joins the answer being written (docs/lifecycle-ui.md §2.3). The one
-	 * state that does refuse — a permission or question request owning the agent's
-	 * next line of input — reaches the bar as `canSend={false}`, already decided by
-	 * the host. A bar that refuses on `turnOpen` is refusing sends the server would
-	 * have accepted.
+	 * turn, and is answered inside it from the point the agent reads it — in a
+	 * bubble of its own, not the one already being written
+	 * (docs/lifecycle-ui.md §2.3). The one state that does refuse — a permission or
+	 * question request owning the agent's next line of input — reaches the bar as
+	 * `canSend={false}`, already decided by the host. A bar that refuses on
+	 * `turnOpen` is refusing sends the server would have accepted.
 	 *
 	 * Offered so a custom bar can *say* something about the open turn.
 	 */

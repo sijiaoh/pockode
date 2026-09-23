@@ -1538,8 +1538,8 @@ describe("ChatPanel", () => {
 			expect(screen.queryByLabelText("Loading")).not.toBeInTheDocument();
 		});
 
-		// The only receipt a mid-turn send gets: nothing new appears under the
-		// message, because the reply above it goes on growing.
+		// The only receipt a mid-turn send gets until the agent reads it: nothing
+		// appears under the message, because the reply above it goes on growing.
 		it("acknowledges a message that went into the running turn", async () => {
 			const user = userEvent.setup();
 			render(<ChatPanel {...defaultProps} />);
@@ -1557,7 +1557,7 @@ describe("ChatPanel", () => {
 
 			await waitFor(() => {
 				expect(
-					screen.getByText("Sent into the reply the agent is working on."),
+					screen.getByText("Sent — the agent has not read it yet."),
 				).toBeInTheDocument();
 			});
 
@@ -1575,7 +1575,49 @@ describe("ChatPanel", () => {
 				});
 			});
 			expect(
-				screen.queryByText("Sent into the reply the agent is working on."),
+				screen.queryByText("Sent — the agent has not read it yet."),
+			).not.toBeInTheDocument();
+		});
+
+		// The read point, end to end: the agent picks the message up, the reply
+		// above is finished where it stood, and what follows is written below the
+		// message it answers.
+		it("answers a mid-turn message below it once the agent reads it", async () => {
+			const user = userEvent.setup();
+			render(<ChatPanel {...defaultProps} />);
+			await waitForHistoryLoad();
+
+			await user.type(screen.getByRole("textbox"), "Hi");
+			await user.click(screen.getByRole("button", { name: /Send/ }));
+			setTurn("running");
+			act(() => {
+				mockState.onNotification?.({ type: "text", content: "Working on it" });
+			});
+
+			await user.type(screen.getByRole("textbox"), "Also look at X");
+			await user.click(screen.getByRole("button", { name: /Send/ }));
+			await screen.findByText("Also look at X");
+
+			act(() => {
+				mockState.onNotification?.({
+					type: "message_ingested",
+					message_id: "m-2",
+				});
+				mockState.onNotification?.({ type: "text", content: "X is fine" });
+			});
+
+			// Two bubbles, not one: the first half stands as it was written.
+			expect(screen.getByText("Working on it")).toBeInTheDocument();
+			const sent = screen.getByText("Also look at X");
+			const answer = screen.getByText("X is fine");
+			expect(
+				sent.compareDocumentPosition(answer) & Node.DOCUMENT_POSITION_FOLLOWING,
+			).toBeTruthy();
+
+			// And the receipt is gone: there is something under the message now,
+			// which says more than the line did.
+			expect(
+				screen.queryByText("Sent — the agent has not read it yet."),
 			).not.toBeInTheDocument();
 		});
 	});

@@ -64,6 +64,18 @@ func TestIntegration_ProtocolSchemaStillFitsWhatWeSend(t *testing.T) {
 		requireRequired(t, dir, "TurnStartParams", "threadId", "input")
 	})
 
+	// The two halves of the read point's id: Pockode sends its own id for the
+	// message with the turn, and Codex echoes it back on the userMessage item it
+	// emits when it takes the message in. The boundary itself survives losing
+	// them — it is where the record sits — but nothing would then say *which* of
+	// several messages queued into one turn each boundary belongs to, which is
+	// the one question position cannot answer. See agent.MessageIngestedEvent.
+	t.Run("a message can be sent with an id that comes back on the echo", func(t *testing.T) {
+		props := schemaProperties(t, dir, "TurnStartParams")
+		requireProps(t, props, "TurnStartParams", "SendMessage sends", "clientUserMessageId")
+		requireItemVariantProps(t, dir, "userMessage", "clientId")
+	})
+
 	// The fork anchor is only as good as the turn id the events are stamped
 	// with, and that is read off the notification envelope rather than the item.
 	// It stopping being required would mean stamping empty ids on records that
@@ -165,6 +177,24 @@ func requireItemVariant(t *testing.T, dir, itemType string, required ...string) 
 			continue
 		}
 		assertRequired(t, itemType, jsonStrings(branch["required"]), required)
+		return
+	}
+	t.Fatalf("ThreadItem no longer has a %q variant, which this package handles", itemType)
+}
+
+// requireItemVariantProps asserts the ThreadItem branch with the given `type`
+// still offers the fields this package reads off it. Separate from
+// requireItemVariant because an optional field is not in `required` and is no
+// less load-bearing for it.
+func requireItemVariantProps(t *testing.T, dir, itemType string, props ...string) {
+	t.Helper()
+	for _, branch := range schemaBranches(t, dir, "codex_app_server_protocol.v2.schemas.json", "ThreadItem") {
+		properties, _ := branch["properties"].(map[string]interface{})
+		disc, _ := properties["type"].(map[string]interface{})
+		if !containsString(jsonStrings(disc["enum"]), itemType) {
+			continue
+		}
+		requireProps(t, properties, itemType, "this package reads", props...)
 		return
 	}
 	t.Fatalf("ThreadItem no longer has a %q variant, which this package handles", itemType)

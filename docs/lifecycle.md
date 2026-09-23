@@ -440,17 +440,29 @@ message sent instead of answering a permission request.
 | Claim | What was observed |
 |---|---|
 | A message sent while the turn is *running* reaches the agent | Yes, on both CLIs, and it **steers** that turn instead of starting a second one — the turn acted on it and then ended once |
+| A mid-turn message is *read* before the turn it steers ends | Yes, on both CLIs, at the agent's next step rather than at the end of the turn — Codex echoed the message back 3.7s after it was sent, as the command it was running finished; Claude's reply began answering it about 6s in. So one turn holds the answers to both messages |
 | A message sent while the turn is *blocked on a request* reaches the agent | **No**, on both CLIs. Not one further event arrived in the four minutes after it, and the request was still answerable at the end of that — answering it finished the turn normally |
 | A *stop* pressed while the turn is blocked on a request lands | Yes, on both CLIs, and quickly — claude-code withdrew the request and ended the turn in about a tenth of a second; Codex's adapter answers the outstanding approval with `cancel` first, which is what unblocks it there. This is what makes the second half of "answer it, or stop the turn" true, and it replaces what used to be listed below as unknown |
 
-The second row is the whole reason the send path refuses a message in that state
-rather than letting it through ([above](#session-one-reducer)), and the first is
-why it lets one through in every other state. All three are re-checked by the
-shared integration suite (`MidTurnMessage`, `MidTurnMessageWhileBlocked`,
-`InterruptWhileBlocked`), so a CLI upgrade that changes any of these answers
-fails a test rather than a user's session.
+**The steering row and the reading row are one measurement and the claim that
+was wrongly read out of it.** Steering says a mid-turn message shares the running
+turn's single *ending*. What was inferred from that, and held for a long time, is
+that it therefore shares that turn's single *bubble* — that the output until the
+ending still answered the message before it, and the new one would be answered
+only once the turn was over. Nobody had measured that; the reading row is it
+measured, and it is the opposite. One ending per turn is not one answer per turn,
+which is why the ending is not what a transcript cuts on
+([agent-event.md](agent-event.md#the-read-point-message_ingested)).
 
-The third row does not retire the grace backstop in `requestStop`: what it
+The blocked row is the whole reason the send path refuses a message in that state
+rather than letting it through ([above](#session-one-reducer)), and the steering
+row is why it lets one through in every other state. All four are re-checked by
+the shared integration suite (`MidTurnMessage`, which covers steering and
+reading, `MidTurnMessageWhileBlocked` and `InterruptWhileBlocked`), so a CLI
+upgrade that changes any of these answers fails a test rather than a user's
+session.
+
+The stop row does not retire the grace backstop in `requestStop`: what it
 measures is that a *working* CLI acts on a stop it is blocked under, and the
 backstop is there for one that is wedged, which no measurement can rule out.
 

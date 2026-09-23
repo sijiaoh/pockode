@@ -376,6 +376,16 @@ export interface AssistantMessage {
 	createdAt: Date;
 	/** See `UserMessage.anchorSeq`. */
 	anchorSeq?: HistorySeq;
+	/**
+	 * This bubble was opened by a read point — the agent had just picked up the
+	 * message above it — rather than by content that belonged nowhere else.
+	 *
+	 * Read by `prependHistoryPage` alone, and it exists because a page of history
+	 * can begin at a read point: the page then opens on a bubble no message event
+	 * preceded, which is also the shape of a turn cut in half by the page size,
+	 * and those two must not be joined back together. Nothing renders it.
+	 */
+	openedAtReadPoint?: true;
 }
 
 export type Message = UserMessage | AssistantMessage;
@@ -948,6 +958,7 @@ export type ServerMethod =
 	| "request_cancelled"
 	| "system"
 	| "message"
+	| "message_ingested"
 	| "command_output";
 
 export type ServerNotification =
@@ -1066,4 +1077,23 @@ export type ServerNotification =
 			resolved_at?: string;
 	  }
 	| { type: "system"; content: string }
+	| {
+			/**
+			 * The agent has read a message that was sent into a turn already
+			 * running — the read point (agent-integration.md#the-read-point). It
+			 * says nothing itself; it is a boundary, and everything the agent
+			 * writes after it answers the message rather than the one before it.
+			 *
+			 * Written only for a message that arrived mid-turn: the one that opens
+			 * a turn has nothing above it to cut away.
+			 *
+			 * `message_id` names the message that was read. The transcript
+			 * deliberately does not place the new bubble by it and cuts by the
+			 * record's position instead, which is the same answer without the id
+			 * (docs/code/frontend-state.md); it is declared here because a reader
+			 * of this record will ask what became of it.
+			 */
+			type: "message_ingested";
+			message_id?: string;
+	  }
 	| { type: "command_output"; content: string };

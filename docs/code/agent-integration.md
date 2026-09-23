@@ -70,7 +70,7 @@ type Agent interface {
 
 type Session interface {
     Events() <-chan AgentEvent       // Event stream
-    SendMessage(prompt string) error // Send user message
+    SendMessage(prompt Prompt) error // Send user message (text + Pockode's id for it)
     SendPermissionResponse(...)      // Respond to permission request
     SendInterrupt() error            // Interrupt AI
     Close()                          // Close session
@@ -83,6 +83,57 @@ type Session interface {
 - **Channel event stream**: Uses unbuffered channels for low-latency event delivery. A consumer drains `Events()` until the agent closes it — that close is the end of the session, and it is what `process.Manager.Close` waits for before letting a caller delete what the session writes to
 - **`process_ended` waits for its consumer**: every other send on the channel steps aside when the session's context is cancelled, which is right for output overtaken by a shutdown. The last event cannot: it is needed *most* when that context has just been cancelled on purpose — a reaped or deleted session — and a `select` over the two has both cases ready, so Go picks at random and half the closes never reach the client, which goes on showing the session as running until it refetches history. `agent.EmitProcessEnded` therefore waits for the consumer instead, with only a 10s backstop against a read loop that has stopped draining without closing the session (a panic recovered above it). The guarantee ends at that consumer: the next hop, `watch.ChatMessagesWatcher.OnChatMessage`, is a bounded queue that drops on overflow like every other chat event, and a client that loses one recovers by refetching history. What was fixed is the hop that dropped the event *by design*, on exactly the closes a user asked for
 - **Close() returns nothing**: Session closure is a best-effort operation; errors don't affect the outcome
+- **A prompt is a struct, not a string**: `Prompt` carries the text and Pockode's own id for the message record it came from. The id is there for one thing — recognising *this* message being read later (see The Read Point below) — and an agent that cannot carry an id through ignores it
+
+### The Read Point
+
+A message sent while a turn is running is steered into that turn by both CLIs,
+so a turn has one ending and any number of messages. `message_ingested` is the
+signal that says which message the output after it belongs to, and the CLIs'
+very different abilities to report it are absorbed here rather than exposed:
+
+| | Codex | Claude |
+|---|---|---|
+| What the CLI offers | a `userMessage` item echoed back when the message is read, carrying the `clientId` sent as `turn/start`'s `clientUserMessageId` | nothing: the only user-direction frames are tool results |
+| Who writes the record | the session, off the echo (`codex.appSession.handleUserMessageItem`) | the send path, at the moment of delivery (`chat.Client.sendEvent`) |
+| How exact it is | the boundary the CLI itself drew | early by however long the CLI took to read the message |
+
+`agent.MessageIngestReporter` is the whole of the switch: a session that
+implements it is left to report its own read point, and one that does not has
+the approximation written for it. Nothing about which is which reaches a client,
+and nothing needs a capability table — an agent that gains an echo later changes
+on its own side only.
+
+Two rules are load-bearing and easy to lose:
+
+- **A message that opened its turn produces no record.** Codex echoes that one
+  back too, so the session passes over the first echo of each turn
+  (`claimTurnOpener`, keyed on the turn id the item arrived stamped with). On
+  the send path the same question is answered by the reducer that applies the
+  prompt — `session.TurnTransition.Started` — and not by reading the turn state
+  beforehand: two sends reaching one idle session would both believe they
+  started it, and the second message would lose its boundary. Without this rule
+  every message would carry a boundary — a record saying the agent picked
+  something up mid-turn when it had just been handed the thing that started the
+  turn. The transcript survives one (it replaces the placeholder the message
+  opened rather than adding a bubble beside it), which is deliberate robustness
+  and not a licence to write them.
+- **The record is written after the message it is about has been broadcast.**
+  History holds them in the right order either way — the message is appended
+  first — but a subscriber told the agent had read a message it had not yet been
+  sent has to hold the record and wait. That is why Pockode's own copy is
+  written in `chat`, not injected into the process's event stream.
+
+Half of that is CLI behaviour, which no test below the CLI can check: that the
+echo comes at all, that it comes *before* the answer to the message, that the id
+survives the round trip, that the turn's opening message produces none, and — on
+the other side of the table — that an agent with no echo does not report a read
+point anyway, which would cut the transcript twice for the one the send path
+already wrote. All five are held by the shared integration suite's
+`MidTurnMessage` scenario, on the turn it was already sending, so covering them
+costs nothing beyond what that scenario cost before. The server's half is
+unit-covered (`agent/codex/appserver_test.go`, `chat/ingest_test.go`); neither
+half stands in for the other.
 
 ### Event Types
 
@@ -94,6 +145,7 @@ Events are divided into four categories:
 | **Terminal** | `done`, `error`, `interrupted`, `process_ended` | Marks end of AI turn |
 | **Permission** | `permission_request`, `permission_response`, `request_cancelled` | Tool execution authorization |
 | **Questions** | `question_posted` | a question the agent asked through `question_post`. Nothing waits on it; the answer arrives as a `message` carrying `answering` |
+| **Read point** | `message_ingested` | the agent has taken in a message that reached it mid-turn ([agent-event.md](../agent-event.md#the-read-point-message_ingested)) |
 | **Legacy** | `ask_user_question`, `question_response` | the CLI's own blocking question, read from old transcripts and never written ([agent-event.md](../agent-event.md#legacy-ask_user_question-and-question_response)) |
 
 ```go
@@ -1873,6 +1925,11 @@ app-server answers both inside the turn already running, and the second
 better of the two — nothing the agent had already done is thrown away — but it is
 why `agent.Session.SendMessage` promises nothing about endings *per message*, and
 why Codex's adapter counts nothing per message either.
+
+What the row does not say is where the two answers go. Sharing an ending is not
+sharing an *answer*: the agent reads the second message part-way through the turn
+and answers it from there, so the turn holds both answers and the split between
+them is the read point ([above](#the-read-point)), never the ending.
 
 Claude's half of that row said **queued** until it was measured, and it was
 wrong: on claude-code 2.1.263 a mid-turn message steers the running turn just as

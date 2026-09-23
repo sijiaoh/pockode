@@ -187,6 +187,14 @@ export type NormalizedEvent =
 			requestId: string;
 			answers: Record<string, string> | null;
 	  }
+	| {
+			/**
+			 * The agent has read a message sent into a turn that was already
+			 * running. A boundary and nothing else — it carries no content and
+			 * draws nothing.
+			 */
+			type: "message_ingested";
+	  }
 	| { type: "raw"; content: string }
 	| { type: "command_output"; content: string };
 
@@ -335,6 +343,12 @@ export function normalizeEvent(
 				requestId: record.request_id as string,
 				answers: normalizeAnswers(record.answers),
 			};
+		case "message_ingested":
+			// `message_id` is dropped here rather than carried and ignored
+			// downstream: nothing in the transcript is joined on it (see
+			// `applyEvent`), and a field nobody reads is a field the next reader
+			// has to prove nobody reads.
+			return { type: "message_ingested" };
 		case "raw":
 			return { type: "raw", content: (record.content as string) ?? "" };
 		case "command_output":
@@ -595,7 +609,9 @@ function lastAssistantIndex(messages: Message[]): number {
  * spinner nothing could stop.
  *
  * At most one bubble is ever open, so scanning past closed ones cannot pick the
- * wrong turn: a turn only opens a bubble when this returns -1.
+ * wrong turn: content opens a bubble only when this returns -1, and the one
+ * thing that opens one regardless — a read point — closes the open one in the
+ * same step.
  */
 export function openAssistantIndex(messages: Message[]): number {
 	for (let i = messages.length - 1; i >= 0; i--) {
@@ -732,6 +748,34 @@ function applyEvent(
 		return messages;
 	}
 
+	// The read point: the agent has picked up a message that was sent into this
+	// turn, so the bubble it was writing is finished and what it writes next
+	// answers that message. One rule, whichever CLI is behind it — the server
+	// decides when the record is written and this never asks which engine wrote
+	// it (docs/code/agent-integration.md#the-read-point).
+	//
+	// The bubble is opened here rather than left to the next content event so
+	// that the spinner survives the cut and the "not read yet" line above the
+	// composer goes at the right moment (AttentionStrip). It cannot leave a
+	// blank box: an empty bubble is dropped when the turn ends, including the
+	// one this replaces.
+	//
+	// It goes at the end, and the record's `message_id` is deliberately not used
+	// to place it — records apply in order, so the end already is under the
+	// message that was read, and the client that sent that message is the one
+	// never told its id (docs/code/frontend-state.md).
+	//
+	// Unconditional, with nothing tested first: a page of history can begin at a
+	// read point, and there the bubble being cut is in the page below and there
+	// is nothing open to find. `openedAtReadPoint` is how `prependHistoryPage`
+	// then knows not to join the two pages back together.
+	if (event.type === "message_ingested") {
+		return [
+			...closePreviousTurn(messages),
+			{ ...createAssistantMessage(), openedAtReadPoint: true },
+		];
+	}
+
 	// A call that only reads an earlier call's task belongs *on* that call, not
 	// beside it: its own row would sit a screenful below the work it describes
 	// with nothing but an opaque id to tie the two together. So it never reaches
@@ -767,16 +811,19 @@ function applyEvent(
 
 	// The turn's own bubble, wherever it sits. It is not always the last message:
 	// a message sent mid-turn lands *below* the reply still being written, and
-	// that reply belongs to the turn that was already running, not to what the
-	// user just typed. So a turn's bubble is opened by its first content event
-	// and closed by its terminal event — never by a user message coming in
-	// underneath it (docs/lifecycle-ui.md §2.3).
+	// that reply belongs to what the agent was already answering, not to what
+	// the user just typed. So a bubble is opened by its first content event and
+	// closed by a terminal event or by a read point — never by a user
+	// message merely arriving underneath it (docs/lifecycle-ui.md §2.3). The
+	// message closes it when the agent *reads* it, which is a record of its own
+	// and may be seconds later.
 	//
-	// This is the one thing keeping two turns' output apart: without `done` /
-	// `interrupted` / `error` arriving, the next turn would grow into this
-	// bubble. `messageReducer.test.ts` states that dependency as a test, because
-	// it used to be covered by a second, accidental rule — a user message closed
-	// the previous turn — that mid-turn sending had to remove.
+	// One turn has one ending, but not one bubble: `done` / `interrupted` /
+	// `error` are still the only things that end a turn, and without one the
+	// next turn would grow into this bubble. `messageReducer.test.ts` states
+	// that dependency as a test, because it used to be covered by a second,
+	// accidental rule — a user message closed the previous turn — that mid-turn
+	// sending had to remove.
 	const openIndex = openAssistantIndex(messages);
 	const hasActiveAssistant = openIndex >= 0;
 
@@ -865,15 +912,22 @@ function applyEvent(
 	// `complete` is deliberately absent: background work outlives the turn that
 	// started it and reports back later
 	// (agent-integration.md#background-waits).
-	if (
+	const abortedTurn =
 		message.status === "interrupted" ||
 		message.status === "error" ||
-		message.status === "process_ended"
-	) {
-		message.parts = settleRunningToolParts(message.parts);
-	}
+		message.status === "process_ended";
 
 	updated[index] = message;
+
+	// Swept across every bubble, not only the one the ending landed in: a read
+	// point closes a bubble where it stands, so a call that was in flight when
+	// the agent picked up a mid-turn message is left running in a bubble the
+	// turn has already moved past. Its result would have settled it, and an
+	// aborted turn is exactly the case where no result is coming — so without
+	// this the cut leaves a spinner above the ending that never stops.
+	if (abortedTurn) {
+		updated = settleRunningToolRuns(updated);
+	}
 
 	if (event.type === "process_ended") {
 		updated = settleAfterProcessGone(updated);
@@ -1608,11 +1662,12 @@ function isEmptyPlaceholder(message: Message): boolean {
 // as `complete`, and the ones the agent never wrote into are dropped rather than
 // left as blank bubbles.
 //
-// Called where something other than a turn's own ending says the turn is over:
-// a message arriving at an idle agent (`appendUserMessage`), and a page of
-// history whose last turn ended in the page above it (`prependHistoryPage`). A
-// turn that is genuinely still running is never put through here — a message
-// sent into one joins it instead.
+// Called where something other than a turn's own ending says the open bubble is
+// finished: a message arriving at an idle agent (`appendUserMessage`), a page of
+// history whose last turn ended in the page above it (`prependHistoryPage`), and
+// the read point, which closes the bubble without the turn itself being over —
+// the turn carries on writing, into the bubble opened underneath the message it
+// has just read.
 function closePreviousTurn(messages: Message[]): Message[] {
 	return messages
 		.map((m): Message => {
@@ -1637,10 +1692,12 @@ function closePreviousTurn(messages: Message[]): Message[] {
  * - **A turn running.** The message was sent into that turn — the CLIs steer the
  *   running turn with whatever arrives mid-reply — so the reply above keeps
  *   growing where it is and the message is simply appended below it. No
- *   placeholder is made, and `placeholder()` is not called: the reply to *this*
- *   message, if the agent writes a separate one, opens its own bubble once the
- *   turn ends. The bubble that is missing here is what `useChatMessages` reads
- *   back as "sent while the agent was working", so do not add one.
+ *   placeholder is made, and `placeholder()` is not called: the agent has not
+ *   read the message yet, and the bubble for what it writes afterwards is
+ *   opened by the read point (`message_ingested` in `applyEvent`), which is the
+ *   only thing that knows when "afterwards" starts. The bubble that is missing
+ *   until then is what `useChatMessages` reads back as "sent, not picked up
+ *   yet", so do not add one.
  *
  * Both callers come through here — the broadcast path below and the local
  * optimistic echo in `useChatMessages`, which needs to name the two messages it
@@ -1879,8 +1936,10 @@ interface HistoryPageCatchUp {
  * A page boundary falls between two records, not between two turns, so the turn
  * the cut lands in comes back as two halves: the older page trails off mid-turn,
  * and the page above it opened on content that no message event preceded. The
- * reducer has only one way to produce a leading assistant message — that exact
- * orphan case — which is what makes rejoining the two halves safe.
+ * reducer has two ways to produce a leading assistant message: that orphan case,
+ * and a page that begins at a read point, whose first bubble is a cut the join
+ * must not undo. The second says so on itself (`openedAtReadPoint`), which is
+ * what keeps rejoining the first safe.
  */
 export function prependHistoryPage(
 	older: Message[],
@@ -1926,6 +1985,16 @@ export function prependHistoryPage(
 	const tail = closed[closed.length - 1];
 	const head = current[0];
 	if (tail.role !== "assistant" || head?.role !== "assistant") {
+		return [...closed, ...current];
+	}
+
+	// Not two halves of one bubble but two bubbles: the page above opens where
+	// the agent picked up a message recorded in it, and what it wrote from there
+	// answers that message rather than continuing the reply below. Joining them
+	// would put the second message's answer back in the first's bubble — the
+	// inversion this whole split exists to remove, reappearing once per page
+	// boundary that happens to land on a read point.
+	if (head.openedAtReadPoint) {
 		return [...closed, ...current];
 	}
 

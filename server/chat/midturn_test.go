@@ -132,11 +132,13 @@ func TestClient_MessageDuringARunningTurnGoesThrough(t *testing.T) {
 	if got := sess.sentPrompts(); len(got) != 2 || got[1] != "second" {
 		t.Errorf("prompts handed to the agent = %q, want both messages", got)
 	}
-	if got := f.historyLen(t); got != 2 {
-		t.Errorf("history records = %d, want both messages", got)
+	// Both messages, and the read point written for the second one — this
+	// agent does not report its own. See ingest_test.go.
+	if got := f.historyLen(t); got != 3 {
+		t.Errorf("history records = %d, want both messages and the read point", got)
 	}
-	if len(f.broadcasts) != 2 {
-		t.Errorf("broadcasts = %d, want one per message", len(f.broadcasts))
+	if len(f.broadcasts) != 3 {
+		t.Errorf("broadcasts = %d, want the records that were written", len(f.broadcasts))
 	}
 	if phase := f.phase(t); phase != session.PhaseRunning {
 		t.Errorf("phase = %q, want the turn still running", phase)

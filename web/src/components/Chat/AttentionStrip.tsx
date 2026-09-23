@@ -22,10 +22,15 @@ interface Props {
 	 */
 	answerPanelOpen?: boolean;
 	/**
-	 * A typed message went into a turn that was already running. The only receipt
-	 * it gets: the reply above it keeps growing and nothing new appears under it,
-	 * so without this line a message that landed and one that vanished look the
-	 * same.
+	 * A typed message went into a turn that was already running and the agent has
+	 * not reached it yet. The only receipt it gets for that stretch: the reply
+	 * above keeps growing and nothing appears under the message, so without this
+	 * line a message that landed and one that vanished look the same.
+	 *
+	 * It names a bounded state rather than the whole rest of the turn: the read
+	 * point opens a bubble under the message the moment the agent picks it up,
+	 * and that takes this line down. On Claude that moment is the send itself, so
+	 * the line barely shows; on Codex it is however long the current step runs.
 	 */
 	sendPending?: boolean;
 }
@@ -192,7 +197,11 @@ function AttentionStrip({
 			<div className={STRIP_FRAME}>
 				<div className={STRIP_LINE}>
 					<CornerDownRight className="size-3 shrink-0" aria-hidden="true" />
-					<span>Sent into the reply the agent is working on.</span>
+					{/* Not "sent into the reply above" any more: the reply above is not
+					    where this message is answered — once the agent reads it, a
+					    bubble opens underneath it instead. What is left to say is the
+					    only thing still invisible, that the agent has not got to it. */}
+					<span>Sent — the agent has not read it yet.</span>
 				</div>
 			</div>
 		);

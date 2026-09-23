@@ -615,7 +615,9 @@ func TestBookkeepingNotificationsAreDropped(t *testing.T) {
 		{"account/rateLimits/updated", `{"rateLimits":{"limitId":"codex"}}`},
 		{"serverRequest/resolved", `{"threadId":"t","requestId":0}`},
 		{"deprecationNotice", `{"message":"upgrade"}`},
-		// The prompt Pockode just sent, echoed back as an item.
+		// The message that opened the turn, echoed back as an item, and the
+		// second half of that echo — see TestUserMessageEcho_* for the echo that
+		// is not dropped.
 		{"item/started", `{"threadId":"t","turnId":"u","startedAtMs":1,"item":{"type":"userMessage","id":"m","content":[{"type":"text","text":"hi"}]}}`},
 		{"item/completed", `{"threadId":"t","turnId":"u","completedAtMs":1,"item":{"type":"userMessage","id":"m","content":[{"type":"text","text":"hi"}]}}`},
 		// Real information with no surface in Pockode yet.
@@ -1095,7 +1097,7 @@ func TestSendMessage_StartsATurnOnTheThread(t *testing.T) {
 	sess.threadID = "thread-1"
 	sess.stateMu.Unlock()
 
-	if err := sess.SendMessage("hello"); err != nil {
+	if err := sess.SendMessage(agent.Prompt{Text: "hello"}); err != nil {
 		t.Fatalf("SendMessage error: %v", err)
 	}
 
@@ -1118,6 +1120,118 @@ func TestSendMessage_StartsATurnOnTheThread(t *testing.T) {
 	}
 }
 
+// A message Pockode can name is one whose read point it can recognise later:
+// Codex echoes this id back on the userMessage item it emits when the model
+// takes the message in (verified on codex-cli 0.153.0).
+func TestSendMessage_CarriesPockodesMessageID(t *testing.T) {
+	sess := newTestSession()
+	defer sess.cancel()
+	writer := &recordingWriteCloser{}
+	sess.stdin = writer
+	sess.stateMu.Lock()
+	sess.threadID = "thread-1"
+	sess.stateMu.Unlock()
+
+	if err := sess.SendMessage(agent.Prompt{Text: "hello", ID: "msg-7"}); err != nil {
+		t.Fatalf("SendMessage error: %v", err)
+	}
+
+	req := writer.waitForRequest(t, "turn/start")
+	var params struct {
+		ClientUserMessageID string `json:"clientUserMessageId"`
+	}
+	if err := json.Unmarshal(req.Params, &params); err != nil {
+		t.Fatalf("turn/start params: %v", err)
+	}
+	if params.ClientUserMessageID != "msg-7" {
+		t.Errorf("clientUserMessageId = %q, want the message id", params.ClientUserMessageID)
+	}
+}
+
+// A message with no id of its own must not invent one: an echo carrying an id
+// nothing in the transcript has would name a message that does not exist.
+func TestSendMessage_WithoutAnIDSendsNoClientID(t *testing.T) {
+	sess := newTestSession()
+	defer sess.cancel()
+	writer := &recordingWriteCloser{}
+	sess.stdin = writer
+	sess.stateMu.Lock()
+	sess.threadID = "thread-1"
+	sess.stateMu.Unlock()
+
+	if err := sess.SendMessage(agent.Prompt{Text: "hello"}); err != nil {
+		t.Fatalf("SendMessage error: %v", err)
+	}
+
+	req := writer.waitForRequest(t, "turn/start")
+	var params map[string]json.RawMessage
+	if err := json.Unmarshal(req.Params, &params); err != nil {
+		t.Fatalf("turn/start params: %v", err)
+	}
+	if _, ok := params["clientUserMessageId"]; ok {
+		t.Errorf("turn/start carries a client id: %s", req.Params)
+	}
+}
+
+// --- The read point ---
+
+// The echo of a message steered into a running turn is the moment Codex took it
+// in, and it is the whole reason this session reports its own read point.
+func TestUserMessageEcho_MidTurnIsTheReadPoint(t *testing.T) {
+	sess := newTestSession()
+	defer sess.cancel()
+
+	// The message that opened the turn, which marks no boundary.
+	sess.notify("item/started", `{"threadId":"t","turnId":"u","item":{"type":"userMessage","id":"m1","clientId":"msg-1","content":[]}}`)
+	sess.notify("item/started", `{"threadId":"t","turnId":"u","item":{"type":"userMessage","id":"m2","clientId":"msg-2","content":[]}}`)
+
+	events := drainEvents(sess.events)
+	if len(events) != 1 {
+		t.Fatalf("expected only the second echo to be reported, got %v", events)
+	}
+	ingested, ok := events[0].(agent.MessageIngestedEvent)
+	if !ok {
+		t.Fatalf("expected a message_ingested event, got %T", events[0])
+	}
+	if ingested.MessageID != "msg-2" {
+		t.Errorf("MessageID = %q, want the second message", ingested.MessageID)
+	}
+}
+
+// Every turn opens with a message of its own, so the first echo of each is the
+// opener — not only the first of the session.
+func TestUserMessageEcho_EachTurnHasItsOwnOpener(t *testing.T) {
+	sess := newTestSession()
+	defer sess.cancel()
+
+	sess.notify("item/started", `{"threadId":"t","turnId":"u1","item":{"type":"userMessage","id":"m1","clientId":"msg-1","content":[]}}`)
+	sess.notify("item/started", `{"threadId":"t","turnId":"u2","item":{"type":"userMessage","id":"m2","clientId":"msg-2","content":[]}}`)
+
+	if events := drainEvents(sess.events); len(events) != 0 {
+		t.Errorf("expected both openers to be passed over, got %v", events)
+	}
+}
+
+// An echo Pockode cannot name still marks where the boundary is — the cut is
+// made where the record sits, not by looking its message up — so a nameless one
+// is reported rather than dropped. Older CLIs, and anything that reached the
+// thread from outside Pockode, arrive this way.
+func TestUserMessageEcho_WithoutAClientIDIsStillReported(t *testing.T) {
+	sess := newTestSession()
+	defer sess.cancel()
+
+	sess.notify("item/started", `{"threadId":"t","turnId":"u","item":{"type":"userMessage","id":"m1","content":[]}}`)
+	sess.notify("item/started", `{"threadId":"t","turnId":"u","item":{"type":"userMessage","id":"m2","clientId":null,"content":[]}}`)
+
+	events := drainEvents(sess.events)
+	if len(events) != 1 {
+		t.Fatalf("expected the second echo to be reported, got %v", events)
+	}
+	if got := events[0].ToRecord().MessageID; got != "" {
+		t.Errorf("MessageID = %q, want none", got)
+	}
+}
+
 // Nothing else ends a turn that never started, so the refusal has to.
 func TestSendMessage_RefusedTurnEndsAsAnError(t *testing.T) {
 	sess := newTestSession()
@@ -1128,7 +1242,7 @@ func TestSendMessage_RefusedTurnEndsAsAnError(t *testing.T) {
 	sess.threadID = "thread-1"
 	sess.stateMu.Unlock()
 
-	if err := sess.SendMessage("hello"); err != nil {
+	if err := sess.SendMessage(agent.Prompt{Text: "hello"}); err != nil {
 		t.Fatalf("SendMessage error: %v", err)
 	}
 	req := writer.waitForRequest(t, "turn/start")
@@ -1148,7 +1262,7 @@ func TestSendMessage_WithoutAThreadFails(t *testing.T) {
 	sess := newTestSession()
 	defer sess.cancel()
 
-	if err := sess.SendMessage("hello"); err == nil {
+	if err := sess.SendMessage(agent.Prompt{Text: "hello"}); err == nil {
 		t.Error("expected an error when the session has no thread")
 	}
 }
@@ -1569,7 +1683,7 @@ func TestSendInterrupt_WaitingStopIsRetiredByANewPrompt(t *testing.T) {
 	if err := sess.SendInterrupt(); err != nil {
 		t.Fatalf("SendInterrupt: %v", err)
 	}
-	if err := sess.SendMessage("have another go"); err != nil {
+	if err := sess.SendMessage(agent.Prompt{Text: "have another go"}); err != nil {
 		t.Fatalf("SendMessage: %v", err)
 	}
 

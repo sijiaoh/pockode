@@ -97,7 +97,8 @@ describe("InputBar", () => {
 	});
 
 	// An open turn is not a reason to refuse: a message sent mid-reply steers the
-	// running turn and joins the answer being written (docs/lifecycle-ui.md §2.3).
+	// running turn and is answered inside it, in a bubble opened where the agent
+	// reads it rather than the one already being written (docs/lifecycle-ui.md §2.3).
 	// The states that *do* refuse reach the bar as `canSend={false}`, decided by
 	// the host — the bar itself must not add a second rule on top of it, or it
 	// would refuse sends the server would have accepted.

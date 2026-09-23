@@ -51,6 +51,17 @@ type EventRecord struct {
 	// QuestionAnswer.
 	Answering []QuestionAnswer `json:"answering,omitempty"`
 	Origin    MessageOrigin    `json:"origin,omitempty"`
+	// MessageID is Pockode's own id for a message, carried by the message record
+	// itself and by the message_ingested record that says the agent read it. It
+	// is what joins the two, and it exists because position cannot do that job:
+	// several messages can be queued into one turn, and they are read one at a
+	// time.
+	//
+	// Pockode's own id rather than the agent's: the agent that echoes one back
+	// (Codex) echoes back the id it was given, and the agent that echoes nothing
+	// has no id of its own to use. Empty on every record written before this
+	// field existed, and on a message whose id was never established.
+	MessageID string `json:"message_id,omitempty"`
 	// Subtype says what kind of record this is within its type, for the two
 	// types that have kinds: a system-origin message (see MessageEvent), and a
 	// tool result that is not the whole story (see ToolResultBackgroundStarted).

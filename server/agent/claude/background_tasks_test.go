@@ -132,7 +132,7 @@ func TestSession_QueuedNoteRidesOnTheNextPromptOnly(t *testing.T) {
 	sess := &cliSession{log: testLogger(), stdin: nopWriteCloser{&buf}}
 
 	sess.QueueNote("Pockode stopped waiting")
-	if err := sess.SendMessage("continue"); err != nil {
+	if err := sess.SendMessage(agent.Prompt{Text: "continue"}); err != nil {
 		t.Fatalf("SendMessage failed: %v", err)
 	}
 	if !strings.Contains(buf.String(), "Pockode stopped waiting") {
@@ -140,7 +140,7 @@ func TestSession_QueuedNoteRidesOnTheNextPromptOnly(t *testing.T) {
 	}
 
 	buf.Reset()
-	if err := sess.SendMessage("continue"); err != nil {
+	if err := sess.SendMessage(agent.Prompt{Text: "continue"}); err != nil {
 		t.Fatalf("SendMessage failed: %v", err)
 	}
 	if strings.Contains(buf.String(), "Pockode stopped waiting") {

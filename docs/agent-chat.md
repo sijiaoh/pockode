@@ -36,7 +36,7 @@ React SPA ──WebSocket──▶ Go Server ──spawn──▶ AI CLI (subpro
 ## Data Flow
 
 1. User sends message → `chat.message` RPC
-2. ChatClient persists message to session history, forwards to `Process.SendMessage()` — unless the turn is holding a permission request open, the one state a message cannot be delivered in, which is refused as `InvalidParams` with nothing written ([lifecycle.md](lifecycle.md#session-one-reducer)). A turn merely *running* is not refused; the message steers it.
+2. ChatClient persists message to session history, forwards to `Process.SendMessage()` — unless the turn is holding a permission request open, the one state a message cannot be delivered in, which is refused as `InvalidParams` with nothing written ([lifecycle.md](lifecycle.md#session-one-reducer)). A turn merely *running* is not refused; the message steers it, and the answer to it begins where the agent reads it rather than where the turn ends — for an agent that cannot report that moment itself, this is also where the read point record is written ([agent-event.md](agent-event.md#the-read-point-message_ingested)).
 3. Agent subprocess receives via stdin, processes, emits stream-json events
 4. Events are parsed into typed `AgentEvent`s (Text, ToolCall, ToolResult, Error, PermissionRequest, Done, etc.)
 5. Events are broadcast to all WebSocket subscribers and persisted to session history
@@ -142,11 +142,19 @@ gone and any Task it was running still spinning. Output that trails such a turn
 cannot reopen it, at a page seam for the same reason it cannot in one stream.
 
 **A page boundary can fall inside one turn.** The older page trails off
-mid-answer and the page above opens on content that no `message` event preceded;
-the reducer produces a leading assistant message in that one case only, which is
-what makes joining the two halves safe. Text at the seam goes through the same
-rule streaming uses, so a sentence — or a fenced code block — cut in two comes
-back as one part.
+mid-answer and the page above opens on content that no `message` event preceded,
+and the two halves are joined. Text at the seam goes through the same rule
+streaming uses, so a sentence — or a fenced code block — cut in two comes back as
+one part.
+
+The reducer produces a leading assistant message in one other case, and it is the
+one case that must *not* be joined: a page beginning at a read point, where the
+agent picked up a message recorded in that page and what follows answers it
+rather than continuing the reply below
+([code/agent-integration.md](code/agent-integration.md#the-read-point)). That
+bubble says so on itself, so the seam can tell the two apart; joining it would
+put the later message's answer back in the earlier message's bubble, once per
+boundary that lands there.
 
 A turn is the *only* thing a boundary can split. Nothing else in the transcript
 spans more than one record: a subagent Task is one tool-call part where its call

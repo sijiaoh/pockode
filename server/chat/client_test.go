@@ -20,11 +20,23 @@ import (
 // It implements no agent.SessionForker, which is how an agent says its sessions
 // cannot be forked — the right default for the tests that are not about forking.
 type mockAgent struct {
+	// reportsIngest makes the sessions it starts claim they say for themselves
+	// when the agent has read a message, the way Codex's do
+	// (agent.MessageIngestReporter). Set before the first session is started.
+	reportsIngest bool
+
 	mu       sync.Mutex
 	sessions []*mockSession
 }
 
 func (a *mockAgent) Start(context.Context, agent.StartOptions) (agent.Session, error) {
+	if a.reportsIngest {
+		sess := &ingestReportingSession{mockSession{events: make(chan agent.AgentEvent)}}
+		a.mu.Lock()
+		a.sessions = append(a.sessions, &sess.mockSession)
+		a.mu.Unlock()
+		return sess, nil
+	}
 	sess := &mockSession{events: make(chan agent.AgentEvent)}
 	a.mu.Lock()
 	a.sessions = append(a.sessions, sess)
@@ -60,12 +72,12 @@ type mockSession struct {
 	events chan agent.AgentEvent
 
 	promptsMu sync.Mutex
-	prompts   []string
+	prompts   []agent.Prompt
 }
 
 func (s *mockSession) Events() <-chan agent.AgentEvent { return s.events }
 
-func (s *mockSession) SendMessage(prompt string) error {
+func (s *mockSession) SendMessage(prompt agent.Prompt) error {
 	s.promptsMu.Lock()
 	s.prompts = append(s.prompts, prompt)
 	s.promptsMu.Unlock()
@@ -75,15 +87,30 @@ func (s *mockSession) SendMessage(prompt string) error {
 // sentPrompts is what the CLI behind this session was actually handed, which is
 // the only way to tell a message that was refused from one that was delivered.
 func (s *mockSession) sentPrompts() []string {
+	texts := make([]string, 0, len(s.sent()))
+	for _, p := range s.sent() {
+		texts = append(texts, p.Text)
+	}
+	return texts
+}
+
+// sent is the same, ids included, for the tests that are about the ids.
+func (s *mockSession) sent() []agent.Prompt {
 	s.promptsMu.Lock()
 	defer s.promptsMu.Unlock()
-	return append([]string(nil), s.prompts...)
+	return append([]agent.Prompt(nil), s.prompts...)
 }
 func (s *mockSession) SendPermissionResponse(agent.PermissionRequestData, agent.PermissionChoice) error {
 	return nil
 }
 func (s *mockSession) SendInterrupt() error { return nil }
 func (s *mockSession) Close()               { close(s.events) }
+
+// ingestReportingSession is a mockSession that also implements
+// agent.MessageIngestReporter.
+type ingestReportingSession struct{ mockSession }
+
+func (s *ingestReportingSession) ReportsMessageIngest() {}
 
 func newTestManager(t *testing.T, store session.Store) *process.Manager {
 	t.Helper()

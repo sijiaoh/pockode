@@ -232,6 +232,15 @@ type TurnTransition struct {
 	// state cannot tell a turn that just ended from one that ended earlier, and
 	// a turn must be reported over exactly once.
 	Ended bool
+	// Started is Ended's opposite number: this input opened a turn that was not
+	// open. Reported for the same reason — the state afterwards cannot tell a
+	// turn this input started from one that was already running — and read by
+	// the send path, where "did my prompt start this turn, or join one?" decides
+	// whether the message has a read point at all
+	// (agent.MessageIngestedEvent). Asking that of the state beforehand would be
+	// a race: two sends reaching one idle session would both believe they
+	// started it.
+	Started bool
 	// Changed is false when the input left the state exactly as it was, which is
 	// the common case — most of a turn's events are output, and the second one
 	// says nothing the first did not. It is what keeps a persisted TurnState
@@ -380,7 +389,8 @@ func ReduceTurn(state TurnState, in TurnInput) TurnTransition {
 	// on the transition rather than on the signal so that every way a turn can
 	// begin clears it the same way: a prompt, output the CLI resumed by itself,
 	// an answer to a prompt that outlived its turn.
-	if next.Open && !state.Open {
+	started := next.Open && !state.Open
+	if started {
 		next.LastOutcome = ""
 	}
 
@@ -393,6 +403,7 @@ func ReduceTurn(state TurnState, in TurnInput) TurnTransition {
 		State:   next,
 		Expired: expired,
 		Ended:   ended,
+		Started: started,
 		Changed: !next.equal(state),
 	}
 }

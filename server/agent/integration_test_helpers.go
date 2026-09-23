@@ -64,7 +64,7 @@ func RunPromptCollecting(t *testing.T, a Agent, workDir, dataDir, sessionID stri
 // up to and including its ending.
 func TurnOn(t *testing.T, ctx context.Context, sess Session, prompt string) PromptRun {
 	t.Helper()
-	if err := sess.SendMessage(prompt); err != nil {
+	if err := sess.SendMessage(Prompt{Text: prompt}); err != nil {
 		t.Fatalf("SendMessage failed: %v", err)
 	}
 

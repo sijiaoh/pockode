@@ -370,7 +370,7 @@ Four things it can say, in the order it prefers them:
 |---|---|---|
 | `permission` | "Waiting for your permission. Answer above or Stop before sending." | "Jump to request" |
 | unanswered questions | "1 question is waiting for your answer." / "{n} questions are waiting for your answer." | **Answer** |
-| a message went into a turn already open | "Sent into the reply the agent is working on." | — |
+| a message went into a turn already open, unread so far | "Sent — the agent has not read it yet." | — |
 | `background` | "Waiting on a background task — nothing to answer." | "Details" (expands) |
 
 The layout, copy and controls of the question row are
@@ -388,9 +388,12 @@ question is open — the agent may well be running — so a second sentence ther
 would be inventing a restriction to explain.
 
 The third row is a **receipt**, and it is the only one the user's own action
-produces. A message sent mid-reply gets no other acknowledgement — the reply above
-it keeps growing and nothing new appears under it — so a message that landed and a
-message that vanished look identical without this line. It is ranked above
+produces. It covers the stretch between the message being sent and the agent
+reading it: until then the reply above keeps growing and nothing appears under the
+message, so a message that landed and a message that vanished look identical
+without this line. It stops at the read point rather than at the end of the turn —
+that is where a bubble opens under the message and the transcript says it for
+itself (§2.3). It is ranked above
 `background` on purpose: sending *is* allowed during a background wait, and "nothing
 to answer" is the older news of the two, so the other order would leave the one
 state where a message lands with nothing said about it at all. It is ranked below
@@ -406,11 +409,13 @@ the line is gone by arithmetic rather than by cleanup. A system-driven message
 (kickoff, step advance, auto-continuation) is excluded: the user did not send it,
 so there is nothing to give them a receipt for.
 
-The copy says "working on" rather than "writing" because `turnOpen`'s optimistic half
-(§2.3) makes this line reachable a moment before the agent has written anything at
-all: two messages typed inside one round trip put the second one here while the
-server has yet to report the first. "Writing" would be the kind of small lie that
-costs the line its only job, which is to be believed about where a message went.
+The copy says only that the message was sent and has not been read. It deliberately
+says nothing about *where* it will be answered: it is answered below itself, which
+is where the reader is already looking, and the line's one job is to be believed
+about the message having arrived at all. It is also reachable a moment before the
+agent has written anything, through `turnOpen`'s optimistic half (§2.3) — two
+messages typed inside one round trip put the second one here while the server has
+yet to report the first — and "not read yet" is true of that moment too.
 
 Whichever it says, it is one bordered row, so the composer moves by at most one
 line's height however many of the four states hold.
@@ -494,10 +499,13 @@ while a question is open is an ordinary message that resolves nothing
 ([answering-ui.md §6](answering-ui.md#6-the-record-card-in-the-stream)).
 
 **An open turn is not a reason to refuse a send.** A message typed while the agent
-is mid-reply *steers* the turn already running: it joins the answer being written
-and shares that turn's single ending, on both CLIs — measured rather than reasoned
-about, and recorded once in
+is mid-reply *steers* the turn already running: it shares that turn's single
+ending, on both CLIs — measured rather than reasoned about, and recorded once in
 [lifecycle.md § What was measured rather than assumed](lifecycle.md#what-was-measured-rather-than-assumed).
+Sharing an ending is not sharing a bubble: the agent reads the message part-way
+through the turn, and from that point on it is answering it, so the transcript
+closes the bubble above and opens a fresh one under the message
+([code/agent-integration.md](code/agent-integration.md#the-read-point)).
 A message sent under a `background` blocker is accepted for a different reason
 rather than the same one: there the CLI is between turns and reads what arrives, and
 the wait is asking nobody for anything, so the message simply overtakes it — the
@@ -975,7 +983,7 @@ a user who stopped one subtask restart two things.
 | A question open while a background task runs | Two dimensions, not a contest. The leaf is `background`; the strip shows the question row above the background row, because the question is the one with something to press. Neither hides the other |
 | A question open while the agent is running | The row says `Running` *and* `2 to answer`; the strip shows the question row; the composer is live. This is the case the two deleted leaves could not express |
 | Fork of a session mid-turn | the fork starts at `phase: idle`, so it has a live composer and no Stop button on its first frame |
-| Message sent into a running turn | it joins the reply being written, so the transcript ends on the message with no bubble under it and the strip says so (§2.2). The reply above keeps growing where it is — a mid-turn message never closes it (§2.3) — and keeps its own spinner, which asks whether the bubble is the open turn rather than whether it is the last row. Position used to answer both; a message landing underneath is what separated them |
+| Message sent into a running turn | until the agent reads it the transcript ends on the message with no bubble under it and the strip says so (§2.2); the reply above keeps growing where it is, since arriving underneath a reply never closes it (§2.3). At the read point that reply is closed and a fresh bubble opens under the message, so what answers it is below it. Either way the spinner asks whether a bubble is the open turn rather than whether it is the last row |
 | Message sent a moment before a request appears | the accepted message takes the card off screen and the turn is left waiting for an answer nobody can give. Stop recovers it — the half of the strip's advice that survives the card going away, and measured to land from under a request. The window is between the server's check and the prompt reaching the turn state, is milliseconds wide, and is accepted on purpose rather than closed with a lock spanning the CLI's stdin (`session.ReduceTurn`, `SignalPrompt`) |
 | Send refused because a request is on screen | the reason is reported as a bubble directly under the message it refused, not at the end of a transcript that may have moved on since. A refusal shown nowhere would leave the message looking delivered, which is the failure shape §2.3 forbids |
 | Work stopped by the nudge limit | `stopped`, plus the engine's comment saying so. Chat shows nothing extra — the transcript already ends where the agent stopped answering |

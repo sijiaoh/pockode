@@ -99,7 +99,7 @@ one bordered row so the composer moves by at most one line's height
 |---|---|---|---|---|
 | 1 | `permission` blocker | `Lock` | "Waiting for your permission. Answer above or Stop before sending." | "Jump to request" |
 | 2 | `unanswered.length > 0` | `CircleHelp` | "1 question is waiting for your answer." / "{n} questions are waiting for your answer." | **Answer** |
-| 3 | a message went into a turn already open | `CornerDownRight` | "Sent into the reply the agent is working on." | — |
+| 3 | a message went into a turn already open, unread so far | `CornerDownRight` | "Sent — the agent has not read it yet." | — |
 | 4 | `background` blocker | `Hourglass` | "Waiting on a background task — nothing to answer." | "Details" (expands) |
 
 **Permission stays first**, and now for a sharper reason than precedence: it is

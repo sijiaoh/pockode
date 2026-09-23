@@ -207,12 +207,15 @@ type appSession struct {
 	// else.
 	attachments attachments.Store
 
-	stateMu  sync.Mutex // protects threadID, turnID and interruptPending
+	stateMu  sync.Mutex // protects threadID, turnID, interruptPending and openerEchoTurnID
 	threadID string
 	turnID   string // the turn currently running, or empty between turns
 	// interruptPending is a stop that arrived before there was a turn to name.
 	// See SendInterrupt.
 	interruptPending bool
+	// openerEchoTurnID is the last turn whose opening message Codex has echoed
+	// back. See claimTurnOpener.
+	openerEchoTurnID string
 
 	// toolInputs holds the rendered input of items still in flight, keyed by
 	// item id. An approval request names only the item it is about, so this is
@@ -251,8 +254,8 @@ func (s *appSession) Events() <-chan agent.AgentEvent {
 // running turn and replaced it — and it is the better of the two, since nothing
 // the agent had already done is thrown away. It is also why nothing here counts
 // endings per message; see agent.Session.
-func (s *appSession) SendMessage(prompt string) error {
-	s.log.Debug("sending prompt", "length", len(prompt))
+func (s *appSession) SendMessage(prompt agent.Prompt) error {
+	s.log.Debug("sending prompt", "length", len(prompt.Text))
 
 	// A new prompt is the user asking for work, which retires a stop that never
 	// found a turn to name — one pressed while the session was idle, or one that
@@ -269,7 +272,15 @@ func (s *appSession) SendMessage(prompt string) error {
 
 	params := map[string]interface{}{
 		"threadId": threadID,
-		"input":    []map[string]interface{}{{"type": "text", "text": prompt}},
+		"input":    []map[string]interface{}{{"type": "text", "text": prompt.Text}},
+	}
+	if prompt.ID != "" {
+		// Codex echoes this back as the `clientId` of the userMessage item it
+		// emits when it reads the message, which is what lets that echo name one
+		// specific message rather than "whichever was sent last" — the case that
+		// needs it is two messages steered into one turn. Verified against
+		// codex-cli 0.153.0. See handleUserMessageItem.
+		params["clientUserMessageId"] = prompt.ID
 	}
 
 	return s.sendRPCAsync("turn/start", params, func(_ json.RawMessage, err error) {
@@ -280,6 +291,11 @@ func (s *appSession) SendMessage(prompt string) error {
 		s.emitEvent(agent.ErrorEvent{Error: fmt.Sprintf("codex could not start the turn: %s", err)})
 	})
 }
+
+// ReportsMessageIngest marks this session as one that says for itself when the
+// agent has read a message; see agent.MessageIngestReporter and
+// handleUserMessageItem.
+func (s *appSession) ReportsMessageIngest() {}
 
 // SendPermissionResponse answers the approval request the user just decided on.
 func (s *appSession) SendPermissionResponse(data agent.PermissionRequestData, choice agent.PermissionChoice) error {
@@ -624,6 +640,25 @@ func (s *appSession) adoptTurn(turnID string) (threadID string, interrupt bool) 
 	interrupt = s.interruptPending
 	s.interruptPending = false
 	return s.threadID, interrupt
+}
+
+// claimTurnOpener reports whether this is the first user message Codex has
+// echoed inside the given turn, which is the message that opened it.
+//
+// Keyed on the turn the echo arrived stamped with rather than on the turn the
+// session believes is running: the two can differ while a turn/start reply is
+// still in flight, and the item's own stamp is the fact that cannot be stale.
+//
+// One turn can hold several echoes — every message steered into it is echoed as
+// it is read — and only the first of them is the opener.
+func (s *appSession) claimTurnOpener(turnID string) bool {
+	s.stateMu.Lock()
+	defer s.stateMu.Unlock()
+	if s.openerEchoTurnID == turnID {
+		return false
+	}
+	s.openerEchoTurnID = turnID
+	return true
 }
 
 // clearTurn forgets the turn that just ended, along with any stop still waiting

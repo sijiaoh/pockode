@@ -1136,7 +1136,7 @@ func TestSession_SendMessage(t *testing.T) {
 		stdin: nopWriteCloser{&buf},
 	}
 
-	err := sess.SendMessage("Hello, Claude!")
+	err := sess.SendMessage(agent.Prompt{Text: "Hello, Claude!"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

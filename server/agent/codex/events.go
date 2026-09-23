@@ -220,15 +220,21 @@ func parseItemNotification(params json.RawMessage) (threadItem, bool) {
 	return item, true
 }
 
-// handleItemStarted turns the beginning of a tool-shaped item into a tool call.
+// handleItemStarted turns the beginning of a tool-shaped item into a tool call,
+// and the echo of a message into the signal that Codex has read it.
 //
-// Items with no counterpart in Pockode's transcript (the echo of the prompt we
-// just sent, the agent's own messages, reasoning, plans, web searches) are left
-// to item/completed or dropped there.
+// The remaining items with no counterpart in Pockode's transcript (the agent's
+// own messages, reasoning, plans, web searches) are left to item/completed or
+// dropped there.
 func (s *appSession) handleItemStarted(params json.RawMessage) {
 	item, ok := parseItemNotification(params)
 	if !ok {
 		s.log.Warn("failed to parse item/started")
+		return
+	}
+
+	if item.Type == "userMessage" {
+		s.handleUserMessageItem(item)
 		return
 	}
 
@@ -247,6 +253,43 @@ func (s *appSession) handleItemStarted(params json.RawMessage) {
 		ToolInput:         toolInput,
 		ProviderMessageID: item.TurnID,
 	})
+}
+
+// handleUserMessageItem turns Codex echoing a message back into the read point
+// for it.
+//
+// The echo is Codex's own account of the moment the message entered the
+// conversation, and it lands between two items rather than inside one, so the
+// boundary it marks is exact: everything after it answers this message. It is
+// the only signal of the kind either CLI offers (measured 2026-09-23 on
+// codex-cli 0.153.0 and claude-code 2.1.263).
+//
+// The message that opened the turn is echoed the same way and is passed over:
+// nothing has been said in the turn yet, so a signal for it would mark a
+// boundary where the message record already is. See claimTurnOpener.
+//
+// Taken from item/started rather than item/completed, which carries the same
+// item milliseconds later: one of the two has to be ignored, and the earlier one
+// is the read point.
+func (s *appSession) handleUserMessageItem(item threadItem) {
+	if s.claimTurnOpener(item.TurnID) {
+		return
+	}
+
+	var ev struct {
+		// ClientID is the id Pockode sent this message with, echoed back. Null
+		// for a message sent without one, and for anything that reached the
+		// thread from outside Pockode.
+		ClientID string `json:"clientId"`
+	}
+	if err := json.Unmarshal(item.Raw, &ev); err != nil {
+		// Degraded rather than dropped: which message was read is worth less
+		// than the fact that one was, and the position of the record still says
+		// where the boundary is. See agent.MessageIngestedEvent.
+		s.log.Warn("failed to parse userMessage item", "error", err)
+	}
+
+	s.emitEvent(agent.MessageIngestedEvent{MessageID: ev.ClientID})
 }
 
 // toolCallOf renders an item as a tool call, or reports that it is not one.
