@@ -224,15 +224,38 @@ A request that arrives before `auth` is refused with reason
 
 ### Session Persistence (Frontend)
 
-The cluster frontend keeps the **session token** the cluster issued in
-`localStorage` under `cluster_auth_session_token`; the password itself is held in
-memory only, until that token replaces it. This is what survives a reload and
-lets the tab reconnect without asking again.
+There is none. The cluster frontend writes **no credential to browser storage**:
+the password is held in memory until the session token replaces it, and that
+token is held in memory too. Every load — new tab, reload, a tab the browser
+restored — starts at the password screen.
 
-The key differs from main mode (`auth_session_token`) to avoid conflicts when
-both modes share the same browser origin. The pre-rename key that held the
-password itself (`cluster_auth_token`) is deleted on start — each frontend
-clears its own, and only its own; see
+That is a deliberate trade, and not one about secrecy. The old behaviour was
+"remembered, except when the cluster had been restarted under a different
+password, and then silently not" (the server resets `sessions.json` whenever the
+running password stops matching its fingerprint). One rule the user can predict
+is worth more here than a convenience that was already conditional, and the
+convenience has a better owner: the browser's own password manager, which the
+user opts into and can delete. The password field keeps
+`autoComplete="current-password"` for exactly that reason. Note that a password
+manager stores per origin, so `http://<LAN-IP>:port` and a relay address are two
+separate entries.
+
+The main frontend is unchanged and still persists its session token; the switch
+is `persistSession` on the shared `createAuthStore`.
+
+An install upgrading into this still has a token under
+`cluster_auth_session_token` — and an older one, the password itself, under
+`cluster_auth_token`. Both are deleted on start: not writing them from now on
+would not have unwritten them. The keys differ from main mode
+(`auth_session_token` / `auth_token`) to avoid conflicts when both modes share
+the same browser origin, and each frontend clears its own, and only its own; see
+[Authentication → Sessions](code/authentication.md#sessions-what-the-browser-keeps).
+
+The `auth` exchange above is unchanged — the token is still issued and still
+used, it simply never outlives the tab. What changes is that every load is now a
+fresh password authentication, so the cluster records a session for each one.
+That was evaluated and accepted, for reasons that sit with the rest of the
+session mechanics in
 [Authentication → Sessions](code/authentication.md#sessions-what-the-browser-keeps).
 
 ### Frontend UX
@@ -243,24 +266,56 @@ section describes what it does; the reasoning behind that shape, and the
 alternatives that were rejected on the way to it, are in
 [cluster-ui.md](cluster-ui.md).
 
-- **Password screen.** The field can be revealed, and says where the password
-  comes from (the `--password` the cluster was started with). It is usually
-  typed on a phone keyboard; typing it blind and being turned away is the worst
-  way to learn a character was wrong. A password the cluster rejects leads to an
-  "Authentication failed" screen carrying the server's own message; its Try
-  Again clears the stored credential and returns here. A stored session token
-  the cluster no longer knows is a different case and is handled silently: it is
-  dropped and the password screen comes back with nothing to apologise for,
-  because the user did nothing wrong. A `?password=` query parameter skips this
-  screen and is stripped from the URL immediately, so a bookmark can carry it
-  instead of a phone keyboard (`?token=` is the pre-rename spelling, still read
-  for one deprecation period).
-- **Connecting** uses a full-screen loading state, held back 300 ms so a connect
-  that is about to succeed says nothing at all. If it never succeeds the screen
-  changes to "Cluster unreachable" with a Retry, because retries run for as long
-  as the tab is open and an indefinite spinner would explain nothing.
-  `version === null` is the test for "never authenticated", since the status
-  alone cannot tell a first connect from a reconnect.
+- **Password screen.** Every load starts here, and the field's description says
+  so ("kept in this tab only, so you'll be asked again after a reload"): "where
+  does this password come from" and "why am I being asked again" are halves of
+  one question and are answered in one breath, which `aria-describedby` then
+  carries to a screen reader whole.
+  The field can be revealed: a cluster password is long, random and usually
+  typed on a phone keyboard, and typing it blind and being turned away is the
+  worst way to learn a character was wrong.
+
+  Arriving here after an ordinary reload shows **nothing** above the field. That
+  is the product working as described, and an apology would suggest otherwise.
+  Only a real event gets a line, and there are two: a session the cluster stopped
+  accepting ("The cluster no longer accepts this session — enter the password
+  again" — without it, being turned away mid-session would look identical to a
+  reload and the user would think their last login never took), and an old
+  password link (below). Both are secondary text, not errors, and whichever is
+  up joins the field's `aria-describedby`: the field takes focus the moment this
+  screen mounts, so a line that is not read out with it is one a screen reader
+  user never gets — and the expired-session line arrives on a screen that mounts
+  under them, with no reload of their own to explain it. Neither line exists on
+  an ordinary load, so an ordinary load still describes nothing but the help
+  text.
+
+  The screen owns its own submission. While it is connecting the button reads
+  "Connecting…", disabled and `aria-busy`, with a spinner held back 300 ms so a
+  connect that is about to succeed shows nothing. A password the cluster rejects
+  is reported **in place**, under the field, with the server's own message; what
+  was typed stays, and the field is refocused and selected. A refusal is now the
+  commonest outcome of one mistyped character, and the fix is one line above it.
+  A refusal always lands here, including one that arrives after the tab had
+  connected: it stops the retries, so the version is cleared with it rather than
+  leaving a node list up over a connection that is shut.
+- **`?password=` links are no longer accepted** (nor the pre-rename `?token=`).
+  A password in a URL is already in history, bookmark sync, referrers and access
+  logs by the time the page can strip it, and it was the one path that skipped
+  the password screen. The parameter is still stripped on arrival, and the
+  password screen says the link was refused so an old bookmark fails out loud
+  rather than looking broken.
+- **Cluster unreachable** replaces the password screen when a connect never
+  succeeds, because retries run for as long as the tab is open and an indefinite
+  spinner would explain nothing. `version === null` is the test for "this tab
+  has never been connected", since the status alone cannot tell a first connect
+  from a reconnect; it alone decides which screen is up, while the status only
+  decides what the password screen looks like. Retry reuses the password in
+  memory, so beneath it **Use a different password** clears that credential and
+  returns to the password screen — otherwise a cluster restarted under a
+  different password is a loop with no exit.
+- **There is no log out.** Nothing is stored, so logging out could do no more
+  than a reload does, and a standing button would imply there was something kept
+  to clear. The header's slot belongs to Add node.
 - **Reconnecting** after a successful connect keeps the last known node list
   visible. The header's status line switches from "Connected" to
   "Reconnecting...", and a banner above the list escalates: "Reconnecting..."

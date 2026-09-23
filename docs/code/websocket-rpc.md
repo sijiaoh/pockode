@@ -382,7 +382,7 @@ Client                              Server
   the same one back for a token — so a client stores it unconditionally
 - A refusal carries `data.reason`, and clients branch on that rather than on the
   message: `invalid_password` keeps the user on the password screen with the
-  error, `session_expired` drops the stored token and returns there silently,
+  error, `session_expired` drops the token and returns there with no error,
   `not_authenticated` means a method arrived before `auth`, and
   `worktree_not_found` — the one refusal the credential was fine for — sends the
   client back to the main worktree for one retry
@@ -509,7 +509,9 @@ no credential to retry *with*; a connection that merely keeps failing stays in
 `reconnecting` indefinitely rather than escalating to either of them. A rejected
 *session token* reaches neither: it is nobody's mistake, so the token is dropped
 and the status goes to `disconnected`, which is the password screen with no
-error on it.
+error on it. `web` returns there saying nothing at all; the cluster panel, whose
+every load starts at that screen, adds a line of secondary text so the return is
+not read as an ordinary reload ([cluster.md](../cluster.md#frontend-ux)).
 
 ### Auto-Reconnect
 

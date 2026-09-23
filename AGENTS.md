@@ -66,7 +66,7 @@ The `packages/shared` package contains UI components, hooks, stores, and utiliti
 **Available exports**:
 - Components: `Spinner`, `ConfirmDialog`, `Sheet`, `ReconnectBanner`
 - Hooks: `useMediaQuery`, `useOutsideClick`, `useIsExpanded`, `useHasCoarsePointer`, `useHasFinePointer`
-- Stores: `createAuthStore` (factory function for the auth store, with configurable localStorage keys)
+- Stores: `createAuthStore` (factory function for the auth store, with configurable localStorage keys — and `persistSession`, which `web-cluster` turns off so no cluster credential is ever written to browser storage; see [docs/cluster.md](docs/cluster.md#session-persistence-frontend))
 - Utils: `getWebSocketUrl`, `BREAKPOINTS`, `MEDIA_QUERIES`, `hasCoarsePointer`, `credentialParams` / `authFailureReason` (the `auth` RPC contract both frontends share with the server — see [docs/code/authentication.md](docs/code/authentication.md))
 - `@pockode/shared/vitest`: `vitestRuntimeOptions` — the worker and timeout settings both `vitest.config.ts` files spread in. A separate subpath because it needs Node types, which the browser entry must not pull in; it lives outside `src` for the same reason. It is the one plain-JavaScript file here: vite leaves a config's bare imports external, so Node loads this one itself, and the Node that `.node-version` pins cannot read `.ts`.
 

@@ -77,12 +77,11 @@ describe("authStore", { timeout: 20_000 }, () => {
 			expect(useAuthStore.getState().sessionToken).toBeNull();
 		});
 
-		// The one thing that separates forgetSession from logout, and the reason
-		// the cluster's `?password=` link still works after its session lapses:
-		// a load that has both a restored token and a password waiting behind it
-		// falls back to the password rather than to the login screen. Only this
-		// order reaches it — `rememberSession` wipes the password, so a password
-		// typed *after* a token was issued is already gone.
+		// The one thing that separates forgetSession from logout: a load that has
+		// both a restored token and a password waiting behind it falls back to
+		// the password rather than to the login screen. Only this order reaches
+		// it — `rememberSession` wipes the password, so a password typed *after*
+		// a token was issued is already gone.
 		it("falls back to a waiting password when the token is dropped", async () => {
 			localStorage.setItem("auth_session_token", "stale-session");
 			const { authActions } = await import("./authStore");

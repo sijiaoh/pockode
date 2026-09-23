@@ -79,6 +79,35 @@ confirmations raised from inside an open sheet — exactly the stacking rule 3
 exists to remove. The running-node Delete needs three actions besides, which a
 confirm/cancel pair cannot express and a `Sheet` footer can.
 
+**A Log out control in the header.** The panel keeps no credential anywhere but
+this tab, so logging out could do nothing a reload does not already do — and a
+standing button would name a concept the app no longer has, implying there is
+something stored that wants clearing. That is precisely the misunderstanding the
+no-persistence change exists to remove. Rule 1 puts Add node in that slot
+instead. The one moment where "leave and re-enter a password" really is the
+answer is a dead end, not a routine, so it appears there and only there: **Use a
+different password** under Retry on the unreachable screen, where retrying with
+the password in memory can never succeed because the cluster came back up under
+a different one.
+
+**`aria-pressed` on the password reveal toggle, beside its full name.** The
+button is named for what it will do — `Show password` / `Hide password`, because
+a bare "Show" is unreadable out of context — and a name that already carries the
+state is the one case the WAI-ARIA APG says not to add `aria-pressed` to: the
+pair is announced "Hide password, toggle button, pressed", the same fact twice
+in two vocabularies. The name is the half that fixes the actual complaint, so it
+is the half that was kept.
+
+**A pending state on the unreachable screen's Retry.** Connect shows that it is
+working and this button deliberately does not, which looks like an oversight and
+is not: pending would mean going through `connect()`, and `connect()` sets the
+status to `connecting`, which together with `version === null` *is* the password
+screen — so the button would throw the user to another screen and back.
+`retryNow()` holds the `reconnecting` status and stays put. Nothing is lost by
+it, since the screen already says it is retrying; what would be lost is by
+"restoring" the pending state through `connect()`, which brings the flicker back
+with it.
+
 **A `node.check_path` RPC to validate the path as the user types.** It was
 specified and then dropped, and not because the payoff was small: it cannot buy
 what it appears to. The same checks already exist in `resolveDir`
@@ -124,5 +153,5 @@ evidence rather than on taste.
 | A search field over the list | A real cluster passes roughly 20 nodes. Groups plus sticky headers carry a few dozen fine. |
 | Pull-to-refresh | Somebody asks. It needs `react-pull-to-refreshify`; the 5 s poll and the visibility catch-up cover the same ground for free. |
 | `node.check_path` | The "I only find out at submit" friction is reported in real use — and then only with the duplicated rule and the check/submit gap above accepted openly. |
-| Persisting the node start password to `localStorage` | Re-entering it after a reload turns out to grate. It adds no new *class* of exposure (that storage already holds the cluster's session token) but does make a second secret durable, so it wants a reason, not a guess. |
+| Persisting the node start password to `localStorage` | Re-entering it after a reload turns out to grate — and the bar is now higher than it was. The cluster frontend stores no credential at all, so this would be the *first* durable secret in that storage rather than a second one beside the session token. Nothing about it is settled by precedent any more; it needs its own argument. |
 | Migrating `web`'s two remaining hand-rolled body-scroll locks (`web/src/components/Files/UploadConflictDialog.tsx`, `web/src/components/ui/ResponsivePanel.tsx`) to `useLockBodyScroll` | It is pure `web` work, not cluster work. Correct today only because neither has an overlay it can stack with — which is fragile, not safe. |

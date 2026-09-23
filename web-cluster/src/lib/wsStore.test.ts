@@ -64,10 +64,22 @@ class MockWebSocket {
 		this.readyState = MockWebSocket.CLOSED;
 		this.onclose?.();
 	}
-	// close() is not instant in a browser: it starts a handshake, and against a
-	// dead cluster onclose lands seconds later. The default mock fires it
-	// synchronously, which hides every bug that needs a socket to outlive its
-	// own close() call.
+	// A server from before session tokens: auth succeeds and hands back nothing
+	// to reconnect with, so the password stays the credential.
+	mockAuthWithoutSessionToken() {
+		this.send = vi.fn((data: string) => {
+			const parsed = JSON.parse(data);
+			if (parsed.id !== undefined && parsed.method === "auth") {
+				queueMicrotask(() => {
+					this.simulateMessage({
+						jsonrpc: "2.0",
+						id: parsed.id,
+						result: { version: "test" },
+					});
+				});
+			}
+		});
+	}
 	// Answers auth with a refusal carrying the machine-readable reason clients
 	// branch on.
 	mockAuthFailure(reason: string) {
@@ -84,6 +96,10 @@ class MockWebSocket {
 			}
 		});
 	}
+	// close() is not instant in a browser: it starts a handshake, and against a
+	// dead cluster onclose lands seconds later. The default mock fires it
+	// synchronously, which hides every bug that needs a socket to outlive its
+	// own close() call.
 	mockSlowClose() {
 		this.close = vi.fn(() => {
 			this.readyState = MockWebSocket.CLOSING;
@@ -99,8 +115,8 @@ const OriginalWebSocket = globalThis.WebSocket;
 
 beforeEach(() => {
 	vi.resetModules();
-	// authStore is module state the connection layer writes the issued session
-	// token into; a fresh module reads this back on import.
+	// The cluster's authStore never writes to storage, so nothing here should
+	// leak between cases — cleared so that stays a fact rather than a belief.
 	localStorage.clear();
 	vi.useFakeTimers();
 	mockWsInstances = [];
@@ -148,9 +164,11 @@ describe("wsStore credentials", () => {
 		expect(useWSStore.getState().status).toBe("reconnecting");
 	});
 
-	// Nothing the user did is wrong, so this must not land on the terminal
-	// "auth_failed" screen the way a bad password does.
-	it("drops an expired session quietly rather than failing auth", async () => {
+	// Nothing the user did is wrong, so this must not be reported as a refused
+	// password. It does have to be said, though: the password screen it returns
+	// to looks exactly like an ordinary load, and version has to go with it or
+	// the node list would stay up with nothing left to authenticate with.
+	it("drops an expired session back to the password screen", async () => {
 		const useWSStore = await getStore();
 		const { authActions, useAuthStore } = await import("./authStore");
 		authActions.rememberSession("stale-session");
@@ -163,7 +181,41 @@ describe("wsStore credentials", () => {
 		await vi.runAllTimersAsync();
 
 		expect(useAuthStore.getState().sessionToken).toBeNull();
-		expect(useWSStore.getState().status).toBe("disconnected");
+		expect(useWSStore.getState()).toMatchObject({
+			status: "disconnected",
+			version: null,
+			reauthReason: "session_expired",
+		});
+	});
+
+	// A refusal stops retrying, so whatever is on screen when it lands is what
+	// the user is left with. Clearing the version is what sends them back to
+	// the password screen; without it a tab that had connected would keep a
+	// node list and a "Connected" header over a socket that is shut. Only a
+	// server too old to issue a token gets here — it leaves the password as the
+	// credential, so a cluster restarted under a different one refuses it.
+	//
+	// The status also has to still be "auth_failed" once every timer has run:
+	// onclose has to see it before it fires, or it schedules a reconnect and the
+	// refused credential goes on being retried in the background.
+	it("returns to the password screen when a password stops being accepted", async () => {
+		const useWSStore = await getStore();
+		useWSStore.getState().actions.connect(TEST_PASSWORD);
+		currentMockWs?.mockAuthWithoutSessionToken();
+		currentMockWs?.simulateOpen();
+		await vi.runAllTimersAsync();
+		expect(useWSStore.getState().version).not.toBeNull();
+
+		currentMockWs?.simulateClose();
+		await vi.advanceTimersByTimeAsync(3000);
+		currentMockWs?.mockAuthFailure("invalid_password");
+		currentMockWs?.simulateOpen();
+		await vi.runAllTimersAsync();
+
+		expect(useWSStore.getState()).toMatchObject({
+			status: "auth_failed",
+			version: null,
+		});
 	});
 });
 

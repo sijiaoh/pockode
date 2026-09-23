@@ -143,9 +143,16 @@ authenticates with the separate `server.json` token, not this one.
 ## Sessions: what the browser keeps
 
 The password is typed once and exchanged for a **session token**; the session
-token is the only credential a frontend stores. `server/authsession/` issues and
-validates them, on both the server and the cluster, out of
+token is the only credential a frontend may store. `server/authsession/` issues
+and validates them, on both the server and the cluster, out of
 `<dataDir>/sessions.json`.
+
+**The cluster frontend stores nothing at all.** It still performs the exchange —
+the token is what its reconnects use, so the password leaves the browser once —
+but it keeps the token in memory only, so every load asks for the password
+again. The main frontend is unchanged. That is a UX decision rather than a
+security one, and it is argued where it belongs, in
+[cluster.md](../cluster.md#session-persistence-frontend).
 
 The reason is what a password in `localStorage` is: unexpirable, unrevocable,
 and *the user's own secret*, possibly shared with accounts that have nothing to
@@ -186,7 +193,7 @@ clients branch on that rather than on the prose message:
 | `data.reason` | Means | Client does |
 |---|---|---|
 | `invalid_password` | The password is wrong | Stay on the password screen, show the error |
-| `session_expired` | The stored token is unknown or past its idle window | Drop it silently and ask for the password — the user did nothing wrong |
+| `session_expired` | The token is unknown or past its idle window | Drop it and ask for the password — the user did nothing wrong, so it is never reported as an error |
 | `not_authenticated` | Some other method arrived before `auth`; the connection is closed | A client that reaches this has a bug — nothing is sent before `auth` |
 | `worktree_not_found` | The credential was fine; the worktree asked for is gone | Fall back to the main worktree and retry once |
 
@@ -200,12 +207,20 @@ unrelated reason was added to this table.
 `cluster_auth_token` in the cluster) on every start, so the plaintext secret does
 not sit in a user's browser until they happen to log out. The removal is
 unconditional and stays until the rest of the deprecations go
-(`createAuthStore`'s `legacyPasswordKey`).
+(`createAuthStore`'s `legacyPasswordKey`). The cluster additionally deletes
+`cluster_auth_session_token` for the same reason: it no longer writes one, and
+not writing does not unwrite what an earlier version left behind.
 
 **Each origin holds its own token.** The same server reached over the LAN
 (`http://ip:port`) and through the relay (`https://<subdomain>…`) are different
 browser origins with separate `localStorage`, so each gets a session of its own.
 That is correct, and it is one reason the cap is 50 rather than 5.
+
+**A cluster tab issues a session per load**, since every load authenticates by
+password and the server issues unconditionally. Accepted rather than worked
+around: the cap evicts least recently used, no long-lived cluster token exists
+any more, so the record evicted is always another dead one. Avoiding it would
+mean changing the `auth` contract for no gain.
 
 ### The password fingerprint, and what it is *not*
 

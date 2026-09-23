@@ -3,21 +3,28 @@ import type { AuthCredential } from "../utils/auth.ts";
 
 export interface AuthState {
 	/**
-	 * The credential that survives a reload. Random, expirable and revocable by
-	 * the server, which is why this — and never the password — is the one thing
-	 * kept in browser storage.
+	 * What the password is exchanged for, so that a reconnect never has to send
+	 * the password again. Random, expirable and revocable by the server, which
+	 * is why this — and never the password — is the one thing an app may put in
+	 * browser storage; whether it does is `persistSession`, and the cluster
+	 * frontend deliberately does not.
 	 */
 	sessionToken: string | null;
 	/**
 	 * The password the user just typed, held only until the first successful
 	 * auth returns a session token to replace it. It is never written to
-	 * storage, so a reload starts from the session token alone.
+	 * storage under any configuration, so no reload ever starts from it.
 	 */
 	password: string | null;
 }
 
 export interface AuthStoreConfig {
-	/** localStorage key for the session token, e.g. "auth_session_token". */
+	/**
+	 * localStorage key for the session token, e.g. "auth_session_token". Still
+	 * required when `persistSession` is false: the key is then what gets wiped
+	 * on start, because an install upgrading into that mode still has a token
+	 * sitting under it and this is the only moment it can be removed.
+	 */
 	sessionKey: string;
 	/**
 	 * The key this app used to keep the user's *password* under, back when the
@@ -27,6 +34,15 @@ export interface AuthStoreConfig {
 	 * TODO: Remove with the rest of the auth-token deprecations in v0.20.0.
 	 */
 	legacyPasswordKey: string;
+	/**
+	 * Whether a reload may stay signed in. Defaults to true.
+	 *
+	 * The cluster panel sets it to false, and not for secrecy: a credential that
+	 * lives only in this tab has exactly one behaviour, which is the whole
+	 * point. The argument is in docs/cluster.md, under Session Persistence
+	 * (Frontend).
+	 */
+	persistSession?: boolean;
 }
 
 export interface AuthStore {
@@ -50,10 +66,9 @@ export interface AuthStore {
 		 * not the user's doing, nothing is said to them, and a password still in
 		 * memory is left to be tried next.
 		 *
-		 * One load reaches that fallback — the cluster opened from a
-		 * `?password=` link while storage still holds a lapsed token. A password
-		 * typed after a token was issued is already gone, because
-		 * `rememberSession` clears it.
+		 * That fallback needs a password that was typed *before* a token was
+		 * issued, since `rememberSession` clears it; only a restored token can
+		 * produce that order, so it exists for apps that persist one.
 		 */
 		forgetSession: () => void;
 		logout: () => void;
@@ -64,16 +79,32 @@ export interface AuthStore {
 	};
 }
 
-/** Factory function to create an auth store with configurable storage keys. */
+/**
+ * Factory function to create an auth store: each app brings its own storage
+ * keys, and says whether a session may be stored at all (`persistSession`).
+ */
 export function createAuthStore(config: AuthStoreConfig): AuthStore {
-	const { sessionKey, legacyPasswordKey } = config;
+	const { sessionKey, legacyPasswordKey, persistSession = true } = config;
 
 	localStorage.removeItem(legacyPasswordKey);
+	// Not writing a token from here on does not unwrite the one an earlier
+	// version left behind. This start is the only chance to clear it.
+	//
+	// TODO: Remove alongside legacyPasswordKey in v0.20.0 — by then every
+	// install that ever stored one has run this once, and nothing writes the
+	// key in this mode for it to find again.
+	if (!persistSession) localStorage.removeItem(sessionKey);
 
 	const useAuthStore = create<AuthState>(() => ({
-		sessionToken: localStorage.getItem(sessionKey),
+		sessionToken: persistSession ? localStorage.getItem(sessionKey) : null,
 		password: null,
 	}));
+
+	const storeSession = (sessionToken: string | null) => {
+		if (!persistSession) return;
+		if (sessionToken === null) localStorage.removeItem(sessionKey);
+		else localStorage.setItem(sessionKey, sessionToken);
+	};
 
 	const selectCredential = (state: AuthState): AuthCredential | null => {
 		// The token wins whenever there is one: it is what the password was
@@ -89,15 +120,15 @@ export function createAuthStore(config: AuthStoreConfig): AuthStore {
 			useAuthStore.setState({ password });
 		},
 		rememberSession: (sessionToken: string) => {
-			localStorage.setItem(sessionKey, sessionToken);
+			storeSession(sessionToken);
 			useAuthStore.setState({ sessionToken, password: null });
 		},
 		forgetSession: () => {
-			localStorage.removeItem(sessionKey);
+			storeSession(null);
 			useAuthStore.setState({ sessionToken: null });
 		},
 		logout: () => {
-			localStorage.removeItem(sessionKey);
+			storeSession(null);
 			useAuthStore.setState({ sessionToken: null, password: null });
 		},
 		getCredential: (): AuthCredential | null =>

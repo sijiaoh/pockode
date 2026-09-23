@@ -48,7 +48,7 @@ type ConnectionStatus =
 
 interface AuthResult {
 	version: string;
-	/** What the client stores in place of the password. */
+	/** What takes the password's place for the rest of the session. */
 	session_token: string;
 }
 
@@ -70,6 +70,18 @@ interface WSState {
 	 * to can drive that.
 	 */
 	reconnectAttempts: number;
+	/**
+	 * Why the password screen is asking again, when the answer is something
+	 * other than "you just loaded the page".
+	 *
+	 * Nothing is persisted, so an ordinary reload arriving at the password
+	 * screen is the product working and gets no explanation at all. Being turned
+	 * away mid-session is a real event, though, and without a word it would look
+	 * exactly like an ordinary reload — the user would conclude their last login
+	 * never took. Live UI state, hence the store rather than anything durable:
+	 * it is true only until the next attempt.
+	 */
+	reauthReason: "session_expired" | null;
 	actions: RPCActions;
 }
 
@@ -186,6 +198,7 @@ export const useWSStore = create<WSState>()((set, get) => {
 					reconnectAttempts: 0,
 					version: result.version,
 					errorMessage: null,
+					reauthReason: null,
 				});
 			} catch (err) {
 				// Not a rejection: the request timed out or the socket died mid-auth.
@@ -197,24 +210,45 @@ export const useWSStore = create<WSState>()((set, get) => {
 					return;
 				}
 
-				// A stored session the cluster no longer knows is nobody's mistake:
-				// drop it and fall back to the password screen without an error.
+				// A session the cluster no longer knows is nobody's mistake: drop it
+				// and go back to the password screen, stating the fact without
+				// dressing it as an error the user caused.
 				if (authFailureReason(err) === "session_expired") {
 					authActions.forgetSession();
 					internal.credential = null;
 					// Status before close, as in disconnect(): onclose must see
 					// "disconnected" and not schedule a reconnect on the way past.
-					set({ status: "disconnected", errorMessage: null });
+					//
+					// version goes too: it is what says "this tab has been connected",
+					// and leaving it would keep the node list on screen with nothing
+					// left to authenticate with. Say why, quietly — see reauthReason.
+					set({
+						status: "disconnected",
+						errorMessage: null,
+						version: null,
+						reauthReason: "session_expired",
+					});
 					internal.socket?.close();
 					return;
 				}
 
-				internal.socket?.close();
+				// Status before close, as in the branch above: onclose bails on
+				// "auth_failed" and would otherwise schedule a reconnect that retries
+				// the refused credential on its own.
+				//
+				// version goes too: a refusal stops retrying, so anything still
+				// showing the node list would sit there with a "Connected" header
+				// over a closed socket. A tab reaches this with a version only when
+				// its credential is still a password (a server too old to issue a
+				// token) and that password stopped being accepted — rare, but the
+				// way out of it is the password screen.
 				set({
 					status: "auth_failed",
+					version: null,
 					errorMessage:
 						err instanceof Error ? err.message : "Authentication failed",
 				});
+				internal.socket?.close();
 			}
 		};
 
@@ -268,6 +302,7 @@ export const useWSStore = create<WSState>()((set, get) => {
 		version: null,
 		errorMessage: null,
 		reconnectAttempts: 0,
+		reauthReason: null,
 		actions: {
 			...nodeActions,
 			connect: (credential: AuthCredential) => {
@@ -282,7 +317,8 @@ export const useWSStore = create<WSState>()((set, get) => {
 				if (status === "connecting" || status === "connected") {
 					return;
 				}
-				set({ reconnectAttempts: 0 });
+				// A fresh attempt answers whatever the last refusal said.
+				set({ reconnectAttempts: 0, reauthReason: null });
 				connectInternal(credential);
 			},
 			// Deliberately not connect(): that resets the attempt counter, and a
@@ -308,6 +344,7 @@ export const useWSStore = create<WSState>()((set, get) => {
 					version: null,
 					errorMessage: null,
 					reconnectAttempts: 0,
+					reauthReason: null,
 				});
 				if (internal.socket) {
 					internal.socket.close();
