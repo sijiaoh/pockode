@@ -47,13 +47,14 @@ export interface AuthStore {
 		rememberSession: (sessionToken: string) => void;
 		/**
 		 * Drop a session token the server no longer knows. Not a logout: it is
-		 * not the user's doing, nothing is said to them, and a password still in
-		 * memory is left to be tried next.
+		 * not the user's doing and nothing is said to them; the password screen
+		 * simply comes back.
 		 *
-		 * One load reaches that fallback — the cluster opened from a
-		 * `?password=` link while storage still holds a lapsed token. A password
-		 * typed after a token was issued is already gone, because
-		 * `rememberSession` clears it.
+		 * It leaves `password` alone because there is never one to leave, and
+		 * that is the consumers' doing rather than this store's: both frontends
+		 * call `login` only from a password screen they show when there is no
+		 * credential at all, and `rememberSession` clears the password the
+		 * moment a token arrives. So nothing survives this call.
 		 */
 		forgetSession: () => void;
 		logout: () => void;

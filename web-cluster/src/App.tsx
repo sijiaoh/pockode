@@ -13,13 +13,6 @@ import { useWSStore } from "./lib/wsStore";
  */
 const CONNECTING_SPINNER_DELAY_MS = 300;
 
-function getPasswordFromUrl(): string | null {
-	const params = new URLSearchParams(window.location.search);
-	// TODO: Drop the `token` spelling in v0.20.0, with the rest of the
-	// auth-token deprecations; a bookmarked link may still carry it.
-	return params.get("password") ?? params.get("token");
-}
-
 export default function App() {
 	const { status, errorMessage, actions, version } = useWSStore();
 	// A fresh object per call, hence useShallow; see selectCredential.
@@ -40,15 +33,6 @@ export default function App() {
 		);
 		return () => clearTimeout(timer);
 	}, [status]);
-
-	useEffect(() => {
-		const urlPassword = getPasswordFromUrl();
-		if (urlPassword) {
-			authActions.login(urlPassword);
-			// Remove the password from the URL for security
-			window.history.replaceState({}, "", window.location.pathname);
-		}
-	}, []);
 
 	useEffect(() => {
 		if (credential && status === "disconnected") {
