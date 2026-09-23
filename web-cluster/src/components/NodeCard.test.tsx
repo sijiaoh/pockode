@@ -14,6 +14,7 @@ function makeNode(
 		name: "my-app",
 		created_at: "2026-09-16T10:00:00Z",
 		updated_at: "2026-09-16T10:00:00Z",
+		last_used_at: "2026-09-16T10:00:00Z",
 		status: { id: "n1", status, ...overrides },
 	};
 }

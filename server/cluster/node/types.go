@@ -14,6 +14,12 @@ type Node struct {
 	Name      string    `json:"name"` // Display name
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
+	// LastUsedAt is when the user last acted on this node — edited or started
+	// it — and is what the node list sorts on, newest first. It is deliberately
+	// not UpdatedAt: that one means "the record was modified", and folding a
+	// start into it would make the name lie about a node whose stored fields
+	// never changed.
+	LastUsedAt time.Time `json:"last_used_at"`
 }
 
 var (

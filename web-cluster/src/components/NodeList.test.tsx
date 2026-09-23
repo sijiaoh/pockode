@@ -11,6 +11,7 @@ const staleNode: NodeWithStatus = {
 	name: "my-app",
 	created_at: "2026-09-16T10:00:00Z",
 	updated_at: "2026-09-16T10:00:00Z",
+	last_used_at: "2026-09-16T10:00:00Z",
 	status: { id: "n1", status: "stale" },
 };
 
@@ -126,6 +127,7 @@ function stoppedNode(id: string, name: string): NodeWithStatus {
 		name,
 		created_at: "2026-09-16T10:00:00Z",
 		updated_at: "2026-09-16T10:00:00Z",
+		last_used_at: "2026-09-16T10:00:00Z",
 		status: { id, status: "stopped" },
 	};
 }
@@ -229,6 +231,7 @@ function nodeOf(
 	id: string,
 	name: string,
 	status: NodeWithStatus["status"]["status"],
+	lastUsedAt = "2026-09-16T10:00:00Z",
 ): NodeWithStatus {
 	return {
 		id,
@@ -236,6 +239,7 @@ function nodeOf(
 		name,
 		created_at: "2026-09-16T10:00:00Z",
 		updated_at: "2026-09-16T10:00:00Z",
+		last_used_at: lastUsedAt,
 		status: { id, status },
 	};
 }
@@ -271,11 +275,28 @@ describe("NodeList: sections", () => {
 			.closest("div") as HTMLElement;
 		expect(stopped).toHaveTextContent(/^Stopped2$/);
 
-		// Within a section, by name — registry order is the order they happened to
-		// be added in, which is nothing the reader knows.
+		// These four were last used at the same moment, so the tie-break decides:
+		// by name, rather than the registry order they happened to be added in,
+		// which is nothing the reader knows.
 		expect(
 			screen.getAllByRole("heading", { level: 3 }).map((h) => h.textContent),
 		).toEqual(["beta", "alpha", "aardvark", "zeta"]);
+	});
+
+	// Alphabetical order handed the top of the list to whoever was named first
+	// and left the node the user actually works in to be scrolled to.
+	it("puts the most recently used node first within a section", async () => {
+		actions.listNodes.mockResolvedValue([
+			nodeOf("n1", "aardvark", "stopped", "2026-09-10T10:00:00Z"),
+			nodeOf("n2", "zeta", "stopped", "2026-09-20T10:00:00Z"),
+			nodeOf("n3", "middle", "stopped", "2026-09-15T10:00:00Z"),
+		]);
+		render(<NodeList />);
+
+		await screen.findByRole("heading", { name: "zeta" });
+		expect(
+			screen.getAllByRole("heading", { level: 3 }).map((h) => h.textContent),
+		).toEqual(["zeta", "middle", "aardvark"]);
 	});
 
 	it("does not draw a section with nothing in it", async () => {

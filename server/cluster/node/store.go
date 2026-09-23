@@ -19,6 +19,7 @@ type Store interface {
 	Get(id string) (Node, bool, error)
 	Create(path, name string, createMissingDir bool) (Node, error)
 	Update(id string, fields UpdateFields, createMissingDir bool) (Node, error)
+	MarkUsed(id string) error
 	Delete(id string) error
 }
 
@@ -56,6 +57,7 @@ func NewFileStore(dataDir string) (*FileStore, error) {
 		return nil, err
 	}
 	store.nodes = idx.Nodes
+	backfillLastUsed(store.nodes)
 
 	return store, nil
 }
@@ -109,11 +111,12 @@ func (s *FileStore) Create(path, name string, createMissingDir bool) (Node, erro
 
 	now := time.Now()
 	newNode := Node{
-		ID:        uuid.Must(uuid.NewV7()).String(),
-		Path:      absPath,
-		Name:      name,
-		CreatedAt: now,
-		UpdatedAt: now,
+		ID:         uuid.Must(uuid.NewV7()).String(),
+		Path:       absPath,
+		Name:       name,
+		CreatedAt:  now,
+		UpdatedAt:  now,
+		LastUsedAt: now,
 	}
 
 	s.nodes = append(s.nodes, newNode)
@@ -164,11 +167,14 @@ func (s *FileStore) Update(id string, fields UpdateFields, createMissingDir bool
 		changed = true
 	}
 
-	if !changed {
-		return *n, nil
+	// Editing counts as using the node even when the form was saved with
+	// nothing altered — the user went to it on purpose. UpdatedAt stays put in
+	// that case, because the record genuinely did not change.
+	now := time.Now()
+	n.LastUsedAt = now
+	if changed {
+		n.UpdatedAt = now
 	}
-
-	n.UpdatedAt = time.Now()
 
 	if err := s.persistIndex(); err != nil {
 		s.nodes = prev
@@ -176,6 +182,29 @@ func (s *FileStore) Update(id string, fields UpdateFields, createMissingDir bool
 	}
 
 	return *n, nil
+}
+
+// MarkUsed records that the user acted on the node without changing it — a
+// start, today its only caller. Nothing about the stored record changed, so
+// only LastUsedAt moves.
+func (s *FileStore) MarkUsed(id string) error {
+	s.nodesMu.Lock()
+	defer s.nodesMu.Unlock()
+
+	idx := s.findIndex(id)
+	if idx < 0 {
+		return ErrNodeNotFound
+	}
+
+	prev := s.snapshotNodes()
+	s.nodes[idx].LastUsedAt = time.Now()
+
+	if err := s.persistIndex(); err != nil {
+		s.nodes = prev
+		return err
+	}
+
+	return nil
 }
 
 func (s *FileStore) Delete(id string) error {
@@ -236,6 +265,18 @@ func (s *FileStore) snapshotNodes() []Node {
 	out := make([]Node, len(s.nodes))
 	copy(out, s.nodes)
 	return out
+}
+
+// backfillLastUsed gives records written before LastUsedAt existed a usable
+// sort key instead of a zero time, which would otherwise pile every old node
+// together at the bottom of the list in whatever order the file happens to
+// hold. UpdatedAt is the closest thing those records know about being used.
+func backfillLastUsed(nodes []Node) {
+	for i := range nodes {
+		if nodes[i].LastUsedAt.IsZero() {
+			nodes[i].LastUsedAt = nodes[i].UpdatedAt
+		}
+	}
 }
 
 func (s *FileStore) findIndex(id string) int {

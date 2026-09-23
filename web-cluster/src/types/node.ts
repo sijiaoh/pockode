@@ -3,7 +3,10 @@ export interface Node {
 	path: string;
 	name: string;
 	created_at: string;
+	/** Record last modified. Not the sort key — see `last_used_at`. */
 	updated_at: string;
+	/** Last edited or started, which is the order the list is read in. */
+	last_used_at: string;
 }
 
 export type NodeStatus = "running" | "stopped" | "stale";

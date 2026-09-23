@@ -522,6 +522,13 @@ func (h *clusterRPCHandler) handleNodeStart(ctx context.Context, conn *jsonrpc2.
 
 	h.log.Info("node started", "nodeId", n.ID)
 
+	// Starting is a use, and the list sorts on that. A failure here has not
+	// stopped anything from running, so it is logged rather than turned into an
+	// error for a start that succeeded.
+	if err := h.nodeStore.MarkUsed(n.ID); err != nil {
+		h.log.Error("failed to record node usage", "error", err, "nodeId", n.ID)
+	}
+
 	status := h.processManager.GetNodeStatus(n)
 	if err := conn.Reply(ctx, req.ID, status); err != nil {
 		h.log.Error("failed to send node.start response", "error", err)

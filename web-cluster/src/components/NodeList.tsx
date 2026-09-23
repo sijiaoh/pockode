@@ -37,6 +37,20 @@ const SECTIONS: { status: NodeStatus; title: string; dot: string }[] = [
  */
 const CLEANUP_FAILED = "Could not clean up this node";
 
+/**
+ * Most recently used first, within a section.
+ *
+ * Alphabetical order gave the top of the list to whoever was named `api`,
+ * however long ago it was last touched, and buried the one node the user
+ * actually works in — expensive on a phone, where the list is read a card at a
+ * time. Name breaks the tie, because the order the backend happens to list them
+ * in is nothing the reader knows.
+ */
+function byRecentlyUsed(a: NodeWithStatus, b: NodeWithStatus) {
+	const diff = Date.parse(b.last_used_at) - Date.parse(a.last_used_at);
+	return diff !== 0 ? diff : a.name.localeCompare(b.name);
+}
+
 function getErrorMessage(err: unknown, fallback: string) {
 	return err instanceof Error ? err.message : fallback;
 }
@@ -384,7 +398,7 @@ export function NodeList() {
 						SECTIONS.map(({ status: sectionStatus, title, dot }) => {
 							const sectionNodes = nodes
 								.filter((node) => node.status.status === sectionStatus)
-								.sort((a, b) => a.name.localeCompare(b.name));
+								.sort(byRecentlyUsed);
 							// An empty section is not a fact worth a row of its own.
 							if (sectionNodes.length === 0) return null;
 

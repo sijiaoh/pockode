@@ -69,6 +69,10 @@ func TestCreate(t *testing.T) {
 	if node.CreatedAt.IsZero() {
 		t.Error("expected non-zero created_at")
 	}
+	// A new node sorts to the top of its section, not to the bottom on a zero time.
+	if node.LastUsedAt.IsZero() {
+		t.Error("expected non-zero last_used_at")
+	}
 }
 
 func TestCreate_InferName(t *testing.T) {
@@ -275,6 +279,10 @@ func TestUpdate_NoChange(t *testing.T) {
 	if !updated.UpdatedAt.Equal(node.UpdatedAt) {
 		t.Error("expected updated_at to remain unchanged when no actual change")
 	}
+	// Saving the form is still a use: the user went to this node on purpose.
+	if !updated.LastUsedAt.After(node.LastUsedAt) {
+		t.Errorf("last_used_at = %v, want later than %v", updated.LastUsedAt, node.LastUsedAt)
+	}
 }
 
 func TestUpdate_CreateMissingDir(t *testing.T) {
@@ -366,6 +374,73 @@ func TestPersistence(t *testing.T) {
 	}
 	if got.Path != projectDir {
 		t.Errorf("path = %q, want %q", got.Path, projectDir)
+	}
+}
+
+// --- Last used ---
+
+func TestMarkUsed(t *testing.T) {
+	dataDir := t.TempDir()
+	projectDir := createTestDir(t, "project")
+
+	s, err := NewFileStore(dataDir)
+	if err != nil {
+		t.Fatalf("NewFileStore: %v", err)
+	}
+	node := createNode(t, s, projectDir, "Test")
+
+	if err := s.MarkUsed(node.ID); err != nil {
+		t.Fatalf("MarkUsed: %v", err)
+	}
+
+	got := getNode(t, s, node.ID)
+	if !got.LastUsedAt.After(node.LastUsedAt) {
+		t.Errorf("last_used_at = %v, want later than %v", got.LastUsedAt, node.LastUsedAt)
+	}
+	// Starting does not modify the record itself.
+	if !got.UpdatedAt.Equal(node.UpdatedAt) {
+		t.Error("expected updated_at to be untouched by a start")
+	}
+
+	// A cluster restart must not lose the ordering the user just established.
+	reopened, err := NewFileStore(dataDir)
+	if err != nil {
+		t.Fatalf("re-open: %v", err)
+	}
+	if persisted := getNode(t, reopened, node.ID); !persisted.LastUsedAt.Equal(got.LastUsedAt) {
+		t.Errorf("after reopen last_used_at = %v, want %v", persisted.LastUsedAt, got.LastUsedAt)
+	}
+}
+
+func TestMarkUsed_NotFound(t *testing.T) {
+	s := newTestStore(t)
+
+	if err := s.MarkUsed("nonexistent"); !errors.Is(err, ErrNodeNotFound) {
+		t.Errorf("error = %v, want ErrNodeNotFound", err)
+	}
+}
+
+// Records written before last_used_at existed must still sort sensibly.
+func TestLoad_BackfillsLastUsedFromUpdatedAt(t *testing.T) {
+	dataDir := t.TempDir()
+	indexPath := filepath.Join(dataDir, "nodes", "index.json")
+	if err := os.MkdirAll(filepath.Dir(indexPath), 0755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	legacy := `{"nodes":[{"id":"n1","path":"/tmp/a","name":"a",` +
+		`"created_at":"2026-01-01T00:00:00Z","updated_at":"2026-02-03T04:05:06Z"}]}`
+	if err := os.WriteFile(indexPath, []byte(legacy), 0644); err != nil {
+		t.Fatalf("write legacy index: %v", err)
+	}
+
+	s, err := NewFileStore(dataDir)
+	if err != nil {
+		t.Fatalf("NewFileStore: %v", err)
+	}
+
+	got := getNode(t, s, "n1")
+	if !got.LastUsedAt.Equal(got.UpdatedAt) {
+		t.Errorf("last_used_at = %v, want updated_at %v", got.LastUsedAt, got.UpdatedAt)
 	}
 }
 

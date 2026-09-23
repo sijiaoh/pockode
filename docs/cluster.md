@@ -23,13 +23,29 @@ A **Node** represents a project directory that can run Pockode. Cluster mode pro
 
 ```go
 type Node struct {
-    ID        string    `json:"id"`         // UUID
-    Path      string    `json:"path"`       // Absolute path to project directory
-    Name      string    `json:"name"`       // Display name (inferred from path if not provided)
-    CreatedAt time.Time `json:"created_at"`
-    UpdatedAt time.Time `json:"updated_at"`
+    ID         string    `json:"id"`           // UUID
+    Path       string    `json:"path"`         // Absolute path to project directory
+    Name       string    `json:"name"`         // Display name (inferred from path if not provided)
+    CreatedAt  time.Time `json:"created_at"`
+    UpdatedAt  time.Time `json:"updated_at"`   // Record last modified (only when a field actually changes)
+    LastUsedAt time.Time `json:"last_used_at"` // Last edited or started
 }
 ```
+
+`LastUsedAt` is the key the node list is sorted on ([Frontend UX](#frontend-ux)
+has the order it produces), so that a node nobody has touched in months does not
+hold the top of the list on the strength of its name. It is set when the node is
+registered and moves whenever the user acts on it afterwards: `node.start`, and
+`node.update` **even when the form was saved without altering a field**, since
+going to a node on purpose is a use of it. `UpdatedAt` moves in neither of those
+cases, which is why the two are separate fields: `UpdatedAt` means "the stored
+record changed", and neither a start nor an unchanged save changes one — folding
+them in would make that name lie about a node whose fields are exactly what they
+were. Records written before `LastUsedAt` existed are given `UpdatedAt` as their
+sort key when the store loads them, so nothing is sorted on a zero time.
+
+Opening a running node is deliberately *not* counted: it is a link the frontend
+follows, and the cluster never hears about it.
 
 The path must point to a directory. If the directory does not exist, the request is rejected with `invalid node: path does not exist`; the frontend detects this and offers to create it in place, retrying with `create_missing_dir` set (see [Frontend UX](#frontend-ux)). A path that exists but is not a directory (or is otherwise inaccessible, e.g. permission denied) is always rejected and never offered for creation. Duplicate paths are rejected.
 
@@ -256,9 +272,10 @@ alternatives that were rejected on the way to it, are in
   cannot walk the delay back to one second.
 - **The list is grouped, not filtered**: **Needs attention** (stale) →
   **Running** → **Stopped**, each header sticky and carrying its own count,
-  empty sections not drawn, and nodes sorted by name inside one. When more than
-  one node is stale the attention header offers **Clean up all** — leftovers
-  arrive in batches, since one reboot orphans every node on the machine.
+  empty sections not drawn, and nodes sorted by `last_used_at` inside one —
+  most recently used first, name breaking ties. When more than one node is
+  stale the attention header offers **Clean up all** — leftovers arrive in
+  batches, since one reboot orphans every node on the machine.
 - **A cluster with no nodes registered** shows neither groups nor an empty
   list but an explanation and an Add node button, which is the only thing there
   is to do next.
