@@ -204,7 +204,7 @@ describe("NodeCard: the start password", () => {
 		}
 	});
 
-	it("asks for a password the first time, and generates one on request", async () => {
+	it("asks for a password, and generates one on request", async () => {
 		const user = userEvent.setup();
 		const { onStart } = renderCard(makeNode("stopped"));
 
@@ -261,36 +261,22 @@ describe("NodeCard: the start password", () => {
 		expect(screen.getByRole("alert")).toHaveTextContent("permission denied");
 	});
 
-	it("starts on one tap once the session has a password, with no sheet", async () => {
+	// The counterpart: the sheet stays open over the card, so the reason is
+	// behind it, and a start that failed would look like nothing happened at all.
+	it("repeats a failed start's reason inside the sheet it kept open", async () => {
 		const user = userEvent.setup();
-		let finish: (started: boolean) => void = () => {};
-		const onStart = vi.fn(
-			() =>
-				new Promise<boolean>((resolve) => {
-					finish = resolve;
-				}),
-		);
 		renderCard(makeNode("stopped"), {
-			savedPassword: "saved-password",
-			onStart,
+			error: "Could not start this node: invalid password",
+			onStart: vi.fn().mockResolvedValue(false),
 		});
 
-		await user.click(screen.getByRole("button", { name: /Start/ }));
+		await user.click(screen.getByRole("button", { name: "Start" }));
+		await user.type(screen.getByLabelText("Node password"), "wrong-password");
+		await submitStart(user);
 
-		expect(screen.queryByLabelText("Node password")).not.toBeInTheDocument();
-		expect(onStart).toHaveBeenCalledWith("n1", "saved-password");
-		// Which password the one tap used is not something to leave the user
-		// guessing about, so it is said where the node's other runtime facts are.
 		expect(
-			screen.getByText("Using the saved node password"),
+			await within(screen.getByRole("dialog")).findByText(/invalid password/),
 		).toBeInTheDocument();
-
-		finish(true);
-		await waitFor(() =>
-			expect(
-				screen.queryByText("Using the saved node password"),
-			).not.toBeInTheDocument(),
-		);
 	});
 
 	// The generated password exists nowhere else and the field is masked, so a
@@ -331,29 +317,6 @@ describe("NodeCard: the start password", () => {
 		expect(await screen.findByText("Copied")).toBeInTheDocument();
 		expect(screen.queryByText(generated)).not.toBeInTheDocument();
 		expect(await navigator.clipboard.readText()).toBe(generated);
-	});
-
-	it("keeps a way back to the sheet once a password is saved", async () => {
-		const user = userEvent.setup();
-		renderCard(makeNode("stopped"), { savedPassword: "saved-password" });
-
-		await openMenu(user);
-		await user.click(
-			screen.getByRole("button", { name: "Start with a different password…" }),
-		);
-
-		expect(screen.getByLabelText("Node password")).toHaveValue("");
-	});
-
-	it("offers no such menu item before a password is saved", async () => {
-		const user = userEvent.setup();
-		renderCard(makeNode("stopped"));
-
-		await openMenu(user);
-
-		expect(
-			screen.queryByRole("button", { name: /different password/ }),
-		).not.toBeInTheDocument();
 	});
 });
 

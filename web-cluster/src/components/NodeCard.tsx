@@ -20,12 +20,6 @@ interface Props {
 	onDelete: (id: string, options?: { stopFirst?: boolean }) => Promise<void>;
 	/** Resolves to whether the node actually started. */
 	onStart: (id: string, password: string) => Promise<boolean>;
-	/**
-	 * The password this session has already started a node with, if any.
-	 * Present means Start needs no sheet: one tap, and the sheet is only
-	 * reached deliberately through the overflow menu.
-	 */
-	savedPassword?: string | null;
 	onStop: (id: string) => Promise<void>;
 	onCleanup: (id: string) => Promise<void>;
 }
@@ -97,7 +91,6 @@ export function NodeCard({
 	onStart,
 	onStop,
 	onCleanup,
-	savedPassword,
 }: Props) {
 	const [menuView, setMenuView] = useState<MenuView | null>(null);
 	const [startSheetOpen, setStartSheetOpen] = useState(false);
@@ -110,11 +103,9 @@ export function NodeCard({
 	const [password, setPassword] = useState("");
 	// Two delete kinds rather than one: the running-node sheet draws both a
 	// "Stop and delete" and a "Delete anyway", and a single flag would spin the
-	// one the user did not press. Start is split for the same reason — which
-	// password a start is using is the difference, and it is the card, not a
-	// second flag kept in step with this one, that has to say so.
+	// one the user did not press.
 	const [actionLoading, setActionLoading] = useState<
-		"start" | "startSaved" | "stop" | "cleanup" | "delete" | "stopDelete" | null
+		"start" | "stop" | "cleanup" | "delete" | "stopDelete" | null
 	>(null);
 
 	const status = node.status.status;
@@ -140,13 +131,6 @@ export function NodeCard({
 	const showLocalLink = Boolean(
 		node.status.remote_url && node.status.local_url,
 	);
-
-	const starting = actionLoading === "start" || actionLoading === "startSaved";
-	// A start running on the remembered password says so where the rest of the
-	// node's runtime facts go, so the one tap is not silent about which password
-	// it used. A node being started is never running, so nothing is displaced.
-	const metaLine =
-		actionLoading === "startSaved" ? "Using the saved node password" : meta;
 
 	const closeMenu = () => setMenuView(null);
 
@@ -179,13 +163,23 @@ export function NodeCard({
 		closeMenu();
 	};
 
+	// Opening clears the verdict as well as raising the sheet: the same button
+	// reopens it after a start that failed, and the reason it shows belongs to
+	// that attempt, not to the one being made now.
+	const openStartSheet = () => {
+		setStartFailed(false);
+		setStartSheetOpen(true);
+	};
+
 	// The sheet is kept open when the start fails. Closing it would throw away a
 	// password the user typed by hand on a phone, for the one outcome where they
 	// still need it.
-	const start = (value: string, kind: "start" | "startSaved") => {
+	const confirmStart = () => {
+		const trimmed = password.trim();
+		if (!trimmed) return;
 		setStartFailed(false);
-		return run(kind, async () => {
-			const started = await onStart(node.id, value);
+		void run("start", async () => {
+			const started = await onStart(node.id, trimmed);
 			if (started) {
 				setStartSheetOpen(false);
 				setPassword("");
@@ -193,27 +187,6 @@ export function NodeCard({
 				setStartFailed(true);
 			}
 		});
-	};
-
-	// Always through here, so a sheet never opens still carrying the verdict of
-	// the start before it.
-	const openStartSheet = () => {
-		setStartFailed(false);
-		setStartSheetOpen(true);
-	};
-
-	const handleStartPressed = () => {
-		if (savedPassword) {
-			void start(savedPassword, "startSaved");
-			return;
-		}
-		openStartSheet();
-	};
-
-	const confirmStart = () => {
-		const trimmed = password.trim();
-		if (!trimmed) return;
-		void start(trimmed, "start");
 	};
 
 	return (
@@ -243,9 +216,7 @@ export function NodeCard({
 					</button>
 				</div>
 
-				{metaLine && (
-					<p className="mt-2 text-xs text-th-text-muted">{metaLine}</p>
-				)}
+				{meta && <p className="mt-2 text-xs text-th-text-muted">{meta}</p>}
 
 				{status === "stale" && (
 					<p className="mt-2 text-sm text-th-text-secondary">
@@ -303,14 +274,17 @@ export function NodeCard({
 					)}
 
 					{status !== "running" && (
+						// No in-flight label here, unlike Clean up beside it: a start is
+						// only ever driven from the sheet, which covers this card until
+						// the start resolves. It stays disabled all the same, because
+						// Clean up does run with nothing on top of it.
 						<button
 							type="button"
-							onClick={handleStartPressed}
+							onClick={openStartSheet}
 							disabled={actionLoading !== null}
 							className={`${PRIMARY_BUTTON} flex-1`}
 						>
-							{starting && <Spinner size="h-4 w-4" />}
-							{starting ? "Starting..." : "Start"}
+							Start
 						</button>
 					)}
 
@@ -341,18 +315,6 @@ export function NodeCard({
 								className={`${MENU_ITEM} text-th-text-primary`}
 							>
 								Stop
-							</button>
-						)}
-						{status !== "running" && savedPassword && (
-							<button
-								type="button"
-								onClick={() => {
-									closeMenu();
-									openStartSheet();
-								}}
-								className={`${MENU_ITEM} text-th-text-primary`}
-							>
-								Start with a different password…
 							</button>
 						)}
 						<button
@@ -596,7 +558,7 @@ function StartNodeSheet({
 				)}
 				<p className="text-sm text-th-text-secondary">
 					Used by the Pockode server started in this project. It is not the
-					cluster password. Remembered until this tab is reloaded.
+					cluster password.
 				</p>
 				<div>
 					<label
