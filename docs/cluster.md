@@ -287,8 +287,7 @@ alternatives that were rejected on the way to it, are in
   since a phone on mobile data cannot reach `localhost`; `Local` appears beside
   it only when both URLs exist. A running node that reported no address at all
   says so rather than offering a button that leads nowhere. Stop (running only),
-  *Start with a different password…* (on a stopped or stale node, once one is
-  remembered), Edit and Delete live in the card's overflow menu.
+  Edit and Delete live in the card's overflow menu.
 - **Stale nodes are a recoverable state**: the card says the server exited
   without cleaning up and that nothing is running, and offers **Start** (which
   clears the leftover itself) alongside **Clean up**.
@@ -319,19 +318,15 @@ alternatives that were rejected on the way to it, are in
   them.
 - **The cluster version** is printed after the last card rather than pinned to
   the viewport corner, where it floated over whatever scrolled underneath it.
-- **Start's password is remembered for the session, in memory only.** It is the
-  password the *spawned node server* uses for its own auth, not the cluster's
-  own, so it is never defaulted from the cluster credential: one leaked node
-  must not hand over the cluster. The first Start of a session opens a sheet
-  offering **Generate** (32 random characters) and **Copy** — and if the
-  clipboard is unavailable, as it is outside a secure context, the password is
-  shown in full so it can be written down rather than lost; every later Start is
-  one tap, and the card says "Using the saved node password" while it runs. The
-  overflow menu keeps **Start with a different password…** as the way back to
-  the sheet. A password is remembered only once it has actually started
-  something, and a failed start leaves the sheet, the typed password and the
-  reason on screen. A reload asks once more — the price of not making a second
-  secret durable in browser storage.
+- **Start asks for the node password every time.** It is the password the
+  *spawned node server* uses for its own auth, not the cluster's own, so it is
+  never defaulted from the cluster credential: one leaked node must not hand
+  over the cluster. Every Start opens a sheet offering **Generate** (32 random
+  characters) and **Copy** — and when the copy fails, as it does outside a
+  secure context where the browser withholds the clipboard, the password is
+  shown in full so it can be written down rather than lost. A failed start
+  leaves the sheet, the typed password and the reason on screen. Nothing in the
+  frontend keeps the password between starts, in storage or in memory.
 
 ### Available Methods
 

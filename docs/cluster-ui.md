@@ -79,6 +79,18 @@ confirmations raised from inside an open sheet — exactly the stacking rule 3
 exists to remove. The running-node Delete needs three actions besides, which a
 confirm/cancel pair cannot express and a `Sheet` footer can.
 
+**Remembering the node start password.** It was held in memory for the tab's
+lifetime — one password for every node — so the first Start of a session opened
+the sheet and every later one, on any node, was a single tap. That is gone:
+every Start asks again. What it bought was one sheet per session; what it cost
+was a second secret sitting in the frontend, and a UI whose most common path
+started a server with a password nobody had in front of them — the same
+password that server then asks for at sign-in. Persisting it to `localStorage`
+is the same trade taken further and is rejected the harder for it: that storage
+already holds the cluster's session token, so it adds no new *class* of
+exposure, but it would make the node secret durable to buy back a convenience
+that was not worth keeping even in memory.
+
 **A `node.check_path` RPC to validate the path as the user types.** It was
 specified and then dropped, and not because the payoff was small: it cannot buy
 what it appears to. The same checks already exist in `resolveDir`
@@ -124,5 +136,4 @@ evidence rather than on taste.
 | A search field over the list | A real cluster passes roughly 20 nodes. Groups plus sticky headers carry a few dozen fine. |
 | Pull-to-refresh | Somebody asks. It needs `react-pull-to-refreshify`; the 5 s poll and the visibility catch-up cover the same ground for free. |
 | `node.check_path` | The "I only find out at submit" friction is reported in real use — and then only with the duplicated rule and the check/submit gap above accepted openly. |
-| Persisting the node start password to `localStorage` | Re-entering it after a reload turns out to grate. It adds no new *class* of exposure (that storage already holds the cluster's session token) but does make a second secret durable, so it wants a reason, not a guess. |
 | Migrating `web`'s two remaining hand-rolled body-scroll locks (`web/src/components/Files/UploadConflictDialog.tsx`, `web/src/components/ui/ResponsivePanel.tsx`) to `useLockBodyScroll` | It is pure `web` work, not cluster work. Correct today only because neither has an overlay it can stack with — which is fragile, not safe. |
