@@ -514,6 +514,56 @@ describe("AnswerPanel", () => {
 		expect(onClose).toHaveBeenCalled();
 	});
 
+	// Whether the caret is in this card is the second of the three conditions
+	// that fold the screen around it on a short viewport (docs/answering-ui.md
+	// §3). The card only reports it; what it must never report is a departure
+	// that is really a move between two of its own controls. `focusout` is
+	// dispatched before the matching `focusin`, so a false "left" would unmount
+	// the composer and mount it again under the user — and an `InputBar` that
+	// mounts takes the caret with it.
+	describe("reporting whether focus is inside it", () => {
+		const renderWithNeighbour = (onFocusChange: (focused: boolean) => void) =>
+			render(
+				<>
+					<AnswerPanel
+						sessionId="s1"
+						unanswered={[database]}
+						onSend={vi.fn()}
+						onClose={vi.fn()}
+						takeFocus={false}
+						onFocusChange={onFocusChange}
+					/>
+					{/* Lit, reachable screen of the kind the backdrop leaves alone: the
+					    session header, the strip, the composer (§3). */}
+					<button type="button">outside</button>
+				</>,
+			);
+
+		it("says nothing new as the caret moves between its own controls", async () => {
+			const user = userEvent.setup();
+			const onFocusChange = vi.fn();
+			renderWithNeighbour(onFocusChange);
+
+			await user.click(screen.getByRole("radio", { name: /SQLite/ }));
+			expect(onFocusChange).toHaveBeenLastCalledWith(true);
+
+			onFocusChange.mockClear();
+			await user.click(screen.getByRole("radio", { name: /Postgres/ }));
+			expect(onFocusChange).not.toHaveBeenCalledWith(false);
+		});
+
+		it("reports the caret leaving for the screen around it", async () => {
+			const user = userEvent.setup();
+			const onFocusChange = vi.fn();
+			renderWithNeighbour(onFocusChange);
+
+			await user.click(screen.getByRole("radio", { name: /SQLite/ }));
+			await user.click(screen.getByRole("button", { name: "outside" }));
+
+			expect(onFocusChange).toHaveBeenLastCalledWith(false);
+		});
+	});
+
 	// Whatever is drawn over this panel — a portalled dialog — owns the key
 	// first, or one press would dismiss both.
 	it("leaves an Escape another surface has already handled alone", async () => {

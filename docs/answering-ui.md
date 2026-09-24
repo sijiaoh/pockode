@@ -190,6 +190,8 @@ covers.** The session header above it, and the strip, the session bar and the
 composer below it, stay lit, reachable and usable. Dimming those would make this
 a modal over the entire app — and the composer in particular is where the user
 says the thing the questions did not ask for, which §6 exists to keep possible.
+On a short viewport the bar and the composer are folded away instead, which is
+the one exception to that and has a subsection of its own below.
 
 ```
 ┌──────────────────────────────────────────────┐
@@ -239,7 +241,7 @@ composer are not.
 | `inert` over what is covered | **Taken.** See below |
 | portal + `fixed inset-0` | **Not taken.** The card and the backdrop are `absolute inset-0` inside the wrapper around the message list, and the card is capped at `max-h-[85%]` of it. That rectangle already exists and already follows a window resize, a soft keyboard and an error bar appearing; a fixed layer would have to be told the header's height, the strip's, the composer's and the error bar's, and the strip's changes *because* of this panel (§2). It is also what makes the dimming stop where it does. `z-10` is enough: the list carries no stacking of its own, and the portalled sheets — `z-50`, `z-70` — still come out over this |
 | body-scroll lock | **Not taken.** Only one region is covered; the page is the user's to scroll |
-| focus trap | **Not taken.** Tab runs out of the footer into the strip, the bars and the composer. That is what "the composer stays usable" means on a keyboard |
+| focus trap | **Not taken.** Tab runs out of the footer into the strip, the bars and the composer. That is what "the composer stays usable" means on a keyboard — and on a short viewport, where there is no room for both, Tab runs out into a strip that is all that is left below the card |
 | `aria-modal="true"` | **Not taken.** The card is a `role="dialog" aria-labelledby`, and that is as far as it goes: `aria-modal` tells a screen reader the rest of the screen is unavailable, and the composer, the strip and the header can all still be reached by Tab. Saying dialog without it is not the cheaper option; it is the true one |
 | taking focus on open | **Not taken.** §4: only when a user action named a question, or when the panel's own arrival has just cost the document its focus |
 
@@ -310,6 +312,111 @@ card is already inside a rectangle that is never the whole screen.
 **No `max-w` on the text inside the card.** The question lines run as wide as
 the card, which `max-w-md` has already sized for reading. A second cap inside it
 would be one component obeying a rule the rest of the app does not have.
+
+### Room on a short viewport
+
+This is the one place in the app where **height** decides anything, and
+[responsive-ui.md](responsive-ui.md#the-two-axes) names it the single exception
+to the two axes rather than a third one.
+
+The case is a phone with the soft keyboard up. The card is capped at 85% of the
+transcript's rectangle, and that rectangle is the screen less the session
+header, the strip, the session action bar and the composer; the keyboard takes
+most of what is left. On a 667px phone under a 300px keyboard the card's body —
+what remains after its own header and footer — comes to about **19px**. The
+panel is competing for a screen that has nothing left, against chrome that has
+nothing to do with answering.
+
+> **While the user is answering on a short viewport, the session action bar and
+> the composer are folded away. Nothing else changes.**
+
+Only hiding, deliberately: no cap raised, no padding tightened, no question
+block re-laid out. The room comes from moving what is useless right now off the
+screen, and that is a decision that can be undone exactly, in one frame, with
+nothing left behind.
+
+"Nothing else changes" is about the rules rather than the pixels. The card does
+grow and re-centre, because it is capped at 85% of a rectangle that just became
+118px taller — that growth *is* the room arriving. What follows from it is that
+a question's options move under the thumb that tapped the first one, and a
+multi-select question is answered with two taps in a row, so how bad that is
+belongs on the real-device check below.
+
+**Stop goes with the bar, and that is the one real loss here.** It is one of the
+user's two exits from a blocked turn (§2), and while this is folded it is not on
+the screen. Having it back costs one press outside the card — or the press that
+closes the panel, which keeps every draft (§5). Leaving Stop behind on a bar of
+its own was considered and dropped: a row that exists only in this state is a
+fourth thing on the screen to explain, and the press that brings the whole bar
+back is the same press either way.
+
+This **overrides "the composer stays usable"**, which the rest of this section
+otherwise holds without qualification; this subsection is the whole of the
+exception and there is no other. The keyboard is in one field at a time, and
+under these three conditions it demonstrably belongs to a field in the card. The
+trade is taken only for the stretch where that is true, and a press outside that
+field ends it.
+
+**Three conditions, all of them at once** (`chromeCollapsed` in `ChatPanel`),
+each of them the whole answer to a different way of getting this wrong:
+
+| Condition | What it stops |
+|---|---|
+| the panel is up | there is something to make room for |
+| focus is on a control **inside the card** | a question arriving while somebody is mid-sentence in the composer must not take the sentence, the composer and the keyboard away under them (§4 forbids exactly this shape of thing) |
+| the viewport is short | on a desktop nothing is crowding the composer, and folding it would be a change for its own sake |
+
+The decision is `ChatPanel`'s because it is the only place that knows all three;
+the card reports whether focus is in it and decides nothing about the screen
+around it.
+
+"Inside the card" is read from the card's own focus events, and the card itself
+is `tabIndex={-1}`, so it counts as inside: a tap on a question's text keeps
+focus in the card rather than reading as a departure. That also means the two
+cases where the panel takes focus for itself (§4: the user named a question, or
+the panel's arrival dropped the document's focus) fold the chrome straight away,
+before any keyboard is up. Both are right — in the first the user asked to be
+put here, and in the second focus was in the transcript rather than in a
+sentence somebody was writing, which is the one thing condition two exists to
+protect.
+
+**`AttentionStrip` stays.** It is one line, and it is where a permission request
+speaks — the one thing that can arrive mid-answer that the user must be told
+about (§7). It is also the only route to the card holding that request while the
+panel is up (§2), and the server refuses answers until that request is dealt
+with; folding the strip for the room would wall the user in with a panel that
+cannot be submitted.
+
+**The composer is unmounted, not emptied.** The default bar keeps what was
+typed in `inputStore`, keyed by session, so it comes back with every word of it
+(§5 is the same promise on the other side of the panel). Unmounting the bar is
+not new here — the work and agent-role overlays already replace the whole chat
+pane — which is why `InputBarProps` in the chat UI registry makes a draft
+outliving its bar part of the contract rather than a property of the one bar
+that ships. Unmounting rather than `hidden` is also what keeps a tall viewport
+pixel-for-pixel unchanged: with nothing folded there is no extra element in the
+tree at all.
+
+The one thing a remount does not restore untouched is the caret. `InputBar`
+focuses itself when it mounts, on a **fine** pointer only
+([session-fork-ui.md](session-fork-ui.md#the-dropped-prompt) has why that gate
+is the pointer and not the width), so the returning bar takes the focus that had
+just left the card. On the phone this exists for, that never happens — a coarse
+pointer does not autofocus — and on a fine pointer it takes a desktop window
+dragged under the threshold to see at all. It is `InputBar`'s existing behaviour
+on every mount, and it is left alone: a fold that only hides things has no
+business rewriting what happens when a component comes back.
+
+**The threshold is one constant**, `SHORT_VIEWPORT_MAX_HEIGHT` in
+`web/src/hooks/useShortViewport.ts`, which carries the arithmetic it came from:
+each chrome row's height, the 85% cap, and the card's own header and footer. It
+lives there rather than in the shared responsive module for the reason
+responsive-ui.md gives, and nothing else may read it.
+
+It is a **derivation, not a measurement** — nobody has held a phone up to it
+yet. The comment on the constant says to re-derive it rather than nudge it when
+a chrome row's height changes, and the number should be checked against a real
+device before it is trusted.
 
 ### Why not the shared `Sheet`
 
@@ -624,8 +731,10 @@ other two are the exceptions, and they come from opposite directions.
 **Most of the time the caret is left alone.** The panel is usually up because a
 question is waiting, not because anybody asked for it, and the composer stays
 usable the whole time — so taking the caret would be taking it out of a sentence
-somebody is typing. A user who pressed a button *naming* a question, on the
-other hand, asked to be put there.
+somebody is typing. That same row is what keeps the short-viewport fold (§3)
+off a sentence in progress: the chrome goes only once focus is inside the card,
+and leaving the caret alone is the reason it usually is not. A user who pressed
+a button *naming* a question, on the other hand, asked to be put there.
 
 **The second row is a rescue, not a grab.** The transcript goes `inert` in the
 same commit the panel mounts in, and a control focused inside it — a message's
@@ -985,6 +1094,15 @@ to carry.
   blocks are ready. Three Sends would be three messages and three turns for one
   sitting at the phone, and the agent would answer the first before it had read
   the third.
+- **Nothing is resized for a short viewport, and the panel does not go
+  full-screen under a keyboard.** The fold in §3 moves chrome off the screen and
+  changes nothing about the card: raising its cap, tightening its padding or
+  re-laying out a question block would each be a second shape to hold true at a
+  second set of sizes, and going full-screen would reopen every one of the four
+  arguments §3 settles. Scrolling the focused control into view is out for the
+  same reason — the room the fold returns is meant to make that unnecessary.
+  Whether it does is the thing to check on a real phone, since the threshold is
+  still a derivation (§3); a measurement may reopen this bullet.
 - **No pill, and no jump to a question card.** Both existed to reach the place
   answering happened, and answering does not happen there any more.
   `web/src/utils/pendingQuestions.ts`, `PendingQuestionPill.tsx` and
@@ -1007,14 +1125,15 @@ silent, and this design simply never enters it.
 | File | Role |
 |---|---|
 | `web/src/components/Chat/AttentionStrip.tsx` | renamed from `BlockerStrip.tsx`; gains row 2, an `onAnswer` prop, and the `answerPanelOpen` that withholds row 2 while the panel is up (§2) |
-| `web/src/components/Chat/AnswerPanel.tsx` | the panel, its blocks, the footer (§3); a card centred in the transcript's rectangle over a backdrop that covers that rectangle alone, capped at 85% of it, measuring nothing; owns Escape and the backdrop press on `window` (§4) |
+| `web/src/components/Chat/AnswerPanel.tsx` | the panel, its blocks, the footer (§3); a card centred in the transcript's rectangle over a backdrop that covers that rectangle alone, capped at 85% of it, measuring nothing; owns Escape and the backdrop press on `window` (§4); reports whether focus is inside it and decides nothing about the screen around it (§3) |
 | `web/src/components/ui/ResponsivePanel.tsx` | marks its Escape handled, and claims the click it dismisses on, so the answer panel underneath it does not close on the same press (§4) |
 | `web/src/components/Chat/ModeSelector.tsx`, `web/src/components/Layout/Sidebar.tsx` | the same Escape line, for the same reason: both open from surfaces the backdrop leaves lit — the composer row and the session header — so both can be the thing on top of the panel. Neither needs the click line: both portal a backdrop of their own (§4) |
 | `web/src/components/Chat/InputBar.tsx` | claims the click its command palette dismisses on — the palette hangs over the composer with no backdrop, at every width (§4) |
 | `packages/shared/src/hooks/useOutsideClick.ts` | hands the caller the event beside the target, which is what lets a caller claim the gesture at all (§4) |
 | `web/src/components/Chat/QuestionForm.tsx` | extracted from `AskUserQuestionItem.tsx`; the one renderer of a question, across every host that draws one — including the third shape, a textarea for a question with no options |
 | `web/src/components/Chat/QuestionRecordItem.tsx` | replaces `AskUserQuestionItem.tsx` — the record card: four states, no form, collapsed by default, `Answer this` in the body (§6), and the one card a legacy `ask_user_question` record draws through |
-| `web/src/components/Chat/ChatPanel.tsx` | holds whether the panel is up, what it is anchored to and the ids this visit has shown; wraps the message list so the panel has a rectangle, and derives the panel's rendering, the transcript's `inert` and the Escape guard from one expression (§3); remembers the last focused element for the rescue and stands its interrupt down while the panel is up (§4); consumes the navigation intent of §4 |
+| `web/src/components/Chat/ChatPanel.tsx` | holds whether the panel is up, what it is anchored to and the ids this visit has shown; wraps the message list so the panel has a rectangle, and derives the panel's rendering, the transcript's `inert` and the Escape guard from one expression (§3); remembers the last focused element for the rescue and stands its interrupt down while the panel is up (§4); consumes the navigation intent of §4; and owns `chromeCollapsed`, the one place all three short-viewport conditions are known (§3) |
+| `web/src/hooks/useShortViewport.ts` | new — the height threshold and the media query that reads it, the app's one height gate, deliberately not in the shared responsive module ([responsive-ui.md](responsive-ui.md#the-two-axes)) |
 | `web/src/components/Chat/MessageList.tsx` | loses the pill, its observer, its debounce and its live region; keeps the jump, narrowed to permission cards (`.jump-highlight`, renamed from `.question-highlight` now that no question card is a target). It is told nothing about the panel: the panel covers it rather than sitting on its edge (§3) |
 | `web/src/components/Chat/MessageItem.tsx` | the answering message's bubble — one entry per `answering` element — and, for an `agent` origin, the named block that replaces it (§6) |
 | `web/src/utils/messageSource.ts` | new — `isTypedByUser`, the one place "a person typed this" is decided: a `role: "user"` message may be Pockode's own or another agent's answer, and neither should follow the transcript to the tail or claim the delivery receipt |

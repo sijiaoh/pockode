@@ -10,6 +10,7 @@ import { useChatMessages } from "../../hooks/useChatMessages";
 import { SKELETON_DELAY_MS, useDelayedFlag } from "../../hooks/useDelayedFlag";
 import { useForkSession } from "../../hooks/useForkSession";
 import { useForkSupport } from "../../hooks/useForkSupport";
+import { useShortViewport } from "../../hooks/useShortViewport";
 import { useViewedSession } from "../../hooks/useViewedSession";
 import { takeAnswerIntent } from "../../lib/answerIntent";
 import { inputActions } from "../../lib/inputStore";
@@ -599,6 +600,34 @@ function ChatPanel({
 	// the whole conversation out of reach with nothing on top of it.
 	const answerPanelShown = !isReadOnly && answerPanelOpen;
 
+	// Room for the card on a screen that has none (docs/answering-ui.md §3,
+	// "Room on a short viewport"). Three facts, and each one of them is what
+	// stops a different way of getting this wrong:
+	//
+	// - the panel is up, so there is something to make room for;
+	// - the user is working inside it, so the soft keyboard — if there is one —
+	//   belongs to a field in the card. Without this, a question arriving while
+	//   somebody is halfway through a sentence in the composer would fold the
+	//   composer, their half-sentence and the keyboard away under them;
+	// - the viewport is short, so the room is actually needed. On a desktop
+	//   nothing is competing for it, and folding a composer nobody is crowding
+	//   would be a change for its own sake.
+	//
+	// The decision lives here rather than in either folded component because
+	// this is the only place that knows all three, and the two of them know
+	// nothing of each other.
+	const isShortViewport = useShortViewport();
+	const [answerPanelFocused, setAnswerPanelFocused] = useState(false);
+	// A closed panel has no focus to report, and its last word on the way out is
+	// not always delivered — a card unmounted under the caret fires no blur. So
+	// the flag is cleared from the fact that owns it, and a panel that opens
+	// again starts from "not in it yet".
+	useEffect(() => {
+		if (!answerPanelShown) setAnswerPanelFocused(false);
+	}, [answerPanelShown]);
+	const chromeCollapsed =
+		answerPanelShown && answerPanelFocused && isShortViewport;
+
 	// Catching the focus the panel's arrival drops. The transcript goes `inert`
 	// in the same commit the panel mounts in, and a control focused inside it —
 	// a message's menu button the user had just tabbed to — is blurred onto
@@ -803,6 +832,7 @@ function ChatPanel({
 							takeFocus={answerAnchor !== null}
 							onSend={handleSendAnswers}
 							onClose={handleCloseAnswerPanel}
+							onFocusChange={setAnswerPanelFocused}
 						/>
 					)}
 				</div>
@@ -904,7 +934,11 @@ function ChatPanel({
 						onDismiss={clearSettingError}
 					/>
 				)}
-				{!overlay && (
+				{/* Safe to fold on a short viewport (docs/answering-ui.md §3):
+				    engine, mode and session info are all settings for the *next*
+				    message. Stop is the one real loss — it is an exit from a blocked
+				    turn — and one press outside the card brings it back. */}
+				{!overlay && !chromeCollapsed && (
 					<div className="flex shrink-0 items-center justify-between border-t border-th-border bg-th-bg-secondary px-3 py-1.5">
 						{/* gap-2, not tighter: three neighbouring hit areas now sit in this
 						    row, and 8px between them is the coarse-pointer floor. */}
@@ -991,7 +1025,13 @@ function ChatPanel({
 						onClose={handleCloseFork}
 					/>
 				)}
+				{/* The keyboard is in one field at a time, and while this is
+				    collapsed it is in the card's. Unmounting is safe for the same
+				    reason the overlays above may do it: a draft has to outlive its
+				    bar, which `InputBarProps` asks of every bar and the default one
+				    answers with `inputStore` (docs/answering-ui.md §3, §5). */}
 				{!isInputBarHidden(overlay) &&
+					!chromeCollapsed &&
 					(view ? (
 						<ReadOnlyBar view={view} onOpenThere={onOpenSessionThere} />
 					) : (

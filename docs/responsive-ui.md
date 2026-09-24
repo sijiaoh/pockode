@@ -33,6 +33,21 @@ container.
   and drag- or hover-shaped interactions.
 - **Width may never decide reachability. Pointer may never decide layout.**
 
+**Height is not a third axis.** There is exactly one exception in the whole app:
+the answer panel folds the session action bar and the composer away while the
+user is answering on a short viewport, because a soft keyboard leaves its card
+almost no room to put a question in
+([answering-ui.md §3](answering-ui.md#room-on-a-short-viewport) holds the
+conditions and what it costs). Its threshold deliberately does **not** live in
+`packages/shared/src/utils/responsive.ts` beside the ladder, but in
+`web/src/hooks/useShortViewport.ts` with the surface that needs it: a height gate
+sitting in the source every surface reads is how an exception becomes an axis.
+It is also web's alone — `web-cluster` has no answer panel — so it fails the
+shared package's other test as well. Nothing else may read it, and a second
+caller means this paragraph is wrong and the rule needs rewriting rather than
+stretching — `web/tests/heightGate.test.ts` is what makes that a red test rather
+than something a reviewer has to remember.
+
 ### Why width is not a proxy for pointer
 
 It reads like one — small screens are usually touched, large ones usually have a

@@ -8,7 +8,8 @@ import {
 	within,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { SHORT_VIEWPORT_QUERY } from "../../hooks/useShortViewport";
 import { useAgentOptionsStore } from "../../lib/agentOptionsStore";
 import { useAgentRoleStore } from "../../lib/agentRoleStore";
 import { clearAnswerIntent, requestAnswerPanel } from "../../lib/answerIntent";
@@ -1008,6 +1009,299 @@ describe("ChatPanel", () => {
 				undefined,
 			);
 			expect(screen.getByText("Pending")).toBeInTheDocument();
+		});
+
+		// A phone with the soft keyboard up leaves the card about 19px of body to
+		// say a question in, because the panel is sharing what is left of the
+		// screen with chrome that has nothing to do with answering. The room is
+		// taken back by folding that chrome away — and by nothing else: no size,
+		// padding or layout of the card changes here (docs/answering-ui.md §3,
+		// "Room on a short viewport").
+		describe("on a short viewport", () => {
+			/**
+			 * A `matchMedia` that answers the height gate live and hands every other
+			 * query to the suite's own mock, so nothing else in the panel changes
+			 * shape underneath these tests.
+			 */
+			const installShortViewport = () => {
+				const original = window.matchMedia;
+				const listeners = new Set<(e: MediaQueryListEvent) => void>();
+				let short = false;
+				window.matchMedia = (query: string) => {
+					if (query !== SHORT_VIEWPORT_QUERY) return original(query);
+					return {
+						// A getter, not a snapshot: the real `matches` is live on the
+						// MediaQueryList, and `useMediaQuery` holds on to one.
+						get matches() {
+							return short;
+						},
+						media: query,
+						addEventListener: (
+							_: string,
+							fn: (e: MediaQueryListEvent) => void,
+						) => listeners.add(fn),
+						removeEventListener: (
+							_: string,
+							fn: (e: MediaQueryListEvent) => void,
+						) => listeners.delete(fn),
+					} as unknown as MediaQueryList;
+				};
+				return {
+					set(next: boolean) {
+						short = next;
+						act(() => {
+							for (const fn of listeners) {
+								fn({
+									matches: next,
+									media: SHORT_VIEWPORT_QUERY,
+								} as MediaQueryListEvent);
+							}
+						});
+					},
+					restore() {
+						window.matchMedia = original;
+					},
+				};
+			};
+
+			let viewport: ReturnType<typeof installShortViewport>;
+			beforeEach(() => {
+				viewport = installShortViewport();
+			});
+			afterEach(() => viewport.restore());
+
+			/** The session action bar, named by the one control only it carries. */
+			const actionBar = () =>
+				screen.queryByRole("button", { name: "Session info" });
+			const composer = () => screen.queryByRole("textbox");
+			/** Moves the caret into the card, which is the second of the three. */
+			const answerInThePanel = async (
+				user: ReturnType<typeof userEvent.setup>,
+			) => {
+				await user.click(
+					within(answerPanel()).getByRole("radio", { name: /SQLite/ }),
+				);
+			};
+
+			it("folds the action bar and the composer away while the user answers", async () => {
+				const user = userEvent.setup();
+				viewport.set(true);
+				seedUnansweredQuestion();
+				render(<ChatPanel {...defaultProps} />);
+				await waitForHistoryLoad();
+
+				// The panel being up is not enough on its own: until the caret is in
+				// the card, the chrome below it is still the user's.
+				expect(actionBar()).toBeInTheDocument();
+				expect(composer()).toBeInTheDocument();
+
+				await answerInThePanel(user);
+
+				expect(actionBar()).not.toBeInTheDocument();
+				expect(composer()).not.toBeInTheDocument();
+				// Nothing about the card itself changed to get that room.
+				expect(answerPanel()).toBeInTheDocument();
+			});
+
+			// The strip is what is deliberately *not* folded, and this is why: a
+			// permission request can arrive while the panel is up, the server
+			// refuses answers until it is dealt with, and the strip's first row is
+			// the only route to the card holding it (§2, §7). Folding the strip
+			// for the room would wall the user in.
+			it("keeps the strip, and with it the way to a permission request", async () => {
+				const user = userEvent.setup();
+				viewport.set(true);
+				seedUnansweredQuestion();
+				render(<ChatPanel {...defaultProps} />);
+				await waitForHistoryLoad();
+				await answerInThePanel(user);
+				expect(composer()).not.toBeInTheDocument();
+
+				act(() =>
+					acceptSetting({
+						turn: {
+							phase: "blocked",
+							open: true,
+							since: "2024-01-01T00:00:00Z",
+							blockers: [
+								{
+									kind: "permission",
+									request_id: "req-9",
+									raised_at: "2024-01-01T00:00:00Z",
+								},
+							],
+							unanswered: [question],
+						},
+					}),
+				);
+
+				expect(
+					screen.getByRole("button", { name: "Jump to request" }),
+				).toBeInTheDocument();
+				// And taking it is a way out of the collapse as well: the panel
+				// closes on its way, so the chrome comes back with it.
+				await user.click(
+					screen.getByRole("button", { name: "Jump to request" }),
+				);
+				expect(composer()).toBeInTheDocument();
+				expect(actionBar()).toBeInTheDocument();
+			});
+
+			// Stop lives on the folded bar, and this is the whole of what that
+			// costs: one press outside the card, or the press that closes the
+			// panel, and it is back. Worth stating because Stop is one of the
+			// user's two exits from a blocked turn (§2).
+			it("gives Stop back with the bar, on the press that leaves the card", async () => {
+				const user = userEvent.setup();
+				viewport.set(true);
+				seedUnansweredQuestion();
+				acceptSetting({
+					turn: {
+						phase: "running",
+						open: true,
+						since: "2024-01-01T00:00:00Z",
+						unanswered: [question],
+					},
+				});
+				render(<ChatPanel {...defaultProps} />);
+				await waitForHistoryLoad();
+
+				const stop = () => screen.queryByRole("button", { name: "Stop" });
+				expect(stop()).toBeInTheDocument();
+
+				await answerInThePanel(user);
+				expect(stop()).not.toBeInTheDocument();
+
+				await user.click(screen.getByRole("heading", { level: 1 }));
+				await waitFor(() => expect(stop()).toBeInTheDocument());
+			});
+
+			it("brings them back when the caret leaves the card", async () => {
+				const user = userEvent.setup();
+				viewport.set(true);
+				seedUnansweredQuestion();
+				render(<ChatPanel {...defaultProps} />);
+				await waitForHistoryLoad();
+				await answerInThePanel(user);
+				expect(composer()).not.toBeInTheDocument();
+
+				// A press on the session header is a press on lit, reachable screen
+				// — the panel stays up, and the chrome it was borrowing room from
+				// comes back with the caret.
+				await user.click(screen.getByRole("heading", { level: 1 }));
+
+				await waitFor(() => expect(composer()).toBeInTheDocument());
+				expect(actionBar()).toBeInTheDocument();
+				expect(answerPanel()).toBeInTheDocument();
+			});
+
+			it("brings them back when the viewport grows again", async () => {
+				const user = userEvent.setup();
+				viewport.set(true);
+				seedUnansweredQuestion();
+				render(<ChatPanel {...defaultProps} />);
+				await waitForHistoryLoad();
+				await answerInThePanel(user);
+				expect(composer()).not.toBeInTheDocument();
+
+				// The keyboard going down is the ordinary case of this, and nothing
+				// about the caret has changed.
+				viewport.set(false);
+
+				expect(composer()).toBeInTheDocument();
+				expect(actionBar()).toBeInTheDocument();
+			});
+
+			// The one this gate exists for. A question arriving over somebody
+			// mid-sentence must not take the sentence, the composer and the
+			// keyboard away under them.
+			it("leaves the composer alone while the user is typing in it", async () => {
+				const user = userEvent.setup();
+				viewport.set(true);
+				seedUnansweredQuestion();
+				render(<ChatPanel {...defaultProps} />);
+				await waitForHistoryLoad();
+
+				const textarea = composer();
+				if (!textarea) throw new Error("the composer should be up");
+				await user.type(textarea, "half a sentence");
+
+				expect(composer()).toHaveValue("half a sentence");
+				expect(actionBar()).toBeInTheDocument();
+			});
+
+			// And when the user does go into the card, the half-sentence is not
+			// lost with the bar that was holding it: the draft lives in the input
+			// store, keyed by session.
+			it("keeps what was typed in the composer when it does fold", async () => {
+				const user = userEvent.setup();
+				viewport.set(true);
+				seedUnansweredQuestion();
+				render(<ChatPanel {...defaultProps} />);
+				await waitForHistoryLoad();
+
+				const textarea = composer();
+				if (!textarea) throw new Error("the composer should be up");
+				await user.type(textarea, "half a sentence");
+				await answerInThePanel(user);
+				expect(composer()).not.toBeInTheDocument();
+
+				await user.keyboard("{Escape}");
+
+				expect(
+					screen.queryByRole("dialog", { name: /question/ }),
+				).not.toBeInTheDocument();
+				expect(composer()).toHaveValue("half a sentence");
+			});
+
+			// A card unmounted under the caret fires no blur, so "focus is in the
+			// card" cannot be left to the card's own last word: a panel that
+			// opens again would open already folded, with nobody in it. Here the
+			// second question brings the panel back by itself (§4: nobody named
+			// it, so it takes no focus) — which is exactly the state condition
+			// two exists to protect.
+			it("opens again with the chrome up, not with the last visit's focus", async () => {
+				const user = userEvent.setup();
+				viewport.set(true);
+				seedUnansweredQuestion();
+				render(<ChatPanel {...defaultProps} />);
+				await waitForHistoryLoad();
+				await answerInThePanel(user);
+				expect(composer()).not.toBeInTheDocument();
+
+				await user.keyboard("{Escape}");
+				expect(composer()).toBeInTheDocument();
+
+				act(() =>
+					acceptSetting({
+						turn: {
+							phase: "idle",
+							open: false,
+							since: "",
+							unanswered: [
+								question,
+								{ ...question, request_id: "q2", header: "Region" },
+							],
+						},
+					}),
+				);
+
+				expect(answerPanel()).toBeInTheDocument();
+				expect(composer()).toBeInTheDocument();
+				expect(actionBar()).toBeInTheDocument();
+			});
+
+			it("changes nothing on a viewport with room to spare", async () => {
+				const user = userEvent.setup();
+				viewport.set(false);
+				seedUnansweredQuestion();
+				render(<ChatPanel {...defaultProps} />);
+				await waitForHistoryLoad();
+				await answerInThePanel(user);
+
+				expect(actionBar()).toBeInTheDocument();
+				expect(composer()).toBeInTheDocument();
+			});
 		});
 
 		// Closing says "not now", and it is worth exactly that: this one stretch

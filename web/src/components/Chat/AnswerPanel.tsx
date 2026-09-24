@@ -46,6 +46,14 @@ interface Props {
 	 * (docs/answering-ui.md §4).
 	 */
 	takeFocus: boolean;
+	/**
+	 * Whether the user is working *inside* this card, which is the difference
+	 * between a panel that is merely up and a panel the soft keyboard belongs to.
+	 * Told to the host rather than kept here: what to fold away for the room is a
+	 * fact about the screen around this card, not about the card
+	 * (docs/answering-ui.md §3, "Room on a short viewport").
+	 */
+	onFocusChange?: (focused: boolean) => void;
 }
 
 /** A block the user can still see, whether or not its question is still open. */
@@ -109,6 +117,7 @@ function AnswerPanel({
 	onSend,
 	onClose,
 	takeFocus,
+	onFocusChange,
 }: Props) {
 	const drafts = useQuestionDraftStore(selectSessionDrafts(sessionId));
 	// Blocks that can no longer be answered but are still on screen, keyed by
@@ -413,6 +422,17 @@ function AnswerPanel({
 				role="dialog"
 				tabIndex={-1}
 				aria-labelledby={titleId}
+				// React's focus events bubble, so the card itself hears every control
+				// in it — including its own `tabIndex={-1}`, which is what it takes
+				// when it reads itself out. `relatedTarget` is what keeps a move
+				// between two controls from reading as a departure: without it,
+				// tabbing from an option to Send would report the card as left and
+				// then entered again.
+				onFocus={() => onFocusChange?.(true)}
+				onBlur={(e) => {
+					if (e.currentTarget.contains(e.relatedTarget)) return;
+					onFocusChange?.(false);
+				}}
 				// Centred, capped at a share of the rectangle rather than at a
 				// number of pixels: a percentage needs no font size, no row height
 				// and no measurement of anything to stay inside the transcript, and
