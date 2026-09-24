@@ -1,5 +1,6 @@
 import { Circle, CircleCheck, CircleDot } from "lucide-react";
 import type { WorkStatus } from "../../types/work";
+import { MarkdownContent } from "../Chat/MarkdownContent";
 
 interface StepItemProps {
 	step: string;
@@ -23,7 +24,7 @@ function StepItem({ step, index, currentStep, workStatus }: StepItemProps) {
 			}`}
 		>
 			<span
-				className={`mt-0.5 shrink-0 transition-colors duration-300 ${
+				className={`mt-1 shrink-0 transition-colors duration-300 ${
 					isCompleted
 						? "text-th-success"
 						: isCurrent
@@ -39,8 +40,8 @@ function StepItem({ step, index, currentStep, workStatus }: StepItemProps) {
 					<Circle className="size-4" />
 				)}
 			</span>
-			<span
-				className={`text-sm ${
+			<div
+				className={`min-w-0 flex-1 ${
 					isCompleted
 						? "text-th-text-muted"
 						: isCurrent
@@ -48,8 +49,13 @@ function StepItem({ step, index, currentStep, workStatus }: StepItemProps) {
 							: "text-th-text-muted"
 				}`}
 			>
-				{step}
-			</span>
+				{/* Steps are authored as markdown — the default roles carry blank lines
+				    and lists — and the agent role page already renders this same string
+				    that way. The state colour stays on this element, so the prose inside
+				    it inherits rather than paints its own (`prose-inherit-color`,
+				    src/index.css). */}
+				<MarkdownContent content={step} className="prose-inherit-color" />
+			</div>
 		</li>
 	);
 }
@@ -59,7 +65,7 @@ interface Props {
 	/** 0-based index of the step the work sits on. */
 	currentStep: number;
 	workStatus: WorkStatus;
-	/** Surface styling, which differs between the detail page and the chat card. */
+	/** Surface styling, left to the caller — today only the detail page's Steps section. */
 	className?: string;
 }
 

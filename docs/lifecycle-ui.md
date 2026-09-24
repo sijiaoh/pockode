@@ -875,6 +875,32 @@ Same behaviour as today's four-value `isActiveState` check, one less thing to
 keep in sync with the status enum. `StepList` takes `status`, not `activity`: a
 step's position does not change because a turn started.
 
+**A step's text is Markdown**, rendered through the same `MarkdownContent` the
+agent role page uses for the very same string — a step written with blank lines
+and a list reads as paragraphs and a list here too, not as one line of source.
+There is no second step card to keep in step with this one: `StepList` has a
+single call site, the detail page's Steps section, and the chat transcript
+borrows the step *wording* alone, never this markup
+([work-system.md](code/work-system.md#one-vocabulary-for-work-status)).
+
+The glyph beside a step is aligned to the prose line box (`mt-1`, against
+`prose-sm`'s 24px line) rather than to the 20px box a plain `text-sm` span used
+to give it — a step is a block of prose now, and the icon has to meet its first
+line.
+
+The state colour survives the move to prose because of `.prose-inherit-color`
+(`web/src/index.css`), which the list adds to the prose root. Typography paints a
+body colour on `.prose` itself, which would swallow the whole signal this section
+is built on — muted once a step is done, primary while the work sits on it — so
+that class hands the text colour and its markers back to `currentColor`, leaving
+the colour on the row where it belongs. Links and code keep their own: those
+colours say what an element *is*, not what state it is in. The rule is
+deliberately unlayered plain CSS rather than an `@utility`, and the reason is
+spelled out in the comment above it: everything in this contest is a single
+class, so what settles it is that unlayered CSS outranks every layer — an
+`@utility` would sit back inside Tailwind's `utilities` layer and leave the
+outcome to Tailwind's ordering there.
+
 ## 7. The two refusals about subtasks
 
 **The step_done that would *close* the work is the one that is refused**, not
