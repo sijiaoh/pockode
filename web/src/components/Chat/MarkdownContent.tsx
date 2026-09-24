@@ -61,13 +61,18 @@ const MARKDOWN_COMPONENTS = { code: CodeBlock, img: MarkdownImage };
 
 interface MarkdownContentProps {
 	content: string;
+	/** Extra classes for the prose root, for a surface that has to tune it. */
+	className?: string;
 }
 
 export const MarkdownContent = memo(function MarkdownContent({
 	content,
+	className,
 }: MarkdownContentProps) {
 	return (
-		<div className="prose dark:prose-invert prose-sm max-w-none prose-code:before:content-none prose-code:after:content-none prose-pre:bg-transparent prose-pre:p-0 prose-pre:text-[length:inherit]">
+		<div
+			className={`prose dark:prose-invert prose-sm max-w-none prose-code:before:content-none prose-code:after:content-none prose-pre:bg-transparent prose-pre:p-0 prose-pre:text-[length:inherit] ${className ?? ""}`}
+		>
 			<Markdown remarkPlugins={REMARK_PLUGINS} components={MARKDOWN_COMPONENTS}>
 				{content}
 			</Markdown>

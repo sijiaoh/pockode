@@ -934,6 +934,32 @@ samp {
 }
 
 /* =============================================================================
+ * MARKDOWN THAT BORROWS ITS COLOUR
+ *
+ * Typography sets a body colour on `.prose` itself, so a surface that paints
+ * state onto the text — StepList, where a step reads muted once it is done and
+ * primary while the work sits on it — loses that signal the moment the text
+ * becomes markdown. Handing the colour back to `currentColor` restores it, for
+ * the run of text and its markers; links and code keep their own, since those
+ * colours say what the element is rather than what state it is in.
+ *
+ * Unlayered on purpose, and specificity is not what carries it: `.prose` and
+ * the `dark:prose-invert` that reassigns these same variables are both single
+ * classes — the dark variant compiles to `:where(.dark, .dark *)`, which adds
+ * none — so a rule of equal weight would be settled by source order inside
+ * Tailwind's `utilities` layer, where Tailwind, not this file, decides the
+ * order. Unlayered CSS outranks every layer, so this holds in both modes;
+ * `@utility` would put it back in that layer and hand the outcome away. */
+.prose-inherit-color {
+	--tw-prose-body: currentColor;
+	--tw-prose-headings: currentColor;
+	--tw-prose-bold: currentColor;
+	--tw-prose-counters: currentColor;
+	--tw-prose-bullets: currentColor;
+	--tw-prose-quotes: currentColor;
+}
+
+/* =============================================================================
  * FILE EDITOR (react-simple-code-editor)
  *
  * This class lands on the library's root: position: relative, overflow: hidden,
