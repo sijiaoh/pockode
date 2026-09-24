@@ -1,7 +1,5 @@
 import type { JSONRPCRequester } from "json-rpc-2.0";
 import type {
-	Comment,
-	CommentUpdateParams,
 	Work,
 	WorkCreateParams,
 	WorkUpdateParams,
@@ -15,7 +13,6 @@ export interface WorkActions {
 	startWork: (id: string) => Promise<Work>;
 	stopWork: (id: string) => Promise<void>;
 	reopenWork: (id: string) => Promise<void>;
-	updateComment: (params: CommentUpdateParams) => Promise<Comment>;
 }
 
 /**
@@ -53,10 +50,6 @@ export function createWorkActions(
 
 		reopenWork: async (id: string): Promise<void> => {
 			await client().request("work.reopen", { id });
-		},
-
-		updateComment: async (params: CommentUpdateParams): Promise<Comment> => {
-			return client().request("work.comment.update", params);
 		},
 	};
 }

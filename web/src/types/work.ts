@@ -102,11 +102,6 @@ export interface WorkUpdateParams {
 	agent_role_id?: string;
 }
 
-export interface CommentUpdateParams {
-	id: string;
-	body: string;
-}
-
 export interface Comment {
 	id: string;
 	work_id: string;

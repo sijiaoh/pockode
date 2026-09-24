@@ -169,6 +169,43 @@ describe("WorkDetailOverlay", () => {
 		expectToAppearBefore(tasksHeading, commentsHeading);
 	});
 
+	// Comments are the agents' record of what happened, and the client has no
+	// way to write one of its own: an edit affordance could only rewrite an
+	// agent's words, and nothing on a comment says whose they were afterwards.
+	it("shows a comment without any way to edit it", () => {
+		mockUseWorkDetailSubscription.mockReturnValue({
+			work: createWork(),
+			activity: "idle",
+			comments: [
+				{
+					id: "comment-1",
+					work_id: "work-1",
+					body: "Implemented the thing",
+					created_at: "2026-03-04T00:00:00Z",
+				},
+			],
+			parent: null,
+			pendingQuestions: [],
+			loading: false,
+			error: null,
+			children: [],
+		});
+
+		render(
+			<WorkDetailOverlay
+				workId="work-1"
+				onBack={vi.fn()}
+				onNavigateToSession={vi.fn()}
+				onOpenWorkDetail={vi.fn()}
+			/>,
+		);
+
+		expect(screen.getByText("Implemented the thing")).toBeInTheDocument();
+		expect(
+			screen.queryByRole("button", { name: /comment/i }),
+		).not.toBeInTheDocument();
+	});
+
 	// A story's children come with its detail, not out of the work list: that
 	// list is the `Current` segment and holds no closed work, so a closed story
 	// read from the archive would otherwise look childless
