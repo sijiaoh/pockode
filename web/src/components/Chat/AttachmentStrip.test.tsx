@@ -76,7 +76,7 @@ function renderStrip(files: FileBlock[], onOpenFile?: (path: string) => void) {
 	);
 }
 
-describe("AttachmentStrip", { timeout: 20_000 }, () => {
+describe("AttachmentStrip", () => {
 	it("shows an image a tool returned inline, without expanding anything", async () => {
 		getAttachment.mockResolvedValue(imageContent());
 

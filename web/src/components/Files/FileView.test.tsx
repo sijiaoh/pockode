@@ -98,7 +98,7 @@ function downloadButton() {
 	return screen.getByRole("button", { name: "Download" });
 }
 
-describe("FileView", { timeout: 20_000 }, () => {
+describe("FileView", () => {
 	beforeEach(() => {
 		getFile.mockReset();
 		downloadFile.mockReset();

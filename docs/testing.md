@@ -57,8 +57,7 @@ is how a file ends up carrying both numbers without saying which is which:
 - `describe(name, { timeout: n }, …)` or `it(name, fn, { timeout: n })` is
   `testTimeout`. Written as `20_000` it is a no-op — that *is* the shared
   default — and the comment usually beside it ("outruns the default 5s") states
-  a default that no longer holds. Delete it rather than copy it; several files
-  still carry one.
+  a default that no longer holds. Delete it rather than copy it.
 - `findBy*(…, …, { timeout: n })` and `waitFor(fn, { timeout: n })` are
   `asyncUtilTimeout`, a different knob with a different default. A value there
   is a real change, and must stay below `testTimeout` or the DOM dump is lost to

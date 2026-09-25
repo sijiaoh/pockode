@@ -7,9 +7,7 @@ vi.mock("./authStore", () => ({
 	},
 }));
 
-// Every case dynamic-imports the module under test, and on a loaded machine that
-// import alone outruns the 5s default — these assertions do no waiting.
-describe("createQueryClient", { timeout: 20_000 }, () => {
+describe("createQueryClient", () => {
 	beforeEach(() => {
 		vi.resetModules();
 	});
