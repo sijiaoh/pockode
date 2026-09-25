@@ -76,6 +76,28 @@ Object.defineProperty(HTMLElement.prototype, "scrollTop", {
 	},
 });
 
+/**
+ * jsdom implements `inert` as an attribute and nothing else: a button inside an
+ * inert subtree still takes focus there, while a browser drops the `focus()`
+ * call silently, per the spec. Left alone, every test about what a keyboard user
+ * can reach under a backdrop passes on code that reaches nothing — the same
+ * class of gap as the missing layout above, and global for the same reason:
+ * `inert` is the app's one way of saying "covered", and it is said in more than
+ * one place.
+ *
+ * Only the call is blocked. A browser also blurs whatever was already focused
+ * when `inert` arrives; that half is not needed by anything here, and guessing
+ * at it would mean watching attribute mutations.
+ */
+const nativeFocus = HTMLElement.prototype.focus;
+HTMLElement.prototype.focus = function focus(
+	this: HTMLElement,
+	options?: FocusOptions,
+) {
+	if (this.closest("[inert]")) return;
+	nativeFocus.call(this, options);
+};
+
 afterEach(() => {
 	cleanup();
 });

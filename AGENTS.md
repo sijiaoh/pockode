@@ -108,6 +108,13 @@ claiming has to be the caller's; the hook filters nothing. The convention, and
 which surfaces are exposed to it, live in
 [docs/answering-ui.md](docs/answering-ui.md#who-owns-the-dismissing-click).
 
+Escape is the same convention with nothing to do the claiming for it: a press
+lands on one element, a key lands on every listener up the path, so an overlay
+that closes on Escape claims the key itself or something below closes with it.
+`Sheet` and `ConfirmDialog` both do, which is why an overlay here needs no
+arrangement with whatever it was opened over — see
+[docs/answering-ui.md](docs/answering-ui.md#who-owns-escape).
+
 The responsive exports are the single source for the width ladder and the two
 pointer gates; both stylesheets are checked against them. Width decides where
 things go, pointer decides whether they can be reached — see

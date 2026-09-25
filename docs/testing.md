@@ -361,6 +361,16 @@ evidence.
   interactive shell has no `pipefail`; the pipeline in `server.yml` is safe only
   because GitHub Actions runs `shell: bash` with `-eo pipefail`, and that same
   `-e` is why the step has to carry the status by hand to reach its report.
+- **jsdom answers for browser behaviour it never implemented, and answers
+  wrongly.** It has no layout, so a `scrollTop` write is a no-op and every read
+  is 0; and `inert` is an attribute to it and nothing else, so a button under a
+  backdrop takes focus there where a browser drops the `focus()` call in
+  silence. A test about what a keyboard user can reach while something covers
+  the page was therefore green on code that reached nothing — and no run of it
+  could have said so, because the gap is in the environment rather than in the
+  assertion: mutating the implementation does not turn it red either. Both are
+  filled in `web/src/test/setup.ts`, globally and on purpose, since the next
+  test to depend on one will not know it is missing.
 - **Green does not mean the assertion works.** Break the implementation on
   purpose and confirm the test goes red. This is the only way to catch a silent
   pass, and it is cheap: revert the mutation right after. Under load,

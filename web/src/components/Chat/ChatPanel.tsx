@@ -722,11 +722,41 @@ function ChatPanel({
 	// transcript covered this row is the only way left to reach a permission
 	// card at all; the drafts survive the close, so the cost is one tap on
 	// `Answer` afterwards.
+	//
+	// So the press only asks for the jump; the jump itself waits for the close
+	// to be on the screen. It has to: the last thing it does is move focus into
+	// the card, and focus into an `inert` subtree is dropped by the spec —
+	// silently, which is why scroll and highlight would go on looking right
+	// while the keyboard half of the jump was lost. `setAnswerPanelOpen` is
+	// state, so the commit that takes `inert` off comes after this handler
+	// returns; ordering the two lines differently changes nothing.
+	const [pendingJumpRequestId, setPendingJumpRequestId] = useState<
+		string | null
+	>(null);
 	const handleJumpToRequest = useCallback((requestId: string) => {
 		setAnswerPanelOpen(false);
 		setAnswerAnchor(null);
-		messageListRef.current?.jumpToRequest(requestId);
+		setPendingJumpRequestId(requestId);
 	}, []);
+	// The request is read in the commit the press produced, which is the one the
+	// close is in: `transcriptInert` is the same value the DOM attribute is
+	// written from, so this is the cover being gone rather than a delay guessed
+	// to outlast it. A layout effect, so the scroll and the focus land in the
+	// paint the uncovered transcript first appears in — a `useEffect` would
+	// paint the card where it was and move it afterwards.
+	//
+	// Asked for once and answered once, never held for later: anything still
+	// covering the transcript here is not the panel this press put away — an
+	// overlay, or a question that arrived in the same frame and raised the panel
+	// again — and a jump kept waiting for that to end would tear the view and
+	// the caret away whenever the user was finally done with it. The strip's row
+	// is still there to press again.
+	useLayoutEffect(() => {
+		if (pendingJumpRequestId === null) return;
+		setPendingJumpRequestId(null);
+		if (transcriptInert) return;
+		messageListRef.current?.jumpToRequest(pendingJumpRequestId);
+	}, [pendingJumpRequestId, transcriptInert]);
 
 	const forkAnchor = forkTarget
 		? resolveForkAnchor(messages, forkTarget.messageId, hasMoreHistory)

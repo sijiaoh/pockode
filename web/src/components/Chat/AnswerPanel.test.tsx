@@ -1,3 +1,4 @@
+import { Sheet } from "@pockode/shared";
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -512,6 +513,70 @@ describe("AnswerPanel", () => {
 		act(() => document.body.focus());
 		await user.keyboard("{Escape}");
 		expect(onClose).toHaveBeenCalled();
+	});
+
+	// ...but only the top layer answers one press. A message's menu open at the
+	// moment a question arrives stays open — the panel dims the transcript, it
+	// does not take the user off it, so a sheet they were part-way through is
+	// still theirs — which leaves a `Sheet` genuinely over this panel. It
+	// listens on `document`, which this panel's `window` listener sits past on
+	// purpose, and claims the press it closes on (docs/answering-ui.md §4,
+	// "Who owns Escape", rule 1). Without the claim one Escape takes both, and
+	// the panel goes with answers half filled in.
+	it("stays up when a sheet over it takes the press", async () => {
+		const user = userEvent.setup();
+		const onClose = vi.fn();
+		const onMenuClose = vi.fn();
+		render(
+			<>
+				<AnswerPanel
+					sessionId="s1"
+					unanswered={[database]}
+					onSend={vi.fn()}
+					onClose={onClose}
+					takeFocus={false}
+				/>
+				<Sheet title="Agent message" onClose={onMenuClose}>
+					<button type="button">Fork from here</button>
+				</Sheet>
+			</>,
+		);
+
+		await user.keyboard("{Escape}");
+
+		expect(onMenuClose).toHaveBeenCalled();
+		expect(onClose).not.toHaveBeenCalled();
+	});
+
+	// ...including the sheet that refuses the press. `ForkSessionSheet` goes
+	// non-dismissible while the fork is in flight, and that is reachable from
+	// the very menu above, so the panel can be underneath one. Its backdrop
+	// swallows the equivalent click either way — it is drawn whether or not it
+	// dismisses — and a key that fell through instead would answer "cancel this"
+	// by putting away the panel behind it.
+	it("stays up when a sheet over it refuses the press", async () => {
+		const user = userEvent.setup();
+		const onClose = vi.fn();
+		const onForkClose = vi.fn();
+		render(
+			<>
+				<AnswerPanel
+					sessionId="s1"
+					unanswered={[database]}
+					onSend={vi.fn()}
+					onClose={onClose}
+					takeFocus={false}
+				/>
+				<Sheet title="Fork session" onClose={onForkClose} dismissible={false}>
+					<button type="button">Fork</button>
+				</Sheet>
+			</>,
+		);
+
+		await user.keyboard("{Escape}");
+
+		expect(onForkClose).not.toHaveBeenCalled();
+		expect(onClose).not.toHaveBeenCalled();
 	});
 
 	// Whether the caret is in this card is the second of the three conditions

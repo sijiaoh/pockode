@@ -251,7 +251,10 @@ function MessageList({
 			//
 			// The card's first button is the row that opens it, which is as close as
 			// a permission card has to a header. Without moving the focus, the jump
-			// is one a keyboard user cannot perceive.
+			// is one a keyboard user cannot perceive — and a focus into an `inert`
+			// subtree is dropped without a word, so a caller jumping out from under
+			// something that covers the transcript has to let the cover go first
+			// (`ChatPanel.handleJumpToRequest`).
 			card.querySelector<HTMLElement>("button")?.focus({ preventScroll: true });
 		},
 		[clearHighlight, jumpTo],

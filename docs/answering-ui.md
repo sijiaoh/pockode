@@ -134,6 +134,19 @@ under a backdrop would be the dead end this surface exists to remove, so the
 jump closes the panel on its way. Closing costs nothing: the drafts stay (§5),
 and the panel is one tap away afterwards.
 
+**The jump waits for that close to be on the screen.** Focus is the half of a
+jump that can fail without looking like it failed: the last thing it does is put
+the caret on the card, and a `focus()` into an `inert` subtree is dropped by the
+spec in silence — so a jump fired beside the close still scrolls and still rings
+the card, and leaves a keyboard user on `<body>`. What it waits for is the state
+that writes the `inert` attribute, not a delay guessed to outlast the close. It
+is asked once and answered once, never held: if something still covers the
+transcript by then it is not the panel this press put away — an overlay, or a
+question that arrived in the same frame and raised the panel again — and a jump
+kept waiting for *that* to end would pull the view and the caret away minutes
+later, at whatever moment the user was finally done with it. Row 1 is still
+there to press again.
+
 **The panel changes the strip's height by one line, and that is left alone.**
 Row 2 goes when the panel opens and comes back when it closes, so the composer
 moves by the one line the strip was always allowed to move it by — the same
@@ -801,6 +814,7 @@ them:
 | Surface | Where it listens | What it does with the press |
 |---|---|---|
 | `ConfirmDialog` | `document`, and it calls `stopPropagation` | closes itself, and the press never reaches `window` at all |
+| `Sheet` — a message's menu, and every other sheet | `document`, and it calls `stopPropagation` | the same, and it claims the press even while it is refusing to be dismissed — then it swallows without closing |
 | `ResponsivePanel` — the session-info panel, the engine picker, the worktree and session-filter dropdowns | `document`, and it calls `preventDefault` | closes itself and **marks the press handled** |
 | `ModeSelector` — the mode dropdown in the composer row | `document`, and it calls `preventDefault` | closes itself and **marks the press handled** |
 | `Sidebar` — the session drawer, below the expanded tier | `document`, and it calls `preventDefault` | closes itself and **marks the press handled** |
@@ -811,22 +825,29 @@ them:
 Two rules, and they are the whole of it:
 
 1. **A surface drawn over the answer panel claims the key**, by
-   `preventDefault` or by `stopPropagation`. Three needed the line adding, all
-   for one reason: they open from the session header or the composer row, both
-   of which stay lit beside the panel, so each genuinely can be on top of one,
-   and without the mark a single press put away both it and a panel the user was
-   not even looking at — the drawer's case is the worst of the three, since it
-   covers the panel outright. `ConfirmDialog` and the command palette already
-   satisfied the rule for their own reasons. A shared `Sheet` claims neither, and
-   one genuinely can be over the panel: a message menu already open stays open
-   when the panel puts itself up under it, so an Escape there closes the menu
-   *and* the panel. The path is narrow — a menu open at the moment a question
-   arrives — and both come back one press away, but it is a real hole rather than
-   the "nothing puts one over it" this used to claim, and a caller that means to
-   keep a sheet over the panel owes `Sheet` the same line. What *cannot* happen is
-   a sheet left over an **overlay**, and what stops that is not `inert` — a sheet
-   is portalled to the body, which `inert` has never reached — but the covering
-   rule below.
+   `preventDefault` or by `stopPropagation`. Four needed the line adding. Three
+   of them for one reason: they open from the session header or the composer
+   row, both of which stay lit beside the panel, so each genuinely can be on top
+   of one, and without the mark a single press put away both it and a panel the
+   user was not even looking at — the drawer's case is the worst of the three,
+   since it covers the panel outright. `ConfirmDialog` and the command palette
+   already satisfied the rule for their own reasons. The fourth is the shared
+   `Sheet`, and it arrives over the panel from the other direction: not opened
+   beside it, but already open when the panel rose underneath. A message's menu
+   stays up while a question puts the panel up under it, because the panel dims
+   the transcript rather than taking the user off it — the same line the
+   covering rule below draws — so a sheet genuinely sits over the panel, and one
+   press used to take the menu *and* the panel, with whatever had been typed
+   into it. The claim is in `Sheet` rather than in the callers that raise one
+   there: nothing has to be registered, the way nothing has to be registered to
+   be covered. The claim is not tied to the close, either: a sheet holding an
+   operation refuses to be dismissed but still takes the key, because its
+   backdrop is drawn whether or not it dismisses and takes the equivalent click
+   either way — `ForkSessionSheet` mid-fork is reachable from that same menu,
+   and a key let through there would answer "cancel this" by putting the panel
+   away instead. What *cannot* happen is a sheet left over an **overlay**, and
+   what stops that is not `inert` — a sheet is portalled to the body, which
+   `inert` has never reached — but the covering rule below.
 2. **The answer panel listens on `window`, not on `document`, so that it is
    asked last.** Registration order cannot be relied on — the panel mounts
    first, so a `document` listener of its own would run *before*
@@ -853,9 +874,10 @@ Most surfaces are safe by construction and need nothing: `Sheet` — a message's
 fork menu — as well as `ConfirmDialog`, the mode dropdown and the session drawer
 each portal a backdrop of their own over this one, and `ResponsivePanel` portals
 one below the expanded tier, so the press never reaches this backdrop at all.
-(Escape is the one that is not symmetrical: a `Sheet` backdrop swallows the press
-but its Escape handler does not claim the key, which is the hole rule 1 above
-records.) The test is whether a surface has a
+(The key is not claimed the same way: a backdrop takes a press merely by
+existing, whereas Escape has nothing equivalent and every one of these surfaces
+claims it with a line of its own — which is why surfaces that need nothing here
+all appear in the Escape table above.) The test is whether a surface has a
 backdrop of its own, not whether it is a dropdown, and by that test two are
 exposed:
 
