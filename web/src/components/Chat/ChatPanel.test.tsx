@@ -897,6 +897,11 @@ describe("ChatPanel", () => {
 		// to is behind the backdrop and `inert`, so this row is the only way left
 		// to reach it at all; the jump closes the panel, which costs nothing but
 		// a tap on `Answer`.
+		//
+		// Focus is the half of this that can be lost without anything looking
+		// wrong: an `inert` subtree drops a `focus()` into it silently, so a jump
+		// fired before the close is on the screen still scrolls and still
+		// highlights, and leaves the keyboard user on `<body>`.
 		it("gets out of the way of a jump to a covered request", async () => {
 			const user = userEvent.setup();
 			seedUnansweredQuestion();
@@ -938,6 +943,13 @@ describe("ChatPanel", () => {
 				screen.queryByRole("dialog", { name: /question/ }),
 			).not.toBeInTheDocument();
 			expect(screen.getByRole("button", { name: "Allow" })).toBeInTheDocument();
+
+			const card = document.querySelector<HTMLElement>(
+				"[data-permission-request-id='req-9']",
+			);
+			expect(card).not.toBeNull();
+			expect(card?.closest("[inert]")).toBeNull();
+			expect(card?.querySelector("button")).toHaveFocus();
 		});
 
 		// The panel outlives an overlay, but the tap that opened it does not:

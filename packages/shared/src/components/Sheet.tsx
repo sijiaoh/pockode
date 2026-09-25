@@ -92,11 +92,31 @@ export function Sheet({
 	const asDrawer = !isExpanded;
 	const sheetRef = useRef<HTMLDivElement>(null);
 
+	// Claims the press, as `ConfirmDialog` does. A surface below a sheet that
+	// also reads Escape as its own dismissal sees the key only if nothing above
+	// it took it, and one genuinely sits below: the chat's answer panel, which
+	// listens on `window` precisely so that it is asked after every `document`
+	// listener has had the press (docs/answering-ui.md §4, "Who owns Escape").
+	// Without the claim, one press puts away both the sheet and a panel holding
+	// answers the user was part-way through.
+	//
+	// Claimed even while refusing, which is the one place the claim and the
+	// close come apart. The backdrop is drawn whether or not it dismisses, so a
+	// press meant for a sheet mid-operation is swallowed rather than handed
+	// down; a key that fell through instead would answer "cancel this" by
+	// putting away the surface behind, which is the sheet refusing on its own
+	// behalf and consenting on someone else's.
+	//
+	// `stopPropagation` rather than `preventDefault`: either marks the press,
+	// and this is the one the other shared overlay already uses. It does not
+	// silence a sibling listener on `document` itself, which is why a dialog
+	// raised inside a sheet still closes together with it.
 	useEffect(() => {
-		if (!dismissible) return;
-
 		const handleEscape = (e: KeyboardEvent) => {
-			if (e.key === "Escape") onClose();
+			if (e.key !== "Escape") return;
+			e.stopPropagation();
+			if (!dismissible) return;
+			onClose();
 		};
 
 		document.addEventListener("keydown", handleEscape);
