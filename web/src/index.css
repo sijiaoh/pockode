@@ -879,7 +879,8 @@ samp {
  * margin and overflow were left behind, and the inner pre is in .prose, so
  * typography's `pre { margin: 1.667em 0; overflow-x: auto }` still reaches it.
  * The margin is the expensive half: every code block grew ~40px the instant it
- * was highlighted, against MessageList's AT_BOTTOM_THRESHOLD of 50. */
+ * was highlighted, against the 50px that counts as the end of the transcript
+ * (`useTranscriptScroll`). */
 .code-block pre {
 	margin: 0;
 	overflow: visible;
@@ -894,15 +895,18 @@ samp {
  * ============================================================================= */
 
 :root {
-	/* Reserved for content whose size is unknown until it loads. Roughly a small
-	 * diagram or a screenshot on a phone — big enough that settling is not a jump,
-	 * small enough not to push the rest of the message off screen. */
+	/* Reserved for content whose size is unknown until it loads, so that settling
+	 * is not a visible jump. It is only that: the transcript's scroll invariant is
+	 * re-applied on every resize (`useTranscriptScroll`), so nothing depends on the
+	 * guess being right. Roughly a small diagram or a screenshot on a phone — big
+	 * enough to cover the common case, small enough not to push the rest of the
+	 * message off screen. */
 	--async-media-height: 12rem;
 }
 
 /* Mermaid arrives in two async steps — the lazy chunk, then mermaid.render() —
- * and ends as a diagram far taller than a line of text. Both waiting states
- * hold this box so measurements are not taken against a one-line placeholder. */
+ * and ends as a diagram far taller than a line of text. Both waiting states hold
+ * this box so the diagram does not arrive out of a single line. */
 .mermaid-placeholder {
 	display: flex;
 	align-items: center;
