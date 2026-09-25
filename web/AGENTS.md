@@ -98,6 +98,7 @@ export default Dialog;
 遵循 [Testing Library 指导原则](https://testing-library.com/docs/guiding-principles)：
 - 按用户视角测试，优先 `getByRole` > `getByLabelText` > `getByText` > `getByTestId`
 - 例外是长列表：`getByRole` 带 `name` 会为页面上每个同 role 元素算一次无障碍名，按查询次数收费——十几个按钮就足以让一次查询花掉数秒，再乘上机器负载就逼近 `testTimeout`。这种场景按 label / text 找行，并在测试里写明为什么（机制、判据与实测见 [docs/testing.md](../docs/testing.md#a-test-that-really-is-slow)）
+- 异步内容要等内容本身（`findBy*`），别等同步画出来的容器再 `getBy*` 里面的东西——等待第一次检查就通过，负载下偶发失败（见 [docs/testing.md](../docs/testing.md#frontend-wait-for-what-you-assert-on)）
 - 不测 state/props/生命周期，只测用户可见行为
 - 适度测试，不追求 100% 覆盖
 - 交互默认用 `userEvent`（见下例）。唯一的例外是冻住的假时钟（`vi.useFakeTimers()`）场景：`userEvent` 在冻住的 vitest 假时钟下会死锁（`shouldAdvanceTime` 不死锁，但把墙钟放了回来），改用 `fireEvent` 逐字符输入并显式推进时钟——原因与写法见 [docs/testing.md](../docs/testing.md#frontend-a-debounce-is-yours-to-run-out)，别把这类用例「修回」`userEvent`
