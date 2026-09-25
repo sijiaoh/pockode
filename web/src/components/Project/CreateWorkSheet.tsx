@@ -6,6 +6,7 @@ import { useSettingsStore } from "../../lib/settingsStore";
 import { useWSStore } from "../../lib/wsStore";
 import type { WorkType } from "../../types/work";
 import { Sheet } from "../ui";
+import RoleSelect from "./RoleSelect";
 
 interface Props {
 	/**
@@ -220,20 +221,13 @@ export default function CreateWorkSheet({
 					<label htmlFor={roleFieldId} className="text-sm text-th-text-primary">
 						Role
 					</label>
-					<select
+					<RoleSelect
 						id={roleFieldId}
 						value={agentRoleId}
-						onChange={(e) => setAgentRoleId(e.target.value)}
+						onChange={setAgentRoleId}
+						emptyLabel="Select role..."
 						disabled={isSubmitting}
-						className="min-h-[44px] w-full rounded-lg border border-th-border bg-th-bg-primary px-3 py-2 text-sm text-th-text-primary focus:border-th-border-focus focus:outline-none focus:ring-2 focus:ring-th-accent/20"
-					>
-						<option value="">Select role...</option>
-						{roles.map((role) => (
-							<option key={role.id} value={role.id}>
-								{role.name}
-							</option>
-						))}
-					</select>
+					/>
 				</div>
 
 				{error && (

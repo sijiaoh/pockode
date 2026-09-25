@@ -17,6 +17,7 @@ import type { AgentRole } from "../../types/agentRole";
 import BackToChatButton from "../ui/BackToChatButton";
 import SettingsLoadError from "../ui/SettingsLoadError";
 import Skeleton from "../ui/Skeleton";
+import RoleSelect from "./RoleSelect";
 
 interface Props {
 	onBack: () => void;
@@ -229,9 +230,6 @@ export default function AgentRoleListOverlay({
  * The only place the default role is written out as words, and the only way to
  * reach "None" — a star can clear the default, but no row then says that there
  * is none.
- *
- * A native `<select>` because that is already what this project draws a role
- * choice with, in both of the other two places it asks for one.
  */
 function DefaultRoleField({
 	roles,
@@ -247,12 +245,6 @@ function DefaultRoleField({
 	error: string | null;
 }) {
 	const fieldId = useId();
-
-	// A stored id with no role behind it is a transient the list will settle:
-	// offering it as a row of its own keeps the field from claiming, even for a
-	// frame, that Settings holds something it does not.
-	const isDangling =
-		defaultRoleId !== "" && !roles.some((r) => r.id === defaultRoleId);
 
 	// What `CreateWorkSheet` will actually do, asked rather than restated — the
 	// sentence below is a description of that form's behaviour, so it has to
@@ -278,20 +270,12 @@ function DefaultRoleField({
 			</label>
 			{valueState === "known" ? (
 				<>
-					<select
+					<RoleSelect
 						id={fieldId}
 						value={defaultRoleId}
-						onChange={(e) => onSelect(e.target.value)}
-						className="min-h-[44px] w-full rounded-lg border border-th-border bg-th-bg-primary px-3 py-2 text-sm text-th-text-primary focus:border-th-border-focus focus:outline-none focus:ring-2 focus:ring-th-accent/20"
-					>
-						<option value="">None</option>
-						{isDangling && <option value={defaultRoleId}>Unknown role</option>}
-						{roles.map((role) => (
-							<option key={role.id} value={role.id}>
-								{role.name}
-							</option>
-						))}
-					</select>
+						onChange={onSelect}
+						emptyLabel="None"
+					/>
 					{sentence && <p className="text-xs text-th-text-muted">{sentence}</p>}
 				</>
 			) : (
