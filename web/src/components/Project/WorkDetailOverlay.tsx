@@ -48,7 +48,17 @@ interface Props {
 	onOpenWorkDetail: (workId: string) => void;
 }
 
-export default function WorkDetailOverlay({
+/**
+ * One page per work: moving to a parent or child renders this same element with
+ * another id, and a reused page would carry the last work's scroll position,
+ * half-finished edits, open sheets and error lines onto the next one. Keyed
+ * here rather than at the call site so no entry point can forget it.
+ */
+export default function WorkDetailOverlay(props: Props) {
+	return <WorkDetailPage key={props.workId} {...props} />;
+}
+
+function WorkDetailPage({
 	workId,
 	onBack,
 	onNavigateToSession,
@@ -150,10 +160,7 @@ export default function WorkDetailOverlay({
 						/>
 					)}
 
-					{/* Keyed because moving to a parent or child reuses this page:
-					    one work's brief left open, or half-edited, is not the
-					    next one's. */}
-					<InlineEditableBody key={work.id} work={work} />
+					<InlineEditableBody work={work} />
 
 					<RoleSection work={work} />
 

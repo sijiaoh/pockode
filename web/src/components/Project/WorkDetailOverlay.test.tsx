@@ -526,7 +526,7 @@ describe("WorkDetailOverlay", () => {
 			expect(screen.getByText(/Ship the reorder/)).not.toBeVisible();
 		});
 
-		// The page is reused when it moves to a parent or child work.
+		// Moving to a parent or child is the same page with another id.
 		it("starts collapsed again on the next work", async () => {
 			const user = userEvent.setup();
 			const { rerender } = renderWithWork(createWork({ body }));
@@ -555,6 +555,68 @@ describe("WorkDetailOverlay", () => {
 				screen.getByRole("button", { name: "Expand description" }),
 			).toBeInTheDocument();
 			expect(screen.queryByText("More.")).not.toBeInTheDocument();
+		});
+	});
+
+	// Moving to a parent or child renders the same page with another id, which
+	// every way in — a task row, the parent link, the back button, browser
+	// history between two details — goes through.
+	describe("moving to another work", () => {
+		// jsdom lays nothing out and ignores `scrollTop`, so the position is put
+		// on the node by hand: it lives on the DOM element, which is exactly what
+		// a reused page would carry over.
+		const scrollBoxOf = (title: string) => {
+			const box = screen
+				.getByRole("heading", { level: 2, name: title })
+				.closest(".overflow-auto");
+			if (!(box instanceof HTMLElement)) throw new Error("no scroll box");
+			return box;
+		};
+		const scrollPage = (title: string) =>
+			Object.defineProperty(scrollBoxOf(title), "scrollTop", {
+				value: 600,
+				writable: true,
+			});
+
+		const showWork = (
+			rerender: ReturnType<typeof render>["rerender"],
+			work: Work,
+		) => {
+			mockUseWorkDetailSubscription.mockReturnValue({
+				...mockUseWorkDetailSubscription.mock.results[0].value,
+				work,
+			});
+			rerender(
+				<WorkDetailOverlay
+					workId={work.id}
+					onBack={vi.fn()}
+					onNavigateToSession={vi.fn()}
+					onOpenWorkDetail={vi.fn()}
+				/>,
+			);
+		};
+
+		it("opens the next work at its top", () => {
+			const { rerender } = renderWithWork(createWork({ title: "Story" }));
+			scrollPage("Story");
+
+			showWork(
+				rerender,
+				createWork({ id: "task-1", type: "task", title: "Task" }),
+			);
+
+			expect(scrollBoxOf("Task").scrollTop).toBe(0);
+		});
+
+		// The subscription re-renders the page on every change to the work; the
+		// reader's place must survive those.
+		it("keeps the place on the same work as it updates", () => {
+			const { rerender } = renderWithWork(createWork({ title: "Story" }));
+			scrollPage("Story");
+
+			showWork(rerender, createWork({ title: "Story, renamed" }));
+
+			expect(scrollBoxOf("Story, renamed").scrollTop).toBe(600);
 		});
 	});
 });
