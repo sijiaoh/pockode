@@ -195,28 +195,6 @@ func (h *rpcMethodHandler) handleWorkReopen(ctx context.Context, conn *jsonrpc2.
 	}
 }
 
-func (h *rpcMethodHandler) handleWorkCommentList(ctx context.Context, conn *jsonrpc2.Conn, req *jsonrpc2.Request) {
-	var params rpc.WorkCommentListParams
-	if err := unmarshalParams(req, &params); err != nil {
-		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "invalid params")
-		return
-	}
-	if params.WorkID == "" {
-		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "work_id is required")
-		return
-	}
-
-	comments, err := h.workStore.ListComments(params.WorkID)
-	if err != nil {
-		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInternalError, "failed to list comments")
-		return
-	}
-
-	if err := conn.Reply(ctx, req.ID, rpc.WorkCommentListResult{Comments: comments}); err != nil {
-		h.log.Error("failed to send work comment list response", "error", err)
-	}
-}
-
 func (h *rpcMethodHandler) handleWorkDetailSubscribe(ctx context.Context, conn *jsonrpc2.Conn, req *jsonrpc2.Request) {
 	var params rpc.WorkDetailSubscribeParams
 	if err := unmarshalParams(req, &params); err != nil {

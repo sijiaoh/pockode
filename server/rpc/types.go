@@ -951,14 +951,6 @@ type WorkListEarlierResult struct {
 	Items []WorkListItem `json:"items"`
 }
 
-type WorkCommentListParams struct {
-	WorkID string `json:"work_id"`
-}
-
-type WorkCommentListResult struct {
-	Comments []work.Comment `json:"comments"`
-}
-
 type WorkDetailSubscribeParams struct {
 	// ID is the subscription id; see SubscribeParams.
 	ID     string `json:"id"`
