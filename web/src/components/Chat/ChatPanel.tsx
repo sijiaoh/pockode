@@ -1,3 +1,4 @@
+import { CoveredSurface } from "@pockode/shared";
 import { AlertTriangle, Square, X } from "lucide-react";
 import {
 	useCallback,
@@ -600,6 +601,37 @@ function ChatPanel({
 	// the whole conversation out of reach with nothing on top of it.
 	const answerPanelShown = !isReadOnly && answerPanelOpen;
 
+	// Where the panel is actually drawn. It is positioned over the transcript,
+	// so it exists only where the transcript does: not over an overlay, and not
+	// over the skeleton that stands in until the history is in. Both used to
+	// come for free — an overlay replaced this whole branch, and the skeleton
+	// returned before the wrapper the panel hangs from. The list staying mounted
+	// through an overlay (below) is what turns them into something that has to
+	// be said out loud.
+	const answerPanelDrawn = answerPanelShown && !overlayOpen && !isChatPending;
+
+	// Everything drawn over the transcript, in one expression, because the
+	// transcript's `inert` has to name all of them: a conversation left reachable
+	// under an overlay would put every card and menu button in the Tab order
+	// ahead of the thing on top of it.
+	const transcriptInert = answerPanelDrawn || overlayOpen;
+
+	// Covered, which is a shorter list than the one above, and the difference is
+	// the whole of it: the answer panel is a layer of this conversation — it
+	// dims the transcript and puts it out of reach, but leaves it on the screen
+	// and leaves the user in the chat. An overlay is somewhere else, so the
+	// transcript goes off the screen entirely and stays mounted only to give the
+	// reader their place back.
+	//
+	// One name for both of the things that follow from that: the class that
+	// takes the transcript off the screen, and the `CoveredSurface` that takes
+	// the sheets it raised off with it. A sheet portalled to the body is out of
+	// reach of `invisible` and `inert` alike, so without the second one a fork
+	// menu opened here would go on floating over the overlay, lit and clickable.
+	// Sheets under a *dimmed* transcript are not touched: nobody has gone
+	// anywhere, and the forty `…` glyphs stay exactly where they are.
+	const transcriptCovered = overlayOpen;
+
 	// Room for the card on a screen that has none (docs/answering-ui.md §3,
 	// "Room on a short viewport"). Three facts, and each one of them is what
 	// stops a different way of getting this wrong:
@@ -725,120 +757,81 @@ function ChatPanel({
 		return () => document.removeEventListener("keydown", handleKeyDown);
 	}, [turnOpen, handleInterrupt, overlay, isSheetOpen]);
 
-	const renderContent = () => {
-		if (!overlay) {
-			// A read the server refused, said out loud rather than left as an empty
-			// transcript: the reader would otherwise conclude the conversation was
-			// empty, which is the one thing a failure must not be allowed to say.
-			if (
-				view &&
-				viewedSession &&
-				(viewedSession.isMissing || viewedSession.error)
-			) {
-				return (
-					<div
-						role="alert"
-						className="flex min-h-0 flex-1 items-center justify-center px-6 text-center text-sm text-th-text-muted"
-					>
-						{viewedSession.isMissing
-							? `This session is not in "${view.label}" any more.`
-							: viewedSession.error}
-					</div>
-				);
-			}
-			// Defer mounting until history loads so initial scroll-to-bottom works.
-			// An unresolved session waits here too, so a switch shows the destination
-			// empty rather than the previous session's messages.
-			if (isChatPending) {
-				return <ChatSkeleton showRows={showSkeleton} />;
-			}
-			// The panel and its backdrop are positioned against this wrapper rather
-			// than portalled to the body, so the rectangle they cover is the
-			// transcript's own: no header height, composer height or strip height
-			// to measure, and two of those change because of this very feature.
-			// Dimming stops at this rectangle's edges, which is what leaves the
-			// composer, the strip and the header lit and usable. `relative`
-			// belongs here and not on `MessageList`, whose empty-conversation
-			// branches have no `relative` of their own for the panel to escape
-			// through.
-			//
-			// Living in this branch also means the panel cannot be drawn over an
-			// overlay or a skeleton without anyone having to remember to say so.
+	// What the transcript region shows. Rendered whether or not an overlay is
+	// up: an overlay covers this, it no longer replaces it.
+	const renderTranscript = () => {
+		// A read the server refused, said out loud rather than left as an empty
+		// transcript: the reader would otherwise conclude the conversation was
+		// empty, which is the one thing a failure must not be allowed to say.
+		if (
+			view &&
+			viewedSession &&
+			(viewedSession.isMissing || viewedSession.error)
+		) {
 			return (
-				<div className="relative flex min-h-0 flex-1 flex-col">
-					{/* The list is covered, never unmounted: its scroll position is
-					    what the user gets back on closing the panel, and re-mounting
-					    would reload the history and lose it. `inert` rather than
-					    `pointer-events-none`, because with no focus trap above them
-					    every dimmed button would otherwise still be in the Tab order
-					    — ahead of the panel — and still in the accessibility tree,
-					    which for a conversation the backdrop has plainly put out of
-					    reach would be a lie. */}
-					<div
-						ref={transcriptRef}
-						inert={answerPanelShown}
-						className="flex min-h-0 flex-1 flex-col"
-					>
-						<MessageList
-							key={sessionId}
-							ref={messageListRef}
-							sessionId={sessionId}
-							messages={messages}
-							hasMoreHistory={hasMoreHistory}
-							isLoadingMoreHistory={isLoadingMoreHistory}
-							historyError={historyError}
-							loadedHistoryPages={loadedHistoryPages}
-							onLoadMoreHistory={loadMoreHistory}
-							isCodex={agentType === "codex"}
-							// The openers a transcript carries for answering back, all
-							// withheld on a viewed session for the one reason: there is no
-							// process there to hear any of them. Each card already draws
-							// itself without a control when it is given none — a pending
-							// card that offers nothing is the truth here, not the dead end
-							// it would be in a live session. The question card is the one
-							// that needs this: its status comes from the records, not from
-							// the turn, so "Answer this" otherwise survives into a screen
-							// whose answer panel is not rendered at all. The other two are
-							// the same statement made where it cannot drift.
-							onPermissionRespond={
-								isReadOnly ? undefined : handlePermissionRespond
-							}
-							onAnswerQuestion={isReadOnly ? undefined : handleAnswerQuestion}
-							onHintClick={isReadOnly ? undefined : handleSend}
-							isReadOnly={isReadOnly}
-							promptError={promptError ?? undefined}
-							onOpenWorkDetail={onOpenWorkDetail}
-							onOpenFile={onOpenFile}
-							forkedFromSessionId={forkedFromSessionId}
-							onOpenSession={onSelectSession}
-							// Forking without a way to open the result would leave the user in
-							// the parent with no sign anything happened, so the menu waits for
-							// a host that can navigate. Today that withholds the whole slot,
-							// fork being the only row in the menu; a second action needing no
-							// navigation would move this gate onto fork's own row instead
-							// (docs/session-fork-ui.md, "Which rows reserve a slot").
-							onForkMessage={
-								!isReadOnly && onSelectSession && forkSupport !== "none"
-									? handleStartFork
-									: undefined
-							}
-						/>
-					</div>
-					{answerPanelShown && (
-						<AnswerPanel
-							sessionId={sessionId}
-							unanswered={unanswered}
-							anchorRequestId={answerAnchor?.requestId}
-							takeFocus={answerAnchor !== null}
-							onSend={handleSendAnswers}
-							onClose={handleCloseAnswerPanel}
-							onFocusChange={setAnswerPanelFocused}
-						/>
-					)}
+				<div
+					role="alert"
+					className="flex min-h-0 flex-1 items-center justify-center px-6 text-center text-sm text-th-text-muted"
+				>
+					{viewedSession.isMissing
+						? `This session is not in "${view.label}" any more.`
+						: viewedSession.error}
 				</div>
 			);
 		}
+		// Defer mounting until history loads so initial scroll-to-bottom works.
+		// An unresolved session waits here too, so a switch shows the destination
+		// empty rather than the previous session's messages.
+		if (isChatPending) {
+			return <ChatSkeleton showRows={showSkeleton} />;
+		}
+		return (
+			<MessageList
+				key={sessionId}
+				ref={messageListRef}
+				sessionId={sessionId}
+				messages={messages}
+				hasMoreHistory={hasMoreHistory}
+				isLoadingMoreHistory={isLoadingMoreHistory}
+				historyError={historyError}
+				loadedHistoryPages={loadedHistoryPages}
+				onLoadMoreHistory={loadMoreHistory}
+				isCodex={agentType === "codex"}
+				// The openers a transcript carries for answering back, all
+				// withheld on a viewed session for the one reason: there is no
+				// process there to hear any of them. Each card already draws
+				// itself without a control when it is given none — a pending
+				// card that offers nothing is the truth here, not the dead end
+				// it would be in a live session. The question card is the one
+				// that needs this: its status comes from the records, not from
+				// the turn, so "Answer this" otherwise survives into a screen
+				// whose answer panel is not rendered at all. The other two are
+				// the same statement made where it cannot drift.
+				onPermissionRespond={isReadOnly ? undefined : handlePermissionRespond}
+				onAnswerQuestion={isReadOnly ? undefined : handleAnswerQuestion}
+				onHintClick={isReadOnly ? undefined : handleSend}
+				isReadOnly={isReadOnly}
+				promptError={promptError ?? undefined}
+				onOpenWorkDetail={onOpenWorkDetail}
+				onOpenFile={onOpenFile}
+				forkedFromSessionId={forkedFromSessionId}
+				onOpenSession={onSelectSession}
+				// Forking without a way to open the result would leave the user in
+				// the parent with no sign anything happened, so the menu waits for
+				// a host that can navigate. Today that withholds the whole slot,
+				// fork being the only row in the menu; a second action needing no
+				// navigation would move this gate onto fork's own row instead
+				// (docs/session-fork-ui.md, "Which rows reserve a slot").
+				onForkMessage={
+					!isReadOnly && onSelectSession && forkSupport !== "none"
+						? handleStartFork
+						: undefined
+				}
+			/>
+		);
+	};
 
+	const renderOverlay = (overlay: NonNullable<OverlayState>) => {
 		switch (overlay.type) {
 			case "diff":
 				return (
@@ -900,6 +893,74 @@ function ChatPanel({
 				);
 		}
 	};
+
+	// The panel and its backdrop are positioned against this wrapper rather than
+	// portalled to the body, so the rectangle they cover is the transcript's own:
+	// no header height, composer height or strip height to measure, and two of
+	// those change because of this very feature. Dimming stops at this
+	// rectangle's edges, which is what leaves the composer, the strip and the
+	// header lit and usable. `relative` belongs here and not on `MessageList`,
+	// whose empty-conversation branches have no `relative` of their own for the
+	// panel to escape through.
+	//
+	// An overlay is drawn in the same rectangle, over the same transcript, for
+	// the same reason the answer panel is: what it covers is a conversation the
+	// user is coming back to.
+	const renderContent = () => (
+		<div className="relative flex min-h-0 flex-1 flex-col">
+			{/* The list is covered, never unmounted — by the answer panel and by
+			    an overlay alike. Its scroll position, its expanded cards and its
+			    highlight ring are what the user gets back on closing whatever
+			    covered it, and none of those live anywhere but in this subtree;
+			    re-mounting loses all three. (The history does survive a re-mount
+			    — `useChatMessages` is held here, above the cover — so what a
+			    remount costs is the reader's place, not a reload.)
+
+			    Under an overlay it is taken out of the flow rather than hidden
+			    with `display: none`: a scroll container with no box has no scroll
+			    position either, so `display: none` would throw away the very
+			    thing staying mounted is for. `absolute inset-0` keeps it the size
+			    of the rectangle the overlay now fills, so the height it comes
+			    back to is the height it had — and `visibility: hidden` keeps that
+			    box while taking it off the screen and out of the accessibility
+			    tree.
+
+			    `inert` rather than `pointer-events-none`, because with no focus
+			    trap above them every covered button would otherwise still be in
+			    the Tab order — ahead of what is covering them — and still in the
+			    accessibility tree, which for a conversation plainly put out of
+			    reach would be a lie.
+
+			    Neither of those reaches what the transcript portals out of
+			    itself — a message's fork menu — so `CoveredSurface` says the
+			    same thing down the React tree, which a portal does not leave. */}
+			<div
+				ref={transcriptRef}
+				inert={transcriptInert}
+				className={
+					transcriptCovered
+						? "invisible absolute inset-0 flex flex-col"
+						: "flex min-h-0 flex-1 flex-col"
+				}
+			>
+				<CoveredSurface covered={transcriptCovered}>
+					{renderTranscript()}
+				</CoveredSurface>
+			</div>
+			{overlay && renderOverlay(overlay)}
+			{answerPanelDrawn && (
+				<AnswerPanel
+					sessionId={sessionId}
+					unanswered={unanswered}
+					anchorRequestId={answerAnchor?.requestId}
+					takeFocus={answerAnchor !== null}
+					onSend={handleSendAnswers}
+					onClose={handleCloseAnswerPanel}
+					onFocusChange={setAnswerPanelFocused}
+				/>
+			)}
+		</div>
+	);
 
 	return (
 		<SessionViewProvider value={view}>
@@ -1010,21 +1071,31 @@ function ChatPanel({
 					</div>
 				)}
 				{/* Gone if the anchor left the transcript — a session deleted, a
-				    worktree switched away from. There is nothing left to confirm. */}
-				{forkTarget && forkAnchor && (
-					<ForkSessionSheet
-						anchor={forkAnchor.message}
-						droppedCount={forkAnchor.droppedCount}
-						agentType={agentType}
-						defaultTitle={forkTarget.defaultTitle}
-						isForking={isForking}
-						error={forkError}
-						onFork={(title) =>
-							handleFork(forkAnchor.anchorSeq, title, forkAnchor.droppedText)
-						}
-						onClose={handleCloseFork}
-					/>
-				)}
+				    worktree switched away from. There is nothing left to confirm.
+
+				    Raised from the transcript, held here only because a fork is a
+				    session-level request belonging to no one bubble — so it is
+				    the transcript's cover that decides it, not this bar's. Inside
+				    the same `CoveredSurface` it closes when an overlay takes the
+				    chat, which also clears `forkTarget`: coming back hands the
+				    reader their conversation, not a confirmation of something
+				    they navigated away from. */}
+				<CoveredSurface covered={transcriptCovered}>
+					{forkTarget && forkAnchor && (
+						<ForkSessionSheet
+							anchor={forkAnchor.message}
+							droppedCount={forkAnchor.droppedCount}
+							agentType={agentType}
+							defaultTitle={forkTarget.defaultTitle}
+							isForking={isForking}
+							error={forkError}
+							onFork={(title) =>
+								handleFork(forkAnchor.anchorSeq, title, forkAnchor.droppedText)
+							}
+							onClose={handleCloseFork}
+						/>
+					)}
+				</CoveredSurface>
 				{/* The keyboard is in one field at a time, and while this is
 				    collapsed it is in the card's. Unmounting is safe for the same
 				    reason the overlays above may do it: a draft has to outlive its
