@@ -557,6 +557,21 @@ as one burst.
   `reconnecting`, leaving a healthy socket that nothing can reach and that
   `disconnect()` can no longer close. `disconnect()` does its own subscription
   cleanup for the same reason, rather than relying on `onclose` to pass by later.
+- `connect()` closes whatever socket it still holds before opening a new one, and
+  settles it the way `disconnect()` does. `reconnecting` is also the status of an
+  attempt whose socket is open and still waiting on its `auth` reply, so a
+  recovery event can start a second attempt over one that is not dead yet. Left
+  open, the first socket's reply would either connect the store on a socket it no
+  longer holds, or — since every socket's RPC client numbers its requests from 1 —
+  arrive with the id the replacement's own `auth` is waiting on and answer it.
+  Closing it is enough for the second case because a browser delivers no message
+  once `close()` has been called; rejecting its pending `auth` settles the first,
+  and does so without touching the store: the rejection carries
+  `DefaultErrorCode` (0), which the next paragraph explains is not an auth
+  failure, so the old attempt only closes its own socket.
+  web-cluster reaches the same place differently — its `connectInternal` detaches
+  the old socket's handlers before closing it, so a late reply has nowhere to go
+  and its `auth` times out into the same close-only path.
 
 **A timed-out `auth` is not an auth failure.** A socket can open and then go
 silent — the relay tunnel behind it dies a moment later, or the phone's own link
