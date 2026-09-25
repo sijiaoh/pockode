@@ -163,9 +163,14 @@ box and 16–19s under load; under load, `queryClient.test.ts` next to it timed
 out outright. That is not a slow test either. Import statically, and reset state
 through what the module already offers — a factory, an exported reset — which is
 all either file turned out to need. Only a test that really needs a fresh module
-instance per case keeps `resetModules`, and it imports the module once in a
-`beforeAll` first: the transform survives `resetModules`, so the hook pays it
-once and every test after only re-evaluates.
+instance per case keeps `resetModules`, and it also imports the module
+statically, as a bare `import "./module"` at the top: the transform survives
+`resetModules`, so the import phase pays it once and every test after only
+re-evaluates. Not a `beforeAll` doing the same `await import()` — that moves the
+cost into `hookTimeout`, which is as tight as `testTimeout`, and a hook that
+times out skips the whole file rather than failing one test.
+A warm-up `beforeAll` in `web/src/lib/authStore.test.ts` timed out that way
+under load and took all seven of its tests with it.
 
 Taking the `await import()` out can turn a later test red. It was also
 a yield: one in an `afterEach` let a previous test's leftover async continuation

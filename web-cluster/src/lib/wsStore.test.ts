@@ -1,5 +1,10 @@
 import type { AuthCredential } from "@pockode/shared";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+// Every case loads the store fresh, since its connection state lives in the
+// module. Importing it here as well pays the transform, which survives
+// resetModules, in the untimed import phase instead of in the first case's
+// or a hook's timeout.
+import "./wsStore";
 
 vi.mock("@pockode/shared", async (importOriginal) => ({
 	...(await importOriginal<typeof import("@pockode/shared")>()),
