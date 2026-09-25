@@ -1,5 +1,9 @@
 export { ConfirmDialog, type ConfirmDialogProps } from "./ConfirmDialog.tsx";
 export {
+	CoveredSurface,
+	type CoveredSurfaceProps,
+} from "./CoveredSurface.tsx";
+export {
 	ReconnectBanner,
 	type ReconnectBannerProps,
 } from "./ReconnectBanner.tsx";

@@ -1,6 +1,7 @@
 import { useEffect, useId, useRef } from "react";
 import { createPortal } from "react-dom";
 import { useLockBodyScroll } from "../hooks/useLockBodyScroll.ts";
+import { useCloseWhenCovered } from "./CoveredSurface.tsx";
 
 export interface ConfirmDialogProps {
 	title: string;
@@ -32,6 +33,10 @@ export function ConfirmDialog({
 	const titleId = useId();
 
 	useLockBodyScroll();
+	// Portalled to the body, so the surface that raised it cannot take it away
+	// by covering itself; cancelling is what a question about a surface the
+	// user has left comes to (CoveredSurface).
+	useCloseWhenCovered(onCancel);
 
 	useEffect(() => {
 		cancelButtonRef.current?.focus();

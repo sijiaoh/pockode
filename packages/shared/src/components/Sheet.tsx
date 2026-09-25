@@ -2,6 +2,7 @@ import { type ReactNode, useEffect, useId, useRef } from "react";
 import { createPortal } from "react-dom";
 import { useLockBodyScroll } from "../hooks/useLockBodyScroll.ts";
 import { useIsExpanded } from "../hooks/useResponsive.ts";
+import { useCloseWhenCovered } from "./CoveredSurface.tsx";
 
 export interface SheetProps {
 	title: string;
@@ -104,6 +105,10 @@ export function Sheet({
 
 	useLockBodyScroll();
 	useSheetFocus(sheetRef);
+	// This sheet is portalled to the body, so nothing its opener does to put
+	// itself away reaches it. Closing with the surface it was raised from is
+	// the sheet's own job, and the only one it can be (CoveredSurface).
+	useCloseWhenCovered(onClose);
 
 	/**
 	 * Keeps Tab inside the sheet. The backdrop already swallows every tap meant

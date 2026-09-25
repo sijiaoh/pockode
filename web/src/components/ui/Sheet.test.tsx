@@ -1,4 +1,4 @@
-import { ConfirmDialog, Sheet } from "@pockode/shared";
+import { ConfirmDialog, CoveredSurface, Sheet } from "@pockode/shared";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useEffect, useRef, useState } from "react";
@@ -346,6 +346,65 @@ describe("Sheet", () => {
 			await user.click(screen.getByRole("button", { name: "Fork from here" }));
 
 			expect(document.body.style.overflow).toBe("hidden");
+		});
+	});
+	// A sheet is portalled to `document.body`, so nothing its host does to put
+	// itself away — `visibility: hidden`, `inert`, either of which travels down
+	// the DOM — reaches it. `CoveredSurface` is the same fact sent down the
+	// React tree, which the portal did not leave.
+	describe("a covered surface", () => {
+		function Covering({ covered }: { covered: boolean }) {
+			const [open, setOpen] = useState(true);
+			return (
+				<CoveredSurface covered={covered}>
+					{open && (
+						<Sheet title="Agent message" onClose={() => setOpen(false)}>
+							<button type="button">Fork from here</button>
+						</Sheet>
+					)}
+				</CoveredSurface>
+			);
+		}
+
+		it("closes a sheet raised from a surface that gets covered", () => {
+			const { rerender } = render(<Covering covered={false} />);
+			expect(screen.queryByRole("dialog")).toBeInTheDocument();
+
+			rerender(<Covering covered />);
+			expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+
+			// Closed, not hidden: the host's open flag is down, so uncovering
+			// hands back the surface rather than the sheet that was on it.
+			rerender(<Covering covered={false} />);
+			expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+		});
+
+		// `dismissible` refuses an accidental dismissal while an operation is in
+		// flight. Being covered is not one, and refusing here would leave a sheet
+		// over the covering surface with its backdrop, its Escape and its close
+		// button all turned off — no way out at all.
+		it("covers one that is refusing to be dismissed", () => {
+			function Busy({ covered }: { covered: boolean }) {
+				const [open, setOpen] = useState(true);
+				return (
+					<CoveredSurface covered={covered}>
+						{open && (
+							<Sheet
+								title="Fork session"
+								dismissible={false}
+								onClose={() => setOpen(false)}
+							>
+								<button type="button">Fork</button>
+							</Sheet>
+						)}
+					</CoveredSurface>
+				);
+			}
+			const { rerender } = render(<Busy covered={false} />);
+			expect(screen.queryByRole("dialog")).toBeInTheDocument();
+
+			rerender(<Busy covered />);
+			expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
 		});
 	});
 });
