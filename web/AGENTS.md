@@ -100,6 +100,7 @@ export default Dialog;
 - 例外是长列表：`getByRole` 带 `name` 会为页面上每个同 role 元素算一次无障碍名，按查询次数收费——十几个按钮就足以让一次查询花掉数秒，再乘上机器负载就逼近 `testTimeout`。这种场景按 label / text 找行，并在测试里写明为什么（机制、判据与实测见 [docs/testing.md](../docs/testing.md#a-test-that-really-is-slow)）
 - 不测 state/props/生命周期，只测用户可见行为
 - 适度测试，不追求 100% 覆盖
+- 交互默认用 `userEvent`（见下例）。唯一的例外是冻住的假时钟（`vi.useFakeTimers()`）场景：`userEvent` 在冻住的 vitest 假时钟下会死锁（`shouldAdvanceTime` 不死锁，但把墙钟放了回来），改用 `fireEvent` 逐字符输入并显式推进时钟——原因与写法见 [docs/testing.md](../docs/testing.md#frontend-a-debounce-is-yours-to-run-out)，别把这类用例「修回」`userEvent`
 
 ```tsx
 import { render, screen } from "@testing-library/react";

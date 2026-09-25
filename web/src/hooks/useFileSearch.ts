@@ -14,7 +14,12 @@ export const FILE_SEARCH_QUERY_KEY = "file-search";
  */
 const FILE_SEARCH_MAX_RESULTS = 100;
 
-const DEBOUNCE_MS = 300;
+/**
+ * Exported because `FilesTab.test.tsx` types against a fake clock and has to
+ * run exactly this wait out. A copy of the number there would keep passing
+ * while drifting from this one, and then assert nothing.
+ */
+export const FILE_SEARCH_DEBOUNCE_MS = 300;
 
 // Scanning file contents is far more expensive than matching names, so it waits
 // for a longer query before firing.
@@ -72,7 +77,7 @@ export function useFileSearch(query: string, active: boolean): FileSearchState {
 	const mode: FileSearchMode = searchContent ? "content" : "name";
 	const minQueryLength = MIN_QUERY_LENGTH[mode];
 
-	const debouncedQuery = useDebouncedValue(query, DEBOUNCE_MS);
+	const debouncedQuery = useDebouncedValue(query, FILE_SEARCH_DEBOUNCE_MS);
 	const requestedQuery = debouncedQuery.trim();
 	const enabled = active && requestedQuery.length >= minQueryLength;
 

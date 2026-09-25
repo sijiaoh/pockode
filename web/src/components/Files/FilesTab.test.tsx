@@ -10,6 +10,7 @@ import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { contentsQueryKey } from "../../hooks/useContents";
+import { FILE_SEARCH_DEBOUNCE_MS } from "../../hooks/useFileSearch";
 import { useFilesSearchStore } from "../../lib/filesSearchStore";
 import { UploadError, uploadFile } from "../../lib/fileUpload";
 import { uploadActions } from "../../lib/uploadStore";
@@ -158,13 +159,48 @@ function result(paths: string[], truncated = false): FileSearchResult {
 	};
 }
 
-// Every case types into the debounced input and waits for a query round trip,
-// which outruns both the default test timeout and the 1s async-query timeout on
-// a loaded machine.
-const SLOW = { timeout: 10_000 };
+/**
+ * Nothing in this block may depend on real time, which rules out `userEvent`
+ * here: it awaits a real zero-delay timer between keystrokes, and on a loaded
+ * machine those gaps stretch into seconds — far past the debounce — so the
+ * hook fires a search for "a" and one for "ap" on the way to "app", and what
+ * the last call holds becomes a matter of how busy the box was. `fireEvent`
+ * takes no time of its own, so the gap between two keystrokes is only ever
+ * what the case below asks for.
+ */
+function typeSearch(text: string): HTMLElement {
+	const input = screen.getByLabelText("Search files");
+	for (let i = 1; i <= text.length; i += 1) {
+		fireEvent.change(input, { target: { value: text.slice(0, i) } });
+		// Typing is not instantaneous, and a debounce that did not restart on
+		// each keystroke would fire partway through the word. Two thirds of it
+		// is short enough that a working one never does, and long enough that
+		// "app" spans more than one debounce — at a third, the word is done
+		// before a timer armed by its first key runs out, and that case passes.
+		act(() => {
+			vi.advanceTimersByTime((FILE_SEARCH_DEBOUNCE_MS * 2) / 3);
+		});
+	}
+	return input;
+}
 
-describe("FilesTab search", { timeout: 20_000 }, () => {
+/** Runs the debounce out and lets the search that follows it render. */
+async function settleSearch() {
+	await act(async () => {
+		await vi.advanceTimersByTimeAsync(FILE_SEARCH_DEBOUNCE_MS);
+	});
+	// The debounce is only the first hop: the request resolves and react-query
+	// hands its result back through a zero-delay timer of its own. The second
+	// `act` is not a spare tick — React commits on leaving one, so this is where
+	// the render carrying the results happens.
+	await act(async () => {
+		await vi.advanceTimersByTimeAsync(0);
+	});
+}
+
+describe("FilesTab search", () => {
 	beforeEach(() => {
+		vi.useFakeTimers();
 		searchFiles.mockReset();
 		localStorage.clear();
 		useFilesSearchStore.setState({
@@ -173,35 +209,35 @@ describe("FilesTab search", { timeout: 20_000 }, () => {
 		});
 	});
 
+	afterEach(() => {
+		vi.useRealTimers();
+	});
+
 	it("shows results while searching and returns to the tree when cleared", async () => {
-		const user = userEvent.setup();
 		searchFiles.mockResolvedValue(result(["src/app.ts"]));
 		renderFilesTab();
 
 		expect(screen.getByText("file tree")).toBeInTheDocument();
 
-		await user.type(screen.getByLabelText("Search files"), "app");
+		typeSearch("app");
+		await settleSearch();
 
 		expect(
-			await screen.findByRole(
-				"button",
-				{ name: "Open file: src/app.ts" },
-				SLOW,
-			),
+			screen.getByRole("button", { name: "Open file: src/app.ts" }),
 		).toBeInTheDocument();
 		expect(screen.getByText("1 file")).toBeInTheDocument();
 
-		await user.click(screen.getByLabelText("Clear search"));
+		fireEvent.click(screen.getByLabelText("Clear search"));
 
-		await waitFor(() => {
-			expect(
-				screen.queryByRole("button", { name: "Open file: src/app.ts" }),
-			).not.toBeInTheDocument();
-		}, SLOW);
+		// Asserted without moving the clock: an empty field leaves search mode on
+		// the keystroke, or the tree would stay hidden for the debounce first.
+		expect(
+			screen.queryByRole("button", { name: "Open file: src/app.ts" }),
+		).not.toBeInTheDocument();
+		expect(screen.getByText("file tree")).toBeInTheDocument();
 	});
 
-	it("lets Escape reach the sidebar only once there is nothing to clear", async () => {
-		const user = userEvent.setup();
+	it("lets Escape reach the sidebar only once there is nothing to clear", () => {
 		const onDocumentEscape = vi.fn();
 		const listener = (e: KeyboardEvent) => {
 			if (e.key === "Escape") onDocumentEscape();
@@ -211,16 +247,16 @@ describe("FilesTab search", { timeout: 20_000 }, () => {
 
 		try {
 			renderFilesTab();
-			const input = screen.getByLabelText("Search files");
+			const input = typeSearch("app");
 
-			await user.type(input, "app{Escape}");
+			fireEvent.keyDown(input, { key: "Escape" });
 
 			expect(input).toHaveValue("");
 			// The sidebar's own Escape listener must not fire, or the whole panel
 			// would close instead of just the search.
 			expect(onDocumentEscape).not.toHaveBeenCalled();
 
-			await user.type(input, "{Escape}");
+			fireEvent.keyDown(input, { key: "Escape" });
 
 			expect(onDocumentEscape).toHaveBeenCalled();
 		} finally {
@@ -229,13 +265,15 @@ describe("FilesTab search", { timeout: 20_000 }, () => {
 	});
 
 	it("defaults to respecting gitignore and searching names", async () => {
-		const user = userEvent.setup();
 		searchFiles.mockResolvedValue(result([]));
 		renderFilesTab();
 
-		await user.type(screen.getByLabelText("Search files"), "app");
+		typeSearch("app");
+		await settleSearch();
 
-		await waitFor(() => expect(searchFiles).toHaveBeenCalled(), SLOW);
+		// Once, for the whole word: the prefixes typed on the way to "app" are
+		// what the debounce is there to keep off the wire.
+		expect(searchFiles).toHaveBeenCalledTimes(1);
 		expect(lastSearchParams()).toMatchObject({
 			query: "app",
 			mode: "name",
@@ -252,82 +290,64 @@ describe("FilesTab search", { timeout: 20_000 }, () => {
 	});
 
 	it("re-runs the search with the new option when a chip is toggled", async () => {
-		const user = userEvent.setup();
 		searchFiles.mockResolvedValue(result([]));
 		renderFilesTab();
 
-		await user.type(screen.getByLabelText("Search files"), "app");
-		await waitFor(() => expect(searchFiles).toHaveBeenCalled(), SLOW);
+		typeSearch("app");
+		await settleSearch();
+		expect(searchFiles).toHaveBeenCalled();
 
-		await user.click(screen.getByRole("button", { name: /Contents/ }));
+		fireEvent.click(screen.getByRole("button", { name: /Contents/ }));
+		await settleSearch();
 
-		await waitFor(
-			() => expect(lastSearchParams()).toMatchObject({ mode: "content" }),
-			SLOW,
-		);
+		expect(lastSearchParams()).toMatchObject({ mode: "content" });
 		expect(localStorage.getItem("files-search-content")).toBe("true");
 	});
 
 	it("offers to widen the search when nothing matches", async () => {
-		const user = userEvent.setup();
 		searchFiles.mockResolvedValue(result([]));
 		renderFilesTab();
 
-		await user.type(screen.getByLabelText("Search files"), "app");
+		typeSearch("app");
+		await settleSearch();
 
-		await user.click(
-			await screen.findByRole(
-				"button",
-				{ name: "Search ignored files too" },
-				SLOW,
-			),
+		fireEvent.click(
+			screen.getByRole("button", { name: "Search ignored files too" }),
 		);
+		await settleSearch();
 
-		await waitFor(
-			() =>
-				expect(lastSearchParams()).toMatchObject({ respect_gitignore: false }),
-			SLOW,
-		);
+		expect(lastSearchParams()).toMatchObject({ respect_gitignore: false });
 	});
 
 	it("surfaces search failures with a retry", async () => {
-		const user = userEvent.setup();
 		searchFiles.mockRejectedValue(new Error("search backend exploded"));
 		renderFilesTab();
 
-		await user.type(screen.getByLabelText("Search files"), "app");
+		typeSearch("app");
+		await settleSearch();
 
-		expect(
-			await screen.findByText("Search failed", undefined, SLOW),
-		).toBeInTheDocument();
+		expect(screen.getByText("Search failed")).toBeInTheDocument();
 		expect(screen.getByText("search backend exploded")).toBeInTheDocument();
 
 		searchFiles.mockResolvedValue(result(["src/app.ts"]));
-		await user.click(screen.getByRole("button", { name: "Retry" }));
+		fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+		await settleSearch();
 
 		expect(
-			await screen.findByRole(
-				"button",
-				{ name: "Open file: src/app.ts" },
-				SLOW,
-			),
+			screen.getByRole("button", { name: "Open file: src/app.ts" }),
 		).toBeInTheDocument();
 	});
 
 	it("waits for two characters before searching file contents", async () => {
-		const user = userEvent.setup();
 		searchFiles.mockResolvedValue(result([]));
 		useFilesSearchStore.setState({ searchContent: true });
 		renderFilesTab();
 
-		await user.type(screen.getByLabelText("Search files"), "a");
+		typeSearch("a");
+		await settleSearch();
 
 		expect(
-			await screen.findByText(
-				"Type at least 2 characters to search file contents",
-				undefined,
-				SLOW,
-			),
+			screen.getByText("Type at least 2 characters to search file contents"),
 		).toBeInTheDocument();
 		expect(searchFiles).not.toHaveBeenCalled();
 	});

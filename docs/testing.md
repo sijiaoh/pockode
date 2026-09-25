@@ -16,7 +16,7 @@ Three of them are red. The fourth is the dangerous one, because it is green.
 | Kind | How it looks | What to change | Seen here |
 |---|---|---|---|
 | **The machine is oversubscribed** | More failures the busier the box; a different file fails each run; every failure is a timeout, none is an assertion; serial runs are all green | The runner's own concurrency. Give the timeout enough room for scheduling, not for slow tests — for the one measured exception, see [A test that really is slow](#a-test-that-really-is-slow) | frontend vitest; the `ws` 12 MiB deflate test |
-| **The test assumes a schedule** | Only fails under load, but always at the same line; there is a `time.Sleep` waiting out something | Wait for the signal instead. **Not** a longer sleep — unless the budget is a backstop rather than the subject, as in the `relay` case below | `agentrole` `TestExternalChange_NotifiesListener`; `relay` `TestUplinkDialOptionsDoNotTruncateTheTunnel` |
+| **The test assumes a schedule** | Only fails under load, but always at the same line; there is a `time.Sleep` waiting out something, or real time elapsing where a debounce or timer is counting | Wait for the signal instead — or, for a timer the code under test owns, [move its clock yourself](#frontend-a-debounce-is-yours-to-run-out). **Not** a longer sleep — unless the budget is a backstop rather than the subject, as in the `relay` case below | `agentrole` `TestExternalChange_NotifiesListener`; `relay` `TestUplinkDialOptionsDoNotTruncateTheTunnel`; `web` `FilesTab search` |
 | **The test fabricates an unreachable state** | Barely correlates with load; fails at a stable rate even on an idle machine running that package alone | Make the test drive a state the implementation can actually reach | `agent/claude` `TestBackgroundWait_OutputPushesTheDeadlineOut` |
 | **Silent pass** | Green. Always green | Make the test assert the precondition it depends on, then mutation-verify | `agent/claude` `TestBackgroundWait_SurvivesAnEmptyTaskList` |
 
@@ -46,10 +46,26 @@ unrelated. Match the message before touching a number.
 |---|---|---|
 | `Test timed out in <n>ms` | `testTimeout` / `hookTimeout` | `packages/shared/vitest-runtime.js` |
 | `[vitest-pool-runner]: Timeout waiting for worker to respond` | `maxWorkers` — the worker pool is starved, no individual test is slow. `poolOptions` and `fileParallelism` are the other levers, both left at their defaults | `packages/shared/vitest-runtime.js` |
-| testing-library's `Unable to find an element …` with a DOM dump, from a `findBy*` | `asyncUtilTimeout` — **defaults to 1000ms** however high `testTimeout` is, and is enforced by testing-library, not vitest | `web/src/test/setup.ts` |
+| testing-library's `Unable to find an element …` with a DOM dump, from a `findBy*` | `asyncUtilTimeout` — testing-library's own default is 1000ms however high `testTimeout` is, and it is enforced by testing-library, not vitest. `web` raises it to 5000ms, deliberately below `testTimeout` | `web/src/test/setup.ts` |
 
 The third one catches people out: raising `testTimeout` does nothing for a
-`findBy*` that already gave up.
+`findBy*` that already gave up, and the reverse holds too.
+
+The same split applies to the overrides written on a test, and mixing them up
+is how a file ends up carrying both numbers without saying which is which:
+
+- `describe(name, { timeout: n }, …)` or `it(name, fn, { timeout: n })` is
+  `testTimeout`. Written as `20_000` it is a no-op — that *is* the shared
+  default — and the comment usually beside it ("outruns the default 5s") states
+  a default that no longer holds. Delete it rather than copy it; several files
+  still carry one.
+- `findBy*(…, …, { timeout: n })` and `waitFor(fn, { timeout: n })` are
+  `asyncUtilTimeout`, a different knob with a different default. A value there
+  is a real change, and must stay below `testTimeout` or the DOM dump is lost to
+  a bare `Test timed out`.
+
+Neither is the fix when the thing being waited for is a debounce: see the next
+section.
 
 The chosen values, and the measurements each was derived from, are in the
 comments at those two files. What is worth saying here is the conclusion none of
@@ -133,6 +149,57 @@ text query can see, still turns one test red.
 `web/src/components/Git/BranchSheet.test.tsx` does this with "names each row by
 its branch", and `web/src/components/ui/Sheet.test.tsx` with "names the box by
 its title and the close button by its job".
+
+## Frontend: a debounce is yours to run out
+
+A test that types into a debounced input and then waits for the result is a
+kind-2 test even when it has no sleep in it. The debounce is counting real time,
+and so is everything around it: under load `userEvent` spends seconds per
+keystroke, far past a few hundred milliseconds of debounce, so the hook fires
+for every prefix on the way to the word, and which request the assertion sees
+depends on how busy the machine was. More `timeout` only makes it wait longer
+for an answer that was never fixed. The debounce is the code's own timer, so
+the test can own its clock instead: `vi.useFakeTimers()`, and advance it
+explicitly. `web/src/components/Files/FilesTab.test.tsx` is the worked example.
+
+Three things about that are not visible from the code:
+
+- **`userEvent` deadlocks under vitest's fake timers.** Every call ends by
+  awaiting a zero-delay `setTimeout` inside Testing Library's `asyncWrapper`,
+  which advances that timer itself only when it detects Jest's fake clock, never
+  vitest's. Freeze the clock and `user.type` never returns. user-event's own
+  remedies do not reach that timer — `setup({ advanceTimers:
+  vi.advanceTimersByTime })` hangs, and so does adding `delay: null` — and
+  `shouldAdvanceTime: true` lets wall time back in, which undoes the point.
+  Type with `fireEvent` one character at a time and move the clock between
+  characters with `act(() => vi.advanceTimersByTime(…))`: `fireEvent` takes no
+  time of its own, so each gap is exactly what the test asked for. This is the
+  one deliberate exception to `userEvent` in `web/AGENTS.md`.
+- **The gap between keystrokes decides which broken debounce the test can
+  see.** With no gap, fake time never passes mid-word, so even a 0ms debounce
+  sees only the finished word — the first version of the `FilesTab` fix was
+  that silent pass, and only [mutating the hook](#verification-that-verifies)
+  showed it. The gap has two bounds. Below the debounce, so a working one never
+  fires mid-word. And long enough that the word spans *more* than one debounce
+  from its first key, or a timer that is armed once and never restarted fires
+  after the last key and passes too: typing "app" at a third of the debounce is
+  done at two thirds of it, which is exactly that case. `FilesTab` types at two
+  thirds, and the mutations it was checked against — no debounce, one shorter
+  than the gap, one that never restarts — each turn it red. Assert the call
+  count (`toHaveBeenCalledTimes(1)`), not only the last call's arguments.
+- **Import the duration; do not copy it.** A test that advances by its own
+  `300` keeps passing after the hook's number changes, and then tests nothing.
+  Export the constant from the module that owns it.
+
+After running the debounce out, one more `act` around a zero-length advance is
+needed before asserting: react-query hands the resolved result back through a
+zero-delay timer of its own, and React commits on leaving `act`. The hop count
+is fixed by that chain, not by the machine, so a missing hop fails every time,
+never intermittently.
+
+None of this touches kind 1. It takes the debounce and `userEvent` off the wall
+clock; a render that takes seconds on an oversubscribed box still does, and the
+answer to that remains [the worker count](#frontend-which-timeout-is-talking-to-you).
 
 ## Go: there is no equivalent knob
 
