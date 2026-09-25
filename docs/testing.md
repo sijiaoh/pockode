@@ -16,7 +16,7 @@ Three of them are red. The fourth is the dangerous one, because it is green.
 | Kind | How it looks | What to change | Seen here |
 |---|---|---|---|
 | **The machine is oversubscribed** | More failures the busier the box; a different file fails each run; every failure is a timeout, none is an assertion; serial runs are all green | The runner's own concurrency. Give the timeout enough room for scheduling, not for slow tests — for the one measured exception, see [A test that really is slow](#a-test-that-really-is-slow) | frontend vitest; the `ws` 12 MiB deflate test |
-| **The test assumes a schedule** | Only fails under load, but always at the same line; there is a `time.Sleep` waiting out something, or real time elapsing where a debounce or timer is counting | Wait for the signal instead — or, for a timer the code under test owns, [move its clock yourself](#frontend-a-debounce-is-yours-to-run-out). **Not** a longer sleep — unless the budget is a backstop rather than the subject, as in the `relay` case below | `agentrole` `TestExternalChange_NotifiesListener`; `relay` `TestUplinkDialOptionsDoNotTruncateTheTunnel`; `web` `FilesTab search` |
+| **The test assumes a schedule** | Only fails under load, but always at the same line; there is a `time.Sleep` waiting out something, or real time elapsing where a debounce or timer is counting, or a wait that is satisfied by [something drawn before what is asserted on](#frontend-wait-for-what-you-assert-on) | Wait for the signal instead — or, for a timer the code under test owns, [move its clock yourself](#frontend-a-debounce-is-yours-to-run-out). **Not** a longer sleep — unless the budget is a backstop rather than the subject, as in the `relay` case below | `agentrole` `TestExternalChange_NotifiesListener`; `relay` `TestUplinkDialOptionsDoNotTruncateTheTunnel`; `web` `FilesTab search`; `web` `InputBar` command palette |
 | **The test fabricates an unreachable state** | Barely correlates with load; fails at a stable rate even on an idle machine running that package alone | Make the test drive a state the implementation can actually reach | `agent/claude` `TestBackgroundWait_OutputPushesTheDeadlineOut` |
 | **Silent pass** | Green. Always green | Make the test assert the precondition it depends on, then mutation-verify | `agent/claude` `TestBackgroundWait_SurvivesAnEmptyTaskList` |
 
@@ -199,6 +199,33 @@ never intermittently.
 None of this touches kind 1. It takes the debounce and `userEvent` off the wall
 clock; a render that takes seconds on an oversubscribed box still does, and the
 answer to that remains [the worker count](#frontend-which-timeout-is-talking-to-you).
+
+## Frontend: wait for what you assert on
+
+The other frontend kind-2 shape has no timer in it at all. A component draws a
+container synchronously and fills it when a promise resolves; the test waits for
+the container, then reads the contents with a synchronous `getBy*`. The wait
+passes on its first check, so nothing ever waited for the promise, and whether
+the contents are there depends on how busy the machine was. Under load it fails
+at the same line, and at once: the `Unable to find …` comes from that `getBy*`,
+with the empty container in the DOM dump, not from a `findBy*` that ran out of
+time, so raising a timeout changes nothing.
+`web/src/components/Chat/InputBar.test.tsx` is the worked example. The command
+palette's listbox appears as soon as the input matches `/…`, but its options
+appear only once `listCommands` answers.
+
+- **Wait on the thing you assert on.** `await findAllByRole("option")`, not
+  `waitFor(listbox)` followed by `getAllByRole("option")`. A `waitFor` on the
+  container is right only when the container is the subject, as in a test that
+  checks whether the panel opens.
+- **An empty answer cannot be waited for on screen.** "Loaded, matched nothing"
+  and "not loaded yet" render the same thing, so no query can tell them apart.
+  Wait for the answer itself: `InputBar`'s `commandsLoaded()` asserts the mock
+  was called, then awaits the promise it returned inside `act`.
+- **To reproduce it deterministically, delay the mock.** Make the mock resolve
+  after a real delay of about 100ms. Every test with this shape then fails on
+  an idle machine, which shows you all of them at once instead of whichever one
+  happened to lose the race.
 
 ## Go: there is no equivalent knob
 
