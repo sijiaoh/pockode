@@ -77,7 +77,6 @@ All methods use JSON-RPC 2.0 over WebSocket. Work and agent_role methods are **a
 | `work.start` | `WorkStartParams` | `WorkDetailItem` | Atomic claim + session creation |
 | `work.stop` | `WorkStopParams` | `{}` | Stop a work item (any started, unclosed work → stopped) |
 | `work.reopen` | `WorkReopenParams` | `{}` | Reopen a closed work item (closed → active) |
-| `work.comment.list` | `WorkCommentListParams` | `{comments: Comment[]}` | List comments on a work item |
 | `work.detail.subscribe` | `WorkDetailSubscribeParams` | `{work, comments, usage, activity, pending_questions?, children, parent?}` | Subscribe to a single work item + comments + the token usage of it and its tasks ([why usage is here and not on `Work`](../code/work-system.md#usage-aggregation)) and the two relations its page draws ([why they are not read off the list](../code/work-system.md#the-list-holds-rows-the-detail-page-holds-the-item)) |
 | `work.detail.unsubscribe` | `{id}` | `{}` | Unsubscribe from work detail |
 | `work.list.subscribe` | `SubscribeParams` | `{items: WorkListItem[], stopped_hidden?, open_hidden?}` | Subscribe + get the **`Current` segment**, which holds no closed work ([what a row carries](#work-list-rows-vs-work-detail), [why it is a segment](#the-list-is-two-segments)) |
@@ -85,12 +84,12 @@ All methods use JSON-RPC 2.0 over WebSocket. Work and agent_role methods are **a
 | `work.list.earlier` | `{id}` | `{items: WorkListItem[]}` | The `Current` segment again with both group caps lifted |
 | `work.list.unsubscribe` | `{id}` | `{}` | Unsubscribe |
 
-Comments are read-only over WebSocket: `work.comment.list` has no `add` or
-`update` beside it. Writing one is an agent reporting on its own work, so it
-belongs to the MCP surface (`work_comment_add`, `work_comment_update`); a client
-that could edit one would be rewriting an agent's words in a record that carries
-no author field, with nothing left to tell the two apart
-([frontend.md](frontend.md#workdetailoverlay)).
+Comments are read-only over WebSocket: they arrive with
+`work.detail.subscribe`, and no method adds or updates one. Writing one is an
+agent reporting on its own work, so it belongs to the MCP surface
+(`work_comment_add`, `work_comment_update`); a client that could edit one would
+be rewriting an agent's words in a record that carries no author field, with
+nothing left to tell the two apart ([frontend.md](frontend.md#workdetailoverlay)).
 
 #### Agent Role
 
@@ -112,7 +111,6 @@ WorkDeleteParams          { id }
 WorkStartParams           { id }
 WorkStopParams            { id }
 WorkReopenParams          { id }
-WorkCommentListParams     { work_id }
 WorkDetailSubscribeParams { id, work_id }
 WorkListArchiveParams     { id, cursor?, limit? }   // id names the subscription, not a fresh query
 WorkListItem              { id, type, story_id?, agent_role_id?, title, status, activity, unanswered_questions?, wait?, session_id?, worktree?, updated_at }
