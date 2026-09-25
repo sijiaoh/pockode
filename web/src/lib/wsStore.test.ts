@@ -217,10 +217,7 @@ async function connectAndAuth(credential: AuthCredential = TEST_PASSWORD) {
 	expect(useWSStore.getState().status).toBe("connected");
 }
 
-// The first case in the file pays for importing the store and its dependencies,
-// which on a loaded machine outruns the 5s default and fails a test that does no
-// waiting of its own.
-describe("wsStore", { timeout: 20_000 }, () => {
+describe("wsStore", () => {
 	describe("connect", () => {
 		it("sets status to connecting then connected after auth", async () => {
 			const wsActions = await getWsActions();
