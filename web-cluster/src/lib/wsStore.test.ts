@@ -348,6 +348,45 @@ describe("wsStore reconnect", () => {
 		expect(mockWsInstances.length).toBe(1);
 		expect(useWSStore.getState().status).toBe("disconnected");
 	});
+
+	// Its answer could only come down the socket disconnect() let go of, and
+	// that socket's onclose is ignored, so nothing else would settle it. No
+	// timer is advanced: the rejection must come from disconnect() itself.
+	it("rejects pending requests on disconnect", async () => {
+		const useWSStore = await connectAndAuth();
+
+		const pending = useWSStore.getState().actions.listNodes();
+		const rejection = expect(pending).rejects.toThrow("Connection lost");
+
+		useWSStore.getState().actions.disconnect();
+
+		await rejection;
+	});
+
+	// Nothing answers a node RPC but the socket it went down, and node RPCs carry
+	// no timeout. No timer is advanced in either case: the rejection must come
+	// from the close or the replacement itself.
+	it("rejects pending requests when the socket closes unexpectedly", async () => {
+		const useWSStore = await connectAndAuth();
+
+		const pending = useWSStore.getState().actions.listNodes();
+		const rejection = expect(pending).rejects.toThrow("Connection lost");
+
+		currentMockWs?.simulateClose();
+
+		await rejection;
+	});
+
+	it("rejects pending requests of a socket a new connection replaces", async () => {
+		const useWSStore = await connectAndAuth();
+
+		const pending = useWSStore.getState().actions.listNodes();
+		const rejection = expect(pending).rejects.toThrow("Connection lost");
+
+		useWSStore.getState().actions.retryNow();
+
+		await rejection;
+	});
 });
 
 // The banner escalates from "Reconnecting…" to "can't reach it, here is a

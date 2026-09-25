@@ -87,6 +87,22 @@ const internal: InternalState = {
 	reconnectTimeout: null,
 };
 
+/**
+ * Stop holding the current socket and close it.
+ *
+ * Its onclose will ignore it for the same reason it ignores any superseded
+ * socket, and their answers could only have come down it, so nothing else is
+ * going to settle its pending requests: only auth carries a timeout, and the
+ * node RPCs would hang for good. Mirrors the web client, down to the error.
+ */
+function releaseSocket(): void {
+	const socket = internal.socket;
+	internal.socket = null;
+	socket?.close();
+	internal.client?.rejectAllPendingRequests("Connection lost");
+	internal.client = null;
+}
+
 function createRPCClient(socket: WebSocket): JSONRPCClient {
 	const client = new JSONRPCClient((request) => {
 		if (socket.readyState !== WebSocket.OPEN) {
@@ -141,12 +157,11 @@ export const useWSStore = create<WSState>()((set, get) => {
 		// a reconnect on top of it.
 		if (internal.socket) {
 			const stale = internal.socket;
-			internal.socket = null;
 			stale.onopen = null;
 			stale.onclose = null;
 			stale.onmessage = null;
 			stale.onerror = null;
-			stale.close();
+			releaseSocket();
 		}
 
 		// During an automatic reconnect keep the "reconnecting" status: flipping
@@ -241,8 +256,11 @@ export const useWSStore = create<WSState>()((set, get) => {
 				return;
 			}
 
-			internal.client = null;
 			internal.socket = null;
+			// Their answers can only have come down this socket, and the node RPCs
+			// carry no timeout, so without this they would hang for good.
+			internal.client?.rejectAllPendingRequests("Connection lost");
+			internal.client = null;
 
 			const currentStatus = get().status;
 
@@ -309,11 +327,7 @@ export const useWSStore = create<WSState>()((set, get) => {
 					errorMessage: null,
 					reconnectAttempts: 0,
 				});
-				if (internal.socket) {
-					internal.socket.close();
-					internal.socket = null;
-				}
-				internal.client = null;
+				releaseSocket();
 			},
 		},
 	};

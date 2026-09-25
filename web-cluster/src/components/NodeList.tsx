@@ -80,6 +80,10 @@ export function NodeList() {
 			setNodes(result);
 			setLoadError(null);
 		} catch (err) {
+			// A fetch the dropped socket took down with it is the reconnect's to
+			// report, and the banner does; the list the user was reading stays up,
+			// and the fetch reconnecting sets off replaces it.
+			if (useWSStore.getState().status !== "connected") return;
 			setLoadError(err instanceof Error ? err.message : "Failed to load nodes");
 		} finally {
 			setLoading(false);
