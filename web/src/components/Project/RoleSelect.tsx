@@ -1,5 +1,6 @@
 import type { ComponentProps } from "react";
 import { useAgentRoleStore } from "../../lib/agentRoleStore";
+import { inputClass } from "../ui/inputClass";
 
 type Props = Omit<
 	ComponentProps<"select">,
@@ -35,7 +36,7 @@ export default function RoleSelect({
 			{...rest}
 			value={value}
 			onChange={(e) => onChange(e.target.value)}
-			className="min-h-[44px] w-full rounded-lg border border-th-border bg-th-bg-primary px-3 py-2 text-sm text-th-text-primary focus:border-th-border-focus focus:outline-none focus:ring-2 focus:ring-th-accent/20"
+			className={`min-h-[44px] w-full rounded-lg bg-th-bg-primary px-3 py-2 text-sm text-th-text-primary ${inputClass}`}
 		>
 			{emptyLabel !== undefined && <option value="">{emptyLabel}</option>}
 			{isDangling && <option value={value}>Unknown role</option>}

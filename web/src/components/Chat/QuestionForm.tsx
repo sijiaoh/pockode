@@ -1,6 +1,7 @@
 import { Check } from "lucide-react";
 import type { AskUserQuestion } from "../../types/message";
 import type { QuestionSelection } from "../../utils/questionAnswer";
+import { inputClass } from "../ui/inputClass";
 
 export interface QuestionFormProps {
 	question: AskUserQuestion;
@@ -73,7 +74,7 @@ function QuestionForm({
 		}`;
 	};
 
-	const inputClass = `mt-0.5 ${disabled ? "accent-th-success" : "accent-th-accent"}`;
+	const choiceInputClass = `mt-0.5 ${disabled ? "accent-th-success" : "accent-th-accent"}`;
 
 	return (
 		<div className="space-y-2">
@@ -105,7 +106,7 @@ function QuestionForm({
 									name={name}
 									checked={selected}
 									onChange={() => onSelectOption(opt.label)}
-									className={inputClass}
+									className={choiceInputClass}
 								/>
 								<div className="min-w-0 flex-1">
 									<div className="break-words text-sm text-th-text-primary">
@@ -134,7 +135,7 @@ function QuestionForm({
 								name={name}
 								checked={otherChecked}
 								onChange={() => onSelectOther()}
-								className={inputClass}
+								className={choiceInputClass}
 							/>
 							<div className="min-w-0 flex-1">
 								<div className="text-sm text-th-text-primary">Other</div>
@@ -152,7 +153,7 @@ function QuestionForm({
 											value={selection.otherText ?? ""}
 											onChange={(e) => onOtherTextChange(e.target.value)}
 											placeholder="Enter your answer..."
-											className="mt-1 w-full rounded border border-th-border bg-th-bg-primary px-2 py-1 text-sm text-th-text-primary placeholder:text-th-text-muted focus:border-th-accent focus:outline-none"
+											className={`mt-1 w-full rounded bg-th-bg-primary px-2 py-1 text-sm text-th-text-primary placeholder:text-th-text-muted ${inputClass}`}
 										/>
 									))}
 							</div>
@@ -180,7 +181,7 @@ function QuestionForm({
 					onChange={(e) => onOtherTextChange(e.target.value)}
 					placeholder="Your answer"
 					rows={3}
-					className="w-full resize-y rounded border border-th-border bg-th-bg-primary px-2 py-1 text-sm text-th-text-primary placeholder:text-th-text-muted focus:border-th-accent focus:outline-none"
+					className={`w-full resize-y rounded bg-th-bg-primary px-2 py-1 text-sm text-th-text-primary placeholder:text-th-text-muted ${inputClass}`}
 				/>
 			)}
 		</div>

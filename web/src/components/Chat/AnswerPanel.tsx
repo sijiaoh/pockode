@@ -18,6 +18,7 @@ import {
 	buildAnswerMessage,
 	toAnswerRecords,
 } from "../../utils/answerMessage";
+import { inputClass } from "../ui/inputClass";
 import QuestionForm from "./QuestionForm";
 
 interface Props {
@@ -677,7 +678,7 @@ function QuestionBlock({
 						disabled={!!stale || disabled}
 						onChange={(e) => onChange(requestId, { note: e.target.value })}
 						placeholder="Add a note (optional)"
-						className="w-full rounded border border-th-border bg-th-bg-primary px-2 py-1 text-sm text-th-text-primary placeholder:text-th-text-muted focus:border-th-accent focus:outline-none"
+						className={`w-full rounded bg-th-bg-primary px-2 py-1 text-sm text-th-text-primary placeholder:text-th-text-muted ${inputClass}`}
 					/>
 				</div>
 			)}

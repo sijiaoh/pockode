@@ -1,6 +1,7 @@
 import { useEffect, useId, useRef, useState } from "react";
 import type { EntryType } from "../../types/contents";
 import { Sheet, Spinner } from "../ui";
+import { inputClass } from "../ui/inputClass";
 
 interface Props {
 	mode: "create" | "rename";
@@ -189,7 +190,7 @@ function EntryNameDialog({
 					spellCheck={false}
 					aria-invalid={error !== null}
 					aria-describedby={error ? errorId : undefined}
-					className="w-full rounded-lg border border-th-border bg-th-bg-primary px-3 py-2.5 text-th-text-primary placeholder:text-th-text-muted focus:border-th-border-focus focus:outline-none focus:ring-2 focus:ring-th-accent/20"
+					className={`w-full rounded-lg bg-th-bg-primary px-3 py-2.5 text-th-text-primary placeholder:text-th-text-muted ${inputClass}`}
 				/>
 				{/* Under the field, where the name being corrected is: a refusal
 				    pushed above it reads as being about the sheet, not the name. */}

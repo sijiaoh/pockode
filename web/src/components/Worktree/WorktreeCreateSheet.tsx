@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { overlayToNavigation, SETUP_HOOK_PATH } from "../../lib/navigation";
 import type { SetupHookSkip } from "../../types/message";
 import { Sheet } from "../ui";
+import { inputClass } from "../ui/inputClass";
 
 interface Props {
 	onClose: () => void;
@@ -156,7 +157,7 @@ function WorktreeCreateSheet({
 						value={name}
 						onChange={(e) => setName(e.target.value)}
 						placeholder="review"
-						className="w-full rounded-lg border border-th-border bg-th-bg-primary px-3 py-2.5 text-th-text-primary placeholder:text-th-text-muted focus:border-th-border-focus focus:outline-none focus:ring-2 focus:ring-th-accent/20"
+						className={`w-full rounded-lg bg-th-bg-primary px-3 py-2.5 text-th-text-primary placeholder:text-th-text-muted ${inputClass}`}
 						disabled={isCreating}
 						autoComplete="off"
 						required
@@ -179,7 +180,7 @@ function WorktreeCreateSheet({
 						value={branch}
 						onChange={(e) => setBranch(e.target.value)}
 						placeholder="feature/my-feature"
-						className="w-full rounded-lg border border-th-border bg-th-bg-primary px-3 py-2.5 text-th-text-primary placeholder:text-th-text-muted focus:border-th-border-focus focus:outline-none focus:ring-2 focus:ring-th-accent/20"
+						className={`w-full rounded-lg bg-th-bg-primary px-3 py-2.5 text-th-text-primary placeholder:text-th-text-muted ${inputClass}`}
 						disabled={isCreating}
 						autoComplete="off"
 					/>
@@ -201,7 +202,7 @@ function WorktreeCreateSheet({
 						value={baseBranch}
 						onChange={(e) => setBaseBranch(e.target.value)}
 						placeholder="main"
-						className="w-full rounded-lg border border-th-border bg-th-bg-primary px-3 py-2.5 text-th-text-primary placeholder:text-th-text-muted focus:border-th-border-focus focus:outline-none focus:ring-2 focus:ring-th-accent/20"
+						className={`w-full rounded-lg bg-th-bg-primary px-3 py-2.5 text-th-text-primary placeholder:text-th-text-muted ${inputClass}`}
 						disabled={isCreating}
 						autoComplete="off"
 					/>
