@@ -33,9 +33,7 @@ function renderResults(
 	);
 }
 
-// jsdom rendering can starve past the default 5s timeout when the suite runs
-// with many workers on a loaded machine.
-describe("FileSearchResults in content mode", { timeout: 20_000 }, () => {
+describe("FileSearchResults in content mode", () => {
 	it("previews the first matches and summarises the rest", () => {
 		renderResults({
 			matches: [

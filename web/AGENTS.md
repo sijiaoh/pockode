@@ -99,6 +99,7 @@ export default Dialog;
 - 按用户视角测试，优先 `getByRole` > `getByLabelText` > `getByText` > `getByTestId`
 - 不测 state/props/生命周期，只测用户可见行为
 - 适度测试，不追求 100% 覆盖
+- 交互默认用 `userEvent`（见下例）。唯一的例外是冻住的假时钟（`vi.useFakeTimers()`）场景：`userEvent` 在冻住的 vitest 假时钟下会死锁（`shouldAdvanceTime` 不死锁，但把墙钟放了回来），改用 `fireEvent` 逐字符输入并显式推进时钟——原因与写法见 [docs/testing.md](../docs/testing.md#frontend-a-debounce-is-yours-to-run-out)，别把这类用例「修回」`userEvent`
 
 ```tsx
 import { render, screen } from "@testing-library/react";
