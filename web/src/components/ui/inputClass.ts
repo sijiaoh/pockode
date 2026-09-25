@@ -10,3 +10,14 @@
  */
 export const inputClass =
 	"border border-th-border focus:border-th-border-focus focus:outline-none focus:ring-2 focus:ring-th-accent/20";
+
+/**
+ * `inputClass`'s focus treatment, for a bordered box whose field has none of
+ * its own — a borderless textarea set inline beside a number and handles,
+ * where a ring on the field itself would overlap its neighbours. The box shows
+ * the focus instead. `focus-within:` also lights for the box's buttons, which
+ * still names the right box. Kept beside `inputClass` so the two change
+ * together; Tailwind only sees whole class literals, so they cannot share one.
+ */
+export const inputFocusWithinClass =
+	"focus-within:border-th-border-focus focus-within:ring-2 focus-within:ring-th-accent/20";

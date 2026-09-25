@@ -127,4 +127,15 @@ describe("the steps list", () => {
 		expect(markdown?.parentElement).toBe(row);
 		expect(markdown?.classList).toContain("min-w-0");
 	});
+
+	// The step's textarea is borderless and ringless so it can sit inline with
+	// its number and handles; its card is what shows where focus is.
+	it("shows focus on the card of the step being edited", async () => {
+		const user = userEvent.setup();
+		renderOverlay();
+		await user.click(screen.getByRole("button", { name: "Edit steps" }));
+
+		const card = screen.getByDisplayValue("推进任务").closest("li > div");
+		expect(card?.classList).toContain("focus-within:border-th-border-focus");
+	});
 });
