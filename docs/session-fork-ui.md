@@ -303,7 +303,8 @@ unforkable.
 `ForkSessionSheet`, a `Sheet` titled **Fork session**. The menu closes as it
 opens, so the two sheets **replace** one another rather than stacking: the
 confirmation is what the user is looking at next, and the menu has nothing left
-to say. (`useLockBodyScroll` counts its holders for exactly this handover.)
+to say. (The handover needs nothing from `useLockBodyScroll`: the menu's cleanup
+runs before the fork sheet's effect, so the page lock is never held twice.)
 
 1. **Anchor preview** — the anchor message quoted read-only, clamped to three
    lines, prefixed by its role — `You`, or the agent's label from

@@ -243,9 +243,14 @@ describe("Sheet", () => {
 			host.remove();
 		});
 
-		// A row can swap its menu for a confirm sheet and unmount the trigger with
-		// it. The handback must not fire at the detached trigger, which would drop
-		// focus on the body just as the arriving sheet claims it.
+		// A menu swapped for a confirm sheet hands focus back to a trigger that is
+		// still on the page, in the same commit that raises the confirm. The
+		// handback has to land before the arriving sheet takes focus, not after,
+		// or the confirm opens with focus on the page it covers.
+		//
+		// Why the trigger stays mounted: had it left with the menu, the handback
+		// would be a no-op whenever it ran, since the DOM refuses focus to a
+		// detached node.
 		it("keeps focus in the arriving sheet when one sheet replaces another", async () => {
 			const user = userEvent.setup();
 
@@ -253,15 +258,6 @@ describe("Sheet", () => {
 				const [step, setStep] = useState<"closed" | "menu" | "confirm">(
 					"closed",
 				);
-				// The trigger goes away with the menu, as a row that removes itself
-				// does.
-				if (step === "confirm") {
-					return (
-						<Sheet title="Confirm" onClose={() => {}}>
-							<button type="button">Do it</button>
-						</Sheet>
-					);
-				}
 				return (
 					<>
 						<button type="button" onClick={() => setStep("menu")}>
@@ -272,6 +268,11 @@ describe("Sheet", () => {
 								<button type="button" onClick={() => setStep("confirm")}>
 									Fork from here
 								</button>
+							</Sheet>
+						)}
+						{step === "confirm" && (
+							<Sheet title="Confirm" onClose={() => {}}>
+								<button type="button">Do it</button>
 							</Sheet>
 						)}
 					</>
@@ -287,13 +288,19 @@ describe("Sheet", () => {
 		});
 	});
 
-	// Every overlay in `@pockode/shared` shares one counted lock, and these are
-	// the two ways a second overlay goes up while the first is still mounted.
-	// A per-overlay save-and-restore passes neither: the one that mounts second
-	// records "hidden" as the value to return to, and cleanups run child-first,
-	// so it writes that back last and the page stays unscrollable until a
-	// reload. Nothing on screen says so — the sheet is gone and the scroll is
-	// simply dead.
+	// Every overlay in `@pockode/shared` shares one counted lock, and the page
+	// stays locked for exactly as long as any of them is up. A per-overlay
+	// save-and-restore fails both cases below: the overlay that mounts second
+	// records "hidden" as the value to return to, and the page is left on it
+	// whenever that overlay restores after the first. Closing in mount order
+	// unlocks the page under the one still open and then leaves it
+	// unscrollable; closing together leaves it unscrollable because cleanups
+	// run parent-first, so the inner overlay writes last. Nothing on screen
+	// says so — the sheet is gone and the scroll is simply dead.
+	//
+	// One sheet replacing another is not a third case: the leaving sheet's
+	// cleanup runs before the arriving one's effect, so the lock is never held
+	// twice and either implementation passes.
 	describe("body scroll lock", () => {
 		beforeEach(() => {
 			document.body.style.overflow = "";
@@ -334,32 +341,68 @@ describe("Sheet", () => {
 			expect(document.body.style.overflow).toBe("");
 		});
 
-		it("keeps the page locked while one sheet replaces another", async () => {
+		it("keeps the page locked until the last of two overlays closes", async () => {
 			const user = userEvent.setup();
 
-			function Replacing() {
-				const [step, setStep] = useState<"menu" | "confirm">("menu");
+			function TwoSheets() {
+				const [open, setOpen] = useState({ first: false, second: false });
 				return (
 					<>
-						{step === "menu" && (
-							<Sheet title="Menu" onClose={() => {}}>
-								<button type="button" onClick={() => setStep("confirm")}>
-									Fork from here
+						<button
+							type="button"
+							onClick={() => setOpen((o) => ({ ...o, first: true }))}
+						>
+							Open first
+						</button>
+						{open.first && (
+							<Sheet
+								title="First"
+								onClose={() => setOpen((o) => ({ ...o, first: false }))}
+							>
+								<button
+									type="button"
+									onClick={() => setOpen((o) => ({ ...o, second: true }))}
+								>
+									Open second
+								</button>
+								<button
+									type="button"
+									onClick={() => setOpen((o) => ({ ...o, first: false }))}
+								>
+									Close first
 								</button>
 							</Sheet>
 						)}
-						{step === "confirm" && (
-							<Sheet title="Confirm" onClose={() => {}}>
-								<button type="button">Fork</button>
+						{open.second && (
+							<Sheet
+								title="Second"
+								onClose={() => setOpen((o) => ({ ...o, second: false }))}
+							>
+								<button
+									type="button"
+									onClick={() => setOpen((o) => ({ ...o, second: false }))}
+								>
+									Close second
+								</button>
 							</Sheet>
 						)}
 					</>
 				);
 			}
-			render(<Replacing />);
-			await user.click(screen.getByText("Fork from here"));
+			render(<TwoSheets />);
 
+			await user.click(screen.getByText("Open first"));
+			await user.click(screen.getByText("Open second"));
 			expect(document.body.style.overflow).toBe("hidden");
+
+			// Mount order, not reverse: the first sheet goes while the second,
+			// which recorded "hidden" as its own value to return to, stays up.
+			await user.click(screen.getByText("Close first"));
+			expect(screen.queryByText("First")).toBeNull();
+			expect(document.body.style.overflow).toBe("hidden");
+
+			await user.click(screen.getByText("Close second"));
+			expect(document.body.style.overflow).toBe("");
 		});
 	});
 	// A sheet is portalled to `document.body`, so nothing its host does to put

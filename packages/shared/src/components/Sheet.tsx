@@ -33,10 +33,12 @@ export interface SheetProps {
  * `preventScroll` because `focus()` otherwise asks for a scroll into view, and
  * nothing should move behind a sheet that has just locked the page.
  *
- * The handback is skipped when the opener is gone from the document. Sheets
- * replace one another (a menu closes as a confirm sheet opens), and the row
- * that opened the first one can unmount with it; focusing a detached node is a
- * silent no-op that drops focus on the body.
+ * The opener may be gone from the document by then — sheets replace one
+ * another (a menu closes as a confirm sheet opens), and the row that opened
+ * the first one can unmount with it. That needs no check: the DOM refuses focus
+ * to a detached node, so the handback is a no-op. Focus is already on the
+ * body by then, dropped there when the sheet holding it unmounted — not by
+ * this call — and a sheet taking over claims it from there.
  */
 function useSheetFocus(ref: React.RefObject<HTMLElement | null>): void {
 	useEffect(() => {
@@ -47,7 +49,7 @@ function useSheetFocus(ref: React.RefObject<HTMLElement | null>): void {
 		sheet.focus({ preventScroll: true });
 
 		return () => {
-			if (opener instanceof HTMLElement && opener.isConnected) {
+			if (opener instanceof HTMLElement) {
 				opener.focus({ preventScroll: true });
 			}
 		};

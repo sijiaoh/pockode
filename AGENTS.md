@@ -80,8 +80,9 @@ one project while the other is fine. `web/tests/sourceScan.test.ts` and
 `web/tests/responsiveTokens.test.ts` hold both.
 
 `useLockBodyScroll` is deliberately *not* exported: it is one counter shared by
-`Sheet` and `ConfirmDialog` so that two overlays unmounting together cannot
-restore each other's `overflow` and leave the page permanently unscrollable.
+`Sheet` and `ConfirmDialog` so that two overlays up at once cannot restore each
+other's `overflow` — whether they close together or in the order they opened —
+and leave the page permanently unscrollable.
 Anything in this package that locks the page uses it; exporting it would invite
 a third, separate counter, which is the bug itself.
 
