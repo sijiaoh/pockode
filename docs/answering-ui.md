@@ -263,15 +263,41 @@ rather than `pointer-events-none`: with no focus trap over them, every dimmed
 control would otherwise stay in the Tab order — *ahead* of the card — and stay
 in the accessibility tree, which for a conversation the backdrop has plainly
 put out of reach would be a lie in the other direction. The list is never
-unmounted, because its scroll position is what the user gets back on closing
-the panel and re-mounting would reload the history and lose it.
+unmounted, because what a remount loses is the reader's place, the cards they
+had opened and the highlight ring. The history is not among them — it is held
+above the list in `ChatPanel` — which is what makes the loss easy to miss: a test
+that only checks the messages came back sees nothing wrong.
 
-**One expression decides the card's rendering, the `inert` and the Escape
-guard** (`answerPanelShown` in `ChatPanel`), so the three cannot disagree. Five
-separate acts close the panel and a read-only session never opens one at all; an
-`inert` cleared by hand would eventually be left behind by one of those six
-paths, and the whole conversation would be out of reach with nothing on top of
-it.
+An **overlay** — a file, a diff, a commit, the settings — takes the same route,
+and goes one step further. It is somewhere else rather than a layer of this
+conversation, so it covers the transcript outright: `invisible absolute inset-0`
+in place of the flex classes, which takes it off the screen and out of the flow
+so the overlay has the rectangle, while the scroll box goes on existing.
+`display: none` cannot be used here, and that is measured rather than reasoned:
+in Chromium a transcript hidden that way reads `clientHeight`, `scrollHeight` and
+`scrollTop` all as zero — the scroll box is destroyed, taking with it the one
+thing staying mounted is for — while under `invisible` the height is unchanged
+and the offset untouched.
+
+**Four names now decide those things, where one used to, and the split is
+load-bearing** (`ChatPanel`). `answerPanelShown` is still the one fact — the panel
+is up — and still carries the Escape guard and the focus rescue. The other three
+are derived from it: `answerPanelDrawn` renders the card (not over an overlay,
+and not over the skeleton that stands in until the history is in — both of which
+used to come free), `transcriptInert` is the `inert`, and `transcriptCovered` is
+the `invisible` and [the sheets that go with
+it](#who-owns-the-dismissing-click).
+
+An overlay flips the derived three and deliberately **not** `answerPanelShown`,
+because the focus rescue is a layout effect hanging on it: flipping it would run
+the rescue a second time as the overlay closed, and the button the user had
+focused is still in the DOM now — covered rather than unmounted — so the rescue
+would find its anchor there and the panel would read itself out on the way back.
+That is the one thing §4 forbids. Each of the four is a single expression so that
+nothing can disagree with it: five separate acts close the panel and a read-only
+session never opens one at all, and an `inert` cleared by hand would eventually be
+left behind by one of those paths, putting the whole conversation out of reach
+with nothing on top of it.
 
 Two things follow from covering the transcript, and both are losses taken
 knowingly:
@@ -390,12 +416,12 @@ cannot be submitted.
 **The composer is unmounted, not emptied.** The default bar keeps what was
 typed in `inputStore`, keyed by session, so it comes back with every word of it
 (§5 is the same promise on the other side of the panel). Unmounting the bar is
-not new here — the work and agent-role overlays already replace the whole chat
-pane — which is why `InputBarProps` in the chat UI registry makes a draft
-outliving its bar part of the contract rather than a property of the one bar
-that ships. Unmounting rather than `hidden` is also what keeps a tall viewport
-pixel-for-pixel unchanged: with nothing folded there is no extra element in the
-tree at all.
+not new here — the work and agent-role overlays already replace everything in the
+chat pane but the transcript, which they cover instead (§3) — which is why
+`InputBarProps` in the chat UI registry makes a draft outliving its bar part of
+the contract rather than a property of the one bar that ships. Unmounting rather
+than `hidden` is also what keeps a tall viewport pixel-for-pixel unchanged: with
+nothing folded there is no extra element in the tree at all.
 
 The one thing a remount does not restore untouched is the caret. `InputBar`
 focuses itself when it mounts, on a **fine** pointer only
@@ -791,10 +817,16 @@ Two rules, and they are the whole of it:
    and without the mark a single press put away both it and a panel the user was
    not even looking at — the drawer's case is the worst of the three, since it
    covers the panel outright. `ConfirmDialog` and the command palette already
-   satisfied the rule for their own reasons. A shared `Sheet` does neither and would close alongside the
-   panel — today nothing puts one over it, because an overlay unmounts the panel
-   outright and the fork menu lives in the `inert` transcript; a future caller
-   that manages it owes `Sheet` the same line.
+   satisfied the rule for their own reasons. A shared `Sheet` claims neither, and
+   one genuinely can be over the panel: a message menu already open stays open
+   when the panel puts itself up under it, so an Escape there closes the menu
+   *and* the panel. The path is narrow — a menu open at the moment a question
+   arrives — and both come back one press away, but it is a real hole rather than
+   the "nothing puts one over it" this used to claim, and a caller that means to
+   keep a sheet over the panel owes `Sheet` the same line. What *cannot* happen is
+   a sheet left over an **overlay**, and what stops that is not `inert` — a sheet
+   is portalled to the body, which `inert` has never reached — but the covering
+   rule below.
 2. **The answer panel listens on `window`, not on `document`, so that it is
    asked last.** Registration order cannot be relied on — the panel mounts
    first, so a `document` listener of its own would run *before*
@@ -817,10 +849,13 @@ the same shape. Pressing the backdrop closes the panel (§3), and a surface open
 over it is dismissed by the same press through `useOutsideClick` — so without
 them one click puts away two things.
 
-Most surfaces are safe by construction and need nothing: `ConfirmDialog`, the
-mode dropdown and the session drawer each portal a backdrop of their own over
-this one, and `ResponsivePanel` portals one below the expanded tier, so the
-press never reaches this backdrop at all. The test is whether a surface has a
+Most surfaces are safe by construction and need nothing: `Sheet` — a message's
+fork menu — as well as `ConfirmDialog`, the mode dropdown and the session drawer
+each portal a backdrop of their own over this one, and `ResponsivePanel` portals
+one below the expanded tier, so the press never reaches this backdrop at all.
+(Escape is the one that is not symmetrical: a `Sheet` backdrop swallows the press
+but its Escape handler does not claim the key, which is the hole rule 1 above
+records.) The test is whether a surface has a
 backdrop of its own, not whether it is a dropdown, and by that test two are
 exposed:
 
@@ -857,6 +892,33 @@ out from under itself — and that exemption asks for `aria-modal="true"`, not f
 withholding `aria-modal`; the header above it is ordinary screen, and a press in
 the panel is an ordinary press elsewhere.
 
+**Being covered is not a dismissal, and it closes sheets anyway.** A surface the
+user has navigated away from takes its portalled overlays with it: `Sheet` and
+`ConfirmDialog` both call `useCloseWhenCovered`, and `ChatPanel` wraps the
+transcript in `<CoveredSurface covered={transcriptCovered}>`
+(`packages/shared/src/components/CoveredSurface.tsx`) — and the fork confirmation
+sheet in the same flag, that one being raised from a row and living a level up
+only because forking is a session-level request. Without it a fork menu
+opened on a row goes on floating over the overlay that replaced the row, lit and
+clickable, because a portal to `document.body` is the one child that has left the
+DOM and so the one thing `invisible` and `inert` cannot reach. The rule travels
+down the React tree, which the portal did not leave.
+
+Three things about it are deliberate. It **closes** rather than hides, because
+the open flag belongs to the host and coming back has to hand the user the
+conversation they left, not a sheet they had open before going elsewhere. It
+ignores `dismissible`, which exists to refuse an accidental dismissal mid-flight
+and would otherwise leave a sheet over the overlay with its backdrop, its Escape
+and its close button all dead. And it is **covered**, not dimmed: the answer
+panel is a layer of this conversation — the transcript stays on screen, the user
+has gone nowhere, and the forty `…` glyphs and anything raised from one are still
+theirs — which is why `transcriptCovered` names only the overlay while
+`transcriptInert` names both (§3).
+
+Nothing has to be registered for this. A new sheet is covered by having been
+written as a `Sheet`, and `useCloseWhenCovered` is deliberately not exported from
+the shared package so that it stays that way.
+
 ## 5. Drafts
 
 One store, `web/src/lib/questionDraftStore.ts`, keyed `sessionId → request_id →
@@ -873,8 +935,9 @@ delete it — the user can change their mind back without retyping, and an unpic
 Other sends nothing.
 
 It is a store rather than component state because every host of this draft
-unmounts under the user: the panel closes, the whole chat pane is replaced when
-an overlay (file, diff, commit, settings) takes it, and the user switches
+unmounts under the user: the panel closes, the panel is not drawn at all while an
+overlay (file, diff, commit, settings) is up — an overlay covers the transcript
+but takes the place of everything else in the pane — and the user switches
 sessions and comes back. Component state loses the draft to all three.
 
 ### It is kept in `localStorage`

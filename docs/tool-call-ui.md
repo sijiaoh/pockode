@@ -422,18 +422,19 @@ being jitter:
   line — a stack of rows each carrying an empty second line is worse than the two
   re-flows.
 
-Those two re-flows need one more rule, because `MessageList` does not protect a
-reader from them. Its `ResizeObserver`
-compensates for content growth in exactly two situations: it re-pins the tail
-when the reader is following it, and it re-anchors a history page still settling
-above (`web/src/components/Chat/MessageList.tsx`). A row that changes height
-**above a reader who has scrolled away from both** simply shifts what they are
-reading.
+Those two re-flows need one more rule. The transcript does hold a reader's place
+through a height change above them, wherever they are reading
+([agent-chat.md](agent-chat.md#where-the-view-sits)) — but holding it means
+writing `scrollTop`, which ends momentum scrolling on iOS, and everything below
+the change moves on the screen whatever is done about the reader. A row that
+keeps one height asks for neither.
 
-For a foreground run that is fine: the turn is blocked on it, so it is the last
-thing in the transcript and the tail-follow case covers it. **A background run is
-exactly the row that is not**, because the conversation carries on above it for
-half an hour. So a background run does not lose its second line when it settles:
+For a foreground run neither cost lands anywhere: the turn is blocked on it, so
+it is the last thing in the transcript — a reader at the tail is following that
+row itself, and a reader further up has it below them, where a height change
+moves nothing they can see. **A background run is exactly the row that is not**,
+because the conversation carries on above it for half an hour. So a background
+run does not lose its second line when it settles:
 
 > **The second line is the run's latest word.** While the run is live that is its
 > activity. When a backgrounded run finishes, it becomes the first line of the
@@ -444,7 +445,7 @@ succeeded in 4m12s"* without being opened is the thing the user went looking for
 It replays correctly too, because the outcome is persisted while the activity is
 not. Only a run that finished in the foreground drops its line — or hands it to
 rung 4, if it failed — and that row is at the tail by construction, so both
-changes of height fall to the tail-follow case above.
+changes of height happen where nothing is below them.
 
 **After a reconnect** the line survives exactly as far as the backend carries
 it. `tool_activity` is not persisted, so history replay has none of it; what
@@ -756,10 +757,10 @@ same gap the next paragraph is about, and small beside the body opening above
 it.
 
 **A `background` run must not open itself** — a 30-minute task that unfolds
-itself shoves the transcript around long after the user stopped caring, and
-`MessageList` compensates for growth only at the tail, which a background row is
-by construction not at ([above](#the-second-line-problem-1)). It is also the one
-rule on this page the code does not keep: `TaskItem`'s `autoExpandedRef` keys on
+itself shoves the transcript around long after the user stopped caring, and the
+reader's place is held through that at the price of a write to `scrollTop` each
+time ([above](#the-second-line-problem-1)). It is also the one rule on this page
+the code does not keep: `TaskItem`'s `autoExpandedRef` keys on
 `run.status === "error"` alone and never reads `fromBackground`, so a
 backgrounded subagent that fails opens its report anyway, wherever in the
 transcript it sits. The gap predates rung 4 and is recorded rather than closed

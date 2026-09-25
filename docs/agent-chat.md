@@ -29,7 +29,7 @@ React SPA ──WebSocket──▶ Go Server ──spawn──▶ AI CLI (subpro
 | Claude impl | `server/agent/claude/claude.go` | Claude CLI subprocess, stream-json parsing, MCP server config |
 | Process manager | `server/process/manager.go` | Process lifecycle, event stream, lease reaper |
 | Frontend panel | `web/src/components/Chat/ChatPanel.tsx` | Message list, input bar, engine (agent + model + effort) and mode selectors, and the session info button — the action bar's third control, whose panel holds what this session has spent ([usage-display-ui.md](usage-display-ui.md)) |
-| Transcript | `web/src/components/Chat/MessageList.tsx` | Rendering the loaded messages, and every scroll decision made over them: [following the tail](#following-the-tail), the sentinel and anchor behind [history paging](#history-paging), and the jump to a pending permission request ([lifecycle-ui.md §2.2](lifecycle-ui.md#22-chat-the-attention-strip)) |
+| Transcript | `web/src/components/Chat/MessageList.tsx` | Rendering the loaded messages, and every scroll decision made over them: [where the view sits](#where-the-view-sits) (with `useTranscriptScroll.ts` and `scrollAnchor.ts` beside it), the sentinel behind [history paging](#history-paging), and the jump to a pending permission request ([lifecycle-ui.md §2.2](lifecycle-ui.md#22-chat-the-attention-strip)) |
 | Chat hook | `web/src/hooks/useChatMessages.ts` | Message state, streaming, permission handling, and the session's unanswered questions |
 | RPC actions | `web/src/lib/rpc/chat.ts` | `sendMessage` (which carries `answering` when it is an answer, [answering-ui.md §3](answering-ui.md#3-the-answer-panel)), `interrupt`, `permissionResponse` |
 
@@ -170,100 +170,70 @@ Reconnecting re-subscribes and so lands back on the newest page: pages already
 scrolled in are dropped rather than stitched back together, since the cursor
 chain would have to be replayed from the bottom anyway.
 
-Scroll position is held by pinning to a message, not by comparing scroll heights
-before and after — the agent can go on writing at the bottom while the page is in
-flight, and that growth is indistinguishable from the growth above that has to be
-compensated for.
+Scroll position is held by holding one element still, not by comparing scroll
+heights before and after — the agent can go on writing at the bottom while the
+page is in flight, and that growth is indistinguishable from the growth above
+that has to be compensated for. Beyond that, a page landing on top needs no rule
+of its own: it moved the element the reader is looking at, and putting that
+element back is what the transcript does after every commit
+([where the view sits](#where-the-view-sits)).
 
-The message pinned to is the *second* one loaded, not the first. The first is the
-one a seam can merge the incoming page into, and the merge keeps its identity,
-the bubble being keyed on it
+One fact about the seam belongs here rather than there. The first loaded row and
+its first part are never anchored to, because the first row is the one an
+incoming page can be merged into and the merge keeps its identity
 ([code/frontend-state.md](code/frontend-state.md#turn-boundaries-and-late-events)).
-Holding its top edge still therefore holds nothing still: the older half grows
-*inside* it and carries everything the reader was looking at down the screen,
-which is the jump the pin exists to prevent. Only that one message can be merged
-into, so the one below it is a fixed point, and pinning it holds the first one's
-own content still as well — the older half having gone in above it. A transcript
-of a single message has no row below it and is pinned to that one; it is also far
-shorter than the viewport, so there is no view position there for a merge to
-lose.
+The older half grows *inside* it, so holding its top edge still holds nothing
+still: it carries everything the reader was looking at down the screen, which is
+the jump the anchor exists to prevent. Every candidate below it moves with that
+growth instead, which is what makes it measurable.
 
-The pin is taken again on every scroll until the page lands, rather than once
-when it was asked for. A flick that brings the sentinel into view goes on
-travelling after the request leaves, and restoring to where that flick started is
-a yank backwards over content the reader has already gone past. The row's
-position is re-read along with the view's: a late event can still grow a message
-above it while the page is on its way, and a fresh view offset paired with a
-stale row position charges the restore for that growth twice.
+A page count that went *down* is not a page landing, and the transcript reads the
+tail again when it sees one. Paging starts over exactly one way — a reconnect
+re-subscribes and so lands back on the newest page — and the rows an anchor names
+may be in that replacement at offsets it was never measured against. Re-subscribing
+clears "a page is loading" with it, the request it discards having learnt by the
+time it returns that it no longer speaks for this transcript: a flag left standing
+there would leave the transcript refusing to page for good, since refusing while a
+page is on its way is exactly how it stays down to one. A reader who never paged
+at all has no such edge — their count was already zero — so the state they were in
+simply stands, which costs nothing: the replacement usually renders the same rows
+under the same ids and the anchor holds, and where it does not, a lost anchor is
+replaced where the view already is.
 
-A page count that went *down* is not a page landing. Paging also starts over —
-a reconnect re-subscribes and so lands back on the newest page — and the view the
-pin was measured against is gone by then, so the page still in flight is dropped
-rather than restored against whatever replaced it. Re-subscribing clears "a page
-is loading" with it, the request it discards having learnt by the time it returns
-that it no longer speaks for this transcript and so cleaning up nothing: a flag
-left standing there would leave the transcript refusing to page for good, since
-refusing while a page is on its way is exactly how it stays down to one.
+**Asking for a page is a state, not an event.** While the top of history is on
+screen, nothing is in flight and nothing has failed, the next page is asked for.
+Two things notice that state and they answer different halves of it. The
+`IntersectionObserver` on the sentinel is the only one that can see the reader
+*arrive* there: scrolling commits nothing, so there is no frame in which the list
+could have measured it. The measurement taken after every commit — once the
+invariant has placed the view — is the only one that can see a page land without
+carrying the sentinel out of view, which is every page in a transcript still
+shorter than the viewport. An observer reports a *crossing*; nothing crossed, so
+nothing is reported, and a short conversation would stop filling after one page.
 
-Losing the pinned message is said out loud and falls back to the height
-difference. That fallback is the measurement just ruled out, and it is wrong in
-exactly the way described above: anything the agent wrote at the bottom while
-the page was in flight is counted as growth above. It is taken anyway because
-the alternative is restoring nothing, which leaves the view against the sentinel
-— the one state that asks for page after page — and because a view moved too far
-is a view the reader can see has moved.
+Being asked twice is therefore ordinary, and harmless. A request made while one
+is in flight is refused outright, and every request that does go out moves the
+cursor further back, so the rule settles at `has_more` being false however many
+times it is put. Nothing judges how much a page added — an empty one, or one
+whose records all rendered to nothing, simply leads to the next — which is what
+removed the last reason to ask whether "the view moved", and with it the stall
+that question used to leave behind. The one state not answered from is a
+container of zero height: it has not been laid out yet, and treating that as
+"nothing is on screen" would ask for history nobody has come near.
 
-The restore is not a single measurement. It is computed the moment the page is
-committed, and what it measures is not final: syntax highlighting, a diagram and
-an image each settle a few frames later, and each of them changes a height it was
-computed from — which is the exception and not the rule
-([why](#content-height-on-the-first-frame)). So the anchor is kept for a short
-window after the page lands and the correction is repeated as the new content
-settles, until the window closes or the view is deliberately taken elsewhere —
-by the user scrolling, or by one of the scrolls started in code that carry an
-intent of their own (the scroll-to-bottom button, a jump to a pending permission
-request, the pin after a message is sent). From that point the view belongs to whatever
-took it there, and a correction would pull it back off.
-
-**Nothing asks for the next page until the one that landed has moved the view.**
-Re-observing the sentinel on every page — which is what used to happen — is a
-loop rather than a rule: a fresh observer reports a sentinel still on screen
-immediately, and a page that failed to move the view leaves it exactly there, so
-one page that restores short becomes an unbounded run of them. The sentinel is
-therefore re-observed when the restore window closes, and only if the view
-actually ended up further down than it started. A page too short to fill the
-viewport still leaves the sentinel in view and so still leads to the next one —
-one page per settled restore. A page that moved nothing, including an empty one
-whose records all rendered to nothing, stops paging where it is and says so; the
-reader's next gesture starts it again, one page at a time.
-
-Each arming buys one request, and the observer is dropped as it fires. Left
-watching, it reports every later crossing of the top edge as well — and the
-corrections a settling page makes carry the sentinel back over that edge again
-and again, so the loop returns in a second form, each correction asking for a
-page nothing judged the need for.
-
-Dropping it is safe rather than final because the request behind it is refused
-outright while a page is in flight or still settling, and each of those states
-ends by arming again or by stalling — a stall the reader's next gesture lifts.
-The refusal is also what keeps the pin single: a page on its way owns it, and
-re-pinning under that page would have it restored against a view measured after
-it was asked for. A page that *fails* gives the pin up instead, never landing to
-be restored against, so "a pin is held" and "a page is on its way" stay the same
-fact — which is the fact the scroll handler above re-measures on.
+The observer is never rebuilt per page. A fresh observer reports a target already
+on screen immediately, so rebuilding it is a loop rather than a rule: one page
+that leaves the sentinel where it was becomes an unbounded run of them. It lives
+exactly as long as the sentinel node does, and what it reports is acted on as
+given — a delivered entry was computed at the most recent layout, which is one
+this commit's own write to `scrollTop` has already gone into.
 
 The sentinel row keeps one height whether or not a page is loading, the spinner
 appearing inside space already reserved for it. The row sits above everything the
-reader is looking at, so growing it pushes the whole transcript down — a jump at
-the moment paging *starts*, which no restore covers, because no page has landed
-to be restored.
-
-"The view moved" is the wrong question in one state, and it is the state every
-short conversation starts in: until the transcript is taller than the viewport
-there is nothing to scroll (the content box is `min-h-full`), so no page can
-move the view however well it restored. There the rule asks instead whether the
-page put any rows above the pinned one — which an empty page still does not — so
-the filling that gets a short history onto the screen goes on working.
+reader is looking at, so growing it moves them. The anchor would put them back,
+but putting them back is a write to `scrollTop`, and what brought the sentinel
+into view was a flick whose momentum that write cancels — so the height is fixed
+to save the write ([the gap that remains](#known-gaps-and-what-they-were-traded-for)).
 
 A page that fails replaces the sentinel with the reason and a Retry button, so
 nothing is left to ask for the next page until the user presses it. Saying nothing would
@@ -281,90 +251,135 @@ cursor makes affordable — growth happens one page at a time and only because t
 user asked for it, where replaying the whole transcript on open imposed it on
 every session — and a reconnect starts over from the newest page.
 
-## Following the Tail
+## Where the View Sits
 
-While an agent writes, the transcript has to stay pinned to its end without ever
-taking the view away from a user who has gone looking for something further up.
-What `MessageList` keeps is therefore an *intent* — whether the tail is what is
-being read — and not a sample of where the view currently sits. The two are not
-interchangeable: a programmatic smooth scroll dispatches the same scroll events
-as a drag does, and every frame of one reads as "not at bottom", so a position
-sample is torn down by the very scrolls that are trying to reach the tail. That
-is why the scroll-to-bottom button used to be able to stop short and leave
-following switched off behind it.
+**Two states, and one action.**
 
-Only the user's own scrolling moves the intent, which is why the gestures that
-scroll the container are listened to alongside the scroll events they cause: a
-scroll event says where the view went, and the gesture says whose doing it was.
-Every scroll started in code — the button, the jump to a pending permission
-request, the pin after a message is sent — declares its own intent at the point
-it is started, and is not allowed to have it overwritten by wherever it lands. A
-jump to a request near the end of the transcript is the case that makes this
-concrete: it comes to rest at the tail, and reading that arrival as the user
-asking to follow again would let the next reflow drag the card they just asked
-to see straight back off the screen.
+| State | Invariant |
+|---|---|
+| reading the tail | the view is pinned to the end |
+| reading somewhere | the anchored element stays the same distance below the container's top edge |
 
-Re-pinning is driven by a `ResizeObserver` watching **both** boxes. The content
-growing is the obvious half; the container shrinking is the half that is easy to
-miss and just as common, because the input box grows as it is typed into, an
-error bar can appear above it, and the software keyboard takes half the screen —
-none of which change the content's height while all of them push the tail out of
-view.
+The action is "apply the invariant of the state you are in"
+(`web/src/components/Chat/useTranscriptScroll.ts`), and it runs at exactly two
+moments: after every commit of `MessageList`, before paint, and on every callback
+of a `ResizeObserver` watching both boxes. A page landing, a diagram settling, a
+card expanding, the keyboard opening, the container growing back as an overlay
+closes — none of them is a case here, each being one of those two moments already.
+Nothing is on a timer.
+
+Neither moment covers the other. A commit is where the transcript's own changes
+land, and the invariant is applied before the frame that would show them in the
+wrong place; a child that settles on its own size without the list re-rendering —
+a diagram, a thumbnail, a subagent body expanding itself — reaches the observer
+and nowhere else. The observer watches the container as well as the content,
+because the container shrinking is just as common and easier to miss: the input
+box grows as it is typed into, an error bar appears above it, the keyboard takes
+half the screen — none of which change the content's height while all of them
+push the tail out of view.
+
+**No write without drift.** A position that is already right is not written to.
+Any programmatic write to `scrollTop` cancels iOS momentum scrolling, so a write
+that moves nothing still costs something. "Already right" means within a pixel:
+the two heights a scroll box is made of are integers while `scrollTop` is not.
+
+**The anchor** is the last candidate element to start at or above the top edge of
+the view, paired with how far below that edge it started. The candidates are
+message rows *and* the top-level parts inside them
+(`web/src/components/Chat/scrollAnchor.ts`): one assistant turn is a single row
+and can be several screens tall, so anchoring on rows alone says nothing about
+where inside one the reader is, and a tool result landing in that same bubble
+above their eyes would push what they are reading down. Nothing inside a
+collapsible body is a candidate — collapsed, it has no position at all — and
+neither is the first row or its first part ([the paging
+seam](#reading-a-page-on-the-client)). The anchor is taken again on every scroll
+the reader causes, and one whose element has left the list is replaced by a fresh
+anchor for wherever the view is now, never by a return to the tail.
+
+**Only the reader's own scrolling changes the state**, and which scroll that was
+is decided by direction rather than by listening for the gestures that caused it:
+
+- Reading the tail, movement *upward* that does not come to rest near the end
+  (50px) is the reader's, because our own writes here can only take the view
+  down. A tap moves nothing and so never arrives at all; a browser find, which
+  does move the view, is the reader.
+- Reading somewhere, every scroll event is the reader's. Movement *downward* that
+  reaches the end returns to the tail; anything else takes the anchor again. A
+  restore of our own that lands here re-takes the same anchor in the same place,
+  which costs nothing. The direction is required: a card collapsing *below* the
+  reader clamps the view to the end, and without it that clamp would read as a
+  return to the tail.
+
+Sampling where the view happens to sit cannot tell those apart, and that is the
+failure this replaced: a scroll event says where the view went one frame after it
+went there, by which time the content has grown again, so a frame of our own
+following read as the reader leaving.
+
+**Explicit inputs** are the only other thing that moves the state. Opening a
+session, the first message in an empty one, the reader sending a message and a
+reconnect replacing the transcript all read the tail. "Sent" is the newest row's
+id having changed to a row the user typed: a count cannot say it, because a page
+landing above grows the list without adding anything at its end, and it routinely
+lands under a transcript whose newest row is one the reader typed. The
+scroll-to-bottom button — shown only while reading somewhere — reads the tail, and
+a jump to a pending permission request anchors on the card.
+
+Both move the view instantly, which is a decision and not an omission. Switching
+to the tail is itself a commit, so the invariant applied before that commit's
+paint would be the first thing to cut short an animation the button had just
+started — and exempting the invariant while an animation runs means knowing when
+the animation ended, which is the kind of guess this design exists to avoid
+(`scrollend` is absent before Safari 18.2). So the list animates no scrolling at
+all, and there is no reduced-motion branch left to honour. A jump is written on
+the container rather than through `scrollIntoView`, which would scroll the app
+shell around it too, and it anchors on where the card actually landed: the end of
+the transcript cannot be scrolled past, so a card near it stops short of the top
+edge, and an anchor claiming otherwise would have every later commit trying to
+push it further.
 
 The browser's own scroll anchoring is turned off on the container. The anchoring
-here is written by hand, for paging as much as for the tail, and leaving the
-browser's on means a second writer of `scrollTop` that cannot be coordinated
-with. Safari does not implement scroll anchoring at all, so leaving it on would
-not even produce the same disagreement on each platform.
+here is written by hand, and leaving the browser's on means a second writer of
+`scrollTop` that cannot be coordinated with. Safari does not implement scroll
+anchoring at all, so leaving it on would not even produce the same disagreement
+on each platform.
 
-Pinning after the user sends a message is done in a layout effect rather than
-from the `ResizeObserver`, even though the observer would eventually see the
-same growth. The observer runs after paint and after anything else that has
-moved the view in between, so the intent it reads is no longer the one the send
-happened under; the layout effect reads it in the commit that added the message
-and before the frame is shown (`adb5a81`). The first screen of a session is
-pinned the same way and for a related reason — `MessageList` is keyed by the
-session id, so a switch mounts a fresh scroll container sitting at the top of
-the page it was given, and a pin taken after paint would flash the oldest
-messages of the new session before jumping to its end.
-
-A page landing on top is the one render that grows the transcript without adding
-anything at its end, and the tail must not be followed to it. The restore effect
-therefore runs *before* the follow effect and hands it the new message count on
-the way past, so the follow effect finds no growth of its own to react to and
-leaves the view where the restore just put it. That handover is nothing but the
-order the two effects are declared in, which is why they cannot be reordered.
+**An overlay covers the transcript rather than unmounting it**, so that the
+reader gets back their place, the cards they had opened and the highlight ring —
+none of which survive a remount, where the history would
+([how, and why not `display: none`](answering-ui.md#it-is-modal-over-one-rectangle-and-nothing-else)).
+The container is one height while covered and another when it comes back, which
+is a resize, which is already the whole of the mechanism above.
 
 ## Content Height on the First Frame
 
-Both readers of height above measure on the frame their content commits: the
-tail gate asks how far the view is from the end, the page restore asks how much
-taller the transcript got above the anchor. Anything that learns its real size a
-few frames later makes both of them answer a question about a layout that no
-longer exists — and the failures that come out of that are the ones this
-document keeps coming back to, a view that stops following after a long answer
-and a page that restores short and asks for another.
+A height that changes a few frames after the content commits no longer breaks
+anything: the resize is the same event as everything else, and the invariant puts
+the reader back. What it still costs is a write to `scrollTop` the reader can
+feel — one more chance to cancel their momentum scrolling — and, in the tail
+state, a threshold that has to be answered on the frame it is asked on: 50px
+decides whether a scroll that moved up came to rest at the end. Content that
+settles late is therefore worth avoiding on its own terms, and this section is
+what was done about it.
 
 The expensive case turned out not to be asynchronous rendering at all, but a
 stylesheet. `react-shiki` hands back shiki's own `<pre>`, which ends up nested
 inside `.code-block` and therefore inside `.prose`, where `@tailwindcss/typography`
 gives every `pre` a `1.667em` margin; `.code-block`'s own reset only ever
 covered the outer box. Every code block in the transcript grew by roughly 40px
-the instant it was highlighted — against an at-bottom threshold of 50px, one
-block put the view on the line and two took following off, and the same amount
-was missing from every message a page restore measured. The rule that resets the
+the instant it was highlighted — against the 50px that counts as the end, one
+block put the view on the line and two took following off it, and under the
+model this replaced that loss was permanent. The rule that resets the
 inner `pre` sits next to the `overflow` it lost in the same refactor
 (`32e9811`), and the height now simply never changes.
 
 What genuinely cannot be known early — the lazy chunk behind a mermaid diagram,
 an image's intrinsic size — is given a reserved box instead
-(`--async-media-height` in `web/src/index.css`), so the waiting state and the
-settled state are the same height and the measurement taken between them is
-still true. A reservation is a guess, and it is paid for in whitespace around
-images smaller than the frame; what it buys is a transcript whose measurements
-do not have to be taken twice. Where the reservation cannot be exact — a diagram
-is whatever size it is — the restore window a page lands into absorbs the
-difference. It exists because this could not be made true of everything.
+(`--async-media-height` in `web/src/index.css`). That reservation is no longer
+part of any mechanism: it is there so the waiting state and the settled state are
+roughly the same height and the transcript does not visibly jump between them. A
+reservation is a guess, paid for in whitespace around images smaller than the
+frame, and where it cannot be exact — a diagram is whatever size it turns out to
+be — the difference is simply a resize like any other.
 
 An attachment in a tool result's strip needs no reservation of this kind,
 because its shape is known before its bytes are: the block carries the
@@ -399,57 +414,62 @@ transcript is read in.
 it, so on the platform this product is built for first it does nothing at all; a
 hand-written anchor is required either way, which leaves the browser's version
 as a second writer of `scrollTop` rather than a feature
-([turned off](#following-the-tail)).
+([turned off](#where-the-view-sits)).
 
 **A ready-made follow library** (`use-stick-to-bottom` and its kind). What such
-a library does is what is described here — a `ResizeObserver`, an explicit
-intent, correction repeated until the content settles — but only for the tail.
+a library does is half of what is described here — a `ResizeObserver` and a held
+intent — and it is the tail half only.
 Reverse-infinite anchoring would still be written by hand, and the two halves
 would then have to agree about who writes `scrollTop` and when. A dependency
 that covers half of one problem and adds a coordination problem is not a saving.
 
 ## Known Gaps and What They Were Traded For
 
-- **Find-in-page does not release following.** Only gestures on the container
-  do, so a browser find (Ctrl+F) jumping to a match — driven by the user but
-  arriving without a gesture — leaves the intent on, and the next streamed
-  output pulls the view back to the tail. The alternative is to mark
-  programmatic scrolls instead of user ones, which requires knowing when a
-  smooth scroll has finished: `scrollend` is absent before Safari 18.2 and a
-  timer heuristic is unreliable on the path every user takes. The failure was
-  put on the narrow path rather than the everyday one, and one wheel notch or a
-  press of the scroll-to-bottom button undoes it.
+- **Growth above the anchor still cancels iOS momentum.** Holding an element
+  still means writing `scrollTop`, and on iOS any write ends momentum scrolling —
+  so a flick to the top of the transcript stops dead if the page it asked for
+  lands while the finger is already off the screen. Nothing avoids the write
+  without giving up the invariant it exists for; what can be done is to make
+  fewer of them, which is why the sentinel row is a fixed height and why nothing
+  in the transcript changes height after it commits if it can be helped
+  ([above](#content-height-on-the-first-frame)).
+- **A card expanded while reading the tail can be pushed out of view.** Opening a
+  body adds height above the end, and re-pinning to the end carries the card that
+  was just opened upward — off the top of the screen, if the body is tall enough.
+  Holding the pressed header still instead would be a third state, "read the tail
+  except over this element", for something the reader undoes with one scroll.
 - **A mermaid diagram still jumps once**, from its reserved box to whatever size
-  it renders at. Removing that jump would mean scaling every diagram into a
-  fixed frame, which spends the readability of large diagrams — the thing they
-  are there for — on a scroll-position detail. The restore window absorbs it
-  instead.
-- **The restore window is 500ms** (`RESTORE_SETTLE_MS`). It is a guess at how
-  long a page's content takes to settle, and on a slow connection a mermaid
-  chunk can land after it, leaving the view drifted by one diagram; it can no
-  longer start another page, so the cost is a drift and not a run of requests.
-  Raising it is safe in that direction and costs the other one: the window takes
-  priority over following the tail, because a reader who just pulled in history
-  is reading the history, so a longer window is a longer period in which output
-  streaming at the bottom is not followed.
-- **A stalled page says so in the console and nowhere in the UI.** The state is
-  only reachable through an empty page or an anchor that went missing, neither
-  of which should happen, and the recovery is exactly what the reader is already
-  doing: the next scroll up asks for the next page. A button for a state that
-  should not occur buys a hypothetical with real interface complexity; the
-  warning is there for the developer who does reach it.
+  it renders at. Removing the jump would mean scaling every diagram into a fixed
+  frame, which spends the readability of large diagrams — the thing they are
+  there for — on a scroll-position detail. The invariant absorbs it: the reader
+  keeps their place, the content below simply moves.
 - **A page that fails moves the view once.** The sentinel row is held at one
   height so the spinner cannot push the transcript down, but the row a failure
   replaces it with carries the reason and a Retry button and is genuinely
   taller. Reserving that much space for a failure that normally never comes
   would put a gap above every conversation, and the jump lands on a reader who
   is being told, in that same row, what just happened.
-- **A tap inside the list during a restore window counts as a gesture.**
-  `pointerdown` cannot know in advance whether it will lead to a scroll, so the
-  correction is cancelled and paging waits to be asked again. The cost is at
-  most one page of automatic filling; the alternative is pairing each gesture
-  with the scroll it causes, which iOS momentum — still scrolling long after the
-  last `touchmove` — makes unreliable.
+- **The first layout of a session opens at the tail, whatever was asked for.** A
+  conversation shorter than the viewport sits on its bottom edge, so a jump to a
+  permission card in it cannot put the card at the top — there is nothing to
+  scroll. Reloading the page on an overlay's URL comes back the same way: the
+  transcript behind it is laid out for the first time and has no place to
+  return the reader to yet. Both are the absence of a previous position rather
+  than the loss of one.
+- **An overlay does not stop paging.** `IntersectionObserver` is specified to
+  ignore `visibility`, so a covered transcript whose sentinel is in view goes on
+  asking for history — and the container growing by the height of the unmounted
+  composer can bring the sentinel into view and buy one more page than the
+  reader would have. It is harmless: it only happens to a reader already at the
+  top of what is loaded, the cursor is finite and the run settles at `has_more`
+  being false, and the anchor holds their place for the way back. The fix would
+  be a rule that knows whether the list is on screen, which is a third piece of
+  state of exactly the kind this design is made of removing — the cost of
+  keeping it out is a page of history nobody reads.
+- **The software keyboard on iOS scrolls the window, not the container.** The
+  invariant here holds the container's own `scrollTop`, and that is not what
+  moved, so nothing in this document addresses it. It belongs to the shell that
+  sizes the chat pane, and is left for that layer to take up.
 
 ## Session Persistence
 

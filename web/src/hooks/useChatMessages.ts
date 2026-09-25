@@ -79,8 +79,10 @@ interface UseChatMessagesReturn {
 	historyError: string | null;
 	/**
 	 * Older pages pulled in so far. Bumped once per page, so a list can tell the
-	 * commit that prepended history from the commits that merely appended to it —
-	 * the difference between restoring the scroll position and following the tail.
+	 * commit that prepended history from the commits that merely appended to it.
+	 * Read for two things: where the conversation begins is only said to a reader
+	 * who has actually paged back, and a count that goes *down* is the one sign
+	 * that a reconnect replaced the transcript (`useTranscriptScroll`).
 	 */
 	loadedHistoryPages: number;
 	loadMoreHistory: () => Promise<void>;
