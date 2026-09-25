@@ -326,12 +326,41 @@ evidence.
   of its own rather than a wider filter on `frontend.yml`. The register
   comparison is still only reached when `web/` changes; nobody has closed that
   one.
+- **`--` before a vitest argument runs the whole suite instead of your file.**
+  pnpm passes `--` through verbatim, and vitest's CLI parser collects everything
+  after it into a bucket the CLI never reads, so those arguments are dropped in
+  silence — neither honoured nor rejected. `vitest list <file>` collects that
+  file's 7 tests; `vitest list -- <file>` collects 2197, the whole of `web`. The
+  parsing is vitest's, not pnpm's, so a forwarding script is not what breaks:
+  `pnpm run test`, `pnpm exec vitest run` and calling the binary yourself lose
+  them alike. **Arguments go straight after the command; never write `--`.**
+  What it costs is not a run that checked nothing — a filter matching no file
+  exits 1 with `No test files found`, and nothing sets `passWithNoTests` in
+  either project's config or in the shared runtime options — but a run that
+  checked far more than you asked: 27 minutes over 148 files, its summary buried
+  under a thousand ticks, and any `--maxWorkers` you wrote for a loaded box back
+  at the config's number — the very knob
+  [the timeout table](#frontend-which-timeout-is-talking-to-you) sends you to.
+  To confirm an argument arrived, use one whose output changes shape, like
+  `--reporter=dot`; vitest does not validate values, so `--maxWorkers=nope` runs
+  happily and exits 0.
+- **`--reporter=basic` is gone, and its error points the wrong way.** Vitest 4
+  removed it and reads `basic` as a path to a custom reporter module, so the run
+  dies before collecting anything with `Failed to load custom Reporter from
+  basic` and `Does the file exist?` — which reads as a mistyped path, not as a
+  flag that no longer exists. It is red (exit 1, nothing run), so what it costs
+  is the time spent looking for the file. `--reporter=dot` is the terse one that
+  survived.
 - **`go test ... | grep ... | head` then `$?` reads `head`'s status**, which is
   essentially always 0. Capture the output in a variable and check the exit code
-  of the command itself. An interactive shell has no `pipefail`; the pipeline in
-  `server.yml` is safe only because GitHub Actions runs `shell: bash` with
-  `-eo pipefail`, and that same `-e` is why the step has to carry the status by
-  hand to reach its report.
+  of the command itself — or redirect rather than pipe, `>log 2>&1; echo $?`.
+  This is not a Go-only hazard, and on the frontend it is the only way a status
+  goes missing: both frontend `test` scripts are a bare `vitest run` and pnpm
+  hands the child's code straight back, printing ` ELIFECYCLE  Test failed.`
+  besides — so a frontend failure that read as green was read through a pipe. An
+  interactive shell has no `pipefail`; the pipeline in `server.yml` is safe only
+  because GitHub Actions runs `shell: bash` with `-eo pipefail`, and that same
+  `-e` is why the step has to carry the status by hand to reach its report.
 - **Green does not mean the assertion works.** Break the implementation on
   purpose and confirm the test goes red. This is the only way to catch a silent
   pass, and it is cheap: revert the mutation right after. Under load,
