@@ -135,38 +135,30 @@ describe("WorkDetailOverlay", () => {
 		});
 	});
 
-	it("renders sections in the expected order", () => {
-		mockUseWorkDetailSubscription.mockReturnValue({
-			work: createWork(),
-			activity: "idle",
-			comments: [],
-			pendingQuestions: [],
-			loading: false,
-			error: null,
-			children: [],
-		});
+	// What changes goes above what does not: a running story's tasks move,
+	// its brief and role were settled when it started.
+	it("puts the sections that change above the ones that do not", () => {
+		renderWithWork(createWork(), "idle", [
+			{
+				request_id: "req-1",
+				header: "Scope",
+				question: "Which one?",
+				asked_at: "2026-03-04T00:00:00Z",
+			},
+		]);
 
-		render(
-			<WorkDetailOverlay
-				workId="work-1"
-				onBack={vi.fn()}
-				onNavigateToSession={vi.fn()}
-				onOpenWorkDetail={vi.fn()}
-			/>,
-		);
+		const headings = [
+			/Waiting for your answer/,
+			"Tasks",
+			"Description",
+			"Role",
+			/Steps/,
+			"Comments",
+		].map((name) => screen.getByRole("heading", { name }));
 
-		const roleHeading = screen.getByRole("heading", { name: "Role" });
-		const descriptionHeading = screen.getByRole("heading", {
-			name: "Description",
-		});
-		const stepsHeading = screen.getByRole("heading", { name: /Steps/ });
-		const tasksHeading = screen.getByRole("heading", { name: "Tasks" });
-		const commentsHeading = screen.getByRole("heading", { name: "Comments" });
-
-		expectToAppearBefore(roleHeading, descriptionHeading);
-		expectToAppearBefore(descriptionHeading, stepsHeading);
-		expectToAppearBefore(stepsHeading, tasksHeading);
-		expectToAppearBefore(tasksHeading, commentsHeading);
+		for (let i = 1; i < headings.length; i++) {
+			expectToAppearBefore(headings[i - 1], headings[i]);
+		}
 	});
 
 	// Comments are the agents' record of what happened, and the client has no
@@ -395,7 +387,7 @@ describe("WorkDetailOverlay", () => {
 
 	// Usage rides on the detail subscription rather than on Work, so this is also
 	// the assertion that the page reads it from there.
-	it("puts the usage the subscription carries between steps and tasks", () => {
+	it("puts the usage the subscription carries between steps and comments", () => {
 		mockUseWorkDetailSubscription.mockReturnValue({
 			work: createWork(),
 			activity: "idle",
@@ -432,11 +424,11 @@ describe("WorkDetailOverlay", () => {
 
 		const stepsHeading = screen.getByRole("heading", { name: /Steps/ });
 		const usageHeading = screen.getByRole("heading", { name: "Usage" });
-		const tasksHeading = screen.getByRole("heading", { name: "Tasks" });
+		const commentsHeading = screen.getByRole("heading", { name: "Comments" });
 
 		expect(screen.getByText("1.2M")).toBeInTheDocument();
 		expectToAppearBefore(stepsHeading, usageHeading);
-		expectToAppearBefore(usageHeading, tasksHeading);
+		expectToAppearBefore(usageHeading, commentsHeading);
 	});
 
 	it("keeps steps below the empty description placeholder", () => {
@@ -494,6 +486,76 @@ describe("WorkDetailOverlay", () => {
 		const stepsHeading = screen.getByRole("heading", { name: /Steps/ });
 
 		expectToAppearBefore(descriptionEditor, stepsHeading);
+	});
+
+	// While open the brief is what the user is still writing, so it stays in
+	// full; once the work has started it shrinks to its first line.
+	describe("the description", () => {
+		const body = "## Goal\n\nShip the reorder.";
+
+		it("shows in full while the work is open", () => {
+			renderWithWork(createWork({ status: "open", body }));
+
+			expect(screen.getByText(/Ship the reorder/)).toBeVisible();
+			expect(
+				screen.queryByRole("button", { name: "Expand description" }),
+			).not.toBeInTheDocument();
+		});
+
+		it.each([
+			"active",
+			"stopped",
+			"closed",
+		] as const)("collapses to its first line once %s", async (status) => {
+			const user = userEvent.setup();
+			renderWithWork(createWork({ status, body }));
+
+			expect(screen.getByText("Goal")).toBeVisible();
+			expect(screen.queryByText(/Ship the reorder/)).not.toBeInTheDocument();
+
+			await user.click(
+				screen.getByRole("button", { name: "Expand description" }),
+			);
+
+			expect(screen.getByText(/Ship the reorder/)).toBeVisible();
+
+			await user.click(
+				screen.getByRole("button", { name: "Collapse description" }),
+			);
+
+			expect(screen.getByText(/Ship the reorder/)).not.toBeVisible();
+		});
+
+		// The page is reused when it moves to a parent or child work.
+		it("starts collapsed again on the next work", async () => {
+			const user = userEvent.setup();
+			const { rerender } = renderWithWork(createWork({ body }));
+			await user.click(
+				screen.getByRole("button", { name: "Expand description" }),
+			);
+
+			mockUseWorkDetailSubscription.mockReturnValue({
+				...mockUseWorkDetailSubscription.mock.results[0].value,
+				work: createWork({
+					id: "task-1",
+					type: "task",
+					body: "## Other\n\nMore.",
+				}),
+			});
+			rerender(
+				<WorkDetailOverlay
+					workId="task-1"
+					onBack={vi.fn()}
+					onNavigateToSession={vi.fn()}
+					onOpenWorkDetail={vi.fn()}
+				/>,
+			);
+
+			expect(
+				screen.getByRole("button", { name: "Expand description" }),
+			).toBeInTheDocument();
+			expect(screen.queryByText("More.")).not.toBeInTheDocument();
+		});
 	});
 });
 

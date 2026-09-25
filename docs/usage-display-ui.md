@@ -391,10 +391,12 @@ absent.
 
 ## The work detail page: the Usage section
 
-A card in `WorkDetailOverlay`, between Steps and Tasks — a fact about this item,
-above the list of items it aggregates. It reuses the section shape every block on
-that page already has: `h3 text-xs font-medium uppercase text-th-text-muted`, body
-in `rounded-lg bg-th-bg-secondary px-3 py-2`.
+A card in `WorkDetailOverlay`, between Steps and Comments — where the page's
+order puts it ([frontend.md](projects/frontend.md#workdetailoverlay)): a figure
+worth checking now and then, not what a user opens a running work to see. It
+reuses the section shape every block on that page already has:
+`h3 text-xs font-medium uppercase text-th-text-muted`, body in
+`rounded-lg bg-th-bg-secondary px-3 py-2`.
 
 ```
 USAGE
@@ -431,7 +433,7 @@ figure the page is about: `text-th-text-primary font-medium`. Own is context:
 or `This task`, derived from `story_id`. The total column is `Incl. 5 tasks`,
 from `task_count` — singular `1 task`, and the count, not a vague "subtasks",
 because the number is the one thing that makes the second column's scope
-checkable against the list right below it. The footnote
+checkable against the Tasks list on the same page. The footnote
 below the card, `text-xs text-th-text-muted`, is always present when two columns
 are: `Total covers this story and every task beneath it.` It names the item the
 same way the own column does, so that the two cannot contradict each other on
