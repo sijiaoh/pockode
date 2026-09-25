@@ -70,25 +70,39 @@ describe("BranchSheet", () => {
 	// branch list is what scrolls inside that cap, and that the way out of a long
 	// list does not scroll away with it.
 	describe("with more branches than fit on screen", () => {
+		// The smallest list the component itself calls "more than fits": jsdom has
+		// no layout, so its filter threshold is the only thing here a row count
+		// can change, and that threshold counts remote branches too — `branches`
+		// already carries one, so eight local rows are what crosses it. Rows past
+		// that buy nothing but the cost below. Raising the threshold and not this
+		// count turns "pins the filter above the rows" red, which is the right
+		// place to hear about it.
 		const many = {
 			...branches,
-			local: Array.from({ length: 60 }, (_, i) => ({
+			local: Array.from({ length: 8 }, (_, i) => ({
 				name: `topic/${i}`,
 				current: i === 0,
 			})),
 		};
 
+		/**
+		 * Against this file's own preference order, and deliberately: filtering a
+		 * role query by accessible name is charged per button on the page and per
+		 * query, and in this file that has cost whole seconds per query
+		 * (docs/testing.md#a-test-that-really-is-slow). These two assertions need
+		 * a row, not that row's accessible name, so they need not pay it.
+		 */
+		const rowFor = (name: string) =>
+			screen.getByText(name).closest("button") as HTMLElement;
+
 		it("scrolls the rows and leaves the footer out of it", () => {
 			renderSheet({ branches: many });
 
-			const scroller = screen.getByRole("button", { name: /topic\/59/ })
-				.parentElement as HTMLElement;
+			const scroller = rowFor("topic/7").parentElement as HTMLElement;
 			expect(scroller).toHaveClass("overflow-y-auto");
 			// The footer is the way out when none of these branches are right;
-			// inside the scroller it would sit below 60 rows.
-			expect(scroller).not.toContainElement(
-				screen.getByRole("button", { name: /New branch/ }),
-			);
+			// inside the scroller it would sit below every row.
+			expect(scroller).not.toContainElement(screen.getByText(/New branch/));
 		});
 
 		it("pins the filter above the rows", () => {
@@ -108,7 +122,7 @@ describe("BranchSheet", () => {
 				onCheckout: vi.fn().mockRejectedValue(new Error("boom")),
 			});
 
-			await user.click(screen.getByRole("button", { name: /topic\/59/ }));
+			await user.click(rowFor("topic/7"));
 
 			const alert = await screen.findByRole("alert");
 			expect(alert.closest(".sticky")).not.toBeNull();
