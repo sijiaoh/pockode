@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { inputClass } from "../ui/inputClass";
 
 interface Props {
 	onSubmit: (password: string) => void;
@@ -36,7 +37,7 @@ function PasswordInput({ onSubmit, error }: Props) {
 					value={password}
 					onChange={(e) => setPassword(e.target.value)}
 					placeholder="Password"
-					className="mb-4 w-full rounded-lg border border-th-border bg-th-bg-secondary p-3 text-th-text-primary placeholder:text-th-text-muted focus:border-th-border-focus focus:outline-none"
+					className={`mb-4 w-full rounded-lg bg-th-bg-secondary p-3 text-th-text-primary placeholder:text-th-text-muted ${inputClass}`}
 				/>
 				{error && <p className="mb-4 text-sm text-th-error">{error}</p>}
 				<button

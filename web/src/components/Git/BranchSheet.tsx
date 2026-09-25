@@ -7,6 +7,7 @@ import {
 	gitBusySummary,
 } from "../../utils/gitErrors";
 import { Sheet, Spinner } from "../ui";
+import { inputClass } from "../ui/inputClass";
 import BranchName from "./BranchName";
 import GitOutput from "./GitOutput";
 
@@ -119,7 +120,7 @@ function BranchSheet({ branches, onClose, onCheckout, onNewBranch }: Props) {
 							value={filter}
 							onChange={(e) => setFilter(e.target.value)}
 							placeholder="Filter branches…"
-							className="w-full rounded-lg border border-th-border bg-th-bg-primary px-3 py-2 text-sm text-th-text-primary placeholder:text-th-text-muted focus:border-th-border-focus focus:outline-none focus:ring-2 focus:ring-th-accent/20"
+							className={`w-full rounded-lg bg-th-bg-primary px-3 py-2 text-sm text-th-text-primary placeholder:text-th-text-muted ${inputClass}`}
 							autoComplete="off"
 						/>
 					</div>

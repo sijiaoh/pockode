@@ -7,6 +7,7 @@ import { useSettingsStore } from "../../../lib/settingsStore";
 import { waitingLabel } from "../../../lib/valueState";
 import { useWorktreeStore } from "../../../lib/worktreeStore";
 import { useWSStore } from "../../../lib/wsStore";
+import { inputClass } from "../../ui/inputClass";
 import SettingsLoadError from "../../ui/SettingsLoadError";
 import Skeleton from "../../ui/Skeleton";
 
@@ -15,8 +16,7 @@ import Skeleton from "../../ui/Skeleton";
  * the same box either way and nothing moves when the path arrives. Height is
  * nobody's to write down here: it comes out of the padding and the line box.
  */
-const FIELD_BOX =
-	"min-w-0 flex-1 rounded-lg border border-th-border bg-th-bg-primary px-3 py-2 text-sm";
+const FIELD_BOX = `min-w-0 flex-1 rounded-lg bg-th-bg-primary px-3 py-2 text-sm ${inputClass}`;
 
 export default function WorktreeSection() {
 	const navigate = useNavigate();
@@ -103,7 +103,7 @@ export default function WorktreeSection() {
 							autoCapitalize="off"
 							autoCorrect="off"
 							spellCheck={false}
-							className={`${FIELD_BOX} text-th-text-primary placeholder:text-th-text-muted focus:border-th-accent focus:outline-none`}
+							className={`${FIELD_BOX} text-th-text-primary placeholder:text-th-text-muted`}
 						/>
 					) : (
 						// The empty input reads as "not set, using the default", which for

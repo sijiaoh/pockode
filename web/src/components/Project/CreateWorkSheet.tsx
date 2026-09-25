@@ -6,6 +6,7 @@ import { useSettingsStore } from "../../lib/settingsStore";
 import { useWSStore } from "../../lib/wsStore";
 import type { WorkType } from "../../types/work";
 import { Sheet } from "../ui";
+import { inputClass } from "../ui/inputClass";
 import RoleSelect from "./RoleSelect";
 
 interface Props {
@@ -213,7 +214,7 @@ export default function CreateWorkSheet({
 						placeholder={PLACEHOLDER[type]}
 						disabled={isSubmitting}
 						autoComplete="off"
-						className="min-h-[44px] w-full rounded-lg border border-th-border bg-th-bg-primary px-3 py-2 text-sm text-th-text-primary placeholder:text-th-text-muted focus:border-th-border-focus focus:outline-none focus:ring-2 focus:ring-th-accent/20"
+						className={`min-h-[44px] w-full rounded-lg bg-th-bg-primary px-3 py-2 text-sm text-th-text-primary placeholder:text-th-text-muted ${inputClass}`}
 					/>
 				</div>
 

@@ -15,6 +15,7 @@ import { type ValueState, waitingLabel } from "../../lib/valueState";
 import { useWSStore } from "../../lib/wsStore";
 import type { AgentRole } from "../../types/agentRole";
 import BackToChatButton from "../ui/BackToChatButton";
+import { inputClass } from "../ui/inputClass";
 import SettingsLoadError from "../ui/SettingsLoadError";
 import Skeleton from "../ui/Skeleton";
 import RoleSelect from "./RoleSelect";
@@ -496,7 +497,7 @@ function CreateRoleButton() {
 					value={name}
 					onChange={(e) => setName(e.target.value)}
 					placeholder="Role name"
-					className="min-h-[44px] w-full rounded-lg border border-th-border bg-th-bg-primary px-3 py-2 text-sm text-th-text-primary placeholder:text-th-text-muted focus:border-th-accent focus:outline-none"
+					className={`min-h-[44px] w-full rounded-lg bg-th-bg-primary px-3 py-2 text-sm text-th-text-primary placeholder:text-th-text-muted ${inputClass}`}
 					// biome-ignore lint/a11y/noAutofocus: inline creation form
 					autoFocus
 					onKeyDown={(e) => {

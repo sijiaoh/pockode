@@ -3,6 +3,7 @@ import { useEffect, useId, useRef, useState } from "react";
 import type { StagedSubmodule } from "../../types/git";
 import { describeGitFailure, type GitFailure } from "../../utils/gitErrors";
 import { Sheet, Spinner } from "../ui";
+import { inputClass } from "../ui/inputClass";
 import GitOutput from "./GitOutput";
 
 /** The commit amend would replace. */
@@ -181,7 +182,7 @@ function CommitSheet({
 						rows={3}
 						disabled={isCommitting}
 						placeholder="Commit message"
-						className="max-h-60 min-h-[6rem] w-full resize-none overflow-y-auto rounded-lg border border-th-border bg-th-bg-primary px-3 py-2.5 text-th-text-primary placeholder:text-th-text-muted focus:border-th-border-focus focus:outline-none focus:ring-2 focus:ring-th-accent/20 disabled:opacity-50"
+						className={`max-h-60 min-h-[6rem] w-full resize-none overflow-y-auto rounded-lg bg-th-bg-primary px-3 py-2.5 text-th-text-primary placeholder:text-th-text-muted disabled:opacity-50 ${inputClass}`}
 					/>
 				</div>
 

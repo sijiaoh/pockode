@@ -26,6 +26,7 @@ import { formatStepCount, getStepProgress } from "../../utils/workSteps";
 import { ActivityBadge, CollapsibleBody, MarkdownContent } from "../ui";
 import BackButton from "../ui/BackButton";
 import BottomActionBar from "../ui/BottomActionBar";
+import { inputClass } from "../ui/inputClass";
 import { WorktreeBadge } from "../Worktree";
 import CreateWorkSheet from "./CreateWorkSheet";
 import RoleSelect from "./RoleSelect";
@@ -483,7 +484,7 @@ function InlineEditableTitle({ work }: { work: Work }) {
 							if (e.key === "Escape") cancel();
 						}}
 						disabled={saving}
-						className="min-w-0 flex-1 rounded-lg border border-th-border bg-th-bg-primary px-3 py-2 text-lg font-bold text-th-text-primary focus:border-th-accent focus:outline-none"
+						className={`min-w-0 flex-1 rounded-lg bg-th-bg-primary px-3 py-2 text-lg font-bold text-th-text-primary ${inputClass}`}
 					/>
 					<button
 						type="button"
@@ -644,7 +645,7 @@ function InlineEditableBody({ work }: { work: Work }) {
 					disabled={saving}
 					placeholder="Add description..."
 					minRows={3}
-					className="w-full resize-none rounded-lg border border-th-border bg-th-bg-primary px-3 py-2 text-sm text-th-text-primary placeholder:text-th-text-muted focus:border-th-accent focus:outline-none"
+					className={`w-full resize-none rounded-lg bg-th-bg-primary px-3 py-2 text-sm text-th-text-primary placeholder:text-th-text-muted ${inputClass}`}
 				/>
 				<div className="mt-2 flex items-center gap-2">
 					<button

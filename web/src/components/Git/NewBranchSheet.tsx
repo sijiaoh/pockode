@@ -1,6 +1,7 @@
 import { useEffect, useId, useRef, useState } from "react";
 import { gitBusySummary } from "../../utils/gitErrors";
 import { Sheet, Spinner } from "../ui";
+import { inputClass } from "../ui/inputClass";
 
 interface Props {
 	/** What the new branch forks from, already rendered for display. */
@@ -90,7 +91,7 @@ function NewBranchSheet({ base, onClose, onCreate }: Props) {
 						value={name}
 						onChange={(e) => setName(e.target.value)}
 						placeholder="feature/my-feature"
-						className="w-full rounded-lg border border-th-border bg-th-bg-primary px-3 py-2.5 text-th-text-primary placeholder:text-th-text-muted focus:border-th-border-focus focus:outline-none focus:ring-2 focus:ring-th-accent/20"
+						className={`w-full rounded-lg bg-th-bg-primary px-3 py-2.5 text-th-text-primary placeholder:text-th-text-muted ${inputClass}`}
 						disabled={isCreating}
 						autoComplete="off"
 						required

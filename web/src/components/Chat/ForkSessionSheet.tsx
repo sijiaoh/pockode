@@ -4,6 +4,7 @@ import { messagePreview } from "../../lib/messagePreview";
 import type { Message } from "../../types/message";
 import type { AgentType } from "../../types/settings";
 import { Sheet, Spinner } from "../ui";
+import { inputClass } from "../ui/inputClass";
 
 interface Props {
 	/** The message the user picked the fork out of. */
@@ -158,7 +159,7 @@ function ForkSessionSheet({
 						type="text"
 						value={title}
 						onChange={(e) => setTitle(e.target.value)}
-						className="w-full rounded-lg border border-th-border bg-th-bg-primary px-3 py-2.5 text-th-text-primary placeholder:text-th-text-muted focus:border-th-border-focus focus:outline-none focus:ring-2 focus:ring-th-accent/20"
+						className={`w-full rounded-lg bg-th-bg-primary px-3 py-2.5 text-th-text-primary placeholder:text-th-text-muted ${inputClass}`}
 						disabled={isForking}
 						autoComplete="off"
 						required
