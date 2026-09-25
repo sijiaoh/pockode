@@ -29,6 +29,7 @@ import BackButton from "../ui/BackButton";
 import BottomActionBar from "../ui/BottomActionBar";
 import { WorktreeBadge } from "../Worktree";
 import CreateWorkSheet from "./CreateWorkSheet";
+import RoleSelect from "./RoleSelect";
 import StepList from "./StepList";
 import {
 	ACTION_ICON,
@@ -573,24 +574,16 @@ function RoleSection({ work }: { work: Work }) {
 			</h3>
 			{editingRole ? (
 				<div className="flex items-center gap-2">
-					<select
+					<RoleSelect
 						value={work.agent_role_id ?? ""}
-						onChange={(e) => handleRoleChange(e.target.value)}
+						onChange={handleRoleChange}
+						emptyLabel={work.agent_role_id ? undefined : "Select role..."}
 						onBlur={() => {
 							if (!savingRole) setEditingRole(false);
 						}}
 						disabled={savingRole}
-						className="min-h-[44px] flex-1 rounded-lg border border-th-border bg-th-bg-primary px-3 py-2 text-sm text-th-text-primary focus:border-th-accent focus:outline-none"
-						// biome-ignore lint/a11y/noAutofocus: inline edit
 						autoFocus
-					>
-						{!work.agent_role_id && <option value="">Select role...</option>}
-						{roles.map((role) => (
-							<option key={role.id} value={role.id}>
-								{role.name}
-							</option>
-						))}
-					</select>
+					/>
 					{savingRole && (
 						<Loader2 className="size-4 animate-spin text-th-text-muted" />
 					)}

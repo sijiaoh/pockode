@@ -307,8 +307,9 @@ Default role  [ Engineer            ▾ ]
 New stories and tasks start with this role.
 ```
 
-A **native `<select>`**, because that is already how this project asks for a role
-in both of the other two places it asks. `None` plus one option per role, and
+`RoleSelect` (`web/src/components/Project/RoleSelect.tsx`), the native
+`<select>` every role picker in this project uses — the create sheet and the work
+detail's Role field are the other two. `None` plus one option per role, and
 choosing `None` stores the empty string.
 
 **The sentence underneath changes with the answer**, and it is a description of
@@ -335,7 +336,8 @@ the empty-list message above is already saying it where the user is looking.
 
 A stored id with no role behind it gets an `Unknown role` option of its own and
 stays selected, rather than falling back to `None`: `None` is an assertion that
-Settings holds no default, and it does hold one. The sentence, though, goes by
+Settings holds no default, and it does hold one. (`RoleSelect` does this for
+every picker, not only this one.) The sentence, though, goes by
 what the create form will do with an id it cannot resolve — ignore it — and not by
 the fact that one is stored, so it reads from the table above as if there were no
 default at all.
@@ -371,11 +373,6 @@ changed — the delete failure is printed without a prefix of its own (§5).
 
 Deliberately not done:
 
-- **A `RoleSelect` shared by all three role pickers.** There are now three nearly
-  identical native selects — the create sheet, the work detail's Role field, and
-  this footer — and the work detail's is the one of the three with no focus ring.
-  Unifying them, and settling that difference with it, means editing two other
-  screens, so it is a task of its own rather than something folded in here.
 - **Steps edited row by row.** The editor stays *edit all, save, cancel*: the
   order is part of what is being edited, and inline per-row editing cannot
   express a drag.
@@ -392,7 +389,7 @@ Deliberately not done:
 | 1 | No row offers a delete control | `AgentRoleListOverlay.test.tsx` |
 | 2 | The engine line for an unset agent, an unset model, and an unset effort — each printing what §3 says | `AgentRoleListOverlay.test.tsx` for the row, `AgentRoleEngineSelector.test.tsx` for the detail page, and `agentOptions.test.ts` for the two rules neither component can reach: `Follow settings` not being resolved, and an unlisted id printing as itself |
 | 3 | Both counts absent at zero rather than written as `0` | `AgentRoleListOverlay.test.tsx` |
-| 4 | The footer selects a default and can reach `None`; a dangling id stays visible | `AgentRoleListOverlay.test.tsx` |
+| 4 | The footer selects a default and can reach `None`; a dangling id stays visible | `AgentRoleListOverlay.test.tsx`; the `Unknown role` option itself in `RoleSelect.test.tsx` |
 | 5 | The sentence matches the create form in all four states of §7 — the three it writes, and the empty list where it writes nothing | `AgentRoleListOverlay.test.tsx`, in two tests; `resolveInitialRole` is the shared rule the sentence and the create sheet both read |
 | 6 | A failed reset and a failed default-role change appear in their own places, and the reset message survives the list going back to loading | `AgentRoleListOverlay.test.tsx` |
 | 7 | Add Role and Reset are absent while the list is not there | `AgentRoleListOverlay.test.tsx` |

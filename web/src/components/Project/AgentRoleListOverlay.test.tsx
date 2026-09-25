@@ -230,7 +230,6 @@ describe("AgentRoleListOverlay", () => {
 			renderOverlay();
 
 			expect(screen.getByLabelText("Default role")).toHaveValue("gone");
-			expect(screen.getByRole("option", { name: "Unknown role" })).toBeTruthy();
 			expect(
 				screen.getByText("New stories and tasks ask which role to use."),
 			).toBeInTheDocument();

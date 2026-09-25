@@ -188,7 +188,7 @@ Tasks, not an order of its own:
 4. **Unanswered questions** — A read-only block, present whenever `pending_questions` is non-empty, with one Answer button into the chat when the work has a session ([lifecycle-ui.md §6.2](../lifecycle-ui.md#62-detail-page))
 5. **Tasks** (story only) — The story's child tasks as `WorkRow`s, the one place a story's tasks are listed, plus an `Add Task` control opening `CreateWorkSheet`. The rows differ from the list's in one slot only: the story name is left off, because every row here is a task of the story on screen. The heading carries `closed/total` and, whenever any child is `active`, an "{n} active" count — the same count that makes a refused `step_done` legible (docs/lifecycle-ui.md §6.2)
 6. **Description** — Inline-editable textarea with Markdown rendering. Fully shown while the work is `open`, when the brief is still what the user is writing; once it has left `open` the brief is settled, and in full it would push everything below it off a phone's first screen, so it collapses to its first non-empty line (a leading heading, quote or list marker dropped — a brief usually opens with `## Goal`) and expands, through `CollapsibleBody`, from that line or the chevron beside the pencil. The component is keyed by work id, so moving between a story and its task does not carry one brief's expanded or half-edited state to the next
-7. **Role** — Inline-editable select (tap to switch role)
+7. **Role** — Inline-editable `RoleSelect` (tap to switch role)
 8. **Steps** — Step progress indicator showing current step position (if agent role has steps defined). Each step's text renders as Markdown, like the role page's copy of it ([lifecycle-ui.md §6.3](../lifecycle-ui.md#63-steplist))
 9. **Usage** — Tokens and cost, this item's own beside the total over it and its tasks, from the same `work.detail` subscription and updating live as its sessions spend ([usage-display-ui.md](../usage-display-ui.md), [aggregation](../code/work-system.md#usage-aggregation))
 10. **Comments** — Loaded via `work.detail.subscribe` (real-time), and read-only: the list is the record agents and the engine write about what happened, and nothing here writes or edits one. A comment carries no author field ([data-model.md](data-model.md#comment)), so an edit would leave nothing to tell a user's wording from the agent's — and the next agent to read the story with `work_comment_list` would take the rewrite as its predecessor's report
@@ -244,6 +244,18 @@ and navigating to the caller. It stays `dismissible={false}` while the request i
 in flight, and does not release its submit lock on success — the caller closes
 it, and releasing early would allow a second work to be created.
 
+### RoleSelect
+
+The one control for choosing an agent role, used by all three places that ask
+for one: `CreateWorkSheet`'s Role field, the work detail's Role field, and the
+default-role footer of `AgentRoleListOverlay`. It reads the roles from
+`useAgentRoleStore` itself, so a caller hands it the stored id and an
+`onChange` rather than the list. `emptyLabel` adds a `""` choice under that
+label — the `Select role...` placeholder while nothing is picked, or the footer's
+`None`, which is a real answer there. An id with no role behind it is shown as
+`Unknown role`, never as some other role
+([agent-roles-ui.md §7](../agent-roles-ui.md#7-the-default-role-in-words-and-on-a-row)).
+
 ### AgentRoleListOverlay
 
 The architecture of this screen and the detail page below it — what each slot
@@ -257,7 +269,7 @@ at the bottom of that detail page, rather than a button per row.
 
 Below the list, outside the scroll region so it survives an empty list, a footer
 holds the three things that are about the set of roles rather than one of them:
-the default-role `<select>` with a line saying what a new story would start with,
+the default-role `RoleSelect` with a line saying what a new story would start with,
 the inline "Add Role" form (name only; `role_prompt` is set to empty string), and
 Reset to defaults.
 
