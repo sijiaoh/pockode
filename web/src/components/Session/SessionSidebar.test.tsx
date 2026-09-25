@@ -2,8 +2,11 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { Activity } from "../../lib/activity";
 import { uploadFile } from "../../lib/fileUpload";
 import { uploadActions } from "../../lib/uploadStore";
+import { useWorkStore } from "../../lib/workStore";
+import type { WorkListItem } from "../../types/work";
 import SessionSidebar from "./SessionSidebar";
 
 const wsState = {
@@ -96,16 +99,22 @@ function renderSidebar(onClose: () => void) {
 	);
 }
 
-/** The dot the Files tab is badged with, which has nothing else to name it. */
-function filesBadge(): Element | null {
-	// Nested: the tab button wraps its icon in a span the badges anchor to.
-	return screen.getByLabelText("Files").querySelector("span > span");
+/**
+ * The dot a tab is badged with, which has nothing else to name it: it is
+ * `aria-hidden` and carries no text. Nested, because the tab button wraps its
+ * icon in the span the badges anchor to.
+ */
+function tabBadge(label: string): Element | null {
+	return screen.getByLabelText(label).querySelector("span > span");
 }
 
 // Module-level, so every case states the count it is about rather than
 // inheriting one from whichever ran before it.
 beforeEach(() => {
 	gitChangeCount = undefined;
+	// Same reason, and in both directions: the work list feeds the Project tab's
+	// badge, so a case that leaves rows behind would badge a later case's sidebar.
+	useWorkStore.getState().reset();
 });
 
 describe("SessionSidebar on a phone", () => {
@@ -153,7 +162,7 @@ describe("SessionSidebar on a phone", () => {
 		renderSidebar(onClose);
 		// Nothing to badge yet, which is also what pins the dot below to the badge
 		// rather than to some other span the tab button might grow.
-		expect(filesBadge()).toBeNull();
+		expect(tabBadge("Files")).toBeNull();
 
 		// A folder of that name: refused before anything is sent, and the row then
 		// stays until it is dismissed.
@@ -168,7 +177,7 @@ describe("SessionSidebar on a phone", () => {
 		expect(onClose).toHaveBeenCalled();
 		// The badge is the wider question and still lit, which is how the row is
 		// found again once the file has been read.
-		expect(filesBadge()).not.toBeNull();
+		expect(tabBadge("Files")).not.toBeNull();
 	});
 });
 
@@ -193,5 +202,39 @@ describe("the Git tab's change count", () => {
 		gitChangeCount = 0;
 		renderSidebar(vi.fn());
 		expect(screen.getByRole("button", { name: "Git" })).toBeInTheDocument();
+	});
+});
+
+describe("the Project tab's attention badge", () => {
+	// Its activity is the whole of what the badge reads; the rest is scaffolding.
+	const work = (activity: Activity): WorkListItem => ({
+		id: "w1",
+		type: "task",
+		title: "Rewire the lifecycle",
+		status: "active",
+		activity,
+		updated_at: "2026-03-04T00:00:00Z",
+	});
+
+	it("lights while a work is waiting on the user", () => {
+		useWorkStore.getState().setWorks([work("needs_permission")]);
+
+		renderSidebar(vi.fn());
+
+		// On a phone the sidebar is a drawer: without this the user has to open it
+		// and pick the tab to find out anyone is waiting.
+		expect(tabBadge("Project")).not.toBeNull();
+		// The hue the other tabs use means "there is news here". This one means a
+		// person is being waited on, and has to match the dot it stands for inside
+		// the tab — one dot, one hue, one meaning (docs/lifecycle-ui.md §4).
+		expect(tabBadge("Project")).toHaveClass("bg-th-warning");
+	});
+
+	it("says nothing while every work is getting on with it", () => {
+		useWorkStore.getState().setWorks([work("running")]);
+
+		renderSidebar(vi.fn());
+
+		expect(tabBadge("Project")).toBeNull();
 	});
 });

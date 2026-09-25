@@ -16,6 +16,7 @@ import {
 	useHasUnfinishedUploads,
 	useHasUploadActivity,
 } from "../../lib/uploadStore";
+import { useWorkNeedsAttention } from "../../lib/workStore";
 import { FilesTab } from "../Files";
 import { DiffTab } from "../Git";
 import { Sidebar, TabbedSidebar, type TabConfig } from "../Layout";
@@ -93,6 +94,11 @@ function SessionSidebar({
 	const hasUploadActivity = useHasUploadActivity();
 	// Narrower than the badge, and deliberately so — see `handleSelectFile`.
 	const hasUnfinishedUploads = useHasUnfinishedUploads();
+	// The tab bar is as far out as this signal reaches — on a phone it is inside
+	// the drawer — so without it a work waiting on the user is only ever found by
+	// opening the drawer *and* picking this tab. The same bit lights the dot
+	// inside the tab, which is what makes the two agree (see `ProjectTab`).
+	const worksNeedAttention = useWorkNeedsAttention();
 
 	// The watcher belongs to the sidebar, not to the Git tab: it feeds the tab's
 	// count badge, which has to keep up while another tab is on top. Each term
@@ -145,9 +151,18 @@ function SessionSidebar({
 				icon: GitCompare,
 				countBadge: gitCountBadge,
 			},
-			{ id: "project", label: "Project", icon: ListChecks },
+			{
+				id: "project",
+				label: "Project",
+				icon: ListChecks,
+				showBadge: worksNeedAttention,
+				// Not the other tabs' "there is news here": this one means a person
+				// is being waited on, and it wears the same hue as the dot it stands
+				// for inside the tab (docs/lifecycle-ui.md §4).
+				badgeTone: "attention",
+			},
 		],
-		[hasAnyUnread, hasUploadActivity, gitCountBadge],
+		[hasAnyUnread, hasUploadActivity, gitCountBadge, worksNeedAttention],
 	);
 
 	const handleSelectSession = useCallback(

@@ -1,3 +1,4 @@
+import { renderHook } from "@testing-library/react";
 import { JSONRPCErrorCode, JSONRPCErrorException } from "json-rpc-2.0";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type {
@@ -5,7 +6,11 @@ import type {
 	WorkListEarlierResult,
 	WorkListItem,
 } from "../types/work";
-import { useWorkStore, workPagingActions } from "./workStore";
+import {
+	useWorkNeedsAttention,
+	useWorkStore,
+	workPagingActions,
+} from "./workStore";
 
 const mockArchive = vi.fn(
 	async (_id: string, _cursor: string): Promise<WorkListArchiveResult> => ({
@@ -394,5 +399,57 @@ describe("the work list's two fetches", () => {
 		expect(state.error).toBeNull();
 		expect(state.works).toHaveLength(1);
 		expect(state.hidden).toEqual({ stopped: 0, open: 7 });
+	});
+});
+
+describe("who is waiting on the user", () => {
+	beforeEach(() => {
+		useWorkStore.getState().reset();
+	});
+
+	const hasAttention = () =>
+		renderHook(() => useWorkNeedsAttention()).result.current;
+
+	it("counts a work whose agent is blocked on a permission", () => {
+		useWorkStore
+			.getState()
+			.setWorks([
+				row({ id: "w1" }),
+				row({ id: "w2", activity: "needs_permission" }),
+			]);
+
+		expect(hasAttention()).toBe(true);
+	});
+
+	it("counts a running work that has posted a question nobody answered", () => {
+		// The two dimensions are independent: an agent goes on running after it
+		// asks, so the activity alone would never say the user owes it anything.
+		useWorkStore
+			.getState()
+			.setWorks([row({ activity: "running", unanswered_questions: 1 })]);
+
+		expect(hasAttention()).toBe(true);
+	});
+
+	it("leaves out a stopped work nobody is waiting on", () => {
+		// Handed back to a person, but not waiting on one — and the dot means the
+		// second thing (docs/lifecycle-ui.md §4).
+		useWorkStore
+			.getState()
+			.setWorks([row({ status: "stopped", activity: "stopped" })]);
+
+		expect(hasAttention()).toBe(false);
+	});
+
+	it("leaves out the states nobody can act on", () => {
+		useWorkStore
+			.getState()
+			.setWorks([
+				row({ activity: "background" }),
+				row({ id: "w2", activity: "waiting_children" }),
+				row({ id: "w3", activity: "idle" }),
+			]);
+
+		expect(hasAttention()).toBe(false);
 	});
 });

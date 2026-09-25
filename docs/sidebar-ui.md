@@ -149,7 +149,7 @@ Colour, restated as rules rather than as a list of places:
 
 | Token | Means |
 |-------|-------|
-| `th-accent` | The one primary action, the active tab, the focus ring, a drag under the cursor right now, a progress bar, a tab's notification badge (the dot, and the Git tab's change count) |
+| `th-accent` | The one primary action, the active tab, the focus ring, a drag under the cursor right now, a progress bar, a tab's notification badge (the dot, and the Git tab's change count) — with one exception: the badge that means a person is being waited on is `th-warning`, because it stands for a warning dot inside that tab ([lifecycle-ui.md §4](lifecycle-ui.md#4-attention-dots)) |
 | `th-accent` as a 2px left bar | A row singled out: the selected row in `SidebarListItem` |
 | `th-bg-tertiary` | The row you are looking at (selected file, selected commit), and the fill of secondary buttons inside sheets |
 | `th-text-muted` | Group headers, metadata, and the icon of an action rare enough to sit below the row it lives on (a tree row's `…`). Quieter than the body colour, never quiet enough to stop being read — it owes AA 4.5 over the worst surface it lands on |

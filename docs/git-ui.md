@@ -358,8 +358,11 @@ rather than the `99+` rule being written twice. There is deliberately **no
 `aria-live`**: while an agent is editing files the count moves every few
 seconds, and announcing each step would turn a screen reader into a counter.
 Shape and colour live in `ui/BadgeCount`: the same `th-accent` fill and the same
-corner of the same icon box as the plain `ui/BadgeDot` the other tabs use, so
-the two read as one family ([sidebar-ui.md](sidebar-ui.md#visual-weight)).
+corner of the same icon box as the plain `ui/BadgeDot` on the Sessions and
+Files tabs, so the two read as one family
+([sidebar-ui.md](sidebar-ui.md#visual-weight)). Named rather than said as
+"the other tabs": the Project tab's badge is the one exception, and it is
+`th-warning` ([lifecycle-ui.md §4](lifecycle-ui.md#4-attention-dots)).
 
 The badge rides in the sidebar's tab bar, so it is visible exactly when that bar
 is: below `expanded` a closed drawer takes the whole bar with it, and the

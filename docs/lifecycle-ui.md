@@ -260,7 +260,7 @@ the glyph and the dot.
 |---|---|---|
 | `ActivityIcon` | glyph only, `size-3.5` (`size-3` at `sm`) | work rows, session rows, group headers |
 | `ActivityBadge` | pill: glyph + label | the work detail heading, which is the one surface with room for the word |
-| `ActivityDot` | 8px dot, warning, `aria-hidden` | ProjectTab, story rollup (§4) |
+| `ActivityDot` | 8px dot, warning, `aria-hidden` | the Project tab's panel (§4); the tab's own badge is a `BadgeDot` in the same hue |
 
 `ActivityBadge` keeps `StatusBadge`'s existing shape — hue on the border, tint
 behind it, label in a text colour that passes AA — including its reasoning about
@@ -612,8 +612,26 @@ dimensions folded back into the one question a dot can ask.
 
 | Surface | Condition |
 |---|---|
-| ProjectTab | any work in the list satisfies `needsAttention` |
+| The sidebar's Project tab, and its panel | any work in the list satisfies `needsAttention` |
 | Session row | the row's own two facts (it *is* the leaf) — §2.1 |
+
+**That tab carries the dot twice, and the two are one dot.** They are both kept
+because they answer different halves of one journey: on a phone the tab bar is
+itself inside the drawer, so without a badge on the tab a waiting work is found
+only by opening the drawer *and* picking this tab. The badge says which tab; the
+dot in the panel says where to look once it is open. Neither derives the bit for
+itself — both read `useWorkNeedsAttention` (`workStore.ts`), where the rule lives
+so that no call site can restate it, following `isWorktreeBound`
+([work-system.md § Displaying a Work's Worktree](code/work-system.md#displaying-a-works-worktree)).
+A second copy of *is anyone waiting on me* is a copy that can disagree, and what
+the user would see is a badge for a dot that is not there.
+
+**The badge wears warning, not the accent the other tabs' badges use.** Accent
+on that tab bar already means *something arrived here*
+([sidebar-ui.md § Visual weight](sidebar-ui.md#visual-weight)); this badge means a
+person is being waited on, and it stands for a dot a few pixels away that is
+already warning. One hue per meaning is the rule this section opens with, and
+two hues for one meaning, side by side, is the thing it forbids.
 
 **The two dimensions are separate everywhere a user can act and joined only
 here.** A dot cannot be acted on — it says "look over there" — so it needs one
@@ -626,8 +644,9 @@ A work row carries **no** dot, and the story row's child rollup is gone with it
 ([project-ui.md §3](project-ui.md#3-the-row)): a task that needs the user now
 has a row of its own in *Needs you*, so both halves of what the dot used to
 roll up are already on screen beside the story, and a dot would point at them.
-The ProjectTab dot is untouched, because it is read when the list is *not* on
-screen — which is the whole reason it exists.
+The Project tab's dot is untouched, because it is read when the list is *not* on
+screen — which is the whole reason it exists, and the reason the tab badge
+carries it one step further out.
 
 Deliberately outside the dot:
 
@@ -1092,6 +1111,6 @@ controls are what they will land on:
 | `web/src/components/Project/WorkDetailOverlay.tsx` | `ActivityBadge`, the `child`-only wait line, the unanswered-questions block, four-status button table |
 | `web/src/components/Project/WorkPrimaryAction.tsx` | new — the four-status table and the Stop confirmation. The row renders it; the action bar writes its own labelled button from the same hook and tables, which is why this has no labelled form of its own. It absorbs `WorkListOverlay`'s exported `StartButton`, which was the second answer to "which button does this row get" |
 | `web/src/components/Project/StepList.tsx` | §6.3 |
-| `web/src/components/Project/ProjectTab.tsx` | dot from `needsAttention` |
+| `web/src/components/Project/ProjectTab.tsx` | dot from `useWorkNeedsAttention` (`workStore.ts`) — the same bit `SessionSidebar` badges the tab itself with (§4) |
 | `web/src/utils/systemMessage.ts` | the `wait_stranded` work event (§7.2), laid out like `child_done` |
 | `web/src/types/{message,work}.ts` | `turn`; `status` / `activity` / `wait`; `unanswered_questions`, `PendingQuestion` |

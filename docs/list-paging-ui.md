@@ -46,12 +46,13 @@ and each fails quietly if a page is allowed to be the whole truth.
 ### 2.1 A count is over everything, never over a page
 
 The *Needs you* heading carries a count, and the Project tab carries an
-attention dot derived from the same predicate over the whole work list
-(`web/src/components/Project/ProjectTab.tsx`). A count computed over a loaded
-page is not a smaller count — it is a wrong one, and the dot is worse: it is an
-*absence* of a signal, so a user is told there is nothing to do by a list that
-simply has not been read that far. **Nothing that says "how many" or "is there
-any" may be derived from a page.**
+attention dot — on the tab itself as much as in its panel, both reading one bit
+(lifecycle-ui.md §4) — derived from the same predicate over the whole work list
+(`useWorkNeedsAttention` in `web/src/lib/workStore.ts`). A count computed over a
+loaded page is not a smaller count — it is a wrong one, and the dot is worse: it
+is an *absence* of a signal, so a user is told there is nothing to do by a list
+that simply has not been read that far. **Nothing that says "how many" or "is
+there any" may be derived from a page.**
 
 This is the constraint that decides §4: the part of the work list those signals
 are read from is not paged at all.
