@@ -58,7 +58,10 @@ function imageContent(overrides: Partial<FileContent> = {}): FileContent {
 
 function renderStrip(files: FileBlock[], onOpenFile?: (path: string) => void) {
 	const queryClient = new QueryClient({
-		defaultOptions: { queries: { retry: false } },
+		// Same as `FilesTab.test.tsx`: `useAttachmentContent` passes a `retry` of
+		// its own, so `retry: false` does not reach it. Only the ~7s of backoff
+		// between attempts is taken away, not the attempts themselves.
+		defaultOptions: { queries: { retry: false, retryDelay: 0 } },
 	});
 	const wrapper = ({ children }: { children: ReactNode }) => (
 		<QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
