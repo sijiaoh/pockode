@@ -2,12 +2,14 @@ package ws
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 
 	"github.com/pockode/server/agentrole"
 	"github.com/pockode/server/rpc"
 	"github.com/pockode/server/session"
+	"github.com/pockode/server/work"
 	"github.com/sourcegraph/jsonrpc2"
 )
 
@@ -102,5 +104,54 @@ func TestAgentRoleUpdate_RejectionReachesTheClient(t *testing.T) {
 	if !strings.Contains(resp.Error.Message, codexModel) ||
 		!strings.Contains(resp.Error.Message, string(session.AgentTypeClaude)) {
 		t.Errorf("message %q names neither the model nor the agent", resp.Error.Message)
+	}
+}
+
+// TestAgentRoleDelete_RefusalIsPrintedVerbatim pins the wording of the one
+// refusal the client prints without a prefix of its own: the reason is the
+// sentence the user reads — `AgentRoleDetailOverlay`'s delete section shows it
+// as-is — so both the singular and the plural form are the server's to get
+// right.
+func TestAgentRoleDelete_RefusalIsPrintedVerbatim(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		works int
+		want  string
+	}{
+		{
+			name:  "one work item",
+			works: 1,
+			want:  "Can't delete: 1 work item still uses this role. Change its role, or delete it, first.",
+		},
+		{
+			name:  "several work items",
+			works: 3,
+			want:  "Can't delete: 3 work items still use this role. Change their role, or delete them, first.",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			env := newTestEnv(t, &mockAgent{})
+
+			for i := 0; i < tc.works; i++ {
+				if _, err := env.workStore.Create(bgCtx, work.Work{
+					Type:        work.WorkTypeStory,
+					Title:       fmt.Sprintf("story %d", i),
+					AgentRoleID: env.testRoleID,
+				}); err != nil {
+					t.Fatalf("create work: %v", err)
+				}
+			}
+
+			resp := env.call("agent_role.delete", map[string]any{"id": env.testRoleID})
+			if resp.Error == nil {
+				t.Fatal("expected a role still in use to be undeletable")
+			}
+			if resp.Error.Code != jsonrpc2.CodeInvalidParams {
+				t.Errorf("code = %d, want InvalidParams (%d)", resp.Error.Code, jsonrpc2.CodeInvalidParams)
+			}
+			if resp.Error.Message != tc.want {
+				t.Errorf("message = %q, want %q", resp.Error.Message, tc.want)
+			}
+		})
 	}
 }

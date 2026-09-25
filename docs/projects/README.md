@@ -28,3 +28,4 @@ Zustand stores ◄─── WebSocket ───► RPC handlers ──┐       
 | [API](api.md) | MCP tools (agent-facing), WebSocket RPC (client-facing), real-time subscription system with backpressure |
 | [Frontend](frontend.md) | Zustand stores, RPC actions, subscription hooks, UI overlay components |
 | [Project UI](../project-ui.md) | The project page's information architecture: the two segments, the four groups, which work gets a row, the row itself, and where creating work lands |
+| [Agent Roles UI](../agent-roles-ui.md) | The agent-role screens: what a row says about a role, where deleting lives, and the footer that owns the default role |

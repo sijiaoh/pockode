@@ -88,3 +88,61 @@ export function buildChoices(
 
 	return choices;
 }
+
+/**
+ * The empty agent type. Not called Auto, though the empty model and effort are:
+ * this one points at a value the user set themselves in Settings and can go
+ * read, while Auto hands the decision to the CLI. The three sit in one panel, so
+ * one word for both would say they mean the same thing.
+ */
+export const FOLLOW_SETTINGS_ID = "";
+export const FOLLOW_SETTINGS_LABEL = "Follow settings";
+export const FOLLOW_SETTINGS_DESCRIPTION =
+	"Use the default engine from Settings";
+
+export interface EngineSummary {
+	/** The agent's own label; null when the role defers to Settings. */
+	agentLabel: string | null;
+	modelLabel: string;
+	/** Null on Auto: whichever level the CLI then picks is its own business. */
+	effortLabel: string | null;
+	/** The one line both the collapsed engine field and the role row print. */
+	text: string;
+}
+
+/**
+ * One engine written as one line, for the two places that write it: the agent
+ * role page's collapsed engine row and the agent role list's row. A second
+ * copy of this joining is how the two would start saying different things about
+ * one record.
+ *
+ * `agentLabel` is null, never resolved from Settings, when the role names no
+ * agent: the record really does say "follow settings", and an unresolved
+ * snapshot resolves to the most reassuring engine there is — Claude on Auto —
+ * which is the one answer a user on Codex must not be shown.
+ */
+export function describeEngine({
+	agentLabel,
+	models,
+	model,
+	efforts,
+	effort,
+}: {
+	agentLabel: string | null;
+	models: AgentOption[] | undefined;
+	model: string;
+	efforts: AgentOption[] | undefined;
+	effort: string;
+}): EngineSummary {
+	const modelLabel = getOptionLabel(models, model);
+	const effortLabel =
+		effort === AUTO_ID ? null : getOptionLabel(efforts, effort);
+	return {
+		agentLabel,
+		modelLabel,
+		effortLabel,
+		text: agentLabel
+			? [agentLabel, modelLabel, effortLabel].filter(Boolean).join(" · ")
+			: FOLLOW_SETTINGS_LABEL,
+	};
+}

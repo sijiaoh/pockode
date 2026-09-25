@@ -38,9 +38,23 @@ export interface AgentRoleUpdateParams {
 
 export interface AgentRoleListSubscribeResult {
 	items: AgentRole[];
+	/**
+	 * How many work items name each role, keyed by role id. A role missing from
+	 * the map is referenced by nothing.
+	 *
+	 * It is not a field on the role because it is not the role's: it comes from
+	 * the work store and moves when no role has changed, so it arrives on its
+	 * own `ref_counts` notification, always as the whole map.
+	 */
+	work_ref_counts: Record<string, number>;
 }
 
 export type AgentRoleListChangedNotification =
 	| { id: string; operation: "create" | "update"; role: AgentRole }
 	| { id: string; operation: "delete"; roleId: string }
-	| { id: string; operation: "sync"; roles: AgentRole[] };
+	| { id: string; operation: "sync"; roles: AgentRole[] }
+	| {
+			id: string;
+			operation: "ref_counts";
+			work_ref_counts: Record<string, number>;
+	  };

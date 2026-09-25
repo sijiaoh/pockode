@@ -74,7 +74,9 @@ func NewRPCHandler(password string, sessions SessionStore, version string, devMo
 	worktreeManager.AddSessionChangeListener(workDetailWatcher)
 	worktreeManager.AddSessionChangeListener(workListWatcher)
 
-	agentRoleListWatcher := watch.NewAgentRoleListWatcher(agentRoleStore)
+	// The work store is the reference-count source: each row says how many work
+	// items name the role, and that changes without any role changing.
+	agentRoleListWatcher := watch.NewAgentRoleListWatcher(agentRoleStore, workStore)
 	agentRoleListWatcher.Start()
 
 	return &RPCHandler{

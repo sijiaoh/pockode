@@ -94,7 +94,7 @@ no author field, with nothing left to tell the two apart
 | `agent_role.update` | `AgentRoleUpdateParams` | `{}` | Update fields |
 | `agent_role.delete` | `AgentRoleDeleteParams` | `{}` | Delete (with referential integrity check) |
 | `agent_role.reset_defaults` | — | `{}` | Delete all roles and recreate defaults |
-| `agent_role.list.subscribe` | `SubscribeParams` | `{items: AgentRole[]}` | Subscribe + get current snapshot |
+| `agent_role.list.subscribe` | `SubscribeParams` | `{items: AgentRole[], work_ref_counts: {[roleId]: number}}` | Subscribe + get current snapshot; `work_ref_counts` says how many work items name each role, and is refreshed whole by the `ref_counts` notification |
 | `agent_role.list.unsubscribe` | `{id}` | `{}` | Unsubscribe |
 
 ### Wire Types
@@ -211,7 +211,14 @@ starting point.
 
 ### `agent_role.delete` Referential Integrity
 
-Before deleting an agent role, the handler scans all work items. If any work item references the role (`agent_role_id` match), the delete is rejected with an error indicating how many items reference it.
+Before deleting an agent role, the handler scans all work items and counts the references with the same `work.CountRoleRefs` the list subscription's `work_ref_counts` is built from — one count, so the number a client draws on a row and the number that refuses the delete cannot disagree. The status is not filtered: a closed work item still blocks the delete ([why](../agent-roles-ui.md#5-deleting-lives-on-the-detail-page)).
+
+The refusal message is **user-facing verbatim** — the client prints it as it stands, with no prefix of its own — which is why it is a capitalised sentence rather than a lowercase fragment like its neighbours, and why singular and plural are spelled out:
+
+```
+Can't delete: 1 work item still uses this role. Change its role, or delete it, first.
+Can't delete: 3 work items still use this role. Change their role, or delete them, first.
+```
 
 ## Real-time Subscription System
 
@@ -232,7 +239,7 @@ Store (mutation)
 
 1. Client generates the subscription `id`, registers its local callback under it, then calls `*.list.subscribe` with that id.
 2. Server registers a `Subscription` under the client's id (with the connection's `Notifier`), then reads the current list. Registration comes **before** the list read, so no event between the two is missed — and because the id was the client's to begin with, such an event is routed to a callback that already exists ([why](../code/subscription-system.md#why-nothing-is-lost-while-a-subscription-is-being-opened)).
-3. Server returns `{items}` — the initial snapshot alone; the reply carries no id.
+3. Server returns the initial snapshot alone; the reply carries no id. `{items}` for `work.list`, `{items, work_ref_counts}` for `agent_role.list`.
 4. Client calls `*.list.unsubscribe` with the same `id` to stop receiving notifications.
 
 ### Notification Format
@@ -252,6 +259,17 @@ For `delete`, only the deleted item's ID:
 
 For `agent_role.list.changed`, the fields are `role` / `roleId` instead of `work` / `workId`.
 
+**Reference counts** (`agent_role.list.changed` only) — a fifth operation, sent
+when the number of work items naming a role moves. Always the whole map, which
+replaces whatever the client held:
+```json
+{ "id": "<sub-id>", "operation": "ref_counts", "work_ref_counts": { "<role-id>": 3 } }
+```
+A role nothing references is absent rather than present as `0`. This arrives on
+the agent role list's own channel because the count lives in the work store, not
+the role store — the watcher listens to both
+([why](../code/subscription-system.md#why-one-channel-carries-two-stores-changes)).
+
 **Full sync** (after event drop):
 ```json
 { "id": "<sub-id>", "operation": "sync", "works": [...] }
@@ -266,3 +284,5 @@ The event channel has capacity 64. When it's full:
 3. If dirty was set, instead of sending the incremental change, the watcher sends a **full sync** notification with the complete current list.
 
 This ensures clients always converge to the correct state, even under burst conditions.
+
+`agent_role.list`'s *work* events are the one exception, because they are answered with a whole recomputed map rather than an increment — a dropped one costs nothing and sets no flag ([why](../code/subscription-system.md#why-one-channel-carries-two-stores-changes)).

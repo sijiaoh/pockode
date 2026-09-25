@@ -29,3 +29,12 @@ export const AGENT_TYPES = Object.keys(AGENT_TYPE_INFO) as AgentType[];
  * never touched the agent setting is really on this one.
  */
 export const DEFAULT_AGENT_TYPE: AgentType = "claude";
+
+/**
+ * The agent's own name, or the id itself when this build has no entry for it.
+ * Shown as itself rather than rewritten to a known agent: the record really is
+ * set to it, and drawing Codex as Claude would be a lie about a stored value.
+ */
+export function getAgentLabel(agentType: string): string {
+	return AGENT_TYPE_INFO[agentType as AgentType]?.label ?? agentType;
+}

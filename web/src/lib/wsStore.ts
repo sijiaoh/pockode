@@ -13,7 +13,6 @@ import {
 } from "json-rpc-2.0";
 import { create } from "zustand";
 import type {
-	AgentRole,
 	AgentRoleListChangedNotification,
 	AgentRoleListSubscribeResult,
 } from "../types/agentRole";
@@ -185,7 +184,7 @@ export interface WatchActions {
 	workDetailUnsubscribe: (id: string) => Promise<void>;
 	agentRoleListSubscribe: (
 		callback: (params: AgentRoleListChangedNotification) => void,
-	) => Promise<WatchSubscribeResult<AgentRole[]>>;
+	) => Promise<WatchSubscribeResult<AgentRoleListSubscribeResult>>;
 	agentRoleListUnsubscribe: (id: string) => Promise<void>;
 }
 
@@ -1167,7 +1166,7 @@ export const useWSStore = create<WSState>((set, get) => ({
 				agentRoleListWatchCallbacks,
 				callback,
 			);
-			return { id, initial: (result as AgentRoleListSubscribeResult).items };
+			return { id, initial: result as AgentRoleListSubscribeResult };
 		},
 
 		agentRoleListUnsubscribe: (id: string) =>

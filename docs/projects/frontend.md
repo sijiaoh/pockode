@@ -11,7 +11,7 @@ Two Zustand stores hold entity state:
 | Store | State | File |
 |---|---|---|
 | `useWorkStore` | `works: WorkListItem[]`, `isLoading`, `error` | `web/src/lib/workStore.ts` |
-| `useAgentRoleStore` | `roles: AgentRole[]`, `isLoading`, `error` | `web/src/lib/agentRoleStore.ts` |
+| `useAgentRoleStore` | `roles: AgentRole[]`, `workRefCounts: Record<string, number>`, `isLoading`, `error` | `web/src/lib/agentRoleStore.ts` |
 
 Both stores expose the same action pattern:
 
@@ -77,6 +77,11 @@ Both `useWorkSubscription` and `useAgentRoleSubscription` follow the same update
 | `create` | Append to list; deduplicate if item already exists (race between subscribe and initial fetch) |
 | `update` | Replace item by ID |
 | `delete` | Remove item by ID |
+
+`useAgentRoleSubscription` handles one more, `ref_counts`, which replaces
+`workRefCounts` wholesale. It is never patched and `sync` never clears it: the
+counts belong to the work store and move while no role changes
+([why](../code/subscription-system.md#why-one-channel-carries-two-stores-changes)).
 
 ## UI Structure
 
@@ -223,7 +228,20 @@ it, and releasing early would allow a second work to be created.
 
 ### AgentRoleListOverlay
 
-Activates `useAgentRoleSubscription`. Lists all roles with a delete button per row. Bottom area has an inline "Add Role" form (name only; `role_prompt` is set to empty string).
+The architecture of this screen and the detail page below it — what each slot
+holds and why the controls sit where they do — is
+[agent-roles-ui.md](../agent-roles-ui.md); this section describes the components.
+
+Activates `useAgentRoleSubscription`. Each role is a two-line card — name and
+default-role star on the first, then its engine, its step count and how many work
+items use it — and the whole card opens the detail page. Deleting has one home,
+at the bottom of that detail page, rather than a button per row.
+
+Below the list, outside the scroll region so it survives an empty list, a footer
+holds the three things that are about the set of roles rather than one of them:
+the default-role `<select>` with a line saying what a new story would start with,
+the inline "Add Role" form (name only; `role_prompt` is set to empty string), and
+Reset to defaults.
 
 ### AgentRoleDetailOverlay
 
