@@ -65,7 +65,7 @@ The `packages/shared` package contains UI components, hooks, stores, and utiliti
 
 **Available exports**:
 - Components: `Spinner`, `ConfirmDialog`, `Sheet`, `ReconnectBanner`, `CoveredSurface`
-- Hooks: `useMediaQuery`, `useOutsideClick`, `useIsExpanded`, `useHasCoarsePointer`, `useHasFinePointer`, `useIsPageCovered`
+- Hooks: `useMediaQuery`, `useOutsideClick`, `useIsExpanded`, `useHasCoarsePointer`, `useHasFinePointer`, `useCoverPage`, `useIsPageCovered`
 - Stores: `createAuthStore` (factory function for the auth store, with configurable localStorage keys)
 - Utils: `getWebSocketUrl`, `BREAKPOINTS`, `MEDIA_QUERIES`, `hasCoarsePointer`, `credentialParams` / `authFailureReason` (the `auth` RPC contract both frontends share with the server — see [docs/code/authentication.md](docs/code/authentication.md))
 - `@pockode/shared/vitest`: `vitestRuntimeOptions` — the worker and timeout settings both `vitest.config.ts` files spread in. A separate subpath because it needs Node types, which the browser entry must not pull in; it lives outside `src` for the same reason. It is the one plain-JavaScript file here: vite leaves a config's bare imports external, so Node loads this one itself, and the Node that `.node-version` pins cannot read `.ts`.
@@ -82,10 +82,21 @@ one project while the other is fine. `web/tests/sourceScan.test.ts` and
 `useLockBodyScroll` is deliberately *not* exported: it is one counter shared by
 `Sheet` and `ConfirmDialog` so that two overlays unmounting together cannot
 restore each other's `overflow` and leave the page permanently unscrollable.
-Anything in this package that covers the page uses it; exporting it would invite
-a third, separate counter, which is the bug itself. What *is* exported is the
-read-only side, `useIsPageCovered`: whether that count is above zero, for a
-listener that has to stand down while a sheet or dialog is up.
+Anything in this package that locks the page uses it; exporting it would invite
+a third, separate counter, which is the bug itself.
+
+Whether something is drawn over the page is a separate count, because not
+everything that covers the page locks it: a dropdown or a drawer can leave the
+page scrollable and still be what a key press is meant for. `useCoverPage(active)`
+registers a layer and `useIsPageCovered` reads whether any is up, for a listener
+that has to stand down while one is. Locking the body registers a layer too,
+so `Sheet` and `ConfirmDialog` are counted without asking; a panel of a
+project's own that leaves the body alone calls `useCoverPage(isOpen)`. It *is*
+exported, and that is safe where the scroll lock is not: the export is the one
+counter, balanced by each caller's own effect cleanup, so there is nothing to
+write by hand. The rule it carries is the converse — a panel tracking "open"
+anywhere else is invisible to the listener reading this one. "Covered" here is
+not `CoveredSurface`'s: that one is a surface taken off the screen.
 
 `CoveredSurface` marks a subtree that something else can be drawn over, and
 every overlay this package portals to `document.body` closes when it is: a

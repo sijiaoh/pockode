@@ -815,12 +815,12 @@ them:
 |---|---|---|
 | `ConfirmDialog` | `document`, and it calls `stopPropagation` | closes itself, and the press never reaches `window` at all |
 | `Sheet` — a message's menu, and every other sheet | `document`, and it calls `stopPropagation` | the same, and it claims the press even while it is refusing to be dismissed — then it swallows without closing |
-| `ResponsivePanel` — the session-info panel, the engine picker, the worktree and session-filter dropdowns | `document`, and it calls `preventDefault` | closes itself and **marks the press handled** |
-| `ModeSelector` — the mode dropdown in the composer row | `document`, and it calls `preventDefault` | closes itself and **marks the press handled** |
-| `Sidebar` — the session drawer, below the expanded tier | `document`, and it calls `preventDefault` | closes itself and **marks the press handled** |
+| `ResponsivePanel` — the session-info panel, the engine picker, the worktree and session-filter dropdowns | `document`, and it calls `preventDefault` | closes itself and **marks the press handled**; while open, at every width, it counts itself as covering the page |
+| `ModeSelector` — the mode dropdown in the composer row | `document`, and it calls `preventDefault` | closes itself and **marks the press handled**; while open, it counts itself as covering the page |
+| `Sidebar` — the session drawer, below the expanded tier | `document`, and it calls `preventDefault` | closes itself and **marks the press handled**; while open as a drawer, it counts itself as covering the page |
 | `InputBar`'s command palette | the textarea, and it calls `preventDefault` | closes the palette; the press never gets past it unmarked |
 | the answer panel | **`window`** | closes, unless the press is already `defaultPrevented` |
-| `ChatPanel`'s interrupt | `document` | ends the agent's turn — the fallback, and the only one that cannot be undone. It stands down (`isSheetOpen`) while any `Sheet` or `ConfirmDialog` is up (`useIsPageCovered`) or the answer panel is |
+| `ChatPanel`'s interrupt | `document` | ends the agent's turn — the fallback, and the only one that cannot be undone. It stands down (`isSheetOpen`) while anything counts itself as covering the page (`useIsPageCovered`) or the answer panel is up |
 
 Two rules, and they are the whole of it:
 
@@ -861,29 +861,32 @@ before them. `stopPropagation` does not silence a sibling on the same target,
 and a listener that runs first finds `defaultPrevented` still false. So it does
 not wait to be told — it **asks whether the page is covered** before it acts:
 
-- **Every shared `Sheet` and `ConfirmDialog`** is answered by `useIsPageCovered`
-  from `@pockode/shared`, which reads the count those two already keep to lock
-  the body's scroll. The fork sheet, a Git sheet, a sheet raised from anywhere
-  in the app — each is counted by having been written as one, and nothing
-  registers with `ChatPanel`. The value is the one read at render, not the
-  count at the moment of the press: the sheet's own listener may close it and
-  React may commit the unmount before `ChatPanel`'s runs in the same dispatch,
-  and a live read would then find zero and interrupt anyway.
+- **Every overlay drawn over the page** is answered by `useIsPageCovered`
+  from `@pockode/shared`, which reads one count of covering layers. Every shared
+  `Sheet` and `ConfirmDialog` is in it without asking — locking the body
+  registers a layer — so the fork sheet, a Git sheet, a sheet raised from
+  anywhere in the app is counted by having been written as one. The surfaces
+  that only mark the press — `ResponsivePanel`, `ModeSelector` and the session
+  drawer — take no shared lock (`ResponsivePanel` locks the body by hand, and
+  only below the expanded tier; its migration is deferred in
+  [cluster-ui.md](cluster-ui.md)), so each joins the count with a
+  `useCoverPage(isOpen)` of its own. They have to: each re-adds its listener
+  when it opens, so it usually runs after `ChatPanel`'s, and its
+  `preventDefault` arrives too late. `ResponsivePanel` counts in both tiers,
+  since its dropdown sits between the user and the page as much as its drawer
+  does; the session drawer counts only as a drawer, since the expanded tier's
+  column is part of the page. The value is the one read at render, not the count
+  at the moment of the press: the overlay's own listener may close it and React
+  may commit before `ChatPanel`'s runs in the same dispatch, and a live read
+  would then find zero and interrupt anyway.
 - **The answer panel** is named in `ChatPanel` itself. It is not in that count
-  and must not be: it covers the transcript's rectangle and leaves the page
-  scrollable (§3), and joining the count would lock the body.
+  and must not be: it is a layer of this conversation, covering the transcript's
+  rectangle alone (§3), and joining the count would make it a layer over the
+  whole page — exactly what it is not.
 
-One hole remains, for what neither counts nor claims in time: a surface that
-only marks the press with `preventDefault` — `ResponsivePanel` (the engine
-picker and the rest of its row in the table above), `ModeSelector` and the
-session drawer. Each adds its listener when it opens, so usually after
-`ChatPanel`'s, and then Escape with one of them open interrupts the agent's turn
-as well as closing it. Closing it means `ChatPanel` learning that they are open,
-and the shared count covers only part of that: `ResponsivePanel` locks the body
-by hand and only below the expanded tier (its migration to the shared lock is
-deferred in [cluster-ui.md](cluster-ui.md)), and the other two lock nothing. Until then it is
-the reason rule 2 exists in the form it does, and any future listener should
-assume the same trap.
+So a new surface that closes on Escape and can be open during a turn claims the
+key for the answer panel's sake and joins the count for `ChatPanel`'s — a
+`Sheet` or `ConfirmDialog` has both for free; anything else writes both lines.
 
 ### Who owns the dismissing click
 
@@ -1233,13 +1236,13 @@ silent, and this design simply never enters it.
 |---|---|
 | `web/src/components/Chat/AttentionStrip.tsx` | renamed from `BlockerStrip.tsx`; gains row 2, an `onAnswer` prop, and the `answerPanelOpen` that withholds row 2 while the panel is up (§2) |
 | `web/src/components/Chat/AnswerPanel.tsx` | the panel, its blocks, the footer (§3); a card centred in the transcript's rectangle over a backdrop that covers that rectangle alone, capped at 85% of it, measuring nothing; owns Escape and the backdrop press on `window` (§4); reports whether focus is inside it and decides nothing about the screen around it (§3) |
-| `web/src/components/ui/ResponsivePanel.tsx` | marks its Escape handled, and claims the click it dismisses on, so the answer panel underneath it does not close on the same press (§4) |
-| `web/src/components/Chat/ModeSelector.tsx`, `web/src/components/Layout/Sidebar.tsx` | the same Escape line, for the same reason: both open from surfaces the backdrop leaves lit — the composer row and the session header — so both can be the thing on top of the panel. Neither needs the click line: both portal a backdrop of their own (§4) |
+| `web/src/components/ui/ResponsivePanel.tsx` | marks its Escape handled, and claims the click it dismisses on, so the answer panel underneath it does not close on the same press; counts itself as covering the page while open, so the chat's interrupt stands down (§4) |
+| `web/src/components/Chat/ModeSelector.tsx`, `web/src/components/Layout/Sidebar.tsx` | the same Escape line, for the same reason: both open from surfaces the backdrop leaves lit — the composer row and the session header — so both can be the thing on top of the panel. The same cover line too, the sidebar's only while it is a drawer. Neither needs the click line: both portal a backdrop of their own (§4) |
 | `web/src/components/Chat/InputBar.tsx` | claims the click its command palette dismisses on — the palette hangs over the composer with no backdrop, at every width (§4) |
 | `packages/shared/src/hooks/useOutsideClick.ts` | hands the caller the event beside the target, which is what lets a caller claim the gesture at all (§4) |
 | `web/src/components/Chat/QuestionForm.tsx` | extracted from `AskUserQuestionItem.tsx`; the one renderer of a question, across every host that draws one — including the third shape, a textarea for a question with no options |
 | `web/src/components/Chat/QuestionRecordItem.tsx` | replaces `AskUserQuestionItem.tsx` — the record card: four states, no form, collapsed by default, `Answer this` in the body (§6), and the one card a legacy `ask_user_question` record draws through |
-| `web/src/components/Chat/ChatPanel.tsx` | holds whether the panel is up, what it is anchored to and the ids this visit has shown; wraps the message list so the panel has a rectangle, and derives the panel's rendering, the transcript's `inert` and the Escape guard from one expression (§3); remembers the last focused element for the rescue and stands its interrupt down while the panel or any shared overlay is up (§4); consumes the navigation intent of §4; and owns `chromeCollapsed`, the one place all three short-viewport conditions are known (§3) |
+| `web/src/components/Chat/ChatPanel.tsx` | holds whether the panel is up, what it is anchored to and the ids this visit has shown; wraps the message list so the panel has a rectangle, and derives the panel's rendering, the transcript's `inert` and the Escape guard from one expression (§3); remembers the last focused element for the rescue and stands its interrupt down while the panel or anything covering the page is up (§4); consumes the navigation intent of §4; and owns `chromeCollapsed`, the one place all three short-viewport conditions are known (§3) |
 | `web/src/hooks/useShortViewport.ts` | new — the height threshold and the media query that reads it, the app's one height gate, deliberately not in the shared responsive module ([responsive-ui.md](responsive-ui.md#the-two-axes)) |
 | `web/src/components/Chat/MessageList.tsx` | loses the pill, its observer, its debounce and its live region; keeps the jump, narrowed to permission cards (`.jump-highlight`, renamed from `.question-highlight` now that no question card is a target). It is told nothing about the panel: the panel covers it rather than sitting on its edge (§3) |
 | `web/src/components/Chat/MessageItem.tsx` | the answering message's bubble — one entry per `answering` element — and, for an `agent` origin, the named block that replaces it (§6) |

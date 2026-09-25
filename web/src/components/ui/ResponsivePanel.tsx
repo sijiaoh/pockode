@@ -1,4 +1,4 @@
-import { useOutsideClick } from "@pockode/shared";
+import { useCoverPage, useOutsideClick } from "@pockode/shared";
 import { X } from "lucide-react";
 import { type ReactNode, useEffect, useId, useRef } from "react";
 import { createPortal } from "react-dom";
@@ -80,6 +80,12 @@ function ResponsivePanel({
 			onClose();
 		}
 	});
+
+	// In either tier, not only the drawer that locks the body: the dropdown sits
+	// between the user and the page just the same. Covering is what keeps the
+	// chat's interrupt off the press — it is a sibling `document` listener, and
+	// if it was registered first it runs before the mark below is made.
+	useCoverPage(isOpen);
 
 	// Close on Escape, and mark the press handled. This panel opens from the
 	// session header and the composer row, and those stay live under surfaces
