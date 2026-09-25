@@ -106,7 +106,9 @@ class MockWebSocket {
 		this.readyState = MockWebSocket.OPEN;
 		this.onopen?.();
 	}
+	// A browser delivers nothing once close() has been called.
 	simulateMessage(data: unknown) {
+		if (this.readyState !== MockWebSocket.OPEN) return;
 		this.onmessage?.({ data: JSON.stringify(data) });
 	}
 	simulateError() {
@@ -1006,6 +1008,62 @@ describe("wsStore", () => {
 			expect(useWSStore.getState().status).toBe("connected");
 			// No reconnect was scheduled on top of the healthy connection.
 			expect(mockWsInstances.length).toBe(2);
+		});
+
+		// "reconnecting" is also the status of an attempt whose socket is open and
+		// still waiting on its auth reply, so a recovery event can start a second
+		// attempt on top of one that is not dead yet. Whichever socket the store
+		// holds, a reply that came down the other one must change nothing.
+		describe("when a retry replaces an attempt awaiting its auth reply", () => {
+			async function replaceAnAttemptMidAuth() {
+				await connectAndAuth();
+				getMockWs()?.simulateClose();
+				await vi.advanceTimersByTimeAsync(RECONNECT_MAX_DELAY);
+
+				const replaced = getMockWs() as MockWebSocket;
+				replaced.deferMethod("auth");
+				replaced.simulateOpen();
+				expect(useWSStore.getState().status).toBe("reconnecting");
+
+				fireRecoveryEvents();
+				const replacement = getMockWs() as MockWebSocket;
+				expect(replacement).not.toBe(replaced);
+				replacement.deferMethod("auth");
+				return { replaced, replacement };
+			}
+
+			it("does not connect on the replaced socket's reply", async () => {
+				const { replaced, replacement } = await replaceAnAttemptMidAuth();
+
+				replaced.releaseDeferred(0, { version: "test", title: "stale" });
+				await vi.advanceTimersByTimeAsync(0);
+
+				expect(useWSStore.getState().status).toBe("reconnecting");
+				expect(replaced.close).toHaveBeenCalled();
+
+				replacement.simulateOpen();
+				replacement.releaseDeferred(0, { version: "test", title: "live" });
+				await vi.advanceTimersByTimeAsync(0);
+				expect(useWSStore.getState().status).toBe("connected");
+				expect(useWSStore.getState().projectTitle).toBe("live");
+			});
+
+			// Every socket's client numbers its requests from 1, so the replaced
+			// socket's auth reply carries the very id the replacement's auth is
+			// waiting on.
+			it("does not answer the replacement's auth with the replaced socket's reply", async () => {
+				const { replaced, replacement } = await replaceAnAttemptMidAuth();
+				replacement.simulateOpen();
+
+				replaced.releaseDeferred(0, { version: "test", title: "stale" });
+				await vi.advanceTimersByTimeAsync(0);
+				expect(useWSStore.getState().status).toBe("reconnecting");
+
+				replacement.releaseDeferred(0, { version: "test", title: "live" });
+				await vi.advanceTimersByTimeAsync(0);
+				expect(useWSStore.getState().status).toBe("connected");
+				expect(useWSStore.getState().projectTitle).toBe("live");
+			});
 		});
 
 		it("does not reconnect on auth failure", async () => {

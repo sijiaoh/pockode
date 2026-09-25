@@ -302,6 +302,26 @@ function clearAllWatchSubscriptions(): void {
 	agentRoleListWatchCallbacks.clear();
 }
 
+/**
+ * Stop holding the current socket and close it.
+ *
+ * Its onclose will ignore it for the same reason it ignores any superseded
+ * socket, so this settles what onclose would have: nothing else is going to
+ * reject its pending requests, and doing it now also frees the callbacks
+ * immediately rather than whenever the close handshake happens to finish.
+ * Rejecting its pending auth is also what keeps that auth, if still in flight,
+ * from connecting the store on a socket it no longer holds.
+ */
+function releaseSocket(reason: string): void {
+	if (!ws) return;
+	const socket = ws;
+	ws = null;
+	socket.close(1000, reason);
+	rpcClients?.base.rejectAllPendingRequests("Connection lost");
+	rpcClients = null;
+	clearAllWatchSubscriptions();
+}
+
 // Callback to clear worktree-dependent caches (set by queryClient)
 let onWorktreeSwitched: (() => void) | null = null;
 
@@ -724,6 +744,10 @@ export const useWSStore = create<WSState>((set, get) => ({
 				clearTimeout(reconnectTimeout);
 				reconnectTimeout = undefined;
 			}
+			// "reconnecting" is also the status of an attempt still waiting on its
+			// auth reply, so a retry can land on a socket that is not dead yet.
+			// Left open, that socket would go on answering as if it were current.
+			releaseSocket("superseded");
 
 			const isReconnecting = currentStatus === "reconnecting";
 			currentCredential = credential;
@@ -900,26 +924,12 @@ export const useWSStore = create<WSState>((set, get) => ({
 				reconnectTimeout = undefined;
 			}
 			currentCredential = null;
-			// Set status BEFORE closing so onclose sees "disconnected" and does
-			// not treat an intentional close as a drop worth reconnecting.
-			//
-			// Auto-reconnect is already off: onclose bails on "disconnected" and
-			// the pending timer checks currentCredential. Reset the attempt count so a
-			// later connect() starts at the short end of the backoff.
+			// Nothing reconnects behind this: the armed retry is cleared above, and
+			// onclose ignores a socket releaseSocket has let go of. Reset the
+			// attempt count so a later connect() starts at the short end of the
+			// backoff.
 			set({ status: "disconnected", reconnectAttempts: 0 });
-			if (ws) {
-				ws.close(1000, "disconnect");
-				ws = null;
-				// onclose will ignore this socket for the same reason it ignores any
-				// superseded one, so nothing else is going to settle these.
-				rpcClients?.base.rejectAllPendingRequests("Connection lost");
-				rpcClients = null;
-				// onclose used to do this on its way past; it now ignores a socket
-				// that is no longer the current one, and this one just stopped being
-				// it. Doing it here also frees the callbacks immediately rather than
-				// whenever the close handshake happens to finish.
-				clearAllWatchSubscriptions();
-			}
+			releaseSocket("disconnect");
 		},
 
 		retryNow: () => {
