@@ -1,5 +1,11 @@
 import { useHasCoarsePointer } from "@pockode/shared";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+	act,
+	fireEvent,
+	render,
+	screen,
+	waitFor,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { Mock } from "vitest";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -47,6 +53,16 @@ Element.prototype.scrollIntoView = vi.fn();
 const HISTORY_KEY = "input_history";
 
 const TEST_SESSION_ID = "test-session";
+
+// The listbox is drawn the moment the input matches, but its options only once
+// listCommands resolves; until then it reads "No matching commands", the same
+// as an answer that matched nothing. A test about the palette's contents waits
+// for the contents — `findAllByRole("option")` — and a test about an empty
+// answer waits for the answer, since nothing on screen changes when it lands.
+async function commandsLoaded() {
+	expect(mockListCommands).toHaveBeenCalled();
+	await act(() => mockListCommands.mock.results[0].value);
+}
 
 const mockCommands = [
 	{ name: "help", isBuiltin: true },
@@ -487,11 +503,7 @@ describe("InputBar", () => {
 			const textarea = screen.getByRole("textbox");
 			fireEvent.change(textarea, { target: { value: "/mo" } });
 
-			await waitFor(() => {
-				expect(screen.getByRole("listbox")).toBeInTheDocument();
-			});
-
-			const options = screen.getAllByRole("option");
+			const options = await screen.findAllByRole("option");
 			expect(options).toHaveLength(2);
 			expect(options[0]).toHaveTextContent("/model");
 			expect(options[1]).toHaveTextContent("/memory");
@@ -503,11 +515,7 @@ describe("InputBar", () => {
 			const textarea = screen.getByRole("textbox");
 			fireEvent.change(textarea, { target: { value: "/my" } });
 
-			await waitFor(() => {
-				expect(screen.getByRole("listbox")).toBeInTheDocument();
-			});
-
-			const option = screen.getByRole("option");
+			const option = await screen.findByRole("option");
 			expect(option).toHaveTextContent("/my-custom");
 			expect(option).toHaveTextContent("(custom)");
 		});
@@ -518,11 +526,7 @@ describe("InputBar", () => {
 			const textarea = screen.getByRole("textbox");
 			fireEvent.change(textarea, { target: { value: "/" } });
 
-			await waitFor(() => {
-				expect(screen.getByRole("listbox")).toBeInTheDocument();
-			});
-
-			const options = screen.getAllByRole("option");
+			const options = await screen.findAllByRole("option");
 			// Initially first item is selected
 			expect(options[0]).toHaveAttribute("aria-selected", "true");
 
@@ -541,11 +545,7 @@ describe("InputBar", () => {
 			const textarea = screen.getByRole("textbox");
 			fireEvent.change(textarea, { target: { value: "/" } });
 
-			await waitFor(() => {
-				expect(screen.getByRole("listbox")).toBeInTheDocument();
-			});
-
-			const options = screen.getAllByRole("option");
+			const options = await screen.findAllByRole("option");
 
 			// ArrowUp from first item wraps to last
 			fireEvent.keyDown(textarea, { key: "ArrowUp" });
@@ -561,9 +561,7 @@ describe("InputBar", () => {
 			const textarea = screen.getByRole("textbox");
 			fireEvent.change(textarea, { target: { value: "/" } });
 
-			await waitFor(() => {
-				expect(screen.getByRole("listbox")).toBeInTheDocument();
-			});
+			await screen.findAllByRole("option");
 
 			// Enter selects the first command
 			fireEvent.keyDown(textarea, { key: "Enter" });
@@ -585,11 +583,7 @@ describe("InputBar", () => {
 			const textarea = screen.getByRole("textbox");
 			fireEvent.change(textarea, { target: { value: "/" } });
 
-			await waitFor(() => {
-				expect(screen.getByRole("listbox")).toBeInTheDocument();
-			});
-
-			fireEvent.click(screen.getByText("/model"));
+			fireEvent.click(await screen.findByText("/model"));
 
 			expect(textarea).toHaveValue("/model ");
 		});
@@ -703,10 +697,7 @@ describe("InputBar", () => {
 
 			const textarea = screen.getByRole("textbox");
 			fireEvent.change(textarea, { target: { value: "/xyz" } });
-
-			await waitFor(() => {
-				expect(screen.getByRole("listbox")).toBeInTheDocument();
-			});
+			await commandsLoaded();
 
 			expect(screen.getByText("No matching commands")).toBeInTheDocument();
 		});
@@ -737,9 +728,7 @@ describe("InputBar", () => {
 			const textarea = screen.getByRole("textbox");
 			fireEvent.change(textarea, { target: { value: "/" } });
 
-			await waitFor(() => {
-				expect(screen.getByRole("listbox")).toBeInTheDocument();
-			});
+			await screen.findAllByRole("option");
 
 			// Navigate to select third item
 			fireEvent.keyDown(textarea, { key: "ArrowDown" });
@@ -760,10 +749,7 @@ describe("InputBar", () => {
 
 			const textarea = screen.getByRole("textbox");
 			fireEvent.change(textarea, { target: { value: "/" } });
-
-			await waitFor(() => {
-				expect(screen.getByRole("listbox")).toBeInTheDocument();
-			});
+			await commandsLoaded();
 
 			expect(screen.getByText("No matching commands")).toBeInTheDocument();
 
@@ -785,15 +771,19 @@ describe("InputBar", () => {
 			const textarea = screen.getByRole("textbox");
 			fireEvent.change(textarea, { target: { value: "/" } });
 
-			await waitFor(() => {
-				expect(screen.getByRole("listbox")).toBeInTheDocument();
-			});
+			const options = await screen.findAllByRole("option");
 
-			// ArrowUp should navigate palette, not history
+			// ArrowUp should navigate palette, not history. History moves on
+			// keyup, so the release has to be sent for this to test anything.
 			fireEvent.keyDown(textarea, { key: "ArrowUp" });
+			fireEvent.keyUp(textarea, { key: "ArrowUp" });
 
 			// Input should still be "/" (not "previous message" from history)
 			expect(textarea).toHaveValue("/");
+			expect(options[options.length - 1]).toHaveAttribute(
+				"aria-selected",
+				"true",
+			);
 		});
 	});
 
