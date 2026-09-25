@@ -820,7 +820,7 @@ them:
 | `Sidebar` — the session drawer, below the expanded tier | `document`, and it calls `preventDefault` | closes itself and **marks the press handled** |
 | `InputBar`'s command palette | the textarea, and it calls `preventDefault` | closes the palette; the press never gets past it unmarked |
 | the answer panel | **`window`** | closes, unless the press is already `defaultPrevented` |
-| `ChatPanel`'s interrupt | `document` | ends the agent's turn — the fallback, and the only one that cannot be undone. It stands down while a fork sheet or the answer panel is up (`isSheetOpen`) |
+| `ChatPanel`'s interrupt | `document` | ends the agent's turn — the fallback, and the only one that cannot be undone. It stands down (`isSheetOpen`) while any `Sheet` or `ConfirmDialog` is up (`useIsPageCovered`) or the answer panel is |
 
 Two rules, and they are the whole of it:
 
@@ -855,13 +855,35 @@ Two rules, and they are the whole of it:
    past every `document` listener in the bubble path whatever order they were
    added in.
 
-`ChatPanel`'s interrupt is not part of rule 1 and keeps a known hole: it also
-listens on `document` and also registers before `ResponsivePanel`, so pressing
-Escape with the engine picker open interrupts the agent's turn as well as
-closing the picker. That predates this design and is not fixed here — fixing it
-means teaching `ChatPanel` that a `ResponsivePanel` is open, which is a
-different piece of work — but it is the reason rule 2 exists in the form it
-does, and any future listener should assume the same trap.
+`ChatPanel`'s interrupt cannot rely on either rule: it listens on `document`
+too, beside the overlays rather than below them, and has usually registered
+before them. `stopPropagation` does not silence a sibling on the same target,
+and a listener that runs first finds `defaultPrevented` still false. So it does
+not wait to be told — it **asks whether the page is covered** before it acts:
+
+- **Every shared `Sheet` and `ConfirmDialog`** is answered by `useIsPageCovered`
+  from `@pockode/shared`, which reads the count those two already keep to lock
+  the body's scroll. The fork sheet, a Git sheet, a sheet raised from anywhere
+  in the app — each is counted by having been written as one, and nothing
+  registers with `ChatPanel`. The value is the one read at render, not the
+  count at the moment of the press: the sheet's own listener may close it and
+  React may commit the unmount before `ChatPanel`'s runs in the same dispatch,
+  and a live read would then find zero and interrupt anyway.
+- **The answer panel** is named in `ChatPanel` itself. It is not in that count
+  and must not be: it covers the transcript's rectangle and leaves the page
+  scrollable (§3), and joining the count would lock the body.
+
+One hole remains, for what neither counts nor claims in time: a surface that
+only marks the press with `preventDefault` — `ResponsivePanel` (the engine
+picker and the rest of its row in the table above), `ModeSelector` and the
+session drawer. Each adds its listener when it opens, so usually after
+`ChatPanel`'s, and then Escape with one of them open interrupts the agent's turn
+as well as closing it. Closing it means `ChatPanel` learning that they are open,
+and the shared count covers only part of that: `ResponsivePanel` locks the body
+by hand and only below the expanded tier (its migration to the shared lock is
+deferred in [cluster-ui.md](cluster-ui.md)), and the other two lock nothing. Until then it is
+the reason rule 2 exists in the form it does, and any future listener should
+assume the same trap.
 
 ### Who owns the dismissing click
 
@@ -1217,7 +1239,7 @@ silent, and this design simply never enters it.
 | `packages/shared/src/hooks/useOutsideClick.ts` | hands the caller the event beside the target, which is what lets a caller claim the gesture at all (§4) |
 | `web/src/components/Chat/QuestionForm.tsx` | extracted from `AskUserQuestionItem.tsx`; the one renderer of a question, across every host that draws one — including the third shape, a textarea for a question with no options |
 | `web/src/components/Chat/QuestionRecordItem.tsx` | replaces `AskUserQuestionItem.tsx` — the record card: four states, no form, collapsed by default, `Answer this` in the body (§6), and the one card a legacy `ask_user_question` record draws through |
-| `web/src/components/Chat/ChatPanel.tsx` | holds whether the panel is up, what it is anchored to and the ids this visit has shown; wraps the message list so the panel has a rectangle, and derives the panel's rendering, the transcript's `inert` and the Escape guard from one expression (§3); remembers the last focused element for the rescue and stands its interrupt down while the panel is up (§4); consumes the navigation intent of §4; and owns `chromeCollapsed`, the one place all three short-viewport conditions are known (§3) |
+| `web/src/components/Chat/ChatPanel.tsx` | holds whether the panel is up, what it is anchored to and the ids this visit has shown; wraps the message list so the panel has a rectangle, and derives the panel's rendering, the transcript's `inert` and the Escape guard from one expression (§3); remembers the last focused element for the rescue and stands its interrupt down while the panel or any shared overlay is up (§4); consumes the navigation intent of §4; and owns `chromeCollapsed`, the one place all three short-viewport conditions are known (§3) |
 | `web/src/hooks/useShortViewport.ts` | new — the height threshold and the media query that reads it, the app's one height gate, deliberately not in the shared responsive module ([responsive-ui.md](responsive-ui.md#the-two-axes)) |
 | `web/src/components/Chat/MessageList.tsx` | loses the pill, its observer, its debounce and its live region; keeps the jump, narrowed to permission cards (`.jump-highlight`, renamed from `.question-highlight` now that no question card is a target). It is told nothing about the panel: the panel covers it rather than sitting on its edge (§3) |
 | `web/src/components/Chat/MessageItem.tsx` | the answering message's bubble — one entry per `answering` element — and, for an `agent` origin, the named block that replaces it (§6) |

@@ -1,3 +1,4 @@
+export { useIsPageCovered } from "./useLockBodyScroll.ts";
 export { useMediaQuery } from "./useMediaQuery.ts";
 export { useOutsideClick } from "./useOutsideClick.ts";
 export {

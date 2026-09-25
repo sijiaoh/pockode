@@ -14,6 +14,7 @@ export {
 	useHasCoarsePointer,
 	useHasFinePointer,
 	useIsExpanded,
+	useIsPageCovered,
 	useMediaQuery,
 	useOutsideClick,
 } from "./hooks/index.ts";

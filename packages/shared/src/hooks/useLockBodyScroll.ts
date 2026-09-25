@@ -1,7 +1,13 @@
-import { useEffect } from "react";
+import { useEffect, useSyncExternalStore } from "react";
 
 let openOverlays = 0;
 let overflowBeforeFirstOverlay = "";
+const coverListeners = new Set<() => void>();
+
+function setOpenOverlays(count: number) {
+	openOverlays = count;
+	for (const listener of coverListeners) listener();
+}
 
 /**
  * Locks body scroll while any overlay is open.
@@ -25,13 +31,35 @@ export function useLockBodyScroll(): void {
 			overflowBeforeFirstOverlay = document.body.style.overflow;
 			document.body.style.overflow = "hidden";
 		}
-		openOverlays += 1;
+		setOpenOverlays(openOverlays + 1);
 
 		return () => {
-			openOverlays -= 1;
+			setOpenOverlays(openOverlays - 1);
 			if (openOverlays === 0) {
 				document.body.style.overflow = overflowBeforeFirstOverlay;
 			}
 		};
 	}, []);
+}
+
+function subscribeToCover(listener: () => void) {
+	coverListeners.add(listener);
+	return () => coverListeners.delete(listener);
+}
+
+function isPageCovered() {
+	return openOverlays > 0;
+}
+
+/**
+ * Whether a shared overlay — a `Sheet` or a `ConfirmDialog` — is drawn over
+ * the page. Read from the same count that locks the body, so it cannot
+ * disagree with what the user sees and nothing has to register to be counted.
+ *
+ * For a `document` listener that must stand down under an overlay: the
+ * overlay's `stopPropagation` does not silence a sibling on the same target,
+ * and one registered earlier runs before the overlay has marked anything.
+ */
+export function useIsPageCovered(): boolean {
+	return useSyncExternalStore(subscribeToCover, isPageCovered);
 }
