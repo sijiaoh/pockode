@@ -10,6 +10,12 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 // decision this move did not need to make. So the tests stay here, where the
 // eight call sites they are really about are, and import the component the way
 // those call sites do.
+//
+// Only "names the box by its title and the close button by its job" queries by
+// accessible name. `getByRole(..., { name })` computes a name for every element
+// of that role, each through jsdom's from-scratch `getComputedStyle`
+// (docs/testing.md#a-test-that-really-is-slow), and the name is a contract of
+// its own, so one test holds it and the rest reach elements by text or label.
 
 /** The full-viewport flex container that parks the content box. */
 function overlay(): HTMLElement {
@@ -18,28 +24,28 @@ function overlay(): HTMLElement {
 
 /** The flex column the header, body and footer live in. */
 function contentBox(): HTMLElement {
-	const box = screen.getByRole("heading", { name: "Long" }).parentElement
-		?.parentElement;
+	const box = screen.getByText("Title").parentElement?.parentElement;
 	if (!box) throw new Error("content box not found");
 	return box;
 }
 
 function body(): HTMLElement {
-	const el = screen.getByText("row 0").parentElement;
+	const el = screen.getByText("Row").parentElement;
 	if (!el) throw new Error("body not found");
 	return el;
 }
 
-function renderTall() {
+// One row: jsdom does no layout, so no row count makes the body overflow here,
+// and nothing in `Sheet` reads how many children it has. The scroll is held as
+// the class contract below, and the row is only a handle on the body.
+function renderSheet() {
 	render(
 		<Sheet
-			title="Long"
+			title="Title"
 			onClose={() => {}}
 			footer={<button type="button">Footer action</button>}
 		>
-			{Array.from({ length: 60 }, (_, i) => `row ${i}`).map((row) => (
-				<p key={row}>{row}</p>
-			))}
+			<p>Row</p>
 		</Sheet>,
 	);
 }
@@ -51,8 +57,18 @@ function renderTall() {
 const CAPPED = /max-h-\[\d+dvh\]/;
 
 describe("Sheet", () => {
+	// The close button is an icon, so its aria-label is all a screen reader has
+	// to call it; the box is labelled by the title so that focus landing on it
+	// (see "focus") reads what the sheet is for.
+	it("names the box by its title and the close button by its job", () => {
+		renderSheet();
+
+		expect(screen.getByRole("dialog", { name: "Title" })).toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Close" })).toBeInTheDocument();
+	});
+
 	it("caps its height against the viewport as a mobile drawer", () => {
-		renderTall();
+		renderSheet();
 
 		expect(contentBox().className).toMatch(CAPPED);
 	});
@@ -61,7 +77,7 @@ describe("Sheet", () => {
 	// the sheet stays under the thumb instead of floating out of reach in the
 	// middle of the screen.
 	it("sits at the bottom of the viewport as a drawer", () => {
-		renderTall();
+		renderSheet();
 
 		expect(overlay()).toHaveClass("items-end");
 		expect(overlay()).not.toHaveClass("items-center");
@@ -92,28 +108,26 @@ describe("Sheet", () => {
 		afterEach(() => set(original));
 
 		it("caps its height against the viewport", () => {
-			renderTall();
+			renderSheet();
 
 			expect(contentBox().className).toMatch(CAPPED);
 		});
 
 		it("sits in the middle of the viewport", () => {
-			renderTall();
+			renderSheet();
 
 			expect(overlay()).toHaveClass("items-center");
 			expect(overlay()).not.toHaveClass("items-end");
 		});
 
 		it("scrolls the body while the footer stays put", () => {
-			renderTall();
+			renderSheet();
 
 			expect(body()).toHaveClass("overflow-y-auto");
 			// Without min-h-0 the body refuses to shrink below its content inside
 			// the flex column, so the cap would be overflowed, not scrolled.
 			expect(body()).toHaveClass("min-h-0");
-			expect(body()).not.toContainElement(
-				screen.getByRole("button", { name: "Footer action" }),
-			);
+			expect(body()).not.toContainElement(screen.getByText("Footer action"));
 		});
 	});
 
@@ -134,7 +148,7 @@ describe("Sheet", () => {
 			// anything else; stopping on "Close" would name the one row the user
 			// least wants to press by accident.
 			expect(overlay()).toHaveFocus();
-			expect(screen.getByRole("button", { name: "Close" })).not.toHaveFocus();
+			expect(screen.getByLabelText("Close")).not.toHaveFocus();
 		});
 
 		it("cycles Tab inside the sheet", async () => {
@@ -142,15 +156,15 @@ describe("Sheet", () => {
 			renderMenu();
 
 			await user.tab();
-			expect(screen.getByRole("button", { name: "Close" })).toHaveFocus();
+			expect(screen.getByLabelText("Close")).toHaveFocus();
 			await user.tab();
 			await user.tab();
-			expect(screen.getByRole("button", { name: "Row B" })).toHaveFocus();
+			expect(screen.getByText("Row B")).toHaveFocus();
 
 			await user.tab();
-			expect(screen.getByRole("button", { name: "Close" })).toHaveFocus();
+			expect(screen.getByLabelText("Close")).toHaveFocus();
 			await user.tab({ shift: true });
-			expect(screen.getByRole("button", { name: "Row B" })).toHaveFocus();
+			expect(screen.getByText("Row B")).toHaveFocus();
 		});
 
 		it("hands focus back to whatever opened it", async () => {
@@ -173,10 +187,10 @@ describe("Sheet", () => {
 			}
 			render(<Toggle />);
 
-			await user.click(screen.getByRole("button", { name: "Actions" }));
-			await user.click(screen.getByRole("button", { name: "Close" }));
+			await user.click(screen.getByText("Actions"));
+			await user.click(screen.getByLabelText("Close"));
 
-			expect(screen.getByRole("button", { name: "Actions" })).toHaveFocus();
+			expect(screen.getByText("Actions")).toHaveFocus();
 		});
 
 		// Form sheets focus their own field from an effect in the calling
@@ -219,10 +233,10 @@ describe("Sheet", () => {
 				</Sheet>,
 			);
 
-			screen.getByRole("button", { name: "Cancel" }).focus();
+			screen.getByText("Cancel").focus();
 			await user.tab();
 
-			expect(screen.getByRole("button", { name: "Force push" })).toHaveFocus();
+			expect(screen.getByText("Force push")).toHaveFocus();
 
 			// Not left behind for the rest of the file: `cleanup` unmounts the
 			// portal's contents but knows nothing about the node hosting them.
@@ -265,10 +279,10 @@ describe("Sheet", () => {
 			}
 			render(<Replacing />);
 
-			await user.click(screen.getByRole("button", { name: "Actions" }));
-			await user.click(screen.getByRole("button", { name: "Fork from here" }));
+			await user.click(screen.getByText("Actions"));
+			await user.click(screen.getByText("Fork from here"));
 
-			expect(screen.getByRole("heading", { name: "Confirm" })).toBeVisible();
+			expect(screen.getByText("Confirm")).toBeVisible();
 			expect(overlay()).toHaveFocus();
 		});
 	});
@@ -310,7 +324,7 @@ describe("Sheet", () => {
 			}
 			render(<FormSheet />);
 
-			await user.click(screen.getByRole("button", { name: "Add" }));
+			await user.click(screen.getByText("Add"));
 			expect(document.body.style.overflow).toBe("hidden");
 
 			// Escape reaches both: they listen on `document`, where stopping
@@ -343,7 +357,7 @@ describe("Sheet", () => {
 				);
 			}
 			render(<Replacing />);
-			await user.click(screen.getByRole("button", { name: "Fork from here" }));
+			await user.click(screen.getByText("Fork from here"));
 
 			expect(document.body.style.overflow).toBe("hidden");
 		});

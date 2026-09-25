@@ -35,12 +35,35 @@ function renderSheet(
 	return { onCheckout };
 }
 
+/**
+ * Against this project's preference for `getByRole`, and deliberately:
+ * filtering a role query by accessible name is charged per button on the page
+ * and per query, and in this file that has cost whole seconds per query
+ * (docs/testing.md#a-test-that-really-is-slow). What a row is called is held
+ * once, by "names each row by its branch"; everything else needs a row, not
+ * its name, so it need not pay for one.
+ */
+const rowFor = (name: string) =>
+	screen.getByText(name).closest("button") as HTMLElement;
+
 describe("BranchSheet", () => {
+	// A row's hint ("current", "in <worktree>") trails the branch in its name,
+	// so what is pinned is the branch leading it.
+	it("names each row by its branch", () => {
+		renderSheet();
+
+		expect(screen.getByRole("button", { name: /^topic/ })).toBeInTheDocument();
+		expect(screen.getByRole("button", { name: /^review/ })).toBeInTheDocument();
+		expect(
+			screen.getByRole("button", { name: /^origin\/colleague/ }),
+		).toBeInTheDocument();
+	});
+
 	it("switches to the branch that was tapped", async () => {
 		const user = userEvent.setup();
 		const { onCheckout } = renderSheet();
 
-		await user.click(screen.getByRole("button", { name: /topic/ }));
+		await user.click(rowFor("topic"));
 
 		expect(onCheckout).toHaveBeenCalledWith("topic");
 	});
@@ -49,7 +72,7 @@ describe("BranchSheet", () => {
 		const user = userEvent.setup();
 		const { onCheckout } = renderSheet();
 
-		const row = screen.getByRole("button", { name: /review/ });
+		const row = rowFor("review");
 		expect(row).toBeDisabled();
 		expect(row).toHaveTextContent("in review-wt");
 
@@ -61,7 +84,7 @@ describe("BranchSheet", () => {
 		const user = userEvent.setup();
 		const { onCheckout } = renderSheet();
 
-		await user.click(screen.getByRole("button", { name: /origin\/colleague/ }));
+		await user.click(rowFor("origin/colleague"));
 
 		expect(onCheckout).toHaveBeenCalledWith("colleague");
 	});
@@ -74,7 +97,7 @@ describe("BranchSheet", () => {
 		// no layout, so its filter threshold is the only thing here a row count
 		// can change, and that threshold counts remote branches too — `branches`
 		// already carries one, so eight local rows are what crosses it. Rows past
-		// that buy nothing but the cost below. Raising the threshold and not this
+		// that buy nothing but render time. Raising the threshold and not this
 		// count turns "pins the filter above the rows" red, which is the right
 		// place to hear about it.
 		const many = {
@@ -84,16 +107,6 @@ describe("BranchSheet", () => {
 				current: i === 0,
 			})),
 		};
-
-		/**
-		 * Against this file's own preference order, and deliberately: filtering a
-		 * role query by accessible name is charged per button on the page and per
-		 * query, and in this file that has cost whole seconds per query
-		 * (docs/testing.md#a-test-that-really-is-slow). These two assertions need
-		 * a row, not that row's accessible name, so they need not pay it.
-		 */
-		const rowFor = (name: string) =>
-			screen.getByText(name).closest("button") as HTMLElement;
 
 		it("scrolls the rows and leaves the footer out of it", () => {
 			renderSheet({ branches: many });
@@ -137,7 +150,7 @@ describe("BranchSheet", () => {
 			"error: Your local changes to the following files would be overwritten by checkout:\n\tdocs/git.md";
 		renderSheet({ onCheckout: vi.fn().mockRejectedValue(new Error(stderr)) });
 
-		await user.click(screen.getByRole("button", { name: /topic/ }));
+		await user.click(rowFor("topic"));
 
 		const alert = await screen.findByRole("alert");
 		expect(alert).toHaveTextContent("Could not switch to topic.");
@@ -162,7 +175,7 @@ describe("BranchSheet", () => {
 				),
 		});
 
-		await user.click(screen.getByRole("button", { name: /topic/ }));
+		await user.click(rowFor("topic"));
 
 		const alert = await screen.findByRole("alert");
 		expect(alert).toHaveTextContent(
