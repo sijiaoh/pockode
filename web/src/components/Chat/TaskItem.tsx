@@ -3,8 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { toolRunText, toolSecondLine } from "../../lib/toolRun";
 import { taskPrompt, toolSummary } from "../../lib/toolSummary";
 import type { ToolRun } from "../../types/message";
-import { CollapsibleBody, ScrollableContent } from "../ui";
-import { MarkdownContent } from "./MarkdownContent";
+import { CollapsibleBody, MarkdownContent, ScrollableContent } from "../ui";
 import { ToolOutcomeSections } from "./ToolOutcomeSections";
 import { ToolMeta, ToolRow, ToolStatusGlyph } from "./ToolRow";
 

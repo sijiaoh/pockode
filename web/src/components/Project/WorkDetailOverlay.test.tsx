@@ -17,7 +17,7 @@ vi.mock("../../hooks/useWorkDetailSubscription", () => ({
 		mockUseWorkDetailSubscription(workId),
 }));
 
-vi.mock("../Chat/MarkdownContent", () => ({
+vi.mock("../ui/MarkdownContent", () => ({
 	MarkdownContent: ({ content }: { content: string }) => <div>{content}</div>,
 }));
 

@@ -64,12 +64,14 @@ interface MarkdownContentProps {
 	/**
 	 * Extra classes for the prose root, for a surface that has to tune it.
 	 *
-	 * A caller that makes this a flex item has to include `min-w-0`, or wrap it in
-	 * an element that has it the way `StepList` does. A wide code block here is
-	 * meant to be scrolled by an ancestor scroll container rather than by its own
-	 * box, so `.code-block` sets `min-width: fit-content` (`web/src/index.css`) —
-	 * and a flex item's `min-width: auto` then floors the item at that full width,
-	 * widening the row and the page instead of letting the ancestor scroll.
+	 * The root carries `min-w-0` itself, so a caller making it a flex item need
+	 * not add it. A wide code block here is meant to be scrolled by an ancestor
+	 * scroll container rather than by its own box, so `.code-block` sets
+	 * `min-width: fit-content` (`web/src/index.css`) — and a flex item's
+	 * `min-width: auto` would floor the item at that full width, widening the row
+	 * and the page instead of letting the ancestor scroll. That only covers the
+	 * root being the flex item: a wrapper that is one, as in `StepList`, needs
+	 * `min-w-0` of its own, since a descendant's cannot lower its floor.
 	 */
 	className?: string;
 }
@@ -80,7 +82,7 @@ export const MarkdownContent = memo(function MarkdownContent({
 }: MarkdownContentProps) {
 	return (
 		<div
-			className={`prose dark:prose-invert prose-sm max-w-none prose-code:before:content-none prose-code:after:content-none prose-pre:bg-transparent prose-pre:p-0 prose-pre:text-[length:inherit] ${className ?? ""}`}
+			className={`prose dark:prose-invert prose-sm max-w-none min-w-0 prose-code:before:content-none prose-code:after:content-none prose-pre:bg-transparent prose-pre:p-0 prose-pre:text-[length:inherit] ${className ?? ""}`}
 		>
 			<Markdown remarkPlugins={REMARK_PLUGINS} components={MARKDOWN_COMPONENTS}>
 				{content}

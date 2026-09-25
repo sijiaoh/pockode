@@ -38,4 +38,21 @@ describe("StepList", () => {
 
 		expect(container.querySelectorAll("br")).toHaveLength(1);
 	});
+
+	// A class assertion, because jsdom lays nothing out. Why the wrapper needs
+	// its own `min-w-0` despite the prose root's is on the wrapper in `StepList`.
+	it("keeps a step's markdown from widening the list", () => {
+		render(
+			<StepList steps={["推进任务"]} currentStep={0} workStatus="active" />,
+		);
+
+		const row = screen.getByText("推进任务").closest("li");
+		expect(row?.classList).toContain("flex");
+
+		const wrapper = screen
+			.getByText("推进任务")
+			.closest("div.prose")?.parentElement;
+		expect(wrapper?.parentElement).toBe(row);
+		expect(wrapper?.classList).toContain("min-w-0");
+	});
 });

@@ -1,6 +1,6 @@
 import { Circle, CircleCheck, CircleDot } from "lucide-react";
 import type { WorkStatus } from "../../types/work";
-import { MarkdownContent } from "../Chat/MarkdownContent";
+import { MarkdownContent } from "../ui";
 
 interface StepItemProps {
 	step: string;
@@ -53,7 +53,9 @@ function StepItem({ step, index, currentStep, workStatus }: StepItemProps) {
 				    and lists — and the agent role page already renders this same string
 				    that way. The state colour stays on this element, so the prose inside
 				    it inherits rather than paints its own (`prose-inherit-color`,
-				    src/index.css). */}
+				    src/index.css). That makes this element the flex item, so the
+				    `min-w-0` above is its own to carry: the one on the prose root
+				    cannot lower this element's floor. */}
 				<MarkdownContent content={step} className="prose-inherit-color" />
 			</div>
 		</li>

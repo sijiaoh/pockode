@@ -29,11 +29,11 @@ import { hasMessageActions } from "../../utils/messageActions";
 import { workEventWording } from "../../utils/systemMessage";
 import {
 	CollapsibleBody,
+	MarkdownContent,
 	ScrollableContent,
 	Spinner,
 	useEverExpanded,
 } from "../ui";
-import { MarkdownContent } from "./MarkdownContent";
 import MessageMenuTrigger, { type ForkBlocked } from "./MessageMenuTrigger";
 import QuestionRecordItem from "./QuestionRecordItem";
 import { anchorCandidateProps } from "./scrollAnchor";

@@ -17,7 +17,7 @@ import { useInlineEdit } from "../../hooks/useInlineEdit";
 import { useAgentRoleStore } from "../../lib/agentRoleStore";
 import { useWSStore } from "../../lib/wsStore";
 import type { AgentRole } from "../../types/agentRole";
-import { MarkdownContent } from "../Chat/MarkdownContent";
+import { MarkdownContent } from "../ui";
 import BackButton from "../ui/BackButton";
 import AgentRoleEngineSelector from "./AgentRoleEngineSelector";
 
@@ -609,7 +609,7 @@ function StepsEditor({ role }: { role: AgentRole }) {
 						<span className="shrink-0 font-medium text-th-text-muted">
 							{index + 1}.
 						</span>
-						<MarkdownContent content={step} className="min-w-0 flex-1" />
+						<MarkdownContent content={step} className="flex-1" />
 					</li>
 				))}
 			</ol>

@@ -3,7 +3,7 @@ import {
 	getLanguageFromPath,
 	isMarkdownFile,
 } from "../../lib/shikiUtils";
-import { MarkdownContent } from "../Chat/MarkdownContent";
+import { MarkdownContent } from "./MarkdownContent";
 
 interface Props {
 	content: string;
