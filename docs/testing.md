@@ -15,7 +15,7 @@ Three of them are red. The fourth is the dangerous one, because it is green.
 
 | Kind | How it looks | What to change | Seen here |
 |---|---|---|---|
-| **The machine is oversubscribed** | More failures the busier the box; a different file fails each run; every failure is a timeout, none is an assertion; serial runs are all green | The runner's own concurrency. Give the timeout enough room for scheduling, not for slow tests | frontend vitest; the `ws` 12 MiB deflate test |
+| **The machine is oversubscribed** | More failures the busier the box; a different file fails each run; every failure is a timeout, none is an assertion; serial runs are all green | The runner's own concurrency. Give the timeout enough room for scheduling, not for slow tests — for the one measured exception, see [A test that really is slow](#a-test-that-really-is-slow) | frontend vitest; the `ws` 12 MiB deflate test |
 | **The test assumes a schedule** | Only fails under load, but always at the same line; there is a `time.Sleep` waiting out something | Wait for the signal instead. **Not** a longer sleep — unless the budget is a backstop rather than the subject, as in the `relay` case below | `agentrole` `TestExternalChange_NotifiesListener`; `relay` `TestUplinkDialOptionsDoNotTruncateTheTunnel` |
 | **The test fabricates an unreachable state** | Barely correlates with load; fails at a stable rate even on an idle machine running that package alone | Make the test drive a state the implementation can actually reach | `agent/claude` `TestBackgroundWait_OutputPushesTheDeadlineOut` |
 | **Silent pass** | Green. Always green | Make the test assert the precondition it depends on, then mutation-verify | `agent/claude` `TestBackgroundWait_SurvivesAnEmptyTaskList` |
@@ -68,6 +68,63 @@ CI is the other half of this: a GitHub runner does own its machine, the premise
 for halving does not hold there, and the config hands `maxWorkers` back to
 vitest's default under `CI`. `.github/workflows/frontend.yml` runs test and
 build per project with a 10-minute budget, plus one workspace-wide lint job.
+
+### A test that really is slow
+
+The paragraph above says the failures were oversubscription rather than slow
+tests. That has held for every red run looked at here but one, where a test
+asked jsdom for an accessible name once per row. `getByRole(..., { name })`
+computes one for **every** element carrying that role, and each computation
+goes through `getComputedStyle`, which jsdom re-cascades from scratch. Two
+`BranchSheet` tests did that over a sheet's worth of branch rows — and a dozen
+buttons is already enough for one such query to cost seconds.
+
+A slow test and a busy box compound, and it is the product that reaches
+`testTimeout` — so the clock cannot tell the two apart and something else has
+to. Compare against a sibling under the same fixture: it is the only comparison
+that holds the machine constant.
+
+| | the two role-and-name tests | their sibling, querying by label |
+|---|---|---|
+| quiet box | 1.4s, 3.0s | 0.32s |
+| box shared with three other suites | 10.7s, 6.3s | 2.8s |
+
+Read the ratios, not the seconds. Several times its neighbour — two to ten
+times here, never once the other way about — is a property of the test;
+contention does not pick one test out of a `describe` and leave the neighbour
+beside it alone. The ten seconds in the second row is that same property
+multiplied by the machine, and a `testTimeout` sized for scheduling delay, as
+this repository's deliberately is, has no room left for the product. The
+expensive test goes red first, so the suite blames the wrong thing.
+
+Two cautions about choosing the sibling. It has to render comparable work — a
+sibling over a handful of rows is not a controlled comparison for one over
+sixty — and it must not be the *first* test in the file: whichever test that is
+pays jsdom's first `getComputedStyle` for the whole worker, several seconds of
+it on a loaded box. That is warm-up, not this.
+
+Read the ratio *within one run*, too. Single test times on a box several agents
+share swing by an order of magnitude between runs — the label-querying sibling
+above has been measured at 34ms and at 1.8s on the same unchanged code — so a
+number carried over from an earlier run compares two machines, not two tests.
+
+What fixed it was the query, not the fixture. Reaching the rows by text instead
+of by accessible name put both tests back among the cheaper ones in their file —
+at the bottom of it on a quiet box, and no longer the pair that reaches
+`testTimeout` first when the box is loaded. Found by name over those same rows,
+on a quiet box, the two cost five and eleven seconds while their by-text
+neighbours were still under one.
+
+The fixture was cut too, to the smallest list the sheet's own filter threshold
+calls long — jsdom has no layout, so nothing else there can read a row count.
+That is hygiene rather than a second thing to diagnose by: re-measured later,
+sixty rows against eight moved those queries by less than the run-to-run spread,
+once in the wrong direction. The cost is charged per query by accessible name,
+and only incidentally per row.
+
+So: render what the contract needs and no more; where a long list *is* the
+contract, reach the rows inside it by label or text, and say in the test why the
+usual preference for `getByRole` (web/AGENTS.md) is being spent.
 
 ## Go: there is no equivalent knob
 
