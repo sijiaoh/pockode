@@ -1,6 +1,5 @@
 import { ListChecks, UserCog } from "lucide-react";
-import { needsAttention } from "../../lib/activity";
-import { useWorkStore } from "../../lib/workStore";
+import { useWorkNeedsAttention } from "../../lib/workStore";
 import { useSidebarRefresh } from "../Layout";
 import { ActivityDot } from "../ui";
 
@@ -14,14 +13,10 @@ export default function ProjectTab({
 	onOpenAgentRoleList,
 }: Props) {
 	const { isActive } = useSidebarRefresh("project");
-	// One dot, one meaning: someone below this is waiting on the user
-	// (docs/lifecycle-ui.md §4). Read off the row rather than derived here: the
-	// server computed it, and it is the only value that holds for a work in a
-	// worktree this client has never loaded — a dot that lit only for the open
-	// worktree would be a dot that means two different things.
-	const hasNeedsUser = useWorkStore((s) =>
-		s.works.some((w) => needsAttention(w.activity, w.unanswered_questions)),
-	);
+	// The same bit the tab bar badges, so the dot inside and the badge outside
+	// can never disagree. Both stay: the badge says which tab to open, the dot
+	// says where to look once it is open.
+	const hasNeedsUser = useWorkNeedsAttention();
 
 	return (
 		<div className={isActive ? "space-y-1 p-2" : "hidden"}>

@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import type { WorkListItem } from "../types/work";
-import { normalizeActivity } from "./activity";
+import { needsAttention, normalizeActivity } from "./activity";
 import { isInvalidParamsRejection, wsActions } from "./wsStore";
 
 /**
@@ -265,6 +265,30 @@ export const useWorkStore = create<WorkStore>((set, get) => ({
 			...initialArchive(),
 		}),
 }));
+
+/**
+ * Whether any work in the `Current` segment is waiting on the user
+ * (docs/lifecycle-ui.md §4).
+ *
+ * One bit, read in two places — the Project tab's badge in the tab bar and the
+ * dot inside the panel — and so it lives here rather than in either of them: a
+ * second copy of "is anyone waiting on me" is a copy that can disagree, and the
+ * user would see a badge for a dot that is not there.
+ *
+ * Read off each row's own `activity` rather than derived from a session here:
+ * the server computed it, and it is the only value that holds for a work in a
+ * worktree this client has never loaded — a dot that lit only for the open
+ * worktree would be a dot that means two different things.
+ *
+ * `stopped` is not in it, because `needsAttention` does not count it: a stopped
+ * work is handed back to a person, but it is not *waiting* on one, and the dot
+ * means the second thing.
+ */
+export function useWorkNeedsAttention(): boolean {
+	return useWorkStore((s) =>
+		s.works.some((w) => needsAttention(w.activity, w.unanswered_questions)),
+	);
+}
 
 /**
  * One row as it arrived from the server, with its activity folded to a leaf this

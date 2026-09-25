@@ -1,6 +1,6 @@
 import type { LucideIcon } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { BadgeCount, BadgeDot } from "../ui";
+import { BadgeCount, BadgeDot, type BadgeDotTone } from "../ui";
 import Sidebar from "./Sidebar";
 import { SidebarContext } from "./SidebarContext";
 
@@ -9,6 +9,12 @@ export interface TabConfig {
 	label: string;
 	icon: LucideIcon;
 	showBadge?: boolean;
+	/**
+	 * What that dot is saying, when it is not the usual "something arrived
+	 * here". Left out by every tab but the one whose badge means a person is
+	 * being waited on (docs/lifecycle-ui.md §4).
+	 */
+	badgeTone?: BadgeDotTone;
 	/**
 	 * Number badge plus what the number means, spoken after the tab label.
 	 * Left out entirely while there is no number to show. A tab wants one badge
@@ -105,6 +111,7 @@ function TabbedSidebar({
 									<Icon className="h-5 w-5" />
 									<BadgeDot
 										show={!!tab.showBadge}
+										tone={tab.badgeTone}
 										className="-top-0.5 -right-0.5"
 									/>
 									<BadgeCount
