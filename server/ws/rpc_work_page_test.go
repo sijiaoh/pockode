@@ -15,7 +15,6 @@ import (
 func createStory(t *testing.T, env *testEnv, title string) work.Work {
 	t.Helper()
 	resp := env.call("work.create", rpc.WorkCreateParams{
-		Type:        work.WorkTypeStory,
 		AgentRoleID: env.testRoleID,
 		Title:       title,
 	})

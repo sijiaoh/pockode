@@ -21,7 +21,7 @@ func updated(item rpc.WorkListItem, at time.Time) rpc.WorkListItem {
 
 func child(id, parent string, t work.WorkType, status work.WorkStatus, activity work.Activity) rpc.WorkListItem {
 	item := row(id, t, status, activity)
-	item.ParentID = parent
+	item.StoryID = parent
 	return item
 }
 

@@ -74,22 +74,21 @@ func costIs(got *float64, want float64) bool {
 	return got != nil && math.Abs(*got-want) < 1e-9
 }
 
-// A story's total reaches every level below it, not just its own children —
-// that is the whole point of the number, and a single-level sum would silently
-// under-report the deeper a plan is broken down.
-func TestAggregateUsage_SumsEveryDepth(t *testing.T) {
+// A story's total covers its own session and every one of its tasks, and
+// nothing belonging to another story.
+func TestAggregateUsage_SumsTheStoryAndItsTasks(t *testing.T) {
 	store := &usageStore{works: []Work{
 		{ID: "story", SessionID: "s-story"},
-		{ID: "task", ParentID: "story", SessionID: "s-task"},
-		{ID: "subtask", ParentID: "task", SessionID: "s-subtask"},
-		{ID: "subsubtask", ParentID: "subtask", SessionID: "s-subsubtask"},
+		{ID: "task", StoryID: "story", SessionID: "s-task"},
+		{ID: "task-2", StoryID: "story", SessionID: "s-task-2"},
+		{ID: "task-3", StoryID: "story", SessionID: "s-task-3"},
 		{ID: "unrelated", SessionID: "s-unrelated"},
 	}}
 	src := newUsageSource()
 	src.set("", "s-story", priced(tokens(1, 2, 3, 4), 0.10))
 	src.set("", "s-task", priced(tokens(10, 20, 30, 40), 0.20))
-	src.set("", "s-subtask", priced(tokens(100, 200, 300, 400), 0.30))
-	src.set("", "s-subsubtask", priced(tokens(1000, 2000, 3000, 4000), 0.40))
+	src.set("", "s-task-2", priced(tokens(100, 200, 300, 400), 0.30))
+	src.set("", "s-task-3", priced(tokens(1000, 2000, 3000, 4000), 0.40))
 	src.set("", "s-unrelated", priced(tokens(9e6, 9e6, 9e6, 9e6), 99))
 
 	usage, err := AggregateUsage(store, src, store.works[0])
@@ -101,13 +100,13 @@ func TestAggregateUsage_SumsEveryDepth(t *testing.T) {
 		t.Errorf("own = %+v, want the story's own session alone", usage.Own)
 	}
 	if usage.Total == nil || usage.Total.TokenUsage != tokens(1111, 2222, 3333, 4444) {
-		t.Errorf("total = %+v, want every depth summed", usage.Total)
+		t.Errorf("total = %+v, want the story and every task summed", usage.Total)
 	}
 	if usage.Total == nil || !costIs(usage.Total.CostUSD, 1.0) {
 		t.Errorf("total cost = %v, want 1.0", usage.Total.CostUSD)
 	}
-	if usage.DescendantCount != 3 {
-		t.Errorf("descendant count = %d, want 3", usage.DescendantCount)
+	if usage.TaskCount != 3 {
+		t.Errorf("task count = %d, want 3", usage.TaskCount)
 	}
 	if usage.UnpricedSessionCount != 0 {
 		t.Errorf("unpriced count = %d, want 0 when every session reported a price", usage.UnpricedSessionCount)
@@ -121,17 +120,17 @@ func TestAggregateUsage_SumsEveryDepth(t *testing.T) {
 
 // A work item that never started, and one whose session has since been cleaned
 // up, are both ordinary states of a plan being filled in: they contribute
-// nothing and must not break the aggregation or the count of descendants.
+// nothing and must not break the aggregation or the count of tasks.
 func TestAggregateUsage_SkipsMissingSessions(t *testing.T) {
 	store := &usageStore{works: []Work{
 		{ID: "story", SessionID: "s-story"},
-		{ID: "not-started", ParentID: "story"},
-		{ID: "session-gone", ParentID: "story", SessionID: "s-deleted"},
-		{ID: "grandchild", ParentID: "not-started", SessionID: "s-grandchild"},
+		{ID: "not-started", StoryID: "story"},
+		{ID: "session-gone", StoryID: "story", SessionID: "s-deleted"},
+		{ID: "counted", StoryID: "story", SessionID: "s-counted"},
 	}}
 	src := newUsageSource()
 	src.set("", "s-story", priced(tokens(1, 1, 1, 1), 0.01))
-	src.set("", "s-grandchild", priced(tokens(2, 2, 2, 2), 0.02))
+	src.set("", "s-counted", priced(tokens(2, 2, 2, 2), 0.02))
 
 	usage, err := AggregateUsage(store, src, store.works[0])
 	if err != nil {
@@ -141,8 +140,8 @@ func TestAggregateUsage_SkipsMissingSessions(t *testing.T) {
 	if usage.Total == nil || usage.Total.TokenUsage != tokens(3, 3, 3, 3) {
 		t.Errorf("total = %+v, want only the two sessions that exist", usage.Total)
 	}
-	if usage.DescendantCount != 3 {
-		t.Errorf("descendant count = %d, want 3 — a descendant counts whether or not it has a session", usage.DescendantCount)
+	if usage.TaskCount != 3 {
+		t.Errorf("task count = %d, want 3 — a task counts whether or not it has a session", usage.TaskCount)
 	}
 	if usage.UnpricedSessionCount != 0 {
 		t.Errorf("unpriced count = %d, want 0 — a missing session is not an unpriced one", usage.UnpricedSessionCount)
@@ -155,7 +154,7 @@ func TestAggregateUsage_SkipsMissingSessions(t *testing.T) {
 func TestAggregateUsage_ReadsEachWorktree(t *testing.T) {
 	store := &usageStore{works: []Work{
 		{ID: "story", SessionID: "s-story"},
-		{ID: "task", ParentID: "story", SessionID: "s-task", Worktree: "feature-x"},
+		{ID: "task", StoryID: "story", SessionID: "s-task", Worktree: "feature-x"},
 	}}
 	src := newUsageSource()
 	src.set("", "s-story", priced(tokens(1, 0, 0, 0), 0.01))
@@ -179,10 +178,10 @@ func TestAggregateUsage_ReadsEachWorktree(t *testing.T) {
 func TestAggregateUsage_CountsUnpricedSessions(t *testing.T) {
 	store := &usageStore{works: []Work{
 		{ID: "story", SessionID: "s-story"},
-		{ID: "claude", ParentID: "story", SessionID: "s-claude"},
-		{ID: "codex", ParentID: "story", SessionID: "s-codex"},
-		{ID: "codex-2", ParentID: "codex", SessionID: "s-codex-2"},
-		{ID: "idle", ParentID: "story", SessionID: "s-idle"},
+		{ID: "claude", StoryID: "story", SessionID: "s-claude"},
+		{ID: "codex", StoryID: "story", SessionID: "s-codex"},
+		{ID: "codex-2", StoryID: "story", SessionID: "s-codex-2"},
+		{ID: "idle", StoryID: "story", SessionID: "s-idle"},
 	}}
 	src := newUsageSource()
 	src.set("", "s-story", priced(tokens(1, 0, 0, 0), 1.5))
@@ -214,7 +213,7 @@ func TestAggregateUsage_CountsUnpricedSessions(t *testing.T) {
 func TestAggregateUsage_NoCostAnywhereLeavesItAbsent(t *testing.T) {
 	store := &usageStore{works: []Work{
 		{ID: "story", SessionID: "s-story"},
-		{ID: "task", ParentID: "story", SessionID: "s-task"},
+		{ID: "task", StoryID: "story", SessionID: "s-task"},
 	}}
 	src := newUsageSource()
 	src.set("", "s-story", session.Usage{TokenUsage: tokens(5, 0, 0, 0)})
@@ -242,7 +241,7 @@ func TestAggregateUsage_NoCostAnywhereLeavesItAbsent(t *testing.T) {
 func TestAggregateUsage_OwnAbsentWhenParentSpentNothing(t *testing.T) {
 	store := &usageStore{works: []Work{
 		{ID: "story"},
-		{ID: "task", ParentID: "story", SessionID: "s-task"},
+		{ID: "task", StoryID: "story", SessionID: "s-task"},
 	}}
 	src := newUsageSource()
 	src.set("", "s-task", priced(tokens(9, 0, 0, 0), 0.05))
@@ -262,11 +261,11 @@ func TestAggregateUsage_OwnAbsentWhenParentSpentNothing(t *testing.T) {
 
 // Nothing spent anywhere is what a freshly created story looks like, and it is
 // the condition the client hides the whole card on. It is not an error, and the
-// descendant count is still the truth about the tree's shape.
+// task count is still the truth about the tree's shape.
 func TestAggregateUsage_NothingReported(t *testing.T) {
 	store := &usageStore{works: []Work{
 		{ID: "story"},
-		{ID: "task", ParentID: "story"},
+		{ID: "task", StoryID: "story"},
 	}}
 
 	usage, err := AggregateUsage(store, newUsageSource(), store.works[0])
@@ -277,8 +276,8 @@ func TestAggregateUsage_NothingReported(t *testing.T) {
 	if usage.Own != nil || usage.Total != nil {
 		t.Errorf("usage = %+v, want both shares absent", usage)
 	}
-	if usage.DescendantCount != 1 {
-		t.Errorf("descendant count = %d, want 1", usage.DescendantCount)
+	if usage.TaskCount != 1 {
+		t.Errorf("task count = %d, want 1", usage.TaskCount)
 	}
 }
 
@@ -289,8 +288,8 @@ func TestAggregateUsage_NothingReported(t *testing.T) {
 func TestAggregateUsage_ForkedSessionCountsOnlyItsOwn(t *testing.T) {
 	store := &usageStore{works: []Work{
 		{ID: "story"},
-		{ID: "source", ParentID: "story", SessionID: "s-source"},
-		{ID: "forked", ParentID: "story", SessionID: "s-forked"},
+		{ID: "source", StoryID: "story", SessionID: "s-source"},
+		{ID: "forked", StoryID: "story", SessionID: "s-forked"},
 	}}
 	src := newUsageSource()
 	src.set("", "s-source", priced(tokens(100, 0, 0, 0), 1))
@@ -306,30 +305,27 @@ func TestAggregateUsage_ForkedSessionCountsOnlyItsOwn(t *testing.T) {
 	}
 }
 
-// A parent chain that points back into itself must not hang the walk or count a
-// work item twice. It should not be reachable, which is exactly why nothing in
-// the system would catch it.
-func TestAggregateUsage_SurvivesCycles(t *testing.T) {
+// A task's total is its own and nothing else — it holds no tasks, which is what
+// makes the aggregation one query rather than a walk.
+func TestAggregateUsage_TaskCountsOnlyItself(t *testing.T) {
 	store := &usageStore{works: []Work{
-		{ID: "a", ParentID: "c", SessionID: "s-a"},
-		{ID: "b", ParentID: "a", SessionID: "s-b"},
-		{ID: "c", ParentID: "b", SessionID: "s-c"},
+		{ID: "story", SessionID: "s-story"},
+		{ID: "task", StoryID: "story", SessionID: "s-task"},
 	}}
 	src := newUsageSource()
-	src.set("", "s-a", priced(tokens(1, 0, 0, 0), 0.01))
-	src.set("", "s-b", priced(tokens(1, 0, 0, 0), 0.01))
-	src.set("", "s-c", priced(tokens(1, 0, 0, 0), 0.01))
+	src.set("", "s-story", priced(tokens(1, 0, 0, 0), 0.01))
+	src.set("", "s-task", priced(tokens(2, 0, 0, 0), 0.02))
 
-	usage, err := AggregateUsage(store, src, store.works[0])
+	usage, err := AggregateUsage(store, src, store.works[1])
 	if err != nil {
 		t.Fatalf("AggregateUsage: %v", err)
 	}
 
-	if usage.Total == nil || usage.Total.InputTokens != 3 {
-		t.Errorf("total input = %+v, want each of the three counted once", usage.Total)
+	if usage.Total == nil || usage.Total.InputTokens != 2 {
+		t.Errorf("total input = %+v, want the task's own 2", usage.Total)
 	}
-	if usage.DescendantCount != 2 {
-		t.Errorf("descendant count = %d, want 2", usage.DescendantCount)
+	if usage.TaskCount != 0 {
+		t.Errorf("task count = %d, want 0", usage.TaskCount)
 	}
 }
 
@@ -339,8 +335,8 @@ func TestAggregateUsage_SurvivesCycles(t *testing.T) {
 func TestAggregateUsage_UnreadableWorktreeDegrades(t *testing.T) {
 	store := &usageStore{works: []Work{
 		{ID: "story", SessionID: "s-story"},
-		{ID: "task", ParentID: "story", SessionID: "s-task", Worktree: "broken"},
-		{ID: "task-2", ParentID: "story", SessionID: "s-task-2", Worktree: "broken"},
+		{ID: "task", StoryID: "story", SessionID: "s-task", Worktree: "broken"},
+		{ID: "task-2", StoryID: "story", SessionID: "s-task-2", Worktree: "broken"},
 	}}
 	src := newUsageSource()
 	src.set("", "s-story", priced(tokens(1, 0, 0, 0), 0.01))
@@ -386,8 +382,8 @@ func TestUsageEqual(t *testing.T) {
 	}{
 		{
 			name:  "same numbers in different allocations",
-			a:     Usage{Own: totals(1, cost(0.5)), Total: totals(2, cost(0.5)), DescendantCount: 1},
-			b:     Usage{Own: totals(1, cost(0.5)), Total: totals(2, cost(0.5)), DescendantCount: 1},
+			a:     Usage{Own: totals(1, cost(0.5)), Total: totals(2, cost(0.5)), TaskCount: 1},
+			b:     Usage{Own: totals(1, cost(0.5)), Total: totals(2, cost(0.5)), TaskCount: 1},
 			equal: true,
 		},
 		{
@@ -407,8 +403,8 @@ func TestUsageEqual(t *testing.T) {
 		},
 		{
 			name: "a child was added",
-			a:    Usage{Total: totals(2, nil), DescendantCount: 1},
-			b:    Usage{Total: totals(2, nil), DescendantCount: 2},
+			a:    Usage{Total: totals(2, nil), TaskCount: 1},
+			b:    Usage{Total: totals(2, nil), TaskCount: 2},
 		},
 		{
 			name: "a session stopped being priced",

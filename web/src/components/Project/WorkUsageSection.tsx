@@ -19,7 +19,7 @@ interface Column {
 	/** Absent on the lone column, which has nothing to be distinguished from. */
 	header?: string;
 	usage: TokenUsage | undefined;
-	/** The subtree figure is what the page is about; the own figure is context. */
+	/** The total figure is what the page is about; the own figure is context. */
 	isTotal: boolean;
 }
 
@@ -82,22 +82,21 @@ function Row({ label, children }: { label: string; children: ReactNode }) {
 }
 
 /**
- * What a work item and its subtree have spent, between Steps and Tasks — a fact
+ * What a work item and its tasks have spent, between Steps and Tasks — a fact
  * about this item, above the list of items it aggregates.
  *
- * Figures are abbreviated here (`1.2M`): a subtree total is read as a
- * proportion, and three columns of grouped exact counts do not fit a 360px
- * viewport. The exact ones are one Open Chat away, in the session info panel.
+ * Figures are abbreviated here (`1.2M`): a total is read as a proportion, and
+ * three columns of grouped exact counts do not fit a 360px viewport. The exact ones are one Open Chat away, in the session info panel.
  */
 function WorkUsageSection({ type, usage }: Props) {
-	const { own, total, descendant_count: descendantCount } = usage;
+	const { own, total, task_count: taskCount } = usage;
 	if (!own && !total) return null;
 
 	// The shape of the tree decides this, not the numbers: keying it off
 	// `total > own` would grow a second column the moment a task's first turn
 	// landed, reorganising the page under the user as a side effect of an agent
 	// working.
-	const twoColumns = descendantCount > 0;
+	const twoColumns = taskCount > 0;
 	const columns: Column[] = twoColumns
 		? [
 				{
@@ -108,12 +107,12 @@ function WorkUsageSection({ type, usage }: Props) {
 				},
 				{
 					key: "total",
-					header: `Incl. ${descendantCount} ${descendantCount === 1 ? "task" : "tasks"}`,
+					header: `Incl. ${taskCount} ${taskCount === 1 ? "task" : "tasks"}`,
 					usage: total,
 					isTotal: true,
 				},
 			]
-		: // With no descendants the two figures are the same number, so only one is
+		: // With no tasks the two figures are the same number, so only one is
 			// worth a column — and with one column there is nothing to label.
 			[{ key: "total", usage: total ?? own, isTotal: true }];
 

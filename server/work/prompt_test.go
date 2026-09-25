@@ -18,7 +18,7 @@ func assertContains(t *testing.T, msg, substr, label string) {
 func TestBuildKickoffMessage_Task(t *testing.T) {
 	w := Work{
 		ID:          "task-1",
-		Type:        WorkTypeTask,
+		StoryID:     "story-1",
 		AgentRoleID: testRoleID,
 		Title:       "Fix the bug",
 	}
@@ -36,16 +36,15 @@ func TestBuildKickoffMessage_Task(t *testing.T) {
 	if strings.Contains(msg, "COORDINATOR") {
 		t.Error("task message should not contain story coordination rules")
 	}
-	// A task has no children, so the tool it would wait on is not offered to it.
-	if strings.Contains(msg, "work_wait") {
-		t.Error("task message should not mention work_wait")
+	// A task has no tasks, so the tool it would wait on is not offered to it.
+	if strings.Contains(msg, "story_wait") {
+		t.Error("task message should not mention story_wait")
 	}
 }
 
 func TestBuildKickoffMessage_Story(t *testing.T) {
 	w := Work{
 		ID:          "story-1",
-		Type:        WorkTypeStory,
 		AgentRoleID: testRoleID,
 		Title:       "Big feature",
 	}
@@ -53,7 +52,7 @@ func TestBuildKickoffMessage_Story(t *testing.T) {
 	msg := BuildKickoffMessage(w)
 
 	assertContains(t, msg, "Big feature", "story title")
-	assertContains(t, msg, "`work_wait` with ID story-1", "work_wait instruction")
+	assertContains(t, msg, "`story_wait` with ID story-1", "story_wait instruction")
 	assertContains(t, msg, "`step_done` with ID story-1", "step_done instruction")
 	assertContains(t, msg, "rejects a `step_done` that would close a story with active subtasks",
 		"the rule that a story waits for its tasks instead of closing over them")
@@ -67,13 +66,13 @@ func TestBuildKickoffMessage_Story(t *testing.T) {
 // only sentence that would have said when it may not.
 func TestLifecycleRules_AnnounceBothSubtaskRefusals(t *testing.T) {
 	msg := BuildKickoffMessage(Work{
-		ID: "s1", Type: WorkTypeStory, AgentRoleID: testRoleID, Title: "S",
+		ID: "s1", AgentRoleID: testRoleID, Title: "S",
 	})
 
 	assertContains(t, msg, "rejects a `step_done` that would close a story with active subtasks",
 		"the step_done refusal")
-	assertContains(t, msg, "rejects a `work_wait` when none of them is running",
-		"the work_wait refusal")
+	assertContains(t, msg, "rejects a `story_wait` when none of them is running",
+		"the story_wait refusal")
 }
 
 // The coordinator rules are the half of a story prompt that is not in the
@@ -82,18 +81,20 @@ func TestLifecycleRules_AnnounceBothSubtaskRefusals(t *testing.T) {
 // what makes that a failure rather than a comparison against "".
 func TestBuildKickoffMessage_StoryCarriesTheCoordinatorRules(t *testing.T) {
 	msg := BuildKickoffMessage(Work{
-		ID: "s1", Type: WorkTypeStory, AgentRoleID: testRoleID, Title: "S",
+		ID: "s1", AgentRoleID: testRoleID, Title: "S",
 	})
 
 	assertContains(t, msg, "You are a COORDINATOR for this story", "coordinator opening")
-	assertContains(t, msg, "work_create", "task breakdown instruction")
-	assertContains(t, msg, "Do NOT call step_done on child tasks", "child lifecycle rule")
+	assertContains(t, msg, "using task_create, with story_id set to this story's ID", "task breakdown instruction")
+	assertContains(t, msg, "Start the tasks you created with task_start, then wait for them with story_wait",
+		"how the tasks are run")
+	assertContains(t, msg, "Do NOT call step_done on your tasks", "task lifecycle rule")
 }
 
 // Every number the lifecycle section quotes at the agent is a promise about what
 // the server does, so each is read from the constant that governs it.
 func TestLifecycleRules_QuoteTheLimitsTheServerActuallyKeeps(t *testing.T) {
-	msg := BuildKickoffMessage(Work{ID: "t1", Type: WorkTypeTask, AgentRoleID: testRoleID, Title: "T"})
+	msg := BuildKickoffMessage(Work{ID: "t1", StoryID: "s1", AgentRoleID: testRoleID, Title: "T"})
 
 	assertContains(t, msg, "after "+strconv.Itoa(DefaultMaxNudges)+" of those in a row", "the nudge allowance")
 }
@@ -108,7 +109,7 @@ func TestLifecycleRules_QuoteTheLimitsTheServerActuallyKeeps(t *testing.T) {
 // happens if a CLI ever stops honouring the flag, and because Codex's
 // counterpart is refused at the protocol rather than hidden.
 func TestLifecycleRules_SendLongWaitsToQuestionPost(t *testing.T) {
-	msg := BuildKickoffMessage(Work{ID: "t1", Type: WorkTypeTask, AgentRoleID: testRoleID, Title: "T"})
+	msg := BuildKickoffMessage(Work{ID: "t1", StoryID: "s1", AgentRoleID: testRoleID, Title: "T"})
 
 	assertContains(t, msg, "does not reach the user here", "that the CLI's own ask tool goes nowhere")
 	assertContains(t, msg, "question_post", "what to do instead")
@@ -118,7 +119,7 @@ func TestLifecycleRules_SendLongWaitsToQuestionPost(t *testing.T) {
 
 func TestBuildKickoffMessage_RoleRefComesFirst(t *testing.T) {
 	msg := BuildKickoffMessage(Work{
-		ID: "t1", Type: WorkTypeTask, AgentRoleID: testRoleID, Title: "T",
+		ID: "t1", StoryID: "s1", AgentRoleID: testRoleID, Title: "T",
 	})
 
 	roleIdx := strings.Index(msg, testRoleID)
@@ -136,12 +137,12 @@ func TestBuildAutoContinuationMessage_ContainsBaseAndNudge(t *testing.T) {
 	}{
 		{
 			"task",
-			Work{ID: "t1", Type: WorkTypeTask, AgentRoleID: testRoleID, Title: "T"},
+			Work{ID: "t1", StoryID: "s1", AgentRoleID: testRoleID, Title: "T"},
 			"Your last turn ended without moving this task along",
 		},
 		{
 			"story",
-			Work{ID: "s1", Type: WorkTypeStory, AgentRoleID: testRoleID, Title: "S"},
+			Work{ID: "s1", AgentRoleID: testRoleID, Title: "S"},
 			"Your last turn ended without moving this story along",
 		},
 	} {
@@ -157,39 +158,21 @@ func TestBuildAutoContinuationMessage_ContainsBaseAndNudge(t *testing.T) {
 	}
 }
 
-func TestBuildKickoffMessage_TaskWithParent_ReportViaComment(t *testing.T) {
+func TestBuildKickoffMessage_TaskReportsViaComment(t *testing.T) {
 	w := Work{
 		ID:          "task-1",
-		Type:        WorkTypeTask,
-		ParentID:    "story-1",
+		StoryID:     "story-1",
 		AgentRoleID: testRoleID,
 		Title:       "Fix bug",
 	}
 
 	msg := BuildKickoffMessage(w)
 
-	assertContains(t, msg, "work_comment_list", "work_comment_list instruction for parent comments")
-	assertContains(t, msg, "work_comment_add", "work_comment_add instruction")
-	assertContains(t, msg, "story-1", "parent work ID")
+	// The story's ID is spelled out in both calls: a template variable that no
+	// longer matches the name Go passes renders as "<no value>", not as an error.
+	assertContains(t, msg, "work_comment_list with work_id story-1", "where to read the story's instructions")
+	assertContains(t, msg, "work_comment_add with work_id story-1", "where to report")
 	assertContains(t, msg, "`step_done` with ID task-1", "step_done instruction")
-}
-
-func TestBuildKickoffMessage_TaskWithoutParent_NoCommentInstruction(t *testing.T) {
-	w := Work{
-		ID:          "task-1",
-		Type:        WorkTypeTask,
-		AgentRoleID: testRoleID,
-		Title:       "Fix bug",
-	}
-
-	msg := BuildKickoffMessage(w)
-
-	if strings.Contains(msg, "work_comment_add") {
-		t.Error("task without parent should not mention work_comment_add")
-	}
-	if strings.Contains(msg, "work_comment_list") {
-		t.Error("task without parent should not mention work_comment_list")
-	}
 }
 
 func TestBuildRestartMessage_ContainsBaseAndNudge(t *testing.T) {
@@ -200,12 +183,12 @@ func TestBuildRestartMessage_ContainsBaseAndNudge(t *testing.T) {
 	}{
 		{
 			"task",
-			Work{ID: "t1", Type: WorkTypeTask, AgentRoleID: testRoleID, Title: "T"},
+			Work{ID: "t1", StoryID: "s1", AgentRoleID: testRoleID, Title: "T"},
 			"Your task was stopped and is now being restarted",
 		},
 		{
 			"story",
-			Work{ID: "s1", Type: WorkTypeStory, AgentRoleID: testRoleID, Title: "S"},
+			Work{ID: "s1", AgentRoleID: testRoleID, Title: "S"},
 			"Your story was stopped and is now being restarted",
 		},
 	} {
@@ -284,7 +267,7 @@ func TestFormatStepSection(t *testing.T) {
 }
 
 func TestBuildKickoffMessageWithSteps_NoSteps(t *testing.T) {
-	w := Work{ID: "t1", Type: WorkTypeTask, AgentRoleID: testRoleID, Title: "T"}
+	w := Work{ID: "t1", StoryID: "s1", AgentRoleID: testRoleID, Title: "T"}
 
 	msgWithoutSteps := BuildKickoffMessage(w)
 	msgWithEmptySteps := BuildKickoffMessageWithSteps(w, []string{}, 0)
@@ -295,7 +278,7 @@ func TestBuildKickoffMessageWithSteps_NoSteps(t *testing.T) {
 }
 
 func TestBuildKickoffMessageWithSteps_WithSteps(t *testing.T) {
-	w := Work{ID: "t1", Type: WorkTypeTask, AgentRoleID: testRoleID, Title: "T"}
+	w := Work{ID: "t1", StoryID: "s1", AgentRoleID: testRoleID, Title: "T"}
 	steps := []string{"Implement feature", "Write tests", "Update docs"}
 
 	msg := BuildKickoffMessageWithSteps(w, steps, 0)
@@ -313,7 +296,7 @@ func TestBuildKickoffMessageWithSteps_WithSteps(t *testing.T) {
 }
 
 func TestBuildStepAdvanceMessage_Format(t *testing.T) {
-	w := Work{ID: "t1", Type: WorkTypeTask, AgentRoleID: testRoleID, Title: "T"}
+	w := Work{ID: "t1", StoryID: "s1", AgentRoleID: testRoleID, Title: "T"}
 
 	msg := BuildStepAdvanceMessage(w, "Write tests", 2, 3)
 
@@ -331,7 +314,7 @@ func TestBuildStepAdvanceMessage_Format(t *testing.T) {
 }
 
 func TestBuildAutoContinuationMessageWithSteps_NoSteps(t *testing.T) {
-	w := Work{ID: "t1", Type: WorkTypeTask, AgentRoleID: testRoleID, Title: "T"}
+	w := Work{ID: "t1", StoryID: "s1", AgentRoleID: testRoleID, Title: "T"}
 
 	msgWithoutSteps := BuildAutoContinuationMessage(w)
 	msgWithEmptySteps := BuildAutoContinuationMessageWithSteps(w, []string{}, 0)
@@ -342,7 +325,7 @@ func TestBuildAutoContinuationMessageWithSteps_NoSteps(t *testing.T) {
 }
 
 func TestBuildAutoContinuationMessageWithSteps_WithSteps(t *testing.T) {
-	w := Work{ID: "t1", Type: WorkTypeTask, AgentRoleID: testRoleID, Title: "T", CurrentStep: 1}
+	w := Work{ID: "t1", StoryID: "s1", AgentRoleID: testRoleID, Title: "T", CurrentStep: 1}
 	steps := []string{"Implement feature", "Write tests", "Update docs"}
 
 	msg := BuildAutoContinuationMessageWithSteps(w, steps, w.CurrentStep)
@@ -364,7 +347,7 @@ func TestBuildAutoContinuationMessageWithSteps_WithSteps(t *testing.T) {
 }
 
 func TestBuildAutoContinuationMessageWithSteps_Story(t *testing.T) {
-	w := Work{ID: "s1", Type: WorkTypeStory, AgentRoleID: testRoleID, Title: "S"}
+	w := Work{ID: "s1", AgentRoleID: testRoleID, Title: "S"}
 	steps := []string{"Step 1", "Step 2"}
 
 	msg := BuildAutoContinuationMessageWithSteps(w, steps, 0)
@@ -372,10 +355,11 @@ func TestBuildAutoContinuationMessageWithSteps_Story(t *testing.T) {
 	assertContains(t, msg, "## Current Step", "step header")
 	assertContains(t, msg, "Step 1 of 2", "step number")
 	assertContains(t, msg, "ended on step 1 of 2", "step context")
+	assertContains(t, msg, "Call story_wait with ID s1", "how a story waits for its tasks")
 }
 
 func TestBuildAutoContinuationMessageWithSteps_InvalidIndex(t *testing.T) {
-	w := Work{ID: "t1", Type: WorkTypeTask, AgentRoleID: testRoleID, Title: "T"}
+	w := Work{ID: "t1", StoryID: "s1", AgentRoleID: testRoleID, Title: "T"}
 	steps := []string{"Step 1", "Step 2"}
 
 	// Invalid index should fall back to standard message
@@ -396,12 +380,12 @@ func TestBuildReopenMessage_ContainsBaseAndNudge(t *testing.T) {
 	}{
 		{
 			"task",
-			Work{ID: "t1", Type: WorkTypeTask, AgentRoleID: testRoleID, Title: "T"},
+			Work{ID: "t1", StoryID: "s1", AgentRoleID: testRoleID, Title: "T"},
 			"This task has been reopened",
 		},
 		{
 			"story",
-			Work{ID: "s1", Type: WorkTypeStory, AgentRoleID: testRoleID, Title: "S"},
+			Work{ID: "s1", AgentRoleID: testRoleID, Title: "S"},
 			"This story has been reopened",
 		},
 	} {
@@ -419,17 +403,18 @@ func TestBuildReopenMessage_ContainsBaseAndNudge(t *testing.T) {
 
 // Every message the engine sends carries the lifecycle section, and none of them
 // may carry the vocabulary it replaced: an agent told its work is "in_progress"
-// will go looking for a status the store cannot produce. Checked over every
-// send site rather than over prompts.yaml, because a stale word can just as
-// easily be appended in Go.
+// will go looking for a status the store cannot produce, and one told to call
+// work_create is answered by a retired stub instead of doing the work. Checked
+// over every send site rather than over prompts.yaml, because a stale word can
+// just as easily be appended in Go.
 func TestEverySystemMessage_SpeaksTheCurrentVocabulary(t *testing.T) {
-	story := Work{ID: "s1", Type: WorkTypeStory, AgentRoleID: testRoleID, Title: "S"}
-	task := Work{ID: "t1", Type: WorkTypeTask, ParentID: "s1", AgentRoleID: testRoleID, Title: "T"}
+	story := Work{ID: "s1", AgentRoleID: testRoleID, Title: "S"}
+	task := Work{ID: "t1", StoryID: "s1", AgentRoleID: testRoleID, Title: "T"}
 	steps := []string{"Do A", "Do B"}
 
 	messages := map[string]string{}
 	for _, w := range []Work{story, task} {
-		prefix := string(w.Type)
+		prefix := string(w.Type())
 		messages[prefix+" kickoff"] = BuildKickoffMessageWithSteps(w, steps, 0)
 		messages[prefix+" restart"] = BuildRestartMessage(w)
 		messages[prefix+" auto_continue"] = BuildAutoContinuationMessage(w)
@@ -449,7 +434,15 @@ func TestEverySystemMessage_SpeaksTheCurrentVocabulary(t *testing.T) {
 	}
 
 	for name, msg := range messages {
-		for _, retired := range []string{"in_progress", "needs_input state", "still in_progress"} {
+		for _, retired := range []string{
+			"in_progress", "needs_input state", "still in_progress",
+			// The tools the story/task split retired, and the two-field way of
+			// naming a task's story that it made unrepresentable.
+			"work_create", "work_list", "work_start", "work_wait", "parent_id", `type="task"`,
+			// What text/template renders for a map key the template names and
+			// Go no longer passes — a renamed variable fails as this, silently.
+			"<no value>",
+		} {
 			if strings.Contains(msg, retired) {
 				t.Errorf("%s message still says %q", name, retired)
 			}
@@ -457,28 +450,39 @@ func TestEverySystemMessage_SpeaksTheCurrentVocabulary(t *testing.T) {
 		// The rules are what makes a message survive an agent that has lost all
 		// memory of this work, so every send site has to carry them.
 		assertContains(t, msg, "How Pockode drives this work", name+" lifecycle section")
+		// A task has no tasks to wait for, so no message to one may offer the
+		// tool — the step nudge offered it to tasks while the lifecycle section
+		// was already careful not to — nor speak of its subtasks at all, which
+		// the lifecycle section's "ask and wait for your subtasks" did.
+		if strings.HasPrefix(name, "task ") {
+			for _, storyOnly := range []string{"story_wait", "subtask"} {
+				if strings.Contains(msg, storyOnly) {
+					t.Errorf("%s message says %q to a task", name, storyOnly)
+				}
+			}
+		}
 	}
 }
 
 // A parent's wait is cleared by the very message telling it a child closed, so
 // a story with two running tasks has to ask again or be nudged for going quiet.
 func TestBuildChildCompletionMessage_TellsTheParentItsWaitIsGone(t *testing.T) {
-	story := Work{ID: "s1", Type: WorkTypeStory, AgentRoleID: testRoleID, Title: "S"}
+	story := Work{ID: "s1", AgentRoleID: testRoleID, Title: "S"}
 
 	msg := BuildChildCompletionMessage(story, "Write the parser", "c1", true)
 
 	assertContains(t, msg, "Write the parser", "child title")
 	assertContains(t, msg, "This message cleared your wait", "the cleared wait")
-	assertContains(t, msg, "call work_wait with ID s1 again", "how to wait again")
+	assertContains(t, msg, "call story_wait with ID s1 again", "how to wait again")
 
 	// A parent that never declared a wait has none to be cleared
 	// (Engine.notifyParentOfChild), and must not be told to "wait again": it was
-	// working, and work_wait is rejected outright once no subtask is running.
+	// working, and story_wait is rejected outright once no subtask is running.
 	standing := BuildChildCompletionMessage(story, "Write the parser", "c1", false)
 	if strings.Contains(standing, "cleared your wait") {
 		t.Error("a parent whose wait still stands is told it was cleared")
 	}
-	if strings.Contains(standing, "call work_wait with ID s1 again") {
+	if strings.Contains(standing, "call story_wait with ID s1 again") {
 		t.Error("a parent whose wait still stands is told to wait again")
 	}
 	if strings.HasSuffix(standing, "\n") {
@@ -489,10 +493,10 @@ func TestBuildChildCompletionMessage_TellsTheParentItsWaitIsGone(t *testing.T) {
 // A stopped story is told nothing while it is stopped — child closures included —
 // so the restart message is the only thing that can send it to look.
 func TestBuildRestartMessage_SendsAStoryToRereadItsTasks(t *testing.T) {
-	msg := BuildRestartMessage(Work{ID: "s1", Type: WorkTypeStory, AgentRoleID: testRoleID, Title: "S"})
+	msg := BuildRestartMessage(Work{ID: "s1", AgentRoleID: testRoleID, Title: "S"})
 
 	assertContains(t, msg, "While a story is stopped Pockode sends it nothing", "why re-reading is needed")
-	assertContains(t, msg, "work_list", "how to re-read the tasks")
+	assertContains(t, msg, "task_list (story_id = this story's ID)", "how to re-read the tasks")
 	assertContains(t, msg, "work_comment_list", "how to read the reports")
 }
 
@@ -500,7 +504,7 @@ func TestBuildRestartMessage_SendsAStoryToRereadItsTasks(t *testing.T) {
 // fetch it — the question is on the subtask's session, not on its work item —
 // so everything needed to answer travels in the message.
 func TestBuildChildQuestionMessage_HandsTheStoryTheWholeQuestion(t *testing.T) {
-	story := Work{ID: "s1", Type: WorkTypeStory, AgentRoleID: testRoleID, Title: "S"}
+	story := Work{ID: "s1", AgentRoleID: testRoleID, Title: "S"}
 	q := session.PendingQuestion{
 		RequestID: "req-7", Header: "Database", Question: "Which database?",
 		Options:     []session.QuestionOption{{Label: "Postgres"}, {Label: "SQLite"}},
@@ -540,8 +544,8 @@ func TestBuildChildQuestionMessage_HandsTheStoryTheWholeQuestion(t *testing.T) {
 // The subtask-question rules are a story's: only a story has subtasks that
 // could ask.
 func TestLifecycleRules_TellOnlyAStoryAboutItsSubtasksQuestions(t *testing.T) {
-	story := Work{ID: "s1", Type: WorkTypeStory, AgentRoleID: testRoleID, Title: "S"}
-	task := Work{ID: "t1", Type: WorkTypeTask, ParentID: "s1", AgentRoleID: testRoleID, Title: "T"}
+	story := Work{ID: "s1", AgentRoleID: testRoleID, Title: "S"}
+	task := Work{ID: "t1", StoryID: "s1", AgentRoleID: testRoleID, Title: "T"}
 
 	assertContains(t, lifecycleRules(story), "question_answer", "a story is told it may answer for its subtasks")
 	if strings.Contains(lifecycleRules(task), "question_answer") {
@@ -553,7 +557,7 @@ func TestLifecycleRules_TellOnlyAStoryAboutItsSubtasksQuestions(t *testing.T) {
 // not one: the story is the coordinator, Pockode nudges it for an unanswered
 // one, and a story that keeps ignoring it is stopped.
 func TestBuildChildQuestionMessage_DoesNotOfferToLeaveIt(t *testing.T) {
-	story := Work{ID: "s1", Type: WorkTypeStory, AgentRoleID: testRoleID, Title: "S"}
+	story := Work{ID: "s1", AgentRoleID: testRoleID, Title: "S"}
 
 	msg := BuildChildQuestionMessage(story, "Write the parser", "c1", "sess-c1",
 		session.PendingQuestion{RequestID: "req-7", Header: "Database", Question: "Which database?"})
@@ -577,19 +581,19 @@ func TestBuildChildQuestionMessage_DoesNotOfferToLeaveIt(t *testing.T) {
 // that subtask running again. Both halves have to say the same thing, so the
 // bound is pinned here beside the engine's test for it.
 func TestLifecycleRules_BoundASubtasksQuestionToARunningSubtask(t *testing.T) {
-	story := Work{ID: "s1", Type: WorkTypeStory, AgentRoleID: testRoleID, Title: "S"}
+	story := Work{ID: "s1", AgentRoleID: testRoleID, Title: "S"}
 
 	rules := lifecycleRules(story)
 
 	assertContains(t, rules, "is not yours", "that a stopped subtask's question is not the story's")
-	assertContains(t, rules, "work_start", "the way to make it the story's again")
+	assertContains(t, rules, "start it again with `task_start`", "the way to make it the story's again")
 }
 
 // TestBuildChildQuestionReminderMessage_QuotesEveryQuestion: the story cannot
 // fetch them — they live on its subtasks' sessions — and it is being asked to
 // settle each, so each arrives whole and with both halves of its identity.
 func TestBuildChildQuestionReminderMessage_QuotesEveryQuestion(t *testing.T) {
-	story := Work{ID: "s1", Type: WorkTypeStory, AgentRoleID: testRoleID, Title: "S"}
+	story := Work{ID: "s1", AgentRoleID: testRoleID, Title: "S"}
 
 	msg := BuildChildQuestionReminderMessage(story, []childQuestion{
 		{ChildID: "c1", ChildTitle: "Write the parser", SessionID: "sess-c1", RequestID: "req-1", Header: "Database", Question: "Which database?"},

@@ -10,7 +10,7 @@ import type { WorkListItem } from "../../types/work";
 /** What the badge reads off a work: its worktree, and whether that is settled. */
 export type WorktreeBadgeWork = Pick<
 	WorkListItem,
-	"id" | "parent_id" | "status" | "worktree"
+	"id" | "story_id" | "status" | "worktree"
 >;
 
 interface Props {

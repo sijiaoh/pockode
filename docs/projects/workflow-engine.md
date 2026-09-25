@@ -27,7 +27,7 @@ must not be nudged.
 | Wait | Set by | Cleared by |
 |---|---|---|
 | none | every transition into active | — |
-| `child` | `work_wait` | a child work closing, or a user message — or the engine, when no child is left that could close |
+| `child` | `story_wait` | a child work closing, or a user message — or the engine, when no child is left that could close |
 
 **Waiting on a person is not a wait.** An agent that needs something from the
 user posts a question (`question_post`); the question lives on the session, the
@@ -40,7 +40,7 @@ The `user` wait and its `wait_reason` are gone.
 with nothing to show for it.
 
 A wait on children is ended by a child closing and by nothing else, so it is
-checked at both ends: `work_wait` is refused when no child of the work is
+checked at both ends: `story_wait` is refused when no child of the work is
 running, and a wait whose last running child leaves *without* closing is cleared
 by the engine with a message saying what became of it. Either case would
 otherwise leave a coordinator waiting forever, and waiting quietly — the engine
@@ -62,7 +62,7 @@ why the pair is shaped that way.
 | `open`    | `active`  | `Store.Claim` (fresh start — no session yet) |
 | `active` / `stopped` | `open`    | `Store.RollbackStart` (fresh start failed) |
 | `active` / `stopped` | `stopped` | `Store.RollbackStart` (restart failed)     |
-| live with an active child | `active` + `child` | `Store.SetChildWait` (`work_wait`; refused when no child is running) |
+| live with an active child | `active` + `child` | `Store.SetChildWait` (`story_wait`; refused when no child is running) |
 | live      | `stopped` | `Store.Stop` (user Stop, aborted turn, nudge limit, deleted session, startup recovery) |
 | live      | `active`  | `Store.Activate` (a user message, a child closing) |
 | `active`  | `active`  | `Store.ClearNudges` (an answer to a posted question — the allowance only) |
@@ -99,7 +99,7 @@ than start over. See
 Work items transition through `StepDone`; there is no intermediate `done` state.
 Any work item with remaining steps advances to the next step and stays `active`.
 When no steps remain, the work item closes. Waiting for child work is handled
-explicitly through `work_wait`, not `StepDone`.
+explicitly through `story_wait`, not `StepDone`.
 
 When a child work closes, the engine tells its parent — and clears the parent's
 wait if it was waiting on its children — so the coordinator can review results
@@ -237,14 +237,14 @@ The prompt builders generate messages for different lifecycle events. All share 
 **Base (`buildBase`):**
 - Agent role reference (instructs agent to fetch its role via `agent_role_get`)
 - Work context (title, ID, instruction to read full details via `work_get`)
-- What differs by work type, and only that:
-  - **Story:** Coordinator rules — break the story into tasks, start them, do not implement anything yourself, do not call `step_done` on a child, read a child's report as a comment on the story.
-  - **Task with parent:** Read the parent's comments before starting, and report results back with `work_comment_add`, because the story agent does not read this chat.
-  - **Task without parent:** nothing extra.
+- What differs by work type — derived from `story_id`, so the two cases below are
+  the only ones there are:
+  - **Story:** Coordinator rules — break the story into tasks, start them, do not implement anything yourself, do not call `step_done` on a task, read a task's report as a comment on the story.
+  - **Task:** Read the story's comments before starting, and report results back with `work_comment_add`, because the story agent does not read this chat.
 - The lifecycle rules (`lifecycle_rules`), identical for every work Pockode
   drives: what the four statuses mean, that `question_post` is how the agent
   reaches a person and that it waits for nothing, that a story waits for its
-  subtasks with `work_wait`, that a story shown one of its subtasks' questions
+  subtasks with `story_wait`, that a story shown one of its subtasks' questions
   must settle it — `question_answer` if it knows the answer, `question_post` to
   the user if it does not, and ignoring it is not a third way — that the same
   rule stops at a *stopped* subtask, whose question is not the story's to
@@ -316,14 +316,14 @@ moment a turn ends rather than from anything it remembered
 ### BuildRestartMessage
 
 Base + a restart nudge appropriate to the work type:
-- **Story:** "Your story was stopped and is now being restarted. While a story is stopped Pockode sends it nothing…" — the story has to re-read `work_list` and `work_comment_list`, and its tasks' unanswered questions with `work_get`, because a stopped parent is never told that a child closed or that one asked something.
+- **Story:** "Your story was stopped and is now being restarted. While a story is stopped Pockode sends it nothing…" — the story has to re-read `task_list` and `work_comment_list`, and its tasks' unanswered questions with `work_get`, because a stopped story is never told that a task closed or that one asked something.
 - **Task:** "Your task was stopped and is now being restarted. Review what you have done so far…"
 
 ### BuildAutoContinuationMessage
 
 Base + a nudge appropriate to the work type, which names the three things the
 engine was looking for and did not get:
-- **Story:** "Your last turn ended without moving this story along: no step_done, no work_wait, and no question waiting for an answer — yours or a subtask's…"
+- **Story:** "Your last turn ended without moving this story along: no step_done, no story_wait, and no question waiting for an answer — yours or a subtask's…"
 - **Task:** "Your last turn ended without moving this task along: no step_done, and no question waiting for an answer…"
 
 ### BuildAutoContinuationMessageWithSteps
@@ -341,11 +341,14 @@ That turn ended on step N of M without saying where the work stands.
 Check if you have completed the current step:
 - If YES: Call step_done with ID xxx to proceed to the next step or close the work.
 - If NO and you are blocked on the user: Ask them with question_post, then carry on or end the turn.
-- If NO and you are a story blocked on your subtasks: Call work_wait with ID xxx.
+- If NO and you are blocked on your tasks: Call story_wait with ID xxx.   (stories only)
 - If NO: Continue working on this step.
 ```
 
-Falls back to `BuildAutoContinuationMessage` for stories or when no steps are defined.
+The `story_wait` line is left out for a task, for the same reason the lifecycle
+section leaves it out: a task has no tasks to wait for.
+
+Falls back to `BuildAutoContinuationMessage` when no steps are defined, or when the current step index is out of range.
 
 ### BuildStepAdvanceMessage
 

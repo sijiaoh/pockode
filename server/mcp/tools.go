@@ -31,28 +31,49 @@ type propertySchema struct {
 
 var toolDefinitions = []toolDefinition{
 	{
-		Name:        "work_list",
-		Description: "List work items (stories and tasks), optionally filtered by parent_id. Each item is a summary and does not include the body. Call work_get with an item's id to read its body. An item's status is one of: open (never started), active (Pockode is driving it), stopped (handed back to a person; no agent runs for it), closed (finished).",
+		Name:        "story_list",
+		Description: "List the stories in this project. A story is a top-level work item; its tasks are listed separately with task_list. Each item is a summary and does not include the body. Call work_get with an item's id to read its body. An item's status is one of: open (never started), active (Pockode is driving it), stopped (handed back to a person; no agent runs for it), closed (finished).",
 		InputSchema: inputSchema{
-			Type: "object",
-			Properties: map[string]propertySchema{
-				"parent_id": {Type: "string", Description: "Filter by parent work ID"},
-			},
+			Type:       "object",
+			Properties: map[string]propertySchema{},
 		},
 	},
 	{
-		Name:        "work_create",
-		Description: "Create a new work item (story or task). Stories are top-level; tasks must have a story parent.",
+		Name:        "task_list",
+		Description: "List the tasks of one story. Each item is a summary and does not include the body. Call work_get with an item's id to read its body. An item's status is one of: open (never started), active (Pockode is driving it), stopped (handed back to a person; no agent runs for it), closed (finished).",
 		InputSchema: inputSchema{
 			Type: "object",
 			Properties: map[string]propertySchema{
-				"type":          {Type: "string", Description: "Work type", Enum: []string{"story", "task"}},
-				"parent_id":     {Type: "string", Description: "Parent work ID (required for tasks)"},
-				"title":         {Type: "string", Description: "Title of the work item"},
-				"body":          {Type: "string", Description: "Detailed description or instructions for the work item"},
+				"story_id": {Type: "string", Description: "The story whose tasks to list"},
+			},
+			Required: []string{"story_id"},
+		},
+	},
+	{
+		Name:        "story_create",
+		Description: "Create a story: a top-level piece of work, which can be broken into tasks with task_create.",
+		InputSchema: inputSchema{
+			Type: "object",
+			Properties: map[string]propertySchema{
+				"title":         {Type: "string", Description: "Title of the story"},
+				"body":          {Type: "string", Description: "Detailed description or instructions for the story"},
 				"agent_role_id": {Type: "string", Description: "Agent role ID (required)"},
 			},
-			Required: []string{"type", "title", "agent_role_id"},
+			Required: []string{"title", "agent_role_id"},
+		},
+	},
+	{
+		Name:        "task_create",
+		Description: "Create a task under a story. A task is the second and last level: it cannot have tasks of its own, and it runs in the worktree of the story it belongs to.",
+		InputSchema: inputSchema{
+			Type: "object",
+			Properties: map[string]propertySchema{
+				"story_id":      {Type: "string", Description: "The story this task belongs to"},
+				"title":         {Type: "string", Description: "Title of the task"},
+				"body":          {Type: "string", Description: "Detailed description or instructions for the task"},
+				"agent_role_id": {Type: "string", Description: "Agent role ID (required)"},
+			},
+			Required: []string{"story_id", "title", "agent_role_id"},
 		},
 	},
 	{
@@ -92,13 +113,28 @@ var toolDefinitions = []toolDefinition{
 		},
 	},
 	{
-		Name:        "work_start",
-		Description: "Start a work item: launches an agent session and moves the item to active, which is the only status Pockode drives. A work item that already has a session is restarted in it and keeps its chat history.",
+		Name:        "story_start",
+		Description: "Start a story: launches an agent session and moves it to active, which is the only status Pockode drives. A story that already has a session is restarted in it and keeps its chat history.",
 		InputSchema: inputSchema{
 			Type: "object",
 			Properties: map[string]propertySchema{
-				"id":       {Type: "string", Description: "Work item ID to start"},
-				"worktree": {Type: "string", Description: "Name of the git worktree to run this story in, created (with a branch of the same name) if it does not exist yet. Only a story takes this: a task always runs in the worktree of the story it belongs to. Omit it to run in the worktree the story is already assigned to (the main one, unless it was set elsewhere)."},
+				"id":       {Type: "string", Description: "Story ID to start"},
+				"worktree": {Type: "string", Description: "Name of the git worktree to run this story in, created (with a branch of the same name) if it does not exist yet. Omit it to run in the worktree the story is already assigned to (the main one, unless it was set elsewhere)."},
+			},
+			Required: []string{"id"},
+		},
+	},
+	{
+		// The worktree argument is the whole reason this is a tool of its own:
+		// a task runs where its story runs, so there is nothing for it to
+		// choose, and a schema without the argument says so without the agent
+		// having to read a sentence about it.
+		Name:        "task_start",
+		Description: "Start a task: launches an agent session and moves it to active, which is the only status Pockode drives. A task that already has a session is restarted in it and keeps its chat history. It runs in the worktree of the story it belongs to, which is why there is nothing to choose here.",
+		InputSchema: inputSchema{
+			Type: "object",
+			Properties: map[string]propertySchema{
+				"id": {Type: "string", Description: "Task ID to start"},
 			},
 			Required: []string{"id"},
 		},
@@ -126,19 +162,67 @@ var toolDefinitions = []toolDefinition{
 		},
 	},
 	{
-		Name:        "work_reopen",
-		Description: "Reopen a closed work item: moves it from closed back to active and resumes its session. Use when you need to add more child work items or continue working on an item that was finished.",
+		// Retired by the story/task split: work_create, work_list, work_start and
+		// work_wait each forked on which kind of work they were given, and the
+		// fork now shows in the tool name and its schema. The entries stay only
+		// so that an agent mid-conversation, still holding the lifecycle rules
+		// that named them, is told which tool replaced this one instead of
+		// "unknown tool" — same precedent, and same shape, as work_needs_input
+		// above.
+		//
+		// When to delete them: the engine resends the lifecycle rules with every
+		// message, so a live session has the new names by its next turn. These
+		// only have to outlast the sessions already mid-turn when the split
+		// ships — so they ship with it, and go with the first commit that
+		// touches the lifecycle rules *after* that release. The prompts that
+		// adopted the new names do not count: they are in the same binary and
+		// the same release as the split, so they close no part of the window
+		// these cover.
+		//
+		// Each keeps its old input schema, unread though it is: an agent holding
+		// the old rules sends the old arguments, and a schema that rejected them
+		// could have the call refused by the CLI before the sentence below ever
+		// reached the model, which is the one thing these entries exist to
+		// prevent.
+		Name:        "work_create",
+		Description: "Retired — use story_create for a top-level story, or task_create (with story_id) for a task under one. There is no type argument any more: naming a story is what makes a task.",
 		InputSchema: inputSchema{
 			Type: "object",
 			Properties: map[string]propertySchema{
-				"id": {Type: "string", Description: "Work item ID to reopen"},
+				"type":          {Type: "string", Description: "Work type", Enum: []string{"story", "task"}},
+				"parent_id":     {Type: "string", Description: "Parent work ID (required for tasks)"},
+				"title":         {Type: "string", Description: "Title of the work item"},
+				"body":          {Type: "string", Description: "Detailed description or instructions for the work item"},
+				"agent_role_id": {Type: "string", Description: "Agent role ID (required)"},
+			},
+			Required: []string{"type", "title", "agent_role_id"},
+		},
+	},
+	{
+		Name:        "work_list",
+		Description: "Retired — use story_list to list the stories, or task_list (with story_id) to list one story's tasks.",
+		InputSchema: inputSchema{
+			Type: "object",
+			Properties: map[string]propertySchema{
+				"parent_id": {Type: "string", Description: "Filter by parent work ID"},
+			},
+		},
+	},
+	{
+		Name:        "work_start",
+		Description: "Retired — use story_start (which takes the optional worktree) for a story, or task_start for a task.",
+		InputSchema: inputSchema{
+			Type: "object",
+			Properties: map[string]propertySchema{
+				"id":       {Type: "string", Description: "Work item ID to start"},
+				"worktree": {Type: "string", Description: "Name of the git worktree to run this story in"},
 			},
 			Required: []string{"id"},
 		},
 	},
 	{
 		Name:        "work_wait",
-		Description: "Record that this work is waiting for its child tasks, and end your turn. The work stays active and Pockode stops nudging it; when a child closes, Pockode messages you with the news and clears the wait — so if other children are still running and you still have nothing to do, call this again. Only a story has children. Rejected when none of the work's subtasks is running — a subtask closing is the only thing that ends this wait, so with none running nothing would ever end it; start them first. This is not how you wait for a person: ask them with question_post, which does not end anything.",
+		Description: "Retired — use story_wait instead. Only a story has tasks to wait for, so the tool says so.",
 		InputSchema: inputSchema{
 			Type: "object",
 			Properties: map[string]propertySchema{
@@ -148,8 +232,30 @@ var toolDefinitions = []toolDefinition{
 		},
 	},
 	{
+		Name:        "work_reopen",
+		Description: "Reopen a closed work item, story or task alike: moves it from closed back to active and resumes its session. Use when there is more to do on something that was finished — on a story, that includes giving it further tasks.",
+		InputSchema: inputSchema{
+			Type: "object",
+			Properties: map[string]propertySchema{
+				"id": {Type: "string", Description: "Work item ID to reopen"},
+			},
+			Required: []string{"id"},
+		},
+	},
+	{
+		Name:        "story_wait",
+		Description: "Record that this story is waiting for its tasks, and end your turn. The story stays active and Pockode stops nudging it; when a task closes, Pockode messages you with the news and clears the wait — so if other tasks are still running and you still have nothing to do, call this again. Only a story has tasks, which is why only a story can wait for them. Rejected when none of the story's tasks is running — a task closing is the only thing that ends this wait, so with none running nothing would ever end it; start them first. This is not how you wait for a person: ask them with question_post, which does not end anything.",
+		InputSchema: inputSchema{
+			Type: "object",
+			Properties: map[string]propertySchema{
+				"id": {Type: "string", Description: "Story ID to wait"},
+			},
+			Required: []string{"id"},
+		},
+	},
+	{
 		Name:        "step_done",
-		Description: "Mark the current step as complete, or the whole work when your agent role defines no steps: the work advances to the next step while steps remain, and otherwise closes. Do not use it to pause — work_wait is how a story waits for its subtasks, and a step_done that would close a story with active subtasks is rejected. Completing a step withdraws any questions you posted during it: the step is over, so their answers would arrive for work you have already finished.",
+		Description: "Mark the current step as complete, or the whole work when your agent role defines no steps: the work advances to the next step while steps remain, and otherwise closes. Do not use it to pause — story_wait is how a story waits for its tasks, and a step_done that would close a story with active subtasks is rejected. Completing a step withdraws any questions you posted during it: the step is over, so their answers would arrive for work you have already finished.",
 		InputSchema: inputSchema{
 			Type: "object",
 			Properties: map[string]propertySchema{

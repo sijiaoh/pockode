@@ -134,7 +134,7 @@ describe("WorktreeBadge", () => {
 			makeWork({
 				id: "task-1",
 				type: "task",
-				parent_id: story.id,
+				story_id: story.id,
 				status: "open",
 				worktree: "feat-login",
 			}),
@@ -151,7 +151,7 @@ describe("WorktreeBadge", () => {
 			makeWork({
 				id: "task-1",
 				type: "task",
-				parent_id: story.id,
+				story_id: story.id,
 				status: "active",
 				worktree: "feat-login",
 			}),
@@ -172,7 +172,7 @@ describe("WorktreeBadge", () => {
 			makeWork({
 				id: "task-1",
 				type: "task",
-				parent_id: story.id,
+				story_id: story.id,
 				status: "open",
 				worktree: "feat-login",
 			}),
@@ -181,12 +181,12 @@ describe("WorktreeBadge", () => {
 		expect(container).toBeEmptyDOMElement();
 	});
 
-	it("falls back to the work's own status when its parent is unknown", () => {
+	it("falls back to the work's own status when its story is unknown", () => {
 		const { container } = renderBadge(
 			makeWork({
 				id: "task-1",
 				type: "task",
-				parent_id: "missing-story",
+				story_id: "missing-story",
 				status: "open",
 				worktree: "feat-login",
 			}),

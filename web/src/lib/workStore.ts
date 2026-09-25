@@ -279,39 +279,31 @@ export function normalizeWorkRow(row: WorkListItem): WorkListItem {
 	return activity === row.activity ? row : { ...row, activity };
 }
 
-/** The only fields needed to walk a work up to its root. */
-type WorkNode = Pick<WorkListItem, "id" | "parent_id" | "status">;
+/** The only fields the verdict below reads off a work. */
+type WorkNode = Pick<WorkListItem, "story_id" | "status">;
 
 /**
  * Whether a work's worktree is already decided and can no longer change.
  *
  * A work that is no longer `open` is frozen: the backend only ever rewrites
- * works that are still `open`. An open work instead waits on its *root* — only a
- * top-level work captures a worktree when it starts, and that same moment
- * rewrites every still-open descendant to match. So an open work is decided as
- * soon as its root has started, and undecided before that.
+ * works that are still `open`. An open task instead waits on its *story* — only
+ * a story captures a worktree when it starts, and that same moment rewrites
+ * every still-open task to match. So an open task is decided as soon as its
+ * story has started, and undecided before that.
+ *
+ * One lookup and no walk: `story_id` is the whole of the hierarchy, so the item
+ * above a task is a story and a story has nothing above it. A story missing
+ * from the list (not synced yet) leaves the task itself as the answer, which is
+ * `open`, which is the truthful "not decided".
  */
 export function isWorktreeBound(
 	works: WorkListItem[],
 	work: WorkNode,
 ): boolean {
 	if (work.status !== "open") return true;
-	return findRootWork(works, work).status !== "open";
-}
-
-function findRootWork(works: WorkListItem[], work: WorkNode): WorkNode {
-	const seen = new Set<string>([work.id]);
-	let current = work;
-	while (current.parent_id) {
-		const parentId = current.parent_id;
-		const parent = works.find((w) => w.id === parentId);
-		// An ancestor missing from the list (not synced yet) or a cycle stops the
-		// walk instead of looping forever; the deepest known node acts as root.
-		if (!parent || seen.has(parent.id)) break;
-		seen.add(parent.id);
-		current = parent;
-	}
-	return current;
+	if (!work.story_id) return false;
+	const story = works.find((w) => w.id === work.story_id);
+	return story ? story.status !== "open" : false;
 }
 
 /**

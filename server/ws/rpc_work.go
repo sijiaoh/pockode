@@ -41,8 +41,7 @@ func (h *rpcMethodHandler) handleWorkCreate(ctx context.Context, conn *jsonrpc2.
 	}
 
 	w, err := h.workStore.Create(ctx, work.Work{
-		Type:        params.Type,
-		ParentID:    params.ParentID,
+		StoryID:     params.StoryID,
 		AgentRoleID: params.AgentRoleID,
 		Title:       params.Title,
 		Body:        params.Body,
@@ -52,9 +51,9 @@ func (h *rpcMethodHandler) handleWorkCreate(ctx context.Context, conn *jsonrpc2.
 		return
 	}
 
-	h.log.Info("work created", "workId", w.ID, "type", w.Type, "title", w.Title)
+	h.log.Info("work created", "workId", w.ID, "type", w.Type(), "title", w.Title)
 
-	if err := conn.Reply(ctx, req.ID, w); err != nil {
+	if err := conn.Reply(ctx, req.ID, rpc.NewWorkDetailItem(w)); err != nil {
 		h.log.Error("failed to send work create response", "error", err)
 	}
 }
@@ -127,7 +126,7 @@ func (h *rpcMethodHandler) handleWorkStart(ctx context.Context, conn *jsonrpc2.C
 	// restart keeps the worktree it already has (SetWorktree only applies while
 	// the work is still open), so this only ever pins a brand-new story.
 	if current, found, err := h.workStore.Get(params.ID); err == nil && found &&
-		current.ParentID == "" && current.Status == work.StatusOpen {
+		current.StoryID == "" && current.Status == work.StatusOpen {
 		name := ""
 		if wt := h.state.getWorktree(); wt != nil {
 			name = wt.Name
@@ -153,7 +152,7 @@ func (h *rpcMethodHandler) handleWorkStart(ctx context.Context, conn *jsonrpc2.C
 
 	h.log.Info("work started", "workId", w.ID, "sessionId", w.SessionID)
 
-	if err := conn.Reply(ctx, req.ID, w); err != nil {
+	if err := conn.Reply(ctx, req.ID, rpc.NewWorkDetailItem(w)); err != nil {
 		h.log.Error("failed to send work start response", "error", err)
 	}
 }
@@ -274,7 +273,7 @@ func (h *rpcMethodHandler) handleWorkDetailSubscribe(ctx context.Context, conn *
 	h.log.Debug("subscribed", "watcher", "work detail", "watchId", params.ID, "workId", params.WorkID)
 
 	result := rpc.WorkDetailSubscribeResult{
-		Work:             detail.Work,
+		Work:             rpc.NewWorkDetailItem(detail.Work),
 		Comments:         detail.Comments,
 		Usage:            detail.Usage,
 		Activity:         detail.Activity,

@@ -7,9 +7,13 @@ import type { WorkType } from "../../types/work";
 import { Sheet } from "../ui";
 
 interface Props {
+	/**
+	 * Which sheet this is: the title and placeholder it shows. Not sent — the
+	 * server reads the kind off `storyId` (`WorkCreateParams`).
+	 */
 	type: WorkType;
 	/** The story a task is created under; absent for a story. */
-	parentId?: string;
+	storyId?: string;
 	onClose: () => void;
 	/**
 	 * The work that now exists. The caller navigates to it — this component
@@ -46,7 +50,7 @@ const PLACEHOLDER: Record<WorkType, string> = {
  */
 export default function CreateWorkSheet({
 	type,
-	parentId,
+	storyId,
 	onClose,
 	onCreated,
 }: Props) {
@@ -90,8 +94,7 @@ export default function CreateWorkSheet({
 			setIsSubmitting(true);
 			try {
 				const created = await createWork({
-					type,
-					parent_id: parentId,
+					story_id: storyId,
 					agent_role_id: agentRoleId,
 					title: trimmed,
 				});
@@ -110,7 +113,7 @@ export default function CreateWorkSheet({
 				setIsSubmitting(false);
 			}
 		},
-		[title, type, parentId, agentRoleId, createWork, isSubmitting, onCreated],
+		[title, type, storyId, agentRoleId, createWork, isSubmitting, onCreated],
 	);
 
 	// An empty list of roles is three different facts, and only one of them is

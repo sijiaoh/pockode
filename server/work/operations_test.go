@@ -198,7 +198,7 @@ func TestOperations_StepDone_RefusesToCloseWhileChildrenAreActive(t *testing.T) 
 	if !errors.Is(err, ErrInvalidWork) {
 		t.Fatalf("err = %v, want an ErrInvalidWork refusal", err)
 	}
-	for _, want := range []string{`"Reducer"`, "work_wait", "The step was not completed"} {
+	for _, want := range []string{`"Reducer"`, "story_wait", "The step was not completed"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("refusal %q does not mention %q", err, want)
 		}
@@ -212,7 +212,7 @@ func TestOperations_StepDone_RefusesToCloseWhileChildrenAreActive(t *testing.T) 
 }
 
 // The mirror of the refusal above, and the two are exactly complementary: a
-// work_wait is accepted precisely when the closing step_done is refused. If it
+// story_wait is accepted precisely when the closing step_done is refused. If it
 // were not, one of the two errors would be naming a way out that is itself shut.
 func TestOperations_Wait_AcceptedWhileASubtaskRuns(t *testing.T) {
 	store := newTestStore(t)
@@ -245,14 +245,14 @@ func TestOperations_Wait_RefusesWhenNothingCouldEndIt(t *testing.T) {
 		{
 			name:  "no subtasks at all",
 			setup: func(*testing.T, *FileStore, string) {},
-			wants: []string{"no subtasks", "work_create"},
+			wants: []string{"no subtasks", "task_create"},
 		},
 		{
 			name: "every subtask already closed",
 			setup: func(t *testing.T, store *FileStore, storyID string) {
 				doneWork(t, store, createTask(t, store, storyID, "Reducer").ID)
 			},
-			wants: []string{"already closed", "work_create"},
+			wants: []string{"already closed", "task_create"},
 		},
 		{
 			// The closed one is what makes this case worth its own setup: the
@@ -270,7 +270,7 @@ func TestOperations_Wait_RefusesWhenNothingCouldEndIt(t *testing.T) {
 			},
 			// Named with their statuses: "none is running" and "you never
 			// started them" are the same sentence to the agent that made them.
-			wants:   []string{`2 of them can be started`, `"Reducer" (stopped)`, `"Lease table" (open)`, "work_start"},
+			wants:   []string{`2 of them can be started`, `"Reducer" (stopped)`, `"Lease table" (open)`, "task_start"},
 			unwants: []string{"Settling", "3"},
 		},
 	}
@@ -301,9 +301,39 @@ func TestOperations_Wait_RefusesWhenNothingCouldEndIt(t *testing.T) {
 				}
 			}
 			if got := getWork(t, store, story.ID); got.Wait != WaitNone {
-				t.Errorf("wait = %q; a refused work_wait sets nothing", got.Wait)
+				t.Errorf("wait = %q; a refused story_wait sets nothing", got.Wait)
 			}
 		})
+	}
+}
+
+// story_wait takes an id, and a task's is as easy to pass as a story's. The
+// refusal must not offer a task the story's ways out: "create them with
+// task_create" would send it to make a third level, which the store refuses.
+func TestOperations_Wait_OnATaskOffersNoTasksOfItsOwn(t *testing.T) {
+	store := newTestStore(t)
+	story := createStory(t, store, "Build")
+	task := createTask(t, store, story.ID, "Reducer")
+	startWork(t, store, story.ID)
+	startWork(t, store, task.ID)
+	ops := NewOperations(store, nil, nil, nil)
+
+	err := ops.Wait(context.Background(), task.ID)
+	if !errors.Is(err, ErrInvalidWork) {
+		t.Fatalf("err = %v, want an ErrInvalidWork refusal", err)
+	}
+	for _, want := range []string{"is a task", "question_post", "step_done", "The wait was not set"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("refusal %q does not mention %q", err, want)
+		}
+	}
+	for _, unwanted := range []string{"task_create", "task_start"} {
+		if strings.Contains(err.Error(), unwanted) {
+			t.Errorf("refusal %q offers a task %s, which would make a third level", err, unwanted)
+		}
+	}
+	if got := getWork(t, store, task.ID); got.Wait != WaitNone {
+		t.Errorf("wait = %q; a refused story_wait sets nothing", got.Wait)
 	}
 }
 

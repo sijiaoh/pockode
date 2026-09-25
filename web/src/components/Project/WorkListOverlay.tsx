@@ -158,15 +158,15 @@ export default function WorkListOverlay({
 		return [...byId.values()];
 	}, [works, archive]);
 
-	const tasksByParentId = useMemo(() => {
+	const tasksByStoryId = useMemo(() => {
 		const map = new Map<string, WorkListItem[]>();
 		for (const w of known) {
-			if (w.type === "task" && w.parent_id) {
-				const list = map.get(w.parent_id);
+			if (w.type === "task" && w.story_id) {
+				const list = map.get(w.story_id);
 				if (list) {
 					list.push(w);
 				} else {
-					map.set(w.parent_id, [w]);
+					map.set(w.story_id, [w]);
 				}
 			}
 		}
@@ -225,13 +225,13 @@ export default function WorkListOverlay({
 		<WorkRow
 			key={work.id}
 			work={work}
-			tasks={work.type === "story" ? tasksByParentId.get(work.id) : undefined}
+			tasks={work.type === "story" ? tasksByStoryId.get(work.id) : undefined}
 			// Slot 1 is the list's, not the row's: a task is here because it left
 			// its story, and without the story's name it is a title with no
 			// context (docs/project-ui.md §3.1).
-			parentTitle={
-				work.type === "task" && work.parent_id
-					? titleById.get(work.parent_id)
+			storyTitle={
+				work.type === "task" && work.story_id
+					? titleById.get(work.story_id)
 					: undefined
 			}
 			roleName={

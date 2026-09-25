@@ -71,7 +71,7 @@ func TestToolsList(t *testing.T) {
 		names[td.Name] = true
 	}
 
-	for _, want := range []string{"work_list", "work_create", "work_update", "work_get", "work_delete", "work_start", "work_needs_input", "step_done", "work_comment_add", "work_comment_list", "agent_role_list", "agent_role_get", "agent_role_reset_defaults"} {
+	for _, want := range []string{"story_list", "task_list", "story_create", "task_create", "work_update", "work_get", "work_delete", "story_start", "task_start", "story_wait", "work_needs_input", "step_done", "work_comment_add", "work_comment_list", "agent_role_list", "agent_role_get", "agent_role_reset_defaults"} {
 		if !names[want] {
 			t.Errorf("missing tool %q", want)
 		}
@@ -114,8 +114,8 @@ func callToolViaProxy(t *testing.T, s *Server, name string, args interface{}) js
 func TestProxyToolCall_Success(t *testing.T) {
 	s, roleID := newProxyToAPI(t, "secret", "secret")
 
-	resp := callToolViaProxy(t, s, "work_create", map[string]string{
-		"type": "story", "title": "Proxied Story", "agent_role_id": roleID,
+	resp := callToolViaProxy(t, s, "story_create", map[string]string{
+		"title": "Proxied Story", "agent_role_id": roleID,
 	})
 	if resp.Error != nil {
 		t.Fatalf("unexpected RPC error: %+v", resp.Error)
@@ -165,8 +165,8 @@ func TestProxyToolCall_UnknownTool(t *testing.T) {
 func TestProxyToolCall_AuthFailure(t *testing.T) {
 	s, roleID := newProxyToAPI(t, "secret", "wrong-token")
 
-	resp := callToolViaProxy(t, s, "work_create", map[string]string{
-		"type": "story", "title": "X", "agent_role_id": roleID,
+	resp := callToolViaProxy(t, s, "story_create", map[string]string{
+		"title": "X", "agent_role_id": roleID,
 	})
 	// An auth failure is a transport problem; the proxy surfaces it as an
 	// isError result so the AI is not left guessing.
@@ -211,7 +211,7 @@ func TestProxyToolCall_CarriesCallerIdentity(t *testing.T) {
 	want := Caller{SessionID: "s1", Worktree: "feature-x"}
 	s, rec := newProxyToRecorder(t, want)
 
-	if resp := callToolViaProxy(t, s, "work_list", map[string]string{}); resp.Error != nil {
+	if resp := callToolViaProxy(t, s, "story_list", map[string]string{}); resp.Error != nil {
 		t.Fatalf("unexpected RPC error: %+v", resp.Error)
 	}
 	if rec.caller != want {
@@ -224,7 +224,7 @@ func TestProxyToolCall_CarriesCallerIdentity(t *testing.T) {
 func TestProxyToolCall_WithoutIdentity(t *testing.T) {
 	s, rec := newProxyToRecorder(t, Caller{})
 
-	if resp := callToolViaProxy(t, s, "work_list", map[string]string{}); resp.Error != nil {
+	if resp := callToolViaProxy(t, s, "story_list", map[string]string{}); resp.Error != nil {
 		t.Fatalf("unexpected RPC error: %+v", resp.Error)
 	}
 	if rec.caller != (Caller{}) {

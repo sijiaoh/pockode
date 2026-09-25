@@ -124,8 +124,8 @@ Activates both `useWorkSubscription` and `useAgentRoleSubscription`.
 5. A fixed `BottomActionBar` with `New Story`, which opens `CreateWorkSheet`
 
 **What the screen resolves for its rows**, because a row is given facts rather
-than looking them up: the story's tasks (indexed by `parent_id` into a
-`Map<string, WorkListItem[]>`), a task's parent title, the role name out of
+than looking them up: the story's tasks (indexed by `story_id` into a
+`Map<string, WorkListItem[]>`), the title of the story a task belongs to, the role name out of
 `useRoleNameMap`, and `showUpdatedAt` in the `Closed` segment.
 
 ### WorkRow
@@ -168,12 +168,12 @@ Shows the detail view for a single work item (story or task). Sections:
 
 - **Parent link** — If the item is a task, shows a tappable link to the parent story
 - **Title** — Inline-editable (tap pencil icon to enter edit mode)
-- **Status** — Read-only badge, with a `WorktreeBadge` alongside it: the worktree binding isn't editable, but the badge is a link that navigates to that worktree's root (shown for both stories and tasks, since a task detail can be opened directly; hidden while neither the work nor its root story has started, because only then can the worktree still change)
+- **Status** — Read-only badge, with a `WorktreeBadge` alongside it: the worktree binding isn't editable, but the badge is a link that navigates to that worktree's root (shown for both stories and tasks, since a task detail can be opened directly; hidden while neither the work nor its story has started, because only then can the worktree still change)
 - **Role** — Inline-editable select (tap to switch role)
 - **Description** — Inline-editable textarea with Markdown rendering
 - **Steps** — Step progress indicator showing current step position (if agent role has steps defined)
-- **Usage** — Tokens and cost, this item's own beside its whole subtree's, from the same `work.detail` subscription and updating live as its sessions spend ([usage-display-ui.md](../usage-display-ui.md), [aggregation](../code/work-system.md#usage-aggregation))
-- **Tasks** (story only) — The story's child tasks as `WorkRow`s, the one place a story's tasks are listed, plus an `Add Task` control opening `CreateWorkSheet`. The rows differ from the list's in one slot only: the parent name is left off, because every row here is a task of the story on screen. The heading carries `closed/total` and, whenever any child is `active`, an "{n} active" count — the same count that makes a refused `step_done` legible (docs/lifecycle-ui.md §6.2)
+- **Usage** — Tokens and cost, this item's own beside the total over it and its tasks, from the same `work.detail` subscription and updating live as its sessions spend ([usage-display-ui.md](../usage-display-ui.md), [aggregation](../code/work-system.md#usage-aggregation))
+- **Tasks** (story only) — The story's child tasks as `WorkRow`s, the one place a story's tasks are listed, plus an `Add Task` control opening `CreateWorkSheet`. The rows differ from the list's in one slot only: the story name is left off, because every row here is a task of the story on screen. The heading carries `closed/total` and, whenever any child is `active`, an "{n} active" count — the same count that makes a refused `step_done` legible (docs/lifecycle-ui.md §6.2)
 - **Comments** — Loaded via `work.detail.subscribe` (real-time)
 
 **Bottom action bar:**
@@ -207,6 +207,12 @@ The one creation form, for both a story from the list and a task from a story's
 detail. A shared `Sheet` holding the two fields the server requires — title and
 role — and nothing else: the description is the brief the agent reads, and its
 editor is on the page the user is about to land on.
+
+Which of the two it is creating is the `type` prop, and that prop decides the
+sheet's heading and placeholder and nothing more. It is not sent: the request
+names a `story_id` or names none, and the server reads the kind off that
+([api.md](api.md#method-reference)), so the sheet cannot ask for a kind that
+contradicts the story it was opened from.
 
 It reads the agent-role store as **three** states rather than one, because the
 subscription is app-wide, starts out loading and returns to loading on every

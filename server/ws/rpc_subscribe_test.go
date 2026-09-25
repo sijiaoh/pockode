@@ -35,7 +35,6 @@ func TestHandler_SubscribeTakesTheClientsID(t *testing.T) {
 	}
 	var item work.Work
 	json.Unmarshal(env.call("work.create", rpc.WorkCreateParams{
-		Type:        work.WorkTypeStory,
 		AgentRoleID: env.testRoleID,
 		Title:       "Story",
 	}).Result, &item)

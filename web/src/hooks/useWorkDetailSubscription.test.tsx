@@ -47,14 +47,14 @@ const work = (id: string): Work => ({
 	updated_at: "2026-03-04T00:00:00Z",
 });
 
-const usageOf = (total: number, descendants = 2): WorkUsage => ({
+const usageOf = (total: number, tasks = 2): WorkUsage => ({
 	total: {
 		input_tokens: total,
 		output_tokens: 0,
 		cache_read_tokens: 0,
 		cache_write_tokens: 0,
 	},
-	descendant_count: descendants,
+	task_count: tasks,
 });
 
 describe("useWorkDetailSubscription", () => {

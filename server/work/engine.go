@@ -305,10 +305,7 @@ func (e *Engine) childrenAwaitingAnswers(w Work) []childQuestion {
 	// agent produces.
 	resolver := NewActivityResolver(e.getTurnSource())
 	var pending []childQuestion
-	for _, child := range works {
-		if child.ParentID != w.ID {
-			continue
-		}
+	for _, child := range TasksOf(works, w.ID) {
 		if child.Status != StatusActive {
 			continue
 		}
@@ -692,7 +689,7 @@ func (e *Engine) HandleQuestionPosted(sessionID string, q session.PendingQuestio
 	defer e.leave()
 
 	child, found := e.findWork(sessionID)
-	if !found || child.ParentID == "" {
+	if !found || child.StoryID == "" {
 		return
 	}
 	e.goFollowUp(func() { e.notifyParentOfChildQuestion(child, q) })
@@ -713,9 +710,9 @@ func (e *Engine) HandleQuestionPosted(sessionID string, q session.PendingQuestio
 // asked to settle the question. Restarting or reopening the story says the
 // same thing sooner.
 func (e *Engine) notifyParentOfChildQuestion(child Work, q session.PendingQuestion) {
-	parent, found, err := e.store.Get(child.ParentID)
+	parent, found, err := e.store.Get(child.StoryID)
 	if err != nil {
-		slog.Warn("failed to get parent work for a child's question", "parentId", child.ParentID, "error", err)
+		slog.Warn("failed to get parent work for a child's question", "parentId", child.StoryID, "error", err)
 		return
 	}
 	if !found || parent.SessionID == "" {
@@ -774,7 +771,7 @@ func (e *Engine) OnWorkChange(event ChangeEvent) {
 	// that for itself, and none of them may leave a `child` wait standing (see
 	// failedToReach). A `user` wait is untouched either way — a person is
 	// reachable whether or not this process can find a worktree.
-	if child.ParentID == "" {
+	if child.StoryID == "" {
 		return
 	}
 
@@ -842,9 +839,9 @@ func (e *Engine) enforceSessionLease(w Work) {
 // is in the work store, and the restart prompt tells the agent to review its
 // tasks before doing anything.
 func (e *Engine) notifyParentOfChild(child Work) {
-	parent, found, err := e.store.Get(child.ParentID)
+	parent, found, err := e.store.Get(child.StoryID)
 	if err != nil {
-		slog.Warn("failed to get parent work for child closure", "parentId", child.ParentID, "error", err)
+		slog.Warn("failed to get parent work for child closure", "parentId", child.StoryID, "error", err)
 		return
 	}
 	if !found || parent.SessionID == "" {
@@ -931,9 +928,9 @@ func (e *Engine) notifyParentOfChild(child Work) {
 // stops the same shape of parent for that reason, not because this one is wrong.
 // The same fork appears below, where the news cannot be delivered.
 func (e *Engine) notifyParentOfStrandedWait(child Work, exit childExit) {
-	parent, found, err := e.store.Get(child.ParentID)
+	parent, found, err := e.store.Get(child.StoryID)
 	if err != nil {
-		slog.Warn("failed to get parent work for a child leaving active", "parentId", child.ParentID, "error", err)
+		slog.Warn("failed to get parent work for a child leaving active", "parentId", child.StoryID, "error", err)
 		return
 	}
 	// Not found is the ordinary case of a deleted story: the cascade emits the
@@ -1152,13 +1149,12 @@ func (e *Engine) RecoverStartup(turns TurnSource) {
 // survive the stop, so the user is still offered them and answering one wakes
 // the work.
 //
-// One pass is enough, and that rests on a fact this package enforces rather than
-// on luck: a `child` wait is only ever set by Store.SetChildWait, which requires
-// an active child, so only a work type that can have children can hold one — and
-// today that is exactly the top-level type (validParents). Nothing sits above a
-// work stopped here, so no stop in this pass can strand another wait.
-// TestOnlyTopLevelWorkCanHaveChildren fails if the hierarchy grows a level,
-// which is when this would have to become a loop to a fixed point.
+// One pass is enough, and that rests on the shape rather than on luck: a
+// `child` wait is only ever set by Store.SetChildWait, which requires an active
+// task, and only a story can hold tasks (Work.StoryID). Nothing sits above a
+// story stopped here, so no stop in this pass can strand another wait. A third
+// level is what would turn this into a loop to a fixed point, and the model
+// cannot express one — TestCreate_StoryIDMustNameAStory is where that is held.
 func (e *Engine) recoverStrandedWaits() {
 	works, err := e.store.List()
 	if err != nil {
@@ -1170,7 +1166,7 @@ func (e *Engine) recoverStrandedWaits() {
 		if w.Status != StatusActive || w.Wait != WaitChild {
 			continue
 		}
-		if HasActiveChild(works, w.ID) {
+		if HasActiveTask(works, w.ID) {
 			continue
 		}
 		e.stop(w.ID, "server restarted and nothing was left to end the work's wait", strandedWaitComment)

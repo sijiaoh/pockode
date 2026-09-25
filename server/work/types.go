@@ -74,13 +74,32 @@ const (
 )
 
 type Work struct {
-	ID          string     `json:"id"`
-	Type        WorkType   `json:"type"`
-	ParentID    string     `json:"parent_id,omitempty"`
-	AgentRoleID string     `json:"agent_role_id,omitempty"`
-	Title       string     `json:"title"`
-	Body        string     `json:"body,omitempty"`
-	Status      WorkStatus `json:"status"`
+	ID string `json:"id"`
+	// StoryID is the whole of the hierarchy: empty means this work is a story,
+	// set means it is that story's task. The name is the constraint — it can
+	// only hold a story — and because a task's own StoryID would have to be
+	// empty to make it a story, a third level cannot be expressed at all.
+	//
+	// It replaced a `parent_id` that could name any work beside a stored `type`
+	// that said the same thing a second time. One fact, one field: a creator
+	// cannot state a type that contradicts the parent it picked, because there
+	// is no type to state (see Type).
+	StoryID string `json:"story_id,omitempty"`
+	// LegacyParentID carries the pre-two-level `parent_id` off disk so Normalize
+	// can fold it into StoryID. Nothing may read it but Normalize and nothing may
+	// ever set it: every record in the store has been through Normalize, which
+	// clears it, so `omitempty` keeps the old key out of everything written back.
+	// A record carrying both keys is not something the store can produce.
+	//
+	// It is a field here rather than a parallel storage struct because the
+	// alternative restates all of Work's fields and tags, where forgetting one
+	// silently drops it on load. The cost is this one field; the benefit is that
+	// the migration stays in Normalize, where the status migration already is.
+	LegacyParentID string     `json:"parent_id,omitempty"`
+	AgentRoleID    string     `json:"agent_role_id,omitempty"`
+	Title          string     `json:"title"`
+	Body           string     `json:"body,omitempty"`
+	Status         WorkStatus `json:"status"`
 	// Wait is what this work is waiting for while active; empty when it is
 	// waiting for nothing. Meaningless on any other status, and cleared by every
 	// transition that leaves active.
@@ -112,6 +131,17 @@ type Work struct {
 	Worktree  string    `json:"worktree,omitempty"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
+}
+
+// Type is derived rather than stored: a work that names a story is that story's
+// task, and one that names none is a story itself. It stays a WorkType because
+// that is what the wire, the prompts and the list rows all still say — what went
+// away is the *second copy of the fact*, not the vocabulary.
+func (w Work) Type() WorkType {
+	if w.StoryID == "" {
+		return WorkTypeStory
+	}
+	return WorkTypeTask
 }
 
 type Operation string
@@ -168,6 +198,9 @@ type WorkStartHandler interface {
 // An unrecognised status is left alone rather than repaired: a hand-edited or
 // corrupted index is not something to silently rewrite, and every guard in this
 // package names the statuses it rejects rather than the ones it admits.
+//
+// The two-level shape arrives the same way and for the same reason: `parent_id`
+// is read as `story_id`, and the old `type` is read and dropped.
 func (w Work) Normalize() Work {
 	switch string(w.Status) {
 	case "in_progress", "needs_input":
@@ -179,6 +212,15 @@ func (w Work) Normalize() Work {
 	case "waiting":
 		w.Status, w.Wait = StatusActive, WaitChild
 	}
+	// Pre-two-level records named their story `parent_id`. The field could point
+	// at any work, but nothing deeper than a task was ever creatable, so every
+	// value it holds on disk is already a story id.
+	if w.StoryID == "" {
+		w.StoryID = w.LegacyParentID
+	}
+	w.LegacyParentID = ""
+	// The old `type` needs nothing at all: it is not a field any more, so
+	// unmarshalling drops it, and StoryID says what it used to say.
 	// A wait only means anything while the engine is driving the work. Anywhere
 	// else it is a leftover that would show the user a work "waiting for you"
 	// that nothing will ever resume.

@@ -428,7 +428,7 @@ weight, not one tier reaching for legibility the other gives up.
 
 | # | Slot | When | Tier | Why here |
 |---|---|---|---|---|
-| 1 | `↳ <parent title>` | the row is a task | structure | A task row only exists here because it left its story (§2.2); without this it is a title with no context. The corner arrow is the shape of depth, and it buys about 20px of title width over the words `in:` — but only on screen: the arrow is `aria-hidden`, so an `sr-only` `in` keeps the relationship for a screen reader, which would otherwise hear a bare title indistinguishable from the role and worktree slots beside it. |
+| 1 | `↳ <story title>` | the row is a task | structure | A task row only exists here because it left its story (§2.2); without this it is a title with no context. The corner arrow is the shape of depth, and it buys about 20px of title width over the words `in:` — but only on screen: the arrow is `aria-hidden`, so an `sr-only` `in` keeps the relationship for a screen reader, which would otherwise hear a bare title indistinguishable from the role and worktree slots beside it. |
 | 2 | Activity label | **every row** | state | Which of the eight leaves this is ([lifecycle-ui.md §1.1](lifecycle-ui.md#11-activity)). |
 | 2b | `1 to answer` / `{n} to answer` | `unanswered_questions > 0` | state | The second dimension. It sits against the activity label rather than replacing it, because a work can be `Running` and still owe two answers — that pair is the whole reason the `needs_answer` leaf was deleted ([answering-ui.md](answering-ui.md)). Short because line 2 clips from the right and this slot is near the front of it. |
 | 3 | `WorktreeBadge` | the work's worktree is fixed | attribute | The list is global across worktrees; the badge and its visibility rule are the old row's unchanged, including staying off rows whose worktree can still change. Its hit area is not: see the hit-area note below. |
@@ -605,7 +605,7 @@ slots — not two row implementations that drift. Every slot rule above decides
 itself from the work, with one exception, and the exception is decided by the
 **screen** rather than by the group:
 
-- Slot 1, `↳ <parent title>`, is passed off on the Tasks section. Every row
+- Slot 1, `↳ <story title>`, is passed off on the Tasks section. Every row
   there is a task of the story on screen, and naming it on each row is noise.
 
 That is the whole difference. A task row in *Needs you* and the same task's row

@@ -1,6 +1,7 @@
 package mcp
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
@@ -25,25 +26,110 @@ func TestToolDefinitions_DoNotTeachTheRetiredStatuses(t *testing.T) {
 	}
 }
 
-// work_list hands the agent raw status values, and its description is the only
-// glossary for them. Read off the constants so a fifth status cannot be added
-// without this sentence being extended.
-func TestToolDefinitions_WorkListExplainsEveryStatusItReturns(t *testing.T) {
-	var listDesc string
-	for _, def := range toolDefinitions {
-		if def.Name == "work_list" {
-			listDesc = def.Description
+// The listings hand the agent raw status values, and their descriptions are the
+// only glossary for them. Read off the constants so a fifth status cannot be
+// added without those sentences being extended.
+func TestToolDefinitions_ListingsExplainEveryStatusTheyReturn(t *testing.T) {
+	for _, tool := range []string{"story_list", "task_list"} {
+		var listDesc string
+		for _, def := range toolDefinitions {
+			if def.Name == tool {
+				listDesc = def.Description
+			}
+		}
+		if listDesc == "" {
+			t.Fatalf("%s is not defined", tool)
+		}
+
+		for _, status := range []work.WorkStatus{
+			work.StatusOpen, work.StatusActive, work.StatusStopped, work.StatusClosed,
+		} {
+			if !strings.Contains(listDesc, string(status)) {
+				t.Errorf("%s's description does not explain the status %q", tool, status)
+			}
 		}
 	}
-	if listDesc == "" {
-		t.Fatal("work_list is not defined")
+}
+
+// The four tools the story/task split replaced are still listed, and what they
+// say is the whole reason to keep listing them: an agent that still holds the
+// old lifecycle rules has to be sent to the tool that replaced this one rather
+// than told the name is unknown. Each entry's description therefore has to name
+// a tool that actually exists — a stub pointing at a typo is the same dead end
+// as no stub at all.
+func TestToolDefinitions_TheSplitLeavesEveryOldNameStanding(t *testing.T) {
+	defined := map[string]toolDefinition{}
+	for _, def := range toolDefinitions {
+		if _, dup := defined[def.Name]; dup {
+			t.Errorf("%s is defined twice", def.Name)
+		}
+		defined[def.Name] = def
 	}
 
-	for _, status := range []work.WorkStatus{
-		work.StatusOpen, work.StatusActive, work.StatusStopped, work.StatusClosed,
+	for old, replacements := range map[string][]string{
+		"work_create": {"story_create", "task_create"},
+		"work_list":   {"story_list", "task_list"},
+		"work_start":  {"story_start", "task_start"},
+		"work_wait":   {"story_wait"},
 	} {
-		if !strings.Contains(listDesc, string(status)) {
-			t.Errorf("work_list's description does not explain the status %q", status)
+		def, ok := defined[old]
+		if !ok {
+			t.Errorf("%s is no longer listed; an agent still holding the old rules is told the tool is unknown", old)
+			continue
+		}
+		if !strings.Contains(strings.ToLower(def.Description), "retired") {
+			t.Errorf("%s does not say it is retired", old)
+		}
+		for _, replacement := range replacements {
+			if !strings.Contains(def.Description, replacement) {
+				t.Errorf("%s does not name %s as what replaced it", old, replacement)
+			}
+			if _, ok := defined[replacement]; !ok {
+				t.Errorf("%s points at %s, which is not a tool", old, replacement)
+			}
+		}
+	}
+}
+
+// The point of splitting a tool in two is that the *schema* states the fork, so
+// an agent never has to learn it from a runtime refusal. That is a claim about
+// which arguments exist on which tool, and nothing else in this package asserts
+// it: give task_start a worktree property, or task_create's story_id to
+// story_create, and every other test stays green while the split has quietly
+// stopped being worth having.
+func TestToolDefinitions_TheSchemasStateTheFork(t *testing.T) {
+	defined := map[string]toolDefinition{}
+	for _, def := range toolDefinitions {
+		defined[def.Name] = def
+	}
+
+	for _, c := range []struct {
+		tool     string
+		property string
+		want     bool
+		required bool
+	}{
+		// Only a story chooses a worktree; a task inherits its story's.
+		{tool: "story_start", property: "worktree", want: true},
+		{tool: "task_start", property: "worktree", want: false},
+		// Naming a story is the whole of what makes a task, so task_create
+		// cannot be called without one and story_create has nowhere to put one.
+		{tool: "task_create", property: "story_id", want: true, required: true},
+		{tool: "story_create", property: "story_id", want: false},
+		// The same fork, for the listings.
+		{tool: "task_list", property: "story_id", want: true, required: true},
+		{tool: "story_list", property: "story_id", want: false},
+	} {
+		def, ok := defined[c.tool]
+		if !ok {
+			t.Errorf("%s is not defined", c.tool)
+			continue
+		}
+		if _, has := def.InputSchema.Properties[c.property]; has != c.want {
+			t.Errorf("%s: has property %q = %v, want %v", c.tool, c.property, has, c.want)
+		}
+		if c.required && !slices.Contains(def.InputSchema.Required, c.property) {
+			t.Errorf("%s: %q is not required, so the call can be made without the one argument that decides what it does", c.tool, c.property)
 		}
 	}
 }
@@ -80,8 +166,8 @@ func TestToolDefinitions_BothSubtaskRefusalsAreAnnounced(t *testing.T) {
 	}
 
 	for _, c := range []struct{ tool, wayOut string }{
-		{tool: "step_done", wayOut: "work_wait"},
-		{tool: "work_wait", wayOut: "question_post"},
+		{tool: "step_done", wayOut: "story_wait"},
+		{tool: "story_wait", wayOut: "question_post"},
 	} {
 		desc, ok := descriptions[c.tool]
 		if !ok {

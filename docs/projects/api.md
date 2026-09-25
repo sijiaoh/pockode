@@ -15,14 +15,18 @@ The MCP server runs as a stdio JSON-RPC 2.0 subprocess, spawned per Claude sessi
 
 | Tool | Required Params | Optional Params | Returns |
 |------|----------------|-----------------|---------|
-| `work_list` | — | `parent_id` | JSON array of `{id, type, parent_id?, agent_role_id?, status, title}` |
-| `work_get` | `id` | — | `{id, type, parent_id?, agent_role_id?, status, title, body?, pending_questions?}` |
-| `work_create` | `type`, `title`, `agent_role_id` | `parent_id`, `body` | Confirmation string with ID |
+| `story_list` | — | — | JSON array of `{id, type, story_id?, agent_role_id?, status, title}` |
+| `task_list` | `story_id` | — | same array, for that story's tasks |
+| `work_get` | `id` | — | `{id, type, story_id?, agent_role_id?, status, title, body?, pending_questions?}` |
+| `story_create` | `title`, `agent_role_id` | `body` | Confirmation string with ID |
+| `task_create` | `story_id`, `title`, `agent_role_id` | `body` | Confirmation string with ID |
 | `work_update` | `id` | `title`, `body`, `agent_role_id` | Confirmation string |
 | `work_delete` | `id` | — | Confirmation string |
-| `work_start` | `id` | `worktree` | Confirmation string with session ID |
+| `story_start` | `id` | `worktree` | Confirmation string with session ID |
+| `task_start` | `id` | — | Confirmation string with session ID |
 | `work_needs_input` | `id`, `reason` | — | **Retired**: an error naming `question_post` |
-| `work_wait` | `id` | — | Confirmation string |
+| `work_create` `work_list` `work_start` `work_wait` | (their old params) | — | **Retired**: an error naming the tool that replaced it |
+| `story_wait` | `id` | — | Confirmation string |
 | `work_reopen` | `id` | — | Confirmation string |
 | `step_done` | `id` | — | Confirmation string |
 | `work_comment_add` | `work_id`, `body` | — | Confirmation string with comment ID |
@@ -37,19 +41,21 @@ The MCP server runs as a stdio JSON-RPC 2.0 subprocess, spawned per Claude sessi
 
 ### Security: Prompt Injection Prevention
 
-`work_list` deliberately excludes `body` from its response. Work bodies contain user-authored instructions that could include adversarial prompts, so a listing that carried them would let every unrelated item in the project speak into the agent's context on a call it made to find one item. The summary it returns instead (shape in the table above) is metadata only, so listing is safe; reading a body has to be the deliberate act of naming that item, which is what `work_get` is. The narrowing lives in one place — `workSummary` / `newWorkSummary` in `server/mcp/executor.go`, which `work_get`'s reply also builds on, so the detail is the summary plus `body` by construction. (It is named apart from the WebSocket layer's `WorkListItem` below on purpose: that one is the web list's row and carries fields only the UI needs.)
+`story_list` and `task_list` deliberately exclude `body` from their response. Work bodies contain user-authored instructions that could include adversarial prompts, so a listing that carried them would let every unrelated item in the project speak into the agent's context on a call it made to find one item. The summary it returns instead (shape in the table above) is metadata only, so listing is safe; reading a body has to be the deliberate act of naming that item, which is what `work_get` is. The narrowing lives in one place — `workSummary` / `newWorkSummary` in `server/mcp/executor.go`, which `work_get`'s reply also builds on, so the detail is the summary plus `body` by construction. (It is named apart from the WebSocket layer's `WorkListItem` below on purpose: that one is the web list's row and carries fields only the UI needs.)
 
 Similarly, `agent_role_list` excludes `role_prompt` — use `agent_role_get` to retrieve it for a specific role.
 
 ### Behavior Notes
 
-- **`work_create`**: Requires `agent_role_id` (validated to exist). Stories are top-level; tasks require `parent_id`.
-- **`work_start`**: Requires the work item to have an `agent_role_id`. Atomically transitions to `active` and attaches a session ID via `Store.Claim` (a fresh UUIDv7, or the existing session on restart), then creates the session and sends the kickoff via `WorkStartHandler` (in-process). The optional `worktree` names the git worktree to run in, and is settled *before* that transition so the session starts in it: the name is pinned via `Store.SetWorktree`, then `Registry.EnsureWorktree` creates the worktree (branch = name) if it does not exist yet, through the same path the `worktree.create` RPC uses — setup hook included, and a skipped hook is reported in the confirmation string. Only a **story** may name one; on a task the call is refused without starting anything, because a task runs in the worktree of the story it belongs to. Naming a *different* worktree for an already-started story fails the call too, rather than starting it where it already lives ([work-system](../code/work-system.md#worktree-binding)).
-- **`step_done`**: Calls `Operations.StepDone()`. Work items advance to the next configured step, or close when no steps remain. Use `work_wait`, not `step_done`, to pause while child work is still open. An advance **withdraws the questions posted during the step** (reason `step_done`): the agent has moved past what it was asking about. The step that closes the work does not — closing retires the session, which withdraws them with reason `work_closed`.
+- **`story_create` / `task_create`**: Both require `agent_role_id` (validated to exist). Which kind is created is decided by the tool the agent picked, not by an argument: `task_create` takes the `story_id`, `story_create` has nowhere to put one. There is no `type` to contradict it.
+- **`story_list` / `task_list`**: The two listings partition the project. `task_list` requires its `story_id`: an empty one is what a story's own `story_id` is, so a listing that fell through would answer "which tasks?" with every story there is.
+- **`story_start` / `task_start`**: Require the work item to have an `agent_role_id`. Atomically transitions to `active` and attaches a session ID via `Store.Claim` (a fresh UUIDv7, or the existing session on restart), then creates the session and sends the kickoff via `WorkStartHandler` (in-process). The optional `worktree` names the git worktree to run in, and is settled *before* that transition so the session starts in it: the name is pinned via `Store.SetWorktree`, then `Registry.EnsureWorktree` creates the worktree (branch = name) if it does not exist yet, through the same path the `worktree.create` RPC uses — setup hook included, and a skipped hook is reported in the confirmation string. Only `story_start` takes it, and it is still refused on a task named to it — an id is a string, and the agent can reach for the wrong tool — because a task runs in the worktree of the story it belongs to. `task_start` refuses the argument rather than ignoring it: what is not on a schema is answered with a sentence, not discarded in silence. Naming a *different* worktree for an already-started story fails the call too, rather than starting it where it already lives ([work-system](../code/work-system.md#worktree-binding)).
+- **`step_done`**: Calls `Operations.StepDone()`. Work items advance to the next configured step, or close when no steps remain. Use `story_wait`, not `step_done`, to pause while child work is still open. An advance **withdraws the questions posted during the step** (reason `step_done`): the agent has moved past what it was asking about. The step that closes the work does not — closing retires the session, which withdraws them with reason `work_closed`.
 - **`work_needs_input`**: **Retired.** It parked the work on a free-text reason shown on the detail page; `question_post` replaced it, and why that is strictly better is [lifecycle](../lifecycle.md#work-four-intentions). The tool is still registered and answers every call with an error naming `question_post`, so an agent whose context still carries the old lifecycle rules is not told "unknown tool"; it moves nothing.
-- **`work_wait`**: Calls `Operations.Wait()`. A story's wait on its subtasks, cleared by one of them closing. It can be **refused**: a child closing is the only thing that ends this wait, so a work with no child running would wait forever, and the error names which children could be started instead ([workflow-engine](workflow-engine.md#wait)).
-- **`work_reopen`**: Calls `Operations.ReopenWork()`. Transitions `closed → active`. Use when you need to add more child work items or continue working on a completed item.
-- **Accepted statuses**: `step_done` / `work_wait` only require that the work is started and not closed, so a stale `stopped` never blocks the agent. Both have a second condition that is about the work's *children* rather than its status: `step_done` is refused when it would close a work whose subtasks are still running, and `work_wait` when none of them is. `work_start` is the one with a different rule: it also accepts `open`, but rejects a work that is already `active` — including one that is waiting, for which the user is offered Stop rather than Restart. See [workflow-engine](workflow-engine.md#status-transitions).
+- **`story_wait`**: Calls `Operations.Wait()`. A story's wait on its subtasks, cleared by one of them closing. It can be **refused**: a child closing is the only thing that ends this wait, so a work with no child running would wait forever, and the error names which children could be started instead ([workflow-engine](workflow-engine.md#wait)). A task's id is refused too, with only the ways out a task has — never `task_create`, which would be a third level.
+- **`work_reopen`**: Calls `Operations.ReopenWork()`. Transitions `closed → active`, for a story or a task alike. Use when there is more to do on something that was finished — on a story, that includes giving it further tasks.
+- **The four tools the story/task split retired** (`work_create`, `work_list`, `work_start`, `work_wait`): still registered, and every call is answered with an error naming the tool that replaced it, for the same reason `work_needs_input` is. Why the tools split where they do, and when these four stubs are deleted, is [work-system](../code/work-system.md#work-tools).
+- **Accepted statuses**: `step_done` / `story_wait` only require that the work is started and not closed, so a stale `stopped` never blocks the agent. Both have a second condition that is about the work's *children* rather than its status: `step_done` is refused when it would close a work whose subtasks are still running, and `story_wait` when none of them is. `story_start` / `task_start` are the ones with a different rule: they also accept `open`, but reject a work that is already `active` — including one that is waiting, for which the user is offered Stop rather than Restart. See [workflow-engine](workflow-engine.md#status-transitions).
 - **`work_update`**: Uses pointer fields (`*string`) to distinguish "not provided" from "set to empty". Only updates data fields (title, body, agent_role_id).
 - **`question_answer`**: Answers a question **another** session posted, for the case where the answer is already known and the user need not be interrupted — a story answering its subtask ([work-system](../code/work-system.md#input-4-a-subtasks-question-reaches-its-story)). Any agent may answer any question except one its own session posted, which is a withdrawal (`question_cancel`) wearing the wrong name. The answer is recorded with who gave it and arrives in the asking session as a message that says so, so nothing there mistakes it for the user's. A question is named by the pair `(session_id, request_id)`, and `session_id` may be left out only while exactly one session is waiting on that id: refused when more than one is — a fork carries a question across with its id — and the refusal lists the candidates with the work running in each, since the work is the half an agent recognises. A `stopped` work is answered like any other and is woken by the answer, as it is by the user's ([work-system](../code/work-system.md#input-3-a-posted-question-was-answered)). It returns only once the answer has reached the asking agent, which may mean starting that agent's process first.
 
@@ -65,15 +71,15 @@ All methods use JSON-RPC 2.0 over WebSocket. Work and agent_role methods are **a
 
 | Method | Params | Result | Description |
 |--------|--------|--------|-------------|
-| `work.create` | `WorkCreateParams` | `Work` (full object) | Create a work item |
+| `work.create` | `WorkCreateParams` | `WorkDetailItem` | Create a work item. `story_id` alone says which kind: a request cannot state a type that contradicts the story it named, because there is no type to state |
 | `work.update` | `WorkUpdateParams` | `{}` | Update data fields (pointer semantics) |
 | `work.delete` | `WorkDeleteParams` | `{}` | Delete a work item (cascade-deletes children and sessions) |
-| `work.start` | `WorkStartParams` | `Work` (full object) | Atomic claim + session creation |
+| `work.start` | `WorkStartParams` | `WorkDetailItem` | Atomic claim + session creation |
 | `work.stop` | `WorkStopParams` | `{}` | Stop a work item (any started, unclosed work → stopped) |
 | `work.reopen` | `WorkReopenParams` | `{}` | Reopen a closed work item (closed → active) |
 | `work.comment.list` | `WorkCommentListParams` | `{comments: Comment[]}` | List comments on a work item |
 | `work.comment.update` | `WorkCommentUpdateParams` | `Comment` | Update a comment's body |
-| `work.detail.subscribe` | `WorkDetailSubscribeParams` | `{work, comments, usage, activity, pending_questions?, children, parent?}` | Subscribe to a single work item + comments + the token usage of its subtree ([why usage is here and not on `Work`](../code/work-system.md#usage-aggregation)) and the two relations its page draws ([why they are not read off the list](../code/work-system.md#the-list-holds-rows-the-detail-page-holds-the-item)) |
+| `work.detail.subscribe` | `WorkDetailSubscribeParams` | `{work, comments, usage, activity, pending_questions?, children, parent?}` | Subscribe to a single work item + comments + the token usage of it and its tasks ([why usage is here and not on `Work`](../code/work-system.md#usage-aggregation)) and the two relations its page draws ([why they are not read off the list](../code/work-system.md#the-list-holds-rows-the-detail-page-holds-the-item)) |
 | `work.detail.unsubscribe` | `{id}` | `{}` | Unsubscribe from work detail |
 | `work.list.subscribe` | `SubscribeParams` | `{items: WorkListItem[], stopped_hidden?, open_hidden?}` | Subscribe + get the **`Current` segment**, which holds no closed work ([what a row carries](#work-list-rows-vs-work-detail), [why it is a segment](#the-list-is-two-segments)) |
 | `work.list.archive` | `WorkListArchiveParams` | `{items: WorkListItem[], next_cursor?, has_more?}` | One page of closed work, served against an open list subscription |
@@ -94,7 +100,7 @@ All methods use JSON-RPC 2.0 over WebSocket. Work and agent_role methods are **a
 ### Wire Types
 
 ```
-WorkCreateParams          { type, title, agent_role_id, parent_id?, body? }
+WorkCreateParams          { title, agent_role_id, story_id?, body? }   // story_id names a story → a task; absent → a story
 WorkUpdateParams          { id, title?, body?, agent_role_id? }
 WorkDeleteParams          { id }
 WorkStartParams           { id }
@@ -104,7 +110,8 @@ WorkCommentListParams     { work_id }
 WorkCommentUpdateParams   { id, body }
 WorkDetailSubscribeParams { id, work_id }
 WorkListArchiveParams     { id, cursor?, limit? }   // id names the subscription, not a fresh query
-WorkListItem              { id, type, parent_id?, agent_role_id?, title, status, activity, unanswered_questions?, wait?, session_id?, worktree?, updated_at }
+WorkListItem              { id, type, story_id?, agent_role_id?, title, status, activity, unanswered_questions?, wait?, session_id?, worktree?, updated_at }
+WorkDetailItem            { id, type, story_id?, agent_role_id?, title, body?, status, wait?, nudge_count?, session_id?, current_step?, worktree?, created_at, updated_at }   // the whole item, on work.detail only
 PendingQuestion           { request_id, header, question, options?, multi_select?, asked_at }
 
 SubscribeParams           { id }   // the whole of a subscribe with no other arguments
@@ -142,8 +149,8 @@ needs:
 | Field | Why the list needs it |
 |-------|----------------------|
 | `id` | identity |
-| `type` | story rows group task rows beneath them |
-| `parent_id` | builds that tree; also walks a work up to its root |
+| `type` | story rows group task rows beneath them. Derived by the server from `story_id` and sent because the row draws it; a client never sends one back |
+| `story_id` | builds that tree, and is the story a task's worktree badge waits on ([`isWorktreeBound`](../code/work-system.md#displaying-a-works-worktree)) |
 | `agent_role_id` | the role name shown on the row |
 | `title`, `status` | the row itself |
 | `unanswered_questions` | how many questions the work's agent has asked and nobody has answered — the second dimension of "needs you", beside `activity` rather than folded into it, since an agent can be running *and* waiting on an answer. A count only: the questions themselves are on the detail ([agent-integration](../code/agent-integration.md#posted-questions)) |
@@ -157,7 +164,24 @@ needs:
 and `body` is unbounded user-authored prose — editing one work item's body would
 otherwise push the whole of it to every subscriber, including the clients looking
 at a different work item. A client that needs them subscribes to `work.detail`,
-which carries the full `Work`.
+which carries the whole item as `WorkDetailItem`.
+
+That item carries every stored field plus the same derived `type` a row does, so
+a client asks a work item's kind the same way wherever it reads one, and
+`rpc.NewWorkDetailItem` derives it in one place the way `NewWorkListItem` does
+for a row.
+
+The derivation stays on the wire and off the disk: the store marshals the domain
+record straight into `index.json`, so a `type` on that record would be written
+back beside the `story_id` it is derived from — the second copy of the fact the
+two-level shape removed. That is why `WorkDetailItem` lists its fields instead of
+embedding the record: a wire type is the only place the kind can be added without
+it also being stored.
+
+`work.create` and `work.start` answer with a `WorkDetailItem` too. They speak for
+one item each, and it is the same item a detail reports, so it is reported the
+same way: a caller that goes on to draw what it just created reads its kind off
+the reply rather than deriving one of its own.
 
 The narrowing lives in one place, `rpc.NewWorkListItem`, so that what a row
 carries is decided once rather than at each producer. `rpc.NewSessionListItem`

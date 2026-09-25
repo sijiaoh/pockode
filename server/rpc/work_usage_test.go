@@ -15,11 +15,11 @@ import (
 func TestWorkDetailCarriesUsage(t *testing.T) {
 	cost := 3.87
 	result, err := json.Marshal(WorkDetailSubscribeResult{
-		Work: work.Work{ID: "w1"},
+		Work: NewWorkDetailItem(work.Work{ID: "w1"}),
 		Usage: work.Usage{
 			Own:                  &work.UsageTotals{CostUSD: &cost},
 			Total:                &work.UsageTotals{CostUSD: &cost},
-			DescendantCount:      5,
+			TaskCount:            5,
 			UnpricedSessionCount: 2,
 		},
 	})
@@ -30,7 +30,7 @@ func TestWorkDetailCarriesUsage(t *testing.T) {
 	for _, want := range []string{
 		`"own"`, `"total"`, `"cost_usd"`, `"input_tokens"`, `"output_tokens"`,
 		`"cache_read_tokens"`, `"cache_write_tokens"`,
-		`"descendant_count":5`, `"unpriced_session_count":2`,
+		`"task_count":5`, `"unpriced_session_count":2`,
 	} {
 		if !strings.Contains(string(result), want) {
 			t.Errorf("detail result is missing %s: %s", want, result)
@@ -44,15 +44,15 @@ func TestWorkDetailCarriesUsage(t *testing.T) {
 	}
 }
 
-// descendant_count decides whether the client shows a total at all, so it has to
-// arrive even when it is zero — omitting it would make "this work item has no
-// children" indistinguishable from an older server that never sent it.
-func TestWorkDetailAlwaysCarriesDescendantCount(t *testing.T) {
-	result, err := json.Marshal(WorkDetailSubscribeResult{Work: work.Work{ID: "w1"}})
+// task_count decides whether the client shows a total at all, so it has to
+// arrive even when it is zero — omitting it would make "this story has no
+// tasks" indistinguishable from an older server that never sent it.
+func TestWorkDetailAlwaysCarriesTaskCount(t *testing.T) {
+	result, err := json.Marshal(WorkDetailSubscribeResult{Work: NewWorkDetailItem(work.Work{ID: "w1"})})
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
-	if !strings.Contains(string(result), `"descendant_count":0`) {
-		t.Errorf("detail result omits descendant_count: %s", result)
+	if !strings.Contains(string(result), `"task_count":0`) {
+		t.Errorf("detail result omits task_count: %s", result)
 	}
 }

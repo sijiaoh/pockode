@@ -19,17 +19,17 @@ function renderSection(usage: WorkUsage, type: "story" | "task" = "story") {
 }
 
 describe("WorkUsageSection", () => {
-	it("shows nothing when no session in the subtree reported anything", () => {
-		const { container } = renderSection({ descendant_count: 3 });
+	it("shows nothing when neither the story nor its tasks reported anything", () => {
+		const { container } = renderSection({ task_count: 3 });
 
 		expect(container).toBeEmptyDOMElement();
 	});
 
-	it("shows one figure and no column headers when there are no descendants", () => {
+	it("shows one figure and no column headers when there are no tasks", () => {
 		renderSection({
 			own: tokens({ input_tokens: 124_000, cost_usd: 0.42 }),
 			total: tokens({ input_tokens: 124_000, cost_usd: 0.42 }),
-			descendant_count: 0,
+			task_count: 0,
 		});
 
 		expect(screen.getByText("124K")).toBeInTheDocument();
@@ -42,7 +42,7 @@ describe("WorkUsageSection", () => {
 		renderSection({
 			own: tokens({ input_tokens: 124_000, cost_usd: 0.42 }),
 			total: tokens({ input_tokens: 1_200_000, cost_usd: 3.87 }),
-			descendant_count: 5,
+			task_count: 5,
 		});
 
 		expect(screen.getByText("This story")).toBeInTheDocument();
@@ -63,7 +63,7 @@ describe("WorkUsageSection", () => {
 			{
 				own: tokens({ input_tokens: 10 }),
 				total: tokens({ input_tokens: 20 }),
-				descendant_count: 1,
+				task_count: 1,
 			},
 			"task",
 		);
@@ -72,13 +72,13 @@ describe("WorkUsageSection", () => {
 		expect(screen.getByText("Incl. 1 task")).toBeInTheDocument();
 	});
 
-	// Both columns show because the tree has descendants, not because the numbers
+	// Both columns show because the story has tasks, not because the numbers
 	// differ: a story whose tasks have not spent anything still shows both.
 	it("keeps both columns when the figures are equal", () => {
 		renderSection({
 			own: tokens({ input_tokens: 500 }),
 			total: tokens({ input_tokens: 500 }),
-			descendant_count: 2,
+			task_count: 2,
 		});
 
 		expect(screen.getByText("This story")).toBeInTheDocument();
@@ -88,7 +88,7 @@ describe("WorkUsageSection", () => {
 	it("says a missing figure was not reported instead of showing a zero", () => {
 		renderSection({
 			total: tokens({ input_tokens: 1_200_000, cost_usd: 3.87 }),
-			descendant_count: 5,
+			task_count: 5,
 		});
 
 		expect(screen.getAllByText("not reported")).toHaveLength(2);
@@ -96,11 +96,11 @@ describe("WorkUsageSection", () => {
 		expect(screen.queryByText("$0.00")).not.toBeInTheDocument();
 	});
 
-	it("drops the cost row when nothing in the subtree reported a price", () => {
+	it("drops the cost row when nothing under the item reported a price", () => {
 		renderSection({
 			own: tokens({ input_tokens: 1_000 }),
 			total: tokens({ input_tokens: 2_000 }),
-			descendant_count: 1,
+			task_count: 1,
 		});
 
 		expect(screen.getByText("Tokens")).toBeInTheDocument();
@@ -108,11 +108,11 @@ describe("WorkUsageSection", () => {
 		expect(screen.queryByText("not reported")).not.toBeInTheDocument();
 	});
 
-	it("keeps the cost row with a dash where only the subtree reported a price", () => {
+	it("keeps the cost row with a dash where only the tasks reported a price", () => {
 		renderSection({
 			own: tokens({ input_tokens: 1_000 }),
 			total: tokens({ input_tokens: 2_000, cost_usd: 3.87 }),
-			descendant_count: 1,
+			task_count: 1,
 		});
 
 		expect(screen.getByText("$3.87")).toBeInTheDocument();
@@ -125,7 +125,7 @@ describe("WorkUsageSection", () => {
 		renderSection({
 			own: tokens({ input_tokens: 1_000, cost_usd: 0.42 }),
 			total: tokens({ input_tokens: 2_000, cost_usd: 3.87 }),
-			descendant_count: 4,
+			task_count: 4,
 			unpriced_session_count: 2,
 		});
 
@@ -144,7 +144,7 @@ describe("WorkUsageSection", () => {
 		renderSection({
 			own: tokens({ input_tokens: 1_000 }),
 			total: tokens({ input_tokens: 2_000 }),
-			descendant_count: 4,
+			task_count: 4,
 			unpriced_session_count: 2,
 		});
 
@@ -161,7 +161,7 @@ describe("WorkUsageSection", () => {
 				cache_write_tokens: 100,
 			}),
 			total: tokens({ input_tokens: 1_000 }),
-			descendant_count: 1,
+			task_count: 1,
 		});
 
 		expect(screen.getAllByText("1K")).toHaveLength(2);

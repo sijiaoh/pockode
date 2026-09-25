@@ -151,7 +151,7 @@ describe("WorkListOverlay", () => {
 			createWork({
 				id: "t1",
 				type: "task",
-				parent_id: "s1",
+				story_id: "s1",
 				title: "Wire the relay",
 				status: "active",
 				activity: "needs_permission",
@@ -181,7 +181,7 @@ describe("WorkListOverlay", () => {
 			createWork({
 				id: "t1",
 				type: "task",
-				parent_id: "s1",
+				story_id: "s1",
 				title: "Wire the relay",
 				status: "active",
 				activity: "running",
@@ -202,7 +202,7 @@ describe("WorkListOverlay", () => {
 			createWork({
 				id: "t1",
 				type: "task",
-				parent_id: "s1",
+				story_id: "s1",
 				title: "Wire the relay",
 				status: "stopped",
 				activity: "stopped",
@@ -228,7 +228,7 @@ describe("WorkListOverlay", () => {
 			createWork({
 				id: "t1",
 				type: "task",
-				parent_id: "s1",
+				story_id: "s1",
 				title: "A running task",
 				status: "active",
 				activity: "running",
@@ -236,7 +236,7 @@ describe("WorkListOverlay", () => {
 			createWork({
 				id: "t2",
 				type: "task",
-				parent_id: "s1",
+				story_id: "s1",
 				title: "A finished task",
 				status: "closed",
 				activity: "closed",
@@ -272,7 +272,7 @@ describe("WorkListOverlay", () => {
 			createWork({
 				id: "t1",
 				type: "task",
-				parent_id: "s1",
+				story_id: "s1",
 				title: "A stopped task",
 				status: "stopped",
 				activity: "stopped",
@@ -366,7 +366,7 @@ describe("WorkListOverlay", () => {
 			createWork({
 				id: "t1",
 				type: "task",
-				parent_id: "s1",
+				story_id: "s1",
 				title: "A running task",
 				status: "active",
 				activity: "running",
@@ -429,7 +429,7 @@ describe("WorkListOverlay", () => {
 			createWork({
 				id: "t1",
 				type: "task",
-				parent_id: "s1",
+				story_id: "s1",
 				title: "A running task",
 				status: "active",
 				activity: "running",
@@ -473,7 +473,7 @@ describe("WorkListOverlay", () => {
 			createWork({
 				id: "t1",
 				type: "task",
-				parent_id: "newer",
+				story_id: "newer",
 				title: "A finished task",
 				status: "closed",
 				activity: "closed",
@@ -802,7 +802,7 @@ describe("WorkListOverlay", () => {
 		const stoppedTask = createWork({
 			id: "t1",
 			type: "task",
-			parent_id: "s1",
+			story_id: "s1",
 			title: "Wire the relay",
 			status: "stopped",
 			activity: "stopped",
@@ -810,7 +810,7 @@ describe("WorkListOverlay", () => {
 		const closedTask = createWork({
 			id: "t2",
 			type: "task",
-			parent_id: "s1",
+			story_id: "s1",
 			title: "A finished task",
 			status: "closed",
 			activity: "closed",

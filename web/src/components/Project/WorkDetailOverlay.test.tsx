@@ -184,7 +184,7 @@ describe("WorkDetailOverlay", () => {
 				{
 					id: "task-1",
 					type: "task",
-					parent_id: "work-1",
+					story_id: "work-1",
 					agent_role_id: "role-1",
 					title: "Wire it up",
 					status: "open",
@@ -214,6 +214,41 @@ describe("WorkDetailOverlay", () => {
 		// The shared row names its work and its state in one breath.
 		await user.click(screen.getByRole("button", { name: "Wire it up — Open" }));
 		expect(onOpenWorkDetail).toHaveBeenCalledWith("task-1");
+	});
+
+	// The section is a story's alone, and the page decides that from the `type`
+	// the server derived from `story_id`
+	// (docs/projects/api.md#work-list-rows-vs-work-detail). Asserted from the
+	// task side as well as the story side above, because the tests that show the
+	// section only pin one direction — a condition stuck at "always" would put an
+	// `Add Task` on a task, and nothing below a task can be created at all.
+	it("gives a task no Tasks section to hang a third level off", () => {
+		mockUseWorkDetailSubscription.mockReturnValue({
+			work: createWork({ id: "task-1", type: "task", story_id: "story-1" }),
+			activity: "idle",
+			comments: [],
+			children: [],
+			parent: null,
+			pendingQuestions: [],
+			loading: false,
+			error: null,
+		});
+
+		render(
+			<WorkDetailOverlay
+				workId="task-1"
+				onBack={vi.fn()}
+				onNavigateToSession={vi.fn()}
+				onOpenWorkDetail={vi.fn()}
+			/>,
+		);
+
+		expect(
+			screen.queryByRole("heading", { name: /^Tasks/ }),
+		).not.toBeInTheDocument();
+		expect(
+			screen.queryByRole("button", { name: "Add Task" }),
+		).not.toBeInTheDocument();
 	});
 
 	// §4: a task lands on its own page too, where its brief gets written.
@@ -295,7 +330,7 @@ describe("WorkDetailOverlay", () => {
 					activity: "running",
 					updated_at: "2026-03-04T00:00:00Z",
 				},
-				work: createWork({ type: "task", parent_id: "story-1" }),
+				work: createWork({ type: "task", story_id: "story-1" }),
 				activity: "idle",
 				comments: [],
 				pendingQuestions: [],
@@ -341,7 +376,7 @@ describe("WorkDetailOverlay", () => {
 					cache_read_tokens: 0,
 					cache_write_tokens: 0,
 				},
-				descendant_count: 5,
+				task_count: 5,
 			},
 			pendingQuestions: [],
 			loading: false,

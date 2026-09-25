@@ -185,7 +185,7 @@ export function isWorkActive(status: WorkStatus): boolean {
  *
  * Why the phase outranks the wait rather than the other way round: a wait is a
  * standing intention, a phase is a fact about this second. An agent that calls
- * `work_wait` and then keeps writing for another ten seconds *is* running, and
+ * `story_wait` and then keeps writing for another ten seconds *is* running, and
  * the row should say so; the moment the turn settles the wait takes over. The
  * alternative needs a priority table between two kinds of waiting that
  * legitimately coexist, and every entry in such a table is an arbitrary choice

@@ -4,13 +4,12 @@
 
 ### Work
 
-A unit of work — either a **story** (top-level, wire type `"story"`) or a **task** (child, wire type `"task"`).
+A unit of work — either a **story** (no `story_id`) or a **task** (the `story_id` names the story it belongs to).
 
 | Field         | Type         | Description                                            |
 | ------------- | ------------ | ------------------------------------------------------ |
 | id            | string       | UUIDv7 (time-ordered)                                  |
-| type          | WorkType     | `"story"` or `"task"`                                  |
-| parent_id     | string?      | ID of parent story (tasks only)                        |
+| story_id      | string?      | The story this work is a task of; absent means it *is* a story ([Hierarchy](#hierarchy)) |
 | agent_role_id | string       | Agent role assigned to this work                       |
 | title         | string       | Short description (required)                           |
 | body          | string?      | Detailed description or instructions                   |
@@ -19,9 +18,19 @@ A unit of work — either a **story** (top-level, wire type `"story"`) or a **ta
 | nudge_count   | int?         | Consecutive nudges with no progress; reset by anything that counts as progress |
 | session_id    | string?      | Agent session ID (set on start, preserved through stop/closed) |
 | current_step  | int?         | 0-indexed step index (only when agent role has steps)  |
-| worktree      | string?      | Worktree the session runs in (empty = main); captured on a top-level work's first start, inherited by children, immutable once started |
+| worktree      | string?      | Worktree the session runs in (empty = main); captured on a story's first start, inherited by its tasks, immutable once started |
 | created_at    | time         | Creation timestamp                                     |
 | updated_at    | time         | Last modification timestamp                            |
+
+`type` (`"story"` / `"task"`) is not stored. It is derived from `story_id`
+(`work.Work.Type()`) and still sent everywhere a work item is reported — the
+list row (`rpc.NewWorkListItem`), the detail and the replies to `work.create` /
+`work.start` (`rpc.NewWorkDetailItem`), and the MCP summary (`newWorkSummary`)
+— as a display field the client reads and never writes, the same standing as
+`activity`. It must not reach `index.json`, where it would be a second copy of
+the fact `story_id` holds; `TestPersistedIndexCarriesNoType` reads the file's
+bytes to hold that. Why the wire keeps it off the domain record is
+[api.md](api.md#work-list-rows-vs-work-detail).
 
 ### Comment
 
@@ -30,7 +39,7 @@ A note attached to a work item, used for progress reports and results.
 | Field      | Type   | Description           |
 | ---------- | ------ | --------------------- |
 | id         | string | UUIDv7                |
-| work_id    | string | Parent work item ID   |
+| work_id    | string | Owning work item ID   |
 | body       | string | Comment text          |
 | created_at | time   | Creation timestamp    |
 
@@ -95,12 +104,17 @@ role to fix.
 
 ## Hierarchy
 
-Two-level only: **Story → Task** (wire types: `story` → `task`).
+`story_id` *is* the hierarchy. A work without one is a story; a work with one is
+that story's task. Two levels, and the shape is what holds them there: a task's
+own `story_id` would have to be empty for it to be a story, so a third level
+cannot be written down at all.
 
-- Stories are always top-level (no parent).
-- Tasks must have exactly one story parent.
+- The only rule left to check is that `story_id` names a work that exists and is
+  itself a story — a task naming a task is how a third level would be built, and
+  that is where it is refused.
 - `agent_role_id` is required on all work items.
-- Deleting a story cascade-deletes all its children.
+- Deleting a story cascade-deletes its tasks.
+- "What is below this work" is one query, `work.TasksOf`, not a walk.
 
 ## Status Lifecycle
 
@@ -114,7 +128,10 @@ the wait and the session's turn state
 Old index values (`in_progress`, `needs_input`, `waiting`) are normalised on
 load — those three were exactly this model flattened, so each maps to the status
 and wait it always meant, except `needs_input`, whose `user` wait no longer
-exists and which lands on plain `active`. There is no migration script.
+exists and which lands on plain `active`. The two-level shape arrives the same
+way: `parent_id` is read as `story_id` — every value it holds on disk is already
+a story id, because nothing deeper was ever creatable — and `type` is read and
+dropped. There is no migration script.
 
 ## Persistence
 
@@ -225,9 +242,9 @@ If `persistIndex` fails, the in-memory state is reverted to match the on-disk st
 | List         | `() → ([]Work, error)`                | Returns all work items                                      |
 | Get          | `(id) → (Work, bool, error)`          | Returns a single item; bool indicates found                 |
 | FindBySessionID | `(sessionID) → (Work, bool, error)` | Finds a work item by its active session ID                  |
-| Create       | `(ctx, Work) → (Work, error)`         | Validates type/parent/agent_role, assigns ID and timestamps |
+| Create       | `(ctx, Work) → (Work, error)`         | Validates title/story/agent_role, assigns ID and timestamps |
 | Update       | `(ctx, id, UpdateFields) → error`     | Partial update of data fields (title, body, agent_role_id)  |
-| Delete       | `(ctx, id) → error`                   | Cascade-deletes children                                    |
+| Delete       | `(ctx, id) → error`                   | Cascade-deletes a story's tasks                             |
 
 **Intent-based transitions** (preferred way to change status):
 

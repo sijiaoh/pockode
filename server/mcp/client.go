@@ -59,7 +59,7 @@ func NewClientFromServerInfo(dataDir string, caller Caller) (*Client, error) {
 		token:   info.Token,
 		caller:  caller,
 		// Bounded so a wedged server can't hang the tool call (and the AI) forever.
-		// Generous because work_start spawns an agent process server-side; normal
+		// Generous because story_start / task_start spawns an agent process server-side; normal
 		// calls finish in well under a second.
 		http: &http.Client{Timeout: 60 * time.Second},
 	}, nil

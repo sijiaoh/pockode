@@ -41,7 +41,7 @@ two answers, and both halves are true at once.
 | `running` | A turn is producing output | `CircleDot` | accent | Running |
 | `needs_permission` | Turn blocked on a permission request | `Lock` | warning | Needs permission |
 | `background` | Turn blocked on a background task | `Hourglass` | secondary | Background task |
-| `waiting_children` | Work waits on subtasks (`work_wait`) | `Clock` | accent | Waiting on subtasks |
+| `waiting_children` | Work waits on subtasks (`story_wait`) | `Clock` | accent | Waiting on subtasks |
 | `idle` | Engine drives the work, nothing is happening | `CircleDot` | muted | Idle |
 | `stopped` | Engine does not touch it; a human must act | `CircleStop` | error | Stopped |
 | `closed` | Finished | `CircleCheck` | muted | Closed |
@@ -127,7 +127,7 @@ field.
 
 Why phase outranks `wait` rather than the other way round: a `wait` is a standing
 intention, a phase is a fact about this second. A story that has called
-`work_wait` and then keeps writing for another ten seconds *is* running, and the
+`story_wait` and then keeps writing for another ten seconds *is* running, and the
 row should say so; the moment the turn settles, the `wait` takes over. The
 alternative — `wait` first — needs a priority table between two kinds of waiting
 that can legitimately coexist, and every entry in such a table is an arbitrary
@@ -860,7 +860,7 @@ place the redesign is trying to separate them.
 - Children section header gains an active count — "{n} active" — whenever any
   child is `active`. This is what makes both §7 rejections legible without a
   second explanation: it is the same count each of them turns on, and "0 active"
-  is the whole reason a `work_wait` was refused.
+  is the whole reason a `story_wait` was refused.
 
 ### 6.3 StepList
 
@@ -894,7 +894,7 @@ The MCP error text — this is the copy, and it is the whole feedback mechanism 
 the agent:
 
 > This story still has 2 active subtask(s): "Session layer TurnState and
-> reducer", "Process lease table and reaper". Call `work_wait` to pause until
+> reducer", "Process lease table and reaper". Call `story_wait` to pause until
 > they close, or stop them first. The step was not completed.
 
 Three properties it needs: it **names** the blockers (an agent told only "there
@@ -911,11 +911,11 @@ has no such button — so there is no user action to report a failure for, and a
 comment for every rejected attempt would bury the story's real comments under
 machine noise.
 
-### 7.1 `work_wait` with no subtask running
+### 7.1 `story_wait` with no subtask running
 
-**The two gates are exactly complementary**: a `work_wait` is accepted precisely
+**The two gates are exactly complementary**: a `story_wait` is accepted precisely
 when the closing `step_done` is refused. That is what makes each error's way out
-real — "call `work_wait` to pause until they close" would be a lie if the wait
+real — "call `story_wait` to pause until they close" would be a lie if the wait
 could be refused for the same story.
 
 A `child` wait is ended by one event and no other: a subtask closing. So a story
@@ -926,8 +926,8 @@ that can be stuck with **nobody told**, which is why it is refused at the source
 rather than drawn somewhere.
 
 Same three properties, same reason, and a fourth the other refusal does not
-need: the three situations have three different ways out, so they are three
-messages rather than one.
+need: the situations have different ways out, so they are separate messages
+rather than one.
 
 Each is one sentence of what is in the way, then the ways out, then the
 statement of no effect — the shape the `step_done` refusal already has, ending
@@ -937,9 +937,15 @@ by the dash rather than by another comma clause.
 
 | Situation | Copy |
 |---|---|
-| no subtasks at all | "only a subtask closing ends a wait on subtasks, and **this work has no subtasks** — so nothing would ever end this one. **Create them with `work_create` and start them with `work_start`**, or call `question_post` if you need something from the user, or `step_done`…. The wait was not set" |
-| all subtasks closed | "…and **all 3 subtask(s) of this work are already closed** — so… **Create more with `work_create` and start them…**" |
-| subtasks exist, none running | "…and **none of this work's subtasks is running, though 2 of them can be started: \"Reducer\" (stopped), \"Lease table\" (open)** — so… **Start them with `work_start`**…" |
+| no subtasks at all | "only a subtask closing ends a wait on subtasks, and **this work has no subtasks** — so nothing would ever end this one. **Create them with `task_create` and start them with `task_start`**, or call `question_post` if you need something from the user, or `step_done`…. The wait was not set" |
+| all subtasks closed | "…and **all 3 subtask(s) of this work are already closed** — so… **Create more with `task_create` and start them…**" |
+| subtasks exist, none running | "…and **none of this work's subtasks is running, though 2 of them can be started: \"Reducer\" (stopped), \"Lease table\" (open)** — so… **Start them with `task_start`**…" |
+| the id names a task | "**… is a task, and only a story has tasks to wait for** — so nothing would ever end this wait. Call `question_post` if you need something from the user, or `step_done` if there is nothing left to do. The wait was not set" |
+
+The fourth exists because `story_wait` takes an id and a task's is as easy to
+pass as a story's: without it a task would be told to "create them with
+`task_create`", a third level the store refuses, so it gets only the two ways
+out that are real.
 
 The third names the subtasks *with their statuses*, because "nothing is running"
 and "you never started them" are the same sentence to an agent that has just
@@ -950,7 +956,7 @@ two stopped ones would otherwise offer a list of two under "none of 6" — and
 what follows the list is a dash, not another "and", which is what would read as
 one more item.
 
-Nothing is drawn for this either, for the same reason: the UI has no `work_wait`
+Nothing is drawn for this either, for the same reason: the UI has no `story_wait`
 button, and the story detail page already answers "why is this not moving" —
 the children section says how many are active (§6.2) and the story's own
 activity says `idle`.
