@@ -36,6 +36,7 @@ import {
 import { MarkdownContent } from "./MarkdownContent";
 import MessageMenuTrigger, { type ForkBlocked } from "./MessageMenuTrigger";
 import QuestionRecordItem from "./QuestionRecordItem";
+import { anchorCandidateProps } from "./scrollAnchor";
 import TaskItem from "./TaskItem";
 import ToolCallItem from "./ToolCallItem";
 import { ToolRow } from "./ToolRow";
@@ -904,16 +905,26 @@ const MessageItem = memo(function MessageItem({
 											? part.tool.id
 											: `${part.type}-${index}`;
 							return (
-								<ContentPartItem
-									key={key}
-									part={part}
-									sessionId={sessionId}
-									onOpenFile={onOpenFile}
-									isCodex={isCodex}
-									onPermissionRespond={onPermissionRespond}
-									onAnswerQuestion={onAnswerQuestion}
-									promptError={promptError}
-								/>
+								// A wrapper of its own, and an unpositioned one, so this part can
+								// be what the view is held still over: one turn is one row and can
+								// be several screens tall, so holding the row still says nothing
+								// about where inside it the reader is (see `scrollAnchor`).
+								//
+								// It takes a `space-y-2` slot whether or not anything is drawn in
+								// it, so a part renderer must render something — every branch of
+								// `ContentPartItem` does today, and one returning null would show
+								// as a gap with nothing in it.
+								<div key={key} {...anchorCandidateProps}>
+									<ContentPartItem
+										part={part}
+										sessionId={sessionId}
+										onOpenFile={onOpenFile}
+										isCodex={isCodex}
+										onPermissionRespond={onPermissionRespond}
+										onAnswerQuestion={onAnswerQuestion}
+										promptError={promptError}
+									/>
+								</div>
 							);
 						})}
 					</div>

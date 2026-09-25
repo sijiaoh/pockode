@@ -115,9 +115,10 @@ export const useQuestionDraftStore = create<QuestionDraftState>()(
  * The drafts of one session's answer panel.
  *
  * A store rather than component state because every host of a draft unmounts
- * under the user: the panel closes, the chat pane is replaced whenever an
- * overlay takes it, and the user switches sessions and comes back. Component
- * state loses the draft to all three.
+ * under the user: the panel closes, the panel is not drawn at all while an
+ * overlay is up — an overlay covers the transcript but takes the place of
+ * everything else in the pane — and the user switches sessions and comes back.
+ * Component state loses the draft to all three.
  *
  * It is persisted to `localStorage`, so a reload keeps what was typed, and the
  * question a draft answers is checked before any of it is shown again — see

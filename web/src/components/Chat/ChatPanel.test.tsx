@@ -289,6 +289,12 @@ describe("ChatPanel", () => {
 		});
 	});
 
+	// The work list is the overlay that also unmounts the composer, so the
+	// rectangle the transcript sits in changes size under it — the hardest of
+	// the overlays for the list to come back from, and the one the sheets it
+	// raised have to be taken away by.
+	const workList = { type: "work-list", segment: "current" } as const;
+
 	// Helper to wait for history loading to complete
 	const waitForHistoryLoad = async () => {
 		await waitFor(() => {
@@ -2908,6 +2914,87 @@ describe("ChatPanel", () => {
 			expect(screen.getByText("file.txt")).toBeInTheDocument();
 		});
 	});
+
+	// An overlay is the user looking at something else for a moment, not leaving
+	// the conversation: what it covers has to be there, and the same, on the way
+	// back — and out of reach for as long as it is covered.
+	describe("under an overlay", () => {
+		const openableHistory = [
+			{ type: "message", content: "Hello" },
+			{
+				type: "tool_call",
+				tool_name: "Bash",
+				tool_input: { command: "ls" },
+				tool_use_id: "tool-1",
+			},
+			{ type: "tool_result", tool_use_id: "tool-1", tool_result: "file.txt" },
+			{ type: "done" },
+		];
+
+		it("hands the transcript back with the cards the reader opened", async () => {
+			const user = userEvent.setup();
+			mockState.mockHistory = openableHistory;
+			const { rerender } = render(<ChatPanel {...defaultProps} />);
+			await waitForHistoryLoad();
+			await user.click(screen.getByText("Bash"));
+			expect(screen.getByText("file.txt")).toBeInTheDocument();
+
+			rerender(<ChatPanel {...defaultProps} overlay={workList} />);
+			expect(screen.getByTestId("work-list-overlay")).toBeInTheDocument();
+			rerender(<ChatPanel {...defaultProps} />);
+
+			// An opened card is state that lives nowhere but in the row that holds
+			// it, so this is the whole of the evidence that the list was never
+			// unmounted — and with it go the scroll position and the highlight
+			// ring, which jsdom cannot see.
+			expect(screen.getByText("file.txt")).toBeInTheDocument();
+			// And nothing was asked for a second time: the history outlives the
+			// trip whichever way this goes, so a reload would cost the reader
+			// their place for rows that came back identical.
+			expect(mockState.chatMessagesSubscribe).toHaveBeenCalledTimes(1);
+		});
+
+		it("puts the transcript out of reach while the overlay is up", async () => {
+			mockState.mockHistory = openableHistory;
+			const { rerender } = render(<ChatPanel {...defaultProps} />);
+			await waitForHistoryLoad();
+
+			rerender(<ChatPanel {...defaultProps} overlay={workList} />);
+
+			// Still mounted, so every button in it would otherwise be in the Tab
+			// order — ahead of the overlay, there being no focus trap — and still
+			// in the accessibility tree, for a conversation nobody can see.
+			const covered = screen.getByText("Bash").closest("[inert]");
+			expect(covered).not.toBeNull();
+			// The overlay is not inside what it covers, or it would be inert too.
+			expect(covered?.contains(screen.getByTestId("work-list-overlay"))).toBe(
+				false,
+			);
+		});
+
+		// The one fact about this that jsdom cannot check for itself, guarded
+		// here because getting it wrong fails silently. Tailwind's `hidden` is
+		// the obvious way to put the list away and would pass every test above —
+		// the rows stay in the document, the opened card comes back. In a browser
+		// it leaves the scroll container with no box, and a container with no box
+		// has no scroll position: the very thing staying mounted is for. Measured
+		// in Chromium on this markup — under `display: none` the container
+		// reports clientHeight, scrollHeight and scrollTop all 0; under
+		// `visibility: hidden` it keeps all three, losing only the height of the
+		// composer that went with the overlay.
+		it("hides the covered transcript without taking its box away", async () => {
+			mockState.mockHistory = openableHistory;
+			const { rerender } = render(<ChatPanel {...defaultProps} />);
+			await waitForHistoryLoad();
+
+			rerender(<ChatPanel {...defaultProps} overlay={workList} />);
+
+			const covered = screen.getByText("Bash").closest("[inert]");
+			expect(covered).not.toBeNull();
+			expect(covered?.className).toContain("invisible");
+			expect(covered?.className.split(/\s+/)).not.toContain("hidden");
+		});
+	});
 	describe("forking a session", () => {
 		const forkHistory = [
 			{ type: "message", content: "Hello", seq: 1 },
@@ -3259,6 +3346,106 @@ describe("ChatPanel", () => {
 				"Try again",
 			);
 			expect(mockState.sendMessage).not.toHaveBeenCalled();
+		});
+
+		/** The menu `openMenu` raises beside an agent bubble. */
+		const menu = () => screen.queryByRole("dialog", { name: "Agent message" });
+
+		// Both sheets below are portalled to the body, which is the whole of the
+		// problem: `invisible` and `inert` travel down the DOM, and a portal is
+		// the one child that has left it. Without the rule they go on floating
+		// over the overlay, lit and clickable, describing a conversation that is
+		// no longer on the screen. Reached by a navigation and only by one — the
+		// sheet's own backdrop swallows every press in the app — so: Android's
+		// back button, or an iOS swipe back, onto a URL that carries an overlay.
+		it("takes the message menu away with the transcript an overlay covers", async () => {
+			const user = userEvent.setup();
+			mockState.mockHistory = forkHistory;
+			const props = { ...defaultProps, onSelectSession: vi.fn() };
+			const { rerender } = render(<ChatPanel {...props} />);
+			await waitForHistoryLoad();
+
+			await openMenu(user, "assistant");
+			expect(menu()).toBeInTheDocument();
+
+			rerender(<ChatPanel {...props} overlay={workList} />);
+			expect(menu()).not.toBeInTheDocument();
+
+			// Closed, not hidden: coming back hands the reader the conversation
+			// they left, not the menu they had open before navigating away.
+			rerender(<ChatPanel {...props} />);
+			expect(menu()).not.toBeInTheDocument();
+			expect(screen.getByText("Hi there!")).toBeInTheDocument();
+		});
+
+		it("takes the fork confirmation away with it too", async () => {
+			const user = userEvent.setup();
+			mockState.mockHistory = forkHistory;
+			const props = { ...defaultProps, onSelectSession: vi.fn() };
+			const { rerender } = render(<ChatPanel {...props} />);
+			await waitForHistoryLoad();
+
+			await openForkSheet(user);
+			const confirm = () =>
+				screen.queryByRole("dialog", { name: "Fork session" });
+			expect(confirm()).toBeInTheDocument();
+
+			rerender(<ChatPanel {...props} overlay={workList} />);
+			expect(confirm()).not.toBeInTheDocument();
+
+			// Closing clears the target as well, so the confirmation does not come
+			// back up on the way out — and nothing was forked by being covered.
+			rerender(<ChatPanel {...props} />);
+			expect(confirm()).not.toBeInTheDocument();
+			expect(mockState.forkSession).not.toHaveBeenCalled();
+		});
+
+		// Covered is not dimmed, and this is the difference. The answer panel is
+		// a layer of this conversation: it dims the transcript and takes it out
+		// of reach, but the transcript is still on the screen and the user has
+		// gone nowhere. A rule that could not tell the two apart would take the
+		// menu out from under their hand here — and, applied the obvious way at
+		// the row instead, would blank every `…` in the transcript with it.
+		it("leaves the menu alone when the answer panel only dims the transcript", async () => {
+			const user = userEvent.setup();
+			mockState.mockHistory = forkHistory;
+			render(<ChatPanel {...defaultProps} onSelectSession={vi.fn()} />);
+			await waitForHistoryLoad();
+
+			await openMenu(user, "assistant");
+			expect(menu()).toBeInTheDocument();
+
+			// Pushed onto this transcript rather than seeded with the answer
+			// panel's own helper: that one replaces the history, and this test
+			// needs the forkable conversation the menu was opened from.
+			act(() =>
+				acceptSetting({
+					turn: {
+						phase: "idle",
+						open: false,
+						since: "",
+						unanswered: [
+							{
+								request_id: "q1",
+								header: "Database",
+								question: "Which database should I use?",
+								options: [{ label: "SQLite" }],
+								multi_select: false,
+								asked_at: "2026-01-02T14:02:00Z",
+							},
+						],
+					},
+				}),
+			);
+
+			// The panel really is up, so what follows is the rule talking and not
+			// a dim that never happened.
+			expect(screen.getByTestId("answer-panel-backdrop")).toBeInTheDocument();
+			expect(menu()).toBeInTheDocument();
+			// And the way into it is still drawn on every row behind it.
+			expect(
+				screen.getAllByRole("button", { name: /^Actions for/ }).length,
+			).toBeGreaterThan(0);
 		});
 
 		it("says at the top of the transcript where the session came from", async () => {

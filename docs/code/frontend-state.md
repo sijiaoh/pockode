@@ -264,11 +264,11 @@ they hold is *drawn*: which rows show a spinner, and which button says `Pushing�
 
 ### Why Scroll State Is Neither a Store nor State
 
-The transcript's scroll decisions — whether the tail is being followed, whether
-the last scroll was the user's, the anchor a page is being restored against,
-whether paging has stopped — live in refs inside `MessageList`
-(`web/src/components/Chat/MessageList.tsx`), and that is the exact opposite of
-the reasoning above.
+The transcript's scroll decisions — which of the two things the reader is doing,
+and the element an anchor is holding still — live in refs inside
+`useTranscriptScroll` (`web/src/components/Chat/useTranscriptScroll.ts`,
+[the model](../agent-chat.md#where-the-view-sits)), and that is the exact
+opposite of the reasoning above.
 
 They are not in a store because **they must not outlive the component**. The
 list is keyed by the session id and remounts on every switch, and every one of
@@ -280,18 +280,15 @@ exists.
 
 They are refs rather than `useState` because **nothing should re-render when
 they change**, and more than that: they are read at moments a render cannot
-reach. The follow intent is read inside a layout effect and inside a
+reach. The state and the anchor are read inside a layout effect and inside a
 `ResizeObserver` callback, against the DOM as it is at that instant. A state
 update would deliver the new value a render later — after the frame whose scroll
 position was the whole question — and would reflow the very list being measured.
 
-What is state in that component marks the boundary. Whether the
-scroll-to-bottom button is showing is state because it is something drawn;
-`sentinelArmKey` is state for the less obvious version of the same reason — it
-exists to re-run the effect that observes the paging sentinel, and a re-render
-is the only way to get an effect to run again. Something is state when a render
-has to happen because of it; the rest of this is bookkeeping the render must not
-see.
+One value in there is state, and it marks the boundary: whether the
+scroll-to-bottom button is showing, because that is something drawn. Something
+is state when a render has to happen because of it; the rest of this is
+bookkeeping the render must not see.
 
 ## Server Cache vs Store
 
@@ -504,11 +501,11 @@ cannot fork from at all.
 
 The joined message keeps the newer half's **id** as well, the bubble being keyed
 on it, and that one is load-bearing outside the reducer: it is why the
-transcript pins its scroll position to the second message it holds rather than
-the first — the first being the only one a seam can grow older content inside,
-and a bubble that grows under the pin holds nothing still
+transcript never anchors its scroll position on the first message it holds — the
+first being the only one a seam can grow older content inside, and a bubble that
+grows under the anchor holds nothing still
 ([agent-chat.md](../agent-chat.md#reading-a-page-on-the-client)). Moving the
-identity to the older half would move that pin, not just rename a key.
+identity to the older half would move that boundary, not just rename a key.
 
 ### Tool Runs
 

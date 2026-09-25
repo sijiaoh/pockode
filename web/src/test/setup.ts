@@ -38,6 +38,44 @@ Object.defineProperty(window, "matchMedia", {
 	}),
 });
 
+/**
+ * jsdom has no layout, so its `scrollTop` setter is a no-op and every read
+ * returns 0. Left alone, that makes a test blind to the one thing a scrolling
+ * container does: a browser clamps what you write to `scrollHeight -
+ * clientHeight`, so "scroll to the bottom" lands *at* the bottom of the content
+ * as it is this frame, and content that grows afterwards leaves the view above
+ * it. Without the clamp `el.scrollTop = el.scrollHeight` reads back as a
+ * position past the end, "am I at the bottom?" is true forever, and follow-the-
+ * tail bugs cannot be written down as tests at all.
+ *
+ * Reads clamp as well as writes, and keep what they clamped to: content that
+ * shrinks under the view — a card collapsing below it — pulls the view up with
+ * it and does not give the position back when the content grows again. A
+ * browser does that at the next layout; here it happens at the next read, which
+ * is the first moment anything could tell the difference.
+ *
+ * Global rather than per-suite because it is jsdom's gap, not one component's:
+ * the same class of thing as the two observers above. Heights still have to be
+ * supplied per test — see `stubScrollBox` — and an element given its own
+ * `scrollTop` property shadows this and keeps whatever it had.
+ */
+const scrollOffsets = new WeakMap<Element, number>();
+function clampScrollTop(el: HTMLElement, value: number): number {
+	const max = Math.max(0, el.scrollHeight - el.clientHeight);
+	const clamped = Math.min(Math.max(value, 0), max);
+	scrollOffsets.set(el, clamped);
+	return clamped;
+}
+Object.defineProperty(HTMLElement.prototype, "scrollTop", {
+	configurable: true,
+	get(this: HTMLElement) {
+		return clampScrollTop(this, scrollOffsets.get(this) ?? 0);
+	},
+	set(this: HTMLElement, value: number) {
+		clampScrollTop(this, value);
+	},
+});
+
 afterEach(() => {
 	cleanup();
 });

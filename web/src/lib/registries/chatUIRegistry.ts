@@ -7,9 +7,10 @@ export interface AvatarProps {
 
 /**
  * A bar is unmounted, not merely hidden, whenever the host has to give its row
- * to something else: the work and agent-role overlays replace the whole chat
- * pane, and on a short viewport the answer panel folds the bar away while the
- * user answers (docs/answering-ui.md §3). A draft the user has already typed
+ * to something else: the work and agent-role overlays replace everything in the
+ * chat pane but the transcript, which they cover instead, and on a short
+ * viewport the answer panel folds the bar away while the user answers
+ * (docs/answering-ui.md §3). A draft the user has already typed
  * has to outlive that, so it cannot live in the bar's own state alone — the
  * default bar keeps it in `inputStore`, keyed by session.
  */

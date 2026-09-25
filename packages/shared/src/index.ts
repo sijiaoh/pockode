@@ -1,6 +1,8 @@
 export {
 	ConfirmDialog,
 	type ConfirmDialogProps,
+	CoveredSurface,
+	type CoveredSurfaceProps,
 	ReconnectBanner,
 	type ReconnectBannerProps,
 	Sheet,

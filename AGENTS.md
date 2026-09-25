@@ -64,7 +64,7 @@ The `packages/shared` package contains UI components, hooks, stores, and utiliti
 - Code is **experimental** or likely to diverge
 
 **Available exports**:
-- Components: `Spinner`, `ConfirmDialog`, `Sheet`, `ReconnectBanner`
+- Components: `Spinner`, `ConfirmDialog`, `Sheet`, `ReconnectBanner`, `CoveredSurface`
 - Hooks: `useMediaQuery`, `useOutsideClick`, `useIsExpanded`, `useHasCoarsePointer`, `useHasFinePointer`
 - Stores: `createAuthStore` (factory function for the auth store, with configurable localStorage keys)
 - Utils: `getWebSocketUrl`, `BREAKPOINTS`, `MEDIA_QUERIES`, `hasCoarsePointer`, `credentialParams` / `authFailureReason` (the `auth` RPC contract both frontends share with the server — see [docs/code/authentication.md](docs/code/authentication.md))
@@ -84,6 +84,19 @@ one project while the other is fine. `web/tests/sourceScan.test.ts` and
 restore each other's `overflow` and leave the page permanently unscrollable.
 Anything in this package that covers the page uses it; exporting it would invite
 a third, separate counter, which is the bug itself.
+
+`CoveredSurface` marks a subtree that something else can be drawn over, and
+every overlay this package portals to `document.body` closes when it is: a
+portal is the one child that has left the DOM, so the `visibility: hidden` and
+the `inert` a covered surface puts on itself reach everything *but* the sheet it
+raised, which goes on floating over whatever the user navigated to. Its hook,
+`useCloseWhenCovered`, is deliberately *not* exported — a sheet is covered by
+having been written as a sheet, and nobody should have to register one. Covered
+means off the screen, never merely dimmed: a layer belonging to the surface
+itself (the chat's answer panel) leaves the user where they were, and a sheet
+they opened is still theirs to finish. The one surface that uses it today, and
+what the distinction costs there, is in
+[docs/answering-ui.md](docs/answering-ui.md#who-owns-the-dismissing-click).
 
 `useOutsideClick` hands its callback the event beside the target, and an overlay
 with no backdrop of its own has to `stopPropagation` on the press it closes on:
