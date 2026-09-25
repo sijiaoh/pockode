@@ -1,4 +1,7 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { HttpError } from "./api";
+import { authActions } from "./authStore";
+import { createQueryClient } from "./queryClient";
 
 // Mock authStore
 vi.mock("./authStore", () => ({
@@ -8,18 +11,12 @@ vi.mock("./authStore", () => ({
 }));
 
 describe("createQueryClient", () => {
-	beforeEach(() => {
-		vi.resetModules();
-	});
-
 	afterEach(() => {
 		vi.clearAllMocks();
 	});
 
 	describe("retry behavior", () => {
-		it("does not retry on 401", async () => {
-			const { HttpError } = await import("./api");
-			const { createQueryClient } = await import("./queryClient");
+		it("does not retry on 401", () => {
 			const queryClient = createQueryClient();
 
 			const retryFn = queryClient.getDefaultOptions().queries?.retry;
@@ -31,8 +28,7 @@ describe("createQueryClient", () => {
 			expect(retryFn(1, new HttpError(401))).toBe(false);
 		});
 
-		it("retries up to 3 times for other errors", async () => {
-			const { createQueryClient } = await import("./queryClient");
+		it("retries up to 3 times for other errors", () => {
 			const queryClient = createQueryClient();
 
 			const retryFn = queryClient.getDefaultOptions().queries?.retry;
@@ -47,8 +43,7 @@ describe("createQueryClient", () => {
 			expect(retryFn(3, genericError)).toBe(false);
 		});
 
-		it("does not retry mutations", async () => {
-			const { createQueryClient } = await import("./queryClient");
+		it("does not retry mutations", () => {
 			const queryClient = createQueryClient();
 
 			expect(queryClient.getDefaultOptions().mutations?.retry).toBe(false);
@@ -56,10 +51,7 @@ describe("createQueryClient", () => {
 	});
 
 	describe("global 401 handling", () => {
-		it("calls logout on query 401", async () => {
-			const { authActions } = await import("./authStore");
-			const { HttpError } = await import("./api");
-			const { createQueryClient } = await import("./queryClient");
+		it("calls logout on query 401", () => {
 			const queryClient = createQueryClient();
 
 			const queryCache = queryClient.getQueryCache();
@@ -74,10 +66,7 @@ describe("createQueryClient", () => {
 			expect(authActions.logout).toHaveBeenCalled();
 		});
 
-		it("does not call logout on other HTTP errors", async () => {
-			const { authActions } = await import("./authStore");
-			const { HttpError } = await import("./api");
-			const { createQueryClient } = await import("./queryClient");
+		it("does not call logout on other HTTP errors", () => {
 			const queryClient = createQueryClient();
 
 			const queryCache = queryClient.getQueryCache();
@@ -92,10 +81,7 @@ describe("createQueryClient", () => {
 			expect(authActions.logout).not.toHaveBeenCalled();
 		});
 
-		it("calls logout on mutation 401", async () => {
-			const { authActions } = await import("./authStore");
-			const { HttpError } = await import("./api");
-			const { createQueryClient } = await import("./queryClient");
+		it("calls logout on mutation 401", () => {
 			const queryClient = createQueryClient();
 
 			const mutationCache = queryClient.getMutationCache();
@@ -110,9 +96,7 @@ describe("createQueryClient", () => {
 			expect(authActions.logout).toHaveBeenCalled();
 		});
 
-		it("does not call logout on non-HttpError", async () => {
-			const { authActions } = await import("./authStore");
-			const { createQueryClient } = await import("./queryClient");
+		it("does not call logout on non-HttpError", () => {
 			const queryClient = createQueryClient();
 
 			const mutationCache = queryClient.getMutationCache();
