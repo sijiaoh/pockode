@@ -488,73 +488,21 @@ describe("WorkDetailOverlay", () => {
 		expectToAppearBefore(descriptionEditor, stepsHeading);
 	});
 
-	// While open the brief is what the user is still writing, so it stays in
-	// full; once the work has started it shrinks to its first line.
 	describe("the description", () => {
-		const body = "## Goal\n\nShip the reorder.";
-
-		it("shows in full while the work is open", () => {
-			renderWithWork(createWork({ status: "open", body }));
+		it.each([
+			"open",
+			"active",
+			"stopped",
+			"closed",
+		] as const)("shows in full while %s", (status) => {
+			renderWithWork(
+				createWork({ status, body: "## Goal\n\nShip the reorder." }),
+			);
 
 			expect(screen.getByText(/Ship the reorder/)).toBeVisible();
 			expect(
 				screen.queryByRole("button", { name: "Expand description" }),
 			).not.toBeInTheDocument();
-		});
-
-		it.each([
-			"active",
-			"stopped",
-			"closed",
-		] as const)("collapses to its first line once %s", async (status) => {
-			const user = userEvent.setup();
-			renderWithWork(createWork({ status, body }));
-
-			expect(screen.getByText("Goal")).toBeVisible();
-			expect(screen.queryByText(/Ship the reorder/)).not.toBeInTheDocument();
-
-			await user.click(
-				screen.getByRole("button", { name: "Expand description" }),
-			);
-
-			expect(screen.getByText(/Ship the reorder/)).toBeVisible();
-
-			await user.click(
-				screen.getByRole("button", { name: "Collapse description" }),
-			);
-
-			expect(screen.getByText(/Ship the reorder/)).not.toBeVisible();
-		});
-
-		// Moving to a parent or child is the same page with another id.
-		it("starts collapsed again on the next work", async () => {
-			const user = userEvent.setup();
-			const { rerender } = renderWithWork(createWork({ body }));
-			await user.click(
-				screen.getByRole("button", { name: "Expand description" }),
-			);
-
-			mockUseWorkDetailSubscription.mockReturnValue({
-				...mockUseWorkDetailSubscription.mock.results[0].value,
-				work: createWork({
-					id: "task-1",
-					type: "task",
-					body: "## Other\n\nMore.",
-				}),
-			});
-			rerender(
-				<WorkDetailOverlay
-					workId="task-1"
-					onBack={vi.fn()}
-					onNavigateToSession={vi.fn()}
-					onOpenWorkDetail={vi.fn()}
-				/>,
-			);
-
-			expect(
-				screen.getByRole("button", { name: "Expand description" }),
-			).toBeInTheDocument();
-			expect(screen.queryByText("More.")).not.toBeInTheDocument();
 		});
 	});
 

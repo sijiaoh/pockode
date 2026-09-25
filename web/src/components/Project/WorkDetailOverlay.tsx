@@ -2,7 +2,6 @@ import { ConfirmDialog } from "@pockode/shared";
 import {
 	AlertCircle,
 	Check,
-	ChevronRight,
 	Loader2,
 	MessageSquare,
 	Pencil,
@@ -23,7 +22,7 @@ import type { AgentRole } from "../../types/agentRole";
 import type { PendingQuestion } from "../../types/message";
 import type { Comment, Work, WorkListItem, WorkType } from "../../types/work";
 import { formatStepCount, getStepProgress } from "../../utils/workSteps";
-import { ActivityBadge, CollapsibleBody, MarkdownContent } from "../ui";
+import { ActivityBadge, MarkdownContent } from "../ui";
 import BackButton from "../ui/BackButton";
 import BottomActionBar from "../ui/BottomActionBar";
 import { inputClass } from "../ui/inputClass";
@@ -634,7 +633,6 @@ function InlineEditableBody({ work }: { work: Work }) {
 		),
 		allowEmpty: true,
 	});
-	const [bodyExpanded, setBodyExpanded] = useState(false);
 
 	if (editing) {
 		return (
@@ -698,77 +696,28 @@ function InlineEditableBody({ work }: { work: Work }) {
 		);
 	}
 
-	// While open the brief is what the user is still writing; once the work has
-	// started it is settled, and in full it would push everything below it off a
-	// phone's first screen.
-	const collapsible = work.status !== "open";
-
 	return (
 		<div>
 			<div className="group flex items-center justify-between mb-1">
 				<h3 className="text-xs font-medium text-th-text-muted uppercase">
 					Description
 				</h3>
-				<div className="flex items-center">
-					{collapsible && (
-						<button
-							type="button"
-							onClick={() => setBodyExpanded(!bodyExpanded)}
-							aria-expanded={bodyExpanded}
-							className="flex min-h-[44px] min-w-[44px] items-center justify-center rounded-lg text-th-text-muted opacity-80 transition-opacity hover:opacity-100 hover:bg-th-bg-tertiary hover:text-th-text-primary"
-							aria-label={
-								bodyExpanded ? "Collapse description" : "Expand description"
-							}
-						>
-							<ChevronRight
-								className={`size-3.5 transition-transform ${bodyExpanded ? "rotate-90" : ""}`}
-							/>
-						</button>
-					)}
-					<button
-						type="button"
-						onClick={() => setEditing(true)}
-						className="flex min-h-[44px] min-w-[44px] items-center justify-center rounded-lg text-th-text-muted opacity-80 transition-opacity hover:opacity-100 hover:bg-th-bg-tertiary hover:text-th-text-primary"
-						aria-label="Edit description"
-					>
-						<Pencil className="size-3.5" />
-					</button>
-				</div>
+				<button
+					type="button"
+					onClick={() => setEditing(true)}
+					className="flex min-h-[44px] min-w-[44px] items-center justify-center rounded-lg text-th-text-muted opacity-80 transition-opacity hover:opacity-100 hover:bg-th-bg-tertiary hover:text-th-text-primary"
+					aria-label="Edit description"
+				>
+					<Pencil className="size-3.5" />
+				</button>
 			</div>
-			{collapsible ? (
-				<div className="rounded-lg bg-th-bg-secondary">
-					{!bodyExpanded && (
-						<button
-							type="button"
-							onClick={() => setBodyExpanded(true)}
-							className="flex min-h-[44px] w-full items-center px-3 text-left text-sm text-th-text-secondary"
-						>
-							<span className="truncate">{firstLineOf(work.body)}</span>
-						</button>
-					)}
-					<CollapsibleBody expanded={bodyExpanded}>
-						<div className="px-3 py-2">
-							<MarkdownContent content={work.body} />
-						</div>
-					</CollapsibleBody>
-				</div>
-			) : (
-				<div className="rounded-lg bg-th-bg-secondary px-3 py-2">
-					<MarkdownContent content={work.body} />
-				</div>
-			)}
+			{/* `.code-block` leaves sideways scrolling to an ancestor; without this
+			    one a wide line would slide the whole page. */}
+			<div className="overflow-x-auto rounded-lg bg-th-bg-secondary px-3 py-2">
+				<MarkdownContent content={work.body} />
+			</div>
 		</div>
 	);
-}
-
-/**
- * The first line of a description with any leading heading, quote or list
- * marker dropped: a brief usually opens with `## Goal`, and the marker would
- * be the one thing the collapsed line shows.
- */
-function firstLineOf(body: string): string {
-	const line = body.split("\n").find((l) => l.trim() !== "") ?? "";
-	return line.replace(/^\s*(#{1,6}\s+|>\s*|[-*+]\s+|\d+\.\s+)/, "").trim();
 }
 
 function ChildrenSection({
