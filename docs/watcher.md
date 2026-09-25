@@ -87,9 +87,9 @@ These watchers implement store listener interfaces and use async buffered channe
 | WorkListWatcher | `watch/work_list.go` | `work.OnChangeListener` + every worktree's `session.OnChangeListener` | `work.list.changed` |
 | WorkDetailWatcher | `watch/work_detail.go` | `work.OnChangeListener` + `work.OnCommentChangeListener` + every worktree's `session.OnChangeListener` | `work.detail.changed` |
 | SettingsWatcher | `watch/settings.go` | `settings.OnChangeListener` | `settings.changed` |
-| AgentRoleListWatcher | `watch/agent_role_list.go` | `agentrole.OnChangeListener` | `agent_role.list.changed` |
+| AgentRoleListWatcher | `watch/agent_role_list.go` | `agentrole.OnChangeListener` + `work.OnChangeListener` (for the per-role work reference counts) | `agent_role.list.changed` |
 
-**Backpressure:** Event channels have fixed capacity (16–256). When full, events are dropped and a `dirty` flag is set. The next delivered event triggers a full sync instead of an incremental update, ensuring clients converge to correct state.
+**Backpressure:** Event channels have fixed capacity (16–256). When full, events are dropped and a `dirty` flag is set. The next delivered event triggers a full sync instead of an incremental update, ensuring clients converge to correct state. The one exception is AgentRoleListWatcher's *work* events, which carry no payload and are answered with a whole recomputed map: a full channel means events are still queued, and each of those recomputes the same map, so a dropped one costs nothing. That watcher listens to two stores and pushes two shapes down one channel — why, and why only one half needs the flag, is in [code/subscription-system.md](code/subscription-system.md#why-one-channel-carries-two-stores-changes).
 
 **Filtered watchers:** WorkDetailWatcher and SessionDetailWatcher each notify only the subscribers watching the affected id, not all subscribers. Both key their subscriptions on `Subscription.Key` and deliver through `BaseWatcher.NotifyForKey`.
 

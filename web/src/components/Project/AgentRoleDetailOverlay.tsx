@@ -629,13 +629,18 @@ function DeleteSection({
 	const [error, setError] = useState<string | null>(null);
 
 	const handleDelete = useCallback(async () => {
+		// The reason a previous attempt was refused is not the reason this one
+		// will be: the count it named may well be why the user went and changed
+		// a work item's role before coming back.
+		setError(null);
 		try {
 			await deleteAgentRole(role.id);
 			onDeleted();
 		} catch (err) {
-			setError(
-				`Failed to delete: ${err instanceof Error ? err.message : String(err)}`,
-			);
+			// Printed unprefixed: the server's refusal for a role work items still
+			// use is already a whole sentence, and "Failed to delete: Can't
+			// delete: ..." is what a prefix would make of it.
+			setError(err instanceof Error ? err.message : String(err));
 			setShowConfirm(false);
 		}
 	}, [deleteAgentRole, role.id, onDeleted]);

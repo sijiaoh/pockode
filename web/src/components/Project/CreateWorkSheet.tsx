@@ -1,6 +1,7 @@
 import { Loader2 } from "lucide-react";
 import { useCallback, useEffect, useId, useState } from "react";
 import { useAgentRoleStore } from "../../lib/agentRoleStore";
+import { resolveInitialRole } from "../../lib/initialRole";
 import { useSettingsStore } from "../../lib/settingsStore";
 import { useWSStore } from "../../lib/wsStore";
 import type { WorkType } from "../../types/work";
@@ -64,21 +65,14 @@ export default function CreateWorkSheet({
 		(s) => s.settings?.default_agent_role_id ?? "",
 	);
 
-	const resolveInitialRole = useCallback((): string => {
-		if (roles.length === 1) return roles[0].id;
-		if (defaultRoleId && roles.some((r) => r.id === defaultRoleId))
-			return defaultRoleId;
-		return "";
-	}, [roles, defaultRoleId]);
-
 	// The roles can arrive after the sheet opens, so this runs on every change
 	// until one sticks — and never overwrites a role the user picked.
 	useEffect(() => {
 		if (!agentRoleId) {
-			const initial = resolveInitialRole();
+			const initial = resolveInitialRole(roles, defaultRoleId);
 			if (initial) setAgentRoleId(initial);
 		}
-	}, [resolveInitialRole, agentRoleId]);
+	}, [roles, defaultRoleId, agentRoleId]);
 
 	const handleSubmit = useCallback(
 		async (e: React.FormEvent) => {

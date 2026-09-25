@@ -1007,6 +1007,11 @@ type AgentRoleDeleteParams struct {
 
 type AgentRoleListSubscribeResult struct {
 	Items []agentrole.AgentRole `json:"items"`
+	// WorkRefCounts maps a role id to how many work items name it. Derived from
+	// the work store rather than held on the role, and kept fresh by its own
+	// `ref_counts` notification — see watch.AgentRoleListWatcher. A role absent
+	// from the map is referenced by nothing.
+	WorkRefCounts map[string]int `json:"work_ref_counts"`
 }
 
 // SessionView namespace

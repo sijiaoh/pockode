@@ -8,7 +8,8 @@ every group one membership rule, every control one place.
 It does **not** restate the state vocabulary. `Activity`, its glyphs, tones and
 labels, which lifecycle button exists for which `status`, and the attention dot
 are [lifecycle-ui.md](lifecycle-ui.md) §§1–4, and this document only ever names
-those leaves. It does not cover the agent-role screens, which are unchanged.
+those leaves. It does not cover the agent-role screens, which are
+[agent-roles-ui.md](agent-roles-ui.md).
 
 **What it replaces.** This has landed, and it is the page: what the list holds
 and how it is grouped is here rather than in
@@ -750,7 +751,10 @@ second place worktree-aware URLs get built (§4).
   and nothing in the page's job needs them.
 - **Grouping by worktree or role.** Both are slots on the row and neither is a
   question this list is asked; the group axis is state, and it has one.
-- **Any change to the agent-role screens.**
+- **The agent-role screens.** They were redesigned, but on their own terms and
+  in their own document — [agent-roles-ui.md](agent-roles-ui.md). What the two
+  pages share is stated once and borrowed: that page's row is this row's card
+  idiom, and the contrast budget in §3 is where it reads its numbers.
 - **Reselecting `--th-warning` and `--th-error`.** The contrast table in §3 is
   where this page hits its ceiling: in the five light variants the warning hue
   on the card clears neither AA 4.5 for text nor the 3:1 non-text floor, and the

@@ -468,6 +468,78 @@ and the first one is never told. Per subscription id, then, and deleted on
 Suppression is worth having only where the trigger is noisier than the news, and
 never for the watcher's own store — there the payload *is* the news.
 
+### Why One Channel Carries Two Stores' Changes
+
+The section above is about a payload that needs a second store to be *complete*:
+a work row cannot be built without the session's turn, so the session event
+re-sends the row. The agent role list is the other shape. What it needs from the
+second store is not part of any role — it is **how many work items name each
+role**, which the list's rows draw and which the delete handler refuses with.
+The number belongs to the work store; the role store can be untouched for
+a week while it moves every hour.
+
+**It is not written onto the role.** An `AgentRole` carrying a count would be a
+record that is refreshed when the role is edited, holding a number that changes
+when it is not — an event record with live state glued to it, which is the
+failure [work-system.md](work-system.md#work-messages-in-chat) names. So it
+travels as a notification of its own, `operation: "ref_counts"`, carrying the
+whole map: `{roleId: count}`, with a role nothing references simply absent,
+because a reader already reads a missing entry as none.
+
+**It is not a second subscription either.** `AgentRoleListWatcher` registers as a
+listener on both stores and funnels both kinds of event into one channel and one
+loop. The client therefore has one subscription and one ordered stream, and the
+two kinds of news cannot overtake each other. When one event produces both
+notifications the order is fixed and one way round: **the role goes first, the
+counts after**, so a client is never handed a count for a role it has not been
+told exists.
+
+The interesting part is that the two halves are **deliberately asymmetric about
+losing an event**, and each is right for what it carries:
+
+| | Role events | Work events |
+|---|---|---|
+| Payload | one role, incrementally — create, update, delete | the whole map, recomputed from the store |
+| Channel full | sets `dirty`; the next delivered event sends a full `sync` instead | dropped, and nothing is recorded |
+
+**Incremental changes need the dirty flag** for the reason every other watcher
+needs it: a client applying deltas to a list it has an incomplete copy of never
+recovers on its own.
+
+**The whole-map push does not need it,** and that is a consequence of pushing the
+map rather than a deltas-for-counts scheme. A dropped work event means the channel
+was full, which means events are still queued behind it — and *every* one of them
+recomputes the same map from the same store. The push the drop lost is the push
+the next event makes. A delta scheme could not claim this: one work item changing
+role moves two counts at once, so a client that missed an earlier delta would be
+adding to a number it never had. That is also why a work event sets no field on
+the event struct — there is nothing about the work worth passing along, only the
+fact that something moved.
+
+**And it is pushed only when it has moved.** Every work change reaches this
+watcher — a turn ending, a status advancing, a title edited — and almost none of
+them touch a count, so the map is compared against the last one sent before it
+goes out, like the rows `WorkListWatcher` pushes.
+
+That comparison is where this watcher had its one real bug, and it is the "already
+sent" rule above read from the other end. `Subscribe` reads the current map to
+return it, and it used to record that read as *sent to everyone*. Then: a work
+change is queued, a new client subscribes and is handed the new map, the loop
+reaches the queued event, computes the same map, finds it "already sent" — and
+pushes it to nobody. Every earlier subscriber stays on the old number with nothing
+left to correct it. So **`Subscribe` reads without recording.** The cost is one
+duplicate map after a subscribe; what it buys is the unconditional invariant that
+a change that moved the counts is always pushed. `TestAgentRoleListWatcher_LateSubscriberDoesNotSwallowAQueuedChange`
+holds it.
+
+On the client the same asymmetry shows up as one rule: **a `sync` must not clear
+the counts.** A sync is the role half recovering, and the counts are not its to
+throw away — they move while no role changes, which is why they have a
+notification of their own. Clearing them there would invent a row whose count has
+gone missing, which is a state the screen otherwise has no way to be in
+([agent-roles-ui.md §4](../agent-roles-ui.md#4-nothing-on-line-2-waits) depends
+on that). A disconnect clears both, because then nothing is known.
+
 ### Which Sessions Belong to Work
 
 A session list row carries `work_id`: the work item that session runs, absent for
@@ -1065,17 +1137,18 @@ the server's own read-modify-write callers, which do not go through this RPC at
 all. Nobody edits the settings from two clients today, so neither is built.
 
 The display half is the three call sites that compose those writes — the Engine
-and Mode fields in Settings, the worktree base path, and the default-role star
-in the agent role list. Each waits on the one question `useGlobalSettingsStatus`
-answers, `settings !== null`, and never on whether the fields inside are filled:
-an empty snapshot is a real answer, and the resolved defaults are the honest
-thing to show for it. Until it arrives they draw a pulsing `Skeleton` where the
-value goes and refuse input, because every resolved default here is a reassuring
-one — Claude on Auto, Default mode, `../<repo>-worktrees`, "None (always ask)" —
-and each says, of settings nobody has been told, exactly what a user who set
-nothing would have. Only the part that claims a value is replaced: field names,
-the static help text, and everything in the role list that answers to its own
-subscription stay put.
+and Mode fields in Settings, the worktree base path, and the agent role list's
+two entries into the default role, its per-row star and its footer field. Each
+waits on the one question `useGlobalSettingsStatus` answers, `settings !== null`,
+and never on whether the fields inside are filled: an empty snapshot is a real
+answer, and the resolved defaults are the honest thing to show for it. Until it
+arrives they draw a pulsing `Skeleton` where the value goes and refuse input,
+because every resolved default here is a reassuring one — Claude on Auto,
+Default mode, `../<repo>-worktrees`, a default role of "None" — and each says,
+of settings nobody has been told, exactly what a user who set nothing would
+have. Only the part that claims a value is replaced: field names, the static
+help text, and everything in the role list that answers to its own subscription
+stay put.
 
 These appear at once, without the `SKELETON_DELAY_MS` the worktree-switch
 skeletons wait out. There the delay can spare a quick switch any indicator at

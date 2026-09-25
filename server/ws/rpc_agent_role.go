@@ -7,6 +7,7 @@ import (
 
 	"github.com/pockode/server/agentrole"
 	"github.com/pockode/server/rpc"
+	"github.com/pockode/server/work"
 	"github.com/sourcegraph/jsonrpc2"
 )
 
@@ -84,15 +85,18 @@ func (h *rpcMethodHandler) handleAgentRoleDelete(ctx context.Context, conn *json
 		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInternalError, "failed to check role references")
 		return
 	}
-	var refCount int
-	for _, w := range works {
-		if w.AgentRoleID == params.ID {
-			refCount++
+	if refCount := work.CountRoleRefs(works)[params.ID]; refCount > 0 {
+		// User-facing verbatim: the client prints this sentence as-is —
+		// AgentRoleDetailOverlay's delete section adds no prefix of its own —
+		// which is why it is a capitalised sentence and not a lowercase fragment
+		// like its neighbours. Singular and plural are spelled out rather than
+		// left as "work item(s)" for the same reason. See
+		// docs/agent-roles-ui.md §5.
+		message := fmt.Sprintf("Can't delete: %d work items still use this role. Change their role, or delete them, first.", refCount)
+		if refCount == 1 {
+			message = "Can't delete: 1 work item still uses this role. Change its role, or delete it, first."
 		}
-	}
-	if refCount > 0 {
-		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams,
-			fmt.Sprintf("cannot delete: role is referenced by %d work item(s)", refCount))
+		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, message)
 		return
 	}
 
@@ -144,7 +148,7 @@ func (h *rpcMethodHandler) handleAgentRoleListSubscribe(ctx context.Context, con
 	}
 
 	notifier := h.state.getNotifier()
-	items, err := h.agentRoleListWatcher.Subscribe(id, notifier)
+	items, refCounts, err := h.agentRoleListWatcher.Subscribe(id, notifier)
 	if err != nil {
 		h.replySubscriptionError(ctx, conn, req.ID, err, "failed to subscribe to agent role list")
 		return
@@ -153,7 +157,8 @@ func (h *rpcMethodHandler) handleAgentRoleListSubscribe(ctx context.Context, con
 	h.log.Debug("subscribed", "watcher", "agent role list", "watchId", id)
 
 	result := rpc.AgentRoleListSubscribeResult{
-		Items: items,
+		Items:         items,
+		WorkRefCounts: refCounts,
 	}
 
 	if err := conn.Reply(ctx, req.ID, result); err != nil {

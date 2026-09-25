@@ -554,18 +554,17 @@ noticed. One representation with a test on it is the only thing that ends that.
      paste the expected side of its diff. Do not edit by hand. -->
 
 ```text
-49 controls render text, state no height of their own and carry no touch-target.
+48 controls render text, state no height of their own and carry no touch-target.
 
-27 state their own font size, so the height below is exact: 16–40px.
+26 state their own font size, so the height below is exact: 16–40px.
 22 inherit it, so the height below is an upper bound — the ancestor that
   sets it may well set a smaller one: 24–48px.
 
-9 are under the 36px fine-pointer floor.
+8 are under the 36px fine-pointer floor.
 6 reach the 44px coarse floor, 0 of them on a read height.
 0 state type this scan cannot read, listed as 0px and `unread`.
 
   16px  exact  web/src/components/Project/WorkDetailOverlay.tsx
-  20px  exact  web/src/components/Project/AgentRoleListOverlay.tsx
   20px  exact  web/src/components/Worktree/WorktreeCreateSheet.tsx
   24px  bound  web/src/components/Settings/sections/AppearanceSections.tsx
   28px  bound  web/src/components/Chat/MessageItem.tsx
@@ -641,12 +640,6 @@ name does not say what a control is for:
   same place and is already 44 (`onBack={() => onOpenWorkDetail(parent.id)}`,
   labelled "Back to parent story"), so this is a second route rather than the
   route.
-- **`Project/AgentRoleListOverlay`** — a list title **inside a `min-h-[44px]`
-  row**: the row is 44, the target in it is 20, because `items-center` centres
-  the text rather than stretching it. `Project/WorkRow`, the row the project
-  list and the story detail share, is the one of this shape that states its 44
-  instead of centring in it, which is why it is not here — and why
-  `WorkListOverlay`, which now draws no row of its own, has left this list.
 - **`Settings/sections/AppearanceSections`** — the theme card, which is the
   over-report described above and needs nothing done to it.
 - **`ui/ContentView`** — the path button at the top of a file or diff view, the
@@ -759,15 +752,17 @@ Written down so the next reader does not grade it again.
   are out of it: answering happens in the answer panel now, whose own controls
   clear the floor, and the card that replaced it holds no form at all
   ([answering-ui.md](answering-ui.md)).
-- **Batch 3 — R1, text targets centred in a tall row.** `AgentRoleListOverlay`,
-  `MessageItem`'s Details link, `ContentView`'s path button. They share a
-  *structural* cause — a 44px row using `items-center` to centre a 20px text
-  target rather than stretch it — so they are worth one answer between them
-  rather than one each. `WorkListOverlay` and `WorkDetailOverlay` were in this
-  batch for their row titles and are out of it: both screens now list work
-  through `WorkRow`, which states its 44. What is left in the register under
-  `WorkDetailOverlay` is the 16px link up to the parent work — a plain text
-  link, not a centred row title, and graded below rather than here.
+- **Batch 3 — R1, text targets centred in a tall row.** `MessageItem`'s Details
+  link and `ContentView`'s path button. They share a *structural* cause — a 44px
+  row using `items-center` to centre a 20px text target rather than stretch it —
+  so they are worth one answer between them rather than one each.
+  `WorkListOverlay`, `WorkDetailOverlay` and `AgentRoleListOverlay` were in this
+  batch for their row titles and are out of it: the first two now list work
+  through `WorkRow`, and the agent role list's row was rebuilt on the same
+  idiom, so all three state their 44 instead of centring in it. What is left in
+  the register under `WorkDetailOverlay` is the 16px link up to the parent work
+  — a plain text link, not a centred row title, and graded below rather than
+  here.
 - **Nothing to raise.** `WorkDetailOverlay`'s parent link (**R2**: its
   same-screen twin, the header's Back button, already clears the floor and goes
   to the same work — the link is the one you tap when you are reading the title

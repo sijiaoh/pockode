@@ -2,8 +2,8 @@ import { useCallback } from "react";
 import { useAgentRoleStore } from "../lib/agentRoleStore";
 import { useWSStore } from "../lib/wsStore";
 import type {
-	AgentRole,
 	AgentRoleListChangedNotification,
+	AgentRoleListSubscribeResult,
 } from "../types/agentRole";
 import { useSubscription } from "./useSubscription";
 
@@ -17,6 +17,7 @@ export function useAgentRoleSubscription(enabled: boolean) {
 
 	const setRoles = useAgentRoleStore((s) => s.setRoles);
 	const updateRoles = useAgentRoleStore((s) => s.updateRoles);
+	const setWorkRefCounts = useAgentRoleStore((s) => s.setWorkRefCounts);
 	const setError = useAgentRoleStore((s) => s.setError);
 	const reset = useAgentRoleStore((s) => s.reset);
 
@@ -24,6 +25,12 @@ export function useAgentRoleSubscription(enabled: boolean) {
 		(params: AgentRoleListChangedNotification) => {
 			if (params.operation === "sync") {
 				setRoles(params.roles);
+				return;
+			}
+			if (params.operation === "ref_counts") {
+				// Always the whole map: the counts live in the work store, so
+				// they move without any role changing and are never patched.
+				setWorkRefCounts(params.work_ref_counts);
 				return;
 			}
 			updateRoles((old) => {
@@ -42,7 +49,7 @@ export function useAgentRoleSubscription(enabled: boolean) {
 				}
 			});
 		},
-		[setRoles, updateRoles],
+		[setRoles, updateRoles, setWorkRefCounts],
 	);
 
 	const handleError = useCallback(
@@ -54,13 +61,21 @@ export function useAgentRoleSubscription(enabled: boolean) {
 		[setError],
 	);
 
+	const applyInitial = useCallback(
+		(initial: AgentRoleListSubscribeResult) => {
+			setRoles(initial.items);
+			setWorkRefCounts(initial.work_ref_counts);
+		},
+		[setRoles, setWorkRefCounts],
+	);
+
 	const { refresh } = useSubscription<
 		AgentRoleListChangedNotification,
-		AgentRole[]
+		AgentRoleListSubscribeResult
 	>(agentRoleListSubscribe, agentRoleListUnsubscribe, handleNotification, {
 		enabled,
 		resubscribeOnWorktreeChange: false,
-		onSubscribed: setRoles,
+		onSubscribed: applyInitial,
 		onReset: reset,
 		onError: handleError,
 	});

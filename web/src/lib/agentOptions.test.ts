@@ -3,6 +3,7 @@ import {
 	AUTO_EFFORT_DESCRIPTION,
 	AUTO_MODEL_DESCRIPTION,
 	buildChoices,
+	describeEngine,
 	getOptionLabel,
 } from "./agentOptions";
 
@@ -74,5 +75,36 @@ describe("buildChoices", () => {
 		expect(efforts.slice(1).every((c) => c.description === undefined)).toBe(
 			true,
 		);
+	});
+});
+
+// The agent role page's collapsed row and the agent role list's rows both print
+// `text`; each has its own component test for the ordinary engines. What is
+// here is the two rows of the contract neither of them reaches.
+describe("describeEngine", () => {
+	it("says an unnamed agent follows settings, claiming no model", () => {
+		expect(
+			describeEngine({
+				agentLabel: null,
+				models: MODELS,
+				model: "opus",
+				efforts: undefined,
+				effort: "high",
+			}).text,
+		).toBe("Follow settings");
+	});
+
+	// Ids this build has never heard of are shown as themselves, agent included:
+	// the record really is set to them.
+	it("prints ids it cannot name as themselves", () => {
+		expect(
+			describeEngine({
+				agentLabel: "foo",
+				models: MODELS,
+				model: "bar",
+				efforts: undefined,
+				effort: "",
+			}).text,
+		).toBe("foo · bar");
 	});
 });

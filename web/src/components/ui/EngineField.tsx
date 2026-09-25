@@ -6,7 +6,10 @@ import {
 	AUTO_ID,
 	AUTO_MODEL_DESCRIPTION,
 	buildChoices,
-	getOptionLabel,
+	describeEngine,
+	FOLLOW_SETTINGS_DESCRIPTION,
+	FOLLOW_SETTINGS_ID,
+	FOLLOW_SETTINGS_LABEL,
 } from "../../lib/agentOptions";
 import {
 	useAgentOptionsStore,
@@ -17,22 +20,13 @@ import {
 	AGENT_TYPE_INFO,
 	AGENT_TYPES,
 	type AgentTypeInfo,
+	getAgentLabel,
 } from "../../lib/agentType";
 import { type ValueState, waitingLabel } from "../../lib/valueState";
 import type { AgentType } from "../../types/settings";
 import { ChoiceRow, Section } from "./ChoiceList";
 import ResponsivePanel from "./ResponsivePanel";
 import Skeleton from "./Skeleton";
-
-/**
- * The empty agent type. Not called Auto, though the empty model and effort are:
- * this one points at a value the user set themselves in Settings and can go
- * read, while Auto hands the decision to the CLI. The three sit in one panel, so
- * one word for both would say they mean the same thing.
- */
-const FOLLOW_SETTINGS_ID = "";
-const FOLLOW_SETTINGS_LABEL = "Follow settings";
-const FOLLOW_SETTINGS_DESCRIPTION = "Use the default engine from Settings";
 
 /** Which section's update failed, so the reason lands under the rows that caused it. */
 type ErrorSection = "agent" | "model" | "effort";
@@ -79,7 +73,7 @@ interface Props {
 
 /** An agent id this build has no entry for, shown as itself. */
 const unknownAgentInfo = (id: string): AgentTypeInfo => ({
-	label: id,
+	label: getAgentLabel(id),
 	description: "Not a known agent on this server",
 	icon: CircleHelp,
 });
@@ -141,11 +135,19 @@ function EngineField({
 
 	const modelChoices = buildChoices(models, model, autoModelDescription);
 	const effortChoices = buildChoices(efforts, effort, autoEffortDescription);
-	const modelLabel = getOptionLabel(models, model);
-	// Auto has no value to report: whichever level the CLI then picks is its own
-	// business, and an agent with no effort setting has nothing to name.
-	const effortLabel =
-		effort === AUTO_ID ? null : getOptionLabel(efforts, effort);
+	// The summary line is shared with the agent role list's rows, so one engine
+	// is written the same way wherever it is written.
+	const {
+		modelLabel,
+		effortLabel,
+		text: summary,
+	} = describeEngine({
+		agentLabel: agentInfo?.label ?? null,
+		models,
+		model,
+		efforts,
+		effort,
+	});
 
 	// Which list applies is a question about an agent. Without one there is no
 	// answer, and the server refuses to store a model in that state anyway.
@@ -275,8 +277,7 @@ function EngineField({
 							    the way the action-bar chip budgets it — but an agent or model
 							    id this build has never heard of has no length limit at all. */}
 							<span className="min-w-0 flex-1 truncate text-sm text-th-text-primary">
-								{agentInfo.label} · {modelLabel}
-								{effortLabel && <> · {effortLabel}</>}
+								{summary}
 							</span>
 						</>
 					) : (
