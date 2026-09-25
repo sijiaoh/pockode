@@ -761,13 +761,14 @@ function ChatPanel({
 	const forkAnchor = forkTarget
 		? resolveForkAnchor(messages, forkTarget.messageId, hasMoreHistory)
 		: null;
-	// Any shared sheet or dialog — the fork sheet, a Git sheet, one raised from
-	// anywhere — has to be asked about rather than trusted to claim the key: its
-	// `stopPropagation` cannot silence this sibling `document` listener. The
-	// cover count is the one they already keep for locking the body.
+	// Any overlay — a shared sheet or dialog raised from anywhere, a dropdown,
+	// the session drawer — has to be asked about rather than trusted to claim
+	// the key: neither `stopPropagation` nor a `preventDefault` made after this
+	// sibling `document` listener has run can stop it. Every one of them counts
+	// itself as covering the page (`useCoverPage`).
 	//
 	// The answer panel is not in that count — it is drawn in the transcript's
-	// rectangle and leaves the page scrollable — so it is named here, and that
+	// rectangle and leaves the page usable — so it is named here, and that
 	// is the whole of what it costs to dim the transcript: the user is looking
 	// at a covered conversation, so Escape has to mean "put this away". It does
 	// not hold focus — it shows itself — so leaving the key here would turn a

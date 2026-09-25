@@ -11,6 +11,7 @@ export {
 	type SpinnerProps,
 } from "./components/index.ts";
 export {
+	useCoverPage,
 	useHasCoarsePointer,
 	useHasFinePointer,
 	useIsExpanded,

@@ -1,3 +1,4 @@
+import { useCoverPage } from "@pockode/shared";
 import { useEffect, useState } from "react";
 import { getSessionModeInfo, SESSION_MODES } from "../../lib/sessionMode";
 import type { SessionMode } from "../../types/message";
@@ -54,6 +55,11 @@ function ModeSelector({
 
 	const currentInfo = getSessionModeInfo(mode, agentType);
 	const currentColors = ICON_COLORS[mode] ?? ICON_COLORS.default;
+
+	// Covering the page is what keeps the chat's interrupt off this press: it
+	// is a sibling `document` listener, and if it was registered first it runs
+	// before the mark below is made.
+	useCoverPage(isOpen);
 
 	// Close dropdown on Escape, and mark the press handled: this sits in the
 	// composer row, which stays lit under surfaces that claim Escape for

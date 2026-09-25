@@ -31,7 +31,10 @@ import type {
 } from "../../types/message";
 import type { AgentType } from "../../types/settings";
 import type { WorkListItem } from "../../types/work";
+import Sidebar from "../Layout/Sidebar";
+import ResponsivePanel from "../ui/ResponsivePanel";
 import ChatPanel from "./ChatPanel";
+import ModeSelector from "./ModeSelector";
 
 // Mock scrollTo (not available in jsdom)
 Element.prototype.scrollTo = vi.fn();
@@ -2279,22 +2282,56 @@ describe("ChatPanel", () => {
 			expect(mockState.interrupt).not.toHaveBeenCalled();
 		});
 
-		// A sheet raised from outside the chat — a Git sheet — listens on
-		// `document` beside the interrupt, so its `stopPropagation` does not
-		// reach it; only the shared cover count does.
-		it("leaves Escape to an open sheet, then interrupts once it is gone", async () => {
-			function SheetOpener() {
+		// A panel raised from outside the chat — a Git sheet, a header dropdown,
+		// the session drawer — listens on `document` beside the interrupt, where
+		// stopping the press does not silence a sibling and marking it comes too
+		// late for one registered first; only the shared cover count holds. The
+		// dropdown is the expanded tier's, which locks nothing, so it is the
+		// count and not the body lock that is being read.
+		it.each([
+			[
+				"sheet",
+				(open: boolean, onClose: () => void) =>
+					open && (
+						<Sheet title="Panel" onClose={onClose}>
+							content
+						</Sheet>
+					),
+			],
+			[
+				"dropdown",
+				(open: boolean, onClose: () => void) => (
+					<ResponsivePanel
+						isOpen={open}
+						onClose={onClose}
+						title="Panel"
+						isExpanded
+					>
+						content
+					</ResponsivePanel>
+				),
+			],
+			[
+				"session drawer",
+				(open: boolean, onClose: () => void) => (
+					<Sidebar isOpen={open} onClose={onClose} isExpanded={false}>
+						content
+					</Sidebar>
+				),
+			],
+		])("leaves Escape to an open %s, then interrupts once it is gone", async (_, renderPanel) => {
+			function PanelOpener() {
 				const [open, setOpen] = useState(false);
 				return (
 					<>
-						<button type="button" onClick={() => setOpen(true)}>
-							Branches
+						<button
+							type="button"
+							aria-expanded={open}
+							onClick={() => setOpen(true)}
+						>
+							Open panel
 						</button>
-						{open && (
-							<Sheet title="Branches" onClose={() => setOpen(false)}>
-								branch list
-							</Sheet>
-						)}
+						{renderPanel(open, () => setOpen(false))}
 					</>
 				);
 			}
@@ -2303,7 +2340,7 @@ describe("ChatPanel", () => {
 			render(
 				<>
 					<ChatPanel {...defaultProps} />
-					<SheetOpener />
+					<PanelOpener />
 				</>,
 			);
 			await waitForHistoryLoad();
@@ -2313,15 +2350,57 @@ describe("ChatPanel", () => {
 					turn: { phase: "running", open: true, since: "2024-01-01T00:00:00Z" },
 				});
 			});
-			await user.click(screen.getByRole("button", { name: "Branches" }));
-			expect(
-				screen.getByRole("dialog", { name: "Branches" }),
-			).toBeInTheDocument();
+			const opener = screen.getByRole("button", { name: "Open panel" });
+			await user.click(opener);
+			expect(opener).toHaveAttribute("aria-expanded", "true");
 			mockState.interrupt.mockClear();
 
 			await user.keyboard("{Escape}");
 
-			expect(screen.queryByRole("dialog", { name: "Branches" })).toBeNull();
+			expect(opener).toHaveAttribute("aria-expanded", "false");
+			expect(mockState.interrupt).not.toHaveBeenCalled();
+
+			await user.keyboard("{Escape}");
+
+			expect(mockState.interrupt).toHaveBeenCalledWith("test-session");
+		});
+
+		// ChatPanel's own picker is disabled while a turn is open, so today its
+		// listener always predates the interrupt's and the mark alone keeps it
+		// out. That is an accident of order the cover count does not rely on, so
+		// the picker here is opened after the interrupt's listener is in place.
+		it("leaves Escape to an open mode picker, then interrupts once it is gone", async () => {
+			const user = userEvent.setup();
+			render(
+				<>
+					<ChatPanel {...defaultProps} />
+					<section aria-label="Other composer">
+						<ModeSelector
+							mode="default"
+							agentType="claude"
+							onModeChange={vi.fn()}
+						/>
+					</section>
+				</>,
+			);
+			await waitForHistoryLoad();
+
+			act(() => {
+				acceptSetting({
+					turn: { phase: "running", open: true, since: "2024-01-01T00:00:00Z" },
+				});
+			});
+			await user.click(
+				within(
+					screen.getByRole("region", { name: "Other composer" }),
+				).getByRole("button", { name: "Default" }),
+			);
+			expect(screen.getByText("YOLO")).toBeInTheDocument();
+			mockState.interrupt.mockClear();
+
+			await user.keyboard("{Escape}");
+
+			expect(screen.queryByText("YOLO")).toBeNull();
 			expect(mockState.interrupt).not.toHaveBeenCalled();
 
 			await user.keyboard("{Escape}");
