@@ -831,13 +831,12 @@ export const useWSStore = create<WSState>((set, get) => ({
 							"Auth failed with worktree, retrying with main:",
 							currentWorktree,
 						);
+						// Restarted before the worktree changes, so the switch that
+						// change sets off finds no client instead of failing on this
+						// refused socket and reconnecting a second time.
+						restartConnection("auth_retry");
 						worktreeActions.setCurrent("");
 						worktreeNotFoundListener?.();
-						socket.close(1000, "auth_retry");
-						// Retry connection with main worktree
-						setTimeout(() => {
-							if (currentCredential) get().actions.connect(currentCredential);
-						}, 100);
 						return;
 					}
 					console.error("WebSocket auth failed:", error);
@@ -872,7 +871,7 @@ export const useWSStore = create<WSState>((set, get) => ({
 			socket.onclose = () => {
 				// A newer socket may already have replaced this one. Closing is not
 				// instant — the handshake against a dead relay drags on for seconds —
-				// and reconnectWebSocket() opens the replacement only 100ms after
+				// and restartConnection() opens the replacement only 100ms after
 				// asking for the close, so a superseded socket routinely outlives its
 				// successor's setup. Without this guard it would then strip the live
 				// connection of its RPC client and subscriptions and demote it to
@@ -1203,17 +1202,32 @@ export const useWSStore = create<WSState>((set, get) => ({
 }));
 
 /**
+ * Drop the current socket and connect again with the same credential shortly
+ * after.
+ *
+ * Released rather than closed, so its onclose cannot arm a backoff retry beside
+ * this one. The retry goes through reconnectTimeout so connect() and
+ * disconnect() cancel it like any other; "reconnecting" is what lets that
+ * connect() through.
+ */
+function restartConnection(reason: string): void {
+	if (reconnectTimeout) clearTimeout(reconnectTimeout);
+	releaseSocket(reason);
+	useWSStore.setState({ status: "reconnecting" });
+	reconnectTimeout = window.setTimeout(() => {
+		if (currentCredential) {
+			useWSStore.getState().actions.connect(currentCredential);
+		}
+	}, 100);
+}
+
+/**
  * Reconnect WebSocket with the current credential.
  * Used as a fallback when worktree.switch RPC fails.
  */
 export function reconnectWebSocket(): void {
 	if (!currentCredential) return;
-	const credential = currentCredential;
-	wsActions.disconnect();
-	// Small delay to ensure clean disconnect before reconnecting
-	setTimeout(() => {
-		useWSStore.getState().actions.connect(credential);
-	}, 100);
+	restartConnection("worktree_switch_failed");
 }
 
 // Expose actions for non-React contexts (e.g., authStore logout)
@@ -1253,6 +1267,11 @@ async function switchWorktreeRPC(name: string): Promise<SwitchResult> {
 		worktreeActions.notifyWorktreeSwitchEnd();
 		return "settled";
 	} catch (error) {
+		// The connection it went out on is already gone, and whatever replaces
+		// it binds worktreeActions.getCurrent() in auth. Restarting here would
+		// tear down that replacement, override an "auth_failed" onclose leaves
+		// alone, or cut short onclose's backoff.
+		if (getClient() !== client) return "not_connected";
 		console.warn("Worktree switch RPC failed:", error);
 		return "failed";
 	}

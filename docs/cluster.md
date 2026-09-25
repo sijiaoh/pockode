@@ -261,7 +261,9 @@ alternatives that were rejected on the way to it, are in
   `version === null` is the test for "never authenticated", since the status
   alone cannot tell a first connect from a reconnect.
 - **Reconnecting** after a successful connect keeps the last known node list
-  visible. The header's status line switches from "Connected" to
+  visible — also when the drop catches a poll in flight, whose "Connection
+  lost" is the banner's to report, not an error page's; the list is refetched
+  once reconnected. The header's status line switches from "Connected" to
   "Reconnecting...", and a banner above the list escalates: "Reconnecting..."
   for the first few attempts, then "Can't reach the server. Still trying..."
   with a **Retry now** button once the backoff is long enough that skipping the

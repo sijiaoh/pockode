@@ -540,16 +540,29 @@ as one burst.
 - Subscriptions are invalidated but data is preserved
 - On successful reconnect, subscriptions are automatically re-established
 - `auth_failed` and `error` states do not trigger reconnection and require user intervention
+- web restarts the connection after a failed `worktree.switch` only when the
+  switch failed on the connection that is still current. One that died with its
+  socket — refused mid-`auth`, dropped, or superseded by a retry — is left to
+  whatever handles that ending: restarting would retry a credential the server
+  just turned away, cut short the backoff, or tear down the replacement. Auth
+  binds `worktreeActions.getCurrent()`, so the next connection lands on the
+  wanted worktree either way
 - `online` and `visibilitychange` skip the rest of the current backoff: regained
   connectivity or a foregrounded tab both mean the timer is now pessimistic. The
   attempt counter is deliberately *not* reset, so a burst of recovery events
   cannot turn into unlimited retries — a failed immediate retry resumes the
   backoff where it left off
-- `connect()` clears any armed retry timer first, so calling it manually during
-  `reconnecting` cannot leave a second socket opening a moment later
+- Every retry timer is armed on the one `reconnectTimeout` handle — the backoff,
+  and in web also the 100ms restart (`restartConnection()`) that follows a
+  `worktree_not_found` refusal or a failed `worktree.switch`. So `connect()`
+  clears whatever is armed before it opens a socket, and calling it manually
+  during `reconnecting` cannot leave a second socket opening a moment later;
+  `disconnect()` clears it too, so nothing reconnects behind a user who left.
+  The restart lets go of the socket before closing it, so its `onclose` finds
+  it superseded and cannot arm a backoff beside the restart
 - Only the socket that is still the current one may touch the store. `close()`
   *starts* a handshake rather than finishing one, and against a dead relay that
-  drags on for seconds — while `reconnectWebSocket()` opens the replacement just
+  drags on for seconds — while `restartConnection()` opens the replacement just
   100ms after asking for the close — so a superseded socket routinely outlives
   its successor's setup. `onclose` therefore returns immediately for a socket
   that is no longer current; without that check it would strip the live
@@ -557,9 +570,9 @@ as one burst.
   `reconnecting`, leaving a healthy socket that nothing can reach and that
   `disconnect()` can no longer close. `disconnect()` does its own subscription
   cleanup for the same reason, rather than relying on `onclose` to pass by later.
-- `connect()` closes whatever socket it still holds before opening a new one, and
-  settles it the way `disconnect()` does. `reconnecting` is also the status of an
-  attempt whose socket is open and still waiting on its `auth` reply, so a
+- `connect()` lets go of whatever socket it still holds before opening a new
+  one, and settles it the way `disconnect()` does. `reconnecting` is also the
+  status of an attempt whose socket is open and still waiting on its `auth` reply, so a
   recovery event can start a second attempt over one that is not dead yet. Left
   open, the first socket's reply would either connect the store on a socket it no
   longer holds, or — since every socket's RPC client numbers its requests from 1 —
@@ -568,10 +581,9 @@ as one burst.
   once `close()` has been called; rejecting its pending `auth` settles the first,
   and does so without touching the store: the rejection carries
   `DefaultErrorCode` (0), which the next paragraph explains is not an auth
-  failure, so the old attempt only closes its own socket.
-  web-cluster reaches the same place differently — its `connectInternal` detaches
-  the old socket's handlers before closing it, so a late reply has nowhere to go
-  and its `auth` times out into the same close-only path.
+  failure, so the old attempt only closes its own socket. (web-cluster also
+  detaches the old socket's handlers first; the rejection is what settles its
+  `auth` all the same.)
 
 **A timed-out `auth` is not an auth failure.** A socket can open and then go
 silent — the relay tunnel behind it dies a moment later, or the phone's own link
@@ -582,7 +594,7 @@ distinguishes by error code:
 a genuine rejection always carries a real (negative) JSON-RPC code, while every way
 a request can die on this side of the wire carries `DefaultErrorCode` (0) — the
 client-side timeout and the rejection an in-flight request gets when its socket
-closes under it (both in [Request Timeout](#request-timeout)), and a send onto a
+ends under it (both in [Request Timeout](#request-timeout)), and a send onto a
 socket that is not open, which json-rpc-2.0 catches and turns into a code-0 response
 carrying the thrown message. Only a real code counts as a rejection; everything else
 falls back to the normal reconnect path.
@@ -642,19 +654,31 @@ message cannot expand past it.
 
 ### Request Timeout
 
-RPC requests carry a client-side timeout, 30 seconds by default:
+RPC requests in web carry a client-side timeout, 30 seconds by default; in
+web-cluster only `auth` does:
 
 ```typescript
 const RPC_TIMEOUT_MS = 30000;
 ```
 
 That clock is the fallback, not the normal way a doomed request ends. A request's
-answer can only arrive on the socket it left by, so `onclose` rejects everything
-still pending rather than let a known-dead request sit out its remaining seconds.
-`disconnect()` has to make that call itself as well — for the same reason it does
-its own subscription cleanup, the `onclose` that follows it arrives for a socket
-that is no longer current and returns early (see
-[Auto-Reconnect](#auto-reconnect)).
+answer can only arrive on the socket it left by, so in both stores a connection
+ending — `disconnect()`, an unexpected close, or a new socket replacing the old
+one — rejects everything still pending on it at once with "Connection lost"
+(`DefaultErrorCode`, 0). `onclose` cannot be the one place that does it: the
+close that follows a deliberate release arrives for a socket that is no longer
+current and returns early (see [Auto-Reconnect](#auto-reconnect)), so whatever
+lets go of a socket (`releaseSocket()`) settles its requests itself. Without
+this a request would sit out its remaining seconds in web, and in web-cluster,
+whose node RPCs carry no timeout, it would hang for good.
+
+So a request that polls in the background gets "Connection lost" whenever a
+drop catches it in flight. The reconnect banner already reports the drop, so a
+poller should keep what it last showed rather than turn it into an error:
+web-cluster's `NodeList`, the one poller today, records a load error only while
+the status is still `connected`, and refetches once reconnected. A user action
+that fails this way still reports it, because whether it took effect is
+unknown.
 
 The exception is `AGENT_START_RPC_TIMEOUT_MS`, a longer clock for the requests
 that start an agent CLI on their own path.

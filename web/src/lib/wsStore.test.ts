@@ -321,6 +321,26 @@ describe("wsStore", () => {
 			}
 		});
 
+		it("cancels the worktree retry on disconnect()", async () => {
+			worktreeActions.setCurrent("gone");
+
+			try {
+				wsActions.connect(TEST_PASSWORD);
+				const ws = getMockWs();
+				ws?.mockAuthFailure("worktree_not_found");
+				ws?.simulateOpen();
+				// Let the refusal land and arm the retry, without firing it.
+				await vi.advanceTimersByTimeAsync(0);
+
+				wsActions.disconnect();
+				await vi.runAllTimersAsync();
+
+				expect(mockWsInstances.length).toBe(1);
+			} finally {
+				worktreeActions.reset();
+			}
+		});
+
 		it("sets status to error when the credential is empty", () => {
 			wsActions.connect({ kind: "password", value: "" });
 
@@ -399,6 +419,77 @@ describe("wsStore", () => {
 
 			// Should not have reconnected
 			expect(mockWsInstances.length).toBe(1);
+		});
+
+		it("cancels the reconnect a failed worktree switch arms", async () => {
+			await connectAndAuth();
+			const ws = getMockWs();
+			if (!ws) throw new Error("no socket");
+			ws.deferMethod("worktree.switch");
+
+			try {
+				worktreeActions.setCurrent("b");
+				await vi.advanceTimersByTimeAsync(0);
+				ws.simulateMessage({
+					jsonrpc: "2.0",
+					id: ws.deferred[0].id,
+					error: { code: -32603, message: "switch failed" },
+				});
+				await vi.advanceTimersByTimeAsync(0);
+				// The failure landed and the fallback reconnect is under way.
+				expect(ws.close).toHaveBeenCalled();
+
+				wsActions.disconnect();
+				await vi.runAllTimersAsync();
+
+				expect(mockWsInstances.length).toBe(1);
+			} finally {
+				worktreeActions.reset();
+			}
+		});
+
+		it("does not retry a refused credential when a switch sent mid-auth fails", async () => {
+			wsActions.connect(TEST_PASSWORD);
+			const ws = getMockWs();
+			if (!ws) throw new Error("no socket");
+			// Leaves worktree.switch unanswered until the refused socket closes.
+			ws.mockAuthFailure();
+			ws.simulateOpen();
+
+			try {
+				worktreeActions.setCurrent("b");
+				await vi.runAllTimersAsync();
+
+				expect(useWSStore.getState().status).toBe("auth_failed");
+				expect(mockWsInstances.length).toBe(1);
+			} finally {
+				worktreeActions.reset();
+			}
+		});
+
+		it("leaves the replacement alone when a switch dies with the socket it replaced", async () => {
+			await connectAndAuth();
+			getMockWs()?.simulateClose();
+			await vi.runOnlyPendingTimersAsync();
+			const midAuth = getMockWs();
+			if (!midAuth) throw new Error("no socket");
+			midAuth.deferMethod("auth");
+			midAuth.deferMethod("worktree.switch");
+			midAuth.simulateOpen();
+
+			try {
+				worktreeActions.setCurrent("b");
+				await vi.advanceTimersByTimeAsync(0);
+				wsActions.retryNow();
+				const replacement = getMockWs();
+				await vi.runAllTimersAsync();
+
+				expect(replacement).not.toBe(midAuth);
+				expect(replacement?.close).not.toHaveBeenCalled();
+				expect(mockWsInstances.length).toBe(3);
+			} finally {
+				worktreeActions.reset();
+			}
 		});
 	});
 

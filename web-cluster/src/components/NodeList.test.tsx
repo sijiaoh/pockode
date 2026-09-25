@@ -31,7 +31,7 @@ const wsState: {
 } = { status: "connected", version: null, actions };
 
 vi.mock("../lib/wsStore", () => ({
-	useWSStore: () => wsState,
+	useWSStore: Object.assign(() => wsState, { getState: () => wsState }),
 }));
 
 describe("NodeList: a refused cleanup", () => {
@@ -388,6 +388,37 @@ describe("NodeList: polling", () => {
 				),
 			{ timeout: POLL_INTERVAL_MS / 5 },
 		);
+	});
+
+	// The socket rejects what it was still carrying when it drops. A poll caught
+	// in that must not swap the nodes for an error screen: App keeps this list
+	// mounted through a reconnect precisely so they stay readable.
+	it("keeps the list when the connection drops mid-poll", async () => {
+		render(<NodeList />);
+		await screen.findByRole("heading", { name: "only" });
+
+		let dropConnection = () => {};
+		actions.listNodes.mockImplementationOnce(
+			() =>
+				new Promise((_, reject) => {
+					dropConnection = () => {
+						wsState.status = "reconnecting";
+						reject(new Error("Connection lost"));
+					};
+				}),
+		);
+		await act(async () => {
+			await vi.advanceTimersByTimeAsync(POLL_INTERVAL_MS);
+		});
+
+		try {
+			await act(async () => dropConnection());
+
+			expect(screen.getByRole("heading", { name: "only" })).toBeTruthy();
+			expect(screen.queryByText("Connection lost")).toBeNull();
+		} finally {
+			wsState.status = "connected";
+		}
 	});
 });
 
