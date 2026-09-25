@@ -126,6 +126,14 @@ So: render what the contract needs and no more; where a long list *is* the
 contract, reach the rows inside it by label or text, and say in the test why the
 usual preference for `getByRole` (web/AGENTS.md) is being spent.
 
+Querying by text stops checking the accessible name; it does not stop the name
+from mattering. So one test still asks by name and the rest go by text, which
+pays the cost once — and a name that drifts from the visible text, which no
+text query can see, still turns one test red.
+`web/src/components/Git/BranchSheet.test.tsx` does this with "names each row by
+its branch", and `web/src/components/ui/Sheet.test.tsx` with "names the box by
+its title and the close button by its job".
+
 ## Go: there is no equivalent knob
 
 There is no repository-level concurrency setting to correct on the Go side. Test
