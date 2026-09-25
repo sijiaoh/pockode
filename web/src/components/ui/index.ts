@@ -17,6 +17,7 @@ export { DiffViewer } from "./DiffViewer";
 export { FileContentDisplay } from "./FileContentDisplay";
 export { FileStateCard } from "./FileStateCard";
 export { iconButtonClass } from "./iconButtonClass";
+export { MarkdownContent } from "./MarkdownContent";
 export { default as PanelSection } from "./PanelSection";
 export { default as PullToRefresh } from "./PullToRefresh";
 export { default as ReconnectBanner } from "./ReconnectBanner";

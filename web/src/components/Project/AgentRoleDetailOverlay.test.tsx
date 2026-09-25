@@ -111,8 +111,9 @@ describe("deleting an agent role", () => {
 
 describe("the steps list", () => {
 	// A class assertion, because jsdom lays nothing out: the overflow this guards
-	// against has no other foothold in a unit test. Why the class is required is
-	// on `MarkdownContent`'s `className` prop.
+	// against has no other foothold in a unit test. The class is the prose root's
+	// own, not passed in here — why it is needed is on `MarkdownContent`'s
+	// `className` prop.
 	it("keeps a step's markdown from widening the steps list", () => {
 		renderOverlay();
 

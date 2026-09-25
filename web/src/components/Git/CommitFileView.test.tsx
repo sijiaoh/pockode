@@ -42,7 +42,7 @@ vi.mock("../../lib/shikiUtils", () => ({
 	isMarkdownFile: (path: string) => path.endsWith(".md"),
 }));
 
-vi.mock("../Chat/MarkdownContent", () => ({
+vi.mock("../ui/MarkdownContent", () => ({
 	MarkdownContent: ({ content }: { content: string }) => (
 		<div data-testid="markdown">{content}</div>
 	),

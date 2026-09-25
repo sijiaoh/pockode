@@ -14,8 +14,7 @@ import type { ContentBlock } from "../../types/content";
 import { GIT_STATUS_INFO } from "../../types/git";
 import { HIGHLIGHT_LIMIT } from "../../utils/fileView";
 import { formatFilePath, relativeToWorkDir } from "../../utils/path";
-import { DiffViewer, FileContentDisplay } from "../ui";
-import { MarkdownContent } from "./MarkdownContent";
+import { DiffViewer, FileContentDisplay, MarkdownContent } from "../ui";
 
 const ansiUp = new AnsiUp();
 ansiUp.use_classes = true;
