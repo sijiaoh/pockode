@@ -19,7 +19,7 @@ import { useWSStore } from "../../lib/wsStore";
 import type { AgentRole } from "../../types/agentRole";
 import { MarkdownContent } from "../ui";
 import BackButton from "../ui/BackButton";
-import { inputClass } from "../ui/inputClass";
+import { inputClass, inputFocusWithinClass } from "../ui/inputClass";
 import AgentRoleEngineSelector from "./AgentRoleEngineSelector";
 
 interface Props {
@@ -448,7 +448,7 @@ function StepsEditor({ role }: { role: AgentRole }) {
 									className={`flex items-start gap-1 rounded-lg border bg-th-bg-primary p-1 transition-all duration-150 ${
 										dragId === item.id
 											? "scale-[0.98] border-th-accent opacity-50 shadow-lg"
-											: "border-th-border"
+											: `border-th-border ${inputFocusWithinClass}`
 									}`}
 								>
 									{/* Drag handle - only this is draggable */}
