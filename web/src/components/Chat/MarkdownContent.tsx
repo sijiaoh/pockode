@@ -61,7 +61,16 @@ const MARKDOWN_COMPONENTS = { code: CodeBlock, img: MarkdownImage };
 
 interface MarkdownContentProps {
 	content: string;
-	/** Extra classes for the prose root, for a surface that has to tune it. */
+	/**
+	 * Extra classes for the prose root, for a surface that has to tune it.
+	 *
+	 * A caller that makes this a flex item has to include `min-w-0`, or wrap it in
+	 * an element that has it the way `StepList` does. A wide code block here is
+	 * meant to be scrolled by an ancestor scroll container rather than by its own
+	 * box, so `.code-block` sets `min-width: fit-content` (`web/src/index.css`) —
+	 * and a flex item's `min-width: auto` then floors the item at that full width,
+	 * widening the row and the page instead of letting the ancestor scroll.
+	 */
 	className?: string;
 }
 

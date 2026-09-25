@@ -609,7 +609,7 @@ function StepsEditor({ role }: { role: AgentRole }) {
 						<span className="shrink-0 font-medium text-th-text-muted">
 							{index + 1}.
 						</span>
-						<MarkdownContent content={step} />
+						<MarkdownContent content={step} className="min-w-0 flex-1" />
 					</li>
 				))}
 			</ol>
