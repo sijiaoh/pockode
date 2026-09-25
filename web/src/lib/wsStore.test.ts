@@ -1,5 +1,16 @@
 import type { AuthCredential } from "@pockode/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { authActions, useAuthStore } from "./authStore";
+import { worktreeActions } from "./worktreeStore";
+import {
+	AGENT_START_RPC_TIMEOUT_MS,
+	isRPCTimeout,
+	RPC_TIMEOUT_MS,
+	reconnectWebSocket,
+	resetWSStore,
+	useWSStore,
+	wsActions,
+} from "./wsStore";
 
 // Mock config module
 vi.mock("../utils/config", () => ({
@@ -167,11 +178,13 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
-	const { resetWSStore } = await import("./wsStore");
+	// A case can end with an auth reply already delivered but the continuation
+	// that acts on it still queued; settle it first, or it lands after the
+	// reset below and connects the next case's store.
+	await vi.advanceTimersByTimeAsync(0);
 	resetWSStore();
 	// The store under test now writes the session token it is handed straight
 	// into authStore, which is module state and outlives one case.
-	const { authActions } = await import("./authStore");
 	authActions.logout();
 
 	vi.restoreAllMocks();
@@ -179,16 +192,6 @@ afterEach(async () => {
 	vi.useRealTimers();
 	globalThis.WebSocket = OriginalWebSocket;
 });
-
-async function getWsActions() {
-	const module = await import("./wsStore");
-	return module.wsActions;
-}
-
-async function getUseWSStore() {
-	const module = await import("./wsStore");
-	return module.useWSStore;
-}
 
 function getMockWs() {
 	return currentMockWs;
@@ -208,9 +211,6 @@ function fireRecoveryEvents() {
 }
 
 async function connectAndAuth(credential: AuthCredential = TEST_PASSWORD) {
-	const wsActions = await getWsActions();
-	const useWSStore = await getUseWSStore();
-
 	wsActions.connect(credential);
 	getMockWs()?.simulateOpen();
 	await vi.runAllTimersAsync();
@@ -220,8 +220,6 @@ async function connectAndAuth(credential: AuthCredential = TEST_PASSWORD) {
 describe("wsStore", () => {
 	describe("connect", () => {
 		it("sets status to connecting then connected after auth", async () => {
-			const wsActions = await getWsActions();
-			const useWSStore = await getUseWSStore();
 			const statusChanges: string[] = [];
 
 			useWSStore.subscribe((state) => {
@@ -237,9 +235,7 @@ describe("wsStore", () => {
 			expect(useWSStore.getState().status).toBe("connected");
 		});
 
-		it("sends auth RPC request on open", async () => {
-			const wsActions = await getWsActions();
-
+		it("sends auth RPC request on open", () => {
 			wsActions.connect(TEST_PASSWORD);
 			getMockWs()?.simulateOpen();
 
@@ -252,9 +248,6 @@ describe("wsStore", () => {
 		});
 
 		it("sets status to auth_failed on auth failure", async () => {
-			const wsActions = await getWsActions();
-			const useWSStore = await getUseWSStore();
-
 			wsActions.connect(TEST_PASSWORD);
 			const ws = getMockWs();
 			ws?.mockAuthFailure();
@@ -268,9 +261,6 @@ describe("wsStore", () => {
 		// again; a reconnect that still reached for it would be the whole point of
 		// the exchange undone.
 		it("swaps the password for the session token it is given", async () => {
-			const wsActions = await getWsActions();
-			const { useAuthStore } = await import("./authStore");
-
 			wsActions.connect(TEST_PASSWORD);
 			getMockWs()?.simulateOpen();
 			await vi.runAllTimersAsync();
@@ -292,9 +282,6 @@ describe("wsStore", () => {
 		// Nothing the user did is wrong, so this must not land on the terminal
 		// "auth_failed" screen the way a bad password does.
 		it("drops an expired session quietly rather than failing auth", async () => {
-			const wsActions = await getWsActions();
-			const useWSStore = await getUseWSStore();
-			const { authActions, useAuthStore } = await import("./authStore");
 			authActions.rememberSession("stale-session");
 
 			wsActions.connect({ kind: "session_token", value: "stale-session" });
@@ -317,8 +304,6 @@ describe("wsStore", () => {
 			{ reason: "worktree_not_found", retries: true },
 			{ reason: "invalid_password", retries: false },
 		])("retries against main only for $reason", async ({ reason, retries }) => {
-			const wsActions = await getWsActions();
-			const { worktreeActions } = await import("./worktreeStore");
 			worktreeActions.setCurrent("gone");
 
 			try {
@@ -334,18 +319,13 @@ describe("wsStore", () => {
 			}
 		});
 
-		it("sets status to error when the credential is empty", async () => {
-			const wsActions = await getWsActions();
-			const useWSStore = await getUseWSStore();
-
+		it("sets status to error when the credential is empty", () => {
 			wsActions.connect({ kind: "password", value: "" });
 
 			expect(useWSStore.getState().status).toBe("error");
 		});
 
-		it("ignores connect() when already connecting", async () => {
-			const wsActions = await getWsActions();
-
+		it("ignores connect() when already connecting", () => {
 			wsActions.connect(TEST_PASSWORD);
 			const firstWs = getMockWs();
 
@@ -359,7 +339,6 @@ describe("wsStore", () => {
 			await connectAndAuth();
 			const connectedWs = getMockWs();
 
-			const wsActions = await getWsActions();
 			wsActions.connect(TEST_PASSWORD);
 
 			// Should not create a new WebSocket
@@ -367,10 +346,7 @@ describe("wsStore", () => {
 			expect(connectedWs?.close).not.toHaveBeenCalled();
 		});
 
-		it("ignores connect() when in error state", async () => {
-			const wsActions = await getWsActions();
-			const useWSStore = await getUseWSStore();
-
+		it("ignores connect() when in error state", () => {
 			// Force error state by calling connect with empty token
 			wsActions.connect({ kind: "password", value: "" });
 			expect(useWSStore.getState().status).toBe("error");
@@ -382,8 +358,6 @@ describe("wsStore", () => {
 		});
 
 		it("resets reconnect attempts on successful connection", async () => {
-			const wsActions = await getWsActions();
-
 			// First connection closes
 			wsActions.connect(TEST_PASSWORD);
 			getMockWs()?.simulateOpen();
@@ -404,9 +378,6 @@ describe("wsStore", () => {
 
 	describe("disconnect", () => {
 		it("closes WebSocket and sets status to disconnected", async () => {
-			const wsActions = await getWsActions();
-			const useWSStore = await getUseWSStore();
-
 			await connectAndAuth();
 			const ws = getMockWs();
 
@@ -417,8 +388,6 @@ describe("wsStore", () => {
 		});
 
 		it("cancels pending reconnect", async () => {
-			const wsActions = await getWsActions();
-
 			await connectAndAuth();
 			getMockWs()?.simulateClose();
 
@@ -433,8 +402,6 @@ describe("wsStore", () => {
 
 	describe("RPC methods", () => {
 		it("sendMessage sends RPC request", async () => {
-			const wsActions = await getWsActions();
-
 			await connectAndAuth();
 			getMockWs()?.send.mockClear();
 
@@ -454,7 +421,6 @@ describe("wsStore", () => {
 		// the broadcast carrying every other record's address skips the sender.
 		it("sendMessage returns the seq the server replies with", async () => {
 			chatMessageResult = { seq: 4 };
-			const wsActions = await getWsActions();
 
 			await connectAndAuth();
 
@@ -467,8 +433,6 @@ describe("wsStore", () => {
 		// result, which has to read as "no address" rather than fail the send or
 		// become a seq of 0, which names no record.
 		it("sendMessage tolerates a server that sends no seq", async () => {
-			const wsActions = await getWsActions();
-
 			await connectAndAuth();
 
 			await expect(
@@ -477,8 +441,6 @@ describe("wsStore", () => {
 		});
 
 		it("throws when not connected", async () => {
-			const wsActions = await getWsActions();
-
 			await expect(wsActions.sendMessage("test", "hello")).rejects.toThrow(
 				"Not connected",
 			);
@@ -487,8 +449,6 @@ describe("wsStore", () => {
 
 	describe("unanswered requests", () => {
 		it("fails them as soon as the socket closes", async () => {
-			const wsActions = await getWsActions();
-
 			await connectAndAuth();
 			getMockWs()?.mockNoResponse();
 
@@ -514,9 +474,6 @@ describe("wsStore", () => {
 		});
 
 		it("marks a request the client gave up on as a timeout", async () => {
-			const { RPC_TIMEOUT_MS, isRPCTimeout } = await import("./wsStore");
-			const wsActions = await getWsActions();
-
 			await connectAndAuth();
 			getMockWs()?.mockNoResponse();
 
@@ -529,10 +486,6 @@ describe("wsStore", () => {
 		});
 
 		it("waits longer on agent-starting requests than on other requests", async () => {
-			const { AGENT_START_RPC_TIMEOUT_MS, RPC_TIMEOUT_MS, isRPCTimeout } =
-				await import("./wsStore");
-			const wsActions = await getWsActions();
-
 			await connectAndAuth();
 			getMockWs()?.mockNoResponse();
 
@@ -578,8 +531,6 @@ describe("wsStore", () => {
 
 	describe("subscriptions", () => {
 		it("unsubscribe removes listener", async () => {
-			const useWSStore = await getUseWSStore();
-			const wsActions = await getWsActions();
 			const listener = vi.fn();
 
 			const unsubscribe = useWSStore.subscribe(listener);
@@ -594,9 +545,7 @@ describe("wsStore", () => {
 			expect(listener).not.toHaveBeenCalled();
 		});
 
-		it("multiple listeners all receive updates", async () => {
-			const useWSStore = await getUseWSStore();
-			const wsActions = await getWsActions();
+		it("multiple listeners all receive updates", () => {
 			const listener1 = vi.fn();
 			const listener2 = vi.fn();
 
@@ -618,7 +567,6 @@ describe("wsStore", () => {
 		const sessionDetail = { id: "s1", title: "during subscribe" };
 
 		it("delivers a notification that arrives before the subscribe reply", async () => {
-			const wsActions = await getWsActions();
 			const callback = vi.fn();
 
 			await connectAndAuth();
@@ -654,8 +602,6 @@ describe("wsStore", () => {
 		});
 
 		it("gives each subscription an id of its own", async () => {
-			const wsActions = await getWsActions();
-
 			await connectAndAuth();
 			const ws = getMockWs();
 			if (!ws) throw new Error("WebSocket not found");
@@ -687,7 +633,6 @@ describe("wsStore", () => {
 		// it back — otherwise the entry sits in the routing table forever, with no
 		// id ever returned for anyone to unsubscribe it by.
 		it("forgets the callback when the subscribe is refused", async () => {
-			const wsActions = await getWsActions();
 			const callback = vi.fn();
 
 			await connectAndAuth();
@@ -740,8 +685,6 @@ describe("wsStore", () => {
 		// cancellable at all — the id used to come back only in the reply that
 		// never came.
 		it("cancels a subscribe its own clock gave up on", async () => {
-			const wsActions = await getWsActions();
-
 			await connectAndAuth();
 			const ws = getMockWs();
 			if (!ws) throw new Error("WebSocket not found");
@@ -799,7 +742,6 @@ describe("wsStore", () => {
 		}
 
 		it("calls callback when fs.changed notification is received", async () => {
-			const wsActions = await getWsActions();
 			const callback = vi.fn();
 
 			await connectAndAuth();
@@ -816,7 +758,6 @@ describe("wsStore", () => {
 		});
 
 		it("ignores fs.changed for unknown ID", async () => {
-			const wsActions = await getWsActions();
 			const callback = vi.fn();
 
 			await connectAndAuth();
@@ -832,7 +773,6 @@ describe("wsStore", () => {
 		});
 
 		it("ignores fs.changed after unsubscribe", async () => {
-			const wsActions = await getWsActions();
 			const callback = vi.fn();
 
 			await connectAndAuth();
@@ -871,7 +811,6 @@ describe("wsStore", () => {
 		}
 
 		it("backs off exponentially and never stops trying", async () => {
-			const useWSStore = await getUseWSStore();
 			await connectAndAuth();
 			withoutJitter();
 
@@ -912,7 +851,6 @@ describe("wsStore", () => {
 		});
 
 		it("restarts the backoff after a connection succeeds", async () => {
-			const useWSStore = await getUseWSStore();
 			await connectAndAuth();
 			withoutJitter();
 
@@ -934,7 +872,6 @@ describe("wsStore", () => {
 		// "reconnecting" looks the same after one second and after an hour, so the
 		// attempt count is what lets the UI escalate from a blip to an outage.
 		it("counts consecutive failures and clears the count on success", async () => {
-			const useWSStore = await getUseWSStore();
 			await connectAndAuth();
 			withoutJitter();
 			expect(useWSStore.getState().reconnectAttempts).toBe(0);
@@ -1004,9 +941,6 @@ describe("wsStore", () => {
 		// stops a waking browser from re-offering a token the server refused —
 		// once per tab switch, indefinitely.
 		it("ignores recovery events after auth was rejected", async () => {
-			const wsActions = await getWsActions();
-			const useWSStore = await getUseWSStore();
-
 			wsActions.connect(TEST_PASSWORD);
 			getMockWs()?.mockAuthFailure();
 			getMockWs()?.simulateOpen();
@@ -1023,9 +957,6 @@ describe("wsStore", () => {
 		// a credential problem: classifying it as auth_failed would strand the
 		// user on a terminal error screen that only a refresh clears.
 		it("retries when auth is never answered instead of failing auth", async () => {
-			const wsActions = await getWsActions();
-			const useWSStore = await getUseWSStore();
-
 			wsActions.connect(TEST_PASSWORD);
 			getMockWs()?.mockNoResponse();
 			getMockWs()?.simulateOpen();
@@ -1038,10 +969,7 @@ describe("wsStore", () => {
 			expect(mockWsInstances.length).toBe(2);
 		});
 
-		it("handles socket error by letting onclose manage state", async () => {
-			const wsActions = await getWsActions();
-			const useWSStore = await getUseWSStore();
-
+		it("handles socket error by letting onclose manage state", () => {
 			wsActions.connect(TEST_PASSWORD);
 			// onerror is always followed by onclose; onerror does not change status
 			getMockWs()?.simulateError();
@@ -1058,8 +986,6 @@ describe("wsStore", () => {
 		// drags on for seconds. The superseded socket must not take the live
 		// connection down with it when it finally lands.
 		it("ignores the close of a socket that has already been replaced", async () => {
-			const useWSStore = await getUseWSStore();
-			const { reconnectWebSocket } = await import("./wsStore");
 			await connectAndAuth();
 
 			const superseded = getMockWs();
@@ -1083,9 +1009,6 @@ describe("wsStore", () => {
 		});
 
 		it("does not reconnect on auth failure", async () => {
-			const wsActions = await getWsActions();
-			const useWSStore = await getUseWSStore();
-
 			wsActions.connect(TEST_PASSWORD);
 			getMockWs()?.mockAuthFailure();
 			getMockWs()?.simulateOpen();
@@ -1111,8 +1034,6 @@ describe("wsStore", () => {
 		// the switch-end then came back full of "b"'s sessions, and no refresh
 		// recovered it, because every later request was answered against "b" too.
 		it("never leaves the connection bound to a superseded worktree", async () => {
-			const useWSStore = await getUseWSStore();
-			const { worktreeActions } = await import("./worktreeStore");
 			await connectAndAuth();
 
 			const ws = getMockWs();

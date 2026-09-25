@@ -149,6 +149,31 @@ text query can see, still turns one test red.
 its branch", and `web/src/components/ui/Sheet.test.tsx` with "names the box by
 its title and the close button by its job".
 
+A first test can be slow for a second reason besides jsdom's warm-up above: the
+file imports what it tests *inside* the tests — an `await import()` in the body
+or a `beforeEach`, usually beside `vi.resetModules()`. The transform of that
+module and everything it pulls in is then charged to whichever test gets there
+first, under its `testTimeout`, instead of to the file's `import` phase. Two
+things give it away: the first test is orders of magnitude slower than its
+neighbours, not several times, and vitest's closing `Duration` line, run on that
+file alone, shows a small `import` beside a large `tests`. Neither file below
+renders anything, so jsdom's warm-up cannot be what the first test paid for.
+`web/src/lib/wsStore.test.ts` spent 4s against its neighbours' 14ms on a quiet
+box and 16–19s under load; under load, `queryClient.test.ts` next to it timed
+out outright. That is not a slow test either. Import statically, and reset state
+through what the module already offers — a factory, an exported reset — which is
+all either file turned out to need. Only a test that really needs a fresh module
+instance per case keeps `resetModules`, and it imports the module once in a
+`beforeAll` first: the transform survives `resetModules`, so the hook pays it
+once and every test after only re-evaluates.
+
+Taking the `await import()` out can turn a later test red. It was also
+a yield: one in an `afterEach` let a previous test's leftover async continuation
+run before the reset, and without it that continuation lands on the next test's
+fresh state. The leak was there all along; drain it explicitly before the reset
+(`await vi.advanceTimersByTimeAsync(0)` under fake timers, as the `afterEach` in
+`wsStore.test.ts` does) rather than putting the import back.
+
 ## Frontend: a debounce is yours to run out
 
 A test that types into a debounced input and then waits for the result is a
