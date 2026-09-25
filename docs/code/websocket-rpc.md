@@ -304,6 +304,7 @@ and everything here is an addition:
 | `work.list.subscribe` result | `stopped_hidden?`, `open_hidden?` | How many rows each capped group of `Current` — *Stopped* and *Not running* — held back, so each group's heading can still show that whole group's count. One field per group, because one number spanning two headings would make at least one of them wrong |
 | `work.list.changed` — `sync` | `stopped_hidden?`, `open_hidden?` | The same, on a resync |
 | `work.detail.subscribe` result, `work.detail.changed` | `children`, `parent?` | Every task under this item, and the story above it |
+| `work.detail.subscribe` result, `work.detail.changed` | `work.type` | Which kind the item is, derived by the server from `story_id` the same way a row's is, so a client asks for a kind one way wherever it reads a work item. A client that derived it itself keeps working — the field it derived from is still there |
 
 `has_unread` and the two hidden counts are the same kind of field and are there
 for the same reason: **a count or an "is there any" may never be derived from a
@@ -732,13 +733,16 @@ means the server never started it.
 
 1. **Define parameter and return types**
    - Go: `server/rpc/types.go` — only for a shape that is the wire's own: a
-     struct, or a deliberate narrowing of a domain type. A handler that replies
-     with a domain value as it stands (`git.branches` → `git.BranchList`,
-     `work.create` → `work.Work`) defines nothing here. A `type X = domain.Y`
-     alias is not a type — it narrows nothing and checks nothing, and a set of
-     them that covers some methods and not others reads as a distinction where
-     there is none. The domain package is the definition; describe the result in
-     the namespace's own document ([git.md](../git.md), [file.md](../file.md),
+     struct, a deliberate narrowing of a domain type, or a domain type plus a
+     value it derives rather than stores (`rpc.WorkDetailItem`'s `type`, which
+     must not reach the file the domain record is marshalled into). A handler
+     that replies with a domain value as it stands (`git.branches` →
+     `git.BranchList`) defines nothing here. A
+     `type X = domain.Y` alias is not a type — it narrows nothing and checks
+     nothing, and a set of them that covers some methods and not others reads as
+     a distinction where there is none. The domain package is the definition;
+     describe the result in the namespace's own document
+     ([git.md](../git.md), [file.md](../file.md),
      [projects/api.md](../projects/api.md)) so a reader can find it from the
      method name.
    - TypeScript: `web/src/types/*.ts`

@@ -93,9 +93,9 @@ func (w *WorkDetailWatcher) relatives(item work.Work) ([]rpc.WorkListItem, *rpc.
 	var parent *rpc.WorkListItem
 	for _, other := range items {
 		switch {
-		case other.ParentID == item.ID:
+		case other.StoryID == item.ID:
 			children = append(children, rpc.NewWorkListItem(other, resolver.RowState(other)))
-		case item.ParentID != "" && other.ID == item.ParentID:
+		case item.StoryID != "" && other.ID == item.StoryID:
 			row := rpc.NewWorkListItem(other, resolver.RowState(other))
 			parent = &row
 		}
@@ -203,7 +203,7 @@ func (w *WorkDetailWatcher) notifyForWorkID(workID string, fromSession bool) {
 func (w *WorkDetailWatcher) notifyDetail(sub *Subscription, detail WorkDetail) {
 	n := Notification{Method: "work.detail.changed", Params: workDetailChangedParams{
 		ID:               sub.ID,
-		Work:             detail.Work,
+		Work:             rpc.NewWorkDetailItem(detail.Work),
 		Comments:         detail.Comments,
 		Usage:            detail.Usage,
 		Activity:         detail.Activity,
@@ -216,9 +216,10 @@ func (w *WorkDetailWatcher) notifyDetail(sub *Subscription, detail WorkDetail) {
 	}
 }
 
-// notifyForSessionID re-sends the detail of the work item owning the session and
-// of every work item above it, because a usage total covers the whole subtree:
-// the session that just spent tokens is part of each of its ancestors' totals.
+// notifyForSessionID re-sends the detail of the work item owning the session
+// and, when that item is a task, of its story: a usage total covers a story and
+// its tasks, so the session that just spent tokens is part of the story's total
+// too. There is no level above a story, so there is nothing further to walk.
 func (w *WorkDetailWatcher) notifyForSessionID(sessionID string) {
 	if sessionID == "" || !w.HasSubscriptions() {
 		return
@@ -233,30 +234,9 @@ func (w *WorkDetailWatcher) notifyForSessionID(sessionID string) {
 		return // A plain chat session, belonging to no work item.
 	}
 
-	// Bounded by the seen set rather than by trusting the parent chain: a cycle
-	// in it would otherwise walk forever on every session change.
-	seen := make(map[string]struct{})
-	for {
-		if _, dup := seen[item.ID]; dup {
-			slog.Warn("work parent chain loops, stopping usage notification walk", "workId", item.ID)
-			return
-		}
-		seen[item.ID] = struct{}{}
-
-		w.notifyForWorkID(item.ID, true)
-
-		if item.ParentID == "" {
-			return
-		}
-		parent, found, err := w.store.Get(item.ParentID)
-		if err != nil {
-			slog.Error("failed to get parent work for usage notification", "error", err, "workId", item.ParentID)
-			return
-		}
-		if !found {
-			return
-		}
-		item = parent
+	w.notifyForWorkID(item.ID, true)
+	if item.StoryID != "" {
+		w.notifyForWorkID(item.StoryID, true)
 	}
 }
 
@@ -451,9 +431,12 @@ func (w *WorkDetailWatcher) Subscribe(id, workID string, notifier Notifier) (Wor
 }
 
 type workDetailChangedParams struct {
-	ID       string         `json:"id"`
-	Work     work.Work      `json:"work"`
-	Comments []work.Comment `json:"comments"`
+	ID string `json:"id"`
+	// Work is the same shape the subscribe result carries, built by the same
+	// narrowing: a subscriber must not be handed a different item by the
+	// notification than by the reply it started from.
+	Work     rpc.WorkDetailItem `json:"work"`
+	Comments []work.Comment     `json:"comments"`
 	// Usage rides on the notification rather than on Work, for the reason
 	// work.Usage documents. Activity is derived too, and for the same reason
 	// is not a field of the work item.

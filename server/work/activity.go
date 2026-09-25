@@ -65,7 +65,7 @@ func (a Activity) NeedsUser() bool {
 // turns, because for a work item the two are the same nothing.
 //
 // Phase outranks wait rather than the other way round: a wait is a standing
-// intention, a phase is a fact about this second. An agent that calls work_wait
+// intention, a phase is a fact about this second. An agent that calls story_wait
 // and then keeps writing for another ten seconds *is* running, and the row
 // should say so; the moment the turn settles the wait takes over. The
 // alternative needs a priority table between two kinds of waiting that can

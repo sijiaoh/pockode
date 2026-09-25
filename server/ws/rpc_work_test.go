@@ -18,7 +18,6 @@ func TestHandler_WorkCreate_Story(t *testing.T) {
 	env := newTestEnv(t, &mockAgent{})
 
 	resp := env.call("work.create", rpc.WorkCreateParams{
-		Type:        work.WorkTypeStory,
 		AgentRoleID: env.testRoleID,
 		Title:       "Build login page",
 	})
@@ -35,8 +34,8 @@ func TestHandler_WorkCreate_Story(t *testing.T) {
 	if result.ID == "" {
 		t.Error("expected non-empty ID")
 	}
-	if result.Type != work.WorkTypeStory {
-		t.Errorf("expected type story, got %s", result.Type)
+	if result.Type() != work.WorkTypeStory {
+		t.Errorf("expected type story, got %s", result.Type())
 	}
 	if result.Title != "Build login page" {
 		t.Errorf("expected title 'Build login page', got %q", result.Title)
@@ -49,22 +48,20 @@ func TestHandler_WorkCreate_Story(t *testing.T) {
 	}
 }
 
-func TestHandler_WorkCreate_TaskWithParent(t *testing.T) {
+func TestHandler_WorkCreate_TaskUnderStory(t *testing.T) {
 	env := newTestEnv(t, &mockAgent{})
 
-	// Create parent story
+	// Create the story the task hangs under
 	storyResp := env.call("work.create", rpc.WorkCreateParams{
-		Type:        work.WorkTypeStory,
 		AgentRoleID: env.testRoleID,
 		Title:       "Parent story",
 	})
 	var story work.Work
 	json.Unmarshal(storyResp.Result, &story)
 
-	// Create task under story with explicit agent_role_id
+	// story_id is the whole of the request's shape: naming one makes a task.
 	resp := env.call("work.create", rpc.WorkCreateParams{
-		Type:        work.WorkTypeTask,
-		ParentID:    story.ID,
+		StoryID:     story.ID,
 		AgentRoleID: env.testRoleID,
 		Title:       "Implement auth",
 	})
@@ -76,28 +73,72 @@ func TestHandler_WorkCreate_TaskWithParent(t *testing.T) {
 	var result work.Work
 	json.Unmarshal(resp.Result, &result)
 
-	if result.ParentID != story.ID {
-		t.Errorf("expected parent_id %s, got %s", story.ID, result.ParentID)
+	if result.StoryID != story.ID {
+		t.Errorf("expected story_id %s, got %s", story.ID, result.StoryID)
 	}
-	if result.Type != work.WorkTypeTask {
-		t.Errorf("expected type task, got %s", result.Type)
+	if result.Type() != work.WorkTypeTask {
+		t.Errorf("expected type task, got %s", result.Type())
 	}
 	if result.AgentRoleID != env.testRoleID {
 		t.Errorf("expected agent_role_id %q, got %q", env.testRoleID, result.AgentRoleID)
 	}
 }
 
-func TestHandler_WorkCreate_InvalidType(t *testing.T) {
+// The create and start replies answer with the same shape the detail does, so
+// the kind of the item a call just acted on is read the same way everywhere. A
+// key that is merely present proves nothing: what the caller needs is the kind
+// derived from the story_id the reply itself carries, which is why each case
+// asserts the value and both kinds are covered.
+func TestHandler_WorkCreateAndStart_CarryTheDerivedType(t *testing.T) {
 	env := newTestEnv(t, &mockAgent{})
 
-	resp := env.call("work.create", rpc.WorkCreateParams{
-		Type:        "invalid",
+	storyResp := env.call("work.create", rpc.WorkCreateParams{
 		AgentRoleID: env.testRoleID,
-		Title:       "Bad type",
+		Title:       "Feature X",
 	})
+	var story rpc.WorkDetailItem
+	if err := json.Unmarshal(storyResp.Result, &story); err != nil {
+		t.Fatalf("unmarshal story create result: %v", err)
+	}
+	if story.Type != work.WorkTypeStory {
+		t.Errorf("work.create of a story: type = %q, want %q", story.Type, work.WorkTypeStory)
+	}
 
-	if resp.Error == nil {
-		t.Fatal("expected error for invalid type")
+	taskResp := env.call("work.create", rpc.WorkCreateParams{
+		StoryID:     story.ID,
+		AgentRoleID: env.testRoleID,
+		Title:       "Implement backend",
+	})
+	var task rpc.WorkDetailItem
+	if err := json.Unmarshal(taskResp.Result, &task); err != nil {
+		t.Fatalf("unmarshal task create result: %v", err)
+	}
+	if task.Type != work.WorkTypeTask {
+		t.Errorf("work.create of a task: type = %q, want %q", task.Type, work.WorkTypeTask)
+	}
+
+	for _, tc := range []struct {
+		name string
+		id   string
+		want work.WorkType
+	}{
+		{"story", story.ID, work.WorkTypeStory},
+		{"task", task.ID, work.WorkTypeTask},
+	} {
+		resp := env.call("work.start", rpc.WorkStartParams{ID: tc.id})
+		if resp.Error != nil {
+			t.Fatalf("work.start %s: unexpected error: %s", tc.name, resp.Error.Message)
+		}
+		var started rpc.WorkDetailItem
+		if err := json.Unmarshal(resp.Result, &started); err != nil {
+			t.Fatalf("unmarshal %s start result: %v", tc.name, err)
+		}
+		if started.ID != tc.id {
+			t.Errorf("work.start %s: id = %q, want %q", tc.name, started.ID, tc.id)
+		}
+		if started.Type != tc.want {
+			t.Errorf("work.start %s: type = %q, want %q", tc.name, started.Type, tc.want)
+		}
 	}
 }
 
@@ -105,7 +146,6 @@ func TestHandler_WorkCreate_EmptyTitle(t *testing.T) {
 	env := newTestEnv(t, &mockAgent{})
 
 	resp := env.call("work.create", rpc.WorkCreateParams{
-		Type:        work.WorkTypeStory,
 		AgentRoleID: env.testRoleID,
 		Title:       "",
 	})
@@ -115,17 +155,31 @@ func TestHandler_WorkCreate_EmptyTitle(t *testing.T) {
 	}
 }
 
-func TestHandler_WorkCreate_TaskWithoutParent(t *testing.T) {
+// The only thing a work.create can now get wrong about the hierarchy: a
+// story_id that does not name a story. A task cannot hold tasks, so the third
+// level is refused here rather than being unrepresentable — the id is a string
+// and the caller can put anything in it.
+func TestHandler_WorkCreate_StoryIDMustNameAStory(t *testing.T) {
 	env := newTestEnv(t, &mockAgent{})
+	story := createStory(t, env, "Story")
 
-	resp := env.call("work.create", rpc.WorkCreateParams{
-		Type:        work.WorkTypeTask,
+	taskResp := env.call("work.create", rpc.WorkCreateParams{
+		StoryID:     story.ID,
 		AgentRoleID: env.testRoleID,
-		Title:       "Orphan task",
+		Title:       "A task",
 	})
+	var task work.Work
+	json.Unmarshal(taskResp.Result, &task)
 
-	if resp.Error == nil {
-		t.Fatal("expected error for task without parent")
+	for _, storyID := range []string{task.ID, "no-such-work"} {
+		resp := env.call("work.create", rpc.WorkCreateParams{
+			StoryID:     storyID,
+			AgentRoleID: env.testRoleID,
+			Title:       "Third level",
+		})
+		if resp.Error == nil {
+			t.Errorf("work.create with story_id %q was accepted, want a refusal", storyID)
+		}
 	}
 }
 
@@ -133,7 +187,6 @@ func TestHandler_WorkCreate_MissingAgentRoleID(t *testing.T) {
 	env := newTestEnv(t, &mockAgent{})
 
 	resp := env.call("work.create", rpc.WorkCreateParams{
-		Type:  work.WorkTypeStory,
 		Title: "Story without role",
 	})
 
@@ -149,7 +202,6 @@ func TestHandler_WorkCreate_InvalidAgentRoleID(t *testing.T) {
 	env := newTestEnv(t, &mockAgent{})
 
 	resp := env.call("work.create", rpc.WorkCreateParams{
-		Type:        work.WorkTypeStory,
 		AgentRoleID: "nonexistent-role-id",
 		Title:       "Story with bad role",
 	})
@@ -169,7 +221,6 @@ func TestHandler_WorkUpdate_Title(t *testing.T) {
 
 	// Create a story
 	createResp := env.call("work.create", rpc.WorkCreateParams{
-		Type:        work.WorkTypeStory,
 		AgentRoleID: env.testRoleID,
 		Title:       "Original title",
 	})
@@ -209,7 +260,6 @@ func TestHandler_WorkDelete(t *testing.T) {
 
 	// Create a story
 	createResp := env.call("work.create", rpc.WorkCreateParams{
-		Type:        work.WorkTypeStory,
 		AgentRoleID: env.testRoleID,
 		Title:       "To be deleted",
 	})
@@ -239,7 +289,6 @@ func TestHandler_WorkDelete_WithChildren(t *testing.T) {
 
 	// Create story with a child task
 	storyResp := env.call("work.create", rpc.WorkCreateParams{
-		Type:        work.WorkTypeStory,
 		AgentRoleID: env.testRoleID,
 		Title:       "Parent",
 	})
@@ -247,8 +296,7 @@ func TestHandler_WorkDelete_WithChildren(t *testing.T) {
 	json.Unmarshal(storyResp.Result, &story)
 
 	taskResp := env.call("work.create", rpc.WorkCreateParams{
-		Type:        work.WorkTypeTask,
-		ParentID:    story.ID,
+		StoryID:     story.ID,
 		AgentRoleID: env.testRoleID,
 		Title:       "Child task",
 	})
@@ -276,7 +324,6 @@ func TestHandler_WorkDelete_CascadesSessionDeletion(t *testing.T) {
 
 	// Create story → task, then start the task (which creates a session)
 	storyResp := env.call("work.create", rpc.WorkCreateParams{
-		Type:        work.WorkTypeStory,
 		AgentRoleID: env.testRoleID,
 		Title:       "Parent story",
 	})
@@ -284,8 +331,7 @@ func TestHandler_WorkDelete_CascadesSessionDeletion(t *testing.T) {
 	json.Unmarshal(storyResp.Result, &story)
 
 	taskResp := env.call("work.create", rpc.WorkCreateParams{
-		Type:        work.WorkTypeTask,
-		ParentID:    story.ID,
+		StoryID:     story.ID,
 		AgentRoleID: env.testRoleID,
 		Title:       "Child task",
 	})
@@ -327,7 +373,6 @@ func TestHandler_WorkStart(t *testing.T) {
 
 	// Create a story, then a task under it
 	storyResp := env.call("work.create", rpc.WorkCreateParams{
-		Type:        work.WorkTypeStory,
 		AgentRoleID: env.testRoleID,
 		Title:       "Feature X",
 	})
@@ -335,8 +380,7 @@ func TestHandler_WorkStart(t *testing.T) {
 	json.Unmarshal(storyResp.Result, &story)
 
 	taskResp := env.call("work.create", rpc.WorkCreateParams{
-		Type:        work.WorkTypeTask,
-		ParentID:    story.ID,
+		StoryID:     story.ID,
 		AgentRoleID: env.testRoleID,
 		Title:       "Implement backend",
 	})
@@ -386,7 +430,6 @@ func TestHandler_WorkStart_AlreadyActive(t *testing.T) {
 
 	// Create and start a story
 	storyResp := env.call("work.create", rpc.WorkCreateParams{
-		Type:        work.WorkTypeStory,
 		AgentRoleID: env.testRoleID,
 		Title:       "Story",
 	})
@@ -412,7 +455,6 @@ func TestHandler_WorkStart_RollbackOnKickoffFailure(t *testing.T) {
 
 	// Create a task under a story
 	storyResp := env.call("work.create", rpc.WorkCreateParams{
-		Type:        work.WorkTypeStory,
 		AgentRoleID: env.testRoleID,
 		Title:       "Feature X",
 	})
@@ -420,8 +462,7 @@ func TestHandler_WorkStart_RollbackOnKickoffFailure(t *testing.T) {
 	json.Unmarshal(storyResp.Result, &story)
 
 	taskResp := env.call("work.create", rpc.WorkCreateParams{
-		Type:        work.WorkTypeTask,
-		ParentID:    story.ID,
+		StoryID:     story.ID,
 		AgentRoleID: env.testRoleID,
 		Title:       "Implement backend",
 	})
@@ -455,7 +496,6 @@ func TestHandler_WorkStart_RollbackAllowsRetry(t *testing.T) {
 	env := newTestEnv(t, mock)
 
 	storyResp := env.call("work.create", rpc.WorkCreateParams{
-		Type:        work.WorkTypeStory,
 		AgentRoleID: env.testRoleID,
 		Title:       "Retry story",
 	})
@@ -486,7 +526,6 @@ func TestHandler_WorkStart_CapturesMainWorktree(t *testing.T) {
 	env := newTestEnv(t, &mockAgent{})
 
 	storyResp := env.call("work.create", rpc.WorkCreateParams{
-		Type:        work.WorkTypeStory,
 		AgentRoleID: env.testRoleID,
 		Title:       "Main story",
 	})
@@ -524,7 +563,6 @@ func TestHandler_WorkStart_CapturesFrontendWorktree(t *testing.T) {
 
 	// A story started while the frontend sits on "feature" pins to it.
 	storyResp := env.call("work.create", rpc.WorkCreateParams{
-		Type:        work.WorkTypeStory,
 		AgentRoleID: env.testRoleID,
 		Title:       "Feature story",
 	})
@@ -542,8 +580,7 @@ func TestHandler_WorkStart_CapturesFrontendWorktree(t *testing.T) {
 
 	// A child created under the started story inherits its worktree.
 	taskResp := env.call("work.create", rpc.WorkCreateParams{
-		Type:        work.WorkTypeTask,
-		ParentID:    story.ID,
+		StoryID:     story.ID,
 		AgentRoleID: env.testRoleID,
 		Title:       "Feature task",
 	})
@@ -570,7 +607,6 @@ func TestHandler_WorkStart_WorktreeImmutableOnRestart(t *testing.T) {
 	}
 
 	storyResp := env.call("work.create", rpc.WorkCreateParams{
-		Type:        work.WorkTypeStory,
 		AgentRoleID: env.testRoleID,
 		Title:       "Feature story",
 	})
@@ -625,12 +661,10 @@ func TestHandler_WorkListSubscribe_WithItems(t *testing.T) {
 
 	// Create some work items
 	env.call("work.create", rpc.WorkCreateParams{
-		Type:        work.WorkTypeStory,
 		AgentRoleID: env.testRoleID,
 		Title:       "Story A",
 	})
 	env.call("work.create", rpc.WorkCreateParams{
-		Type:        work.WorkTypeStory,
 		AgentRoleID: env.testRoleID,
 		Title:       "Story B",
 	})
@@ -671,6 +705,62 @@ func TestHandler_WorkDetailSubscribe_CarriesTheActivity(t *testing.T) {
 	}
 	if result.Activity != work.ActivityWaitingChildren {
 		t.Errorf("activity = %q, want %q", result.Activity, work.ActivityWaitingChildren)
+	}
+}
+
+// The detail's `type` is derived by rpc.NewWorkDetailItem, and the rpc package
+// asserts that derivation. What it cannot assert is that this reply goes through
+// it: a WorkDetailItem built as a struct literal here compiles and marshals, and
+// leaves `type` empty — which the detail page reads as "not a story", so a story
+// loses its Tasks section and its `Add Task` with nothing red.
+//
+// Both kinds, because an empty value is wrong for one of them whichever way a
+// mistake falls.
+func TestHandler_WorkDetailSubscribe_CarriesTheDerivedType(t *testing.T) {
+	env := newTestEnv(t, &mockAgent{})
+
+	storyResp := env.call("work.create", rpc.WorkCreateParams{
+		AgentRoleID: env.testRoleID,
+		Title:       "A story",
+	})
+	var story work.Work
+	if err := json.Unmarshal(storyResp.Result, &story); err != nil {
+		t.Fatalf("unmarshal story: %v", err)
+	}
+	taskResp := env.call("work.create", rpc.WorkCreateParams{
+		StoryID:     story.ID,
+		AgentRoleID: env.testRoleID,
+		Title:       "A task",
+	})
+	var task work.Work
+	if err := json.Unmarshal(taskResp.Result, &task); err != nil {
+		t.Fatalf("unmarshal task: %v", err)
+	}
+
+	for _, tc := range []struct {
+		name   string
+		workID string
+		want   work.WorkType
+	}{
+		{"story", story.ID, work.WorkTypeStory},
+		{"task", task.ID, work.WorkTypeTask},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			resp := env.call("work.detail.subscribe", rpc.WorkDetailSubscribeParams{
+				ID:     "watch-" + tc.name,
+				WorkID: tc.workID,
+			})
+			if resp.Error != nil {
+				t.Fatalf("unexpected error: %s", resp.Error.Message)
+			}
+			var result rpc.WorkDetailSubscribeResult
+			if err := json.Unmarshal(resp.Result, &result); err != nil {
+				t.Fatalf("unmarshal: %v", err)
+			}
+			if result.Work.Type != tc.want {
+				t.Errorf("detail type = %q, want %q", result.Work.Type, tc.want)
+			}
+		})
 	}
 }
 

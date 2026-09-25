@@ -19,12 +19,13 @@ interface Props {
 	 */
 	tasks?: WorkListItem[];
 	/**
-	 * Slot 1. The list passes a task's parent title; the story detail's children
-	 * section passes nothing, because every row there is a task of the story on
-	 * screen and naming it once per row is noise (docs/project-ui.md §3.1). It is
-	 * the one slot decided by the screen rather than by the work.
+	 * Slot 1. The list passes the title of the story a task belongs to; the story
+	 * detail's Tasks section passes nothing, because every row there is a task of
+	 * the story on screen and naming it once per row is noise
+	 * (docs/project-ui.md §3.1). It is the one slot decided by the screen rather
+	 * than by the work.
 	 */
-	parentTitle?: string;
+	storyTitle?: string;
 	/** Slot 4, resolved by the screen from the role map it already holds. */
 	roleName?: string;
 	/**
@@ -61,7 +62,7 @@ interface Props {
 export default function WorkRow({
 	work,
 	tasks,
-	parentTitle,
+	storyTitle,
 	roleName,
 	showUpdatedAt,
 	headingLevel = 3,
@@ -101,7 +102,7 @@ export default function WorkRow({
 	// Fixed order, one appearance rule each, and the line clips from the right —
 	// which is what puts depth and state first and the timestamp last.
 	const slots: { key: string; node: ReactNode; pushedRight?: boolean }[] = [];
-	if (parentTitle) {
+	if (storyTitle) {
 		// Ahead of the state, which overrules the order docs/project-ui.md §3 gave
 		// these two: that order was right while the state had exactly one channel,
 		// and the state now has three (this word, the left edge, the glyph) while
@@ -115,12 +116,12 @@ export default function WorkRow({
 		// reader cannot tell from the role and worktree slots beside it — those are
 		// bare titles too, and the arrow was the only thing distinguishing this one.
 		slots.push({
-			key: "parent",
+			key: "story",
 			node: (
 				<span className="flex items-center gap-1 text-th-text-secondary">
 					<CornerDownRight className="size-3 shrink-0" aria-hidden="true" />
 					<span className="sr-only">in </span>
-					<span className="max-w-[10rem] truncate">{parentTitle}</span>
+					<span className="max-w-[10rem] truncate">{storyTitle}</span>
 				</span>
 			),
 		});

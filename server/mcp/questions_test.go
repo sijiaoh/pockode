@@ -153,7 +153,7 @@ func TestQuestionPost_RefusedOnAClosedWork(t *testing.T) {
 	exec, sessions, store, roleID := newQuestionExec(t)
 
 	created, err := store.Create(context.Background(), work.Work{
-		Type: work.WorkTypeStory, Title: "Ship it", AgentRoleID: roleID,
+		Title: "Ship it", AgentRoleID: roleID,
 	})
 	if err != nil {
 		t.Fatalf("create work: %v", err)
@@ -348,7 +348,7 @@ func TestAskingTheUser_TheThreeTextsMakeTheSameClaims(t *testing.T) {
 func startedWork(t *testing.T, store work.Store, roleID, title, sessionID string) string {
 	t.Helper()
 	created, err := store.Create(context.Background(), work.Work{
-		Type: work.WorkTypeStory, Title: title, AgentRoleID: roleID,
+		Title: title, AgentRoleID: roleID,
 	})
 	if err != nil {
 		t.Fatalf("create work: %v", err)

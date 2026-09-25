@@ -224,7 +224,7 @@ values this replaces (`in_progress`, `needs_input`, `waiting`) were exactly
 `active` crossed with a wait, which is why converting the stored ones needed no
 guessing and no migration script.
 
-Beside the status, an active work carries a **`wait`** — `child` (`work_wait`),
+Beside the status, an active work carries a **`wait`** — `child` (`story_wait`),
 the only value — which only the agent can declare. A waiting work is still
 `active`: the engine still owns it, it simply must not be nudged to carry on. It
 is cleared by something that arrives from *outside* the session, which is what
@@ -250,7 +250,7 @@ as one went stale.
 
 **A wait must have something that could still end it, and that is checked at
 both ends.** A `child` wait is ended by one event only — a subtask closing — so
-`work_wait` is refused when no subtask is running, and a wait whose last running
+`story_wait` is refused when no subtask is running, and a wait whose last running
 subtask leaves *without* closing is cleared by the engine, which tells the agent
 what became of it. Neither half is optional, because the failure is silent: a
 work stuck `active` on a wait nothing can end is never nudged (that is what a
@@ -348,7 +348,7 @@ nowhere:
 > for when nothing is happening.
 
 The phase outranks the wait because a wait is a standing intention and a phase is
-a fact about this second: an agent that calls `work_wait` and then keeps
+a fact about this second: an agent that calls `story_wait` and then keeps
 writing for ten seconds *is* running, and the moment the turn settles the wait
 takes over. The alternative needs a priority table between two kinds of waiting
 that legitimately coexist, and every entry in such a table is an arbitrary choice

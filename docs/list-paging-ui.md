@@ -82,7 +82,7 @@ The same rule reaches one screen this document did not anticipate. A story's
 list was every work item. Once it is `Current` and holds nothing closed, a
 closed story reloaded on — a daily act, on a URL people share — shows no tasks
 while its own row claims `{closed}/{total}` over them. So the detail answers for
-its own subtree instead of borrowing the list's
+its own tasks instead of borrowing the list's
 ([code/work-system.md](code/work-system.md#the-list-holds-rows-the-detail-page-holds-the-item)).
 A story bounds its children and §7 already refuses to page them, so this asks
 for nothing unbounded.

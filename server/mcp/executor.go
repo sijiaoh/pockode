@@ -114,7 +114,7 @@ func (e *Executor) SetWorkEngine(engine WorkEngine) {
 // what keeps a tool call and a tap on a button the same act; it is required
 // whenever any work_* tool is reachable. settingsStore keeps the default agent
 // role in sync on reset; a nil settingsStore skips that update. worktrees
-// prepares the worktree work_start names, and like workOps is required
+// prepares the worktree story_start names, and like workOps is required
 // whenever the work_* tools are reachable. sessions is the session layer the
 // question_* tools act on, and is required whenever those are reachable. Nils
 // are tolerated only where the corresponding tools are unreachable (e.g. narrow
@@ -130,24 +130,32 @@ func NewExecutor(workStore work.Store, agentRoleStore agentrole.Store, workOps *
 // held on the Executor because one Executor serves every session at once.
 func (e *Executor) Execute(ctx context.Context, caller Caller, name string, args json.RawMessage) (string, error) {
 	switch name {
-	case "work_list":
-		return e.workList(args)
-	case "work_create":
-		return e.workCreate(ctx, args)
+	case "story_list":
+		return e.storyList()
+	case "task_list":
+		return e.taskList(args)
+	case "story_create":
+		return e.storyCreate(ctx, args)
+	case "task_create":
+		return e.taskCreate(ctx, args)
 	case "work_update":
 		return e.workUpdate(ctx, args)
 	case "work_get":
 		return e.workGet(args)
 	case "work_delete":
 		return e.workDelete(ctx, args)
-	case "work_start":
-		return e.workStart(ctx, args)
+	case "story_start":
+		return e.storyStart(ctx, args)
+	case "task_start":
+		return e.taskStart(ctx, args)
 	case "work_needs_input":
 		return e.workNeedsInput(ctx, args)
+	case "work_create", "work_list", "work_start", "work_wait":
+		return e.retiredBySplit(name)
 	case "work_reopen":
 		return e.workReopen(ctx, args)
-	case "work_wait":
-		return e.workWait(ctx, args)
+	case "story_wait":
+		return e.storyWait(ctx, args)
 	case "step_done":
 		return e.stepDone(ctx, args)
 	case "work_comment_add":
@@ -173,8 +181,8 @@ func (e *Executor) Execute(ctx context.Context, caller Caller, name string, args
 	}
 }
 
-// workSummary is one entry of the work_list result: enough for the agent to
-// pick an item and walk the story/task tree, and nothing more.
+// workSummary is one entry of a story_list / task_list result: enough for the
+// agent to pick an item and walk the story/task tree, and nothing more.
 //
 // Body is left out to contain prompt injection, not to save bytes. A body is
 // user-authored instructions, so a list that carried them would let every
@@ -192,9 +200,12 @@ func (e *Executor) Execute(ctx context.Context, caller Caller, name string, args
 // mean anything to an agent, and sharing the type would let a field added for a
 // badge widen every agent's list output.
 type workSummary struct {
-	ID          string `json:"id"`
+	ID string `json:"id"`
+	// Type is derived from StoryID, never stored, and is sent beside it so an
+	// agent reads a work item's kind the same way here as the web client does on
+	// a row (rpc.WorkListItem).
 	Type        string `json:"type"`
-	ParentID    string `json:"parent_id,omitempty"`
+	StoryID     string `json:"story_id,omitempty"`
 	AgentRoleID string `json:"agent_role_id,omitempty"`
 	Status      string `json:"status"`
 	Title       string `json:"title"`
@@ -215,46 +226,63 @@ type workDetail struct {
 	PendingQuestions []session.PendingQuestion `json:"pending_questions,omitempty"`
 }
 
-// newWorkSummary narrows a work item to its summary. Both tools go through here
-// so the narrowing is decided in one place.
+// newWorkSummary narrows a work item to its summary. Every tool that returns one
+// goes through here, so the narrowing — and the derivation of Type — is decided
+// in one place.
 func newWorkSummary(w work.Work) workSummary {
 	return workSummary{
 		ID:          w.ID,
-		Type:        string(w.Type),
-		ParentID:    w.ParentID,
+		Type:        string(w.Type()),
+		StoryID:     w.StoryID,
 		AgentRoleID: w.AgentRoleID,
 		Status:      string(w.Status),
 		Title:       w.Title,
 	}
 }
 
-func (e *Executor) workList(args json.RawMessage) (string, error) {
+func (e *Executor) storyList() (string, error) {
+	works, err := e.workStore.List()
+	if err != nil {
+		return "", err
+	}
+
+	var stories []work.Work
+	for _, w := range works {
+		if w.Type() == work.WorkTypeStory {
+			stories = append(stories, w)
+		}
+	}
+	return marshalSummaries(stories)
+}
+
+func (e *Executor) taskList(args json.RawMessage) (string, error) {
 	var params struct {
-		ParentID string `json:"parent_id"`
+		StoryID string `json:"story_id"`
 	}
 	if len(args) > 0 {
 		if err := json.Unmarshal(args, &params); err != nil {
 			return "", userErrorf("invalid arguments: %w", err)
 		}
 	}
+	// Not defensiveness about a missing argument: an empty story_id is what a
+	// story's own StoryID is, so work.TasksOf would be being asked a question
+	// with no answer. Saying so beats the empty list a silent fall-through
+	// would return.
+	if params.StoryID == "" {
+		return "", userErrorf("story_id is required: name the story whose tasks you want, or call story_list to see the stories")
+	}
 
 	works, err := e.workStore.List()
 	if err != nil {
 		return "", err
 	}
+	return marshalSummaries(work.TasksOf(works, params.StoryID))
+}
 
-	if params.ParentID != "" {
-		var filtered []work.Work
-		for _, w := range works {
-			if w.ParentID == params.ParentID {
-				filtered = append(filtered, w)
-			}
-		}
-		works = filtered
-	}
-
-	// Always return JSON array for consistent parsing by the AI agent.
-	// Formatted text would risk prompt injection via user-supplied titles.
+// marshalSummaries renders a listing. Always a JSON array, for consistent
+// parsing by the AI agent: formatted text would risk prompt injection via
+// user-supplied titles.
+func marshalSummaries(works []work.Work) (string, error) {
 	items := make([]workSummary, len(works))
 	for i, w := range works {
 		items[i] = newWorkSummary(w)
@@ -266,13 +294,31 @@ func (e *Executor) workList(args json.RawMessage) (string, error) {
 	return string(b), nil
 }
 
-func (e *Executor) workCreate(ctx context.Context, args json.RawMessage) (string, error) {
+func (e *Executor) storyCreate(ctx context.Context, args json.RawMessage) (string, error) {
+	return e.createWork(ctx, args, "")
+}
+
+func (e *Executor) taskCreate(ctx context.Context, args json.RawMessage) (string, error) {
 	var params struct {
-		Type        work.WorkType `json:"type"`
-		ParentID    string        `json:"parent_id"`
-		Title       string        `json:"title"`
-		Body        string        `json:"body"`
-		AgentRoleID string        `json:"agent_role_id"`
+		StoryID string `json:"story_id"`
+	}
+	if err := json.Unmarshal(args, &params); err != nil {
+		return "", userErrorf("invalid arguments: %w", err)
+	}
+	if params.StoryID == "" {
+		return "", userErrorf("story_id is required: a task belongs to a story. Use story_create for a top-level story")
+	}
+	return e.createWork(ctx, args, params.StoryID)
+}
+
+// createWork is the whole of both creation tools. storyID is what the tool the
+// agent picked decides — nothing in the arguments can contradict it, which is
+// why the split removed the type argument rather than validating it.
+func (e *Executor) createWork(ctx context.Context, args json.RawMessage, storyID string) (string, error) {
+	var params struct {
+		Title       string `json:"title"`
+		Body        string `json:"body"`
+		AgentRoleID string `json:"agent_role_id"`
 	}
 	if err := json.Unmarshal(args, &params); err != nil {
 		return "", userErrorf("invalid arguments: %w", err)
@@ -289,8 +335,7 @@ func (e *Executor) workCreate(ctx context.Context, args json.RawMessage) (string
 	}
 
 	created, err := e.workStore.Create(ctx, work.Work{
-		Type:        params.Type,
-		ParentID:    params.ParentID,
+		StoryID:     storyID,
 		Title:       params.Title,
 		Body:        params.Body,
 		AgentRoleID: params.AgentRoleID,
@@ -299,7 +344,7 @@ func (e *Executor) workCreate(ctx context.Context, args json.RawMessage) (string
 		return "", err
 	}
 
-	return fmt.Sprintf("Created %s %q (ID: %s)", created.Type, created.Title, created.ID), nil
+	return fmt.Sprintf("Created %s %q (ID: %s)", created.Type(), created.Title, created.ID), nil
 }
 
 func (e *Executor) workUpdate(ctx context.Context, args json.RawMessage) (string, error) {
@@ -406,7 +451,7 @@ func (e *Executor) workDelete(ctx context.Context, args json.RawMessage) (string
 	return fmt.Sprintf("Deleted work %s", params.ID), nil
 }
 
-func (e *Executor) workStart(ctx context.Context, args json.RawMessage) (string, error) {
+func (e *Executor) storyStart(ctx context.Context, args json.RawMessage) (string, error) {
 	var params struct {
 		ID       string `json:"id"`
 		Worktree string `json:"worktree"`
@@ -414,16 +459,50 @@ func (e *Executor) workStart(ctx context.Context, args json.RawMessage) (string,
 	if err := json.Unmarshal(args, &params); err != nil {
 		return "", userErrorf("invalid arguments: %w", err)
 	}
+	return e.startWork(ctx, params.ID, params.Worktree)
+}
 
-	var note string
+// taskStart takes no worktree, which is the only difference between the two
+// start tools: a task runs where its story runs, so there is nothing to choose.
+// assignWorktree still refuses a task that is named to story_start, because an
+// id is a string and the agent can reach for the wrong tool.
+//
+// It reads the argument anyway, in order to refuse one. Leaving it off the
+// struct would drop it silently, and an agent that asked to place this task
+// somewhere would be told nothing while its request was discarded — the same
+// call story_start answers with a sentence. What is not in the schema is
+// refused, not ignored.
+func (e *Executor) taskStart(ctx context.Context, args json.RawMessage) (string, error) {
+	var params struct {
+		ID       string `json:"id"`
+		Worktree string `json:"worktree"`
+	}
+	if err := json.Unmarshal(args, &params); err != nil {
+		return "", userErrorf("invalid arguments: %w", err)
+	}
 	if params.Worktree != "" {
+		return "", userErrorf("task_start takes no worktree: a task runs in the worktree of the story it belongs to. Start that story in %q with story_start instead", params.Worktree)
+	}
+	return e.startWork(ctx, params.ID, "")
+}
+
+// startWork is both start tools. It deliberately does not check that the id it
+// was given is of the kind the tool names: starting is the same act for a story
+// and a task, and the only thing that actually forks is the worktree, which the
+// two schemas and assignWorktree already settle between them. Refusing
+// story_start on a task would reject a call whose outcome is correct — an id is
+// a string, and an agent that reached for the neighbouring tool still asked for
+// something this can do.
+func (e *Executor) startWork(ctx context.Context, id, worktree string) (string, error) {
+	var note string
+	if worktree != "" {
 		var err error
-		if note, err = e.assignWorktree(ctx, params.ID, params.Worktree); err != nil {
+		if note, err = e.assignWorktree(ctx, id, worktree); err != nil {
 			return "", err
 		}
 	}
 
-	w, err := e.workOps.StartWork(ctx, params.ID)
+	w, err := e.workOps.StartWork(ctx, id)
 	if err != nil {
 		return "", err
 	}
@@ -448,10 +527,11 @@ func (e *Executor) assignWorktree(ctx context.Context, id, name string) (string,
 	if !found {
 		return "", userErrorf("work %s not found", id)
 	}
-	// A subtree shares one worktree: a task runs where its story runs, decided
-	// when the story started, and there is nothing left here to choose.
-	if w.ParentID != "" {
-		return "", userErrorf("work %s is a task: only a story can choose a worktree, and a task runs in the worktree of the story it belongs to. Start its story %s in %q instead", id, w.ParentID, name)
+	// A story and its tasks share one worktree: a task runs where its story
+	// runs, decided when the story started, and there is nothing left here to
+	// choose.
+	if w.StoryID != "" {
+		return "", userErrorf("work %s is a task: only a story can choose a worktree, and a task runs in the worktree of the story it belongs to. Start its story %s in %q instead", id, w.StoryID, name)
 	}
 
 	if err := e.workStore.SetWorktree(ctx, id, name); err != nil {
@@ -489,6 +569,24 @@ func (e *Executor) workNeedsInput(context.Context, json.RawMessage) (string, err
 		"and the answer arrives as a message in this chat")
 }
 
+// retiredBySplit answers the four tools the story/task split replaced, naming
+// the one to call instead. Like work_needs_input it is a user error rather than
+// a failure: nothing broke, and the next call is the right one.
+//
+// It exists for agents that were mid-conversation when the split shipped and
+// still hold the lifecycle rules that named these tools. Delete it with the
+// tool definitions it answers for — see the note on them in tools.go for when
+// that is.
+func (e *Executor) retiredBySplit(name string) (string, error) {
+	replacements := map[string]string{
+		"work_create": "story_create for a top-level story, or task_create (with story_id) for a task under one — there is no type argument any more, naming a story is what makes a task",
+		"work_list":   "story_list for the stories, or task_list (with story_id) for one story's tasks",
+		"work_start":  "story_start (which takes the optional worktree) for a story, or task_start for a task",
+		"work_wait":   "story_wait — only a story has tasks to wait for",
+	}
+	return "", userErrorf("%s is retired: use %s", name, replacements[name])
+}
+
 func (e *Executor) workReopen(ctx context.Context, args json.RawMessage) (string, error) {
 	var params struct {
 		ID string `json:"id"`
@@ -504,7 +602,7 @@ func (e *Executor) workReopen(ctx context.Context, args json.RawMessage) (string
 	return fmt.Sprintf("Reopened work %s", params.ID), nil
 }
 
-func (e *Executor) workWait(ctx context.Context, args json.RawMessage) (string, error) {
+func (e *Executor) storyWait(ctx context.Context, args json.RawMessage) (string, error) {
 	var params struct {
 		ID string `json:"id"`
 	}
@@ -516,7 +614,7 @@ func (e *Executor) workWait(ctx context.Context, args json.RawMessage) (string, 
 		return "", err
 	}
 
-	return fmt.Sprintf("Work %s is now waiting for child work to complete", params.ID), nil
+	return fmt.Sprintf("Story %s is now waiting for its tasks to complete", params.ID), nil
 }
 
 func (e *Executor) stepDone(ctx context.Context, args json.RawMessage) (string, error) {

@@ -85,9 +85,11 @@ func hasCurrentRow(item rpc.WorkListItem) bool {
 // rows held back" — one hidden number spanning two headings would make at least
 // one of them wrong (docs/list-paging-ui.md §4.1).
 //
-// A row of an unrecognised status or type belongs to neither, so the cap never
-// reaches it — the conservative half of the asymmetry above, and what keeps
-// "rows sent plus rows held back" exactly the group the client draws.
+// A row of an unrecognised status belongs to neither, so the cap never reaches
+// it — the conservative half of the asymmetry above, and what keeps "rows sent
+// plus rows held back" exactly the group the client draws. Only the status can
+// be unrecognised: the type is derived from story_id and is always one of the
+// two (work.Work.Type).
 
 // isStoppedRow reports whether a row belongs to the *Stopped* group. Stories
 // and tasks alike: the group's membership rule is the status, and a stopped
@@ -142,8 +144,8 @@ func currentSegment(items []rpc.WorkListItem, groupCap int) (kept []rpc.WorkList
 	// drops happen in.
 	holdsRowChild := make(map[string]bool, len(items))
 	for _, item := range items {
-		if item.ParentID != "" && rows[item.ID] {
-			holdsRowChild[item.ParentID] = true
+		if item.StoryID != "" && rows[item.ID] {
+			holdsRowChild[item.StoryID] = true
 		}
 	}
 
@@ -194,7 +196,7 @@ func currentSegment(items []rpc.WorkListItem, groupCap int) (kept []rpc.WorkList
 		}
 		switch {
 		case rows[item.ID]:
-		case item.ParentID != "" && rows[item.ParentID] && !dropped[item.ParentID]:
+		case item.StoryID != "" && rows[item.StoryID] && !dropped[item.StoryID]:
 			// A task kept for the roll-up on its story's row.
 		case holdsRowChild[item.ID]:
 			// A story kept for the name its task's row prints.
@@ -242,7 +244,7 @@ func archiveSegment(items []rpc.WorkListItem, cursor string, limit int) ([]rpc.W
 	rows := make([]rpc.WorkListItem, 0, len(page))
 	rows = append(rows, page...)
 	for _, item := range items {
-		if item.ParentID != "" && onPage[item.ParentID] {
+		if item.StoryID != "" && onPage[item.StoryID] {
 			rows = append(rows, item)
 		}
 	}

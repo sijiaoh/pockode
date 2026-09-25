@@ -109,15 +109,15 @@ type Store interface {
 	RollbackStart(ctx context.Context, id string, sessionID string, wasRestart bool) error
 
 	// Reopen transitions a closed work item back to active.
-	// This allows users to add more child work items or continue working.
+	// This allows users to add more tasks or continue working.
 	Reopen(ctx context.Context, id string) error
 
-	// SetWorktree records the worktree a top-level work will run in and pins its
-	// whole subtree to that worktree. Only permitted before the work has started
-	// (status open); once started the worktree is immutable. Children normally
-	// inherit their worktree at create time, but any open descendant created
-	// before the parent started still holds the empty default, so this also
-	// propagates the worktree down to those descendants.
+	// SetWorktree records the worktree a story will run in and pins its tasks to
+	// that worktree too. Only permitted before the work has started (status
+	// open); once started the worktree is immutable. Tasks normally inherit
+	// their worktree at create time, but one created before its story started
+	// still holds the empty default, so this also propagates the worktree down
+	// to those.
 	SetWorktree(ctx context.Context, id string, worktree string) error
 
 	AddComment(ctx context.Context, workID, body string) (Comment, error)
@@ -219,35 +219,32 @@ func (s *FileStore) FindBySessionID(sessionID string) (Work, bool, error) {
 // --- Write operations ---
 
 func (s *FileStore) Create(_ context.Context, w Work) (Work, error) {
-	if !ValidateType(w.Type) {
-		return Work{}, fmt.Errorf("%w: invalid type %q", ErrInvalidWork, w.Type)
-	}
 	if w.Title == "" {
 		return Work{}, fmt.Errorf("%w: title is required", ErrInvalidWork)
 	}
 
 	s.worksMu.Lock()
 
-	var parent *Work
-	if w.ParentID != "" {
+	var story *Work
+	if w.StoryID != "" {
 		for i := range s.works {
-			if s.works[i].ID == w.ParentID {
-				parent = &s.works[i]
+			if s.works[i].ID == w.StoryID {
+				story = &s.works[i]
 				break
 			}
 		}
-		if parent == nil {
+		if story == nil {
 			s.worksMu.Unlock()
-			return Work{}, fmt.Errorf("%w: parent %q not found", ErrInvalidWork, w.ParentID)
+			return Work{}, fmt.Errorf("%w: story %q not found", ErrInvalidWork, w.StoryID)
 		}
-	}
-	if err := ValidateParent(w.Type, parent); err != nil {
-		s.worksMu.Unlock()
-		return Work{}, err
-	}
-	if parent != nil && parent.Status == StatusClosed {
-		s.worksMu.Unlock()
-		return Work{}, fmt.Errorf("%w: parent %s is closed; reopen it first to add children", ErrInvalidWork, parent.ID)
+		if err := ValidateStory(*story); err != nil {
+			s.worksMu.Unlock()
+			return Work{}, err
+		}
+		if story.Status == StatusClosed {
+			s.worksMu.Unlock()
+			return Work{}, fmt.Errorf("%w: story %s is closed; reopen it first to add tasks", ErrInvalidWork, story.ID)
+		}
 	}
 
 	if w.AgentRoleID == "" {
@@ -255,18 +252,17 @@ func (s *FileStore) Create(_ context.Context, w Work) (Work, error) {
 		return Work{}, fmt.Errorf("%w: agent_role_id is required", ErrInvalidWork)
 	}
 
-	// Child work inherits its parent's worktree. Since children are created by
-	// the parent's running agent, the parent already has its worktree fixed.
+	// A task inherits its story's worktree. Since tasks are created by the
+	// story's running agent, the story already has its worktree fixed.
 	worktree := w.Worktree
-	if parent != nil {
-		worktree = parent.Worktree
+	if story != nil {
+		worktree = story.Worktree
 	}
 
 	now := time.Now()
 	work := Work{
 		ID:          uuid.Must(uuid.NewV7()).String(),
-		Type:        w.Type,
-		ParentID:    w.ParentID,
+		StoryID:     w.StoryID,
 		AgentRoleID: w.AgentRoleID,
 		Title:       w.Title,
 		Body:        w.Body,
@@ -330,8 +326,8 @@ func (s *FileStore) Delete(_ context.Context, id string) error {
 		return ErrWorkNotFound
 	}
 
-	// Collect the target and all descendants for cascade delete.
-	deleteIDs := CollectDescendantIDs(s.works, id)
+	// Collect the target and its tasks for cascade delete.
+	deleteIDs := subtreeIDs(s.works, id)
 
 	var deleted []Work
 	newWorks := make([]Work, 0, len(s.works)-len(deleteIDs))
@@ -524,11 +520,11 @@ func (s *FileStore) ClearNudges(_ context.Context, id string) error {
 
 // SetChildWait and ClearChildWaitIfStranded are the two transitions here not
 // written through setLiveStatus: their condition spans the work *and its
-// children*, and setLiveStatus hands a mutate func the one record it is
-// changing. Reading the siblings outside the lock is the bug they exist to
-// remove, so each takes the lock itself.
+// tasks*, and setLiveStatus hands a mutate func the one record it is changing.
+// Reading the tasks outside the lock is the bug they exist to remove, so each
+// takes the lock itself.
 //
-// HasActiveChild is the condition, and it is written once for both. "Is there
+// HasActiveTask is the condition, and it is written once for both. "Is there
 // still something that could close" is one question; a wait set on one answer
 // and cleared on another would be a wait that argues with itself.
 func (s *FileStore) SetChildWait(_ context.Context, id string) (bool, error) {
@@ -543,7 +539,7 @@ func (s *FileStore) SetChildWait(_ context.Context, id string) (bool, error) {
 		s.worksMu.Unlock()
 		return false, fmt.Errorf("cannot set the wait of work %s: %w", id, err)
 	}
-	if !HasActiveChild(s.works, id) {
+	if !HasActiveTask(s.works, id) {
 		s.worksMu.Unlock()
 		return false, nil
 	}
@@ -580,7 +576,7 @@ func (s *FileStore) ClearChildWaitIfStranded(_ context.Context, id string) (bool
 		s.worksMu.Unlock()
 		return false, ErrWorkNotFound
 	}
-	if w := s.works[idx]; w.Status != StatusActive || w.Wait != WaitChild || HasActiveChild(s.works, id) {
+	if w := s.works[idx]; w.Status != StatusActive || w.Wait != WaitChild || HasActiveTask(s.works, id) {
 		s.worksMu.Unlock()
 		return false, nil
 	}
@@ -598,13 +594,17 @@ func (s *FileStore) ClearChildWaitIfStranded(_ context.Context, id string) (bool
 	return true, nil
 }
 
-// HasActiveChild reports whether any direct child of parentID is active. It is
-// the one condition a wait on children depends on, so it is written once and
-// read both by the store (under its lock) and by whoever is holding a listing
-// already.
-func HasActiveChild(works []Work, parentID string) bool {
+// HasActiveTask reports whether any task of storyID is active. It is the one
+// condition a wait on tasks depends on, so it is written once and read both by
+// the store (under its lock) and by whoever is holding a listing already.
+//
+// The empty id answers false, for the reason TasksOf gives at length.
+func HasActiveTask(works []Work, storyID string) bool {
+	if storyID == "" {
+		return false
+	}
 	for _, w := range works {
-		if w.ParentID == parentID && w.Status == StatusActive {
+		if w.StoryID == storyID && w.Status == StatusActive {
 			return true
 		}
 	}
@@ -758,19 +758,19 @@ func (s *FileStore) SetWorktree(_ context.Context, id string, worktree string) e
 		return fmt.Errorf("%w: worktree is immutable once work %s has started (status %s)", ErrInvalidWork, id, root.Status)
 	}
 
-	// Pin the whole subtree to one worktree. Children normally inherit at create
-	// time, but an open descendant created before this top-level work started
-	// still holds the empty default; bring those along so "a subtree shares one
-	// worktree" holds regardless of create ordering. Started descendants keep
-	// their fixed worktree and are left untouched.
-	descendants := CollectDescendantIDs(s.works, id)
+	// Pin the story and its tasks to one worktree. Tasks normally inherit at
+	// create time, but an open task created before its story started still holds
+	// the empty default; bring those along so "a story and its tasks share one
+	// worktree" holds regardless of create ordering. Started tasks keep their
+	// fixed worktree and are left untouched.
+	subtree := subtreeIDs(s.works, id)
 
 	prev := s.snapshotWorks()
 	now := time.Now()
 	modified := map[string]bool{}
 	for i := range s.works {
 		w := &s.works[i]
-		if !descendants[w.ID] || w.Worktree == worktree || w.Status != StatusOpen {
+		if !subtree[w.ID] || w.Worktree == worktree || w.Status != StatusOpen {
 			continue
 		}
 		w.Worktree = worktree
@@ -1005,17 +1005,39 @@ func UnclosedWorkByWorktree(works []Work, worktree string) []Work {
 	return unclosed
 }
 
-// CollectDescendantIDs returns a set containing rootID and all transitive descendants.
-func CollectDescendantIDs(works []Work, rootID string) map[string]bool {
-	ids := map[string]bool{rootID: true}
-	for changed := true; changed; {
-		changed = false
-		for _, w := range works {
-			if w.ParentID != "" && ids[w.ParentID] && !ids[w.ID] {
-				ids[w.ID] = true
-				changed = true
-			}
+// TasksOf returns the tasks belonging to storyID, in listing order. The
+// hierarchy is two levels by construction — a work with a StoryID is a task and
+// holds none of its own — so this one query is the whole of "what is below this
+// work", and nothing here walks or closes over anything.
+//
+// It replaced a transitive-closure walk that no caller had a third level to
+// feed. Passing a task's id is not an error: it simply has no tasks.
+//
+// The empty id answers with nothing, and that is the one case worth spelling
+// out: "" is how a story spells its *own* StoryID, so matching on it would
+// answer "every story in the project" to a question that meant "the tasks of no
+// story" — and subtreeIDs would hand that to a cascade delete. Writing
+// TasksOf(works, w.StoryID) to find a work's siblings is the natural way to
+// reach it.
+func TasksOf(works []Work, storyID string) []Work {
+	if storyID == "" {
+		return nil
+	}
+	var tasks []Work
+	for _, w := range works {
+		if w.StoryID == storyID {
+			tasks = append(tasks, w)
 		}
+	}
+	return tasks
+}
+
+// subtreeIDs returns id together with the ids of its tasks — everything a
+// cascade over one work covers.
+func subtreeIDs(works []Work, id string) map[string]bool {
+	ids := map[string]bool{id: true}
+	for _, t := range TasksOf(works, id) {
+		ids[t.ID] = true
 	}
 	return ids
 }

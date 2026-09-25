@@ -2,10 +2,12 @@ package work
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 )
@@ -24,16 +26,16 @@ const testRoleID = "test-role-id"
 
 func createStory(t *testing.T, s *FileStore, title string) Work {
 	t.Helper()
-	w, err := s.Create(context.Background(), Work{Type: WorkTypeStory, Title: title, AgentRoleID: testRoleID})
+	w, err := s.Create(context.Background(), Work{Title: title, AgentRoleID: testRoleID})
 	if err != nil {
 		t.Fatalf("Create story %q: %v", title, err)
 	}
 	return w
 }
 
-func createTask(t *testing.T, s *FileStore, parentID, title string) Work {
+func createTask(t *testing.T, s *FileStore, storyID, title string) Work {
 	t.Helper()
-	w, err := s.Create(context.Background(), Work{Type: WorkTypeTask, ParentID: parentID, Title: title, AgentRoleID: testRoleID})
+	w, err := s.Create(context.Background(), Work{StoryID: storyID, Title: title, AgentRoleID: testRoleID})
 	if err != nil {
 		t.Fatalf("Create task %q: %v", title, err)
 	}
@@ -110,8 +112,8 @@ func TestCreate_Story(t *testing.T) {
 
 	story := createStory(t, s, "Login feature")
 
-	if story.Type != WorkTypeStory {
-		t.Errorf("type = %q, want %q", story.Type, WorkTypeStory)
+	if story.Type() != WorkTypeStory {
+		t.Errorf("type = %q, want %q", story.Type(), WorkTypeStory)
 	}
 	if story.Title != "Login feature" {
 		t.Errorf("title = %q, want %q", story.Title, "Login feature")
@@ -130,41 +132,35 @@ func TestCreate_Task(t *testing.T) {
 
 	task := createTask(t, s, story.ID, "Task")
 
-	if task.ParentID != story.ID {
-		t.Errorf("parent_id = %q, want %q", task.ParentID, story.ID)
+	if task.StoryID != story.ID {
+		t.Errorf("story_id = %q, want %q", task.StoryID, story.ID)
 	}
 }
 
-func TestCreate_TaskRequiresParent(t *testing.T) {
-	s := newTestStore(t)
-	_, err := s.Create(context.Background(), Work{Type: WorkTypeTask, Title: "Orphan", AgentRoleID: testRoleID})
-	if err == nil {
-		t.Fatal("expected error for task without parent")
-	}
-}
-
-func TestCreate_TaskCannotBeUnderTask(t *testing.T) {
+// The only shape rule left: story_id must name a story. "A task needs a parent"
+// and "a story must be top-level" are not testable any more — a work is
+// whichever its story_id says, so neither can be asked for.
+func TestCreate_StoryIDMustNameAStory(t *testing.T) {
 	s := newTestStore(t)
 	story := createStory(t, s, "Story")
 	task := createTask(t, s, story.ID, "Task")
 
-	_, err := s.Create(context.Background(), Work{Type: WorkTypeTask, ParentID: task.ID, Title: "Nested task", AgentRoleID: testRoleID})
+	_, err := s.Create(context.Background(), Work{StoryID: task.ID, Title: "Nested task", AgentRoleID: testRoleID})
 	if err == nil {
-		t.Fatal("expected error for task under task")
+		t.Fatal("expected error for a task under a task")
 	}
 }
 
-func TestCreate_StoryMustBeTopLevel(t *testing.T) {
+func TestCreate_StoryIDMustExist(t *testing.T) {
 	s := newTestStore(t)
-	story := createStory(t, s, "Parent")
 
-	_, err := s.Create(context.Background(), Work{Type: WorkTypeStory, ParentID: story.ID, Title: "Nested story", AgentRoleID: testRoleID})
+	_, err := s.Create(context.Background(), Work{StoryID: "nonexistent", Title: "Orphan", AgentRoleID: testRoleID})
 	if err == nil {
-		t.Fatal("expected error for nested story")
+		t.Fatal("expected error for a task naming a story that does not exist")
 	}
 }
 
-func TestCreate_TaskUnderClosedParent(t *testing.T) {
+func TestCreate_TaskUnderClosedStory(t *testing.T) {
 	s := newTestStore(t)
 	story := createStory(t, s, "Story")
 	startWork(t, s, story.ID)
@@ -174,9 +170,9 @@ func TestCreate_TaskUnderClosedParent(t *testing.T) {
 		t.Fatal("precondition: story should be closed")
 	}
 
-	_, err := s.Create(context.Background(), Work{Type: WorkTypeTask, ParentID: story.ID, Title: "Late task", AgentRoleID: testRoleID})
+	_, err := s.Create(context.Background(), Work{StoryID: story.ID, Title: "Late task", AgentRoleID: testRoleID})
 	if err == nil {
-		t.Fatal("expected error for task under closed parent")
+		t.Fatal("expected error for a task under a closed story")
 	}
 }
 
@@ -184,30 +180,22 @@ func TestCreate_AgentRoleIDRequired(t *testing.T) {
 	s := newTestStore(t)
 
 	// Story without agent_role_id
-	_, err := s.Create(context.Background(), Work{Type: WorkTypeStory, Title: "No role"})
+	_, err := s.Create(context.Background(), Work{Title: "No role"})
 	if err == nil {
 		t.Fatal("expected error for story without agent_role_id")
 	}
 
 	// Task without agent_role_id
-	story := createStory(t, s, "Parent")
-	_, err = s.Create(context.Background(), Work{Type: WorkTypeTask, ParentID: story.ID, Title: "No role task"})
+	story := createStory(t, s, "Story")
+	_, err = s.Create(context.Background(), Work{StoryID: story.ID, Title: "No role task"})
 	if err == nil {
 		t.Fatal("expected error for task without agent_role_id")
 	}
 }
 
-func TestCreate_InvalidType(t *testing.T) {
-	s := newTestStore(t)
-	_, err := s.Create(context.Background(), Work{Type: "epic", Title: "X", AgentRoleID: testRoleID})
-	if err == nil {
-		t.Fatal("expected error for invalid type")
-	}
-}
-
 func TestCreate_EmptyTitle(t *testing.T) {
 	s := newTestStore(t)
-	_, err := s.Create(context.Background(), Work{Type: WorkTypeStory, Title: "", AgentRoleID: testRoleID})
+	_, err := s.Create(context.Background(), Work{Title: "", AgentRoleID: testRoleID})
 	if err == nil {
 		t.Fatal("expected error for empty title")
 	}
@@ -409,41 +397,54 @@ func TestDelete_WithChildren(t *testing.T) {
 	}
 }
 
-func TestCollectDescendantIDs(t *testing.T) {
-	// Build a tree: A → B → C, A → D (two branches, one 3 levels deep)
+func TestTasksOf(t *testing.T) {
 	works := []Work{
 		{ID: "A"},
-		{ID: "B", ParentID: "A"},
-		{ID: "C", ParentID: "B"},
-		{ID: "D", ParentID: "A"},
-		{ID: "E"}, // unrelated root
+		{ID: "B", StoryID: "A"},
+		{ID: "C", StoryID: "A"},
+		{ID: "D"}, // unrelated story
+		{ID: "E", StoryID: "D"},
 	}
 
-	ids := CollectDescendantIDs(works, "A")
-
-	for _, want := range []string{"A", "B", "C", "D"} {
-		if !ids[want] {
-			t.Errorf("expected %s in descendants", want)
-		}
+	var got []string
+	for _, task := range TasksOf(works, "A") {
+		got = append(got, task.ID)
 	}
-	if ids["E"] {
-		t.Error("unrelated item E should not be in descendants")
+	if want := []string{"B", "C"}; !slices.Equal(got, want) {
+		t.Errorf("TasksOf(A) = %v, want %v", got, want)
 	}
 }
 
-func TestCollectDescendantIDs_LeafNode(t *testing.T) {
+// "" is how a story spells its own StoryID, so asking for the tasks of no story
+// must answer with none — not with every story in the project, which is what a
+// plain match would give, and which subtreeIDs would hand to a cascade delete.
+func TestTasksOf_EmptyStoryID(t *testing.T) {
 	works := []Work{
 		{ID: "A"},
-		{ID: "B", ParentID: "A"},
+		{ID: "B", StoryID: "A"},
+		{ID: "C"},
 	}
 
-	ids := CollectDescendantIDs(works, "B")
-
-	if !ids["B"] {
-		t.Error("expected B in descendants")
+	if got := TasksOf(works, ""); len(got) != 0 {
+		t.Errorf(`TasksOf("") = %v, want none`, got)
 	}
-	if ids["A"] {
-		t.Error("parent A should not be in descendants of B")
+	if ids := subtreeIDs(works, ""); len(ids) != 1 {
+		t.Errorf(`subtreeIDs("") covers %v, want nothing but the id it was given`, ids)
+	}
+	if HasActiveTask([]Work{{ID: "A", Status: StatusActive}}, "") {
+		t.Error(`HasActiveTask("") = true, want false — an active story is not a task of no story`)
+	}
+}
+
+// A task has no tasks, which is why nothing built on TasksOf needs a walk.
+func TestTasksOf_Task(t *testing.T) {
+	works := []Work{
+		{ID: "A"},
+		{ID: "B", StoryID: "A"},
+	}
+
+	if got := TasksOf(works, "B"); len(got) != 0 {
+		t.Errorf("TasksOf(B) = %v, want none", got)
 	}
 }
 
@@ -957,7 +958,6 @@ func TestConcurrent_CreateStories(t *testing.T) {
 	for i := 0; i < n; i++ {
 		go func(i int) {
 			_, err := s.Create(context.Background(), Work{
-				Type:        WorkTypeStory,
 				Title:       fmt.Sprintf("Story %d", i),
 				AgentRoleID: testRoleID,
 			})
@@ -988,15 +988,14 @@ func TestConcurrent_CreateStories(t *testing.T) {
 
 func TestConcurrent_CreateTasksUnderStory(t *testing.T) {
 	s := newTestStore(t)
-	story := createStory(t, s, "Parent")
+	story := createStory(t, s, "Story")
 	const n = 20
 
 	errs := make(chan error, n)
 	for i := 0; i < n; i++ {
 		go func(i int) {
 			_, err := s.Create(context.Background(), Work{
-				Type:        WorkTypeTask,
-				ParentID:    story.ID,
+				StoryID:     story.ID,
 				Title:       fmt.Sprintf("Task %d", i),
 				AgentRoleID: testRoleID,
 			})
@@ -1083,8 +1082,7 @@ func TestConcurrent_MixedOperations(t *testing.T) {
 		go func(i int) {
 			defer func() { done <- struct{}{} }()
 			s.Create(context.Background(), Work{
-				Type:        WorkTypeTask,
-				ParentID:    story.ID,
+				StoryID:     story.ID,
 				Title:       fmt.Sprintf("Task %d", i),
 				AgentRoleID: testRoleID,
 			})
@@ -1657,7 +1655,7 @@ func TestStepDone_ClosesFromStaleLiveStatus(t *testing.T) {
 // SetChildWait is where the "a wait must have something that could end it" rule
 // is actually applied, so the interesting cases are the store's, not the
 // caller's: it must refuse without writing, and it must still admit a stale
-// `stopped` — an agent able to call work_wait is running whatever status says.
+// `stopped` — an agent able to call story_wait is running whatever status says.
 func TestSetChildWait(t *testing.T) {
 	t.Run("refuses, and writes nothing, with no active child", func(t *testing.T) {
 		store := newTestStore(t)
@@ -1778,7 +1776,7 @@ func TestClearChildWaitIfStranded(t *testing.T) {
 	})
 }
 
-// work_wait must not be lockable by a stale stopped either: the agent reporting
+// story_wait must not be lockable by a stale stopped either: the agent reporting
 // what it is waiting on is running, whatever status says.
 func TestLiveStatusSetters_AcceptStoppedSource(t *testing.T) {
 	tests := []struct {
@@ -1912,6 +1910,123 @@ func TestFileStore_NormalisesOldStatusesOnLoad(t *testing.T) {
 		got := getWork(t, s, id)
 		if got.Status != expected.status || got.Wait != expected.wait {
 			t.Errorf("%s (%s) = %q/%q, want %q/%q", id, got.Title, got.Status, got.Wait, expected.status, expected.wait)
+		}
+	}
+}
+
+// `type` is on the wire (rpc.WorkDetailItem, rpc.WorkListItem) and must stay
+// off the disk: the hierarchy is one field, and a stored kind beside story_id is
+// the second copy of the fact this shape was collapsed to remove — free to
+// disagree with story_id the moment either is written alone.
+//
+// Asserted against the file's bytes rather than against a reloaded Work, because
+// a reloaded Work cannot see the difference: the field is gone from the struct,
+// so an unmarshal would drop a stored `type` and report the same thing either
+// way. What this guards against is a MarshalJSON on the domain type — the
+// tempting way to put a derived key on the wire — since persistIndex marshals
+// the records themselves into this file, so anything Work marshals lands here.
+func TestPersistedIndexCarriesNoType(t *testing.T) {
+	dir := t.TempDir()
+	s, err := NewFileStore(dir)
+	if err != nil {
+		t.Fatalf("NewFileStore: %v", err)
+	}
+	story := createStory(t, s, "A story")
+	task := createTask(t, s, story.ID, "A task")
+
+	raw, err := os.ReadFile(filepath.Join(dir, "works", "index.json"))
+	if err != nil {
+		t.Fatalf("read index: %v", err)
+	}
+	// Parsed rather than searched for `"type"`: the same file holds the comments,
+	// so a comment body is free to contain that text, and a substring match also
+	// depends on how the file happens to be indented.
+	var index struct {
+		Works []map[string]json.RawMessage `json:"works"`
+	}
+	if err := json.Unmarshal(raw, &index); err != nil {
+		t.Fatalf("unmarshal index: %v", err)
+	}
+	if len(index.Works) != 2 {
+		t.Fatalf("index holds %d works, want the story and its task: %s", len(index.Works), raw)
+	}
+
+	for _, record := range index.Works {
+		if _, present := record["type"]; present {
+			t.Errorf("index.json stores a type: %s", record["type"])
+		}
+	}
+	// The task's own record names its story, so the absence above is the absence
+	// of a key rather than of the hierarchy. Found by id rather than by position,
+	// which the store never promised.
+	var stored map[string]json.RawMessage
+	for _, record := range index.Works {
+		if string(record["id"]) == `"`+task.ID+`"` {
+			stored = record
+		}
+	}
+	if stored == nil {
+		t.Fatalf("the task is not in the index: %s", raw)
+	}
+	if got := string(stored["story_id"]); got != `"`+story.ID+`"` {
+		t.Errorf("the stored task names its story as %s, want %q", got, story.ID)
+	}
+}
+
+// The other half of that migration: a record written before the hierarchy was
+// one field. `parent_id` is read as `story_id` — every value it holds on disk
+// is a story id, because nothing deeper was ever creatable — and `type` is read
+// and dropped, because story_id now says the same thing.
+func TestFileStore_ReadsOldParentIDAsStoryIDOnLoad(t *testing.T) {
+	dir := t.TempDir()
+	index := `{"works":[
+		{"id":"s1","type":"story","title":"a story","status":"open","agent_role_id":"r"},
+		{"id":"t1","type":"task","parent_id":"s1","title":"a task","status":"open","agent_role_id":"r"}
+	]}`
+	if err := os.MkdirAll(filepath.Join(dir, "works"), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "works", "index.json"), []byte(index), 0o644); err != nil {
+		t.Fatalf("write index: %v", err)
+	}
+
+	s, err := NewFileStore(dir)
+	if err != nil {
+		t.Fatalf("NewFileStore: %v", err)
+	}
+
+	story := getWork(t, s, "s1")
+	if story.StoryID != "" || story.Type() != WorkTypeStory {
+		t.Errorf("s1 = story_id %q / type %q, want the story it was", story.StoryID, story.Type())
+	}
+	task := getWork(t, s, "t1")
+	if task.StoryID != "s1" || task.Type() != WorkTypeTask {
+		t.Errorf("t1 = story_id %q / type %q, want s1 / task", task.StoryID, task.Type())
+	}
+
+	// And the next write does not put either old key back. Asserted on the
+	// file rather than on LegacyParentID being empty: the claim is about what
+	// lands on disk, and a cleared field only implies it for as long as the tag
+	// says omitempty.
+	createStory(t, s, "any write")
+	raw, err := os.ReadFile(filepath.Join(dir, "works", "index.json"))
+	if err != nil {
+		t.Fatalf("read index: %v", err)
+	}
+	var written struct {
+		Works []map[string]json.RawMessage `json:"works"`
+	}
+	if err := json.Unmarshal(raw, &written); err != nil {
+		t.Fatalf("unmarshal index: %v", err)
+	}
+	for _, record := range written.Works {
+		for _, old := range []string{"parent_id", "type"} {
+			if v, present := record[old]; present {
+				t.Errorf("record %s was written back with %s = %s", record["id"], old, v)
+			}
+		}
+		if string(record["id"]) == `"t1"` && string(record["story_id"]) != `"s1"` {
+			t.Errorf("t1 was written back with story_id %s, want \"s1\"", record["story_id"])
 		}
 	}
 }

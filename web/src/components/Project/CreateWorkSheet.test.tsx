@@ -22,6 +22,8 @@ const role = (id: string, name: string): AgentRole => ({
 	updated_at: "2026-03-04T00:00:00Z",
 });
 
+// `work.create` answers with the whole item, derived `type` and all, exactly as
+// the detail does: the sheet reads the new id off it and navigates.
 const created = (id: string): Work => ({
 	id,
 	type: "story",
@@ -44,7 +46,7 @@ function renderSheet(
 	render(
 		<CreateWorkSheet
 			type={props.type ?? "story"}
-			parentId={props.parentId}
+			storyId={props.storyId}
 			onClose={onClose}
 			onCreated={onCreated}
 		/>,
@@ -72,23 +74,26 @@ describe("CreateWorkSheet", () => {
 		await submitTitle("Rebuild the project page");
 
 		expect(createWork).toHaveBeenCalledWith({
-			type: "story",
-			parent_id: undefined,
+			story_id: undefined,
 			agent_role_id: "role-1",
 			title: "Rebuild the project page",
 		});
 		expect(onCreated).toHaveBeenCalledWith("work-9");
 	});
 
+	// The story is the whole of the request's shape: no `type` rides beside it,
+	// so the sheet cannot ask for a kind that contradicts the story it was
+	// opened from.
 	it("creates a task under the story that opened it", async () => {
 		createWork.mockResolvedValue(created("task-2"));
-		renderSheet({ type: "task", parentId: "story-1" });
+		renderSheet({ type: "task", storyId: "story-1" });
 
 		await submitTitle("Wire the bottom bar");
 
 		expect(createWork).toHaveBeenCalledWith(
-			expect.objectContaining({ type: "task", parent_id: "story-1" }),
+			expect.objectContaining({ story_id: "story-1" }),
 		);
+		expect(createWork.mock.calls[0][0]).not.toHaveProperty("type");
 	});
 
 	// The one thing the user would have to retype is the one thing the server

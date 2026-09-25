@@ -3,10 +3,13 @@
 //
 // Where a wire type is a deliberate narrowing of a domain type rather than a
 // copy of it, the narrowing lives here too (NewSessionListItem), so that what a
-// client is told is decided in one place instead of at each handler.
+// client is told is decided in one place instead of at each handler. The same
+// goes the other way: a type here may also add a field the domain type derives
+// rather than stores (NewWorkDetailItem's `type`), which is how a derived value
+// reaches the wire without reaching the domain type's own storage.
 //
 // The converse is why several methods have params here and no result: a handler
-// that replies with a domain value as it stands (git.show, work.create) defines
+// that replies with a domain value as it stands (git.show, git.branches) defines
 // no result type. An alias for one would not be a type — it narrows nothing and
 // checks nothing — and aliasing some such methods but not others would read as
 // a distinction between them that does not exist. The domain package the
@@ -763,12 +766,16 @@ type SettingsUpdateParams struct {
 
 // Work namespace
 
+// WorkCreateParams says what to create by naming a story or not naming one:
+// with a story_id the new item is that story's task, without it a story. There
+// is no `type` beside it, so a caller cannot ask for one kind and describe
+// another — the contradiction the server used to have to refuse is not
+// expressible (docs/projects/api.md).
 type WorkCreateParams struct {
-	Type        work.WorkType `json:"type"`
-	ParentID    string        `json:"parent_id,omitempty"`
-	AgentRoleID string        `json:"agent_role_id"`
-	Title       string        `json:"title"`
-	Body        string        `json:"body,omitempty"`
+	StoryID     string `json:"story_id,omitempty"`
+	AgentRoleID string `json:"agent_role_id"`
+	Title       string `json:"title"`
+	Body        string `json:"body,omitempty"`
 }
 
 type WorkUpdateParams struct {
@@ -806,7 +813,7 @@ type WorkReopenParams struct {
 // it is unbounded user-authored prose, it is the field most often edited, and no
 // row renders it.
 //
-// Several fields that stayed are not drawn on the row they arrive on. ParentID
+// Several fields that stayed are not drawn on the row they arrive on. StoryID
 // and Status build the story/task tree and answer whether a work's worktree is
 // still free to change, which is what decides if its badge may be shown at all.
 // That rule needs the *whole* list to resolve one item, so it can only be
@@ -815,9 +822,13 @@ type WorkReopenParams struct {
 // carries its own work id (SessionListItem.WorkID), so it no longer reads this
 // list to find out which of its sessions belong to work.
 type WorkListItem struct {
-	ID          string          `json:"id"`
+	ID string `json:"id"`
+	// Type is derived from StoryID rather than stored (work.Work.Type), and is
+	// sent because a row draws it: the server derives it once per row instead
+	// of every client doing it per row. Clients read it and never send it —
+	// work.create takes a story_id and nothing else.
 	Type        work.WorkType   `json:"type"`
-	ParentID    string          `json:"parent_id,omitempty"`
+	StoryID     string          `json:"story_id,omitempty"`
 	AgentRoleID string          `json:"agent_role_id,omitempty"`
 	Title       string          `json:"title"`
 	Status      work.WorkStatus `json:"status"`
@@ -852,8 +863,8 @@ type WorkListItem struct {
 func NewWorkListItem(w work.Work, state work.RowState) WorkListItem {
 	return WorkListItem{
 		ID:                  w.ID,
-		Type:                w.Type,
-		ParentID:            w.ParentID,
+		Type:                w.Type(),
+		StoryID:             w.StoryID,
 		AgentRoleID:         w.AgentRoleID,
 		Title:               w.Title,
 		Status:              w.Status,
@@ -954,8 +965,82 @@ type WorkDetailSubscribeParams struct {
 	WorkID string `json:"work_id"`
 }
 
+// WorkDetailItem is the whole of one work item as the detail reports it: every
+// stored field, plus the `type` the server derives from `story_id` so that the
+// row and the detail name a work item's kind the same way.
+//
+// It exists so that `type` can be on the wire without being on disk. work.Work
+// is marshalled straight into index.json (work.FileStore.persistIndex), so a
+// MarshalJSON on the domain type — the other way to put a derived key on the
+// wire — would write the kind back beside the story_id it is derived from,
+// which is the second copy of the fact the two-level shape exists to remove.
+//
+// The fields are listed out rather than embedding work.Work with a Type beside
+// it. An embedded record with a same-named field compiles while shadowing the
+// method it is meant to call, so the wire could report a kind nobody derived,
+// and an embedded record also hands out whatever work.Work grows next. The cost
+// is that a new stored field has to be added here too, which
+// TestWorkDetailItemCarriesEveryStoredField fails until it is.
+//
+// NudgeCount rides along because this type narrows nothing: it is the stored
+// record plus a derived kind, and dropping a key a client may be reading is a
+// separate decision from adding one. The one field of work.Work with no
+// counterpart here is LegacyParentID, which exists to read an old file and is
+// empty in everything the store hands out.
+type WorkDetailItem struct {
+	ID string `json:"id"`
+	// Type is derived, never stored: work.Work.Type reads it off StoryID. Both
+	// keys are sent because a reader that groups, labels or routes by kind
+	// should not have to know which field encodes it.
+	Type        work.WorkType   `json:"type"`
+	StoryID     string          `json:"story_id,omitempty"`
+	AgentRoleID string          `json:"agent_role_id,omitempty"`
+	Title       string          `json:"title"`
+	Body        string          `json:"body,omitempty"`
+	Status      work.WorkStatus `json:"status"`
+	Wait        work.WorkWait   `json:"wait,omitempty"`
+	NudgeCount  int             `json:"nudge_count,omitempty"`
+	SessionID   string          `json:"session_id,omitempty"`
+	CurrentStep int             `json:"current_step,omitempty"`
+	Worktree    string          `json:"worktree,omitempty"`
+	CreatedAt   time.Time       `json:"created_at"`
+	UpdatedAt   time.Time       `json:"updated_at"`
+}
+
+// NewWorkDetailItem builds the detail's view of a work item. Every producer of
+// one goes through here, so the derivation of `type` happens in a single place
+// — as it does for a row, in NewWorkListItem.
+func NewWorkDetailItem(w work.Work) WorkDetailItem {
+	return WorkDetailItem{
+		ID:          w.ID,
+		Type:        w.Type(),
+		StoryID:     w.StoryID,
+		AgentRoleID: w.AgentRoleID,
+		Title:       w.Title,
+		Body:        w.Body,
+		Status:      w.Status,
+		Wait:        w.Wait,
+		NudgeCount:  w.NudgeCount,
+		SessionID:   w.SessionID,
+		CurrentStep: w.CurrentStep,
+		Worktree:    w.Worktree,
+		CreatedAt:   w.CreatedAt,
+		UpdatedAt:   w.UpdatedAt,
+	}
+}
+
+// WorkDetailSubscribeResult reports the whole of one work item: every stored
+// field of it, `story_id` and the derived `type` alike (WorkDetailItem).
+//
+// Usage and Activity ride *beside* Work rather than in it because they are
+// derived from something the work record knows nothing about — the sessions
+// under it, the turn of its own — and because a reader of a work item should not
+// pay for them. `type` is derived too, but from a field of the record itself, so
+// it costs a comparison and belongs where every other field of the item is: a
+// client reads one key for a kind here and on a row, and never has to know which
+// field encodes it.
 type WorkDetailSubscribeResult struct {
-	Work     work.Work      `json:"work"`
+	Work     WorkDetailItem `json:"work"`
 	Comments []work.Comment `json:"comments"`
 	// Usage is the detail's alone, never Work's — see work.Usage.
 	Usage work.Usage `json:"usage"`

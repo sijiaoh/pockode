@@ -15,7 +15,6 @@ import (
 func createWorktreeWork(t *testing.T, env *testEnv, worktree, title string) work.Work {
 	t.Helper()
 	w, err := env.workStore.Create(bgCtx, work.Work{
-		Type:        work.WorkTypeStory,
 		Title:       title,
 		AgentRoleID: env.testRoleID,
 	})

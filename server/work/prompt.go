@@ -41,7 +41,7 @@ const (
 func NewMessageMeta(w Work, step, total int) *agent.MessageMeta {
 	meta := &agent.MessageMeta{
 		WorkID:   w.ID,
-		WorkType: string(w.Type),
+		WorkType: string(w.Type()),
 		Title:    w.Title,
 	}
 	if total > 0 && step >= 1 && step <= total {
@@ -59,7 +59,7 @@ type promptTemplates struct {
 	RoleReference              string `yaml:"role_reference"`
 	WorkContext                string `yaml:"work_context"`
 	StoryBehaviorRules         string `yaml:"story_behavior_rules"`
-	TaskRulesWithParent        string `yaml:"task_rules_with_parent"`
+	TaskRules                  string `yaml:"task_rules"`
 	LifecycleRules             string `yaml:"lifecycle_rules"`
 	StoryRestartNudge          string `yaml:"story_restart_nudge"`
 	TaskRestartNudge           string `yaml:"task_restart_nudge"`
@@ -133,7 +133,7 @@ func roleReference(agentRoleID string) string {
 func lifecycleRules(w Work) string {
 	return render(prompts.LifecycleRules, map[string]any{
 		"ID":        w.ID,
-		"IsStory":   w.Type == WorkTypeStory,
+		"IsStory":   w.Type() == WorkTypeStory,
 		"MaxNudges": DefaultMaxNudges,
 	})
 }
@@ -154,12 +154,11 @@ func buildBase(w Work) string {
 	})
 
 	sections := []string{render(prompts.PockodeMCPPrefix, nil), role, workCtx}
-	switch {
-	case w.Type == WorkTypeStory:
+	if w.Type() == WorkTypeStory {
 		sections = append(sections, storyBehaviorRules())
-	case w.ParentID != "":
-		sections = append(sections, render(prompts.TaskRulesWithParent, map[string]string{
-			"ParentID": w.ParentID,
+	} else {
+		sections = append(sections, render(prompts.TaskRules, map[string]string{
+			"StoryID": w.StoryID,
 		}))
 	}
 	sections = append(sections, lifecycleRules(w))
@@ -204,7 +203,7 @@ func BuildRestartMessage(w Work) string {
 	base := buildBase(w)
 
 	var nudge string
-	if w.Type == WorkTypeStory {
+	if w.Type() == WorkTypeStory {
 		nudge = render(prompts.StoryRestartNudge, nil)
 	} else {
 		nudge = render(prompts.TaskRestartNudge, nil)
@@ -221,7 +220,7 @@ func BuildAutoContinuationMessage(w Work) string {
 	base := buildBase(w)
 
 	var nudge string
-	if w.Type == WorkTypeStory {
+	if w.Type() == WorkTypeStory {
 		nudge = render(prompts.StoryAutoContinueNudge, nil)
 	} else {
 		nudge = render(prompts.TaskAutoContinueNudge, nil)
@@ -246,6 +245,7 @@ func BuildAutoContinuationMessageWithSteps(w Work, steps []string, currentStep i
 		"CurrentStep": currentStep + 1,
 		"TotalSteps":  len(steps),
 		"ID":          w.ID,
+		"IsStory":     w.Type() == WorkTypeStory,
 	})
 
 	return base + "\n\n" + stepSection + "\n\n" + nudge
@@ -259,7 +259,7 @@ func BuildAutoContinuationMessageWithSteps(w Work, steps []string, currentStep i
 // (Engine.notifyParentOfChild). It is false for a parent that had declared no
 // wait — a story still working through its own turn when a subtask happened to
 // close. Telling that one its wait was cleared would name something it never
-// had, and invite it to "wait again" with work_wait when it has nothing it is
+// had, and invite it to "wait again" with story_wait when it has nothing it is
 // ready to stop for.
 func BuildChildCompletionMessage(parent Work, childTitle, childID string, waitCleared bool) string {
 	base := buildBase(parent)
@@ -328,7 +328,7 @@ func BuildChildQuestionReminderMessage(parent Work, pending []childQuestion) str
 // caller knows which of the three shapes it was, and the three differ in the way
 // back — a stopped or unstarted subtask is restarted, a deleted one is replaced.
 // Collapsing them into "the subtask is gone" would send the agent looking for
-// work_start on an ID that no longer exists.
+// story_start / task_start on an ID that no longer exists.
 func BuildStrandedWaitMessage(parent Work, childTitle, childID string, exit childExit) string {
 	base := buildBase(parent)
 
@@ -364,7 +364,7 @@ func BuildReopenMessage(w Work) string {
 	base := buildBase(w)
 
 	var nudge string
-	if w.Type == WorkTypeStory {
+	if w.Type() == WorkTypeStory {
 		nudge = render(prompts.StoryReopenNudge, nil)
 	} else {
 		nudge = render(prompts.TaskReopenNudge, nil)

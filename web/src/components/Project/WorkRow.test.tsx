@@ -141,7 +141,7 @@ describe("WorkRow", () => {
 				type: "task",
 				activity: "needs_permission",
 			}),
-			parentTitle: "Cluster mode",
+			storyTitle: "Cluster mode",
 			roleName: "Engineer",
 		});
 
@@ -267,7 +267,7 @@ describe("WorkRow", () => {
 	it("names the parent before anything else on the line", () => {
 		renderRow({
 			work: work({ type: "task", activity: "needs_permission" }),
-			parentTitle: "Cluster mode",
+			storyTitle: "Cluster mode",
 			roleName: "Engineer",
 		});
 
@@ -283,7 +283,7 @@ describe("WorkRow", () => {
 	it("keeps the word the arrow stands for, for a screen reader", () => {
 		const { container } = renderRow({
 			work: work({ type: "task" }),
-			parentTitle: "Cluster mode",
+			storyTitle: "Cluster mode",
 		});
 
 		const spoken = container.querySelectorAll(".sr-only");

@@ -42,23 +42,23 @@ func TestSetWorktree_AssignsWhileOpen(t *testing.T) {
 	}
 }
 
-func TestSetWorktree_PropagatesToOpenDescendants(t *testing.T) {
+func TestSetWorktree_PropagatesToOpenTasks(t *testing.T) {
 	s := newTestStore(t)
 
-	// Children created before the story starts inherit the empty default.
+	// Tasks created before the story starts inherit the empty default.
 	story := createStory(t, s, "Story")
 	task := createTask(t, s, story.ID, "Task")
 	if task.Worktree != "" {
-		t.Fatalf("pre-start child worktree = %q, want empty", task.Worktree)
+		t.Fatalf("pre-start task worktree = %q, want empty", task.Worktree)
 	}
 
-	// Capturing the story's worktree at start must pull those descendants along,
-	// keeping the whole subtree on one worktree.
+	// Capturing the story's worktree at start must pull those tasks along,
+	// keeping the story and its tasks on one worktree.
 	if err := s.SetWorktree(context.Background(), story.ID, "feature-x"); err != nil {
 		t.Fatalf("SetWorktree: %v", err)
 	}
 	if got := getWork(t, s, task.ID); got.Worktree != "feature-x" {
-		t.Errorf("descendant worktree = %q, want propagated %q", got.Worktree, "feature-x")
+		t.Errorf("task worktree = %q, want propagated %q", got.Worktree, "feature-x")
 	}
 }
 

@@ -2,13 +2,6 @@ package work
 
 import "fmt"
 
-// validParents defines which parent types are allowed for each work type.
-// An empty slice means the type must be top-level (no parent).
-var validParents = map[WorkType][]WorkType{
-	WorkTypeStory: {},
-	WorkTypeTask:  {WorkTypeStory},
-}
-
 var (
 	errWorkNotStarted = fmt.Errorf("%w: work has not been started; start it first", ErrInvalidWork)
 	errWorkClosed     = fmt.Errorf("%w: work is closed; reopen it to continue", ErrInvalidWork)
@@ -35,7 +28,7 @@ var (
 // index — must not be one more way to lock a work item out of its own agent.
 
 // ValidateProgress checks that a work item can be moved along by its agent:
-// step_done, work_wait, stopping, or a liveness sync.
+// step_done, story_wait, stopping, or a liveness sync.
 func ValidateProgress(status WorkStatus) error {
 	switch status {
 	case StatusOpen:
@@ -60,33 +53,14 @@ func ValidateStartable(status WorkStatus) error {
 	return nil
 }
 
-func ValidateType(t WorkType) bool {
-	_, ok := validParents[t]
-	return ok
-}
-
-// ValidateParent checks that the parent is a valid type for the given child type.
-// parent == nil means no parent (top-level).
-func ValidateParent(childType WorkType, parent *Work) error {
-	allowed := validParents[childType]
-
-	if len(allowed) == 0 {
-		// Must be top-level
-		if parent != nil {
-			return fmt.Errorf("%w: %s must be top-level, got parent %s", ErrInvalidWork, childType, parent.Type)
-		}
-		return nil
+// ValidateStory checks the work a new task names as its story. There is no
+// table of allowed parents any more, and no rule about the child either: the
+// field is called StoryID, so the only thing left to check is that it holds a
+// story. A task naming a task is how a third level would be built, and this is
+// where it is refused.
+func ValidateStory(story Work) error {
+	if story.Type() != WorkTypeStory {
+		return fmt.Errorf("%w: %s is a task and cannot hold tasks of its own; name its story %s instead", ErrInvalidWork, story.ID, story.StoryID)
 	}
-
-	// Must have a parent
-	if parent == nil {
-		return fmt.Errorf("%w: %s requires a parent of type %v", ErrInvalidWork, childType, allowed)
-	}
-
-	for _, t := range allowed {
-		if parent.Type == t {
-			return nil
-		}
-	}
-	return fmt.Errorf("%w: %s cannot be a child of %s", ErrInvalidWork, childType, parent.Type)
+	return nil
 }

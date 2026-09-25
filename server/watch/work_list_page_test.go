@@ -13,12 +13,12 @@ import (
 )
 
 func openStory(id string) work.Work {
-	return work.Work{ID: id, Type: work.WorkTypeStory, Status: work.StatusOpen, Title: id}
+	return work.Work{ID: id, Status: work.StatusOpen, Title: id}
 }
 
 func closedStoryWork(id string, updatedAt time.Time) work.Work {
 	return work.Work{
-		ID: id, Type: work.WorkTypeStory, Status: work.StatusClosed,
+		ID: id, Status: work.StatusClosed,
 		Title: id, UpdatedAt: updatedAt,
 	}
 }
@@ -55,7 +55,7 @@ func TestWorkListWatcher_SubscribeCapsNotRunningAndSaysHowMuchItHeldBack(t *test
 func TestWorkListWatcher_SubscribeNeverHidesWorkThatNeedsTheUser(t *testing.T) {
 	store := &mockWorkStore{}
 	store.works = append(store.works, work.Work{
-		ID: "waiting", Type: work.WorkTypeStory, Status: work.StatusActive,
+		ID: "waiting", Status: work.StatusActive,
 		Title: "waiting", SessionID: "s-waiting",
 	})
 	for i := range CurrentGroupCap * 2 {
@@ -158,7 +158,7 @@ func TestWorkListWatcher_PageRefusesAnUnknownSubscription(t *testing.T) {
 // subscriber about a change this read happened to see first.
 func TestWorkListWatcher_ReadingAPageDoesNotSwallowTheNextNotification(t *testing.T) {
 	store := &mockWorkStore{works: []work.Work{{
-		ID: "w1", Type: work.WorkTypeStory, Status: work.StatusActive,
+		ID: "w1", Status: work.StatusActive,
 		Title: "w1", SessionID: "s1",
 	}}}
 	turns := &turnSourceStub{}

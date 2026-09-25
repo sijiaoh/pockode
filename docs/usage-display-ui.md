@@ -27,8 +27,8 @@ report price" look identical on screen and mean opposite things.
 **Context belongs to a session, spend belongs to both.** A context window is the
 state of one live conversation; it cannot be added up, so it lives in that
 session's info panel and never on a work item. Cumulative tokens and price can be
-added up, so a work item carries them twice: its own session, and its whole
-subtree.
+added up, so a work item carries them twice: what its own session spent, and
+what it and its tasks spent together.
 
 **On the session side, every figure is behind a tap.** The action bar gets one
 icon-only button and no numbers. The bar is the session's controls, it is already
@@ -91,21 +91,21 @@ states below are keyed on. `usage` itself is always there — an empty session c
 empty `Usage`, not a missing one.
 
 Work detail carries an aggregate over the same counters, and nothing else an
-aggregate does not need — no context fields, because a subtree has no window:
+aggregate does not need — no context fields, because an aggregate has no window:
 
 ```ts
 interface WorkUsage {
 	/** This work item's own session. Absent when it has none, or it spent nothing. */
 	own?: TokenUsage;
-	/** This work item plus every descendant at any depth. */
+	/** This story plus its tasks. */
 	total?: TokenUsage;
 	/**
-	 * Descendants counted into `total`, at any depth; 0 when there are none.
+	 * Tasks counted into `total`; 0 on a task, and on a story with none.
 	 * Required, and the only thing that decides whether the page shows one column
 	 * or two — only the detail carries usage, so the client cannot count or sum
-	 * the subtree itself.
+	 * the tasks itself.
 	 */
-	descendant_count: number;
+	task_count: number;
 	/**
 	 * Sessions inside `total` that spent tokens but reported no price. Non-zero
 	 * makes the cost figure a floor, and the UI says so (*Work states*).
@@ -182,8 +182,8 @@ rather than `1.2M` in every row. Spoken labels always carry the grouped count
 (`1,248,301 tokens`), on every surface. A `title` carrying the same grouped count
 is welcome on a fine pointer, but nothing may depend on it.
 
-A work item's totals have no panel and stay abbreviated. Deliberate: a subtree
-total is read as a proportion ("the tasks cost three times what the story did"),
+A work item's totals have no panel and stay abbreviated. Deliberate: the total
+is read as a proportion ("the tasks cost three times what the story did"),
 and the per-session exact figures are one Open Chat away.
 
 All figures render with `tabular-nums`, so a number that ticks upward mid-turn
@@ -428,16 +428,15 @@ figure the page is about: `text-th-text-primary font-medium`. Own is context:
 — `text-[10px] uppercase text-th-text-muted`, first column empty.
 
 **Copy.** The own column is named after what the user is looking at: `This story`
-or `This task`, from `work.type`. The total column is `Incl. 5 tasks`, from
-`descendant_count` — singular `1 task`, and the count, not a vague "subtasks",
+or `This task`, derived from `story_id`. The total column is `Incl. 5 tasks`,
+from `task_count` — singular `1 task`, and the count, not a vague "subtasks",
 because the number is the one thing that makes the second column's scope
 checkable against the list right below it. The footnote
 below the card, `text-xs text-th-text-muted`, is always present when two columns
-are: `Total covers this story and every task beneath it.` — the word *beneath*
-doing the work of saying it is not just the direct children. It names the item
-the same way the own column does, so a task reads `Total covers this task and
-every task beneath it.`: the two would otherwise contradict each other on the
-one page that shows both.
+are: `Total covers this story and every task beneath it.` It names the item the
+same way the own column does, so that the two cannot contradict each other on
+the one page that shows both — though in practice only a story ever reads it,
+since two columns need `task_count > 0` and nothing can hang below a task.
 
 No context window here, in any state. A work item has no single window, and the
 session's own screen is one tap away through Open Chat.
@@ -447,15 +446,15 @@ session's own screen is one tap away through Open Chat.
 | State | What shows |
 | --- | --- |
 | `own` and `total` both absent | No Usage section at all |
-| `descendant_count` is 0 | One column, no header row, no footnote: the figure alone, in the total's weight — with no descendants the two figures are the same number |
-| Own absent, total present (this item never ran; its children did) | Both columns; own cell is an em dash in `text-th-text-muted`, `aria-hidden` beside an `sr-only` `not reported` — never `0`, and never an `aria-label` on a bare span, which is not reliably announced |
-| Cost reported nowhere in the subtree | Cost row absent entirely |
+| `task_count` is 0 | One column, no header row, no footnote: the figure alone, in the total's weight — with no tasks the two figures are the same number |
+| Own absent, total present (the story never ran; its tasks did) | Both columns; own cell is an em dash in `text-th-text-muted`, `aria-hidden` beside an `sr-only` `not reported` — never `0`, and never an `aria-label` on a bare span, which is not reliably announced |
+| Cost reported nowhere under the item | Cost row absent entirely |
 | Cost in total but not in own | Cost row present, own cell `—` |
 | `unpriced_session_count > 0`, with a cost row | Total cost renders `$3.87+`, and a second footnote line follows: `Price is missing for 2 sessions — their agent does not report one.` — singular `1 session — its agent`, as the column header pluralises |
-| `unpriced_session_count > 0`, with no cost row | Nothing extra: the sentence exists to qualify the `+`, and a subtree no agent priced has no figure for it to point at |
+| `unpriced_session_count > 0`, with no cost row | Nothing extra: the sentence exists to qualify the `+`, and a total no agent priced has no figure for it to point at |
 
 The `+` and its footnote are the whole reason the counter is in the contract: a
-subtree mixing an agent that prices its turns with one that does not would
+story mixing an agent that prices its turns with one that does not would
 otherwise report a total that looks complete and is not. `+` rather than `≥`
 because the app already spends that idiom on "this many, and more" in
 `formatBadgeCount`, and a mathematical operator in a price column invites being
@@ -483,7 +482,7 @@ Three things, following the pyramid — the formatter carries most of it:
   cost row. Not the bar width or the threshold colour — those are styles over
   arithmetic the unit tests already cover.
 - **The work card's states**: hidden with nothing spent, one column at
-  `descendant_count: 0`, two labelled columns otherwise, the dash for an absent
+  `task_count: 0`, two labelled columns otherwise, the dash for an absent
   own, the `+` and its footnote when `unpriced_session_count` is non-zero.
 
 ## Out of scope

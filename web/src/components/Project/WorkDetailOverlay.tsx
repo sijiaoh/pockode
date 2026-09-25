@@ -798,7 +798,7 @@ function ChildrenSection({
 			{addingTask && (
 				<CreateWorkSheet
 					type="task"
-					parentId={storyId}
+					storyId={storyId}
 					onClose={() => setAddingTask(false)}
 					onCreated={handleCreated}
 				/>

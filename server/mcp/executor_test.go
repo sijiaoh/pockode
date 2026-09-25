@@ -28,13 +28,13 @@ func (stubWorkStarter) HandleWorkStart(context.Context, work.Work) error { retur
 
 var errStartFailed = errors.New("start handler failed")
 
-// failingWorkStarter always fails, to exercise the rollback path in work_start.
+// failingWorkStarter always fails, to exercise the rollback path in a start.
 type failingWorkStarter struct{ err error }
 
 func (f failingWorkStarter) HandleWorkStart(context.Context, work.Work) error { return f.err }
 
 // stubWorktrees stands in for the worktree registry: it records the names
-// work_start asked to prepare, and reports each one as newly created unless a
+// a start asked to prepare, and reports each one as newly created unless a
 // test set skip or err.
 type stubWorktrees struct {
 	asked []string
@@ -223,12 +223,11 @@ func callTool(t *testing.T, e *Executor, name string, args interface{}) result {
 
 func toolText(r result) string { return r.Text }
 
-// --- Tool: work_create ---
+// --- Tools: story_create / task_create ---
 
-func TestWorkCreate(t *testing.T) {
+func TestStoryCreate(t *testing.T) {
 	ts := newTestExec(t)
-	result := callTool(t, ts.exec, "work_create", map[string]string{
-		"type":          "story",
+	result := callTool(t, ts.exec, "story_create", map[string]string{
 		"title":         "Login feature",
 		"agent_role_id": ts.roleID,
 	})
@@ -246,24 +245,56 @@ func TestWorkCreate(t *testing.T) {
 	}
 }
 
-func TestWorkCreate_InvalidType(t *testing.T) {
+// task_create makes a task of the story it names — that, and only that, is what
+// separates it from story_create, so the created item is read back rather than
+// the call merely being checked for an error.
+func TestTaskCreate_MakesATaskOfTheNamedStory(t *testing.T) {
 	ts := newTestExec(t)
-	result := callTool(t, ts.exec, "work_create", map[string]string{
-		"type":          "epic",
-		"title":         "X",
-		"agent_role_id": ts.roleID,
-	})
+	storyID := extractID(t, toolText(callTool(t, ts.exec, "story_create", map[string]string{
+		"title": "Parent Story", "agent_role_id": ts.roleID,
+	})))
 
-	if !result.IsError {
-		t.Error("expected error for invalid type")
+	taskID := extractID(t, toolText(callTool(t, ts.exec, "task_create", map[string]string{
+		"story_id": storyID, "title": "Child Task", "agent_role_id": ts.roleID,
+	})))
+
+	task := decodeObject(t, toolText(callTool(t, ts.exec, "work_get", map[string]string{"id": taskID})))
+	if got := stringField(t, task, "story_id"); got != storyID {
+		t.Errorf("task story_id = %q, want %q", got, storyID)
+	}
+	if got := stringField(t, task, "type"); got != "task" {
+		t.Errorf("task type = %q, want \"task\"", got)
+	}
+
+	story := decodeObject(t, toolText(callTool(t, ts.exec, "work_get", map[string]string{"id": storyID})))
+	if _, ok := story["story_id"]; ok {
+		t.Error("story carries a story_id key; it should be absent, not empty")
+	}
+	if got := stringField(t, story, "type"); got != "story" {
+		t.Errorf("story type = %q, want \"story\"", got)
 	}
 }
 
-// --- Tool: work_list ---
-
-func TestWorkList_Empty(t *testing.T) {
+// A task needs a story, and story_create is the tool for one without. Saying so
+// beats creating a second story the agent did not ask for.
+func TestTaskCreate_RefusesWithoutAStory(t *testing.T) {
 	ts := newTestExec(t)
-	result := callTool(t, ts.exec, "work_list", map[string]string{})
+	result := callTool(t, ts.exec, "task_create", map[string]string{
+		"title": "Orphan", "agent_role_id": ts.roleID,
+	})
+	if !result.IsError {
+		t.Fatalf("task_create with no story_id was accepted: %q", toolText(result))
+	}
+	if !strings.Contains(toolText(result), "story_create") {
+		t.Errorf("refusal does not name the tool to use instead: %q", toolText(result))
+	}
+}
+
+// --- Tools: story_list / task_list ---
+
+func TestStoryList_Empty(t *testing.T) {
+	ts := newTestExec(t)
+	result := callTool(t, ts.exec, "story_list", map[string]string{})
 
 	text := toolText(result)
 	if text != "[]" {
@@ -271,52 +302,92 @@ func TestWorkList_Empty(t *testing.T) {
 	}
 }
 
-func TestWorkList_WithItems(t *testing.T) {
+// The two listings partition the project between them, and each one's whole job
+// is the half it leaves out: a story_list with tasks in it is the tree the
+// two-level shape removed, and a task_list that crosses stories is worse than
+// no filter at all.
+func TestStoryListAndTaskList_EachSeeOnlyTheirOwn(t *testing.T) {
 	ts := newTestExec(t)
 
-	callTool(t, ts.exec, "work_create", map[string]string{
-		"type": "story", "title": "Story A", "agent_role_id": ts.roleID,
+	storyA := extractID(t, toolText(callTool(t, ts.exec, "story_create", map[string]string{
+		"title": "Story A", "agent_role_id": ts.roleID,
+	})))
+	storyB := extractID(t, toolText(callTool(t, ts.exec, "story_create", map[string]string{
+		"title": "Story B", "agent_role_id": ts.roleID,
+	})))
+	callTool(t, ts.exec, "task_create", map[string]string{
+		"story_id": storyA, "title": "Task of A", "agent_role_id": ts.roleID,
 	})
-	callTool(t, ts.exec, "work_create", map[string]string{
-		"type": "story", "title": "Story B", "agent_role_id": ts.roleID,
+	callTool(t, ts.exec, "task_create", map[string]string{
+		"story_id": storyB, "title": "Task of B", "agent_role_id": ts.roleID,
 	})
 
-	result := callTool(t, ts.exec, "work_list", map[string]string{})
-	text := toolText(result)
-
-	if !strings.Contains(text, "Story A") || !strings.Contains(text, "Story B") {
-		t.Errorf("expected both stories in list, got %q", text)
+	for _, tc := range []struct {
+		name  string
+		args  map[string]string
+		tool  string
+		want  []string
+		avoid []string
+	}{
+		{
+			name: "story_list names every story and no task",
+			tool: "story_list", args: map[string]string{},
+			want: []string{"Story A", "Story B"}, avoid: []string{"Task of A", "Task of B"},
+		},
+		{
+			name: "task_list names one story's tasks and nothing else",
+			tool: "task_list", args: map[string]string{"story_id": storyA},
+			want: []string{"Task of A"}, avoid: []string{"Task of B", "Story A", "Story B"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			titles := listedTitles(t, toolText(callTool(t, ts.exec, tc.tool, tc.args)))
+			for _, title := range tc.want {
+				if !slices.Contains(titles, title) {
+					t.Errorf("%s is missing %q; got %v", tc.tool, title, titles)
+				}
+			}
+			for _, title := range tc.avoid {
+				if slices.Contains(titles, title) {
+					t.Errorf("%s carries %q, which is not its own; got %v", tc.tool, title, titles)
+				}
+			}
+		})
 	}
 }
 
-func TestWorkList_FilterByParentID(t *testing.T) {
+// An empty story_id is what a story's own story_id is, so a fall-through would
+// answer "which tasks?" with every story in the project, or with nothing.
+func TestTaskList_RefusesWithoutAStory(t *testing.T) {
 	ts := newTestExec(t)
-
-	storyResult := callTool(t, ts.exec, "work_create", map[string]string{
-		"type": "story", "title": "Parent Story", "agent_role_id": ts.roleID,
-	})
-	storyID := extractID(t, toolText(storyResult))
-
-	callTool(t, ts.exec, "work_create", map[string]string{
-		"type": "task", "parent_id": storyID, "title": "Child Task", "agent_role_id": ts.roleID,
+	callTool(t, ts.exec, "story_create", map[string]string{
+		"title": "Story A", "agent_role_id": ts.roleID,
 	})
 
-	callTool(t, ts.exec, "work_create", map[string]string{
-		"type": "story", "title": "Other Story", "agent_role_id": ts.roleID,
-	})
-
-	result := callTool(t, ts.exec, "work_list", map[string]string{"parent_id": storyID})
-	text := toolText(result)
-
-	if !strings.Contains(text, "Child Task") {
-		t.Errorf("expected child task, got %q", text)
+	result := callTool(t, ts.exec, "task_list", map[string]string{})
+	if !result.IsError {
+		t.Fatalf("task_list with no story_id was accepted: %q", toolText(result))
 	}
-	if strings.Contains(text, "Parent Story") || strings.Contains(text, "Other Story") {
-		t.Errorf("should not contain non-child items, got %q", text)
+	if !strings.Contains(toolText(result), "story_list") {
+		t.Errorf("refusal does not name where to find a story: %q", toolText(result))
 	}
 }
 
-// summaryKeys is the exact key set a work_list entry carries. parent_id is
+// listedTitles reads the titles out of a listing result, in order.
+func listedTitles(t *testing.T, text string) []string {
+	t.Helper()
+	var entries []map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(text), &entries); err != nil {
+		t.Fatalf("decode %q: %v", text, err)
+	}
+	titles := make([]string, len(entries))
+	for i, entry := range entries {
+		titles[i] = stringField(t, entry, "title")
+	}
+	return titles
+}
+
+// summaryKeys is the exact key set a listing entry carries. story_id is
 // omitempty, so a task carries it and a story does not.
 //
 // Pinned exactly rather than as a "must not contain body" check: the thing that
@@ -327,7 +398,7 @@ func TestWorkList_FilterByParentID(t *testing.T) {
 func summaryKeys(isTask bool) []string {
 	keys := []string{"id", "type", "agent_role_id", "status", "title"}
 	if isTask {
-		keys = append(keys, "parent_id")
+		keys = append(keys, "story_id")
 	}
 	return keys
 }
@@ -366,52 +437,67 @@ func stringField(t *testing.T, obj map[string]json.RawMessage, key string) strin
 	return v
 }
 
-// TestWorkList_CarriesOnlySummaryFields is the guard for the summary/detail
-// split: work_list is the call an agent makes to find one item, so it must not
-// hand over the bodies of all the others. See workSummary.
-func TestWorkList_CarriesOnlySummaryFields(t *testing.T) {
+// TestListings_CarryOnlySummaryFields is the guard for the summary/detail
+// split: a listing is the call an agent makes to find one item, so it must not
+// hand over the bodies of all the others. See workSummary. It also pins the
+// derived `type` to its value: a listing that named every item a story would
+// still carry the key, and the key alone is not what a reader groups by.
+func TestListings_CarryOnlySummaryFields(t *testing.T) {
 	ts := newTestExec(t)
 
-	storyResult := callTool(t, ts.exec, "work_create", map[string]string{
-		"type": "story", "title": "Parent Story", "body": "Long prose the list must not carry",
+	storyResult := callTool(t, ts.exec, "story_create", map[string]string{
+		"title": "Parent Story", "body": "Long prose the list must not carry",
 		"agent_role_id": ts.roleID,
 	})
 	storyID := extractID(t, toolText(storyResult))
-	callTool(t, ts.exec, "work_create", map[string]string{
-		"type": "task", "parent_id": storyID, "title": "Child Task",
+	callTool(t, ts.exec, "task_create", map[string]string{
+		"story_id": storyID, "title": "Child Task",
 		"body": "More prose", "agent_role_id": ts.roleID,
 	})
 	// Starting the story gives it a session_id and moves it to active, so
 	// the assertion covers a running work item and not only a freshly created
 	// one — session_id is exactly the kind of field that could leak into a summary.
-	callTool(t, ts.exec, "work_start", map[string]string{"id": storyID})
+	callTool(t, ts.exec, "story_start", map[string]string{"id": storyID})
 
-	text := toolText(callTool(t, ts.exec, "work_list", map[string]string{}))
-	var entries []map[string]json.RawMessage
-	if err := json.Unmarshal([]byte(text), &entries); err != nil {
-		t.Fatalf("decode %q: %v", text, err)
-	}
-
-	byTitle := make(map[string]map[string]json.RawMessage, len(entries))
-	for _, entry := range entries {
-		byTitle[stringField(t, entry, "title")] = entry
-	}
-	for title, isTask := range map[string]bool{"Parent Story": false, "Child Task": true} {
-		entry, ok := byTitle[title]
-		if !ok {
-			t.Fatalf("work_list is missing %q; got %q", title, text)
+	for _, tc := range []struct {
+		tool     string
+		args     map[string]string
+		title    string
+		wantType string
+		isTask   bool
+	}{
+		{"story_list", map[string]string{}, "Parent Story", "story", false},
+		{"task_list", map[string]string{"story_id": storyID}, "Child Task", "task", true},
+	} {
+		text := toolText(callTool(t, ts.exec, tc.tool, tc.args))
+		var entries []map[string]json.RawMessage
+		if err := json.Unmarshal([]byte(text), &entries); err != nil {
+			t.Fatalf("decode %q: %v", text, err)
 		}
-		assertKeys(t, title, entry, summaryKeys(isTask))
+
+		var entry map[string]json.RawMessage
+		for _, e := range entries {
+			if stringField(t, e, "title") == tc.title {
+				entry = e
+			}
+		}
+		if entry == nil {
+			t.Fatalf("%s is missing %q; got %q", tc.tool, tc.title, text)
+		}
+		assertKeys(t, tc.title, entry, summaryKeys(tc.isTask))
+		if got := stringField(t, entry, "type"); got != tc.wantType {
+			t.Errorf("%s: %s type = %q, want %q", tc.tool, tc.title, got, tc.wantType)
+		}
 	}
 }
 
-// TestWorkGet_DetailIsSummaryPlusBody pins the other half of the split: what
-// work_list withholds must still be reachable for the one item the agent named.
+// TestWorkGet_DetailIsSummaryPlusBody pins the other half of the split: what a
+// listing withholds must still be reachable for the one item the agent named.
 func TestWorkGet_DetailIsSummaryPlusBody(t *testing.T) {
 	ts := newTestExec(t)
 
-	createResult := callTool(t, ts.exec, "work_create", map[string]string{
-		"type": "story", "title": "My Story", "body": "Details here", "agent_role_id": ts.roleID,
+	createResult := callTool(t, ts.exec, "story_create", map[string]string{
+		"title": "My Story", "body": "Details here", "agent_role_id": ts.roleID,
 	})
 	id := extractID(t, toolText(createResult))
 
@@ -434,8 +520,8 @@ func TestWorkGet_DetailIsSummaryPlusBody(t *testing.T) {
 func TestWorkUpdate(t *testing.T) {
 	ts := newTestExec(t)
 
-	createResult := callTool(t, ts.exec, "work_create", map[string]string{
-		"type": "story", "title": "Old Title", "agent_role_id": ts.roleID,
+	createResult := callTool(t, ts.exec, "story_create", map[string]string{
+		"title": "Old Title", "agent_role_id": ts.roleID,
 	})
 	id := extractID(t, toolText(createResult))
 
@@ -478,8 +564,8 @@ func TestWorkGet_NotFound(t *testing.T) {
 func TestWorkDelete(t *testing.T) {
 	ts := newTestExec(t)
 
-	createResult := callTool(t, ts.exec, "work_create", map[string]string{
-		"type": "story", "title": "Delete Me", "agent_role_id": ts.roleID,
+	createResult := callTool(t, ts.exec, "story_create", map[string]string{
+		"title": "Delete Me", "agent_role_id": ts.roleID,
 	})
 	id := extractID(t, toolText(createResult))
 
@@ -507,17 +593,17 @@ func TestWorkDelete_NotFound(t *testing.T) {
 	}
 }
 
-// --- Tool: work_start ---
+// --- Tools: story_start / task_start ---
 
-func TestWorkStart(t *testing.T) {
+func TestStoryStart(t *testing.T) {
 	ts := newTestExec(t)
 
-	createResult := callTool(t, ts.exec, "work_create", map[string]string{
-		"type": "story", "title": "Start Me", "agent_role_id": ts.roleID,
+	createResult := callTool(t, ts.exec, "story_create", map[string]string{
+		"title": "Start Me", "agent_role_id": ts.roleID,
 	})
 	id := extractID(t, toolText(createResult))
 
-	result := callTool(t, ts.exec, "work_start", map[string]string{"id": id})
+	result := callTool(t, ts.exec, "story_start", map[string]string{"id": id})
 
 	if result.IsError {
 		t.Fatalf("unexpected error: %s", toolText(result))
@@ -542,44 +628,77 @@ func TestWorkStart(t *testing.T) {
 	}
 }
 
-func TestWorkStart_NotFound(t *testing.T) {
+func TestStoryStart_NotFound(t *testing.T) {
 	ts := newTestExec(t)
-	result := callTool(t, ts.exec, "work_start", map[string]string{"id": "nonexistent"})
+	result := callTool(t, ts.exec, "story_start", map[string]string{"id": "nonexistent"})
 
 	if !result.IsError {
 		t.Error("expected error for nonexistent ID")
 	}
 }
 
-func TestWorkStart_AlreadyActive(t *testing.T) {
+func TestStoryStart_AlreadyActive(t *testing.T) {
 	ts := newTestExec(t)
 
-	createResult := callTool(t, ts.exec, "work_create", map[string]string{
-		"type": "story", "title": "Story", "agent_role_id": ts.roleID,
+	createResult := callTool(t, ts.exec, "story_create", map[string]string{
+		"title": "Story", "agent_role_id": ts.roleID,
 	})
 	id := extractID(t, toolText(createResult))
 
-	callTool(t, ts.exec, "work_start", map[string]string{"id": id})
+	callTool(t, ts.exec, "story_start", map[string]string{"id": id})
 
-	result := callTool(t, ts.exec, "work_start", map[string]string{"id": id})
+	result := callTool(t, ts.exec, "story_start", map[string]string{"id": id})
 	if !result.IsError {
 		t.Error("expected error for a work that is already active")
 	}
 }
 
-func TestWorkStart_NoAgentRole(t *testing.T) {
+func TestStoryStart_NoAgentRole(t *testing.T) {
 	ts := newTestExec(t)
 
-	createResult := callTool(t, ts.exec, "work_create", map[string]string{
-		"type": "story", "title": "Story", "agent_role_id": ts.roleID,
+	createResult := callTool(t, ts.exec, "story_create", map[string]string{
+		"title": "Story", "agent_role_id": ts.roleID,
 	})
 	id := extractID(t, toolText(createResult))
 	empty := ""
 	ts.store.Update(context.Background(), id, work.UpdateFields{AgentRoleID: &empty})
 
-	result := callTool(t, ts.exec, "work_start", map[string]string{"id": id})
+	result := callTool(t, ts.exec, "story_start", map[string]string{"id": id})
 	if !result.IsError {
 		t.Error("expected error for work without agent_role_id")
+	}
+}
+
+// --- Tools retired by the story/task split ---
+
+// The four old names still reach the executor, and what they answer with is the
+// whole reason to keep them: an agent whose context still carries the lifecycle
+// rules that named them is told which tool replaced this one, in the same turn,
+// instead of "unknown tool". Each case checks the replacement is named — a
+// refusal that only says "retired" leaves the agent no next move.
+func TestRetiredBySplit_NameWhatReplacedThem(t *testing.T) {
+	ts := newTestExec(t)
+
+	for old, replacements := range map[string][]string{
+		"work_create": {"story_create", "task_create"},
+		"work_list":   {"story_list", "task_list"},
+		"work_start":  {"story_start", "task_start"},
+		"work_wait":   {"story_wait"},
+	} {
+		result := callTool(t, ts.exec, old, map[string]string{})
+		if !result.IsError {
+			t.Errorf("%s was accepted: %s", old, toolText(result))
+			continue
+		}
+		text := toolText(result)
+		if !strings.Contains(text, "retired") {
+			t.Errorf("%s: result = %q, want it to say it is retired", old, text)
+		}
+		for _, replacement := range replacements {
+			if !strings.Contains(text, replacement) {
+				t.Errorf("%s: result = %q, want it to name %s", old, text, replacement)
+			}
+		}
 	}
 }
 
@@ -592,11 +711,11 @@ func TestWorkStart_NoAgentRole(t *testing.T) {
 func TestWorkNeedsInput_IsRetiredAndNamesWhatReplacedIt(t *testing.T) {
 	ts := newTestExec(t)
 
-	createResult := callTool(t, ts.exec, "work_create", map[string]string{
-		"type": "story", "title": "Story", "agent_role_id": ts.roleID,
+	createResult := callTool(t, ts.exec, "story_create", map[string]string{
+		"title": "Story", "agent_role_id": ts.roleID,
 	})
 	id := extractID(t, toolText(createResult))
-	callTool(t, ts.exec, "work_start", map[string]string{"id": id})
+	callTool(t, ts.exec, "story_start", map[string]string{"id": id})
 
 	result := callTool(t, ts.exec, "work_needs_input", map[string]string{
 		"id": id, "reason": "Need clarification on requirements",
@@ -686,8 +805,8 @@ func TestAgentRoleResetDefaults(t *testing.T) {
 func TestWorkCommentAdd(t *testing.T) {
 	ts := newTestExec(t)
 
-	createResult := callTool(t, ts.exec, "work_create", map[string]string{
-		"type": "story", "title": "Story", "agent_role_id": ts.roleID,
+	createResult := callTool(t, ts.exec, "story_create", map[string]string{
+		"title": "Story", "agent_role_id": ts.roleID,
 	})
 	id := extractID(t, toolText(createResult))
 
@@ -720,8 +839,8 @@ func TestWorkCommentAdd_WorkNotFound(t *testing.T) {
 func TestWorkCommentList_Empty(t *testing.T) {
 	ts := newTestExec(t)
 
-	createResult := callTool(t, ts.exec, "work_create", map[string]string{
-		"type": "story", "title": "Story", "agent_role_id": ts.roleID,
+	createResult := callTool(t, ts.exec, "story_create", map[string]string{
+		"title": "Story", "agent_role_id": ts.roleID,
 	})
 	id := extractID(t, toolText(createResult))
 
@@ -738,8 +857,8 @@ func TestWorkCommentList_Empty(t *testing.T) {
 func TestWorkCommentList_WithComments(t *testing.T) {
 	ts := newTestExec(t)
 
-	createResult := callTool(t, ts.exec, "work_create", map[string]string{
-		"type": "story", "title": "Story", "agent_role_id": ts.roleID,
+	createResult := callTool(t, ts.exec, "story_create", map[string]string{
+		"title": "Story", "agent_role_id": ts.roleID,
 	})
 	id := extractID(t, toolText(createResult))
 
@@ -763,8 +882,8 @@ func TestWorkCommentList_WithComments(t *testing.T) {
 func TestWorkCommentUpdate(t *testing.T) {
 	ts := newTestExec(t)
 
-	createResult := callTool(t, ts.exec, "work_create", map[string]string{
-		"type": "story", "title": "Story", "agent_role_id": ts.roleID,
+	createResult := callTool(t, ts.exec, "story_create", map[string]string{
+		"title": "Story", "agent_role_id": ts.roleID,
 	})
 	workID := extractID(t, toolText(createResult))
 
@@ -802,7 +921,7 @@ func TestWorkCommentUpdate_NotFound(t *testing.T) {
 	}
 }
 
-// --- step_done / work_wait ---
+// --- step_done / story_wait ---
 
 func TestStepDone_AdvancesStep(t *testing.T) {
 	exec, store, roleID := newExecWithRole(t, agentrole.AgentRole{
@@ -811,17 +930,17 @@ func TestStepDone_AdvancesStep(t *testing.T) {
 		Steps:      []string{"Step 1: Plan", "Step 2: Implement", "Step 3: Test"},
 	})
 
-	result := callTool(t, exec, "work_create", map[string]string{
-		"type": "story", "title": "Test Story", "agent_role_id": roleID,
+	result := callTool(t, exec, "story_create", map[string]string{
+		"title": "Test Story", "agent_role_id": roleID,
 	})
 	storyID := extractID(t, toolText(result))
 
-	result = callTool(t, exec, "work_create", map[string]string{
-		"type": "task", "title": "Test Task", "agent_role_id": roleID, "parent_id": storyID,
+	result = callTool(t, exec, "task_create", map[string]string{
+		"title": "Test Task", "agent_role_id": roleID, "story_id": storyID,
 	})
 	id := extractID(t, toolText(result))
 
-	callTool(t, exec, "work_start", map[string]string{"id": id})
+	callTool(t, exec, "story_start", map[string]string{"id": id})
 
 	result = callTool(t, exec, "step_done", map[string]string{"id": id})
 	text := toolText(result)
@@ -849,17 +968,17 @@ func TestStepDone_LastStep(t *testing.T) {
 		Steps:      []string{"Step 1: Plan", "Step 2: Execute"},
 	})
 
-	result := callTool(t, exec, "work_create", map[string]string{
-		"type": "story", "title": "Test Story", "agent_role_id": roleID,
+	result := callTool(t, exec, "story_create", map[string]string{
+		"title": "Test Story", "agent_role_id": roleID,
 	})
 	storyID := extractID(t, toolText(result))
 
-	result = callTool(t, exec, "work_create", map[string]string{
-		"type": "task", "title": "Test Task", "agent_role_id": roleID, "parent_id": storyID,
+	result = callTool(t, exec, "task_create", map[string]string{
+		"title": "Test Task", "agent_role_id": roleID, "story_id": storyID,
 	})
 	id := extractID(t, toolText(result))
 
-	callTool(t, exec, "work_start", map[string]string{"id": id})
+	callTool(t, exec, "story_start", map[string]string{"id": id})
 
 	callTool(t, exec, "step_done", map[string]string{"id": id})
 
@@ -885,17 +1004,17 @@ func TestStepDone_LastStep(t *testing.T) {
 func TestStepDone_NoSteps(t *testing.T) {
 	ts := newTestExec(t)
 
-	result := callTool(t, ts.exec, "work_create", map[string]string{
-		"type": "story", "title": "Test Story", "agent_role_id": ts.roleID,
+	result := callTool(t, ts.exec, "story_create", map[string]string{
+		"title": "Test Story", "agent_role_id": ts.roleID,
 	})
 	storyID := extractID(t, toolText(result))
 
-	result = callTool(t, ts.exec, "work_create", map[string]string{
-		"type": "task", "title": "Test Task", "agent_role_id": ts.roleID, "parent_id": storyID,
+	result = callTool(t, ts.exec, "task_create", map[string]string{
+		"title": "Test Task", "agent_role_id": ts.roleID, "story_id": storyID,
 	})
 	id := extractID(t, toolText(result))
 
-	callTool(t, ts.exec, "work_start", map[string]string{"id": id})
+	callTool(t, ts.exec, "story_start", map[string]string{"id": id})
 
 	result = callTool(t, ts.exec, "step_done", map[string]string{"id": id})
 	if result.IsError {
@@ -911,27 +1030,27 @@ func TestStepDone_NoSteps(t *testing.T) {
 	}
 }
 
-func TestWorkWait_StoryWithPendingChildWaits(t *testing.T) {
+func TestStoryWait_StoryWithPendingChildWaits(t *testing.T) {
 	ts := newTestExec(t)
 
-	result := callTool(t, ts.exec, "work_create", map[string]string{
-		"type": "story", "title": "Test Story", "agent_role_id": ts.roleID,
+	result := callTool(t, ts.exec, "story_create", map[string]string{
+		"title": "Test Story", "agent_role_id": ts.roleID,
 	})
 	storyID := extractID(t, toolText(result))
 
-	result = callTool(t, ts.exec, "work_create", map[string]string{
-		"type": "task", "title": "Test Task", "agent_role_id": ts.roleID, "parent_id": storyID,
+	result = callTool(t, ts.exec, "task_create", map[string]string{
+		"title": "Test Task", "agent_role_id": ts.roleID, "story_id": storyID,
 	})
 	taskID := extractID(t, toolText(result))
 
-	callTool(t, ts.exec, "work_start", map[string]string{"id": storyID})
-	callTool(t, ts.exec, "work_start", map[string]string{"id": taskID})
+	callTool(t, ts.exec, "story_start", map[string]string{"id": storyID})
+	callTool(t, ts.exec, "task_start", map[string]string{"id": taskID})
 
-	result = callTool(t, ts.exec, "work_wait", map[string]string{"id": storyID})
+	result = callTool(t, ts.exec, "story_wait", map[string]string{"id": storyID})
 	if result.IsError {
 		t.Fatalf("unexpected error: %s", toolText(result))
 	}
-	if !strings.Contains(toolText(result), "waiting for child work") {
+	if !strings.Contains(toolText(result), "waiting for its tasks") {
 		t.Errorf("expected waiting message, got %q", toolText(result))
 	}
 
@@ -947,24 +1066,24 @@ func TestWorkWait_StoryWithPendingChildWaits(t *testing.T) {
 func TestStepDone_RefusesToCloseAStoryWithActiveSubtasks(t *testing.T) {
 	ts := newTestExec(t)
 
-	result := callTool(t, ts.exec, "work_create", map[string]string{
-		"type": "story", "title": "Test Story", "agent_role_id": ts.roleID,
+	result := callTool(t, ts.exec, "story_create", map[string]string{
+		"title": "Test Story", "agent_role_id": ts.roleID,
 	})
 	storyID := extractID(t, toolText(result))
 
-	result = callTool(t, ts.exec, "work_create", map[string]string{
-		"type": "task", "title": "Reducer", "agent_role_id": ts.roleID, "parent_id": storyID,
+	result = callTool(t, ts.exec, "task_create", map[string]string{
+		"title": "Reducer", "agent_role_id": ts.roleID, "story_id": storyID,
 	})
 	taskID := extractID(t, toolText(result))
 
-	callTool(t, ts.exec, "work_start", map[string]string{"id": storyID})
-	callTool(t, ts.exec, "work_start", map[string]string{"id": taskID})
+	callTool(t, ts.exec, "story_start", map[string]string{"id": storyID})
+	callTool(t, ts.exec, "task_start", map[string]string{"id": taskID})
 
 	result = callTool(t, ts.exec, "step_done", map[string]string{"id": storyID})
 	if !result.IsError {
 		t.Fatalf("expected a refusal, got %q", toolText(result))
 	}
-	for _, want := range []string{`"Reducer"`, "work_wait", "The step was not completed"} {
+	for _, want := range []string{`"Reducer"`, "story_wait", "The step was not completed"} {
 		if !strings.Contains(toolText(result), want) {
 			t.Errorf("refusal %q does not mention %q", toolText(result), want)
 		}
@@ -981,18 +1100,18 @@ func TestStepDone_RefusesToCloseAStoryWithActiveSubtasks(t *testing.T) {
 func TestStepDone_ClosesAStoryWhoseSubtasksAreDone(t *testing.T) {
 	ts := newTestExec(t)
 
-	result := callTool(t, ts.exec, "work_create", map[string]string{
-		"type": "story", "title": "Test Story", "agent_role_id": ts.roleID,
+	result := callTool(t, ts.exec, "story_create", map[string]string{
+		"title": "Test Story", "agent_role_id": ts.roleID,
 	})
 	storyID := extractID(t, toolText(result))
 
-	result = callTool(t, ts.exec, "work_create", map[string]string{
-		"type": "task", "title": "Test Task", "agent_role_id": ts.roleID, "parent_id": storyID,
+	result = callTool(t, ts.exec, "task_create", map[string]string{
+		"title": "Test Task", "agent_role_id": ts.roleID, "story_id": storyID,
 	})
 	taskID := extractID(t, toolText(result))
 
-	callTool(t, ts.exec, "work_start", map[string]string{"id": storyID})
-	callTool(t, ts.exec, "work_start", map[string]string{"id": taskID})
+	callTool(t, ts.exec, "story_start", map[string]string{"id": storyID})
+	callTool(t, ts.exec, "task_start", map[string]string{"id": taskID})
 	callTool(t, ts.exec, "step_done", map[string]string{"id": taskID})
 
 	result = callTool(t, ts.exec, "step_done", map[string]string{"id": storyID})
@@ -1024,16 +1143,16 @@ func TestExecute_UnknownTool(t *testing.T) {
 
 // When the start handler fails, the claim must be rolled back so the work does
 // not get stuck active with a dangling session.
-func TestWorkStart_RollbackOnHandlerFailure(t *testing.T) {
+func TestStoryStart_RollbackOnHandlerFailure(t *testing.T) {
 	store, arStore, settingsStore, roleID := newStoresWithRole(t, agentrole.AgentRole{Name: "Eng", RolePrompt: "x"})
 	exec := NewExecutor(store, arStore, work.NewOperations(store, failingWorkStarter{err: errStartFailed}, stubNotifier{}, agentrole.Steps{Store: arStore}), settingsStore, &stubWorktrees{}, &stubSessions{})
 
-	created := callTool(t, exec, "work_create", map[string]string{
-		"type": "story", "title": "Story", "agent_role_id": roleID,
+	created := callTool(t, exec, "story_create", map[string]string{
+		"title": "Story", "agent_role_id": roleID,
 	})
 	id := extractID(t, toolText(created))
 
-	res := callTool(t, exec, "work_start", map[string]string{"id": id})
+	res := callTool(t, exec, "story_start", map[string]string{"id": id})
 	if !res.IsError {
 		t.Fatal("expected error result when start handler fails")
 	}
@@ -1056,13 +1175,13 @@ func TestStepDone_NotifiesNextStep(t *testing.T) {
 	spy := &spyNotifier{}
 	exec := NewExecutor(store, arStore, work.NewOperations(store, stubWorkStarter{}, spy, agentrole.Steps{Store: arStore}), settingsStore, &stubWorktrees{}, &stubSessions{})
 
-	storyID := extractID(t, toolText(callTool(t, exec, "work_create", map[string]string{
-		"type": "story", "title": "S", "agent_role_id": roleID,
+	storyID := extractID(t, toolText(callTool(t, exec, "story_create", map[string]string{
+		"title": "S", "agent_role_id": roleID,
 	})))
-	taskID := extractID(t, toolText(callTool(t, exec, "work_create", map[string]string{
-		"type": "task", "title": "T", "agent_role_id": roleID, "parent_id": storyID,
+	taskID := extractID(t, toolText(callTool(t, exec, "task_create", map[string]string{
+		"title": "T", "agent_role_id": roleID, "story_id": storyID,
 	})))
-	callTool(t, exec, "work_start", map[string]string{"id": taskID})
+	callTool(t, exec, "task_start", map[string]string{"id": taskID})
 
 	callTool(t, exec, "step_done", map[string]string{"id": taskID})
 
@@ -1083,13 +1202,13 @@ func TestStepDone_NoNotifyOnClose(t *testing.T) {
 	spy := &spyNotifier{}
 	exec := NewExecutor(store, arStore, work.NewOperations(store, stubWorkStarter{}, spy, agentrole.Steps{Store: arStore}), settingsStore, &stubWorktrees{}, &stubSessions{})
 
-	storyID := extractID(t, toolText(callTool(t, exec, "work_create", map[string]string{
-		"type": "story", "title": "S", "agent_role_id": roleID,
+	storyID := extractID(t, toolText(callTool(t, exec, "story_create", map[string]string{
+		"title": "S", "agent_role_id": roleID,
 	})))
-	taskID := extractID(t, toolText(callTool(t, exec, "work_create", map[string]string{
-		"type": "task", "title": "T", "agent_role_id": roleID, "parent_id": storyID,
+	taskID := extractID(t, toolText(callTool(t, exec, "task_create", map[string]string{
+		"title": "T", "agent_role_id": roleID, "story_id": storyID,
 	})))
-	callTool(t, exec, "work_start", map[string]string{"id": taskID})
+	callTool(t, exec, "task_start", map[string]string{"id": taskID})
 
 	callTool(t, exec, "step_done", map[string]string{"id": taskID})
 
@@ -1103,10 +1222,10 @@ func TestWorkReopen_NotifiesReopen(t *testing.T) {
 	spy := &spyNotifier{}
 	exec := NewExecutor(store, arStore, work.NewOperations(store, stubWorkStarter{}, spy, agentrole.Steps{Store: arStore}), settingsStore, &stubWorktrees{}, &stubSessions{})
 
-	id := extractID(t, toolText(callTool(t, exec, "work_create", map[string]string{
-		"type": "story", "title": "S", "agent_role_id": roleID,
+	id := extractID(t, toolText(callTool(t, exec, "story_create", map[string]string{
+		"title": "S", "agent_role_id": roleID,
 	})))
-	callTool(t, exec, "work_start", map[string]string{"id": id})
+	callTool(t, exec, "story_start", map[string]string{"id": id})
 	callTool(t, exec, "step_done", map[string]string{"id": id}) // no steps → closes
 
 	res := callTool(t, exec, "work_reopen", map[string]string{"id": id})
@@ -1231,11 +1350,11 @@ func TestStepDone_SingleStepRoleReportsTheStep(t *testing.T) {
 		Steps:      []string{"Do the thing"},
 	})
 
-	result := callTool(t, exec, "work_create", map[string]string{
-		"type": "story", "title": "Test Story", "agent_role_id": roleID,
+	result := callTool(t, exec, "story_create", map[string]string{
+		"title": "Test Story", "agent_role_id": roleID,
 	})
 	id := extractID(t, toolText(result))
-	callTool(t, exec, "work_start", map[string]string{"id": id})
+	callTool(t, exec, "story_start", map[string]string{"id": id})
 
 	text := toolText(callTool(t, exec, "step_done", map[string]string{"id": id}))
 
@@ -1248,11 +1367,11 @@ func TestStepDone_SingleStepRoleReportsTheStep(t *testing.T) {
 func TestStepDone_SteplessRoleReportsOnlyTheClose(t *testing.T) {
 	ts := newTestExec(t)
 
-	result := callTool(t, ts.exec, "work_create", map[string]string{
-		"type": "story", "title": "Test Story", "agent_role_id": ts.roleID,
+	result := callTool(t, ts.exec, "story_create", map[string]string{
+		"title": "Test Story", "agent_role_id": ts.roleID,
 	})
 	id := extractID(t, toolText(result))
-	callTool(t, ts.exec, "work_start", map[string]string{"id": id})
+	callTool(t, ts.exec, "story_start", map[string]string{"id": id})
 
 	text := toolText(callTool(t, ts.exec, "step_done", map[string]string{"id": id}))
 
@@ -1280,8 +1399,8 @@ func TestWorkDelete_CascadesToSessionsLikeTheUsersDelete(t *testing.T) {
 	ops.SetSessionDeleter(deleter)
 	exec := NewExecutor(store, arStore, ops, settingsStore, &stubWorktrees{}, &stubSessions{})
 
-	result := callTool(t, exec, "work_create", map[string]string{
-		"type": "story", "title": "Test Story", "agent_role_id": roleID,
+	result := callTool(t, exec, "story_create", map[string]string{
+		"title": "Test Story", "agent_role_id": roleID,
 	})
 	storyID := extractID(t, toolText(result))
 	if _, err := store.Start(context.Background(), storyID, "sess-1"); err != nil {
@@ -1297,7 +1416,7 @@ func TestWorkDelete_CascadesToSessionsLikeTheUsersDelete(t *testing.T) {
 	}
 }
 
-// --- work_start's worktree argument ---
+// --- story_start's worktree argument ---
 
 // newExecWithWorktrees builds an executor over a stub registry the test can
 // inspect, which is what the worktree argument's behavior is observed through.
@@ -1309,14 +1428,14 @@ func newExecWithWorktrees(t *testing.T) (*Executor, work.Store, string, *stubWor
 	return NewExecutor(store, arStore, ops, settingsStore, worktrees, &stubSessions{}), store, roleID, worktrees
 }
 
-func TestWorkStart_WorktreePinsStoryAndCreatesIt(t *testing.T) {
+func TestStoryStart_WorktreePinsStoryAndCreatesIt(t *testing.T) {
 	exec, store, roleID, worktrees := newExecWithWorktrees(t)
 
-	storyID := extractID(t, toolText(callTool(t, exec, "work_create", map[string]string{
-		"type": "story", "title": "S", "agent_role_id": roleID,
+	storyID := extractID(t, toolText(callTool(t, exec, "story_create", map[string]string{
+		"title": "S", "agent_role_id": roleID,
 	})))
 
-	res := callTool(t, exec, "work_start", map[string]string{"id": storyID, "worktree": "feature-x"})
+	res := callTool(t, exec, "story_start", map[string]string{"id": storyID, "worktree": "feature-x"})
 	if res.IsError {
 		t.Fatalf("unexpected error: %s", toolText(res))
 	}
@@ -1334,17 +1453,17 @@ func TestWorkStart_WorktreePinsStoryAndCreatesIt(t *testing.T) {
 
 // A task runs where its story runs, so there is nothing for it to choose — and
 // honoring the argument would split one subtree across two worktrees.
-func TestWorkStart_WorktreeRejectedForTask(t *testing.T) {
+func TestStoryStart_WorktreeRejectedForTask(t *testing.T) {
 	exec, store, roleID, worktrees := newExecWithWorktrees(t)
 
-	storyID := extractID(t, toolText(callTool(t, exec, "work_create", map[string]string{
-		"type": "story", "title": "S", "agent_role_id": roleID,
+	storyID := extractID(t, toolText(callTool(t, exec, "story_create", map[string]string{
+		"title": "S", "agent_role_id": roleID,
 	})))
-	taskID := extractID(t, toolText(callTool(t, exec, "work_create", map[string]string{
-		"type": "task", "title": "T", "agent_role_id": roleID, "parent_id": storyID,
+	taskID := extractID(t, toolText(callTool(t, exec, "task_create", map[string]string{
+		"title": "T", "agent_role_id": roleID, "story_id": storyID,
 	})))
 
-	res := callTool(t, exec, "work_start", map[string]string{"id": taskID, "worktree": "feature-x"})
+	res := callTool(t, exec, "story_start", map[string]string{"id": taskID, "worktree": "feature-x"})
 	if !res.IsError {
 		t.Fatal("expected an error result for a task")
 	}
@@ -1360,17 +1479,48 @@ func TestWorkStart_WorktreeRejectedForTask(t *testing.T) {
 	}
 }
 
+// A worktree is not on task_start's schema, and what is not on the schema is
+// refused rather than dropped. Before the split the same call was refused by
+// assignWorktree; a task_start that simply left the field off its struct would
+// start the task in its story's worktree and say nothing, leaving the agent
+// believing it had placed the task somewhere it did not.
+func TestTaskStart_RefusesAWorktreeRatherThanIgnoringIt(t *testing.T) {
+	exec, store, roleID, worktrees := newExecWithWorktrees(t)
+
+	storyID := extractID(t, toolText(callTool(t, exec, "story_create", map[string]string{
+		"title": "S", "agent_role_id": roleID,
+	})))
+	taskID := extractID(t, toolText(callTool(t, exec, "task_create", map[string]string{
+		"title": "T", "agent_role_id": roleID, "story_id": storyID,
+	})))
+
+	res := callTool(t, exec, "task_start", map[string]string{"id": taskID, "worktree": "feature-x"})
+	if !res.IsError {
+		t.Fatalf("task_start accepted a worktree and said nothing: %q", toolText(res))
+	}
+	if !strings.Contains(toolText(res), "story_start") {
+		t.Errorf("error = %q, want it to name the tool that does take a worktree", toolText(res))
+	}
+
+	if len(worktrees.asked) != 0 {
+		t.Errorf("prepared %v, want nothing created for a rejected start", worktrees.asked)
+	}
+	if w, _, _ := store.Get(taskID); w.Status != work.StatusOpen {
+		t.Errorf("task status = %q, want open (not started)", w.Status)
+	}
+}
+
 // A worktree whose setup hook was skipped looks exactly like a prepared one, so
 // the skip has to reach the agent that asked for the worktree.
-func TestWorkStart_ReportsSkippedSetupHook(t *testing.T) {
+func TestStoryStart_ReportsSkippedSetupHook(t *testing.T) {
 	exec, _, roleID, worktrees := newExecWithWorktrees(t)
 	worktrees.skip = &worktree.SetupHookSkip{Reason: "bash not found", Hint: "delete the hook"}
 
-	storyID := extractID(t, toolText(callTool(t, exec, "work_create", map[string]string{
-		"type": "story", "title": "S", "agent_role_id": roleID,
+	storyID := extractID(t, toolText(callTool(t, exec, "story_create", map[string]string{
+		"title": "S", "agent_role_id": roleID,
 	})))
 
-	res := callTool(t, exec, "work_start", map[string]string{"id": storyID, "worktree": "feature-x"})
+	res := callTool(t, exec, "story_start", map[string]string{"id": storyID, "worktree": "feature-x"})
 	if res.IsError {
 		t.Fatalf("unexpected error: %s", toolText(res))
 	}
@@ -1381,15 +1531,15 @@ func TestWorkStart_ReportsSkippedSetupHook(t *testing.T) {
 
 // A story must not start in a worktree that could not be prepared: the session
 // would be created against a directory that is not there.
-func TestWorkStart_WorktreeCreationFailureDoesNotStart(t *testing.T) {
+func TestStoryStart_WorktreeCreationFailureDoesNotStart(t *testing.T) {
 	exec, store, roleID, worktrees := newExecWithWorktrees(t)
 	worktrees.err = errors.New("git worktree add: exit status 128")
 
-	storyID := extractID(t, toolText(callTool(t, exec, "work_create", map[string]string{
-		"type": "story", "title": "S", "agent_role_id": roleID,
+	storyID := extractID(t, toolText(callTool(t, exec, "story_create", map[string]string{
+		"title": "S", "agent_role_id": roleID,
 	})))
 
-	res := callTool(t, exec, "work_start", map[string]string{"id": storyID, "worktree": "feature-x"})
+	res := callTool(t, exec, "story_start", map[string]string{"id": storyID, "worktree": "feature-x"})
 	if !res.IsError {
 		t.Fatal("expected an error result when the worktree cannot be prepared")
 	}

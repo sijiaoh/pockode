@@ -542,7 +542,7 @@ func TestEngine_ClearsAWaitNothingCouldEnd(t *testing.T) {
 					t.Fatalf("Stop the child: %v", err)
 				}
 			},
-			wants:   []string{"was stopped instead of closing", "restart it with work_start"},
+			wants:   []string{"was stopped instead of closing", "restart it with task_start"},
 			unwants: []string{"was deleted"},
 		},
 		{
@@ -552,8 +552,8 @@ func TestEngine_ClearsAWaitNothingCouldEnd(t *testing.T) {
 					t.Fatalf("Delete the child: %v", err)
 				}
 			},
-			wants:   []string{"was deleted", "create a replacement with work_create"},
-			unwants: []string{"work_start using ID"},
+			wants:   []string{"was deleted", "create a replacement with task_create"},
+			unwants: []string{"task_start using ID"},
 		},
 		{
 			// A fresh start that failed puts the subtask back to `open`. It is
@@ -565,7 +565,7 @@ func TestEngine_ClearsAWaitNothingCouldEnd(t *testing.T) {
 					t.Fatalf("RollbackStart the child: %v", err)
 				}
 			},
-			wants:   []string{"is not running", "start it with work_start"},
+			wants:   []string{"is not running", "start it with task_start"},
 			unwants: []string{"was deleted", "restart it"},
 		},
 	}
@@ -654,7 +654,7 @@ func TestEngine_OnlyTheCallerThatClearedTheWaitSends(t *testing.T) {
 	t.Cleanup(loser.Stop)
 
 	loser.OnWorkChange(ChangeEvent{Op: OperationUpdate, Work: Work{
-		ID: task.ID, ParentID: story.ID, Status: StatusStopped, Title: "T",
+		ID: task.ID, StoryID: story.ID, Status: StatusStopped, Title: "T",
 	}})
 
 	loser.Stop() // Waits for the follow-up rather than for a message never sent.
@@ -919,8 +919,8 @@ func TestEngine_RecoverStartup(t *testing.T) {
 	waitingOnChild := createStory(t, f.store, "waiting on its children")
 	startWorkWithSession(t, f.store, waitingOnChild.ID, "sess-child")
 	survivingChild := createTask(t, f.store, waitingOnChild.ID, "asking the user something too")
-	startWorkWithSession(t, f.store, survivingChild.ID, "sess-grandchild")
-	f.turns.post("sess-grandchild")
+	startWorkWithSession(t, f.store, survivingChild.ID, "sess-task")
+	f.turns.post("sess-task")
 	setChildWait(t, f.store, waitingOnChild.ID)
 
 	f.engine.RecoverStartup(f.turns)
@@ -1001,27 +1001,6 @@ func TestEngine_RecoverStartupStopsAStrandedWaitEvenWithQuestionsOutstanding(t *
 	got := getWork(t, f.store, story.ID)
 	if got.Status != StatusStopped || got.Wait != WaitNone {
 		t.Errorf("story = %q/%q, want stopped with its wait cleared", got.Status, got.Wait)
-	}
-}
-
-// No work type is both a child and a parent — the hierarchy is exactly two
-// levels — and that is what lets recoverStrandedWaits make a single pass.
-//
-// A `child` wait only comes from SetChildWait, which requires an active child,
-// so only a type that can have children can hold one; if that type can never
-// itself be a child, nothing sits above a work the pass stops, and no stop in
-// the pass can strand another wait. Give the hierarchy a third level and this
-// fails — which is the moment that pass has to become a loop to a fixed point,
-// because stopping a middle work would strand the one above it with no listener
-// attached to notice.
-func TestOnlyTopLevelWorkCanHaveChildren(t *testing.T) {
-	for childType, parents := range validParents {
-		for _, parentType := range parents {
-			if len(validParents[parentType]) > 0 {
-				t.Errorf("%s may be a child of %s, which may itself be a child: "+
-					"recoverStrandedWaits needs to loop to a fixed point now", childType, parentType)
-			}
-		}
 	}
 }
 
@@ -1424,7 +1403,7 @@ func TestEngine_NudgesOrdinarilyOnceTheSubtasksQuestionIsSettled(t *testing.T) {
 	if f.sender.count() != 2 {
 		t.Fatalf("sent %d messages, want the reminder and then an ordinary nudge", f.sender.count())
 	}
-	if !strings.Contains(f.sender.contents()[1], "no work_wait") {
+	if !strings.Contains(f.sender.contents()[1], "no story_wait") {
 		t.Error("the second ending was not read as an ordinary empty turn")
 	}
 }

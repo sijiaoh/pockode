@@ -134,7 +134,6 @@ func TestAgentRoleDelete_RefusalIsPrintedVerbatim(t *testing.T) {
 
 			for i := 0; i < tc.works; i++ {
 				if _, err := env.workStore.Create(bgCtx, work.Work{
-					Type:        work.WorkTypeStory,
 					Title:       fmt.Sprintf("story %d", i),
 					AgentRoleID: env.testRoleID,
 				}); err != nil {

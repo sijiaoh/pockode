@@ -95,8 +95,8 @@ func (o *Operations) SetQuestionWithdrawer(w QuestionWithdrawer) {
 	o.questions = w
 }
 
-// DeleteWork removes a work item, its descendants, and the agent sessions they
-// were using.
+// DeleteWork removes a work item, its tasks, and the agent sessions they were
+// using.
 //
 // The cascade is here rather than in either transport because both entry points
 // must do the same thing: a story deleted from the UI and one deleted by an
@@ -120,9 +120,9 @@ func (o *Operations) DeleteWork(ctx context.Context, id string) error {
 	return nil
 }
 
-// subtreeSessions reports the worktree the deleted subtree lives in and every
-// session id in it. The whole subtree shares the target's worktree — children
-// inherit it at create time — so one worktree covers all of them.
+// subtreeSessions reports the worktree the deleted work lives in and every
+// session id it and its tasks hold. They all share the target's worktree —
+// tasks inherit it at create time — so one worktree covers all of them.
 func (o *Operations) subtreeSessions(id string) (worktree string, sessionIDs []string) {
 	target, found, err := o.store.Get(id)
 	if err != nil || !found {
@@ -134,9 +134,9 @@ func (o *Operations) subtreeSessions(id string) (worktree string, sessionIDs []s
 		return target.Worktree, nil
 	}
 
-	descendants := CollectDescendantIDs(works, id)
+	subtree := subtreeIDs(works, id)
 	for _, w := range works {
-		if descendants[w.ID] && w.SessionID != "" {
+		if subtree[w.ID] && w.SessionID != "" {
 			sessionIDs = append(sessionIDs, w.SessionID)
 		}
 	}
@@ -283,15 +283,15 @@ func (o *Operations) refuseIfChildrenActive(w Work, totalSteps int) error {
 		return err
 	}
 	var titles []string
-	for _, child := range works {
-		if child.ParentID == w.ID && child.Status == StatusActive {
-			titles = append(titles, strconv.Quote(child.Title))
+	for _, task := range TasksOf(works, w.ID) {
+		if task.Status == StatusActive {
+			titles = append(titles, strconv.Quote(task.Title))
 		}
 	}
 	if len(titles) == 0 {
 		return nil
 	}
-	return fmt.Errorf("%w: this story still has %d active subtask(s): %s. Call work_wait to pause until they close, or stop them first. The step was not completed",
+	return fmt.Errorf("%w: this story still has %d active subtask(s): %s. Call story_wait to pause until they close, or stop them first. The step was not completed",
 		ErrInvalidWork, len(titles), strings.Join(titles, ", "))
 }
 
@@ -318,11 +318,11 @@ func (o *Operations) Wait(ctx context.Context, id string) error {
 	return nil
 }
 
-// waitRefusal explains a work_wait the store would not set, and it is the mirror
+// waitRefusal explains a story_wait the store would not set, and it is the mirror
 // of refuseIfChildrenActive: the two gates are exactly complementary, so a
-// work_wait is accepted precisely when the step_done that would close the work
+// story_wait is accepted precisely when the step_done that would close the work
 // is refused. That is what makes the way out each error names reachable — "call
-// work_wait instead" would be a lie if the wait could be refused for the same
+// story_wait instead" would be a lie if the wait could be refused for the same
 // work.
 //
 // Same three properties as that refusal (docs/lifecycle-ui.md §7): it names what
@@ -341,17 +341,24 @@ func (o *Operations) waitRefusal(id string) error {
 		return err
 	}
 
+	// story_wait takes an id, and an id can name a task. A task has no tasks
+	// of its own, so every way out below would send it to create a third level
+	// that ValidateStory refuses; it gets the two ways out that are real.
+	for _, w := range works {
+		if w.ID == id && w.Type() == WorkTypeTask {
+			return fmt.Errorf("%w: %s is a task, and only a story has tasks to wait for — so nothing would ever end this wait. Call question_post if you need something from the user, or step_done if there is nothing left to do. The wait was not set",
+				ErrInvalidWork, id)
+		}
+	}
+
 	// Nothing here was active when the store refused, so "not closed" is the
 	// same set as "could be started".
 	var startable []string
-	total := 0
-	for _, child := range works {
-		if child.ParentID != id {
-			continue
-		}
-		total++
-		if child.Status != StatusClosed {
-			startable = append(startable, fmt.Sprintf("%s (%s)", strconv.Quote(child.Title), child.Status))
+	tasks := TasksOf(works, id)
+	total := len(tasks)
+	for _, task := range tasks {
+		if task.Status != StatusClosed {
+			startable = append(startable, fmt.Sprintf("%s (%s)", strconv.Quote(task.Title), task.Status))
 		}
 	}
 
@@ -359,17 +366,17 @@ func (o *Operations) waitRefusal(id string) error {
 	switch {
 	case total == 0:
 		situation = "this work has no subtasks"
-		wayOut = "Create them with work_create and start them with work_start"
+		wayOut = "Create them with task_create and start them with task_start"
 	case len(startable) == 0:
 		situation = fmt.Sprintf("all %d subtask(s) of this work are already closed", total)
-		wayOut = "Create more with work_create and start them with work_start"
+		wayOut = "Create more with task_create and start them with task_start"
 	default:
 		// The number counts what the list names, not every subtask: introducing
 		// a list of one with the total ("none of 6: \"Reducer\"") reads as a
 		// list that was cut short.
 		situation = fmt.Sprintf("none of this work's subtasks is running, though %d of them can be started: %s",
 			len(startable), strings.Join(startable, ", "))
-		wayOut = "Start them with work_start"
+		wayOut = "Start them with task_start"
 	}
 	// The rule comes first so that the situation — which in the third case ends
 	// in a list — is closed by the dash rather than by another comma clause,

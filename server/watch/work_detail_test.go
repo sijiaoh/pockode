@@ -214,6 +214,56 @@ func TestWorkDetailWatcher_NotifyOnWorkChange(t *testing.T) {
 	}
 }
 
+// The other send point for a detail, and the one that runs for the life of a
+// page. Its `type` is derived by rpc.NewWorkDetailItem — asserted in the rpc
+// package — so what this asks is that the notification goes through it: a
+// WorkDetailItem assembled field by field here would compile and marshal with
+// `type` empty, and the open page would silently change what it draws on the
+// next change to the item.
+func TestWorkDetailWatcher_NotificationCarriesTheDerivedType(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		workID string
+		want   work.WorkType
+	}{
+		{"a work naming no story", "s1", work.WorkTypeStory},
+		{"a work naming one", "t1", work.WorkTypeTask},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store := &mockDetailStore{works: []work.Work{
+				{ID: "s1", Title: "a story"},
+				{ID: "t1", StoryID: "s1", Title: "a task"},
+			}}
+			w := NewWorkDetailWatcher(store, newMockUsageSource(), nil)
+			w.Start()
+			defer w.Stop()
+
+			notifier := &captureNotifier{}
+			if _, err := w.Subscribe("client-1", tc.workID, notifier); err != nil {
+				t.Fatalf("Subscribe: %v", err)
+			}
+
+			// Checked rather than discarded: a zero Work from a mistyped fixture id
+			// derives to "story", which would pass the story case for the wrong
+			// reason.
+			item, found, err := store.Get(tc.workID)
+			if err != nil || !found {
+				t.Fatalf("fixture Get(%s) = found %v, err %v", tc.workID, found, err)
+			}
+			w.OnWorkChange(work.ChangeEvent{Op: work.OperationUpdate, Work: item})
+			waitFor(t, func() bool { return notifier.count() >= 1 })
+
+			var params workDetailChangedParams
+			if err := json.Unmarshal(notifier.last(), &params); err != nil {
+				t.Fatalf("unmarshal: %v", err)
+			}
+			if params.Work.Type != tc.want {
+				t.Errorf("detail type = %q, want %q", params.Work.Type, tc.want)
+			}
+		})
+	}
+}
+
 func TestWorkDetailWatcher_NotifyFilteredByWorkID(t *testing.T) {
 	store := &mockDetailStore{
 		works: []work.Work{
@@ -324,15 +374,15 @@ func TestWorkDetailWatcher_OnWorkChange_AfterStop(t *testing.T) {
 	})
 }
 
-// The detail carries the subtree's usage, which is the only place it is sent:
-// the client sees its own work item and cannot reach the grandchild that spent
+// The detail carries the story's whole usage, which is the only place it is
+// sent: the client sees its own work item and cannot reach the tasks that spent
 // most of it.
 func TestWorkDetailWatcher_SubscribeCarriesSubtreeUsage(t *testing.T) {
 	store := &mockDetailStore{
 		works: []work.Work{
 			{ID: "w1", SessionID: "s1"},
-			{ID: "w2", ParentID: "w1", SessionID: "s2"},
-			{ID: "w3", ParentID: "w2", SessionID: "s3"},
+			{ID: "w2", StoryID: "w1", SessionID: "s2"},
+			{ID: "w3", StoryID: "w1", SessionID: "s3"},
 		},
 	}
 	src := newMockUsageSource()
@@ -349,22 +399,22 @@ func TestWorkDetailWatcher_SubscribeCarriesSubtreeUsage(t *testing.T) {
 		t.Errorf("own = %+v, want the work's own session", detail.Usage.Own)
 	}
 	if detail.Usage.Total == nil || detail.Usage.Total.InputTokens != 111 {
-		t.Errorf("total = %+v, want every depth", detail.Usage.Total)
+		t.Errorf("total = %+v, want the story and both its tasks", detail.Usage.Total)
 	}
-	if detail.Usage.DescendantCount != 2 {
-		t.Errorf("descendant count = %d, want 2", detail.Usage.DescendantCount)
+	if detail.Usage.TaskCount != 2 {
+		t.Errorf("task count = %d, want 2", detail.Usage.TaskCount)
 	}
 }
 
 // A session spending tokens changes nothing about the work item, so without
 // listening to the session stores the number on screen would freeze for exactly
-// as long as the agent is running. It reaches every ancestor, because each of
-// their totals includes it.
+// as long as the agent is running. It reaches the task's story too, because the
+// story's total includes it.
 func TestWorkDetailWatcher_NotifyOnSessionUsageChange(t *testing.T) {
 	store := &mockDetailStore{
 		works: []work.Work{
 			{ID: "story"},
-			{ID: "task", ParentID: "story", SessionID: "s-task"},
+			{ID: "task", StoryID: "story", SessionID: "s-task"},
 			{ID: "other"},
 		},
 	}
@@ -541,69 +591,6 @@ func TestWorkDetailWatcher_UnsubscribeForgetsSentUsage(t *testing.T) {
 	}
 }
 
-// The walk goes up the whole chain, not one step. A grandparent's total covers
-// its grandchild's session just as directly as the parent's does, and an
-// implementation that stopped after one hop would still pass a two-level test.
-func TestWorkDetailWatcher_SessionUsageReachesEveryAncestor(t *testing.T) {
-	store := &mockDetailStore{
-		works: []work.Work{
-			{ID: "root"},
-			{ID: "mid", ParentID: "root"},
-			{ID: "leaf", ParentID: "mid", SessionID: "s-leaf"},
-		},
-	}
-	src := newMockUsageSource()
-	w := NewWorkDetailWatcher(store, src, nil)
-	w.Start()
-	defer w.Stop()
-
-	rootNotifier := &captureNotifier{}
-	w.Subscribe("client-1", "root", rootNotifier)
-
-	src.set("", "s-leaf", inputTokens(42))
-	w.OnSessionChange(session.SessionChangeEvent{
-		Op:      session.OperationUpdate,
-		Session: session.SessionMeta{ID: "s-leaf"},
-	})
-
-	waitFor(t, func() bool { return rootNotifier.count() >= 1 })
-
-	var params workDetailChangedParams
-	json.Unmarshal(rootNotifier.last(), &params)
-	if params.Usage.Total == nil || params.Usage.Total.InputTokens != 42 {
-		t.Errorf("grandparent total = %+v, want the grandchild's 42", params.Usage.Total)
-	}
-}
-
-// A parent chain that points back into itself must stop the walk rather than
-// spin: this runs on the watcher's only event goroutine, so a loop here does not
-// just waste a cycle, it stops every later notification for the life of the
-// process. Asserted by requiring the next event to still be delivered.
-func TestWorkDetailWatcher_SurvivesLoopingParentChain(t *testing.T) {
-	store := &mockDetailStore{
-		works: []work.Work{
-			{ID: "a", ParentID: "b", SessionID: "s-a"},
-			{ID: "b", ParentID: "a"},
-		},
-	}
-	w := NewWorkDetailWatcher(store, newMockUsageSource(), nil)
-	w.Start()
-	defer w.Stop()
-
-	notifier := &captureNotifier{}
-	w.Subscribe("client-1", "b", notifier)
-
-	w.OnSessionChange(session.SessionChangeEvent{
-		Op:      session.OperationUpdate,
-		Session: session.SessionMeta{ID: "s-a"},
-	})
-	w.OnWorkChange(work.ChangeEvent{Op: work.OperationUpdate, Work: work.Work{ID: "b"}})
-
-	// The work change is queued behind the session change, so seeing it at all
-	// means the walk terminated.
-	waitFor(t, func() bool { return notifier.count() >= 1 })
-}
-
 // turnSourceStub answers with one worktree's turns, the way the worktree manager
 // does for a worktree that is loaded.
 type turnSourceStub struct {
@@ -675,10 +662,10 @@ func TestWorkDetailWatcher_ResendsWhenOnlyTheActivityMoved(t *testing.T) {
 // (docs/list-paging-ui.md §2.2).
 func TestWorkDetailWatcher_CarriesItsChildrenAndItsParent(t *testing.T) {
 	store := &mockDetailStore{works: []work.Work{
-		{ID: "story", Type: work.WorkTypeStory, Status: work.StatusClosed, Title: "Story"},
-		{ID: "t1", Type: work.WorkTypeTask, ParentID: "story", Status: work.StatusClosed, Title: "One"},
-		{ID: "t2", Type: work.WorkTypeTask, ParentID: "story", Status: work.StatusClosed, Title: "Two"},
-		{ID: "other", Type: work.WorkTypeStory, Status: work.StatusOpen, Title: "Other"},
+		{ID: "story", Status: work.StatusClosed, Title: "Story"},
+		{ID: "t1", StoryID: "story", Status: work.StatusClosed, Title: "One"},
+		{ID: "t2", StoryID: "story", Status: work.StatusClosed, Title: "Two"},
+		{ID: "other", Status: work.StatusOpen, Title: "Other"},
 	}}
 	w := NewWorkDetailWatcher(store, newMockUsageSource(), nil)
 

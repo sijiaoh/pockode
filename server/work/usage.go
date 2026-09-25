@@ -7,13 +7,13 @@ import (
 )
 
 // Usage is what a work item has consumed: its own session's share, and the share
-// of the whole subtree beneath it.
+// of its tasks as well.
 //
 // It belongs to a work item's *detail*, never to Work itself. Work is the record
-// the store holds; this is derived at read time by walking every session in the
-// subtree, which the store knows nothing about. A field here would put that walk
-// behind every reader of a Work — Store.List above all, which AggregateUsage
-// itself calls to find the subtree.
+// the store holds; this is derived at read time by reading every session the
+// work and its tasks ran, which the store knows nothing about. A field here
+// would put that read behind every reader of a Work — Store.List above all,
+// which AggregateUsage itself calls to find the tasks.
 //
 // No context window here, at any level: a window is a property of one live
 // conversation, and there is no meaning to the sum of several.
@@ -25,23 +25,28 @@ type Usage struct {
 	// one.
 	Own *UsageTotals `json:"own,omitempty"`
 
-	// Total is Own plus every descendant's, at every depth. Absent under the same
-	// condition as Own, applied to the whole subtree.
+	// Total is Own plus every task's. Absent under the same condition as Own,
+	// applied to the story and its tasks together. On a task it equals Own: a
+	// task holds no tasks.
 	Total *UsageTotals `json:"total,omitempty"`
 
-	// DescendantCount is how many work items sit beneath this one, at every
-	// depth. Always sent: usage is not on Work, so a client holds no consumption
-	// figure for any work item but the one it has open and cannot aggregate the
-	// subtree itself. Whether the subtree has anything in it is also what decides
-	// whether a total is worth showing at all — a question that must not be
-	// answered by comparing Total against Own, which would make a column appear
-	// the moment a child's first turn lands.
-	DescendantCount int `json:"descendant_count"`
+	// TaskCount is how many tasks this story holds, and 0 on a task. It was
+	// `descendant_count` while the shape was a tree of any depth; with one level
+	// below a story there are no descendants to count that are not tasks, and a
+	// name promising depth invites reading it as one.
+	//
+	// Always sent: usage is not on Work, so a client holds no consumption figure
+	// for any work item but the one it has open and cannot aggregate the tasks
+	// itself. Whether there are any is also what decides whether a total is
+	// worth showing at all — a question that must not be answered by comparing
+	// Total against Own, which would make a column appear the moment a task's
+	// first turn lands.
+	TaskCount int `json:"task_count"`
 
-	// UnpricedSessionCount is how many sessions in the subtree (this work's own
-	// included) spent tokens while their agent reported no price. Without it a
-	// tree mixing Claude (which prices) and Codex (which never does) would report
-	// a total that looks complete and is not.
+	// UnpricedSessionCount is how many of the sessions the total covers (this
+	// work's own included) spent tokens while their agent reported no price.
+	// Without it a story mixing Claude (which prices) and Codex (which never
+	// does) would report a total that looks complete and is not.
 	UnpricedSessionCount int `json:"unpriced_session_count,omitempty"`
 }
 
@@ -50,7 +55,7 @@ type Usage struct {
 // are the same usage (session.Usage.equal exists for the same reason). It is what
 // lets a watcher tell "this session change moved the numbers" from "it did not".
 func (u Usage) Equal(o Usage) bool {
-	return u.DescendantCount == o.DescendantCount &&
+	return u.TaskCount == o.TaskCount &&
 		u.UnpricedSessionCount == o.UnpricedSessionCount &&
 		u.Own.equal(o.Own) &&
 		u.Total.equal(o.Total)
@@ -76,7 +81,8 @@ func (t *UsageTotals) equal(o *UsageTotals) bool {
 	}
 }
 
-// UsageTotals is consumption at one scope — one session, or a whole subtree.
+// UsageTotals is consumption at one scope — one session, or a story and its
+// tasks together.
 // The four counters are session.TokenUsage's, so a work total and a session
 // total are the same units added the same way.
 //
@@ -101,24 +107,21 @@ type SessionUsageSource interface {
 	SessionUsages(worktree string) (map[string]session.Usage, error)
 }
 
-// AggregateUsage adds up what root and its whole subtree consumed.
+// AggregateUsage adds up what root and its tasks consumed.
 //
 // It only reads what the sessions already recorded; nothing here re-counts
 // tokens. Sessions that are missing — a work that never started, or one whose
 // session has since been cleaned up — contribute nothing rather than failing the
-// aggregation, which is the normal state of a subtree the user is still filling
+// aggregation, which is the normal state of a story the user is still filling
 // in.
+//
+// It used to be a walk with a seen set, guarding against a parent chain that
+// pointed back into itself. There is no chain left to loop: a task's tasks are
+// the empty set, so root plus TasksOf(root) is the whole of it.
 func AggregateUsage(store Store, src SessionUsageSource, root Work) (Usage, error) {
 	works, err := store.List()
 	if err != nil {
 		return Usage{}, err
-	}
-
-	children := make(map[string][]Work, len(works))
-	for _, w := range works {
-		if w.ParentID != "" {
-			children[w.ParentID] = append(children[w.ParentID], w)
-		}
 	}
 
 	lookup := newUsageLookup(src)
@@ -126,43 +129,28 @@ func AggregateUsage(store Store, src SessionUsageSource, root Work) (Usage, erro
 	var own, total session.TokenUsage
 	var ownCost, totalCost *float64
 	unpriced := 0
-	visited := 0
 
-	// Iterative walk with a seen set: a parent chain that somehow points back
-	// into itself would otherwise make this recurse forever, and a work item
-	// counted twice is worse than a work item counted once.
-	seen := map[string]struct{}{root.ID: {}}
-	stack := []Work{root}
-	for len(stack) > 0 {
-		node := stack[len(stack)-1]
-		stack = stack[:len(stack)-1]
-		visited++
-
-		if usage, found := lookup.get(node.Worktree, node.SessionID); found {
-			total = total.Add(usage.TokenUsage)
-			totalCost = addCost(totalCost, usage.CostUSD)
-			if node.ID == root.ID {
-				own = own.Add(usage.TokenUsage)
-				ownCost = addCost(ownCost, usage.CostUSD)
-			}
-			if !usage.TokenUsage.IsZero() && usage.CostUSD == nil {
-				unpriced++
-			}
+	tasks := TasksOf(works, root.ID)
+	for _, node := range append([]Work{root}, tasks...) {
+		usage, found := lookup.get(node.Worktree, node.SessionID)
+		if !found {
+			continue
 		}
-
-		for _, child := range children[node.ID] {
-			if _, dup := seen[child.ID]; dup {
-				continue
-			}
-			seen[child.ID] = struct{}{}
-			stack = append(stack, child)
+		total = total.Add(usage.TokenUsage)
+		totalCost = addCost(totalCost, usage.CostUSD)
+		if node.ID == root.ID {
+			own = own.Add(usage.TokenUsage)
+			ownCost = addCost(ownCost, usage.CostUSD)
+		}
+		if !usage.TokenUsage.IsZero() && usage.CostUSD == nil {
+			unpriced++
 		}
 	}
 
 	return Usage{
 		Own:                  newTotals(own, ownCost),
 		Total:                newTotals(total, totalCost),
-		DescendantCount:      visited - 1,
+		TaskCount:            len(tasks),
 		UnpricedSessionCount: unpriced,
 	}, nil
 }
@@ -177,7 +165,7 @@ func newTotals(tokens session.TokenUsage, cost *float64) *UsageTotals {
 }
 
 // addCost sums costs while keeping "nobody reported a cost" distinct from "the
-// cost was zero" — the first is what a Codex-only subtree looks like, and
+// cost was zero" — the first is what a Codex-only story looks like, and
 // displaying it as $0.00 would be a claim the agent never made.
 func addCost(sum *float64, add *float64) *float64 {
 	if add == nil {

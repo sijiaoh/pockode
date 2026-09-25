@@ -18,12 +18,21 @@ Story: "Add dark mode support"
 - Prevents recursion complexity while still enabling fine-grained work breakdown
 - Simplifies the state machine and lifecycle management
 
+**And the shape says so rather than a rule saying so.** One field, `StoryID`,
+is the whole hierarchy, and a third level cannot be written down in it
+([data-model](../projects/data-model.md#hierarchy)). What that buys the code:
+there is no stored `type` beside it, so a creator cannot state a kind that
+contradicts the story it picked; what is left to validate is one literal rule
+(`ValidateStory`); and "what is below this work" is one query, `work.TasksOf`,
+rather than a transitive closure. The type the wire, the prompts and the list
+rows still speak is derived (`Work.Type()`): the vocabulary stayed, the second
+copy of the fact went.
+
 ```go
 // server/work/types.go
 type Work struct {
     ID          string     // UUID v7
-    Type        WorkType   // "story" | "task"
-    ParentID    string     // Empty for Story, required for Task
+    StoryID     string     // Empty for a Story; the story's ID for a Task
     AgentRoleID string     // The AI role that executes this work
     Title       string
     Body        string     // Detailed instructions (optional)
@@ -46,26 +55,30 @@ frozen:
   it starts (`handleWorkStart` → `store.SetWorktree`). It is not captured at
   create time, because a story may be created long before the user picks the
   worktree they want it to run in. An agent has no current worktree to capture,
-  so its `work_start` takes the name as an argument instead and creates the
+  so its `story_start` takes the name as an argument instead and creates the
   worktree when it does not exist yet (`Registry.EnsureWorktree`, branch = name)
   — the same `SetWorktree` call, reached with the name said out loud rather than
-  read off the connection. Only a story may name one: a task has already
-  inherited its story's, and the argument is refused on one rather than silently
-  splitting a subtree across two worktrees.
-- **Child work** inherits its parent's worktree at create time (`store.Create`).
-  Children are usually created by the parent's already-running agent, so the
-  parent's worktree is fixed by then. A child pre-created under a still-open
-  story would inherit the empty default instead, so `SetWorktree` also propagates
-  the captured worktree down to any open descendant when the story starts. Either
-  way an entire story subtree normally shares one worktree — the coordinator and
-  all its tasks stay together. The one gap is a task started *before* its story
+  read off the connection. Only `story_start` has the argument at all, and it is
+  still refused on a task named to it — an id is a string — rather than
+  silently splitting a story from its tasks across two worktrees.
+  `task_start` is a tool of its own precisely so that the schema says this,
+  instead of a sentence in a description having to; and it reads the argument anyway in order to *refuse* it, because a
+  field merely left off the struct would discard the request in silence and let
+  the agent believe it had placed the task somewhere.
+- **A task** inherits its story's worktree at create time (`store.Create`).
+  Tasks are usually created by the story's already-running agent, so the story's
+  worktree is fixed by then. A task pre-created under a still-open story would
+  inherit the empty default instead, so `SetWorktree` also propagates the
+  captured worktree down to the story's open tasks when it starts. Either way a
+  story and its tasks normally share one worktree — the coordinator and all its
+  tasks stay together. The one gap is a task started *before* its story
   (nothing forbids it): it is no longer open by then, so propagation skips it and
   it keeps whatever it inherited at create time.
 - **Immutable once started** — `SetWorktree` only mutates a work while its status
   is still `open`; any later call is rejected. Assigning the *same* value is a
   no-op, so a main-worktree story that goes open → start → stop → start does not
   trip the immutability guard on restart. An agent naming a *different* worktree
-  in `work_start` therefore has the whole call rejected: the story is neither
+  in `story_start` therefore has the whole call rejected: the story is neither
   moved nor restarted, rather than quietly starting where it already lives.
 
 **Why immutable**: a session's process, cwd, and session files live in a
@@ -79,21 +92,22 @@ session cleanup act on `worktreeManager.Get(w.Worktree)` instead of always the
 main worktree, and it is
 the ownership signal behind worktree-deletion protection (below).
 
-One consumer leans on the *normally* in "an entire story subtree normally shares
+One consumer leans on the *normally* in "a story and its tasks normally share
 one worktree" while nothing here can enforce it: usage aggregation lets an
 unreadable worktree cost a total its share with nothing but a log line, which is
-only tolerable while a split subtree stays the exception noted above. Loosening
+only tolerable while a split story stays the exception noted above. Loosening
 this binding means deciding that degradation again — see [Usage
 Aggregation](#usage-aggregation).
 
 ### Validation Rules
 
 On creation (`FileStore.Create` in `server/work/store.go`):
-1. **Type must be valid** — either "story" or "task"
-2. **Title required** — non-empty string
-3. **AgentRoleID required** — non-empty here; that the role actually exists is checked one layer up, in `handleWorkCreate` (`server/ws/rpc_work.go`)
-4. **Parent type match** — Tasks must have a Story parent, Stories cannot have parents
-5. **Parent not closed** — Cannot create children under closed parents
+1. **Title required** — non-empty string
+2. **`StoryID` names a story** — when set, it must name a work that exists and is itself a story (`ValidateStory`); this is the one hierarchy rule [above](#two-level-tree-structure) leaves
+3. **Story not closed** — cannot add tasks to a closed story; reopen it first
+4. **AgentRoleID required** — non-empty here; that the role actually exists is checked one layer up, in `handleWorkCreate` (`server/ws/rpc_work.go`)
+
+There is no type to validate: it is not an input (see above).
 
 ## State Machine
 
@@ -136,7 +150,7 @@ time one was missed, and four separate mechanisms existed to repair them.
 | Wait | Set by | Cleared by |
 |------|--------|------------|
 | none | every transition into active | — |
-| `child` | `work_wait` | a child work closing, or a user message — or the engine, when no child is left that could close ([input 5](#input-5-a-child-work-left-active)) |
+| `child` | `story_wait` | a child work closing, or a user message — or the engine, when no child is left that could close ([input 5](#input-5-a-child-work-left-active)) |
 
 A wait is orthogonal to the status: a waiting work is still **active** — the
 engine still owns it — it simply must not be nudged to carry on. It is cleared
@@ -164,7 +178,7 @@ allowance.
 table beside them to drift out of sync:
 
 - `ValidateProgress` — may the agent move this work along (`step_done`,
-  `work_wait`, stop, a liveness sync)? `active` and
+  `story_wait`, stop, a liveness sync)? `active` and
   `stopped` qualify; `open` and `closed` do not, and each names its way in.
   A `stopped` work is admitted on purpose: an agent able to call `step_done` is
   running whatever the status claims, and gating on it is how a work that had
@@ -210,7 +224,7 @@ work *and its children*, while `setLiveStatus` hands a mutate func the single
 record it is changing. Written that way each would have to read the children
 outside the lock, and that read is the bug they exist to remove — see
 [input 5](#a-wait-nothing-could-end). They share one predicate,
-`work.HasActiveChild`: "is there still something that could close" is one
+`work.HasActiveTask`: "is there still something that could close" is one
 question, and a wait set on one answer and cleared on another would be a wait
 that argues with itself.
 
@@ -261,7 +275,7 @@ activity(work, turn):
 ```
 
 Phase outranks wait because a wait is a standing intention and a phase is a fact
-about this second: an agent that calls `work_wait` and then keeps writing for ten
+about this second: an agent that calls `story_wait` and then keeps writing for ten
 seconds *is* running. Permission outranks background because background is the one
 nobody can act on — and those are the only two blockers a turn has.
 
@@ -328,12 +342,12 @@ fork inherits — are in
 Work items transition through `StepDone`; there is no intermediate `done` state.
 Any work item with remaining steps advances to the next step and stays `active`.
 When no steps remain, the work item closes. Waiting for child work is handled
-explicitly through `work_wait`, not `StepDone`.
+explicitly through `story_wait`, not `StepDone`.
 
 **The closing step_done is refused while any subtask is still `active`**, and the
 refusal names them (`work.Operations.refuseIfChildrenActive`):
 
-> This story still has 2 active subtask(s): "…", "…". Call `work_wait` to pause
+> This story still has 2 active subtask(s): "…", "…". Call `story_wait` to pause
 > until they close, or stop them first. The step was not completed.
 
 Only the closing one: advancing through a story's own steps alongside running
@@ -408,14 +422,18 @@ AI agents interact with the Work system through MCP (Model Context Protocol) too
 
 | Tool | Purpose | Key Parameters |
 |------|---------|----------------|
-| `work_list` | List all works, optionally by parent | `parent_id?` |
-| `work_create` | Create Story or Task | `type`, `title`, `agent_role_id`, `parent_id?` |
+| `story_list` | List the project's stories | — |
+| `task_list` | List one story's tasks | `story_id` |
+| `story_create` | Create a top-level story | `title`, `agent_role_id`, `body?` |
+| `task_create` | Create a task under a story | `story_id`, `title`, `agent_role_id`, `body?` |
 | `work_get` | Get full details including body | `id` |
 | `work_update` | Modify title/body/role | `id`, fields to update |
-| `work_delete` | Delete (cascades to children) | `id` |
-| `work_start` | Begin execution | `id`, `worktree?` (story only) |
+| `work_delete` | Delete (a story takes its tasks with it) | `id` |
+| `story_start` | Begin execution of a story | `id`, `worktree?` |
+| `task_start` | Begin execution of a task | `id` |
 | `work_needs_input` | **Retired.** Answers with an error naming `question_post` | `id`, `reason` |
-| `work_wait` | Pause for child work completion | `id` |
+| `work_create` `work_list` `work_start` `work_wait` | **Retired** by the split. Each answers with an error naming the tool that replaced it | (their old ones) |
+| `story_wait` | Pause for task completion | `id` |
 | `work_reopen` | Reopen a closed work item | `id` |
 | `step_done` | Advance work step or close work | `id` |
 | `work_comment_add` | Add progress note | `work_id`, `body` |
@@ -427,6 +445,27 @@ an agent whose context still carries the old lifecycle rules is answered with a
 sentence naming `question_post` rather than with "unknown tool", so it can act on
 it in the same turn. It moves nothing. The entry goes for good once nothing can
 still be holding those rules.
+
+**The names are the fork.** A tool is split by story and task exactly where the
+behaviour forks, and keeps the `work_` prefix where it does not: `story_start`
+takes a worktree and `task_start` refuses one; only a story has tasks
+to list or to wait for; a creation names a story or it is one. The rest —
+`work_get`, `work_update`, `work_delete`, `work_reopen`, `work_comment_*` — mean
+the same thing for both kinds, and splitting them would only double what an agent
+has to remember. The point is that an agent reads which kind a tool is for off
+the name, instead of finding out from a runtime refusal.
+
+`work_create`, `work_list`, `work_start` and `work_wait` are the four that split,
+and all four are still listed as retired stubs, on the same precedent and for the
+same reason as `work_needs_input`: each answers with an error naming the tool
+that replaced it. **When to delete them**: the engine resends `lifecycle_rules`
+with every message, so a live session has the new names by its next turn; the
+stubs only have to outlast the sessions that were mid-turn when the split
+ships. So they ship with it, and go with the first commit *after that release*
+that touches those rules. The prompts' own switch to the new names does not
+count: `prompts.yaml` is in the same binary and the same release as the split,
+so it closes none of the window the stubs cover — deleting them alongside it
+would mean they never existed in any deployed state.
 
 ### Question Tools
 
@@ -488,11 +527,11 @@ See [Posted Questions](agent-integration.md#posted-questions).
 | `agent_role_get` | Get role details including system prompt |
 | `agent_role_reset_defaults` | Reset to default roles |
 
-Two of these return less than their name suggests: `work_list` omits the body and
+Two of these return less than their name suggests: the listings omit the body and
 **A tool description is a prompt.** It is all an agent knows about a status it
 never sees the code for, so the descriptions carry the same vocabulary as
-`lifecycle_rules`: `work_list` glosses the four statuses it returns,
-`question_post` carries its whole contract (see below), `work_wait` says that
+`lifecycle_rules`: `story_list` and `task_list` gloss the four statuses they
+return, `question_post` carries its whole contract (see below), `story_wait` says that
 the news of a child closing clears the wait *and* that a wait with no subtask
 running is rejected, and `step_done` says it is not a way to pause and that
 completing a step withdraws the questions asked during it. The two
@@ -542,7 +581,7 @@ itself):
 
 - **Single writer** — only the main server mutates work data, so there is no
   two-writer fsnotify sync to coordinate.
-- **Direct side effects** — `work_start`/`work_reopen` run through the shared
+- **Direct side effects** — `story_start` / `task_start` / `work_reopen` run through the shared
   `work.Operations`, which owns the store transition and its follow-up alike, so a
   transition takes effect immediately instead of waiting for the main server to
   notice a file change.
@@ -847,9 +886,9 @@ because the way back differs:
 
 | How it left | What the parent is told to consider |
 |---|---|
-| deleted | create a replacement with `work_create` — there is no id left to restart |
-| stopped | restart it with `work_start`, by id |
-| rolled back to `open` | start it with `work_start`, by id — and that the start it already had did not take |
+| deleted | create a replacement with `task_create` — there is no id left to restart |
+| stopped | restart it with `task_start`, by id |
+| rolled back to `open` | start it with `task_start`, by id — and that the start it already had did not take |
 
 **The whole decision is one store call.** `Store.ClearChildWaitIfStranded` asks
 both halves of the question — is this wait stranded, and am I the one ending it
@@ -949,13 +988,12 @@ exists to end. It takes nothing from the question either: questions outlive a
 stop, the user is still offered them, and answering one wakes the work like any
 other message.
 
-One pass is enough, and that rests on a fact the package enforces rather than on
-luck: a `child` wait only ever comes from `SetChildWait`, which requires an
-active child, so only a type that can *have* children can hold one — and today
-that is exactly the top-level type. Nothing sits above a work stopped in this
-pass, so no stop in it can strand another wait.
-`TestOnlyTopLevelWorkCanHaveChildren` fails the day the hierarchy grows a
-level, which is when this has to become a loop to a fixed point.
+One pass is enough, and that rests on the shape rather than on luck: a `child`
+wait only ever comes from `SetChildWait`, which requires an active task, and
+only a story can hold tasks (`Work.StoryID`). Nothing sits above a story stopped
+in this pass, so no stop in it can strand another wait. A third level is what
+would turn this into a loop to a fixed point, and the model cannot express one
+— `TestCreate_StoryIDMustNameAStory` is where that is held.
 
 **Startup stops where [input 5](#a-wait-nothing-could-end) wakes, and the two
 agree rather than contradict.** Waking hands the decision to the agent, which
@@ -1039,7 +1077,7 @@ nobody can read.
 
 **The two refusals are exactly complementary**: `Wait` is accepted precisely
 when the `StepDone` that would close the work is refused. That is not symmetry
-for its own sake — each error names the other as a way out, and "call `work_wait`
+for its own sake — each error names the other as a way out, and "call `story_wait`
 instead" would be a lie if the wait could be refused for the same work.
 
 What `Wait` refuses is a wait that nothing could ever end: a `child` wait is
@@ -1277,7 +1315,7 @@ arising at all.
 ## Usage Aggregation
 
 A work item's detail reports what it consumed: its **own** session's share, and
-the **total** over itself plus every descendant at every depth
+the **total** over itself plus every one of its tasks
 (`work.AggregateUsage`, `server/work/usage.go`). The numbers are the ones the
 sessions already recorded (`session.Usage`, `server/session/usage.go`) —
 nothing in the work layer re-counts tokens, so a work total and a session total
@@ -1300,8 +1338,8 @@ Four facts go out:
 |---|---|
 | `own` | the work's own session lives in the work's worktree, which is not necessarily the active one — reaching its usage from the work detail would mean a second, cross-worktree session subscription |
 | `total` | usage is not on the list row, by the rule just above, so the client holds no consumption figure for any work item but the one it has open — it cannot sum its own children even though it has them |
-| `descendant_count` | same reason; it is also what decides whether a total is worth showing, a question that must **not** be answered by comparing `total` against `own` — that would make a column appear the moment a child's first turn lands |
-| `unpriced_session_count` | how many sessions in the subtree spent tokens while their agent reported no price. A tree mixing Claude (which prices) and Codex (which never does) would otherwise report a total that looks complete and is not |
+| `task_count` | same reason; it is also what decides whether a total is worth showing, a question that must **not** be answered by comparing `total` against `own` — that would make a column appear the moment a task's first turn lands. It was `descendant_count` while a work could sit at any depth; one level below a story leaves no descendant that is not a task, and a name promising depth invites reading it as one |
+| `unpriced_session_count` | how many sessions under the item spent tokens while their agent reported no price. A tree mixing Claude (which prices) and Codex (which never does) would otherwise report a total that looks complete and is not |
 
 No `total_tokens` (the four counters are summed by whoever displays them) and no
 context window at any level: a window is a property of one live conversation, and
@@ -1352,9 +1390,10 @@ log line.
 **Usage changes without the work item changing**, so `WorkDetailWatcher` also
 listens to every worktree's session store (`Manager.AddSessionChangeListener`)
 and, on a session change, re-sends the detail of the work item owning that
-session **and of every work item above it** — each ancestor's total includes it.
-Sessions belonging to no work item (plain chats) cost nothing, and the walk is
-bounded by a seen set rather than by trusting the parent chain.
+session **and, when that item is a task, of its story** — the story's total
+includes it. There is no level above a story, so that is the whole of it: no
+walk, and nothing that could loop. Sessions belonging to no work item (plain
+chats) cost nothing.
 
 Two details of that wiring are load-bearing here, and both generalise past this
 case — the rules are in
@@ -1504,8 +1543,8 @@ The split decides where each surface reads from:
   `WorktreeBadge` / `isWorktreeBound` and the session row's wait lookup read
   none of them, which is why narrowing the store changed no behaviour.
 
-`work.create` and `work.start` still answer with a whole `Work`: like the
-detail, they speak for the single item they acted on.
+`work.create` and `work.start` answer with the same `rpc.WorkDetailItem` the
+detail does ([api.md](../projects/api.md#work-list-rows-vs-work-detail)).
 
 ### One Vocabulary for Work Status
 
@@ -1521,8 +1560,8 @@ The work list is **global — it spans every worktree** (its subscription sets `
 
 Design decisions specific to this display:
 
-- **A work whose worktree is not decided yet shows no badge at all**, since a badge would assert a binding that can still change. What counts as decided follows from *Worktree Binding* above: a work that is no longer `open` is already frozen, and an `open` one is decided the moment its **root** starts and propagates the captured worktree down. So an open work is judged by its root, not by itself — that is what keeps the badge on an open task under a running story while hiding it for the same task under a story that has not started.
-- **The badge resolves that verdict itself rather than being told it.** `isWorktreeBound` (`workStore.ts`) owns the rule and `WorktreeBadge` reads it through a `useWorkStore` selector, so no call site can forget it. Reaching the root needs the whole work list, which is why the badge subscribes to the store instead of taking the verdict as a prop. When an ancestor is missing from that list (subscription not synced yet), the walk stops at the deepest known one and *its* status decides — with the two-level hierarchy `validParents` enforces, that means falling back to the work's own status, which errs toward hiding.
+- **A work whose worktree is not decided yet shows no badge at all**, since a badge would assert a binding that can still change. What counts as decided follows from *Worktree Binding* above: a work that is no longer `open` is already frozen, and an `open` one is decided the moment its **story** starts and propagates the captured worktree down. So an open task is judged by its story, not by itself — that is what keeps the badge on an open task under a running story while hiding it for the same task under a story that has not started. An open story has nothing above it and is simply undecided.
+- **The badge resolves that verdict itself rather than being told it.** `isWorktreeBound` (`workStore.ts`) owns the rule and `WorktreeBadge` reads it through a `useWorkStore` selector, so no call site can forget it. Reaching the story needs the whole work list, which is why the badge subscribes to the store instead of taking the verdict as a prop. It is one lookup and no walk — `story_id` names a story, and a story names nothing — so a story missing from that list (subscription not synced yet) leaves the task itself as the answer, which is `open`, which errs toward hiding.
 - **The binding is read-only, but the badge is a navigation link.** The worktree binding is frozen once a work starts (see *Worktree Binding*), so — unlike the editable role — the badge never *reassigns* a work's worktree. It is, however — for as long as that worktree exists (see below) — a clickable `<Link>` (target from `buildNavigation({ type: "home", worktree })`) that jumps to that worktree's root URL (main → `/`, feature → `/w/<worktree>/`), letting the user pivot from the mixed global list straight into the context of any work's worktree. It carries no work/chat context — just the worktree switch — and uses real anchor semantics (middle-click / open-in-new-tab) rather than a button.
 - **Stories and tasks are treated alike — the work's type is not part of the rule.** Visibility is the binding verdict above and nothing else, so every place the badge appears asks `useWorktreeBadgeVisible` the same question: the list's rows, the story detail's Tasks rows (the same `WorkRow`) and the detail header. Type did decide it on the list once, and the reason was sound for the list it was written for: a task was reachable only by expanding its story, so its badge would have restated the story badge directly above it. Neither half of that survives. A task that needs a person now gets a row of its own (docs/project-ui.md §2.2) with no story row above it — usually in a different group, and even in the same group nothing puts the two adjacent — and a task detail can be opened without its story on screen at all. A story subtree does normally share one worktree, but a task started ahead of its story (see *Worktree Binding*) is the case where it does not, and that is exactly the kind of task the list promotes.
 - **Feature name comes straight from the stored `Worktree` string**, so a work still shows its original worktree name even after that worktree is deleted. The live worktree list is consulted for one thing only: whether that worktree is still there. Once it is not, the badge is a muted `Archive` marker instead of a link — there is nowhere to go, and the link used to bounce off the redirect guard back to main (the glyph and the ban on `th-error` for this state are [cross-worktree-session-ui.md](../cross-worktree-session-ui.md#gitbranch-and-archive)). An empty list reads as *not loaded yet* rather than *no worktrees*, the same reading the redirect guard takes.
@@ -1686,14 +1725,14 @@ Start (step 0)
 
 Every message the engine sends is the same base plus one nudge. The base is: the
 MCP prefix, the agent role reference, the work context, the one section that
-differs by type — a story's coordinator rules, a task's "report to your parent
+differs by type — a story's coordinator rules, a task's "report to your story
 with `work_comment_add`" — and then `lifecycle_rules`, which every work driven by
 Pockode gets verbatim.
 
 **`lifecycle_rules` is the single place the agent-facing lifecycle is written.**
 It says what the four statuses mean, that `question_post` is how the agent
 reaches a person — posted and returned, nothing waiting on it, the answer
-arriving later as a message — that a story's wait on its subtasks is `work_wait`,
+arriving later as a message — that a story's wait on its subtasks is `story_wait`,
 that exactly two things end a turn cleanly (`step_done`, or something
 outstanding) and what happens when neither is true: a nudge, and `stopped` once
 the allowance is spent. "I still have work to do" is deliberately not
@@ -1701,8 +1740,8 @@ offered as a third way to end a turn; it is the nudged case, and listing it as a
 ending would have promised an agent a safety it does not have. For a story it
 also names **both** subtask refusals, in the one sentence that already pairs the
 two tools: a `step_done` that would close a story with subtasks still running is
-rejected, and so is a `work_wait` with none of them running. Naming only the
-first is the trap, because that same sentence points the agent at `work_wait` —
+rejected, and so is a `story_wait` with none of them running. Naming only the
+first is the trap, because that same sentence points the agent at `story_wait` —
 `prompt_test.go` holds both halves.
 
 For a story it also names the **two** ways to settle a subtask's question, says
@@ -1728,8 +1767,10 @@ question would be waited on; `question_post` waits for nothing, so there is no
 deadline to tell it about. `--answer-timeout` now governs permission requests
 alone, which the agent is not the one waiting on.
 
-`IsStory` gates the sections about children: only a story can have any, so a task
-is never offered `work_wait`.
+`IsStory` gates the sections about a story's tasks: only a story has any, so a
+task is never offered `story_wait` nor told about subtasks — here or in
+`step_auto_continue_nudge`, which is gated the same way. `prompt_test.go` checks
+both over every message a task can be sent.
 
 **Two things the agent cannot derive from any tool description.** First, that
 its CLI's own ask-the-user tool does not reach the user here: Pockode refuses it
@@ -1745,12 +1786,12 @@ allowance. `prompt_test.go` holds both sentences.
 
 **The story restart nudge sends the agent to re-read its tasks**, and that is
 load-bearing rather than politeness: a stopped parent is deliberately not told
-when a child closes (*A Child Closing*), so re-reading `work_list` and
+when a child closes (*A Child Closing*), so re-reading `task_list` and
 `work_comment_list` is the only way it learns what happened while it was stopped.
 
 **The child-done nudge says that it cleared the wait — when it did.** Being told
 about one child resumes a parent that was waiting on its children, so a story
-with other tasks still running has to call `work_wait` again, otherwise its next
+with other tasks still running has to call `story_wait` again, otherwise its next
 silent turn reads as an agent that stopped by accident. A parent that declared no
 wait is told the child closed and told that nothing was cleared — there was
 nothing to ask for again. Which of the two happened is passed to `BuildChildCompletionMessage` by the engine
@@ -1948,7 +1989,7 @@ Prompt templates are externalized in `server/work/prompts.yaml`, embedded at com
 # Uses Go text/template syntax: {{.FieldName}}
 
 pockode_mcp_prefix: |
-  All work_* and agent_role_* tools in this session...
+  All work_*, story_*, task_* and agent_role_* tools in this session...
 
 role_reference: |
   Your agent role ID is {{.AgentRoleID}}. Use agent_role_get...
@@ -1965,13 +2006,13 @@ work_context: |
 | `role_reference` | All messages | `AgentRoleID` |
 | `work_context` | All messages | `Title`, `ID` |
 | `story_behavior_rules` | Story kickoff | (none) |
-| `task_rules_with_parent` | Task with parent | `ParentID` |
+| `task_rules` | Task kickoff | `StoryID` |
 | `lifecycle_rules` | All messages | `ID`, `IsStory`, `MaxNudges` |
 | `story_restart_nudge` | Story restart | (none) |
 | `task_restart_nudge` | Task restart | (none) |
 | `story_auto_continue_nudge` | Story auto-continuation | (none) |
 | `task_auto_continue_nudge` | Task auto-continuation | (none) |
-| `step_auto_continue_nudge` | Step auto-continuation | `CurrentStep`, `TotalSteps`, `ID` |
+| `step_auto_continue_nudge` | Step auto-continuation | `CurrentStep`, `TotalSteps`, `ID`, `IsStory` |
 | `child_completion_nudge` | Waiting parent resume | `ChildTitle`, `ChildID`, `ID` |
 | `story_reopen_nudge` | Story reopen | (none) |
 | `task_reopen_nudge` | Task reopen | (none) |
