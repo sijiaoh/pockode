@@ -1,4 +1,4 @@
-import { MEDIA_QUERIES } from "@pockode/shared";
+import { MEDIA_QUERIES, Sheet } from "@pockode/shared";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
 	act,
@@ -8,6 +8,7 @@ import {
 	within,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SHORT_VIEWPORT_QUERY } from "../../hooks/useShortViewport";
 import { useAgentOptionsStore } from "../../lib/agentOptionsStore";
@@ -2276,6 +2277,56 @@ describe("ChatPanel", () => {
 			await user.keyboard("{Escape}");
 
 			expect(mockState.interrupt).not.toHaveBeenCalled();
+		});
+
+		// A sheet raised from outside the chat — a Git sheet — listens on
+		// `document` beside the interrupt, so its `stopPropagation` does not
+		// reach it; only the shared cover count does.
+		it("leaves Escape to an open sheet, then interrupts once it is gone", async () => {
+			function SheetOpener() {
+				const [open, setOpen] = useState(false);
+				return (
+					<>
+						<button type="button" onClick={() => setOpen(true)}>
+							Branches
+						</button>
+						{open && (
+							<Sheet title="Branches" onClose={() => setOpen(false)}>
+								branch list
+							</Sheet>
+						)}
+					</>
+				);
+			}
+
+			const user = userEvent.setup();
+			render(
+				<>
+					<ChatPanel {...defaultProps} />
+					<SheetOpener />
+				</>,
+			);
+			await waitForHistoryLoad();
+
+			act(() => {
+				acceptSetting({
+					turn: { phase: "running", open: true, since: "2024-01-01T00:00:00Z" },
+				});
+			});
+			await user.click(screen.getByRole("button", { name: "Branches" }));
+			expect(
+				screen.getByRole("dialog", { name: "Branches" }),
+			).toBeInTheDocument();
+			mockState.interrupt.mockClear();
+
+			await user.keyboard("{Escape}");
+
+			expect(screen.queryByRole("dialog", { name: "Branches" })).toBeNull();
+			expect(mockState.interrupt).not.toHaveBeenCalled();
+
+			await user.keyboard("{Escape}");
+
+			expect(mockState.interrupt).toHaveBeenCalledWith("test-session");
 		});
 	});
 

@@ -1,4 +1,4 @@
-import { CoveredSurface } from "@pockode/shared";
+import { CoveredSurface, useIsPageCovered } from "@pockode/shared";
 import { AlertTriangle, Square, X } from "lucide-react";
 import {
 	useCallback,
@@ -761,14 +761,21 @@ function ChatPanel({
 	const forkAnchor = forkTarget
 		? resolveForkAnchor(messages, forkTarget.messageId, hasMoreHistory)
 		: null;
-	// The answer panel counts, and that is the whole of what it costs to dim the
-	// transcript: the user is looking at a covered conversation, so Escape has
-	// to mean "put this away". It does not hold focus — it shows itself — so
-	// leaving the key here would turn a press aimed at the panel into an
-	// interrupt of the agent's turn, which cannot be undone. The panel claims
-	// Escape on the window for as long as it is up; pressing it again, with
-	// the panel gone, interrupts.
-	const isSheetOpen = Boolean(forkAnchor) || answerPanelShown;
+	// Any shared sheet or dialog — the fork sheet, a Git sheet, one raised from
+	// anywhere — has to be asked about rather than trusted to claim the key: its
+	// `stopPropagation` cannot silence this sibling `document` listener. The
+	// cover count is the one they already keep for locking the body.
+	//
+	// The answer panel is not in that count — it is drawn in the transcript's
+	// rectangle and leaves the page scrollable — so it is named here, and that
+	// is the whole of what it costs to dim the transcript: the user is looking
+	// at a covered conversation, so Escape has to mean "put this away". It does
+	// not hold focus — it shows itself — so leaving the key here would turn a
+	// press aimed at the panel into an interrupt of the agent's turn, which
+	// cannot be undone. The panel claims Escape on the window for as long as it
+	// is up; pressing it again, with the panel gone, interrupts.
+	const isPageCovered = useIsPageCovered();
+	const isSheetOpen = isPageCovered || answerPanelShown;
 
 	useEffect(() => {
 		const handleKeyDown = (e: KeyboardEvent) => {
