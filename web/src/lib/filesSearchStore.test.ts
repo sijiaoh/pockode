@@ -1,4 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+// Every case loads the store fresh, since it reads storage as it loads.
+// Importing it here as well pays the transform, which survives
+// resetModules, in the untimed import phase instead of in the first case's
+// or a hook's timeout.
+import "./filesSearchStore";
 
 describe("filesSearchStore", () => {
 	beforeEach(() => {
