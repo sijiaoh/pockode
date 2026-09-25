@@ -169,17 +169,29 @@ there before it can decide where the separator dots go.
 
 ### WorkDetailOverlay
 
-Shows the detail view for a single work item (story or task). Sections:
+Shows the detail view for a single work item (story or task).
 
-- **Parent link** — If the item is a task, shows a tappable link to the parent story
-- **Title** — Inline-editable (tap pencil icon to enter edit mode)
-- **Status** — Read-only badge, with a `WorktreeBadge` alongside it: the worktree binding isn't editable, but the badge is a link that navigates to that worktree's root (shown for both stories and tasks, since a task detail can be opened directly; hidden while neither the work nor its story has started, because only then can the worktree still change)
-- **Role** — Inline-editable select (tap to switch role)
-- **Description** — Inline-editable textarea with Markdown rendering
-- **Steps** — Step progress indicator showing current step position (if agent role has steps defined). Each step's text renders as Markdown, like the role page's copy of it ([lifecycle-ui.md §6.3](../lifecycle-ui.md#63-steplist))
-- **Usage** — Tokens and cost, this item's own beside the total over it and its tasks, from the same `work.detail` subscription and updating live as its sessions spend ([usage-display-ui.md](../usage-display-ui.md), [aggregation](../code/work-system.md#usage-aggregation))
-- **Tasks** (story only) — The story's child tasks as `WorkRow`s, the one place a story's tasks are listed, plus an `Add Task` control opening `CreateWorkSheet`. The rows differ from the list's in one slot only: the story name is left off, because every row here is a task of the story on screen. The heading carries `closed/total` and, whenever any child is `active`, an "{n} active" count — the same count that makes a refused `step_done` legible (docs/lifecycle-ui.md §6.2)
-- **Comments** — Loaded via `work.detail.subscribe` (real-time), and read-only: the list is the record agents and the engine write about what happened, and nothing here writes or edits one. A comment carries no author field ([data-model.md](data-model.md#comment)), so an edit would leave nothing to tell a user's wording from the agent's — and the next agent to read the story with `work_comment_list` would take the rewrite as its predecessor's report
+**What changes goes above what does not.** It is the list page's rule — what
+needs the user comes first ([project-ui.md §2.3](../project-ui.md#23-four-groups-and-why-four))
+— applied to one work: a user opens a running work to see where it has got to,
+and that is the questions it is asking and the tasks it is moving through, not
+the brief they wrote and the role they picked before it started. The rule draws
+one line rather than ranking every section: above the Description is what a user
+opens a running work for; from the Description down is reference — Steps and
+Usage do move, but checking them is not why the page was opened, and Comments
+is a log, read from the end it grows at. A task's page is a story's without
+Tasks, not an order of its own:
+
+1. **Parent link** — If the item is a task, shows a tappable link to the parent story
+2. **Title** — Inline-editable (tap pencil icon to enter edit mode)
+3. **Status** — Read-only `ActivityBadge`, with a `WorktreeBadge` alongside it: the worktree binding isn't editable, but the badge is a link that navigates to that worktree's root (shown for both stories and tasks, since a task detail can be opened directly; hidden while neither the work nor its story has started, because only then can the worktree still change). Under them, the `child`-only wait line ([lifecycle-ui.md §6.2](../lifecycle-ui.md#62-detail-page))
+4. **Unanswered questions** — A read-only block, present whenever `pending_questions` is non-empty, with one Answer button into the chat when the work has a session ([lifecycle-ui.md §6.2](../lifecycle-ui.md#62-detail-page))
+5. **Tasks** (story only) — The story's child tasks as `WorkRow`s, the one place a story's tasks are listed, plus an `Add Task` control opening `CreateWorkSheet`. The rows differ from the list's in one slot only: the story name is left off, because every row here is a task of the story on screen. The heading carries `closed/total` and, whenever any child is `active`, an "{n} active" count — the same count that makes a refused `step_done` legible (docs/lifecycle-ui.md §6.2)
+6. **Description** — Inline-editable textarea with Markdown rendering. Fully shown while the work is `open`, when the brief is still what the user is writing; once it has left `open` the brief is settled, and in full it would push everything below it off a phone's first screen, so it collapses to its first non-empty line (a leading heading, quote or list marker dropped — a brief usually opens with `## Goal`) and expands, through `CollapsibleBody`, from that line or the chevron beside the pencil. The component is keyed by work id, so moving between a story and its task does not carry one brief's expanded or half-edited state to the next
+7. **Role** — Inline-editable select (tap to switch role)
+8. **Steps** — Step progress indicator showing current step position (if agent role has steps defined). Each step's text renders as Markdown, like the role page's copy of it ([lifecycle-ui.md §6.3](../lifecycle-ui.md#63-steplist))
+9. **Usage** — Tokens and cost, this item's own beside the total over it and its tasks, from the same `work.detail` subscription and updating live as its sessions spend ([usage-display-ui.md](../usage-display-ui.md), [aggregation](../code/work-system.md#usage-aggregation))
+10. **Comments** — Loaded via `work.detail.subscribe` (real-time), and read-only: the list is the record agents and the engine write about what happened, and nothing here writes or edits one. A comment carries no author field ([data-model.md](data-model.md#comment)), so an edit would leave nothing to tell a user's wording from the agent's — and the next agent to read the story with `work_comment_list` would take the rewrite as its predecessor's report
 
 **Bottom action bar:**
 
