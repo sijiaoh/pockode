@@ -422,7 +422,9 @@ the register's entry for a control no user could reach.
 **Line 2** is a single line, no wrapping, built from a fixed slot order. Each
 slot has one rule for when it appears, and the group never changes it; when the
 line is too narrow, the rightmost slots truncate first, which is why the order is
-what it is. The line is **two tiers, not seven equals**: slots 1 and 2 are
+what it is. Slot 7 is the exception: it stands outside the clip, so the
+truncation eats slots 1–6 from the right and never the date (its row says why).
+The line is **two tiers, not seven equals**: slots 1 and 2 are
 `text-th-text-secondary`, the rest keep the container's `text-th-text-muted`.
 Both clear AA in every variant (the table above) — the tiers are a difference in
 weight, not one tier reaching for legibility the other gives up.
@@ -436,7 +438,7 @@ weight, not one tier reaching for legibility the other gives up.
 | 4 | Role name | the work has a role | attribute | Who is doing it. |
 | 5 | `{n} active` | the row is a story with active children | attribute | The only thing lost by not nesting tasks is "something under here is moving", and this is it — in the same words the detail page's children header uses. |
 | 6 | `{closed}/{total} tasks` | the row is a story with children | attribute | Progress. |
-| 7 | Relative `updated_at`, `ml-auto` | **both segments** of the list | attribute | Every list here is sorted by it (§2.3), and a sort key the user cannot see is a list in no order at all. Right-aligned so it reads as a column: a date at a different x on every row is a sort order the user has to reconstruct. It is the one slot with no leading `·` — the gap already separates it, and a middot left floating mid-line reads as a slot that failed. The story detail's Tasks list does not draw it: that list is in creation order (§2.3), so there is no sort key there to show. |
+| 7 | Relative `updated_at`, outside the clip, at the right edge | **both segments** of the list | attribute | Every list here is sorted by it (§2.3), and a sort key the user cannot see is a list in no order at all — which is also why it is the one slot the clip never reaches: as the last slot it would be the first thing a narrow line lost. It is drawn after the clipping container rather than inside it, and that container's `flex-1` pushes it to the right edge so it reads as a column: a date at a different x on every row is a sort order the user has to reconstruct. It is the one slot with no leading `·` — the gap already separates it, and a middot left floating mid-line reads as a slot that failed. That gap is twice the one either side of a `·`, because the clip cuts mid-glyph with no ellipsis: at the slots' spacing a cut-off `2 act` and the date `3m` read as one word. The story detail's Tasks list does not draw it: that list is in creation order (§2.3), so there is no sort key there to show. |
 
 **Slot 1 comes before slot 2, and that overrules the order this section used to
 give them.** Putting the state first was right while the state had exactly one
@@ -791,6 +793,7 @@ The checks, in the order they would fail, and where each one is now:
 | 18 | A project with nothing stopped renders no *Stopped* heading at all — not an empty one, not a gap — and opens on *Needs you* | `WorkListOverlay.test.tsx` |
 | 19 | Each group is in `updated_at` order, newest first, and the comparison is of times rather than of strings — two timestamps written with different UTC offsets sort by instant, not by spelling | `workOrder.test.ts` for the rule, `WorkListOverlay.test.tsx` for the list actually using it |
 | 20 | Each capped group's heading counts its own hidden rows, and one failure to fetch them prints one message with one Retry however many groups are offering the control | `WorkListOverlay.test.tsx`; the server half is `work_list_segment_test.go` (see [list-paging-ui.md §4.1](list-paging-ui.md#41-current-is-loaded-whole-and-that-is-the-design)) |
+| 21 | Line 2 clips the other slots and never the date: the role is inside the clipping container and slot 7 is not | `WorkRow.test.tsx` |
 
 Check 6 was the one that reached the end of the rewrite untested. It had been
 written down as the behaviour that was already right and could be lost while the

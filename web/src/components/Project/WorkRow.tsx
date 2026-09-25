@@ -100,8 +100,9 @@ export default function WorkRow({
 			: "border-l-th-border";
 
 	// Fixed order, one appearance rule each, and the line clips from the right —
-	// which is what puts depth and state first and the timestamp last.
-	const slots: { key: string; node: ReactNode; pushedRight?: boolean }[] = [];
+	// which is what puts depth and state first. The timestamp is not one of
+	// these: it is drawn outside the clip, below.
+	const slots: { key: string; node: ReactNode }[] = [];
 	if (storyTitle) {
 		// Ahead of the state, which overrules the order docs/project-ui.md §3 gave
 		// these two: that order was right while the state had exactly one channel,
@@ -202,15 +203,6 @@ export default function WorkRow({
 			),
 		});
 	}
-	if (showUpdatedAt) {
-		// Pushed to the right edge so the sort key reads as a column: a date per row
-		// at a different x is a sort the user has to reconstruct.
-		slots.push({
-			key: "updated",
-			pushedRight: true,
-			node: <span>{formatRelativeDate(work.updated_at)}</span>,
-		});
-	}
 
 	const Heading = headingLevel === 4 ? "h4" : "h3";
 
@@ -279,28 +271,40 @@ export default function WorkRow({
 			</div>
 
 			{/* Always rendered — the state word is unconditional, so every card is
-			    exactly two lines tall. The clip is what makes the line truncate from
-			    the right, and it clips focus rings too — the worktree badge's is a
-			    `ring-2` box-shadow with no room above it, or to its left when it is
-			    the first slot. The 2px of padding is that room, and the matching
-			    negative margins keep the row exactly as tall and as wide as it was:
-			    half a focus ring is the one kind worse than none. */}
-			<div className="-mx-0.5 -mt-0.5 flex items-center gap-1.5 overflow-hidden whitespace-nowrap px-0.5 pt-0.5 pb-1 text-xs text-th-text-muted">
-				{slots.map((slot, i) => (
-					// The separator belongs to the slot that follows it, so a slot
-					// that is absent takes its separator with it — and a slot pushed to
-					// the far end drops it, because the gap is already the separator and
-					// a `·` left floating mid-line reads as a slot that failed to render.
-					<span
-						key={slot.key}
-						className={`flex shrink-0 items-center gap-1.5${slot.pushedRight ? " ml-auto" : ""}`}
-					>
-						{i > 0 && !slot.pushedRight && (
-							<span aria-hidden="true">&middot;</span>
-						)}
-						{slot.node}
+			    exactly two lines tall. */}
+			<div className="flex items-center gap-1.5 whitespace-nowrap pb-1 text-xs text-th-text-muted">
+				{/* The clip is what makes the slots truncate from the right, and it
+				    clips focus rings too — the worktree badge's is a `ring-2`
+				    box-shadow with no room above it, or to its left when it is the
+				    first slot, and only the line's bottom padding below it. So that
+				    padding is the clip's own, and the 2px above and to the left is
+				    the rest of the room; the matching negative margins keep the row
+				    exactly as tall and as wide as it was, and the date level with
+				    the slots: half a focus ring is the one kind worse than none. Not
+				    on the right, where it would only narrow the gap to the date. */}
+				<div className="-mt-0.5 -mb-1 -ml-0.5 flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden pt-0.5 pb-1 pl-0.5">
+					{slots.map((slot, i) => (
+						// The separator belongs to the slot that follows it, so a slot
+						// that is absent takes its separator with it.
+						<span key={slot.key} className="flex shrink-0 items-center gap-1.5">
+							{i > 0 && <span aria-hidden="true">&middot;</span>}
+							{slot.node}
+						</span>
+					))}
+				</div>
+				{/* Outside the clip, because it is the sort key: the slot the line
+				    would lose first is the one that says why this row is where it
+				    is. The clip's `flex-1` pins it to the right edge so it reads as
+				    a column — a date per row at a different x is a sort the user has
+				    to reconstruct — and that gap is its separator, since a `·` left
+				    floating mid-line reads as a slot that failed to render. It is
+				    widened because the clip cuts mid-glyph with no ellipsis: at the
+				    slots' own spacing, `2 act` and `3m` read as one word. */}
+				{showUpdatedAt && (
+					<span className="shrink-0 pl-1.5">
+						{formatRelativeDate(work.updated_at)}
 					</span>
-				))}
+				)}
 			</div>
 
 			{error && (

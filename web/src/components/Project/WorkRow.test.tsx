@@ -314,6 +314,17 @@ describe("WorkRow", () => {
 		expect(screen.getByText(/ago|just now|yesterday/)).toBeInTheDocument();
 	});
 
+	// The sort key is what says why the row is where it is, so a line too long
+	// for the screen clips the other slots and never it.
+	it("keeps the date out of the line's clip", () => {
+		renderRow({ roleName: "Engineer", showUpdatedAt: true });
+
+		const role = screen.getByText("Engineer");
+		const date = screen.getByText(/ago|just now|yesterday/);
+		expect(role.closest(".overflow-hidden")).not.toBeNull();
+		expect(date.closest(".overflow-hidden")).toBeNull();
+	});
+
 	// No row expands: children are listed in exactly one place, the story's
 	// detail page.
 	it("holds no children and no way to ask for them", () => {
