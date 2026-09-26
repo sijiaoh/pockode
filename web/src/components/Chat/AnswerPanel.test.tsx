@@ -70,7 +70,7 @@ describe("AnswerPanel", () => {
 		// Capped against the rectangle, so it cannot grow past the conversation
 		// it is centred in; uncapped in the other direction, so one short
 		// question is a card and not a wall.
-		expect(panel).toHaveClass("max-h-[85%]", "max-w-md", "rounded-xl");
+		expect(panel).toHaveClass("max-h-[85%]", "max-w-2xl", "rounded-xl");
 		expect(panel).not.toHaveClass("h-full");
 
 		// The backdrop is `absolute`, never `fixed`: it is positioned against

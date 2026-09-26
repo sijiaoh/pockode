@@ -201,9 +201,9 @@ nothing it renders nothing — unchanged.
 `web/src/components/Chat/AnswerPanel.tsx`. It is a **card centred in the
 transcript's rectangle, over a backdrop that dims that rectangle and nothing
 else**: a scrolling body between a fixed header and footer, drawn on
-`bg-th-bg-secondary` with `Sheet`'s centred rounding, width and shadow, never
-taller than **85% of that rectangle** and usually shorter, because its height is
-whatever the questions need.
+`bg-th-bg-secondary` with `Sheet`'s centred rounding and shadow, at most
+`max-w-2xl` wide, never taller than **85% of that rectangle** and usually
+shorter, because its height is whatever the questions need.
 
 **The backdrop stops at the transcript's edges, and that is the whole of what it
 covers.** The session header above it, and the strip, the session bar and the
@@ -344,10 +344,28 @@ rectangle. No `sm:`, no `lg:`, no `useIsExpanded()`.
 Width decides layout *form* ([responsive-ui.md](responsive-ui.md)), and here
 there is no second form to decide between: the transcript is one column at every
 tier, and "centred in that column" means the same thing in all three. What width
-does change it handles without a branch — `mx-4 w-full max-w-md`, so a narrow
-screen gets the column less its margins and a wide one is held to `max-w-md`,
-the same value `Sheet` uses centred. At the expanded tier the rectangle is
-already narrowed by the sidebar, so this is never near the screen's width.
+does change it handles without a branch — `mx-4 w-full max-w-2xl`, so a narrow
+screen gets the column less its margins and a wide one is held to `max-w-2xl`.
+At the expanded tier the rectangle is already narrowed by the sidebar, so this
+is never near the screen's width.
+
+**The cap is a reading measure, not a share of the screen.** The card holds
+prose and code — question text and option descriptions are Markdown — so what
+it is sized for is line length. At `max-w-2xl` (672px) the question text gets
+about 614px once the body and block padding are taken off: roughly 88 Latin
+characters or 44 CJK ones per line of `prose-sm`, the top of the comfortable
+range for each. One step wider (`max-w-3xl`) runs Latin text past 100 a line,
+and a percentage width would keep growing with the monitor, so the cap stops
+here at every width. It is not a new number either: `DialogShell` caps its
+card and the settings page its column at the same value, for the same reason.
+
+A phone in portrait never reaches the cap: its column is narrower, so `w-full`
+decides the width and the cap is irrelevant. A phone in landscape does — it is
+the regular tier, and at ~844px the card grows to the cap. That is intended:
+width decides layout, not the device, and a landscape phone is short of height,
+not width, so fewer wrapped lines make its card shorter. Keeping it unchanged
+would take an `lg:` prefix, which would leave every 640–1023px desktop window
+with the narrow card too.
 
 `Sheet`'s own split — drawer below the expanded tier, centred at and above it —
 is deliberately **not** copied. It exists because `Sheet` is modal over the whole
@@ -356,8 +374,8 @@ make one panel two different things at two widths for no gain, and the centred
 card is already inside a rectangle that is never the whole screen.
 
 **No `max-w` on the text inside the card.** The question lines run as wide as
-the card, which `max-w-md` has already sized for reading. A second cap inside it
-would be one component obeying a rule the rest of the app does not have.
+the card, which `max-w-2xl` has already sized for reading. A second cap inside
+it would be one component obeying a rule the rest of the app does not have.
 
 ### Room on a short viewport
 
@@ -482,11 +500,14 @@ for shared code.
 What is left to duplicate is a few lines of Tailwind and one boolean. That
 repetition is cheaper than an API surface spanning two projects, and because
 those lines copy `Sheet`'s own centred values — `rounded-xl`, `shadow-xl`,
-`max-w-md`, `bg-th-bg-secondary`, the header and footer borders and padding,
-the `touch-target` close button, and the separate backdrop layer — the panel
-looks exactly like every sheet in the app. Consistency from the tokens, which is
-where it belongs. The one value deliberately *not* copied is the drag handle
-(§8). `Sheet` itself is untouched, and its other callers with it.
+`bg-th-bg-secondary`, the header and footer borders and padding, the
+`touch-target` close button, and the separate backdrop layer — the panel looks
+exactly like every sheet in the app. Consistency from the tokens, which is where
+it belongs. Two values are deliberately *not* copied: the drag handle (§8), and
+the width — `Sheet`'s `max-w-md` suits the pickers and short forms it holds, and
+this card holds prose and code, so it takes the reading measure argued in
+[One shape at every width](#one-shape-at-every-width). `Sheet` itself is
+untouched, and its other callers with it.
 
 ### What it draws
 
@@ -1223,11 +1244,15 @@ to carry.
   and what shows through it is exactly what has just been put out of reach.
   Reading the conversation is one press on the backdrop away.
 - **No swipe-to-dismiss, and no drag handle.** Neither has anything to grab on
-  a centred card, and `Sheet`'s handle is the one value of its the panel does
-  not copy (§3): a handle with no drag behind it promises a gesture that does
-  not exist. Closing is the `×`, Escape, a press on the backdrop, or the
-  footer's Close once nothing is left — deliberate acts, none of them reachable
-  by a flick through the last question.
+  a centred card, and `Sheet`'s handle is one of the two values of its the
+  panel does not copy (§3): a handle with no drag behind it promises a gesture
+  that does not exist. Closing is the `×`, Escape, a press on the backdrop, or
+  the footer's Close once nothing is left — deliberate acts, none of them
+  reachable by a flick through the last question.
+- **No second column of options on a wide screen.** The card's extra width goes
+  to fewer wrapped lines, not to a grid: descriptions differ in length, so a
+  grid's rows would not line up and its reading order — across or down — would
+  be a guess, while a list of choices is read top to bottom.
 - **No third, minimised form** — a bubble, a pill, a collapsed bar. Closed plus
   the strip's row 2 **Answer** already is that form, and it has one state
   instead of two.

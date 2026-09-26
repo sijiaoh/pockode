@@ -477,10 +477,13 @@ function AnswerPanel({
 				// and no measurement of anything to stay inside the transcript, and
 				// it goes on doing so when the soft keyboard halves the screen. No
 				// `h-full`, so a single short question is a small card rather than a
-				// wall. The width, rounding, shadow and colour are `Sheet`'s own
-				// centred values; its drag handle is not copied, there being nothing
-				// to drag here.
-				className="relative mx-4 flex max-h-[85%] w-full max-w-md flex-col overflow-hidden rounded-xl bg-th-bg-secondary shadow-xl outline-none"
+				// wall. The rounding, shadow and colour are `Sheet`'s own centred
+				// values; its drag handle is not copied, there being nothing to drag
+				// here. The width is not `Sheet`'s: that holds pickers and short forms,
+				// this holds prose and code, so the cap is a reading measure, with
+				// no breakpoint prefix (docs/answering-ui.md §3, "One shape at every
+				// width").
+				className="relative mx-4 flex max-h-[85%] w-full max-w-2xl flex-col overflow-hidden rounded-xl bg-th-bg-secondary shadow-xl outline-none"
 			>
 				{/* Header, footer and the close button wear the same classes as
 				    `Sheet`'s, copied rather than shared: what makes them look alike
