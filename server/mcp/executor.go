@@ -148,10 +148,6 @@ func (e *Executor) Execute(ctx context.Context, caller Caller, name string, args
 		return e.storyStart(ctx, args)
 	case "task_start":
 		return e.taskStart(ctx, args)
-	case "work_needs_input":
-		return e.workNeedsInput(ctx, args)
-	case "work_create", "work_list", "work_start", "work_wait":
-		return e.retiredBySplit(name)
 	case "work_reopen":
 		return e.workReopen(ctx, args)
 	case "story_wait":
@@ -551,40 +547,6 @@ func (e *Executor) assignWorktree(ctx context.Context, id, name string) (string,
 		note += fmt.Sprintf(". Its setup hook did not run: %s (%s)", skip.Reason, skip.Hint)
 	}
 	return note, nil
-}
-
-// workNeedsInput is retired and answers with the way to do what it did.
-//
-// It parked the work on a free-text reason shown on its detail page, which was
-// the worst version of a question: no structure, no record in the transcript,
-// and nowhere to answer it from. question_post is the whole of what replaced it,
-// and it is strictly more — the agent can go on working while it waits.
-//
-// The tool is still registered so that an agent carrying the old lifecycle rules
-// in its context is told this rather than "unknown tool", and it is a user error
-// rather than a failure: nothing broke, and the next call is the right one.
-func (e *Executor) workNeedsInput(context.Context, json.RawMessage) (string, error) {
-	return "", userErrorf("work_needs_input is retired: ask the user with question_post instead. " +
-		"It returns as soon as the question is posted — you can carry on working, or end your turn without being nudged — " +
-		"and the answer arrives as a message in this chat")
-}
-
-// retiredBySplit answers the four tools the story/task split replaced, naming
-// the one to call instead. Like work_needs_input it is a user error rather than
-// a failure: nothing broke, and the next call is the right one.
-//
-// It exists for agents that were mid-conversation when the split shipped and
-// still hold the lifecycle rules that named these tools. Delete it with the
-// tool definitions it answers for — see the note on them in tools.go for when
-// that is.
-func (e *Executor) retiredBySplit(name string) (string, error) {
-	replacements := map[string]string{
-		"work_create": "story_create for a top-level story, or task_create (with story_id) for a task under one — there is no type argument any more, naming a story is what makes a task",
-		"work_list":   "story_list for the stories, or task_list (with story_id) for one story's tasks",
-		"work_start":  "story_start (which takes the optional worktree) for a story, or task_start for a task",
-		"work_wait":   "story_wait — only a story has tasks to wait for",
-	}
-	return "", userErrorf("%s is retired: use %s", name, replacements[name])
 }
 
 func (e *Executor) workReopen(ctx context.Context, args json.RawMessage) (string, error) {

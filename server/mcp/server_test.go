@@ -71,7 +71,7 @@ func TestToolsList(t *testing.T) {
 		names[td.Name] = true
 	}
 
-	for _, want := range []string{"story_list", "task_list", "story_create", "task_create", "work_update", "work_get", "work_delete", "story_start", "task_start", "story_wait", "work_needs_input", "step_done", "work_comment_add", "work_comment_list", "agent_role_list", "agent_role_get", "agent_role_reset_defaults"} {
+	for _, want := range []string{"story_list", "task_list", "story_create", "task_create", "work_update", "work_get", "work_delete", "story_start", "task_start", "story_wait", "step_done", "work_comment_add", "work_comment_list", "agent_role_list", "agent_role_get", "agent_role_reset_defaults"} {
 		if !names[want] {
 			t.Errorf("missing tool %q", want)
 		}

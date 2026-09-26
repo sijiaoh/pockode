@@ -404,7 +404,7 @@ func TestBuildReopenMessage_ContainsBaseAndNudge(t *testing.T) {
 // Every message the engine sends carries the lifecycle section, and none of them
 // may carry the vocabulary it replaced: an agent told its work is "in_progress"
 // will go looking for a status the store cannot produce, and one told to call
-// work_create is answered by a retired stub instead of doing the work. Checked
+// work_create is answered with "unknown tool" instead of doing the work. Checked
 // over every send site rather than over prompts.yaml, because a stale word can
 // just as easily be appended in Go.
 func TestEverySystemMessage_SpeaksTheCurrentVocabulary(t *testing.T) {
@@ -436,7 +436,7 @@ func TestEverySystemMessage_SpeaksTheCurrentVocabulary(t *testing.T) {
 	for name, msg := range messages {
 		for _, retired := range []string{
 			"in_progress", "needs_input state", "still in_progress",
-			// The tools the story/task split retired, and the two-field way of
+			// The tools the story/task split replaced, and the two-field way of
 			// naming a task's story that it made unrepresentable.
 			"work_create", "work_list", "work_start", "work_wait", "parent_id", `type="task"`,
 			// What text/template renders for a map key the template names and

@@ -481,8 +481,8 @@ func TestItemStarted_MCPToolCallWithoutArguments(t *testing.T) {
 		name string
 		item string
 	}{
-		{"omitted", `{"type":"mcpToolCall","id":"call-1","server":"pockode","tool":"work_list","status":"inProgress"}`},
-		{"null", `{"type":"mcpToolCall","id":"call-1","server":"pockode","tool":"work_list","status":"inProgress","arguments":null}`},
+		{"omitted", `{"type":"mcpToolCall","id":"call-1","server":"pockode","tool":"story_list","status":"inProgress"}`},
+		{"null", `{"type":"mcpToolCall","id":"call-1","server":"pockode","tool":"story_list","status":"inProgress","arguments":null}`},
 	}
 
 	for _, tt := range tests {

@@ -431,20 +431,12 @@ AI agents interact with the Work system through MCP (Model Context Protocol) too
 | `work_delete` | Delete (a story takes its tasks with it) | `id` |
 | `story_start` | Begin execution of a story | `id`, `worktree?` |
 | `task_start` | Begin execution of a task | `id` |
-| `work_needs_input` | **Retired.** Answers with an error naming `question_post` | `id`, `reason` |
-| `work_create` `work_list` `work_start` `work_wait` | **Retired** by the split. Each answers with an error naming the tool that replaced it | (their old ones) |
 | `story_wait` | Pause for task completion | `id` |
 | `work_reopen` | Reopen a closed work item | `id` |
 | `step_done` | Advance work step or close work | `id` |
 | `work_comment_add` | Add progress note | `work_id`, `body` |
 | `work_comment_list` | List comments | `work_id` |
 | `work_comment_update` | Update comment text | `id`, `body` |
-
-`work_needs_input` is still listed, and that is the whole of what it is for now:
-an agent whose context still carries the old lifecycle rules is answered with a
-sentence naming `question_post` rather than with "unknown tool", so it can act on
-it in the same turn. It moves nothing. The entry goes for good once nothing can
-still be holding those rules.
 
 **The names are the fork.** A tool is split by story and task exactly where the
 behaviour forks, and keeps the `work_` prefix where it does not: `story_start`
@@ -455,17 +447,14 @@ the same thing for both kinds, and splitting them would only double what an agen
 has to remember. The point is that an agent reads which kind a tool is for off
 the name, instead of finding out from a runtime refusal.
 
-`work_create`, `work_list`, `work_start` and `work_wait` are the four that split,
-and all four are still listed as retired stubs, on the same precedent and for the
-same reason as `work_needs_input`: each answers with an error naming the tool
-that replaced it. **When to delete them**: the engine resends `lifecycle_rules`
-with every message, so a live session has the new names by its next turn; the
-stubs only have to outlast the sessions that were mid-turn when the split
-ships. So they ship with it, and go with the first commit *after that release*
-that touches those rules. The prompts' own switch to the new names does not
-count: `prompts.yaml` is in the same binary and the same release as the split,
-so it closes none of the window the stubs cover — deleting them alongside it
-would mean they never existed in any deployed state.
+The split replaced `work_create`, `work_list`, `work_start` and `work_wait`.
+For the release that shipped it they stayed registered as stubs answering with
+an error that named their replacement, to cover sessions that were mid-turn with
+the old names; the engine resends `lifecycle_rules` with every message, so that
+window closed with the next turn, and the stubs are gone. A call to one of those
+names is now "unknown tool" like any other, which is why
+`work.TestEverySystemMessage_SpeaksTheCurrentVocabulary` keeps them out of every
+message the engine composes.
 
 ### Question Tools
 

@@ -13,10 +13,9 @@ package agent
 
 // CLIQuestionRefusal is that text, and there is one copy of it because there is
 // one fact to state. It says the same three things as the question_post tool
-// result and the work_needs_input retirement notice — posted and it returns,
-// nothing waits on you, the answer comes back as a message — so that an agent
-// meeting all three does not have to work out whether they describe one
-// mechanism or three.
+// result — posted and it returns, nothing waits on you, the answer comes back
+// as a message — so that an agent meeting both does not have to work out
+// whether they describe one mechanism or two.
 const CLIQuestionRefusal = "This question was not delivered to the user: Pockode does not ask the user through this tool. " +
 	"Ask with question_post instead. It returns as soon as the question is posted — nothing waits on you, so carry on " +
 	"working or end your turn — and the answer, or the user's refusal to answer, arrives as a message in this chat, " +

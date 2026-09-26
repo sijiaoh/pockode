@@ -133,11 +133,11 @@ alternative — `wait` first — needs a priority table between two kinds of wai
 that can legitimately coexist, and every entry in such a table is an arbitrary
 choice someone later "fixes".
 
-`work.wait == "user"` leaves this function, and the `work_needs_input` that set
-it leaves with it — the tool name survives only as a notice pointing at
-`question_post` ([work-system.md](code/work-system.md#work-tools)). Waiting for
-a person is no longer something a work declares; it is the session's unanswered
-questions, and they never enter the activity at all.
+`work.wait == "user"` leaves this function, and the `work_needs_input` tool that
+set it is gone with it, replaced by `question_post`
+([agent-integration.md](code/agent-integration.md#retired-the-paths-this-replaced)).
+Waiting for a person is no longer something a work declares; it is the session's
+unanswered questions, and they never enter the activity at all.
 
 ### 1.3 Where it is computed
 

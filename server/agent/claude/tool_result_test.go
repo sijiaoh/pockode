@@ -230,7 +230,7 @@ func TestParseToolResultUndecodableImage(t *testing.T) {
 // ToolSearch's answer used to reach the transcript as raw JSON.
 func TestParseToolResultToolReference(t *testing.T) {
 	store, _ := testStore(t)
-	content := `[{"type":"tool_reference","tool_name":"mcp__pockode__work_get"},{"type":"tool_reference","tool_name":"mcp__pockode__work_list"}]`
+	content := `[{"type":"tool_reference","tool_name":"mcp__pockode__work_get"},{"type":"tool_reference","tool_name":"mcp__pockode__story_list"}]`
 
 	result := parseToolResultLine(t, store, content)
 
@@ -240,7 +240,7 @@ func TestParseToolResultToolReference(t *testing.T) {
 	if len(result.Contents) != 2 {
 		t.Fatalf("expected 2 blocks, got %#v", result.Contents)
 	}
-	for i, want := range []string{"mcp__pockode__work_get", "mcp__pockode__work_list"} {
+	for i, want := range []string{"mcp__pockode__work_get", "mcp__pockode__story_list"} {
 		block := result.Contents[i]
 		if block.Type != agent.ContentBlockToolReference || block.ToolName != want {
 			t.Errorf("block %d: got %#v, want a reference to %q", i, block, want)

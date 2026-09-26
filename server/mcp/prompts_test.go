@@ -3,7 +3,6 @@ package mcp
 import (
 	"os"
 	"regexp"
-	"strings"
 	"testing"
 
 	"gopkg.in/yaml.v3"
@@ -16,10 +15,9 @@ var toolLikeName = regexp.MustCompile(`\b(?:work|story|task|step|question|agent_
 // prompts.yaml is the other half of the tool contract: it is where an agent is
 // told which tool to call, and it is read from a different package than the one
 // that defines the tools, so a rename on one side compiles fine without the
-// other. Every name it uses has to be a tool that is listed and not retired, or
-// an argument one of those tools takes — a prompt pointing at a retired stub
-// costs the agent a refused call on every message, and one pointing at a name
-// no tool has costs it an "unknown tool". (Only names carrying a tool prefix are
+// other. Every name it uses has to be a tool that is listed, or an argument one
+// of those tools takes — a prompt pointing at a name no tool has costs the agent
+// an "unknown tool" on every message. (Only names carrying a tool prefix are
 // seen; a misspelt prefix is not.)
 //
 // Read from the file rather than from the builders because the file is the
@@ -37,27 +35,16 @@ func TestPrompts_NameOnlyLiveTools(t *testing.T) {
 	}
 
 	live := map[string]bool{}
-	retired := map[string]bool{}
 	for _, def := range toolDefinitions {
-		if strings.HasPrefix(def.Description, "Retired") {
-			retired[def.Name] = true
-			continue
-		}
 		live[def.Name] = true
 		for arg := range def.InputSchema.Properties {
 			live[arg] = true
 		}
 	}
-	if len(retired) == 0 {
-		t.Fatal("no tool reads as retired; the check below would pass vacuously")
-	}
 
 	for key, text := range templates {
 		for _, name := range toolLikeName.FindAllString(text, -1) {
-			switch {
-			case retired[name]:
-				t.Errorf("%s tells the agent to use %s, which is retired", key, name)
-			case !live[name]:
+			if !live[name] {
 				t.Errorf("%s names %s, which is neither a tool nor an argument of one", key, name)
 			}
 		}

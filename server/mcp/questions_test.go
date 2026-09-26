@@ -296,17 +296,17 @@ func TestQuestionTools_AreAdvertised(t *testing.T) {
 	}
 }
 
-// The agent meets three texts about asking the user — the question_post reply,
-// the work_needs_input retirement notice, and the refusal a CLI's own question
-// tool gets (agent.CLIQuestionRefusal, sent from both agent packages). They
-// describe one mechanism, and an agent reading three different accounts of it
-// has to work out for itself whether they are one thing or three.
+// The agent meets two texts about asking the user — the question_post reply
+// and the refusal a CLI's own question tool gets (agent.CLIQuestionRefusal, sent
+// from both agent packages). They describe one mechanism, and an agent reading
+// two different accounts of it has to work out for itself whether they are one
+// thing or two.
 //
 // Only the load-bearing claims are pinned, not the wording: each text has to say
 // that the agent carries on and that the answer comes back as a message. Those
 // are the two things a model cannot derive, and the two a rewrite is most likely
 // to lose.
-func TestAskingTheUser_TheThreeTextsMakeTheSameClaims(t *testing.T) {
+func TestAskingTheUser_TheTwoTextsMakeTheSameClaims(t *testing.T) {
 	exec, _, _, _ := newQuestionExec(t)
 
 	posted, err := callAs(t, exec, Caller{SessionID: "sess-1"}, "question_post", map[string]any{
@@ -316,14 +316,8 @@ func TestAskingTheUser_TheThreeTextsMakeTheSameClaims(t *testing.T) {
 		t.Fatalf("question_post: %v", err)
 	}
 
-	_, retirementErr := callAs(t, exec, Caller{SessionID: "sess-1"}, "work_needs_input", map[string]any{})
-	if retirementErr == nil {
-		t.Fatal("work_needs_input answered instead of saying it is retired")
-	}
-
 	texts := map[string]string{
 		"question_post reply":           posted,
-		"work_needs_input retirement":   retirementErr.Error(),
 		"the CLI question tool refusal": agent.CLIQuestionRefusal,
 	}
 	for name, text := range texts {
@@ -334,11 +328,9 @@ func TestAskingTheUser_TheThreeTextsMakeTheSameClaims(t *testing.T) {
 		}
 	}
 
-	// The two that redirect have to name where to go.
-	for _, name := range []string{"work_needs_input retirement", "the CLI question tool refusal"} {
-		if !strings.Contains(texts[name], "question_post") {
-			t.Errorf("%s does not name question_post: %s", name, texts[name])
-		}
+	// The refusal redirects, so it has to name where to go.
+	if !strings.Contains(agent.CLIQuestionRefusal, "question_post") {
+		t.Errorf("the CLI question tool refusal does not name question_post: %s", agent.CLIQuestionRefusal)
 	}
 }
 

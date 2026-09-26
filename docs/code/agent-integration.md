@@ -892,14 +892,12 @@ Recorded so they do not become blanks nobody knows about.
   ([agent-event.md](../agent-event.md#legacy-ask_user_question-and-question_response)).
   A legacy card nothing settled says in words that it can no longer be answered,
   which is what replaced the `expired` question status and its table of reasons.
-- **The `work_needs_input` MCP tool keeps a stub on purpose.** It moves no state
-  and answers every call with a user error naming `question_post`
-  ([work-system.md](work-system.md#work-tools)). The *capability* is what was
-  deleted — `wait=user` and `Work.WaitReason` are gone — but an agent whose context
-  still carries the old lifecycle rules will call it, and the difference between
-  that sentence and "unknown tool" is whether it can put itself right in the same
-  turn. Its wording, `question_post`'s reply and `agent.CLIQuestionRefusal` are
-  held to the same claims by `mcp.TestAskingTheUser_TheThreeTextsMakeTheSameClaims`.
+- **The `work_needs_input` MCP tool**, with `wait=user` and `Work.WaitReason`
+  behind it. For a while the name stayed registered as a stub answering with an
+  error naming `question_post`, so an agent still carrying the old lifecycle
+  rules could put itself right in the same turn; the engine resends those rules
+  with every message, so nothing holds them any more, and the stub is gone too.
+  A call to it is now "unknown tool" like any other name.
 
 ### Refusing the CLIs' Own Question
 
@@ -925,10 +923,10 @@ Two lines of defence, in that order:
    flag.
 
 **One reason text, `agent.CLIQuestionRefusal`, shared by both.** It says the same
-three things as the `question_post` tool result and the `work_needs_input`
-retirement notice — posted and it returns, nothing waits on you, the answer comes
-back as a message — so an agent meeting all three does not have to work out
-whether they describe one mechanism or three.
+three things as the `question_post` tool result — posted and it returns, nothing
+waits on you, the answer comes back as a message — so an agent meeting both does
+not have to work out whether they describe one mechanism or two;
+`mcp.TestAskingTheUser_TheTwoTextsMakeTheSameClaims` holds them to it.
 
 **The refusal is not silent.** Both sides emit
 `agent.CLIQuestionRefusedWarning`, a user-visible record: something happened in

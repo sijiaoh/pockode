@@ -51,46 +51,6 @@ func TestToolDefinitions_ListingsExplainEveryStatusTheyReturn(t *testing.T) {
 	}
 }
 
-// The four tools the story/task split replaced are still listed, and what they
-// say is the whole reason to keep listing them: an agent that still holds the
-// old lifecycle rules has to be sent to the tool that replaced this one rather
-// than told the name is unknown. Each entry's description therefore has to name
-// a tool that actually exists — a stub pointing at a typo is the same dead end
-// as no stub at all.
-func TestToolDefinitions_TheSplitLeavesEveryOldNameStanding(t *testing.T) {
-	defined := map[string]toolDefinition{}
-	for _, def := range toolDefinitions {
-		if _, dup := defined[def.Name]; dup {
-			t.Errorf("%s is defined twice", def.Name)
-		}
-		defined[def.Name] = def
-	}
-
-	for old, replacements := range map[string][]string{
-		"work_create": {"story_create", "task_create"},
-		"work_list":   {"story_list", "task_list"},
-		"work_start":  {"story_start", "task_start"},
-		"work_wait":   {"story_wait"},
-	} {
-		def, ok := defined[old]
-		if !ok {
-			t.Errorf("%s is no longer listed; an agent still holding the old rules is told the tool is unknown", old)
-			continue
-		}
-		if !strings.Contains(strings.ToLower(def.Description), "retired") {
-			t.Errorf("%s does not say it is retired", old)
-		}
-		for _, replacement := range replacements {
-			if !strings.Contains(def.Description, replacement) {
-				t.Errorf("%s does not name %s as what replaced it", old, replacement)
-			}
-			if _, ok := defined[replacement]; !ok {
-				t.Errorf("%s points at %s, which is not a tool", old, replacement)
-			}
-		}
-	}
-}
-
 // The point of splitting a tool in two is that the *schema* states the fork, so
 // an agent never has to learn it from a runtime refusal. That is a claim about
 // which arguments exist on which tool, and nothing else in this package asserts
@@ -132,25 +92,6 @@ func TestToolDefinitions_TheSchemasStateTheFork(t *testing.T) {
 			t.Errorf("%s: %q is not required, so the call can be made without the one argument that decides what it does", c.tool, c.property)
 		}
 	}
-}
-
-// The retired tool is still listed, and what it says is the whole reason to
-// keep listing it: an agent that still has the old lifecycle rules in its
-// context has to be sent to question_post rather than told the tool is unknown.
-func TestToolDefinitions_NeedsInputIsRetiredAndPointsAtQuestionPost(t *testing.T) {
-	for _, def := range toolDefinitions {
-		if def.Name != "work_needs_input" {
-			continue
-		}
-		if !strings.Contains(def.Description, "question_post") {
-			t.Error("work_needs_input does not name what replaced it")
-		}
-		if !strings.Contains(strings.ToLower(def.Description), "retired") {
-			t.Error("work_needs_input does not say it is retired")
-		}
-		return
-	}
-	t.Fatal("work_needs_input is not defined")
 }
 
 // The two refusals about subtasks (docs/lifecycle-ui.md §7) are rules an agent
