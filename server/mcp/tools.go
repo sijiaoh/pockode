@@ -120,6 +120,7 @@ var toolDefinitions = []toolDefinition{
 			Properties: map[string]propertySchema{
 				"id":       {Type: "string", Description: "Story ID to start"},
 				"worktree": {Type: "string", Description: "Name of the git worktree to run this story in, created (with a branch of the same name) if it does not exist yet. Omit it to run in the worktree the story is already assigned to (the main one, unless it was set elsewhere)."},
+				"watch":    {Type: "boolean", Description: "Set true to watch the story from this chat: Pockode sends a message here — starting a turn if this chat is idle — when the story closes, when it is stopped (handed back to a person), and when the story itself posts a question, which you may answer with question_answer. Its tasks' questions, starts and closings are not reported. The watch lasts until the story closes — through stops and restarts, but not past the close, so a story closed and reopened is unwatched until a later start with watch — and a story has one watcher, so a later start with watch moves it to whoever made that call. Omit it to start the story without changing who is watching it."},
 			},
 			Required: []string{"id"},
 		},

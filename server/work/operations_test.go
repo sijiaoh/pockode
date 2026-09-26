@@ -37,7 +37,7 @@ func TestOperations_StartWork_ClaimsAndReturnsWork(t *testing.T) {
 	starter := &recordingStarter{}
 	ops := NewOperations(store, starter, nil, nil)
 
-	w, err := ops.StartWork(context.Background(), story.ID)
+	w, err := ops.StartWork(context.Background(), story.ID, nil)
 	if err != nil {
 		t.Fatalf("StartWork: %v", err)
 	}
@@ -59,7 +59,7 @@ func TestOperations_StartWork_RestartReusesSession(t *testing.T) {
 	story := createStory(t, store, "Build")
 	ops := NewOperations(store, &recordingStarter{}, nil, nil)
 
-	first, err := ops.StartWork(context.Background(), story.ID)
+	first, err := ops.StartWork(context.Background(), story.ID, nil)
 	if err != nil {
 		t.Fatalf("first StartWork: %v", err)
 	}
@@ -67,7 +67,7 @@ func TestOperations_StartWork_RestartReusesSession(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	restarted, err := ops.StartWork(context.Background(), story.ID)
+	restarted, err := ops.StartWork(context.Background(), story.ID, nil)
 	if err != nil {
 		t.Fatalf("restart StartWork: %v", err)
 	}
@@ -81,7 +81,7 @@ func TestOperations_StartWork_RollsBackOnHandlerFailure(t *testing.T) {
 	story := createStory(t, store, "Build")
 	ops := NewOperations(store, &recordingStarter{err: errors.New("kickoff failed")}, nil, nil)
 
-	if _, err := ops.StartWork(context.Background(), story.ID); err == nil {
+	if _, err := ops.StartWork(context.Background(), story.ID, nil); err == nil {
 		t.Fatal("expected error when handler fails")
 	}
 
@@ -103,7 +103,7 @@ func TestOperations_StartWork_MissingRole(t *testing.T) {
 	}
 	ops := NewOperations(store, &recordingStarter{}, nil, nil)
 
-	if _, err := ops.StartWork(context.Background(), w.ID); err == nil {
+	if _, err := ops.StartWork(context.Background(), w.ID, nil); err == nil {
 		t.Fatal("expected error for work without agent_role_id")
 	}
 	got, _, _ := store.Get(w.ID)
@@ -123,7 +123,7 @@ func TestOperations_StartWork_DetachesCallerContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	w, err := ops.StartWork(ctx, story.ID)
+	w, err := ops.StartWork(ctx, story.ID, nil)
 	if err != nil {
 		t.Fatalf("StartWork with cancelled ctx: %v", err)
 	}

@@ -756,6 +756,16 @@ type MessageMeta struct {
 	// fact, not a live position. See docs/code/work-system.md.
 	Step  *StepInfo  `json:"step,omitempty"`
 	Child *ChildInfo `json:"child,omitempty"`
+	// Story is the story a watched_story_* message reports on: one the
+	// receiving session started with a watch. The receiver is often a plain
+	// chat with no work of its own, so this may be the only work named here.
+	Story *StoryInfo `json:"story,omitempty"`
+}
+
+// StoryInfo identifies the story a watched_story_* message reports on.
+type StoryInfo struct {
+	ID    string `json:"id"`
+	Title string `json:"title"`
 }
 
 // MessageEvent represents a message sent to the agent. Used for:

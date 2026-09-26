@@ -137,7 +137,7 @@ func (h *rpcMethodHandler) handleWorkStart(ctx context.Context, conn *jsonrpc2.C
 		}
 	}
 
-	w, err := h.workOps.StartWork(ctx, params.ID)
+	w, err := h.workOps.StartWork(ctx, params.ID, nil)
 	if err != nil {
 		// ErrWorkNotFound / ErrInvalidWork map to client errors; a kickoff failure
 		// (e.g. "send kickoff message: ...") is surfaced verbatim so the user sees

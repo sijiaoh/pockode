@@ -30,6 +30,12 @@ const (
 	// where nothing is going to close: the parent's wait on its subtasks has
 	// nothing left that could end it.
 	MessageSubtypeWaitStranded = "wait_stranded"
+	// The watched_story_* subtypes go to the session that started a story with
+	// a watch (Work.Watcher), which need not be running any work at all: the
+	// story closed, was stopped, or posted a question of its own.
+	MessageSubtypeWatchedStoryClosed   = "watched_story_closed"
+	MessageSubtypeWatchedStoryStopped  = "watched_story_stopped"
+	MessageSubtypeWatchedStoryQuestion = "watched_story_question"
 )
 
 // NewMessageMeta builds the summary metadata for a system message.
@@ -72,6 +78,8 @@ type promptTemplates struct {
 	ChildQuestionNudge         string `yaml:"child_question_nudge"`
 	ChildQuestionReminderNudge string `yaml:"child_question_reminder_nudge"`
 	StrandedWaitNudge          string `yaml:"stranded_wait_nudge"`
+	WatchedStoryEnded          string `yaml:"watched_story_ended"`
+	WatchedStoryQuestion       string `yaml:"watched_story_question"`
 	StepAdvanceSection         string `yaml:"step_advance_section"`
 	CurrentStepSection         string `yaml:"current_step_section"`
 }
@@ -340,6 +348,37 @@ func BuildStrandedWaitMessage(parent Work, childTitle, childID string, exit chil
 	})
 
 	return base + "\n\n" + nudge
+}
+
+// BuildWatchedStoryEndedMessage tells a watcher that the story it watches
+// closed or was stopped. It carries no buildBase: the watcher is often a plain
+// chat, and when it does run a work its own context is not what this is about.
+func BuildWatchedStoryEndedMessage(story Work) string {
+	return render(prompts.WatchedStoryEnded, map[string]any{
+		"Title":  story.Title,
+		"ID":     story.ID,
+		"Status": string(story.Status),
+	})
+}
+
+// BuildWatchedStoryQuestionMessage tells a watcher that the story it watches
+// asked the user something. Quoted in full with both halves of its identity,
+// for the reasons BuildChildQuestionMessage gives.
+func BuildWatchedStoryQuestionMessage(story Work, q session.PendingQuestion) string {
+	labels := make([]string, 0, len(q.Options))
+	for _, o := range q.Options {
+		labels = append(labels, o.Label)
+	}
+	return render(prompts.WatchedStoryQuestion, map[string]any{
+		"Title":       story.Title,
+		"ID":          story.ID,
+		"SessionID":   story.SessionID,
+		"Header":      q.Header,
+		"Question":    q.Question,
+		"RequestID":   q.RequestID,
+		"Options":     strings.Join(labels, " | "),
+		"MultiSelect": q.MultiSelect,
+	})
 }
 
 // BuildStepAdvanceMessage creates the message sent when advancing to the next step.

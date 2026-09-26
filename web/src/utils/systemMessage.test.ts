@@ -55,6 +55,17 @@ describe("workEventWording", () => {
 		).toEqual({ label: "Subtask asked", summary: "Sub task" });
 	});
 
+	// A watcher is often a plain chat with no title of its own, and when it does
+	// run a work, that title is not what the message is about.
+	it("names the watched story for its news", () => {
+		expect(
+			workEventWording("watched_story_closed", {
+				title: "Watcher's own work",
+				story: { id: "s1", title: "Watched story" },
+			}),
+		).toEqual({ label: "Story done", summary: "Watched story" });
+	});
+
 	it("leaves an auto-continue's summary blank", () => {
 		expect(workEventWording("auto_continue", { title: "Ship it" })).toEqual({
 			label: "Continued",

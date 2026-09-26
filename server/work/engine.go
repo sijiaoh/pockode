@@ -2,6 +2,7 @@ package work
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"sync"
 	"sync/atomic"
@@ -11,7 +12,8 @@ import (
 )
 
 // MessageSender sends system-driven automatic messages to agent sessions.
-// Satisfied by *chat.Client.
+// Satisfied by *chat.Client. A send to a session that does not exist fails
+// with an error wrapping session.ErrSessionNotFound.
 type MessageSender interface {
 	SendSystemMessage(ctx context.Context, sessionID, content, subtype string, meta *agent.MessageMeta) error
 }
@@ -74,9 +76,11 @@ const DefaultMaxNudges = 3
 //   - HandleAnswer — questions the agent had posted were answered, by the user
 //     or by another agent.
 //   - HandleQuestionPosted — this session's agent posted a question, which the
-//     story above it may be able to answer.
+//     story above it may be able to answer, or — a story's own question — the
+//     session watching the story may.
 //   - OnWorkChange (a child leaving active) — a subtask finished, or stopped
-//     being something its parent's wait could be waiting for.
+//     being something its parent's wait could be waiting for. A watched story
+//     closing or stopping is read off the same event.
 //   - OnSessionChange (a deletion) — the work's session was deleted.
 //   - RecoverStartup — the server started with work left over from a previous run.
 //
@@ -682,17 +686,30 @@ func (e *Engine) HandleAnswer(sessionID string) {
 // waiting for, and is not nudged for it. That is the mirror image of
 // notifyParentOfChild, which does clear it, because there the thing the wait
 // was for has happened.
+//
+// A story's own question goes to the session watching it, if one is: it
+// started the story and may know what the story is asking. A task's question
+// never does — the watcher asked about the story, and the story is the one a
+// task's question is for.
 func (e *Engine) HandleQuestionPosted(sessionID string, q session.PendingQuestion) {
 	if !e.enter() {
 		return
 	}
 	defer e.leave()
 
-	child, found := e.findWork(sessionID)
-	if !found || child.StoryID == "" {
+	w, found := e.findWork(sessionID)
+	if !found {
 		return
 	}
-	e.goFollowUp(func() { e.notifyParentOfChildQuestion(child, q) })
+	if w.StoryID == "" {
+		if w.Watcher != nil {
+			e.goFollowUp(func() {
+				e.notifyWatcher(*w.Watcher, w, BuildWatchedStoryQuestionMessage(w, q), MessageSubtypeWatchedStoryQuestion)
+			})
+		}
+		return
+	}
+	e.goFollowUp(func() { e.notifyParentOfChildQuestion(w, q) })
 }
 
 // notifyParentOfChildQuestion delivers one subtask question to its story.
@@ -763,6 +780,7 @@ func (e *Engine) OnWorkChange(event ChangeEvent) {
 	child := event.Work
 	if event.Op == OperationUpdate {
 		e.enforceSessionLease(child)
+		e.notifyWatcherOfEnd(event)
 	}
 	// A missing resolver is deliberately *not* checked here. It used to be, and
 	// it silently dropped every event that arrived before the resolver was
@@ -794,6 +812,108 @@ func (e *Engine) OnWorkChange(event ChangeEvent) {
 	case child.Status == StatusOpen:
 		e.goFollowUp(func() { e.notifyParentOfStrandedWait(child, childNotStarted) })
 	}
+}
+
+// notifyWatcherOfEnd tells the session watching a story that the story closed
+// or was stopped.
+//
+// Read off the transition, not the condition the child branches below test: a
+// watcher is owed one message per ending, and every later edit of a closed
+// story's title would otherwise send it another. A story that is reopened or
+// restarted and ends again has ended again, and says so again.
+//
+// Stopped is reported beside closed because both are the story ceasing to move
+// by itself: a watcher waiting for it to finish would otherwise wait forever on
+// a story a person has taken back. Deletion is not: whoever deleted it — a
+// person, or the watcher itself — already knows, and there is no story left for
+// the message to point at.
+//
+// The watcher told is the one from before the change: closing releases the
+// watch in the same write (FileStore.StepDone), so the closed story no longer
+// names who was watching it, and the event is what remembers.
+func (e *Engine) notifyWatcherOfEnd(event ChangeEvent) {
+	story := event.Work
+	if event.PrevWatcher == nil || event.PrevStatus == story.Status {
+		return
+	}
+	watcher := *event.PrevWatcher
+	switch story.Status {
+	case StatusClosed:
+		e.goFollowUp(func() {
+			e.notifyWatcher(watcher, story, BuildWatchedStoryEndedMessage(story), MessageSubtypeWatchedStoryClosed)
+		})
+	case StatusStopped:
+		e.goFollowUp(func() {
+			e.notifyWatcher(watcher, story, BuildWatchedStoryEndedMessage(story), MessageSubtypeWatchedStoryStopped)
+		})
+	}
+}
+
+// notifyWatcher delivers one piece of a story's news to the session watching it.
+//
+// Like notifyParentOfChildQuestion, it is owed nothing and clears nothing: the
+// watcher declared no wait, so an undelivered message leaves nobody stuck, and
+// it is logged rather than retried. The story itself is where the news stays —
+// its status, its comments, its question.
+//
+// Two watchers are skipped on purpose rather than failed on:
+//
+//   - A session that no longer exists. Deleting a chat is an ordinary thing to
+//     do, and a story does not have to be told; the watch is left in place and
+//     simply reaches nobody.
+//   - A session running a work the engine is not driving. A message starts a
+//     turn, and starting one under a stopped or closed work is the thing
+//     notifyParentOfChild refuses to do for the same reason.
+//
+// Anything else that goes wrong is a fault and is logged as one — including a
+// watcher whose turn is holding a request on screen, which refuses every
+// message: the news is lost there, not queued.
+func (e *Engine) notifyWatcher(watcher Watcher, story Work, msg, subtype string) {
+	// A story's own session is never told about the story: it is the one
+	// doing the telling.
+	if watcher.SessionID == story.SessionID {
+		return
+	}
+
+	meta := &agent.MessageMeta{}
+	w, found, err := e.store.FindBySessionID(watcher.SessionID)
+	if err != nil {
+		slog.Warn("failed to find the work of a story's watcher",
+			"storyId", story.ID, "watcherSessionId", watcher.SessionID, "error", err)
+		return
+	}
+	if found {
+		if w.Status != StatusActive {
+			slog.Debug("a watched story's news for a work the engine is not driving",
+				"storyId", story.ID, "watcherWorkId", w.ID, "watcherStatus", w.Status)
+			return
+		}
+		meta = NewMessageMeta(w, w.CurrentStep+1, e.stepCount(w))
+	}
+	meta.Story = &agent.StoryInfo{ID: story.ID, Title: story.Title}
+
+	sender, release, ok := e.resolveSender(watcher.Worktree)
+	if !ok {
+		slog.Warn("could not reach the session watching a story",
+			"storyId", story.ID, "watcherSessionId", watcher.SessionID, "subtype", subtype)
+		return
+	}
+	defer release()
+
+	if err := sender.SendSystemMessage(e.ctx, watcher.SessionID, msg, subtype, meta); err != nil {
+		switch {
+		case e.ctx.Err() != nil:
+		case errors.Is(err, session.ErrSessionNotFound):
+			slog.Debug("the session watching a story is gone",
+				"storyId", story.ID, "watcherSessionId", watcher.SessionID)
+		default:
+			slog.Warn("failed to tell a watcher about its story",
+				"storyId", story.ID, "watcherSessionId", watcher.SessionID, "subtype", subtype, "error", err)
+		}
+		return
+	}
+	slog.Info("story news sent to its watcher",
+		"storyId", story.ID, "watcherSessionId", watcher.SessionID, "subtype", subtype)
 }
 
 // childExit is how a child stopped being something a parent's wait could be

@@ -117,8 +117,8 @@ has seven inputs and no special cases beside them:
 | A turn ended | aborted → `stopped`; otherwise read in order — a question of its own leaves it alone, an *active* subtask's unanswered question earns its own nudge, a `child` wait leaves it alone, nothing at all earns the ordinary nudge; `stopped` once the shared allowance runs out |
 | A user message | back to `active`, wait and nudges cleared |
 | A posted question was answered, by the user or by another agent (`question_answer`) | nudges cleared and a `stopped` work woken, the same either way; a `child` wait deliberately left standing — no subtask closed |
-| An agent posted a question | passed up to an *active* parent story as `child_question`, which clears nothing and is never retried |
-| A child work left `active` | a child that *closed*: tell an *active* parent and clear a `child` wait; a child that left any other way: clear a `child` wait nothing is left to end, and wake the parent to decide |
+| An agent posted a question | passed up to an *active* parent story as `child_question`, which clears nothing and is never retried; a story's own question goes to its watcher, if any, as `watched_story_question` |
+| A child work left `active` | a child that *closed*: tell an *active* parent and clear a `child` wait; a child that left any other way: clear a `child` wait nothing is left to end, and wake the parent to decide; a watched story closing or being stopped tells its watcher |
 | The session was deleted | → `stopped` |
 | Server startup | `active` with no wait → `stopped` + comment; a work with an unanswered question is preserved; a work waiting on children is preserved only while one of them is still `active`, and otherwise `stopped` + comment |
 

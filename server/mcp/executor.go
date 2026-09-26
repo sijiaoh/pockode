@@ -145,7 +145,7 @@ func (e *Executor) Execute(ctx context.Context, caller Caller, name string, args
 	case "work_delete":
 		return e.workDelete(ctx, args)
 	case "story_start":
-		return e.storyStart(ctx, args)
+		return e.storyStart(ctx, caller, args)
 	case "task_start":
 		return e.taskStart(ctx, args)
 	case "work_reopen":
@@ -447,15 +447,31 @@ func (e *Executor) workDelete(ctx context.Context, args json.RawMessage) (string
 	return fmt.Sprintf("Deleted work %s", params.ID), nil
 }
 
-func (e *Executor) storyStart(ctx context.Context, args json.RawMessage) (string, error) {
+// storyStart's watch is a flag rather than a session id, and the session it
+// names is always the caller's own. That is the question tools' rule
+// (question_post posts into the caller's chat without being told which): an
+// agent has no business choosing whom Pockode wakes, a model asked for an id
+// would sooner or later pass one it half-remembers, and the one session that
+// certainly wants the news is the one asking for it. It is the story_wait
+// shape too — the session that declares a wait is the one woken when it ends.
+func (e *Executor) storyStart(ctx context.Context, caller Caller, args json.RawMessage) (string, error) {
 	var params struct {
 		ID       string `json:"id"`
 		Worktree string `json:"worktree"`
+		Watch    bool   `json:"watch"`
 	}
 	if err := json.Unmarshal(args, &params); err != nil {
 		return "", userErrorf("invalid arguments: %w", err)
 	}
-	return e.startWork(ctx, params.ID, params.Worktree)
+
+	var watcher *work.Watcher
+	if params.Watch {
+		if caller.SessionID == "" {
+			return "", errNoCallerSession("story_start with watch", "there is no chat to wake with the story's news; call it without watch")
+		}
+		watcher = &work.Watcher{SessionID: caller.SessionID, Worktree: caller.Worktree}
+	}
+	return e.startWork(ctx, params.ID, params.Worktree, watcher)
 }
 
 // taskStart takes no worktree, which is the only difference between the two
@@ -479,7 +495,7 @@ func (e *Executor) taskStart(ctx context.Context, args json.RawMessage) (string,
 	if params.Worktree != "" {
 		return "", userErrorf("task_start takes no worktree: a task runs in the worktree of the story it belongs to. Start that story in %q with story_start instead", params.Worktree)
 	}
-	return e.startWork(ctx, params.ID, "")
+	return e.startWork(ctx, params.ID, "", nil)
 }
 
 // startWork is both start tools. It deliberately does not check that the id it
@@ -489,7 +505,7 @@ func (e *Executor) taskStart(ctx context.Context, args json.RawMessage) (string,
 // story_start on a task would reject a call whose outcome is correct — an id is
 // a string, and an agent that reached for the neighbouring tool still asked for
 // something this can do.
-func (e *Executor) startWork(ctx context.Context, id, worktree string) (string, error) {
+func (e *Executor) startWork(ctx context.Context, id, worktree string, watcher *work.Watcher) (string, error) {
 	var note string
 	if worktree != "" {
 		var err error
@@ -498,11 +514,14 @@ func (e *Executor) startWork(ctx context.Context, id, worktree string) (string, 
 		}
 	}
 
-	w, err := e.workOps.StartWork(ctx, id)
+	w, err := e.workOps.StartWork(ctx, id, watcher)
 	if err != nil {
 		return "", err
 	}
 
+	if watcher != nil {
+		note += ". This chat is watching it: you will get a message when it closes, is stopped, or asks a question of its own"
+	}
 	return fmt.Sprintf("Started work %s (session: %s)%s", w.ID, w.SessionID, note), nil
 }
 

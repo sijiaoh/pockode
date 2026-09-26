@@ -253,7 +253,7 @@ func TestClaim_FreshStartGeneratesSession(t *testing.T) {
 	s := newTestStore(t)
 	story := createStory(t, s, "S")
 
-	w, restart, err := s.Claim(context.Background(), story.ID)
+	w, restart, err := s.Claim(context.Background(), story.ID, nil)
 	if err != nil {
 		t.Fatalf("Claim: %v", err)
 	}
@@ -273,7 +273,7 @@ func TestClaim_RestartReusesSession(t *testing.T) {
 	s := newTestStore(t)
 	story := createStory(t, s, "S")
 
-	first, _, err := s.Claim(context.Background(), story.ID)
+	first, _, err := s.Claim(context.Background(), story.ID, nil)
 	if err != nil {
 		t.Fatalf("first Claim: %v", err)
 	}
@@ -281,7 +281,7 @@ func TestClaim_RestartReusesSession(t *testing.T) {
 		t.Fatalf("Stop: %v", err)
 	}
 
-	again, restart, err := s.Claim(context.Background(), story.ID)
+	again, restart, err := s.Claim(context.Background(), story.ID, nil)
 	if err != nil {
 		t.Fatalf("restart Claim: %v", err)
 	}
@@ -299,12 +299,12 @@ func TestClaim_RestartReusesSession(t *testing.T) {
 func TestClaim_RejectsAWaitingWork(t *testing.T) {
 	s := newTestStore(t)
 	story := createStory(t, s, "S")
-	if _, _, err := s.Claim(context.Background(), story.ID); err != nil {
+	if _, _, err := s.Claim(context.Background(), story.ID, nil); err != nil {
 		t.Fatalf("first Claim: %v", err)
 	}
 	waitOnChild(t, s, story.ID)
 
-	if _, _, err := s.Claim(context.Background(), story.ID); err == nil {
+	if _, _, err := s.Claim(context.Background(), story.ID, nil); err == nil {
 		t.Fatal("Claim on a waiting work succeeded; it is already running")
 	}
 }
@@ -312,18 +312,89 @@ func TestClaim_RejectsAWaitingWork(t *testing.T) {
 func TestClaim_RejectsAlreadyActive(t *testing.T) {
 	s := newTestStore(t)
 	story := createStory(t, s, "S")
-	if _, _, err := s.Claim(context.Background(), story.ID); err != nil {
+	if _, _, err := s.Claim(context.Background(), story.ID, nil); err != nil {
 		t.Fatalf("first Claim: %v", err)
 	}
 
-	if _, _, err := s.Claim(context.Background(), story.ID); !errors.Is(err, ErrInvalidWork) {
+	if _, _, err := s.Claim(context.Background(), story.ID, nil); !errors.Is(err, ErrInvalidWork) {
 		t.Errorf("err = %v, want ErrInvalidWork", err)
+	}
+}
+
+// A watched start records its watcher; a start without one leaves the watcher
+// the story already has, and it survives the store being read back from disk.
+func TestClaim_RecordsAWatcherAndKeepsItAcrossUnwatchedStarts(t *testing.T) {
+	dir := t.TempDir()
+	s, err := NewFileStore(dir)
+	if err != nil {
+		t.Fatalf("NewFileStore: %v", err)
+	}
+	story := createStory(t, s, "S")
+	watcher := Watcher{SessionID: "sess-watcher", Worktree: "feature-x"}
+
+	if _, _, err := s.Claim(context.Background(), story.ID, &watcher); err != nil {
+		t.Fatalf("watched Claim: %v", err)
+	}
+	if err := s.Stop(context.Background(), story.ID); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+	if _, _, err := s.Claim(context.Background(), story.ID, nil); err != nil {
+		t.Fatalf("unwatched Claim: %v", err)
+	}
+
+	reloaded, err := NewFileStore(dir)
+	if err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	if got := getWork(t, reloaded, story.ID).Watcher; got == nil || *got != watcher {
+		t.Errorf("watcher = %+v, want %+v", got, watcher)
+	}
+}
+
+// Closing is what the watch was for, so it releases the watcher in the same
+// write — and says who it released, which is who the close is reported to.
+func TestStepDone_ClosingReleasesTheWatcher(t *testing.T) {
+	s := newTestStore(t)
+	story := createStory(t, s, "S")
+	watcher := Watcher{SessionID: "sess-watcher"}
+	if _, _, err := s.Claim(context.Background(), story.ID, &watcher); err != nil {
+		t.Fatalf("Claim: %v", err)
+	}
+	var closing *ChangeEvent
+	s.AddOnChangeListener(listenerFunc(func(e ChangeEvent) {
+		if e.Work.ID == story.ID && e.Work.Status == StatusClosed {
+			closing = &e
+		}
+	}))
+
+	if _, err := s.StepDone(context.Background(), story.ID, 0); err != nil {
+		t.Fatalf("StepDone: %v", err)
+	}
+
+	if got := getWork(t, s, story.ID).Watcher; got != nil {
+		t.Errorf("watcher = %+v after closing, want none", got)
+	}
+	if closing == nil || closing.PrevWatcher == nil || *closing.PrevWatcher != watcher {
+		t.Errorf("closing event = %+v, want it to carry the released watcher %+v", closing, watcher)
+	}
+}
+
+func TestClaim_RefusesToWatchATask(t *testing.T) {
+	s := newTestStore(t)
+	story := createStory(t, s, "S")
+	task := createTask(t, s, story.ID, "T")
+
+	if _, _, err := s.Claim(context.Background(), task.ID, &Watcher{SessionID: "sess-watcher"}); !errors.Is(err, ErrInvalidWork) {
+		t.Fatalf("err = %v, want ErrInvalidWork", err)
+	}
+	if got := getWork(t, s, task.ID); got.Status != StatusOpen || got.Watcher != nil {
+		t.Errorf("task = %q watched by %+v, want it left open and unwatched", got.Status, got.Watcher)
 	}
 }
 
 func TestClaim_NotFound(t *testing.T) {
 	s := newTestStore(t)
-	if _, _, err := s.Claim(context.Background(), "missing"); !errors.Is(err, ErrWorkNotFound) {
+	if _, _, err := s.Claim(context.Background(), "missing", nil); !errors.Is(err, ErrWorkNotFound) {
 		t.Errorf("err = %v, want ErrWorkNotFound", err)
 	}
 }
@@ -1165,7 +1236,7 @@ func TestConcurrent_ClaimSameWork(t *testing.T) {
 	results := make(chan outcome, n)
 	for i := 0; i < n; i++ {
 		go func() {
-			w, _, err := s.Claim(context.Background(), story.ID)
+			w, _, err := s.Claim(context.Background(), story.ID, nil)
 			results <- outcome{w: w, err: err}
 		}()
 	}

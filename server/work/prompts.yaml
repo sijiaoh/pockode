@@ -211,6 +211,38 @@ stranded_wait_nudge: |
 
   Decide what happens next: {{if eq .Exit "deleted"}}create a replacement with task_create and start it{{else if eq .Exit "stopped"}}restart it with task_start using ID {{.ChildID}}{{else}}start it with task_start using ID {{.ChildID}}{{end}}, ask the user with question_post if this needs them, or call step_done with ID {{.ID}} if the work is finished. Do not call story_wait again until a task of yours is running; the lifecycle section above says why.
 
+# Sent to the session that started a story with story_start's watch, when the
+# story closes or is stopped. The watcher may be a plain chat with nothing of
+# its own in Pockode, so the message stands alone: no work context, and only
+# the story's own ID to act on.
+#
+# A stopped story is the one to explain. Nothing happens to it until it is
+# restarted, which is exactly the news a watcher waiting for it to finish
+# would otherwise never get.
+# Placeholders: {{.Title}}, {{.ID}}, {{.Status}} (closed or stopped)
+watched_story_ended: |
+  {{if eq .Status "closed" -}}
+  Story "{{.Title}}" (ID: {{.ID}}), which you started and were watching, has been closed, and your watch of it ends here. Use work_comment_list with work_id {{.ID}} to read what it reported.
+  {{- else -}}
+  Story "{{.Title}}" (ID: {{.ID}}), which you started and are watching, has been stopped: it was handed back to a person, and nothing happens to it until it is restarted. Use work_comment_list with work_id {{.ID}} to see why — a story is stopped when a person stops it, when its agent keeps going quiet without finishing, or when its chat is deleted. Restart it with story_start if what stopped it is settled, or leave it to the user.
+  {{- end}}
+
+# Sent to the session watching a story when the story itself posts a question.
+# Its tasks' questions go to the story, not here. The watcher is offered the
+# answer but not obliged to give it: the user is already being asked, and
+# unlike a story with its subtasks, a watcher is not the one whose job it is.
+# Placeholders: {{.Title}}, {{.ID}}, {{.SessionID}}, {{.Header}}, {{.Question}},
+# {{.RequestID}}, {{.Options}}, {{.MultiSelect}}
+watched_story_question: |
+  Story "{{.Title}}" (ID: {{.ID}}), which you started and are watching, has asked the user a question:
+
+  {{.Header}}: {{.Question}}
+  {{if .Options}}Options: {{.Options}}{{if .MultiSelect}} (more than one may be picked){{end}}
+  {{end}}Request ID: {{.RequestID}}
+  Session ID: {{.SessionID}}
+
+  If you know the answer, you may give it with question_answer (request_id and session_id above; {{if .Options}}`answers` for the labels you pick from the list, `text` for anything in your own words{{else}}`text`, since this question offered nothing to pick{{end}}). The story is told the answer came from you, not from the user. If you do not know it, do not guess: the user is being asked already, and the story carries on either way.
+
 # Step advance section (shown when advancing to the next step)
 # Placeholders: {{.PrevStep}}, {{.TotalSteps}}, {{.CurrentStep}}, {{.StepPrompt}}, {{.ID}}
 step_advance_section: |

@@ -13,7 +13,11 @@ import (
 	"github.com/pockode/server/session"
 )
 
-var ErrSessionNotFound = errors.New("session not found")
+// ErrSessionNotFound is the session store's own sentinel, not a second one
+// beside it: whoever sends through a Client only knows it as a
+// work.MessageSender, and has to be able to tell a deleted session from a
+// fault without importing this package (work.Engine.notifyWatcher).
+var ErrSessionNotFound = session.ErrSessionNotFound
 
 // ErrSessionNotRunning is returned when a request only makes sense to a live
 // agent process and the session has none.

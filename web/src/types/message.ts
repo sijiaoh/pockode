@@ -322,6 +322,11 @@ export interface SystemMessageChild {
 	title: string;
 }
 
+export interface SystemMessageStory {
+	id: string;
+	title: string;
+}
+
 // Summary data for a system-origin message, used to render it without parsing
 // the prompt body. Mirrors agent.MessageMeta on the server.
 export interface SystemMessageMeta {
@@ -338,6 +343,8 @@ export interface SystemMessageMeta {
 	 */
 	step?: SystemMessageStep;
 	child?: SystemMessageChild;
+	/** The story a watched_story_* message reports on. */
+	story?: SystemMessageStory;
 }
 
 export interface UserMessage {

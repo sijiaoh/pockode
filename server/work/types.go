@@ -128,9 +128,27 @@ type Work struct {
 	// Worktree the work's session runs in (empty = main). Captured from the
 	// frontend's current worktree when a top-level work first starts, or
 	// inherited from the parent at create time; immutable once the work starts.
-	Worktree  string    `json:"worktree,omitempty"`
+	Worktree string `json:"worktree,omitempty"`
+	// Watcher is the session that started this story with story_start and asked
+	// to be woken when the story ends or asks something (Engine.notifyWatcher).
+	// Only a story has one, and at most one: a later watched start replaces it,
+	// an unwatched start leaves it alone. It outlives a stop on purpose — a
+	// watcher may be waiting for the story to be restarted and finish — but not
+	// a close: the story closing is what the watch was for, so the write that
+	// closes it releases the watcher too (FileStore.StepDone). A story closed and
+	// reopened is unwatched until a later start with watch.
+	Watcher   *Watcher  `json:"watcher,omitempty"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
+}
+
+// Watcher names a session to wake with news of a story. The worktree travels
+// with the id because sessions are stored per worktree and a watcher need not
+// live in the story's: a chat in main may start a story in a worktree of its
+// own.
+type Watcher struct {
+	SessionID string `json:"session_id"`
+	Worktree  string `json:"worktree,omitempty"`
 }
 
 // Type is derived rather than stored: a work that names a story is that story's
@@ -155,6 +173,15 @@ const (
 type ChangeEvent struct {
 	Op   Operation
 	Work Work
+	// PrevStatus is the status the work had before this change, on an update;
+	// equal to Work.Status when the change left the status alone. It is what
+	// lets a listener react to a transition rather than to a condition that
+	// every later edit of the same work would repeat.
+	PrevStatus WorkStatus
+	// PrevWatcher is the story's watcher before this change. It is who was
+	// watching when the change happened — the one a close is reported to,
+	// since the close itself releases Work.Watcher.
+	PrevWatcher *Watcher
 }
 
 // OnChangeListener receives notifications when Work items change.

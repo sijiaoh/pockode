@@ -19,6 +19,7 @@ A unit of work — either a **story** (no `story_id`) or a **task** (the `story_
 | session_id    | string?      | Agent session ID (set on start, preserved through stop/closed) |
 | current_step  | int?         | 0-indexed step index (only when agent role has steps)  |
 | worktree      | string?      | Worktree the session runs in (empty = main); captured on a story's first start, inherited by its tasks, immutable once started |
+| watcher       | Watcher?     | Stories only: `{session_id, worktree?}` of the session that started it with `story_start`'s `watch` and is sent its news; kept across stops and restarts, cleared by the write that closes the story ([work-system.md](../code/work-system.md#a-storys-watcher)) |
 | created_at    | time         | Creation timestamp                                     |
 | updated_at    | time         | Last modification timestamp                            |
 

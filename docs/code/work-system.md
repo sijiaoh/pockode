@@ -40,6 +40,7 @@ type Work struct {
     SessionID   string     // Active AI session, empty when not running
     CurrentStep int        // 0-indexed; used only when agent role has Steps
     Worktree    string     // Worktree the session runs in; empty = main
+    Watcher     *Watcher   // Stories only: the session woken with its news; released when the story closes (see "A story's watcher")
     CreatedAt   time.Time
     UpdatedAt   time.Time
 }
@@ -431,7 +432,7 @@ AI agents interact with the Work system through MCP (Model Context Protocol) too
 | `work_get` | Get full details including body | `id` |
 | `work_update` | Modify title/body/role | `id`, fields to update |
 | `work_delete` | Delete (a story takes its tasks with it) | `id` |
-| `story_start` | Begin execution of a story | `id`, `worktree?` |
+| `story_start` | Begin execution of a story | `id`, `worktree?`, `watch?` |
 | `task_start` | Begin execution of a task | `id` |
 | `story_wait` | Pause for task completion | `id` |
 | `work_reopen` | Reopen a closed work item | `id` |
@@ -611,7 +612,7 @@ instead.
 | The user handed the session something to go on | the three chat RPCs |
 | A posted question was answered | `chat.message` with `answering`, or the `question_answer` MCP tool |
 | An agent posted a question | the `question_post` MCP tool |
-| A child work left active | the work store's own change event |
+| A child work left active (and a watched story closed or stopped) | the work store's own change event |
 | The session was deleted | the session store's own change event |
 | The server started | `RecoverStartup`, before any session exists |
 
@@ -814,11 +815,15 @@ is still asked to settle the question. The restart and reopen prompts say the
 same thing sooner, by telling a story to read its subtasks' unanswered questions
 (`work_get`).
 
+A question posted by a *story* has no parent to go to; it goes to the story's
+watcher, if it has one ([A story's watcher](#a-storys-watcher)).
+
 ### Input 5: a child work left active
 
-The engine hears every work change, and a child leaving `active` is one of two
-things it reads off them (the other is
-[the session lease](#the-session-lease)). Two quite different things are read
+The engine hears every work change, and a child leaving `active` is one of three
+things it reads off them (the others are
+[the session lease](#the-session-lease) and
+[a watched story ending](#a-storys-watcher)). Two quite different things are read
 off it, and which one depends on whether the child *closed*.
 
 **A closing child has a report to deliver**, so its parent is told whether or
@@ -1040,6 +1045,76 @@ loaded. That is exact rather than best-effort: a worktree holding a live process
 is never cleaned up, so an unloaded one provably has no process to stop —
 and building one would mean starting watchers and a process manager for every
 work a restart stops.
+
+### A story's watcher
+
+`story_start` with `watch: true` records the calling session as the story's
+`Watcher` (`{session_id, worktree}`), and the engine sends that session the
+story's news — often into a plain chat that runs no work at all. It adds no
+input: the news is read off inputs 4 and 5.
+
+| What happened to the story | Subtype |
+|---|---|
+| it closed | `watched_story_closed` |
+| it was stopped | `watched_story_stopped` |
+| it posted a question of its own | `watched_story_question` |
+
+**The watch is a flag, not a session id.** The session woken is always the
+caller's own ([MCP caller identity](agent-integration.md#mcp-caller-identity)),
+the rule `question_post` follows: an agent has no business choosing whom
+Pockode wakes, and a model asked for an id would sooner or later pass one it
+half-remembers. A call with no caller session is refused, and the story is not
+started — a start whose promised news could never arrive is worse than none.
+
+**It is state on the story, written in the start's own write.** `Store.Claim`
+takes the watcher and records it in the same write that makes the story
+`active`, so nothing the story does can happen before the watch is in place; a
+`nil` watcher leaves the existing one alone, which is what every other start
+path passes. Only a story can be watched. A story has one watcher — a later
+watched start moves it to whoever made that call. The watch outlives a stop,
+because a watcher may be waiting for the story to be restarted and finish: a
+story stopped, restarted and closed has ended twice, and says so twice. It does
+not outlive the close — the close is what the watch was for — so the write that
+closes the story (`FileStore.StepDone`, the only path that writes `closed`)
+also clears `Watcher`. Otherwise a story reopened or restarted from the web
+long afterwards would wake a chat that has moved on to something else. A story
+closed and reopened is unwatched until a later start with `watch`; since
+`Reopen` makes it `active` directly, that start can come only after it next
+stops.
+
+**Endings are read off the transition, not the status.** `ChangeEvent.PrevStatus`
+carries the status from the store's pre-mutation snapshot, and
+`Engine.notifyWatcherOfEnd` fires only when it differs — otherwise every later
+edit of a closed story's title would announce the closing again. It sends to
+`ChangeEvent.PrevWatcher`, taken from the same snapshot: who was watching when
+the change happened. That is a fact about the moment, which is what an event
+may carry — and the only place the close's watcher is still found, since the
+close has already released `Work.Watcher`. A story's own question, by contrast,
+reads the live `Work.Watcher`. *Stopped* is reported beside *closed* because
+both are the story ceasing to move by itself: a watcher waiting for it to finish
+would otherwise wait forever on a story a person has taken back, so the message
+says why a story is stopped and that `story_start` restarts it. A deletion is not reported — whoever deleted it
+already knows, and there is no story left to point at.
+
+**Only the story's own news.** Its tasks' questions, starts and closings go to
+the story, as they always have: the story coordinates its tasks, and the
+watcher asked only about the story. A watched story's question is *offered* to
+the watcher (the message carries `request_id` and `session_id` for
+`question_answer`), not handed to it the way a subtask's is to its story: the
+user is already being asked, and nothing nudges a watcher that leaves it.
+
+**Delivery is owed nothing, like [input 4](#input-4-a-subtasks-question-reaches-its-story).**
+The watcher declared no wait, so an undelivered message leaves nobody stuck:
+nothing is retried and nothing is stopped. Two watchers are skipped on purpose
+rather than failed on — a session that has been deleted (the send fails with
+`session.ErrSessionNotFound`, which `chat.ErrSessionNotFound` is an alias of so
+that `work` can tell it apart without importing `chat`), and a session running a
+work that is not `active`, because a message starts a turn — the reason
+[a stopped parent](#input-5-a-child-work-left-active) is told nothing either.
+Anything else is logged as a fault — including a watcher whose turn is holding
+a request on screen, which refuses every message: that news is lost, not
+queued, and the story's status and comments are where it is found again. A
+story never notifies its own session.
 
 ### Commands
 
@@ -1912,6 +1987,9 @@ A system-driven message is refused in exactly one state, like any other: while t
 | `child_question` | the engine passing a subtask's question up | Subtask asked | child title |
 | `child_done` | the engine telling a parent | Subtask done | child title |
 | `wait_stranded` | the engine clearing a wait nothing could end | Wait cleared | child title |
+| `watched_story_closed` | the engine telling a story's watcher | Story done | watched story title |
+| `watched_story_stopped` | the engine telling a story's watcher | Story stopped | watched story title |
+| `watched_story_question` | the engine passing a watched story's question on | Story asked | watched story title |
 | *(unknown or absent)* | — | System Message | work title |
 
 Every action word states a finished fact — something started, continued, reached step 2 — because by the time anyone reads it the event is over. Wording it that way is the cheapest guard there is against the rule at the top of this section: a word that can only describe a moment cannot be mistaken for a live status.
@@ -1922,12 +2000,13 @@ Every action word states a finished fact — something started, continued, reach
 - **`child_done` names the child.** The message is delivered to the parent but reports on the subtask, so the parent's own title is noise next to it.
 
 - **`child_question` names the child for the same reason**, and its action word is what the subtask did rather than what the story must do: the story either answers it or asks the user itself, and a line promising either would be wrong half the time. The story's *reminder* to settle one is an `auto_continue` rather than a second `child_question` — it is a nudge, spending the allowance and ending in a stop, not news — and one of them may be about several subtasks at once, while `meta.child` holds one.
+- **The `watched_story_*` subtypes name the watched story**, for the reason `child_done` names the child — and more so, since the receiver is often a plain chat with no title of its own.
 
-**Meta summary** — `NewMessageMeta(w, step, total)` builds that data so the UI never has to read the prompt body (whose first lines are always the MCP boilerplate prefix). It carries `work_id` / `work_type` / `title` from `w`, plus `step` when the send site has real step context (`total > 0` and `1 <= step <= total`); `child_done`, `child_question` and `wait_stranded` additionally carry `child: {id, title}`, so the line can name the subtask without parsing the prompt.
+**Meta summary** — `NewMessageMeta(w, step, total)` builds that data so the UI never has to read the prompt body (whose first lines are always the MCP boilerplate prefix). It carries `work_id` / `work_type` / `title` from `w`, plus `step` when the send site has real step context (`total > 0` and `1 <= step <= total`); `child_done`, `child_question` and `wait_stranded` additionally carry `child: {id, title}`, so the line can name the subtask without parsing the prompt; the `watched_story_*` subtypes carry `story: {id, title}` instead. A watcher running no work gets a `meta` holding only `story` — there is no receiving work to describe.
 
 Every subtype fills `step`, including the three whose prompt body never restates one — `restart`, `reopen` and `child_done` append only their nudge (see *Prompt Format*). Summary and body answer different questions: the body says what the agent has to act on, the summary says where the work stood, and the UI needs the latter even when the prompt withholds it. `step` is omitted only when there is genuinely no position to report — a stepless role, a failed step lookup (`stepCount` answers 0 for both, since a missing step provider must not block a message), or a `current_step` left out of range by a role whose steps were shortened afterwards.
 
-`w` is the **receiving** work — the one whose session the message is delivered to, which is not always the one the message is about. `child_done` is delivered to the *parent's* session, so its `work_id` is the parent's. That field is what the message's *Details* link opens, so filing the message under the child would send the reader into a work this message was never delivered to. Taking the whole `Work` rather than a loose title and id is what makes that hard to get wrong: every field is derived from one value, so no call site can label one work while keying on another.
+`w` is the **receiving** work — the one whose session the message is delivered to, which is not always the one the message is about. `child_done` is delivered to the *parent's* session, so its `work_id` is the parent's. That field is what the message's *Details* link opens, so filing the message under the child would send the reader into a work this message was never delivered to. Taking the whole `Work` rather than a loose title and id is what makes that hard to get wrong: every field is derived from one value, so no call site can label one work while keying on another. A `watched_story_*` message is the one whose expanded title and *Details* lead elsewhere — to `meta.story` (`workEventSubject` in `web/src/utils/systemMessage.ts`): it is news of a story the reader started, not of the reader, which is often a plain chat with no work to open, and whose own work, when it has one, is already reachable from the chat.
 
 `meta.step` is the field most easily mistaken for live state: it records where the work stood **when the message was sent**. It is what this event's own line is worded from, and the only step the transcript knows — never the work's current position.
 
@@ -2010,6 +2089,8 @@ work_context: |
 | `child_question_nudge` | A subtask's question passed up | `ChildTitle`, `ChildID`, `ChildSessionID`, `Header`, `Question`, `RequestID`, `Options`, `MultiSelect` |
 | `child_question_reminder_nudge` | A story nudged to settle its subtasks' questions | `Questions` (each: `ChildTitle`, `ChildID`, `SessionID`, `RequestID`, `Header`, `Question`) |
 | `stranded_wait_nudge` | A wait nothing could end | `ChildTitle`, `ChildID`, `ID`, `Exit` |
+| `watched_story_ended` | A watched story closed or was stopped | `Title`, `ID`, `Status` |
+| `watched_story_question` | A watched story's question passed on | `Title`, `ID`, `SessionID`, `Header`, `Question`, `RequestID`, `Options`, `MultiSelect` |
 | `step_advance_section` | Step advance | `PrevStep`, `TotalSteps`, `CurrentStep`, `StepPrompt`, `ID` |
 | `current_step_section` | Initial step display | `CurrentStep`, `TotalSteps`, `StepPrompt`, `ID` |
 

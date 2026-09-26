@@ -240,6 +240,27 @@ describe("MessageItem", () => {
 			expect(onOpenWorkDetail).toHaveBeenCalledWith("work-1");
 		});
 
+		// The watcher is often a plain chat with no work of its own; the story is
+		// what the message is about either way.
+		it("offers Details into the story a watched story's news is about", async () => {
+			const user = userEvent.setup();
+			const onOpenWorkDetail = vi.fn();
+			render(
+				<MessageItem
+					sessionId="session-1"
+					message={systemMessage({
+						subtype: "watched_story_closed",
+						meta: { story: { id: "story-1", title: "Watched story" } },
+					})}
+					onOpenWorkDetail={onOpenWorkDetail}
+				/>,
+			);
+
+			await user.click(screen.getByRole("button", { expanded: false }));
+			await user.click(screen.getByRole("button", { name: "Details" }));
+			expect(onOpenWorkDetail).toHaveBeenCalledWith("story-1");
+		});
+
 		// History recorded before work_id was sent: it still renders, it just has
 		// nowhere to link to.
 		it("omits Details when the message names no work", async () => {

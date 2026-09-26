@@ -39,7 +39,13 @@ type Store interface {
 	// has a session) that sessionID is reused to preserve chat history;
 	// otherwise a fresh sessionID is generated. The returned restart
 	// flag tells the caller how to RollbackStart if the kickoff later fails.
-	Claim(ctx context.Context, id string) (w Work, restart bool, err error)
+	//
+	// A non-nil watcher is recorded as the story's Watcher in the same write,
+	// so nothing the story does after starting can happen before the watch is
+	// in place; nil leaves any existing watcher alone. Only a story can be
+	// watched. A rollback leaves the watch where it is: it is what the caller
+	// asked for, and the next start honours it.
+	Claim(ctx context.Context, id string, watcher *Watcher) (w Work, restart bool, err error)
 
 	// Stop hands the work back to a person: the engine stops driving it and its
 	// session loses its lease. Allowed from any live status.
@@ -390,7 +396,7 @@ func (s *FileStore) Start(_ context.Context, id string, sessionID string) (Work,
 	return result, nil
 }
 
-func (s *FileStore) Claim(_ context.Context, id string) (Work, bool, error) {
+func (s *FileStore) Claim(_ context.Context, id string, watcher *Watcher) (Work, bool, error) {
 	s.worksMu.Lock()
 
 	idx := s.findIndex(id)
@@ -403,6 +409,10 @@ func (s *FileStore) Claim(_ context.Context, id string) (Work, bool, error) {
 	if err := ValidateStartable(w.Status); err != nil {
 		s.worksMu.Unlock()
 		return Work{}, false, fmt.Errorf("cannot start work %s: %w", id, err)
+	}
+	if watcher != nil && w.Type() != WorkTypeStory {
+		s.worksMu.Unlock()
+		return Work{}, false, fmt.Errorf("%w: work %s is a task, and only a story can be watched", ErrInvalidWork, id)
 	}
 
 	// Any work that already owns a session is a restart: reusing that session
@@ -420,6 +430,10 @@ func (s *FileStore) Claim(_ context.Context, id string) (Work, bool, error) {
 	w.Status = StatusActive
 	w.SessionID = sessionID
 	w.clearDrive()
+	if watcher != nil {
+		watched := *watcher
+		w.Watcher = &watched
+	}
 	w.UpdatedAt = time.Now()
 
 	result := *w // copy before persistAndNotifyUpdates releases the lock
@@ -659,6 +673,11 @@ func (s *FileStore) StepDone(_ context.Context, id string, totalSteps int) (bool
 
 	w.Status = StatusClosed
 	w.clearDrive()
+	// In the same write as the close, so no later start — a reopen, a restart
+	// from the web — can find the old watch still in place and wake a chat that
+	// has long moved on. The close itself still reaches it: the change event
+	// carries the released watcher as PrevWatcher.
+	w.Watcher = nil
 	w.UpdatedAt = time.Now()
 
 	modified := map[string]bool{id: true}
@@ -795,10 +814,21 @@ func (s *FileStore) persistAndNotifyUpdates(prev []Work, modified map[string]boo
 		return err
 	}
 
+	before := make(map[string]Work, len(modified))
+	for _, w := range prev {
+		if modified[w.ID] {
+			before[w.ID] = w
+		}
+	}
 	var events []ChangeEvent
 	for _, w := range s.works {
 		if modified[w.ID] {
-			events = append(events, ChangeEvent{Op: OperationUpdate, Work: w})
+			events = append(events, ChangeEvent{
+				Op:          OperationUpdate,
+				Work:        w,
+				PrevStatus:  before[w.ID].Status,
+				PrevWatcher: before[w.ID].Watcher,
+			})
 		}
 	}
 	listeners := s.copyListeners()

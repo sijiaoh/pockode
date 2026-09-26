@@ -148,7 +148,10 @@ func (o *Operations) subtreeSessions(id string) (worktree string, sessionIDs []s
 // kickoff (or restart) message via the WorkStartHandler. On handler failure the
 // claim is rolled back so the work never gets stuck active with a dangling
 // session. The returned Work is the claimed item.
-func (o *Operations) StartWork(ctx context.Context, id string) (Work, error) {
+//
+// watcher, when non-nil, is recorded on the story with the claim (Store.Claim);
+// nil starts it without touching who is watching it.
+func (o *Operations) StartWork(ctx context.Context, id string, watcher *Watcher) (Work, error) {
 	// Precondition: a startable work must have an agent role. Checked before the
 	// claim; a stale read here is harmless (worst case a rare spurious reject),
 	// unlike the status/session decision which Claim makes under the store lock.
@@ -167,7 +170,7 @@ func (o *Operations) StartWork(ctx context.Context, id string) (Work, error) {
 	// client/AI CLI must not cancel session creation midway, which would orphan a
 	// half-created session. The claim and kickoff run to completion regardless.
 	startCtx := context.WithoutCancel(ctx)
-	w, restart, err := o.store.Claim(startCtx, id)
+	w, restart, err := o.store.Claim(startCtx, id, watcher)
 	if err != nil {
 		return Work{}, err
 	}

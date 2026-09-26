@@ -995,6 +995,7 @@ type WorkDetailItem struct {
 	SessionID   string          `json:"session_id,omitempty"`
 	CurrentStep int             `json:"current_step,omitempty"`
 	Worktree    string          `json:"worktree,omitempty"`
+	Watcher     *work.Watcher   `json:"watcher,omitempty"`
 	CreatedAt   time.Time       `json:"created_at"`
 	UpdatedAt   time.Time       `json:"updated_at"`
 }
@@ -1016,6 +1017,7 @@ func NewWorkDetailItem(w work.Work) WorkDetailItem {
 		SessionID:   w.SessionID,
 		CurrentStep: w.CurrentStep,
 		Worktree:    w.Worktree,
+		Watcher:     w.Watcher,
 		CreatedAt:   w.CreatedAt,
 		UpdatedAt:   w.UpdatedAt,
 	}

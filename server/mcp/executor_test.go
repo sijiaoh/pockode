@@ -669,6 +669,62 @@ func TestStoryStart_NoAgentRole(t *testing.T) {
 	}
 }
 
+// The watcher is always the session the call came from: the model says whether
+// to watch, never whom to wake.
+func TestStoryStart_WatchRecordsTheCallersSession(t *testing.T) {
+	ts := newTestExec(t)
+	id := extractID(t, toolText(callTool(t, ts.exec, "story_create", map[string]string{
+		"title": "Story", "agent_role_id": ts.roleID,
+	})))
+	caller := Caller{SessionID: "sess-caller", Worktree: "feature-x"}
+
+	out, err := callAs(t, ts.exec, caller, "story_start", map[string]any{"id": id, "watch": true})
+	if err != nil {
+		t.Fatalf("story_start: %v", err)
+	}
+	if !strings.Contains(out, "watching") {
+		t.Errorf("result = %q, want it to say this chat is watching", out)
+	}
+	w, _, err := ts.store.Get(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if w.Watcher == nil || *w.Watcher != (work.Watcher{SessionID: caller.SessionID, Worktree: caller.Worktree}) {
+		t.Errorf("watcher = %+v, want the caller %+v", w.Watcher, caller)
+	}
+}
+
+func TestStoryStart_WithoutWatchLeavesTheStoryUnwatched(t *testing.T) {
+	ts := newTestExec(t)
+	id := extractID(t, toolText(callTool(t, ts.exec, "story_create", map[string]string{
+		"title": "Story", "agent_role_id": ts.roleID,
+	})))
+
+	if _, err := callAs(t, ts.exec, Caller{SessionID: "sess-caller"}, "story_start", map[string]any{"id": id}); err != nil {
+		t.Fatalf("story_start: %v", err)
+	}
+	if w, _, _ := ts.store.Get(id); w.Watcher != nil {
+		t.Errorf("watcher = %+v, want none", w.Watcher)
+	}
+}
+
+// With no session behind the call there is nobody to wake, and the story is
+// not started on a promise that cannot be kept.
+func TestStoryStart_WatchNeedsACallerSession(t *testing.T) {
+	ts := newTestExec(t)
+	id := extractID(t, toolText(callTool(t, ts.exec, "story_create", map[string]string{
+		"title": "Story", "agent_role_id": ts.roleID,
+	})))
+
+	_, err := callAs(t, ts.exec, Caller{}, "story_start", map[string]any{"id": id, "watch": true})
+	if err == nil || !isUserError(err) {
+		t.Fatalf("err = %v, want a user error", err)
+	}
+	if w, _, _ := ts.store.Get(id); w.Status != work.StatusOpen {
+		t.Errorf("status = %q, want the story left open", w.Status)
+	}
+}
+
 // --- Tool: agent_role_list ---
 
 func TestAgentRoleList(t *testing.T) {

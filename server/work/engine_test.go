@@ -1240,7 +1240,7 @@ func TestEngine_ASubtaskQuestionIsNotDeliveredToAStoppedStory(t *testing.T) {
 	}
 }
 
-// A question from a task with no story above it is nobody's news.
+// A question from a story nobody is watching has no one above it to tell.
 func TestEngine_AQuestionFromAStoryGoesNowhere(t *testing.T) {
 	f := newEngineFixture(t)
 	f.startedStory(t, "sess-1")
@@ -1429,5 +1429,231 @@ func TestEngine_LeavesAStoppedSubtasksQuestionToTheUser(t *testing.T) {
 	}
 	if strings.Contains(f.sender.contents()[0], "still waiting on questions") {
 		t.Error("the story was pushed to answer for a subtask a person had stopped")
+	}
+}
+
+// --- a story watched by the session that started it ---
+
+// watchedStory creates a story and starts it the way story_start with watch
+// does: the watcher is recorded in the same claim.
+func (f *engineFixture) watchedStory(t *testing.T, watcherSessionID string) Work {
+	t.Helper()
+	story := createStory(t, f.store, "Watched")
+	w, _, err := f.store.Claim(context.Background(), story.ID, &Watcher{SessionID: watcherSessionID})
+	if err != nil {
+		t.Fatalf("Claim: %v", err)
+	}
+	return w
+}
+
+func (r *recordingSender) sentTo(sessionID string) []sentMessage {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var out []sentMessage
+	for _, m := range r.sent {
+		if m.sessionID == sessionID {
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
+// The watcher is told once per ending: the notification is read off the
+// transition, so an edit to a story that is already closed repeats nothing.
+func TestEngine_AWatchedStoryClosingWakesItsWatcherOnce(t *testing.T) {
+	f := newEngineFixture(t)
+	story := f.watchedStory(t, "sess-watcher")
+
+	if _, err := f.store.StepDone(context.Background(), story.ID, 0); err != nil {
+		t.Fatalf("StepDone: %v", err)
+	}
+	waitFor(t, func() bool { return len(f.sender.sentTo("sess-watcher")) > 0 })
+	title := "Renamed after closing"
+	if err := f.store.Update(context.Background(), story.ID, UpdateFields{Title: &title}); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	f.engine.Stop()
+
+	sent := f.sender.sentTo("sess-watcher")
+	if len(sent) != 1 || sent[0].subtype != MessageSubtypeWatchedStoryClosed {
+		t.Fatalf("watcher got %v, want one %s message", sent, MessageSubtypeWatchedStoryClosed)
+	}
+	if !strings.HasPrefix(sent[0].content, "Story ") || !strings.Contains(sent[0].content, story.ID) || !strings.Contains(sent[0].content, "work_comment_list") {
+		t.Errorf("message = %q, want it to open on the story and say where its report is", sent[0].content)
+	}
+}
+
+// The watch outlives a stop: a story stopped, restarted by someone else and
+// closed has ended twice, and the watcher hears about both.
+func TestEngine_AWatchedStoryRestartedAfterStoppingWakesItsWatcherAgain(t *testing.T) {
+	f := newEngineFixture(t)
+	story := f.watchedStory(t, "sess-watcher")
+	ctx := context.Background()
+
+	if err := f.store.Stop(ctx, story.ID); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+	// Each notification is its own follow-up goroutine, so the two endings
+	// arrive in order only if the first has before the second happens.
+	waitFor(t, func() bool { return len(f.sender.sentTo("sess-watcher")) > 0 })
+	if _, _, err := f.store.Claim(ctx, story.ID, nil); err != nil {
+		t.Fatalf("unwatched Claim: %v", err)
+	}
+	if _, err := f.store.StepDone(ctx, story.ID, 0); err != nil {
+		t.Fatalf("StepDone: %v", err)
+	}
+	f.engine.Stop()
+
+	sent := f.sender.sentTo("sess-watcher")
+	if len(sent) != 2 || sent[0].subtype != MessageSubtypeWatchedStoryStopped || sent[1].subtype != MessageSubtypeWatchedStoryClosed {
+		t.Errorf("watcher got %v, want a stopped then a closed message", sent)
+	}
+}
+
+// Closing ends the watch: a story reopened and closed again does not wake the
+// chat that watched its first run, which may have long moved on.
+func TestEngine_AClosedStoryNoLongerWakesItsFormerWatcher(t *testing.T) {
+	f := newEngineFixture(t)
+	story := f.watchedStory(t, "sess-watcher")
+	ctx := context.Background()
+
+	if _, err := f.store.StepDone(ctx, story.ID, 0); err != nil {
+		t.Fatalf("StepDone: %v", err)
+	}
+	if err := f.store.Reopen(ctx, story.ID); err != nil {
+		t.Fatalf("Reopen: %v", err)
+	}
+	if err := f.store.Stop(ctx, story.ID); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+	if _, _, err := f.store.Claim(ctx, story.ID, nil); err != nil {
+		t.Fatalf("unwatched Claim: %v", err)
+	}
+	if _, err := f.store.StepDone(ctx, story.ID, 0); err != nil {
+		t.Fatalf("StepDone: %v", err)
+	}
+	f.engine.Stop()
+
+	sent := f.sender.sentTo("sess-watcher")
+	if len(sent) != 1 || sent[0].subtype != MessageSubtypeWatchedStoryClosed {
+		t.Errorf("watcher got %v, want only the first close", sent)
+	}
+}
+
+// A stopped story will not move again by itself, so a watcher waiting for it to
+// finish is told — otherwise it would wait forever.
+func TestEngine_AWatchedStoryStoppingWakesItsWatcher(t *testing.T) {
+	f := newEngineFixture(t)
+	story := f.watchedStory(t, "sess-watcher")
+
+	if err := f.store.Stop(context.Background(), story.ID); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+
+	waitFor(t, func() bool { return len(f.sender.sentTo("sess-watcher")) > 0 })
+	sent := f.sender.sentTo("sess-watcher")
+	if len(sent) != 1 || sent[0].subtype != MessageSubtypeWatchedStoryStopped {
+		t.Fatalf("watcher got %v, want one %s message", sent, MessageSubtypeWatchedStoryStopped)
+	}
+	if !strings.Contains(sent[0].content, "story_start") {
+		t.Errorf("message = %q, want it to say how the story is restarted", sent[0].content)
+	}
+}
+
+func TestEngine_AWatchedStorysQuestionReachesItsWatcher(t *testing.T) {
+	f := newEngineFixture(t)
+	story := f.watchedStory(t, "sess-watcher")
+
+	f.engine.HandleQuestionPosted(story.SessionID, subtaskQuestion())
+
+	waitFor(t, func() bool { return len(f.sender.sentTo("sess-watcher")) > 0 })
+	sent := f.sender.sentTo("sess-watcher")
+	if len(sent) != 1 || sent[0].subtype != MessageSubtypeWatchedStoryQuestion {
+		t.Fatalf("watcher got %v, want one %s message", sent, MessageSubtypeWatchedStoryQuestion)
+	}
+	for _, want := range []string{"Which database?", "req-1", story.SessionID, "question_answer"} {
+		if !strings.Contains(sent[0].content, want) {
+			t.Errorf("message does not contain %q; it is the watcher's only copy of the question", want)
+		}
+	}
+}
+
+// Nobody asked to watch this story, so its ending is nobody's news.
+func TestEngine_AnUnwatchedStoryEndsSilently(t *testing.T) {
+	f := newEngineFixture(t)
+	story := f.startedStory(t, "sess-story")
+
+	if _, err := f.store.StepDone(context.Background(), story.ID, 0); err != nil {
+		t.Fatalf("StepDone: %v", err)
+	}
+	f.engine.Stop()
+
+	if got := f.sender.count(); got != 0 {
+		t.Errorf("sent %v, want nothing", f.sender.subtypes())
+	}
+}
+
+// The watcher asked about the story. Its tasks starting, asking and closing are
+// the story's business, and reach the story exactly as they always have.
+func TestEngine_AWatchedStorysTasksAreNotReportedToItsWatcher(t *testing.T) {
+	f := newEngineFixture(t)
+	story := f.watchedStory(t, "sess-watcher")
+	task := f.startedSubtask(t, story.ID, "Wire the store", "sess-child")
+
+	f.engine.HandleQuestionPosted("sess-child", subtaskQuestion())
+	doneWork(t, f.store, task.ID)
+	waitFor(t, func() bool { return len(f.sender.sentTo(story.SessionID)) == 2 })
+	f.engine.Stop()
+
+	if sent := f.sender.sentTo("sess-watcher"); len(sent) != 0 {
+		t.Errorf("watcher got %v, want nothing about the story's tasks", sent)
+	}
+}
+
+// sessionGoneSender is a chat whose sessions have all been deleted.
+type sessionGoneSender struct{}
+
+func (sessionGoneSender) SendSystemMessage(context.Context, string, string, string, *agent.MessageMeta) error {
+	return session.ErrSessionNotFound
+}
+
+// Deleting a chat that was watching a story is an ordinary thing to do: the
+// story ends exactly as it would have, with nothing stopped and nothing noted.
+func TestEngine_AWatcherWhoseSessionIsGoneIsSkipped(t *testing.T) {
+	f := newEngineFixture(t)
+	f.engine.SetSender(sessionGoneSender{})
+	story := f.watchedStory(t, "sess-deleted")
+
+	f.engine.HandleQuestionPosted(story.SessionID, subtaskQuestion())
+	if _, err := f.store.StepDone(context.Background(), story.ID, 0); err != nil {
+		t.Fatalf("StepDone: %v", err)
+	}
+	f.engine.Stop()
+
+	if got := getWork(t, f.store, story.ID); got.Status != StatusClosed {
+		t.Errorf("story = %q, want it closed as it asked", got.Status)
+	}
+	if bodies := f.commentBodies(t, story.ID); len(bodies) != 0 {
+		t.Errorf("comments = %v, want none", bodies)
+	}
+}
+
+// A watcher that is itself a work handed back to a person is not woken: a
+// message starts a turn, and a stopped work must not be set running.
+func TestEngine_AWatcherRunningAStoppedWorkIsNotWoken(t *testing.T) {
+	f := newEngineFixture(t)
+	watcher := f.startedStory(t, "sess-watcher")
+	if err := f.store.Stop(context.Background(), watcher.ID); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+	story := f.watchedStory(t, "sess-watcher")
+
+	if _, err := f.store.StepDone(context.Background(), story.ID, 0); err != nil {
+		t.Fatalf("StepDone: %v", err)
+	}
+	f.engine.Stop()
+
+	if sent := f.sender.sentTo("sess-watcher"); len(sent) != 0 {
+		t.Errorf("watcher got %v, want nothing while it is stopped", sent)
 	}
 }

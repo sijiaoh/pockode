@@ -26,7 +26,7 @@ import type {
 } from "../../types/message";
 import { forkUnavailableReason } from "../../utils/forkAnchor";
 import { hasMessageActions } from "../../utils/messageActions";
-import { workEventWording } from "../../utils/systemMessage";
+import { workEventSubject, workEventWording } from "../../utils/systemMessage";
 import {
 	CollapsibleBody,
 	MarkdownContent,
@@ -100,10 +100,9 @@ function WorkEventItem({
 }: WorkEventItemProps) {
 	const [expanded, setExpanded] = useState(false);
 	const { label, summary } = workEventWording(subtype, meta);
-	const workId = meta?.work_id;
-	// The work's own title, even where the collapsed line names something else
-	// (a finished child): expanded, it sits next to the link into that work.
-	const title = meta?.title;
+	// The subject's own title, even where the collapsed line names something
+	// else (a finished child): expanded, it sits next to the link into that work.
+	const { workId, title } = workEventSubject(subtype, meta);
 
 	return (
 		<div className="rounded bg-th-bg-secondary text-xs">

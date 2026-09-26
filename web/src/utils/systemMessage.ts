@@ -14,6 +14,9 @@ const SYSTEM_MESSAGE_LABELS: Record<string, string> = {
 	child_done: "Subtask done",
 	child_question: "Subtask asked",
 	wait_stranded: "Wait cleared",
+	watched_story_closed: "Story done",
+	watched_story_stopped: "Story stopped",
+	watched_story_question: "Story asked",
 };
 
 /** How one work event reads in the stream. */
@@ -53,9 +56,35 @@ export function workEventWording(
 	) {
 		return { label, summary: meta?.child?.title ?? "" };
 	}
+	// Sent to whoever started a story with a watch — often a plain chat with no
+	// title of its own — about that story.
+	if (subtype?.startsWith("watched_story_")) {
+		return { label, summary: meta?.story?.title ?? "" };
+	}
 	// Auto-continues repeat, and repeating one title is the least informative
 	// line there is. Left blank so they stay visually weightless.
 	if (subtype === "auto_continue") return { label, summary: "" };
 
 	return { label, summary: meta?.title ?? "" };
+}
+
+/** The work a work event's expanded body names and links into. */
+export interface WorkEventSubject {
+	workId?: string;
+	title?: string;
+}
+
+/**
+ * Normally the work the message was sent to. A watched story's news is the
+ * exception: it is about a story the reader started, not about the reader —
+ * which is often a plain chat with no work at all — so it leads to that story.
+ */
+export function workEventSubject(
+	subtype: string | undefined,
+	meta: SystemMessageMeta | undefined,
+): WorkEventSubject {
+	if (subtype?.startsWith("watched_story_") && meta?.story) {
+		return { workId: meta.story.id, title: meta.story.title };
+	}
+	return { workId: meta?.work_id, title: meta?.title };
 }
