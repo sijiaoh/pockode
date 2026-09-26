@@ -203,6 +203,11 @@ func TestOperations_StepDone_RefusesToCloseWhileChildrenAreActive(t *testing.T) 
 			t.Errorf("refusal %q does not mention %q", err, want)
 		}
 	}
+	// Stopping a subtask is a person's call and no agent tool does it, so the
+	// refusal must not send the agent after it.
+	if strings.Contains(strings.ToLower(err.Error()), "stop") {
+		t.Errorf("refusal %q suggests stopping, which no agent tool can do", err)
+	}
 	if got := getWork(t, store, story.ID); got.Status != StatusActive || got.CurrentStep != 0 {
 		t.Errorf("status/step = %q/%d; a refused step_done moves nothing", got.Status, got.CurrentStep)
 	}

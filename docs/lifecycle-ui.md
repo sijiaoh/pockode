@@ -940,12 +940,13 @@ the agent:
 
 > This story still has 2 active subtask(s): "Session layer TurnState and
 > reducer", "Process lease table and reaper". Call `story_wait` to pause until
-> they close, or stop them first. The step was not completed.
+> they close. The step was not completed.
 
 Three properties it needs: it **names** the blockers (an agent told only "there
-are subtasks" will guess), it names **both** ways out, and it states plainly that
-nothing happened. That text appears in the transcript as an ordinary tool error,
-which is the user's first view of it.
+are subtasks" will guess), it names the **one** way out an agent has —
+`story_wait`; stopping a subtask is a person's call and no agent tool makes it —
+and it states plainly that nothing happened. That text appears in the transcript
+as an ordinary tool error, which is the user's first view of it.
 
 The user's second view is the story detail page: the children section says
 "{n} active" (§6.2) and the story's own activity says `idle` or

@@ -348,18 +348,20 @@ explicitly through `story_wait`, not `StepDone`.
 refusal names them (`work.Operations.refuseIfChildrenActive`):
 
 > This story still has 2 active subtask(s): "…", "…". Call `story_wait` to pause
-> until they close, or stop them first. The step was not completed.
+> until they close. The step was not completed.
 
 Only the closing one: advancing through a story's own steps alongside running
 subtasks is ordinary. Finishing is not — the children would be left with a
 parent nobody is going to report to, and closing the story retires the session
 they report through. Nothing is cascaded, because stopping someone else's work
-is a decision rather than a side effect of finishing your own; the two ways out
-are both named in the error, and the rule itself is stated up front in the two
-places an agent reads before it acts — the tool description and the lifecycle
-section every message carries. When a child closes, the engine
-tells the parent and clears a `child` wait; already closed parents are not
-reopened, preserving the intentional completion of coordinated work.
+is a decision rather than a side effect of finishing your own. For the same
+reason the error names only `story_wait`: stopping a subtask is a person's call
+and no agent tool makes it, so offering it would send the agent after a call it
+cannot make. The rule itself is stated up front in the two places an agent reads
+before it acts — the tool description and the lifecycle section every message
+carries. When a child closes, the engine tells the parent and clears a `child`
+wait; already closed parents are not reopened, preserving the intentional
+completion of coordinated work.
 
 ## File-Based Storage
 

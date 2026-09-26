@@ -266,9 +266,11 @@ func (o *Operations) StepDone(ctx context.Context, id string) (hasMoreSteps bool
 //
 // The children are named rather than counted. An agent told only that "there
 // are subtasks" has to guess which, and the guess is what produces a second
-// wrong call; the error also names both ways out, because the wait is usually
-// what it wanted. Nothing is cascaded — stopping someone else's work is a
-// decision, not a side effect of finishing your own.
+// wrong call; the error also names the way out, story_wait. It names only that
+// one: stopping a subtask is a person's decision and no agent tool does it, so
+// offering it would send the agent after a call it cannot make. Nothing is
+// cascaded for the same reason — stopping someone else's work is a decision,
+// not a side effect of finishing your own.
 //
 // A stale read is harmless in the same way StartWork's precondition is: a child
 // that goes active in the gap is a rare spurious close, and one that closes in
@@ -291,7 +293,7 @@ func (o *Operations) refuseIfChildrenActive(w Work, totalSteps int) error {
 	if len(titles) == 0 {
 		return nil
 	}
-	return fmt.Errorf("%w: this story still has %d active subtask(s): %s. Call story_wait to pause until they close, or stop them first. The step was not completed",
+	return fmt.Errorf("%w: this story still has %d active subtask(s): %s. Call story_wait to pause until they close. The step was not completed",
 		ErrInvalidWork, len(titles), strings.Join(titles, ", "))
 }
 
