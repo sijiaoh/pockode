@@ -512,6 +512,21 @@ The third row is the shape a question with nothing to pick takes. It needs no
 second surface and no second copy, and it is multi-line where the Other input is
 not: the answers that arrive there are paragraphs, not labels.
 
+**The question and each option's description are Markdown; labels and the
+header are not.** What the agent wrote as prose is rendered as prose, the way
+the rest of its writing is. A label is the answer itself — sent back verbatim,
+matched by the server, repeated in the card's collapsed summary — so it reads
+the same everywhere only if it is never rendered. Rendering has one consequence
+for every host: read-only means the *choices* are disabled, not the form, so
+`QuestionForm` disables its own inputs rather than sitting in a disabled
+`fieldset`, which would also disable the copy button on a code block in the
+question. The work detail page's pending-question list is not a `QuestionForm`
+but follows the same split. The one place a question stays source is its echo
+in the answering message (§6). That body is written for its tightest host, the
+user bubble, whose text is plain and whose foreground and background are a pair
+tuned close to the contrast floor — prose's link and code colours would break
+it. The rendered question is on the record card.
+
 ### Other and Won't answer are not alternatives
 
 Both are on every block that has options, and each says something the other

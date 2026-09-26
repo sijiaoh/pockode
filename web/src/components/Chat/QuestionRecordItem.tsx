@@ -205,8 +205,13 @@ function QuestionRecordItem({
 					{/* Always disabled: this card is a record. An answered one shows
 					    the selection filled in, which is what keeps it looking like the
 					    form that was filled in; every other state shows the question
-					    with nothing picked. */}
-					<fieldset disabled aria-label="Question" className="space-y-2">
+					    with nothing picked. The form disables its own choices rather
+					    than a disabled fieldset doing it, which would also disable the
+					    copy button on a code block in the question. min-w-0 against a
+					    fieldset's UA `min-inline-size: min-content`: a wide code block
+					    would otherwise floor the whole form at its width, and the body
+					    would scroll options and all sideways instead of the block. */}
+					<fieldset aria-label="Question" className="min-w-0 space-y-2">
 						<QuestionForm
 							question={record.question}
 							askedAt={record.askedAt}

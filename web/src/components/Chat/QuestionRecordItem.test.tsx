@@ -252,4 +252,26 @@ describe("QuestionRecordItem", () => {
 			screen.queryByRole("button", { name: "Answer this" }),
 		).not.toBeInTheDocument();
 	});
+
+	// The card is read-only, but only its choices are: a code block the agent put
+	// in the question is still there to be copied.
+	it("keeps the choices read-only without disabling the question's code block", async () => {
+		const user = userEvent.setup();
+		render(
+			<QuestionRecordItem
+				record={{
+					...record,
+					question: {
+						...record.question,
+						question: "Run this?\n\n```sh\nmake migrate\n```",
+					},
+				}}
+				status="pending"
+			/>,
+		);
+		await user.click(screen.getByRole("button", { name: /Database/ }));
+
+		expect(screen.getByRole("radio", { name: /Managed/ })).toBeDisabled();
+		expect(screen.getByRole("button", { name: "Copy code" })).toBeEnabled();
+	});
 });

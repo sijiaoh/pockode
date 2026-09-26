@@ -177,7 +177,8 @@ needs the user comes first ([project-ui.md §2.3](../project-ui.md#23-four-group
 and that is the questions it is asking and the tasks it is moving through, not
 the brief they wrote and the role they picked before it started. The rule draws
 one line rather than ranking every section: above the Description is what a user
-opens a running work for; from the Description down is reference — Steps and
+opens a running work for; the Description follows it, in full, because the brief
+is what tells whether that progress is right; below it is reference — Steps and
 Usage do move, but checking them is not why the page was opened, and Comments
 is a log, read from the end it grows at. A task's page is a story's without
 Tasks, not an order of its own:
@@ -187,11 +188,18 @@ Tasks, not an order of its own:
 3. **Status** — Read-only `ActivityBadge`, with a `WorktreeBadge` alongside it: the worktree binding isn't editable, but the badge is a link that navigates to that worktree's root (shown for both stories and tasks, since a task detail can be opened directly; hidden while neither the work nor its story has started, because only then can the worktree still change). Under them, the `child`-only wait line ([lifecycle-ui.md §6.2](../lifecycle-ui.md#62-detail-page))
 4. **Unanswered questions** — A read-only block, present whenever `pending_questions` is non-empty, with one Answer button into the chat when the work has a session ([lifecycle-ui.md §6.2](../lifecycle-ui.md#62-detail-page))
 5. **Tasks** (story only) — The story's child tasks as `WorkRow`s, the one place a story's tasks are listed, plus an `Add Task` control opening `CreateWorkSheet`. The rows differ from the list's in one slot only: the story name is left off, because every row here is a task of the story on screen. The heading carries `closed/total` and, whenever any child is `active`, an "{n} active" count — the same count that makes a refused `step_done` legible (docs/lifecycle-ui.md §6.2)
-6. **Description** — Inline-editable textarea with Markdown rendering. Fully shown while the work is `open`, when the brief is still what the user is writing; once it has left `open` the brief is settled, and in full it would push everything below it off a phone's first screen, so it collapses to its first non-empty line (a leading heading, quote or list marker dropped — a brief usually opens with `## Goal`) and expands, through `CollapsibleBody`, from that line or the chevron beside the pencil. The component is keyed by work id, so moving between a story and its task does not carry one brief's expanded or half-edited state to the next
+6. **Description** — Inline-editable textarea with Markdown rendering. Shown in full in every status: it is the part users read most, and hidden behind one line it would cost a tap every time. The card scrolls wide content (a long code line, a table) sideways itself, since `.code-block` leaves that to an ancestor and the next one up is the whole page
 7. **Role** — Inline-editable `RoleSelect` (tap to switch role)
 8. **Steps** — Step progress indicator showing current step position (if agent role has steps defined). Each step's text renders as Markdown, like the role page's copy of it ([lifecycle-ui.md §6.3](../lifecycle-ui.md#63-steplist))
 9. **Usage** — Tokens and cost, this item's own beside the total over it and its tasks, from the same `work.detail` subscription and updating live as its sessions spend ([usage-display-ui.md](../usage-display-ui.md), [aggregation](../code/work-system.md#usage-aggregation))
 10. **Comments** — Loaded via `work.detail.subscribe` (real-time), and read-only: the list is the record agents and the engine write about what happened, and nothing here writes or edits one. A comment carries no author field ([data-model.md](data-model.md#comment)), so an edit would leave nothing to tell a user's wording from the agent's — and the next agent to read the story with `work_comment_list` would take the rewrite as its predecessor's report
+
+The page is keyed by work id inside the component (`WorkDetailOverlay` renders
+`WorkDetailPage key={workId}`). Moving to a parent or child, or between two
+details in history, renders the same element with another id, and a reused page
+would carry the last work's scroll position, half-edited brief, open sheet and
+error line onto the next one. A notification about the same work keeps the id,
+so the reader's place survives it.
 
 **Bottom action bar:**
 

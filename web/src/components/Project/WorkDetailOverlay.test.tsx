@@ -488,73 +488,83 @@ describe("WorkDetailOverlay", () => {
 		expectToAppearBefore(descriptionEditor, stepsHeading);
 	});
 
-	// While open the brief is what the user is still writing, so it stays in
-	// full; once the work has started it shrinks to its first line.
 	describe("the description", () => {
-		const body = "## Goal\n\nShip the reorder.";
-
-		it("shows in full while the work is open", () => {
-			renderWithWork(createWork({ status: "open", body }));
+		it.each([
+			"open",
+			"active",
+			"stopped",
+			"closed",
+		] as const)("shows in full while %s", (status) => {
+			renderWithWork(
+				createWork({ status, body: "## Goal\n\nShip the reorder." }),
+			);
 
 			expect(screen.getByText(/Ship the reorder/)).toBeVisible();
 			expect(
 				screen.queryByRole("button", { name: "Expand description" }),
 			).not.toBeInTheDocument();
 		});
+	});
 
-		it.each([
-			"active",
-			"stopped",
-			"closed",
-		] as const)("collapses to its first line once %s", async (status) => {
-			const user = userEvent.setup();
-			renderWithWork(createWork({ status, body }));
+	// Moving to a parent or child renders the same page with another id, which
+	// every way in — a task row, the parent link, the back button, browser
+	// history between two details — goes through.
+	describe("moving to another work", () => {
+		// jsdom lays nothing out and ignores `scrollTop`, so the position is put
+		// on the node by hand: it lives on the DOM element, which is exactly what
+		// a reused page would carry over.
+		const scrollBoxOf = (title: string) => {
+			const box = screen
+				.getByRole("heading", { level: 2, name: title })
+				.closest(".overflow-auto");
+			if (!(box instanceof HTMLElement)) throw new Error("no scroll box");
+			return box;
+		};
+		const scrollPage = (title: string) =>
+			Object.defineProperty(scrollBoxOf(title), "scrollTop", {
+				value: 600,
+				writable: true,
+			});
 
-			expect(screen.getByText("Goal")).toBeVisible();
-			expect(screen.queryByText(/Ship the reorder/)).not.toBeInTheDocument();
-
-			await user.click(
-				screen.getByRole("button", { name: "Expand description" }),
-			);
-
-			expect(screen.getByText(/Ship the reorder/)).toBeVisible();
-
-			await user.click(
-				screen.getByRole("button", { name: "Collapse description" }),
-			);
-
-			expect(screen.getByText(/Ship the reorder/)).not.toBeVisible();
-		});
-
-		// The page is reused when it moves to a parent or child work.
-		it("starts collapsed again on the next work", async () => {
-			const user = userEvent.setup();
-			const { rerender } = renderWithWork(createWork({ body }));
-			await user.click(
-				screen.getByRole("button", { name: "Expand description" }),
-			);
-
+		const showWork = (
+			rerender: ReturnType<typeof render>["rerender"],
+			work: Work,
+		) => {
 			mockUseWorkDetailSubscription.mockReturnValue({
 				...mockUseWorkDetailSubscription.mock.results[0].value,
-				work: createWork({
-					id: "task-1",
-					type: "task",
-					body: "## Other\n\nMore.",
-				}),
+				work,
 			});
 			rerender(
 				<WorkDetailOverlay
-					workId="task-1"
+					workId={work.id}
 					onBack={vi.fn()}
 					onNavigateToSession={vi.fn()}
 					onOpenWorkDetail={vi.fn()}
 				/>,
 			);
+		};
 
-			expect(
-				screen.getByRole("button", { name: "Expand description" }),
-			).toBeInTheDocument();
-			expect(screen.queryByText("More.")).not.toBeInTheDocument();
+		it("opens the next work at its top", () => {
+			const { rerender } = renderWithWork(createWork({ title: "Story" }));
+			scrollPage("Story");
+
+			showWork(
+				rerender,
+				createWork({ id: "task-1", type: "task", title: "Task" }),
+			);
+
+			expect(scrollBoxOf("Task").scrollTop).toBe(0);
+		});
+
+		// The subscription re-renders the page on every change to the work; the
+		// reader's place must survive those.
+		it("keeps the place on the same work as it updates", () => {
+			const { rerender } = renderWithWork(createWork({ title: "Story" }));
+			scrollPage("Story");
+
+			showWork(rerender, createWork({ title: "Story, renamed" }));
+
+			expect(scrollBoxOf("Story, renamed").scrollTop).toBe(600);
 		});
 	});
 });
