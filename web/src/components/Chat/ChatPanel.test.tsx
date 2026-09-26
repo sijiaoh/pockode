@@ -956,6 +956,63 @@ describe("ChatPanel", () => {
 			expect(card?.querySelector("button")).toHaveFocus();
 		});
 
+		// The jump closes the panel from outside, so it stands down mid-send like
+		// the panel's own ways out. Here that matters most: the send is refused
+		// *because of* the permission request, and a panel closed before the
+		// refusal lands takes the one explanation of it away.
+		it("holds the jump while the panel is sending", async () => {
+			const user = userEvent.setup();
+			seedUnansweredQuestion();
+			render(<ChatPanel {...defaultProps} />);
+			await waitForHistoryLoad();
+			act(() =>
+				acceptSetting({
+					turn: {
+						phase: "blocked",
+						open: true,
+						since: "2024-01-01T00:00:00Z",
+						blockers: [
+							{
+								kind: "permission",
+								request_id: "req-9",
+								raised_at: "2024-01-01T00:00:00Z",
+							},
+						],
+						unanswered: [question],
+					},
+				}),
+			);
+
+			let refuse: (reason: Error) => void = () => {};
+			mockState.sendMessage.mockReturnValueOnce(
+				new Promise((_resolve, reject) => {
+					refuse = reject;
+				}),
+			);
+			await user.click(
+				within(answerPanel()).getByRole("radio", { name: /SQLite/ }),
+			);
+			await user.click(
+				within(answerPanel()).getByRole("button", { name: "Send" }),
+			);
+
+			const jump = screen.getByRole("button", { name: "Jump to request" });
+			expect(jump).toBeDisabled();
+
+			await act(async () =>
+				refuse(
+					new Error(
+						"this turn is waiting for an answer to the request on screen",
+					),
+				),
+			);
+
+			expect(
+				within(answerPanel()).getByText(/waiting for a permission decision/),
+			).toBeInTheDocument();
+			expect(jump).toBeEnabled();
+		});
+
 		// The panel outlives an overlay, but the tap that opened it does not:
 		// coming back from a file or a diff is the app re-showing the panel, and
 		// an automatic re-show must not pull the caret out of the composer.

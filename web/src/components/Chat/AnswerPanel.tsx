@@ -55,6 +55,12 @@ interface Props {
 	 * (docs/answering-ui.md §3, "Room on a short viewport").
 	 */
 	onFocusChange?: (focused: boolean) => void;
+	/**
+	 * Whether a submit is in flight. Told to the host because one way out of
+	 * this panel is not the panel's own — the strip's jump to a permission card
+	 * closes it from outside — and it has to stand down mid-send like the rest.
+	 */
+	onSendingChange?: (sending: boolean) => void;
 }
 
 /** A block the user can still see, whether or not its question is still open. */
@@ -119,6 +125,7 @@ function AnswerPanel({
 	onClose,
 	takeFocus,
 	onFocusChange,
+	onSendingChange,
 }: Props) {
 	const drafts = useQuestionDraftStore(selectSessionDrafts(sessionId));
 	// Blocks that can no longer be answered but are still on screen, keyed by
@@ -137,6 +144,12 @@ function AnswerPanel({
 	// Questions that were on screen last render, so a departure can be told from
 	// a question that was never here.
 	const seenRef = useRef<Map<string, PendingQuestion>>(new Map());
+	// Request ids the submit in flight carries. The turn update resolving them
+	// and the send's own response travel on different channels, in no promised
+	// order, so a question can leave the list while its draft is still waiting
+	// on the response that would clear it — and that departure is this panel's
+	// own answer landing, not somebody else's.
+	const inFlightRef = useRef<Set<string>>(new Set());
 
 	// Blocks whose question left the list while holding a draft keep their place
 	// and go grey; ones holding nothing simply disappear, because nothing was
@@ -167,7 +180,11 @@ function AnswerPanel({
 		if (departed.length === 0) return;
 
 		const drafts = useQuestionDraftStore.getState().drafts[sessionId];
-		const keep = departed.filter((q) => isDraftDirty(drafts?.[q.request_id]));
+		const keep = departed.filter(
+			(q) =>
+				!inFlightRef.current.has(q.request_id) &&
+				isDraftDirty(drafts?.[q.request_id]),
+		);
 		if (keep.length === 0) return;
 		setStale((prev) => {
 			const next = new Map(prev);
@@ -274,6 +291,7 @@ function AnswerPanel({
 
 		setSending(true);
 		setError(null);
+		inFlightRef.current = new Set(entries.map((e) => e.requestId));
 		try {
 			await onSend(buildAnswerMessage(entries), toAnswerRecords(entries));
 			// Only now: a question whose send failed is still unanswered, and its
@@ -289,10 +307,15 @@ function AnswerPanel({
 			// The refusal names every request id it refused over, so the blocks
 			// that caused it go grey and keep their drafts while every other block
 			// stays live — one more tap, nothing retyped (docs/answering-ui.md §7).
+			//
+			// So does one that left the list while the send was out: the departure
+			// was held back as possibly this panel's own, and the send failing says
+			// it was not. Left alone it would vanish with its draft still stored.
 			const refused = liveBlocks.filter(
 				(b) =>
 					readyIds.includes(b.question.request_id) &&
-					message.includes(b.question.request_id),
+					(message.includes(b.question.request_id) ||
+						!seenRef.current.has(b.question.request_id)),
 			);
 			if (refused.length > 0) {
 				setStale((prev) => {
@@ -307,6 +330,7 @@ function AnswerPanel({
 				});
 			}
 		} finally {
+			inFlightRef.current = new Set();
 			setSending(false);
 		}
 	}, [liveBlocks, readyIds, drafts, onSend, sessionId]);
@@ -315,9 +339,13 @@ function AnswerPanel({
 	// not submitted, or asked while the panel was up — keeps it open, and a list
 	// emptied from elsewhere never closes it: a panel that vanishes under a
 	// finger is worse than one that explains itself.
+	//
+	// Never mid-send: the list can empty before the response lands, and
+	// `sentCount` may still be counting an earlier submit, so closing then would
+	// take the panel away before this submit is known to have gone out.
 	useEffect(() => {
-		if (sentCount > 0 && blocks.length === 0) onClose();
-	}, [sentCount, blocks.length, onClose]);
+		if (!sending && sentCount > 0 && blocks.length === 0) onClose();
+	}, [sending, sentCount, blocks.length, onClose]);
 
 	const title =
 		unanswered.length === 1 ? "1 question" : `${unanswered.length} questions`;
@@ -341,13 +369,23 @@ function AnswerPanel({
 		tookFocusRef.current = takeFocus;
 	}, [takeFocus]);
 
-	// Closing on Escape, backdrop and × is one action under three names, and all
-	// three stand down mid-send: a slow relay must not leave the user unsure
-	// whether their answers went out.
+	// Closing on Escape, backdrop, × and the footer's Close is one action under
+	// four names, and all four stand down mid-send: a slow relay must not leave
+	// the user unsure whether their answers went out. The strip's jump, which
+	// closes from outside, stands down on `onSendingChange` below.
 	const handleDismiss = useCallback(() => {
 		if (sending) return;
 		onClose();
 	}, [sending, onClose]);
+
+	// The cleanup is what reports the end, so a panel unmounted mid-send — an
+	// overlay opening, a session switch — cannot leave the host thinking a send
+	// is still out.
+	useEffect(() => {
+		if (!sending) return;
+		onSendingChange?.(true);
+		return () => onSendingChange?.(false);
+	}, [sending, onSendingChange]);
 
 	// Escape closes the panel rather than interrupting the agent's turn, and it
 	// is claimed for the window rather than on the panel's own element: the
@@ -510,7 +548,7 @@ function AnswerPanel({
 						total={liveBlocks.length}
 						sending={sending}
 						onSend={handleSend}
-						onClose={onClose}
+						onClose={handleDismiss}
 					/>
 				</div>
 			</section>
@@ -534,14 +572,20 @@ function Footer({
 	// Nothing left to answer turns the one button into the way out. There is no
 	// Cancel beside Send at any other time: closing keeps every draft, and a
 	// Cancel would promise that leaving discards.
+	//
+	// It can appear mid-send — the blocks being sent leave the list as soon as
+	// the turn update says they are resolved, which may be before the response —
+	// so it stands down with the others, and says why, until the send is known
+	// to have landed.
 	if (total === 0) {
 		return (
 			<button
 				type="button"
 				onClick={onClose}
-				className="ml-auto min-h-[44px] rounded-lg bg-th-accent px-4 text-sm font-medium text-th-accent-text"
+				disabled={sending}
+				className="ml-auto min-h-[44px] rounded-lg bg-th-accent px-4 text-sm font-medium text-th-accent-text disabled:opacity-50"
 			>
-				Close
+				{sending ? "Sending..." : "Close"}
 			</button>
 		);
 	}

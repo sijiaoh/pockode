@@ -730,6 +730,11 @@ function ChatPanel({
 	// while the keyboard half of the jump was lost. `setAnswerPanelOpen` is
 	// state, so the commit that takes `inert` off comes after this handler
 	// returns; ordering the two lines differently changes nothing.
+	//
+	// Not while the panel is sending, the same as its own ways out: a
+	// permission request can come up mid-send, and closing then would take
+	// away the only place the send's outcome — a refusal included — is told.
+	const [answerPanelSending, setAnswerPanelSending] = useState(false);
 	const [pendingJumpRequestId, setPendingJumpRequestId] = useState<
 		string | null
 	>(null);
@@ -995,6 +1000,7 @@ function ChatPanel({
 					onSend={handleSendAnswers}
 					onClose={handleCloseAnswerPanel}
 					onFocusChange={setAnswerPanelFocused}
+					onSendingChange={setAnswerPanelSending}
 				/>
 			)}
 		</div>
@@ -1024,6 +1030,7 @@ function ChatPanel({
 						// visible jumps.
 						answerPanelOpen={answerPanelOpen}
 						sendPending={isSendPending}
+						jumpDisabled={answerPanelSending}
 					/>
 				)}
 				{/* Session action bar */}

@@ -134,6 +134,13 @@ under a backdrop would be the dead end this surface exists to remove, so the
 jump closes the panel on its way. Closing costs nothing: the drafts stay (§5),
 and the panel is one tap away afterwards.
 
+**Except mid-send, when the jump is disabled.** It closes the panel as surely as
+the `×` does, so it stands down with the panel's own ways out (§3). This is the
+one of them most likely to be reached for then: an answer sent while a
+permission request is outstanding is refused *because of* that request, and a
+panel closed before the refusal lands takes the only explanation of it away. The
+panel tells `ChatPanel` when a send is out, since the strip is not the panel's.
+
 **The jump waits for that close to be on the screen.** Focus is the half of a
 jump that can fail without looking like it failed: the last thing it does is put
 the caret on the card, and a `focus()` into an `inert` subtree is dropped by the
@@ -260,9 +267,9 @@ composer are not.
 
 Two things the old sheet had are kept for reasons that were never about being
 modal: the header/body/footer skeleton, and **not being closeable mid-send** —
-the `×`, Escape and the backdrop all go dead while a submit is in flight,
-because on a slow relay a panel that can be closed leaves the user unsure
-whether the answer went.
+the `×`, Escape, the backdrop, the footer's Close (§3, *When it closes*) and the
+strip's jump (§2) all go dead while a submit is in flight, because on a slow
+relay a panel that can be closed leaves the user unsure whether the answer went.
 
 The body carries `overscroll-y-contain`, the same class the message list's own
 scroller wears. An overscroll at either end stops at the panel instead of
@@ -656,10 +663,32 @@ from the list.** `unanswered.length > 0 && !permission && !dismissed` is the
 obvious way to write §4 and it makes the last row of that table unreachable: the
 frame the last question leaves the list in is the frame the panel disappears in,
 taking the half-typed answer with it. Showing itself (§4) only ever *sets* the
-flag. What clears it is the `×`, Escape, a press on the backdrop, a submit that
-left nothing behind, and the strip's jump to a permission card (§2) — five acts,
-each of them something the user asked for. The first three are one action under
-three names, and all three stand down mid-send (§3).
+flag. What clears it is the `×`, Escape, a press on the backdrop, the footer's
+Close, a submit that left nothing behind, and the strip's jump to a permission
+card (§2) — six acts, each of them something the user asked for. The first four
+are one action under four names; they and the jump stand down mid-send (§3, §2).
+
+**A submit's two replies arrive in no promised order, and the panel behaves the
+same under both.** The send's own response comes back on the request; the turn
+update that takes the answered questions off the list is a push on the chat
+subscription. Either may land first. So the first row of the table is decided by
+the response, not by the list:
+
+- The panel closes only when three things hold at once: no submit is in flight,
+  a submit from this panel has succeeded, and no block is left. The first
+  condition is not redundant with the other two — a second submit can find the
+  list emptied by its own turn update while the success counted is the first
+  submit's, and without it the panel would close before the second is known to
+  have gone out.
+- When the turn update wins, the blocks being sent leave the panel straight away
+  — they are this panel's own answers landing, not a departure (§7) — and if
+  nothing else was open the body reads "Nothing left to answer." while the footer
+  button reads **Sending...**, disabled. That is the footer's Close in its mid-send
+  form: the one button that can appear during a send says why it cannot be
+  pressed, the way Send does. The response then closes the panel.
+- When the response wins, it clears the sent drafts, and the blocks stay until
+  the turn update takes their questions off the list; the panel closes then.
+  Having no draft left, they leave without a trace rather than going grey.
 
 ## 4. When the panel is up
 
@@ -1162,6 +1191,8 @@ to carry.
 | A question arrives while the panel is up | Its block is appended at the end; the title's count and the footer's `n` go up. Nothing scrolls — the user is reading something |
 | A question is answered elsewhere, its block has **no draft** | The block disappears. The counts fall. Nothing is announced: nothing was lost |
 | A question is answered elsewhere, its block **has a draft** | The block stays, disabled and dimmed, with "Already answered elsewhere." and a `×` that dismisses the block and clears its draft. The draft stays visible until then, and the block does not count toward `k`. The copy says *elsewhere* rather than naming a device, because the answer may equally have come from another agent through `question_answer` |
+| A question leaves the list while this panel's own submit carrying it is in flight | Not "elsewhere": it is the submit's turn update arriving ahead of its response (§3, *When it closes*). The block disappears even though its draft is not cleared yet — the response will clear it. A question the in-flight submit does *not* carry is judged by the two rows above, send or no send |
+| A block left the list during a submit that then **fails** | The departure was held back as possibly this panel's own, and the failure says it was not, so the block comes back dimmed with "Already answered elsewhere." and its draft, like a refused entry below. When the connection dropped after the server had in fact taken the answer, the copy is wrong about *who* answered; that is accepted over letting the draft vanish unseen |
 | A question is withdrawn by the agent (`question_cancel`) | Same two rules, with "The agent withdrew this question." The card in the stream reads `Cancelled` |
 | The work closes, or its step advances | Its questions are cancelled by the engine; the blocks behave exactly as a withdrawal, which is what it is |
 | Submit refused — one entry no longer pending | The whole call fails (§3). The offending blocks flip to the dimmed "Already answered elsewhere." state; every other block keeps its draft and `Send` is live again for them. One more tap, nothing retyped |
@@ -1172,7 +1203,7 @@ to carry.
 | A question whose card has not been paged in | Answerable. That is the whole design: the panel reads the list, not the transcript. The `Answer this` opener does not exist for it, because its card is not on screen to hold one |
 | `Answer this` on a card while the panel is already up | Cannot be reached: the card is behind the backdrop and `inert` (§3). It is a way to *that one* question, not a way in, so nothing is lost — the question already has a block in the panel. Closing first reaches the button, and closing keeps every draft (§5) |
 | An agent answers the question (`question_answer`) | The block leaves the panel by the two rules above; the card reads `Answered`, and the answering message is drawn as the named block of §6 rather than as a user bubble |
-| A permission request arrives while the panel is up | The panel **does not close** — it may hold half-typed answers, and a surface that disappears under the user is worse than one that explains itself. The strip shows row 1 instead of row 2 (which is not rendered anyway while the panel is up), and a submit is refused with the line above. The card itself is behind the backdrop and `inert` whether or not it is scrolled into view, so "Jump to request" — which closes the panel on its way — is the only route to it (§2) |
+| A permission request arrives while the panel is up | The panel **does not close** — it may hold half-typed answers, and a surface that disappears under the user is worse than one that explains itself. The strip shows row 1 instead of row 2 (which is not rendered anyway while the panel is up), and a submit is refused with the line above. The card itself is behind the backdrop and `inert` whether or not it is scrolled into view, so "Jump to request" — which closes the panel on its way, and so waits out a submit in flight — is the only route to it (§2) |
 | Reduced motion | The panel's anchor scroll degrades, as every scroll in this app does. There is nothing else to degrade: the panel has no enter or leave animation (§8) |
 
 ## 8. Deliberately not done
@@ -1194,9 +1225,9 @@ to carry.
 - **No swipe-to-dismiss, and no drag handle.** Neither has anything to grab on
   a centred card, and `Sheet`'s handle is the one value of its the panel does
   not copy (§3): a handle with no drag behind it promises a gesture that does
-  not exist. Closing is the `×`, Escape, or a press on the backdrop — three
-  deliberate acts, none of them reachable by a flick through the last
-  question.
+  not exist. Closing is the `×`, Escape, a press on the backdrop, or the
+  footer's Close once nothing is left — deliberate acts, none of them reachable
+  by a flick through the last question.
 - **No third, minimised form** — a bubble, a pill, a collapsed bar. Closed plus
   the strip's row 2 **Answer** already is that form, and it has one state
   instead of two.
@@ -1249,8 +1280,8 @@ silent, and this design simply never enters it.
 
 | File | Role |
 |---|---|
-| `web/src/components/Chat/AttentionStrip.tsx` | renamed from `BlockerStrip.tsx`; gains row 2, an `onAnswer` prop, and the `answerPanelOpen` that withholds row 2 while the panel is up (§2) |
-| `web/src/components/Chat/AnswerPanel.tsx` | the panel, its blocks, the footer (§3); a card centred in the transcript's rectangle over a backdrop that covers that rectangle alone, capped at 85% of it, measuring nothing; owns Escape and the backdrop press on `window` (§4); reports whether focus is inside it and decides nothing about the screen around it (§3) |
+| `web/src/components/Chat/AttentionStrip.tsx` | renamed from `BlockerStrip.tsx`; gains row 2, an `onAnswer` prop, and the `answerPanelOpen` that withholds row 2 while the panel is up, and the `jumpDisabled` that holds row 1's jump while the panel is sending (§2) |
+| `web/src/components/Chat/AnswerPanel.tsx` | the panel, its blocks, the footer (§3); a card centred in the transcript's rectangle over a backdrop that covers that rectangle alone, capped at 85% of it, measuring nothing; owns Escape and the backdrop press on `window` (§4); reports whether focus is inside it and decides nothing about the screen around it (§3); reports whether a submit is in flight, for the one way out of it that is not its own (§2) |
 | `web/src/components/ui/ResponsivePanel.tsx` | marks its Escape handled, and claims the click it dismisses on, so the answer panel underneath it does not close on the same press; counts itself as covering the page while open, so the chat's interrupt stands down (§4) |
 | `web/src/components/Chat/ModeSelector.tsx`, `web/src/components/Layout/Sidebar.tsx` | the same Escape line, for the same reason: both open from surfaces the backdrop leaves lit — the composer row and the session header — so both can be the thing on top of the panel. The same cover line too, the sidebar's only while it is a drawer. Neither needs the click line: both portal a backdrop of their own (§4) |
 | `web/src/components/Chat/InputBar.tsx` | claims the click its command palette dismisses on — the palette hangs over the composer with no backdrop, at every width (§4) |

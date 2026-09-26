@@ -7,6 +7,11 @@ interface Props {
 	/** Scrolls the transcript to the card that is holding the turn up. */
 	onJumpToRequest: (requestId: string) => void;
 	/**
+	 * The jump closes the answer panel on its way, so it stands down while the
+	 * panel is sending, like the panel's own ways out (docs/answering-ui.md §2).
+	 */
+	jumpDisabled?: boolean;
+	/**
 	 * Opens the answer panel. The strip is the one way back into it once it has
 	 * been closed, which is why this row's action is a button rather than the
 	 * underlined text the other three wear.
@@ -95,6 +100,7 @@ const STRIP_ACTION =
 function AttentionStrip({
 	turn,
 	onJumpToRequest,
+	jumpDisabled,
 	onAnswer,
 	answerPanelOpen,
 	sendPending,
@@ -138,7 +144,8 @@ function AttentionStrip({
 						<button
 							type="button"
 							onClick={() => onJumpToRequest(requestId)}
-							className={STRIP_ACTION}
+							disabled={jumpDisabled}
+							className={`${STRIP_ACTION} disabled:opacity-50`}
 						>
 							Jump to request
 						</button>

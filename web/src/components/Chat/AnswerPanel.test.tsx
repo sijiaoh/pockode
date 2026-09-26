@@ -1,8 +1,13 @@
 import { Sheet } from "@pockode/shared";
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import type { ComponentProps } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { useQuestionDraftStore } from "../../lib/questionDraftStore";
+import {
+	EMPTY_DRAFT,
+	questionDraftActions,
+	useQuestionDraftStore,
+} from "../../lib/questionDraftStore";
 import type { PendingQuestion } from "../../types/message";
 import AnswerPanel from "./AnswerPanel";
 
@@ -362,6 +367,145 @@ describe("AnswerPanel", () => {
 			/>,
 		);
 		expect(onClose).toHaveBeenCalled();
+	});
+
+	// The turn update resolving a question and the send's response come down
+	// different channels in no promised order. Update first used to read as the
+	// question leaving with a draft — somebody else's answer — and the grey block
+	// that left behind kept the panel from ever closing itself.
+	describe("when the turn update lands before the send's response", () => {
+		function deferredSend() {
+			const deliveries: Array<() => void> = [];
+			const failures: Array<(err: Error) => void> = [];
+			const onSend = vi.fn(
+				() =>
+					new Promise<void>((resolve, reject) => {
+						deliveries.push(resolve);
+						failures.push(reject);
+					}),
+			);
+			return {
+				onSend,
+				deliver: () => act(async () => deliveries.shift()?.()),
+				fail: (err: Error) => act(async () => failures.shift()?.(err)),
+			};
+		}
+
+		function relist(
+			rerender: ReturnType<typeof render>["rerender"],
+			unanswered: PendingQuestion[],
+			onSend: ComponentProps<typeof AnswerPanel>["onSend"],
+			onClose: () => void,
+		) {
+			rerender(
+				<AnswerPanel
+					sessionId="s1"
+					unanswered={unanswered}
+					onSend={onSend}
+					onClose={onClose}
+					takeFocus
+				/>,
+			);
+		}
+
+		it("does not mistake its own answer for one given elsewhere, and closes once delivered", async () => {
+			const user = userEvent.setup();
+			const { onSend, deliver } = deferredSend();
+			const { rerender, onClose } = renderPanel([database], onSend);
+
+			await user.click(screen.getByRole("radio", { name: /SQLite/ }));
+			await user.click(screen.getByRole("button", { name: "Send" }));
+			relist(rerender, [], onSend, onClose);
+
+			expect(
+				screen.queryByText("Already answered elsewhere."),
+			).not.toBeInTheDocument();
+			// Every way out stands down until the response says it went out,
+			// including the footer's button that replaces Send once the list
+			// empties — which goes on saying the send is still out.
+			expect(screen.getByRole("button", { name: "Close" })).toBeDisabled();
+			expect(screen.getByRole("button", { name: "Sending..." })).toBeDisabled();
+			await user.click(screen.getByTestId("answer-panel-backdrop"));
+			await user.keyboard("{Escape}");
+			expect(onClose).not.toHaveBeenCalled();
+
+			await deliver();
+			expect(onClose).toHaveBeenCalled();
+		});
+
+		it("stays open through each submit until that one is delivered", async () => {
+			const user = userEvent.setup();
+			const { onSend, deliver } = deferredSend();
+			const { rerender, onClose } = renderPanel([database, region], onSend);
+
+			await user.click(screen.getByRole("radio", { name: /SQLite/ }));
+			await user.click(screen.getByRole("button", { name: "Send" }));
+			relist(rerender, [region], onSend, onClose);
+			await deliver();
+			expect(onClose).not.toHaveBeenCalled();
+
+			await user.type(screen.getByPlaceholderText("Your answer"), "eu");
+			await user.click(screen.getByRole("button", { name: "Send" }));
+			// The first submit's "1 answer sent." is still counted here, and the
+			// list is empty: only the send in flight keeps the panel up.
+			relist(rerender, [], onSend, onClose);
+			expect(onClose).not.toHaveBeenCalled();
+			expect(
+				screen.queryByText("Already answered elsewhere."),
+			).not.toBeInTheDocument();
+
+			await deliver();
+			expect(onClose).toHaveBeenCalled();
+		});
+
+		it("still greys out a question answered elsewhere during the send", async () => {
+			const user = userEvent.setup();
+			const { onSend, deliver } = deferredSend();
+			const { rerender, onClose } = renderPanel([database, region], onSend);
+
+			await user.click(screen.getByRole("radio", { name: /SQLite/ }));
+			// Worked on but not ready, so it stays behind when r1 goes out.
+			act(() =>
+				questionDraftActions.set("s1", "r2", {
+					...EMPTY_DRAFT,
+					note: "ask ops",
+				}),
+			);
+			expect(screen.getByText("1 of 2 ready")).toBeInTheDocument();
+
+			await user.click(screen.getByRole("button", { name: "Send" }));
+			relist(rerender, [], onSend, onClose);
+
+			const stale = await screen.findAllByText("Already answered elsewhere.");
+			expect(stale).toHaveLength(1);
+			expect(
+				stale[0]
+					.closest("[data-answer-block]")
+					?.getAttribute("data-answer-block"),
+			).toBe("r2");
+
+			await deliver();
+			expect(onClose).not.toHaveBeenCalled();
+		});
+
+		it("greys out a block that left while its send failed", async () => {
+			const user = userEvent.setup();
+			const { onSend, fail } = deferredSend();
+			const { rerender, onClose } = renderPanel([database], onSend);
+
+			await user.click(screen.getByRole("radio", { name: /SQLite/ }));
+			await user.click(screen.getByRole("button", { name: "Send" }));
+			relist(rerender, [], onSend, onClose);
+			await fail(new Error("connection lost"));
+
+			expect(
+				await screen.findByText("Already answered elsewhere."),
+			).toBeInTheDocument();
+			expect(useQuestionDraftStore.getState().drafts.s1?.r1.labels).toEqual([
+				"SQLite",
+			]);
+			expect(onClose).not.toHaveBeenCalled();
+		});
 	});
 
 	// A block that held nothing is not a loss, so nothing is announced.
