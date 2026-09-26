@@ -1,6 +1,7 @@
 import { Check } from "lucide-react";
 import type { AskUserQuestion } from "../../types/message";
 import type { QuestionSelection } from "../../utils/questionAnswer";
+import { MarkdownContent } from "../ui";
 import { inputClass } from "../ui/inputClass";
 
 export interface QuestionFormProps {
@@ -25,6 +26,20 @@ export interface QuestionFormProps {
 	onSelectOther: () => void;
 	onOtherTextChange: (text: string) => void;
 }
+
+/**
+ * What the agent wrote — the question and each option's description — is
+ * markdown, as everything else it writes is. The colour stays the one this form
+ * paints (`prose-inherit-color`, src/index.css). The overflow is local: the
+ * answer panel's body is itself a scroller, and a wide code block left to it
+ * would slide the whole form sideways, options and all, rather than just
+ * itself (see `MarkdownContent`'s `className`).
+ *
+ * Option labels stay plain text. A label is the answer — sent back verbatim,
+ * matched by the server, and shown as-is in the card's collapsed summary — so
+ * it reads the same everywhere it appears only if it is never rendered.
+ */
+const markdownClass = "prose-inherit-color overflow-x-auto break-words";
 
 /**
  * The one and only renderer for a question, used by every surface that draws
@@ -90,9 +105,10 @@ function QuestionForm({
 						{formatAskedAt(askedAt)}
 					</span>
 				)}
-				<p className="mt-1 break-words text-sm text-th-text-primary">
-					{question.question}
-				</p>
+				<MarkdownContent
+					content={question.question}
+					className={`${markdownClass} mt-1 text-th-text-primary`}
+				/>
 			</div>
 
 			{hasOptions ? (
@@ -105,6 +121,7 @@ function QuestionForm({
 									type={inputType}
 									name={name}
 									checked={selected}
+									disabled={disabled}
 									onChange={() => onSelectOption(opt.label)}
 									className={choiceInputClass}
 								/>
@@ -116,9 +133,10 @@ function QuestionForm({
 									    description at all, and an empty line of its own
 									    leading is a gap under every option in the list. */}
 									{opt.description && (
-										<div className="break-words text-xs leading-relaxed text-th-text-muted">
-											{opt.description}
-										</div>
+										<MarkdownContent
+											content={opt.description}
+											className={`${markdownClass} text-xs leading-relaxed text-th-text-muted [&_code]:text-[length:inherit]`}
+										/>
 									)}
 								</div>
 								{disabled && selected && (
@@ -134,6 +152,7 @@ function QuestionForm({
 								type={inputType}
 								name={name}
 								checked={otherChecked}
+								disabled={disabled}
 								onChange={() => onSelectOther()}
 								className={choiceInputClass}
 							/>

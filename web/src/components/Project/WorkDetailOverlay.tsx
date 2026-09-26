@@ -429,9 +429,12 @@ function PendingQuestionsSection({
 						<span className="inline-block rounded bg-th-accent/20 px-1.5 py-0.5 text-xs text-th-text-primary">
 							{question.header}
 						</span>
-						<p className="mt-1 break-words text-sm text-th-text-primary">
-							{question.question}
-						</p>
+						{/* Markdown, as the answer panel draws the same question
+						    (`QuestionForm`); option labels stay plain there too. */}
+						<MarkdownContent
+							content={question.question}
+							className="prose-inherit-color mt-1 overflow-x-auto break-words text-th-text-primary"
+						/>
 						{(question.options ?? []).length > 0 && (
 							<p className="mt-1 break-words text-xs text-th-text-muted">
 								{(question.options ?? [])

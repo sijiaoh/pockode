@@ -634,23 +634,21 @@ function QuestionBlock({
 					</button>
 				</div>
 			)}
-			<fieldset disabled={locked} className="min-w-0">
-				<QuestionForm
-					question={{
-						question: question.question,
-						header: question.header,
-						options,
-						multiSelect,
-					}}
-					askedAt={question.asked_at}
-					name={requestId}
-					selection={{ labels: draft.labels, otherText }}
-					disabled={locked}
-					onSelectOption={handleOption}
-					onSelectOther={handleOther}
-					onOtherTextChange={(text) => onChange(requestId, { text })}
-				/>
-			</fieldset>
+			<QuestionForm
+				question={{
+					question: question.question,
+					header: question.header,
+					options,
+					multiSelect,
+				}}
+				askedAt={question.asked_at}
+				name={requestId}
+				selection={{ labels: draft.labels, otherText }}
+				disabled={locked}
+				onSelectOption={handleOption}
+				onSelectOther={handleOther}
+				onOtherTextChange={(text) => onChange(requestId, { text })}
+			/>
 
 			{/* "Won't answer" rather than "Skip": skipping reads as *later*, and
 			    this resolves the question for good. The line under it says who
