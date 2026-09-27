@@ -92,7 +92,7 @@ Windows 与 darwin/linux 一样是发布目标（产物见 [docs/platforms.md](.
 | `worktree/setup.go` | `hook_shell_{unix,windows}.go` — setup hook 的解释器（Windows 无 bash，探测 Git for Windows） |
 | `internal/pathutil/pathutil.go` | `equal_{unix,windows}.go` — Windows 路径比较大小写不敏感 |
 | `internal/fsperm/fsperm.go` | `fsperm_{unix,windows}.go` — 0700/0600 mode 位 / 显式 DACL |
-| `cluster/node/process.go` | `process_{unix,windows}.go` — 与终端脱钩（`Setsid` / `DETACHED_PROCESS`）、优雅关闭与强杀的等待方式 |
+| `cluster/node/process.go` | `process_{unix,windows}.go` — 与终端脱钩（`Setsid` / `CREATE_NO_WINDOW`）、优雅关闭与强杀的等待方式 |
 | `internal/shutdown/shutdown.go` | `request_{unix,windows}.go` — SIGTERM / 命名事件 |
 
 **路径处理统一走 `internal/pathutil`**，不要在各包里重新实现一遍：
@@ -116,7 +116,7 @@ Windows 与 darwin/linux 一样是发布目标（产物见 [docs/platforms.md](.
 
 **退出请求统一走 `internal/shutdown`**：`Listen()` 让本进程知道该退出了，`RequestExit(pid)` 让别的进程退出。别在别处再写一遍 `signal.Notify`。Windows 没有 SIGTERM 可发，官方的替代品 Ctrl+Break 只能送到与**调用方**共享控制台的进程，服务 / 计划任务 / detached 启动的集群一律送不到，所以那边走的是命名事件；等待方和发信方必须对上同一个名字，两半因此放在同一个包里。来龙去脉见 [docs/cluster.md](../docs/cluster.md#asking-a-node-to-exit-on-windows)。
 
-**节点与集群的终端脱钩，两个平台都是**：unix 用 `Setsid`，Windows 用 `DETACHED_PROCESS`——节点要活过启动集群的那个 shell，就不能待在它的终端/控制台上，否则关掉终端窗口会把节点一起带走（Windows 会给控制台上所有进程发 `CTRL_CLOSE_EVENT`）。**这件事和 AI CLI 那边的 `CREATE_NO_WINDOW` 是一对**：没有控制台的进程再去启动控制台程序时，Windows 会给它新分配一个**可见**的控制台窗口，集群模式下每次调 AI CLI 都会闪一个黑窗。改其中一处务必看另一处。
+**节点与集群的终端脱钩，两个平台都是**：unix 用 `Setsid`，Windows 用 `CREATE_NO_WINDOW`——节点要活过启动集群的那个 shell，就不能待在它的终端/控制台上，否则关掉终端窗口会把节点一起带走（Windows 会给控制台上所有进程发 `CTRL_CLOSE_EVENT`）。Windows 上用的**不是** `DETACHED_PROCESS`：完全没有控制台的进程每启动一个控制台程序，Windows 都会给它新分配一个**可见**的控制台窗口，而节点不停地调 git、hook 的 shell，结果就是持续闪黑窗（AI CLI 经 `internal/proctree` 启动，本来就有自己的隐藏控制台）。`CREATE_NO_WINDOW` 给节点一个属于它自己、没有窗口的控制台，子孙进程默认继承它，所以**节点里新增的 `exec.Command` 不需要任何 flag**，孙进程（git 拉起的 ssh、credential helper）也一并覆盖——除非某个程序自己用 `DETACHED_PROCESS` / `CREATE_NEW_CONSOLE` 启动子进程、主动放弃继承，那是它自己的行为，我们管不到。别给它再加 `DETACHED_PROCESS` / `CREATE_NEW_CONSOLE`——与二者组合时 `CREATE_NO_WINDOW` 被忽略。`internal/proctree` 的 `CREATE_NO_WINDOW` 与此是一对，覆盖的是不经集群、本身就没有控制台的服务器（服务 / 计划任务），且只覆盖经它启动的进程；改其中一处务必看另一处。
 
 「这个路径必须留在某目录内」用标准库的 **`filepath.IsLocal`**，别自己拼条件：它一并挡掉 `..` 逃逸和 Windows 保留设备名（`NUL`、`COM1`——这类名字解析到设备而不是目录里的文件）。`git.validatePath` 和 `contents.ValidatePath` 都走它，因此二者的判定是结构上一致的，而不是各写一遍碰巧一致。
 

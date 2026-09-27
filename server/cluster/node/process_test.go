@@ -404,6 +404,11 @@ const (
 	helperLifetime = 60 * time.Second
 )
 
+// platformHelperModes holds helper modes that only one platform's tests use, so
+// what they need of that platform's API stays in its own file. Each runs after
+// the ready report has been written, and the helper exits when it returns.
+var platformHelperModes = map[string]func(){}
+
 func TestMain(m *testing.M) {
 	mode := os.Getenv(helperEnv)
 	if mode == "" {
@@ -413,6 +418,11 @@ func TestMain(m *testing.M) {
 	l := shutdown.Listen()
 	if err := os.WriteFile(os.Getenv(helperReadyEnv), []byte(termtest.Of()), 0600); err != nil {
 		panic(err)
+	}
+
+	if run, ok := platformHelperModes[mode]; ok {
+		run()
+		os.Exit(0)
 	}
 
 	switch mode {
@@ -534,8 +544,8 @@ func startHelperNode(t *testing.T, mode string) helperNode {
 // flags themselves: a node has to survive the terminal its cluster happened to
 // be started from being closed, and the only way it can is by not being on that
 // terminal at all. The two platforms get there differently — a session of its
-// own on unix, no console at all on Windows — so the assertion is on the outcome
-// both are after.
+// own on unix, a hidden console of its own on Windows — so the assertion is on
+// the outcome both are after.
 //
 // It is the flags that are under test, not their one caller: that Start applies
 // them is a line in Start, and a real node would have to reach the point of

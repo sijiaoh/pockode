@@ -30,28 +30,42 @@ func processExists(pid int) bool {
 
 // setProcessDetached sets process attributes to run detached from parent on Windows.
 //
-// DETACHED_PROCESS is the counterpart of Setsid on the unix side: the node is
-// given no console at all instead of inheriting the cluster's. Without it,
+// CREATE_NO_WINDOW is the counterpart of Setsid on the unix side: the node gets
+// a console of its own, one with no window, instead of inheriting the cluster's.
+// Left on the cluster's console, a node would go the way of that console:
 // closing the terminal window the cluster happens to have been started from
-// sends CTRL_CLOSE_EVENT to every process on that console, and the node goes
-// down with it — while the same action on unix leaves the node running. A node
-// is meant to outlive the shell that launched its cluster, so it must not be on
-// that shell's console in the first place.
+// sends CTRL_CLOSE_EVENT to every process on it, and the node goes down with
+// it — while the same action on unix leaves the node running. A node is meant
+// to outlive the shell that launched its cluster, so it must not be on that
+// shell's console in the first place.
 //
-// It also settles the opposite case. A cluster with no console of its own — one
-// run as a service or from Task Scheduler — used to have Windows allocate a
-// fresh, *visible* console for each node it started, since a console program
-// with nothing to inherit gets one made for it. Asking for none is what stops
-// that too.
+// The console being there matters as much as it not being the cluster's. A
+// process with no console at all — which is what DETACHED_PROCESS, used here
+// before, produces — gets a fresh, *visible* console allocated for every console
+// program it starts, because such a program with nothing to inherit has one made
+// for it. A node starts them constantly: git for every status poll, the shell for
+// a worktree hook, and whatever git starts in turn (ssh, a credential helper).
+// Each one flashed a black window, continuously, over whatever the user was
+// doing. With a hidden console of its own the node has one to hand down, and
+// every descendant started without flags of its own inherits it — including an
+// exec added later that nobody thought to flag, and the grandchildren no flag of
+// ours could reach.
 //
-// It replaces CREATE_NEW_PROCESS_GROUP rather than joining it. A process group
-// exists to be addressed by GenerateConsoleCtrlEvent, which reaches processes
-// through a shared console; with no console there is no terminal-wide event to
-// keep out, and no group for one to be aimed at. Asking the node to exit does
-// not go that way either — see internal/shutdown.
+// The same holds for a cluster with no console of its own — one run as a service
+// or from Task Scheduler — which would otherwise have Windows make the node a
+// visible console of its own: CREATE_NO_WINDOW creates one either way, and
+// never shows it.
+//
+// No process group beside it. A process group exists to be addressed by
+// GenerateConsoleCtrlEvent, which reaches processes through a shared console;
+// the node shares none, so there is no terminal-wide event to keep out. Asking
+// the node to exit does not go that way either — see internal/shutdown.
+//
+// Windows ignores CREATE_NO_WINDOW when it is combined with DETACHED_PROCESS or
+// CREATE_NEW_CONSOLE, so neither may be added back here.
 func setProcessDetached(cmd *exec.Cmd) {
 	cmd.SysProcAttr = &syscall.SysProcAttr{
-		CreationFlags: windows.DETACHED_PROCESS,
+		CreationFlags: windows.CREATE_NO_WINDOW,
 	}
 }
 

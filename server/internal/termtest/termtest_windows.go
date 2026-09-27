@@ -34,7 +34,8 @@ func Of() Attachment {
 	pids, err := consoleProcesses()
 	switch {
 	case errors.Is(err, errNoConsole):
-		// Which is exactly what DETACHED_PROCESS produces.
+		// Which is exactly what DETACHED_PROCESS produces. CREATE_NO_WINDOW
+		// lands below instead: a console of the child's own, without the parent.
 		return Detached
 	case err != nil:
 		// Not an answer: saying "detached" here would turn a broken probe into a

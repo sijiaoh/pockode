@@ -37,13 +37,15 @@ type Tree struct {
 // reaching the child before the server can shut down what it started in order.
 //
 // CREATE_NO_WINDOW keeps the child's console off the screen. It matters most
-// where the server has no console of its own — a node started by a cluster, a
-// service, Task Scheduler — because Windows allocates a *visible* console for
-// the first console program such a process starts, and every subprocess call
-// would flash a black window at whoever is using the machine. Where the server
-// does have a console the flag costs nothing that was being used: callers here
-// hand the child pipes for all three of its streams, so nothing it writes was
-// going to reach a console either way.
+// where the server has no console of its own — a service, Task Scheduler —
+// because Windows allocates a *visible* console for every console program such a
+// process starts, and every subprocess call would flash a black window at
+// whoever is using the machine. It covers only what is started through here; a
+// node started by a cluster is covered whole, by being given a hidden console to
+// hand down (see cluster/node). Where the server does have a console the flag
+// costs nothing that was being used: callers here hand the child pipes for all
+// three of its streams, so nothing it writes was going to reach a console either
+// way.
 //
 // Windows ignores CREATE_NO_WINDOW when it is combined with CREATE_NEW_CONSOLE
 // or DETACHED_PROCESS, so the child must not be handed either of those as a way

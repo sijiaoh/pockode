@@ -146,7 +146,8 @@ session can reach in. The console event survives only as a fallback for a node
 started by a build that predates the event and still running while the cluster
 is upgraded and restarted around it — and only while that older node still shares
 the cluster's console. It cannot reach a node this version started, and does not
-need to: those have no console at all, and every one of them publishes the event.
+need to: none of those shares the cluster's console, and every one of them
+publishes the event.
 
 Both halves live in `server/internal/shutdown` — the waiting side and the
 signalling side have to agree on the name, so they are kept in one place. Server
@@ -154,12 +155,24 @@ mode and cluster mode both listen; `pockode mcp` does not, being a stdio proxy
 that the AI CLI owns and ends by closing its input.
 
 **Nodes no longer die with the terminal.** Nodes are started detached on every
-platform, and on Windows that now means with no console at all — the counterpart
-of the `setsid` unix has always used. Previously a node inherited the cluster's
-console, so closing that terminal window sent it a close event and took it down;
-now it survives, which is what unix already did. Stop a node from the UI instead.
-Shutting the cluster down has never stopped nodes either, so the two platforms
-finally agree.
+platform, and on Windows that now means on a console of the node's own, one with
+no window — the counterpart of the `setsid` unix has always used. Previously a
+node inherited the cluster's console, so closing that terminal window sent it a
+close event and took it down; now it survives, which is what unix already did.
+Stop a node from the UI instead. Shutting the cluster down has never stopped
+nodes either, so the two platforms finally agree.
+
+**Nodes no longer flash console windows.** The console being the node's own and
+windowless is the other half of the fix. A process with no console at all gets a
+fresh, visible console for every console program it starts, and a node starts
+them constantly — git for every status poll, the shell for a worktree hook, and
+whatever those start in turn. An earlier build started nodes that way, and the
+result was a black window flashing over the user's desktop again and again. Now
+all of those inherit the node's hidden console instead, short of a program that
+deliberately asks Windows for a console of its own. (The AI CLI was never among
+them: it has always been started on a hidden console of its own.) A node
+started by an earlier build keeps its old console arrangement until it is
+restarted.
 
 ## Usage
 

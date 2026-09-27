@@ -10,8 +10,9 @@
 //
 // "Terminal" here means whatever the OS ties a process to for the purpose of
 // terminal-wide events: the session on unix (what Setsid changes, and what owns
-// the controlling terminal), the console on Windows (what DETACHED_PROCESS
-// withholds, and what console control events travel over).
+// the controlling terminal), the console on Windows (what CREATE_NO_WINDOW
+// and DETACHED_PROCESS each keep a child off, and what console control events
+// travel over).
 //
 // Nothing here belongs in production code. Detachment is decided when a process
 // is created, and no part of Pockode has a reason to ask about it afterwards.

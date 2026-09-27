@@ -33,7 +33,7 @@ func eventName(pid int) string {
 // and restarted around it. Such a node was started attached to the console of
 // the cluster that spawned it, which is why the fallback can still reach it —
 // and only if the new cluster shares that console. It cannot reach a node this
-// build starts, because those are launched with no console at all, and it does
+// build starts, because each is launched on a console of its own, and it does
 // not need to: they all publish the event.
 //
 // The PID is rejected unless it is positive: it reaches us from server.json, and
@@ -72,9 +72,9 @@ type requestWatcher struct {
 // watchExitRequests publishes this process's shutdown event and calls notify
 // once it is signalled. It returns nil if the event cannot be published, which
 // leaves console signalling as the only way in — and a node started by a
-// cluster has no console, so for one of those the cluster's request degrades all
-// the way to a forced kill. Still better than refusing to start: the process
-// runs, it only loses the graceful path.
+// cluster shares no console with it, so for one of those the cluster's request
+// degrades all the way to a forced kill. Still better than refusing to start:
+// the process runs, it only loses the graceful path.
 func watchExitRequests(notify func()) *requestWatcher {
 	name, err := windows.UTF16PtrFromString(eventName(os.Getpid()))
 	if err != nil {

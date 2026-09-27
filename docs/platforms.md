@@ -403,7 +403,10 @@ Three things that are easy to get wrong here:
   processes, as it did when starting from a terminal or with `-NoNewWindow`. Only
   services and logged-off scheduled tasks were ever affected.
 - Starting an AI CLI does not flash a console window. Pockode gives it a console
-  of its own with no window attached, in every mode.
+  of its own with no window attached, in every mode. In cluster mode the same
+  holds for everything a node starts — git, hooks, and what those start in turn —
+  because the node itself runs on a windowless console they inherit; see
+  [cluster.md](cluster.md#asking-a-node-to-exit-on-windows).
 - Closing the terminal a cluster was started from no longer takes its nodes down
   with it. Stop a node from the UI instead; see the same section above for why the
   behaviour changed.
