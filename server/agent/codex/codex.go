@@ -98,7 +98,7 @@ func New() *Agent {
 func (a *Agent) Start(ctx context.Context, opts agent.StartOptions) (agent.Session, error) {
 	procCtx, cancel := context.WithCancel(ctx)
 
-	if err := checkAppServerSupport(procCtx); err != nil {
+	if err := checkAppServerSupport(procCtx, Binary); err != nil {
 		cancel()
 		return nil, err
 	}
@@ -224,6 +224,11 @@ type appSession struct {
 	toolInputsMu sync.Mutex
 	toolInputs   map[string]json.RawMessage
 
+	// turnAuthFailed says the running turn has been refused for its
+	// credentials; see readAuthVerdict. Only the notification handlers touch it,
+	// and they all run on the one goroutine reading app-server's output.
+	turnAuthFailed bool
+
 	usage  *usageObserver
 	resume *resumeStateStore
 
@@ -288,7 +293,7 @@ func (s *appSession) SendMessage(prompt agent.Prompt) error {
 			return
 		}
 		// No turn started, so nothing else will end this one.
-		s.emitEvent(agent.ErrorEvent{Error: fmt.Sprintf("codex could not start the turn: %s", err)})
+		s.emitEvent(agent.ErrorEvent{Error: redactSecrets(fmt.Sprintf("codex could not start the turn: %s", err))})
 	})
 }
 
@@ -382,7 +387,23 @@ func (s *appSession) Close() {
 
 // initialize performs the app-server handshake.
 func (s *appSession) initialize(ctx context.Context) error {
-	params := map[string]interface{}{
+	result, err := s.sendRPC(ctx, "initialize", initializeParams())
+	if err != nil {
+		return err
+	}
+	s.log.Info("codex app-server initialized", "result", string(result))
+
+	data, err := json.Marshal(initializedNotification)
+	if err != nil {
+		return err
+	}
+	return s.writeStdin(data)
+}
+
+// initializeParams is what Pockode says about itself in the handshake, the same
+// for every app-server it starts.
+func initializeParams() map[string]interface{} {
+	return map[string]interface{}{
 		"clientInfo": map[string]interface{}{
 			"name":    "pockode",
 			"version": "1.0.0",
@@ -400,19 +421,10 @@ func (s *appSession) initialize(ctx context.Context) error {
 			"experimentalApi": true,
 		},
 	}
-	result, err := s.sendRPC(ctx, "initialize", params)
-	if err != nil {
-		return err
-	}
-	s.log.Info("codex app-server initialized", "result", string(result))
-
-	notification := rpcRequest{JSONRPC: "2.0", Method: "initialized"}
-	data, err := json.Marshal(notification)
-	if err != nil {
-		return err
-	}
-	return s.writeStdin(data)
 }
+
+// initializedNotification completes the handshake once initialize is answered.
+var initializedNotification = rpcRequest{JSONRPC: "2.0", Method: "initialized"}
 
 // openThread gives this session a thread to talk in: the fork it was created as,
 // the thread it already has, or a new one.
@@ -923,11 +935,11 @@ func firstNonEmpty(values ...string) string {
 // `--version`: the version this channel appeared in is not documented anywhere
 // Pockode can check, and a wrong guess would either lock out installs that work
 // or let a failure surface as an unreadable JSON-RPC error much later.
-func checkAppServerSupport(ctx context.Context) error {
+func checkAppServerSupport(ctx context.Context, binary string) error {
 	ctx, cancel := context.WithTimeout(ctx, supportProbeTimeout)
 	defer cancel()
 
-	cmd, err := agent.CommandContext(ctx, Binary, "--help")
+	cmd, err := agent.CommandContext(ctx, binary, "--help")
 	if err != nil {
 		return err
 	}
@@ -941,11 +953,11 @@ func checkAppServerSupport(ctx context.Context) error {
 		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 			return fmt.Errorf("codex --help did not finish within %s", supportProbeTimeout)
 		}
-		return fmt.Errorf("could not run %s --help: %w", Binary, err)
+		return fmt.Errorf("could not run %s --help: %w", binary, err)
 	}
 
 	if !listsAppServer(string(out)) {
-		return errors.New("this codex CLI has no `app-server` subcommand, which Pockode needs to run a Codex session; update codex and try again")
+		return errors.New("this codex CLI has no `app-server` subcommand, which is how Pockode drives Codex; update codex and try again")
 	}
 	return nil
 }

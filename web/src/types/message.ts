@@ -263,7 +263,17 @@ export type ContentPart =
 	| { type: "text"; content: string }
 	| { type: "tool_call"; tool: ToolRun }
 	| { type: "system"; content: string }
-	| { type: "warning"; message: string; code: string }
+	| {
+			type: "warning";
+			message: string;
+			code: string;
+			/**
+			 * The CLI that was refused for its credentials, when the warning says
+			 * so — a retry the turn is still making. A record of that moment, never
+			 * whether the CLI is signed in now (docs/cli-login-ui.md).
+			 */
+			authFailure?: AgentType;
+	  }
 	| {
 			type: "permission_request";
 			request: PermissionRequest;
@@ -311,6 +321,11 @@ export type ContentPart =
  * the answer itself (`QuestionAnswerRecord.resolved_by`).
  */
 export type MessageOrigin = "user" | "system" | "agent";
+
+/** A record's mark that the CLI was refused for its credentials. */
+export interface AuthFailureRecord {
+	agent: string;
+}
 
 export interface SystemMessageStep {
 	current: number;
@@ -394,6 +409,11 @@ export interface AssistantMessage {
 	parts: ContentPart[];
 	status: MessageStatus;
 	error?: string;
+	/**
+	 * The CLI whose credentials were refused, when `error` is an auth failure.
+	 * Absent on errors recorded before the server marked them.
+	 */
+	authFailure?: AgentType;
 	createdAt: Date;
 	/** See `UserMessage.anchorSeq`. */
 	anchorSeq?: HistorySeq;
@@ -836,7 +856,7 @@ export interface TurnBlocker {
  * `phase` to find out. */
 export type TurnPhase = "idle" | "running" | "blocked";
 
-export type TurnOutcome = "completed" | "failed" | "aborted";
+export type TurnOutcome = "completed" | "failed" | "auth_failed" | "aborted";
 
 export interface SessionTurn {
 	phase: TurnPhase;
@@ -1051,8 +1071,9 @@ export type ServerNotification =
 			type: "warning";
 			message: string;
 			code: string;
+			auth_failure?: AuthFailureRecord;
 	  }
-	| { type: "error"; error: string }
+	| { type: "error"; error: string; auth_failure?: AuthFailureRecord }
 	| { type: "done" }
 	| { type: "interrupted" }
 	| { type: "process_ended" }

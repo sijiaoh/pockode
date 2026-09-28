@@ -16,6 +16,7 @@ import type {
 	AgentRoleListChangedNotification,
 	AgentRoleListSubscribeResult,
 } from "../types/agentRole";
+import type { CliLogin, CliLoginChangedNotification } from "../types/cliAuth";
 import type { GitDiffChangedNotification, GitDiffData } from "../types/git";
 import type {
 	AuthParams,
@@ -32,6 +33,7 @@ import type {
 	SessionListSubscribeResult,
 } from "../types/message";
 import type {
+	AgentType,
 	Settings,
 	SettingsChangedNotification,
 	SettingsSubscribeResult,
@@ -52,11 +54,13 @@ import {
 	type AgentRoleActions,
 	type AttachmentActions,
 	type ChatActions,
+	type CliAuthActions,
 	type CommandActions,
 	createAgentActions,
 	createAgentRoleActions,
 	createAttachmentActions,
 	createChatActions,
+	createCliAuthActions,
 	createCommandActions,
 	createFileActions,
 	createGitActions,
@@ -186,11 +190,18 @@ export interface WatchActions {
 		callback: (params: AgentRoleListChangedNotification) => void,
 	) => Promise<WatchSubscribeResult<AgentRoleListSubscribeResult>>;
 	agentRoleListUnsubscribe: (id: string) => Promise<void>;
+	/** The CLI's latest sign-in, running or last ended, or null if none. */
+	cliLoginSubscribe: (
+		agent: AgentType,
+		callback: (params: CliLoginChangedNotification) => void,
+	) => Promise<WatchSubscribeResult<CliLogin | null>>;
+	cliLoginUnsubscribe: (id: string) => Promise<void>;
 }
 
 type RPCActions = ConnectionActions &
 	AgentActions &
 	AgentRoleActions &
+	CliAuthActions &
 	AttachmentActions &
 	ChatActions &
 	CommandActions &
@@ -267,6 +278,10 @@ const agentRoleListWatchCallbacks = new Map<
 	string,
 	(params: AgentRoleListChangedNotification) => void
 >();
+const cliLoginWatchCallbacks = new Map<
+	string,
+	(params: CliLoginChangedNotification) => void
+>();
 
 /**
  * Clear worktree-scoped watch subscriptions. Called when switching worktrees.
@@ -300,6 +315,7 @@ function clearAllWatchSubscriptions(): void {
 	workListWatchCallbacks.clear();
 	workDetailWatchCallbacks.clear();
 	agentRoleListWatchCallbacks.clear();
+	cliLoginWatchCallbacks.clear();
 }
 
 /**
@@ -458,7 +474,9 @@ const CODEX_START_BUDGET_MS = 10000 + 45000;
 
 /**
  * Timeout for the RPCs that are given room to wait out an agent CLI start:
- * `chat.message` and `work.start`.
+ * `chat.message` and `work.start`. `cli_auth.status` and `cli_auth.logout`
+ * borrow it: they run a CLI while waited on too, for at most 65s (see
+ * lib/rpc/cliAuth.ts).
  *
  * Both reach `GetOrCreateProcess` -> `Agent.Start` on their own request path —
  * `chat.message` directly, `work.start` through the kickoff (or restart) message
@@ -571,6 +589,11 @@ const watchNotificationHandlers: Record<string, WatchNotificationHandler> = {
 		agentRoleListWatchCallbacks.get(changedParams.id)?.(changedParams);
 		return true;
 	},
+	"cli_auth.login.changed": (params) => {
+		const changedParams = params as CliLoginChangedNotification;
+		cliLoginWatchCallbacks.get(changedParams.id)?.(changedParams);
+		return true;
+	},
 };
 
 function handleNotification(method: string, params: unknown): void {
@@ -677,6 +700,7 @@ async function closeSubscription<TCallback>(
 // Create namespace-specific actions
 const agentActions = createAgentActions(getClient);
 const agentRoleActions = createAgentRoleActions(getClient);
+const cliAuthActions = createCliAuthActions(getClient, getAgentStartClient);
 const attachmentActions = createAttachmentActions(getClient);
 const chatActions = createChatActions(getClient, getAgentStartClient);
 const commandActions = createCommandActions(getClient);
@@ -1185,9 +1209,30 @@ export const useWSStore = create<WSState>((set, get) => ({
 				agentRoleListWatchCallbacks,
 			),
 
+		cliLoginSubscribe: async (
+			agent: AgentType,
+			callback: (params: CliLoginChangedNotification) => void,
+		) => {
+			const { id, result } = await openSubscription(
+				"cli_auth.login.subscribe",
+				{ agent },
+				cliLoginWatchCallbacks,
+				callback,
+			);
+			return { id, initial: (result as { login: CliLogin | null }).login };
+		},
+
+		cliLoginUnsubscribe: (id: string) =>
+			closeSubscription(
+				"cli_auth.login.unsubscribe",
+				id,
+				cliLoginWatchCallbacks,
+			),
+
 		// Spread namespace-specific actions
 		...agentActions,
 		...agentRoleActions,
+		...cliAuthActions,
 		...attachmentActions,
 		...chatActions,
 		...commandActions,

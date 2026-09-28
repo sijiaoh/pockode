@@ -163,6 +163,36 @@ func TestIntegration_ProtocolSchemaStillFitsWhatWeSend(t *testing.T) {
 			}
 		}
 	})
+
+	// parseAccount decides a CLI's sign-in state from these. requiresOpenaiAuth
+	// going optional would read as an unparseable status; an account type it
+	// does not know reads as "managed outside Pockode", which is safe but worth
+	// hearing about.
+	t.Run("account/read still says who is signed in", func(t *testing.T) {
+		requireRequired(t, dir, "GetAccountResponse", "requiresOpenaiAuth")
+		requireProps(t, schemaProperties(t, dir, "GetAccountResponse"), "GetAccountResponse", "parseAccount reads", "account")
+
+		known := map[string]bool{accountTypeChatGPT: false, accountTypeAPIKey: false, accountTypeAmazonBedrock: false}
+		for _, branch := range schemaBranches(t, dir, "codex_app_server_protocol.v2.schemas.json", "Account") {
+			props, _ := branch["properties"].(map[string]interface{})
+			disc, _ := props["type"].(map[string]interface{})
+			for _, typ := range jsonStrings(disc["enum"]) {
+				if _, ok := known[typ]; !ok {
+					t.Logf("note: Account gained type %q, which Pockode reports as managed outside Pockode", typ)
+					continue
+				}
+				known[typ] = true
+				if typ == accountTypeChatGPT {
+					requireProps(t, props, "ChatgptAccount", "parseAccount reads", "email", "planType")
+				}
+			}
+		}
+		for typ, seen := range known {
+			if !seen {
+				t.Errorf("Account no longer has type %q, which parseAccount handles", typ)
+			}
+		}
+	})
 }
 
 // requireItemVariant finds the ThreadItem branch with the given `type` and

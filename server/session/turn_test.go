@@ -141,6 +141,7 @@ func TestReduceTurnOutcomes(t *testing.T) {
 	}{
 		{SignalDone, OutcomeCompleted},
 		{SignalFailed, OutcomeFailed},
+		{SignalAuthFailed, OutcomeAuthFailed},
 		{SignalInterrupted, OutcomeAborted},
 		{SignalProcessEnded, OutcomeAborted},
 	}

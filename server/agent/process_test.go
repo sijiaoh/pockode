@@ -34,6 +34,9 @@ const (
 	// that started it, which is the one thing about a child that only the child
 	// can answer.
 	roleTerminal = "terminal"
+	// roleFail stands in for a CLI command that fails: a line on each stream,
+	// then a non-zero exit, which is how the auth commands say no.
+	roleFail = "fail"
 
 	// leafLifetime only has to outlast the assertions; every test kills the leaf
 	// long before it elapses.
@@ -50,6 +53,8 @@ func TestMain(m *testing.M) {
 		runArgvRole()
 	case roleTerminal:
 		runTerminalRole()
+	case roleFail:
+		runFailRole()
 	default:
 		os.Exit(m.Run())
 	}
@@ -89,6 +94,12 @@ func runArgvRole() {
 		fmt.Println(arg)
 	}
 	os.Exit(0)
+}
+
+func runFailRole() {
+	fmt.Println("progress")
+	fmt.Fprintln(os.Stderr, "Logout failed: no network")
+	os.Exit(3)
 }
 
 // runTerminalRole reports how it is attached to the terminal of the process

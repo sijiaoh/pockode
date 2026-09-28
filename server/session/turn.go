@@ -78,6 +78,11 @@ const (
 	OutcomeCompleted TurnOutcome = "completed"
 	// OutcomeFailed is a turn that stopped on an error the agent reported.
 	OutcomeFailed TurnOutcome = "failed"
+	// OutcomeAuthFailed is a failed turn the CLI attributed to its credentials.
+	// Kept apart from failed because carrying on from it is pointless: every
+	// turn after it fails the same way until somebody signs in, which only a
+	// person can do.
+	OutcomeAuthFailed TurnOutcome = "auth_failed"
 	// OutcomeAborted is a turn that was taken away rather than finished: a user
 	// interrupt, or the death of the process carrying it. Kept apart from
 	// failed because the two mean opposite things to whatever drives the work —
@@ -179,10 +184,11 @@ const (
 	SignalRequestCancelled TurnSignal = "request_cancelled"
 	// SignalAnswered is the user answering a prompt. The turn resumes.
 	SignalAnswered TurnSignal = "answered"
-	// SignalDone, SignalFailed and SignalInterrupted are the three ways a turn
-	// ends, and map one-to-one onto the three TurnOutcomes.
+	// SignalDone, SignalFailed, SignalAuthFailed and SignalInterrupted are the
+	// ways a turn ends, and map one-to-one onto the TurnOutcomes.
 	SignalDone        TurnSignal = "done"
 	SignalFailed      TurnSignal = "failed"
+	SignalAuthFailed  TurnSignal = "auth_failed"
 	SignalInterrupted TurnSignal = "interrupted"
 	// SignalQuestionPosted is a question Pockode has taken charge of, carried on
 	// TurnInput.Question. Unlike SignalPermissionRaised it blocks nothing: the
@@ -348,7 +354,7 @@ func ReduceTurn(state TurnState, in TurnInput) TurnTransition {
 		// session idle. Reading it as either one outright gets the other wrong.
 		next.Blockers = dropRequest(next.Blockers, in.RequestID)
 
-	case SignalDone, SignalFailed, SignalInterrupted:
+	case SignalDone, SignalFailed, SignalAuthFailed, SignalInterrupted:
 		expired = next.Blockers
 		next.Blockers = nil
 		next.Open = false
@@ -431,6 +437,8 @@ func outcomeFor(signal TurnSignal) TurnOutcome {
 		return OutcomeCompleted
 	case SignalFailed:
 		return OutcomeFailed
+	case SignalAuthFailed:
+		return OutcomeAuthFailed
 	default:
 		return OutcomeAborted
 	}

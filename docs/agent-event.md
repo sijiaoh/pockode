@@ -246,6 +246,17 @@ Two field-level decisions worth knowing before adding one — why `AskedAt` and
 `answers` map) need not be here at all — are with the struct itself, in
 [code/agent-integration.md § EventRecord](code/agent-integration.md#eventrecord-unified-event-format).
 
+An `error` or `warning` record may carry `AuthFailure` (`auth_failure: {agent}`):
+the CLI named there was refused for its credentials — on the turn's ending, or on
+a retry the turn is still making. It is a fact about that moment; whether the CLI
+is signed in *now* is live status, read from `cli_auth.status`
+([cli-login-ui.md](cli-login-ui.md#from-the-chat)). How each adapter recognises
+one is in
+[code/agent-integration.md](code/agent-integration.md#auth-failures). An `error`
+carrying it also ends the turn as `auth_failed` rather than `failed`, which is
+what stops a work session instead of nudging it
+([code/work-system.md](code/work-system.md)).
+
 A `tool_result` also uses `Subtype`, for the three kinds of result that are not
 simply "what the call produced", and carries `DurationMs` / `ExitCode` when the
 CLI reported them as figures. A `tool_activity` record — which exists on the wire

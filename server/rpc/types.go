@@ -32,6 +32,7 @@ import (
 
 	"github.com/pockode/server/agent"
 	"github.com/pockode/server/agentrole"
+	"github.com/pockode/server/cliauth"
 	"github.com/pockode/server/command"
 	"github.com/pockode/server/contents"
 	"github.com/pockode/server/git"
@@ -759,6 +760,67 @@ type AgentInfo struct {
 
 type AgentListResult struct {
 	Agents []AgentInfo `json:"agents"`
+}
+
+// CLI auth namespace: whether each AI CLI is signed in on this machine (see
+// package cliauth).
+
+// CLIAuthStatusParams narrows cli_auth.status to one CLI. Params may be omitted
+// altogether to read every CLI.
+type CLIAuthStatusParams struct {
+	Agent session.AgentType `json:"agent,omitempty"`
+}
+
+// CLIAuthStatusResult lists the CLIs in display order. A CLI whose status could
+// not be read is in the list as "unavailable" — the request itself only fails
+// for an agent the server does not know.
+type CLIAuthStatusResult struct {
+	Statuses []cliauth.Status `json:"statuses"`
+}
+
+type CLIAuthLogoutParams struct {
+	Agent session.AgentType `json:"agent"`
+}
+
+// CLIAuthLogoutResult is the CLI's status read after signing out, which is not
+// necessarily "signed_out": credentials from the environment outlive a sign-out.
+type CLIAuthLogoutResult struct {
+	Status cliauth.Status `json:"status"`
+}
+
+// CLIAuthLoginStartParams starts a sign-in. AccountKind picks the kind of
+// account for a CLI that offers more than one (Claude: claude_ai, the default,
+// or console); it is refused for one that does not.
+type CLIAuthLoginStartParams struct {
+	Agent       session.AgentType   `json:"agent"`
+	AccountKind cliauth.AccountKind `json:"account_kind,omitempty"`
+}
+
+// CLIAuthLoginResult is the sign-in a command acted on, as it is afterwards.
+type CLIAuthLoginResult struct {
+	Login cliauth.Login `json:"login"`
+}
+
+type CLIAuthLoginSubmitCodeParams struct {
+	LoginID string `json:"login_id"`
+	Code    string `json:"code"`
+}
+
+type CLIAuthLoginCancelParams struct {
+	LoginID string `json:"login_id"`
+}
+
+type CLIAuthLoginSubscribeParams struct {
+	// ID is the subscription id; see SubscribeParams.
+	ID    string            `json:"id"`
+	Agent session.AgentType `json:"agent"`
+}
+
+// CLIAuthLoginSubscribeResult is the CLI's latest sign-in — running, or the
+// last to end since the server started — or null when it has had none.
+// Changes arrive as cli_auth.login.changed notifications of the same shape.
+type CLIAuthLoginSubscribeResult struct {
+	Login *cliauth.Login `json:"login"`
 }
 
 // Settings namespace

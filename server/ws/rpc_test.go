@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http/httptest"
 	"os"
 	"os/exec"
@@ -15,6 +16,8 @@ import (
 	"github.com/coder/websocket"
 	"github.com/pockode/server/agent"
 	"github.com/pockode/server/agentrole"
+	"github.com/pockode/server/cliauth"
+	"github.com/pockode/server/cliauth/cliauthtest"
 	"github.com/pockode/server/command"
 	"github.com/pockode/server/contents"
 	"github.com/pockode/server/git"
@@ -76,7 +79,8 @@ type testEnv struct {
 	mock            *mockAgent
 	worktreeManager *worktree.Manager
 	workStore       work.Store
-	testRoleID      string // pre-created agent role ID for tests
+	testRoleID      string                // pre-created agent role ID for tests
+	cliAuth         *cliauthtest.Provider // the claude CLI as cli_auth.* sees it
 	handler         *RPCHandler
 	server          *httptest.Server
 	conn            *websocket.Conn
@@ -158,7 +162,11 @@ func newTestEnvWithAgent(t *testing.T, mock *mockAgent, ag agent.Agent, workDir 
 	workOps := work.NewOperations(workStore, workStarter, workEngine, agentrole.Steps{Store: agentRoleStore})
 	workOps.SetSessionDeleter(worktreeManager)
 
-	h := NewRPCHandler(testPassword, authsessiontest.New(), "test", true, cmdStore, worktreeManager, settingsStore, workStore, workOps, workEngine, agentRoleStore)
+	cliAuth := cliauthtest.New(cliauthtest.State{})
+	cliAuthService := cliauth.NewService(slog.Default())
+	cliAuthService.Register(session.AgentTypeClaude, cliAuth)
+
+	h := NewRPCHandler(testPassword, authsessiontest.New(), "test", true, cmdStore, worktreeManager, settingsStore, workStore, workOps, workEngine, agentRoleStore, cliAuthService)
 	server := httptest.NewServer(h)
 
 	// No deadline of its own: every read and write is bounded individually (see
@@ -180,6 +188,7 @@ func newTestEnvWithAgent(t *testing.T, mock *mockAgent, ag agent.Agent, workDir 
 		worktreeManager: worktreeManager,
 		workStore:       workStore,
 		testRoleID:      testRole.ID,
+		cliAuth:         cliAuth,
 		handler:         h,
 		server:          server,
 		conn:            conn,
@@ -535,7 +544,7 @@ func newAuthTestServer(t *testing.T, password string, sessions SessionStore) *ht
 	workStarter := worktree.NewWorkStarter(worktreeManager, agentRoleStore, settingsStore)
 	workOps := work.NewOperations(workStore, workStarter, nil, nil)
 
-	h := NewRPCHandler(password, sessions, "test", true, cmdStore, worktreeManager, settingsStore, workStore, workOps, work.NewEngine(workStore, work.DefaultMaxNudges), agentRoleStore)
+	h := NewRPCHandler(password, sessions, "test", true, cmdStore, worktreeManager, settingsStore, workStore, workOps, work.NewEngine(workStore, work.DefaultMaxNudges), agentRoleStore, cliauth.NewService(slog.Default()))
 	server := httptest.NewServer(h)
 	t.Cleanup(server.Close)
 	return server

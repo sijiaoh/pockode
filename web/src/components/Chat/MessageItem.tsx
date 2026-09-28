@@ -26,6 +26,7 @@ import type {
 	QuestionAnswerRecord,
 	SystemMessageMeta,
 } from "../../types/message";
+import type { AgentType } from "../../types/settings";
 import { forkUnavailableReason } from "../../utils/forkAnchor";
 import { hasMessageActions } from "../../utils/messageActions";
 import { workEventSubject, workEventWording } from "../../utils/systemMessage";
@@ -36,6 +37,7 @@ import {
 	Spinner,
 	useEverExpanded,
 } from "../ui";
+import AuthFailureNotice from "./AuthFailureNotice";
 import MessageMenuTrigger, { type ForkBlocked } from "./MessageMenuTrigger";
 import QuestionRecordItem from "./QuestionRecordItem";
 import { anchorCandidateProps } from "./scrollAnchor";
@@ -641,6 +643,12 @@ interface Props {
 	 * this component is memoized.
 	 */
 	onForkMessage?: (messageId: string) => void;
+	/**
+	 * Opens the sign-in for the CLI an auth failure in this message names.
+	 * Absent where there is nothing to sign in from. Must be stable: this
+	 * component is memoized.
+	 */
+	onSignIn?: (agent: AgentType, messageId: string) => void;
 }
 
 /**
@@ -851,6 +859,7 @@ const MessageItem = memo(function MessageItem({
 	promptError,
 	onOpenWorkDetail,
 	onForkMessage,
+	onSignIn,
 }: Props) {
 	const chatUIConfig = useChatUIConfig();
 	const UserAvatar = chatUIConfig.UserAvatar;
@@ -948,6 +957,27 @@ const MessageItem = memo(function MessageItem({
 		);
 	}
 
+	// One notice per turn, where the failure stands now: on the turn's error once
+	// it has failed, and until then on the latest refused retry of the turn still
+	// running. The turn's other auth warnings say the same thing again, so a
+	// failed turn draws none of them; a turn that recovered draws them as the
+	// warnings they were.
+	const authError =
+		message.status === "error" ? message.authFailure : undefined;
+	const liveAuthIndex =
+		!authError && isOpenTurn
+			? message.parts.findLastIndex(
+					(part) => part.type === "warning" && part.authFailure,
+				)
+			: -1;
+	const shownParts = message.parts
+		.map((part, index) => ({ part, index }))
+		.filter(
+			({ part }) => !(authError && part.type === "warning" && part.authFailure),
+		);
+	const signIn = (agent: AgentType) =>
+		onSignIn ? () => onSignIn(agent, message.id) : undefined;
+
 	// Assistant message
 	return (
 		<div className="flex items-end justify-start gap-2">
@@ -955,9 +985,9 @@ const MessageItem = memo(function MessageItem({
 			<div
 				className={`chat-bubble max-w-full min-w-0 overflow-hidden rounded-lg bg-th-ai-bubble p-2.5 text-th-ai-bubble-text sm:p-3 ${assistantBubbleClass}`}
 			>
-				{message.parts.length > 0 && (
+				{shownParts.length > 0 && (
 					<div className="space-y-2">
-						{message.parts.map((part, index) => {
+						{shownParts.map(({ part, index }) => {
 							// The tool use id alone: one part per call now, because a
 							// permission card takes its call's place and a resent
 							// tool_call updates the row it names rather than adding one.
@@ -983,15 +1013,25 @@ const MessageItem = memo(function MessageItem({
 								// `ContentPartItem` does today, and one returning null would show
 								// as a gap with nothing in it.
 								<div key={key} {...anchorCandidateProps}>
-									<ContentPartItem
-										part={part}
-										sessionId={sessionId}
-										onOpenFile={onOpenFile}
-										isCodex={isCodex}
-										onPermissionRespond={onPermissionRespond}
-										onAnswerQuestion={onAnswerQuestion}
-										promptError={promptError}
-									/>
+									{index === liveAuthIndex &&
+									part.type === "warning" &&
+									part.authFailure ? (
+										<AuthFailureNotice
+											message={part.message}
+											agent={part.authFailure}
+											onSignIn={signIn(part.authFailure)}
+										/>
+									) : (
+										<ContentPartItem
+											part={part}
+											sessionId={sessionId}
+											onOpenFile={onOpenFile}
+											isCodex={isCodex}
+											onPermissionRespond={onPermissionRespond}
+											onAnswerQuestion={onAnswerQuestion}
+											promptError={promptError}
+										/>
+									)}
 								</div>
 							);
 						})}
@@ -1012,9 +1052,18 @@ const MessageItem = memo(function MessageItem({
 				{message.status === "streaming" && isOpenTurn && (
 					<Spinner variant="current" className="mt-2" />
 				)}
-				{message.status === "error" && (
-					<p className="mt-2 text-sm text-th-error">{message.error}</p>
-				)}
+				{message.status === "error" &&
+					(authError ? (
+						<div className="mt-2">
+							<AuthFailureNotice
+								message={message.error ?? ""}
+								agent={authError}
+								onSignIn={signIn(authError)}
+							/>
+						</div>
+					) : (
+						<p className="mt-2 text-sm text-th-error">{message.error}</p>
+					))}
 				{message.status === "interrupted" && (
 					<p className="mt-2 text-sm text-th-text-muted">Interrupted</p>
 				)}

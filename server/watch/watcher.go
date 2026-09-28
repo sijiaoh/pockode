@@ -21,4 +21,5 @@ var (
 	_ Watcher = (*WorkListWatcher)(nil)
 	_ Watcher = (*WorkDetailWatcher)(nil)
 	_ Watcher = (*AgentRoleListWatcher)(nil)
+	_ Watcher = (*CLILoginWatcher)(nil)
 )

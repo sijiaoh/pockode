@@ -82,6 +82,16 @@ type Process struct {
 // in the background. The whole tree is terminated when ctx is cancelled, when
 // Terminate is called, or once the direct child exits on its own.
 func StartProcess(ctx context.Context, log *slog.Logger, name string, args []string, dir string) (*Process, error) {
+	return StartProcessEnv(ctx, log, name, args, dir, nil)
+}
+
+// StartProcessEnv is StartProcess with env ("KEY=value") added to the
+// environment the CLI inherits from this process.
+//
+// No argument may name one of these variables as %KEY%: the check that
+// refuses what cmd.exe would expand in a .cmd wrapper's arguments reads this
+// process's environment, not env (see expandedVarIn).
+func StartProcessEnv(ctx context.Context, log *slog.Logger, name string, args []string, dir string, env []string) (*Process, error) {
 	// Resolved before anything is allocated: a CLI that cannot be found or
 	// cannot be called safely is a user-environment problem, and there is no
 	// point building pipes for it.
@@ -106,6 +116,9 @@ func StartProcess(ctx context.Context, log *slog.Logger, name string, args []str
 	}
 
 	cmd.Dir = dir
+	if len(env) > 0 {
+		cmd.Env = append(os.Environ(), env...)
+	}
 	// Handing exec.Cmd *os.File values (rather than an arbitrary io.Reader) makes
 	// it pass the descriptors straight to the child: no copying goroutines, and
 	// nothing for Wait to synchronise on.

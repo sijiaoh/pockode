@@ -38,3 +38,25 @@ export const DEFAULT_AGENT_TYPE: AgentType = "claude";
 export function getAgentLabel(agentType: string): string {
 	return AGENT_TYPE_INFO[agentType as AgentType]?.label ?? agentType;
 }
+
+export interface AgentCliInfo {
+	/** The command a user installs and runs on the server. */
+	command: string;
+	/** Signs in from a terminal on the server: the way out when Pockode can't. */
+	loginCommand: string;
+	installUrl: string;
+}
+
+/** The CLI behind each agent, for telling a user how to install it. */
+export const AGENT_CLI_INFO: Record<AgentType, AgentCliInfo> = {
+	claude: {
+		command: "claude",
+		loginCommand: "claude auth login",
+		installUrl: "https://docs.claude.com/en/docs/claude-code/setup",
+	},
+	codex: {
+		command: "codex",
+		loginCommand: "codex login",
+		installUrl: "https://github.com/openai/codex",
+	},
+};

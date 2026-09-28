@@ -781,5 +781,33 @@ describe("InputBar", () => {
 
 			expect(screen.getByRole("textbox")).not.toHaveFocus();
 		});
+
+		// A draft put back after signing in: the host asks, and the bar answers
+		// the way it answers a session change.
+		it.each([
+			[false, true],
+			[true, false],
+		])("answers a focus request when coarse is %s: focused %s", (coarse, focused) => {
+			vi.mocked(useHasCoarsePointer).mockReturnValue(coarse);
+			const { rerender } = render(
+				<InputBar
+					sessionId={TEST_SESSION_ID}
+					onSend={() => {}}
+					focusRequest={0}
+				/>,
+			);
+			screen.getByRole("textbox").blur();
+
+			rerender(
+				<InputBar
+					sessionId={TEST_SESSION_ID}
+					onSend={() => {}}
+					focusRequest={1}
+				/>,
+			);
+
+			if (focused) expect(screen.getByRole("textbox")).toHaveFocus();
+			else expect(screen.getByRole("textbox")).not.toHaveFocus();
+		});
 	});
 });

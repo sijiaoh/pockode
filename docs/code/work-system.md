@@ -709,6 +709,15 @@ nobody asked for, so the work stops. A *failed* turn is nudged like a completed
 one: an agent whose turn errored has usually lost a tool call, not the thread,
 and the nudge limit is what bounds the cost of being wrong about that.
 
+A turn that failed on the CLI's credentials (`session.OutcomeAuthFailed`, from an
+error record carrying an auth mark — see
+[agent-event.md](../agent-event.md#eventrecord-serialization)) is the exception:
+it stops the work at once, ahead of the question checks, with a comment saying
+the CLI couldn't authenticate and where to sign in. Nothing the agent does can
+fix it, so every nudge would only buy another identical failure up to the limit.
+Restarting is the user's, after signing in — from the failed turn's notice in the
+work's chat, or Settings → CLI sign-in.
+
 `DefaultMaxNudges` is 3. A nudge is a guess that the agent stopped mid-task;
 three in a row with nothing to show is evidence the guess is wrong, and the work
 is handed to a person with a comment saying who stopped it — otherwise it is

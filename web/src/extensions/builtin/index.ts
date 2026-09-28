@@ -1,6 +1,7 @@
 import {
 	AccountSection,
 	AppearanceSection,
+	CliSignInSection,
 	SessionSection,
 	ThemeSection,
 	WorktreeSection,
@@ -13,6 +14,7 @@ const PRIORITY = {
 	THEME: 20,
 	WORKTREE: 30,
 	SESSION: 40,
+	CLI_SIGN_IN: 50,
 	ACCOUNT: 90,
 } as const;
 
@@ -45,6 +47,13 @@ export const activate: Extension["activate"] = (ctx) => {
 		label: "Session",
 		priority: PRIORITY.SESSION,
 		component: SessionSection,
+	});
+
+	ctx.settings.register({
+		id: "cli-sign-in",
+		label: "CLI sign-in",
+		priority: PRIORITY.CLI_SIGN_IN,
+		component: CliSignInSection,
 	});
 
 	ctx.settings.register({

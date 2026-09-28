@@ -21,6 +21,7 @@ import (
 	"github.com/pockode/server/agentrole"
 	"github.com/pockode/server/apiroute"
 	"github.com/pockode/server/authsession"
+	"github.com/pockode/server/cliauth"
 	"github.com/pockode/server/cluster"
 	"github.com/pockode/server/command"
 	"github.com/pockode/server/filetransfer"
@@ -346,6 +347,13 @@ Flags:
 	agents.Register(session.AgentTypeCodex, codex.New())
 	agentStatuses := agent.CheckBinaries(slog.Default(), claude.Binary, codex.Binary)
 
+	// Registered in the order the CLIs are listed everywhere else: Claude, then
+	// Codex. They run in workDir because both read project-level settings that
+	// can decide which credentials a session uses.
+	cliAuth := cliauth.NewService(slog.Default())
+	cliAuth.Register(session.AgentTypeClaude, claude.NewAuth(workDir))
+	cliAuth.Register(session.AgentTypeCodex, codex.NewAuth(workDir))
+
 	// Initialize worktree registry and manager
 	registry := worktree.NewRegistry(workDir, dataDir)
 	registry.SetBaseDirProvider(func() string {
@@ -398,7 +406,7 @@ Flags:
 	mcpExecutor.SetWorkEngine(workEngine)
 	mcpHandler := mcp.NewAPIHandler(mcpExecutor, mcpToken)
 
-	wsHandler := ws.NewRPCHandler(cred.Password, sessions, version, devMode, commandStore, worktreeManager, settingsStore, workStore, workOps, workEngine, agentRoleStore)
+	wsHandler := ws.NewRPCHandler(cred.Password, sessions, version, devMode, commandStore, worktreeManager, settingsStore, workStore, workOps, workEngine, agentRoleStore, cliAuth)
 	transferHandler := filetransfer.NewHandler(registry, slog.Default())
 	handler := newHandler(cred.Password, sessions, devMode, wsHandler, mcpHandler, transferHandler)
 
@@ -472,6 +480,8 @@ Flags:
 			slog.Error("server shutdown error", "error", err)
 		}
 		wsHandler.Stop()
+		// Sign-ins end with the server; their CLIs are not left waiting.
+		cliAuth.Close()
 		if err := sessions.Flush(); err != nil {
 			slog.Error("failed to persist sessions", "error", err)
 		}

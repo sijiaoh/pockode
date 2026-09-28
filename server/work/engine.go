@@ -388,6 +388,13 @@ const childQuestionLimitComment = "Stopped automatically: a subtask of this stor
 	"neither answered nor took to the user, and the story's nudge allowance is spent, so Pockode stopped nudging it. " +
 	"The subtask is still waiting for that answer: answer it on the subtask, or restart this story to have it decide."
 
+// authFailedComment explains the stop an auth failure causes. Restarting is left
+// to the user because signing in is theirs to do, and the failed turn in the
+// work's chat is where the way to sign in is.
+const authFailedComment = "Stopped automatically: the agent's CLI couldn't authenticate, so every further turn " +
+	"would fail the same way. Sign in to the CLI — from the failed turn in this work's chat, or Settings → CLI sign-in — " +
+	"then restart the work."
+
 // HandleTurnEnded is the engine's main input: a turn of this session has ended
 // and stayed ended (session.TurnSettler decided the second half).
 //
@@ -426,7 +433,9 @@ const childQuestionLimitComment = "Stopped automatically: a subtask of this stor
 //
 // A failed turn is nudged like a completed one on purpose: an agent whose turn
 // errored has usually lost a tool call, not the thread, and the nudge limit is
-// what bounds the cost of being wrong about that.
+// what bounds the cost of being wrong about that. An auth failure is the
+// exception, and stops the work like an abort does: nothing the agent does can
+// fix it, so every nudge would fail the same way until the limit.
 //
 // A stale ending — one whose session came back inside the settle delay — never
 // reaches here: the settler drops an ending as soon as a new turn starts
@@ -452,6 +461,13 @@ func (e *Engine) HandleTurnEnded(sessionID string, outcome session.TurnOutcome) 
 
 	if outcome == session.OutcomeAborted {
 		e.stop(w.ID, "turn aborted", "")
+		return
+	}
+
+	// Ahead of the questions: an agent that cannot authenticate cannot act on
+	// an answer either, and a nudge would only buy another identical failure.
+	if outcome == session.OutcomeAuthFailed {
+		e.stop(w.ID, "authentication failed", authFailedComment)
 		return
 	}
 

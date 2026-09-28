@@ -22,6 +22,11 @@ import { useSessionDetailStore } from "../../lib/sessionDetailStore";
 import { useSessionStore } from "../../lib/sessionStore";
 import { useWorkStore } from "../../lib/workStore";
 import {
+	createFakeCliAuth,
+	makeLogin,
+	resetCliLoginStore,
+} from "../../test/cliAuthFixtures";
+import {
 	makeSessionDetail,
 	makeSessionListItem,
 } from "../../test/sessionFixtures";
@@ -120,6 +125,9 @@ const mockState = vi.hoisted(() => ({
 	listAgents: vi.fn(() =>
 		Promise.resolve([{ type: "claude", fork_support: "any_message" }]),
 	),
+	// The `cli_auth.*` actions, swapped per test for a fake server
+	// (test/cliAuthFixtures) that the sign-in sheet talks to.
+	cliAuth: {} as Record<string, (...args: never[]) => unknown>,
 	onNotification: null as ((notification: ServerNotification) => void) | null,
 	sessionDetail: null as SessionDetail | null,
 	mockHistory: [] as unknown[],
@@ -156,6 +164,20 @@ vi.mock("../../lib/wsStore", () => {
 		// be open over the answer panel. An empty list still draws it.
 		listCommands: () => Promise.resolve([]),
 		invalidateCommandCache: vi.fn(),
+		...Object.fromEntries(
+			[
+				"cliAuthStatus",
+				"cliAuthLogout",
+				"cliLoginStart",
+				"cliLoginSubmitCode",
+				"cliLoginCancel",
+				"cliLoginSubscribe",
+				"cliLoginUnsubscribe",
+			].map((name) => [
+				name,
+				(...args: never[]) => mockState.cliAuth[name](...args),
+			]),
+		),
 	});
 
 	// One actions object for the whole file, not a fresh one per read: a hook
@@ -3327,6 +3349,98 @@ describe("ChatPanel", () => {
 			expect(covered?.className.split(/\s+/)).not.toContain("hidden");
 		});
 	});
+	// The chat's way in to signing a CLI in (docs/cli-login-ui.md#from-the-chat).
+	describe("signing in from an auth failure", () => {
+		const failedHistory = [
+			{ type: "message", content: "fix the build", seq: 1 },
+			{
+				type: "error",
+				error: "Not logged in · Please run /login",
+				auth_failure: { agent: "codex" },
+				seq: 2,
+			},
+		];
+
+		const signInAndFinish = async (
+			user: ReturnType<typeof userEvent.setup>,
+		) => {
+			const server = createFakeCliAuth();
+			mockState.cliAuth = server.actions as typeof mockState.cliAuth;
+			server.setStatuses([{ agent: "codex", state: "signed_out" }]);
+			server.actions.cliLoginStart.mockResolvedValue(
+				makeLogin({ id: "l1", agent: "codex", user_code: "ABCD-12345" }),
+			);
+			await user.click(
+				await screen.findByRole("button", { name: "Sign in to Codex" }),
+			);
+			await screen.findByText("ABCD-12345");
+			server.push(
+				makeLogin({
+					id: "l1",
+					agent: "codex",
+					revision: 2,
+					phase: "succeeded",
+				}),
+			);
+			await screen.findByRole("heading", { name: "Signed in to Codex" });
+		};
+
+		beforeEach(() => {
+			resetCliLoginStore();
+			mockState.mockHistory = failedHistory;
+		});
+
+		it("puts the failed message back as a draft once signed in", async () => {
+			const user = userEvent.setup();
+			render(<ChatPanel {...defaultProps} />);
+			await waitForHistoryLoad();
+
+			await signInAndFinish(user);
+			await user.click(screen.getByRole("button", { name: "Send again" }));
+
+			expect(screen.queryByRole("dialog")).toBeNull();
+			expect(screen.getByRole("textbox")).toHaveValue("fix the build");
+			expect(useInputStore.getState().inputs["test-session"]).toBe(
+				"fix the build",
+			);
+			expect(mockState.sendMessage).not.toHaveBeenCalled();
+		});
+
+		it("leaves a draft already in the input alone", async () => {
+			const user = userEvent.setup();
+			useInputStore.setState({ inputs: { "test-session": "half-typed" } });
+			render(<ChatPanel {...defaultProps} />);
+			await waitForHistoryLoad();
+
+			await signInAndFinish(user);
+
+			expect(screen.queryByRole("button", { name: "Send again" })).toBeNull();
+			expect(
+				screen.getByRole("button", { name: "Copy message" }),
+			).toBeInTheDocument();
+			expect(useInputStore.getState().inputs["test-session"]).toBe(
+				"half-typed",
+			);
+		});
+
+		// The panel outlives a session switch, and a history seq names a turn
+		// only within its own session: the other one's turn at the same place is
+		// not the one that failed.
+		it("offers no Send again once another session is on screen", async () => {
+			const user = userEvent.setup();
+			const { rerender } = render(<ChatPanel {...defaultProps} />);
+			await waitForHistoryLoad();
+			await signInAndFinish(user);
+
+			rerender(<ChatPanel {...defaultProps} sessionId="elsewhere" />);
+			await waitForHistoryLoad();
+
+			expect(screen.queryByRole("button", { name: "Send again" })).toBeNull();
+			expect(screen.getByRole("button", { name: "Done" })).toBeInTheDocument();
+			expect(useInputStore.getState().inputs.elsewhere).toBeUndefined();
+		});
+	});
+
 	describe("forking a session", () => {
 		const forkHistory = [
 			{ type: "message", content: "Hello", seq: 1 },

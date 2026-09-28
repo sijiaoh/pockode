@@ -1,6 +1,6 @@
 import { getDiffViewHighlighter } from "@git-diff-view/shiki";
 import { useIsExpanded } from "@pockode/shared";
-import { Check, Copy } from "lucide-react";
+import { Check, Copy, X } from "lucide-react";
 import * as React from "react";
 import { useShikiHighlighter } from "react-shiki";
 import {
@@ -10,6 +10,7 @@ import {
 	createHighlighter,
 	type Highlighter,
 } from "shiki";
+import { useCopyToClipboard } from "../hooks/useCopyToClipboard";
 import { splitNativePath } from "../utils/path";
 
 export const CODE_FONT_SIZE_MOBILE = 12;
@@ -85,8 +86,9 @@ export function CodeHighlighter({
 }) {
 	const isExpanded = useIsExpanded();
 	const fontSize = isExpanded ? CODE_FONT_SIZE_DESKTOP : CODE_FONT_SIZE_MOBILE;
-	const [copied, setCopied] = React.useState(false);
-	const timerRef = React.useRef<number | undefined>(undefined);
+	const { state: copyState, copy } = useCopyToClipboard({
+		resetAfterMs: 2000,
+	});
 
 	// Highlighting is synchronous CPU work proportional to the input, and awaiting
 	// it does not spare the main thread — so the oversized input is withheld from
@@ -97,28 +99,30 @@ export function CodeHighlighter({
 		cssVarTheme,
 	);
 
-	React.useEffect(() => {
-		return () => clearTimeout(timerRef.current);
-	}, []);
-
-	const handleCopy = async () => {
-		await navigator.clipboard.writeText(children);
-		setCopied(true);
-		clearTimeout(timerRef.current);
-		timerRef.current = window.setTimeout(() => setCopied(false), 2000);
-	};
-
 	const style = { "--code-font-size": `${fontSize}px` } as React.CSSProperties;
 
 	return (
 		<div className="code-block-wrapper">
 			<button
 				type="button"
-				onClick={handleCopy}
+				onClick={() => copy(children)}
 				className="code-copy-button touch-target"
-				aria-label={copied ? "Copied" : "Copy code"}
+				// A failed copy needs nothing more: the code is on screen in full.
+				aria-label={
+					copyState === "copied"
+						? "Copied"
+						: copyState === "failed"
+							? "Copy failed"
+							: "Copy code"
+				}
 			>
-				{copied ? <Check size={14} /> : <Copy size={14} />}
+				{copyState === "copied" ? (
+					<Check size={14} />
+				) : copyState === "failed" ? (
+					<X size={14} />
+				) : (
+					<Copy size={14} />
+				)}
 			</button>
 			<pre className="code-block" style={style}>
 				{plain ? (

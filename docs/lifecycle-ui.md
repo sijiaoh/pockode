@@ -199,7 +199,7 @@ interface TurnState {
   /** When the session entered this phase. ISO 8601. Drives "since HH:MM". */
   since: string;
   /** How the previous turn ended; says nothing while the phase is not idle. */
-  last_outcome?: "completed" | "failed" | "aborted";
+  last_outcome?: "completed" | "failed" | "auth_failed" | "aborted";
 }
 ```
 

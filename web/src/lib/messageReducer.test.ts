@@ -613,6 +613,50 @@ describe("messageReducer", () => {
 			expect(assistant.error).toBe("Failed");
 		});
 
+		// The mark names the CLI; one this build does not know is no mark at all,
+		// so the record reads as the plain failure it also is.
+		it("carries an auth failure's CLI onto the turn and its warnings", () => {
+			let messages: Message[] = [createStreamingMessage()];
+			messages = applyServerEvent(
+				messages,
+				normalizeEvent({
+					type: "warning",
+					message: "Not logged in",
+					code: "authentication_failed",
+					auth_failure: { agent: "claude" },
+				}),
+			);
+			messages = applyServerEvent(
+				messages,
+				normalizeEvent({
+					type: "error",
+					error: "Not logged in",
+					auth_failure: { agent: "claude" },
+				}),
+			);
+			const assistant = messages[0] as AssistantMessage;
+			expect(assistant.authFailure).toBe("claude");
+			expect(assistant.parts).toEqual([
+				{
+					type: "warning",
+					message: "Not logged in",
+					code: "authentication_failed",
+					authFailure: "claude",
+				},
+			]);
+
+			const unknown = applyServerEvent(
+				[createStreamingMessage()],
+				normalizeEvent({
+					type: "error",
+					error: "Not logged in",
+					auth_failure: { agent: "gemini" },
+				}),
+			)[0] as AssistantMessage;
+			expect(unknown.status).toBe("error");
+			expect(unknown.authFailure).toBeUndefined();
+		});
+
 		it("appends system message as content part", () => {
 			const initial = [createStreamingMessage()];
 			const messages = applyServerEvent(initial, {
@@ -2179,6 +2223,28 @@ describe("messageReducer", () => {
 			expect(partsOf(joined[joined.length - 1])).toEqual([
 				{ type: "text", content: "about Y" },
 			]);
+		});
+
+		// The turn ended at the boundary, so it is the older half that says how:
+		// losing the auth mark there would turn the sign-in notice back into a
+		// bare error line.
+		it("keeps an auth failure that ended the turn across a page boundary", () => {
+			const older = replayHistory([
+				{ type: "message", content: "do the thing" },
+				{ type: "text", content: "partial" },
+				{
+					type: "error",
+					error: "Not logged in",
+					auth_failure: { agent: "claude" },
+				},
+			]);
+			const newer = replayHistory([{ type: "text", content: "late" }]);
+
+			const joined = prependHistoryPage(older, newer);
+			const turn = joined[joined.length - 1] as AssistantMessage;
+
+			expect(turn.status).toBe("error");
+			expect(turn.authFailure).toBe("claude");
 		});
 
 		// The join that must still happen: a boundary falling *inside* the bubble a

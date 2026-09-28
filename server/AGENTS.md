@@ -45,6 +45,7 @@ apiroute/               # 本进程 API 路径判定（SPA handler 与 relay 代
 attachments/            # 按 session 存放事件里以 id 引用的内容（内容寻址）
 authsession/            # 登录会话：密码换取的 session token + 密码指纹（sessions.json）
 chat/                   # Chat 客户端
+cliauth/                # AI CLI 登录状态查询、远程登录流程与登出（各 CLI 的实现在 agent/*/auth.go、login.go，见 docs/code/cli-auth.md）
 command/                # 命令存储 + Pockode 命令（`/pockode-*` 的解析与展开，见 docs/pockode-commands.md）
 contents/               # 文件内容获取
 filestore/              # 文件存储基础设施（原子写 / 文件锁 / JSONL / 变更监听）
@@ -106,7 +107,7 @@ Windows 与 darwin/linux 一样是发布目标（产物见 [docs/platforms.md](.
 
 参数一律是**原生路径**。外部来的值默认不是：git 的输出、手写的设置、我们自己 API 里的路径都用 `/`，进来时 `filepath.FromSlash`，出去时 `filepath.ToSlash`。
 
-**启动 AI CLI 一律走 `agent.Command`**，不要直接 `exec.Command(claude.Binary, …)`。它做两件各自都容易漏掉的事：`lookupBinary` 在 PATH 之外补上安装器的默认目录（Windows 上 PATH 是进程启动时定死的，装在 pockode.exe 启动之后的 CLI 就是看不见的），以及在可执行文件是 npm 装出来的 `.cmd` 时自己构造命令行——Windows 跑批处理文件是把命令行交给 cmd.exe，而 `os/exec` 按 `CommandLineToArgvW` 的规则加引号，两套规则对不上（Go 只在文档里提了一句，没有修，见 `agent/cmdline.go`）。需要能放弃的短命探测（如 `codex --version`）走 `agent.CommandContext`，它是同一条路加一个 ctx；会话进程走 `agent.StartProcess`，那边自己持有生命周期。
+**启动 AI CLI 一律走 `agent.Command`**，不要直接 `exec.Command(claude.Binary, …)`。它做两件各自都容易漏掉的事：`lookupBinary` 在 PATH 之外补上安装器的默认目录（Windows 上 PATH 是进程启动时定死的，装在 pockode.exe 启动之后的 CLI 就是看不见的），以及在可执行文件是 npm 装出来的 `.cmd` 时自己构造命令行——Windows 跑批处理文件是把命令行交给 cmd.exe，而 `os/exec` 按 `CommandLineToArgvW` 的规则加引号，两套规则对不上（Go 只在文档里提了一句，没有修，见 `agent/cmdline.go`）。需要能放弃的短命探测（如 `codex --help`）走 `agent.CommandContext`，它是同一条路加一个 ctx；跑完就要输出、超时要连子孙一起杀掉的一次性命令（如 `claude auth status`）走 `agent.Run`，它是跑到结束的 `agent.StartProcess`；会话进程走 `agent.StartProcess`，那边自己持有生命周期；要给 CLI 额外加环境变量时用 `agent.StartProcessEnv`（如 `claude auth login` 的 `BROWSER`）。
 
 **存凭据的地方用 `internal/fsperm` 收紧，收紧的对象是目录不是文件**。`os.WriteFile(path, data, 0600)` 在 Windows 上什么也没做——Go 只把 perm 映射到只读属性，实际访问权来自父目录继承来的 ACL，而盘符根下建出来的目录一律继承一条 `BUILTIN\Users` 读权限。收紧目录才有两个逐个收紧文件拿不到的性质：**新建的文件自动继承**（`.pockode` 里的 session 记录、`server.log`、work store 都归它管，不必在每个写入点重复一遍），以及**扛得住 temp+rename**（`filestore` 和 git 的 `store` helper 都是先写临时文件再改名覆盖，改名进来的文件带的是它自己创建时的权限，逐个文件收紧会被下一次写入静默抹掉）。
 

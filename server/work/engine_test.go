@@ -226,6 +226,39 @@ func TestEngine_NudgesAFailedTurnToo(t *testing.T) {
 	}
 }
 
+// An auth failure is the exception: every further turn would fail the same way
+// until a person signs in, so the work is stopped at once and says why.
+func TestEngine_StopsAWorkWhoseTurnFailedToAuthenticate(t *testing.T) {
+	f := newEngineFixture(t)
+	story := f.startedStory(t, "sess-1")
+
+	f.engine.HandleTurnEnded("sess-1", session.OutcomeAuthFailed)
+
+	if f.sender.count() != 0 {
+		t.Errorf("sent %d messages, want no nudge", f.sender.count())
+	}
+	if got := getWork(t, f.store, story.ID); got.Status != StatusStopped {
+		t.Errorf("status = %q, want stopped", got.Status)
+	}
+	if got := f.commentBodies(t, story.ID); len(got) != 1 || got[0] != authFailedComment {
+		t.Errorf("comments = %q, want the auth failure explained", got)
+	}
+}
+
+// Ahead of the question check: an agent that cannot authenticate cannot act on
+// the answer either, so waiting for it would only hide the failure.
+func TestEngine_StopsOnAnAuthFailureEvenWithAQuestionOutstanding(t *testing.T) {
+	f := newEngineFixture(t)
+	story := f.startedStory(t, "sess-1")
+	f.turns.post("sess-1")
+
+	f.engine.HandleTurnEnded("sess-1", session.OutcomeAuthFailed)
+
+	if got := getWork(t, f.store, story.ID); got.Status != StatusStopped {
+		t.Errorf("status = %q, want stopped", got.Status)
+	}
+}
+
 func TestEngine_StopsAWorkAfterTheNudgeLimit(t *testing.T) {
 	f := newEngineFixture(t)
 	story := f.startedStory(t, "sess-1")

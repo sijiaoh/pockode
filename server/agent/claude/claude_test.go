@@ -54,7 +54,7 @@ func parseTestLineFull(log *slog.Logger, line []byte, pendingRequests *sync.Map,
 	if err := json.Unmarshal(line, &event); err != nil {
 		return []agent.AgentEvent{agent.TextEvent{Content: string(line)}}
 	}
-	return parseLine(log, line, event, pendingRequests, backgroundTasks, refusals, attachments.Store{})
+	return parseLine(log, line, event, pendingRequests, backgroundTasks, &authFailureTracker{}, refusals, attachments.Store{})
 }
 
 // observeLine decodes a raw line and forwards it to observe (test helper).
@@ -172,8 +172,9 @@ func TestParseLine(t *testing.T) {
 			name:  "synthetic assistant message becomes a warning labelled by the CLI",
 			input: `{"type":"assistant","message":{"id":"58516ac7","model":"<synthetic>","role":"assistant","type":"message","content":[{"type":"text","text":"Invalid API key \u00b7 Fix external API key"}]},"session_id":"08165e10","error":"authentication_failed","is_api_error_message":true}`,
 			expected: []agent.AgentEvent{agent.WarningEvent{
-				Message: "Invalid API key \u00b7 Fix external API key",
-				Code:    "authentication_failed",
+				Message:     "Invalid API key \u00b7 Fix external API key",
+				Code:        "authentication_failed",
+				AuthFailure: &agent.AuthFailure{Agent: session.AgentTypeClaude},
 			}},
 		},
 		{

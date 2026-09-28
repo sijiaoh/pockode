@@ -42,6 +42,7 @@ Method names are organized using the `namespace.method` format, solving two prob
 | `work.*` | app | `ws/rpc_work.go` |
 | `agent_role.*` | app | `ws/rpc_agent_role.go` |
 | `agent.*` | app | `ws/rpc_agent.go` |
+| `cli_auth.*` | app | `ws/rpc_cli_auth.go` |
 
 - **Worktree scope**: Operations that depend on the current working directory (files, Git, etc.)
 - **App scope**: Global operations across worktrees (settings, project management, etc.)

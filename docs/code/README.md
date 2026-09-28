@@ -13,6 +13,7 @@ Index of Pockode code explanation documents. These documents focus on "why it's 
 | [Real-time Subscription System](subscription-system.md) | Who names a subscription, watcher architecture, backpressure handling | `server/watch/`, `web/src/hooks/useSubscription.ts` |
 | [Frontend State Management](frontend-state.md) | Zustand stores and extension system | `web/src/lib/` |
 | [Relay NAT Traversal](relay-system.md) | Mobile access to local PC | `server/relay/` |
+| [AI CLI Sign-in](cli-auth.md) | Whether each AI CLI is signed in on the server machine, signing in from a phone, and signing out | `server/cliauth/`, `server/agent/*/auth.go`, `server/agent/*/login.go` |
 
 Two of these — [Agent Integration](agent-integration.md) and
 [Work](work-system.md) — build one half each of the same model: how long a

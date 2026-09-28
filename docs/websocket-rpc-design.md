@@ -32,6 +32,7 @@ Method names use the `namespace.method` format with namespaces.
 | `work.*` | app | `ws/rpc_work.go` |
 | `agent_role.*` | app | `ws/rpc_agent_role.go` |
 | `agent.*` | app | `ws/rpc_agent.go` |
+| `cli_auth.*` | app | `ws/rpc_cli_auth.go` |
 
 - **worktree scope**: Methods bound to the current worktree
 - **app scope**: Methods independent of any worktree

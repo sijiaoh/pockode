@@ -513,6 +513,7 @@ func (s *cliSession) writeStdin(data []byte) error {
 
 func streamOutput(ctx context.Context, log *slog.Logger, stdout io.Reader, events chan<- agent.AgentEvent, pendingRequests *sync.Map, resumeState *claudeResumeStateManager, backgroundTasks *backgroundTaskTracker, usage *usageObserver, refusals controlRefusals, store attachments.Store) {
 	scanner := agent.NewLineScanner(stdout, agent.MaxLineBytes)
+	authFailures := &authFailureTracker{}
 
 	for scanner.Scan() {
 		line := scanner.Bytes()
@@ -549,7 +550,7 @@ func streamOutput(ctx context.Context, log *slog.Logger, stdout io.Reader, event
 		}
 		usage.observe(line, event)
 
-		for _, ev := range parseLine(log, line, event, pendingRequests, backgroundTasks, refusals, store) {
+		for _, ev := range parseLine(log, line, event, pendingRequests, backgroundTasks, authFailures, refusals, store) {
 			select {
 			case events <- ev:
 			case <-ctx.Done():
@@ -1056,19 +1057,19 @@ type controlRefusals struct {
 // parseLine converts one already-decoded stream-json envelope into agent events.
 // line is retained for the cases (assistant, result, control_*) that decode a
 // superset struct.
-func parseLine(log *slog.Logger, line []byte, event cliEvent, pendingRequests *sync.Map, backgroundTasks *backgroundTaskTracker, refusals controlRefusals, store attachments.Store) []agent.AgentEvent {
+func parseLine(log *slog.Logger, line []byte, event cliEvent, pendingRequests *sync.Map, backgroundTasks *backgroundTaskTracker, authFailures *authFailureTracker, refusals controlRefusals, store attachments.Store) []agent.AgentEvent {
 	switch event.Type {
 	case "assistant":
-		return parseAssistantEvent(log, line, event, backgroundTasks)
+		return parseAssistantEvent(log, line, event, backgroundTasks, authFailures)
 	case "user":
 		return parseUserEvent(log, event, backgroundTasks, store)
 	case "result":
-		if ev := parseResultEvent(log, line, backgroundTasks); ev != nil {
+		if ev := parseResultEvent(log, line, backgroundTasks, authFailures); ev != nil {
 			return []agent.AgentEvent{ev}
 		}
 		return nil
 	case "system":
-		return parseSystemEvent(log, line, event, backgroundTasks)
+		return parseSystemEvent(log, line, event, backgroundTasks, authFailures)
 	case "control_request":
 		return parseControlRequest(log, line, refusals)
 	case "control_response":
@@ -1126,7 +1127,7 @@ type systemContent struct {
 	Content string `json:"content"`
 }
 
-func parseSystemEvent(log *slog.Logger, line []byte, event cliEvent, backgroundTasks *backgroundTaskTracker) []agent.AgentEvent {
+func parseSystemEvent(log *slog.Logger, line []byte, event cliEvent, backgroundTasks *backgroundTaskTracker, authFailures *authFailureTracker) []agent.AgentEvent {
 	// A level signal about live state, not a transcript entry: it only updates
 	// the tracker parseResultEvent consults.
 	if event.Subtype == "background_tasks_changed" {
@@ -1160,7 +1161,11 @@ func parseSystemEvent(log *slog.Logger, line []byte, event cliEvent, backgroundT
 		return nil
 	}
 
-	return []agent.AgentEvent{agent.SystemEvent{Content: string(line)}}
+	events := []agent.AgentEvent{agent.SystemEvent{Content: string(line)}}
+	if event.Subtype == "api_retry" {
+		events = append(events, authFailures.retry(log, line)...)
+	}
+	return events
 }
 
 // unsupportedControlSubtypes names the requests the CLI originates that Pockode
@@ -1338,7 +1343,7 @@ type assistantEnvelope struct {
 // second class on the text path would restore the same bug for whichever notice
 // fell into it, and a message with no model behind it is never the agent
 // contributing to the conversation regardless of what it says.
-func syntheticNotice(log *slog.Logger, line []byte, msg cliMessage) []agent.AgentEvent {
+func syntheticNotice(log *slog.Logger, line []byte, msg cliMessage, authFailures *authFailureTracker) []agent.AgentEvent {
 	var textParts []string
 	for _, block := range msg.Content {
 		if block.Type != "text" {
@@ -1365,12 +1370,13 @@ func syntheticNotice(log *slog.Logger, line []byte, msg cliMessage) []agent.Agen
 	}
 
 	return []agent.AgentEvent{agent.WarningEvent{
-		Message: strings.Join(textParts, ""),
-		Code:    code,
+		Message:     strings.Join(textParts, ""),
+		Code:        code,
+		AuthFailure: authFailures.notice(code),
 	}}
 }
 
-func parseAssistantEvent(log *slog.Logger, line []byte, event cliEvent, backgroundTasks *backgroundTaskTracker) []agent.AgentEvent {
+func parseAssistantEvent(log *slog.Logger, line []byte, event cliEvent, backgroundTasks *backgroundTaskTracker, authFailures *authFailureTracker) []agent.AgentEvent {
 	if event.Message == nil {
 		log.Warn("assistant event message is nil", "subtype", event.Subtype)
 		return nil
@@ -1383,8 +1389,9 @@ func parseAssistantEvent(log *slog.Logger, line []byte, event cliEvent, backgrou
 	}
 
 	if msg.Model == syntheticModel {
-		return syntheticNotice(log, line, msg)
+		return syntheticNotice(log, line, msg, authFailures)
 	}
+	authFailures.modelReached()
 
 	var events []agent.AgentEvent
 	var textParts []string
@@ -1557,7 +1564,9 @@ const legacyAbortError = "Request was aborted"
 // parseResultEvent turns the CLI's end-of-turn frame into an event: an ending,
 // or — while background work is still running — the turn being parked on it
 // (see below).
-func parseResultEvent(log *slog.Logger, line []byte, backgroundTasks *backgroundTaskTracker) agent.AgentEvent {
+func parseResultEvent(log *slog.Logger, line []byte, backgroundTasks *backgroundTaskTracker, authFailures *authFailureTracker) agent.AgentEvent {
+	authFailure := authFailures.ended()
+
 	var result resultEvent
 	if err := json.Unmarshal(line, &result); err != nil {
 		return agent.DoneEvent{}
@@ -1570,7 +1579,7 @@ func parseResultEvent(log *slog.Logger, line []byte, backgroundTasks *background
 	// A failed turn must not look like a completed one; without this the user
 	// only sees the response stop with no explanation.
 	if result.IsError {
-		return agent.ErrorEvent{Error: result.errorMessage()}
+		return agent.ErrorEvent{Error: result.errorMessage(), AuthFailure: authFailure}
 	}
 
 	// A normal ending while background tasks are still live is not an ending:

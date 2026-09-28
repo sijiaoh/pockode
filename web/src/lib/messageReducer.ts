@@ -18,8 +18,10 @@ import type {
 	ToolRun,
 	UserMessage,
 } from "../types/message";
+import type { AgentType } from "../types/settings";
 import { lookupAnswer, parseAnswer } from "../utils/questionAnswer";
 import { generateUUID } from "../utils/uuid";
+import { AGENT_TYPES } from "./agentType";
 import { parseContentBlocks } from "./contentBlocks";
 
 // Legacy history recorded system messages with origin "work" before the
@@ -47,6 +49,14 @@ function normalizeExpiryReason(raw: unknown): ExpiryReason | undefined {
 	return typeof raw === "string" && EXPIRY_REASONS.includes(raw)
 		? (raw as ExpiryReason)
 		: undefined;
+}
+
+// The CLI a record says refused its credentials. An agent this build does not
+// know reads as no mark: the record then renders as an ordinary error or
+// warning, which is true of it, rather than offering a sign-in to nothing.
+function normalizeAuthFailure(raw: unknown): AgentType | undefined {
+	const agent = (raw as { agent?: unknown } | null | undefined)?.agent;
+	return AGENT_TYPES.find((type) => type === agent);
 }
 
 // Boundary defense for one question's shape: the Go encoder emits `null` for a
@@ -140,8 +150,14 @@ export type NormalizedEvent =
 			/** An increment: it accumulates into the run's output. */
 			outputDelta?: string;
 	  }
-	| { type: "warning"; message: string; code: string }
-	| { type: "error"; error: string }
+	| {
+			type: "warning";
+			message: string;
+			code: string;
+			/** See `ContentPart`'s warning. */
+			authFailure?: AgentType;
+	  }
+	| { type: "error"; error: string; authFailure?: AgentType }
 	| { type: "done" }
 	| { type: "interrupted" }
 	| { type: "process_ended" }
@@ -281,9 +297,14 @@ export function normalizeEvent(
 				type: "warning",
 				message: (record.message as string) ?? "",
 				code: (record.code as string) ?? "",
+				authFailure: normalizeAuthFailure(record.auth_failure),
 			};
 		case "error":
-			return { type: "error", error: (record.error as string) ?? "" };
+			return {
+				type: "error",
+				error: (record.error as string) ?? "",
+				authFailure: normalizeAuthFailure(record.auth_failure),
+			};
 		case "done":
 			return { type: "done" };
 		case "interrupted":
@@ -583,7 +604,12 @@ export function applyEventToParts(
 		case "warning":
 			return [
 				...parts,
-				{ type: "warning", message: event.message, code: event.code },
+				{
+					type: "warning",
+					message: event.message,
+					code: event.code,
+					authFailure: event.authFailure,
+				},
 			];
 		case "raw":
 			return [...parts, { type: "raw", content: event.content }];
@@ -917,6 +943,7 @@ function applyEvent(
 		} else if (event.type === "error") {
 			message.status = "error";
 			message.error = event.error;
+			message.authFailure = event.authFailure;
 		} else if (event.type === "process_ended") {
 			message.status = "process_ended";
 		}
@@ -2035,7 +2062,13 @@ export function prependHistoryPage(
 		// why the head is the one row the transcript never anchors on — it grows
 		// from the inside (docs/agent-chat.md#reading-a-page-on-the-client).
 		...head,
-		...(endedAtBoundary ? { status: tail.status, error: tail.error } : {}),
+		...(endedAtBoundary
+			? {
+					status: tail.status,
+					error: tail.error,
+					authFailure: tail.authFailure,
+				}
+			: {}),
 		parts: endedAtBoundary ? settleRunningToolParts(joined) : joined,
 		createdAt: tail.createdAt,
 		// The head's anchor wins when it has one: it names the later record, which

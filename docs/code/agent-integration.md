@@ -283,8 +283,9 @@ The warning's `Code` comes from the `error` field on the assistant frame itself,
 falling back to `synthetic_message` when the frame carries none. The label set is
 open rather than a fixed enumeration: `authentication_failed` and `server_error`
 are what the messages on one developer machine carry, and a local endpoint
-answering 400 was measured later producing `unknown`. Nothing branches on the
-value — it is passed straight to the banner — so a label nobody anticipated costs
+answering 400 was measured later producing `unknown`. One value is branched on —
+`authentication_failed`, which marks the turn as an auth failure (below) — and
+the rest are passed straight to the banner, so a label nobody anticipated costs
 at most a less helpful code. Across those 35 messages and that run, `error` is
 non-empty exactly when `isApiErrorMessage` is true, so reading the second field
 would add nothing.
@@ -300,6 +301,47 @@ the wrong target: `SystemItem` in the frontend runs an unguarded `JSON.parse` on
 the content (`web/src/components/Chat/MessageItem.tsx`), so prose reaching it
 throws during render. `WarningItem` already draws a message-and-code banner,
 which is the shape this is.
+
+#### Auth Failures
+
+A turn the CLI was refused for its credentials — not signed in, a login that
+expired, a key the provider rejected — ends in an `ErrorEvent` carrying
+`AuthFailure{Agent}`, so the chat can offer the right sign-in from the record and
+the turn ends as `auth_failed` (see [agent-event.md](../agent-event.md#eventrecord-serialization)).
+Neither CLI says so on the frame that ends the turn, so each adapter remembers it
+for the turn under way from the CLI's structured signal, never from its text:
+
+| CLI | Signal | Ending |
+|-----|--------|--------|
+| Claude | `error: "authentication_failed"` on a synthetic assistant frame or a `system/api_retry` frame | the `result` with `is_error` (its `terminal_reason` is `api_error`, shared with every other API failure) |
+| Codex | an `error` notification whose `codexErrorInfo` holds `httpStatusCode: 401` under any variant, or is `"unauthorized"` | `turn/completed` with `failed` — whose own info is plain `"other"` on codex-cli 0.153.0, which is why the retries are what is read |
+
+Both CLIs retry a refusal before giving up — Claude up to ten times over minutes
+for a rejected key, Codex about twenty seconds — so the retry is marked too, on a
+`WarningEvent`: Claude's first refused retry of a turn raises one of its own
+(`authentication_failed_retry`), and each of Codex's `stream_error` retry warnings
+carries the mark when its status was 401. The turn is not cut short: a retry after
+a token refresh can still succeed, and a turn that recovers leaves its marked
+warnings as ordinary warnings. The latest word wins: a refusal the turn got past
+before failing for something else (a later retry on another status, Claude's
+notice naming another cause, or simply the model answering) does not mark the
+ending, which would otherwise stop a work session over an overload. Codex's flag is also taken only from errors
+naming the turn that is running, so a late report of an earlier turn cannot mark
+the next one. Claude's synthetic notice is marked as well; the
+client draws one notice per turn and hides the rest
+([cli-login-ui.md](../cli-login-ui.md#the-notice)).
+
+Codex quotes a rejected key back in the provider's error text ("Incorrect API key
+provided: sk-proj-****9jkl."). OpenAI masks the middle but not the prefix or the
+last four characters, and another provider may not mask it at all, so the Codex
+texts that carry provider errors — turn errors, retry warnings, `warning`
+notifications (the WebSocket fallback quotes its 401), a refused `turn/start` —
+pass through `redactSecrets` before they reach a record or the log. A crashed
+process's stderr goes through the shared `agent.WaitForProcess` path and is not
+covered. A process that has been refused needs no restart
+once the CLI is signed in: both CLIs read the new credentials on the next turn
+(measured on claude 2.1.283 and codex-cli 0.153.0), which is what makes resending
+the message enough.
 
 ### Session Forking
 

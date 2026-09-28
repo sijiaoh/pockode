@@ -125,6 +125,8 @@ func (s *appSession) handleTurnStarted(params json.RawMessage) {
 		s.log.Warn("failed to read the turn id out of turn/started", "error", err)
 		return
 	}
+	// A refusal reported between turns is not this turn's.
+	s.turnAuthFailed = false
 	threadID, interrupt := s.adoptTurn(notif.Turn.ID)
 	if interrupt {
 		// A stop that arrived before this turn had an id to name. See
@@ -162,6 +164,16 @@ func (s *appSession) handleTurnCompleted(params json.RawMessage) {
 
 	s.clearTurn()
 	s.forgetToolInputs()
+	authFailed := s.turnAuthFailed
+	s.turnAuthFailed = false
+	if notif.Turn.Error != nil {
+		switch readAuthVerdict(notif.Turn.Error.CodexErrorInfo) {
+		case authRefused:
+			authFailed = true
+		case authAccepted:
+			authFailed = false
+		}
+	}
 
 	switch notif.Turn.Status {
 	case "interrupted":
@@ -172,12 +184,16 @@ func (s *appSession) handleTurnCompleted(params json.RawMessage) {
 		message := "codex reported an error without a message"
 		if notif.Turn.Error != nil {
 			s.log.Info("codex turn failed",
-				"message", notif.Turn.Error.Message,
-				"details", notif.Turn.Error.AdditionalDetails,
+				"message", redactSecrets(notif.Turn.Error.Message),
+				"details", redactSecrets(notif.Turn.Error.AdditionalDetails),
 				"info", string(notif.Turn.Error.CodexErrorInfo))
-			message = firstNonEmpty(notif.Turn.Error.Message, message)
+			message = firstNonEmpty(redactSecrets(notif.Turn.Error.Message), message)
 		}
-		s.emitEvent(agent.ErrorEvent{Error: message})
+		event := agent.ErrorEvent{Error: message}
+		if authFailed {
+			event.AuthFailure = codexAuthFailure()
+		}
+		s.emitEvent(event)
 	default:
 		s.emitEvent(agent.DoneEvent{})
 	}
@@ -237,6 +253,7 @@ func (s *appSession) handleItemStarted(params json.RawMessage) {
 		s.handleUserMessageItem(item)
 		return
 	}
+	s.modelReached(item.Type)
 
 	toolName, toolInput, ok := s.toolCallOf(item)
 	if !ok {
@@ -379,6 +396,7 @@ func (s *appSession) handleItemCompleted(params json.RawMessage) {
 	}
 
 	s.forgetToolInput(item.ID)
+	s.modelReached(item.Type)
 
 	switch item.Type {
 	case "agentMessage":
@@ -592,6 +610,27 @@ func (s *appSession) handleMCPServerStatus(params json.RawMessage) {
 	})
 }
 
+// notFromTheModel are the item types that can appear without the model's
+// stream having got through, so they prove nothing about credentials. Where: the
+// ThreadItem union of codex-cli 0.153.0's app-server schema. Compaction calls
+// the API too, and can itself be refused.
+var notFromTheModel = map[string]bool{
+	"userMessage":       true,
+	"contextCompaction": true,
+	"hookPrompt":        true,
+	"enteredReviewMode": true,
+	"exitedReviewMode":  true,
+}
+
+// modelReached reads an item of the running turn: one the model produced says
+// the turn got past authentication, so a refusal earlier in it is not what it
+// ends on.
+func (s *appSession) modelReached(itemType string) {
+	if !notFromTheModel[itemType] {
+		s.turnAuthFailed = false
+	}
+}
+
 // handleErrorNotification reports a turn error that the turn survives.
 //
 // A failure the turn does not survive is reported by turn/completed instead,
@@ -601,6 +640,7 @@ func (s *appSession) handleMCPServerStatus(params json.RawMessage) {
 // explains a turn that has stalled on stream retries.
 func (s *appSession) handleErrorNotification(params json.RawMessage) {
 	var notif struct {
+		TurnID    string    `json:"turnId"`
 		Error     turnError `json:"error"`
 		WillRetry bool      `json:"willRetry"`
 	}
@@ -608,11 +648,27 @@ func (s *appSession) handleErrorNotification(params json.RawMessage) {
 		s.log.Warn("failed to parse error notification", "error", err)
 		return
 	}
+	message := redactSecrets(notif.Error.Message)
 	s.log.Info("codex reported a turn error",
-		"message", notif.Error.Message, "willRetry", notif.WillRetry,
+		"message", message, "willRetry", notif.WillRetry,
 		"info", string(notif.Error.CodexErrorInfo))
 
-	if !notif.WillRetry || notif.Error.Message == "" {
+	// Remembered for the turn's ending, whose own error info does not say it
+	// (see readAuthVerdict) — the latest word wins, so a refusal the turn got
+	// past before failing for something else does not mark it. Only for the
+	// turn running now: a late report of an earlier one must not carry over.
+	var authFailure *agent.AuthFailure
+	if _, running := s.currentTurn(); running != "" && (notif.TurnID == "" || notif.TurnID == running) {
+		switch readAuthVerdict(notif.Error.CodexErrorInfo) {
+		case authRefused:
+			s.turnAuthFailed = true
+			authFailure = codexAuthFailure()
+		case authAccepted:
+			s.turnAuthFailed = false
+		}
+	}
+
+	if !notif.WillRetry || message == "" {
 		return
 	}
 	// "stream_error" is the MCP channel's name for the same thing, kept so that
@@ -620,7 +676,11 @@ func (s *appSession) handleErrorNotification(params json.RawMessage) {
 	// same code for the same event. Nothing branches on the value — it goes
 	// straight to the banner — so the only thing it can cost is a reader's
 	// double take at a name no app-server notification has.
-	s.emitEvent(agent.WarningEvent{Message: notif.Error.Message, Code: "stream_error"})
+	//
+	// A refused retry carries the auth mark, which is what lets the user sign in
+	// while the turn is still retrying — about twenty seconds on codex-cli
+	// 0.153.0 — rather than after it gives up.
+	s.emitEvent(agent.WarningEvent{Message: message, Code: "stream_error", AuthFailure: authFailure})
 }
 
 // handleWarningNotification surfaces a non-fatal warning: the turn keeps going,
@@ -636,7 +696,9 @@ func (s *appSession) handleWarningNotification(method string, params json.RawMes
 		s.log.Warn("failed to parse codex warning notification", "method", method, "error", err)
 		return
 	}
-	message := firstNonEmpty(notif.Message, notif.Summary)
+	// Provider error text reaches here too — the fallback from WebSockets
+	// quotes the 401 it got — so it is redacted like a turn error.
+	message := redactSecrets(firstNonEmpty(notif.Message, notif.Summary))
 	if message == "" {
 		s.log.Debug("ignoring codex warning without a message", "method", method)
 		return

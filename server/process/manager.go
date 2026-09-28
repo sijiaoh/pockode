@@ -1295,6 +1295,9 @@ func turnInputFor(event agent.AgentEvent) (session.TurnInput, bool) {
 		in.Signal = session.SignalDone
 	case agent.ErrorEvent:
 		in.Signal = session.SignalFailed
+		if e.AuthFailure != nil {
+			in.Signal = session.SignalAuthFailed
+		}
 	case agent.InterruptedEvent:
 		in.Signal = session.SignalInterrupted
 	case agent.ProcessEndedEvent:

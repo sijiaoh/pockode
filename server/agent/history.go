@@ -20,13 +20,16 @@ type EventRecord struct {
 	// replay still has it; absent whenever it could not be resolved, which is
 	// ordinary (see ToolCallEvent.OriginToolUseID). What a client does with the
 	// join — or nothing at all — is the client's decision.
-	OriginToolUseID       string             `json:"origin_tool_use_id,omitempty"`
-	ToolResult            string             `json:"tool_result,omitempty"`
-	Contents              []ContentBlock     `json:"contents,omitempty"`
-	IsError               bool               `json:"is_error,omitempty"`
-	Error                 string             `json:"error,omitempty"`
-	Message               string             `json:"message,omitempty"`
-	Code                  string             `json:"code,omitempty"`
+	OriginToolUseID string         `json:"origin_tool_use_id,omitempty"`
+	ToolResult      string         `json:"tool_result,omitempty"`
+	Contents        []ContentBlock `json:"contents,omitempty"`
+	IsError         bool           `json:"is_error,omitempty"`
+	Error           string         `json:"error,omitempty"`
+	Message         string         `json:"message,omitempty"`
+	Code            string         `json:"code,omitempty"`
+	// AuthFailure marks an error or warning record as a credentials refusal;
+	// see the type.
+	AuthFailure           *AuthFailure       `json:"auth_failure,omitempty"`
 	RequestID             string             `json:"request_id,omitempty"`
 	PermissionSuggestions []PermissionUpdate `json:"permission_suggestions,omitempty"`
 	// Questions is a question_posted record's one question, in a one-element

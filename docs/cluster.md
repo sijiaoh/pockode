@@ -341,6 +341,19 @@ alternatives that were rejected on the way to it, are in
   shown in full so it can be written down rather than lost. A failed start
   leaves the sheet, the typed password and the reason on screen. Nothing in the
   frontend keeps the password between starts, in storage or in memory.
+- **No AI CLI sign-in.** Every node on one machine shares the CLIs'
+  credentials, so signing Claude or Codex in or out from any node's Pockode
+  (Settings → CLI sign-in) does it for all of them; the cluster frontend has
+  no screen of its own for it ([cli-login-ui.md](cli-login-ui.md#cluster)).
+  They share because every node inherits the manager's environment, and
+  Pockode sets neither `CLAUDE_CONFIG_DIR` nor `CODEX_HOME`, so each CLI finds
+  the same stored credentials. Sessions that are already running pick up the
+  new credentials on their next message, with no restart. A Pockode started
+  outside the cluster as another OS user, or with either variable set
+  differently, has credentials of its own and needs its own sign-in. Each node
+  still runs its own sign-in flows, so two nodes can sign the same CLI in at
+  once; the one that finishes last wins
+  ([cli-auth.md](code/cli-auth.md#one-per-cli-owned-by-the-server)).
 
 ### Available Methods
 

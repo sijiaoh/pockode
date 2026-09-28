@@ -40,6 +40,13 @@ export interface InputBarProps {
 	 */
 	turnOpen?: boolean;
 	onStop?: () => void;
+	/**
+	 * Bumped when the host has just put something into the draft for the user
+	 * to go on from (a failed turn's message, back after signing in). Answered
+	 * like a session change: focus where a physical keyboard is likely, nothing
+	 * where focusing would raise an on-screen keyboard over the conversation.
+	 */
+	focusRequest?: number;
 }
 
 export interface ModeSelectorProps {

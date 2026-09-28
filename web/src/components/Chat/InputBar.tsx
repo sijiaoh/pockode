@@ -37,6 +37,8 @@ interface Props {
 	 * passes one prop set to whichever bar is installed.
 	 */
 	turnOpen?: boolean;
+	/** See `InputBarProps.focusRequest`. */
+	focusRequest?: number;
 }
 
 // Slash command pattern per Claude Code naming conventions.
@@ -48,6 +50,7 @@ function InputBar({
 	onSend,
 	canSend = true,
 	disabled = false,
+	focusRequest = 0,
 }: Props) {
 	const input = useInputStore((state) => state.inputs[sessionId] ?? "");
 	const isPrimaryPointerCoarse = useHasCoarsePointer();
@@ -92,11 +95,13 @@ function InputBar({
 	// question (a touchscreen laptop is driven by its trackpad and does want
 	// focus), so this is `hasCoarsePointer`, not the any-pointer gate hit areas
 	// use.
-	// biome-ignore lint/correctness/useExhaustiveDependencies: intentionally re-run when sessionId changes
+	//
+	// A focus request is answered the same way, for the same reason.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: intentionally re-run when sessionId changes or focus is requested
 	useEffect(() => {
 		if (disabled) return;
 		if (!isPrimaryPointerCoarse) textareaRef.current?.focus();
-	}, [sessionId, disabled]);
+	}, [sessionId, disabled, focusRequest]);
 
 	useEffect(() => {
 		if (!isPaletteOpen) return;

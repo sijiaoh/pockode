@@ -30,9 +30,16 @@ import type {
 	QuestionAnswerRecord,
 } from "../../types/message";
 import type { OverlayState, WorkSegment } from "../../types/overlay";
+import type { AgentType } from "../../types/settings";
 import { resolveForkAnchor } from "../../utils/forkAnchor";
 import { buildForkTitle } from "../../utils/forkTitle";
 import { parsePockodeCommand } from "../../utils/pockodeCommand";
+import {
+	type SendAgainTarget,
+	sendAgainTarget,
+	sendAgainText,
+} from "../../utils/sendAgain";
+import CliLoginSheet from "../CliLogin/CliLoginSheet";
 import { FileEditor, FileView } from "../Files";
 import { CommitDiffView, CommitFileView, CommitView, DiffView } from "../Git";
 import MainContainer from "../Layout/MainContainer";
@@ -460,6 +467,47 @@ function ChatPanel({
 		},
 		[forkSession, sessionId, onSelectSession],
 	);
+
+	// The CLI being signed in from a failed turn's notice, and that turn. Held
+	// here for the fork sheet's reason: the sign-in belongs to the session, not
+	// to the bubble it was opened from.
+	const [signInTarget, setSignInTarget] = useState<
+		(SendAgainTarget & { agent: AgentType; sessionId: string }) | null
+	>(null);
+	const [inputFocusRequest, setInputFocusRequest] = useState(0);
+	// Read rather than subscribed, and inside the handler so it stays stable for
+	// the memoized bubbles: the turn's place in history is taken at the press.
+	const messagesRef = useRef(messages);
+	messagesRef.current = messages;
+	const handleSignIn = useCallback(
+		(agent: AgentType, messageId: string) => {
+			setSignInTarget({
+				agent,
+				sessionId,
+				...sendAgainTarget(messagesRef.current, messageId),
+			});
+		},
+		[sessionId],
+	);
+	const handleCloseSignIn = useCallback(() => setSignInTarget(null), []);
+	const hasDraft = useInputStore((state) => !!state.inputs[sessionId]);
+	// Read against the transcript as it is now, not as it was when the sheet
+	// opened: a turn that has since been followed by another is not the latest,
+	// and one that was still retrying may have failed since. Only in the session
+	// it was opened from: the panel outlives a session switch (a swipe back while
+	// the sheet is up), and a history seq means nothing in another session.
+	const resendText =
+		signInTarget && signInTarget.sessionId === sessionId
+			? sendAgainText(messages, signInTarget)
+			: undefined;
+	const handleSendAgain = useCallback(() => {
+		if (resendText === undefined) return;
+		inputActions.set(sessionId, resendText);
+		setSignInTarget(null);
+		// In the same commit as the sheet closing, whose cleanup hands focus
+		// back to the notice's button first; the bar's effect runs after it.
+		setInputFocusRequest((n) => n + 1);
+	}, [resendText, sessionId]);
 
 	// Whether the answer panel is open. Held rather than derived from
 	// `unanswered.length`, which is the obvious shortcut and a lossy one: the
@@ -910,6 +958,7 @@ function ChatPanel({
 						? handleStartFork
 						: undefined
 				}
+				onSignIn={isReadOnly ? undefined : handleSignIn}
 			/>
 		);
 	};
@@ -1186,6 +1235,21 @@ function ChatPanel({
 							onClose={handleCloseFork}
 						/>
 					)}
+					{signInTarget && (
+						<CliLoginSheet
+							agent={signInTarget.agent}
+							onClose={handleCloseSignIn}
+							sendAgain={
+								resendText === undefined
+									? undefined
+									: {
+											text: resendText,
+											draftKept: hasDraft,
+											onSendAgain: handleSendAgain,
+										}
+							}
+						/>
+					)}
 				</CoveredSurface>
 				{/* The keyboard is in one field at a time, and while this is
 				    collapsed it is in the card's. Unmounting is safe for the same
@@ -1206,6 +1270,7 @@ function ChatPanel({
 							disabled={!isSessionResolved}
 							turnOpen={turnOpen}
 							onStop={handleInterrupt}
+							focusRequest={inputFocusRequest}
 						/>
 					))}
 			</MainContainer>

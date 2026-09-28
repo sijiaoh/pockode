@@ -3,6 +3,8 @@ package agent
 import (
 	"encoding/json"
 	"time"
+
+	"github.com/pockode/server/session"
 )
 
 // EventType defines the type of agent event.
@@ -407,6 +409,10 @@ func (e ToolActivityEvent) ToRecord() EventRecord {
 type WarningEvent struct {
 	Message string
 	Code    string
+	// AuthFailure is set on a warning that says the CLI was refused for its
+	// credentials while the turn carries on (a retry), so the client can offer a
+	// way to sign in before the turn gives up. See AuthFailure.
+	AuthFailure *AuthFailure
 }
 
 func (WarningEvent) EventType() EventType { return EventTypeWarning }
@@ -414,21 +420,40 @@ func (WarningEvent) isAgentEvent()        {}
 
 func (e WarningEvent) ToRecord() EventRecord {
 	return EventRecord{
-		Type:    e.EventType(),
-		Message: e.Message,
-		Code:    e.Code,
+		Type:        e.EventType(),
+		Message:     e.Message,
+		Code:        e.Code,
+		AuthFailure: e.AuthFailure,
 	}
+}
+
+// AuthFailure marks a record as the CLI being refused for its credentials — not
+// signed in, a login that expired, a key the provider rejected — and names the
+// CLI, which is what a client needs to offer the right sign-in from the record.
+//
+// It says what happened on this turn and nothing more. Whether the CLI is signed
+// in now, or whether its credentials are Pockode's to fix at all (a key in the
+// environment is not), is live state the client reads from cli_auth.status —
+// see docs/cli-login-ui.md#from-the-chat.
+//
+// Set by the adapter from the CLI's structured signal, never from its text.
+type AuthFailure struct {
+	Agent session.AgentType `json:"agent"`
 }
 
 type ErrorEvent struct {
 	Error string
+	// AuthFailure is set when the turn failed because the CLI was refused for
+	// its credentials. It also changes what the turn ended as
+	// (session.OutcomeAuthFailed).
+	AuthFailure *AuthFailure
 }
 
 func (ErrorEvent) EventType() EventType { return EventTypeError }
 func (ErrorEvent) isAgentEvent()        {}
 
 func (e ErrorEvent) ToRecord() EventRecord {
-	return EventRecord{Type: e.EventType(), Error: e.Error}
+	return EventRecord{Type: e.EventType(), Error: e.Error, AuthFailure: e.AuthFailure}
 }
 
 type DoneEvent struct{}

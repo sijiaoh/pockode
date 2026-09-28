@@ -325,6 +325,17 @@ func TestProcess_TurnStateTransitions(t *testing.T) {
 			wantTurn: turnShape{phase: session.PhaseIdle, outcome: session.OutcomeFailed},
 		},
 		{
+			// Kept apart from failed: the work engine stops on it instead of
+			// nudging, because nothing the agent does can fix credentials.
+			name: "an auth failure ends the turn as auth_failed",
+			events: []agent.AgentEvent{agent.ErrorEvent{
+				Error:       "Not logged in",
+				AuthFailure: &agent.AuthFailure{Agent: session.AgentTypeClaude},
+			}},
+			want:     []ProcessState{ProcessStateIdle},
+			wantTurn: turnShape{phase: session.PhaseIdle, outcome: session.OutcomeAuthFailed},
+		},
+		{
 			name:   "permission request pauses the turn",
 			events: []agent.AgentEvent{agent.PermissionRequestEvent{RequestID: "r1"}},
 			// Narrowed to idle — nothing is being produced, so the session goes

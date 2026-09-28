@@ -10,6 +10,7 @@ import {
 import { openAssistantIndex } from "../../lib/messageReducer";
 import { useChatUIConfig } from "../../lib/registries/chatUIRegistry";
 import type { Message, PermissionRequest } from "../../types/message";
+import type { AgentType } from "../../types/settings";
 import { Spinner } from "../ui";
 import ForkOriginBanner from "./ForkOriginBanner";
 import MessageItem, {
@@ -84,6 +85,8 @@ interface Props {
 	onOpenSession?: (sessionId: string) => void;
 	/** Must be stable: it reaches the memoized `MessageItem`. */
 	onForkMessage?: (messageId: string) => void;
+	/** Must be stable: it reaches the memoized `MessageItem`. */
+	onSignIn?: (agent: AgentType, messageId: string) => void;
 	/**
 	 * The transcript belongs to another worktree and can only be read. Only the
 	 * empty state needs telling: everything else here already goes quiet when
@@ -111,6 +114,7 @@ function MessageList({
 	forkedFromSessionId,
 	onOpenSession,
 	onForkMessage,
+	onSignIn,
 	isReadOnly = false,
 }: Props) {
 	const { EmptyState: CustomEmptyState } = useChatUIConfig();
@@ -383,6 +387,7 @@ function MessageList({
 									onOpenWorkDetail={onOpenWorkDetail}
 									onOpenFile={onOpenFile}
 									onForkMessage={onForkMessage}
+									onSignIn={onSignIn}
 								/>
 							</div>
 						);
