@@ -40,12 +40,26 @@ function CommandPalette({ commands, selectedIndex, onSelect, filter }: Props) {
 							role="option"
 							aria-selected={index === selectedIndex}
 						>
-							<span className=" text-th-text-primary">
-								/<HighlightedText text={cmd.name} highlight={filter} />
+							<span className="flex min-w-0 flex-1 flex-col">
+								<span className="flex items-center gap-2">
+									<span className="text-th-text-primary">
+										/<HighlightedText text={cmd.name} highlight={filter} />
+									</span>
+									{cmd.isPockode && (
+										<span className="shrink-0 rounded bg-th-accent/20 px-1.5 py-0.5 text-xs text-th-text-primary">
+											Pockode
+										</span>
+									)}
+									{!cmd.isBuiltin && !cmd.isPockode && (
+										<span className="text-sm text-th-text-muted">(custom)</span>
+									)}
+								</span>
+								{cmd.description && (
+									<span className="truncate text-xs text-th-text-muted">
+										{cmd.description}
+									</span>
+								)}
 							</span>
-							{!cmd.isBuiltin && (
-								<span className="text-sm text-th-text-muted">(custom)</span>
-							)}
 						</button>
 					))}
 				</div>

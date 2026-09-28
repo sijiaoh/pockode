@@ -5,15 +5,26 @@ import type {
 	MessageParams,
 	MessageResult,
 	PermissionResponseParams,
+	PockodeCommandInvocation,
 	QuestionAnswerParams,
 } from "../../types/message";
-import { readHistorySeq } from "../messageReducer";
+import { normalizeCommand, readHistorySeq } from "../messageReducer";
+
+/** What the server said about a message it accepted; see `MessageResult`. */
+export interface SentMessage {
+	seq?: HistorySeq;
+	/**
+	 * Present only when the message invoked a Pockode command: the prompt the
+	 * agent was sent in its place, and the command as the server parsed it.
+	 */
+	expanded?: { content: string; command: PockodeCommandInvocation };
+}
 
 export interface ChatActions {
 	/**
 	 * Resolves with the seq the server gave the message, so the caller can name
-	 * that record — undefined when it has no address to give (see
-	 * `MessageResult`), which is not a failure.
+	 * that record — absent when it has no address to give (see `MessageResult`),
+	 * which is not a failure.
 	 */
 	sendMessage: (
 		sessionId: string,
@@ -25,7 +36,7 @@ export interface ChatActions {
 		 * see `MessageParams.answering`.
 		 */
 		answering?: QuestionAnswerParams[],
-	) => Promise<HistorySeq | undefined>;
+	) => Promise<SentMessage>;
 	interrupt: (sessionId: string) => Promise<void>;
 	permissionResponse: (params: PermissionResponseParams) => Promise<void>;
 }
@@ -54,7 +65,7 @@ export function createChatActions(
 			sessionId: string,
 			content: string,
 			answering?: QuestionAnswerParams[],
-		): Promise<HistorySeq | undefined> => {
+		): Promise<SentMessage> => {
 			const result = (await requireClient(getAgentStartClient).request(
 				"chat.message",
 				{
@@ -67,7 +78,14 @@ export function createChatActions(
 			// it is the same field with the same rule: a server too old to send one
 			// answers with an empty object, and the missing field must stay absent
 			// rather than become a seq of 0, which names no record.
-			return readHistorySeq(result);
+			const seq = readHistorySeq(result);
+			const command = normalizeCommand(result?.command);
+			return {
+				...(seq !== undefined ? { seq } : {}),
+				...(command && typeof result?.content === "string"
+					? { expanded: { content: result.content, command } }
+					: {}),
+			};
 		},
 
 		interrupt: async (sessionId: string): Promise<void> => {

@@ -22,7 +22,11 @@ import {
 	selectSessionDetail,
 	useSessionDetailStore,
 } from "../lib/sessionDetailStore";
-import { type ConnectionStatus, useWSStore } from "../lib/wsStore";
+import {
+	type ConnectionStatus,
+	isInvalidParamsRejection,
+	useWSStore,
+} from "../lib/wsStore";
 import type {
 	AssistantMessage,
 	ChatMessagesSubscribeResult,
@@ -38,6 +42,7 @@ import type {
 import type { AgentType } from "../types/settings";
 import { toAnswerParams } from "../utils/answerMessage";
 import { isTypedByUser } from "../utils/messageSource";
+import { parsePockodeCommand } from "../utils/pockodeCommand";
 import { generateUUID } from "../utils/uuid";
 import { useSubscription } from "./useSubscription";
 import type { ViewedSession } from "./useViewedSession";
@@ -131,7 +136,10 @@ interface UseChatMessagesReturn {
 	 * is all-or-nothing: the server validates every entry before delivering
 	 * anything, and a refusal leaves the transcript exactly as it was — so this
 	 * rethrows for those rather than reporting into the transcript, because the
-	 * surface that has to hear about it is the sheet holding the drafts.
+	 * surface that has to hear about it is the sheet holding the drafts. A
+	 * Pockode command (`/pockode-…`) the server refuses is taken back too, and
+	 * rethrows for the same reason: the one who has to hear is the input it was
+	 * typed into.
 	 */
 	sendUserMessage: (
 		content: string,
@@ -159,6 +167,7 @@ interface UseChatMessagesReturn {
 // Actions are stable references - get once at module level
 const {
 	sendMessage,
+	invalidateCommandCache,
 	chatMessagesSubscribe,
 	chatMessagesHistory,
 	chatMessagesUnsubscribe,
@@ -581,15 +590,20 @@ export function useChatMessages({
 			// empty list would otherwise echo a bubble drawn from no answers, send
 			// no `answering`, and take the wrong branch on failure.
 			const answers = answering?.length ? answering : undefined;
+			// Drawn as the command row from the first frame rather than as a bubble
+			// that turns into one: the prompt it stands for is the server's to
+			// expand, and arrives with the reply.
+			const command = parsePockodeCommand(content) ?? undefined;
 			const userMessageId = generateUUID();
 			const assistantMessageId = generateUUID();
 
 			const userMessage: UserMessage = {
 				id: userMessageId,
 				role: "user",
-				content,
+				content: command ? "" : content,
 				status: "complete",
 				createdAt: new Date(),
+				...(command ? { command } : {}),
 				// Echoed with the bubble so an answer draws as answers rather than
 				// as the flattened text the agent reads.
 				...(answers ? { answering: answers } : {}),
@@ -619,19 +633,33 @@ export function useChatMessages({
 				// Without it the bubble just added could not be forked from until the
 				// session was reloaded. An older server sends none, which simply leaves
 				// the message unaddressable, as every locally sent one used to be.
-				const seq = await sendMessage(
+				const { seq, expanded } = await sendMessage(
 					sessionId,
 					content,
 					answers && toAnswerParams(answers),
 				);
 				setMessages((prev) => {
-					const stamped = stampMessageAnchorSeq(prev, userMessageId, seq);
+					// The server's parse and prompt over the echo's: the sender is left
+					// out of the broadcast, so this is its one copy of what the agent
+					// was actually sent.
+					const filled = expanded
+						? prev.map((m) =>
+								m.id === userMessageId && m.role === "user"
+									? { ...m, ...expanded }
+									: m,
+							)
+						: prev;
+					const stamped = stampMessageAnchorSeq(filled, userMessageId, seq);
 					// The cards this message settled, and this client has to settle
 					// them itself: the sender is left out of the broadcast that
 					// carries the record, so nothing else is coming to do it. Only
 					// after the send — a refused answer settles nothing.
 					return answers ? applyAnswering(stamped, answers) : stamped;
 				});
+				// Not at click time: the server records a slash command's use only
+				// once the send has gone through, and a list fetched in between would
+				// be cached without it.
+				if (content.startsWith("/")) invalidateCommandCache();
 				return true;
 			} catch (error) {
 				console.error("Failed to send message:", error);
@@ -640,7 +668,14 @@ export function useChatMessages({
 				// is taken back out rather than left looking sent with a failure
 				// pinned under it. The sheet is where the reason belongs: it holds
 				// the drafts, and it is what the user is looking at.
-				if (answers) {
+				//
+				// A command the server refused (an unknown name, a worktree with no
+				// branch, or a send refused as any message's would be) is gone the
+				// same way, and the caller restores what was typed and says why.
+				// Only a refusal: a timeout or a dropped socket may have been
+				// delivered, and handing the draft back would invite running the
+				// command twice — that takes the ordinary path below.
+				if (answers || (command && isInvalidParamsRejection(error))) {
 					setMessages((prev) =>
 						prev.filter(
 							(m) => m.id !== userMessageId && m.id !== assistantMessageId,

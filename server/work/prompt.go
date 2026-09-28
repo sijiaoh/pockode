@@ -82,6 +82,7 @@ type promptTemplates struct {
 	WatchedStoryQuestion       string `yaml:"watched_story_question"`
 	StepAdvanceSection         string `yaml:"step_advance_section"`
 	CurrentStepSection         string `yaml:"current_step_section"`
+	PockodeLeadCommand         string `yaml:"pockode_lead_command"`
 }
 
 var prompts promptTemplates
@@ -410,4 +411,16 @@ func BuildReopenMessage(w Work) string {
 	}
 
 	return base + "\n\n" + nudge
+}
+
+// BuildPockodeLeadPrompt is what /pockode-lead expands to. It lives with the
+// work prompts because it is one: it tells an agent how to drive work through
+// Pockode, and its rules have to stay in step with the ones the engine gives
+// the stories it starts. branch is where finished stories are merged; args is
+// what the user added after the command, empty for none.
+func BuildPockodeLeadPrompt(branch, args string) string {
+	return render(prompts.PockodeLeadCommand, map[string]string{
+		"Branch": branch,
+		"Args":   args,
+	})
 }

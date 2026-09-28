@@ -7,7 +7,7 @@ export {
 	type AttachmentActions,
 	createAttachmentActions,
 } from "./attachment";
-export { type ChatActions, createChatActions } from "./chat";
+export { type ChatActions, createChatActions, type SentMessage } from "./chat";
 export {
 	type Command,
 	type CommandActions,

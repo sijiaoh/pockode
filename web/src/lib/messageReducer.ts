@@ -8,6 +8,7 @@ import type {
 	Message,
 	MessageOrigin,
 	PermissionUpdate,
+	PockodeCommandInvocation,
 	QuestionAnswerRecord,
 	QuestionRecordStatus,
 	ServerNotification,
@@ -65,6 +66,19 @@ function normalizeQuestion(raw: AskUserQuestion | undefined): AskUserQuestion {
 function normalizeAnswering(raw: unknown): QuestionAnswerRecord[] | undefined {
 	if (!Array.isArray(raw) || raw.length === 0) return undefined;
 	return raw as QuestionAnswerRecord[];
+}
+
+// A message record's `command`, kept only when it names one: anything else
+// would draw a command row with no command in it. Also reads the same field on
+// the `chat.message` reply.
+export function normalizeCommand(
+	raw: unknown,
+): PockodeCommandInvocation | undefined {
+	const fields = raw as Record<string, unknown> | null | undefined;
+	if (typeof fields?.name !== "string" || !fields.name) return undefined;
+	return typeof fields.args === "string" && fields.args
+		? { name: fields.name, args: fields.args }
+		: { name: fields.name };
 }
 
 // A cancelled question is stored with a nil answers map, and `omitempty` on the
@@ -143,6 +157,8 @@ export type NormalizedEvent =
 			meta?: SystemMessageMeta;
 			/** The posted questions this message answers; see QuestionAnswerRecord. */
 			answering?: QuestionAnswerRecord[];
+			/** The Pockode command `content` was expanded from. */
+			command?: PockodeCommandInvocation;
 	  }
 	| {
 			type: "permission_request";
@@ -286,6 +302,7 @@ export function normalizeEvent(
 				subtype: record.subtype as string | undefined,
 				meta: record.meta as SystemMessageMeta | undefined,
 				answering: normalizeAnswering(record.answering),
+				command: normalizeCommand(record.command),
 			};
 		case "permission_request":
 			return {
@@ -709,6 +726,7 @@ export function applyServerEvent(
 			meta: event.meta,
 			anchorSeq: seq,
 			answering: event.answering,
+			command: event.command,
 		});
 	}
 
@@ -1639,6 +1657,7 @@ interface UserMessageOptions {
 	anchorSeq?: HistorySeq;
 	/** The posted questions this message answers; see QuestionAnswerRecord. */
 	answering?: QuestionAnswerRecord[];
+	command?: PockodeCommandInvocation;
 }
 
 /**
@@ -1737,6 +1756,7 @@ export function applyUserMessage(
 			: {}),
 		...(options?.source === "agent" ? { source: options.source } : {}),
 		...(options?.answering ? { answering: options.answering } : {}),
+		...(options?.command ? { command: options.command } : {}),
 	};
 
 	return appendUserMessage(messages, userMessage, () =>

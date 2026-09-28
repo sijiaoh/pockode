@@ -5,6 +5,7 @@ import type {
 	UserMessage,
 } from "../types/message";
 import { hasMessageActions } from "./messageActions";
+import { formatPockodeCommand } from "./pockodeCommand";
 
 /**
  * Why fork cannot run on a message it otherwise applies to.
@@ -153,7 +154,13 @@ export function resolveForkAnchor(
 		anchorSeq,
 		droppedCount,
 		// The same question `dropsAnchor` asked, asked again: a boolean does not
-		// carry the narrowing that reaching `content` needs.
-		droppedText: message.role === "user" ? message.content : undefined,
+		// carry the narrowing that reaching `content` needs. A command goes back
+		// as typed, not as the prompt it expanded to.
+		droppedText:
+			message.role !== "user"
+				? undefined
+				: message.command
+					? formatPockodeCommand(message.command)
+					: message.content,
 	};
 }

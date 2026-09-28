@@ -7,6 +7,7 @@ import (
 
 	"github.com/pockode/server/agent"
 	"github.com/pockode/server/chat"
+	"github.com/pockode/server/command"
 	"github.com/pockode/server/process"
 	"github.com/pockode/server/rpc"
 	"github.com/pockode/server/session"
@@ -134,16 +135,54 @@ func (h *rpcMethodHandler) handleMessage(ctx context.Context, conn *jsonrpc2.Con
 
 	log := h.log.With("sessionId", params.SessionID)
 
-	h.recordCommandIfSlash(params.Content)
+	// Expanded before anything is sent, so a command that cannot be expanded
+	// leaves no trace: it is refused, and never reaches the agent as the text the
+	// user typed.
+	content := params.Content
+	cmd, isCommand := command.ParsePockode(params.Content)
+	if isCommand {
+		if len(params.Answering) > 0 {
+			// An answer is prose written for the questions it answers, and a
+			// command's prompt is not that; which of the two the user meant is
+			// not the server's to guess.
+			h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams,
+				"A Pockode command cannot be sent together with answers. Send the answers first, then the command on its own.")
+			return
+		}
+		expanded, err := command.ExpandPockode(cmd, command.PockodeEnv{WorkDir: wt.WorkDir})
+		if err != nil {
+			if errors.Is(err, command.ErrUnknownPockodeCommand) || errors.Is(err, command.ErrNoBranch) {
+				h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, err.Error())
+			} else {
+				h.replyInternalError(ctx, conn, req.ID, "failed to expand /"+cmd.Name, err, "sessionId", params.SessionID)
+			}
+			return
+		}
+		content = expanded
+	}
 
-	log.Info("received prompt", "length", len(params.Content))
+	if isCommand {
+		log.Info("received Pockode command", "command", cmd.Name, "length", len(content))
+	} else {
+		log.Info("received prompt", "length", len(content))
+	}
 
-	seq, err := wt.ChatClient.SendMessageAnswering(ctx, params.SessionID, params.Content,
-		chatAnswers(params.Answering), h.state.getNotifier())
+	var seq session.HistorySeq
+	var err error
+	if isCommand {
+		seq, err = wt.ChatClient.SendCommandExcluding(ctx, params.SessionID, content, cmd, h.state.getNotifier())
+	} else {
+		seq, err = wt.ChatClient.SendMessageAnswering(ctx, params.SessionID, content,
+			chatAnswers(params.Answering), h.state.getNotifier())
+	}
 	if err != nil {
 		h.replyErrorForChat(ctx, conn, req, params.SessionID, err)
 		return
 	}
+
+	// Only once the message is with the agent: the palette offers what was
+	// used, and a command that was refused or never delivered was not.
+	h.recordCommandIfSlash(params.Content)
 
 	// After the send, and so in all three of these handlers: what resumes a work
 	// is the agent having been handed something to go on. A send that failed —
@@ -165,7 +204,11 @@ func (h *rpcMethodHandler) handleMessage(ctx context.Context, conn *jsonrpc2.Con
 
 	// This connection is the one excluded from the broadcast, so the reply is
 	// where it learns its own message's seq (see rpc.MessageResult).
-	if err := conn.Reply(ctx, req.ID, rpc.MessageResult{Seq: seq}); err != nil {
+	result := rpc.MessageResult{Seq: seq}
+	if isCommand {
+		result.Content, result.Command = content, &cmd
+	}
+	if err := conn.Reply(ctx, req.ID, result); err != nil {
 		log.Error("failed to send response", "error", err)
 	}
 }

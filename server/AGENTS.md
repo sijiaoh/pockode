@@ -45,7 +45,7 @@ apiroute/               # 本进程 API 路径判定（SPA handler 与 relay 代
 attachments/            # 按 session 存放事件里以 id 引用的内容（内容寻址）
 authsession/            # 登录会话：密码换取的 session token + 密码指纹（sessions.json）
 chat/                   # Chat 客户端
-command/                # 命令存储
+command/                # 命令存储 + Pockode 命令（`/pockode-*` 的解析与展开，见 docs/pockode-commands.md）
 contents/               # 文件内容获取
 filestore/              # 文件存储基础设施（原子写 / 文件锁 / JSONL / 变更监听）
 filetransfer/           # 文件上传 / 下载 HTTP 端点

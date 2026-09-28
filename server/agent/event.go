@@ -788,6 +788,18 @@ type MessageEvent struct {
 	// — and this is the structured copy a client draws the bubble from, so a
 	// bubble never has to parse the prose back apart.
 	Answering []QuestionAnswer
+	// Command is the Pockode command the user typed, when Content is what it
+	// expanded to rather than what they wrote. See CommandInvocation.
+	Command *CommandInvocation
+}
+
+// CommandInvocation is a Pockode command as the user typed it: the name without
+// its slash ("pockode-lead"), and whatever followed it. It is what they sent,
+// and nothing more — the prompt the agent read is the message's Content, and
+// what the command's template says today may no longer be what it said then.
+type CommandInvocation struct {
+	Name string `json:"name"`
+	Args string `json:"args,omitempty"`
 }
 
 func (MessageEvent) EventType() EventType { return EventTypeMessage }
@@ -802,6 +814,7 @@ func (e MessageEvent) ToRecord() EventRecord {
 		Meta:      e.Meta,
 		Answering: e.Answering,
 		MessageID: e.MessageID,
+		Command:   e.Command,
 	}
 }
 

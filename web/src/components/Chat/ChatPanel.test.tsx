@@ -8,6 +8,7 @@ import {
 	within,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { JSONRPCErrorCode, JSONRPCErrorException } from "json-rpc-2.0";
 import { useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SHORT_VIEWPORT_QUERY } from "../../hooks/useShortViewport";
@@ -16,6 +17,7 @@ import { useAgentRoleStore } from "../../lib/agentRoleStore";
 import { clearAnswerIntent, requestAnswerPanel } from "../../lib/answerIntent";
 import { useInputStore } from "../../lib/inputStore";
 import { useQuestionDraftStore } from "../../lib/questionDraftStore";
+import type { SentMessage } from "../../lib/rpc";
 import { useSessionDetailStore } from "../../lib/sessionDetailStore";
 import { useSessionStore } from "../../lib/sessionStore";
 import { useWorkStore } from "../../lib/workStore";
@@ -81,11 +83,9 @@ vi.mock("../Project", () => ({
 
 // Use vi.hoisted to ensure mockState is available when vi.mock factory runs
 const mockState = vi.hoisted(() => ({
-	// Mirrors ChatActions.sendMessage: it resolves with the seq the server gave
-	// the message, or undefined when there is no address to give.
-	sendMessage: vi.fn(
-		(): Promise<number | undefined> => Promise.resolve(undefined),
-	),
+	// Mirrors ChatActions.sendMessage: it resolves with what the server said
+	// about the message — its seq, when it has an address to give.
+	sendMessage: vi.fn((): Promise<SentMessage> => Promise.resolve({})),
 	interrupt: vi.fn(() => Promise.resolve()),
 	permissionResponse: vi.fn(() => Promise.resolve()),
 	questionResponse: vi.fn(() => Promise.resolve()),
@@ -114,7 +114,7 @@ const mockState = vi.hoisted(() => ({
 	sessionViewGet: vi.fn(),
 	sessionViewHistory: vi.fn(),
 	/** Whether the server *refused* a read, as opposed to failing to answer. */
-	isInvalidParamsRejection: vi.fn(() => false),
+	isInvalidParamsRejection: vi.fn((_error: unknown) => false),
 	// The agents the server declares. The fork UI here is tested on an agent that
 	// can be forked; the refusal has its own test below.
 	listAgents: vi.fn(() =>
@@ -232,7 +232,7 @@ describe("ChatPanel", () => {
 
 	beforeEach(() => {
 		vi.clearAllMocks();
-		mockState.sendMessage.mockResolvedValue(undefined);
+		mockState.sendMessage.mockResolvedValue({});
 		mockState.onNotification = null;
 		mockState.uuidCounter = 0;
 		mockState.mockHistory = [];
@@ -1666,6 +1666,139 @@ describe("ChatPanel", () => {
 			await waitFor(() => {
 				expect(screen.getByText(/not found in \$PATH/)).toBeInTheDocument();
 			});
+		});
+	});
+
+	// A refused command was never sent anywhere, so nothing may look sent: the
+	// echo goes, what was typed comes back, and the server's reason is shown.
+	describe("a refused Pockode command", () => {
+		const refusal = (message: string) =>
+			new JSONRPCErrorException(message, JSONRPCErrorCode.InvalidParams);
+		const refuse = () =>
+			mockState.sendMessage.mockRejectedValueOnce(
+				refusal(
+					'Unknown Pockode command "/pockode-foo". Available: /pockode-lead',
+				),
+			);
+
+		beforeEach(() => {
+			mockState.isInvalidParamsRejection.mockImplementation(
+				(error: unknown) =>
+					error instanceof JSONRPCErrorException &&
+					error.code === JSONRPCErrorCode.InvalidParams,
+			);
+		});
+
+		it("restores the draft and shows the server's reason", async () => {
+			refuse();
+			const user = userEvent.setup();
+			render(<ChatPanel {...defaultProps} />);
+			await waitForHistoryLoad();
+
+			const textarea = screen.getByRole("textbox");
+			await user.type(textarea, "/pockode-foo do it");
+			await user.click(screen.getByRole("button", { name: /Send/ }));
+
+			expect(await screen.findByRole("alert")).toHaveTextContent(
+				'Unknown Pockode command "/pockode-foo"',
+			);
+			expect(textarea).toHaveValue("/pockode-foo do it");
+			expect(
+				screen.queryByRole("button", { name: /\/pockode-foo/ }),
+			).not.toBeInTheDocument();
+
+			await user.click(screen.getByRole("button", { name: "Dismiss error" }));
+			expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+		});
+
+		// The input already holds something new; the refusal must not overwrite it.
+		it("keeps whatever the user typed after sending", async () => {
+			let reject: (reason: Error) => void = () => {};
+			mockState.sendMessage.mockReturnValueOnce(
+				new Promise((_resolve, rejectSend) => {
+					reject = rejectSend;
+				}),
+			);
+			const user = userEvent.setup();
+			render(<ChatPanel {...defaultProps} />);
+			await waitForHistoryLoad();
+
+			const textarea = screen.getByRole("textbox");
+			await user.type(textarea, "/pockode-foo do it");
+			await user.click(screen.getByRole("button", { name: /Send/ }));
+			await user.type(textarea, "something else");
+			await act(async () => {
+				reject(refusal("Unknown Pockode command"));
+			});
+
+			expect(await screen.findByRole("alert")).toBeInTheDocument();
+			expect(textarea).toHaveValue("something else");
+		});
+
+		// A typo must not become the new session's name.
+		it("names a new chat only once the command is accepted", async () => {
+			const onUpdateTitle = vi.fn();
+			const user = userEvent.setup();
+			const { rerender } = render(
+				<ChatPanel
+					{...defaultProps}
+					sessionTitle="New Chat"
+					onUpdateTitle={onUpdateTitle}
+				/>,
+			);
+			await waitForHistoryLoad();
+
+			refuse();
+			await user.type(screen.getByRole("textbox"), "/pockode-foo x");
+			await user.click(screen.getByRole("button", { name: /Send/ }));
+			await screen.findByRole("alert");
+			expect(onUpdateTitle).not.toHaveBeenCalled();
+
+			rerender(
+				<ChatPanel
+					{...defaultProps}
+					sessionTitle="New Chat"
+					onUpdateTitle={onUpdateTitle}
+				/>,
+			);
+			await user.clear(screen.getByRole("textbox"));
+			await user.type(screen.getByRole("textbox"), "/pockode-lead x");
+			await user.click(screen.getByRole("button", { name: /Send/ }));
+			await waitFor(() =>
+				expect(onUpdateTitle).toHaveBeenCalledWith("/pockode-lead x"),
+			);
+		});
+
+		// The refusal belongs to the conversation it was sent from.
+		it("does not report the refusal in another session", async () => {
+			let reject: (reason: Error) => void = () => {};
+			mockState.sendMessage.mockReturnValueOnce(
+				new Promise((_resolve, rejectSend) => {
+					reject = rejectSend;
+				}),
+			);
+			const user = userEvent.setup();
+			const { rerender } = render(<ChatPanel {...defaultProps} />);
+			await waitForHistoryLoad();
+
+			await user.type(screen.getByRole("textbox"), "/pockode-foo do it");
+			await user.click(screen.getByRole("button", { name: /Send/ }));
+			rerender(<ChatPanel {...defaultProps} sessionId="elsewhere" />);
+			await waitForHistoryLoad();
+			await act(async () => {
+				reject(refusal("Unknown Pockode command"));
+			});
+
+			expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+			expect(useInputStore.getState().inputs[defaultProps.sessionId]).toBe(
+				"/pockode-foo do it",
+			);
+
+			rerender(<ChatPanel {...defaultProps} />);
+			await waitForHistoryLoad();
+			expect(await screen.findByRole("alert")).toHaveTextContent(
+				"Unknown Pockode command",
+			);
 		});
 	});
 
@@ -3476,7 +3609,7 @@ describe("ChatPanel", () => {
 		it("forks from a message this tab just sent, with no reload", async () => {
 			const user = userEvent.setup();
 			mockState.mockHistory = forkHistory;
-			mockState.sendMessage.mockResolvedValue(7);
+			mockState.sendMessage.mockResolvedValue({ seq: 7 });
 			mockState.forkSession.mockResolvedValue(forkedSession);
 
 			render(<ChatPanel {...defaultProps} onSelectSession={vi.fn()} />);

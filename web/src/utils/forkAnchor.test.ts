@@ -139,6 +139,25 @@ describe("resolveForkAnchor", () => {
 		).toBeUndefined();
 	});
 
+	// What the user typed is what they would send again; the prompt a command
+	// expanded to is the server's, and re-sending it would skip the command.
+	it("hands back a Pockode command as typed, not as its prompt", () => {
+		const messages: Message[] = [
+			userMessage({ id: "u1" }),
+			assistantMessage({ id: "a1" }),
+			userMessage({
+				id: "u2",
+				anchorSeq: 3,
+				content: "Lead the work…",
+				command: { name: "pockode-lead", args: "backend first" },
+			}),
+		];
+
+		expect(resolveForkAnchor(messages, "u2", false)?.droppedText).toBe(
+			"/pockode-lead backend first",
+		);
+	});
+
 	// A fork returns to before the anchor was sent, so a message the user typed
 	// is one of the things left behind rather than the last thing kept.
 	it("counts a user anchor itself as staying behind", () => {

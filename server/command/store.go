@@ -1,4 +1,5 @@
-// Package command manages slash command history and builtin command definitions.
+// Package command manages slash command history, the builtin command
+// definitions, and Pockode's own commands (see docs/pockode-commands.md).
 package command
 
 import (
@@ -6,6 +7,7 @@ import (
 	"regexp"
 	"slices"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -36,10 +38,15 @@ type RecentCommand struct {
 	UsedAt time.Time `json:"usedAt"`
 }
 
-// Command is the API response type with builtin flag.
+// Command is the API response type. A command is one of three kinds: a builtin
+// of the agent CLI (IsBuiltin), one of Pockode's own (IsPockode), or neither —
+// a user's custom command.
 type Command struct {
 	Name      string `json:"name"`
 	IsBuiltin bool   `json:"isBuiltin"`
+	IsPockode bool   `json:"isPockode"`
+	// Description is set for Pockode commands only.
+	Description string `json:"description,omitempty"`
 }
 
 // Store manages slash command history.
@@ -106,7 +113,8 @@ func (s *Store) persist() error {
 	return filestore.WriteFileAtomic(s.filePath(), data, 0644)
 }
 
-// List returns commands sorted by most recently used, with unused builtins appended at the end.
+// List returns commands sorted by most recently used, with unused Pockode
+// commands and then unused builtins appended at the end.
 func (s *Store) List() []Command {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -118,26 +126,43 @@ func (s *Store) List() []Command {
 	})
 
 	seen := make(map[string]bool)
-	commands := make([]Command, 0, len(sorted)+len(BuiltinCommands))
+	commands := make([]Command, 0, len(sorted)+len(PockodeCommands)+len(BuiltinCommands))
 	for _, rc := range sorted {
+		if strings.HasPrefix(rc.Name, PockodePrefix) && !isKnownPockode(rc.Name) {
+			// Sent before the prefix was Pockode's, or a command since removed:
+			// offering it now would only offer an error.
+			continue
+		}
 		seen[rc.Name] = true
-		commands = append(commands, Command{
-			Name:      rc.Name,
-			IsBuiltin: slices.Contains(BuiltinCommands, rc.Name),
-		})
+		commands = append(commands, newCommand(rc.Name))
+	}
+
+	for _, cmd := range PockodeCommands {
+		if !seen[cmd.Name] {
+			commands = append(commands, newCommand(cmd.Name))
+		}
 	}
 
 	for _, name := range BuiltinCommands {
 		if seen[name] {
 			continue
 		}
-		commands = append(commands, Command{
-			Name:      name,
-			IsBuiltin: true,
-		})
+		commands = append(commands, newCommand(name))
 	}
 
 	return commands
+}
+
+func isKnownPockode(name string) bool {
+	_, ok := findPockode(name)
+	return ok
+}
+
+func newCommand(name string) Command {
+	if cmd, ok := findPockode(name); ok {
+		return Command{Name: name, IsPockode: true, Description: cmd.Description}
+	}
+	return Command{Name: name, IsBuiltin: slices.Contains(BuiltinCommands, name)}
 }
 
 const maxRecentCommands = 1000

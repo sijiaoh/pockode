@@ -1,8 +1,16 @@
 import type { JSONRPCRequester } from "json-rpc-2.0";
 
+/**
+ * A slash command the palette offers. Three kinds, mutually exclusive:
+ * `isBuiltin` is the CLI's own, `isPockode` is one Pockode expands itself, and
+ * neither is the user's custom command.
+ */
 export interface Command {
 	name: string;
 	isBuiltin: boolean;
+	isPockode?: boolean;
+	/** Only Pockode's commands carry one. */
+	description?: string;
 }
 
 interface CommandListResult {

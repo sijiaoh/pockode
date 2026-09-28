@@ -6,6 +6,7 @@ import {
 	CircleHelp,
 	ExternalLink,
 	ListTodo,
+	SquareSlash,
 	X,
 } from "lucide-react";
 import { memo, useMemo, useState } from "react";
@@ -21,6 +22,7 @@ import type {
 	PermissionStatus,
 	PermissionUpdate,
 	PermissionUpdateDestination,
+	PockodeCommandInvocation,
 	QuestionAnswerRecord,
 	SystemMessageMeta,
 } from "../../types/message";
@@ -39,6 +41,7 @@ import QuestionRecordItem from "./QuestionRecordItem";
 import { anchorCandidateProps } from "./scrollAnchor";
 import TaskItem from "./TaskItem";
 import ToolCallItem from "./ToolCallItem";
+import { Section } from "./ToolOutcomeSections";
 import { ToolRow } from "./ToolRow";
 
 interface SystemItemProps {
@@ -788,6 +791,54 @@ function answerText(entry: QuestionAnswerRecord): string {
 	return [...(entry.answers ?? []), ...(text ? [text] : [])].join(" · ");
 }
 
+/**
+ * A Pockode command the user sent, drawn as the command they typed rather than
+ * as the prompt it expanded to: the template is the same every time, and what a
+ * reader wants is which command and what was added to it. The prompt is one tap
+ * away, as the agent read it — plain text, since Markdown would change how it
+ * looks.
+ */
+function PockodeCommandItem({
+	command,
+	content,
+}: {
+	command: PockodeCommandInvocation;
+	content: string;
+}) {
+	const [expanded, setExpanded] = useState(false);
+	return (
+		<div className="rounded bg-th-bg-secondary text-xs">
+			<ToolRow
+				expanded={expanded}
+				onToggle={() => setExpanded(!expanded)}
+				glyph={
+					<SquareSlash className="mt-0.5 size-3 shrink-0 text-th-text-muted" />
+				}
+				title={`/${command.name}`}
+				detail={command.args ?? ""}
+			/>
+			<CollapsibleBody expanded={expanded}>
+				<ScrollableContent className="max-h-[60vh] overflow-auto border-t border-th-border p-2">
+					<Section label="Sent to the agent">
+						{/* Empty only on this client's own echo, until the server's
+						    reply brings the prompt it expanded the command to — or
+						    for good, when the send failed without a reply. */}
+						{content ? (
+							<p className="whitespace-pre-wrap break-words text-th-text-primary">
+								{content}
+							</p>
+						) : (
+							<p className="text-th-text-muted">
+								Not received from the server.
+							</p>
+						)}
+					</Section>
+				</ScrollableContent>
+			</CollapsibleBody>
+		</div>
+	);
+}
+
 const MessageItem = memo(function MessageItem({
 	message,
 	sessionId,
@@ -860,6 +911,24 @@ const MessageItem = memo(function MessageItem({
 				</div>
 			) : (
 				event
+			);
+		}
+		if (message.command) {
+			const item = (
+				<PockodeCommandItem
+					command={message.command}
+					content={message.content}
+				/>
+			);
+			// Full-bleed like the lines above, so it keeps the slot for the same
+			// reason: the row has to end where the bubbles do.
+			return slot ? (
+				<div className="flex items-start gap-2">
+					<div className="min-w-0 flex-1">{item}</div>
+					{slot}
+				</div>
+			) : (
+				item
 			);
 		}
 		return (

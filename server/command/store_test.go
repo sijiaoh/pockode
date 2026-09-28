@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 )
@@ -43,16 +44,59 @@ func TestList_EmptyStore(t *testing.T) {
 
 	commands := store.List()
 
-	if len(commands) != len(BuiltinCommands) {
-		t.Errorf("expected %d commands, got %d", len(BuiltinCommands), len(commands))
+	var want []Command
+	for _, cmd := range PockodeCommands {
+		want = append(want, Command{Name: cmd.Name, IsPockode: true, Description: cmd.Description})
+	}
+	for _, name := range BuiltinCommands {
+		want = append(want, Command{Name: name, IsBuiltin: true})
+	}
+	if !slices.Equal(commands, want) {
+		t.Errorf("List() = %+v, want %+v", commands, want)
+	}
+}
+
+// A Pockode command the user has used sorts by recency like any other, and
+// keeps its kind and description there.
+func TestList_UsedPockodeCommandSortsByRecency(t *testing.T) {
+	store, err := NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
 	}
 
-	for i, cmd := range commands {
-		if cmd.Name != BuiltinCommands[i] {
-			t.Errorf("expected %s at index %d, got %s", BuiltinCommands[i], i, cmd.Name)
+	useAged(t, store, "help", time.Hour)
+	store.Use("pockode-lead")
+
+	commands := store.List()
+
+	if commands[0].Name != "pockode-lead" || !commands[0].IsPockode || commands[0].Description == "" {
+		t.Errorf("first = %+v, want pockode-lead as a described Pockode command", commands[0])
+	}
+	count := 0
+	for _, cmd := range commands {
+		if cmd.Name == "pockode-lead" {
+			count++
 		}
-		if !cmd.IsBuiltin {
-			t.Errorf("expected %s to be builtin", cmd.Name)
+	}
+	if count != 1 {
+		t.Errorf("pockode-lead listed %d times, want once", count)
+	}
+}
+
+// The prefix is Pockode's, so a name under it that is not a Pockode command —
+// one sent before the prefix was reserved, or a command since removed — would
+// only be offered to be refused.
+func TestList_OmitsUnknownPockodeNamesFromHistory(t *testing.T) {
+	store, err := NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	store.Use("pockode-gone")
+
+	for _, cmd := range store.List() {
+		if cmd.Name == "pockode-gone" {
+			t.Errorf("List() offers %+v", cmd)
 		}
 	}
 }
@@ -152,8 +196,8 @@ func TestUse_TrimsOldEntries(t *testing.T) {
 	store.Use("final")
 
 	commands := store.List()
-	if len(commands) > maxRecentCommands+len(BuiltinCommands) {
-		t.Errorf("expected at most %d commands, got %d", maxRecentCommands+len(BuiltinCommands), len(commands))
+	if len(commands) > maxRecentCommands+len(PockodeCommands)+len(BuiltinCommands) {
+		t.Errorf("expected at most %d commands, got %d", maxRecentCommands+len(PockodeCommands)+len(BuiltinCommands), len(commands))
 	}
 
 	// Verify newest entry is kept
@@ -236,8 +280,8 @@ func TestNewStore_CorruptFileIsQuarantined(t *testing.T) {
 	}
 
 	for _, cmd := range store.List() {
-		if !cmd.IsBuiltin {
-			t.Errorf("expected only builtins after corruption, got %s", cmd.Name)
+		if !cmd.IsBuiltin && !cmd.IsPockode {
+			t.Errorf("expected no history after corruption, got %s", cmd.Name)
 		}
 	}
 
@@ -334,7 +378,7 @@ func TestUse_InvalidName(t *testing.T) {
 	// Verify nothing was recorded
 	commands := store.List()
 	for _, cmd := range commands {
-		if !cmd.IsBuiltin {
+		if !cmd.IsBuiltin && !cmd.IsPockode {
 			t.Errorf("unexpected custom command recorded: %s", cmd.Name)
 		}
 	}

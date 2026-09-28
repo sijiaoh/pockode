@@ -1,6 +1,8 @@
 import { act, render, waitFor } from "@testing-library/react";
+import { JSONRPCErrorCode, JSONRPCErrorException } from "json-rpc-2.0";
 import { useLayoutEffect } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { SentMessage } from "../lib/rpc";
 import { useSessionDetailStore } from "../lib/sessionDetailStore";
 import { makeSessionDetail } from "../test/sessionFixtures";
 import type {
@@ -19,11 +21,10 @@ const mockState = vi.hoisted(() => ({
 	chatMessagesSubscribe: vi.fn(),
 	chatMessagesHistory: vi.fn(),
 	chatMessagesUnsubscribe: vi.fn(async () => {}),
-	// Mirrors ChatActions.sendMessage: it resolves with the seq the server gave
-	// the message, or undefined when there is no address to give.
-	sendMessage: vi.fn(
-		(): Promise<number | undefined> => Promise.resolve(undefined),
-	),
+	// Mirrors ChatActions.sendMessage: it resolves with what the server said
+	// about the message — its seq, when it has an address to give.
+	sendMessage: vi.fn((): Promise<SentMessage> => Promise.resolve({})),
+	invalidateCommandCache: vi.fn(),
 }));
 
 vi.mock("../lib/wsStore", () => {
@@ -36,6 +37,7 @@ vi.mock("../lib/wsStore", () => {
 			chatMessagesHistory: mockState.chatMessagesHistory,
 			chatMessagesUnsubscribe: mockState.chatMessagesUnsubscribe,
 			sendMessage: mockState.sendMessage,
+			invalidateCommandCache: mockState.invalidateCommandCache,
 		},
 	};
 	const store = ((selector: (s: unknown) => unknown) =>
@@ -44,7 +46,13 @@ vi.mock("../lib/wsStore", () => {
 		getState: () => typeof state;
 	};
 	store.getState = () => state;
-	return { useWSStore: store };
+	return {
+		useWSStore: store,
+		// The real check reads the JSON-RPC code, which is all the tests vary.
+		isInvalidParamsRejection: (error: unknown) =>
+			error instanceof JSONRPCErrorException &&
+			error.code === JSONRPCErrorCode.InvalidParams,
+	};
 });
 
 function setDetailTurn(sessionId: string, turn: SessionDetail["turn"]) {
@@ -100,7 +108,8 @@ describe("useChatMessages", () => {
 		committed.length = 0;
 		mockState.status = "connected";
 		mockState.sendMessage.mockReset();
-		mockState.sendMessage.mockResolvedValue(undefined);
+		mockState.sendMessage.mockResolvedValue({});
+		mockState.invalidateCommandCache.mockClear();
 		mockState.chatMessagesHistory.mockReset();
 		useSessionDetailStore.getState().clear();
 		mockState.chatMessagesSubscribe.mockImplementation(
@@ -175,7 +184,7 @@ describe("useChatMessages", () => {
 	// the whole point of the action, right when the answer disappoints — stays
 	// greyed out until the session is reloaded.
 	it("can fork from a message it just sent, without a reload", async () => {
-		mockState.sendMessage.mockResolvedValue(4);
+		mockState.sendMessage.mockResolvedValue({ seq: 4 });
 
 		const { latest, send } = renderSendProbe();
 		await waitFor(() => expect(latest.messages.length).toBeGreaterThan(0));
@@ -193,7 +202,7 @@ describe("useChatMessages", () => {
 	// empty result. The message simply stays unaddressable, as every locally sent
 	// one used to be — it must not fail the send or blank the fork icon's row.
 	it("sends normally against a server that replies with no seq", async () => {
-		mockState.sendMessage.mockResolvedValue(undefined);
+		mockState.sendMessage.mockResolvedValue({});
 
 		const { latest, send } = renderSendProbe();
 		await waitFor(() => expect(latest.messages.length).toBeGreaterThan(0));
@@ -207,6 +216,130 @@ describe("useChatMessages", () => {
 		const sent = findSent(latest.messages);
 		expect(sent.anchorSeq).toBeUndefined();
 		expect(isForkableMessage(sent)).toBe(false);
+	});
+
+	// The sender is left out of the broadcast, so its own command is drawn from
+	// what it typed until the reply brings the prompt the agent was actually sent.
+	it("echoes a Pockode command as the command and fills in its prompt from the reply", async () => {
+		let reply: (result: SentMessage) => void = () => {};
+		mockState.sendMessage.mockReturnValueOnce(
+			new Promise((resolve) => {
+				reply = resolve;
+			}),
+		);
+
+		const { latest, send } = renderSendProbe();
+		await waitFor(() => expect(latest.messages.length).toBeGreaterThan(0));
+
+		let sending: Promise<boolean> = Promise.resolve(false);
+		act(() => {
+			sending = send.current("/pockode-lead backend first");
+		});
+
+		const echo = () =>
+			latest.messages.find((m) => m.role === "user" && m.command);
+		expect(echo()).toMatchObject({
+			content: "",
+			command: { name: "pockode-lead", args: "backend first" },
+		});
+
+		// A parse of its own, so the test can tell whose the row ends up with.
+		await act(async () => {
+			reply({
+				seq: 5,
+				expanded: {
+					content: "Lead the work…",
+					command: { name: "pockode-lead", args: "server's parse" },
+				},
+			});
+			await sending;
+		});
+
+		expect(echo()).toMatchObject({
+			content: "Lead the work…",
+			command: { name: "pockode-lead", args: "server's parse" },
+			anchorSeq: 5,
+		});
+	});
+
+	// A refused command was never written or delivered, so leaving its echo up
+	// would claim otherwise; the caller is the one that tells the user why.
+	it("takes a refused Pockode command back out and rethrows", async () => {
+		mockState.sendMessage.mockRejectedValueOnce(
+			new JSONRPCErrorException(
+				'Unknown Pockode command "/pockode-foo".',
+				JSONRPCErrorCode.InvalidParams,
+			),
+		);
+
+		const { latest, send } = renderSendProbe();
+		await waitFor(() => expect(latest.messages.length).toBeGreaterThan(0));
+		const before = latest.messages;
+
+		await act(async () => {
+			await expect(send.current("/pockode-foo")).rejects.toThrow(
+				"Unknown Pockode command",
+			);
+		});
+
+		expect(latest.messages).toEqual(before);
+	});
+
+	// The server records a slash command's use only once the send has gone
+	// through, so a palette list cached before then would be missing it.
+	it("drops the cached command list only after a slash command is accepted", async () => {
+		let reply: (result: SentMessage) => void = () => {};
+		mockState.sendMessage.mockReturnValueOnce(
+			new Promise((resolve) => {
+				reply = resolve;
+			}),
+		);
+
+		const { latest, send } = renderSendProbe();
+		await waitFor(() => expect(latest.messages.length).toBeGreaterThan(0));
+
+		let sending: Promise<boolean> = Promise.resolve(false);
+		act(() => {
+			sending = send.current("/review");
+		});
+		expect(mockState.invalidateCommandCache).not.toHaveBeenCalled();
+
+		await act(async () => {
+			reply({ seq: 5 });
+			await sending;
+		});
+		expect(mockState.invalidateCommandCache).toHaveBeenCalledOnce();
+
+		await act(async () => {
+			await send.current("hello");
+		});
+		expect(mockState.invalidateCommandCache).toHaveBeenCalledOnce();
+	});
+
+	// A send that never got an answer may still have reached the agent, so it
+	// is not taken back: the row stays, with the failure reported under it.
+	it("keeps a Pockode command whose send failed without a refusal", async () => {
+		mockState.sendMessage.mockRejectedValueOnce(
+			new JSONRPCErrorException("Request timed out", 0),
+		);
+
+		const { latest, send } = renderSendProbe();
+		await waitFor(() => expect(latest.messages.length).toBeGreaterThan(0));
+
+		let ok = true;
+		await act(async () => {
+			ok = await send.current("/pockode-lead");
+		});
+
+		expect(ok).toBe(false);
+		expect(
+			latest.messages.find((m) => m.role === "user" && m.command),
+		).toBeDefined();
+		expect(latest.messages.at(-1)).toMatchObject({
+			role: "assistant",
+			status: "error",
+			error: "Failed to send message: Request timed out",
+		});
 	});
 
 	// A Task subagent keeps talking for a moment after the user stops the turn.

@@ -118,6 +118,14 @@ func (c *Client) SendMessageExcluding(ctx context.Context, sessionID, content st
 	return c.sendEvent(ctx, sessionID, agent.MessageEvent{Content: content}, exclude)
 }
 
+// SendCommandExcluding is SendMessageExcluding for a Pockode command: content is
+// the prompt the command expanded to, which is what the agent reads and what the
+// record holds, and cmd is what the user typed. It is still the user's message —
+// the origin is theirs, so it forks and drives a work like any other.
+func (c *Client) SendCommandExcluding(ctx context.Context, sessionID, content string, cmd agent.CommandInvocation, exclude any) (session.HistorySeq, error) {
+	return c.sendEvent(ctx, sessionID, agent.MessageEvent{Content: content, Command: &cmd}, exclude)
+}
+
 // SendSystemMessage sends a system-driven automatic message (kickoff, restart,
 // auto-continue, etc.). It is tagged with origin "system" plus a subtype and
 // optional meta so the frontend can fold it into the receiving work's progress

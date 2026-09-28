@@ -167,8 +167,15 @@ type QuestionAnswerParams struct {
 // it omits it too. Both mean the same thing to a client — the message is not
 // addressable — which is the state it was already in for every message it sent,
 // so neither is an error.
+//
+// Content and Command are set only for a message that invoked a Pockode command,
+// and are the same two fields its record carries (agent.EventRecord): the prompt
+// the command expanded to and the command as parsed. The sender has only what it
+// typed, and this reply is its one way to learn what the agent was sent.
 type MessageResult struct {
-	Seq session.HistorySeq `json:"seq,omitempty"`
+	Seq     session.HistorySeq       `json:"seq,omitempty"`
+	Content string                   `json:"content,omitempty"`
+	Command *agent.CommandInvocation `json:"command,omitempty"`
 }
 
 type InterruptParams struct {

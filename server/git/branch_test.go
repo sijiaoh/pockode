@@ -1,6 +1,7 @@
 package git
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -46,6 +47,42 @@ func TestHead(t *testing.T) {
 	}
 	if head.Hash == "" {
 		t.Error("Head() returned an empty hash while detached")
+	}
+}
+
+func TestCurrentBranch(t *testing.T) {
+	dir, cleanup := setupTestRepoWithCommit(t)
+	defer cleanup()
+	runGit(t, dir, "branch", "-M", "feature/x")
+
+	if got, err := CurrentBranch(dir); err != nil || got != "feature/x" {
+		t.Errorf("CurrentBranch() = %q, %v; want feature/x", got, err)
+	}
+
+	runGit(t, dir, "checkout", "--detach", "HEAD")
+	if _, err := CurrentBranch(dir); !errors.Is(err, ErrDetachedHead) {
+		t.Errorf("CurrentBranch() detached error = %v, want ErrDetachedHead", err)
+	}
+}
+
+func TestCurrentBranch_UnbornBranch(t *testing.T) {
+	dir, cleanup := setupTestRepo(t)
+	defer cleanup()
+	runGit(t, dir, "symbolic-ref", "HEAD", "refs/heads/fresh")
+
+	if got, err := CurrentBranch(dir); err != nil || got != "fresh" {
+		t.Errorf("CurrentBranch() = %q, %v; want fresh", got, err)
+	}
+}
+
+// Anything but a detached HEAD is a failure to read, not a HEAD on no branch.
+func TestCurrentBranch_NotARepository(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("GIT_CEILING_DIRECTORIES", filepath.Dir(dir))
+
+	_, err := CurrentBranch(dir)
+	if err == nil || errors.Is(err, ErrDetachedHead) {
+		t.Errorf("CurrentBranch() error = %v, want a failure other than ErrDetachedHead", err)
 	}
 }
 

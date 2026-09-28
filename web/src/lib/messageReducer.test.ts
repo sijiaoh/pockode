@@ -1548,6 +1548,22 @@ describe("messageReducer", () => {
 				expect(message.role === "user" && message.answering).toHaveLength(1);
 			});
 
+			// The row is drawn from `command`, so a replayed or broadcast record
+			// has to arrive with it, while `content` stays the prompt the agent read.
+			it("carries a Pockode command through to the message", () => {
+				const event = normalizeEvent({
+					type: "message",
+					content: "Lead the work…",
+					command: { name: "pockode-lead", args: "backend first" },
+				} as Record<string, unknown>);
+				const messages = applyServerEvent([], event);
+				expect(messages[0]).toMatchObject({
+					role: "user",
+					content: "Lead the work…",
+					command: { name: "pockode-lead", args: "backend first" },
+				});
+			});
+
 			it("normalizes legacy 'work' origin to 'system' (backward compat)", () => {
 				// Legacy wire data predating the rename, so it is an untyped record.
 				const event = normalizeEvent({

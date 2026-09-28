@@ -25,6 +25,34 @@ describe("MessageItem", () => {
 		expect(screen.getByText("Hello AI")).toBeInTheDocument();
 	});
 
+	describe("a Pockode command", () => {
+		const commandMessage: Message = {
+			id: "c1",
+			role: "user",
+			content: "Lead the work just discussed.\n\nAdditional instructions",
+			status: "complete",
+			createdAt: new Date(),
+			command: { name: "pockode-lead", args: "backend first" },
+		};
+
+		// The template reads the same every time; what a reader scans for is
+		// which command was sent and what was added to it.
+		it("shows the command and its arguments, not the prompt, until opened", async () => {
+			const user = userEvent.setup();
+			render(<MessageItem sessionId="session-1" message={commandMessage} />);
+
+			const row = screen.getByRole("button", { expanded: false });
+			expect(row).toHaveTextContent("/pockode-lead");
+			expect(row).toHaveTextContent("backend first");
+			expect(screen.queryByText(/Lead the work just discussed/)).toBeNull();
+
+			await user.click(row);
+
+			expect(screen.getByText("Sent to the agent")).toBeVisible();
+			expect(screen.getByText(/Lead the work just discussed/)).toBeVisible();
+		});
+	});
+
 	// The bubble is drawn from `answering`, never from the `content` string the
 	// agent reads — so every half of an answer the record keeps has to be read
 	// here, or a user watches their own words vanish on send.

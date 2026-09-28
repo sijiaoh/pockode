@@ -1,7 +1,9 @@
 package git
 
 import (
+	"errors"
 	"fmt"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -74,6 +76,23 @@ func Head(dir string) (*HeadInfo, error) {
 	}
 
 	return head, nil
+}
+
+// ErrDetachedHead is CurrentBranch in a worktree whose HEAD is on no branch.
+var ErrDetachedHead = errors.New("HEAD is detached")
+
+// CurrentBranch returns the branch HEAD is on, named even before its first
+// commit. Unlike Head it reads nothing else, so a caller that needs only the
+// name is not failed by a log it never asked for.
+func CurrentBranch(dir string) (string, error) {
+	branch, err := execGit(dir, "symbolic-ref", "--quiet", "--short", "HEAD")
+	// --quiet makes "HEAD is not symbolic" exit 1 and silent; everything else
+	// that can go wrong (no repository, no git) is fatal and exits otherwise.
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 {
+		return "", ErrDetachedHead
+	}
+	return branch, err
 }
 
 // Branches returns HEAD plus the local and remote-only branches of dir.

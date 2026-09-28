@@ -14,7 +14,7 @@ import { useForkSupport } from "../../hooks/useForkSupport";
 import { useShortViewport } from "../../hooks/useShortViewport";
 import { useViewedSession } from "../../hooks/useViewedSession";
 import { takeAnswerIntent } from "../../lib/answerIntent";
-import { inputActions } from "../../lib/inputStore";
+import { inputActions, useInputStore } from "../../lib/inputStore";
 import { questionDraftActions } from "../../lib/questionDraftStore";
 import { useChatUIConfig } from "../../lib/registries/chatUIRegistry";
 import {
@@ -32,6 +32,7 @@ import type {
 import type { OverlayState, WorkSegment } from "../../types/overlay";
 import { resolveForkAnchor } from "../../utils/forkAnchor";
 import { buildForkTitle } from "../../utils/forkTitle";
+import { parsePockodeCommand } from "../../utils/pockodeCommand";
 import { FileEditor, FileView } from "../Files";
 import { CommitDiffView, CommitFileView, CommitView, DiffView } from "../Git";
 import MainContainer from "../Layout/MainContainer";
@@ -69,12 +70,16 @@ function isInputBarHidden(overlay: OverlayState | undefined): boolean {
 }
 
 /**
+ * A refusal of something the user just did from the composer, in the server's
+ * words.
+ *
  * Changing the engine or the mode is a deliberate action whose only other
  * feedback is the control snapping back to where it was. One bar for all three
  * settings — the server's reason is what tells "that model isn't this agent's"
- * apart from a dropped connection.
+ * apart from a dropped connection. A refused Pockode command lands here too: its
+ * echo is taken back out, so this bar is the only place the reason can be.
  */
-function SettingErrorBar({
+function ComposerErrorBar({
 	message,
 	onDismiss,
 }: {
@@ -280,19 +285,54 @@ function ChatPanel({
 		}
 	}, [sessionId, isSessionResolved, isReadOnly, overlay, markSessionRead]);
 
+	// Keyed by the session it was sent to, so a refusal arriving after the user
+	// has moved on is not reported into somebody else's conversation.
+	const [commandError, setCommandError] = useState<{
+		sessionId: string;
+		message: string;
+	} | null>(null);
+
 	const handleSend = useCallback(
 		(content: string) => {
-			if (resolvedTitle === "New Chat") {
-				const title =
-					content.length > 30
-						? `${content.slice(0, 30).replace(/\n/g, " ")}...`
-						: content.replace(/\n/g, " ");
-				onUpdateTitle(title);
-			}
+			const rename =
+				resolvedTitle === "New Chat"
+					? () =>
+							onUpdateTitle(
+								content.length > 30
+									? `${content.slice(0, 30).replace(/\n/g, " ")}...`
+									: content.replace(/\n/g, " "),
+							)
+					: undefined;
+			// A command the server may refuse names the session only once it is
+			// accepted, or a typo would stay behind as the title. Still the session
+			// it was sent to: this `onUpdateTitle` is the one from that render.
+			const isCommand = parsePockodeCommand(content) !== null;
+			if (!isCommand) rename?.();
 
-			sendUserMessage(content);
+			setCommandError(null);
+			const sentTo = sessionId;
+			// Only a refused Pockode command rejects here (see `sendUserMessage`):
+			// its echo is gone, so what was typed goes back into the input — unless
+			// the user has already started something new there.
+			sendUserMessage(content).then(
+				(sent) => {
+					if (sent && isCommand) rename?.();
+				},
+				(error: unknown) => {
+					if (!useInputStore.getState().inputs[sentTo]) {
+						inputActions.set(sentTo, content);
+					}
+					setCommandError({
+						sessionId: sentTo,
+						message:
+							error instanceof Error && error.message
+								? error.message
+								: "Unknown error",
+					});
+				},
+			);
 		},
-		[resolvedTitle, onUpdateTitle, sendUserMessage],
+		[resolvedTitle, onUpdateTitle, sendUserMessage, sessionId],
 	);
 
 	// An answer only reaches the process that raised the prompt, so a card whose
@@ -1035,9 +1075,15 @@ function ChatPanel({
 				)}
 				{/* Session action bar */}
 				{!overlay && settingError && (
-					<SettingErrorBar
+					<ComposerErrorBar
 						message={settingError}
 						onDismiss={clearSettingError}
+					/>
+				)}
+				{!overlay && commandError?.sessionId === sessionId && (
+					<ComposerErrorBar
+						message={commandError.message}
+						onDismiss={() => setCommandError(null)}
 					/>
 				)}
 				{/* Safe to fold on a short viewport (docs/answering-ui.md §3):

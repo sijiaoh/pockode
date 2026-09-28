@@ -59,7 +59,7 @@ function InputBar({
 	const [commands, setCommands] = useState<Command[]>([]);
 	const [selectedIndex, setSelectedIndex] = useState(0);
 	const [paletteDismissed, setPaletteDismissed] = useState(false);
-	const { listCommands, invalidateCommandCache } = useWSStore((s) => s.actions);
+	const listCommands = useWSStore((s) => s.actions.listCommands);
 
 	// Palette shows when input matches valid command pattern, unless manually dismissed
 	const isSlashMode = COMMAND_PATTERN.test(input);
@@ -160,20 +160,8 @@ function InputBar({
 			resetNavigation();
 			onSend(trimmed);
 			inputActions.clear(sessionId);
-			// Invalidate command cache when a slash command is sent
-			if (trimmed.startsWith("/")) {
-				invalidateCommandCache();
-			}
 		}
-	}, [
-		input,
-		onSend,
-		canSend,
-		sessionId,
-		saveToHistory,
-		resetNavigation,
-		invalidateCommandCache,
-	]);
+	}, [input, onSend, canSend, sessionId, saveToHistory, resetNavigation]);
 
 	// Track pending history navigation to check cursor Y position on keyup
 	const pendingHistoryNav = useRef<{

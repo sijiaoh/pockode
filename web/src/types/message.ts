@@ -372,6 +372,20 @@ export interface UserMessage {
 	 * flattened for the agent to read (docs/answering-ui.md §3).
 	 */
 	answering?: QuestionAnswerRecord[];
+	/**
+	 * The Pockode command the user typed, when `content` is the prompt it
+	 * expanded to. The row is drawn from this; `content` is what the agent read.
+	 */
+	command?: PockodeCommandInvocation;
+}
+
+/**
+ * A Pockode command as the user typed it: the name without its slash
+ * ("pockode-lead") and whatever followed it, absent when nothing did.
+ */
+export interface PockodeCommandInvocation {
+	name: string;
+	args?: string;
 }
 
 export interface AssistantMessage {
@@ -655,6 +669,13 @@ export interface MessageParams {
  */
 export interface MessageResult {
 	seq?: HistorySeq;
+	/**
+	 * Set only for a message that invoked a Pockode command: the prompt it
+	 * expanded to and the command as the server parsed it — the two fields its
+	 * record carries, which this client would otherwise never see.
+	 */
+	content?: string;
+	command?: PockodeCommandInvocation;
 }
 
 export interface InterruptParams {

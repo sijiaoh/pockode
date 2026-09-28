@@ -1116,6 +1116,11 @@ a request on screen, which refuses every message: that news is lost, not
 queued, and the story's status and comments are where it is found again. A
 story never notifies its own session.
 
+**The news carries no standing instructions.** A `watched_story_*` message says
+what happened to the story and how to act on that one event, nothing more — so a
+watcher that leads through [`/pockode-lead`](../pockode-commands.md#known-limitation-the-rules-live-only-in-the-leads-context)
+keeps its rules only for as long as its own context does.
+
 ### Commands
 
 The six things a person or an agent can ask for live in `work.Operations`, and
@@ -2093,6 +2098,7 @@ work_context: |
 | `watched_story_question` | A watched story's question passed on | `Title`, `ID`, `SessionID`, `Header`, `Question`, `RequestID`, `Options`, `MultiSelect` |
 | `step_advance_section` | Step advance | `PrevStep`, `TotalSteps`, `CurrentStep`, `StepPrompt`, `ID` |
 | `current_step_section` | Initial step display | `CurrentStep`, `TotalSteps`, `StepPrompt`, `ID` |
+| `pockode_lead_command` | The [`/pockode-lead`](../pockode-commands.md#pockode-lead) command, sent as the user's message | `Branch`, `Args` |
 
 ### Rendering
 

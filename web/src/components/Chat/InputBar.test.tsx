@@ -34,14 +34,12 @@ import getCaretCoordinates from "textarea-caret";
 const mockGetCaretCoordinates = getCaretCoordinates as Mock;
 
 const mockListCommands = vi.fn();
-const mockInvalidateCommandCache = vi.fn();
 
 vi.mock("../../lib/wsStore", () => ({
 	useWSStore: vi.fn((selector) =>
 		selector({
 			actions: {
 				listCommands: mockListCommands,
-				invalidateCommandCache: mockInvalidateCommandCache,
 			},
 		}),
 	),
@@ -75,7 +73,6 @@ describe("InputBar", () => {
 	beforeEach(() => {
 		localStorage.clear();
 		mockListCommands.mockResolvedValue(mockCommands);
-		mockInvalidateCommandCache.mockClear();
 		mockGetCaretCoordinates.mockReturnValue({ top: 0, left: 0, height: 20 });
 		vi.mocked(useHasCoarsePointer).mockReturnValue(false);
 	});
@@ -700,26 +697,6 @@ describe("InputBar", () => {
 			await commandsLoaded();
 
 			expect(screen.getByText("No matching commands")).toBeInTheDocument();
-		});
-
-		it("invalidates command cache when slash command is sent", async () => {
-			const user = userEvent.setup();
-			render(<InputBar sessionId={TEST_SESSION_ID} onSend={() => {}} />);
-
-			await user.type(screen.getByRole("textbox"), "/help");
-			await user.click(screen.getByRole("button", { name: /Send/ }));
-
-			expect(mockInvalidateCommandCache).toHaveBeenCalled();
-		});
-
-		it("does not invalidate cache when regular message is sent", async () => {
-			const user = userEvent.setup();
-			render(<InputBar sessionId={TEST_SESSION_ID} onSend={() => {}} />);
-
-			await user.type(screen.getByRole("textbox"), "hello");
-			await user.click(screen.getByRole("button", { name: /Send/ }));
-
-			expect(mockInvalidateCommandCache).not.toHaveBeenCalled();
 		});
 
 		it("resets selection to first when filter changes", async () => {

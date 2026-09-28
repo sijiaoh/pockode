@@ -519,7 +519,29 @@ describe("wsStore", () => {
 
 			await expect(
 				wsActions.sendMessage("test-session", "hello"),
-			).resolves.toBe(4);
+			).resolves.toEqual({ seq: 4 });
+		});
+
+		// The sender misses the broadcast, so the reply is its only copy of the
+		// prompt its command expanded to.
+		it("sendMessage returns what a Pockode command expanded to", async () => {
+			chatMessageResult = {
+				seq: 4,
+				content: "Lead the work…",
+				command: { name: "pockode-lead" },
+			};
+
+			await connectAndAuth();
+
+			await expect(
+				wsActions.sendMessage("test-session", "/pockode-lead"),
+			).resolves.toEqual({
+				seq: 4,
+				expanded: {
+					content: "Lead the work…",
+					command: { name: "pockode-lead" },
+				},
+			});
 		});
 
 		// Purely additive on the wire: an older server answers with an empty
@@ -530,7 +552,7 @@ describe("wsStore", () => {
 
 			await expect(
 				wsActions.sendMessage("test-session", "hello"),
-			).resolves.toBeUndefined();
+			).resolves.toEqual({});
 		});
 
 		it("throws when not connected", async () => {

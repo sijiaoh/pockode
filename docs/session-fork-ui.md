@@ -170,7 +170,8 @@ Two levels, and they are what makes the slot steady:
   and the agent's `fork_support` is not `"none"`. A session that can never fork
   should not pay 44px a row for a glyph that will never come.
 - **Message level.** Inside such a session **every** row draws the slot: settled
-  bubbles, streaming and sending ones, and the collapsed one-line Work events.
+  bubbles, streaming and sending ones, the collapsed one-line Work events, and
+  the one-line [Pockode command](pockode-commands.md#how-it-is-drawn) rows.
   Only what stands in the slot differs.
   - For bubbles the reason is constant geometry: a message going from streaming
     to settled does not move a pixel.
@@ -240,7 +241,10 @@ files that say which is which: `utils/messageActions.ts` answers the first,
   which render as a collapsed one-line event rather than a bubble) get none.
   They are not conversation turns; they are Pockode's own annotations, and there
   is nothing a user does *to* one. They keep the empty slot all the same, for
-  the edge it lines up (*Which rows reserve a slot*).
+  the edge it lines up (*Which rows reserve a slot*). A
+  [Pockode command](pockode-commands.md) is not one of these, although it is
+  drawn as a line too: the user sent it, so its origin is theirs and it has a
+  menu like any bubble.
 - A message still `sending` or `streaming` gets none either — it is not yet a
   turn. Here too the slot stays, which is what lets the glyph arrive when the
   turn ends without moving the bubble the agent has been writing into.
@@ -310,8 +314,11 @@ runs before the fork sheet's effect, so the page lock is never held twice.)
    lines, prefixed by its role — `You`, or the agent's label from
    `AGENT_TYPE_INFO` (`Claude` / `Codex`). The user picked it from a scrolling
    transcript on a phone; showing it back is how they confirm they hit the
-   right one. The preview does not say whether the quoted message is the last
-   one kept or the first one left behind; the sentence under it does.
+   right one. A [Pockode command](pockode-commands.md#how-it-is-drawn) is
+   quoted as typed (`/pockode-lead …`), not as the prompt it expanded to, which
+   opens the same way every time. The preview does not say whether the quoted
+   message is the last one kept or the first one left behind; the sentence
+   under it does.
 2. **What is cut**, one line, with the real count — messages as the user sees
    them. History pages in from the bottom, so everything after the cut point is
    loaded by definition and the count is exact however far back the user has
@@ -440,6 +447,10 @@ Three things to be exact about:
   second writer; it still has exactly one reader, `InputBar`.
 - **It does not happen on an assistant anchor.** That message is kept by the
   fork, so there is nothing to hand back.
+- **A command comes back as typed.** A message that invoked a
+  [Pockode command](pockode-commands.md#how-it-is-drawn) holds the prompt the
+  command expanded to, but the draft is `/name args`: sending the prompt itself
+  would skip the command, and it is not what the user wrote.
 - **It does not focus the input on a coarse pointer.** `InputBar` focuses on a
   session change only for a fine pointer, deliberately: a software keyboard
   springing up would cover the conversation the user just opened. Restoring a

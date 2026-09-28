@@ -116,6 +116,8 @@ The `message` event covers both messages a user types and the automatic prompts 
 
 **Why an origin field, not a new `EventType`**: user and system messages are the same kind of thing — text sent to the agent on stdin, replayed identically on resume. A distinct event type would fork the send/persist/replay path for no behavioral gain. All three fields are `omitempty`, so history written before they existed loads as a plain user message — backward compatible by omission. The producing side (subtype catalog, tagging call sites, and legacy-value normalization) and how the frontend renders the result are documented in [code/work-system.md](code/work-system.md#work-messages-in-chat).
 
+A [Pockode command](pockode-commands.md) is **not** a system message, though Pockode wrote the text the agent reads. The user sent it, so its origin is theirs: it forks, and it drives a work as a user message does. What marks it is a `command` field — `{name, args?}`, what the user typed — beside a `content` that holds the prompt the command expanded to. Like `answering`, it is a structured copy the client draws from, never sent to the CLI.
+
 #### The Read Point (`message_ingested`)
 
 A message sent while a turn is running is steered into that turn rather than
@@ -222,7 +224,7 @@ answer it and the card offers none.
 
 `server/agent/history.go` — Flat struct used for both persistence and wire format. Each event type populates only its relevant fields; the rest are zero-valued and omitted from JSON.
 
-Key fields: `Type`, `Content`, `ToolName`, `ToolInput`, `ToolResult`, `Error`, `RequestID`, `PermissionSuggestions`, `Questions`, `Reason`, `AskedAt`, `ResolvedAt`, `Answering`, and (for system-driven `message` events) `Origin`, `Subtype`, `Meta`.
+Key fields: `Type`, `Content`, `ToolName`, `ToolInput`, `ToolResult`, `Error`, `RequestID`, `PermissionSuggestions`, `Questions`, `Reason`, `AskedAt`, `ResolvedAt`, `Answering`, `Command` (a message expanded from a [Pockode command](pockode-commands.md#what-is-recorded)), and (for system-driven `message` events) `Origin`, `Subtype`, `Meta`.
 
 `MessageID` is on two record types and joins them: Pockode's own id for a
 message, carried by the `message` record and quoted by the `message_ingested`
@@ -289,7 +291,7 @@ owns them.
 
 `server/watch/chat_messages.go` — `ChatMessagesWatcher` implements `process.ChatMessageListener`. Receives already-persisted events (persistence happens in `ProcessManager.streamEvents()` via `store.AppendToHistory`), converts them to `EventRecord` via `ToRecord()`, then broadcasts JSON-RPC notifications with method `"chat.<event-type>"` and the subscription ID for client-side routing. Each notification also carries the record's `seq`, the same address a history page carries on its records ([paging](agent-chat.md#history-paging)), so a client cannot tell a replayed record from a live one when it names a point in the conversation ([code/agent-integration.md](code/agent-integration.md#history-storage)). Events that were not persisted carry none.
 
-A user message is broadcast to every subscriber except the tab that sent it, which has already echoed the message into its own transcript. That tab therefore learns its own record's address from a third source — the reply to the `chat.message` call it made (`rpc.MessageResult`), the only channel that reaches it. Replayed history, live notification and that reply all carry the same `seq`, so what a client can name does not depend on which of the three delivered the record. A message no record names stays unaddressable, and a client must not number it itself.
+A user message is broadcast to every subscriber except the tab that sent it, which has already echoed the message into its own transcript. That tab therefore learns its own record's address from a third source — the reply to the `chat.message` call it made (`rpc.MessageResult`), the only channel that reaches it. Replayed history, live notification and that reply all carry the same `seq`, so what a client can name does not depend on which of the three delivered the record. For a message that invoked a [Pockode command](pockode-commands.md) the reply also carries the record's `content` and `command`, for the same reason: the sender typed `/pockode-lead`, and the prompt the agent was sent instead reaches it nowhere else. A message no record names stays unaddressable, and a client must not number it itself.
 
 ## Frontend
 

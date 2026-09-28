@@ -1,4 +1,5 @@
 import type { ContentPart, Message } from "../types/message";
+import { formatPockodeCommand } from "../utils/pockodeCommand";
 import { isTaskTool, taskDescription } from "./toolSummary";
 
 /**
@@ -44,9 +45,13 @@ function partPreview(part: ContentPart): string {
  * put there, rather than this function inventing a description of the message.
  */
 export function messagePreview(message: Message): string {
+	// A command is quoted as typed: its content is a template that opens the
+	// same way every time, and so identifies nothing.
 	const raw =
 		message.role === "user"
-			? message.content
+			? message.command
+				? formatPockodeCommand(message.command)
+				: message.content
 			: message.parts.map(partPreview).filter(Boolean).join(" ");
 	return raw.replace(/\s+/g, " ").trim();
 }

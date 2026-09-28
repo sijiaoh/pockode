@@ -103,12 +103,14 @@ Follows standard JSON-RPC 2.0; Pockode has no custom extensions.
 
 ### Growing a reply
 
-`chat.message` answers `rpc.MessageResult` — today one `omitempty` field, `seq`,
-telling the sender where its own message landed in the history. It needs one
-because the sender is deliberately left out of the broadcast that carries every
-other record's `seq` (it has already echoed the message into its own
-transcript), so the reply is the only place that address can reach it. What it
-is for is in [session-fork-ui.md](../session-fork-ui.md#which-messages-get-a-menu-and-when-fork-is-on-it):
+`chat.message` answers `rpc.MessageResult` — `omitempty` fields only: `seq`,
+telling the sender where its own message landed in the history, and, for a
+message that invoked a [Pockode command](../pockode-commands.md#what-is-recorded),
+`content` and `command` — the prompt the command expanded to and the command as
+parsed. It needs one because the sender is deliberately left out of the
+broadcast that carries every other record's `seq` (it has already echoed the
+message into its own transcript), so the reply is the only place that address —
+or a command's expansion — can reach it. What the address is for is in [session-fork-ui.md](../session-fork-ui.md#which-messages-get-a-menu-and-when-fork-is-on-it):
 a record a client cannot name is a record it cannot fork from.
 
 That method used to answer a bare `{}`, and growing it needed **no coordinated
@@ -750,7 +752,10 @@ established that the error never came from the server at all. The git panel's
 `web/src/utils/gitErrors.ts` is where that rule pays off: a refusal is
 recognised by `-32001` and never by its wording, so a git command that really
 ran and failed with prose that happens to read the same is still shown as what
-it is. Code 0 and `-32001` are the two ends of the same distinction — 0 means
+it is. A [Pockode command](../pockode-commands.md#when-the-server-refuses)
+the server refused — its own refusals and the send's alike — is recognised the
+same way, by `-32602` alone (`isInvalidParamsRejection`), and its message is
+what the user is shown. Code 0 and `-32001` are the two ends of the same distinction — 0 means
 the client gave up and the request may yet be running on the server, `-32001`
 means the server never started it.
 
