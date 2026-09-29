@@ -130,17 +130,86 @@ it operates on by default (`--work`) — and scan the QR code it prints:
 pockode -password YOUR_PASSWORD
 ```
 
-The script downloads the binary for your OS and architecture and moves it into
-`/usr/local/bin`, which is why it asks for `sudo`. Re-running the same command
-upgrades in place, and `sudo rm /usr/local/bin/pockode` is the whole uninstall.
+The script downloads the binary for your OS and architecture into
+`~/.local/bin/pockode`. Nothing about it needs `sudo`: the directory is yours, and
+the script creates it if it is not there yet.
 
-Before any of that the download is verified, so a file that fails stops the run
-before it ever asks for `sudo` — see
-[Verifying the Download](#verifying-the-download). The check needs `sha256sum`
-or `shasum`; Linux and busybox ship the first, macOS the second. Which one you
-have is looked for *before* the download, because a machine that cannot verify
-should not install: with neither, you get an error naming the tools — install
-coreutils or perl — and not a single byte is fetched.
+Many systems do not have `~/.local/bin` on `PATH`, so a first install often ends
+by saying so, with the line to add for your shell and the full path to start
+this copy with meanwhile:
+
+```
+/home/you/.local/bin is not on your PATH. To add it, run:
+  echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc
+and open a new terminal.
+
+Done! Until 'pockode' finds this copy, start it with its full path:
+  /home/you/.local/bin/pockode -password YOUR_PASSWORD
+```
+
+The file it names follows your login shell: `~/.zshrc` for zsh, `~/.bashrc` for
+bash on Linux and `~/.bash_profile` on macOS, `fish_add_path` for fish, and
+`~/.profile` for anything else. Once `pockode` resolves to the installed copy the
+script just says `Done!`.
+
+**Upgrading** is re-running the same command; it replaces the file in place.
+**Uninstalling** is `rm ~/.local/bin/pockode` — the `.pockode` directory in each
+of your projects, with its sessions, settings and work items, is left alone.
+
+Before any of that the download is verified, so a file that fails never reaches
+`~/.local/bin` — see [Verifying the Download](#verifying-the-download). The check
+needs `sha256sum` or `shasum`; Linux and busybox ship the first, macOS the
+second. Which one you have is looked for *before* the download, because a machine
+that cannot verify should not install: with neither, you get an error naming the
+tools — install coreutils or perl — and not a single byte is fetched.
+
+If the script stops with `Nothing was installed: you cannot write to` your
+`~/.local` or `~/.local/bin`, an earlier command run with `sudo` left that
+directory owned by root. The default install will not reach for `sudo` to get
+past it; the message prints the `sudo chown` that gives the directory back to
+you — run it and install again — or install elsewhere with `--install-dir`.
+
+### Moving from `/usr/local/bin`
+
+Installs made before `~/.local/bin` became the default put `pockode` in
+`/usr/local/bin`. That directory is on every default `PATH`, often ahead of
+`~/.local/bin`, so the old copy can keep running after an upgrade. The script
+checks which `pockode` your shell actually finds, and when it is not the one just
+installed it says so on stderr, with the command that removes it:
+
+```
+Warning: 'pockode' runs /usr/local/bin/pockode, not the copy just installed at /home/you/.local/bin/pockode.
+It comes first on your PATH, so it will keep running instead of this one.
+If it is an older install, remove it with:
+  sudo rm /usr/local/bin/pockode
+```
+
+Run that once and the old copy is gone; the warning does not come back. The
+same warning appears for any other `pockode` that shadows the new one, which is
+why it asks you to check that it really is an old install first. If
+`~/.local/bin` already comes first on your `PATH` there is no warning — the old
+copy is simply never run — and `sudo rm /usr/local/bin/pockode` tidies it away.
+
+### Installing somewhere else
+
+To keep `pockode` in `/usr/local/bin` or any other directory, name it:
+
+```bash
+curl -fsSL https://pockode.com/install.sh | sh -s -- --install-dir /usr/local/bin
+curl -fsSL https://pockode.com/install.sh | POCKODE_INSTALL_DIR=/usr/local/bin sh
+```
+
+A relative path or a leading `~` is resolved against your current directory and
+home. If you can write to the directory, it is installed exactly like the default,
+without `sudo`. If you cannot, the script says `You cannot write to DIR, so
+installing there needs sudo.` and uses it — only after the download has passed
+verification, so a bad download never gets as far as a password prompt. That is
+the one case the script ever uses `sudo`, and it is always one you asked for.
+
+Name the directory again on every upgrade: the script does not remember it, and
+a plain run installs a second copy into `~/.local/bin` — with the warning above
+if your directory comes first on `PATH` and keeps the old version running.
+Uninstalling is `rm` — or `sudo rm` — of the file you put there.
 
 ### Installing a specific version
 
@@ -156,10 +225,11 @@ curl -fsSL https://pockode.com/install.sh | POCKODE_VERSION=0.16.0 sh
 curl -fsSL https://pockode.com/install.sh | sh -s -- --version 0.16.0
 ```
 
-The two are equivalent, and the flag wins if both are set. There are two because
-a pipe gives the script no arguments of its own: `sh -s --` is the shell's way to
-hand them over, and the environment variable is the shorter thing to type in
-front of it. `v0.16.0`, `0.16.0` and `latest` are all accepted — the same
+The two are equivalent, and the flag wins if both are set — the same holds for
+`--install-dir` and `POCKODE_INSTALL_DIR`. There are two because a pipe gives the
+script no arguments of its own: `sh -s --` is the shell's way to hand them over,
+and the environment variable is the shorter thing to type in front of it.
+`v0.16.0`, `0.16.0` and `latest` are all accepted — the same
 spellings `install.ps1` takes for `-Version`. Anything else is rejected before
 the download, since the version is pasted into a release URL.
 
@@ -173,12 +243,10 @@ A version that has no release, a release with no binary for your platform, or a
 download that fails verification all fail with the URL they tried rather than a
 bare 404 — nothing is installed, and the copy you already had stays where it is.
 
-`--version` is the only option here, unlike `install.ps1`, which also has
-`-InstallDir`, `-Url` and `-Uninstall`. Those exist there because a Windows
-install has no conventional location, no obvious download fallback and no
-one-line way to undo it. On macOS and Linux each of those is already a single
-command: `/usr/local/bin` is the convention, `curl -o` plus `chmod +x` installs a
-binary from anywhere, and `rm` uninstalls. The full usage text:
+The two options, `--version` and `--install-dir`, combine freely. `install.ps1`
+also has `-Url` and `-Uninstall`; on macOS and Linux each of those is already a
+single command — `curl -o` plus `chmod +x` installs a binary from anywhere, and
+`rm` uninstalls. The full usage text:
 
 ```bash
 curl -fsSL https://pockode.com/install.sh | sh -s -- --help
@@ -197,8 +265,9 @@ pockode -password YOUR_PASSWORD
 ```
 
 The script puts `pockode.exe` in `%LOCALAPPDATA%\Programs\Pockode` and adds that
-directory to your user `PATH`. None of it needs administrator rights, which is the
-deliberate difference from `install.sh` and its `sudo` write to `/usr/local/bin`.
+directory to your user `PATH`. None of it needs administrator rights — like
+`install.sh`, it installs into your own user directory; unlike it, it puts that
+directory on `PATH` for you rather than printing the line to add.
 **Open a new terminal afterwards**: the one you ran the command in resolved its
 `PATH` when it started.
 

@@ -433,7 +433,8 @@ jobs:
   # The version a user asks for turns into a download URL, and getting that URL
   # wrong is the whole failure mode of this feature: a silently-latest install,
   # or a tag that lost its "v". Nothing here downloads anything - a fake curl
-  # records the URL it was handed and fails, which stops the script before sudo.
+  # records the URL it was handed and fails, which stops the script before it
+  # installs anything.
   install-sh-version:
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -592,16 +593,23 @@ jobs:
             esac
           done
 
-  # What install.sh does with root cannot be read off the script: that what
-  # lands in /usr/local/bin is executable by users other than the one who
-  # installed it, that a download which fails or is interrupted leaves a working
-  # install alone, and that nothing goes through a path someone else could have
-  # got to first. Those need a real root and a real rename, so this installs for
-  # real - the runner's sudo is passwordless and its /usr/local/bin is
-  # root-owned, which is the situation a user runs the script in.
+  # What install.sh does to a machine cannot be read off the script: that the
+  # default install never asks for root, that what it prints afterwards sends
+  # the user somewhere that works, that a download which fails or is interrupted
+  # leaves a working install alone, and that nothing goes through a path someone
+  # else could have got to first. So this installs the real binary for real, on
+  # both platforms the script serves. Every run has a $HOME of its own, and the
+  # runner's passwordless sudo stands in for a user's in the one case that is
+  # meant to use it: a directory the user named and cannot write to.
   install-sh-install:
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        # macos-latest is Apple silicon, so between them the two also cover both
+        # spellings of the architecture the script maps.
+        os: [ubuntu-latest, macos-latest]
 
     steps:
       - uses: actions/checkout@v6
@@ -618,12 +626,21 @@ jobs:
       - name: Build the release asset
         working-directory: server
         run: |
+          asset=pockode-$(go env GOOS)-$(go env GOARCH)
           mkdir -p ../.ci-serve/latest/download
-          go build -o ../.ci-serve/latest/download/pockode-linux-amd64 .
+          go build -o "../.ci-serve/latest/download/$asset" .
           # The same "<hash>  <name>" line scripts/build.sh publishes, produced
-          # the same way: the install only proves anything if what it verifies
-          # against has the shape a real release has.
-          (cd ../.ci-serve/latest/download && sha256sum pockode-linux-amd64 > checksums.txt)
+          # the same way - by shasum on macOS, which has no sha256sum: the
+          # install only proves anything if what it verifies against has the
+          # shape a real release has.
+          cd ../.ci-serve/latest/download
+          if command -v sha256sum > /dev/null; then
+            sha256sum "$asset" > checksums.txt
+          else
+            shasum -a 256 "$asset" > checksums.txt
+          fi
+          echo "ASSET_NAME=$asset" >> "$GITHUB_ENV"
+          echo "PLATFORM=$(go env GOOS)/$(go env GOARCH)" >> "$GITHUB_ENV"
 
       # Three releases that must not install: one whose binary does not match
       # the checksum published for it, one that publishes no checksums.txt at
@@ -634,21 +651,22 @@ jobs:
         run: |
           fixture() {
             mkdir -p ".ci-serve/download/$1"
-            cp .ci-serve/latest/download/pockode-linux-amd64 ".ci-serve/download/$1/"
+            cp ".ci-serve/latest/download/$ASSET_NAME" ".ci-serve/download/$1/"
           }
 
           # A byte appended after the checksum was taken is the same thing to
           # sha256 as a binary swapped for someone else's.
           fixture v0.0.0-tampered
           cp .ci-serve/latest/download/checksums.txt .ci-serve/download/v0.0.0-tampered/
-          printf 'x' >> .ci-serve/download/v0.0.0-tampered/pockode-linux-amd64
+          printf 'x' >> ".ci-serve/download/v0.0.0-tampered/$ASSET_NAME"
 
           # Deliberately nothing beside it: a release from before checksums
           # were published looks exactly like this.
           fixture v0.0.0-no-checksums
 
+          # A platform neither leg of the matrix is.
           fixture v0.0.0-other-platform
-          sed 's/pockode-linux-amd64/pockode-darwin-arm64/' .ci-serve/latest/download/checksums.txt \
+          sed "s/$ASSET_NAME/pockode-plan9-amd64/" .ci-serve/latest/download/checksums.txt \
             > .ci-serve/download/v0.0.0-other-platform/checksums.txt
 
           # The odd one out: this release is fine and has to install. Its
@@ -657,11 +675,12 @@ jobs:
           # name, which is how shasum writes a hash it took in binary mode;
           # CRLF endings, which install.ps1 reads without noticing; and this
           # platform's line somewhere other than first. Refusing any of them
-          # would be a rejection the message blames the release for.
+          # would be a rejection the message blames the release for. awk rather
+          # than sed, which on macOS writes "\r" as a plain r.
           fixture v0.0.0-odd-checksums
           {
-            printf '%064d  pockode-darwin-arm64\r\n' 0
-            sed 's/^\([0-9a-f]*\)  /\1  */; s/$/\r/' .ci-serve/latest/download/checksums.txt
+            printf '%064d  pockode-plan9-amd64\r\n' 0
+            awk '{ printf "%s  *%s\r\n", $1, $2 }' .ci-serve/latest/download/checksums.txt
           } > .ci-serve/download/v0.0.0-odd-checksums/checksums.txt
 
       # The released asset does not exist until this branch ships, and pointing
@@ -674,7 +693,7 @@ jobs:
           # when this step ends, and the next request would then kill the server
           # halfway through the job.
           nohup python3 -m http.server 8000 --bind 127.0.0.1 --directory .ci-serve > http.log 2>&1 &
-          url=http://127.0.0.1:8000/latest/download/pockode-linux-amd64
+          url=http://127.0.0.1:8000/latest/download/$ASSET_NAME
           for _ in $(seq 30); do
             if curl -fsS -o /dev/null "$url"; then exit 0; fi
             sleep 0.5
@@ -690,7 +709,10 @@ jobs:
         run: |
           # The fake hands over by absolute path, so that it cannot find itself.
           test -x /usr/bin/curl
-          mkdir -p fake-bin fake-fail-bin
+          mkdir -p ci-bin fake-bin fake-fail-bin
+          # GNU stat on Linux, BSD stat on macOS: the one question both the
+          # fake and the assertions ask of a file that the two answer apart.
+          printf '#!/bin/sh\nstat -c %%a "$1" 2> /dev/null || stat -f %%Lp "$1"\n' > ci-bin/mode-of
           cat > fake-bin/curl <<'CURL'
           #!/bin/sh
           # Holds the download open for the interrupt cases below, and says so
@@ -716,7 +738,7 @@ jobs:
           prev=
           for arg in "$@"; do
             if [ "$prev" = -o ]; then
-              printf '%s %s\n' "$(stat -c %a "$(dirname "$arg")")" "$arg" >> "$DOWNLOAD_LOG"
+              printf '%s %s\n' "$("$MODE_OF" "$(dirname "$arg")")" "$arg" >> "$DOWNLOAD_LOG"
             fi
             prev=$arg
           done
@@ -725,73 +747,180 @@ jobs:
           # The stream assertions need a run that fails without downloading: the
           # default run has no stderr to look at unless something goes wrong.
           printf '#!/bin/sh\nexit 22\n' > fake-fail-bin/curl
-          chmod +x fake-bin/curl fake-fail-bin/curl
+          chmod +x ci-bin/mode-of fake-bin/curl fake-fail-bin/curl
           echo "$PWD/fake-bin" >> "$GITHUB_PATH"
+          echo "MODE_OF=$PWD/ci-bin/mode-of" >> "$GITHUB_ENV"
           echo "DOWNLOAD_LOG=$PWD/download.log" >> "$GITHUB_ENV"
           echo "FAKE_CURL_STARTED=$PWD/curl-started" >> "$GITHUB_ENV"
 
-      # Every step below runs the same three shells against the same clean
-      # slate, and a copy of either that drifted would quietly stop testing one
-      # of them.
-      - name: The three shells, and the helpers every step below shares
+      # Every step below runs the same shells against the same clean slate, and
+      # a copy of either that drifted would quietly stop testing one of them.
+      - name: The shells, and the helpers every step below shares
         run: |
-          command -v busybox >/dev/null || { sudo apt-get update; sudo apt-get install -y busybox-static; }
-          cat > ci-lib.sh <<'LIB'
-          fail() { printf '%s\n' "FAIL [$SH]: $*" >&2; exit 1; }
+          if [ "$(uname -s)" = Linux ]; then
+            command -v busybox >/dev/null || { sudo apt-get update; sudo apt-get install -y busybox-static; }
+          fi
+          # Owned by root, and so the one place a user's install needs sudo for;
+          # SYSTEM_DIR below is created and removed inside it.
+          sudo mkdir -p /opt/pockode-ci
 
-          INSTALL_DIR=/usr/local/bin
-          TARGET=$INSTALL_DIR/pockode
-          ASSET=.ci-serve/latest/download/pockode-linux-amd64
+          # Records being run and fails. The exit is loud rather than a quiet
+          # refusal, so a script that reached it cannot pass on a cleanup that
+          # happened to work.
+          mkdir -p fake-sudo-bin
+          printf '#!/bin/sh\nprintf "%%s\\n" "$*" >> "$SUDO_LOG"\nexit 99\n' > fake-sudo-bin/sudo
+          chmod +x fake-sudo-bin/sudo
+
+          cat > ci-lib.sh <<'LIB'
+          # To the step's own stderr, kept on fd 3: a check that fails inside a
+          # run whose stderr goes to a file would otherwise say why into it.
+          exec 3>&2
+          fail() { printf '%s\n' "FAIL [$SH]: $*" >&3; exit 1; }
+
+          # `curl ... | sh` lands in whatever /bin/sh is: across the Linux
+          # distributions at least dash, bash and busybox ash; on macOS bash 3.2
+          # in POSIX mode, or dash where /var/select/sh was switched to it.
+          # `busybox ash` is two words, so callers run $SH unquoted.
+          if [ "$(uname -s)" = Darwin ]; then
+            for_each_shell() { for SH in sh dash bash; do "$@"; done; }
+          else
+            for_each_shell() { for SH in dash bash 'busybox ash'; do "$@"; done; }
+          fi
+
+          # Absolute, so that a step can run the script from another directory.
+          SCRIPT=$PWD/site/static/install.sh
+          ASSET=$PWD/.ci-serve/latest/download/$ASSET_NAME
+          FAKE_SUDO_BIN=$PWD/fake-sudo-bin
+          export SUDO_LOG=$PWD/sudo.log
+
+          # A home of its own, emptied before every run: the default goes to
+          # ~/.local/bin, and neither what an earlier run left there nor
+          # anything the runner keeps in its own home can decide a result.
+          export HOME=$PWD/ci-home
+          DEFAULT_DIR=$HOME/.local/bin
+          # The PATH of a user who has not added ~/.local/bin to it yet, and the
+          # PATH of one who has - the second is the default here, because most
+          # steps are about the install rather than about PATH advice.
+          BASE_PATH=$PATH
+          export PATH="$DEFAULT_DIR:$BASE_PATH"
+
+          # Root-owned, which is where /usr/local/bin is on Linux. Not
+          # /usr/local/bin itself: a macOS runner can have made that writable
+          # to its user, and which answer the script gives depends on it.
+          SYSTEM_DIR=/opt/pockode-ci/bin
+
           # The two paths the script used to use, kept here because several
           # steps have to show that nothing goes to either any more: the
           # download's, and the staged copy's before it got an unguessable name.
-          PREDICTABLE=/tmp/pockode
-          PREDICTABLE_STAGED=$INSTALL_DIR/pockode.download
           # Where mktemp creates things: the shared directory the download has
           # to end up in a private subdirectory of, rather than directly in.
           TMPBASE=${TMPDIR:-/tmp}
           TMPBASE=${TMPBASE%/}
-
-          # `curl ... | sh` lands in whatever /bin/sh is, which across macOS and
-          # the Linux distributions is at least these three. `busybox ash` is two
-          # words, so callers run `$SH site/static/install.sh` unquoted.
-          for_each_shell() {
-            for SH in dash bash 'busybox ash'; do
-              "$@"
-            done
-          }
+          PREDICTABLE=/tmp/pockode
+          # The same fixed name under TMPDIR, which a macOS runner sets: as
+          # predictable as /tmp's, and where a regression would write instead.
+          PREDICTABLE_TMPDIR=$TMPBASE/pockode
+          PREDICTABLE_STAGED=$SYSTEM_DIR/pockode.download
 
           # Runs start from nothing installed, so no step can pass on what an
           # earlier one left behind.
           reset_install() {
-            sudo rm -f "$TARGET" "$INSTALL_DIR"/pockode.*
-            rm -rf "$PREDICTABLE" "$TMPBASE"/pockode-install.*
+            rm -rf "$HOME"
+            mkdir -p "$HOME"
+            sudo rm -rf "$SYSTEM_DIR"
+            rm -rf "$PREDICTABLE" "$PREDICTABLE_TMPDIR" "$TMPBASE"/pockode-install.*
             : > "$DOWNLOAD_LOG"
           }
 
-          install_sh() { $SH site/static/install.sh "$@"; }
+          # Read from stdin, the way `curl ... | sh -s -- ...` hands it over.
+          # Every run through here is also the proof that it never asks for
+          # root: sudo is the fake, and a run that reached it fails here even if
+          # the script carried on regardless. 98 rather than fail's 1: called in
+          # a subshell, this exit only ends the subshell, and 1 is the status a
+          # refusal test is waiting for.
+          install_sh() {
+            : > "$SUDO_LOG"
+            run_status=0
+            PATH="$FAKE_SUDO_BIN:$PATH" $SH -s -- "$@" < "$SCRIPT" || run_status=$?
+            if [ -s "$SUDO_LOG" ]; then
+              printf '%s\n' "FAIL [$SH]: [$*] reached sudo: $(cat "$SUDO_LOG")" >&3
+              exit 98
+            fi
+            return "$run_status"
+          }
 
+          # The one install that is meant to reach sudo, and it gets the real one.
+          sudo_install_sh() { $SH -s -- --install-dir "$SYSTEM_DIR" "$@" < "$SCRIPT"; }
+
+          # A PATH holding every tool install.sh and the fake curl run and
+          # nothing else, less the ones named: the only way to take a tool away
+          # from `command -v`. The single difference from a working machine is
+          # then the tool taken away, so a script that got past its absence
+          # would be caught by the assertions rather than die of some other
+          # missing tool and look the same. A tool added to install.sh later and
+          # not added here fails loudly as a 127, which is the right way round.
+          # Shells and hash tools a platform does not have are simply left out.
+          path_without() {
+            dir=$PWD/path-without-$(printf '%s' "$*" | tr ' ' -)
+            rm -rf "$dir"
+            mkdir -p "$dir"
+            for tool in sh dash bash busybox uname mktemp rm awk sudo cp chmod mv \
+              dirname mkdir sed cat stat sha256sum shasum; do
+              case " $* " in *" $tool "*) continue ;; esac
+              found=$(command -v "$tool") || continue
+              ln -s "$found" "$dir/$tool"
+            done
+            ln -s "$PWD/fake-bin/curl" "$dir/curl"
+            printf '%s' "$dir"
+          }
+
+          # busybox ash resolves sha256sum as one of its own applets without
+          # consulting PATH, the way it does uname, so there the tool cannot be
+          # taken away - which is also why busybox needs no fallback. Asked
+          # rather than assumed, like the uname branches. $1 is the PATH the
+          # tool was taken out of.
+          shell_keeps_sha256sum() {
+            if PATH=$1 $SH -c 'command -v sha256sum' > /dev/null 2>&1; then
+              echo "$SH answers sha256sum itself; leaving this branch to the other shells"
+              return 0
+            fi
+            return 1
+          }
+
+          # $1 defaults to the default install.
           assert_installed() {
-            if [ -L "$TARGET" ]; then fail "$TARGET is a symlink"; fi
-            [ -f "$TARGET" ] || fail "$TARGET is not a regular file"
-            mode=$(stat -c %a "$TARGET")
-            [ "$mode" = 755 ] || fail "$TARGET is mode $mode, not 755"
-            cmp -s "$ASSET" "$TARGET" || fail "$TARGET is not the asset that was served"
+            target=${1:-$DEFAULT_DIR/pockode}
+            if [ -L "$target" ]; then fail "$target is a symlink"; fi
+            [ -f "$target" ] || fail "$target is not a regular file"
+            mode=$("$MODE_OF" "$target")
+            [ "$mode" = 755 ] || fail "$target is mode $mode, not 755"
+            cmp -s "$ASSET" "$target" || fail "$target is not the asset that was served"
             # Quiet: this runs a few dozen times, and a failure has fail to
             # speak through.
-            pockode -version > /dev/null || fail "the installed pockode does not run"
-            # Installed by one user, runnable by all the others: nothing but the
-            # explicit chmod on the staged copy makes this true.
-            sudo -u nobody "$TARGET" -version > /dev/null ||
-              fail "a user who did not install it cannot run $TARGET"
+            "$target" -version > /dev/null || fail "the installed $target does not run"
+          }
+
+          # Installed with sudo, owned by root, and runnable by users other than
+          # the one who installed it: nothing but the explicit chmod on the
+          # staged copy makes the last true. Only asked of this directory - a
+          # home directory need not let other users in at all.
+          assert_system_install() {
+            assert_installed "$SYSTEM_DIR/pockode"
+            owner=$(ls -ld "$SYSTEM_DIR/pockode" | awk '{ print $3 }')
+            [ "$owner" = root ] || fail "$SYSTEM_DIR/pockode is owned by $owner, not root"
+            sudo -u nobody "$SYSTEM_DIR/pockode" -version > /dev/null ||
+              fail "a user who did not install it cannot run $SYSTEM_DIR/pockode"
           }
 
           # By shape, not by name: the staged copy is called something different
-          # every run, so there is no one path to look for.
+          # every run, so there is no one path to look for. Any directories
+          # given are searched besides the two every step installs to.
           assert_no_leftovers() {
-            staged=$(find "$INSTALL_DIR" -maxdepth 1 -name 'pockode.*')
+            staged=$(find "$DEFAULT_DIR" "$SYSTEM_DIR" "$@" -maxdepth 1 -name 'pockode.*' 2> /dev/null || :)
             [ -z "$staged" ] || fail "a staged file was left behind: $staged"
-            leftover=$(find "$TMPBASE" -maxdepth 1 -name 'pockode-install.*')
+            # The slash is for macOS, where /tmp is a symlink and BSD find
+            # would otherwise list the link and nothing behind it.
+            leftover=$(find "$TMPBASE/" -maxdepth 1 -name 'pockode-install.*')
             [ -z "$leftover" ] || fail "a temporary directory was left behind: $leftover"
           }
 
@@ -803,22 +932,259 @@ jobs:
           download_dir_mode() { awk '$2 ~ /\/pockode$/ { m = $1 } END { print m }' "$DOWNLOAD_LOG"; }
           LIB
 
-      - name: An install is executable by a user who did not install it
+      # A first install on a machine that has never had ~/.local/bin: it is not
+      # on PATH, so what is printed last is the only way the user finds what
+      # was installed. Compared in full and then followed the way a user would:
+      # the printed line is run, a fresh shell reads the startup file it wrote,
+      # and the `pockode` that shell finds has to be this install.
+      - name: A first install needs no sudo and says how to put it on PATH
+        run: |
+          . ./ci-lib.sh
+          target=$DEFAULT_DIR/pockode
+          # macOS terminals start login shells, which read .bash_profile rather
+          # than .bashrc.
+          if [ "$(uname -s)" = Darwin ]; then bash_rc=.bash_profile; else bash_rc=.bashrc; fi
+          # $1 is the login shell, $2 the startup file the advice has to write.
+          check_login_shell() {
+            reset_install
+            ( PATH=$BASE_PATH; export SHELL="/bin/$1"; install_sh ) > out.txt 2> err.txt ||
+              fail "[$1] the install failed: $(cat err.txt)"
+            {
+              echo "Downloading Pockode for $PLATFORM..."
+              echo "Installing to $target..."
+              echo
+              echo "$DEFAULT_DIR is not on your PATH. To add it, run:"
+              echo "  echo 'export PATH=\"\$HOME/.local/bin:\$PATH\"' >> ~/$2"
+              echo "and open a new terminal."
+              echo
+              echo "Done! Until 'pockode' finds this copy, start it with its full path:"
+              echo "  $target -password YOUR_PASSWORD"
+            } > wanted.txt
+            diff -u wanted.txt out.txt || fail "[$1] a first install does not print what it should"
+            [ ! -s err.txt ] || fail "[$1] a first install wrote to stderr: $(cat err.txt)"
+            assert_installed
+            assert_no_leftovers
+
+            ( PATH=$BASE_PATH; sh -c "$(sed -n 5p out.txt)" ) || fail "[$1] the printed PATH command failed"
+            found=$(PATH=$BASE_PATH sh -c '. "$HOME/$1" && command -v pockode' sh "$2" || :)
+            [ "$found" = "$target" ] ||
+              fail "[$1] after following the advice, 'pockode' is '$found', not $target"
+          }
+          check() {
+            check_login_shell zsh .zshrc
+            check_login_shell bash "$bash_rc"
+            check_login_shell sh .profile
+
+            # fish is not on either runner, so its advice is checked as text.
+            reset_install
+            ( PATH=$BASE_PATH; export SHELL=/usr/bin/fish; install_sh ) > out.txt 2> err.txt ||
+              fail "[fish] the install failed: $(cat err.txt)"
+            [ "$(sed -n 5p out.txt)" = "  fish_add_path $DEFAULT_DIR" ] ||
+              fail "[fish] the advice is not fish_add_path: $(cat out.txt)"
+          }
+          for_each_shell check
+
+      # Once ~/.local/bin is on PATH every later run is an upgrade, and its
+      # output is what nearly every user sees from then on. Compared in full:
+      # most other assertions here look at a run that failed, so an extra line,
+      # or a reworded one, would go unnoticed.
+      - name: An upgrade replaces the existing install
         run: |
           . ./ci-lib.sh
           check() {
             reset_install
-            install_sh || fail "the install failed"
+            mkdir -p "$DEFAULT_DIR"
+            printf '#!/bin/sh\necho "pockode (old)"\n' > "$DEFAULT_DIR/pockode"
+            chmod 755 "$DEFAULT_DIR/pockode"
+            # Under a restrictive umask the download is readable by the user
+            # who ran the script and no one else, which is where installing it
+            # by moving it into place leaves a binary of the wrong mode.
+            (umask 077; install_sh) > out.txt 2> err.txt || fail "the upgrade failed: $(cat err.txt)"
+            printf '%s\n' "Downloading Pockode for $PLATFORM..." \
+              "Installing to $DEFAULT_DIR/pockode..." \
+              "Done! Run 'pockode -password YOUR_PASSWORD' to get started." > wanted.txt
+            diff -u wanted.txt out.txt || fail "an upgrade changed what it prints"
+            [ ! -s err.txt ] || fail "an upgrade wrote to stderr: $(cat err.txt)"
             assert_installed
+            assert_no_leftovers
+            # The step's bash remembers where it last found pockode.
+            hash -r
+            [ "$(command -v pockode)" = "$DEFAULT_DIR/pockode" ] || fail "'pockode' is $(command -v pockode)"
+            pockode -version > /dev/null || fail "'pockode -version' does not run the upgrade"
+          }
+          for_each_shell check
+
+      # Everyone who installed before ~/.local/bin was the default has pockode
+      # in /usr/local/bin, which comes before anything a user adds to PATH:
+      # without a warning, every upgrade from then on installs a copy that never
+      # runs. The warning is compared in full and its advice followed, after
+      # which the next run has nothing left to warn about.
+      - name: An older copy that comes first on PATH is warned about
+        run: |
+          . ./ci-lib.sh
+          # $1 is the directory, $2 "sudo" when it needs it.
+          old_copy() {
+            printf '#!/bin/sh\necho "pockode (old)"\n' > old-pockode
+            $2 mkdir -p "$1"
+            $2 cp old-pockode "$1/pockode"
+            $2 chmod 755 "$1/pockode"
+          }
+          # $1 is the directory holding the old copy, $2 the command that
+          # removes it, $3 the rest of PATH.
+          expect_warning() {
+            ( PATH="$1:$3"; install_sh ) > out.txt 2> err.txt || fail "[$1] the install failed: $(cat err.txt)"
+            {
+              echo
+              echo "Warning: 'pockode' runs $1/pockode, not the copy just installed at $DEFAULT_DIR/pockode."
+              echo "It comes first on your PATH, so it will keep running instead of this one."
+              echo "If it is an older install, remove it with:"
+              echo "  $2 $1/pockode"
+            } > wanted.txt
+            diff -u wanted.txt err.txt || fail "[$1] the warning is not the one expected"
+            assert_installed
+            # Until then, the full path is the way to the new copy.
+            grep -qxF "  $DEFAULT_DIR/pockode -password YOUR_PASSWORD" out.txt ||
+              fail "[$1] the full path to the new copy is not given: $(cat out.txt)"
+
+            ( PATH="$1:$3"; sh -c "$(tail -n 1 err.txt)" ) || fail "[$1] the printed removal failed"
+            [ ! -e "$1/pockode" ] || fail "[$1] the printed removal left the old copy"
+            ( PATH="$1:$3"; install_sh ) > out.txt 2> err.txt || fail "[$1] the install failed: $(cat err.txt)"
+            [ ! -s err.txt ] || fail "[$1] still warns once the old copy is gone: $(cat err.txt)"
+            assert_installed
+            assert_no_leftovers
+          }
+          check() {
+            # Upgrading from the previous install.sh: a root-owned copy on the
+            # default PATH, and ~/.local/bin nowhere on it yet.
+            reset_install
+            old_copy "$SYSTEM_DIR" sudo
+            expect_warning "$SYSTEM_DIR" "sudo rm" "$BASE_PATH"
+
+            # A copy the user put in a directory of their own, ahead of a
+            # ~/.local/bin that is already on PATH.
+            reset_install
+            old_copy "$HOME/old-bin"
+            expect_warning "$HOME/old-bin" rm "$PATH"
+          }
+          for_each_shell check
+
+      # Every way of naming a directory lands the install there and nowhere
+      # else - not also in ~/.local/bin - and one the user can write to is
+      # installed without sudo, exactly like the default.
+      - name: An install directory of the user's choosing is installed to
+        run: |
+          . ./ci-lib.sh
+          # $1 is the directory the install has to land in; the rest is passed
+          # to install_sh.
+          lands_in() {
+            want=$1
+            shift
+            install_sh "$@" > out.txt 2> err.txt || fail "[$*] the install failed: $(cat err.txt)"
+            grep -qxF "Installing to $want/pockode..." out.txt || fail "[$*] did not install to $want: $(cat out.txt)"
+            assert_installed "$want/pockode"
+            assert_no_leftovers "$want"
+            [ ! -e "$DEFAULT_DIR" ] || fail "[$*] created $DEFAULT_DIR as well"
+          }
+          check() {
+            reset_install
+            lands_in "$HOME/a/bin" --install-dir "$HOME/a/bin"
+            reset_install
+            lands_in "$HOME/b/bin" --install-dir="$HOME/b/bin/"
+            reset_install
+            ( export POCKODE_INSTALL_DIR="$HOME/c/bin"; lands_in "$HOME/c/bin" )
+            # The flag wins over the environment.
+            reset_install
+            ( export POCKODE_INSTALL_DIR="$HOME/not-here"; lands_in "$HOME/d/bin" --install-dir "$HOME/d/bin" )
+            [ ! -e "$HOME/not-here" ] || fail "POCKODE_INSTALL_DIR was used over --install-dir"
+            # A tilde the shell leaves alone - after an =, and inside quotes -
+            # is the user's home all the same, not a directory named "~".
+            reset_install
+            # shellcheck disable=SC2088
+            lands_in "$HOME/e/bin" --install-dir='~/e/bin'
+            reset_install
+            # shellcheck disable=SC2088
+            ( export POCKODE_INSTALL_DIR='~/f/bin'; lands_in "$HOME/f/bin" )
+            # Relative to where it was run.
+            reset_install
+            ( cd "$HOME"; lands_in "$HOME/g/bin" --install-dir g/bin )
+
+            # A path that is a file cannot be installed into.
+            reset_install
+            : > "$HOME/a-file"
+            status=0
+            install_sh --install-dir "$HOME/a-file" > out.txt 2> err.txt || status=$?
+            [ "$status" = 1 ] || fail "installing into a file exited $status, wanted 1"
+            grep -qxF "Nothing was installed: $HOME/a-file exists and is not a directory." err.txt ||
+              fail "installing into a file does not say why: $(cat err.txt)"
+
+            # The default is ~/.local/bin, which means nothing without a home,
+            # and that is found out before anything is downloaded.
+            reset_install
+            status=0
+            ( unset HOME; install_sh ) > out.txt 2> err.txt || status=$?
+            [ "$status" = 1 ] || fail "an install without HOME exited $status, wanted 1"
+            grep -qF 'Cannot find your home directory' err.txt ||
+              fail "an install without HOME does not say why: $(cat err.txt)"
+            [ ! -s "$DOWNLOAD_LOG" ] || fail "an install without HOME downloaded: $(cat "$DOWNLOAD_LOG")"
+          }
+          for_each_shell check
+
+      # The one install that is meant to use sudo: a directory the user named
+      # and cannot write to. Asked for before anything is written, and only
+      # there - see the refusal steps below for the other half.
+      - name: A directory the user cannot write to is installed with sudo, for every user
+        run: |
+          . ./ci-lib.sh
+          check() {
+            reset_install
+            sudo_install_sh > out.txt 2> err.txt || fail "the install failed: $(cat err.txt)"
+            grep -qxF "You cannot write to $SYSTEM_DIR, so installing there needs sudo." out.txt ||
+              fail "the install did not say why it needs sudo: $(cat out.txt)"
+            assert_system_install
+            # Also the upgrade case, under the umask where only the explicit
+            # chmod leaves the rest of the machine able to run it.
+            (umask 077; sudo_install_sh) > /dev/null || fail "the upgrade failed"
+            assert_system_install
+            assert_no_leftovers
+            [ ! -e "$DEFAULT_DIR" ] || fail "created $DEFAULT_DIR as well"
+
+            # Without a sudo to fall back on, it is refused and says why.
+            reset_install
+            status=0
+            PATH=$(path_without sudo) $SH -s -- --install-dir "$SYSTEM_DIR" < "$SCRIPT" > out.txt 2> err.txt || status=$?
+            [ "$status" = 1 ] || fail "an install without sudo exited $status, wanted 1"
+            grep -qF "you cannot write to $SYSTEM_DIR, and sudo is not available" err.txt ||
+              fail "an install without sudo does not say why: $(cat err.txt)"
+            [ ! -e "$SYSTEM_DIR/pockode" ] || fail "an install without sudo installed anyway"
+          }
+          for_each_shell check
+
+      # What the default promises is that it never needs root, including when
+      # it cannot write where it wants to - usually a ~/.local some earlier sudo
+      # created. It says which directory is in the way and how to take it back,
+      # and the advice is followed to show that it is enough.
+      - name: The default refuses rather than use sudo, and says how to fix it
+        run: |
+          . ./ci-lib.sh
+          check() {
+            reset_install
+            sudo mkdir -p "$HOME/.local"
+            status=0
+            install_sh > out.txt 2> err.txt || status=$?
+            [ "$status" = 1 ] || fail "an install into a root-owned ~/.local exited $status, wanted 1"
+            {
+              echo "Nothing was installed: you cannot write to $HOME/.local."
+              echo "It is usually left behind by an earlier command run with sudo. Take it back with:"
+              echo "  sudo chown -R \"\$(id -un)\" $HOME/.local"
+              echo "or install somewhere else with --install-dir."
+            } > wanted.txt
+            diff -u wanted.txt err.txt || fail "the refusal is not the one expected"
+            [ ! -e "$DEFAULT_DIR" ] || fail "$DEFAULT_DIR was created anyway"
             assert_no_leftovers
 
-            # Also the upgrade case. Under a restrictive umask the download is
-            # readable by the user who ran the script and no one else, which is
-            # where installing it by moving it into place leaves a binary the
-            # rest of the machine cannot run.
-            (umask 077; install_sh) || fail "the upgrade failed"
+            sh -c "$(sed -n 3p err.txt)" || fail "the printed chown failed"
+            install_sh > /dev/null || fail "after taking ~/.local back, the install still failed"
             assert_installed
-            assert_no_leftovers
           }
           for_each_shell check
 
@@ -829,7 +1195,7 @@ jobs:
           . ./ci-lib.sh
           check() {
             reset_install
-            install_sh
+            install_sh > /dev/null
             first=$(download_path)
             mode=$(download_dir_mode)
             dir=$(dirname "$first")
@@ -838,7 +1204,7 @@ jobs:
             esac
             [ "$mode" = 700 ] || fail "the download directory $dir is mode $mode, not 700"
 
-            install_sh
+            install_sh > /dev/null
             [ "$first" != "$(download_path)" ] || fail "two runs downloaded to the same path $first"
             assert_no_leftovers
           }
@@ -850,21 +1216,25 @@ jobs:
           check() {
             reset_install
             printf 'someone else\n' > canary
-            ln -s "$PWD/canary" "$PREDICTABLE"
-            install_sh
+            # -f: on Linux the two are one path.
+            ln -sf "$PWD/canary" "$PREDICTABLE"
+            ln -sf "$PWD/canary" "$PREDICTABLE_TMPDIR"
+            install_sh > /dev/null
             assert_installed
             assert_no_leftovers
             [ -L "$PREDICTABLE" ] || fail "$PREDICTABLE is no longer the symlink it was"
-            grep -q 'someone else' canary || fail "the download was written through $PREDICTABLE"
+            [ -L "$PREDICTABLE_TMPDIR" ] || fail "$PREDICTABLE_TMPDIR is no longer the symlink it was"
+            grep -q 'someone else' canary || fail "the download was written through a planted symlink"
           }
           for_each_shell check
 
       # /usr/local/bin is root-only on Linux but group-writable on a default
       # macOS, where anyone in the admin group can leave a symlink at a staged
-      # name they can predict and have the install follow it as root. Planted in
-      # a loop, the way it would be for real: deleting the name before writing
-      # to it leaves a gap between the two commands that this wins on the first
-      # install, so only a name that cannot be guessed passes this.
+      # name they can predict and have an install someone runs with sudo follow
+      # it as root. Planted in a loop, the way it would be for real: deleting
+      # the name before writing to it leaves a gap between the two commands that
+      # this wins on the first install, so only a name that cannot be guessed
+      # passes this.
       - name: The staged name cannot be planted, not even in a loop
         run: |
           . ./ci-lib.sh
@@ -874,17 +1244,25 @@ jobs:
           trap 'rm -f plant-flag' EXIT
           check() {
             reset_install
+            sudo mkdir -p "$SYSTEM_DIR"
             printf 'someone else\n' > canary
-            # Standing in for a user who can write $INSTALL_DIR - the runner's
-            # is root-only, so reaching it at all needs sudo here. The flag file
+            # Standing in for a user who can write $SYSTEM_DIR - it is
+            # root-only, so reaching it at all needs sudo here. The flag file
             # stops the loop: killing it by pid would only reach the sudo.
             : > plant-flag
             sudo sh -c 'while [ -e "$1" ]; do ln -sfn "$2" "$3"; done' \
               plant "$PWD/plant-flag" "$PWD/canary" "$PREDICTABLE_STAGED" &
+            # A loop that never planted anything would pass everything below.
+            waited=0
+            until sudo test -L "$PREDICTABLE_STAGED"; do
+              waited=$((waited + 1))
+              [ "$waited" -lt 100 ] || fail "nothing was ever planted at $PREDICTABLE_STAGED"
+              sleep 0.1
+            done
             attempt=0
             while [ "$attempt" -lt 5 ]; do
-              install_sh || fail "the install failed"
-              assert_installed
+              sudo_install_sh > /dev/null || fail "the install failed"
+              assert_system_install
               grep -q 'someone else' canary ||
                 fail "the install was written through a symlink planted at $PREDICTABLE_STAGED"
               attempt=$((attempt + 1))
@@ -904,60 +1282,67 @@ jobs:
           . ./ci-lib.sh
           check() {
             reset_install
-            install_sh
-            if install_sh --version 0.0.0-no-such-release; then
+            # This order: the other way round, the default copy would already
+            # be ahead of $SYSTEM_DIR on PATH and draw a warning.
+            sudo_install_sh > /dev/null
+            install_sh > /dev/null
+            if install_sh --version 0.0.0-no-such-release 2> /dev/null; then
               fail "installing a version that does not exist should have failed"
             fi
+            if install_sh --install-dir "$SYSTEM_DIR" --version 0.0.0-no-such-release 2> /dev/null; then
+              fail "installing a version that does not exist into $SYSTEM_DIR should have failed"
+            fi
             assert_installed
+            assert_system_install
             assert_no_leftovers
           }
           for_each_shell check
 
       # The point of the checksum: a file that does not match the release is not
-      # installed, and that is decided before anything asks for root. The fake
-      # sudo exits 99 rather than refusing quietly, so a script that did reach
-      # it fails here instead of passing on a cleanup that happened to work.
+      # installed, and that is decided before anything asks for root - so it
+      # holds for a directory that would need sudo too, where install_sh's fake
+      # sudo fails any run that reached it.
       - name: A download that cannot be verified is refused, and sudo is never reached
         run: |
           . ./ci-lib.sh
-          mkdir -p fake-sudo-bin
-          printf '#!/bin/sh\nprintf "%%s\\n" "$*" >> "$SUDO_LOG"\nexit 99\n' > fake-sudo-bin/sudo
-          chmod +x fake-sudo-bin/sudo
-          export SUDO_LOG=$PWD/sudo.log
-
           # $1 is the fixture release under test, $2 what stderr has to say
           # about it - the three failures need three different answers from the
-          # user, so one wording standing in for another is a real defect.
+          # user, so one wording standing in for another is a real defect. $3 is
+          # the install that has to survive it, and the rest goes to install_sh.
           refuses() {
-            : > "$SUDO_LOG"
+            release=$1
+            says=$2
+            survivor=$3
+            shift 3
             status=0
-            # In a subshell: install_sh is a function, and a variable
-            # assignment prefixing one of those is only scoped to the call in
-            # newer bash. A fake sudo left on PATH would fail the assertions
-            # below, which use the real one.
-            ( PATH="$PWD/fake-sudo-bin:$PATH"; install_sh --version "$1" ) > out.txt 2> err.txt || status=$?
-            [ "$status" = 1 ] || fail "[$1] exited $status, wanted 1"
-            grep -qF "$2" err.txt || fail "[$1] stderr does not say '$2': $(cat err.txt)"
+            install_sh "$@" --version "$release" > out.txt 2> err.txt || status=$?
+            [ "$status" = 1 ] || fail "[$release $*] exited $status, wanted 1"
+            grep -qF "$says" err.txt || fail "[$release $*] stderr does not say '$says': $(cat err.txt)"
             # These are named versions, where the binary and the checksums came
             # from one release by construction. Offering the mid-install
             # explanation here would hand the user an account of a mismatch
             # that cannot be true, for the one failure that is a security event.
             if grep -qF 'published mid-install' err.txt; then
-              fail "[$1] offered the latest-release explanation for a named version: $(cat err.txt)"
+              fail "[$release $*] offered the latest-release explanation for a named version: $(cat err.txt)"
             fi
-            if [ -s "$SUDO_LOG" ]; then fail "[$1] reached sudo: $(cat "$SUDO_LOG")"; fi
-            if grep -q 'Installing to' out.txt; then fail "[$1] said it was installing: $(cat out.txt)"; fi
+            if grep -q 'Installing to' out.txt; then fail "[$release $*] said it was installing: $(cat out.txt)"; fi
             # The install that was already there is what a user stands to lose.
-            assert_installed
+            assert_installed "$survivor"
             assert_no_leftovers
+          }
+          refuses_everywhere() {
+            refuses "$1" "$2" "$DEFAULT_DIR/pockode"
+            refuses "$1" "$2" "$SYSTEM_DIR/pockode" --install-dir "$SYSTEM_DIR"
           }
 
           check() {
             reset_install
-            install_sh || fail "the install failed"
-            refuses 0.0.0-tampered 'does not match the checksum'
-            refuses 0.0.0-no-checksums 'without checksums.txt'
-            refuses 0.0.0-other-platform 'does not list pockode-linux-amd64'
+            # Into $SYSTEM_DIR first, for the reason in the step above.
+            sudo_install_sh > /dev/null || fail "the install into $SYSTEM_DIR failed"
+            install_sh > /dev/null || fail "the install failed"
+            refuses_everywhere 0.0.0-tampered 'does not match the checksum'
+            refuses_everywhere 0.0.0-no-checksums 'without checksums.txt'
+            refuses_everywhere 0.0.0-other-platform "does not list $ASSET_NAME"
           }
           for_each_shell check
 
@@ -985,37 +1370,40 @@ jobs:
       - name: Without sha256sum or shasum nothing is downloaded or installed
         run: |
           . ./ci-lib.sh
-          # A PATH of its own is the only way to take a tool away from
-          # `command -v`, and this one takes away nothing else: everything
-          # install.sh runs is in it, down to the sudo it installs with, so the
-          # single difference from a working machine is the missing hash tool.
-          # A script that verified late, or not at all, would get all the way to
-          # the download or the install and be caught by the assertions below
-          # rather than dying of some other missing tool and looking the same.
-          # A tool added to install.sh later and not added here fails loudly as
-          # a 127, which is the right way round.
-          mkdir -p nosha-bin
-          for tool in dash bash busybox uname mktemp rm awk sudo cp chmod mv stat dirname; do
-            ln -sf "$(command -v "$tool")" "nosha-bin/$tool"
-          done
-          ln -sf "$PWD/fake-bin/curl" nosha-bin/curl
           check() {
-            # busybox ash resolves sha256sum as one of its own applets without
-            # consulting PATH, the way it already does uname, so there the tool
-            # cannot be taken away - which is also why busybox needs no
-            # fallback. Asked rather than assumed, like the uname branches.
-            if PATH="$PWD/nosha-bin" $SH -c 'command -v sha256sum' > /dev/null 2>&1; then
-              echo "$SH answers sha256sum itself; leaving this branch to the other shells"
-              return 0
-            fi
+            no_sha=$(path_without sha256sum shasum)
+            if shell_keeps_sha256sum "$no_sha"; then return 0; fi
             reset_install
             status=0
-            PATH="$PWD/nosha-bin" $SH site/static/install.sh > out.txt 2> err.txt || status=$?
+            ( PATH=$no_sha; install_sh ) > out.txt 2> err.txt || status=$?
             [ "$status" = 1 ] || fail "a machine without a sha256 tool exited $status, wanted 1"
             grep -qF 'neither sha256sum nor shasum' err.txt ||
               fail "stderr does not name the missing tools: $(cat err.txt)"
-            [ ! -e "$TARGET" ] || fail "$TARGET was installed without being verified"
+            [ ! -e "$DEFAULT_DIR/pockode" ] || fail "pockode was installed without being verified"
             [ ! -s "$DOWNLOAD_LOG" ] || fail "something was downloaded anyway: $(cat "$DOWNLOAD_LOG")"
+            assert_no_leftovers
+          }
+          for_each_shell check
+
+      # shasum is all macOS has, and on Linux it is the fallback, so it has to
+      # verify on both: taken down to shasum alone, a good release installs and
+      # a tampered one is refused.
+      - name: With shasum alone the download is still verified
+        run: |
+          . ./ci-lib.sh
+          check() {
+            shasum_only=$(path_without sha256sum)
+            if shell_keeps_sha256sum "$shasum_only"; then return 0; fi
+            reset_install
+            ( PATH=$shasum_only; install_sh ) > out.txt 2> err.txt ||
+              fail "with shasum alone, a valid release was refused: $(cat err.txt)"
+            assert_installed
+            status=0
+            ( PATH=$shasum_only; install_sh --version 0.0.0-tampered ) > out.txt 2> err.txt || status=$?
+            [ "$status" = 1 ] || fail "with shasum alone, a tampered release exited $status, wanted 1"
+            grep -qF 'does not match the checksum' err.txt ||
+              fail "with shasum alone, a tampered release was not refused for its checksum: $(cat err.txt)"
+            assert_installed
             assert_no_leftovers
           }
           for_each_shell check
@@ -1053,11 +1441,11 @@ jobs:
           PY
           check() {
             reset_install
-            install_sh
+            install_sh > /dev/null
             for signal in SIGHUP:129 SIGINT:130 SIGTERM:143; do
               status=0
               FAKE_CURL_DELAY=60 python3 signal-run.py "${signal%:*}" "$FAKE_CURL_STARTED" \
-                $SH site/static/install.sh || status=$?
+                $SH "$SCRIPT" > /dev/null || status=$?
               [ "$status" = "${signal#*:}" ] ||
                 fail "${signal%:*} during the download exited $status, wanted ${signal#*:}"
               assert_installed
@@ -1079,37 +1467,28 @@ jobs:
             chmod +x fake-uname-bin/uname
           }
           # $1 is stdout in full, $2 something stderr has to contain, then the
-          # uname -s and uname -m that select the branch under test.
+          # uname -s and uname -m that select the branch under test - or none,
+          # for the runner's own.
           expect_streams() {
-            fake_uname "$3" "$4"
+            if [ $# -gt 2 ]; then
+              fake_uname "$3" "$4"
+            else
+              rm -rf fake-uname-bin
+            fi
             status=0
             PATH="$PWD/fake-fail-bin:$PWD/fake-uname-bin:$PATH" \
-              $SH site/static/install.sh > out.txt 2> err.txt || status=$?
-            [ "$status" != 0 ] || fail "[$3 $4] should not have reported success"
-            [ "$(cat out.txt)" = "$1" ] || fail "[$3 $4] stdout was '$(cat out.txt)', wanted '$1'"
-            grep -qF "$2" err.txt || fail "[$3 $4] stderr does not say '$2': $(cat err.txt)"
-          }
-          # The successful run is the output nearly every user ever sees, and its
-          # last line is the command the README tells them to run next. Compared
-          # in full: every other assertion in this workflow looks at a run that
-          # failed, so an extra line here, or a reworded one, would go unnoticed.
-          expect_success_stdout() {
-            reset_install
-            install_sh > out.txt 2> err.txt || fail "the install failed: $(cat err.txt)"
-            printf '%s\n' 'Downloading Pockode for linux/amd64...' \
-              "Installing to $TARGET..." \
-              "Done! Run 'pockode -password YOUR_PASSWORD' to get started." > wanted.txt
-            diff -u wanted.txt out.txt || fail "a successful install changed what it prints"
+              $SH "$SCRIPT" > out.txt 2> err.txt || status=$?
+            [ "$status" != 0 ] || fail "[${3-} ${4-}] should not have reported success"
+            [ "$(cat out.txt)" = "$1" ] || fail "[${3-} ${4-}] stdout was '$(cat out.txt)', wanted '$1'"
+            grep -qF "$2" err.txt || fail "[${3-} ${4-}] stderr does not say '$2': $(cat err.txt)"
           }
           check() {
-            expect_success_stdout
-
             # The one line a failed default run is allowed to put on stdout.
-            expect_streams 'Downloading Pockode for linux/amd64...' 'Download failed:' Linux x86_64
+            expect_streams "Downloading Pockode for $PLATFORM..." 'Download failed:'
 
             # The branches below need a uname the runner does not have, and
             # busybox ash answers uname from its own applet without consulting
-            # PATH - a fake cannot reach it, so the other two shells carry these
+            # PATH - a fake cannot reach it, so the other shells carry these
             # three. Asked rather than assumed: a shell that starts or stops
             # doing this changes what runs here without anyone editing it.
             fake_uname Plan9 x86_64

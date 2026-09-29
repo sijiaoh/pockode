@@ -9,8 +9,9 @@
     which is also how upgrades work.
 
     Nothing here needs administrator rights: the binary goes under
-    %LOCALAPPDATA% and only the per-user PATH is touched. That is the difference
-    from install.sh, which installs to /usr/local/bin with sudo.
+    %LOCALAPPDATA% and only the per-user PATH is touched. install.sh does the
+    same with ~/.local/bin, except that it only prints the PATH change rather
+    than making it.
 
 .PARAMETER Version
     Release tag to install, e.g. "v0.16.0". Defaults to the latest release.

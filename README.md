@@ -52,11 +52,11 @@ irm https://pockode.com/install.ps1 | iex
 pockode -password YOUR_PASSWORD
 ```
 
-The Windows installer needs no administrator rights; open a new terminal afterwards so `PATH` picks it up.
+Neither installer needs `sudo` or administrator rights: macOS and Linux get `~/.local/bin`, and the script tells you if that is not on your `PATH` yet; on Windows, open a new terminal afterwards so `PATH` picks it up. Upgrading from an old `/usr/local/bin` install? The script prints the command that removes the old copy.
 
 Scan the QR code with your phone. Done.
 
-> Every prebuilt binary, how each download is verified, how to install a specific version, and what Windows needs installed alongside it: [platform support](docs/platforms.md).
+> Every prebuilt binary, how each download is verified, how to install a specific version or into another directory, how to uninstall, and what Windows needs installed alongside it: [platform support](docs/platforms.md).
 
 > Need to manage multiple projects? Use [cluster mode](docs/cluster.md) — an orchestrator that registers project nodes and starts/stops their servers on demand.
 
