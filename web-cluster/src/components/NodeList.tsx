@@ -332,11 +332,14 @@ export function NodeList() {
 
 			<ReconnectBanner />
 
-			<div className="flex-1 overflow-y-auto p-4">
+			{/* No vertical padding on the scroller: a sticky header pins to its
+			    padding edge, so a top inset would leave a strip above a pinned
+			    header that the cards scrolling under it show through. */}
+			<div className="flex-1 overflow-y-auto px-4">
 				{/* Cards are read one at a time, so they stop widening long before the
 				    window does; past the expanded tier the spare width becomes a
 				    second column instead. */}
-				<div className="mx-auto max-w-3xl">
+				<div className="mx-auto max-w-3xl py-4">
 					{nodes.length === 0 ? (
 						<div className="flex flex-col items-center justify-center py-16 text-center">
 							<div className="flex h-16 w-16 items-center justify-center rounded-full bg-th-bg-tertiary text-th-text-muted">

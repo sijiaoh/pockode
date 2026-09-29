@@ -312,6 +312,24 @@ describe("WorkListOverlay", () => {
 		).toEqual(["Needs you1"]);
 	});
 
+	// A sticky heading pins to its scroller's padding edge, not its border
+	// edge, so any padding on the scroller is a strip above a pinned heading
+	// that the rows scrolling under it show through.
+	it("pins group headings flush with the top of the scroller", () => {
+		setWorks([createWork({ id: "s1", title: "Never started" })]);
+
+		renderList();
+
+		const heading = screen.getByRole("heading", {
+			level: 2,
+			name: /Not running/,
+		});
+		expect(heading).toHaveClass("sticky", "top-0");
+		const scroller = heading.closest(".overflow-auto");
+		expect(scroller).not.toBeNull();
+		expect(scroller?.className).not.toMatch(/(^|\s)p[ty]?-/);
+	});
+
 	// §6.1: the top of a group is what happened most recently. It matters most
 	// in *Stopped*, where "handed back a minute ago" and "broken since last
 	// week" are two different jobs.

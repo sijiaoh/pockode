@@ -259,93 +259,99 @@ export default function WorkListOverlay({
 			    wherever the list has been scrolled to. */}
 			<SegmentedControl segment={segment} onSelect={onSelectSegment} />
 
-			<div ref={scrollRef} className="min-h-0 flex-1 overflow-auto p-2">
-				{isLoading ? (
-					<div className="flex items-center justify-center py-8">
-						<Loader2 className="size-5 animate-spin text-th-text-muted" />
-					</div>
-				) : error ? (
-					<div className="flex flex-col items-center gap-2 py-8 text-center text-sm text-th-error">
-						<AlertCircle className="size-5" />
-						<p>{error}</p>
-					</div>
-				) : segment === "closed" ? (
-					<>
-						{/* Above the rows rather than instead of them: a page that did
+			{/* The inset belongs to the content, not the scroller: a sticky
+			    heading pins to the scroller's padding edge, so padding here
+			    would leave a strip above a pinned heading that the rows
+			    scrolling under it show through. */}
+			<div ref={scrollRef} className="min-h-0 flex-1 overflow-auto">
+				<div className="p-2">
+					{isLoading ? (
+						<div className="flex items-center justify-center py-8">
+							<Loader2 className="size-5 animate-spin text-th-text-muted" />
+						</div>
+					) : error ? (
+						<div className="flex flex-col items-center gap-2 py-8 text-center text-sm text-th-error">
+							<AlertCircle className="size-5" />
+							<p>{error}</p>
+						</div>
+					) : segment === "closed" ? (
+						<>
+							{/* Above the rows rather than instead of them: a page that did
 						    not arrive is no reason to take away the one the user was
 						    reading, and Retry asks for the page that failed, which is
 						    not always the page on screen. */}
-						{archiveError && (
-							<div className="flex flex-col items-center gap-2 py-4 text-center text-sm text-th-error">
-								<AlertCircle className="size-5" />
-								<p role="alert">{archiveError}</p>
-								<button
-									type="button"
-									onClick={() =>
-										workPagingActions.loadArchivePage(
-											archiveAttempt.page,
-											archiveAttempt.cursor,
-										)
-									}
-									className="min-h-[44px] rounded-lg px-4 text-sm text-th-text-primary hover:bg-th-bg-tertiary focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent"
-								>
-									Retry
-								</button>
-							</div>
-						)}
-						{!archiveLoaded ? (
-							!archiveError && (
-								<div className="flex items-center justify-center py-8">
-									<Loader2 className="size-5 animate-spin text-th-text-muted" />
+							{archiveError && (
+								<div className="flex flex-col items-center gap-2 py-4 text-center text-sm text-th-error">
+									<AlertCircle className="size-5" />
+									<p role="alert">{archiveError}</p>
+									<button
+										type="button"
+										onClick={() =>
+											workPagingActions.loadArchivePage(
+												archiveAttempt.page,
+												archiveAttempt.cursor,
+											)
+										}
+										className="min-h-[44px] rounded-lg px-4 text-sm text-th-text-primary hover:bg-th-bg-tertiary focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent"
+									>
+										Retry
+									</button>
 								</div>
-							)
-						) : closedStories.length === 0 ? (
-							// No action to offer here, so none is written.
-							<p className="py-8 text-center text-sm text-th-text-muted">
-								Nothing finished yet.
-							</p>
-						) : (
-							<div className="space-y-2">{closedStories.map(renderRow)}</div>
-						)}
-					</>
-				) : groups.length === 0 ? (
-					<div className="py-8 text-center text-sm text-th-text-muted">
-						<p>Nothing on the go.</p>
-						<p>Start with a story — the button below.</p>
-					</div>
-				) : (
-					<div className="space-y-4">
-						{groups.map(({ group, rows, hidden: groupHidden }) => (
-							<section key={group}>
-								<GroupHeading
-									group={group}
-									// The whole group's, not the number of rows fetched: a
-									// heading reading `Not running 50` over a group of 120 is
-									// not a smaller number, it is a wrong one
-									// (docs/list-paging-ui.md §4.1).
-									count={rows.length + groupHidden}
-								/>
-								{groupHidden > 0 && (
-									// Above the rows, because it leads backwards and points
-									// the way it leads: the rows it fetches are the least
-									// recently updated, off the bottom of a group listed
-									// newest first.
-									//
-									// Both capped groups can offer one at the same time, and
-									// pressing either lifts both caps: it is a lid coming off
-									// the segment, not a page being turned
-									// (docs/list-paging-ui.md §4.1).
-									<ShowEarlierWork
-										count={groupHidden}
-										isLoading={isEarlierLoading}
-										error={group === earlierErrorGroup ? earlierError : null}
+							)}
+							{!archiveLoaded ? (
+								!archiveError && (
+									<div className="flex items-center justify-center py-8">
+										<Loader2 className="size-5 animate-spin text-th-text-muted" />
+									</div>
+								)
+							) : closedStories.length === 0 ? (
+								// No action to offer here, so none is written.
+								<p className="py-8 text-center text-sm text-th-text-muted">
+									Nothing finished yet.
+								</p>
+							) : (
+								<div className="space-y-2">{closedStories.map(renderRow)}</div>
+							)}
+						</>
+					) : groups.length === 0 ? (
+						<div className="py-8 text-center text-sm text-th-text-muted">
+							<p>Nothing on the go.</p>
+							<p>Start with a story — the button below.</p>
+						</div>
+					) : (
+						<div className="space-y-4">
+							{groups.map(({ group, rows, hidden: groupHidden }) => (
+								<section key={group}>
+									<GroupHeading
+										group={group}
+										// The whole group's, not the number of rows fetched: a
+										// heading reading `Not running 50` over a group of 120 is
+										// not a smaller number, it is a wrong one
+										// (docs/list-paging-ui.md §4.1).
+										count={rows.length + groupHidden}
 									/>
-								)}
-								<div className="space-y-2">{rows.map(renderRow)}</div>
-							</section>
-						))}
-					</div>
-				)}
+									{groupHidden > 0 && (
+										// Above the rows, because it leads backwards and points
+										// the way it leads: the rows it fetches are the least
+										// recently updated, off the bottom of a group listed
+										// newest first.
+										//
+										// Both capped groups can offer one at the same time, and
+										// pressing either lifts both caps: it is a lid coming off
+										// the segment, not a page being turned
+										// (docs/list-paging-ui.md §4.1).
+										<ShowEarlierWork
+											count={groupHidden}
+											isLoading={isEarlierLoading}
+											error={group === earlierErrorGroup ? earlierError : null}
+										/>
+									)}
+									<div className="space-y-2">{rows.map(renderRow)}</div>
+								</section>
+							))}
+						</div>
+					)}
+				</div>
 			</div>
 
 			{/* Fixed above the bottom bar rather than at the end of the list, and
