@@ -1,11 +1,12 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Activity } from "../../lib/activity";
 import { uploadFile } from "../../lib/fileUpload";
 import { uploadActions } from "../../lib/uploadStore";
 import { useWorkStore } from "../../lib/workStore";
+import { worktreeActions } from "../../lib/worktreeStore";
 import type { WorkListItem } from "../../types/work";
 import SessionSidebar from "./SessionSidebar";
 
@@ -182,6 +183,11 @@ describe("SessionSidebar on a phone", () => {
 });
 
 describe("the Git tab's change count", () => {
+	beforeEach(() => {
+		worktreeActions.setIsGitRepo(true);
+		return () => worktreeActions.reset();
+	});
+
 	it("is spoken after the tab label, with the noun it counts", () => {
 		gitChangeCount = 5;
 		renderSidebar(vi.fn());
@@ -202,6 +208,24 @@ describe("the Git tab's change count", () => {
 		gitChangeCount = 0;
 		renderSidebar(vi.fn());
 		expect(screen.getByRole("button", { name: "Git" })).toBeInTheDocument();
+	});
+});
+
+// Hidden rather than disabled: an unusable Git tab would only raise the question
+// of why it cannot be used (docs/git-ui.md).
+describe("the Git tab", () => {
+	afterEach(() => worktreeActions.reset());
+
+	it("is left out of a project that is not a git repository", () => {
+		worktreeActions.setIsGitRepo(false);
+		renderSidebar(vi.fn());
+		expect(screen.queryByRole("button", { name: "Git" })).toBeNull();
+		expect(screen.getByRole("button", { name: "Files" })).toBeInTheDocument();
+	});
+
+	it("is left out until the server has said the project is one", () => {
+		renderSidebar(vi.fn());
+		expect(screen.queryByRole("button", { name: "Git" })).toBeNull();
 	});
 });
 

@@ -24,3 +24,23 @@ export function invalidateGitQueries(queryClient: QueryClient): Promise<void> {
 	// awaiting caller only needs to know the refresh finished.
 	return Promise.allSettled(refetched).then(() => undefined);
 }
+
+/**
+ * Drop everything the git panel read, for a project that has just stopped
+ * being a repository.
+ *
+ * Not invalidateGitQueries: the listener that learns the news runs before React
+ * re-renders, while the readers still hold `enabled: true`, so an invalidation
+ * would send every one of them off to be refused with -32002 — and retried.
+ * Removing also cancels whatever is in flight, and leaves no error behind to
+ * flash up if a later `git init` brings the panel back.
+ */
+export function removeGitQueries(queryClient: QueryClient): void {
+	for (const queryKey of [
+		gitStatusQueryKey,
+		gitLogQueryKey,
+		gitBranchesQueryKey,
+	]) {
+		queryClient.removeQueries({ queryKey });
+	}
+}

@@ -1,12 +1,14 @@
 package worktree
 
 import (
+	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestNewRegistry_NonGitRepo(t *testing.T) {
@@ -841,4 +843,110 @@ func resolveSymlinks(t *testing.T, path string) string {
 		t.Fatalf("EvalSymlinks(%q) failed: %v", path, err)
 	}
 	return resolved
+}
+
+// Refresh does not wait out the cache: a repository created a moment after the
+// last read is what the next read reports, and what IsGitRepo says from then on.
+func TestRefresh_SeesGitInitBeforeCacheExpires(t *testing.T) {
+	dir := resolveSymlinks(t, t.TempDir())
+	r := NewRegistry(dir, "")
+	if r.IsGitRepo() {
+		t.Fatal("expected IsGitRepo() = false before git init")
+	}
+
+	cmd := exec.Command("git", "init")
+	cmd.Dir = dir
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v\n%s", err, out)
+	}
+
+	snap, err := r.Refresh(context.Background())
+	if err != nil {
+		t.Fatalf("Refresh: %v", err)
+	}
+	if !snap.IsGitRepo || !r.IsGitRepo() {
+		t.Errorf("after git init: Refresh = %+v, IsGitRepo() = %v; want both true", snap, r.IsGitRepo())
+	}
+}
+
+// IsGitRepoFresh answers for a decision that sticks (story_start's worktree),
+// so a `git init` a moment ago is already seen.
+func TestIsGitRepoFresh_SeesGitInitBeforeCacheExpires(t *testing.T) {
+	dir := resolveSymlinks(t, t.TempDir())
+	r := NewRegistry(dir, "")
+	if r.IsGitRepo() {
+		t.Fatal("expected IsGitRepo() = false before git init")
+	}
+
+	cmd := exec.Command("git", "init")
+	cmd.Dir = dir
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v\n%s", err, out)
+	}
+
+	if !r.IsGitRepoFresh() {
+		t.Error("IsGitRepoFresh() = false right after git init, want true")
+	}
+}
+
+// A read that was cancelled has learned nothing, so it must not overwrite a
+// repository the registry knows about with "not a git repository".
+func TestRefresh_CancelledReadKeepsState(t *testing.T) {
+	r := NewRegistry(initGitRepo(t), "")
+	if !r.IsGitRepo() {
+		t.Fatal("expected IsGitRepo() = true for git repository")
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := r.Refresh(ctx); err == nil {
+		t.Fatal("Refresh with a cancelled context reported success")
+	}
+	if !r.IsGitRepo() {
+		t.Error("a cancelled read turned the project into a non-git one")
+	}
+}
+
+// A git stuck on a lock times out, and the cache keeps its answer for another
+// TTL: otherwise every request queued behind cacheMu would start its own read
+// and wait out the timeout in turn.
+func TestRefresh_TimedOutReadBacksOffForTTL(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("uses a shell script as git")
+	}
+	dir := initGitRepo(t)
+	r := NewRegistry(dir, "")
+	if !r.IsGitRepo() {
+		t.Fatal("setup: expected a git repository")
+	}
+
+	bin := t.TempDir()
+	calls := filepath.Join(bin, "calls")
+	sleep, err := exec.LookPath("sleep")
+	if err != nil {
+		t.Skip("no sleep binary")
+	}
+	script := "#!/bin/sh\necho x >> " + calls + "\nexec " + sleep + " 5\n"
+	if err := os.WriteFile(filepath.Join(bin, "git"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin)
+	saved := worktreeListTimeout
+	worktreeListTimeout = 500 * time.Millisecond
+	t.Cleanup(func() { worktreeListTimeout = saved })
+
+	r.invalidateCache()
+	for range 3 {
+		if !r.IsGitRepo() {
+			t.Fatal("a timed-out read turned the project into a non-git one")
+		}
+	}
+
+	data, err := os.ReadFile(calls)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := strings.Count(string(data), "x"); n != 1 {
+		t.Errorf("git ran %d times, want 1: a timed-out read must hold for the TTL", n)
+	}
 }

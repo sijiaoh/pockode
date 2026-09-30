@@ -8,6 +8,23 @@ export interface SettingsSectionConfig {
 	label: string;
 	priority: number;
 	component: ComponentType;
+	/**
+	 * Whether the section applies right now. Hides the heading and its
+	 * navigation entry with the body — a component returning null would leave
+	 * both behind. Omitted means always shown.
+	 */
+	visibility?: SettingsSectionVisibility;
+}
+
+/**
+ * A source the settings page can read and follow, in the shape
+ * `useSyncExternalStore` takes — a zustand store's `getState` and `subscribe`
+ * fit it directly. Not a hook: the page reads one per section, and hooks
+ * cannot be called over a list whose length can change.
+ */
+export interface SettingsSectionVisibility {
+	get: () => boolean;
+	subscribe: (onChange: () => void) => () => void;
 }
 
 let sections: SettingsSectionConfig[] = [];

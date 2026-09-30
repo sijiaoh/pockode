@@ -132,7 +132,13 @@ Order (`command.Store.List`):
 
 A recently used name under the prefix that is no longer a Pockode command — one
 sent before the prefix was reserved, or a command since removed — is left out.
-Offering it would only lead to an error.
+So is a command that needs git, recently used or not, in a project that is not a
+git repository ([below](#when-the-server-refuses)). Offering either would only
+lead to an error. Because the list now depends on whether the project is a
+repository, the client drops its cached copy when that answer changes
+([frontend-state.md](code/frontend-state.md#store-patterns)); otherwise a
+`git init` would leave `/pockode-lead` missing from the palette until the next
+send.
 
 Recording happens **only after the message has reached the agent**, for every
 slash command. A command that was refused, or a send that failed because the
@@ -148,8 +154,9 @@ is written to be shown to the user as-is:
 
 | Case | Message |
 |---|---|
-| Unknown name | `Unknown Pockode command "/pockode-foo". Available: /pockode-lead` |
+| Unknown name | `Unknown Pockode command "/pockode-foo". Available: /pockode-lead` — only the commands the project could run, as the palette lists them; with none, the `Available:` part is left off |
 | A command that needs a branch, in a worktree whose HEAD is detached | `/pockode-lead needs the current branch, but HEAD is detached. Check out a branch and send it again.` |
+| A command that needs git, in a project that is not a git repository | ``/pockode-lead needs a git repository. Ask the AI to run `git init`, then send it again.`` |
 | Sent together with `answering` | `A Pockode command cannot be sent together with answers. Send the answers first, then the command on its own.` |
 
 The server refuses a command sent with `answering` because an answer is text
@@ -159,9 +166,14 @@ client cannot produce this case: the answer panel builds its content with
 `buildAnswerMessage`, which always starts with `Answering:`. The check protects
 the server from other clients.
 
-A branch that cannot be read for any reason other than a detached HEAD — the
-directory is not a repository, git is missing — is a system error, not a user
-error. It is answered as `-32603` with the cause, and logged
+Whether the project is a repository is the worktree registry's answer, the
+same one the client hides its git UI on ([git.md](git.md#projects-without-a-repository)),
+so "git is missing" lands in that refusal too: the registry counts a git that
+cannot run as no repository. The palette leaves such a command out, so the
+refusal is what answers one typed by hand or resent from a draft. A branch
+that still cannot be read in a project the registry calls a repository — the
+registry's answer is up to 3 seconds old — is a system error, not a user error.
+It is answered as `-32603` with the cause, and logged
 ([code/websocket-rpc.md](code/websocket-rpc.md#error-replies)).
 
 An expanded command can still be refused by the send itself, like any message:
@@ -240,13 +252,18 @@ handled in code.
 
 1. Add an entry to `PockodeCommands` in `server/command/pockode.go`: the name
    (with the `pockode-` prefix, without the slash), a one-line English
-   description for the palette, and an `expand` function.
+   description for the palette, and an `expand` function. Set `needsGit` if the
+   command means nothing outside a git repository: the palette then leaves it
+   out there, and `ExpandPockode` refuses it before `expand` runs, so `expand`
+   never has to check.
 2. `expand` receives `PockodeEnv` (what it may read about where it was invoked,
-   today the worktree directory) and the arguments, and returns the prompt. A
-   failure that is the user's to fix is returned as a `refusal` worded for them,
-   wrapping a sentinel the handler recognises as `-32602`. The handler matches
-   `ErrUnknownPockodeCommand` and `ErrNoBranch` today, so a new kind of refusal
-   adds its sentinel there. Any other error is treated as a system error.
+   today the worktree directory and whether the project is a git repository)
+   and the arguments, and returns the prompt. A failure that is the user's to
+   fix is returned as a `refusal` worded for them, wrapping a sentinel of its
+   own (`ErrNoBranch`, `ErrNotGitRepo`, …) for tests and callers to tell kinds
+   apart. The handler asks only `IsRefusal`, which makes any `refusal` a
+   `-32602`, so a new kind needs no change there. Any other error is treated as
+   a system error.
 3. Put the template in `server/work/prompts.yaml` when it is about driving work,
    with its field in `promptTemplates` and a builder in `server/work/prompt.go`
    (a key with no field loads as an empty template), and add it to the

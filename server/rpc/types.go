@@ -420,6 +420,12 @@ type GitPushParams struct {
 // wait for in the user's language.
 const CodeGitBusy = -32001
 
+// CodeNotGitRepo answers a request that needs git in a project that is not a
+// git repository. Like CodeGitBusy nothing was attempted; unlike it, repeating
+// the request only helps once the repository exists, which the client learns
+// from worktree.changed.
+const CodeNotGitRepo = -32002
+
 // GitBusyData is the data member of a CodeGitBusy error.
 type GitBusyData struct {
 	// Operation is what holds the worktree, in git.BusyError's vocabulary:
@@ -696,10 +702,21 @@ type SetupHookSkip struct {
 }
 
 type WorktreeListResult struct {
+	// IsGitRepo is false when the project directory is not inside a git
+	// repository (or git cannot be run there). Worktrees then holds only main,
+	// and every git.* request and worktree create/delete is refused with
+	// CodeNotGitRepo.
+	IsGitRepo bool           `json:"is_git_repo"`
 	Worktrees []WorktreeInfo `json:"worktrees"`
 	// SetupHookSkip is set when creating a worktree *would* skip the hook, so
 	// the client can say so before the user creates one.
 	SetupHookSkip *SetupHookSkip `json:"setup_hook_skip,omitempty"`
+}
+
+// WorktreeSubscribeResult is the state worktree.changed later reports changes
+// to.
+type WorktreeSubscribeResult struct {
+	IsGitRepo bool `json:"is_git_repo"`
 }
 
 type WorktreeCreateParams struct {

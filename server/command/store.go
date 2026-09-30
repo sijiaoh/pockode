@@ -114,8 +114,9 @@ func (s *Store) persist() error {
 }
 
 // List returns commands sorted by most recently used, with unused Pockode
-// commands and then unused builtins appended at the end.
-func (s *Store) List() []Command {
+// commands and then unused builtins appended at the end. Outside a git
+// repository the Pockode commands that need one are left out.
+func (s *Store) List(isGitRepo bool) []Command {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -128,9 +129,10 @@ func (s *Store) List() []Command {
 	seen := make(map[string]bool)
 	commands := make([]Command, 0, len(sorted)+len(PockodeCommands)+len(BuiltinCommands))
 	for _, rc := range sorted {
-		if strings.HasPrefix(rc.Name, PockodePrefix) && !isKnownPockode(rc.Name) {
-			// Sent before the prefix was Pockode's, or a command since removed:
-			// offering it now would only offer an error.
+		if strings.HasPrefix(rc.Name, PockodePrefix) && !isOfferedPockode(rc.Name, isGitRepo) {
+			// Sent before the prefix was Pockode's, a command since removed, or
+			// one this project cannot run: offering it now would only offer an
+			// error.
 			continue
 		}
 		seen[rc.Name] = true
@@ -138,7 +140,7 @@ func (s *Store) List() []Command {
 	}
 
 	for _, cmd := range PockodeCommands {
-		if !seen[cmd.Name] {
+		if !seen[cmd.Name] && isOfferedPockode(cmd.Name, isGitRepo) {
 			commands = append(commands, newCommand(cmd.Name))
 		}
 	}
@@ -153,9 +155,9 @@ func (s *Store) List() []Command {
 	return commands
 }
 
-func isKnownPockode(name string) bool {
-	_, ok := findPockode(name)
-	return ok
+func isOfferedPockode(name string, isGitRepo bool) bool {
+	cmd, ok := findPockode(name)
+	return ok && (isGitRepo || !cmd.needsGit)
 }
 
 func newCommand(name string) Command {

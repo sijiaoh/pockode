@@ -26,6 +26,29 @@ func (h *rpcMethodHandler) replyGitError(ctx context.Context, conn *jsonrpc2.Con
 	h.replyError(ctx, conn, id, jsonrpc2.CodeInternalError, err.Error())
 }
 
+// requiresGitRepo reports whether method runs git and so cannot answer anything
+// but git's own "not a git repository" in a project that is not one.
+// Subscribing and unsubscribing are exempt: they run no git themselves, so a
+// panel may stay subscribed across `git init`. That the repository appeared is
+// announced by worktree.changed, not by git.changed — an empty directory reads
+// the same to the git watcher before and after.
+func requiresGitRepo(method string) bool {
+	if !strings.HasPrefix(method, "git.") {
+		return false
+	}
+	switch method {
+	case "git.subscribe", "git.unsubscribe", "git.diff.unsubscribe":
+		return false
+	}
+	return true
+}
+
+// replyNotGitRepo refuses a request that needs a git repository, with a code
+// of its own so the client can tell it from a git command that ran and failed.
+func (h *rpcMethodHandler) replyNotGitRepo(ctx context.Context, conn *jsonrpc2.Conn, id jsonrpc2.ID) {
+	h.replyError(ctx, conn, id, rpc.CodeNotGitRepo, "not a git repository: "+h.worktreeManager.Registry().MainDir())
+}
+
 // validateGitPaths checks every path of a request before any of it runs,
 // replying and returning false on the first one that fails.
 func (h *rpcMethodHandler) validateGitPaths(ctx context.Context, conn *jsonrpc2.Conn, req *jsonrpc2.Request, workDir string, paths []string) bool {

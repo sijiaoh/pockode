@@ -70,7 +70,7 @@ func TestHandler_MessagePockodeCommandIsExpanded(t *testing.T) {
 	if rec.Origin != "" {
 		t.Errorf("record origin = %q, want the user's", rec.Origin)
 	}
-	if first := env.handler.commandStore.List()[0]; first.Name != "pockode-lead" {
+	if first := env.handler.commandStore.List(true)[0]; first.Name != "pockode-lead" {
 		t.Errorf("most recent command = %q, want the delivered pockode-lead", first.Name)
 	}
 }
@@ -88,7 +88,7 @@ func TestHandler_MessageSlashCommandUnrecordedWhenSendFails(t *testing.T) {
 		t.Fatal("send to a missing session succeeded")
 	}
 
-	if first := env.handler.commandStore.List()[0]; first.Name != "earlier" {
+	if first := env.handler.commandStore.List(true)[0]; first.Name != "earlier" {
 		t.Errorf("most recent command = %q, want the failed one unrecorded", first.Name)
 	}
 }
@@ -132,6 +132,12 @@ func TestHandler_MessagePockodeCommandRefusals(t *testing.T) {
 			want:    "Check out a branch",
 		},
 		{
+			name:    "not a git repository",
+			env:     func(t *testing.T, mock *mockAgent) *testEnv { return newTestEnv(t, mock) },
+			content: "/pockode-lead",
+			want:    "needs a git repository",
+		},
+		{
 			name:    "sent as an answer",
 			env:     func(t *testing.T, mock *mockAgent) *testEnv { return newBranchTestEnv(t, mock, "main") },
 			content: "/pockode-lead",
@@ -170,7 +176,7 @@ func TestHandler_MessagePockodeCommandRefusals(t *testing.T) {
 				t.Errorf("message records = %+v, want none", records)
 			}
 			// Recorded usage would put the refused command ahead of this one.
-			if first := env.handler.commandStore.List()[0]; first.Name != "earlier" {
+			if first := env.handler.commandStore.List(true)[0]; first.Name != "earlier" {
 				t.Errorf("most recent command = %q, want the refused one unrecorded", first.Name)
 			}
 			if tt.answer && len(unanswered(t, env, row.ID)) != 1 {

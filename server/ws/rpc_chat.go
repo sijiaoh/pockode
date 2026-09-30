@@ -149,9 +149,12 @@ func (h *rpcMethodHandler) handleMessage(ctx context.Context, conn *jsonrpc2.Con
 				"A Pockode command cannot be sent together with answers. Send the answers first, then the command on its own.")
 			return
 		}
-		expanded, err := command.ExpandPockode(cmd, command.PockodeEnv{WorkDir: wt.WorkDir})
+		expanded, err := command.ExpandPockode(cmd, command.PockodeEnv{
+			WorkDir:   wt.WorkDir,
+			IsGitRepo: h.worktreeManager.Registry().IsGitRepo(),
+		})
 		if err != nil {
-			if errors.Is(err, command.ErrUnknownPockodeCommand) || errors.Is(err, command.ErrNoBranch) {
+			if command.IsRefusal(err) {
 				h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, err.Error())
 			} else {
 				h.replyInternalError(ctx, conn, req.ID, "failed to expand /"+cmd.Name, err, "sessionId", params.SessionID)

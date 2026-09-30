@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { fetchWorktrees, WORKTREES_QUERY_KEY } from "../lib/worktreeQuery";
-import { getDisplayName, useIsGitRepo } from "../lib/worktreeStore";
+import { getDisplayName } from "../lib/worktreeStore";
 import { useWSStore } from "../lib/wsStore";
 
 export interface WorktreeDisplay {
@@ -20,7 +20,6 @@ export function useWorktreeDisplay(
 	worktree: string | undefined,
 ): WorktreeDisplay {
 	const isConnected = useWSStore((s) => s.status === "connected");
-	const isGitRepo = useIsGitRepo();
 
 	// Only the main path needs the list; feature worktrees display their stored
 	// name directly. Shares the react-query cache with useWorktree (same key);
@@ -28,7 +27,7 @@ export function useWorktreeDisplay(
 	const { data: worktrees = [] } = useQuery({
 		queryKey: WORKTREES_QUERY_KEY,
 		queryFn: fetchWorktrees,
-		enabled: !worktree && isConnected && isGitRepo,
+		enabled: !worktree && isConnected,
 		staleTime: Number.POSITIVE_INFINITY,
 	});
 

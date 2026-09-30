@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { gitSyncActions, useGitSyncStore } from "./gitSyncStore";
+import { worktreeActions } from "./worktreeStore";
 
 const run = (worktree: string) => useGitSyncStore.getState().runs[worktree];
 
@@ -9,6 +10,7 @@ const pending = () => new Promise<string>(() => {});
 describe("gitSyncStore", () => {
 	beforeEach(() => {
 		gitSyncActions.reset();
+		worktreeActions.reset();
 	});
 
 	// The guard the sync sheet used to hold: closing the sheet reset it, and the
@@ -66,5 +68,24 @@ describe("gitSyncStore", () => {
 		gitSyncActions.start("", "fetch", pending, () => "");
 
 		expect(run("").outcome).toBeNull();
+	});
+
+	// A pull refused because .git was deleted can settle after worktree.changed
+	// said so; the Git tab is gone by then, so the banner would first be seen
+	// under the repository a later `git init` creates.
+	it("drops outcomes, not running operations, when the repository comes or goes", async () => {
+		worktreeActions.setIsGitRepo(true);
+		await gitSyncActions.start(
+			"",
+			"pull",
+			() => Promise.reject(new Error("not a git repository")),
+			() => "Pull failed.",
+		);
+		gitSyncActions.start("feature", "push", pending, () => "");
+
+		worktreeActions.setIsGitRepo(false);
+
+		expect(run("").outcome).toBeNull();
+		expect(run("feature").running).toBe("push");
 	});
 });

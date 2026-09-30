@@ -20,3 +20,16 @@ export type OverlayState =
 	| { type: "agent-role-list" }
 	| { type: "agent-role-detail"; roleId: string }
 	| null;
+
+/** The overlays that read the repository, and so have nothing to show without one. */
+export function isGitOverlay(overlay: OverlayState | undefined): boolean {
+	switch (overlay?.type) {
+		case "diff":
+		case "commit":
+		case "commit-diff":
+		case "commit-file":
+			return true;
+		default:
+			return false;
+	}
+}

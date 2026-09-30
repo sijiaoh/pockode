@@ -36,8 +36,9 @@ export function useWorktreeBadgeVisible(work: WorktreeBadgeWork): boolean {
 	// so an undecided binding renders nothing rather than a provisional name.
 	if (!isBound) return false;
 
-	// Non-git projects have no worktree concept, so the main badge is just noise.
-	return !(isMain && !isGitRepo);
+	// Non-git projects have no worktree concept, so the main badge is just noise;
+	// and until the server has said which this is, it may be one.
+	return !(isMain && isGitRepo !== true);
 }
 
 function WorktreeBadge({ work, className }: Props) {
@@ -51,7 +52,8 @@ function WorktreeBadge({ work, className }: Props) {
 	// Deleting a worktree leaves its sessions behind, so a work can outlive the
 	// worktree it names. An empty list is one that has not landed rather than a
 	// machine with no worktrees — the same reading AppShell's redirect guard
-	// takes.
+	// takes. A project that has stopped being a repository lists only main, so
+	// the worktrees it used to have land here too.
 	const isGone =
 		!isMain &&
 		worktrees.length > 0 &&

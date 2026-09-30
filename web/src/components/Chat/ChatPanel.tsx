@@ -23,13 +23,18 @@ import {
 } from "../../lib/sessionDetailStore";
 import { useSessionStore } from "../../lib/sessionStore";
 import { type SessionView, SessionViewProvider } from "../../lib/sessionView";
+import { useIsGitRepo } from "../../lib/worktreeStore";
 import { useWSStore } from "../../lib/wsStore";
 import type {
 	HistorySeq,
 	PermissionRequest,
 	QuestionAnswerRecord,
 } from "../../types/message";
-import type { OverlayState, WorkSegment } from "../../types/overlay";
+import {
+	isGitOverlay,
+	type OverlayState,
+	type WorkSegment,
+} from "../../types/overlay";
 import type { AgentType } from "../../types/settings";
 import { resolveForkAnchor } from "../../utils/forkAnchor";
 import { buildForkTitle } from "../../utils/forkTitle";
@@ -185,6 +190,7 @@ function ChatPanel({
 }: Props) {
 	const isReadOnly = view !== null;
 	const projectTitle = useWSStore((state) => state.projectTitle);
+	const isGitRepo = useIsGitRepo();
 	const {
 		InputBar: CustomInputBar,
 		ModeSelector: CustomModeSelector,
@@ -963,6 +969,11 @@ function ChatPanel({
 		);
 	};
 
+	// A git view waits, blank, until the server has said this is a repository;
+	// the shell replaces the route if it is not. Mounting it early would send
+	// reads that can only fail and flash their error first.
+	const isOverlayHeld = isGitOverlay(overlay) && !isGitRepo;
+
 	const renderOverlay = (overlay: NonNullable<OverlayState>) => {
 		switch (overlay.type) {
 			case "diff":
@@ -1079,7 +1090,7 @@ function ChatPanel({
 					{renderTranscript()}
 				</CoveredSurface>
 			</div>
-			{overlay && renderOverlay(overlay)}
+			{overlay && !isOverlayHeld && renderOverlay(overlay)}
 			{answerPanelDrawn && (
 				<AnswerPanel
 					sessionId={sessionId}

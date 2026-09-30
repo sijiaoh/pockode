@@ -14,7 +14,12 @@ import {
 	useWSStore,
 	wsActions,
 } from "../lib/wsStore";
-import type { SetupHookSkip, WorktreeInfo } from "../types/message";
+import type {
+	SetupHookSkip,
+	WorktreeChangedNotification,
+	WorktreeInfo,
+	WorktreeSubscribeResult,
+} from "../types/message";
 import { useSubscription } from "./useSubscription";
 
 /** Resolves to the skipped setup script, or null when it ran. */
@@ -69,25 +74,50 @@ export function useWorktree({
 		data: worktrees = [],
 		isLoading,
 		isSuccess,
+		error,
 	} = useQuery({
 		queryKey: WORKTREES_QUERY_KEY,
 		queryFn: fetchWorktrees,
-		enabled: enabled && isConnected && isGitRepo,
+		enabled: enabled && isConnected,
 		staleTime: Number.POSITIVE_INFINITY,
 	});
 
-	const handleWorktreeChanged = useCallback(() => {
-		queryClient.invalidateQueries({ queryKey: WORKTREES_QUERY_KEY });
+	// Both answers are fresher than a list request already in flight, whose
+	// reply would put the older is_git_repo back (fetchWorktrees drops the
+	// writes of a cancelled one). Cancelled explicitly: invalidation alone
+	// leaves a first fetch running, since there is no data yet to fall back on.
+	const refetchWorktrees = useCallback(async () => {
+		await queryClient.cancelQueries({ queryKey: WORKTREES_QUERY_KEY });
+		await queryClient.invalidateQueries({ queryKey: WORKTREES_QUERY_KEY });
 	}, [queryClient]);
 
+	const handleWorktreeChanged = useCallback(
+		({ is_git_repo }: WorktreeChangedNotification) => {
+			worktreeActions.setIsGitRepo(is_git_repo);
+			void refetchWorktrees();
+		},
+		[refetchWorktrees],
+	);
+
+	const handleWorktreeSubscribed = useCallback(
+		({ is_git_repo }: WorktreeSubscribeResult) => {
+			worktreeActions.setIsGitRepo(is_git_repo);
+			void refetchWorktrees();
+		},
+		[refetchWorktrees],
+	);
+
+	// Subscribed whether or not the project is a git repository: this is the
+	// subscription that reports a `git init` (or a deleted `.git`).
 	useSubscription(
 		worktreeSubscribe,
 		worktreeUnsubscribe,
 		handleWorktreeChanged,
 		{
-			enabled: enabled && isGitRepo,
+			enabled,
 			// Worktree list subscription is Manager-level, not worktree-scoped
 			resubscribeOnWorktreeChange: false,
+			onSubscribed: handleWorktreeSubscribed,
 		},
 	);
 
@@ -170,6 +200,7 @@ export function useWorktree({
 		worktrees,
 		isLoading,
 		isSuccess,
+		error,
 		isGitRepo,
 		setupHookSkip,
 		refresh,

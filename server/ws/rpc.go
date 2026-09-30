@@ -562,6 +562,11 @@ func (h *rpcMethodHandler) Handle(ctx context.Context, conn *jsonrpc2.Conn, req 
 		return
 	}
 
+	if requiresGitRepo(req.Method) && !h.worktreeManager.Registry().IsGitRepo() {
+		h.replyNotGitRepo(ctx, conn, req.ID)
+		return
+	}
+
 	// Dispatch to method handlers
 	switch req.Method {
 	// chat namespace

@@ -20,7 +20,7 @@ import { useSessionStore } from "../lib/sessionStore";
 import { resolveSessionView } from "../lib/sessionView";
 import { useWorktreeStore, worktreeActions } from "../lib/worktreeStore";
 import { useWSStore, wsActions } from "../lib/wsStore";
-import type { WorkSegment } from "../types/overlay";
+import { isGitOverlay, type WorkSegment } from "../types/overlay";
 import PasswordInput from "./Auth/PasswordInput";
 import { ChatPanel } from "./Chat";
 import { SessionSidebar } from "./Session";
@@ -120,28 +120,57 @@ function AppShell() {
 	);
 	// Until the worktree list has landed, "deleted" cannot be told from "not
 	// asked yet", and the strips would claim the wrong one for a frame.
-	const isSessionViewReady = !isGitRepo || isWorktreesLoaded;
+	const isSessionViewReady = isWorktreesLoaded;
 
 	useSettingsSubscription(isAuthenticated);
 	useWorkSubscription(isAuthenticated);
 	useAgentRoleSubscription(isAuthenticated);
 	useAgentOptions(isAuthenticated);
 
+	const isUrlWorktreeMissing =
+		isWorktreesLoaded &&
+		urlWorktree !== "" &&
+		worktrees.length > 0 &&
+		!worktrees.some((w) => w.name === urlWorktree);
+
 	// Redirect to main when URL worktree doesn't exist in worktree list
 	useEffect(() => {
-		if (!isWorktreesLoaded) return;
-		if (!urlWorktree) return;
-		if (!isGitRepo) return;
-		if (worktrees.length === 0) return;
+		if (!isUrlWorktreeMissing) return;
+		console.warn(`Worktree "${urlWorktree}" not found, redirecting to main`);
+		navigate(
+			buildNavigation({ type: "home", worktree: "" }, { replace: true }),
+		);
+	}, [isUrlWorktreeMissing, urlWorktree, navigate]);
 
-		const exists = worktrees.some((w) => w.name === urlWorktree);
-		if (!exists) {
-			console.warn(`Worktree "${urlWorktree}" not found, redirecting to main`);
-			navigate(
-				buildNavigation({ type: "home", worktree: "" }, { replace: true }),
-			);
-		}
-	}, [isWorktreesLoaded, isGitRepo, worktrees, urlWorktree, navigate]);
+	// A git view reached by URL or history — or left open when `.git` went away
+	// — in a project that is not a repository. Replaced rather than shown as an
+	// error: there is nothing to see there and nothing the user did wrong.
+	const isGitOverlayOpen = isGitOverlay(overlay);
+	useEffect(() => {
+		if (isGitRepo !== false || !isGitOverlayOpen) return;
+		// The redirect above leaves the git view as well, and a second navigation
+		// here would replace it with one into the worktree that is gone.
+		if (isUrlWorktreeMissing) return;
+		navigate(
+			buildNavigation(
+				routeSessionId
+					? {
+							type: "session",
+							worktree: urlWorktree,
+							sessionId: routeSessionId,
+						}
+					: { type: "home", worktree: urlWorktree },
+				{ replace: true },
+			),
+		);
+	}, [
+		isGitRepo,
+		isGitOverlayOpen,
+		isUrlWorktreeMissing,
+		routeSessionId,
+		urlWorktree,
+		navigate,
+	]);
 
 	const activeDiffFile =
 		overlay?.type === "diff"

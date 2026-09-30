@@ -14,6 +14,7 @@ import { FILE_SEARCH_DEBOUNCE_MS } from "../../hooks/useFileSearch";
 import { useFilesSearchStore } from "../../lib/filesSearchStore";
 import { UploadError, uploadFile } from "../../lib/fileUpload";
 import { uploadActions } from "../../lib/uploadStore";
+import { worktreeActions } from "../../lib/worktreeStore";
 import type { Entry } from "../../types/contents";
 import type { FileSearchResult } from "../../types/search";
 import { SidebarContext } from "../Layout/SidebarContext";
@@ -207,10 +208,12 @@ describe("FilesTab search", () => {
 			respectGitignore: true,
 			searchContent: false,
 		});
+		worktreeActions.setIsGitRepo(true);
 	});
 
 	afterEach(() => {
 		vi.useRealTimers();
+		worktreeActions.reset();
 	});
 
 	it("shows results while searching and returns to the tree when cleared", async () => {
@@ -287,6 +290,22 @@ describe("FilesTab search", () => {
 			"aria-pressed",
 			"false",
 		);
+	});
+
+	// There is no .gitignore for the server to respect outside a repository, so
+	// the chip would toggle nothing.
+	it("offers no gitignore chip outside a git repository", async () => {
+		worktreeActions.setIsGitRepo(false);
+		searchFiles.mockResolvedValue(result([]));
+		renderFilesTab();
+
+		typeSearch("app");
+		await settleSearch();
+
+		expect(
+			screen.getByRole("button", { name: /Contents/ }),
+		).toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: /\.gitignore/ })).toBeNull();
 	});
 
 	it("re-runs the search with the new option when a chip is toggled", async () => {

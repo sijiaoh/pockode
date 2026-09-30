@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { describeGitFailure, type GitFailure } from "../utils/gitErrors";
+import { worktreeActions } from "./worktreeStore";
 
 export type SyncOperation = "fetch" | "pull" | "push";
 
@@ -83,6 +84,22 @@ export const gitSyncActions = {
 
 	reset: () => useGitSyncStore.setState({ runs: {} }),
 };
+
+// An outcome answers a question about the repository it ran against. Whichever
+// way the answer flipped, that repository is not the one a later banner would
+// sit under. A run refused because .git was gone can settle after the flip; the
+// Git tab is off screen then, and the flip back after `git init` clears it.
+// What is still running is left alone: its settling is what lifts the guard.
+worktreeActions.onGitRepoChange(() => {
+	useGitSyncStore.setState((s) => ({
+		runs: Object.fromEntries(
+			Object.entries(s.runs).map(([worktree, run]) => [
+				worktree,
+				{ ...run, outcome: null },
+			]),
+		),
+	}));
+});
 
 export function useSyncRun(worktree: string): SyncRun {
 	return useGitSyncStore((s) => s.runs[worktree] ?? IDLE);

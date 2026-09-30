@@ -1,6 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
 import { fetchWorktrees, WORKTREES_QUERY_KEY } from "../lib/worktreeQuery";
-import { useIsGitRepo } from "../lib/worktreeStore";
 import { useWSStore } from "../lib/wsStore";
 import type { WorktreeInfo } from "../types/message";
 
@@ -13,11 +12,10 @@ import type { WorktreeInfo } from "../types/message";
  */
 export function useWorktreeList(): WorktreeInfo[] {
 	const isConnected = useWSStore((s) => s.status === "connected");
-	const isGitRepo = useIsGitRepo();
 	const { data = [] } = useQuery({
 		queryKey: WORKTREES_QUERY_KEY,
 		queryFn: fetchWorktrees,
-		enabled: isConnected && isGitRepo,
+		enabled: isConnected,
 		staleTime: Number.POSITIVE_INFINITY,
 	});
 	return data;

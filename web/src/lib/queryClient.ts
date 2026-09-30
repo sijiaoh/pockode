@@ -1,6 +1,8 @@
 import { QueryClient } from "@tanstack/react-query";
+import { invalidateGitQueries, removeGitQueries } from "../hooks/gitQueries";
 import { HttpError } from "./api";
 import { authActions } from "./authStore";
+import { worktreeActions } from "./worktreeStore";
 import { setOnWorktreeSwitched } from "./wsStore";
 
 function isUnauthorized(error: unknown): boolean {
@@ -59,6 +61,14 @@ export function createQueryClient(): QueryClient {
 		for (const key of WORKTREE_DEPENDENT_QUERY_KEYS) {
 			queryClient.invalidateQueries({ queryKey: [key] });
 		}
+	});
+
+	// Whatever the git panel cached belongs to the repository before the change.
+	// Invalidating on the way in refetches only once a reader is enabled, since
+	// readers are gated on isGitRepo and this runs before they re-render.
+	worktreeActions.onGitRepoChange((isGitRepo) => {
+		if (isGitRepo) void invalidateGitQueries(queryClient);
+		else removeGitQueries(queryClient);
 	});
 
 	return queryClient;

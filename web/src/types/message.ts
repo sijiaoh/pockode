@@ -616,10 +616,24 @@ export interface SetupHookSkip {
 }
 
 export interface WorktreeListResult {
+	/** False leaves only main in `worktrees`. See WorktreeSubscribeResult. */
+	is_git_repo: boolean;
 	worktrees: WorktreeInfo[];
 	/** Set when creating a worktree would skip the setup script. */
 	setup_hook_skip?: SetupHookSkip;
 }
+
+/**
+ * Whether the project is a git repository, read afresh for the subscriber.
+ * worktree.changed carries the same field from then on. While it is false,
+ * every git.* request that runs git and worktree create/delete is refused with
+ * -32002 (the server's CodeNotGitRepo).
+ */
+export interface WorktreeSubscribeResult {
+	is_git_repo: boolean;
+}
+
+export type WorktreeChangedNotification = WorktreeSubscribeResult;
 
 export interface WorktreeCreateParams {
 	name: string;

@@ -7,6 +7,7 @@ import {
 	WorktreeSection,
 } from "../../components/Settings/sections";
 import type { Extension } from "../../lib/extensions";
+import { useWorktreeStore } from "../../lib/worktreeStore";
 
 // Builtin sections use 0-99
 const PRIORITY = {
@@ -40,6 +41,11 @@ export const activate: Extension["activate"] = (ctx) => {
 		label: "Worktree",
 		priority: PRIORITY.WORKTREE,
 		component: WorktreeSection,
+		// Hidden rather than disabled outside a repository; the saved values stay.
+		visibility: {
+			get: () => useWorktreeStore.getState().isGitRepo === true,
+			subscribe: useWorktreeStore.subscribe,
+		},
 	});
 
 	ctx.settings.register({

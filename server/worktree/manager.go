@@ -55,7 +55,7 @@ func NewManager(registry *Registry, agents *agent.Registry, dataDir string, budg
 		agents:          agents,
 		dataDir:         dataDir,
 		leaseBudgets:    budgets,
-		WorktreeWatcher: watch.NewWorktreeWatcher(registry.MainDir()),
+		WorktreeWatcher: watch.NewWorktreeWatcher(registry.Refresh),
 		worktrees:       make(map[string]*Worktree),
 		questions:       newQuestionIndex(),
 	}

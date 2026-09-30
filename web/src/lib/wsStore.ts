@@ -31,6 +31,8 @@ import type {
 	SessionListChangedNotification,
 	SessionListPageResult,
 	SessionListSubscribeResult,
+	WorktreeChangedNotification,
+	WorktreeSubscribeResult,
 } from "../types/message";
 import type {
 	AgentType,
@@ -127,7 +129,9 @@ export interface WatchActions {
 		callback: (params: GitDiffChangedNotification) => void,
 	) => Promise<WatchSubscribeResult<GitDiffData>>;
 	gitDiffUnsubscribe: (id: string) => Promise<void>;
-	worktreeSubscribe: (callback: () => void) => Promise<WatchSubscribeResult>;
+	worktreeSubscribe: (
+		callback: (params: WorktreeChangedNotification) => void,
+	) => Promise<WatchSubscribeResult<WorktreeSubscribeResult>>;
 	worktreeUnsubscribe: (id: string) => Promise<void>;
 	/**
 	 * @param excludeWorkSessions Drops every session that belongs to a work item,
@@ -261,7 +265,10 @@ const chatMessagesCallbacks = new Map<
 // Their server-side watchers are Manager/app-level and span all worktrees; the
 // server keeps pushing to them across worktree switches, so these must survive
 // a switch and are only cleared when the connection itself goes away.
-const worktreeWatchCallbacks = new Map<string, () => void>();
+const worktreeWatchCallbacks = new Map<
+	string,
+	(params: WorktreeChangedNotification) => void
+>();
 const settingsWatchCallbacks = new Map<
 	string,
 	(params: SettingsChangedNotification) => void
@@ -549,7 +556,11 @@ const watchNotificationHandlers: Record<string, WatchNotificationHandler> = {
 		gitDiffWatchCallbacks.get(diffParams.id)?.(diffParams);
 		return true;
 	},
-	"worktree.changed": createIdBasedHandler(worktreeWatchCallbacks),
+	"worktree.changed": (params) => {
+		const changed = params as WorktreeChangedNotification & { id: string };
+		worktreeWatchCallbacks.get(changed.id)?.(changed);
+		return true;
+	},
 	"worktree.deleted": (params) => {
 		const { name } = params as { name: string };
 		const wasCurrentWorktree = worktreeActions.getCurrent() === name;
@@ -1008,14 +1019,16 @@ export const useWSStore = create<WSState>((set, get) => ({
 		gitDiffUnsubscribe: (id: string) =>
 			closeSubscription("git.diff.unsubscribe", id, gitDiffWatchCallbacks),
 
-		worktreeSubscribe: async (callback: () => void) => {
-			const { id } = await openSubscription(
+		worktreeSubscribe: async (
+			callback: (params: WorktreeChangedNotification) => void,
+		) => {
+			const { id, result } = await openSubscription(
 				"worktree.subscribe",
 				{},
 				worktreeWatchCallbacks,
 				callback,
 			);
-			return { id };
+			return { id, initial: result as WorktreeSubscribeResult };
 		},
 
 		worktreeUnsubscribe: (id: string) =>
@@ -1351,6 +1364,12 @@ async function runWorktreeSwitchLoop(): Promise<void> {
 
 worktreeActions.onWorktreeChange(() => {
 	void runWorktreeSwitchLoop();
+});
+
+// command.list leaves out the commands that need a repository, so the palette's
+// copy is stale the moment the answer changes.
+worktreeActions.onGitRepoChange(() => {
+	commandActions.invalidateCommandCache();
 });
 
 // Reset function for testing

@@ -35,12 +35,15 @@ func (f failingWorkStarter) HandleWorkStart(context.Context, work.Work) error { 
 
 // stubWorktrees stands in for the worktree registry: it records the names
 // a start asked to prepare, and reports each one as newly created unless a
-// test set skip or err.
+// test set skip or err. The project is a git repository unless notGit is set.
 type stubWorktrees struct {
-	asked []string
-	skip  *worktree.SetupHookSkip
-	err   error
+	asked  []string
+	skip   *worktree.SetupHookSkip
+	err    error
+	notGit bool
 }
+
+func (s *stubWorktrees) IsGitRepoFresh() bool { return !s.notGit }
 
 func (s *stubWorktrees) EnsureWorktree(name string) (bool, *worktree.SetupHookSkip, error) {
 	s.asked = append(s.asked, name)
@@ -1463,6 +1466,32 @@ func TestStoryStart_WorktreeRejectedForTask(t *testing.T) {
 	}
 	if w, _, _ := store.Get(taskID); w.Status != work.StatusOpen {
 		t.Errorf("task status = %q, want open (not started)", w.Status)
+	}
+}
+
+// Outside a repository no worktree can be made, and a story pinned to one would
+// ask for it again on every start; the agent is told to leave the argument off.
+func TestStoryStart_WorktreeRejectedOutsideARepository(t *testing.T) {
+	exec, store, roleID, worktrees := newExecWithWorktrees(t)
+	worktrees.notGit = true
+
+	storyID := extractID(t, toolText(callTool(t, exec, "story_create", map[string]string{
+		"title": "S", "agent_role_id": roleID,
+	})))
+
+	res := callTool(t, exec, "story_start", map[string]string{"id": storyID, "worktree": "feature-x"})
+	if !res.IsError {
+		t.Fatal("expected an error result outside a repository")
+	}
+	if !strings.Contains(toolText(res), "not a git repository; omit worktree") {
+		t.Errorf("error = %q, want it to say to omit worktree", toolText(res))
+	}
+
+	if len(worktrees.asked) != 0 {
+		t.Errorf("prepared %v, want nothing", worktrees.asked)
+	}
+	if w, _, _ := store.Get(storyID); w.Worktree != "" || w.Status != work.StatusOpen {
+		t.Errorf("story = worktree %q, status %q; want unpinned and open", w.Worktree, w.Status)
 	}
 }
 

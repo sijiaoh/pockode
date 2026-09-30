@@ -67,6 +67,7 @@ type SettingsStore interface {
 // is what satisfies it.
 type WorktreeProvisioner interface {
 	EnsureWorktree(name string) (created bool, setupHookSkip *worktree.SetupHookSkip, err error)
+	IsGitRepoFresh() bool
 }
 
 // WorkEngine is the part of work.Engine the question tools reach: what happens
@@ -547,6 +548,12 @@ func (e *Executor) assignWorktree(ctx context.Context, id, name string) (string,
 	// choose.
 	if w.StoryID != "" {
 		return "", userErrorf("work %s is a task: only a story can choose a worktree, and a task runs in the worktree of the story it belongs to. Start its story %s in %q instead", id, w.StoryID, name)
+	}
+
+	// Refused before the pinning: a story pinned to a worktree that can never
+	// exist would keep asking for it on every later start.
+	if !e.worktrees.IsGitRepoFresh() {
+		return "", userErrorf("cannot start work %s in worktree %q: not a git repository; omit worktree", id, name)
 	}
 
 	if err := e.workStore.SetWorktree(ctx, id, name); err != nil {

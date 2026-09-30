@@ -61,7 +61,7 @@ Pockode uses Zustand for state management, pure reducers for event processing, a
 | gitPanelStore | Git panel UI state (History expanded) | Session-scoped override |
 | gitSyncStore | The fetch/pull/push in flight in each worktree, and how the last one ended | Keyed by worktree; outlives the sheet that started the run |
 | gitWriteStore | Each worktree's serial queue of stage/unstage/discard writes, and the paths they have pending | Keyed by worktree; one write at a time, so two taps cannot race |
-| worktreeStore | Current worktree, and whether the server can run the setup hook | External listener pattern |
+| worktreeStore | Current worktree, whether the project is a git repository, and whether the server can run the setup hook | External listener pattern; `isGitRepo` is `null` until the server has answered |
 | themeStore | Theme mode/name | Registry subscription |
 
 ### Why wsStore is Large
@@ -115,6 +115,8 @@ export const worktreeActions = {
 ```
 
 wsStore subscribes to these listeners to clean up worktree-scoped subscriptions before worktree switch completes — React's async rendering would be too late. App-level subscriptions (work list/detail, agent role list, settings, worktree list) are preserved across switches because the server keeps pushing to them.
+
+`isGitRepo` has listeners of its own, for the moment the project becomes or stops being a git repository. It is live state the server owns, three-valued — `null` (not answered yet), `true`, `false` — and written only from the server's answers: the `worktree.list` result (`fetchWorktrees`), the `worktree.subscribe` reply, and each `worktree.changed` ([git.md](../git.md#projects-without-a-repository)). A failed `git.*` request never writes it: one failure proves nothing, and the server has already read the answer. `null` is not a stand-in for either answer; git-only UI treats it as "not yet" and stays hidden ([git-ui.md](../git-ui.md#projects-without-a-repository)). Those replies can arrive out of order, so a newer answer cancels the list request in flight before refetching, and `fetchWorktrees` does not write from a request that was cancelled — otherwise the older reply would put the older answer back. `onGitRepoChange` fires only when the value actually changes; its three listeners are the caches that depend on it — `queryClient.ts` invalidates the git queries when a repository appears and removes them when it goes (an invalidation then would refetch through readers that have not yet re-rendered as disabled, straight into `-32002`), wsStore drops the cached `command.list`, which leaves out commands that need git, and `gitSyncStore` drops the last fetch/pull/push outcomes, which belong to the repository before the change.
 
 **Pattern C: Registry Subscription** — themeStore subscribes to themeRegistry changes:
 

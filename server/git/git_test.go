@@ -1051,6 +1051,70 @@ func TestStatus_NonASCIIPaths(t *testing.T) {
 	}
 }
 
+// Before the first commit there is no HEAD for `git restore --staged` to
+// restore from, and unstaging has to work all the same.
+func TestReset_Unborn(t *testing.T) {
+	dir, cleanup := setupTestRepo(t)
+	defer cleanup()
+
+	writeTestFile(t, dir, "new.txt", "hi\n")
+	if err := Add(dir, "new.txt"); err != nil {
+		t.Fatalf("Add() error: %v", err)
+	}
+	if err := Reset(dir, "new.txt"); err != nil {
+		t.Fatalf("Reset() error: %v", err)
+	}
+
+	status, err := Status(dir)
+	if err != nil {
+		t.Fatalf("Status() error: %v", err)
+	}
+	if len(status.Staged) != 0 {
+		t.Errorf("staged = %+v, want nothing after unstaging", status.Staged)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "new.txt")); err != nil {
+		t.Errorf("unstaging touched the file on disk: %v", err)
+	}
+}
+
+// Edited again after staging, the index entry differs from both the file and
+// the (absent) HEAD — which git rm refuses without -f. The edit must survive.
+func TestReset_UnbornEditedAfterStaging(t *testing.T) {
+	dir, cleanup := setupTestRepo(t)
+	defer cleanup()
+
+	writeTestFile(t, dir, "new.txt", "staged\n")
+	if err := Add(dir, "new.txt"); err != nil {
+		t.Fatalf("Add() error: %v", err)
+	}
+	writeTestFile(t, dir, "new.txt", "edited\n")
+
+	if err := Reset(dir, "new.txt"); err != nil {
+		t.Fatalf("Reset() error: %v", err)
+	}
+	status, err := Status(dir)
+	if err != nil {
+		t.Fatalf("Status() error: %v", err)
+	}
+	if len(status.Staged) != 0 {
+		t.Errorf("staged = %+v, want nothing after unstaging", status.Staged)
+	}
+	if got, _ := os.ReadFile(filepath.Join(dir, "new.txt")); string(got) != "edited\n" {
+		t.Errorf("file = %q, want the edit kept", got)
+	}
+}
+
+// Like restore --staged in a repository with commits, a path that matches
+// nothing is an error rather than a silent success.
+func TestReset_UnbornUnmatchedPath(t *testing.T) {
+	dir, cleanup := setupTestRepo(t)
+	defer cleanup()
+
+	if err := Reset(dir, "missing.txt"); err == nil {
+		t.Error("Reset() of a path that matches nothing succeeded, want an error")
+	}
+}
+
 // TestAddReset_NonASCIIPath verifies the other half of the round trip: the path
 // reported by Status must also work as-is as a pathspec for staging commands,
 // which fail loudly (rather than silently) when it doesn't match.

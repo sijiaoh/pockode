@@ -444,7 +444,9 @@ rule in [sidebar-ui.md](sidebar-ui.md#the-narrow-width-rule). Without the
 this the row that visibly broke when the panel was narrowed.
 
 Two chips, shown only while a search is running, expose the options the UI
-varies; both persist in `localStorage`:
+varies; both persist in `localStorage`. The `.gitignore` chip is left out
+outside a git repository, where it would change nothing, and its saved value is
+kept for when one appears ([git-ui.md](git-ui.md#projects-without-a-repository)):
 
 | Chip | Key | Default | Effect |
 |------|-----|---------|--------|

@@ -2,6 +2,7 @@ import { useNavigate } from "@tanstack/react-router";
 import { useEffect, useRef, useState } from "react";
 import { overlayToNavigation, SETUP_HOOK_PATH } from "../../lib/navigation";
 import type { SetupHookSkip } from "../../types/message";
+import { gitRefusalSummary } from "../../utils/gitErrors";
 import { Sheet } from "../ui";
 import { inputClass } from "../ui/inputClass";
 
@@ -65,8 +66,11 @@ function WorktreeCreateSheet({
 				setSkippedAfterCreate(skipped);
 			}
 		} catch (err) {
+			// The project can stop being a repository while the sheet is open;
+			// that refusal is the server's sentence, not an error to quote.
 			setError(
-				err instanceof Error ? err.message : "Failed to create worktree",
+				gitRefusalSummary(err) ??
+					(err instanceof Error ? err.message : "Failed to create worktree"),
 			);
 		}
 	};

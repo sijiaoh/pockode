@@ -28,13 +28,19 @@ const PockodePrefix = "pockode-"
 type PockodeCommand struct {
 	Name        string
 	Description string
-	expand      func(env PockodeEnv, args string) (string, error)
+	// needsGit leaves the command out of the list in a project that is not a
+	// git repository, and refuses it there when typed anyway.
+	needsGit bool
+	expand   func(env PockodeEnv, args string) (string, error)
 }
 
 // PockodeEnv is what a command may read about where it was invoked.
 type PockodeEnv struct {
 	// WorkDir is the worktree the invoking session runs in.
 	WorkDir string
+	// IsGitRepo is whether the project is a git repository, as the worktree
+	// registry last read it.
+	IsGitRepo bool
 }
 
 // PockodeCommands lists every Pockode command, in the order they are offered.
@@ -42,6 +48,7 @@ var PockodeCommands = []PockodeCommand{
 	{
 		Name:        "pockode-lead",
 		Description: "Lead the work just discussed through Pockode stories",
+		needsGit:    true,
 		expand:      expandLead,
 	},
 }
@@ -53,6 +60,9 @@ var (
 	// ErrNoBranch is a command that needs the worktree's branch, invoked while
 	// HEAD is on none.
 	ErrNoBranch = errors.New("the worktree is not on a branch")
+	// ErrNotGitRepo is a command that needs git, invoked in a project that is
+	// not a git repository.
+	ErrNotGitRepo = errors.New("not a git repository")
 )
 
 // refusal is an ExpandPockode error that is the user's to act on. The client
@@ -65,6 +75,13 @@ type refusal struct {
 
 func (r *refusal) Error() string { return r.msg }
 func (r *refusal) Unwrap() error { return r.kind }
+
+// IsRefusal reports whether an ExpandPockode error is the user's to act on, and
+// so to be shown to them as it is rather than reported as a server failure.
+func IsRefusal(err error) bool {
+	var r *refusal
+	return errors.As(err, &r)
+}
 
 // ParsePockode reports whether content invokes a Pockode command, and splits it
 // into the name and what followed it. Whether the name is a known command is
@@ -82,19 +99,30 @@ func ParsePockode(content string) (agent.CommandInvocation, bool) {
 	return agent.CommandInvocation{Name: PockodePrefix + name, Args: args}, true
 }
 
-// ExpandPockode returns the prompt a Pockode command stands for. An error
-// matching ErrUnknownPockodeCommand or ErrNoBranch is about the invocation and
-// the user's to act on; any other is a failure to read what the command needs.
+// ExpandPockode returns the prompt a Pockode command stands for. An error for
+// which IsRefusal holds is about the invocation and the user's to act on; any
+// other is a failure to read what the command needs.
 func ExpandPockode(inv agent.CommandInvocation, env PockodeEnv) (string, error) {
 	if cmd, ok := findPockode(inv.Name); ok {
+		if cmd.needsGit && !env.IsGitRepo {
+			return "", &refusal{ErrNotGitRepo,
+				fmt.Sprintf("/%s needs a git repository. Ask the AI to run `git init`, then send it again.", cmd.Name)}
+		}
 		return cmd.expand(env, inv.Args)
 	}
-	names := make([]string, len(PockodeCommands))
-	for i, cmd := range PockodeCommands {
-		names[i] = "/" + cmd.Name
+	// Only what would be accepted here, as command.list offers.
+	var names []string
+	for _, cmd := range PockodeCommands {
+		if cmd.needsGit && !env.IsGitRepo {
+			continue
+		}
+		names = append(names, "/"+cmd.Name)
 	}
-	return "", &refusal{ErrUnknownPockodeCommand,
-		fmt.Sprintf("Unknown Pockode command \"/%s\". Available: %s", inv.Name, strings.Join(names, ", "))}
+	msg := fmt.Sprintf("Unknown Pockode command \"/%s\".", inv.Name)
+	if len(names) > 0 {
+		msg += " Available: " + strings.Join(names, ", ")
+	}
+	return "", &refusal{ErrUnknownPockodeCommand, msg}
 }
 
 func findPockode(name string) (PockodeCommand, bool) {

@@ -12,6 +12,7 @@ import {
 	DEFAULT_PRIORITY,
 	registerSettingsSection,
 	type SettingsSectionConfig,
+	type SettingsSectionVisibility,
 } from "./registries/settingsRegistry";
 import {
 	resetSidebarUIConfig,
@@ -21,7 +22,7 @@ import {
 import { registerTheme, type ThemeInfo } from "./registries/themeRegistry";
 
 export { DEFAULT_PRIORITY };
-export type { SettingsSectionConfig };
+export type { SettingsSectionConfig, SettingsSectionVisibility };
 
 export interface ExtensionContext {
 	readonly id: string;

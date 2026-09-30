@@ -39,7 +39,7 @@ func TestParsePockode(t *testing.T) {
 }
 
 func TestExpandPockode_UnknownNamesTheAvailableCommands(t *testing.T) {
-	_, err := ExpandPockode(agent.CommandInvocation{Name: "pockode-nope"}, PockodeEnv{WorkDir: t.TempDir()})
+	_, err := ExpandPockode(agent.CommandInvocation{Name: "pockode-nope"}, PockodeEnv{WorkDir: t.TempDir(), IsGitRepo: true})
 	if !errors.Is(err, ErrUnknownPockodeCommand) {
 		t.Fatalf("err = %v, want ErrUnknownPockodeCommand", err)
 	}
@@ -47,6 +47,17 @@ func TestExpandPockode_UnknownNamesTheAvailableCommands(t *testing.T) {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("err = %q, want it to name %s", err, want)
 		}
+	}
+}
+
+// Offering a command the next message would refuse is a dead end.
+func TestExpandPockode_UnknownLeavesOutCommandsThatNeedGit(t *testing.T) {
+	_, err := ExpandPockode(agent.CommandInvocation{Name: "pockode-nope"}, PockodeEnv{WorkDir: t.TempDir()})
+	if !errors.Is(err, ErrUnknownPockodeCommand) {
+		t.Fatalf("err = %v, want ErrUnknownPockodeCommand", err)
+	}
+	if strings.Contains(err.Error(), "/pockode-lead") {
+		t.Errorf("err = %q, want it not to offer /pockode-lead outside a repository", err)
 	}
 }
 
@@ -70,7 +81,7 @@ func runGit(t *testing.T, dir string, args ...string) {
 func TestExpandPockode_LeadMergesIntoTheWorktreesBranch(t *testing.T) {
 	dir := gitRepo(t, "feature/x")
 
-	got, err := ExpandPockode(agent.CommandInvocation{Name: "pockode-lead"}, PockodeEnv{WorkDir: dir})
+	got, err := ExpandPockode(agent.CommandInvocation{Name: "pockode-lead"}, PockodeEnv{WorkDir: dir, IsGitRepo: true})
 	if err != nil {
 		t.Fatalf("ExpandPockode: %v", err)
 	}
@@ -85,7 +96,7 @@ func TestExpandPockode_LeadMergesIntoTheWorktreesBranch(t *testing.T) {
 func TestExpandPockode_LeadAppendsTheArgs(t *testing.T) {
 	dir := gitRepo(t, "main")
 
-	got, err := ExpandPockode(agent.CommandInvocation{Name: "pockode-lead", Args: "API first\n{{.Branch}}"}, PockodeEnv{WorkDir: dir})
+	got, err := ExpandPockode(agent.CommandInvocation{Name: "pockode-lead", Args: "API first\n{{.Branch}}"}, PockodeEnv{WorkDir: dir, IsGitRepo: true})
 	if err != nil {
 		t.Fatalf("ExpandPockode: %v", err)
 	}
@@ -101,20 +112,29 @@ func TestExpandPockode_LeadRefusesADetachedHead(t *testing.T) {
 		"commit", "--allow-empty", "-m", "init")
 	runGit(t, dir, "checkout", "--detach")
 
-	_, err := ExpandPockode(agent.CommandInvocation{Name: "pockode-lead"}, PockodeEnv{WorkDir: dir})
+	_, err := ExpandPockode(agent.CommandInvocation{Name: "pockode-lead"}, PockodeEnv{WorkDir: dir, IsGitRepo: true})
 	if !errors.Is(err, ErrNoBranch) {
 		t.Fatalf("err = %v, want ErrNoBranch", err)
 	}
 }
 
-// A branch that cannot be read at all is not the user's to fix by checking one
-// out, so it is not worded as a refusal.
-func TestExpandPockode_LeadFailsWithoutARepository(t *testing.T) {
+// Outside a repository there is no branch to merge into; that is the user's to
+// fix, so it is a refusal rather than a failure.
+func TestExpandPockode_LeadRefusesWithoutARepository(t *testing.T) {
+	_, err := ExpandPockode(agent.CommandInvocation{Name: "pockode-lead"}, PockodeEnv{WorkDir: t.TempDir()})
+	if !errors.Is(err, ErrNotGitRepo) || !IsRefusal(err) {
+		t.Fatalf("err = %v, want an ErrNotGitRepo refusal", err)
+	}
+}
+
+// A branch that cannot be read at all in what was a repository a moment ago is
+// not the user's to fix by checking one out, so it is not worded as a refusal.
+func TestExpandPockode_LeadFailsWhenTheBranchCannotBeRead(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("GIT_CEILING_DIRECTORIES", filepath.Dir(dir))
 
-	_, err := ExpandPockode(agent.CommandInvocation{Name: "pockode-lead"}, PockodeEnv{WorkDir: dir})
-	if err == nil || errors.Is(err, ErrNoBranch) {
-		t.Fatalf("err = %v, want a failure that is not ErrNoBranch", err)
+	_, err := ExpandPockode(agent.CommandInvocation{Name: "pockode-lead"}, PockodeEnv{WorkDir: dir, IsGitRepo: true})
+	if err == nil || IsRefusal(err) {
+		t.Fatalf("err = %v, want a failure that is not a refusal", err)
 	}
 }

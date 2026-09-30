@@ -4,7 +4,7 @@ import type { GitBranches } from "../../types/git";
 import {
 	describeGitFailure,
 	type GitFailure,
-	gitBusySummary,
+	gitRefusalSummary,
 } from "../../utils/gitErrors";
 import { Sheet, Spinner } from "../ui";
 import { inputClass } from "../ui/inputClass";
@@ -65,13 +65,16 @@ function BranchSheet({ branches, onClose, onCheckout, onNewBranch }: Props) {
 		try {
 			await onCheckout(branch);
 		} catch (err) {
-			const busy = gitBusySummary(err);
+			const refusal = gitRefusalSummary(err);
 			setError(
-				busy
+				refusal
 					? // A refusal explains itself, but not which row it was about, and
 						// the list is taller than the sheet: the branch that was tapped
 						// has usually scrolled away by the time this is read.
-						{ summary: `Could not switch to ${branch}. ${busy}`, detail: null }
+						{
+							summary: `Could not switch to ${branch}. ${refusal}`,
+							detail: null,
+						}
 					: describeGitFailure(err, (detail) =>
 							OVERWRITE_REFUSAL.test(detail)
 								? `Could not switch to ${branch}. Commit or discard these changes first.`

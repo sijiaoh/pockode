@@ -8,7 +8,7 @@ import (
 )
 
 func (h *rpcMethodHandler) handleCommandList(ctx context.Context, conn *jsonrpc2.Conn, req *jsonrpc2.Request) {
-	commands := h.commandStore.List()
+	commands := h.commandStore.List(h.worktreeManager.Registry().IsGitRepo())
 
 	result := rpc.CommandListResult{Commands: commands}
 

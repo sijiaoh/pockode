@@ -138,6 +138,7 @@ vi.mock("./Session", () => ({
 
 // The worktree existence guard would otherwise redirect unknown worktrees to
 // main; report both worktrees as present so navigation is not interfered with.
+const repo = vi.hoisted(() => ({ isGitRepo: true as boolean | null }));
 vi.mock("../hooks/useWorktree", () => ({
 	useWorktree: () => ({
 		worktrees: [
@@ -145,7 +146,7 @@ vi.mock("../hooks/useWorktree", () => ({
 			{ name: "B", branch: "B", is_main: false },
 		],
 		isSuccess: true,
-		isGitRepo: true,
+		isGitRepo: repo.isGitRepo,
 	}),
 }));
 
@@ -550,6 +551,46 @@ describe("AppShell sidebar form and its switch", () => {
 			"data-can-open-sidebar",
 			String(!expanded),
 		);
+	});
+});
+
+// A git view has nothing to show outside a repository — reached by a saved URL,
+// by history, or left open when `.git` went away. It is replaced, not shown as
+// an error, and only once the server has actually said so.
+describe("AppShell git views outside a git repository", () => {
+	beforeEach(() => {
+		vi.clearAllMocks();
+		resetWorktreeStore();
+		useSessionDetailStore.getState().clear();
+		useSessionStore.setState({
+			sessions: [],
+			isLoading: true,
+			isSuccess: false,
+			showTaskSessions: false,
+		});
+		useWorkStore.setState({ works: [] });
+		useAuthStore.setState({ sessionToken: "test-session-token" });
+	});
+
+	afterEach(() => {
+		repo.isGitRepo = true;
+	});
+
+	it("returns to the session the view was opened over", async () => {
+		repo.isGitRepo = false;
+		const router = renderAppShell("/w/A/unstaged/src/a.ts?session=a1");
+
+		await waitFor(() =>
+			expect(router.state.location.pathname).toBe("/w/A/s/a1"),
+		);
+	});
+
+	it("leaves the view alone while the answer is not in", async () => {
+		repo.isGitRepo = null;
+		const router = renderAppShell("/w/A/unstaged/src/a.ts?session=a1");
+
+		await screen.findByTestId("chat-panel");
+		expect(router.state.location.pathname).toBe("/w/A/unstaged/src/a.ts");
 	});
 });
 

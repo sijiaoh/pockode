@@ -14,6 +14,13 @@ import { JSONRPCErrorException } from "json-rpc-2.0";
 const GIT_BUSY_CODE = -32001;
 
 /**
+ * Where: server/rpc/types.go's CodeNotGitRepo. The project stopped being a
+ * repository after the request was started from a panel that was still on
+ * screen; nothing ran, so it is a refusal like the one above.
+ */
+const NOT_GIT_REPO_CODE = -32002;
+
+/**
  * The operations the server names in a refusal, each as the gerund that goes
  * after "busy". The keys are the contract (server/git/lock.go); the values are
  * the only part a user reads, so they say what the panel calls the action
@@ -43,20 +50,19 @@ export interface GitFailure {
 }
 
 /**
- * The plain-language sentence for a refused request, or null if the failure is
- * anything else.
+ * The plain-language sentence for a request the server refused before git ran,
+ * or null if the failure is anything else.
  *
  * Exported for the two sheets that put the sentence inside one of their own,
  * naming the branch the refusal cannot name; anything that renders a failure
  * as it comes wants describeGitFailure.
  */
-export function gitBusySummary(error: unknown): string | null {
-	if (
-		!(error instanceof JSONRPCErrorException) ||
-		error.code !== GIT_BUSY_CODE
-	) {
-		return null;
+export function gitRefusalSummary(error: unknown): string | null {
+	if (!(error instanceof JSONRPCErrorException)) return null;
+	if (error.code === NOT_GIT_REPO_CODE) {
+		return "This project is no longer a git repository.";
 	}
+	if (error.code !== GIT_BUSY_CODE) return null;
 
 	// An operation the server has since added is still a refusal worth
 	// explaining; only the clause naming it is dropped.
@@ -84,8 +90,8 @@ export function describeGitFailure(
 	error: unknown,
 	summarize: (detail: string) => string,
 ): GitFailure {
-	const busy = gitBusySummary(error);
-	if (busy !== null) return { summary: busy, detail: null };
+	const refusal = gitRefusalSummary(error);
+	if (refusal !== null) return { summary: refusal, detail: null };
 
 	const detail = error instanceof Error ? error.message : String(error);
 	return { summary: summarize(detail), detail };

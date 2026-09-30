@@ -34,9 +34,10 @@ func toRPCSetupHookSkip(skip *worktree.SetupHookSkip) *rpc.SetupHookSkip {
 
 func (h *rpcMethodHandler) handleWorktreeList(ctx context.Context, conn *jsonrpc2.Conn, req *jsonrpc2.Request) {
 	registry := h.worktreeManager.Registry()
-	worktrees := registry.List()
+	worktrees, isGitRepo := registry.ListState()
 
 	result := rpc.WorktreeListResult{
+		IsGitRepo:     isGitRepo,
 		Worktrees:     make([]rpc.WorktreeInfo, len(worktrees)),
 		SetupHookSkip: toRPCSetupHookSkip(registry.CheckSetupHook()),
 	}
@@ -75,7 +76,7 @@ func (h *rpcMethodHandler) handleWorktreeCreate(ctx context.Context, conn *jsonr
 	if err != nil {
 		switch {
 		case errors.Is(err, worktree.ErrNotGitRepo):
-			h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidRequest, "not a git repository")
+			h.replyNotGitRepo(ctx, conn, req.ID)
 		case errors.Is(err, worktree.ErrWorktreeAlreadyExist):
 			h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "worktree already exists")
 		default:
@@ -129,7 +130,7 @@ func (h *rpcMethodHandler) handleWorktreeDelete(ctx context.Context, conn *jsonr
 	if err := registry.Delete(params.Name); err != nil {
 		switch {
 		case errors.Is(err, worktree.ErrNotGitRepo):
-			h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidRequest, "not a git repository")
+			h.replyNotGitRepo(ctx, conn, req.ID)
 		case errors.Is(err, worktree.ErrWorktreeNotFound):
 			h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "worktree not found")
 		default:
@@ -210,14 +211,15 @@ func (h *rpcMethodHandler) handleWorktreeSubscribe(ctx context.Context, conn *js
 	}
 
 	notifier := h.state.getNotifier()
-	if err := h.worktreeManager.WorktreeWatcher.Subscribe(id, notifier); err != nil {
+	isGitRepo, err := h.worktreeManager.WorktreeWatcher.Subscribe(id, notifier)
+	if err != nil {
 		h.replySubscriptionError(ctx, conn, req.ID, err, "failed to subscribe to worktree list")
 		return
 	}
 	h.state.trackSubscription(id, h.worktreeManager.WorktreeWatcher)
 	h.log.Debug("subscribed", "watcher", "worktree", "watchId", id)
 
-	if err := conn.Reply(ctx, req.ID, struct{}{}); err != nil {
+	if err := conn.Reply(ctx, req.ID, rpc.WorktreeSubscribeResult{IsGitRepo: isGitRepo}); err != nil {
 		h.log.Error("failed to send worktree subscribe response", "error", err)
 	}
 }

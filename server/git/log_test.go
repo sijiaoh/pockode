@@ -1,8 +1,31 @@
 package git
 
 import (
+	"path/filepath"
 	"testing"
 )
+
+// `git init` leaves a branch with no commits, where git log fails; the history
+// panel has to read that as empty rather than as an error.
+func TestLog_Unborn(t *testing.T) {
+	dir, cleanup := setupTestRepo(t)
+	defer cleanup()
+
+	commits, err := Log(dir, 50)
+	if err != nil || len(commits) != 0 {
+		t.Errorf("Log() = %v, %v; want no commits and no error", commits, err)
+	}
+}
+
+// Only an unborn branch reads as empty; no repository at all is still a failure.
+func TestLog_NotARepository(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("GIT_CEILING_DIRECTORIES", filepath.Dir(dir))
+
+	if _, err := Log(dir, 50); err == nil {
+		t.Error("Log() outside a repository succeeded, want an error")
+	}
+}
 
 func TestParseLogOutput(t *testing.T) {
 	tests := []struct {

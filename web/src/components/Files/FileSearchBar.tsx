@@ -1,6 +1,7 @@
 import { EyeOff, FileText, Search, X } from "lucide-react";
 import type { KeyboardEvent, ReactNode, RefObject } from "react";
 import { useFilesSearchStore } from "../../lib/filesSearchStore";
+import { useIsGitRepo } from "../../lib/worktreeStore";
 import ToggleChip from "../common/ToggleChip";
 import { Spinner } from "../ui";
 
@@ -33,6 +34,9 @@ function FileSearchBar({
 	const toggleSearchContent = useFilesSearchStore(
 		(state) => state.toggleSearchContent,
 	);
+	// Outside a repository the server has no .gitignore to respect, so the chip
+	// would toggle nothing (docs/file.md). The saved choice is left as it is.
+	const isGitRepo = useIsGitRepo() === true;
 
 	const handleKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
 		if (e.key === "Escape") {
@@ -106,13 +110,15 @@ function FileSearchBar({
 			    wrap instead of overflowing a narrow panel. */}
 			{showOptions && (
 				<div className="flex shrink-0 flex-wrap items-center gap-2 px-2 pb-2">
-					<ToggleChip
-						icon={EyeOff}
-						label=".gitignore"
-						title="Respect .gitignore"
-						pressed={respectGitignore}
-						onToggle={toggleRespectGitignore}
-					/>
+					{isGitRepo && (
+						<ToggleChip
+							icon={EyeOff}
+							label=".gitignore"
+							title="Respect .gitignore"
+							pressed={respectGitignore}
+							onToggle={toggleRespectGitignore}
+						/>
+					)}
 					<ToggleChip
 						icon={FileText}
 						label="Contents"

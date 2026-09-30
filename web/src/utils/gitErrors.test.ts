@@ -1,6 +1,6 @@
 import { JSONRPCErrorException } from "json-rpc-2.0";
 import { describe, expect, it } from "vitest";
-import { describeGitFailure, gitBusySummary } from "./gitErrors";
+import { describeGitFailure, gitRefusalSummary } from "./gitErrors";
 
 /** As the server writes it: server/rpc/types.go's CodeGitBusy and GitBusyData. */
 function busy(operation: string): JSONRPCErrorException {
@@ -11,17 +11,25 @@ function busy(operation: string): JSONRPCErrorException {
 	);
 }
 
-describe("gitBusySummary", () => {
+describe("gitRefusalSummary", () => {
 	it("says what the worktree is busy with", () => {
-		expect(gitBusySummary(busy("pull"))).toBe(
+		expect(gitRefusalSummary(busy("pull"))).toBe(
 			"This worktree is busy pulling. Try again once it finishes.",
 		);
 	});
 
 	it("still explains a refusal that names an operation it does not know", () => {
-		const summary = gitBusySummary(busy("rebase"));
+		const summary = gitRefusalSummary(busy("rebase"));
 		expect(summary).toContain("busy");
 		expect(summary).not.toContain("rebase");
+	});
+
+	it("explains a request refused because the project is not a repository", () => {
+		expect(
+			gitRefusalSummary(
+				new JSONRPCErrorException("not a git repository: /p", -32002),
+			),
+		).toBe("This project is no longer a git repository.");
 	});
 
 	// The refusal is told apart by its code: git's own failures are prose the
@@ -29,14 +37,14 @@ describe("gitBusySummary", () => {
 	// either side rewords a sentence.
 	it("ignores a git failure that reads like one", () => {
 		expect(
-			gitBusySummary(
+			gitRefusalSummary(
 				new JSONRPCErrorException(
 					"another git operation is running in this worktree",
 					-32603,
 				),
 			),
 		).toBeNull();
-		expect(gitBusySummary(new Error("boom"))).toBeNull();
+		expect(gitRefusalSummary(new Error("boom"))).toBeNull();
 	});
 });
 
@@ -58,6 +66,18 @@ describe("describeGitFailure", () => {
 	it("leaves a refusal with no output to quote", () => {
 		expect(describeGitFailure(busy("push"), () => "unused")).toEqual({
 			summary: "This worktree is busy pushing. Try again once it finishes.",
+			detail: null,
+		});
+	});
+
+	it("leaves a not-a-repository refusal with no output to quote", () => {
+		expect(
+			describeGitFailure(
+				new JSONRPCErrorException("not a git repository: /p", -32002),
+				() => "unused",
+			),
+		).toEqual({
+			summary: "This project is no longer a git repository.",
 			detail: null,
 		});
 	});

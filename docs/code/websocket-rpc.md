@@ -743,6 +743,10 @@ one reply helper that carries a `data` member — because a code alone would say
 the entire reason the code exists rather than a sentence to pattern-match. `data`
 is the machine-readable half of the answer, never the only half: the message
 still says the whole thing, for a client that only displays it.
+`-32002` (`rpc.CodeNotGitRepo`) is the same kind of refusal for a project that
+is not a git repository at all; it needs no `data`, since what would make the
+request work — the repository appearing — arrives as `worktree.changed`
+([git.md](../git.md#projects-without-a-repository)).
 
 A server's error message is therefore text to put in front of a user, never a
 value to branch on — it embeds an arbitrary error string, and its fixed half is

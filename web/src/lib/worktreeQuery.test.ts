@@ -3,7 +3,7 @@ import type { WorktreeListResult } from "../types/message";
 import { fetchWorktrees } from "./worktreeQuery";
 import { useWorktreeStore, worktreeActions } from "./worktreeStore";
 
-let listResult: WorktreeListResult = { worktrees: [] };
+let listResult: WorktreeListResult = { is_git_repo: true, worktrees: [] };
 
 vi.mock("./wsStore", () => ({
 	wsActions: {
@@ -13,7 +13,7 @@ vi.mock("./wsStore", () => ({
 
 afterEach(() => {
 	worktreeActions.reset();
-	listResult = { worktrees: [] };
+	listResult = { is_git_repo: true, worktrees: [] };
 });
 
 describe("fetchWorktrees", () => {
@@ -22,6 +22,7 @@ describe("fetchWorktrees", () => {
 	// leave every warning unrendered.
 	it("publishes a skipped setup script to the store", async () => {
 		listResult = {
+			is_git_repo: true,
 			worktrees: [],
 			setup_hook_skip: { reason: "no bash.exe found", hint: "install it" },
 		};
@@ -41,5 +42,27 @@ describe("fetchWorktrees", () => {
 
 		expect(useWorktreeStore.getState().setupHookSkip).toBeNull();
 		expect(worktrees).toEqual([]);
+	});
+
+	// Same reason: the Git tab, the switcher and every git read hang off it.
+	it("publishes whether the project is a git repository", async () => {
+		listResult = { is_git_repo: false, worktrees: [] };
+
+		await fetchWorktrees();
+
+		expect(useWorktreeStore.getState().isGitRepo).toBe(false);
+	});
+
+	// Out-of-order replies: a request worktree.changed cancelled can answer after
+	// the newer one, and must not put the older answer back.
+	it("leaves the store alone for a request that was cancelled", async () => {
+		worktreeActions.setIsGitRepo(true);
+		listResult = { is_git_repo: false, worktrees: [] };
+		const controller = new AbortController();
+		controller.abort();
+
+		await fetchWorktrees({ signal: controller.signal });
+
+		expect(useWorktreeStore.getState().isGitRepo).toBe(true);
 	});
 });

@@ -3,17 +3,25 @@ import { render, screen, waitFor } from "@testing-library/react";
 import type { AnchorHTMLAttributes, ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useWorkStore } from "../../lib/workStore";
-import { worktreeActions } from "../../lib/worktreeStore";
+import { useWorktreeStore, worktreeActions } from "../../lib/worktreeStore";
 import type { WorktreeInfo } from "../../types/message";
 import type { WorkListItem, WorkStatus } from "../../types/work";
 import WorktreeBadge from "./WorktreeBadge";
 
 let mockWorktrees: WorktreeInfo[] = [];
+let mockIsGitRepo = true;
+let listPending = false;
 
 vi.mock("../../lib/wsStore", () => ({
 	useWSStore: vi.fn((selector) => selector({ status: "connected" })),
 	wsActions: {
-		listWorktrees: () => Promise.resolve({ worktrees: mockWorktrees }),
+		listWorktrees: () =>
+			listPending
+				? new Promise(() => {})
+				: Promise.resolve({
+						is_git_repo: mockIsGitRepo,
+						worktrees: mockWorktrees,
+					}),
 	},
 }));
 
@@ -68,6 +76,8 @@ afterEach(() => {
 	worktreeActions.reset();
 	useWorkStore.getState().reset();
 	mockWorktrees = [];
+	mockIsGitRepo = true;
+	listPending = false;
 });
 
 describe("WorktreeBadge", () => {
@@ -95,6 +105,8 @@ describe("WorktreeBadge", () => {
 	});
 
 	it("falls back to a neutral label before the list loads", () => {
+		// Known from the subscription reply, which can land before the list.
+		worktreeActions.setIsGitRepo(true);
 		renderStartedBadge("");
 		expect(
 			screen.getByRole("link", { name: "Open main worktree" }),
@@ -195,8 +207,21 @@ describe("WorktreeBadge", () => {
 	});
 
 	it("renders nothing on the default worktree in a non-git project", async () => {
-		worktreeActions.setIsGitRepo(false);
+		mockIsGitRepo = false;
+		mockWorktrees = [{ name: "", path: "/p", branch: "", is_main: true }];
 		const { container } = renderStartedBadge("");
-		await waitFor(() => expect(container).toBeEmptyDOMElement());
+		await waitFor(() =>
+			expect(useWorktreeStore.getState().isGitRepo).toBe(false),
+		);
+		expect(container).toBeEmptyDOMElement();
+	});
+
+	it("renders nothing on the default worktree until the server says it is a repository", async () => {
+		listPending = true;
+		const { container } = renderStartedBadge("");
+		// Past the tick in which a resolved list would have landed.
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		expect(useWorktreeStore.getState().isGitRepo).toBeNull();
+		expect(container).toBeEmptyDOMElement();
 	});
 });

@@ -1,5 +1,6 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { JSONRPCErrorException } from "json-rpc-2.0";
 import { describe, expect, it, vi } from "vitest";
 import type { SetupHookSkip } from "../../types/message";
 import WorktreeCreateSheet from "./WorktreeCreateSheet";
@@ -85,5 +86,22 @@ describe("WorktreeCreateSheet", () => {
 		expect(
 			screen.queryByText(/setup script did not run/),
 		).not.toBeInTheDocument();
+	});
+
+	// The project stopped being a repository before worktree.changed said so;
+	// the server's sentence names an absolute path the user has no use for.
+	it("explains a refusal because the project is no longer a repository", async () => {
+		renderSheet({
+			onCreate: () =>
+				Promise.reject(
+					new JSONRPCErrorException("not a git repository: /abs/p", -32002),
+				),
+		});
+
+		await submitName("feature");
+
+		expect(await screen.findByRole("alert")).toHaveTextContent(
+			"This project is no longer a git repository.",
+		);
 	});
 });

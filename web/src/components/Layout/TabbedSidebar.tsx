@@ -57,6 +57,13 @@ function TabbedSidebar({
 }: Props) {
 	const [activeTab, setActiveTab] = useState(defaultTab);
 	const [refreshSignal, setRefreshSignal] = useState(0);
+
+	// A tab can be taken away while it is open (the Git tab, when the project
+	// stops being a repository). Falling back in state rather than only in what
+	// is drawn keeps the tab from reopening itself when it comes back.
+	if (activeTab !== defaultTab && !tabs.some((tab) => tab.id === activeTab)) {
+		setActiveTab(defaultTab);
+	}
 	const prevOpenRef = useRef(isOpen);
 
 	useEffect(() => {

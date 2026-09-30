@@ -42,7 +42,7 @@ func TestList_EmptyStore(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	commands := store.List()
+	commands := store.List(true)
 
 	var want []Command
 	for _, cmd := range PockodeCommands {
@@ -67,7 +67,7 @@ func TestList_UsedPockodeCommandSortsByRecency(t *testing.T) {
 	useAged(t, store, "help", time.Hour)
 	store.Use("pockode-lead")
 
-	commands := store.List()
+	commands := store.List(true)
 
 	if commands[0].Name != "pockode-lead" || !commands[0].IsPockode || commands[0].Description == "" {
 		t.Errorf("first = %+v, want pockode-lead as a described Pockode command", commands[0])
@@ -94,10 +94,30 @@ func TestList_OmitsUnknownPockodeNamesFromHistory(t *testing.T) {
 
 	store.Use("pockode-gone")
 
-	for _, cmd := range store.List() {
+	for _, cmd := range store.List(true) {
 		if cmd.Name == "pockode-gone" {
 			t.Errorf("List() offers %+v", cmd)
 		}
+	}
+}
+
+// A command that needs git would only be offered to be refused in a project
+// without a repository, even one the user has sent before.
+func TestList_OmitsGitCommandsOutsideARepository(t *testing.T) {
+	store, err := NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	store.Use("pockode-lead")
+
+	for _, cmd := range store.List(false) {
+		if cmd.Name == "pockode-lead" {
+			t.Errorf("List(false) offers %+v", cmd)
+		}
+	}
+	if first := store.List(true)[0]; first.Name != "pockode-lead" {
+		t.Errorf("List(true)[0] = %q, want the recently used pockode-lead", first.Name)
 	}
 }
 
@@ -111,7 +131,7 @@ func TestList_RecentCommandsFirst(t *testing.T) {
 	useAged(t, store, "help", time.Hour)
 	store.Use("model")
 
-	commands := store.List()
+	commands := store.List(true)
 
 	if commands[0].Name != "model" {
 		t.Errorf("expected 'model' first, got %s", commands[0].Name)
@@ -130,7 +150,7 @@ func TestList_CustomCommandMarkedAsNotBuiltin(t *testing.T) {
 
 	store.Use("my-custom-cmd")
 
-	commands := store.List()
+	commands := store.List(true)
 
 	if commands[0].Name != "my-custom-cmd" {
 		t.Errorf("expected 'my-custom-cmd' first, got %s", commands[0].Name)
@@ -151,7 +171,7 @@ func TestList_DuplicateUsageDeduped(t *testing.T) {
 	useAged(t, store, "model", time.Hour)
 	store.Use("help")
 
-	commands := store.List()
+	commands := store.List(true)
 
 	if commands[0].Name != "help" {
 		t.Errorf("expected 'help' first (most recent), got %s", commands[0].Name)
@@ -195,7 +215,7 @@ func TestUse_TrimsOldEntries(t *testing.T) {
 	// Adding one more triggers trim
 	store.Use("final")
 
-	commands := store.List()
+	commands := store.List(true)
 	if len(commands) > maxRecentCommands+len(PockodeCommands)+len(BuiltinCommands) {
 		t.Errorf("expected at most %d commands, got %d", maxRecentCommands+len(PockodeCommands)+len(BuiltinCommands), len(commands))
 	}
@@ -228,7 +248,7 @@ func TestPersistence(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	commands := store2.List()
+	commands := store2.List(true)
 	if commands[0].Name != "model" {
 		t.Errorf("expected 'model' first after reload, got %s", commands[0].Name)
 	}
@@ -250,7 +270,7 @@ func TestNewStore_DeduplicatesOnLoad(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	commands := store.List()
+	commands := store.List(true)
 
 	helpCount := 0
 	for _, cmd := range commands {
@@ -279,7 +299,7 @@ func TestNewStore_CorruptFileIsQuarantined(t *testing.T) {
 		t.Fatalf("NewStore on corrupt file: %v", err)
 	}
 
-	for _, cmd := range store.List() {
+	for _, cmd := range store.List(true) {
 		if !cmd.IsBuiltin && !cmd.IsPockode {
 			t.Errorf("expected no history after corruption, got %s", cmd.Name)
 		}
@@ -297,8 +317,8 @@ func TestNewStore_CorruptFileIsQuarantined(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if reloaded.List()[0].Name != "model" {
-		t.Errorf("expected 'model' first after recovery, got %s", reloaded.List()[0].Name)
+	if reloaded.List(true)[0].Name != "model" {
+		t.Errorf("expected 'model' first after recovery, got %s", reloaded.List(true)[0].Name)
 	}
 }
 
@@ -376,7 +396,7 @@ func TestUse_InvalidName(t *testing.T) {
 	}
 
 	// Verify nothing was recorded
-	commands := store.List()
+	commands := store.List(true)
 	for _, cmd := range commands {
 		if !cmd.IsBuiltin && !cmd.IsPockode {
 			t.Errorf("unexpected custom command recorded: %s", cmd.Name)

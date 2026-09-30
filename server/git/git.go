@@ -3,6 +3,7 @@ package git
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/url"
@@ -674,12 +675,30 @@ func Add(dir string, paths ...string) error {
 
 // Reset unstages files from the git index.
 // For submodule paths (e.g., "submodule/path/to/file"), it runs git reset inside the submodule.
-// Uses "git restore --staged" which handles both existing and newly added files correctly.
+// Uses "git restore --staged" which handles both existing and newly added files
+// correctly, and "git rm --cached" before the first commit, where there is no
+// HEAD to restore from.
 func Reset(dir string, paths ...string) error {
 	return stagingOp(dir, opUnstage, paths, func(actualDir, pathspec string) error {
 		_, err := execGit(actualDir, "restore", "--staged", "--", pathspec)
+		if err != nil && isUnborn(actualDir) {
+			// Before the first commit unstaging is dropping the entry from the
+			// index. -f only lifts rm's refusal of an entry that differs from the
+			// file on disk; with --cached the file itself is never touched.
+			_, err = execGit(actualDir, "rm", "--cached", "-f", "-r", "--quiet", "--", pathspec)
+		}
 		return err
 	})
+}
+
+// isUnborn reports whether dir is a repository whose HEAD names a branch with
+// no commits yet — the state `git init` leaves. Only exit 1 counts: that is
+// `rev-parse --verify --quiet` saying HEAD resolves to nothing, where a broken
+// or missing repository is fatal and exits otherwise.
+func isUnborn(dir string) bool {
+	_, err := execGit(dir, "rev-parse", "--verify", "--quiet", "HEAD")
+	var exitErr *exec.ExitError
+	return errors.As(err, &exitErr) && exitErr.ExitCode() == 1
 }
 
 // stagingOp is Add and Reset, which differ only in the command they run per
@@ -785,6 +804,10 @@ func Log(dir string, limit int) ([]Commit, error) {
 	cmd.Dir = dir
 	output, err := cmd.Output()
 	if err != nil {
+		// Asked only once log has failed, so the ordinary case pays for nothing.
+		if isUnborn(dir) {
+			return []Commit{}, nil
+		}
 		return nil, fmt.Errorf("git log failed: %w", err)
 	}
 

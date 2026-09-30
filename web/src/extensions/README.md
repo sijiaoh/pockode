@@ -49,6 +49,22 @@ export default function YourSection() {
 }
 ```
 
+A section that only applies some of the time takes an optional `visibility`,
+which hides its heading and navigation entry along with the body — a component
+returning `null` would leave both behind. It is a source rather than a hook
+(`get` plus `subscribe`, the shape `useSyncExternalStore` takes), so a zustand
+store fits it directly:
+
+```ts
+ctx.settings.register({
+  // ...
+  visibility: {
+    get: () => useWorktreeStore.getState().isGitRepo === true,
+    subscribe: useWorktreeStore.subscribe,
+  },
+});
+```
+
 ### ctx.chatUI.configure()
 
 Customize the chat interface by replacing default components or hiding elements.

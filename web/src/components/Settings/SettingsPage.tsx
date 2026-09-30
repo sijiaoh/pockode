@@ -1,5 +1,8 @@
-import { useRef } from "react";
-import { useSettingsSections } from "../../lib/registries/settingsRegistry";
+import { useCallback, useMemo, useRef, useSyncExternalStore } from "react";
+import {
+	type SettingsSectionConfig,
+	useSettingsSections,
+} from "../../lib/registries/settingsRegistry";
 import BackToChatButton from "../ui/BackToChatButton";
 import SettingsNav from "./SettingsNav";
 
@@ -9,7 +12,7 @@ interface Props {
 
 export default function SettingsPage({ onBack }: Props) {
 	const scrollContainerRef = useRef<HTMLElement>(null);
-	const sections = useSettingsSections();
+	const sections = useVisibleSettingsSections();
 
 	const navItems = sections.map((section) => ({
 		id: section.id,
@@ -44,4 +47,40 @@ export default function SettingsPage({ onBack }: Props) {
 			</main>
 		</div>
 	);
+}
+
+function isVisible(section: SettingsSectionConfig): boolean {
+	return section.visibility?.get() ?? true;
+}
+
+function useVisibleSettingsSections(): SettingsSectionConfig[] {
+	const registered = useSettingsSections();
+
+	const subscribe = useCallback(
+		(onChange: () => void) => {
+			const unsubscribes = registered.map((section) =>
+				section.visibility?.subscribe(onChange),
+			);
+			return () => {
+				for (const unsubscribe of unsubscribes) unsubscribe?.();
+			};
+		},
+		[registered],
+	);
+	// A string, so an unrelated store update that leaves every answer as it was
+	// does not re-render the page.
+	const getVisibleIds = useCallback(
+		() =>
+			registered
+				.filter(isVisible)
+				.map((section) => section.id)
+				.join("\0"),
+		[registered],
+	);
+	const visibleIds = useSyncExternalStore(subscribe, getVisibleIds);
+
+	return useMemo(() => {
+		const ids = new Set(visibleIds.split("\0"));
+		return registered.filter((section) => ids.has(section.id));
+	}, [registered, visibleIds]);
 }

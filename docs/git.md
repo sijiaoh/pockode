@@ -189,6 +189,29 @@ Two watchers deliver live updates via the subscription system. Both poll every 3
 - **GitWatcher** — Polls `git rev-parse HEAD` + `git status` and compares the result against the previous one. Subscribers receive `git.changed` notifications when it differs (e.g., after `git add`).
 - **GitDiffWatcher** — Recomputes the diff behind each `git.diff.subscribe` subscription and sends `git.diff.changed` to that subscriber when the result changes. Each notification carries the full diff and file contents, not a delta.
 
+## Projects Without a Repository
+
+A project does not have to be a git repository, and can become one while Pockode is running (`git init`, a clone into the directory) or stop being one (`.git` deleted). What the client needs is one fact — is this project a git repository right now — and one moment — when that changes.
+
+**The worktree registry is the single source.** `Registry` reads `git worktree list --porcelain` in the main checkout; if git answers, the project is a repository, and if it refuses for any reason — no repository, git missing, a directory git will not trust — it is not, since no git feature could work there either way. git's own account of why is logged, once per distinct reason rather than per poll, since the log is the one place a missing repository can be told apart from the rest. A read that was *killed* — a cancelled watcher, the 10-second timeout — has learned nothing and leaves the previous answer in place rather than reporting the repository gone. A timed-out read also keeps that answer for one more cache TTL, so a git stuck on a lock costs one timeout rather than one per request queued behind it.
+
+**The client learns it from the worktree subscription.** `worktree.subscribe` replies `{is_git_repo}`, read fresh rather than from the last poll, because polling pauses while nobody is subscribed. `worktree.changed` carries `is_git_repo` too, and fires when the worktree list changes *or* the repository appears or disappears. `worktree.list` reports `is_git_repo` beside the worktrees it lists, from the same read — a list holding only main is otherwise ambiguous. The watcher polls through the registry (`Registry.Refresh`), so the registry's cache already holds the change by the time the notification goes out: a `worktree.list` sent in answer cannot be served the listing from before it.
+
+**Requests that need git are refused with a code of their own.** In a project that is not a repository every `git.*` method that runs git, and `worktree.create` / `worktree.delete`, answer `-32002` (`rpc.CodeNotGitRepo`) instead of whatever git printed. `git.subscribe`, `git.unsubscribe` and `git.diff.unsubscribe` are exempt: they run no git themselves, so a panel may stay subscribed across `git init`. It must not wait for `git.changed` to learn that the repository appeared — an empty directory looks the same to the git watcher before and after — `worktree.changed` is what says so.
+
+**The server's own features ask the same registry.** `command.list` leaves out the Pockode commands that need git and `/pockode-lead` is refused as the user's to fix ([pockode-commands.md](pockode-commands.md#when-the-server-refuses)); both read the cached answer, since a palette a few seconds behind costs nothing. MCP `story_start` refuses a `worktree` argument before pinning it to the story, since a story pinned to a worktree that can never be created would ask for it again on every start. That one reads `Registry.IsGitRepoFresh`, past the cache: the agent asking is often the one that has just run `git init`, and being told there is no repository would send it down the wrong path.
+
+What the client does with the answer — which git surfaces disappear, and what happens to one that is open when the repository goes away — is in [git-ui.md](git-ui.md#projects-without-a-repository).
+
+### Before the first commit
+
+`git init` leaves a repository whose branch has no commit yet, and the panel has to work there, since that is exactly where a user who just asked for a repository lands. Two operations assume a HEAD and are given a fallback, each taken only after the ordinary command has failed and `rev-parse --verify --quiet HEAD` has exited 1 (resolves to nothing, as opposed to a broken repository, which is fatal):
+
+- **`git.log` answers an empty list** rather than git's `does not have any commits yet`, so History reads as empty instead of failed.
+- **`git.reset` falls back to `git rm --cached -f -r`.** `restore --staged` restores from HEAD, and there is none; before the first commit, unstaging *is* dropping the entry from the index. `-f` only lifts rm's refusal of an entry that differs from the file on disk (staged, then edited again) — with `--cached` the file itself is never touched — and an unmatched path still fails, as it does once there are commits.
+
+The rest needs no special case: `worktree list --porcelain` still names the branch, so the switcher shows it, and the first commit goes through `git.commit` like any other. Amend is simply not offered, because there is no HEAD commit for it to sit on ([git-ui.md](git-ui.md#amend)).
+
 ## Configuration
 
 Git is opt-in via `--git` flag. When enabled, the server initializes the repo with remote config from command line arguments (`--git-repo-url`, `--git-repo-token`, `--git-user-name`, `--git-user-email`). See `server/AGENTS.md` for the full argument list.

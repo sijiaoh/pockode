@@ -109,3 +109,90 @@ func worktreeInList(list rpc.WorktreeListResult, name string) bool {
 	}
 	return false
 }
+
+// A project without a repository is told so by every entry point the client
+// reads it from, and a git request there is refused with a code of its own
+// rather than whatever git printed. Once `git init` runs, the next read says so
+// straight away — not after the registry's cache happens to expire — and the
+// subscriber that was already open is told as well.
+func TestHandler_Worktree_GitRepoState(t *testing.T) {
+	dir := t.TempDir()
+	env := newWorkDirTestEnv(t, dir)
+
+	var list rpc.WorktreeListResult
+	resp := env.call("worktree.list", nil)
+	if err := json.Unmarshal(resp.Result, &list); err != nil {
+		t.Fatalf("list unmarshal: %v", err)
+	}
+	if list.IsGitRepo || len(list.Worktrees) != 1 || !list.Worktrees[0].IsMain {
+		t.Fatalf("non-git project listed as %+v, want is_git_repo=false and main alone", list)
+	}
+
+	var sub rpc.WorktreeSubscribeResult
+	resp = env.call("worktree.subscribe", rpc.SubscribeParams{ID: "before-init"})
+	if err := json.Unmarshal(resp.Result, &sub); err != nil {
+		t.Fatalf("subscribe unmarshal: %v", err)
+	}
+	if sub.IsGitRepo {
+		t.Fatal("worktree.subscribe reported is_git_repo=true for a non-git project")
+	}
+
+	for _, call := range []struct {
+		method string
+		params any
+	}{
+		{"git.status", nil},
+		{"git.log", nil},
+		{"worktree.create", rpc.WorktreeCreateParams{Name: "feature", Branch: "feature"}},
+	} {
+		resp := env.call(call.method, call.params)
+		if resp.Error == nil || resp.Error.Code != rpc.CodeNotGitRepo {
+			t.Errorf("%s: got %+v, want error code %d", call.method, resp.Error, rpc.CodeNotGitRepo)
+		}
+	}
+	// Subscribing runs no git, and is how a panel left open hears about the
+	// repository once it exists.
+	if resp := env.call("git.subscribe", rpc.SubscribeParams{ID: "git-panel"}); resp.Error != nil {
+		t.Errorf("git.subscribe refused in a non-git project: %s", resp.Error.Message)
+	}
+
+	runGitIn(t, dir, "init")
+
+	resp = env.call("worktree.subscribe", rpc.SubscribeParams{ID: "after-init"})
+	if err := json.Unmarshal(resp.Result, &sub); err != nil {
+		t.Fatalf("subscribe unmarshal: %v", err)
+	}
+	if !sub.IsGitRepo {
+		t.Error("worktree.subscribe still reports is_git_repo=false after git init")
+	}
+
+	notified := map[string]bool{}
+	for range 2 {
+		n := env.readNotification()
+		if n.Method != "worktree.changed" {
+			t.Fatalf("got %s, want worktree.changed", n.Method)
+		}
+		var params struct {
+			ID        string `json:"id"`
+			IsGitRepo bool   `json:"is_git_repo"`
+		}
+		if err := json.Unmarshal(n.Params, &params); err != nil {
+			t.Fatalf("notification unmarshal: %v", err)
+		}
+		notified[params.ID] = params.IsGitRepo
+	}
+	if !notified["before-init"] || !notified["after-init"] {
+		t.Errorf("worktree.changed after git init = %v, want is_git_repo=true for both subscribers", notified)
+	}
+
+	resp = env.call("worktree.list", nil)
+	if err := json.Unmarshal(resp.Result, &list); err != nil {
+		t.Fatalf("list unmarshal: %v", err)
+	}
+	if !list.IsGitRepo {
+		t.Error("worktree.list still reports is_git_repo=false after the change was announced")
+	}
+	if resp := env.call("git.status", nil); resp.Error != nil {
+		t.Errorf("git.status after git init: %s", resp.Error.Message)
+	}
+}

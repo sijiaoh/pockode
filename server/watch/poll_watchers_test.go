@@ -1,6 +1,9 @@
 package watch
 
-import "testing"
+import (
+	"context"
+	"testing"
+)
 
 // Cancelling a watcher aborts the git command mid-poll, so the poll reports an
 // empty tree rather than the truth. Announcing that as a change would send
@@ -8,7 +11,10 @@ import "testing"
 // behind it is being removed.
 func TestPollWatchers_StayQuietAfterStop(t *testing.T) {
 	gitWatcher := NewGitWatcher(t.TempDir())
-	worktreeWatcher := NewWorktreeWatcher(t.TempDir())
+	// Like a real git, the poll reads the project as it is until it is killed.
+	worktreeWatcher := NewWorktreeWatcher(func(ctx context.Context) (WorktreeState, error) {
+		return WorktreeState{}, ctx.Err()
+	})
 
 	tests := []struct {
 		name           string
@@ -18,7 +24,7 @@ func TestPollWatchers_StayQuietAfterStop(t *testing.T) {
 		stop           func()
 	}{
 		{"git", func(n Notifier) { gitWatcher.Subscribe("client-1", n) }, func() { gitWatcher.lastState = "seeded" }, gitWatcher.checkAndNotify, gitWatcher.Stop},
-		{"worktree", func(n Notifier) { worktreeWatcher.Subscribe("client-1", n) }, func() { worktreeWatcher.lastState = "seeded" }, worktreeWatcher.checkAndNotify, worktreeWatcher.Stop},
+		{"worktree", func(n Notifier) { worktreeWatcher.Subscribe("client-1", n) }, func() { worktreeWatcher.lastState = WorktreeState{IsGitRepo: true, Fingerprint: "seeded"} }, worktreeWatcher.checkAndNotify, worktreeWatcher.Stop},
 	}
 
 	for _, tt := range tests {

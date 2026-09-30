@@ -17,6 +17,7 @@ import {
 	useHasUploadActivity,
 } from "../../lib/uploadStore";
 import { useWorkNeedsAttention } from "../../lib/workStore";
+import { useIsGitRepo } from "../../lib/worktreeStore";
 import { FilesTab } from "../Files";
 import { DiffTab } from "../Git";
 import { Sidebar, TabbedSidebar, type TabConfig } from "../Layout";
@@ -99,6 +100,9 @@ function SessionSidebar({
 	// opening the drawer *and* picking this tab. The same bit lights the dot
 	// inside the tab, which is what makes the two agree (see `ProjectTab`).
 	const worksNeedAttention = useWorkNeedsAttention();
+	// Only a confirmed repository gets the Git tab: while the answer is pending
+	// a project without one would see the tab appear and vanish again.
+	const isGitRepo = useIsGitRepo() === true;
 
 	// The watcher belongs to the sidebar, not to the Git tab: it feeds the tab's
 	// count badge, which has to keep up while another tab is on top. Each term
@@ -112,7 +116,10 @@ function SessionSidebar({
 	);
 	useGitWatch({
 		onChanged: refreshGit,
-		enabled: !SidebarContent && (isExpanded || isOpen || !!activeDiffFile),
+		enabled:
+			isGitRepo &&
+			!SidebarContent &&
+			(isExpanded || isOpen || !!activeDiffFile),
 	});
 
 	const gitChangeCount = useGitChangeCount();
@@ -145,12 +152,16 @@ function SessionSidebar({
 				icon: FolderOpen,
 				showBadge: hasUploadActivity,
 			},
-			{
-				id: "git",
-				label: "Git",
-				icon: GitCompare,
-				countBadge: gitCountBadge,
-			},
+			...(isGitRepo
+				? [
+						{
+							id: "git",
+							label: "Git",
+							icon: GitCompare,
+							countBadge: gitCountBadge,
+						},
+					]
+				: []),
 			{
 				id: "project",
 				label: "Project",
@@ -162,7 +173,13 @@ function SessionSidebar({
 				badgeTone: "attention",
 			},
 		],
-		[hasAnyUnread, hasUploadActivity, gitCountBadge, worksNeedAttention],
+		[
+			hasAnyUnread,
+			hasUploadActivity,
+			isGitRepo,
+			gitCountBadge,
+			worksNeedAttention,
+		],
 	);
 
 	const handleSelectSession = useCallback(
@@ -246,13 +263,15 @@ function SessionSidebar({
 				onRepointFile={onRepointFile}
 				onCloseFile={onCloseFile}
 			/>
-			<DiffTab
-				onSelectFile={handleSelectDiffFile}
-				onSelectCommit={handleSelectCommit}
-				onCloseFile={onCloseDiffFile}
-				activeFile={activeDiffFile}
-				activeCommitHash={activeCommitHash}
-			/>
+			{isGitRepo && (
+				<DiffTab
+					onSelectFile={handleSelectDiffFile}
+					onSelectCommit={handleSelectCommit}
+					onCloseFile={onCloseDiffFile}
+					activeFile={activeDiffFile}
+					activeCommitHash={activeCommitHash}
+				/>
+			)}
 			<ProjectTab
 				onOpenWorkList={onOpenWorkList}
 				onOpenAgentRoleList={onOpenAgentRoleList}

@@ -2,6 +2,8 @@ package worktree
 
 import (
 	"bufio"
+	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -14,6 +16,7 @@ import (
 
 	"github.com/pockode/server/internal/pathutil"
 	"github.com/pockode/server/settings"
+	"github.com/pockode/server/watch"
 )
 
 var (
@@ -45,7 +48,17 @@ type Registry struct {
 	isGitRepo bool
 	cacheTime time.Time
 	cacheTTL  time.Duration
+
+	// lastFailure is git's account of why the last listing failed, kept so a
+	// repeated failure is logged once rather than on every poll.
+	lastFailure string
 }
+
+// worktreeListTimeout bounds `git worktree list`, which is local and normally
+// instant. A git stuck on a lock would otherwise hold cacheMu, and with it every
+// RPC that resolves a worktree, for as long as it hangs. A var so a test can
+// time out without waiting ten seconds.
+var worktreeListTimeout = 10 * time.Second
 
 func NewRegistry(mainDir, dataDir string) *Registry {
 	// Resolve symlinks for consistent path comparison (e.g., /var -> /private/var on macOS)
@@ -66,6 +79,14 @@ func (r *Registry) IsGitRepo() bool {
 	r.cacheMu.RLock()
 	defer r.cacheMu.RUnlock()
 	return r.isGitRepo
+}
+
+// IsGitRepoFresh is IsGitRepo read from git now rather than from the TTL
+// cache, for a decision that sticks: an agent that has just run `git init`
+// must not be told there is no repository for up to cacheTTL longer.
+func (r *Registry) IsGitRepoFresh() bool {
+	r.invalidateCache()
+	return r.IsGitRepo()
 }
 
 func (r *Registry) MainDir() string {
@@ -162,6 +183,14 @@ func (r *Registry) Resolve(name string) (string, error) {
 }
 
 func (r *Registry) List() []Info {
+	list, _ := r.ListState()
+	return list
+}
+
+// ListState is List together with whether the project is a git repository,
+// both from the same read of git, so a list of main alone can be told apart
+// from a project with no repository to hold any other worktree.
+func (r *Registry) ListState() ([]Info, bool) {
 	r.refreshIfNeeded()
 
 	r.cacheMu.RLock()
@@ -178,7 +207,7 @@ func (r *Registry) List() []Info {
 		}
 	}
 
-	return result
+	return result, r.isGitRepo
 }
 
 // Create adds a worktree and runs the setup hook in it. The returned
@@ -338,22 +367,68 @@ func (r *Registry) refresh() {
 		return
 	}
 
-	cmd := exec.Command("git", "worktree", "list", "--porcelain")
+	if _, err := r.readLocked(context.Background()); err != nil {
+		slog.Warn("worktree list unavailable, keeping the previous one", "mainDir", r.mainDir, "error", err)
+		// The previous answer stands for another TTL: a git stuck on a lock would
+		// otherwise make every caller queued behind cacheMu wait out its own
+		// timeout in turn.
+		r.cacheTime = time.Now()
+	}
+}
+
+// Refresh re-reads the worktree list from git whatever the cache's age, and
+// reports what it read. The worktree watcher polls through it, so by the time a
+// client hears worktree.changed the cache already holds the change: a
+// worktree.list sent in answer cannot be served a listing older than the
+// notification that prompted it.
+//
+// It fails only when ctx ended the read. A git that was killed has said nothing
+// about the repository, so the cache keeps what it last knew instead of
+// reporting the project as not a git repository.
+func (r *Registry) Refresh(ctx context.Context) (watch.WorktreeState, error) {
+	r.cacheMu.Lock()
+	defer r.cacheMu.Unlock()
+
+	return r.readLocked(ctx)
+}
+
+func (r *Registry) readLocked(ctx context.Context) (watch.WorktreeState, error) {
+	ctx, cancel := context.WithTimeout(ctx, worktreeListTimeout)
+	defer cancel()
+
+	// --no-optional-locks: a read-only poll must not take .git/index.lock and
+	// collide with the git the user or an agent is running at the same moment.
+	cmd := exec.CommandContext(ctx, "git", "--no-optional-locks", "worktree", "list", "--porcelain")
 	cmd.Dir = r.mainDir
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
 	output, err := cmd.Output()
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return watch.WorktreeState{}, fmt.Errorf("git worktree list in %s: %w", r.mainDir, ctxErr)
+	}
+
 	if err != nil {
-		// Not a git repo or git not available
+		// Not a git repository, or git is missing or refuses the directory
+		// (dubious ownership). Either way no git feature can work here, so all of
+		// them read as "not a git repository" — but only the first case is
+		// ordinary, and the log is the one place the others can be told apart.
+		if failure := strings.TrimSpace(stderr.String()) + " (" + err.Error() + ")"; failure != r.lastFailure {
+			r.lastFailure = failure
+			slog.Info("project is not usable as a git repository", "mainDir", r.mainDir, "reason", failure)
+		}
 		r.isGitRepo = false
 		r.cache = map[string]Info{
 			"": {Name: "", Path: r.mainDir, Branch: "", IsMain: true},
 		}
 		r.cacheTime = time.Now()
-		return
+		return watch.WorktreeState{}, nil
 	}
 
+	r.lastFailure = ""
 	r.isGitRepo = true
 	r.cache = r.parseWorktreeList(string(output))
 	r.cacheTime = time.Now()
+	return watch.WorktreeState{IsGitRepo: true, Fingerprint: string(output)}, nil
 }
 
 // parseWorktreeList turns `git worktree list --porcelain` output into the cache,

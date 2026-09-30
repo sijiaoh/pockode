@@ -21,6 +21,7 @@ import type { SentMessage } from "../../lib/rpc";
 import { useSessionDetailStore } from "../../lib/sessionDetailStore";
 import { useSessionStore } from "../../lib/sessionStore";
 import { useWorkStore } from "../../lib/workStore";
+import { worktreeActions } from "../../lib/worktreeStore";
 import {
 	createFakeCliAuth,
 	makeLogin,
@@ -76,6 +77,13 @@ function render(ui: React.ReactElement) {
 vi.mock("../Files", () => ({
 	FileView: () => <div data-testid="file-view" />,
 	FileEditor: () => <div data-testid="file-editor" />,
+}));
+
+vi.mock("../Git", () => ({
+	DiffView: () => <div data-testid="diff-view" />,
+	CommitView: () => null,
+	CommitDiffView: () => null,
+	CommitFileView: () => null,
 }));
 
 // Mock Project overlays to avoid router dependency
@@ -298,6 +306,7 @@ describe("ChatPanel", () => {
 		clearAnswerIntent();
 		useWorkStore.getState().reset();
 		useAgentRoleStore.getState().reset();
+		worktreeActions.reset();
 		// Stands in for the one options fetch the app shell does. Only Claude has
 		// effort levels here, which is also how an agent without any is expressed.
 		useAgentOptionsStore.getState().setModels({
@@ -3336,6 +3345,18 @@ describe("ChatPanel", () => {
 		// reports clientHeight, scrollHeight and scrollTop all 0; under
 		// `visibility: hidden` it keeps all three, losing only the height of the
 		// composer that went with the overlay.
+		// Until the server says the project is a repository, a git view would only
+		// send reads that fail; the shell replaces the route if it is not one.
+		it("holds a git view until the project is known to be a repository", async () => {
+			const diff = { type: "diff", path: "a.ts", staged: false } as const;
+			render(<ChatPanel {...defaultProps} overlay={diff} />);
+			await waitForHistoryLoad();
+			expect(screen.queryByTestId("diff-view")).toBeNull();
+
+			act(() => worktreeActions.setIsGitRepo(true));
+			expect(screen.getByTestId("diff-view")).toBeInTheDocument();
+		});
+
 		it("hides the covered transcript without taking its box away", async () => {
 			mockState.mockHistory = openableHistory;
 			const { rerender } = render(<ChatPanel {...defaultProps} />);

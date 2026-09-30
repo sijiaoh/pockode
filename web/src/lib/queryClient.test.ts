@@ -1,7 +1,10 @@
+import { QueryObserver } from "@tanstack/react-query";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { gitStatusQueryKey } from "../hooks/gitQueries";
 import { HttpError } from "./api";
 import { authActions } from "./authStore";
 import { createQueryClient } from "./queryClient";
+import { worktreeActions } from "./worktreeStore";
 
 // Mock authStore
 vi.mock("./authStore", () => ({
@@ -109,6 +112,35 @@ describe("createQueryClient", () => {
 			} as Parameters<typeof mutationCache.notify>[0]);
 
 			expect(authActions.logout).not.toHaveBeenCalled();
+		});
+	});
+
+	describe("when the project stops being a git repository", () => {
+		afterEach(() => {
+			worktreeActions.reset();
+		});
+
+		// The change listener runs before the readers re-render with
+		// enabled: false, so invalidating here would send each of them to be
+		// refused with -32002.
+		it("drops the git queries without refetching them", async () => {
+			worktreeActions.setIsGitRepo(true);
+			const queryClient = createQueryClient();
+			const queryFn = vi.fn(async () => "status");
+			const observer = new QueryObserver(queryClient, {
+				queryKey: gitStatusQueryKey,
+				queryFn,
+			});
+			const unsubscribe = observer.subscribe(() => {});
+			await vi.waitFor(() => expect(queryFn).toHaveBeenCalledTimes(1));
+
+			worktreeActions.setIsGitRepo(false);
+
+			expect(queryFn).toHaveBeenCalledTimes(1);
+			expect(
+				queryClient.getQueryCache().find({ queryKey: gitStatusQueryKey }),
+			).toBeUndefined();
+			unsubscribe();
 		});
 	});
 });

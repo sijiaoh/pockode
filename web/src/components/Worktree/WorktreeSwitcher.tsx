@@ -1,6 +1,7 @@
 import { ChevronDown, GitBranch, X } from "lucide-react";
 import { useCallback, useRef, useState } from "react";
 import { useWorktree } from "../../hooks/useWorktree";
+import { useWSStore } from "../../lib/wsStore";
 import type { WorktreeInfo } from "../../types/message";
 import WorktreeCreateSheet from "./WorktreeCreateSheet";
 import WorktreeDropdown from "./WorktreeDropdown";
@@ -22,6 +23,7 @@ function WorktreeSwitcher({ onClose, isExpanded = true }: Props) {
 		currentWorktree,
 		worktrees,
 		isLoading,
+		error,
 		isGitRepo,
 		setupHookSkip,
 		select,
@@ -31,6 +33,7 @@ function WorktreeSwitcher({ onClose, isExpanded = true }: Props) {
 		isDeleting,
 		getDisplayName,
 	} = useWorktree();
+	const projectTitle = useWSStore((s) => s.projectTitle);
 
 	const handleSelect = useCallback(
 		(worktree: WorktreeInfo) => {
@@ -83,7 +86,11 @@ function WorktreeSwitcher({ onClose, isExpanded = true }: Props) {
 		setIsCreateOpen(true);
 	}, []);
 
-	const displayName = currentWorktree ? getDisplayName(currentWorktree) : null;
+	// No main in the list is a project inside another repository's directory,
+	// whose main worktree git reports elsewhere; the fallback matches main's own.
+	const displayName = currentWorktree
+		? getDisplayName(currentWorktree)
+		: "Default";
 
 	const isCurrent = useCallback(
 		(worktree: WorktreeInfo) => {
@@ -104,13 +111,14 @@ function WorktreeSwitcher({ onClose, isExpanded = true }: Props) {
 		</button>
 	);
 
-	// Non-git repository: show simple header
-	if (!isGitRepo) {
+	// Not a repository: nothing to switch between, so the project's name in
+	// place of a switcher — no hint about `git init` (docs/git-ui.md).
+	if (isGitRepo === false) {
 		return (
 			<div className="mx-3 mt-3 mb-2 flex items-center gap-2">
 				<div className="flex min-w-0 flex-1 items-center px-1 py-2">
 					<span className="truncate text-base font-bold text-th-text-primary">
-						Pockode
+						{projectTitle || "Pockode"}
 					</span>
 				</div>
 				{closeButton}
@@ -118,8 +126,24 @@ function WorktreeSwitcher({ onClose, isExpanded = true }: Props) {
 		);
 	}
 
-	// Loading state or no worktree data yet: show skeleton
-	if (isLoading || !displayName) {
+	// The list failed and there is nothing of it to show; a skeleton would say
+	// it is still coming, and "Default" would pass off an empty list as real.
+	if (error && worktrees.length === 0) {
+		return (
+			<div className="mx-3 mt-3 mb-2 flex items-center gap-2">
+				<p
+					className="min-w-0 flex-1 px-1 py-2 text-sm break-words text-th-error"
+					role="alert"
+				>
+					Couldn&apos;t load worktrees: {error.message}
+				</p>
+				{closeButton}
+			</div>
+		);
+	}
+
+	// Not known yet whether there is anything to switch: show skeleton
+	if (isGitRepo === null || isLoading) {
 		return (
 			<div className="mx-3 mt-3 mb-2 flex items-center gap-2">
 				<div className="flex min-w-0 flex-1 items-center gap-2 rounded-lg border border-th-border bg-th-bg-tertiary px-3 py-2">
