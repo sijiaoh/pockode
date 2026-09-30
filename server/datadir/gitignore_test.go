@@ -69,22 +69,65 @@ func TestEnsureGitignore_LeavesOnlyTheAgentRoleIndexVisibleToGit(t *testing.T) {
 	}
 }
 
-func TestEnsureGitignore_ReplacesAStaleFile(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, ".gitignore")
-	if err := os.WriteFile(path, []byte("# an older build's rules, or a user's edit\n/*\n"), 0644); err != nil {
-		t.Fatal(err)
+func TestEnsureGitignore_UpdatesOnlyAFileItStillManages(t *testing.T) {
+	tests := []struct {
+		name     string
+		existing *string
+		want     string
+	}{
+		{
+			name: "missing file is created",
+			want: gitignoreContent,
+		},
+		{
+			name:     "marked file with older rules is updated",
+			existing: ptr(gitignoreMarker + "\n/*\n"),
+			want:     gitignoreContent,
+		},
+		{
+			name:     "marker behind a BOM, with trailing space and CRLF, still counts",
+			existing: ptr("\ufeff" + gitignoreMarker + " \r\n/*\r\n"),
+			want:     gitignoreContent,
+		},
+		{
+			name:     "file with the marker removed is left alone",
+			existing: ptr("# my own rules\n/*\n!/notes.md\n"),
+			want:     "# my own rules\n/*\n!/notes.md\n",
+		},
+		{
+			name:     "marker moved off the first line no longer counts",
+			existing: ptr("/*\n" + gitignoreMarker + "\n"),
+			want:     "/*\n" + gitignoreMarker + "\n",
+		},
+		{
+			name:     "emptied file is left alone",
+			existing: ptr(""),
+			want:     "",
+		},
 	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, ".gitignore")
+			if tt.existing != nil {
+				if err := os.WriteFile(path, []byte(*tt.existing), 0644); err != nil {
+					t.Fatal(err)
+				}
+			}
 
-	if err := EnsureGitignore(dir); err != nil {
-		t.Fatalf("EnsureGitignore: %v", err)
-	}
+			if err := EnsureGitignore(dir); err != nil {
+				t.Fatalf("EnsureGitignore: %v", err)
+			}
 
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(data) != gitignoreContent {
-		t.Errorf("stale .gitignore was not replaced: %q", data)
+			data, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(data) != tt.want {
+				t.Errorf("got:\n%s\nwant:\n%s", data, tt.want)
+			}
+		})
 	}
 }
+
+func ptr(s string) *string { return &s }

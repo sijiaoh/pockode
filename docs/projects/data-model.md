@@ -170,12 +170,21 @@ roles. The user never has to touch their own `.gitignore`. The rules are
 anchored to the directory's top level, so a worktree's data under `worktrees/`
 is ignored whole.
 
-The file belongs to Pockode: every start rewrites it if its bytes differ from
-what the running build defines, so a rule change reaches existing projects on
-their next start and a local edit is lost. Its header tells the user the two
-things still in their hands — an outer `.gitignore` can drop `.pockode/` as a
-whole but cannot override a single rule in it (the nearer file wins), and
-`git add -f` commits a file it ignores.
+The file belongs to Pockode for as long as its first line is Pockode's marker
+comment: every start rewrites it if its bytes differ from what the running
+build defines, so a rule change reaches existing projects on their next start
+and a local edit is lost. Deleting the marker hands the file to the user —
+Pockode never writes it again, and later rule changes no longer reach it;
+deleting the whole file hands it back, since a missing file is written fresh on
+the next start. Only the first line counts, and a byte-order mark, trailing
+whitespace or CRLF on it do not read as a takeover: an editor that adds them was
+not told to take anything over.
+
+The header tells the user the rest of what is in their hands — an outer
+`.gitignore` can drop `.pockode/` as a whole but cannot override a single rule
+in it (the nearer file wins), and `git add -f` commits a file it ignores. The
+file ignores itself, so a taken-over copy stays on the one machine unless it is
+committed that way.
 
 Only the default `<work>/.pockode` gets one. A `--data` path can be any
 directory, the project root included, and a `/*` written there would hide the

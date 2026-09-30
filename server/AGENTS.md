@@ -49,7 +49,7 @@ cliauth/                # AI CLI 登录状态查询、远程登录流程与登�
 cliupdate/              # AI CLI 新版本检查与更新（跑 CLI 自己的 update，再核对版本；各 CLI 的定义在 agent/*/update.go，见 docs/code/cli-update.md）
 command/                # 命令存储 + Pockode 命令（`/pockode-*` 的解析与展开，见 docs/pockode-commands.md）
 contents/               # 文件内容获取
-datadir/                # 默认数据目录（<work>/.pockode）自带的 .gitignore（归 Pockode 管理，每次启动覆盖为当前版本的内容，见 docs/projects/data-model.md）
+datadir/                # 默认数据目录（<work>/.pockode）自带的 .gitignore（首行标记在时归 Pockode 管理、每次启动覆盖为当前版本的内容，用户删掉标记即接管，见 docs/projects/data-model.md）
 filestore/              # 文件存储基础设施（原子写 / 文件锁 / JSONL / 变更监听）
 filetransfer/           # 文件上传 / 下载 HTTP 端点
 git/                    # Git 操作
