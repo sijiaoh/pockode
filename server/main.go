@@ -25,6 +25,7 @@ import (
 	"github.com/pockode/server/cliupdate"
 	"github.com/pockode/server/cluster"
 	"github.com/pockode/server/command"
+	"github.com/pockode/server/datadir"
 	"github.com/pockode/server/filetransfer"
 	"github.com/pockode/server/git"
 	"github.com/pockode/server/internal/fsperm"
@@ -212,7 +213,8 @@ Flags:
 	devMode := *devModeFlag
 
 	dataDirStr := pathutil.ExpandTilde(*dataDirFlag)
-	if dataDirStr == "" {
+	defaultDataDir := dataDirStr == ""
+	if defaultDataDir {
 		dataDirStr = filepath.Join(workDir, ".pockode")
 	}
 	absDataDir, err := filepath.Abs(dataDirStr)
@@ -230,6 +232,14 @@ Flags:
 	if err := fsperm.RestrictDir(dataDir); err != nil {
 		slog.Error("failed to secure data directory", "path", dataDir, "error", err)
 		os.Exit(1)
+	}
+	// Written before anything else lands in the directory, so no file of ours
+	// is ever untracked-but-visible in the project's git status.
+	if defaultDataDir {
+		if err := datadir.EnsureGitignore(dataDir); err != nil {
+			slog.Error("failed to write data directory .gitignore", "error", err)
+			os.Exit(1)
+		}
 	}
 
 	logger.Init(logger.Config{

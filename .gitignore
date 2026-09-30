@@ -27,7 +27,9 @@ server/agent/codex/sessions/
 # Reference projects (cloned for development reference only)
 refs/
 
-# Data directory
+# Data directory. The server writes .pockode/.gitignore with the same rules on
+# startup; this copy covers a checkout whose .pockode predates that, where
+# server.json and relay.json hold tokens that must not be committed.
 .pockode/*
 !.pockode/agent-roles
 .pockode/agent-roles/*

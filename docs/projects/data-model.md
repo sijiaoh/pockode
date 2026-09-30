@@ -160,6 +160,28 @@ The index files contain all items in a flat array:
 { "roles": [...] }
 ```
 
+### What the project's git sees
+
+The data directory sits inside the user's project, so the server keeps a
+`<dataDir>/.gitignore` there (`server/datadir`) that ignores everything in it —
+sessions, logs, `server.json` and `relay.json` with their tokens, the file
+itself — except `agent-roles/index.json`, which a team may commit to share its
+roles. The user never has to touch their own `.gitignore`. The rules are
+anchored to the directory's top level, so a worktree's data under `worktrees/`
+is ignored whole.
+
+The file belongs to Pockode: every start rewrites it if its bytes differ from
+what the running build defines, so a rule change reaches existing projects on
+their next start and a local edit is lost. Its header tells the user the two
+things still in their hands — an outer `.gitignore` can drop `.pockode/` as a
+whole but cannot override a single rule in it (the nearer file wins), and
+`git add -f` commits a file it ignores.
+
+Only the default `<work>/.pockode` gets one. A `--data` path can be any
+directory, the project root included, and a `/*` written there would hide the
+user's whole tree from git — so a custom data directory inside the project is
+the user's to ignore.
+
 ### Atomic writes
 
 Writes use the **write → fsync → rename** pattern to prevent corruption:
@@ -178,10 +200,10 @@ a slow disk: ~150ms → ~220ms).
 The same primitive (`filestore.WriteFileAtomic`) backs every file the server
 rewrites whole: the stores built on `filestore.File` (work, agent-role,
 settings, the cluster node registry), the session and command indexes, plus
-`server.json`, `relay.json`, `sessions.json`, `mcp-config.json` and the
-per-session Claude resume file. Files whose mode matters pass it explicitly —
-`server.json`, `relay.json` and `sessions.json` stay `0600` because they hold
-credentials.
+`server.json`, `relay.json`, `sessions.json`, `mcp-config.json`, the data
+directory's `.gitignore` and the per-session Claude resume file. Files whose
+mode matters pass it explicitly — `server.json`, `relay.json` and
+`sessions.json` stay `0600` because they hold credentials.
 
 Session history is the one piece of state not rewritten whole: it is appended a
 record at a time through `filestore.AppendJSONL`, which gives up the whole-file
