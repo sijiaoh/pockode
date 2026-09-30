@@ -33,6 +33,7 @@ import (
 	"github.com/pockode/server/agent"
 	"github.com/pockode/server/agentrole"
 	"github.com/pockode/server/cliauth"
+	"github.com/pockode/server/cliupdate"
 	"github.com/pockode/server/command"
 	"github.com/pockode/server/contents"
 	"github.com/pockode/server/git"
@@ -838,6 +839,51 @@ type CLIAuthLoginSubscribeParams struct {
 // Changes arrive as cli_auth.login.changed notifications of the same shape.
 type CLIAuthLoginSubscribeResult struct {
 	Login *cliauth.Login `json:"login"`
+}
+
+// CLI update namespace: whether each AI CLI has a newer release, and updating
+// it (see package cliupdate).
+
+// CLIUpdateCheckParams narrows cli_update.check to one CLI. Params may be
+// omitted altogether to check every CLI.
+type CLIUpdateCheckParams struct {
+	Agent session.AgentType `json:"agent,omitempty"`
+}
+
+// CLIUpdateCheckResult lists the CLIs in display order. A CLI whose versions
+// could not be read is in the list as "unavailable" — the request itself only
+// fails for an agent the server does not know.
+type CLIUpdateCheckResult struct {
+	Checks []cliupdate.Check `json:"checks"`
+}
+
+type CLIUpdateStartParams struct {
+	Agent session.AgentType `json:"agent"`
+}
+
+// CLIUpdateStartResult is the update started, or the one already running for
+// the CLI.
+type CLIUpdateStartResult struct {
+	Update cliupdate.Update `json:"update"`
+}
+
+// CLIUpdateDismissParams names an update that has ended, to drop it for every
+// client.
+type CLIUpdateDismissParams struct {
+	UpdateID string `json:"update_id"`
+}
+
+type CLIUpdateSubscribeParams struct {
+	// ID is the subscription id; see SubscribeParams.
+	ID    string            `json:"id"`
+	Agent session.AgentType `json:"agent"`
+}
+
+// CLIUpdateSubscribeResult is the CLI's latest update — running, or the last
+// to end since the server started — or null when it has had none. Changes
+// arrive as cli_update.changed notifications of the same shape.
+type CLIUpdateSubscribeResult struct {
+	Update *cliupdate.Update `json:"update"`
 }
 
 // Settings namespace

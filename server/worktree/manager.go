@@ -381,6 +381,24 @@ func (m *Manager) ResolveSessionWorktree(sessionID string) (string, error) {
 	return "", fmt.Errorf("%w: %s", ErrSessionNotFound, sessionID)
 }
 
+// AgentProcessCount is how many sessions have a process of agentType's CLI
+// running, across every worktree. Only loaded worktrees are looked at, which is
+// exact for the reason StopSession gives.
+func (m *Manager) AgentProcessCount(agentType session.AgentType) int {
+	m.mu.Lock()
+	managers := make([]*process.Manager, 0, len(m.worktrees))
+	for _, wt := range m.worktrees {
+		managers = append(managers, wt.ProcessManager)
+	}
+	m.mu.Unlock()
+
+	n := 0
+	for _, pm := range managers {
+		n += pm.AgentProcessCount(agentType)
+	}
+	return n
+}
+
 // loaded reports the worktree of that name only if it already exists, without
 // creating one or taking a reference.
 func (m *Manager) loaded(name string) (*Worktree, bool) {

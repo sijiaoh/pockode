@@ -58,14 +58,20 @@ func (h *rpcMethodHandler) handleCLIAuthLogout(ctx context.Context, conn *jsonrp
 // needs to see ("claude auth logout failed: ..."), and the providers word it
 // for them.
 func (h *rpcMethodHandler) replyCLIAuthError(ctx context.Context, conn *jsonrpc2.Conn, id jsonrpc2.ID, err error) {
-	code := int64(jsonrpc2.CodeInternalError)
-	for _, clientErr := range []error{
+	h.replyReasonError(ctx, conn, id, err,
 		cliauth.ErrUnknownAgent,
 		cliauth.ErrInvalidAccountKind,
 		cliauth.ErrLoginNotFound,
 		cliauth.ErrCodeNotExpected,
 		cliauth.ErrInvalidCode,
-	} {
+	)
+}
+
+// replyReasonError replies with err's own message, as invalid params when it
+// is one of clientErrs and as an internal error otherwise.
+func (h *rpcMethodHandler) replyReasonError(ctx context.Context, conn *jsonrpc2.Conn, id jsonrpc2.ID, err error, clientErrs ...error) {
+	code := int64(jsonrpc2.CodeInternalError)
+	for _, clientErr := range clientErrs {
 		if errors.Is(err, clientErr) {
 			code = jsonrpc2.CodeInvalidParams
 		}

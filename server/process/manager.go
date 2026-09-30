@@ -67,6 +67,12 @@ type Manager struct {
 
 	processesMu sync.Mutex
 	processes   map[string]*Process
+	// agentCounts is how many of processes run each agent type, kept beside
+	// the map so it can be read without processesMu, which a process start
+	// holds for as long as the CLI takes to come up (a Codex handshake takes
+	// seconds). Written only by putProcess and deleteProcess.
+	agentCountsMu sync.Mutex
+	agentCounts   map[session.AgentType]int
 
 	// Message listener (ChatMessagesWatcher)
 	messageListener ChatMessageListener
@@ -107,6 +113,7 @@ var ErrRequestNotPending = errors.New("this request is no longer waiting for an 
 // Process holds a running agent process. Do not cache references.
 type Process struct {
 	sessionID    string
+	agentType    session.AgentType
 	agentSession agent.Session
 	sessionStore session.Store
 	manager      *Manager // back-reference for broadcasting to subscribers
@@ -174,6 +181,7 @@ func NewManager(agents *agent.Registry, worktree, workDir, dataDir, mcpServerDir
 		sessionStore: store,
 		budgets:      budgets,
 		processes:    make(map[string]*Process),
+		agentCounts:  make(map[session.AgentType]int),
 		settler:      session.NewTurnSettler(session.DefaultSettleDelay),
 		ctx:          ctx,
 		cancel:       cancel,
@@ -275,6 +283,7 @@ func (m *Manager) GetOrCreateProcess(ctx context.Context, meta session.SessionMe
 
 	proc := &Process{
 		sessionID:    sessionID,
+		agentType:    meta.AgentType,
 		agentSession: sess,
 		sessionStore: m.sessionStore,
 		manager:      m,
@@ -290,7 +299,7 @@ func (m *Manager) GetOrCreateProcess(ctx context.Context, meta session.SessionMe
 	startTransition := proc.applyTurn(ctx, session.TurnInput{Signal: session.SignalProcessStarted})
 	// An already activated session starts out knowing it has nothing to record.
 	proc.activated.Store(meta.Activated)
-	m.processes[sessionID] = proc
+	m.putProcess(proc)
 
 	m.wg.Add(1)
 	go func() {
@@ -437,6 +446,36 @@ func (m *Manager) ProcessCount() int {
 	return len(m.processes)
 }
 
+// AgentProcessCount returns the number of processes running agentType's CLI.
+// It does not wait for a process that is starting.
+func (m *Manager) AgentProcessCount(agentType session.AgentType) int {
+	m.agentCountsMu.Lock()
+	defer m.agentCountsMu.Unlock()
+	return m.agentCounts[agentType]
+}
+
+// putProcess registers a process for a session that has none. Callers hold
+// processesMu.
+func (m *Manager) putProcess(p *Process) {
+	m.processes[p.sessionID] = p
+	m.agentCountsMu.Lock()
+	m.agentCounts[p.agentType]++
+	m.agentCountsMu.Unlock()
+}
+
+// deleteProcess removes the session's process, if it has one. Callers hold
+// processesMu.
+func (m *Manager) deleteProcess(sessionID string) {
+	p, ok := m.processes[sessionID]
+	if !ok {
+		return
+	}
+	delete(m.processes, sessionID)
+	m.agentCountsMu.Lock()
+	m.agentCounts[p.agentType]--
+	m.agentCountsMu.Unlock()
+}
+
 // SetOnProcessEnd sets a callback to be called when any process ends.
 func (m *Manager) SetOnProcessEnd(callback func()) {
 	m.processesMu.Lock()
@@ -472,7 +511,7 @@ func (m *Manager) dropProcess(p *Process) (replaced bool) {
 	current, present := m.processes[p.sessionID]
 	replaced = present && current != p
 	if present && !replaced {
-		delete(m.processes, p.sessionID)
+		m.deleteProcess(p.sessionID)
 	}
 	callback := m.onProcessEnd
 	m.processesMu.Unlock()
@@ -488,7 +527,7 @@ func (m *Manager) dropProcess(p *Process) (replaced bool) {
 func (m *Manager) remove(sessionID string) *Process {
 	m.processesMu.Lock()
 	proc := m.processes[sessionID]
-	delete(m.processes, sessionID)
+	m.deleteProcess(sessionID)
 	callback := m.onProcessEnd
 	m.processesMu.Unlock()
 
@@ -507,7 +546,7 @@ func (m *Manager) removeWhere(predicate func(*Process) bool) []*Process {
 	for sessionID, proc := range m.processes {
 		if predicate(proc) {
 			removed = append(removed, proc)
-			delete(m.processes, sessionID)
+			m.deleteProcess(sessionID)
 		}
 	}
 	return removed
@@ -651,7 +690,7 @@ func (m *Manager) Shutdown() {
 	procs := make([]*Process, 0, len(m.processes))
 	for sessionID, p := range m.processes {
 		procs = append(procs, p)
-		delete(m.processes, sessionID)
+		m.deleteProcess(sessionID)
 	}
 	m.processesMu.Unlock()
 

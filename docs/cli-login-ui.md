@@ -11,7 +11,9 @@ in, [session-fork-ui.md](session-fork-ui.md#the-dropped-prompt) for the draft
 hand-back reused here, [responsive-ui.md](responsive-ui.md) for the width ladder
 and hit-area floors, [answering-ui.md](answering-ui.md#who-owns-escape) for the
 Escape and dismissing-click conventions `Sheet` already follows,
-[cluster.md](cluster.md) for why the cluster frontend has none of this.
+[cluster.md](cluster.md) for why the cluster frontend has none of this,
+[cli-update-ui.md](cli-update-ui.md) for the version row the same cards carry
+and updating a CLI from it.
 
 ## The rules
 
@@ -55,36 +57,43 @@ draft store, the transcript, or a log.
 countdown from the `expires_at` the server gives it, and never ends a flow on its
 own.
 
-## Where status lives: Settings → CLI sign-in
+## Where status lives: Settings → AI CLIs
 
 A new built-in settings section, registered in
 `web/src/extensions/builtin/index.ts`:
 
 | id | label | priority |
 |----|-------|----------|
-| `cli-sign-in` | CLI sign-in | 50 — right after Session (40), where the default engine is picked, and before Account (90) |
+| `cli-sign-in` | AI CLIs | 50 — right after Session (40), where the default engine is picked, and before Account (90) |
 
 It holds one card per CLI, in `EngineField`'s order: Claude, then Codex. A CLI
 is never hidden, whatever its state: "Codex is not installed" is an answer the
 user came here for.
 
 ```
-CLI SIGN-IN
+AI CLIS
                                         ↻ Refresh
 ┌───────────────────────────────────────────────────┐
-│ Claude                              2.1.283       │
+│ Claude                                            │
 │ ● Signed in · ada@example.com · Max               │
 │                                        Sign out   │
+│  ─────────────────────────────────────────────    │
+│ ✓ Version 2.1.283 · Up to date                    │
 ├───────────────────────────────────────────────────┤
-│ Codex                               0.153.0       │
+│ Codex                                             │
 │ ○ Not signed in                                   │
 │                                     [ Sign in ]   │
+│  ─────────────────────────────────────────────    │
+│ ↑ Version 0.153.0 · 0.160.0 available             │
+│                                     [ Update ]    │
 └───────────────────────────────────────────────────┘
 ```
 
-- **Name** in `text-sm text-th-text-primary`, **version** right-aligned in
-  `text-xs text-th-text-muted` when known. The version is there for the day a
-  CLI update breaks a flow (*Flow broke*): it is the first thing anyone asks.
+- **Name** in `text-sm text-th-text-primary`. The **version** is in the
+  version row at the card's foot, with whether a newer one is out and the way to
+  update — see [cli-update-ui.md](cli-update-ui.md). It matters here too, for
+  the day a CLI update breaks a flow (*Flow broke*): it is the first thing
+  anyone asks.
 - **Status line** — a coloured dot or icon, then the phrase and detail in
   `text-sm text-th-text-primary`. Colour is on the dot or icon only: the success
   and warning tokens do not reach text contrast on the light theme.
@@ -112,6 +121,7 @@ cards would only move the button away from the name.
 | Not installed | `CircleSlash`, `text-th-text-muted` | "Not installed", and "Install the `<command>` CLI on the machine running Pockode, then refresh." | **Install instructions ↗** — text link to the CLI's install page |
 | Sign-in in progress | Spinner | "Signing in…", and "Started earlier." when this page did not start it | **Continue** — primary, opens the sheet on the running flow · **Cancel** — text button |
 | Status unavailable | `AlertTriangle`, `text-th-error` | "Couldn't read sign-in status", and the server's error in `text-xs` | **Retry** — primary |
+| Update running | the last state read before it | that state's phrase, or "Sign-in status is checked after the update." with none to keep | none — "Wait for the update to finish." when a state is kept ([cli-update-ui.md](cli-update-ui.md#while-it-runs)) |
 
 "Started earlier" and not "on another screen": after a reload, the same phone is
 a new page, and nothing can tell it apart from a second device. What matters is
@@ -550,9 +560,10 @@ Not a wire format — the backend owns that — but what the screens above canno
 drawn without:
 
 - **Status per CLI**: signed in / not signed in / external / not installed / in
-  progress / unavailable, plus account and plan (optional), external source
-  (optional), CLI version (optional), and the running flow's id (when in
-  progress).
+  progress / updating / unavailable, plus account and plan (optional), external
+  source (optional), CLI version (optional), the running flow's id (when in
+  progress), and the running update's id (when updating,
+  [cli-update-ui.md](cli-update-ui.md#while-it-runs)).
 - **A flow**, by id, readable again after a reconnect: its phase; for Codex the
   device URL, code and `expires_at`; for Claude the URL, `expires_at` and which
   account kind; on failure a reason from the failure table and a sanitized

@@ -1190,7 +1190,7 @@ places, and that the names never say "loading" where nothing is loading.
 | SessionList | 64 | Medium frequency; similar to WorkList |
 | SessionDetail | 64 | Same store events as SessionList; see [above](#why-a-session-is-two-subscriptions) |
 | Settings | 16 | Low frequency; settings rarely change |
-| CLILogin | none | A set of CLIs with a pending change instead of a queue: every notification is the whole sign-in as it is when sent, so changes collapse and none is ever dropped ([cli-auth.md](cli-auth.md#signing-in)) |
+| CLILogin, CLIUpdate | none | A set of CLIs with a pending change instead of a queue (`watch/cli_record.go`): every notification is the whole sign-in or update as it is when sent, so changes collapse and none is ever dropped ([cli-auth.md](cli-auth.md#signing-in), [cli-update.md](cli-update.md#the-rpc)) |
 
 These values were chosen empirically. The key insight: buffer overflow triggers full sync, which is more expensive than the incremental update but still correct. Thus, buffers should be large enough to handle typical bursts, but not so large that they consume excessive memory.
 

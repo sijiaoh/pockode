@@ -2,6 +2,7 @@ package filestore
 
 import (
 	"bytes"
+	"errors"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -110,6 +111,28 @@ func awaitGrant(t *testing.T, pending <-chan acquisition) *fileLock {
 		t.Fatal("lock was never granted")
 		return nil
 	}
+}
+
+// TryLock refuses at once rather than waiting, to another handle in this
+// process exactly as to another process, and is free again once released.
+func TestTryLock(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "update.lock")
+
+	unlock, err := TryLock(path)
+	if err != nil {
+		t.Fatalf("TryLock: %v", err)
+	}
+	// Another handle in this process contends as another process would.
+	if _, err := TryLock(path); !errors.Is(err, ErrLocked) {
+		t.Fatalf("second TryLock: got %v, want ErrLocked", err)
+	}
+
+	unlock()
+	unlock, err = TryLock(path)
+	if err != nil {
+		t.Fatalf("TryLock after unlock: %v", err)
+	}
+	unlock()
 }
 
 // TestConcurrentReadWrite asserts the end-to-end guarantee the lock exists for:

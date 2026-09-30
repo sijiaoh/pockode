@@ -2,8 +2,14 @@ import { ConfirmDialog } from "@pockode/shared";
 import { AlertTriangle, CircleSlash, Info } from "lucide-react";
 import { type ReactNode, useState } from "react";
 import { useCliLoginSubscription } from "../../../hooks/useCliLoginSubscription";
+import { useCliUpdateSubscription } from "../../../hooks/useCliUpdateSubscription";
 import { getAgentLabel } from "../../../lib/agentType";
-import { cliLoginActions, useCliLoginStore } from "../../../lib/cliLoginStore";
+import {
+	cliLoginActions,
+	isLoginEnded,
+	useCliLoginStore,
+} from "../../../lib/cliLoginStore";
+import type { CliUpdateCheck } from "../../../types/cliUpdate";
 import type { AgentType } from "../../../types/settings";
 import { errorMessage } from "../../../utils/errorMessage";
 import {
@@ -18,6 +24,7 @@ import {
 } from "../../CliLogin/loginParts";
 import { Spinner } from "../../ui";
 import Skeleton from "../../ui/Skeleton";
+import CliVersionRow, { shownUpdate } from "./CliVersionRow";
 
 interface Props {
 	agent: AgentType;
@@ -25,11 +32,39 @@ interface Props {
 	onOpenSignIn: () => void;
 }
 
-/** One CLI's sign-in status and what can be done about it from here. */
+/**
+ * One CLI's sign-in status and version, and what can be done about either from
+ * here.
+ */
 export default function CliStatusCard({ agent, onOpenSignIn }: Props) {
-	// Follows the running sign-in, so the card moves on when it ends.
+	// Follows the running sign-in and update, so the card moves on when they end.
 	useCliLoginSubscription(agent);
-	const status = useCliLoginStore((s) => s.statuses[agent]);
+	useCliUpdateSubscription(agent);
+	const readStatus = useCliLoginStore((s) => s.statuses[agent]);
+	const settledStatus = useCliLoginStore((s) => s.settledStatuses[agent]);
+	const check = useCliLoginStore((s) => s.checks[agent]);
+	const checkError = useCliLoginStore((s) => s.checkErrors[agent]);
+	const record = useCliLoginStore((s) => s.updates[agent]);
+	const seenEnding = useCliLoginStore((s) =>
+		record ? s.updatesSeenEnding.includes(record.id) : false,
+	);
+	const updateStartedHere = useCliLoginStore((s) =>
+		record ? s.updatesStartedHere.includes(record.id) : false,
+	);
+	const updateError = useCliLoginStore((s) => s.updateErrors[agent]);
+	const loginRunning = useCliLoginStore((s) => {
+		const login = s.logins[agent];
+		return !!login && !isLoginEnded(login);
+	});
+
+	// While the CLI is being replaced its sign-in is not read: the card keeps
+	// what it read before, and nothing that runs the CLI is offered.
+	const updating =
+		readStatus?.state === "updating" ||
+		check?.state === "updating" ||
+		record?.phase === "running";
+	const status = updating ? settledStatus : readStatus;
+	const signingIn = readStatus?.state === "signing_in" || loginRunning;
 	const startedHere = useCliLoginStore((s) =>
 		status?.login_id ? s.startedHere.includes(status.login_id) : false,
 	);
@@ -69,6 +104,53 @@ export default function CliStatusCard({ agent, onOpenSignIn }: Props) {
 
 	const cancel = (loginId: string) =>
 		void run("cancelling", () => cliLoginActions.cancelLogin(agent, loginId));
+
+	const [updateBusy, setUpdateBusy] = useState(false);
+	const [updateActionError, setUpdateActionError] = useState<string | null>(
+		null,
+	);
+	// A refused start is about the check and record it was pressed over. By
+	// content, not identity: the dialog re-reads the check, and that answer can
+	// land after the refusal without anything having changed.
+	const updateBasis = [
+		check?.state,
+		check?.version,
+		check?.latest_version,
+		record?.id,
+		record?.phase,
+	].join("|");
+	const [errorBasis, setErrorBasis] = useState(updateBasis);
+	if (errorBasis !== updateBasis) {
+		setErrorBasis(updateBasis);
+		setUpdateActionError(null);
+	}
+	const [confirmingUpdate, setConfirmingUpdate] = useState(false);
+	// Another device started one while the dialog was up (its re-read check or
+	// the subscription says so): pressing would join that update, not start one.
+	if (confirmingUpdate && updating) setConfirmingUpdate(false);
+
+	const runUpdateAction = async (action: () => Promise<void>) => {
+		setUpdateBusy(true);
+		setUpdateActionError(null);
+		try {
+			await action();
+		} catch (err) {
+			setUpdateActionError(errorMessage(err));
+		} finally {
+			setUpdateBusy(false);
+		}
+	};
+
+	const openUpdate = () => {
+		setConfirmingUpdate(true);
+		// The dialog speaks for the check as it is now, not as the card drew it.
+		void cliLoginActions.refreshCheck(agent);
+	};
+
+	const confirmUpdate = () => {
+		setConfirmingUpdate(false);
+		void runUpdateAction(() => cliLoginActions.startUpdate(agent));
+	};
 
 	let icon: ReactNode = null;
 	let phrase: ReactNode = null;
@@ -171,16 +253,19 @@ export default function CliStatusCard({ agent, onOpenSignIn }: Props) {
 			);
 	}
 
+	if (updating) {
+		actions = null;
+		if (!status) {
+			// A reload mid-update: there is no earlier read to keep.
+			phrase = "Sign-in status is checked after the update.";
+		}
+	}
+
 	return (
 		<li className="space-y-2 px-4 py-3">
-			<div className="flex items-baseline justify-between gap-3">
-				<h3 className="text-sm text-th-text-primary">{label}</h3>
-				{status?.version && (
-					<span className="text-xs text-th-text-muted">{status.version}</span>
-				)}
-			</div>
+			<h3 className="text-sm text-th-text-primary">{label}</h3>
 
-			{status ? (
+			{status || updating ? (
 				<>
 					<div className="flex items-start gap-2">
 						<span className="flex h-5 shrink-0 items-center" aria-hidden="true">
@@ -203,6 +288,11 @@ export default function CliStatusCard({ agent, onOpenSignIn }: Props) {
 						</div>
 					</div>
 					{actions && <div className="flex justify-end gap-2">{actions}</div>}
+					{updating && status && (
+						<p className="text-right text-xs text-th-text-muted">
+							Wait for the update to finish.
+						</p>
+					)}
 				</>
 			) : (
 				<div className="space-y-2">
@@ -214,6 +304,37 @@ export default function CliStatusCard({ agent, onOpenSignIn }: Props) {
 						<Skeleton className="h-11 w-20 rounded-lg" />
 					</div>
 				</div>
+			)}
+
+			<CliVersionRow
+				agent={agent}
+				check={check}
+				checkError={checkError}
+				statusVersion={readStatus?.version ?? settledStatus?.version}
+				statusNotInstalled={readStatus?.state === "not_installed"}
+				update={shownUpdate(record, check, seenEnding)}
+				startedHere={updateStartedHere}
+				followError={updateError}
+				signingIn={signingIn}
+				busy={updateBusy}
+				error={updateActionError}
+				onUpdate={openUpdate}
+				onDismiss={(updateId) =>
+					void runUpdateAction(() =>
+						cliLoginActions.dismissUpdate(agent, updateId),
+					)
+				}
+			/>
+
+			{confirmingUpdate && (
+				<ConfirmDialog
+					title={`Update ${label}?`}
+					message={updateMessage(label, check)}
+					confirmLabel="Update"
+					cancelLabel="Cancel"
+					onConfirm={confirmUpdate}
+					onCancel={() => setConfirmingUpdate(false)}
+				/>
 			)}
 
 			{confirmingSignOut && (
@@ -229,6 +350,41 @@ export default function CliStatusCard({ agent, onOpenSignIn }: Props) {
 			)}
 		</li>
 	);
+}
+
+/**
+ * What an update reaches and what it leaves alone (docs/cli-update-ui.md,
+ * "Pressing Update"). No version in the title: the CLI installs whatever is
+ * newest when it runs.
+ */
+function updateMessage(label: string, check: CliUpdateCheck | undefined) {
+	const sentences: string[] = [];
+	if (check?.state === "update_available" && check.latest_version) {
+		sentences.push(
+			check.version
+				? `${check.latest_version} is available; this server has ${check.version}.`
+				: `${check.latest_version} is available.`,
+		);
+	}
+	sentences.push(
+		`The update is for the whole machine: every project and cluster node here uses the same ${label}.`,
+	);
+	const kept = check?.version ?? "the version they started with";
+	const count = check?.running_sessions ?? 0;
+	if (count === 1) {
+		sentences.push(
+			`${label} is open in 1 session in this project. It isn't interrupted — it keeps ${kept} until it closes, and uses the new version from its next start.`,
+		);
+	} else if (count > 1) {
+		sentences.push(
+			`${label} is open in ${count} sessions in this project. They aren't interrupted — they keep ${kept} until they close, and use the new version from their next start.`,
+		);
+	} else {
+		sentences.push(
+			`Running sessions aren't interrupted — they keep ${kept} until they close, and use the new version from their next start.`,
+		);
+	}
+	return sentences.join(" ");
 }
 
 function Dot({ className, filled }: { className: string; filled?: boolean }) {

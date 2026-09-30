@@ -18,6 +18,7 @@ import (
 	"github.com/pockode/server/agentrole"
 	"github.com/pockode/server/cliauth"
 	"github.com/pockode/server/cliauth/cliauthtest"
+	"github.com/pockode/server/cliupdate"
 	"github.com/pockode/server/command"
 	"github.com/pockode/server/contents"
 	"github.com/pockode/server/git"
@@ -166,7 +167,7 @@ func newTestEnvWithAgent(t *testing.T, mock *mockAgent, ag agent.Agent, workDir 
 	cliAuthService := cliauth.NewService(slog.Default())
 	cliAuthService.Register(session.AgentTypeClaude, cliAuth)
 
-	h := NewRPCHandler(testPassword, authsessiontest.New(), "test", true, cmdStore, worktreeManager, settingsStore, workStore, workOps, workEngine, agentRoleStore, cliAuthService)
+	h := NewRPCHandler(testPassword, authsessiontest.New(), "test", true, cmdStore, worktreeManager, settingsStore, workStore, workOps, workEngine, agentRoleStore, cliAuthService, cliupdate.NewService(slog.Default(), nil, nil))
 	server := httptest.NewServer(h)
 
 	// No deadline of its own: every read and write is bounded individually (see
@@ -544,7 +545,7 @@ func newAuthTestServer(t *testing.T, password string, sessions SessionStore) *ht
 	workStarter := worktree.NewWorkStarter(worktreeManager, agentRoleStore, settingsStore)
 	workOps := work.NewOperations(workStore, workStarter, nil, nil)
 
-	h := NewRPCHandler(password, sessions, "test", true, cmdStore, worktreeManager, settingsStore, workStore, workOps, work.NewEngine(workStore, work.DefaultMaxNudges), agentRoleStore, cliauth.NewService(slog.Default()))
+	h := NewRPCHandler(password, sessions, "test", true, cmdStore, worktreeManager, settingsStore, workStore, workOps, work.NewEngine(workStore, work.DefaultMaxNudges), agentRoleStore, cliauth.NewService(slog.Default()), cliupdate.NewService(slog.Default(), nil, nil))
 	server := httptest.NewServer(h)
 	t.Cleanup(server.Close)
 	return server

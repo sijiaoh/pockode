@@ -46,6 +46,7 @@ attachments/            # 按 session 存放事件里以 id 引用的内容（�
 authsession/            # 登录会话：密码换取的 session token + 密码指纹（sessions.json）
 chat/                   # Chat 客户端
 cliauth/                # AI CLI 登录状态查询、远程登录流程与登出（各 CLI 的实现在 agent/*/auth.go、login.go，见 docs/code/cli-auth.md）
+cliupdate/              # AI CLI 新版本检查与更新（跑 CLI 自己的 update，再核对版本；各 CLI 的定义在 agent/*/update.go，见 docs/code/cli-update.md）
 command/                # 命令存储 + Pockode 命令（`/pockode-*` 的解析与展开，见 docs/pockode-commands.md）
 contents/               # 文件内容获取
 filestore/              # 文件存储基础设施（原子写 / 文件锁 / JSONL / 变更监听）

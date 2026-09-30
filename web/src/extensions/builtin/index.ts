@@ -57,7 +57,7 @@ export const activate: Extension["activate"] = (ctx) => {
 
 	ctx.settings.register({
 		id: "cli-sign-in",
-		label: "CLI sign-in",
+		label: "AI CLIs",
 		priority: PRIORITY.CLI_SIGN_IN,
 		component: CliSignInSection,
 	});

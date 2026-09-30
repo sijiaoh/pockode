@@ -1,7 +1,6 @@
 import {
 	AlertTriangle,
 	CheckCircle2,
-	ChevronRight,
 	CircleSlash,
 	Info,
 	XCircle,
@@ -29,7 +28,7 @@ import type {
 } from "../../types/cliAuth";
 import type { AgentType } from "../../types/settings";
 import { errorMessage } from "../../utils/errorMessage";
-import { CollapsibleBody, Sheet, Spinner } from "../ui";
+import { Sheet, Spinner } from "../ui";
 import {
 	accountSummary,
 	ExternalSource,
@@ -38,7 +37,11 @@ import {
 } from "./cliAuthText";
 import DeviceCodeStep from "./DeviceCodeStep";
 import { describeFailure } from "./loginOutcome";
-import { primaryButtonClass, secondaryButtonClass } from "./loginParts";
+import {
+	Details,
+	primaryButtonClass,
+	secondaryButtonClass,
+} from "./loginParts";
 import PastedCodeStep from "./PastedCodeStep";
 
 interface Props {
@@ -580,6 +583,27 @@ function describeStatus(
 					</>
 				),
 			};
+		case "updating":
+			// The CLI's files are being replaced, so the server runs none of its
+			// sign-in commands meanwhile (docs/cli-update-ui.md, "While it runs").
+			return {
+				announcement: `${label} is being updated`,
+				body: (
+					<Outcome
+						icon={<Spinner srText={null} />}
+						title={`${label} is being updated`}
+					>
+						Sign-in status is checked after the update. Wait for it to finish,
+						then retry.
+					</Outcome>
+				),
+				footer: (
+					<>
+						{parts.closeButton()}
+						{parts.retry}
+					</>
+				),
+			};
 		default:
 			return {
 				announcement: "Couldn't read sign-in status",
@@ -632,7 +656,6 @@ function Outcome({
 	details?: string;
 	detailsOpen?: boolean;
 }) {
-	const [expanded, setExpanded] = useState(detailsOpen);
 	return (
 		<div className="space-y-3">
 			<div className="flex gap-3">
@@ -648,27 +671,7 @@ function Outcome({
 					)}
 				</div>
 			</div>
-			{details && (
-				<div>
-					<button
-						type="button"
-						onClick={() => setExpanded((v) => !v)}
-						aria-expanded={expanded}
-						className="-ml-1 inline-flex min-h-9 items-center gap-1 rounded-md px-1 text-xs text-th-text-muted hover:text-th-text-secondary focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent pointer-coarse:min-h-11"
-					>
-						<ChevronRight
-							className={`h-3.5 w-3.5 transition-transform ${expanded ? "rotate-90" : ""}`}
-							aria-hidden="true"
-						/>
-						Details
-					</button>
-					<CollapsibleBody expanded={expanded}>
-						<pre className="mt-1 whitespace-pre-wrap break-words rounded-md bg-th-bg-tertiary p-3 font-mono text-xs text-th-text-secondary">
-							{details}
-						</pre>
-					</CollapsibleBody>
-				</div>
-			)}
+			{details && <Details details={details} defaultOpen={detailsOpen} />}
 		</div>
 	);
 }

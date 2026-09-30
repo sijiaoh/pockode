@@ -716,7 +716,7 @@ it stops the work at once, ahead of the question checks, with a comment saying
 the CLI couldn't authenticate and where to sign in. Nothing the agent does can
 fix it, so every nudge would only buy another identical failure up to the limit.
 Restarting is the user's, after signing in — from the failed turn's notice in the
-work's chat, or Settings → CLI sign-in.
+work's chat, or Settings → AI CLIs.
 
 `DefaultMaxNudges` is 3. A nudge is a guess that the agent stopped mid-task;
 three in a row with nothing to show is evidence the guess is wrong, and the work

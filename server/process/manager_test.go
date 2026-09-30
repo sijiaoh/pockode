@@ -1467,3 +1467,67 @@ func TestManager_LeaseReaper_SparesAPromptRaisedAfterTheTurnEnded(t *testing.T) 
 		t.Error("process reaped although a prompt was still waiting to be answered")
 	}
 }
+
+// slowStartAgent is a mockAgent whose Start waits for release, as a Codex
+// start waits for its app-server's handshake.
+type slowStartAgent struct {
+	*mockAgent
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (a slowStartAgent) Start(ctx context.Context, opts agent.StartOptions) (agent.Session, error) {
+	close(a.entered)
+	<-a.release
+	return a.mockAgent.Start(ctx, opts)
+}
+
+// The count is read on a request path (cli_update.check), so it must not wait
+// out a process that is still starting, and it follows processes as they end.
+func TestManager_AgentProcessCount(t *testing.T) {
+	store, _ := session.NewFileStore(t.TempDir())
+	slow := slowStartAgent{mockAgent: &mockAgent{}, entered: make(chan struct{}), release: make(chan struct{})}
+	registry := agent.NewRegistry()
+	registry.Register(session.AgentTypeClaude, slow)
+	m := NewManager(registry, "", "/tmp", "", "", store, idleOnly(10*time.Minute))
+	defer m.Shutdown()
+	// Deferred after Shutdown so it runs first: a test that fails while the
+	// start is held must not leave Shutdown waiting on it.
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(slow.release) }) }
+	defer release()
+
+	started := make(chan error, 1)
+	go func() {
+		_, _, err := m.GetOrCreateProcess(context.Background(), createSession(t, store, "sess-1"))
+		started <- err
+	}()
+	<-slow.entered
+
+	counted := make(chan int, 1)
+	go func() { counted <- m.AgentProcessCount(session.AgentTypeClaude) }()
+	select {
+	case n := <-counted:
+		if n != 0 {
+			t.Errorf("count while starting = %d, want 0", n)
+		}
+	// A backstop, not a measurement: a count that waits on the start never
+	// returns before release, however long this is.
+	case <-time.After(20 * time.Second):
+		t.Fatal("AgentProcessCount waited for a process that was starting")
+	}
+
+	release()
+	if err := <-started; err != nil {
+		t.Fatalf("GetOrCreateProcess: %v", err)
+	}
+	if n := m.AgentProcessCount(session.AgentTypeClaude); n != 1 {
+		t.Errorf("count after start = %d, want 1", n)
+	}
+	if n := m.AgentProcessCount(session.AgentTypeCodex); n != 0 {
+		t.Errorf("codex count = %d, want 0", n)
+	}
+
+	m.Close("sess-1")
+	waitUntil(t, "the process to be gone", func() bool { return m.AgentProcessCount(session.AgentTypeClaude) == 0 })
+}

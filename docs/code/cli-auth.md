@@ -15,9 +15,10 @@ Verified against Claude Code 2.1.283 and codex-cli 0.153.0.
 | `server/agent/claude/login.go` | Claude's sign-in: `claude auth login` over pipes |
 | `server/agent/codex/auth.go` | Codex's provider: the app-server's `account/read` and `account/logout` |
 | `server/agent/codex/login.go` | Codex's sign-in: the app-server's device-code `account/login/*` |
-| `server/watch/cli_login.go` | `CLILoginWatcher`, which pushes sign-in changes |
+| `server/watch/cli_login.go` | `CLILoginWatcher`, which pushes sign-in changes; the mechanism is `watch/cli_record.go`, shared with [updates](cli-update.md) |
 | `server/cliauth/cliauthtest/` | a `Provider` for tests that need a CLI's sign-in without running one |
 | `server/agent/run.go` | `agent.Run`, the one-shot command runner: Claude's commands and every `--version` |
+| `server/agent/version.go` | `agent.Version`, the `--version` read, shared with [updates](cli-update.md) |
 | `server/ws/rpc_cli_auth.go` | the `cli_auth.*` methods |
 
 What a CLI prints and how it is read belongs with the rest of that CLI's
@@ -40,12 +41,13 @@ The sign-in methods are [below](#signing-in).
 // Status
 {
   "agent": "claude",               // session.AgentType
-  "state": "signed_in",            // signed_in | signed_out | external | not_installed | signing_in | unavailable
+  "state": "signed_in",            // signed_in | signed_out | external | not_installed | signing_in | updating | unavailable
   "version": "2.1.283",            // optional
   "account": { "email": "...", "organization": "...", "plan": "max" },  // signed_in; every field optional
   "external": { "kind": "api_key", "source": "ANTHROPIC_API_KEY" },     // external
   "error": "...",                  // unavailable, not_installed
-  "login_id": "..."                // signing_in: the running sign-in
+  "login_id": "...",               // signing_in: the running sign-in
+  "update_id": "..."               // updating: the running update
 }
 ```
 
@@ -180,7 +182,10 @@ a read racing a sign-out could write back the credentials it just removed.
 
 The lock is a channel, not a `sync.Mutex`, so a caller can stop waiting for it:
 one whose client has gone does not stay queued behind a sign-out. `--version`
-touches no credentials and runs outside it.
+touches no credentials, but runs under it all the same, beside the command it
+accompanies: an update takes the lock before replacing the CLI's files, and
+must not do so under a `--version` still running. A status answered without
+the lock — `signing_in`, `updating`, or a wait that timed out — has no version.
 
 A running sign-in holds its CLI's lock from start to end — up to 15 minutes —
 because the CLI writes the credential file at a moment only it knows. It waits
@@ -190,6 +195,16 @@ queues behind it: a status read answers `signing_in` without running the CLI,
 and a sign-out is refused ("cancel it before signing out"). A read already
 waiting for the lock when a sign-in takes it is woken and answers the same way,
 rather than sitting out its 20s.
+
+An [update](cli-update.md) holds the lock the same way, through
+`BeginUpdate`, for the opposite reason: it is the CLI's files that are being
+replaced. While it runs, a status read answers `updating` without running the
+CLI, and a sign-in or a sign-out is refused ("is being
+updated; try again once the update has finished"). An update is refused in turn
+while a sign-in runs, since that sign-in's process is the binary it would
+replace. Unlike a sign-in, an update does not have to have the lock to start:
+it marks the CLI at once, so nothing new begins, and then waits for a read or a
+sign-out already running before it runs the CLI.
 
 Server shutdown ends status reads and sign-outs too, and `Service.Close` waits
 for their CLIs to be gone. Their context is the connection's, and the HTTP
@@ -400,8 +415,8 @@ Detecting an auth failure mid-conversation relies on the same kind of thing: the
 field each CLI puts on its error frames
 ([agent-integration.md](agent-integration.md#auth-failures)). If that field
 changes, the turn still fails and shows the CLI's error as an ordinary error
-line. Only the notice and its sign-in button are lost, and Settings → CLI
-sign-in still works.
+line. Only the notice and its sign-in button are lost, and Settings → AI
+CLIs still works.
 
 Everything here was verified against the versions at the top of this document.
 When the CLIs are updated, check it again by running both sign-ins end to end.
@@ -418,10 +433,10 @@ The screens are in [cli-login-ui.md](../cli-login-ui.md); the code behind them:
 | Path | Holds |
 |------|-------|
 | `web/src/lib/rpc/cliAuth.ts` | the `cli_auth.*` requests |
-| `web/src/lib/cliLoginStore.ts` | status per CLI and its latest sign-in, in memory only |
+| `web/src/lib/cliLoginStore.ts` | status per CLI and its latest sign-in, in memory only; the update half is in [cli-update.md](cli-update.md#the-web-client) |
 | `web/src/hooks/useCliLoginSubscription.ts` | follows a CLI's sign-in into the store while a screen shows it |
 | `web/src/components/CliLogin/` | `CliLoginSheet`, the one sign-in flow, and the wording it shares with the card |
-| `web/src/components/Settings/sections/CliSignInSection.tsx` | Settings → CLI sign-in, one `CliStatusCard` per CLI |
+| `web/src/components/Settings/sections/CliSignInSection.tsx` | Settings → AI CLIs, one `CliStatusCard` per CLI |
 | `web/src/components/Chat/AuthFailureNotice.tsx` | the chat's way in: a turn that failed on its credentials ([agent-integration.md](agent-integration.md#auth-failures)), opening the same sheet from `ChatPanel` |
 
 The store applies the revision rule above in one place, `applyLogin`, which

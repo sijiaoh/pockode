@@ -1,6 +1,7 @@
-import { Clock, ExternalLink } from "lucide-react";
+import { ChevronRight, Clock, ExternalLink } from "lucide-react";
 import { type MouseEvent, useEffect, useState } from "react";
 import { useCopyToClipboard } from "../../hooks/useCopyToClipboard";
+import { CollapsibleBody } from "../ui";
 
 export const primaryButtonClass =
 	"inline-flex min-h-11 items-center justify-center gap-2 rounded-lg bg-th-accent px-4 text-sm text-th-accent-text transition-colors hover:bg-th-accent-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent disabled:cursor-not-allowed disabled:opacity-50";
@@ -16,9 +17,8 @@ export const cardTextButtonClass =
 export const textButtonClass =
 	"inline-flex min-h-9 shrink-0 items-center gap-1.5 rounded-md px-2 text-sm text-th-accent hover:bg-th-bg-tertiary focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent pointer-coarse:min-h-11";
 
-/** Milliseconds left until `expiresAt`, ticking once a second; never below 0. */
-function useRemaining(expiresAt: string): number {
-	const deadline = Date.parse(expiresAt);
+/** The current time, ticking once a second. */
+export function useNow(): number {
 	const [now, setNow] = useState(() => Date.now());
 
 	useEffect(() => {
@@ -26,10 +26,10 @@ function useRemaining(expiresAt: string): number {
 		return () => clearInterval(timer);
 	}, []);
 
-	return Math.max(0, deadline - now);
+	return now;
 }
 
-function formatMinutes(ms: number): string {
+export function formatMinutes(ms: number): string {
 	const total = Math.ceil(ms / 1000);
 	const minutes = Math.floor(total / 60);
 	const seconds = total % 60;
@@ -42,7 +42,9 @@ function formatMinutes(ms: number): string {
  * live region — it would talk every second.
  */
 export function ExpiryLine({ expiresAt }: { expiresAt: string }) {
-	const remaining = useRemaining(expiresAt);
+	const now = useNow();
+	// Never below 0: at the deadline the server ends the flow, not this.
+	const remaining = Math.max(0, Date.parse(expiresAt) - now);
 	const lastMinute = remaining <= 60_000;
 
 	return (
@@ -144,5 +146,37 @@ export function Step({
 			</h3>
 			<div className="space-y-3 pl-5">{children}</div>
 		</section>
+	);
+}
+
+/** A collapsed "Details" with a command's own output, for a failure's reader. */
+export function Details({
+	details,
+	defaultOpen = false,
+}: {
+	details: string;
+	defaultOpen?: boolean;
+}) {
+	const [expanded, setExpanded] = useState(defaultOpen);
+	return (
+		<div>
+			<button
+				type="button"
+				onClick={() => setExpanded((v) => !v)}
+				aria-expanded={expanded}
+				className="-ml-1 inline-flex min-h-9 items-center gap-1 rounded-md px-1 text-xs text-th-text-muted hover:text-th-text-secondary focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent pointer-coarse:min-h-11"
+			>
+				<ChevronRight
+					className={`h-3.5 w-3.5 transition-transform ${expanded ? "rotate-90" : ""}`}
+					aria-hidden="true"
+				/>
+				Details
+			</button>
+			<CollapsibleBody expanded={expanded}>
+				<pre className="mt-1 whitespace-pre-wrap break-words rounded-md bg-th-bg-tertiary p-3 font-mono text-xs text-th-text-secondary">
+					{details}
+				</pre>
+			</CollapsibleBody>
+		</div>
 	);
 }

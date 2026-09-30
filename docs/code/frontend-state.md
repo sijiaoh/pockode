@@ -53,7 +53,7 @@ Pockode uses Zustand for state management, pure reducers for event processing, a
 | agentRoleStore | AI roles | State/Actions interface split |
 | agentOptionsStore | Selectable models and effort levels per agent | Fetched once per connection, not subscribed |
 | settingsStore | App settings, and why they are missing when they are | Holds the subscription's `refresh` too: the Retry is far below the hook that owns it |
-| cliLoginStore | Each AI CLI's sign-in status on the server machine, and its latest sign-in flow | Status is read on demand, never pushed ([why](cli-auth.md#no-subscription)); a flow outlives the sheet showing it. In memory only: a flow's link and codes are secrets |
+| cliLoginStore | Each AI CLI's sign-in status and update check on the server machine, and its latest sign-in flow and update ([cli-update.md](cli-update.md#the-web-client)) | Status is read on demand, never pushed ([why](cli-auth.md#no-subscription)); a flow outlives the sheet showing it. In memory only: a flow's link and codes are secrets |
 | authStore | The credential to connect with: the session token that survives a reload, or the password just typed | localStorage init; a leaf module written to by wsStore, never the other way round |
 | inputStore | Draft text, per session | persist middleware |
 | questionDraftStore | What has been typed into each unanswered question, per session | persist middleware, plus a second map: what came out of storage waits there until the session's unanswered list vouches for it, so an answer to a withdrawn question can never reach the screen ([answering-ui.md §5](../answering-ui.md#5-drafts)) |

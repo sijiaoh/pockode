@@ -17,6 +17,10 @@ import type {
 	AgentRoleListSubscribeResult,
 } from "../types/agentRole";
 import type { CliLogin, CliLoginChangedNotification } from "../types/cliAuth";
+import type {
+	CliUpdate,
+	CliUpdateChangedNotification,
+} from "../types/cliUpdate";
 import type { GitDiffChangedNotification, GitDiffData } from "../types/git";
 import type {
 	AuthParams,
@@ -57,12 +61,14 @@ import {
 	type AttachmentActions,
 	type ChatActions,
 	type CliAuthActions,
+	type CliUpdateActions,
 	type CommandActions,
 	createAgentActions,
 	createAgentRoleActions,
 	createAttachmentActions,
 	createChatActions,
 	createCliAuthActions,
+	createCliUpdateActions,
 	createCommandActions,
 	createFileActions,
 	createGitActions,
@@ -200,12 +206,19 @@ export interface WatchActions {
 		callback: (params: CliLoginChangedNotification) => void,
 	) => Promise<WatchSubscribeResult<CliLogin | null>>;
 	cliLoginUnsubscribe: (id: string) => Promise<void>;
+	/** The CLI's latest update, running or last ended, or null if none. */
+	cliUpdateSubscribe: (
+		agent: AgentType,
+		callback: (params: CliUpdateChangedNotification) => void,
+	) => Promise<WatchSubscribeResult<CliUpdate | null>>;
+	cliUpdateUnsubscribe: (id: string) => Promise<void>;
 }
 
 type RPCActions = ConnectionActions &
 	AgentActions &
 	AgentRoleActions &
 	CliAuthActions &
+	CliUpdateActions &
 	AttachmentActions &
 	ChatActions &
 	CommandActions &
@@ -289,6 +302,10 @@ const cliLoginWatchCallbacks = new Map<
 	string,
 	(params: CliLoginChangedNotification) => void
 >();
+const cliUpdateWatchCallbacks = new Map<
+	string,
+	(params: CliUpdateChangedNotification) => void
+>();
 
 /**
  * Clear worktree-scoped watch subscriptions. Called when switching worktrees.
@@ -323,6 +340,7 @@ function clearAllWatchSubscriptions(): void {
 	workDetailWatchCallbacks.clear();
 	agentRoleListWatchCallbacks.clear();
 	cliLoginWatchCallbacks.clear();
+	cliUpdateWatchCallbacks.clear();
 }
 
 /**
@@ -605,6 +623,11 @@ const watchNotificationHandlers: Record<string, WatchNotificationHandler> = {
 		cliLoginWatchCallbacks.get(changedParams.id)?.(changedParams);
 		return true;
 	},
+	"cli_update.changed": (params) => {
+		const changedParams = params as CliUpdateChangedNotification;
+		cliUpdateWatchCallbacks.get(changedParams.id)?.(changedParams);
+		return true;
+	},
 };
 
 function handleNotification(method: string, params: unknown): void {
@@ -712,6 +735,7 @@ async function closeSubscription<TCallback>(
 const agentActions = createAgentActions(getClient);
 const agentRoleActions = createAgentRoleActions(getClient);
 const cliAuthActions = createCliAuthActions(getClient, getAgentStartClient);
+const cliUpdateActions = createCliUpdateActions(getClient);
 const attachmentActions = createAttachmentActions(getClient);
 const chatActions = createChatActions(getClient, getAgentStartClient);
 const commandActions = createCommandActions(getClient);
@@ -1242,10 +1266,27 @@ export const useWSStore = create<WSState>((set, get) => ({
 				cliLoginWatchCallbacks,
 			),
 
+		cliUpdateSubscribe: async (
+			agent: AgentType,
+			callback: (params: CliUpdateChangedNotification) => void,
+		) => {
+			const { id, result } = await openSubscription(
+				"cli_update.subscribe",
+				{ agent },
+				cliUpdateWatchCallbacks,
+				callback,
+			);
+			return { id, initial: (result as { update: CliUpdate | null }).update };
+		},
+
+		cliUpdateUnsubscribe: (id: string) =>
+			closeSubscription("cli_update.unsubscribe", id, cliUpdateWatchCallbacks),
+
 		// Spread namespace-specific actions
 		...agentActions,
 		...agentRoleActions,
 		...cliAuthActions,
+		...cliUpdateActions,
 		...attachmentActions,
 		...chatActions,
 		...commandActions,

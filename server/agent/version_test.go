@@ -1,4 +1,4 @@
-package cliauth
+package agent
 
 import "testing"
 

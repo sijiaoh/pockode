@@ -3,6 +3,7 @@ import {
 	createFakeCliAuth,
 	type FakeCliAuth,
 	makeLogin,
+	makeUpdate,
 	resetCliLoginStore,
 } from "../test/cliAuthFixtures";
 import type { CliAuthStatus } from "../types/cliAuth";
@@ -162,5 +163,171 @@ describe("cliLoginStore", () => {
 		expect(useCliLoginStore.getState().statuses.claude?.state).toBe(
 			"signed_out",
 		);
+	});
+
+	describe("updates", () => {
+		it("keeps the higher revision of one update", () => {
+			cliLoginActions.applyUpdate(
+				"claude",
+				makeUpdate({ revision: 3, phase: "failed" }),
+			);
+			cliLoginActions.applyUpdate(
+				"claude",
+				makeUpdate({ revision: 2, phase: "running" }),
+			);
+			expect(useCliLoginStore.getState().updates.claude?.phase).toBe("failed");
+		});
+
+		// A check that could not be made must not read as "up to date", nor wipe
+		// what the last check that did answer said.
+		it("keeps the last check when a check request fails", async () => {
+			server.setChecks([
+				{
+					agent: "claude",
+					state: "update_available",
+					version: "2.1.283",
+					latest_version: "2.1.290",
+					channel: "latest",
+					running_sessions: 0,
+				},
+			]);
+			await cliLoginActions.refreshCheck("claude");
+			server.actions.cliUpdateCheck.mockRejectedValueOnce(
+				new Error("Connection lost"),
+			);
+			await cliLoginActions.refreshCheck("claude");
+
+			const state = useCliLoginStore.getState();
+			expect(state.checks.claude?.state).toBe("update_available");
+			expect(state.checkErrors.claude).toBe("Connection lost");
+			expect(state.checking.claude).toBe(false);
+		});
+
+		// While the CLI is replaced its sign-in is not read; the card keeps the
+		// last state it did read, and both are read again once it has ended.
+		it("holds the last sign-in through an update and reads both after it", async () => {
+			server.setStatuses([{ agent: "claude", state: "signed_in" }]);
+			await cliLoginActions.refreshStatus("claude");
+			server.setStatuses([
+				{ agent: "claude", state: "updating", update_id: "update-1" },
+			]);
+			await cliLoginActions.refreshStatus("claude");
+			expect(useCliLoginStore.getState().settledStatuses.claude?.state).toBe(
+				"signed_in",
+			);
+
+			cliLoginActions.applyUpdate("claude", makeUpdate());
+			// A request that fails meanwhile says nothing about the sign-in.
+			server.actions.cliAuthStatus.mockRejectedValueOnce(
+				new Error("Connection lost"),
+			);
+			await cliLoginActions.refreshStatus("claude");
+			expect(useCliLoginStore.getState().settledStatuses.claude?.state).toBe(
+				"signed_in",
+			);
+
+			server.setStatuses([{ agent: "claude", state: "signed_in" }]);
+			server.setChecks([
+				{
+					agent: "claude",
+					state: "up_to_date",
+					version: "2.1.290",
+					channel: "latest",
+					running_sessions: 0,
+				},
+			]);
+			cliLoginActions.applyUpdate(
+				"claude",
+				makeUpdate({ revision: 2, phase: "succeeded", to_version: "2.1.290" }),
+			);
+
+			await vi.waitFor(() => {
+				const state = useCliLoginStore.getState();
+				expect(state.statuses.claude?.state).toBe("signed_in");
+				expect(state.checks.claude?.version).toBe("2.1.290");
+			});
+			expect(useCliLoginStore.getState().updatesSeenEnding).toEqual([
+				"update-1",
+			]);
+		});
+
+		// Outside Settings nothing follows the update to its end, so a surface
+		// that only needs *a* status does not settle for `updating`.
+		it("does not take `updating` as a status to keep", async () => {
+			server.setStatuses([
+				{ agent: "claude", state: "updating", update_id: "update-1" },
+			]);
+			await cliLoginActions.refreshStatus("claude");
+			server.setStatuses([{ agent: "claude", state: "signed_in" }]);
+
+			cliLoginActions.ensureStatus("claude");
+
+			await vi.waitFor(() =>
+				expect(useCliLoginStore.getState().statuses.claude?.state).toBe(
+					"signed_in",
+				),
+			);
+		});
+
+		// A Refresh sent while the update ran is answered `updating`, and can land
+		// after the update has ended: it must not leave the card held still.
+		it("reads status again when a read answered mid-update lands after the end", async () => {
+			let answer: (value: CliAuthStatus[]) => void = () => {};
+			server.actions.cliAuthStatus.mockImplementationOnce(
+				() =>
+					new Promise<CliAuthStatus[]>((resolve) => {
+						answer = resolve;
+					}),
+			);
+			server.setStatuses([{ agent: "claude", state: "signed_in" }]);
+			// After a reload: the first copy of the update this page gets is the
+			// ended one, so there is no ending it saw to re-read on.
+			const read = cliLoginActions.refreshStatus("claude");
+			cliLoginActions.applyUpdate(
+				"claude",
+				makeUpdate({ id: "stale-status", revision: 2, phase: "failed" }),
+			);
+			answer([
+				{ agent: "claude", state: "updating", update_id: "stale-status" },
+			]);
+			await read;
+
+			await vi.waitFor(() =>
+				expect(useCliLoginStore.getState().statuses.claude?.state).toBe(
+					"signed_in",
+				),
+			);
+		});
+
+		// Changes are collapsed on the server, so a fast update can reach this
+		// page ended before its start's reply does.
+		it("counts an update it started as seen ending, however the copies arrive", async () => {
+			const ended = makeUpdate({
+				id: "fast",
+				revision: 2,
+				phase: "succeeded",
+				to_version: "2.1.290",
+			});
+			server.actions.cliUpdateStart.mockImplementation(async () => {
+				cliLoginActions.applyUpdate("claude", ended);
+				return makeUpdate({ id: "fast", revision: 1 });
+			});
+
+			await cliLoginActions.startUpdate("claude");
+
+			expect(useCliLoginStore.getState().updatesSeenEnding).toEqual(["fast"]);
+			expect(server.actions.cliUpdateCheck).toHaveBeenCalledWith("claude");
+		});
+
+		// The server keeps the last update to end and hands it to every fresh
+		// subscribe; its success was confirmed on the screen that watched it.
+		it("does not count an update that was already over as seen ending", () => {
+			cliLoginActions.applyUpdate(
+				"claude",
+				makeUpdate({ phase: "succeeded", to_version: "2.1.290" }),
+			);
+			expect(useCliLoginStore.getState().updatesSeenEnding).toEqual([]);
+			expect(server.actions.cliUpdateCheck).not.toHaveBeenCalled();
+		});
 	});
 });

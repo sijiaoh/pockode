@@ -305,6 +305,10 @@ func (s *Service) StartLogin(agentType session.AgentType, kind AccountKind) (Log
 		s.loginsMu.Unlock()
 		return login, nil
 	}
+	if s.updating[agentType] != "" {
+		s.loginsMu.Unlock()
+		return Login{}, updatingError(agentType)
+	}
 
 	now := time.Now()
 	f := &loginFlow{
@@ -327,8 +331,7 @@ func (s *Service) StartLogin(agentType session.AgentType, kind AccountKind) (Log
 	s.logins[agentType] = f
 	// Wakes a status read or a sign-out waiting for this CLI's lock, which is
 	// now the sign-in's.
-	close(s.loginStarted[agentType])
-	s.loginStarted[agentType] = make(chan struct{})
+	s.markBusy(agentType)
 	login := f.login
 	// Under loginsMu, which Close takes before waiting: a sign-in that got past
 	// the closed check is always one Close waits for.
@@ -369,7 +372,7 @@ func (s *Service) runLogin(ctx context.Context, f *loginFlow, p Provider, opts L
 	// only it knows, and a sign-out or a refreshing status read must not race
 	// that write. Status reads meanwhile answer StateSigningIn without asking.
 	var st Status
-	unlock, err := s.lockForLogin(ctx, agentType)
+	unlock, err := s.lockUntilDone(ctx, agentType)
 	if err == nil {
 		st, err = p.Login(ctx, opts, flowHandle{s: s, flow: f})
 		unlock()

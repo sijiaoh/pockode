@@ -15,6 +15,7 @@ import (
 	"github.com/pockode/server/agentrole"
 	"github.com/pockode/server/authsession"
 	"github.com/pockode/server/cliauth"
+	"github.com/pockode/server/cliupdate"
 	"github.com/pockode/server/command"
 	"github.com/pockode/server/filetransfer"
 	"github.com/pockode/server/mcp"
@@ -53,7 +54,7 @@ func newTestServer(t *testing.T, serverPassword, mcpToken string) (http.Handler,
 	workStarter := worktree.NewWorkStarter(scopeManager, agentRoleStore, settingsStore)
 	workOps := work.NewOperations(workStore, workStarter, nil, nil)
 	workOps.SetSessionDeleter(scopeManager)
-	wsHandler := ws.NewRPCHandler(serverPassword, sessions, "test", true, cmdStore, scopeManager, settingsStore, workStore, workOps, work.NewEngine(workStore, work.DefaultMaxNudges), agentRoleStore, cliauth.NewService(slog.Default()))
+	wsHandler := ws.NewRPCHandler(serverPassword, sessions, "test", true, cmdStore, scopeManager, settingsStore, workStore, workOps, work.NewEngine(workStore, work.DefaultMaxNudges), agentRoleStore, cliauth.NewService(slog.Default()), cliupdate.NewService(slog.Default(), nil, nil))
 	mcpHandler := mcp.NewAPIHandler(mcp.NewExecutor(workStore, agentRoleStore, workOps, settingsStore, registry, scopeManager), mcpToken)
 	transferHandler := filetransfer.NewHandler(registry, slog.Default())
 

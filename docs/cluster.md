@@ -343,7 +343,7 @@ alternatives that were rejected on the way to it, are in
   frontend keeps the password between starts, in storage or in memory.
 - **No AI CLI sign-in.** Every node on one machine shares the CLIs'
   credentials, so signing Claude or Codex in or out from any node's Pockode
-  (Settings → CLI sign-in) does it for all of them; the cluster frontend has
+  (Settings → AI CLIs) does it for all of them; the cluster frontend has
   no screen of its own for it ([cli-login-ui.md](cli-login-ui.md#cluster)).
   They share because every node inherits the manager's environment, and
   Pockode sets neither `CLAUDE_CONFIG_DIR` nor `CODEX_HOME`, so each CLI finds
@@ -354,6 +354,12 @@ alternatives that were rejected on the way to it, are in
   still runs its own sign-in flows, so two nodes can sign the same CLI in at
   once; the one that finishes last wins
   ([cli-auth.md](code/cli-auth.md#one-per-cli-owned-by-the-server)).
+- **No AI CLI update.** The nodes share each CLI's install the same way, so
+  updating it from any node's Pockode (Settings → AI CLIs) updates it for all
+  of them ([cli-update-ui.md](cli-update-ui.md#cluster)). Unlike a sign-in, two
+  nodes cannot update the same CLI at once: a lock shared by every Pockode of
+  the OS user refuses the second
+  ([cli-update.md](code/cli-update.md#one-update-per-cli-per-os-user)).
 
 ### Available Methods
 

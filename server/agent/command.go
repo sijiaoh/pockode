@@ -36,7 +36,8 @@ func (e *BinaryNotFoundError) Error() string {
 // lookupBinary resolves an AI CLI name to the executable to run. It stays
 // unexported so Command remains the only way in: a caller that resolved the
 // path itself and then reached for exec.Command would silently lose the
-// command-line handling that the resolved path is what selects.
+// command-line handling that the resolved path is what selects. BinaryPath
+// hands the path out for showing, not for running.
 //
 // PATH decides first, so whichever copy the user's own shell would run is the
 // one we run too. Windows then falls back to the directories the installers
@@ -66,6 +67,13 @@ func lookupBinary(name string) (string, error) {
 	}
 
 	return "", &BinaryNotFoundError{Name: name, Dirs: dirs}
+}
+
+// BinaryPath is the executable an AI CLI name resolves to, for telling a user
+// which of the installs on the machine is the one Pockode runs. To run it, use
+// Command.
+func BinaryPath(name string) (string, error) {
+	return lookupBinary(name)
 }
 
 // Command builds the exec.Cmd that runs an AI CLI.

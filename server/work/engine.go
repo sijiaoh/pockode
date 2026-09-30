@@ -392,7 +392,7 @@ const childQuestionLimitComment = "Stopped automatically: a subtask of this stor
 // to the user because signing in is theirs to do, and the failed turn in the
 // work's chat is where the way to sign in is.
 const authFailedComment = "Stopped automatically: the agent's CLI couldn't authenticate, so every further turn " +
-	"would fail the same way. Sign in to the CLI — from the failed turn in this work's chat, or Settings → CLI sign-in — " +
+	"would fail the same way. Sign in to the CLI — from the failed turn in this work's chat, or Settings → AI CLIs — " +
 	"then restart the work."
 
 // HandleTurnEnded is the engine's main input: a turn of this session has ended

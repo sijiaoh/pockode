@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/pockode/server/agentrole"
 	"github.com/pockode/server/cliauth"
+	"github.com/pockode/server/cliupdate"
 	"github.com/pockode/server/command"
 	"github.com/pockode/server/filetransfer"
 	"github.com/pockode/server/logger"
@@ -56,9 +57,11 @@ type RPCHandler struct {
 	agentRoleListWatcher *watch.AgentRoleListWatcher
 	cliAuth              *cliauth.Service
 	cliLoginWatcher      *watch.CLILoginWatcher
+	cliUpdate            *cliupdate.Service
+	cliUpdateWatcher     *watch.CLIUpdateWatcher
 }
 
-func NewRPCHandler(password string, sessions SessionStore, version string, devMode bool, commandStore *command.Store, worktreeManager *worktree.Manager, settingsStore *settings.Store, workStore work.Store, workOps *work.Operations, workEngine *work.Engine, agentRoleStore agentrole.Store, cliAuth *cliauth.Service) *RPCHandler {
+func NewRPCHandler(password string, sessions SessionStore, version string, devMode bool, commandStore *command.Store, worktreeManager *worktree.Manager, settingsStore *settings.Store, workStore work.Store, workOps *work.Operations, workEngine *work.Engine, agentRoleStore agentrole.Store, cliAuth *cliauth.Service, cliUpdate *cliupdate.Service) *RPCHandler {
 	settingsWatcher := watch.NewSettingsWatcher(settingsStore)
 	settingsWatcher.Start()
 
@@ -85,6 +88,9 @@ func NewRPCHandler(password string, sessions SessionStore, version string, devMo
 	cliLoginWatcher := watch.NewCLILoginWatcher(cliAuth)
 	cliLoginWatcher.Start()
 
+	cliUpdateWatcher := watch.NewCLIUpdateWatcher(cliUpdate)
+	cliUpdateWatcher.Start()
+
 	return &RPCHandler{
 		password:             password,
 		sessions:             sessions,
@@ -103,6 +109,8 @@ func NewRPCHandler(password string, sessions SessionStore, version string, devMo
 		agentRoleListWatcher: agentRoleListWatcher,
 		cliAuth:              cliAuth,
 		cliLoginWatcher:      cliLoginWatcher,
+		cliUpdate:            cliUpdate,
+		cliUpdateWatcher:     cliUpdateWatcher,
 	}
 }
 
@@ -113,6 +121,7 @@ func (h *RPCHandler) Stop() {
 	h.workDetailWatcher.Stop()
 	h.agentRoleListWatcher.Stop()
 	h.cliLoginWatcher.Stop()
+	h.cliUpdateWatcher.Stop()
 }
 
 // clientCompression negotiates permessage-deflate with the browser.
@@ -447,6 +456,21 @@ func (h *rpcMethodHandler) Handle(ctx context.Context, conn *jsonrpc2.Conn, req 
 		return
 	case "cli_auth.login.unsubscribe":
 		h.handleWatcherUnsubscribe(ctx, conn, req, h.cliLoginWatcher, "cli auth login")
+		return
+	case "cli_update.check":
+		h.handleCLIUpdateCheck(ctx, conn, req)
+		return
+	case "cli_update.start":
+		h.handleCLIUpdateStart(ctx, conn, req)
+		return
+	case "cli_update.dismiss":
+		h.handleCLIUpdateDismiss(ctx, conn, req)
+		return
+	case "cli_update.subscribe":
+		h.handleCLIUpdateSubscribe(ctx, conn, req)
+		return
+	case "cli_update.unsubscribe":
+		h.handleWatcherUnsubscribe(ctx, conn, req, h.cliUpdateWatcher, "cli update")
 		return
 	case "settings.subscribe":
 		h.handleSettingsSubscribe(ctx, conn, req)

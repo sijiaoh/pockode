@@ -18,8 +18,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"regexp"
-	"strings"
 	"sync"
 	"time"
 
@@ -46,6 +44,9 @@ const (
 	// StateSigningIn is a CLI with a sign-in running; LoginID names it. Its
 	// credentials are not read meanwhile: the sign-in may be writing them.
 	StateSigningIn State = "signing_in"
+	// StateUpdating is a CLI being updated; UpdateID names the update. It is
+	// not run meanwhile: its files are being replaced. See BeginUpdate.
+	StateUpdating State = "updating"
 	// StateUnavailable is a status that could not be read. It is never folded
 	// into StateSignedOut: guessing the benign state would send the user into a
 	// sign-in that cannot fix whatever is actually wrong.
@@ -67,6 +68,8 @@ type Status struct {
 	Error string `json:"error,omitempty"`
 	// LoginID is the running sign-in, with StateSigningIn.
 	LoginID string `json:"login_id,omitempty"`
+	// UpdateID is the running update, with StateUpdating.
+	UpdateID string `json:"update_id,omitempty"`
 }
 
 // Account is what a signed-in CLI reports about whom it is signed in as. Every
@@ -172,17 +175,21 @@ type Service struct {
 	// A channel rather than a sync.Mutex so that waiting for it can be given up
 	// on: a caller whose client has gone must not stay queued behind a sign-out.
 	//
-	// A running sign-in holds its CLI's lock throughout; see runLogin.
+	// A running sign-in holds its CLI's lock throughout (see runLogin), and so
+	// does a running update (see BeginUpdate).
 	cliLocks map[session.AgentType]chan struct{}
 
-	// loginsMu guards logins, loginStarted, closed and every loginFlow's state.
+	// loginsMu guards logins, updating, busyStarted, closed and every
+	// loginFlow's state.
 	loginsMu sync.Mutex
 	// logins is each CLI's latest sign-in, running or ended.
 	logins map[session.AgentType]*loginFlow
-	// loginStarted is closed, and replaced, when a sign-in starts on the CLI:
-	// what waits for the CLI's lock has to learn that it is now a sign-in's,
+	// updating is the id of each CLI's running update.
+	updating map[session.AgentType]string
+	// busyStarted is closed, and replaced, when a sign-in or an update starts
+	// on the CLI: what waits for the CLI's lock has to learn that it is now
 	// held for minutes, rather than wait for it.
-	loginStarted   map[session.AgentType]chan struct{}
+	busyStarted    map[session.AgentType]chan struct{}
 	loginListeners []LoginListener
 	closed         bool
 	// baseCtx ends every sign-in, status read and sign-out; Close cancels it.
@@ -206,7 +213,8 @@ func NewService(log *slog.Logger) *Service {
 		providers:    make(map[session.AgentType]Provider),
 		cliLocks:     make(map[session.AgentType]chan struct{}),
 		logins:       make(map[session.AgentType]*loginFlow),
-		loginStarted: make(map[session.AgentType]chan struct{}),
+		updating:     make(map[session.AgentType]string),
+		busyStarted:  make(map[session.AgentType]chan struct{}),
 		baseCtx:      baseCtx,
 		cancelBase:   cancelBase,
 		loginTimeout: LoginTimeout,
@@ -219,15 +227,15 @@ func (s *Service) Register(agentType session.AgentType, p Provider) {
 	if _, ok := s.providers[agentType]; !ok {
 		s.agents = append(s.agents, agentType)
 		s.cliLocks[agentType] = make(chan struct{}, 1)
-		s.loginStarted[agentType] = make(chan struct{})
+		s.busyStarted[agentType] = make(chan struct{})
 	}
 	s.providers[agentType] = p
 }
 
 // Statuses reads every registered CLI at once, or only agentType when it is not
-// empty. A CLI whose read failed is in the list as StateUnavailable, and one
-// with a sign-in running as StateSigningIn; the only errors are ErrUnknownAgent
-// and ErrShuttingDown.
+// empty. A CLI whose read failed is in the list as StateUnavailable, one with
+// a sign-in running as StateSigningIn, and one being updated as StateUpdating;
+// the only errors are ErrUnknownAgent and ErrShuttingDown.
 func (s *Service) Statuses(ctx context.Context, agentType session.AgentType) ([]Status, error) {
 	agents := s.agents
 	if agentType != "" {
@@ -248,16 +256,25 @@ func (s *Service) Statuses(ctx context.Context, agentType session.AgentType) ([]
 	var wg sync.WaitGroup
 	for i, t := range agents {
 		wg.Go(func() {
-			statuses[i] = s.withVersion(ctx, t, func() Status {
-				unlock, loginID, err := s.lockUnlessSigningIn(ctx, t)
-				if err != nil {
-					return ErrorStatus(err)
-				}
-				if loginID != "" {
-					return Status{State: StateSigningIn, LoginID: loginID}
-				}
-				defer unlock()
+			// The version is read under the lock too, though it touches no
+			// credentials: an update takes the lock before it replaces the
+			// CLI's files, and must not do so under a --version still running.
+			// A CLI that is busy, or whose lock could not be had, answers
+			// without one.
+			unlock, busy, err := s.lockUnlessBusy(ctx, t)
+			switch {
+			case err != nil:
+				statuses[i] = ErrorStatus(err)
+			case busy != nil:
+				statuses[i] = *busy
+			}
+			if unlock == nil {
+				statuses[i].Agent = t
+				return
+			}
+			defer unlock()
 
+			statuses[i] = s.withVersion(ctx, t, func() Status {
 				st, err := s.providers[t].Status(ctx)
 				if err != nil {
 					s.logReadFailure(ctx, t, err)
@@ -286,11 +303,14 @@ func (s *Service) Logout(ctx context.Context, agentType session.AgentType) (Stat
 	}
 	defer end()
 
-	unlock, loginID, err := s.lockUnlessSigningIn(ctx, agentType)
+	unlock, busy, err := s.lockUnlessBusy(ctx, agentType)
 	if err != nil {
 		return Status{}, err
 	}
-	if loginID != "" {
+	if busy != nil {
+		if busy.State == StateUpdating {
+			return Status{}, updatingError(agentType)
+		}
 		return Status{}, fmt.Errorf("a sign-in to %s is in progress; cancel it before signing out", agentType)
 	}
 	defer unlock()
@@ -339,11 +359,11 @@ func (s *Service) beginCommand(ctx context.Context) (context.Context, func(), er
 // docs/code/cli-auth.md.
 const lockWaitTimeout = 20 * time.Second
 
-// lockForLogin takes agentType's lock for a sign-in, waiting until ctx is done.
-// lockWaitTimeout is not for it: that bounds a request someone is waiting on,
-// and a sign-in has a deadline and a Cancel of its own. Queued behind a slow
-// Codex read, it would otherwise fail as "another command was running".
-func (s *Service) lockForLogin(ctx context.Context, agentType session.AgentType) (unlock func(), err error) {
+// lockUntilDone takes agentType's lock for a sign-in or an update, waiting
+// until ctx is done. lockWaitTimeout is not for them: that bounds a request
+// someone is waiting on, and each has a deadline of its own. Queued behind a
+// slow Codex read, one would otherwise fail as "another command was running".
+func (s *Service) lockUntilDone(ctx context.Context, agentType session.AgentType) (unlock func(), err error) {
 	l := s.cliLocks[agentType]
 	select {
 	case l <- struct{}{}:
@@ -353,45 +373,114 @@ func (s *Service) lockForLogin(ctx context.Context, agentType session.AgentType)
 	}
 }
 
-// lockUnlessSigningIn takes agentType's lock, or gives up after
-// lockWaitTimeout or when ctx is done, whichever comes first — unless a
-// sign-in is running on the CLI, or starts while this waits: that holds the
-// lock for minutes, so its id is returned instead, and no lock.
-func (s *Service) lockUnlessSigningIn(ctx context.Context, agentType session.AgentType) (unlock func(), loginID string, err error) {
+// lockUnlessBusy takes agentType's lock, or gives up after lockWaitTimeout or
+// when ctx is done, whichever comes first — unless a sign-in or an update is
+// running on the CLI, or starts while this waits: that holds the lock for
+// minutes, so the status it leaves the CLI in is returned instead, and no lock.
+func (s *Service) lockUnlessBusy(ctx context.Context, agentType session.AgentType) (unlock func(), busy *Status, err error) {
 	l := s.cliLocks[agentType]
 	timer := time.NewTimer(lockWaitTimeout)
 	defer timer.Stop()
 	for {
 		s.loginsMu.Lock()
-		running := s.runningLogin(agentType)
-		started := s.loginStarted[agentType]
-		if running != nil {
-			loginID = running.login.ID
-		}
+		busy = s.busyStatus(agentType)
+		started := s.busyStarted[agentType]
 		s.loginsMu.Unlock()
-		if loginID != "" {
-			return nil, loginID, nil
+		if busy != nil {
+			return nil, busy, nil
 		}
 
 		select {
 		case l <- struct{}{}:
-			return func() { <-l }, "", nil
+			return func() { <-l }, nil, nil
 		case <-started:
 		case <-timer.C:
-			return nil, "", lockTimeoutError(agentType)
+			return nil, nil, lockTimeoutError(agentType)
 		case <-ctx.Done():
-			return nil, "", ctx.Err()
+			return nil, nil, ctx.Err()
 		}
 	}
+}
+
+// busyStatus is agentType's status while a sign-in or an update holds it, or
+// nil. Callers hold loginsMu.
+func (s *Service) busyStatus(agentType session.AgentType) *Status {
+	if id := s.updating[agentType]; id != "" {
+		return &Status{State: StateUpdating, UpdateID: id}
+	}
+	if f := s.runningLogin(agentType); f != nil {
+		return &Status{State: StateSigningIn, LoginID: f.login.ID}
+	}
+	return nil
+}
+
+// markBusy wakes whatever waits for agentType's lock, which a sign-in or an
+// update has just taken over. Callers hold loginsMu.
+func (s *Service) markBusy(agentType session.AgentType) {
+	close(s.busyStarted[agentType])
+	s.busyStarted[agentType] = make(chan struct{})
+}
+
+// ErrUpdating is a sign-in or a sign-out asked for while the CLI is being
+// updated.
+var ErrUpdating = errors.New("is being updated")
+
+func updatingError(agentType session.AgentType) error {
+	return fmt.Errorf("%s %w; try again once the update has finished", agentType, ErrUpdating)
+}
+
+// BeginUpdate reserves agentType for an update, whose id is updateID. From now
+// until end is called, status reads answer StateUpdating without running the
+// CLI, and sign-ins and sign-outs are refused: the CLI's files are being
+// replaced under them. An update is refused in turn while a sign-in is
+// running, since that sign-in's process is the binary the update replaces.
+//
+// wait takes the CLI's lock, which a status read or a sign-out already running
+// may still hold; the update runs the CLI only once it has returned. end
+// releases the lock, if wait took it, and the reservation. It is called once.
+func (s *Service) BeginUpdate(agentType session.AgentType, updateID string) (wait func(context.Context) error, end func(), err error) {
+	if _, ok := s.providers[agentType]; !ok {
+		return nil, nil, fmt.Errorf("%w: %q", ErrUnknownAgent, agentType)
+	}
+	s.loginsMu.Lock()
+	defer s.loginsMu.Unlock()
+	if s.closed {
+		return nil, nil, ErrShuttingDown
+	}
+	if busy := s.busyStatus(agentType); busy != nil {
+		if busy.State == StateUpdating {
+			return nil, nil, fmt.Errorf("%s %w", agentType, ErrUpdating)
+		}
+		return nil, nil, fmt.Errorf("a sign-in to %s is in progress; finish or cancel it before updating", agentType)
+	}
+	s.updating[agentType] = updateID
+	s.markBusy(agentType)
+
+	var unlock func()
+	wait = func(ctx context.Context) error {
+		u, err := s.lockUntilDone(ctx, agentType)
+		unlock = u
+		return err
+	}
+	end = func() {
+		if unlock != nil {
+			unlock()
+		}
+		s.loginsMu.Lock()
+		delete(s.updating, agentType)
+		s.loginsMu.Unlock()
+	}
+	return wait, end, nil
 }
 
 func lockTimeoutError(agentType session.AgentType) error {
 	return fmt.Errorf("another %s sign-in command was still running after %s; try again", agentType, lockWaitTimeout)
 }
 
-// withVersion runs read while the CLI's version is asked for alongside it —
-// `--version` touches no credentials, so it needs no lock — and stamps both the
-// agent and the version on what read returns.
+// withVersion runs read while the CLI's version is asked for alongside it, and
+// stamps both the agent and the version on what read returns. Callers hold the
+// CLI's lock until it returns: `--version` touches no credentials, but an
+// update must not replace the CLI while it runs.
 func (s *Service) withVersion(ctx context.Context, agentType session.AgentType, read func() Status) Status {
 	var version string
 	var versions sync.WaitGroup
@@ -432,21 +521,10 @@ func ExternalStatus(ext External) Status {
 	return Status{State: StateExternal, External: &ext}
 }
 
-// versionTimeout bounds `<cli> --version`, which prints a constant and reaches
-// nothing; a CLI that takes longer is one whose version is not worth waiting for.
-const versionTimeout = 10 * time.Second
-
-// versionPattern finds the version in what `--version` prints: "2.1.283 (Claude
-// Code)" and "codex-cli 0.153.0" as of the versions this was written against.
-var versionPattern = regexp.MustCompile(`\d+\.\d+[0-9A-Za-z.+-]*`)
-
 // version is best effort: the version is there to help explain a failure, and
 // not knowing it must not become one. Why it is missing goes to the log.
 func (s *Service) version(ctx context.Context, binary string) string {
-	ctx, cancel := context.WithTimeout(ctx, versionTimeout)
-	defer cancel()
-
-	res, err := agent.Run(ctx, s.log, binary, "", "--version")
+	version, err := agent.Version(ctx, s.log, binary)
 	if err != nil {
 		var notFound *agent.BinaryNotFoundError
 		if !errors.As(err, &notFound) && !errors.Is(err, context.Canceled) {
@@ -454,25 +532,7 @@ func (s *Service) version(ctx context.Context, binary string) string {
 		}
 		return ""
 	}
-	if res.ExitCode != 0 {
-		s.log.Warn("AI CLI version command failed", "cli", binary, "exitCode", res.ExitCode, "stderr", LastLine(res.Stderr))
-		return ""
-	}
-	return parseVersion(res.Stdout)
-}
-
-// parseVersion picks the version number out of what a CLI's `--version`
-// printed, or returns "" when there is none.
-func parseVersion(out string) string {
-	return versionPattern.FindString(out)
-}
-
-// LastLine is the last non-blank line of a CLI's output, trimmed. A CLI that
-// fails says why on its last line, after whatever progress it printed first,
-// which makes this the part worth showing a user.
-func LastLine(out string) string {
-	lines := strings.Split(strings.TrimSpace(out), "\n")
-	return strings.TrimSpace(lines[len(lines)-1])
+	return version
 }
 
 // TimeoutError turns a deadline that ran out into a sentence naming what did not

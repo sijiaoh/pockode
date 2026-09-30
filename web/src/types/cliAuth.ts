@@ -9,6 +9,7 @@ export type CliAuthState =
 	| "external"
 	| "not_installed"
 	| "signing_in"
+	| "updating"
 	| "unavailable";
 
 export interface CliAccount {
@@ -45,6 +46,8 @@ export interface CliAuthStatus {
 	error?: string;
 	/** signing_in: the running sign-in */
 	login_id?: string;
+	/** updating: the running update. Nothing else is read meanwhile. */
+	update_id?: string;
 }
 
 export type CliAccountKind = "claude_ai" | "console";

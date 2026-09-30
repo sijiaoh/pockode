@@ -362,7 +362,7 @@ func (c *authClient) exitError(method string) error {
 	case stderr = <-c.stderr:
 	case <-time.After(agent.StderrReadTimeout):
 	}
-	if line := cliauth.LastLine(stderr); line != "" {
+	if line := agent.LastLine(stderr); line != "" {
 		return fmt.Errorf("codex app-server exited before answering %s: %s", method, line)
 	}
 	return fmt.Errorf("codex app-server exited before answering %s", method)

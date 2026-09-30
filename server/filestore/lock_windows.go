@@ -27,6 +27,14 @@ func lockFile(f *os.File, exclusive bool) error {
 	return windows.LockFileEx(windows.Handle(f.Fd()), flags, 0, allBytes, allBytes, new(windows.Overlapped))
 }
 
+// errWouldBlock is what tryLockFile fails with when the lock is held.
+var errWouldBlock = windows.ERROR_LOCK_VIOLATION
+
+func tryLockFile(f *os.File) error {
+	flags := uint32(windows.LOCKFILE_EXCLUSIVE_LOCK | windows.LOCKFILE_FAIL_IMMEDIATELY)
+	return windows.LockFileEx(windows.Handle(f.Fd()), flags, 0, allBytes, allBytes, new(windows.Overlapped))
+}
+
 func unlockFile(f *os.File) error {
 	// The unlocked range must match the locked one exactly.
 	return windows.UnlockFileEx(windows.Handle(f.Fd()), 0, allBytes, allBytes, new(windows.Overlapped))

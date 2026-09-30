@@ -1,6 +1,7 @@
 package filestore
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -50,4 +51,29 @@ func (l *fileLock) release() {
 	if err := l.f.Close(); err != nil {
 		slog.Error("filestore failed to close lock file", "path", l.f.Name(), "error", err)
 	}
+}
+
+// ErrLocked is TryLock finding the lock held by someone else.
+var ErrLocked = errors.New("lock is held by another holder")
+
+// TryLock takes an exclusive lock on the file at path, creating it if needed,
+// or fails at once with ErrLocked when anyone else holds it — another process,
+// or another handle in this one. It is for work that must run once per machine
+// and should be refused rather than queued: the OS drops the lock with the
+// process, so a holder that crashed never leaves it behind the way a PID file
+// would. unlock releases it.
+func TryLock(path string) (unlock func(), err error) {
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0644)
+	if err != nil {
+		return nil, fmt.Errorf("open lock file: %w", err)
+	}
+	if err := tryLockFile(f); err != nil {
+		f.Close()
+		if errors.Is(err, errWouldBlock) {
+			return nil, ErrLocked
+		}
+		return nil, fmt.Errorf("acquire exclusive lock on %s: %w", path, err)
+	}
+	l := &fileLock{f: f}
+	return l.release, nil
 }

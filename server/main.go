@@ -22,6 +22,7 @@ import (
 	"github.com/pockode/server/apiroute"
 	"github.com/pockode/server/authsession"
 	"github.com/pockode/server/cliauth"
+	"github.com/pockode/server/cliupdate"
 	"github.com/pockode/server/cluster"
 	"github.com/pockode/server/command"
 	"github.com/pockode/server/filetransfer"
@@ -388,6 +389,13 @@ Flags:
 	workOps.SetSessionDeleter(worktreeManager)
 	// A completed step withdraws the questions asked during it.
 	workOps.SetQuestionWithdrawer(worktreeManager)
+	// Updates run the CLIs' own `update` commands. The worktree manager counts
+	// the sessions still on the old version, which an update does not touch;
+	// cliAuth keeps sign-ins and an update of the same CLI apart.
+	cliUpdate := cliupdate.NewService(slog.Default(), worktreeManager, cliAuth)
+	cliUpdate.Register(session.AgentTypeClaude, claude.UpdateCLI())
+	cliUpdate.Register(session.AgentTypeCodex, codex.UpdateCLI())
+
 	if err := worktreeManager.Start(); err != nil {
 		slog.Warn("failed to start worktree manager", "error", err)
 	}
@@ -406,7 +414,7 @@ Flags:
 	mcpExecutor.SetWorkEngine(workEngine)
 	mcpHandler := mcp.NewAPIHandler(mcpExecutor, mcpToken)
 
-	wsHandler := ws.NewRPCHandler(cred.Password, sessions, version, devMode, commandStore, worktreeManager, settingsStore, workStore, workOps, workEngine, agentRoleStore, cliAuth)
+	wsHandler := ws.NewRPCHandler(cred.Password, sessions, version, devMode, commandStore, worktreeManager, settingsStore, workStore, workOps, workEngine, agentRoleStore, cliAuth, cliUpdate)
 	transferHandler := filetransfer.NewHandler(registry, slog.Default())
 	handler := newHandler(cred.Password, sessions, devMode, wsHandler, mcpHandler, transferHandler)
 
@@ -482,6 +490,9 @@ Flags:
 		wsHandler.Stop()
 		// Sign-ins end with the server; their CLIs are not left waiting.
 		cliAuth.Close()
+		// An update still running is killed rather than waited for: a download
+		// on a slow connection would hold the shutdown for minutes.
+		cliUpdate.Close()
 		if err := sessions.Flush(); err != nil {
 			slog.Error("failed to persist sessions", "error", err)
 		}

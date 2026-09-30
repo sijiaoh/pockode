@@ -150,6 +150,19 @@ describe("CliLoginSheet", () => {
 
 			expect(await screen.findByText("ABCD-12345")).toBeInTheDocument();
 		});
+
+		// The CLI's files are being replaced: nothing that runs it is offered.
+		it("starts no sign-in while the CLI is being updated", async () => {
+			server.setStatuses([
+				{ agent: "codex", state: "updating", update_id: "update-1" },
+			]);
+			render(<CliLoginSheet agent="codex" onClose={vi.fn()} />);
+
+			expect(
+				await screen.findByRole("heading", { name: "Codex is being updated" }),
+			).toBeInTheDocument();
+			expect(server.actions.cliLoginStart).not.toHaveBeenCalled();
+		});
 	});
 
 	describe("only Cancel cancels", () => {

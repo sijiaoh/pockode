@@ -15,6 +15,13 @@ func lockFile(f *os.File, exclusive bool) error {
 	return flock(f, how)
 }
 
+// errWouldBlock is what tryLockFile fails with when the lock is held.
+var errWouldBlock = syscall.EWOULDBLOCK
+
+func tryLockFile(f *os.File) error {
+	return flock(f, syscall.LOCK_EX|syscall.LOCK_NB)
+}
+
 func unlockFile(f *os.File) error {
 	return flock(f, syscall.LOCK_UN)
 }

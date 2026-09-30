@@ -177,7 +177,7 @@ func parseAuthStatus(res agent.RunResult) (cliauth.Status, error) {
 // status` prints on stdout is its JSON, account details included, and a reason
 // becomes an error that is logged.
 func statusFailureReason(res agent.RunResult) string {
-	if line := cliauth.LastLine(res.Stderr); line != "" {
+	if line := agent.LastLine(res.Stderr); line != "" {
 		return line
 	}
 	return fmt.Sprintf("exit status %d", res.ExitCode)
@@ -198,10 +198,10 @@ func signedIn(st authStatus) cliauth.Status {
 // line ("Logout failed: ..."), falling back to stdout and then to the bare exit
 // status.
 func failureReason(res agent.RunResult) string {
-	if line := cliauth.LastLine(res.Stderr); line != "" {
+	if line := agent.LastLine(res.Stderr); line != "" {
 		return line
 	}
-	if line := cliauth.LastLine(res.Stdout); line != "" {
+	if line := agent.LastLine(res.Stdout); line != "" {
 		return line
 	}
 	return fmt.Sprintf("exit status %d", res.ExitCode)
