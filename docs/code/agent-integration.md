@@ -875,16 +875,17 @@ their on-disk index, and resolving a session never builds a worktree.
 ## Posted Questions
 
 An agent can ask the user something **without stopping for the answer**:
-`question_post` records one question and returns straight away with a
-`request_id`. The answer — or the user's refusal to answer — arrives later as an
-ordinary message, in a turn of its own, possibly long after the turn that asked
-has ended. This is a different thing from the CLIs' own blocking prompt
-(`ask_user_question`), which holds the tool call open and dies with the process —
-and which no longer reaches a user at all ([Refusing the CLIs' Own
+`question_post` records the questions it is given and returns straight away with
+a `request_id` for each. Each answer — or the user's refusal to answer — arrives
+later as an ordinary message, in a turn of its own, possibly long after the turn
+that asked has ended. This is a different thing from the CLIs' own blocking
+prompt (`ask_user_question`), which holds the tool call open and dies with the
+process — and which no longer reaches a user at all ([Refusing the CLIs' Own
 Question](#refusing-the-clis-own-question)).
 
 **A posted question is state, its asking is a record, and the two must not be
-confused.** The pair is written by `chat.Client.PostQuestion`:
+confused.** The pair is written by `chat.Client.PostQuestions`, once per
+question:
 
 | | Where | What it says |
 |---|---|---|
@@ -912,11 +913,87 @@ which lets an agent leave `session_id` out while exactly one session is waiting
 and refuses the call the moment more than one is
 ([work-system.md](work-system.md#question-tools)).
 
-**One question per call, one `request_id` per question.** An answer names a
+**Several questions per call, one `request_id` per question.** An answer names a
 question, and so does a refusal to answer one, so a record covering three
 questions leaves "I will not answer the second" with no subject. Older
 transcripts hold `ask_user_question` records carrying several at once; they came
 from the CLI's blocking prompt.
+
+### Asking several at once
+
+`question_post` takes `questions[]`, at least one and with no upper bound. When it
+took one question per call, an agent with three related questions made three
+calls seconds apart; the panel came up on the first, the user answered what was
+in front of them and sent it, and the result was two answer messages and two
+turns for the agent.
+
+**A batch is how questions arrive, not a new unit of answering.** Each question
+gets its own `request_id`, its own `question_posted` record and its own entry in
+`Unanswered`, and is answered, declined and withdrawn on its own — by the user
+or by another agent. So every reader of the session state (the panel, the
+counts, the work detail, fork inheritance, the question index) and every
+operation on a question is exactly what it was, and "one record, one request id"
+still holds. Nothing records which call a question came in; the panel draws no
+grouping either, because the user answers questions, not calls.
+
+**Order is carried by what already exists, and by nothing new.** A batch shares
+one `asked_at` — it was asked at one moment — so the time cannot order it. The
+order is the order of writing: `Unanswered` is appended to and never re-sorted,
+and the records take consecutive history seqs, so both carry the `questions[]`
+order; a fork rebuilds its list from the records in that same order. A batch
+index beside them would be the same fact written twice. `chat.Client.postMu`
+takes `PostQuestions` calls one at a time, because a model can make two calls in
+parallel and their questions would otherwise interleave in both.
+Every reader keeps the order it is handed — none sorts by `asked_at`.
+
+**A batch that fails part way keeps what it posted.** Those questions are being
+asked; the error names each one by header and `request_id` and says the rest
+were not posted, so the agent does not ask them a second time. The work layer is
+told about the posted ones either way, in one call
+(`work.Engine.HandleQuestionsPosted`), and a story or a watcher hears about one
+call's questions in **one** message — a message each would hand it one turn per
+question, the same problem moved between agents
+([work-system.md](work-system.md#input-4-a-subtasks-question-reaches-its-story)).
+
+**Refused only when the answer would come back wrong.** A refusal costs a round
+trip for the model and a longer wait for the user, so `mcp.questionSpecs`
+refuses only what would make an answer ambiguous or the form contradict itself,
+each with the offending `questions[i]` and how to fix it:
+
+| Refused | Because |
+|---|---|
+| `questions` empty or missing | there is nothing to ask |
+| empty `question` or `header` (whitespace counts as empty) | there is nothing to answer; the header is the card's title, and without it the user cannot tell the waiting questions apart |
+| an empty option label, or two equal labels in one question | an answer names the label it picked |
+| two questions in one call with the same text (after trimming) | an answer is sent back quoting its question (`Q: …`), so the two answers could not be told apart |
+| `multi_select` with no options | the agent believes it is offering a choice; a free-text box in its place is a quiet disagreement |
+
+**Everything else about a good question is guidance, with no limit behind it.**
+No cap on the number of questions (a cap only pushes the rest into a second call,
+which is the problem above), on the number of options ("which of these 12 files
+should go" is a fair question), on header or label length (labels are often file
+paths or branch names, and a word count means nothing in Chinese or Japanese), and
+no refusal of a single option (beside Other and "don't answer" it reads as "this,
+or tell me otherwise") or of an option the agent named "Other" (one extra row, and
+not reliably recognisable across languages). Size is bounded only by the MCP
+request body limit. The UI's half of this is that nothing it is given breaks the
+layout: long headers and labels wrap, and a long list scrolls inside the panel's
+body ([answering-ui.md](../answering-ui.md#3-the-answer-panel)).
+`TestQuestionPost_AcceptsWhatOnlyGuidanceGoverns` holds the list.
+
+**When and how to ask is written in one place: the `question_post` description.**
+It is the one text every session reads — a plain chat gets no system prompt, and
+Claude and Codex both read tool descriptions — so it carries when to ask (only a
+decision that is the user's and changes what happens next; look things up
+first; take conventional defaults; never ask for permission or "shall I
+continue?"), how (everything in one call, early; each question readable alone
+in a panel over the chat, often on a phone and much later; options for a known
+set, free text otherwise; no "Other" of the agent's own), and what never to do
+(multiple choice in reply text, asking for secrets). The lifecycle prompt points
+at it rather than repeating it ([work-system.md](work-system.md#prompt-format)).
+Its property descriptions state purpose and never a number: a number in a
+description reads to a model as a limit, which is exactly what the table above
+declines to set.
 
 ### Retired: the paths this replaced
 

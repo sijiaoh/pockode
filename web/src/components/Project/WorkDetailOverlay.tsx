@@ -426,7 +426,9 @@ function PendingQuestionsSection({
 						key={question.request_id}
 						className="rounded-lg bg-th-bg-secondary px-3 py-2"
 					>
-						<span className="inline-block rounded bg-th-accent/20 px-1.5 py-0.5 text-xs text-th-text-primary">
+						{/* `max-w-full` because an inline-block sizes to its longest
+						    word, and `break-words` only breaks one that is held in. */}
+						<span className="inline-block max-w-full break-words rounded bg-th-accent/20 px-1.5 py-0.5 text-xs text-th-text-primary">
 							{question.header}
 						</span>
 						{/* Markdown, as the answer panel draws the same question

@@ -37,4 +37,34 @@ describe("QuestionForm", () => {
 		// left as the characters the agent will get back.
 		expect(screen.getByRole("radio", { name: /\*\*Redis\*\*/ })).toBeVisible();
 	});
+
+	// Neither a header nor a label has a length limit, and jsdom lays nothing
+	// out, so what keeps a long one inside the panel is read off its classes:
+	// each sits in a box allowed to shrink, and breaks a word too long to fit.
+	it("wraps a long header and a long option label rather than widening", () => {
+		const header = "H".repeat(200);
+		const label = "L".repeat(300);
+		render(
+			<QuestionForm
+				question={{
+					question: "Pick one",
+					header,
+					options: [{ label, description: "" }],
+					multiSelect: false,
+				}}
+				askedAt="2026-01-02T14:02:00Z"
+				name="q1"
+				selection={EMPTY_SELECTION}
+				disabled={false}
+				onSelectOption={noop}
+				onSelectOther={noop}
+				onOtherTextChange={noop}
+			/>,
+		);
+
+		expect(screen.getByText(header)).toHaveClass("min-w-0", "break-words");
+		const labelText = screen.getByText(label);
+		expect(labelText).toHaveClass("break-words");
+		expect(labelText.parentElement).toHaveClass("min-w-0", "flex-1");
+	});
 });

@@ -31,7 +31,12 @@ func TestBuildKickoffMessage_Task(t *testing.T) {
 	assertContains(t, msg, "task-1", "work ID")
 	assertContains(t, msg, "agent role", "agent-role-driven lifecycle instruction")
 	assertContains(t, msg, "`step_done` with ID task-1", "step_done instruction")
-	assertContains(t, msg, "`question_post` is how you ask", "how to reach the user")
+	assertContains(t, msg, "Ask with `question_post`", "how to reach the user")
+	// How to ask is question_post's description, which every session reads;
+	// the lifecycle rules keep only what Pockode does around a question.
+	if strings.Contains(msg, "only way to ask") || strings.Contains(msg, "ask-the-user tool") {
+		t.Error("task message repeats the question_post description")
+	}
 
 	if strings.Contains(msg, "COORDINATOR") {
 		t.Error("task message should not contain story coordination rules")
@@ -99,20 +104,13 @@ func TestLifecycleRules_QuoteTheLimitsTheServerActuallyKeeps(t *testing.T) {
 	assertContains(t, msg, "after "+strconv.Itoa(DefaultMaxNudges)+" of those in a row", "the nudge allowance")
 }
 
-// The two things an agent can only learn from the prompt, because nothing in
-// either tool's own description says them: that its CLI's own ask-the-user tool
-// is refused here, and that ending a turn with a posted question outstanding is
-// not the accident an ordinary quiet ending is.
-//
-// The first is worth saying even though the model cannot see that tool in a
-// Claude session — buildArgs takes it off the list — because the refusal is what
-// happens if a CLI ever stops honouring the flag, and because Codex's
-// counterpart is refused at the protocol rather than hidden.
+// The one thing about asking that an agent can only learn from the prompt,
+// because it is about the work and not the tool: ending a turn with a posted
+// question outstanding is not the accident an ordinary quiet ending is.
 func TestLifecycleRules_SendLongWaitsToQuestionPost(t *testing.T) {
 	msg := BuildKickoffMessage(Work{ID: "t1", StoryID: "s1", AgentRoleID: testRoleID, Title: "T"})
 
-	assertContains(t, msg, "does not reach the user here", "that the CLI's own ask tool goes nowhere")
-	assertContains(t, msg, "question_post", "what to do instead")
+	assertContains(t, msg, "question_post", "how to ask")
 	assertContains(t, msg, "does not nudge you and does not spend your allowance",
 		"that a posted question makes an ending unsurprising")
 }
@@ -423,7 +421,7 @@ func TestEverySystemMessage_SpeaksTheCurrentVocabulary(t *testing.T) {
 		messages[prefix+" reopen"] = BuildReopenMessage(w)
 	}
 	messages["child_question"] = BuildChildQuestionMessage(story, "Child", "c1", "sess-c1",
-		session.PendingQuestion{RequestID: "req-1", Header: "Database", Question: "Which?"})
+		[]session.PendingQuestion{{RequestID: "req-1", Header: "Database", Question: "Which?"}})
 	messages["child_question_reminder"] = BuildChildQuestionReminderMessage(story, []childQuestion{
 		{ChildID: "c1", ChildTitle: "Child", SessionID: "sess-c1", RequestID: "req-1", Header: "Database", Question: "Which?"},
 	})
@@ -511,7 +509,7 @@ func TestBuildChildQuestionMessage_HandsTheStoryTheWholeQuestion(t *testing.T) {
 		MultiSelect: true,
 	}
 
-	msg := BuildChildQuestionMessage(story, "Write the parser", "c1", "sess-c1", q)
+	msg := BuildChildQuestionMessage(story, "Write the parser", "c1", "sess-c1", []session.PendingQuestion{q})
 
 	assertContains(t, msg, "Write the parser", "child title")
 	assertContains(t, msg, "Which database?", "the question itself")
@@ -531,7 +529,7 @@ func TestBuildChildQuestionMessage_HandsTheStoryTheWholeQuestion(t *testing.T) {
 	// must not point at `answers`: there is no list for a label to come from,
 	// and the server refuses one.
 	plain := BuildChildQuestionMessage(story, "Write the parser", "c1", "sess-c1",
-		session.PendingQuestion{RequestID: "req-8", Header: "Name", Question: "What name?"})
+		[]session.PendingQuestion{{RequestID: "req-8", Header: "Name", Question: "What name?"}})
 	if strings.Contains(plain, "Options:") {
 		t.Error("a question that offered nothing still printed an options line")
 	}
@@ -539,6 +537,27 @@ func TestBuildChildQuestionMessage_HandsTheStoryTheWholeQuestion(t *testing.T) {
 		t.Error("a question that offered nothing still offered the labels field")
 	}
 	assertContains(t, plain, "offered nothing to pick", "where the answer goes instead")
+}
+
+// TestBuildChildQuestionMessage_QuotesABatchInOrder: questions asked in one
+// call reach the story in one message, in the order they were asked, each with
+// its own request id.
+func TestBuildChildQuestionMessage_QuotesABatchInOrder(t *testing.T) {
+	story := Work{ID: "s1", AgentRoleID: testRoleID, Title: "S"}
+
+	msg := BuildChildQuestionMessage(story, "Write the parser", "c1", "sess-c1", []session.PendingQuestion{
+		{RequestID: "req-1", Header: "Database", Question: "Which database?",
+			Options: []session.QuestionOption{{Label: "Postgres"}, {Label: "SQLite"}}},
+		{RequestID: "req-2", Header: "Name", Question: "What name?"},
+	})
+
+	assertContains(t, msg, "2 questions", "how many were asked")
+	first, second := strings.Index(msg, "req-1"), strings.Index(msg, "req-2")
+	if first < 0 || second < 0 || first > second {
+		t.Errorf("request ids at %d and %d, want both, in the order asked", first, second)
+	}
+	assertContains(t, msg, "Postgres | SQLite", "the first question's options")
+	assertContains(t, msg, "`answers`", "the labels field, since one question offered options")
 }
 
 // The subtask-question rules are a story's: only a story has subtasks that
@@ -560,7 +579,7 @@ func TestBuildChildQuestionMessage_DoesNotOfferToLeaveIt(t *testing.T) {
 	story := Work{ID: "s1", AgentRoleID: testRoleID, Title: "S"}
 
 	msg := BuildChildQuestionMessage(story, "Write the parser", "c1", "sess-c1",
-		session.PendingQuestion{RequestID: "req-7", Header: "Database", Question: "Which database?"})
+		[]session.PendingQuestion{{RequestID: "req-7", Header: "Database", Question: "Which database?"}})
 
 	if strings.Contains(msg, "or leave it") {
 		t.Error("the story is still told it may leave its subtask's question")

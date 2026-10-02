@@ -9,7 +9,7 @@ import "time"
 // cannot import it, and the question a *session* is holding is not the question
 // an agent CLI raised — one is Pockode's own state, the other is a frame parsed
 // out of a subprocess. The conversion is one line, in the one place that posts a
-// question (chat.Client.PostQuestion).
+// question (chat.Client.PostQuestions).
 type QuestionOption struct {
 	Label       string `json:"label"`
 	Description string `json:"description,omitempty"`
@@ -43,7 +43,8 @@ type PendingQuestion struct {
 	// options, and refused there rather than silently ignored (see the
 	// question_post tool).
 	MultiSelect bool `json:"multi_select,omitempty"`
-	// AskedAt is when the question was posted, which is what orders the list
-	// (oldest first) and what a card prints.
+	// AskedAt is when the question was posted, which is what a card prints. It
+	// does not order the list: questions asked in one call share it, and the
+	// list keeps the order they were appended in.
 	AskedAt time.Time `json:"asked_at"`
 }

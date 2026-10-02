@@ -75,8 +75,8 @@ const DefaultMaxNudges = 3
 //   - HandleUserMessage — the user handed the session something to go on.
 //   - HandleAnswer — questions the agent had posted were answered, by the user
 //     or by another agent.
-//   - HandleQuestionPosted — this session's agent posted a question, which the
-//     story above it may be able to answer, or — a story's own question — the
+//   - HandleQuestionsPosted — this session's agent posted questions, which the
+//     story above it may be able to answer, or — a story's own questions — the
 //     session watching the story may.
 //   - OnWorkChange (a child leaving active) — a subtask finished, or stopped
 //     being something its parent's wait could be waiting for. A watched story
@@ -687,13 +687,17 @@ func (e *Engine) HandleAnswer(sessionID string) {
 
 // --- Input 4: an agent posted a question ---
 
-// HandleQuestionPosted passes a subtask's question up to the story above it.
+// HandleQuestionsPosted passes a subtask's questions up to the story above it.
 //
 // A story knows things its subtasks do not — what it decided, what a sibling
 // already settled, what the user told it an hour ago — so a subtask asking
 // "which database?" is often a question the story can simply answer, and the
 // user never has to be interrupted at all. The story decides: it answers with
 // question_answer, or asks the user itself with question_post.
+//
+// qs are the questions one question_post call asked, and they travel as one
+// message: they were asked together so that whoever answers takes them in at
+// once, and a message each would hand the story one turn per question.
 //
 // What this deliberately does *not* do is clear the parent's `child` wait. That
 // wait is ended by a subtask closing and nothing else; a subtask asking a
@@ -703,12 +707,12 @@ func (e *Engine) HandleAnswer(sessionID string) {
 // notifyParentOfChild, which does clear it, because there the thing the wait
 // was for has happened.
 //
-// A story's own question goes to the session watching it, if one is: it
-// started the story and may know what the story is asking. A task's question
-// never does — the watcher asked about the story, and the story is the one a
+// A story's own questions go to the session watching it, if one is: it
+// started the story and may know what the story is asking. A task's questions
+// never do — the watcher asked about the story, and the story is the one a
 // task's question is for.
-func (e *Engine) HandleQuestionPosted(sessionID string, q session.PendingQuestion) {
-	if !e.enter() {
+func (e *Engine) HandleQuestionsPosted(sessionID string, qs []session.PendingQuestion) {
+	if len(qs) == 0 || !e.enter() {
 		return
 	}
 	defer e.leave()
@@ -720,29 +724,29 @@ func (e *Engine) HandleQuestionPosted(sessionID string, q session.PendingQuestio
 	if w.StoryID == "" {
 		if w.Watcher != nil {
 			e.goFollowUp(func() {
-				e.notifyWatcher(*w.Watcher, w, BuildWatchedStoryQuestionMessage(w, q), MessageSubtypeWatchedStoryQuestion)
+				e.notifyWatcher(*w.Watcher, w, BuildWatchedStoryQuestionMessage(w, qs), MessageSubtypeWatchedStoryQuestion)
 			})
 		}
 		return
 	}
-	e.goFollowUp(func() { e.notifyParentOfChildQuestion(w, q) })
+	e.goFollowUp(func() { e.notifyParentOfChildQuestions(w, qs) })
 }
 
-// notifyParentOfChildQuestion delivers one subtask question to its story.
+// notifyParentOfChildQuestions delivers a subtask's questions to its story.
 //
 // Nothing is retried and nothing is stopped when it cannot be delivered — a
 // stopped or closed parent, a parent whose turn is held open by a permission
 // request — and that is the difference from the two notifications below it.
 // Those two carry news a waiting parent is *owed*: the wait is cleared by them,
 // so an undelivered one leaves a work waiting for something that already
-// happened. This one clears nothing. The question stays on the subtask, where
-// the user can see it and answer it, and the parent's wait is exactly as it
-// was. Nor is an undelivered one forgotten: the question is on the subtask's
+// happened. This one clears nothing. The questions stay on the subtask, where
+// the user can see them and answer them, and the parent's wait is exactly as it
+// was. Nor is an undelivered one forgotten: the questions are on the subtask's
 // session, and the story's next turn to end is read against that live list
 // (HandleTurnEnded), so a story that never received this message is still
-// asked to settle the question. Restarting or reopening the story says the
-// same thing sooner.
-func (e *Engine) notifyParentOfChildQuestion(child Work, q session.PendingQuestion) {
+// asked to settle them. Restarting or reopening the story says the same thing
+// sooner.
+func (e *Engine) notifyParentOfChildQuestions(child Work, qs []session.PendingQuestion) {
 	parent, found, err := e.store.Get(child.StoryID)
 	if err != nil {
 		slog.Warn("failed to get parent work for a child's question", "parentId", child.StoryID, "error", err)
@@ -760,26 +764,26 @@ func (e *Engine) notifyParentOfChildQuestion(child Work, q session.PendingQuesti
 	sender, release, ok := e.resolveSender(parent.Worktree)
 	if !ok {
 		slog.Warn("could not reach a story with its subtask's question",
-			"parentId", parent.ID, "childId", child.ID, "requestId", q.RequestID)
+			"parentId", parent.ID, "childId", child.ID, "questions", len(qs))
 		return
 	}
 	defer release()
 
-	msg := BuildChildQuestionMessage(parent, child.Title, child.ID, child.SessionID, q)
+	msg := BuildChildQuestionMessage(parent, child.Title, child.ID, child.SessionID, qs)
 	meta := NewMessageMeta(parent, parent.CurrentStep+1, e.stepCount(parent))
 	meta.Child = &agent.ChildInfo{ID: child.ID, Title: child.Title}
 	if err := sender.SendSystemMessage(e.ctx, parent.SessionID, msg, MessageSubtypeChildQuestion, meta); err != nil {
 		if e.ctx.Err() != nil {
 			return
 		}
-		// Warn and stop there: the user can still answer this question, and the
-		// parent has lost nothing it was holding.
+		// Warn and stop there: the user can still answer these questions, and
+		// the parent has lost nothing it was holding.
 		slog.Warn("failed to pass a subtask's question to its story",
-			"parentId", parent.ID, "childId", child.ID, "requestId", q.RequestID, "error", err)
+			"parentId", parent.ID, "childId", child.ID, "questions", len(qs), "error", err)
 		return
 	}
 	slog.Info("subtask question passed to its story",
-		"parentId", parent.ID, "childId", child.ID, "requestId", q.RequestID)
+		"parentId", parent.ID, "childId", child.ID, "questions", len(qs))
 }
 
 // --- Input 5: a child work left active ---

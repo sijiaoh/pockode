@@ -284,34 +284,67 @@ func BuildChildCompletionMessage(parent Work, childTitle, childID string, waitCl
 }
 
 // BuildChildQuestionMessage tells a story that one of its subtasks asked the
-// user something, and hands it the two ways forward.
+// user something, and hands it the two ways forward. qs are the questions one
+// question_post call asked, quoted together in the order they were asked.
 //
-// The question is quoted in full, options and all, because the story is being
+// Each question is quoted in full, options and all, because the story is being
 // asked to consider answering it and cannot fetch it: the question lives on the
-// subtask's session, not on the work item. Both halves of the question's
+// subtask's session, not on the work item. Both halves of a question's
 // identity travel with it — the session it is waiting in and its request id —
 // because a fork can leave one request id waiting in two sessions, and a story
 // given only the id would have to spend a refused call to find that out.
-func BuildChildQuestionMessage(parent Work, childTitle, childID, childSessionID string, q session.PendingQuestion) string {
+func BuildChildQuestionMessage(parent Work, childTitle, childID, childSessionID string, qs []session.PendingQuestion) string {
 	base := buildBase(parent)
-
-	labels := make([]string, 0, len(q.Options))
-	for _, o := range q.Options {
-		labels = append(labels, o.Label)
-	}
 
 	nudge := render(prompts.ChildQuestionNudge, map[string]any{
 		"ChildTitle":     childTitle,
 		"ChildID":        childID,
 		"ChildSessionID": childSessionID,
-		"Header":         q.Header,
-		"Question":       q.Question,
-		"RequestID":      q.RequestID,
-		"Options":        strings.Join(labels, " | "),
-		"MultiSelect":    q.MultiSelect,
+		"Questions":      quotedQuestions(qs),
+		"AnyOptions":     anyOptions(qs),
 	})
 
 	return base + "\n\n" + nudge
+}
+
+// quotedQuestion is a posted question as a message quotes it to an agent that
+// may answer it: the options flattened to the labels an answer names.
+type quotedQuestion struct {
+	Header      string
+	Question    string
+	RequestID   string
+	Options     string
+	MultiSelect bool
+}
+
+// anyOptions reports whether any of qs offered something to pick, which is
+// whether pointing at question_answer's `answers` means anything: with no list
+// a label could come from, the server refuses one.
+func anyOptions(qs []session.PendingQuestion) bool {
+	for _, q := range qs {
+		if len(q.Options) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+func quotedQuestions(qs []session.PendingQuestion) []quotedQuestion {
+	out := make([]quotedQuestion, len(qs))
+	for i, q := range qs {
+		labels := make([]string, 0, len(q.Options))
+		for _, o := range q.Options {
+			labels = append(labels, o.Label)
+		}
+		out[i] = quotedQuestion{
+			Header:      q.Header,
+			Question:    q.Question,
+			RequestID:   q.RequestID,
+			Options:     strings.Join(labels, " | "),
+			MultiSelect: q.MultiSelect,
+		}
+	}
+	return out
 }
 
 // BuildChildQuestionReminderMessage tells a story that its subtasks are still
@@ -363,22 +396,16 @@ func BuildWatchedStoryEndedMessage(story Work) string {
 }
 
 // BuildWatchedStoryQuestionMessage tells a watcher that the story it watches
-// asked the user something. Quoted in full with both halves of its identity,
-// for the reasons BuildChildQuestionMessage gives.
-func BuildWatchedStoryQuestionMessage(story Work, q session.PendingQuestion) string {
-	labels := make([]string, 0, len(q.Options))
-	for _, o := range q.Options {
-		labels = append(labels, o.Label)
-	}
+// asked the user something. Quoted in full with both halves of each question's
+// identity, and all of one call's questions in one message, for the reasons
+// BuildChildQuestionMessage gives.
+func BuildWatchedStoryQuestionMessage(story Work, qs []session.PendingQuestion) string {
 	return render(prompts.WatchedStoryQuestion, map[string]any{
-		"Title":       story.Title,
-		"ID":          story.ID,
-		"SessionID":   story.SessionID,
-		"Header":      q.Header,
-		"Question":    q.Question,
-		"RequestID":   q.RequestID,
-		"Options":     strings.Join(labels, " | "),
-		"MultiSelect": q.MultiSelect,
+		"Title":      story.Title,
+		"ID":         story.ID,
+		"SessionID":  story.SessionID,
+		"Questions":  quotedQuestions(qs),
+		"AnyOptions": anyOptions(qs),
 	})
 }
 

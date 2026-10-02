@@ -102,6 +102,9 @@ type stubQuestions struct {
 	cancelledFor []string
 	answered     []stubAnswer
 	postErr      error
+	// postErrAfter is how many questions are posted before postErr is
+	// returned, for a batch that fails part way.
+	postErrAfter int
 	cancelErr    error
 	answerErr    error
 }
@@ -113,16 +116,20 @@ type stubAnswer struct {
 	by        agent.QuestionResolver
 }
 
-func (q *stubQuestions) PostQuestion(_ context.Context, sessionID string, spec chat.QuestionSpec) (session.PendingQuestion, error) {
-	if q.postErr != nil {
-		return session.PendingQuestion{}, q.postErr
+func (q *stubQuestions) PostQuestions(_ context.Context, sessionID string, specs []chat.QuestionSpec) ([]session.PendingQuestion, error) {
+	var posted []session.PendingQuestion
+	for _, spec := range specs {
+		if q.postErr != nil && len(posted) == q.postErrAfter {
+			return posted, q.postErr
+		}
+		q.posted = append(q.posted, spec)
+		q.postedFor = append(q.postedFor, sessionID)
+		posted = append(posted, session.PendingQuestion{
+			RequestID: fmt.Sprintf("req-%d", len(q.posted)), Header: spec.Header, Question: spec.Question,
+			Options: spec.Options, MultiSelect: spec.MultiSelect,
+		})
 	}
-	q.posted = append(q.posted, spec)
-	q.postedFor = append(q.postedFor, sessionID)
-	return session.PendingQuestion{
-		RequestID: "req-1", Header: spec.Header, Question: spec.Question,
-		Options: spec.Options, MultiSelect: spec.MultiSelect,
-	}, nil
+	return posted, nil
 }
 
 func (q *stubQuestions) AnswerQuestion(_ context.Context, sessionID string, a chat.Answer, by agent.QuestionResolver) error {

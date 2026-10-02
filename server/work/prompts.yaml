@@ -56,11 +56,7 @@ lifecycle_rules: |
 
   ### Asking the user something
 
-  `question_post` is how you ask. It records the question, returns immediately, and **nothing is waiting on you** — carry on working if you have anything left to do, or end your turn if you do not. The answer, or the user's refusal to answer, arrives as a message in this chat, possibly long after this turn is over. If you stop needing it, withdraw it with `question_cancel`.
-
-  While a question of yours is unanswered, a turn of yours ending is not treated as an accident: Pockode does not nudge you and does not spend your allowance. So you may ask and stop{{if .IsStory}}, ask and keep working, or ask and wait for your subtasks — all three{{else}} or ask and keep working — both{{end}} are ordinary.
-
-  It is the only way to ask. Your CLI's own ask-the-user tool does not reach the user here: Pockode refuses it and tells you to come back to `question_post`, so a question asked that way is a turn spent for nothing.
+  Ask with `question_post`; its description says when and how. While a question of yours is unanswered, a turn of yours ending is not treated as an accident: Pockode does not nudge you and does not spend your allowance. So you may ask and stop{{if .IsStory}}, ask and keep working, or ask and wait for your subtasks — all three{{else}} or ask and keep working — both{{end}} are ordinary.
   {{if .IsStory}}
   ### Waiting for your subtasks
 
@@ -157,17 +153,20 @@ child_completion_nudge: |
 # question (the question_answer tool says the same): a fork leaves one request
 # id waiting in two sessions, and a story given only the id would spend a call
 # finding that out. One id is cheaper than a refused call and a retry.
-# Placeholders: {{.ChildTitle}}, {{.ChildID}}, {{.Header}}, {{.Question}},
-# {{.RequestID}}, {{.ChildSessionID}}, {{.Options}}, {{.MultiSelect}}
+# Questions are the ones a single question_post call asked, in the order it
+# asked them; they arrive as one message so the story takes them in together.
+# Placeholders: {{.ChildTitle}}, {{.ChildID}}, {{.ChildSessionID}}, {{.AnyOptions}},
+# {{.Questions}} (Header, Question, RequestID, Options, MultiSelect)
 child_question_nudge: |
-  Task "{{.ChildTitle}}" (ID: {{.ChildID}}) has asked the user a question. You are being shown it because you are the task's coordinator: you may already know the answer, and if you do not, deciding what happens to this question is yours.
+  Task "{{.ChildTitle}}" (ID: {{.ChildID}}) has asked the user {{if eq (len .Questions) 1}}a question{{else}}{{len .Questions}} questions{{end}}. You are being shown {{if eq (len .Questions) 1}}it{{else}}them{{end}} because you are the task's coordinator: you may already know the answer{{if ne (len .Questions) 1}}s{{end}}, and where you do not, deciding what happens to each question is yours.
 
+  Session ID: {{.ChildSessionID}}
+  {{range .Questions}}
   {{.Header}}: {{.Question}}
   {{if .Options}}Options: {{.Options}}{{if .MultiSelect}} (more than one may be picked){{end}}
   {{end}}Request ID: {{.RequestID}}
-  Session ID: {{.ChildSessionID}}
-
-  - If you know the answer, give it with question_answer (request_id and session_id above — naming both saves a refused call when a fork left the same request id waiting in two sessions; {{if .Options}}`answers` for the labels you pick from the list, `text` for anything in your own words{{else}}`text` — this question offered nothing to pick, so the answer is your own words{{end}}). The task is told the answer came from you, not from the user.
+  {{end}}
+  - If you know an answer, give it with question_answer (its request_id and the session_id above — naming both saves a refused call when a fork left the same request id waiting in two sessions; {{if .AnyOptions}}`answers` for the labels you pick from a question's options, `text` for anything in your own words, which is the whole answer to a question that offered nothing to pick{{else}}`text` — {{if eq (len .Questions) 1}}this question{{else}}these questions{{end}} offered nothing to pick, so the answer is your own words{{end}}). The task is told the answer came from you, not from the user.
   - If you do not know, do not guess — and do not leave it: ask the user yourself with question_post. Your own question is how a story says "I cannot decide this", and it is what tells Pockode you are handling this one.
 
   This message changes nothing else: the task is still running, and if you were waiting for your subtasks you still are. Answering is not a reason to stop waiting.
@@ -231,17 +230,20 @@ watched_story_ended: |
 # Its tasks' questions go to the story, not here. The watcher is offered the
 # answer but not obliged to give it: the user is already being asked, and
 # unlike a story with its subtasks, a watcher is not the one whose job it is.
-# Placeholders: {{.Title}}, {{.ID}}, {{.SessionID}}, {{.Header}}, {{.Question}},
-# {{.RequestID}}, {{.Options}}, {{.MultiSelect}}
+# Questions are the ones a single question_post call asked, in the order it
+# asked them, sent as one message for the reason child_question_nudge gives.
+# Placeholders: {{.Title}}, {{.ID}}, {{.SessionID}}, {{.AnyOptions}},
+# {{.Questions}} (Header, Question, RequestID, Options, MultiSelect)
 watched_story_question: |
-  Story "{{.Title}}" (ID: {{.ID}}), which you started and are watching, has asked the user a question:
+  Story "{{.Title}}" (ID: {{.ID}}), which you started and are watching, has asked the user {{if eq (len .Questions) 1}}a question{{else}}{{len .Questions}} questions{{end}}:
 
+  Session ID: {{.SessionID}}
+  {{range .Questions}}
   {{.Header}}: {{.Question}}
   {{if .Options}}Options: {{.Options}}{{if .MultiSelect}} (more than one may be picked){{end}}
   {{end}}Request ID: {{.RequestID}}
-  Session ID: {{.SessionID}}
-
-  If you know the answer, you may give it with question_answer (request_id and session_id above; {{if .Options}}`answers` for the labels you pick from the list, `text` for anything in your own words{{else}}`text`, since this question offered nothing to pick{{end}}). The story is told the answer came from you, not from the user. If you do not know it, do not guess: the user is being asked already, and the story carries on either way.
+  {{end}}
+  If you know an answer, you may give it with question_answer (its request_id and the session_id above; {{if .AnyOptions}}`answers` for the labels you pick from a question's options, `text` for anything in your own words, which is the whole answer to a question that offered nothing to pick{{else}}`text`, since {{if eq (len .Questions) 1}}this question{{else}}these questions{{end}} offered nothing to pick{{end}}). The story is told the answer came from you, not from the user. If you do not know it, do not guess: the user is being asked already, and the story carries on either way.
 
 # Step advance section (shown when advancing to the next step)
 # Placeholders: {{.PrevStep}}, {{.TotalSteps}}, {{.CurrentStep}}, {{.StepPrompt}}, {{.ID}}

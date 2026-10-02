@@ -85,6 +85,45 @@ describe("AnswerPanel", () => {
 		expect(panel).not.toHaveAttribute("aria-modal");
 	});
 
+	// One `question_post` call stamps every question with the same `asked_at`,
+	// so the order they were asked in is the list's order and nothing else.
+	// The headers run against the alphabet, so a sort on them shows too.
+	it("draws a batch in the order of the session's list", () => {
+		const askedAt = "2026-01-02T14:02:00.000000001Z";
+		const headers = ["Gamma", "Alpha", "Beta"];
+		renderPanel(
+			headers.map((header, i) => ({
+				...region,
+				request_id: `b${i}`,
+				header,
+				question: `${header}?`,
+				asked_at: askedAt,
+			})),
+		);
+
+		expect(
+			screen
+				.getAllByText(/^(Gamma|Alpha|Beta)$/)
+				.map((chip) => chip.textContent),
+		).toEqual(headers);
+	});
+
+	// No limit on how many questions or options arrive, so the body is what
+	// scrolls: it takes the card's leftover height (`min-h-0 flex-1`) and
+	// scrolls inside it, while the Send footer stays outside it, in reach.
+	it("scrolls its questions inside the card, keeping Send outside them", () => {
+		renderPanel([database, region]);
+
+		const body = screen.getByText("Which region?").closest(".overflow-y-auto");
+		expect(body).toHaveClass("min-h-0", "flex-1");
+		expect(body).toContainElement(
+			screen.getByText("Which database should I use?"),
+		);
+		expect(body).not.toContainElement(
+			screen.getByRole("button", { name: "Send" }),
+		);
+	});
+
 	// The backdrop is what makes "outside" mean anything, so pressing it is the
 	// dismissal every user of a dimmed screen already expects.
 	it("closes when the backdrop is pressed", async () => {

@@ -51,11 +51,12 @@ type Answer struct {
 // through the worktree manager — depends on what it uses rather than on the
 // whole chat client.
 type Questions interface {
-	// PostQuestion records a question on behalf of the agent running in
-	// sessionID and returns it as the session now holds it — the request id an
-	// answer will name, and the question itself, which is what a story above
-	// this session is told about it.
-	PostQuestion(ctx context.Context, sessionID string, spec QuestionSpec) (session.PendingQuestion, error)
+	// PostQuestions records questions on behalf of the agent running in
+	// sessionID and returns them as the session now holds them — the request
+	// ids an answer will name, and the questions themselves, which is what a
+	// story above this session is told about them. They come back in the order
+	// they were given, and on error hold the ones that were posted before it.
+	PostQuestions(ctx context.Context, sessionID string, specs []QuestionSpec) ([]session.PendingQuestion, error)
 	// CancelQuestion withdraws a question the same agent posted.
 	CancelQuestion(ctx context.Context, sessionID, requestID string) error
 	// AnswerQuestion delivers an answer an agent gave to a question this
@@ -73,26 +74,57 @@ type QuestionSpec struct {
 	MultiSelect bool
 }
 
-// PostQuestion records one question and starts waiting for its answer.
+// PostQuestions records questions asked together and starts waiting for their
+// answers.
 //
-// The record goes in first and the state second, and that order is the whole
-// shape of this: the transcript gains a fact that never changes, and the
-// session's turn gains a list entry that disappears the moment someone answers.
-// A record written with no state behind it shows as a question nobody is
-// waiting on — visible, wrong, and repairable. State with no record behind it
-// would be a question with no account of having been asked, which a fork could
-// not inherit and a transcript could not explain.
+// Asking together changes how the questions arrive and nothing else: each is
+// its own question, with its own request id and its own question_posted
+// record, answered, declined and withdrawn on its own. They share one AskedAt
+// because they were asked at one moment, and their order is the order they
+// are written in — the transcript's and the session's unanswered list, which
+// is appended to and never re-sorted — so nothing beside them needs to carry
+// it.
+//
+// For each question the record goes in first and the state second, and that
+// order is the whole shape of this: the transcript gains a fact that never
+// changes, and the session's turn gains a list entry that disappears the moment
+// someone answers. A record written with no state behind it shows as a
+// question nobody is waiting on — visible, wrong, and repairable. State with no
+// record behind it would be a question with no account of having been asked,
+// which a fork could not inherit and a transcript could not explain.
+//
+// Two calls in one session — a model can make them in parallel — are taken
+// one at a time, so a batch is never split by another's questions landing in
+// the middle of it.
+//
+// A failure part way stops there and returns what was already posted: those
+// questions are being asked, and the caller has to be able to say so.
 //
 // No process is started and none is needed: the agent asking is by definition
 // running, and a question outlives whatever process asked it anyway.
-func (c *Client) PostQuestion(ctx context.Context, sessionID string, spec QuestionSpec) (session.PendingQuestion, error) {
+func (c *Client) PostQuestions(ctx context.Context, sessionID string, specs []QuestionSpec) ([]session.PendingQuestion, error) {
 	if _, found, err := c.store.Get(sessionID); err != nil {
-		return session.PendingQuestion{}, fmt.Errorf("get session: %w", err)
+		return nil, fmt.Errorf("get session: %w", err)
 	} else if !found {
-		return session.PendingQuestion{}, ErrSessionNotFound
+		return nil, ErrSessionNotFound
 	}
 
+	c.postMu.Lock()
+	defer c.postMu.Unlock()
+
 	now := time.Now()
+	posted := make([]session.PendingQuestion, 0, len(specs))
+	for _, spec := range specs {
+		q, err := c.postQuestion(ctx, sessionID, spec, now)
+		if err != nil {
+			return posted, err
+		}
+		posted = append(posted, q)
+	}
+	return posted, nil
+}
+
+func (c *Client) postQuestion(ctx context.Context, sessionID string, spec QuestionSpec, now time.Time) (session.PendingQuestion, error) {
 	q := session.PendingQuestion{
 		RequestID:   uuid.Must(uuid.NewV7()).String(),
 		Header:      spec.Header,

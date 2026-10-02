@@ -16,15 +16,15 @@ import (
 // does, and returns the request id an answer names.
 func post(t *testing.T, env *testEnv, sessionID, header string) string {
 	t.Helper()
-	q, err := env.getMainWorktree().ChatClient.PostQuestion(context.Background(), sessionID, chat.QuestionSpec{
+	posted, err := env.getMainWorktree().ChatClient.PostQuestions(context.Background(), sessionID, []chat.QuestionSpec{{
 		Header:   header,
 		Question: "Which database?",
 		Options:  []session.QuestionOption{{Label: "Postgres"}, {Label: "SQLite"}},
-	})
+	}})
 	if err != nil {
-		t.Fatalf("PostQuestion: %v", err)
+		t.Fatalf("PostQuestions: %v", err)
 	}
-	return q.RequestID
+	return posted[0].RequestID
 }
 
 func unanswered(t *testing.T, env *testEnv, sessionID string) []session.PendingQuestion {

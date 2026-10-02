@@ -469,7 +469,7 @@ chat to ask into, and no identity to be recorded as having answered.
 
 | Tool | Purpose | Key Parameters |
 |------|---------|----------------|
-| `question_post` | Ask the user one question and carry on; returns a `request_id` | `question`, `header`, `options?`, `multi_select?` |
+| `question_post` | Ask the user questions and carry on; returns a `request_id` for each | `questions` (each `question`, `header`, `options?`, `multi_select?`) |
 | `question_answer` | Answer a question **another** session posted | `request_id`, `answers?`, `text?`, `session_id?` |
 | `question_cancel` | Withdraw a question the same session posted | `request_id` |
 
@@ -506,8 +506,9 @@ the sessions waiting, the refusal names the candidates the same way.
 There is deliberately **no tool that lists questions**: the answer arrives as a
 message, so a list would only invite an agent to poll for it inside the turn it
 was told not to wait in. For the same reason the `question_post` description
-carries the whole contract — an ordinary session gets no system prompt, so the
-description is the only place it can be said.
+carries the whole contract — the mechanism, and when and how to ask — since an
+ordinary session gets no system prompt, so the description is the only place it
+can be said ([agent-integration.md](agent-integration.md#asking-several-at-once)).
 
 See [Posted Questions](agent-integration.md#posted-questions).
 
@@ -792,7 +793,10 @@ the *subtask's* count and not its own, which is what [input
 A story usually knows what its subtask is asking about — it decided it, or a
 sibling settled it — so a question posted by a work with a parent is passed up as
 a `child_question` message carrying the question, its `request_id` and the
-subtask's session id. The session id travels with the request id because the
+subtask's session id. The questions of one `question_post` call travel in **one**
+message, in the order they were asked: they were asked together so that whoever
+answers takes them in at once, and a message each would spend one of the story's
+turns per question. The session id travels with the request id because the
 pair is what names a question ([Question Tools](#question-tools)), and one extra
 id costs less than the refused call a story would otherwise spend discovering a
 fork.
@@ -1109,7 +1113,8 @@ already knows, and there is no story left to point at.
 the story, as they always have: the story coordinates its tasks, and the
 watcher asked only about the story. A watched story's question is *offered* to
 the watcher (the message carries `request_id` and `session_id` for
-`question_answer`), not handed to it the way a subtask's is to its story: the
+`question_answer`, and one call's questions together, as for a story), not
+handed to it the way a subtask's is to its story: the
 user is already being asked, and nothing nudges a watcher that leaves it.
 
 **Delivery is owed nothing, like [input 4](#input-4-a-subtasks-question-reaches-its-story).**
@@ -1811,8 +1816,9 @@ Pockode gets verbatim.
 
 **`lifecycle_rules` is the single place the agent-facing lifecycle is written.**
 It says what the four statuses mean, that `question_post` is how the agent
-reaches a person — posted and returned, nothing waiting on it, the answer
-arriving later as a message — that a story's wait on its subtasks is `story_wait`,
+reaches a person — and no more about asking than that, since the tool's own
+description says when and how and every session reads it — that a story's wait
+on its subtasks is `story_wait`,
 that exactly two things end a turn cleanly (`step_done`, or something
 outstanding) and what happens when neither is true: a nudge, and `stopped` once
 the allowance is spent. "I still have work to do" is deliberately not
@@ -1852,17 +1858,17 @@ task is never offered `story_wait` nor told about subtasks — here or in
 `step_auto_continue_nudge`, which is gated the same way. `prompt_test.go` checks
 both over every message a task can be sent.
 
-**Two things the agent cannot derive from any tool description.** First, that
-its CLI's own ask-the-user tool does not reach the user here: Pockode refuses it
-and points the agent back at `question_post`
-([agent-integration.md](agent-integration.md#refusing-the-clis-own-question)), so
-a question asked that way is a turn spent for nothing. This is worth saying even
-though a Claude session cannot see that tool at all — `buildArgs` takes it off the
-list — because the refusal is what happens if a CLI stops honouring the flag, and
-because Codex's counterpart is refused at the protocol rather than hidden.
-Second, that ending a turn with a posted question outstanding is not the accident
-an ordinary quiet ending is: Pockode does not nudge and does not spend the
-allowance. `prompt_test.go` holds both sentences.
+**Asking is one sentence here, and one fact the tool cannot carry.** How to
+ask — the mechanism, when, how, and that the CLI's own ask-the-user tool does
+not reach the user ([agent-integration.md](agent-integration.md#refusing-the-clis-own-question))
+— is in the `question_post` description, which every session reads, worked or
+not; repeating it here would be a second copy for the two to drift apart in, so
+the section says "Ask with `question_post`; its description says when and how"
+and `prompt_test.go` checks the copy is gone. What stays is lifecycle, which no
+tool description can know: ending a turn with a posted question outstanding is
+not the accident an ordinary quiet ending is — Pockode does not nudge and does
+not spend the allowance. `prompt_test.go` holds that sentence;
+`mcp.TestQuestionTools_AreAdvertised` holds the description's.
 
 **The story restart nudge sends the agent to re-read its tasks**, and that is
 load-bearing rather than politeness: a stopped parent is deliberately not told

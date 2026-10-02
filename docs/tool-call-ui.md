@@ -205,7 +205,11 @@ guarantee is *when* the record is written — during the call — so the record
 always falls between that call's `tool_call` and its `tool_result`, and the last
 unreturned call whose name ends in `question_post` is the one that posted it.
 That is an invariant the server holds itself, rather than an assumption about
-the order in which a CLI emits its own frames.
+the order in which a CLI emits its own frames. A call that asked several
+questions writes one record each, and only the first takes the row; the rest
+follow the last card of their batch (the ones sharing its `asked_at`), so a
+batch is never split by whatever else is running
+([answering-ui.md §6](answering-ui.md#6-the-record-card-in-the-stream)).
 
 A join that misses leaves two rows, which is untidy and not wrong. Drawing both
 on purpose would be: `question_post  Which database…  ✓` directly above a card

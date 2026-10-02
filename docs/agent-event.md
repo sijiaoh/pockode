@@ -157,7 +157,9 @@ one that is coarsely right about where the answering began.
 
 A question an agent asks is a `question_posted` record; the answer is not a
 record of its own but part of the `message` that carries it, in `answering`. One
-question per record and one `request_id` per question — an answer names a
+question per record and one `request_id` per question, even when one
+`question_post` call asked several: the call writes a record each, in the order
+it asked them, all with the same `asked_at`. An answer names a
 question and so does a refusal to answer one, so a record covering three
 questions leaves "I will not answer the second" with no subject. The mechanism is
 [code/agent-integration.md § Posted
@@ -346,7 +348,9 @@ event folds into a part its own id does not name:
   necessarily falls between the call's `tool_call` and its `tool_result`. There is
   no id to join on — an MCP call reaches the server over HTTP and the CLI's
   `tool_use_id` is not in it. Missing the take-over costs two rows saying one
-  thing, which is a degradation rather than an error.
+  thing, which is a degradation rather than an error. Of the records one call
+  writes, only the first takes the row; the rest follow the last card sharing
+  their `asked_at`, so the batch stays together.
 - `ask_user_question` (legacy) takes the place of its `tool_call` part by id.
   Claude asked through a regular tool call, so one question arrived as
   `tool_call` → `ask_user_question` → `question_response` → `tool_result`; the

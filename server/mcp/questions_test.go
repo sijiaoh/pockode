@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -48,12 +49,14 @@ func TestQuestionPost_PostsIntoTheCallersSession(t *testing.T) {
 	exec, sessions, _, _ := newQuestionExec(t)
 
 	out, err := callAs(t, exec, Caller{SessionID: "sess-1", Worktree: "feature-x"}, "question_post", map[string]any{
-		"header":   "Database",
-		"question": "Which database?",
-		"options": []map[string]string{
-			{"label": "Postgres", "description": "the one we have"},
-			{"label": "SQLite"},
-		},
+		"questions": []map[string]any{{
+			"header":   "Database",
+			"question": "Which database?",
+			"options": []map[string]string{
+				{"label": "Postgres", "description": "the one we have"},
+				{"label": "SQLite"},
+			},
+		}},
 	})
 	if err != nil {
 		t.Fatalf("question_post: %v", err)
@@ -93,7 +96,7 @@ func TestQuestionTools_RefuseACallWithNoSession(t *testing.T) {
 		t.Run(tool, func(t *testing.T) {
 			exec, sessions, _, _ := newQuestionExec(t)
 			_, err := callAs(t, exec, Caller{}, tool, map[string]any{
-				"header": "h", "question": "q", "request_id": "req-1",
+				"questions": []map[string]any{{"header": "h", "question": "q"}}, "request_id": "req-1",
 			})
 			if err == nil || !strings.Contains(err.Error(), "only be called from a Pockode session") {
 				t.Fatalf("error = %v, want a refusal naming the missing session", err)
@@ -108,25 +111,43 @@ func TestQuestionTools_RefuseACallWithNoSession(t *testing.T) {
 	}
 }
 
+// oneQuestion is a question_post call asking a single question.
+func oneQuestion(q map[string]any) map[string]any {
+	return map[string]any{"questions": []map[string]any{q}}
+}
+
+// TestQuestionPost_ArgumentRefusals: only what would make an answer wrong is
+// refused, and the refusal says which question and how to fix it.
 func TestQuestionPost_ArgumentRefusals(t *testing.T) {
 	tests := []struct {
 		name string
 		args map[string]any
 		want string
 	}{
-		{"no question", map[string]any{"header": "h"}, "question is required"},
-		{"no header", map[string]any{"question": "q"}, "header is required"},
-		{"an option with no label", map[string]any{
+		{"no questions", map[string]any{}, "pass at least one question"},
+		{"an empty list", map[string]any{"questions": []map[string]any{}}, "pass at least one question"},
+		{"no question", oneQuestion(map[string]any{"header": "h"}), "questions[0]: question is required"},
+		{"no header", oneQuestion(map[string]any{"question": "q"}), "questions[0]: header is required"},
+		{"a blank header", oneQuestion(map[string]any{"header": "  ", "question": "q"}), "header is required"},
+		{"an option with no label", oneQuestion(map[string]any{
 			"header": "h", "question": "q",
 			"options": []map[string]string{{"description": "d"}},
-		}, "every option needs a label"},
-		{"two options with one label", map[string]any{
+		}), "every option needs a label"},
+		{"two options with one label", oneQuestion(map[string]any{
 			"header": "h", "question": "q",
 			"options": []map[string]string{{"label": "a"}, {"label": "a"}},
-		}, "share the label"},
-		{"multi_select with nothing to select", map[string]any{
+		}), "share the label"},
+		{"multi_select with nothing to select", oneQuestion(map[string]any{
 			"header": "h", "question": "q", "multi_select": true,
-		}, "needs options to select from"},
+		}), "needs options to select from"},
+		{"the fault is located in the batch", map[string]any{"questions": []map[string]any{
+			{"header": "h", "question": "q"},
+			{"header": "h2"},
+		}}, "questions[1]: question is required"},
+		{"two questions with one text", map[string]any{"questions": []map[string]any{
+			{"header": "Database", "question": "Which one?"},
+			{"header": "Runtime", "question": " Which one? "},
+		}}, "questions[0] and questions[1] have the same question text"},
 	}
 
 	for _, tt := range tests {
@@ -143,6 +164,89 @@ func TestQuestionPost_ArgumentRefusals(t *testing.T) {
 				t.Error("a refused question reached the session layer")
 			}
 		})
+	}
+}
+
+// TestQuestionPost_AcceptsWhatOnlyGuidanceGoverns: how many, how long, and
+// whether an option looks redundant are matters of asking well, not of an
+// answer being wrong — refusing them costs the user a round trip for nothing.
+func TestQuestionPost_AcceptsWhatOnlyGuidanceGoverns(t *testing.T) {
+	long := strings.Repeat("src/very/deep/path/to/some/file.go ", 20)
+	var options []map[string]string
+	for i := range 30 {
+		options = append(options, map[string]string{"label": fmt.Sprintf("%s%d", long, i)})
+	}
+	var questions []map[string]any
+	for i := range 25 {
+		questions = append(questions, map[string]any{"header": "h", "question": fmt.Sprintf("q%d", i)})
+	}
+	questions = append(questions,
+		map[string]any{"header": long, "question": "Which files?", "options": options, "multi_select": true},
+		map[string]any{"header": "Only", "question": "Use this?", "options": []map[string]string{{"label": "Yes"}}},
+		map[string]any{"header": "Other", "question": "Which?", "options": []map[string]string{{"label": "A"}, {"label": "Other"}}},
+	)
+
+	exec, sessions, _, _ := newQuestionExec(t)
+	if _, err := callAs(t, exec, callerInMain, "question_post", map[string]any{"questions": questions}); err != nil {
+		t.Fatalf("question_post: %v", err)
+	}
+	if got := len(sessions.questions.posted); got != len(questions) {
+		t.Errorf("posted = %d, want all %d", got, len(questions))
+	}
+}
+
+// TestQuestionPost_ABatchPostsEveryQuestionInOrder: each question is posted in
+// the order given, and the reply pairs each header with its request id so the
+// model can tell which id is which.
+func TestQuestionPost_ABatchPostsEveryQuestionInOrder(t *testing.T) {
+	exec, sessions, _, _ := newQuestionExec(t)
+	engine := &spyEngine{}
+	exec.SetWorkEngine(engine)
+
+	out, err := callAs(t, exec, callerInMain, "question_post", map[string]any{"questions": []map[string]any{
+		{"header": "Database", "question": "Which database?"},
+		{"header": "Runtime", "question": "Which runtime?"},
+	}})
+	if err != nil {
+		t.Fatalf("question_post: %v", err)
+	}
+	posted := sessions.questions.posted
+	if len(posted) != 2 || posted[0].Header != "Database" || posted[1].Header != "Runtime" {
+		t.Fatalf("posted = %+v, want both, in the order asked", posted)
+	}
+	for _, want := range []string{`"Database" (request_id: req-1)`, `"Runtime" (request_id: req-2)`} {
+		if !strings.Contains(out, want) {
+			t.Errorf("reply = %q, want it to contain %s", out, want)
+		}
+	}
+	// One report for the call, so a story above hears about the batch at once.
+	if len(engine.postedIn) != 1 || len(engine.posted[0]) != 2 {
+		t.Errorf("engine told %d time(s) with %v, want once with both questions", len(engine.postedIn), engine.posted)
+	}
+}
+
+// TestQuestionPost_AFailurePartWayNamesWhatWasPosted: the questions already
+// posted are being asked, and an agent told only "failed" would ask them again.
+func TestQuestionPost_AFailurePartWayNamesWhatWasPosted(t *testing.T) {
+	exec, sessions, _, _ := newQuestionExec(t)
+	engine := &spyEngine{}
+	exec.SetWorkEngine(engine)
+	sessions.questions = &stubQuestions{postErr: errors.New("disk full"), postErrAfter: 1}
+
+	_, err := callAs(t, exec, callerInMain, "question_post", map[string]any{"questions": []map[string]any{
+		{"header": "Database", "question": "Which database?"},
+		{"header": "Runtime", "question": "Which runtime?"},
+	}})
+	if err == nil {
+		t.Fatal("question_post succeeded with a failure part way")
+	}
+	for _, want := range []string{"posted 1 of 2", `"Database" (request_id: req-1)`, "disk full"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error = %q, want it to contain %q", err, want)
+		}
+	}
+	if len(engine.posted) != 1 || len(engine.posted[0]) != 1 {
+		t.Errorf("engine told %v, want the one question that was posted", engine.posted)
 	}
 }
 
@@ -165,9 +269,9 @@ func TestQuestionPost_RefusedOnAClosedWork(t *testing.T) {
 		t.Fatalf("close work: %v", err)
 	}
 
-	_, err = callAs(t, exec, callerInMain, "question_post", map[string]any{
+	_, err = callAs(t, exec, callerInMain, "question_post", oneQuestion(map[string]any{
 		"header": "Database", "question": "Which database?",
-	})
+	}))
 	if err == nil || !strings.Contains(err.Error(), "is closed") {
 		t.Fatalf("error = %v, want a refusal naming the closed work", err)
 	}
@@ -183,9 +287,9 @@ func TestQuestionPost_RefusedOnAClosedWork(t *testing.T) {
 // the want of one.
 func TestQuestionPost_AllowedInAPlainChatSession(t *testing.T) {
 	exec, sessions, _, _ := newQuestionExec(t)
-	if _, err := callAs(t, exec, callerInMain, "question_post", map[string]any{
+	if _, err := callAs(t, exec, callerInMain, "question_post", oneQuestion(map[string]any{
 		"header": "Database", "question": "Which database?",
-	}); err != nil {
+	})); err != nil {
 		t.Fatalf("question_post in a session with no work: %v", err)
 	}
 	if len(sessions.questions.posted) != 1 {
@@ -281,14 +385,24 @@ func TestQuestionTools_AreAdvertised(t *testing.T) {
 			t.Fatalf("%s is not advertised", name)
 		}
 		// Ordinary sessions get no system prompt, so the description is the only
-		// place the two surprising facts can be said.
+		// place the surprising facts can be said: the mechanism, that the CLI's
+		// own ask tool goes nowhere (Codex's is refused at the protocol rather
+		// than hidden), and the rules a model breaks unless told — asking in one
+		// call, never adding the "Other" the panel already offers, never asking
+		// for a secret.
 		if name == "question_post" {
-			for _, want := range []string{"returns immediately", "arrives later as an ordinary message", "question_cancel"} {
+			for _, want := range []string{"returns immediately", "arrives later as an ordinary message", "question_cancel",
+				"does not reach the user here",
+				"in one call", "\"Other\"", "passwords"} {
 				if !strings.Contains(found.Description, want) {
 					t.Errorf("question_post description does not say %q", want)
 				}
 			}
-			options := found.InputSchema.Properties["options"]
+			questions := found.InputSchema.Properties["questions"]
+			if questions.Items == nil || questions.Items.Properties["header"].Type != "string" {
+				t.Fatal("the questions schema does not describe the objects it takes")
+			}
+			options := questions.Items.Properties["options"]
 			if options.Items == nil || options.Items.Properties["label"].Type != "string" {
 				t.Error("the options schema does not describe the objects it takes")
 			}
@@ -309,9 +423,9 @@ func TestQuestionTools_AreAdvertised(t *testing.T) {
 func TestAskingTheUser_TheTwoTextsMakeTheSameClaims(t *testing.T) {
 	exec, _, _, _ := newQuestionExec(t)
 
-	posted, err := callAs(t, exec, Caller{SessionID: "sess-1"}, "question_post", map[string]any{
+	posted, err := callAs(t, exec, Caller{SessionID: "sess-1"}, "question_post", oneQuestion(map[string]any{
 		"header": "Database", "question": "Which database?",
-	})
+	}))
 	if err != nil {
 		t.Fatalf("question_post: %v", err)
 	}
@@ -602,14 +716,15 @@ func TestQuestionAnswer_RefusedWithoutACallerSession(t *testing.T) {
 
 // spyEngine records what the question tools reported to the work layer.
 type spyEngine struct {
-	posted   []session.PendingQuestion
+	// posted holds each report's questions: one entry per question_post call.
+	posted   [][]session.PendingQuestion
 	postedIn []string
 	answered []string
 }
 
-func (s *spyEngine) HandleQuestionPosted(sessionID string, q session.PendingQuestion) {
+func (s *spyEngine) HandleQuestionsPosted(sessionID string, qs []session.PendingQuestion) {
 	s.postedIn = append(s.postedIn, sessionID)
-	s.posted = append(s.posted, q)
+	s.posted = append(s.posted, qs)
 }
 
 func (s *spyEngine) HandleAnswer(sessionID string) {
@@ -628,16 +743,16 @@ func TestQuestionTools_ReportToTheWorkLayer(t *testing.T) {
 		"req-1": {{SessionID: "sess-2"}},
 	}
 
-	if _, err := callAs(t, exec, callerInMain, "question_post", map[string]any{
+	if _, err := callAs(t, exec, callerInMain, "question_post", oneQuestion(map[string]any{
 		"header": "Database", "question": "Which database?",
-	}); err != nil {
+	})); err != nil {
 		t.Fatalf("question_post: %v", err)
 	}
 	if len(engine.posted) != 1 || engine.postedIn[0] != "sess-1" {
 		t.Fatalf("posted = %+v in %v, want the caller's own question", engine.posted, engine.postedIn)
 	}
-	if engine.posted[0].Question != "Which database?" {
-		t.Errorf("posted question = %q, want the question itself, which is what the story is shown", engine.posted[0].Question)
+	if engine.posted[0][0].Question != "Which database?" {
+		t.Errorf("posted question = %q, want the question itself, which is what the story is shown", engine.posted[0][0].Question)
 	}
 
 	if _, err := callAs(t, exec, callerInMain, "question_answer", map[string]any{
