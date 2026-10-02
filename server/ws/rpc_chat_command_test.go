@@ -142,7 +142,7 @@ func TestHandler_MessagePockodeCommandRefusals(t *testing.T) {
 			env:     func(t *testing.T, mock *mockAgent) *testEnv { return newBranchTestEnv(t, mock, "main") },
 			content: "/pockode-lead",
 			answer:  true,
-			want:    "together with answers",
+			want:    "on their own",
 		},
 	}
 	for _, tt := range tests {

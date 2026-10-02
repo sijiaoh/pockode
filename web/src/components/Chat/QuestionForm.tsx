@@ -1,6 +1,11 @@
-import { Check } from "lucide-react";
+import { Check, Plus } from "lucide-react";
+import { useEffect, useId, useRef, useState } from "react";
+import TextareaAutosize from "react-textarea-autosize";
 import type { AskUserQuestion } from "../../types/message";
-import type { QuestionSelection } from "../../utils/questionAnswer";
+import {
+	noteApplies,
+	type QuestionSelection,
+} from "../../utils/questionAnswer";
 import { MarkdownContent, RecommendedTag } from "../ui";
 import { inputClass } from "../ui/inputClass";
 
@@ -8,16 +13,6 @@ export interface QuestionFormProps {
 	question: AskUserQuestion;
 	/** When it was asked, as an ISO string. Absent draws no time. */
 	askedAt?: string;
-	/**
-	 * Whether a question that offers options also offers **Other**.
-	 *
-	 * True for the CLI's own blocking prompt, which takes any text back. False
-	 * for a posted question: the server refuses an answer naming a label the
-	 * question did not offer (`chat.validateAnswer`), so an Other row there
-	 * would be a control whose every use is refused. Ignored when the question
-	 * offers no options at all — the whole answer is free text then.
-	 */
-	allowOther?: boolean;
 	/** Groups the radio inputs of one question; must be unique per question. */
 	name: string;
 	selection: QuestionSelection;
@@ -25,6 +20,20 @@ export interface QuestionFormProps {
 	onSelectOption: (label: string) => void;
 	onSelectOther: () => void;
 	onOtherTextChange: (text: string) => void;
+	/**
+	 * What the **Other** input holds, picked or not. `selection.otherText` is
+	 * null while Other is unpicked, but an editable form keeps the text it
+	 * parked there on screen. Absent, the input shows the selection's own text.
+	 */
+	otherInput?: string;
+	/**
+	 * The user's remark beside what they picked. Drawn only while it would be
+	 * sent (`noteApplies`) on a disabled form, so a record card shows exactly
+	 * the note its answer carried.
+	 */
+	note?: string;
+	/** Makes the note editable. Absent, an enabled form offers no note. */
+	onNoteChange?: (text: string) => void;
 }
 
 /**
@@ -49,25 +58,40 @@ const markdownClass = "prose-inherit-color overflow-x-auto break-words";
  *
  * Three shapes, decided by the question itself (docs/answering-ui.md §3):
  * radios with an **Other** row, checkboxes with one, and — when the question
- * offers no options at all — a multi-line textarea with no Other row, because
- * there is nothing for it to be other *than*. That third shape is what a free
- * text request becomes, and it is multi-line where the Other input is not:
- * the answers that arrive there are paragraphs, not labels.
+ * offers no options at all — a textarea with no Other row, because there is
+ * nothing for it to be other *than*. That third shape is what a free text
+ * request becomes, and it opens three lines tall where the Other input opens
+ * at one: the answers that arrive there are paragraphs, while Other is usually
+ * a label the agent did not think of — usually, so it grows when it is not.
  */
 function QuestionForm({
 	question,
 	askedAt,
-	allowOther = true,
 	name,
 	selection,
 	disabled,
 	onSelectOption,
 	onSelectOther,
 	onOtherTextChange,
+	otherInput,
+	note = "",
+	onNoteChange,
 }: QuestionFormProps) {
 	const hasOptions = question.options.length > 0;
 	const inputType = question.multiSelect ? "checkbox" : "radio";
 	const otherChecked = selection.otherText !== null;
+	const otherValue = otherInput ?? selection.otherText ?? "";
+	const selectedCount = selection.labels.length + (otherChecked ? 1 : 0);
+	const otherId = useId();
+
+	// The Other input is always on screen in an editable form, so going into it
+	// is how the user says "something else" — but only a click or typing does.
+	// Focus alone would pick it as Tab passes through on its way to the note,
+	// silently replacing a radio already chosen; and a press would pick it as a
+	// finger starts a scroll across it. Never unpicks: the radio does that.
+	const pickOther = () => {
+		if (!otherChecked) onSelectOther();
+	};
 
 	const rowClass = (selected: boolean) => {
 		// A read-only row is not aimed at, so it owes no hit area; an option the
@@ -101,6 +125,14 @@ function QuestionForm({
 					<span className="min-w-0 break-words rounded bg-th-accent/20 px-1.5 py-0.5 text-xs text-th-text-primary">
 						{question.header}
 					</span>
+					{/* Not "k of n": that reads as a target to reach, and echoes the
+					    panel's "k of n ready". Ticked Other counts while still empty —
+					    this says what is ticked, not what is ready to send. */}
+					{hasOptions && question.multiSelect && selectedCount > 0 && (
+						<span className="shrink-0 py-0.5 text-xs tabular-nums text-th-text-muted">
+							{selectedCount} selected
+						</span>
+					)}
 					{/* Opposite the chip, in the reader's own locale. It is what tells two
 					    questions with the same header apart, and what says how long one
 					    has been waiting. */}
@@ -152,41 +184,65 @@ function QuestionForm({
 						);
 					})}
 
-					{(allowOther || otherChecked) && (
-						<label className={rowClass(otherChecked)}>
-							<input
-								type={inputType}
-								name={name}
-								checked={otherChecked}
-								disabled={disabled}
-								onChange={() => onSelectOther()}
-								className={choiceInputClass}
-							/>
-							<div className="min-w-0 flex-1">
-								<div className="text-sm text-th-text-primary">Other</div>
-								{otherChecked &&
-									(disabled ? (
-										// A long answer left in the single-line input would be
-										// clipped to one scrollable line; a paragraph wraps and
-										// shows all of it.
-										<p className="mt-1 whitespace-pre-wrap break-words rounded border border-th-border bg-th-bg-primary px-2 py-1 text-sm text-th-text-primary">
-											{selection.otherText}
-										</p>
-									) : (
-										<input
-											type="text"
-											value={selection.otherText ?? ""}
-											onChange={(e) => onOtherTextChange(e.target.value)}
-											placeholder="Enter your answer..."
-											className={`mt-1 w-full rounded bg-th-bg-primary px-2 py-1 text-sm text-th-text-primary placeholder:text-th-text-muted ${inputClass}`}
-										/>
-									))}
-							</div>
-							{disabled && otherChecked && (
-								<Check className="mt-0.5 size-3 shrink-0 text-th-success" />
+					{/* Unlike the option rows, only the control and its word are the
+					    label. The input beside them is not: a field inside a label is
+					    read out as part of the control's name, and a drag that starts
+					    in it and ends on the word would toggle Other as a label click. */}
+					<div className={rowClass(otherChecked)}>
+						<input
+							id={otherId}
+							type={inputType}
+							name={name}
+							checked={otherChecked}
+							disabled={disabled}
+							onChange={() => onSelectOther()}
+							className={choiceInputClass}
+						/>
+						<div className="min-w-0 flex-1">
+							<label
+								htmlFor={otherId}
+								className={`block text-sm text-th-text-primary ${disabled ? "" : "cursor-pointer"}`}
+							>
+								Other
+							</label>
+							{disabled ? (
+								otherChecked && (
+									// A paragraph rather than the input: a locked input would
+									// still scroll after five lines, and a record shows all of it.
+									<p className="mt-1 whitespace-pre-wrap break-words rounded border border-th-border bg-th-bg-primary px-2 py-1 text-sm text-th-text-primary">
+										{selection.otherText}
+									</p>
+								)
+							) : (
+								<TextareaAutosize
+									aria-label={
+										question.header
+											? `Other answer for ${question.header}`
+											: "Other answer"
+									}
+									value={otherValue}
+									onClick={pickOther}
+									onChange={(e) => {
+										onOtherTextChange(e.target.value);
+										pickOther();
+									}}
+									placeholder="Your own answer"
+									minRows={1}
+									maxRows={5}
+									// Text left behind an unpicked Other stays visible but
+									// muted, the same as a parked note: it is not sent.
+									className={`mt-1 block w-full resize-none rounded bg-th-bg-primary px-2 py-1 pointer-coarse:py-2 text-sm placeholder:text-th-text-muted ${inputClass} ${
+										!otherChecked && otherValue !== ""
+											? "border-dashed text-th-text-muted"
+											: "text-th-text-primary"
+									}`}
+								/>
 							)}
-						</label>
-					)}
+						</div>
+						{disabled && otherChecked && (
+							<Check className="mt-0.5 size-3 shrink-0 text-th-success" />
+						)}
+					</div>
 				</div>
 			) : disabled ? (
 				// A free-text question with no answer is the ordinary state of a
@@ -209,8 +265,126 @@ function QuestionForm({
 					className={`w-full resize-y rounded bg-th-bg-primary px-2 py-1 text-sm text-th-text-primary placeholder:text-th-text-muted ${inputClass}`}
 				/>
 			)}
+			{hasOptions && (
+				<NoteField
+					header={question.header}
+					note={note}
+					applies={noteApplies(question, selection)}
+					nothingPicked={selection.labels.length === 0 && !otherChecked}
+					disabled={disabled}
+					onChange={onNoteChange}
+				/>
+			)}
 		</div>
 	);
+}
+
+/**
+ * The remark beside an answer, under the options of a question that has them.
+ *
+ * While the form is editable, text the user typed is never hidden by a change
+ * elsewhere in it: unpicking every option leaves a written note on screen,
+ * muted and still editable, so it reads as parked rather than lost and can be
+ * moved into Other by hand. Only an empty note gives way to the `Add a note`
+ * button, and never while it holds the caret. A disabled form draws only a
+ * note that would be sent, which is all a record ever carries.
+ */
+function NoteField({
+	header,
+	note,
+	applies,
+	nothingPicked,
+	disabled,
+	onChange,
+}: {
+	header: string;
+	note: string;
+	applies: boolean;
+	nothingPicked: boolean;
+	disabled: boolean;
+	onChange?: (text: string) => void;
+}) {
+	// Screen state only: after a reload an empty note is a button again and a
+	// written one is already a box, so there is nothing here worth persisting.
+	const [opened, setOpened] = useState(false);
+	const [focused, setFocused] = useState(false);
+	const textareaRef = useRef<HTMLTextAreaElement>(null);
+	const hintId = useId();
+	const written = note.trim() !== "";
+
+	// Only the press on `Add a note` sets `opened`, and the box mounts in that
+	// same render — the user asked for it to type in. Once open it stays open,
+	// so the box coming back after a re-pick does not take the caret again.
+	useEffect(() => {
+		if (opened) textareaRef.current?.focus();
+	}, [opened]);
+
+	// Locking the block swaps the box out from under the caret, and a focused
+	// element that is removed fires no blur in every browser — so `focused`
+	// would hold an empty box open once the block is unlocked again.
+	useEffect(() => {
+		if (disabled) setFocused(false);
+	}, [disabled]);
+
+	if (disabled || !onChange) {
+		if (!applies || !written) return null;
+		return (
+			<div className="space-y-1">
+				<NoteLabel />
+				<p className="whitespace-pre-wrap break-words rounded border border-th-border bg-th-bg-primary px-2 py-1 text-sm text-th-text-primary">
+					{note}
+				</p>
+			</div>
+		);
+	}
+
+	if (!written && !focused && !(opened && applies)) {
+		if (!applies) return null;
+		return (
+			<button
+				type="button"
+				onClick={() => setOpened(true)}
+				className="touch-target flex items-center gap-1 rounded text-xs text-th-accent transition-colors hover:text-th-text-primary focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent"
+			>
+				<Plus className="size-3.5" />
+				Add a note
+			</button>
+		);
+	}
+
+	const parked = written && !applies;
+	return (
+		<div className="space-y-1">
+			<NoteLabel />
+			<TextareaAutosize
+				ref={textareaRef}
+				aria-label={header ? `Note for ${header}` : "Note"}
+				// The dashed border is the only other sign it will not be sent.
+				aria-describedby={parked ? hintId : undefined}
+				value={note}
+				onChange={(e) => onChange(e.target.value)}
+				onFocus={() => setFocused(true)}
+				onBlur={() => setFocused(false)}
+				placeholder="Anything the agent should know about this choice"
+				minRows={2}
+				maxRows={5}
+				className={`block w-full resize-none rounded bg-th-bg-primary px-2 py-1 pointer-coarse:py-2 text-sm placeholder:text-th-text-muted ${inputClass} ${
+					parked ? "border-dashed text-th-text-muted" : "text-th-text-primary"
+				}`}
+			/>
+			{parked && (
+				<p id={hintId} className="text-xs text-th-text-muted">
+					{nothingPicked
+						? "Not sent until you pick an option."
+						: "Not sent with Other — add it to your answer above."}
+				</p>
+			)}
+		</div>
+	);
+}
+
+function NoteLabel() {
+	return <div className="text-xs text-th-text-muted">Note</div>;
 }
 
 /** "14:02" in the reader's own locale, or nothing for a time that is not one. */

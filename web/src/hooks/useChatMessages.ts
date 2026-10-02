@@ -639,9 +639,10 @@ export function useChatMessages({
 					answers && toAnswerParams(answers),
 				);
 				setMessages((prev) => {
-					// The server's parse and prompt over the echo's: the sender is left
-					// out of the broadcast, so this is its one copy of what the agent
-					// was actually sent.
+					// The server's text over the echo's — a command's parse and prompt,
+					// or the body written from the answers: the sender is left out of
+					// the broadcast, so this is its one copy of what the agent was
+					// actually sent.
 					const filled = expanded
 						? prev.map((m) =>
 								m.id === userMessageId && m.role === "user"

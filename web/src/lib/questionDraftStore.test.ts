@@ -12,6 +12,7 @@ const answer: QuestionDraft = {
 	otherPicked: false,
 	declined: false,
 	note: "",
+	answerNote: "pin it to 16",
 };
 
 /** The store as a freshly loaded page sees it: rehydrated from what is stored. */
@@ -41,6 +42,24 @@ describe("questionDraftStore", () => {
 
 		questionDraftActions.restore("s1", ["r1"]);
 		expect(useQuestionDraftStore.getState().drafts.s1?.r1).toEqual(answer);
+	});
+
+	// A draft stored before a field existed comes back without it, and every
+	// reader of a draft takes the fields as always there.
+	it("fills in what a draft stored by an older page lacks", async () => {
+		const { answerNote: _, ...older } = answer;
+		localStorage.setItem(
+			"question_drafts",
+			JSON.stringify({ state: { drafts: { s1: { r1: older } } }, version: 0 }),
+		);
+
+		const { useQuestionDraftStore, questionDraftActions } = await reload();
+		questionDraftActions.restore("s1", ["r1"]);
+
+		expect(useQuestionDraftStore.getState().drafts.s1?.r1).toEqual({
+			...answer,
+			answerNote: "",
+		});
 	});
 
 	it("drops a stored draft whose question the arriving list no longer carries", async () => {

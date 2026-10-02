@@ -18,6 +18,26 @@ export const EMPTY_SELECTION: QuestionSelection = {
 	otherText: null,
 };
 
+/**
+ * Whether a note may go beside this selection — the client's half of the
+ * server's `chat.validateNote`, so the form never offers a note the server
+ * would refuse.
+ *
+ * It needs something picked to sit beside. A free-text answer and a single
+ * choice of **Other** take none: both are already the user's own words.
+ * Beside a multiple choice, Other is one more pick among the rest.
+ */
+export function noteApplies(
+	question: Pick<AskUserQuestion, "options" | "multiSelect">,
+	selection: QuestionSelection,
+): boolean {
+	if (question.options.length === 0) return false;
+	return (
+		selection.labels.length > 0 ||
+		(question.multiSelect && selection.otherText !== null)
+	);
+}
+
 // The flat answer format of the CLI's own blocking question: labels joined by
 // ", ", with an optional trailing `Other: <free text>` entry. **Read only.**
 // Nothing writes it any more — an answer today keeps its labels and the user's

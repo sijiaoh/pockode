@@ -384,7 +384,8 @@ export interface UserMessage {
 	/**
 	 * The posted questions this message answers, when it answers any. The bubble
 	 * is drawn from these rather than from `content`, which is the same facts
-	 * flattened for the agent to read (docs/answering-ui.md §3).
+	 * flattened for the agent to read — written by the server, and empty on the
+	 * sender's echo until its reply arrives (docs/answering-ui.md §3).
 	 */
 	answering?: QuestionAnswerRecord[];
 	/**
@@ -576,7 +577,12 @@ export interface QuestionAnswerRecord {
 	 */
 	text?: string;
 	declined?: boolean;
-	/** The optional line the user added beside a decline. */
+	/**
+	 * The optional line beside the answer: the reason beside a decline, or a
+	 * remark beside the options picked. Never on a question that offered no
+	 * options, nor beside **Other** on a single-select one — there the answer is
+	 * already the answerer's own words, and a note would read as a second one.
+	 */
 	note?: string;
 	/**
 	 * Who gave this answer. Absent on records written before an agent could
@@ -589,7 +595,9 @@ export interface QuestionAnswerRecord {
 
 /**
  * One question answered by a `chat.message`, as the client states it.
- * Either `declined`, or something in `answers` or `text`.
+ * Either `declined`, or something in `answers` or `text`; `note` beside either,
+ * under the rules on {@link QuestionAnswerRecord.note}. The message carrying
+ * these has empty `content`: the server writes the text the agent reads.
  */
 export interface QuestionAnswerParams {
 	request_id: string;
@@ -711,9 +719,10 @@ export interface MessageParams {
 export interface MessageResult {
 	seq?: HistorySeq;
 	/**
-	 * Set only for a message that invoked a Pockode command: the prompt it
-	 * expanded to and the command as the server parsed it — the two fields its
-	 * record carries, which this client would otherwise never see.
+	 * Set when the server wrote the text the agent was sent: the prompt a Pockode
+	 * command expanded to (with `command` as the server parsed it), or the body
+	 * written from a message's `answering`. The `content` its record carries,
+	 * which this client would otherwise never see.
 	 */
 	content?: string;
 	command?: PockodeCommandInvocation;

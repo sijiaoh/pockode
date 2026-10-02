@@ -34,7 +34,7 @@ The MCP server runs as a stdio JSON-RPC 2.0 subprocess, spawned per Claude sessi
 | `agent_role_get` | `id` | — | `{id, name, role_prompt}` |
 | `agent_role_reset_defaults` | — | — | Confirmation string |
 | `question_post` | `questions` (each: `question`, `header`, optional `options` — each `label`, optional `description`, `recommended` — and `multi_select`) | — | Confirmation string naming each question's header and `request_id` |
-| `question_answer` | `request_id` | `answers`, `text`, `session_id` | Confirmation string |
+| `question_answer` | `request_id` | `answers`, `text`, `note`, `session_id` | Confirmation string |
 | `question_cancel` | `request_id` | — | Confirmation string |
 
 ### Security: Prompt Injection Prevention

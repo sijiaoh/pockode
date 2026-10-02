@@ -111,6 +111,18 @@ describe("MessageItem", () => {
 			expect(screen.getByText("Node · pin it to 22")).toBeInTheDocument();
 		});
 
+		// The bubble is what the user said; a remark left off it would show
+		// them less than the agent was sent.
+		it("draws the note beside an answer", () => {
+			render(
+				<MessageItem
+					sessionId="session-1"
+					message={answering({ answers: ["Postgres"], note: "pin it to 16" })}
+				/>,
+			);
+			expect(screen.getByText("Postgres — pin it to 16")).toBeInTheDocument();
+		});
+
 		it("says a decline is one, with the note when there was one", () => {
 			render(
 				<MessageItem

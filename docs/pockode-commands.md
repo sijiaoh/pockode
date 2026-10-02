@@ -75,7 +75,8 @@ says what the agent was sent then, not what the command would expand to now
 
 The sender is left out of the broadcast, so it learns both fields from the reply
 to its own `chat.message` call: `rpc.MessageResult` carries `content` and
-`command` beside `seq`, and only for a command message
+`command` beside `seq`; `command` only for a command message, `content` also for
+a message carrying answers
 ([code/websocket-rpc.md](code/websocket-rpc.md#growing-a-reply)).
 
 ## How it is drawn
@@ -157,14 +158,14 @@ is written to be shown to the user as-is:
 | Unknown name | `Unknown Pockode command "/pockode-foo". Available: /pockode-lead` — only the commands the project could run, as the palette lists them; with none, the `Available:` part is left off |
 | A command that needs a branch, in a worktree whose HEAD is detached | `/pockode-lead needs the current branch, but HEAD is detached. Check out a branch and send it again.` |
 | A command that needs git, in a project that is not a git repository | ``/pockode-lead needs a git repository. Ask the AI to run `git init`, then send it again.`` |
-| Sent together with `answering` | `A Pockode command cannot be sent together with answers. Send the answers first, then the command on its own.` |
+| Sent together with `answering` | `Answers are sent on their own: the message the agent reads is written from them. Send the answers first, then the rest as a message of its own. If you did not type anything beside them, reload the page — this client is out of date.` |
 
-The server refuses a command sent with `answering` because an answer is text
-written for the questions it answers, and a command's prompt is not that
-text. The server should not guess which of the two the user meant. The web
-client cannot produce this case: the answer panel builds its content with
-`buildAnswerMessage`, which always starts with `Answering:`. The check protects
-the server from other clients.
+The server refuses a command sent with `answering` because it refuses any
+content beside answers: the message the agent reads is written by the server
+from the answers, so the content has nowhere to go, and which of the two the
+user meant is not the server's to guess. The web client cannot produce this
+case — the answer panel sends empty content — so the check protects the server
+from other clients and from a stale page.
 
 Whether the project is a repository is the worktree registry's answer, the
 same one the client hides its git UI on ([git.md](git.md#projects-without-a-repository)),

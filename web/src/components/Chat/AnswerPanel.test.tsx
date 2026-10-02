@@ -195,18 +195,14 @@ describe("AnswerPanel", () => {
 
 		await user.click(screen.getByRole("radio", { name: /Other/ }));
 		await user.type(
-			screen.getByPlaceholderText("Enter your answer..."),
+			screen.getByRole("textbox", { name: "Other answer for Database" }),
 			"MySQL",
 		);
 		await user.click(screen.getByRole("button", { name: "Send" }));
 
-		const [content, answering] = onSend.mock.calls[0];
-		expect(answering).toMatchObject([
+		expect(onSend.mock.calls[0][0]).toMatchObject([
 			{ request_id: "r1", answers: [], text: "MySQL" },
 		]);
-		// The prose is the only half the CLI reads, so it has to say in words what
-		// the record says structurally.
-		expect(content).toContain("A: MySQL");
 	});
 
 	// Ticking Other is not yet an answer, and Send must not offer to deliver one:
@@ -232,10 +228,10 @@ describe("AnswerPanel", () => {
 		await user.click(screen.getByRole("checkbox", { name: /SQLite/ }));
 		await user.click(screen.getByRole("button", { name: "Send" }));
 
-		expect(onSend.mock.calls[0][1]).toMatchObject([
+		expect(onSend.mock.calls[0][0]).toMatchObject([
 			{ request_id: "r1", answers: ["Postgres", "SQLite"] },
 		]);
-		expect(onSend.mock.calls[0][1][0].text).toBeUndefined();
+		expect(onSend.mock.calls[0][0][0].text).toBeUndefined();
 	});
 
 	// Radios are exclusive and Other is one of them. The text is kept in the
@@ -247,16 +243,117 @@ describe("AnswerPanel", () => {
 
 		await user.click(screen.getByRole("radio", { name: /Other/ }));
 		await user.type(
-			screen.getByPlaceholderText("Enter your answer..."),
+			screen.getByRole("textbox", { name: "Other answer for Database" }),
 			"MySQL",
 		);
 		await user.click(screen.getByRole("radio", { name: /SQLite/ }));
+		// Kept on screen, not just in the draft: hidden, it would read as lost.
+		// The box is not part of the radio's label, so its text is not read out
+		// as the option's name.
+		expect(screen.getByRole("radio", { name: "Other" })).not.toBeChecked();
+		expect(
+			screen.getByRole("textbox", { name: "Other answer for Database" }),
+		).toHaveValue("MySQL");
 		await user.click(screen.getByRole("button", { name: "Send" }));
 
-		expect(onSend.mock.calls[0][1]).toMatchObject([
+		expect(onSend.mock.calls[0][0]).toMatchObject([
 			{ request_id: "r1", answers: ["SQLite"] },
 		]);
-		expect(onSend.mock.calls[0][1][0].text).toBeUndefined();
+		expect(onSend.mock.calls[0][0][0].text).toBeUndefined();
+	});
+
+	describe("the Other input", () => {
+		const otherInput = () =>
+			screen.getByRole("textbox", { name: "Other answer for Database" });
+
+		// Going into the box is how the user says "something else"; making them
+		// tick the row first is a step they skip and then wonder why Send is off.
+		it("picks Other when the user clicks into it", async () => {
+			const user = userEvent.setup();
+			renderPanel([database]);
+
+			await user.click(screen.getByRole("radio", { name: /SQLite/ }));
+			await user.click(otherInput());
+
+			expect(screen.getByRole("radio", { name: /Other/ })).toBeChecked();
+			expect(screen.getByRole("radio", { name: /SQLite/ })).not.toBeChecked();
+		});
+
+		// Tab passes through the box on its way to the note. Picking on focus
+		// would silently swap out the radio the user already chose.
+		it("does not pick Other when focus only passes through it", async () => {
+			const user = userEvent.setup();
+			renderPanel([database]);
+
+			await user.click(screen.getByRole("radio", { name: /SQLite/ }));
+			otherInput().focus();
+
+			expect(screen.getByRole("radio", { name: /SQLite/ })).toBeChecked();
+			expect(screen.getByRole("radio", { name: /Other/ })).not.toBeChecked();
+		});
+
+		it("picks Other when the user types in it, and sends what was typed", async () => {
+			const user = userEvent.setup();
+			const { onSend } = renderPanel([database]);
+
+			await user.click(screen.getByRole("radio", { name: /SQLite/ }));
+			otherInput().focus();
+			await user.keyboard("MySQL");
+			await user.click(screen.getByRole("button", { name: "Send" }));
+
+			expect(onSend.mock.calls[0][0]).toMatchObject([
+				{ request_id: "r1", answers: [], text: "MySQL" },
+			]);
+		});
+
+		// In a multiple choice Other is one more pick: going into the box adds
+		// it beside the rest, and never unticks it.
+		it("adds Other beside the other picks of a multiple choice", async () => {
+			const user = userEvent.setup();
+			renderPanel([{ ...database, multi_select: true }]);
+
+			await user.click(screen.getByRole("checkbox", { name: /Postgres/ }));
+			await user.click(otherInput());
+			await user.click(otherInput());
+
+			expect(screen.getByRole("checkbox", { name: /Postgres/ })).toBeChecked();
+			expect(screen.getByRole("checkbox", { name: /Other/ })).toBeChecked();
+		});
+
+		// Answers that arrive here can be sentences; Enter must not end them.
+		it("takes more than one line", async () => {
+			const user = userEvent.setup();
+			renderPanel([database]);
+
+			await user.type(otherInput(), "MySQL{Enter}but only 8");
+
+			expect(otherInput()).toHaveValue("MySQL\nbut only 8");
+		});
+	});
+
+	describe("the count of picks", () => {
+		// Ticked Other counts while still empty: the count says what is ticked,
+		// not what is ready to send — the footer says that.
+		it("counts what a multiple choice has ticked, Other included", async () => {
+			const user = userEvent.setup();
+			renderPanel([{ ...database, multi_select: true }]);
+
+			expect(screen.queryByText(/selected$/)).not.toBeInTheDocument();
+			await user.click(screen.getByRole("checkbox", { name: /Postgres/ }));
+			expect(screen.getByText("1 selected")).toBeInTheDocument();
+			await user.click(screen.getByRole("checkbox", { name: /Other/ }));
+			expect(screen.getByText("2 selected")).toBeInTheDocument();
+		});
+
+		// A single choice is always one; counting it says nothing.
+		it("is not shown for a single choice", async () => {
+			const user = userEvent.setup();
+			renderPanel([database]);
+
+			await user.click(screen.getByRole("radio", { name: /Postgres/ }));
+
+			expect(screen.queryByText(/selected$/)).not.toBeInTheDocument();
+		});
 	});
 
 	it("sends one message for every block that is ready", async () => {
@@ -267,9 +364,7 @@ describe("AnswerPanel", () => {
 		await user.click(screen.getByRole("button", { name: "Send" }));
 
 		expect(onSend).toHaveBeenCalledTimes(1);
-		const [content, answering] = onSend.mock.calls[0];
-		expect(content).toContain("Q: Which database should I use?\nA: SQLite");
-		expect(answering).toMatchObject([
+		expect(onSend.mock.calls[0][0]).toMatchObject([
 			{
 				request_id: "r1",
 				header: "Database",
@@ -368,9 +463,160 @@ describe("AnswerPanel", () => {
 		);
 		await user.click(screen.getByRole("button", { name: "Send" }));
 
-		expect(onSend.mock.calls[0][1]).toMatchObject([
+		expect(onSend.mock.calls[0][0]).toMatchObject([
 			{ request_id: "r2", declined: true, note: "ask ops" },
 		]);
+	});
+
+	// Both go out as the record's one `note`, so nothing but the draft keeps a
+	// reason for refusing from turning into a remark on the answer, or back.
+	it("keeps a decline's note and an answer's note apart", async () => {
+		const user = userEvent.setup();
+		const { onSend } = renderPanel([database]);
+
+		await user.click(screen.getByRole("radio", { name: /SQLite/ }));
+		await user.click(screen.getByRole("button", { name: "Add a note" }));
+		await user.type(
+			screen.getByRole("textbox", { name: "Note for Database" }),
+			"pin it",
+		);
+		await user.click(screen.getByRole("checkbox", { name: /Won't answer/ }));
+		await user.type(
+			screen.getByPlaceholderText("Add a note (optional)"),
+			"ask ops",
+		);
+		await user.click(screen.getByRole("checkbox", { name: /Won't answer/ }));
+		await user.click(screen.getByRole("button", { name: "Send" }));
+
+		expect(onSend.mock.calls[0][0]).toMatchObject([
+			{ request_id: "r1", answers: ["SQLite"], note: "pin it" },
+		]);
+	});
+
+	describe("the note beside an answer", () => {
+		it("is offered once something is picked, and sent with it", async () => {
+			const user = userEvent.setup();
+			const { onSend } = renderPanel([database]);
+			expect(
+				screen.queryByRole("button", { name: "Add a note" }),
+			).not.toBeInTheDocument();
+
+			await user.click(screen.getByRole("radio", { name: /Postgres/ }));
+			await user.click(screen.getByRole("button", { name: "Add a note" }));
+			// The press was a request to type, so the caret is already there.
+			const note = screen.getByRole("textbox", { name: "Note for Database" });
+			expect(note).toHaveFocus();
+			await user.keyboard("pin it to 16");
+			await user.click(screen.getByRole("button", { name: "Send" }));
+
+			expect(onSend.mock.calls[0][0]).toMatchObject([
+				{ request_id: "r1", answers: ["Postgres"], note: "pin it to 16" },
+			]);
+		});
+
+		// Other is already the user's own words, and a question with no options
+		// has nothing for a remark to sit beside: the server refuses both.
+		it("is not offered beside a single Other or a free-text answer", async () => {
+			const user = userEvent.setup();
+			renderPanel([database, region]);
+
+			await user.click(screen.getByRole("radio", { name: /Other/ }));
+			await user.type(
+				screen.getByRole("textbox", { name: "Other answer for Database" }),
+				"MySQL",
+			);
+			await user.type(screen.getByRole("textbox", { name: "Region" }), "eu");
+
+			expect(
+				screen.queryByRole("button", { name: "Add a note" }),
+			).not.toBeInTheDocument();
+		});
+
+		// Beside several picks, Other is one more of them.
+		it("is offered beside Other in a multiple choice", async () => {
+			const user = userEvent.setup();
+			renderPanel([{ ...database, multi_select: true }]);
+
+			await user.click(screen.getByRole("checkbox", { name: /Other/ }));
+
+			expect(
+				screen.getByRole("button", { name: "Add a note" }),
+			).toBeInTheDocument();
+		});
+
+		// Unpicking is trying something else, not throwing the note away: it
+		// stays on screen and in the draft, and simply is not sent.
+		it("is kept, but not sent, while nothing it can go beside is picked", async () => {
+			const user = userEvent.setup();
+			const { onSend } = renderPanel([database]);
+
+			await user.click(screen.getByRole("radio", { name: /SQLite/ }));
+			await user.click(screen.getByRole("button", { name: "Add a note" }));
+			await user.keyboard("pin it");
+			await user.click(screen.getByRole("radio", { name: /Other/ }));
+			await user.type(
+				screen.getByRole("textbox", { name: "Other answer for Database" }),
+				"MySQL",
+			);
+
+			expect(
+				screen.getByRole("textbox", { name: "Note for Database" }),
+			).toHaveValue("pin it");
+			expect(
+				screen.getByText("Not sent with Other — add it to your answer above."),
+			).toBeInTheDocument();
+
+			await user.click(screen.getByRole("button", { name: "Send" }));
+			expect(onSend.mock.calls[0][0][0]).toMatchObject({ text: "MySQL" });
+			expect(onSend.mock.calls[0][0][0].note).toBeUndefined();
+		});
+
+		it("says why a kept note is not sent when nothing is picked", async () => {
+			const user = userEvent.setup();
+			renderPanel([{ ...database, multi_select: true }]);
+
+			await user.click(screen.getByRole("checkbox", { name: /Postgres/ }));
+			await user.click(screen.getByRole("button", { name: "Add a note" }));
+			await user.keyboard("pin it");
+			await user.click(screen.getByRole("checkbox", { name: /Postgres/ }));
+
+			expect(
+				screen.getByRole("textbox", { name: "Note for Database" }),
+			).toHaveAccessibleDescription("Not sent until you pick an option.");
+		});
+
+		// A box that went away as its last character was deleted would take the
+		// caret with it, mid-edit.
+		it("does not vanish from under the caret when emptied", async () => {
+			const user = userEvent.setup();
+			questionDraftActions.set("s1", "r1", {
+				...EMPTY_DRAFT,
+				answerNote: "x",
+			});
+			renderPanel([database]);
+
+			const note = screen.getByRole("textbox", { name: "Note for Database" });
+			await user.click(note);
+			await user.keyboard("{Backspace}");
+
+			expect(note).toBeInTheDocument();
+			expect(note).toHaveFocus();
+		});
+
+		// What a reload puts back: the store is persisted, so the panel only has
+		// to draw what it holds.
+		it("comes back from the draft as a box, not a button", () => {
+			questionDraftActions.set("s1", "r1", {
+				...EMPTY_DRAFT,
+				labels: ["SQLite"],
+				answerNote: "pin it",
+			});
+			renderPanel([database]);
+
+			expect(
+				screen.getByRole("textbox", { name: "Note for Database" }),
+			).toHaveValue("pin it");
+		});
 	});
 
 	it("does not clear what was picked when the user ticks Won't answer", async () => {

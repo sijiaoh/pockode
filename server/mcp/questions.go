@@ -178,6 +178,7 @@ type questionAnswerParams struct {
 	RequestID string   `json:"request_id"`
 	Answers   []string `json:"answers"`
 	Text      string   `json:"text"`
+	Note      string   `json:"note"`
 	SessionID string   `json:"session_id"`
 }
 
@@ -235,6 +236,7 @@ func (e *Executor) questionAnswer(ctx context.Context, caller Caller, args json.
 		RequestID: params.RequestID,
 		Answers:   params.Answers,
 		Text:      params.Text,
+		Note:      params.Note,
 	}, by); err != nil {
 		// Translated rather than passed through: chat's own sentence is written
 		// for the person sitting in *that* session — "answer it, or stop the

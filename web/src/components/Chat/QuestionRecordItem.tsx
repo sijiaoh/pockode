@@ -217,6 +217,9 @@ function QuestionRecordItem({
 							askedAt={record.askedAt}
 							name={record.requestId}
 							selection={selection}
+							// A declined card's note is its reason, already in the
+							// outcome line above.
+							note={isAnswered ? answer?.note : undefined}
 							disabled
 							onSelectOption={noop}
 							onSelectOther={noop}

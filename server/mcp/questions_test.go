@@ -543,6 +543,7 @@ func TestQuestionAnswer_AnswersAnotherSessionsQuestion(t *testing.T) {
 	out, err := callAs(t, exec, callerInMain, "question_answer", map[string]any{
 		"request_id": "req-1",
 		"answers":    []string{"Postgres"},
+		"note":       "pin it to 16",
 	})
 	if err != nil {
 		t.Fatalf("question_answer: %v", err)
@@ -557,6 +558,9 @@ func TestQuestionAnswer_AnswersAnotherSessionsQuestion(t *testing.T) {
 	}
 	if delivered[0].sessionID != "sess-2" {
 		t.Errorf("delivered to %q, want the session that asked", delivered[0].sessionID)
+	}
+	if got := delivered[0].answer; !slices.Equal(got.Answers, []string{"Postgres"}) || got.Note != "pin it to 16" {
+		t.Errorf("answer = %+v, want the labels and the note passed on", got)
 	}
 	want := agent.QuestionResolver{Kind: agent.ResolverAgent, WorkID: workID, Title: "Ship the API"}
 	if delivered[0].by != want {

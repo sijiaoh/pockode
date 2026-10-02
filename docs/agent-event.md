@@ -165,15 +165,18 @@ questions leaves "I will not answer the second" with no subject. The mechanism i
 [code/agent-integration.md § Posted
 Questions](code/agent-integration.md#posted-questions).
 
-An `answering` entry keeps the option labels the user picked and what they wrote
-themselves in **separate fields** — `answers` and `text`:
+An `answering` entry keeps the option labels the user picked, what they wrote
+themselves, and any remark on it in **separate fields** — `answers`, `text` and
+`note`:
 
 ```jsonc
-{ "type": "message", "content": "Answering:\n\nQ: Which database?\nA: Postgres",
-  "answering": [ { "request_id": "...", "header": "Database", "question": "Which database?",
+{ "type": "message",
+  "content": "Answering:\n\nQ: Which databases?\nA: Postgres · and, in their own words: SQLite in tests — note: pin Postgres to 16",
+  "answering": [ { "request_id": "...", "header": "Database", "question": "Which databases?",
                    "answers": ["Postgres"],        // labels the question offered, and only those
-                   "text": "and SQLite in tests",  // the user's own words: Other, or a free-text answer
-                   "declined": false, "note": "", "answered_at": "RFC3339" } ] }
+                   "text": "SQLite in tests",      // the user's own words: Other, or a free-text answer
+                   "note": "pin Postgres to 16",   // a remark beside the answer, or a decline's reason
+                   "answered_at": "RFC3339" } ] }  // "declined": true replaces answers and text
 ```
 
 **Two fields rather than one list, because the agent has to be able to tell them
@@ -187,8 +190,9 @@ be a label.
 What reaches the CLI is the `content` string alone; `answering` is Pockode's own
 structure and is never sent. So the prose has to say in words what the record
 says structurally, and it does — free text is written as *"and, in their own
-words: …"* rather than beside the labels unmarked
-(`web/src/utils/answerMessage.ts`).
+words: …"* rather than beside the labels unmarked, and a `note` as *"— note:
+…"* after the answer
+([code/agent-integration.md](code/agent-integration.md#answering)).
 
 An entry also carries `resolved_by` — `{"kind": "user"}`, or `{"kind": "agent",
 "work_id": "...", "title": "..."}` when another agent answered through
@@ -304,7 +308,7 @@ owns them.
 
 `server/watch/chat_messages.go` — `ChatMessagesWatcher` implements `process.ChatMessageListener`. Receives already-persisted events (persistence happens in `ProcessManager.streamEvents()` via `store.AppendToHistory`), converts them to `EventRecord` via `ToRecord()`, then broadcasts JSON-RPC notifications with method `"chat.<event-type>"` and the subscription ID for client-side routing. Each notification also carries the record's `seq`, the same address a history page carries on its records ([paging](agent-chat.md#history-paging)), so a client cannot tell a replayed record from a live one when it names a point in the conversation ([code/agent-integration.md](code/agent-integration.md#history-storage)). Events that were not persisted carry none.
 
-A user message is broadcast to every subscriber except the tab that sent it, which has already echoed the message into its own transcript. That tab therefore learns its own record's address from a third source — the reply to the `chat.message` call it made (`rpc.MessageResult`), the only channel that reaches it. Replayed history, live notification and that reply all carry the same `seq`, so what a client can name does not depend on which of the three delivered the record. For a message that invoked a [Pockode command](pockode-commands.md) the reply also carries the record's `content` and `command`, for the same reason: the sender typed `/pockode-lead`, and the prompt the agent was sent instead reaches it nowhere else. A message no record names stays unaddressable, and a client must not number it itself.
+A user message is broadcast to every subscriber except the tab that sent it, which has already echoed the message into its own transcript. That tab therefore learns its own record's address from a third source — the reply to the `chat.message` call it made (`rpc.MessageResult`), the only channel that reaches it. Replayed history, live notification and that reply all carry the same `seq`, so what a client can name does not depend on which of the three delivered the record. For a message that invoked a [Pockode command](pockode-commands.md) the reply also carries the record's `content` and `command`, for the same reason: the sender typed `/pockode-lead`, and the prompt the agent was sent instead reaches it nowhere else. A message carrying `answering` gets `content` back the same way: the sender sent none, and the body the server wrote from the answers reaches it nowhere else. A message no record names stays unaddressable, and a client must not number it itself.
 
 ## Frontend
 

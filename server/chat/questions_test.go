@@ -329,27 +329,32 @@ func TestWithdrawQuestions_TakesBackEverything(t *testing.T) {
 	}
 }
 
-// TestSendMessageAnswering_DeliversAndClears is the answering path end to end:
+// TestSendAnswers_DeliversAndClears is the answering path end to end:
 // the agent is handed the prose, the record carries the structured copy a bubble
 // is drawn from, and the questions leave the list.
-func TestSendMessageAnswering_DeliversAndClears(t *testing.T) {
+func TestSendAnswers_DeliversAndClears(t *testing.T) {
 	f := newQuestionFixture(t)
 	first := f.post(t, "Database")
 	second := f.post(t, "Runtime")
 
-	_, err := f.client.SendMessageAnswering(context.Background(), "sess", "Answering: ...", []Answer{
+	_, content, err := f.client.SendAnswers(context.Background(), "sess", []Answer{
 		{RequestID: first, Answers: []string{"Postgres"}},
 		{RequestID: second, Declined: true, Note: "not my call"},
 	}, nil)
 	if err != nil {
-		t.Fatalf("SendMessageAnswering: %v", err)
+		t.Fatalf("SendAnswers: %v", err)
 	}
 
 	if got := f.unanswered(t); len(got) != 0 {
 		t.Errorf("unanswered = %+v, want both resolved", got)
 	}
-	if prompts := f.agent.session(t, 1).sentPrompts(); len(prompts) != 1 || prompts[0] != "Answering: ..." {
-		t.Errorf("prompts = %q, want the message delivered once", prompts)
+	want := "Answering:\n\nQ: Which database?\nA: Postgres\n\nQ: Which database?\nA: (not answering) — note: not my call"
+	if prompts := f.agent.session(t, 1).sentPrompts(); len(prompts) != 1 || prompts[0] != want {
+		t.Errorf("prompts = %q, want %q delivered once", prompts, want)
+	}
+	// Handed back because the sender is left out of the broadcast.
+	if content != want {
+		t.Errorf("returned content = %q, want what the agent was sent", content)
 	}
 
 	records := f.records(t)
@@ -370,17 +375,17 @@ func TestSendMessageAnswering_DeliversAndClears(t *testing.T) {
 	}
 }
 
-// TestSendMessageAnswering_PartialAnswersAreFine: the user may answer two of
+// TestSendAnswers_PartialAnswersAreFine: the user may answer two of
 // three and come back to the third.
-func TestSendMessageAnswering_PartialAnswersAreFine(t *testing.T) {
+func TestSendAnswers_PartialAnswersAreFine(t *testing.T) {
 	f := newQuestionFixture(t)
 	first := f.post(t, "Database")
 	second := f.post(t, "Runtime")
 
-	if _, err := f.client.SendMessageAnswering(context.Background(), "sess", "one of them", []Answer{
+	if _, _, err := f.client.SendAnswers(context.Background(), "sess", []Answer{
 		{RequestID: first, Answers: []string{"SQLite"}},
 	}, nil); err != nil {
-		t.Fatalf("SendMessageAnswering: %v", err)
+		t.Fatalf("SendAnswers: %v", err)
 	}
 
 	pending := f.unanswered(t)
@@ -389,12 +394,12 @@ func TestSendMessageAnswering_PartialAnswersAreFine(t *testing.T) {
 	}
 }
 
-// TestSendMessageAnswering_OneResolvedQuestionRefusesTheWholeMessage is the
+// TestSendAnswers_OneResolvedQuestionRefusesTheWholeMessage is the
 // contract the composer's draft handling is written against. The content is one
 // string written for all the answers together, so delivering the half that is
 // still wanted would hand the agent prose answering a question it already has an
 // answer to.
-func TestSendMessageAnswering_OneResolvedQuestionRefusesTheWholeMessage(t *testing.T) {
+func TestSendAnswers_OneResolvedQuestionRefusesTheWholeMessage(t *testing.T) {
 	f := newQuestionFixture(t)
 	first := f.post(t, "Database")
 	second := f.post(t, "Runtime")
@@ -403,7 +408,7 @@ func TestSendMessageAnswering_OneResolvedQuestionRefusesTheWholeMessage(t *testi
 	}
 
 	before := len(f.records(t))
-	_, err := f.client.SendMessageAnswering(context.Background(), "sess", "both", []Answer{
+	_, _, err := f.client.SendAnswers(context.Background(), "sess", []Answer{
 		{RequestID: first, Answers: []string{"Postgres"}},
 		{RequestID: second, Answers: []string{"Node"}},
 	}, nil)
@@ -427,7 +432,7 @@ func TestSendMessageAnswering_OneResolvedQuestionRefusesTheWholeMessage(t *testi
 	}
 }
 
-func TestSendMessageAnswering_ShapeRefusals(t *testing.T) {
+func TestSendAnswers_ShapeRefusals(t *testing.T) {
 	tests := []struct {
 		name   string
 		answer func(id string) Answer
@@ -454,7 +459,33 @@ func TestSendMessageAnswering_ShapeRefusals(t *testing.T) {
 		{"an option and free text on a single-select question", func(id string) Answer {
 			return Answer{RequestID: id, Answers: []string{"Postgres"}, Text: "actually SQLite"}
 		}, "takes one answer"},
+		// Other is already the user's own words; a note beside it would be a
+		// second sentence the agent could not tell from the answer.
+		{"a note beside Other on a single-select question", func(id string) Answer {
+			return Answer{RequestID: id, Text: "MySQL", Note: "it is what ops runs"}
+		}, "takes no note"},
+		// The shape is reported before the note: the note has nothing to sit
+		// beside, and "answered with nothing" is what the user has to fix.
+		{"a note with nothing chosen", func(id string) Answer {
+			return Answer{RequestID: id, Note: "pin it to 16"}
+		}, "answered with nothing"},
 	}
+
+	t.Run("a note on a free-text question", func(t *testing.T) {
+		f := newQuestionFixture(t)
+		q, err := postOne(f.client, context.Background(), "sess", QuestionSpec{
+			Header: "Name", Question: "What should it be called?",
+		})
+		if err != nil {
+			t.Fatalf("PostQuestions: %v", err)
+		}
+		_, _, err = f.client.SendAnswers(context.Background(), "sess", []Answer{
+			{RequestID: q.RequestID, Text: "ledger", Note: "short is better"},
+		}, nil)
+		if !errors.Is(err, ErrAnswerShape) || !strings.Contains(err.Error(), "takes no note") {
+			t.Fatalf("error = %v, want ErrAnswerShape saying it takes no note", err)
+		}
+	})
 
 	t.Run("a free-text question answered with nothing", func(t *testing.T) {
 		f := newQuestionFixture(t)
@@ -467,7 +498,7 @@ func TestSendMessageAnswering_ShapeRefusals(t *testing.T) {
 		id := q.RequestID
 		// Recorded as answered, it would read to the agent as "the user said
 		// nothing" — which is what declining says properly.
-		_, err = f.client.SendMessageAnswering(context.Background(), "sess", "x", []Answer{
+		_, _, err = f.client.SendAnswers(context.Background(), "sess", []Answer{
 			{RequestID: id, Text: "   "},
 		}, nil)
 		if !errors.Is(err, ErrAnswerShape) {
@@ -483,7 +514,7 @@ func TestSendMessageAnswering_ShapeRefusals(t *testing.T) {
 			f := newQuestionFixture(t)
 			id := f.post(t, "Database")
 
-			_, err := f.client.SendMessageAnswering(context.Background(), "sess", "x", []Answer{tt.answer(id)}, nil)
+			_, _, err := f.client.SendAnswers(context.Background(), "sess", []Answer{tt.answer(id)}, nil)
 			if !errors.Is(err, ErrAnswerShape) {
 				t.Fatalf("error = %v, want ErrAnswerShape", err)
 			}
@@ -497,11 +528,11 @@ func TestSendMessageAnswering_ShapeRefusals(t *testing.T) {
 	}
 }
 
-// TestSendMessageAnswering_AResolvedQuestionIsReportedBeforeABadShape: a typo
+// TestSendAnswers_AResolvedQuestionIsReportedBeforeABadShape: a typo
 // in one answer must not hide a question somebody else resolved, or the client
 // spends a whole round trip finding out about the second problem after fixing
 // the first.
-func TestSendMessageAnswering_AResolvedQuestionIsReportedBeforeABadShape(t *testing.T) {
+func TestSendAnswers_AResolvedQuestionIsReportedBeforeABadShape(t *testing.T) {
 	f := newQuestionFixture(t)
 	first := f.post(t, "Database")
 	second := f.post(t, "Runtime")
@@ -509,7 +540,7 @@ func TestSendMessageAnswering_AResolvedQuestionIsReportedBeforeABadShape(t *test
 		t.Fatalf("CancelQuestion: %v", err)
 	}
 
-	_, err := f.client.SendMessageAnswering(context.Background(), "sess", "both", []Answer{
+	_, _, err := f.client.SendAnswers(context.Background(), "sess", []Answer{
 		{RequestID: first, Answers: []string{"MySQL"}}, // never offered
 		{RequestID: second, Answers: []string{"Node"}}, // already withdrawn
 	}, nil)
@@ -521,9 +552,9 @@ func TestSendMessageAnswering_AResolvedQuestionIsReportedBeforeABadShape(t *test
 	}
 }
 
-// TestSendMessageAnswering_MultiSelectAndFreeText: the two shapes a single
+// TestSendAnswers_MultiSelectAndFreeText: the two shapes a single
 // answer may legitimately have more than one string in.
-func TestSendMessageAnswering_MultiSelectAndFreeText(t *testing.T) {
+func TestSendAnswers_MultiSelectAndFreeText(t *testing.T) {
 	t.Run("multi select", func(t *testing.T) {
 		f := newQuestionFixture(t)
 		q, err := postOne(f.client, context.Background(), "sess", QuestionSpec{
@@ -534,10 +565,10 @@ func TestSendMessageAnswering_MultiSelectAndFreeText(t *testing.T) {
 			t.Fatalf("PostQuestions: %v", err)
 		}
 		id := q.RequestID
-		if _, err := f.client.SendMessageAnswering(context.Background(), "sess", "both", []Answer{
+		if _, _, err := f.client.SendAnswers(context.Background(), "sess", []Answer{
 			{RequestID: id, Answers: []string{"linux", "windows"}},
 		}, nil); err != nil {
-			t.Fatalf("SendMessageAnswering: %v", err)
+			t.Fatalf("SendAnswers: %v", err)
 		}
 	})
 
@@ -551,10 +582,10 @@ func TestSendMessageAnswering_MultiSelectAndFreeText(t *testing.T) {
 		}
 		id := q.RequestID
 		// Anything goes: there were no options for it to fail to be one of.
-		if _, err := f.client.SendMessageAnswering(context.Background(), "sess", "answer", []Answer{
+		if _, _, err := f.client.SendAnswers(context.Background(), "sess", []Answer{
 			{RequestID: id, Text: "whatever I like"},
 		}, nil); err != nil {
-			t.Fatalf("SendMessageAnswering: %v", err)
+			t.Fatalf("SendAnswers: %v", err)
 		}
 	})
 
@@ -570,7 +601,7 @@ func TestSendMessageAnswering_MultiSelectAndFreeText(t *testing.T) {
 			t.Fatalf("PostQuestions: %v", err)
 		}
 		id := q.RequestID
-		_, err = f.client.SendMessageAnswering(context.Background(), "sess", "x", []Answer{
+		_, _, err = f.client.SendAnswers(context.Background(), "sess", []Answer{
 			{RequestID: id, Answers: []string{"pockode"}},
 		}, nil)
 		if !errors.Is(err, ErrAnswerShape) {
@@ -589,7 +620,7 @@ func TestSendMessageAnswering_MultiSelectAndFreeText(t *testing.T) {
 // told it was handed back a choice it never gave; it does not stop the user
 // saying something else. "None of these, it is X" is an answer, and squeezing it
 // into a decline would tell the agent the user refused to answer.
-func TestSendMessageAnswering_FreeTextBesideTheOptions(t *testing.T) {
+func TestSendAnswers_FreeTextBesideTheOptions(t *testing.T) {
 	for _, tt := range []struct {
 		name        string
 		multiSelect bool
@@ -625,9 +656,8 @@ func TestSendMessageAnswering_FreeTextBesideTheOptions(t *testing.T) {
 			}
 			id := q.RequestID
 
-			if _, err := f.client.SendMessageAnswering(context.Background(), "sess", "x",
-				[]Answer{tt.answer(id)}, nil); err != nil {
-				t.Fatalf("SendMessageAnswering: %v", err)
+			if _, _, err := f.client.SendAnswers(context.Background(), "sess", []Answer{tt.answer(id)}, nil); err != nil {
+				t.Fatalf("SendAnswers: %v", err)
 			}
 
 			answering := lastAnswering(t, f, id)
@@ -642,6 +672,56 @@ func TestSendMessageAnswering_FreeTextBesideTheOptions(t *testing.T) {
 			}
 			if pending := f.unanswered(t); len(pending) != 0 {
 				t.Errorf("unanswered = %+v, want the question answered", pending)
+			}
+		})
+	}
+}
+
+// A note sits beside an answer, never in it: recorded in its own field and
+// marked in the prose, so the agent cannot read it as a label or as Other.
+func TestSendAnswers_NoteBesideTheAnswer(t *testing.T) {
+	for _, tt := range []struct {
+		name        string
+		multiSelect bool
+		answer      func(id string) Answer
+		wantNote    string
+		wantLine    string
+	}{
+		{"beside an option", false, func(id string) Answer {
+			return Answer{RequestID: id, Answers: []string{"Postgres"}, Note: "  pin it to 16 "}
+		}, "pin it to 16", "A: Postgres — note: pin it to 16"},
+		{"beside options and Other, on a multi-select question", true, func(id string) Answer {
+			return Answer{RequestID: id, Answers: []string{"Postgres"}, Text: "DuckDB", Note: "DuckDB for analytics only"}
+		}, "DuckDB for analytics only", "A: Postgres · and, in their own words: DuckDB — note: DuckDB for analytics only"},
+		{"beside Other alone, on a multi-select question", true, func(id string) Answer {
+			return Answer{RequestID: id, Text: "DuckDB", Note: "for now"}
+		}, "for now", "A: DuckDB — note: for now"},
+		// Whitespace is no note, so it is not one Other refuses either.
+		{"blank beside Other on a single-select question", false, func(id string) Answer {
+			return Answer{RequestID: id, Text: "MySQL", Note: "  "}
+		}, "", "A: MySQL"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			f := newQuestionFixture(t)
+			q, err := postOne(f.client, context.Background(), "sess", QuestionSpec{
+				Header: "Database", Question: "Which one?", MultiSelect: tt.multiSelect,
+				Options: []session.QuestionOption{{Label: "Postgres"}, {Label: "SQLite"}},
+			})
+			if err != nil {
+				t.Fatalf("PostQuestions: %v", err)
+			}
+
+			if _, _, err := f.client.SendAnswers(context.Background(), "sess",
+				[]Answer{tt.answer(q.RequestID)}, nil); err != nil {
+				t.Fatalf("SendAnswers: %v", err)
+			}
+
+			if got := lastAnswering(t, f, q.RequestID).Note; got != tt.wantNote {
+				t.Errorf("note = %q, want %q", got, tt.wantNote)
+			}
+			want := "Answering:\n\nQ: Which one?\n" + tt.wantLine
+			if prompts := f.agent.session(t, 1).sentPrompts(); len(prompts) != 1 || prompts[0] != want {
+				t.Errorf("prompts = %q, want %q", prompts, want)
 			}
 		})
 	}
@@ -669,11 +749,11 @@ func lastAnswering(t *testing.T, f *questionFixture, requestID string) agent.Que
 	return agent.QuestionAnswer{}
 }
 
-func TestSendMessageAnswering_SameQuestionTwiceInOneMessage(t *testing.T) {
+func TestSendAnswers_SameQuestionTwiceInOneMessage(t *testing.T) {
 	f := newQuestionFixture(t)
 	id := f.post(t, "Database")
 
-	_, err := f.client.SendMessageAnswering(context.Background(), "sess", "x", []Answer{
+	_, _, err := f.client.SendAnswers(context.Background(), "sess", []Answer{
 		{RequestID: id, Answers: []string{"Postgres"}},
 		{RequestID: id, Answers: []string{"SQLite"}},
 	}, nil)
@@ -682,11 +762,11 @@ func TestSendMessageAnswering_SameQuestionTwiceInOneMessage(t *testing.T) {
 	}
 }
 
-// TestSendMessageAnswering_RefusedWhileAPermissionIsOnScreen: the session is
+// TestSendAnswers_RefusedWhileAPermissionIsOnScreen: the session is
 // blocked on something only a live process can take, and answering a posted
 // question does not change that. Reported as it is rather than silently
 // swallowed.
-func TestSendMessageAnswering_RefusedWhileAPermissionIsOnScreen(t *testing.T) {
+func TestSendAnswers_RefusedWhileAPermissionIsOnScreen(t *testing.T) {
 	f := newQuestionFixture(t)
 	id := f.post(t, "Database")
 
@@ -718,7 +798,7 @@ func TestSendMessageAnswering_RefusedWhileAPermissionIsOnScreen(t *testing.T) {
 		return err == nil && proc.TurnState().AwaitingUserAnswer()
 	})
 
-	_, err := f.client.SendMessageAnswering(context.Background(), "sess", "answer", []Answer{
+	_, _, err := f.client.SendAnswers(context.Background(), "sess", []Answer{
 		{RequestID: id, Answers: []string{"Postgres"}},
 	}, nil)
 	if !errors.Is(err, ErrTurnAwaitingAnswer) {
@@ -729,18 +809,17 @@ func TestSendMessageAnswering_RefusedWhileAPermissionIsOnScreen(t *testing.T) {
 	}
 }
 
-// TestSendMessageAnswering_NoAnswersIsAnOrdinaryMessage keeps the common path
-// honest: nothing about the question machinery touches a message that answers
-// nothing.
-func TestSendMessageAnswering_NoAnswersIsAnOrdinaryMessage(t *testing.T) {
+// A message answering nothing would reach the agent as a bare "Answering:";
+// the ordinary message is the handler's other path, not this one.
+func TestSendAnswers_RefusesNoAnswers(t *testing.T) {
 	f := newQuestionFixture(t)
-	id := f.post(t, "Database")
+	f.post(t, "Database")
 
-	if _, err := f.client.SendMessageAnswering(context.Background(), "sess", "just talking", nil, nil); err != nil {
-		t.Fatalf("SendMessageAnswering: %v", err)
+	if _, _, err := f.client.SendAnswers(context.Background(), "sess", nil, nil); !errors.Is(err, ErrAnswerShape) {
+		t.Fatalf("error = %v, want ErrAnswerShape", err)
 	}
-	if pending := f.unanswered(t); len(pending) != 1 || pending[0].RequestID != id {
-		t.Errorf("unanswered = %+v, want the question untouched", pending)
+	if got := len(f.agent.sessions); got != 0 {
+		t.Errorf("agent sessions started = %d, want nothing delivered", got)
 	}
 }
 
@@ -815,14 +894,14 @@ func TestAnswerQuestion_RecordsWhoAnsweredAndMarksTheMessage(t *testing.T) {
 
 // A person's answer keeps saying it was a person's, explicitly. It used to be
 // derivable from the record type and no longer is.
-func TestSendMessageAnswering_RecordsTheUserAsTheAnswerer(t *testing.T) {
+func TestSendAnswers_RecordsTheUserAsTheAnswerer(t *testing.T) {
 	f := newQuestionFixture(t)
 	id := f.post(t, "Database")
 
-	if _, err := f.client.SendMessageAnswering(context.Background(), "sess", "x", []Answer{
+	if _, _, err := f.client.SendAnswers(context.Background(), "sess", []Answer{
 		{RequestID: id, Answers: []string{"Postgres"}},
 	}, nil); err != nil {
-		t.Fatalf("SendMessageAnswering: %v", err)
+		t.Fatalf("SendAnswers: %v", err)
 	}
 
 	answering := lastAnswering(t, f, id)
@@ -854,9 +933,8 @@ func TestDescribeResolution_SaysWhoResolvedIt(t *testing.T) {
 		{
 			name: "the user answered in the chat",
 			resolve: func(t *testing.T, f *questionFixture, id string) {
-				if _, err := f.client.SendMessageAnswering(context.Background(), "sess", "x",
-					[]Answer{{RequestID: id, Answers: []string{"Postgres"}}}, nil); err != nil {
-					t.Fatalf("SendMessageAnswering: %v", err)
+				if _, _, err := f.client.SendAnswers(context.Background(), "sess", []Answer{{RequestID: id, Answers: []string{"Postgres"}}}, nil); err != nil {
+					t.Fatalf("SendAnswers: %v", err)
 				}
 			},
 			want: "answered by the user at ",
@@ -947,5 +1025,44 @@ func TestAnswerQuestion_ChecksTheShapeLikeAnyOther(t *testing.T) {
 	}
 	if pending := f.unanswered(t); len(pending) != 1 {
 		t.Errorf("unanswered = %+v, want the question still waiting", pending)
+	}
+}
+
+// An agent's answer reads as a person's does below the lead, note included —
+// the same fact in the same shape — and only the lead and the possessive say
+// who gave it.
+func TestAnswerQuestion_ProseIsAPersonsWithItsOwnLead(t *testing.T) {
+	f := newQuestionFixture(t)
+	q, err := postOne(f.client, context.Background(), "sess", QuestionSpec{
+		Header: "Database", Question: "Which one?", MultiSelect: true,
+		Options: []session.QuestionOption{{Label: "Postgres"}, {Label: "SQLite"}},
+	})
+	if err != nil {
+		t.Fatalf("PostQuestions: %v", err)
+	}
+
+	if err := f.client.AnswerQuestion(context.Background(), "sess", Answer{
+		RequestID: q.RequestID, Answers: []string{"Postgres"}, Text: "DuckDB", Note: "the story settled this",
+	}, otherAgent); err != nil {
+		t.Fatalf("AnswerQuestion: %v", err)
+	}
+
+	want := "Answering — from the agent working on \"Ship the API\" (work-9), not from the user.\n\n" +
+		"Q: Which one?\nA: Postgres · and, in its own words: DuckDB — note: the story settled this"
+	if prompts := f.agent.session(t, 1).sentPrompts(); len(prompts) != 1 || prompts[0] != want {
+		t.Errorf("prompts = %q, want %q", prompts, want)
+	}
+}
+
+// The note rules are the same for an agent: a note beside Other on a
+// single-select question is a second answer, whoever writes it.
+func TestAnswerQuestion_NoteRulesLikeAnyOther(t *testing.T) {
+	f := newQuestionFixture(t)
+	id := f.post(t, "Database")
+
+	err := f.client.AnswerQuestion(context.Background(), "sess",
+		Answer{RequestID: id, Text: "MySQL", Note: "ops runs it"}, otherAgent)
+	if !errors.Is(err, ErrAnswerShape) || !strings.Contains(err.Error(), "takes no note") {
+		t.Fatalf("error = %v, want ErrAnswerShape saying it takes no note", err)
 	}
 }

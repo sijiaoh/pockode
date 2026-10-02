@@ -139,6 +139,51 @@ describe("QuestionRecordItem", () => {
 		expect(screen.getByRole("radio", { name: /SQLite/ })).toBeChecked();
 	});
 
+	// The card matches the form it was: the same count of picks, and an unused
+	// Other as the dimmed row alone — an empty box would be a field to fill in.
+	it("counts a multiple choice's picks, and draws no box for an unused Other", async () => {
+		const user = userEvent.setup();
+		render(
+			<QuestionRecordItem
+				record={{
+					...record,
+					question: { ...record.question, multiSelect: true },
+				}}
+				status="answered"
+				answer={{
+					request_id: "r1",
+					answers: ["Postgres", "SQLite"],
+					answered_at: "2026-01-02T14:05:00Z",
+				}}
+			/>,
+		);
+		await user.click(screen.getByRole("button", { name: /Database/ }));
+		expect(screen.getByText("2 selected")).toBeVisible();
+		expect(screen.getByRole("checkbox", { name: /Other/ })).not.toBeChecked();
+		expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
+	});
+
+	it("shows the note the answer carried, where the form had it", async () => {
+		const user = userEvent.setup();
+		render(
+			<QuestionRecordItem
+				record={record}
+				status="answered"
+				answer={{
+					request_id: "r1",
+					answers: ["SQLite"],
+					note: "pin it to 3.45",
+					answered_at: "2026-01-02T14:05:00Z",
+				}}
+			/>,
+		);
+		// The summary says what was picked; the note waits in the body.
+		const header = screen.getByRole("button", { name: /Database/ });
+		expect(header).not.toHaveTextContent("pin it");
+		await user.click(header);
+		expect(screen.getByText("pin it to 3.45")).toBeVisible();
+	});
+
 	// The two are told apart by a sentence, not by a colour: both mean "no
 	// answer was given" and differ only in who decided.
 	it("tells declined and cancelled apart in words", async () => {

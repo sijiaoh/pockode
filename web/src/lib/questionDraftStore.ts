@@ -28,14 +28,25 @@ export interface QuestionDraft {
 	/**
 	 * Whether **Other** is picked, for a question that offered options.
 	 *
-	 * Stored rather than derived from `text` being non-empty: the input has to be
-	 * on screen *before* there is anything in it, and "ticked but still empty" is
-	 * a real state — one that is not a complete answer.
+	 * Stored rather than derived from `text` being non-empty, both ways round:
+	 * "ticked but still empty" is a real state — one that is not a complete
+	 * answer — and so is "written, then unpicked", whose text stays on screen
+	 * but is not sent.
 	 */
 	otherPicked: boolean;
 	declined: boolean;
 	/** The optional line beside a decline. */
 	note: string;
+	/**
+	 * The optional remark beside what was picked.
+	 *
+	 * Kept apart from the decline's `note` although both are sent as the one
+	 * `note` on the record: only one of them is ever sent, and toggling
+	 * **Won't answer** must not turn "but pin it to 16" into a reason for
+	 * refusing, or a reason into a remark. Kept too while nothing it may sit
+	 * beside is picked — unpicking is trying something, not discarding it.
+	 */
+	answerNote: string;
 }
 
 export const EMPTY_DRAFT: QuestionDraft = {
@@ -44,6 +55,7 @@ export const EMPTY_DRAFT: QuestionDraft = {
 	otherPicked: false,
 	declined: false,
 	note: "",
+	answerNote: "",
 };
 
 interface QuestionDraftState {
@@ -155,7 +167,11 @@ export const questionDraftActions = {
 			const live = new Set(liveRequestIds);
 			const vouched: Record<string, QuestionDraft> = {};
 			for (const [requestId, draft] of Object.entries(waiting)) {
-				if (live.has(requestId)) vouched[requestId] = draft;
+				// Over the empty draft: one stored by an older page lacks the
+				// fields added since.
+				if (live.has(requestId)) {
+					vouched[requestId] = { ...EMPTY_DRAFT, ...draft };
+				}
 			}
 			const { [sessionId]: _checked, ...restorable } = state.restorable;
 			return {
@@ -203,7 +219,8 @@ export function isDraftDirty(draft: QuestionDraft | undefined): boolean {
 		draft.labels.length > 0 ||
 		draft.text.trim() !== "" ||
 		draft.declined ||
-		draft.note.trim() !== ""
+		draft.note.trim() !== "" ||
+		draft.answerNote.trim() !== ""
 	);
 }
 
