@@ -94,17 +94,22 @@ function QuestionForm({
 	return (
 		<div className="space-y-2">
 			<div>
-				<span className="inline-block rounded bg-th-accent/20 px-1.5 py-0.5 text-xs text-th-text-primary">
-					{question.header}
-				</span>
-				{/* Opposite the chip, in the reader's own locale. It is what tells two
-				    questions with the same header apart, and what says how long one
-				    has been waiting. */}
-				{formatAskedAt(askedAt) && (
-					<span className="float-right text-xs text-th-text-muted">
-						{formatAskedAt(askedAt)}
+				<div className="flex items-start gap-2">
+					{/* A header is the agent's to write and has no length limit, so the
+					    chip wraps — inside the row, beside the time — rather than
+					    pushing the form wider than the panel. */}
+					<span className="min-w-0 break-words rounded bg-th-accent/20 px-1.5 py-0.5 text-xs text-th-text-primary">
+						{question.header}
 					</span>
-				)}
+					{/* Opposite the chip, in the reader's own locale. It is what tells two
+					    questions with the same header apart, and what says how long one
+					    has been waiting. */}
+					{formatAskedAt(askedAt) && (
+						<span className="ml-auto shrink-0 text-xs text-th-text-muted">
+							{formatAskedAt(askedAt)}
+						</span>
+					)}
+				</div>
 				<MarkdownContent
 					content={question.question}
 					className={`${markdownClass} mt-1 text-th-text-primary`}

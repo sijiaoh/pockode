@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -44,13 +46,13 @@ func newQuestionFixture(t *testing.T) *questionFixture {
 
 func (f *questionFixture) post(t *testing.T, header string) string {
 	t.Helper()
-	q, err := f.client.PostQuestion(context.Background(), "sess", QuestionSpec{
+	q, err := postOne(f.client, context.Background(), "sess", QuestionSpec{
 		Header:   header,
 		Question: "Which database?",
 		Options:  []session.QuestionOption{{Label: "Postgres"}, {Label: "SQLite"}},
 	})
 	if err != nil {
-		t.Fatalf("PostQuestion: %v", err)
+		t.Fatalf("PostQuestions: %v", err)
 	}
 	return q.RequestID
 }
@@ -142,23 +144,96 @@ func TestPostQuestion_RecordsAndWaits(t *testing.T) {
 	}
 }
 
-func TestPostQuestion_SeveralAtOnce(t *testing.T) {
+// postOne posts a question asked on its own.
+func postOne(c *Client, ctx context.Context, sessionID string, spec QuestionSpec) (session.PendingQuestion, error) {
+	posted, err := c.PostQuestions(ctx, sessionID, []QuestionSpec{spec})
+	if err != nil {
+		return session.PendingQuestion{}, err
+	}
+	return posted[0], nil
+}
+
+// TestPostQuestions_ABatchIsQuestionsOfTheirOwn: asking together changes how
+// the questions arrive and nothing about what they are — each gets its own id
+// and its own record — and the order they were asked in is the order they are
+// written in, which is all that orders questions sharing one asked_at.
+func TestPostQuestions_ABatchIsQuestionsOfTheirOwn(t *testing.T) {
 	f := newQuestionFixture(t)
-	first := f.post(t, "Database")
-	second := f.post(t, "Runtime")
+	posted, err := f.client.PostQuestions(context.Background(), "sess", []QuestionSpec{
+		{Header: "Database", Question: "Which database?"},
+		{Header: "Runtime", Question: "Which runtime?"},
+		{Header: "Region", Question: "Which region?"},
+	})
+	if err != nil {
+		t.Fatalf("PostQuestions: %v", err)
+	}
+	if len(posted) != 3 {
+		t.Fatalf("posted = %d, want 3", len(posted))
+	}
+	ids := map[string]bool{}
+	for _, q := range posted {
+		ids[q.RequestID] = true
+		if !q.AskedAt.Equal(posted[0].AskedAt) {
+			t.Errorf("asked_at %v differs from %v: one call is one moment", q.AskedAt, posted[0].AskedAt)
+		}
+	}
+	if len(ids) != 3 {
+		t.Errorf("request ids = %v, want one per question", ids)
+	}
 
 	pending := f.unanswered(t)
-	if len(pending) != 2 || pending[0].RequestID != first || pending[1].RequestID != second {
-		t.Fatalf("unanswered = %+v, want both, oldest first", pending)
+	records := f.records(t)
+	if len(pending) != 3 || len(records) != 3 || len(f.broadcasts) != 3 {
+		t.Fatalf("unanswered = %d, records = %d, broadcasts = %d; want one of each per question",
+			len(pending), len(records), len(f.broadcasts))
 	}
-	if first == second {
-		t.Error("two questions share a request id")
+	for i, q := range posted {
+		if pending[i].RequestID != q.RequestID || records[i].RequestID != q.RequestID || f.broadcasts[i].RequestID != q.RequestID {
+			t.Errorf("position %d: unanswered %s, record %s, broadcast %s; want %s (%s) — asking order",
+				i, pending[i].RequestID, records[i].RequestID, f.broadcasts[i].RequestID, q.RequestID, q.Header)
+		}
+	}
+}
+
+// TestPostQuestions_ConcurrentBatchesStayTogether: a model can make two calls
+// in parallel, and a batch split by the other's questions would reach the
+// panel interleaved.
+func TestPostQuestions_ConcurrentBatchesStayTogether(t *testing.T) {
+	f := newQuestionFixture(t)
+	batch := func(name string) []QuestionSpec {
+		specs := make([]QuestionSpec, 5)
+		for i := range specs {
+			specs[i] = QuestionSpec{Header: name, Question: fmt.Sprintf("%s %d?", name, i)}
+		}
+		return specs
+	}
+
+	var wg sync.WaitGroup
+	for _, name := range []string{"A", "B"} {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if _, err := f.client.PostQuestions(context.Background(), "sess", batch(name)); err != nil {
+				t.Errorf("PostQuestions %s: %v", name, err)
+			}
+		}()
+	}
+	wg.Wait()
+
+	pending := f.unanswered(t)
+	if len(pending) != 10 {
+		t.Fatalf("unanswered = %d, want 10", len(pending))
+	}
+	for i, q := range pending {
+		if q.Header != pending[i/5*5].Header {
+			t.Fatalf("unanswered headers interleave at %d: %+v", i, pending)
+		}
 	}
 }
 
 func TestPostQuestion_UnknownSession(t *testing.T) {
 	f := newQuestionFixture(t)
-	_, err := f.client.PostQuestion(context.Background(), "nope", QuestionSpec{Header: "h", Question: "q"})
+	_, err := f.client.PostQuestions(context.Background(), "nope", []QuestionSpec{{Header: "h", Question: "q"}})
 	if !errors.Is(err, ErrSessionNotFound) {
 		t.Errorf("error = %v, want ErrSessionNotFound", err)
 	}
@@ -375,11 +450,11 @@ func TestSendMessageAnswering_ShapeRefusals(t *testing.T) {
 
 	t.Run("a free-text question answered with nothing", func(t *testing.T) {
 		f := newQuestionFixture(t)
-		q, err := f.client.PostQuestion(context.Background(), "sess", QuestionSpec{
+		q, err := postOne(f.client, context.Background(), "sess", QuestionSpec{
 			Header: "Name", Question: "What should it be called?",
 		})
 		if err != nil {
-			t.Fatalf("PostQuestion: %v", err)
+			t.Fatalf("PostQuestions: %v", err)
 		}
 		id := q.RequestID
 		// Recorded as answered, it would read to the agent as "the user said
@@ -443,12 +518,12 @@ func TestSendMessageAnswering_AResolvedQuestionIsReportedBeforeABadShape(t *test
 func TestSendMessageAnswering_MultiSelectAndFreeText(t *testing.T) {
 	t.Run("multi select", func(t *testing.T) {
 		f := newQuestionFixture(t)
-		q, err := f.client.PostQuestion(context.Background(), "sess", QuestionSpec{
+		q, err := postOne(f.client, context.Background(), "sess", QuestionSpec{
 			Header: "Targets", Question: "Which?", MultiSelect: true,
 			Options: []session.QuestionOption{{Label: "linux"}, {Label: "windows"}},
 		})
 		if err != nil {
-			t.Fatalf("PostQuestion: %v", err)
+			t.Fatalf("PostQuestions: %v", err)
 		}
 		id := q.RequestID
 		if _, err := f.client.SendMessageAnswering(context.Background(), "sess", "both", []Answer{
@@ -460,11 +535,11 @@ func TestSendMessageAnswering_MultiSelectAndFreeText(t *testing.T) {
 
 	t.Run("free text", func(t *testing.T) {
 		f := newQuestionFixture(t)
-		q, err := f.client.PostQuestion(context.Background(), "sess", QuestionSpec{
+		q, err := postOne(f.client, context.Background(), "sess", QuestionSpec{
 			Header: "Name", Question: "What should it be called?",
 		})
 		if err != nil {
-			t.Fatalf("PostQuestion: %v", err)
+			t.Fatalf("PostQuestions: %v", err)
 		}
 		id := q.RequestID
 		// Anything goes: there were no options for it to fail to be one of.
@@ -480,11 +555,11 @@ func TestSendMessageAnswering_MultiSelectAndFreeText(t *testing.T) {
 	// string the agent never offered arriving as though it had.
 	t.Run("a label on a question that offered none", func(t *testing.T) {
 		f := newQuestionFixture(t)
-		q, err := f.client.PostQuestion(context.Background(), "sess", QuestionSpec{
+		q, err := postOne(f.client, context.Background(), "sess", QuestionSpec{
 			Header: "Name", Question: "What should it be called?",
 		})
 		if err != nil {
-			t.Fatalf("PostQuestion: %v", err)
+			t.Fatalf("PostQuestions: %v", err)
 		}
 		id := q.RequestID
 		_, err = f.client.SendMessageAnswering(context.Background(), "sess", "x", []Answer{
@@ -533,12 +608,12 @@ func TestSendMessageAnswering_FreeTextBesideTheOptions(t *testing.T) {
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			f := newQuestionFixture(t)
-			q, err := f.client.PostQuestion(context.Background(), "sess", QuestionSpec{
+			q, err := postOne(f.client, context.Background(), "sess", QuestionSpec{
 				Header: "Database", Question: "Which one?", MultiSelect: tt.multiSelect,
 				Options: []session.QuestionOption{{Label: "Postgres"}, {Label: "SQLite"}},
 			})
 			if err != nil {
-				t.Fatalf("PostQuestion: %v", err)
+				t.Fatalf("PostQuestions: %v", err)
 			}
 			id := q.RequestID
 

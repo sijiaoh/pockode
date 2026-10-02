@@ -243,17 +243,17 @@ The prompt builders generate messages for different lifecycle events. All share 
   - **Task:** Read the story's comments before starting, and report results back with `work_comment_add`, because the story agent does not read this chat.
 - The lifecycle rules (`lifecycle_rules`), identical for every work Pockode
   drives: what the four statuses mean, that `question_post` is how the agent
-  reaches a person and that it waits for nothing, that a story waits for its
-  subtasks with `story_wait`, that a story shown one of its subtasks' questions
-  must settle it — `question_answer` if it knows the answer, `question_post` to
-  the user if it does not, and ignoring it is not a third way — that the same
-  rule stops at a *stopped* subtask, whose question is not the story's to
-  answer, that neither of the two touches its own wait, that a turn ends
-  cleanly with `step_done` or with something outstanding, that a turn ending
-  with neither is nudged and stops the work after the allowance, and that a
-  long wait belongs to `question_post` rather than to a chat question holding
-  the process open. It is written once here so no send site can drift into its
-  own version of the rules — see
+  reaches a person (one sentence, leaving when and how to the tool's own
+  description), that a turn ending with a question unanswered is not nudged,
+  that a story waits for its subtasks with `story_wait`, that a story shown one
+  of its subtasks' questions must settle it — `question_answer` if it knows the
+  answer, `question_post` to the user if it does not, and ignoring it is not a
+  third way — that the same rule stops at a *stopped* subtask, whose question is
+  not the story's to answer, that neither of the two touches its own wait, that
+  a turn ends cleanly with `step_done` or with something outstanding, and that a
+  turn ending with neither is nudged and stops the work after the allowance. It
+  is written once here so no send site can drift into its own version of the
+  rules — see
   [work-system.md](../code/work-system.md#prompt-format).
 
 ### BuildKickoffMessage
@@ -286,19 +286,22 @@ lifecycle section in the same message says.
 
 ### BuildChildQuestionMessage
 
-Base + one question a subtask posted, quoted whole — header, question, options,
-and the pair that names it: the `request_id` and the subtask's `session_id`. It
-is quoted rather than referenced because the story cannot fetch it: the question
-lives on the subtask's *session*, not on its work item. Both halves of the
+Base + the questions one `question_post` call of a subtask posted, in the order
+it asked them, each quoted whole — header, question, options, and its
+`request_id` — with the subtask's `session_id` once, since it is the other half
+of every one of them. One call is one message, so a subtask asking three things
+costs the story one turn rather than three. They are quoted rather than
+referenced because the story cannot fetch them: a question lives on the
+subtask's *session*, not on its work item. Both halves of each question's
 identity travel because a fork can leave one `request_id` waiting in two
 sessions, and one id costs less than the refused call the story would otherwise
 spend finding that out
 ([work-system.md](../code/work-system.md#question-tools)).
 
-The story is offered the two ways forward — answer it, or ask the user itself —
-and told which two are not on offer: guessing, and leaving it. The last line
-says the message changed nothing else, because an agent handed something to do
-otherwise assumes its wait is over, and this one clears no wait.
+The story is offered the two ways forward for each question — answer it, or ask
+the user itself — and told which two are not on offer: guessing, and leaving it.
+The last line says the message changed nothing else, because an agent handed
+something to do otherwise assumes its wait is over, and this one clears no wait.
 
 ### BuildChildQuestionReminderMessage
 

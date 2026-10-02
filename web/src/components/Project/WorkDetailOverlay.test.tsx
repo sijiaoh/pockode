@@ -161,6 +161,23 @@ describe("WorkDetailOverlay", () => {
 		}
 	});
 
+	// A batch shares one `asked_at`, so the section draws the session's list as
+	// it stands; the headers run against the alphabet, so a sort on them shows.
+	// A header has no length limit, and an inline-block chip sizes to its
+	// longest word unless capped, which jsdom cannot lay out — so the cap is
+	// read off the classes.
+	it("lists a batch in the order it was asked, with a long header wrapping", () => {
+		const askedAt = "2026-03-04T00:00:00.000000001Z";
+		const long = "A".repeat(200);
+		renderWithWork(createWork(), "idle", [
+			{ request_id: "q1", header: "Zeta", question: "One?", asked_at: askedAt },
+			{ request_id: "q2", header: long, question: "Two?", asked_at: askedAt },
+		]);
+
+		expectToAppearBefore(screen.getByText("One?"), screen.getByText("Two?"));
+		expect(screen.getByText(long)).toHaveClass("max-w-full", "break-words");
+	});
+
 	// Comments are the agents' record of what happened, and the client has no
 	// way to write one of its own: an edit affordance could only rewrite an
 	// agent's words, and nothing on a comment says whose they were afterwards.

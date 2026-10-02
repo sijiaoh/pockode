@@ -709,7 +709,7 @@ function AnsweringBody({ answering }: { answering: QuestionAnswerRecord[] }) {
 					    its shape and every word on it keeps the ratio that was
 					    checked. */}
 					{entry.header && (
-						<span className="inline-block rounded border border-current/40 px-1.5 py-0.5 text-xs">
+						<span className="inline-block max-w-full break-words rounded border border-current/40 px-1.5 py-0.5 text-xs">
 							{entry.header}
 						</span>
 					)}

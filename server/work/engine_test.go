@@ -1212,14 +1212,21 @@ func TestEngine_ASubtaskQuestionReachesItsStory(t *testing.T) {
 	task := createTask(t, f.store, story.ID, "Wire the store")
 	startWorkWithSession(t, f.store, task.ID, "sess-child")
 
-	f.engine.HandleQuestionPosted("sess-child", subtaskQuestion())
+	// Asked in one call, so told in one message: a message each would hand the
+	// story a turn per question.
+	f.engine.HandleQuestionsPosted("sess-child", []session.PendingQuestion{
+		subtaskQuestion(),
+		{RequestID: "req-2", Header: "Name", Question: "What name?"},
+	})
 
+	// Stopping waits for every follow-up, so a second message would be here.
 	waitFor(t, func() bool { return f.sender.count() > 0 })
+	f.engine.Stop()
 	if got := f.sender.subtypes(); len(got) != 1 || got[0] != MessageSubtypeChildQuestion {
 		t.Fatalf("sent %v, want one child-question message", got)
 	}
 	body := f.sender.contents()[0]
-	for _, want := range []string{"Which database?", "req-1", "Postgres", "question_answer", "question_post"} {
+	for _, want := range []string{"Which database?", "req-1", "Postgres", "What name?", "req-2", "question_answer", "question_post"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("message does not contain %q; it is the story's only copy of the question", want)
 		}
@@ -1237,7 +1244,7 @@ func TestEngine_ASubtaskQuestionLeavesTheParentsWaitAlone(t *testing.T) {
 	startWorkWithSession(t, f.store, task.ID, "sess-child")
 	setChildWait(t, f.store, story.ID)
 
-	f.engine.HandleQuestionPosted("sess-child", subtaskQuestion())
+	f.engine.HandleQuestionsPosted("sess-child", []session.PendingQuestion{subtaskQuestion()})
 
 	waitFor(t, func() bool { return f.sender.count() > 0 })
 	got := getWork(t, f.store, story.ID)
@@ -1262,7 +1269,7 @@ func TestEngine_ASubtaskQuestionIsNotDeliveredToAStoppedStory(t *testing.T) {
 		t.Fatalf("Stop: %v", err)
 	}
 
-	f.engine.HandleQuestionPosted("sess-child", subtaskQuestion())
+	f.engine.HandleQuestionsPosted("sess-child", []session.PendingQuestion{subtaskQuestion()})
 	f.engine.Stop() // waits for the follow-up, so "nothing was sent" is decidable
 
 	if got := f.sender.count(); got != 0 {
@@ -1278,7 +1285,7 @@ func TestEngine_AQuestionFromAStoryGoesNowhere(t *testing.T) {
 	f := newEngineFixture(t)
 	f.startedStory(t, "sess-1")
 
-	f.engine.HandleQuestionPosted("sess-1", subtaskQuestion())
+	f.engine.HandleQuestionsPosted("sess-1", []session.PendingQuestion{subtaskQuestion()})
 	f.engine.Stop()
 
 	if got := f.sender.count(); got != 0 {
@@ -1298,7 +1305,7 @@ func TestEngine_AnUndeliverableSubtaskQuestionChangesNothing(t *testing.T) {
 	startWorkWithSession(t, f.store, task.ID, "sess-child")
 	setChildWait(t, f.store, story.ID)
 
-	f.engine.HandleQuestionPosted("sess-child", subtaskQuestion())
+	f.engine.HandleQuestionsPosted("sess-child", []session.PendingQuestion{subtaskQuestion()})
 	f.engine.Stop()
 
 	got := getWork(t, f.store, story.ID)
@@ -1597,7 +1604,7 @@ func TestEngine_AWatchedStorysQuestionReachesItsWatcher(t *testing.T) {
 	f := newEngineFixture(t)
 	story := f.watchedStory(t, "sess-watcher")
 
-	f.engine.HandleQuestionPosted(story.SessionID, subtaskQuestion())
+	f.engine.HandleQuestionsPosted(story.SessionID, []session.PendingQuestion{subtaskQuestion()})
 
 	waitFor(t, func() bool { return len(f.sender.sentTo("sess-watcher")) > 0 })
 	sent := f.sender.sentTo("sess-watcher")
@@ -1633,7 +1640,7 @@ func TestEngine_AWatchedStorysTasksAreNotReportedToItsWatcher(t *testing.T) {
 	story := f.watchedStory(t, "sess-watcher")
 	task := f.startedSubtask(t, story.ID, "Wire the store", "sess-child")
 
-	f.engine.HandleQuestionPosted("sess-child", subtaskQuestion())
+	f.engine.HandleQuestionsPosted("sess-child", []session.PendingQuestion{subtaskQuestion()})
 	doneWork(t, f.store, task.ID)
 	waitFor(t, func() bool { return len(f.sender.sentTo(story.SessionID)) == 2 })
 	f.engine.Stop()
@@ -1657,7 +1664,7 @@ func TestEngine_AWatcherWhoseSessionIsGoneIsSkipped(t *testing.T) {
 	f.engine.SetSender(sessionGoneSender{})
 	story := f.watchedStory(t, "sess-deleted")
 
-	f.engine.HandleQuestionPosted(story.SessionID, subtaskQuestion())
+	f.engine.HandleQuestionsPosted(story.SessionID, []session.PendingQuestion{subtaskQuestion()})
 	if _, err := f.store.StepDone(context.Background(), story.ID, 0); err != nil {
 		t.Fatalf("StepDone: %v", err)
 	}

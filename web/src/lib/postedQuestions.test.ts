@@ -106,6 +106,56 @@ describe("posted questions in the transcript", () => {
 		});
 	});
 
+	// One `question_post` call posts its questions as one record each, all
+	// with the call's `asked_at`, back to back. Only the first finds the row.
+	describe("questions asked in one call", () => {
+		const batched = (requestId: string, askedAt: string) => ({
+			...posted(requestId, requestId),
+			asked_at: askedAt,
+		});
+		const first = "2026-01-02T14:02:00.000000001Z";
+		const second = "2026-01-02T14:02:00.000000002Z";
+		const cards = (messages: Message[]) =>
+			lastParts(messages).map((part) =>
+				part.type === "question_record"
+					? part.record.requestId
+					: part.type === "tool_call"
+						? part.tool.id
+						: part.type,
+			);
+
+		it("keeps them together and in order behind a call drawn after the row", () => {
+			const messages = replayHistory([
+				{ type: "message", content: "go" },
+				toolCall("t1", "mcp__pockode__question_post"),
+				toolCall("t2", "Read"),
+				batched("a1", first),
+				batched("a2", first),
+				batched("a3", first),
+			]);
+			expect(cards(messages)).toEqual(["a1", "a2", "a3", "t2"]);
+		});
+
+		it("keeps each batch in order when two calls are open at once", () => {
+			const messages = replayHistory([
+				{ type: "message", content: "go" },
+				toolCall("t1", "mcp__pockode__question_post"),
+				toolCall("t2", "mcp__pockode__question_post"),
+				batched("a1", first),
+				batched("a2", first),
+				batched("b1", second),
+				batched("b2", second),
+			]);
+			// Which call a batch came from is not on the record, so either may
+			// take either row; what holds is that neither batch is split or
+			// reordered.
+			const order = cards(messages);
+			expect(order).toHaveLength(4);
+			expect(order.indexOf("a2")).toBe(order.indexOf("a1") + 1);
+			expect(order.indexOf("b2")).toBe(order.indexOf("b1") + 1);
+		});
+	});
+
 	describe("what settles a card", () => {
 		it("answers it from the message that carries the answer", () => {
 			const messages = replayHistory([

@@ -71,12 +71,23 @@ interface PendingQuestion {
 }
 ```
 
-**One `question_post` is one question and one `request_id`.** The card in history
-can still hold several — records written by the old `AskUserQuestion` path do —
-but nothing new is ever written that way, and every surface here counts
-`request_id`s. This is what makes "decline this one" a sentence with a subject:
-declining half of a multi-question request would need a second identifier that
-the answer path does not carry.
+**One question is one `request_id` and one record, however many a
+`question_post` call asked.** A call can carry several, and each still arrives
+as a `PendingQuestion` and a `question_posted` record of its own; nothing on the
+wire says which call a question came in, and no surface groups by it — the user
+answers questions, not calls
+([agent-integration.md](code/agent-integration.md#asking-several-at-once)). The
+card in history can still hold several — records written by the old
+`AskUserQuestion` path do — but nothing new is ever written that way, and every
+surface here counts `request_id`s. This is what makes "decline this one" a
+sentence with a subject: declining half of a multi-question request would need a
+second identifier that the answer path does not carry.
+
+**Every list is drawn in the order it arrives, and nothing sorts by
+`asked_at`.** Questions asked in one call share one `asked_at`, so the time
+cannot order them; the server's list is already in asking order, a batch's
+questions together and in the order the agent wrote them. A sort by time would
+at best reproduce that, and an unstable one would shuffle a batch.
 
 **Rows carry the count, never the questions.** A sidebar of thirty sessions does
 not need thirty question texts to draw thirty glyphs, and the full list already
@@ -518,7 +529,8 @@ questions" would spend the one fixed line on a word the button already carries,
 while the count is the one fact that otherwise takes scrolling to work out — and
 the one that answers "am I nearly done".
 
-**One block per `request_id`, oldest first, in one flat scroll.** Not an
+**One block per `request_id`, in the list's order — oldest first, a batch in
+the order it was asked — in one flat scroll.** Not an
 accordion and not a wizard: a wizard hides how much is left, forbids answering out
 of order, and turns two questions into four taps. The stack is skimmable, and the
 panel's body already scrolls between a pinned header and footer.
@@ -554,6 +566,17 @@ in the answering message (§6). That body is written for its tightest host, the
 user bubble, whose text is plain and whose foreground and background are a pair
 tuned close to the contrast floor — prose's link and code colours would break
 it. The rendered question is on the record card.
+
+**Nothing an agent sends can break the layout**, because the server sets no
+limit on it — not on the number of questions or options, nor on the length of a
+header or label
+([agent-integration.md](code/agent-integration.md#asking-several-at-once) says
+why). Long headers and labels wrap. In a block the header shares a flex row with
+the time and wraps beside it; the header chips elsewhere — on the work detail
+page and in the answering bubble — are capped at the width they sit in, since an
+`inline-block` is otherwise as wide as its longest word and `break-words` never
+gets to act. A long list scrolls in the panel's body, with **Send** in the
+footer outside it.
 
 ### Other and Won't answer are not alternatives
 
@@ -1124,6 +1147,12 @@ is what it is — the record of a question, in one of four states.
   `question_posted` record has none. The record is written *during* the call, so
   it always falls between that call's `tool_call` and its `tool_result` — the
   last unreturned call whose name ends in `question_post` is this question's.
+  One call can write several records, and only the first finds that row; the
+  rest go **after the last card with the same `asked_at`**, which is what one
+  call's questions share, so a batch stays together and in order even with a
+  parallel tool row or a second `question_post` running beside it. Two calls
+  landing on one clock tick read as one batch: the order is still right, and the
+  second call's row is left beside the cards.
   Drawing both is two adjacent rows saying one thing, which is the duplication that
   section removed once already; a join that misses simply leaves the two rows.
 - **Default collapsed, in every state including `pending`.** It does not

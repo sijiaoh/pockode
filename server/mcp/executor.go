@@ -78,9 +78,10 @@ type WorktreeProvisioner interface {
 // these is a command anybody issued against a work item — they are things that
 // happened to its session, which is what the engine's inputs are.
 type WorkEngine interface {
-	// HandleQuestionPosted passes a subtask's question up to the story above
-	// it, if it has one and that story is running.
-	HandleQuestionPosted(sessionID string, q session.PendingQuestion)
+	// HandleQuestionsPosted passes the questions one question_post call asked
+	// up to whoever may know the answers: the story above a subtask, or the
+	// session watching a story.
+	HandleQuestionsPosted(sessionID string, qs []session.PendingQuestion)
 	// HandleAnswer wakes the answered work and gives it its nudge allowance
 	// back. It is the same input the user's own answers go through: an answer
 	// starts a turn there whoever gave it.

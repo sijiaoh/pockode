@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sync"
 
 	"github.com/google/uuid"
 	"github.com/pockode/server/agent"
@@ -90,6 +91,8 @@ type Client struct {
 	store     session.Store
 	pm        *process.Manager
 	broadcast EventBroadcastFunc
+	// postMu keeps each PostQuestions call's questions contiguous; see there.
+	postMu sync.Mutex
 }
 
 func NewClient(store session.Store, pm *process.Manager) *Client {

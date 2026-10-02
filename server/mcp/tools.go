@@ -21,9 +21,10 @@ type propertySchema struct {
 	Description string   `json:"description,omitempty"`
 	Enum        []string `json:"enum,omitempty"`
 	// Items describes the elements of an array property, and Properties the
-	// fields of an object one. Both are here for question_post's options, which
-	// is a list of objects — the first tool argument in Pockode that is not a
-	// scalar, and a model given a bare "array" would have to guess the shape of.
+	// fields of an object one. Both are here for question_post, whose questions
+	// and their options are lists of objects — the first tool arguments in
+	// Pockode that are not scalars, and a model given a bare "array" would have
+	// to guess the shape of.
 	Items      *propertySchema           `json:"items,omitempty"`
 	Properties map[string]propertySchema `json:"properties,omitempty"`
 	Required   []string                  `json:"required,omitempty"`
@@ -237,31 +238,53 @@ var toolDefinitions = []toolDefinition{
 	},
 	{
 		Name: "question_post",
-		Description: "Ask the user one question and keep working. The call returns immediately with a request id; it does not wait for an answer. " +
-			"The answer — or the user's refusal to answer — arrives later as an ordinary message in this chat, in a turn of its own, possibly long after this turn has ended. Do not wait for it here, and do not ask again because nothing came back. " +
-			"The user may also simply reply in the chat instead of using the question card; if their message answers the question, treat it as answered and call question_cancel to take the card down. " +
-			"Post one question per call: each gets its own request id, which is what lets the user answer one and decline another. " +
-			"This is the only way to ask. Your CLI's own ask-the-user tool does not reach the user here — Pockode refuses it and tells you to come back to this one — so a question asked that way is a turn spent for nothing.",
+		Description: "Ask the user questions and keep working. The call returns immediately with a request id for each question; it does not wait for an answer. " +
+			"Each answer — or the user's refusal to answer — arrives later as an ordinary message in this chat, in a turn of its own, possibly long after this turn has ended. Do not wait for it here, and do not ask again because nothing came back. " +
+			"Meanwhile, carry on with whatever does not depend on the answers, or end your turn. " +
+			"The user may also simply reply in the chat instead; if their message answers a question, treat it as answered and call question_cancel to take its card down. " +
+			"This is the only way to ask: your CLI's own ask-the-user tool does not reach the user here.\n\n" +
+			"When to ask: only for a decision that belongs to the user and changes what you do next. " +
+			"Do not ask what you can find out yourself — read the code, the docs and the history first. " +
+			"Where a choice has a conventional default, take it and say so. " +
+			"Do not ask for permission to act; the permission system handles that. " +
+			"Do not ask \"shall I continue?\" or \"is this OK?\" — ask the decision itself.\n\n" +
+			"How to ask: put every question you need in one call, as early as you can — but only the ones you need, since each makes the user stop and think. " +
+			"The user reads them in a panel that covers the conversation, often on a phone and long after you asked, so each question must make sense on its own and carry the context it needs. " +
+			"When the answer is one of a known set, offer options; when the set is large or open-ended, ask for free text. " +
+			"Never add an \"Other\" option: the user always has their own input box and can decline to answer. " +
+			"Use multi_select when more than one option can apply.\n\n" +
+			"Never write multiple-choice questions in your reply text — they cannot be answered as a form there. " +
+			"Never ask for passwords, tokens or API keys: the answer is stored in the transcript and sent to the model. Tell the user which variable or file to set instead.",
 		InputSchema: inputSchema{
 			Type: "object",
 			Properties: map[string]propertySchema{
-				"question": {Type: "string", Description: "The question, in full, as the user will read it."},
-				"header":   {Type: "string", Description: "A short label for the question (a few words), shown as the card's title."},
-				"options": {
+				"questions": {
 					Type:        "array",
-					Description: "The answers offered. Omit it to ask for free text.",
+					Description: "The questions to ask, in the order the user should read them. Each is answered, declined or withdrawn on its own.",
 					Items: &propertySchema{
 						Type: "object",
 						Properties: map[string]propertySchema{
-							"label":       {Type: "string", Description: "The option as the user picks it. Must be unique within the question."},
-							"description": {Type: "string", Description: "What choosing it means, if that is not obvious from the label."},
+							"question": {Type: "string", Description: "The question, in full, as the user will read it: understandable on its own, with the context needed to decide. Distinct from every other question in the call."},
+							"header":   {Type: "string", Description: "A word or two naming the question, shown as its title."},
+							"options": {
+								Type:        "array",
+								Description: "The answers offered, when the answer is one of a known set. Omit it to ask for free text.",
+								Items: &propertySchema{
+									Type: "object",
+									Properties: map[string]propertySchema{
+										"label":       {Type: "string", Description: "The option as the user picks it, and the answer you get back verbatim — keep it short. Must be unique within the question."},
+										"description": {Type: "string", Description: "What choosing this option means — its consequence or trade-off — rather than a restatement of the label."},
+									},
+									Required: []string{"label"},
+								},
+							},
+							"multi_select": {Type: "boolean", Description: "Allow more than one option to be picked. Only meaningful with options."},
 						},
-						Required: []string{"label"},
+						Required: []string{"question", "header"},
 					},
 				},
-				"multi_select": {Type: "boolean", Description: "Allow more than one option to be picked. Only meaningful with options."},
 			},
-			Required: []string{"question", "header"},
+			Required: []string{"questions"},
 		},
 	},
 	{

@@ -39,10 +39,14 @@ type Sessions interface {
 	ResolveSessionWorktree(sessionID string) (string, error)
 }
 
-// questionPostParams is question_post's input. It is not agent.AskUserQuestion:
-// that type is the shape a CLI's own prompt frame parses into, and what is
-// accepted from a model here is decided here.
+// questionPostParams is question_post's input. Its questions are not
+// agent.AskUserQuestion: that type is the shape a CLI's own prompt frame parses
+// into, and what is accepted from a model here is decided here.
 type questionPostParams struct {
+	Questions []questionParams `json:"questions"`
+}
+
+type questionParams struct {
 	Question string `json:"question"`
 	Header   string `json:"header"`
 	Options  []struct {
@@ -61,7 +65,7 @@ func (e *Executor) questionPost(ctx context.Context, caller Caller, args json.Ra
 	if err := json.Unmarshal(args, &params); err != nil {
 		return "", userErrorf("invalid arguments: %w", err)
 	}
-	spec, err := questionSpec(params)
+	specs, err := questionSpecs(params.Questions)
 	if err != nil {
 		return "", err
 	}
@@ -82,24 +86,42 @@ func (e *Executor) questionPost(ctx context.Context, caller Caller, args json.Ra
 	}
 	defer release()
 
-	q, err := questions.PostQuestion(ctx, caller.SessionID, spec)
-	if err != nil {
-		return "", err
-	}
+	posted, err := questions.PostQuestions(ctx, caller.SessionID, specs)
 
 	// A subtask's question is news for the story above it, which may know the
-	// answer without the user ever being asked. Told after the question is
+	// answer without the user ever being asked. Told after the questions are
 	// recorded, and on the engine's own goroutine: this call promises that
 	// nothing is waiting on it, and delivering to the parent can mean starting
-	// the parent's process.
-	if e.workEngine != nil {
-		e.workEngine.HandleQuestionPosted(caller.SessionID, q)
+	// the parent's process. Told even when the batch stopped part way, because
+	// the ones posted are being asked all the same.
+	if e.workEngine != nil && len(posted) > 0 {
+		e.workEngine.HandleQuestionsPosted(caller.SessionID, posted)
 	}
 
-	return fmt.Sprintf("Question posted (request_id: %s). Nothing is waiting here — carry on. "+
-		"The answer, or the user's refusal to answer, will arrive as a message in this chat, "+
-		"possibly after this turn has ended. If the user answers it in the chat instead, "+
-		"call question_cancel with this request_id.", q.RequestID), nil
+	if err != nil {
+		if len(posted) == 0 {
+			return "", err
+		}
+		// The ones already posted are real questions the user is being asked,
+		// and an agent told only "failed" would post them a second time.
+		return "", fmt.Errorf("posted %d of %d questions before failing (%s); the rest were not posted: %w",
+			len(posted), len(specs), describePosted(posted), err)
+	}
+
+	return fmt.Sprintf("Posted %d question(s): %s. Nothing is waiting here — carry on. "+
+		"Each answer, or the user's refusal to answer, will arrive as a message in this chat, "+
+		"possibly after this turn has ended. If the user answers one in the chat instead, "+
+		"call question_cancel with its request_id.", len(posted), describePosted(posted)), nil
+}
+
+// describePosted names each posted question by its header beside its request
+// id, which is how a model asking several at once tells which id is which.
+func describePosted(posted []session.PendingQuestion) string {
+	parts := make([]string, len(posted))
+	for i, q := range posted {
+		parts[i] = fmt.Sprintf("%q (request_id: %s)", q.Header, q.RequestID)
+	}
+	return strings.Join(parts, ", ")
 }
 
 func (e *Executor) questionCancel(ctx context.Context, caller Caller, args json.RawMessage) (string, error) {
@@ -358,14 +380,46 @@ func (e *Executor) describeCandidates(at []worktree.QuestionLocation) string {
 	return strings.Join(parts, "; ")
 }
 
-func questionSpec(params questionPostParams) (chat.QuestionSpec, error) {
+// questionSpecs checks a question_post call and turns it into what is posted.
+//
+// It refuses only what would make an answer wrong: a question with nothing to
+// show or nothing to call it, a form that contradicts itself, or two answers
+// that could not be told apart. How many questions, how many options, and how
+// long any of it is are left alone — a cap would only push the rest into a
+// second call, which is the scattered asking batching exists to end, and the
+// panel draws any length. Every refusal names the question it is about, since a
+// call can carry many.
+func questionSpecs(params []questionParams) ([]chat.QuestionSpec, error) {
+	if len(params) == 0 {
+		return nil, userErrorf("questions is required: pass at least one question")
+	}
+	specs := make([]chat.QuestionSpec, 0, len(params))
+	seen := make(map[string]int, len(params))
+	for i, p := range params {
+		spec, err := questionSpec(p)
+		if err != nil {
+			return nil, userErrorf("questions[%d]: %w", i, err)
+		}
+		if first, dup := seen[spec.Question]; dup {
+			// An answer is sent back quoting the question it answers, so two
+			// questions with one text would come back as two answers to the
+			// same thing.
+			return nil, userErrorf("questions[%d] and questions[%d] have the same question text; merge them into one, or reword one so the answers can be told apart", first, i)
+		}
+		seen[spec.Question] = i
+		specs = append(specs, spec)
+	}
+	return specs, nil
+}
+
+func questionSpec(params questionParams) (chat.QuestionSpec, error) {
 	question := strings.TrimSpace(params.Question)
 	header := strings.TrimSpace(params.Header)
 	if question == "" {
-		return chat.QuestionSpec{}, userErrorf("question is required")
+		return chat.QuestionSpec{}, errors.New("question is required")
 	}
 	if header == "" {
-		return chat.QuestionSpec{}, userErrorf("header is required: it is the card's title, and a question with no title is one the user cannot tell apart from the others waiting")
+		return chat.QuestionSpec{}, errors.New("header is required: it is the card's title, and a question with no title is one the user cannot tell apart from the others waiting")
 	}
 
 	options := make([]session.QuestionOption, 0, len(params.Options))
@@ -373,14 +427,14 @@ func questionSpec(params questionPostParams) (chat.QuestionSpec, error) {
 	for _, o := range params.Options {
 		label := strings.TrimSpace(o.Label)
 		if label == "" {
-			return chat.QuestionSpec{}, userErrorf("every option needs a label")
+			return chat.QuestionSpec{}, errors.New("every option needs a label")
 		}
 		if _, dup := seen[label]; dup {
 			// An answer names the label it picked, so two options wearing one
 			// label would make the answer ambiguous — in the transcript the
 			// agent reads back, where there is nothing left to disambiguate it
 			// with.
-			return chat.QuestionSpec{}, userErrorf("two options share the label %q", label)
+			return chat.QuestionSpec{}, fmt.Errorf("two options share the label %q; give each option a label of its own", label)
 		}
 		seen[label] = struct{}{}
 		options = append(options, session.QuestionOption{Label: label, Description: strings.TrimSpace(o.Description)})
@@ -392,7 +446,7 @@ func questionSpec(params questionPostParams) (chat.QuestionSpec, error) {
 			// believes it is offering a choice, and silently answering with a
 			// free-text box is the kind of quiet disagreement that shows up
 			// later as an answer nobody understands.
-			return chat.QuestionSpec{}, userErrorf("multi_select needs options to select from; add options, or drop multi_select to ask for free text")
+			return chat.QuestionSpec{}, errors.New("multi_select needs options to select from; add options, or drop multi_select to ask for free text")
 		}
 	}
 

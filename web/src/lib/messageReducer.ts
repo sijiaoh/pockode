@@ -447,6 +447,30 @@ function openQuestionPostIndex(parts: ContentPart[]): number {
 	return -1;
 }
 
+/**
+ * The last card of the batch a `question_posted` record belongs to, or -1.
+ *
+ * A batch is the questions of one `question_post` call, and the server stamps
+ * all of them with the one `asked_at` and writes them back to back, so the
+ * time is what names it. Two calls landing on one tick of a coarse clock read
+ * as one batch, which costs little: their questions stay in order, and the
+ * second call's row is left drawn beside them. A record without a time
+ * predates batches and belongs to none.
+ */
+function lastOfBatchIndex(
+	parts: ContentPart[],
+	askedAt: string | undefined,
+): number {
+	if (!askedAt) return -1;
+	for (let i = parts.length - 1; i >= 0; i--) {
+		const part = parts[i];
+		if (part.type === "question_record" && part.record.askedAt === askedAt) {
+			return i;
+		}
+	}
+	return -1;
+}
+
 function applyToolCall(
 	parts: ContentPart[],
 	toolUseId: string,
@@ -592,6 +616,18 @@ export function applyEventToParts(
 			// `permission_request` and `ask_user_question` make above: both rows
 			// describe one act, and drawing them side by side is the duplication
 			// tool-call-ui.md removed once already.
+			//
+			// One call can post several questions, one record each, and only the
+			// first finds the row: the rest go in right behind their batch, which
+			// may no longer be at the end — a parallel tool call drawn after the
+			// row, or the row of a second open `question_post`, would otherwise
+			// split the batch or take one of its questions out of order.
+			const batchEnd = lastOfBatchIndex(parts, event.askedAt);
+			if (batchEnd !== -1) {
+				const updated = [...parts];
+				updated.splice(batchEnd + 1, 0, questionPart);
+				return updated;
+			}
 			const index = openQuestionPostIndex(parts);
 			if (index === -1) return [...parts, questionPart];
 
