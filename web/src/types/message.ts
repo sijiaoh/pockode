@@ -496,6 +496,13 @@ export interface QuestionOption {
 	 * thing to a reader, so neither draws a line.
 	 */
 	description?: string;
+	/**
+	 * The option the asking agent would pick itself. Absent means not
+	 * recommended: the server omits it when false, and records written before
+	 * it existed never carry it. A single-choice question has at most one; a
+	 * multi-select may have several. It is a hint to show, never a selection.
+	 */
+	recommended?: boolean;
 }
 
 export interface AskUserQuestion {

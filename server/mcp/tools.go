@@ -252,7 +252,8 @@ var toolDefinitions = []toolDefinition{
 			"The user reads them in a panel that covers the conversation, often on a phone and long after you asked, so each question must make sense on its own and carry the context it needs. " +
 			"When the answer is one of a known set, offer options; when the set is large or open-ended, ask for free text. " +
 			"Never add an \"Other\" option: the user always has their own input box and can decline to answer. " +
-			"Use multi_select when more than one option can apply.\n\n" +
+			"Use multi_select when more than one option can apply. " +
+			"If you would choose one option yourself, mark it recommended and put it first; the user sees it flagged, and it is not picked for them. A single-choice question may recommend at most one option.\n\n" +
 			"Never write multiple-choice questions in your reply text — they cannot be answered as a form there. " +
 			"Never ask for passwords, tokens or API keys: the answer is stored in the transcript and sent to the model. Tell the user which variable or file to set instead.",
 		InputSchema: inputSchema{
@@ -274,6 +275,7 @@ var toolDefinitions = []toolDefinition{
 									Properties: map[string]propertySchema{
 										"label":       {Type: "string", Description: "The option as the user picks it, and the answer you get back verbatim — keep it short. Must be unique within the question."},
 										"description": {Type: "string", Description: "What choosing this option means — its consequence or trade-off — rather than a restatement of the label."},
+										"recommended": {Type: "boolean", Description: "This is the option you would choose. Put it first. At most one per question unless multi_select. Mark it here rather than writing \"(Recommended)\" into the label: the label is the answer you get back."},
 									},
 									Required: []string{"label"},
 								},

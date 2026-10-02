@@ -151,6 +151,24 @@ describe("AnswerPanel", () => {
 		expect(screen.getByText("0 of 2 ready")).toBeInTheDocument();
 	});
 
+	// A recommendation is a hint, never a selection: preselecting it would let
+	// one press of Send answer for the user with something they never read.
+	it("picks nothing for the user when an option is recommended", () => {
+		renderPanel([
+			{
+				...database,
+				options: [
+					{ label: "Postgres", description: "Managed", recommended: true },
+					{ label: "SQLite", description: "One file" },
+				],
+			},
+		]);
+		expect(screen.getByText("Recommended")).toBeInTheDocument();
+		expect(screen.getByRole("radio", { name: /Postgres/ })).not.toBeChecked();
+		expect(screen.getByText("0 of 1 ready")).toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
+	});
+
 	// A question with no options is the shape a free-text request takes, and it
 	// needs no second surface and no second copy.
 	it("draws a question with no options as free text", () => {

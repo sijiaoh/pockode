@@ -156,7 +156,7 @@ child_completion_nudge: |
 # Questions are the ones a single question_post call asked, in the order it
 # asked them; they arrive as one message so the story takes them in together.
 # Placeholders: {{.ChildTitle}}, {{.ChildID}}, {{.ChildSessionID}}, {{.AnyOptions}},
-# {{.Questions}} (Header, Question, RequestID, Options, MultiSelect)
+# {{.Questions}} (Header, Question, RequestID, Options, Recommended, MultiSelect)
 child_question_nudge: |
   Task "{{.ChildTitle}}" (ID: {{.ChildID}}) has asked the user {{if eq (len .Questions) 1}}a question{{else}}{{len .Questions}} questions{{end}}. You are being shown {{if eq (len .Questions) 1}}it{{else}}them{{end}} because you are the task's coordinator: you may already know the answer{{if ne (len .Questions) 1}}s{{end}}, and where you do not, deciding what happens to each question is yours.
 
@@ -164,7 +164,8 @@ child_question_nudge: |
   {{range .Questions}}
   {{.Header}}: {{.Question}}
   {{if .Options}}Options: {{.Options}}{{if .MultiSelect}} (more than one may be picked){{end}}
-  {{end}}Request ID: {{.RequestID}}
+  {{if .Recommended}}The task would pick: {{.Recommended}}
+  {{end}}{{end}}Request ID: {{.RequestID}}
   {{end}}
   - If you know an answer, give it with question_answer (its request_id and the session_id above — naming both saves a refused call when a fork left the same request id waiting in two sessions; {{if .AnyOptions}}`answers` for the labels you pick from a question's options, `text` for anything in your own words, which is the whole answer to a question that offered nothing to pick{{else}}`text` — {{if eq (len .Questions) 1}}this question{{else}}these questions{{end}} offered nothing to pick, so the answer is your own words{{end}}). The task is told the answer came from you, not from the user.
   - If you do not know, do not guess — and do not leave it: ask the user yourself with question_post. Your own question is how a story says "I cannot decide this", and it is what tells Pockode you are handling this one.
@@ -179,11 +180,16 @@ child_question_nudge: |
 # them — they live on the subtasks' sessions, not on their work items — and each
 # carries the pair that names it.
 # Placeholders: {{.Questions}} (ChildTitle, ChildID, SessionID, RequestID,
-# Header, Question)
+# Header, Question, Options, Recommended, MultiSelect)
 child_question_reminder_nudge: |
   Your turn ended while your subtasks are still waiting on questions you have neither answered nor taken to the user:
   {{range .Questions}}
   - Task "{{.ChildTitle}}" (ID: {{.ChildID}}) — {{.Header}}: {{.Question}}
+    {{- if .Options}}
+    Options: {{.Options}}{{if .MultiSelect}} (more than one may be picked){{end}}
+    {{- if .Recommended}}
+    The task would pick: {{.Recommended}}
+    {{- end}}{{end}}
     request_id: {{.RequestID}}, session_id: {{.SessionID}}
   {{- end}}
 
@@ -233,7 +239,7 @@ watched_story_ended: |
 # Questions are the ones a single question_post call asked, in the order it
 # asked them, sent as one message for the reason child_question_nudge gives.
 # Placeholders: {{.Title}}, {{.ID}}, {{.SessionID}}, {{.AnyOptions}},
-# {{.Questions}} (Header, Question, RequestID, Options, MultiSelect)
+# {{.Questions}} (Header, Question, RequestID, Options, Recommended, MultiSelect)
 watched_story_question: |
   Story "{{.Title}}" (ID: {{.ID}}), which you started and are watching, has asked the user {{if eq (len .Questions) 1}}a question{{else}}{{len .Questions}} questions{{end}}:
 
@@ -241,7 +247,8 @@ watched_story_question: |
   {{range .Questions}}
   {{.Header}}: {{.Question}}
   {{if .Options}}Options: {{.Options}}{{if .MultiSelect}} (more than one may be picked){{end}}
-  {{end}}Request ID: {{.RequestID}}
+  {{if .Recommended}}The story would pick: {{.Recommended}}
+  {{end}}{{end}}Request ID: {{.RequestID}}
   {{end}}
   If you know an answer, you may give it with question_answer (its request_id and the session_id above; {{if .AnyOptions}}`answers` for the labels you pick from a question's options, `text` for anything in your own words, which is the whole answer to a question that offered nothing to pick{{else}}`text`, since {{if eq (len .Questions) 1}}this question{{else}}these questions{{end}} offered nothing to pick{{end}}). The story is told the answer came from you, not from the user. If you do not know it, do not guess: the user is being asked already, and the story carries on either way.
 

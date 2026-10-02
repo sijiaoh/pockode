@@ -52,6 +52,7 @@ type questionParams struct {
 	Options  []struct {
 		Label       string `json:"label"`
 		Description string `json:"description"`
+		Recommended bool   `json:"recommended"`
 	} `json:"options"`
 	MultiSelect bool `json:"multi_select"`
 }
@@ -423,21 +424,41 @@ func questionSpec(params questionParams) (chat.QuestionSpec, error) {
 	}
 
 	options := make([]session.QuestionOption, 0, len(params.Options))
-	seen := make(map[string]struct{}, len(params.Options))
+	// Whether each label was written with the suffix, so that a clash the
+	// stripping caused can say so.
+	seen := make(map[string]bool, len(params.Options))
+	var recommended []string
 	for _, o := range params.Options {
-		label := strings.TrimSpace(o.Label)
+		label, suffixed := stripRecommendedSuffix(strings.TrimSpace(o.Label))
 		if label == "" {
+			if suffixed {
+				return chat.QuestionSpec{}, fmt.Errorf("an option's label is only %q; give it a label of its own and set recommended: true instead", recommendedSuffix)
+			}
 			return chat.QuestionSpec{}, errors.New("every option needs a label")
 		}
-		if _, dup := seen[label]; dup {
+		if earlierSuffixed, dup := seen[label]; dup {
 			// An answer names the label it picked, so two options wearing one
 			// label would make the answer ambiguous — in the transcript the
 			// agent reads back, where there is nothing left to disambiguate it
 			// with.
+			if suffixed || earlierSuffixed {
+				return chat.QuestionSpec{}, fmt.Errorf("two options share the label %q once %q is removed from it — the suffix is read as recommended: true, not kept in the label; give each option a label of its own", label, recommendedSuffix)
+			}
 			return chat.QuestionSpec{}, fmt.Errorf("two options share the label %q; give each option a label of its own", label)
 		}
-		seen[label] = struct{}{}
-		options = append(options, session.QuestionOption{Label: label, Description: strings.TrimSpace(o.Description)})
+		seen[label] = suffixed
+		rec := o.Recommended || suffixed
+		if rec {
+			recommended = append(recommended, label)
+		}
+		options = append(options, session.QuestionOption{Label: label, Description: strings.TrimSpace(o.Description), Recommended: rec})
+	}
+	if len(recommended) > 1 && !params.MultiSelect {
+		// Counted after the suffix is stripped, since a suffixed label is a
+		// recommendation too. Recommending two answers of which only one can be
+		// picked says nothing about which to pick.
+		return chat.QuestionSpec{}, fmt.Errorf("%d options are recommended %q but only one can be picked; recommend only the one you would choose, or set multi_select if more than one can apply",
+			len(recommended), recommended)
 	}
 	if len(options) == 0 {
 		options = nil
@@ -456,4 +477,20 @@ func questionSpec(params questionParams) (chat.QuestionSpec, error) {
 		Options:     options,
 		MultiSelect: params.MultiSelect,
 	}, nil
+}
+
+// recommendedSuffix is what agent CLIs train models to append to the option
+// they would pick. Here a label is the answer handed back verbatim, so the
+// suffix would end up inside the answer: it is read as recommended: true
+// instead. Only this exact spelling is recognised.
+const recommendedSuffix = "(Recommended)"
+
+// stripRecommendedSuffix removes recommendedSuffix, and the space before it,
+// from a label, reporting whether it was there.
+func stripRecommendedSuffix(label string) (string, bool) {
+	trimmed, ok := strings.CutSuffix(label, recommendedSuffix)
+	if !ok {
+		return label, false
+	}
+	return strings.TrimSpace(trimmed), true
 }

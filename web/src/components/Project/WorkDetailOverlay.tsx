@@ -9,7 +9,7 @@ import {
 	Trash2,
 	X,
 } from "lucide-react";
-import { useCallback, useMemo, useState } from "react";
+import { Fragment, useCallback, useMemo, useState } from "react";
 import TextareaAutosize from "react-textarea-autosize";
 import { useInlineEdit } from "../../hooks/useInlineEdit";
 import { useRoleNameMap } from "../../hooks/useRoleNameMap";
@@ -22,7 +22,7 @@ import type { AgentRole } from "../../types/agentRole";
 import type { PendingQuestion } from "../../types/message";
 import type { Comment, Work, WorkListItem, WorkType } from "../../types/work";
 import { formatStepCount, getStepProgress } from "../../utils/workSteps";
-import { ActivityBadge, MarkdownContent } from "../ui";
+import { ActivityBadge, MarkdownContent, RecommendedTag } from "../ui";
 import BackButton from "../ui/BackButton";
 import BottomActionBar from "../ui/BottomActionBar";
 import { inputClass } from "../ui/inputClass";
@@ -439,9 +439,13 @@ function PendingQuestionsSection({
 						/>
 						{(question.options ?? []).length > 0 && (
 							<p className="mt-1 break-words text-xs text-th-text-muted">
-								{(question.options ?? [])
-									.map((option) => option.label)
-									.join(" · ")}
+								{(question.options ?? []).map((option, i) => (
+									<Fragment key={option.label}>
+										{i > 0 && " · "}
+										{option.label}
+										{option.recommended && <RecommendedTag />}
+									</Fragment>
+								))}
 							</p>
 						)}
 					</div>

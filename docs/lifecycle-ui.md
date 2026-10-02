@@ -861,7 +861,10 @@ place the redesign is trying to separate them.
   ```
 
   **Read-only, and deliberately.** Question text at `text-sm`, the option labels
-  under it joined by `·` and muted, one entry per `request_id`. No radios, no
+  under it joined by `·` and muted, a recommended one followed by the same
+  `Recommended` tag the panel draws
+  ([answering-ui.md](answering-ui.md#what-it-draws)), one entry per
+  `request_id`. No radios, no
   free-text box, no per-question buttons. Answering is a conversation — it
   produces a message in a session, the agent replies in that session, and half
   the reason to answer at all is to see what happens next. A form here would be a

@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Activity } from "../../lib/activity";
@@ -676,6 +676,26 @@ describe("the unanswered questions section", () => {
 		).toBeInTheDocument();
 		expect(screen.getByText("Postgres · SQLite")).toBeInTheDocument();
 		expect(screen.queryByRole("radio")).toBeNull();
+	});
+
+	it("tags the option the agent recommends, in the order it gave", () => {
+		renderWithWork(
+			createWork({ status: "active", session_id: "s1" }),
+			"running",
+			[
+				{
+					...question,
+					options: [
+						{ label: "Postgres", description: "Managed" },
+						{ label: "SQLite", description: "One file", recommended: true },
+					],
+				},
+			],
+		);
+
+		const list = screen.getByText(/Postgres/);
+		expect(list).toHaveTextContent("Postgres · SQLite, Recommended");
+		expect(within(list).getByText("Recommended")).toBeVisible();
 	});
 
 	// The list is empty exactly when it should be — closing a work withdraws its

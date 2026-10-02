@@ -137,6 +137,24 @@ func TestQuestionPost_ArgumentRefusals(t *testing.T) {
 			"header": "h", "question": "q",
 			"options": []map[string]string{{"label": "a"}, {"label": "a"}},
 		}), "share the label"},
+		{"two recommendations where only one can be picked", oneQuestion(map[string]any{
+			"header": "h", "question": "q",
+			"options": []map[string]any{{"label": "a", "recommended": true}, {"label": "b", "recommended": true}},
+		}), "only one can be picked"},
+		// Counted after the suffix is read as a recommendation, or this one
+		// would slip through as one marked option.
+		{"a suffix recommends a second option", oneQuestion(map[string]any{
+			"header": "h", "question": "q",
+			"options": []map[string]any{{"label": "a", "recommended": true}, {"label": "b (Recommended)"}},
+		}), `["a" "b"]`},
+		{"a label that is only the suffix", oneQuestion(map[string]any{
+			"header": "h", "question": "q",
+			"options": []map[string]string{{"label": "(Recommended)"}, {"label": "b"}},
+		}), "set recommended: true"},
+		{"a suffixed label repeats another", oneQuestion(map[string]any{
+			"header": "h", "question": "q",
+			"options": []map[string]string{{"label": "a (Recommended)"}, {"label": "a"}},
+		}), "once \"(Recommended)\" is removed"},
 		{"multi_select with nothing to select", oneQuestion(map[string]any{
 			"header": "h", "question": "q", "multi_select": true,
 		}), "needs options to select from"},
@@ -164,6 +182,50 @@ func TestQuestionPost_ArgumentRefusals(t *testing.T) {
 				t.Error("a refused question reached the session layer")
 			}
 		})
+	}
+}
+
+// TestQuestionPost_RecommendedOptions: the flag is carried to what is posted;
+// the "(Recommended)" suffix models are trained to write is read as the same
+// flag and kept out of the label, because the label is the answer the agent
+// gets back; and a multi-select may recommend several.
+func TestQuestionPost_RecommendedOptions(t *testing.T) {
+	exec, sessions, _, _ := newQuestionExec(t)
+
+	_, err := callAs(t, exec, callerInMain, "question_post", map[string]any{"questions": []map[string]any{
+		{"header": "Database", "question": "Which database?", "options": []map[string]any{
+			{"label": "Postgres (Recommended)"}, {"label": "SQLite"},
+		}},
+		{"header": "Runtime", "question": "Which runtime?", "options": []map[string]any{
+			{"label": "Go", "recommended": true}, {"label": "Rust"},
+		}},
+		{"header": "Targets", "question": "Which targets?", "multi_select": true, "options": []map[string]any{
+			{"label": "Linux", "recommended": true}, {"label": "macOS(Recommended)"}, {"label": "Windows"},
+			// Only the exact English suffix is recognised.
+			{"label": "BSD (recommended)"},
+		}},
+	}})
+	if err != nil {
+		t.Fatalf("question_post: %v", err)
+	}
+
+	type opt struct {
+		label       string
+		recommended bool
+	}
+	want := [][]opt{
+		{{"Postgres", true}, {"SQLite", false}},
+		{{"Go", true}, {"Rust", false}},
+		{{"Linux", true}, {"macOS", true}, {"Windows", false}, {"BSD (recommended)", false}},
+	}
+	for i, spec := range sessions.questions.posted {
+		var got []opt
+		for _, o := range spec.Options {
+			got = append(got, opt{o.Label, o.Recommended})
+		}
+		if !slices.Equal(got, want[i]) {
+			t.Errorf("questions[%d] options = %+v, want %+v", i, got, want[i])
+		}
 	}
 }
 
@@ -393,7 +455,7 @@ func TestQuestionTools_AreAdvertised(t *testing.T) {
 		if name == "question_post" {
 			for _, want := range []string{"returns immediately", "arrives later as an ordinary message", "question_cancel",
 				"does not reach the user here",
-				"in one call", "\"Other\"", "passwords"} {
+				"in one call", "\"Other\"", "passwords", "recommended"} {
 				if !strings.Contains(found.Description, want) {
 					t.Errorf("question_post description does not say %q", want)
 				}
@@ -405,6 +467,9 @@ func TestQuestionTools_AreAdvertised(t *testing.T) {
 			options := questions.Items.Properties["options"]
 			if options.Items == nil || options.Items.Properties["label"].Type != "string" {
 				t.Error("the options schema does not describe the objects it takes")
+			}
+			if options.Items != nil && options.Items.Properties["recommended"].Type != "boolean" {
+				t.Error("the options schema does not offer the recommended flag")
 			}
 		}
 	}

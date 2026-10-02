@@ -23,7 +23,7 @@ func postedRecord(t *testing.T, id string) json.RawMessage {
 		Question: AskUserQuestion{
 			Question: "Which database?",
 			Header:   "Database",
-			Options:  []QuestionOption{{Label: "Postgres", Description: "the one we have"}},
+			Options:  []QuestionOption{{Label: "Postgres", Description: "the one we have", Recommended: true}, {Label: "SQLite"}},
 		},
 		AskedAt: time.Unix(1700000000, 0).UTC(),
 	})
@@ -63,11 +63,24 @@ func TestUnansweredQuestions_CarriesTheWholeQuestion(t *testing.T) {
 	if q.Header != "Database" || q.Question != "Which database?" {
 		t.Errorf("question = %+v, want the posted text", q)
 	}
-	if len(q.Options) != 1 || q.Options[0].Label != "Postgres" || q.Options[0].Description != "the one we have" {
+	if len(q.Options) != 2 || q.Options[0].Label != "Postgres" || q.Options[0].Description != "the one we have" ||
+		!q.Options[0].Recommended || q.Options[1].Recommended {
 		t.Errorf("options = %+v, want the posted options", q.Options)
 	}
 	if q.AskedAt.IsZero() {
 		t.Error("asked_at is zero, want the moment the question was posted")
+	}
+}
+
+// TestUnansweredQuestions_ReadsARecordFromBeforeRecommended: transcripts
+// written before options could be recommended carry no such key, and a fork of
+// one still inherits its questions — with nothing recommended.
+func TestUnansweredQuestions_ReadsARecordFromBeforeRecommended(t *testing.T) {
+	old := json.RawMessage(`{"type":"question_posted","request_id":"req-1","questions":[{"question":"Which?","header":"DB","options":[{"label":"Postgres","description":""}],"multiSelect":false}]}`)
+
+	questions := UnansweredQuestions([]json.RawMessage{old})
+	if len(questions) != 1 || len(questions[0].Options) != 1 || questions[0].Options[0].Recommended {
+		t.Fatalf("questions = %+v, want the old question, nothing recommended", questions)
 	}
 }
 
