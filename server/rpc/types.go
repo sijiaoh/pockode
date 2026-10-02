@@ -126,15 +126,18 @@ func OrLegacy(current, deprecated string) string {
 
 type MessageParams struct {
 	SessionID string `json:"session_id"`
-	Content   string `json:"content"`
+	// Content is the message. Empty when Answering is set — the server writes
+	// that message itself, from the answers, so the wording the agent reads
+	// lives in one place whoever answered — and refused when it is not.
+	Content string `json:"content"`
 	// Answering are the posted questions this message answers. Absent for an
 	// ordinary message.
 	//
 	// The whole message is refused if any entry names a question that is no
 	// longer waiting for an answer (chat.ErrQuestionNotPending, reported as
-	// CodeInvalidParams with every such request id named). Content is one
+	// CodeInvalidParams with every such request id named). The message is one
 	// string written for all of them together, so there is no half of it to
-	// deliver — see chat.Client.SendMessageAnswering.
+	// deliver — see chat.Client.SendAnswers.
 	Answering []QuestionAnswerParams `json:"answering,omitempty"`
 }
 
@@ -153,7 +156,11 @@ type QuestionAnswerParams struct {
 	Text string `json:"text,omitempty"`
 	// Declined says the user will not answer this one. The agent is told.
 	Declined bool `json:"declined,omitempty"`
-	// Note is the optional line the user added beside a decline.
+	// Note is the user's optional line beside what they answered: the reason
+	// beside a decline, or a remark beside the options picked (a multi-select's
+	// Other among them). It is refused where it would read as a second answer
+	// — on a question with no options, and on a single-select question
+	// answered with Text — see chat.validateNote.
 	Note string `json:"note,omitempty"`
 }
 
@@ -170,10 +177,11 @@ type QuestionAnswerParams struct {
 // addressable — which is the state it was already in for every message it sent,
 // so neither is an error.
 //
-// Content and Command are set only for a message that invoked a Pockode command,
-// and are the same two fields its record carries (agent.EventRecord): the prompt
-// the command expanded to and the command as parsed. The sender has only what it
-// typed, and this reply is its one way to learn what the agent was sent.
+// Content is set for a message whose text the server wrote rather than took as
+// typed, and is the content its record carries (agent.EventRecord): the prompt a
+// Pockode command expanded to, with Command beside it as parsed, or the body
+// written from the answers of a message carrying Answering. The sender has only
+// what it sent, and this reply is its one way to learn what the agent was sent.
 type MessageResult struct {
 	Seq     session.HistorySeq       `json:"seq,omitempty"`
 	Content string                   `json:"content,omitempty"`

@@ -109,10 +109,12 @@ Follows standard JSON-RPC 2.0; Pockode has no custom extensions.
 telling the sender where its own message landed in the history, and, for a
 message that invoked a [Pockode command](../pockode-commands.md#what-is-recorded),
 `content` and `command` — the prompt the command expanded to and the command as
-parsed. It needs one because the sender is deliberately left out of the
+parsed — or, for a message carrying `answering`, `content` alone: the body the
+server wrote from the answers ([agent-integration.md](agent-integration.md#answering)).
+It needs one because the sender is deliberately left out of the
 broadcast that carries every other record's `seq` (it has already echoed the
 message into its own transcript), so the reply is the only place that address —
-or a command's expansion — can reach it. What the address is for is in [session-fork-ui.md](../session-fork-ui.md#which-messages-get-a-menu-and-when-fork-is-on-it):
+or a body the server wrote — can reach it. What the address is for is in [session-fork-ui.md](../session-fork-ui.md#which-messages-get-a-menu-and-when-fork-is-on-it):
 a record a client cannot name is a record it cannot fork from.
 
 That method used to answer a bare `{}`, and growing it needed **no coordinated

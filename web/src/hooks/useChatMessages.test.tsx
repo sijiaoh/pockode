@@ -8,6 +8,7 @@ import { makeSessionDetail } from "../test/sessionFixtures";
 import type {
 	AssistantMessage,
 	Message,
+	QuestionAnswerRecord,
 	ServerNotification,
 	SessionDetail,
 	UserMessage,
@@ -82,7 +83,10 @@ function Probe({ sessionId }: { sessionId: string }) {
 
 function renderSendProbe() {
 	const latest: { messages: Message[] } = { messages: [] };
-	const send = { current: async (_content: string) => false };
+	const send = {
+		current: async (_content: string, _answering?: QuestionAnswerRecord[]) =>
+			false,
+	};
 	function SendProbe() {
 		const { messages, sendUserMessage } = useChatMessages({ sessionId: "s1" });
 		latest.messages = messages;
@@ -259,6 +263,37 @@ describe("useChatMessages", () => {
 			content: "Lead the work…",
 			command: { name: "pockode-lead", args: "server's parse" },
 			anchorSeq: 5,
+		});
+	});
+
+	// The server writes an answering message's body, so the echo starts empty
+	// and takes the body from the reply — what a fork from it, or its preview,
+	// would otherwise only see after a reload.
+	it("fills an answer's echo with the body the server wrote", async () => {
+		mockState.sendMessage.mockResolvedValueOnce({
+			seq: 7,
+			expanded: { content: "Answering:\n\nQ: Which?\nA: SQLite" },
+		});
+		const answering: QuestionAnswerRecord[] = [
+			{
+				request_id: "q1",
+				question: "Which?",
+				answers: ["SQLite"],
+				answered_at: "2026-01-01T00:00:00Z",
+			},
+		];
+
+		const { latest, send } = renderSendProbe();
+		await waitFor(() => expect(latest.messages.length).toBeGreaterThan(0));
+		await act(async () => {
+			await send.current("", answering);
+		});
+
+		expect(
+			latest.messages.find((m) => m.role === "user" && m.answering),
+		).toMatchObject({
+			content: "Answering:\n\nQ: Which?\nA: SQLite",
+			anchorSeq: 7,
 		});
 	});
 

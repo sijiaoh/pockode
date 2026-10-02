@@ -799,8 +799,8 @@ function ChatPanel({
 	}, [answerPanelShown]);
 
 	const handleSendAnswers = useCallback(
-		async (content: string, answering: QuestionAnswerRecord[]) => {
-			await sendUserMessage(content, answering);
+		async (answering: QuestionAnswerRecord[]) => {
+			await sendUserMessage("", answering);
 		},
 		[sendUserMessage],
 	);

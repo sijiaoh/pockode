@@ -782,21 +782,24 @@ function answeredByLine(answering: QuestionAnswerRecord[] | undefined): string {
 }
 
 /**
- * What the user said, both halves of it.
+ * What the user said, both halves of it, and the note beside either.
  *
  * The record keeps option labels and the user's own words apart so the *agent*
  * can tell them apart; the prose it reads marks the second as such
- * (`answerMessage.ts`). Here they are simply joined: this is the user reading
- * their own answer back, and which half a word came from is not a distinction
- * they need drawn for them.
+ * (`chat.answerMessage` on the server). Here they are simply joined: this is
+ * the user reading their own answer back, and which half a word came from is
+ * not a distinction they need drawn for them.
  */
 function answerText(entry: QuestionAnswerRecord): string {
+	const note = entry.note?.trim();
 	if (entry.declined) {
-		const note = entry.note?.trim();
 		return note ? `Not answering — ${note}` : "Not answering.";
 	}
 	const text = entry.text?.trim();
-	return [...(entry.answers ?? []), ...(text ? [text] : [])].join(" · ");
+	const answer = [...(entry.answers ?? []), ...(text ? [text] : [])].join(
+		" · ",
+	);
+	return note ? `${answer} — ${note}` : answer;
 }
 
 /**

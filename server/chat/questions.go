@@ -42,7 +42,10 @@ type Answer struct {
 	// nothing — it is the user's own words, not a choice.
 	Text     string
 	Declined bool
-	// Note is the optional line beside a decline.
+	// Note is the answerer's optional line beside what they answered: a
+	// remark on a pick ("Postgres, but pin it to 16"), or the reason beside a
+	// decline. It never stands in for an answer, so validateAnswer allows it
+	// only where there is one to sit beside and it cannot be mistaken for one.
 	Note string
 }
 
@@ -222,8 +225,14 @@ func (c *Client) withdraw(ctx context.Context, sessionID, requestID string, reas
 	return nil
 }
 
-// SendMessageAnswering sends a message that answers posted questions, and is
-// the only way one is answered.
+// SendAnswers sends a message that answers posted questions, and is the only
+// way a person answers one. It returns the message body alongside the seq.
+//
+// The message body is written here, from the answers, rather than taken from
+// the client: it is the only half of an answer the agent reads, and an agent's
+// answer arrives in the same shape (see answerMessage), so the wording has one
+// home. The sender is left out of the broadcast carrying the record, so the
+// body is handed back for it to learn what the agent read.
 //
 // Every answer is checked before anything is delivered, and one bad answer
 // refuses the whole message. The content is a single string written for all of
@@ -242,28 +251,19 @@ func (c *Client) withdraw(ctx context.Context, sessionID, requestID string, reas
 // answered twice, which is a thing it can make sense of; the alternative is
 // holding the session's state across a write to a subprocess's stdin, for a
 // race that needs two people answering one question in the same breath.
-func (c *Client) SendMessageAnswering(ctx context.Context, sessionID, content string, answers []Answer, exclude any) (session.HistorySeq, error) {
-	if len(answers) == 0 {
-		return c.SendMessageExcluding(ctx, sessionID, content, exclude)
-	}
-	return c.deliverAnswers(ctx, sessionID, answers, agent.UserResolver(), func([]agent.QuestionAnswer) string {
-		return content
-	}, exclude)
+func (c *Client) SendAnswers(ctx context.Context, sessionID string, answers []Answer, exclude any) (session.HistorySeq, string, error) {
+	return c.deliverAnswers(ctx, sessionID, answers, agent.UserResolver(), exclude)
 }
 
 // AnswerQuestion delivers one answer an agent gave to a question another
 // session asked, and is question_answer's whole effect on the session that
 // asked.
 //
-// Everything below the prose is the path a person's answer takes, deliberately:
-// the same checks in the same order, the same record, the same removal from the
+// It is the path a person's answer takes, deliberately: the same checks in the
+// same order, the same record, the same prose, the same removal from the
 // unanswered list. An answer that took a second path would be a second set of
 // rules about what an answer may be, and the transcript would hold two shapes
-// of the same fact.
-//
-// The prose is the one half that differs, because the receiving agent reads
-// only the prose (`answering` never reaches a CLI) and the one thing it must
-// not conclude is that the user said this. See agentAnswerMessage.
+// of the same fact. Only who answered differs, and answerMessage says so.
 //
 // It returns once the answer is with the agent, which can mean starting its
 // process first: a question outlives the process that asked it, so the
@@ -273,38 +273,40 @@ func (c *Client) SendMessageAnswering(ctx context.Context, sessionID, content st
 // An agent answers; it never declines. Refusing to answer is a person's to do —
 // it is them saying they will not be drawn — and an agent that does not know the
 // answer simply leaves the question where it is, for the user or for another
-// agent. So question_answer offers no decline, and agentAnswerMessage has no
-// wording for one.
+// agent. So question_answer offers no decline.
 func (c *Client) AnswerQuestion(ctx context.Context, sessionID string, answer Answer, by agent.QuestionResolver) error {
-	_, err := c.deliverAnswers(ctx, sessionID, []Answer{answer}, by, func(answering []agent.QuestionAnswer) string {
-		return agentAnswerMessage(answering, by)
-	}, nil)
+	_, _, err := c.deliverAnswers(ctx, sessionID, []Answer{answer}, by, nil)
 	return err
 }
 
-// deliverAnswers is the one path an answer takes, whoever gave it. prose turns
-// the resolved answers into the message body, which is the only thing the two
-// callers do differently.
-func (c *Client) deliverAnswers(ctx context.Context, sessionID string, answers []Answer, by agent.QuestionResolver, prose func([]agent.QuestionAnswer) string, exclude any) (session.HistorySeq, error) {
+// deliverAnswers is the one path an answer takes, whoever gave it, and returns
+// the body the agent was sent.
+func (c *Client) deliverAnswers(ctx context.Context, sessionID string, answers []Answer, by agent.QuestionResolver, exclude any) (session.HistorySeq, string, error) {
+	if len(answers) == 0 {
+		// A body with no answers in it would be a bare "Answering:" that starts
+		// a turn about nothing.
+		return session.NoHistorySeq, "", fmt.Errorf("%w: a message answering questions has to answer at least one", ErrAnswerShape)
+	}
 	meta, found, err := c.store.Get(sessionID)
 	if err != nil {
-		return session.NoHistorySeq, fmt.Errorf("get session: %w", err)
+		return session.NoHistorySeq, "", fmt.Errorf("get session: %w", err)
 	}
 	if !found {
-		return session.NoHistorySeq, ErrSessionNotFound
+		return session.NoHistorySeq, "", ErrSessionNotFound
 	}
 
 	now := time.Now()
 	answering, err := c.resolveAnswers(ctx, sessionID, meta.Turn, answers, by, now)
 	if err != nil {
-		return session.NoHistorySeq, err
+		return session.NoHistorySeq, "", err
 	}
 
+	content := answerMessage(answering, by)
 	seq, err := c.sendEvent(ctx, sessionID, agent.MessageEvent{
-		Content: prose(answering), Answering: answering, Origin: originOf(by),
+		Content: content, Answering: answering, Origin: originOf(by),
 	}, exclude)
 	if err != nil {
-		return seq, err
+		return seq, "", err
 	}
 
 	for _, a := range answering {
@@ -319,7 +321,7 @@ func (c *Client) deliverAnswers(ctx context.Context, sessionID string, answers [
 				"sessionId", sessionID, "requestId", a.RequestID, "error", err)
 		}
 	}
-	return seq, nil
+	return seq, content, nil
 }
 
 // originOf says how a message carrying these answers is marked.
@@ -334,40 +336,75 @@ func originOf(by agent.QuestionResolver) agent.MessageOrigin {
 	return ""
 }
 
-// agentAnswerMessage is the body of the message an agent's answer arrives as.
+// answerMessage is the body of the message answers arrive as, whoever gave
+// them, and the one place that wording lives.
 //
 // The prose is the whole of what the receiving agent reads — `answering` is
-// Pockode's own structure and never reaches a CLI — so the first thing it says
-// is who answered. Without that the answer is indistinguishable from the user's
-// own, and an agent acting on "the user chose Postgres" when no user has seen
-// the question is the one failure this tool could cause.
+// Pockode's own structure and never reaches a CLI — so it has to stand on its
+// own: a bare option label would arrive as an answer to nothing, so each
+// answer carries its question with it.
 //
-// The Q:/A: shape below is deliberately the one a person's answer arrives in
-// (web/src/utils/answerMessage.ts): the same fact should not read as two
-// different kinds of message depending on who supplied it. Only the lead line
-// differs, which is exactly the part that differs.
-func agentAnswerMessage(answering []agent.QuestionAnswer, by agent.QuestionResolver) string {
+// The lead says who answered. A person's is one word, so that one question and
+// five read the same (docs/answering-ui.md §3). An agent's names the agent and
+// says it was not the user: without that the answer is indistinguishable from
+// the user's own, and an agent acting on "the user chose Postgres" when no user
+// has seen the question is the one failure question_answer could cause. Below
+// the lead the two are the same shape, because they are the same fact.
+func answerMessage(answering []agent.QuestionAnswer, by agent.QuestionResolver) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "Answering — from %s, not from the user.\n", describeResolver(&by))
+	if by.Kind == agent.ResolverAgent {
+		fmt.Fprintf(&b, "Answering — from %s, not from the user.\n", describeResolver(&by))
+	} else {
+		b.WriteString("Answering:\n")
+	}
 	for _, a := range answering {
-		fmt.Fprintf(&b, "\nQ: %s\nA: %s\n", a.Question, answerLine(a))
+		fmt.Fprintf(&b, "\nQ: %s\nA: %s\n", a.Question, answerLine(a, by))
 	}
 	return strings.TrimRight(b.String(), "\n")
 }
 
-// answerLine is what follows "A:". It marks the answerer's own words when they
-// sit beside option labels, for the reason the client's formatter gives: an
-// unmarked sentence next to two labels reads as a third option that was
-// offered.
-func answerLine(a agent.QuestionAnswer) string {
-	parts := append([]string(nil), a.Answers...)
-	if text := strings.TrimSpace(a.Text); text != "" {
-		if len(a.Answers) > 0 {
-			text = "and, in its own words: " + text
+// answerLine is what follows "A:".
+//
+// A decline is written as a phrase rather than left blank, because a blank
+// answer reads to the agent as "the user said nothing" — which is what it was
+// already looking at before the message arrived.
+//
+// The answerer's own words are marked as such when they sit beside a label: the
+// record keeps `answers` and `text` apart, but the CLI reads only this, and an
+// unmarked sentence next to two labels would read as a third option the agent
+// had offered. A lone free text carries no marker, deliberately: there is
+// nothing beside it to be mistaken for, and every answer to a question with no
+// options is that shape.
+//
+// The note is marked for the same reason, and always: unmarked after a label
+// it would read as part of the label, and after a decline as a reason nobody
+// can tell from an answer.
+func answerLine(a agent.QuestionAnswer, by agent.QuestionResolver) string {
+	var line string
+	if a.Declined {
+		line = "(not answering)"
+	} else {
+		parts := append([]string(nil), a.Answers...)
+		if a.Text != "" {
+			text := a.Text
+			if len(a.Answers) > 0 {
+				text = fmt.Sprintf("and, in %s own words: %s", possessive(by), text)
+			}
+			parts = append(parts, text)
 		}
-		parts = append(parts, text)
+		line = strings.Join(parts, " \u00b7 ")
 	}
-	return strings.Join(parts, " \u00b7 ")
+	if a.Note != "" {
+		line += " — note: " + a.Note
+	}
+	return line
+}
+
+func possessive(by agent.QuestionResolver) string {
+	if by.Kind == agent.ResolverAgent {
+		return "its"
+	}
+	return "their"
 }
 
 // describeResolver names an answerer in a sentence, for the message an answer
@@ -427,7 +464,7 @@ func (c *Client) resolveAnswers(ctx context.Context, sessionID string, turn sess
 			Answers:    a.Answers,
 			Text:       strings.TrimSpace(a.Text),
 			Declined:   a.Declined,
-			Note:       a.Note,
+			Note:       strings.TrimSpace(a.Note),
 			ResolvedBy: &by,
 			AnsweredAt: now,
 		})
@@ -444,6 +481,13 @@ func (c *Client) resolveAnswers(ctx context.Context, sessionID string, turn sess
 // the agent can see which is which. The thing being guarded is "do not invent
 // an option", not "the user may not say anything else".
 func validateAnswer(q session.PendingQuestion, a Answer) error {
+	if err := validateAnswerShape(q, a); err != nil {
+		return err
+	}
+	return validateNote(q, a)
+}
+
+func validateAnswerShape(q session.PendingQuestion, a Answer) error {
 	text := strings.TrimSpace(a.Text)
 	if a.Declined {
 		if len(a.Answers) > 0 || text != "" {
@@ -479,6 +523,33 @@ func validateAnswer(q session.PendingQuestion, a Answer) error {
 		if !offersLabel(q.Options, label) {
 			return fmt.Errorf("%w: %q does not offer %q", ErrAnswerShape, q.Header, label)
 		}
+	}
+	return nil
+}
+
+// validateNote checks the note against what it sits beside.
+//
+// A decline takes one: it is the reason. An answer takes one only where it
+// cannot be confused with the answer itself — beside picked options, which are
+// the agent's words and leave the answerer none of their own. A question with
+// no options is answered in the answerer's own words already, and so is a
+// single-select question answered with Other; a note there would be a second
+// sentence of the same kind, and the agent could not tell which one was the
+// answer. On a multi-select question Other is one more item in a list rather
+// than the answer itself, so the note remarks on the list, as it does there
+// without Other.
+//
+// The "nothing chosen" case never reaches here: validateAnswerShape refuses an
+// answer with nothing in it, so a note always has something beside it.
+func validateNote(q session.PendingQuestion, a Answer) error {
+	if a.Declined || strings.TrimSpace(a.Note) == "" {
+		return nil
+	}
+	if len(q.Options) == 0 {
+		return fmt.Errorf("%w: %q offered no options, so its answer is already in your own words and takes no note; put everything in the answer", ErrAnswerShape, q.Header)
+	}
+	if !q.MultiSelect && strings.TrimSpace(a.Text) != "" {
+		return fmt.Errorf("%w: %q was answered in your own words (Other), which takes no note on a question with one answer; put everything in that answer", ErrAnswerShape, q.Header)
 	}
 	return nil
 }

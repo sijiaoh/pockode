@@ -135,20 +135,23 @@ func (h *rpcMethodHandler) handleMessage(ctx context.Context, conn *jsonrpc2.Con
 
 	log := h.log.With("sessionId", params.SessionID)
 
+	// A message answering questions is written by the server from the answers
+	// (chat.Client.SendAnswers), so content beside them has nowhere to go.
+	// Refused rather than dropped: it is something the user typed — a command,
+	// or a word to the agent — and which of the two messages they meant is not
+	// the server's to guess.
+	if len(params.Answering) > 0 && params.Content != "" {
+		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams,
+			"Answers are sent on their own: the message the agent reads is written from them. Send the answers first, then the rest as a message of its own. If you did not type anything beside them, reload the page — this client is out of date.")
+		return
+	}
+
 	// Expanded before anything is sent, so a command that cannot be expanded
 	// leaves no trace: it is refused, and never reaches the agent as the text the
 	// user typed.
 	content := params.Content
 	cmd, isCommand := command.ParsePockode(params.Content)
 	if isCommand {
-		if len(params.Answering) > 0 {
-			// An answer is prose written for the questions it answers, and a
-			// command's prompt is not that; which of the two the user meant is
-			// not the server's to guess.
-			h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams,
-				"A Pockode command cannot be sent together with answers. Send the answers first, then the command on its own.")
-			return
-		}
 		expanded, err := command.ExpandPockode(cmd, command.PockodeEnv{
 			WorkDir:   wt.WorkDir,
 			IsGitRepo: h.worktreeManager.Registry().IsGitRepo(),
@@ -174,9 +177,11 @@ func (h *rpcMethodHandler) handleMessage(ctx context.Context, conn *jsonrpc2.Con
 	var err error
 	if isCommand {
 		seq, err = wt.ChatClient.SendCommandExcluding(ctx, params.SessionID, content, cmd, h.state.getNotifier())
-	} else {
-		seq, err = wt.ChatClient.SendMessageAnswering(ctx, params.SessionID, content,
+	} else if len(params.Answering) > 0 {
+		seq, content, err = wt.ChatClient.SendAnswers(ctx, params.SessionID,
 			chatAnswers(params.Answering), h.state.getNotifier())
+	} else {
+		seq, err = wt.ChatClient.SendMessageExcluding(ctx, params.SessionID, content, h.state.getNotifier())
 	}
 	if err != nil {
 		h.replyErrorForChat(ctx, conn, req, params.SessionID, err)
@@ -210,6 +215,8 @@ func (h *rpcMethodHandler) handleMessage(ctx context.Context, conn *jsonrpc2.Con
 	result := rpc.MessageResult{Seq: seq}
 	if isCommand {
 		result.Content, result.Command = content, &cmd
+	} else if len(params.Answering) > 0 {
+		result.Content = content
 	}
 	if err := conn.Reply(ctx, req.ID, result); err != nil {
 		log.Error("failed to send response", "error", err)

@@ -239,6 +239,8 @@ the one exception to that and has a subsection of its own below.
 │ ░│  (•) SQLite                             │░│
 │ ░│      One file, no ops                   │░│
 │ ░│  ( ) Other                              │░│
+│ ░│      [ Your own answer______________ ]  │░│
+│ ░│  + Add a note                           │░│
 │ ░│  ☐ Won't answer                         │░│
 │ ░│ ─────────────────────────────────────── │░│
 │ ░│ [Region]                         14:02  │░│
@@ -544,13 +546,24 @@ Three shapes, decided by the question:
 
 | Question | Control |
 |---|---|
-| `options` non-empty, `multi_select` false | radios, plus an **Other** radio with a single-line input |
-| `options` non-empty, `multi_select` true | checkboxes, plus an **Other** checkbox with a single-line input |
+| `options` non-empty, `multi_select` false | radios, plus an **Other** radio with an input that grows from one line |
+| `options` non-empty, `multi_select` true | checkboxes, plus an **Other** checkbox with an input that grows from one line |
 | `options` empty | a multi-line `textarea`, placeholder "Your answer" |
 
 The third row is the shape a question with nothing to pick takes. It needs no
-second surface and no second copy, and it is multi-line where the Other input is
-not: the answers that arrive there are paragraphs, not labels.
+second surface and no second copy, and it opens three lines tall where the Other
+input opens at one: the answers that arrive there are paragraphs, while Other is
+usually a label the agent did not think of — usually, so it grows to five lines
+before it scrolls.
+
+The Other input is on screen whenever the form is editable, picked or not, and
+going into it is how the user picks Other: a click in it, or typing. Focus
+alone does not — Tab passes through it on the way to the note, and would
+silently replace the radio already chosen — and neither does a press, which on a
+touch screen is also the start of a scroll. Text left behind an unpicked Other
+stays visible, muted, and is not sent. A multiple choice shows `{k} selected`
+beside its header, Other counted while still empty: it says what is ticked, not
+what is ready.
 
 **The question and each option's description are Markdown; labels and the
 header are not.** What the agent wrote as prose is rendered as prose, the way
@@ -630,8 +643,7 @@ else"*.
 
 The two halves stay apart all the way out: `answers` carries labels, `text`
 carries the user's words, and the prose the CLI actually reads marks the second
-as such rather than listing it beside the first
-(`web/src/utils/answerMessage.ts`).
+as such rather than listing it beside the first (*What is sent*, below).
 
 The same form is drawn read-only on a record card, where an answer's two halves
 land in the two controls they were filled into — no guessing from the labels,
@@ -641,6 +653,50 @@ because the record kept them apart.
 read-only and owe nothing; these are the only place in this design a user aims at
 a row, so they take `pointer-coarse:min-h-11` on top of the card's `p-2`
 ([responsive-ui.md](responsive-ui.md#hit-areas-and-spacing)).
+
+### A note beside the answer
+
+Options say *what*. A user who picks Postgres sometimes has to add *"but pin it
+to 16"*, and writing that into **Other** would turn a remark into a second
+answer — on a single choice, one that replaces the option. So a block whose
+answer is labels takes a third thing beside them, a note, recorded in `note`
+apart from both halves (`QuestionForm`'s `NoteField`).
+
+- **Offered only where it can be told apart from the answer:** the question has
+  options and something is picked, a multi-select's Other counting. Not beside
+  Other on a single choice, and never on a question with no options — there the
+  answer is already the user's own words, and a note would be a second sentence
+  the agent could not tell from it. The rule is `noteApplies`
+  (`web/src/utils/questionAnswer.ts`), the client's copy of the server's
+  `chat.validateNote`
+  ([agent-integration.md](code/agent-integration.md#answering)); the form
+  reads it to decide what to offer, the panel to decide what to send.
+- **A link until it is wanted.** `+ Add a note` sits under the options, above
+  Won't answer; pressing it opens a textarea two lines tall, growing to five,
+  with focus in it. A note that has text is drawn open from the start, so a
+  restored draft comes back as the box. It does not count towards
+  `k of n ready`: a note is never what makes an answer.
+- **Kept, not sent, when the selection stops allowing it.** Unpicking
+  everything, or moving a single choice to Other, leaves the note on screen and
+  still editable — the user may want to move it into Other — but dashed and
+  muted, with a line under it saying why: *"Not sent until you pick an option."*
+  or *"Not sent with Other — add it to your answer above."* That line is the
+  box's accessible description, so the border is not the only signal. Other
+  text left behind an unpicked Other is muted the same way: one look for
+  "written, not counted", learnt once. Hiding either would look like losing it,
+  and the note box sits outside the option list, so a change elsewhere would
+  make it vanish.
+- **Never removed while it has focus.** The box is up while it has text, while
+  it has focus, or once opened this mount while the selection allows a note.
+  Without the focus clause, clearing a restored note with nothing picked would
+  take the box out from under the caret.
+- **Read-only draws only a note that applies.** A locked block and the record
+  card draw the note as a plain bordered paragraph under the options, the same
+  as read-only Other text, and only beside a selection that takes one — so a
+  stale or sending block never shows a sentence that looks like part of the
+  answer and is not going. Won't answer is the one lock that keeps the picks on
+  screen without sending them (*Declining*, below), and the note stays with
+  them, dimmed with the rest of the block.
 
 ### Declining, per question
 
@@ -660,6 +716,11 @@ up.
 Checking it does not clear what was already selected. Unchecking restores it:
 trying a thing and coming back should not cost what was typed.
 
+The decline's note is not the answer's note. Both end up in the record's one
+`note`, but each is a draft of its own (§5) and only the one matching the
+block's state is sent, so toggling Won't answer never turns a remark into a
+reason for refusing or the other way round.
+
 ### The footer, and partial submits
 
 One row: `{k} of {n} ready` muted on the left, **Send** on the right. `k` counts
@@ -678,22 +739,24 @@ which is exactly the promise this panel does not make.
 ### What is sent
 
 One `chat.message` carrying
-`answering: [{ request_id, answers?, text?, declined?, note? }]` — labels in
-`answers`, the user's own words in `text`, and `note` only on a decline — and a
-body composed from the same entries by `web/src/utils/answerMessage.ts`, the one
-place the wording lives:
+`answering: [{ request_id, answers?, text?, declined?, note? }]` and empty
+`content` — labels in `answers`, the user's own words in `text`, and `note`
+beside a decline or beside an answer it applies to. The client writes no body:
+the server writes it from the same entries, for a person's answer and an
+agent's alike, and hands it back in the reply for the sender's echo
+([agent-integration.md](code/agent-integration.md#answering)). It reads:
 
 ```
 Answering:
 
 Q: Which database should I use?
-A: SQLite
+A: SQLite — note: keep the file under data/
 
-Q: Which runtime?
-A: Node · and, in their own words: pin it to 22
+Q: Which runtimes?
+A: Node · and, in their own words: Bun for scripts
 
 Q: Which region?
-A: (not answering) already said it above
+A: (not answering) — note: already said it above
 ```
 
 The lead is one word because the message may be the only thing the agent reads:
@@ -704,7 +767,7 @@ and five read the same.
 The middle line is why the prose marks free text as the user's own. The record
 keeps `answers` and `text` in separate fields, but the CLI sees only this string —
 an unmarked sentence sitting beside an option label would read as a third option
-the agent had offered.
+the agent had offered. The note is marked for the same reason.
 
 **The call is all-or-nothing about what it carries** — which is not the same as
 refusing a partial submit. The user chooses how many blocks to send; the server
@@ -1084,17 +1147,24 @@ the shared package so that it stays that way.
 ## 5. Drafts
 
 One store, `web/src/lib/questionDraftStore.ts`, keyed `sessionId → request_id →
-{ labels, text, otherPicked, declined, note }`. `labels` holds options the
-question offered and `text` holds the user's own words, and both may carry
-something at once — **Other** beside a set of options, or, for a question that
+{ labels, text, otherPicked, declined, note, answerNote }`. `labels` holds
+options the question offered and `text` holds the user's own words, and both may
+carry something at once — **Other** beside a set of options, or, for a question that
 offered none, the whole answer.
 
 `otherPicked` is stored rather than derived from `text` being non-empty, and the
-reason is the empty case: the input has to be on screen *before* there is
-anything in it, and "Other ticked, nothing typed" is a real state that is not a
-complete answer. It is also what makes unpicking Other keep the text rather than
+reason is that both mismatches are real states: "Other ticked, nothing typed" is
+not a complete answer, and "written, then unpicked" is text on screen that is not
+sent. The second is what makes unpicking Other keep the text rather than
 delete it — the user can change their mind back without retyping, and an unpicked
 Other sends nothing.
+
+`note` and `answerNote` are the decline's reason and the answer's remark (§3).
+They are sent as the record's one `note`, and only one of them ever is, but they
+are stored apart so that toggling Won't answer cannot carry either one into the
+other. `answerNote` is kept, like unpicked Other text, while nothing it may sit
+beside is picked. A draft stored before `answerNote` existed is restored over
+the empty draft, so a missing field reads as empty rather than `undefined`.
 
 It is a store rather than component state because every host of this draft
 unmounts under the user: the panel closes, the panel is not drawn at all while an
@@ -1199,8 +1269,10 @@ is what it is — the record of a question, in one of four states.
   beats two colours the user has to have learnt.
 - **A `pending` body holds a read-only view of the question and the `Answer this`
   button** (§4). An `answered` body holds `QuestionForm` read-only with the
-  selection filled in, which is what keeps an answered card looking like the
-  form that was filled in.
+  selection filled in and the note under it, which is what keeps an answered
+  card looking like the form that was filled in, `{k} selected` on a multiple
+  choice included. The collapsed summary leaves the note out: it says what was
+  picked, and a note there could not be told from Other text.
 - Everything §5 of lifecycle-ui said about an **expired** question — the live
   form, "Send as message", the three banners, the degraded-answer message — is
   deleted. It existed because an answer could outlive its request; now an answer
@@ -1367,19 +1439,19 @@ silent, and this design simply never enters it.
 | `web/src/components/Chat/ModeSelector.tsx`, `web/src/components/Layout/Sidebar.tsx` | the same Escape line, for the same reason: both open from surfaces the backdrop leaves lit — the composer row and the session header — so both can be the thing on top of the panel. The same cover line too, the sidebar's only while it is a drawer. Neither needs the click line: both portal a backdrop of their own (§4) |
 | `web/src/components/Chat/InputBar.tsx` | claims the click its command palette dismisses on — the palette hangs over the composer with no backdrop, at every width (§4) |
 | `packages/shared/src/hooks/useOutsideClick.ts` | hands the caller the event beside the target, which is what lets a caller claim the gesture at all (§4) |
-| `web/src/components/Chat/QuestionForm.tsx` | extracted from `AskUserQuestionItem.tsx`; the one renderer of a question, across every host that draws one — including the third shape, a textarea for a question with no options |
+| `web/src/components/Chat/QuestionForm.tsx` | extracted from `AskUserQuestionItem.tsx`; the one renderer of a question, across every host that draws one — including the third shape, a textarea for a question with no options — and of the note beside an answer, editable or read-only (§3) |
 | `web/src/components/ui/RecommendedTag.tsx` | the `Recommended` tag on an option, the one copy of its wording and style for all three places that draw options (§3) |
 | `web/src/components/Chat/QuestionRecordItem.tsx` | replaces `AskUserQuestionItem.tsx` — the record card: four states, no form, collapsed by default, `Answer this` in the body (§6), and the one card a legacy `ask_user_question` record draws through |
 | `web/src/components/Chat/ChatPanel.tsx` | holds whether the panel is up, what it is anchored to and the ids this visit has shown; wraps the message list so the panel has a rectangle, and derives the panel's rendering, the transcript's `inert` and the Escape guard from one expression (§3); remembers the last focused element for the rescue and stands its interrupt down while the panel or anything covering the page is up (§4); consumes the navigation intent of §4; and owns `chromeCollapsed`, the one place all three short-viewport conditions are known (§3) |
 | `web/src/hooks/useShortViewport.ts` | new — the height threshold and the media query that reads it, the app's one height gate, deliberately not in the shared responsive module ([responsive-ui.md](responsive-ui.md#the-two-axes)) |
 | `web/src/components/Chat/MessageList.tsx` | loses the pill, its observer, its debounce and its live region; keeps the jump, narrowed to permission cards (`.jump-highlight`, renamed from `.question-highlight` now that no question card is a target). It is told nothing about the panel: the panel covers it rather than sitting on its edge (§3) |
-| `web/src/components/Chat/MessageItem.tsx` | the answering message's bubble — one entry per `answering` element — and, for an `agent` origin, the named block that replaces it (§6) |
+| `web/src/components/Chat/MessageItem.tsx` | the answering message's bubble — one entry per `answering` element, its note after a dash — and, for an `agent` origin, the named block that replaces it (§6) |
 | `web/src/utils/messageSource.ts` | new — `isTypedByUser`, the one place "a person typed this" is decided: a `role: "user"` message may be Pockode's own or another agent's answer, and neither should follow the transcript to the tail or claim the delivery receipt |
 | `web/src/lib/answerIntent.ts` | the one-shot navigation intent of §4 — *take me to this question*, not *open the panel* — deliberately not a route |
 | `web/src/lib/questionDraftStore.ts` | the drafts, persisted to `question_drafts` and vouched for against the unanswered list before they are shown (§5) |
 | `web/src/lib/rpc/chat.ts` | `sendMessage` takes `answering`; `questionResponse` and the `chat.question_response` RPC behind it are deleted |
-| `web/src/utils/answerMessage.ts` | new — the message body (§3); replaces `degradedAnswer` in `AskUserQuestionItem.tsx` |
-| `web/src/utils/questionAnswer.ts` | kept for the legacy records alone: `QuestionSelection` for the form, and `parseAnswer` / `lookupAnswer` to read an old flat answer string back |
+| `web/src/utils/answerMessage.ts` | new — the panel's entries as answer records for the echo and as params for the wire; it writes no body, the server does (§3); replaces `degradedAnswer` in `AskUserQuestionItem.tsx` |
+| `web/src/utils/questionAnswer.ts` | `QuestionSelection` for the form and `noteApplies`, where a note may go (§3); `parseAnswer` / `lookupAnswer` kept for the legacy records alone, to read an old flat answer string back |
 | `web/src/utils/pendingQuestions.ts`, `Chat/PendingQuestionPill.tsx` | deleted |
 | `web/src/lib/activity.ts` | `needsUser(activity)` → `needsAttention(activity, unansweredQuestions)`; two leaves removed (lifecycle-ui.md §1.1) |
 | `web/src/components/common/SidebarListItem.tsx` | the second indicator (lifecycle-ui.md §2.1) |

@@ -509,6 +509,7 @@ describe("ChatPanel", () => {
 							otherPicked: false,
 							declined: false,
 							note: "",
+							answerNote: "",
 						},
 					},
 				},
@@ -568,7 +569,8 @@ describe("ChatPanel", () => {
 
 			expect(mockState.sendMessage).toHaveBeenCalledWith(
 				"test-session",
-				"Answering:\n\nQ: Which database should I use?\nA: SQLite",
+				// The server writes what the agent reads from the answers.
+				"",
 				[{ request_id: "q1", answers: ["SQLite"] }],
 			);
 			expect(await screen.findByText("Answered")).toBeInTheDocument();
@@ -595,7 +597,13 @@ describe("ChatPanel", () => {
 			expect(
 				await screen.findByText("Already answered elsewhere."),
 			).toBeInTheDocument();
-			expect(screen.queryByText("Answering:")).not.toBeInTheDocument();
+			// The echo is drawn from its answers, so a bubble left behind would
+			// say "SQLite" somewhere other than the panel's own option.
+			expect(
+				screen
+					.queryAllByText("SQLite")
+					.filter((el) => !answerPanel().contains(el)),
+			).toHaveLength(0);
 			expect(screen.getByText("Pending")).toBeInTheDocument();
 		});
 
@@ -612,7 +620,10 @@ describe("ChatPanel", () => {
 
 			// Not merely present: usable, and used. The Send picked here is the
 			// composer's — the panel has one of its own, which is the point.
-			await user.type(screen.getByRole("textbox"), "meanwhile");
+			await user.type(
+				screen.getByPlaceholderText(/^Type a message/),
+				"meanwhile",
+			);
 			const composerSend = screen
 				.getAllByRole("button", { name: /^Send/ })
 				.filter((button) => !answerPanel().contains(button));
@@ -1104,7 +1115,10 @@ describe("ChatPanel", () => {
 			render(<ChatPanel {...defaultProps} />);
 			await waitForHistoryLoad();
 
-			await user.type(screen.getByRole("textbox"), "an ordinary message");
+			await user.type(
+				screen.getByPlaceholderText(/^Type a message/),
+				"an ordinary message",
+			);
 			// The panel has a Send of its own; this one is the composer's.
 			await user.click(
 				screen
@@ -1183,7 +1197,7 @@ describe("ChatPanel", () => {
 			/** The session action bar, named by the one control only it carries. */
 			const actionBar = () =>
 				screen.queryByRole("button", { name: "Session info" });
-			const composer = () => screen.queryByRole("textbox");
+			const composer = () => screen.queryByPlaceholderText(/^Type a message/);
 			/** Moves the caret into the card, which is the second of the three. */
 			const answerInThePanel = async (
 				user: ReturnType<typeof userEvent.setup>,

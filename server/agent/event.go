@@ -622,7 +622,10 @@ type QuestionAnswer struct {
 	// in the sense that matters — the agent is told, and stops waiting — which
 	// is why it travels with the ones that are.
 	Declined bool `json:"declined,omitempty"`
-	// Note is what the user added beside a decline. Optional and free text.
+	// Note is the answerer's optional line beside the answer: the reason beside
+	// a decline, or a remark beside the options picked. Free text, and kept
+	// apart from Text for the reason Text is kept apart from Answers — it is a
+	// remark on the answer, not part of it.
 	Note string `json:"note,omitempty"`
 	// ResolvedBy says who gave this answer.
 	//

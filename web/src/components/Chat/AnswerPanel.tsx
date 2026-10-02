@@ -13,11 +13,11 @@ import type {
 	PendingQuestion,
 	QuestionAnswerRecord,
 } from "../../types/message";
+import { type AnswerEntry, toAnswerRecords } from "../../utils/answerMessage";
 import {
-	type AnswerEntry,
-	buildAnswerMessage,
-	toAnswerRecords,
-} from "../../utils/answerMessage";
+	noteApplies,
+	type QuestionSelection,
+} from "../../utils/questionAnswer";
 import { inputClass } from "../ui/inputClass";
 import QuestionForm from "./QuestionForm";
 
@@ -34,9 +34,10 @@ interface Props {
 	 *
 	 * It takes whole answer *records* rather than the wire's narrower params,
 	 * because the same facts have a second reader: the bubble the message is
-	 * echoed into, which draws each answer beside what was asked.
+	 * echoed into, which draws each answer beside what was asked. There is no
+	 * text beside them: the server writes what the agent reads.
 	 */
-	onSend: (content: string, answering: QuestionAnswerRecord[]) => Promise<void>;
+	onSend: (answering: QuestionAnswerRecord[]) => Promise<void>;
 	onClose: () => void;
 	/**
 	 * Whether the panel should read itself out. True when a user action named
@@ -284,7 +285,7 @@ function AnswerPanel({
 					question: b.question.question,
 					...answersOf(b.question, draft),
 					declined: draft.declined,
-					note: draft.note,
+					note: noteOf(b.question, draft),
 				};
 			});
 		if (entries.length === 0) return;
@@ -293,7 +294,7 @@ function AnswerPanel({
 		setError(null);
 		inFlightRef.current = new Set(entries.map((e) => e.requestId));
 		try {
-			await onSend(buildAnswerMessage(entries), toAnswerRecords(entries));
+			await onSend(toAnswerRecords(entries));
 			// Only now: a question whose send failed is still unanswered, and its
 			// draft is the whole of what the user would have to retype.
 			questionDraftActions.clear(
@@ -631,9 +632,9 @@ function QuestionBlock({
 	const handleOption = (label: string) => {
 		if (!multiSelect) {
 			// Radios are exclusive, and **Other** is one of them: picking a label
-			// unpicks Other. The text it held is deliberately kept — the user can
-			// change their mind back without retyping it, and it is not sent while
-			// Other is unpicked.
+			// unpicks Other. The text it held is deliberately kept, and stays on
+			// screen — the user can change their mind back without retyping it, and
+			// it is not sent while Other is unpicked.
 			onChange(requestId, { labels: [label], otherPicked: false });
 			return;
 		}
@@ -651,17 +652,6 @@ function QuestionBlock({
 		}
 		onChange(requestId, { otherPicked: !draft.otherPicked });
 	};
-
-	// One field, two controls: the **Other** input beside a set of options, and
-	// the textarea of a question that offered none. `null` is what tells
-	// QuestionForm the Other row is not in use, so an unpicked Other reads as
-	// null however much text is parked behind it.
-	const hasOpts = options.length > 0;
-	const otherText = hasOpts
-		? draft.otherPicked
-			? draft.text
-			: null
-		: draft.text;
 
 	return (
 		<div
@@ -690,11 +680,14 @@ function QuestionBlock({
 				}}
 				askedAt={question.asked_at}
 				name={requestId}
-				selection={{ labels: draft.labels, otherText }}
+				selection={selectionOf(question, draft)}
 				disabled={locked}
 				onSelectOption={handleOption}
 				onSelectOther={handleOther}
 				onOtherTextChange={(text) => onChange(requestId, { text })}
+				otherInput={draft.text}
+				note={draft.answerNote}
+				onNoteChange={(answerNote) => onChange(requestId, { answerNote })}
 			/>
 
 			{/* "Won't answer" rather than "Skip": skipping reads as *later*, and
@@ -780,6 +773,43 @@ function answersOf(
 		answers: draft.labels,
 		...(draft.otherPicked ? { text: draft.text } : {}),
 	};
+}
+
+/**
+ * The draft as the form draws it. One field, two controls: the **Other** input
+ * beside a set of options, and the textarea of a question that offered none.
+ * `null` is what tells QuestionForm the Other row is not in use, so an unpicked
+ * Other reads as null however much text is parked behind it.
+ */
+function selectionOf(
+	question: PendingQuestion,
+	draft: QuestionDraft,
+): QuestionSelection {
+	if (!hasOptions(question)) return { labels: [], otherText: draft.text };
+	return {
+		labels: draft.labels,
+		otherText: draft.otherPicked ? draft.text : null,
+	};
+}
+
+/**
+ * Which of the draft's two notes goes out, if either: the decline's beside a
+ * decline, and the remark only while there is something picked for it to sit
+ * beside — the same rule that has the form show it as parked otherwise.
+ */
+function noteOf(
+	question: PendingQuestion,
+	draft: QuestionDraft,
+): string | undefined {
+	if (draft.declined) return draft.note;
+	const applies = noteApplies(
+		{
+			options: question.options ?? [],
+			multiSelect: question.multi_select ?? false,
+		},
+		selectionOf(question, draft),
+	);
+	return applies ? draft.answerNote : undefined;
 }
 
 export default AnswerPanel;

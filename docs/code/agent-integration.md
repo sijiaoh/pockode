@@ -12,7 +12,7 @@ Pockode integrates AI Agents (Claude and Codex) through subprocess management. T
                                 ▼
 ┌─────────────────────────────────────────────────────────────────────┐
 │  ws/rpc_chat.go                                                      │
-│  ├─ chat.message → ChatClient.SendMessageAnswering()                │
+│  ├─ chat.message → ChatClient.SendMessageExcluding() / SendAnswers()│
 │  ├─ chat.interrupt → ChatClient.Interrupt()                         │
 │  └─ chat.permission_response → ChatClient.SendPermissionResponse()  │
 └───────────────────────────────┬─────────────────────────────────────┘
@@ -1158,9 +1158,22 @@ non-`multi_select` question takes one answer in total (a label and a sentence
 being two), and whitespace is not an answer, which is what `declined` is for.
 
 The two halves also stay apart in the prose, which is the only thing the CLI
-reads: free text is written as *"and, in their own words: …"* rather than listed
-beside the labels (`web/src/utils/answerMessage.ts`). An unmarked sentence there
-would undo structurally what the check guards.
+reads: free text is written as *"and, in their own words: …"* (*its* for an
+agent) rather than listed beside the labels, and a `note` as *"— note: …"* after
+them. An unmarked sentence there would undo structurally what the check guards:
+free text would read as a third option, and a note as part of the label before
+it, or as an answer rather than a decline's reason. The prose is written by the
+server from the answers (`chat.answerMessage`), for a person's answer and an
+agent's alike, so the wording has one home; a `chat.message` carrying
+`answering` sends empty `content` and is refused if it does not, and the reply's
+`content` hands the written body back to the sender, which the broadcast skips.
+
+A `note` may sit beside a decline (its reason) or beside picked options (a
+remark on them, a multi-select's **Other** included). `chat.validateNote`
+refuses it where it would read as a second answer: on a question with no
+options, and beside **Other** on a single-select question — both already
+answered in the answerer's own words. The answer panel offers the note under
+the same rule (`noteApplies`), so the refusal only meets other clients.
 
 **The whole message is validated before anything is delivered, and one bad entry
 refuses all of it.** The content is a single string written for every answer
@@ -1197,11 +1210,12 @@ which nobody but the person asked can make. An agent that does not know the
 answer leaves the question where it is, for the user or for another agent, and
 that costs nothing: a question is not holding anything open.
 
-Everything below the prose is the path a person's answer takes:
-`chat.Client.AnswerQuestion` shares `deliverAnswers` with `SendMessageAnswering`,
-so the same checks run in the same order, the same record is written, and the
-question leaves the unanswered list the same way. Two things differ, and each is
-there to stop one specific misreading:
+Everything but who the prose names — its lead, and whose "own words" — is the
+path a person's answer takes:
+`chat.Client.AnswerQuestion` shares `deliverAnswers` with `SendAnswers`, so the
+same checks run in the same order, the same record is written, and the question
+leaves the unanswered list the same way. Two things differ, and each is there to
+stop one specific misreading:
 
 | | What it is | Why |
 |---|---|---|
@@ -1211,8 +1225,8 @@ there to stop one specific misreading:
 **The prose leads with who answered**, because the prose is the whole of what the
 receiving CLI reads — `answering` never reaches it — and an agent acting on "the
 user chose Postgres" when no user has seen the question is the one failure this
-tool could cause. The `Q:`/`A:` shape under that lead is deliberately the one a
-person's answer arrives in.
+tool could cause. The `Q:`/`A:` shape under that lead is the one a person's
+answer arrives in, written by the same function.
 
 One refusal is about *reaching* the question rather than about the answer:
 **more than one session is waiting on that `request_id`.** A fork carries a

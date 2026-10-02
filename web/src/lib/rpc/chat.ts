@@ -14,10 +14,12 @@ import { normalizeCommand, readHistorySeq } from "../messageReducer";
 export interface SentMessage {
 	seq?: HistorySeq;
 	/**
-	 * Present only when the message invoked a Pockode command: the prompt the
-	 * agent was sent in its place, and the command as the server parsed it.
+	 * Present when the server wrote the text the agent was sent rather than
+	 * taking it as typed: the prompt a Pockode command expanded to, with the
+	 * command as the server parsed it, or the body written from a message's
+	 * answers.
 	 */
-	expanded?: { content: string; command: PockodeCommandInvocation };
+	expanded?: { content: string; command?: PockodeCommandInvocation };
 }
 
 export interface ChatActions {
@@ -82,8 +84,13 @@ export function createChatActions(
 			const command = normalizeCommand(result?.command);
 			return {
 				...(seq !== undefined ? { seq } : {}),
-				...(command && typeof result?.content === "string"
-					? { expanded: { content: result.content, command } }
+				...(typeof result?.content === "string"
+					? {
+							expanded: {
+								content: result.content,
+								...(command ? { command } : {}),
+							},
+						}
 					: {}),
 			};
 		},

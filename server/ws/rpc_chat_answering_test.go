@@ -2,6 +2,7 @@ package ws
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -47,7 +48,6 @@ func TestHandler_MessageAnsweringResolvesTheQuestions(t *testing.T) {
 
 	resp := env.call("chat.message", rpc.MessageParams{
 		SessionID: row.ID,
-		Content:   "Answering:\n\nQ: Which database?\nA: Postgres",
 		Answering: []rpc.QuestionAnswerParams{
 			{RequestID: first, Answers: []string{"Postgres"}},
 			{RequestID: second, Declined: true, Note: "ask the ops team"},
@@ -59,6 +59,45 @@ func TestHandler_MessageAnsweringResolvesTheQuestions(t *testing.T) {
 
 	if got := unanswered(t, env, row.ID); len(got) != 0 {
 		t.Errorf("unanswered = %+v, want both resolved", got)
+	}
+	// The sender is left out of the broadcast, so the reply is how it learns
+	// the body the server wrote — its echo has nothing else to go on.
+	var result rpc.MessageResult
+	if err := json.Unmarshal(resp.Result, &result); err != nil {
+		t.Fatalf("unmarshal result: %v", err)
+	}
+	if !strings.HasPrefix(result.Content, "Answering:") || !strings.Contains(result.Content, "note: ask the ops team") {
+		t.Errorf("result content = %q, want the body the server wrote", result.Content)
+	}
+	if result.Command != nil {
+		t.Errorf("result command = %+v, want none for an answer", result.Command)
+	}
+}
+
+// The server writes an answering message itself, so anything typed beside the
+// answers has nowhere to go; refused rather than dropped, with nothing sent.
+func TestHandler_MessageAnsweringRefusesContentBesideTheAnswers(t *testing.T) {
+	mock := &mockAgent{}
+	env := newTestEnv(t, mock)
+	row, _ := env.createSession()
+	id := post(t, env, row.ID, "Database")
+
+	resp := env.call("chat.message", rpc.MessageParams{
+		SessionID: row.ID,
+		Content:   "and also, rename the table",
+		Answering: []rpc.QuestionAnswerParams{{RequestID: id, Answers: []string{"Postgres"}}},
+	})
+	if resp.Error == nil || resp.Error.Code != jsonrpc2.CodeInvalidParams {
+		t.Fatalf("error = %+v, want CodeInvalidParams", resp.Error)
+	}
+	if !strings.Contains(resp.Error.Message, "on their own") {
+		t.Errorf("error = %q, want it to say answers go on their own", resp.Error.Message)
+	}
+	if sent := mock.sentMessagesFor(row.ID); len(sent) != 0 {
+		t.Errorf("agent was sent %q, want nothing", sent)
+	}
+	if got := unanswered(t, env, row.ID); len(got) != 1 {
+		t.Errorf("unanswered = %+v, want the question still open", got)
 	}
 }
 
@@ -77,7 +116,6 @@ func TestHandler_MessageAnsweringRefusesTheWholeMessage(t *testing.T) {
 
 	resp := env.call("chat.message", rpc.MessageParams{
 		SessionID: row.ID,
-		Content:   "both answers in one string",
 		Answering: []rpc.QuestionAnswerParams{
 			{RequestID: first, Answers: []string{"Postgres"}},
 			{RequestID: second, Answers: []string{"Node"}},
@@ -113,7 +151,6 @@ func TestHandler_MessageAnsweringRefusesAnAnswerThatWasNotOffered(t *testing.T) 
 
 	resp := env.call("chat.message", rpc.MessageParams{
 		SessionID: row.ID,
-		Content:   "MySQL",
 		Answering: []rpc.QuestionAnswerParams{{RequestID: id, Answers: []string{"MySQL"}}},
 	})
 	if resp.Error == nil || resp.Error.Code != jsonrpc2.CodeInvalidParams {
@@ -150,7 +187,6 @@ func TestHandler_MessageAnsweringKeepsTheChildWait(t *testing.T) {
 
 	resp := env.call("chat.message", rpc.MessageParams{
 		SessionID: sessionID,
-		Content:   "Answering:\n\nQ: Which database?\nA: Postgres",
 		Answering: []rpc.QuestionAnswerParams{{RequestID: requestID, Answers: []string{"Postgres"}}},
 	})
 	if resp.Error != nil {

@@ -470,7 +470,7 @@ chat to ask into, and no identity to be recorded as having answered.
 | Tool | Purpose | Key Parameters |
 |------|---------|----------------|
 | `question_post` | Ask the user questions and carry on; returns a `request_id` for each | `questions` (each `question`, `header`, `options?` — each `label`, `description?`, `recommended?` — `multi_select?`) |
-| `question_answer` | Answer a question **another** session posted | `request_id`, `answers?`, `text?`, `session_id?` |
+| `question_answer` | Answer a question **another** session posted | `request_id`, `answers?`, `text?`, `note?`, `session_id?` |
 | `question_cancel` | Withdraw a question the same session posted | `request_id` |
 
 **A question is named by a pair — the session it is waiting in and its

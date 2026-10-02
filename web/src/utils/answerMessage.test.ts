@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
 	type AnswerEntry,
-	buildAnswerMessage,
 	toAnswerParams,
 	toAnswerRecords,
 } from "./answerMessage";
@@ -22,79 +21,6 @@ const declined: AnswerEntry = {
 	declined: true,
 	note: "already said it above",
 };
-
-describe("buildAnswerMessage", () => {
-	// The text is the only half the agent ever reads — `answering` is Pockode's
-	// own structure and never reaches the CLI — so each entry has to carry its
-	// question with it or a bare label arrives as an answer to nothing.
-	it("carries each question with its answer", () => {
-		expect(buildAnswerMessage([answered])).toBe(
-			"Answering:\n\nQ: Which database should I use?\nA: SQLite",
-		);
-	});
-
-	it("reads the same for one question and for several", () => {
-		expect(buildAnswerMessage([answered, declined])).toBe(
-			[
-				"Answering:",
-				"",
-				"Q: Which database should I use?",
-				"A: SQLite",
-				"",
-				"Q: Which region?",
-				"A: (not answering) already said it above",
-			].join("\n"),
-		);
-	});
-
-	// A blank line would read to the agent as "the user said nothing", which is
-	// what it was already looking at before the message arrived.
-	it("says a decline in words, note or no note", () => {
-		expect(buildAnswerMessage([{ ...declined, note: undefined }])).toContain(
-			"A: (not answering)",
-		);
-	});
-
-	it("joins a multi-select answer", () => {
-		expect(
-			buildAnswerMessage([
-				{
-					requestId: "r3",
-					header: "Which",
-					question: "Which?",
-					answers: ["A", "B"],
-					declined: false,
-				},
-			]),
-		).toContain("A: A · B");
-	});
-
-	// This prose is the only half the CLI reads, so the split the record keeps
-	// structurally has to be said here in words. Unmarked, the sentence would
-	// arrive as a third option the agent had offered.
-	it("marks the user's own words when they sit beside a label", () => {
-		expect(
-			buildAnswerMessage([
-				{ ...answered, answers: ["Node"], text: "pin it to 22" },
-			]),
-		).toContain("A: Node · and, in their own words: pin it to 22");
-	});
-
-	// And carries no marker when it stands alone: there is nothing beside it to
-	// be mistaken for, and this is every answer to a question that offered no
-	// options.
-	it("writes a lone free-text answer plainly", () => {
-		expect(
-			buildAnswerMessage([{ ...answered, answers: [], text: "use SQLite" }]),
-		).toContain("A: use SQLite");
-	});
-
-	it("drops free text that is only whitespace", () => {
-		expect(
-			buildAnswerMessage([{ ...answered, answers: ["SQLite"], text: "  " }]),
-		).toContain("A: SQLite");
-	});
-});
 
 describe("toAnswerRecords", () => {
 	// The bubble draws each answer beside what was asked, and the card that
@@ -146,6 +72,18 @@ describe("toAnswerParams", () => {
 		expect(toAnswerParams(toAnswerRecords([answered, declined]))).toEqual([
 			{ request_id: "r1", answers: ["SQLite"] },
 			{ request_id: "r2", declined: true, note: "already said it above" },
+		]);
+	});
+
+	// The server decides where a note may go; the client only has to carry it,
+	// beside an answer as beside a decline.
+	it("carries a note beside an answer", () => {
+		expect(
+			toAnswerParams(
+				toAnswerRecords([{ ...answered, note: " pin it to 3.45 " }]),
+			),
+		).toEqual([
+			{ request_id: "r1", answers: ["SQLite"], note: "pin it to 3.45" },
 		]);
 	});
 
