@@ -90,7 +90,7 @@ func SessionQuestionOptions(options []QuestionOption) []session.QuestionOption {
 	}
 	out := make([]session.QuestionOption, len(options))
 	for i, o := range options {
-		out[i] = session.QuestionOption{Label: o.Label, Description: o.Description}
+		out[i] = session.QuestionOption{Label: o.Label, Description: o.Description, Recommended: o.Recommended}
 	}
 	return out
 }
@@ -103,7 +103,7 @@ func AgentQuestionOptions(options []session.QuestionOption) []QuestionOption {
 	}
 	out := make([]QuestionOption, len(options))
 	for i, o := range options {
-		out[i] = QuestionOption{Label: o.Label, Description: o.Description}
+		out[i] = QuestionOption{Label: o.Label, Description: o.Description, Recommended: o.Recommended}
 	}
 	return out
 }

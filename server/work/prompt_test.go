@@ -423,7 +423,7 @@ func TestEverySystemMessage_SpeaksTheCurrentVocabulary(t *testing.T) {
 	messages["child_question"] = BuildChildQuestionMessage(story, "Child", "c1", "sess-c1",
 		[]session.PendingQuestion{{RequestID: "req-1", Header: "Database", Question: "Which?"}})
 	messages["child_question_reminder"] = BuildChildQuestionReminderMessage(story, []childQuestion{
-		{ChildID: "c1", ChildTitle: "Child", SessionID: "sess-c1", RequestID: "req-1", Header: "Database", Question: "Which?"},
+		{ChildID: "c1", ChildTitle: "Child", SessionID: "sess-c1", quotedQuestion: quotedQuestion{RequestID: "req-1", Header: "Database", Question: "Which?"}},
 	})
 	messages["child_done"] = BuildChildCompletionMessage(story, "Child", "c1", true)
 	messages["child_done, wait standing"] = BuildChildCompletionMessage(story, "Child", "c1", false)
@@ -539,6 +539,59 @@ func TestBuildChildQuestionMessage_HandsTheStoryTheWholeQuestion(t *testing.T) {
 	assertContains(t, plain, "offered nothing to pick", "where the answer goes instead")
 }
 
+// TestBuildChildQuestionMessage_NamesTheTasksOwnPick: a story deciding in the
+// user's place should see what the task would have chosen — on a line of its
+// own, so the options line stays the labels an answer names verbatim.
+func TestBuildChildQuestionMessage_NamesTheTasksOwnPick(t *testing.T) {
+	story := Work{ID: "s1", AgentRoleID: testRoleID, Title: "S"}
+
+	msg := BuildChildQuestionMessage(story, "Write the parser", "c1", "sess-c1", []session.PendingQuestion{
+		{RequestID: "req-1", Header: "Database", Question: "Which database?",
+			Options: []session.QuestionOption{{Label: "Postgres", Recommended: true}, {Label: "SQLite"}}},
+		{RequestID: "req-2", Header: "Engine", Question: "Which engine?",
+			Options: []session.QuestionOption{{Label: "A"}, {Label: "B"}}},
+	})
+
+	assertContains(t, msg, "Options: Postgres | SQLite\n", "the options, unmarked")
+	assertContains(t, msg, "The task would pick: Postgres", "the task's own pick")
+	if strings.Count(msg, "would pick") != 1 {
+		t.Errorf("want a pick line only for the question that recommended one:\n%s", msg)
+	}
+}
+
+// TestBuildChildQuestionReminderMessage_NamesTheTasksOwnPick: the reminder is
+// the same decision asked again, so it carries the same help.
+func TestBuildChildQuestionReminderMessage_NamesTheTasksOwnPick(t *testing.T) {
+	story := Work{ID: "s1", AgentRoleID: testRoleID, Title: "S"}
+	q := quoteQuestion(session.PendingQuestion{RequestID: "req-1", Header: "Database", Question: "Which database?",
+		Options: []session.QuestionOption{{Label: "Postgres"}, {Label: "SQLite", Recommended: true}}})
+
+	msg := BuildChildQuestionReminderMessage(story, []childQuestion{
+		{ChildID: "c1", ChildTitle: "Write the parser", SessionID: "sess-c1", quotedQuestion: q},
+		{ChildID: "c2", ChildTitle: "Wire the store", SessionID: "sess-c2", quotedQuestion: quotedQuestion{RequestID: "req-2", Header: "Name", Question: "What name?"}},
+	})
+
+	assertContains(t, msg, "Options: Postgres | SQLite", "the options it may pick from")
+	assertContains(t, msg, "The task would pick: SQLite", "the task's own pick")
+	if strings.Count(msg, "Options:") != 1 {
+		t.Errorf("a question that offered nothing still printed an options line:\n%s", msg)
+	}
+}
+
+// TestBuildWatchedStoryQuestionMessage_NamesTheStorysOwnPick: a watcher is
+// offered the answer too, so it gets the same help a story gets from its task.
+func TestBuildWatchedStoryQuestionMessage_NamesTheStorysOwnPick(t *testing.T) {
+	story := Work{ID: "s1", AgentRoleID: testRoleID, Title: "S", SessionID: "sess-s1"}
+
+	msg := BuildWatchedStoryQuestionMessage(story, []session.PendingQuestion{
+		{RequestID: "req-1", Header: "Targets", Question: "Which targets?", MultiSelect: true,
+			Options: []session.QuestionOption{{Label: "Linux", Recommended: true}, {Label: "macOS", Recommended: true}, {Label: "Windows"}}},
+	})
+
+	assertContains(t, msg, "Options: Linux | macOS | Windows (more than one may be picked)", "the options, unmarked")
+	assertContains(t, msg, "The story would pick: Linux | macOS", "every option the story recommended")
+}
+
 // TestBuildChildQuestionMessage_QuotesABatchInOrder: questions asked in one
 // call reach the story in one message, in the order they were asked, each with
 // its own request id.
@@ -615,8 +668,8 @@ func TestBuildChildQuestionReminderMessage_QuotesEveryQuestion(t *testing.T) {
 	story := Work{ID: "s1", AgentRoleID: testRoleID, Title: "S"}
 
 	msg := BuildChildQuestionReminderMessage(story, []childQuestion{
-		{ChildID: "c1", ChildTitle: "Write the parser", SessionID: "sess-c1", RequestID: "req-1", Header: "Database", Question: "Which database?"},
-		{ChildID: "c2", ChildTitle: "Wire the store", SessionID: "sess-c2", RequestID: "req-2", Header: "Name", Question: "What name?"},
+		{ChildID: "c1", ChildTitle: "Write the parser", SessionID: "sess-c1", quotedQuestion: quotedQuestion{RequestID: "req-1", Header: "Database", Question: "Which database?"}},
+		{ChildID: "c2", ChildTitle: "Wire the store", SessionID: "sess-c2", quotedQuestion: quotedQuestion{RequestID: "req-2", Header: "Name", Question: "What name?"}},
 	})
 
 	for _, want := range []string{

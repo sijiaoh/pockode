@@ -967,6 +967,7 @@ each with the offending `questions[i]` and how to fix it:
 | an empty option label, or two equal labels in one question | an answer names the label it picked |
 | two questions in one call with the same text (after trimming) | an answer is sent back quoting its question (`Q: …`), so the two answers could not be told apart |
 | `multi_select` with no options | the agent believes it is offering a choice; a free-text box in its place is a quiet disagreement |
+| more than one `recommended` option without `multi_select` (a `(Recommended)` suffix counts) | two recommendations of which only one can be picked say nothing about which to pick |
 
 **Everything else about a good question is guidance, with no limit behind it.**
 No cap on the number of questions (a cap only pushes the rest into a second call,
@@ -981,6 +982,23 @@ layout: long headers and labels wrap, and a long list scrolls inside the panel's
 body ([answering-ui.md](../answering-ui.md#3-the-answer-panel)).
 `TestQuestionPost_AcceptsWhatOnlyGuidanceGoverns` holds the list.
 
+**A recommendation is a flag on an option, never part of its label.** An agent
+marks the option it would pick itself with `recommended`; it travels on the
+option in both the `question_posted` record and `Unanswered`, and is omitted
+when false, so a record written before it existed reads as recommending nothing.
+The CLIs train their models to append `(Recommended)` to that option's label
+instead, and a label here is the answer handed back verbatim — left in place,
+the suffix would come back inside the user's answer. So `mcp.questionSpec`
+strips that exact spelling (case-sensitive, with or without a space before
+it) and sets the flag, *before* the checks above: a label that was only the
+suffix is refused as empty, two labels equal once it is gone are refused as
+duplicates — with an error saying why, since the agent wrote two different
+strings — and a suffixed option counts toward the single-choice limit. Other
+spellings are left alone; they are the agent's label. Nothing else follows from the flag on the server:
+options keep the order the agent gave (the description asks it to put the
+recommended one first), and nothing is selected for the user
+([answering-ui.md](../answering-ui.md#what-it-draws)).
+
 **When and how to ask is written in one place: the `question_post` description.**
 It is the one text every session reads — a plain chat gets no system prompt, and
 Claude and Codex both read tool descriptions — so it carries when to ask (only a
@@ -988,7 +1006,8 @@ decision that is the user's and changes what happens next; look things up
 first; take conventional defaults; never ask for permission or "shall I
 continue?"), how (everything in one call, early; each question readable alone
 in a panel over the chat, often on a phone and much later; options for a known
-set, free text otherwise; no "Other" of the agent's own), and what never to do
+set, free text otherwise; no "Other" of the agent's own; the option it would
+pick marked `recommended` and first), and what never to do
 (multiple choice in reply text, asking for secrets). The lifecycle prompt points
 at it rather than repeating it ([work-system.md](work-system.md#prompt-format)).
 Its property descriptions state purpose and never a number: a number in a

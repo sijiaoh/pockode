@@ -230,6 +230,7 @@ type PermissionUpdate struct {
 type QuestionOption struct {
 	Label       string `json:"label"`
 	Description string `json:"description"`
+	Recommended bool   `json:"recommended,omitempty"`
 }
 
 // AskUserQuestion represents a question to ask the user.

@@ -13,6 +13,11 @@ import "time"
 type QuestionOption struct {
 	Label       string `json:"label"`
 	Description string `json:"description,omitempty"`
+	// Recommended marks the option the asking agent would pick itself. A single
+	// choice carries at most one; a multi-select may carry several. Absent on
+	// questions posted before the field existed, which read as no
+	// recommendation.
+	Recommended bool `json:"recommended,omitempty"`
 }
 
 // PendingQuestion is one question a session is waiting on an answer to.

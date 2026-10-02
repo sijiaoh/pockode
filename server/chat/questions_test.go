@@ -49,7 +49,7 @@ func (f *questionFixture) post(t *testing.T, header string) string {
 	q, err := postOne(f.client, context.Background(), "sess", QuestionSpec{
 		Header:   header,
 		Question: "Which database?",
-		Options:  []session.QuestionOption{{Label: "Postgres"}, {Label: "SQLite"}},
+		Options:  []session.QuestionOption{{Label: "Postgres", Recommended: true}, {Label: "SQLite"}},
 	})
 	if err != nil {
 		t.Fatalf("PostQuestions: %v", err)
@@ -131,7 +131,15 @@ func TestPostQuestion_RecordsAndWaits(t *testing.T) {
 	}
 	// One question per record, which is what gives "decline this one" a subject.
 	if len(records[0].Questions) != 1 {
-		t.Errorf("record questions = %d, want exactly one", len(records[0].Questions))
+		t.Fatalf("record questions = %d, want exactly one", len(records[0].Questions))
+	}
+	// The asker's own pick is part of the question: the card drawn from the
+	// record and the panel drawn from the state both show it.
+	if opts := records[0].Questions[0].Options; len(opts) != 2 || !opts[0].Recommended || opts[1].Recommended {
+		t.Errorf("record options = %+v, want the recommendation kept", opts)
+	}
+	if opts := pending[0].Options; len(opts) != 2 || !opts[0].Recommended || opts[1].Recommended {
+		t.Errorf("unanswered options = %+v, want the recommendation kept", opts)
 	}
 
 	// Posting starts no process: the agent that asked is already running, and a

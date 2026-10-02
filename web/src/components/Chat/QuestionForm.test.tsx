@@ -67,4 +67,34 @@ describe("QuestionForm", () => {
 		expect(labelText).toHaveClass("break-words");
 		expect(labelText.parentElement).toHaveClass("min-w-0", "flex-1");
 	});
+
+	// A recommendation is the agent's opinion, said beside the option; it is
+	// in the accessible name so a screen reader hears it while choosing.
+	it("tags the recommended option and only that one", () => {
+		render(
+			<QuestionForm
+				question={{
+					question: "Which database?",
+					header: "Database",
+					options: [
+						{ label: "Postgres", description: "", recommended: true },
+						{ label: "SQLite", description: "" },
+					],
+					multiSelect: false,
+				}}
+				name="q1"
+				selection={EMPTY_SELECTION}
+				disabled={false}
+				onSelectOption={noop}
+				onSelectOther={noop}
+				onOtherTextChange={noop}
+			/>,
+		);
+
+		expect(
+			screen.getByRole("radio", { name: /Postgres.*Recommended/ }),
+		).not.toBeChecked();
+		expect(screen.getByRole("radio", { name: "SQLite" })).toBeVisible();
+		expect(screen.getAllByText("Recommended")).toHaveLength(1);
+	});
 });

@@ -308,12 +308,16 @@ func BuildChildQuestionMessage(parent Work, childTitle, childID, childSessionID 
 }
 
 // quotedQuestion is a posted question as a message quotes it to an agent that
-// may answer it: the options flattened to the labels an answer names.
+// may answer it: the options flattened to the labels an answer names, and the
+// ones the asker recommended named again on their own. The asker's own pick is
+// what an agent deciding in the user's place most needs to see, and it is kept
+// out of the options line so that no marker can be copied into an answer.
 type quotedQuestion struct {
 	Header      string
 	Question    string
 	RequestID   string
 	Options     string
+	Recommended string
 	MultiSelect bool
 }
 
@@ -329,20 +333,29 @@ func anyOptions(qs []session.PendingQuestion) bool {
 	return false
 }
 
+func quoteQuestion(q session.PendingQuestion) quotedQuestion {
+	labels := make([]string, 0, len(q.Options))
+	var recommended []string
+	for _, o := range q.Options {
+		labels = append(labels, o.Label)
+		if o.Recommended {
+			recommended = append(recommended, o.Label)
+		}
+	}
+	return quotedQuestion{
+		Header:      q.Header,
+		Question:    q.Question,
+		RequestID:   q.RequestID,
+		Options:     strings.Join(labels, " | "),
+		Recommended: strings.Join(recommended, " | "),
+		MultiSelect: q.MultiSelect,
+	}
+}
+
 func quotedQuestions(qs []session.PendingQuestion) []quotedQuestion {
 	out := make([]quotedQuestion, len(qs))
 	for i, q := range qs {
-		labels := make([]string, 0, len(q.Options))
-		for _, o := range q.Options {
-			labels = append(labels, o.Label)
-		}
-		out[i] = quotedQuestion{
-			Header:      q.Header,
-			Question:    q.Question,
-			RequestID:   q.RequestID,
-			Options:     strings.Join(labels, " | "),
-			MultiSelect: q.MultiSelect,
-		}
+		out[i] = quoteQuestion(q)
 	}
 	return out
 }

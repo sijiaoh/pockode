@@ -469,7 +469,7 @@ chat to ask into, and no identity to be recorded as having answered.
 
 | Tool | Purpose | Key Parameters |
 |------|---------|----------------|
-| `question_post` | Ask the user questions and carry on; returns a `request_id` for each | `questions` (each `question`, `header`, `options?`, `multi_select?`) |
+| `question_post` | Ask the user questions and carry on; returns a `request_id` for each | `questions` (each `question`, `header`, `options?` — each `label`, `description?`, `recommended?` — `multi_select?`) |
 | `question_answer` | Answer a question **another** session posted | `request_id`, `answers?`, `text?`, `session_id?` |
 | `question_cancel` | Withdraw a question the same session posted | `request_id` |
 
@@ -805,6 +805,13 @@ The story answers with `question_answer`, or asks the user itself with
 `question_post`. **Leaving it is not a third way** — the story is the subtask's
 coordinator, and a question left sitting there is what [input
 1](#input-1-a-turn-ended) nudges the story for.
+
+A question's options are quoted with it, and the ones the subtask recommended go
+on a line of their own beneath — "The task would pick: …" — rather than being
+marked inside the options line. An answer is labels copied out of the message,
+and a marker beside a label would be copied with it and refused as a label
+nobody offered. The reminder nudge and the watcher's `watched_story_question`
+quote a question the same way (`work.quoteQuestion`).
 
 **It clears no wait.** A `child` wait ends when a subtask *closes*, and a subtask
 asking a question is not that — the subtask carries on either way. So a story

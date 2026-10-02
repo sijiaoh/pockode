@@ -33,7 +33,7 @@ The MCP server runs as a stdio JSON-RPC 2.0 subprocess, spawned per Claude sessi
 | `agent_role_list` | — | — | JSON array of `{id, name}` |
 | `agent_role_get` | `id` | — | `{id, name, role_prompt}` |
 | `agent_role_reset_defaults` | — | — | Confirmation string |
-| `question_post` | `questions` (each: `question`, `header`, optional `options`, `multi_select`) | — | Confirmation string naming each question's header and `request_id` |
+| `question_post` | `questions` (each: `question`, `header`, optional `options` — each `label`, optional `description`, `recommended` — and `multi_select`) | — | Confirmation string naming each question's header and `request_id` |
 | `question_answer` | `request_id` | `answers`, `text`, `session_id` | Confirmation string |
 | `question_cancel` | `request_id` | — | Confirmation string |
 
@@ -113,6 +113,7 @@ WorkListArchiveParams     { id, cursor?, limit? }   // id names the subscription
 WorkListItem              { id, type, story_id?, agent_role_id?, title, status, activity, unanswered_questions?, wait?, session_id?, worktree?, updated_at }
 WorkDetailItem            { id, type, story_id?, agent_role_id?, title, body?, status, wait?, nudge_count?, session_id?, current_step?, worktree?, watcher?, created_at, updated_at }   // the whole item, on work.detail only
 PendingQuestion           { request_id, header, question, options?, multi_select?, asked_at }
+QuestionOption            { label, description?, recommended? }   // recommended absent = false
 
 SubscribeParams           { id }   // the whole of a subscribe with no other arguments
 

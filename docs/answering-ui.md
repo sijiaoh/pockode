@@ -578,6 +578,33 @@ page and in the answering bubble — are capped at the width they sit in, since 
 gets to act. A long list scrolls in the panel's body, with **Send** in the
 footer outside it.
 
+**The option the agent would pick carries a `Recommended` tag, and that is all
+it does.** The tag (`web/src/components/ui/RecommendedTag.tsx`) follows the
+label — inside the `<label>`, so it is part of the control's accessible name —
+and is drawn in the same three places a question's options are: the panel's
+form, the record card (the same `QuestionForm`), and the work detail page's
+pending-question list. Each recommended option gets its own; Other and a
+free-text question never have one.
+
+- **Neutral, not accent or success.** Both colours already mean "selected" on
+  these rows, and a recommendation is never a selection: it is the muted, opaque
+  chip of the Declined and Cancelled statuses, a pair the contrast tests already
+  hold, and opaque so it stays legible on a selected row's tint. No icon, for the
+  same reason. On an answered card it dims with an unpicked row, so "the agent
+  suggested X, I chose Y" is still there to read without competing with the
+  answer.
+- **Not preselected.** A form that started with the recommendation picked would
+  make Send one tap away from an answer the user never gave, and `k of n ready`
+  would count a question nobody looked at. The panel starts empty as before.
+- **Not reordered.** Options are drawn in the order the agent gave; the tool
+  description asks it to put the recommendation first, and moving it here would
+  show the user a different list from the one the agent wrote.
+
+The label is never parsed for a `(Recommended)` suffix: the server strips it into
+the flag before anything is recorded
+([agent-integration.md](code/agent-integration.md#asking-several-at-once)), so a
+label is shown exactly as it will be answered.
+
 ### Other and Won't answer are not alternatives
 
 Both are on every block that has options, and each says something the other
@@ -1341,6 +1368,7 @@ silent, and this design simply never enters it.
 | `web/src/components/Chat/InputBar.tsx` | claims the click its command palette dismisses on — the palette hangs over the composer with no backdrop, at every width (§4) |
 | `packages/shared/src/hooks/useOutsideClick.ts` | hands the caller the event beside the target, which is what lets a caller claim the gesture at all (§4) |
 | `web/src/components/Chat/QuestionForm.tsx` | extracted from `AskUserQuestionItem.tsx`; the one renderer of a question, across every host that draws one — including the third shape, a textarea for a question with no options |
+| `web/src/components/ui/RecommendedTag.tsx` | the `Recommended` tag on an option, the one copy of its wording and style for all three places that draw options (§3) |
 | `web/src/components/Chat/QuestionRecordItem.tsx` | replaces `AskUserQuestionItem.tsx` — the record card: four states, no form, collapsed by default, `Answer this` in the body (§6), and the one card a legacy `ask_user_question` record draws through |
 | `web/src/components/Chat/ChatPanel.tsx` | holds whether the panel is up, what it is anchored to and the ids this visit has shown; wraps the message list so the panel has a rectangle, and derives the panel's rendering, the transcript's `inert` and the Escape guard from one expression (§3); remembers the last focused element for the rescue and stands its interrupt down while the panel or anything covering the page is up (§4); consumes the navigation intent of §4; and owns `chromeCollapsed`, the one place all three short-viewport conditions are known (§3) |
 | `web/src/hooks/useShortViewport.ts` | new — the height threshold and the media query that reads it, the app's one height gate, deliberately not in the shared responsive module ([responsive-ui.md](responsive-ui.md#the-two-axes)) |

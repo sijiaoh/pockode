@@ -265,9 +265,7 @@ type childQuestion struct {
 	ChildID    string
 	ChildTitle string
 	SessionID  string
-	RequestID  string
-	Header     string
-	Question   string
+	quotedQuestion
 }
 
 // childrenAwaitingAnswers lists the questions this work's subtasks are waiting
@@ -315,12 +313,10 @@ func (e *Engine) childrenAwaitingAnswers(w Work) []childQuestion {
 		}
 		for _, q := range resolver.PendingQuestions(child) {
 			pending = append(pending, childQuestion{
-				ChildID:    child.ID,
-				ChildTitle: child.Title,
-				SessionID:  child.SessionID,
-				RequestID:  q.RequestID,
-				Header:     q.Header,
-				Question:   q.Question,
+				ChildID:        child.ID,
+				ChildTitle:     child.Title,
+				SessionID:      child.SessionID,
+				quotedQuestion: quoteQuestion(q),
 			})
 		}
 	}

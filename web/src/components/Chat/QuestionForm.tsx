@@ -1,7 +1,7 @@
 import { Check } from "lucide-react";
 import type { AskUserQuestion } from "../../types/message";
 import type { QuestionSelection } from "../../utils/questionAnswer";
-import { MarkdownContent } from "../ui";
+import { MarkdownContent, RecommendedTag } from "../ui";
 import { inputClass } from "../ui/inputClass";
 
 export interface QuestionFormProps {
@@ -133,6 +133,7 @@ function QuestionForm({
 								<div className="min-w-0 flex-1">
 									<div className="break-words text-sm text-th-text-primary">
 										{opt.label}
+										{opt.recommended && <RecommendedTag />}
 									</div>
 									{/* Only when there is one: an option may carry no
 									    description at all, and an empty line of its own
