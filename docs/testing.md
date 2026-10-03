@@ -567,9 +567,26 @@ for `delete-files`, take them from whether its old reasons say anything was
 deleted.
 
 Codex's three missing passes were all `review` on `empty-database`: each run
-asked one decision with `question_post` and left the stack — language and
-framework — neither asked nor stated as a default. So read the reasons, not
-the count, before concluding the guidance failed.
+made one `question_post` call holding a single decision, and the rule to ask a
+step's decisions together was then only in the tool description. It now sits
+in the asking guidance
+([agent-integration.md](code/agent-integration.md#telling-the-agent-when-to-ask)).
+Rerun in the default configuration after that move (same CLI versions, three
+runs, one CLI after the other): Claude 21 of 21 for $3.14, Codex 20 of 21, no
+scenario worse on either. On `empty-database` Codex
+went from 0 of 3 to 2 of 3: still one call each time, but two of the three
+asked two decisions in it — where it runs, plus either single- or multi-user
+or how much to set up — the extra one being the user's to make. The third
+asked one and stated PostgreSQL with a basic notes table as its default, which
+follows the guidance; it is `review` only because the judge wants at least two
+questions for an empty repository. One gap is unchanged across all six Codex
+runs, before and after: the backend language and framework is neither asked
+nor stated as a default. Codex planned the step as Docker Compose plus an init
+script, for which no language is needed, so this reads as its scope of "set up
+the database" rather than a broken rule — a judgement, not something the
+evidence settles. If the stack should be settled there, the guidance text
+alone is unlikely to do it. Either way, read the reasons, not the count,
+before concluding the guidance failed.
 
 ## Verification that verifies
 

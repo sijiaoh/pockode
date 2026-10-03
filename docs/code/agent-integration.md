@@ -1013,17 +1013,23 @@ the run after this split is what says it worked
   ask a user's decision with `question_post` (loading it through tool search
   first), and that it is the only way to ask; when to ask (only a decision that
   is the user's and changes what happens next; look things up first; take
-  conventional defaults; never ask for permission or "shall I continue?"); and
-  what never to do (a question, least of all multiple choice, in the reply
-  text; acting on the answer it expects; asking for secrets).
+  conventional defaults; never ask for permission or "shall I continue?"); that
+  a step's decisions go in one call, early, and only those, each either asked or
+  taken as a stated default; and what never to do (a question, least of all
+  multiple choice, in the reply text; acting on the answer it expects; asking
+  for secrets). The one-call rule began in the tool description; it moved here
+  after Codex, which loaded the tool and so had it in front of it, still asked a
+  single one of a step's decisions and quietly took the rest: by the time it
+  read the description, it had evidently settled on asking one
+  ([testing.md](../testing.md#the-question_post-eval)).
 - **The `question_post` description** is read once the agent goes for the tool,
-  and carries the mechanism and how to word a question: everything in one call,
-  early; each question readable alone in a panel over the chat, often on a
-  phone and much later; options for a known set, free text otherwise; no
-  "Other" of the agent's own; the option it would pick marked `recommended` and
-  first. Its property descriptions state purpose and never a number: a number
-  in a description reads to a model as a limit, which is exactly what the table
-  in [Asking several at once](#asking-several-at-once) declines to set.
+  and carries the mechanism and how to word a question: each question readable
+  alone in a panel over the chat, often on a phone and much later; options for a
+  known set, free text otherwise; no "Other" of the agent's own; the option it
+  would pick marked `recommended` and first. Its property descriptions state
+  purpose and never a number: a number in a description reads to a model as a
+  limit, which is exactly what the table in [Asking several at
+  once](#asking-several-at-once) declines to set.
 
 The guidance has one source and reaches each CLI through the channel that CLI
 shows before loading, both chosen from what was measured on Claude 2.1.286 and

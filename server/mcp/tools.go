@@ -242,8 +242,7 @@ var toolDefinitions = []toolDefinition{
 			"Each answer — or the user's refusal to answer — arrives later as an ordinary message in this chat, in a turn of its own, possibly long after this turn has ended. Do not wait for it here, and do not ask again because nothing came back. " +
 			"Meanwhile, carry on with whatever does not depend on the answers, or end your turn. " +
 			"The user may also simply reply in the chat instead; if their message answers a question, treat it as answered and call question_cancel to take its card down.\n\n" +
-			"How to ask: put every question you need in one call, as early as you can — but only the ones you need, since each makes the user stop and think. " +
-			"The user reads them in a panel that covers the conversation, often on a phone and long after you asked, so each question must make sense on its own and carry the context it needs. " +
+			"How to ask: the user reads the questions in a panel that covers the conversation, often on a phone and long after you asked, so each question must make sense on its own and carry the context it needs. " +
 			"When the answer is one of a known set, offer options; when the set is large or open-ended, ask for free text. " +
 			"Never add an \"Other\" option: the user always has their own input box and can decline to answer. " +
 			"Use multi_select when more than one option can apply. " +
