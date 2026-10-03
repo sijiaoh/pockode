@@ -713,8 +713,13 @@ function AnsweringBody({ answering }: { answering: QuestionAnswerRecord[] }) {
 							{entry.header}
 						</span>
 					)}
+					{/* Source, not rendered (docs/answering-ui.md §3), but with its
+					    line breaks: a question's paragraphs and code fences run
+					    together into one line are harder to read than either. */}
 					{entry.question && (
-						<p className="mt-1 break-words text-xs">{entry.question}</p>
+						<p className="mt-1 break-words whitespace-pre-wrap text-xs">
+							{entry.question}
+						</p>
 					)}
 					<p className="mt-0.5 break-words whitespace-pre-wrap">
 						{answerText(entry)}

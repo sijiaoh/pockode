@@ -76,6 +76,23 @@ describe("MessageItem", () => {
 			],
 		});
 
+		// Still source, but a question's paragraphs and code fences run into one
+		// line are unreadable.
+		it("keeps the line breaks of the question it echoes", () => {
+			render(
+				<MessageItem
+					sessionId="session-1"
+					message={answering({
+						question: "Which database?\n\n```sql\nSELECT 1;\n```",
+						answers: ["Postgres"],
+					})}
+				/>,
+			);
+			const question = screen.getByText(/Which database\?/);
+			expect(question).toHaveClass("whitespace-pre-wrap");
+			expect(question.textContent).toContain("\n\n```sql\n");
+		});
+
 		it("draws the question beside the labels that were picked", () => {
 			render(
 				<MessageItem
