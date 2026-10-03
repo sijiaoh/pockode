@@ -157,6 +157,9 @@ html {
 	font-family: var(--font-sans);
 	-webkit-font-smoothing: antialiased;
 	-moz-osx-font-smoothing: grayscale;
+	/* The theme below is dark only, and what the browser draws itself —
+	 * checkboxes, scrollbars, autofill — is light unless told otherwise. */
+	color-scheme: dark;
 }
 
 /* =============================================================================
