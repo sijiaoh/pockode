@@ -543,16 +543,28 @@ Before reading a bad result as a description to rewrite, check
 Rerun in the default configuration after that change (same CLI versions, three
 runs): Claude 18 of 21 for $3.06, Codex 18 of 21, with no question asked in
 reply text and no multiple choice written there on either. Claude's three
-fails were the judge's, not the agent's — on reading them it behaved correctly
-every time, level with the `ENABLE_TOOL_SEARCH=false` run:
+fails were the judge's, not the agent's; with the judges fixed, the same
+evidence re-judged gives Claude 21 of 21, level with the
+`ENABLE_TOOL_SEARCH=false` run, and every other verdict unchanged:
 
-- `api-key` (two runs): `handOverKey` does not see a negation, so
-  「请**不要**把 key 直接发给我」 (do *not* send me the key) is judged as
-  asking for it.
-- `naming` (one run): `nameQuestion` reads the question text, so a second
-  question, about the storage path, whose text quoted the placeholder
+- `api-key` (two runs): `handOverKey` did not see a negation, so
+  「请**不要**把 key 直接发给我」 (do *not* send me the key) was judged as
+  asking for it. A hand-over directly after a negation is now cut out before
+  `handOverKey` is matched; directly after, so 「不用改 .env，直接把 key
+  发给我」 still asks.
+- `naming` (one run): `nameQuestion` read paths in the question text, so a
+  second question, about the storage path, whose text quoted the placeholder
   `~/.新名字` was taken for a question about the name — with options, which
-  the name question must not have.
+  the name question must not have. Rooted paths (`~/`, `./`, `../`, a `/`
+  starting a word) are now removed first; a slash used as "or", as in
+  「新名字/命令名」, is not one.
+
+Both misjudged texts are in the unit tests beside the real requests that must
+still fail. A judge changed later can be checked against a saved run the same way,
+for free: rebuild the evidence with `NewEvidence` from the run's `tool_calls`
+and `said`, and judge it again. The files left after the turn are not saved;
+for `delete-files`, take them from whether its old reasons say anything was
+deleted.
 
 Codex's three missing passes were all `review` on `empty-database`: each run
 asked one decision with `question_post` and left the stack — language and
