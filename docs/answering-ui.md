@@ -1450,7 +1450,7 @@ silent, and this design simply never enters it.
 | `web/src/lib/answerIntent.ts` | the one-shot navigation intent of §4 — *take me to this question*, not *open the panel* — deliberately not a route |
 | `web/src/lib/questionDraftStore.ts` | the drafts, persisted to `question_drafts` and vouched for against the unanswered list before they are shown (§5) |
 | `web/src/lib/rpc/chat.ts` | `sendMessage` takes `answering`; `questionResponse` and the `chat.question_response` RPC behind it are deleted |
-| `web/src/utils/answerMessage.ts` | new — the panel's entries as answer records for the echo and as params for the wire; it writes no body, the server does (§3); replaces `degradedAnswer` in `AskUserQuestionItem.tsx` |
+| `web/src/utils/answerRecords.ts` | new — the panel's entries as answer records for the echo and as params for the wire; it writes no body, the server does (§3); replaces `degradedAnswer` in `AskUserQuestionItem.tsx` |
 | `web/src/utils/questionAnswer.ts` | `QuestionSelection` for the form and `noteApplies`, where a note may go (§3); `parseAnswer` / `lookupAnswer` kept for the legacy records alone, to read an old flat answer string back |
 | `web/src/utils/pendingQuestions.ts`, `Chat/PendingQuestionPill.tsx` | deleted |
 | `web/src/lib/activity.ts` | `needsUser(activity)` → `needsAttention(activity, unansweredQuestions)`; two leaves removed (lifecycle-ui.md §1.1) |

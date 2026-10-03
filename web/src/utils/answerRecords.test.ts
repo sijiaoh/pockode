@@ -3,7 +3,7 @@ import {
 	type AnswerEntry,
 	toAnswerParams,
 	toAnswerRecords,
-} from "./answerMessage";
+} from "./answerRecords";
 
 const answered: AnswerEntry = {
 	requestId: "r1",
