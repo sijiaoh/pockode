@@ -178,6 +178,14 @@ html {
 	font-family: var(--font-sans);
 	-webkit-font-smoothing: antialiased;
 	-moz-osx-font-smoothing: grayscale;
+	/* The themes repaint everything but what the browser draws itself —
+	 * radios, checkboxes, scrollbars, a select's popup, autofill — which
+	 * follows `color-scheme` and would otherwise stay light on a dark card. */
+	color-scheme: light;
+}
+
+html.dark {
+	color-scheme: dark;
 }
 
 code,

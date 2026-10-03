@@ -2,6 +2,7 @@ import { MEDIA_QUERIES, Sheet } from "@pockode/shared";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
 	act,
+	fireEvent,
 	render as rtlRender,
 	screen,
 	waitFor,
@@ -1138,9 +1139,10 @@ describe("ChatPanel", () => {
 		// A phone with the soft keyboard up leaves the card about 19px of body to
 		// say a question in, because the panel is sharing what is left of the
 		// screen with chrome that has nothing to do with answering. The room is
-		// taken back by folding that chrome away — and by nothing else: no size,
-		// padding or layout of the card changes here (docs/answering-ui.md §3,
-		// "Room on a short viewport").
+		// taken back by folding that chrome away, and the card takes it on the
+		// same flag — its whole rectangle, a tighter header and footer — so the
+		// card's short shape never shows without the fold, nor the fold without
+		// it (docs/answering-ui.md §3, "Room on a short viewport").
 		describe("on a short viewport", () => {
 			/**
 			 * A `matchMedia` that answers the height gate live and hands every other
@@ -1151,7 +1153,12 @@ describe("ChatPanel", () => {
 				const original = window.matchMedia;
 				const listeners = new Set<(e: MediaQueryListEvent) => void>();
 				let short = false;
+				let coarse = false;
 				window.matchMedia = (query: string) => {
+					// Read once, before render: nothing here swaps the pointer mid-test.
+					if (query === MEDIA_QUERIES.primaryCoarsePointer) {
+						return { ...original(query), matches: coarse } as MediaQueryList;
+					}
 					if (query !== SHORT_VIEWPORT_QUERY) return original(query);
 					return {
 						// A getter, not a snapshot: the real `matches` is live on the
@@ -1182,6 +1189,10 @@ describe("ChatPanel", () => {
 							}
 						});
 					},
+					/** A finger as the primary pointer. Call before rendering. */
+					touch() {
+						coarse = true;
+					},
 					restore() {
 						window.matchMedia = original;
 					},
@@ -1198,6 +1209,13 @@ describe("ChatPanel", () => {
 			const actionBar = () =>
 				screen.queryByRole("button", { name: "Session info" });
 			const composer = () => screen.queryByPlaceholderText(/^Type a message/);
+			/**
+			 * Whether the card is in its folded shape. jsdom lays nothing out, so
+			 * the cap is read off the class it is written in; the padding rides on
+			 * the same prop and is AnswerPanel's own test to hold.
+			 */
+			const cardTakesTheRoom = () =>
+				answerPanel().classList.contains("max-h-full");
 			/** Moves the caret into the card, which is the second of the three. */
 			const answerInThePanel = async (
 				user: ReturnType<typeof userEvent.setup>,
@@ -1218,13 +1236,13 @@ describe("ChatPanel", () => {
 				// the card, the chrome below it is still the user's.
 				expect(actionBar()).toBeInTheDocument();
 				expect(composer()).toBeInTheDocument();
+				expect(cardTakesTheRoom()).toBe(false);
 
 				await answerInThePanel(user);
 
 				expect(actionBar()).not.toBeInTheDocument();
 				expect(composer()).not.toBeInTheDocument();
-				// Nothing about the card itself changed to get that room.
-				expect(answerPanel()).toBeInTheDocument();
+				expect(cardTakesTheRoom()).toBe(true);
 			});
 
 			// The strip is what is deliberately *not* folded, and this is why: a
@@ -1316,7 +1334,7 @@ describe("ChatPanel", () => {
 
 				await waitFor(() => expect(composer()).toBeInTheDocument());
 				expect(actionBar()).toBeInTheDocument();
-				expect(answerPanel()).toBeInTheDocument();
+				expect(cardTakesTheRoom()).toBe(false);
 			});
 
 			it("brings them back when the viewport grows again", async () => {
@@ -1334,6 +1352,7 @@ describe("ChatPanel", () => {
 
 				expect(composer()).toBeInTheDocument();
 				expect(actionBar()).toBeInTheDocument();
+				expect(cardTakesTheRoom()).toBe(false);
 			});
 
 			// The one this gate exists for. A question arriving over somebody
@@ -1352,6 +1371,197 @@ describe("ChatPanel", () => {
 
 				expect(composer()).toHaveValue("half a sentence");
 				expect(actionBar()).toBeInTheDocument();
+				expect(cardTakesTheRoom()).toBe(false);
+				// Under a mouse the card stays, too: there is no soft keyboard to
+				// make room for, and the composer that focuses itself on mount
+				// would otherwise send the card away on every press that left it.
+				expect(answerPanel()).not.toHaveAttribute("inert");
+			});
+
+			// The converse of the fold: with the caret in the composer on a touch
+			// screen, the card is what gives way, to the very form a close leaves
+			// — the strip's `Answer` row — without being closed
+			// (docs/answering-ui.md §3, "Room on a short viewport").
+			describe("with the caret in the composer under a thumb", () => {
+				/** Off the screen and out of reach, but still mounted. */
+				const cardYielded = () =>
+					answerPanel().closest("[inert]") !== null &&
+					answerPanel().closest(".invisible") !== null;
+				const answerRow = () =>
+					screen.queryByRole("button", { name: "Answer" });
+
+				const typeInComposer = async (
+					user: ReturnType<typeof userEvent.setup>,
+				) => {
+					const textarea = composer();
+					if (!textarea) throw new Error("the composer should be up");
+					await user.type(textarea, "half a sentence");
+				};
+
+				const renderYielded = async () => {
+					const user = userEvent.setup();
+					viewport.touch();
+					viewport.set(true);
+					seedUnansweredQuestion();
+					render(<ChatPanel {...defaultProps} />);
+					await waitForHistoryLoad();
+					return user;
+				};
+
+				it("steps the card aside for the strip's Answer row", async () => {
+					const user = await renderYielded();
+					expect(cardYielded()).toBe(false);
+					expect(answerRow()).not.toBeInTheDocument();
+
+					await typeInComposer(user);
+
+					expect(cardYielded()).toBe(true);
+					expect(answerRow()).toBeInTheDocument();
+					// Nothing is dimmed any more, so nothing is out of reach either.
+					expect(screen.getByText("Pending").closest("[inert]")).toBeNull();
+					expect(composer()).toHaveValue("half a sentence");
+					expect(actionBar()).toBeInTheDocument();
+				});
+
+				// Stepping aside is not a close: the card that comes back is the
+				// one that left — same element, so the same scroll position — with
+				// the pick still in it, and it takes nothing on its way back.
+				it("brings the card back as it was when the viewport grows", async () => {
+					const user = await renderYielded();
+					await answerInThePanel(user);
+					await user.click(screen.getByRole("heading", { level: 1 }));
+					await waitFor(() => expect(composer()).toBeInTheDocument());
+					const card = answerPanel();
+
+					await typeInComposer(user);
+					expect(cardYielded()).toBe(true);
+
+					viewport.set(false);
+
+					expect(cardYielded()).toBe(false);
+					expect(answerPanel()).toBe(card);
+					expect(
+						within(card).getByRole("radio", { name: /SQLite/ }),
+					).toBeChecked();
+					expect(composer()).toHaveFocus();
+				});
+
+				it("brings the card back when the caret leaves the composer", async () => {
+					const user = await renderYielded();
+					await typeInComposer(user);
+					expect(cardYielded()).toBe(true);
+
+					await user.click(screen.getByRole("heading", { level: 1 }));
+
+					expect(cardYielded()).toBe(false);
+					expect(answerRow()).not.toBeInTheDocument();
+				});
+
+				// Escape in the composer meant "put the questions away" before the
+				// card stepped aside, and still does: it closes, so the keyboard
+				// going down does not bring the card back — and it is still not an
+				// interrupt.
+				it("closes on Escape without interrupting", async () => {
+					const user = await renderYielded();
+					act(() =>
+						acceptSetting({
+							turn: {
+								phase: "running",
+								open: true,
+								since: "2024-01-01T00:00:00Z",
+								unanswered: [question],
+							},
+						}),
+					);
+					await typeInComposer(user);
+					expect(cardYielded()).toBe(true);
+
+					await user.keyboard("{Escape}");
+
+					expect(
+						screen.queryByRole("dialog", { name: /question/ }),
+					).not.toBeInTheDocument();
+					expect(mockState.interrupt).not.toHaveBeenCalled();
+					viewport.set(false);
+					expect(
+						screen.queryByRole("dialog", { name: /question/ }),
+					).not.toBeInTheDocument();
+				});
+
+				// The press ends the yield itself rather than waiting for the
+				// composer's blur: focus cannot enter an `inert` card, and which of
+				// the two a phone delivers first is not promised. `fireEvent` so
+				// that no blur comes at all.
+				it("takes the caret into the card on Answer, with no blur first", async () => {
+					const user = await renderYielded();
+					await typeInComposer(user);
+					const answer = answerRow();
+					if (!answer) throw new Error("the Answer row should be up");
+
+					await act(async () => fireEvent.click(answer));
+
+					expect(cardYielded()).toBe(false);
+					expect(answerPanel()).toHaveFocus();
+					// And the caret being in the card is what folds the chrome.
+					expect(composer()).not.toBeInTheDocument();
+				});
+
+				// The ordinary press, which is the hard one: a press that moved focus
+				// would blur the composer first, end the aside and take the row away
+				// before its own click arrived. The row keeps the caret until then.
+				it("takes the caret into the card on an ordinary press of Answer", async () => {
+					const user = await renderYielded();
+					await typeInComposer(user);
+					const answer = answerRow();
+					if (!answer) throw new Error("the Answer row should be up");
+
+					await user.click(answer);
+
+					expect(cardYielded()).toBe(false);
+					expect(answerPanel()).toHaveFocus();
+				});
+
+				// While the card is aside the transcript is live, and a control
+				// focused there is blurred onto `<body>` the moment the card comes
+				// back over it — the same drop its first arrival is rescued from.
+				it("catches the focus the transcript loses when it comes back", async () => {
+					const user = await renderYielded();
+					await typeInComposer(user);
+
+					const card = screen.getAllByRole("button", { name: /Database/ })[0];
+					act(() => card.focus());
+
+					expect(cardYielded()).toBe(false);
+					expect(answerPanel()).toHaveFocus();
+				});
+
+				// The question that arrives mid-sentence is the case §4 protects:
+				// it shows up as the row's count, and nothing rises over the
+				// composer.
+				it("lets a question arriving mid-sentence wait on the row", async () => {
+					const user = await renderYielded();
+					await typeInComposer(user);
+
+					act(() =>
+						acceptSetting({
+							turn: {
+								phase: "idle",
+								open: false,
+								since: "",
+								unanswered: [
+									question,
+									{ ...question, request_id: "q2", header: "Region" },
+								],
+							},
+						}),
+					);
+
+					expect(cardYielded()).toBe(true);
+					expect(
+						screen.getByText("2 questions are waiting for your answer."),
+					).toBeInTheDocument();
+					expect(composer()).toHaveFocus();
+				});
 			});
 
 			// And when the user does go into the card, the half-sentence is not
@@ -1425,6 +1635,7 @@ describe("ChatPanel", () => {
 
 				expect(actionBar()).toBeInTheDocument();
 				expect(composer()).toBeInTheDocument();
+				expect(cardTakesTheRoom()).toBe(false);
 			});
 		});
 

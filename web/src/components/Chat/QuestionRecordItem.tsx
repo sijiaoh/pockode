@@ -196,36 +196,41 @@ function QuestionRecordItem({
 
 			<CollapsibleBody expanded={expanded}>
 				<ScrollableContent className="max-h-[60vh] overflow-auto border-t border-th-border p-2">
-					{outcome && (
-						<p className="mb-3 rounded bg-th-bg-tertiary px-2 py-1.5 text-th-text-muted">
-							{outcome}
-							{withdrawalCause(reason)}
-						</p>
-					)}
-					{/* Always disabled: this card is a record. An answered one shows
-					    the selection filled in, which is what keeps it looking like the
-					    form that was filled in; every other state shows the question
-					    with nothing picked. The form disables its own choices rather
-					    than a disabled fieldset doing it, which would also disable the
-					    copy button on a code block in the question. min-w-0 against a
-					    fieldset's UA `min-inline-size: min-content`: a wide code block
-					    would otherwise floor the whole form at its width, and the body
-					    would scroll options and all sideways instead of the block. */}
-					<fieldset aria-label="Question" className="min-w-0 space-y-2">
-						<QuestionForm
-							question={record.question}
-							askedAt={record.askedAt}
-							name={record.requestId}
-							selection={selection}
-							// A declined card's note is its reason, already in the
-							// outcome line above.
-							note={isAnswered ? answer?.note : undefined}
-							disabled
-							onSelectOption={noop}
-							onSelectOther={noop}
-							onOtherTextChange={noop}
-						/>
-					</fieldset>
+					{/* The frame is as wide as every other tool row; what is read in
+					    it is held to the answer panel's reading measure
+					    (docs/answering-ui.md §6). */}
+					<div className="max-w-2xl">
+						{outcome && (
+							<p className="mb-3 rounded bg-th-bg-tertiary px-2 py-1.5 text-th-text-muted">
+								{outcome}
+								{withdrawalCause(reason)}
+							</p>
+						)}
+						{/* Always disabled: this card is a record. An answered one shows
+						    the selection filled in, which is what keeps it looking like the
+						    form that was filled in; every other state shows the question
+						    with nothing picked. The form disables its own choices rather
+						    than a disabled fieldset doing it, which would also disable the
+						    copy button on a code block in the question. min-w-0 against a
+						    fieldset's UA `min-inline-size: min-content`: a wide code block
+						    would otherwise floor the whole form at its width, and the body
+						    would scroll options and all sideways instead of the block. */}
+						<fieldset aria-label="Question" className="min-w-0 space-y-2">
+							<QuestionForm
+								question={record.question}
+								askedAt={record.askedAt}
+								name={record.requestId}
+								selection={selection}
+								// A declined card's note is its reason, already in the
+								// outcome line above.
+								note={isAnswered ? answer?.note : undefined}
+								disabled
+								onSelectOption={noop}
+								onSelectOther={noop}
+								onOtherTextChange={noop}
+							/>
+						</fieldset>
+					</div>
 				</ScrollableContent>
 			</CollapsibleBody>
 
@@ -239,6 +244,11 @@ function QuestionRecordItem({
 				<div className="flex justify-end border-t border-th-border p-2">
 					<button
 						type="button"
+						// Keeps the caret in the composer until the click, as the
+						// strip's Answer does: a press that blurred it would bring a
+						// stepped-aside panel back over this card first, and the
+						// click would never reach it (docs/answering-ui.md §3).
+						onMouseDown={(e) => e.preventDefault()}
 						onClick={() => onAnswer(record.requestId)}
 						className="touch-target rounded px-1 text-th-accent underline transition-colors hover:text-th-text-primary focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent"
 					>

@@ -31,7 +31,13 @@ import { useMediaQuery } from "@pockode/shared";
  * which is the bug this answers.
  *
  * Folding the action bar and the composer away returns 118px of that same
- * budget to the transcript, so the 19px body becomes 119px.
+ * budget to the transcript, and the card takes the room in the same breath:
+ * its cap becomes the whole transcript and its header and footer tighten to 45
+ * and 53 (AnswerPanel's `chromeCollapsed`). The body is then `H - 78 - 98`, so
+ * the 19px body becomes 191px, and on a 560px phone under the same keyboard it
+ * is 84px — the field being typed in and a line either side of it. That counts
+ * the strip, which is on screen only while it has something to say other than
+ * the open questions; without it the body has 33px more.
  *
  * The number is a derivation, not a measurement: nobody has held a phone up to
  * it yet. Re-derive rather than nudge it if a chrome row's height changes.
@@ -42,7 +48,9 @@ export const SHORT_VIEWPORT_QUERY = `(max-height: ${SHORT_VIEWPORT_MAX_HEIGHT}px
 
 /**
  * True when the viewport is too short for the answer panel to share the screen
- * with the chrome below it.
+ * with the chrome below it. Which of the two gives way is the caret's call:
+ * in the card, the chrome folds (`chromeCollapsed`); in the composer on a touch
+ * screen, the card steps aside (`answerPanelYielded`). Both live in `ChatPanel`.
  *
  * A media query rather than a `visualViewport` reading: `web/index.html` asks
  * for `interactive-widget=resizes-content`, so a soft keyboard shrinks the

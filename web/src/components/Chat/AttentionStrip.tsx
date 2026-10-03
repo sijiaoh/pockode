@@ -189,6 +189,12 @@ function AttentionStrip({
 					    statements. */}
 					<button
 						type="button"
+						// The press keeps the caret where it is until the click. With
+						// it in the composer on a short touch screen the panel has
+						// stepped aside, and a press that moved focus would end that
+						// and unmount this row before its own click arrived
+						// (docs/answering-ui.md §3, "The converse").
+						onMouseDown={(e) => e.preventDefault()}
 						onClick={onAnswer}
 						className="touch-target rounded bg-th-accent px-2 py-0.5 text-th-accent-text transition-opacity hover:opacity-90 focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent"
 					>
