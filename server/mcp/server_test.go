@@ -7,6 +7,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/pockode/server/agent"
 )
 
 // callMethod sends a JSON-RPC request to the stdio proxy and returns the
@@ -56,6 +58,11 @@ func TestInitialize(t *testing.T) {
 	}
 	if result.ServerInfo.Name != "pockode" {
 		t.Errorf("name = %q, want pockode", result.ServerInfo.Name)
+	}
+	// The one channel through which Claude sees the asking guidance before it
+	// has loaded question_post.
+	if result.Instructions != agent.AskingGuidance {
+		t.Errorf("instructions = %q, want agent.AskingGuidance", result.Instructions)
 	}
 }
 

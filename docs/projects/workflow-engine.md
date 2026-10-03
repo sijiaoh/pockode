@@ -243,12 +243,12 @@ The prompt builders generate messages for different lifecycle events. All share 
   - **Task:** Read the story's comments before starting, and report results back with `work_comment_add`, because the story agent does not read this chat.
 - The lifecycle rules (`lifecycle_rules`), identical for every work Pockode
   drives: what the four statuses mean, that `question_post` is how the agent
-  reaches a person (one sentence, leaving when and how to the tool's own
-  description), that a turn ending with a question unanswered is not nudged,
-  that a story waits for its subtasks with `story_wait`, that a story shown one
-  of its subtasks' questions must settle it — `question_answer` if it knows the
-  answer, `question_post` to the user if it does not, and ignoring it is not a
-  third way — that the same rule stops at a *stopped* subtask, whose question is
+  reaches a person (one sentence, leaving when and how to the asking guidance
+  and the tool's own description), that a turn ending with a question
+  unanswered is not nudged, that a story waits for its subtasks with
+  `story_wait`, that a story shown one of its subtasks' questions must settle
+  it — `question_answer` if it knows the answer, `question_post` to the user
+  if it does not, and ignoring it is not a third way — that the same rule stops at a *stopped* subtask, whose question is
   not the story's to answer, that neither of the two touches its own wait, that
   a turn ends cleanly with `step_done` or with something outstanding, and that a
   turn ending with neither is nudged and stops the work after the allowance. It

@@ -4,7 +4,9 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"unicode/utf16"
 
+	"github.com/pockode/server/agent"
 	"github.com/pockode/server/work"
 )
 
@@ -121,4 +123,28 @@ func TestToolDefinitions_BothSubtaskRefusalsAreAnnounced(t *testing.T) {
 			t.Errorf("%s does not name %s as a way out", c.tool, c.wayOut)
 		}
 	}
+}
+
+// claudeMCPTextLimit is where Claude cuts an MCP tool description and a
+// server's instructions, ending them in "… [truncated]" (the default of
+// CLAUDE_CODE_MAX_MCP_DESCRIPTION_LENGTH, measured on claude 2.1.286). It counts
+// JavaScript string length, which is UTF-16 code units, not runes. Nothing
+// reports the cut to the server, and what goes is the end of the text — which
+// is where question_post's rule against asking for secrets sat until the rule
+// was moved out of it.
+const claudeMCPTextLimit = 2048
+
+func TestToolDefinitions_FitClaudesLimit(t *testing.T) {
+	for _, def := range toolDefinitions {
+		if n := utf16Len(def.Description); n > claudeMCPTextLimit {
+			t.Errorf("%s's description is %d characters; Claude reads only the first %d", def.Name, n, claudeMCPTextLimit)
+		}
+	}
+	if n := utf16Len(agent.AskingGuidance); n > claudeMCPTextLimit {
+		t.Errorf("the server instructions are %d characters; Claude reads only the first %d", n, claudeMCPTextLimit)
+	}
+}
+
+func utf16Len(s string) int {
+	return len(utf16.Encode([]rune(s)))
 }

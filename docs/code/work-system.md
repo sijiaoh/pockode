@@ -505,10 +505,10 @@ the sessions waiting, the refusal names the candidates the same way.
 
 There is deliberately **no tool that lists questions**: the answer arrives as a
 message, so a list would only invite an agent to poll for it inside the turn it
-was told not to wait in. For the same reason the `question_post` description
-carries the whole contract — the mechanism, and when and how to ask — since an
-ordinary session gets no system prompt, so the description is the only place it
-can be said ([agent-integration.md](agent-integration.md#asking-several-at-once)).
+was told not to wait in. The mechanism and how to word a question are in the
+`question_post` description; when to ask, and that it is the only way to, are in
+the asking guidance every session gets before it has loaded a tool
+([agent-integration.md](agent-integration.md#telling-the-agent-when-to-ask)).
 
 See [Posted Questions](agent-integration.md#posted-questions).
 
@@ -524,7 +524,8 @@ Two of these return less than their name suggests: the listings omit the body an
 **A tool description is a prompt.** It is all an agent knows about a status it
 never sees the code for, so the descriptions carry the same vocabulary as
 `lifecycle_rules`: `story_list` and `task_list` gloss the four statuses they
-return, `question_post` carries its whole contract (see below), `story_wait` says that
+return, `question_post` carries its mechanism and how to word a question (see
+below), `story_wait` says that
 the news of a child closing clears the wait *and* that a wait with no subtask
 running is rejected, and `step_done` says it is not a way to pause and that
 completing a step withdraws the questions asked during it. The two
@@ -1823,8 +1824,8 @@ Pockode gets verbatim.
 
 **`lifecycle_rules` is the single place the agent-facing lifecycle is written.**
 It says what the four statuses mean, that `question_post` is how the agent
-reaches a person — and no more about asking than that, since the tool's own
-description says when and how and every session reads it — that a story's wait
+reaches a person — and no more about asking than that, since the asking guidance
+says when and how and every session gets it — that a story's wait
 on its subtasks is `story_wait`,
 that exactly two things end a turn cleanly (`step_done`, or something
 outstanding) and what happens when neither is true: a nudge, and `stopped` once
@@ -1866,16 +1867,21 @@ task is never offered `story_wait` nor told about subtasks — here or in
 both over every message a task can be sent.
 
 **Asking is one sentence here, and one fact the tool cannot carry.** How to
-ask — the mechanism, when, how, and that the CLI's own ask-the-user tool does
-not reach the user ([agent-integration.md](agent-integration.md#refusing-the-clis-own-question))
-— is in the `question_post` description, which every session reads, worked or
-not; repeating it here would be a second copy for the two to drift apart in, so
-the section says "Ask with `question_post`; its description says when and how"
-and `prompt_test.go` checks the copy is gone. What stays is lifecycle, which no
-tool description can know: ending a turn with a posted question outstanding is
-not the accident an ordinary quiet ending is — Pockode does not nudge and does
-not spend the allowance. `prompt_test.go` holds that sentence;
-`mcp.TestQuestionTools_AreAdvertised` holds the description's.
+ask — when, and that the CLI's own ask-the-user tool does not reach the user
+([agent-integration.md](agent-integration.md#refusing-the-clis-own-question)) —
+is `agent.AskingGuidance`, which every session gets, worked or not; the
+mechanism and wording are the `question_post` description, read on loading the
+tool ([agent-integration.md](agent-integration.md#telling-the-agent-when-to-ask)).
+Repeating either here would be a second copy for them to drift apart in, so the
+section says "Ask with `question_post`, as the "Asking the user something in
+Pockode" guidance says" — naming the guidance by its heading, since this
+section has an asking heading of its own — and `prompt_test.go` checks the copy is gone. What stays is lifecycle,
+which neither text can know: ending a turn with a posted question outstanding
+is not the accident an ordinary quiet ending is — Pockode does not nudge and
+does not spend the allowance. `prompt_test.go` holds that sentence;
+`mcp.TestQuestionTools_AreAdvertised` holds the description's, and
+`mcp.TestPrompts_NameOnlyLiveTools` holds the guidance, like `prompts.yaml`,
+to naming only tools that exist.
 
 **The story restart nudge sends the agent to re-read its tasks**, and that is
 load-bearing rather than politeness: a stopped parent is deliberately not told

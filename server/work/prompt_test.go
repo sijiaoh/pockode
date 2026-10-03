@@ -32,10 +32,11 @@ func TestBuildKickoffMessage_Task(t *testing.T) {
 	assertContains(t, msg, "agent role", "agent-role-driven lifecycle instruction")
 	assertContains(t, msg, "`step_done` with ID task-1", "step_done instruction")
 	assertContains(t, msg, "Ask with `question_post`", "how to reach the user")
-	// How to ask is question_post's description, which every session reads;
-	// the lifecycle rules keep only what Pockode does around a question.
+	// When and how to ask is agent.AskingGuidance and question_post's
+	// description, which every session gets; the lifecycle rules keep only what
+	// Pockode does around a question.
 	if strings.Contains(msg, "only way to ask") || strings.Contains(msg, "ask-the-user tool") {
-		t.Error("task message repeats the question_post description")
+		t.Error("task message repeats the asking guidance")
 	}
 
 	if strings.Contains(msg, "COORDINATOR") {

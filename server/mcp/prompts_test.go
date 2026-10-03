@@ -6,6 +6,8 @@ import (
 	"testing"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/pockode/server/agent"
 )
 
 // toolLikeName matches what the prompts name as a tool or as a tool's argument:
@@ -33,6 +35,10 @@ func TestPrompts_NameOnlyLiveTools(t *testing.T) {
 	if err := yaml.Unmarshal(data, &templates); err != nil {
 		t.Fatalf("parse prompts: %v", err)
 	}
+
+	// The asking guidance is the same kind of text from a third package, and
+	// every session reads it.
+	templates["agent.AskingGuidance"] = agent.AskingGuidance
 
 	live := map[string]bool{}
 	for _, def := range toolDefinitions {

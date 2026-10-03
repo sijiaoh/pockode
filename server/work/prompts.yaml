@@ -56,7 +56,7 @@ lifecycle_rules: |
 
   ### Asking the user something
 
-  Ask with `question_post`; its description says when and how. While a question of yours is unanswered, a turn of yours ending is not treated as an accident: Pockode does not nudge you and does not spend your allowance. So you may ask and stop{{if .IsStory}}, ask and keep working, or ask and wait for your subtasks — all three{{else}} or ask and keep working — both{{end}} are ordinary.
+  Ask with `question_post`, as the "Asking the user something in Pockode" guidance says. While a question of yours is unanswered, a turn of yours ending is not treated as an accident: Pockode does not nudge you and does not spend your allowance. So you may ask and stop{{if .IsStory}}, ask and keep working, or ask and wait for your subtasks — all three{{else}} or ask and keep working — both{{end}} are ordinary.
   {{if .IsStory}}
   ### Waiting for your subtasks
 

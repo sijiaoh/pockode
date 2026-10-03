@@ -241,21 +241,13 @@ var toolDefinitions = []toolDefinition{
 		Description: "Ask the user questions and keep working. The call returns immediately with a request id for each question; it does not wait for an answer. " +
 			"Each answer — or the user's refusal to answer — arrives later as an ordinary message in this chat, in a turn of its own, possibly long after this turn has ended. Do not wait for it here, and do not ask again because nothing came back. " +
 			"Meanwhile, carry on with whatever does not depend on the answers, or end your turn. " +
-			"The user may also simply reply in the chat instead; if their message answers a question, treat it as answered and call question_cancel to take its card down. " +
-			"This is the only way to ask: your CLI's own ask-the-user tool does not reach the user here.\n\n" +
-			"When to ask: only for a decision that belongs to the user and changes what you do next. " +
-			"Do not ask what you can find out yourself — read the code, the docs and the history first. " +
-			"Where a choice has a conventional default, take it and say so. " +
-			"Do not ask for permission to act; the permission system handles that. " +
-			"Do not ask \"shall I continue?\" or \"is this OK?\" — ask the decision itself.\n\n" +
+			"The user may also simply reply in the chat instead; if their message answers a question, treat it as answered and call question_cancel to take its card down.\n\n" +
 			"How to ask: put every question you need in one call, as early as you can — but only the ones you need, since each makes the user stop and think. " +
 			"The user reads them in a panel that covers the conversation, often on a phone and long after you asked, so each question must make sense on its own and carry the context it needs. " +
 			"When the answer is one of a known set, offer options; when the set is large or open-ended, ask for free text. " +
 			"Never add an \"Other\" option: the user always has their own input box and can decline to answer. " +
 			"Use multi_select when more than one option can apply. " +
-			"If you would choose one option yourself, mark it recommended and put it first; the user sees it flagged, and it is not picked for them. A single-choice question may recommend at most one option.\n\n" +
-			"Never write multiple-choice questions in your reply text — they cannot be answered as a form there. " +
-			"Never ask for passwords, tokens or API keys: the answer is stored in the transcript and sent to the model. Tell the user which variable or file to set instead.",
+			"If you would choose one option yourself, mark it recommended and put it first; the user sees it flagged, and it is not picked for them. A single-choice question may recommend at most one option.",
 		InputSchema: inputSchema{
 			Type: "object",
 			Properties: map[string]propertySchema{
