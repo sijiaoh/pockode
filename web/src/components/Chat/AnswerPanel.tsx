@@ -18,8 +18,7 @@ import {
 	noteApplies,
 	type QuestionSelection,
 } from "../../utils/questionAnswer";
-import { inputClass } from "../ui/inputClass";
-import QuestionForm from "./QuestionForm";
+import QuestionForm, { answerFieldClass } from "./QuestionForm";
 
 interface Props {
 	sessionId: string;
@@ -62,6 +61,24 @@ interface Props {
 	 * closes it from outside — and it has to stand down mid-send like the rest.
 	 */
 	onSendingChange?: (sending: boolean) => void;
+	/**
+	 * Whether the host has folded its chrome away to make room for this card.
+	 * The card takes that room in the same breath — the whole rectangle rather
+	 * than 85% of it, and a tighter header and footer — and it does so off this
+	 * one flag rather than asking the screen itself, so the card can never be in
+	 * its short-viewport shape while the chrome is still up, or the other way
+	 * round (docs/answering-ui.md §3, "Room on a short viewport").
+	 */
+	chromeCollapsed?: boolean;
+	/**
+	 * Whether the card has stepped aside for the composer, which on a short touch
+	 * screen is the other half of the fold above (docs/answering-ui.md §3, "Room
+	 * on a short viewport"). Off the screen and out of reach, but still mounted
+	 * and still open: the drafts, the receipt and the body's scroll position are
+	 * all where the user left them when it comes back. Escape still closes it —
+	 * pressed in the composer it means "put the questions away" either way.
+	 */
+	yielded?: boolean;
 }
 
 /** A block the user can still see, whether or not its question is still open. */
@@ -97,7 +114,11 @@ const ALREADY_ANSWERED = "Already answered elsewhere.";
  * It is a card centred in the transcript's rectangle over a backdrop that
  * dims it, at one shape and one size at every width: the height is what the
  * content needs, capped at 85% of the rectangle, so one short question is a
- * small card rather than a wall.
+ * small card rather than a wall. The one exception is a short viewport with
+ * the host's chrome folded away (`chromeCollapsed`), where the cap is the whole
+ * rectangle and the header and footer are tighter — and its converse, the
+ * caret in the composer, where the card is not on the screen at all
+ * (`yielded`).
  *
  * The backdrop covers the transcript and nothing else. The session header
  * above it, and the strip, the session bar and the composer below it, stay
@@ -127,6 +148,8 @@ function AnswerPanel({
 	takeFocus,
 	onFocusChange,
 	onSendingChange,
+	chromeCollapsed = false,
+	yielded = false,
 }: Props) {
 	const drafts = useQuestionDraftStore(selectSessionDrafts(sessionId));
 	// Blocks that can no longer be answered but are still on screen, keyed by
@@ -138,9 +161,15 @@ function AnswerPanel({
 	const [stale, setStale] = useState<Map<string, StaleBlock>>(new Map());
 	const [sending, setSending] = useState(false);
 	const [error, setError] = useState<string | null>(null);
-	// How many blocks the last submit carried, so the body can say so until the
-	// next change. Zero means nothing has been sent from this panel yet.
+	// How many blocks the last submit carried. Zero means nothing has been sent
+	// from this panel yet, which is also what keeps a list emptied from
+	// elsewhere from closing it.
 	const [sentCount, setSentCount] = useState(0);
+	// Whether the footer says "N answers sent." in place of its ready count.
+	// Apart from `sentCount` because it ends sooner: at the user's next change,
+	// when the count is what they need again — and that change must not turn a
+	// later emptying of the list into a reason to stay open.
+	const [receiptShown, setReceiptShown] = useState(false);
 
 	// Questions that were on screen last render, so a departure can be told from
 	// a question that was never here.
@@ -172,12 +201,15 @@ function AnswerPanel({
 		const arrived = unanswered.some((q) => !seen.has(q.request_id));
 		seenRef.current = new Map(unanswered.map((q) => [q.request_id, q]));
 
-		// A question arriving makes the "N answers sent" line stale news — it
+		// A question arriving makes the "N answers sent" receipt stale news — it
 		// counted what was left at the time. A question *leaving* does not: the
 		// blocks that were just submitted leave for that very reason, and
-		// resetting on them would take the line away in the same frame it
+		// resetting on them would take the receipt away in the same frame it
 		// appeared.
-		if (arrived) setSentCount(0);
+		if (arrived) {
+			setSentCount(0);
+			setReceiptShown(false);
+		}
 		if (departed.length === 0) return;
 
 		const drafts = useQuestionDraftStore.getState().drafts[sessionId];
@@ -258,6 +290,7 @@ function AnswerPanel({
 				useQuestionDraftStore.getState().drafts[sessionId]?.[requestId] ??
 				EMPTY_DRAFT;
 			questionDraftActions.set(sessionId, requestId, { ...current, ...change });
+			setReceiptShown(false);
 		},
 		[sessionId],
 	);
@@ -270,6 +303,7 @@ function AnswerPanel({
 				next.delete(requestId);
 				return next;
 			});
+			setReceiptShown(false);
 		},
 		[sessionId],
 	);
@@ -292,6 +326,8 @@ function AnswerPanel({
 
 		setSending(true);
 		setError(null);
+		// A receipt left from an earlier submit would sit beside this one's error.
+		setReceiptShown(false);
 		inFlightRef.current = new Set(entries.map((e) => e.requestId));
 		try {
 			await onSend(toAnswerRecords(entries));
@@ -302,6 +338,7 @@ function AnswerPanel({
 				entries.map((e) => e.requestId),
 			);
 			setSentCount(entries.length);
+			setReceiptShown(true);
 		} catch (err) {
 			const message = err instanceof Error ? err.message : String(err);
 			setError(explain(message));
@@ -443,7 +480,16 @@ function AnswerPanel({
 		// transcript and stops at its edges. `z-10` is enough: the list below
 		// carries no stacking of its own, and the portalled sheets — z-50, z-70 —
 		// still come out over this one.
-		<div className="absolute inset-0 z-10 flex items-center justify-center">
+		//
+		// A yield is `invisible` + `inert`, the transcript's own way of leaving
+		// the screen under an overlay, and for its reason: `display: none` or an
+		// unmount would throw the body's scroll position away. Hidden, the
+		// backdrop is no target either, so no press can dismiss a card nobody
+		// can see.
+		<div
+			inert={yielded}
+			className={`absolute inset-0 z-10 flex items-center justify-center${yielded ? " invisible" : ""}`}
+		>
 			{/* The backdrop is its own layer under the card, not a handler on
 			    this container: what it dims is exactly what a press on it puts
 			    away. The press itself is read on `window` above. */}
@@ -484,14 +530,26 @@ function AnswerPanel({
 				// this holds prose and code, so the cap is a reading measure, with
 				// no breakpoint prefix (docs/answering-ui.md §3, "One shape at every
 				// width").
-				className="relative mx-4 flex max-h-[85%] w-full max-w-2xl flex-col overflow-hidden rounded-xl bg-th-bg-secondary shadow-xl outline-none"
+				//
+				// With the chrome folded the cap is the whole rectangle: at that
+				// height every row of the margin is a row of the question being
+				// typed in, and the folded chrome is what the user would look at
+				// past the edges anyway.
+				className={`relative mx-4 flex ${chromeCollapsed ? "max-h-full" : "max-h-[85%]"} w-full max-w-2xl flex-col overflow-hidden rounded-xl bg-th-bg-secondary shadow-xl outline-none`}
 			>
 				{/* Header, footer and the close button wear the same classes as
 				    `Sheet`'s, copied rather than shared: what makes them look alike
 				    is the tokens, and a `variant` on a shared modal would make every
 				    reader of `Sheet` — in both frontends — check which half they are
-				    in first. */}
-				<div className="flex shrink-0 items-center justify-between border-b border-th-border px-4 py-3">
+				    in first. Folded chrome tightens both to what their controls need,
+				    so the body keeps room for the field being typed in and a line
+				    either side of it: the footer to Send's 44px, the header to the
+				    close button's 44px hit area and no tighter — the card clips, and
+				    with nothing above it but the session header, any of that hit
+				    area left outside the card could not be pressed. */}
+				<div
+					className={`flex shrink-0 items-center justify-between border-b border-th-border px-4 ${chromeCollapsed ? "py-2.5" : "py-3"}`}
+				>
 					<h2
 						id={titleId}
 						className="min-w-0 truncate text-base font-bold text-th-text-primary"
@@ -518,13 +576,6 @@ function AnswerPanel({
 					ref={bodyRef}
 					className="min-h-0 flex-1 overflow-y-auto overscroll-y-contain p-4 space-y-4"
 				>
-					{sentCount > 0 && (
-						<p className="text-xs text-th-text-muted">
-							{sentCount === 1
-								? "1 answer sent."
-								: `${sentCount} answers sent.`}
-						</p>
-					)}
 					{error && (
 						<p role="alert" className="text-xs text-th-error">
 							{error}
@@ -546,8 +597,17 @@ function AnswerPanel({
 						/>
 					))}
 				</div>
-				<div className="flex shrink-0 gap-3 border-t border-th-border p-4">
+				<div
+					className={`flex shrink-0 gap-3 border-t border-th-border px-4 ${chromeCollapsed ? "py-1" : "py-4"}`}
+				>
 					<Footer
+						receipt={
+							!receiptShown
+								? null
+								: sentCount === 1
+									? "1 answer sent."
+									: `${sentCount} answers sent.`
+						}
 						ready={readyIds.length}
 						total={liveBlocks.length}
 						sending={sending}
@@ -561,12 +621,14 @@ function AnswerPanel({
 }
 
 function Footer({
+	receipt,
 	ready,
 	total,
 	sending,
 	onSend,
 	onClose,
 }: {
+	receipt: string | null;
 	ready: number;
 	total: number;
 	sending: boolean;
@@ -581,31 +643,38 @@ function Footer({
 	// the turn update says they are resolved, which may be before the response —
 	// so it stands down with the others, and says why, until the send is known
 	// to have landed.
-	if (total === 0) {
-		return (
-			<button
-				type="button"
-				onClick={onClose}
-				disabled={sending}
-				className="ml-auto min-h-[44px] rounded-lg bg-th-accent px-4 text-sm font-medium text-th-accent-text disabled:opacity-50"
-			>
-				{sending ? "Sending..." : "Close"}
-			</button>
-		);
-	}
+	//
+	// The receipt of a partial submit takes the ready count's place, because the
+	// footer is the one row always on screen: the body stays where the user was
+	// reading (§7, "Nothing scrolls"), and its top is usually out of view. Its
+	// live region is on screen before the text arrives — one mounted with its
+	// text already in is not announced — and holds only the receipt, so the
+	// count ticking with every pick is not read out.
 	return (
 		<>
 			<span className="self-center text-xs text-th-text-muted">
-				{ready} of {total} ready
+				<output>{receipt}</output>
+				{!receipt && total > 0 && `${ready} of ${total} ready`}
 			</span>
-			<button
-				type="button"
-				onClick={onSend}
-				disabled={ready === 0 || sending}
-				className="ml-auto min-h-[44px] rounded-lg bg-th-accent px-4 text-sm font-medium text-th-accent-text disabled:opacity-50"
-			>
-				{sending ? "Sending..." : "Send"}
-			</button>
+			{total === 0 ? (
+				<button
+					type="button"
+					onClick={onClose}
+					disabled={sending}
+					className="ml-auto min-h-[44px] rounded-lg bg-th-accent px-4 text-sm font-medium text-th-accent-text disabled:opacity-50"
+				>
+					{sending ? "Sending..." : "Close"}
+				</button>
+			) : (
+				<button
+					type="button"
+					onClick={onSend}
+					disabled={ready === 0 || sending}
+					className="ml-auto min-h-[44px] rounded-lg bg-th-accent px-4 text-sm font-medium text-th-accent-text disabled:opacity-50"
+				>
+					{sending ? "Sending..." : "Send"}
+				</button>
+			)}
 		</>
 	);
 }
@@ -671,24 +740,30 @@ function QuestionBlock({
 					</button>
 				</div>
 			)}
-			<QuestionForm
-				question={{
-					question: question.question,
-					header: question.header,
-					options,
-					multiSelect,
-				}}
-				askedAt={question.asked_at}
-				name={requestId}
-				selection={selectionOf(question, draft)}
-				disabled={locked}
-				onSelectOption={handleOption}
-				onSelectOther={handleOther}
-				onOtherTextChange={(text) => onChange(requestId, { text })}
-				otherInput={draft.text}
-				note={draft.answerNote}
-				onNoteChange={(answerNote) => onChange(requestId, { answerNote })}
-			/>
+			{/* A declined block dims as a whole, question and header included, and
+			    its picks are drawn as kept-not-sent. Won't answer and its note
+			    stay lit: they are what the user acts on now. */}
+			<div className={draft.declined && !stale ? "opacity-60" : ""}>
+				<QuestionForm
+					question={{
+						question: question.question,
+						header: question.header,
+						options,
+						multiSelect,
+					}}
+					askedAt={question.asked_at}
+					name={requestId}
+					selection={selectionOf(question, draft)}
+					disabled={locked}
+					withheld={draft.declined}
+					onSelectOption={handleOption}
+					onSelectOther={handleOther}
+					onOtherTextChange={(text) => onChange(requestId, { text })}
+					otherInput={draft.text}
+					note={draft.answerNote}
+					onNoteChange={(answerNote) => onChange(requestId, { answerNote })}
+				/>
+			</div>
 
 			{/* "Won't answer" rather than "Skip": skipping reads as *later*, and
 			    this resolves the question for good. The line under it says who
@@ -716,7 +791,7 @@ function QuestionBlock({
 						disabled={!!stale || disabled}
 						onChange={(e) => onChange(requestId, { note: e.target.value })}
 						placeholder="Add a note (optional)"
-						className={`w-full rounded bg-th-bg-primary px-2 py-1 text-sm text-th-text-primary placeholder:text-th-text-muted ${inputClass}`}
+						className={`w-full text-th-text-primary ${answerFieldClass}`}
 					/>
 				</div>
 			)}

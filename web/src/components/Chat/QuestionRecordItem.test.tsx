@@ -122,6 +122,16 @@ describe("QuestionRecordItem", () => {
 		expect(screen.getByRole("radio", { name: /SQLite/ })).toBeDisabled();
 	});
 
+	// Only what is read in the card: its frame stays as wide as the tool rows.
+	it("holds what an expanded card reads to the panel's measure", async () => {
+		const user = userEvent.setup();
+		render(<QuestionRecordItem record={record} status="cancelled" />);
+		await user.click(screen.getByRole("button", { name: /Database/ }));
+		expect(
+			screen.getByRole("group", { name: "Question" }).closest(".max-w-2xl"),
+		).not.toBeNull();
+	});
+
 	it("shows an answered card as the form that was filled in", async () => {
 		const user = userEvent.setup();
 		render(

@@ -17,6 +17,13 @@ export interface QuestionFormProps {
 	name: string;
 	selection: QuestionSelection;
 	disabled: boolean;
+	/**
+	 * The selection is on screen but not going out: the block is declined, which
+	 * keeps the picks without sending them. Draws them written-not-sent, the
+	 * parked note's look, rather than as a settled answer. Only read while
+	 * `disabled`.
+	 */
+	withheld?: boolean;
 	onSelectOption: (label: string) => void;
 	onSelectOther: () => void;
 	onOtherTextChange: (text: string) => void;
@@ -51,6 +58,20 @@ export interface QuestionFormProps {
 const markdownClass = "prose-inherit-color overflow-x-auto break-words";
 
 /**
+ * Text that is on screen but will not be sent: a parked note, Other text left
+ * behind an unpicked Other, and everything a declined block keeps. One look
+ * for "written, not counted" (docs/answering-ui.md §3).
+ */
+const unsentClass = "border-dashed text-th-text-muted";
+
+/**
+ * Every field the user types into while answering, the decline's note in
+ * AnswerPanel included. 16px under a thumb because iOS Safari zooms into any
+ * field it focuses below that (docs/answering-ui.md §3).
+ */
+export const answerFieldClass = `rounded bg-th-bg-primary px-2 py-1 pointer-coarse:py-2 text-sm pointer-coarse:text-base placeholder:text-th-text-muted ${inputClass}`;
+
+/**
  * The one and only renderer for a question, used by every surface that draws
  * one: the answer panel's blocks, the record card's read-only body, and the
  * CLI's own blocking prompt. Sharing it is what keeps an answered card looking
@@ -70,6 +91,7 @@ function QuestionForm({
 	name,
 	selection,
 	disabled,
+	withheld = false,
 	onSelectOption,
 	onSelectOther,
 	onOtherTextChange,
@@ -82,6 +104,14 @@ function QuestionForm({
 	const otherChecked = selection.otherText !== null;
 	const otherValue = otherInput ?? selection.otherText ?? "";
 	const selectedCount = selection.labels.length + (otherChecked ? 1 : 0);
+	// Unpicked rows recede only beside an answer, to put the eye on it. With
+	// nothing picked — a pending, withdrawn or declined record — or with picks
+	// that are not going out, there is no answer to point at, and receding would
+	// only leave every option hard to read.
+	const recede = !withheld && selectedCount > 0;
+	// A settled answer is drawn in success, with a tick; one that is kept but
+	// not sent is dashed and muted, like a parked note — never both.
+	const settled = disabled && !withheld;
 	const otherId = useId();
 
 	// The Other input is always on screen in an editable form, so going into it
@@ -99,12 +129,15 @@ function QuestionForm({
 		const reach = disabled ? "" : " pointer-coarse:min-h-11";
 		if (disabled) {
 			// Selected rows use success (a settled fact) rather than accent
-			// (actionable), and the rest recede so the eye lands on the answer.
-			return `flex cursor-default items-start gap-2 rounded border p-2${reach} ${
-				selected
+			// (actionable).
+			const look = !selected
+				? recede
+					? "border-th-border/60 opacity-45"
+					: "border-th-border"
+				: settled
 					? "border-th-success bg-th-success/10"
-					: "border-th-border/60 opacity-45"
-			}`;
+					: "border-dashed border-th-border";
+			return `flex cursor-default items-start gap-2 rounded border p-2${reach} ${look}`;
 		}
 		return `flex cursor-pointer items-start gap-2 rounded border p-2 transition-colors${reach} ${
 			selected
@@ -113,7 +146,18 @@ function QuestionForm({
 		}`;
 	};
 
-	const choiceInputClass = `mt-0.5 ${disabled ? "accent-th-success" : "accent-th-accent"}`;
+	const choiceInputClass = `mt-0.5 ${
+		!disabled
+			? "accent-th-accent"
+			: settled
+				? "accent-th-success"
+				: "accent-th-text-muted"
+	}`;
+	// A pick that is not going out mutes its word along with its border.
+	const pickedTextClass = (selected: boolean) =>
+		disabled && selected && withheld
+			? "text-th-text-muted"
+			: "text-th-text-primary";
 
 	return (
 		<div className="space-y-2">
@@ -163,7 +207,9 @@ function QuestionForm({
 									className={choiceInputClass}
 								/>
 								<div className="min-w-0 flex-1">
-									<div className="break-words text-sm text-th-text-primary">
+									<div
+										className={`break-words text-sm ${pickedTextClass(selected)}`}
+									>
 										{opt.label}
 										{opt.recommended && <RecommendedTag />}
 									</div>
@@ -177,7 +223,7 @@ function QuestionForm({
 										/>
 									)}
 								</div>
-								{disabled && selected && (
+								{settled && selected && (
 									<Check className="mt-0.5 size-3 shrink-0 text-th-success" />
 								)}
 							</label>
@@ -201,7 +247,7 @@ function QuestionForm({
 						<div className="min-w-0 flex-1">
 							<label
 								htmlFor={otherId}
-								className={`block text-sm text-th-text-primary ${disabled ? "" : "cursor-pointer"}`}
+								className={`block text-sm ${pickedTextClass(otherChecked)} ${disabled ? "" : "cursor-pointer"}`}
 							>
 								Other
 							</label>
@@ -209,7 +255,9 @@ function QuestionForm({
 								otherChecked && (
 									// A paragraph rather than the input: a locked input would
 									// still scroll after five lines, and a record shows all of it.
-									<p className="mt-1 whitespace-pre-wrap break-words rounded border border-th-border bg-th-bg-primary px-2 py-1 text-sm text-th-text-primary">
+									<p
+										className={`mt-1 whitespace-pre-wrap break-words rounded border border-th-border bg-th-bg-primary px-2 py-1 text-sm ${settled ? "text-th-text-primary" : unsentClass}`}
+									>
 										{selection.otherText}
 									</p>
 								)
@@ -231,15 +279,15 @@ function QuestionForm({
 									maxRows={5}
 									// Text left behind an unpicked Other stays visible but
 									// muted, the same as a parked note: it is not sent.
-									className={`mt-1 block w-full resize-none rounded bg-th-bg-primary px-2 py-1 pointer-coarse:py-2 text-sm placeholder:text-th-text-muted ${inputClass} ${
+									className={`mt-1 block w-full resize-none ${answerFieldClass} ${
 										!otherChecked && otherValue !== ""
-											? "border-dashed text-th-text-muted"
+											? unsentClass
 											: "text-th-text-primary"
 									}`}
 								/>
 							)}
 						</div>
-						{disabled && otherChecked && (
+						{settled && otherChecked && (
 							<Check className="mt-0.5 size-3 shrink-0 text-th-success" />
 						)}
 					</div>
@@ -251,7 +299,13 @@ function QuestionForm({
 				selection.otherText === null ? (
 					<p className="text-xs text-th-text-muted">No answer was given.</p>
 				) : (
-					<p className="whitespace-pre-wrap break-words rounded border border-th-success bg-th-success/10 px-2 py-1 text-sm text-th-text-primary">
+					<p
+						className={`whitespace-pre-wrap break-words rounded border px-2 py-1 text-sm ${
+							settled
+								? "border-th-success bg-th-success/10 text-th-text-primary"
+								: `border-th-border ${unsentClass}`
+						}`}
+					>
 						{selection.otherText}
 					</p>
 				)
@@ -262,7 +316,7 @@ function QuestionForm({
 					onChange={(e) => onOtherTextChange(e.target.value)}
 					placeholder="Your answer"
 					rows={3}
-					className={`w-full resize-y rounded bg-th-bg-primary px-2 py-1 text-sm text-th-text-primary placeholder:text-th-text-muted ${inputClass}`}
+					className={`w-full resize-y text-th-text-primary ${answerFieldClass}`}
 				/>
 			)}
 			{hasOptions && (
@@ -272,6 +326,7 @@ function QuestionForm({
 					applies={noteApplies(question, selection)}
 					nothingPicked={selection.labels.length === 0 && !otherChecked}
 					disabled={disabled}
+					withheld={withheld}
 					onChange={onNoteChange}
 				/>
 			)}
@@ -295,6 +350,7 @@ function NoteField({
 	applies,
 	nothingPicked,
 	disabled,
+	withheld,
 	onChange,
 }: {
 	header: string;
@@ -302,6 +358,7 @@ function NoteField({
 	applies: boolean;
 	nothingPicked: boolean;
 	disabled: boolean;
+	withheld: boolean;
 	onChange?: (text: string) => void;
 }) {
 	// Screen state only: after a reload an empty note is a button again and a
@@ -331,7 +388,11 @@ function NoteField({
 		return (
 			<div className="space-y-1">
 				<NoteLabel />
-				<p className="whitespace-pre-wrap break-words rounded border border-th-border bg-th-bg-primary px-2 py-1 text-sm text-th-text-primary">
+				<p
+					className={`whitespace-pre-wrap break-words rounded border border-th-border bg-th-bg-primary px-2 py-1 text-sm ${
+						withheld ? unsentClass : "text-th-text-primary"
+					}`}
+				>
 					{note}
 				</p>
 			</div>
@@ -340,11 +401,14 @@ function NoteField({
 
 	if (!written && !focused && !(opened && applies)) {
 		if (!applies) return null;
+		// The box itself is the hit area — 36px under a mouse, 44px under a thumb
+		// — rather than an overlay around a 16px line: the rows above and below
+		// are 8px away, and an overlay of either height would reach into them.
 		return (
 			<button
 				type="button"
 				onClick={() => setOpened(true)}
-				className="touch-target flex items-center gap-1 rounded text-xs text-th-accent transition-colors hover:text-th-text-primary focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent"
+				className="flex min-h-9 items-center gap-1 rounded pointer-coarse:min-h-11 text-xs text-th-accent transition-colors hover:text-th-text-primary focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent"
 			>
 				<Plus className="size-3.5" />
 				Add a note
@@ -368,8 +432,8 @@ function NoteField({
 				placeholder="Anything the agent should know about this choice"
 				minRows={2}
 				maxRows={5}
-				className={`block w-full resize-none rounded bg-th-bg-primary px-2 py-1 pointer-coarse:py-2 text-sm placeholder:text-th-text-muted ${inputClass} ${
-					parked ? "border-dashed text-th-text-muted" : "text-th-text-primary"
+				className={`block w-full resize-none ${answerFieldClass} ${
+					parked ? unsentClass : "text-th-text-primary"
 				}`}
 			/>
 			{parked && (

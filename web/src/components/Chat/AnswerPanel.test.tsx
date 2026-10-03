@@ -1,5 +1,12 @@
 import { Sheet } from "@pockode/shared";
-import { act, fireEvent, render, screen, within } from "@testing-library/react";
+import {
+	act,
+	fireEvent,
+	render,
+	screen,
+	waitFor,
+	within,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ComponentProps } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -83,6 +90,37 @@ describe("AnswerPanel", () => {
 		// Not `aria-modal`: those three are still reachable, and saying otherwise
 		// would take them away from a screen reader alone.
 		expect(panel).not.toHaveAttribute("aria-modal");
+	});
+
+	// With the host's chrome folded on a short viewport the card is all that is
+	// left to answer in, so it takes the room: the whole rectangle, and a header
+	// and footer cut to what their controls need. Send keeps its 44px — that is
+	// the one row the user must reach with the keyboard up.
+	it("takes the whole rectangle and tightens its edges when the chrome is folded", () => {
+		const props = {
+			sessionId: "s1",
+			unanswered: [database],
+			onSend: vi.fn(),
+			onClose: vi.fn(),
+			takeFocus: false,
+		};
+		const { rerender } = render(<AnswerPanel {...props} />);
+		const panel = screen.getByRole("dialog", { name: /question/ });
+		const header = screen.getByRole("heading", {
+			name: "1 question",
+		}).parentElement;
+		const send = screen.getByRole("button", { name: "Send" });
+		const footer = send.parentElement;
+		expect(header).toHaveClass("py-3");
+		expect(footer).toHaveClass("py-4");
+
+		rerender(<AnswerPanel {...props} chromeCollapsed />);
+
+		expect(panel).toHaveClass("max-h-full");
+		expect(panel).not.toHaveClass("max-h-[85%]");
+		expect(header).toHaveClass("py-2.5");
+		expect(footer).toHaveClass("py-1");
+		expect(send).toHaveClass("min-h-[44px]");
 	});
 
 	// One `question_post` call stamps every question with the same `asked_at`,
@@ -386,6 +424,27 @@ describe("AnswerPanel", () => {
 		expect(await screen.findByText("1 answer sent.")).toBeInTheDocument();
 	});
 
+	// The body stays where the user was reading, so the receipt goes where it is
+	// always seen — the footer, in the ready count's place — and into a status
+	// region that is there before it, which is what gets it read out. The next
+	// change is about what is left, so the count comes back.
+	it("says what a partial submit sent in the footer, until the next change", async () => {
+		const user = userEvent.setup();
+		renderPanel([database, region]);
+		const status = screen.getByRole("status");
+		expect(status).toBeEmptyDOMElement();
+
+		await user.click(screen.getByRole("radio", { name: /SQLite/ }));
+		await user.click(screen.getByRole("button", { name: "Send" }));
+
+		await waitFor(() => expect(status).toHaveTextContent("1 answer sent."));
+		expect(screen.queryByText(/ready$/)).not.toBeInTheDocument();
+
+		await user.type(screen.getByRole("textbox", { name: "Region" }), "eu");
+		expect(status).toBeEmptyDOMElement();
+		expect(screen.getByText(/ready$/)).toBeInTheDocument();
+	});
+
 	it("clears a draft only once its own submit lands", async () => {
 		const user = userEvent.setup();
 		renderPanel([database]);
@@ -491,6 +550,36 @@ describe("AnswerPanel", () => {
 		expect(onSend.mock.calls[0][0]).toMatchObject([
 			{ request_id: "r1", answers: ["SQLite"], note: "pin it" },
 		]);
+	});
+
+	// iOS Safari zooms into any field it focuses below 16px, cropping the card.
+	// Read off the classes, as jsdom evaluates no media query; every kind of
+	// field the panel offers is up at once so a new one cannot slip past.
+	it("types at 16px, padded alike, in every field under a thumb", async () => {
+		const user = userEvent.setup();
+		renderPanel([
+			database,
+			region,
+			{ ...region, request_id: "r3", header: "Owner" },
+		]);
+
+		await user.click(screen.getByRole("radio", { name: /SQLite/ }));
+		await user.click(screen.getByRole("button", { name: "Add a note" }));
+		const [, , ownerDecline] = screen.getAllByRole("checkbox", {
+			name: /Won't answer/,
+		});
+		await user.click(ownerDecline);
+
+		const fields = screen.getAllByRole("textbox");
+		// Other, the note, Region's free text, Owner's decline note.
+		expect(fields).toHaveLength(4);
+		for (const field of fields) {
+			expect(field).toHaveClass(
+				"text-sm",
+				"pointer-coarse:text-base",
+				"pointer-coarse:py-2",
+			);
+		}
 	});
 
 	describe("the note beside an answer", () => {
@@ -629,6 +718,22 @@ describe("AnswerPanel", () => {
 		expect(useQuestionDraftStore.getState().drafts.s1?.r1.labels).toEqual([
 			"SQLite",
 		]);
+	});
+
+	// What is dimmed is what the decline took out of play: the whole question,
+	// header included. The lever that takes it back stays lit.
+	it("dims a declined question as a whole, and not its Won't answer", async () => {
+		const user = userEvent.setup();
+		renderPanel([database]);
+
+		await user.click(screen.getByRole("checkbox", { name: /Won't answer/ }));
+
+		expect(screen.getByText("Database").closest(".opacity-60")).not.toBeNull();
+		expect(
+			screen
+				.getByRole("checkbox", { name: /Won't answer/ })
+				.closest(".opacity-60"),
+		).toBeNull();
 	});
 
 	// A panel that vanished under a finger would make its own disappearance the

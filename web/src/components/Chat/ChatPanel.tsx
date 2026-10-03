@@ -1,4 +1,8 @@
-import { CoveredSurface, useIsPageCovered } from "@pockode/shared";
+import {
+	CoveredSurface,
+	useHasCoarsePointer,
+	useIsPageCovered,
+} from "@pockode/shared";
 import { AlertTriangle, Square, X } from "lucide-react";
 import {
 	useCallback,
@@ -547,10 +551,18 @@ function ChatPanel({
 	// the user has already dismissed the panel over and one that has just
 	// arrived: only the second opens it again.
 	const seenQuestionIdsRef = useRef<Set<string>>(new Set());
+	// Whether the caret is in the composer, which on a short touch screen is
+	// what makes the panel step aside (see `answerPanelYielded` below).
+	const [composerFocused, setComposerFocused] = useState(false);
 
+	// Clearing `composerFocused` is what ends a yield, and it is done here rather
+	// than left to the composer's blur: the card is `inert` while it has yielded,
+	// focus cannot be moved into it until that is gone, and whether the blur or
+	// the press arrives first is the browser's to decide.
 	const openAnswerPanel = useCallback((requestId?: string) => {
 		setAnswerPanelOpen(true);
 		setAnswerAnchor({ requestId });
+		setComposerFocused(false);
 	}, []);
 	const handleOpenAnswerPanel = useCallback(
 		() => openAnswerPanel(),
@@ -695,6 +707,38 @@ function ChatPanel({
 	// the whole conversation out of reach with nothing on top of it.
 	const answerPanelShown = !isReadOnly && answerPanelOpen;
 
+	// The converse of the fold below (docs/answering-ui.md §3, "Room on a short
+	// viewport"): on a short touch screen the card and the chrome under it never
+	// share the screen, and the caret says which one has it. In the card, the
+	// chrome folds; in the composer, the card steps aside — off the screen but
+	// still open, so the strip offers its `Answer` row exactly as after a close,
+	// and the card comes back as it was the moment the caret leaves.
+	//
+	// The primary pointer is part of it because the composer focuses itself on
+	// mount under a fine one: in a short desktop window the chrome coming back
+	// would hand the composer the caret and the card would vanish on the press
+	// that left it. A fine pointer has no soft keyboard to make room for anyway.
+	const isShortViewport = useShortViewport();
+	const isPrimaryPointerCoarse = useHasCoarsePointer();
+	const answerPanelYielded =
+		answerPanelShown &&
+		composerFocused &&
+		isShortViewport &&
+		isPrimaryPointerCoarse;
+	// The one flag for "the card is on the screen", read by the strip's row and
+	// by the transcript's `inert`, so the row and the card swap in one frame.
+	const answerPanelOnScreen = answerPanelShown && !answerPanelYielded;
+	// A yield is the card going off the screen, and the anchor does not survive
+	// it any more than it survives an overlay: coming back is the app's doing,
+	// so the card must neither scroll nor take the caret. Clearing it also
+	// re-arms the panel's focus edge, which the rescue below and a press on
+	// `Answer` both need.
+	const [anchorYielded, setAnchorYielded] = useState(answerPanelYielded);
+	if (anchorYielded !== answerPanelYielded) {
+		setAnchorYielded(answerPanelYielded);
+		if (answerPanelYielded) setAnswerAnchor(null);
+	}
+
 	// Where the panel is actually drawn. It is positioned over the transcript,
 	// so it exists only where the transcript does: not over an overlay, and not
 	// over the skeleton that stands in until the history is in. Both used to
@@ -707,8 +751,9 @@ function ChatPanel({
 	// Everything drawn over the transcript, in one expression, because the
 	// transcript's `inert` has to name all of them: a conversation left reachable
 	// under an overlay would put every card and menu button in the Tab order
-	// ahead of the thing on top of it.
-	const transcriptInert = answerPanelDrawn || overlayOpen;
+	// ahead of the thing on top of it. A card that has yielded covers nothing.
+	const transcriptInert =
+		(answerPanelDrawn && answerPanelOnScreen) || overlayOpen;
 
 	// Covered, which is a shorter list than the one above, and the difference is
 	// the whole of it: the answer panel is a layer of this conversation — it
@@ -741,8 +786,10 @@ function ChatPanel({
 	//
 	// The decision lives here rather than in either folded component because
 	// this is the only place that knows all three, and the two of them know
-	// nothing of each other.
-	const isShortViewport = useShortViewport();
+	// nothing of each other. The card is handed the same flag rather than asking
+	// the screen itself: the room it takes — its whole rectangle, a tighter header
+	// and footer — exists only while the chrome is folded, and one flag is what
+	// keeps the two from ever disagreeing.
 	const [answerPanelFocused, setAnswerPanelFocused] = useState(false);
 	// A closed panel has no focus to report, and its last word on the way out is
 	// not always delivered — a card unmounted under the caret fires no blur. So
@@ -753,9 +800,19 @@ function ChatPanel({
 	}, [answerPanelShown]);
 	const chromeCollapsed =
 		answerPanelShown && answerPanelFocused && isShortViewport;
+	// The same reasoning as the card's flag above, for the composer: it is
+	// unmounted by the fold and by an overlay, and a bar removed under the caret
+	// fires no blur — left standing, the flag would make the card yield to a
+	// composer that is not there.
+	const composerMounted =
+		!view && !isInputBarHidden(overlay) && !chromeCollapsed;
+	useEffect(() => {
+		if (!composerMounted) setComposerFocused(false);
+	}, [composerMounted]);
 
 	// Catching the focus the panel's arrival drops. The transcript goes `inert`
-	// in the same commit the panel mounts in, and a control focused inside it —
+	// in the same commit the panel comes on screen in — mounting, or returning
+	// from a yield — and a control focused inside it —
 	// a message's menu button the user had just tabbed to — is blurred onto
 	// `<body>`, from where Tab restarts at the top of the page rather than
 	// entering the panel that is the reason it moved.
@@ -790,13 +847,13 @@ function ChatPanel({
 	// A layout effect and the re-render it causes, so the rescue lands in the
 	// same paint the panel appears in.
 	useLayoutEffect(() => {
-		if (!answerPanelShown) return;
+		if (!answerPanelOnScreen) return;
 		const last = lastFocusedRef.current;
 		if (!last || !transcriptRef.current?.contains(last)) return;
 		// Never over an anchor already there: that one names a question, and this
 		// one does not.
 		setAnswerAnchor((prev) => prev ?? {});
-	}, [answerPanelShown]);
+	}, [answerPanelOnScreen]);
 
 	const handleSendAnswers = useCallback(
 		async (answering: QuestionAnswerRecord[]) => {
@@ -1101,6 +1158,8 @@ function ChatPanel({
 					onClose={handleCloseAnswerPanel}
 					onFocusChange={setAnswerPanelFocused}
 					onSendingChange={setAnswerPanelSending}
+					chromeCollapsed={chromeCollapsed}
+					yielded={answerPanelYielded}
 				/>
 			)}
 		</div>
@@ -1123,12 +1182,13 @@ function ChatPanel({
 						turn={turn}
 						onJumpToRequest={handleJumpToRequest}
 						onAnswer={handleOpenAnswerPanel}
-						// Driven by the same flag that draws the panel, so the row goes
+						// Driven by the same flags that draw the panel, so the row goes
 						// and the panel appears in one frame. Told rather than derived
 						// inside the strip: a frame where both are on screen moves the
 						// composer down and straight back up, and one open is then two
-						// visible jumps.
-						answerPanelOpen={answerPanelOpen}
+						// visible jumps. A yielded card is off the screen, so the row
+						// is the way back to it, as after a close.
+						answerPanelOpen={answerPanelOnScreen}
 						sendPending={isSendPending}
 						jumpDisabled={answerPanelSending}
 					/>
@@ -1272,17 +1332,31 @@ function ChatPanel({
 					(view ? (
 						<ReadOnlyBar view={view} onOpenThere={onOpenSessionThere} />
 					) : (
-						<InputBar
-							sessionId={sessionId}
-							onSend={handleSend}
-							canSend={
-								status === "connected" && !isChatPending && !promptOwnsInput
-							}
-							disabled={!isSessionResolved}
-							turnOpen={turnOpen}
-							onStop={handleInterrupt}
-							focusRequest={inputFocusRequest}
-						/>
+						// Read from outside the bar, the way the card reports its own
+						// focus: the bar is a registry component, and what it renders
+						// inside is its own business. `contents` so the wrapper takes no
+						// part in the column's layout.
+						// biome-ignore lint/a11y/noStaticElementInteractions: listens to focus moving through the bar; nothing here is a control
+						<div
+							className="contents"
+							onFocus={() => setComposerFocused(true)}
+							onBlur={(e) => {
+								if (e.currentTarget.contains(e.relatedTarget)) return;
+								setComposerFocused(false);
+							}}
+						>
+							<InputBar
+								sessionId={sessionId}
+								onSend={handleSend}
+								canSend={
+									status === "connected" && !isChatPending && !promptOwnsInput
+								}
+								disabled={!isSessionResolved}
+								turnOpen={turnOpen}
+								onStop={handleInterrupt}
+								focusRequest={inputFocusRequest}
+							/>
+						</div>
 					))}
 			</MainContainer>
 		</SessionViewProvider>
