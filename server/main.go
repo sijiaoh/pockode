@@ -567,33 +567,8 @@ func initStores(dataDir string) (*stores, error) {
 }
 
 func runMCP() {
-	mcpFlags := flag.NewFlagSet("mcp", flag.ExitOnError)
-	dataDirFlag := mcpFlags.String("data-dir", "", "data directory (required)")
-	// Who this proxy speaks for. Written into the spawn by the agent that starts
-	// the CLI, so tools can act on the calling session without the model naming
-	// it. Optional: a proxy started by hand has no session.
-	sessionIDFlag := mcpFlags.String("session-id", "", "session the calling CLI runs (optional)")
-	worktreeFlag := mcpFlags.String("worktree", "", "worktree that session lives in (optional; empty is the main worktree)")
-	mcpFlags.Parse(os.Args[2:])
-
-	dataDir := *dataDirFlag
-	if dataDir == "" {
-		fmt.Fprintln(os.Stderr, "Error: --data-dir is required")
-		os.Exit(1)
-	}
-
-	// Client mode: discover the running server from server.json and forward tool
-	// calls over its local API. The MCP process owns no stores and no watcher.
-	caller := mcp.Caller{SessionID: *sessionIDFlag, Worktree: *worktreeFlag}
-	client, err := mcp.NewClientFromServerInfo(dataDir, caller)
-	if err != nil {
+	if err := mcp.RunProxy(os.Args[2:], version); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		os.Exit(1)
-	}
-
-	server := mcp.NewServer(client, version)
-	if err := server.Run(context.Background()); err != nil {
-		fmt.Fprintf(os.Stderr, "Error: MCP server failed: %v\n", err)
 		os.Exit(1)
 	}
 }
