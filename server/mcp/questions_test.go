@@ -448,12 +448,13 @@ func TestQuestionTools_AreAdvertised(t *testing.T) {
 		}
 		// The description is read once the agent goes for the tool, so it holds
 		// the surprising facts about the mechanism and the rules for wording a
-		// question a model breaks unless told: asking in one call, never adding
-		// the "Other" the panel already offers. What must be known before the
-		// tool is loaded is agent.AskingGuidance's (see below).
+		// question a model breaks unless told: never adding the "Other" the
+		// panel already offers. What must be known before the tool is loaded,
+		// asking a step's decisions in one call included, is
+		// agent.AskingGuidance's (see below).
 		if name == "question_post" {
 			for _, want := range []string{"returns immediately", "arrives later as an ordinary message", "question_cancel",
-				"in one call", "\"Other\"", "recommended"} {
+				"\"Other\"", "recommended"} {
 				if !strings.Contains(found.Description, want) {
 					t.Errorf("question_post description does not say %q", want)
 				}
