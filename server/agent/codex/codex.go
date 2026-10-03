@@ -46,8 +46,9 @@ const appServerSubcommand = "app-server"
 // failure.
 //
 // Neither budget covers model latency: `--help` just lists subcommands, and the
-// startup budget covers the `initialize` handshake plus one `thread/start`,
-// `thread/resume` or `thread/fork`, none of which sends a prompt anywhere.
+// startup budget covers the `initialize` handshake plus one `thread/start`
+// (with the `config/read` before it), `thread/resume` or `thread/fork`, none of
+// which sends a prompt anywhere.
 //
 // That is not the same as covering only local work, and measuring says so. On
 // codex-cli 0.153.0, with no prompt in sight, `initialize` took 2.3-4.9s and
@@ -478,6 +479,10 @@ func (s *appSession) openRecordedThread(ctx context.Context, state codexResumeSt
 func (s *appSession) startThread(ctx context.Context) error {
 	params := s.buildThreadParams()
 	params["threadSource"] = threadSource
+	// The guidance is about question_post, which only the MCP server offers.
+	if !s.opts.DisableMCP {
+		params["developerInstructions"] = s.developerInstructions(ctx)
+	}
 
 	result, err := s.sendRPC(ctx, "thread/start", params)
 	if err != nil {
@@ -564,7 +569,8 @@ func (s *appSession) adoptThread(result json.RawMessage) error {
 	return nil
 }
 
-// buildThreadParams builds the settings shared by thread/start and thread/resume.
+// buildThreadParams builds the settings shared by thread/start, thread/resume and
+// thread/fork.
 func (s *appSession) buildThreadParams() map[string]interface{} {
 	overrides := map[string]interface{}{}
 	if !s.opts.DisableMCP {

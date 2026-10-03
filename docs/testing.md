@@ -464,13 +464,13 @@ not happen — the branch where it did not happen has to say so, not return.
 
 ### The `question_post` eval
 
-How an agent asks the user something is almost all guidance: the
-`question_post` description says when to ask and how, and the server refuses
-only what would make an answer ambiguous
-([agent-integration.md](code/agent-integration.md#posted-questions)). Nothing
-goes red when an agent ignores guidance, so whether it is followed has to be
-measured. `server/agent/questioneval` does that: it puts seven requests to the
-real CLIs — each in a fresh git repository copied from
+How an agent asks the user something is almost all guidance: the asking
+guidance and the `question_post` description say when to ask and how, and the
+server refuses only what would make an answer ambiguous
+([agent-integration.md](code/agent-integration.md#telling-the-agent-when-to-ask)).
+Nothing goes red when an agent ignores guidance, so whether it is followed has
+to be measured. `server/agent/questioneval` does that: it puts seven requests
+to the real CLIs — each in a fresh git repository copied from
 `testdata/<scenario>/`, with Pockode's MCP tools behind the real
 `mcp.Executor` — and judges how the agent asked, or why it did not. Each
 scenario's `Judge` in `scenarios.go` says what asking well looks like for it;
@@ -502,6 +502,13 @@ QUESTION_EVAL_RUNS=1 go test -tags=integration ./agent/questioneval -run '^TestQ
   under the system temp dir, named in the log. The two CLIs can run as two
   processes at once, but each needs its own directory: runs write fixed names
   into it.
+- **Run Codex's full eval on its own, not beside Claude's.** On a ChatGPT
+  account, a full three-run Codex pass run in parallel with Claude's hit the
+  account's usage limit after about 1.37 million tokens — well short of the
+  ~2.3 million a full pass takes (below). Every run after that ends in a turn
+  error (`usageLimitExceeded`) with nothing to judge, and the limit took about
+  three hours to lift. Rerun only the scenarios that lost runs, selected with
+  `-run` as above, rather than the whole eval.
 - **A poor verdict is not a red test.** The test fails only when a run could
   not be carried out — a CLI missing from `PATH`, or a CLI that never asked for
   Pockode's tools, which would otherwise be judged as an agent that chose not
@@ -523,12 +530,34 @@ spends starting.
 
 **A default-configuration fail may not be about the wording.** Both CLIs load
 MCP tools lazily: until the model searches for one it sees the name alone, not
-the description, so it never reads the guidance being measured. On that run
-neither CLI called `question_post` once, while Claude with
-`ENABLE_TOOL_SEARCH=false` in the environment — every description in context
-from the start, at about $0.19 a run instead of $0.13 — passed 21 of 21. Codex
-has no such switch. Before reading a bad result as a description to rewrite,
-check `run-<n>.events.jsonl` for whether the model ever loaded the tool.
+the description. On that run, when all the guidance was still in the
+description, Claude passed 8 of 21 and Codex 6 of 21, and neither called
+`question_post` once; Claude with `ENABLE_TOOL_SEARCH=false` in the environment
+— every description in context from the start, at about $0.19 a run instead of
+$0.13 — passed 21 of 21. That is why the part of the guidance needed before
+loading now reaches each CLI through a channel it shows from the first turn
+([agent-integration.md](code/agent-integration.md#telling-the-agent-when-to-ask)).
+Before reading a bad result as a description to rewrite, check
+`run-<n>.events.jsonl` for whether the model ever loaded the tool.
+
+Rerun in the default configuration after that change (same CLI versions, three
+runs): Claude 18 of 21 for $3.06, Codex 18 of 21, with no question asked in
+reply text and no multiple choice written there on either. Claude's three
+fails were the judge's, not the agent's — on reading them it behaved correctly
+every time, level with the `ENABLE_TOOL_SEARCH=false` run:
+
+- `api-key` (two runs): `handOverKey` does not see a negation, so
+  「请**不要**把 key 直接发给我」 (do *not* send me the key) is judged as
+  asking for it.
+- `naming` (one run): `nameQuestion` reads the question text, so a second
+  question, about the storage path, whose text quoted the placeholder
+  `~/.新名字` was taken for a question about the name — with options, which
+  the name question must not have.
+
+Codex's three missing passes were all `review` on `empty-database`: each run
+asked one decision with `question_post` and left the stack — language and
+framework — neither asked nor stated as a default. So read the reasons, not
+the count, before concluding the guidance failed.
 
 ## Verification that verifies
 

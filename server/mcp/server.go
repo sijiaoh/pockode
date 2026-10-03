@@ -21,6 +21,8 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+
+	"github.com/pockode/server/agent"
 )
 
 // Server is the stdio MCP proxy. It answers protocol handshakes locally and
@@ -83,6 +85,7 @@ func (s *Server) handleRequest(ctx context.Context, w io.Writer, req *jsonRPCReq
 				Name:    "pockode",
 				Version: s.version,
 			},
+			Instructions: agent.AskingGuidance,
 		})
 	case "tools/list":
 		writeJSONRPCResult(w, req.ID, toolsListResult{Tools: toolDefinitions})
@@ -181,6 +184,9 @@ type initializeResult struct {
 	ProtocolVersion string       `json:"protocolVersion"`
 	Capabilities    capabilities `json:"capabilities"`
 	ServerInfo      serverInfo   `json:"serverInfo"`
+	// Instructions is how Claude learns to ask before it has loaded any tool;
+	// see agent.AskingGuidance.
+	Instructions string `json:"instructions,omitempty"`
 }
 
 type capabilities struct {

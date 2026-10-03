@@ -999,26 +999,63 @@ options keep the order the agent gave (the description asks it to put the
 recommended one first), and nothing is selected for the user
 ([answering-ui.md](../answering-ui.md#what-it-draws)).
 
-**When and how to ask is written in one place: the `question_post` description.**
-It is the one text every session can read — a plain chat gets no system prompt,
-and Claude and Codex both read tool descriptions — so it carries when to ask (only a
-decision that is the user's and changes what happens next; look things up
-first; take conventional defaults; never ask for permission or "shall I
-continue?"), how (everything in one call, early; each question readable alone
-in a panel over the chat, often on a phone and much later; options for a known
-set, free text otherwise; no "Other" of the agent's own; the option it would
-pick marked `recommended` and first), and what never to do
-(multiple choice in reply text, asking for secrets). The lifecycle prompt points
-at it rather than repeating it ([work-system.md](work-system.md#prompt-format)).
-Its property descriptions state purpose and never a number: a number in a
-description reads to a model as a limit, which is exactly what the table above
-declines to set.
+### Telling the agent when to ask
 
-Guidance has no test that goes red, so whether agents follow it is measured
-instead, by a paid eval against the real CLIs
-([testing.md](../testing.md#the-question_post-eval)). Its first run found
-why "can read" is not "reads": both CLIs load MCP tools lazily, and until a
-model loads `question_post` it has the name, not this description.
+**When and how to ask is written in two texts, split by when the agent needs
+them.** Both CLIs load MCP tools lazily: until a model loads `question_post` it
+has the name and not the description, so an agent that never thought of asking
+never reads why it should. The guidance eval's first run measured exactly that
+— neither CLI called `question_post` once in its default configuration — and
+the run after this split is what says it worked
+([testing.md](../testing.md#the-question_post-eval)).
+
+- **`agent.AskingGuidance`** is what has to be known before any tool is loaded:
+  ask a user's decision with `question_post` (loading it through tool search
+  first), and that it is the only way to ask; when to ask (only a decision that
+  is the user's and changes what happens next; look things up first; take
+  conventional defaults; never ask for permission or "shall I continue?"); and
+  what never to do (a question, least of all multiple choice, in the reply
+  text; acting on the answer it expects; asking for secrets).
+- **The `question_post` description** is read once the agent goes for the tool,
+  and carries the mechanism and how to word a question: everything in one call,
+  early; each question readable alone in a panel over the chat, often on a
+  phone and much later; options for a known set, free text otherwise; no
+  "Other" of the agent's own; the option it would pick marked `recommended` and
+  first. Its property descriptions state purpose and never a number: a number
+  in a description reads to a model as a limit, which is exactly what the table
+  in [Asking several at once](#asking-several-at-once) declines to set.
+
+The guidance has one source and reaches each CLI through the channel that CLI
+shows before loading, both chosen from what was measured on Claude 2.1.286 and
+Codex 0.159.3:
+
+| CLI | Channel | Why this one |
+|-----|---------|--------------|
+| Claude | `instructions` in the MCP server's `initialize` reply (`mcp.Server`) | Claude puts server instructions in the system prompt whether or not the server's tools are deferred. |
+| Codex | `developerInstructions` on `thread/start` | Codex shows server instructions only once a tool of the server is loaded, as the description of its namespace. The parameter *replaces* the user's own `developer_instructions`, so the user's value is read with `config/read` first and sent ahead of the guidance; a failed read warns the user and carries on. It is fixed when the thread starts: `thread/resume` and `thread/fork` ignore the parameter and keep what the thread started with, so it is sent on `thread/start` alone, and a thread started before the guidance existed, or before a change to it, goes on without it. |
+
+Both go only where the MCP server does: a session started without it has no
+`question_post` to point at. Codex receives the server instructions as well,
+on loading a tool; repeating them there costs a few hundred tokens and is not
+worth a second text to keep in step.
+
+Ruled out: turning lazy loading off for everything (`ENABLE_TOOL_SEARCH=false`
+on Claude — every tool description in every turn; Codex has no switch, its
+`tool_search_always_defer_mcp_tools` feature reads "removed"); and keeping the
+`question_post` description itself always loaded on Claude, which it supports
+through `_meta["anthropic/alwaysLoad"]` on the tool (or `alwaysLoad` on the
+server's config entry, for all of them). That would put the whole description
+in every turn, on Claude alone, where the instructions put the part that is
+needed before the tool is loaded on both.
+
+Claude cuts a tool description and a server's instructions at 2048 characters
+(`CLAUDE_CODE_MAX_MCP_DESCRIPTION_LENGTH`), silently and from the end;
+`question_post`'s description had grown past it, taking the secrets rule with
+it, until that rule moved into the guidance. `mcp`'s tests hold every
+description and the guidance under it.
+
+The lifecycle prompt points at the guidance rather than repeating it
+([work-system.md](work-system.md#prompt-format)).
 
 ### Retired: the paths this replaced
 

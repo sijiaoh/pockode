@@ -446,16 +446,14 @@ func TestQuestionTools_AreAdvertised(t *testing.T) {
 		if found == nil {
 			t.Fatalf("%s is not advertised", name)
 		}
-		// Ordinary sessions get no system prompt, so the description is the only
-		// place the surprising facts can be said: the mechanism, that the CLI's
-		// own ask tool goes nowhere (Codex's is refused at the protocol rather
-		// than hidden), and the rules a model breaks unless told — asking in one
-		// call, never adding the "Other" the panel already offers, never asking
-		// for a secret.
+		// The description is read once the agent goes for the tool, so it holds
+		// the surprising facts about the mechanism and the rules for wording a
+		// question a model breaks unless told: asking in one call, never adding
+		// the "Other" the panel already offers. What must be known before the
+		// tool is loaded is agent.AskingGuidance's (see below).
 		if name == "question_post" {
 			for _, want := range []string{"returns immediately", "arrives later as an ordinary message", "question_cancel",
-				"does not reach the user here",
-				"in one call", "\"Other\"", "passwords", "recommended"} {
+				"in one call", "\"Other\"", "recommended"} {
 				if !strings.Contains(found.Description, want) {
 					t.Errorf("question_post description does not say %q", want)
 				}
