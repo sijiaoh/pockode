@@ -1000,8 +1000,8 @@ recommended one first), and nothing is selected for the user
 ([answering-ui.md](../answering-ui.md#what-it-draws)).
 
 **When and how to ask is written in one place: the `question_post` description.**
-It is the one text every session reads — a plain chat gets no system prompt, and
-Claude and Codex both read tool descriptions — so it carries when to ask (only a
+It is the one text every session can read — a plain chat gets no system prompt,
+and Claude and Codex both read tool descriptions — so it carries when to ask (only a
 decision that is the user's and changes what happens next; look things up
 first; take conventional defaults; never ask for permission or "shall I
 continue?"), how (everything in one call, early; each question readable alone
@@ -1013,6 +1013,12 @@ at it rather than repeating it ([work-system.md](work-system.md#prompt-format)).
 Its property descriptions state purpose and never a number: a number in a
 description reads to a model as a limit, which is exactly what the table above
 declines to set.
+
+Guidance has no test that goes red, so whether agents follow it is measured
+instead, by a paid eval against the real CLIs
+([testing.md](../testing.md#the-question_post-eval)). Its first run found
+why "can read" is not "reads": both CLIs load MCP tools lazily, and until a
+model loads `question_post` it has the name, not this description.
 
 ### Retired: the paths this replaced
 

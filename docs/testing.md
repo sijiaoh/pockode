@@ -383,7 +383,9 @@ is held back differently: `//go:build integration` keeps it out of every
 untagged build, so `go test ./...` does not compile it, let alone run it. The
 commands that do, and the requirement that each CLI be logged in, are in
 [server/AGENTS.md](../server/AGENTS.md). What that file does not say is what
-running them costs.
+running them costs. The same tag also holds back the
+[`question_post` eval](#the-question_post-eval), which measures rather than
+asserts and has a gate of its own on top.
 
 **Every turn in it is a real API call.** `TestIntegration_ReportsCost` prints
 one of the prices — `turn cost: 0.0725 USD`, for a turn whose whole prompt is
@@ -459,6 +461,74 @@ the two `Interrupt` rows in the table above. Mutation-verified: with
 
 That is the shape worth copying whenever a test depends on something that may
 not happen — the branch where it did not happen has to say so, not return.
+
+### The `question_post` eval
+
+How an agent asks the user something is almost all guidance: the
+`question_post` description says when to ask and how, and the server refuses
+only what would make an answer ambiguous
+([agent-integration.md](code/agent-integration.md#posted-questions)). Nothing
+goes red when an agent ignores guidance, so whether it is followed has to be
+measured. `server/agent/questioneval` does that: it puts seven requests to the
+real CLIs — each in a fresh git repository copied from
+`testdata/<scenario>/`, with Pockode's MCP tools behind the real
+`mcp.Executor` — and judges how the agent asked, or why it did not. Each
+scenario's `Judge` in `scenarios.go` says what asking well looks like for it;
+`JudgeChoices` is applied to every run on top (no "Other" of the agent's own,
+short header and labels, `recommended` as a flag rather than in the label, no
+multiple choice written into the reply text).
+
+The judging is plain code with plain tests: `judge_test.go` runs under
+`go test ./...` for free, so a change to a judge is checked without a turn.
+Only the harness, `eval_integration_test.go`, is paid.
+
+```sh
+cd server
+# everything: 2 CLIs × 7 scenarios × QUESTION_EVAL_RUNS
+QUESTION_EVAL_RUNS=3 go test -tags=integration ./agent/questioneval -run '^TestQuestionEval$' -v -timeout 0
+# one CLI, one scenario — subtests are <cli>/<scenario>/run-<n>
+QUESTION_EVAL_RUNS=1 go test -tags=integration ./agent/questioneval -run '^TestQuestionEval$/^codex$/^delete-files$' -v -timeout 0
+```
+
+- **`QUESTION_EVAL_RUNS` is the second gate.** Unset, the whole eval skips, so
+  `-tags=integration ./...` run by accident does not bill for dozens of long
+  turns. Set, it is how many times each selected scenario runs on each selected
+  CLI; one run of a scenario says little about a model that answers
+  differently each time.
+- **`-timeout 0` is not optional.** A turn may take up to 15 minutes — several
+  scenarios write code and run it — and a full run is far past `go test`'s
+  default ten.
+- **`QUESTION_EVAL_OUT`** is where the evidence goes; unset, a fresh directory
+  under the system temp dir, named in the log. The two CLIs can run as two
+  processes at once, but each needs its own directory: runs write fixed names
+  into it.
+- **A poor verdict is not a red test.** The test fails only when a run could
+  not be carried out — a CLI missing from `PATH`, or a CLI that never asked for
+  Pockode's tools, which would otherwise be judged as an agent that chose not
+  to ask. The result is `summary.md`: passes per scenario and CLI, cost, and
+  the reason for every run that did not pass. A verdict is `pass`, `fail` or
+  `review`; `review` is a run the checks could not settle, and its reasons say
+  what to read. Questions asked in reply text are found by question marks
+  alone, so an imperative ("tell me which to delete") is not one — read
+  `said` before concluding an agent did not ask.
+  Each run's `<cli>/<scenario>/run-<n>.json` holds every MCP call with its raw
+  arguments and reply, the `question_post` calls that were accepted, the
+  reply text (`said`), both verdicts with their reasons, time
+  and cost; `run-<n>.events.jsonl` is the whole turn.
+
+Measured on one full run at three runs per scenario (Claude 2.1.286,
+Codex 0.159.3): Claude $2.66 and 8 minutes; Codex about 2.3 million tokens —
+it reports no price — and 31 minutes, much of it the ~40 s each Codex process
+spends starting.
+
+**A default-configuration fail may not be about the wording.** Both CLIs load
+MCP tools lazily: until the model searches for one it sees the name alone, not
+the description, so it never reads the guidance being measured. On that run
+neither CLI called `question_post` once, while Claude with
+`ENABLE_TOOL_SEARCH=false` in the environment — every description in context
+from the start, at about $0.19 a run instead of $0.13 — passed 21 of 21. Codex
+has no such switch. Before reading a bad result as a description to rewrite,
+check `run-<n>.events.jsonl` for whether the model ever loaded the tool.
 
 ## Verification that verifies
 
