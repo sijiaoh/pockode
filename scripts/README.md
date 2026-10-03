@@ -194,3 +194,9 @@ the cluster-mode stack instead of the normal one.
 ./scripts/dev.sh            # normal mode
 ./scripts/dev.sh --cluster  # cluster mode
 ```
+
+## `question-walkthrough/` — Answering UI screenshots
+
+Runs the server with a fake `claude` that asks questions on demand, and drives a
+headless browser through every state of the answering UI at phone and desktop
+sizes, light and dark. See [its README](question-walkthrough/README.md).

@@ -811,13 +811,17 @@ One consequence is shared by all nine: the keyboard focus ring now outlines the
 
 #### Not done: the coarse-pointer walkthrough
 
-**Batch 1 was never looked at on a coarse pointer, or rendered at all.** This
-repository cannot render: Playwright's `headless_shell` is missing
+**Batch 1 was never looked at on a coarse pointer, or rendered at all.** At the
+time this repository could not render: Playwright's `headless_shell` is missing
 `libatk-1.0.so.0` and the other system libraries beside it, and installing them
-needs `sudo`. So every height, offset and clearance in this section — and the
-two technique precedents this batch contributed above — is arithmetic over
-`padding + line box`. What *is* machine-checked is the static reading of the
-class lists in `touchTarget.test.ts` and the behavioural assertions in the
+needs `sudo`. It can now —
+[`scripts/question-walkthrough/`](../scripts/question-walkthrough/README.md)
+unpacks those libraries without root and drives the real server at phone sizes
+on a coarse pointer — but it only walks the answering UI, and batch 1's screens
+have not been through it. So every height, offset and clearance in this section
+— and the two technique precedents this batch contributed above — is arithmetic
+over `padding + line box`. What *is* machine-checked is the static reading of
+the class lists in `touchTarget.test.ts` and the behavioural assertions in the
 component suites. The walkthrough remains the acceptance criterion, and it
 remains owed.
 
