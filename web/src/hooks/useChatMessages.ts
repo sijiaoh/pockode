@@ -40,7 +40,7 @@ import type {
 	UserMessage,
 } from "../types/message";
 import type { AgentType } from "../types/settings";
-import { toAnswerParams } from "../utils/answerMessage";
+import { toAnswerParams } from "../utils/answerRecords";
 import { isTypedByUser } from "../utils/messageSource";
 import { parsePockodeCommand } from "../utils/pockodeCommand";
 import { generateUUID } from "../utils/uuid";

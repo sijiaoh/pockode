@@ -13,7 +13,7 @@ import type {
 	PendingQuestion,
 	QuestionAnswerRecord,
 } from "../../types/message";
-import { type AnswerEntry, toAnswerRecords } from "../../utils/answerMessage";
+import { type AnswerEntry, toAnswerRecords } from "../../utils/answerRecords";
 import {
 	noteApplies,
 	type QuestionSelection,
