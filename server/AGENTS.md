@@ -40,6 +40,7 @@ main.go                 # 入口 + 路由 + graceful shutdown
 agent/                  # Agent 抽象（接口, 事件, 进程管理, 注册表）
   claude/               # Claude CLI 实现
   codex/                # Codex CLI 实现
+  questioneval/         # question_post 引导评测：真实 CLI 跑场景并判定提问质量（付费，`integration` 标签 + `QUESTION_EVAL_RUNS`）
 agentrole/              # AgentRole 存储 + 类型定义
 apiroute/               # 本进程 API 路径判定（SPA handler 与 relay 代理共用）
 attachments/            # 按 session 存放事件里以 id 引用的内容（内容寻址）

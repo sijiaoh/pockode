@@ -1,0 +1,7 @@
+[project]
+name = "quicknote"
+version = "0.3.0"
+requires-python = ">=3.10"
+
+[project.scripts]
+quicknote = "quicknote.cli:main"
