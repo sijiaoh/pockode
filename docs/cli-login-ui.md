@@ -311,8 +311,8 @@ Sign in to Claude                                   ✕
 ### Copying
 
 Copy appears three times here and once more in *Send again*, and the app already
-has a copy in `shikiUtils` (the code block's copy button). One hook,
-`useCopyToClipboard`, serves all of them, with the code block moved onto it:
+has a copy on every code block and block header (`CopyButton`,
+`web/src/components/ui/`). One hook, `useCopyToClipboard`, serves all of them:
 it returns `copy(text)` and a state of idle / copied / failed.
 
 Failed is a real state, not a rare one: outside a secure context — Pockode on a

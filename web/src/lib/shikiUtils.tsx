@@ -1,6 +1,5 @@
 import { getDiffViewHighlighter } from "@git-diff-view/shiki";
 import { useIsExpanded } from "@pockode/shared";
-import { Check, Copy, X } from "lucide-react";
 import * as React from "react";
 import { useShikiHighlighter } from "react-shiki";
 import {
@@ -10,7 +9,7 @@ import {
 	createHighlighter,
 	type Highlighter,
 } from "shiki";
-import { useCopyToClipboard } from "../hooks/useCopyToClipboard";
+import { CopyButton } from "../components/ui/CopyButton";
 import { splitNativePath } from "../utils/path";
 
 export const CODE_FONT_SIZE_MOBILE = 12;
@@ -79,6 +78,7 @@ export function CodeHighlighter({
 	language,
 	plain = false,
 	wrap = false,
+	copyable = true,
 }: {
 	children: string;
 	language?: string;
@@ -89,12 +89,14 @@ export function CodeHighlighter({
 	 * a command being approved — not for code whose lines have to stay aligned.
 	 */
 	wrap?: boolean;
+	/**
+	 * Lay a copy button over the corner. Off where the block sits under a
+	 * `BlockHeader` that carries one, which is the place that covers nothing.
+	 */
+	copyable?: boolean;
 }) {
 	const isExpanded = useIsExpanded();
 	const fontSize = isExpanded ? CODE_FONT_SIZE_DESKTOP : CODE_FONT_SIZE_MOBILE;
-	const { state: copyState, copy } = useCopyToClipboard({
-		resetAfterMs: 2000,
-	});
 
 	// Highlighting is synchronous CPU work proportional to the input, and awaiting
 	// it does not spare the main thread — so the oversized input is withheld from
@@ -106,34 +108,22 @@ export function CodeHighlighter({
 	);
 
 	const style = { "--code-font-size": `${fontSize}px` } as React.CSSProperties;
+	const preClass = wrap
+		? copyable
+			? "code-block code-block--wrap code-block--corner"
+			: "code-block code-block--wrap"
+		: "code-block";
 
 	return (
 		<div className="code-block-wrapper">
-			<button
-				type="button"
-				onClick={() => copy(children)}
-				className="code-copy-button touch-target"
-				// A failed copy needs nothing more: the code is on screen in full.
-				aria-label={
-					copyState === "copied"
-						? "Copied"
-						: copyState === "failed"
-							? "Copy failed"
-							: "Copy code"
-				}
-			>
-				{copyState === "copied" ? (
-					<Check size={14} />
-				) : copyState === "failed" ? (
-					<X size={14} />
-				) : (
-					<Copy size={14} />
-				)}
-			</button>
-			<pre
-				className={wrap ? "code-block code-block--wrap" : "code-block"}
-				style={style}
-			>
+			{copyable && (
+				<CopyButton
+					text={children}
+					label="Copy code"
+					className="code-copy-button"
+				/>
+			)}
+			<pre className={preClass} style={style}>
 				{plain ? (
 					<code>{children}</code>
 				) : (

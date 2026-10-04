@@ -16,6 +16,8 @@ interface DiffViewerProps {
 	hunks: string[];
 	oldContent?: string;
 	newContent?: string;
+	/** Wrap long lines rather than scroll them sideways. */
+	wrap?: boolean;
 }
 
 export function DiffViewer({
@@ -23,6 +25,7 @@ export function DiffViewer({
 	hunks,
 	oldContent,
 	newContent,
+	wrap = false,
 }: DiffViewerProps) {
 	const isDark = useSyncExternalStore(subscribeToDarkMode, getIsDarkMode);
 	const isExpanded = useIsExpanded();
@@ -48,6 +51,7 @@ export function DiffViewer({
 				}}
 				registerHighlighter={highlighter}
 				diffViewMode={DiffModeEnum.Unified}
+				diffViewWrap={wrap}
 				diffViewTheme={isDark ? "dark" : "light"}
 				diffViewHighlight
 				diffViewFontSize={

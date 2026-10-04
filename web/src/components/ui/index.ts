@@ -5,7 +5,9 @@ export { default as ActivityIcon } from "./ActivityIcon";
 export { default as BackToChatButton } from "./BackToChatButton";
 export { default as BadgeCount, formatBadgeCount } from "./BadgeCount";
 export { type BadgeDotTone, default as BadgeDot } from "./BadgeDot";
+export { BlockHeader, HeaderCopyButton } from "./BlockHeader";
 export { default as BottomActionBar } from "./BottomActionBar";
+export { ClampedContent } from "./ClampedContent";
 export { CollapsibleBody, useEverExpanded } from "./CollapsibleBody";
 export { default as ConnectionStatus } from "./ConnectionStatus";
 export {
@@ -13,6 +15,7 @@ export {
 	default as ContentView,
 	getActionIconButtonClass,
 } from "./ContentView";
+export { CopyButton } from "./CopyButton";
 export { DiffViewer } from "./DiffViewer";
 export { FileContentDisplay } from "./FileContentDisplay";
 export { FileStateCard } from "./FileStateCard";

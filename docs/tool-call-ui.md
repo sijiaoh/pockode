@@ -13,9 +13,12 @@ The surfaces are `ToolCallItem.tsx`, `TaskItem.tsx` (the subagent category),
 through `ToolRow.tsx`, which is where the grammar below lives — plus
 `ToolInvocation.tsx` for the invocation a row and a card both show,
 `ToolResultDisplay.tsx` for the result, `ProposedChange.tsx` for the file
-change a result and a card both draw, `ToolOutcomeSections.tsx` for the
-labelled blocks the two tool renderers share, and `TurnChangesCard.tsx` for
-[the files a turn changed](#the-turns-changes), all under
+change a result, the permission card and the turn's changes card all draw
+(read by `lib/proposedChange.ts`), `ToolOutcomeSections.tsx` for the blocks
+the two tool renderers share, `ToolSection.tsx` for the labelled,
+clamped section every one of those blocks is drawn as, and
+`TurnChangesCard.tsx` for [the files a turn changed](#the-turns-changes), all
+under
 `web/src/components/Chat/`. The transcript around them
 is [agent-chat.md](agent-chat.md); the width ladder and the pointer gates are
 [responsive-ui.md](responsive-ui.md) and are used here, never re-derived.
@@ -265,8 +268,8 @@ the left, so two `index.ts` stay apart as `…/Chat` and `…/Files`), a chip, a
 the counts. The directory is relative to the work directory, empty at its
 root, absolute outside it. On a narrow screen the directory goes first, then
 the name truncates — never wider than 60% of the line, so a long one gives way
-sooner; the chip and counts never move. The full path is verbatim on the
-body's first line.
+sooner; the chip and counts never move. The full path is on the body's first
+line, `PathLine`, a tap away as in the tool body.
 
 - **The chip** says what the turn did to the file, from whether it existed
   before the turn (its first change did not create it) and after (its last did
@@ -295,18 +298,24 @@ path are one file; a path outside it is matched whole in a namespace of its
 own, since `/etc/hosts` split into segments reads exactly like
 `<workDir>/etc/hosts` made relative.
 
-**A tap opens the row in place**, at every width: the tool body's
-`CollapsibleBody` → `ScrollableContent max-h-[60vh]` on `bg-th-bg-secondary`,
-holding `PathLine` (with *Open* into the Files tab, except for a deleted file
-or one outside the work directory) and then one `ProposedChange` per change, in
-order. With more than one, each is headed `1 · Edit`, `2 · Write`…; a rewriting
-Write is headed *Whole file written — what it replaced is not in this call*
-(not "the transcript": an earlier step may have written exactly what it
-replaced). A Codex call that changed several files is split, each row's diff
-holding its own file only; `CodexDiff`'s own status-and-path line half repeats
-`PathLine`, and is kept rather than given a second rendering mode. There is no
-net diff: an `Edit` carries fragments, not the file, so nothing trustworthy can
-be composed from them — the changes are shown as made, as
+**A tap opens the row in place**, at every width: `CollapsibleBody` → a plain
+`bg-th-bg-secondary` box — no scroll box of its own, for the reason the tool
+body [gave one up](#the-body-problems-2-and-3) — holding `PathLine` (with
+*Open* into the Files tab, except for a deleted file or one outside the work
+directory) and then one change per `Section`, in order, each drawn exactly as
+on its tool row: `ProposedChange` clamped by `ClampedContent` with *Show all*
+and *Full screen* (`Edit · deliver.ts`), `+N −M` and the one *Wrap long lines*
+switch in its header, and a Write's content copied from there. Being the same
+component, each diff also has the tool body's narrow gutter on a phone. A file
+changed once heads its block `Change` (`Content` for a Write), as the tool
+body does; with more than one, each is headed `1 · Edit`, `2 · Write`…; a
+rewriting Write opens with *Whole file written — what it replaced is not in
+this call* (not "the transcript": an earlier step may have written exactly
+what it replaced). A Codex call that changed several files is split, each
+row's diff holding its own file only; `CodexDiff`'s own status-and-path line
+half repeats `PathLine`, and is kept rather than given a second rendering mode.
+There is no net diff: an `Edit` carries fragments, not the file, so nothing
+trustworthy can be composed from them — the changes are shown as made, as
 [fetches](#a-fetch-reads-on-the-row-it-came-from) are, nothing merged and
 nothing dropped. Not a sheet: on a desktop `Sheet` is 448px, narrower than the
 reading column, and a reviewer moving file to file would open and close it for
@@ -425,8 +434,8 @@ tool rows, not about cards.
 directly: `min-h-9 pointer-coarse:min-h-11`. It is not a `touch-target`
 overlay — there is room to grow the box, and a real box is always simpler
 (`web/src/index.css`, the `touch-target` comment). Controls *inside* the body
-(file chips, the copy button) keep the ≥8px separation that overlay hit areas
-require.
+(file chips, a section header's buttons) keep the ≥8px separation that overlay
+hit areas require.
 
 ## Status
 
@@ -562,12 +571,16 @@ keeps the tint. Once answered it is an ordinary row: no tint, and a body on
 **The card's body is the row's Invocation.** `ToolInvocation`
 (`Chat/ToolInvocation.tsx`) draws both, so the command a user approved and the
 command the row later says ran are one rendering, not two that agree by
-convention. Below it, for a file tool, a *Proposed change* section draws the
+convention — sections, headers, clamps and all; the card's body has no scroller
+of its own either. Below it, for a file tool, a *Proposed change* section draws the
 diff or the file preview through `ProposedChange` — the same component the row's
 result uses, which reads only the input and so can be drawn before the call
-runs. Last, folded and muted, *Raw input*: the input as it arrived, minus
-Codex's `command_actions`. It is left out where it would only repeat the body —
-when the body already is the JSON fallback or a string input, and for an
+runs — header and all (`proposedChangeHeader`), so the count, the wrap switch
+and *Full screen* [below](#the-body-problems-2-and-3) are on the card too. Last,
+folded and muted, *Raw input*: the input as it arrived, minus Codex's
+`command_actions`, copied from its header as JSON. It is left out where it would
+only repeat the body: when the body already is the input (the JSON fallback, an
+MCP tool's arguments listed by name, a string input), and for an
 `ExitPlanMode` whose plan is its only key. A plan with anything beside it keeps
 the raw input, since whatever else it asks for is approved with it.
 
@@ -856,11 +869,11 @@ differently. It is named for the outcome rather than for the background because
 the last block is drawn for foreground calls too, where its label is simply
 `Result`. It draws nothing at all when all three are empty, which is the common
 case, and it takes a `block` switch for the one difference between its two hosts:
-`ToolCallItem`'s body is a single 60vh scroller that it sits inside, while
-`TaskItem`'s is a stack of bordered blocks that each carry their own ceiling, so
-there it is one of those. A scroller nested in a scroller would swallow the drag
-meant for the transcript ([the body](#the-body-problems-2-and-3)); no ceiling at
-all in `TaskItem` would let one fetch of a chatty task push the transcript down
+`ToolCallItem`'s body is a single padded block that it sits inside, while
+`TaskItem`'s is a stack of bordered blocks, so there it is one of those. Either
+way each of its sections clamps itself rather than scrolling
+([the body](#the-body-problems-2-and-3)); no ceiling at
+all would let one fetch of a chatty task push the transcript down
 by thousands of pixels.
 
 `output_file` arrives as a `FileBlock` with `omitted: not_fetched`, and
@@ -1033,35 +1046,104 @@ it is non-zero, and then the glyph has already said so.
 
 ## The body (problems 2 and 3)
 
-One `CollapsibleBody` → `ScrollableContent max-h-[60vh]`, as today. Sections in
-this order, each omitted when empty:
+One `CollapsibleBody` → one padded block, with **no height and no scroller of
+its own**. It used to be a `ScrollableContent max-h-[60vh]`, and on a phone that
+box was under the thumb most of the time a tall body was open, so the drag
+meant for the transcript scrolled the body instead. Now every section clamps
+itself (`ClampedContent`, `web/src/components/ui/`): past `max-h-80` it is cut,
+faded where it is cut, and opened in place by *Show all*. Clipped content
+scrolls nothing, so every vertical drag stays the page's — and a keyboard that
+tabs into the cut-off part opens it, because the browser would otherwise
+scroll the clipped box to the focused control and leave it where no drag can
+bring it back. Sideways a section
+does scroll — a file's lines keep their width — and a box with nothing to
+scroll vertically hands a vertical drag on to the page. What is read at length
+rather than skimmed — a whole file (`Read`, `Write`) and a diff (`Edit`,
+`MultiEdit`) — also offers *Full screen*, the shared `Sheet` in its
+`fullScreen` form, once it runs past the clamp.
+
+**Every section has a header bar** (`Section`, `Chat/ToolSection.tsx`, drawn
+through `BlockHeader` in `components/ui/`): its name on the left, its actions on
+the right. The copy button is one of those actions, never laid over the
+content — in a code block's corner it sat on the end of the first line, which
+on a phone is most of a command. `CodeHighlighter`'s corner button is turned off
+(`copyable={false}`) wherever a header carries it. What a result's button copies
+is `resultCopyText`: the text a reader would select, so a `Read` without its
+line numbers and a command's output without its colour codes; a diff or a
+checklist has no button. `BlockHeader` is meant for any block of content, not
+only tool sections: a fenced code block in the agent's text (`CodeBlock`,
+`components/ui/`) is the same bar, with the language on the left and the copy
+on the right, over code that scrolls sideways in its own box so the bar stays
+put. The text around it is `prose-sm` brought in for a conversation
+(`prose-message`, `web/src/index.css`): headings one step above the body
+rather than four, tighter paragraphs, a table in tight rows that scrolls in its
+own box when it is wider than the phone — the transcript clips sideways, so a
+table left to it would lose its right columns.
+
+**The order is the tool's** (`toolBodyLayout`, `web/src/lib/`). For a tool whose
+row has already said everything that was asked — `Read`, `Glob`, `Grep`,
+`WebSearch` — the result comes first and the invocation is folded
+under it, its header the disclosure: the input in full would only stand between
+the reader and the answer they opened the row for. It is still there, which
+keeps [everything the row truncates](#the-rules) in the body; and it starts
+open when there is no result yet, because then the call is all the body has to
+say. Everything else, `Bash` first among them, keeps the invocation on top: a
+command is what has to be read before its output can be trusted. A `TodoWrite`
+is its checklist and nothing else: the list is the input, and a successful
+result only acknowledges it — a sentence telling the agent to keep using the
+tool — so it is left out (`resultIsAcknowledgement`). A failed one keeps its
+result, which is where it says why.
+
+**Sections are named for what they hold**, not for the plumbing. The invocation
+names itself by what it shows — *Command*, *File* / *Files*, *Request* for a
+sentence, *Todos* for a checklist, *Parameters* for named fields and the JSON
+fallback. The result is named by the tool: *Output* for `Bash`, *Content* for
+`Read` and `Write`, *Change* for `Edit` and `MultiEdit`, *Matches* for `Glob`
+and `Grep`, *Results* for `WebSearch`, *Page* for `WebFetch`, and *Result* for everything
+else. A result that arrived after the turn is *Outcome · after the turn*
+whatever the tool, as below.
+
+In the default order, each section omitted when empty:
 
 1. **Invocation — always present.** This is the answer to problem 2 and the
    reason every row now has a chevron.
    - `Bash`: `CodeHighlighter language="bash" wrap` with the full command —
-     wrapped (the `wrap` mode, which also clears the copy button's corner),
-     selectable, and with the copy button that component already brings
-     (`web/src/lib/shikiUtils.tsx`). Claude's `description`, when present, sits
+     wrapped, selectable, and copied from the header.
+     Claude's `description`, when present, sits
      above it as one muted line; Codex's `cwd`, when it is not the work
      directory, below it as `in <path>`.
-   - File tools: the full path, with an *Open* into the Files tab when it is
-     under the work directory. A Codex file change gives one such line per file
-     it leaves behind — a rename's destination, since its source is gone.
+   - File tools: the path on **one line** (`PathLine`), relative to the work
+     directory when it is inside it and cut from the left as the row cuts it —
+     the file name whole, the directories first to go — with an *Open* into the
+     Files tab when it is under the work directory. The absolute path broken
+     anywhere took four lines on a phone, most of them the work directory every
+     path shares. The full path is still in the body, a tap away rather than
+     behind a hover: tapping the line writes it out absolute and wrapped, and
+     it is what the header's copy button copies. A Codex file change gives one
+     such line per file it leaves behind — a rename's destination, since its
+     source is gone.
    - `Grep` / `Glob`: pattern, path and flags as labelled lines.
-   - `ExitPlanMode`: the plan, through `MarkdownContent`, with no label.
+   - `TodoWrite`: the checklist — a status icon per item, the done ones struck
+     through. An input that is not a list of todos falls through to the
+     fields below.
+   - `ExitPlanMode`: the plan, through `MarkdownContent`, with no label —
+     clamped all the same.
    - A Codex approval that described nothing but its `reason`, or an input
      that is a bare string: the text as a sentence.
-   - MCP and unknown tools: `CodeHighlighter language="json" wrap` over the
-     pretty-printed input. No lazy-render gate of its own: `CollapsibleBody`
-     renders nothing before the first expand, so a second gate would save
-     nothing. Highlighting is capped at the `HIGHLIGHT_LIMIT` the file viewer
-     already uses, because shiki tokenizes on the main thread.
+   - MCP and unknown tools: the arguments as a `name  value` list
+     (`FieldList`, shared with `Grep` / `Glob`) — a string as the text it is,
+     unquoted and wrapped; anything else as its JSON, indented when it has
+     structure of its own. A value sits beside its name when it fits and goes
+     under it when it does not. The header copies the input as JSON, since that
+     is what it gets pasted back into. An input with no fields to name — an
+     array, an empty object — stays `CodeHighlighter language="json" wrap`,
+     capped at the `HIGHLIGHT_LIMIT` the file viewer already uses, because
+     shiki tokenizes on the main thread.
 2. **Live output**, while running: the last 50 lines of `run.output` in a mono
    block, newest at the bottom, replaced by the result when it arrives. **No
-   scroller of its own** — `ScrollableContent` already owns one scroll box here,
-   and a scroll area inside a scroll area is a trap on a touch screen, where a
-   drag that was meant for the transcript is swallowed by whatever is under the
-   thumb. The 50 lines are what a cap buys instead: a build that printed ten
+   scroller of its own**, like every section — and its clamp keeps the *end* in
+   view (`clampFrom="end"`), since the newest line is the one being watched. The
+   50 lines are what a cap buys on top of that: a build that printed ten
    thousand of them does not become ten thousand DOM nodes in a row nobody has
    finished reading. The body does not auto-scroll either; the row's second line
    is the live glance, and the body is where someone reads at their own pace.
@@ -1084,6 +1166,26 @@ this order, each omitted when empty:
    - MCP and unknown tools whose result parses as JSON: pretty-print and
      highlight instead of printing it flat.
    - `WebFetch`: the result is Markdown, and `MarkdownContent` exists.
+   - `Bash`: the output **wraps** — a log line is read whole, and a sideways
+     scroll hid the end of nearly every one on a phone. Its clamp keeps the
+     *end* in view (`resultFromEnd`), because a test run's or a build's verdict
+     is its last lines: `max-h-80` at the body's `text-xs` line height is the
+     last 20 lines or so, and the button that opens the rest says how much
+     there is — *Show all N lines*. A failed command's last five lines are
+     marked as its error (a red rule, tint and text), since that is nearly
+     always where it says why; five holds a compiler's last errors or a test
+     runner's `FAIL` without painting a whole log red.
+   - A diff (`Edit`, `MultiEdit`, a Codex file change): the header says how
+     many lines it adds and removes, `+N −M`, and carries a switch that wraps
+     long lines (*Wrap long lines*). The switch is one remembered choice for
+     every diff in the chat (`diffSettingsStore`, beside the Git view's
+     whitespace one) rather than a state per block: a reader on a phone who
+     wants lines wrapped wants them wrapped in the next diff too. Off by
+     default, because unwrapped lines keep the code's shape. A `Write` gets
+     neither: a new file is content, not a diff, and every line of it would
+     count as added whether or not it overwrote one. On a phone the diff has
+     one narrow line-number column instead of two — see
+     [Width and pointer](#width-and-pointer).
 4. **Exit code**, when Codex reported a non-zero one, and — for a call whose
    result outlived the turn it was cut off in — one line saying so.
 
@@ -1373,10 +1475,11 @@ drawn by the same `PartBlocks` and its consecutive calls fold into a summary
 exactly as a message's do ([groups](#groups)).
 
 **It does not scroll on its own.** The `TaskItem` body is a stack of blocks
-that each carry a ceiling, and this is the one block that must not: the rows
-inside it open into bodies with their own 60vh scroller, and a scroller inside
-a scroller is the trap [the body](#the-body-problems-2-and-3) already refuses —
-a drag on a phone goes to whichever box is under the thumb. So the Process grows
+whose report and prompt are clamped like a tool section, and this is the one
+block that is not: the rows inside it open into bodies of their own, and a cut
+around them would hide a row the reader opened behind a *Show all*. A scroller
+is out for the reason [the body](#the-body-problems-2-and-3) gives — a drag on a
+phone goes to whichever box is under the thumb. So the Process grows
 to its full height, and the cost — a long subagent is many rows once opened —
 is accepted because it is only paid by someone who asked for it, and
 [grouping](#groups) folds most of it back into a line.
@@ -1548,7 +1651,7 @@ omission.
 
 | Tier | What changes |
 |---|---|
-| compact (<640) | the baseline described above |
+| compact (<640) | the baseline described above, and a diff's line numbers in one narrow column |
 | `sm:` (640–1023) | `p-2` → `sm:p-2.5` and nothing else |
 | `lg:` (≥1024) | nothing — the transcript column does not change shape |
 
@@ -1557,6 +1660,17 @@ budget.** A rule like "wrap the command at `sm:`" makes the same call look like
 a different thing on a tablet and a phone, and it would mean the phone — the
 primary device — is the one place the full text is unreachable. The body is the
 answer at every width, so there is one answer.
+
+**The one layout change is the diff's gutter.** The diff library draws an old
+and a new line number side by side, about a third of a phone's width before any
+code. Below `sm` that gutter is one column as wide as the widest number, and
+each row keeps the number of the side it is on — a removed line its old one,
+every other line its new one; the `+` / `−` in front of the code already says
+which side that is. The library writes its gutter width inline, so the override
+is in `web/src/index.css` with the other diff overrides, not in a component.
+It applies to every `DiffViewer`, the Git view's included — a gutter that eats
+a third of the screen is the same problem there. Above `sm` the two columns
+stay: there is room for them, and the old number is worth having.
 
 **No `pointer-fine:` reveal anywhere in this design.** Nothing is hover-only, so
 there is no fallback branch to get wrong. `pointer-coarse:` appears once, on the
@@ -1629,7 +1743,8 @@ decisions, and reachability is a CSS variant
 13. A backgrounded subagent after its notification: the summary is under
     *Outcome · after the turn*, not passed off as what the call returned, with
     no empty-report sentence above it, and not drawn again at the end of the
-    Process. A fetch of it is readable in the same body, inside its own scroll box.
+    Process. A fetch of it is readable in the same body, cut to its clamp
+    with *Show all* rather than inside a scroll box.
 14. Reload the page on any of the above: every fetched block is still there and
     the row's second line is present from the first frame — a fetch is persisted,
     unlike the activity line.
@@ -1681,19 +1796,41 @@ decisions, and reachability is a CSS variant
 28. Open a running `Bash` to watch it, then let the next call arrive: it stays
     open and in place; close it and it folds. A hidden row is never where the
     view is held, and a group whose last row is hidden leaves no doubled line.
-29. A turn that edits two files and creates one: when it settles, the card
+29. On a 375px phone, open a `Read` of a long file and drag the page up and down
+    across its body: the transcript moves, the body never does. *Content* is on
+    top, cut and faded, with *Show all* and *Full screen*; *File* is folded under
+    it. Copy from the *Content* header: no line numbers in what was copied.
+30. On a 375px phone, with nothing scrolled sideways: an `Edit` of a deep file
+    shows `src/…/name.ts` on one line beside *Open*; a `TodoWrite` opens on its
+    checklist alone; an MCP call lists its arguments by name; a `go test` that
+    failed shows its last lines wrapped, the final five in red, with *Show all N
+    lines* under them.
+31. On a 375px phone, open an `Edit`: its *Change* header reads `+N −M`; the
+    gutter is one narrow column and the code takes most of the width. Turn on
+    *Wrap long lines*: long lines wrap with no sideways scroll, and the next
+    diff — in this row, another row or a permission card — is wrapped too.
+32. On a 375px phone, a reply with a heading, a wide table and a long code
+    line: the heading reads one step above the body, not a banner; the table
+    scrolls sideways on its own while the text around it stays put; the code
+    block's language and copy button sit in a bar above the code, and the code
+    scrolls under it without carrying the bar along.
+33. A turn that edits two files and creates one: when it settles, the card
     and the actions replace the spinner together — `3 files changed`, the
     created file `new` with no `−`. While it ran there was no card. Interrupt
     or fail one like it: the card is in the same place, under the status line,
     listing only what succeeded; a turn with no successful change has no card
     and no gap.
-30. On a 375px phone, two `index.ts` in deep directories: one line each, told
-    apart by their last directory, chip and counts whole; the full path in the
-    body. The same file edited three times is one row with the summed counts,
-    opening on `1 · Edit` to `3 · Edit`; edited once, no heading. A `Write`
-    over a file: `rewritten`, `+N` only, and the line saying so above its diff.
-31. Nine changed files: five rows and `Show 4 more files`; press it and focus
+34. On a 375px phone, two `index.ts` in deep directories: one line each, told
+    apart by their last directory, chip and counts whole; in the body,
+    `PathLine` relative, and the full path once it is tapped. The same file
+    edited three times is one row with the summed counts, opening on
+    `1 · Edit` to `3 · Edit`; edited once, `Change`. A `Write` over a file: `rewritten`, `+N` only, and the line saying so above its diff.
+35. Nine changed files: five rows and `Show 4 more files`; press it and focus
     lands on the sixth row. Seven: all listed. Reload: the same card.
+36. On a 375px phone, open a card row onto a diff of hundreds of lines and drag
+    up and down over it: the transcript moves, never the diff alone. The diff
+    is cut and faded with *Show all* and *Full screen* under it, `+N −M` and
+    the wrap switch in its header; a `Write`'s block copies its content.
 
 ## Out of scope
 
@@ -1702,9 +1839,11 @@ decisions, and reachability is a CSS variant
   a card row back to its tool call, and nothing in `web-cluster`
   ([the turn's changes](#the-turns-changes)).
 - **A full-screen tool detail route.** happy's answer to long content is
-  navigation, and it is a good one, but Pockode's row already owns a body with a
-  60vh scroller; adding a second surface for the same content would mean deciding
-  which of the two any given tool goes to.
+  navigation, and it is a good one, but Pockode's row already owns a body that
+  opens long content in place; adding a route for the same content would mean
+  deciding which of the two any given tool goes to. *Full screen* on a long file
+  or diff is a sheet over the transcript, not a route — closing it leaves the
+  reader where they were.
 - **Per-call token cost.** Usage has an owner
   ([usage-display-ui.md](usage-display-ui.md)) and a row is not it.
 - **Re-theming.** Every colour here is an existing `th-` token; no new one is

@@ -1,6 +1,7 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { useDiffSettingsStore } from "../../lib/diffSettingsStore";
 import type { ToolRun } from "../../types/message";
 import ToolCallItem from "./ToolCallItem";
 
@@ -16,6 +17,18 @@ vi.mock("../../lib/wsStore", () => ({
 vi.mock("../../lib/shikiUtils", () => ({
 	CodeHighlighter: ({ children }: { children: string }) => (
 		<pre>{children}</pre>
+	),
+	getLanguageFromPath: () => undefined,
+	isMarkdownFile: () => false,
+}));
+
+// The diff itself is the library's to draw; what the body owes it is the
+// patch and whether to wrap.
+vi.mock("../ui/DiffViewer", () => ({
+	DiffViewer: ({ hunks, wrap }: { hunks: string[]; wrap?: boolean }) => (
+		<pre data-testid="diff" data-wrap={String(Boolean(wrap))}>
+			{hunks.join("")}
+		</pre>
 	),
 }));
 
@@ -53,7 +66,7 @@ describe("ToolCallItem", () => {
 		const user = userEvent.setup();
 		draw();
 		await user.click(screen.getByRole("button", { expanded: false }));
-		expect(screen.getByText("Invocation")).toBeVisible();
+		expect(screen.getByText("Command")).toBeVisible();
 	});
 
 	// A search's `path` is the scope it ran in, not what it was looking for. If
@@ -102,6 +115,311 @@ describe("ToolCallItem", () => {
 		// showing, and a build's verdict is at the end while the head is noise.
 		expect(screen.getByText("make: *** [build] Error 1")).toBeVisible();
 		expect(screen.queryByText(/vite build/)).toBeNull();
+	});
+
+	describe("the body", () => {
+		const open = async () => {
+			const user = userEvent.setup();
+			await user.click(screen.getAllByRole("button", { expanded: false })[0]);
+			return user;
+		};
+		const precedes = (a: HTMLElement, b: HTMLElement) =>
+			Boolean(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
+
+		// The command is what has to be read before its output can be trusted.
+		it("puts a command before its output, under their own names", async () => {
+			draw({ status: "success", result: "built in 2s" });
+			await open();
+
+			expect(
+				precedes(screen.getByText("Command"), screen.getByText("Output")),
+			).toBe(true);
+			expect(screen.getByText("built in 2s")).toBeVisible();
+		});
+
+		// The row already says which file was read; the answer is what the row
+		// was opened for, and the input is folded under it.
+		it("puts a Read's content first and folds the file it was asked for", async () => {
+			draw({
+				name: "Read",
+				input: { file_path: "/Users/test/project/src/main.ts" },
+				status: "success",
+				result: "     1\tconsole.log(1);",
+			});
+			const user = await open();
+
+			const file = screen.getByRole("button", { name: "File" });
+			expect(precedes(screen.getByText("Content"), file)).toBe(true);
+			expect(file).toHaveAttribute("aria-expanded", "false");
+			expect(screen.queryByRole("button", { name: "src/main.ts" })).toBeNull();
+
+			await user.click(file);
+			expect(screen.getByRole("button", { name: "src/main.ts" })).toBeVisible();
+		});
+
+		// Until it answers, the call is all the body has to say.
+		it("leaves a running Read's file open while there is nothing above it", async () => {
+			draw({
+				name: "Read",
+				input: { file_path: "/Users/test/project/src/main.ts" },
+			});
+			await open();
+
+			expect(screen.getByRole("button", { name: "File" })).toHaveAttribute(
+				"aria-expanded",
+				"true",
+			);
+		});
+
+		it("names an unknown tool's blocks plainly", async () => {
+			draw({
+				name: "mcp__srv__lookup",
+				input: { id: 7 },
+				status: "success",
+				result: "found",
+			});
+			await open();
+
+			expect(
+				precedes(screen.getByText("Parameters"), screen.getByText("Result")),
+			).toBe(true);
+		});
+
+		// The work directory is what every path here shares; written out and
+		// broken anywhere it took four lines on a phone. Cut to one line, it is
+		// still in the body in full, a tap away rather than behind a hover.
+		it("shows a file relative to the work directory, on one line", async () => {
+			const onOpenFile = vi.fn();
+			const path = "/Users/test/project/src/lib/main.ts";
+			render(
+				<ToolCallItem
+					run={run({
+						name: "Edit",
+						input: { file_path: path, old_string: "a", new_string: "b" },
+					})}
+					sessionId="session-1"
+					onOpenFile={onOpenFile}
+				/>,
+			);
+			const user = await open();
+			const writeText = vi.spyOn(navigator.clipboard, "writeText");
+
+			const line = screen.getByRole("button", { name: "src/lib/main.ts" });
+			expect(within(line).getByText("main.ts")).toHaveClass("truncate");
+			await user.click(line);
+			expect(screen.getByText(path)).toHaveClass("break-all");
+
+			await user.click(screen.getByRole("button", { name: "Open" }));
+			expect(onOpenFile).toHaveBeenCalledWith("src/lib/main.ts");
+			// The header still hands over the path in full.
+			await user.click(screen.getByRole("button", { name: "Copy file" }));
+			expect(writeText).toHaveBeenLastCalledWith(path);
+		});
+
+		// The list is in the input; the answer is a sentence telling the agent
+		// to keep using the tool, and a screen of JSON above the list was all
+		// the body used to open on.
+		it("shows a TodoWrite as its checklist and nothing else", async () => {
+			draw({
+				name: "TodoWrite",
+				input: {
+					todos: [
+						{ content: "Write tests", status: "completed", activeForm: "" },
+						{ content: "Ship it", status: "pending", activeForm: "" },
+					],
+				},
+				status: "success",
+				result: "Todos have been modified successfully.",
+			});
+			await open();
+
+			expect(screen.getByText("Todos")).toBeVisible();
+			expect(screen.getByText("Write tests")).toHaveClass("line-through");
+			expect(screen.getByText("Ship it")).toBeVisible();
+			expect(screen.queryByText(/"todos"/)).toBeNull();
+			expect(screen.queryByText(/modified successfully/)).toBeNull();
+			expect(screen.queryByText("Parameters")).toBeNull();
+		});
+
+		it("still says why a TodoWrite failed", async () => {
+			draw({
+				name: "TodoWrite",
+				input: { todos: [{ content: "Ship it", status: "pending" }] },
+				status: "error",
+				result: "InputValidationError: activeForm is required",
+			});
+			await open();
+
+			expect(screen.getByText("Ship it")).toBeVisible();
+			expect(
+				screen.getByText("InputValidationError: activeForm is required", {
+					selector: "pre",
+				}),
+			).toBeVisible();
+		});
+
+		// MCP arguments are named fields; as JSON they were quotes, braces and a
+		// sideways scroll around the few words that mattered.
+		it("lists an unknown tool's arguments by name", async () => {
+			const input = {
+				query: "open issues",
+				limit: 5,
+				filter: { state: "open" },
+			};
+			draw({ name: "mcp__github__search", input });
+			const user = await open();
+			const writeText = vi.spyOn(navigator.clipboard, "writeText");
+
+			const field = (name: string) =>
+				screen.getByText(name, { selector: "dt" }).nextElementSibling;
+			expect(field("query")).toHaveTextContent(/^open issues$/);
+			expect(field("limit")).toHaveTextContent(/^5$/);
+			expect(field("filter")).toHaveTextContent('"state": "open"');
+			// Copied as the JSON it is, to be pasted somewhere that reads JSON.
+			await user.click(screen.getByRole("button", { name: "Copy parameters" }));
+			expect(writeText).toHaveBeenLastCalledWith(
+				JSON.stringify(input, null, 2),
+			);
+		});
+
+		describe("a change", () => {
+			const edit = {
+				name: "Edit",
+				input: {
+					file_path: "/Users/test/project/src/a.ts",
+					old_string: "one\ntwo\n",
+					new_string: "one\n2\nthree\n",
+				},
+				status: "success" as const,
+				result: "The file has been updated.",
+			};
+
+			afterEach(() => {
+				useDiffSettingsStore.setState({ wrapLines: false });
+				localStorage.clear();
+			});
+
+			it("counts the lines it adds and removes in its header", async () => {
+				draw(edit);
+				await open();
+
+				const header = screen.getByText("Change").parentElement;
+				expect(header).toHaveTextContent("+2 −1");
+			});
+
+			// A phone's width cuts most lines of code; scrolling each one sideways
+			// to read it is what the switch spares.
+			it("wraps long lines on request, and remembers it", async () => {
+				draw(edit);
+				const user = await open();
+
+				const toggle = screen.getByRole("button", { name: "Wrap long lines" });
+				expect(toggle).toHaveAttribute("aria-pressed", "false");
+				expect(screen.getByTestId("diff")).toHaveAttribute(
+					"data-wrap",
+					"false",
+				);
+
+				await user.click(toggle);
+				expect(toggle).toHaveAttribute("aria-pressed", "true");
+				expect(screen.getByTestId("diff")).toHaveAttribute("data-wrap", "true");
+				expect(localStorage.getItem("pockode:diffWrapLines")).toBe("true");
+			});
+
+			// A new file is content, not a diff: every line would count as added
+			// whether or not it overwrote one.
+			it("leaves a written file's header without a count or a switch", async () => {
+				draw({
+					name: "Write",
+					input: { file_path: "/Users/test/project/a.txt", content: "x\ny\n" },
+					status: "success",
+					result: "File created",
+				});
+				await open();
+
+				expect(screen.getByText("Content").parentElement).not.toHaveTextContent(
+					"+",
+				);
+				expect(
+					screen.queryByRole("button", { name: "Wrap long lines" }),
+				).toBeNull();
+			});
+		});
+
+		describe("a command's output", () => {
+			afterEach(() => {
+				vi.restoreAllMocks();
+			});
+
+			// On a phone a sideways scroll hid the end of nearly every line.
+			it("wraps", async () => {
+				draw({ status: "success", result: "built in 2s" });
+				await open();
+				expect(screen.getByText("built in 2s")).toHaveClass(
+					"whitespace-pre-wrap",
+				);
+			});
+
+			// A test run's or a build's verdict is its last lines, so that is
+			// the end a long output is cut to keep.
+			it("keeps its end in view and counts what it cut", async () => {
+				// jsdom does no layout: every element is as tall as a long log, and
+				// the box as tall as the clamp.
+				vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockReturnValue(
+					2000,
+				);
+				vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(
+					320,
+				);
+				const result = `${Array.from({ length: 120 }, (_, i) => `line ${i}`).join("\n")}\n`;
+				draw({ status: "success", result });
+				const user = await open();
+
+				const output = screen.getByText(/line 119/);
+				expect(output.closest("[data-clamped]")).toHaveClass("justify-end");
+				await user.click(
+					screen.getByRole("button", { name: "Show all 120 lines" }),
+				);
+				expect(output.closest("[data-clamped]")).toBeNull();
+			});
+
+			// Why it failed is nearly always said at the end.
+			it("marks where a failed command says why", async () => {
+				const result = ["a", "b", "c", "d", "e", "f", "FAIL"].join("\n");
+				draw({ status: "error", result });
+				await open();
+
+				const pre = (text: RegExp) =>
+					screen.getByText(text, {
+						selector: "pre",
+						normalizer: (raw) => raw,
+					});
+				expect(pre(/FAIL/)).toHaveClass("text-th-error");
+				expect(pre(/FAIL/).textContent).toBe("c\nd\ne\nf\nFAIL");
+				expect(pre(/^a\nb$/)).toHaveClass("text-th-text-muted");
+			});
+		});
+
+		// A button laid over a block covers the end of its first line; in the
+		// header it covers nothing. The output is copied as the text it reads
+		// as, not with the colour codes it was printed in.
+		it("copies from each block's header", async () => {
+			draw({
+				status: "success",
+				result: "\u001b[32mok\u001b[0m",
+			});
+			// user-event puts a clipboard of its own on `navigator` at setup, so
+			// the spy goes on after it.
+			const user = await open();
+			const writeText = vi.spyOn(navigator.clipboard, "writeText");
+
+			const command = screen.getByRole("button", { name: "Copy command" });
+			const output = screen.getByRole("button", { name: "Copy output" });
+			await user.click(command);
+			expect(writeText).toHaveBeenLastCalledWith("npm run build");
+			await user.click(output);
+			expect(writeText).toHaveBeenLastCalledWith("ok");
+		});
 	});
 
 	describe("the second line", () => {
@@ -208,10 +526,8 @@ describe("ToolCallItem", () => {
 			expect(screen.queryByText("Not fetched")).toBeNull();
 
 			await user.click(screen.getByRole("button", { expanded: false }));
-			// The full path, not the file name: the body does not truncate, so its
-			// tail is the name already.
 			expect(
-				screen.getByText(`${mockWorkDir.value}/.pockode/logs/build-1.log`),
+				screen.getByRole("button", { name: ".pockode/logs/build-1.log" }),
 			).toBeVisible();
 			expect(screen.getByText("Not fetched")).toBeVisible();
 			expect(screen.getByRole("button", { name: "Open" })).toBeVisible();
@@ -247,7 +563,9 @@ describe("ToolCallItem", () => {
 			);
 
 			await user.click(screen.getByRole("button", { expanded: false }));
-			expect(screen.getByText("/tmp/claude-shell/build-1.log")).toBeVisible();
+			expect(
+				screen.getByRole("button", { name: "/tmp/claude-shell/build-1.log" }),
+			).toBeVisible();
 			expect(screen.getByText("Not fetched")).toBeVisible();
 			expect(screen.queryByRole("button", { name: "Open" })).toBeNull();
 		});

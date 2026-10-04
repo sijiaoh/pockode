@@ -19,6 +19,12 @@ export interface SheetProps {
 	 */
 	onSubmit?: (e: React.FormEvent) => void;
 	footer?: ReactNode;
+	/**
+	 * Take the whole viewport at every width, for content that is read rather
+	 * than answered — a whole file, a long diff — and that a drawer's 90% or a
+	 * modal's `max-w-md` would cut down to the size it was opened to escape.
+	 */
+	fullScreen?: boolean;
 	children: ReactNode;
 }
 
@@ -87,11 +93,12 @@ export function Sheet({
 	dismissible = true,
 	onSubmit,
 	footer,
+	fullScreen = false,
 	children,
 }: SheetProps) {
 	const isExpanded = useIsExpanded();
 	const titleId = useId();
-	const asDrawer = !isExpanded;
+	const asDrawer = !isExpanded && !fullScreen;
 	const sheetRef = useRef<HTMLDivElement>(null);
 
 	// Claims the press, as `ConfirmDialog` does. A surface below a sheet that
@@ -209,9 +216,11 @@ export function Sheet({
 			{/* Content */}
 			<div
 				className={`relative flex w-full flex-col bg-th-bg-secondary shadow-xl ${
-					asDrawer
-						? "max-h-[90dvh] rounded-t-2xl"
-						: "mx-4 max-h-[85dvh] max-w-md rounded-xl"
+					fullScreen
+						? "h-dvh overflow-hidden"
+						: asDrawer
+							? "max-h-[90dvh] rounded-t-2xl"
+							: "mx-4 max-h-[85dvh] max-w-md rounded-xl"
 				}`}
 			>
 				{/* Drag handle - drawer only */}

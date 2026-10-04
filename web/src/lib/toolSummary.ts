@@ -77,8 +77,8 @@ export function taskDescription(input: unknown): string {
 }
 
 /**
- * A path split for a row: the directories, which may fade out, and the file
- * name, which may not.
+ * A path split for one line — the row's, and a tool body's `PathLine`: the
+ * directories, which may fade out, and the file name, which may not.
  *
  * `truncate` removes the tail of a string, and a path's tail is the one part
  * that identifies it — so the two halves are drawn separately and only the

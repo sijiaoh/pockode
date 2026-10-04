@@ -1,6 +1,8 @@
 import { FileDiff } from "lucide-react";
 import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { proposedChangeText } from "../../lib/proposedChange";
 import {
+	type FileEdit,
 	type LineCounts,
 	type TurnFile,
 	type TurnFileMarker,
@@ -8,11 +10,12 @@ import {
 } from "../../lib/turnChanges";
 import { useWSStore } from "../../lib/wsStore";
 import type { ContentPart } from "../../types/message";
-import { CollapsibleBody, ScrollableContent } from "../ui";
-import { ProposedChange } from "./ProposedChange";
+import { CollapsibleBody } from "../ui";
+import { ProposedChange, proposedChangeHeader } from "./ProposedChange";
 import { anchorCandidateProps } from "./scrollAnchor";
 import { PathLine } from "./ToolInvocation";
 import { Chip, Detail, RowButton } from "./ToolRow";
+import { Section } from "./ToolSection";
 
 /**
  * Up to this many files are all listed. Past it the card lists FOLDED_ROWS and
@@ -73,6 +76,46 @@ function dirParts(dir: string): { head: string; tail: string } {
 	return { head: dir.slice(0, cut), tail: dir.slice(cut) };
 }
 
+/**
+ * One change as the tool body shows it — the same `Section`, header counts,
+ * wrap switch and copy, clamped in place with *Full screen* — so a reviewer
+ * reads it the same in the card as on its tool row.
+ */
+function EditSection({
+	edit,
+	step,
+	fileName,
+}: {
+	edit: FileEdit;
+	/** Its place among the file's changes, when there is more than one. */
+	step?: number;
+	fileName: string;
+}) {
+	const { change, run } = edit;
+	// Counting reads the whole diff; `change` is the same object every render.
+	const header = useMemo(() => proposedChangeHeader(change), [change]);
+	const noun = change.kind === "write" ? "Content" : "Change";
+	return (
+		<Section
+			label={step ? `${step} · ${run.name}` : noun}
+			// Named by what it copies, and by which step when several could.
+			copyLabel={`Copy ${noun.toLowerCase()}${step ? ` of ${step} · ${run.name}` : ""}`}
+			{...header}
+			copyText={proposedChangeText(change)}
+			fullScreenTitle={`${run.name} · ${fileName}`}
+		>
+			{/* Not "not in the transcript": an earlier step of this turn may have
+			    written the very content this one replaced. */}
+			{edit.rewritten && (
+				<p className="pb-1 text-th-text-muted">
+					Whole file written — what it replaced is not in this call.
+				</p>
+			)}
+			<ProposedChange change={change} />
+		</Section>
+	);
+}
+
 function FileBody({
 	file,
 	onOpenFile,
@@ -90,27 +133,16 @@ function FileBody({
 			/>
 			{/* One diff per edit, in order. Edits carry fragments, not the file, so
 			    there is nothing to compose a net diff from that could be trusted. */}
-			<div className="space-y-2">
-				{file.edits.map((edit, index) => (
+			{file.edits.map((edit, index) => (
+				<EditSection
 					// The run alone does not tell edits apart: a Codex payload may list
 					// one path twice.
-					<div key={`${edit.run.id}:${index}`} className="space-y-1">
-						{numbered && (
-							<p className="text-th-text-muted">
-								{index + 1} · {edit.run.name}
-							</p>
-						)}
-						{/* Not "not in the transcript": an earlier step of this turn may
-						    have written the very content this one replaced. */}
-						{edit.rewritten && (
-							<p className="text-th-text-muted">
-								Whole file written — what it replaced is not in this call.
-							</p>
-						)}
-						<ProposedChange change={edit.change} />
-					</div>
-				))}
-			</div>
+					key={`${edit.run.id}:${index}`}
+					edit={edit}
+					step={numbered ? index + 1 : undefined}
+					fileName={file.name}
+				/>
+			))}
 		</>
 	);
 }
@@ -161,9 +193,9 @@ function FileRow({
 			</RowButton>
 			<div id={bodyId}>
 				<CollapsibleBody expanded={expanded}>
-					<ScrollableContent className="max-h-[60vh] space-y-3 overflow-auto border-t border-th-border bg-th-bg-secondary p-2">
+					<div className="space-y-3 border-t border-th-border bg-th-bg-secondary p-2">
 						<FileBody file={file} onOpenFile={onOpenFile} />
-					</ScrollableContent>
+					</div>
 				</CollapsibleBody>
 			</div>
 		</div>

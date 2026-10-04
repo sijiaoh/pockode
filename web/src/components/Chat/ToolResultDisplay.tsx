@@ -1,8 +1,7 @@
 import { AnsiUp } from "ansi_up";
-import { Check, Circle, Loader2 } from "lucide-react";
 import { useMemo } from "react";
 import { groupContentBlocks } from "../../lib/contentBlocks";
-import { proposedChange } from "../../lib/proposedChange";
+import { proposedChange, proposedChangeText } from "../../lib/proposedChange";
 import { CodeHighlighter } from "../../lib/shikiUtils";
 import { parseReadResult } from "../../lib/toolResultParser";
 import { useWSStore } from "../../lib/wsStore";
@@ -28,14 +27,15 @@ interface ToolResultDisplayProps {
 	 * there is none to read.
 	 */
 	contents?: ContentBlock[];
+	/** Whether the call failed, which a command's output shows at its end. */
+	failed?: boolean;
 }
 
-interface TodoWriteInput {
-	todos: Array<{
-		content: string;
-		status: "pending" | "in_progress" | "completed";
-		activeForm: string;
-	}>;
+/** The file a `Read` returned, without the line numbers the CLI prefixes. */
+function readResultCode(result: string): string {
+	const lines = parseReadResult(result);
+	if (lines.length === 0) return result;
+	return lines.map((l) => l.content).join("\n");
 }
 
 function ReadResultDisplay({
@@ -45,49 +45,10 @@ function ReadResultDisplay({
 	result: string;
 	filePath?: string;
 }) {
-	const lines = useMemo(() => parseReadResult(result), [result]);
-	const code = useMemo(() => lines.map((l) => l.content).join("\n"), [lines]);
-
-	if (lines.length === 0) {
-		return <FileContentDisplay content={result} filePath={filePath} />;
-	}
-
-	return <FileContentDisplay content={code} filePath={filePath} />;
-}
-
-function TodoWriteResultDisplay({ input }: { input: TodoWriteInput }) {
-	const getStatusIcon = (status: TodoWriteInput["todos"][number]["status"]) => {
-		switch (status) {
-			case "completed":
-				return <Check className="size-4 text-th-success" />;
-			case "in_progress":
-				return <Loader2 className="size-4 text-th-warning" />;
-			case "pending":
-				return <Circle className="size-4 text-th-text-muted" />;
-		}
-	};
+	const code = useMemo(() => readResultCode(result), [result]);
 
 	return (
-		<div className="space-y-1 text-sm">
-			{input.todos.map((todo, index) => (
-				<div
-					// biome-ignore lint/suspicious/noArrayIndexKey: todos have no unique identifier
-					key={index}
-					className="flex items-center gap-2"
-				>
-					{getStatusIcon(todo.status)}
-					<span
-						className={
-							todo.status === "completed"
-								? "text-th-text-muted line-through"
-								: ""
-						}
-					>
-						{todo.content}
-					</span>
-				</div>
-			))}
-		</div>
+		<FileContentDisplay content={code} filePath={filePath} copyable={false} />
 	);
 }
 
@@ -185,25 +146,113 @@ function UnknownResultDisplay({ result }: { result: string }) {
 	}, [result]);
 
 	if (pretty)
-		return <CodeHighlighter language="json">{pretty}</CodeHighlighter>;
+		return (
+			<CodeHighlighter language="json" copyable={false}>
+				{pretty}
+			</CodeHighlighter>
+		);
 	return <pre className="whitespace-pre-wrap text-th-text-muted">{result}</pre>;
 }
 
-function BashResultDisplay({ result }: { result: string }) {
-	const html = useMemo(() => ansiUp.ansi_to_html(result), [result]);
+/**
+ * How many of a failed command's last lines are marked as its error. The
+ * failure is nearly always said at the end — a compiler's last errors, a test
+ * runner's `FAIL` — and a handful of lines holds it without painting a whole
+ * log red.
+ */
+const ERROR_TAIL_LINES = 5;
+
+function outputLines(result: string): string[] {
+	return result.replace(/\n+$/, "").split("\n");
+}
+
+/** What the output's *Show all* says: a log is measured in lines. */
+export function outputLineCount(result: string): number {
+	return outputLines(result).length;
+}
+
+function AnsiPre({ text, className }: { text: string; className: string }) {
+	const html = useMemo(() => ansiUp.ansi_to_html(text), [text]);
 
 	return (
 		<pre
-			className="font-mono text-xs text-th-text-muted"
+			className={`whitespace-pre-wrap break-words font-mono text-xs ${className}`}
 			// biome-ignore lint/security/noDangerouslySetInnerHtml: ansi_up output is safe
 			dangerouslySetInnerHTML={{ __html: html }}
 		/>
 	);
 }
 
-function isTodoWriteInput(input: unknown): input is TodoWriteInput {
-	const i = input as Record<string, unknown>;
-	return Array.isArray(i?.todos) && i.todos.length > 0;
+/**
+ * A command's output, wrapped: a log line is read whole, and on a phone a
+ * sideways scroll hid the end of nearly every one. A failed command's last
+ * lines stand out, since that is where it says why.
+ */
+function BashResultDisplay({
+	result,
+	failed,
+}: {
+	result: string;
+	failed?: boolean;
+}) {
+	const [head, tail] = useMemo(() => {
+		if (!failed) return [result, ""];
+		const lines = outputLines(result);
+		return [
+			lines.slice(0, -ERROR_TAIL_LINES).join("\n"),
+			lines.slice(-ERROR_TAIL_LINES).join("\n"),
+		];
+	}, [result, failed]);
+
+	return (
+		<>
+			{head && <AnsiPre text={head} className="text-th-text-muted" />}
+			{tail && (
+				<AnsiPre
+					text={tail}
+					className="border-l-2 border-th-error bg-th-error/10 pl-2 text-th-error"
+				/>
+			)}
+		</>
+	);
+}
+
+// Built rather than written as a literal: a control character in a regex
+// literal is almost always a mistake, and the linter says so.
+const ANSI_ESCAPE = new RegExp(
+	`${String.fromCharCode(27)}\\[[0-?]*[ -/]*[@-~]`,
+	"g",
+);
+
+/**
+ * What the result block's copy button copies: the text a reader would select
+ * out of it, which is not always the result as it arrived — a `Read` comes back
+ * line-numbered and a command's output carries colour codes. Nothing for a
+ * result that is not text to begin with: a diff, content blocks.
+ */
+export function resultCopyText(
+	toolName: string,
+	toolInput: unknown,
+	result: string,
+	contents?: ContentBlock[],
+): string | undefined {
+	if (contents) return undefined;
+
+	switch (toolName) {
+		case "Read":
+			return readResultCode(result);
+		case "Bash":
+			return result.replace(ANSI_ESCAPE, "");
+		case "Edit":
+		case "MultiEdit":
+		case "Write": {
+			const change = proposedChange(toolName, toolInput);
+			if (change) return proposedChangeText(change);
+			return result || undefined;
+		}
+		default:
+			return result || undefined;
+	}
 }
 
 /**
@@ -257,17 +306,11 @@ function ToolResultDisplay({
 	result,
 	contents,
 	onOpenFile,
+	failed,
 }: ToolResultDisplayProps) {
 	const input = toolInput as Record<string, unknown>;
 	const filePath =
 		typeof input?.file_path === "string" ? input.file_path : undefined;
-	// Memoized because building add/delete patches diffs whole file contents,
-	// and a streaming session re-renders this tree while it stays expanded.
-	const change = useMemo(
-		() => proposedChange(toolName, toolInput),
-		[toolName, toolInput],
-	);
-
 	if (contents) {
 		return <ContentBlocksDisplay blocks={contents} />;
 	}
@@ -301,18 +344,14 @@ function ToolResultDisplay({
 		// input alone, and the permission card draws the same one before it runs.
 		case "Edit":
 		case "MultiEdit":
-		case "Write":
+		case "Write": {
+			const change = proposedChange(toolName, toolInput);
 			if (change) return <ProposedChange change={change} />;
 			return <UnknownResultDisplay result={result} />;
+		}
 
 		case "Bash":
-			return <BashResultDisplay result={result} />;
-
-		case "TodoWrite":
-			if (isTodoWriteInput(toolInput)) {
-				return <TodoWriteResultDisplay input={toolInput} />;
-			}
-			return <pre className="text-th-text-muted">{result}</pre>;
+			return <BashResultDisplay result={result} failed={failed} />;
 
 		default:
 			return <UnknownResultDisplay result={result} />;

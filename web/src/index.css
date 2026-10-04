@@ -735,6 +735,44 @@ samp {
 		/* biome-ignore lint/complexity/noImportantStyles: Override library's inline sticky positioning */
 		position: static !important;
 	}
+
+	/*
+	 * One narrow line-number column instead of the library's two: an old and a
+	 * new number side by side took about a third of a phone's width. Each row
+	 * keeps the number of the side it is on — a removed line its old number,
+	 * every other its new one — and the +/- in front of the code says which.
+	 *
+	 * The library writes the column's width inline as twice
+	 * --diff-aside-width-- (its measure of the widest number, at least 40px),
+	 * so one of them is the narrow column, and only !important reaches it.
+	 * Every selector goes through .diff-style-root because the library's own
+	 * utilities are `.diff-tailwindcss-wrapper .pl-[10px]` and the like: a tie
+	 * would leave the result to whichever stylesheet happened to load last.
+	 */
+	.diff-tailwindcss-wrapper .diff-style-root .diff-line-num,
+	.diff-tailwindcss-wrapper .diff-style-root .diff-line-hunk-action {
+		/* biome-ignore lint/complexity/noImportantStyles: Override library's inline width */
+		width: var(--diff-aside-width--) !important;
+		/* biome-ignore lint/complexity/noImportantStyles: Override library's inline width */
+		min-width: var(--diff-aside-width--) !important;
+		/* biome-ignore lint/complexity/noImportantStyles: Override library's inline width */
+		max-width: var(--diff-aside-width--) !important;
+		padding-inline: 4px;
+	}
+
+	/* An added line's empty old slot, a removed line's empty new slot, the gap
+	   between them — and on a context line, the old number. */
+	.diff-tailwindcss-wrapper .diff-style-root .diff-line-num span:empty,
+	.diff-tailwindcss-wrapper
+		.diff-style-root
+		.diff-line-num
+		[data-line-old-num]:has(~ [data-line-new-num]) {
+		display: none;
+	}
+
+	.diff-tailwindcss-wrapper .diff-style-root .diff-line-num span {
+		width: 100%;
+	}
 }
 
 /* Let parent container handle scrolling instead of child components' internal scroll */
@@ -861,23 +899,25 @@ samp {
 /* react-shiki hands back shiki's own <pre class="shiki">, so once highlighting
  * lands there is a second <pre> nested inside .code-block. `32e9811` moved "the
  * parent container scrolls, not the library's own box" off `.shiki` and onto
- * `.code-block`, and reset the inner pre's font-size through `prose-pre:*` — but
- * margin and overflow were left behind, and the inner pre is in .prose, so
- * typography's `pre { margin: 1.667em 0; overflow-x: auto }` still reaches it.
- * The margin is the expensive half: every code block grew ~40px the instant it
- * was highlighted, against the 50px that counts as the end of the transcript
- * (`useTranscriptScroll`). */
+ * `.code-block` — but margin and overflow were left behind, and a <pre> keeps a
+ * margin of its own (the browser's 1em, or Typography's 1.667em where a block is
+ * still in .prose). The margin is the expensive half: every code block grew
+ * ~40px the instant it was highlighted, against the 50px that counts as the end
+ * of the transcript (`useTranscriptScroll`). */
 .code-block pre {
 	margin: 0;
 	overflow: visible;
 }
 
-/* The copy button is absolute over the top-right corner, so a wrapped first
- * line would run underneath it; the right padding is the button's width. Shiki's
- * own <pre> and <code> inside are told to wrap too, or they keep the line whole
- * and the wrap on the outer box does nothing. */
+/* Shiki's own <pre> and <code> inside are told to wrap too, or they keep the
+ * line whole and the wrap on the outer box does nothing. */
 .code-block--wrap {
 	min-width: 0;
+}
+
+/* A corner copy button is absolute over the top-right corner, so a wrapped first
+ * line would run underneath it; the right padding is the button's width. */
+.code-block--corner {
 	padding-right: 2.25rem;
 }
 
@@ -940,6 +980,107 @@ samp {
 }
 
 /* =============================================================================
+ * MARKDOWN IN A MESSAGE
+ *
+ * Typography's `prose-sm` is set for an article: a 20px h2 over 14px body, 16px
+ * between paragraphs, 2em around a table. In a conversation on a phone that is
+ * a reply mostly made of headings and gaps, so `prose-message` keeps the body
+ * and brings the rest in. Unlayered for the reason `prose-inherit-color` is —
+ * which also means every Typography rule these restate a margin over (the
+ * first/last-child reset, `h2 + *`) has to be restated here too.
+ * ============================================================================= */
+
+/* The blocks `MarkdownContent` draws itself — a code block, a table's scroll
+ * box, a diagram — are divs Typography does not space, so they are spaced
+ * here, in em so a note's blocks shrink with its text. */
+.markdown-block {
+	margin-top: 0.75em;
+	margin-bottom: 0.75em;
+}
+
+.markdown-block:first-child {
+	margin-top: 0;
+}
+
+.markdown-block:last-child {
+	margin-bottom: 0;
+}
+
+/* The scroll box carries the table's margin; one on the table inside it would
+ * be scrolled content, not space. */
+.markdown-block > table {
+	margin: 0;
+}
+
+/* The header bar shares the code's ground, so the box is one block with a
+ * rule across it rather than a bar stacked on a card. */
+.markdown-code {
+	border-radius: 0.375rem;
+	background-color: var(--th-code-bg);
+}
+
+.markdown-code .code-block {
+	border-radius: 0;
+}
+
+.prose-message :where(p, ul, ol, blockquote) {
+	margin-top: 0.75em;
+	margin-bottom: 0.75em;
+}
+
+.prose-message :where(li) :where(ul, ol) {
+	margin-top: 0.25em;
+	margin-bottom: 0.25em;
+}
+
+.prose-message :where(h1, h2, h3, h4, h5, h6) {
+	margin-top: 1.25em;
+	margin-bottom: 0.5em;
+	line-height: 1.4;
+}
+
+.prose-message :where(h1) {
+	font-size: 1.25em;
+}
+
+.prose-message :where(h2) {
+	font-size: 1.125em;
+}
+
+.prose-message :where(h3, h4, h5, h6) {
+	font-size: 1em;
+}
+
+.prose-message :where(h1, h2, h3, h4, h5, h6) + * {
+	margin-top: 0;
+}
+
+.prose-message :where(hr) {
+	margin-top: 1.25em;
+	margin-bottom: 1.25em;
+}
+
+.prose-message :where(th, td) {
+	padding: 0.375em 0.75em;
+}
+
+.prose-message :where(th, td):first-child {
+	padding-inline-start: 0;
+}
+
+.prose-message :where(th, td):last-child {
+	padding-inline-end: 0;
+}
+
+.prose-message > :first-child {
+	margin-top: 0;
+}
+
+.prose-message > :last-child {
+	margin-bottom: 0;
+}
+
+/* =============================================================================
  * MARKDOWN THAT BORROWS ITS COLOUR
  *
  * Typography sets a body colour on `.prose` itself, so a surface that paints
@@ -987,9 +1128,8 @@ samp {
 	line-height: 1.5;
 }
 
-/* No `pre`: a code block's margin is `.code-block`'s, and this rule, equally
- * specific and later, would override it. */
-.prose-note :where(p, ul, ol, blockquote, table, h1, h2, h3, h4, h5, h6) {
+/* No code block or table: their margins are `.markdown-block`'s, already in em. */
+.prose-note :where(p, ul, ol, blockquote, h1, h2, h3, h4, h5, h6) {
 	margin-top: 0.5em;
 	margin-bottom: 0.5em;
 }
