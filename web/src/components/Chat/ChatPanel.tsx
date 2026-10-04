@@ -254,6 +254,8 @@ function ChatPanel({
 		turnOpen,
 		isSendPending,
 		turn,
+		tail,
+		openedThoughtIds,
 		mode,
 		agentType,
 		model,
@@ -1052,6 +1054,8 @@ function ChatPanel({
 				ref={messageListRef}
 				sessionId={sessionId}
 				messages={messages}
+				tail={tail}
+				openedThoughtIds={openedThoughtIds}
 				hasMoreHistory={hasMoreHistory}
 				isLoadingMoreHistory={isLoadingMoreHistory}
 				historyError={historyError}

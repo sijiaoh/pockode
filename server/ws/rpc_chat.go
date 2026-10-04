@@ -3,6 +3,7 @@ package ws
 import (
 	"context"
 	"errors"
+	"time"
 	"unicode"
 
 	"github.com/pockode/server/agent"
@@ -63,7 +64,7 @@ func (h *rpcMethodHandler) handleChatMessagesSubscribe(ctx context.Context, conn
 		// From the store, not from the process manager: the turn is what the
 		// session is doing, and it is recorded whether or not a process is still
 		// there to be asked.
-		Turn:         meta.Turn,
+		Turn:         rpc.NewTurn(meta.Turn, time.Now()),
 		ToolActivity: wt.ProcessManager.GetToolActivity(params.SessionID),
 	}
 	if err := conn.Reply(ctx, req.ID, result); err != nil {

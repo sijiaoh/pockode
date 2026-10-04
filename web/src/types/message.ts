@@ -990,6 +990,14 @@ export interface SessionTurn {
 	blockers?: TurnBlocker[];
 	/** When the current phase was entered; it does not move while it holds. */
 	since: string;
+	/**
+	 * How long the open turn has run, as of the moment the server sent this;
+	 * absent while `open` is false. A reading rather than a timestamp, so the
+	 * tail line counts on from when it arrived and never compares the server's
+	 * clock with this device's (docs/turn-progress-ui.md §2.3). Unlike `since` it
+	 * does not reset when the turn blocks and resumes.
+	 */
+	open_elapsed_ms?: number;
 	/** How the previous turn ended. Cleared the moment a new one starts, so it
 	 * says nothing while `phase` is not `idle`. */
 	last_outcome?: TurnOutcome;

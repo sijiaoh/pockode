@@ -686,6 +686,167 @@ describe("useChatMessages", () => {
 		});
 	});
 
+	// The tail line's half of the hook: what the main agent is thinking now is
+	// state of its own beside the transcript, and its clock is the server's
+	// reading carried over to this device (docs/turn-progress-ui.md §2.3).
+	describe("the tail line", () => {
+		const RUNNING = {
+			phase: "running" as const,
+			open: true,
+			since: "2024-01-01T00:00:00Z",
+		};
+
+		function renderTail() {
+			let notify: (notification: ServerNotification) => void = () => {};
+			mockState.chatMessagesSubscribe.mockImplementation(
+				async (
+					_sessionId: string,
+					onNotification: (notification: ServerNotification) => void,
+				) => {
+					notify = onNotification;
+					return {
+						id: "sub-1",
+						initial: {
+							history: [{ type: "message", content: "Go" }],
+							turn: RUNNING,
+						},
+					};
+				},
+			);
+			setDetailTurn("s1", RUNNING);
+			const latest = {} as ReturnType<typeof useChatMessages>;
+			function TailProbe() {
+				Object.assign(latest, useChatMessages({ sessionId: "s1" }));
+				return null;
+			}
+			render(<TailProbe />);
+			const emit = (...notifications: unknown[]) =>
+				act(() => {
+					for (const n of notifications) notify(n as ServerNotification);
+				});
+			return { latest, emit };
+		}
+
+		const delta = (content_delta: string) => ({
+			type: "thinking_delta",
+			content_delta,
+		});
+
+		it("gathers the deltas and ends with the main agent's thinking record", async () => {
+			const { latest, emit } = renderTail();
+			await waitFor(() => expect(latest.isLoadingHistory).toBe(false));
+
+			emit(delta(""), delta("**Plan**\n\n"), delta("Read it"));
+			await waitFor(() =>
+				expect(latest.tail.thinking).toMatchObject({
+					content: "**Plan**\n\nRead it",
+					joinedLate: false,
+				}),
+			);
+
+			// A subagent's thinking is its own row, not the main agent's pause.
+			emit({ type: "thinking", content: "sub", parent_tool_use_id: "task-1" });
+			expect(latest.tail.thinking).not.toBeNull();
+
+			emit({
+				type: "thinking",
+				content: "**Plan**\n\nRead it",
+				duration_ms: 4000,
+			});
+			expect(latest.tail.thinking).toBeNull();
+			// Nor did the deltas reach the transcript: only the records did (the
+			// subagent's sits flat, its parent not being loaded).
+			const reply = latest.messages.at(-1) as AssistantMessage;
+			expect(reply.parts.map((part) => part.type)).toEqual([
+				"thinking",
+				"thinking",
+			]);
+		});
+
+		it("ends with the turn, record or not", async () => {
+			const { latest, emit } = renderTail();
+			await waitFor(() => expect(latest.isLoadingHistory).toBe(false));
+
+			emit(delta("half"));
+			await waitFor(() => expect(latest.tail.thinking).not.toBeNull());
+			emit({ type: "interrupted" });
+			expect(latest.tail.thinking).toBeNull();
+		});
+
+		// Nothing closes what the user opened, and a line they opened becomes the
+		// row it settles into.
+		it("opens the row a thinking the user had open settles into", async () => {
+			const { latest, emit } = renderTail();
+			await waitFor(() => expect(latest.isLoadingHistory).toBe(false));
+
+			emit(delta(""), delta("Checking"));
+			await waitFor(() => expect(latest.tail.thinking).not.toBeNull());
+			act(() => latest.tail.onToggleThinking());
+			expect(latest.tail.thinking?.expanded).toBe(true);
+
+			// The record and the text after it reaching one render, as two socket
+			// messages close together do.
+			emit(
+				{ type: "thinking", content: "Checking", duration_ms: 2000 },
+				{ type: "text", content: "Done." },
+			);
+			const reply = latest.messages.at(-1) as AssistantMessage;
+			const row = reply.parts[0];
+			if (row.type !== "thinking") throw new Error("no thinking row");
+			expect(latest.openedThoughtIds.has(row.id)).toBe(true);
+		});
+
+		// Output proves the thinking is over even if its record never comes; a
+		// subagent's says nothing about the main agent.
+		it("ends with the main agent's next output", async () => {
+			const { latest, emit } = renderTail();
+			await waitFor(() => expect(latest.isLoadingHistory).toBe(false));
+
+			emit(delta("x"));
+			await waitFor(() => expect(latest.tail.thinking).not.toBeNull());
+			emit({ type: "text", content: "sub", parent_tool_use_id: "task-1" });
+			expect(latest.tail.thinking).not.toBeNull();
+			emit({ type: "text", content: "Here it is." });
+			expect(latest.tail.thinking).toBeNull();
+		});
+
+		it("is not brought back by deltas still waiting for their frame", async () => {
+			const { latest, emit } = renderTail();
+			await waitFor(() => expect(latest.isLoadingHistory).toBe(false));
+
+			emit(delta("late"), { type: "thinking", content: "late" });
+			await act(
+				() =>
+					new Promise<void>((resolve) =>
+						requestAnimationFrame(() => resolve()),
+					),
+			);
+			expect(latest.tail.thinking).toBeNull();
+		});
+
+		// A restart, or a stop that cut a codex item short, leaves no record.
+		it("ends when the turn closes without a record", async () => {
+			const { latest, emit } = renderTail();
+			await waitFor(() => expect(latest.isLoadingHistory).toBe(false));
+
+			emit(delta("x"));
+			await waitFor(() => expect(latest.tail.thinking).not.toBeNull());
+			act(() => setDetailTurn("s1", { phase: "idle", open: false, since: "" }));
+			expect(latest.tail.thinking).toBeNull();
+		});
+
+		it("counts the turn's clock on from when the server's reading arrived", async () => {
+			const now = vi.spyOn(Date, "now").mockReturnValue(1_000_000);
+			try {
+				const { latest } = renderTail();
+				act(() => setDetailTurn("s1", { ...RUNNING, open_elapsed_ms: 64_000 }));
+				expect(latest.tail.openedAt).toBe(1_000_000 - 64_000);
+			} finally {
+				now.mockRestore();
+			}
+		});
+	});
+
 	describe("paging back through history", () => {
 		// Renders the hook and hands the test everything it needs to page.
 		function renderPager() {

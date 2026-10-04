@@ -57,6 +57,7 @@ import { PartBlocks } from "./ToolList";
 import { Section } from "./ToolOutcomeSections";
 import { ToolRow } from "./ToolRow";
 import { TurnChangesCard } from "./TurnChangesCard";
+import TurnTail from "./TurnTail";
 
 interface SystemItemProps {
 	content: string;
@@ -1335,23 +1336,25 @@ const MessageItem = memo(function MessageItem({
 				{!pending && (
 					<TurnChangesCard parts={message.parts} onOpenFile={onOpenFile} />
 				)}
-				<MessageActions
-					pending={pending}
-					// Keyed on being the open turn rather than on being last. The two
-					// agreed until a message could be sent mid-reply; now the reply
-					// that is still growing routinely has that message under it, and
-					// reading position would take its spinner away at the one moment
-					// the user has just asked it something. A message left `streaming`
-					// that is *not* the open turn gets nothing, which is what stopped
-					// a superseded reply from claiming to still be running.
-					spinning={
-						message.status === "sending" ||
-						(message.status === "streaming" && !!isOpenTurn)
-					}
-					copyText={copyText || undefined}
-					onFork={onFork}
-					forkBlocked={forkBlocked}
-				/>
+				{pending ? (
+					<TurnTail
+						// Keyed on being the open turn rather than on being last. The two
+						// agreed until a message could be sent mid-reply; now the reply
+						// that is still growing routinely has that message under it, and
+						// reading position would take its line away at the one moment the
+						// user has just asked it something. A message left `streaming`
+						// that is *not* the open turn keeps the slot empty, which is what
+						// stopped a superseded reply from claiming to still be running.
+						writing={message.status === "sending" || !!isOpenTurn}
+						placeholder={message.status === "sending"}
+					/>
+				) : (
+					<MessageActions
+						copyText={copyText || undefined}
+						onFork={onFork}
+						forkBlocked={forkBlocked}
+					/>
+				)}
 			</div>
 		</div>
 	);

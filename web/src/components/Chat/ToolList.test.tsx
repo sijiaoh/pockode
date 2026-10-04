@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import type { ContentPart } from "../../types/message";
 import ThinkingItem from "./ThinkingItem";
 import { PartBlocks } from "./ToolList";
+import { OpenedThoughtsContext } from "./turnTailContext";
 
 const bash = (id: string): ContentPart => ({
 	type: "tool_call",
@@ -60,6 +61,21 @@ describe("PartBlocks with thinking", () => {
 			screen.getByRole("button", { name: "Thought for 2 seconds" }),
 		);
 		await user.click(summary);
+
+		expect(
+			screen.getByRole("button", { name: "Thought for 2 seconds" }),
+		).toHaveAttribute("aria-expanded", "true");
+		expect(screen.getByText("a")).not.toBeVisible();
+	});
+
+	// The user opened it while it was still the tail line, before the row
+	// existed: it settles open and in sight, though its group has folded.
+	it("opens a thinking that settled from a tail line the user had open", () => {
+		render(
+			<OpenedThoughtsContext value={new Set(["th-1"])}>
+				<List />
+			</OpenedThoughtsContext>,
+		);
 
 		expect(
 			screen.getByRole("button", { name: "Thought for 2 seconds" }),

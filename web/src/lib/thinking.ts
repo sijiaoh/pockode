@@ -1,4 +1,4 @@
-import type { Thought } from "../types/message";
+import type { Thought, TurnPhase } from "../types/message";
 import { formatElapsed } from "./toolRun";
 
 /**
@@ -66,4 +66,99 @@ export function spokenThoughtLabel(thoughts: Thought[]): string {
 		return `Thought for ${unit(minutes, "minute")} ${unit(seconds % 60, "second")}`;
 	}
 	return `Thought for ${unit(Math.floor(minutes / 60), "hour")} ${unit(minutes % 60, "minute")}`;
+}
+
+/**
+ * What the main agent is thinking right now, as far as its `thinking_delta`s
+ * have said (docs/turn-progress-ui.md#23-what-it-says). Client-side only: it
+ * lasts seconds, ends with the thinking's record, and a reconnect loses it —
+ * which costs the tail line one word until the next signal.
+ */
+export interface LiveThinking {
+	content: string;
+	fullReasoning: string;
+	/**
+	 * The first delta this client saw already carried text, so the start of the
+	 * thinking was missed — a subscription made mid-thinking. Codex opens every
+	 * reasoning item with an empty delta, so a beginning this client saw never
+	 * starts with text.
+	 */
+	joinedLate: boolean;
+	/** The user opened it; the row it settles into opens too. */
+	expanded: boolean;
+}
+
+/**
+ * What the tail line draws from (docs/turn-progress-ui.md#2-the-tail-line).
+ */
+export interface TurnTail {
+	phase: TurnPhase;
+	/**
+	 * When the open turn began, on this device's clock: the server's reading
+	 * subtracted from when it arrived. Absent without a reading.
+	 */
+	openedAt?: number;
+	/** The main agent is thinking now; null when it is not, or not known to be. */
+	thinking: LiveThinking | null;
+	onToggleThinking: () => void;
+}
+
+/**
+ * Folds more text onto what the main agent has thought so far: a delta, or a
+ * run of them already folded together. `live` is null before the first.
+ */
+export function applyThinkingDelta(
+	live: LiveThinking | null,
+	delta: { content: string; fullReasoning: string },
+): LiveThinking {
+	if (!live) {
+		return {
+			content: delta.content,
+			fullReasoning: delta.fullReasoning,
+			joinedLate: Boolean(delta.content || delta.fullReasoning),
+			expanded: false,
+		};
+	}
+	return {
+		...live,
+		content: live.content + delta.content,
+		fullReasoning: live.fullReasoning + delta.fullReasoning,
+	};
+}
+
+// A line's leading block marker — heading, quote, list bullet or number.
+const BLOCK_MARKER = /^(?:#{1,6}\s+|>\s*|[-*+]\s+|\d+[.)]\s+)+/;
+// Emphasis only where it is a pair of delimiters around words, so the `_` in
+// `snake_case` and the `*` in `a * b` — common in reasoning about code — stay.
+// No lookbehind: Safari before 16.4 cannot parse it, and a regex it cannot
+// parse fails the whole module.
+const STRONG = /(\*\*|__)(\S(?:.*?\S)??)\1/g;
+const EMPHASIS = /(^|[^\w*])([*_])(\S(?:.*?\S)??)\2(?![\w*])/g;
+const CODE_SPAN = /`([^`]*)`/;
+
+/** Code spans keep their text untouched; only the prose around them loses markers. */
+function stripInline(line: string): string {
+	return line
+		.split(CODE_SPAN)
+		.map((piece, index) =>
+			index % 2 === 1
+				? piece
+				: piece.replace(STRONG, "$2").replace(EMPHASIS, "$1$3"),
+		)
+		.join("")
+		.replaceAll("`", "");
+}
+
+/**
+ * The last non-empty line of the text so far, Markdown markers stripped: a
+ * codex summary part opens on a bold heading, which is usually exactly the line
+ * worth showing. Empty when there is no text yet.
+ */
+export function latestLine(text: string): string {
+	const lines = text.split("\n");
+	for (let i = lines.length - 1; i >= 0; i--) {
+		const line = stripInline(lines[i].trim().replace(BLOCK_MARKER, "")).trim();
+		if (line) return line;
+	}
+	return "";
 }

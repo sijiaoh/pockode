@@ -31,7 +31,7 @@ function ThoughtText({ content }: { content: string }) {
  * One record's share of the body. Codex's raw reasoning goes under a label
  * only beside a summary; alone it is the body, and nothing is labelled twice.
  */
-function ThoughtBody({ thought }: { thought: Thought }) {
+export function ThoughtBody({ thought }: { thought: Thought }) {
 	if (!hasText(thought)) {
 		return <p className="text-th-text-muted">Hidden by the model provider.</p>;
 	}

@@ -948,9 +948,9 @@ export function applyServerEvent(
 		});
 	}
 
-	// TODO: Remove once the tail line draws it (docs/turn-progress-ui.md#2-the-tail-line).
-	// Until then it is dropped here, before an event the transcript does not
-	// place can open an empty reply.
+	// Not the transcript's: the tail line draws it from state of its own
+	// (useChatMessages), and nothing is placed for it here — it would open an
+	// empty reply.
 	if (event.type === "thinking_delta") {
 		return messages;
 	}

@@ -2433,20 +2433,19 @@ describe("ChatPanel", () => {
 			act(() => {
 				mockState.onNotification?.({ type: "text", content: "Working on it" });
 			});
-			// By label: the list's own scroll-position output is a `status` too.
-			expect(screen.getByLabelText("Loading")).toBeInTheDocument();
+			expect(await screen.findByText("Agent is running")).toBeInTheDocument();
 
 			await user.type(screen.getByRole("textbox"), "Also look at X");
 			await user.click(screen.getByRole("button", { name: /Send/ }));
 
 			await screen.findByText("Also look at X");
-			expect(screen.getByLabelText("Loading")).toBeInTheDocument();
+			expect(await screen.findByText("Agent is running")).toBeInTheDocument();
 
 			// And it goes when the turn does, rather than spinning on.
 			act(() => {
 				mockState.onNotification?.({ type: "done" });
 			});
-			expect(screen.queryByLabelText("Loading")).not.toBeInTheDocument();
+			expect(screen.queryByText("Agent is running")).not.toBeInTheDocument();
 		});
 
 		// The only receipt a mid-turn send gets until the agent reads it: nothing
@@ -3715,16 +3714,19 @@ describe("ChatPanel", () => {
 			render(<ChatPanel {...defaultProps} />);
 			await waitForHistoryLoad();
 
+			act(() => {
+				acceptSetting({
+					turn: { phase: "running", open: true, since: "2024-01-01T00:00:00Z" },
+				});
+			});
 			emit(autoContinue, { type: "text", content: "wrapping up" });
 
 			setWorkStatus("closed");
 
 			// The turn is untouched by the work reaching its end: still streaming,
-			// still spinning, still showing what the agent wrote.
+			// still running, still showing what the agent wrote.
 			expect(screen.getByText("wrapping up")).toBeInTheDocument();
-			expect(
-				screen.getByRole("status", { name: "Loading" }),
-			).toBeInTheDocument();
+			expect(await screen.findByText("Agent is running")).toBeInTheDocument();
 		});
 	});
 

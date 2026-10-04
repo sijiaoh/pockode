@@ -3227,6 +3227,7 @@ type TurnState struct {
     Open        bool        // a turn is under way behind whatever is in its way
     Blockers    []Blocker   // permission | background
     Since       time.Time   // when this phase was entered
+    OpenedAt    time.Time   // when the open turn began; zero while !Open, never stored
     LastOutcome TurnOutcome // completed | failed | aborted, for the turn that ended
     Unanswered  []PendingQuestion // questions posted and not yet answered
 }
@@ -3312,9 +3313,15 @@ were.
 #### What Is Left of the Narrowing
 
 Nothing outside this package reads a turn through a process state any more. The
-client carries the whole `TurnState` — on `SessionListItem` and on the chat
-subscription — and derives what it draws from it
-([lifecycle-ui.md](../lifecycle-ui.md)); the work layer derives its activity from
+client carries the whole `TurnState` — on `SessionListItem`, `SessionDetail` and
+the chat subscription — and derives what it draws from it
+([lifecycle-ui.md](../lifecycle-ui.md)). It goes out as `rpc.Turn`, which swaps
+`OpenedAt` for `open_elapsed_ms`, a reading taken against the server's clock as
+the message is built: the tail line's turn clock counts on from when that reading
+arrived, so it never compares two clocks
+([turn-progress-ui.md](../turn-progress-ui.md#23-what-it-says)). `OpenedAt` is not
+stored because no open turn survives a restart ([Restart Repair](#restart-repair)).
+The work layer derives its activity from
 the same state ([work-system.md](work-system.md#activity)) and hears turn
 *endings*, settled, from the settler.
 

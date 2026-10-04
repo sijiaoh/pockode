@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import {
+	useCallback,
+	useEffect,
+	useLayoutEffect,
+	useMemo,
+	useRef,
+	useState,
+} from "react";
 import { IDLE_TURN } from "../lib/activity";
 import {
 	type ChatAttachment,
@@ -28,6 +35,11 @@ import {
 	useSessionDetailStore,
 } from "../lib/sessionDetailStore";
 import {
+	applyThinkingDelta,
+	type LiveThinking,
+	type TurnTail,
+} from "../lib/thinking";
+import {
 	type ConnectionStatus,
 	isInvalidParamsRejection,
 	useWSStore,
@@ -42,6 +54,7 @@ import type {
 	ServerNotification,
 	SessionMode,
 	SessionTurn,
+	Thought,
 	UserMessage,
 } from "../types/message";
 import type { AgentType } from "../types/settings";
@@ -111,6 +124,13 @@ interface UseChatMessagesReturn {
 	isSendPending: boolean;
 	/** What the session is doing, for the surfaces that need more than a boolean. */
 	turn: SessionTurn;
+	/** What the tail line draws; see `TurnTail`. */
+	tail: TurnTail;
+	/**
+	 * Thinking parts that settled while the user had their tail line open, so
+	 * their rows open as they appear.
+	 */
+	openedThoughtIds: ReadonlySet<string>;
 	/**
 	 * The session's own settings, from `session.detail`. Until its first snapshot
 	 * arrives they read as the placeholders below — no session has been described
@@ -248,6 +268,26 @@ function newestSeq(history: unknown[]): HistorySeq | undefined {
 	return undefined;
 }
 
+/**
+ * The thinking part a record settled into, found by the record itself: the
+ * reducer keeps the thought it was handed, so neither its position nor what
+ * landed after it in the same commit can point at the wrong part.
+ */
+function thoughtPartId(
+	messages: Message[],
+	thought: Thought,
+): string | undefined {
+	for (let i = messages.length - 1; i >= 0; i--) {
+		const message = messages[i];
+		if (message.role !== "assistant") continue;
+		const part = message.parts.find(
+			(p) => p.type === "thinking" && p.thoughts.includes(thought),
+		);
+		if (part?.type === "thinking") return part.id;
+	}
+	return undefined;
+}
+
 export function useChatMessages({
 	sessionId,
 	enabled = true,
@@ -316,6 +356,14 @@ export function useChatMessages({
 	// reported as open would arm a Stop this screen cannot deliver and hold
 	// bubbles streaming that will never receive another byte.
 	const turn = isView ? IDLE_TURN : (sessionDetail?.turn ?? IDLE_TURN);
+	// The turn's clock, carried over to this device's: the server's reading of
+	// how long the turn had been open, taken back from when it arrived. Never
+	// the server's own timestamp, which this clock need not agree with.
+	const detailReceivedAt = useSessionDetailStore((s) => s.receivedAt);
+	const turnOpenedAt =
+		turn.open_elapsed_ms === undefined
+			? undefined
+			: detailReceivedAt - turn.open_elapsed_ms;
 
 	// Placeholders for the round trip before the first snapshot: never another
 	// session's values, because the selector above hands back nothing until the
@@ -370,6 +418,83 @@ export function useChatMessages({
 		};
 	}, []);
 
+	// What the main agent is thinking right now. Not a part of the transcript:
+	// it is never recorded, and it ends with the record that is. Coalesced per
+	// frame like tool activity, for the same two reasons — deltas outrun the
+	// screen, and a hidden tab flushes nothing, so they are held folded rather
+	// than queued.
+	const [liveThinking, setLiveThinking] = useState<LiveThinking | null>(null);
+	const liveThinkingRef = useRef(liveThinking);
+	liveThinkingRef.current = liveThinking;
+	const pendingThinkingRef = useRef<LiveThinking | null>(null);
+	const thinkingFrameRef = useRef<number | undefined>(undefined);
+	// Set when a thinking the user had open settles: its row opens with it.
+	const [openedThoughtIds, setOpenedThoughtIds] = useState<ReadonlySet<string>>(
+		new Set(),
+	);
+	const settlingOpenThoughtRef = useRef<Thought | null>(null);
+
+	const flushThinking = useCallback(() => {
+		thinkingFrameRef.current = undefined;
+		const pending = pendingThinkingRef.current;
+		if (!pending) return;
+		pendingThinkingRef.current = null;
+		setLiveThinking((prev) =>
+			prev ? applyThinkingDelta(prev, pending) : pending,
+		);
+	}, []);
+
+	// Deltas held for the next frame belong to the thinking being ended, and a
+	// flush after this would bring it back.
+	const endThinking = useCallback(() => {
+		if (thinkingFrameRef.current !== undefined) {
+			cancelAnimationFrame(thinkingFrameRef.current);
+			thinkingFrameRef.current = undefined;
+		}
+		pendingThinkingRef.current = null;
+		setLiveThinking(null);
+	}, []);
+
+	useEffect(() => {
+		return () => {
+			if (thinkingFrameRef.current !== undefined) {
+				cancelAnimationFrame(thinkingFrameRef.current);
+			}
+		};
+	}, []);
+
+	// A turn that is over thinks no more, however it ended — including the ways
+	// that leave no record to end it here (a restart, a stop that cut a codex
+	// reasoning item off before it completed).
+	useEffect(() => {
+		if (!turn.open) endThinking();
+	}, [turn.open, endThinking]);
+
+	const toggleThinking = useCallback(() => {
+		setLiveThinking((prev) => prev && { ...prev, expanded: !prev.expanded });
+	}, []);
+
+	const tail = useMemo<TurnTail>(
+		() => ({
+			phase: turn.phase,
+			openedAt: turnOpenedAt,
+			thinking: liveThinking,
+			onToggleThinking: toggleThinking,
+		}),
+		[turn.phase, turnOpenedAt, liveThinking, toggleThinking],
+	);
+
+	// Before paint, so the row a thinking settles into is never drawn closed.
+	useLayoutEffect(() => {
+		const thought = settlingOpenThoughtRef.current;
+		if (!thought) return;
+		// One look, in the commit the record was applied in: a record the reducer
+		// set aside is never going to be found.
+		settlingOpenThoughtRef.current = null;
+		const id = thoughtPartId(messages, thought);
+		if (id) setOpenedThoughtIds((prev) => new Set(prev).add(id));
+	}, [messages]);
+
 	const handleNotification = useCallback(
 		(notification: ServerNotification) => {
 			const seq = readHistorySeq(notification);
@@ -392,6 +517,34 @@ export function useChatMessages({
 				backReferencesRef.current.push(notification);
 			}
 			const event = normalizeEvent(notification);
+			if (event.type === "thinking_delta") {
+				pendingThinkingRef.current = applyThinkingDelta(
+					pendingThinkingRef.current,
+					{
+						content: event.contentDelta,
+						fullReasoning: event.fullReasoningDelta,
+					},
+				);
+				if (thinkingFrameRef.current === undefined) {
+					thinkingFrameRef.current = requestAnimationFrame(flushThinking);
+				}
+				return;
+			}
+			// The thinking's own record ends it, and so does anything the main
+			// agent says after it: output proves the thinking is over even if its
+			// record never comes.
+			if (
+				((event.type === "thinking" ||
+					event.type === "text" ||
+					event.type === "tool_call") &&
+					!event.parentToolUseId) ||
+				isTurnTerminal(notification)
+			) {
+				if (event.type === "thinking" && liveThinkingRef.current?.expanded) {
+					settlingOpenThoughtRef.current = event.thought;
+				}
+				endThinking();
+			}
 			if (event.type === "tool_activity") {
 				mergeActivity(pendingActivityRef.current, event);
 				if (activityFrameRef.current === undefined) {
@@ -403,7 +556,7 @@ export function useChatMessages({
 			// replayed one has no honest clock to draw from.
 			setMessages((prev) => applyServerEvent(prev, event, seq, { live: true }));
 		},
-		[flushActivity],
+		[flushActivity, flushThinking, endThinking],
 	);
 
 	// Reset when the session changes. During render rather than in an effect: an
@@ -430,6 +583,9 @@ export function useChatMessages({
 		historyGenerationRef.current++;
 		// Progress held for the next frame belongs to the session being left.
 		pendingActivityRef.current.clear();
+		pendingThinkingRef.current = null;
+		setLiveThinking(null);
+		setOpenedThoughtIds(new Set());
 	}
 
 	// The transcript's own subscription, opened through the common layer like
@@ -474,8 +630,11 @@ export function useChatMessages({
 			boundaryTerminalRef.current = leadingTurnTerminal(initial.history);
 			newestHistorySeqRef.current = newestSeq(initial.history);
 			subscribedTurnRef.current = initial.turn;
-			// Progress for the transcript being replaced.
+			// Progress for the transcript being replaced. A thinking under way
+			// carries on, but every delta of it before now is gone: the next one
+			// starts it over as joined late.
 			pendingActivityRef.current.clear();
+			endThinking();
 			const replayed = replayHistory(initial.history);
 			// The turn is the authority the records are missing: a transcript the
 			// server died in the middle of ends with a bubble still streaming and
@@ -493,7 +652,7 @@ export function useChatMessages({
 			);
 			setIsLoadingHistory(false);
 		},
-		[],
+		[endThinking],
 	);
 
 	const handleSubscribeError = useCallback((err: unknown) => {
@@ -879,6 +1038,8 @@ export function useChatMessages({
 		turnOpen,
 		isSendPending,
 		turn,
+		tail,
+		openedThoughtIds,
 		mode,
 		agentType,
 		model,

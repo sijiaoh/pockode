@@ -272,7 +272,9 @@ because it is a statement about the transcript, not content. Under
 already say the turn is alive, and the shared `Spinner` does not stop itself.
 
 **When it says `Thinking…`** — only on a signal from the main agent that it is
-thinking *now*, which ends with that thinking's record:
+thinking *now*, which ends with that thinking's record — or with anything else
+the main agent says next, since output proves the thinking is over even if its
+record never comes:
 
 - **codex**: a reasoning item has started and its text is arriving
   (`item/reasoning/summaryTextDelta`, `item/reasoning/textDelta`). The *latest

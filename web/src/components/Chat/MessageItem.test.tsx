@@ -7,6 +7,9 @@ import type {
 	PermissionRequest,
 } from "../../types/message";
 import MessageItem from "./MessageItem";
+import { IDLE_TAIL, TurnTailContext } from "./turnTailContext";
+
+const RUNNING = { ...IDLE_TAIL, phase: "running" as const };
 
 const mockWorkDir = vi.hoisted(() => ({ value: "/Users/test/project" }));
 
@@ -401,7 +404,7 @@ describe("MessageItem", () => {
 		expect(screen.getByText("Hello human")).toBeInTheDocument();
 	});
 
-	it("shows spinner for sending status", () => {
+	it("says the turn is running on a placeholder the server has not answered", async () => {
 		const message: Message = {
 			id: "3",
 			role: "assistant",
@@ -410,12 +413,13 @@ describe("MessageItem", () => {
 			createdAt: new Date(),
 		};
 
-		// A bubble waiting for the server to take it always spins, wherever it sits.
+		// The send is about to open a turn, and nothing else says so yet.
 		render(<MessageItem sessionId="session-1" message={message} />);
-		expect(screen.getByRole("status")).toBeInTheDocument();
+		expect(await screen.findByText("Agent is running")).toBeInTheDocument();
+		expect(screen.getByText("Working")).toBeInTheDocument();
 	});
 
-	it("shows spinner for the streaming message the turn is writing into", () => {
+	it("draws the tail line on the streaming message the turn is writing into", async () => {
 		const message: Message = {
 			id: "3",
 			role: "assistant",
@@ -424,14 +428,18 @@ describe("MessageItem", () => {
 			createdAt: new Date(),
 		};
 
-		render(<MessageItem sessionId="session-1" message={message} isOpenTurn />);
-		expect(screen.getByRole("status")).toBeInTheDocument();
+		render(
+			<TurnTailContext value={RUNNING}>
+				<MessageItem sessionId="session-1" message={message} isOpenTurn />
+			</TurnTailContext>,
+		);
+		expect(await screen.findByText("Agent is running")).toBeInTheDocument();
 	});
 
 	// A message sent mid-reply is appended below the reply it went into, so the
 	// reply still being written is no longer last. Reading position would take its
 	// spinner away at the moment the user has just asked it something.
-	it("keeps the spinner on the open turn under a message sent into it", () => {
+	it("keeps the tail line on the open turn under a message sent into it", async () => {
 		const message: Message = {
 			id: "3",
 			role: "assistant",
@@ -440,8 +448,12 @@ describe("MessageItem", () => {
 			createdAt: new Date(),
 		};
 
-		render(<MessageItem sessionId="session-1" message={message} isOpenTurn />);
-		expect(screen.getByRole("status")).toBeInTheDocument();
+		render(
+			<TurnTailContext value={RUNNING}>
+				<MessageItem sessionId="session-1" message={message} isOpenTurn />
+			</TurnTailContext>,
+		);
+		expect(await screen.findByText("Agent is running")).toBeInTheDocument();
 	});
 
 	it("shows no indicator for a streaming message the turn has moved on from", () => {
@@ -456,13 +468,15 @@ describe("MessageItem", () => {
 		// A bubble left streaming that no open turn is writing into says nothing
 		// rather than claiming to still be running; the content stands on its own.
 		render(
-			<MessageItem
-				sessionId="session-1"
-				message={message}
-				isOpenTurn={false}
-			/>,
+			<TurnTailContext value={RUNNING}>
+				<MessageItem
+					sessionId="session-1"
+					message={message}
+					isOpenTurn={false}
+				/>
+			</TurnTailContext>,
 		);
-		expect(screen.queryByRole("status")).not.toBeInTheDocument();
+		expect(screen.queryByText("Agent is running")).not.toBeInTheDocument();
 		expect(screen.queryByText("Process ended")).not.toBeInTheDocument();
 	});
 
@@ -1235,23 +1249,21 @@ describe("MessageItem", () => {
 			return within(menu).getByRole("button", { name: /Fork from here/ });
 		};
 
-		// The row is already there while the agent writes, holding the spinner,
-		// so settling swaps its contents rather than adding a row under the text.
-		it("holds the row's place with the spinner while streaming", () => {
+		// The tail line holds the row's place while the agent writes, so settling
+		// swaps one for the other rather than adding a row under the text.
+		it("holds the row's place with the tail line while streaming", () => {
 			render(
-				<MessageItem
-					sessionId="session-1"
-					message={{ ...settled(), status: "streaming" }}
-					isOpenTurn
-					onForkMessage={vi.fn()}
-				/>,
+				<TurnTailContext value={RUNNING}>
+					<MessageItem
+						sessionId="session-1"
+						message={{ ...settled(), status: "streaming" }}
+						isOpenTurn
+						onForkMessage={vi.fn()}
+					/>
+				</TurnTailContext>,
 			);
-			const row = actions();
-			expect(row).not.toBeNull();
-			expect(within(row as HTMLElement).queryAllByRole("button")).toHaveLength(
-				0,
-			);
-			expect(within(row as HTMLElement).getByRole("status")).toBeVisible();
+			expect(actions()).toBeNull();
+			expect(screen.getByText("Working")).toBeVisible();
 		});
 
 		it("offers copy, fork and the menu once settled", () => {

@@ -444,12 +444,23 @@ bubble is ever open — a turn opens one only when `openAssistantIndex` finds no
 scanning past closed ones cannot pick the wrong turn.
 
 `openAssistantIndex` answers one more question that used to be read off position:
-which bubble may show a spinner. `MessageList` computes it once and hands each row
-`isOpenTurn`, replacing an `isLast` that agreed with it only until a message could
-land underneath the reply it went into — after which the reply still being written
-was no longer last, and lost its spinner at the moment the user had just asked it
-something. The bubbles that are *not* the open turn still show nothing, which is
-what keeps a reply the turn has moved on from claiming to be running.
+which bubble carries the tail line ([turn-progress-ui.md](../turn-progress-ui.md#2-the-tail-line)).
+`MessageList` computes it once and hands each row `isOpenTurn`, replacing an
+`isLast` that agreed with it only until a message could land underneath the reply
+it went into — after which the reply still being written was no longer last, and
+lost its line at the moment the user had just asked it something. The bubbles that
+are *not* the open turn still show nothing, which is what keeps a reply the turn
+has moved on from claiming to be running.
+
+What the line *says* does not come through the bubble's props: the turn's phase,
+its clock and what the main agent is thinking right now reach it through
+`TurnTailContext`, so that a thinking delta several times a second re-renders the
+one line rather than every memoized bubble. "Thinking now" is `useChatMessages`
+state beside the transcript, never a part of it — `thinking_delta` is not
+recorded, so it is dropped by the reducer and folded per frame into that state
+instead. The thinking's record clears it, and so does anything else the main agent
+says next (output proves the thinking is over even if its record never comes) and
+the turn ending however it ends.
 
 That search is also what leaves only two things able to close a bubble: the turn's own
 ending, and the read point. A user message arriving underneath used to close it as a

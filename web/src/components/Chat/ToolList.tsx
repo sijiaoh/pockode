@@ -1,10 +1,17 @@
-import { type ReactNode, useCallback, useMemo, useState } from "react";
+import {
+	type ReactNode,
+	useCallback,
+	useContext,
+	useMemo,
+	useState,
+} from "react";
 import { partBlocks, partKey } from "../../lib/partTree";
 import { stepId } from "../../lib/subagentRun";
 import { rowEntries } from "../../lib/toolGroups";
 import type { ContentPart } from "../../types/message";
 import { RowExpansionContext } from "./rowExpansionContext";
 import { ToolGroupSummary } from "./ToolGroupSummary";
+import { OpenedThoughtsContext } from "./turnTailContext";
 
 interface Item {
 	part: ContentPart;
@@ -105,12 +112,18 @@ function RowList<T extends Item>({
 			return next;
 		});
 
+	// A thinking the user opened while it was still the tail line is a choice
+	// they made before the row existed.
+	const openedThoughts = useContext(OpenedThoughtsContext);
+	const choiceFor = (key: string) =>
+		choices.get(key) ?? (openedThoughts.has(key) || undefined);
+
 	const entries = rowEntries(items);
 	// A card and its row are one call, shown and hidden together.
 	const openedCalls = new Set(
 		entries.flatMap((entry) =>
 			entry.kind === "item" &&
-			choices.get(partKey(entry.item.part, entry.item.index))
+			choiceFor(partKey(entry.item.part, entry.item.index))
 				? [entry.call]
 				: [],
 		),
@@ -144,7 +157,7 @@ function RowList<T extends Item>({
 						<RowSlot
 							key={key}
 							rowKey={key}
-							choice={choices.get(key)}
+							choice={choiceFor(key)}
 							onChoice={onChoice}
 							hidden={hidden}
 							wrapperProps={wrapperProps}
