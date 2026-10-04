@@ -83,10 +83,9 @@ function Probe({ sessionId }: { sessionId: string }) {
 
 function renderSendProbe() {
 	const latest: { messages: Message[] } = { messages: [] };
-	const send = {
-		current: async (_content: string, _answering?: QuestionAnswerRecord[]) =>
-			false,
-	};
+	const send: {
+		current: ReturnType<typeof useChatMessages>["sendUserMessage"];
+	} = { current: async () => false };
 	function SendProbe() {
 		const { messages, sendUserMessage } = useChatMessages({ sessionId: "s1" });
 		latest.messages = messages;
@@ -295,6 +294,69 @@ describe("useChatMessages", () => {
 			content: "Answering:\n\nQ: Which?\nA: SQLite",
 			anchorSeq: 7,
 		});
+	});
+
+	// The echo has only the browser's guess at each file; the reply has what the
+	// server read from the stored bytes, and that is what stays on screen.
+	it("sends files by id and fills their echo from the reply", async () => {
+		mockState.sendMessage.mockResolvedValueOnce({
+			seq: 3,
+			attachments: [
+				{
+					name: "shot.png",
+					mime: "image/png",
+					size: 5,
+					width: 3,
+					height: 2,
+					attachment_id: "abc.png",
+				},
+			],
+		});
+		const file = { id: "abc.png", name: "shot.png", size: 5, mime: "" };
+
+		const { latest, send } = renderSendProbe();
+		await waitFor(() => expect(latest.messages.length).toBeGreaterThan(0));
+		await act(async () => {
+			await send.current("", undefined, [file]);
+		});
+
+		expect(mockState.sendMessage).toHaveBeenCalledWith(
+			expect.anything(),
+			"",
+			undefined,
+			[{ id: "abc.png", name: "shot.png" }],
+		);
+		expect(
+			latest.messages.find((m) => m.role === "user" && m.attachments),
+		).toMatchObject({
+			attachments: [{ mime: "image/png", width: 3, attachment_id: "abc.png" }],
+			anchorSeq: 3,
+		});
+	});
+
+	// The files are the composer's to keep when the server refuses them — an
+	// agent that cannot receive files, an id the session does not have.
+	it("takes a refused message with files back out and rethrows", async () => {
+		mockState.sendMessage.mockRejectedValueOnce(
+			new JSONRPCErrorException(
+				"this session's agent cannot receive attached files",
+				JSONRPCErrorCode.InvalidParams,
+			),
+		);
+
+		const { latest, send } = renderSendProbe();
+		await waitFor(() => expect(latest.messages.length).toBeGreaterThan(0));
+		const before = latest.messages;
+
+		await act(async () => {
+			await expect(
+				send.current("look", undefined, [
+					{ id: "x", name: "x.png", size: 1, mime: "image/png" },
+				]),
+			).rejects.toThrow("cannot receive attached files");
+		});
+
+		expect(latest.messages).toEqual(before);
 	});
 
 	// A refused command was never written or delivered, so leaving its echo up

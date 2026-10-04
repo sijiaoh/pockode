@@ -27,7 +27,7 @@ export function totalTokens(usage: TokenUsage): number {
  * Abbreviated token count for surfaces with no room for the exact one, e.g.
  * `1536` -> `1.5K`.
  *
- * Only where width is scarce: the session info panel shows `formatExactTokens`
+ * Only where width is scarce: the header's session panel shows `formatExactTokens`
  * instead, because a figure a user opened a panel to read should be the real one.
  */
 export function formatTokens(tokens: number): string {

@@ -778,12 +778,13 @@ func (h *rpcMethodHandler) handleAuth(ctx context.Context, conn *jsonrpc2.Conn, 
 
 	title := filepath.Base(h.worktreeManager.Registry().MainDir())
 	result := rpc.AuthResult{
-		Version:       h.version,
-		Title:         title,
-		WorkDir:       wt.WorkDir,
-		WorktreeName:  wt.Name,
-		MaxUploadSize: filetransfer.MaxUploadSize,
-		SessionToken:  sessionToken,
+		Version:           h.version,
+		Title:             title,
+		WorkDir:           wt.WorkDir,
+		WorktreeName:      wt.Name,
+		MaxUploadSize:     filetransfer.MaxUploadSize,
+		MaxAttachmentSize: filetransfer.MaxAttachmentSize,
+		SessionToken:      sessionToken,
 	}
 	if err := conn.Reply(ctx, req.ID, result); err != nil {
 		h.log.Error("failed to send auth response", "error", err)

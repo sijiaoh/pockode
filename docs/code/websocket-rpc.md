@@ -110,7 +110,9 @@ telling the sender where its own message landed in the history, and, for a
 message that invoked a [Pockode command](../pockode-commands.md#what-is-recorded),
 `content` and `command` — the prompt the command expanded to and the command as
 parsed — or, for a message carrying `answering`, `content` alone: the body the
-server wrote from the answers ([agent-integration.md](agent-integration.md#answering)).
+server wrote from the answers ([agent-integration.md](agent-integration.md#answering)),
+and, for a message carrying files, `attachments` — each file as its record
+describes it ([agent-integration.md](agent-integration.md#files-the-user-sends)).
 It needs one because the sender is deliberately left out of the
 broadcast that carries every other record's `seq` (it has already echoed the
 message into its own transcript), so the reply is the only place that address —
@@ -376,6 +378,7 @@ Client                              Server
   │   { version, title, work_dir,      │
   │     worktree_name,                 │
   │     max_upload_size,               │
+  │     max_attachment_size,           │
   │     session_token }                │
   │◀───────────────────────────────────┤
   │                                    │
@@ -402,7 +405,9 @@ Client                              Server
   server is free to change what it accepts, and the client that has to respect
   the number is the one furthest from the decision. It is the same value on
   every route — the relay tunnel streams a request body and imposes no ceiling
-  of its own.
+  of its own. That is the workspace upload's ceiling; `max_attachment_size` is
+  the same thing for chat attachments (`POST /api/chat/attachments`), which have
+  a lower one of their own ([File § Transfer](../file.md#transfer)).
 
 For where the server's password comes from (`--password` / `POCKODE_PASSWORD`), how a session token is issued and expired, and the overall trust model, see [Authentication](authentication.md).
 

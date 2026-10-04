@@ -486,8 +486,8 @@ one page, so a row can be missing simply because the reader has not scrolled
 that far ([list-paging-ui.md](list-paging-ui.md#23-an-absence-is-not-evidence)).
 The same wording spells the sidebar row's screen-reader text below.
 
-The transcript's top, not the chat header: the header belongs to the project
-title (`MainContainer title={projectTitle}`), and more to the point, "this
+The transcript's top, not the chat header: the header names the session and what
+runs it ([agent-chat.md](agent-chat.md#the-session-screen)), and more to the point, "this
 conversation begins as a copy of another one" is a fact about where the
 transcript starts — the top of the transcript is literally where it belongs.
 

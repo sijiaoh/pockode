@@ -1,4 +1,4 @@
-import type { HistorySeq, Message } from "../types/message";
+import type { HistorySeq, Message, UserMessage } from "../types/message";
 import { formatPockodeCommand } from "./pockodeCommand";
 
 /**
@@ -27,8 +27,8 @@ export function sendAgainTarget(
 }
 
 /**
- * What *Send again* puts back into the input after signing in from `target`, or
- * undefined when it offers nothing
+ * The message *Send again* puts back into the composer after signing in from
+ * `target`, or undefined when it offers nothing
  * (docs/cli-login-ui.md#after-signing-in-send-again).
  *
  * Only once the turn has failed on its credentials: a notice on a turn still
@@ -37,13 +37,12 @@ export function sendAgainTarget(
  * a person typed: an older turn's message is one the conversation has moved
  * past, and a turn Pockode or another agent started holds words the user never
  * wrote. An answer to posted questions is left out too — its text is the answers
- * flattened for the agent, which is not what the user entered. A command comes
- * back as typed.
+ * flattened for the agent, which is not what the user entered.
  */
-export function sendAgainText(
+export function sendAgainMessage(
 	messages: readonly Message[],
 	target: SendAgainTarget,
-): string | undefined {
+): UserMessage | undefined {
 	const last = messages.at(-1);
 	if (
 		!last ||
@@ -62,5 +61,15 @@ export function sendAgainText(
 	if ((asked.source && asked.source !== "user") || asked.answering) {
 		return undefined;
 	}
+	return asked;
+}
+
+/** What `sendAgainMessage` gives back as text. A command comes back as typed. */
+export function sendAgainText(
+	messages: readonly Message[],
+	target: SendAgainTarget,
+): string | undefined {
+	const asked = sendAgainMessage(messages, target);
+	if (!asked) return undefined;
 	return asked.command ? formatPockodeCommand(asked.command) : asked.content;
 }

@@ -1,5 +1,6 @@
 import type { ComponentType } from "react";
 import { useSyncExternalStore } from "react";
+import type { ChatAttachment } from "../chatAttachments";
 
 export interface AvatarProps {
 	className?: string;
@@ -12,11 +13,29 @@ export interface AvatarProps {
  * viewport the answer panel folds the bar away while the user answers
  * (docs/answering-ui.md §3). A draft the user has already typed
  * has to outlive that, so it cannot live in the bar's own state alone — the
- * default bar keeps it in `inputStore`, keyed by session.
+ * default bar keeps it in `inputStore`, keyed by session, files and their
+ * uploads included.
  */
+/**
+ * What became of a send, as far as the bar has to act on it. `refused`: the
+ * server turned the message down whole — nothing was written or delivered, and
+ * the host has said why and put the text back — so whatever else the bar took
+ * out of the draft for it (the default bar's files) goes back too. `sent`
+ * covers everything else, a failed delivery included: that message stands in
+ * the transcript with its failure under it, and may have reached the agent.
+ */
+export type SendOutcome = "sent" | "refused";
+
 export interface InputBarProps {
 	sessionId: string;
-	onSend: (content: string) => void;
+	/**
+	 * `content` may be empty when `attachments` is not. The attachments are
+	 * files already in the session's store (`uploadChatAttachment`).
+	 */
+	onSend: (
+		content: string,
+		attachments?: ChatAttachment[],
+	) => Promise<SendOutcome>;
 	/**
 	 * The only switch for "can this be sent right now". Typing is never affected
 	 * by it — a draft written while the connection is down or history is loading
@@ -36,9 +55,17 @@ export interface InputBarProps {
 	 * `canSend={false}`, already decided by the host. A bar that refuses on
 	 * `turnOpen` is refusing sends the server would have accepted.
 	 *
-	 * Offered so a custom bar can *say* something about the open turn.
+	 * What it does decide is Stop, which is the bar's: the host draws no Stop of
+	 * its own. The default bar gives Send and Stop one slot, never both at once —
+	 * Stop while the turn is open and Send has nothing to do (no draft, or
+	 * `canSend={false}`), and held unpressable for a moment after it arrives,
+	 * since it lands under the thumb that just pressed Send. `slotShowsStop` and
+	 * `ArmedStop` in `Chat/SendStopSlot.tsx` are that rule, for a custom bar to
+	 * reuse. A custom bar that draws no Stop leaves the user no way to interrupt
+	 * on a touch screen.
 	 */
 	turnOpen?: boolean;
+	/** Interrupts the open turn. */
 	onStop?: () => void;
 	/**
 	 * Bumped when the host has just put something into the draft for the user
@@ -63,8 +90,7 @@ export interface ModeSelectorProps {
 }
 
 /**
- * Agent, model and effort are one control: both lists are decided by the agent,
- * and the action bar has no room for a second, wider button.
+ * Agent, model and effort are one control: both lists are decided by the agent.
  */
 export interface EngineSelectorProps {
 	agentType: "claude" | "codex";
@@ -109,13 +135,24 @@ export interface ChatUIConfig {
 	/** Custom InputBar component (replaces default) */
 	InputBar?: ComponentType<InputBarProps>;
 
-	/** Custom ModeSelector component (set to null to hide) */
+	/**
+	 * Custom ModeSelector, drawn as the Permissions section of the session panel
+	 * the header's title opens (set to null to drop the section).
+	 */
 	ModeSelector?: ComponentType<ModeSelectorProps> | null;
 
-	/** Custom EngineSelector (agent + model + effort) component (set to null to hide) */
+	/**
+	 * Custom EngineSelector (agent + model + effort), drawn as the Engine
+	 * section of the session panel the header's title opens (set to null to drop
+	 * the section).
+	 */
 	EngineSelector?: ComponentType<EngineSelectorProps> | null;
 
-	/** Custom StopButton component (set to null to hide) */
+	/**
+	 * Custom StopButton, drawn by the default InputBar in its send slot in place
+	 * of the built-in Stop, and armed the same way (set to null to hide: the
+	 * slot then only ever holds Send). A custom InputBar draws its own Stop.
+	 */
 	StopButton?: ComponentType<StopButtonProps> | null;
 
 	/** Custom EmptyState component (shown when there are no messages) */

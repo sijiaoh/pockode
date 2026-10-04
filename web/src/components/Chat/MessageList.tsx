@@ -124,12 +124,13 @@ function MessageList({
 	// Everything about where the view sits lives in there: two states, one
 	// action. Called first so that the invariant for this commit is applied before
 	// anything below reads a position back out of the container.
-	const { showScrollButton, scrollToBottom, jumpTo } = useTranscriptScroll({
-		scrollRef,
-		contentRef,
-		messages,
-		loadedHistoryPages,
-	});
+	const { showScrollButton, hasUnseen, scrollToBottom, jumpTo } =
+		useTranscriptScroll({
+			scrollRef,
+			contentRef,
+			messages,
+			loadedHistoryPages,
+		});
 
 	// Mirrors the prop rather than closing over it: `requestOlderPage` must keep
 	// its identity, or the sentinel effect below would re-observe every time a page
@@ -311,7 +312,9 @@ function MessageList({
 			>
 				<div
 					ref={contentRef}
-					className="flex min-h-full flex-col justify-end px-3 sm:px-4"
+					// The reading width is on the rows, not the scroller: the scrollbar
+					// stays at the pane's edge and the wheel works over the margins.
+					className="mx-auto flex min-h-full w-full max-w-3xl flex-col justify-end px-3 sm:px-4"
 				>
 					{historyError ? (
 						<div
@@ -392,19 +395,36 @@ function MessageList({
 							</div>
 						);
 					})}
+					{/* Sticky inside the column rather than absolute over the pane, so
+					    it lines up with the column's right edge by construction — the
+					    pane also holds the scrollbar, which the column is centred
+					    without. Zero height, so it adds nothing to the content the
+					    resize observer measures. */}
+					{showScrollButton && (
+						<div className="pointer-events-none sticky bottom-3 h-0">
+							<button
+								type="button"
+								onClick={scrollToBottom}
+								className="pointer-events-auto absolute right-0 bottom-0 flex size-9 items-center justify-center rounded-full border border-th-border bg-th-bg-primary text-th-text-secondary pointer-coarse:size-11 shadow-xl transition-colors hover:bg-th-bg-secondary hover:text-th-text-primary"
+								aria-label={
+									hasUnseen
+										? "Scroll to bottom, new messages"
+										: "Scroll to bottom"
+								}
+							>
+								<ArrowDown className="h-5 w-5" aria-hidden="true" />
+								{hasUnseen && (
+									<span
+										data-testid="unseen-dot"
+										className="absolute -top-0.5 -right-0.5 size-2.5 rounded-full bg-th-accent ring-2 ring-th-bg-primary"
+										aria-hidden="true"
+									/>
+								)}
+							</button>
+						</div>
+					)}
 				</div>
 			</div>
-
-			{showScrollButton && (
-				<button
-					type="button"
-					onClick={scrollToBottom}
-					className="absolute bottom-4 left-1/2 flex size-9 -translate-x-1/2 items-center justify-center rounded-full border border-th-border bg-th-bg-primary text-th-text-secondary pointer-coarse:size-11 shadow-xl transition-colors hover:bg-th-bg-secondary hover:text-th-text-primary"
-					aria-label="Scroll to bottom"
-				>
-					<ArrowDown className="h-5 w-5" aria-hidden="true" />
-				</button>
-			)}
 		</div>
 	);
 }

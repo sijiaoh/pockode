@@ -1,3 +1,4 @@
+import type { FileBlock } from "../types/content";
 import type {
 	AssistantMessage,
 	HistorySeq,
@@ -105,6 +106,11 @@ export interface ForkAnchor {
 	 * the fork keeps.
 	 */
 	droppedText?: string;
+	/**
+	 * The files sent with those words, restored beside them. A fork clones the
+	 * session's attachment store, so the same ids name them in the new session.
+	 */
+	droppedAttachments?: FileBlock[];
 }
 
 /**
@@ -162,5 +168,7 @@ export function resolveForkAnchor(
 				: message.command
 					? formatPockodeCommand(message.command)
 					: message.content,
+		droppedAttachments:
+			message.role === "user" ? message.attachments : undefined,
 	};
 }

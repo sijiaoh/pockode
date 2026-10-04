@@ -1008,6 +1008,13 @@ func (p *Process) ReportsMessageIngest() bool {
 	return ok
 }
 
+// ReceivesAttachments reports whether this session's agent can be handed the
+// files a message carries. See agent.AttachmentReceiver.
+func (p *Process) ReceivesAttachments() bool {
+	_, ok := p.agentSession.(agent.AttachmentReceiver)
+	return ok
+}
+
 // SendPermissionResponse answers a permission request, which clears the blocker
 // that request raised and lets the turn carry on.
 func (p *Process) SendPermissionResponse(data agent.PermissionRequestData, choice agent.PermissionChoice) error {

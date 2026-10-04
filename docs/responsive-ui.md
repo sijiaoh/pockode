@@ -34,7 +34,7 @@ container.
 - **Width may never decide reachability. Pointer may never decide layout.**
 
 **Height is not a third axis.** There is exactly one exception in the whole app:
-the answer panel folds the session action bar and the composer away while the
+the answer panel folds the composer away while the
 user is answering on a short viewport, because a soft keyboard leaves its card
 almost no room to put a question in
 ([answering-ui.md §3](answering-ui.md#room-on-a-short-viewport) holds the
@@ -554,14 +554,14 @@ noticed. One representation with a test on it is the only thing that ends that.
      paste the expected side of its diff. Do not edit by hand. -->
 
 ```text
-48 controls render text, state no height of their own and carry no touch-target.
+47 controls render text, state no height of their own and carry no touch-target.
 
 26 state their own font size, so the height below is exact: 16–40px.
-22 inherit it, so the height below is an upper bound — the ancestor that
+21 inherit it, so the height below is an upper bound — the ancestor that
   sets it may well set a smaller one: 24–48px.
 
 8 are under the 36px fine-pointer floor.
-6 reach the 44px coarse floor, 0 of them on a read height.
+5 reach the 44px coarse floor, 0 of them on a read height.
 0 state type this scan cannot read, listed as 0px and `unread`.
 
   16px  exact  web/src/components/Project/WorkDetailOverlay.tsx
@@ -590,7 +590,6 @@ noticed. One representation with a test on it is the only thing that ends that.
   40px  exact  web/src/components/Project/ProjectTab.tsx ×2
   40px  exact  web/src/components/Worktree/WorktreeCreateSheet.tsx ×3
   40px  exact  web/src/extensions/ExampleExtension/sidebarUI/CustomSidebarContent.tsx
-  44px  bound  web/src/components/Chat/ModeSelector.tsx
   44px  bound  web/src/components/Worktree/WorktreeDropdown.tsx
   48px  bound  web/src/components/Auth/PasswordInput.tsx
   48px  bound  web/src/components/Chat/CommandPalette.tsx
@@ -975,10 +974,9 @@ Known blind spots, recorded as they are rather than as they should be:
    its own source and its `gap` is unguarded either way: packing it back to
    `gap-1` leaves the suite green. A row whose children are *components* is the
    same hole from the other side: the tags in it are capitalised, so none is
-   recognised as a control and nothing is measured between them — the session
-   action bar sat at `gap-1.5` (6px) between two selector components, green, until
-   a third control was added and a reader noticed
-   ([usage-display-ui.md](usage-display-ui.md)). All three kinds have to be read by
+   recognised as a control and nothing is measured between them — the chat's
+   former session action bar sat at `gap-1.5` (6px) between two selector
+   components, green, until a third control was added and a reader noticed. All three kinds have to be read by
    a person. (A gapped *ancestor* catches some of the first kind by accident,
    measuring the inner controls against its own gap — accident, not coverage.)
 3. **`sourceScan`'s per-root assertion cannot catch a root being deleted

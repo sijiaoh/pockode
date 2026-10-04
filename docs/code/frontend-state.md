@@ -55,7 +55,7 @@ Pockode uses Zustand for state management, pure reducers for event processing, a
 | settingsStore | App settings, and why they are missing when they are | Holds the subscription's `refresh` too: the Retry is far below the hook that owns it |
 | cliLoginStore | Each AI CLI's sign-in status and update check on the server machine, and its latest sign-in flow and update ([cli-update.md](cli-update.md#the-web-client)) | Status is read on demand, never pushed ([why](cli-auth.md#no-subscription)); a flow outlives the sheet showing it. In memory only: a flow's link and codes are secrets |
 | authStore | The credential to connect with: the session token that survives a reload, or the password just typed | localStorage init; a leaf module written to by wsStore, never the other way round |
-| inputStore | Draft text, per session | persist middleware |
+| inputStore | The draft, per session: its text, and the files picked for it with their uploads | persist middleware for the text only — neither a `File` nor its `blob:` preview survives a reload. The files are here, not in the bar, because the bar is unmounted mid-draft and an upload outlives it |
 | questionDraftStore | What has been typed into each unanswered question, per session | persist middleware, plus a second map: what came out of storage waits there until the session's unanswered list vouches for it, so an answer to a withdrawn question can never reach the screen ([answering-ui.md §5](../answering-ui.md#5-drafts)) |
 | filesSearchStore | File search options | localStorage init |
 | gitPanelStore | Git panel UI state (History expanded) | Session-scoped override |
@@ -289,9 +289,9 @@ reach. The state and the anchor are read inside a layout effect and inside a
 update would deliver the new value a render later — after the frame whose scroll
 position was the whole question — and would reflow the very list being measured.
 
-One value in there is state, and it marks the boundary: whether the
-scroll-to-bottom button is showing, because that is something drawn. Something
-is state when a render has to happen because of it; the rest of this is
+What the scroll-to-bottom button draws is state, and it marks the boundary:
+whether it is showing and whether it carries the new-content dot, because those
+are drawn. Something is state when a render has to happen because of it; the rest of this is
 bookkeeping the render must not see.
 
 ## Server Cache vs Store
@@ -845,8 +845,9 @@ export interface ChatUIConfig {
   UserAvatar?: ComponentType<AvatarProps>;
   AssistantAvatar?: ComponentType<AvatarProps>;
   InputBar?: ComponentType<InputBarProps>;
-  ModeSelector?: ComponentType<ModeSelectorProps> | null;  // null hides it
-  EngineSelector?: ComponentType<EngineSelectorProps> | null;  // agent + model + effort chip
+  ModeSelector?: ComponentType<ModeSelectorProps> | null;  // the session panel's Permissions; null drops it
+  EngineSelector?: ComponentType<EngineSelectorProps> | null;  // its Engine (agent + model + effort)
+  StopButton?: ComponentType<StopButtonProps> | null;  // the default InputBar's send slot
   // ...
 }
 ```

@@ -170,6 +170,9 @@ type Prompt struct {
 	// with it. Empty when the message has no record to name — nothing downstream
 	// may then claim it does.
 	ID string
+	// Attachments are the files the user sent with the message. Only a session
+	// that is an AttachmentReceiver is ever handed any.
+	Attachments []Attachment
 }
 
 // MessageIngestReporter is implemented by agent sessions that say for

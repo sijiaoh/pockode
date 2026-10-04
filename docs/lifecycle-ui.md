@@ -481,16 +481,25 @@ most. What the `turn` half removes is the part that was never reliable — infer
 liveness from the last message's status and a `process_ended` that a restart never
 wrote.
 
-`turnOpen` governs Stop, the Escape shortcut and the model / mode / effort
-selectors. It is **not** the composer's gate, and the table below is where those two
+`turnOpen` governs Stop, the Escape shortcut and the session panel's engine
+and mode ([agent-chat.md](agent-chat.md#the-session-screen)). It is **not** the composer's gate, and the table below is where those two
 questions part company:
 
 | `phase` | Stop button | Escape shortcut | Send | Composer hint |
 |---|---|---|---|---|
 | `idle` | hidden | inactive | enabled | — |
-| `running` | shown | active | enabled | the strip, once a message has gone in |
+| `running` | shown while the draft is empty | active | enabled | the strip, once a message has gone in |
 | `blocked(permission)` | shown | active | disabled | the strip |
-| `blocked(background)` | shown | active | enabled | the strip |
+| `blocked(background)` | shown while the draft is empty | active | enabled | the strip |
+
+Stop and Send share one slot at the composer's end and are never on screen
+together, so a destructive target never sits beside Send under a thumb. Stop
+takes the slot whenever Send has nothing to do — no draft (text, or files
+ready to go), or the host not taking sends (`canSend={false}`) — and Send keeps
+it for a draft written mid-turn; interrupting then is an emptied draft away, or
+Escape. Because the Stop that replaces Send lands under
+the thumb that just pressed it, it ignores presses for its first 500ms
+(`Chat/SendStopSlot.tsx`).
 
 **Unanswered questions are not in this table at all**, and their absence is the
 model change made visible. They are not a `phase`, so they gate nothing: the
@@ -530,8 +539,8 @@ reports that refusal rather than swallowing it
 ([answering-ui.md §7](answering-ui.md#7-edge-cases)).
 
 Typing is never blocked in any of these states — only sending — so a drafted
-message survives the wait. Model / mode / effort selectors stay disabled for the
-whole open turn, as they are today — and mid-turn sending is a reason they stay
+message survives the wait. The session panel's engine and mode stay disabled for the
+whole open turn, as they always have — and mid-turn sending is a reason they stay
 that way rather than an argument against it: a message that joins the turn already
 running is answered by the engine and mode that turn started under, so offering to
 change them beside it would offer something that cannot take effect.

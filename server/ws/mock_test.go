@@ -141,6 +141,23 @@ func (forkableMockAgent) ForkSession(context.Context, agent.ForkOptions) (bool, 
 	return false, nil
 }
 
+// attachmentMockAgent is a mockAgent whose sessions take files, as both CLIs'
+// do (agent.AttachmentReceiver). The plain mockAgent's do not, which is how the
+// refusal for an agent that cannot is reached.
+type attachmentMockAgent struct{ *mockAgent }
+
+type attachmentReceivingSession struct{ *mockSession }
+
+func (attachmentReceivingSession) ReceivesAttachments() {}
+
+func (m attachmentMockAgent) Start(ctx context.Context, opts agent.StartOptions) (agent.Session, error) {
+	sess, err := m.mockAgent.Start(ctx, opts)
+	if err != nil {
+		return nil, err
+	}
+	return attachmentReceivingSession{sess.(*mockSession)}, nil
+}
+
 func (m *mockAgent) Start(ctx context.Context, opts agent.StartOptions) (agent.Session, error) {
 	m.mu.Lock()
 	m.startCalls = append(m.startCalls, startCall{sessionID: opts.SessionID, resume: opts.Resume, mode: opts.Mode})

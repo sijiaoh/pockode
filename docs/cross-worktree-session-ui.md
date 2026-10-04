@@ -277,15 +277,15 @@ feature-x`) while the label stays short, as `WorktreeBadge` does. It lands on th
 session's ordinary URL in its own worktree with `from` dropped, so the screen
 that arrives is a live, writable one.
 
-### The action bar between them
+### The header's session panel
 
-- **`Engine` and `Mode` are removed, not disabled.** Disabled reads as "not just
-  now", and what is missing is the execution environment itself.
-- **`Stop` is not rendered** — there is no open turn to end, and none can start.
-- **`Session info` stays.** What the session spent and which work it belongs to
+- **Engine and Permissions are removed, not disabled.** Disabled reads as "not
+  just now", and what is missing is the execution environment itself. The
+  title's second line says `Read-only` in their place.
+- **Work and Usage stay.** What the session spent and which work it belongs to
   are still readable, and it is the way back to that work.
-- The row keeps its border and padding with one button in it, so the two screens
-  do not differ in height at the bottom.
+- **Stop does not exist here**: it lives in the composer's send slot, and
+  `ReadOnlyBar` has none — there is no open turn to end, and none can start.
 
 ### In the transcript
 

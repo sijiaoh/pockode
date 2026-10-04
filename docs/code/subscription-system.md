@@ -1073,26 +1073,29 @@ down under that same name to the engine and mode controls, which until it holds
 both refuse input and show nothing.
 
 **Refusing input**, because the placeholder can eat the correction. The
-placeholder mode is `default`, and `ModeSelector.handleSelect` is a no-op when
-the chosen mode equals the current one. So a session actually in `yolo` rendered
-as Default, and a user pressing "Default" to get back to it was silently ignored:
-the control believed nothing had changed.
+placeholder mode is `default`, and a mode row is a radio, which fires nothing when
+the choice pressed is the one already checked. So a session actually in `yolo`
+rendered as Default, and a user pressing "Default" to get back to it was silently
+ignored: the control believed nothing had changed. The panel's Engine row and
+Permissions rows are therefore unavailable, saying `Loading…`, and no mode row is
+checked.
 
 **Showing nothing**, because a disabled control is still making a claim, and
 every placeholder here is the reassuring one: `default` mode and `claude` agent
 say, of a session nothing is known about, that it is a Claude session that asks
-before it acts. The mode chip is the sharp case — its two states are a grey
-shield and an amber bolt, so the gap read as "this session prompts you" for a
-session running with no prompts at all. Both chips therefore draw a pulsing
-placeholder where the glyph goes and name no value, on a `hasSessionSettings`
-prop each (`EngineSelector`, `ModeSelector`).
+before it acts. The mode is the sharp case — its two states are a calm label and
+an amber bolt, so the gap read as "this session prompts you" for a session
+running with no prompts at all. The header's second line therefore draws a
+pulsing placeholder and names no value, and so does the panel's Engine row
+(`SessionHeader`, `useEngineSummary`); a registered `EngineSelector` or
+`ModeSelector` gets the same `hasSessionSettings` prop to do likewise.
 
-Note which flag gates which, because the chip waits on two. The agent glyph
+Note which flag gates which, because the engine waits on two. The agent glyph
 waits on `hasSessionSettings`, the agent being one of the settings the snapshot
 brings. The model *name* waits again, on `hasLabel`: the option lists it is
 named from load separately, and while they are the only thing outstanding the
-agent is known and its icon is the one true thing on the chip. That second gate
-is also why the chip skeletons the model rather than showing "Auto" — Auto is a
+agent is known and its icon is the one true thing in the row. That second gate
+is also why the model is a skeleton rather than "Auto" — Auto is a
 real setting, and a session set to Opus would claim to be on Auto until its
 lists arrived.
 

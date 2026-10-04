@@ -194,8 +194,8 @@ function UsageBody({
 }
 
 /**
- * What this session has consumed, as its agent reported it — the first section
- * of the session info panel.
+ * What this session has consumed, as its agent reported it — the last section
+ * of the header's session panel.
  *
  * Every figure is the agent's own: nothing is estimated from a price table, and
  * what an agent never reported is said in words rather than shown as a zero.

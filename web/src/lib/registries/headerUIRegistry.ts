@@ -1,10 +1,10 @@
-import type { ComponentType } from "react";
+import type { ComponentType, ReactNode } from "react";
 import { useSyncExternalStore } from "react";
 
 export interface HeaderUIConfig {
 	/**
 	 * Custom Header component (replaces default header).
-	 * Receives onOpenSidebar, onOpenSettings, title as props.
+	 * Receives onOpenSidebar, onOpenSettings, title and heading as props.
 	 *
 	 * Replaces the entire header, including the connection status indicator
 	 * and the menu/settings buttons. Render `<ConnectionStatus />` from
@@ -13,8 +13,12 @@ export interface HeaderUIConfig {
 	HeaderContent?: ComponentType<HeaderContentProps>;
 
 	/**
-	 * Custom Title component (replaces default h1 title).
-	 * Receives the same `title` prop the default h1 would render.
+	 * Custom Title component: replaces the title's text, never the heading
+	 * around it. In a chat that text is the open session's title, and sits
+	 * inside the button that opens the session panel — so render phrasing
+	 * content only (no heading, no button); the host draws the `h1`, the
+	 * button and the engine/mode line beneath it. With no session open it is
+	 * the project's name.
 	 */
 	TitleComponent?: ComponentType<TitleComponentProps>;
 }
@@ -23,10 +27,19 @@ export interface HeaderContentProps {
 	/** Absent when the sidebar is a persistent column: render no menu button. */
 	onOpenSidebar?: () => void;
 	onOpenSettings?: () => void;
+	/** The open session's title, or the project's name when there is none. */
 	title?: string;
+	/**
+	 * The session's own heading — its title and engine/mode line as the button
+	 * that opens the session panel — and absent when no session is open.
+	 * Render it: the session's engine, mode and facts are changed and read
+	 * nowhere else, so a header that leaves it out leaves them unreachable.
+	 */
+	heading?: ReactNode;
 }
 
 export interface TitleComponentProps {
+	/** The open session's title, or the project's name when there is none. */
 	title?: string;
 }
 

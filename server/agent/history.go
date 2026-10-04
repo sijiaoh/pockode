@@ -56,7 +56,10 @@ type EventRecord struct {
 	// Command is the Pockode command a message record was expanded from; see
 	// CommandInvocation.
 	Command *CommandInvocation `json:"command,omitempty"`
-	Origin  MessageOrigin      `json:"origin,omitempty"`
+	// Attachments are the files the user sent with a message record; see
+	// MessageEvent.Attachments.
+	Attachments []FileBlock   `json:"attachments,omitempty"`
+	Origin      MessageOrigin `json:"origin,omitempty"`
 	// MessageID is Pockode's own id for a message, carried by the message record
 	// itself and by the message_ingested record that says the agent read it. It
 	// is what joins the two, and it exists because position cannot do that job:

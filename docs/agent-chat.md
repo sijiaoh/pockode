@@ -24,18 +24,19 @@ React SPA ──WebSocket──▶ Go Server ──spawn──▶ AI CLI (subpro
 | Session config | `server/ws/rpc_session.go` | `session.set_agent_type` / `set_mode` / `set_model` / `set_effort`, each closing the running process because a CLI is told these only at launch; `session.models` and `session.efforts` list the choices ([models](code/agent-integration.md#session-models), [effort](code/agent-integration.md#session-effort)). None of them answer with the new value: the settings in force reach the panel through `session.detail` ([why](code/subscription-system.md#why-a-session-is-two-subscriptions)) |
 | Another worktree's sessions | `server/ws/rpc_session_view.go` | `session_view.*` — reading (and discarding) a session stored under a worktree the connection is not in, including one that no longer exists ([how](#sessions-outlive-their-worktree)) |
 | Attachments | `server/ws/rpc_attachment.go` | `attachment.get` — the content a chat event references by id, answered in `file.get`'s own shape so one client path renders both ([why](code/agent-integration.md#content-blocks-and-attachments)) |
+| Sending files | `server/filetransfer/attachment.go`, `server/chat/attachments.go` | `POST /api/chat/attachments` stores a file in the session's store; `chat.message`'s `attachments` names it by id and each agent delivers it its own way ([how](code/agent-integration.md#files-the-user-sends)). Client side: `web/src/lib/chatAttachments.ts`; the composer's `+` menu (Photos / Files) uploads each file as it is picked (`inputStore`), holds Send until every one is stored, and takes the files back if the message is refused |
 | Chat client | `server/chat/client.go` | Session coordination, message persistence, event broadcast; `SendMessageExcluding` (user) and `SendSystemMessage` (system automation) share one persist+broadcast path |
 | Agent interface | `server/agent/agent.go` | `Session` and `AgentEvent` interfaces |
 | Claude impl | `server/agent/claude/claude.go` | Claude CLI subprocess, stream-json parsing, MCP server config |
 | Process manager | `server/process/manager.go` | Process lifecycle, event stream, lease reaper |
-| Frontend panel | `web/src/components/Chat/ChatPanel.tsx` | Message list, input bar, engine (agent + model + effort) and mode selectors, and the session info button — the action bar's third control, whose panel holds what this session has spent ([usage-display-ui.md](usage-display-ui.md)) |
+| Frontend panel | `web/src/components/Chat/ChatPanel.tsx` | The session screen: the header (`SessionHeader.tsx` — the session's title, and the panel behind it holding engine, permission mode, work and usage), the transcript and the composer (`InputBar.tsx`) ([layout](#the-session-screen)) |
 | Transcript | `web/src/components/Chat/MessageList.tsx` | Rendering the loaded messages, and every scroll decision made over them: [where the view sits](#where-the-view-sits) (with `useTranscriptScroll.ts` and `scrollAnchor.ts` beside it), the sentinel behind [history paging](#history-paging), and the jump to a pending permission request ([lifecycle-ui.md §2.2](lifecycle-ui.md#22-chat-the-attention-strip)) |
 | Chat hook | `web/src/hooks/useChatMessages.ts` | Message state, streaming, permission handling, and the session's unanswered questions |
 | RPC actions | `web/src/lib/rpc/chat.ts` | `sendMessage` (which carries `answering` when it is an answer, [answering-ui.md §3](answering-ui.md#3-the-answer-panel)), `interrupt`, `permissionResponse` |
 
 ## Data Flow
 
-1. User sends message → `chat.message` RPC
+1. User sends message → `chat.message` RPC (files it carries were uploaded beforehand and are named by id — [how](code/agent-integration.md#files-the-user-sends))
 2. ChatClient persists message to session history, forwards to `Process.SendMessage()` — unless the turn is holding a permission request open, the one state a message cannot be delivered in, which is refused as `InvalidParams` with nothing written ([lifecycle.md](lifecycle.md#session-one-reducer)). A turn merely *running* is not refused; the message steers it, and the answer to it begins where the agent reads it rather than where the turn ends — for an agent that cannot report that moment itself, this is also where the read point record is written ([agent-event.md](agent-event.md#the-read-point-message_ingested)).
 3. Agent subprocess receives via stdin, processes, emits stream-json events
 4. Events are parsed into typed `AgentEvent`s (Text, ToolCall, ToolResult, Error, PermissionRequest, Done, etc.)
@@ -49,6 +50,92 @@ Besides user-typed messages, the Work system pushes automatic prompts to the sam
 See [agent-event.md](agent-event.md) for the full event type catalog, data flow, and frontend processing pipeline.
 
 A question does not block the agent, and its card is pushed out of view — often out of the loaded pages entirely — by whatever the agent streams next. So answering does not happen on the card: the unanswered questions are session state, answered in a card that puts itself up over the transcript — dimming that rectangle alone, and leaving the header, the strip and the composer lit and usable — and reached again, once it is closed, from a strip above the composer. That whole surface is [answering-ui.md](answering-ui.md); the card in the stream is only the record of what was asked.
+
+## The Session Screen
+
+Three bands, top to bottom: the header, the transcript, the composer. Nothing
+else is permanent — the attention strip and the composer's error bar come and go
+between the last two ([lifecycle-ui.md §2.2](lifecycle-ui.md#22-chat-the-attention-strip)).
+
+```
+[☰] [ Session title ˅            ] [●] [⚙]   header, h-11 / sm:h-12
+    [ Opus · Default             ]
+┌─────────────────────────────────────────┐
+│        transcript (reading column)   [↓]│
+└─────────────────────────────────────────┘
+    [+] [ Type a message...        ] [↑]     composer
+```
+
+**The header names the session** (`Chat/SessionHeader.tsx`, handed to
+`MainContainer` as its `heading`). The title is one button with a second line
+under it: the model — the agent's name when the model is Auto, since "Auto" says
+only that the CLI decides — and the permission mode in `getSessionModeInfo`'s
+words, YOLO in the warning colour with its icon. The engine truncates first; the
+mode, which decides whether the next turn asks before it acts, stays whole. Until
+the session has described itself the second line is a skeleton rather than a
+placeholder "Default", so a session running without prompts never wears the name
+of one that asks. A session still called `New Chat` reads as a placeholder
+(secondary colour), and one whose title has not arrived yet is a skeleton too;
+one read out of another worktree says `Read-only` instead of
+an engine, and `Unavailable session` if it cannot be read at all. A route naming
+no session has nothing to describe, so the header keeps the project's name and
+offers no button. The project's name otherwise lives in the sidebar's worktree
+switcher.
+
+**The title opens the session panel** — a `ResponsivePanel`, a bottom drawer below
+the expanded tier and a dropdown under the title at and above it. It holds, in
+order, what decides the next message and then what describes the ones sent:
+
+- **Engine** — one row summarising agent, model and effort, which drills into the
+  three lists (`Chat/EngineSections.tsx`) in the same panel, with a `‹ Engine` row
+  back. On a phone, three lists side by side would leave the drawer showing
+  nothing but the engine.
+- **Permissions** — Default / YOLO, two rows, in place.
+- **Work** and **Usage** — the session's facts
+  ([usage-display-ui.md](usage-display-ui.md),
+  [work-system.md](code/work-system.md#session-to-work-navigation)).
+
+A change that succeeds leaves the panel open — a radio group moves its selection
+with the arrow keys, and closing on select would leave a keyboard user only the
+neighbouring choice. One that fails closes it, and the reason shows in the bar
+above the composer — over an overlay too, since the header the panel hangs off
+is usable there. While a turn is open (the server takes no setting change
+then) or the settings are still loading, Engine and Permissions stay listed but
+unavailable, each saying why. On a read-only session they are not listed at all:
+what is missing there is the execution environment, not a moment's availability.
+
+**The composer is one row**: `+`, the textarea, and one slot that holds Send or
+Stop — never both ([lifecycle-ui.md §2.3](lifecycle-ui.md#23-chat-composer-and-stop)
+has the rule and the 500ms arming). The textarea grows upward and the row is
+`items-end`, so both buttons stay with the last line, under the thumb. The `+`
+menu (`Chat/ComposerMenu.tsx`) hangs above `+` at every width — three rows do not
+earn a sheet — and pressing `+` does not take focus from the draft, so a soft
+keyboard does not drop and rise again:
+
+- **Commands** — what typing `/` does: puts `/` in front of the draft, which opens
+  the command palette when the result reads as a command name (an empty draft
+  does). The menu row is how a phone user learns commands exist at all.
+- **Photos** / **Files** — the system pickers (`accept="image/*"` reaches the
+  photo library on a phone). Each file uploads as soon as it is picked and waits
+  in a strip above the row (`Chat/ComposerAttachments.tsx`) with a spinner while it
+  uploads, a remove button, and — on failure — the reason written out, since a `title` is
+  out of reach under a thumb. Send waits until every file is stored; a failed one
+  has to be removed first, so nothing picked is dropped silently. How the files
+  travel is in [Key Files](#key-files).
+
+The menu and the palette are exclusive, and both follow the overlay conventions
+of [answering-ui.md §4](answering-ui.md#who-owns-escape) ([and the click](answering-ui.md#who-owns-the-dismissing-click)).
+
+**The conversation is a reading column**, `max-w-3xl` (768px) centred, shared by
+the transcript, the composer's inner row (with the palette and the menu hung off
+it), the attention strip's content and the error bar's: `+` lines up with the
+messages' left edge and Send with their right. Borders and backgrounds stay full
+width, and so does the transcript's scroll box, so its scrollbar sits at the
+window's edge and the wheel works over the margins. The header is not
+constrained: it is the window's chrome. With the sidebar open at its default
+288px, the column only starts to bind at a window of roughly 1060px, so phones
+and tablets are untouched. The scroll-to-bottom button belongs to the column too
+([Where the View Sits](#where-the-view-sits)).
 
 ## History Paging
 
@@ -317,10 +404,14 @@ following read as the reader leaving.
 
 **Explicit inputs** are the only other thing that moves the state. Opening a
 session, the first message in an empty one, the reader sending a message and a
-reconnect replacing the transcript all read the tail. "Sent" is the newest row's
-id having changed to a row the user typed: a count cannot say it, because a page
-landing above grows the list without adding anything at its end, and it routinely
-lands under a transcript whose newest row is one the reader typed. The
+reconnect replacing the transcript all read the tail. "Sent" is a row the user
+typed among the rows added after the previous newest one — not necessarily the
+newest itself, since a send to an idle agent lands with its reply's placeholder
+below it. A count cannot say it, because a page landing above grows the list
+without adding anything at its end, and it routinely lands under a transcript
+whose newest row is one the reader typed. "Replaced" is the page count dropping,
+or — when the page count has not changed — none of the previous rows
+surviving, since replaying history mints every row a new id. The
 scroll-to-bottom button — shown only while reading somewhere — reads the tail, and
 a jump to a pending permission request anchors on the card.
 
@@ -336,6 +427,21 @@ shell around it too, and it anchors on where the card actually landed: the end o
 the transcript cannot be scrolled past, so a card near it stops short of the top
 edge, and an anchor claiming otherwise would have every later commit trying to
 push it further.
+
+The button sticks to the bottom right of the transcript's scroll box from inside
+the reading column (`max-w-3xl`), so it lines up with the column's right edge
+whatever the scrollbar takes. It is hidden within reach of the end even while
+anchored: there it would sit over the last row's bottom-right controls — a
+permission card's Allow, right after a jump to it — with no scrolling left to
+move them out from under it. It carries a dot once the end of the conversation
+has changed since the reader last saw it, which is on leaving the tail or on
+coming back within reach of the end. "Changed" is the newest row's id, its body
+(`parts`, or a user row's `content`) or its `error` no longer being the one
+recorded, compared by identity. It is not the message object, which an
+`anchorSeq` backfill replaces without showing anything new, nor the content's
+height, which also grows when an older page lands above; a page joining onto the
+newest row rewrites its `parts` with older history, so a page landing takes the
+newest row as seen. Reading the tail again clears it.
 
 The browser's own scroll anchoring is turned off on the container. The anchoring
 here is written by hand, and leaving the browser's on means a second writer of

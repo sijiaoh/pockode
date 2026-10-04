@@ -5,13 +5,13 @@ How a user reads what a session and a work item have spent, in
 live, what each one means, how they are formatted, and what the screen shows when
 an agent reports nothing.
 
-It also introduces the surface that carries them on the session side — a **session
-info panel** behind one button on the action bar. Usage is its first section and
-deliberately not its last, so the section contract here is the one later features
-follow (*The panel is a list of sections*).
+On the session side they live in the **session panel** the header's title opens.
+Usage was that panel's first section and deliberately not its last, so the section
+contract here is the one later features follow (*The panel is a list of
+sections*).
 
-Related: [agent-chat.md](agent-chat.md) for the session screen this adds a control
-to, [code/agent-integration.md](code/agent-integration.md#usage-reporting) for
+Related: [agent-chat.md](agent-chat.md#the-session-screen) for the session screen
+and the panel's other sections, [code/agent-integration.md](code/agent-integration.md#usage-reporting) for
 where the figures come from and why they are not events,
 [code/work-system.md](code/work-system.md#usage-aggregation) for the work tree the
 totals are summed over, [sidebar-ui.md](sidebar-ui.md) for the list that
@@ -26,14 +26,14 @@ report price" look identical on screen and mean opposite things.
 
 **Context belongs to a session, spend belongs to both.** A context window is the
 state of one live conversation; it cannot be added up, so it lives in that
-session's info panel and never on a work item. Cumulative tokens and price can be
+session's panel and never on a work item. Cumulative tokens and price can be
 added up, so a work item carries them twice: what its own session spent, and
 what it and its tasks spent together.
 
-**On the session side, every figure is behind a tap.** The action bar gets one
-icon-only button and no numbers. The bar is the session's controls, it is already
-full at 360px, and a figure parked there would be the one thing in this design
-that costs width from something a user is trying to do.
+**On the session side, every figure is behind a tap.** The header carries the
+session's name and what runs it, and no numbers. It is already full at 360px, and
+a figure parked there would be the one thing in this design that costs width from
+something a user is trying to do.
 
 **Never a list.** Both surfaces are detail surfaces. The sidebar's session rows
 and the work list show nothing, and their wire shapes carry nothing
@@ -177,7 +177,7 @@ matters.
 **Abbreviated on the glance surface, exact in the panel.** The work card is
 abbreviated, and that is the value it reports: `title` is unreachable under a
 thumb, so nothing important may live only there. The grouped exact counts live
-where there is room for them — the session info panel, which shows `1,248,301`
+where there is room for them — the session panel, which shows `1,248,301`
 rather than `1.2M` in every row. Spoken labels always carry the grouped count
 (`1,248,301 tokens`), on every surface. A `title` carrying the same grouped count
 is welcome on a fine pointer, but nothing may depend on it.
@@ -189,89 +189,54 @@ and the per-session exact figures are one Open Chat away.
 All figures render with `tabular-nums`, so a number that ticks upward mid-turn
 does not shuffle the ones beside it.
 
-## The session screen: the session info button and its panel
+## The session screen: the session panel
 
 The session has no detail page — its screen is the chat. What it gets instead is
-one more control on the session action bar, the strip that already holds this
-session's engine and mode: **an info button, whose panel is where facts about this
-session live.** Usage is one of those facts and not the only one, which is why
-the button is named after the session and not after tokens: a control labelled
-"usage" would have to be renamed or duplicated the first time anything else
-belongs in there — and something else does. A Work section, naming the work item
-this session runs, sits above Usage on the sessions that have one
+**a panel behind the header's title, which is where facts about this session
+live** ([agent-chat.md](agent-chat.md#the-session-screen) has the header and the
+panel's settings). Usage is one of those facts and not the only one, which is why
+the panel is the session's and not the tokens': a control labelled "usage" would
+have to be renamed or duplicated the first time anything else belongs in there —
+and something else does. A Work section, naming the work item this session runs,
+sits above Usage on the sessions that have one
 ([work-system.md](code/work-system.md#session-to-work-navigation)).
 
-```
-┌──────────────────────────────────────────────┐
-│  ⌁ sonnet · high │ ◇ │ ⓘ │             ■   │   <- session action bar
-└──────────────────────────────────────────────┘
-   engine           mode  info              stop
-```
+**The way in is permanent.** The title is there for every session and never
+disabled, and the panel does not wait for data: a door that appeared after the
+first turn would be one the user has to discover twice. A route naming no session
+has no title button — waiting for a session's data and waiting for a session are
+different waits.
 
-**The button is icon-only**, lucide `Info` at `size-4`, geometry copied from
-`ModeSelector`'s trigger — `size-9 pointer-coarse:size-11`, `rounded border
-border-th-border bg-th-bg-tertiary`, `active:scale-95`, `focus-visible:ring-2`.
-Both axes are written, as the hit-area floor requires of an icon-only control.
-`aria-label="Session info"`, `aria-haspopup="dialog"`, `aria-expanded`. The label
-is the control's name and nothing more — it names no value, because the button
-shows none.
+That makes the Usage section's empty state real, and it is one line — see
+*Session states*.
 
-Adding it also puts a third hit area on the strip, so the row goes from `gap-1.5`
-to `gap-2`. 6px between neighbouring controls was already under the 8px
-coarse-pointer floor, and the automated guard never said so: it measures between
-interactive tags, and this row's children are components
-([responsive-ui.md](responsive-ui.md#the-automated-gates), blind spot 2). At 360px
-the wider gap still fits — the engine chip's model name is `max-w-[88px] truncate`
-already.
+### Nothing about usage on the header
 
-**It is permanent.** Unlike the engine and mode chips it is never disabled, and
-unlike the numbers inside it, it does not wait for data: a control that appeared
-after the first turn would be a control the user has to discover twice, and it is
-the door to everything the panel will hold later, not a usage indicator. Permanent
-for a session, that is — the bar renders with no session open too (the route names
-none), and there the button is absent rather than describing nothing. Waiting for
-a session's data and waiting for a session are different waits.
+The header carries **no number, no percentage, no badge and no colour** from the
+session's usage. When the window is nearly full, the user learns it by opening the
+panel rather than by glancing up. Worth paying, because a figure in the header
+would compete for width with the session's name and its mode — the one warning
+colour the header does carry, which says whether the next turn asks before it
+acts. If context pressure later turns out to need announcing without a tap, the
+honest way to do it is its own signal (an inline warning above the input bar,
+where the app already puts things the user must see), not a number bolted onto
+the title.
 
-That makes the panel's empty state real, and it is one line — see *Session
-states*.
+The panel is a `ResponsivePanel` — a drawer below the expanded tier, a dropdown
+under the title at and above it. Two facts about that container a section has to
+honour:
 
-### Nothing about usage on the bar itself
-
-The action bar is already crowded — engine, mode, and the stop button, on a strip
-that has to survive a 360px viewport — so the button carries **no number, no
-percentage, no badge and no colour** from the session's usage. Its icon stays
-`th-text-secondary` in every state.
-
-That is a deliberate cost: when the window is nearly full, the user learns it by
-opening the panel rather than by glancing at the bar. Worth paying here, because a
-figure on the bar would re-label the button as a meter — the one thing this
-button, which exists to host the next four features too, must not become — and it
-would have to compete for width with each of them. If context pressure later turns
-out to need announcing without a tap, the honest way to do it is its own signal
-(an inline warning above the input bar, where the app already puts things the user
-must see), not a number bolted onto this button.
-
-**Tapping opens the panel** through `ResponsivePanel`, configured as
-`EngineSelector` configures its own — `title="Session info"`, `triggerRef`,
-`isExpanded` from `useIsExpanded()`, `desktopPosition="left"`,
-`desktopPlacement="above"`, the default `w-72` and the default heights (the
-sections here need no more room than the Engine panel's three). It hangs off the
-same bar, so it gets the same drawer-below / dropdown-above treatment.
-
-Two facts about that container a section has to honour:
-
-- **It supplies no padding and no scrolling.** Children go in a
-  `<div className="overflow-y-auto pb-2">`, and each section owns its own `px-3`,
-  exactly as the Engine panel does.
-- **Only the drawer has a visible title.** At and above the expanded tier the
-  dropdown carries the title in `aria-label` alone, with no header and no close
-  button — which is the other reason the `USAGE` heading exists from day one: on a
-  desktop it is the only label the section will ever have.
+- **It supplies no padding and no scrolling.** The panel puts its sections in
+  one scrolling `div`, and each section owns its own `px-3`.
+- **No section is titled by the container.** The drawer's header and the
+  dropdown's first line name the session, not a section, and the dropdown has no
+  close button — which is the other reason every section carries its heading: it
+  is the only label the section will ever have.
 
 ### The panel is a list of sections
 
 ```
-┌ Session info ────────────────────────── ✕ ┐
+┌ Session title ───────────────────────── ✕ ┐
 │                                            │
 │  USAGE                                     │
 │  Context                          46%      │
@@ -292,23 +257,24 @@ Two facts about that container a section has to honour:
 ```
 
 Usage is drawn here alone because this document is about usage, not because it
-is the panel's only section or its first: a Work section sits above it on a
-session a work item drives, and is absent on every other
+is the panel's only section or its first: Engine and Permissions come first on a
+live session, and a Work section sits above Usage on a session a work item
+drives, absent on every other
 ([work-system.md](code/work-system.md#session-to-work-navigation)). Order is the
 panel's to own — a section does not know where it sits, which is what keeps that
 true of this one as well.
 
-One section per heading, in the heading style this container already uses — the
-Engine panel's `legend`: `px-3 pt-3 pb-1 text-[11px] font-medium uppercase
-tracking-wide text-th-text-muted`. From the second section on, a
-`border-t border-th-border mt-2` above it. Not `WorkDetailOverlay`'s `text-xs`
-page heading: the panel's neighbour is the Engine panel, and that is what it has
-to look like.
+One section per heading, every one through `ui/PanelSection` — a named `section`
+with an `h3` in `ChoiceList`'s legend typography (`px-3 pt-3 pb-1 text-[11px]
+font-medium uppercase tracking-wide text-th-text-muted`), and from the second
+section on a `border-t border-th-border mt-2` above it. Not `WorkDetailOverlay`'s
+`text-xs` page heading: the panel's neighbours are the engine's and the mode's
+choice lists, and that is what it has to look like.
 
 `ChoiceList`'s `Section` is the right *look* and the wrong *element* — it is a
 `fieldset` with a `legend`, built for the pick-one-of lists it ships with. A
-read-only block of figures is not a group of form controls, so this borrows its
-typography and stays an `h3` with a plain `div`. Worth saying out loud, because
+read-only block of figures is not a group of form controls, so `PanelSection`
+borrows its typography and stays an `h3`. Worth saying out loud, because
 importing it would be the obvious move and would put a fieldset around text.
 
 A section is one component that renders its own heading, its own body and its own
@@ -351,7 +317,7 @@ nobody reads `Cache write 0` on an agent that has no cache.
 
 ### Session states
 
-The button has none: it is always there, always neutral, always opens. Every state
+The way in has none: the title is always there and always opens. Every state
 below is a state of the Usage section inside the panel; the Work section above it
 has its own, and they do not interact — neither section can take the other down.
 
@@ -370,7 +336,7 @@ The missing-window row is defensive, not common: both shipped CLIs do report one
 per `server/agent/*/usage.go`). It is defined anyway, because a CLI version that
 stops reporting it must not take the rest of the panel down with it.
 
-The empty line is the price of a permanent button, and it is the right price: an
+The empty line is the price of a permanent way in, and it is the right price: an
 empty panel would read as a broken one, and `0` figures would claim the agent
 reported zeros when it reported nothing at all. The Context block survives an
 empty total because a window can be known before anything is spent — a resumed
@@ -478,8 +444,8 @@ Three things, following the pyramid — the formatter carries most of it:
 - **`formatTokens` / `formatCost` / `formatContextPercent`**, from the tables
   above, including the carry-over (`999_950`), the `<$0.01` floor and the `<1%`
   floor. Unit tests, and the bulk of the coverage.
-- **The button and its panel**, by what a user can perceive: the button is there
-  before anything has been reported and opens a panel saying `Nothing reported
+- **The session panel's Usage section**, by what a user can perceive: before
+  anything has been reported, the title opens a panel saying `Nothing reported
   yet.`; the panel's rows carry the grouped figures; no cost reported leaves no
   cost row. Not the bar width or the threshold colour — those are styles over
   arithmetic the unit tests already cover.
@@ -493,9 +459,9 @@ Three things, following the pyramid — the formatter carries most of it:
 - **Estimation.** No price table, no per-model arithmetic, no "approximately".
 - **History.** No per-turn or per-day breakdown, no charts. One cumulative figure
   per scope is what the requirement asks for.
-- **Anything on the action bar.** No context figure, no percentage, no badge: the
-  bar is full, and this round adds exactly one icon-only button to it.
-- **The session info panel's other sections.** How a section is built and where it
+- **Anything in the header.** No context figure, no percentage, no badge: the
+  header is full.
+- **The session panel's other sections.** How a section is built and where it
   goes is settled here; what the next one contains is not this design's business.
 - **`web-cluster`.** It has no chat screen and no work tree; nothing here reaches
   it, and none of these components belong in `@pockode/shared` yet.

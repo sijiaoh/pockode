@@ -260,8 +260,7 @@ converse, the card stepping aside while the caret is in the composer.
 │ ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░│
 ├──────────────────────────────────────────────┤
 │ AttentionStrip (row 2 absent — §2)           │ ← not covered
-│ engine · mode                         [Stop] │ ← not covered
-│ [ type a message… ]                  [ Send ]│ ← not covered, and usable
+│ [+] [ type a message… ]          [Send/Stop] │ ← not covered, and usable
 └──────────────────────────────────────────────┘
 ```
 
@@ -403,14 +402,15 @@ to the two axes rather than a third one.
 
 The case is a phone with the soft keyboard up. The card is capped at 85% of the
 transcript's rectangle, and that rectangle is the screen less the session
-header, the strip, the session action bar and the composer; the keyboard takes
+header, the strip and the composer; the keyboard takes
 most of what is left. On a 667px phone under a 300px keyboard the card's body —
-what remains after its own header and footer — comes to about **19px**. The
+what remains after its own header and footer — comes to about **68px**, and
+came to 19px while a settings row still sat above the composer. The
 panel is competing for a screen that has nothing left, against chrome that has
 nothing to do with answering.
 
-> **While the user is answering on a short viewport, the session action bar and
-> the composer are folded away, and the card takes the room they leave.**
+> **While the user is answering on a short viewport, the composer — Stop
+> included — is folded away, and the card takes the room it leaves.**
 
 The fold came first, and was meant to be the whole of it: hide what is useless
 right now, raise no cap, tighten no padding. A walkthrough in a real browser,
@@ -514,8 +514,10 @@ business rewriting what happens when a component comes back.
 
 The fold answers a caret in the card. A caret in the composer is the case it
 deliberately leaves alone, and on a 560px phone under a keyboard that leaves the
-card about 83px — less than its own header and footer, so Send is cut off — and
-on a 667px one a body of about 48px. Neither can be answered in.
+card about 131px — less than its own header and footer, so Send is cut off — and
+on a 667px one a body of about 96px. Neither can be answered in. (Measured at 83
+and 48px with a settings row above the composer; the figures here are that
+measurement less the row, derived rather than measured again.)
 
 > **On a short touch screen the card and the chrome below it never share the
 > screen, and the caret decides which one has it.** In the card, the chrome
@@ -525,9 +527,9 @@ Aside, the screen is exactly the one a close leaves: no card, no backdrop, the
 transcript undimmed and live, and the strip's row 2 offering **Answer** (§2).
 That is the minimised form §8 already names, reused rather than joined by a
 third one. The alternatives were each worse: folding the chrome here takes away
-the sentence condition two exists to protect; squeezing the card further cannot
-fit a header, a footer and one line into ~98px, and would be a third set of
-sizes; laying the card over the composer breaks the one promise this section
+the sentence condition two exists to protect; squeezing the card further would leave,
+of its ~131px at 560, one line beside a header and a footer that take ~98 even
+folded, and would be a third set of sizes; laying the card over the composer breaks the one promise this section
 opens with.
 
 **Four conditions** (`answerPanelYielded` in `ChatPanel`): the panel is up, the
@@ -593,7 +595,7 @@ reason responsive-ui.md gives, and nothing else may read it.
 It is a **derivation, not a measurement** — the walkthrough above measured the
 card on either side of it in headless Chromium, but a simulated keyboard is not
 a keyboard, and nobody has held a phone up to it yet. A 390×844 phone under the
-simulated keyboard is 544px, four above the line, and does not fold. The comment
+simulated keyboard is 544px, above the line, and does not fold. The comment
 on the constant says to re-derive it rather than nudge it when a chrome row's
 height changes, and the number should be checked against a real device before
 it is trusted.
@@ -1118,23 +1120,24 @@ them:
 |---|---|---|
 | `ConfirmDialog` | `document`, and it calls `stopPropagation` | closes itself, and the press never reaches `window` at all |
 | `Sheet` — a message's menu, and every other sheet | `document`, and it calls `stopPropagation` | the same, and it claims the press even while it is refusing to be dismissed — then it swallows without closing |
-| `ResponsivePanel` — the session-info panel, the engine picker, the worktree and session-filter dropdowns | `document`, and it calls `preventDefault` | closes itself and **marks the press handled**; while open, at every width, it counts itself as covering the page |
-| `ModeSelector` — the mode dropdown in the composer row | `document`, and it calls `preventDefault` | closes itself and **marks the press handled**; while open, it counts itself as covering the page |
+| `ResponsivePanel` — the header's session panel, the worktree and session-filter dropdowns | `document`, and it calls `preventDefault` | closes itself and **marks the press handled**; while open, at every width, it counts itself as covering the page |
 | `Sidebar` — the session drawer, below the expanded tier | `document`, and it calls `preventDefault` | closes itself and **marks the press handled**; while open as a drawer, it counts itself as covering the page |
 | `InputBar`'s command palette | the textarea, and it calls `preventDefault` | closes the palette; the press never gets past it unmarked |
+| `InputBar`'s `+` menu | `document`, and it calls `preventDefault` | closes itself and **marks the press handled**; while open, it counts itself as covering the page |
 | the answer panel | **`window`** | closes, unless the press is already `defaultPrevented` |
 | `ChatPanel`'s interrupt | `document` | ends the agent's turn — the fallback, and the only one that cannot be undone. It stands down (`isSheetOpen`) while anything counts itself as covering the page (`useIsPageCovered`) or the answer panel is up |
 
 Two rules, and they are the whole of it:
 
 1. **A surface drawn over the answer panel claims the key**, by
-   `preventDefault` or by `stopPropagation`. Four needed the line adding. Three
-   of them for one reason: they open from the session header or the composer
-   row, both of which stay lit beside the panel, so each genuinely can be on top
-   of one, and without the mark a single press put away both it and a panel the
-   user was not even looking at — the drawer's case is the worst of the three,
-   since it covers the panel outright. `ConfirmDialog` and the command palette
-   already satisfied the rule for their own reasons. The fourth is the shared
+   `preventDefault` or by `stopPropagation`. Three needed the line adding. Two
+   of them for one reason: they open from the session header, which stays lit
+   beside the panel, so each genuinely can be on top of it, and without the mark
+   a single press put away both it and a panel the user was not even looking
+   at — the drawer's case is the worse of the two, since it covers the panel
+   outright. `ConfirmDialog` and the command palette already satisfied the rule
+   for their own reasons, and the composer's `+` menu was written to it. The
+   third is the shared
    `Sheet`, and it arrives over the panel from the other direction: not opened
    beside it, but already open when the panel rose underneath. A message's menu
    stays up while a question puts the panel up under it, because the panel dims
@@ -1169,8 +1172,8 @@ not wait to be told — it **asks whether the page is covered** before it acts:
   `Sheet` and `ConfirmDialog` is in it without asking — locking the body
   registers a layer — so the fork sheet, a Git sheet, a sheet raised from
   anywhere in the app is counted by having been written as one. The surfaces
-  that only mark the press — `ResponsivePanel`, `ModeSelector` and the session
-  drawer — take no shared lock (`ResponsivePanel` locks the body by hand, and
+  that only mark the press — `ResponsivePanel` (the header's session panel is
+  one), the composer's `+` menu and the session drawer — take no shared lock (`ResponsivePanel` locks the body by hand, and
   only below the expanded tier; its migration is deferred in
   [cluster-ui.md](cluster-ui.md)), so each joins the count with a
   `useCoverPage(isOpen)` of its own. They have to: each re-adds its listener
@@ -1211,8 +1214,9 @@ exposed:
 
 | Surface | What it does with the press |
 |---|---|
-| `ResponsivePanel` **in the expanded tier** — the session-info panel, the engine picker, the worktree and session-filter dropdowns | closes itself and calls `stopPropagation`, and only on the press it actually closes on |
+| `ResponsivePanel` **in the expanded tier** — the header's session panel, the worktree and session-filter dropdowns | closes itself and calls `stopPropagation`, and only on the press it actually closes on |
 | `InputBar`'s command palette | the same. It hangs over the composer at *every* width, so it is the one that overlaps here on a phone as well as on a desktop |
+| `InputBar`'s `+` menu | the same, at every width, for the same reason |
 | the answer panel | closes, on a **`window`** listener, if the press landed on the backdrop element itself |
 
 The two rules, restated for the pointer:
@@ -1573,8 +1577,8 @@ silent, and this design simply never enters it.
 | `web/src/components/Chat/AttentionStrip.tsx` | renamed from `BlockerStrip.tsx`; gains row 2, an `onAnswer` prop, and the `answerPanelOpen` that withholds row 2 while the card is on the screen, and the `jumpDisabled` that holds row 1's jump while the panel is sending (§2) |
 | `web/src/components/Chat/AnswerPanel.tsx` | the panel, its blocks, the footer (§3); a card centred in the transcript's rectangle over a backdrop that covers that rectangle alone, capped at 85% of it — all of it, with a slimmer header and footer, when told `chromeCollapsed` — measuring nothing; owns Escape and the backdrop press on `window` (§4); reports whether focus is inside it and decides nothing about the screen around it (§3); steps aside — `invisible` + `inert`, still mounted — when told it has `yielded` (§3); reports whether a submit is in flight, for the one way out of it that is not its own (§2) |
 | `web/src/components/ui/ResponsivePanel.tsx` | marks its Escape handled, and claims the click it dismisses on, so the answer panel underneath it does not close on the same press; counts itself as covering the page while open, so the chat's interrupt stands down (§4) |
-| `web/src/components/Chat/ModeSelector.tsx`, `web/src/components/Layout/Sidebar.tsx` | the same Escape line, for the same reason: both open from surfaces the backdrop leaves lit — the composer row and the session header — so both can be the thing on top of the panel. The same cover line too, the sidebar's only while it is a drawer. Neither needs the click line: both portal a backdrop of their own (§4) |
-| `web/src/components/Chat/InputBar.tsx` | claims the click its command palette dismisses on — the palette hangs over the composer with no backdrop, at every width (§4) |
+| `web/src/components/Layout/Sidebar.tsx` | the same Escape line, for the same reason: it opens from the session header, which the backdrop leaves lit, so it can be the thing on top of the panel. The same cover line too, only while it is a drawer. It needs no click line: it portals a backdrop of its own (§4) |
+| `web/src/components/Chat/InputBar.tsx` | claims the click its command palette and `+` menu dismiss on — both hang over the composer with no backdrop, at every width (§4) |
 | `packages/shared/src/hooks/useOutsideClick.ts` | hands the caller the event beside the target, which is what lets a caller claim the gesture at all (§4) |
 | `web/src/components/Chat/QuestionForm.tsx` | extracted from `AskUserQuestionItem.tsx`; the one renderer of a question, across every host that draws one — including the third shape, a textarea for a question with no options — and of the note beside an answer, editable or read-only (§3) |
 | `web/src/components/ui/RecommendedTag.tsx` | the `Recommended` tag on an option, the one copy of its wording and style for all three places that draw options (§3) |

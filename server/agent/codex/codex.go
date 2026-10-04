@@ -276,9 +276,22 @@ func (s *appSession) SendMessage(prompt agent.Prompt) error {
 		return errors.New("codex session has no open thread")
 	}
 
+	// Images by path: codex reads them itself, so nothing here has to hold the
+	// bytes, and it applies its own limits to what it reads.
+	images, byPath := agent.SplitAttachments(prompt.Attachments, func(a agent.Attachment) bool {
+		return agent.InlineImageMIMEs[a.File.MIME]
+	})
+	input := make([]map[string]interface{}, 0, len(images)+1)
+	for _, a := range images {
+		input = append(input, map[string]interface{}{"type": "localImage", "path": a.Path})
+	}
+	if text := agent.AppendNote(prompt.Text, agent.AttachedFilesNote(byPath)); text != "" {
+		input = append(input, map[string]interface{}{"type": "text", "text": text})
+	}
+
 	params := map[string]interface{}{
 		"threadId": threadID,
-		"input":    []map[string]interface{}{{"type": "text", "text": prompt.Text}},
+		"input":    input,
 	}
 	if prompt.ID != "" {
 		// Codex echoes this back as the `clientId` of the userMessage item it
@@ -297,6 +310,10 @@ func (s *appSession) SendMessage(prompt agent.Prompt) error {
 		s.emitEvent(agent.ErrorEvent{Error: redactSecrets(fmt.Sprintf("codex could not start the turn: %s", err))})
 	})
 }
+
+// ReceivesAttachments marks this session as one that delivers attachments; see
+// agent.AttachmentReceiver.
+func (s *appSession) ReceivesAttachments() {}
 
 // ReportsMessageIngest marks this session as one that says for itself when the
 // agent has read a message; see agent.MessageIngestReporter and

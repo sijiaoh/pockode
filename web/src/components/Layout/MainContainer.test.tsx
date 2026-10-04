@@ -61,7 +61,9 @@ describe("MainContainer", () => {
 		).toBeInTheDocument();
 	});
 
-	it("renders TitleComponent in place of the default h1 and forwards the title prop", () => {
+	// The text, never the heading: in a chat the title sits in the button that
+	// opens the session panel, so the host keeps the `h1` either way.
+	it("renders TitleComponent inside the h1 and forwards the title prop", () => {
 		setHeaderUIConfig({
 			TitleComponent: ({ title }) => (
 				<span data-testid="custom-title">{`custom:${title}`}</span>
@@ -70,10 +72,12 @@ describe("MainContainer", () => {
 
 		renderMainContainer({ title: "My Project" });
 
+		expect(screen.getByRole("heading", { level: 1 })).toContainElement(
+			screen.getByTestId("custom-title"),
+		);
 		expect(screen.getByTestId("custom-title")).toHaveTextContent(
 			"custom:My Project",
 		);
-		expect(screen.queryByRole("heading", { level: 1 })).not.toBeInTheDocument();
 		expect(
 			screen.getByRole("button", { name: "Open menu" }),
 		).toBeInTheDocument();
@@ -119,5 +123,34 @@ describe("MainContainer", () => {
 
 		expect(screen.getByTestId("custom-header")).toBeInTheDocument();
 		expect(screen.queryByTestId("custom-title")).not.toBeInTheDocument();
+	});
+
+	it("draws a caller's heading in place of the default title", () => {
+		render(
+			<MainContainer title="My Project" heading={<h1>Session title</h1>}>
+				<div />
+			</MainContainer>,
+		);
+
+		expect(
+			screen.getByRole("heading", { level: 1, name: "Session title" }),
+		).toBeInTheDocument();
+		expect(screen.queryByText("My Project")).not.toBeInTheDocument();
+	});
+
+	// The session's settings are reachable through the heading alone, so a
+	// header that replaces the default one is handed it to place.
+	it("hands the heading to a custom HeaderContent", () => {
+		setHeaderUIConfig({
+			HeaderContent: ({ heading }) => <header>{heading}</header>,
+		});
+
+		render(
+			<MainContainer heading={<button type="button">Session</button>}>
+				<div />
+			</MainContainer>,
+		);
+
+		expect(screen.getByRole("button", { name: "Session" })).toBeInTheDocument();
 	});
 });

@@ -186,6 +186,67 @@ func TestResolveSessionWorktree(t *testing.T) {
 	}
 }
 
+// An upload names a worktree and a session over HTTP, so both names are
+// vouched for here before either becomes a path a file is written under.
+func TestAttachmentDataDir(t *testing.T) {
+	repo := initGitRepo(t)
+	dataDir := t.TempDir()
+	registry := NewRegistry(repo, dataDir)
+	if _, _, err := registry.EnsureWorktree("feature-x"); err != nil {
+		t.Fatalf("EnsureWorktree: %v", err)
+	}
+
+	// The main worktree is loaded and answers from its live store; feature-x is
+	// not, and answers from its index on disk.
+	mainStore, err := session.NewFileStore(dataDir)
+	if err != nil {
+		t.Fatalf("session.NewFileStore: %v", err)
+	}
+	if _, err := mainStore.Create(context.Background(), "main-session", session.CreateSpec{}); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	m := &Manager{
+		registry:  registry,
+		dataDir:   dataDir,
+		worktrees: map[string]*Worktree{"": {SessionStore: mainStore}},
+	}
+	createSessionIn(t, m, "feature-x", "feature-session")
+	// A deleted worktree keeps its sessions readable, but none can take a file.
+	createSessionIn(t, m, "gone", "gone-session")
+
+	tests := []struct {
+		name      string
+		worktree  string
+		sessionID string
+		wantDir   string
+		wantErr   error
+	}{
+		{"loaded worktree", "", "main-session", dataDir, nil},
+		{"unloaded worktree", "feature-x", "feature-session", filepath.Join(dataDir, "worktrees", "feature-x"), nil},
+		{"unknown worktree", "no-such-worktree", "feature-session", "", ErrWorktreeNotFound},
+		{"deleted worktree", "gone", "gone-session", "", ErrWorktreeNotFound},
+		{"session of another worktree", "feature-x", "main-session", "", ErrSessionNotFound},
+		{"unknown session", "feature-x", "no-such-session", "", ErrSessionNotFound},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := m.AttachmentDataDir(tt.worktree, tt.sessionID)
+			if tt.wantErr != nil {
+				if !errors.Is(err, tt.wantErr) {
+					t.Errorf("err = %v, want %v", err, tt.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("AttachmentDataDir: %v", err)
+			}
+			if got != tt.wantDir {
+				t.Errorf("dir = %q, want %q", got, tt.wantDir)
+			}
+		})
+	}
+}
+
 // StartupTurns is what work.Engine.RecoverStartup reads, and it runs before any
 // Manager exists — so it has to answer for the main worktree and the named ones
 // alike, straight off the file, with nothing built.

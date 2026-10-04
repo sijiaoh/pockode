@@ -64,8 +64,9 @@ function formatSince(since: string): string | undefined {
 	});
 }
 
+// Bounded like the transcript column above it; the frame's border stays full width.
 const STRIP_LINE =
-	"flex flex-wrap items-center justify-center gap-1.5 px-3 py-2 text-th-text-muted text-xs";
+	"mx-auto flex max-w-3xl flex-wrap items-center justify-center gap-1.5 px-3 py-2 text-th-text-muted text-xs";
 
 // One bordered row above the composer, whichever of the four things it says.
 const STRIP_FRAME = "shrink-0 border-th-border border-t";
@@ -242,7 +243,7 @@ function AttentionStrip({
 			    per-task kill, because the model gives the host no way to end one task
 			    without ending the turn. */}
 			{expanded && (
-				<p className="px-3 pb-2 text-center text-th-text-muted text-xs">
+				<p className="mx-auto max-w-3xl px-3 pb-2 text-center text-th-text-muted text-xs">
 					{since
 						? `Waiting on background tasks since ${since}. `
 						: "Waiting on background tasks. "}

@@ -53,6 +53,18 @@ function ResponsivePanel({
 	const titleId = useId();
 	const mobile = !isExpanded;
 
+	// Focus held inside when the panel goes is dropped on `<body>` with it, so it
+	// goes back to the trigger — unless something else has taken it since, such
+	// as an overlay the panel's own row opened. A ref rather than a reading at
+	// close time: by the time the effect runs the panel is gone, and so is the
+	// focus that was in it.
+	const focusInsideRef = useRef(false);
+	useEffect(() => {
+		if (isOpen || !focusInsideRef.current) return;
+		focusInsideRef.current = false;
+		if (document.activeElement === document.body) triggerRef?.current?.focus();
+	}, [isOpen, triggerRef]);
+
 	// Claiming the click is the other half of claiming Escape below, and is
 	// needed for the same reason: above the expanded tier this is a dropdown
 	// anchored to its trigger with no backdrop of its own, so the click that
@@ -75,7 +87,11 @@ function ResponsivePanel({
 			return;
 		}
 
-		if (panelRef.current && !panelRef.current.contains(target)) {
+		// The path as it was when the press landed, not the tree as it is now: a
+		// row that swaps the panel's content — a drill into a sub-view — has
+		// left the document by the time the click reaches `document`, and
+		// `contains` would take it for a press outside.
+		if (panelRef.current && !event.composedPath().includes(panelRef.current)) {
 			event.stopPropagation();
 			onClose();
 		}
@@ -88,7 +104,7 @@ function ResponsivePanel({
 	useCoverPage(isOpen);
 
 	// Close on Escape, and mark the press handled. This panel opens from the
-	// session header and the composer row, and those stay live under surfaces
+	// session header, which stays live under surfaces
 	// that claim Escape for themselves — today the chat's answer panel, which
 	// waits until `window` to ask exactly so that this answer is in by then.
 	// Without the mark, one press would put away both this panel and one the
@@ -146,11 +162,24 @@ function ResponsivePanel({
 			aria-modal={mobile}
 			aria-labelledby={mobile ? titleId : undefined}
 			aria-label={mobile ? undefined : title}
+			onFocus={() => {
+				focusInsideRef.current = true;
+			}}
+			onBlur={(e) => {
+				if (!e.currentTarget.contains(e.relatedTarget)) {
+					focusInsideRef.current = false;
+				}
+			}}
 		>
 			{/* Mobile header */}
 			{mobile && (
 				<div className="flex shrink-0 items-center justify-between border-b border-th-border px-4 py-3">
-					<h2 id={titleId} className="text-base font-bold text-th-text-primary">
+					{/* Clamped: a title can be a whole sentence someone typed, and the
+					    header must not push the content off a phone's sheet. */}
+					<h2
+						id={titleId}
+						className="line-clamp-3 min-w-0 break-words text-base font-bold text-th-text-primary"
+					>
 						{title}
 					</h2>
 					<button

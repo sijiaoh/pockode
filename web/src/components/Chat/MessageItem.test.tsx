@@ -25,6 +25,29 @@ describe("MessageItem", () => {
 		expect(screen.getByText("Hello AI")).toBeInTheDocument();
 	});
 
+	// The files are part of what the user sent; a message can be nothing else,
+	// and must not then read as an empty bubble.
+	it("shows the files a user message carried", () => {
+		const message: Message = {
+			id: "f1",
+			role: "user",
+			content: "",
+			status: "complete",
+			createdAt: new Date(),
+			attachments: [
+				{
+					name: "report.pdf",
+					mime: "application/pdf",
+					size: 2048,
+					attachment_id: "abc.pdf",
+				},
+			],
+		};
+
+		render(<MessageItem sessionId="session-1" message={message} />);
+		expect(screen.getByText("report.pdf")).toBeInTheDocument();
+	});
+
 	describe("a Pockode command", () => {
 		const commandMessage: Message = {
 			id: "c1",

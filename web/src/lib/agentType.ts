@@ -1,4 +1,4 @@
-import { Bot, Terminal } from "lucide-react";
+import { Bot, CircleHelp, Terminal } from "lucide-react";
 import type { AgentType } from "../types/settings";
 
 export interface AgentTypeInfo {
@@ -37,6 +37,17 @@ export const DEFAULT_AGENT_TYPE: AgentType = "claude";
  */
 export function getAgentLabel(agentType: string): string {
 	return AGENT_TYPE_INFO[agentType as AgentType]?.label ?? agentType;
+}
+
+/** The agent's entry, or one naming the id itself — see `getAgentLabel`. */
+export function getAgentInfo(agentType: string): AgentTypeInfo {
+	return (
+		AGENT_TYPE_INFO[agentType as AgentType] ?? {
+			label: agentType,
+			description: "Not a known agent on this server",
+			icon: CircleHelp,
+		}
+	);
 }
 
 export interface AgentCliInfo {

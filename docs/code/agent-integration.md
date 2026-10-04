@@ -796,6 +796,70 @@ file that *is* in the work directory is read through `file.get`. That direction
 is fine precisely because it is the ordinary one — a work-directory-relative
 path, validated as every other file read is.
 
+### Files the User Sends
+
+The store also holds the other direction: files a user sends *to* the agent — a
+screenshot from a phone, a PDF, a log. They arrive in two steps, because a photo
+is megabytes and the WebSocket carries one message at a time:
+
+1. `POST /api/chat/attachments` stores each file in the session's store and
+   answers with its id ([file.md](../file.md#transfer)). The id keeps the
+   original extension (`attachments.UploadExtension`): unlike content an agent
+   delivered, these are read back by the agent's own tools, and claude's Read
+   decides by extension whether a file is a PDF or an image.
+2. `chat.message` names them in `attachments: [{id, name}]`. The handler
+   resolves every id inside that session's directory before anything is sent
+   (`chat.ResolveAttachments` — an id is a bare name, never a path) and
+   describes each from the stored bytes: MIME, size and, for an image, its
+   dimensions. One bad id refuses the whole message. Files are refused beside
+   `answering`, for the reason content is.
+
+The message record carries those descriptions as `attachments`, a list of the
+same `FileBlock` a tool result's file uses, so a client draws both with one
+code path and fetches either through `attachment.get`. The record names files
+by id only: the path on this machine is handed to the agent and nowhere else.
+The sender, left out of the broadcast, gets the descriptions back on the
+`chat.message` reply.
+
+What the agent is handed is each adapter's business, decided at delivery:
+
+| | Image (PNG, JPEG, GIF, WebP) | Anything else |
+|--|--|--|
+| claude | An `image` content block, base64, beside the text block of the stream-json user message — when the API will take it: at most 5 MB of base64, both sides readable and within 8000 px (an image whose dimensions the server cannot read goes by path), no more than 20 images and 15 MiB inline per message. Anything else goes by path, and claude's Read scales it down. The limits are strict because a refused image block stays in claude's own transcript and is re-sent with every later turn | A note appended to the prompt text listing each file's name, type, size and absolute path, for the model to read with its tools |
+| codex | A `localImage` input item naming the stored file; codex reads it itself | The same note in the `text` item |
+
+A message may be files alone; neither adapter then sends an empty text block,
+which the API refuses. A message with neither text, files nor answers is
+refused.
+
+claude asks before reading outside its working directories, so it is launched
+with the session's attachment directory as an `--add-dir` (created at launch,
+since the flag is read once and an upload can arrive while the process runs).
+Without it every file sent by path would raise a permission request, and a work
+running unattended would stall on one.
+
+`chat.ResolveAttachments` opens every file before anything is recorded, so a
+missing file refuses the message whole. The adapter reads the image bytes later,
+after the record is written; a file that disappears in between fails the send
+the way a broken stdin write does — the error reaches the sender and the record
+stays.
+
+A known limit of the path note: it names files by their absolute path, and that
+text becomes part of claude's own transcript. A forked claude session resumes
+that transcript, so an earlier message still points into the *source* session's
+directory, which the fork's `--add-dir` does not cover — re-reading such a file
+raises a permission request, and fails once the source is deleted, although
+`attachments.Clone` gave the fork its own copy under the same id. Files sent
+after the fork are unaffected.
+
+The capability is declared, not assumed: an agent session that can deliver
+files implements `agent.AttachmentReceiver`, and `chat.Client` refuses a
+message carrying files to one that does not (`chat.ErrAttachmentsUnsupported`,
+`InvalidParams`) before anything is recorded. Sending it without them would
+have the agent answer a screenshot it never saw, with nothing on the screen to
+say so. Both CLIs Pockode ships implement it today; the check is what keeps a
+third from dropping files silently.
+
 ## Protocol Baselines
 
 Nothing below is a spec. The event payloads are unversioned — Claude negotiates
