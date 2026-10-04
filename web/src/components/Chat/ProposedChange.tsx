@@ -1,85 +1,15 @@
 import { createPatch } from "diff";
 import { useMemo } from "react";
-import {
-	type CodexChangeView,
-	parseCodexChanges,
-} from "../../lib/codexChanges";
+import type { CodexChangeView } from "../../lib/codexChanges";
+import type {
+	EditInput,
+	MultiEditInput,
+	ProposedChangeData,
+} from "../../lib/proposedChange";
 import { useWSStore } from "../../lib/wsStore";
 import { GIT_STATUS_INFO } from "../../types/git";
 import { formatFilePath } from "../../utils/path";
 import { DiffViewer, FileContentDisplay } from "../ui";
-
-interface EditInput {
-	file_path: string;
-	old_string: string;
-	new_string: string;
-	replace_all?: boolean;
-}
-
-interface WriteInput {
-	file_path: string;
-	content: string;
-}
-
-interface MultiEditInput {
-	file_path: string;
-	edits: Array<{ old_string: string; new_string: string }>;
-}
-
-/**
- * What a file tool will do to the file, read from its input alone.
- *
- * Nothing here reads the result, which is what lets the same view sit in two
- * places: a finished call's result, and the permission card asking whether the
- * call may run at all — so what was approved and what ran read the same.
- */
-export type ProposedChangeData =
-	| { kind: "edit"; input: EditInput }
-	| { kind: "multiEdit"; input: MultiEditInput }
-	| { kind: "write"; input: WriteInput }
-	| { kind: "codex"; changes: CodexChangeView[] };
-
-function isEditInput(input: unknown): input is EditInput {
-	const i = input as Record<string, unknown>;
-	return (
-		typeof i?.file_path === "string" &&
-		typeof i?.old_string === "string" &&
-		typeof i?.new_string === "string"
-	);
-}
-
-function isWriteInput(input: unknown): input is WriteInput {
-	const i = input as Record<string, unknown>;
-	return typeof i?.file_path === "string" && typeof i?.content === "string";
-}
-
-function isMultiEditInput(input: unknown): input is MultiEditInput {
-	const i = input as Record<string, unknown>;
-	return typeof i?.file_path === "string" && Array.isArray(i?.edits);
-}
-
-/**
- * Null for a tool that changes no file, or an input of the wrong shape. Callers
- * memoize it: a Codex payload's add and delete patches diff whole files.
- */
-export function proposedChange(
-	toolName: string,
-	input: unknown,
-): ProposedChangeData | null {
-	switch (toolName) {
-		case "Edit": {
-			if (isEditInput(input)) return { kind: "edit", input };
-			const changes = parseCodexChanges(input);
-			return changes ? { kind: "codex", changes } : null;
-		}
-		case "MultiEdit":
-			return isMultiEditInput(input) ? { kind: "multiEdit", input } : null;
-		case "Write":
-			return isWriteInput(input) ? { kind: "write", input } : null;
-		default:
-			return null;
-	}
-}
 
 function EditDiff({ input }: { input: EditInput }) {
 	const unifiedDiff = useMemo(

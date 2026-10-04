@@ -85,7 +85,7 @@ export function taskDescription(input: unknown): string {
  * first is allowed to be cut. The path is shown relative to the work directory
  * when it is inside it, which is both shorter and what the Files tab names it.
  */
-function pathParts(
+export function pathParts(
 	filePath: string,
 	workDir: string,
 ): { head: string; tail: string } {
