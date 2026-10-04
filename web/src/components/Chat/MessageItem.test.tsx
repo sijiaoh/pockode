@@ -887,10 +887,12 @@ describe("MessageItem", () => {
 			expect(card).toHaveTextContent('"command": "rm -rf build"');
 		});
 
-		it("does not repeat an input that is already drawn as JSON", () => {
-			const card = drawCard(pending("mcp__srv__do", { target: "x" }));
+		it("does not repeat an input that is already drawn whole", () => {
+			drawCard(pending("mcp__srv__do", { target: "x" }));
 
-			expect(card).toHaveTextContent('"target": "x"');
+			expect(
+				screen.getByText("target", { selector: "dt" }).nextElementSibling,
+			).toHaveTextContent(/^x$/);
 			expect(
 				screen.queryByRole("button", { name: "Raw input" }),
 			).not.toBeInTheDocument();
@@ -906,6 +908,23 @@ describe("MessageItem", () => {
 
 			expect(screen.getByText("Proposed change")).toBeInTheDocument();
 			expect(card).toHaveTextContent("hello from the agent");
+		});
+
+		it("counts the lines an edit will add and remove", () => {
+			drawCard(
+				pending("Edit", {
+					file_path: "/Users/test/project/a.ts",
+					old_string: "one\n",
+					new_string: "1\n2\n",
+				}),
+			);
+
+			expect(
+				screen.getByText("Proposed change").parentElement,
+			).toHaveTextContent("+2 −1");
+			expect(
+				screen.getByRole("button", { name: "Wrap long lines" }),
+			).toBeInTheDocument();
 		});
 
 		it("offers the way over to the file a request would touch", async () => {

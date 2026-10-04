@@ -77,15 +77,15 @@ export function taskDescription(input: unknown): string {
 }
 
 /**
- * A path split for a row: the directories, which may fade out, and the file
- * name, which may not.
+ * A path split for one line — the row's, and a tool body's `PathLine`: the
+ * directories, which may fade out, and the file name, which may not.
  *
  * `truncate` removes the tail of a string, and a path's tail is the one part
  * that identifies it — so the two halves are drawn separately and only the
  * first is allowed to be cut. The path is shown relative to the work directory
  * when it is inside it, which is both shorter and what the Files tab names it.
  */
-function pathParts(
+export function pathParts(
 	filePath: string,
 	workDir: string,
 ): { head: string; tail: string } {

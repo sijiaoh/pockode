@@ -64,8 +64,9 @@ to copy, and the design below is Pockode's own.
 
 **claude-code-chat** (`refs/claude-code-chat`) never joins a result to its call
 at all — it matches a result to "the last tool use" by position. Its one
-transferable idea is progressive reveal, and Pockode's `ScrollableContent` is a
-better version of it that already shipped.
+transferable idea is progressive reveal, and Pockode's `ClampedContent` — a
+section cut to a height and opened in place by *Show all* — is a better version
+of it that already shipped.
 
 ## What the two engines actually emit
 

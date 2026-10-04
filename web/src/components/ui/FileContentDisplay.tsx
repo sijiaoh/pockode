@@ -14,16 +14,23 @@ interface Props {
 	 * as a megabyte of source does.
 	 */
 	plain?: boolean;
+	/** See `CodeHighlighter`. */
+	copyable?: boolean;
 }
 
-export function FileContentDisplay({ content, filePath, plain }: Props) {
+export function FileContentDisplay({
+	content,
+	filePath,
+	plain,
+	copyable,
+}: Props) {
 	if (!plain && filePath && isMarkdownFile(filePath)) {
 		return <MarkdownContent content={content} />;
 	}
 
 	const language = filePath ? getLanguageFromPath(filePath) : undefined;
 	return (
-		<CodeHighlighter language={language} plain={plain}>
+		<CodeHighlighter language={language} plain={plain} copyable={copyable}>
 			{content}
 		</CodeHighlighter>
 	);

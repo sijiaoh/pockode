@@ -44,7 +44,12 @@ import AttachmentStrip from "./AttachmentStrip";
 import AuthFailureNotice from "./AuthFailureNotice";
 import MessageActions from "./MessageActions";
 import MessageMenuTrigger, { type ForkBlocked } from "./MessageMenuTrigger";
-import { ProposedChange, proposedChange } from "./ProposedChange";
+import {
+	ProposedChange,
+	proposedChange,
+	proposedChangeHeader,
+	proposedChangeText,
+} from "./ProposedChange";
 import QuestionRecordItem from "./QuestionRecordItem";
 import { useRowExpanded } from "./rowExpansionContext";
 import { anchorCandidateProps } from "./scrollAnchor";
@@ -52,8 +57,8 @@ import TaskItem from "./TaskItem";
 import ToolCallItem from "./ToolCallItem";
 import { invocationView, ToolInvocation } from "./ToolInvocation";
 import { PartBlocks } from "./ToolList";
-import { Section } from "./ToolOutcomeSections";
 import { ToolRow } from "./ToolRow";
+import { Section } from "./ToolSection";
 
 interface SystemItemProps {
 	content: string;
@@ -337,36 +342,31 @@ function getModeLabel(mode: PermissionMode): string {
  * The input as it arrived, folded away under the reading of it above.
  *
  * Kept because the reading is a reading: a key no branch draws is still part
- * of what is being approved. `CollapsibleBody` mounts nothing until the first
- * open, so the serialization below is paid for only by someone who asked.
+ * of what is being approved. A folded `Section` mounts nothing until the first
+ * open, so the serialization below is paid for only by someone who asked — or
+ * who copies it, which is why the header copies through a function.
  */
 function RawInput({ input }: { input: unknown }) {
-	const [expanded, setExpanded] = useState(false);
-
 	return (
-		<div>
-			<button
-				type="button"
-				aria-expanded={expanded}
-				onClick={() => setExpanded(!expanded)}
-				className="flex min-h-[36px] w-full items-center gap-1.5 rounded text-left text-th-text-muted pointer-coarse:min-h-11 hover:bg-th-overlay-hover"
-			>
-				<ChevronRight
-					className={`size-3 shrink-0 transition-transform ${expanded ? "rotate-90" : ""}`}
-				/>
-				Raw input
-			</button>
-			<CollapsibleBody expanded={expanded}>
-				<RawInputBody input={input} />
-			</CollapsibleBody>
-		</div>
+		<Section
+			label="Raw input"
+			copyText={() => formatInput(input)}
+			collapsible={{ defaultOpen: false }}
+		>
+			<RawInputBody input={input} />
+		</Section>
 	);
 }
 
 function RawInputBody({ input }: { input: unknown }) {
 	const json = useMemo(() => formatInput(input), [input]);
 	return (
-		<CodeHighlighter language="json" wrap plain={json.length > HIGHLIGHT_LIMIT}>
+		<CodeHighlighter
+			language="json"
+			wrap
+			copyable={false}
+			plain={json.length > HIGHLIGHT_LIMIT}
+		>
 			{json}
 		</CodeHighlighter>
 	);
@@ -605,8 +605,8 @@ function PermissionRequestItem({
 				{/* A settled card's body is an opened drawer like a tool row's; a
 				    pending one keeps the card's tint, being what the card asks
 				    about. */}
-				<ScrollableContent
-					className={`max-h-[60vh] space-y-3 overflow-auto border-t border-th-border p-2 ${isPending ? "" : "bg-th-bg-secondary"}`}
+				<div
+					className={`space-y-3 border-t border-th-border p-2 ${isPending ? "" : "bg-th-bg-secondary"}`}
 				>
 					{/* An expired permission can only have been a denial, and the card
 					    states that outcome rather than offering anything to press: the
@@ -621,7 +621,7 @@ function PermissionRequestItem({
 					{hasToolInput && (
 						<PermissionRequestBody request={request} onOpenFile={onOpenFile} />
 					)}
-				</ScrollableContent>
+				</div>
 			</CollapsibleBody>
 
 			{/* Outside the button row on purpose. A refusal often takes the buttons
@@ -700,16 +700,16 @@ function PermissionRequestBody({
 		() => invocationView(request.toolName, request.toolInput),
 		[request.toolName, request.toolInput],
 	);
-	const change = useMemo(
-		() => proposedChange(request.toolName, request.toolInput),
-		[request.toolName, request.toolInput],
-	);
-	// Where the body already is the input — the JSON fallback, a string input,
-	// a plan that is the input's only key — the raw input would say it twice. A
-	// plan with anything beside it keeps it: whatever else the plan asks for is
-	// being approved with it.
+	const change = proposedChange(request.toolName, request.toolInput);
+	// Counting reads the whole diff; `change` is the same object every render.
+	const changeHeader = useMemo(() => proposedChangeHeader(change), [change]);
+	// Where the body already is the input — the JSON fallback or its fields, a
+	// string input, a plan that is the input's only key — the raw input would
+	// say it twice. A plan with anything beside it keeps it: whatever else the
+	// plan asks for is being approved with it.
 	const showRaw =
 		view.kind !== "json" &&
+		view.kind !== "params" &&
 		typeof request.toolInput !== "string" &&
 		!(
 			view.kind === "plan" &&
@@ -724,7 +724,12 @@ function PermissionRequestBody({
 				onOpenFile={onOpenFile}
 			/>
 			{change && (
-				<Section label="Proposed change">
+				<Section
+					label="Proposed change"
+					{...changeHeader}
+					copyText={proposedChangeText(change)}
+					fullScreenTitle="Proposed change"
+				>
 					<ProposedChange change={change} />
 				</Section>
 			)}
@@ -1090,7 +1095,7 @@ function PockodeCommandItem({
 				/>
 			)}
 			<CollapsibleBody expanded={expanded}>
-				<ScrollableContent className="max-h-[60vh] overflow-auto border-t border-th-border p-2">
+				<div className="border-t border-th-border p-2">
 					<Section label="Sent to the agent">
 						{/* Empty only on this client's own echo, until the server's
 						    reply brings the prompt it expanded the command to — or
@@ -1105,7 +1110,7 @@ function PockodeCommandItem({
 							</p>
 						)}
 					</Section>
-				</ScrollableContent>
+				</div>
 			</CollapsibleBody>
 		</div>
 	);

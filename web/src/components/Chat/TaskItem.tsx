@@ -13,7 +13,7 @@ import { stepsLabel, toolRunText, toolSecondLine } from "../../lib/toolRun";
 import { taskPrompt, toolSummary } from "../../lib/toolSummary";
 import { useWSStore } from "../../lib/wsStore";
 import type { ContentPart, ToolRun } from "../../types/message";
-import { CollapsibleBody, MarkdownContent, ScrollableContent } from "../ui";
+import { ClampedContent, CollapsibleBody, MarkdownContent } from "../ui";
 import { PartBlocks } from "./ToolList";
 import { ToolOutcomeSections } from "./ToolOutcomeSections";
 import { Detail, ToolMeta, ToolRow, ToolStatusGlyph } from "./ToolRow";
@@ -248,9 +248,11 @@ function TaskItem({ run, depth = 0, renderChild }: Props) {
 						</p>
 					)}
 					{report ? (
-						<ScrollableContent className="max-h-[60vh] overflow-auto p-2">
-							<MarkdownContent content={report} />
-						</ScrollableContent>
+						<div className="p-2">
+							<ClampedContent>
+								<MarkdownContent content={report} />
+							</ClampedContent>
+						</div>
 					) : (
 						// A backgrounded subagent's outcome below is its report, and
 						// says so in its own label; a sentence about it would only
@@ -285,8 +287,9 @@ function TaskItem({ run, depth = 0, renderChild }: Props) {
 								</span>
 							</button>
 							<CollapsibleBody expanded={processExpanded}>
-								{/* No scroller of its own: the rows inside open into bodies
-								    with theirs, and a scroller inside a scroller is a drag
+								{/* Neither clamped nor scrolling: the rows inside open into
+								    bodies of their own, which a clamp would hide behind a
+								    "Show all", and a scroller in the transcript is a drag
 								    that goes to whichever box is under the thumb. */}
 								<div className="pb-2">
 									{/* biome-ignore lint/a11y/useSemanticElements: a column of transcript parts, not form controls a fieldset would group */}
@@ -328,11 +331,13 @@ function TaskItem({ run, depth = 0, renderChild }: Props) {
 								<span className="text-th-text-muted">Prompt</span>
 							</button>
 							<CollapsibleBody expanded={promptExpanded}>
-								<ScrollableContent className="max-h-[40vh] overflow-auto p-2">
-									<pre className="whitespace-pre-wrap text-th-text-muted">
-										{prompt}
-									</pre>
-								</ScrollableContent>
+								<div className="p-2">
+									<ClampedContent>
+										<pre className="whitespace-pre-wrap text-th-text-muted">
+											{prompt}
+										</pre>
+									</ClampedContent>
+								</div>
 							</CollapsibleBody>
 						</div>
 					)}

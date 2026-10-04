@@ -4,18 +4,24 @@ import {
 	type FileReference,
 	partitionFileBlocks,
 } from "../../lib/contentBlocks";
+import { toolBodyLayout } from "../../lib/toolBodyLayout";
 import { lastOutputLines, toolSecondLine } from "../../lib/toolRun";
 import { toolSummary } from "../../lib/toolSummary";
 import { useWSStore } from "../../lib/wsStore";
 import type { ToolRun } from "../../types/message";
 import { omittedLabel } from "../../utils/attachment";
-import { CollapsibleBody, ScrollableContent } from "../ui";
+import { CollapsibleBody, useEverExpanded } from "../ui";
 import AttachmentStrip from "./AttachmentStrip";
+import { proposedChange, proposedChangeHeader } from "./ProposedChange";
 import { useRowExpanded } from "./rowExpansionContext";
 import { PathLine, ToolInvocation } from "./ToolInvocation";
-import { Section, ToolOutcomeSections } from "./ToolOutcomeSections";
-import ToolResultDisplay from "./ToolResultDisplay";
+import { ToolOutcomeSections } from "./ToolOutcomeSections";
+import ToolResultDisplay, {
+	outputLineCount,
+	resultCopyText,
+} from "./ToolResultDisplay";
 import { ToolMeta, ToolRow, ToolStatusGlyph } from "./ToolRow";
+import { Section } from "./ToolSection";
 
 /** How much of a running call's output the body shows. */
 const LIVE_OUTPUT_LINES = 50;
@@ -38,9 +44,9 @@ interface Props {
  * directory, it had no button either: a card-shaped thing that could not be
  * tapped.
  *
- * The full path, not the file name the block also carries: the body does not
- * truncate, so the tail of the path *is* the name and a second copy of it would
- * only take a line.
+ * Through `PathLine`, not the file name the block also carries: the line keeps
+ * the name whole and cuts the directories first, so a second copy of the name
+ * would only take a line.
  */
 function ReferenceLine({
 	file,
@@ -102,7 +108,105 @@ const ToolCallItem = memo(function ToolCallItem({
 	const live = run.status === "running" || run.status === "background";
 	const liveOutput =
 		live && run.output ? lastOutputLines(run.output, LIVE_OUTPUT_LINES) : "";
-	const hasResult = Boolean(run.result || run.contents);
+	const layout = toolBodyLayout(run.name);
+	// A result that only acknowledges the call is no answer to show.
+	const showsResult =
+		Boolean(run.result || run.contents) &&
+		!(layout.resultIsAcknowledgement && !failed);
+	// Eager rather than a function handed to the button, because whether there
+	// is anything to copy decides whether there is a button. Gated on the body
+	// having been opened: a collapsed `Read` should not pay to strip its line
+	// numbers.
+	const everExpanded = useEverExpanded(expanded);
+	const copyText = useMemo(
+		() =>
+			everExpanded && showsResult
+				? resultCopyText(run.name, run.input, run.result ?? "", run.contents)
+				: undefined,
+		[everExpanded, showsResult, run.name, run.input, run.result, run.contents],
+	);
+	// Gated the same way: counting means reading the whole diff. Mirrors when
+	// `ToolResultDisplay` draws the change rather than content blocks.
+	const changeHeader = useMemo(
+		() =>
+			everExpanded && showsResult && !run.contents
+				? proposedChangeHeader(proposedChange(run.name, run.input))
+				: {},
+		[everExpanded, showsResult, run.name, run.input, run.contents],
+	);
+	// Gated the same way: counting means splitting the whole output.
+	const showAllLabel = useMemo(
+		() =>
+			everExpanded && layout.resultFromEnd && run.result
+				? `Show all ${outputLineCount(run.result)} lines`
+				: undefined,
+		[everExpanded, layout.resultFromEnd, run.result],
+	);
+
+	const invocation = (
+		<ToolInvocation
+			toolName={run.name}
+			input={run.input}
+			onOpenFile={onOpenFile}
+			// Folded only once there is an answer to read instead; until then the
+			// call is all the body has to say. Read when the body first mounts,
+			// so a result arriving later does not fold what the user is reading.
+			collapsible={
+				layout.resultFirst ? { defaultOpen: !showsResult } : undefined
+			}
+		/>
+	);
+
+	const outcome = (
+		<>
+			{liveOutput && (
+				<Section label="Output so far" clampFrom="end">
+					<pre className="whitespace-pre-wrap font-mono text-th-text-muted">
+						{liveOutput}
+					</pre>
+				</Section>
+			)}
+			<ToolOutcomeSections
+				run={run}
+				outcomeLabel={layout.resultLabel}
+				outcomeClampFrom={layout.resultFromEnd ? "end" : undefined}
+				outcomeShowAllLabel={showAllLabel}
+				outcomeMeta={changeHeader.meta}
+				outcomeActions={changeHeader.actions}
+				outcomeCopyText={copyText}
+				outcomeFullScreenTitle={
+					layout.fullScreen
+						? [summary.title, summary.detail + summary.detailTail]
+								.filter(Boolean)
+								.join(" · ")
+						: undefined
+				}
+				outcome={
+					showsResult && (
+						<>
+							<ToolResultDisplay
+								toolName={run.name}
+								toolInput={run.input}
+								result={run.result ?? ""}
+								contents={run.contents}
+								onOpenFile={onOpenFile}
+								failed={failed}
+							/>
+							{/* No condition of its own: a reference can only have come
+							    from `run.contents`, which is half of `showsResult`. */}
+							{references.map((file) => (
+								<ReferenceLine
+									key={file.path}
+									file={file}
+									onOpenFile={onOpenFile}
+								/>
+							))}
+						</>
+					)
+				}
+			/>
+		</>
+	);
 
 	return (
 		<div className="text-xs">
@@ -128,60 +232,33 @@ const ToolCallItem = memo(function ToolCallItem({
 				/>
 			)}
 			<CollapsibleBody expanded={expanded}>
-				<ScrollableContent className="max-h-[60vh] space-y-3 overflow-auto border-t border-th-border bg-th-bg-secondary p-2">
-					{/* No `useEverExpanded` gate: `CollapsibleBody` renders nothing
-					    at all until the body is first opened, so the pretty-printing
-					    and the highlighting below are already paid for only once
-					    somebody asks. */}
-					<ToolInvocation
-						toolName={run.name}
-						input={run.input}
-						onOpenFile={onOpenFile}
-					/>
-					{liveOutput && (
-						// No scroller of its own: `ScrollableContent` above already owns
-						// one, and a scroll area inside a scroll area swallows the drag
-						// that was meant for the transcript.
-						<Section label="Output so far">
-							<pre className="whitespace-pre-wrap font-mono text-th-text-muted">
-								{liveOutput}
-							</pre>
-						</Section>
+				{/* No height of its own and no scroller: each block clamps itself
+				    (`Section`), because a scroll box inside the transcript takes the
+				    drag a phone meant for the page. No `useEverExpanded` gate either:
+				    `CollapsibleBody` renders nothing at all until the body is first
+				    opened, so the pretty-printing and the highlighting below are
+				    already paid for only once somebody asks. */}
+				<div className="space-y-3 border-t border-th-border bg-th-bg-secondary p-2">
+					{layout.resultFirst ? (
+						<>
+							{outcome}
+							{invocation}
+						</>
+					) : (
+						<>
+							{invocation}
+							{outcome}
+						</>
 					)}
-					<ToolOutcomeSections
-						run={run}
-						outcome={
-							hasResult && (
-								<>
-									<ToolResultDisplay
-										toolName={run.name}
-										toolInput={run.input}
-										result={run.result ?? ""}
-										contents={run.contents}
-										onOpenFile={onOpenFile}
-									/>
-									{/* No condition of its own: a reference can only have come
-									    from `run.contents`, which is half of `hasResult`. */}
-									{references.map((file) => (
-										<ReferenceLine
-											key={file.path}
-											file={file}
-											onOpenFile={onOpenFile}
-										/>
-									))}
-								</>
-							)
-						}
-					/>
 					{run.exitCode !== undefined && run.exitCode !== 0 && (
 						<p className="text-th-text-muted">Exit code {run.exitCode}</p>
 					)}
-					{run.status === "interrupted" && hasResult && (
+					{run.status === "interrupted" && showsResult && (
 						<p className="text-th-text-muted">
 							Returned after the turn was interrupted.
 						</p>
 					)}
-				</ScrollableContent>
+				</div>
 			</CollapsibleBody>
 		</div>
 	);
