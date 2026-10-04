@@ -13,8 +13,9 @@ The surfaces are `ToolCallItem.tsx`, `TaskItem.tsx` (the subagent category),
 through `ToolRow.tsx`, which is where the grammar below lives — plus
 `ToolInvocation.tsx` for the invocation a row and a card both show,
 `ToolResultDisplay.tsx` for the result, `ProposedChange.tsx` for the file
-change a result and a card both draw, `ToolOutcomeSections.tsx` for the
-blocks the two tool renderers share, `ToolSection.tsx` for the labelled,
+change a result, the permission card and the turn's changes card all draw
+(read by `lib/proposedChange.ts`), `ToolOutcomeSections.tsx` for the blocks
+the two tool renderers share, `ToolSection.tsx` for the labelled,
 clamped section every one of those blocks is drawn as, and
 `TurnChangesCard.tsx` for [the files a turn changed](#the-turns-changes), all
 under
@@ -297,22 +298,24 @@ path are one file; a path outside it is matched whole in a namespace of its
 own, since `/etc/hosts` split into segments reads exactly like
 `<workDir>/etc/hosts` made relative.
 
-**A tap opens the row in place**, at every width: `CollapsibleBody` →
-`ScrollableContent max-h-[60vh]` on `bg-th-bg-secondary` — the box the tool
-body [has since given up](#the-body-problems-2-and-3) for sections that clamp
-themselves; the card has not followed yet — holding `PathLine` (with *Open*
-into the Files tab, except for a deleted file or one outside the work
-directory) and then one `ProposedChange` per change, in order. Being the same
-component, each diff has the tool body's narrow gutter on a phone and follows
-the one *Wrap long lines* switch; the card offers no switch of its own, so it
-is set from a tool row or a permission card. With more than one, each is headed `1 · Edit`, `2 · Write`…; a rewriting
-Write is headed *Whole file written — what it replaced is not in this call*
-(not "the transcript": an earlier step may have written exactly what it
-replaced). A Codex call that changed several files is split, each row's diff
-holding its own file only; `CodexDiff`'s own status-and-path line half repeats
-`PathLine`, and is kept rather than given a second rendering mode. There is no
-net diff: an `Edit` carries fragments, not the file, so nothing trustworthy can
-be composed from them — the changes are shown as made, as
+**A tap opens the row in place**, at every width: `CollapsibleBody` → a plain
+`bg-th-bg-secondary` box — no scroll box of its own, for the reason the tool
+body [gave one up](#the-body-problems-2-and-3) — holding `PathLine` (with
+*Open* into the Files tab, except for a deleted file or one outside the work
+directory) and then one change per `Section`, in order, each drawn exactly as
+on its tool row: `ProposedChange` clamped by `ClampedContent` with *Show all*
+and *Full screen* (`Edit · deliver.ts`), `+N −M` and the one *Wrap long lines*
+switch in its header, and a Write's content copied from there. Being the same
+component, each diff also has the tool body's narrow gutter on a phone. A file
+changed once heads its block `Change` (`Content` for a Write), as the tool
+body does; with more than one, each is headed `1 · Edit`, `2 · Write`…; a
+rewriting Write opens with *Whole file written — what it replaced is not in
+this call* (not "the transcript": an earlier step may have written exactly
+what it replaced). A Codex call that changed several files is split, each
+row's diff holding its own file only; `CodexDiff`'s own status-and-path line
+half repeats `PathLine`, and is kept rather than given a second rendering mode.
+There is no net diff: an `Edit` carries fragments, not the file, so nothing
+trustworthy can be composed from them — the changes are shown as made, as
 [fetches](#a-fetch-reads-on-the-row-it-came-from) are, nothing merged and
 nothing dropped. Not a sheet: on a desktop `Sheet` is 448px, narrower than the
 reading column, and a reviewer moving file to file would open and close it for
@@ -1818,12 +1821,16 @@ decisions, and reachability is a CSS variant
     listing only what succeeded; a turn with no successful change has no card
     and no gap.
 34. On a 375px phone, two `index.ts` in deep directories: one line each, told
-    apart by their last directory, chip and counts whole; the full path in the
-    body. The same file edited three times is one row with the summed counts,
-    opening on `1 · Edit` to `3 · Edit`; edited once, no heading. A `Write`
-    over a file: `rewritten`, `+N` only, and the line saying so above its diff.
+    apart by their last directory, chip and counts whole; in the body,
+    `PathLine` relative, and the full path once it is tapped. The same file
+    edited three times is one row with the summed counts, opening on
+    `1 · Edit` to `3 · Edit`; edited once, `Change`. A `Write` over a file: `rewritten`, `+N` only, and the line saying so above its diff.
 35. Nine changed files: five rows and `Show 4 more files`; press it and focus
     lands on the sixth row. Seven: all listed. Reload: the same card.
+36. On a 375px phone, open a card row onto a diff of hundreds of lines and drag
+    up and down over it: the transcript moves, never the diff alone. The diff
+    is cut and faded with *Show all* and *Full screen* under it, `+N −M` and
+    the wrap switch in its header; a `Write`'s block copies its content.
 
 ## Out of scope
 

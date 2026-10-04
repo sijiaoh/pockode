@@ -14,6 +14,7 @@ vi.mock("../../lib/wsStore", () => ({
 // The diff itself is `ProposedChange`'s to draw, and its viewer measures text
 // on a canvas jsdom does not have; what the card owes is handing it each edit.
 vi.mock("./ProposedChange", () => ({
+	proposedChangeHeader: () => ({}),
 	ProposedChange: ({ change }: { change: ProposedChangeData }) => (
 		<p>
 			{change.kind} diff of{" "}
@@ -149,6 +150,36 @@ describe("TurnChangesCard", () => {
 		).toBeInTheDocument();
 	});
 
+	// The tool body's blocks, not a box of its own: a scroll box inside the
+	// transcript takes the drags meant for the page on a phone.
+	it("opens onto blocks that clamp themselves, as the tool body's do", async () => {
+		const user = userEvent.setup();
+		render(
+			<TurnChangesCard
+				parts={[
+					edit("1", "/repo/a.ts", "one", "two"),
+					write("2", "/repo/b.ts", "x\n", "File created successfully"),
+				]}
+			/>,
+		);
+		const writeText = vi.spyOn(navigator.clipboard, "writeText");
+
+		const row = screen.getByRole("button", { name: /^a\.ts/ });
+		await user.click(row);
+		await user.click(screen.getByRole("button", { name: /^b\.ts/ }));
+		const diff = screen.getByText("edit diff of /repo/a.ts");
+		expect(screen.getByText("Change")).toBeInTheDocument();
+		expect(diff.closest(".max-h-80")).toHaveClass("overflow-y-hidden");
+		const group = card() as HTMLElement;
+		expect(
+			group.querySelector(".overflow-auto, .overflow-y-auto, [class*='60vh']"),
+		).toBeNull();
+
+		// The new file's content is copied from its block's header.
+		await user.click(screen.getByRole("button", { name: "Copy content" }));
+		expect(writeText).toHaveBeenLastCalledWith("x\n");
+	});
+
 	it("titles each step by the tool that made it", async () => {
 		const user = userEvent.setup();
 		render(
@@ -169,6 +200,10 @@ describe("TurnChangesCard", () => {
 		expect(
 			screen.getAllByText(/^\d · /).map((title) => title.textContent),
 		).toEqual(["1 · Edit", "2 · Write"]);
+		// Only the Write has content to copy, and its button says which step.
+		expect(
+			screen.getByRole("button", { name: "Copy content of 2 · Write" }),
+		).toBeInTheDocument();
 	});
 
 	it("offers no way to open a file the turn deleted", async () => {

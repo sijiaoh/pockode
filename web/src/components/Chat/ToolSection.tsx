@@ -16,6 +16,8 @@ interface Props {
 	actions?: ReactNode;
 	/** What the header's copy button copies; no button without it. */
 	copyText?: string | (() => string);
+	/** The copy button's name, where `Copy <label>` would not read as one. */
+	copyLabel?: string;
 	/**
 	 * Fold the block under its header, open or closed to begin with. For what the
 	 * row has already said — the input of a `Read` whose path is the row's whole
@@ -41,6 +43,7 @@ export function Section({
 	meta,
 	actions,
 	copyText,
+	copyLabel,
 	collapsible,
 	clampFrom,
 	fullScreenTitle,
@@ -84,7 +87,7 @@ export function Section({
 						{copyText && (
 							<HeaderCopyButton
 								text={copyText}
-								label={`Copy ${label.toLowerCase()}`}
+								label={copyLabel ?? `Copy ${label.toLowerCase()}`}
 							/>
 						)}
 					</>
