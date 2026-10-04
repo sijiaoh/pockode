@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { isAbortError } from "./api";
+import { uploadChatAttachment } from "./chatAttachments";
 import {
 	nameCollision,
 	nextAvailableName,
@@ -329,5 +330,88 @@ describe("nextAvailableName", () => {
 		expect(nextAvailableName("Makefile", new Set(["Makefile"]))).toBe(
 			"Makefile (1)",
 		);
+	});
+});
+
+describe("uploadChatAttachment", () => {
+	beforeEach(() => {
+		logout.mockClear();
+		FakeXHR.instances = [];
+		vi.stubGlobal("XMLHttpRequest", FakeXHR);
+	});
+
+	afterEach(() => {
+		vi.unstubAllGlobals();
+	});
+
+	const file = new File(["hello"], "shot.png", { type: "image/png" });
+
+	it("posts to the session's store and resolves with the id to send", async () => {
+		const progress = vi.fn();
+		const done = uploadChatAttachment({
+			file,
+			sessionId: "sess-1",
+			worktree: "feature",
+			onProgress: progress,
+		});
+		const xhr = only();
+		expect(xhr.method).toBe("POST");
+		expect(xhr.url).toBe(
+			"http://localhost:8080/api/chat/attachments?session_id=sess-1&worktree=feature",
+		);
+		expect(xhr.headers.get("Authorization")).toBe("Bearer test-token");
+		expect(xhr.body?.get("file")).toBeInstanceOf(File);
+
+		xhr.reportProgress(1, 2);
+		expect(progress).toHaveBeenCalledWith(0.5);
+
+		xhr.respond(
+			200,
+			JSON.stringify({ files: [{ id: "abc.png", name: "shot.png", size: 5 }] }),
+		);
+		await expect(done).resolves.toEqual({
+			id: "abc.png",
+			name: "shot.png",
+			size: 5,
+			mime: "image/png",
+		});
+	});
+
+	it("leaves the worktree out for the main one", async () => {
+		const done = uploadChatAttachment({ file, sessionId: "s", worktree: "" });
+		expect(only().url).toBe(
+			"http://localhost:8080/api/chat/attachments?session_id=s",
+		);
+		only().respond(200, JSON.stringify({ files: [{ id: "x" }] }));
+		await done;
+	});
+
+	it("names the ceiling a file was refused for", async () => {
+		const done = uploadChatAttachment({ file, sessionId: "s", worktree: "" });
+		only().respond(
+			413,
+			errorBody("too_large", "attachments exceed the 20 MiB limit", {
+				limit: 20 * 1024 * 1024,
+			}),
+		);
+		const error = await done.catch((e: unknown) => e);
+		expect(error).toBeInstanceOf(UploadError);
+		expect((error as UploadError).message).toBe("Too large (max 20 MB)");
+		expect((error as UploadError).canRetry).toBe(false);
+	});
+
+	it("says so when the session is gone", async () => {
+		const done = uploadChatAttachment({ file, sessionId: "s", worktree: "" });
+		only().respond(
+			404,
+			errorBody("session_not_found", 'session "s" not found'),
+		);
+		await expect(done).rejects.toThrow("The chat session no longer exists");
+	});
+
+	it("refuses a success that names no stored file", async () => {
+		const done = uploadChatAttachment({ file, sessionId: "s", worktree: "" });
+		only().respond(200, "{}");
+		await expect(done).rejects.toBeInstanceOf(UploadError);
 	});
 });

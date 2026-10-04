@@ -1,5 +1,5 @@
 import { useIsExpanded } from "@pockode/shared";
-import { ChevronDown, CircleHelp } from "lucide-react";
+import { ChevronDown } from "lucide-react";
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import {
 	AUTO_EFFORT_DESCRIPTION,
@@ -20,7 +20,7 @@ import {
 	AGENT_TYPE_INFO,
 	AGENT_TYPES,
 	type AgentTypeInfo,
-	getAgentLabel,
+	getAgentInfo,
 } from "../../lib/agentType";
 import { type ValueState, waitingLabel } from "../../lib/valueState";
 import type { AgentType } from "../../types/settings";
@@ -71,13 +71,6 @@ interface Props {
 	valueState?: ValueState;
 }
 
-/** An agent id this build has no entry for, shown as itself. */
-const unknownAgentInfo = (id: string): AgentTypeInfo => ({
-	label: getAgentLabel(id),
-	description: "Not a known agent on this server",
-	icon: CircleHelp,
-});
-
 /**
  * An engine — agent, model and effort — behind a collapsed summary row, in the
  * same three-section panel the chat uses. Shared by the agent role page and the
@@ -85,7 +78,7 @@ const unknownAgentInfo = (id: string): AgentTypeInfo => ({
  * an empty model means; both are controlled, so the selected dot follows the
  * server's answer rather than the click.
  *
- * Not `Chat/EngineSelector` itself: that one is shaped around a resolved,
+ * Not `Chat/EngineSections` itself: that one is shaped around a resolved,
  * possibly running session — a locked agent after activation, a CLI that
  * restarts on a switch — and is replaceable through `chatUIRegistry`. Neither a
  * role nor a setting touches a session that already exists.
@@ -125,12 +118,12 @@ function EngineField({
 	const optionsFetched = useAgentOptionsStore((s) => s.models !== null);
 
 	// An agent id this build has no entry for keeps its own name and a neutral
-	// icon. Not falling back to Claude the way the session chip does: there the
+	// icon. Not falling back to Claude the way the session panel does: there the
 	// only such row is the current, locked one, while this field can be set to
 	// anything the server offers, and drawing Codex as Claude would be a lie
 	// about a value the user is here to edit.
 	const agentInfo: AgentTypeInfo | undefined = agentType
-		? (AGENT_TYPE_INFO[agentType] ?? unknownAgentInfo(agentType))
+		? getAgentInfo(agentType)
 		: undefined;
 
 	const modelChoices = buildChoices(models, model, autoModelDescription);
@@ -173,7 +166,7 @@ function EngineField({
 	// Listed as a row of its own, the way a retired model id is: without it the
 	// section would look like nothing is selected.
 	if (agentType && !AGENT_TYPE_INFO[agentType]) {
-		agentChoices.unshift({ id: agentType, info: unknownAgentInfo(agentType) });
+		agentChoices.unshift({ id: agentType, info: getAgentInfo(agentType) });
 	}
 
 	// A failure names the choice that caused it, and the panel is the only place
@@ -274,7 +267,7 @@ function EngineField({
 								aria-hidden="true"
 							/>
 							{/* The row has the whole page width, so nothing is budgeted away
-							    the way the action-bar chip budgets it — but an agent or model
+							    the way the session header budgets it — but an agent or model
 							    id this build has never heard of has no length limit at all. */}
 							<span className="min-w-0 flex-1 truncate text-sm text-th-text-primary">
 								{summary}

@@ -29,9 +29,9 @@ function PanelSection({
 			aria-labelledby={titleId}
 			className="mt-2 border-t border-th-border first:mt-0 first:border-t-0"
 		>
-			{/* The heading exists from the first section on: at and above the
-			    expanded tier the panel is a dropdown with no visible title, so this
-			    is the only label the content will ever have on a desktop. */}
+			{/* The heading exists from the first section on: the panel's own title
+			    names what the panel is about, never a section, so this is the only
+			    label a section's content will ever have. */}
 			<h3
 				id={titleId}
 				className="px-3 pt-3 pb-1 text-[11px] font-medium uppercase tracking-wide text-th-text-muted"

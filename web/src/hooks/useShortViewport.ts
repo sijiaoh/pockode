@@ -20,21 +20,20 @@ import { useMediaQuery } from "@pockode/shared";
  * |---|---|
  * | session header (`h-11`) | 45 |
  * | `AttentionStrip` (`py-2` + a `text-xs` line) | 33 |
- * | session action bar (`py-1.5` + a 44px control) | 57 |
- * | `InputBar` (`py-2` + a `min-h-11` textarea) | 61 |
+ * | `InputBar`, Stop included (`py-2` + a `min-h-11` textarea) | 61 |
  *
- * That leaves the transcript `H - 196`, the card 85% of it (§3), and the card's
+ * That leaves the transcript `H - 139`, the card 85% of it (§3), and the card's
  * body that minus its own header (49) and footer (77) — so
- * `0.85 * (H - 196) - 126`. At `H = 540` the body is 166px: a question and two
+ * `0.85 * (H - 139) - 126`. At `H = 483` the body is 166px: a question and two
  * options, which is the least that can be called readable. Below it the number
- * falls away fast — a 667px phone with a 300px keyboard over it lands at 19px,
+ * falls away fast — a 667px phone with a 300px keyboard over it lands at 68px,
  * which is the bug this answers.
  *
- * Folding the action bar and the composer away returns 118px of that same
+ * Folding the composer away returns 61px of that same
  * budget to the transcript, and the card takes the room in the same breath:
  * its cap becomes the whole transcript and its header and footer tighten to 45
  * and 53 (AnswerPanel's `chromeCollapsed`). The body is then `H - 78 - 98`, so
- * the 19px body becomes 191px, and on a 560px phone under the same keyboard it
+ * the 68px body becomes 191px, and on a 560px phone under the same keyboard it
  * is 84px — the field being typed in and a line either side of it. That counts
  * the strip, which is on screen only while it has something to say other than
  * the open questions; without it the body has 33px more.
@@ -42,7 +41,7 @@ import { useMediaQuery } from "@pockode/shared";
  * The number is a derivation, not a measurement: nobody has held a phone up to
  * it yet. Re-derive rather than nudge it if a chrome row's height changes.
  */
-export const SHORT_VIEWPORT_MAX_HEIGHT = 540;
+export const SHORT_VIEWPORT_MAX_HEIGHT = 483;
 
 export const SHORT_VIEWPORT_QUERY = `(max-height: ${SHORT_VIEWPORT_MAX_HEIGHT}px)`;
 

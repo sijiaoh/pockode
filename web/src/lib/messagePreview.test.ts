@@ -16,4 +16,20 @@ describe("messagePreview", () => {
 			}),
 		).toBe("/pockode-lead backend first");
 	});
+
+	it("names a message that is only files by the files", () => {
+		expect(
+			messagePreview({
+				id: "u2",
+				role: "user",
+				content: "",
+				status: "complete",
+				createdAt: new Date(),
+				attachments: [
+					{ name: "shot.png", mime: "image/png", attachment_id: "a.png" },
+					{ name: "log.txt", mime: "text/plain", attachment_id: "b.txt" },
+				],
+			}),
+		).toBe("shot.png, log.txt");
+	});
 });

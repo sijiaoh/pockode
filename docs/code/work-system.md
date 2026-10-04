@@ -1727,9 +1727,10 @@ risks leaving an orphan session behind.
 ### Session to Work Navigation
 
 The reverse direction of the shortcut above: from a conversation back to the
-work item that drives it. It is one row, `SessionWorkSection`, at the top of the
-session info panel on the chat action bar — above Usage, because what this
-session *is* comes before what it has spent. A session that runs no work draws
+work item that drives it. It is one row, `SessionWorkSection`, in the session
+panel the chat header's title opens
+([agent-chat.md](../agent-chat.md#the-session-screen)) — above Usage, because
+what this session *is* comes before what it has spent. A session that runs no work draws
 no section at all: `WorkStarter` creates the session from the work's own
 `SessionID`, and a restart reuses it, so a work never attaches itself to a
 session a user made — a session without one will never grow one later, and a

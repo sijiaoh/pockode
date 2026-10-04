@@ -1608,6 +1608,40 @@ describe("messageReducer", () => {
 				});
 			});
 
+			// The files a user sent travel on the record by id, so a replayed or
+			// broadcast message draws them as the sender's echo did.
+			it("carries the files a message was sent with", () => {
+				const event = normalizeEvent({
+					type: "message",
+					content: "",
+					attachments: [
+						{
+							name: "shot.png",
+							mime: "image/png",
+							size: 10,
+							width: 3,
+							height: 2,
+							attachment_id: "abc.png",
+						},
+						"not a block",
+					],
+				} as Record<string, unknown>);
+				const messages = applyServerEvent([], event);
+				expect(messages[0]).toMatchObject({
+					role: "user",
+					attachments: [
+						{
+							name: "shot.png",
+							mime: "image/png",
+							size: 10,
+							width: 3,
+							height: 2,
+							attachment_id: "abc.png",
+						},
+					],
+				});
+			});
+
 			it("normalizes legacy 'work' origin to 'system' (backward compat)", () => {
 				// Legacy wire data predating the rename, so it is an untyped record.
 				const event = normalizeEvent({

@@ -1053,3 +1053,33 @@ samp {
 		animation: none;
 	}
 }
+
+/* =============================================================================
+ * STOP ARMING
+ *
+ * Stop takes the composer's action slot the moment a send opens a turn, and
+ * holds still for `STOP_ARM_MS` (Chat/SendStopSlot.tsx) before it can be
+ * pressed. The fade spans that same wait, so a button that is not yet live
+ * does not look live; the element sets the duration from the constant, so the
+ * one here is only a fallback. Mounted rather than revealed, hence an animation and only
+ * a `from`, for the reasons the message menu trigger above gives.
+ *
+ * Reduced motion drops the fade, not the wait: the wait is what keeps a double
+ * tap from interrupting the turn it just started.
+ * ============================================================================= */
+
+@theme {
+	--animate-stop-arm: stop-arm 500ms ease-in;
+
+	@keyframes stop-arm {
+		from {
+			opacity: 0;
+		}
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.animate-stop-arm {
+		animation: none;
+	}
+}

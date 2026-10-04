@@ -1,5 +1,5 @@
 import type { AuthCredentialParams } from "@pockode/shared";
-import type { ContentBlock } from "./content";
+import type { ContentBlock, FileBlock } from "./content";
 import type { AgentType } from "./settings";
 import type { WorkType } from "./work";
 
@@ -393,6 +393,13 @@ export interface UserMessage {
 	 * expanded to. The row is drawn from this; `content` is what the agent read.
 	 */
 	command?: PockodeCommandInvocation;
+	/**
+	 * The files the user sent with the message, each fetched by its
+	 * `attachment_id` through `attachment.get`. On the sender's echo these are
+	 * what the client knew at send time until the reply replaces them with the
+	 * server's description (type and dimensions read from the stored bytes).
+	 */
+	attachments?: FileBlock[];
 }
 
 /**
@@ -683,6 +690,11 @@ export interface AuthResult {
 	 */
 	max_upload_size: number;
 	/**
+	 * The same ceiling for chat attachments (`POST /api/chat/attachments`),
+	 * which have one of their own. Absent from servers that predate them.
+	 */
+	max_attachment_size?: number;
+	/**
 	 * What the client stores in place of the password: freshly issued when it
 	 * authenticated with a password, and the very same token it sent when it
 	 * authenticated with one. Never a rotation, so it can be stored
@@ -701,6 +713,19 @@ export interface MessageParams {
 	 * pending — the body is one string, so there is no half of it to deliver.
 	 */
 	answering?: QuestionAnswerParams[];
+	/**
+	 * Files sent with the message, by the ids `POST /api/chat/attachments`
+	 * returned for this session. `content` may be empty when there are any.
+	 * Refused beside `answering`, and refused whole (`-32602`) when an id names
+	 * nothing the session has or the session's agent cannot receive files.
+	 */
+	attachments?: MessageAttachmentParams[];
+}
+
+/** One uploaded file a message carries; `name` is what the user calls it. */
+export interface MessageAttachmentParams {
+	id: string;
+	name?: string;
 }
 
 /**
@@ -726,6 +751,8 @@ export interface MessageResult {
 	 */
 	content?: string;
 	command?: PockodeCommandInvocation;
+	/** The files the message carried, as its record describes them. */
+	attachments?: FileBlock[];
 }
 
 export interface InterruptParams {

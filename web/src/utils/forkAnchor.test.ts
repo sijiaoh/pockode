@@ -139,6 +139,23 @@ describe("resolveForkAnchor", () => {
 		).toBeUndefined();
 	});
 
+	it("hands back the files a user anchor carried with its words", () => {
+		const shot = {
+			name: "shot.png",
+			mime: "image/png",
+			attachment_id: "a.png",
+		};
+		const messages: Message[] = [
+			userMessage({ id: "u1" }),
+			assistantMessage({ id: "a1" }),
+			userMessage({ id: "u2", anchorSeq: 3, content: "", attachments: [shot] }),
+		];
+
+		expect(
+			resolveForkAnchor(messages, "u2", false)?.droppedAttachments,
+		).toEqual([shot]);
+	});
+
 	// What the user typed is what they would send again; the prompt a command
 	// expanded to is the server's, and re-sending it would skip the command.
 	it("hands back a Pockode command as typed, not as its prompt", () => {

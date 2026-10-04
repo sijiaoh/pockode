@@ -3,7 +3,7 @@ import {
 	useHasCoarsePointer,
 	useIsPageCovered,
 } from "@pockode/shared";
-import { AlertTriangle, Square, X } from "lucide-react";
+import { AlertTriangle, X } from "lucide-react";
 import {
 	useCallback,
 	useEffect,
@@ -18,14 +18,22 @@ import { useForkSupport } from "../../hooks/useForkSupport";
 import { useShortViewport } from "../../hooks/useShortViewport";
 import { useViewedSession } from "../../hooks/useViewedSession";
 import { takeAnswerIntent } from "../../lib/answerIntent";
-import { inputActions, useInputStore } from "../../lib/inputStore";
+import type { ChatAttachment } from "../../lib/chatAttachments";
+import {
+	attachmentActions,
+	inputActions,
+	useInputStore,
+} from "../../lib/inputStore";
 import { questionDraftActions } from "../../lib/questionDraftStore";
-import { useChatUIConfig } from "../../lib/registries/chatUIRegistry";
+import {
+	type SendOutcome,
+	useChatUIConfig,
+} from "../../lib/registries/chatUIRegistry";
 import {
 	selectSessionDetail,
 	useSessionDetailStore,
 } from "../../lib/sessionDetailStore";
-import { useSessionStore } from "../../lib/sessionStore";
+import { NEW_SESSION_TITLE, useSessionStore } from "../../lib/sessionStore";
 import { type SessionView, SessionViewProvider } from "../../lib/sessionView";
 import { useIsGitRepo } from "../../lib/worktreeStore";
 import { useWSStore } from "../../lib/wsStore";
@@ -40,11 +48,12 @@ import {
 	type WorkSegment,
 } from "../../types/overlay";
 import type { AgentType } from "../../types/settings";
-import { resolveForkAnchor } from "../../utils/forkAnchor";
+import { type ForkAnchor, resolveForkAnchor } from "../../utils/forkAnchor";
 import { buildForkTitle } from "../../utils/forkTitle";
 import { parsePockodeCommand } from "../../utils/pockodeCommand";
 import {
 	type SendAgainTarget,
+	sendAgainMessage,
 	sendAgainTarget,
 	sendAgainText,
 } from "../../utils/sendAgain";
@@ -62,14 +71,12 @@ import { SettingsPage } from "../Settings";
 import AnswerPanel from "./AnswerPanel";
 import AttentionStrip from "./AttentionStrip";
 import ChatSkeleton from "./ChatSkeleton";
-import EngineSelector from "./EngineSelector";
 import ForkSessionSheet from "./ForkSessionSheet";
 import DefaultInputBar from "./InputBar";
 import type { PromptError } from "./MessageItem";
 import MessageList, { type MessageListHandle } from "./MessageList";
-import ModeSelector from "./ModeSelector";
 import ReadOnlyBar from "./ReadOnlyBar";
-import SessionInfoButton from "./SessionInfoButton";
+import SessionHeader from "./SessionHeader";
 import SessionOriginBar from "./SessionOriginBar";
 
 const noop = () => {};
@@ -105,18 +112,25 @@ function ComposerErrorBar({
 	return (
 		<div
 			role="alert"
-			className="flex shrink-0 items-start gap-2 border-t border-th-border bg-th-bg-secondary px-3 py-1.5 text-xs text-th-error"
+			className="shrink-0 border-t border-th-border bg-th-bg-secondary py-1.5 text-xs text-th-error"
 		>
-			<AlertTriangle className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />
-			<span className="min-w-0 flex-1">{message}</span>
-			<button
-				type="button"
-				onClick={onDismiss}
-				aria-label="Dismiss error"
-				className="touch-target -my-1 flex size-5 shrink-0 items-center justify-center rounded text-th-text-muted transition-colors hover:text-th-text-primary active:scale-95"
-			>
-				<X className="size-3.5" />
-			</button>
+			{/* Bounded like the transcript column, so the dismiss sits under the
+			    column's right edge rather than at the window's. */}
+			<div className="mx-auto flex max-w-3xl items-start gap-2 px-3 sm:px-4">
+				<AlertTriangle
+					className="mt-0.5 size-3.5 shrink-0"
+					aria-hidden="true"
+				/>
+				<span className="min-w-0 flex-1">{message}</span>
+				<button
+					type="button"
+					onClick={onDismiss}
+					aria-label="Dismiss error"
+					className="touch-target -my-1 flex size-5 shrink-0 items-center justify-center rounded text-th-text-muted transition-colors hover:text-th-text-primary active:scale-95"
+				>
+					<X className="size-3.5" />
+				</button>
+			</div>
 		</div>
 	);
 }
@@ -195,15 +209,8 @@ function ChatPanel({
 	const isReadOnly = view !== null;
 	const projectTitle = useWSStore((state) => state.projectTitle);
 	const isGitRepo = useIsGitRepo();
-	const {
-		InputBar: CustomInputBar,
-		ModeSelector: CustomModeSelector,
-		EngineSelector: CustomEngineSelector,
-		StopButton: CustomStopButton,
-		ChatTopContent,
-	} = useChatUIConfig();
+	const { InputBar: CustomInputBar, ChatTopContent } = useChatUIConfig();
 	const InputBar = CustomInputBar ?? DefaultInputBar;
-	const Engine = CustomEngineSelector ?? EngineSelector;
 
 	// Read, not held: `AppShell` owns the session's detail subscription, because
 	// whether the session exists is what that subscription answers and the shell
@@ -226,6 +233,13 @@ function ChatPanel({
 	// session a work item drives. The detail speaks for the session itself and
 	// covers those.
 	const resolvedTitle = sessionTitle || sessionDetail?.title || "";
+	// A viewed session whose read failed has no row and will get no detail, so
+	// waiting for its name would pulse forever.
+	const viewReadFailed =
+		viewedSession !== null &&
+		(viewedSession.isMissing || viewedSession.error !== null);
+	const headerTitle =
+		resolvedTitle || (viewReadFailed ? "Unavailable session" : "");
 
 	const {
 		messages,
@@ -310,33 +324,39 @@ function ChatPanel({
 	} | null>(null);
 
 	const handleSend = useCallback(
-		(content: string) => {
+		(content: string, attachments?: ChatAttachment[]): Promise<SendOutcome> => {
+			// A message that is only files is named after them.
+			const titleSource =
+				content || (attachments ?? []).map((a) => a.name).join(", ");
 			const rename =
-				resolvedTitle === "New Chat"
+				resolvedTitle === NEW_SESSION_TITLE
 					? () =>
 							onUpdateTitle(
-								content.length > 30
-									? `${content.slice(0, 30).replace(/\n/g, " ")}...`
-									: content.replace(/\n/g, " "),
+								titleSource.length > 30
+									? `${titleSource.slice(0, 30).replace(/\n/g, " ")}...`
+									: titleSource.replace(/\n/g, " "),
 							)
 					: undefined;
-			// A command the server may refuse names the session only once it is
-			// accepted, or a typo would stay behind as the title. Still the session
-			// it was sent to: this `onUpdateTitle` is the one from that render.
-			const isCommand = parsePockodeCommand(content) !== null;
-			if (!isCommand) rename?.();
+			// A message the server may refuse names the session only once it is
+			// accepted, or a typo would stay behind as the title — a command, or
+			// files the agent cannot receive. Still the session it was sent to: this
+			// `onUpdateTitle` is the one from that render.
+			const mayBeRefused =
+				parsePockodeCommand(content) !== null || !!attachments?.length;
+			if (!mayBeRefused) rename?.();
 
 			setCommandError(null);
 			const sentTo = sessionId;
-			// Only a refused Pockode command rejects here (see `sendUserMessage`):
-			// its echo is gone, so what was typed goes back into the input — unless
-			// the user has already started something new there.
-			sendUserMessage(content).then(
-				(sent) => {
-					if (sent && isCommand) rename?.();
+			// Only a refused command or message with files rejects here (see
+			// `sendUserMessage`): its echo is gone, so what was typed goes back into
+			// the input — unless the user has already started something new there.
+			return sendUserMessage(content, undefined, attachments).then(
+				(sent): SendOutcome => {
+					if (sent && mayBeRefused) rename?.();
+					return "sent";
 				},
-				(error: unknown) => {
-					if (!useInputStore.getState().inputs[sentTo]) {
+				(error: unknown): SendOutcome => {
+					if (content && !useInputStore.getState().inputs[sentTo]) {
 						inputActions.set(sentTo, content);
 					}
 					setCommandError({
@@ -346,6 +366,7 @@ function ChatPanel({
 								? error.message
 								: "Unknown error",
 					});
+					return "refused";
 				},
 			);
 		},
@@ -457,7 +478,11 @@ function ChatPanel({
 	}, [clearForkError]);
 
 	const handleFork = useCallback(
-		async (anchorSeq: HistorySeq, title: string, droppedText?: string) => {
+		async (
+			anchorSeq: HistorySeq,
+			title: string,
+			dropped: Pick<ForkAnchor, "droppedText" | "droppedAttachments">,
+		) => {
 			try {
 				const forked = await forkSession(sessionId, anchorSeq, title);
 				setForkTarget(null);
@@ -468,7 +493,12 @@ function ChatPanel({
 				// not it. Set before navigating so the box is never briefly empty;
 				// the caret needs no help, since setting a textarea's value leaves
 				// it after the text.
-				if (droppedText) inputActions.set(forked.id, droppedText);
+				if (dropped.droppedText) {
+					inputActions.set(forked.id, dropped.droppedText);
+				}
+				if (dropped.droppedAttachments) {
+					attachmentActions.adopt(forked.id, dropped.droppedAttachments);
+				}
 				onSelectSession?.(forked.id);
 			} catch {
 				// Reported through forkError in the sheet, which stays open: landing
@@ -500,12 +530,18 @@ function ChatPanel({
 		[sessionId],
 	);
 	const handleCloseSignIn = useCallback(() => setSignInTarget(null), []);
-	const hasDraft = useInputStore((state) => !!state.inputs[sessionId]);
+	const hasDraft = useInputStore(
+		(state) => !!state.inputs[sessionId] || !!state.attachments[sessionId],
+	);
 	// Read against the transcript as it is now, not as it was when the sheet
 	// opened: a turn that has since been followed by another is not the latest,
 	// and one that was still retrying may have failed since. Only in the session
 	// it was opened from: the panel outlives a session switch (a swipe back while
 	// the sheet is up), and a history seq means nothing in another session.
+	const resendMessage =
+		signInTarget && signInTarget.sessionId === sessionId
+			? sendAgainMessage(messages, signInTarget)
+			: undefined;
 	const resendText =
 		signInTarget && signInTarget.sessionId === sessionId
 			? sendAgainText(messages, signInTarget)
@@ -513,11 +549,15 @@ function ChatPanel({
 	const handleSendAgain = useCallback(() => {
 		if (resendText === undefined) return;
 		inputActions.set(sessionId, resendText);
+		// The files too, or the message would go again without them.
+		if (resendMessage?.attachments) {
+			attachmentActions.adopt(sessionId, resendMessage.attachments);
+		}
 		setSignInTarget(null);
 		// In the same commit as the sheet closing, whose cleanup hands focus
 		// back to the notice's button first; the bar's effect runs after it.
 		setInputFocusRequest((n) => n + 1);
-	}, [resendText, sessionId]);
+	}, [resendText, resendMessage, sessionId]);
 
 	// Whether the answer panel is open. Held rather than derived from
 	// `unanswered.length`, which is the obvious shortcut and a lossy one: the
@@ -1168,7 +1208,30 @@ function ChatPanel({
 	return (
 		<SessionViewProvider value={view}>
 			<MainContainer
-				title={projectTitle}
+				title={resolvedTitle || projectTitle}
+				// A route naming no session leaves nothing to describe, so the
+				// header keeps the project's name and offers no panel.
+				heading={
+					sessionId === "" ? undefined : (
+						<SessionHeader
+							title={headerTitle}
+							detail={sessionDetail}
+							onOpenWorkDetail={onOpenWorkDetail}
+							readOnly={isReadOnly}
+							agentType={agentType}
+							model={model}
+							effort={effort}
+							mode={mode}
+							hasSessionSettings={hasSessionSettings}
+							isSessionActivated={isSessionActivated}
+							turnOpen={turnOpen}
+							onAgentTypeChange={setAgentType}
+							onModelChange={setModel}
+							onEffortChange={setEffort}
+							onModeChange={setMode}
+						/>
+					)
+				}
 				onOpenSidebar={onOpenSidebar}
 				onOpenSettings={onOpenSettings}
 			>
@@ -1193,8 +1256,11 @@ function ChatPanel({
 						jumpDisabled={answerPanelSending}
 					/>
 				)}
-				{/* Session action bar */}
-				{!overlay && settingError && (
+				{/* Not held back by an overlay, unlike the composer's errors: the
+				    session panel that raised it opens from the header, which stays
+				    up over every overlay, and closes on a refusal so this can be
+				    read. */}
+				{settingError && (
 					<ComposerErrorBar
 						message={settingError}
 						onDismiss={clearSettingError}
@@ -1205,81 +1271,6 @@ function ChatPanel({
 						message={commandError.message}
 						onDismiss={() => setCommandError(null)}
 					/>
-				)}
-				{/* Safe to fold on a short viewport (docs/answering-ui.md §3):
-				    engine, mode and session info are all settings for the *next*
-				    message. Stop is the one real loss — it is an exit from a blocked
-				    turn — and one press outside the card brings it back. */}
-				{!overlay && !chromeCollapsed && (
-					<div className="flex shrink-0 items-center justify-between border-t border-th-border bg-th-bg-secondary px-3 py-1.5">
-						{/* gap-2, not tighter: three neighbouring hit areas now sit in this
-						    row, and 8px between them is the coarse-pointer floor. */}
-						<div className="flex min-w-0 items-center gap-2">
-							{/* Removed rather than disabled on a viewed session: disabled
-							    reads as "not just now", and what is missing is the
-							    execution environment itself. */}
-							{isReadOnly || CustomEngineSelector === null ? null : (
-								<Engine
-									agentType={agentType}
-									model={model}
-									effort={effort}
-									onAgentTypeChange={setAgentType}
-									onModelChange={setModel}
-									onEffortChange={setEffort}
-									hasSessionSettings={hasSessionSettings}
-									isSessionActivated={isSessionActivated}
-									disabled={!hasSessionSettings || turnOpen}
-								/>
-							)}
-							{isReadOnly ||
-							CustomModeSelector === null ? null : CustomModeSelector ? (
-								<CustomModeSelector
-									mode={mode}
-									agentType={agentType}
-									onModeChange={setMode}
-									hasSessionSettings={hasSessionSettings}
-									disabled={!hasSessionSettings || turnOpen}
-								/>
-							) : (
-								<ModeSelector
-									mode={mode}
-									agentType={agentType}
-									onModeChange={setMode}
-									hasSessionSettings={hasSessionSettings}
-									disabled={!hasSessionSettings || turnOpen}
-								/>
-							)}
-							{/* Gated on the route naming a session at all, not on its data:
-							    the button is permanent for the session it belongs to — it
-							    waits through a switch, showing "Loading…" — but there is no
-							    session to describe when the route names none. */}
-							{sessionId !== "" && (
-								<SessionInfoButton
-									detail={sessionDetail}
-									onOpenWorkDetail={onOpenWorkDetail}
-								/>
-							)}
-						</div>
-						{/* Stop exists for every open turn, blocked ones included: the
-						    process is alive, and Stop is one of the user's two exits from
-						    a blocked turn — the card being the other. */}
-						{turnOpen && !isReadOnly ? (
-							CustomStopButton === null ? null : CustomStopButton ? (
-								<CustomStopButton onStop={handleInterrupt} />
-							) : (
-								<button
-									type="button"
-									onClick={handleInterrupt}
-									aria-label="Stop"
-									className="flex size-9 shrink-0 items-center justify-center rounded bg-th-error pointer-coarse:size-11 text-th-text-inverse transition-all hover:opacity-90 active:scale-95"
-								>
-									<Square className="size-3.5 fill-current" />
-								</button>
-							)
-						) : (
-							<div className="size-8 shrink-0" />
-						)}
-					</div>
 				)}
 				{/* Gone if the anchor left the transcript — a session deleted, a
 				    worktree switched away from. There is nothing left to confirm.
@@ -1301,7 +1292,7 @@ function ChatPanel({
 							isForking={isForking}
 							error={forkError}
 							onFork={(title) =>
-								handleFork(forkAnchor.anchorSeq, title, forkAnchor.droppedText)
+								handleFork(forkAnchor.anchorSeq, title, forkAnchor)
 							}
 							onClose={handleCloseFork}
 						/>
@@ -1326,7 +1317,10 @@ function ChatPanel({
 				    collapsed it is in the card's. Unmounting is safe for the same
 				    reason the overlays above may do it: a draft has to outlive its
 				    bar, which `InputBarProps` asks of every bar and the default one
-				    answers with `inputStore` (docs/answering-ui.md §3, §5). */}
+				    answers with `inputStore` (docs/answering-ui.md §3, §5). Stop
+				    lives in the bar and folds with it, though it is one of the
+				    user's two exits from a blocked turn: one press outside the card
+				    brings it back. */}
 				{!isInputBarHidden(overlay) &&
 					!chromeCollapsed &&
 					(view ? (

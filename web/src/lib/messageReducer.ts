@@ -1,4 +1,4 @@
-import type { ContentBlock } from "../types/content";
+import type { ContentBlock, FileBlock } from "../types/content";
 import type {
 	AskUserQuestion,
 	AssistantMessage,
@@ -22,7 +22,7 @@ import type { AgentType } from "../types/settings";
 import { lookupAnswer, parseAnswer } from "../utils/questionAnswer";
 import { generateUUID } from "../utils/uuid";
 import { AGENT_TYPES } from "./agentType";
-import { parseContentBlocks } from "./contentBlocks";
+import { parseContentBlocks, parseFileBlocks } from "./contentBlocks";
 
 // Legacy history recorded system messages with origin "work" before the
 // concept was renamed to "system". Map the old value so old sessions still
@@ -175,6 +175,8 @@ export type NormalizedEvent =
 			answering?: QuestionAnswerRecord[];
 			/** The Pockode command `content` was expanded from. */
 			command?: PockodeCommandInvocation;
+			/** The files the user sent with the message. */
+			attachments?: FileBlock[];
 	  }
 	| {
 			type: "permission_request";
@@ -324,6 +326,7 @@ export function normalizeEvent(
 				meta: record.meta as SystemMessageMeta | undefined,
 				answering: normalizeAnswering(record.answering),
 				command: normalizeCommand(record.command),
+				attachments: parseFileBlocks(record.attachments),
 			};
 		case "permission_request":
 			return {
@@ -789,6 +792,7 @@ export function applyServerEvent(
 			anchorSeq: seq,
 			answering: event.answering,
 			command: event.command,
+			attachments: event.attachments,
 		});
 	}
 
@@ -1721,6 +1725,7 @@ interface UserMessageOptions {
 	/** The posted questions this message answers; see QuestionAnswerRecord. */
 	answering?: QuestionAnswerRecord[];
 	command?: PockodeCommandInvocation;
+	attachments?: FileBlock[];
 }
 
 /**
@@ -1820,6 +1825,7 @@ export function applyUserMessage(
 		...(options?.source === "agent" ? { source: options.source } : {}),
 		...(options?.answering ? { answering: options.answering } : {}),
 		...(options?.command ? { command: options.command } : {}),
+		...(options?.attachments ? { attachments: options.attachments } : {}),
 	};
 
 	return appendUserMessage(messages, userMessage, () =>

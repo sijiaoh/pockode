@@ -24,6 +24,7 @@ const ERROR_MESSAGES = new Map([
 	["not_a_directory", "The destination is not a folder"],
 	["not_found", "The destination folder no longer exists"],
 	["worktree_not_found", "Worktree not found"],
+	["session_not_found", "The chat session no longer exists"],
 ]);
 
 /**
@@ -211,13 +212,36 @@ export interface UploadRequest {
  * a file within it, `overwrite` applies to the whole request so a mixed
  * decision has to be split anyway, and a failure then belongs to the one file
  * it is shown against.
- *
- * `XMLHttpRequest` rather than `fetch`: `fetch` reports nothing while a request
- * body is being sent, and a progress bar is the point of a queue.
  */
-export function uploadFile(request: UploadRequest): Promise<void> {
+export async function uploadFile(request: UploadRequest): Promise<void> {
 	const { file, name, destPath, worktree, overwrite, onProgress, signal } =
 		request;
+	const body = new FormData();
+	body.append("file", file, name);
+	await postUpload(uploadUrl(destPath, overwrite, worktree), body, {
+		onProgress,
+		signal,
+	});
+}
+
+/**
+ * POSTs a multipart body to one of the upload endpoints and resolves with the
+ * response text, rejecting with an `UploadError` phrased from the endpoints'
+ * shared `{error, code}` contract.
+ *
+ * `XMLHttpRequest` rather than `fetch`: `fetch` reports nothing while a request
+ * body is being sent, and a progress bar is the point of an upload.
+ */
+export function postUpload(
+	url: string,
+	body: FormData,
+	options: {
+		/** Fraction of the body sent so far, 0 to 1. */
+		onProgress?: (fraction: number) => void;
+		signal?: AbortSignal;
+	} = {},
+): Promise<string> {
+	const { onProgress, signal } = options;
 
 	return new Promise((resolve, reject) => {
 		if (signal?.aborted) {
@@ -225,11 +249,8 @@ export function uploadFile(request: UploadRequest): Promise<void> {
 			return;
 		}
 
-		const body = new FormData();
-		body.append("file", file, name);
-
 		const xhr = new XMLHttpRequest();
-		xhr.open("POST", uploadUrl(destPath, overwrite, worktree));
+		xhr.open("POST", url);
 		for (const [header, value] of Object.entries(authHeaders())) {
 			xhr.setRequestHeader(header, value);
 		}
@@ -250,7 +271,7 @@ export function uploadFile(request: UploadRequest): Promise<void> {
 		xhr.onload = () =>
 			settle(() => {
 				if (xhr.status === 200) {
-					resolve();
+					resolve(xhr.responseText);
 					return;
 				}
 				reject(toUploadError(xhr.status, xhr.responseText));

@@ -1,6 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { IDLE_TURN } from "../lib/activity";
 import {
+	type ChatAttachment,
+	toAttachmentParams,
+	toEchoFileBlocks,
+} from "../lib/chatAttachments";
+import {
 	appendUserMessage,
 	applyAnswering,
 	applyServerEvent,
@@ -140,10 +145,17 @@ interface UseChatMessagesReturn {
 	 * Pockode command (`/pockode-…`) the server refuses is taken back too, and
 	 * rethrows for the same reason: the one who has to hear is the input it was
 	 * typed into.
+	 *
+	 * `attachments` are files already uploaded to this session
+	 * (`uploadChatAttachment`); the message may then have no text. A send
+	 * carrying files that the server refuses — an id it does not have, an agent
+	 * that cannot receive files — is taken back and rethrows like a refused
+	 * command, so the composer can keep the files and say why.
 	 */
 	sendUserMessage: (
 		content: string,
 		answering?: QuestionAnswerRecord[],
+		attachments?: ChatAttachment[],
 	) => Promise<boolean>;
 	interrupt: () => Promise<void>;
 	permissionResponse: (params: PermissionResponseParams) => Promise<void>;
@@ -585,11 +597,13 @@ export function useChatMessages({
 		async (
 			content: string,
 			answering?: QuestionAnswerRecord[],
+			attachments?: ChatAttachment[],
 		): Promise<boolean> => {
 			// Normalised once, so "present" and "non-empty" cannot come apart: an
 			// empty list would otherwise echo a bubble drawn from no answers, send
 			// no `answering`, and take the wrong branch on failure.
 			const answers = answering?.length ? answering : undefined;
+			const files = attachments?.length ? attachments : undefined;
 			// Drawn as the command row from the first frame rather than as a bubble
 			// that turns into one: the prompt it stands for is the server's to
 			// expand, and arrives with the reply.
@@ -607,6 +621,7 @@ export function useChatMessages({
 				// Echoed with the bubble so an answer draws as answers rather than
 				// as the flattened text the agent reads.
 				...(answers ? { answering: answers } : {}),
+				...(files ? { attachments: toEchoFileBlocks(files) } : {}),
 			};
 
 			// Empty assistant message ready to receive streaming content
@@ -633,23 +648,38 @@ export function useChatMessages({
 				// Without it the bubble just added could not be forked from until the
 				// session was reloaded. An older server sends none, which simply leaves
 				// the message unaddressable, as every locally sent one used to be.
-				const { seq, expanded } = await sendMessage(
+				const {
+					seq,
+					expanded,
+					attachments: described,
+				} = await sendMessage(
 					sessionId,
 					content,
 					answers && toAnswerParams(answers),
+					// Only when there are any, so a message without files is sent with
+					// exactly the arguments it always was.
+					...(files ? [toAttachmentParams(files)] : []),
 				);
 				setMessages((prev) => {
 					// The server's text over the echo's — a command's parse and prompt,
 					// or the body written from the answers: the sender is left out of
 					// the broadcast, so this is its one copy of what the agent was
 					// actually sent.
-					const filled = expanded
-						? prev.map((m) =>
-								m.id === userMessageId && m.role === "user"
-									? { ...m, ...expanded }
-									: m,
-							)
-						: prev;
+					//
+					// The files likewise: the echo had only the browser's guess at each
+					// type, the reply has what the stored bytes are.
+					const update = {
+						...expanded,
+						...(described ? { attachments: described } : {}),
+					};
+					const filled =
+						expanded || described
+							? prev.map((m) =>
+									m.id === userMessageId && m.role === "user"
+										? { ...m, ...update }
+										: m,
+								)
+							: prev;
 					const stamped = stampMessageAnchorSeq(filled, userMessageId, seq);
 					// The cards this message settled, and this client has to settle
 					// them itself: the sender is left out of the broadcast that
@@ -675,8 +705,14 @@ export function useChatMessages({
 				// same way, and the caller restores what was typed and says why.
 				// Only a refusal: a timeout or a dropped socket may have been
 				// delivered, and handing the draft back would invite running the
-				// command twice — that takes the ordinary path below.
-				if (answers || (command && isInvalidParamsRejection(error))) {
+				// command twice — that takes the ordinary path below. A message
+				// carrying files is taken back on a refusal for the same reason: the
+				// files are the composer's to keep, and an agent that cannot receive
+				// them is said so there.
+				if (
+					answers ||
+					((command || files) && isInvalidParamsRejection(error))
+				) {
 					setMessages((prev) =>
 						prev.filter(
 							(m) => m.id !== userMessageId && m.id !== assistantMessageId,

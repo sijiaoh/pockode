@@ -37,6 +37,44 @@ const DRIFT_TOLERANCE = 1;
  */
 type ReadingState = "tail" | "anchored";
 
+/**
+ * What the end of the conversation shows, compared by identity. The reducer
+ * updates immutably, so every streamed chunk is a new `parts` array and a turn
+ * failing sets `error` — but not the message object itself: an `anchorSeq`
+ * backfill replaces that too, and it changes nothing anyone can see. Nor is it
+ * the content's height, which also grows when an older page lands above.
+ */
+type TailSignature = readonly unknown[];
+
+function tailSignature(messages: Message[]): TailSignature {
+	const last = messages[messages.length - 1];
+	if (!last) return [];
+	return last.role === "assistant"
+		? [last.id, last.parts, last.error]
+		: [last.id, last.content];
+}
+
+function sameSignature(a: TailSignature, b: TailSignature): boolean {
+	return a.length === b.length && a.every((value, i) => value === b[i]);
+}
+
+/**
+ * The rows appended after the newest row of the previous commit that is still
+ * there, or `"replaced"` when none of them is. Measured from the newest
+ * *surviving* row because rows also go: an empty reply bubble is dropped as the
+ * next message closes its turn, and a refused send's echo is taken back out.
+ */
+function rowsAdded(prev: Message[], next: Message[]): Message[] | "replaced" {
+	if (prev.length === 0) return next;
+	if (next[next.length - 1]?.id === prev[prev.length - 1].id) return [];
+	const indexById = new Map(next.map((m, i) => [m.id, i]));
+	for (let i = prev.length - 1; i >= 0; i--) {
+		const at = indexById.get(prev[i].id);
+		if (at !== undefined) return next.slice(at + 1);
+	}
+	return "replaced";
+}
+
 function maxScrollTop(el: HTMLElement): number {
 	return Math.max(0, el.scrollHeight - el.clientHeight);
 }
@@ -51,8 +89,15 @@ interface Options {
 }
 
 export interface TranscriptScroll {
-	/** Only shown while reading somewhere else: at the tail it does nothing. */
+	/**
+	 * Only shown while reading somewhere else, and not within reach of the end:
+	 * at the tail it does nothing, and at the end it would only cover the last
+	 * row's bottom-right controls — a permission card's Allow among them — where
+	 * no further scrolling can move them out from under it.
+	 */
 	showScrollButton: boolean;
+	/** The end of the conversation has changed since the reader left it. */
+	hasUnseen: boolean;
 	scrollToBottom: () => void;
 	/** Puts `target` at the top of the view and reads from there. */
 	jumpTo: (target: HTMLElement) => void;
@@ -86,30 +131,59 @@ export function useTranscriptScroll({
 	 * to be measured against that, not against wherever they last stopped.
 	 */
 	const lastTopRef = useRef(0);
-	const [showScrollButton, setShowScrollButton] = useState(false);
+	const [isAnchored, setIsAnchored] = useState(false);
+	const [isNearEnd, setIsNearEnd] = useState(true);
+	const [hasUnseen, setHasUnseen] = useState(false);
+	// Read from the scroll handler, which is attached once and so cannot close
+	// over `messages`; kept current by the per-commit effect below.
+	const messagesRef = useRef(messages);
+	/** The tail as it was when the reader left it; null while reading the tail. */
+	const leftTailRef = useRef<TailSignature | null>(null);
 
 	const readTail = useCallback(() => {
 		stateRef.current = "tail";
 		anchorRef.current = null;
-		setShowScrollButton(false);
+		leftTailRef.current = null;
+		setIsAnchored(false);
+		setHasUnseen(false);
 	}, []);
 
 	const readAnchored = useCallback((anchor: ScrollAnchor | null) => {
+		// Only on leaving the tail: a jump made while already reading elsewhere
+		// has not shown the reader the end either.
+		if (stateRef.current === "tail") {
+			leftTailRef.current = tailSignature(messagesRef.current);
+		}
 		stateRef.current = "anchored";
 		anchorRef.current = anchor;
-		setShowScrollButton(true);
+		setIsAnchored(true);
 	}, []);
 
-	const moveTo = useCallback((el: HTMLElement, target: number) => {
-		const clamped = Math.min(Math.max(target, 0), maxScrollTop(el));
-		if (Math.abs(el.scrollTop - clamped) >= DRIFT_TOLERANCE) {
-			el.scrollTop = clamped;
+	// Wherever the view comes to rest. Within reach of the end is also where the
+	// end has been seen, so an anchored reader there has nothing new below them.
+	const noteEnd = useCallback((el: HTMLElement) => {
+		const nearEnd = maxScrollTop(el) - el.scrollTop <= AT_BOTTOM_THRESHOLD;
+		setIsNearEnd(nearEnd);
+		if (nearEnd && stateRef.current === "anchored") {
+			leftTailRef.current = tailSignature(messagesRef.current);
+			setHasUnseen(false);
 		}
-		// Read back rather than assumed: the browser clamps the write, and a
-		// direction compared against a position the view never reached would read
-		// the next event as the reader moving.
-		lastTopRef.current = el.scrollTop;
 	}, []);
+
+	const moveTo = useCallback(
+		(el: HTMLElement, target: number) => {
+			const clamped = Math.min(Math.max(target, 0), maxScrollTop(el));
+			if (Math.abs(el.scrollTop - clamped) >= DRIFT_TOLERANCE) {
+				el.scrollTop = clamped;
+			}
+			// Read back rather than assumed: the browser clamps the write, and a
+			// direction compared against a position the view never reached would
+			// read the next event as the reader moving.
+			lastTopRef.current = el.scrollTop;
+			noteEnd(el);
+		},
+		[noteEnd],
+	);
 
 	const applyInvariant = useCallback(() => {
 		const el = scrollRef.current;
@@ -131,11 +205,12 @@ export function useTranscriptScroll({
 		moveTo(el, anchorScrollTop(anchor));
 	}, [scrollRef, moveTo]);
 
-	// The newest row, by id: what makes a message "just sent" is that it was not
-	// there a commit ago, and a count cannot say that — an older page landing above
-	// grows the list without adding anything at the end, and it routinely lands
-	// under a transcript whose newest row is one the reader typed.
-	const prevLastIdRef = useRef(messages[messages.length - 1]?.id);
+	// The rows of the previous commit, read by id: what makes a message "just
+	// sent" is that it was not there a commit ago, and a count cannot say that — an
+	// older page landing above grows the list without adding anything at the end,
+	// and it routinely lands under a transcript whose newest row is one the reader
+	// typed.
+	const prevMessagesRef = useRef(messages);
 	const prevPagesRef = useRef(loadedHistoryPages);
 
 	// No dependency list: every commit is a commit that can have invalidated the
@@ -144,24 +219,43 @@ export function useTranscriptScroll({
 	// explicit inputs are read in the commit they belong to and always before the
 	// invariant they change.
 	useLayoutEffect(() => {
+		messagesRef.current = messages;
 		const prevPages = prevPagesRef.current;
 		prevPagesRef.current = loadedHistoryPages;
-		const last = messages[messages.length - 1];
-		const prevLastId = prevLastIdRef.current;
-		prevLastIdRef.current = last?.id;
+		const prevMessages = prevMessagesRef.current;
+		prevMessagesRef.current = messages;
+		const added = rowsAdded(prevMessages, messages);
 
-		if (loadedHistoryPages < prevPages) {
-			// Paging started over, which only a reconnect does: re-subscribing lands
-			// back on the newest page and replaces the transcript. The rows an anchor
-			// names may be in there at offsets it was never measured against, and the
-			// newest page is what was asked for.
+		if (
+			loadedHistoryPages < prevPages ||
+			(added === "replaced" && loadedHistoryPages === prevPages)
+		) {
+			// The transcript was replaced, which only a reconnect does: re-subscribing
+			// lands back on the newest page. Paging starting over says so when pages
+			// had been loaded; with none, the count cannot drop, but replaying history
+			// mints every row a new id. The rows an anchor names are gone or at
+			// offsets it was never measured against, and the newest page is what was
+			// asked for.
 			readTail();
-		} else if (last && last.id !== prevLastId && isTypedByUser(last)) {
+		} else if (added !== "replaced" && added.some(isTypedByUser)) {
 			// Sending is the reader saying where they are reading next; they have just
-			// written at the end of the conversation. Rows nobody typed — Pockode's
-			// own, another agent's answer to a posted question — are nobody's gesture
-			// and say nothing about that.
+			// written at the end of the conversation. Any new row, not only the last:
+			// a message sent to an idle agent lands with its reply's placeholder
+			// below it. Rows nobody typed — Pockode's own, another agent's answer to a
+			// posted question — are nobody's gesture and say nothing about that.
 			readTail();
+		}
+
+		const left = leftTailRef.current;
+		if (left) {
+			const now = tailSignature(messages);
+			if (loadedHistoryPages > prevPages) {
+				// A page joining onto the newest row rewrites its parts with history the
+				// reader is paging *towards*; nothing arrived at the end.
+				leftTailRef.current = now;
+			} else if (!sameSignature(left, now)) {
+				setHasUnseen(true);
+			}
 		}
 
 		applyInvariant();
@@ -183,6 +277,7 @@ export function useTranscriptScroll({
 			const moved = top - lastTopRef.current;
 			lastTopRef.current = top;
 			const atBottom = maxScrollTop(el) - top <= AT_BOTTOM_THRESHOLD;
+			noteEnd(el);
 
 			if (stateRef.current === "tail") {
 				// Upward movement that did not come to rest near the end is the
@@ -208,7 +303,7 @@ export function useTranscriptScroll({
 
 		el.addEventListener("scroll", handleScroll, { passive: true });
 		return () => el.removeEventListener("scroll", handleScroll);
-	}, [hasContainer, readAnchored, readTail, scrollRef]);
+	}, [hasContainer, noteEnd, readAnchored, readTail, scrollRef]);
 
 	// biome-ignore lint/correctness/useExhaustiveDependencies: hasContainer triggers re-observe when the scroll container mounts
 	useLayoutEffect(() => {
@@ -264,5 +359,10 @@ export function useTranscriptScroll({
 		[scrollRef, moveTo, readAnchored],
 	);
 
-	return { showScrollButton, scrollToBottom, jumpTo };
+	return {
+		showScrollButton: isAnchored && !isNearEnd,
+		hasUnseen,
+		scrollToBottom,
+		jumpTo,
+	};
 }

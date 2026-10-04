@@ -13,7 +13,7 @@ export const AUTO_ID = "";
 /**
  * The name for the empty value is a frontend decision; the server has no label
  * for it. Not "Default": that is already the name of a session mode, and the two
- * sit side by side in the same action bar. The same word for both settings — the
+ * sit side by side in the same session panel. The same word for both settings — the
  * legend above each list is what says which one it means.
  */
 const AUTO_LABEL = "Auto";
@@ -45,7 +45,7 @@ export interface Choice {
 }
 
 /**
- * What the chip shows for an id. An id the server no longer lists is shown as
+ * What the session header shows for an id. An id the server no longer lists is shown as
  * itself rather than rewritten to Auto: the session really is still set to it
  * (the server only clears a stale value when the agent changes), and presenting
  * someone else's choice as Auto would be a lie.

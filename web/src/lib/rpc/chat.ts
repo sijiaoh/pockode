@@ -1,13 +1,16 @@
 import type { JSONRPCRequester } from "json-rpc-2.0";
+import type { FileBlock } from "../../types/content";
 import type {
 	HistorySeq,
 	InterruptParams,
+	MessageAttachmentParams,
 	MessageParams,
 	MessageResult,
 	PermissionResponseParams,
 	PockodeCommandInvocation,
 	QuestionAnswerParams,
 } from "../../types/message";
+import { parseFileBlocks } from "../contentBlocks";
 import { normalizeCommand, readHistorySeq } from "../messageReducer";
 
 /** What the server said about a message it accepted; see `MessageResult`. */
@@ -20,6 +23,8 @@ export interface SentMessage {
 	 * answers.
 	 */
 	expanded?: { content: string; command?: PockodeCommandInvocation };
+	/** The files the message carried, as the server described them. */
+	attachments?: FileBlock[];
 }
 
 export interface ChatActions {
@@ -38,6 +43,11 @@ export interface ChatActions {
 		 * see `MessageParams.answering`.
 		 */
 		answering?: QuestionAnswerParams[],
+		/**
+		 * Files uploaded to the session beforehand (`uploadChatAttachment`).
+		 * Refused beside `answering`.
+		 */
+		attachments?: MessageAttachmentParams[],
 	) => Promise<SentMessage>;
 	interrupt: (sessionId: string) => Promise<void>;
 	permissionResponse: (params: PermissionResponseParams) => Promise<void>;
@@ -67,6 +77,7 @@ export function createChatActions(
 			sessionId: string,
 			content: string,
 			answering?: QuestionAnswerParams[],
+			attachments?: MessageAttachmentParams[],
 		): Promise<SentMessage> => {
 			const result = (await requireClient(getAgentStartClient).request(
 				"chat.message",
@@ -74,6 +85,7 @@ export function createChatActions(
 					session_id: sessionId,
 					content,
 					...(answering && answering.length > 0 ? { answering } : {}),
+					...(attachments && attachments.length > 0 ? { attachments } : {}),
 				} as MessageParams,
 			)) as MessageResult | undefined;
 			// Decoded by the same reader as a seq arriving on a notification, because
@@ -82,8 +94,10 @@ export function createChatActions(
 			// rather than become a seq of 0, which names no record.
 			const seq = readHistorySeq(result);
 			const command = normalizeCommand(result?.command);
+			const files = parseFileBlocks(result?.attachments);
 			return {
 				...(seq !== undefined ? { seq } : {}),
+				...(files ? { attachments: files } : {}),
 				...(typeof result?.content === "string"
 					? {
 							expanded: {

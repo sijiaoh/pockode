@@ -1,4 +1,5 @@
 import type { ContentPart, Message } from "../types/message";
+import { attachmentName } from "../utils/attachment";
 import { formatPockodeCommand } from "../utils/pockodeCommand";
 import { isTaskTool, taskDescription } from "./toolSummary";
 
@@ -47,11 +48,15 @@ function partPreview(part: ContentPart): string {
 export function messagePreview(message: Message): string {
 	// A command is quoted as typed: its content is a template that opens the
 	// same way every time, and so identifies nothing.
+	//
+	// A message that is only files is named by them: their names are the words
+	// the user chose, as much as anything typed would have been.
 	const raw =
 		message.role === "user"
 			? message.command
 				? formatPockodeCommand(message.command)
-				: message.content
+				: message.content ||
+					(message.attachments ?? []).map(attachmentName).join(", ")
 			: message.parts.map(partPreview).filter(Boolean).join(" ");
 	return raw.replace(/\s+/g, " ").trim();
 }

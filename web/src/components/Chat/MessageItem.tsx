@@ -13,6 +13,7 @@ import { memo, useMemo, useState } from "react";
 import { useChatUIConfig } from "../../lib/registries/chatUIRegistry";
 import { isTaskTool, toolSummary } from "../../lib/toolSummary";
 import { useWSStore } from "../../lib/wsStore";
+import type { FileBlock } from "../../types/content";
 import type {
 	ContentPart,
 	ExpiryReason,
@@ -37,6 +38,7 @@ import {
 	Spinner,
 	useEverExpanded,
 } from "../ui";
+import AttachmentStrip from "./AttachmentStrip";
 import AuthFailureNotice from "./AuthFailureNotice";
 import MessageMenuTrigger, { type ForkBlocked } from "./MessageMenuTrigger";
 import QuestionRecordItem from "./QuestionRecordItem";
@@ -817,9 +819,15 @@ function answerText(entry: QuestionAnswerRecord): string {
 function PockodeCommandItem({
 	command,
 	content,
+	attachments,
+	sessionId,
+	onOpenFile,
 }: {
 	command: PockodeCommandInvocation;
 	content: string;
+	attachments?: FileBlock[];
+	sessionId: string;
+	onOpenFile?: (path: string) => void;
 }) {
 	const [expanded, setExpanded] = useState(false);
 	return (
@@ -833,6 +841,13 @@ function PockodeCommandItem({
 				title={`/${command.name}`}
 				detail={command.args ?? ""}
 			/>
+			{attachments && (
+				<AttachmentStrip
+					files={attachments}
+					sessionId={sessionId}
+					onOpenFile={onOpenFile}
+				/>
+			)}
 			<CollapsibleBody expanded={expanded}>
 				<ScrollableContent className="max-h-[60vh] overflow-auto border-t border-th-border p-2">
 					<Section label="Sent to the agent">
@@ -935,6 +950,9 @@ const MessageItem = memo(function MessageItem({
 				<PockodeCommandItem
 					command={message.command}
 					content={message.content}
+					attachments={message.attachments}
+					sessionId={sessionId}
+					onOpenFile={onOpenFile}
 				/>
 			);
 			// Full-bleed like the lines above, so it keeps the slot for the same
@@ -957,7 +975,19 @@ const MessageItem = memo(function MessageItem({
 					{message.answering ? (
 						<AnsweringBody answering={message.answering} />
 					) : (
-						<p className="whitespace-pre-wrap">{message.content}</p>
+						message.content && (
+							<p className="whitespace-pre-wrap">{message.content}</p>
+						)
+					)}
+					{/* The files are part of what was sent, so they are inside the
+					    bubble; a message can be nothing else. */}
+					{message.attachments && (
+						<AttachmentStrip
+							files={message.attachments}
+							sessionId={sessionId}
+							onOpenFile={onOpenFile}
+							divided={message.content !== ""}
+						/>
 					)}
 				</div>
 				{UserAvatar && <UserAvatar className="size-10 shrink-0" />}
