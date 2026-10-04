@@ -977,19 +977,71 @@ describe("ChatPanel", () => {
 			// The panel is not what closes under a permission request.
 			expect(answerPanel()).toBeInTheDocument();
 
-			await user.click(screen.getByRole("button", { name: "Jump to request" }));
+			await user.click(
+				screen.getByRole("button", { name: /^Show permission request/ }),
+			);
 
 			expect(
 				screen.queryByRole("dialog", { name: /question/ }),
 			).not.toBeInTheDocument();
-			expect(screen.getByRole("button", { name: "Allow" })).toBeInTheDocument();
 
 			const card = document.querySelector<HTMLElement>(
 				"[data-permission-request-id='req-9']",
 			);
 			expect(card).not.toBeNull();
+			if (!card) return;
+			expect(
+				within(card).getByRole("button", { name: "Allow" }),
+			).toBeInTheDocument();
 			expect(card?.closest("[inert]")).toBeNull();
 			expect(card?.querySelector("button")).toHaveFocus();
+		});
+
+		// Unlike the jump, answering needs nothing from the transcript, and it is
+		// what lets the panel's own send through afterwards.
+		it("leaves the panel up when the strip answers a permission request", async () => {
+			const user = userEvent.setup();
+			seedUnansweredQuestion();
+			render(<ChatPanel {...defaultProps} />);
+			await waitForHistoryLoad();
+			act(() => {
+				mockState.onNotification?.({
+					type: "permission_request",
+					request_id: "req-9",
+					tool_name: "Bash",
+					tool_input: { command: "npm test" },
+					tool_use_id: "tool-9",
+				});
+			});
+			act(() =>
+				acceptSetting({
+					turn: {
+						phase: "blocked",
+						open: true,
+						since: "2024-01-01T00:00:00Z",
+						blockers: [
+							{
+								kind: "permission",
+								request_id: "req-9",
+								raised_at: "2024-01-01T00:00:00Z",
+							},
+						],
+						unanswered: [question],
+					},
+				}),
+			);
+
+			const allow = () =>
+				within(
+					screen.getByRole("group", { name: "Permission request" }),
+				).getByRole("button", { name: "Allow" });
+			await waitFor(() => expect(allow().closest("[inert]")).toBeNull());
+			await user.click(allow());
+
+			expect(mockState.permissionResponse).toHaveBeenCalledWith(
+				expect.objectContaining({ request_id: "req-9", choice: "allow" }),
+			);
+			expect(answerPanel()).toBeInTheDocument();
 		});
 
 		// The jump closes the panel from outside, so it stands down mid-send like
@@ -1198,7 +1250,12 @@ describe("ChatPanel", () => {
 			});
 			afterEach(() => viewport.restore());
 
-			const composer = () => screen.queryByPlaceholderText(/^Type a message/);
+			// Under a permission request the placeholder is the reason Send is
+			// refused, so both are the composer.
+			const composer = () =>
+				screen.queryByPlaceholderText(
+					/^(Type a message|Answer the permission request)/,
+				);
 			/**
 			 * Whether the card is in its folded shape. jsdom lays nothing out, so
 			 * the cap is read off the class it is written in; the padding rides on
@@ -2633,6 +2690,122 @@ describe("ChatPanel", () => {
 			).not.toBeInTheDocument();
 		});
 
+		// The strip answers through the card's path, and the card shows the
+		// outcome straight away like a press on the card itself.
+		it("answers from the attention strip the way the card does", async () => {
+			const user = userEvent.setup();
+			render(<ChatPanel {...defaultProps} />);
+			await waitForHistoryLoad();
+			act(() => {
+				mockState.onNotification?.({
+					type: "permission_request",
+					request_id: "req-3",
+					tool_name: "Bash",
+					tool_input: { command: "npm test" },
+					tool_use_id: "tool-3",
+				});
+			});
+			act(() =>
+				acceptSetting({
+					turn: {
+						phase: "blocked",
+						open: true,
+						since: "2024-01-01T00:00:00Z",
+						blockers: [
+							{
+								kind: "permission",
+								request_id: "req-3",
+								raised_at: "2024-01-01T00:00:00Z",
+							},
+						],
+					},
+				}),
+			);
+
+			const strip = screen.getByRole("group", { name: "Permission request" });
+			expect(screen.getByRole("textbox")).toHaveAttribute(
+				"placeholder",
+				"Answer the permission request to send",
+			);
+			// Armed after it arrives; the wait is real time here.
+			await waitFor(() =>
+				expect(
+					within(strip)
+						.getByRole("button", { name: "Allow" })
+						.closest("[inert]"),
+				).toBeNull(),
+			);
+			await user.click(within(strip).getByRole("button", { name: "Allow" }));
+
+			expect(mockState.permissionResponse).toHaveBeenCalledWith({
+				session_id: "test-session",
+				request_id: "req-3",
+				tool_use_id: "tool-3",
+				tool_input: { command: "npm test" },
+				permission_suggestions: undefined,
+				choice: "allow",
+			});
+			// The receipt holds the row until the server takes the blocker down.
+			expect(within(strip).getByText("Allowed")).toBeInTheDocument();
+			const card = document.querySelector<HTMLElement>(
+				"[data-permission-request-id='req-3']",
+			);
+			expect(
+				card && within(card).queryByRole("button", { name: "Allow" }),
+			).toBeNull();
+		});
+
+		// A subagent's request is filed under its Task call, not at the top of
+		// the message; the strip has to find it there all the same.
+		it("answers a subagent's request from the strip", async () => {
+			render(<ChatPanel {...defaultProps} />);
+			await waitForHistoryLoad();
+			act(() => {
+				mockState.onNotification?.({
+					type: "tool_call",
+					tool_use_id: "task-1",
+					tool_name: "Agent",
+					tool_input: { description: "explore", subagent_type: "Explore" },
+				});
+				mockState.onNotification?.({
+					type: "tool_call",
+					tool_use_id: "tool-4",
+					tool_name: "Bash",
+					tool_input: { command: "ls" },
+					parent_tool_use_id: "task-1",
+				});
+				mockState.onNotification?.({
+					type: "permission_request",
+					request_id: "req-4",
+					tool_name: "Bash",
+					tool_input: { command: "ls" },
+					tool_use_id: "tool-4",
+				});
+			});
+			act(() =>
+				acceptSetting({
+					turn: {
+						phase: "blocked",
+						open: true,
+						since: "2024-01-01T00:00:00Z",
+						blockers: [
+							{
+								kind: "permission",
+								request_id: "req-4",
+								raised_at: "2024-01-01T00:00:00Z",
+							},
+						],
+					},
+				}),
+			);
+
+			expect(
+				within(
+					screen.getByRole("group", { name: "Permission request" }),
+				).getByRole("button", { name: "Allow" }),
+			).toBeInTheDocument();
+		});
+
 		it("shows inline permission request and sends deny response", async () => {
 			const user = userEvent.setup();
 			render(<ChatPanel {...defaultProps} />);
@@ -2668,6 +2841,15 @@ describe("ChatPanel", () => {
 		// the thing that lists the prompts still waiting on someone
 		// (docs/lifecycle-ui.md §8).
 		describe("an answer the server refuses", () => {
+			// The card's, not the strip's: while blocked, the strip offers the same
+			// answers.
+			const cardButton = (name: string) =>
+				within(
+					document.querySelector<HTMLElement>(
+						"[data-permission-request-id='req-9']",
+					) ?? document.body,
+				).getByRole("button", { name });
+
 			const raisePermission = () =>
 				act(() => {
 					mockState.onNotification?.({
@@ -2705,15 +2887,13 @@ describe("ChatPanel", () => {
 				raisePermission();
 				act(() => blockedOn("req-9"));
 
-				await user.click(screen.getByRole("button", { name: "Allow" }));
+				await user.click(cardButton("Allow"));
 
 				expect(await screen.findByRole("alert")).toHaveTextContent(
 					"connection lost",
 				);
 				// Still pending, so the user can simply press it again.
-				expect(
-					screen.getByRole("button", { name: "Allow" }),
-				).toBeInTheDocument();
+				expect(cardButton("Allow")).toBeInTheDocument();
 			});
 
 			it("retires the card once the turn no longer lists the prompt", async () => {

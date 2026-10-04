@@ -1,7 +1,11 @@
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { AssistantMessage, Message } from "../../types/message";
+import type {
+	AssistantMessage,
+	Message,
+	PermissionRequest,
+} from "../../types/message";
 import MessageItem from "./MessageItem";
 
 const mockWorkDir = vi.hoisted(() => ({ value: "/Users/test/project" }));
@@ -758,6 +762,211 @@ describe("MessageItem", () => {
 		expect(
 			screen.queryByRole("button", { name: "Allow" }),
 		).not.toBeInTheDocument();
+	});
+
+	describe("a pending permission card", () => {
+		const pending = (
+			toolName: string,
+			toolInput: unknown,
+			extra: Partial<PermissionRequest> = {},
+		): Message => ({
+			id: "perm",
+			role: "assistant",
+			parts: [
+				{
+					type: "permission_request",
+					request: {
+						requestId: "req-1",
+						toolName,
+						toolInput,
+						toolUseId: "tool-1",
+						...extra,
+					},
+					status: "pending",
+				},
+			],
+			status: "streaming",
+			createdAt: new Date(),
+		});
+
+		const drawCard = (message: Message, isCodex = false) => {
+			const { container } = render(
+				<MessageItem
+					sessionId="session-1"
+					message={message}
+					onPermissionRespond={vi.fn()}
+					isCodex={isCodex}
+				/>,
+			);
+			const card = container.querySelector<HTMLElement>(
+				"[data-permission-request-id]",
+			);
+			if (!card) throw new Error("no permission card");
+			return card;
+		};
+
+		// What is approved is read the way the row will show it ran, not as the
+		// JSON it arrived in; the JSON is still there, folded.
+		it("reads a command as a command, keeping the raw input folded", async () => {
+			const user = userEvent.setup();
+			const card = drawCard(
+				pending("Bash", {
+					command: "rm -rf build",
+					description: "Clean the build",
+					cwd: "/tmp/elsewhere",
+				}),
+			);
+
+			expect(card).toHaveTextContent("Clean the build");
+			expect(card).toHaveTextContent("rm -rf build");
+			expect(card).toHaveTextContent("in /tmp/elsewhere");
+			expect(card).not.toHaveTextContent('"command"');
+
+			const raw = screen.getByRole("button", { name: "Raw input" });
+			expect(raw).toHaveAttribute("aria-expanded", "false");
+			await user.click(raw);
+			expect(raw).toHaveAttribute("aria-expanded", "true");
+			expect(card).toHaveTextContent('"command": "rm -rf build"');
+		});
+
+		it("does not repeat an input that is already drawn as JSON", () => {
+			const card = drawCard(pending("mcp__srv__do", { target: "x" }));
+
+			expect(card).toHaveTextContent('"target": "x"');
+			expect(
+				screen.queryByRole("button", { name: "Raw input" }),
+			).not.toBeInTheDocument();
+		});
+
+		it("shows a file write as the change it will make", () => {
+			const card = drawCard(
+				pending("Write", {
+					file_path: "/Users/test/project/notes.txt",
+					content: "hello from the agent",
+				}),
+			);
+
+			expect(screen.getByText("Proposed change")).toBeInTheDocument();
+			expect(card).toHaveTextContent("hello from the agent");
+		});
+
+		it("offers the way over to the file a request would touch", async () => {
+			const user = userEvent.setup();
+			const onOpenFile = vi.fn();
+			render(
+				<MessageItem
+					sessionId="session-1"
+					message={pending("Write", {
+						file_path: "/Users/test/project/notes.txt",
+						content: "x",
+					})}
+					onPermissionRespond={vi.fn()}
+					onOpenFile={onOpenFile}
+				/>,
+			);
+
+			await user.click(screen.getByRole("button", { name: "Open" }));
+			expect(onOpenFile).toHaveBeenCalledWith("notes.txt");
+		});
+
+		// A plan that is the whole input says everything already; one with
+		// anything beside it is asking for that too.
+		it("folds the raw input under a plan only when the plan is not all of it", () => {
+			const { unmount } = render(
+				<MessageItem
+					sessionId="session-1"
+					message={pending("ExitPlanMode", { plan: "Do it" })}
+					onPermissionRespond={vi.fn()}
+				/>,
+			);
+			expect(
+				screen.queryByRole("button", { name: "Raw input" }),
+			).not.toBeInTheDocument();
+			unmount();
+
+			drawCard(
+				pending("ExitPlanMode", {
+					plan: "Do it",
+					allowedPrompts: [{ tool: "Bash", prompt: "run tests" }],
+				}),
+			);
+			expect(
+				screen.getByRole("button", { name: "Raw input" }),
+			).toBeInTheDocument();
+		});
+
+		// Its consequence is the one thing about Always Allow that outlives the
+		// request, so the button carries it, not only the line above it.
+		it("describes Always Allow by what it writes", () => {
+			drawCard(pending("Bash", { command: "ls" }), true);
+
+			expect(
+				screen.getByRole("button", { name: "Always Allow" }),
+			).toHaveAccessibleDescription(
+				"Always Allow stops Codex asking about requests like this until the session ends.",
+			);
+		});
+
+		// The server writes back every suggestion, so the card names every one,
+		// above the button that writes them.
+		it("says everything Always Allow will write", () => {
+			const card = drawCard(
+				pending(
+					"Bash",
+					{ command: "npm run build" },
+					{
+						permissionSuggestions: [
+							{
+								type: "addRules",
+								rules: [{ toolName: "Bash", ruleContent: "npm run build:*" }],
+								behavior: "allow",
+								destination: "projectSettings",
+							},
+							{
+								type: "setMode",
+								mode: "bypassPermissions",
+								destination: "session",
+							},
+						],
+					},
+				),
+			);
+
+			expect(card).toHaveTextContent(
+				"Always Allow adds to this project: Bash(npm run build:*)",
+			);
+			expect(card).toHaveTextContent(
+				"Always Allow switches this session to Bypass permissions mode.",
+			);
+			expect(
+				screen.getByRole("button", { name: "Always Allow" }),
+			).toBeInTheDocument();
+		});
+
+		it("says what Always Allow means on Codex, which has no rules", () => {
+			const card = drawCard(pending("Bash", { command: "ls" }), true);
+
+			expect(card).toHaveTextContent(
+				"Always Allow stops Codex asking about requests like this until the session ends.",
+			);
+		});
+
+		it("offers no Always Allow when Claude suggested nothing", () => {
+			const card = drawCard(pending("Bash", { command: "ls" }));
+
+			expect(card).not.toHaveTextContent("Always Allow");
+		});
+
+		// Deny, then Always Allow, then Allow: the primary action keeps the
+		// right-hand end.
+		it("orders the decision with Allow last", () => {
+			drawCard(pending("Bash", { command: "ls" }), true);
+
+			const names = screen
+				.getAllByRole("button", { name: /^(Deny|Always Allow|Allow)$/ })
+				.map((button) => button.textContent);
+			expect(names).toEqual(["Deny", "Always Allow", "Allow"]);
+		});
 	});
 
 	it("renders system message with subtype and status from JSON content", () => {

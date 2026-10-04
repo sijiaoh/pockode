@@ -78,11 +78,17 @@ export function CodeHighlighter({
 	children,
 	language,
 	plain = false,
+	wrap = false,
 }: {
 	children: string;
 	language?: string;
 	/** Render the code as-is. Use for input too large to tokenize on the main thread. */
 	plain?: boolean;
+	/**
+	 * Break long lines instead of scrolling them. For text read end to end —
+	 * a command being approved — not for code whose lines have to stay aligned.
+	 */
+	wrap?: boolean;
 }) {
 	const isExpanded = useIsExpanded();
 	const fontSize = isExpanded ? CODE_FONT_SIZE_DESKTOP : CODE_FONT_SIZE_MOBILE;
@@ -124,7 +130,10 @@ export function CodeHighlighter({
 					<Copy size={14} />
 				)}
 			</button>
-			<pre className="code-block" style={style}>
+			<pre
+				className={wrap ? "code-block code-block--wrap" : "code-block"}
+				style={style}
+			>
 				{plain ? (
 					<code>{children}</code>
 				) : (

@@ -103,12 +103,15 @@ name the next reader has to work around.
 
 Everything else about it is unchanged — one line between the transcript and the
 composer, `ForkOriginBanner`'s chrome, centred, `text-xs`, `size-3` glyph, muted,
-one bordered row so the composer moves by at most one line's height
-([lifecycle-ui.md §2.2](lifecycle-ui.md#22-chat-the-attention-strip)).
+one bordered row so the composer moves by at most one row's height
+([lifecycle-ui.md §2.2](lifecycle-ui.md#22-chat-the-attention-strip)). Row 1
+alone is left-aligned and 44px, because it is a decision rather than a
+statement; its layout, arming, receipt and fallback are in
+[lifecycle-ui.md](lifecycle-ui.md#the-permission-row).
 
 | # | State | Glyph | Copy | Trailing action |
 |---|---|---|---|---|
-| 1 | `permission` blocker | `Lock` | "Waiting for your permission. Answer above or Stop before sending." | "Jump to request" |
+| 1 | `permission` blocker | `Lock` | {tool} [+N] {detail} — the request on one line, the summary a jump to its card ([lifecycle-ui.md §2.2](lifecycle-ui.md#the-permission-row)) | **Deny** **Allow** (plan: **Review**) |
 | 2 | `unanswered.length > 0` | `CircleHelp` | "1 question is waiting for your answer." / "{n} questions are waiting for your answer." | **Answer** |
 | 3 | a message went into a turn already open, unread so far | `CornerDownRight` | "Sent — the agent has not read it yet." | — |
 | 4 | `background` blocker | `Hourglass` | "Waiting on a background task — nothing to answer." | "Details" (expands) |
@@ -139,14 +142,21 @@ below. Passing the strip no `onAnswer` while the panel is up would hide the row
 as a side effect, and the strip would then take itself to be a chat with no way
 to answer at all and fall through to row 3 or 4.
 
-**Row 1's "Jump to request" closes the panel before it jumps, and it is now the
-only way to reach a permission card at all.** A permission request can arrive
+**Row 1's jump — its summary, its Review, or the fallback's "Jump to request" —
+closes the panel before it jumps, and it is now the only way to reach a
+permission card at all.** A permission request can arrive
 while the panel is up (§7) — and while the panel is up the whole transcript is
 behind the backdrop and `inert` (§3), so no card in it can be seen or pressed,
 whether or not it happens to be scrolled into view. Scrolling to something
 under a backdrop would be the dead end this surface exists to remove, so the
 jump closes the panel on its way. Closing costs nothing: the drafts stay (§5),
 and the panel is one tap away afterwards.
+
+**Row 1's Deny and Allow do not need the card, so they do not close the
+panel.** Approving reads nothing from the transcript, and it is exactly what
+lets the panel's own send through afterwards — so it stays available while the
+panel sends, too. Both keep focus where it was on the press, the same way
+**Answer** does, so a caret in the panel's field survives them.
 
 **Except mid-send, when the jump is disabled.** It closes the panel as surely as
 the `×` does, so it stands down with the panel's own ways out (§3). This is the
@@ -179,9 +189,9 @@ avoid.
 **Row 2 says nothing about sending**, and that is the visible half of the model
 change. Sending is not refused while a question is open — the agent may be
 running, and a typed message is an ordinary message that answers nothing (§6).
-Row 1's second sentence exists to explain a disabled Send; row 2 has no disabled
-control to explain, so a sentence there would be inventing a restriction to
-explain.
+Row 1 explains its disabled Send — in the composer's placeholder now
+(`sendBlockedReason`); row 2 has no disabled control to explain, so a sentence
+there would be inventing a restriction to explain.
 
 **"Answer" is a button, not a link.** Every other action on this strip is a way
 to *look* at something — jump, expand — and wears the strip's underlined-text
@@ -343,9 +353,9 @@ knowingly:
   It is a way to *that one* question, not a way in, and reaching it now means
   closing the panel first — which costs nothing (§5). The button itself is
   unchanged; what changed is that its host is behind a backdrop.
-- A **permission card cannot be approved in place.** The strip's "Jump to
-  request" is the only route to one while the panel is up, and it closes the
-  panel on its way (§2, §7).
+- A **permission card cannot be approved in place.** Row 1's jump is the only
+  route to one while the panel is up, and it closes the panel on its way; its
+  Deny and Allow answer without it, and leave the panel up (§2, §7).
 
 **The dimming is the point, not a decoration.** It says which surface the next
 press belongs to, which is the thing the drawer form had to keep re-explaining:
@@ -486,7 +496,8 @@ protect.
 **`AttentionStrip` stays.** It is one line, and it is where a permission request
 speaks — the one thing that can arrive mid-answer that the user must be told
 about (§7). It is also the only route to the card holding that request while the
-panel is up (§2), and the server refuses answers until that request is dealt
+panel is up (§2) — and, through its Deny and Allow, a way to deal with it
+without leaving — and the server refuses answers until that request is dealt
 with; folding the strip for the room would wall the user in with a panel that
 cannot be submitted.
 
@@ -1489,7 +1500,7 @@ to carry.
 | A question whose card has not been paged in | Answerable. That is the whole design: the panel reads the list, not the transcript. The `Answer this` opener does not exist for it, because its card is not on screen to hold one |
 | `Answer this` on a card while the panel is already up | Cannot be reached: the card is behind the backdrop and `inert` (§3). It is a way to *that one* question, not a way in, so nothing is lost — the question already has a block in the panel. Closing first reaches the button, and closing keeps every draft (§5) |
 | An agent answers the question (`question_answer`) | The block leaves the panel by the two rules above; the card reads `Answered`, and the answering message is drawn as the named block of §6 rather than as a user bubble |
-| A permission request arrives while the panel is up | The panel **does not close** — it may hold half-typed answers, and a surface that disappears under the user is worse than one that explains itself. The strip shows row 1 instead of row 2 (which is not rendered anyway while the panel is up), and a submit is refused with the line above. The card itself is behind the backdrop and `inert` whether or not it is scrolled into view, so "Jump to request" — which closes the panel on its way, and so waits out a submit in flight — is the only route to it (§2) |
+| A permission request arrives while the panel is up | The panel **does not close** — it may hold half-typed answers, and a surface that disappears under the user is worse than one that explains itself. The strip shows row 1 instead of row 2 (which is not rendered anyway while the panel is up), and a submit is refused with the line above. The card itself is behind the backdrop and `inert` whether or not it is scrolled into view, so row 1's jump — which closes the panel on its way, and so waits out a submit in flight — is the only route to it; row 1's Deny and Allow answer it without leaving the panel (§2) |
 | Reduced motion | The panel's anchor scroll degrades, as every scroll in this app does. There is nothing else to degrade: the panel has no enter or leave animation (§8) |
 
 ## 8. Deliberately not done

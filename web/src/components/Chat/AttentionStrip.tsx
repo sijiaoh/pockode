@@ -1,6 +1,33 @@
-import { CircleHelp, CornerDownRight, Hourglass, Lock } from "lucide-react";
-import { useState } from "react";
-import type { SessionTurn, TurnBlocker } from "../../types/message";
+import {
+	AlertTriangle,
+	Check,
+	CircleHelp,
+	CornerDownRight,
+	Hourglass,
+	Lock,
+	X,
+} from "lucide-react";
+import { type MouseEvent, useRef, useState } from "react";
+import { toolSummary } from "../../lib/toolSummary";
+import { useWSStore } from "../../lib/wsStore";
+import type {
+	PermissionRequest,
+	PermissionStatus,
+	SessionTurn,
+	TurnBlocker,
+} from "../../types/message";
+import type { PromptError } from "./MessageItem";
+import { Armed } from "./SendStopSlot";
+import { Chip, Detail } from "./ToolRow";
+
+/** A permission card the turn is blocked on, as the transcript has it now. */
+export interface PermissionEntry {
+	request: PermissionRequest;
+	status: PermissionStatus;
+}
+
+/** No Always Allow: what it adds is spelled out on the card, and only there. */
+export type StripPermissionChoice = "deny" | "allow";
 
 interface Props {
 	turn: SessionTurn;
@@ -38,6 +65,20 @@ interface Props {
 	 * the line barely shows; on Codex it is however long the current step runs.
 	 */
 	sendPending?: boolean;
+	/**
+	 * The cards behind the turn's permission blockers, in the blockers' order,
+	 * whatever their status — a card answered a moment ago is still here until
+	 * the server takes its blocker down, and is what the row's receipt reads.
+	 * A blocker whose card is not loaded has no entry.
+	 */
+	permissionRequests?: PermissionEntry[];
+	/** The card's own answer path, so the strip and the card cannot drift. */
+	onPermissionRespond?: (
+		request: PermissionRequest,
+		choice: StripPermissionChoice,
+	) => void;
+	/** The last refused answer; shown on the row when it is the row's request. */
+	promptError?: PromptError;
 }
 
 /**
@@ -51,6 +92,32 @@ function leadingBlocker(blockers: TurnBlocker[]): TurnBlocker | undefined {
 		blockers.find((b) => b.kind === "permission") ??
 		blockers.find((b) => b.kind === "background")
 	);
+}
+
+/**
+ * Which card the permission row speaks for, and how many more are waiting.
+ *
+ * A denial still listed first: on Claude a deny interrupts the turn, so every
+ * other request is about to expire, and handing the row to the next one would
+ * offer answers the server can only refuse. The receipt holds until the
+ * server says where the turn stands. Then the oldest pending one, the order
+ * the server raised them in. With none pending, the one answered last, until
+ * its blocker goes: the row holds still for that round trip as the press's
+ * receipt instead of flashing another row.
+ */
+function permissionRowEntry(
+	entries: PermissionEntry[],
+): { entry: PermissionEntry; more: number } | undefined {
+	const denied = entries.find((e) => e.status === "denied");
+	if (denied) return { entry: denied, more: 0 };
+	const pending = entries.filter((e) => e.status === "pending");
+	if (pending.length > 0) {
+		return { entry: pending[0], more: pending.length - 1 };
+	}
+	const answered = entries.findLast(
+		(e) => e.status === "allowed" || e.status === "denied",
+	);
+	return answered && { entry: answered, more: 0 };
 }
 
 /** "14:02" in the reader's own locale. */
@@ -79,6 +146,191 @@ const STRIP_FRAME = "shrink-0 border-th-border border-t";
 const STRIP_ACTION =
 	"touch-target rounded px-1 underline transition-colors hover:text-th-text-primary focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent";
 
+// Left-aligned and 44px rather than the centred statement line: this row is a
+// decision, read "what, then how", with the answers at the thumb's end. `py-2`
+// around `h-7` controls is exactly the 44px `touch-target` reaches, so no
+// control's hit area spills into the transcript or the composer.
+const PERMISSION_LINE =
+	"mx-auto flex max-w-3xl items-center gap-2 px-3 py-2 text-xs focus:outline-none";
+
+// No `overflow-hidden` to contain a long title: it would clip `touch-target`'s
+// overlay, so the title truncates itself instead.
+const PERMISSION_SUMMARY =
+	"touch-target flex h-7 min-w-0 flex-1 items-center gap-1.5 rounded text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent disabled:opacity-50";
+
+const PERMISSION_DENY =
+	"touch-target h-7 shrink-0 rounded-md border border-th-border px-3 text-th-text-primary transition-colors hover:bg-th-overlay-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent";
+
+const PERMISSION_ALLOW =
+	"touch-target h-7 shrink-0 rounded-md bg-th-accent px-3 font-medium text-th-accent-text transition-opacity hover:opacity-90 focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent disabled:opacity-50";
+
+// The press keeps the caret where it is: in the answer panel's field on a
+// short screen, moving it would bring the composer back under the thumb
+// mid-press; in the composer, it would drop the keyboard a draft is being
+// typed on. Approving needs neither moved.
+const keepFocus = (e: MouseEvent) => e.preventDefault();
+
+/**
+ * The permission row: the request, cut to one line the way its card's title
+ * is, and the two answers that need nothing more than that line
+ * (docs/lifecycle-ui.md §2.2).
+ */
+function PermissionRow({
+	entry,
+	more,
+	error,
+	onRespond,
+	onJump,
+	jumpDisabled,
+}: {
+	entry: PermissionEntry;
+	more: number;
+	error?: string;
+	onRespond: (
+		request: PermissionRequest,
+		choice: StripPermissionChoice,
+	) => void;
+	onJump: (requestId: string) => void;
+	jumpDisabled?: boolean;
+}) {
+	const workDir = useWSStore((state) => state.workDir);
+	const { request, status } = entry;
+	const summary = toolSummary(request.toolName, request.toolInput, workDir);
+	const detail = summary.detail + summary.detailTail;
+	const jump = () => onJump(request.requestId);
+	// Approving a plan approves all the work after it, and one cut line is not
+	// enough to decide that on: the primary answer becomes a way to the card.
+	const isPlan = request.toolName === "ExitPlanMode";
+	const summaryRef = useRef<HTMLButtonElement>(null);
+	const groupRef = useRef<HTMLDivElement>(null);
+
+	// The pressed button goes — to the receipt, or inert under the next
+	// request — and focus would fall to the page with it. A pointer press never
+	// focused it (`keepFocus`), so only a keyboard answer is carried over: to the
+	// summary, or to the row itself while the summary is disabled mid-send.
+	const respond = (
+		e: MouseEvent<HTMLButtonElement>,
+		choice: StripPermissionChoice,
+	) => {
+		const hadFocus = e.currentTarget === document.activeElement;
+		onRespond(request, choice);
+		if (!hadFocus) return;
+		if (jumpDisabled) groupRef.current?.focus();
+		else summaryRef.current?.focus();
+	};
+
+	const label = [
+		"Show permission request:",
+		summary.chip
+			? `${summary.title} (${summary.chip}) ${detail}`
+			: `${summary.title} ${detail}`,
+		more > 0
+			? `(${more} more permission request${more === 1 ? "" : "s"} waiting)`
+			: "",
+		error ? `— answer refused: ${error}` : "",
+	]
+		.filter(Boolean)
+		.join(" ");
+
+	return (
+		<div className={STRIP_FRAME}>
+			{/* biome-ignore lint/a11y/useSemanticElements: a fieldset's min-content width defeats the summary's truncation, and this is no form */}
+			<div
+				ref={groupRef}
+				role="group"
+				aria-label="Permission request"
+				tabIndex={-1}
+				className={PERMISSION_LINE}
+			>
+				<button
+					ref={summaryRef}
+					type="button"
+					onClick={jump}
+					disabled={jumpDisabled}
+					title={error ?? detail}
+					aria-label={label}
+					className={PERMISSION_SUMMARY}
+				>
+					{error ? (
+						<AlertTriangle
+							className="size-3 shrink-0 text-th-error"
+							aria-hidden="true"
+						/>
+					) : (
+						<Lock
+							className="size-3 shrink-0 text-th-text-muted"
+							aria-hidden="true"
+						/>
+					)}
+					{/* The title stays through a refusal: Allow is still live beside
+					    it, and must not stand next to nothing but an error. */}
+					<span className="max-w-[50%] shrink-0 truncate text-th-accent">
+						{summary.title}
+					</span>
+					{summary.chip && <Chip>{summary.chip}</Chip>}
+					{more > 0 && <Chip>{`+${more}`}</Chip>}
+					{/* A refusal of an answer given here is said here, where the user
+					    is looking, in the detail's place; the card holds the full
+					    alert and the detail. */}
+					{error ? (
+						<span className="min-w-0 flex-1 truncate text-th-error">
+							{error}
+						</span>
+					) : (
+						<Detail
+							detail={summary.detail}
+							detailTail={summary.detailTail}
+							mono={summary.mono}
+						/>
+					)}
+				</button>
+				{status === "pending" ? (
+					// Keyed by request: answering one puts the next in the same
+					// place, and a second tap must not approve what nobody read.
+					<Armed key={request.requestId} className="gap-2">
+						<button
+							type="button"
+							onMouseDown={keepFocus}
+							onClick={(e) => respond(e, "deny")}
+							className={PERMISSION_DENY}
+						>
+							Deny
+						</button>
+						{isPlan ? (
+							<button
+								type="button"
+								onClick={jump}
+								disabled={jumpDisabled}
+								className={PERMISSION_ALLOW}
+							>
+								Review
+							</button>
+						) : (
+							<button
+								type="button"
+								onMouseDown={keepFocus}
+								onClick={(e) => respond(e, "allow")}
+								className={PERMISSION_ALLOW}
+							>
+								Allow
+							</button>
+						)}
+					</Armed>
+				) : (
+					<output className="flex shrink-0 items-center gap-1 text-th-text-muted">
+						{status === "allowed" ? (
+							<Check className="size-3" aria-hidden="true" />
+						) : (
+							<X className="size-3" aria-hidden="true" />
+						)}
+						{status === "allowed" ? "Allowed" : "Denied"}
+					</output>
+				)}
+			</div>
+		</div>
+	);
+}
+
 /**
  * One line between the transcript and the composer, saying what needs the user
  * (docs/lifecycle-ui.md §2.2).
@@ -92,7 +344,9 @@ const STRIP_ACTION =
  * muted — because both are one-line statements about the transcript rather than
  * controls, and the pane should have one vocabulary for them. It sits below the
  * list, where the fork banner sits above it, because it describes the
- * transcript's *end*.
+ * transcript's *end*. The permission row alone departs from it, for the reason
+ * `PERMISSION_LINE` gives: it is two decisions and their object, not a
+ * statement.
  *
  * It holds no state of its own beyond whether the background detail is open:
  * everything it says is read from the session's turn and the transcript's tail,
@@ -105,6 +359,9 @@ function AttentionStrip({
 	onAnswer,
 	answerPanelOpen,
 	sendPending,
+	permissionRequests,
+	onPermissionRespond,
+	promptError,
 }: Props) {
 	const [expanded, setExpanded] = useState(false);
 
@@ -129,6 +386,30 @@ function AttentionStrip({
 	const prompt = blocker?.kind === "permission" ? blocker : undefined;
 
 	if (prompt) {
+		const shown =
+			onPermissionRespond && permissionRowEntry(permissionRequests ?? []);
+		if (shown) {
+			const { entry, more } = shown;
+			return (
+				<PermissionRow
+					entry={entry}
+					more={more}
+					error={
+						promptError?.requestId === entry.request.requestId &&
+						entry.status === "pending"
+							? promptError.message
+							: undefined
+					}
+					onRespond={onPermissionRespond}
+					onJump={onJumpToRequest}
+					jumpDisabled={jumpDisabled}
+				/>
+			);
+		}
+
+		// The card is not in the loaded transcript yet — its event has not
+		// arrived, or it sits in history not paged in — so there is nothing to
+		// summarise or answer from here. The statement row stands in.
 		const requestId = prompt.request_id;
 		return (
 			<div className={STRIP_FRAME}>

@@ -446,4 +446,40 @@ describe("ToolCallItem", () => {
 			expect(screen.getByText("Exit code 2")).toBeVisible();
 		});
 	});
+
+	// Which directory a Codex command runs in is half of what it does; the work
+	// directory itself goes without saying.
+	it("names the directory a command runs in when it is not the work directory", async () => {
+		const user = userEvent.setup();
+		draw({
+			input: { command: "ls", cwd: "/tmp/elsewhere" },
+			status: "success",
+		});
+		await user.click(screen.getByRole("button", { name: /Bash/ }));
+		expect(screen.getByText("/tmp/elsewhere")).toBeInTheDocument();
+	});
+
+	it("says nothing of the directory when it is the work directory", async () => {
+		const user = userEvent.setup();
+		draw({
+			input: { command: "ls", cwd: "/Users/test/project/" },
+			status: "success",
+		});
+		await user.click(screen.getByRole("button", { name: /Bash/ }));
+		expect(screen.queryByText(/^in /)).not.toBeInTheDocument();
+	});
+
+	it("reads a plan as a plan rather than as JSON", async () => {
+		const user = userEvent.setup();
+		draw({
+			name: "ExitPlanMode",
+			input: { plan: "# Ship it\n\nThen celebrate." },
+			status: "success",
+		});
+		await user.click(screen.getByRole("button", { name: /ExitPlanMode/ }));
+		expect(
+			screen.getByRole("heading", { name: "Ship it" }),
+		).toBeInTheDocument();
+		expect(screen.queryByText(/"plan"/)).not.toBeInTheDocument();
+	});
 });

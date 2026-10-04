@@ -368,7 +368,7 @@ Four things it can say, in the order it prefers them:
 
 | State | Copy | Trailing action |
 |---|---|---|
-| `permission` | "Waiting for your permission. Answer above or Stop before sending." | "Jump to request" |
+| `permission` | `Lock` {tool} [+N] {detail, cut like the card's title} — see below | **Deny** **Allow** (plan: **Review**) |
 | unanswered questions | "1 question is waiting for your answer." / "{n} questions are waiting for your answer." | **Answer** |
 | a message went into a turn already open, unread so far | "Sent — the agent has not read it yet." | — |
 | `background` | "Waiting on a background task — nothing to answer." | "Details" (expands) |
@@ -380,8 +380,80 @@ Permission is first, and now for a sharper reason than the precedence §1.2 uses
 it is the only row left that Send is refused under (§2.3), and it is also the
 state in which *answering a question is refused*, because the CLI holding the
 request open reads nothing else. It is the thing that has to happen first in both
-senses. Its second sentence stays, because a disabled control with no reason on
-screen is the silent failure this project forbids.
+senses.
+
+#### The permission row
+
+It is the one row that is a decision rather than a statement, so it is the one
+that leaves the strip's grammar — left-aligned and 44px rather than centred and
+one text line, read "what, then how" with the answers at the thumb's end:
+
+```
+🔒 Bash +2  rm -rf build/ && npm run b…   [ Deny ] [ Allow ]
+└──────── summary (jumps to the card) ──┘
+```
+
+- **The summary** is the card's own title line — `toolSummary`, its chip (an
+  MCP call's server) and the row's `Detail`, so the strip, the card and the
+  tool row cut one string one way.
+  Pressing it is the old "Jump to request": scroll, ring, focus the card, with
+  the answer panel closed on the way and held while it sends.
+- **Deny and Allow** go through the card's answer path (`handlePermissionRespond`),
+  optimistic update included. There is **no Always Allow**: what it adds is
+  spelled out on the card, and a rule should not be written from a line too
+  short to show it. Pressing either leaves focus where it was (`onMouseDown`
+  `preventDefault`), so a draft's keyboard stays up and a collapsed composer
+  does not come back mid-press. They do **not** close the answer panel —
+  approving needs nothing from the transcript, and it is what lets the panel's
+  send through afterwards.
+- **Armed per request.** The answers sit in a fixed place while what they
+  answer changes: answering one request brings the next into the same place, and
+  a request can arrive under a press meant for something else. So for `ARM_MS`
+  (500ms, the composer's Stop uses the same `Armed`) after each new request takes
+  the row, Deny and Allow are `inert`. The summary is not held: a jump has no
+  side effect.
+- **Several requests** (parallel subagents, parallel calls) are taken in the
+  order the server raised them: the row speaks for the oldest pending one, and a
+  `+N` chip counts the rest. No carousel — answer in order, or jump to a card to
+  take another first. A Deny holds the row on its receipt for as long as its
+  blocker is listed, instead of handing it to the next request: on Claude a
+  deny interrupts the turn, so the rest are about to expire, and their answers
+  could only be refused. On Codex the blocker goes at once and the next takes
+  over.
+- **Receipt.** Between the press and the server taking the blocker down, the
+  card is already answered and nothing else is pending; the row holds still with
+  a muted `Allowed` / `Denied` (an `<output>`, so it is announced) in place of
+  the answers, instead of flashing the send receipt or the background row for
+  one round trip. An answer given from the keyboard moves focus to the summary
+  (to the row itself while the summary is disabled mid-send), since the pressed
+  button is gone; a pointer press never took focus.
+- **Refusal.** When the server refuses the row's answer (`promptError` on its
+  request), the card has gone back to pending and the error takes the detail's
+  place, in `text-th-error`, behind an `AlertTriangle`. The title stays: the
+  answers stay too, so it can be tried again, and Allow must not stand beside
+  nothing but an error. The card holds the full alert and the detail.
+- **A plan** (`ExitPlanMode`) shows **Review**, a jump, in Allow's place: it
+  approves all the work after it, and one cut line is not enough to decide that.
+- **Card not loaded** — the event has not arrived, or the card sits in history
+  not paged in: the row falls back to the old statement, "Waiting for your
+  permission. Answer above or Stop before sending." with "Jump to request".
+
+The strip reads the cards as `ChatPanel` hands them over — the blockers'
+requests looked up at every depth of the transcript (a subagent's card is filed
+under its call), whatever their status — and reads no store for them itself.
+
+The old row's second sentence explained why Send is refused, and a disabled
+control with no reason on screen is the silent failure this project forbids.
+The new row has no room for it, so the reason is now said in two places. The
+row itself is the first: a lock and Deny/Allow directly above the composer are
+the decision Send is waiting on. The composer is the second, through
+`InputBarProps.sendBlockedReason`, which `ChatPanel` sets to "Answer the
+permission request to send" exactly while a permission request owns the input,
+and which the default bar shows as its placeholder. `canSend` keeps its meaning;
+the reason is only ever read when it is false. A placeholder is hidden by a
+draft, so with one written the row alone says it — accepted, because the row
+is on the screen whenever the composer is, and stays when the composer folds
+([answering-ui.md §3](answering-ui.md), "`AttentionStrip` stays").
 
 The question row carries no such sentence. Sending is not refused while a
 question is open — the agent may well be running — so a second sentence there
@@ -418,10 +490,11 @@ messages typed inside one round trip put the second one here while the server ha
 yet to report the first — and "not read yet" is true of that moment too.
 
 Whichever it says, it is one bordered row, so the composer moves by at most one
-line's height however many of the four states hold.
+row's height however many of the four states hold — 33px for a statement, 45px
+for the permission row.
 
-"Jump to request" uses the jump `MessageList` owns — scroll, ring, focus the
-header row — via the permission blocker's `request_id`. The strip does not
+The permission row's jump uses the jump `MessageList` owns — scroll, ring,
+focus the header row — via the permission blocker's `request_id`. The strip does not
 re-implement it: the scroll container is there, and a second implementation of a
 scroll-and-highlight is a second set of edge cases.
 
@@ -489,7 +562,7 @@ questions part company:
 |---|---|---|---|---|
 | `idle` | hidden | inactive | enabled | — |
 | `running` | shown while the draft is empty | active | enabled | the strip, once a message has gone in |
-| `blocked(permission)` | shown | active | disabled | the strip |
+| `blocked(permission)` | shown | active | disabled | the strip, and the placeholder (`sendBlockedReason`, §2.2) |
 | `blocked(background)` | shown while the draft is empty | active | enabled | the strip |
 
 Stop and Send share one slot at the composer's end and are never on screen
@@ -499,7 +572,7 @@ ready to go), or the host not taking sends (`canSend={false}`) — and Send keep
 it for a draft written mid-turn; interrupting then is an emptied draft away, or
 Escape. Because the Stop that replaces Send lands under
 the thumb that just pressed it, it ignores presses for its first 500ms
-(`Chat/SendStopSlot.tsx`).
+(`Armed` in `Chat/SendStopSlot.tsx`, which the strip's permission row reuses).
 
 **Unanswered questions are not in this table at all**, and their absence is the
 model change made visible. They are not a `phase`, so they gate nothing: the
@@ -1056,7 +1129,7 @@ a user who stopped one subtask restart two things.
 | Server restart with a blocked turn | blockers expire on process death and are written to history, so on reconnect the permission cards read Expired and the composer is live. Unanswered questions are untouched: they are turn state on disk, not a blocker, and they are still listed when the next process starts |
 | `activity` the client does not know | normalised to `idle` at the wire boundary; an unknown state must not blank a row |
 | Story with children in several activities | the story shows its *own* activity. What children contribute to a story row is counts, not a state: "{n} active" and "{closed}/{total} tasks" in its meta line |
-| A decision pressed on a permission card that expired a moment ago | the RPC fails with the server's own reason ("this request is no longer waiting for an answer"); the card flips to Expired with §5's banner and the error is shown inline under the buttons. There is no second route: an expired permission is a denial. The refusal is the session's turn speaking — a request it no longer lists as a blocker cannot be answered, which also covers a decision that arrives after another client's |
+| A decision pressed on a permission card that expired a moment ago | the RPC fails with the server's own reason ("this request is no longer waiting for an answer"); the card flips to Expired with §5's banner and the error is shown inline where the buttons were. There is no second route: an expired permission is a denial. The refusal is the session's turn speaking — a request it no longer lists as a blocker cannot be answered, which also covers a decision that arrives after another client's |
 | Session deleted while its work is `active` | the work moves to `stopped`. The delete confirmation says so: "Delete "{title}"? The work "{work}" will stop." — a session delete that silently stops work is the kind of silent failure this project forbids |
 | Work closed while its turn is still finishing (grace: 2 minutes) | the work row reads `Closed` immediately while its session row may still read `Running` for the length of the grace period. That is two layers telling the truth about themselves, not a contradiction: the engine has let go, the process has not finished speaking. Nothing waits for the other before it updates |
 | Work reopened during the close grace | the reopen's restart message cancels the retirement outright — the premise of it was that nobody was coming back. The session keeps its process and its transcript, and the work is `active` again with no trace of the two minutes it spent closed |
@@ -1089,17 +1162,18 @@ Three of `web/tests/`'s scans read this work without being told to, and two new
 controls are what they will land on:
 
 - **Hit areas.** The attention strip's trailing actions ("Jump to request",
-  "Answer", "Details"), the answer panel's option rows and its per-question
-  "Won't answer" checkbox, and the list row's Restart button are interactive and
-  must clear the floor in
+  "Answer", "Details", and the permission row's summary, Deny and Allow), the
+  answer panel's option rows and its per-question "Won't answer" checkbox, and
+  the list row's Restart button are interactive and must clear the floor in
   [responsive-ui.md](responsive-ui.md#hit-areas-and-spacing). The row's button is
   icon-only on every row (§3), so it owes a box on both axes and never appears in
   the register's deferred list at all. The strip's actions carry text, so they owe
   only the height — `touch-target` over a `text-xs` line, which is the shape the
   strip already uses and the one thing worth keeping from the pill it replaced.
-  The panel's option rows are the exception and take a real
-  `pointer-coarse:min-h-11` box rather than an overlay: a panel has room to grow
-  the box, and a real box is always simpler.
+  The permission row's controls are `h-7` boxes under the same overlay, in a row
+  exactly 44px tall, so no overlay leaves the row. The panel's option rows are
+  the exception and take a real `pointer-coarse:min-h-11` box rather than an
+  overlay: a panel has room to grow the box, and a real box is always simpler.
 - **Indicators are not controls.** `ActivityIcon` and `ActivityDot` render no
   button and take no handler anywhere in this design; a 12px glyph that could be
   tapped is a 12px glyph somebody will try to tap.

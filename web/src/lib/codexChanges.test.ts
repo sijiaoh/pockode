@@ -1,6 +1,6 @@
 import { DiffFile } from "@git-diff-view/react";
 import { describe, expect, it } from "vitest";
-import { parseCodexChanges } from "./codexChanges";
+import { codexChangePaths, parseCodexChanges } from "./codexChanges";
 
 // Captured from codex-cli 0.153.0 `item/started` fileChange items: the shape
 // the app-server channel sends. Paths arrive absolute, `diff` is the whole file
@@ -199,5 +199,18 @@ describe("parseCodexChanges", () => {
 			parseCodexChanges({ changes: [{ kind: { type: "add" }, diff: "x" }] }),
 		).toBeNull();
 		expect(parseCodexChanges(null)).toBeNull();
+	});
+});
+
+describe("codexChangePaths", () => {
+	it("names where each file ends up, in the order the diff draws them", () => {
+		expect(codexChangePaths({ changes: ARRAY_MIXED })).toEqual(
+			parseCodexChanges({ changes: ARRAY_MIXED })?.map((c) => c.newPath),
+		);
+	});
+
+	it("is null for anything parseCodexChanges rejects", () => {
+		expect(codexChangePaths({ changes: [] })).toBeNull();
+		expect(codexChangePaths({ file_path: "/a" })).toBeNull();
 	});
 });

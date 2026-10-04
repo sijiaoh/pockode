@@ -65,7 +65,7 @@ export function ToolStatusGlyph({
  * A word about the call that is not its title: which subagent is running it,
  * which MCP server it belongs to, or that it went to the background.
  */
-function Chip({ children }: { children: string }) {
+export function Chip({ children }: { children: string }) {
 	return (
 		<span className="shrink-0 rounded bg-th-accent/20 px-1.5 py-0.5 text-th-text-primary">
 			{children}

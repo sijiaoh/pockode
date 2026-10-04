@@ -1,20 +1,15 @@
 import { AnsiUp } from "ansi_up";
-import { createPatch } from "diff";
 import { Check, Circle, Loader2 } from "lucide-react";
 import { useMemo } from "react";
-import {
-	type CodexChangeView,
-	parseCodexChanges,
-} from "../../lib/codexChanges";
 import { groupContentBlocks } from "../../lib/contentBlocks";
 import { CodeHighlighter } from "../../lib/shikiUtils";
 import { parseReadResult } from "../../lib/toolResultParser";
 import { useWSStore } from "../../lib/wsStore";
 import type { ContentBlock } from "../../types/content";
-import { GIT_STATUS_INFO } from "../../types/git";
 import { HIGHLIGHT_LIMIT } from "../../utils/fileView";
 import { formatFilePath, relativeToWorkDir } from "../../utils/path";
-import { DiffViewer, FileContentDisplay, MarkdownContent } from "../ui";
+import { FileContentDisplay, MarkdownContent } from "../ui";
+import { ProposedChange, proposedChange } from "./ProposedChange";
 
 const ansiUp = new AnsiUp();
 ansiUp.use_classes = true;
@@ -32,23 +27,6 @@ interface ToolResultDisplayProps {
 	 * there is none to read.
 	 */
 	contents?: ContentBlock[];
-}
-
-interface EditInput {
-	file_path: string;
-	old_string: string;
-	new_string: string;
-	replace_all?: boolean;
-}
-
-interface WriteInput {
-	file_path: string;
-	content: string;
-}
-
-interface MultiEditInput {
-	file_path: string;
-	edits: Array<{ old_string: string; new_string: string }>;
 }
 
 interface TodoWriteInput {
@@ -74,84 +52,6 @@ function ReadResultDisplay({
 	}
 
 	return <FileContentDisplay content={code} filePath={filePath} />;
-}
-
-function EditResultDisplay({ input }: { input: EditInput }) {
-	const unifiedDiff = useMemo(
-		() => createPatch(input.file_path, input.old_string, input.new_string),
-		[input.file_path, input.old_string, input.new_string],
-	);
-
-	return <DiffViewer fileName={input.file_path} hunks={[unifiedDiff]} />;
-}
-
-function CodexEditResultDisplay({ changes }: { changes: CodexChangeView[] }) {
-	const workDir = useWSStore((s) => s.workDir);
-
-	return (
-		<div className="space-y-3">
-			{changes.map((change) => (
-				<div key={change.path} className="space-y-1">
-					<div className="flex items-center gap-2 text-sm">
-						<span
-							className={`shrink-0 font-mono ${GIT_STATUS_INFO[change.status].color}`}
-							// "?" means an unknown change type here, not git's "Untracked".
-							title={
-								change.status === "?"
-									? change.note
-									: GIT_STATUS_INFO[change.status].label
-							}
-						>
-							{change.status}
-						</span>
-						<span
-							className="truncate text-th-text-primary"
-							title={change.newPath}
-						>
-							{formatFilePath(change.newPath, workDir)}
-						</span>
-					</div>
-					{change.newPath !== change.path && (
-						<div className="text-th-text-muted text-xs" title={change.path}>
-							from {formatFilePath(change.path, workDir)}
-						</div>
-					)}
-					{change.patch ? (
-						<DiffViewer fileName={change.newPath} hunks={[change.patch]} />
-					) : (
-						<p className="text-th-text-muted">
-							{change.note ?? "No diff to show"}
-						</p>
-					)}
-				</div>
-			))}
-		</div>
-	);
-}
-
-function MultiEditResultDisplay({ input }: { input: MultiEditInput }) {
-	const diffs = useMemo(
-		() =>
-			input.edits.map((edit, index) => ({
-				index,
-				patch: createPatch(input.file_path, edit.old_string, edit.new_string),
-			})),
-		[input.file_path, input.edits],
-	);
-
-	return (
-		<div className="space-y-2">
-			{diffs.map(({ index, patch }) => (
-				<DiffViewer key={index} fileName={input.file_path} hunks={[patch]} />
-			))}
-		</div>
-	);
-}
-
-function WriteResultDisplay({ input }: { input: WriteInput }) {
-	return (
-		<FileContentDisplay content={input.content} filePath={input.file_path} />
-	);
 }
 
 function TodoWriteResultDisplay({ input }: { input: TodoWriteInput }) {
@@ -300,25 +200,6 @@ function BashResultDisplay({ result }: { result: string }) {
 	);
 }
 
-function isEditInput(input: unknown): input is EditInput {
-	const i = input as Record<string, unknown>;
-	return (
-		typeof i?.file_path === "string" &&
-		typeof i?.old_string === "string" &&
-		typeof i?.new_string === "string"
-	);
-}
-
-function isWriteInput(input: unknown): input is WriteInput {
-	const i = input as Record<string, unknown>;
-	return typeof i?.file_path === "string" && typeof i?.content === "string";
-}
-
-function isMultiEditInput(input: unknown): input is MultiEditInput {
-	const i = input as Record<string, unknown>;
-	return typeof i?.file_path === "string" && Array.isArray(i?.edits);
-}
-
 function isTodoWriteInput(input: unknown): input is TodoWriteInput {
 	const i = input as Record<string, unknown>;
 	return Array.isArray(i?.todos) && i.todos.length > 0;
@@ -381,7 +262,10 @@ function ToolResultDisplay({
 		typeof input?.file_path === "string" ? input.file_path : undefined;
 	// Memoized because building add/delete patches diffs whole file contents,
 	// and a streaming session re-renders this tree while it stays expanded.
-	const codexChanges = useMemo(() => parseCodexChanges(toolInput), [toolInput]);
+	const change = useMemo(
+		() => proposedChange(toolName, toolInput),
+		[toolName, toolInput],
+	);
 
 	if (contents) {
 		return <ContentBlocksDisplay blocks={contents} />;
@@ -412,25 +296,12 @@ function ToolResultDisplay({
 		case "Read":
 			return <ReadResultDisplay result={result} filePath={filePath} />;
 
+		// What a file tool did is what it was asked to do: the view reads the
+		// input alone, and the permission card draws the same one before it runs.
 		case "Edit":
-			if (isEditInput(toolInput)) {
-				return <EditResultDisplay input={toolInput} />;
-			}
-			if (codexChanges) {
-				return <CodexEditResultDisplay changes={codexChanges} />;
-			}
-			return <UnknownResultDisplay result={result} />;
-
 		case "MultiEdit":
-			if (isMultiEditInput(toolInput)) {
-				return <MultiEditResultDisplay input={toolInput} />;
-			}
-			return <UnknownResultDisplay result={result} />;
-
 		case "Write":
-			if (isWriteInput(toolInput)) {
-				return <WriteResultDisplay input={toolInput} />;
-			}
+			if (change) return <ProposedChange change={change} />;
 			return <UnknownResultDisplay result={result} />;
 
 		case "Bash":

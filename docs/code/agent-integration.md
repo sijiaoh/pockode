@@ -393,8 +393,8 @@ learns something new.
 
 (Forking is the only subject settled this way so far. One agent-name branch remains
 elsewhere — `ChatPanel` passes `isCodex` down to decide whether a permission
-request offers *Always Allow* — which is a different fact about an agent and would
-need a capability of its own to express.)
+request offers *Always Allow*, and how the card words what it does — which is a
+different fact about an agent and would need a capability of its own to express.)
 
 `process.Manager.ForkAgentSession` reaches the interface through a type assertion
 and **reports** an agent that does not implement it as an error rather than

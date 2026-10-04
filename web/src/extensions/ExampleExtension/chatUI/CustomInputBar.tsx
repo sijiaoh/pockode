@@ -1,9 +1,6 @@
 import { Send, Square } from "lucide-react";
 import { useState } from "react";
-import {
-	ArmedStop,
-	slotShowsStop,
-} from "../../../components/Chat/SendStopSlot";
+import { Armed, slotShowsStop } from "../../../components/Chat/SendStopSlot";
 import type { InputBarProps } from "../../../lib/registries/chatUIRegistry";
 
 /**
@@ -52,7 +49,7 @@ export default function CustomInputBar({
 			/>
 			{onStop && slotShowsStop({ turnOpen, canSend, hasDraft, disabled }) ? (
 				// Armed after arriving: it lands under the thumb that just sent.
-				<ArmedStop>
+				<Armed>
 					<button
 						type="button"
 						onClick={onStop}
@@ -61,7 +58,7 @@ export default function CustomInputBar({
 					>
 						<Square className="size-3.5 fill-current" />
 					</button>
-				</ArmedStop>
+				</Armed>
 			) : (
 				<button
 					type="button"
