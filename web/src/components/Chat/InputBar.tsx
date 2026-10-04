@@ -601,6 +601,10 @@ function InputBar({
 						onChange={(e) => setInput(e.target.value)}
 						onKeyDown={handleKeyDown}
 						onKeyUp={handleKeyUp}
+						// The autosizer measures the placeholder when the draft is
+						// empty, so a reason that wraps on a narrow phone would grow
+						// the bar by a line exactly as a permission request arrives.
+						maxRows={input === "" ? 1 : undefined}
 						placeholder={
 							!canSend && sendBlockedReason
 								? sendBlockedReason
@@ -613,7 +617,7 @@ function InputBar({
 						autoComplete="off"
 						autoCorrect="off"
 						autoCapitalize="off"
-						className="min-h-9 max-h-[40vh] min-w-0 flex-1 resize-none pointer-coarse:min-h-11 overflow-y-auto rounded-lg bg-th-bg-secondary px-3 py-1.5 pointer-coarse:py-2.5 text-th-text-primary placeholder:text-th-text-muted focus:outline-none focus:ring-2 focus:ring-th-border-focus sm:max-h-[200px] sm:px-4"
+						className="min-h-9 max-h-[40vh] min-w-0 flex-1 resize-none pointer-coarse:min-h-11 overflow-y-auto rounded-lg bg-th-bg-secondary px-3 py-1.5 pointer-coarse:py-2.5 text-th-text-primary placeholder:text-th-text-muted placeholder:truncate focus:outline-none focus:ring-2 focus:ring-th-border-focus sm:max-h-[200px] sm:px-4"
 					/>
 					{/* biome-ignore lint/a11y/noStaticElementInteractions: listens for focus passing through, takes no input of its own */}
 					<div
@@ -636,7 +640,7 @@ function InputBar({
 										type="button"
 										onClick={onStop}
 										aria-label="Stop"
-										className="flex size-9 items-center justify-center rounded-lg bg-th-error pointer-coarse:size-11 text-th-text-inverse transition-all hover:opacity-90 active:scale-95"
+										className="flex size-9 items-center justify-center rounded-lg bg-th-text-primary pointer-coarse:size-11 text-th-text-inverse transition-all hover:opacity-90 active:scale-95"
 									>
 										<Square className="size-3.5 fill-current" />
 									</button>

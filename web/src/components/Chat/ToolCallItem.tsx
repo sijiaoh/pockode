@@ -6,7 +6,11 @@ import {
 } from "../../lib/contentBlocks";
 import { proposedChange } from "../../lib/proposedChange";
 import { toolBodyLayout } from "../../lib/toolBodyLayout";
-import { lastOutputLines, toolSecondLine } from "../../lib/toolRun";
+import {
+	lastOutputLines,
+	shownResult,
+	toolSecondLine,
+} from "../../lib/toolRun";
 import { toolSummary } from "../../lib/toolSummary";
 import { useWSStore } from "../../lib/wsStore";
 import type { ToolRun } from "../../types/message";
@@ -18,6 +22,7 @@ import { useRowExpanded } from "./rowExpansionContext";
 import { PathLine, ToolInvocation } from "./ToolInvocation";
 import { ToolOutcomeSections } from "./ToolOutcomeSections";
 import ToolResultDisplay, {
+	FAILURE_TEXT,
 	outputLineCount,
 	resultCopyText,
 } from "./ToolResultDisplay";
@@ -119,29 +124,37 @@ const ToolCallItem = memo(function ToolCallItem({
 	// having been opened: a collapsed `Read` should not pay to strip its line
 	// numbers.
 	const everExpanded = useEverExpanded(expanded);
+	const result = shownResult(run.result ?? "");
 	const copyText = useMemo(
 		() =>
 			everExpanded && showsResult
-				? resultCopyText(run.name, run.input, run.result ?? "", run.contents)
+				? resultCopyText(run.name, run.input, result, run.contents)
 				: undefined,
-		[everExpanded, showsResult, run.name, run.input, run.result, run.contents],
+		[everExpanded, showsResult, run.name, run.input, result, run.contents],
 	);
-	// Gated the same way: counting means reading the whole diff. Mirrors when
+	// Gated the same way: diffing means reading the whole input. Mirrors when
 	// `ToolResultDisplay` draws the change rather than content blocks.
-	const changeHeader = useMemo(
+	const change = useMemo(
 		() =>
 			everExpanded && showsResult && !run.contents
-				? proposedChangeHeader(proposedChange(run.name, run.input))
-				: {},
+				? proposedChange(run.name, run.input)
+				: null,
 		[everExpanded, showsResult, run.name, run.input, run.contents],
 	);
+	const changeHeader = useMemo(
+		() => proposedChangeHeader(change, { applied: !failed }),
+		[change, failed],
+	);
+	// A change is drawn from the input, so its result is shown nowhere else —
+	// and when the tool refused it, the result is the reason.
+	const changeError = change && failed ? result : "";
 	// Gated the same way: counting means splitting the whole output.
 	const showAllLabel = useMemo(
 		() =>
-			everExpanded && layout.resultFromEnd && run.result
-				? `Show all ${outputLineCount(run.result)} lines`
+			everExpanded && layout.resultFromEnd && result
+				? `Show all ${outputLineCount(result)} lines`
 				: undefined,
-		[everExpanded, layout.resultFromEnd, run.result],
+		[everExpanded, layout.resultFromEnd, result],
 	);
 
 	const invocation = (
@@ -167,6 +180,15 @@ const ToolCallItem = memo(function ToolCallItem({
 					</pre>
 				</Section>
 			)}
+			{changeError && (
+				<Section label="Error">
+					<pre
+						className={`whitespace-pre-wrap break-words font-mono ${FAILURE_TEXT}`}
+					>
+						{changeError}
+					</pre>
+				</Section>
+			)}
 			<ToolOutcomeSections
 				run={run}
 				outcomeLabel={layout.resultLabel}
@@ -188,7 +210,7 @@ const ToolCallItem = memo(function ToolCallItem({
 							<ToolResultDisplay
 								toolName={run.name}
 								toolInput={run.input}
-								result={run.result ?? ""}
+								result={result}
 								contents={run.contents}
 								onOpenFile={onOpenFile}
 								failed={failed}

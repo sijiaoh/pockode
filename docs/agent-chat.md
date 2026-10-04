@@ -463,12 +463,28 @@ the transcript cannot be scrolled past, so a card near it stops short of the top
 edge, and an anchor claiming otherwise would have every later commit trying to
 push it further.
 
-The button sticks to the bottom right of the transcript's scroll box from inside
-the reading column (`max-w-3xl`), so it lines up with the column's right edge
-whatever the scrollbar takes. It is hidden within reach of the end even while
-anchored: there it would sit over the last row's bottom-right controls — a
-permission card's Allow, right after a jump to it — with no scrolling left to
-move them out from under it. It carries a dot once the end of the conversation
+The button is a pill, `h-8 w-11` with a `touch-target` hit area (44px on a
+coarse pointer, 36px on a fine one), horizontally centred above the composer. It
+sticks to the bottom of the transcript's scroll box from inside the reading
+column (`max-w-3xl`), so it centres on the column whatever the scrollbar takes.
+It used to sit in the bottom-right corner, and on a phone that corner is exactly
+where the transcript keeps what most needs reading: a row's `+`/`−` counts and
+elapsed time, the copy buttons, Open, a permission card's Allow — on a narrow
+line the button covered the only number on it. Centred, it covers the middle of
+a line of prose, which still reads around it.
+
+It is hidden in two cases even while anchored. **Within reach of the end**
+(the same 50px): there is nothing left below to go to. **Over a control that
+must stay pressable**: anything spread with `keepClearProps` (exported from
+`useTranscriptScroll.ts`) that is inside the button's band — the bottom 60px of
+the view, the button's offset plus its coarse hit area plus a little air — hides
+it, checked against the layout on every scroll and every time the invariant is
+applied. Today that is the pending permission card's answer row. Distance from
+the end could not do this job: the turn-end slot under a waiting card keeps its
+height ([turn-progress-ui.md §2.1](turn-progress-ui.md#21-where-it-is)), about
+56px, so a card's answers could sit inside the button's band while the view was
+still more than 50px from the end — and the button was drawn on Allow, right
+after a jump to it. It carries a dot once the end of the conversation
 has changed since the reader last saw it, which is on leaving the tail or on
 coming back within reach of the end. "Changed" is the newest row's id, its body
 (`parts`, or a user row's `content`) or its `error` no longer being the one

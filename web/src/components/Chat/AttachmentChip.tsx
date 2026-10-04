@@ -35,19 +35,22 @@ function AttachmentChip({
 	action,
 }: Props) {
 	return (
+		// Its own type sizes rather than the surrounding text's: inside a user
+		// bubble that text is the message, and an entry at the message's size
+		// competes with it — and outgrows the composer's entry for the same file.
 		<div className="flex w-56 shrink-0 items-center gap-2 rounded-lg border border-th-border bg-th-bg-secondary p-2">
 			<Icon className={`size-5 shrink-0 ${iconClassName}`} aria-hidden="true" />
-			<div className="min-w-0 flex-1">
+			<div className="min-w-0 flex-1 text-sm">
 				<div className="truncate text-th-text-primary" title={tooltip ?? title}>
 					{title}
 				</div>
-				<div className="truncate text-th-text-muted">{detail}</div>
+				<div className="truncate text-xs text-th-text-muted">{detail}</div>
 			</div>
 			{action && (
 				<button
 					type="button"
 					onClick={action.onClick}
-					className="min-h-[36px] shrink-0 rounded px-2 text-th-accent pointer-coarse:min-h-11 hover:bg-th-overlay-hover"
+					className="min-h-[36px] shrink-0 rounded px-2 text-sm text-th-accent pointer-coarse:min-h-11 hover:bg-th-overlay-hover"
 				>
 					{action.label}
 				</button>

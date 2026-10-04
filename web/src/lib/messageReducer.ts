@@ -2321,10 +2321,13 @@ export function retireAgainstTurn(
  * reach the end of a transcript with a bubble still streaming and dialogs still
  * open. The turn is the authority those records are missing.
  *
- * On top of the retirements above: a bubble still `streaming` while the turn is
- * not running has stopped, and it stopped the way the turn ended. A turn parked
- * on a background task counts — nothing is arriving, and saying so is the whole
- * point of that blocker.
+ * On top of the retirements above: a bubble still `streaming` once the turn is
+ * no longer open has stopped, and it stopped the way the turn ended. An open
+ * turn has not, whatever it is blocked on: an answered permission or a finished
+ * background task resumes it in the same reply, and until then that reply's
+ * turn-end slot stays empty (docs/turn-progress-ui.md §2.2) rather than offering
+ * Copy and Fork on a reply that is not finished — which is also what the live
+ * path shows, since neither blocker touches the transcript.
  *
  * Only the newest page, because `last_outcome` is how the *last* turn ended and
  * an older page's unfinished turn is not that one. Older pages are closed by
@@ -2336,7 +2339,7 @@ export function settleAgainstTurn(
 	turn: SessionTurn,
 ): Message[] {
 	const retired = retireAgainstTurn(messages, turn);
-	if (turn.phase === "running") return retired;
+	if (turn.open) return retired;
 	return finalizeStreamingMessages(
 		retired,
 		turn.last_outcome === "aborted" ? "interrupted" : "complete",

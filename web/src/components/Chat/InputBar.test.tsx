@@ -119,7 +119,7 @@ describe("InputBar", () => {
 	// A refusal the user has to act on is said where they are about to type;
 	// one that only passes (no `canSend`) keeps the ordinary prompt.
 	it.each([
-		[false, "Answer the permission request to send"],
+		[false, "Allow or deny to send"],
 		[true, /^Type a message/],
 	])("puts the refusal reason in the placeholder only while refused (canSend: %s)", (canSend, placeholder) => {
 		render(
@@ -127,7 +127,7 @@ describe("InputBar", () => {
 				sessionId={TEST_SESSION_ID}
 				onSend={sendAccepted}
 				canSend={canSend}
-				sendBlockedReason="Answer the permission request to send"
+				sendBlockedReason="Allow or deny to send"
 			/>,
 		);
 

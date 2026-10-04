@@ -1,5 +1,15 @@
 {
 	"$schema": "https://biomejs.dev/schemas/2.3.14/schema.json",
 	"root": false,
-	"extends": "//"
+	"extends": "//",
+	"linter": {
+		"rules": {
+			"a11y": {
+				"noLabelWithoutControl": {
+					"level": "error",
+					"options": { "inputComponents": ["ChoiceInput"] }
+				}
+			}
+		}
+	}
 }

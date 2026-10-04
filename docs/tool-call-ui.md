@@ -77,7 +77,11 @@ border-th-border` frame with a 1px `border-th-border` hairline between rows, and
 no gap and no fill of its own, so the rows sit on the transcript's ground. Text,
 a question card and every other part end the list and stand on their own, with
 the message's `space-y-2` around them. One call alone is a list of one row, so
-a row looks the same wherever it is.
+a row looks the same wherever it is. The one list without a visible frame is one
+holding nothing but thinking rows: its border is `border-transparent`, so the
+columns stay where a framed list puts them, while a thinking beside tool calls
+shares their frame (`RowList` in `Chat/ToolList.tsx`; why, in
+[turn-progress-ui.md §1.2](turn-progress-ui.md#12-where-it-goes-and-groups)).
 
 ```
 The sender retries on 429 and 503. Two gaps:
@@ -188,7 +192,7 @@ row, with its elapsed time. One line either way, so it does not change height
 when it settles. It does not spin while a card in the group waits on the user:
 then the machine is waiting for them, and with nothing settled yet the row says
 only `N steps`, with an empty glyph — neither busy nor done. Its text is `aria-hidden` while it moves,
-and the spinner says `Tool calls running`.
+and the running glyph says `Tool calls running`.
 
 **Rendering.** Every part is rendered once, in transcript order; the group adds
 a summary entry before its first part and hides its foldable parts with the
@@ -458,10 +462,10 @@ The glyph column is the single place status is stated:
 
 | Status | Glyph | Colour | Row | Body |
 |---|---|---|---|---|
-| `running` | `Spinner` (`variant="current"`, `size="h-3 w-3"`, with the tool name in its `srText`) | inherits | activity line when there is one | invocation + live output |
-| `background` | same spinner, plus a `background` chip after the name | inherits | activity line when there is one, else the last line fetched of it | invocation + live output + whatever has been fetched |
+| `running` | `RunningGlyph`: a `Spinner` (`variant="current"`, `size="h-3 w-3"`), or under `prefers-reduced-motion` a still `CircleDot` in `text-th-accent`; `role="status"` named `<tool> running` either way | inherits (the dot: accent) | activity line when there is one | invocation + live output |
+| `background` | the same glyph, plus a `background` chip after the name | inherits | activity line when there is one, else the last line fetched of it | invocation + live output + whatever has been fetched |
 | `success` | `Check` | **`text-th-text-muted`** | second line only if it came from the background (below) | invocation + result |
-| `error` | `X` | `text-th-error` | the row button tinted `bg-th-error/10` (`hover:bg-th-error/15`), detail text `text-th-error`, second line = the last line of the output — or the outcome, when the run came from the background | closed, like every other row |
+| `error` | `X` | `text-th-error` | the row button tinted `bg-th-error/10` (`hover:bg-th-error/15`), detail text `text-th-error`, second line = the line of the output that says why it failed, or the tool's reason for refusing the call — or the outcome, when the run came from the background ([rungs 3 and 4](#the-second-line-problem-1)) | closed, like every other row |
 | `interrupted` | `Ban` | `text-th-text-muted` | second line only if it came from the background (below) | invocation + whatever came back |
 
 Two of those are deliberate departures:
@@ -475,9 +479,18 @@ Two of those are deliberate departures:
   ([tool-call-model.md](tool-call-model.md#tasks-are-tool-runs)), so there is one
   answer rather than two.
 - **`background` is not a finished state.** It is `running` wearing a badge: the
-  spinner keeps turning, because the work *is* still going, and the chip says
+  running glyph stays, because the work *is* still going, and the chip says
   why the conversation moved on without it. Giving it its own glyph would be
   saying the call ended, which is the exact lie this replaced.
+
+The running glyph is one component, `RunningGlyph` in `ToolRow.tsx`, used by
+every tool row and by a group's summary while it runs. Under
+`prefers-reduced-motion` it does what the turn's tail line does
+([turn-progress-ui.md §2.3](turn-progress-ui.md#23-what-it-says)): the motion
+is decoration and `Spinner` does not stop itself, so it is swapped for a still
+`CircleDot` — in accent, so beside the muted ticks of settled rows it still
+reads as live. The `role="status"` and its label sit on the wrapper, not on
+either glyph, so the name survives whichever one is showing.
 
 The chip is the same shape a subagent type or an MCP server wears, and lives in
 `ToolRow` so there is one of it:
@@ -586,17 +599,21 @@ MCP tool's arguments listed by name, a string input), and for an
 the raw input, since whatever else it asks for is approved with it.
 
 **The decision is one full-width row**, `Deny | Always Allow | Allow`, with
-Allow — the accent, primary action — always at the right-hand end and 1.4× the
-width of the others, so it does not move when Always Allow is not offered. The
-boxes grow to the floor (`min-h-9 pointer-coarse:min-h-11`, `gap-2`) rather
-than borrow a `touch-target` overlay, since the card is free to grow; `text-sm`
-on them is the card's one step up from `text-xs`, because they are a decision
-and not a caption. Always Allow lost its green: it is the option whose effect
-outlives the request, and the success colour was an invitation to press it.
-What it will write is said directly above the row and outside the scrolling
-body — every suggestion, not the first, because the server sends the whole list
-back — so the explanation cannot scroll away while the button stays in view.
-No key is bound to any of the three: Escape already interrupts the turn
+Allow — the accent, primary action — always at the right-hand end, so it does
+not move when Always Allow is not offered. The row is one line at any width:
+Deny and Always Allow take their label's width (`whitespace-nowrap`, `px-3`) and
+Allow takes what is left. They used to share the width by ratio, Allow 1.4× the
+others, and at 360px *Always Allow* wrapped — one button two lines tall beside
+two that were one. The boxes grow to the floor (`min-h-9
+pointer-coarse:min-h-11`, `gap-2`) rather than borrow a `touch-target` overlay,
+since the card is free to grow; `text-sm` on them is the card's one step up from
+`text-xs`, because they are a decision and not a caption. Always Allow lost its
+green: it is the option whose effect outlives the request, and the success
+colour was an invitation to press it. What it will write is said directly above
+the row and outside the scrolling body — every suggestion, not the first,
+because the server sends the whole list back — so the explanation cannot scroll
+away while the button stays in view. No key is bound to any of the three: Escape
+already interrupts the turn
 ([answering-ui.md](answering-ui.md#who-owns-escape)), and a stray key on a
 prompt that runs arbitrary commands costs too much.
 
@@ -623,7 +640,7 @@ afterwards cannot word the same call differently.
 |---|---|---|---|
 | `Bash` | `Bash` | the **command**, newlines collapsed to ` ⏎ ` — or, when Codex parsed the command into exactly one action, that action's path or query | right |
 | `Read` / `Write` / `Edit` / `MultiEdit` | the name | the path relative to the work directory, split so the file name survives | **left** |
-| `Grep` | `Grep` | `"pattern"` + ` in <path>` when scoped | right |
+| `Grep` | `Grep` | `"pattern"` + ` in <path>` when scoped — the path relative to the work directory when inside it, and no ` in …` at all when it *is* the work directory | right |
 | `Glob` | `Glob` | the pattern | right |
 | `WebFetch` / `WebSearch` | the name | host + path / the query | right |
 | `TodoWrite` | `TodoWrite` | `n done / m` | — |
@@ -632,7 +649,7 @@ afterwards cannot word the same call differently.
 | `server:tool` (Codex MCP) or `mcp__server__tool` (Claude MCP) | the tool half | the server half as a chip, then the first scalar argument, else compact JSON | right |
 | anything else | the name | first non-empty scalar in `input` | right |
 
-Five decisions inside that table:
+Six decisions inside that table:
 
 - **`TaskOutput` is in the table although many of them never draw a row.** A
   fetch of a task's output is filed under the call it reads and takes no row at
@@ -655,6 +672,14 @@ Five decisions inside that table:
   Claude passes its own `mcp__server__tool` straight through, and an unsplit
   40-character machine name would sit in the title slot, which never truncates,
   and evict the detail that actually identifies the call.
+- **A `Grep` scope is named from the work directory.** Claude nearly always
+  passes `path` absolute, and on a 375px row the detail then had room for the
+  home directory and nothing after it — the pattern, then `in /Users/me/…`,
+  never the part that says where. Inside the work directory the scope is
+  relative (`in src/lib`); the work directory itself is omitted, since every
+  search runs there anyway; a path outside it is left as it came. Compared by
+  segments (`isSameNativePath`, `utils/path.ts`), so a trailing separator or the
+  other separator does not make the work directory look like somewhere else.
 - **Paths truncate from the left**, and the detail is the path *relative to the
   work directory* rather than `formatFilePath`'s `Button.tsx (src/components)`.
   The two cannot both be had: that form puts the file name first, and splitting
@@ -688,7 +713,7 @@ whose colour already means something.
 Under line 1, while — and only while — the run has something to say there: its
 **activity** while it is live, the **last line fetched** of a live run nobody is
 reporting progress on, the **outcome** of a run that finished in the
-background, and the **last line** of one that failed. A settled foreground run
+background, and the line that says **why** one failed. A settled foreground run
 has a second line only when it failed.
 
 ```tsx
@@ -707,10 +732,21 @@ has a second line only when it failed.
    the fetch carries it in, see there — and failing that `run.output` — Codex's
    `commandExecution/outputDelta`. Literal output either way, so mono.
 3. for a settled `fromBackground` run, the first line of the outcome. Prose.
-4. for a settled foreground **failure**, the **last non-empty line** of the
-   result. Literal output, so mono. Before this rung a collapsed failed row said
-   only *that* the call failed — the border and the glyph — and the reason was
-   behind the chevron, which is why the row used to open itself.
+   Claude's own notification sentence, `Background command "<description>"
+   <outcome>`, is cut to its outcome and capitalised — `Completed (exit code
+   0)`; any other phrasing is shown as it came, and the body's *Outcome* keeps
+   the whole sentence.
+4. for a settled foreground **failure**, the line of the result that says why
+   (`failureLine` in `lib/toolRun.ts`): the **last line naming a failure** —
+   `error`, `fail`, `panic`, `✗` or `×`, in any case — skipping lines that say
+   where rather than why: Node's `at …` frames, Python's `File "…", line N`,
+   Go's bare `path.go:N +0x…` frames (whose file may well be `panic.go`), and
+   the `Errors  Files` header of the table tsc ends a many-file failure with.
+   With no such line, the last non-empty one. Literal output, so mono. A call
+   the **tool refused** is the exception — see below. Before this rung a
+   collapsed failed row said only *that* the call failed — the border and the
+   glyph — and the reason was behind the chevron, which is why the row used to
+   open itself.
 
 **Rung 2's two sources are one rung, not two.** Both are this call's own machine
 output, and either one is the same sentence to a reader — *this is the last thing
@@ -742,11 +778,32 @@ fetch is in the body.
 
 Rung 3 is above rung 4 and the order is load-bearing: a backgrounded failure's
 outcome is the notification's own summary sentence, which says more than the
-tail of a log the user never asked for. The last line rather than the first,
-because it is the one rung 2 was already showing a moment earlier — the text
-does not jump to the other end of the output as the run settles — and because a
-build states its verdict at the end (`make: *** [build] Error 1`) while the head
-is noise (`> vite build`).
+tail of a log the user never asked for. Rung 3 drops the description from
+Claude's sentence because it is the command, already the row's first line, and
+at 375px it pushed the outcome — the one word the user came back for — off the
+end of the line.
+
+Rung 4 reads from the end, because a build states its verdict there
+(`make: *** [build] Error 1`, go test's `FAIL pkg`) while the head is noise
+(`> vite build`). It used to be simply the last non-empty line, and on a phone
+that held for builds and failed for the two failures seen most: a test runner
+ends on its timing (vitest's `Duration 1.31s`) and an uncaught Node error ends
+on a stack frame, so the collapsed row named a duration or a file offset and
+said nothing about why. Hence the search back for a line naming the failure,
+and the frames skipped even when they match — `at failTest (…)` is where, not
+why. The fallback keeps a failure with no such word (a bare `exit status 2`)
+as it was.
+
+**A refused call is not program output.** Claude answers an input its tool will
+not act on — an `Edit` whose `old_string` is not in the file, a `Write` to a
+file not read yet — with `<tool_use_error>…</tool_use_error>`. The tag is the
+CLI's envelope, not anything the tool said, and it is stripped wherever the
+result is drawn or copied: the second line (`toolUseErrorText`), the body and
+the copy button (`shownResult`). The text inside is a sentence about the input
+that opens with its reason, followed by the input quoted back, so the second
+line takes its **first** non-empty line, in prose rather than mono. On device
+the row used to end in `import { send }</tool_use_error>` — the tail of the
+quoted input, with the tag.
 
 It is drawn `text-th-text-muted` like every other second line, not red. The row
 already carries three reds; a fourth would dilute "red means failed" into "red
@@ -771,14 +828,14 @@ being jitter:
   in the completed result, so a frame merged away costs nothing
   ([tool-call-model.md](tool-call-model.md#live-progress)).
 - **`aria-hidden` while it is live, exposed once it settles.** The row is a
-  `<button>`, so anything inside it is part of its accessible name — and a button
-  whose name changes several times a second is re-announced at every focus and is
-  worse than no progress at all. So the moving line is hidden: the spinner
-  (`role="status"`) says the call is running, the glyph says how it went, and the
-  full output is in the body, which is reachable. The background outcome line is
-  the opposite case — it is stable, it is the answer the user was waiting for,
-  and it stays in the row's name. (A live region here would read every stdout
-  line aloud, which is why neither variant is one.)
+  `<button>`, so anything inside it is part of its accessible name — and a
+  button whose name changes several times a second is re-announced at every
+  focus and is worse than no progress at all. So the moving line is hidden: the
+  running glyph (`role="status"`) says the call is running, the glyph says how
+  it went, and the full output is in the body, which is reachable. The
+  background outcome line is the opposite case — it is stable, it is the answer
+  the user was waiting for, and it stays in the row's name. (A live region here
+  would read every stdout line aloud, which is why neither variant is one.)
 - **The line appears at most once per run, and disappears at most once.** Not
   once per update: the whole point of never clearing it is that the row's height
   is stable for as long as the run lives. It is also not reserved with a blank
@@ -800,8 +857,8 @@ because the conversation carries on above it for half an hour. So a background
 run does not lose its second line when it settles:
 
 > **The second line is the run's latest word.** While the run is live that is its
-> activity. When a backgrounded run finishes, it becomes the first line of the
-> outcome — and stays.
+> activity. When a backgrounded run finishes, it becomes the outcome (rung 3) —
+> and stays.
 
 Which is also the better row: a settled background call that reads *"Build
 succeeded in 4m12s"* without being opened is the thing the user went looking for.
@@ -836,11 +893,11 @@ height there.
 
 ### When a background run finishes
 
-`task_notification` supersedes the placeholder. The row settles to
-`success` / `error` (glyph and colour from the table), keeps the chip, keeps its
-second line — now the first line of `summary` — and the body gains another
-section. The body must not simply replace the placeholder text: the placeholder
-is what the **agent** read, the notification is what
+`task_notification` supersedes the placeholder. The row settles to `success` /
+`error` (glyph and colour from the table), keeps the chip, keeps its second line
+— now `summary` as [rung 3](#the-second-line-problem-1) reads it — and the body
+gains another section. The body must not simply replace the placeholder text:
+the placeholder is what the **agent** read, the notification is what
 **happened**, and a body that shows only the second asserts the agent saw
 something it never did. Labelled blocks, in this order:
 
@@ -1063,23 +1120,61 @@ rather than skimmed — a whole file (`Read`, `Write`) and a diff (`Edit`,
 `MultiEdit`) — also offers *Full screen*, the shared `Sheet` in its
 `fullScreen` form, once it runs past the clamp.
 
+The block is `p-2` with `space-y-3` between its sections, and a code block in
+a section draws **no box of its own** — no padding, no background
+(`.tool-section .code-block` in `web/src/index.css`), so a command lines up
+with the label above it and the output beside it. The box's `0.75rem 1rem`
+padding was only indentation there: every theme's `--th-code-bg` is its
+`--th-bg-secondary`, the body's own ground, so the box was invisible and its
+padding set the command 16px in and doubled the gap between two blocks. The
+background goes with the padding rather than staying, because a pending
+permission card's body is tinted, and a padless box on it would put the command
+against its own edges. A fenced block in Markdown keeps its box: it has a
+header bar to sit under.
+
 **Every section has a header bar** (`Section`, `Chat/ToolSection.tsx`, drawn
 through `BlockHeader` in `components/ui/`): its name on the left, its actions on
-the right. The copy button is one of those actions, never laid over the
-content — in a code block's corner it sat on the end of the first line, which
-on a phone is most of a command. `CodeHighlighter`'s corner button is turned off
+the right. The copy button is one of those actions, never laid over the content
+— in a code block's corner it sat on the end of the first line, which on a phone
+is most of a command. `CodeHighlighter`'s corner button is turned off
 (`copyable={false}`) wherever a header carries it. What a result's button copies
 is `resultCopyText`: the text a reader would select, so a `Read` without its
-line numbers and a command's output without its colour codes; a diff or a
-checklist has no button. `BlockHeader` is meant for any block of content, not
-only tool sections: a fenced code block in the agent's text (`CodeBlock`,
-`components/ui/`) is the same bar, with the language on the left and the copy
-on the right, over code that scrolls sideways in its own box so the bar stays
-put. The text around it is `prose-sm` brought in for a conversation
-(`prose-message`, `web/src/index.css`): headings one step above the body
-rather than four, tighter paragraphs, a table in tight rows that scrolls in its
-own box when it is wider than the phone — the transcript clips sideways, so a
-table left to it would lose its right columns.
+line numbers, a command's output without its colour codes, and a refused call
+without its `<tool_use_error>` tag ([above](#the-second-line-problem-1)); a diff
+or a checklist has no button. The one block with no header is a single file's
+path (*File tools*, below), which carries its copy button at the end of its own
+line. `BlockHeader` is meant for any block of content, not only tool sections: a
+fenced code block in the agent's text (`CodeBlock`, `components/ui/`) is the
+same bar, with the language on the left and the copy on the right, over code
+that scrolls sideways in its own box so the bar stays put. The text around it is
+`prose-sm` brought in for a conversation (`prose-message`, `web/src/index.css`):
+headings one step above the body rather than four, tighter paragraphs, a table
+in tight rows that scrolls in its own box when it is wider than the phone — the
+transcript clips sideways, so a table left to it would lose its right columns.
+
+**A wide table keeps its columns readable and scrolls.** It used to be squeezed
+into the content width and never overflow at all, so on a phone each cell stood
+four or five lines tall, one word to a line. Now each header cell sets its
+column's floor (`MarkdownHeaderCell`, `components/ui/MarkdownContent.tsx`):
+`min-width: max(9em, <header characters × 0.6>ch)` — 9em so a column of prose is
+not squeezed to its longest word, and the header term so a long header widens
+its column to about two lines instead of standing four lines tall over short
+cells. The table then overflows into its own horizontal scroll, and while there
+is more to the right its right edge fades (a `mask-image` gradient, dropped at
+the end), since nothing else on a touch screen says a box scrolls sideways.
+
+**Inline code wraps as a whole token.** It is an inline-block no wider than
+the line, so a token that fits on a line of its own moves there whole; only a
+token longer than a line breaks inside, after a `/` where it has one (a `<wbr>`
+after each run of slashes, so `https://` stays together) and anywhere as the
+last resort. Inside a table cell it is `overflow-wrap: break-word` instead, so
+the column's minimum width is its longest token and the table scrolls rather
+than cutting the token. It used to be `break-all`, which split
+`src/webho|oks/…` mid-name even on a desktop. It is `0.9em` at the text's own
+weight: in em so it follows a table cell's or a note's smaller text (which
+retired the note's own `font-size: inherit` override), and not the 600 weight
+Typography gives it, which out-shouted bold beside it — the ground and the mono
+face already set it apart.
 
 **The order is the tool's** (`toolBodyLayout`, `web/src/lib/`). For a tool whose
 row has already said everything that was asked — `Read`, `Glob`, `Grep`,
@@ -1096,23 +1191,37 @@ tool — so it is left out (`resultIsAcknowledgement`). A failed one keeps its
 result, which is where it says why.
 
 **Sections are named for what they hold**, not for the plumbing. The invocation
-names itself by what it shows — *Command*, *File* / *Files*, *Request* for a
+names itself by what it shows — *Command*, *File* / *Files* (one unfolded
+file is a line with no header, below), *Request* for a
 sentence, *Todos* for a checklist, *Parameters* for named fields and the JSON
 fallback. The result is named by the tool: *Output* for `Bash`, *Content* for
 `Read` and `Write`, *Change* for `Edit` and `MultiEdit`, *Matches* for `Glob`
 and `Grep`, *Results* for `WebSearch`, *Page* for `WebFetch`, and *Result* for everything
 else. A result that arrived after the turn is *Outcome · after the turn*
-whatever the tool, as below.
+whatever the tool, and a failed file change gains an *Error* section above its
+*Change* or *Content*, as below.
 
 In the default order, each section omitted when empty:
 
 1. **Invocation — always present.** This is the answer to problem 2 and the
    reason every row now has a chevron.
    - `Bash`: `CodeHighlighter language="bash" wrap` with the full command —
-     wrapped, selectable, and copied from the header.
-     Claude's `description`, when present, sits
-     above it as one muted line; Codex's `cwd`, when it is not the work
-     directory, below it as `in <path>`.
+     wrapped, selectable, and copied from the header. Claude's `description`,
+     when present, sits above it as one muted line; Codex's `cwd`, when it is
+     not the work directory, below it as `in <path>`. A wrapped block — this
+     one, the JSON fallback below, the permission card's *Raw input* — breaks
+     **only at whitespace**: each run of non-space characters is one
+     inline-block `.code-word` (`wordWrapTransformer` in `lib/shikiUtils.tsx`,
+     on shiki's tree, since a word may be two tokens of two colours), and only a
+     word longer than the line breaks inside itself. Left to the browser a line
+     also broke after a hyphen, and `--reporter=verbose` split into `--` and
+     `reporter=verbose` read as two arguments — on the screen where a command is
+     audited before it is approved. A continuation line hangs 2ch past its own
+     line's indent (`--hang`), so it reads as the rest of its line and, in
+     indented JSON, not as a shallower key. Text past `HIGHLIGHT_LIMIT`
+     ([file.md](file.md#viewer-ui)), which shiki is not given, is split into
+     lines only: a span per word would spend on the DOM what withholding it
+     saved.
    - File tools: the path on **one line** (`PathLine`), relative to the work
      directory when it is inside it and cut from the left as the row cuts it —
      the file name whole, the directories first to go — with an *Open* into the
@@ -1120,9 +1229,26 @@ In the default order, each section omitted when empty:
      anywhere took four lines on a phone, most of them the work directory every
      path shares. The full path is still in the body, a tap away rather than
      behind a hover: tapping the line writes it out absolute and wrapped, and
-     it is what the header's copy button copies. A Codex file change gives one
+     it is what the copy button copies. A Codex file change gives one
      such line per file it leaves behind — a rename's destination, since its
      source is gone.
+     **One file that is not folded** — an `Edit`, `MultiEdit` or `Write`, a
+     single-file Codex change, any single-file call on a permission card, all
+     through `ToolInvocation` — is
+     that line and nothing else: path, *Open*, and a copy button (`Copy path`)
+     at its end, one 44px row on a coarse pointer, with no visible `File`
+     header; the line is a `role="group"` named `File`, so a screen reader
+     keeps the name. The header only said what the path plainly is, and on a
+     phone the header and the path's own line stood between the row and the
+     diff the reader opened it for. A `Read`'s *File*, folded under its result,
+     and a multi-file *Files* keep the header, which is what folds or lists
+     them. The diff's first line now sits about 92px below the row at 375px on
+     a coarse pointer (8px padding + 44px path row + 12px gap + 24px *Change*
+     header + 4px), 84px on a fine one, down from about 120px. The target was
+     about 60px, and it stays missed on purpose: the 44px path row is the
+     touch floor, the 12px gap is the one every section of the body keeps,
+     and the *Change* header is what tells the diff from the path above it, so
+     the only way to 60px is to merge rows again — not worth another round.
    - `Grep` / `Glob`: pattern, path and flags as labelled lines.
    - `TodoWrite`: the checklist — a status icon per item, the done ones struck
      through. An input that is not a list of todos falls through to the
@@ -1173,11 +1299,15 @@ In the default order, each section omitted when empty:
      is its last lines: `max-h-80` at the body's `text-xs` line height is the
      last 20 lines or so, and the button that opens the rest says how much
      there is — *Show all N lines*. A failed command's last five lines are
-     marked as its error (a red rule, tint and text), since that is nearly
-     always where it says why; five holds a compiler's last errors or a test
-     runner's `FAIL` without painting a whole log red.
+     marked as its error (a red rule, tint and text — `FAILURE_TEXT` in
+     `ToolResultDisplay.tsx`), since that is nearly always where it says why;
+     five holds a compiler's last errors or a test runner's `FAIL` without
+     painting a whole log red.
    - A diff (`Edit`, `MultiEdit`, a Codex file change): the header says how
-     many lines it adds and removes, `+N −M`, and carries a switch that wraps
+     many lines it adds and removes, `+N −M` with a zero side left out (`+1`,
+     not `+1 −0`) — `LineCountsLabel` in `ProposedChange.tsx`, the one count
+     the tool body, the permission card and [the turn's
+     changes](#the-turns-changes) all draw — and carries a switch that wraps
      long lines (*Wrap long lines*). The switch is one remembered choice for
      every diff in the chat (`diffSettingsStore`, beside the Git view's
      whitespace one) rather than a state per block: a reader on a phone who
@@ -1187,6 +1317,15 @@ In the default order, each section omitted when empty:
      count as added whether or not it overwrote one. On a phone the diff has
      one narrow line-number column instead of two — see
      [Width and pointer](#width-and-pointer).
+   - A file change that **failed** (`Edit`, `MultiEdit`, `Write`): an **Error**
+     section comes before the change, holding the result — the tool's reason,
+     tag stripped — drawn as a failed command's last lines are (`FAILURE_TEXT`);
+     then the *Change* or *Content*, its header reading `not applied` and its
+     counts muted rather than green and red. The view is drawn from the input,
+     so a refused change looks exactly like one that landed, and the result —
+     the only place the reason is — was shown nowhere: on device an `Edit` whose
+     `old_string` was not in the file opened on a `+1 −2` diff that read as
+     applied, with the error never on screen.
 4. **Exit code**, when Codex reported a non-zero one, and — for a call whose
    result outlived the turn it was cut off in — one line saying so.
 
@@ -1196,6 +1335,23 @@ the answer, and an answer folded behind a chevron has not been shown. A block
 marked `not_fetched` is not that — it is a *pointer* at a file nobody read — so
 it is drawn as a reference line in the body instead
 ([above](#when-a-background-run-finishes)).
+
+A file in the strip that is not drawn as an image, here and in a user's
+message, is `AttachmentChip` (an image is a thumbnail, whose tooltip carries
+the same detail), which
+sets its own compact type — name `text-sm`, detail `text-xs` — rather than
+taking the surrounding text's, so in a bubble it does not compete with the
+message or outgrow the composer's entry for the same file. Its detail
+(`attachmentDetail`, `utils/attachment.ts`) is dimensions and size,
+`2000×1333 · 433 KB`, with the type only when the name does not already say it:
+a name with an extension does, and so does the type standing in as the name of a
+block that names no file; a name without an extension keeps it (`PNG · 357 B`).
+A badge read off the MIME subtype beside an extension was noise that turned a
+`.log` into `PLAIN`, and the composer's entry showed the size alone, so a file
+changed its description by being sent. In a user's bubble the strip has no
+divider above it (`divided={false}` in `MessageItem.tsx`): a rule the bubble's
+width under a paragraph read as that paragraph's underline, so spacing alone
+sets the files off.
 
 **Nothing opens a tool call's body but the user.** Trial and error is how an
 agent works: a turn routinely contains several failed calls, and four bodies
@@ -1511,15 +1667,15 @@ section exists to end. None of the cues is a new colour:
   list in it does not run its frame into the frame of the list the Task row
   itself sits in.
 - **The subagent's text is a note, not a message.** The main agent's text is
-  `MarkdownContent` — `prose prose-sm` in `text-th-text-primary`. The
-  subagent's is the same component in a **note** variant: body at the row's
-  `text-xs`, in `text-th-text-secondary`, with tight paragraph margins. A
-  variant rather than a wrapper's classes, because `prose-sm` and the prose
-  colour variables are set on the component itself and win over anything
-  inherited, and because its inline code is a fixed `text-sm` that has to scale
-  with the note rather than stand out of it. No bubble, no avatar, no message
-  chrome: a subagent's text is commentary between its steps, and drawing it at
-  the weight of an answer is what made it read as the main agent talking.
+  `MarkdownContent` — `prose prose-sm` in `text-th-text-primary`. The subagent's
+  is the same component in a **note** variant: body at the row's `text-xs`, in
+  `text-th-text-secondary`, with tight paragraph margins. A variant rather than
+  a wrapper's classes, because `prose-sm` and the prose colour variables are set
+  on the component itself and win over anything inherited. (Inline code needs
+  nothing of its own here: it is sized in em, [so it follows the
+  note](#the-body-problems-2-and-3).) No bubble, no avatar, no message chrome: a
+  subagent's text is commentary between its steps, and drawing it at the weight
+  of an answer is what made it read as the main agent talking.
 - **Tool rows are the same rows.** One-line rows at `text-xs` in the same list,
   folding into the same groups; the rail is what says whose they are. Restyling
   them would be a second visual language for the same call, and one more thing
@@ -1684,7 +1840,8 @@ decisions, and reachability is a CSS variant
 - The row is a `<button>` with `aria-expanded` — unconditional now, since there
   is always a body.
 - The glyph carries the status as text: `aria-label` on the settled icons
-  (`success` / `failed` / `interrupted`), `srText` on the spinner. Colour is
+  (`success` / `failed` / `interrupted`), and the running glyph is a
+  `role="status"` named `<tool> running`. Colour is
   never the only carrier — an `error` row also has a border and red detail text.
 - The second line is `aria-hidden` while it is moving and exposed once it has
   settled, so the row's accessible name stays put while stdout moves and still
@@ -1701,7 +1858,9 @@ decisions, and reachability is a CSS variant
 ## What a reviewer should check
 
 1. A `Bash` row with a 300-character command: one line, truncated from the right,
-   full command in the body, copyable.
+   full command in the body, copyable. Where it wraps, it wraps at spaces:
+   no `--flag` split after its hyphens, and each continuation line indented
+   past the start of its line.
 2. A `Read` of a deeply nested file: the file name is still visible; the
    directories are what disappeared.
 3. A backgrounded call, live: spinner + chip + activity line, elapsed counter
@@ -1715,8 +1874,12 @@ decisions, and reachability is a CSS variant
    no card above the body — with an Open only when the path is under the work
    directory.
 5. A failed `Bash`: red `X`, red detail, the row tinted red (its body is not),
-   **closed**, with the last line it printed under the title. Open it for the
-   rest.
+   **closed**, with the line that says why under the title — for a failed
+   vitest run its summary line (`Tests  2 failed | 2 passed (4)`), not
+   `Duration …`; for an
+   uncaught Node error the `Error: …` line, not a stack frame. Open it for the
+   rest. A backgrounded `Bash` that finished reads `Completed (exit code 0)`
+   (or its failure) under the command, not `Background command "…"`.
 6. A codex `commandExecution`: detail derived from `commandActions` when there is
    one, `durationMs` on the right, `exitCode` in the body.
 7. An approved `Bash`: **one** row, not two — the card takes the pending row's
@@ -1802,19 +1965,27 @@ decisions, and reachability is a CSS variant
     top, cut and faded, with *Show all* and *Full screen*; *File* is folded under
     it. Copy from the *Content* header: no line numbers in what was copied.
 30. On a 375px phone, with nothing scrolled sideways: an `Edit` of a deep file
-    shows `src/…/name.ts` on one line beside *Open*; a `TodoWrite` opens on its
+    opens on `src/…/name.ts`, *Open* and a copy button on one row, with no
+    `File` header above it, and the command or path in any section starts
+    flush with its section's label; a `TodoWrite` opens on its
     checklist alone; an MCP call lists its arguments by name; a `go test` that
     failed shows its last lines wrapped, the final five in red, with *Show all N
     lines* under them.
-31. On a 375px phone, open an `Edit`: its *Change* header reads `+N −M`; the
+31. On a 375px phone, open an `Edit`: its *Change* header reads `+N −M` (an
+    edit that only adds reads `+N`, never `−0`); the
     gutter is one narrow column and the code takes most of the width. Turn on
     *Wrap long lines*: long lines wrap with no sideways scroll, and the next
     diff — in this row, another row or a permission card — is wrapped too.
 32. On a 375px phone, a reply with a heading, a wide table and a long code
     line: the heading reads one step above the body, not a banner; the table
-    scrolls sideways on its own while the text around it stays put; the code
-    block's language and copy button sit in a bar above the code, and the code
-    scrolls under it without carrying the bar along.
+    keeps its columns at least about 9em wide — a long header at about two
+    lines, no cell four lines tall — and scrolls sideways on its own while the
+    text around it stays put, its right edge faded until scrolled to the end;
+    the code block's language and copy button sit in a bar above the code, and
+    the code scrolls under it without carrying the bar along. Inline code in
+    the text and the table is never split mid-name: a path that fits moves to
+    the next line whole, a longer one breaks after a `/`, and it is no bolder
+    than the text around it.
 33. A turn that edits two files and creates one: when it settles, the card
     and the actions replace the tail line together — `3 files changed`, the
     created file `new` with no `−`. While it ran there was no card. Interrupt
@@ -1832,6 +2003,16 @@ decisions, and reachability is a CSS variant
     up and down over it: the transcript moves, never the diff alone. The diff
     is cut and faded with *Show all* and *Full screen* under it, `+N −M` and
     the wrap switch in its header; a `Write`'s block copies its content.
+37. An `Edit` the tool refused (an `old_string` not in the file): the row's
+    second line is the reason in prose, with no `</tool_use_error>` on it.
+    Open it: an *Error* section in red above *Change*, the *Change* header
+    reading `not applied` with muted counts, and nothing in the body or the
+    copy carrying the tag.
+38. A `Grep` with an absolute `path` inside the work directory: the row reads
+    `"pattern" in src/lib`; with `path` the work directory itself, just
+    `"pattern"`.
+39. With reduced motion on: every running row, and a running group summary,
+    shows a still accent dot where the spinner was.
 
 ## Out of scope
 

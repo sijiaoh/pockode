@@ -162,6 +162,14 @@ function UnknownResultDisplay({ result }: { result: string }) {
  */
 const ERROR_TAIL_LINES = 5;
 
+/**
+ * How text that says why a call failed is drawn in its body — a failed
+ * command's last lines, a refused change's reason: red, on a red bar, so it is
+ * found without reading the rest.
+ */
+export const FAILURE_TEXT =
+	"border-l-2 border-th-error bg-th-error/10 pl-2 text-th-error";
+
 function outputLines(result: string): string[] {
 	return result.replace(/\n+$/, "").split("\n");
 }
@@ -207,12 +215,7 @@ function BashResultDisplay({
 	return (
 		<>
 			{head && <AnsiPre text={head} className="text-th-text-muted" />}
-			{tail && (
-				<AnsiPre
-					text={tail}
-					className="border-l-2 border-th-error bg-th-error/10 pl-2 text-th-error"
-				/>
-			)}
+			{tail && <AnsiPre text={tail} className={FAILURE_TEXT} />}
 		</>
 	);
 }

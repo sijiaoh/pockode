@@ -144,11 +144,20 @@ describe("attachmentFileName", () => {
 });
 
 describe("attachmentDetail", () => {
-	it("leaves out what the agent did not report", () => {
+	it("gives what the agent reported but not the type the name says", () => {
 		expect(
 			attachmentDetail(block({ size: 443_000, width: 2000, height: 1333 })),
-		).toBe("PNG · 2000×1333 · 433 KB");
-		expect(attachmentDetail(block())).toBe("PNG");
+		).toBe("2000×1333 · 433 KB");
+		expect(attachmentDetail(block())).toBe("");
+		expect(attachmentDetail(block({ name: "shot.png", size: 357 }))).toBe(
+			"357 B",
+		);
+	});
+
+	it("gives the type when the name has no extension to say it", () => {
+		expect(
+			attachmentDetail(block({ path: "/tmp/screenshot", size: 357 })),
+		).toBe("PNG · 357 B");
 	});
 });
 

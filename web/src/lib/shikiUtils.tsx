@@ -1,5 +1,6 @@
 import { getDiffViewHighlighter } from "@git-diff-view/shiki";
 import { useIsExpanded } from "@pockode/shared";
+import type { Element, ElementContent } from "hast";
 import * as React from "react";
 import { useShikiHighlighter } from "react-shiki";
 import {
@@ -8,6 +9,7 @@ import {
 	createCssVariablesTheme,
 	createHighlighter,
 	type Highlighter,
+	type ShikiTransformer,
 } from "shiki";
 import { CopyButton } from "../components/ui/CopyButton";
 import { splitNativePath } from "../utils/path";
@@ -73,6 +75,161 @@ const cssVarTheme = createCssVariablesTheme({
 	variablePrefix: "--shiki-",
 });
 
+const WORD = "code-word";
+const SPACE_SPLIT = /(\s+)/;
+/** The tab stop a `<pre>` uses unless told otherwise. */
+const TAB_WIDTH = 8;
+
+/**
+ * How far a wrapped line's continuation is indented: 2ch past the line's own
+ * indent, or nothing to set for an unindented line (index.css defaults
+ * `--hang` to 2ch). An indented JSON key wrapped back to 2ch would read as a
+ * shallower key.
+ */
+function lineHang(line: string): string | undefined {
+	const indent = /^[ \t]*/.exec(line)?.[0] ?? "";
+	if (!indent) return undefined;
+	let width = 0;
+	for (const char of indent) width += char === "\t" ? TAB_WIDTH : 1;
+	return `${width + 2}ch`;
+}
+
+/** The single text a shiki token holds, or null for any other shape. */
+function tokenText(token: ElementContent): string | null {
+	if (token.type === "text") return token.value;
+	if (
+		token.type === "element" &&
+		token.children.length === 1 &&
+		token.children[0].type === "text"
+	) {
+		return token.children[0].value;
+	}
+	return null;
+}
+
+/**
+ * A wrapped block's lines with every run of non-space characters held together
+ * as one `.code-word`, so the browser breaks the line only between words.
+ *
+ * Left to itself it also breaks after a hyphen, and in a command that splits
+ * `--reporter=verbose` into `--` and `reporter=verbose` — which read as two
+ * arguments, on the one screen where the command is being audited before it is
+ * approved. No CSS turns the hyphen's break off on its own; holding the word
+ * together does, and a word too long for a whole line still breaks inside
+ * itself (index.css, `.code-word`).
+ *
+ * Done on shiki's tree because its tokens do not follow words: `--reporter`
+ * and `=verbose` may be two colours of one word. A token of any shape but one
+ * text is kept whole as it came — shiki emits none today, and splitting one
+ * would drop whatever is past its first child.
+ */
+export const wordWrapTransformer: ShikiTransformer = {
+	name: "pockode:word-wrap",
+	line(node) {
+		const children: ElementContent[] = [];
+		let word: Element | null = null;
+		let lineText = "";
+		for (const token of node.children) {
+			const text = tokenText(token);
+			if (text === null) {
+				word = null;
+				children.push(token);
+				continue;
+			}
+			lineText += text;
+			for (const piece of text.split(SPACE_SPLIT)) {
+				if (!piece) continue;
+				if (/^\s/.test(piece)) {
+					word = null;
+					children.push({ type: "text", value: piece });
+					continue;
+				}
+				if (!word) {
+					word = {
+						type: "element",
+						tagName: "span",
+						properties: { class: WORD },
+						children: [],
+					};
+					children.push(word);
+				}
+				word.children.push(
+					token.type === "element"
+						? { ...token, children: [{ type: "text", value: piece }] }
+						: { type: "text", value: piece },
+				);
+			}
+		}
+		node.children = children;
+		const hang = lineHang(lineText);
+		if (hang) node.properties.style = `--hang:${hang}`;
+	},
+	// The lines are blocks in a wrapped block (index.css), so the newline shiki
+	// puts between them would be a blank line of its own — and so would the
+	// empty line after a final newline, which a `<pre>` used to swallow.
+	code(node) {
+		const children = node.children.filter(
+			(child) => !(child.type === "text" && child.value === "\n"),
+		);
+		const last = children[children.length - 1];
+		if (last?.type === "element" && last.children.length === 0) children.pop();
+		node.children = children;
+	},
+};
+
+const WRAP_OPTIONS = { transformers: [wordWrapTransformer] };
+
+/**
+ * The tree `wordWrapTransformer` builds, for text shiki has not seen — before
+ * it answers, or past the size it is allowed. The same shape, so a block does
+ * not change height the moment its colours arrive.
+ *
+ * Without `words` the lines are left unsplit: text past the size shiki is
+ * allowed is withheld from it to spare the main thread, and a span per word of
+ * it would spend that saving on the DOM instead.
+ */
+export function WrappedPlain({
+	text,
+	words = true,
+}: {
+	text: string;
+	words?: boolean;
+}) {
+	return (
+		<code>
+			{text
+				.replace(/\n$/, "")
+				.split("\n")
+				.map((line, lineIndex) => {
+					const hang = lineHang(line);
+					return (
+						<span
+							// biome-ignore lint/suspicious/noArrayIndexKey: the lines of one fixed string
+							key={lineIndex}
+							className="line"
+							style={
+								hang ? ({ "--hang": hang } as React.CSSProperties) : undefined
+							}
+						>
+							{words
+								? line.split(SPACE_SPLIT).map((piece, index) =>
+										index % 2 === 1 ? (
+											piece
+										) : piece ? (
+											// biome-ignore lint/suspicious/noArrayIndexKey: as above
+											<span key={index} className={WORD}>
+												{piece}
+											</span>
+										) : null,
+									)
+								: line}
+						</span>
+					);
+				})}
+		</code>
+	);
+}
+
 export function CodeHighlighter({
 	children,
 	language,
@@ -105,6 +262,7 @@ export function CodeHighlighter({
 		plain ? "" : children,
 		plain ? undefined : language,
 		cssVarTheme,
+		wrap ? WRAP_OPTIONS : undefined,
 	);
 
 	const style = { "--code-font-size": `${fontSize}px` } as React.CSSProperties;
@@ -124,11 +282,12 @@ export function CodeHighlighter({
 				/>
 			)}
 			<pre className={preClass} style={style}>
-				{plain ? (
-					<code>{children}</code>
-				) : (
-					(highlighted ?? <code>{children}</code>)
-				)}
+				{(!plain && highlighted) ||
+					(wrap ? (
+						<WrappedPlain text={children} words={!plain} />
+					) : (
+						<code>{children}</code>
+					))}
 			</pre>
 		</div>
 	);

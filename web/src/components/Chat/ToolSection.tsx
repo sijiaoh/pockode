@@ -107,7 +107,7 @@ export function Section({
 	);
 
 	return (
-		<div className="space-y-1">
+		<div className="tool-section space-y-1">
 			{header}
 			{collapsible ? (
 				<CollapsibleBody expanded={open}>{body}</CollapsibleBody>

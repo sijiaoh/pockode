@@ -856,9 +856,9 @@ function ChatPanel({
 	// The decision lives here rather than in either folded component because
 	// this is the only place that knows all three, and the two of them know
 	// nothing of each other. The card is handed the same flag rather than asking
-	// the screen itself: the room it takes — its whole rectangle, a tighter header
-	// and footer — exists only while the chrome is folded, and one flag is what
-	// keeps the two from ever disagreeing.
+	// the screen itself: the room it takes — its whole rectangle, its header
+	// folded into the footer — exists only while the chrome is folded, and one
+	// flag is what keeps the two from ever disagreeing.
 	const [answerPanelFocused, setAnswerPanelFocused] = useState(false);
 	// A closed panel has no focus to report, and its last word on the way out is
 	// not always delivered — a card unmounted under the caret fires no blur. So
@@ -1383,9 +1383,7 @@ function ChatPanel({
 									status === "connected" && !isChatPending && !promptOwnsInput
 								}
 								sendBlockedReason={
-									promptOwnsInput
-										? "Answer the permission request to send"
-										: undefined
+									promptOwnsInput ? "Allow or deny to send" : undefined
 								}
 								disabled={!isSessionResolved}
 								turnOpen={turnOpen}

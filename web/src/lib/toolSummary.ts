@@ -1,4 +1,8 @@
-import { relativeToWorkDir, splitNativePath } from "../utils/path";
+import {
+	isSameNativePath,
+	relativeToWorkDir,
+	splitNativePath,
+} from "../utils/path";
 import { codexChangePaths } from "./codexChanges";
 import { firstLine } from "./subagentRun";
 
@@ -105,6 +109,18 @@ function pathSummary(
 ): ToolSummary {
 	const { head, tail } = pathParts(filePath, workDir);
 	return { title, detail: head, detailTail: tail, mono: true };
+}
+
+/**
+ * Where a search ran, as its row names it. Claude nearly always passes an
+ * absolute path, which on a phone left room for the home directory and nothing
+ * else — so a scope inside the work directory is named relative to it, and the
+ * work directory itself, being where every search runs anyway, is not named.
+ */
+function grepScope(scope: string | undefined, workDir: string) {
+	if (!scope) return undefined;
+	if (workDir && isSameNativePath(scope, workDir)) return undefined;
+	return relativeToWorkDir(scope, workDir) ?? scope;
 }
 
 interface CommandAction {
@@ -280,7 +296,7 @@ export function toolSummary(
 	// searched for.
 	if (toolName === "Grep") {
 		const pattern = str(obj.pattern) ?? "";
-		const scope = str(obj.path);
+		const scope = grepScope(str(obj.path), workDir);
 		return {
 			title: "Grep",
 			detail: scope ? `"${pattern}" in ${scope}` : `"${pattern}"`,

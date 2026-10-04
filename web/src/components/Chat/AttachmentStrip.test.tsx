@@ -189,7 +189,7 @@ describe("AttachmentStrip", () => {
 
 	// The block claimed an image and the bytes turned out not to be one, so
 	// there is nothing to draw and the server sent no reason for it. Saying only
-	// the type and size here would read as nothing being wrong.
+	// its size here would read as nothing being wrong.
 	it("says so when what arrives is not the image it claimed", async () => {
 		getAttachment.mockResolvedValue(
 			imageContent({ mime: "text/xml", content: "<svg/>", encoding: "text" }),

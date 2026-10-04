@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
 	formatFilePath,
+	isSameNativePath,
 	relativeToWorkDir,
 	splitNativePath,
 	splitPath,
@@ -159,5 +160,23 @@ describe("relativeToWorkDir", () => {
 	it("is null for the work directory itself, and with no work directory", () => {
 		expect(relativeToWorkDir(posixWorkDir, posixWorkDir)).toBeNull();
 		expect(relativeToWorkDir("/Users/me/project/src/main.go", "")).toBeNull();
+	});
+});
+
+describe("isSameNativePath", () => {
+	it("ignores a trailing separator and which separator each side uses", () => {
+		expect(isSameNativePath("/home/me/project/", "/home/me/project")).toBe(
+			true,
+		);
+		expect(isSameNativePath("C:\\work\\repo", "C:/work/repo")).toBe(true);
+	});
+
+	it("tells a directory from one whose name it begins", () => {
+		expect(isSameNativePath("/home/me/project2", "/home/me/project")).toBe(
+			false,
+		);
+		expect(isSameNativePath("/home/me/project/src", "/home/me/project")).toBe(
+			false,
+		);
 	});
 });

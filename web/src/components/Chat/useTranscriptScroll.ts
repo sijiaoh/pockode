@@ -22,6 +22,36 @@ import {
  */
 const AT_BOTTOM_THRESHOLD = 50;
 /**
+ * How far up from the view's bottom edge the scroll button reaches, hit area
+ * included: its `bottom-3` offset, plus the coarse pointer's 44px floor, plus a
+ * little air. Whatever must stay pressable is kept out of this band.
+ */
+const BUTTON_BAND = 60;
+
+const KEEP_CLEAR_ATTR = "data-keep-clear";
+
+/**
+ * Marks controls the scroll button must never be drawn over — a pending
+ * permission card's answers. Spread onto them: `<div {...keepClearProps}>`.
+ */
+export const keepClearProps = { [KEEP_CLEAR_ATTR]: "" };
+
+/**
+ * Whether anything marked keep-clear is in the band the button sits in. Asked
+ * of the layout, not of the rows: what is below a card — the turn-end slot, a
+ * message sent after it — moves the card in and out of the band by its height,
+ * which is how a fixed "near the end" distance once let the button cover Allow.
+ */
+function keepClearInBand(el: HTMLElement): boolean {
+	const bottom = el.getBoundingClientRect().bottom;
+	for (const node of el.querySelectorAll(`[${KEEP_CLEAR_ATTR}]`)) {
+		const rect = node.getBoundingClientRect();
+		if (rect.bottom > bottom - BUTTON_BAND && rect.top < bottom) return true;
+	}
+	return false;
+}
+
+/**
  * Movement below this is not worth a write. Both heights a scroll box is made of
  * are integers while `scrollTop` is not, so "pinned to the end" is only ever
  * reached to within a pixel, and a write that moves nothing still cancels iOS
@@ -90,10 +120,10 @@ interface Options {
 
 export interface TranscriptScroll {
 	/**
-	 * Only shown while reading somewhere else, and not within reach of the end:
-	 * at the tail it does nothing, and at the end it would only cover the last
-	 * row's bottom-right controls — a permission card's Allow among them — where
-	 * no further scrolling can move them out from under it.
+	 * Only shown while reading somewhere else, not within reach of the end, and
+	 * never over a control marked keep-clear (`keepClearProps`): at the tail it
+	 * does nothing, at the end there is nothing left below to go to, and over a
+	 * permission card's answers it would take the press meant for them.
 	 */
 	showScrollButton: boolean;
 	/** The end of the conversation has changed since the reader left it. */
@@ -133,6 +163,7 @@ export function useTranscriptScroll({
 	const lastTopRef = useRef(0);
 	const [isAnchored, setIsAnchored] = useState(false);
 	const [isNearEnd, setIsNearEnd] = useState(true);
+	const [isOverKeepClear, setIsOverKeepClear] = useState(false);
 	const [hasUnseen, setHasUnseen] = useState(false);
 	// Read from the scroll handler, which is attached once and so cannot close
 	// over `messages`; kept current by the per-commit effect below.
@@ -164,6 +195,7 @@ export function useTranscriptScroll({
 	const noteEnd = useCallback((el: HTMLElement) => {
 		const nearEnd = maxScrollTop(el) - el.scrollTop <= AT_BOTTOM_THRESHOLD;
 		setIsNearEnd(nearEnd);
+		setIsOverKeepClear(keepClearInBand(el));
 		if (nearEnd && stateRef.current === "anchored") {
 			leftTailRef.current = tailSignature(messagesRef.current);
 			setHasUnseen(false);
@@ -360,7 +392,7 @@ export function useTranscriptScroll({
 	);
 
 	return {
-		showScrollButton: isAnchored && !isNearEnd,
+		showScrollButton: isAnchored && !isNearEnd && !isOverKeepClear,
 		hasUnseen,
 		scrollToBottom,
 		jumpTo,

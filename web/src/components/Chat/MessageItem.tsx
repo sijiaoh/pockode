@@ -58,6 +58,7 @@ import { ToolRow } from "./ToolRow";
 import { Section } from "./ToolSection";
 import { TurnChangesCard } from "./TurnChangesCard";
 import TurnTail from "./TurnTail";
+import { keepClearProps } from "./useTranscriptScroll";
 
 interface SystemItemProps {
 	content: string;
@@ -503,9 +504,12 @@ function AlwaysAllowEffect({
 // A decision, not a caption: the one place in this `text-xs` card that steps
 // up to `text-sm`. The card is a container that can grow, so the box itself
 // grows to the floor rather than borrowing a `touch-target` overlay.
+// One line at any width: the secondary buttons take their label's width and
+// Allow, the primary, takes what is left — a label wrapped at 360px made one
+// button two lines tall beside two that are one.
 const PERMISSION_BUTTON =
-	"min-h-9 rounded-md text-sm font-medium pointer-coarse:min-h-11 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-th-accent";
-const PERMISSION_SECONDARY = `${PERMISSION_BUTTON} flex-1 border border-th-border bg-th-bg-primary text-th-text-primary hover:bg-th-overlay-hover`;
+	"min-h-9 whitespace-nowrap rounded-md px-3 text-sm font-medium pointer-coarse:min-h-11 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-th-accent";
+const PERMISSION_SECONDARY = `${PERMISSION_BUTTON} flex-none border border-th-border bg-th-bg-primary text-th-text-primary hover:bg-th-overlay-hover`;
 
 // What an expired permission request says, per reason. Every one of them states
 // the same outcome — the tool did not run — because a permission that is not
@@ -649,7 +653,7 @@ function PermissionRequestItem({
 					    Enter or Escape shortcut — Escape already interrupts the turn
 					    (docs/answering-ui.md#who-owns-escape), and a stray key on a
 					    prompt that runs arbitrary commands costs too much. */}
-					<div className="flex gap-2 p-2">
+					<div className="flex gap-2 p-2" {...keepClearProps}>
 						<button
 							type="button"
 							onClick={() => onRespond(request, "deny")}
@@ -672,7 +676,7 @@ function PermissionRequestItem({
 						<button
 							type="button"
 							onClick={() => onRespond(request, "allow")}
-							className={`${PERMISSION_BUTTON} flex-[1.4] bg-th-accent text-th-accent-text hover:opacity-90`}
+							className={`${PERMISSION_BUTTON} flex-1 bg-th-accent text-th-accent-text hover:opacity-90`}
 						>
 							Allow
 						</button>
@@ -1220,13 +1224,15 @@ const MessageItem = memo(function MessageItem({
 						)
 					)}
 					{/* The files are part of what was sent, so they are inside the
-					    bubble; a message can be nothing else. */}
+					    bubble; a message can be nothing else. Spacing alone sets them
+					    off from the text: a rule the bubble's width under a paragraph
+					    reads as that paragraph's underline. */}
 					{message.attachments && (
 						<AttachmentStrip
 							files={message.attachments}
 							sessionId={sessionId}
 							onOpenFile={onOpenFile}
-							divided={message.content !== ""}
+							divided={false}
 						/>
 					)}
 				</div>

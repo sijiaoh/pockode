@@ -18,6 +18,7 @@ import {
 	noteApplies,
 	type QuestionSelection,
 } from "../../utils/questionAnswer";
+import ChoiceInput from "./ChoiceInput";
 import QuestionForm, { answerFieldClass } from "./QuestionForm";
 
 interface Props {
@@ -64,10 +65,10 @@ interface Props {
 	/**
 	 * Whether the host has folded its chrome away to make room for this card.
 	 * The card takes that room in the same breath — the whole rectangle rather
-	 * than 85% of it, and a tighter header and footer — and it does so off this
-	 * one flag rather than asking the screen itself, so the card can never be in
-	 * its short-viewport shape while the chrome is still up, or the other way
-	 * round (docs/answering-ui.md §3, "Room on a short viewport").
+	 * than 85% of it, and its header folded into a 53px footer — and it does so
+	 * off this one flag rather than asking the screen itself, so the card can
+	 * never be in its short-viewport shape while the chrome is still up, or the
+	 * other way round (docs/answering-ui.md §3, "Room on a short viewport").
 	 */
 	chromeCollapsed?: boolean;
 	/**
@@ -99,6 +100,12 @@ interface StaleBlock {
 
 const ALREADY_ANSWERED = "Already answered elsewhere.";
 
+/** What the user types into, as opposed to picks: the fields worth revealing. */
+const TEXT_FIELD = 'textarea, input:not([type="checkbox"]):not([type="radio"])';
+
+/** One line of the body's text (16px at a 1.5 line box) kept below the field. */
+const REVEAL_MARGIN_PX = 24;
+
 /**
  * The one surface that answers questions.
  *
@@ -116,7 +123,7 @@ const ALREADY_ANSWERED = "Already answered elsewhere.";
  * content needs, capped at 85% of the rectangle, so one short question is a
  * small card rather than a wall. The one exception is a short viewport with
  * the host's chrome folded away (`chromeCollapsed`), where the cap is the whole
- * rectangle and the header and footer are tighter — and its converse, the
+ * rectangle and the header is folded into the footer — and its converse, the
  * caret in the composer, where the card is not on the screen at all
  * (`yielded`).
  *
@@ -283,6 +290,56 @@ function AnswerPanel({
 		anchoredRef.current = anchorRequestId;
 		target.scrollIntoView({ block: "start" });
 	}, [anchorRequestId]);
+
+	// Keeps the field being typed in on screen, with a line of what follows it.
+	// Not left to the browser: it scrolls a focused field into view when focus
+	// arrives, at best, and not when the soft keyboard then shortens the body
+	// under it or when the field grows a line — and on a short viewport any one
+	// of those puts the caret behind the footer.
+	useEffect(() => {
+		const body = bodyRef.current;
+		if (!body) return;
+		const typingIn = (): HTMLElement | null => {
+			const el = document.activeElement;
+			return el instanceof HTMLElement &&
+				body.contains(el) &&
+				el.matches(TEXT_FIELD)
+				? el
+				: null;
+		};
+		const reveal = () => {
+			const field = typingIn();
+			if (!field) return;
+			const view = body.getBoundingClientRect();
+			const box = field.getBoundingClientRect();
+			// The bottom first: a field taller than the body is typed into at its
+			// end, so that is the half to keep.
+			const below = box.bottom + REVEAL_MARGIN_PX - view.bottom;
+			const above = view.top - (box.top - REVEAL_MARGIN_PX);
+			if (below > 0) body.scrollTop += below;
+			else if (above > 0) body.scrollTop -= Math.min(above, -below);
+		};
+		const observer = new ResizeObserver(reveal);
+		observer.observe(body);
+		const handleFocusIn = (e: FocusEvent) => {
+			if (!(e.target instanceof HTMLElement) || !e.target.matches(TEXT_FIELD))
+				return;
+			observer.observe(e.target);
+			reveal();
+		};
+		const handleFocusOut = (e: FocusEvent) => {
+			if (e.target instanceof HTMLElement && e.target !== body) {
+				observer.unobserve(e.target);
+			}
+		};
+		body.addEventListener("focusin", handleFocusIn);
+		body.addEventListener("focusout", handleFocusOut);
+		return () => {
+			observer.disconnect();
+			body.removeEventListener("focusin", handleFocusIn);
+			body.removeEventListener("focusout", handleFocusOut);
+		};
+	}, []);
 
 	const update = useCallback(
 		(requestId: string, change: Partial<QuestionDraft>) => {
@@ -541,31 +598,32 @@ function AnswerPanel({
 				    `Sheet`'s, copied rather than shared: what makes them look alike
 				    is the tokens, and a `variant` on a shared modal would make every
 				    reader of `Sheet` — in both frontends — check which half they are
-				    in first. Folded chrome tightens both to what their controls need,
-				    so the body keeps room for the field being typed in and a line
-				    either side of it: the footer to Send's 44px, the header to the
-				    close button's 44px hit area and no tighter — the card clips, and
-				    with nothing above it but the session header, any of that hit
-				    area left outside the card could not be pressed. */}
-				<div
-					className={`flex shrink-0 items-center justify-between border-b border-th-border px-4 ${chromeCollapsed ? "py-2.5" : "py-3"}`}
-				>
-					<h2
-						id={titleId}
-						className="min-w-0 truncate text-base font-bold text-th-text-primary"
-					>
+				    in first.
+
+				    Folded chrome folds the header into the footer: the title's count
+				    is the footer's "N of M ready" said a second time, and its row is
+				    a third of the body at that height — the room the field being
+				    typed in and a line either side of it need. The title stays for a
+				    screen reader, which names the dialog by it. */}
+				{chromeCollapsed ? (
+					<h2 id={titleId} className="sr-only">
 						{title}
 					</h2>
-					<button
-						type="button"
-						onClick={handleDismiss}
-						disabled={sending}
-						aria-label="Close"
-						className="touch-target -my-1.5 -mr-1 flex size-9 shrink-0 items-center justify-center rounded text-th-text-muted hover:bg-th-bg-tertiary hover:text-th-text-primary disabled:cursor-not-allowed disabled:opacity-50"
-					>
-						<X className="size-5" />
-					</button>
-				</div>
+				) : (
+					<div className="flex shrink-0 items-center justify-between border-b border-th-border px-4 py-3">
+						<h2
+							id={titleId}
+							className="min-w-0 truncate text-base font-bold text-th-text-primary"
+						>
+							{title}
+						</h2>
+						<CloseButton
+							onClick={handleDismiss}
+							disabled={sending}
+							className="-my-1.5 -mr-1"
+						/>
+					</div>
+				)}
 				{/* overscroll-y-contain: an overscroll at either end stops here
 				    rather than leaving the panel — on touch that is the browser's own
 				    rubber-band and pull-to-refresh, reached by flicking through the
@@ -586,20 +644,37 @@ function AnswerPanel({
 							Nothing left to answer.
 						</p>
 					)}
-					{blocks.map((block) => (
-						<QuestionBlock
-							key={block.question.request_id}
-							block={block}
-							draft={drafts[block.question.request_id] ?? EMPTY_DRAFT}
-							disabled={sending}
-							onChange={update}
-							onDismiss={dismiss}
-						/>
-					))}
+					{/* The questions sit on the card itself, a rule between two: a box
+					    around each would be a third border around every option, and
+					    the margins it takes are the question's own room on a phone.
+					    The options keep theirs, being what is pressed. */}
+					<div className="divide-y divide-th-border">
+						{blocks.map((block) => (
+							<QuestionBlock
+								key={block.question.request_id}
+								block={block}
+								draft={drafts[block.question.request_id] ?? EMPTY_DRAFT}
+								disabled={sending}
+								onChange={update}
+								onDismiss={dismiss}
+							/>
+						))}
+					</div>
 				</div>
+				{/* Folded, the footer is Send's 44px and a 4px edge. The close button
+				    goes to the far end from Send, so a thumb reaching for one does not
+				    land on the other; with nothing left to answer, Send is already
+				    Close. */}
 				<div
 					className={`flex shrink-0 gap-3 border-t border-th-border px-4 ${chromeCollapsed ? "py-1" : "py-4"}`}
 				>
+					{chromeCollapsed && liveBlocks.length > 0 && (
+						<CloseButton
+							onClick={handleDismiss}
+							disabled={sending}
+							className="-ml-1 self-center"
+						/>
+					)}
 					<Footer
 						receipt={
 							!receiptShown
@@ -617,6 +692,30 @@ function AnswerPanel({
 				</div>
 			</section>
 		</div>
+	);
+}
+
+/** Its 36px box reaches 44px through `touch-target`, under a thumb. */
+function CloseButton({
+	onClick,
+	disabled,
+	className,
+}: {
+	onClick: () => void;
+	disabled: boolean;
+	/** Where it sits in its row. */
+	className: string;
+}) {
+	return (
+		<button
+			type="button"
+			onClick={onClick}
+			disabled={disabled}
+			aria-label="Close"
+			className={`touch-target flex size-9 shrink-0 items-center justify-center rounded text-th-text-muted hover:bg-th-bg-tertiary hover:text-th-text-primary disabled:cursor-not-allowed disabled:opacity-50 ${className}`}
+		>
+			<X className="size-5" />
+		</button>
 	);
 }
 
@@ -725,7 +824,7 @@ function QuestionBlock({
 	return (
 		<div
 			data-answer-block={requestId}
-			className={`rounded-lg border border-th-border p-3 ${stale ? "opacity-60" : ""}`}
+			className={`py-4 first:pt-0 last:pb-0 ${stale ? "opacity-60" : ""}`}
 		>
 			{stale && (
 				<div className="mb-2 flex items-start gap-2 text-xs text-th-text-muted">
@@ -771,12 +870,12 @@ function QuestionBlock({
 			    it is the user's lever for a question the agent forgot to withdraw,
 			    and because it travels as a message it wakes the agent up. */}
 			<label className="mt-2 flex items-center gap-2 pointer-coarse:min-h-11 text-xs text-th-text-secondary">
-				<input
+				<ChoiceInput
 					type="checkbox"
+					tone={stale || disabled ? "withheld" : "actionable"}
 					checked={draft.declined}
 					disabled={!!stale || disabled}
 					onChange={() => onChange(requestId, { declined: !draft.declined })}
-					className="accent-th-accent"
 				/>
 				Won&apos;t answer
 			</label>

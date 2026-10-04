@@ -1116,6 +1116,40 @@ describe("MessageList following the tail", () => {
 		).toBeInTheDocument();
 	});
 
+	// Rows below a pending card — the turn-end slot keeps its height while the
+	// turn waits — can hold it more than "near the end" away from the end, so
+	// distance cannot be what keeps the button off its answers.
+	it("keeps the button off a pending permission card's answers", () => {
+		render(
+			<MessageList
+				sessionId="session-1"
+				messages={[...transcript, permissionMessage("card", "p1")]}
+				onPermissionRespond={() => {}}
+			/>,
+		);
+		const scroller = scrollContainer();
+		stubScrollBox(scroller, { contentHeight: 1000, viewportHeight: 500 });
+		triggerResize(scroller);
+		const rect = (top: number, bottom: number) => ({ top, bottom }) as DOMRect;
+		vi.spyOn(scroller, "getBoundingClientRect").mockReturnValue(rect(0, 500));
+		const answers = screen.getByRole("button", { name: "Allow" }).parentElement;
+		if (!answers) throw new Error("no answer row");
+		const answersAt = vi
+			.spyOn(answers, "getBoundingClientRect")
+			.mockReturnValue(rect(-200, -150));
+
+		dragTo(scroller, 200);
+		expect(
+			screen.getByRole("button", { name: "Scroll to bottom" }),
+		).toBeInTheDocument();
+
+		answersAt.mockReturnValue(rect(440, 490));
+		dragTo(scroller, 190);
+		expect(
+			screen.queryByRole("button", { name: /Scroll to bottom/ }),
+		).toBeNull();
+	});
+
 	// A send to an idle agent lands with its reply's placeholder below it, so the
 	// newest row is not the one the reader typed.
 	it("returns to the tail when a send to an idle agent opens a reply below it", () => {

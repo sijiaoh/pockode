@@ -4,8 +4,7 @@ import type { GroupSummary } from "../../lib/toolGroups";
 import { stepsLabel } from "../../lib/toolRun";
 import { toolSummary } from "../../lib/toolSummary";
 import { useWSStore } from "../../lib/wsStore";
-import { Spinner } from "../ui";
-import { Chip, Detail, RowButton, ToolMeta } from "./ToolRow";
+import { Chip, Detail, RowButton, RunningGlyph, ToolMeta } from "./ToolRow";
 
 interface Props {
 	summary: GroupSummary;
@@ -56,14 +55,7 @@ export function ToolGroupSummary({ summary, expanded, onToggle }: Props) {
 			<RowButton
 				expanded={expanded}
 				onToggle={onToggle}
-				glyph={
-					<Spinner
-						variant="current"
-						size="h-3 w-3"
-						className="mt-0.5 shrink-0"
-						srText="Tool calls running"
-					/>
-				}
+				glyph={<RunningGlyph label="Tool calls running" />}
 			>
 				<CurrentStep summary={summary} />
 			</RowButton>

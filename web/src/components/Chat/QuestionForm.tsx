@@ -8,6 +8,7 @@ import {
 } from "../../utils/questionAnswer";
 import { MarkdownContent, RecommendedTag } from "../ui";
 import { inputClass } from "../ui/inputClass";
+import ChoiceInput, { type ChoiceTone } from "./ChoiceInput";
 
 export interface QuestionFormProps {
 	question: AskUserQuestion;
@@ -146,13 +147,11 @@ function QuestionForm({
 		}`;
 	};
 
-	const choiceInputClass = `mt-0.5 ${
-		!disabled
-			? "accent-th-accent"
-			: settled
-				? "accent-th-success"
-				: "accent-th-text-muted"
-	}`;
+	const choiceTone: ChoiceTone = !disabled
+		? "actionable"
+		: settled
+			? "settled"
+			: "withheld";
 	// A pick that is not going out mutes its word along with its border.
 	const pickedTextClass = (selected: boolean) =>
 		disabled && selected && withheld
@@ -198,13 +197,14 @@ function QuestionForm({
 						const selected = selection.labels.includes(opt.label);
 						return (
 							<label key={opt.label} className={rowClass(selected)}>
-								<input
+								<ChoiceInput
 									type={inputType}
+									tone={choiceTone}
 									name={name}
 									checked={selected}
 									disabled={disabled}
 									onChange={() => onSelectOption(opt.label)}
-									className={choiceInputClass}
+									className="mt-0.5"
 								/>
 								<div className="min-w-0 flex-1">
 									<div
@@ -235,14 +235,15 @@ function QuestionForm({
 					    read out as part of the control's name, and a drag that starts
 					    in it and ends on the word would toggle Other as a label click. */}
 					<div className={rowClass(otherChecked)}>
-						<input
+						<ChoiceInput
 							id={otherId}
 							type={inputType}
+							tone={choiceTone}
 							name={name}
 							checked={otherChecked}
 							disabled={disabled}
 							onChange={() => onSelectOther()}
-							className={choiceInputClass}
+							className="mt-0.5"
 						/>
 						<div className="min-w-0 flex-1">
 							<label

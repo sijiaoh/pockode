@@ -11,7 +11,11 @@ import {
 import { useWSStore } from "../../lib/wsStore";
 import type { ContentPart } from "../../types/message";
 import { CollapsibleBody } from "../ui";
-import { ProposedChange, proposedChangeHeader } from "./ProposedChange";
+import {
+	LineCountsLabel,
+	ProposedChange,
+	proposedChangeHeader,
+} from "./ProposedChange";
 import { anchorCandidateProps } from "./scrollAnchor";
 import { PathLine } from "./ToolInvocation";
 import { Chip, Detail, RowButton } from "./ToolRow";
@@ -50,20 +54,6 @@ function spokenLines(lines: LineCounts | null): string | undefined {
 	if (added > 0) return `${plural(added, "line")} added`;
 	if (removed > 0) return `${plural(removed, "line")} removed`;
 	return undefined;
-}
-
-/** `+N −M`, with a side that is zero or unknown left out rather than `−0`. */
-function Counts({ lines }: { lines: LineCounts | null }) {
-	if (!lines) return null;
-	const { added, removed = 0 } = lines;
-	if (added === 0 && removed === 0) return null;
-	return (
-		<span className="flex shrink-0 gap-1.5 font-mono tabular-nums">
-			{added > 0 && <span className="text-th-success">+{added}</span>}
-			{/* U+2212, the minus sign: a hyphen is narrower than the plus. */}
-			{removed > 0 && <span className="text-th-error">−{removed}</span>}
-		</span>
-	);
 }
 
 /**
@@ -188,7 +178,7 @@ function FileRow({
 					    has to, or the counts would sit against the name. */}
 					{!file.dir && <span className="flex-1" />}
 					{file.marker && <Chip>{file.marker}</Chip>}
-					<Counts lines={file.lines} />
+					<LineCountsLabel lines={file.lines} />
 				</span>
 			</RowButton>
 			<div id={bodyId}>
@@ -267,7 +257,7 @@ export function TurnChangesCard({ parts, onOpenFile }: Props) {
 									{plural(files.length, "file")} changed
 								</span>
 								<span aria-hidden className="contents">
-									<Counts lines={lines} />
+									<LineCountsLabel lines={lines} />
 								</span>
 								{spokenTotal && <span className="sr-only">{spokenTotal}</span>}
 							</span>

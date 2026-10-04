@@ -22,8 +22,8 @@ interface Props {
 	/** Absent when the host cannot navigate to a file. */
 	onOpenFile?: (path: string) => void;
 	/**
-	 * Draws the rule that sets the strip off from what is above it. Off where
-	 * nothing is: a message that is only files.
+	 * Draws the rule that sets the strip off from the header line above it. Off
+	 * in a user bubble, where what is above is the message's own text.
 	 */
 	divided?: boolean;
 }

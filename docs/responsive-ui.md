@@ -815,15 +815,15 @@ One consequence is shared by all nine: the keyboard focus ring now outlines the
 time this repository could not render: Playwright's `headless_shell` is missing
 `libatk-1.0.so.0` and the other system libraries beside it, and installing them
 needs `sudo`. It can now —
-[`scripts/question-walkthrough/`](../scripts/question-walkthrough/README.md)
-unpacks those libraries without root and drives the real server at phone sizes
-on a coarse pointer — but it only walks the answering UI, and batch 1's screens
-have not been through it. So every height, offset and clearance in this section
-— and the two technique precedents this batch contributed above — is arithmetic
-over `padding + line box`. What *is* machine-checked is the static reading of
-the class lists in `touchTarget.test.ts` and the behavioural assertions in the
-component suites. The walkthrough remains the acceptance criterion, and it
-remains owed.
+[`scripts/ui-walkthrough/`](../scripts/ui-walkthrough/README.md) unpacks those
+libraries without root and drives the real server at phone sizes on a coarse
+pointer — but it only walks the answering UI and the chat screen, and batch 1's
+screens have not been through it. So every height, offset and clearance in this
+section — and the two technique precedents this batch contributed above — is
+arithmetic over `padding + line box`. What *is* machine-checked is the static
+reading of the class lists in `touchTarget.test.ts` and the behavioural
+assertions in the component suites. The walkthrough remains the acceptance
+criterion, and it remains owed.
 
 ## Which event primitive
 

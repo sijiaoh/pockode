@@ -14,17 +14,12 @@ interface Props {
 const GLYPH = <Brain className="mt-0.5 size-3 shrink-0 text-th-text-muted" />;
 
 /**
- * Thinking is the agent's prose, read at the text's own size and in secondary
- * colour — markers included, through `prose-inherit-color`, which unlike a
- * utility still wins over `dark:prose-invert` (src/index.css).
+ * Thinking is drawn as a note — a tool row's size, in secondary colour — the
+ * way a subagent's words are, and for the same reason: opened in the middle of
+ * a reply, it must not read as the agent answering.
  */
 function ThoughtText({ content }: { content: string }) {
-	return (
-		<MarkdownContent
-			content={content}
-			className="prose-inherit-color text-th-text-secondary"
-		/>
-	);
+	return <MarkdownContent content={content} variant="note" />;
 }
 
 /**
