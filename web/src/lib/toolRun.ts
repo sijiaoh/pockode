@@ -187,3 +187,8 @@ export function formatDuration(ms: number): string {
 	if (totalMinutes < 60) return `${totalMinutes}m ${Math.floor(seconds % 60)}s`;
 	return `${Math.floor(totalMinutes / 60)}h ${totalMinutes % 60}m`;
 }
+
+/** A count of calls, as a subagent row and a folded group both word it. */
+export function stepsLabel(steps: number): string {
+	return steps === 1 ? "1 step" : `${steps} steps`;
+}

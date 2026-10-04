@@ -300,10 +300,12 @@ speak:
 - **Fork is gone from every row** in both source states. A fork starts a session,
   which only the worktree that owns it can do — so forking means `Open there`
   first, and for a deleted worktree it means nothing at all. Fork is the whole of
-  the message menu, so the `…` slot is not rendered at all rather than opening on
-  nothing — a read-only session is a third way for the session-level condition to
-  come out `no`, beside a host that cannot navigate and an agent that cannot fork
-  ([session-fork-ui.md](session-fork-ui.md#which-rows-reserve-a-slot)).
+  a user message's menu, so the `…` slot is not rendered at all rather than
+  opening on nothing — a read-only session is a third way for the session-level
+  condition to come out `no`, beside a host that cannot navigate and an agent
+  that cannot fork ([session-fork-ui.md](session-fork-ui.md#which-rows-reserve-a-slot)).
+  An agent message keeps only Copy under it, and no `…`
+  ([session-fork-ui.md](session-fork-ui.md#the-agents-turn-end-row)).
 - **`AttentionStrip` and the answer panel are not rendered.** An unanswered
   question cannot be answered from here — and the panel putting itself up over
   the conversation

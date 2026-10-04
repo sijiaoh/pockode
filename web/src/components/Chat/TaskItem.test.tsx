@@ -300,6 +300,33 @@ describe("TaskItem", () => {
 			await user.click(screen.getByRole("button", { name: /^Process/ }));
 		};
 
+		// The Process is a list of parts like a message's, and folds the same way.
+		it("folds a run of its calls into one summary, keeping a failure in sight", async () => {
+			const user = userEvent.setup();
+			const failed: ContentPart = {
+				type: "tool_call",
+				tool: {
+					id: "c2",
+					name: "Bash",
+					input: { command: "go test" },
+					status: "error",
+				},
+			};
+			render(
+				<TaskItemWithChildren
+					run={task("success", { children: [read("c1"), failed, read("c3")] })}
+				/>,
+			);
+			await openProcess(user);
+
+			const summary = screen.getByRole("button", { name: /Read 1 file/ });
+			expect(screen.getByText("row for c1")).not.toBeVisible();
+			expect(screen.getByText("row for c2")).toBeVisible();
+			await user.click(summary);
+			expect(screen.getByText("row for c1")).toBeVisible();
+			expect(screen.getByText("row for c3")).toBeVisible();
+		});
+
 		// How far it has come and what it is doing now, without opening it: the
 		// latest child is the subagent's own words when it is between calls.
 		it("says how many steps it has taken and what it is doing", () => {

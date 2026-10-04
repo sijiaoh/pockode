@@ -1,4 +1,5 @@
 import { relativeToWorkDir, splitNativePath } from "../utils/path";
+import { codexChangePaths } from "./codexChanges";
 import { firstLine } from "./subagentRun";
 
 /**
@@ -313,4 +314,84 @@ export function toolSummary(
 	if (mcp) return mcpSummary(mcp, input);
 
 	return fallbackSummary(toolName, input);
+}
+
+/**
+ * What kind of thing a call did, for the one-line summary a run of calls folds
+ * into (docs/tool-call-ui.md#groups). Ordered by consequence: a reader skimming
+ * a folded run wants to know first what was changed and what was run, and a
+ * narrow screen cuts the end of the line.
+ */
+export const TOOL_VERBS = [
+	"edit",
+	"run",
+	"read",
+	"search",
+	"fetch",
+	"todo",
+	"other",
+] as const;
+
+export type ToolVerb = (typeof TOOL_VERBS)[number];
+
+export interface ToolVerbReading {
+	verb: ToolVerb;
+	/**
+	 * The files the call touched, for the verbs counted in files rather than in
+	 * calls. Absent when the input names none; the call then counts once.
+	 */
+	paths?: string[];
+}
+
+function filePaths(obj: Record<string, unknown>): string[] | undefined {
+	const path = str(obj.file_path) ?? str(obj.notebook_path) ?? str(obj.path);
+	return path ? [path] : undefined;
+}
+
+/**
+ * The verb a call is summarised under. The same table of knowledge as
+ * `toolSummary`, and a Codex `Bash` is read through the same
+ * `singleCommandAction`: the summary has to say what the rows under it say.
+ */
+export function toolVerb(toolName: string, input: unknown): ToolVerbReading {
+	const obj = asObject(input);
+	switch (toolName) {
+		case "Write":
+		case "Edit":
+		case "MultiEdit":
+		case "NotebookEdit":
+			// One Codex file change can name several files.
+			return {
+				verb: "edit",
+				paths:
+					(toolName === "Edit" ? codexChangePaths(input) : null) ??
+					filePaths(obj),
+			};
+		case "Bash": {
+			const action = singleCommandAction(input);
+			if (action?.type === "read") {
+				const path = str(action.path);
+				return { verb: "read", paths: path ? [path] : undefined };
+			}
+			if (action?.type === "search" || action?.type === "listFiles") {
+				return { verb: "search" };
+			}
+			return { verb: "run" };
+		}
+		case "BashOutput":
+		case "KillShell":
+			return { verb: "run" };
+		case "Read":
+			return { verb: "read", paths: filePaths(obj) };
+		case "Grep":
+		case "Glob":
+		case "WebSearch":
+			return { verb: "search" };
+		case "WebFetch":
+			return { verb: "fetch" };
+		case "TodoWrite":
+			return { verb: "todo" };
+		default:
+			return { verb: "other" };
+	}
 }

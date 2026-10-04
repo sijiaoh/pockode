@@ -158,3 +158,37 @@ export function partKey(part: ContentPart, index: number): string {
 			return `${part.type}-${index}`;
 	}
 }
+
+/**
+ * Whether a part is drawn as a row: a tool call (a subagent call included) or
+ * a permission card, whatever its state. Everything else — text, a question
+ * card, a notice — is drawn as itself.
+ */
+export function isRowPart(part: ContentPart): boolean {
+	return part.type === "tool_call" || part.type === "permission_request";
+}
+
+export type PartBlock<T> =
+	| { kind: "rows"; items: T[] }
+	| { kind: "single"; item: T };
+
+/**
+ * A list of parts cut into what the transcript draws: each maximal run of
+ * consecutive rows becomes one list, and every other part stands alone
+ * (docs/tool-call-ui.md#the-list).
+ */
+export function partBlocks<T extends { part: ContentPart }>(
+	items: T[],
+): PartBlock<T>[] {
+	const blocks: PartBlock<T>[] = [];
+	for (const item of items) {
+		if (!isRowPart(item.part)) {
+			blocks.push({ kind: "single", item });
+			continue;
+		}
+		const last = blocks.at(-1);
+		if (last?.kind === "rows") last.items.push(item);
+		else blocks.push({ kind: "rows", items: [item] });
+	}
+	return blocks;
+}

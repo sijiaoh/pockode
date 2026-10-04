@@ -17,7 +17,7 @@ import { toolRunText } from "./toolRun";
  * its batch stands in: one `question_post` call posts every question of one
  * batch under one `asked_at`.
  */
-function stepId(part: ContentPart): string | undefined {
+export function stepId(part: ContentPart): string | undefined {
 	switch (part.type) {
 		case "tool_call":
 			return part.tool.id;

@@ -1,6 +1,6 @@
 import { ChevronRight } from "lucide-react";
 import { type ReactNode, useEffect, useRef, useState } from "react";
-import { collectPartsDeep, partKey } from "../../lib/partTree";
+import { collectPartsDeep } from "../../lib/partTree";
 import {
 	countSteps,
 	type LatestChild,
@@ -9,11 +9,12 @@ import {
 	subagentStepsLine,
 	withoutEchoedReport,
 } from "../../lib/subagentRun";
-import { toolRunText, toolSecondLine } from "../../lib/toolRun";
+import { stepsLabel, toolRunText, toolSecondLine } from "../../lib/toolRun";
 import { taskPrompt, toolSummary } from "../../lib/toolSummary";
 import { useWSStore } from "../../lib/wsStore";
 import type { ContentPart, ToolRun } from "../../types/message";
 import { CollapsibleBody, MarkdownContent, ScrollableContent } from "../ui";
+import { PartBlocks } from "./ToolList";
 import { ToolOutcomeSections } from "./ToolOutcomeSections";
 import { Detail, ToolMeta, ToolRow, ToolStatusGlyph } from "./ToolRow";
 import { useUnfiledChildren } from "./unfiledChildrenContext";
@@ -39,10 +40,6 @@ interface Props {
  * levels keep the rail — its 2px is all they cost — and indent no further.
  */
 const MAX_INDENTED_LEVELS = 3;
-
-function stepsLabel(steps: number): string {
-	return steps === 1 ? "1 step" : `${steps} steps`;
-}
 
 /**
  * A pending permission card is never drawn inside a Process: the Process is
@@ -197,9 +194,7 @@ function TaskItem({ run, depth = 0, renderChild }: Props) {
 	}, [failed, nested]);
 
 	return (
-		<div
-			className={`rounded bg-th-bg-secondary text-xs ${failed ? "border border-th-error/40" : ""}`}
-		>
+		<div className="text-xs">
 			<ToolRow
 				expanded={expanded}
 				onToggle={() => setExpanded(!expanded)}
@@ -234,15 +229,16 @@ function TaskItem({ run, depth = 0, renderChild }: Props) {
 				// Between the row and its body, outside the collapsible: visible
 				// whether the row is open or not, and inside this item's DOM, which
 				// is what tells a screen reader whose request it is.
-				<div className="space-y-2 px-2 pb-2">
-					{pendingCards.map((part, index) => (
-						<div key={partKey(part, index)}>{renderChild(part)}</div>
-					))}
+				<div className="px-2 pb-2">
+					<PartBlocks
+						items={pendingCards.map((part, index) => ({ part, index }))}
+						renderPart={({ part }) => renderChild(part)}
+					/>
 				</div>
 			)}
 
 			<CollapsibleBody expanded={expanded}>
-				<div className="border-t border-th-border">
+				<div className="border-t border-th-border bg-th-bg-secondary">
 					{/* The note belongs to the report it qualifies, not to the row:
 					    on a phone a fixed-width label there truncates the
 					    description away to nothing. */}
@@ -297,14 +293,15 @@ function TaskItem({ run, depth = 0, renderChild }: Props) {
 									<div
 										role="group"
 										aria-label={processLabel}
-										// The bubble's ground, not the card's: every tool row is
-										// drawn on `bg-th-bg-secondary` too, and on it a run of
-										// them would have no edges.
-										className={`space-y-2 border-l-2 border-th-border bg-th-ai-bubble py-2 ${level <= MAX_INDENTED_LEVELS ? "ml-2 pl-2" : ""}`}
+										// Its own right margin: the lists in it have frames, and one
+										// flush with the frame of the list this row sits in would
+										// draw the two as a single doubled line.
+										className={`space-y-2 border-l-2 border-th-border py-2 pr-2 ${level <= MAX_INDENTED_LEVELS ? "ml-2 pl-2" : ""}`}
 									>
-										{shownChildren.map(({ part, index }) => (
-											<div key={partKey(part, index)}>{renderChild(part)}</div>
-										))}
+										<PartBlocks
+											items={shownChildren}
+											renderPart={({ part }) => renderChild(part)}
+										/>
 										{unfiled && unfiled.count > 0 && (
 											<p className="text-th-text-muted">
 												{unfiled.count === 1

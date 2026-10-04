@@ -177,11 +177,9 @@ sets its floor — what it carries is timestamps, paths, counts and diff hunk
 headers, all of it `text-xs`, none of it anywhere near the 18pt (24px) regular
 or 14pt bold (18.66px) that WCAG's large-text relief starts at. So it owes the
 full 4.5, and it owes it on the *worst* surface it lands on rather than on a
-chosen one. That comes to five pairings in `GUARDED_PAIRS`: `th-bg-primary`,
-`th-bg-secondary` and `th-bg-tertiary`, plus `th-ai-bubble` — Mermaid's
-loading and error lines are muted and render inside the assistant bubble,
-which is darker than tertiary in void and mint light — plus `th-overlay-hover`
-composited onto `th-bg-secondary`. That last one is the worst of the five in
+chosen one. That comes to four pairings in `GUARDED_PAIRS`: `th-bg-primary`,
+`th-bg-secondary` and `th-bg-tertiary`, plus `th-overlay-hover`
+composited onto `th-bg-secondary`. That last one is the worst of the four in
 every variant, and it is the one no listing of the stylesheet's own colours
 would ever show: Chat's collapsible headers are muted text on
 `bg-th-bg-secondary` under `hover:bg-th-overlay-hover`, and the overlay is
@@ -195,8 +193,8 @@ stylesheet does not hold, which is what `TokenPair`'s `onto` is for; without
 it the blend would have to be hard-coded into the test, and a hard-coded blend
 stops tracking the overlay the moment a theme changes it. That pair is also
 the one a future palette tweak would be tempted to delete rather than satisfy
-— it has the least margin of the five — and deleting a pair is invisible to
-every other check in the file, since the remaining four still cover every
+— it has the least margin of the four — and deleting a pair is invisible to
+every other check in the file, since the remaining three still cover every
 variant. So the overlays are counted the other way round as well: every
 `--th-overlay-*` a stylesheet declares has to appear as a fill in
 `GUARDED_PAIRS`, which is a list the stylesheet itself supplies rather than

@@ -1,6 +1,6 @@
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
 	AssistantMessage,
 	Message,
@@ -662,6 +662,64 @@ describe("MessageItem", () => {
 		expect(screen.getByRole("button", { name: "Deny" })).toBeInTheDocument();
 	});
 
+	// Claude's card takes its call's row in place. The list the two rows share
+	// must survive that, or the row the user opened beside it closes.
+	it("keeps a row open when the row before it becomes a permission card", async () => {
+		const user = userEvent.setup();
+		const call = (id: string, command: string) => ({
+			type: "tool_call" as const,
+			tool: {
+				id,
+				name: "Bash",
+				input: { command },
+				status: "running" as const,
+			},
+		});
+		const message = (parts: AssistantMessage["parts"]): Message => ({
+			id: "parallel",
+			role: "assistant",
+			parts,
+			status: "streaming",
+			createdAt: new Date(),
+		});
+
+		const { rerender } = render(
+			<MessageItem
+				sessionId="session-1"
+				message={message([call("tool-1", "make a"), call("tool-2", "make b")])}
+			/>,
+		);
+		// Two running calls fold into a group; open it to reach the row.
+		await user.click(
+			screen.getByRole("button", { name: "Tool calls running" }),
+		);
+		await user.click(screen.getByRole("button", { name: /make b/ }));
+
+		rerender(
+			<MessageItem
+				sessionId="session-1"
+				message={message([
+					{
+						type: "permission_request",
+						request: {
+							requestId: "req-1",
+							toolName: "Bash",
+							toolInput: { command: "make a" },
+							toolUseId: "tool-1",
+						},
+						status: "pending",
+					},
+					call("tool-2", "make b"),
+				])}
+			/>,
+		);
+
+		expect(screen.getByRole("button", { name: /make b/ })).toHaveAttribute(
+			"aria-expanded",
+			"true",
+		);
+	});
+
 	it("calls onPermissionRespond when Allow is clicked", async () => {
 		const user = userEvent.setup();
 		const onRespond = vi.fn();
@@ -1006,79 +1064,54 @@ describe("MessageItem", () => {
 		expect(screen.getByText("init")).toBeInTheDocument();
 	});
 
-	// The slot beside the bubble, and the `…` in it. Queried by class because
-	// what these assert is geometry, and jsdom applies no Tailwind — the same
-	// reason tests/touchTarget.ts reads the source rather than the layout.
-	// By size, not by alignment: what these assert is that the 36px slot is there
-	// and unchanging, and where it sits in the row is not their claim. `div`
+	// The user's `…`: a slot beside the bubble. Queried by class because what
+	// these assert is geometry, and jsdom applies no Tailwind — the same reason
+	// tests/touchTarget.ts reads the source rather than the layout. `div`
 	// because the glyph inside the slot is 36px too (`iconButtonClass`), and a
 	// bare `.size-9` would count the slot twice wherever one is drawn.
-	describe("message menu slot", () => {
+	describe("the user's message menu slot", () => {
 		const slots = (container: HTMLElement) =>
 			Array.from(container.querySelectorAll("div.size-9"));
 
-		const settled = (): AssistantMessage => ({
-			id: "slot-1",
-			role: "assistant",
-			parts: [{ type: "text", content: "Answer" }],
+		const userMessage = (): Message => ({
+			id: "slot-3",
+			role: "user",
+			content: "Try again",
 			status: "complete",
 			createdAt: new Date(),
-			anchorSeq: 4,
+			anchorSeq: 2,
 		});
 
-		const pendingRequest = () => ({
-			type: "permission_request" as const,
-			request: {
-				requestId: "r1",
-				toolName: "Bash",
-				toolInput: {},
-				toolUseId: "t1",
-			},
-			status: "pending" as const,
-		});
-
-		const openFork = async (user: ReturnType<typeof userEvent.setup>) => {
-			await user.click(
-				screen.getByRole("button", { name: "Actions for the agent's message" }),
-			);
-			return screen.getByRole("button", { name: /Fork from here/ });
-		};
-
-		// The whole point of reserving the slot: the bubble the user is reading
-		// does not move when the agent finishes writing into it.
-		it("reserves the same slot while streaming and once settled", () => {
-			const streaming = render(
+		// The bubble the user is reading does not move when it settles.
+		it("reserves the same slot while sending and once settled", () => {
+			const sending = render(
 				<MessageItem
 					sessionId="session-1"
-					message={{ ...settled(), status: "streaming" }}
+					message={{ ...userMessage(), status: "sending" }}
 					onForkMessage={vi.fn()}
 				/>,
 			);
-			const before = slots(streaming.container);
+			const before = slots(sending.container);
 			expect(before).toHaveLength(1);
-			// Nothing in it yet: a message still being written is not a turn.
 			expect(
-				screen.queryByRole("button", { name: /^Actions for/ }),
+				screen.queryByRole("button", { name: "Actions for your message" }),
 			).not.toBeInTheDocument();
 
 			const after = render(
 				<MessageItem
 					sessionId="session-1"
-					message={settled()}
+					message={userMessage()}
 					onForkMessage={vi.fn()}
 				/>,
 			);
 			const settledSlots = slots(after.container);
 			expect(settledSlots).toHaveLength(1);
 			expect(settledSlots[0].className).toBe(before[0].className);
-			expect(
-				screen.getByRole("button", { name: "Actions for the agent's message" }),
-			).toBeInTheDocument();
 		});
 
-		// A full-bleed line has no bubble to be narrower than, so without a slot
-		// of its own it would overhang every bubble in the transcript.
-		it("reserves the slot on a work event line too, with nothing in it", () => {
+		// Never a turn, and with no bubble edge left to line up with, an empty
+		// slot would only narrow the line.
+		it("reserves no slot on a work event line", () => {
 			const { container } = render(
 				<MessageItem
 					sessionId="session-1"
@@ -1095,37 +1128,24 @@ describe("MessageItem", () => {
 					onForkMessage={vi.fn()}
 				/>,
 			);
-			expect(slots(container)).toHaveLength(1);
-			expect(
-				screen.queryByRole("button", { name: /^Actions for/ }),
-			).not.toBeInTheDocument();
+			expect(slots(container)).toHaveLength(0);
 		});
 
 		// Session-level: nothing can be done to any message here, so the room is
 		// not paid for either.
 		it("reserves nothing when the session cannot fork", () => {
 			const { container } = render(
-				<MessageItem sessionId="session-1" message={settled()} />,
+				<MessageItem sessionId="session-1" message={userMessage()} />,
 			);
 			expect(slots(container)).toHaveLength(0);
-			expect(
-				screen.queryByRole("button", { name: /^Actions for/ }),
-			).not.toBeInTheDocument();
 		});
 
-		it("names the speaker in the trigger and in the menu title", async () => {
+		it("names the speaker in the menu title", async () => {
 			const user = userEvent.setup();
 			render(
 				<MessageItem
 					sessionId="session-1"
-					message={{
-						id: "slot-3",
-						role: "user",
-						content: "Try again",
-						status: "complete",
-						createdAt: new Date(),
-						anchorSeq: 2,
-					}}
+					message={userMessage()}
 					onForkMessage={vi.fn()}
 				/>,
 			);
@@ -1134,24 +1154,261 @@ describe("MessageItem", () => {
 				screen.getByRole("button", { name: "Actions for your message" }),
 			);
 			expect(screen.getByRole("dialog")).toHaveAccessibleName("Your message");
+			// Copy belongs to the agent's text; the user's menu is unchanged.
+			expect(
+				screen.queryByRole("button", { name: "Copy text" }),
+			).not.toBeInTheDocument();
 		});
 
-		// The one reason the user can clear, so it is the one that says what to do.
-		it("tells the user to respond to a request the message is holding", async () => {
+		// The opening prompt whose record never persisted is both codes at once,
+		// and the permanent one wins: pointing at the missing seq would name a
+		// state whose clearing changes nothing, since nothing behind the first
+		// message is coming back either way.
+		it("names the opening message over a missing seq when both apply", async () => {
 			const user = userEvent.setup();
 			render(
 				<MessageItem
 					sessionId="session-1"
-					message={{ ...settled(), parts: [pendingRequest()] }}
+					message={{ ...userMessage(), anchorSeq: undefined }}
+					isFirst
 					onForkMessage={vi.fn()}
 				/>,
 			);
 
-			const fork = await openFork(user);
+			await user.click(
+				screen.getByRole("button", { name: "Actions for your message" }),
+			);
+			const fork = screen.getByRole("button", { name: /Fork from here/ });
+			expect(fork).toHaveTextContent("Nothing before this message to keep.");
+			expect(fork).not.toHaveTextContent("no saved position");
+		});
+	});
+
+	describe("the agent's turn-end actions", () => {
+		afterEach(() => {
+			vi.unstubAllGlobals();
+		});
+
+		const settled = (): AssistantMessage => ({
+			id: "slot-1",
+			role: "assistant",
+			parts: [
+				{ type: "text", content: "First **part**" },
+				{
+					type: "tool_call",
+					tool: {
+						id: "t0",
+						name: "Bash",
+						input: { command: "ls" },
+						status: "success",
+						result: "a.txt",
+					},
+				},
+				{ type: "text", content: "Second part" },
+			],
+			status: "complete",
+			createdAt: new Date(),
+			anchorSeq: 4,
+		});
+
+		const pendingRequest = () => ({
+			type: "permission_request" as const,
+			request: {
+				requestId: "r1",
+				toolName: "Bash",
+				toolInput: {},
+				toolUseId: "t1",
+			},
+			status: "pending" as const,
+		});
+
+		const actions = () =>
+			screen.queryByRole("group", { name: "Message actions" });
+
+		const openMenu = async (user: ReturnType<typeof userEvent.setup>) => {
+			await user.click(
+				screen.getByRole("button", {
+					name: "More actions for the agent's message",
+				}),
+			);
+			const menu = screen.getByRole("dialog", { name: "Agent message" });
+			return within(menu).getByRole("button", { name: /Fork from here/ });
+		};
+
+		// The row is already there while the agent writes, holding the spinner,
+		// so settling swaps its contents rather than adding a row under the text.
+		it("holds the row's place with the spinner while streaming", () => {
+			render(
+				<MessageItem
+					sessionId="session-1"
+					message={{ ...settled(), status: "streaming" }}
+					isOpenTurn
+					onForkMessage={vi.fn()}
+				/>,
+			);
+			const row = actions();
+			expect(row).not.toBeNull();
+			expect(within(row as HTMLElement).queryAllByRole("button")).toHaveLength(
+				0,
+			);
+			expect(within(row as HTMLElement).getByRole("status")).toBeVisible();
+		});
+
+		it("offers copy, fork and the menu once settled", () => {
+			render(
+				<MessageItem
+					sessionId="session-1"
+					message={settled()}
+					onForkMessage={vi.fn()}
+				/>,
+			);
+			const row = within(actions() as HTMLElement);
+			expect(
+				row.getAllByRole("button").map((b) => b.getAttribute("aria-label")),
+			).toEqual([
+				"Copy message",
+				"Fork from here",
+				"More actions for the agent's message",
+			]);
+		});
+
+		it("copies the message's own text as Markdown, without its tool calls", async () => {
+			const user = userEvent.setup();
+			const writeText = vi.fn().mockResolvedValue(undefined);
+			vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText } });
+			render(<MessageItem sessionId="session-1" message={settled()} />);
+
+			await user.click(screen.getByRole("button", { name: "Copy message" }));
+
+			expect(writeText).toHaveBeenCalledWith("First **part**\n\nSecond part");
+			expect(screen.getByRole("button", { name: "Copied" })).toBeVisible();
+		});
+
+		// Plain http on a LAN has no clipboard at all, and that must be visible.
+		it("says so when copying fails", async () => {
+			const user = userEvent.setup();
+			vi.stubGlobal("navigator", { ...navigator, clipboard: undefined });
+			render(<MessageItem sessionId="session-1" message={settled()} />);
+
+			await user.click(screen.getByRole("button", { name: "Copy message" }));
+
+			expect(screen.getByRole("button", { name: "Copy failed" })).toBeVisible();
+		});
+
+		it("copies from the menu too", async () => {
+			const user = userEvent.setup();
+			const writeText = vi.fn().mockResolvedValue(undefined);
+			vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText } });
+			render(
+				<MessageItem
+					sessionId="session-1"
+					message={settled()}
+					onForkMessage={vi.fn()}
+				/>,
+			);
+
+			await openMenu(user);
+			await user.click(screen.getByRole("button", { name: "Copy text" }));
+
+			expect(writeText).toHaveBeenCalledWith("First **part**\n\nSecond part");
+			expect(screen.queryByRole("dialog")).toBeNull();
+		});
+
+		// Copy is an action a message with no text could never have.
+		it("offers no copy on a message that is only tool calls", async () => {
+			const user = userEvent.setup();
+			render(
+				<MessageItem
+					sessionId="session-1"
+					message={{ ...settled(), parts: [settled().parts[1]] }}
+					onForkMessage={vi.fn()}
+				/>,
+			);
+			expect(
+				screen.queryByRole("button", { name: "Copy message" }),
+			).not.toBeInTheDocument();
+			await openMenu(user);
+			expect(
+				screen.queryByRole("button", { name: "Copy text" }),
+			).not.toBeInTheDocument();
+		});
+
+		// Without fork the menu would only repeat the Copy button beside it.
+		it("draws only copy when the session cannot fork", () => {
+			render(<MessageItem sessionId="session-1" message={settled()} />);
+			const row = within(actions() as HTMLElement);
+			expect(row.getAllByRole("button")).toHaveLength(1);
+			expect(row.getByRole("button", { name: "Copy message" })).toBeVisible();
+		});
+
+		it("draws no row at all when there is nothing to offer", () => {
+			render(
+				<MessageItem
+					sessionId="session-1"
+					message={{ ...settled(), parts: [settled().parts[1]] }}
+				/>,
+			);
+			expect(actions()).toBeNull();
+		});
+
+		it("forks from the Fork button directly", async () => {
+			const user = userEvent.setup();
+			const onForkMessage = vi.fn();
+			render(
+				<MessageItem
+					sessionId="session-1"
+					message={settled()}
+					onForkMessage={onForkMessage}
+				/>,
+			);
+
+			await user.click(screen.getByRole("button", { name: "Fork from here" }));
+
+			expect(onForkMessage).toHaveBeenCalledWith("slot-1");
+			expect(screen.queryByRole("dialog")).toBeNull();
+		});
+
+		it("forks the message the menu was opened from", async () => {
+			const user = userEvent.setup();
+			const onForkMessage = vi.fn();
+			render(
+				<MessageItem
+					sessionId="session-1"
+					message={settled()}
+					onForkMessage={onForkMessage}
+				/>,
+			);
+
+			await user.click(await openMenu(user));
+
+			expect(onForkMessage).toHaveBeenCalledWith("slot-1");
+			// The menu steps aside for the confirmation that follows it.
+			expect(screen.queryByRole("dialog")).toBeNull();
+		});
+
+		// An icon cannot say why, so a blocked Fork opens the menu that can.
+		it("opens the menu with the reason when fork is blocked", async () => {
+			const user = userEvent.setup();
+			const onForkMessage = vi.fn();
+			render(
+				<MessageItem
+					sessionId="session-1"
+					message={{ ...settled(), parts: [pendingRequest()] }}
+					onForkMessage={onForkMessage}
+				/>,
+			);
+
+			const button = screen.getByRole("button", { name: "Fork from here" });
+			expect(button).toHaveAttribute("aria-disabled", "true");
+			await user.click(button);
+
+			const menu = screen.getByRole("dialog", { name: "Agent message" });
+			const fork = within(menu).getByRole("button", { name: /Fork from here/ });
 			expect(fork).toHaveAttribute("aria-disabled", "true");
 			expect(fork).toHaveTextContent(
 				"Respond to the request in this message first.",
 			);
+			expect(onForkMessage).not.toHaveBeenCalled();
 			// Disabled but reachable: the reason is worth nothing if focus and the
 			// screen reader skip the row carrying it.
 			fork.focus();
@@ -1174,58 +1431,11 @@ describe("MessageItem", () => {
 				/>,
 			);
 
-			const fork = await openFork(user);
+			const fork = await openMenu(user);
 			expect(fork).toHaveTextContent(
 				"This message has no saved position to fork from.",
 			);
 			expect(fork).not.toHaveTextContent("Respond to the request");
-		});
-
-		// The opening prompt whose record never persisted is both codes at once,
-		// and the permanent one wins: pointing at the missing seq would name a
-		// state whose clearing changes nothing, since nothing behind the first
-		// message is coming back either way.
-		it("names the opening message over a missing seq when both apply", async () => {
-			const user = userEvent.setup();
-			render(
-				<MessageItem
-					sessionId="session-1"
-					message={{
-						id: "slot-4",
-						role: "user",
-						content: "Try again",
-						status: "complete",
-						createdAt: new Date(),
-					}}
-					isFirst
-					onForkMessage={vi.fn()}
-				/>,
-			);
-
-			await user.click(
-				screen.getByRole("button", { name: "Actions for your message" }),
-			);
-			const fork = screen.getByRole("button", { name: /Fork from here/ });
-			expect(fork).toHaveTextContent("Nothing before this message to keep.");
-			expect(fork).not.toHaveTextContent("no saved position");
-		});
-
-		it("forks the message the menu was opened from", async () => {
-			const user = userEvent.setup();
-			const onForkMessage = vi.fn();
-			render(
-				<MessageItem
-					sessionId="session-1"
-					message={settled()}
-					onForkMessage={onForkMessage}
-				/>,
-			);
-
-			await user.click(await openFork(user));
-
-			expect(onForkMessage).toHaveBeenCalledWith("slot-1");
-			// The menu steps aside for the confirmation that follows it.
-			expect(screen.queryByRole("dialog")).toBeNull();
 		});
 	});
 
@@ -1328,6 +1538,91 @@ describe("MessageItem", () => {
 			// Two spans: the directories may be cut, the file name may not.
 			expect(screen.getByText("src/components/")).toBeInTheDocument();
 			expect(screen.getByText("Button.tsx")).toBeInTheDocument();
+		});
+	});
+
+	describe("a run of calls folded into a group", () => {
+		const bash = (
+			id: string,
+			status: "running" | "success" | "error" = "success",
+		) => ({
+			type: "tool_call" as const,
+			tool: { id, name: "Bash", input: { command: `make ${id}` }, status },
+		});
+		const message = (
+			parts: AssistantMessage["parts"],
+			status: Message["status"] = "complete",
+		): Message => ({
+			id: "grouped",
+			role: "assistant",
+			parts,
+			status,
+			createdAt: new Date(),
+		});
+		const row = (id: string) =>
+			screen.getByText(`make ${id}`).closest("button") as HTMLElement;
+
+		it("shows the summary and the failures, and the rest once opened", async () => {
+			const user = userEvent.setup();
+			render(
+				<MessageItem
+					sessionId="session-1"
+					message={message([bash("a"), bash("b", "error"), bash("c")])}
+				/>,
+			);
+
+			expect(row("a")).not.toBeVisible();
+			expect(row("b")).toBeVisible();
+			expect(row("c")).not.toBeVisible();
+			await user.click(screen.getByRole("button", { name: /Ran 2 commands/ }));
+			expect(row("a")).toBeVisible();
+			expect(row("c")).toBeVisible();
+		});
+
+		// The scroll anchor measures where an element sits, and one that is not
+		// displayed measures as the top of the page.
+		it("does not offer a folded row as a scroll anchor", () => {
+			render(
+				<MessageItem
+					sessionId="session-1"
+					message={message([bash("a"), bash("b")])}
+				/>,
+			);
+			for (const id of ["a", "b"]) {
+				expect(row(id).closest("[hidden]")).not.toHaveAttribute(
+					"data-scroll-anchor",
+				);
+			}
+		});
+
+		// What the user is reading must not be folded out of sight under them.
+		it("keeps a row the user opened in sight when its group forms, until they close it", async () => {
+			const user = userEvent.setup();
+			const { rerender } = render(
+				<MessageItem
+					sessionId="session-1"
+					message={message([bash("a", "running")], "streaming")}
+				/>,
+			);
+			await user.click(row("a"));
+
+			rerender(
+				<MessageItem
+					sessionId="session-1"
+					message={message(
+						[bash("a", "running"), bash("b", "running")],
+						"streaming",
+					)}
+				/>,
+			);
+			expect(row("a")).toBeVisible();
+			expect(row("a")).toHaveAttribute("aria-expanded", "true");
+			expect(
+				screen.getByText("make b", { selector: "[hidden] *" }),
+			).not.toBeVisible();
+
+			await user.click(row("a"));
+			expect(row("a")).not.toBeVisible();
 		});
 	});
 });

@@ -3990,7 +3990,10 @@ describe("ChatPanel", () => {
 			forked_from: { session_id: "test-session" },
 		});
 
-		/** Opens the menu beside the nth bubble of one speaker; -1 is the last. */
+		/**
+		 * Opens the nth message menu of one speaker; -1 is the last. The user's
+		 * `…` stands beside their bubble, the agent's at the end of its message.
+		 */
 		const openMenu = async (
 			user: ReturnType<typeof userEvent.setup>,
 			side: "user" | "assistant",
@@ -4000,19 +4003,26 @@ describe("ChatPanel", () => {
 				name:
 					side === "user"
 						? "Actions for your message"
-						: "Actions for the agent's message",
+						: "More actions for the agent's message",
 			});
 			await user.click(triggers[index < 0 ? triggers.length + index : index]);
 		};
 
-		// Two steps now that the action lives in a menu: open the `…` beside the
-		// first assistant answer, then take the fork row. That answer is the first
-		// offer in the transcript — the opening prompt above it has nothing behind
-		// it to fork to.
+		// The Fork button at the end of the first assistant answer. That answer is
+		// the first offer in the transcript — the opening prompt above it has
+		// nothing behind it to fork to.
 		const openForkSheet = async (user: ReturnType<typeof userEvent.setup>) => {
-			await openMenu(user, "assistant");
-			await user.click(screen.getByRole("button", { name: /Fork from here/ }));
+			const forks = await screen.findAllByRole("button", {
+				name: "Fork from here",
+			});
+			await user.click(forks[0]);
 		};
+
+		/** The fork row of the menu that is open, not a turn's own Fork button. */
+		const menuForkRow = () =>
+			within(screen.getByRole("dialog")).getByRole("button", {
+				name: /Fork from here/,
+			});
 
 		// An agent that was never forkable has no refusal to explain, so it gets
 		// neither the `…` nor the slot the `…` would have sat in — a session that
@@ -4034,9 +4044,12 @@ describe("ChatPanel", () => {
 			// first paint, and `null` until then means "offer it" (useForkSupport).
 			await waitFor(() =>
 				expect(
-					screen.queryAllByRole("button", { name: /^Actions for/ }),
+					screen.queryAllByRole("button", { name: /actions for/i }),
 				).toHaveLength(0),
 			);
+			expect(
+				screen.queryByRole("button", { name: "Fork from here" }),
+			).not.toBeInTheDocument();
 			// The transcript really is on screen, so the absence below is the
 			// declaration talking and not a render that never happened.
 			expect(screen.getByText("Hi there!")).toBeInTheDocument();
@@ -4176,7 +4189,7 @@ describe("ChatPanel", () => {
 			// "Hello", the message with no seq — the one above it opens the session
 			// and is refused for its own reason.
 			await openMenu(user, "user", 1);
-			const fork = screen.getByRole("button", { name: /Fork from here/ });
+			const fork = menuForkRow();
 			expect(fork).toHaveAttribute("aria-disabled", "true");
 			// Written out where a finger can read it: a tooltip never fires on a
 			// touch screen, so a reason living only in a label is out of reach.
@@ -4206,7 +4219,7 @@ describe("ChatPanel", () => {
 			await waitForHistoryLoad();
 
 			await openMenu(user, "user", 0);
-			const fork = screen.getByRole("button", { name: /Fork from here/ });
+			const fork = menuForkRow();
 			expect(fork).toHaveAttribute("aria-disabled", "true");
 			expect(fork).toHaveTextContent("Nothing before this message to keep.");
 			// Permanent, so the sentence must not promise a later.
@@ -4238,7 +4251,7 @@ describe("ChatPanel", () => {
 			await waitForHistoryLoad();
 
 			await openMenu(user, "user", 0);
-			const fork = screen.getByRole("button", { name: /Fork from here/ });
+			const fork = menuForkRow();
 			expect(fork).not.toHaveAttribute("aria-disabled");
 			expect(fork).not.toHaveTextContent("Nothing before this message");
 
@@ -4269,7 +4282,7 @@ describe("ChatPanel", () => {
 			// this seq can have come from is the reply to the send itself.
 			expect(mockState.chatMessagesSubscribe).toHaveBeenCalledTimes(1);
 			await openMenu(user, "user", -1);
-			const fork = screen.getByRole("button", { name: /Fork from here/ });
+			const fork = menuForkRow();
 			expect(fork).not.toHaveAttribute("aria-disabled");
 
 			await user.click(fork);
@@ -4300,7 +4313,7 @@ describe("ChatPanel", () => {
 
 			// "Try again", the second thing the user said.
 			await openMenu(user, "user", 1);
-			await user.click(screen.getByRole("button", { name: /Fork from here/ }));
+			await user.click(menuForkRow());
 
 			const sheet = within(screen.getByRole("dialog"));
 			expect(sheet.getByText("Try again")).toBeInTheDocument();
@@ -4327,7 +4340,7 @@ describe("ChatPanel", () => {
 			expect(mockState.sendMessage).not.toHaveBeenCalled();
 		});
 
-		/** The menu `openMenu` raises beside an agent bubble. */
+		/** The menu `openMenu` raises from an agent message. */
 		const menu = () => screen.queryByRole("dialog", { name: "Agent message" });
 
 		// Both sheets below are portalled to the body, which is the whole of the
