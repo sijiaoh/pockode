@@ -441,8 +441,8 @@ it as well as to the user.
 The price lands in the fork's UI: with nothing to
 settle it, that last message sits in the frontend's `streaming` status until the
 user's next message closes the turn, and while it does it cannot itself be a fork
-anchor. It does not look busy in the meantime — the spinner is gated on a live
-process, and a fresh fork has none.
+anchor. It does not look busy in the meantime — the tail line is drawn only on
+the open turn, and a fresh fork has none.
 
 Events the cut left half of go the other way — `agent.TruncateHistory` drops a
 tool call whose result fell after the anchor, and a permission request or a
@@ -2796,11 +2796,11 @@ be wrong.
 **Claude's duration has to be measured, and Codex's does not.** Codex stamps
 both ends of the item. Claude reports no thinking time and its thinking arrives
 whole, in one frame of its own, so `thinkingClock` measures from the thread's
-last *transcript* output — text, a tool call, a tool result, or the message that
-opened the turn — to the frame's arrival. Transcript output on purpose: the CLI
-writes `thinking_tokens` estimates and bookkeeping frames throughout a think,
-and measuring from the last line of any kind would make almost every thinking
-`0s`. The clock is kept per thread — the main thread, and each subagent from the
+last *transcript* output — text, a tool call, a tool result, a previous thinking
+block, or the message that opened the turn — to the frame's arrival. Transcript
+output on purpose: the CLI writes `thinking_tokens` estimates and bookkeeping
+frames throughout a think, and measuring from the last line of any kind would
+make almost every thinking `0s`. The clock is kept per thread — the main thread, and each subagent from the
 call that spawned it — because a backgrounded subagent writes between the main
 agent's lines. Every event the adapter sends passes the clock, including the
 results it writes for a line too large to read: a result the clock missed would

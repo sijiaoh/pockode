@@ -238,7 +238,7 @@ record from being two bubbles.
 
 Order matters inside that repair: the page's trailing turn is closed *first*.
 The records that ended it are in the page above, so left as it replayed it would
-keep a spinner running in the middle of the transcript — and with nothing left
+keep a tail line running in the middle of the transcript — and with nothing left
 streaming, a later `process_ended` retires only the dialogs and Tasks this page
 left open instead of also stamping its status onto a turn that was still running
 at this point. What the session is doing is passed in separately rather than

@@ -38,11 +38,11 @@ func thinkingDisplayArgs(version string) []string {
 //
 // Claude reports no thinking time, and its thinking text arrives whole in one
 // frame, so the duration is the time from the thread's last transcript output —
-// text, a tool call, a tool result, or the message that opened the turn — to the
-// block's arrival: how long the agent was quiet before saying this. Transcript
-// output on purpose: the CLI writes thinking_tokens estimates and bookkeeping
-// frames all through a think, and measuring from the last line of any kind
-// would make nearly every thinking 0s.
+// text, a tool call, a tool result, a previous thinking block, or the message
+// that opened the turn — to the block's arrival: how long the agent was quiet
+// before saying this. Transcript output on purpose: the CLI writes
+// thinking_tokens estimates and bookkeeping frames all through a think, and
+// measuring from the last line of any kind would make nearly every thinking 0s.
 //
 // Kept per thread, because a backgrounded subagent writes between the main
 // agent's own lines: the main thread is "", a subagent the call that spawned it,

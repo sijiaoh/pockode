@@ -239,7 +239,7 @@ summary is told from a tool row: by what it lacks, not by a new colour or fill.
 **Where and when.** Always last before the turn-end row — under the error,
 `Interrupted` or `Process ended` line — so it is in one place however the turn
 ended, and nowhere when nothing counted: no empty frame, no gap. It is shown
-exactly when the actions are (`!pending`), so the two replace the spinner in
+exactly when the actions are (`!pending`), so the two replace the tail line in
 one render, at the tail where a height change pushes nothing. Not while the
 turn runs: the group summary already says `Edited N files` then, and a frame
 growing at the tail would push at the content streaming in above it. A
@@ -1683,7 +1683,7 @@ decisions, and reachability is a CSS variant
     open and in place; close it and it folds. A hidden row is never where the
     view is held, and a group whose last row is hidden leaves no doubled line.
 29. A turn that edits two files and creates one: when it settles, the card
-    and the actions replace the spinner together — `3 files changed`, the
+    and the actions replace the tail line together — `3 files changed`, the
     created file `new` with no `−`. While it ran there was no card. Interrupt
     or fail one like it: the card is in the same place, under the status line,
     listing only what succeeded; a turn with no successful change has no card

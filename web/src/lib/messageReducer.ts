@@ -837,7 +837,7 @@ function lastAssistantIndex(messages: Message[]): number {
  * mid-reply is appended below that reply, and a send that then fails leaves its
  * reason below that. Either would hide the running turn behind them, and the
  * `done` meant for it would be dropped as belonging to no one — leaving a
- * spinner nothing could stop.
+ * tail line nothing could end.
  *
  * At most one bubble is ever open, so scanning past closed ones cannot pick the
  * wrong turn: content opens a bubble only when this returns -1, and the one
@@ -1004,7 +1004,7 @@ function applyEvent(
 	// it (docs/code/agent-integration.md#the-read-point).
 	//
 	// The bubble is opened here rather than left to the next content event so
-	// that the spinner survives the cut and the "not read yet" line above the
+	// that the tail line survives the cut and the "not read yet" line above the
 	// composer goes at the right moment (AttentionStrip). It cannot leave a
 	// blank box: an empty bubble is dropped when the turn ends, including the
 	// one this replaces.
@@ -1137,7 +1137,7 @@ function applyEvent(
 	// `complete` is deliberately not an ended turn here: when a background wait
 	// runs out of budget Pockode delivers the end of turn itself, and the CLI
 	// may genuinely resume output afterwards — that output is a live turn and
-	// must still light up the spinner.
+	// must still bring back the tail line.
 	//
 	// Read off the last assistant rather than the last message for the same
 	// reason as above: a message sent mid-turn sits below the bubble the trailing
@@ -2482,7 +2482,7 @@ export function prependHistoryPage(
 	}
 
 	// The older page's last turn is over by definition: the records that ended it
-	// are in the page above. Left as it replayed, it would keep a spinner running
+	// are in the page above. Left as it replayed, it would keep a tail line running
 	// forever in the middle of the transcript. This is also what stands in when
 	// the boundary terminal says nothing — a turn cut mid-answer by the page size
 	// ended no particular way.

@@ -873,7 +873,7 @@ interface Props {
 	isFirst?: boolean;
 	/**
 	 * This bubble is the one the open turn is writing into, which is what makes a
-	 * spinner on it true. Not the same as `isLast` since a message sent mid-reply
+	 * tail line on it true. Not the same as `isLast` since a message sent mid-reply
 	 * is appended below the reply it went into — that reply is still being written
 	 * and has to keep saying so (docs/lifecycle-ui.md §2.3).
 	 */
@@ -1331,7 +1331,7 @@ const MessageItem = memo(function MessageItem({
 					<p className="mt-2 text-sm text-th-warning">Process ended</p>
 				)}
 				{/* Last before the actions however the turn ended, so it is always
-				    in one place; shown when they are, so the two replace the spinner
+				    in one place; shown when they are, so the two replace the tail line
 				    together. */}
 				{!pending && (
 					<TurnChangesCard parts={message.parts} onOpenFile={onOpenFile} />

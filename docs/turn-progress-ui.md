@@ -16,13 +16,13 @@ below that touches one of theirs says which.
 
 ## The problem
 
-During a long think, or a long command, the screen holds a Stop button and
-nothing else that moves. A reader cannot tell a turn that is working from one
-that hung, and everything the agent reasoned on the way is thrown away: the
-Claude adapter skips `thinking` blocks, and the codex adapter has no case for a
-`reasoning` item and drops its delta notifications unread. Comparable products
-answer both with one folded line — *Thought for Ns* — that costs a line and
-gives the reader a pulse.
+Before this design, a long think or a long command left the screen holding a
+Stop button and nothing else that moved. A reader could not tell a turn that
+was working from one that hung, and everything the agent reasoned on the way
+was thrown away: the Claude adapter skipped `thinking` blocks, and the codex
+adapter had no case for a `reasoning` item and dropped its delta notifications
+unread. Comparable products answer both with one folded line — *Thought for
+Ns* — that costs a line and gives the reader a pulse.
 
 ## The rules
 
@@ -118,7 +118,10 @@ not a call**:
 - **The summary's settled verbs gain one last entry**, after `Used N tools` and
   before `N interrupted` — least consequential, so it is the end a narrow screen
   cuts: `Thought for 1m 20s`, the sum over the folded thinking, under the
-  merged row's rule (every part measured, or the entry says `Thought`).
+  merged row's rule (every part measured, or the entry says `Thought`). Never
+  alone: with nothing else settled to report — every folded call still
+  running or waiting on a card — a summary of only a thought would read as a
+  settled group.
 
 [The turn's changes](tool-call-ui.md#the-turns-changes) does not change:
 thinking edits nothing, and the card lists files.
@@ -170,7 +173,7 @@ it.
 | Engine | Measured as |
 |---|---|
 | codex | `completedAtMs` of the item's `item/completed` minus `startedAtMs` of its `item/started` — the engine's own clock, which both notifications carry |
-| claude | from the thread's last transcript output before the block — a text, a tool call, a tool result, or the message that opened the turn — to the block's arrival. A subagent's thread starts at the call that spawned it |
+| claude | from the thread's last transcript output before the block — a text, a tool call, a tool result, a previous thinking block, or the message that opened the turn — to the block's arrival. A subagent's thread starts at the call that spawned it |
 
 For Claude, *transcript output* is deliberate. The CLI also writes
 `thinking_tokens` estimates while it thinks, and its subagents' lines and its
@@ -205,11 +208,11 @@ row says `Thought` (§1.1).
 
 **In the turn-end slot of the reply being written** — the place the turn-end
 row (`MessageActions`: Copy, Fork, `…`) takes once the turn settles, and where
-its spinner stands today. The tail line replaces that spinner; there is never a
-second one. It is part of the transcript, so it scrolls with it: a reader
-following the tail sees it under the newest content; a reader scrolled up is not
-chased by it — Stop, in the composer, says the turn is open at every scroll
-position.
+that row's spinner used to stand. The tail line (`TurnTail`) replaced that
+spinner; there is never a second one. It is part of the transcript, so it
+scrolls with it: a reader following the tail sees it under the newest content;
+a reader scrolled up is not chased by it — Stop, in the composer, says the turn
+is open at every scroll position.
 
 There is at most one reply being written, so there is at most one tail line:
 
@@ -228,7 +231,7 @@ glyph column, the label where a row's title starts, the clock in the meta slot.
 Its height is the turn-end row's (both hold `min-h-9`, `pointer-coarse:min-h-11`),
 and **the slot keeps that height while the line is hidden**: when the turn
 blocks and resumes, nothing above or below moves; when the turn settles, the
-turn-end row takes the same height.
+turn-end row, when it draws one, takes the same height.
 
 ### 2.2 When it shows
 
@@ -245,10 +248,10 @@ Nothing else shows it and nothing else hides it.
 | `blocked(background)` | empty, height kept | the attention strip's background row |
 | placeholder up, server not yet reporting | `Working`, no clock | — |
 
-**Under `blocked` this changes what is drawn today**: the turn-end row's spinner
-keeps turning while a turn waits on a permission or a background task. It stops
-because a blocked turn is not producing, and a spinner over a two-hour
-background wait is exactly what
+**Under `blocked` this changed what was drawn before**: the turn-end row's
+spinner kept turning while a turn waited on a permission or a background task.
+The line stops because a blocked turn is not producing, and a spinner over a
+two-hour background wait is exactly what
 [lifecycle-ui.md §1.1](lifecycle-ui.md#11-activity) removed; the strip states
 the wait instead. When the turn goes back to `running` the line comes back with
 the turn's clock, which kept running underneath.
@@ -272,11 +275,12 @@ because it is a statement about the transcript, not content. Under
 already say the turn is alive, and the shared `Spinner` does not stop itself.
 
 **When it says `Thinking…`** — only on a signal from the main agent that it is
-thinking *now*, which ends with that thinking's record — or with anything else
-the main agent says next, since output proves the thinking is over even if its
-record never comes:
+thinking *now*, which ends with that thinking's record, with the turn — or
+with the main agent's next text or tool call, since output proves the thinking
+is over even if its record never comes:
 
-- **codex**: a reasoning item has started and its text is arriving
+- **codex**: a reasoning item has started (`item/started`, which says
+  `Thinking…` before any words), then its text arrives
   (`item/reasoning/summaryTextDelta`, `item/reasoning/textDelta`). The *latest
   line* is the last non-empty line of the text so far, Markdown markers
   stripped — a summary part's bold heading is usually exactly that line — cut

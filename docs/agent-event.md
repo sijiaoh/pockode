@@ -139,7 +139,9 @@ gives exactly the text the record will hold. The live text is still
 best-effort: a delta is the first thing dropped when a subscriber falls behind,
 and a client that subscribed mid-thinking holds only a tail of it. The record is
 what is kept. A live thinking ends with the next
-main-agent `thinking` record or with the turn. The record carries no id joining
+main-agent `thinking` record or with the turn; a client also ends it on the
+main agent's next text or tool call
+([turn-progress-ui.md §2.3](turn-progress-ui.md#23-what-it-says)). The record carries no id joining
 it to its deltas, because there is only ever one live thinking. A thinking the
 engine never finished — Codex's, cut off by Stop — leaves no record at all.
 

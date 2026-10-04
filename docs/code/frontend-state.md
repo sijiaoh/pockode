@@ -458,9 +458,16 @@ its clock and what the main agent is thinking right now reach it through
 one line rather than every memoized bubble. "Thinking now" is `useChatMessages`
 state beside the transcript, never a part of it — `thinking_delta` is not
 recorded, so it is dropped by the reducer and folded per frame into that state
-instead. The thinking's record clears it, and so does anything else the main agent
-says next (output proves the thinking is over even if its record never comes) and
-the turn ending however it ends.
+instead. What ends it is
+[turn-progress-ui.md §2.3](../turn-progress-ui.md#23-what-it-says)'s rule: the
+thinking's record, the main agent's next text or tool call, or the turn ending
+however it ends. If the user had opened the line, the row its
+record settles into opens too: the hook finds that part by the record's
+`Thought` object — which the reducer stores as it is, so neither position nor
+React batching the record with the text after it can mislead the search — and
+adds its id to `openedThoughtIds`, which `RowList` reads through
+`OpenedThoughtsContext` as that row's first choice. It is done in a layout
+effect, so the row is never painted closed first.
 
 That search is also what leaves only two things able to close a bubble: the turn's own
 ending, and the read point. A user message arriving underneath used to close it as a
@@ -749,6 +756,16 @@ The rules particular to children:
   messages, never deltas. Filing made this matter — the main agent's "A and B
   are running" and its "A finished" used to have the subagents' work between
   them, and with that filed away they sat back to back.
+- **Consecutive thinking from the same speaker is one part.** A `thinking`
+  record joins the `thinking` part before it, as one more entry in its
+  `thoughts`, because the engine splitting one pause into two blocks is nothing
+  a reader can use ([turn-progress-ui.md](../turn-progress-ui.md#11-what-it-is)).
+  A record that would draw nothing — no text, not redacted, no duration — is
+  dropped in `applyServerEvent` before it can open a reply or join a run. The
+  part carries an `id` of its own, generated here, because a thinking has no
+  `tool_use_id` and a position-based key would remount the row — and close what
+  the user opened — whenever an older page loads; joining two pages across a
+  split run (`joinTurnParts`) keeps the newer half's id for the same reason.
 
 #### Live state on a run
 
