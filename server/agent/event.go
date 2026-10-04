@@ -820,6 +820,10 @@ type MessageEvent struct {
 	// Command is the Pockode command the user typed, when Content is what it
 	// expanded to rather than what they wrote. See CommandInvocation.
 	Command *CommandInvocation
+	// Attachments describe the files the user sent with the message, by their
+	// ids in the session's attachment store. What the agent was handed for each
+	// is not recorded: that is the agent's business, decided at delivery.
+	Attachments []FileBlock
 }
 
 // CommandInvocation is a Pockode command as the user typed it: the name without
@@ -836,14 +840,15 @@ func (MessageEvent) isAgentEvent()        {}
 
 func (e MessageEvent) ToRecord() EventRecord {
 	return EventRecord{
-		Type:      e.EventType(),
-		Content:   e.Content,
-		Origin:    e.Origin,
-		Subtype:   e.Subtype,
-		Meta:      e.Meta,
-		Answering: e.Answering,
-		MessageID: e.MessageID,
-		Command:   e.Command,
+		Type:        e.EventType(),
+		Content:     e.Content,
+		Origin:      e.Origin,
+		Subtype:     e.Subtype,
+		Meta:        e.Meta,
+		Answering:   e.Answering,
+		MessageID:   e.MessageID,
+		Command:     e.Command,
+		Attachments: e.Attachments,
 	}
 }
 

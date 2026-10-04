@@ -24,12 +24,22 @@ type mockAgent struct {
 	// when the agent has read a message, the way Codex's do
 	// (agent.MessageIngestReporter). Set before the first session is started.
 	reportsIngest bool
+	// receivesAttachments makes them agent.AttachmentReceivers, as both CLIs'
+	// sessions are. Set before the first session is started.
+	receivesAttachments bool
 
 	mu       sync.Mutex
 	sessions []*mockSession
 }
 
 func (a *mockAgent) Start(context.Context, agent.StartOptions) (agent.Session, error) {
+	if a.receivesAttachments {
+		sess := &attachmentReceivingSession{mockSession{events: make(chan agent.AgentEvent)}}
+		a.mu.Lock()
+		a.sessions = append(a.sessions, &sess.mockSession)
+		a.mu.Unlock()
+		return sess, nil
+	}
 	if a.reportsIngest {
 		sess := &ingestReportingSession{mockSession{events: make(chan agent.AgentEvent)}}
 		a.mu.Lock()
@@ -111,6 +121,12 @@ func (s *mockSession) Close()               { close(s.events) }
 type ingestReportingSession struct{ mockSession }
 
 func (s *ingestReportingSession) ReportsMessageIngest() {}
+
+// attachmentReceivingSession is a mockSession that also implements
+// agent.AttachmentReceiver.
+type attachmentReceivingSession struct{ mockSession }
+
+func (s *attachmentReceivingSession) ReceivesAttachments() {}
 
 func newTestManager(t *testing.T, store session.Store) *process.Manager {
 	t.Helper()
@@ -231,7 +247,7 @@ func TestClient_MessageWithNoRecordHasNoAddress(t *testing.T) {
 		broadcastSeq = seq
 	})
 
-	seq, err := client.SendMessageExcluding(context.Background(), "sess", "hello", nil)
+	seq, err := client.SendMessageExcluding(context.Background(), "sess", "hello", nil, nil)
 	if err != nil {
 		t.Fatalf("SendMessageExcluding = %v, want the prompt to go through anyway", err)
 	}

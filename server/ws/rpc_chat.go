@@ -146,6 +146,48 @@ func (h *rpcMethodHandler) handleMessage(ctx context.Context, conn *jsonrpc2.Con
 		return
 	}
 
+	if len(params.Answering) > 0 && len(params.Attachments) > 0 {
+		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams,
+			"Answers are sent on their own: send the answers first, then the files as a message of their own.")
+		return
+	}
+
+	if params.Content == "" && len(params.Answering) == 0 && len(params.Attachments) == 0 {
+		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "the message is empty")
+		return
+	}
+
+	// Resolved before anything is sent, like a command below, so a message
+	// naming a file the session does not have leaves no trace.
+	var attached []agent.Attachment
+	if len(params.Attachments) > 0 {
+		// The session id picks the directory the ids are resolved in, so one this
+		// worktree does not have must not become a path at all — the rule
+		// attachment.get keeps for the same reason.
+		_, found, err := wt.SessionStore.Get(params.SessionID)
+		if err != nil {
+			h.replyInternalError(ctx, conn, req.ID, "failed to get session", err, "sessionId", params.SessionID)
+			return
+		}
+		if !found {
+			h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "session not found")
+			return
+		}
+		refs := make([]chat.AttachmentRef, len(params.Attachments))
+		for i, a := range params.Attachments {
+			refs[i] = chat.AttachmentRef{ID: a.ID, Name: a.Name}
+		}
+		attached, err = chat.ResolveAttachments(log, wt.DataDir, params.SessionID, refs)
+		if err != nil {
+			if errors.Is(err, chat.ErrAttachmentNotFound) {
+				h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, err.Error())
+			} else {
+				h.replyInternalError(ctx, conn, req.ID, "failed to read attachments", err, "sessionId", params.SessionID)
+			}
+			return
+		}
+	}
+
 	// Expanded before anything is sent, so a command that cannot be expanded
 	// leaves no trace: it is refused, and never reaches the agent as the text the
 	// user typed.
@@ -170,18 +212,18 @@ func (h *rpcMethodHandler) handleMessage(ctx context.Context, conn *jsonrpc2.Con
 	if isCommand {
 		log.Info("received Pockode command", "command", cmd.Name, "length", len(content))
 	} else {
-		log.Info("received prompt", "length", len(content))
+		log.Info("received prompt", "length", len(content), "attachments", len(attached))
 	}
 
 	var seq session.HistorySeq
 	var err error
 	if isCommand {
-		seq, err = wt.ChatClient.SendCommandExcluding(ctx, params.SessionID, content, cmd, h.state.getNotifier())
+		seq, err = wt.ChatClient.SendCommandExcluding(ctx, params.SessionID, content, cmd, attached, h.state.getNotifier())
 	} else if len(params.Answering) > 0 {
 		seq, content, err = wt.ChatClient.SendAnswers(ctx, params.SessionID,
 			chatAnswers(params.Answering), h.state.getNotifier())
 	} else {
-		seq, err = wt.ChatClient.SendMessageExcluding(ctx, params.SessionID, content, h.state.getNotifier())
+		seq, err = wt.ChatClient.SendMessageExcluding(ctx, params.SessionID, content, attached, h.state.getNotifier())
 	}
 	if err != nil {
 		h.replyErrorForChat(ctx, conn, req, params.SessionID, err)
@@ -217,6 +259,9 @@ func (h *rpcMethodHandler) handleMessage(ctx context.Context, conn *jsonrpc2.Con
 		result.Content, result.Command = content, &cmd
 	} else if len(params.Answering) > 0 {
 		result.Content = content
+	}
+	for _, a := range attached {
+		result.Attachments = append(result.Attachments, a.File)
 	}
 	if err := conn.Reply(ctx, req.ID, result); err != nil {
 		log.Error("failed to send response", "error", err)
@@ -315,7 +360,8 @@ func (h *rpcMethodHandler) replyErrorForChat(ctx context.Context, conn *jsonrpc2
 		errors.Is(err, process.ErrRequestNotPending) ||
 		errors.Is(err, chat.ErrForkAnchorOutOfRange) ||
 		errors.Is(err, chat.ErrForkAnchorNoHistory) ||
-		errors.Is(err, chat.ErrForkUnsupported) {
+		errors.Is(err, chat.ErrForkUnsupported) ||
+		errors.Is(err, chat.ErrAttachmentsUnsupported) {
 		// The request does not fit the session's history, state or agent — a prompt
 		// whose process is gone or which is no longer being waited on, a message
 		// answering a question somebody already resolved (the text names every
@@ -323,7 +369,8 @@ func (h *rpcMethodHandler) replyErrorForChat(ctx context.Context, conn *jsonrpc2
 		// those answers out and keep the rest of the draft), a message
 		// sent into a turn that is holding a request open, a fork anchored past
 		// the end of the history or at the very first message, a fork of a
-		// session whose agent cannot be forked.
+		// session whose agent cannot be forked, files for an agent that cannot
+		// receive them.
 		// The message names what was wrong, and none of them is a server fault.
 		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, err.Error())
 	} else {

@@ -77,6 +77,9 @@ type AuthResult struct {
 	// It is the same on every route: the relay tunnel streams a request body and
 	// imposes no ceiling of its own.
 	MaxUploadSize int64 `json:"max_upload_size"`
+	// MaxAttachmentSize is the same thing for chat attachments
+	// (POST /api/chat/attachments), which have a ceiling of their own.
+	MaxAttachmentSize int64 `json:"max_attachment_size"`
 	// SessionToken is what the client stores in place of the password. It is a
 	// freshly issued token when the client authenticated with a password, and
 	// the very same token it sent when it authenticated with one — never a
@@ -139,6 +142,19 @@ type MessageParams struct {
 	// string written for all of them together, so there is no half of it to
 	// deliver — see chat.Client.SendAnswers.
 	Answering []QuestionAnswerParams `json:"answering,omitempty"`
+	// Attachments are files sent with the message, uploaded beforehand to the
+	// session's attachment store (POST /api/chat/attachments). Content may be
+	// empty when there are any. Refused beside Answering, and refused whole when
+	// any id names nothing the session has, or when the session's agent cannot
+	// receive files (chat.ErrAttachmentsUnsupported).
+	Attachments []MessageAttachmentParams `json:"attachments,omitempty"`
+}
+
+// MessageAttachmentParams names one uploaded file. Name is what the user calls
+// it, for display and for the agent: the id is a hash and keeps none of it.
+type MessageAttachmentParams struct {
+	ID   string `json:"id"`
+	Name string `json:"name,omitempty"`
 }
 
 // QuestionAnswerParams is one question answered by the message carrying it.
@@ -186,6 +202,10 @@ type MessageResult struct {
 	Seq     session.HistorySeq       `json:"seq,omitempty"`
 	Content string                   `json:"content,omitempty"`
 	Command *agent.CommandInvocation `json:"command,omitempty"`
+	// Attachments describe the files the message carried as its record does —
+	// type, size and dimensions read from the stored bytes — for the same
+	// reason as Content: the sender is left out of the broadcast.
+	Attachments []agent.FileBlock `json:"attachments,omitempty"`
 }
 
 type InterruptParams struct {

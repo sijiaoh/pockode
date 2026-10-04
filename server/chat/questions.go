@@ -304,7 +304,7 @@ func (c *Client) deliverAnswers(ctx context.Context, sessionID string, answers [
 	content := answerMessage(answering, by)
 	seq, err := c.sendEvent(ctx, sessionID, agent.MessageEvent{
 		Content: content, Answering: answering, Origin: originOf(by),
-	}, exclude)
+	}, nil, exclude)
 	if err != nil {
 		return seq, "", err
 	}

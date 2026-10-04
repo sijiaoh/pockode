@@ -381,6 +381,38 @@ func (m *Manager) ResolveSessionWorktree(sessionID string) (string, error) {
 	return "", fmt.Errorf("%w: %s", ErrSessionNotFound, sessionID)
 }
 
+// AttachmentDataDir is the data directory a file uploaded to one of the named
+// worktree's sessions is stored under (see package attachments), once both the
+// worktree and the session are known to exist.
+//
+// Uploads arrive over HTTP, off the WebSocket connection that would otherwise
+// hold the worktree, so this vouches for both names before either becomes a
+// path. A session of a deleted worktree is refused: it can be read, never
+// continued (SessionReader), and a file sent to it has nowhere to go.
+func (m *Manager) AttachmentDataDir(name, sessionID string) (string, error) {
+	// Any failure to resolve the name is the worktree not being there — a
+	// named one in a project that is not a git repository has no worktrees —
+	// and is wrapped so a caller can tell it from a fault reading the index.
+	if _, err := m.registry.Resolve(name); err != nil {
+		if errors.Is(err, ErrWorktreeNotFound) {
+			return "", err
+		}
+		return "", fmt.Errorf("%w: %w", ErrWorktreeNotFound, err)
+	}
+	reader, err := m.SessionReader(name)
+	if err != nil {
+		return "", err
+	}
+	_, found, err := reader.Get(sessionID)
+	if err != nil {
+		return "", err
+	}
+	if !found {
+		return "", fmt.Errorf("%w: %s", ErrSessionNotFound, sessionID)
+	}
+	return m.SessionDataDir(name)
+}
+
 // AgentProcessCount is how many sessions have a process of agentType's CLI
 // running, across every worktree. Only loaded worktrees are looked at, which is
 // exact for the reason StopSession gives.

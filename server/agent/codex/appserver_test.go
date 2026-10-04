@@ -1148,6 +1148,48 @@ func TestSendMessage_CarriesPockodesMessageID(t *testing.T) {
 	}
 }
 
+// Images go as localImage items codex reads itself; anything else is named in
+// the text for the model to open.
+func TestSendMessage_Attachments(t *testing.T) {
+	sess := newTestSession()
+	defer sess.cancel()
+	writer := &recordingWriteCloser{}
+	sess.stdin = writer
+	sess.stateMu.Lock()
+	sess.threadID = "thread-1"
+	sess.stateMu.Unlock()
+
+	err := sess.SendMessage(agent.Prompt{Text: "look", Attachments: []agent.Attachment{
+		{File: agent.FileBlock{Name: "shot.png", MIME: "image/png"}, Path: "/data/shot"},
+		{File: agent.FileBlock{Name: "log.txt", MIME: "text/plain; charset=utf-8"}, Path: "/data/log"},
+	}})
+	if err != nil {
+		t.Fatalf("SendMessage error: %v", err)
+	}
+
+	req := writer.waitForRequest(t, "turn/start")
+	var params struct {
+		Input []struct {
+			Type string `json:"type"`
+			Text string `json:"text"`
+			Path string `json:"path"`
+		} `json:"input"`
+	}
+	if err := json.Unmarshal(req.Params, &params); err != nil {
+		t.Fatalf("turn/start params: %v", err)
+	}
+	if len(params.Input) != 2 {
+		t.Fatalf("input = %+v, want an image and a text", params.Input)
+	}
+	if params.Input[0].Type != "localImage" || params.Input[0].Path != "/data/shot" {
+		t.Errorf("first item = %+v, want the image by path", params.Input[0])
+	}
+	if params.Input[1].Type != "text" || !strings.HasPrefix(params.Input[1].Text, "look\n\n") ||
+		!strings.Contains(params.Input[1].Text, "/data/log") || strings.Contains(params.Input[1].Text, "/data/shot") {
+		t.Errorf("text item = %q, want the message and the text file's path", params.Input[1].Text)
+	}
+}
+
 // A message with no id of its own must not invent one: an echo carrying an id
 // nothing in the transcript has would name a message that does not exist.
 func TestSendMessage_WithoutAnIDSendsNoClientID(t *testing.T) {

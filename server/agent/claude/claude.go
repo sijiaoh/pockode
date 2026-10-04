@@ -4,6 +4,7 @@ package claude
 import (
 	"context"
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -147,6 +148,14 @@ func buildArgs(opts agent.StartOptions, launch claudeLaunch) []string {
 		args = append(args, "--effort", opts.Effort)
 	}
 
+	// Files the user sends live in the session's attachment store, outside the
+	// work directory, and claude asks before reading outside its directories:
+	// without this every PDF sent by path would raise a permission request, and
+	// a work running unattended would stall on one. Measured on claude 2.1.286.
+	if dir := attachmentDir(opts); dir != "" {
+		args = append(args, "--add-dir", dir)
+	}
+
 	if launch.sessionID != "" {
 		if launch.resume {
 			args = append(args, "--resume", launch.sessionID)
@@ -185,6 +194,17 @@ func (a *Agent) Start(ctx context.Context, opts agent.StartOptions) (agent.Sessi
 		}
 		removeMCPConfig = remove
 		claudeArgs = append(claudeArgs, "--mcp-config", mcpConfigPath)
+	}
+
+	// Created up front rather than left to the first upload: the directory is
+	// handed to the CLI once, at launch, and an upload can arrive while this
+	// process is running.
+	if dir := attachmentDir(opts); dir != "" {
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			removeMCPConfig()
+			cancel()
+			return nil, fmt.Errorf("failed to create attachment dir: %w", err)
+		}
 	}
 
 	proc, err := agent.StartProcess(procCtx, log, Binary, claudeArgs, opts.WorkDir)
@@ -326,25 +346,98 @@ func (s *cliSession) takeNote() string {
 // So this session does not implement agent.MessageIngestReporter and the send
 // path writes the read point for it; see agent.MessageIngestedEvent.
 func (s *cliSession) SendMessage(prompt agent.Prompt) error {
-	text := prompt.Text
+	// Read before anything else is done with the prompt: a file that cannot be
+	// read fails the send, and the queued note must still be there for the
+	// prompt the user sends next.
+	images, byPath := splitInlineImages(prompt.Attachments)
+	content := make([]inputBlock, 0, len(images)+1)
+	for _, a := range images {
+		data, err := os.ReadFile(a.Path)
+		if err != nil {
+			return fmt.Errorf("read attachment %q: %w", a.File.Name, err)
+		}
+		content = append(content, inputBlock{
+			Type: "image",
+			Source: &imageSource{
+				Type:      "base64",
+				MediaType: a.File.MIME,
+				Data:      base64.StdEncoding.EncodeToString(data),
+			},
+		})
+	}
+
+	text := agent.AppendNote(prompt.Text, agent.AttachedFilesNote(byPath))
 	if note := s.takeNote(); note != "" {
 		text = fmt.Sprintf("<system-reminder>%s</system-reminder>\n\n%s", note, text)
+	}
+	// The API refuses an empty text block, and a message of images alone has
+	// nothing to put in one.
+	if text != "" {
+		content = append(content, inputBlock{Type: "text", Text: text})
 	}
 
 	msg := userMessage{
 		Type: "user",
 		Message: userContent{
 			Role:    "user",
-			Content: []textContent{{Type: "text", Text: text}},
+			Content: content,
 		},
 	}
 	data, err := json.Marshal(msg)
 	if err != nil {
 		return fmt.Errorf("failed to marshal message: %w", err)
 	}
-	s.log.Debug("sending prompt", "length", len(text))
+	s.log.Debug("sending prompt", "length", len(text), "images", len(images), "files", len(byPath))
 	return s.writeStdin(data)
 }
+
+// Limits on what goes to claude as image content, from the Anthropic API's
+// documented ceilings. An image block the API refuses is not refused once: it
+// stays in claude's own transcript and is sent again with every later turn, so
+// one bad image would break the session for good. Anything outside these goes
+// by path instead, where claude's Read scales the image down before the model
+// sees it.
+const (
+	// maxInlineImage is the API's 5 MB per image, which it measures on the
+	// base64 — a third larger than the file.
+	maxInlineImage = 5_000_000 / 4 * 3
+	// maxInlineSide is the API's 8000 px on either side; past 20 images in one
+	// request that drops to 2000, which maxInlineImages keeps one message from
+	// reaching on its own. A conversation that collects more across turns is
+	// past what one message can see, and is left to the CLI's own handling of
+	// a long transcript.
+	maxInlineSide   = 8000
+	maxInlineImages = 20
+	// maxInlineTotal keeps one message well inside the API's 32 MB request,
+	// which also has to carry the conversation itself.
+	maxInlineTotal = 15 << 20
+)
+
+// splitInlineImages picks the attachments that go to claude as image blocks.
+// Dimensions of zero mean the header could not be read, which is as good as a
+// file the API will refuse to decode.
+func splitInlineImages(attachments []agent.Attachment) (inlined, byPath []agent.Attachment) {
+	var total int64
+	var count int
+	return agent.SplitAttachments(attachments, func(a agent.Attachment) bool {
+		f := a.File
+		ok := count < maxInlineImages &&
+			agent.InlineImageMIMEs[f.MIME] &&
+			f.Size <= maxInlineImage &&
+			f.Width > 0 && f.Height > 0 &&
+			f.Width <= maxInlineSide && f.Height <= maxInlineSide &&
+			total+f.Size <= maxInlineTotal
+		if ok {
+			total += f.Size
+			count++
+		}
+		return ok
+	})
+}
+
+// ReceivesAttachments marks this session as one that delivers attachments; see
+// agent.AttachmentReceiver.
+func (s *cliSession) ReceivesAttachments() {}
 
 // SendPermissionResponse sends a permission response to Claude.
 func (s *cliSession) SendPermissionResponse(data agent.PermissionRequestData, choice agent.PermissionChoice) error {
@@ -937,13 +1030,22 @@ type userMessage struct {
 }
 
 type userContent struct {
-	Role    string        `json:"role"`
-	Content []textContent `json:"content"`
+	Role    string       `json:"role"`
+	Content []inputBlock `json:"content"`
 }
 
-type textContent struct {
-	Type string `json:"type"`
-	Text string `json:"text"`
+// inputBlock is one content block of a user message, in the Anthropic API's
+// shape, which is what stream-json input takes.
+type inputBlock struct {
+	Type   string       `json:"type"`
+	Text   string       `json:"text,omitempty"`
+	Source *imageSource `json:"source,omitempty"`
+}
+
+type imageSource struct {
+	Type      string `json:"type"`
+	MediaType string `json:"media_type"`
+	Data      string `json:"data"`
 }
 
 type controlRequest struct {
@@ -1631,4 +1733,13 @@ func (r resultEvent) errorMessage() string {
 		return fmt.Sprintf("Claude ended the turn with an error (%s)", r.Subtype)
 	}
 	return "Claude ended the turn with an error"
+}
+
+// attachmentDir is where this session's attachments live, or "" for a session
+// started without a data directory to keep any in.
+func attachmentDir(opts agent.StartOptions) string {
+	if opts.DataDir == "" || opts.SessionID == "" {
+		return ""
+	}
+	return attachments.Dir(opts.DataDir, opts.SessionID)
 }

@@ -76,6 +76,20 @@ func TestIntegration_ProtocolSchemaStillFitsWhatWeSend(t *testing.T) {
 		requireItemVariantProps(t, dir, "userMessage", "clientId")
 	})
 
+	// An attached image is handed over by path; losing the variant would turn
+	// every screenshot into a refused turn.
+	t.Run("a turn's input can carry a local image by path", func(t *testing.T) {
+		for _, branch := range schemaBranches(t, dir, "codex_app_server_protocol.v2.schemas.json", "UserInput") {
+			properties, _ := branch["properties"].(map[string]interface{})
+			disc, _ := properties["type"].(map[string]interface{})
+			if containsString(jsonStrings(disc["enum"]), "localImage") {
+				requireProps(t, properties, "localImage", "SendMessage sends", "path")
+				return
+			}
+		}
+		t.Fatal("UserInput no longer has a localImage variant, which SendMessage sends attached images as")
+	})
+
 	// The fork anchor is only as good as the turn id the events are stamped
 	// with, and that is read off the notification envelope rather than the item.
 	// It stopping being required would mean stamping empty ids on records that

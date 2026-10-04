@@ -2,17 +2,17 @@ package agent
 
 import (
 	"bytes"
+	"encoding/binary"
 	"image"
 	"log/slog"
 
 	// Registered for their DecodeConfig only, to read an image's dimensions from
-	// its header. These three cover what reaches here: claude re-encodes
-	// anything large as JPEG and passes small PNGs through, and the images
-	// codex's view_image names on disk are overwhelmingly one of the three.
-	// WebP, BMP and TIFF would each cost a dependency or a decoder of their own
-	// for a format the tools rarely produce, and a format none of these can
-	// decode costs the dimensions and nothing else — the UI then holds a
-	// fallback shape rather than the right one.
+	// its header. With webpDimensions these cover the image types the agents
+	// take inline (see InlineImageMIMEs), and claude only inlines an image whose
+	// dimensions are known — so a format missing here is one an upload can never
+	// send as an image. BMP, TIFF and the rest are left out: nothing takes them
+	// inline, and a format nothing here can read costs the dimensions and
+	// nothing else — the UI then holds a fallback shape rather than the right one.
 	_ "image/gif"
 	_ "image/jpeg"
 	_ "image/png"
@@ -101,8 +101,48 @@ type FileBlock struct {
 func ImageDimensions(log *slog.Logger, data []byte) (int, int) {
 	cfg, format, err := image.DecodeConfig(bytes.NewReader(data))
 	if err != nil {
+		if w, h, ok := webpDimensions(data); ok {
+			return w, h
+		}
 		log.Debug("could not read image dimensions", "error", err, "format", format)
 		return 0, 0
 	}
 	return cfg.Width, cfg.Height
+}
+
+// webpDimensions reads a WebP's canvas size from the first chunk of its RIFF
+// container, in each of the three layouts the format has: lossy (VP8), lossless
+// (VP8L) and extended (VP8X). Hand-read rather than through a WebP decoder,
+// because the size is all that is wanted and it sits at fixed offsets.
+func webpDimensions(data []byte) (int, int, bool) {
+	if len(data) < 20 || string(data[0:4]) != "RIFF" || string(data[8:12]) != "WEBP" {
+		return 0, 0, false
+	}
+	p := data[20:] // the first chunk's payload
+	switch string(data[12:16]) {
+	case "VP8 ":
+		// A 3-byte frame tag, the start code, then 14-bit sizes.
+		if len(p) < 10 || p[3] != 0x9d || p[4] != 0x01 || p[5] != 0x2a {
+			return 0, 0, false
+		}
+		w := int(binary.LittleEndian.Uint16(p[6:8]) & 0x3fff)
+		h := int(binary.LittleEndian.Uint16(p[8:10]) & 0x3fff)
+		return w, h, w > 0 && h > 0
+	case "VP8L":
+		// A signature byte, then width-1 and height-1 as 14-bit fields.
+		if len(p) < 5 || p[0] != 0x2f {
+			return 0, 0, false
+		}
+		bits := binary.LittleEndian.Uint32(p[1:5])
+		return int(bits&0x3fff) + 1, int(bits>>14&0x3fff) + 1, true
+	case "VP8X":
+		// Flags and reserved bytes, then width-1 and height-1 as 24-bit fields.
+		if len(p) < 10 {
+			return 0, 0, false
+		}
+		w := int(p[4]) | int(p[5])<<8 | int(p[6])<<16
+		h := int(p[7]) | int(p[8])<<8 | int(p[9])<<16
+		return w + 1, h + 1, true
+	}
+	return 0, 0, false
 }

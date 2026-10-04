@@ -21,6 +21,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/pockode/server/filestore"
 )
@@ -137,4 +138,56 @@ func Clone(dataDir, srcSessionID, dstSessionID string) error {
 		}
 	}
 	return nil
+}
+
+// ErrNotFound is returned by Resolve for an id that names no stored attachment.
+var ErrNotFound = errors.New("attachment not found")
+
+// Resolve returns the path of one stored attachment, for a caller that has to
+// hand the file itself on — an agent reading what the user sent.
+//
+// The id arrives from a client, so it is held to what Put hands out before it
+// becomes a path: a bare file name inside the session's directory, naming a
+// regular file. Anything else is ErrNotFound, the same answer a well-formed id
+// with nothing behind it gets.
+func Resolve(dataDir, sessionID, id string) (string, error) {
+	if id == "" || !filepath.IsLocal(id) || filepath.Base(id) != id || filepath.Ext(id) == ".lock" {
+		return "", ErrNotFound
+	}
+	path := filepath.Join(Dir(dataDir, sessionID), id)
+	info, err := os.Lstat(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		return "", ErrNotFound
+	}
+	if err != nil {
+		return "", fmt.Errorf("stat attachment: %w", err)
+	}
+	if !info.Mode().IsRegular() {
+		return "", ErrNotFound
+	}
+	return path, nil
+}
+
+// UploadExtension is the part of a user's file name worth keeping on the id of
+// a file they uploaded.
+//
+// Unlike content an agent delivered, an upload is read back by the agent's own
+// tools, and those go by extension: claude's Read only treats a file as a PDF
+// or an image when its name says so, so a report stored under a bare hash would
+// reach the model as bytes. Only a short alphanumeric extension is kept — the
+// id is a file name on this machine, and nothing a client sends gets to choose
+// more of it than that.
+func UploadExtension(name string) string {
+	ext := strings.ToLower(filepath.Ext(name))
+	// .lock is what filestore's atomic write names its lock file, which Clone
+	// and Resolve both pass over.
+	if len(ext) < 2 || len(ext) > 11 || ext == ".lock" {
+		return ""
+	}
+	for _, r := range ext[1:] {
+		if (r < 'a' || r > 'z') && (r < '0' || r > '9') {
+			return ""
+		}
+	}
+	return ext
 }
