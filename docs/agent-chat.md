@@ -157,6 +157,13 @@ constrained: it is the window's chrome. With the sidebar open at its default
 and tablets are untouched. The scroll-to-bottom button belongs to the column too
 ([Where the View Sits](#where-the-view-sits)).
 
+**Only the user speaks in bubbles.** The agent's message has no bubble: its text,
+tool calls and cards run the full width of the column in `text-th-text-primary`,
+and below them a turn-end row (`Chat/MessageActions.tsx`) holds Copy, Fork and
+the `…` menu — the spinner stands in that row while the message is still being
+written. The user's bubble keeps the `…` slot beside it. Why the two sides
+differ is in [session-fork-ui.md](session-fork-ui.md#entry-point).
+
 ## History Paging
 
 Opening a session does not ship its whole transcript. `chat.messages.subscribe`

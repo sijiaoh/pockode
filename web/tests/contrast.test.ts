@@ -90,9 +90,9 @@ describe("guarded pairs", () => {
 
 // A fill and its foreground used to be declared by the same set of rules, so
 // counting either proved the walk had found every variant. `--th-text-muted`
-// breaks that: it is carried by five fills, and one of them — `--th-ai-bubble`
-// — web-cluster does not declare at all, having no chat bubbles. Counting per
-// pair would now demand a bubble that should not exist.
+// breaks that: it is carried by several fills, and a fill one stylesheet needs
+// is one the other may have no surface for. Counting per pair would demand that
+// every stylesheet declare every surface.
 //
 // The invariant that survives is the one that was always the point: a variant
 // that declares a guarded foreground is checked against *something*. It is

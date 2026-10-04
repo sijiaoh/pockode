@@ -93,8 +93,8 @@ same row structure as a tool call (`PockodeCommandItem` in
   the agent read.
 
 A command message has no status and no chip, because it is an event that has
-already happened. It keeps the message-action slot like the other full-width
-lines (a work event, an agent's answer), so the row ends where the bubbles do
+already happened. It is still the user's own message, so it keeps the
+message-action slot and its `…` like every user row, an agent's answer included
 ([session-fork-ui.md](session-fork-ui.md#which-rows-reserve-a-slot)).
 
 **The local echo is the line from the first frame.** `sendUserMessage` parses

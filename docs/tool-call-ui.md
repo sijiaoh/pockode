@@ -7,7 +7,8 @@ decides how one looks and behaves. Read it first — every field named here
 `fetches`, `durationMs`, `exitCode`, `seenAt`, and a subagent run's children) is
 its `ToolRun`, and nothing below asks for data it does not define.
 
-The surfaces are `ToolCallItem.tsx`, `TaskItem.tsx` (the subagent category) and
+The surfaces are `ToolCallItem.tsx`, `TaskItem.tsx` (the subagent category),
+`ToolGroupSummary.tsx` (the row a run of calls folds into) and
 `PermissionRequestItem` in `MessageItem.tsx` — all three drawing their row
 through `ToolRow.tsx`, which is where the grammar below lives — plus
 `ToolInvocation.tsx` for the invocation a row and a card both show,
@@ -34,12 +35,14 @@ is [agent-chat.md](agent-chat.md); the width ladder and the pointer gates are
 
 ## The rules
 
-**One row, one line, always.** A tool call is a line in a transcript, not a
-card. It does not wrap, it does not grow a second title line at `sm:`, and it
+**One row, one line, always — and a run of rows, one line too.** A tool call
+is a line in a transcript, not a card. It does not wrap, it does not grow a second title line at `sm:`, and it
 never re-flows when the window is resized. Twenty rows that are each one line
 can be skimmed; twenty rows that are each one-or-three lines cannot. The only
 thing that ever adds a line is the **second line**, and only for a run that has
-something to say on it — see below.
+something to say on it — see below. Consecutive calls between two pieces of
+text then fold into **one summary row** ([groups](#groups)), with the rows the
+reader must not miss pinned under it.
 
 **Nothing is hidden behind hover.** Not a tooltip, not a reveal. A phone has no
 hover, and a hover-revealed control is permanently hidden wherever hovering does
@@ -62,6 +65,140 @@ table below. Every "is this still running" question is answered by the reducer
 alike — that single author is what the merge of subagent rows into tool rows
 bought.
 
+## The list
+
+Consecutive rows — tool calls, subagent calls and permission cards, whatever
+their state — are drawn as **one list**: a single `rounded-lg border
+border-th-border` frame with a 1px `border-th-border` hairline between rows, and
+no gap and no fill of its own, so the rows sit on the transcript's ground. Text,
+a question card and every other part end the list and stand on their own, with
+the message's `space-y-2` around them. One call alone is a list of one row, so
+a row looks the same wherever it is.
+
+```
+The sender retries on 429 and 503. Two gaps:
+┌─────────────────────────────────────────────┐
+│ ›  ✓  Read   server/relay/sender.go         │
+├─────────────────────────────────────────────┤
+│ ›  ✗  Bash   go test ./relay/…              │  ← the row itself tinted red
+│          --- FAIL: TestRetry (0.01s)        │
+├─────────────────────────────────────────────┤
+│ ›  ✓  Edit   server/relay/sender.go         │
+└─────────────────────────────────────────────┘
+Fixed both; tests pass.
+```
+
+It used to be a stack of cards, each `rounded bg-th-bg-secondary` with 8px
+between them. Twenty calls were twenty boxes and nineteen gutters; a list says
+the same with a hairline, and the frame says where the run of calls begins and
+ends.
+
+`PartBlocks` (`Chat/ToolList.tsx`) draws it, over `partBlocks` in
+`lib/partTree.ts`, and the main transcript and a subagent's Process both go
+through it, so a list reads the same at every depth. Two details are
+load-bearing:
+
+- **Each row carries its own `border-t`, and the first one's is pulled up under
+  the frame** (`-mt-px` on the inner column, clipped by the frame's
+  `overflow-hidden`). Not `divide-y`: that draws between DOM siblings whether or
+  not they are displayed, so a hidden last row would leave a hairline on top of
+  the frame's bottom edge — a doubled line.
+- **The frame clips.** Anything a row draws outside its own box is cut off, so
+  everything a row draws on its edge is drawn inside it: the focus ring is
+  `ring-inset`, the pending card's frame is an inset outline, and the jump
+  highlight on it is an inset shadow.
+
+Each row's wrapper, not the list, is a scroll anchor candidate in the main
+transcript, exactly as a part on its own is (`scrollAnchor.ts`): a list with
+its rows open can be several screens tall, and holding it still would say
+nothing about where inside it the reader is. A group's summary row is one too; a
+row folded into it is not ([groups](#groups)).
+
+## Groups
+
+A turn of fourteen calls is fourteen rows, and on a phone that is two screens
+of `Read`s between the question and the answer. So consecutive calls in a list
+fold into one row that says what they did:
+
+```
+┌───────────────────────────────────────────────┐
+│ ›  ✓  Edited 2 files · Ran 1 command · Read 2…│  ← the summary
+├───────────────────────────────────────────────┤
+│ ›  ✗  Bash   go test ./relay/…                │  ← pinned: failed
+│          --- FAIL: TestRetry (0.01s)          │
+├───────────────────────────────────────────────┤
+│ ›  ⟳  Bash  background  npm run dev     4m 12s│  ← pinned: background
+└───────────────────────────────────────────────┘
+```
+
+`rowEntries` (`lib/toolGroups.ts`) decides it, a pure function of the parts as
+they are now; `PartBlocks` draws it, so a subagent's Process folds exactly as a
+message does. Every part of a list falls into one of three kinds:
+
+| Kind | Parts | In a group |
+|---|---|---|
+| **Breaker** | a subagent call, `ExitPlanMode`, and their cards — and, since they already end the list, text, a question card and every other part | ends the group and stands as itself |
+| **Pinned** | a call that is `error`; one that is `background` or `fromBackground`, running or settled; a card that is not `allowed`, or is `allowed` while its row has not come back | belongs to the group, never folds |
+| **Foldable** | every other call (`running` / `success` / `interrupted`), with its `allowed` card once its row is back | folds into the summary |
+
+- **A call is one member, by id.** A card and the row it stands for share a
+  `tool_use_id` and are counted, pinned and folded together.
+- **Two foldable members or no group.** With fewer the rows lie flat as they
+  are: one call needs no summary, and a summary over one success and a failure
+  costs a line and saves none.
+- **Why a subagent breaks the run.** Its row already is a summary — its Process
+  is the folded list — and its waiting card sits under it, which must stay in
+  sight. A plan is written for the user to read, prose in all but shape.
+- **Why background work stays pinned after it settles.** It settles long after
+  the reader moved on; moving it into the summary then deletes a row above
+  them — the height change [the second line](#the-second-line-problem-1) works
+  to avoid — and its settled second line, *"Build succeeded in 4m12s"*, is what
+  they came back for. The reducer's known corner, a call marked backgrounded
+  only after its placeholder
+  ([tool-call-model.md](tool-call-model.md#background-lives-on-tool_result-twice)),
+  folds until its outcome arrives and then comes out; it is accepted, not
+  patched over.
+- **Why an approved card stays pinned until its row is back.** Claude does not
+  resend the call after approval; until progress or a result rebuilds the row,
+  the card is all there is of the call, and folding it would put a tick over a
+  command still running.
+
+**The summary row** is the tool row's box (`RowButton` in `ToolRow.tsx`) with a
+different text column, so the two cannot differ in height. Settled, it is the
+verbs of its **successful** foldable calls — a failed `Edit` changed nothing,
+and it is pinned below anyway — in a fixed order by consequence, so the end a
+narrow screen cuts is the least important: `Edited N files · Ran N commands ·
+Read N files · Searched N times · Fetched N pages · Updated todos · Used N
+tools · N interrupted`. Files are counted once however often they were touched
+(a Codex file change counts each of its files); everything else counts calls,
+and a Codex `Bash` is read through the same `singleCommandAction` as its row's
+title (`toolVerb` in `lib/toolSummary.ts`). The glyph is a muted `Check`, or
+`Ban` when something was interrupted — never green, never red; red is the
+pinned rows'. No accent title: that is what tells it from a tool row.
+
+While a foldable call runs, the summary is on that step, in the grammar a
+subagent's second line already speaks: `6 steps · Bash  npm run build…  12s` —
+every call in the group counted, then the newest running one worded as its own
+row, with its elapsed time. One line either way, so it does not change height
+when it settles. It does not spin while a card in the group waits on the user:
+then the machine is waiting for them, and with nothing settled yet the row says
+only `N steps`, with an empty glyph — neither busy nor done. Its text is `aria-hidden` while it moves,
+and the spinner says `Tool calls running`.
+
+**Rendering.** Every part is rendered once, in transcript order; the group adds
+a summary entry before its first part and hides its foldable parts with the
+`hidden` attribute. Nothing is copied or remounted — a pending card is in the
+DOM once, so a jump to it lands, and a row folded and unfolded comes back as it
+was. A hidden part is not a scroll anchor candidate: an element that is not
+displayed measures as sitting at the top.
+
+**Nothing opens a group but the user, and nothing folds what the user opened.**
+A row's open body is held by the list (`rowExpansionContext.ts`), which keeps a
+row the user opened in sight when its group forms or closes, until they close
+it themselves — the run they were watching does not vanish because the next
+call arrived. Only the user's own choice counts: a pending card opens itself,
+and folding it once it is answered and its row is back is the point.
+
 ## The row
 
 ```
@@ -82,28 +219,35 @@ line. The second line then aligns under the name for free, and the alignment
 cannot drift from whatever the leading column is sized to.
 
 ```tsx
-<button className="flex w-full items-start gap-1.5 rounded p-2 text-left
-                   min-h-[36px] pointer-coarse:min-h-11 sm:p-2.5
+<button className="flex min-h-9 w-full flex-col justify-center px-2 py-1.5
+                   text-left pointer-coarse:min-h-11 sm:px-2.5
                    hover:bg-th-overlay-hover">
-  <ChevronRight className={`size-3 shrink-0 … ${expanded ? "rotate-90" : ""}`} />
-  {glyph}                                   {/* ToolStatusGlyph, or the card's CircleHelp */}
-  <span className="min-w-0 flex-1">
-    <span className="flex items-baseline gap-1.5">
-      <span className="shrink-0 text-th-accent">{title}</span>
-      {chip && <Chip>{chip}</Chip>}          {/* subagent type, MCP server */}
-      {background && <Chip>background</Chip>}
-      <Detail detail={detail} detailTail={detailTail} />
-      {meta}
+  <span className="flex w-full items-start gap-1.5">
+    <ChevronRight className={`size-3 shrink-0 … ${expanded ? "rotate-90" : ""}`} />
+    {glyph}                                 {/* ToolStatusGlyph, or the card's CircleHelp */}
+    <span className="min-w-0 flex-1">
+      <span className="flex items-baseline gap-1.5">
+        <span className="shrink-0 text-th-accent">{title}</span>
+        {chip && <Chip>{chip}</Chip>}        {/* subagent type, MCP server */}
+        {background && <Chip>background</Chip>}
+        <Detail detail={detail} detailTail={detailTail} />
+        {meta}
+      </span>
+      {secondLine && <SecondLine … />}
     </span>
-    {secondLine && <SecondLine … />}
   </span>
 </button>
 ```
 
-Both icons keep `size-3` and the row keeps `text-xs`, `rounded`,
-`bg-th-bg-secondary` and `p-2` — a re-shaping of the row that was there, not a
-new visual language. `items-start` rather than `items-center` because the glyph
-belongs to line 1 when there are two lines.
+The row has no fill, corner or frame of its own: it is a line in
+[the list](#the-list). Both icons keep `size-3` and the row keeps `text-xs`.
+
+**One line sits in the middle of the floor; two lines fill it.** The button is a
+column centred on the cross axis, and the two-column row inside it is
+`items-start`. With one line the 16px line box is centred in the 36px or 44px
+floor instead of hugging its top with the bottom half empty; with two, 32px of
+lines plus `py-1.5` is exactly 44px, and the glyph still sits level with line 1
+rather than between the lines — it belongs to line 1.
 
 **The chevron is unconditional.** It used to be drawn only when there was a
 result to show, with a blank spacer otherwise — which is why a running call, and
@@ -115,7 +259,7 @@ the buttons, not in it), and "there is always an invocation" is a fact about
 tool rows, not about cards.
 
 **Hit area.** The row is the only tap target on line 1, so it takes the floor
-directly: `min-h-[36px] pointer-coarse:min-h-11`. It is not a `touch-target`
+directly: `min-h-9 pointer-coarse:min-h-11`. It is not a `touch-target`
 overlay — there is room to grow the box, and a real box is always simpler
 (`web/src/index.css`, the `touch-target` comment). Controls *inside* the body
 (file chips, the copy button) keep the ≥8px separation that overlay hit areas
@@ -144,7 +288,7 @@ The glyph column is the single place status is stated:
 | `running` | `Spinner` (`variant="current"`, `size="h-3 w-3"`, with the tool name in its `srText`) | inherits | activity line when there is one | invocation + live output |
 | `background` | same spinner, plus a `background` chip after the name | inherits | activity line when there is one, else the last line fetched of it | invocation + live output + whatever has been fetched |
 | `success` | `Check` | **`text-th-text-muted`** | second line only if it came from the background (below) | invocation + result |
-| `error` | `X` | `text-th-error` | `border border-th-error/40` on the container, detail text `text-th-error`, second line = the last line of the output — or the outcome, when the run came from the background | closed, like every other row |
+| `error` | `X` | `text-th-error` | the row button tinted `bg-th-error/10` (`hover:bg-th-error/15`), detail text `text-th-error`, second line = the last line of the output — or the outcome, when the run came from the background | closed, like every other row |
 | `interrupted` | `Ban` | `text-th-text-muted` | second line only if it came from the background (below) | invocation + whatever came back |
 
 Two of those are deliberate departures:
@@ -241,10 +385,16 @@ stuck and one that looks answerable.
 those sizes, with the same `toolSummary` derivation and the same `Detail`
 component — a user who approved `rm -rf …` and then reads the row that ran it
 should be looking at the same string truncated the same way. The card is the one
-place a row wears a warning border (`border border-th-warning bg-th-warning/10`)
-with `CircleHelp` in `text-th-warning`: it is the only tool-shaped row in the
-transcript that is blocked on the user, so it is the only one that gets to be
-loud before anything has gone wrong.
+place a row is still a card — tinted `bg-th-warning/10` and framed by a 1px
+`outline-th-warning` drawn just inside its edge — with `CircleHelp` in
+`text-th-warning`: it is the only tool-shaped row in the transcript that is
+blocked on the user, so it is the only one that gets to be loud before anything
+has gone wrong. An outline rather than a border, so the frame does not shift
+the card against the rows around it, and drawn inside because the list clips
+whatever is outside; an outline rather than an inset ring, because an outline is
+painted over the card's children and the row's hover cannot cover it. Its body
+keeps the tint. Once answered it is an ordinary row: no tint, and a body on
+`bg-th-bg-secondary` like a tool row's.
 
 **The card's body is the row's Invocation.** `ToolInvocation`
 (`Chat/ToolInvocation.tsx`) draws both, so the command a user approved and the
@@ -423,7 +573,7 @@ is noise (`> vite build`).
 
 It is drawn `text-th-text-muted` like every other second line, not red. The row
 already carries three reds; a fourth would dilute "red means failed" into "red
-means this row". The border and the glyph say the call failed, the second line
+means this row". The tint and the glyph say the call failed, the second line
 says what it said.
 
 Nothing else. It is one line, it truncates, and the full text is in the body.
@@ -1055,11 +1205,9 @@ exception: **a nested `TaskItem` does not open itself on failure.** Inside an
 open Process it is mid-transcript by definition, so opening it is a height
 change under the reader for a failure the outer subagent has already dealt
 with — its red row says it failed, and the outer report is the account. The
-Process is a **list of parts**, the same shape a message's content is, which is
-the one structural promise this design makes to the coming tool-call-grouping
-work: whatever folds a run of consecutive tool rows into a summary in a message
-folds them in the Process by being handed the Process's list. Nothing here
-groups anything; nothing here prevents it.
+Process is a **list of parts**, the same shape a message's content is, so it is
+drawn by the same `PartBlocks` and its consecutive calls fold into a summary
+exactly as a message's do ([groups](#groups)).
 
 **It does not scroll on its own.** The `TaskItem` body is a stack of blocks
 that each carry a ceiling, and this is the one block that must not: the rows
@@ -1067,8 +1215,8 @@ inside it open into bodies with their own 60vh scroller, and a scroller inside
 a scroller is the trap [the body](#the-body-problems-2-and-3) already refuses —
 a drag on a phone goes to whichever box is under the thumb. So the Process grows
 to its full height, and the cost — a long subagent is many rows once opened —
-is accepted because it is only paid by someone who asked for it, and it is the
-first thing grouping will shrink.
+is accepted because it is only paid by someone who asked for it, and
+[grouping](#groups) folds most of it back into a line.
 
 **While the run is live it grows at the bottom**, newest last, and it does not
 scroll itself to follow. The row's second line is the live glance; an open
@@ -1084,17 +1232,19 @@ section exists to end. None of the cues is a new colour:
 - **A rail.** The children sit in `ml-2 border-l-2 border-th-border pl-2`, so
   the Process is a column visibly hung from its own heading, and the main
   transcript's text never has one. A rail rather than a card because the
-  children are rows that already have their own background, and a card around
-  cards is a box of boxes.
-- **The column is the transcript's ground, not the card's.** The `TaskItem`
-  body is `bg-th-bg-secondary`, and so is every tool row — drawn on it, a row
-  would have no edge, and a run of them would read as one block of text. So the
-  column takes the assistant bubble's `bg-th-ai-bubble`, with the bubble's
-  `space-y-2` between parts, and the rows inside it look exactly as they do in
-  the main transcript. A nested `TaskItem` is then a secondary card on a bubble
-  column again, so the two grounds alternate by themselves at every depth.
+  children's rows are already a framed list, and a card around a list is a box
+  around a box.
+- **The rows are a list of their own.** The column sits on the `TaskItem` body's
+  `bg-th-bg-secondary` with no fill of its own, and its rows are drawn by the
+  same `PartBlocks` as the main transcript's: a framed list, with the message's
+  `space-y-2` between it and the subagent's text. The frame and the hairlines
+  give each row its edges, which is why the column no longer needs a ground of
+  its own to set rows off from it — it used to take the agent's bubble fill for
+  that, back when every row was a filled card. The column keeps a `pr-2`, so a
+  list in it does not run its frame into the frame of the list the Task row
+  itself sits in.
 - **The subagent's text is a note, not a message.** The main agent's text is
-  `MarkdownContent` — `prose prose-sm` in `text-th-ai-bubble-text`. The
+  `MarkdownContent` — `prose prose-sm` in `text-th-text-primary`. The
   subagent's is the same component in a **note** variant: body at the row's
   `text-xs`, in `text-th-text-secondary`, with tight paragraph margins. A
   variant rather than a wrapper's classes, because `prose-sm` and the prose
@@ -1103,9 +1253,10 @@ section exists to end. None of the cues is a new colour:
   with the note rather than stand out of it. No bubble, no avatar, no message
   chrome: a subagent's text is commentary between its steps, and drawing it at
   the weight of an answer is what made it read as the main agent talking.
-- **Tool rows are unchanged.** They are already one-line rows at `text-xs`; the
-  rail is what says whose they are. Restyling them would be a second visual
-  language for the same call, and one more thing grouping has to know.
+- **Tool rows are the same rows.** One-line rows at `text-xs` in the same list,
+  folding into the same groups; the rail is what says whose they are. Restyling
+  them would be a second visual language for the same call, and one more thing
+  grouping would have to know.
 - **It is named for a screen reader too.** The column is `role="group"` with an
   `aria-label` naming whose it is (`Explore subagent's process`, from the row's
   chip; `Subagent's process` on a row with none, as every Codex spawn is). The cues above are all visual, and a screen-reader user
@@ -1134,8 +1285,8 @@ design.
   plus its border is 18px; three levels cost about 54px, which on a 360px phone
   still leaves the innermost rows well over 250px — room for a title and a
   meaningful detail. From the fourth level the rail is drawn without further
-  indent, so a pathological depth narrows nothing past that — the rail and the
-  alternating ground still say where each level starts.
+  indent, so a pathological depth narrows nothing past that — the rail and each
+  level's own list frame still say where each level starts.
 
 #### When a step asks the user
 
@@ -1285,8 +1436,9 @@ decisions, and reachability is a CSS variant
    log it wrote is a reference line inside that body — full path, `Not fetched`,
    no card above the body — with an Open only when the path is under the work
    directory.
-5. A failed `Bash`: red `X`, red detail, bordered row, **closed**, with the last
-   line it printed under the title. Open it for the rest.
+5. A failed `Bash`: red `X`, red detail, the row tinted red (its body is not),
+   **closed**, with the last line it printed under the title. Open it for the
+   rest.
 6. A codex `commandExecution`: detail derived from `commandActions` when there is
    one, `durationMs` on the right, `exitCode` in the body.
 7. An approved `Bash`: **one** row, not two — the card takes the pending row's
@@ -1339,6 +1491,33 @@ decisions, and reachability is a CSS variant
     and no spinner left anywhere inside its Process.
 20. A transcript recorded before this change: subagent rows and their work read
     exactly as they did, with no `0 steps` anywhere.
+21. A turn with text, five calls, text, one call: two framed lists, hairlines
+    between rows and no gaps, the text outside both. A one-line row has its
+    line in the middle of its 44px on a phone, not along the top; a two-line row
+    fills it with the glyph level with line 1. Open a row in the middle: its
+    body opens in place on `bg-th-bg-secondary`, and the rows below move down.
+    The same inside an open Process. A pending card in a list: its warning
+    frame complete on all four sides, also while hovered, and the jump highlight
+    visible inside it.
+22. On a 375px phone, a turn of fourteen calls with two failures between two
+    texts: one summary row with the two red rows directly under it, both on the
+    first screen. Open the summary: every call in order, the failures in their
+    place and not repeated, each row opening on its own.
+23. While the group runs: `N steps · <current call>  <elapsed>` on one line,
+    and the verb summary when it settles, **without the row changing height**.
+    A failed `Edit` is not in `Edited N files`.
+24. One foldable call, with any number of failures beside it: no summary.
+25. A pending card in a group: pinned under the summary, which does not spin.
+    Allow it: the card stays until its row comes back, then both fold. Deny it:
+    the card and the failed row both stay.
+26. A backgrounded `Bash`: folded while it is an ordinary running call, pinned
+    from the moment it goes to the background, still pinned when it settles —
+    second line becomes the outcome, height unchanged.
+27. A subagent call between calls splits them into two groups; its Process
+    folds its own calls the same way.
+28. Open a running `Bash` to watch it, then let the next call arrive: it stays
+    open and in place; close it and it folds. A hidden row is never where the
+    view is held, and a group whose last row is hidden leaves no doubled line.
 
 ## Out of scope
 

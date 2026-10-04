@@ -201,6 +201,64 @@ interface Props {
 	toggleable?: boolean;
 }
 
+interface RowButtonProps {
+	expanded: boolean;
+	onToggle: () => void;
+	glyph: ReactNode;
+	error?: boolean;
+	toggleable?: boolean;
+	/** The text column: line 1 and, when there is one, the second line. */
+	children: ReactNode;
+}
+
+/**
+ * The box every row in a list is drawn in — a tool row, and the summary a run
+ * of them folds into — so the two cannot drift apart in height, padding or
+ * where the glyph sits.
+ */
+export function RowButton({
+	expanded,
+	onToggle,
+	glyph,
+	error,
+	toggleable = true,
+	children,
+}: RowButtonProps) {
+	return (
+		<button
+			type="button"
+			onClick={onToggle}
+			aria-expanded={toggleable ? expanded : undefined}
+			// The row is the only tap target on its line, so it takes the touch
+			// floor directly rather than wearing an overlay: there is room to grow
+			// the box, and a real box is always simpler.
+			//
+			// A column centred on the cross axis, holding the two-column row: one
+			// line sits in the middle of the floor instead of along its top, and two
+			// lines fill it, with the glyph still level with the first.
+			//
+			// A failure tints the row itself — the list draws no frame per row to
+			// redden, and the body under it stays neutral, since a failed subagent
+			// opens a whole report there. The ring is inset because the list clips
+			// whatever is drawn outside a row.
+			className={`flex min-h-9 w-full flex-col justify-center px-2 py-1.5 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-th-accent focus-visible:ring-inset pointer-coarse:min-h-11 sm:px-2.5 ${error ? "bg-th-error/10 hover:bg-th-error/15" : "hover:bg-th-overlay-hover"}`}
+		>
+			<span className="flex w-full items-start gap-1.5">
+				{toggleable ? (
+					<ChevronRight
+						className={`mt-0.5 size-3 shrink-0 text-th-text-muted transition-transform ${expanded ? "rotate-90" : ""}`}
+					/>
+				) : (
+					// A blank keeps the rows aligned with the ones that do open.
+					<span className="mt-0.5 size-3 shrink-0" />
+				)}
+				{glyph}
+				<span className="min-w-0 flex-1">{children}</span>
+			</span>
+		</button>
+	);
+}
+
 export function ToolRow({
 	expanded,
 	onToggle,
@@ -218,59 +276,46 @@ export function ToolRow({
 	toggleable = true,
 }: Props) {
 	return (
-		<button
-			type="button"
-			onClick={onToggle}
-			aria-expanded={toggleable ? expanded : undefined}
-			// The row is the only tap target on its line, so it takes the touch
-			// floor directly rather than wearing an overlay: there is room to grow
-			// the box, and a real box is always simpler.
-			className="flex min-h-[36px] w-full items-start gap-1.5 rounded p-2 text-left hover:bg-th-overlay-hover pointer-coarse:min-h-11 sm:p-2.5"
+		<RowButton
+			expanded={expanded}
+			onToggle={onToggle}
+			glyph={glyph}
+			error={error}
+			toggleable={toggleable}
 		>
-			{toggleable ? (
-				<ChevronRight
-					className={`mt-0.5 size-3 shrink-0 text-th-text-muted transition-transform ${expanded ? "rotate-90" : ""}`}
+			<span className="flex items-baseline gap-1.5">
+				<span className="shrink-0 text-th-accent">{title}</span>
+				{chip && <Chip>{chip}</Chip>}
+				{background && <Chip>background</Chip>}
+				<Detail
+					detail={detail}
+					detailTail={detailTail}
+					mono={detailMono}
+					error={error}
 				/>
-			) : (
-				// A blank keeps the rows aligned with the ones that do open.
-				<span className="mt-0.5 size-3 shrink-0" />
-			)}
-			{glyph}
-			<span className="min-w-0 flex-1">
-				<span className="flex items-baseline gap-1.5">
-					<span className="shrink-0 text-th-accent">{title}</span>
-					{chip && <Chip>{chip}</Chip>}
-					{background && <Chip>background</Chip>}
-					<Detail
-						detail={detail}
-						detailTail={detailTail}
-						mono={detailMono}
-						error={error}
-					/>
-					{meta}
-				</span>
-				{richSecondLine ? (
-					<span
-						aria-hidden={richSecondLine.live}
-						className="flex min-w-0 items-baseline gap-1.5 text-th-text-muted"
-					>
-						{richSecondLine.content}
-					</span>
-				) : (
-					secondLine && (
-						<span
-							// Hidden from the accessible name while it moves, exposed once
-							// it has settled: the spinner already says the call is running,
-							// and a settled background outcome is the answer the user was
-							// waiting for.
-							aria-hidden={secondLine.live}
-							className={`block truncate text-th-text-muted ${secondLine.mono ? "font-mono" : ""}`}
-						>
-							{secondLine.text}
-						</span>
-					)
-				)}
+				{meta}
 			</span>
-		</button>
+			{richSecondLine ? (
+				<span
+					aria-hidden={richSecondLine.live}
+					className="flex min-w-0 items-baseline gap-1.5 text-th-text-muted"
+				>
+					{richSecondLine.content}
+				</span>
+			) : (
+				secondLine && (
+					<span
+						// Hidden from the accessible name while it moves, exposed once
+						// it has settled: the spinner already says the call is running,
+						// and a settled background outcome is the answer the user was
+						// waiting for.
+						aria-hidden={secondLine.live}
+						className={`block truncate text-th-text-muted ${secondLine.mono ? "font-mono" : ""}`}
+					>
+						{secondLine.text}
+					</span>
+				)
+			)}
+		</RowButton>
 	);
 }

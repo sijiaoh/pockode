@@ -10,7 +10,6 @@ import {
 	X,
 } from "lucide-react";
 import { memo, useId, useMemo, useState } from "react";
-import { partKey } from "../../lib/partTree";
 import { useChatUIConfig } from "../../lib/registries/chatUIRegistry";
 import { CodeHighlighter } from "../../lib/shikiUtils";
 import { isTaskTool, toolSummary } from "../../lib/toolSummary";
@@ -39,18 +38,20 @@ import {
 	CollapsibleBody,
 	MarkdownContent,
 	ScrollableContent,
-	Spinner,
 	useEverExpanded,
 } from "../ui";
 import AttachmentStrip from "./AttachmentStrip";
 import AuthFailureNotice from "./AuthFailureNotice";
+import MessageActions from "./MessageActions";
 import MessageMenuTrigger, { type ForkBlocked } from "./MessageMenuTrigger";
 import { ProposedChange, proposedChange } from "./ProposedChange";
 import QuestionRecordItem from "./QuestionRecordItem";
+import { useRowExpanded } from "./rowExpansionContext";
 import { anchorCandidateProps } from "./scrollAnchor";
 import TaskItem from "./TaskItem";
 import ToolCallItem from "./ToolCallItem";
 import { invocationView, ToolInvocation } from "./ToolInvocation";
+import { PartBlocks } from "./ToolList";
 import { Section } from "./ToolOutcomeSections";
 import { ToolRow } from "./ToolRow";
 
@@ -553,7 +554,9 @@ function PermissionRequestItem({
 	// show still has to be openable — otherwise the one thing the card has left
 	// to say is unreachable.
 	const hasExpandableContent = hasToolInput || status === "expired";
-	const [expanded, setExpanded] = useState(isPending && hasExpandableContent);
+	const [expanded, setExpanded] = useRowExpanded(
+		isPending && hasExpandableContent,
+	);
 
 	const statusConfig = {
 		pending: { Icon: CircleHelp, color: "text-th-warning" },
@@ -573,7 +576,13 @@ function PermissionRequestItem({
 		// and is gone.
 		<div
 			data-permission-request-id={request.requestId}
-			className={`scroll-mt-14 rounded text-xs ${isPending ? "border border-th-warning bg-th-warning/10" : "bg-th-bg-secondary"}`}
+			//
+			// A pending card is the one row in a list that is still a card: tinted,
+			// and framed by an outline drawn inside its own edge. An outline rather
+			// than a border, so the frame does not shift the row against its
+			// neighbours; and rather than an inset ring, because an outline is
+			// painted over the children, so the row's hover cannot cover it.
+			className={`scroll-mt-14 text-xs ${isPending ? "bg-th-warning/10 outline-1 -outline-offset-1 outline-th-warning" : ""}`}
 		>
 			<ToolRow
 				expanded={expanded}
@@ -593,7 +602,12 @@ function PermissionRequestItem({
 			/>
 
 			<CollapsibleBody expanded={expanded}>
-				<ScrollableContent className="max-h-[60vh] space-y-3 overflow-auto border-t border-th-border p-2">
+				{/* A settled card's body is an opened drawer like a tool row's; a
+				    pending one keeps the card's tint, being what the card asks
+				    about. */}
+				<ScrollableContent
+					className={`max-h-[60vh] space-y-3 overflow-auto border-t border-th-border p-2 ${isPending ? "" : "bg-th-bg-secondary"}`}
+				>
 					{/* An expired permission can only have been a denial, and the card
 					    states that outcome rather than offering anything to press: the
 					    two expired cards are told apart by their affordances, not their
@@ -1117,24 +1131,23 @@ const MessageItem = memo(function MessageItem({
 	const userBubbleClass = chatUIConfig.userBubbleClass ?? "";
 	const assistantBubbleClass = chatUIConfig.assistantBubbleClass ?? "";
 
-	// Two conditions, one per level. The session decides whether there is a slot
-	// at all — a session nothing can be done to should not pay 44px a row for a
-	// glyph that will never come — and the message decides whether the slot has
-	// anything in it.
-	const slot = onForkMessage ? (
-		<MessageMenuTrigger
-			side={message.role}
-			onFork={
-				hasMessageActions(message) ? () => onForkMessage(message.id) : undefined
-			}
-			forkBlocked={forkBlockedReason(message, isFirst)}
-		/>
-	) : null;
+	// Two conditions, one per level. The session decides whether fork is on
+	// offer at all — a session nothing can be done to should not pay 44px a row
+	// for a glyph that will never come — and the message decides whether it is a
+	// turn yet.
+	const onFork =
+		onForkMessage && hasMessageActions(message)
+			? () => onForkMessage(message.id)
+			: undefined;
+	const forkBlocked = forkBlockedReason(message, isFirst);
 
 	if (message.role === "user") {
+		const slot = onForkMessage ? (
+			<MessageMenuTrigger onFork={onFork} forkBlocked={forkBlocked} />
+		) : null;
 		// An agent's answer is neither a bubble nor an event line; see
-		// AgentAnswerItem. It keeps the slot for the same reason the event line
-		// does — it is full-bleed, and the row has to end where the bubbles do.
+		// AgentAnswerItem. Full-bleed, but it is conversation the user can fork
+		// from, so it keeps the slot and its `…`.
 		if (message.source === "agent") {
 			const answer = (
 				<AgentAnswerItem
@@ -1152,24 +1165,17 @@ const MessageItem = memo(function MessageItem({
 			);
 		}
 		// System-driven messages render as a collapsed event line, not a bubble.
+		// No slot: it would always be empty (not a turn), and the agent's text
+		// beside it runs to the reading column's edge now, so there is no bubble
+		// edge left for an empty slot to line up with.
 		if (message.source === "system") {
-			const event = (
+			return (
 				<WorkEventItem
 					content={message.content}
 					subtype={message.subtype}
 					meta={message.meta}
 					onOpenWorkDetail={onOpenWorkDetail}
 				/>
-			);
-			// An empty slot, so this full-bleed line ends where the widest bubble
-			// ends rather than reaching 44px past it.
-			return slot ? (
-				<div className="flex items-start gap-2">
-					<div className="min-w-0 flex-1">{event}</div>
-					{slot}
-				</div>
-			) : (
-				event
 			);
 		}
 		if (message.command) {
@@ -1182,8 +1188,8 @@ const MessageItem = memo(function MessageItem({
 					onOpenFile={onOpenFile}
 				/>
 			);
-			// Full-bleed like the lines above, so it keeps the slot for the same
-			// reason: the row has to end where the bubbles do.
+			// Full-bleed like the answer above, and the user's own, so it keeps the
+			// slot and its `…`.
 			return slot ? (
 				<div className="flex items-start gap-2">
 					<div className="min-w-0 flex-1">{item}</div>
@@ -1242,68 +1248,63 @@ const MessageItem = memo(function MessageItem({
 		);
 	const signIn = (agent: AgentType) =>
 		onSignIn ? () => onSignIn(agent, message.id) : undefined;
+	// What the agent wrote, as it wrote it: top-level text only. Tool calls,
+	// cards and a subagent's notes are the transcript's, not this message's prose.
+	const copyText = message.parts
+		.flatMap((part) => (part.type === "text" ? [part.content] : []))
+		.join("\n\n");
+	const pending =
+		message.status === "sending" || message.status === "streaming";
 
-	// Assistant message
+	// Assistant message: no bubble, the full reading width. Not `overflow-hidden`
+	// like the bubble was: the action row reaches left of the column so its first
+	// icon lines up with the text, and clipping would cut its box and focus ring.
 	return (
-		<div className="flex items-end justify-start gap-2">
+		<div className="flex items-start justify-start gap-2">
 			{AssistantAvatar && <AssistantAvatar className="size-10 shrink-0" />}
 			<div
-				className={`chat-bubble max-w-full min-w-0 overflow-hidden rounded-lg bg-th-ai-bubble p-2.5 text-th-ai-bubble-text sm:p-3 ${assistantBubbleClass}`}
+				className={`min-w-0 flex-1 text-th-text-primary ${assistantBubbleClass}`}
 			>
 				{shownParts.length > 0 && (
 					<div className="space-y-2">
-						{shownParts.map(({ part, index }) => {
-							const key = partKey(part, index);
-							return (
-								// A wrapper of its own, and an unpositioned one, so this part can
-								// be what the view is held still over: one turn is one row and can
-								// be several screens tall, so holding the row still says nothing
-								// about where inside it the reader is (see `scrollAnchor`).
-								//
-								// It takes a `space-y-2` slot whether or not anything is drawn in
-								// it, so a part renderer must render something — every branch of
-								// `ContentPartItem` does today, and one returning null would show
-								// as a gap with nothing in it.
-								<div key={key} {...anchorCandidateProps}>
-									{index === liveAuthIndex &&
-									part.type === "warning" &&
-									part.authFailure ? (
-										<AuthFailureNotice
-											message={part.message}
-											agent={part.authFailure}
-											onSignIn={signIn(part.authFailure)}
-										/>
-									) : (
-										<ContentPartItem
-											part={part}
-											sessionId={sessionId}
-											onOpenFile={onOpenFile}
-											isCodex={isCodex}
-											onPermissionRespond={onPermissionRespond}
-											onAnswerQuestion={onAnswerQuestion}
-											promptError={promptError}
-										/>
-									)}
-								</div>
-							);
-						})}
+						{/* Every part has a wrapper of its own, and an unpositioned one,
+						    so this part can be what the view is held still over: one turn
+						    is one row and can be several screens tall, so holding the row
+						    still says nothing about where inside it the reader is (see
+						    `scrollAnchor`).
+
+						    A part on its own takes a `space-y-2` slot whether or not
+						    anything is drawn in it, so a part renderer must render
+						    something — every branch of `ContentPartItem` does today, and
+						    one returning null would show as a gap with nothing in it. */}
+						<PartBlocks
+							items={shownParts}
+							wrapperProps={anchorCandidateProps}
+							renderPart={({ part, index }) =>
+								index === liveAuthIndex &&
+								part.type === "warning" &&
+								part.authFailure ? (
+									<AuthFailureNotice
+										message={part.message}
+										agent={part.authFailure}
+										onSignIn={signIn(part.authFailure)}
+									/>
+								) : (
+									<ContentPartItem
+										part={part}
+										sessionId={sessionId}
+										onOpenFile={onOpenFile}
+										isCodex={isCodex}
+										onPermissionRespond={onPermissionRespond}
+										onAnswerQuestion={onAnswerQuestion}
+										promptError={promptError}
+									/>
+								)
+							}
+						/>
 					</div>
 				)}
 
-				{/* Status indicator */}
-				{message.status === "sending" && (
-					<Spinner variant="current" className="mt-2" />
-				)}
-				{/* Keyed on being the open turn rather than on being last. The two
-				    agreed until a message could be sent mid-reply; now the reply
-				    that is still growing routinely has that message under it, and
-				    reading position would take its spinner away at the one moment
-				    the user has just asked it something. A bubble left `streaming`
-				    that is *not* the open turn gets nothing, which is what stopped
-				    a superseded reply from claiming to still be running. */}
-				{message.status === "streaming" && isOpenTurn && (
-					<Spinner variant="current" className="mt-2" />
-				)}
 				{message.status === "error" &&
 					(authError ? (
 						<div className="mt-2">
@@ -1322,8 +1323,24 @@ const MessageItem = memo(function MessageItem({
 				{message.status === "process_ended" && (
 					<p className="mt-2 text-sm text-th-warning">Process ended</p>
 				)}
+				<MessageActions
+					pending={pending}
+					// Keyed on being the open turn rather than on being last. The two
+					// agreed until a message could be sent mid-reply; now the reply
+					// that is still growing routinely has that message under it, and
+					// reading position would take its spinner away at the one moment
+					// the user has just asked it something. A message left `streaming`
+					// that is *not* the open turn gets nothing, which is what stopped
+					// a superseded reply from claiming to still be running.
+					spinning={
+						message.status === "sending" ||
+						(message.status === "streaming" && !!isOpenTurn)
+					}
+					copyText={copyText || undefined}
+					onFork={onFork}
+					forkBlocked={forkBlocked}
+				/>
 			</div>
-			{slot}
 		</div>
 	);
 });

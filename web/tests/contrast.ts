@@ -89,10 +89,6 @@ export const GUARDED_PAIRS: TokenPair[] = [
 	{ background: "th-bg-primary", foreground: "th-text-muted" },
 	{ background: "th-bg-secondary", foreground: "th-text-muted" },
 	{ background: "th-bg-tertiary", foreground: "th-text-muted" },
-	// Mermaid's loading and error lines are muted, and they render inside the
-	// assistant bubble. In the dark variants this is the same value as
-	// `--th-bg-tertiary`; in void and mint light it is darker than it.
-	{ background: "th-ai-bubble", foreground: "th-text-muted" },
 	// The worst surface of all, and the one no listing of the stylesheet's own
 	// colours would ever show: the collapsible headers in Chat are muted text on
 	// `bg-th-bg-secondary` under `hover:bg-th-overlay-hover`. The overlay is
@@ -104,11 +100,9 @@ export const GUARDED_PAIRS: TokenPair[] = [
 		foreground: "th-text-muted",
 		onto: "th-bg-secondary",
 	},
-	// TODO: add `--th-ai-bubble` under its own `--th-ai-bubble-text`, and
-	// `--th-code-bg` / `--th-code-text`. The bubble appears above only as a
-	// surface muted is read on; the body text a theme actually pins to it is
-	// still unwatched. Both cleared AA when the list was last surveyed, so
-	// adding them costs a line each.
+	// TODO: add `--th-code-bg` under `--th-code-text`: the body text a theme
+	// pins to it is still unwatched. It cleared AA when the list was last
+	// surveyed, so adding it costs a line.
 	//
 	// The rest of the survey is deliberately not here. `--th-success` /
 	// `--th-warning` / `--th-error` over `--th-bg-*` fail in every light

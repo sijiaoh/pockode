@@ -1,4 +1,4 @@
-import { GitBranch } from "lucide-react";
+import { Copy, GitBranch } from "lucide-react";
 import MenuRow from "../common/MenuRow";
 import { Sheet } from "../ui";
 import type { ForkBlocked } from "./MessageMenuTrigger";
@@ -34,6 +34,12 @@ interface Props {
 	side: "user" | "assistant";
 	onFork: () => void;
 	forkBlocked?: ForkBlocked;
+	/**
+	 * Absent where the message has no text of its own to copy — an action this
+	 * message could never have, so it is removed rather than disabled. The
+	 * outcome is shown on the Copy button in the row the menu opened from.
+	 */
+	onCopy?: () => void;
 	onClose: () => void;
 }
 
@@ -47,19 +53,16 @@ interface Props {
  * already a drawer on a phone and a centered modal on a wide screen, so no
  * second breakpoint is written here.
  *
- * One row today — the very shape the standing action row was once chosen over,
- * for charging two taps and handing back one thing. What changed is the other
- * side of the trade: this row can carry a whole sentence saying why fork cannot
- * run, which an icon could only whisper into `aria-label` where no finger ever
- * reads it, and the transcript gets back the 36-44px per message that a
- * standing row spends on its first icon. A one-row sheet is an accepted middle,
- * not an oversight.
+ * The full list even where some of it also stands as a button (the agent's
+ * turn-end row): this is where a blocked action says why in a whole sentence,
+ * which an icon could only whisper into `aria-label` where no finger ever reads
+ * it. On the user's side it is still a one-row sheet — an accepted middle, not
+ * an oversight (docs/session-fork-ui.md).
  *
  * Focus is `Sheet`'s job, not this menu's: it takes focus on open, cycles Tab
  * inside itself and hands focus back to the `…` on close.
  *
- * Rules for whoever adds the second action, so the menu is not redesigned per
- * row:
+ * Rules for whoever adds an action, so the menu is not redesigned per row:
  * - Two groups: reversible above, destructive below, one divider between (the
  *   shape `FileEntryMenu` already has). Each group is append-only — a new row
  *   goes last in its group and existing rows never move, because what this
@@ -73,7 +76,7 @@ interface Props {
  * - A row that cannot run right now is disabled with a reason, not removed.
  *   Removal is only for actions this kind of message could never have.
  */
-function MessageMenu({ side, onFork, forkBlocked, onClose }: Props) {
+function MessageMenu({ side, onFork, forkBlocked, onCopy, onClose }: Props) {
 	return (
 		<Sheet
 			title={side === "user" ? "Your message" : "Agent message"}
@@ -95,6 +98,16 @@ function MessageMenu({ side, onFork, forkBlocked, onClose }: Props) {
 						onFork();
 					}}
 				/>
+				{onCopy && (
+					<MenuRow
+						icon={Copy}
+						label="Copy text"
+						onClick={() => {
+							onClose();
+							onCopy();
+						}}
+					/>
+				)}
 			</div>
 		</Sheet>
 	);

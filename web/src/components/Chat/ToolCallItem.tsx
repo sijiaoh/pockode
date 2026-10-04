@@ -1,4 +1,4 @@
-import { memo, useMemo, useState } from "react";
+import { memo, useMemo } from "react";
 import {
 	contentBlockFiles,
 	type FileReference,
@@ -11,6 +11,7 @@ import type { ToolRun } from "../../types/message";
 import { omittedLabel } from "../../utils/attachment";
 import { CollapsibleBody, ScrollableContent } from "../ui";
 import AttachmentStrip from "./AttachmentStrip";
+import { useRowExpanded } from "./rowExpansionContext";
 import { PathLine, ToolInvocation } from "./ToolInvocation";
 import { Section, ToolOutcomeSections } from "./ToolOutcomeSections";
 import ToolResultDisplay from "./ToolResultDisplay";
@@ -69,7 +70,7 @@ const ToolCallItem = memo(function ToolCallItem({
 	sessionId,
 	onOpenFile,
 }: Props) {
-	const [expanded, setExpanded] = useState(false);
+	const [expanded, setExpanded] = useRowExpanded();
 	const workDir = useWSStore((state) => state.workDir);
 	const summary = useMemo(
 		() => toolSummary(run.name, run.input, workDir),
@@ -104,9 +105,7 @@ const ToolCallItem = memo(function ToolCallItem({
 	const hasResult = Boolean(run.result || run.contents);
 
 	return (
-		<div
-			className={`rounded bg-th-bg-secondary text-xs ${failed ? "border border-th-error/40" : ""}`}
-		>
+		<div className="text-xs">
 			<ToolRow
 				expanded={expanded}
 				onToggle={() => setExpanded(!expanded)}
@@ -129,7 +128,7 @@ const ToolCallItem = memo(function ToolCallItem({
 				/>
 			)}
 			<CollapsibleBody expanded={expanded}>
-				<ScrollableContent className="max-h-[60vh] space-y-3 overflow-auto border-t border-th-border p-2">
+				<ScrollableContent className="max-h-[60vh] space-y-3 overflow-auto border-t border-th-border bg-th-bg-secondary p-2">
 					{/* No `useEverExpanded` gate: `CollapsibleBody` renders nothing
 					    at all until the body is first opened, so the pretty-printing
 					    and the highlighting below are already paid for only once

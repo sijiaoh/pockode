@@ -137,7 +137,7 @@ export interface ChatUIConfig {
 	AssistantAvatar?: ComponentType<AvatarProps>;
 	/** Custom class for user bubble */
 	userBubbleClass?: string;
-	/** Custom class for assistant bubble */
+	/** Custom class for the assistant's content column (it has no bubble) */
 	assistantBubbleClass?: string;
 
 	/** Custom InputBar component (replaces default) */

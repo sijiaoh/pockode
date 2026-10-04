@@ -166,8 +166,6 @@ body {
 	/* Special - Chat bubbles */
 	--color-th-user-bubble: var(--th-user-bubble);
 	--color-th-user-bubble-text: var(--th-user-bubble-text);
-	--color-th-ai-bubble: var(--th-ai-bubble);
-	--color-th-ai-bubble-text: var(--th-ai-bubble-text);
 }
 
 /* =============================================================================
@@ -243,8 +241,6 @@ samp {
 	/* Chat bubbles */
 	--th-user-bubble: #0b7a70;
 	--th-user-bubble-text: #ffffff;
-	--th-ai-bubble: #e6eef2;
-	--th-ai-bubble-text: #0c1829;
 }
 
 .dark.theme-abyss {
@@ -284,8 +280,6 @@ samp {
 	/* Chat bubbles */
 	--th-user-bubble: #0f766e;
 	--th-user-bubble-text: #ccfbf1;
-	--th-ai-bubble: #1a2840;
-	--th-ai-bubble-text: #e8f0f5;
 }
 
 /* =============================================================================
@@ -335,8 +329,6 @@ samp {
 	/* Chat bubbles */
 	--th-user-bubble: #9333ea;
 	--th-user-bubble-text: #ffffff;
-	--th-ai-bubble: #ebe4f2;
-	--th-ai-bubble-text: #1e1228;
 }
 
 .dark.theme-aurora {
@@ -376,8 +368,6 @@ samp {
 	/* Chat bubbles */
 	--th-user-bubble: #7c3aed;
 	--th-user-bubble-text: #f3e8ff;
-	--th-ai-bubble: #2d1a48;
-	--th-ai-bubble-text: #f3e8ff;
 }
 
 /* =============================================================================
@@ -427,8 +417,6 @@ samp {
 	/* Chat bubbles */
 	--th-user-bubble: #c2410c;
 	--th-user-bubble-text: #ffffff;
-	--th-ai-bubble: #f5efe8;
-	--th-ai-bubble-text: #27201c;
 }
 
 .dark.theme-ember {
@@ -468,8 +456,6 @@ samp {
 	/* Chat bubbles */
 	--th-user-bubble: #c2410c;
 	--th-user-bubble-text: #fff7ed;
-	--th-ai-bubble: #382a24;
-	--th-ai-bubble-text: #f8f0e8;
 }
 
 /* =============================================================================
@@ -519,8 +505,6 @@ samp {
 	/* Chat bubbles */
 	--th-user-bubble: #077691;
 	--th-user-bubble-text: #ffffff;
-	--th-ai-bubble: #ddf0e5;
-	--th-ai-bubble-text: #0a2018;
 }
 
 .dark.theme-mint {
@@ -560,8 +544,6 @@ samp {
 	/* Chat bubbles */
 	--th-user-bubble: #0e7490;
 	--th-user-bubble-text: #ecfeff;
-	--th-ai-bubble: #1a3328;
-	--th-ai-bubble-text: #e8f8f0;
 }
 
 /* =============================================================================
@@ -611,8 +593,6 @@ samp {
 	/* Chat bubbles */
 	--th-user-bubble: #18181b;
 	--th-user-bubble-text: #fafafa;
-	--th-ai-bubble: #ececec;
-	--th-ai-bubble-text: #09090b;
 }
 
 .dark.theme-void {
@@ -652,8 +632,6 @@ samp {
 	/* Chat bubbles */
 	--th-user-bubble: #27272a;
 	--th-user-bubble-text: #fafafa;
-	--th-ai-bubble: #1c1c1f;
-	--th-ai-bubble-text: #fafafa;
 }
 
 /* =============================================================================
@@ -1080,8 +1058,10 @@ samp {
 	transition: box-shadow 300ms ease-out;
 }
 
+/* Inset: the card is a row in a list that clips whatever is drawn outside its
+ * rows. A pending card's body has no fill of its own, so nothing covers it. */
 .jump-highlight {
-	box-shadow: 0 0 0 2px var(--th-warning);
+	box-shadow: inset 0 0 0 2px var(--th-warning);
 }
 
 @media (prefers-reduced-motion: reduce) {
