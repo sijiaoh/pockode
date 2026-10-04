@@ -4,8 +4,8 @@ import { hasText, spokenThoughtLabel, thoughtLabel } from "../../lib/thinking";
 import type { Thought } from "../../types/message";
 import { CollapsibleBody, MarkdownContent, ScrollableContent } from "../ui";
 import { useRowExpanded } from "./rowExpansionContext";
-import { Section } from "./ToolSection";
 import { Chip, RowButton, StaticRow } from "./ToolRow";
+import { Section } from "./ToolSection";
 
 interface Props {
 	thoughts: Thought[];
