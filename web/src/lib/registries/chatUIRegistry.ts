@@ -42,6 +42,14 @@ export interface InputBarProps {
 	 * has to survive the wait. Use `disabled` to close the bar entirely.
 	 */
 	canSend?: boolean;
+	/**
+	 * Why the host refuses sends, when the reason is one the user has to act
+	 * on — today a permission request owning the agent's next input. Only
+	 * meaningful while `canSend` is false; absent for refusals that pass on
+	 * their own (a dropped connection, history loading). The default bar shows
+	 * it as the placeholder, since nothing else on screen says why Send is gone.
+	 */
+	sendBlockedReason?: string;
 	disabled?: boolean;
 	/**
 	 * Whether a turn is open — running, or blocked on something only the user or
@@ -60,7 +68,7 @@ export interface InputBarProps {
 	 * Stop while the turn is open and Send has nothing to do (no draft, or
 	 * `canSend={false}`), and held unpressable for a moment after it arrives,
 	 * since it lands under the thumb that just pressed Send. `slotShowsStop` and
-	 * `ArmedStop` in `Chat/SendStopSlot.tsx` are that rule, for a custom bar to
+	 * `Armed` in `Chat/SendStopSlot.tsx` are that rule, for a custom bar to
 	 * reuse. A custom bar that draws no Stop leaves the user no way to interrupt
 	 * on a touch screen.
 	 */

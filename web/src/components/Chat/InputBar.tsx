@@ -38,7 +38,7 @@ import ComposerMenu, {
 	type ComposerMenuItem,
 	focusMenuItem,
 } from "./ComposerMenu";
-import { ArmedStop, slotShowsStop } from "./SendStopSlot";
+import { Armed, slotShowsStop } from "./SendStopSlot";
 
 interface Props {
 	sessionId: string;
@@ -48,6 +48,8 @@ interface Props {
 		attachments?: ChatAttachment[],
 	) => Promise<SendOutcome>;
 	canSend?: boolean;
+	/** See `InputBarProps.sendBlockedReason`. */
+	sendBlockedReason?: string;
 	/**
 	 * Session not resolved yet (mid switch). Unlike `canSend={false}`, which only
 	 * blocks sending while the current session's history loads, this closes the
@@ -74,6 +76,7 @@ function InputBar({
 	sessionId,
 	onSend,
 	canSend = true,
+	sendBlockedReason,
 	disabled = false,
 	turnOpen = false,
 	onStop,
@@ -599,9 +602,11 @@ function InputBar({
 						onKeyDown={handleKeyDown}
 						onKeyUp={handleKeyUp}
 						placeholder={
-							hasCoarsePointer()
-								? "Type a message..."
-								: "Type a message... (Shift+Enter for newline)"
+							!canSend && sendBlockedReason
+								? sendBlockedReason
+								: hasCoarsePointer()
+									? "Type a message..."
+									: "Type a message... (Shift+Enter for newline)"
 						}
 						disabled={disabled}
 						spellCheck={false}
@@ -623,7 +628,7 @@ function InputBar({
 						}}
 					>
 						{onStop && showStop ? (
-							<ArmedStop>
+							<Armed>
 								{CustomStopButton ? (
 									<CustomStopButton onStop={onStop} />
 								) : (
@@ -636,7 +641,7 @@ function InputBar({
 										<Square className="size-3.5 fill-current" />
 									</button>
 								)}
-							</ArmedStop>
+							</Armed>
 						) : (
 							<button
 								type="button"

@@ -894,6 +894,22 @@ samp {
 	overflow: visible;
 }
 
+/* The copy button is absolute over the top-right corner, so a wrapped first
+ * line would run underneath it; the right padding is the button's width. Shiki's
+ * own <pre> and <code> inside are told to wrap too, or they keep the line whole
+ * and the wrap on the outer box does nothing. */
+.code-block--wrap {
+	min-width: 0;
+	padding-right: 2.25rem;
+}
+
+.code-block--wrap,
+.code-block--wrap pre,
+.code-block--wrap code {
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+}
+
 /* =============================================================================
  * ASYNC MEDIA
  *
@@ -1108,14 +1124,16 @@ samp {
  * STOP ARMING
  *
  * Stop takes the composer's action slot the moment a send opens a turn, and
- * holds still for `STOP_ARM_MS` (Chat/SendStopSlot.tsx) before it can be
- * pressed. The fade spans that same wait, so a button that is not yet live
+ * holds still for `ARM_MS` (Chat/SendStopSlot.tsx) before it can be pressed;
+ * the attention strip's Deny and Allow do the same for each new permission
+ * request. The fade spans that same wait, so a button that is not yet live
  * does not look live; the element sets the duration from the constant, so the
- * one here is only a fallback. Mounted rather than revealed, hence an animation and only
- * a `from`, for the reasons the message menu trigger above gives.
+ * one here is only a fallback. Mounted rather than revealed, hence an animation
+ * and only a `from`, for the reasons the message menu trigger above gives.
  *
  * Reduced motion drops the fade, not the wait: the wait is what keeps a double
- * tap from interrupting the turn it just started.
+ * tap from interrupting the turn it just started, or approving a request
+ * nobody read.
  * ============================================================================= */
 
 @theme {

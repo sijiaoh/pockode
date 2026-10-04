@@ -10,7 +10,9 @@ its `ToolRun`, and nothing below asks for data it does not define.
 The surfaces are `ToolCallItem.tsx`, `TaskItem.tsx` (the subagent category) and
 `PermissionRequestItem` in `MessageItem.tsx` — all three drawing their row
 through `ToolRow.tsx`, which is where the grammar below lives — plus
-`ToolResultDisplay.tsx` for the body and `ToolOutcomeSections.tsx` for the
+`ToolInvocation.tsx` for the invocation a row and a card both show,
+`ToolResultDisplay.tsx` for the result, `ProposedChange.tsx` for the file
+change a result and a card both draw, and `ToolOutcomeSections.tsx` for the
 labelled blocks the two tool renderers share, all under
 `web/src/components/Chat/`. The transcript around them
 is [agent-chat.md](agent-chat.md); the width ladder and the pointer gates are
@@ -108,8 +110,9 @@ result to show, with a blank spacer otherwise — which is why a running call, a
 a call that answered with an image alone, could not be opened at all. Every row
 has a body now, because every row has an **invocation** to show (below). The one
 exception is the permission card, which keeps a condition: a request with no
-input and no suggestions really does have an empty body, and "there is always an
-invocation" is a fact about tool rows, not about cards.
+input really does have an empty body (what Always Allow would write sits above
+the buttons, not in it), and "there is always an invocation" is a fact about
+tool rows, not about cards.
 
 **Hit area.** The row is the only tap target on line 1, so it takes the floor
 directly: `min-h-[36px] pointer-coarse:min-h-11`. It is not a `touch-target`
@@ -242,6 +245,33 @@ place a row wears a warning border (`border border-th-warning bg-th-warning/10`)
 with `CircleHelp` in `text-th-warning`: it is the only tool-shaped row in the
 transcript that is blocked on the user, so it is the only one that gets to be
 loud before anything has gone wrong.
+
+**The card's body is the row's Invocation.** `ToolInvocation`
+(`Chat/ToolInvocation.tsx`) draws both, so the command a user approved and the
+command the row later says ran are one rendering, not two that agree by
+convention. Below it, for a file tool, a *Proposed change* section draws the
+diff or the file preview through `ProposedChange` — the same component the row's
+result uses, which reads only the input and so can be drawn before the call
+runs. Last, folded and muted, *Raw input*: the input as it arrived, minus
+Codex's `command_actions`. It is left out where it would only repeat the body —
+when the body already is the JSON fallback or a string input, and for an
+`ExitPlanMode` whose plan is its only key. A plan with anything beside it keeps
+the raw input, since whatever else it asks for is approved with it.
+
+**The decision is one full-width row**, `Deny | Always Allow | Allow`, with
+Allow — the accent, primary action — always at the right-hand end and 1.4× the
+width of the others, so it does not move when Always Allow is not offered. The
+boxes grow to the floor (`min-h-9 pointer-coarse:min-h-11`, `gap-2`) rather
+than borrow a `touch-target` overlay, since the card is free to grow; `text-sm`
+on them is the card's one step up from `text-xs`, because they are a decision
+and not a caption. Always Allow lost its green: it is the option whose effect
+outlives the request, and the success colour was an invitation to press it.
+What it will write is said directly above the row and outside the scrolling
+body — every suggestion, not the first, because the server sends the whole list
+back — so the explanation cannot scroll away while the button stays in view.
+No key is bound to any of the three: Escape already interrupts the turn
+([answering-ui.md](answering-ui.md#who-owns-escape)), and a stray key on a
+prompt that runs arbitrary commands costs too much.
 
 A denial settles the card from the user's own response
 (`choice === "deny"` in the reducer), not from anything an engine says — and that
@@ -695,14 +725,20 @@ this order, each omitted when empty:
 
 1. **Invocation — always present.** This is the answer to problem 2 and the
    reason every row now has a chevron.
-   - `Bash`: `CodeHighlighter language="bash"` with the full command — wrapping,
+   - `Bash`: `CodeHighlighter language="bash" wrap` with the full command —
+     wrapped (the `wrap` mode, which also clears the copy button's corner),
      selectable, and with the copy button that component already brings
      (`web/src/lib/shikiUtils.tsx`). Claude's `description`, when present, sits
-     above it as one muted line.
+     above it as one muted line; Codex's `cwd`, when it is not the work
+     directory, below it as `in <path>`.
    - File tools: the full path, with an *Open* into the Files tab when it is
-     under the work directory.
+     under the work directory. A Codex file change gives one such line per file
+     it leaves behind — a rename's destination, since its source is gone.
    - `Grep` / `Glob`: pattern, path and flags as labelled lines.
-   - MCP and unknown tools: `CodeHighlighter language="json"` over the
+   - `ExitPlanMode`: the plan, through `MarkdownContent`, with no label.
+   - A Codex approval that described nothing but its `reason`, or an input
+     that is a bare string: the text as a sentence.
+   - MCP and unknown tools: `CodeHighlighter language="json" wrap` over the
      pretty-printed input. No lazy-render gate of its own: `CollapsibleBody`
      renders nothing before the first expand, so a second gate would save
      nothing. Highlighting is capped at the `HIGHLIGHT_LIMIT` the file viewer
@@ -721,9 +757,9 @@ this order, each omitted when empty:
    came from the background, *Outcome · after the turn*
    ([above](#when-a-background-run-finishes)). The first two are drawn whole by
    `ToolOutcomeSections`; the last is a slot, because what a result looks like is
-   this renderer's knowledge. Here it is `ToolResultDisplay`, unchanged in
-   structure, with three cheap additions that close problem 3 and need nothing
-   from the new model:
+   this renderer's knowledge. Here it is `ToolResultDisplay` — whose file
+   changes are `ProposedChange`, shared with the permission card — with three
+   cheap additions that close problem 3 and need nothing from the new model:
    - `Grep` / `Glob`: the result is a file list — rendered as one, paths through
      `formatFilePath`, each with an *Open* into the Files tab, capped at 100 with
      a count of the rest. A repo-wide `Glob` answers with thousands, and it used

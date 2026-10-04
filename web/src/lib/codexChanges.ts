@@ -162,6 +162,26 @@ export function parseCodexChanges(input: unknown): CodexChangeView[] | null {
 		.sort((a, b) => a.path.localeCompare(b.path));
 }
 
+/**
+ * The files a Codex changes payload leaves behind, without building any patch:
+ * what a call's invocation names, where `parseCodexChanges` is what its diff
+ * draws — each one's `newPath`, in the same order.
+ * Null exactly when `parseCodexChanges` is.
+ */
+export function codexChangePaths(input: unknown): string[] | null {
+	const entries = changeEntries(asRecord(input)?.changes);
+	if (!entries || entries.length === 0) return null;
+	// Sorted on the source path, as the diff is, but naming the destination: a
+	// renamed file's source no longer exists to be opened.
+	return entries
+		.sort((a, b) => a.path.localeCompare(b.path))
+		.map((entry) =>
+			typeof entry.change.move_path === "string"
+				? entry.change.move_path
+				: entry.path,
+		);
+}
+
 /** The changes of either shape, or null when this is not a changes payload. */
 function changeEntries(changes: unknown): ChangeEntry[] | null {
 	const entries: ChangeEntry[] = [];

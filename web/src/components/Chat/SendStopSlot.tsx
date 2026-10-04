@@ -1,12 +1,14 @@
 import { type ReactNode, useEffect, useState } from "react";
 
 /**
- * How long a Stop that has just taken the slot refuses a press. Sending empties
- * the draft and opens the turn in one go, so the button under the thumb that
- * was Send is Stop a frame later — and a double tap, or a quick second message,
- * would interrupt a turn nobody meant to end. Interrupting cannot be undone.
+ * How long a control that has just landed under the thumb refuses a press.
+ * Sending empties the draft and opens the turn in one go, so the button under
+ * the thumb that was Send is Stop a frame later — and a double tap, or a quick
+ * second message, would interrupt a turn nobody meant to end. The attention
+ * strip's Deny and Allow have the same problem: answering one request puts the
+ * next in the same place. Neither interrupting nor approving can be undone.
  */
-export const STOP_ARM_MS = 500;
+export const ARM_MS = 500;
 
 interface SlotState {
 	turnOpen: boolean;
@@ -38,19 +40,28 @@ export function slotShowsStop({
 }
 
 /**
- * Wraps whatever Stop is drawn in the slot and holds it unpressable for
- * `STOP_ARM_MS` after it arrives. Arrival is mounting: the slot swaps Send for
- * Stop by unmounting one and mounting the other, so every Send-to-Stop change
- * re-arms and Stop-to-Send waits for nothing.
+ * Wraps controls that can arrive under a press meant for something else — the
+ * composer's Stop, the strip's Deny and Allow — and holds them unpressable for
+ * `ARM_MS` after they arrive. Arrival is mounting: the slot swaps Send for Stop
+ * by unmounting one and mounting the other, so every Send-to-Stop change
+ * re-arms and Stop-to-Send waits for nothing; the strip keys it by request, so
+ * each new request re-arms.
  *
  * `inert` as well as `pointer-events-none`: a pointer is the case this is for,
  * but a disarmed control should not take focus or a key either.
  */
-export function ArmedStop({ children }: { children: ReactNode }) {
+export function Armed({
+	children,
+	className = "",
+}: {
+	children: ReactNode;
+	/** Laid out as a flex row; this adds to it (a gap between two controls). */
+	className?: string;
+}) {
 	const [armed, setArmed] = useState(false);
 
 	useEffect(() => {
-		const id = setTimeout(() => setArmed(true), STOP_ARM_MS);
+		const id = setTimeout(() => setArmed(true), ARM_MS);
 		return () => clearTimeout(id);
 	}, []);
 
@@ -58,8 +69,8 @@ export function ArmedStop({ children }: { children: ReactNode }) {
 		<div
 			inert={!armed}
 			data-armed={armed}
-			style={{ animationDuration: `${STOP_ARM_MS}ms` }}
-			className={`flex shrink-0 animate-stop-arm ${
+			style={{ animationDuration: `${ARM_MS}ms` }}
+			className={`flex shrink-0 animate-stop-arm ${className} ${
 				armed ? "" : "pointer-events-none"
 			}`}
 		>

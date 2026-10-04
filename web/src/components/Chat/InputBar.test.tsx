@@ -20,7 +20,7 @@ import {
 	setChatUIConfig,
 } from "../../lib/registries/chatUIRegistry";
 import InputBar from "./InputBar";
-import { STOP_ARM_MS } from "./SendStopSlot";
+import { ARM_MS } from "./SendStopSlot";
 
 vi.mock("../../utils/platform", () => ({
 	isMac: false,
@@ -114,6 +114,27 @@ describe("InputBar", () => {
 
 		expect(screen.getByRole("textbox")).not.toBeDisabled();
 		expect(screen.getByRole("button", { name: /Send/ })).toBeDisabled();
+	});
+
+	// A refusal the user has to act on is said where they are about to type;
+	// one that only passes (no `canSend`) keeps the ordinary prompt.
+	it.each([
+		[false, "Answer the permission request to send"],
+		[true, /^Type a message/],
+	])("puts the refusal reason in the placeholder only while refused (canSend: %s)", (canSend, placeholder) => {
+		render(
+			<InputBar
+				sessionId={TEST_SESSION_ID}
+				onSend={sendAccepted}
+				canSend={canSend}
+				sendBlockedReason="Answer the permission request to send"
+			/>,
+		);
+
+		expect(screen.getByRole("textbox")).toHaveAttribute(
+			"placeholder",
+			expect.stringMatching(placeholder),
+		);
 	});
 
 	it("does not send on Enter when canSend is false", () => {
@@ -902,7 +923,7 @@ describe("InputBar", () => {
 						useInputStore.setState({ inputs: { [TEST_SESSION_ID]: "" } }),
 					);
 					expect(armed(), `round ${round}, on arrival`).toBe(false);
-					act(() => vi.advanceTimersByTime(STOP_ARM_MS));
+					act(() => vi.advanceTimersByTime(ARM_MS));
 					expect(armed(), `round ${round}, after the wait`).toBe(true);
 
 					act(() =>

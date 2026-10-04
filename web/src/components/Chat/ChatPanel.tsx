@@ -8,6 +8,7 @@ import {
 	useCallback,
 	useEffect,
 	useLayoutEffect,
+	useMemo,
 	useRef,
 	useState,
 } from "react";
@@ -24,6 +25,7 @@ import {
 	inputActions,
 	useInputStore,
 } from "../../lib/inputStore";
+import { collectPartsDeep } from "../../lib/partTree";
 import { questionDraftActions } from "../../lib/questionDraftStore";
 import {
 	type SendOutcome,
@@ -69,7 +71,7 @@ import {
 } from "../Project";
 import { SettingsPage } from "../Settings";
 import AnswerPanel from "./AnswerPanel";
-import AttentionStrip from "./AttentionStrip";
+import AttentionStrip, { type PermissionEntry } from "./AttentionStrip";
 import ChatSkeleton from "./ChatSkeleton";
 import ForkSessionSheet from "./ForkSessionSheet";
 import DefaultInputBar from "./InputBar";
@@ -303,6 +305,31 @@ function ChatPanel({
 	const promptOwnsInput =
 		turn.phase === "blocked" &&
 		(turn.blockers ?? []).some((b) => b.kind === "permission");
+
+	// The cards behind those blockers, for the strip to answer from. Looked up
+	// at every depth: a subagent's request is filed under its Task call.
+	const blockingPermissions = useMemo(() => {
+		const ids = (turn.blockers ?? []).flatMap((b) =>
+			b.kind === "permission" && b.request_id ? [b.request_id] : [],
+		);
+		if (ids.length === 0) return [];
+		const cards = new Map<string, PermissionEntry>();
+		for (const message of messages) {
+			if (message.role !== "assistant") continue;
+			for (const part of collectPartsDeep(
+				message.parts,
+				(p) => p.type === "permission_request",
+			)) {
+				if (part.type === "permission_request") {
+					cards.set(part.request.requestId, part);
+				}
+			}
+		}
+		return ids.flatMap((id) => {
+			const card = cards.get(id);
+			return card ? [{ request: card.request, status: card.status }] : [];
+		});
+	}, [turn.blockers, messages]);
 
 	const markSessionRead = useWSStore((s) => s.actions.markSessionRead);
 
@@ -1254,6 +1281,12 @@ function ChatPanel({
 						answerPanelOpen={answerPanelOnScreen}
 						sendPending={isSendPending}
 						jumpDisabled={answerPanelSending}
+						permissionRequests={blockingPermissions}
+						// Answering does not close the answer panel: unlike the jump, it
+						// needs nothing from the transcript, and it is what lets the
+						// panel's own send through afterwards.
+						onPermissionRespond={handlePermissionRespond}
+						promptError={promptError ?? undefined}
 					/>
 				)}
 				{/* Not held back by an overlay, unlike the composer's errors: the
@@ -1344,6 +1377,11 @@ function ChatPanel({
 								onSend={handleSend}
 								canSend={
 									status === "connected" && !isChatPending && !promptOwnsInput
+								}
+								sendBlockedReason={
+									promptOwnsInput
+										? "Answer the permission request to send"
+										: undefined
 								}
 								disabled={!isSessionResolved}
 								turnOpen={turnOpen}

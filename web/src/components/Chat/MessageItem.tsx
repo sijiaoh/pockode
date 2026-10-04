@@ -9,9 +9,10 @@ import {
 	SquareSlash,
 	X,
 } from "lucide-react";
-import { memo, useMemo, useState } from "react";
+import { memo, useId, useMemo, useState } from "react";
 import { partKey } from "../../lib/partTree";
 import { useChatUIConfig } from "../../lib/registries/chatUIRegistry";
+import { CodeHighlighter } from "../../lib/shikiUtils";
 import { isTaskTool, toolSummary } from "../../lib/toolSummary";
 import { useWSStore } from "../../lib/wsStore";
 import type { FileBlock } from "../../types/content";
@@ -29,8 +30,10 @@ import type {
 	SystemMessageMeta,
 } from "../../types/message";
 import type { AgentType } from "../../types/settings";
+import { HIGHLIGHT_LIMIT } from "../../utils/fileView";
 import { forkUnavailableReason } from "../../utils/forkAnchor";
 import { hasMessageActions } from "../../utils/messageActions";
+import { formatFilePath } from "../../utils/path";
 import { workEventSubject, workEventWording } from "../../utils/systemMessage";
 import {
 	CollapsibleBody,
@@ -42,10 +45,12 @@ import {
 import AttachmentStrip from "./AttachmentStrip";
 import AuthFailureNotice from "./AuthFailureNotice";
 import MessageMenuTrigger, { type ForkBlocked } from "./MessageMenuTrigger";
+import { ProposedChange, proposedChange } from "./ProposedChange";
 import QuestionRecordItem from "./QuestionRecordItem";
 import { anchorCandidateProps } from "./scrollAnchor";
 import TaskItem from "./TaskItem";
 import ToolCallItem from "./ToolCallItem";
+import { invocationView, ToolInvocation } from "./ToolInvocation";
 import { Section } from "./ToolOutcomeSections";
 import { ToolRow } from "./ToolRow";
 
@@ -252,20 +257,9 @@ interface PermissionRequestItemProps {
 	reason?: ExpiryReason;
 	isCodex?: boolean;
 	onRespond?: (request: PermissionRequest, choice: PermissionChoice) => void;
+	onOpenFile?: (path: string) => void;
 	/** Why the last attempt to answer failed. */
 	error?: string;
-}
-
-/** Extract plan content from ExitPlanMode input */
-function extractPlanContent(toolInput: unknown): string | null {
-	if (!toolInput || typeof toolInput !== "object") {
-		return null;
-	}
-	const input = toolInput as { plan?: unknown };
-	if (typeof input.plan === "string") {
-		return input.plan;
-	}
-	return null;
 }
 
 /**
@@ -322,12 +316,196 @@ function getDestinationLabel(destination: PermissionUpdateDestination): string {
 	}
 }
 
-/** Type guard for PermissionUpdate with rules */
-function hasRules(
-	update: PermissionUpdate,
-): update is PermissionUpdate & { rules: PermissionRuleValue[] } {
-	return "rules" in update;
+type PermissionMode = Extract<PermissionUpdate, { type: "setMode" }>["mode"];
+
+/** Claude's permission modes, as the one line that names them reads them. */
+function getModeLabel(mode: PermissionMode): string {
+	switch (mode) {
+		case "default":
+			return "Default";
+		case "acceptEdits":
+			return "Accept edits";
+		case "bypassPermissions":
+			return "Bypass permissions";
+		case "plan":
+			return "Plan";
+	}
 }
+
+/**
+ * The input as it arrived, folded away under the reading of it above.
+ *
+ * Kept because the reading is a reading: a key no branch draws is still part
+ * of what is being approved. `CollapsibleBody` mounts nothing until the first
+ * open, so the serialization below is paid for only by someone who asked.
+ */
+function RawInput({ input }: { input: unknown }) {
+	const [expanded, setExpanded] = useState(false);
+
+	return (
+		<div>
+			<button
+				type="button"
+				aria-expanded={expanded}
+				onClick={() => setExpanded(!expanded)}
+				className="flex min-h-[36px] w-full items-center gap-1.5 rounded text-left text-th-text-muted pointer-coarse:min-h-11 hover:bg-th-overlay-hover"
+			>
+				<ChevronRight
+					className={`size-3 shrink-0 transition-transform ${expanded ? "rotate-90" : ""}`}
+				/>
+				Raw input
+			</button>
+			<CollapsibleBody expanded={expanded}>
+				<RawInputBody input={input} />
+			</CollapsibleBody>
+		</div>
+	);
+}
+
+function RawInputBody({ input }: { input: unknown }) {
+	const json = useMemo(() => formatInput(input), [input]);
+	return (
+		<CodeHighlighter language="json" wrap plain={json.length > HIGHLIGHT_LIMIT}>
+			{json}
+		</CodeHighlighter>
+	);
+}
+
+function RuleChips({ items }: { items: string[] }) {
+	return (
+		<span className="inline-flex flex-wrap gap-1 align-middle">
+			{items.map((item, idx) => (
+				<code
+					// biome-ignore lint/suspicious/noArrayIndexKey: a request's suggestions never change
+					key={idx}
+					className="rounded bg-th-bg-tertiary px-1 py-0.5 font-mono text-th-text-primary"
+				>
+					{item}
+				</code>
+			))}
+		</span>
+	);
+}
+
+/**
+ * One sentence of what pressing Always Allow writes.
+ *
+ * Every suggestion, not the first: the server answers with the whole list
+ * (`UpdatedPermissions = PermissionSuggestions`), so a card naming fewer would
+ * be agreeing to more than it says.
+ */
+function SuggestionLine({ update }: { update: PermissionUpdate }) {
+	const dest = getDestinationLabel(update.destination);
+	const workDir = useWSStore((state) => state.workDir);
+
+	switch (update.type) {
+		case "addRules":
+			return (
+				<>
+					adds to {dest}:{" "}
+					<RuleChips items={update.rules.map(formatPermissionRule)} />
+				</>
+			);
+		case "replaceRules":
+			return (
+				<>
+					replaces the rules in {dest} with:{" "}
+					<RuleChips items={update.rules.map(formatPermissionRule)} />
+				</>
+			);
+		case "removeRules":
+			return (
+				<>
+					removes from {dest}:{" "}
+					<RuleChips items={update.rules.map(formatPermissionRule)} />
+				</>
+			);
+		case "setMode":
+			// The mode is the weight of the sentence — bypassing permissions is the
+			// heaviest thing any suggestion can do — so it is not left muted.
+			return (
+				<>
+					switches {dest} to{" "}
+					<span className="font-medium text-th-text-primary">
+						{getModeLabel(update.mode)}
+					</span>{" "}
+					mode.
+				</>
+			);
+		case "addDirectories":
+			return (
+				<>
+					lets {dest} access:{" "}
+					<RuleChips
+						items={update.directories.map((dir) =>
+							formatFilePath(dir, workDir),
+						)}
+					/>
+				</>
+			);
+		case "removeDirectories":
+			return (
+				<>
+					removes access to:{" "}
+					<RuleChips
+						items={update.directories.map((dir) =>
+							formatFilePath(dir, workDir),
+						)}
+					/>
+				</>
+			);
+	}
+}
+
+/**
+ * What Always Allow does, said directly above the button that does it.
+ *
+ * Outside the scrolling body on purpose: a long command used to scroll this
+ * explanation out of sight while the button stayed in view.
+ */
+function AlwaysAllowEffect({
+	id,
+	suggestions,
+	isCodex,
+}: {
+	/** Described-by target of the Always Allow button. */
+	id: string;
+	suggestions: PermissionUpdate[];
+	isCodex?: boolean;
+}) {
+	const label = (
+		<span className="font-medium text-th-text-primary">Always Allow</span>
+	);
+
+	// Codex has no rules to show: its "always" is `acceptForSession`.
+	if (suggestions.length === 0) {
+		if (!isCodex) return null;
+		return (
+			<p id={id} className="px-2 pt-2 text-th-text-muted">
+				{label} stops Codex asking about requests like this until the session
+				ends.
+			</p>
+		);
+	}
+
+	return (
+		<div id={id} className="space-y-1 px-2 pt-2 text-th-text-muted">
+			{suggestions.map((update, idx) => (
+				// biome-ignore lint/suspicious/noArrayIndexKey: a request's suggestions never change
+				<p key={idx}>
+					{label} <SuggestionLine update={update} />
+				</p>
+			))}
+		</div>
+	);
+}
+
+// A decision, not a caption: the one place in this `text-xs` card that steps
+// up to `text-sm`. The card is a container that can grow, so the box itself
+// grows to the floor rather than borrowing a `touch-target` overlay.
+const PERMISSION_BUTTON =
+	"min-h-9 rounded-md text-sm font-medium pointer-coarse:min-h-11 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-th-accent";
+const PERMISSION_SECONDARY = `${PERMISSION_BUTTON} flex-1 border border-th-border bg-th-bg-primary text-th-text-primary hover:bg-th-overlay-hover`;
 
 // What an expired permission request says, per reason. Every one of them states
 // the same outcome — the tool did not run — because a permission that is not
@@ -359,6 +537,7 @@ function PermissionRequestItem({
 	reason,
 	isCodex,
 	onRespond,
+	onOpenFile,
 	error,
 }: PermissionRequestItemProps) {
 	const isPending = status === "pending";
@@ -366,33 +545,15 @@ function PermissionRequestItem({
 	// The same derivation the tool row uses: a user who approved a command and
 	// then reads the row that ran it is looking at one string, cut one way.
 	const summary = toolSummary(request.toolName, request.toolInput, workDir);
-	const isExitPlanMode = request.toolName === "ExitPlanMode";
-	const planContent = isExitPlanMode
-		? extractPlanContent(request.toolInput)
-		: null;
-	const hasToolInput = !planContent && !isEmptyInput(request.toolInput);
-	const permissionSuggestion =
-		isPending &&
-		request.permissionSuggestions &&
-		request.permissionSuggestions.length > 0 &&
-		hasRules(request.permissionSuggestions[0])
-			? request.permissionSuggestions[0]
-			: null;
+	const hasToolInput = !isEmptyInput(request.toolInput);
+	const suggestions = request.permissionSuggestions ?? [];
+	const offersAlwaysAllow = isCodex || suggestions.length > 0;
+	const alwaysAllowEffectId = useId();
 	// The expired banner lives in the body, so a request with nothing else to
 	// show still has to be openable — otherwise the one thing the card has left
 	// to say is unreachable.
-	const hasExpandableContent = Boolean(
-		planContent || hasToolInput || permissionSuggestion || status === "expired",
-	);
+	const hasExpandableContent = hasToolInput || status === "expired";
 	const [expanded, setExpanded] = useState(isPending && hasExpandableContent);
-	const everExpanded = useEverExpanded(expanded);
-	// Whether there is an input to show is a cheap question; serializing it is
-	// not, and a denied request whose strip stays shut never needs the answer.
-	const toolInputContent = useMemo(
-		() =>
-			everExpanded && hasToolInput ? formatInput(request.toolInput) : null,
-		[everExpanded, hasToolInput, request.toolInput],
-	);
 
 	const statusConfig = {
 		pending: { Icon: CircleHelp, color: "text-th-warning" },
@@ -432,40 +593,19 @@ function PermissionRequestItem({
 			/>
 
 			<CollapsibleBody expanded={expanded}>
-				<ScrollableContent className="max-h-[60vh] overflow-auto border-t border-th-border p-2">
+				<ScrollableContent className="max-h-[60vh] space-y-3 overflow-auto border-t border-th-border p-2">
 					{/* An expired permission can only have been a denial, and the card
 					    states that outcome rather than offering anything to press: the
 					    two expired cards are told apart by their affordances, not their
 					    chrome (docs/lifecycle-ui.md §5.2). */}
 					{status === "expired" && (
-						<div className="mb-2 rounded bg-th-bg-tertiary px-2 py-1.5 text-th-text-muted">
+						<div className="rounded bg-th-bg-tertiary px-2 py-1.5 text-th-text-muted">
 							{(reason && PERMISSION_EXPIRY_COPY[reason]) ??
 								PERMISSION_EXPIRY_FALLBACK}
 						</div>
 					)}
-					{planContent && <MarkdownContent content={planContent} />}
-					{toolInputContent && (
-						<pre className="overflow-x-auto rounded bg-th-code-bg p-2 text-th-code-text">
-							{toolInputContent}
-						</pre>
-					)}
-					{permissionSuggestion && (
-						<div className="mt-2 rounded bg-th-bg-primary/50 p-2">
-							<p className="mb-1 text-th-text-muted">
-								"Always Allow" will add to{" "}
-								{getDestinationLabel(permissionSuggestion.destination)}:
-							</p>
-							<div className="flex flex-wrap gap-1">
-								{permissionSuggestion.rules.map((rule, idx) => (
-									<code
-										key={`${rule.toolName}-${idx}`}
-										className="rounded bg-th-success/20 px-1 py-0.5 text-th-success"
-									>
-										{formatPermissionRule(rule)}
-									</code>
-								))}
-							</div>
-						</div>
+					{hasToolInput && (
+						<PermissionRequestBody request={request} onOpenFile={onOpenFile} />
 					)}
 				</ScrollableContent>
 			</CollapsibleBody>
@@ -483,35 +623,99 @@ function PermissionRequestItem({
 			)}
 
 			{isPending && onRespond && (
-				<div className="flex justify-end gap-2 border-t border-th-border p-2">
-					<button
-						type="button"
-						onClick={() => onRespond(request, "deny")}
-						className="rounded bg-th-bg-secondary px-2 py-1 text-th-text-muted hover:bg-th-overlay-hover"
-					>
-						Deny
-					</button>
-					{(isCodex ||
-						(request.permissionSuggestions &&
-							request.permissionSuggestions.length > 0)) && (
+				<div className="border-t border-th-border">
+					{offersAlwaysAllow && (
+						<AlwaysAllowEffect
+							id={alwaysAllowEffectId}
+							suggestions={suggestions}
+							isCodex={isCodex}
+						/>
+					)}
+					{/* Allow keeps the right-hand end whether or not Always Allow is
+					    offered: the thumb's side, and the side Send sits on below. No
+					    Enter or Escape shortcut — Escape already interrupts the turn
+					    (docs/answering-ui.md#who-owns-escape), and a stray key on a
+					    prompt that runs arbitrary commands costs too much. */}
+					<div className="flex gap-2 p-2">
 						<button
 							type="button"
-							onClick={() => onRespond(request, "always_allow")}
-							className="rounded bg-th-success/20 px-2 py-1 text-th-success hover:bg-th-success/30"
+							onClick={() => onRespond(request, "deny")}
+							className={PERMISSION_SECONDARY}
 						>
-							Always Allow
+							Deny
 						</button>
-					)}
-					<button
-						type="button"
-						onClick={() => onRespond(request, "allow")}
-						className="rounded bg-th-accent px-2 py-1 text-th-accent-text hover:opacity-90"
-					>
-						Allow
-					</button>
+						{offersAlwaysAllow && (
+							<button
+								type="button"
+								onClick={() => onRespond(request, "always_allow")}
+								// The sentence above is the button's consequence; a screen
+								// reader landing on the button should hear it too.
+								aria-describedby={alwaysAllowEffectId}
+								className={PERMISSION_SECONDARY}
+							>
+								Always Allow
+							</button>
+						)}
+						<button
+							type="button"
+							onClick={() => onRespond(request, "allow")}
+							className={`${PERMISSION_BUTTON} flex-[1.4] bg-th-accent text-th-accent-text hover:opacity-90`}
+						>
+							Allow
+						</button>
+					</div>
 				</div>
 			)}
 		</div>
+	);
+}
+
+/**
+ * The same reading of the input the tool row gives once the call has run, so
+ * what was approved and what ran are one text: the invocation, then — for a
+ * file tool — the change it will make, then the input as it arrived.
+ */
+function PermissionRequestBody({
+	request,
+	onOpenFile,
+}: {
+	request: PermissionRequest;
+	onOpenFile?: (path: string) => void;
+}) {
+	const view = useMemo(
+		() => invocationView(request.toolName, request.toolInput),
+		[request.toolName, request.toolInput],
+	);
+	const change = useMemo(
+		() => proposedChange(request.toolName, request.toolInput),
+		[request.toolName, request.toolInput],
+	);
+	// Where the body already is the input — the JSON fallback, a string input,
+	// a plan that is the input's only key — the raw input would say it twice. A
+	// plan with anything beside it keeps it: whatever else the plan asks for is
+	// being approved with it.
+	const showRaw =
+		view.kind !== "json" &&
+		typeof request.toolInput !== "string" &&
+		!(
+			view.kind === "plan" &&
+			Object.keys(request.toolInput as object).length === 1
+		);
+
+	return (
+		<>
+			<ToolInvocation
+				toolName={request.toolName}
+				input={request.toolInput}
+				onOpenFile={onOpenFile}
+			/>
+			{change && (
+				<Section label="Proposed change">
+					<ProposedChange change={change} />
+				</Section>
+			)}
+			{showRaw && <RawInput input={request.toolInput} />}
+		</>
 	);
 }
 
@@ -579,6 +783,7 @@ function ContentPartItem(props: ContentPartItemProps) {
 				reason={part.reason}
 				isCodex={isCodex}
 				onRespond={onPermissionRespond}
+				onOpenFile={onOpenFile}
 				error={
 					promptError?.requestId === part.request.requestId
 						? promptError.message
