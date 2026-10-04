@@ -129,13 +129,17 @@ describe("SessionHeader", () => {
 			);
 		});
 
-		it("shows the mode that skips permissions in the warning colour", () => {
+		// YOLO is many users' everyday mode: one spot of colour on the glyph,
+		// never a warning-coloured word.
+		it("marks the mode that skips permissions with its glyph alone", () => {
 			render(<SessionHeader {...headerProps({ mode: "yolo" })} />);
 
 			expect(trigger()).toHaveAccessibleName(
 				"Session: Fix the login bug, Opus · YOLO",
 			);
-			expect(screen.getByText("YOLO")).toHaveClass("text-th-warning");
+			const mode = screen.getByText("YOLO");
+			expect(mode).not.toHaveClass("text-th-warning");
+			expect(mode.querySelector("svg")).toHaveClass("text-th-warning");
 		});
 
 		// The placeholder mode is the calm one: a session running with no
