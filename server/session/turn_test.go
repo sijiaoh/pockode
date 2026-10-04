@@ -622,3 +622,31 @@ func TestReduceTurnDoesNotMutateItsInput(t *testing.T) {
 		t.Fatalf("the reducer rewrote the state it was given: %+v", state)
 	}
 }
+
+// OpenedAt is the turn's clock, so it has to survive what resets Since — a
+// block and a resume — and go with the turn, whichever way it ends.
+func TestReduceTurnOpenedAtSpansTheTurn(t *testing.T) {
+	state := drive(TurnState{},
+		in(SignalPrompt, 0),
+		inReq(SignalPermissionRaised, "r1", 1),
+		inReq(SignalAnswered, "r1", 2),
+		in(SignalPrompt, 3),
+	)
+	if !state.OpenedAt.Equal(at(0)) {
+		t.Fatalf("OpenedAt = %v, want the prompt that opened the turn (%v)", state.OpenedAt, at(0))
+	}
+	if !state.Since.Equal(at(2)) {
+		t.Fatalf("Since = %v, want the resume (%v)", state.Since, at(2))
+	}
+
+	for _, ending := range []TurnSignal{SignalDone, SignalInterrupted, SignalProcessEnded, SignalProcessStarted} {
+		if got := ReduceTurn(state, in(ending, 4)).State; !got.OpenedAt.IsZero() {
+			t.Errorf("%s left OpenedAt = %v, want zero", ending, got.OpenedAt)
+		}
+	}
+
+	// Output the CLI resumes with by itself opens a turn as well as a prompt does.
+	if got := ReduceTurn(TurnState{}, in(SignalOutput, 5)).State; !got.OpenedAt.Equal(at(5)) {
+		t.Fatalf("OpenedAt = %v, want %v", got.OpenedAt, at(5))
+	}
+}

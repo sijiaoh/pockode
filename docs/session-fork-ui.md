@@ -199,12 +199,13 @@ text as Markdown, blank-line joined — no tool calls, cards or subagent notes),
 gets one, not only the last: forking an old answer is a main use, and a turn
 split by a mid-reply message is two messages, each a valid anchor.
 
-- **While the message is written** the row is already there, holding the
-  spinner; settling swaps the spinner for the buttons (with the same
-  `animate-message-menu-in` fade). The row's height is fixed
+- **While the message is written** its slot is already there, holding the
+  tail line ([turn-progress-ui.md §2](turn-progress-ui.md#2-the-tail-line));
+  settling swaps the line for the buttons (with the
+  `animate-message-menu-in` fade). Both hold the same height
   (`min-h-9 pointer-coarse:min-h-11`), so the text above does not move when the
   turn ends — what the user's slot buys by being reserved, this row buys by
-  replacing the spinner.
+  replacing the tail line.
 - **Copy only where there is text.** A message that is only tool calls could
   never have it, so it is removed rather than disabled. A failed copy (plain
   http on a LAN has no clipboard) turns the icon into a red `X` labelled *Copy
@@ -252,7 +253,7 @@ it** (*Which messages get a menu*).
 That accounting still holds for the user's bubble. On the agent's side it was
 redone when the bubble went away, and came out the other way:
 
-- **The row replaces, it does not add.** It takes the place of the spinner and
+- **The row replaces, it does not add.** It takes the place of the tail line and
   of the bubble's own padding (20px), so a settled message nets roughly 16–24px
   — not the full 36–44px charged above.
 - **Width became the scarcer axis.** The agent's text going full width is the
@@ -287,7 +288,7 @@ files that say which is which: `utils/messageActions.ts` answers the first,
   menu like any bubble.
 - A message still `sending` or `streaming` gets none either — it is not yet a
   turn. Its place is held all the same — the user's slot, the agent's turn-end
-  row with the spinner in it — which is what lets the actions arrive when the
+  slot with the tail line in it — which is what lets the actions arrive when the
   turn ends without moving the text above them.
 
 **2. Can fork run on this message?** (`forkUnavailableReason`,
@@ -656,7 +657,7 @@ New, all in `web/src/components/Chat/` unless noted:
 | File | Role |
 | --- | --- |
 | `MessageMenuTrigger.tsx` | The slot beside a user row and the `…` in it, plus whether its menu is open. Props: `{ onFork?: () => void; forkBlocked?: "nothing-before" \| "no-anchor-seq" \| "pending-request" }`. No `onFork` means this message is not a turn — the slot renders, the glyph does not. It also owns the `ForkBlocked` type, though only `nothing-before` is spelled there: the other two are `forkAnchor.ts`'s `ForkUnavailable`, declared beside the check that produces them, since a utility module does not import from the components that use it. `MessageMenu` imports `ForkBlocked`, as a type, which is erased at compile time and so is not a runtime cycle |
-| `MessageActions.tsx` | The agent's turn-end row (*The agent's turn-end row*): the spinner while pending, then Copy, Fork and `…`, plus the copy state and whether the menu is open. Props: `{ pending; spinning; copyText?; onFork?; forkBlocked? }` |
+| `MessageActions.tsx` | The agent's turn-end row (*The agent's turn-end row*) under a settled message: Copy, Fork and `…`, plus the copy state and whether the menu is open. Props: `{ copyText?; onFork?; forkBlocked? }`. While the message is pending, `TurnTail.tsx` holds the slot instead ([turn-progress-ui.md §2](turn-progress-ui.md#2-the-tail-line)) |
 | `MessageMenu.tsx` | The `Sheet` behind the `…`: everything this message can do, titled by speaker — **Your message** / **Agent message**, since a sheet here names its subject the way `Fork session` and a file's own name do. `onCopy` adds *Copy text*, which only the agent's side passes. The rules for adding a row live at its top, where the list is |
 | `ForkSessionSheet.tsx` | The confirm sheet above. Props: `{ anchor, droppedCount, agentType, defaultTitle, isForking, error, onFork, onClose }` |
 | `ForkOriginBanner.tsx` | The lineage row at the top of `MessageList` |
@@ -682,7 +683,7 @@ Changed:
   joins the row's accessible name without an `aria-describedby`.
 - `MessageItem.tsx` — renders `MessageMenuTrigger` on every user row of a
   forkable session, as a flex sibling on the bubble's inside, and
-  `MessageActions` at the end of every agent message, and assembles fork's
+  `MessageActions` at the end of every settled agent message, and assembles fork's
   blocked reason: the menu gate first, then `nothing-before`, the one cause that
   needs the transcript, then whatever `forkUnavailableReason` says about the
   message alone. Optional props `onForkMessage?: (messageId: string) => void`

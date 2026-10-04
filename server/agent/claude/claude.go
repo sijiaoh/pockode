@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -15,6 +16,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -196,6 +198,16 @@ func (a *Agent) Start(ctx context.Context, opts agent.StartOptions) (agent.Sessi
 		claudeArgs = append(claudeArgs, "--mcp-config", mcpConfigPath)
 	}
 
+	// Asked on every launch rather than once: the CLI can be updated under a
+	// running server, and --version answers in milliseconds.
+	version, err := agent.Version(ctx, log, Binary)
+	var notFound *agent.BinaryNotFoundError
+	// A missing CLI is StartProcess's to report, below.
+	if err != nil && !errors.As(err, &notFound) {
+		log.Warn("could not read the claude version; thinking text will not be requested", "error", err)
+	}
+	claudeArgs = append(claudeArgs, thinkingDisplayArgs(version)...)
+
 	// Created up front rather than left to the first upload: the directory is
 	// handed to the CLI once, at launch, and an upload can arrive while this
 	// process is running.
@@ -280,7 +292,7 @@ func (a *Agent) Start(ctx context.Context, opts agent.StartOptions) (agent.Sessi
 			lossStore.clear(log)
 		}
 
-		streamOutput(procCtx, log, proc.Stdout, events, pendingRequests, resumeState, backgroundTasks, usage, sess.refusals(), attachmentStore)
+		streamOutput(procCtx, log, proc.Stdout, events, pendingRequests, resumeState, backgroundTasks, &sess.thinking, usage, sess.refusals(), attachmentStore)
 		agent.WaitForProcess(procCtx, log, proc, stderrCh, events)
 		resumeState.processExited(procCtx.Err() != nil)
 
@@ -308,6 +320,7 @@ type cliSession struct {
 	stdinMu         sync.Mutex
 	pendingRequests *sync.Map // tracks sent control requests by requestID for response matching
 	backgroundTasks *backgroundTaskTracker
+	thinking        thinkingClock
 	lossStore       backgroundLossStore
 	cancel          func()
 	closeOnce       sync.Once
@@ -388,7 +401,11 @@ func (s *cliSession) SendMessage(prompt agent.Prompt) error {
 		return fmt.Errorf("failed to marshal message: %w", err)
 	}
 	s.log.Debug("sending prompt", "length", len(text), "images", len(images), "files", len(byPath))
-	return s.writeStdin(data)
+	if err := s.writeStdin(data); err != nil {
+		return err
+	}
+	s.thinking.messageSent(time.Now())
+	return nil
 }
 
 // Limits on what goes to claude as image content, from the Anthropic API's
@@ -604,21 +621,38 @@ func (s *cliSession) writeStdin(data []byte) error {
 	return err
 }
 
-func streamOutput(ctx context.Context, log *slog.Logger, stdout io.Reader, events chan<- agent.AgentEvent, pendingRequests *sync.Map, resumeState *claudeResumeStateManager, backgroundTasks *backgroundTaskTracker, usage *usageObserver, refusals controlRefusals, store attachments.Store) {
+func streamOutput(ctx context.Context, log *slog.Logger, stdout io.Reader, events chan<- agent.AgentEvent, pendingRequests *sync.Map, resumeState *claudeResumeStateManager, backgroundTasks *backgroundTaskTracker, thinking *thinkingClock, usage *usageObserver, refusals controlRefusals, store attachments.Store) {
 	scanner := agent.NewLineScanner(stdout, agent.MaxLineBytes)
 	authFailures := &authFailureTracker{}
+
+	// send is the one way an event leaves here, so that none bypasses the
+	// thinking clock: a result it never saw would put the call's whole runtime
+	// into the next thinking's duration. False once the context is done.
+	send := func(ev agent.AgentEvent, arrived time.Time) bool {
+		ev, ok := thinking.observe(ev, arrived)
+		if !ok {
+			return true
+		}
+		select {
+		case events <- ev:
+			return true
+		case <-ctx.Done():
+			return false
+		}
+	}
 
 	for scanner.Scan() {
 		line := scanner.Bytes()
 		if len(line) == 0 {
 			continue
 		}
+		// Read once per line, before parsing: everything parsed out of one frame
+		// arrived at the same moment.
+		arrived := time.Now()
 
 		if scanner.Truncated() {
 			for _, ev := range oversizedLineEvents(log, line, scanner.Len(), refusals.decline) {
-				select {
-				case events <- ev:
-				case <-ctx.Done():
+				if !send(ev, arrived) {
 					return
 				}
 			}
@@ -630,12 +664,10 @@ func streamOutput(ctx context.Context, log *slog.Logger, stdout io.Reader, event
 		var event cliEvent
 		if err := json.Unmarshal(line, &event); err != nil {
 			log.Warn("failed to parse JSON from CLI", "error", err, "lineLength", len(line))
-			select {
-			case events <- agent.TextEvent{Content: string(line)}:
-				continue
-			case <-ctx.Done():
+			if !send(agent.TextEvent{Content: string(line)}, arrived) {
 				return
 			}
+			continue
 		}
 
 		if resumeState != nil {
@@ -644,9 +676,7 @@ func streamOutput(ctx context.Context, log *slog.Logger, stdout io.Reader, event
 		usage.observe(line, event)
 
 		for _, ev := range parseLine(log, line, event, pendingRequests, backgroundTasks, authFailures, refusals, store) {
-			select {
-			case events <- ev:
-			case <-ctx.Done():
+			if !send(ev, arrived) {
 				return
 			}
 		}
@@ -1146,8 +1176,11 @@ type cliMessageString struct {
 }
 
 type cliContentBlock struct {
-	Type      string          `json:"type"`
-	Text      string          `json:"text,omitempty"`
+	Type string `json:"type"`
+	Text string `json:"text,omitempty"`
+	// Thinking is a thinking block's text; see thinkingDisplayArgs for why it
+	// is often empty.
+	Thinking  string          `json:"thinking,omitempty"`
 	ID        string          `json:"id,omitempty"`
 	Name      string          `json:"name,omitempty"`
 	Input     json.RawMessage `json:"input,omitempty"`
@@ -1227,9 +1260,9 @@ func parseLine(log *slog.Logger, line []byte, event cliEvent, pendingRequests *s
 // surfaces for a retry banner and a denial dialog — Pockode has neither, so
 // without these a stalled turn or an auto-denied tool would go unexplained.
 //
-// Two notable exclusions: `init` is session-start metadata that the CLI re-emits
-// at the start of every turn, and `thinking_tokens` is a per-delta token
-// estimate — both are pure noise in a transcript.
+// One notable exclusion: `init` is session-start metadata that the CLI re-emits
+// at the start of every turn, pure noise in a transcript. `thinking_tokens` is
+// read before this map is consulted, as the signal that the agent is thinking.
 var userVisibleSystemSubtypes = map[string]bool{
 	"compact_boundary":          true, // conversation was compacted
 	"informational":             true, // loop text banner, e.g. hook feedback
@@ -1266,6 +1299,20 @@ func parseSystemEvent(log *slog.Logger, line []byte, event cliEvent, backgroundT
 			return nil
 		}
 		return []agent.AgentEvent{agent.CommandOutputEvent{Content: payload.Content}}
+	}
+
+	// A per-delta estimate of the thinking tokens so far, written while the
+	// model thinks and before its thinking block arrives. The number is not
+	// shown; that the frame arrived is the signal (agent.ThinkingDeltaEvent),
+	// which thinkingClock cuts down to one per stretch. Only the main agent's:
+	// a subagent's thinking is described in its own row. The frames carry no
+	// parent_tool_use_id, and a subagent writes none, forwarded or not
+	// (measured on 2.1.289), so the check is for a CLI that starts to.
+	if event.Subtype == "thinking_tokens" {
+		if event.ParentToolUseID != "" {
+			return nil
+		}
+		return []agent.AgentEvent{agent.ThinkingDeltaEvent{}}
 	}
 
 	// The task lifecycle. Read as signals about live state — which call is
@@ -1515,18 +1562,37 @@ func parseAssistantEvent(log *slog.Logger, line []byte, event cliEvent, backgrou
 	var events []agent.AgentEvent
 	var textParts []string
 
-	// TODO: Handle thinking/redacted_thinking blocks and other missing fields.
+	flushText := func() {
+		if len(textParts) > 0 {
+			events = append(events, textEvent(event, textParts))
+			textParts = nil
+		}
+	}
+
 	for _, block := range msg.Content {
 		switch block.Type {
 		case "text":
 			if block.Text != "" {
 				textParts = append(textParts, block.Text)
 			}
+		case "thinking", "redacted_thinking":
+			flushText()
+			// An empty thinking is still recorded: that the agent thought, and
+			// for how long, is worth a row even when it shared nothing. The
+			// duration is stamped later, by thinkingClock.
+			//
+			// No ProviderMessageID: a fork anchored on this frame would resume
+			// a conversation ending in a thinking-only assistant message, which
+			// nothing has shown --resume-session-at to accept. Without it the
+			// anchor falls back to the record before, and a fork cut there only
+			// loses the thinking.
+			events = append(events, agent.ThinkingEvent{
+				Content:         strings.TrimSpace(block.Thinking),
+				Redacted:        block.Type == "redacted_thinking",
+				ParentToolUseID: event.ParentToolUseID,
+			})
 		case "tool_use", "server_tool_use":
-			if len(textParts) > 0 {
-				events = append(events, textEvent(event, textParts))
-				textParts = nil
-			}
+			flushText()
 			events = append(events, agent.ToolCallEvent{
 				ToolUseID: block.ID,
 				ToolName:  block.Name,
@@ -1542,9 +1608,7 @@ func parseAssistantEvent(log *slog.Logger, line []byte, event cliEvent, backgrou
 		}
 	}
 
-	if len(textParts) > 0 {
-		events = append(events, textEvent(event, textParts))
-	}
+	flushText()
 
 	return events
 }

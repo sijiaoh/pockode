@@ -515,7 +515,7 @@ type SessionListItem struct {
 	// and, being volatile process state, arrived on their own schedule. This one
 	// is persisted with the session, so a row is drawn the same whether or not a
 	// process exists.
-	Turn session.TurnState `json:"turn"`
+	Turn Turn `json:"turn"`
 	// UnansweredQuestions is how many questions this session is waiting on
 	// answers to. It is `len(turn.unanswered)` and nothing else — derived here,
 	// at the one place a row is built, so it cannot drift from the list it
@@ -532,6 +532,33 @@ type SessionListItem struct {
 	ForkedFrom          *session.ForkOrigin `json:"forked_from,omitempty"`
 }
 
+// Turn is session.TurnState as a client receives it: the instant the open turn
+// began swapped for how long it has been open as of sending. A reading rather
+// than a timestamp because the client counts on from when it received it, so
+// the tail line's clock (docs/turn-progress-ui.md §2.3) never depends on the
+// phone's clock agreeing with the server's.
+//
+// Every wire type that carries a turn carries this one, which is what makes
+// "derived at send time" hold on every path rather than on the ones that
+// remembered to.
+type Turn struct {
+	session.TurnState
+	// OpenElapsedMs is absent while no turn is open.
+	OpenElapsedMs *int64 `json:"open_elapsed_ms,omitempty"`
+}
+
+// NewTurn takes the reading. now is the server's clock at the moment the value
+// is built, which is the moment it is sent: every caller builds one for a
+// message it is about to write.
+func NewTurn(state session.TurnState, now time.Time) Turn {
+	t := Turn{TurnState: state}
+	if state.Open && !state.OpenedAt.IsZero() {
+		elapsed := max(now.Sub(state.OpenedAt).Milliseconds(), 0)
+		t.OpenElapsedMs = &elapsed
+	}
+	return t
+}
+
 // NewSessionListItem builds the row for a session. Every producer of a row goes
 // through here so that narrowing SessionMeta down to a row is decided in one
 // place.
@@ -545,7 +572,7 @@ func NewSessionListItem(meta session.SessionMeta, workID string) SessionListItem
 		WorkID:              workID,
 		Title:               meta.Title,
 		UpdatedAt:           meta.UpdatedAt,
-		Turn:                meta.Turn,
+		Turn:                NewTurn(meta.Turn, time.Now()),
 		UnansweredQuestions: len(meta.Turn.Unanswered),
 		Unread:              meta.Unread,
 		ForkedFrom:          meta.ForkedFrom,
@@ -636,6 +663,8 @@ type SessionDetailSubscribeParams struct {
 // leave a session's own settings with no subscription that carries them.
 type SessionDetail struct {
 	session.SessionMeta
+	// Turn shadows SessionMeta.Turn with its wire form; see Turn.
+	Turn Turn `json:"turn"`
 	// WorkID names the work item this session runs, absent for a plain chat
 	// session. Same field, same source and same rule as SessionListItem.WorkID:
 	// derived from work.Work.SessionID, never stored on the session.
@@ -648,7 +677,7 @@ type SessionDetail struct {
 }
 
 func NewSessionDetail(meta session.SessionMeta, workID string) SessionDetail {
-	return SessionDetail{SessionMeta: meta, WorkID: workID}
+	return SessionDetail{SessionMeta: meta, Turn: NewTurn(meta.Turn, time.Now()), WorkID: workID}
 }
 
 type SessionDetailSubscribeResult struct {
@@ -681,7 +710,7 @@ type ChatMessagesSubscribeResult struct {
 	// governs: a turn that is not running is what tells the client that every
 	// message still streaming has stopped, which is the only thing that closes
 	// out a transcript whose server died mid-stream (docs/lifecycle-ui.md §2.4).
-	Turn session.TurnState `json:"turn"`
+	Turn Turn `json:"turn"`
 	// ToolActivity is what each tool call still in flight last reported doing,
 	// by tool_use_id. It is here rather than in History because a tool_activity
 	// event is the latest value of something still changing and is never

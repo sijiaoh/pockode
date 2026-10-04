@@ -120,6 +120,15 @@ type TurnState struct {
 	// holds — an event that leaves the phase alone leaves this alone too. It is
 	// what a phase budget is measured against.
 	Since time.Time `json:"since"`
+	// OpenedAt is when the open turn began, on this server's clock; zero while
+	// Open is false. Unlike Since it does not move when the turn blocks and
+	// resumes, which is what lets a turn's clock run on underneath a wait.
+	//
+	// Not stored and not sent. No open turn survives a restart (NormalizeTurn),
+	// so a stored instant would never be read back; and the wire carries a
+	// reading taken from it instead (rpc.NewTurn), so no client ever compares it
+	// with its own clock.
+	OpenedAt time.Time `json:"-"`
 	// LastOutcome is how the previous turn ended, and is cleared the moment a
 	// new turn starts. Reading it while Open is true would therefore be reading
 	// about nothing.
@@ -398,6 +407,10 @@ func ReduceTurn(state TurnState, in TurnInput) TurnTransition {
 	started := next.Open && !state.Open
 	if started {
 		next.LastOutcome = ""
+		next.OpenedAt = in.At
+	}
+	if !next.Open {
+		next.OpenedAt = time.Time{}
 	}
 
 	next.Phase = phaseFor(next.Open, next.Blockers)
@@ -531,7 +544,8 @@ func cloneBlockers(blockers []Blocker) []Blocker {
 
 func (t TurnState) equal(other TurnState) bool {
 	if t.Phase != other.Phase || t.Open != other.Open ||
-		!t.Since.Equal(other.Since) || t.LastOutcome != other.LastOutcome {
+		!t.Since.Equal(other.Since) || !t.OpenedAt.Equal(other.OpenedAt) ||
+		t.LastOutcome != other.LastOutcome {
 		return false
 	}
 	if len(t.Blockers) != len(other.Blockers) {

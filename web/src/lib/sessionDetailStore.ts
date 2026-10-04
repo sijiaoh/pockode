@@ -25,6 +25,12 @@ interface SessionDetailState {
 	sessionId: string | null;
 	/** Null until the snapshot arrives, and again once the session is deleted. */
 	detail: SessionDetail | null;
+	/**
+	 * When `detail` arrived, on this device's clock (`Date.now()`). What the
+	 * detail's `turn.open_elapsed_ms` was true as of, so the turn clock counts on
+	 * from here.
+	 */
+	receivedAt: number;
 	status: SessionDetailStatus;
 }
 
@@ -53,9 +59,15 @@ export type SessionDetailStore = SessionDetailState & SessionDetailActions;
 export const useSessionDetailStore = create<SessionDetailStore>((set) => ({
 	sessionId: null,
 	detail: null,
+	receivedAt: 0,
 	status: "loading",
 	setDetail: (sessionId, detail) =>
-		set({ sessionId, detail, status: detail ? "ready" : "missing" }),
+		set({
+			sessionId,
+			detail,
+			receivedAt: Date.now(),
+			status: detail ? "ready" : "missing",
+		}),
 	setMissing: (sessionId) =>
 		set({ sessionId, detail: null, status: "missing" }),
 	clear: () => set({ sessionId: null, detail: null, status: "loading" }),

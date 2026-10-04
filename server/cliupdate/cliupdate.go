@@ -298,7 +298,7 @@ func (s *Service) check(ctx context.Context, agentType session.AgentType) Check 
 		return c
 	}
 
-	cmp, err := compareVersions(c.LatestVersion, c.Version)
+	cmp, err := agent.CompareVersions(c.LatestVersion, c.Version)
 	if err != nil {
 		s.logCheckFailure(ctx, agentType, "could not compare AI CLI versions", err)
 		c.State = StateUnavailable

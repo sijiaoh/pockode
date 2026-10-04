@@ -163,6 +163,38 @@ describe("messageReducer", () => {
 			});
 		});
 
+		it("normalizes thinking records rather than falling back to raw", () => {
+			expect(
+				normalizeEvent({
+					type: "thinking",
+					content: "**Counting**",
+					duration_ms: 12000,
+					parent_tool_use_id: "task-1",
+				}),
+			).toEqual({
+				type: "thinking",
+				thought: {
+					content: "**Counting**",
+					fullReasoning: "",
+					redacted: false,
+					durationMs: 12000,
+				},
+				parentToolUseId: "task-1",
+			});
+			// A redacted block with nothing measured: no text, no duration.
+			expect(normalizeEvent({ type: "thinking", redacted: true })).toEqual({
+				type: "thinking",
+				thought: { content: "", fullReasoning: "", redacted: true },
+				parentToolUseId: undefined,
+			});
+			// The signal alone, as Claude sends it.
+			expect(normalizeEvent({ type: "thinking_delta" })).toEqual({
+				type: "thinking_delta",
+				contentDelta: "",
+				fullReasoningDelta: "",
+			});
+		});
+
 		it("carries the subagent call a record was produced inside", () => {
 			const parent = { parent_tool_use_id: "task-1" };
 			expect(
@@ -4947,5 +4979,150 @@ describe("messageReducer", () => {
 				]);
 			});
 		});
+	});
+});
+
+describe("thinking", () => {
+	const think = (extra: Record<string, unknown> = {}) => ({
+		type: "thinking",
+		content: "Checking the sender.",
+		duration_ms: 2000,
+		...extra,
+	});
+	const thoughtsOf = (part: ContentPart | undefined) =>
+		part?.type === "thinking" ? part.thoughts.map((t) => t.durationMs) : null;
+
+	it("draws consecutive records as one row, and text between as two", () => {
+		const parts = partsOf(
+			replayHistory([
+				{ type: "message", content: "go" },
+				think(),
+				think({ content: "", redacted: true, duration_ms: 1000 }),
+				{ type: "text", content: "Found it." },
+				think({ content: "Next." }),
+			]).at(-1) as Message,
+		);
+		expect(parts).toEqual([
+			{
+				type: "thinking",
+				id: expect.any(String),
+				thoughts: [
+					{
+						content: "Checking the sender.",
+						fullReasoning: "",
+						redacted: false,
+						durationMs: 2000,
+					},
+					{
+						content: "",
+						fullReasoning: "",
+						redacted: true,
+						durationMs: 1000,
+					},
+				],
+			},
+			{ type: "text", content: "Found it." },
+			{
+				type: "thinking",
+				id: expect.any(String),
+				thoughts: [
+					{
+						content: "Next.",
+						fullReasoning: "",
+						redacted: false,
+						durationMs: 2000,
+					},
+				],
+			},
+		]);
+		// Two rows, two keys.
+		expect(parts[0]).not.toMatchObject({
+			id: (parts[2] as { id: string }).id,
+		});
+	});
+
+	// A bare `Thought` with nothing behind it is noise, and set aside before it
+	// could split a run or open a reply of its own.
+	it("sets aside a record with nothing to draw", () => {
+		const empty = think({ content: "", duration_ms: undefined });
+		const replayed = replayHistory([
+			{ type: "message", content: "go" },
+			think(),
+			empty,
+			think(),
+			{ type: "done" },
+			empty,
+		]);
+		expect(replayed).toHaveLength(2);
+		expect(thoughtsOf(partsOf(replayed[1])[0])).toEqual([2000, 2000]);
+	});
+
+	it("files a subagent's thinking under the call that spawned it", () => {
+		const parts = partsOf(
+			replayHistory([
+				{ type: "message", content: "go" },
+				{
+					type: "tool_call",
+					tool_use_id: "t1",
+					tool_name: "Agent",
+					tool_input: {},
+				},
+				think({ duration_ms: 1000 }),
+				think({ parent_tool_use_id: "t1" }),
+				think({ duration_ms: 3000 }),
+			]).at(-1) as Message,
+		);
+		expect(parts).toMatchObject([
+			{
+				type: "tool_call",
+				tool: { id: "t1", children: [{ type: "thinking" }] },
+			},
+			// Filed away, the subagent's thinking does not split the main run.
+			{ type: "thinking" },
+		]);
+		expect(thoughtsOf(parts[1])).toEqual([1000, 3000]);
+	});
+
+	// Unfiled, a subagent's thinking sits flat beside the main agent's, and
+	// joined they would be one row nobody could attribute.
+	it("does not join one speaker's thinking with another's", () => {
+		const parts = partsOf(
+			replayHistory([
+				{ type: "message", content: "go" },
+				think({ duration_ms: 1000 }),
+				think({ parent_tool_use_id: "not-loaded" }),
+			]).at(-1) as Message,
+		);
+		expect(parts.map(thoughtsOf)).toEqual([[1000], [2000]]);
+	});
+
+	it("rejoins a thinking a page boundary cut in half", () => {
+		const older = replayHistory([
+			{ type: "message", content: "go" },
+			think({ duration_ms: 1000 }),
+		]);
+		const newer = replayHistory([
+			think({ duration_ms: 3000 }),
+			{ type: "done" },
+		]);
+		const shownId = (partsOf(newer[0])[0] as { id: string }).id;
+		const joined = prependHistoryPage(older, newer);
+		expect(partsOf(joined[1]).map(thoughtsOf)).toEqual([[1000, 3000]]);
+		expect(partsOf(joined[1])[0]).toMatchObject({ id: shownId });
+	});
+
+	// Its id is its key: a new one would remount the row on screen.
+	it("keeps a thinking's id when a page joins above it", () => {
+		const older = replayHistory([
+			{ type: "message", content: "go" },
+			{ type: "text", content: "Looking." },
+		]);
+		const newer = replayHistory([think(), { type: "done" }]);
+		const shownId = (partsOf(newer[0])[0] as { id: string }).id;
+		const joined = prependHistoryPage(older, newer);
+		expect(partsOf(joined[1])).toMatchObject([
+			{ type: "text" },
+			{ type: "thinking", id: shownId },
+		]);
 	});
 });

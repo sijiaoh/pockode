@@ -267,6 +267,17 @@ export interface QuestionRecord {
 	askedAt?: string;
 }
 
+/** One `thinking` record, as a thinking row draws it. */
+export interface Thought {
+	/** Claude's thinking, or Codex's reasoning summary; Markdown. */
+	content: string;
+	/** Codex's raw reasoning, drawn under its own label beside `content`. */
+	fullReasoning: string;
+	redacted: boolean;
+	/** Measured by the server; absent when nothing measured it. */
+	durationMs?: number;
+}
+
 export type ContentPart =
 	| {
 			type: "text";
@@ -281,6 +292,23 @@ export type ContentPart =
 	| {
 			type: "tool_call";
 			tool: ToolRun;
+			/** See the `text` part. */
+			parentToolUseId?: string;
+	  }
+	| {
+			/**
+			 * A run of consecutive `thinking` records, drawn as one row
+			 * (docs/turn-progress-ui.md#11-what-it-is): the engine splitting one
+			 * pause into two blocks is nothing the reader can use. Never empty.
+			 */
+			type: "thinking";
+			/**
+			 * Minted by the reducer, since no record names one: a row's key and
+			 * its open body must survive the parts before it shifting, which a
+			 * history page joining from above does.
+			 */
+			id: string;
+			thoughts: Thought[];
 			/** See the `text` part. */
 			parentToolUseId?: string;
 	  }
@@ -962,6 +990,14 @@ export interface SessionTurn {
 	blockers?: TurnBlocker[];
 	/** When the current phase was entered; it does not move while it holds. */
 	since: string;
+	/**
+	 * How long the open turn has run, as of the moment the server sent this;
+	 * absent while `open` is false. A reading rather than a timestamp, so the
+	 * tail line counts on from when it arrived and never compares the server's
+	 * clock with this device's (docs/turn-progress-ui.md §2.3). Unlike `since` it
+	 * does not reset when the turn blocks and resumes.
+	 */
+	open_elapsed_ms?: number;
 	/** How the previous turn ended. Cleared the moment a new one starts, so it
 	 * says nothing while `phase` is not `idle`. */
 	last_outcome?: TurnOutcome;
@@ -1087,6 +1123,8 @@ export type ServerMethod =
 	| "tool_call"
 	| "tool_result"
 	| "tool_activity"
+	| "thinking"
+	| "thinking_delta"
 	| "warning"
 	| "error"
 	| "done"
@@ -1175,6 +1213,37 @@ export type ServerNotification =
 			tool_use_id: string;
 			activity?: string;
 			output_delta?: string;
+	  }
+	| {
+			/**
+			 * A finished stretch of the agent's thinking (docs/turn-progress-ui.md).
+			 * Every field may be absent: an engine that shared no text leaves
+			 * `content` out, and a thinking nothing measured leaves out
+			 * `duration_ms`.
+			 */
+			type: "thinking";
+			/** Claude's thinking, or Codex's reasoning summary; Markdown. */
+			content?: string;
+			/** Codex's raw reasoning, shown under its own label when present. */
+			full_reasoning?: string;
+			/** The model provider withheld the text; `content` is then absent. */
+			redacted?: boolean;
+			/** Measured by the server while it happened. */
+			duration_ms?: number;
+			/** See the `text` record. */
+			parent_tool_use_id?: string;
+	  }
+	| {
+			/**
+			 * The main agent is thinking now. Never persisted, like
+			 * `tool_activity`, and never a subagent's. Ends with the next
+			 * `thinking` record or with the turn. Both deltas absent is the signal
+			 * alone (Claude); otherwise they accumulate into the coming record's
+			 * `content` and `full_reasoning`, separators included.
+			 */
+			type: "thinking_delta";
+			content_delta?: string;
+			full_reasoning_delta?: string;
 	  }
 	| {
 			type: "warning";

@@ -9,6 +9,7 @@ import {
 } from "react";
 import { openAssistantIndex } from "../../lib/messageReducer";
 import { useChatUIConfig } from "../../lib/registries/chatUIRegistry";
+import type { TurnTail } from "../../lib/thinking";
 import type { Message, PermissionRequest } from "../../types/message";
 import type { AgentType } from "../../types/settings";
 import { Spinner } from "../ui";
@@ -18,6 +19,11 @@ import MessageItem, {
 	type PromptError,
 } from "./MessageItem";
 import { anchorCandidateProps } from "./scrollAnchor";
+import {
+	IDLE_TAIL,
+	OpenedThoughtsContext,
+	TurnTailContext,
+} from "./turnTailContext";
 import {
 	UnfiledChildrenContext,
 	useUnfiledChildrenValue,
@@ -97,7 +103,13 @@ interface Props {
 	 * the handler it would call is withheld.
 	 */
 	isReadOnly?: boolean;
+	/** What the reply being written ends on; see `TurnTail`. */
+	tail?: TurnTail;
+	/** See `useChatMessages`. */
+	openedThoughtIds?: ReadonlySet<string>;
 }
+
+const NO_OPENED_THOUGHTS: ReadonlySet<string> = new Set();
 
 function MessageList({
 	ref,
@@ -120,6 +132,8 @@ function MessageList({
 	onForkMessage,
 	onSignIn,
 	isReadOnly = false,
+	tail,
+	openedThoughtIds = NO_OPENED_THOUGHTS,
 }: Props) {
 	const { EmptyState: CustomEmptyState } = useChatUIConfig();
 	const scrollRef = useRef<HTMLDivElement>(null);
@@ -370,38 +384,42 @@ function MessageList({
 							Beginning of conversation
 						</p>
 					)}
-					<UnfiledChildrenContext value={unfiled}>
-						{messages.map((message, index) => {
-							return (
-								<div
-									key={message.id}
-									data-message-id={message.id}
-									// This wrapper is the row the view can be held still over, and
-									// it is here rather than on anything `MessageItem` renders
-									// because it is unpositioned (see `scrollAnchor`).
-									{...anchorCandidateProps}
-									className="py-1.5 sm:py-2"
-								>
-									<MessageItem
-										message={message}
-										sessionId={sessionId}
-										// Top of the loaded transcript is the session's own start
-										// only once there are no older pages left above it.
-										isFirst={index === 0 && !hasMoreHistory}
-										isOpenTurn={index === openIndex}
-										isCodex={isCodex}
-										onPermissionRespond={onPermissionRespond}
-										onAnswerQuestion={onAnswerQuestion}
-										promptError={promptError}
-										onOpenWorkDetail={onOpenWorkDetail}
-										onOpenFile={onOpenFile}
-										onForkMessage={onForkMessage}
-										onSignIn={onSignIn}
-									/>
-								</div>
-							);
-						})}
-					</UnfiledChildrenContext>
+					<TurnTailContext value={tail ?? IDLE_TAIL}>
+						<OpenedThoughtsContext value={openedThoughtIds}>
+							<UnfiledChildrenContext value={unfiled}>
+								{messages.map((message, index) => {
+									return (
+										<div
+											key={message.id}
+											data-message-id={message.id}
+											// This wrapper is the row the view can be held still over, and
+											// it is here rather than on anything `MessageItem` renders
+											// because it is unpositioned (see `scrollAnchor`).
+											{...anchorCandidateProps}
+											className="py-1.5 sm:py-2"
+										>
+											<MessageItem
+												message={message}
+												sessionId={sessionId}
+												// Top of the loaded transcript is the session's own start
+												// only once there are no older pages left above it.
+												isFirst={index === 0 && !hasMoreHistory}
+												isOpenTurn={index === openIndex}
+												isCodex={isCodex}
+												onPermissionRespond={onPermissionRespond}
+												onAnswerQuestion={onAnswerQuestion}
+												promptError={promptError}
+												onOpenWorkDetail={onOpenWorkDetail}
+												onOpenFile={onOpenFile}
+												onForkMessage={onForkMessage}
+												onSignIn={onSignIn}
+											/>
+										</div>
+									);
+								})}
+							</UnfiledChildrenContext>
+						</OpenedThoughtsContext>
+					</TurnTailContext>
 					{/* Sticky inside the column rather than absolute over the pane, so
 					    it lines up with the column's right edge by construction — the
 					    pane also holds the scrollbar, which the column is centred

@@ -50,12 +50,14 @@ import QuestionRecordItem from "./QuestionRecordItem";
 import { useRowExpanded } from "./rowExpansionContext";
 import { anchorCandidateProps } from "./scrollAnchor";
 import TaskItem from "./TaskItem";
+import ThinkingItem from "./ThinkingItem";
 import ToolCallItem from "./ToolCallItem";
 import { invocationView, ToolInvocation } from "./ToolInvocation";
 import { PartBlocks } from "./ToolList";
 import { ToolRow } from "./ToolRow";
 import { Section } from "./ToolSection";
 import { TurnChangesCard } from "./TurnChangesCard";
+import TurnTail from "./TurnTail";
 
 interface SystemItemProps {
 	content: string;
@@ -829,6 +831,9 @@ function ContentPartItem(props: ContentPartItemProps) {
 	if (part.type === "command_output") {
 		return <CommandOutputItem content={part.content} />;
 	}
+	if (part.type === "thinking") {
+		return <ThinkingItem thoughts={part.thoughts} />;
+	}
 	// A subagent call is a tool run like any other; only its body differs, so
 	// this is a renderer chosen by category rather than a second model.
 	if (isTaskTool(part.tool.name)) {
@@ -868,7 +873,7 @@ interface Props {
 	isFirst?: boolean;
 	/**
 	 * This bubble is the one the open turn is writing into, which is what makes a
-	 * spinner on it true. Not the same as `isLast` since a message sent mid-reply
+	 * tail line on it true. Not the same as `isLast` since a message sent mid-reply
 	 * is appended below the reply it went into — that reply is still being written
 	 * and has to keep saying so (docs/lifecycle-ui.md §2.3).
 	 */
@@ -1326,28 +1331,30 @@ const MessageItem = memo(function MessageItem({
 					<p className="mt-2 text-sm text-th-warning">Process ended</p>
 				)}
 				{/* Last before the actions however the turn ended, so it is always
-				    in one place; shown when they are, so the two replace the spinner
+				    in one place; shown when they are, so the two replace the tail line
 				    together. */}
 				{!pending && (
 					<TurnChangesCard parts={message.parts} onOpenFile={onOpenFile} />
 				)}
-				<MessageActions
-					pending={pending}
-					// Keyed on being the open turn rather than on being last. The two
-					// agreed until a message could be sent mid-reply; now the reply
-					// that is still growing routinely has that message under it, and
-					// reading position would take its spinner away at the one moment
-					// the user has just asked it something. A message left `streaming`
-					// that is *not* the open turn gets nothing, which is what stopped
-					// a superseded reply from claiming to still be running.
-					spinning={
-						message.status === "sending" ||
-						(message.status === "streaming" && !!isOpenTurn)
-					}
-					copyText={copyText || undefined}
-					onFork={onFork}
-					forkBlocked={forkBlocked}
-				/>
+				{pending ? (
+					<TurnTail
+						// Keyed on being the open turn rather than on being last. The two
+						// agreed until a message could be sent mid-reply; now the reply
+						// that is still growing routinely has that message under it, and
+						// reading position would take its line away at the one moment the
+						// user has just asked it something. A message left `streaming`
+						// that is *not* the open turn keeps the slot empty, which is what
+						// stopped a superseded reply from claiming to still be running.
+						writing={message.status === "sending" || !!isOpenTurn}
+						placeholder={message.status === "sending"}
+					/>
+				) : (
+					<MessageActions
+						copyText={copyText || undefined}
+						onFork={onFork}
+						forkBlocked={forkBlocked}
+					/>
+				)}
 			</div>
 		</div>
 	);

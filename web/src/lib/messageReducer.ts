@@ -14,6 +14,7 @@ import type {
 	ServerNotification,
 	SessionTurn,
 	SystemMessageMeta,
+	Thought,
 	ToolFetch,
 	ToolRun,
 	UserMessage,
@@ -31,6 +32,7 @@ import {
 	mapPartsDeep,
 	type PartPath,
 } from "./partTree";
+import { isDrawnThought } from "./thinking";
 
 // Legacy history recorded system messages with origin "work" before the
 // concept was renamed to "system". Map the old value so old sessions still
@@ -167,6 +169,19 @@ export type NormalizedEvent =
 			activity?: string;
 			/** An increment: it accumulates into the run's output. */
 			outputDelta?: string;
+	  }
+	| {
+			/** A finished stretch of thinking; see the wire record. */
+			type: "thinking";
+			/** `durationMs` is absent when nothing measured it — never zero. */
+			thought: Thought;
+			parentToolUseId?: string;
+	  }
+	| {
+			/** The main agent is thinking now; never persisted. */
+			type: "thinking_delta";
+			contentDelta: string;
+			fullReasoningDelta: string;
 	  }
 	| {
 			type: "warning";
@@ -318,6 +333,25 @@ export function normalizeEvent(
 				toolUseId: record.tool_use_id as string,
 				activity: record.activity as string | undefined,
 				outputDelta: record.output_delta as string | undefined,
+			};
+		case "thinking":
+			return {
+				type: "thinking",
+				thought: {
+					content: (record.content as string) ?? "",
+					fullReasoning: (record.full_reasoning as string) ?? "",
+					redacted: record.redacted === true,
+					...(typeof record.duration_ms === "number" && record.duration_ms > 0
+						? { durationMs: record.duration_ms }
+						: {}),
+				},
+				parentToolUseId: record.parent_tool_use_id as string | undefined,
+			};
+		case "thinking_delta":
+			return {
+				type: "thinking_delta",
+				contentDelta: (record.content_delta as string) ?? "",
+				fullReasoningDelta: (record.full_reasoning_delta as string) ?? "",
 			};
 		case "warning":
 			return {
@@ -717,6 +751,32 @@ export function applyEventToParts(
 				return updated;
 			});
 		}
+		case "thinking": {
+			const { thought } = event;
+			// Joined like text, and only with the same speaker's: consecutive
+			// records are one pause the engine happened to split, and one row.
+			const lastPart = parts[parts.length - 1];
+			if (
+				lastPart?.type === "thinking" &&
+				lastPart.parentToolUseId === event.parentToolUseId
+			) {
+				return [
+					...parts.slice(0, -1),
+					{ ...lastPart, thoughts: [...lastPart.thoughts, thought] },
+				];
+			}
+			return [
+				...parts,
+				{
+					type: "thinking",
+					id: generateUUID(),
+					thoughts: [thought],
+					...(event.parentToolUseId
+						? { parentToolUseId: event.parentToolUseId }
+						: {}),
+				},
+			];
+		}
 		case "system":
 			return [...parts, { type: "system", content: event.content }];
 		case "warning":
@@ -777,7 +837,7 @@ function lastAssistantIndex(messages: Message[]): number {
  * mid-reply is appended below that reply, and a send that then fails leaves its
  * reason below that. Either would hide the running turn behind them, and the
  * `done` meant for it would be dropped as belonging to no one — leaving a
- * spinner nothing could stop.
+ * tail line nothing could end.
  *
  * At most one bubble is ever open, so scanning past closed ones cannot pick the
  * wrong turn: content opens a bubble only when this returns -1, and the one
@@ -888,6 +948,19 @@ export function applyServerEvent(
 		});
 	}
 
+	// Not the transcript's: the tail line draws it from state of its own
+	// (useChatMessages), and nothing is placed for it here — it would open an
+	// empty reply.
+	if (event.type === "thinking_delta") {
+		return messages;
+	}
+
+	// A thinking that would draw nothing is set aside before it can open a
+	// reply, or join a run and cost its sum the number.
+	if (event.type === "thinking" && !isDrawnThought(event.thought)) {
+		return messages;
+	}
+
 	return stampAnchorSeq(messages, applyEvent(messages, event, options), seq);
 }
 
@@ -931,7 +1004,7 @@ function applyEvent(
 	// it (docs/code/agent-integration.md#the-read-point).
 	//
 	// The bubble is opened here rather than left to the next content event so
-	// that the spinner survives the cut and the "not read yet" line above the
+	// that the tail line survives the cut and the "not read yet" line above the
 	// composer goes at the right moment (AttentionStrip). It cannot leave a
 	// blank box: an empty bubble is dropped when the turn ends, including the
 	// one this replaces.
@@ -974,7 +1047,9 @@ function applyEvent(
 	// they are the subagent's, and say nothing about the turn. A parent that is
 	// not loaded leaves them to fall through and sit flat where they arrived.
 	if (
-		(event.type === "text" || event.type === "tool_call") &&
+		(event.type === "text" ||
+			event.type === "tool_call" ||
+			event.type === "thinking") &&
 		event.parentToolUseId
 	) {
 		const filed = fileUnderParent(
@@ -1062,7 +1137,7 @@ function applyEvent(
 	// `complete` is deliberately not an ended turn here: when a background wait
 	// runs out of budget Pockode delivers the end of turn itself, and the CLI
 	// may genuinely resume output afterwards — that output is a live turn and
-	// must still light up the spinner.
+	// must still bring back the tail line.
 	//
 	// Read off the last assistant rather than the last message for the same
 	// reason as above: a message sent mid-turn sits below the bubble the trailing
@@ -2324,16 +2399,32 @@ function joinTurnParts(
 	// of the boundary come back as one part, a paragraph apart, as they would
 	// have been had the page not been split there.
 	const first = after[0];
-	return first?.type === "text"
-		? [
-				...applyEventToParts(before, {
-					type: "text",
-					content: first.content,
-					parentToolUseId: first.parentToolUseId,
-				}),
-				...after.slice(1),
-			]
-		: [...before, ...after];
+	if (first?.type === "text") {
+		return [
+			...applyEventToParts(before, {
+				type: "text",
+				content: first.content,
+				parentToolUseId: first.parentToolUseId,
+			}),
+			...after.slice(1),
+		];
+	}
+	// The joined row keeps the newer half's id: that half was on screen first,
+	// and a new key would remount it and close what the user had opened, as
+	// `prependHistoryPage` keeps the bubble's own id for the same reason.
+	const last = before.at(-1);
+	if (
+		first?.type === "thinking" &&
+		last?.type === "thinking" &&
+		last.parentToolUseId === first.parentToolUseId
+	) {
+		return [
+			...before.slice(0, -1),
+			{ ...first, thoughts: [...last.thoughts, ...first.thoughts] },
+			...after.slice(1),
+		];
+	}
+	return [...before, ...after];
 }
 
 /** What a page could not know had happened to it after it was written. */
@@ -2391,7 +2482,7 @@ export function prependHistoryPage(
 	}
 
 	// The older page's last turn is over by definition: the records that ended it
-	// are in the page above. Left as it replayed, it would keep a spinner running
+	// are in the page above. Left as it replayed, it would keep a tail line running
 	// forever in the middle of the transcript. This is also what stands in when
 	// the boundary terminal says nothing — a turn cut mid-answer by the page size
 	// ended no particular way.

@@ -305,6 +305,129 @@ func TestBuildThreadParams_Effort(t *testing.T) {
 	}
 }
 
+// Without a summary configured a reasoning item completes empty, and every
+// thinking row would be a bare duration.
+func TestBuildThreadParams_ReasoningSummary(t *testing.T) {
+	sess := &appSession{opts: agent.StartOptions{DisableMCP: true}}
+	cfg := sess.buildThreadParams()["config"].(map[string]interface{})
+	if cfg["model_reasoning_summary"] != "auto" {
+		t.Errorf("model_reasoning_summary = %v, want %q", cfg["model_reasoning_summary"], "auto")
+	}
+}
+
+// --- Reasoning ---
+
+// Shapes measured on codex-cli 0.160.0 with a summary configured: the item
+// starts empty, the summary streams in as deltas tagged with their part, and
+// the item completes holding the whole of it.
+func TestReasoning_RecordedWithTheEnginesDuration(t *testing.T) {
+	sess := newTestSession()
+	defer sess.cancel()
+
+	sess.notify("item/started", `{"threadId":"t","turnId":"u","startedAtMs":1000,"item":{"type":"reasoning","id":"rs","summary":[],"content":[]}}`)
+	sess.notify("item/completed", `{"threadId":"t","turnId":"u","completedAtMs":3500,"item":{"type":"reasoning","id":"rs",
+		"summary":["**Counting**\n\nMultiples of 3 first.","**Checking**"],"content":["raw"]}}`)
+
+	events := drainEvents(sess.events)
+	want := agent.ThinkingEvent{
+		Content:           "**Counting**\n\nMultiples of 3 first.\n\n**Checking**",
+		FullReasoning:     "raw",
+		DurationMs:        2500,
+		ProviderMessageID: "u",
+	}
+	// The start is the signal, before any text arrives.
+	if len(events) != 2 || events[0] != (agent.ThinkingDeltaEvent{}) || events[1] != want {
+		t.Errorf("events = %+v, want the signal and then %+v", events, want)
+	}
+}
+
+// An empty item is still a thinking that happened; a start never seen leaves
+// nothing to measure from.
+func TestReasoning_EmptyAndUnmeasured(t *testing.T) {
+	sess := newTestSession()
+	defer sess.cancel()
+
+	sess.notify("item/completed", `{"threadId":"t","turnId":"u","completedAtMs":3500,"item":{"type":"reasoning","id":"rs","summary":[],"content":[]}}`)
+
+	events := drainEvents(sess.events)
+	if len(events) != 1 || events[0] != (agent.ThinkingEvent{ProviderMessageID: "u"}) {
+		t.Errorf("events = %+v, want one empty, unmeasured thinking", events)
+	}
+}
+
+// The deltas concatenate into exactly the text the record will hold, so a part
+// that begins carries its separator — once per part boundary crossed.
+func TestReasoning_DeltasBuildTheRecordedText(t *testing.T) {
+	sess := newTestSession()
+	defer sess.cancel()
+
+	sess.notify("item/started", `{"threadId":"t","turnId":"u","startedAtMs":1,"item":{"type":"reasoning","id":"rs","summary":[],"content":[]}}`)
+	sess.notify("item/reasoning/summaryTextDelta", `{"threadId":"t","turnId":"u","itemId":"rs","summaryIndex":0,"delta":"**Counting**"}`)
+	sess.notify("item/reasoning/summaryTextDelta", `{"threadId":"t","turnId":"u","itemId":"rs","summaryIndex":0,"delta":" multiples"}`)
+	sess.notify("item/reasoning/summaryPartAdded", `{"threadId":"t","turnId":"u","itemId":"rs","summaryIndex":1}`)
+	sess.notify("item/reasoning/summaryTextDelta", `{"threadId":"t","turnId":"u","itemId":"rs","summaryIndex":2,"delta":"**Done**"}`)
+	sess.notify("item/reasoning/textDelta", `{"threadId":"t","turnId":"u","itemId":"rs","contentIndex":0,"delta":"raw"}`)
+
+	var summary, full strings.Builder
+	for _, ev := range drainEvents(sess.events) {
+		delta, ok := ev.(agent.ThinkingDeltaEvent)
+		if !ok {
+			t.Fatalf("unexpected event %+v", ev)
+		}
+		summary.WriteString(delta.ContentDelta)
+		full.WriteString(delta.FullReasoningDelta)
+	}
+	if got, want := summary.String(), strings.Join([]string{"**Counting** multiples", "", "**Done**"}, "\n\n"); got != want {
+		t.Errorf("summary so far = %q, want %q", got, want)
+	}
+	if full.String() != "raw" {
+		t.Errorf("full reasoning so far = %q, want %q", full.String(), "raw")
+	}
+}
+
+// A subagent's thinking is described in its own row; the main agent's tail line
+// must not say the main agent is thinking. Its record is still kept, filed under
+// the spawn.
+func TestReasoning_SubagentThinkingIsRecordedButNotSignalled(t *testing.T) {
+	sess := newSubagentTestSession()
+	defer sess.cancel()
+
+	sess.notify("item/started", `{"threadId":"child","turnId":"turn-child","startedAtMs":10,"item":{"type":"reasoning","id":"rs","summary":[],"content":[]}}`)
+	sess.notify("item/reasoning/summaryTextDelta", `{"threadId":"child","turnId":"turn-child","itemId":"rs","summaryIndex":0,"delta":"hm"}`)
+	sess.notify("item/completed", `{"threadId":"child","turnId":"turn-child","completedAtMs":40,"item":{"type":"reasoning","id":"rs","summary":["hm"],"content":[]}}`)
+
+	events := drainEvents(sess.events)
+	want := agent.ThinkingEvent{Content: "hm", DurationMs: 30, ParentToolUseID: "call_spawn"}
+	if len(events) != 1 || events[0] != want {
+		t.Errorf("events = %+v, want only the record %+v", events, want)
+	}
+}
+
+// A turn ending forgets what it cut off, and only its own: a subagent may still
+// be reasoning when its parent's turn is over.
+func TestReasoning_TurnEndForgetsOnlyItsOwnThread(t *testing.T) {
+	sess := newSubagentTestSession()
+	defer sess.cancel()
+
+	sess.notify("item/started", `{"threadId":"main","turnId":"turn-main","startedAtMs":10,"item":{"type":"reasoning","id":"rs-main","summary":[],"content":[]}}`)
+	sess.notify("item/started", `{"threadId":"child","turnId":"turn-child","startedAtMs":10,"item":{"type":"reasoning","id":"rs-child","summary":[],"content":[]}}`)
+	sess.notify("turn/completed", `{"threadId":"main","turn":{"id":"turn-main","items":[],"status":"interrupted"}}`)
+	sess.notify("item/completed", `{"threadId":"child","turnId":"turn-child","completedAtMs":50,"item":{"type":"reasoning","id":"rs-child","summary":[],"content":[]}}`)
+
+	if _, ok := sess.reasoningItems["rs-main"]; ok {
+		t.Error("the reasoning the interrupt cut off outlived its turn")
+	}
+	var got []agent.ThinkingEvent
+	for _, ev := range drainEvents(sess.events) {
+		if th, ok := ev.(agent.ThinkingEvent); ok {
+			got = append(got, th)
+		}
+	}
+	if len(got) != 1 || got[0].DurationMs != 40 {
+		t.Errorf("thinking records = %+v, want the subagent's, still measured", got)
+	}
+}
+
 // --- Item translation ---
 
 func TestItemStarted_CommandExecution(t *testing.T) {
@@ -960,7 +1083,7 @@ func TestBookkeepingNotificationsAreDropped(t *testing.T) {
 		{"thread/started", `{"thread":{"id":"t"}}`},
 		{"thread/status/changed", `{"threadId":"t","status":{"type":"idle"}}`},
 		{"item/agentMessage/delta", `{"threadId":"t","turnId":"u","itemId":"m","delta":"par"}`},
-		{"item/reasoning/textDelta", `{"threadId":"t","turnId":"u","itemId":"r","delta":"thinking"}`},
+		{"item/reasoning/summaryPartAdded", `{"threadId":"t","turnId":"u","itemId":"r","summaryIndex":1}`},
 		{"turn/diff/updated", `{"threadId":"t","turnId":"u","diff":""}`},
 		{"account/rateLimits/updated", `{"rateLimits":{"limitId":"codex"}}`},
 		{"serverRequest/resolved", `{"threadId":"t","requestId":0}`},
@@ -971,7 +1094,6 @@ func TestBookkeepingNotificationsAreDropped(t *testing.T) {
 		{"item/started", `{"threadId":"t","turnId":"u","startedAtMs":1,"item":{"type":"userMessage","id":"m","content":[{"type":"text","text":"hi"}]}}`},
 		{"item/completed", `{"threadId":"t","turnId":"u","completedAtMs":1,"item":{"type":"userMessage","id":"m","content":[{"type":"text","text":"hi"}]}}`},
 		// Real information with no surface in Pockode yet.
-		{"item/completed", `{"threadId":"t","turnId":"u","completedAtMs":1,"item":{"type":"reasoning","id":"r","summary":[],"content":[]}}`},
 		{"item/completed", `{"threadId":"t","turnId":"u","completedAtMs":1,"item":{"type":"webSearch","id":"w","query":"go"}}`},
 	}
 	for _, d := range drops {
