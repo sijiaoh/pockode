@@ -707,7 +707,7 @@ describe("useChatMessages", () => {
 					return {
 						id: "sub-1",
 						initial: {
-							history: [{ type: "message", content: "Go" }],
+							history: [{ type: "message", content: "Go", seq: 5 }],
 							turn: RUNNING,
 						},
 					};
@@ -794,6 +794,27 @@ describe("useChatMessages", () => {
 			const row = reply.parts[0];
 			if (row.type !== "thinking") throw new Error("no thinking row");
 			expect(latest.openedThoughtIds.has(row.id)).toBe(true);
+		});
+
+		// Notifications held across a subscribe are replayed after the page: the
+		// deltas come back with no seq, the record that ended them is skipped as
+		// already on screen, and has to end them all the same.
+		it("ends with a record the history page already had", async () => {
+			const { latest, emit } = renderTail();
+			await waitFor(() => expect(latest.isLoadingHistory).toBe(false));
+
+			emit(delta("x"));
+			await waitFor(() => expect(latest.tail.thinking).not.toBeNull());
+			emit({ type: "thinking", content: "x", duration_ms: 1000, seq: 5 });
+			expect(latest.tail.thinking).toBeNull();
+			// Still skipped, not applied a second time.
+			expect(
+				latest.messages.some(
+					(m) =>
+						m.role === "assistant" &&
+						m.parts.some((part) => part.type === "thinking"),
+				),
+			).toBe(false);
 		});
 
 		// Output proves the thinking is over even if its record never comes; a

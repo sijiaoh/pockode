@@ -498,6 +498,18 @@ export function useChatMessages({
 	const handleNotification = useCallback(
 		(notification: ServerNotification) => {
 			const seq = readHistorySeq(notification);
+			const event = normalizeEvent(notification);
+			// The thinking's own record ends it, and so does anything the main
+			// agent says after it: output proves the thinking is over even if its
+			// record never comes. Read before the skip below, because a record the
+			// page already has still proves it — and the deltas held across a
+			// subscribe are replayed with no seq to skip them by.
+			const endsThinking =
+				((event.type === "thinking" ||
+					event.type === "text" ||
+					event.type === "tool_call") &&
+					!event.parentToolUseId) ||
+				isTurnTerminal(notification);
 			// Already on screen: this record came back in the history page too, and
 			// applying it again would put a second copy of the message in the
 			// transcript. Only a record the page actually reaches is skipped — seqs
@@ -510,13 +522,13 @@ export function useChatMessages({
 				newestHistorySeqRef.current !== undefined &&
 				seq <= newestHistorySeqRef.current
 			) {
+				if (endsThinking) endThinking();
 				return;
 			}
 
 			if (isBackReference(notification)) {
 				backReferencesRef.current.push(notification);
 			}
-			const event = normalizeEvent(notification);
 			if (event.type === "thinking_delta") {
 				pendingThinkingRef.current = applyThinkingDelta(
 					pendingThinkingRef.current,
@@ -530,16 +542,9 @@ export function useChatMessages({
 				}
 				return;
 			}
-			// The thinking's own record ends it, and so does anything the main
-			// agent says after it: output proves the thinking is over even if its
-			// record never comes.
-			if (
-				((event.type === "thinking" ||
-					event.type === "text" ||
-					event.type === "tool_call") &&
-					!event.parentToolUseId) ||
-				isTurnTerminal(notification)
-			) {
+			if (endsThinking) {
+				// Only here: a skipped record is never applied, so there would be no
+				// part for it to settle into.
 				if (event.type === "thinking" && liveThinkingRef.current?.expanded) {
 					settlingOpenThoughtRef.current = event.thought;
 				}
