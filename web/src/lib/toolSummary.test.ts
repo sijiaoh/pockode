@@ -98,6 +98,22 @@ describe("toolSummary", () => {
 		).toMatchObject({ title: "Task", chip: "Explore", detail: "find usages" });
 	});
 
+	it("names a Codex spawn, which has no description, by its agent", () => {
+		expect(
+			toolSummary("Task", { agent_path: "/root/read_a" }, WORK_DIR),
+		).toMatchObject({ title: "Task", chip: undefined, detail: "read_a" });
+	});
+
+	it("names a Codex spawn that carries only its prompt by the prompt", () => {
+		expect(
+			toolSummary(
+				"Task",
+				{ prompt: "Read src/file1.go\nThen report." },
+				WORK_DIR,
+			),
+		).toMatchObject({ title: "Task", detail: "Read src/file1.go" });
+	});
+
 	// Claude passes its own `mcp__server__tool` through verbatim, and the title
 	// slot never truncates — a 40-character machine name there would push the
 	// argument that identifies the call off the row.

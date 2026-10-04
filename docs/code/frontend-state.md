@@ -420,8 +420,10 @@ starts — and it never held this turn open in the first place
 ([answering-ui.md §6](../answering-ui.md#6-the-record-card-in-the-stream)).
 
 That matters because the CLI keeps talking for a moment after a turn is cut
-short — a Task subagent's last output is the usual source. Such content is
-appended to the ended message and leaves its status alone; without that it
+short — a Task subagent's last output is the usual source. A subagent's records
+name their call and are filed under it, wherever it is
+([below](#a-subagents-children)); anything else is appended to the ended
+message and leaves its status alone; without that it
 would open a fresh `streaming` bubble under a turn the user has already stopped.
 The composer no longer infers liveness from it — `turnOpen` reads the session's
 own turn ([lifecycle-ui.md](../lifecycle-ui.md#23-chat-composer-and-stop)) — but
@@ -515,7 +517,8 @@ identity to the older half would move that boundary, not just rename a key.
 
 Every tool call in a turn — a `Bash`, a `Read`, a subagent — is one
 `{ type: "tool_call" }` part holding a `ToolRun`, appended where its `tool_call`
-landed, so a call reads at the point in the turn that made it. Nothing groups
+landed — or, for a subagent's own call, in its parent run's children
+([below](#a-subagents-children)) — so a call reads at the point in the turn that made it. Nothing groups
 them: a summary across several calls can only restate what the individual rows
 already say, and it costs the one thing a transcript is for, which is knowing
 when each thing happened.
@@ -523,8 +526,9 @@ when each thing happened.
 A subagent call is not a second shape. It *is* a tool call — Claude even carries
 its `tool_use_id` on the task lifecycle frames — and keeping a `TaskRun` beside
 `ToolRun` meant two status machines and two settle-on-interrupt paths for one
-thing. `TaskItem` stays, as the renderer for that category, and its three extra
-fields (`description`, `subagent_type`, `prompt`) are derived from `input` the
+thing. `TaskItem` stays, as the renderer for that category, and its extra
+fields (`description`, `subagent_type`, `prompt`, and a Codex spawn's
+`agent_path`) are derived from `input` the
 way every other row's title is ([tool-call-model.md](../tool-call-model.md)).
 
 **One part per `tool_use_id`.** A `permission_request` *takes the place* of the
@@ -670,6 +674,70 @@ doing now".
 What the renderers make of the list — where it lands on the row and in the body,
 why each fetch keeps its own block, and what a failed or empty one says — is
 [tool-call-ui.md](../tool-call-ui.md#a-fetch-reads-on-the-row-it-came-from).
+
+#### A subagent's children
+
+A subagent's own `text` and `tool_call` records name the call they ran under
+(`parent_tool_use_id`), and the reducer files them into that run's `children` —
+a list of ordinary parts, the same shape a message's content is, built by the
+same `applyEventToParts`. A child that is itself a subagent call holds children
+of its own. So a message's content is a tree, and `lib/partTree.ts` holds the
+walks over it: every rule above that finds "the part with this id" or touches
+"every pending card" finds and touches it at any depth — a result settling a
+child, a card taking a child's place and its row coming back beside it, a
+process ending expiring a subagent's card, an answer settling a subagent's
+question. What the renderers do with the tree is
+[tool-call-ui.md](../tool-call-ui.md#a-subagents-own-work).
+
+The rules particular to children:
+
+- **Filed wherever the parent is**, which is not always the bubble the turn is
+  writing: a backgrounded subagent works on while the conversation moves on,
+  and a read point leaves a foreground one in the bubble above. A filed child
+  changes no bubble's status and opens no bubble — it is the subagent's, and
+  says nothing about the turn. A permission request names no parent, so a
+  subagent's card is found by its call, wherever that was filed, and a posted
+  question — which names no call — by the position join, at any depth. The
+  card can also come first: on claude 2.1.286 a subagent's call is asked about
+  before its `tool_call` is written, so the card finds no row and lands flat in
+  the turn's bubble; the `tool_call`, which does name the parent, then takes it
+  along into the parent's children, where it stands in for the row as usual —
+  with the row approval rebuilt beside it, should the engine have reported on
+  the call before announcing it. A bubble the card itself opened — a background subagent asking after its turn
+  ended, which the bubble records as `openedByCard` — goes with it rather than
+  staying behind open and empty, reading as a turn still running; so does any
+  bubble the card leaves empty once its turn completed, as the ending would
+  have dropped it. Any other open bubble is the turn's, empty or not, and one
+  whose turn was cut short keeps its ending line. Where the call cannot be
+  filed either, the card stays flat and takes the parent the call names; a flat
+  card that already names one was left by a page boundary and is not moved.
+- **A parent that is not loaded leaves the child flat**, where it arrived — an
+  earlier page, or a call a fork cut dropped. The part then keeps
+  `parentToolUseId`, which stops it running together with the main agent's
+  text and lets the parent's row count it once its page loads; a card that
+  takes such a row's place keeps it, and so does the row rebuilt on approval.
+  It is not moved then, by the rule a fetch follows: a row never leaves from
+  under the reader. And while any of a run's children sit flat, the ones that
+  follow go flat after them, so nothing is filed above words that came first.
+- **A settled subagent settles what it leaves running.** Its `tool_result`
+  interrupts every child still `running`, at any depth; a child in
+  `background` is left to settle by its own notification, and so is everything
+  under it. An aborted turn's sweep follows the same two rules, and so does a
+  call filed under a subagent that was interrupted or failed, or under one still
+  running once its turn was cut short — unless a backgrounded subagent is
+  above it. One filed under a subagent that *finished* is left running, whatever
+  became of its turn: Claude resumes a finished subagent when the agent writes
+  to it (`SendMessage`, measured on claude 2.1.286), the
+  resumed work names the call that first spawned it, and its results are still
+  to come — as they are for a Codex child given more work. So is one filed
+  under a subagent that was interrupted or failed once the user has sent a
+  turn since: that is the subagent resumed, not output trailing its end. The
+  parent row keeps the status it ended with; only its new children run.
+- **Each text record is its own paragraph.** Consecutive `text` from the same
+  speaker join with a blank line, not end to end: both adapters send whole
+  messages, never deltas. Filing made this matter — the main agent's "A and B
+  are running" and its "A finished" used to have the subagents' work between
+  them, and with that filed away they sat back to back.
 
 #### Live state on a run
 
@@ -887,6 +955,7 @@ Key features:
 | `web/src/lib/wsStore.ts` | WebSocket + RPC + subscription management |
 | `web/src/lib/queryClient.ts` | react-query setup + worktree-dependent invalidation |
 | `web/src/lib/messageReducer.ts` | Event → Message state transformation |
+| `web/src/lib/partTree.ts` | Walks over a message's content, which nests a subagent's work under its call |
 | `web/src/lib/extensions.ts` | Extension loading and context creation |
 | `web/src/lib/registries/*.ts` | Runtime registries for themes, UI, settings |
 | `web/src/lib/*Store.ts` | Domain data stores |

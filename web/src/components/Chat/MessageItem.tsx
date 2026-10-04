@@ -10,6 +10,7 @@ import {
 	X,
 } from "lucide-react";
 import { memo, useMemo, useState } from "react";
+import { partKey } from "../../lib/partTree";
 import { useChatUIConfig } from "../../lib/registries/chatUIRegistry";
 import { isTaskTool, toolSummary } from "../../lib/toolSummary";
 import { useWSStore } from "../../lib/wsStore";
@@ -529,6 +530,12 @@ interface ContentPartItemProps {
 	onAnswerQuestion?: (requestId: string) => void;
 	/** The failed answer, by request id; see `PromptError`. */
 	promptError?: PromptError;
+	/**
+	 * How many subagent Processes this part sits inside; 0 in the bubble
+	 * itself. Everything is drawn as it would be at the top, except text: a
+	 * subagent's words are a note, not a message.
+	 */
+	depth?: number;
 }
 
 /**
@@ -540,17 +547,24 @@ export interface PromptError {
 	message: string;
 }
 
-function ContentPartItem({
-	part,
-	sessionId,
-	onOpenFile,
-	isCodex,
-	onPermissionRespond,
-	onAnswerQuestion,
-	promptError,
-}: ContentPartItemProps) {
+function ContentPartItem(props: ContentPartItemProps) {
+	const {
+		part,
+		sessionId,
+		onOpenFile,
+		isCodex,
+		onPermissionRespond,
+		onAnswerQuestion,
+		promptError,
+		depth = 0,
+	} = props;
 	if (part.type === "text") {
-		return <MarkdownContent content={part.content} />;
+		return (
+			<MarkdownContent
+				content={part.content}
+				variant={depth > 0 ? "note" : "message"}
+			/>
+		);
 	}
 	if (part.type === "system") {
 		return <SystemItem content={part.content} />;
@@ -595,7 +609,15 @@ function ContentPartItem({
 	// A subagent call is a tool run like any other; only its body differs, so
 	// this is a renderer chosen by category rather than a second model.
 	if (isTaskTool(part.tool.name)) {
-		return <TaskItem run={part.tool} />;
+		return (
+			<TaskItem
+				run={part.tool}
+				depth={depth}
+				renderChild={(child) => (
+					<ContentPartItem {...props} part={child} depth={depth + 1} />
+				)}
+			/>
+		);
 	}
 	return (
 		<ToolCallItem
@@ -996,20 +1018,7 @@ const MessageItem = memo(function MessageItem({
 				{shownParts.length > 0 && (
 					<div className="space-y-2">
 						{shownParts.map(({ part, index }) => {
-							// The tool use id alone: one part per call now, because a
-							// permission card takes its call's place and a resent
-							// tool_call updates the row it names rather than adding one.
-							const key =
-								part.type === "permission_request"
-									? part.request.requestId
-									: part.type === "question_record"
-										? // Not unique on its own for a legacy record, which
-											// could carry several questions under one request id;
-											// the index disambiguates those.
-											`${part.record.requestId}-${index}`
-										: part.type === "tool_call"
-											? part.tool.id
-											: `${part.type}-${index}`;
+							const key = partKey(part, index);
 							return (
 								// A wrapper of its own, and an unpositioned one, so this part can
 								// be what the view is held still over: one turn is one row and can

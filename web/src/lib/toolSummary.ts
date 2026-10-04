@@ -1,4 +1,5 @@
 import { relativeToWorkDir, splitNativePath } from "../utils/path";
+import { firstLine } from "./subagentRun";
 
 /**
  * What a tool call's row says about itself: a title naming the kind of call,
@@ -32,7 +33,9 @@ export interface ToolSummary {
 /**
  * The subagent tool goes by two names: the CLI renamed `Task` to `Agent`
  * (2.1.x emits `Agent`), and stored history holds whichever name was current
- * when it was recorded. Both render as the same part.
+ * when it was recorded. Both render as the same part. Codex's subagent spawn
+ * arrives as `Task` too: the server names it so, because it is the same thing
+ * (docs/code/agent-integration.md#subagent-threads).
  */
 export function isTaskTool(toolName: string): boolean {
 	return toolName === "Task" || toolName === "Agent";
@@ -53,10 +56,23 @@ export function taskPrompt(input: unknown): string | undefined {
 	return str(asObject(input).prompt);
 }
 
-/** What a subagent call was asked to do, for quoting the call in one line. */
+/**
+ * What a subagent call was asked to do, for quoting the call in one line.
+ *
+ * A Codex spawn carries no description: one shape has only the agent's path —
+ * `/root/read_a`, whose last segment is the name the model gave the agent for
+ * its task — so that name stands in; the other has only the prompt, whose
+ * first line does.
+ */
 export function taskDescription(input: unknown): string {
 	const obj = asObject(input);
-	return str(obj.description) ?? str(obj.subagent_type) ?? "Task";
+	return (
+		str(obj.description) ??
+		str(obj.subagent_type) ??
+		str(str(obj.agent_path)?.split("/").pop()) ??
+		str(firstLine(str(obj.prompt) ?? "")) ??
+		"Task"
+	);
 }
 
 /**

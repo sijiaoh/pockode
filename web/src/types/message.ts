@@ -210,6 +210,14 @@ export interface ToolRun {
 	 * no timestamp, so a replayed run gets none and draws no stopwatch.
 	 */
 	seenAt?: Date;
+	/**
+	 * A subagent call's own text and calls, in arrival order — the same shape a
+	 * message's content is. Persisted (each record names its parent), so a
+	 * replayed run has them exactly as the live one did. Absent for every call
+	 * that is not a subagent's, and for a subagent from a transcript recorded
+	 * before records named their parent (docs/tool-call-model.md#a-subagents-own-conversation).
+	 */
+	children?: ContentPart[];
 }
 
 /**
@@ -260,8 +268,22 @@ export interface QuestionRecord {
 }
 
 export type ContentPart =
-	| { type: "text"; content: string }
-	| { type: "tool_call"; tool: ToolRun }
+	| {
+			type: "text";
+			content: string;
+			/**
+			 * Set only on a subagent's text that could not be filed under its call
+			 * because the call is not loaded; it then sits flat where it arrived.
+			 * Filed children carry none — where they sit already says whose they are.
+			 */
+			parentToolUseId?: string;
+	  }
+	| {
+			type: "tool_call";
+			tool: ToolRun;
+			/** See the `text` part. */
+			parentToolUseId?: string;
+	  }
 	| { type: "system"; content: string }
 	| {
 			type: "warning";
@@ -280,6 +302,8 @@ export type ContentPart =
 			status: PermissionStatus;
 			/** Only ever set alongside `expired`; see ExpiryReason. */
 			reason?: ExpiryReason;
+			/** Carried over from the unfiled row it took the place of; see `text`. */
+			parentToolUseId?: string;
 	  }
 	| {
 			/**
@@ -306,6 +330,8 @@ export type ContentPart =
 			 * instead of offering a way in.
 			 */
 			legacy?: boolean;
+			/** As on `permission_request`. */
+			parentToolUseId?: string;
 	  }
 	| { type: "raw"; content: string }
 	| { type: "command_output"; content: string };
@@ -428,6 +454,16 @@ export interface AssistantMessage {
 	 * and those two must not be joined back together. Nothing renders it.
 	 */
 	openedAtReadPoint?: true;
+	/**
+	 * This bubble was opened by a permission card no turn was open for — a
+	 * background subagent asking after its turn had ended.
+	 *
+	 * Read by `takeStrayCard` alone: when the subagent's call then takes the
+	 * card along into its Process, a bubble that existed only for the card has
+	 * nothing left in it, and left open and empty it would read as a turn still
+	 * running. Nothing renders it.
+	 */
+	openedByCard?: true;
 }
 
 export type Message = UserMessage | AssistantMessage;
@@ -1040,7 +1076,17 @@ export type ServerMethod =
 	| "command_output";
 
 export type ServerNotification =
-	| { type: "text"; content: string }
+	| {
+			type: "text";
+			content: string;
+			/**
+			 * The subagent call (Claude's Task / Agent, Codex's spawn) this record
+			 * was produced inside. Absent for the main conversation. May name a
+			 * call that is not loaded or that a fork cut dropped; see
+			 * docs/agent-event.md.
+			 */
+			parent_tool_use_id?: string;
+	  }
 	| {
 			type: "message";
 			content: string;
@@ -1063,6 +1109,10 @@ export type ServerNotification =
 			 * call simply stands alone. See docs/tool-call-model.md.
 			 */
 			origin_tool_use_id?: string;
+			/**
+			 * See the `text` record.
+			 */
+			parent_tool_use_id?: string;
 	  }
 	| {
 			type: "tool_result";
@@ -1085,6 +1135,8 @@ export type ServerNotification =
 			duration_ms?: number;
 			/** Absent for every tool that is not a command that ran. */
 			exit_code?: number;
+			/** See the `text` record. */
+			parent_tool_use_id?: string;
 	  }
 	| {
 			/**

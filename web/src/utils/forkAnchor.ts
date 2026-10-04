@@ -1,3 +1,4 @@
+import { somePartDeep } from "../lib/partTree";
 import type {
 	AssistantMessage,
 	HistorySeq,
@@ -52,7 +53,10 @@ export function forkUnavailableReason(
 	// the fork can answer it (agent.UnansweredQuestions). A legacy card is not one
 	// either — nothing can answer it in the source session, so cutting above it
 	// takes nothing away.
-	return message.parts.some(
+	// At any depth: a subagent's call waits on the user as surely as the main
+	// agent's does.
+	return somePartDeep(
+		message.parts,
 		(part) => part.type === "permission_request" && part.status === "pending",
 	)
 		? "pending-request"

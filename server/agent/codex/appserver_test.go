@@ -600,6 +600,356 @@ func TestEventsOutsideATurnCarryNoTurnID(t *testing.T) {
 	}
 }
 
+// --- Subagent threads ---
+
+// newSubagentTestSession is a session on thread "main" whose model has spawned
+// a subagent on thread "child" through call "call_spawn", in the order
+// codex-cli 0.159.3 reports it: the spawn on the parent's thread first, then the
+// child's own turn. The spawn's own call is drained, so each test sees only
+// what follows it.
+func newSubagentTestSession() *appSession {
+	sess := newTestSession()
+	sess.stateMu.Lock()
+	sess.threadID = "main"
+	sess.stateMu.Unlock()
+	sess.notify("turn/started", `{"threadId":"main","turn":{"id":"turn-main","items":[],"status":"inProgress"}}`)
+	sess.notify("item/started", `{"threadId":"main","turnId":"turn-main","startedAtMs":1,"item":{
+		"type":"subAgentActivity","id":"call_spawn","kind":"started","agentThreadId":"child","agentPath":"/root/reader"}}`)
+	sess.notify("turn/started", `{"threadId":"child","turn":{"id":"turn-child","items":[],"status":"inProgress"}}`)
+	drainEvents(sess.events)
+	return sess
+}
+
+// The spawn is drawn as a subagent call, once, though both halves of its item
+// report it — it is the row the child's records are filed under.
+func TestSubagentSpawnIsATaskCall(t *testing.T) {
+	sess := newTestSession()
+	defer sess.cancel()
+	sess.stateMu.Lock()
+	sess.threadID = "main"
+	sess.stateMu.Unlock()
+
+	spawn := `{"threadId":"main","turnId":"turn-main","startedAtMs":1,"item":{
+		"type":"subAgentActivity","id":"call_spawn","kind":"started","agentThreadId":"child","agentPath":"/root/reader"}}`
+	sess.notify("item/started", spawn)
+	sess.notify("item/completed", spawn)
+
+	events := drainEvents(sess.events)
+	if len(events) != 1 {
+		t.Fatalf("expected one call for the spawn, got %v", events)
+	}
+	call, ok := events[0].(agent.ToolCallEvent)
+	if !ok {
+		t.Fatalf("event = %#v, want a tool call", events[0])
+	}
+	if call.ToolUseID != "call_spawn" || call.ToolName != "Task" ||
+		string(call.ToolInput) != `{"agent_path":"/root/reader"}` ||
+		call.ParentToolUseID != "" || call.ProviderMessageID != "turn-main" {
+		t.Errorf("call = %+v, want a Task named after the agent, in the session's own turn", call)
+	}
+}
+
+// The other shape a spawn comes in on codex-cli 0.159.3 (measured with
+// gpt-5.6-luna): a spawnAgent collabAgentToolCall, which names the new thread
+// only on completion and carries the prompt. The child's items that follow are
+// filed under it like the other shape's.
+func TestSpawnAgentCallIsATaskCall(t *testing.T) {
+	sess := newTestSession()
+	defer sess.cancel()
+	sess.stateMu.Lock()
+	sess.threadID = "main"
+	sess.stateMu.Unlock()
+
+	sess.notify("item/started", `{"threadId":"main","turnId":"turn-main","startedAtMs":1,"item":{
+		"type":"collabAgentToolCall","id":"exec-spawn","tool":"spawnAgent","status":"inProgress",
+		"senderThreadId":"main","receiverThreadIds":[],"prompt":"Read a.go","agentsStates":{}}}`)
+	sess.notify("item/completed", `{"threadId":"main","turnId":"turn-main","completedAtMs":2,"item":{
+		"type":"collabAgentToolCall","id":"exec-spawn","tool":"spawnAgent","status":"completed",
+		"senderThreadId":"main","receiverThreadIds":["child"],"prompt":"Read a.go",
+		"agentsStates":{"child":{"status":"pendingInit","message":null}}}}`)
+	sess.notify("item/completed", `{"threadId":"child","turnId":"turn-child","completedAtMs":3,"item":{
+		"type":"agentMessage","id":"msg-1","text":"it is retry1","phase":"final_answer"}}`)
+
+	events := drainEvents(sess.events)
+	if len(events) != 2 {
+		t.Fatalf("expected the spawn's call and the child's text, got %v", events)
+	}
+	call, ok := events[0].(agent.ToolCallEvent)
+	if !ok || call.ToolUseID != "exec-spawn" || call.ToolName != "Task" ||
+		string(call.ToolInput) != `{"prompt":"Read a.go"}` {
+		t.Errorf("first event = %+v, want a Task carrying the prompt", events[0])
+	}
+	if parent := events[1].ToRecord().ParentToolUseID; parent != "exec-spawn" {
+		t.Errorf("child text names parent %q, want the spawn", parent)
+	}
+}
+
+// What a subagent does arrives on the same connection as the session's own
+// thread, and is told apart only by the thread it names.
+func TestSubagentItemsNameTheSpawningCall(t *testing.T) {
+	sess := newSubagentTestSession()
+	defer sess.cancel()
+
+	sess.notify("item/started", `{"threadId":"child","turnId":"turn-child","startedAtMs":2,"item":{
+		"type":"commandExecution","id":"exec-1","command":"cat a.txt","cwd":"/tmp","status":"inProgress"}}`)
+	sess.notify("item/completed", `{"threadId":"child","turnId":"turn-child","completedAtMs":3,"item":{
+		"type":"commandExecution","id":"exec-1","status":"completed","exitCode":0,"aggregatedOutput":"hi\n"}}`)
+	sess.notify("item/completed", `{"threadId":"child","turnId":"turn-child","completedAtMs":4,"item":{
+		"type":"agentMessage","id":"msg-1","text":"it says hi","phase":"final_answer"}}`)
+
+	events := drainEvents(sess.events)
+	if len(events) != 3 {
+		t.Fatalf("expected the call, its result and the text, got %v", events)
+	}
+	for _, event := range events {
+		record := event.ToRecord()
+		if record.ParentToolUseID != "call_spawn" {
+			t.Errorf("%T names parent %q, want the spawning call", event, record.ParentToolUseID)
+		}
+		// The child's turn is not one this thread can be forked at.
+		if record.ProviderMessageID != "" {
+			t.Errorf("%T carries provider message id %q, want none", event, record.ProviderMessageID)
+		}
+	}
+}
+
+// The session's own items stay where they were.
+func TestOwnThreadItemsNameNoParent(t *testing.T) {
+	sess := newSubagentTestSession()
+	defer sess.cancel()
+
+	sess.notify("item/completed", `{"threadId":"main","turnId":"turn-main","completedAtMs":5,"item":{
+		"type":"agentMessage","id":"msg-2","text":"the subagent says hi","phase":"final_answer"}}`)
+
+	events := drainEvents(sess.events)
+	if len(events) != 1 {
+		t.Fatalf("expected the session's own text alone, got %v", events)
+	}
+	record := events[0].ToRecord()
+	if record.ParentToolUseID != "" || record.ProviderMessageID != "turn-main" {
+		t.Errorf("record = %+v, want no parent and the session's own turn", record)
+	}
+}
+
+// A subagent the session never saw spawned — one a previous process started —
+// is still not the session's own thread.
+func TestUnknownSubagentItemsAreStillSetApart(t *testing.T) {
+	sess := newSubagentTestSession()
+	defer sess.cancel()
+
+	sess.notify("item/completed", `{"threadId":"stranger","turnId":"turn-x","completedAtMs":2,"item":{
+		"type":"agentMessage","id":"msg-1","text":"hello","phase":"final_answer"}}`)
+
+	record := drainEvents(sess.events)[0].ToRecord()
+	if record.ParentToolUseID != "" || record.ProviderMessageID != "" {
+		t.Errorf("record = %+v, want neither a parent nor a turn", record)
+	}
+}
+
+// The subagent's turn ends while the parent is still waiting on it. Taken for
+// the session's own, it would end the turn early and point a stop at the
+// wrong thread; what it does end is the spawn's row.
+func TestSubagentTurnsDoNotDriveTheSessionsTurn(t *testing.T) {
+	sess := newSubagentTestSession()
+	defer sess.cancel()
+
+	if threadID, turnID := sess.currentTurn(); threadID != "main" || turnID != "turn-main" {
+		t.Fatalf("currentTurn() = %q/%q after the subagent's turn started, want main/turn-main", threadID, turnID)
+	}
+
+	sess.notify("turn/completed", `{"threadId":"child","turn":{"id":"turn-child","items":[],"status":"completed"}}`)
+	if events := drainEvents(sess.events); len(events) != 1 {
+		t.Errorf("the subagent's turn ending produced %v, want only the spawn's result", events)
+	} else if _, ok := events[0].(agent.ToolResultEvent); !ok {
+		t.Errorf("the subagent's turn ending produced %#v, want the spawn's result", events[0])
+	}
+	if _, turnID := sess.currentTurn(); turnID != "turn-main" {
+		t.Errorf("turn id = %q after the subagent's turn ended, want turn-main", turnID)
+	}
+
+	sess.notify("turn/completed", `{"threadId":"main","turn":{"id":"turn-main","items":[],"status":"completed"}}`)
+	events := drainEvents(sess.events)
+	if len(events) != 1 || events[0].EventType() != agent.EventTypeDone {
+		t.Errorf("expected the session's own turn to end it, got %v", events)
+	}
+}
+
+// A finished subagent's last words are its report, as a Claude Task's result
+// is — and a later turn that says nothing leaves them standing.
+func TestSubagentTurnSettlesTheSpawnWithItsLastWords(t *testing.T) {
+	sess := newSubagentTestSession()
+	defer sess.cancel()
+
+	sess.notify("item/completed", `{"threadId":"child","turnId":"turn-child","completedAtMs":2,"item":{
+		"type":"agentMessage","id":"msg-1","text":"Reading it.","phase":"commentary"}}`)
+	sess.notify("item/completed", `{"threadId":"child","turnId":"turn-child","completedAtMs":3,"item":{
+		"type":"agentMessage","id":"msg-2","text":"It says hi.","phase":"final_answer"}}`)
+	drainEvents(sess.events)
+
+	sess.notify("turn/completed", `{"threadId":"child","turn":{"id":"turn-child","items":[],"status":"completed"}}`)
+	events := drainEvents(sess.events)
+	if len(events) != 1 {
+		t.Fatalf("expected the spawn's result, got %v", events)
+	}
+	result, ok := events[0].(agent.ToolResultEvent)
+	if !ok || result.ToolUseID != "call_spawn" || result.ToolResult != "It says hi." || result.IsError {
+		t.Errorf("event = %#v, want call_spawn settled with the child's last words", events[0])
+	}
+
+	// Given more work, the same subagent runs another turn under the same spawn.
+	sess.notify("turn/started", `{"threadId":"child","turn":{"id":"turn-child-2","items":[],"status":"inProgress"}}`)
+	sess.notify("turn/completed", `{"threadId":"child","turn":{"id":"turn-child-2","items":[],"status":"completed"}}`)
+	events = drainEvents(sess.events)
+	if len(events) != 1 {
+		t.Fatalf("expected the second turn's result, got %v", events)
+	}
+	if result := events[0].(agent.ToolResultEvent); result.ToolResult != "It says hi." {
+		t.Errorf("second turn reported %q, want the subagent's last words still", result.ToolResult)
+	}
+}
+
+// A subagent's own subagent names the call that spawned *it*, so the records
+// nest rather than flatten onto the outermost spawn — the inner spawn's row
+// included.
+func TestNestedSubagentNamesItsOwnSpawn(t *testing.T) {
+	sess := newSubagentTestSession()
+	defer sess.cancel()
+
+	sess.notify("item/started", `{"threadId":"child","turnId":"turn-child","startedAtMs":2,"item":{
+		"type":"subAgentActivity","id":"call_inner","kind":"started","agentThreadId":"grandchild","agentPath":"/root/reader/deeper"}}`)
+	sess.notify("item/completed", `{"threadId":"grandchild","turnId":"turn-g","completedAtMs":3,"item":{
+		"type":"agentMessage","id":"msg-1","text":"deep","phase":"final_answer"}}`)
+	sess.notify("turn/completed", `{"threadId":"grandchild","turn":{"id":"turn-g","items":[],"status":"completed"}}`)
+
+	events := drainEvents(sess.events)
+	if len(events) != 3 {
+		t.Fatalf("expected the inner spawn, its text and its result, got %v", events)
+	}
+	if call := events[0].ToRecord(); call.ToolUseID != "call_inner" || call.ParentToolUseID != "call_spawn" || call.ProviderMessageID != "" {
+		t.Errorf("inner spawn = %+v, want call_inner under call_spawn with no turn", call)
+	}
+	if text := events[1].ToRecord(); text.ParentToolUseID != "call_inner" {
+		t.Errorf("grandchild's text = %+v, want it under the inner spawn", text)
+	}
+	if result := events[2].ToRecord(); result.ToolUseID != "call_inner" || result.ToolResult != "deep" || result.ParentToolUseID != "call_spawn" {
+		t.Errorf("result = %+v, want call_inner settled with the grandchild's words, under call_spawn", result)
+	}
+}
+
+// Either half of the spawn item is enough to learn it from, and only the
+// report of a spawn says which call a thread belongs to.
+func TestSubagentSpawnIsLearnedFromEitherHalf(t *testing.T) {
+	sess := newTestSession()
+	defer sess.cancel()
+	sess.stateMu.Lock()
+	sess.threadID = "main"
+	sess.stateMu.Unlock()
+
+	sess.notify("item/completed", `{"threadId":"main","turnId":"turn-main","completedAtMs":1,"item":{
+		"type":"subAgentActivity","id":"call_spawn","kind":"started","agentThreadId":"child","agentPath":"/root/reader"}}`)
+	// The completion report reuses the thread and must not re-point it.
+	sess.notify("item/completed", `{"threadId":"main","turnId":"turn-main","completedAtMs":2,"item":{
+		"type":"subAgentActivity","id":"subagent-completed-turn-child","kind":"completed","agentThreadId":"child","agentPath":"/root/reader"}}`)
+	sess.notify("item/completed", `{"threadId":"child","turnId":"turn-child","completedAtMs":3,"item":{
+		"type":"agentMessage","id":"msg-1","text":"hi","phase":"final_answer"}}`)
+
+	events := drainEvents(sess.events)
+	if len(events) != 2 || events[0].ToRecord().ToolUseID != "call_spawn" || events[1].ToRecord().ParentToolUseID != "call_spawn" {
+		t.Errorf("expected the spawn's call and the child's text under it, got %v", events)
+	}
+}
+
+// A failed subagent fails its row, without ending the session's turn.
+func TestSubagentFailureFailsTheSpawn(t *testing.T) {
+	sess := newSubagentTestSession()
+	defer sess.cancel()
+
+	sess.notify("turn/completed", `{"threadId":"child","turn":{"id":"turn-child","items":[],"status":"failed","error":{"message":"rate limited"}}}`)
+
+	events := drainEvents(sess.events)
+	if len(events) != 1 {
+		t.Fatalf("expected the spawn's result, got %v", events)
+	}
+	result, ok := events[0].(agent.ToolResultEvent)
+	if !ok || result.ToolUseID != "call_spawn" || !result.IsError || !strings.Contains(result.ToolResult, "rate limited") {
+		t.Errorf("event = %#v, want call_spawn failed quoting the error", events[0])
+	}
+	if _, turnID := sess.currentTurn(); turnID != "turn-main" {
+		t.Errorf("turn id = %q, want the session's turn still running", turnID)
+	}
+}
+
+// A stopped subagent did not finish its task, and its row must not read as
+// though it had.
+func TestInterruptedSubagentFailsTheSpawn(t *testing.T) {
+	sess := newSubagentTestSession()
+	defer sess.cancel()
+
+	sess.notify("turn/completed", `{"threadId":"child","turn":{"id":"turn-child","items":[],"status":"interrupted"}}`)
+
+	events := drainEvents(sess.events)
+	if len(events) != 1 {
+		t.Fatalf("expected the spawn's result, got %v", events)
+	}
+	if result, ok := events[0].(agent.ToolResultEvent); !ok || result.ToolUseID != "call_spawn" || !result.IsError ||
+		!strings.Contains(result.ToolResult, "interrupted") {
+		t.Errorf("event = %#v, want call_spawn failed, saying it was interrupted", events[0])
+	}
+}
+
+// A failure Codex gives no words for is still said to be one.
+func TestSubagentFailureWithoutAMessage(t *testing.T) {
+	sess := newSubagentTestSession()
+	defer sess.cancel()
+
+	sess.notify("turn/completed", `{"threadId":"child","turn":{"id":"turn-child","items":[],"status":"failed","error":null}}`)
+
+	events := drainEvents(sess.events)
+	if len(events) != 1 {
+		t.Fatalf("expected the spawn's result, got %v", events)
+	}
+	if result, ok := events[0].(agent.ToolResultEvent); !ok || !result.IsError || result.ToolResult != "The subagent failed: no message" {
+		t.Errorf("event = %#v, want call_spawn failed with no message", events[0])
+	}
+}
+
+// A subagent whose spawn was never seen has no row, so its failure is said as
+// a warning; anything else it ends with explains itself.
+func TestUnknownSubagentFailureIsAWarning(t *testing.T) {
+	sess := newSubagentTestSession()
+	defer sess.cancel()
+
+	sess.notify("turn/completed", `{"threadId":"stranger","turn":{"id":"turn-x","items":[],"status":"interrupted"}}`)
+	if events := drainEvents(sess.events); len(events) != 0 {
+		t.Errorf("an interrupted stranger produced %v, want nothing", events)
+	}
+
+	sess.notify("turn/completed", `{"threadId":"stranger","turn":{"id":"turn-x","items":[],"status":"failed","error":{"message":"rate limited"}}}`)
+	events := drainEvents(sess.events)
+	if len(events) != 1 {
+		t.Fatalf("expected one warning, got %v", events)
+	}
+	warning, ok := events[0].(agent.WarningEvent)
+	if !ok || warning.Code != "subagent_failed" || !strings.Contains(warning.Message, "rate limited") {
+		t.Errorf("event = %#v, want a subagent_failed warning quoting the error", events[0])
+	}
+}
+
+// A subagent's prompt is not a message anyone sent this session.
+func TestSubagentUserMessageIsNoReadPoint(t *testing.T) {
+	sess := newSubagentTestSession()
+	defer sess.cancel()
+
+	sess.notify("item/started", `{"threadId":"child","turnId":"turn-child","startedAtMs":2,"item":{
+		"type":"userMessage","id":"m1","clientId":null,"content":[{"type":"text","text":"read a.txt"}]}}`)
+	sess.notify("item/started", `{"threadId":"child","turnId":"turn-child","startedAtMs":3,"item":{
+		"type":"userMessage","id":"m2","clientId":null,"content":[{"type":"text","text":"and b.txt"}]}}`)
+
+	if events := drainEvents(sess.events); len(events) != 0 {
+		t.Errorf("expected no events, got %v", events)
+	}
+}
+
 // Notifications that duplicate content rendered elsewhere, or that describe
 // bookkeeping, must not reach the transcript: Codex sends dozens per turn.
 func TestBookkeepingNotificationsAreDropped(t *testing.T) {

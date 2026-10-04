@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AssistantMessage, Message } from "../../types/message";
@@ -994,6 +994,73 @@ describe("MessageItem", () => {
 			expect(onForkMessage).toHaveBeenCalledWith("slot-1");
 			// The menu steps aside for the confirmation that follows it.
 			expect(screen.queryByRole("dialog")).toBeNull();
+		});
+	});
+
+	// The real part renderer drawn recursively, which is what TaskItem's own
+	// tests stand in for: a subagent's text as a note on a rail, its calls as
+	// ordinary rows, its own subagent as a nested Task.
+	describe("a subagent's process", () => {
+		it("draws the subagent's work with the transcript's own renderers", async () => {
+			const user = userEvent.setup();
+			const message: AssistantMessage = {
+				id: "m1",
+				role: "assistant",
+				status: "complete",
+				createdAt: new Date(),
+				parts: [
+					{
+						type: "tool_call",
+						tool: {
+							id: "t1",
+							name: "Agent",
+							input: { description: "find retries", subagent_type: "Explore" },
+							status: "success",
+							result: "The report.",
+							children: [
+								{ type: "text", content: "Looking at the sender." },
+								{
+									type: "tool_call",
+									tool: {
+										id: "c1",
+										name: "Grep",
+										input: { pattern: "Retry-After" },
+										status: "success",
+									},
+								},
+								{
+									type: "tool_call",
+									tool: {
+										id: "t2",
+										name: "Agent",
+										input: {
+											description: "read backoff",
+											subagent_type: "Plan",
+										},
+										status: "success",
+									},
+								},
+							],
+						},
+					},
+				],
+			};
+			render(<MessageItem sessionId="session-1" message={message} />);
+			expect(screen.getByText("2 steps")).toBeVisible();
+
+			await user.click(screen.getByRole("button", { name: /find retries/ }));
+			await user.click(
+				screen.getByRole("button", { name: "Process · 2 steps" }),
+			);
+			const group = screen.getByRole("group", {
+				name: "Explore subagent's process",
+			});
+			const note = within(group).getByText("Looking at the sender.");
+			expect(note.closest(".prose-note")).not.toBeNull();
+			expect(within(group).getByText(/Retry-After/)).toBeVisible();
+			expect(
+				within(group).getByRole("button", { name: /read backoff/ }),
+			).toBeVisible();
 		});
 	});
 

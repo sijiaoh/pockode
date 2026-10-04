@@ -1014,6 +1014,23 @@ type cliEvent struct {
 	// telemetry) it names something the transcript has no entry for, so those
 	// ids are deliberately not carried into history.
 	UUID string `json:"uuid,omitempty"`
+	// ParentToolUseID is set on the assistant and user frames a subagent
+	// produced, naming the Task/Agent call it runs under. A backgrounded
+	// subagent's frames arrive interleaved with the main conversation's, so
+	// this is the only thing that says whose they are (measured on 2.1.286).
+	ParentToolUseID string `json:"parent_tool_use_id,omitempty"`
+}
+
+// anchorID is the frame's uuid when it can anchor a fork, and empty when the
+// frame is a subagent's: those uuids are entries of the subagent's sidechain
+// transcript (subagents/agent-<id>.jsonl beside the session's own), so
+// --resume-session-at cannot find them in the main one. See
+// agent.EventRecord.ProviderMessageID.
+func (e cliEvent) anchorID() string {
+	if e.ParentToolUseID != "" {
+		return ""
+	}
+	return e.UUID
 }
 
 type cliMessage struct {
@@ -1385,7 +1402,7 @@ func parseAssistantEvent(log *slog.Logger, line []byte, event cliEvent, backgrou
 	var msg cliMessage
 	if err := json.Unmarshal(event.Message, &msg); err != nil {
 		log.Warn("failed to parse assistant message from CLI", "error", err)
-		return []agent.AgentEvent{agent.TextEvent{Content: string(event.Message)}}
+		return []agent.AgentEvent{agent.TextEvent{Content: string(event.Message), ParentToolUseID: event.ParentToolUseID}}
 	}
 
 	if msg.Model == syntheticModel {
@@ -1405,7 +1422,7 @@ func parseAssistantEvent(log *slog.Logger, line []byte, event cliEvent, backgrou
 			}
 		case "tool_use", "server_tool_use":
 			if len(textParts) > 0 {
-				events = append(events, agent.TextEvent{Content: strings.Join(textParts, ""), ProviderMessageID: event.UUID})
+				events = append(events, textEvent(event, textParts))
 				textParts = nil
 			}
 			events = append(events, agent.ToolCallEvent{
@@ -1417,16 +1434,25 @@ func parseAssistantEvent(log *slog.Logger, line []byte, event cliEvent, backgrou
 				// join is resolved now, while the task is still tracked, and
 				// travels with the record.
 				OriginToolUseID:   backgroundTasks.originOfCall(block.Name, block.Input),
-				ProviderMessageID: event.UUID,
+				ParentToolUseID:   event.ParentToolUseID,
+				ProviderMessageID: event.anchorID(),
 			})
 		}
 	}
 
 	if len(textParts) > 0 {
-		events = append(events, agent.TextEvent{Content: strings.Join(textParts, ""), ProviderMessageID: event.UUID})
+		events = append(events, textEvent(event, textParts))
 	}
 
 	return events
+}
+
+func textEvent(event cliEvent, parts []string) agent.TextEvent {
+	return agent.TextEvent{
+		Content:           strings.Join(parts, ""),
+		ParentToolUseID:   event.ParentToolUseID,
+		ProviderMessageID: event.anchorID(),
+	}
 }
 
 func parseUserEvent(log *slog.Logger, event cliEvent, backgroundTasks *backgroundTaskTracker, store attachments.Store) []agent.AgentEvent {
@@ -1441,7 +1467,7 @@ func parseUserEvent(log *slog.Logger, event cliEvent, backgroundTasks *backgroun
 		var msgStr cliMessageString
 		if err := json.Unmarshal(event.Message, &msgStr); err != nil {
 			// Unknown format - output raw for visibility
-			return []agent.AgentEvent{agent.TextEvent{Content: string(event.Message)}}
+			return []agent.AgentEvent{agent.TextEvent{Content: string(event.Message), ParentToolUseID: event.ParentToolUseID}}
 		}
 		return extractEventsFromText(log, msgStr.Content)
 	}
@@ -1465,7 +1491,8 @@ func parseUserEvent(log *slog.Logger, event cliEvent, backgroundTasks *backgroun
 				Subtype:           subtype,
 				Contents:          result.blocks,
 				IsError:           block.IsError,
-				ProviderMessageID: event.UUID,
+				ParentToolUseID:   event.ParentToolUseID,
+				ProviderMessageID: event.anchorID(),
 			})
 
 		default:

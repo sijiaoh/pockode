@@ -23,6 +23,14 @@ import { lookupAnswer, parseAnswer } from "../utils/questionAnswer";
 import { generateUUID } from "../utils/uuid";
 import { AGENT_TYPES } from "./agentType";
 import { parseContentBlocks } from "./contentBlocks";
+import {
+	editAtPath,
+	editChildrenAtPath,
+	findPartPath,
+	findToolRunPath,
+	mapPartsDeep,
+	type PartPath,
+} from "./partTree";
 
 // Legacy history recorded system messages with origin "work" before the
 // concept was renamed to "system". Map the old value so old sessions still
@@ -101,7 +109,15 @@ function normalizeAnswers(raw: unknown): Record<string, string> | null {
 
 // Normalized event with camelCase (internal representation)
 export type NormalizedEvent =
-	| { type: "text"; content: string }
+	| {
+			type: "text";
+			content: string;
+			/**
+			 * The subagent call this was produced inside; absent for the main
+			 * conversation. The call it names may not be loaded.
+			 */
+			parentToolUseId?: string;
+	  }
 	| {
 			type: "tool_call";
 			toolUseId: string;
@@ -114,6 +130,8 @@ export type NormalizedEvent =
 			 * or one a previous process started, can no longer be named.
 			 */
 			originToolUseId?: string;
+			/** See the `text` event. */
+			parentToolUseId?: string;
 	  }
 	| {
 			type: "tool_result";
@@ -259,7 +277,11 @@ export function normalizeEvent(
 
 	switch (type) {
 		case "text":
-			return { type: "text", content: (record.content as string) ?? "" };
+			return {
+				type: "text",
+				content: (record.content as string) ?? "",
+				parentToolUseId: record.parent_tool_use_id as string | undefined,
+			};
 		case "tool_call":
 			return {
 				type: "tool_call",
@@ -267,6 +289,7 @@ export function normalizeEvent(
 				toolName: record.tool_name as string,
 				toolInput: record.tool_input,
 				originToolUseId: record.origin_tool_use_id as string | undefined,
+				parentToolUseId: record.parent_tool_use_id as string | undefined,
 			};
 		case "tool_result":
 			return {
@@ -284,6 +307,8 @@ export function normalizeEvent(
 						: undefined,
 				exitCode:
 					typeof record.exit_code === "number" ? record.exit_code : undefined,
+				// No `parent_tool_use_id`: a result joins its call by id at any
+				// depth, so whose call it was is already known where it lands.
 			};
 		case "tool_activity":
 			return {
@@ -426,7 +451,7 @@ function findToolRunIndex(parts: ContentPart[], toolUseId: string): number {
 }
 
 /**
- * The `question_post` tool row a `question_posted` record belongs to, or -1.
+ * The `question_post` tool row a `question_posted` record belongs to, or null.
  *
  * Joined by position rather than by `tool_use_id`, because there is none to
  * join on: a `question_post` call reaches the server over HTTP from the MCP
@@ -437,18 +462,21 @@ function findToolRunIndex(parts: ContentPart[], toolUseId: string): number {
  * therefore this question's, and a join that misses simply leaves two rows
  * rather than getting one wrong (docs/tool-call-ui.md).
  */
-function openQuestionPostIndex(parts: ContentPart[]): number {
-	for (let i = parts.length - 1; i >= 0; i--) {
-		const part = parts[i];
-		if (part.type !== "tool_call") continue;
-		if (part.tool.status !== "running") continue;
-		if (part.tool.name.endsWith("question_post")) return i;
-	}
-	return -1;
+function openQuestionPostPath(parts: ContentPart[]): PartPath | null {
+	// At any depth: a subagent can post a question too, and its call is then in
+	// that subagent's children. Which of two open calls from different agents
+	// is "last" is the limit this join always had (docs/tool-call-ui.md).
+	return findPartPath(
+		parts,
+		(part) =>
+			part.type === "tool_call" &&
+			part.tool.status === "running" &&
+			part.tool.name.endsWith("question_post"),
+	);
 }
 
 /**
- * The last card of the batch a `question_posted` record belongs to, or -1.
+ * The last card of the batch a `question_posted` record belongs to, or null.
  *
  * A batch is the questions of one `question_post` call, and the server stamps
  * all of them with the one `asked_at` and writes them back to back, so the
@@ -457,18 +485,16 @@ function openQuestionPostIndex(parts: ContentPart[]): number {
  * second call's row is left drawn beside them. A record without a time
  * predates batches and belongs to none.
  */
-function lastOfBatchIndex(
+function lastOfBatchPath(
 	parts: ContentPart[],
 	askedAt: string | undefined,
-): number {
-	if (!askedAt) return -1;
-	for (let i = parts.length - 1; i >= 0; i--) {
-		const part = parts[i];
-		if (part.type === "question_record" && part.record.askedAt === askedAt) {
-			return i;
-		}
-	}
-	return -1;
+): PartPath | null {
+	if (!askedAt) return null;
+	return findPartPath(
+		parts,
+		(part) =>
+			part.type === "question_record" && part.record.askedAt === askedAt,
+	);
 }
 
 function applyToolCall(
@@ -477,6 +503,7 @@ function applyToolCall(
 	toolName: string,
 	toolInput: unknown,
 	options: ApplyOptions,
+	parentToolUseId?: string,
 ): ContentPart[] {
 	const index = findToolRunIndex(parts, toolUseId);
 	if (index !== -1) {
@@ -498,15 +525,22 @@ function applyToolCall(
 	// would say the machine is busy. The row comes back when the engine reports
 	// (see `updateRunById`), rebuilt from what the card carries, which is the
 	// same input this call announced.
-	if (
-		parts.some(
-			(part) =>
-				part.type === "permission_request" &&
-				part.request.toolUseId === toolUseId &&
-				part.status === "pending",
-		)
-	) {
-		return parts;
+	const cardIndex = parts.findIndex(
+		(part) =>
+			part.type === "permission_request" &&
+			part.request.toolUseId === toolUseId &&
+			part.status === "pending",
+	);
+	if (cardIndex !== -1) {
+		// A subagent's card that came before its call, and whose call could not
+		// be filed either: the call is the one to say whose it is, and the card
+		// standing in for it keeps that, as a card replacing a row does.
+		const card = parts[cardIndex];
+		if (!parentToolUseId || card.type !== "permission_request") return parts;
+		if (card.parentToolUseId) return parts;
+		const updated = [...parts];
+		updated[cardIndex] = { ...card, parentToolUseId };
+		return updated;
 	}
 
 	// No row for this call yet — either it is new, or a card that has since been
@@ -522,8 +556,23 @@ function applyToolCall(
 				status: "running",
 				...(options.live ? { seenAt: new Date() } : {}),
 			},
+			...(parentToolUseId ? { parentToolUseId } : {}),
 		},
 	];
+}
+
+/**
+ * `card` taking the place of `row`, keeping whose call it was. Only an
+ * unfiled row says so — a filed one is placed — and losing it would drop the
+ * call from its subagent's count, and give the row rebuilt on approval to the
+ * main agent.
+ */
+function withParentOf(row: ContentPart, card: ContentPart): ContentPart {
+	if (row.type !== "tool_call" || !row.parentToolUseId) return card;
+	if (card.type !== "permission_request" && card.type !== "question_record") {
+		return card;
+	}
+	return { ...card, parentToolUseId: row.parentToolUseId };
 }
 
 export function applyEventToParts(
@@ -533,14 +582,35 @@ export function applyEventToParts(
 ): ContentPart[] {
 	switch (event.type) {
 		case "text": {
+			// Joined only with text from the same speaker: a subagent's words that
+			// could not be filed sit flat beside the main agent's, and run together
+			// they would be one paragraph nobody could attribute.
+			//
+			// A record is a whole message, not a delta — neither adapter streams
+			// partial text — so two of them are two paragraphs. Back to back is the
+			// ordinary case once subagent work is filed away: the main agent's "A
+			// and B are running" and its "A finished" used to have that work
+			// between them, and joined bare they read as one run-on sentence.
 			const lastPart = parts[parts.length - 1];
-			if (lastPart?.type === "text") {
+			if (
+				lastPart?.type === "text" &&
+				lastPart.parentToolUseId === event.parentToolUseId
+			) {
 				return [
 					...parts.slice(0, -1),
-					{ type: "text", content: lastPart.content + event.content },
+					{ ...lastPart, content: `${lastPart.content}\n\n${event.content}` },
 				];
 			}
-			return [...parts, { type: "text", content: event.content }];
+			return [
+				...parts,
+				{
+					type: "text",
+					content: event.content,
+					...(event.parentToolUseId
+						? { parentToolUseId: event.parentToolUseId }
+						: {}),
+				},
+			];
 		}
 		case "tool_call":
 			return applyToolCall(
@@ -549,6 +619,7 @@ export function applyEventToParts(
 				event.toolName,
 				event.toolInput,
 				options,
+				event.parentToolUseId,
 			);
 		case "permission_request": {
 			const permissionPart: ContentPart = {
@@ -566,14 +637,18 @@ export function applyEventToParts(
 			// the user is deciding, the machine is waiting for *them*, and a row
 			// spinning above the card would say the opposite. Same join
 			// `ask_user_question` makes below — all of it describes one tool use.
-			const index = event.toolUseId
-				? findToolRunIndex(parts, event.toolUseId)
-				: -1;
-			if (index === -1) return [...parts, permissionPart];
+			// At any depth: a subagent's call is asked about where it is filed,
+			// and the renderer decides where a pending card is drawn.
+			const path = event.toolUseId
+				? findToolRunPath(parts, event.toolUseId)
+				: null;
+			if (!path) return [...parts, permissionPart];
 
-			const updated = [...parts];
-			updated[index] = permissionPart;
-			return updated;
+			return editAtPath(parts, path, (list, index) => {
+				const updated = [...list];
+				updated[index] = withParentOf(list[index], permissionPart);
+				return updated;
+			});
 		}
 		case "legacy_question": {
 			// One card per question rather than one card carrying several. The new
@@ -622,18 +697,22 @@ export function applyEventToParts(
 			// may no longer be at the end — a parallel tool call drawn after the
 			// row, or the row of a second open `question_post`, would otherwise
 			// split the batch or take one of its questions out of order.
-			const batchEnd = lastOfBatchIndex(parts, event.askedAt);
-			if (batchEnd !== -1) {
-				const updated = [...parts];
-				updated.splice(batchEnd + 1, 0, questionPart);
-				return updated;
+			const batchEnd = lastOfBatchPath(parts, event.askedAt);
+			if (batchEnd) {
+				return editAtPath(parts, batchEnd, (list, index) => {
+					const updated = [...list];
+					updated.splice(index + 1, 0, questionPart);
+					return updated;
+				});
 			}
-			const index = openQuestionPostIndex(parts);
-			if (index === -1) return [...parts, questionPart];
+			const path = openQuestionPostPath(parts);
+			if (!path) return [...parts, questionPart];
 
-			const updated = [...parts];
-			updated[index] = questionPart;
-			return updated;
+			return editAtPath(parts, path, (list, index) => {
+				const updated = [...list];
+				updated[index] = withParentOf(list[index], questionPart);
+				return updated;
+			});
 		}
 		case "system":
 			return [...parts, { type: "system", content: event.content }];
@@ -666,6 +745,16 @@ export function createAssistantMessage(
 		status,
 		createdAt: new Date(),
 	};
+}
+
+/** Whether a bubble's turn was cut short rather than finished. */
+function isAbortedStatus(message: Message): boolean {
+	return (
+		message.role === "assistant" &&
+		(message.status === "interrupted" ||
+			message.status === "error" ||
+			message.status === "process_ended")
+	);
 }
 
 /** Index of the last assistant bubble, whatever state it is in. -1 for none. */
@@ -723,8 +812,11 @@ function stampAnchorSeq(
 	const last = after[index];
 	// Compared against the same position rather than the end of `before`: a
 	// terminal event can drop an empty placeholder, and the message left behind
-	// is then an old one that this record did not touch.
+	// is then an old one that this record did not touch. A card can also take
+	// its bubble out from the middle (`takeStrayCard`), shifting everything after
+	// it, so a last message `before` already held is one this record left alone.
 	if (last === before[index]) return after;
+	if (after.length < before.length && before.includes(last)) return after;
 
 	const updated = [...after];
 	updated[index] = { ...last, anchorSeq: seq };
@@ -871,6 +963,53 @@ function applyEvent(
 		if (absorbed) return absorbed;
 	}
 
+	// A subagent's own text and calls go under the call that spawned it, which
+	// is not always in the bubble the turn is writing: a backgrounded subagent
+	// keeps working while the conversation moves on, and a read point leaves a
+	// foreground one in the bubble above. Filed, they touch no bubble's status —
+	// they are the subagent's, and say nothing about the turn. A parent that is
+	// not loaded leaves them to fall through and sit flat where they arrived.
+	if (
+		(event.type === "text" || event.type === "tool_call") &&
+		event.parentToolUseId
+	) {
+		const filed = fileUnderParent(
+			messages,
+			event.parentToolUseId,
+			{ ...event, parentToolUseId: undefined },
+			options,
+		);
+		if (filed) return filed;
+	}
+
+	// A permission request names its call and no parent, so a subagent's is
+	// found by the call itself, wherever it was filed. A main-conversation call
+	// keeps the old rule below — its card goes into the turn's own bubble.
+	if (event.type === "permission_request" && event.toolUseId) {
+		const toolUseId = event.toolUseId;
+		const filed = applyToNestedList(
+			messages,
+			(parts) => findToolRunPath(parts, toolUseId),
+			event,
+			options,
+		);
+		if (filed) return filed;
+	}
+
+	// A posted question names no call at all, and joins by position; a
+	// subagent's is still found by its batch or its open `question_post`,
+	// wherever that was filed.
+	if (event.type === "question_posted") {
+		const filed = applyToNestedList(
+			messages,
+			(parts) =>
+				lastOfBatchPath(parts, event.askedAt) ?? openQuestionPostPath(parts),
+			event,
+			options,
+		);
+		if (filed) return filed;
+	}
+
 	// Tool result updates existing tool_call across all messages (may arrive after interrupt)
 	if (event.type === "tool_result") {
 		return updateToolResult(messages, event);
@@ -953,7 +1092,12 @@ function applyEvent(
 		// Nothing is swept up first: reaching here means `openAssistantIndex` found
 		// no bubble open anywhere, so there is no earlier turn left running to
 		// close out.
-		updated = [...messages, createAssistantMessage()];
+		updated = [
+			...messages,
+			event.type === "permission_request"
+				? { ...createAssistantMessage(), openedByCard: true }
+				: createAssistantMessage(),
+		];
 		index = updated.length - 1;
 	}
 
@@ -1028,6 +1172,229 @@ function applyEvent(
 	return updated;
 }
 
+/** Whether some of this run's children already sit flat, unfiled. */
+function hasUnfiledChildren(
+	messages: Message[],
+	parentToolUseId: string,
+): boolean {
+	return messages.some(
+		(msg) =>
+			msg.role === "assistant" &&
+			msg.parts.some(
+				(part) =>
+					"parentToolUseId" in part && part.parentToolUseId === parentToolUseId,
+			),
+	);
+}
+
+/**
+ * Applies a subagent's event to the children of the run it names, and returns
+ * null when that run is not loaded.
+ *
+ * Also null when some of the run's children loaded flat before it did: they
+ * stay where they are, so what follows them goes flat too, after them, rather
+ * than being filed above them and read out of order.
+ */
+function fileUnderParent(
+	messages: Message[],
+	parentToolUseId: string,
+	event: NormalizedEvent,
+	options: ApplyOptions,
+): Message[] | null {
+	// A subagent call the user approved has only its card until the engine
+	// next reports on it, and the row is what its work is filed under. Live, a
+	// progress line usually brings the row back first; replay has none, so the
+	// work itself has to — or a reload would draw it flat.
+	const rebuilt = updateRunById(messages, parentToolUseId, (run) => run, false);
+	// A subagent's call can be asked about before it is announced (measured on
+	// claude 2.1.286: the `permission_request` precedes the subagent's own
+	// `tool_call`), and then the card had no row to find and went flat into the
+	// turn's bubble. The call names its parent; the card goes with it.
+	const stray =
+		event.type === "tool_call" ? takeStrayCard(rebuilt, event.toolUseId) : null;
+	const withRow = stray ? stray.messages : rebuilt;
+	// Whether the turn has ended cut short, read as `applyEvent` reads it: the
+	// parent may sit in a bubble a read point closed as complete before the
+	// ending landed in the next one.
+	const lastIndex = lastAssistantIndex(withRow);
+	const turnCut =
+		openAssistantIndex(withRow) < 0 &&
+		lastIndex >= 0 &&
+		isAbortedStatus(withRow[lastIndex]);
+	for (let i = withRow.length - 1; i >= 0; i--) {
+		const msg = withRow[i];
+		if (msg.role !== "assistant") continue;
+		const path = findToolRunPath(msg.parts, parentToolUseId);
+		if (!path) continue;
+		if (hasUnfiledChildren(withRow, parentToolUseId)) return null;
+		const aborted = turnCut || isAbortedStatus(msg);
+		const resumedLater = withRow
+			.slice(i + 1)
+			.some((later) => later.role === "user");
+		// A subagent under a backgrounded one outlives its turn with it.
+		const underBackground = path
+			.slice(0, -1)
+			.reduce<{ list: ContentPart[]; found: boolean }>(
+				({ list, found }, index) => {
+					const part = list[index];
+					return part?.type === "tool_call"
+						? {
+								list: part.tool.children ?? [],
+								found: found || part.tool.status === "background",
+							}
+						: { list: [], found };
+				},
+				{ list: msg.parts, found: false },
+			).found;
+		const parts = editAtPath(msg.parts, path, (list, index) => {
+			const part = list[index];
+			if (part.type !== "tool_call") return list; // Type guard - never happens
+			const run = part.tool;
+			const children = run.children ?? [];
+			const applied = applyEventToParts(
+				stray ? [...children, ...stray.parts] : children,
+				event,
+				options,
+			);
+			// A call trailing in after its subagent was cut short or failed has
+			// nothing left to report on it — the same rule `settleToolRun` applies
+			// to the calls that were already there. One that finished is another
+			// matter: Claude resumes a finished subagent when the agent writes to
+			// it (SendMessage), and the resumed work is filed under the call that
+			// first spawned it, with its own results still to come — and so does one
+			// that was cut short, once the user has sent a turn since.
+			const cut =
+				(run.status === "interrupted" || run.status === "error") &&
+				!resumedLater;
+			const filed: ContentPart = {
+				...part,
+				tool: {
+					...run,
+					children: cut ? settleRunningToolParts(applied) : applied,
+				},
+			};
+			// Nor does work trailing a turn that was cut short while its subagent
+			// was still running — the sweep `applyEvent` gives the turn's own late
+			// content, kept to this subagent: it reaches a row the rebuild above
+			// has only just put back, still running, and stops at one that had
+			// finished, whose resumed work is still to report.
+			const updatedList = [...list];
+			updatedList[index] =
+				aborted && !underBackground && run.status === "running"
+					? settleRunningToolParts([filed])[0]
+					: filed;
+			return updatedList;
+		});
+		const updated = [...withRow];
+		updated[i] = { ...msg, parts };
+		return updated;
+	}
+	return null;
+}
+
+/**
+ * The permission card for `toolUseId` that sits flat at the top of a bubble,
+ * taken out of it with whatever of the call came with it, or null. Only the top: a card filed under some run was
+ * already joined to its call. And only a card that names no parent: one that
+ * does was left flat by a page boundary, and stays where it first loaded.
+ *
+ * A bubble the card alone made goes with it. Asked after its turn had ended — a
+ * background subagent's — the card opened a bubble of its own, and left behind
+ * empty it would read as a turn still running. Only that bubble while it is
+ * open — one that answers a user message is the turn's, whether or not
+ * anything is in it yet — and any bubble the card leaves empty once its turn
+ * completed, which the ending would have dropped had it been empty then. Never
+ * one whose turn was cut short: its ending is a line of its own.
+ *
+ * The row approval rebuilt beside the card goes along too, when the engine
+ * reported on the call before announcing it: left behind, it would be the
+ * call's second row.
+ */
+function takeStrayCard(
+	messages: Message[],
+	toolUseId: string,
+): { messages: Message[]; parts: ContentPart[] } | null {
+	for (let i = messages.length - 1; i >= 0; i--) {
+		const msg = messages[i];
+		if (msg.role !== "assistant") continue;
+		const index = msg.parts.findIndex(
+			(part) =>
+				part.type === "permission_request" &&
+				part.request.toolUseId === toolUseId &&
+				!part.parentToolUseId,
+		);
+		if (index === -1) continue;
+		const next = msg.parts[index + 1];
+		const taken =
+			next?.type === "tool_call" &&
+			next.tool.id === toolUseId &&
+			!next.parentToolUseId
+				? 2
+				: 1;
+		const parts = msg.parts.filter((_, j) => j < index || j >= index + taken);
+		const emptied =
+			parts.length === 0 &&
+			(msg.status === "complete" ||
+				(msg.status === "streaming" && msg.openedByCard === true));
+		const updated = emptied
+			? messages.filter((_, j) => j !== i)
+			: messages.map((m, j) => (j === i ? { ...msg, parts } : m));
+		return {
+			messages: updated,
+			parts: msg.parts.slice(index, index + taken),
+		};
+	}
+	return null;
+}
+
+/**
+ * Applies an event to the list the part `locate` finds sits in, when that part
+ * is a subagent's — some run's child. Null when nothing is found, or what is
+ * found sits at the top of its bubble and the ordinary rule applies.
+ */
+function applyToNestedList(
+	messages: Message[],
+	locate: (parts: ContentPart[]) => PartPath | null,
+	event: NormalizedEvent,
+	options: ApplyOptions,
+): Message[] | null {
+	for (let i = messages.length - 1; i >= 0; i--) {
+		const msg = messages[i];
+		if (msg.role !== "assistant") continue;
+		const path = locate(msg.parts);
+		if (!path) continue;
+		if (path.length < 2) return null;
+		const updated = [...messages];
+		updated[i] = {
+			...msg,
+			parts: editChildrenAtPath(msg.parts, path.slice(0, -1), (children) =>
+				applyEventToParts(children, event, options),
+			),
+		};
+		return updated;
+	}
+	return null;
+}
+
+/**
+ * `fn` over every part of every assistant bubble, at every depth. Hands back
+ * the same list when nothing changed.
+ */
+function mapAllParts(
+	messages: Message[],
+	fn: (part: ContentPart) => ContentPart,
+): Message[] {
+	let anyChanged = false;
+	const updated = messages.map((msg) => {
+		if (msg.role !== "assistant") return msg;
+		const parts = mapPartsDeep(msg.parts, fn);
+		if (parts === msg.parts) return msg;
+		anyChanged = true;
+		return { ...msg, parts };
+	});
+	return anyChanged ? updated : messages;
+}
+
 /**
  * Retires the permission requests nothing can decide any more.
  *
@@ -1049,28 +1416,13 @@ export function expirePendingDialogs(
 	reason?: ExpiryReason,
 ): Message[] {
 	const isLive = (requestId: string) => stillLive?.has(requestId) ?? false;
-	let anyChanged = false;
-	const updated = messages.map((msg) => {
-		if (msg.role !== "assistant") return msg;
-
-		let changed = false;
-		const updatedParts = msg.parts.map((part) => {
-			if (
-				part.type === "permission_request" &&
-				part.status === "pending" &&
-				!isLive(part.request.requestId)
-			) {
-				changed = true;
-				return { ...part, status: "expired" as const, reason };
-			}
-			return part;
-		});
-
-		if (!changed) return msg;
-		anyChanged = true;
-		return { ...msg, parts: updatedParts };
-	});
-	return anyChanged ? updated : messages;
+	return mapAllParts(messages, (part) =>
+		part.type === "permission_request" &&
+		part.status === "pending" &&
+		!isLive(part.request.requestId)
+			? { ...part, status: "expired" as const, reason }
+			: part,
+	);
 }
 
 /**
@@ -1095,42 +1447,28 @@ function applyCancellation(
 	requestId: string,
 	reason?: ExpiryReason,
 ): Message[] {
-	let anyChanged = false;
-	const updated = messages.map((msg) => {
-		if (msg.role !== "assistant") return msg;
+	return mapAllParts(messages, (part) => {
+		// A posted question is withdrawn, never expired: it belongs to the
+		// session rather than to the process that asked it, so the only thing
+		// that retires it is something naming it (docs/answering-ui.md §6). A
+		// legacy card is settled the same way — its CLI withdrawing the
+		// question is the one thing that can still name it.
+		if (part.type === "question_record") {
+			if (part.record.requestId !== requestId) return part;
+			if (part.status !== "pending") return part;
+			return { ...part, status: "cancelled" as const, reason };
+		}
+		if (part.type !== "permission_request") return part;
+		if (part.request.requestId !== requestId) return part;
 
-		let changed = false;
-		const updatedParts = msg.parts.map((part) => {
-			// A posted question is withdrawn, never expired: it belongs to the
-			// session rather than to the process that asked it, so the only thing
-			// that retires it is something naming it (docs/answering-ui.md §6). A
-			// legacy card is settled the same way — its CLI withdrawing the
-			// question is the one thing that can still name it.
-			if (part.type === "question_record") {
-				if (part.record.requestId !== requestId) return part;
-				if (part.status !== "pending") return part;
-				changed = true;
-				return { ...part, status: "cancelled" as const, reason };
-			}
-			if (part.type !== "permission_request") return part;
-			if (part.request.requestId !== requestId) return part;
-
-			if (part.status === "pending") {
-				changed = true;
-				return { ...part, status: "expired" as const, reason };
-			}
-			if (part.status === "expired" && reason && part.reason === undefined) {
-				changed = true;
-				return { ...part, reason };
-			}
-			return part;
-		});
-
-		if (!changed) return msg;
-		anyChanged = true;
-		return { ...msg, parts: updatedParts };
+		if (part.status === "pending") {
+			return { ...part, status: "expired" as const, reason };
+		}
+		if (part.status === "expired" && reason && part.reason === undefined) {
+			return { ...part, reason };
+		}
+		return part;
 	});
-	return anyChanged ? updated : messages;
 }
 
 /**
@@ -1157,25 +1495,13 @@ export function resetPromptRequest(
 	requestId: string,
 	status: "pending" | "expired",
 ): Message[] {
-	let anyChanged = false;
-	const updated = messages.map((msg) => {
-		if (msg.role !== "assistant") return msg;
-
-		let changed = false;
-		const updatedParts = msg.parts.map((part) => {
-			const isTarget =
-				part.type === "permission_request" &&
-				part.request.requestId === requestId;
-			if (!isTarget || part.status === status) return part;
-			changed = true;
-			return { ...part, status };
-		});
-
-		if (!changed) return msg;
-		anyChanged = true;
-		return { ...msg, parts: updatedParts };
+	return mapAllParts(messages, (part) => {
+		const isTarget =
+			part.type === "permission_request" &&
+			part.request.requestId === requestId;
+		if (!isTarget || part.status === status) return part;
+		return { ...part, status };
 	});
-	return anyChanged ? updated : messages;
 }
 
 export function updatePermissionRequestStatus(
@@ -1183,28 +1509,13 @@ export function updatePermissionRequestStatus(
 	requestId: string,
 	newStatus: "allowed" | "denied",
 ): Message[] {
-	let anyChanged = false;
-	const updated = messages.map((msg) => {
-		if (msg.role !== "assistant") return msg;
-
-		let changed = false;
-		const updatedParts = msg.parts.map((part) => {
-			if (
-				part.type === "permission_request" &&
-				part.request.requestId === requestId &&
-				part.status === "pending"
-			) {
-				changed = true;
-				return { ...part, status: newStatus };
-			}
-			return part;
-		});
-
-		if (!changed) return msg;
-		anyChanged = true;
-		return { ...msg, parts: updatedParts };
-	});
-	return anyChanged ? updated : messages;
+	return mapAllParts(messages, (part) =>
+		part.type === "permission_request" &&
+		part.request.requestId === requestId &&
+		part.status === "pending"
+			? { ...part, status: newStatus }
+			: part,
+	);
 }
 
 /**
@@ -1221,29 +1532,17 @@ export function applyAnswering(
 	answering: QuestionAnswerRecord[],
 ): Message[] {
 	const byRequest = new Map(answering.map((a) => [a.request_id, a]));
-	let anyChanged = false;
-	const updated = messages.map((msg) => {
-		if (msg.role !== "assistant") return msg;
-
-		let changed = false;
-		const updatedParts = msg.parts.map((part) => {
-			if (part.type !== "question_record" || part.status !== "pending") {
-				return part;
-			}
-			const answer = byRequest.get(part.record.requestId);
-			if (!answer) return part;
-			changed = true;
-			const status: QuestionRecordStatus = answer.declined
-				? "declined"
-				: "answered";
-			return { ...part, status, answer };
-		});
-
-		if (!changed) return msg;
-		anyChanged = true;
-		return { ...msg, parts: updatedParts };
+	return mapAllParts(messages, (part) => {
+		if (part.type !== "question_record" || part.status !== "pending") {
+			return part;
+		}
+		const answer = byRequest.get(part.record.requestId);
+		if (!answer) return part;
+		const status: QuestionRecordStatus = answer.declined
+			? "declined"
+			: "answered";
+		return { ...part, status, answer };
 	});
-	return anyChanged ? updated : messages;
 }
 
 /**
@@ -1381,6 +1680,10 @@ function settleToolRun(
 				: event.isError
 					? "error"
 					: "success",
+		// A settled subagent leaves nothing spinning under it: a child still
+		// running has lost the only process that could report on it. A
+		// backgrounded child is left to its own notification.
+		...(run.children ? { children: settleRunningToolParts(run.children) } : {}),
 	};
 
 	if (
@@ -1443,59 +1746,70 @@ function updateRunById(
 	// that also has none — rebuilding a row for a call that is not this one.
 	if (!toolUseId) return messages;
 
-	const write = (
-		message: AssistantMessage,
-		index: number,
-		parts: ContentPart[],
-		partIndex: number,
-	): Message[] => {
-		const part = parts[partIndex];
-		if (part.type !== "tool_call") return messages; // Type guard - never happens
-		const run = update(part.tool);
-		// Handing back the same run says the record changed nothing — progress on
-		// a call that has already settled. The list is returned untouched, so a
-		// transcript that did not change does not re-render.
-		if (run === part.tool && parts === message.parts) return messages;
-
-		const updatedParts = [...parts];
-		updatedParts[partIndex] = { ...part, tool: run };
-		const updated = [...messages];
-		updated[index] = { ...message, parts: updatedParts };
-		return updated;
-	};
-
+	// At any depth, both passes: a subagent's call is filed under its parent,
+	// and its result names only itself.
 	for (let i = messages.length - 1; i >= 0; i--) {
 		const msg = messages[i];
 		if (msg.role !== "assistant") continue;
-		const partIndex = findToolRunIndex(msg.parts, toolUseId);
-		if (partIndex !== -1) return write(msg, i, msg.parts, partIndex);
+		const path = findToolRunPath(msg.parts, toolUseId);
+		if (!path) continue;
+
+		let unchanged = false;
+		const parts = editAtPath(msg.parts, path, (list, index) => {
+			const part = list[index];
+			if (part.type !== "tool_call") return list; // Type guard - never happens
+			const run = update(part.tool);
+			// Handing back the same run says the record changed nothing — progress
+			// on a call that has already settled. The list is returned untouched,
+			// so a transcript that did not change does not re-render.
+			if (run === part.tool) {
+				unchanged = true;
+				return list;
+			}
+			const updatedList = [...list];
+			updatedList[index] = { ...part, tool: run };
+			return updatedList;
+		});
+		if (unchanged) return messages;
+		const updated = [...messages];
+		updated[i] = { ...msg, parts };
+		return updated;
 	}
 
 	for (let i = messages.length - 1; i >= 0; i--) {
 		const msg = messages[i];
 		if (msg.role !== "assistant") continue;
-		const cardIndex = msg.parts.findIndex(
+		const path = findPartPath(
+			msg.parts,
 			(part) =>
 				part.type === "permission_request" &&
 				part.request.toolUseId === toolUseId &&
 				(fromPendingCard || part.status !== "pending"),
 		);
-		if (cardIndex === -1) continue;
+		if (!path) continue;
 
-		const card = msg.parts[cardIndex];
-		if (card.type !== "permission_request") continue; // Type guard - never happens
-		const restored: ContentPart = {
-			type: "tool_call",
-			tool: {
-				id: toolUseId,
-				name: card.request.toolName,
-				input: card.request.toolInput,
-				status: "running",
-			},
-		};
-		const parts = [...msg.parts];
-		parts.splice(cardIndex + 1, 0, restored);
-		return write(msg, i, parts, cardIndex + 1);
+		const parts = editAtPath(msg.parts, path, (list, cardIndex) => {
+			const card = list[cardIndex];
+			if (card.type !== "permission_request") return list; // Type guard - never happens
+			const restored: ContentPart = {
+				type: "tool_call",
+				tool: update({
+					id: toolUseId,
+					name: card.request.toolName,
+					input: card.request.toolInput,
+					status: "running",
+				}),
+				...(card.parentToolUseId
+					? { parentToolUseId: card.parentToolUseId }
+					: {}),
+			};
+			const updatedList = [...list];
+			updatedList.splice(cardIndex + 1, 0, restored);
+			return updatedList;
+		});
+		const updated = [...messages];
+		updated[i] = { ...msg, parts };
+		return updated;
 	}
 
 	return messages;
@@ -1521,26 +1835,31 @@ function absorbFetchCall(
 	for (let i = messages.length - 1; i >= 0; i--) {
 		const msg = messages[i];
 		if (msg.role !== "assistant") continue;
-		const partIndex = findToolRunIndex(msg.parts, originToolUseId);
-		if (partIndex === -1) continue;
+		const path = findToolRunPath(msg.parts, originToolUseId);
+		if (!path) continue;
 
-		const part = msg.parts[partIndex];
-		if (part.type !== "tool_call") continue; // Type guard - never happens
-		const run = part.tool;
-		// Already filed — the same call announced twice. Absorbed all the same:
-		// what this returns is the absence of a row, not an entry.
-		if (run.fetches?.some((fetch) => fetch.id === fetchToolUseId)) {
-			return messages;
-		}
-
-		const parts = [...msg.parts];
-		parts[partIndex] = {
-			...part,
-			tool: {
-				...run,
-				fetches: [...(run.fetches ?? []), { id: fetchToolUseId }],
-			},
-		};
+		let alreadyFiled = false;
+		const parts = editAtPath(msg.parts, path, (list, index) => {
+			const part = list[index];
+			if (part.type !== "tool_call") return list; // Type guard - never happens
+			const run = part.tool;
+			// Already filed — the same call announced twice. Absorbed all the
+			// same: what this returns is the absence of a row, not an entry.
+			if (run.fetches?.some((fetch) => fetch.id === fetchToolUseId)) {
+				alreadyFiled = true;
+				return list;
+			}
+			const updatedList = [...list];
+			updatedList[index] = {
+				...part,
+				tool: {
+					...run,
+					fetches: [...(run.fetches ?? []), { id: fetchToolUseId }],
+				},
+			};
+			return updatedList;
+		});
+		if (alreadyFiled) return messages;
 		const updated = [...messages];
 		updated[i] = { ...msg, parts };
 		return updated;
@@ -1568,15 +1887,14 @@ function applyFetchResult(
 	for (let i = messages.length - 1; i >= 0; i--) {
 		const msg = messages[i];
 		if (msg.role !== "assistant") continue;
-		const partIndex = msg.parts.findIndex(
+		const path = findPartPath(
+			msg.parts,
 			(part) =>
 				part.type === "tool_call" &&
-				part.tool.fetches?.some((fetch) => fetch.id === event.toolUseId),
+				!!part.tool.fetches?.some((fetch) => fetch.id === event.toolUseId),
 		);
-		if (partIndex === -1) continue;
+		if (!path) continue;
 
-		const part = msg.parts[partIndex];
-		if (part.type !== "tool_call") continue; // Type guard - never happens
 		const fetched: ToolFetch = {
 			id: event.toolUseId,
 			result: event.toolResult,
@@ -1585,16 +1903,21 @@ function applyFetchResult(
 			// status, and only this entry says anything went wrong.
 			...(event.isError ? { isError: true } : {}),
 		};
-		const parts = [...msg.parts];
-		parts[partIndex] = {
-			...part,
-			tool: {
-				...part.tool,
-				fetches: part.tool.fetches?.map((fetch) =>
-					fetch.id === event.toolUseId ? fetched : fetch,
-				),
-			},
-		};
+		const parts = editAtPath(msg.parts, path, (list, index) => {
+			const part = list[index];
+			if (part.type !== "tool_call") return list; // Type guard - never happens
+			const updatedList = [...list];
+			updatedList[index] = {
+				...part,
+				tool: {
+					...part.tool,
+					fetches: part.tool.fetches?.map((fetch) =>
+						fetch.id === event.toolUseId ? fetched : fetch,
+					),
+				},
+			};
+			return updatedList;
+		});
 		const updated = [...messages];
 		updated[i] = { ...msg, parts };
 		return updated;
@@ -1688,15 +2011,30 @@ export function applyToolActivitySnapshot(
  * Leaving them running would spin a Spinner that never stops.
  *
  * A `background` run is deliberately left alone: its work outlives the turn by
- * definition, and its outcome is still coming.
+ * definition, and its outcome is still coming. So is everything under it — a
+ * backgrounded subagent's own calls are as alive as it is — while a subagent
+ * that is settled here takes its running children with it.
  */
 function settleRunningToolParts(parts: ContentPart[]): ContentPart[] {
 	let changed = false;
 	const updated = parts.map((part) => {
-		if (part.type !== "tool_call" || part.tool.status !== "running")
+		if (part.type !== "tool_call" || part.tool.status === "background") {
 			return part;
+		}
+		const children = part.tool.children
+			? settleRunningToolParts(part.tool.children)
+			: undefined;
+		const settle = part.tool.status === "running";
+		if (!settle && children === part.tool.children) return part;
 		changed = true;
-		return { ...part, tool: { ...part.tool, status: "interrupted" as const } };
+		return {
+			...part,
+			tool: {
+				...part.tool,
+				...(settle ? { status: "interrupted" as const } : {}),
+				...(children ? { children } : {}),
+			},
+		};
 	});
 	return changed ? updated : parts;
 }
@@ -1976,15 +2314,16 @@ function joinTurnParts(
 	before: ContentPart[],
 	after: ContentPart[],
 ): ContentPart[] {
-	// Through the same rule the stream itself uses, so a sentence — or a fenced
-	// code block — cut in two by the boundary comes back as one part rather than
-	// two that render side by side.
+	// Through the same rule the stream itself uses, so the messages either side
+	// of the boundary come back as one part, a paragraph apart, as they would
+	// have been had the page not been split there.
 	const first = after[0];
 	return first?.type === "text"
 		? [
 				...applyEventToParts(before, {
 					type: "text",
 					content: first.content,
+					parentToolUseId: first.parentToolUseId,
 				}),
 				...after.slice(1),
 			]

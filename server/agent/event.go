@@ -258,6 +258,9 @@ type AgentEvent interface {
 
 type TextEvent struct {
 	Content string
+	// ParentToolUseID names the subagent call this text was written inside; see
+	// EventRecord.ParentToolUseID.
+	ParentToolUseID string
 	// ProviderMessageID names the part of the agent's own conversation this text
 	// came out of, when the agent puts ids on them. See
 	// EventRecord.ProviderMessageID.
@@ -268,7 +271,12 @@ func (TextEvent) EventType() EventType { return EventTypeText }
 func (TextEvent) isAgentEvent()        {}
 
 func (e TextEvent) ToRecord() EventRecord {
-	return EventRecord{Type: e.EventType(), Content: e.Content, ProviderMessageID: e.ProviderMessageID}
+	return EventRecord{
+		Type:              e.EventType(),
+		Content:           e.Content,
+		ParentToolUseID:   e.ParentToolUseID,
+		ProviderMessageID: e.ProviderMessageID,
+	}
 }
 
 type ToolCallEvent struct {
@@ -279,6 +287,9 @@ type ToolCallEvent struct {
 	// only identifies it by something Pockode's join key cannot be recovered
 	// from. See EventRecord.OriginToolUseID.
 	OriginToolUseID string
+	// ParentToolUseID names the subagent call this call was made inside; see
+	// EventRecord.ParentToolUseID.
+	ParentToolUseID string
 	// ProviderMessageID names the part of the agent's own conversation this call
 	// came out of, when the agent puts ids on them. See
 	// EventRecord.ProviderMessageID.
@@ -295,6 +306,7 @@ func (e ToolCallEvent) ToRecord() EventRecord {
 		ToolInput:         e.ToolInput,
 		ToolUseID:         e.ToolUseID,
 		OriginToolUseID:   e.OriginToolUseID,
+		ParentToolUseID:   e.ParentToolUseID,
 		ProviderMessageID: e.ProviderMessageID,
 	}
 }
@@ -350,6 +362,9 @@ type ToolResultEvent struct {
 	// IsError reports that the tool call failed. Best-effort: only set when the
 	// agent CLI says so, never inferred from the result text.
 	IsError bool
+	// ParentToolUseID names the subagent call this result came back inside; see
+	// EventRecord.ParentToolUseID.
+	ParentToolUseID string
 	// ProviderMessageID names the part of the agent's own conversation this
 	// result came out of, when the agent puts ids on them. See
 	// EventRecord.ProviderMessageID.
@@ -369,6 +384,7 @@ func (e ToolResultEvent) ToRecord() EventRecord {
 		ExitCode:          e.ExitCode,
 		Contents:          e.Contents,
 		IsError:           e.IsError,
+		ParentToolUseID:   e.ParentToolUseID,
 		ProviderMessageID: e.ProviderMessageID,
 	}
 }

@@ -20,7 +20,22 @@ type EventRecord struct {
 	// replay still has it; absent whenever it could not be resolved, which is
 	// ordinary (see ToolCallEvent.OriginToolUseID). What a client does with the
 	// join — or nothing at all — is the client's decision.
-	OriginToolUseID string         `json:"origin_tool_use_id,omitempty"`
+	OriginToolUseID string `json:"origin_tool_use_id,omitempty"`
+	// ParentToolUseID is the subagent call a text, tool_call or tool_result
+	// record was produced inside: the subagent's own words and tool use, which
+	// the agent streams interleaved with the main conversation's — a
+	// backgrounded subagent writes between the main agent's own lines — so
+	// position cannot say whose they are. Empty for everything the main
+	// conversation produced, and on every record written before the field
+	// existed. A subagent's subagent names the call that spawned *it*, so the
+	// field nests rather than flattens.
+	//
+	// It points at a call that need not be loaded, or exist at all — the call
+	// may sit on an earlier history page, or have been dropped by a fork cut
+	// that kept its children but not its result (see TruncateHistory). A
+	// client that cannot find it shows the record where it sits, as it would
+	// without the field.
+	ParentToolUseID string         `json:"parent_tool_use_id,omitempty"`
 	ToolResult      string         `json:"tool_result,omitempty"`
 	Contents        []ContentBlock `json:"contents,omitempty"`
 	IsError         bool           `json:"is_error,omitempty"`
@@ -95,6 +110,15 @@ type EventRecord struct {
 	// records either. Empty for events with nothing of the agent's behind them
 	// (a warning Pockode raised itself), for agents that expose no ids, and for
 	// every record written before this field existed.
+	//
+	// Also empty on a subagent's records (ParentToolUseID set): both CLIs keep a
+	// subagent's conversation apart from the main one — Claude in a sidechain
+	// transcript of its own, Codex in a thread of its own — so its ids name
+	// nothing the main conversation can be reopened at. LastProviderMessageID
+	// walks back past them, so a fork cut inside a subagent's run is anchored on
+	// the last main-conversation record TruncateHistory keeps — what preceded
+	// the spawning call, which is dropped with its result after the cut, or for
+	// a backgrounded subagent whatever the main agent went on to do while it ran.
 	//
 	// What the id names is each agent's own business, since only that agent ever
 	// reads it back: the anchor it accepts for reopening a conversation is what

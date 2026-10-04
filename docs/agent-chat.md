@@ -144,8 +144,8 @@ cannot reopen it, at a page seam for the same reason it cannot in one stream.
 **A page boundary can fall inside one turn.** The older page trails off
 mid-answer and the page above opens on content that no `message` event preceded,
 and the two halves are joined. Text at the seam goes through the same rule
-streaming uses, so a sentence — or a fenced code block — cut in two comes back as
-one part.
+streaming uses, so the messages either side of it come back as one part, a
+paragraph apart, as they would have streamed.
 
 The reducer produces a leading assistant message in one other case, and it is the
 one case that must *not* be joined: a page beginning at a read point, where the
@@ -156,15 +156,17 @@ bubble says so on itself, so the seam can tell the two apart; joining it would
 put the later message's answer back in the earlier message's bubble, once per
 boundary that lands there.
 
-A turn is the *only* thing a boundary can split. Nothing else in the transcript
-spans more than one record: a subagent Task is one tool-call part where its call
-landed ([code/frontend-state.md](code/frontend-state.md#tool-runs)) and a work
-event is one message where it happened
-([code/work-system.md](code/work-system.md#rendering-in-the-transcript)), so
-neither can arrive as two halves needing to be folded back together. That is not
-an accident of how they happen to be rendered, it is a reason for rendering them
-that way: anything aggregated across records has to be found and re-anchored at
-every seam, and an event left where it landed never does.
+A turn is the *only* thing a boundary splits and folds back. A work event is
+one message where it happened
+([code/work-system.md](code/work-system.md#rendering-in-the-transcript)), so it
+cannot arrive as two halves. That is not an accident of how it happens to be
+rendered, it is a reason for rendering it that way: anything aggregated across
+records has to be found and re-anchored at every seam, and an event left where
+it landed never does. A subagent's work is the one thing aggregated across
+records — it is filed under the call that spawned it — and it is deliberately
+*not* re-anchored at a seam: work already drawn stays flat where it loaded when
+the call's page arrives, and the call's row only counts it
+([code/frontend-state.md](code/frontend-state.md#a-subagents-children)).
 
 Reconnecting re-subscribes and so lands back on the newest page: pages already
 scrolled in are dropped rather than stitched back together, since the cursor

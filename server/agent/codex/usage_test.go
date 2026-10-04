@@ -1,6 +1,7 @@
 package codex
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/pockode/server/agent"
@@ -231,6 +232,27 @@ func TestUsageUpdateReachesObserverWithoutATranscriptEntry(t *testing.T) {
 	}
 	if events := drainEvents(sess.events); len(events) != 0 {
 		t.Errorf("a usage update produced transcript events: %v", events)
+	}
+}
+
+// A subagent's thread reports a running total of its own on the same
+// connection; taken for this thread's, it would be a delta against the wrong
+// total and a context reading of the wrong conversation.
+func TestSubagentUsageIsNotTheSessions(t *testing.T) {
+	var got []session.UsageReport
+	sess := newTestSession()
+	defer sess.cancel()
+	sess.stateMu.Lock()
+	sess.threadID = "t"
+	sess.stateMu.Unlock()
+	sess.usage = newUsageObserver(testLogger(), agent.StartOptions{
+		OnUsage: func(r session.UsageReport) { got = append(got, r) },
+	})
+
+	sess.notify("thread/tokenUsage/updated", strings.Replace(firstUsageUpdate, `"threadId":"t"`, `"threadId":"child"`, 1))
+
+	if len(got) != 0 {
+		t.Errorf("a subagent's usage was reported as the session's: %+v", got)
 	}
 }
 
