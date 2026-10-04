@@ -1,4 +1,4 @@
-import { Ban, Check, ChevronRight, X } from "lucide-react";
+import { Ban, Check, ChevronRight, CircleDot, X } from "lucide-react";
 import { type ReactNode, useEffect, useState } from "react";
 import {
 	formatDuration,
@@ -32,6 +32,35 @@ const settledGlyphs: Record<
 };
 
 /**
+ * What a row shows while its work is going: a spinner, or under reduced motion
+ * a still dot — the motion is decoration, and `Spinner` does not stop itself.
+ * Accent then, as the turn's tail line is, so the dot still reads as "live"
+ * beside the muted ticks of the settled rows.
+ */
+export function RunningGlyph({ label }: { label: string }) {
+	return (
+		// biome-ignore lint/a11y/useSemanticElements: not a form's output, as in Spinner itself
+		<span
+			role="status"
+			aria-label={label}
+			// Aligned with line 1 rather than centred on a row that may have two
+			// lines, same as the chevron beside it.
+			className="mt-0.5 flex size-3 shrink-0 items-center justify-center"
+		>
+			{/* Hidden because `Spinner` is a status of its own, and the label is
+			    this span's: it has to outlive whichever glyph is showing. */}
+			<span aria-hidden className="flex motion-reduce:hidden">
+				<Spinner variant="current" size="h-3 w-3" srText={null} />
+			</span>
+			<CircleDot
+				aria-hidden
+				className="hidden size-3 text-th-accent motion-reduce:block"
+			/>
+		</span>
+	);
+}
+
+/**
  * The single place a run states its status. A spinner means the work is still
  * going — `background` included, because it is: the badge beside it is what
  * says the conversation moved on without it.
@@ -44,16 +73,7 @@ export function ToolStatusGlyph({
 	name: string;
 }) {
 	if (status === "running" || status === "background") {
-		return (
-			<Spinner
-				variant="current"
-				size="h-3 w-3"
-				// Aligned with line 1 rather than centred on a row that may have
-				// two lines, same as the chevron beside it.
-				className="mt-0.5 shrink-0"
-				srText={`${name} running`}
-			/>
-		);
+		return <RunningGlyph label={`${name} running`} />;
 	}
 	const { Icon, color, label } = settledGlyphs[status];
 	return (

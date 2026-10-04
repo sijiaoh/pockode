@@ -1185,7 +1185,7 @@ describe("ChatPanel", () => {
 		// say a question in, because the panel is sharing what is left of the
 		// screen with chrome that has nothing to do with answering. The room is
 		// taken back by folding that chrome away, and the card takes it on the
-		// same flag — its whole rectangle, a tighter header and footer — so the
+		// same flag — its whole rectangle, its header folded into the footer — so the
 		// card's short shape never shows without the fold, nor the fold without
 		// it (docs/answering-ui.md §3, "Room on a short viewport").
 		describe("on a short viewport", () => {
@@ -1254,7 +1254,7 @@ describe("ChatPanel", () => {
 			// refused, so both are the composer.
 			const composer = () =>
 				screen.queryByPlaceholderText(
-					/^(Type a message|Answer the permission request)/,
+					/^(Type a message|Allow or deny to send)/,
 				);
 			/**
 			 * Whether the card is in its folded shape. jsdom lays nothing out, so
@@ -2724,7 +2724,7 @@ describe("ChatPanel", () => {
 			const strip = screen.getByRole("group", { name: "Permission request" });
 			expect(screen.getByRole("textbox")).toHaveAttribute(
 				"placeholder",
-				"Answer the permission request to send",
+				"Allow or deny to send",
 			);
 			// Armed after it arrives; the wait is real time here.
 			await waitFor(() =>

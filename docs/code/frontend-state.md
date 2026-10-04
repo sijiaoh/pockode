@@ -492,7 +492,8 @@ The `done` dependency is therefore still single and explicit
 which is why `messageReducer.test.ts` states it as a test of its own rather than
 leaving it a thing everyone assumed. The net that is unchanged, and the one that
 matters in practice, is the subscribe-time settle: `turn` finalises whatever is still
-`streaming` ([lifecycle-ui.md §2.4](../lifecycle-ui.md#24-recovering-a-dangling-turn-after-a-restart)).
+`streaming` unless the turn is still open
+([lifecycle-ui.md §2.4](../lifecycle-ui.md#24-recovering-a-dangling-turn-after-a-restart)).
 
 The same lateness decides where a fork can cut. A message carries the `anchorSeq`
 of the last history record folded into it, and the reducer stamps it on the
@@ -613,10 +614,10 @@ honest:
   ([agent-integration.md](agent-integration.md#background-waits)) — and so is
   `background`, for the same reason.
 - Replay adds no settling of its own — it feeds history through this same
-  reducer — so a call still running at the end of a history stays running,
-  which is right while the session is live. A process killed while Pockode was
-  down normally *is* in the history — the session store writes the
-  `process_ended` the killed run never got to
+  reducer — so a call still running at the end of a history stays running, which
+  is right while the session is live. A process killed while Pockode was down
+  normally *is* in the history — the session store writes the `process_ended`
+  the killed run never got to
   ([agent-integration.md](agent-integration.md#restart-repair)) — but the client
   does not rely on that record being there, because a session stored by a build
   from before that repair existed has none. The session's `turn` is the
@@ -625,10 +626,13 @@ honest:
   nothing about *when* the turn ended — over every older page pulled in after
   ([agent-chat.md](../agent-chat.md#reading-a-page-on-the-client),
   [lifecycle-ui.md](../lifecycle-ui.md#24-recovering-a-dangling-turn-after-a-restart)).
-  It settles three things at once and each on its own condition: a bubble still
-  `streaming` while the turn is not running, a pending card the turn does not
-  list as a blocker — a card it *does* list is still answerable and is left
-  alone — and a call still running once the turn is idle.
+  It settles three things at once, each on its own condition:
+  - a bubble still `streaming` while the turn is not open — an open turn,
+    whether it waits on a permission or a background task, resumes in that
+    same bubble;
+  - a pending card the turn does not list as a blocker (a card it *does* list
+    is still answerable and is left alone);
+  - a call still running once the turn is idle.
 - An interrupted run whose result finally arrives keeps its `interrupted`
   status. The content is kept and readable; what it cannot do is make the UI
   claim the call finished normally. No flag records that it came back late —

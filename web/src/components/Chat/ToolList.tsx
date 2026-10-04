@@ -129,8 +129,16 @@ function RowList<T extends Item>({
 		),
 	);
 
+	// A list of nothing but a thinking is not framed: it lies on the rows'
+	// columns like the tail line it settles from, so `Thinking…` becoming
+	// `Thought for 12s` grows no box around it. Transparent rather than absent,
+	// so the columns stay where a framed list has them.
+	const framed = items.some((item) => item.part.type !== "thinking");
+
 	return (
-		<div className="overflow-hidden rounded-lg border border-th-border text-xs">
+		<div
+			className={`overflow-hidden rounded-lg border text-xs ${framed ? "border-th-border" : "border-transparent"}`}
+		>
 			<div className="-mt-px">
 				{entries.map((entry) => {
 					if (entry.kind === "summary") {

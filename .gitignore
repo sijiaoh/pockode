@@ -42,5 +42,5 @@ dist/
 node_modules/
 .pnpm-store/
 
-# Answering UI walkthrough: scratch server state, Playwright, screenshots
+# UI walkthrough: scratch server state, Playwright, screenshots
 .walkthrough/

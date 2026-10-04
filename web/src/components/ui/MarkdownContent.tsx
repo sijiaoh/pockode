@@ -1,5 +1,15 @@
-import type { Element } from "hast";
-import { type ComponentPropsWithoutRef, lazy, memo, Suspense } from "react";
+import type { Element, ElementContent } from "hast";
+import {
+	type ComponentPropsWithoutRef,
+	type CSSProperties,
+	lazy,
+	memo,
+	type ReactNode,
+	Suspense,
+	useEffect,
+	useRef,
+	useState,
+} from "react";
 import Markdown from "react-markdown";
 import remarkBreaks from "remark-breaks";
 import remarkGfm from "remark-gfm";
@@ -15,12 +25,35 @@ type CodeProps = ComponentPropsWithoutRef<"code"> & {
 	node?: Element;
 };
 
+/**
+ * A soft break after each run of `/` that has something after it, so a path too
+ * long for the line breaks between its segments rather than mid-name — and a
+ * URL's `//` stays in one piece.
+ */
+function breakAfterSlashes(children: ReactNode): ReactNode {
+	if (typeof children !== "string") return children;
+	const segments = children.match(/[^/]*\/+|[^/]+$/g);
+	if (!segments || segments.length < 2) return children;
+	return segments.flatMap((segment, i) =>
+		// biome-ignore lint/suspicious/noArrayIndexKey: the segments of one fixed string
+		i === 0 ? [segment] : [<wbr key={i} />, segment],
+	);
+}
+
 // Only inline code reaches here: a block's <code> is drawn by `MarkdownPre`,
 // which never renders its children.
+//
+// An inline-block capped at the line, so a token that fits on a line of its own
+// moves there whole and only one longer than the line breaks inside — at a `/`
+// where it has one, anywhere as the last resort. Its baseline is its first
+// line's, so the text beside a token that did break lines up with its start
+// rather than its end. In em and at the text's weight, so it follows a table
+// cell's or a note's smaller text and does not outweigh bold: the ground and
+// the mono face already set it apart.
 function MarkdownCode({ children }: CodeProps) {
 	return (
-		<code className="break-all rounded bg-th-code-bg px-1.5 py-0.5 text-sm text-th-code-text">
-			{children}
+		<code className="inline-block max-w-full rounded bg-th-code-bg px-1 align-baseline font-normal [baseline-source:first] text-[0.9em] text-th-code-text leading-snug [overflow-wrap:anywhere]">
+			{breakAfterSlashes(children)}
 		</code>
 	);
 }
@@ -70,12 +103,73 @@ type TableProps = ComponentPropsWithoutRef<"table"> & {
 
 // A table too wide for a phone scrolls in its own box; the transcript around it
 // clips sideways rather than scrolling, so without one its right columns would
-// be cut off.
+// be cut off. The right edge fades while there is more to the right, since a box
+// that scrolls sideways says so nowhere else on a touch screen.
 function MarkdownTable({ node, ...props }: TableProps) {
+	const ref = useRef<HTMLDivElement>(null);
+	const [moreRight, setMoreRight] = useState(false);
+
+	useEffect(() => {
+		const el = ref.current;
+		if (!el) return;
+		const check = () =>
+			setMoreRight(el.scrollLeft + el.clientWidth < el.scrollWidth - 1);
+		check();
+		el.addEventListener("scroll", check, { passive: true });
+		const observer = new ResizeObserver(check);
+		observer.observe(el);
+		if (el.firstElementChild) observer.observe(el.firstElementChild);
+		return () => {
+			el.removeEventListener("scroll", check);
+			observer.disconnect();
+		};
+	}, []);
+
 	return (
-		<div className="markdown-block overflow-x-auto">
+		<div
+			ref={ref}
+			className={`markdown-block overflow-x-auto ${moreRight ? "[mask-image:linear-gradient(to_left,transparent,black_2rem)]" : ""}`}
+		>
 			<table {...props} />
 		</div>
+	);
+}
+
+type HeaderCellProps = ComponentPropsWithoutRef<"th"> & {
+	node?: Element;
+};
+
+function textOf(node: Element | ElementContent): string {
+	if (node.type === "text") return node.value;
+	if (node.type !== "element") return "";
+	return node.children.map(textOf).join("");
+}
+
+// The header row is where a column's width floor is set, since every GFM table
+// has one. A floor of its own, so a column of prose is not squeezed to its
+// longest word, one word to a line; and at least wide enough for the header's
+// text in about two lines, so a long header widens its column — the table
+// scrolls — instead of standing four lines tall over a column of short cells.
+// `ch` is a digit's width; prose averages a little more per character, which
+// the factor takes up.
+function MarkdownHeaderCell({
+	node,
+	style,
+	className,
+	...props
+}: HeaderCellProps) {
+	const length = node ? textOf(node).trim().length : 0;
+	return (
+		<th
+			{...props}
+			style={
+				{
+					...style,
+					"--header-width": `${Math.ceil(length * 0.6)}ch`,
+				} as CSSProperties
+			}
+			className={`min-w-[max(9em,var(--header-width))] ${className ?? ""}`}
+		/>
 	);
 }
 
@@ -97,6 +191,7 @@ const MARKDOWN_COMPONENTS = {
 	code: MarkdownCode,
 	pre: MarkdownPre,
 	table: MarkdownTable,
+	th: MarkdownHeaderCell,
 	img: MarkdownImage,
 };
 

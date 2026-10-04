@@ -212,7 +212,7 @@ describe("ToolCallItem", () => {
 			await user.click(screen.getByRole("button", { name: "Open" }));
 			expect(onOpenFile).toHaveBeenCalledWith("src/lib/main.ts");
 			// The header still hands over the path in full.
-			await user.click(screen.getByRole("button", { name: "Copy file" }));
+			await user.click(screen.getByRole("button", { name: "Copy path" }));
 			expect(writeText).toHaveBeenLastCalledWith(path);
 		});
 
@@ -305,6 +305,45 @@ describe("ToolCallItem", () => {
 
 				const header = screen.getByText("Change").parentElement;
 				expect(header).toHaveTextContent("+2 −1");
+			});
+
+			// The view is drawn from the input, so a refused change looks exactly
+			// like one that landed unless the body says otherwise — and the
+			// result, the one place the reason is, is shown nowhere else.
+			it("says why a refused change was not applied, before the change", async () => {
+				draw({
+					...edit,
+					status: "error",
+					result:
+						"<tool_use_error>String to replace not found in file.\nString: one</tool_use_error>",
+				});
+				await open();
+
+				// The row's second line holds the reason alone; the body all of it.
+				const error = screen.getByText(/String: one$/);
+				expect(error).toHaveTextContent(/^String to replace not found/);
+				expect(precedes(error, screen.getByText("Change"))).toBe(true);
+				expect(screen.queryByText(/tool_use_error/)).toBeNull();
+				const header = screen.getByText("Change").parentElement;
+				expect(header).toHaveTextContent(/not applied\s*\+2 −1$/);
+			});
+
+			// A new file has no counts to mute; the header still says it never
+			// landed.
+			it("marks a refused Write as not applied too", async () => {
+				draw({
+					name: "Write",
+					input: { file_path: "/Users/test/project/src/a.ts", content: "x" },
+					status: "error",
+					result:
+						"<tool_use_error>File has not been read yet. Read it first before writing to it.</tool_use_error>",
+				});
+				await open();
+
+				expect(screen.getByText("Error")).toBeVisible();
+				expect(screen.getByText("Content").parentElement).toHaveTextContent(
+					/not applied$/,
+				);
 			});
 
 			// A phone's width cuts most lines of code; scrolling each one sideways

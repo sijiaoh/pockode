@@ -28,10 +28,10 @@ const parts: ContentPart[] = [
 	bash("b"),
 ];
 
-function List() {
+function List({ shown = parts }: { shown?: ContentPart[] }) {
 	return (
 		<PartBlocks
-			items={parts.map((part, index) => ({ part, index }))}
+			items={shown.map((part, index) => ({ part, index }))}
 			renderPart={({ part }) =>
 				part.type === "thinking" ? (
 					<ThinkingItem thoughts={part.thoughts} />
@@ -81,5 +81,18 @@ describe("PartBlocks with thinking", () => {
 			screen.getByRole("button", { name: "Thought for 2 seconds" }),
 		).toHaveAttribute("aria-expanded", "true");
 		expect(screen.getByText("a")).not.toBeVisible();
+	});
+
+	// Alone, a thinking lies on the rows' columns like the tail line it settles
+	// from; beside a call it shares the call's frame.
+	it("frames a thinking only when it shares the list with a call", () => {
+		const frameOf = (name: string) =>
+			screen.getByRole("button", { name }).closest(".rounded-lg");
+		const { unmount } = render(<List shown={parts.slice(0, 1)} />);
+		expect(frameOf("Thought for 2 seconds")).toHaveClass("border-transparent");
+		unmount();
+
+		render(<List shown={parts.slice(0, 2)} />);
+		expect(frameOf("Thought for 2 seconds")).toHaveClass("border-th-border");
 	});
 });

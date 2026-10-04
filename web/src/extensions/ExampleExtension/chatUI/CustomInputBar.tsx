@@ -54,7 +54,7 @@ export default function CustomInputBar({
 						type="button"
 						onClick={onStop}
 						aria-label="Stop"
-						className="flex size-9 items-center justify-center rounded-full bg-th-error text-th-text-inverse pointer-coarse:size-11"
+						className="flex size-9 items-center justify-center rounded-full bg-th-text-primary text-th-text-inverse pointer-coarse:size-11"
 					>
 						<Square className="size-3.5 fill-current" />
 					</button>

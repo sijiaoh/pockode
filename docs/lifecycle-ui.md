@@ -471,10 +471,22 @@ control with no reason on screen is the silent failure this project forbids.
 The new row has no room for it, so the reason is now said in two places. The
 row itself is the first: a lock and Deny/Allow directly above the composer are
 the decision Send is waiting on. The composer is the second, through
-`InputBarProps.sendBlockedReason`, which `ChatPanel` sets to "Answer the
-permission request to send" exactly while a permission request owns the input,
-and which the default bar shows as its placeholder. `canSend` keeps its meaning;
-the reason is only ever read when it is false. A placeholder is hidden by a
+`InputBarProps.sendBlockedReason`, which `ChatPanel` sets to "Allow or deny to
+send" exactly while a permission request owns the input, and which the default
+bar shows as its placeholder. `canSend` keeps its meaning; the reason is only
+ever read when it is false.
+
+The copy is short on purpose, and the bar does not let its length matter
+anyway. The first wording, "Answer the permission request to send", wrapped to
+two lines at 375px and below, and the autosizing textarea sizes itself by its
+placeholder while the draft is empty — so the bar grew by a line (~24px) exactly
+as the request arrived, and the composer moved 69px rather than the 45px this
+section promises below. That is the tightest state there is: on a 375×560 phone
+with the keyboard up, the transcript has about 87px left. "Allow or deny to
+send" fits one line at 360px and names the two buttons directly above it in the
+strip. The bar also holds the empty textarea to one row (`maxRows={1}` while the
+draft is empty, `placeholder:truncate`), so a longer reason a host might pass is
+cut rather than allowed to move the composer. A placeholder is hidden by a
 draft, so with one written the row alone says it — accepted, because the row
 is on the screen whenever the composer is, and stays when the composer folds
 ([answering-ui.md §3](answering-ui.md), "`AttentionStrip` stays").
@@ -521,7 +533,8 @@ are about something else (questions, the receipt). The full boundary is
 
 Whichever it says, it is one bordered row, so the composer moves by at most one
 row's height however many of the four states hold — 33px for a statement, 45px
-for the permission row.
+for the permission row. The composer's own height does not change with the
+state (the placeholder above is held to one line), so this is the whole of it.
 
 The permission row's jump uses the jump `MessageList` owns — scroll, ring,
 focus the header row — via the permission blocker's `request_id`. The strip does not
@@ -604,6 +617,17 @@ Escape. Because the Stop that replaces Send lands under
 the thumb that just pressed it, it ignores presses for its first 500ms
 (`Armed` in `Chat/SendStopSlot.tsx`, which the strip's permission row reuses).
 
+**Stop is neutral, not red**: a solid `bg-th-text-primary` with a
+`text-th-text-inverse` square — dark on a light theme, light on a dark one.
+It was `bg-th-error`, and on a phone that did not hold: Stop owns the slot for
+nearly the whole of every turn, so saturated red was the loudest thing on the
+screen for most of the time the app is in use, and red there reads as
+"something went wrong" while nothing has. Red is kept for errors and failures.
+The colour had no protective job to give up: what keeps Stop from being pressed
+by mistake is the exclusion with Send above and `Armed`, neither of which
+changed, nor did its size or place. And with Stop neutral, a permission wait has
+one accent on screen — Allow — which is the press it is waiting for.
+
 **Unanswered questions are not in this table at all**, and their absence is the
 model change made visible. They are not a `phase`, so they gate nothing: the
 composer is live, Send is live, Stop is whatever the turn says. A message typed
@@ -658,7 +682,19 @@ outlives the process that asked it, which is what §5.1 below gives up.
 The subscription result carries `turn`, so the client no longer infers liveness
 from the absence of `process_ended` in history. Rule: **on subscribe, if
 `turn.phase != "running"`, every message still `streaming` is finalised** — as
-`interrupted` when `turn` reports the last turn aborted, `complete` otherwise.
+`interrupted` when `turn` reports the last turn aborted, `complete` otherwise —
+**unless the turn is still open**, whatever it is blocked on. An open turn
+resumes in the same reply — after the permission is answered, or, for a
+background wait, when the CLI picks the turn back up itself once the task
+finishes ([agent-integration.md](code/agent-integration.md#background-waits))
+— so the reply stays `streaming`: its turn-end slot stays empty on a
+reload exactly as it does live
+([turn-progress-ui.md §2.2](turn-progress-ui.md#22-when-it-shows)), and the text
+written after the wait lands in that same bubble rather than opening a second
+one under a reply already marked finished. Finalising it as `complete`, which
+this rule first did, put Copy and Fork on a half-written reply after every
+reload during a wait. A permission prompt that outlived its turn (`open`
+false) has nothing to resume, and its reply is finalised as before.
 This replaces the `isProcessRunning` bookkeeping in `useChatMessages` and is the
 only thing that closes out a transcript whose server died mid-stream.
 
@@ -1165,7 +1201,7 @@ a user who stopped one subtask restart two things.
 | Work reopened during the close grace | the reopen's restart message cancels the retirement outright — the premise of it was that nobody was coming back. The session keeps its process and its transcript, and the work is `active` again with no trace of the two minutes it spent closed |
 | Blocker raised *during* the close grace period | it never appears as `Closed` work needing input: it is cancelled with reason `work_closed` (§5), and the session's phase returns to idle. A question posted then is cancelled by the same rule — a closed work must not leave a card waiting on an answer nobody will act on |
 | 240px sidebar | every indicator is `shrink-0` and icon-only; the title is the one `flex-1 min-w-0` element ([sidebar-ui.md](sidebar-ui.md#the-narrow-width-rule)) |
-| Reduced motion | the session row's spinner degrades the way it always has; the tail line swaps its `Spinner` for a still `CircleDot` ([turn-progress-ui.md §2.3](turn-progress-ui.md#23-what-it-says)) |
+| Reduced motion | the session row's spinner degrades the way it always has; the tail line ([turn-progress-ui.md §2.3](turn-progress-ui.md#23-what-it-says)), a running tool row and a running group summary ([tool-call-ui.md § Status](tool-call-ui.md#status)) swap their `Spinner` for a still accent `CircleDot`, since the shared `Spinner` does not stop itself |
 
 ## 9. Deliberately not done
 

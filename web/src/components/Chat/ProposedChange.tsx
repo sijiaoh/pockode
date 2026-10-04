@@ -7,6 +7,7 @@ import {
 } from "../../lib/diffSettingsStore";
 import { diffStat } from "../../lib/diffStat";
 import type { ProposedChangeData } from "../../lib/proposedChange";
+import type { LineCounts } from "../../lib/turnChanges";
 import { useWSStore } from "../../lib/wsStore";
 import { GIT_STATUS_INFO } from "../../types/git";
 import { formatFilePath } from "../../utils/path";
@@ -25,25 +26,68 @@ function changePatches(change: ProposedChangeData): string[] | undefined {
 }
 
 /**
+ * `+N −M`, with a side that is zero or unknown left out rather than `−0`.
+ * Muted for a change that was never applied: the counts still say what was
+ * asked, but green and red would read as lines that changed.
+ */
+export function LineCountsLabel({
+	lines,
+	muted = false,
+}: {
+	lines: LineCounts | null;
+	muted?: boolean;
+}) {
+	if (!lines) return null;
+	const { added, removed = 0 } = lines;
+	if (added === 0 && removed === 0) return null;
+	return (
+		<span
+			className={`flex shrink-0 gap-1.5 font-mono tabular-nums ${muted ? "text-th-text-muted" : ""}`}
+		>
+			{added > 0 && (
+				<span className={muted ? "" : "text-th-success"}>+{added}</span>
+			)}
+			{/* Read as two figures, not one, by anything that takes the text. */}
+			{added > 0 && removed > 0 && " "}
+			{/* U+2212, the minus sign: a hyphen is narrower than the plus. */}
+			{removed > 0 && (
+				<span className={muted ? "" : "text-th-error"}>−{removed}</span>
+			)}
+		</span>
+	);
+}
+
+/**
  * What a change's header says and offers: how many lines it adds and removes,
  * and a switch to wrap long lines. Nothing for a new file, which is content
  * rather than a diff — every line of it would count as added, overwritten or
  * not.
+ *
+ * A change the tool refused says so first: the view draws the input, which
+ * looks exactly like a change that landed.
  */
-export function proposedChangeHeader(change: ProposedChangeData | null): {
+export function proposedChangeHeader(
+	change: ProposedChangeData | null,
+	{ applied = true }: { applied?: boolean } = {},
+): {
 	meta?: ReactNode;
 	actions?: ReactNode;
 } {
-	const patches = change && changePatches(change);
+	if (!change) return {};
+	// No `·` before it: the header already sets meta off from the label by a
+	// gap, and a dot inside that gap sat closer to the words after it than to
+	// the label before.
+	const notApplied = !applied && <span>not applied</span>;
+	const patches = changePatches(change);
 	// A Codex change of hunkless files only (an empty add, a pure rename) has
 	// nothing to count and nothing to wrap.
-	if (!patches?.length) return {};
-	const { added, removed } = diffStat(patches);
+	if (!patches?.length) return notApplied ? { meta: notApplied } : {};
 	return {
 		meta: (
-			<span className="font-mono">
-				<span className="text-th-success">+{added}</span>{" "}
-				<span className="text-th-error">−{removed}</span>
+			<span className="flex items-baseline gap-1.5">
+				{notApplied}
+				{notApplied && " "}
+				<LineCountsLabel lines={diffStat(patches)} muted={!applied} />
 			</span>
 		),
 		actions: <WrapLinesToggle />,

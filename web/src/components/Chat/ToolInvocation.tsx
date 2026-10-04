@@ -5,8 +5,8 @@ import { CodeHighlighter } from "../../lib/shikiUtils";
 import { pathParts } from "../../lib/toolSummary";
 import { useWSStore } from "../../lib/wsStore";
 import { HIGHLIGHT_LIMIT } from "../../utils/fileView";
-import { relativeToWorkDir } from "../../utils/path";
-import { ClampedContent, MarkdownContent } from "../ui";
+import { isSameNativePath, relativeToWorkDir } from "../../utils/path";
+import { ClampedContent, HeaderCopyButton, MarkdownContent } from "../ui";
 import { Detail } from "./ToolRow";
 import { Section } from "./ToolSection";
 
@@ -23,9 +23,15 @@ import { Section } from "./ToolSection";
 export function PathLine({
 	path,
 	onOpenFile,
+	copyable = false,
 }: {
 	path: string;
 	onOpenFile?: (path: string) => void;
+	/**
+	 * End the line with a copy button, for a path that stands as a block of its
+	 * own and so has no header to carry one.
+	 */
+	copyable?: boolean;
 }) {
 	const workDir = useWSStore((state) => state.workDir);
 	const relative = relativeToWorkDir(path, workDir);
@@ -57,6 +63,7 @@ export function PathLine({
 					Open
 				</button>
 			)}
+			{copyable && <HeaderCopyButton text={path} label="Copy path" />}
 		</div>
 	);
 }
@@ -65,10 +72,6 @@ function asObject(input: unknown): Record<string, unknown> {
 	return input && typeof input === "object"
 		? (input as Record<string, unknown>)
 		: {};
-}
-
-function trimSeparators(path: string): string {
-	return path.replace(/[\\/]+$/, "");
 }
 
 type TodoStatus = "pending" | "in_progress" | "completed";
@@ -339,7 +342,7 @@ export function ToolInvocation({
 					collapsible={collapsible}
 				>
 					{view.description && (
-						<p className="text-th-text-muted">{view.description}</p>
+						<p className="mb-1 text-th-text-muted">{view.description}</p>
 					)}
 					<CodeHighlighter
 						language="bash"
@@ -352,7 +355,7 @@ export function ToolInvocation({
 					>
 						{view.command}
 					</CodeHighlighter>
-					{view.cwd && trimSeparators(view.cwd) !== trimSeparators(workDir) && (
+					{view.cwd && !isSameNativePath(view.cwd, workDir) && (
 						<p className="break-all text-th-text-muted">
 							in <span className="font-mono">{view.cwd}</span>
 						</p>
@@ -383,7 +386,20 @@ export function ToolInvocation({
 				</Section>
 			);
 
+		// One file is one line — the path, Open, copy — and no `File` header
+		// over it: the header only said what the path plainly is, and on a
+		// phone it and the path's own line cost a screen's worth of a diff. The
+		// group keeps the name for a screen reader. Several files, or one folded
+		// under a result, keep the header that lists or folds them.
 		case "paths":
+			if (view.paths.length === 1 && !collapsible) {
+				return (
+					// biome-ignore lint/a11y/useSemanticElements: a fieldset is for form controls; this is a labelled group of a line and its actions
+					<div role="group" aria-label={label}>
+						<PathLine path={view.paths[0]} onOpenFile={onOpenFile} copyable />
+					</div>
+				);
+			}
 			return (
 				<Section
 					label={label}

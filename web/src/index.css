@@ -928,6 +928,41 @@ samp {
 	overflow-wrap: anywhere;
 }
 
+/* A wrapped block breaks only between words: each word is held together
+ * (`wordWrapTransformer` in lib/shikiUtils.tsx) and moves to the next line
+ * whole, and only a word wider than the line breaks inside itself — the
+ * inline-block is then exactly the line's width. Each line is a block whose
+ * continuation is indented 2ch past the line's own indent (`--hang`, set per
+ * line), so a wrapped line reads as the rest of its line rather than a line of
+ * its own — or, in indented JSON, a shallower key. */
+.code-block--wrap .line {
+	display: block;
+	min-height: 1lh;
+	padding-left: var(--hang, 2ch);
+	text-indent: calc(-1 * var(--hang, 2ch));
+}
+
+.code-block--wrap .code-word {
+	display: inline-block;
+	max-width: 100%;
+	text-indent: 0;
+}
+
+/* In a tool call's body a code block draws no box of its own: the body is
+ * already a panel, and the box's padding only set a command 16px in from the
+ * label above it and the output beside it, with 12px of air above and below
+ * that made the gap between two blocks twice the one the body asks for. The
+ * background goes with the padding, because not every body is
+ * `--th-bg-secondary` (= `--th-code-bg`): a pending permission card's is
+ * tinted, and there a padless box would leave the command against its edges.
+ * A Markdown code block keeps its box: it has a header bar to sit under. A
+ * corner copy button would sit over the first line without its padding, so a
+ * block in a section carries its copy button in the section's header. */
+.tool-section .code-block:not(.markdown-code *) {
+	padding: 0;
+	background: transparent;
+}
+
 /* =============================================================================
  * ASYNC MEDIA
  *
@@ -1010,6 +1045,14 @@ samp {
  * be scrolled content, not space. */
 .markdown-block > table {
 	margin: 0;
+}
+
+/* Inline code breaks anywhere as a last resort, and `anywhere` also tells the
+ * table that a token can be one character wide — so its column is never sized
+ * for it and the token is cut mid-word. In a cell the table scrolls instead:
+ * `break-word` keeps the token's width as the column's floor. */
+.markdown-block :where(td, th) > code {
+	overflow-wrap: break-word;
 }
 
 /* The header bar shares the code's ground, so the box is one block with a
@@ -1115,8 +1158,7 @@ samp {
  * sets its own size and colour variables in the utilities layer, where a
  * utility of equal weight would win or lose by Tailwind's source order — which
  * also means the first/last-child margin reset has to be restated here, since
- * these rules outrank Typography's. Inline code is a fixed `text-sm` in
- * `MarkdownContent`; here it follows the note instead of standing out of it. */
+ * these rules outrank Typography's. */
 .prose-note {
 	--tw-prose-body: var(--th-text-secondary);
 	--tw-prose-headings: var(--th-text-secondary);
@@ -1149,10 +1191,6 @@ samp {
 
 .prose-note > :last-child {
 	margin-bottom: 0;
-}
-
-.prose-note :not(pre) > code {
-	font-size: inherit;
 }
 
 /* =============================================================================

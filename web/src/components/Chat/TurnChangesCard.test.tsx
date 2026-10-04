@@ -13,7 +13,8 @@ vi.mock("../../lib/wsStore", () => ({
 
 // The diff itself is `ProposedChange`'s to draw, and its viewer measures text
 // on a canvas jsdom does not have; what the card owes is handing it each edit.
-vi.mock("./ProposedChange", () => ({
+vi.mock("./ProposedChange", async (importOriginal) => ({
+	...(await importOriginal<typeof import("./ProposedChange")>()),
 	proposedChangeHeader: () => ({}),
 	ProposedChange: ({ change }: { change: ProposedChangeData }) => (
 		<p>

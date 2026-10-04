@@ -81,14 +81,34 @@ describe("settleAgainstTurn", () => {
 		).toMatchObject({ status: "streaming" });
 	});
 
-	// A parked turn is producing nothing, which is the whole point of saying so.
-	it("finishes a bubble the turn parked on background work", () => {
+	// Whatever an open turn is blocked on, clearing it resumes the turn in this
+	// same reply, and until then its slot must not offer Copy and Fork on a reply
+	// that is half written — the live path never finishes it either.
+	it.each([
+		{ kind: "permission" as const, request_id: "p1", raised_at: "" },
+		{ kind: "background" as const, raised_at: "" },
+	])("leaves a bubble an open turn is blocked on ($kind) streaming", (blocker) => {
+		const settled = settleAgainstTurn(
+			streaming(),
+			turnState("blocked", { blockers: [blocker] }),
+		);
+		expect(settled.at(-1)).toMatchObject({ status: "streaming" });
+
+		const resumed = applyServerEvent(settled, {
+			type: "text",
+			content: " on",
+		});
+		expect(resumed).toHaveLength(settled.length);
+		expect(resumed.at(-1)).toMatchObject({
+			id: settled.at(-1)?.id,
+			status: "streaming",
+		});
+
+		// A blocker that outlived its turn has nothing to resume.
 		expect(
 			settleAgainstTurn(
 				streaming(),
-				turnState("blocked", {
-					blockers: [{ kind: "background", raised_at: "" }],
-				}),
+				turnState("blocked", { open: false, blockers: [blocker] }),
 			).at(-1),
 		).toMatchObject({ status: "complete" });
 	});

@@ -100,8 +100,19 @@ cost a sum its number. The merged row:
 
 In transcript order, where the engine produced it — usually before a tool call
 or before the answer text. It is a list member, so a thinking next to tool calls
-shares their frame, and one standing alone before text is a list of one row,
-exactly as one call alone is.
+shares their frame. One standing alone before text is a list of one row, as one
+call alone is — but **a list that holds nothing but thinking is not framed**:
+its border is `border-transparent` rather than absent, so the row keeps both
+the columns a framed list gives it and its 44px coarse-pointer target.
+
+The frame came off because of what it cost on a phone. Nearly every reply opens
+with a thinking, so nearly every reply opened with a bordered `Thought for 1s` —
+about 60px of box on a phone for a line that says almost nothing, and on a
+desktop an empty full-width frame. And the live `Thinking…` tail line it settles
+from (§2.3) is unframed, so a frame appearing around it the moment it settled
+was a jump on the one line the reader was watching. Unframed, `Thinking…`
+becomes `Thought for 12s` in place. A thinking among tool calls keeps their
+frame, since there the frame is the calls'.
 
 In [groups](tool-call-ui.md#groups) a thinking part is **foldable, but it is
 not a call**:
@@ -130,9 +141,15 @@ thinking edits nothing, and the card lists files.
 
 A tap opens it in place, at every width, like a tool row: `CollapsibleBody` →
 `ScrollableContent max-h-[60vh]` on `bg-th-bg-secondary`. The text is rendered
-through `MarkdownContent` at `text-sm` in `text-th-text-secondary`: codex
-summaries are Markdown with a bold heading per part, and Claude's thinking is
-prose that sometimes uses lists. Not a sheet, for the reason the changes card
+through `MarkdownContent` because codex summaries are Markdown with a bold
+heading per part, and Claude's thinking is prose that sometimes uses lists —
+in its `note` variant, the style a subagent's narration between its steps uses:
+a tool row's size, in secondary colour. The same body is what the tail line
+opens on as *the thinking so far* (§2.3). It was `text-sm` in
+`text-th-text-secondary`, and on a phone that was not far enough from the
+answer: 14px and one shade lighter, in abyss-light it could not be told from
+the reply below it, and thinking opened in the middle of a reply must not read
+as the main agent speaking. Not a sheet, for the reason the changes card
 gives: on a desktop the sheet is narrower than the column being read.
 
 A codex reasoning item carries two lists of parts: `summary` (written for a
@@ -244,8 +261,8 @@ Nothing else shows it and nothing else hides it.
 |---|---|---|
 | `idle` | the turn-end row | — |
 | `running` | the tail line | — |
-| `blocked(permission)` | empty, height kept | the attention strip's permission row and the card |
-| `blocked(background)` | empty, height kept | the attention strip's background row |
+| `blocked(permission)` | empty, height kept — on a reload too | the attention strip's permission row and the card |
+| `blocked(background)` | empty, height kept — on a reload too | the attention strip's background row |
 | placeholder up, server not yet reporting | `Working`, no clock | — |
 
 **Under `blocked` this changed what was drawn before**: the turn-end row's
@@ -255,6 +272,12 @@ two-hour background wait is exactly what
 [lifecycle-ui.md §1.1](lifecycle-ui.md#11-activity) removed; the strip states
 the wait instead. When the turn goes back to `running` the line comes back with
 the turn's clock, which kept running underneath.
+
+**A reload keeps the slot empty during either wait**, as live does: the
+subscribe-time settle leaves the reply of an open turn `streaming`, whatever it
+is blocked on
+([lifecycle-ui.md §2.4](lifecycle-ui.md#24-recovering-a-dangling-turn-after-a-restart)
+says why).
 
 ### 2.3 What it says
 
@@ -272,7 +295,9 @@ Label in `text-th-text-secondary`, latest line and clock in
 because it is a statement about the transcript, not content. Under
 `prefers-reduced-motion` the glyph is a still `CircleDot` (the `running` glyph,
 [lifecycle-ui.md §1.1](lifecycle-ui.md#11-activity)); the clock and the words
-already say the turn is alive, and the shared `Spinner` does not stop itself.
+already say the turn is alive, and the shared `Spinner` does not stop itself. A
+running tool row and a running group summary make the same swap
+([tool-call-ui.md § Status](tool-call-ui.md#status)).
 
 **When it says `Thinking…`** — only on a signal from the main agent that it is
 thinking *now*, which ends with that thinking's record, with the turn — or
