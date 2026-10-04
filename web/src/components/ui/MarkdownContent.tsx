@@ -74,15 +74,23 @@ interface MarkdownContentProps {
 	 * `min-w-0` of its own, since a descendant's cannot lower its floor.
 	 */
 	className?: string;
+	/**
+	 * `note` is commentary rather than a message: a subagent's words between
+	 * its steps, drawn at a tool row's size in secondary colour (`prose-note`,
+	 * src/index.css) so they cannot be mistaken for the main agent talking.
+	 */
+	variant?: "message" | "note";
 }
 
 export const MarkdownContent = memo(function MarkdownContent({
 	content,
 	className,
+	variant = "message",
 }: MarkdownContentProps) {
+	const size = variant === "note" ? "prose-note" : "prose-sm";
 	return (
 		<div
-			className={`prose dark:prose-invert prose-sm max-w-none min-w-0 prose-code:before:content-none prose-code:after:content-none prose-pre:bg-transparent prose-pre:p-0 prose-pre:text-[length:inherit] ${className ?? ""}`}
+			className={`prose dark:prose-invert ${size} max-w-none min-w-0 prose-code:before:content-none prose-code:after:content-none prose-pre:bg-transparent prose-pre:p-0 prose-pre:text-[length:inherit] ${className ?? ""}`}
 		>
 			<Markdown remarkPlugins={REMARK_PLUGINS} components={MARKDOWN_COMPONENTS}>
 				{content}

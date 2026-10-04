@@ -499,6 +499,7 @@ type EventRecord struct {
     ToolInput             json.RawMessage    `json:"tool_input,omitempty"`
     ToolUseID             string             `json:"tool_use_id,omitempty"`
     OriginToolUseID       string             `json:"origin_tool_use_id,omitempty"`
+    ParentToolUseID       string             `json:"parent_tool_use_id,omitempty"`
     ToolResult            string             `json:"tool_result,omitempty"`
     Contents              []ContentBlock     `json:"contents,omitempty"`
     IsError               bool               `json:"is_error,omitempty"`
@@ -550,6 +551,30 @@ Empty for events with nothing of the agent's behind them (a warning Pockode
 raised itself), for agents that expose no ids, and for every record written
 before the field existed — which is why every reader treats it as optional rather
 than assuming it.
+
+**A subagent's records carry none.** Both CLIs keep a subagent's conversation
+apart from the main one — Claude writes it to a sidechain transcript of its own
+(`<session>/subagents/agent-<id>.jsonl`, measured on 2.1.286; the frame uuids
+appear there and nowhere in the main transcript), Codex runs it as a thread of
+its own — so its ids name nothing `--resume-session-at` or `lastTurnId` can find.
+A fork cut inside a subagent's run therefore walks back past them to the last
+main-conversation record the cut keeps — for a subagent running inside its call
+whatever preceded that call, since the call itself is dropped with its result
+after the cut; for a backgrounded one, whose placeholder result came at once,
+whatever the main agent went on to do meanwhile — which is a point the main
+conversation can be reopened at.
+
+`ParentToolUseID` is what marks those records: the subagent call (Claude's
+`Task` / `Agent`, Codex's spawn) a `text`, `tool_call` or `tool_result` record
+was produced inside. It has to be a field because position cannot say it: a
+backgrounded Claude subagent writes between the main agent's own lines, and a
+Codex subagent's items arrive interleaved with the parent thread's. A subagent's
+subagent names the call that spawned *it*, so the field nests. What it names may
+not be loaded — an earlier history page, or a call a fork cut dropped because
+its result fell after the cut — and a client that cannot find it shows the
+record where it sits. Claude
+reads it off the frame's own `parent_tool_use_id`; Codex derives it, see
+[Subagent threads](#subagent-threads).
 
 **What the id names is each agent's own business**, since only that agent ever
 reads it back: whatever anchor it accepts for reopening a conversation is what
@@ -2465,6 +2490,7 @@ when one begins, `item/completed` when it ends — wrapped in a turn.
 | `item/started`, `imageView` | `ToolCallEvent {ToolName: "Read"}` |
 | `item/completed`, `agentMessage` | `TextEvent` |
 | `item/completed`, the four item types above | `ToolResultEvent` (`imageView`'s carries a file block, the rest text) |
+| `item/started` or `item/completed`: `subAgentActivity` `kind: "started"`, or `collabAgentToolCall` `tool: "spawnAgent"` once it names its thread | `ToolCallEvent {ToolName: "Task"}`, once per spawn; its result comes from the child thread's `turn/completed` — see [Subagent threads](#subagent-threads) |
 | `item/commandExecution/outputDelta` | `ToolActivityEvent {OutputDelta}` — real stdout/stderr as it is produced |
 | `item/mcpToolCall/progress` | `ToolActivityEvent {Activity}` — the tool's own one-line status |
 | `mcpServer/startupStatus/updated`, `status: "failed"` | `WarningEvent` per failed server |
@@ -2599,6 +2625,79 @@ patch either — that is the editable approval surface of a desktop client. If
 either of those stops being true it has to be wired to `rememberToolInput`, since
 the prompt reads from there.
 
+#### Subagent threads
+
+With `multi_agent` on — the default on codex-cli 0.159.3 — the model can spawn a
+subagent, and app-server runs it as **a thread of its own on the same
+connection**: the child's `turn/started`, items, `thread/tokenUsage/updated` and
+`turn/completed` all arrive here, told apart from the session's own only by the
+`threadId` they name. Measured end to end: the spawn is reported on the parent's
+thread as a `subAgentActivity` item (`kind: "started"`, `agentThreadId`: the
+child), whose id is the model's spawn call; the parent then sits in a
+`collabAgentToolCall` `wait` while the child's turn runs and ends; the parent's
+own turn ends after that. The same codex-cli reports a spawn in a second shape,
+depending on the model (measured with `gpt-5.6-luna`): a `collabAgentToolCall`
+whose `tool` is `spawnAgent`, carrying the `prompt`, whose `receiverThreadIds`
+is empty on `item/started` and names the child on `item/completed` — before any
+of the child's items, in every measured run; nothing enforces that order, and a
+child item arriving first would be drawn flat. Both shapes are read as the
+spawn, from whichever half of the item first names the child. A `spawnAgent`
+that fails names no thread and draws no row: the agent's next words are the
+only account of it.
+
+So a notification naming a thread that is not the session's is set apart
+(`isOwnThread`; one naming no thread, or arriving before the thread is known, is
+the session's):
+
+| From a subagent's thread | Handling |
+|---|---|
+| `turn/started`, `turn/completed` | not the session's — read as the session's, the child's ending ended the parent's turn while it was still waiting, and the child's start re-aimed `turn/interrupt` at the child. The child's `turn/completed` settles the spawn's row instead (below). For a child whose spawn was never seen there is no row: a `failed` ending is said as a `subagent_failed` `WarningEvent`, so the child's work does not just stop unexplained, and any other ending is dropped |
+| `thread/tokenUsage/updated` | dropped — a running total of another thread wrecks the accumulator's deltas and reports the child's prompt as this session's context. The child's tokens go uncounted; a per-thread accumulator would count them |
+| `userMessage` items | dropped — the child's prompt is not a message anyone sent this session, so it is no read point |
+| every other item | mapped as above, with `ParentToolUseID` = the spawn call (from either spawn shape, empty if the spawn was not seen) and no `ProviderMessageID` |
+
+**The spawn is drawn as a subagent call.** The item that reports it becomes a `ToolCallEvent` named `Task` — Claude's subagent call, so a client
+draws it with the same row, files the child's records under it and counts its
+steps ([tool-call-ui.md](../tool-call-ui.md#a-subagents-own-work)) — emitted
+for whichever half of the item arrives first. A spawn inside a child carries
+that child's own spawn as its parent, so subagents nest. What a Codex spawn
+cannot carry, measured on 0.159.3:
+
+- **No description.** A `subAgentActivity` names the agent's path
+  (`/root/read_a`) and nothing else, and the child's prompt is not echoed on its
+  thread either: the input is `{agent_path}`, the row names the agent by the
+  path's last segment, and the body has no Prompt section. A `spawnAgent` call
+  carries the prompt and no path: the input is `{prompt}`, the row is named by
+  the prompt's first line, and the body has its Prompt section.
+- **No outcome of its own.** The child's `turn/completed` is what settles it, as
+  a `ToolResultEvent` on the spawn: `completed` carries the child's latest
+  `agentMessage` — the report, which is what the parent's `wait` reads back, as
+  a Claude Task's result is — `failed` carries the redacted error,
+  `interrupted` a sentence saying so; both of those are `IsError`, since neither
+  finished the task. A child given more work later (`sendInput`, `followupTask`)
+  runs another turn under the same spawn and settles it again; the report stays
+  the child's latest words, so a turn that said nothing does not erase it. While
+  such a turn runs, the row still reads as settled, and its new children are
+  filed under it by the reducer's rule for a resumed subagent
+  ([frontend-state](frontend-state.md#a-subagents-children)). The `subAgentActivity` `kind: "completed"` the
+  parent's thread also gets is ignored: it says nothing about how the turn
+  ended.
+- **No duration**: the child's turn reports one, but it is not the spawn call's,
+  so the result carries none.
+
+Every other `collabAgentToolCall` stays on the "produce nothing" path. Its
+`wait` names no receiver and no state alongside a `subAgentActivity` spawn; with
+`spawnAgent` it names the children and their last words, which the child's own
+`turn/completed` already settles the rows with.
+
+Nothing makes the parent wait for its child. A parent whose turn ends while a
+child still runs ends the session's turn as usual, and the child's items that
+arrive afterwards land after that ending, carrying their parent as always — the
+spawn's row goes on running past the turn until the child's own ending settles
+it; an approval a late child item asks for still works, but loses the patch
+preview a file change would show, because the turn's ending forgot every item's
+input (`forgetToolInputs`), the child's included.
+
 ### Deliberately Not Wired Up
 
 These are choices, recorded so they do not become blanks nobody knows about.
@@ -2631,8 +2730,10 @@ These are choices, recorded so they do not become blanks nobody knows about.
   reason; app-server has no notification by either name, so there is nothing to
   add to `ignoredNotifications` — the item simply falls through the type switch
   like reasoning and plans.)
-- **`BackgroundWaitEvent`** has no Codex counterpart to emit. Codex has no concept
-  of a task that outlives its turn, so a Codex session never parks one and the
+- **`BackgroundWaitEvent`** has no Codex counterpart to emit. Codex has no
+  backgrounded task, so a Codex session never parks one — a subagent still
+  running when its parent's turn ends does not hold the session open
+  ([Subagent threads](#subagent-threads)) — and the
   `background` blocker simply never appears on it
   ([Background Waits](#background-waits)).
 
@@ -2726,8 +2827,9 @@ request in the thread. A `904%` sitting in a stored index came from exactly that
 Claude needs one filter besides: an `assistant` frame carrying
 `parent_tool_use_id` belongs to a subagent's own conversation (11,800 against the
 main conversation's 24,034), and a turn that ends in a Task call would otherwise
-report the subagent's context as the session's. Codex needs no equivalent — one
-app-server process carries one thread.
+report the subagent's context as the session's. Codex's equivalent is the
+thread filter: a subagent's thread reports its own usage on the same connection,
+and that is dropped ([Subagent threads](#subagent-threads)).
 
 **Two fields that look like the level after compaction, and are not.** Claude's
 `compact_boundary.compact_metadata.post_tokens` counts only the conversation that

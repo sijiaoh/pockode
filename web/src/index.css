@@ -972,6 +972,56 @@ samp {
 }
 
 /* =============================================================================
+ * MARKDOWN AS A NOTE
+ *
+ * A subagent's text inside its Process (docs/tool-call-ui.md#telling-the-
+ * subagents-words-from-the-main-agents): the row's `text-xs`, secondary colour,
+ * tight margins. Unlayered for the reason `prose-inherit-color` is — `.prose`
+ * sets its own size and colour variables in the utilities layer, where a
+ * utility of equal weight would win or lose by Tailwind's source order — which
+ * also means the first/last-child margin reset has to be restated here, since
+ * these rules outrank Typography's. Inline code is a fixed `text-sm` in
+ * `MarkdownContent`; here it follows the note instead of standing out of it. */
+.prose-note {
+	--tw-prose-body: var(--th-text-secondary);
+	--tw-prose-headings: var(--th-text-secondary);
+	--tw-prose-bold: var(--th-text-secondary);
+	--tw-prose-counters: var(--th-text-secondary);
+	--tw-prose-bullets: var(--th-text-secondary);
+	--tw-prose-quotes: var(--th-text-secondary);
+	font-size: 0.75rem;
+	line-height: 1.5;
+}
+
+/* No `pre`: a code block's margin is `.code-block`'s, and this rule, equally
+ * specific and later, would override it. */
+.prose-note :where(p, ul, ol, blockquote, table, h1, h2, h3, h4, h5, h6) {
+	margin-top: 0.5em;
+	margin-bottom: 0.5em;
+}
+
+.prose-note :where(h1, h2, h3, h4, h5, h6) {
+	font-size: 1em;
+}
+
+.prose-note :where(li) {
+	margin-top: 0.125em;
+	margin-bottom: 0.125em;
+}
+
+.prose-note > :first-child {
+	margin-top: 0;
+}
+
+.prose-note > :last-child {
+	margin-bottom: 0;
+}
+
+.prose-note :not(pre) > code {
+	font-size: inherit;
+}
+
+/* =============================================================================
  * FILE EDITOR (react-simple-code-editor)
  *
  * This class lands on the library's root: position: relative, overflow: hidden,

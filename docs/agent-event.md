@@ -232,7 +232,7 @@ answer it and the card offers none.
 
 `server/agent/history.go` — Flat struct used for both persistence and wire format. Each event type populates only its relevant fields; the rest are zero-valued and omitted from JSON.
 
-Key fields: `Type`, `Content`, `ToolName`, `ToolInput`, `ToolResult`, `Error`, `RequestID`, `PermissionSuggestions`, `Questions`, `Reason`, `AskedAt`, `ResolvedAt`, `Answering`, `Command` (a message expanded from a [Pockode command](pockode-commands.md#what-is-recorded)), and (for system-driven `message` events) `Origin`, `Subtype`, `Meta`.
+Key fields: `Type`, `Content`, `ToolName`, `ToolInput`, `ToolResult`, `ParentToolUseID`, `Error`, `RequestID`, `PermissionSuggestions`, `Questions`, `Reason`, `AskedAt`, `ResolvedAt`, `Answering`, `Command` (a message expanded from a [Pockode command](pockode-commands.md#what-is-recorded)), and (for system-driven `message` events) `Origin`, `Subtype`, `Meta`.
 
 `MessageID` is on two record types and joins them: Pockode's own id for a
 message, carried by the `message` record and quoted by the `message_ingested`
@@ -264,6 +264,11 @@ one is in
 carrying it also ends the turn as `auth_failed` rather than `failed`, which is
 what stops a work session instead of nudging it
 ([code/work-system.md](code/work-system.md)).
+
+`ParentToolUseID` (`parent_tool_use_id`) is on the `text`, `tool_call` and
+`tool_result` records a **subagent** produced, naming the subagent call it ran
+under — see
+[code/agent-integration.md](code/agent-integration.md#eventrecord-unified-event-format).
 
 A `tool_result` also uses `Subtype`, for the three kinds of result that are not
 simply "what the call produced", and carries `DurationMs` / `ExitCode` when the

@@ -230,6 +230,14 @@ type appSession struct {
 	// and they all run on the one goroutine reading app-server's output.
 	turnAuthFailed bool
 
+	// subagentCalls maps a subagent's thread to the spawn that started it; see
+	// rememberSubagent. Read and written only by the notification handlers, on
+	// the one goroutine reading app-server's output.
+	subagentCalls map[string]subagentSpawn
+	// subagentReports holds each subagent thread's latest words; see
+	// settleSubagent. Same goroutine as subagentCalls.
+	subagentReports map[string]string
+
 	usage  *usageObserver
 	resume *resumeStateStore
 

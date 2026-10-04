@@ -18,6 +18,10 @@ import MessageItem, {
 	type PromptError,
 } from "./MessageItem";
 import { anchorCandidateProps } from "./scrollAnchor";
+import {
+	UnfiledChildrenContext,
+	useUnfiledChildrenValue,
+} from "./unfiledChildrenContext";
 import { useTranscriptScroll } from "./useTranscriptScroll";
 
 const HIGHLIGHT_DURATION_MS = 1500;
@@ -211,6 +215,7 @@ function MessageList({
 	// message sent mid-reply began landing *below* the reply it went into
 	// (docs/lifecycle-ui.md §2.3): the last row is then the message, not the turn.
 	const openIndex = openAssistantIndex(messages);
+	const unfiled = useUnfiledChildrenValue(messages);
 
 	const highlightRef = useRef<{
 		card: HTMLElement;
@@ -365,36 +370,38 @@ function MessageList({
 							Beginning of conversation
 						</p>
 					)}
-					{messages.map((message, index) => {
-						return (
-							<div
-								key={message.id}
-								data-message-id={message.id}
-								// This wrapper is the row the view can be held still over, and
-								// it is here rather than on anything `MessageItem` renders
-								// because it is unpositioned (see `scrollAnchor`).
-								{...anchorCandidateProps}
-								className="py-1.5 sm:py-2"
-							>
-								<MessageItem
-									message={message}
-									sessionId={sessionId}
-									// Top of the loaded transcript is the session's own start
-									// only once there are no older pages left above it.
-									isFirst={index === 0 && !hasMoreHistory}
-									isOpenTurn={index === openIndex}
-									isCodex={isCodex}
-									onPermissionRespond={onPermissionRespond}
-									onAnswerQuestion={onAnswerQuestion}
-									promptError={promptError}
-									onOpenWorkDetail={onOpenWorkDetail}
-									onOpenFile={onOpenFile}
-									onForkMessage={onForkMessage}
-									onSignIn={onSignIn}
-								/>
-							</div>
-						);
-					})}
+					<UnfiledChildrenContext value={unfiled}>
+						{messages.map((message, index) => {
+							return (
+								<div
+									key={message.id}
+									data-message-id={message.id}
+									// This wrapper is the row the view can be held still over, and
+									// it is here rather than on anything `MessageItem` renders
+									// because it is unpositioned (see `scrollAnchor`).
+									{...anchorCandidateProps}
+									className="py-1.5 sm:py-2"
+								>
+									<MessageItem
+										message={message}
+										sessionId={sessionId}
+										// Top of the loaded transcript is the session's own start
+										// only once there are no older pages left above it.
+										isFirst={index === 0 && !hasMoreHistory}
+										isOpenTurn={index === openIndex}
+										isCodex={isCodex}
+										onPermissionRespond={onPermissionRespond}
+										onAnswerQuestion={onAnswerQuestion}
+										promptError={promptError}
+										onOpenWorkDetail={onOpenWorkDetail}
+										onOpenFile={onOpenFile}
+										onForkMessage={onForkMessage}
+										onSignIn={onSignIn}
+									/>
+								</div>
+							);
+						})}
+					</UnfiledChildrenContext>
 					{/* Sticky inside the column rather than absolute over the pane, so
 					    it lines up with the column's right edge by construction — the
 					    pane also holds the scrollbar, which the column is centred

@@ -221,6 +221,40 @@ func TestParseLine(t *testing.T) {
 			}},
 		},
 		{
+			// A subagent's frames interleave with the main conversation's, so the
+			// call they run under is the only thing that says whose they are. Its
+			// uuid is an entry of the subagent's sidechain transcript, which the
+			// main conversation cannot be resumed at, so it anchors nothing.
+			name:  "a subagent's text and tool call name the call they run under",
+			input: `{"type":"assistant","parent_tool_use_id":"toolu_task","uuid":"side-uuid","message":{"content":[{"type":"text","text":"Looking."},{"type":"tool_use","id":"toolu_sub","name":"Grep","input":{"pattern":"x"}}]}}`,
+			expected: []agent.AgentEvent{
+				agent.TextEvent{Content: "Looking.", ParentToolUseID: "toolu_task"},
+				agent.ToolCallEvent{
+					ToolUseID:       "toolu_sub",
+					ToolName:        "Grep",
+					ToolInput:       json.RawMessage(`{"pattern":"x"}`),
+					ParentToolUseID: "toolu_task",
+				},
+			},
+		},
+		{
+			name:  "a subagent's tool result names the call it runs under",
+			input: `{"type":"user","parent_tool_use_id":"toolu_task","uuid":"side-uuid","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_sub","content":"match"}]}}`,
+			expected: []agent.AgentEvent{agent.ToolResultEvent{
+				ToolUseID:       "toolu_sub",
+				ToolResult:      "match",
+				ParentToolUseID: "toolu_task",
+			}},
+		},
+		{
+			// The main conversation's frames carry the field as an explicit null.
+			name:  "a main-conversation frame names no parent",
+			input: `{"type":"assistant","parent_tool_use_id":null,"uuid":"msg-uuid","message":{"content":[{"type":"text","text":"done"}]}}`,
+			expected: []agent.AgentEvent{
+				agent.TextEvent{Content: "done", ProviderMessageID: "msg-uuid"},
+			},
+		},
+		{
 			name:  "assistant text and tool_use in same message",
 			input: `{"type":"assistant","message":{"content":[{"type":"text","text":"I will read the file"},{"type":"tool_use","id":"toolu_456","name":"Read","input":{"path":"main.go"}}]}}`,
 			expected: []agent.AgentEvent{

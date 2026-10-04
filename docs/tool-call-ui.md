@@ -4,8 +4,8 @@ How a tool call is drawn, on a phone first.
 [tool-call-model.md](tool-call-model.md) decides what a tool run **is**; this one
 decides how one looks and behaves. Read it first — every field named here
 (`status`, `activity`, `output`, `placeholderResult`, `fromBackground`,
-`fetches`, `durationMs`, `exitCode`, `seenAt`) is its `ToolRun`, and nothing
-below asks for data it does not define.
+`fetches`, `durationMs`, `exitCode`, `seenAt`, and a subagent run's children) is
+its `ToolRun`, and nothing below asks for data it does not define.
 
 The surfaces are `ToolCallItem.tsx`, `TaskItem.tsx` (the subagent category) and
 `PermissionRequestItem` in `MessageItem.tsx` — all three drawing their row
@@ -270,7 +270,7 @@ afterwards cannot word the same call differently.
 | `Glob` | `Glob` | the pattern | right |
 | `WebFetch` / `WebSearch` | the name | host + path / the query | right |
 | `TodoWrite` | `TodoWrite` | `n done / m` | — |
-| `Task` / `Agent` (the CLI renamed it; history holds both) | the name | `description`, with `subagent_type` as a chip | right |
+| `Task` / `Agent` (the CLI renamed it; history holds both) | the name | `description`, with `subagent_type` as a chip; without a description, `subagent_type`, else a Codex spawn's agent name or prompt ([below](#a-subagents-own-work)) | right |
 | `TaskOutput` | `TaskOutput` | the `task_id`, in mono | right |
 | `server:tool` (Codex MCP) or `mcp__server__tool` (Claude MCP) | the tool half | the server half as a chip, then the first scalar argument, else compact JSON | right |
 | anything else | the name | first non-empty scalar in `input` | right |
@@ -379,7 +379,9 @@ the answer is: on every backgrounded `Bash`. Claude emits `task_progress` for
 for nothing else — shell tasks have no progress sender anywhere in the CLI
 (measured against claude 2.1.263). So a backgrounded shell row has no rung 1 ever,
 and a fetch of it is exactly what the user reads on the row. On a backgrounded
-subagent the opposite holds while it is live, and the fetch is in the body.
+subagent the opposite holds while it is live, until its first step replaces the
+rungs ([its second line](#the-second-line-steps-and-what-it-is-doing)), and the
+fetch is in the body.
 
 Rung 3 is above rung 4 and the order is load-bearing: a backgrounded failure's
 outcome is the notification's own summary sentence, which says more than the
@@ -753,12 +755,13 @@ without being opened.
 decision to collapse it stands), because the two cases are not the same one: a
 subagent failing is rare rather than routine, and its report is the only account
 of what went wrong anywhere in the UI. For the same reason `TaskItem` passes
-`secondLine={failed ? null : toolSecondLine(run)}` — with the body already open,
-rung 4 would only be a second and worse copy of what is under it, the tail of a
-markdown report drawn in mono. That `null` covers rung 3 as well, so a
-backgrounded subagent that fails loses its outcome line too — one line of the
-same gap the next paragraph is about, and small beside the body opening above
-it.
+no shared second line on a failed run (`failed && !run.fromBackground`) —
+with the body already open, rung 4 would only be a second and worse copy of what
+is under it, the tail of a markdown report drawn in mono. What a failed subagent row says instead is
+[its step count](#the-second-line-steps-and-what-it-is-doing), which copies
+nothing in the body. A backgrounded failure keeps its outcome line (rung 3),
+steps or not: it is the one failed row whose body is not supposed to open (next
+paragraph), so the line is not a copy of anything on screen.
 
 **A `background` run must not open itself** — a 30-minute task that unfolds
 itself shoves the transcript around long after the user stopped caring, and the
@@ -776,29 +779,417 @@ opening it has to be a way of reaching it, not silence.
 
 `TaskItem` draws a different body, because a subagent answers in prose rather
 than in output: its report as Markdown, then the three shared blocks, then the
-prompt it was given behind a disclosure of its own. The blocks sit between the
-two deliberately — the report is the subagent's conclusion, and the raw output a
-later call fetched is the evidence for it, so it belongs under the conclusion and
-above the question.
+subagent's own work behind a **Process** disclosure
+([below](#a-subagents-own-work)), then the prompt it was given behind a
+disclosure of its own. The blocks sit right under the report deliberately — the
+report is the subagent's conclusion, and the raw output a later call fetched is
+evidence for that same conclusion, so it belongs under it. Process comes after
+both because it is how the subagent got there, which a reader wants less often
+than what it found; the prompt comes last because it is the question, and the
+reader opening this row already knows roughly what was asked from the row's own
+detail.
+
+```
+┌────────────────────────────────────────────────────────────┐
+│ ›  ✓  Task  Explore  Find retry handling            1m 12s │
+│       12 steps                                             │
+├────────────────────────────────────────────────────────────┤
+│  The sender retries on 429 and 503, honouring …            │  report
+│  …                                                         │
+├────────────────────────────────────────────────────────────┤
+│ ›  Process · 12 steps                                      │  closed
+├────────────────────────────────────────────────────────────┤
+│ ›  Prompt                                                  │  closed
+└────────────────────────────────────────────────────────────┘
+```
 
 Until those blocks arrived this body had a hole in it, and the hole told a lie:
 
-- A backgrounded subagent's own report **never comes back to this transcript**.
-  The call handed the agent a placeholder and the agent moved on; what arrives
-  later is `task_notification`'s summary. `TaskItem` drew that text unlabelled,
-  in the place a report goes — so a summary written after the turn was over read
-  as the subagent's own account of its work, which is exactly what the
+- A backgrounded subagent's report **does not come back as its call's
+  result**. The call handed the agent a placeholder and the agent moved on; what
+  arrives later is `task_notification`'s summary. `TaskItem` drew that text
+  unlabelled, in the place a report goes — so a summary that arrived after the
+  call had returned read as what the call returned, which is exactly what the
   *Returned to the agent* / *Outcome · after the turn* pair exists to prevent.
   The outcome now goes under its own label like everywhere else.
 - The placeholder itself was drawn nowhere, so the text the agent actually read
   was the one thing missing from the body.
 
-With the outcome moved out, a settled backgrounded subagent has no report to
-show, and the sentence in its place has to say so without blaming the subagent
-for silence: *"A backgrounded subagent's own report does not come back to the
-transcript."* The other empty-report sentences — still working, failed, cut
-short — are unchanged and are still the answer everywhere else, including a
+That outcome is the subagent's report all the same, delivered later. Measured
+on claude 2.1.286, the summary is the subagent's last message word for word, and
+the CLI hands the notification to the main agent, which reads it — the agent's
+next words quote it. So a settled backgrounded subagent that ended well needs no
+sentence about a missing report: the outcome under its own label is the report,
+and nothing stands in front of it. One that failed or was stopped has the CLI's
+verdict there instead, and its sentence points at it without blaming the
+subagent for silence: *"The subagent ran in the background; how it ended is
+under Outcome below."* The other empty-report sentences — still working, failed,
+cut short — are unchanged and are still the answer everywhere else, including a
 backgrounded subagent that has not settled yet: that one really is still working.
+
+This is a common case, not the corner: on claude 2.1.286 the CLI backgrounds a
+main-agent `Agent` call of its own accord, `run_in_background` or not — every
+one in a run that launched two at once did.
+
+## A subagent's own work
+
+While a subagent runs, everything it says and every tool it calls arrives on the
+same stream as the main agent's — a backgrounded one writes between the main
+agent's own lines — and Pockode used to draw all of it flat: the subagent's
+*"Looking at the sender for edge cases."* and its `Read` / `Grep` rows sat at the
+same level as the main agent's own, and nothing on screen said whose they were.
+That is the one way this transcript makes a reader misjudge *who did what*, so a
+subagent's work is now drawn **under the call that spawned it**. Which records
+belong to which call is the model's to say
+([tool-call-model.md](tool-call-model.md#a-subagents-own-conversation)); this
+section is what the row and its body do with them.
+
+Two words, used exactly:
+
+- **Children** are everything the subagent produced, text and calls alike, in
+  arrival order. The body draws them as its **Process**.
+- **Steps** are the children that are calls — every child `tool_use_id`,
+  whatever it is drawn as at the moment: a tool row, a pending permission card
+  standing in for one, or a question card that replaced one. Counting by id
+  rather than by row is what keeps the count from dropping by one while a card
+  waits and from never counting a question. Text is not a step: it is
+  commentary on the steps, and a count that moved when the subagent narrated
+  would stop measuring progress. A subagent the subagent spawned is one step,
+  however much it did itself ([nesting](#a-subagent-inside-a-subagent)).
+
+Codex's subagent spawn reaches this row as a subagent call too, and everything
+in this section applies to it unchanged, save what Codex does not report: no
+task description, ever. A spawn reported as `subAgentActivity` names no prompt
+either, so its row is named after the agent the model gave the task to and its
+body has no Prompt section; one reported as a `spawnAgent` call carries the
+prompt, which names the row by its first line and fills the Prompt section
+([code/agent-integration.md](code/agent-integration.md#subagent-threads)).
+
+### The second line: steps and what it is doing
+
+```
+ ⟳  Task  Explore  Find retry handling                     47s
+    6 steps · Grep "Retry-After" in server/
+```
+
+The collapsed row is how a user tells a subagent that is getting somewhere from
+one that is stuck, without opening anything. Two facts do that: *how far* it has
+come — the step count — and *what it is doing now*, which is its **latest
+child**. So a subagent's second line replaces the shared rungs with its own; the
+first row that matches wins:
+
+| Run | Second line |
+|---|---|
+| no steps | the shared rungs, unchanged — `run.activity` while live, the background rungs, else no line |
+| live (`running` / `background`) | `N steps · <latest child>` |
+| `interrupted` | `N steps · <latest child>` — frozen where it was cut |
+| settled, from the background | `N steps · <first line of the outcome>` |
+| `success` / `error` | `N steps` |
+
+`1 step`, singular. The rules inside that table:
+
+- **The latest child is worded the way it is worded on its own.** A call reads
+  as its own row would — `toolSummary` title, then its detail through the same
+  `Detail` component, so a path still loses its directories before its file
+  name; a call standing behind a card reads the same, since the card uses the
+  same derivation. A text reads as its first non-empty line, with any leading
+  Markdown block marker (`#`, `>`, a list bullet) dropped, and the inline
+  markers a report opens with as often as not — `**Findings:**`, a code span, a
+  link's target — dropped too. Not `__` or a single `*`: as likely an
+  identifier's own. A subagent between two
+  calls is usually writing, and *"Checking the 503 path next."* is exactly what it
+  is doing at that moment — which is why the second half reads children although
+  the count only counts steps.
+- **Steps outrank `run.activity`**, which is why only the no-steps row reads it.
+  For a subagent Claude's `task_progress` line is `Running <description>`
+  (measured, claude 2.1.263 —
+  [the task lifecycle](code/agent-integration.md#the-task-lifecycle)), which is
+  the row's own detail said again. It is better than nothing only before the
+  first step has arrived. Children also replay — they are persisted, and the
+  activity is not — so a reloaded row reads the same as the live one did.
+- **Its shape.** One flex line, `items-baseline gap-1.5`, inside the row's
+  existing `text-th-text-muted` second-line slot: the count `shrink-0`, a `·`,
+  then the latest child — a call's title in `text-th-text-secondary` (not the
+  accent the row's own title wears: two accent titles on one row would make the
+  child read as the row), then `Detail`, which truncates. A text child is one
+  `truncate` span, not mono. `6 steps · ` never yields width; on a 320px phone the
+  latest child is cut to a few characters and the count is still there, because
+  the count is the half that answers *is it moving*.
+- **It is never red, even when the latest child failed.** `Detail` is passed no
+  error here. A failed call inside a subagent is the subagent's trial and error,
+  exactly as one in the main transcript is
+  ([the body](#the-body-problems-2-and-3)); the row's colour is the subagent's own
+  outcome, and the failed call is red on its own row in the Process.
+- **A settled run keeps its count and drops the latest child.** On `success` and
+  `error` the report is the account of what happened, and the last thing the
+  subagent touched is noise next to it; `12 steps` is the fact worth keeping on
+  a collapsed row. `interrupted` keeps the child because there it *is* the news:
+  where it was when it was cut. A run that settled from the background, success
+  or failure, keeps its outcome line as every background row does
+  ([above](#the-second-line-problem-1)) — a backgrounded failure does not
+  rely on its body opening, because it must not
+  ([the body](#the-body-problems-2-and-3)). Keeping a line in every case is also
+  what holds the row's height when it settles, and that matters more for a
+  subagent than for any other foreground call: the main agent routinely spawns
+  several at once, so a subagent row that finishes first is **not** at the
+  tail — its siblings are still running under it.
+- **`error` gets a line now.** The shared rung 4 (the tail of the output) is
+  still withheld, for the reason [above](#the-body-problems-2-and-3) — the body
+  opens itself and the report is right there — but the count is not a copy of
+  anything in the body's first screen, so it stays.
+- **`aria-hidden` while live, exposed once settled**, as every second line
+  ([above](#the-second-line-problem-1)). Both halves move while live: the count
+  and the latest child.
+
+A row with **no steps** draws what it drew before this section existed. That
+covers two real cases with one rule: a subagent that answered without calling
+anything, and every transcript recorded before children were attributed —
+their subagent records sit flat beside the call
+([below](#what-is-not-filed)). Writing `0 steps` on those would be false for the
+second kind. The price is that a step-less subagent which showed its activity
+line while live loses it when it settles — the one re-flow left, on a subagent
+that never called a tool, which is rare.
+
+### Process
+
+```
+├────────────────────────────────────────────────────────────┤
+│ ⌄  Process · 6 steps                                       │
+│ ┃ Looking at the sender for edge cases.                    │  subagent text
+│ ┃ ›  ✓  Read   server/relay/sender.go                      │
+│ ┃ ›  ✓  Grep   "Retry-After" in server/                    │
+│ ┃ ›  ✗  Bash   go test ./relay/…                           │  red on its own row
+│ ┃       --- FAIL: TestRetry (0.01s)                        │
+│ ┃ The 503 path ignores the header. Checking why.           │
+│ ┃ ›  ⟳  Read   server/relay/backoff.go                     │
+├────────────────────────────────────────────────────────────┤
+```
+
+A disclosure in the shape the Prompt one already has — a `<button>` with
+`aria-expanded`, chevron, muted label, `p-2`, `border-t` — titled
+`Process · N steps` with the same `N` as the row, or `Process` alone when every
+child is text. It is drawn only when it has at least one child to draw (the next
+rule, and a pending card drawn under the row instead
+([below](#when-a-step-asks-the-user)), can leave it none) or unfiled children to mention
+([below](#what-is-not-filed)).
+
+**The report is not drawn twice.** A subagent's last message *is* its report,
+handed to the main agent as the call's result when the subagent ran inside its
+call and as `task_notification`'s summary when it ran in the background. A
+backgrounded subagent also streams that message as a child, so its Process
+would end on the outcome drawn above it again. The Process therefore leaves out
+a **last child that is the same text** as the report or outcome the body shows
+(whitespace aside), or that last child's final paragraph when it is exactly
+that text — messages in a row are joined into one part, a blank line apart, and
+the report is only the last of them — compared, not assumed, because the stream does not always
+carry it (all measured on claude 2.1.286): a subagent that ran inside its call
+hands its last message back without streaming it, and a resumed one
+(`SendMessage`) streams words under the call that first spawned it that are not
+that call's report at all. A failed run's result is the CLI's error, so nothing
+matches it. While the run is live there is nothing to match, and the second line
+reads the newest words like any other latest child. Text is not a step, so the
+count is the same either way.
+
+**The report is the subagent's, not the frame around it.** What a subagent that
+ran inside its call returns is addressed to the model (claude 2.1.286): a
+`[Subagent hand-back]` preamble saying the text is model output, the report with
+every line indented two spaces, then the `agentId` and `<usage>` lines the agent
+needs to resume it. The body draws the report out of that frame
+(`subagentReport`); a result in any other shape is drawn as it came, so a CLI
+that rewords the frame costs the unwrapping and never the report. A subagent's
+own subagent that ran this way streamed none of its work in the measured run —
+its frames reached only its sidechain transcript — so its row has a report and
+no Process.
+
+**It is closed until the user opens it, and nothing opens it.** Not a failure,
+not an interruption, not the subagent finishing. `TaskItem` opens its body when
+the subagent fails, because the report is the only account of what went wrong;
+the Process is a tap further down, and opening it too would put a subagent's
+forty rows into the transcript at the moment the user is reading the report. If
+the report is empty, its sentence sits above the closed Process — with only the
+outcome blocks, when there are any, between them — which is where the reader
+goes next. Its open state is local and survives the run settling, like the
+Prompt's.
+
+**Children in arrival order, each drawn by the renderer it would have in the
+main transcript.** A call is a `ToolCallItem`, a subagent call a `TaskItem`, a
+permission or question record its own card — the same components and rules as
+at the top level, because a `Grep` is a `Grep` whoever ran it, with one
+exception: **a nested `TaskItem` does not open itself on failure.** Inside an
+open Process it is mid-transcript by definition, so opening it is a height
+change under the reader for a failure the outer subagent has already dealt
+with — its red row says it failed, and the outer report is the account. The
+Process is a **list of parts**, the same shape a message's content is, which is
+the one structural promise this design makes to the coming tool-call-grouping
+work: whatever folds a run of consecutive tool rows into a summary in a message
+folds them in the Process by being handed the Process's list. Nothing here
+groups anything; nothing here prevents it.
+
+**It does not scroll on its own.** The `TaskItem` body is a stack of blocks
+that each carry a ceiling, and this is the one block that must not: the rows
+inside it open into bodies with their own 60vh scroller, and a scroller inside
+a scroller is the trap [the body](#the-body-problems-2-and-3) already refuses —
+a drag on a phone goes to whichever box is under the thumb. So the Process grows
+to its full height, and the cost — a long subagent is many rows once opened —
+is accepted because it is only paid by someone who asked for it, and it is the
+first thing grouping will shrink.
+
+**While the run is live it grows at the bottom**, newest last, and it does not
+scroll itself to follow. The row's second line is the live glance; an open
+Process is for reading at the reader's pace, which is the same split the live
+output block makes.
+
+#### Telling the subagent's words from the main agent's
+
+Inside a Process every line belongs to the subagent, and it must not be
+possible to mistake one of them for the main agent's — that mistake is what this
+section exists to end. None of the cues is a new colour:
+
+- **A rail.** The children sit in `ml-2 border-l-2 border-th-border pl-2`, so
+  the Process is a column visibly hung from its own heading, and the main
+  transcript's text never has one. A rail rather than a card because the
+  children are rows that already have their own background, and a card around
+  cards is a box of boxes.
+- **The column is the transcript's ground, not the card's.** The `TaskItem`
+  body is `bg-th-bg-secondary`, and so is every tool row — drawn on it, a row
+  would have no edge, and a run of them would read as one block of text. So the
+  column takes the assistant bubble's `bg-th-ai-bubble`, with the bubble's
+  `space-y-2` between parts, and the rows inside it look exactly as they do in
+  the main transcript. A nested `TaskItem` is then a secondary card on a bubble
+  column again, so the two grounds alternate by themselves at every depth.
+- **The subagent's text is a note, not a message.** The main agent's text is
+  `MarkdownContent` — `prose prose-sm` in `text-th-ai-bubble-text`. The
+  subagent's is the same component in a **note** variant: body at the row's
+  `text-xs`, in `text-th-text-secondary`, with tight paragraph margins. A
+  variant rather than a wrapper's classes, because `prose-sm` and the prose
+  colour variables are set on the component itself and win over anything
+  inherited, and because its inline code is a fixed `text-sm` that has to scale
+  with the note rather than stand out of it. No bubble, no avatar, no message
+  chrome: a subagent's text is commentary between its steps, and drawing it at
+  the weight of an answer is what made it read as the main agent talking.
+- **Tool rows are unchanged.** They are already one-line rows at `text-xs`; the
+  rail is what says whose they are. Restyling them would be a second visual
+  language for the same call, and one more thing grouping has to know.
+- **It is named for a screen reader too.** The column is `role="group"` with an
+  `aria-label` naming whose it is (`Explore subagent's process`, from the row's
+  chip; `Subagent's process` on a row with none, as every Codex spawn is). The cues above are all visual, and a screen-reader user
+  hearing the subagent's text as plain prose would be making exactly the mistake
+  this section ends.
+
+The report is the exception and is drawn as it is today, Markdown at full
+weight: it is the subagent's answer to the main agent, it is what the main agent
+read, and it is outside the rail.
+
+#### A subagent inside a subagent
+
+Claude's `task_started` carries `spawn_depth`, so a subagent spawning its own is
+a case the CLI itself names. It needs nothing new: the inner call is a child
+like any other, drawn as a `TaskItem`, with its own second line, its own report
+and its own closed Process — recursion of the one component, not a second
+design.
+
+- **The outer row counts it as one step**, and when it is the latest child the
+  outer line reads it as the inner call's row does
+  (`Task  Explore  Read the backoff policy`), not as the inner subagent's latest
+  child. The outer row says what the *outer* subagent is doing, which is waiting
+  on its own subagent; the inner row, one tap down, says what that one is doing.
+  Reaching through would put a step the outer subagent never took on its line.
+- **Each level costs one rail's indent, up to three.** The rail's `ml-2 pl-2`
+  plus its border is 18px; three levels cost about 54px, which on a 360px phone
+  still leaves the innermost rows well over 250px — room for a title and a
+  meaningful detail. From the fourth level the rail is drawn without further
+  indent, so a pathological depth narrows nothing past that — the rail and the
+  alternating ground still say where each level starts.
+
+#### When a step asks the user
+
+A subagent's call can need permission, and its card would be inside a Process
+that is closed by default — a session that looks busy while it is waiting on
+someone who cannot see why. So **a pending permission card is never inside a
+Process**: it is drawn **in the outermost Task item, between the row and the
+body**, outside the collapsible, visible whether the row is open or not. The
+outermost, because a card from a subagent's subagent would otherwise be under a
+row that is itself inside a closed Process; the top-level Task row is the one
+row in the transcript the user can always see. Being inside that item's DOM is
+also what tells a screen reader whose request it is.
+
+```
+│ ⟳  Task  Explore  Find retry handling                     47s │
+│    6 steps · Bash  rm -rf build/                              │
+│ ┌ ?  Bash   rm -rf build/                                   ┐ │  the card, as everywhere
+│ │    [Allow]  [Deny]  …                                     │ │
+│ └───────────────────────────────────────────────────────────┘ │
+```
+
+It is the ordinary card, same component and same rules
+([the permission card](#the-permission-card-takes-the-rows-place)): it takes its
+call's row as it would anywhere, and only *where it is drawn* changes while it
+waits. Under the row and not at the transcript's tail, because the Task row is
+what the card is about and parallel subagents could each be asking. More than
+one can be waiting in the same slot — parallel calls in one subagent, or a
+nested subagent's beside its parent's — and they stack in transcript order, a nested subagent's cards where that
+subagent sits. Each
+card names its own call; the Task row's second line may or may not name the
+same one (a later sibling call, or a nested subagent, can be the latest child),
+and nothing here needs it to. Once answered, a card leaves the slot: whatever it
+and its call become afterwards are drawn in the Process, in arrival order, as
+they would be in a message — the one height change here, and it happens under
+the user's own tap.
+
+The Task row keeps its spinner while a card waits, and this is the one place a
+spinner sits beside a pending card, which
+[the permission card](#the-permission-card-takes-the-rows-place) otherwise
+forbids. It is allowed here because it is not the lie that rule exists for: the
+call that is blocked is the card itself, not the row, and the row is the main
+agent's call into a subagent that is genuinely still in flight. What made the
+old spinner false was that it stood for the waiting call, possibly a screenful
+away from the card; this one stands for its parent, with the card directly under
+it saying why it is not moving.
+
+A **question card** is filed wherever the call it replaced is — in the Process,
+when that call was a subagent's. It holds no buttons
+([above](#the-permission-card-takes-the-rows-place)) and the answering happens
+elsewhere ([answering-ui.md](answering-ui.md)), so a closed Process hides
+nothing anybody is waiting on. The record itself carries no parent; it follows
+the call its position join picks, and that join cannot tell apart two
+`question_post` calls from different agents that are open at the same moment —
+the limit it always had, now visible as which Process the card lands in.
+
+#### States
+
+| Task status | Row | Process |
+|---|---|---|
+| `running` | spinner, `N steps · <latest child>` | grows; its live children spin |
+| `background` | spinner + chip, same line while children arrive | as running, for as long as children arrive |
+| `success` | muted check, `N steps` | settled |
+| `error` | red, opens its body (not when nested), `N steps` | closed; a failed call, if any, is red on its own row |
+| `interrupted` | `Ban`, `N steps · <latest child>` | settled |
+
+**A settled subagent leaves nothing spinning under it**, save a child in
+`background`, which settles by its own notification as any backgrounded call
+does. Those are the model's rules
+([tool-call-model.md](tool-call-model.md#a-subagents-own-conversation)), applied
+by the reducer
+([code/frontend-state.md](code/frontend-state.md#a-subagents-children)); the
+renderer infers nothing.
+
+#### What is not filed
+
+- **Records of transcripts recorded before children were attributed** carry
+  nothing to file them by, and stay where they are. They read exactly as before.
+- **A child whose call is not in the loaded transcript** — the page boundary fell
+  between a subagent call and its work — has no row to go under, and is drawn
+  flat where it arrived, as old transcripts are, rather than under a stand-in
+  row naming a call the client cannot show. When the page holding the call
+  loads, the flat children stay where they are, by the rule a fetch already
+  follows ([code/frontend-state.md](code/frontend-state.md#a-fetch-filed-under-the-call-it-reads)):
+  a row is never taken away from under the reader. The call's row still counts
+  them — `N` counts every loaded child with its id, filed or not, because a
+  count that silently shrank across a page boundary would understate the work —
+  and its Process ends with one muted line saying how many are further down,
+  where they loaded first. While any are flat, the subagent's later work goes
+  flat after them rather than being filed above words that came first — so the
+  flat ones are the newest, and the row's latest child is read from them.
 
 ## Width and pointer
 
@@ -837,6 +1228,10 @@ decisions, and reachability is a CSS variant
   request, in the body. A fetched line is exposed even on a still-running row,
   because that text is standing still — the flag follows the text, not the run.
 - The `background` chip is real text, so it is read as part of the row.
+- A subagent's Process is a `role="group"` named for the subagent, and a pending
+  permission card it raised sits inside the Task item's own DOM, so both say
+  whose they are without the visual cues
+  ([a subagent's own work](#telling-the-subagents-words-from-the-main-agents)).
 
 ## What a reviewer should check
 
@@ -881,12 +1276,33 @@ decisions, and reachability is a CSS variant
     `TaskOutput` with the task id in mono. Then page backwards until the origin
     row loads: that row **stays where it is**.
 13. A backgrounded subagent after its notification: the summary is under
-    *Outcome · after the turn*, not passed off as the subagent's report, and the
-    report area says that a backgrounded subagent's report does not come back
-    here. A fetch of it is readable in the same body, inside its own scroll box.
+    *Outcome · after the turn*, not passed off as what the call returned, with
+    no empty-report sentence above it, and not drawn again at the end of the
+    Process. A fetch of it is readable in the same body, inside its own scroll box.
 14. Reload the page on any of the above: every fetched block is still there and
     the row's second line is present from the first frame — a fetch is persisted,
     unlike the activity line.
+15. A subagent at work, collapsed: `N steps · <latest child>`, the count going
+    up with each tool call and the second half changing as it works — its text
+    as prose, its tool calls as their own row would word them. None of its text
+    or rows anywhere in the main transcript, as long as the spawning call is
+    loaded ([what is not filed](#what-is-not-filed)).
+16. Two subagents spawned together: each row counts only its own steps. Let the
+    upper one finish first: its line becomes `N steps` **without the row
+    changing height**, while the lower one keeps moving.
+17. Open the finished one: report, then `Process · N steps` **closed**, then
+    `Prompt` closed. Open Process: the subagent's text in small secondary type on
+    a rail, its tool rows exactly as main-transcript rows, nothing scrolling
+    inside the Process itself, and the report **not** repeated at its end.
+    Reload: the same row, the same count.
+18. A subagent step that needs permission, with the Task row collapsed: the card
+    is visible directly under the Task row, not hidden in the closed Process —
+    and for a subagent's subagent, under the top-level Task row. Approve it: the
+    card leaves that slot and the step runs inside the Process.
+19. Interrupt a subagent mid-run: `Ban`, the line frozen on its latest child,
+    and no spinner left anywhere inside its Process.
+20. A transcript recorded before this change: subagent rows and their work read
+    exactly as they did, with no `0 steps` anywhere.
 
 ## Out of scope
 
@@ -894,7 +1310,6 @@ decisions, and reachability is a CSS variant
   navigation, and it is a good one, but Pockode's row already owns a body with a
   60vh scroller; adding a second surface for the same content would mean deciding
   which of the two any given tool goes to.
-- **Nesting a subagent's conversation under its call** — as in the model doc.
 - **Per-call token cost.** Usage has an owner
   ([usage-display-ui.md](usage-display-ui.md)) and a row is not it.
 - **Re-theming.** Every colour here is an existing `th-` token; no new one is

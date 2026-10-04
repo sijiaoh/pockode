@@ -2310,11 +2310,13 @@ describe("ChatPanel", () => {
 
 			// The turn it failed to reach is untouched and still running.
 			act(() => {
-				mockState.onNotification?.({ type: "text", content: " — carrying on" });
+				mockState.onNotification?.({ type: "text", content: "Carrying on." });
 			});
-			expect(
-				screen.getByText("Working on it — carrying on"),
-			).toBeInTheDocument();
+			expect(screen.getByText("Carrying on.")).toBeInTheDocument();
+			const after = document.body.textContent ?? "";
+			expect(after.indexOf("Carrying on.")).toBeLessThan(
+				after.indexOf("Also look at X"),
+			);
 		});
 
 		// The other reason a mid-turn send finds no placeholder to fail in, and the
@@ -2416,9 +2418,9 @@ describe("ChatPanel", () => {
 			// The reply carries on in the bubble it was already in, above the new
 			// message, and the receipt goes when the turn ends.
 			act(() => {
-				mockState.onNotification?.({ type: "text", content: " — and X" });
+				mockState.onNotification?.({ type: "text", content: "And X." });
 			});
-			expect(screen.getByText("Working on it — and X")).toBeInTheDocument();
+			expect(screen.getByText("And X.")).toBeInTheDocument();
 
 			act(() => {
 				mockState.onNotification?.({ type: "done" });
@@ -2475,7 +2477,7 @@ describe("ChatPanel", () => {
 	});
 
 	describe("receiving messages", () => {
-		it("accumulates streaming text into assistant message", async () => {
+		it("adds each text message to the assistant message", async () => {
 			const user = userEvent.setup();
 			render(<ChatPanel {...defaultProps} />);
 			await waitForHistoryLoad();
@@ -2487,15 +2489,16 @@ describe("ChatPanel", () => {
 			act(() => {
 				mockState.onNotification?.({
 					type: "text",
-					content: "Hello ",
+					content: "Hello.",
 				});
 				mockState.onNotification?.({
 					type: "text",
-					content: "there!",
+					content: "There!",
 				});
 			});
 
-			expect(screen.getByText("Hello there!")).toBeInTheDocument();
+			expect(screen.getByText("Hello.")).toBeInTheDocument();
+			expect(screen.getByText("There!")).toBeInTheDocument();
 		});
 
 		it("displays tool calls with results", async () => {

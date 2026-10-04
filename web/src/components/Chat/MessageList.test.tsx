@@ -7,7 +7,7 @@ import {
 	type ScrollBox,
 	stubScrollBox,
 } from "../../test/scrollBox";
-import type { Message } from "../../types/message";
+import type { ContentPart, Message } from "../../types/message";
 import MessageList, { type MessageListHandle } from "./MessageList";
 
 vi.mock("../../lib/wsStore", () => ({
@@ -1477,5 +1477,53 @@ describe("the scroll button's new-content dot", () => {
 			screen.getByRole("button", { name: "Scroll to bottom" }),
 		).toBeInTheDocument();
 		expect(dot()).toBeNull();
+	});
+});
+
+// Children that loaded flat, before their call did, stay where they are; the
+// call's row in another bubble still counts them (docs/tool-call-ui.md#what-is-not-filed).
+describe("a subagent's unfiled children", () => {
+	it("are counted by their call's row", () => {
+		const message = (id: string, parts: ContentPart[]): Message => ({
+			id,
+			role: "assistant",
+			status: "complete",
+			createdAt: new Date(),
+			parts,
+		});
+		const read = (id: string, parentToolUseId?: string): ContentPart => ({
+			type: "tool_call",
+			tool: {
+				id,
+				name: "Read",
+				input: { file_path: "/a.go" },
+				status: "success",
+			},
+			...(parentToolUseId ? { parentToolUseId } : {}),
+		});
+		render(
+			<MessageList
+				sessionId="session-1"
+				messages={[
+					message("m1", [
+						{
+							type: "tool_call",
+							tool: {
+								id: "t1",
+								name: "Agent",
+								input: { description: "find usages" },
+								status: "success",
+								result: "done",
+								children: [read("c1")],
+							},
+						},
+					]),
+					message("m2", [read("c2", "t1"), read("c3", "t1")]),
+				]}
+			/>,
+		);
+		expect(
+			screen.getByRole("button", { name: /find usages/ }),
+		).toHaveAccessibleName(/3 steps/);
 	});
 });

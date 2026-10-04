@@ -83,7 +83,7 @@ function Chip({ children }: { children: string }) {
  * a leading ellipsis (`direction: rtl` reorders punctuation), which is why this
  * is two spans rather than one rule.
  */
-function Detail({
+export function Detail({
 	detail,
 	detailTail,
 	mono,
@@ -185,6 +185,11 @@ interface Props {
 	/** The right-hand figure, when the row has one. */
 	meta?: ReactNode;
 	secondLine?: ToolSecondLine | null;
+	/**
+	 * A second line with structure of its own rather than one string — a
+	 * subagent's step count beside what it is doing. Wins over `secondLine`.
+	 */
+	richSecondLine?: { content: ReactNode; live: boolean } | null;
 	/** Failure is the only saturated colour in a stack of rows. */
 	error?: boolean;
 	/**
@@ -208,6 +213,7 @@ export function ToolRow({
 	detailMono,
 	meta,
 	secondLine,
+	richSecondLine,
 	error,
 	toggleable = true,
 }: Props) {
@@ -243,17 +249,26 @@ export function ToolRow({
 					/>
 					{meta}
 				</span>
-				{secondLine && (
+				{richSecondLine ? (
 					<span
-						// Hidden from the accessible name while it moves, exposed once
-						// it has settled: the spinner already says the call is running,
-						// and a settled background outcome is the answer the user was
-						// waiting for.
-						aria-hidden={secondLine.live}
-						className={`block truncate text-th-text-muted ${secondLine.mono ? "font-mono" : ""}`}
+						aria-hidden={richSecondLine.live}
+						className="flex min-w-0 items-baseline gap-1.5 text-th-text-muted"
 					>
-						{secondLine.text}
+						{richSecondLine.content}
 					</span>
+				) : (
+					secondLine && (
+						<span
+							// Hidden from the accessible name while it moves, exposed once
+							// it has settled: the spinner already says the call is running,
+							// and a settled background outcome is the answer the user was
+							// waiting for.
+							aria-hidden={secondLine.live}
+							className={`block truncate text-th-text-muted ${secondLine.mono ? "font-mono" : ""}`}
+						>
+							{secondLine.text}
+						</span>
+					)
 				)}
 			</span>
 		</button>
