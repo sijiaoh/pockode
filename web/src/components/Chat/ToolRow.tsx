@@ -209,9 +209,38 @@ interface RowButtonProps {
 	toggleable?: boolean;
 	/** The id of the body the row opens, when the body is a sibling it names. */
 	controls?: string;
+	/** The accessible name, for a row whose visible words do not read as one. */
+	label?: string;
 	/** The text column: line 1 and, when there is one, the second line. */
 	children: ReactNode;
 }
+
+// The row's box, a button or not: one line sits in the middle of the touch
+// floor, two fill it.
+const ROW_BOX =
+	"flex min-h-9 w-full flex-col justify-center px-2 py-1.5 text-left pointer-coarse:min-h-11 sm:px-2.5";
+
+/** The two columns inside the box; see the file comment. */
+function RowColumns({
+	lead,
+	glyph,
+	children,
+}: {
+	lead: ReactNode;
+	glyph: ReactNode;
+	children: ReactNode;
+}) {
+	return (
+		<span className="flex w-full items-start gap-1.5">
+			{lead}
+			{glyph}
+			<span className="min-w-0 flex-1">{children}</span>
+		</span>
+	);
+}
+
+// A blank keeps the rows aligned with the ones that do open.
+const NO_CHEVRON = <span className="mt-0.5 size-3 shrink-0" />;
 
 /**
  * The box every row in a list is drawn in — a tool row, and the summary a run
@@ -225,6 +254,7 @@ export function RowButton({
 	error,
 	toggleable = true,
 	controls,
+	label,
 	children,
 }: RowButtonProps) {
 	return (
@@ -233,6 +263,7 @@ export function RowButton({
 			onClick={onToggle}
 			aria-expanded={toggleable ? expanded : undefined}
 			aria-controls={toggleable ? controls : undefined}
+			aria-label={label}
 			// The row is the only tap target on its line, so it takes the touch
 			// floor directly rather than wearing an overlay: there is room to grow
 			// the box, and a real box is always simpler.
@@ -245,21 +276,44 @@ export function RowButton({
 			// redden, and the body under it stays neutral, since a failed subagent
 			// opens a whole report there. The ring is inset because the list clips
 			// whatever is drawn outside a row.
-			className={`flex min-h-9 w-full flex-col justify-center px-2 py-1.5 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-th-accent focus-visible:ring-inset pointer-coarse:min-h-11 sm:px-2.5 ${error ? "bg-th-error/10 hover:bg-th-error/15" : "hover:bg-th-overlay-hover"}`}
+			className={`${ROW_BOX} focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-th-accent focus-visible:ring-inset ${error ? "bg-th-error/10 hover:bg-th-error/15" : "hover:bg-th-overlay-hover"}`}
 		>
-			<span className="flex w-full items-start gap-1.5">
-				{toggleable ? (
-					<ChevronRight
-						className={`mt-0.5 size-3 shrink-0 text-th-text-muted transition-transform ${expanded ? "rotate-90" : ""}`}
-					/>
-				) : (
-					// A blank keeps the rows aligned with the ones that do open.
-					<span className="mt-0.5 size-3 shrink-0" />
-				)}
-				{glyph}
-				<span className="min-w-0 flex-1">{children}</span>
-			</span>
+			<RowColumns
+				lead={
+					toggleable ? (
+						<ChevronRight
+							className={`mt-0.5 size-3 shrink-0 text-th-text-muted transition-transform ${expanded ? "rotate-90" : ""}`}
+						/>
+					) : (
+						NO_CHEVRON
+					)
+				}
+				glyph={glyph}
+			>
+				{children}
+			</RowColumns>
 		</button>
+	);
+}
+
+/**
+ * A row with nothing under it and nothing to do: `RowButton`'s box and
+ * columns, but not a button, since a tap that can only learn there is nothing
+ * here is a tap spent for nothing.
+ */
+export function StaticRow({
+	glyph,
+	children,
+}: {
+	glyph: ReactNode;
+	children: ReactNode;
+}) {
+	return (
+		<div className={ROW_BOX}>
+			<RowColumns lead={NO_CHEVRON} glyph={glyph}>
+				{children}
+			</RowColumns>
+		</div>
 	);
 }
 

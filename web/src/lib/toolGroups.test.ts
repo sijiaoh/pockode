@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type {
 	ContentPart,
 	PermissionStatus,
+	Thought,
 	ToolRun,
 	ToolRunStatus,
 } from "../types/message";
@@ -37,6 +38,22 @@ const card = (
 		},
 		status,
 	} as ContentPart,
+});
+
+let thinkingId = 0;
+const thinking = (...durations: (number | undefined)[]): Item => ({
+	part: {
+		type: "thinking",
+		id: `thinking-${++thinkingId}`,
+		thoughts: durations.map(
+			(durationMs): Thought => ({
+				content: "Hmm.",
+				fullReasoning: "",
+				redacted: false,
+				...(durationMs !== undefined ? { durationMs } : {}),
+			}),
+		),
+	},
 });
 
 function id(item: Item): string {
@@ -230,7 +247,75 @@ describe("rowEntries", () => {
 		expect(summary?.current).toBeUndefined();
 	});
 
+	// Codex reasons before nearly every call: a thinking that counted would
+	// fold a lone call into a summary hiding its own title.
+	it("does not count a thinking toward the minimum or the steps", () => {
+		expect(shape(rowEntries([thinking(1000), bash("a")]))).toEqual([
+			"thinking",
+			"a",
+		]);
+		expect(
+			summaryOf([thinking(1000), bash("a"), thinking(1000), bash("b")])?.steps,
+		).toBe(2);
+	});
+
+	it("folds a thinking among the calls without ending the run", () => {
+		expect(
+			shape(
+				rowEntries([
+					thinking(2000),
+					bash("a"),
+					thinking(3000),
+					bash("b", "error"),
+					bash("c"),
+				]),
+			),
+		).toEqual([
+			"[Ran 2 commands · Thought for 5s]",
+			"thinking↓",
+			"a↓",
+			"thinking↓",
+			"b",
+			"c↓",
+		]);
+	});
+
+	it("gives each thinking a call of its own", () => {
+		const calls = rowEntries([thinking(1), bash("a"), thinking(1)]).flatMap(
+			(entry) => (entry.kind === "item" ? [entry.call] : []),
+		);
+		expect(new Set(calls).size).toBe(3);
+	});
+
 	describe("the summary line", () => {
+		it("puts the folded thinking after the verbs and before interruptions", () => {
+			expect(
+				summaryOf([
+					thinking(61_000, 19_000),
+					bash("a", "interrupted"),
+					call("b", "mcp__srv__do"),
+				])?.segments,
+			).toEqual(["Used 1 tool", "Thought for 1m 20s", "1 interrupted"]);
+		});
+
+		it("says only Thought when a folded thinking was not measured", () => {
+			expect(
+				summaryOf([thinking(1000), bash("a"), thinking(undefined), bash("b")])
+					?.segments,
+			).toEqual(["Ran 2 commands", "Thought"]);
+		});
+
+		it("leaves the thinking out while nothing has settled", () => {
+			expect(
+				summaryOf([
+					thinking(1000),
+					card("a", "pending"),
+					bash("b", "running"),
+					bash("c", "running"),
+				])?.segments,
+			).toEqual([]);
+		});
+
 		it("leaves failed and interrupted calls out of the verbs", () => {
 			const summary = summaryOf([
 				call("a", "Edit", { file_path: "/x" }),

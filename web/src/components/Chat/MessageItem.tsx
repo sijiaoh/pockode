@@ -50,6 +50,7 @@ import QuestionRecordItem from "./QuestionRecordItem";
 import { useRowExpanded } from "./rowExpansionContext";
 import { anchorCandidateProps } from "./scrollAnchor";
 import TaskItem from "./TaskItem";
+import ThinkingItem from "./ThinkingItem";
 import ToolCallItem from "./ToolCallItem";
 import { invocationView, ToolInvocation } from "./ToolInvocation";
 import { PartBlocks } from "./ToolList";
@@ -828,6 +829,9 @@ function ContentPartItem(props: ContentPartItemProps) {
 	}
 	if (part.type === "command_output") {
 		return <CommandOutputItem content={part.content} />;
+	}
+	if (part.type === "thinking") {
+		return <ThinkingItem thoughts={part.thoughts} />;
 	}
 	// A subagent call is a tool run like any other; only its body differs, so
 	// this is a renderer chosen by category rather than a second model.

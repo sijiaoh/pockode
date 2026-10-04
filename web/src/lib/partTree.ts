@@ -141,8 +141,9 @@ export function collectPartsDeep(
 /**
  * A part's React key within its list: one part per call, because a
  * permission card takes its call's place and a resent `tool_call` updates the
- * row it names rather than adding one — so a row keys on its tool use id and a
- * card on its request id, and only parts with neither fall back to position.
+ * row it names rather than adding one — so a row keys on its tool use id, a
+ * card on its request id, a thinking on the id the reducer gave it, and only
+ * parts with none of these fall back to position.
  */
 export function partKey(part: ContentPart, index: number): string {
 	switch (part.type) {
@@ -154,18 +155,24 @@ export function partKey(part: ContentPart, index: number): string {
 			return `${part.record.requestId}-${index}`;
 		case "tool_call":
 			return part.tool.id;
+		case "thinking":
+			return part.id;
 		default:
 			return `${part.type}-${index}`;
 	}
 }
 
 /**
- * Whether a part is drawn as a row: a tool call (a subagent call included) or
- * a permission card, whatever its state. Everything else — text, a question
- * card, a notice — is drawn as itself.
+ * Whether a part is drawn as a row: a tool call (a subagent call included), a
+ * permission card whatever its state, or a thinking. Everything else — text, a
+ * question card, a notice — is drawn as itself.
  */
 export function isRowPart(part: ContentPart): boolean {
-	return part.type === "tool_call" || part.type === "permission_request";
+	return (
+		part.type === "tool_call" ||
+		part.type === "permission_request" ||
+		part.type === "thinking"
+	);
 }
 
 export type PartBlock<T> =

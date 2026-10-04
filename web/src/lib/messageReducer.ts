@@ -14,6 +14,7 @@ import type {
 	ServerNotification,
 	SessionTurn,
 	SystemMessageMeta,
+	Thought,
 	ToolFetch,
 	ToolRun,
 	UserMessage,
@@ -31,6 +32,7 @@ import {
 	mapPartsDeep,
 	type PartPath,
 } from "./partTree";
+import { isDrawnThought } from "./thinking";
 
 // Legacy history recorded system messages with origin "work" before the
 // concept was renamed to "system". Map the old value so old sessions still
@@ -171,11 +173,8 @@ export type NormalizedEvent =
 	| {
 			/** A finished stretch of thinking; see the wire record. */
 			type: "thinking";
-			content: string;
-			fullReasoning: string;
-			redacted: boolean;
-			/** Absent when nothing measured it — never zero. */
-			durationMs?: number;
+			/** `durationMs` is absent when nothing measured it — never zero. */
+			thought: Thought;
 			parentToolUseId?: string;
 	  }
 	| {
@@ -338,13 +337,14 @@ export function normalizeEvent(
 		case "thinking":
 			return {
 				type: "thinking",
-				content: (record.content as string) ?? "",
-				fullReasoning: (record.full_reasoning as string) ?? "",
-				redacted: record.redacted === true,
-				durationMs:
-					typeof record.duration_ms === "number" && record.duration_ms > 0
-						? record.duration_ms
-						: undefined,
+				thought: {
+					content: (record.content as string) ?? "",
+					fullReasoning: (record.full_reasoning as string) ?? "",
+					redacted: record.redacted === true,
+					...(typeof record.duration_ms === "number" && record.duration_ms > 0
+						? { durationMs: record.duration_ms }
+						: {}),
+				},
 				parentToolUseId: record.parent_tool_use_id as string | undefined,
 			};
 		case "thinking_delta":
@@ -751,6 +751,32 @@ export function applyEventToParts(
 				return updated;
 			});
 		}
+		case "thinking": {
+			const { thought } = event;
+			// Joined like text, and only with the same speaker's: consecutive
+			// records are one pause the engine happened to split, and one row.
+			const lastPart = parts[parts.length - 1];
+			if (
+				lastPart?.type === "thinking" &&
+				lastPart.parentToolUseId === event.parentToolUseId
+			) {
+				return [
+					...parts.slice(0, -1),
+					{ ...lastPart, thoughts: [...lastPart.thoughts, thought] },
+				];
+			}
+			return [
+				...parts,
+				{
+					type: "thinking",
+					id: generateUUID(),
+					thoughts: [thought],
+					...(event.parentToolUseId
+						? { parentToolUseId: event.parentToolUseId }
+						: {}),
+				},
+			];
+		}
 		case "system":
 			return [...parts, { type: "system", content: event.content }];
 		case "warning":
@@ -922,10 +948,16 @@ export function applyServerEvent(
 		});
 	}
 
-	// TODO: Remove once the thinking row and the tail line draw these
-	// (docs/turn-progress-ui.md). Until then they are dropped here, before an
-	// event the transcript does not place can open an empty reply.
-	if (event.type === "thinking" || event.type === "thinking_delta") {
+	// TODO: Remove once the tail line draws it (docs/turn-progress-ui.md#2-the-tail-line).
+	// Until then it is dropped here, before an event the transcript does not
+	// place can open an empty reply.
+	if (event.type === "thinking_delta") {
+		return messages;
+	}
+
+	// A thinking that would draw nothing is set aside before it can open a
+	// reply, or join a run and cost its sum the number.
+	if (event.type === "thinking" && !isDrawnThought(event.thought)) {
 		return messages;
 	}
 
@@ -1015,7 +1047,9 @@ function applyEvent(
 	// they are the subagent's, and say nothing about the turn. A parent that is
 	// not loaded leaves them to fall through and sit flat where they arrived.
 	if (
-		(event.type === "text" || event.type === "tool_call") &&
+		(event.type === "text" ||
+			event.type === "tool_call" ||
+			event.type === "thinking") &&
 		event.parentToolUseId
 	) {
 		const filed = fileUnderParent(
@@ -2365,16 +2399,32 @@ function joinTurnParts(
 	// of the boundary come back as one part, a paragraph apart, as they would
 	// have been had the page not been split there.
 	const first = after[0];
-	return first?.type === "text"
-		? [
-				...applyEventToParts(before, {
-					type: "text",
-					content: first.content,
-					parentToolUseId: first.parentToolUseId,
-				}),
-				...after.slice(1),
-			]
-		: [...before, ...after];
+	if (first?.type === "text") {
+		return [
+			...applyEventToParts(before, {
+				type: "text",
+				content: first.content,
+				parentToolUseId: first.parentToolUseId,
+			}),
+			...after.slice(1),
+		];
+	}
+	// The joined row keeps the newer half's id: that half was on screen first,
+	// and a new key would remount it and close what the user had opened, as
+	// `prependHistoryPage` keeps the bubble's own id for the same reason.
+	const last = before.at(-1);
+	if (
+		first?.type === "thinking" &&
+		last?.type === "thinking" &&
+		last.parentToolUseId === first.parentToolUseId
+	) {
+		return [
+			...before.slice(0, -1),
+			{ ...first, thoughts: [...last.thoughts, ...first.thoughts] },
+			...after.slice(1),
+		];
+	}
+	return [...before, ...after];
 }
 
 /** What a page could not know had happened to it after it was written. */

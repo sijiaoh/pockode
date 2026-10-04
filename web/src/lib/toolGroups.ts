@@ -1,5 +1,6 @@
-import type { ContentPart, ToolRun } from "../types/message";
+import type { ContentPart, Thought, ToolRun } from "../types/message";
 import { stepId } from "./subagentRun";
+import { thoughtLabel } from "./thinking";
 import { isTaskTool, TOOL_VERBS, type ToolVerb, toolVerb } from "./toolSummary";
 
 /**
@@ -22,7 +23,10 @@ export interface GroupSummary {
 	 * then the machine is waiting for them, not busy.
 	 */
 	current?: ToolRun;
-	/** What the settled calls did, `Edited 2 files`, in consequence order. */
+	/**
+	 * What the settled calls did, `Edited 2 files`, in consequence order, and
+	 * then how long the folded thinking took.
+	 */
 	segments: string[];
 	/** How many folded calls were cut short. */
 	interrupted: number;
@@ -33,7 +37,10 @@ export type RowEntry<T> =
 	| {
 			kind: "item";
 			item: T;
-			/** The call this part belongs to; a card and its row share one. */
+			/**
+			 * The call this part belongs to; a card and its row share one. A
+			 * thinking, which is no call, has one of its own.
+			 */
 			call: string;
 			/**
 			 * The group this part folds into, absent for a part that never folds:
@@ -100,6 +107,7 @@ const VERB_WORDING: Record<ToolVerb, (count: number) => string> = {
 function summarize<T>(
 	members: Member<T>[],
 	folding: Member<T>[],
+	thoughts: Thought[],
 ): GroupSummary {
 	// Files are counted once however often they were touched; everything else
 	// counts calls. A call naming no file stands for one of its own.
@@ -123,6 +131,12 @@ function summarize<T>(
 		const count = counted.get(verb)?.size;
 		return count ? [VERB_WORDING[verb](count)] : [];
 	});
+	// Least consequential of all, so it is the end a narrow screen cuts; and
+	// never alone, since a summary of nothing but a thought would read as a
+	// settled group while every call in it still waits on the user.
+	if (thoughts.length > 0 && (segments.length > 0 || interrupted > 0)) {
+		segments.push(thoughtLabel(thoughts));
+	}
 	if (interrupted > 0) segments.push(`${interrupted} interrupted`);
 	return {
 		steps: members.length,
@@ -149,29 +163,43 @@ function membersOf<T extends { part: ContentPart }>(items: T[]): Member<T>[] {
 	return [...byCall.values()];
 }
 
+/**
+ * A thinking folds with its group but is no call: it never breaks a run, and
+ * counts toward neither the minimum nor the steps — codex reasons before
+ * nearly every call, and counting that would fold a lone call into a summary
+ * that hides its own title (docs/turn-progress-ui.md#12-where-it-goes-and-groups).
+ */
 function groupEntries<T extends { part: ContentPart }>(
 	items: T[],
 ): RowEntry<T>[] {
-	const members = membersOf(items);
-	const callOf = new Map<T, Member<T>>();
+	const members = membersOf(
+		items.filter((item) => item.part.type !== "thinking"),
+	);
+	const callOf = new Map<T, string>();
 	for (const member of members) {
-		for (const item of member.items) callOf.set(item, member);
+		for (const item of member.items) callOf.set(item, member.call);
+	}
+	const thoughts: Thought[] = [];
+	for (const item of items) {
+		if (item.part.type !== "thinking") continue;
+		callOf.set(item, `thinking:${item.part.id}`);
+		thoughts.push(...item.part.thoughts);
 	}
 	const folding = members.filter((member) => !isPinned(member));
 	if (folding.length < MIN_FOLDABLE) {
 		return items.map((item) => ({
 			kind: "item",
 			item,
-			call: callOf.get(item)?.call ?? "",
+			call: callOf.get(item) ?? "",
 		}));
 	}
 	const key = `group:${members[0].call}`;
 	const foldingCalls = new Set(folding.map((member) => member.call));
 	return [
-		{ kind: "summary", key, summary: summarize(members, folding) },
+		{ kind: "summary", key, summary: summarize(members, folding, thoughts) },
 		...items.map((item): RowEntry<T> => {
-			const call = callOf.get(item)?.call ?? "";
-			return foldingCalls.has(call)
+			const call = callOf.get(item) ?? "";
+			return foldingCalls.has(call) || item.part.type === "thinking"
 				? { kind: "item", item, call, group: key }
 				: { kind: "item", item, call };
 		}),

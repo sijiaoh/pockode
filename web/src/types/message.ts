@@ -267,6 +267,17 @@ export interface QuestionRecord {
 	askedAt?: string;
 }
 
+/** One `thinking` record, as a thinking row draws it. */
+export interface Thought {
+	/** Claude's thinking, or Codex's reasoning summary; Markdown. */
+	content: string;
+	/** Codex's raw reasoning, drawn under its own label beside `content`. */
+	fullReasoning: string;
+	redacted: boolean;
+	/** Measured by the server; absent when nothing measured it. */
+	durationMs?: number;
+}
+
 export type ContentPart =
 	| {
 			type: "text";
@@ -281,6 +292,23 @@ export type ContentPart =
 	| {
 			type: "tool_call";
 			tool: ToolRun;
+			/** See the `text` part. */
+			parentToolUseId?: string;
+	  }
+	| {
+			/**
+			 * A run of consecutive `thinking` records, drawn as one row
+			 * (docs/turn-progress-ui.md#11-what-it-is): the engine splitting one
+			 * pause into two blocks is nothing the reader can use. Never empty.
+			 */
+			type: "thinking";
+			/**
+			 * Minted by the reducer, since no record names one: a row's key and
+			 * its open body must survive the parts before it shifting, which a
+			 * history page joining from above does.
+			 */
+			id: string;
+			thoughts: Thought[];
 			/** See the `text` part. */
 			parentToolUseId?: string;
 	  }
