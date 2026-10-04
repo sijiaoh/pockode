@@ -270,12 +270,13 @@ function SessionHeader({
 									group={`${groupId}-mode`}
 									value={modeKey}
 									label={
-										<span
-											className={`flex items-center gap-1.5 ${
-												modeKey === "yolo" ? "text-th-warning" : ""
-											}`}
-										>
-											<info.icon className="size-3.5" aria-hidden="true" />
+										<span className="flex items-center gap-1.5">
+											<info.icon
+												className={`size-3.5 ${
+													modeKey === "yolo" ? "text-th-warning" : ""
+												}`}
+												aria-hidden="true"
+											/>
 											{info.label}
 										</span>
 									}
@@ -352,12 +353,13 @@ function SessionHeader({
 								    decides whether the next turn asks before it acts. */}
 									<span className="min-w-0 truncate">{engineText}</span>
 									<span className="shrink-0 px-1">·</span>
-									<span
-										className={`flex shrink-0 items-center gap-0.5 ${
-											isYolo ? "text-th-warning" : ""
-										}`}
-									>
-										{isYolo && <Zap className="size-3" aria-hidden="true" />}
+									<span className="flex shrink-0 items-center gap-0.5">
+										{isYolo && (
+											<Zap
+												className="size-3 text-th-warning"
+												aria-hidden="true"
+											/>
+										)}
 										{modeInfo.label}
 									</span>
 								</>
