@@ -4,6 +4,7 @@ import {
 	type FileReference,
 	partitionFileBlocks,
 } from "../../lib/contentBlocks";
+import { proposedChange } from "../../lib/proposedChange";
 import { toolBodyLayout } from "../../lib/toolBodyLayout";
 import { lastOutputLines, toolSecondLine } from "../../lib/toolRun";
 import { toolSummary } from "../../lib/toolSummary";
@@ -12,7 +13,7 @@ import type { ToolRun } from "../../types/message";
 import { omittedLabel } from "../../utils/attachment";
 import { CollapsibleBody, useEverExpanded } from "../ui";
 import AttachmentStrip from "./AttachmentStrip";
-import { proposedChange, proposedChangeHeader } from "./ProposedChange";
+import { proposedChangeHeader } from "./ProposedChange";
 import { useRowExpanded } from "./rowExpansionContext";
 import { PathLine, ToolInvocation } from "./ToolInvocation";
 import { ToolOutcomeSections } from "./ToolOutcomeSections";

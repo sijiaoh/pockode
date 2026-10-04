@@ -14,8 +14,10 @@ through `ToolRow.tsx`, which is where the grammar below lives — plus
 `ToolInvocation.tsx` for the invocation a row and a card both show,
 `ToolResultDisplay.tsx` for the result, `ProposedChange.tsx` for the file
 change a result and a card both draw, `ToolOutcomeSections.tsx` for the
-blocks the two tool renderers share, and `ToolSection.tsx` for the labelled,
-clamped section every one of those blocks is drawn as, all under
+blocks the two tool renderers share, `ToolSection.tsx` for the labelled,
+clamped section every one of those blocks is drawn as, and
+`TurnChangesCard.tsx` for [the files a turn changed](#the-turns-changes), all
+under
 `web/src/components/Chat/`. The transcript around them
 is [agent-chat.md](agent-chat.md); the width ladder and the pointer gates are
 [responsive-ui.md](responsive-ui.md) and are used here, never re-derived.
@@ -199,6 +201,172 @@ row the user opened in sight when its group forms or closes, until they close
 it themselves — the run they were watching does not vanish because the next
 call arrived. Only the user's own choice counts: a pending card opens itself,
 and folding it once it is answered and its row is back is the point.
+
+## The turn's changes
+
+The tool rows say what a turn *did*; nothing said what it *left behind*. To
+review a turn's edits the reader had to open every `Edit` row, folded into a
+summary or not, and keep count of which file they were on. So a settled turn
+that changed files ends with one more framed list, standing directly above the
+turn-end row ([agent-chat.md](agent-chat.md#the-session-screen)):
+
+```
+The sender now backs off on 503 too.
+┌──────────────────────────────────────────────┐
+│ ▤  2 files changed                  +11  −2  │  ← the header: not a button
+├──────────────────────────────────────────────┤
+│ ›  deliver.ts  src/webhooks/sender  +7  −2   │
+├──────────────────────────────────────────────┤
+│ ›  backoff.ts  src/webhooks/sender  new  +4  │
+└──────────────────────────────────────────────┘
+[⧉] [⑂] […]
+```
+
+`turnChanges` (`lib/turnChanges.ts`) derives it, a pure function of one
+assistant message's parts as they are now, like `rowEntries`;
+`Chat/TurnChangesCard.tsx` draws it, and `MessageItem` places it. What counts
+as a file change is asked of `proposedChange` (`lib/proposedChange.ts`) — the
+one reader the tool body and the permission card already use — so a tool it
+learns to read reaches the card with no list of names here.
+
+**It is the list's grammar, told apart by its header alone.** The frame,
+hairlines, `-mt-px` and `ring-inset` are [the list's](#the-list); every file
+row is the tool row's box (`RowButton`, no glyph — everything listed
+succeeded), so height, hover and the touch floor cannot differ. The header is
+the one row that is not a button, with `FileDiff` in the chevron's column so
+its text lines up with the file names — the same trick by which a group's
+summary is told from a tool row: by what it lacks, not by a new colour or fill.
+
+**Where and when.** Always last before the turn-end row — under the error,
+`Interrupted` or `Process ended` line — so it is in one place however the turn
+ended, and nowhere when nothing counted: no empty frame, no gap. It is shown
+exactly when the actions are (`!pending`), so the two replace the spinner in
+one render, at the tail where a height change pushes nothing. Not while the
+turn runs: the group summary already says `Edited N files` then, and a frame
+growing at the tail would push at the content streaming in above it. A
+cut-short turn shows it like any other — that is the turn whose leftovers most
+need reading. The one way it grows after settling is a subagent the turn left
+in the background finishing edits: they are this turn's, and they land at the
+tail, under nothing but the actions. The wrapper is a scroll anchor candidate
+like a part: with rows open it can be screens tall.
+
+**The unit is one assistant message** — what the transcript draws as a turn. A
+read point that splits a reply into two messages gives each its own card;
+those are two answers. A subagent's edits are read from its children at the
+place of the call that ran it, unattributed: the user's question is what
+changed, not who changed it.
+
+**What counts** is a call that `succeeded`. A failed or denied call changed
+nothing; one interrupted or still running may or may not have, and listing it
+would send the reader to review a change that may not exist — the summary
+row's rule. A subagent cut short keeps the edits it finished.
+
+**A row** is, left to right: the chevron, the file name — with the chip, the
+one primary-colour text on the row — the directory (`Detail`, fading out from
+the left, so two `index.ts` stay apart as `…/Chat` and `…/Files`), a chip, and
+the counts. The directory is relative to the work directory, empty at its
+root, absolute outside it. On a narrow screen the directory goes first, then
+the name truncates — never wider than 60% of the line, so a long one gives way
+sooner; the chip and counts never move. The full path is on the body's first
+line, `PathLine`, a tap away as in the tool body.
+
+- **The chip** says what the turn did to the file, from whether it existed
+  before the turn (its first change did not create it) and after (its last did
+  not delete it): `new`, `deleted` (also for one created and deleted within the
+  turn — it still has something to review), `renamed`, or `rewritten` — a Write
+  over an existing file, or a file deleted and made again (when the deleting
+  was a command this list cannot see, an edit creating a file it already
+  changed says so). A file there throughout and only edited has none. The chip
+  is the `background` chip's component; a deletion is not red, since it is a
+  result, not an error.
+- **The counts** are `+N` in `th-success` and `−N` (U+2212) in `th-error`,
+  mono and tabular — the one exception to [failure being the only saturated
+  colour](#the-rules), held to the numbers: a signed diff stat is a convention
+  read the same as the diff viewer's, and the card is not in a stack of tool
+  rows where red could read as a failed call. A side that is zero or unknown is
+  left out; there is never a `−0`.
+
+**One file changed several times is one row.** Its counts are the sum of its
+changes. Files are listed in the order the turn first touched them, and a
+rename moves a row's key to the new path without moving the row, so later
+changes join it. A rename onto a file the turn had already changed merges the
+two into one row, at the place of whichever the turn touched first, its
+changes in the order made. Paths are
+matched relative to the work directory when inside it, so two spellings of one
+path are one file; a path outside it is matched whole in a namespace of its
+own, since `/etc/hosts` split into segments reads exactly like
+`<workDir>/etc/hosts` made relative.
+
+**A tap opens the row in place**, at every width: `CollapsibleBody` →
+`ScrollableContent max-h-[60vh]` on `bg-th-bg-secondary` — the box the tool
+body [has since given up](#the-body-problems-2-and-3) for sections that clamp
+themselves; the card has not followed yet — holding `PathLine` (with *Open*
+into the Files tab, except for a deleted file or one outside the work
+directory) and then one `ProposedChange` per change, in order. Being the same
+component, each diff has the tool body's narrow gutter on a phone and follows
+the one *Wrap long lines* switch; the card offers no switch of its own, so it
+is set from a tool row or a permission card. With more than one, each is headed `1 · Edit`, `2 · Write`…; a rewriting
+Write is headed *Whole file written — what it replaced is not in this call*
+(not "the transcript": an earlier step may have written exactly what it
+replaced). A Codex call that changed several files is split, each row's diff
+holding its own file only; `CodexDiff`'s own status-and-path line half repeats
+`PathLine`, and is kept rather than given a second rendering mode. There is no
+net diff: an `Edit` carries fragments, not the file, so nothing trustworthy can
+be composed from them — the changes are shown as made, as
+[fetches](#a-fetch-reads-on-the-row-it-came-from) are, nothing merged and
+nothing dropped. Not a sheet: on a desktop `Sheet` is 448px, narrower than the
+reading column, and a reviewer moving file to file would open and close it for
+each. Rows open independently, only by the user's hand, and opening one does
+not scroll.
+
+**Many files.** Up to seven are listed. Past that the card lists five and a
+`Show N more files` row (a `RowButton` with `toggleable={false}`: once pressed
+it is gone, so it has no state to report), which lists the rest and moves focus
+to the first row it revealed rather than letting it fall to the page. Seven, not
+five, so that `Show 1 more` and `Show 2 more` never appear. The header always
+counts every file.
+
+**Line counts are read off the inputs**, with no protocol of their own:
+
+| Change | `+` | `−` |
+|---|---|---|
+| `Edit` | `diffLines` over `old_string` / `new_string`, each closed with a newline so a fragment's last line compares as a line — appending to `a` is `+1`, not a rewrite of `a` — and carriage returns set aside, so a CRLF file reads the same | same |
+| `Edit` with an empty `old_string` | the new text's lines | `0` |
+| `MultiEdit` | each edit as an `Edit`, summed | same |
+| `Write` creating the file | the content's lines, a trailing newline opening none | `0` |
+| `Write` over a file | the content's lines | unknown — the old content is not in the call |
+| Codex | the `+` / `-` lines of each file's hunks, so the count is the diff the row opens on; no hunks (an empty file, a pure rename) is `0`, an unknown change type is unknown | same |
+
+Whether a `Write` created or rewrote is only in its result's wording, measured
+on Claude Code 2.1.286: `File created successfully at: …` and `The file … has
+been updated successfully.` Any other wording — an older record, a CLI that
+rephrased it — gets no chip and only `+N`: guessing either way would put a
+false word on the card. Summing, `−` adds what is known and is left out only
+when nothing is; the header's totals are the files' sums, read the same way.
+
+What the counts do not promise, and the card does not pretend to:
+
+- **They are not `git diff --stat`.** A line one change added and a later one
+  rewrote counts twice; a `replace_all` edit counts as one replacement, since
+  how many places matched is not in the transcript; a mixed `−` is only the
+  known part.
+- **Only tool calls are seen.** `rm`, `sed -i` or `git checkout` run through
+  `Bash` change files the card cannot list; neither can `NotebookEdit`, which
+  `proposedChange` does not read yet. Hence `files changed` counts changes it
+  saw, not the state of the tree.
+
+What they do promise is to stay put: everything comes from the persisted tool
+calls and results, so a reloaded turn draws the card it ended with.
+
+**Accessibility.** The card is a `role="group"` named by its header (`2 files
+changed`) — not a region: one landmark per turn would drown the page's own. The
+visible counts are `aria-hidden` beside an `sr-only` *"11 lines added, 2
+removed"*. A file row hides its whole visible line and carries one `sr-only`
+sentence, so its name reads as one: *"backoff.ts in src/webhooks/sender, new
+file, 4 lines added"*, or *"config.ts in src, rewritten, 30 lines written"*
+when nothing removed is known. It has `aria-expanded` and `aria-controls`
+naming its body. Colour never carries anything alone: the counts are signed,
+the chip is a word.
 
 ## The row
 
@@ -1643,9 +1811,26 @@ decisions, and reachability is a CSS variant
     scrolls sideways on its own while the text around it stays put; the code
     block's language and copy button sit in a bar above the code, and the code
     scrolls under it without carrying the bar along.
+33. A turn that edits two files and creates one: when it settles, the card
+    and the actions replace the spinner together — `3 files changed`, the
+    created file `new` with no `−`. While it ran there was no card. Interrupt
+    or fail one like it: the card is in the same place, under the status line,
+    listing only what succeeded; a turn with no successful change has no card
+    and no gap.
+34. On a 375px phone, two `index.ts` in deep directories: one line each, told
+    apart by their last directory, chip and counts whole; the full path in the
+    body. The same file edited three times is one row with the summed counts,
+    opening on `1 · Edit` to `3 · Edit`; edited once, no heading. A `Write`
+    over a file: `rewritten`, `+N` only, and the line saying so above its diff.
+35. Nine changed files: five rows and `Show 4 more files`; press it and focus
+    lands on the sixth row. Seven: all listed. Reload: the same card.
 
 ## Out of scope
 
+- **The turn's changes, live or reconciled.** No card while the turn runs, no
+  net diff, no counts checked against git, no `Bash` side effects, no jump from
+  a card row back to its tool call, and nothing in `web-cluster`
+  ([the turn's changes](#the-turns-changes)).
 - **A full-screen tool detail route.** happy's answer to long content is
   navigation, and it is a good one, but Pockode's row already owns a body that
   opens long content in place; adding a route for the same content would mean

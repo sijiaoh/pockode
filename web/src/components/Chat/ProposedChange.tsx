@@ -1,142 +1,21 @@
-import { createPatch } from "diff";
 import { WrapText } from "lucide-react";
 import type { ReactNode } from "react";
-import {
-	type CodexChangeView,
-	parseCodexChanges,
-} from "../../lib/codexChanges";
+import type { CodexChangeView } from "../../lib/codexChanges";
 import {
 	diffSettingsActions,
 	useDiffSettingsStore,
 } from "../../lib/diffSettingsStore";
 import { diffStat } from "../../lib/diffStat";
+import type { ProposedChangeData } from "../../lib/proposedChange";
 import { useWSStore } from "../../lib/wsStore";
 import { GIT_STATUS_INFO } from "../../types/git";
 import { formatFilePath } from "../../utils/path";
 import { DiffViewer, FileContentDisplay } from "../ui";
 
-interface EditInput {
-	file_path: string;
-	old_string: string;
-	new_string: string;
-	replace_all?: boolean;
-}
-
-interface WriteInput {
-	file_path: string;
-	content: string;
-}
-
-interface MultiEditInput {
-	file_path: string;
-	edits: Array<{ old_string: string; new_string: string }>;
-}
-
-/**
- * What a file tool will do to the file, read from its input alone.
- *
- * Nothing here reads the result, which is what lets the same view sit in two
- * places: a finished call's result, and the permission card asking whether the
- * call may run at all — so what was approved and what ran read the same.
- *
- * An `Edit` and a `MultiEdit` are both a file's patches, built here once:
- * the header counts their lines and the body draws them.
- */
-export type ProposedChangeData =
-	| { kind: "diff"; filePath: string; patches: string[] }
-	| { kind: "write"; input: WriteInput }
-	| { kind: "codex"; changes: CodexChangeView[] };
-
-function isEditInput(input: unknown): input is EditInput {
-	const i = input as Record<string, unknown>;
-	return (
-		typeof i?.file_path === "string" &&
-		typeof i?.old_string === "string" &&
-		typeof i?.new_string === "string"
-	);
-}
-
-function isWriteInput(input: unknown): input is WriteInput {
-	const i = input as Record<string, unknown>;
-	return typeof i?.file_path === "string" && typeof i?.content === "string";
-}
-
-function isMultiEditInput(input: unknown): input is MultiEditInput {
-	const i = input as Record<string, unknown>;
-	return typeof i?.file_path === "string" && Array.isArray(i?.edits);
-}
-
-/**
- * By input, because a call's input never changes and three places ask about
- * the same one: the result, its header and its copy button.
- */
-const changeCache = new WeakMap<
-	object,
-	{ toolName: string; change: ProposedChangeData | null }
->();
-
-/**
- * Null for a tool that changes no file, or an input of the wrong shape.
- * Remembered per input: a Codex payload's add and delete patches diff whole
- * files, and an edit's patch is a diff too.
- */
-export function proposedChange(
-	toolName: string,
-	input: unknown,
-): ProposedChangeData | null {
-	if (typeof input !== "object" || input === null) return null;
-	const cached = changeCache.get(input);
-	if (cached?.toolName === toolName) return cached.change;
-	const change = buildProposedChange(toolName, input);
-	changeCache.set(input, { toolName, change });
-	return change;
-}
-
-function buildProposedChange(
-	toolName: string,
-	input: unknown,
-): ProposedChangeData | null {
-	switch (toolName) {
-		case "Edit": {
-			if (isEditInput(input)) {
-				return {
-					kind: "diff",
-					filePath: input.file_path,
-					patches: [
-						createPatch(input.file_path, input.old_string, input.new_string),
-					],
-				};
-			}
-			const changes = parseCodexChanges(input);
-			return changes ? { kind: "codex", changes } : null;
-		}
-		case "MultiEdit":
-			return isMultiEditInput(input)
-				? {
-						kind: "diff",
-						filePath: input.file_path,
-						patches: input.edits.map((edit) =>
-							createPatch(input.file_path, edit.old_string, edit.new_string),
-						),
-					}
-				: null;
-		case "Write":
-			return isWriteInput(input) ? { kind: "write", input } : null;
-		default:
-			return null;
-	}
-}
-
-/** The change as text to copy, where it is text: a new file is its content. */
-export function proposedChangeText(
-	change: ProposedChangeData,
-): string | undefined {
-	return change.kind === "write" ? change.input.content : undefined;
-}
-
 function changePatches(change: ProposedChangeData): string[] | undefined {
 	switch (change.kind) {
-		case "diff":
+		case "edit":
+		case "multiEdit":
 			return change.patches;
 		case "codex":
 			return change.changes.flatMap((c) => (c.patch ? [c.patch] : []));
@@ -257,8 +136,11 @@ function CodexDiff({ changes }: { changes: CodexChangeView[] }) {
 
 export function ProposedChange({ change }: { change: ProposedChangeData }) {
 	switch (change.kind) {
-		case "diff":
-			return <PatchList fileName={change.filePath} patches={change.patches} />;
+		case "edit":
+		case "multiEdit":
+			return (
+				<PatchList fileName={change.input.file_path} patches={change.patches} />
+			);
 		case "write":
 			return (
 				// Its copy button is the block header's (`proposedChangeText`).

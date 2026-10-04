@@ -10,6 +10,7 @@ import {
 	X,
 } from "lucide-react";
 import { memo, useId, useMemo, useState } from "react";
+import { proposedChange, proposedChangeText } from "../../lib/proposedChange";
 import { useChatUIConfig } from "../../lib/registries/chatUIRegistry";
 import { CodeHighlighter } from "../../lib/shikiUtils";
 import { isTaskTool, toolSummary } from "../../lib/toolSummary";
@@ -44,12 +45,7 @@ import AttachmentStrip from "./AttachmentStrip";
 import AuthFailureNotice from "./AuthFailureNotice";
 import MessageActions from "./MessageActions";
 import MessageMenuTrigger, { type ForkBlocked } from "./MessageMenuTrigger";
-import {
-	ProposedChange,
-	proposedChange,
-	proposedChangeHeader,
-	proposedChangeText,
-} from "./ProposedChange";
+import { ProposedChange, proposedChangeHeader } from "./ProposedChange";
 import QuestionRecordItem from "./QuestionRecordItem";
 import { useRowExpanded } from "./rowExpansionContext";
 import { anchorCandidateProps } from "./scrollAnchor";
@@ -59,6 +55,7 @@ import { invocationView, ToolInvocation } from "./ToolInvocation";
 import { PartBlocks } from "./ToolList";
 import { ToolRow } from "./ToolRow";
 import { Section } from "./ToolSection";
+import { TurnChangesCard } from "./TurnChangesCard";
 
 interface SystemItemProps {
 	content: string;
@@ -1327,6 +1324,12 @@ const MessageItem = memo(function MessageItem({
 				)}
 				{message.status === "process_ended" && (
 					<p className="mt-2 text-sm text-th-warning">Process ended</p>
+				)}
+				{/* Last before the actions however the turn ended, so it is always
+				    in one place; shown when they are, so the two replace the spinner
+				    together. */}
+				{!pending && (
+					<TurnChangesCard parts={message.parts} onOpenFile={onOpenFile} />
 				)}
 				<MessageActions
 					pending={pending}
