@@ -1,9 +1,9 @@
-package cliupdate_test
+package agent_test
 
 import (
 	"testing"
 
-	"github.com/pockode/server/cliupdate"
+	"github.com/pockode/server/agent"
 )
 
 func TestCompareVersions(t *testing.T) {
@@ -27,7 +27,7 @@ func TestCompareVersions(t *testing.T) {
 		{"1.0.0+build.1", "1.0.0", 0},
 	}
 	for _, tt := range tests {
-		got, err := cliupdate.CompareVersions(tt.a, tt.b)
+		got, err := agent.CompareVersions(tt.a, tt.b)
 		if err != nil {
 			t.Errorf("CompareVersions(%q, %q): %v", tt.a, tt.b, err)
 			continue
@@ -37,7 +37,7 @@ func TestCompareVersions(t *testing.T) {
 		}
 	}
 
-	if _, err := cliupdate.CompareVersions("latest", "1.0.0"); err == nil {
+	if _, err := agent.CompareVersions("latest", "1.0.0"); err == nil {
 		t.Error("CompareVersions accepted a version without numbers")
 	}
 }

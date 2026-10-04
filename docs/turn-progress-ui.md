@@ -170,7 +170,7 @@ it.
 | Engine | Measured as |
 |---|---|
 | codex | `completedAtMs` of the item's `item/completed` minus `startedAtMs` of its `item/started` — the engine's own clock, which both notifications carry |
-| claude | from the main thread's last transcript output before the block — a text, a tool call, a tool result, the read point, or the turn's start — to the block's arrival |
+| claude | from the thread's last transcript output before the block — a text, a tool call, a tool result, or the message that opened the turn — to the block's arrival. A subagent's thread starts at the call that spawned it |
 
 For Claude, *transcript output* is deliberate. The CLI also writes
 `thinking_tokens` estimates while it thinks, and its subagents' lines and its
@@ -283,9 +283,11 @@ thinking *now*, which ends with that thinking's record:
 - **claude**: the CLI's `thinking_tokens` frames, which it writes while thinking
   without the partial-message stream. They carry a token estimate and no text,
   so Claude's line says `Thinking…` with no latest line and has nothing to open.
-  Whether a frame can be told to be the main thread's rather than a subagent's
-  has to be measured on the CLI; if it cannot, Claude stays at `Working`, since
-  a subagent thinking is not the main agent thinking (§3). Claude's thinking
+  They are the main thread's: a subagent writes none (measured on claude
+  2.1.289), and a subagent thinking is not the main agent thinking (§3). Not
+  every think writes them — a short one goes straight to its block — so the
+  line may go from `Working` to a settled row without saying `Thinking…`.
+  Claude's thinking
   *text* only arrives whole, with its block; showing it live would need the
   partial-message stream, which changes how every text block is read — a
   separate decision, not taken here.
@@ -325,7 +327,7 @@ left out and `Working` stands alone — the strip's rule for `since`.
 | reconnect mid-thinking, then it completes | its row settles with the server-measured duration, as if nothing had happened |
 | the turn ends while you were away | no tail line; the reply has its turn-end row |
 | the server restarted mid-turn | the turn is gone, so `phase` is `idle` and there is no tail line; the dangling reply is finalised by [lifecycle-ui.md §2.4](lifecycle-ui.md#24-recovering-a-dangling-turn-after-a-restart) |
-| Stop during a live thinking | the line goes with the turn. If the engine still completes the item, it settles as a row like any other; if it does not, there is no record and no row — the same on replay as live. Which codex does has to be measured |
+| Stop during a live thinking | the line goes with the turn. Codex does not complete the item it cut off (measured on codex-cli 0.160.0), so there is no record and no row — the same on replay as live |
 
 ## 3. Subagents
 

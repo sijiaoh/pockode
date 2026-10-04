@@ -37,9 +37,9 @@ UI (attachment strip scrolled into view)
 
 ### AgentEvent Interface
 
-`server/agent/event.go` — Sealed interface (unexported marker method) with 18 concrete implementations.
+`server/agent/event.go` — Sealed interface (unexported marker method) with 21 concrete implementations.
 
-**There are 20 `EventType` constants and 18 event structs, and the gap is the
+**There are 23 `EventType` constants and 21 event structs, and the gap is the
 point.** `ask_user_question` and `question_response` are types nothing can
 produce any more, kept because old transcripts hold records of them and a reader
 of history still has to recognise one (see Legacy below). A type with no event
@@ -57,8 +57,8 @@ type AgentEvent interface {
 
 | Category | Types | Terminal? |
 |----------|-------|-----------|
-| Content | `text`, `tool_call`, `tool_result`, `system`, `warning`, `raw`, `command_output` | No |
-| Progress | `tool_activity` (broadcast only, never recorded) | No |
+| Content | `text`, `tool_call`, `tool_result`, `thinking`, `system`, `warning`, `raw`, `command_output` | No |
+| Progress | `tool_activity`, `thinking_delta` (broadcast only, never recorded) | No |
 | Wait | `background_wait` (the turn parked on work outliving its tool call) | No |
 | Terminal | `done`, `interrupted`, `error`, `process_ended` | Yes |
 | Permission | `permission_request`, `permission_response`, `request_cancelled` | No |
@@ -103,6 +103,61 @@ per call still in flight as the state it also is, to hand to a client that
 subscribes mid-run ([tool-call-model.md](tool-call-model.md#tool_activity-is-not-persisted)).
 An unpersisted event carries no `seq`, which is exactly what the broadcast rule
 below already said about a record that does not exist.
+
+#### Thinking
+
+What the agent thought on the way is two events, because it is two things
+([turn-progress-ui.md](turn-progress-ui.md)). That a stretch of thinking
+happened, what it said and how long it took stays true, so it is a **recorded**
+`thinking` event, written once the thinking is over. That the agent is thinking
+*right now* lasts seconds and only changes the tail line's words, so it is
+`thinking_delta`: **broadcast and never recorded**, the same exception
+`tool_activity` is. Unlike `tool_activity`, nothing keeps a snapshot of it for a
+client that subscribes mid-thinking: such a client shows `Working` until the
+next signal, and gets the whole text with the record.
+
+```jsonc
+{ "type": "thinking",
+  "content": "**Counting multiples**\n\n…",  // what was thought, for a reader; Markdown
+  "full_reasoning": "…",                       // Codex's raw reasoning, when it shares any
+  "redacted": true,                            // the provider withheld the text
+  "duration_ms": 12000,                        // measured by the server; absent = not measured
+  "parent_tool_use_id": "…" }                  // a subagent's, filed under its spawn
+
+{ "type": "thinking_delta",                    // the main agent only, never a subagent
+  "content_delta": "…",                        // the next piece of the coming `content`
+  "full_reasoning_delta": "…" }                // …and of `full_reasoning`
+```
+
+Every field is optional. An empty thinking — a block with no text, a reasoning
+item with nothing in either list — is still recorded, because *that the agent
+thought, and for how long* is the part the reader came for. A `thinking_delta`
+with neither delta is the signal alone: Claude streams no thinking text, only a
+token estimate, and Codex's reasoning has started before its first words. The deltas accumulate,
+and a new part already carries its paragraph separator, so concatenating them
+gives exactly the text the record will hold. The live text is still
+best-effort: a delta is the first thing dropped when a subscriber falls behind,
+and a client that subscribed mid-thinking holds only a tail of it. The record is
+what is kept. A live thinking ends with the next
+main-agent `thinking` record or with the turn. The record carries no id joining
+it to its deltas, because there is only ever one live thinking. A thinking the
+engine never finished — Codex's, cut off by Stop — leaves no record at all.
+
+**The duration is the server's measurement, never the client's.** A client only
+has the moment a record reached it, which means nothing on replay — the reason
+[tool-call-model.md](tool-call-model.md#toolrun) gives Claude tool rows no
+duration. The server takes the reading while the thinking happens and stores
+it: Codex's from the engine's own item timestamps, Claude's as the time from the
+thread's last transcript output to the block. `0` is never written for a
+measured thinking, so an absent `duration_ms` always means unmeasured. Neither
+CLI sends thinking text unless asked, and how Pockode asks — gated on the
+Claude CLI's version — is in
+[code/agent-integration.md](code/agent-integration.md#thinking).
+
+`thinking` is in `ActivatesSession`: only the model writes one, so the turn
+reached it. `thinking_delta` is not. Claude's is a CLI estimate, and it sits
+with `system` and `tool_activity` in the gap between the two predicates, the
+gap that must not end a background wait.
 
 #### Message Origin (user vs. system)
 
@@ -269,6 +324,10 @@ what stops a work session instead of nudging it
 `tool_result` records a **subagent** produced, naming the subagent call it ran
 under — see
 [code/agent-integration.md](code/agent-integration.md#eventrecord-unified-event-format).
+
+A `thinking` record keeps its text in `Content` and adds `FullReasoning`,
+`Redacted` and a `DurationMs` the server measured; a `thinking_delta` carries
+`ContentDelta` and `FullReasoningDelta` ([Thinking](#thinking)).
 
 A `tool_result` also uses `Subtype`, for the three kinds of result that are not
 simply "what the call produced", and carries `DurationMs` / `ExitCode` when the

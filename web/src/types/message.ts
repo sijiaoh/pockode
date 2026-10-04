@@ -1087,6 +1087,8 @@ export type ServerMethod =
 	| "tool_call"
 	| "tool_result"
 	| "tool_activity"
+	| "thinking"
+	| "thinking_delta"
 	| "warning"
 	| "error"
 	| "done"
@@ -1175,6 +1177,37 @@ export type ServerNotification =
 			tool_use_id: string;
 			activity?: string;
 			output_delta?: string;
+	  }
+	| {
+			/**
+			 * A finished stretch of the agent's thinking (docs/turn-progress-ui.md).
+			 * Every field may be absent: an engine that shared no text leaves
+			 * `content` out, and a thinking nothing measured leaves out
+			 * `duration_ms`.
+			 */
+			type: "thinking";
+			/** Claude's thinking, or Codex's reasoning summary; Markdown. */
+			content?: string;
+			/** Codex's raw reasoning, shown under its own label when present. */
+			full_reasoning?: string;
+			/** The model provider withheld the text; `content` is then absent. */
+			redacted?: boolean;
+			/** Measured by the server while it happened. */
+			duration_ms?: number;
+			/** See the `text` record. */
+			parent_tool_use_id?: string;
+	  }
+	| {
+			/**
+			 * The main agent is thinking now. Never persisted, like
+			 * `tool_activity`, and never a subagent's. Ends with the next
+			 * `thinking` record or with the turn. Both deltas absent is the signal
+			 * alone (Claude); otherwise they accumulate into the coming record's
+			 * `content` and `full_reasoning`, separators included.
+			 */
+			type: "thinking_delta";
+			content_delta?: string;
+			full_reasoning_delta?: string;
 	  }
 	| {
 			type: "warning";

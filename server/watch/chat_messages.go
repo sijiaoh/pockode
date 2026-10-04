@@ -56,14 +56,15 @@ func (w *ChatMessagesWatcher) OnChatMessage(msg process.ChatMessage) {
 
 	// A losable event gives way rather than crowding out one that is not.
 	//
-	// tool_activity is the first high-frequency event Pockode forwards — a
-	// chatty command produces one per chunk of stdout — and the only one whose
-	// loss costs nothing: the whole output arrives again with the result, and a
-	// client that subscribes is handed the newest line
-	// (agent.EventType.Persisted). Everything else in this buffer happens once,
-	// and a dropped `done` leaves a finished turn drawn as running until the
-	// client resubscribes. Without a reserve, a burst of progress could evict
-	// one.
+	// tool_activity and thinking_delta are the high-frequency events Pockode
+	// forwards — a chatty command produces one per chunk of stdout, a reasoning
+	// summary one per few words — and the only ones whose loss costs nothing
+	// lasting: the whole output arrives again with the result, the whole
+	// thinking with its record, and a client that subscribes is handed the
+	// newest activity line (agent.EventType.Persisted). Everything else in this
+	// buffer happens once, and a dropped `done` leaves a finished turn drawn as
+	// running until the client resubscribes. Without a reserve, a burst of
+	// progress could evict one.
 	//
 	// Half the buffer is a reserve, not a tuned figure: it only engages once the
 	// consumer has fallen far behind, which is exactly when the cheapest thing

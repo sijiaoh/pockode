@@ -169,6 +169,22 @@ export type NormalizedEvent =
 			outputDelta?: string;
 	  }
 	| {
+			/** A finished stretch of thinking; see the wire record. */
+			type: "thinking";
+			content: string;
+			fullReasoning: string;
+			redacted: boolean;
+			/** Absent when nothing measured it — never zero. */
+			durationMs?: number;
+			parentToolUseId?: string;
+	  }
+	| {
+			/** The main agent is thinking now; never persisted. */
+			type: "thinking_delta";
+			contentDelta: string;
+			fullReasoningDelta: string;
+	  }
+	| {
 			type: "warning";
 			message: string;
 			code: string;
@@ -318,6 +334,24 @@ export function normalizeEvent(
 				toolUseId: record.tool_use_id as string,
 				activity: record.activity as string | undefined,
 				outputDelta: record.output_delta as string | undefined,
+			};
+		case "thinking":
+			return {
+				type: "thinking",
+				content: (record.content as string) ?? "",
+				fullReasoning: (record.full_reasoning as string) ?? "",
+				redacted: record.redacted === true,
+				durationMs:
+					typeof record.duration_ms === "number" && record.duration_ms > 0
+						? record.duration_ms
+						: undefined,
+				parentToolUseId: record.parent_tool_use_id as string | undefined,
+			};
+		case "thinking_delta":
+			return {
+				type: "thinking_delta",
+				contentDelta: (record.content_delta as string) ?? "",
+				fullReasoningDelta: (record.full_reasoning_delta as string) ?? "",
 			};
 		case "warning":
 			return {
@@ -886,6 +920,13 @@ export function applyServerEvent(
 			command: event.command,
 			attachments: event.attachments,
 		});
+	}
+
+	// TODO: Remove once the thinking row and the tail line draw these
+	// (docs/turn-progress-ui.md). Until then they are dropped here, before an
+	// event the transcript does not place can open an empty reply.
+	if (event.type === "thinking" || event.type === "thinking_delta") {
+		return messages;
 	}
 
 	return stampAnchorSeq(messages, applyEvent(messages, event, options), seq);

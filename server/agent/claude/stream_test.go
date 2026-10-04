@@ -41,7 +41,7 @@ func runStreamOutputWithDeclines(t *testing.T, stdout string) ([]agent.AgentEven
 
 	var declines []declined
 	streamOutput(context.Background(), slog.Default(), strings.NewReader(stdout), events,
-		&sync.Map{}, nil, &backgroundTaskTracker{},
+		&sync.Map{}, nil, &backgroundTaskTracker{}, &thinkingClock{},
 		newUsageObserver(slog.Default(), agent.StartOptions{}),
 		testRefusals(func(requestID, reason string) {
 			declines = append(declines, declined{requestID, reason})

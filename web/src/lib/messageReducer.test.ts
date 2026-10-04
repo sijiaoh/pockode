@@ -163,6 +163,34 @@ describe("messageReducer", () => {
 			});
 		});
 
+		it("normalizes thinking records rather than falling back to raw", () => {
+			expect(
+				normalizeEvent({
+					type: "thinking",
+					content: "**Counting**",
+					duration_ms: 12000,
+					parent_tool_use_id: "task-1",
+				}),
+			).toEqual({
+				type: "thinking",
+				content: "**Counting**",
+				fullReasoning: "",
+				redacted: false,
+				durationMs: 12000,
+				parentToolUseId: "task-1",
+			});
+			// A redacted block with nothing measured: no text, no duration.
+			expect(
+				normalizeEvent({ type: "thinking", redacted: true }),
+			).toMatchObject({ redacted: true, content: "", durationMs: undefined });
+			// The signal alone, as Claude sends it.
+			expect(normalizeEvent({ type: "thinking_delta" })).toEqual({
+				type: "thinking_delta",
+				contentDelta: "",
+				fullReasoningDelta: "",
+			});
+		});
+
 		it("carries the subagent call a record was produced inside", () => {
 			const parent = { parent_tool_use_id: "task-1" };
 			expect(

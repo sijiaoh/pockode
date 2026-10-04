@@ -141,7 +141,8 @@ Events are divided into four categories:
 
 | Category | Event Types | Description |
 |----------|-------------|-------------|
-| **Content** | `text`, `tool_call`, `tool_result`, `system`, `warning`, `raw`, `command_output` | AI-generated content |
+| **Content** | `text`, `tool_call`, `tool_result`, `thinking`, `system`, `warning`, `raw`, `command_output` | AI-generated content |
+| **Live** | `tool_activity`, `thinking_delta` | what a call or the agent is doing right now; broadcast, never recorded |
 | **Terminal** | `done`, `error`, `interrupted`, `process_ended` | Marks end of AI turn |
 | **Permission** | `permission_request`, `permission_response`, `request_cancelled` | Tool execution authorization |
 | **Questions** | `question_posted` | a question the agent asked through `question_post`. Nothing waits on it; the answer arrives as a `message` carrying `answering` |
@@ -167,7 +168,7 @@ inspects event types.
 
 ```go
 // agent/event.go
-func (e EventType) Persisted() bool            // everything except tool_activity
+func (e EventType) Persisted() bool            // everything except tool_activity and thinking_delta
 func (e EventType) AwaitsUserInput() bool      // done, error, interrupted, permission_request
 func (e EventType) IndicatesAgentActivity() bool
 func (e EventType) ActivatesSession() bool
@@ -191,9 +192,11 @@ because being wrong is expensive and nothing downstream corrects it (below). Her
 the default is the safe one: an event says what was true at one moment and that
 stays true, so a type nobody thought about is recorded. Forgetting to exclude one
 costs a stored record nobody reads; forgetting to include one would leave a hole
-in history. The single exclusion is `tool_activity`, which reports the *latest*
+in history. The exclusions are `tool_activity`, which reports the *latest*
 value of something still changing and would be a lie in a transcript the moment
-the next one arrived ([tool-call-model.md](../tool-call-model.md#tool_activity-is-not-persisted)).
+the next one arrived ([tool-call-model.md](../tool-call-model.md#tool_activity-is-not-persisted)),
+and `thinking_delta`, which says the agent is thinking *now* — the finished
+thinking is recorded whole, as `thinking` ([Thinking](#thinking)).
 A non-persisted event reaches subscribers with no `seq`, because there is no
 record for one to name.
 
@@ -212,7 +215,8 @@ boundary with `ActivatesSession`, which is where the expense moved.
 
 #### Why `ActivatesSession` Is Not `IndicatesAgentActivity`
 
-The two differ by two event types — `system` and `tool_activity` — and that
+The two differ by three event types — `system`, `tool_activity` and
+`thinking_delta` — and that
 difference is the whole reason the second predicate exists. A turn can be under way from
 start to finish without the agent ever contributing to it: a first message sent
 through an expired login or a dead endpoint gets an `init`, a run of
@@ -232,9 +236,10 @@ is not over, while over-including in `IndicatesAgentActivity` costs nothing.
 So `command_output` and `raw` are in `ActivatesSession` despite being
 borderline — neither can come from a turn that never started — while `system`,
 borderline in the other direction, is not. `IndicatesAgentActivity` is written as
-the union (`system || tool_activity || ActivatesSession()`) rather than as a
-second literal list, so a future output event type added to one cannot silently
-go missing from the other. The two named types are named rather than derived:
+the union (`system || tool_activity || thinking_delta || ActivatesSession()`)
+rather than as a second literal list, so a future output event type added to one
+cannot silently go missing from the other. The named types are named rather than
+derived:
 each says a turn is under way without putting anything of the agent's into it.
 (`tool_activity` no longer buys a parked turn extra time: the background lease is
 a flat cap on how long a turn may stay parked, not a silence budget — see
@@ -521,6 +526,10 @@ type EventRecord struct {
     ExitCode              *int               `json:"exit_code,omitempty"`
     Activity              string             `json:"activity,omitempty"`
     OutputDelta           string             `json:"output_delta,omitempty"`
+    FullReasoning         string             `json:"full_reasoning,omitempty"`
+    Redacted              bool               `json:"redacted,omitempty"`
+    ContentDelta          string             `json:"content_delta,omitempty"`
+    FullReasoningDelta    string             `json:"full_reasoning_delta,omitempty"`
     ProviderMessageID     string             `json:"provider_message_id,omitempty"`
 }
 ```
@@ -617,6 +626,12 @@ inferred from arrival times, which would be wrong on replay. `Activity` and
 `OutputDelta` belong to `tool_activity` records, which are broadcast and never
 stored; they are fields here anyway because `EventRecord` is the whole of how an
 event is serialized, for the wire as much as for history.
+
+A `thinking` record keeps its text in `Content`, beside `FullReasoning` and
+`Redacted`, and its `DurationMs` is the one Pockode measured rather than one a CLI
+reported, for Claude ([Thinking](#thinking)). `ContentDelta` and
+`FullReasoningDelta` belong to `thinking_delta`, which, like `tool_activity`, is
+never stored.
 
 ## Content Blocks and Attachments
 
@@ -1757,7 +1772,7 @@ recording one is precisely what stops a session being unstarted.
 | CLI Message | Subtype / Field | Converts To |
 |-------------|-----------------|-------------|
 | `assistant` | `message.model` is `<synthetic>` | `WarningEvent` (the CLI's own notice, not the agent — [why](#why-activatessession-is-not-indicatesagentactivity)) |
-| `assistant` | anything else | `TextEvent` + `ToolCallEvent` |
+| `assistant` | anything else | `TextEvent` + `ToolCallEvent` + `ThinkingEvent` (a `thinking` / `redacted_thinking` block — see [Thinking](#thinking)) |
 | `user` | — | `ToolResultEvent` |
 | `result` | any | `InterruptedEvent`, `ErrorEvent`, or `DoneEvent` (see below) |
 | `control_request` | `can_use_tool`, `tool_name` is `AskUserQuestion` | `WarningEvent` + a `deny` that does not interrupt ([why](#refusing-the-clis-own-question)) |
@@ -1770,6 +1785,7 @@ recording one is precisely what stops a session being unstarted.
 | `system` | `task_notification` | `ToolResultEvent` for a backgrounded call, no event for any other |
 | `system` | `task_started`, `task_updated` | (no event — updates the task tracker) |
 | `system` | `local_command_output` | `CommandOutputEvent` |
+| `system` | `thinking_tokens` | `ThinkingDeltaEvent`, the first of a stretch only (see [Thinking](#thinking)) |
 | `system` | allowlisted subtypes | `SystemEvent` |
 | `system` | other | (dropped — internal bookkeeping) |
 | `progress`, `tool_progress`, `tool_use_summary`, `rate_limit_event`, `auth_status`, `prompt_suggestion`, `command_lifecycle` | — | (dropped — telemetry / host control) |
@@ -2267,7 +2283,8 @@ carry a `config` map that overrides `config.toml` for this thread only, and
 counterpart of Claude's `--mcp-config`, with no file to write and therefore none
 of the lifetime problem that one has: the spawn is already per thread, so the
 caller identity (`--session-id`, `--worktree`) goes straight into it. `model_reasoning_effort` rides in the
-same way, for a different reason ([Session Effort](#session-effort)).
+same way, for a different reason ([Session Effort](#session-effort)), and so does
+`model_reasoning_summary` ([Thinking](#thinking)).
 
 **`threadSource` says whose thread this is, and does not say it where you would
 expect.** It lands in the rollout's `thread_source`, next to `originator` (which
@@ -2493,6 +2510,9 @@ when one begins, `item/completed` when it ends — wrapped in a turn.
 | `item/started` or `item/completed`: `subAgentActivity` `kind: "started"`, or `collabAgentToolCall` `tool: "spawnAgent"` once it names its thread | `ToolCallEvent {ToolName: "Task"}`, once per spawn; its result comes from the child thread's `turn/completed` — see [Subagent threads](#subagent-threads) |
 | `item/commandExecution/outputDelta` | `ToolActivityEvent {OutputDelta}` — real stdout/stderr as it is produced |
 | `item/mcpToolCall/progress` | `ToolActivityEvent {Activity}` — the tool's own one-line status |
+| `item/completed`, `reasoning` | `ThinkingEvent` — see [Thinking](#thinking) |
+| `item/started`, `reasoning` | `ThinkingDeltaEvent` with no text, the main thread's only — the item's start is also half its duration |
+| `item/reasoning/summaryTextDelta`, `item/reasoning/textDelta` | `ThinkingDeltaEvent`, the main thread's only |
 | `mcpServer/startupStatus/updated`, `status: "failed"` | `WarningEvent` per failed server |
 | `error` with `willRetry` | `WarningEvent` |
 | `warning`, `guardianWarning`, `configWarning` | `WarningEvent` |
@@ -2529,7 +2549,7 @@ joined into nonsense.
 
 **Item types not in the table produce nothing**, which is a second and separate
 place work is dropped from the ignore list below: the echo of the prompt just
-sent, reasoning, plans and web searches all arrive as ordinary `item/*`
+sent, plans and web searches all arrive as ordinary `item/*`
 notifications and fall through the type switch. They are dropped for the same
 reason — no surface to render them on — and would be picked up by adding a case
 rather than by removing a list entry.
@@ -2608,7 +2628,7 @@ while the same output spread a second apart produced one per line but the last).
 That is why the shared suite requires the event of a command that prints and then
 keeps running, rather than of `echo hi`.
 
-Reasoning, plans and the turn's accumulated diff are listed by choice
+Plans and the turn's accumulated diff are listed by choice
 rather than by accident — they carry real information Pockode has no surface for
 yet, and their whole form is dropped alongside their increments, so they are not
 increments of anything rendered.
@@ -2729,13 +2749,127 @@ These are choices, recorded so they do not become blanks nobody knows about.
   `image_generation_end` were its predecessors, and were ignored for the same
   reason; app-server has no notification by either name, so there is nothing to
   add to `ignoredNotifications` — the item simply falls through the type switch
-  like reasoning and plans.)
+  like plans.)
 - **`BackgroundWaitEvent`** has no Codex counterpart to emit. Codex has no
   backgrounded task, so a Codex session never parks one — a subagent still
   running when its parent's turn ends does not hold the session open
   ([Subagent threads](#subagent-threads)) — and the
   `background` blocker simply never appears on it
   ([Background Waits](#background-waits)).
+
+## Thinking
+
+Both CLIs report what the model thought before it answered, and Pockode carries
+it in two events with opposite lifetimes ([agent-event.md](../agent-event.md#thinking)):
+a `thinking` record once a stretch of thinking is over — its text and how long
+it took — and a `thinking_delta` broadcast while the main agent is thinking now,
+which is never recorded. The UI they feed is
+[turn-progress-ui.md](../turn-progress-ui.md).
+
+| | Claude | Codex |
+|---|---|---|
+| The record | a `thinking` or `redacted_thinking` content block of an `assistant` frame | `item/completed` of a `reasoning` item: `summary[]` → `content`, `content[]` → `full_reasoning`, each joined as paragraphs |
+| Its text | only when the CLI is started with `--thinking-display summarized` | only when `model_reasoning_summary` is configured |
+| Its duration | measured by `thinkingClock` (below) | `completedAtMs` minus the item's `startedAtMs` — the engine's own clock |
+| The live signal | `system/thinking_tokens` frames, cut to one per stretch; no text | `item/started` of the item (the signal alone), then `item/reasoning/summaryTextDelta` → `content_delta`, `item/reasoning/textDelta` → `full_reasoning_delta` |
+| A subagent's | recorded under its spawn; no signal | recorded under its spawn; its deltas are dropped |
+
+**Neither CLI sends thinking text unless asked**, and both are asked. Measured
+on claude 2.1.289, every thinking block arrives with `"thinking": ""` and only
+a signature: the model's thinking display defaults to `omitted`. Measured on
+codex-cli 0.160.0, a reasoning item completes with `summary: []` and no summary
+deltas are sent. So the Claude adapter passes `--thinking-display summarized` —
+the summaries the CLI's own transcript view shows — and the Codex adapter sets
+`model_reasoning_summary: "auto"` as a thread config override, like
+`model_reasoning_effort`. A thread override takes precedence over a summary
+setting in the user's own `config.toml`.
+
+**`--thinking-display` is version-gated.** It is hidden from `claude --help`,
+and a CLI that does not know a flag refuses to start at all. Bisected over the
+published releases, 2.1.92 rejects it as an unknown option and 2.1.94 accepts
+it (there is no 2.1.93), so the adapter asks `claude --version` on every launch
+— it can be updated under a running server, and the answer takes milliseconds —
+and passes the flag from 2.1.94. A version it cannot read gets no flag: such a
+CLI's thinking rows carry a duration and no text, which is the cheaper way to
+be wrong.
+
+**Claude's duration has to be measured, and Codex's does not.** Codex stamps
+both ends of the item. Claude reports no thinking time and its thinking arrives
+whole, in one frame of its own, so `thinkingClock` measures from the thread's
+last *transcript* output — text, a tool call, a tool result, or the message that
+opened the turn — to the frame's arrival. Transcript output on purpose: the CLI
+writes `thinking_tokens` estimates and bookkeeping frames throughout a think,
+and measuring from the last line of any kind would make almost every thinking
+`0s`. The clock is kept per thread — the main thread, and each subagent from the
+call that spawned it — because a backgrounded subagent writes between the main
+agent's lines. Every event the adapter sends passes the clock, including the
+results it writes for a line too large to read: a result the clock missed would
+put the call's whole runtime into the next thinking.
+
+What does *not* move it is as deliberate:
+
+- **A message sent into a running turn.** The agent reads it at its next call to
+  the model, which nothing reports, and a thinking under way when it was sent
+  goes on regardless. The Claude read point is written at the moment of
+  delivery for the transcript's sake ([The Read Point](#the-read-point)), and
+  restarting the clock there would cut that thinking short.
+- **Background work finishing while the turn runs.** Its result is nothing the
+  agent said. Only when the turn is parked does that result start the clock,
+  because there it is what brings the turn back.
+- **The time a turn is over or parked.** An ending clears the main thread's
+  start, and so does parking, so what follows begins from a message or from the
+  result that ends the wait. The one exception is a message sent after the
+  turn's last output that the ending had not answered — the CLI had finished
+  before it arrived — which opens the next turn, so its send time is kept and
+  that turn counts as running. Not after Stop, which may have discarded it with
+  the turn; then the next message sent starts the clock. An
+  ending also forgets the calls the turn left unanswered (a web search's result
+  is not a tool result; Stop cuts calls off), except backgrounded ones whose
+  subagents run on.
+
+A thinking with no start to measure from is recorded without a duration, never
+with one guessed.
+
+A measured duration is never written as `0`: `duration_ms` is `omitempty`, and
+an absent one means "not measured". A think the server timed at under a
+millisecond is recorded as `1`.
+
+**The live signal is the main agent's alone.** A subagent's thinking is
+described in its own row, and the main tail line must not say the main agent is
+thinking while it waits on one. Codex says whose a delta is by its `threadId`,
+and other threads' are dropped. Claude's `thinking_tokens` frames carry no
+`parent_tool_use_id`, and a subagent writes none, with or without
+`--forward-subagent-text` (measured on 2.1.289), so every frame is the main
+agent's. The adapter still drops one that names a parent, in case a CLI starts
+to send them. The frames arrive several times a second and say only a token
+estimate, so the clock passes the first of a stretch and drops the rest until
+the next transcript output. Not every think produces any: short ones go
+straight to the block.
+
+**Codex deltas build exactly the recorded text.** Each delta names its part
+(`summaryIndex` / `contentIndex`). The first delta of a new part carries the
+paragraph separator, once for each part boundary crossed, so the deltas
+concatenate into the joined text the record will hold. That includes a part
+that streamed nothing. `item/reasoning/summaryPartAdded` says nothing the
+indices do not, and is ignored. The live copy is still best-effort: the
+subscription drops non-persisted events first when a client falls behind, so
+the record is what a client keeps.
+
+**A reasoning item cut off by Stop leaves no record.** Measured on codex-cli
+0.160.0: an interrupt during the summary deltas ends in `turn/completed` with
+`status: "interrupted"` and no `item/completed` for the reasoning. That is the
+same live and on replay. The item's start is forgotten when its own thread's
+turn ends — a subagent still reasoning when its parent's turn is over keeps its
+timing.
+Claude has no in-flight block to lose: a thinking block either arrived whole or
+did not arrive.
+
+**A Claude thinking record names no fork anchor.** Its frame has a uuid like any
+other, but a fork anchored there would resume a conversation ending in a
+thinking-only assistant message, and nothing has shown `--resume-session-at`
+accepting that. Without `provider_message_id` the anchor falls back to the
+record before ([Forking](#forking)), and a fork cut there loses only the
+thinking. A Codex record carries its turn id like every other item of the turn.
 
 ## Usage Reporting
 
@@ -4084,6 +4218,7 @@ The following conditions send an `ErrorEvent` and end the session:
 | Claude implementation | `server/agent/claude/claude.go` |
 | Claude background waits | `server/agent/claude/background_tasks.go`, `background_loss.go` |
 | Codex implementation | `server/agent/codex/codex.go` (process, JSON-RPC, thread lifecycle), `events.go` (notification mapping), `approval.go` (server requests), `resume.go` (`codex_resume.json`), `view_image.go` (the image an `imageView` item names) |
+| Thinking | `server/agent/claude/thinking.go` (the `--thinking-display` gate, `thinkingClock`), `server/agent/codex/reasoning.go` |
 | Content blocks and attachments | `server/agent/content.go` (block shapes), `server/agent/claude/tool_result.go` (Claude's blocks), `server/attachments/attachments.go` (per-session store), `server/ws/rpc_attachment.go` (`attachment.get`), `web/src/lib/contentBlocks.ts`, `web/src/components/Chat/AttachmentStrip.tsx` |
 | Session forking | `server/agent/fork.go`, `claude/fork.go`, `codex/fork.go` |
 | Codex protocol drift check | `server/agent/codex/schema_integration_test.go` |

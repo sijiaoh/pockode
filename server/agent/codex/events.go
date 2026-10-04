@@ -53,19 +53,21 @@ var ignoredNotifications = map[string]bool{
 	// rememberToolInput on the day one of those stops being true.
 	"item/fileChange/patchUpdated": true,
 
-	// Real information with no surface in Pockode yet — reasoning, plans and the
-	// turn's accumulated diff. The whole form of each is dropped as well, in
+	// A new part of a reasoning summary beginning. The deltas carry their part
+	// index too, which is what handleReasoningDelta reads, so this says nothing
+	// they do not.
+	"item/reasoning/summaryPartAdded": true,
+
+	// Real information with no surface in Pockode yet — plans and the turn's
+	// accumulated diff. The whole form of each is dropped as well, in
 	// handleItemCompleted's switch, so these are not increments of anything
 	// rendered.
-	"item/reasoning/textDelta":        true,
-	"item/reasoning/summaryTextDelta": true,
-	"item/reasoning/summaryPartAdded": true,
-	"item/plan/delta":                 true,
-	"turn/plan/updated":               true,
-	"turn/diff/updated":               true,
-	"turn/moderationMetadata":         true,
-	"model/rerouted":                  true,
-	"model/safetyBuffering/updated":   true,
+	"item/plan/delta":               true,
+	"turn/plan/updated":             true,
+	"turn/diff/updated":             true,
+	"turn/moderationMetadata":       true,
+	"model/rerouted":                true,
+	"model/safetyBuffering/updated": true,
 }
 
 // handleNotification dispatches one server notification.
@@ -84,6 +86,7 @@ func (s *appSession) handleNotification(msg rpcMessage) {
 		if thread := notificationThread(msg.Params); !s.isOwnThread(thread) {
 			if msg.Method == "turn/completed" {
 				s.settleSubagent(thread, msg.Params)
+				s.forgetReasoning(func(t string) bool { return t == thread })
 			}
 			return
 		}
@@ -107,6 +110,12 @@ func (s *appSession) handleNotification(msg rpcMessage) {
 
 	case "item/mcpToolCall/progress":
 		s.handleMCPToolProgress(msg.Params)
+
+	case "item/reasoning/summaryTextDelta":
+		s.handleReasoningDelta(msg.Params, false)
+
+	case "item/reasoning/textDelta":
+		s.handleReasoningDelta(msg.Params, true)
 
 	case "thread/tokenUsage/updated":
 		// Usage accounting, not a transcript entry: it updates the session's
@@ -183,6 +192,7 @@ func (s *appSession) handleTurnCompleted(params json.RawMessage) {
 
 	s.clearTurn()
 	s.forgetToolInputs()
+	s.forgetReasoning(s.isOwnThread)
 	authFailed := s.turnAuthFailed
 	s.turnAuthFailed = false
 	if notif.Turn.Error != nil {
@@ -429,6 +439,10 @@ type threadItem struct {
 	ParentToolUseID string `json:"-"`
 	// ThreadID is the thread the notification named, read off it like TurnID.
 	ThreadID string `json:"-"`
+	// AtMs is the engine's clock reading the notification carried: startedAtMs
+	// on item/started, completedAtMs on item/completed. Zero when it carried
+	// none.
+	AtMs int64 `json:"-"`
 }
 
 // parseItemNotification reads an item notification and places it: an item of
@@ -438,8 +452,10 @@ func (s *appSession) parseItemNotification(params json.RawMessage) (threadItem, 
 		Item json.RawMessage `json:"item"`
 		// Required on both item/started and item/completed, per the protocol
 		// schema codex-cli 0.153.0 generates.
-		TurnID   string `json:"turnId"`
-		ThreadID string `json:"threadId"`
+		TurnID        string `json:"turnId"`
+		ThreadID      string `json:"threadId"`
+		StartedAtMs   int64  `json:"startedAtMs"`
+		CompletedAtMs int64  `json:"completedAtMs"`
 	}
 	if err := json.Unmarshal(params, &notif); err != nil || len(notif.Item) == 0 {
 		return threadItem{}, false
@@ -451,6 +467,7 @@ func (s *appSession) parseItemNotification(params json.RawMessage) (threadItem, 
 	item.Raw = notif.Item
 	item.TurnID = notif.TurnID
 	item.ThreadID = notif.ThreadID
+	item.AtMs = max(notif.StartedAtMs, notif.CompletedAtMs)
 	if !s.isOwnThread(notif.ThreadID) {
 		item.FromSubagent = true
 		item.ParentToolUseID = s.subagentCalls[notif.ThreadID].CallID
@@ -462,9 +479,10 @@ func (s *appSession) parseItemNotification(params json.RawMessage) (threadItem, 
 // handleItemStarted turns the beginning of a tool-shaped item into a tool call,
 // and the echo of a message into the signal that Codex has read it.
 //
-// The remaining items with no counterpart in Pockode's transcript (the agent's
-// own messages, reasoning, plans, web searches) are left to item/completed or
-// dropped there.
+// A reasoning item's start is remembered for its duration and, on the main
+// thread, signals that the agent is thinking. The remaining items with no
+// counterpart in Pockode's transcript (the agent's own messages, plans, web
+// searches) are left to item/completed or dropped there.
 func (s *appSession) handleItemStarted(params json.RawMessage) {
 	item, ok := s.parseItemNotification(params)
 	if !ok {
@@ -482,6 +500,8 @@ func (s *appSession) handleItemStarted(params json.RawMessage) {
 		return
 	case "subAgentActivity", "collabAgentToolCall":
 		s.rememberSubagent(item)
+	case "reasoning":
+		s.handleReasoningStarted(item)
 	}
 	s.modelReached(item)
 
@@ -719,6 +739,9 @@ func (s *appSession) handleItemCompleted(params json.RawMessage) {
 
 	case "imageView":
 		s.handleImageViewCompleted(item)
+
+	case "reasoning":
+		s.handleReasoningCompleted(item)
 	}
 }
 

@@ -237,6 +237,10 @@ type appSession struct {
 	// subagentReports holds each subagent thread's latest words; see
 	// settleSubagent. Same goroutine as subagentCalls.
 	subagentReports map[string]string
+	// reasoningItems are the reasoning items still in flight, by item id; see
+	// reasoningProgress. Same goroutine as subagentCalls, and forgotten when
+	// their thread's turn ends.
+	reasoningItems map[string]*reasoningProgress
 
 	usage  *usageObserver
 	resume *resumeStateStore
@@ -625,6 +629,7 @@ func (s *appSession) buildThreadParams() map[string]interface{} {
 	if s.opts.Effort != "" {
 		overrides["model_reasoning_effort"] = s.opts.Effort
 	}
+	overrides["model_reasoning_summary"] = reasoningSummary
 
 	params := map[string]interface{}{
 		"cwd":    s.opts.WorkDir,

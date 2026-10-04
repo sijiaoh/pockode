@@ -92,7 +92,8 @@ type EventRecord struct {
 	Subtype string       `json:"subtype,omitempty"`
 	Meta    *MessageMeta `json:"meta,omitempty"`
 	// DurationMs and ExitCode are what an agent CLI reported about a finished
-	// tool call as figures rather than as prose; see ToolResultEvent.
+	// tool call as figures rather than as prose; see ToolResultEvent. A thinking
+	// record carries DurationMs too, measured by the server; see ThinkingEvent.
 	DurationMs int64 `json:"duration_ms,omitempty"`
 	ExitCode   *int  `json:"exit_code,omitempty"`
 	// Activity and OutputDelta belong to tool_activity records, which are
@@ -101,6 +102,15 @@ type EventRecord struct {
 	// serialized, for the wire as much as for history.
 	Activity    string `json:"activity,omitempty"`
 	OutputDelta string `json:"output_delta,omitempty"`
+	// FullReasoning and Redacted belong to thinking records; see ThinkingEvent.
+	// The thinking text itself is Content.
+	FullReasoning string `json:"full_reasoning,omitempty"`
+	Redacted      bool   `json:"redacted,omitempty"`
+	// ContentDelta and FullReasoningDelta belong to thinking_delta records,
+	// which are broadcast and never stored, like tool_activity's; see
+	// ThinkingDeltaEvent.
+	ContentDelta       string `json:"content_delta,omitempty"`
+	FullReasoningDelta string `json:"full_reasoning_delta,omitempty"`
 	// ProviderMessageID is the agent's own id for the piece of its conversation
 	// this event was parsed out of, when the agent hands one out. It is a fact
 	// the event arrived with, not Pockode state, which is why it is recorded

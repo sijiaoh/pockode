@@ -12,10 +12,11 @@ both installed with npm, on Linux.
 
 | Path | Holds |
 |------|-------|
-| `server/cliupdate/` | `Service`: the check (`cliupdate.go`), the update flow (`update.go`), the npm registry read (`registry.go`), version ordering (`semver.go`) |
+| `server/cliupdate/` | `Service`: the check (`cliupdate.go`), the update flow (`update.go`), the npm registry read (`registry.go`) |
 | `server/agent/claude/update.go` | Claude as `cliupdate` sees it: its npm package, and its release channel read from the user's settings |
 | `server/agent/codex/update.go` | Codex, likewise |
 | `server/agent/version.go` | `agent.Version`, the `--version` read shared with sign-in status |
+| `server/agent/semver.go` | `agent.CompareVersions`, version ordering — shared with the Claude adapter, which gates a launch flag on the installed version |
 | `server/watch/cli_update.go` | `CLIUpdateWatcher`, which pushes update changes; the mechanism is `watch/cli_record.go`, shared with sign-ins |
 | `server/ws/rpc_cli_update.go` | the `cli_update.*` methods |
 | `server/filestore/lock.go` | `TryLock`, the lock shared by every Pockode of the OS user |
