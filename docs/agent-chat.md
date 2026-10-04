@@ -160,11 +160,15 @@ and tablets are untouched. The scroll-to-bottom button belongs to the column too
 **Only the user speaks in bubbles.** The agent's message has no bubble: its text,
 tool calls and cards run the full width of the column in `text-th-text-primary`,
 and below them a turn-end row (`Chat/MessageActions.tsx`) holds Copy, Fork and
-the `…` menu — the spinner stands in that row while the message is still being
-written. A turn that changed files lists them just above that row, each
-opening on its diffs ([tool-call-ui.md](tool-call-ui.md#the-turns-changes)).
-The user's bubble keeps the `…` slot beside it. Why the two sides differ is
-in [session-fork-ui.md](session-fork-ui.md#entry-point).
+the `…` menu — while the turn is running, the tail line (`Working  1m 4s`)
+stands in that row's place instead
+([turn-progress-ui.md](turn-progress-ui.md#2-the-tail-line)). A turn that
+changed files lists them just above the turn-end row, each opening on its
+diffs ([tool-call-ui.md](tool-call-ui.md#the-turns-changes)). The user's
+bubble keeps the `…` slot beside it. Why the two sides differ is in
+[session-fork-ui.md](session-fork-ui.md#entry-point). What the agent thought on
+the way is a muted `Thought for 12s` row in the reply, among the tool rows or on
+its own ([turn-progress-ui.md](turn-progress-ui.md#1-the-thinking-row)).
 
 ## History Paging
 

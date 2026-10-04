@@ -198,17 +198,32 @@ interface TurnState {
   unanswered?: PendingQuestion[];
   /** When the session entered this phase. ISO 8601. Drives "since HH:MM". */
   since: string;
+  /**
+   * How long the open turn has run, as of the moment this state was sent;
+   * absent while `open` is false. Derived at send time — see below. Drives the
+   * tail line's clock (docs/turn-progress-ui.md §2.3).
+   */
+  open_elapsed_ms?: number;
   /** How the previous turn ended; says nothing while the phase is not idle. */
   last_outcome?: "completed" | "failed" | "auth_failed" | "aborted";
 }
 ```
 
-This is `session.TurnState` serialized as it stands, rather than the separate
-`blocker_detail` an earlier cut of this document specified. The reason is that
-the detail the strip needs is already the blocker's own: `request_id` belongs to
-the prompt that raised it, and a second field carrying "the request id of
-whichever blocker leads" would be a second place where the precedence in §1.2 is
-decided, free to disagree with the first.
+This is `session.TurnState` serialized as it stands — with one derived field,
+below — rather than the separate `blocker_detail` an earlier cut of this
+document specified. The reason is that the detail the strip needs is already the
+blocker's own: `request_id` belongs to the prompt that raised it, and a second
+field carrying "the request id of whichever blocker leads" would be a second
+place where the precedence in §1.2 is decided, free to disagree with the first.
+
+The derived field is `open_elapsed_ms`. What the server keeps on the turn is the
+instant it opened, on the server's clock; it changes only when a turn opens, so
+it is an ordinary part of the state. What goes on the wire is that instant
+subtracted from the server's now at the moment of sending, on every path that
+carries `turn`. A reading rather than a timestamp, because the client counts on
+from when it received it and so never has to trust its own clock to agree with
+the server's; and not `since`, which resets every time the turn blocks and
+resumes.
 
 **Background task names are not sent, and no count is either.** The CLI's own
 schema says the background task level and the task lifecycle frames have no
@@ -280,15 +295,16 @@ needed where the glyph stands alone.
 
 ### 1.5 The spinner rule
 
-**Exactly one surface animates: a session row whose activity is `running`.**
-Everything else uses the static `CircleDot`.
+**Exactly two surfaces animate, and only for `running`: a session row, and the
+chat's tail line.** Everything else uses the static `CircleDot`.
 
 A spinner asserts "output is arriving right now". Under the new model that
 assertion is finally true and bounded — `running` is a reducer phase that a
-background wait can no longer squat in — and the session list is the one place
-where liveness is the question being asked. Work rows keep the static glyph for
-the reason already recorded in work-system.md: an `active` work with an idle
-process is an ordinary resting state, and a settle delay is not an emergency.
+background wait can no longer squat in — and the session list and the end of
+the transcript are the two places where liveness is the question being asked.
+Work rows keep the static glyph for the reason already recorded in
+work-system.md: an `active` work with an idle process is an ordinary resting
+state, and a settle delay is not an emergency.
 
 A row shows **at most two** indicators, and they are not in competition, because
 they answer different questions:
@@ -310,6 +326,14 @@ untouched by this redesign.
 motion — a streaming bubble, a tool call's own progress — is untouched and is not
 covered by this rule: those describe one message, not a state, and a message that
 is arriving is the one thing a spinner has always been honest about.
+
+The chat's **tail line** is the session row's spinner for the reader who is
+already in the session: it paints `running` and is hidden in every other leaf
+— including both `blocked` ones, where the turn-end row's spinner used to keep
+turning. The one moment it shows that a row does not is the round trip before
+the server reports `running`, through the composer's optimistic half (§2.3),
+which the sidebar never sees
+([turn-progress-ui.md §2.2](turn-progress-ui.md#22-when-it-shows)).
 
 ## 2. Session surfaces
 
@@ -488,6 +512,12 @@ about the message having arrived at all. It is also reachable a moment before th
 agent has written anything, through `turnOpen`'s optimistic half (§2.3) — two
 messages typed inside one round trip put the second one here while the server has
 yet to report the first — and "not read yet" is true of that moment too.
+
+**What the strip does not say is that the turn is running.** That is the
+transcript's tail line, and the two never speak at once about the turn: the
+tail line shows only while `running`, which is the one phase whose strip rows
+are about something else (questions, the receipt). The full boundary is
+[turn-progress-ui.md §4](turn-progress-ui.md#4-what-it-does-not-say).
 
 Whichever it says, it is one bordered row, so the composer moves by at most one
 row's height however many of the four states hold — 33px for a statement, 45px

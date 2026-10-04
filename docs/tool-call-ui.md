@@ -140,11 +140,11 @@ message does. Every part of a list falls into one of three kinds:
 |---|---|---|
 | **Breaker** | a subagent call, `ExitPlanMode`, and their cards — and, since they already end the list, text, a question card and every other part | ends the group and stands as itself |
 | **Pinned** | a call that is `error`; one that is `background` or `fromBackground`, running or settled; a card that is not `allowed`, or is `allowed` while its row has not come back | belongs to the group, never folds |
-| **Foldable** | every other call (`running` / `success` / `interrupted`), with its `allowed` card once its row is back | folds into the summary |
+| **Foldable** | every other call (`running` / `success` / `interrupted`), with its `allowed` card once its row is back; a thinking row, which folds but is not a call and counts toward nothing ([turn-progress-ui.md](turn-progress-ui.md#12-where-it-goes-and-groups)) | folds into the summary |
 
 - **A call is one member, by id.** A card and the row it stands for share a
   `tool_use_id` and are counted, pinned and folded together.
-- **Two foldable members or no group.** With fewer the rows lie flat as they
+- **Two foldable calls or no group.** With fewer the rows lie flat as they
   are: one call needs no summary, and a summary over one success and a failure
   costs a line and saves none.
 - **Why a subagent breaks the run.** Its row already is a summary — its Process
@@ -170,12 +170,13 @@ verbs of its **successful** foldable calls — a failed `Edit` changed nothing,
 and it is pinned below anyway — in a fixed order by consequence, so the end a
 narrow screen cuts is the least important: `Edited N files · Ran N commands ·
 Read N files · Searched N times · Fetched N pages · Updated todos · Used N
-tools · N interrupted`. Files are counted once however often they were touched
-(a Codex file change counts each of its files); everything else counts calls,
-and a Codex `Bash` is read through the same `singleCommandAction` as its row's
-title (`toolVerb` in `lib/toolSummary.ts`). The glyph is a muted `Check`, or
-`Ban` when something was interrupted — never green, never red; red is the
-pinned rows'. No accent title: that is what tells it from a tool row.
+tools · Thought for 1m 20s · N interrupted`. Files are counted once however
+often they were touched (a Codex file change counts each of its files);
+everything else counts calls, and a Codex `Bash` is read through the same
+`singleCommandAction` as its row's title (`toolVerb` in `lib/toolSummary.ts`).
+The glyph is a muted `Check`, or `Ban` when something was interrupted — never
+green, never red; red is the pinned rows'. No accent title: that is what tells
+it from a tool row.
 
 While a foldable call runs, the summary is on that step, in the grammar a
 subagent's second line already speaks: `6 steps · Bash  npm run build…  12s` —
