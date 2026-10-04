@@ -195,8 +195,9 @@ the cluster-mode stack instead of the normal one.
 ./scripts/dev.sh --cluster  # cluster mode
 ```
 
-## `question-walkthrough/` — Answering UI screenshots
+## `ui-walkthrough/` — Chat and answering UI screenshots
 
-Runs the server with a fake `claude` that asks questions on demand, and drives a
-headless browser through every state of the answering UI at phone and desktop
-sizes, light and dark. See [its README](question-walkthrough/README.md).
+Runs the server with a fake `claude` that plays scripted turns on demand — tool
+calls, subagents, permission requests, questions, turns left running — and
+drives a headless browser through the chat UI and the answering UI at phone and
+desktop sizes, light and dark. See [its README](ui-walkthrough/README.md).

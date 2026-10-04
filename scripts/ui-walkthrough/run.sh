@@ -1,5 +1,5 @@
 #!/bin/bash
-# Real-browser walkthrough of the answering UI (docs/answering-ui.md).
+# Real-browser walkthrough of the chat UI and the answering UI.
 # See README.md beside this file for what each command does.
 set -euo pipefail
 
@@ -8,7 +8,7 @@ PROJECT_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
 WALKTHROUGH_DIR="${WALKTHROUGH_DIR:-$PROJECT_DIR/.walkthrough}"
 STATE_DIR="$WALKTHROUGH_DIR/state"
-SHOTS_DIR="${SHOTS_DIR:-$WALKTHROUGH_DIR/shots/question-ui}"
+SHOTS_DIR="${SHOTS_DIR:-$WALKTHROUGH_DIR/shots}"
 PORT="${PORT:-18970}"
 PASSWORD="walkthrough"
 # Pinned so that every run drives the same browser build.
@@ -144,6 +144,7 @@ shoot)
 	;;
 *)
 	echo "usage: $0 {up|down|shoot [--themes=all] [filter...]}" >&2
+	echo "  a filter names a suite (chat, question), scene, viewport or theme" >&2
 	exit 2
 	;;
 esac
