@@ -207,6 +207,8 @@ interface RowButtonProps {
 	glyph: ReactNode;
 	error?: boolean;
 	toggleable?: boolean;
+	/** The id of the body the row opens, when the body is a sibling it names. */
+	controls?: string;
 	/** The text column: line 1 and, when there is one, the second line. */
 	children: ReactNode;
 }
@@ -222,6 +224,7 @@ export function RowButton({
 	glyph,
 	error,
 	toggleable = true,
+	controls,
 	children,
 }: RowButtonProps) {
 	return (
@@ -229,6 +232,7 @@ export function RowButton({
 			type="button"
 			onClick={onToggle}
 			aria-expanded={toggleable ? expanded : undefined}
+			aria-controls={toggleable ? controls : undefined}
 			// The row is the only tap target on its line, so it takes the touch
 			// floor directly rather than wearing an overlay: there is room to grow
 			// the box, and a real box is always simpler.

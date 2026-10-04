@@ -2,6 +2,7 @@ import { AnsiUp } from "ansi_up";
 import { Check, Circle, Loader2 } from "lucide-react";
 import { useMemo } from "react";
 import { groupContentBlocks } from "../../lib/contentBlocks";
+import { proposedChange } from "../../lib/proposedChange";
 import { CodeHighlighter } from "../../lib/shikiUtils";
 import { parseReadResult } from "../../lib/toolResultParser";
 import { useWSStore } from "../../lib/wsStore";
@@ -9,7 +10,7 @@ import type { ContentBlock } from "../../types/content";
 import { HIGHLIGHT_LIMIT } from "../../utils/fileView";
 import { formatFilePath, relativeToWorkDir } from "../../utils/path";
 import { FileContentDisplay, MarkdownContent } from "../ui";
-import { ProposedChange, proposedChange } from "./ProposedChange";
+import { ProposedChange } from "./ProposedChange";
 
 const ansiUp = new AnsiUp();
 ansiUp.use_classes = true;
