@@ -4,10 +4,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"testing"
 
+	"github.com/pockode/server/rpc"
 	"github.com/pockode/server/session"
 	"github.com/pockode/server/work"
 )
@@ -410,6 +412,40 @@ func TestSessionDetailWatcher_HandleWorkChange_SkipsWritesThatMoveNothing(t *tes
 	params := decodeSessionDetailParams(t, notifier.last())
 	if params.Session == nil || params.Session.Title != "renamed" {
 		t.Errorf("last notification is %+v, want the session change", params.Session)
+	}
+}
+
+// The open chat lists the stories it watches, so unlike its row it does take a
+// watched story's retitle: the list draws the title.
+func TestSessionDetailWatcher_HandleWorkChange_ListsTheWatchedStories(t *testing.T) {
+	store, works := sessionsWithOneWorkSession()
+	w := NewSessionDetailWatcher(store, works)
+	notifier := &captureNotifier{}
+	if _, err := w.Subscribe("client-1", "sess-chat", notifier); err != nil {
+		t.Fatalf("subscribe: %v", err)
+	}
+	w.Start()
+	defer w.Stop()
+
+	story := watchedStory("Story", work.StatusActive)
+	works.works = append(works.works, story)
+	w.HandleWorkChange(work.ChangeEvent{Op: work.OperationUpdate, Work: story})
+	waitFor(t, func() bool { return notifier.count() >= 1 })
+
+	params := decodeSessionDetailParams(t, notifier.last())
+	want := []rpc.WatchedStory{{ID: "story-1", Title: "Story", Status: work.StatusActive}}
+	if params.Session == nil || params.Session.Watching != 1 || !slices.Equal(params.Session.WatchedStories, want) {
+		t.Fatalf("detail = %+v, want watching 1 listing %+v", params.Session, want)
+	}
+
+	retitled := watchedStory("Renamed", work.StatusActive)
+	works.works[1] = retitled
+	w.HandleWorkChange(work.ChangeEvent{Op: work.OperationUpdate, Work: retitled, PrevWatcher: retitled.Watcher})
+	waitFor(t, func() bool { return notifier.count() >= 2 })
+
+	params = decodeSessionDetailParams(t, notifier.last())
+	if params.Session == nil || len(params.Session.WatchedStories) != 1 || params.Session.WatchedStories[0].Title != "Renamed" {
+		t.Errorf("detail = %+v, want the watched story retitled", params.Session)
 	}
 }
 

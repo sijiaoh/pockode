@@ -260,7 +260,7 @@ session at all.
 ### Activity
 
 `Activity` is what a work is *doing*, as one value, and it is derived —
-never stored. Eight leaves; the rule, in full:
+never stored. Nine leaves; the rule, in full:
 
 > The session says what is happening; the work's wait says what it is waiting
 > for when nothing is happening.
@@ -271,8 +271,9 @@ activity(work, turn):
   turn.phase == running          -> running
   turn.phase == blocked          -> permission > background
   otherwise (idle, or no turn):
-    wait child -> waiting_children
-    otherwise  -> idle
+    wait child   -> waiting_children
+    watching > 0 -> watching
+    otherwise    -> idle
 ```
 
 Phase outranks wait because a wait is a standing intention and a phase is a fact
@@ -283,6 +284,13 @@ nobody can act on — and those are the only two blockers a turn has.
 `needs_answer` was a ninth leaf and is gone with the CLI's own blocking question.
 Its replacement is not a leaf at all: a question an agent posts leaves the work
 `running`, and what says so is the count below.
+
+`watching` is the one leaf a work row never reaches: `RowStateFor` passes a
+count of zero. It is how many stories the *session* watches
+([A story's watcher](#a-storys-watcher)), and what a work row reports is the
+engine driving the work — an idle `active` work is nudged whether or not its
+session watches anything. It reaches session rows, plain chats included, from
+the row's `watching` count.
 
 Nothing here says "this work is waiting for a person", and that is the second
 dimension's job, not this one's — see below.
@@ -1162,17 +1170,36 @@ user is already being asked, and nothing nudges a watcher that leaves it.
 
 **Delivery is owed nothing, like [input 4](#input-4-a-subtasks-question-reaches-its-story).**
 The watcher declared no wait, so an undelivered message leaves nobody stuck:
-nothing is retried and nothing is stopped. Two watchers are skipped on purpose
-rather than failed on — a session that has been deleted, which matters only for
-news already on its way, since the deletion itself releases the watch (the send
-fails with `session.ErrSessionNotFound`, which `chat.ErrSessionNotFound` is an
-alias of so that `work` can tell it apart without importing `chat`), and a
-session running a work that is not `active`, because a message starts a turn —
-the reason [a stopped parent](#input-5-a-child-work-left-active) is told nothing either.
+nothing is retried and nothing is stopped. Two kinds of watcher are skipped on
+purpose rather than failed on. One is a session that has been deleted, which
+matters only for news already on its way, since the deletion itself releases the
+watch (the send fails with `session.ErrSessionNotFound`, which
+`chat.ErrSessionNotFound` is an alias of so that `work` can tell it apart without
+importing `chat`). The other is whatever `work.WakesWatcher` rules out: the
+story's own session — it is the one doing the telling — and a session running a
+work that is not `active`, because a message starts a turn — the reason
+[a stopped parent](#input-5-a-child-work-left-active) is told nothing either.
 Anything else is logged as a fault — including a watcher whose turn is holding
 a request on screen, which refuses every message: that news is lost, not
-queued, and the story's status and comments are where it is found again. A
-story never notifies its own session.
+queued, and the story's status and comments are where it is found again.
+
+**The watching session says so, and the count is derived, not stored.** A
+session's list row carries `watching` — how many stories it watches — and its
+detail carries the same count beside `watched_stories` (`{id, title, status}`),
+which together make the session's `watching` activity
+([lifecycle-ui.md §1.2](../lifecycle-ui.md#12-deriving-it)). Nothing is written
+to the session for it: `Work.Watcher` *is* the relation, read the other way
+round by `work.WatchedBySession` / `Store.WatchedBy`, as `work_id` is read off
+`Work.SessionID`. A story counts while it is not closed — stopped included — and
+the watching side is held to `WakesWatcher`, the predicate the delivery above
+uses, so the count can never promise a wake-up the engine will not send. Nor is
+it read off the news: a `watched_story_*` message records that something
+happened to the story at one moment and goes stale the moment the story moves
+again (AGENTS.md, *Events are events, state is state*), so a chat's "watching"
+is the store's live answer, re-resolved whenever a work changes. How that
+reaches the client — which change re-pushes which session, across worktrees —
+is
+[subscription-system.md § What a Session Watches](subscription-system.md#what-a-session-watches).
 
 **The news carries no standing instructions.** A `watched_story_*` message says
 what happened to the story and how to act on that one event, nothing more — so a

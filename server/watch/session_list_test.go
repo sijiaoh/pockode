@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/pockode/server/process"
+	"github.com/pockode/server/rpc"
 	"github.com/pockode/server/session"
 	"github.com/pockode/server/work"
 )
@@ -292,7 +293,7 @@ func TestSessionListWatcher_DirtyFlag_SyncsAfterDrop(t *testing.T) {
 		BaseWatcher: NewBaseWatcher(),
 		store:       store,
 		eventCh:     make(chan sessionListEvent, 1),
-		works:       newSessionWorkIndex(nil),
+		works:       newSessionWorkIndex(nil, sameRow),
 	}
 	store.AddOnChangeListener(w)
 
@@ -411,6 +412,10 @@ func (s *stubWorkSource) List() ([]work.Work, error) {
 		return nil, s.listErr
 	}
 	return s.works, nil
+}
+
+func (s *stubWorkSource) WatchedBy(sessionID string) ([]work.Work, error) {
+	return work.WatchedBySession(s.works)[sessionID], nil
 }
 
 func (s *stubWorkSource) FindBySessionID(sessionID string) (work.Work, bool, error) {
@@ -638,12 +643,117 @@ func TestSessionListWatcher_HandleWorkChange_IgnoresWorkWithoutASession(t *testi
 	}
 }
 
+// watchedStory is a story the plain chat of sessionsWithOneWorkSession watches.
+// Its own session lives in another worktree, so this store does not have it.
+func watchedStory(title string, status work.WorkStatus) work.Work {
+	return work.Work{
+		ID: "story-1", Title: title, Status: status, SessionID: "sess-elsewhere",
+		Watcher: &work.Watcher{SessionID: "sess-chat"},
+	}
+}
+
+// A story names its watcher, not the other way round, so a change to the story
+// is the only thing that can move a watcher's count: the watching session itself
+// is not touched by being watched. The count follows the watch on and off, and
+// a change that leaves it where it was — a retitle — stays off the wire.
+func TestSessionListWatcher_HandleWorkChange_PushesTheWatchersCount(t *testing.T) {
+	store, works := sessionsWithOneWorkSession()
+	w := NewSessionListWatcher(store, works)
+	notifier := &captureNotifier{}
+	if _, err := w.Subscribe("client-1", notifier, SessionListFilter{}); err != nil {
+		t.Fatalf("subscribe: %v", err)
+	}
+	w.Start()
+	defer w.Stop()
+
+	lastRow := func() rpc.SessionListItem {
+		t.Helper()
+		var params sessionListChangedParams
+		if err := json.Unmarshal(notifier.last(), &params); err != nil {
+			t.Fatalf("unmarshal params: %v", err)
+		}
+		if params.Session == nil || params.Session.ID != "sess-chat" {
+			t.Fatalf("expected the watcher's row, got %+v", params)
+		}
+		return *params.Session
+	}
+
+	story := watchedStory("Story", work.StatusActive)
+	works.works = append(works.works, story)
+	w.HandleWorkChange(work.ChangeEvent{Op: work.OperationUpdate, Work: story})
+	waitFor(t, func() bool { return notifier.count() >= 1 })
+	if got := lastRow().Watching; got != 1 {
+		t.Fatalf("watching = %d after the watched start, want 1", got)
+	}
+
+	retitled := watchedStory("Renamed", work.StatusActive)
+	works.works[1] = retitled
+	w.HandleWorkChange(work.ChangeEvent{Op: work.OperationUpdate, Work: retitled, PrevWatcher: retitled.Watcher})
+	// Nothing arrives for the retitle, so a session change — pushed
+	// unconditionally — is what says it has been handled before the store moves
+	// again.
+	w.OnSessionChange(session.SessionChangeEvent{
+		Op:      session.OperationUpdate,
+		Session: session.SessionMeta{ID: "sess-work"},
+	})
+	waitFor(t, func() bool { return notifier.count() >= 2 })
+	if got := notifier.count(); got != 2 {
+		t.Fatalf("sent %d notifications, want 2 — a retitle does not move the count", got)
+	}
+
+	closed := watchedStory("Renamed", work.StatusClosed)
+	closed.Watcher = nil
+	works.works[1] = closed
+	w.HandleWorkChange(work.ChangeEvent{Op: work.OperationUpdate, Work: closed, PrevWatcher: retitled.Watcher})
+	waitFor(t, func() bool { return notifier.count() >= 3 })
+	if got := lastRow().Watching; got != 0 {
+		t.Errorf("watching = %d after the story closed, want 0", got)
+	}
+}
+
+// A session whose own work leaves active is no longer woken by the stories it
+// watches (work.WakesWatcher), so that change — to the session's work, not to
+// any story — is what takes its count down.
+func TestSessionListWatcher_HandleWorkChange_DropsTheCountWhenTheWatchersWorkStops(t *testing.T) {
+	store, works := sessionsWithOneWorkSession()
+	works.works[0].Status = work.StatusActive
+	story := watchedStory("Story", work.StatusActive)
+	story.Watcher = &work.Watcher{SessionID: "sess-work"}
+	works.works = append(works.works, story)
+
+	w := NewSessionListWatcher(store, works)
+	notifier := &captureNotifier{}
+	snapshot, err := w.Subscribe("client-1", notifier, SessionListFilter{})
+	if err != nil {
+		t.Fatalf("subscribe: %v", err)
+	}
+	for _, item := range snapshot.Sessions {
+		if item.ID == "sess-work" && item.Watching != 1 {
+			t.Fatalf("watching = %d in the snapshot, want 1", item.Watching)
+		}
+	}
+	w.Start()
+	defer w.Stop()
+
+	works.works[0].Status = work.StatusStopped
+	w.HandleWorkChange(work.ChangeEvent{Op: work.OperationUpdate, Work: works.works[0]})
+	waitFor(t, func() bool { return notifier.count() >= 1 })
+
+	var params sessionListChangedParams
+	if err := json.Unmarshal(notifier.last(), &params); err != nil {
+		t.Fatalf("unmarshal params: %v", err)
+	}
+	if params.Session == nil || params.Session.ID != "sess-work" || params.Session.Watching != 0 {
+		t.Errorf("row = %+v, want sess-work watching nothing", params.Session)
+	}
+}
+
 func TestSessionListWatcher_Sync_IsFilteredPerSubscriber(t *testing.T) {
 	store, works := sessionsWithOneWorkSession()
 	w := &SessionListWatcher{
 		BaseWatcher: NewBaseWatcher(),
 		store:       store,
-		works:       newSessionWorkIndex(works),
+		works:       newSessionWorkIndex(works, sameRow),
 		eventCh:     make(chan sessionListEvent, 1),
 	}
 	store.AddOnChangeListener(w)

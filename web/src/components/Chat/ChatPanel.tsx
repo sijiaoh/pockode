@@ -18,6 +18,7 @@ import { useForkSession } from "../../hooks/useForkSession";
 import { useForkSupport } from "../../hooks/useForkSupport";
 import { useShortViewport } from "../../hooks/useShortViewport";
 import { useViewedSession } from "../../hooks/useViewedSession";
+import { sessionActivity } from "../../lib/activity";
 import { takeAnswerIntent } from "../../lib/answerIntent";
 import type { ChatAttachment } from "../../lib/chatAttachments";
 import {
@@ -37,6 +38,7 @@ import {
 } from "../../lib/sessionDetailStore";
 import { NEW_SESSION_TITLE, useSessionStore } from "../../lib/sessionStore";
 import { type SessionView, SessionViewProvider } from "../../lib/sessionView";
+import { useWorkStore } from "../../lib/workStore";
 import { useIsGitRepo } from "../../lib/worktreeStore";
 import { useWSStore } from "../../lib/wsStore";
 import type {
@@ -307,6 +309,18 @@ function ChatPanel({
 	const promptOwnsInput =
 		turn.phase === "blocked" &&
 		(turn.blockers ?? []).some((b) => b.kind === "permission");
+
+	// The strip says the session is watching by the rule its row is drawn by, so
+	// the row's Eye and the strip's line come and go together
+	// (docs/lifecycle-ui.md §1.2).
+	const sessionWorkId = sessionDetail?.work_id;
+	const sessionWork = useWorkStore((s) =>
+		sessionWorkId ? s.works.find((w) => w.id === sessionWorkId) : undefined,
+	);
+	const watchedStories =
+		sessionActivity(turn, sessionWork, sessionDetail?.watching) === "watching"
+			? sessionDetail?.watched_stories
+			: undefined;
 
 	// The cards behind those blockers, for the strip to answer from. Looked up
 	// at every depth: a subagent's request is filed under its Task call.
@@ -1291,6 +1305,8 @@ function ChatPanel({
 						// panel's own send through afterwards.
 						onPermissionRespond={handlePermissionRespond}
 						promptError={promptError ?? undefined}
+						watchedStories={watchedStories}
+						onOpenWorkDetail={onOpenWorkDetail}
 					/>
 				)}
 				{/* Not held back by an overlay, unlike the composer's errors: the

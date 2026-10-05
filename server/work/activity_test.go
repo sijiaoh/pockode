@@ -23,7 +23,8 @@ type activityCase struct {
 		Phase    session.TurnPhase     `json:"phase"`
 		Blockers []session.BlockerKind `json:"blockers"`
 	} `json:"turn"`
-	Want Activity `json:"want"`
+	Watching int      `json:"watching"`
+	Want     Activity `json:"want"`
 }
 
 func loadActivityCases(t *testing.T) []activityCase {
@@ -56,7 +57,7 @@ func TestDeriveActivity(t *testing.T) {
 				}
 			}
 
-			got := DeriveActivity(Work{Status: tc.Work.Status, Wait: tc.Work.Wait}, turn)
+			got := DeriveActivity(Work{Status: tc.Work.Status, Wait: tc.Work.Wait}, turn, tc.Watching)
 			if got != tc.Want {
 				t.Errorf("activity = %q, want %q", got, tc.Want)
 			}
@@ -80,6 +81,7 @@ func TestNeedsUserIsTheOneLeafTheUserCanActOn(t *testing.T) {
 		ActivityRunning:         false,
 		ActivityBackground:      false,
 		ActivityWaitingChildren: false,
+		ActivityWatching:        false,
 		ActivityIdle:            false,
 		ActivityStopped:         false,
 		ActivityClosed:          false,

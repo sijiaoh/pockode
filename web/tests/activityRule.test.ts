@@ -18,8 +18,10 @@ import type { WorkStatus, WorkWait } from "../src/types/work";
  */
 interface ActivityCase {
 	name: string;
-	work: { status: WorkStatus; wait?: WorkWait };
+	/** Absent for a session that runs no work — a plain chat. */
+	work?: { status: WorkStatus; wait?: WorkWait };
 	turn?: { phase: SessionTurn["phase"]; blockers?: TurnBlocker["kind"][] };
+	watching?: number;
 	want: Activity;
 }
 
@@ -50,6 +52,6 @@ describe("the shared activity rule", () => {
 			})),
 		};
 
-		expect(deriveActivity(c.work, turn)).toBe(c.want);
+		expect(deriveActivity(c.work, turn, c.watching)).toBe(c.want);
 	});
 });

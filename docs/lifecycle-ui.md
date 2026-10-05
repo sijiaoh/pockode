@@ -26,7 +26,7 @@ The new model makes waiting explicit, so the UI's job becomes narrow:
 
 ### 1.1 Activity
 
-`Activity` is the only state any surface paints. Eight leaves, and there is never
+`Activity` is the only state any surface paints. Nine leaves, and there is never
 more than one — the layers it is derived from are each exclusive.
 
 It answers **what the session is doing**, and only that. What the user has to
@@ -42,16 +42,17 @@ two answers, and both halves are true at once.
 | `needs_permission` | Turn blocked on a permission request | `Lock` | warning | Needs permission |
 | `background` | Turn blocked on a background task | `Hourglass` | secondary | Background task |
 | `waiting_children` | Work waits on subtasks (`story_wait`) | `Clock` | accent | Waiting on subtasks |
+| `watching` | Session between turns watches stories that have not closed | `Eye` | accent | Watching stories |
 | `idle` | Engine drives the work, nothing is happening | `CircleDot` | muted | Idle |
 | `stopped` | Engine does not touch it; a human must act | `CircleStop` | error | Stopped |
 | `closed` | Finished | `CircleCheck` | muted | Closed |
 
 Glyphs are all lucide icons the app already imports, except `Lock` and
-`Hourglass`. Nothing else is new: tones are the existing `th-*` semantic tokens
+`Hourglass` (`Eye` was already the file editor's). Nothing else is new: tones are the existing `th-*` semantic tokens
 (`text-th-accent`, `text-th-warning`, `text-th-text-secondary`,
 `text-th-text-muted`, `text-th-error`).
 
-Four decisions inside that table are load-bearing:
+Five decisions inside that table are load-bearing:
 
 - **`running` and `idle` share `CircleDot`; only the colour differs.** They are
   the same thing — a live, engine-driven work — differing in whether a turn is
@@ -73,6 +74,13 @@ Four decisions inside that table are load-bearing:
 - **`waiting_children` keeps accent.** Unlike `background` it is a structural
   state the user reads on purpose ("this story is coordinating"), and it is the
   state whose subtasks are the next place to look.
+- **`watching` keeps accent too.** A chat that started a story with `watch` and
+  stepped back is not finished — it is woken when the story closes, stops or
+  asks ([work-system.md § A story's watcher](code/work-system.md#a-storys-watcher)) —
+  and a muted glyph, or none, would tell the user it was. It is not a blocker
+  and not a wait the engine keeps: nothing about nudging reads it
+  ([lifecycle.md](lifecycle.md#activity-one-derived-answer)), and it never reaches a
+  work row (§1.2).
 
 ### 1.2 Deriving it
 
@@ -82,7 +90,7 @@ One rule, stated once, and the reason it is short:
 > for when nothing is happening.**
 
 ```
-activity(work, turn):            // work may be absent; turn may be absent
+activity(work, turn, watching):  // work may be absent; turn may be absent
   no work                  -> skip to the turn branches below
   work.status == "open"    -> open
   work.status == "closed"  -> closed
@@ -93,6 +101,7 @@ activity(work, turn):            // work may be absent; turn may be absent
                               otherwise (background)      -> background
   // turn.phase == "idle", or there is no turn at all
   work.wait == "child"     -> waiting_children
+  watching > 0             -> watching
   otherwise                -> idle
 ```
 
@@ -102,7 +111,8 @@ one subtle call in this document:
 ```
 sessionActivity(session):
   work = the work the row names, looked up by session.work_id in workStore
-  activity(work?.status == "active" ? work : undefined, session.turn)
+  activity(work?.status == "active" ? work : undefined, session.turn,
+           session.watching)
 ```
 
 **A session row sees a work's `wait`, never its `status`.** The wait is a fact
@@ -124,6 +134,23 @@ the right list, still says what its own `turn` is doing, and still links to the
 right work. Inverting the list instead would make *membership* depend on the
 list being complete, and that is a wrong row rather than a row missing one
 field.
+
+**`watching` is the session's, counted by the server, and comes last.** It is
+how many stories the session watches whose news would actually wake it, carried
+on the row as `watching` — a client holding a paged work list cannot count what
+it was never sent, which is the reason `work_id` is the server's too. The count
+is held to the rule the engine delivers by (`work.WakesWatcher`): a story's own
+session is not counted, and a session whose own work is not `active` counts
+nothing, because the news would not reach either and "this chat wakes when…"
+would be false. On the story's side it is "not closed" and nothing finer: a
+stopped story still counts, since its watcher may be waiting for it to be
+restarted and finish. It ranks below `wait` because a session waiting on its
+subtasks is doing what it was started for, and the stories it watches are
+something it does on the side. A plain chat — no work at all — reaches this
+branch, and that is the common case: a lead chat is usually one. A work row
+always passes zero: what it reports is the engine driving the work, and an idle
+`active` work is about to be nudged whether or not its session watches
+anything.
 
 Why phase outranks `wait` rather than the other way round: a `wait` is a standing
 intention, a phase is a fact about this second. A story that has called
@@ -237,6 +264,13 @@ copy below is written to need neither.
 as it is. `WorkListItem`: `status: "open" | "active" | "stopped" | "closed"`,
 plus `activity` and `wait?: "child"`.
 
+**`watching` is the same shape.** A row carries the count alone; the open
+session's `SessionDetail` carries it beside `watched_stories` (`{id, title,
+status}` each, in listing order), which is what the strip lists (§2.2). A
+title rides with the session rather than being looked up, so a story the work
+list has not paged in is still named; its activity is the one thing read from
+`workStore`, and is simply not drawn when the story is not there.
+
 **Every row also carries `unanswered_questions: number`, and only the number.**
 That is the second dimension in its list-shaped form: thirty sidebar rows do not
 need thirty question texts to draw thirty glyphs. The full list rides on the
@@ -251,8 +285,9 @@ the worse of the two).
 
 ### 1.4 The three components
 
-`web/src/lib/activity.ts` — `deriveActivity(work, turn)`,
-`sessionActivity(session, work)` (the three-line wrapper in §1.2),
+`web/src/lib/activity.ts` — `deriveActivity(work, turn, watching)`,
+`sessionActivity(turn, work, watching)` (the three-line wrapper in §1.2),
+`watchingLabel(count)` (the counted form of `watching`'s label),
 `ACTIVITY_VIEW` (`{ Icon, tone, label, ariaLabel }` per leaf),
 `needsAttention(activity, unansweredQuestions)`.
 
@@ -344,7 +379,7 @@ which the sidebar never sees
 its markup and becomes one branch of the indicator slot; every other leaf renders
 `ActivityIcon` (a 12px glyph reads as an indicator, not as an action, so it needs
 no hit area). Every `aria-label` in the table below, the spinner's included,
-comes from `ACTIVITY_VIEW` — the spinner is the one element here that had a
+comes from `ACTIVITY_VIEW` (`watching`'s with its count put in, below) — the spinner is the one element here that had a
 hand-written label, and leaving it hand-written would have kept one row of the
 vocabulary outside the map that owns it.
 
@@ -354,12 +389,23 @@ vocabulary outside the map that owns it.
 | `needs_permission` | `Lock` warning | "Waiting for your permission" |
 | `waiting_children` | `Clock` accent | "Waiting on subtasks" |
 | `background` | `Hourglass` secondary | "Waiting on a background task" |
+| `watching` | `Eye` accent | "Watching 1 story" / "Watching {n} stories" |
 | `idle` | unread dot, or nothing | — |
 
 `waiting_children` is the one a session row can only get from a work, and only
 from an `active` one, by the rule in §1.2; `open`, `stopped` and `closed` never
-reach a session row at all. Everything else in the table is read from the
-session's own turn, so it reaches a row whether or not any work is behind it.
+reach a session row at all. `watching` comes from the row's own `watching`
+count, so it reaches a plain chat as readily as a work session. Everything else
+in the table is read from the session's own turn, so it reaches a row whether or
+not any work is behind it.
+
+`watching`'s label is the one the row adds to: it knows the count, so `SidebarListItem` takes `watchingCount` and hands
+`ActivityIcon` the counted form (`watchingLabel`) through its `ariaLabel`
+override. The leaf's own "Watching stories" stays the fallback for a surface
+that has no count. Like `waiting_children`, it takes the indicator slot and so
+hides the unread dot (§1.5, rung 3); while a turn runs or is blocked, the
+turn's leaf wins and the `Eye` comes back when it settles — the rule in §1.2,
+with nothing added for it.
 
 **The question count is a second indicator beside that one, never instead of
 it** — rung 2 of §1.5. When `unanswered_questions > 0` the row draws `CircleHelp`
@@ -380,7 +426,7 @@ running *and* owes two answers used to have to pick one of those to say.
 
 One line between the transcript and `InputBar`, saying **what needs the user** —
 and, when nothing does, that a message reached the reply the agent is working
-on. `BlockerStrip` is renamed `AttentionStrip` with this change: two of its four
+on. `BlockerStrip` is renamed `AttentionStrip` with this change: most of its
 rows are not blockers, a question does not block a turn at all, and a name that
 describes one row of four is a name every later reader works around. It
 borrows `ForkOriginBanner`'s chrome — centred, `text-xs`, `size-3` glyph, muted —
@@ -388,7 +434,7 @@ because both are one-line statements about the transcript rather than controls,
 and the pane should have one vocabulary for them. It sits below the list (not at
 the top like the fork banner) because it describes the transcript's *end*.
 
-Four things it can say, in the order it prefers them:
+Five things it can say, in the order it prefers them:
 
 | State | Copy | Trailing action |
 |---|---|---|
@@ -396,6 +442,7 @@ Four things it can say, in the order it prefers them:
 | unanswered questions | "1 question is waiting for your answer." / "{n} questions are waiting for your answer." | **Answer** |
 | a message went into a turn already open, unread so far | "Sent — the agent has not read it yet." | — |
 | `background` | "Waiting on a background task — nothing to answer." | "Details" (expands) |
+| `watching` | "Watching 1 story — this chat wakes when it closes, stops, or asks." / "Watching {n} stories — this chat wakes when one closes, stops, or asks." | "Details" (expands) |
 
 The layout, copy and controls of the question row are
 [answering-ui.md §2](answering-ui.md#2-the-strip); only its rank is decided here.
@@ -532,7 +579,7 @@ are about something else (questions, the receipt). The full boundary is
 [turn-progress-ui.md §4](turn-progress-ui.md#4-what-it-does-not-say).
 
 Whichever it says, it is one bordered row, so the composer moves by at most one
-row's height however many of the four states hold — 33px for a statement, 45px
+row's height however many of the five states hold — 33px for a statement, 45px
 for the permission row. The composer's own height does not change with the
 state (the placeholder above is held to one line), so this is the whole of it.
 
@@ -573,6 +620,34 @@ No countdown to the 24h lease. A number the user cannot change, counting down to
 an outcome they would not recognise, is worse than the sentence above; the lease
 expiring produces a visible warning in the transcript (existing `WarningEvent`
 path), which is where a deadline belongs.
+
+#### The watching row
+
+The last row says what a chat that started stories and stepped back is waiting
+for, which an idle composer would otherwise answer with "nothing". It shows
+exactly when the session's activity is `watching`: `ChatPanel` evaluates
+`sessionActivity` with the open session's `work_id` and `watching`, the rule
+the session's row is drawn by, so the row's `Eye` and this line come and go
+together, and the strip is handed `watched_stories` only then. It shares the
+lowest rank with `background` and never meets it, since both are leaves; the
+question row and the receipt outrank it, and while the turn runs the tail line
+has the floor.
+
+- **The glyph is `Eye`, muted** like every glyph on the strip; the accent is
+  the row indicator's.
+- **"Details" expands the list**, `<ul aria-label="Watched stories">`, scrolled
+  inside `max-h-32` so a long list cannot push the composer off a short
+  screen. Each story is one button: its activity glyph and label read from
+  `workStore` the way a work row's are, and its title from `watched_stories`.
+  A story the work list has not paged in is still named, and drawn without an
+  activity — except a stopped one, whose status the session's detail carries.
+  Pressing it opens the story's detail page (`onOpenWorkDetail`), the route the
+  `watched_story_*` messages already take.
+- **Under the list, "Open a story to unwatch it."** The strip carries no Unwatch
+  of its own: letting go is decided on the story, where who is watching is
+  shown (§6.2).
+- **Its expanded state is its own.** It is not shared with the background
+  row's, so switching from one row to the other does not carry "open" across.
 
 ### 2.3 Chat: composer and Stop
 
@@ -798,7 +873,7 @@ carries it one step further out.
 
 Deliberately outside the dot:
 
-- **`background` and `waiting_children`.** There is nothing to do. A dot that
+- **`background`, `waiting_children` and `watching`.** There is nothing to do. A dot that
   means "something is happening" is a dot the user learns to ignore, and that
   habit is what made the old needs-input dot worthless.
 - **`stopped`.** A stopped work needs a human, but it needs one *whenever the
@@ -1027,6 +1102,31 @@ place the redesign is trying to separate them.
   ([answering-ui.md §4](answering-ui.md#4-when-the-panel-is-up)). The plain
   `Open Chat` control beside it is unchanged: it names no question, so the panel
   comes up on the oldest one and takes no focus.
+- **Under the wait line, who watches the story**, whenever the detail names a
+  `watcher`:
+
+  ```
+  👁 Watched by  Refactor the sidebar  ·  Unwatch
+  ```
+
+  Gated on the field and nothing else. Closing releases the watch, so the line
+  goes by itself; a stopped story keeps it, because the watch outlives a stop;
+  a task never has one. The session's name is a link to it
+  (`onNavigateToSession`). It is looked up in `sessionStore` by id rather than
+  copied onto the detail, where a rename would leave it stale; the list holds
+  only the worktree in view, so a watcher there that the list does not hold is
+  `UNLISTED_SESSION_NAME`, and one in another worktree is "a session in
+  ‹worktree›". The link works either way.
+
+  **Unwatch has no confirmation** (`work.unwatch`, which releases whoever is
+  watching —
+  [work-system.md § A story's watcher](code/work-system.md#a-storys-watcher)).
+  The story runs on untouched, and all the chat loses is being woken — one
+  message to it puts that right, which is the reason Stop asks nothing either.
+  Nor is it optimistic: the button is disabled while the request is out, the
+  detail's push takes the watcher away and the line with it, and the session's
+  row and strip move by their own pushes. A refusal is shown under the line,
+  `role="alert"`: "Failed to unwatch: {message}".
 - Children section header gains an active count — "{n} active" — whenever any
   child is `active`. This is what makes both §7 rejections legible without a
   second explanation: it is the same count each of them turns on, and "0 active"
@@ -1240,6 +1340,12 @@ controls are what they will land on:
   exactly 44px tall, so no overlay leaves the row. The panel's option rows are
   the exception and take a real `pointer-coarse:min-h-11` box rather than an
   overlay: a panel has room to grow the box, and a real box is always simpler.
+  The watching row's story list is the same exception for the same reason —
+  stacked overlays would overlap each other — at `min-h-9`, the fine-pointer
+  floor, growing to `min-h-11` under a coarse one. The detail page's "Watched
+  by" link and Unwatch are text on one line and take `touch-target`, `gap-2`
+  apart; the link truncates inside its own `<span>`, because `truncate` on the
+  button would clip the overlay with the text.
 - **Indicators are not controls.** `ActivityIcon` and `ActivityDot` render no
   button and take no handler anywhere in this design; a 12px glyph that could be
   tapped is a 12px glyph somebody will try to tap.
@@ -1254,22 +1360,23 @@ controls are what they will land on:
 
 | File | Change |
 |---|---|
-| `web/src/lib/activity.ts` | new — `deriveActivity`, `ACTIVITY_VIEW`, `needsAttention` |
+| `web/src/lib/activity.ts` | new — `deriveActivity`, `ACTIVITY_VIEW`, `needsAttention`, `watchingLabel` |
 | `web/src/components/ui/Activity{Icon,Badge,Dot}.tsx` | new — replace `StatusIcon` / `StatusBadge` |
 | `web/src/components/ui/StatusIcon.tsx`, `StatusBadge.tsx` | deleted |
-| `web/src/components/common/SidebarListItem.tsx` | `activity` + `unread` replace three booleans. It is a `web` component, not a `@pockode/shared` one — `web-cluster` has no sessions and no work, so nothing here is shared code |
-| `web/src/components/Session/SessionItem.tsx` | looks the row's own `work_id` up in `workStore` and passes `sessionActivity` (§1.2) |
-| `web/src/components/Chat/ChatPanel.tsx` | `turn.phase` replaces `isStreaming`; mounts the attention strip and the answer panel |
-| `web/src/components/Chat/AttentionStrip.tsx` | renamed from `BlockerStrip.tsx` — §2.2 |
+| `web/src/components/ui/ActivityIcon.tsx` | an `ariaLabel` override, for the row that knows how many stories it watches (§2.1) |
+| `web/src/components/common/SidebarListItem.tsx` | `activity` + `unread` replace three booleans; `watchingCount` for `watching`'s label. It is a `web` component, not a `@pockode/shared` one — `web-cluster` has no sessions and no work, so nothing here is shared code |
+| `web/src/components/Session/SessionItem.tsx` | looks the row's own `work_id` up in `workStore` and passes `sessionActivity` with the row's `watching` (§1.2) |
+| `web/src/components/Chat/ChatPanel.tsx` | `turn.phase` replaces `isStreaming`; mounts the attention strip and the answer panel; decides the watching row by `sessionActivity` |
+| `web/src/components/Chat/AttentionStrip.tsx` | renamed from `BlockerStrip.tsx` — §2.2, the watching row included |
 | `web/src/components/Chat/AnswerPanel.tsx` | new — [answering-ui.md §3](answering-ui.md#3-the-answer-panel) |
 | `web/src/components/Chat/QuestionRecordItem.tsx` | replaces `AskUserQuestionItem.tsx` — a record card: four states, no form ([answering-ui.md §6](answering-ui.md#6-the-record-card-in-the-stream)) |
 | `web/src/components/Chat/MessageItem.tsx` | permission card's expired banners |
 | `web/src/hooks/useChatMessages.ts` | `isProcessRunning` bookkeeping replaced by §2.4 |
 | `web/src/components/Project/WorkListOverlay.tsx` | the groups of §6.1, headed by a fixed `ActivityIcon` per group |
 | `web/src/components/Project/WorkRow.tsx` | the row itself — `ActivityIcon`, the activity label in its meta line, the icon-only lifecycle control ([project-ui.md §3](project-ui.md#3-the-row)) |
-| `web/src/components/Project/WorkDetailOverlay.tsx` | `ActivityBadge`, the `child`-only wait line, the unanswered-questions block, four-status button table |
+| `web/src/components/Project/WorkDetailOverlay.tsx` | `ActivityBadge`, the `child`-only wait line, the "Watched by" line and Unwatch, the unanswered-questions block, four-status button table |
 | `web/src/components/Project/WorkPrimaryAction.tsx` | new — the four-status table and the Stop confirmation. The row renders it; the action bar writes its own labelled button from the same hook and tables, which is why this has no labelled form of its own. It absorbs `WorkListOverlay`'s exported `StartButton`, which was the second answer to "which button does this row get" |
 | `web/src/components/Project/StepList.tsx` | §6.3 |
 | `web/src/components/Project/ProjectTab.tsx` | dot from `useWorkNeedsAttention` (`workStore.ts`) — the same bit `SessionSidebar` badges the tab itself with (§4) |
 | `web/src/utils/systemMessage.ts` | the `wait_stranded` work event (§7.2), laid out like `child_done` |
-| `web/src/types/{message,work}.ts` | `turn`; `status` / `activity` / `wait`; `unanswered_questions`, `PendingQuestion` |
+| `web/src/types/{message,work}.ts` | `turn`; `status` / `activity` / `wait`; `unanswered_questions`, `PendingQuestion`; `watching`, `WatchedStory`, `Work.watcher` |

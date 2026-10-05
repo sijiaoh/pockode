@@ -166,6 +166,28 @@ describe("what a session row says it is waiting for", () => {
 		});
 		expect(container.querySelector(".bg-th-accent")).toBeNull();
 	});
+
+	// A chat that started stories and stepped back is still alive: it wakes
+	// when one of them moves, so the row must not settle on idle or unread.
+	it.each([
+		[1, "Watching 1 story"],
+		[3, "Watching 3 stories"],
+	])("says how many stories it watches (%i)", (watching, label) => {
+		const { container } = renderRow({
+			turn: turn("idle"),
+			work_id: undefined,
+			watching,
+			unread: true,
+		});
+		expect(screen.getByLabelText(label)).toBeInTheDocument();
+		expect(container.querySelector(".bg-th-accent")).toBeNull();
+	});
+
+	it("lets a live turn outrank the watch", () => {
+		renderRow({ turn: turn("running"), work_id: undefined, watching: 2 });
+		expect(screen.getByLabelText("Agent is running")).toBeInTheDocument();
+		expect(screen.queryByLabelText(/Watching/)).toBeNull();
+	});
 });
 
 // Deleting a session takes away the place an answer would have gone, so the

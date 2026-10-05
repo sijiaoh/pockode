@@ -872,38 +872,36 @@ func (e *Engine) notifyWatcherOfEnd(event ChangeEvent) {
 // it is logged rather than retried. The story itself is where the news stays —
 // its status, its comments, its question.
 //
-// Two watchers are skipped on purpose rather than failed on:
+// Two kinds of watcher are skipped on purpose rather than failed on:
 //
 //   - A session that no longer exists. Deleting a chat is an ordinary thing to
 //     do, and a story does not have to be told. Deletion releases the watch
 //     (OnSessionDeleted), but news already on its way can still arrive after.
-//   - A session running a work the engine is not driving. A message starts a
-//     turn, and starting one under a stopped or closed work is the thing
-//     notifyParentOfChild refuses to do for the same reason.
+//   - One WakesWatcher rules out: the story's own session, or a session running
+//     a work the engine is not driving.
 //
 // Anything else that goes wrong is a fault and is logged as one — including a
 // watcher whose turn is holding a request on screen, which refuses every
 // message: the news is lost there, not queued.
 func (e *Engine) notifyWatcher(watcher Watcher, story Work, msg, subtype string) {
-	// A story's own session is never told about the story: it is the one
-	// doing the telling.
-	if watcher.SessionID == story.SessionID {
-		return
-	}
-
-	meta := &agent.MessageMeta{}
 	w, found, err := e.store.FindBySessionID(watcher.SessionID)
 	if err != nil {
 		slog.Warn("failed to find the work of a story's watcher",
 			"storyId", story.ID, "watcherSessionId", watcher.SessionID, "error", err)
 		return
 	}
+	var own *Work
 	if found {
-		if w.Status != StatusActive {
-			slog.Debug("a watched story's news for a work the engine is not driving",
-				"storyId", story.ID, "watcherWorkId", w.ID, "watcherStatus", w.Status)
-			return
-		}
+		own = &w
+	}
+	if !WakesWatcher(story, watcher.SessionID, own) {
+		slog.Debug("a watched story's news for a session it does not wake",
+			"storyId", story.ID, "watcherSessionId", watcher.SessionID)
+		return
+	}
+
+	meta := &agent.MessageMeta{}
+	if found {
 		meta = NewMessageMeta(w, w.CurrentStep+1, e.stepCount(w))
 	}
 	meta.Story = &agent.StoryInfo{ID: story.ID, Title: story.Title}

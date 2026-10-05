@@ -7,7 +7,11 @@
     "only one of the two fails on the other side.",
     "",
     "A case with no turn is a work with no session, or one whose session sits",
-    "between turns: for a work item the two are the same nothing."
+    "between turns: for a work item the two are the same nothing.",
+    "",
+    "`watching` is how many unclosed stories the session watches; absent is",
+    "none. A case with no work is a session that runs none — a plain chat, which",
+    "is where a watch usually lives."
   ],
   "cases": [
     {
@@ -78,6 +82,44 @@
       "name": "a wait with no session is still a wait",
       "work": { "status": "active", "wait": "child" },
       "want": "waiting_children"
+    },
+    {
+      "name": "a session between turns that watches stories",
+      "work": { "status": "active" },
+      "turn": { "phase": "idle" },
+      "watching": 2,
+      "want": "watching"
+    },
+    {
+      "name": "a plain chat between turns that watches a story",
+      "turn": { "phase": "idle" },
+      "watching": 1,
+      "want": "watching"
+    },
+    {
+      "name": "a running turn outranks watching",
+      "turn": { "phase": "running" },
+      "watching": 1,
+      "want": "running"
+    },
+    {
+      "name": "a turn parked on background work outranks watching",
+      "turn": { "phase": "blocked", "blockers": ["background"] },
+      "watching": 1,
+      "want": "background"
+    },
+    {
+      "name": "a wait on children outranks watching",
+      "work": { "status": "active", "wait": "child" },
+      "turn": { "phase": "idle" },
+      "watching": 1,
+      "want": "waiting_children"
+    },
+    {
+      "name": "a stopped work, whatever its session watches",
+      "work": { "status": "stopped" },
+      "watching": 1,
+      "want": "stopped"
     }
   ]
 }

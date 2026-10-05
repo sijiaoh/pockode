@@ -1,10 +1,12 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { useWorkStore } from "../../lib/workStore";
 import type {
 	PermissionStatus,
 	SessionTurn,
 	TurnBlocker,
+	WatchedStory,
 } from "../../types/message";
 import AttentionStrip, { type PermissionEntry } from "./AttentionStrip";
 import { ARM_MS } from "./SendStopSlot";
@@ -713,6 +715,80 @@ describe("AttentionStrip", () => {
 			expect(
 				screen.getByRole("button", { name: "Jump to request" }),
 			).toBeInTheDocument();
+		});
+	});
+
+	describe("the stories the chat watches", () => {
+		const stories: WatchedStory[] = [
+			{ id: "st1", title: "Ship the importer", status: "active" },
+			{ id: "st2", title: "Fix the flaky test", status: "stopped" },
+		];
+
+		afterEach(() => useWorkStore.getState().reset());
+
+		it.each([
+			[1, "Watching 1 story — this chat wakes when it closes, stops, or asks."],
+			[
+				2,
+				"Watching 2 stories — this chat wakes when one closes, stops, or asks.",
+			],
+		])("says how many it watches (%i)", (n, text) => {
+			render(
+				<AttentionStrip
+					turn={turn("idle")}
+					onJumpToRequest={vi.fn()}
+					watchedStories={stories.slice(0, n)}
+				/>,
+			);
+			expect(screen.getByText(text)).toBeInTheDocument();
+		});
+
+		it("lists them behind Details, each a way to its page", async () => {
+			const user = userEvent.setup();
+			const onOpen = vi.fn();
+			useWorkStore.getState().setWorks([
+				{
+					id: "st1",
+					type: "story",
+					title: "Ship the importer",
+					status: "active",
+					activity: "waiting_children",
+					updated_at: "2026-01-02T14:02:00Z",
+				},
+			]);
+			render(
+				<AttentionStrip
+					turn={turn("idle")}
+					onJumpToRequest={vi.fn()}
+					watchedStories={stories}
+					onOpenWorkDetail={onOpen}
+				/>,
+			);
+
+			expect(screen.queryByRole("list")).toBeNull();
+			await user.click(screen.getByRole("button", { name: "Details" }));
+
+			const list = screen.getByRole("list", { name: "Watched stories" });
+			// The story's own activity, from the work list where it is paged in,
+			// and from its status alone where it is not.
+			expect(list).toHaveTextContent("Ship the importerWaiting on subtasks");
+			expect(list).toHaveTextContent("Fix the flaky testStopped");
+
+			await user.click(screen.getByText("Fix the flaky test"));
+			expect(onOpen).toHaveBeenCalledWith("st2");
+		});
+
+		// Both are activity leaves, so the caller never passes both; a turn that
+		// is blocked is the row that speaks.
+		it("gives way to a background wait", () => {
+			render(
+				<AttentionStrip
+					turn={turn("blocked", [background])}
+					onJumpToRequest={vi.fn()}
+					watchedStories={stories}
+				/>,
+			);
+			expect(screen.queryByText(/Watching/)).toBeNull();
 		});
 	});
 });

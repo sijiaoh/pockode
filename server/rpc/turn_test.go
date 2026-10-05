@@ -42,7 +42,7 @@ func TestSessionDetailSendsTheWireTurn(t *testing.T) {
 		Phase: session.PhaseRunning, Open: true, OpenedAt: time.Now().Add(-time.Hour),
 	}}
 
-	data, err := json.Marshal(NewSessionDetail(meta, ""))
+	data, err := json.Marshal(NewSessionDetail(meta, SessionWork{}))
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}

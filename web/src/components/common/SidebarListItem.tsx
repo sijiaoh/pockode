@@ -1,6 +1,10 @@
 import { CircleHelp } from "lucide-react";
 import type { ReactNode } from "react";
-import { ACTIVITY_VIEW, type Activity } from "../../lib/activity";
+import {
+	ACTIVITY_VIEW,
+	type Activity,
+	watchingLabel,
+} from "../../lib/activity";
 import { ActivityIcon } from "../ui";
 
 interface Props {
@@ -21,6 +25,11 @@ interface Props {
 	 * keeps running, so the two are true at once and one glyph cannot say both.
 	 */
 	unansweredQuestions?: number;
+	/**
+	 * How many stories the row's session watches. Only read while `activity` is
+	 * `watching`, to put the number in the glyph's label.
+	 */
+	watchingCount?: number;
 	/** Whether anything has arrived since the row was last read. */
 	unread?: boolean;
 	leftSlot?: ReactNode;
@@ -35,6 +44,7 @@ function SidebarListItem({
 	isActive,
 	activity,
 	unansweredQuestions = 0,
+	watchingCount = 0,
 	unread,
 	leftSlot,
 	actions,
@@ -74,7 +84,15 @@ function SidebarListItem({
 						aria-label={ACTIVITY_VIEW.running.ariaLabel}
 					/>
 				) : activity && activity !== "idle" ? (
-					<ActivityIcon activity={activity} size="sm" />
+					<ActivityIcon
+						activity={activity}
+						size="sm"
+						ariaLabel={
+							activity === "watching" && watchingCount > 0
+								? watchingLabel(watchingCount)
+								: undefined
+						}
+					/>
 				) : (
 					unansweredQuestions === 0 &&
 					unread && (

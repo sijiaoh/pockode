@@ -42,7 +42,7 @@ func NewSessionDetailWatcher(store session.Store, works SessionWorkSource) *Sess
 	w := &SessionDetailWatcher{
 		BaseWatcher: NewBaseWatcher(),
 		store:       store,
-		works:       newSessionWorkIndex(works),
+		works:       newSessionWorkIndex(works, sameDetail),
 		// Same source and same size as SessionListWatcher's channel: both are fed
 		// by every session change in the worktree, so a burst one can absorb
 		// without falling back to a full sync the other must absorb too.
@@ -101,21 +101,22 @@ func (w *SessionDetailWatcher) notifyChange(event session.SessionChangeEvent) {
 		return
 	}
 
-	workID, ok := w.works.resolve(sessionID)
+	sw, ok := w.works.resolve(sessionID)
 	if !ok {
 		// Nothing truthful to say: the session is readable but the relation is
 		// not, and a detail that omits the work item claims the session belongs
 		// to none. The next change to either side resolves it again.
 		return
 	}
-	detail := rpc.NewSessionDetail(event.Session, workID)
-	w.works.remember(sessionID, workID)
+	detail := rpc.NewSessionDetail(event.Session, sw)
+	w.works.remember(sessionID, sw)
 	w.pushDetail(sessionID, &detail)
 }
 
-// notifyWorkChange re-sends the detail of the session a changed work item runs.
-// Nothing about the session moves when the relation does, so without this the
-// open session would keep saying what was true when it was last written.
+// notifyWorkChange re-sends the details of the sessions a changed work item
+// names: the one it runs, and the one watching it (sessionsTouchedBy). Nothing
+// about a session moves when either relation does, so without this the open
+// session would keep saying what was true when it was last written.
 //
 // The relation is resolved from the store rather than read off the event: a
 // delete carries the work as it was, and the detail has to say what it is now,
@@ -123,21 +124,28 @@ func (w *SessionDetailWatcher) notifyChange(event session.SessionChangeEvent) {
 //
 // Most of these changes move nothing a subscriber holds — a work is written
 // several times a turn, for a wait declared, a nudge counted, a step advanced —
-// so an event that would repeat the work id already sent for this session stops
-// here, before the store read.
+// so an event that would repeat the relation already sent for this session
+// stops here, before the store read.
+//
+// A work with no session and no watcher names no session to re-resolve; what
+// that covers, and the one case it leaves behind, is on
+// SessionListWatcher.notifyWorkChange.
 func (w *SessionDetailWatcher) notifyWorkChange(event work.ChangeEvent) {
-	// A work with no session names no session to re-resolve; what that covers,
-	// and the one case it leaves behind, is on SessionListWatcher.notifyWorkChange.
-	sessionID := event.Work.SessionID
-	if sessionID == "" || !w.HasSubscriptionForKey(sessionID) {
-		return
+	for _, sessionID := range sessionsTouchedBy(event) {
+		if w.HasSubscriptionForKey(sessionID) {
+			w.refreshSession(sessionID, event.Work.ID)
+		}
 	}
+}
 
-	workID, ok := w.works.resolve(sessionID)
+// refreshSession re-sends one session's detail if its relation to the work
+// layer moved since it last went out.
+func (w *SessionDetailWatcher) refreshSession(sessionID, changedWorkID string) {
+	sw, ok := w.works.resolve(sessionID)
 	if !ok {
 		return
 	}
-	if w.works.alreadySent(sessionID, workID) {
+	if w.works.alreadySent(sessionID, sw) {
 		return
 	}
 
@@ -152,10 +160,10 @@ func (w *SessionDetailWatcher) notifyWorkChange(event work.ChangeEvent) {
 		return
 	}
 
-	detail := rpc.NewSessionDetail(meta, workID)
-	w.works.remember(sessionID, workID)
+	detail := rpc.NewSessionDetail(meta, sw)
+	w.works.remember(sessionID, sw)
 	w.pushDetail(sessionID, &detail)
-	slog.Debug("notified session detail of a work change", "workId", event.Work.ID, "sessionId", sessionID)
+	slog.Debug("notified session detail of a work change", "workId", changedWorkID, "sessionId", sessionID)
 }
 
 func (w *SessionDetailWatcher) pushDetail(sessionID string, detail *rpc.SessionDetail) {
@@ -200,13 +208,13 @@ func (w *SessionDetailWatcher) notifySyncAll() {
 			details[sub.Key] = nil
 			continue
 		}
-		workID, ok := w.works.resolve(sub.Key)
+		sw, ok := w.works.resolve(sub.Key)
 		if !ok {
 			skipped = true
 			continue
 		}
-		detail := rpc.NewSessionDetail(meta, workID)
-		w.works.remember(sub.Key, workID)
+		detail := rpc.NewSessionDetail(meta, sw)
+		w.works.remember(sub.Key, sw)
 		details[sub.Key] = &detail
 	}
 
@@ -241,7 +249,7 @@ func (w *SessionDetailWatcher) Subscribe(id, sessionID string, notifier Notifier
 		return rpc.SessionDetail{}, err
 	}
 
-	// The work id last sent for this session is dropped rather than replaced
+	// The relation last sent for this session is dropped rather than replaced
 	// with the one this snapshot carries. That record exists to skip a push that
 	// would tell every subscriber of this session what they already hold, and it
 	// is only sound while it names what all of them hold — which a new
@@ -264,12 +272,12 @@ func (w *SessionDetailWatcher) Subscribe(id, sessionID string, notifier Notifier
 	// Refused rather than answered without it, as the session list refuses a
 	// snapshot it cannot resolve: a detail missing its work id is a session
 	// claiming to belong to no work, and a subscriber has no reason to ask again.
-	workID, err := w.works.resolveErr(sessionID)
+	sw, err := w.works.resolveErr(sessionID)
 	if err != nil {
 		w.RemoveSubscription(id)
 		return rpc.SessionDetail{}, fmt.Errorf("resolve the work of session %s: %w", sessionID, err)
 	}
-	return rpc.NewSessionDetail(meta, workID), nil
+	return rpc.NewSessionDetail(meta, sw), nil
 }
 
 // sessionDetailChangedParams reports a session's new state, or its removal.

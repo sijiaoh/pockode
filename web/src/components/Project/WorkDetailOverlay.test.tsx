@@ -4,7 +4,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Activity } from "../../lib/activity";
 import { useAgentRoleStore } from "../../lib/agentRoleStore";
 import { clearAnswerIntent, takeAnswerIntent } from "../../lib/answerIntent";
+import { useSessionStore } from "../../lib/sessionStore";
 import { useWorkStore } from "../../lib/workStore";
+import { useWorktreeStore } from "../../lib/worktreeStore";
+import { useWSStore } from "../../lib/wsStore";
+import { makeSessionListItem } from "../../test/sessionFixtures";
 import type { AgentRole } from "../../types/agentRole";
 import type { PendingQuestion } from "../../types/message";
 import type { Work } from "../../types/work";
@@ -762,5 +766,88 @@ describe("the unanswered questions section", () => {
 
 		await user.click(screen.getByRole("button", { name: "Open Chat" }));
 		expect(takeAnswerIntent("s1")).toBeNull();
+	});
+});
+
+describe("the watcher line", () => {
+	const unwatchWork = vi.fn<(id: string) => Promise<void>>();
+	const watched = (worktree?: string) =>
+		createWork({ watcher: { session_id: "lead", worktree } });
+
+	beforeEach(() => {
+		mockUseWorkDetailSubscription.mockReset();
+		unwatchWork.mockReset();
+		unwatchWork.mockResolvedValue(undefined);
+		useWSStore.setState((s) => ({ actions: { ...s.actions, unwatchWork } }));
+		useWorktreeStore.setState({ current: "" });
+		useSessionStore.getState().reset();
+		useSessionStore.setState({
+			sessions: [makeSessionListItem({ id: "lead", title: "Lead chat" })],
+		});
+	});
+
+	it("names the chat it wakes, and leads back to it", async () => {
+		const user = userEvent.setup();
+		const onNavigateToSession = vi.fn();
+		mockUseWorkDetailSubscription.mockReturnValue({
+			work: watched(),
+			activity: "running",
+			comments: [],
+			children: [],
+			parent: null,
+			pendingQuestions: [],
+			loading: false,
+			error: null,
+		});
+		render(
+			<WorkDetailOverlay
+				workId="work-1"
+				onBack={vi.fn()}
+				onNavigateToSession={onNavigateToSession}
+				onOpenWorkDetail={vi.fn()}
+			/>,
+		);
+
+		expect(screen.getByText("Watched by")).toBeInTheDocument();
+		await user.click(screen.getByRole("button", { name: "Lead chat" }));
+		expect(onNavigateToSession).toHaveBeenCalledWith("lead", "");
+	});
+
+	// The session list holds the worktree in view, so a watcher elsewhere is
+	// named by where it lives rather than called missing.
+	it("names a watcher in another worktree by its worktree", () => {
+		renderWithWork(watched("feature-x"));
+		expect(
+			screen.getByRole("button", { name: "a session in feature-x" }),
+		).toBeInTheDocument();
+	});
+
+	it("says nothing about a story nobody watches", () => {
+		renderWithWork(createWork());
+		expect(screen.queryByText("Watched by")).toBeNull();
+	});
+
+	// The story runs on either way, so there is nothing to confirm; the line
+	// goes when the detail's push drops the watcher, not before.
+	it("unwatches at once, without asking", async () => {
+		const user = userEvent.setup();
+		renderWithWork(watched());
+		await user.click(
+			screen.getByRole("button", {
+				name: "Unwatch — stop waking Lead chat with this story's news",
+			}),
+		);
+		expect(unwatchWork).toHaveBeenCalledWith("work-1");
+		expect(screen.queryByRole("dialog")).toBeNull();
+	});
+
+	it("says why an unwatch failed", async () => {
+		const user = userEvent.setup();
+		unwatchWork.mockRejectedValueOnce(new Error("not connected"));
+		renderWithWork(watched());
+		await user.click(screen.getByRole("button", { name: /^Unwatch/ }));
+		expect(await screen.findByRole("alert")).toHaveTextContent(
+			"Failed to unwatch: not connected",
+		);
 	});
 });

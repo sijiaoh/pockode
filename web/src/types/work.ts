@@ -99,7 +99,20 @@ export interface Work
 	extends Omit<WorkListItem, "activity" | "unanswered_questions"> {
 	body?: string;
 	current_step?: number;
+	/**
+	 * The session this story wakes when it closes, stops or asks something.
+	 * Absent when nobody watches it — always on a task, and on a story once it
+	 * closes, which releases the watch. On the detail alone: the session's row
+	 * counts what it watches (`SessionListItem.watching`).
+	 */
+	watcher?: WorkWatcher;
 	created_at: string;
+}
+
+export interface WorkWatcher {
+	session_id: string;
+	/** Worktree the watching session lives in (empty/undefined = main). */
+	worktree?: string;
 }
 
 /**

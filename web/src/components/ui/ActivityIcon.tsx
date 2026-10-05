@@ -13,6 +13,11 @@ interface Props {
 	 * announcing it a second time.
 	 */
 	decorative?: boolean;
+	/**
+	 * Replaces the leaf's own label where the surface knows more than the leaf
+	 * says — a session row knows how many stories it is watching.
+	 */
+	ariaLabel?: string;
 }
 
 /** A tone as the colour of a glyph standing on its own. */
@@ -43,6 +48,7 @@ export default function ActivityIcon({
 	activity,
 	size = "default",
 	decorative,
+	ariaLabel: ariaLabelOverride,
 }: Props) {
 	const { Icon, tone, ariaLabel } = ACTIVITY_VIEW[activity];
 	const base = size === "sm" ? "size-3 shrink-0" : "size-3.5 shrink-0";
@@ -50,7 +56,7 @@ export default function ActivityIcon({
 	return (
 		<Icon
 			className={`${base} ${glyphClass(tone)}`}
-			aria-label={decorative ? undefined : ariaLabel}
+			aria-label={decorative ? undefined : (ariaLabelOverride ?? ariaLabel)}
 			aria-hidden={decorative ? "true" : undefined}
 		/>
 	);
