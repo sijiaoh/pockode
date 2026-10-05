@@ -22,7 +22,7 @@ const localResponseHeaderTimeout = 30 * time.Second
 // maxIdleLocalConns keeps a connection pooled per concurrent relayed request.
 // Sized to the relay's per-tunnel stream budget so a busy page load does not
 // re-dial localhost for every asset.
-const maxIdleLocalConns = 32
+const maxIdleLocalConns = 64
 
 // forwardedHeaders are set by the cloud relay from the public request. Rewrite
 // strips them from the outbound request, so they are copied back explicitly;
@@ -45,8 +45,13 @@ func newLocalProxy(backendPort, frontendPort int, site previewSite, auth preview
 		DialContext: (&net.Dialer{Timeout: 5 * time.Second}).DialContext,
 		// net/http defaults to 2 idle connections per host, which would
 		// make every relayed request past the second re-dial localhost.
-		// The relay caps its concurrent streams, so this bounds naturally.
-		MaxIdleConnsPerHost:   maxIdleLocalConns,
+		MaxIdleConnsPerHost: maxIdleLocalConns,
+		// That cap is per port and per transport, and each tunnel builds its
+		// own transport, so idle connections must also expire: otherwise
+		// every reconnect strands its predecessor's pool on every port it
+		// reached, and previews reach any port. 90 s is
+		// http.DefaultTransport's value.
+		IdleConnTimeout:       90 * time.Second,
 		ResponseHeaderTimeout: localResponseHeaderTimeout,
 	}
 
