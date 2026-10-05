@@ -138,8 +138,8 @@ type Work struct {
 	// closes it releases the watcher too (FileStore.StepDone). A story closed and
 	// reopened is unwatched until a later start with watch. Before the close it
 	// can also be released (FileStore.Unwatch): by the watcher itself through
-	// story_unwatch, by a person from the UI, or by the watching session being
-	// deleted (Engine.OnSessionDeleted).
+	// story_unwatch, or by the watching session being deleted
+	// (Engine.OnSessionDeleted).
 	Watcher   *Watcher  `json:"watcher,omitempty"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`

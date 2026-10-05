@@ -516,8 +516,7 @@ func (e *Executor) storyUnwatch(ctx context.Context, caller Caller, args json.Ra
 		return "", errNoCallerSession("story_unwatch", "there is no chat whose watch could be released")
 	}
 
-	self := caller.watcher()
-	prev, released, err := e.workOps.Unwatch(ctx, params.ID, &self)
+	prev, released, err := e.workOps.Unwatch(ctx, params.ID, caller.watcher())
 	if err != nil {
 		return "", err
 	}

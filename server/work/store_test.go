@@ -401,13 +401,12 @@ func TestUnwatch(t *testing.T) {
 	tests := []struct {
 		name         string
 		watched      bool
-		only         *Watcher
+		by           Watcher
 		wantReleased bool
 	}{
-		{name: "the watcher itself", watched: true, only: &watcher, wantReleased: true},
-		{name: "anyone, as a person from the UI", watched: true, only: nil, wantReleased: true},
-		{name: "another session", watched: true, only: &other, wantReleased: false},
-		{name: "nobody watching", watched: false, only: &watcher, wantReleased: false},
+		{name: "the watcher itself", watched: true, by: watcher, wantReleased: true},
+		{name: "another session", watched: true, by: other, wantReleased: false},
+		{name: "nobody watching", watched: false, by: watcher, wantReleased: false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -430,7 +429,7 @@ func TestUnwatch(t *testing.T) {
 			changes := 0
 			s.AddOnChangeListener(listenerFunc(func(ChangeEvent) { changes++ }))
 
-			prev, released, err := s.Unwatch(context.Background(), story.ID, tt.only)
+			prev, released, err := s.Unwatch(context.Background(), story.ID, tt.by)
 			if err != nil {
 				t.Fatalf("Unwatch: %v", err)
 			}
@@ -481,14 +480,14 @@ func TestUnwatch_RefusesATask(t *testing.T) {
 	story := createStory(t, s, "S")
 	task := createTask(t, s, story.ID, "T")
 
-	if _, _, err := s.Unwatch(context.Background(), task.ID, nil); !errors.Is(err, ErrInvalidWork) {
+	if _, _, err := s.Unwatch(context.Background(), task.ID, Watcher{SessionID: "sess-watcher"}); !errors.Is(err, ErrInvalidWork) {
 		t.Errorf("err = %v, want ErrInvalidWork", err)
 	}
 }
 
 func TestUnwatch_NotFound(t *testing.T) {
 	s := newTestStore(t)
-	if _, _, err := s.Unwatch(context.Background(), "missing", nil); !errors.Is(err, ErrWorkNotFound) {
+	if _, _, err := s.Unwatch(context.Background(), "missing", Watcher{SessionID: "sess-watcher"}); !errors.Is(err, ErrWorkNotFound) {
 		t.Errorf("err = %v, want ErrWorkNotFound", err)
 	}
 }

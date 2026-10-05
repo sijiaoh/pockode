@@ -1060,10 +1060,6 @@ type WorkReopenParams struct {
 	ID string `json:"id"`
 }
 
-type WorkUnwatchParams struct {
-	ID string `json:"id"`
-}
-
 // WorkListItem is one row of the work list: what drawing a row needs, and
 // nothing more.
 //

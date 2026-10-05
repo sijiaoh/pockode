@@ -643,9 +643,9 @@ has the floor.
   activity — except a stopped one, whose status the session's detail carries.
   Pressing it opens the story's detail page (`onOpenWorkDetail`), the route the
   `watched_story_*` messages already take.
-- **Under the list, "Open a story to unwatch it."** The strip carries no Unwatch
-  of its own: letting go is decided on the story, where who is watching is
-  shown (§6.2).
+- **No Unwatch anywhere in the web.** The watch is the watching agent's to
+  release with `story_unwatch`; a person who wants it gone tells that chat
+  ([work-system.md § A story's watcher](code/work-system.md#a-storys-watcher)).
 - **Its expanded state is its own.** It is not shared with the background
   row's, so switching from one row to the other does not carry "open" across.
 
@@ -1106,7 +1106,7 @@ place the redesign is trying to separate them.
   `watcher`:
 
   ```
-  👁 Watched by  Refactor the sidebar  ·  Unwatch
+  👁 Watched by  Refactor the sidebar
   ```
 
   Gated on the field and nothing else. Closing releases the watch, so the line
@@ -1118,15 +1118,7 @@ place the redesign is trying to separate them.
   `UNLISTED_SESSION_NAME`, and one in another worktree is "a session in
   ‹worktree›". The link works either way.
 
-  **Unwatch has no confirmation** (`work.unwatch`, which releases whoever is
-  watching —
-  [work-system.md § A story's watcher](code/work-system.md#a-storys-watcher)).
-  The story runs on untouched, and all the chat loses is being woken — one
-  message to it puts that right, which is the reason Stop asks nothing either.
-  Nor is it optimistic: the button is disabled while the request is out, the
-  detail's push takes the watcher away and the line with it, and the session's
-  row and strip move by their own pushes. A refusal is shown under the line,
-  `role="alert"`: "Failed to unwatch: {message}".
+  The line is read-only: there is no Unwatch beside it (§2.2).
 - Children section header gains an active count — "{n} active" — whenever any
   child is `active`. This is what makes both §7 rejections legible without a
   second explanation: it is the same count each of them turns on, and "0 active"
@@ -1343,9 +1335,9 @@ controls are what they will land on:
   The watching row's story list is the same exception for the same reason —
   stacked overlays would overlap each other — at `min-h-9`, the fine-pointer
   floor, growing to `min-h-11` under a coarse one. The detail page's "Watched
-  by" link and Unwatch are text on one line and take `touch-target`, `gap-2`
-  apart; the link truncates inside its own `<span>`, because `truncate` on the
-  button would clip the overlay with the text.
+  by" link is text on its line and takes `touch-target`; it truncates inside
+  its own `<span>`, because `truncate` on the button would clip the overlay
+  with the text.
 - **Indicators are not controls.** `ActivityIcon` and `ActivityDot` render no
   button and take no handler anywhere in this design; a 12px glyph that could be
   tapped is a 12px glyph somebody will try to tap.
@@ -1374,7 +1366,7 @@ controls are what they will land on:
 | `web/src/hooks/useChatMessages.ts` | `isProcessRunning` bookkeeping replaced by §2.4 |
 | `web/src/components/Project/WorkListOverlay.tsx` | the groups of §6.1, headed by a fixed `ActivityIcon` per group |
 | `web/src/components/Project/WorkRow.tsx` | the row itself — `ActivityIcon`, the activity label in its meta line, the icon-only lifecycle control ([project-ui.md §3](project-ui.md#3-the-row)) |
-| `web/src/components/Project/WorkDetailOverlay.tsx` | `ActivityBadge`, the `child`-only wait line, the "Watched by" line and Unwatch, the unanswered-questions block, four-status button table |
+| `web/src/components/Project/WorkDetailOverlay.tsx` | `ActivityBadge`, the `child`-only wait line, the "Watched by" line, the unanswered-questions block, four-status button table |
 | `web/src/components/Project/WorkPrimaryAction.tsx` | new — the four-status table and the Stop confirmation. The row renders it; the action bar writes its own labelled button from the same hook and tables, which is why this has no labelled form of its own. It absorbs `WorkListOverlay`'s exported `StartButton`, which was the second answer to "which button does this row get" |
 | `web/src/components/Project/StepList.tsx` | §6.3 |
 | `web/src/components/Project/ProjectTab.tsx` | dot from `useWorkNeedsAttention` (`workStore.ts`) — the same bit `SessionSidebar` badges the tab itself with (§4) |

@@ -1122,7 +1122,7 @@ closed and reopened is unwatched until a later start with `watch`; since
 `Reopen` makes it `active` directly, that start can come only after it next
 stops.
 
-**Letting go is asymmetric.** Before the close, a watch ends in three ways, all
+**Only the watcher lets go.** Before the close, a watch ends in two ways, both
 through `FileStore.Unwatch`, which compares and clears under the store's lock
 for the reason `SetChildWait` does — a watched start landing between a check and
 a write would otherwise be released by a call meant for its predecessor:
@@ -1130,21 +1130,21 @@ a write would otherwise be released by a call meant for its predecessor:
 | Who lets go | Through | Releases |
 |---|---|---|
 | the watcher itself | `story_unwatch` | only the caller's own watch (`{session_id, worktree}` must match exactly) |
-| a person | `work.unwatch` | whoever is watching |
 | nobody — the watching session was deleted | [input 6](#input-6-the-session-was-deleted) | every watch held by exactly that session |
 
 An agent lowers only the flag it raised: another chat's watch is that chat's,
 and finding one, or none, is not an error — the caller wanted not to be told,
-and is not; the result says why nothing changed. A person acts on the story
-rather than as a watcher, so the UI releases whoever it is. Only `Watcher` is
-cleared: the story's status, wait, session, step and tasks are untouched, so an
-unwatched story runs on exactly as before, and the update event it emits
-changes no status, so `notifyWatcherOfEnd` reads nothing into it. A watcher
-that has lost track of what it watches finds it through `story_list`, which
-marks exactly the caller's watches `watched: true` — the same exact match, read
-from the live `Work.Watcher`, so a closed story is never marked. `story_start`,
-`story_unwatch` and `story_list` take "this chat" from one place,
-`mcp.Caller.watcher()`, so the three cannot disagree about who it is.
+and is not; the result says why nothing changed. There is no web path: the
+watch is the watching agent's, and a person who wants it gone tells that chat.
+Only `Watcher` is cleared: the story's status, wait, session, step and tasks
+are untouched, so an unwatched story runs on exactly as before, and the update
+event it emits changes no status, so `notifyWatcherOfEnd` reads nothing into
+it. A watcher that has lost track of what it watches finds it through
+`story_list`, which marks exactly the caller's watches `watched: true` — the
+same exact match, read from the live `Work.Watcher`, so a closed story is never
+marked. `story_start`, `story_unwatch` and `story_list` take "this chat" from
+one place, `mcp.Caller.watcher()`, so the three cannot disagree about who it
+is.
 
 **Endings are read off the transition, not the status.** `ChangeEvent.PrevStatus`
 carries the status from the store's pre-mutation snapshot, and

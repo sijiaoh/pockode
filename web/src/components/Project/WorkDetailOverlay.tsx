@@ -387,13 +387,13 @@ function WaitLine({ work }: { work: Work }) {
 }
 
 /**
- * Which chat this story wakes, a way back to it, and a way to stop it.
+ * Which chat this story wakes, and a way back to it.
  *
  * Shown whenever the detail names a watcher: closing releases the watch, so the
  * line goes by itself, and a stopped story keeps it because the watch outlives
- * a stop. No confirmation on Unwatch: the story runs on regardless, and all the
- * chat loses is being woken — one message to it brings that back. No optimistic
- * update either: the detail's push takes the watcher away, and the line with it.
+ * a stop. There is no way to unwatch from here: the watch is the watching
+ * agent's to release (story_unwatch), and a person who wants it gone tells
+ * that chat.
  *
  * The chat is named from the session list rather than from a copy on the
  * detail, which would go stale on a rename. The list holds only the worktree in
@@ -407,15 +407,12 @@ function WatcherLine({
 	work: Work;
 	onNavigateToSession: (sessionId: string, worktree: string) => void;
 }) {
-	const unwatchWork = useWSStore((s) => s.actions.unwatchWork);
 	// The worktree the session list is read out of, which is what decides
 	// whether the list can name the watcher.
 	const currentWorktree = useWorktreeStore((s) => s.current);
 	const watcher = work.watcher;
 	const watcherId = watcher?.session_id ?? "";
 	const listedTitle = useSessionStore(selectSessionTitle(watcherId));
-	const [unwatching, setUnwatching] = useState(false);
-	const [error, setError] = useState<string | null>(null);
 
 	if (!watcher) return null;
 	const worktree = watcher.worktree ?? "";
@@ -424,51 +421,19 @@ function WatcherLine({
 			? (listedTitle ?? UNLISTED_SESSION_NAME)
 			: `a session in ${worktree || "main"}`;
 
-	const handleUnwatch = async () => {
-		setError(null);
-		setUnwatching(true);
-		try {
-			await unwatchWork(work.id);
-		} catch (err) {
-			setError(err instanceof Error ? err.message : String(err));
-		} finally {
-			setUnwatching(false);
-		}
-	};
-
 	return (
-		<div className="mt-2 text-xs text-th-text-secondary">
-			<div className="flex min-w-0 items-center gap-2">
-				<Eye
-					className="size-3 shrink-0 text-th-text-muted"
-					aria-hidden="true"
-				/>
-				<span className="shrink-0">Watched by</span>
-				<button
-					type="button"
-					onClick={() => onNavigateToSession(watcher.session_id, worktree)}
-					// The name truncates itself: `truncate` on the button would clip
-					// `touch-target`'s overlay along with the text.
-					className="touch-target flex min-w-0 max-w-[16rem] rounded text-th-accent hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent"
-				>
-					<span className="truncate">{name}</span>
-				</button>
-				<span aria-hidden="true">·</span>
-				<button
-					type="button"
-					onClick={handleUnwatch}
-					disabled={unwatching}
-					aria-label={`Unwatch — stop waking ${name} with this story's news`}
-					className="touch-target shrink-0 rounded underline hover:text-th-text-primary focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent disabled:opacity-50"
-				>
-					Unwatch
-				</button>
-			</div>
-			{error && (
-				<p className="mt-1 text-th-error" role="alert">
-					Failed to unwatch: {error}
-				</p>
-			)}
+		<div className="mt-2 flex min-w-0 items-center gap-2 text-xs text-th-text-secondary">
+			<Eye className="size-3 shrink-0 text-th-text-muted" aria-hidden="true" />
+			<span className="shrink-0">Watched by</span>
+			<button
+				type="button"
+				onClick={() => onNavigateToSession(watcher.session_id, worktree)}
+				// The name truncates itself: `truncate` on the button would clip
+				// `touch-target`'s overlay along with the text.
+				className="touch-target flex min-w-0 max-w-[16rem] rounded text-th-accent hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent"
+			>
+				<span className="truncate">{name}</span>
+			</button>
 		</div>
 	);
 }

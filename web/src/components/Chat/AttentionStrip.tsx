@@ -434,9 +434,6 @@ function WatchingRow({
 							/>
 						))}
 					</ul>
-					<p className="mt-1 text-center text-th-text-muted">
-						Open a story to unwatch it.
-					</p>
 				</div>
 			)}
 		</div>
