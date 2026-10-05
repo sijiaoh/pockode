@@ -26,8 +26,8 @@ func TestDeleteInDir(t *testing.T) {
 		}
 	}
 
-	if err := DeleteInDir(dataDir, "sess-1"); err != nil {
-		t.Fatalf("DeleteInDir: %v", err)
+	if deleted, err := DeleteInDir(dataDir, "sess-1"); err != nil || !deleted {
+		t.Fatalf("DeleteInDir = %v, %v, want a deletion", deleted, err)
 	}
 
 	reopened, err := NewFileStore(dataDir)
@@ -47,7 +47,7 @@ func TestDeleteInDir(t *testing.T) {
 
 	// A session that is not there is already gone, and its id — which could be
 	// anything — is never turned into a path to find that out.
-	if err := DeleteInDir(dataDir, "sess-1"); err != nil {
-		t.Errorf("deleting an absent session: %v", err)
+	if deleted, err := DeleteInDir(dataDir, "sess-1"); err != nil || deleted {
+		t.Errorf("deleting an absent session = %v, %v, want nothing deleted and no error", deleted, err)
 	}
 }

@@ -389,9 +389,6 @@ Flags:
 	// other order would drop every change that arrived in between, and a dropped
 	// change is a wait nothing comes back to.
 	workStore.AddOnChangeListener(workEngine)
-	// A deleted session takes away the place every answer would have gone, which
-	// is one of the engine's six inputs.
-	worktreeManager.AddSessionChangeListener(workEngine)
 	workStarter := worktree.NewWorkStarter(worktreeManager, agentRoleStore, settingsStore)
 	// Single implementation of every work command, shared by the WebSocket
 	// handler (user actions) and the MCP Executor (AI actions).

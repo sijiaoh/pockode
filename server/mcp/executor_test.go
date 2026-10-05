@@ -366,6 +366,66 @@ func TestStoryListAndTaskList_EachSeeOnlyTheirOwn(t *testing.T) {
 	}
 }
 
+// watched is this chat's own relation to a story, so it has to match the
+// caller exactly — the same session in another worktree is another chat — and
+// say nothing about a watch held by someone else, or one already let go.
+func TestStoryList_MarksTheCallersWatches(t *testing.T) {
+	caller := Caller{SessionID: "sess-caller", Worktree: "feature-x"}
+	ts := newTestExec(t)
+
+	start := func(title string, by Caller, watch bool) string {
+		t.Helper()
+		id := extractID(t, toolText(callTool(t, ts.exec, "story_create", map[string]string{
+			"title": title, "agent_role_id": ts.roleID,
+		})))
+		if _, err := callAs(t, ts.exec, by, "story_start", map[string]any{"id": id, "watch": watch}); err != nil {
+			t.Fatalf("story_start %s: %v", title, err)
+		}
+		return id
+	}
+	start("Mine", caller, true)
+	released := start("Released", caller, true)
+	if _, err := callAs(t, ts.exec, caller, "story_unwatch", map[string]any{"id": released}); err != nil {
+		t.Fatalf("story_unwatch: %v", err)
+	}
+	start("Other chat", Caller{SessionID: "sess-other", Worktree: "feature-x"}, true)
+	start("Same session, other worktree", Caller{SessionID: caller.SessionID}, true)
+	start("Unwatched", caller, false)
+
+	watched := func(c Caller) []string {
+		t.Helper()
+		out, err := callAs(t, ts.exec, c, "story_list", map[string]any{})
+		if err != nil {
+			t.Fatalf("story_list: %v", err)
+		}
+		var entries []struct {
+			Title   string          `json:"title"`
+			Watched json.RawMessage `json:"watched"`
+		}
+		if err := json.Unmarshal([]byte(out), &entries); err != nil {
+			t.Fatalf("decode %q: %v", out, err)
+		}
+		var titles []string
+		for _, e := range entries {
+			switch string(e.Watched) {
+			case "true":
+				titles = append(titles, e.Title)
+			case "":
+			default:
+				t.Errorf("%q: watched = %s, want true or absent", e.Title, e.Watched)
+			}
+		}
+		return titles
+	}
+
+	if got := watched(caller); !slices.Equal(got, []string{"Mine"}) {
+		t.Errorf("caller sees watched %v, want only [Mine]", got)
+	}
+	if got := watched(Caller{}); len(got) != 0 {
+		t.Errorf("a call from outside a chat sees watched %v, want none", got)
+	}
+}
+
 // An empty story_id is what a story's own story_id is, so a fall-through would
 // answer "which tasks?" with every story in the project, or with nothing.
 func TestTaskList_RefusesWithoutAStory(t *testing.T) {
@@ -701,6 +761,98 @@ func TestStoryStart_WatchRecordsTheCallersSession(t *testing.T) {
 	}
 	if w.Watcher == nil || *w.Watcher != (work.Watcher{SessionID: caller.SessionID, Worktree: caller.Worktree}) {
 		t.Errorf("watcher = %+v, want the caller %+v", w.Watcher, caller)
+	}
+}
+
+// story_unwatch lets go of the caller's own watch and nothing else: the
+// session is never one the model names, and another chat's watch is that
+// chat's. Each outcome says which of them happened.
+func TestStoryUnwatch(t *testing.T) {
+	caller := Caller{SessionID: "sess-caller", Worktree: "feature-x"}
+	other := Caller{SessionID: "sess-other"}
+
+	tests := []struct {
+		name        string
+		watchedBy   *Caller
+		wantWatcher *Caller
+		wantText    string
+	}{
+		{name: "watched by the caller", watchedBy: &caller, wantWatcher: nil, wantText: "no longer watching"},
+		{name: "watched by another chat", watchedBy: &other, wantWatcher: &other, wantText: "another chat"},
+		{name: "watched by nobody", watchedBy: nil, wantWatcher: nil, wantText: "not being watched"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ts := newTestExec(t)
+			id := extractID(t, toolText(callTool(t, ts.exec, "story_create", map[string]string{
+				"title": "Story", "agent_role_id": ts.roleID,
+			})))
+			starter, watch := caller, false
+			if tt.watchedBy != nil {
+				starter, watch = *tt.watchedBy, true
+			}
+			if _, err := callAs(t, ts.exec, starter, "story_start", map[string]any{"id": id, "watch": watch}); err != nil {
+				t.Fatalf("story_start: %v", err)
+			}
+
+			out, err := callAs(t, ts.exec, caller, "story_unwatch", map[string]any{"id": id})
+			if err != nil {
+				t.Fatalf("story_unwatch: %v", err)
+			}
+
+			if !strings.Contains(out, tt.wantText) {
+				t.Errorf("result = %q, want it to say %q", out, tt.wantText)
+			}
+			w, _, err := ts.store.Get(id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tt.wantWatcher == nil && w.Watcher != nil {
+				t.Errorf("watcher = %+v, want none", w.Watcher)
+			}
+			if tt.wantWatcher != nil && (w.Watcher == nil || *w.Watcher != (work.Watcher{SessionID: tt.wantWatcher.SessionID, Worktree: tt.wantWatcher.Worktree})) {
+				t.Errorf("watcher = %+v, want it left with %+v", w.Watcher, *tt.wantWatcher)
+			}
+			if w.Status != work.StatusActive {
+				t.Errorf("status = %q, want the story still active", w.Status)
+			}
+		})
+	}
+}
+
+func TestStoryUnwatch_Refusals(t *testing.T) {
+	ts := newTestExec(t)
+	storyID := extractID(t, toolText(callTool(t, ts.exec, "story_create", map[string]string{
+		"title": "Story", "agent_role_id": ts.roleID,
+	})))
+	taskID := extractID(t, toolText(callTool(t, ts.exec, "task_create", map[string]string{
+		"story_id": storyID, "title": "Task", "agent_role_id": ts.roleID,
+	})))
+	watcher := Caller{SessionID: "sess-caller"}
+	if _, err := callAs(t, ts.exec, watcher, "story_start", map[string]any{"id": storyID, "watch": true}); err != nil {
+		t.Fatalf("story_start: %v", err)
+	}
+
+	tests := []struct {
+		name   string
+		caller Caller
+		id     string
+		want   string
+	}{
+		{name: "no caller session", caller: Caller{}, id: storyID, want: "Pockode session"},
+		{name: "a task", caller: watcher, id: taskID, want: "only a story can be watched"},
+		{name: "a missing work", caller: watcher, id: "missing", want: "not found"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := callAs(t, ts.exec, tt.caller, "story_unwatch", map[string]any{"id": tt.id})
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Errorf("err = %v, want it to say %q", err, tt.want)
+			}
+		})
+	}
+	if w, _, _ := ts.store.Get(storyID); w.Watcher == nil {
+		t.Error("watcher released by a refused call")
 	}
 }
 

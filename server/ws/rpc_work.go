@@ -195,6 +195,31 @@ func (h *rpcMethodHandler) handleWorkReopen(ctx context.Context, conn *jsonrpc2.
 	}
 }
 
+// handleWorkUnwatch releases a story's watcher whoever it is: a person acts on
+// the story from the UI, not as the chat that watches it. A story nobody is
+// watching is not an error — the outcome the person asked for already holds.
+func (h *rpcMethodHandler) handleWorkUnwatch(ctx context.Context, conn *jsonrpc2.Conn, req *jsonrpc2.Request) {
+	var params rpc.WorkUnwatchParams
+	if err := unmarshalParams(req, &params); err != nil {
+		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "invalid params")
+		return
+	}
+
+	prev, released, err := h.workOps.Unwatch(ctx, params.ID, nil)
+	if err != nil {
+		h.replyWorkError(ctx, conn, req.ID, err, "failed to unwatch work")
+		return
+	}
+
+	if released {
+		h.log.Info("work unwatched", "workId", params.ID, "watcherSessionId", prev.SessionID)
+	}
+
+	if err := conn.Reply(ctx, req.ID, struct{}{}); err != nil {
+		h.log.Error("failed to send work unwatch response", "error", err)
+	}
+}
+
 func (h *rpcMethodHandler) handleWorkDetailSubscribe(ctx context.Context, conn *jsonrpc2.Conn, req *jsonrpc2.Request) {
 	var params rpc.WorkDetailSubscribeParams
 	if err := unmarshalParams(req, &params); err != nil {

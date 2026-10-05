@@ -392,6 +392,107 @@ func TestClaim_RefusesToWatchATask(t *testing.T) {
 	}
 }
 
+// Unwatch releases only the watch it was asked about, and only the watch: the
+// story keeps running exactly as it was, and the release survives a reload.
+func TestUnwatch(t *testing.T) {
+	watcher := Watcher{SessionID: "sess-watcher", Worktree: "feature-x"}
+	other := Watcher{SessionID: "sess-other"}
+
+	tests := []struct {
+		name         string
+		watched      bool
+		only         *Watcher
+		wantReleased bool
+	}{
+		{name: "the watcher itself", watched: true, only: &watcher, wantReleased: true},
+		{name: "anyone, as a person from the UI", watched: true, only: nil, wantReleased: true},
+		{name: "another session", watched: true, only: &other, wantReleased: false},
+		{name: "nobody watching", watched: false, only: &watcher, wantReleased: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			s, err := NewFileStore(dir)
+			if err != nil {
+				t.Fatalf("NewFileStore: %v", err)
+			}
+			story := createStory(t, s, "S")
+			var claimWatcher *Watcher
+			if tt.watched {
+				claimWatcher = &watcher
+			}
+			started, _, err := s.Claim(context.Background(), story.ID, claimWatcher)
+			if err != nil {
+				t.Fatalf("Claim: %v", err)
+			}
+			waitOnChild(t, s, story.ID)
+			before := getWork(t, s, story.ID)
+			changes := 0
+			s.AddOnChangeListener(listenerFunc(func(ChangeEvent) { changes++ }))
+
+			prev, released, err := s.Unwatch(context.Background(), story.ID, tt.only)
+			if err != nil {
+				t.Fatalf("Unwatch: %v", err)
+			}
+
+			if released != tt.wantReleased {
+				t.Errorf("released = %v, want %v", released, tt.wantReleased)
+			}
+			if !tt.watched && prev != nil {
+				t.Errorf("prev = %+v, want none: nobody was watching", prev)
+			}
+			if tt.watched && (prev == nil || *prev != watcher) {
+				t.Errorf("prev = %+v, want the watcher found, %+v", prev, watcher)
+			}
+			if wantChanges := map[bool]int{true: 1, false: 0}[tt.wantReleased]; changes != wantChanges {
+				t.Errorf("change events = %d, want %d", changes, wantChanges)
+			}
+
+			reloaded, err := NewFileStore(dir)
+			if err != nil {
+				t.Fatalf("reload: %v", err)
+			}
+			got := getWork(t, reloaded, story.ID)
+			switch {
+			case tt.wantReleased && got.Watcher != nil:
+				t.Errorf("watcher = %+v, want it released", got.Watcher)
+			case !tt.wantReleased && tt.watched && (got.Watcher == nil || *got.Watcher != watcher):
+				t.Errorf("watcher = %+v, want it left as %+v", got.Watcher, watcher)
+			}
+			if got.Status != before.Status || got.Wait != before.Wait || got.SessionID != started.SessionID || got.CurrentStep != before.CurrentStep {
+				t.Errorf("story = %q/%q in %q at step %d, want it running as before: %q/%q in %q at step %d",
+					got.Status, got.Wait, got.SessionID, got.CurrentStep, before.Status, before.Wait, started.SessionID, before.CurrentStep)
+			}
+			works, err := reloaded.List()
+			if err != nil {
+				t.Fatalf("List: %v", err)
+			}
+			for _, task := range TasksOf(works, story.ID) {
+				if task.Status != StatusActive {
+					t.Errorf("task %q = %q, want it still active", task.Title, task.Status)
+				}
+			}
+		})
+	}
+}
+
+func TestUnwatch_RefusesATask(t *testing.T) {
+	s := newTestStore(t)
+	story := createStory(t, s, "S")
+	task := createTask(t, s, story.ID, "T")
+
+	if _, _, err := s.Unwatch(context.Background(), task.ID, nil); !errors.Is(err, ErrInvalidWork) {
+		t.Errorf("err = %v, want ErrInvalidWork", err)
+	}
+}
+
+func TestUnwatch_NotFound(t *testing.T) {
+	s := newTestStore(t)
+	if _, _, err := s.Unwatch(context.Background(), "missing", nil); !errors.Is(err, ErrWorkNotFound) {
+		t.Errorf("err = %v, want ErrWorkNotFound", err)
+	}
+}
+
 func TestClaim_NotFound(t *testing.T) {
 	s := newTestStore(t)
 	if _, _, err := s.Claim(context.Background(), "missing", nil); !errors.Is(err, ErrWorkNotFound) {

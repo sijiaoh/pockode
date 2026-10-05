@@ -133,7 +133,7 @@ func NewExecutor(workStore work.Store, agentRoleStore agentrole.Store, workOps *
 func (e *Executor) Execute(ctx context.Context, caller Caller, name string, args json.RawMessage) (string, error) {
 	switch name {
 	case "story_list":
-		return e.storyList()
+		return e.storyList(caller)
 	case "task_list":
 		return e.taskList(args)
 	case "story_create":
@@ -148,6 +148,8 @@ func (e *Executor) Execute(ctx context.Context, caller Caller, name string, args
 		return e.workDelete(ctx, args)
 	case "story_start":
 		return e.storyStart(ctx, caller, args)
+	case "story_unwatch":
+		return e.storyUnwatch(ctx, caller, args)
 	case "task_start":
 		return e.taskStart(ctx, args)
 	case "work_reopen":
@@ -238,19 +240,35 @@ func newWorkSummary(w work.Work) workSummary {
 	}
 }
 
-func (e *Executor) storyList() (string, error) {
+// storyListItem is a story_list entry: the summary, plus whether this chat is
+// the story's watcher. Watched is the caller's relation to the story, not the
+// story's own state, so it is read from the live Watcher on every call; it is
+// what lets a lead whose context was compacted find again the stories it is
+// waiting on. Who else is watching is left out — that is another chat's
+// business, and an agent can act on no watch but its own.
+type storyListItem struct {
+	workSummary
+	Watched bool `json:"watched,omitempty"`
+}
+
+func (e *Executor) storyList(caller Caller) (string, error) {
 	works, err := e.workStore.List()
 	if err != nil {
 		return "", err
 	}
 
-	var stories []work.Work
+	self := caller.watcher()
+	items := []storyListItem{}
 	for _, w := range works {
-		if w.Type() == work.WorkTypeStory {
-			stories = append(stories, w)
+		if w.Type() != work.WorkTypeStory {
+			continue
 		}
+		items = append(items, storyListItem{
+			workSummary: newWorkSummary(w),
+			Watched:     caller.SessionID != "" && w.Watcher != nil && *w.Watcher == self,
+		})
 	}
-	return marshalSummaries(stories)
+	return marshalListing(items)
 }
 
 func (e *Executor) taskList(args json.RawMessage) (string, error) {
@@ -277,14 +295,18 @@ func (e *Executor) taskList(args json.RawMessage) (string, error) {
 	return marshalSummaries(work.TasksOf(works, params.StoryID))
 }
 
-// marshalSummaries renders a listing. Always a JSON array, for consistent
-// parsing by the AI agent: formatted text would risk prompt injection via
-// user-supplied titles.
 func marshalSummaries(works []work.Work) (string, error) {
 	items := make([]workSummary, len(works))
 	for i, w := range works {
 		items[i] = newWorkSummary(w)
 	}
+	return marshalListing(items)
+}
+
+// marshalListing renders a listing. Always a JSON array, for consistent
+// parsing by the AI agent: formatted text would risk prompt injection via
+// user-supplied titles.
+func marshalListing[T any](items []T) (string, error) {
 	b, err := json.Marshal(items)
 	if err != nil {
 		return "", fmt.Errorf("marshal work list: %w", err)
@@ -471,9 +493,42 @@ func (e *Executor) storyStart(ctx context.Context, caller Caller, args json.RawM
 		if caller.SessionID == "" {
 			return "", errNoCallerSession("story_start with watch", "there is no chat to wake with the story's news; call it without watch")
 		}
-		watcher = &work.Watcher{SessionID: caller.SessionID, Worktree: caller.Worktree}
+		w := caller.watcher()
+		watcher = &w
 	}
 	return e.startWork(ctx, params.ID, params.Worktree, watcher)
+}
+
+// storyUnwatch releases the caller's own watch, for the reason storyStart's
+// watch is a flag: the session is the caller's, never one the model names. A
+// story watched by somebody else, or by nobody, is not an error — this chat
+// hears nothing from it either way, which is what the call asked for — but the
+// result says so, since an agent that believed it was watching was wrong about
+// something it may be relying on.
+func (e *Executor) storyUnwatch(ctx context.Context, caller Caller, args json.RawMessage) (string, error) {
+	var params struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(args, &params); err != nil {
+		return "", userErrorf("invalid arguments: %w", err)
+	}
+	if caller.SessionID == "" {
+		return "", errNoCallerSession("story_unwatch", "there is no chat whose watch could be released")
+	}
+
+	self := caller.watcher()
+	prev, released, err := e.workOps.Unwatch(ctx, params.ID, &self)
+	if err != nil {
+		return "", err
+	}
+	switch {
+	case released:
+		return fmt.Sprintf("This chat is no longer watching story %s. The story itself is unchanged", params.ID), nil
+	case prev == nil:
+		return fmt.Sprintf("Story %s is not being watched, so nothing changed. A story stops being watched when it closes", params.ID), nil
+	default:
+		return fmt.Sprintf("Story %s is watched by another chat, not this one, so nothing changed: that watch is the other chat's to release", params.ID), nil
+	}
 }
 
 // taskStart takes no worktree, which is the only difference between the two

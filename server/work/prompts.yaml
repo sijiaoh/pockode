@@ -303,7 +303,8 @@ pockode_lead_command: |
   5. Do not edit or comment on a story after starting it. A running story is not told when its title or body changes or a comment is added, so whether it ever sees one is luck. If a started story needs to change course, let it finish and create a follow-up story for the change.
   6. When a story asks a question, answer it with question_answer if you can decide it from this discussion and the project itself; otherwise leave it — the user is already being asked.
   7. Trust a story to do its job. A story commits but does not merge; that is yours. When one closes, do not re-review its work in detail — judge whether it fits the whole, merge its branch into {{.Branch}}, and start whatever was waiting on it.
-  8. When every story is merged, tell the user what was done.
+  8. When you no longer need to follow a story that has not closed — it was dropped, or the user took it over — release it with story_unwatch; a closed story is released by itself. story_list marks the stories you are watching with `watched`, if you lose track of them.
+  9. When every story is merged, tell the user what was done.
   {{- if .Args}}
 
   Additional instructions from the user:

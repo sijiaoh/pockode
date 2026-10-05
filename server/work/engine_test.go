@@ -915,10 +915,7 @@ func TestEngine_StopsAWorkWhoseSessionWasDeleted(t *testing.T) {
 			// would have arrived.
 			f.turns.post("sess-1")
 
-			f.engine.OnSessionChange(session.SessionChangeEvent{
-				Op:      session.OperationDelete,
-				Session: session.SessionMeta{ID: "sess-1"},
-			})
+			f.engine.OnSessionDeleted("", "sess-1")
 
 			// Waited on the comment, not on the status: the stop lands first and
 			// the explanation a moment later, so the status is the weaker of the
@@ -933,6 +930,48 @@ func TestEngine_StopsAWorkWhoseSessionWasDeleted(t *testing.T) {
 				t.Errorf("comments = %v, want one naming the deleted session", bodies)
 			}
 		})
+	}
+}
+
+// A deleted chat lets go of every story it was watching, and of nothing else:
+// a watch is a session in a worktree, so the same id elsewhere is another chat.
+// The stories themselves are left exactly as they were.
+func TestEngine_ADeletedSessionReleasesItsWatches(t *testing.T) {
+	f := newEngineFixture(t)
+	ctx := context.Background()
+	deleted := Watcher{SessionID: "sess-w", Worktree: "feature-x"}
+
+	watch := func(title string, watcher Watcher) Work {
+		t.Helper()
+		w, _, err := f.store.Claim(ctx, createStory(t, f.store, title).ID, &watcher)
+		if err != nil {
+			t.Fatalf("Claim %q: %v", title, err)
+		}
+		return w
+	}
+	released := []Work{watch("Mine", deleted), watch("Also mine", deleted)}
+	kept := []Work{
+		watch("Same id, main worktree", Watcher{SessionID: "sess-w"}),
+		watch("Another chat", Watcher{SessionID: "sess-other", Worktree: "feature-x"}),
+	}
+
+	f.engine.OnSessionDeleted("feature-x", "sess-w")
+	f.engine.Stop()
+
+	for _, before := range released {
+		got := getWork(t, f.store, before.ID)
+		if got.Watcher != nil {
+			t.Errorf("%q watcher = %+v, want none", got.Title, *got.Watcher)
+		}
+		if got.Status != before.Status || got.SessionID != before.SessionID {
+			t.Errorf("%q = %q on %q, want it untouched (%q on %q)",
+				got.Title, got.Status, got.SessionID, before.Status, before.SessionID)
+		}
+	}
+	for _, before := range kept {
+		if got := getWork(t, f.store, before.ID); got.Watcher == nil || *got.Watcher != *before.Watcher {
+			t.Errorf("%q watcher = %+v, want %+v kept", got.Title, got.Watcher, *before.Watcher)
+		}
 	}
 }
 
