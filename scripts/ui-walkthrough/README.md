@@ -127,6 +127,7 @@ with reduced motion, so a live row shows its still dot, not a spinner.
 | `changes` | `changes-card`, `changes-card-all` (past *Show N more files*), `changes-file-open` |
 | `markdown` | `markdown-table`, `markdown-code` |
 | `attachments` | `attachments-sent`, `composer-menu`, `composer-attachments`, `composer-attachments-keyboard` |
+| `message-actions` | `message-actions` (the reply's Copy and Fork row, the user bubble's `…`), `message-menu-user`, `message-actions-fork-blocked`, `message-menu-fork-blocked` (the menu a blocked Fork opens) — the blocked pair staged as `no-anchor-seq`, the scene says why |
 | `permission` | `permission-card`, `permission-strip` (scrolled to the top; on a phone that takes the card off screen and leaves the strip), `permission-keyboard` |
 | `permission-multi` | `permission-multi-edit`, `permission-multi-write` |
 | `asking` | `asking-panel`, `asking-strip`, `asking-keyboard` |

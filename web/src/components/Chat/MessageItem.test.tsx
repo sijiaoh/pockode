@@ -1187,10 +1187,6 @@ describe("MessageItem", () => {
 				screen.getByRole("button", { name: "Actions for your message" }),
 			);
 			expect(screen.getByRole("dialog")).toHaveAccessibleName("Your message");
-			// Copy belongs to the agent's text; the user's menu is unchanged.
-			expect(
-				screen.queryByRole("button", { name: "Copy text" }),
-			).not.toBeInTheDocument();
 		});
 
 		// The opening prompt whose record never persisted is both codes at once,
@@ -1258,12 +1254,9 @@ describe("MessageItem", () => {
 		const actions = () =>
 			screen.queryByRole("group", { name: "Message actions" });
 
+		/** Only a blocked Fork opens the menu: it holds nothing else the row lacks. */
 		const openMenu = async (user: ReturnType<typeof userEvent.setup>) => {
-			await user.click(
-				screen.getByRole("button", {
-					name: "More actions for the agent's message",
-				}),
-			);
+			await user.click(screen.getByRole("button", { name: "Fork from here" }));
 			const menu = screen.getByRole("dialog", { name: "Agent message" });
 			return within(menu).getByRole("button", { name: /Fork from here/ });
 		};
@@ -1285,7 +1278,8 @@ describe("MessageItem", () => {
 			expect(screen.getByText("Working")).toBeVisible();
 		});
 
-		it("offers copy, fork and the menu once settled", () => {
+		// No `…`: the menu would only repeat the two buttons beside it.
+		it("offers copy and fork once settled", () => {
 			render(
 				<MessageItem
 					sessionId="session-1"
@@ -1296,11 +1290,7 @@ describe("MessageItem", () => {
 			const row = within(actions() as HTMLElement);
 			expect(
 				row.getAllByRole("button").map((b) => b.getAttribute("aria-label")),
-			).toEqual([
-				"Copy message",
-				"Fork from here",
-				"More actions for the agent's message",
-			]);
+			).toEqual(["Copy message", "Fork from here"]);
 		});
 
 		it("copies the message's own text as Markdown, without its tool calls", async () => {
@@ -1326,28 +1316,8 @@ describe("MessageItem", () => {
 			expect(screen.getByRole("button", { name: "Copy failed" })).toBeVisible();
 		});
 
-		it("copies from the menu too", async () => {
-			const user = userEvent.setup();
-			const writeText = vi.fn().mockResolvedValue(undefined);
-			vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText } });
-			render(
-				<MessageItem
-					sessionId="session-1"
-					message={settled()}
-					onForkMessage={vi.fn()}
-				/>,
-			);
-
-			await openMenu(user);
-			await user.click(screen.getByRole("button", { name: "Copy text" }));
-
-			expect(writeText).toHaveBeenCalledWith("First **part**\n\nSecond part");
-			expect(screen.queryByRole("dialog")).toBeNull();
-		});
-
 		// Copy is an action a message with no text could never have.
-		it("offers no copy on a message that is only tool calls", async () => {
-			const user = userEvent.setup();
+		it("offers no copy on a message that is only tool calls", () => {
 			render(
 				<MessageItem
 					sessionId="session-1"
@@ -1358,13 +1328,8 @@ describe("MessageItem", () => {
 			expect(
 				screen.queryByRole("button", { name: "Copy message" }),
 			).not.toBeInTheDocument();
-			await openMenu(user);
-			expect(
-				screen.queryByRole("button", { name: "Copy text" }),
-			).not.toBeInTheDocument();
 		});
 
-		// Without fork the menu would only repeat the Copy button beside it.
 		it("draws only copy when the session cannot fork", () => {
 			render(<MessageItem sessionId="session-1" message={settled()} />);
 			const row = within(actions() as HTMLElement);
@@ -1396,24 +1361,6 @@ describe("MessageItem", () => {
 			await user.click(screen.getByRole("button", { name: "Fork from here" }));
 
 			expect(onForkMessage).toHaveBeenCalledWith("slot-1");
-			expect(screen.queryByRole("dialog")).toBeNull();
-		});
-
-		it("forks the message the menu was opened from", async () => {
-			const user = userEvent.setup();
-			const onForkMessage = vi.fn();
-			render(
-				<MessageItem
-					sessionId="session-1"
-					message={settled()}
-					onForkMessage={onForkMessage}
-				/>,
-			);
-
-			await user.click(await openMenu(user));
-
-			expect(onForkMessage).toHaveBeenCalledWith("slot-1");
-			// The menu steps aside for the confirmation that follows it.
 			expect(screen.queryByRole("dialog")).toBeNull();
 		});
 

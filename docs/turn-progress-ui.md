@@ -256,7 +256,7 @@ row says `Thought` (§1.1).
 ### 2.1 Where it is
 
 **In the turn-end slot of the reply being written** — the place the turn-end
-row (`MessageActions`: Copy, Fork, `…`) takes once the turn settles, and where
+row (`MessageActions`: Copy, Fork) takes once the turn settles, and where
 that row's spinner used to stand. The tail line (`TurnTail`) replaced that
 spinner; there is never a second one. It is part of the transcript, so it
 scrolls with it: a reader following the tail sees it under the newest content;
