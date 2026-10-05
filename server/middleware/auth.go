@@ -1,9 +1,10 @@
 package middleware
 
 import (
-	"crypto/subtle"
 	"net/http"
 	"strings"
+
+	"github.com/pockode/server/password"
 )
 
 // SessionValidator reports whether a bearer credential is a live session token.
@@ -16,7 +17,7 @@ type SessionValidator interface {
 // Auth accepts either the server password or a session token as the bearer
 // credential. The password stays usable directly so that curl and scripts have
 // something to send; browsers exchange it for a session token and send that.
-func Auth(password string, sessions SessionValidator) func(http.Handler) http.Handler {
+func Auth(serverPassword string, sessions SessionValidator) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			// Health check, WebSocket, and the local MCP API bypass this middleware:
@@ -29,7 +30,7 @@ func Auth(password string, sessions SessionValidator) func(http.Handler) http.Ha
 				return
 			}
 
-			if !authorized(r.Header.Get("Authorization"), password, sessions) {
+			if !authorized(r.Header.Get("Authorization"), serverPassword, sessions) {
 				// A missing header, a malformed one and a wrong credential all
 				// get the same reply: telling an unauthenticated caller which
 				// of the three it got wrong is information it has not earned.
@@ -42,12 +43,12 @@ func Auth(password string, sessions SessionValidator) func(http.Handler) http.Ha
 	}
 }
 
-func authorized(authHeader, password string, sessions SessionValidator) bool {
+func authorized(authHeader, serverPassword string, sessions SessionValidator) bool {
 	scheme, credential, ok := strings.Cut(authHeader, " ")
 	if !ok || scheme != "Bearer" {
 		return false
 	}
-	if subtle.ConstantTimeCompare([]byte(credential), []byte(password)) == 1 {
+	if password.Matches(credential, serverPassword) {
 		return true
 	}
 	return sessions.Validate(credential)

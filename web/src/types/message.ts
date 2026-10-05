@@ -675,6 +675,11 @@ export interface AuthResult {
 	title: string;
 	work_dir: string;
 	/**
+	 * The address this server is reachable at through the relay, such as
+	 * `https://abc123.cloud.pockode.com`; empty when the relay is disabled.
+	 */
+	remote_url: string;
+	/**
 	 * Ceiling on one upload request, in bytes, sent so a client can refuse an
 	 * oversized file before spending a slow link on it instead of keeping its
 	 * own copy of the number. The same on every route — the relay tunnel

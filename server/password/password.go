@@ -1,5 +1,5 @@
 // Package password defines how the Pockode server obtains the password that
-// guards its API.
+// guards its API, and how a presented one is checked against it.
 //
 // The credential is a user-chosen shared secret that the user types on their
 // phone, so it is a password rather than a token — the old name invited the
@@ -10,6 +10,7 @@
 package password
 
 import (
+	"crypto/subtle"
 	"fmt"
 	"os"
 )
@@ -101,4 +102,10 @@ func Load(flagValue, legacyFlagValue string) (Credential, error) {
 	os.Unsetenv(EnvVar)
 	os.Unsetenv(LegacyEnvVar)
 	return cred, err
+}
+
+// Matches reports whether given is the server password. Every place that
+// accepts the password checks it through here, so they cannot drift apart.
+func Matches(given, password string) bool {
+	return subtle.ConstantTimeCompare([]byte(given), []byte(password)) == 1
 }

@@ -167,7 +167,7 @@ func newTestEnvWithAgent(t *testing.T, mock *mockAgent, ag agent.Agent, workDir 
 	cliAuthService := cliauth.NewService(slog.Default())
 	cliAuthService.Register(session.AgentTypeClaude, cliAuth)
 
-	h := NewRPCHandler(testPassword, authsessiontest.New(), "test", true, cmdStore, worktreeManager, settingsStore, workStore, workOps, workEngine, agentRoleStore, cliAuthService, cliupdate.NewService(slog.Default(), nil, nil))
+	h := NewRPCHandler(testPassword, authsessiontest.New(), "test", "", true, cmdStore, worktreeManager, settingsStore, workStore, workOps, workEngine, agentRoleStore, cliAuthService, cliupdate.NewService(slog.Default(), nil, nil))
 	server := httptest.NewServer(h)
 
 	// No deadline of its own: every read and write is bounded individually (see
@@ -531,7 +531,7 @@ func getWorkOrFail(t *testing.T, env *testEnv, workID string) work.Work {
 // newAuthTestServer builds the smallest handler that can answer an auth
 // request, for the tests that need a connection that has NOT authenticated —
 // which newTestEnv, by construction, cannot give them.
-func newAuthTestServer(t *testing.T, password string, sessions SessionStore) *httptest.Server {
+func newAuthTestServer(t *testing.T, password, remoteURL string, sessions SessionStore) *httptest.Server {
 	t.Helper()
 	dataDir := t.TempDir()
 	workDir := t.TempDir()
@@ -545,7 +545,7 @@ func newAuthTestServer(t *testing.T, password string, sessions SessionStore) *ht
 	workStarter := worktree.NewWorkStarter(worktreeManager, agentRoleStore, settingsStore)
 	workOps := work.NewOperations(workStore, workStarter, nil, nil)
 
-	h := NewRPCHandler(password, sessions, "test", true, cmdStore, worktreeManager, settingsStore, workStore, workOps, work.NewEngine(workStore, work.DefaultMaxNudges), agentRoleStore, cliauth.NewService(slog.Default()), cliupdate.NewService(slog.Default(), nil, nil))
+	h := NewRPCHandler(password, sessions, "test", remoteURL, true, cmdStore, worktreeManager, settingsStore, workStore, workOps, work.NewEngine(workStore, work.DefaultMaxNudges), agentRoleStore, cliauth.NewService(slog.Default()), cliupdate.NewService(slog.Default(), nil, nil))
 	server := httptest.NewServer(h)
 	t.Cleanup(server.Close)
 	return server
@@ -605,7 +605,7 @@ func TestHandler_Auth_Refusals(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Issue: %v", err)
 	}
-	server := newAuthTestServer(t, testPassword, sessions)
+	server := newAuthTestServer(t, testPassword, "", sessions)
 
 	tests := []struct {
 		name       string
@@ -660,7 +660,7 @@ func TestHandler_Auth_BothCredentialsRefused(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Issue: %v", err)
 	}
-	server := newAuthTestServer(t, testPassword, sessions)
+	server := newAuthTestServer(t, testPassword, "", sessions)
 
 	resp := callOnce(t, server.URL, "auth", rpc.AuthParams{Password: testPassword, SessionToken: live})
 	if resp.Error == nil || resp.Error.Code != jsonrpc2.CodeInvalidParams {
@@ -672,7 +672,7 @@ func TestHandler_Auth_BothCredentialsRefused(t *testing.T) {
 // what every later connection sends — handed back unchanged, so a client can
 // store the field without tracking how it authenticated.
 func TestHandler_Auth_PasswordIssuesReusableSessionToken(t *testing.T) {
-	server := newAuthTestServer(t, testPassword, authsessiontest.New())
+	server := newAuthTestServer(t, testPassword, "", authsessiontest.New())
 
 	resp := callOnce(t, server.URL, "auth", rpc.AuthParams{Password: testPassword})
 	if resp.Error != nil {
@@ -699,10 +699,31 @@ func TestHandler_Auth_PasswordIssuesReusableSessionToken(t *testing.T) {
 	}
 }
 
+func TestHandler_Auth_ReportsRemoteURL(t *testing.T) {
+	const remoteURL = "https://abc123.cloud.pockode.com"
+	server := newAuthTestServer(t, testPassword, remoteURL, authsessiontest.New())
+
+	resp := callOnce(t, server.URL, "auth", rpc.AuthParams{Password: testPassword})
+	if resp.Error != nil {
+		t.Fatalf("auth failed: %v", resp.Error)
+	}
+	// Decoded by its wire name rather than into rpc.AuthResult, which would
+	// agree with itself even if the tag drifted from what the web client reads.
+	var result struct {
+		RemoteURL string `json:"remote_url"`
+	}
+	if err := json.Unmarshal(resp.Result, &result); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if result.RemoteURL != remoteURL {
+		t.Errorf("remote_url = %q, want %q", result.RemoteURL, remoteURL)
+	}
+}
+
 // A PWA cached on a phone before the rename still sends `token`, and must keep
 // working for the deprecation period.
 func TestHandler_Auth_AcceptsDeprecatedTokenParam(t *testing.T) {
-	server := newAuthTestServer(t, testPassword, authsessiontest.New())
+	server := newAuthTestServer(t, testPassword, "", authsessiontest.New())
 
 	resp := callOnce(t, server.URL, "auth", rpc.AuthParams{Token: testPassword})
 	if resp.Error != nil {
