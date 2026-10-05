@@ -241,6 +241,12 @@ interface WSState {
 	reconnectAttempts: number;
 	projectTitle: string;
 	workDir: string;
+	/**
+	 * See `AuthResult.remote_url`. Kept across disconnects: opening a preview
+	 * needs no connection, and clearing it would flicker the entry away on
+	 * every reconnect.
+	 */
+	remoteUrl: string;
 	/** See `AuthResult.max_upload_size`; 0 until an auth reply has arrived. */
 	maxUploadSize: number;
 	actions: RPCActions;
@@ -775,6 +781,7 @@ export const useWSStore = create<WSState>((set, get) => ({
 	reconnectAttempts: 0,
 	projectTitle: "",
 	workDir: "",
+	remoteUrl: "",
 	maxUploadSize: 0,
 
 	actions: {
@@ -856,6 +863,7 @@ export const useWSStore = create<WSState>((set, get) => ({
 						reconnectAttempts: 0,
 						projectTitle: result.title,
 						workDir: result.work_dir,
+						remoteUrl: result.remote_url,
 						maxUploadSize: result.max_upload_size,
 					});
 				} catch (error) {
@@ -1434,5 +1442,6 @@ export function resetWSStore() {
 		reconnectAttempts: 0,
 		projectTitle: "",
 		workDir: "",
+		remoteUrl: "",
 	});
 }

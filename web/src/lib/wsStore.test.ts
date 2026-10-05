@@ -281,6 +281,25 @@ describe("wsStore", () => {
 			expect(frame.params).toEqual({ session_token: TEST_SESSION_TOKEN });
 		});
 
+		// Opening a port preview needs no connection, so the header's entry must
+		// not vanish and come back with every reconnect.
+		it("keeps the relay address through a disconnect", async () => {
+			const remoteUrl = "https://abc123.cloud.pockode.com";
+			wsActions.connect(TEST_PASSWORD);
+			const ws = getMockWs() as MockWebSocket;
+			ws.deferMethod("auth");
+			ws.simulateOpen();
+			ws.releaseDeferred(0, { version: "test", remote_url: remoteUrl });
+			await vi.advanceTimersByTimeAsync(0);
+			expect(useWSStore.getState().remoteUrl).toBe(remoteUrl);
+
+			ws.simulateClose();
+			await vi.advanceTimersByTimeAsync(0);
+
+			expect(useWSStore.getState().status).toBe("reconnecting");
+			expect(useWSStore.getState().remoteUrl).toBe(remoteUrl);
+		});
+
 		// Nothing the user did is wrong, so this must not land on the terminal
 		// "auth_failed" screen the way a bad password does.
 		it("drops an expired session quietly rather than failing auth", async () => {
