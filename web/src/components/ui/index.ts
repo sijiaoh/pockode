@@ -16,6 +16,7 @@ export {
 export { DiffViewer } from "./DiffViewer";
 export { FileContentDisplay } from "./FileContentDisplay";
 export { FileStateCard } from "./FileStateCard";
+export { headerButtonClass } from "./headerButtonClass";
 export { iconButtonClass } from "./iconButtonClass";
 export { inputClass } from "./inputClass";
 export { MarkdownContent } from "./MarkdownContent";

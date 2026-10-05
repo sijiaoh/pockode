@@ -126,8 +126,13 @@ See `headerUIRegistry.ts` for prop interfaces (`HeaderContentProps`, `TitleCompo
 > <ConnectionStatus />
 > ```
 >
+> The port preview button is self-contained and can be placed as-is
+> (`import PortPreviewButton from "../../components/PortPreview/PortPreviewButton"`);
+> it renders nothing when the relay is disabled.
+>
 > The menu / settings buttons must likewise be re-implemented from the
-> `onOpenSidebar` / `onOpenSettings` props if you want to keep them.
+> `onOpenSidebar` / `onOpenSettings` props if you want to keep them;
+> `headerButtonClass` from `components/ui` gives them the built-in look.
 
 ### ctx.sidebarUI.configure()
 

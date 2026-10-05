@@ -554,9 +554,9 @@ noticed. One representation with a test on it is the only thing that ends that.
      paste the expected side of its diff. Do not edit by hand. -->
 
 ```text
-48 controls render text, state no height of their own and carry no touch-target.
+50 controls render text, state no height of their own and carry no touch-target.
 
-26 state their own font size, so the height below is exact: 16–40px.
+28 state their own font size, so the height below is exact: 16–40px.
 22 inherit it, so the height below is an upper bound — the ancestor that
   sets it may well set a smaller one: 24–48px.
 
@@ -587,6 +587,7 @@ noticed. One representation with a test on it is the only thing that ends that.
   40px  exact  web/src/components/Files/EntryNameDialog.tsx ×2
   40px  exact  web/src/components/Git/CommitSheet.tsx ×2
   40px  exact  web/src/components/Git/NewBranchSheet.tsx ×2
+  40px  exact  web/src/components/PortPreview/PortPreviewSheet.tsx ×2
   40px  exact  web/src/components/Project/ProjectTab.tsx ×2
   40px  exact  web/src/components/Worktree/WorktreeCreateSheet.tsx ×3
   40px  exact  web/src/extensions/ExampleExtension/sidebarUI/CustomSidebarContent.tsx

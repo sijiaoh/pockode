@@ -14,6 +14,10 @@ It is the app's own relay address with `-<port>` added to the first label: the a
 
 The port is written plainly: `-5173`, not `-05173`. Any port from 1 to 65535 can be previewed; there is no allowlist, since the tunnel and everything listening on the machine are the user's own. Only `localhost:<port>` is ever dialed, so a preview cannot reach another machine on the PC's network.
 
+## Opening a Preview from the App
+
+The app's header has a preview button beside Settings, shown only when `remote_url` is set. It asks for a port and opens its preview address in a new tab. Ports opened before are listed under Recent — the five most recent, kept in the browser's local storage and shared by every worktree, since ports belong to the machine. Recent entries are plain links, so they open even when the browser blocks the tab the Open button tries to create; when it does, the sheet says so and the port is already in the list.
+
 ## Logging In
 
 A preview is guarded by the app's own password, not by anything of the previewed server's.
