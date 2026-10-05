@@ -4,8 +4,8 @@ import { ACTIVITY_VIEW } from "../../lib/activity";
 import { hasText, type LiveThinking, latestLine } from "../../lib/thinking";
 import { formatElapsed } from "../../lib/toolRun";
 import { CollapsibleBody, ScrollableContent, Spinner } from "../ui";
+import { BareBody, BareRow } from "./BareRow";
 import { ThoughtBody } from "./ThinkingItem";
-import { RowButton, StaticRow } from "./ToolRow";
 import { useTurnTail } from "./turnTailContext";
 
 interface Props {
@@ -68,23 +68,25 @@ function TurnClock({ openedAt }: { openedAt: number }) {
 
 function ThinkingSoFar({ thinking }: { thinking: LiveThinking }) {
 	return (
-		<ScrollableContent className="max-h-[60vh] overflow-auto border-t border-th-border bg-th-bg-secondary px-2 py-2">
-			{thinking.joinedLate && (
-				<p className="mb-2 text-th-text-muted">
-					Earlier thinking appears in full when it finishes.
-				</p>
-			)}
-			<ThoughtBody thought={{ ...thinking, redacted: false }} />
-		</ScrollableContent>
+		<BareBody>
+			<ScrollableContent className="max-h-[60vh] overflow-auto px-2.5 py-2">
+				{thinking.joinedLate && (
+					<p className="mb-2 text-th-text-muted">
+						Earlier thinking appears in full when it finishes.
+					</p>
+				)}
+				<ThoughtBody thought={{ ...thinking, redacted: false }} />
+			</ScrollableContent>
+		</BareBody>
 	);
 }
 
 /**
  * The turn-end slot of the reply being written, while it is still being
- * written (docs/turn-progress-ui.md#2-the-tail-line): `Working  1m 4s`, or
- * `Thinking… <latest line>`. It says that the turn is producing and for how
- * long, and nothing else — every other fact about the turn has an owner of its
- * own (§4 there).
+ * written (docs/turn-progress-ui.md#2-the-tail-line): `Working 1m 4s`, or
+ * `Thinking… 1m 4s · <latest line>`. It says that the turn is producing and
+ * for how long, and nothing else — every other fact about the turn has an
+ * owner of its own (§4 there).
  *
  * The slot keeps the turn-end row's height whether or not the line is drawn,
  * so a turn blocking and resuming moves nothing, and settling swaps the line
@@ -109,22 +111,30 @@ function TurnTail({ writing, placeholder }: Props) {
 	const live = shown && phase === "running" ? thinking : null;
 	const text = live && hasText({ ...live, redacted: false });
 
+	const latest = live ? latestLine(live.content || live.fullReasoning) : "";
+	// The clock follows the word rather than the latest line: the line changes
+	// length several times a second and would drag the clock with it, and
+	// `Thinking… 12s` reads as the `Thought for 12s` it settles into. Only the
+	// latest line gives way on a narrow screen.
 	const words = (
 		<span aria-hidden className="flex items-baseline gap-1.5">
 			<span className="shrink-0 text-th-text-secondary">
 				{live ? "Thinking…" : "Working"}
 			</span>
-			<span className="min-w-0 flex-1 truncate text-th-text-muted">
-				{live ? latestLine(live.content || live.fullReasoning) : ""}
-			</span>
 			{openedAt !== undefined && <TurnClock openedAt={openedAt} />}
+			{latest && (
+				<>
+					<span className="shrink-0 text-th-text-muted">·</span>
+					<span className="min-w-0 truncate text-th-text-muted">{latest}</span>
+				</>
+			)}
 		</span>
 	);
 
 	return (
-		// Transparent side borders put the line's columns where a framed list's
-		// rows have theirs, so it lines up with the rows above it.
-		<div className="mt-2 min-h-9 border-x border-transparent text-xs pointer-coarse:min-h-11">
+		// Drawn bare, its glyph on the text's left edge, so the settled turn's Copy
+		// button takes the line's place without a sideways jump.
+		<div className="mt-2 min-h-9 text-xs pointer-coarse:min-h-11">
 			{/* Beside the line rather than around it, and filled only while the line
 			    is up: announced when it appears, not on every switch between
 			    working and thinking, which codex makes around almost every call. */}
@@ -137,20 +147,22 @@ function TurnTail({ writing, placeholder }: Props) {
 			{shown &&
 				(live && text ? (
 					<>
-						<RowButton
-							expanded={live.expanded}
-							onToggle={onToggleThinking}
+						<BareRow
 							glyph={GLYPH}
-							label="Agent's thinking so far"
+							toggle={{
+								expanded: live.expanded,
+								onToggle: onToggleThinking,
+								label: "Agent's thinking so far",
+							}}
 						>
 							{words}
-						</RowButton>
+						</BareRow>
 						<CollapsibleBody expanded={live.expanded}>
 							<ThinkingSoFar thinking={live} />
 						</CollapsibleBody>
 					</>
 				) : (
-					<StaticRow glyph={GLYPH}>{words}</StaticRow>
+					<BareRow glyph={GLYPH}>{words}</BareRow>
 				))}
 		</div>
 	);

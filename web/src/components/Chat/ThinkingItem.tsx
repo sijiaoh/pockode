@@ -1,9 +1,10 @@
 import { Brain } from "lucide-react";
-import { memo } from "react";
+import { memo, useContext } from "react";
 import { hasText, spokenThoughtLabel, thoughtLabel } from "../../lib/thinking";
 import type { Thought } from "../../types/message";
 import { CollapsibleBody, MarkdownContent, ScrollableContent } from "../ui";
-import { useRowExpanded } from "./rowExpansionContext";
+import { BareBody, BareRow } from "./BareRow";
+import { RowFrameContext, useRowExpanded } from "./rowExpansionContext";
 import { Chip, RowButton, StaticRow } from "./ToolRow";
 import { Section } from "./ToolSection";
 
@@ -51,15 +52,18 @@ export function ThoughtBody({ thought }: { thought: Thought }) {
  */
 const ThinkingItem = memo(function ThinkingItem({ thoughts }: Props) {
 	const [expanded, setExpanded] = useRowExpanded();
+	const framed = useContext(RowFrameContext);
 	const label = thoughtLabel(thoughts);
 	const spoken = spokenThoughtLabel(thoughts);
 
 	if (!thoughts.some(hasText)) {
 		const redacted = thoughts.some((thought) => thought.redacted);
-		return (
-			<StaticRow glyph={GLYPH}>
+		const words = (
+			<>
 				<span aria-hidden className="flex items-baseline gap-1.5">
-					<span className="truncate text-th-text-secondary">{label}</span>
+					<span className="min-w-0 truncate text-th-text-secondary">
+						{label}
+					</span>
 					{redacted && <Chip>hidden</Chip>}
 				</span>
 				<span className="sr-only">
@@ -67,7 +71,12 @@ const ThinkingItem = memo(function ThinkingItem({ thoughts }: Props) {
 						? `${spoken}, content hidden by the model provider`
 						: `${spoken}, no content shared`}
 				</span>
-			</StaticRow>
+			</>
+		);
+		return framed ? (
+			<StaticRow glyph={GLYPH}>{words}</StaticRow>
+		) : (
+			<BareRow glyph={GLYPH}>{words}</BareRow>
 		);
 	}
 
@@ -75,26 +84,48 @@ const ThinkingItem = memo(function ThinkingItem({ thoughts }: Props) {
 	const shown = thoughts.filter(
 		(thought) => hasText(thought) || thought.redacted,
 	);
+	const toggle = () => setExpanded(!expanded);
+	const words = (
+		<span className="block truncate text-th-text-secondary">{label}</span>
+	);
+	const records = shown.map((thought, index) => (
+		// Records only ever append, so the position is the identity.
+		// biome-ignore lint/suspicious/noArrayIndexKey: see above
+		<div key={index} className="py-2">
+			<ThoughtBody thought={thought} />
+		</div>
+	));
 	return (
 		<div className="text-xs">
-			<RowButton
-				expanded={expanded}
-				onToggle={() => setExpanded(!expanded)}
-				glyph={GLYPH}
-				label={spoken}
-			>
-				<span className="block truncate text-th-text-secondary">{label}</span>
-			</RowButton>
+			{framed ? (
+				<RowButton
+					expanded={expanded}
+					onToggle={toggle}
+					glyph={GLYPH}
+					label={spoken}
+				>
+					{words}
+				</RowButton>
+			) : (
+				<BareRow
+					glyph={GLYPH}
+					toggle={{ expanded, onToggle: toggle, label: spoken }}
+				>
+					{words}
+				</BareRow>
+			)}
 			<CollapsibleBody expanded={expanded}>
-				<ScrollableContent className="max-h-[60vh] divide-y divide-th-border overflow-auto border-t border-th-border bg-th-bg-secondary px-2">
-					{shown.map((thought, index) => (
-						// Records only ever append, so the position is the identity.
-						// biome-ignore lint/suspicious/noArrayIndexKey: see above
-						<div key={index} className="py-2">
-							<ThoughtBody thought={thought} />
-						</div>
-					))}
-				</ScrollableContent>
+				{framed ? (
+					<ScrollableContent className="max-h-[60vh] divide-y divide-th-border overflow-auto border-t border-th-border bg-th-bg-secondary px-2">
+						{records}
+					</ScrollableContent>
+				) : (
+					<BareBody>
+						<ScrollableContent className="max-h-[60vh] divide-y divide-th-border overflow-auto px-2.5">
+							{records}
+						</ScrollableContent>
+					</BareBody>
+				)}
 			</CollapsibleBody>
 		</div>
 	);

@@ -83,16 +83,16 @@ describe("PartBlocks with thinking", () => {
 		expect(screen.getByText("a")).not.toBeVisible();
 	});
 
-	// Alone, a thinking lies on the rows' columns like the tail line it settles
-	// from; beside a call it shares the call's frame.
-	it("frames a thinking only when it shares the list with a call", () => {
-		const frameOf = (name: string) =>
-			screen.getByRole("button", { name }).closest(".rounded-lg");
-		const { unmount } = render(<List shown={parts.slice(0, 1)} />);
-		expect(frameOf("Thought for 2 seconds")).toHaveClass("border-transparent");
-		unmount();
+	// Alone, a thinking is drawn bare rather than as a framed row; it is still
+	// the same disclosure.
+	it("opens a thinking that has no call beside it", async () => {
+		const user = userEvent.setup();
+		render(<List shown={parts.slice(0, 1)} />);
+		const row = screen.getByRole("button", { name: "Thought for 2 seconds" });
+		expect(row).toHaveTextContent("Thought for 2s");
 
-		render(<List shown={parts.slice(0, 2)} />);
-		expect(frameOf("Thought for 2 seconds")).toHaveClass("border-th-border");
+		await user.click(row);
+		expect(row).toHaveAttribute("aria-expanded", "true");
+		expect(screen.getByText("Plan it.")).toBeVisible();
 	});
 });

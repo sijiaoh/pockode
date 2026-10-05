@@ -9,7 +9,7 @@ import { partBlocks, partKey } from "../../lib/partTree";
 import { stepId } from "../../lib/subagentRun";
 import { rowEntries } from "../../lib/toolGroups";
 import type { ContentPart } from "../../types/message";
-import { RowExpansionContext } from "./rowExpansionContext";
+import { RowExpansionContext, RowFrameContext } from "./rowExpansionContext";
 import { ToolGroupSummary } from "./ToolGroupSummary";
 import { OpenedThoughtsContext } from "./turnTailContext";
 
@@ -45,6 +45,7 @@ function callKey({ part, index }: Item): string {
 
 interface SlotProps {
 	rowKey: string;
+	framed: boolean;
 	choice?: boolean;
 	onChoice: (rowKey: string, expanded: boolean) => void;
 	hidden: boolean;
@@ -60,6 +61,7 @@ interface SlotProps {
  */
 function RowSlot({
 	rowKey,
+	framed,
 	choice,
 	onChoice,
 	hidden,
@@ -75,7 +77,7 @@ function RowSlot({
 	);
 	return (
 		<div
-			className="border-t border-th-border"
+			className={framed ? "border-t border-th-border" : undefined}
 			hidden={hidden}
 			{...(hidden ? undefined : wrapperProps)}
 		>
@@ -87,11 +89,12 @@ function RowSlot({
 }
 
 /**
- * One framed list, with each run of calls that folds drawn as a summary row
- * over its members (docs/tool-call-ui.md#groups). Holds two things the rows
- * cannot: which groups are open, and which rows the user opened — a row the
- * user is reading stays in sight when its group closes or forms over it, until
- * they close it themselves.
+ * One list — framed, unless it holds nothing but a thinking — with each run
+ * of calls that folds drawn as a summary row over its members
+ * (docs/tool-call-ui.md#groups). Holds two things the rows cannot: which
+ * groups are open, and which rows the user opened — a row the user is reading
+ * stays in sight when its group closes or forms over it, until they close it
+ * themselves.
  */
 function RowList<T extends Item>({
 	items,
@@ -129,53 +132,59 @@ function RowList<T extends Item>({
 		),
 	);
 
-	// A list of nothing but a thinking is not framed: it lies on the rows'
-	// columns like the tail line it settles from, so `Thinking…` becoming
-	// `Thought for 12s` grows no box around it. Transparent rather than absent,
-	// so the columns stay where a framed list has them.
+	// A list of nothing but a thinking is not framed: it is drawn bare, on the
+	// text's left edge like the tail line it settles from, so `Thinking…`
+	// becoming `Thought for 12s` grows no box around it and does not move.
 	const framed = items.some((item) => item.part.type !== "thinking");
 
 	return (
-		<div
-			className={`overflow-hidden rounded-lg border text-xs ${framed ? "border-th-border" : "border-transparent"}`}
-		>
-			<div className="-mt-px">
-				{entries.map((entry) => {
-					if (entry.kind === "summary") {
+		<RowFrameContext value={framed}>
+			<div
+				className={
+					framed
+						? "overflow-hidden rounded-lg border border-th-border text-xs"
+						: "text-xs"
+				}
+			>
+				<div className={framed ? "-mt-px" : undefined}>
+					{entries.map((entry) => {
+						if (entry.kind === "summary") {
+							return (
+								<div
+									key={entry.key}
+									className="border-t border-th-border"
+									{...wrapperProps}
+								>
+									<ToolGroupSummary
+										summary={entry.summary}
+										expanded={openGroups.has(entry.key)}
+										onToggle={() => toggleGroup(entry.key)}
+									/>
+								</div>
+							);
+						}
+						const key = partKey(entry.item.part, entry.item.index);
+						const hidden =
+							entry.group !== undefined &&
+							!openGroups.has(entry.group) &&
+							!openedCalls.has(entry.call);
 						return (
-							<div
-								key={entry.key}
-								className="border-t border-th-border"
-								{...wrapperProps}
+							<RowSlot
+								key={key}
+								rowKey={key}
+								framed={framed}
+								choice={choiceFor(key)}
+								onChoice={onChoice}
+								hidden={hidden}
+								wrapperProps={wrapperProps}
 							>
-								<ToolGroupSummary
-									summary={entry.summary}
-									expanded={openGroups.has(entry.key)}
-									onToggle={() => toggleGroup(entry.key)}
-								/>
-							</div>
+								{renderPart(entry.item)}
+							</RowSlot>
 						);
-					}
-					const key = partKey(entry.item.part, entry.item.index);
-					const hidden =
-						entry.group !== undefined &&
-						!openGroups.has(entry.group) &&
-						!openedCalls.has(entry.call);
-					return (
-						<RowSlot
-							key={key}
-							rowKey={key}
-							choice={choiceFor(key)}
-							onChoice={onChoice}
-							hidden={hidden}
-							wrapperProps={wrapperProps}
-						>
-							{renderPart(entry.item)}
-						</RowSlot>
-					);
-				})}
+					})}
+				</div>
 			</div>
-		</div>
+		</RowFrameContext>
 	);
 }
 
