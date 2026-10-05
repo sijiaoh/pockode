@@ -70,7 +70,7 @@ const SessionItem = memo(function SessionItem({
 	const work = useWorkStore((s) =>
 		workId ? s.works.find((w) => w.id === workId) : undefined,
 	);
-	const activity = sessionActivity(session.turn, work);
+	const activity = sessionActivity(session.turn, work, session.watching);
 	// Only a work the engine is still driving has anything to lose by this.
 	const stoppedWorkTitle =
 		work && isWorkActive(work.status) ? work.title : undefined;
@@ -137,6 +137,7 @@ const SessionItem = memo(function SessionItem({
 			unread={session.unread}
 			activity={activity}
 			unansweredQuestions={session.unanswered_questions}
+			watchingCount={session.watching}
 			onSelect={() => onSelect(session.id, origin?.worktree ?? null)}
 			actions={
 				<DeleteButton

@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"sync"
 	"time"
@@ -88,8 +89,12 @@ func (m *Manager) SetWorkStore(s work.Store) {
 }
 
 // OnWorkChange implements work.OnChangeListener: a session names the work item
-// it runs — on its list row and on its detail — and nothing about the session
-// moves when that relation does.
+// it runs and counts the stories it watches — on its list row and on its
+// detail — and nothing about the session moves when either relation does.
+//
+// The change goes to the work's own worktree and to the worktrees of the
+// story's watcher before and after it, each once: a chat in main may watch a
+// story running in a worktree of its own.
 //
 // Routed through the manager rather than each worktree's watcher registering on
 // the work store itself, because that store is global and keeps its listeners
@@ -101,9 +106,17 @@ func (m *Manager) SetWorkStore(s work.Store) {
 // there is nobody to notify, and building it here would defeat the cleanup that
 // unloaded it.
 func (m *Manager) OnWorkChange(event work.ChangeEvent) {
-	if wt, ok := m.loaded(event.Work.Worktree); ok {
-		wt.SessionListWatcher.HandleWorkChange(event)
-		wt.SessionDetailWatcher.HandleWorkChange(event)
+	names := []string{event.Work.Worktree}
+	for _, watcher := range []*work.Watcher{event.Work.Watcher, event.PrevWatcher} {
+		if watcher != nil && !slices.Contains(names, watcher.Worktree) {
+			names = append(names, watcher.Worktree)
+		}
+	}
+	for _, name := range names {
+		if wt, ok := m.loaded(name); ok {
+			wt.SessionListWatcher.HandleWorkChange(event)
+			wt.SessionDetailWatcher.HandleWorkChange(event)
+		}
 	}
 }
 

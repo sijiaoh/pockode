@@ -3,19 +3,28 @@ import {
 	Check,
 	CircleHelp,
 	CornerDownRight,
+	Eye,
 	Hourglass,
 	Lock,
 	X,
 } from "lucide-react";
 import { type MouseEvent, useRef, useState } from "react";
+import {
+	ACTIVITY_VIEW,
+	type Activity,
+	watchingLabel,
+} from "../../lib/activity";
 import { toolSummary } from "../../lib/toolSummary";
+import { useWorkStore } from "../../lib/workStore";
 import { useWSStore } from "../../lib/wsStore";
 import type {
 	PermissionRequest,
 	PermissionStatus,
 	SessionTurn,
 	TurnBlocker,
+	WatchedStory,
 } from "../../types/message";
+import { ActivityIcon } from "../ui";
 import type { PromptError } from "./MessageItem";
 import { Armed } from "./SendStopSlot";
 import { Chip, Detail } from "./ToolRow";
@@ -79,6 +88,14 @@ interface Props {
 	) => void;
 	/** The last refused answer; shown on the row when it is the row's request. */
 	promptError?: PromptError;
+	/**
+	 * The stories the session watches, passed only while its activity is
+	 * `watching` — the same rule the session's row is drawn by, worked out by
+	 * the caller that holds the work. Empty or absent, the row does not exist.
+	 */
+	watchedStories?: WatchedStory[];
+	/** Opens a watched story's detail, from the row's Details list. */
+	onOpenWorkDetail?: (workId: string) => void;
 }
 
 /**
@@ -145,6 +162,11 @@ const STRIP_FRAME = "shrink-0 border-th-border border-t";
 // into a control (web/tests/touchTarget.ts, `interactiveControls`).
 const STRIP_ACTION =
 	"touch-target rounded px-1 underline transition-colors hover:text-th-text-primary focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent";
+
+// A real box rather than `touch-target` over a text line: the rows are stacked,
+// and overlays reaching 44px would overlap each other (docs/lifecycle-ui.md §10).
+const WATCHED_STORY_ROW =
+	"flex min-h-9 w-full min-w-0 items-center gap-1.5 rounded px-2 text-left transition-colors hover:bg-th-overlay-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent pointer-coarse:min-h-11";
 
 // Left-aligned and 44px rather than the centred statement line: this row is a
 // decision, read "what, then how", with the answers at the thumb's end. `py-2`
@@ -332,6 +354,96 @@ function PermissionRow({
 }
 
 /**
+ * One watched story in the watching row's Details: its own activity, read from
+ * the work list the way a work row's is, and a way to its page. The title comes
+ * with the session's detail, so a story the list has not paged in is still
+ * named — it is only drawn without its activity.
+ */
+function WatchedStoryItem({
+	story,
+	onOpen,
+}: {
+	story: WatchedStory;
+	onOpen?: (workId: string) => void;
+}) {
+	const listed = useWorkStore(
+		(s) => s.works.find((w) => w.id === story.id)?.activity,
+	);
+	const activity: Activity | undefined =
+		listed ?? (story.status === "stopped" ? "stopped" : undefined);
+	return (
+		<li>
+			<button
+				type="button"
+				onClick={() => onOpen?.(story.id)}
+				className={WATCHED_STORY_ROW}
+			>
+				{activity && <ActivityIcon activity={activity} size="sm" decorative />}
+				<span className="min-w-0 truncate text-th-text-primary">
+					{story.title}
+				</span>
+				{activity && (
+					<span className="shrink-0 text-th-text-secondary">
+						{ACTIVITY_VIEW[activity].label}
+					</span>
+				)}
+			</button>
+		</li>
+	);
+}
+
+/**
+ * The lowest row, beside the background wait: a chat that started stories and
+ * stepped back is not finished, and an idle composer would say it was. Nothing
+ * here is for the user to do, so it is a statement with its list behind
+ * Details, like the background row.
+ */
+function WatchingRow({
+	stories,
+	onOpenWorkDetail,
+}: {
+	stories: WatchedStory[];
+	onOpenWorkDetail?: (workId: string) => void;
+}) {
+	const [expanded, setExpanded] = useState(false);
+	const count = stories.length;
+	return (
+		<div className={STRIP_FRAME}>
+			<div className={STRIP_LINE}>
+				<Eye className="size-3 shrink-0" aria-hidden="true" />
+				<span>
+					{`${watchingLabel(count)} — this chat wakes when ${count === 1 ? "it" : "one"} closes, stops, or asks.`}
+				</span>
+				<button
+					type="button"
+					onClick={() => setExpanded(!expanded)}
+					aria-expanded={expanded}
+					className={STRIP_ACTION}
+				>
+					Details
+				</button>
+			</div>
+			{expanded && (
+				<div className="mx-auto max-w-3xl px-3 pb-2 text-xs">
+					<ul aria-label="Watched stories" className="max-h-32 overflow-y-auto">
+						{stories.map((story) => (
+							<WatchedStoryItem
+								key={story.id}
+								story={story}
+								onOpen={onOpenWorkDetail}
+							/>
+						))}
+					</ul>
+					<p className="mt-1 text-center text-th-text-muted">
+						Open a story to unwatch it.
+					</p>
+				</div>
+			)}
+		</div>
+	);
+}
+
+/**
  * One line between the transcript and the composer, saying what needs the user
  * (docs/lifecycle-ui.md §2.2).
  *
@@ -348,7 +460,7 @@ function PermissionRow({
  * `PERMISSION_LINE` gives: it is two decisions and their object, not a
  * statement.
  *
- * It holds no state of its own beyond whether the background detail is open:
+ * It holds no state of its own beyond whether a row's Details are open:
  * everything it says is read from the session's turn and the transcript's tail,
  * and goes when they do.
  */
@@ -362,6 +474,8 @@ function AttentionStrip({
 	permissionRequests,
 	onPermissionRespond,
 	promptError,
+	watchedStories,
+	onOpenWorkDetail,
 }: Props) {
 	const [expanded, setExpanded] = useState(false);
 
@@ -369,8 +483,9 @@ function AttentionStrip({
 		turn.phase === "blocked" ? leadingBlocker(turn.blockers ?? []) : undefined;
 	const unanswered = turn.unanswered?.length ?? 0;
 
-	// The line is one of four things, and the branches below are in that order:
-	// permission, unanswered questions, the send receipt, a background wait.
+	// The line is one of five things, and the branches below are in that order:
+	// permission, unanswered questions, the send receipt, then a background wait
+	// or the stories being watched — two activity leaves, so never both.
 	//
 	// A permission request comes first, and now for a sharper reason than
 	// precedence: it is the only row the composer is disabled under, and the only
@@ -502,7 +617,15 @@ function AttentionStrip({
 		);
 	}
 
-	if (!blocker) return null;
+	if (!blocker) {
+		if (!watchedStories?.length) return null;
+		return (
+			<WatchingRow
+				stories={watchedStories}
+				onOpenWorkDetail={onOpenWorkDetail}
+			/>
+		);
+	}
 
 	const since = formatSince(turn.since);
 	return (

@@ -45,6 +45,10 @@ type stubWorkSource struct{ works []work.Work }
 
 func (s *stubWorkSource) List() ([]work.Work, error) { return s.works, nil }
 
+func (s *stubWorkSource) WatchedBy(sessionID string) ([]work.Work, error) {
+	return work.WatchedBySession(s.works)[sessionID], nil
+}
+
 func (s *stubWorkSource) FindBySessionID(sessionID string) (work.Work, bool, error) {
 	for _, w := range s.works {
 		if w.SessionID == sessionID {
@@ -136,6 +140,47 @@ func TestOnWorkChange_ReachesTheSessionWatchersOfTheWorksWorktree(t *testing.T) 
 	}
 	if got := detailNotifier.calls(); got != 1 {
 		t.Errorf("notified the detail %d times, want once — a work belongs to one worktree", got)
+	}
+}
+
+// A chat may watch a story running in a worktree of its own, and its row counts
+// that story — so the change has to reach the watcher's worktree as well as the
+// story's, including when the story's worktree is not loaded at all.
+func TestOnWorkChange_ReachesTheWatchersWorktree(t *testing.T) {
+	sessionStore, err := session.NewFileStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("session.NewFileStore: %v", err)
+	}
+	if _, err := sessionStore.Create(context.Background(), "sess-chat", session.CreateSpec{}); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	story := work.Work{
+		ID: "story-1", Status: work.StatusActive, SessionID: "sess-story", Worktree: "feature-1",
+		Watcher: &work.Watcher{SessionID: "sess-chat"},
+	}
+	listWatcher := watch.NewSessionListWatcher(sessionStore, &stubWorkSource{works: []work.Work{story}})
+	listWatcher.Start()
+	defer listWatcher.Stop()
+
+	m := &Manager{
+		worktrees: map[string]*Worktree{
+			"": {SessionStore: sessionStore, SessionListWatcher: listWatcher, SessionDetailWatcher: watch.NewSessionDetailWatcher(sessionStore, nil)},
+		},
+	}
+	listNotifier := &capturingNotifier{}
+	if _, err := listWatcher.Subscribe("client-1", listNotifier, watch.SessionListFilter{}); err != nil {
+		t.Fatalf("subscribe to the list: %v", err)
+	}
+
+	m.OnWorkChange(work.ChangeEvent{Op: work.OperationUpdate, Work: story})
+
+	deadline := time.Now().Add(2 * time.Second)
+	for listNotifier.calls() == 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("the watcher's worktree was never notified")
+		}
+		time.Sleep(5 * time.Millisecond)
 	}
 }
 

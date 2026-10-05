@@ -392,6 +392,46 @@ describe("ChatPanel", () => {
 	// destination is known. Whatever is still on screen belongs to the session the
 	// user came from: showing it reads as having opened the wrong chat, and the
 	// input would send the next message into it.
+	// The strip says the session is watching by the rule its row is drawn by:
+	// a settled turn with stories watched, and the stories' own work's wait
+	// does not come into it (docs/lifecycle-ui.md §1.2).
+	describe("the stories the chat watches", () => {
+		const watchedStories = [
+			{ id: "st1", title: "Ship the importer", status: "active" as const },
+		];
+
+		it("says it is watching once the turn settles, and opens a story from the list", async () => {
+			const user = userEvent.setup();
+			const onOpenWorkDetail = vi.fn();
+			seedSessionDetail({ watching: 1, watched_stories: watchedStories });
+			render(
+				<ChatPanel {...defaultProps} onOpenWorkDetail={onOpenWorkDetail} />,
+			);
+			await waitForHistoryLoad();
+
+			expect(
+				screen.getByText(
+					"Watching 1 story — this chat wakes when it closes, stops, or asks.",
+				),
+			).toBeInTheDocument();
+			await user.click(screen.getByRole("button", { name: "Details" }));
+			await user.click(screen.getByText("Ship the importer"));
+			expect(onOpenWorkDetail).toHaveBeenCalledWith("st1");
+		});
+
+		it("leaves a running turn to say what it is doing", async () => {
+			seedSessionDetail({
+				watching: 1,
+				watched_stories: watchedStories,
+				turn: { phase: "running", open: true, since: "" },
+			});
+			render(<ChatPanel {...defaultProps} />);
+			await waitForHistoryLoad();
+
+			expect(screen.queryByText(/^Watching/)).toBeNull();
+		});
+	});
+
 	describe("while the destination session is still resolving", () => {
 		it("drops the previous session's messages and refuses to send", async () => {
 			const user = userEvent.setup();

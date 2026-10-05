@@ -4,6 +4,7 @@ import {
 	CircleDot,
 	CircleStop,
 	Clock,
+	Eye,
 	Hourglass,
 	Lock,
 	type LucideIcon,
@@ -12,7 +13,7 @@ import type { SessionTurn } from "../types/message";
 import type { WorkListItem, WorkStatus } from "../types/work";
 
 /**
- * The only state any surface paints. Eight leaves, and there is never more than
+ * The only state any surface paints. Nine leaves, and there is never more than
  * one at a time: the layers it is derived from are each exclusive
  * (docs/lifecycle-ui.md §1.1).
  *
@@ -26,6 +27,7 @@ export type Activity =
 	| "needs_permission"
 	| "background"
 	| "waiting_children"
+	| "watching"
 	| "idle"
 	| "stopped"
 	| "closed";
@@ -66,7 +68,9 @@ interface ActivityView {
  * deliberately quiet: there is nothing to do and nothing is stuck, and a louder
  * tone would re-create the two-hour spinner this redesign removes.
  * `waiting_children` keeps accent, because it is a structural state read on
- * purpose.
+ * purpose, and so does `watching`: a chat that started a story and stepped back
+ * is still alive — it wakes when the story closes, stops or asks — and a muted
+ * glyph would tell the user it had finished.
  *
  * `needs_permission` is the only leaf left in the warning hue, and it is the
  * whole of what an activity can say about the user being waited on. The other
@@ -99,6 +103,12 @@ export const ACTIVITY_VIEW: Record<Activity, ActivityView> = {
 		label: "Waiting on subtasks",
 		ariaLabel: "Waiting on subtasks",
 	},
+	watching: {
+		Icon: Eye,
+		tone: "accent",
+		label: "Watching stories",
+		ariaLabel: "Watching stories",
+	},
 	idle: { Icon: CircleDot, tone: "muted", label: "Idle", ariaLabel: "Idle" },
 	stopped: {
 		Icon: CircleStop,
@@ -113,6 +123,14 @@ export const ACTIVITY_VIEW: Record<Activity, ActivityView> = {
 		ariaLabel: "Closed",
 	},
 };
+
+/**
+ * `watching` with its count, for the surfaces that know how many: the leaf's
+ * own label is the count-free form a work row or a badge falls back to.
+ */
+export function watchingLabel(count: number): string {
+	return count === 1 ? "Watching 1 story" : `Watching ${count} stories`;
+}
 
 /**
  * An activity as it arrived from the server, folded to one this build knows.
@@ -147,7 +165,7 @@ export function normalizeActivity(raw: unknown): Activity {
  * user can act on one of the two, both are drawn side by side instead — a dot
  * cannot be aimed at, so it owes only the one bit.
  *
- * `background` and `waiting_children` are deliberately outside it: there is
+ * `background`, `waiting_children` and `watching` are deliberately outside it: there is
  * nothing to do, and a dot meaning "something is happening" is a dot the user
  * learns to ignore.
  */
@@ -194,6 +212,12 @@ export function isWorkActive(status: WorkStatus): boolean {
  * Permission outranks background when both are live: background is the one
  * nobody can act on, and those are the only two blockers a turn has.
  *
+ * `watching` — how many unclosed stories the session watches, counted by the
+ * server (`SessionListItem.watching`) — comes last, below the work's own wait:
+ * a session waiting on its subtasks is doing what it was started for, and the
+ * stories it watches are something it does on the side. It is not a wait the
+ * engine keeps, and nothing about nudging reads it.
+ *
  * The server evaluates this same rule for work rows, which is where a row's
  * `activity` comes from (server/work/activity.go): a work list spans worktrees,
  * and a client cannot hold the turn state of a session in a worktree it has not
@@ -203,6 +227,7 @@ export function isWorkActive(status: WorkStatus): boolean {
 export function deriveActivity(
 	work: ActivityWork | undefined,
 	turn: SessionTurn | undefined,
+	watching = 0,
 ): Activity {
 	if (work) {
 		if (work.status === "open") return "open";
@@ -218,6 +243,7 @@ export function deriveActivity(
 	}
 
 	if (work?.wait === "child") return "waiting_children";
+	if (watching > 0) return "watching";
 	return "idle";
 }
 
@@ -239,13 +265,19 @@ export function deriveActivity(
  * and the `wait` is the one thing a row still asks the work list for. So a work
  * the store has not paged in costs the row its `wait` and nothing else — it is
  * still in the right list and still says what its own turn is doing.
+ *
+ * `watching` is the row's own count, and required so that no caller drops it by
+ * accident: a watching chat read without it says `idle`, which is the very
+ * claim the leaf exists to correct.
  */
 export function sessionActivity(
 	turn: SessionTurn | undefined,
 	work: ActivityWork | undefined,
+	watching: number | undefined,
 ): Activity {
 	return deriveActivity(
 		work && isWorkActive(work.status) ? work : undefined,
 		turn,
+		watching ?? 0,
 	);
 }

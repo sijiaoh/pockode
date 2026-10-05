@@ -1,7 +1,7 @@
 import type { AuthCredentialParams } from "@pockode/shared";
 import type { ContentBlock, FileBlock } from "./content";
 import type { AgentType } from "./settings";
-import type { WorkType } from "./work";
+import type { WorkStatus, WorkType } from "./work";
 
 export type SessionMode = "default" | "yolo";
 
@@ -68,6 +68,14 @@ export interface SessionListItem {
 	 * incomplete (docs/code/subscription-system.md#which-sessions-belong-to-work).
 	 */
 	work_id?: string;
+	/**
+	 * How many unclosed stories this session watches and would be woken by
+	 * (a session whose own work is not active is woken by none), counted by the
+	 * server — a client holding a paged work list cannot count what it was never
+	 * sent (docs/lifecycle-ui.md §1.2). Absent means none. The third input of
+	 * `sessionActivity`, beside the turn and the work's wait.
+	 */
+	watching?: number;
 	/** The row's subtitle, and what the list is ordered by. */
 	updated_at: string;
 	/**
@@ -86,6 +94,13 @@ export interface SessionListItem {
 	unanswered_questions?: number;
 	/** Absent on a session that was created rather than forked. */
 	forked_from?: ForkOrigin;
+}
+
+/** One story a session watches: enough to list it and open its detail. */
+export interface WatchedStory {
+	id: string;
+	title: string;
+	status: WorkStatus;
 }
 
 /**
@@ -942,6 +957,14 @@ export interface SessionDetail {
 	 * (docs/code/subscription-system.md#which-sessions-belong-to-work).
 	 */
 	work_id?: string;
+	/** `SessionListItem.watching`, here for the reason `work_id` is. */
+	watching?: number;
+	/**
+	 * The stories `watching` counts, for the open session: the chat that says it
+	 * is watching is the surface that lists what. A row is sent the count alone.
+	 * Absent means none.
+	 */
+	watched_stories?: WatchedStory[];
 	/**
 	 * Always present: a session that has spent nothing carries an empty usage,
 	 * not a missing one, which is what "nothing reported yet" is keyed on.

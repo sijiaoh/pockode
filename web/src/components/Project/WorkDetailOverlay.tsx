@@ -2,6 +2,7 @@ import { ConfirmDialog } from "@pockode/shared";
 import {
 	AlertCircle,
 	Check,
+	Eye,
 	Loader2,
 	MessageSquare,
 	Pencil,
@@ -17,6 +18,12 @@ import { useWorkDetailSubscription } from "../../hooks/useWorkDetailSubscription
 import type { Activity } from "../../lib/activity";
 import { useAgentRoleStore } from "../../lib/agentRoleStore";
 import { requestAnswerPanel } from "../../lib/answerIntent";
+import {
+	selectSessionTitle,
+	UNLISTED_SESSION_NAME,
+	useSessionStore,
+} from "../../lib/sessionStore";
+import { useWorktreeStore } from "../../lib/worktreeStore";
 import { useWSStore } from "../../lib/wsStore";
 import type { AgentRole } from "../../types/agentRole";
 import type { PendingQuestion } from "../../types/message";
@@ -137,6 +144,10 @@ function WorkDetailPage({
 							<WorktreeBadge work={work} className="max-w-[16rem]" />
 						</div>
 						<WaitLine work={work} />
+						<WatcherLine
+							work={work}
+							onNavigateToSession={onNavigateToSession}
+						/>
 					</div>
 
 					<PendingQuestionsSection
@@ -372,6 +383,93 @@ function WaitLine({ work }: { work: Work }) {
 		<p className="mt-2 text-xs text-th-text-secondary">
 			Waiting for its subtasks to finish.
 		</p>
+	);
+}
+
+/**
+ * Which chat this story wakes, a way back to it, and a way to stop it.
+ *
+ * Shown whenever the detail names a watcher: closing releases the watch, so the
+ * line goes by itself, and a stopped story keeps it because the watch outlives
+ * a stop. No confirmation on Unwatch: the story runs on regardless, and all the
+ * chat loses is being woken — one message to it brings that back. No optimistic
+ * update either: the detail's push takes the watcher away, and the line with it.
+ *
+ * The chat is named from the session list rather than from a copy on the
+ * detail, which would go stale on a rename. The list holds only the worktree in
+ * view, so a watcher elsewhere is named by its worktree; either way the link
+ * still opens it.
+ */
+function WatcherLine({
+	work,
+	onNavigateToSession,
+}: {
+	work: Work;
+	onNavigateToSession: (sessionId: string, worktree: string) => void;
+}) {
+	const unwatchWork = useWSStore((s) => s.actions.unwatchWork);
+	// The worktree the session list is read out of, which is what decides
+	// whether the list can name the watcher.
+	const currentWorktree = useWorktreeStore((s) => s.current);
+	const watcher = work.watcher;
+	const watcherId = watcher?.session_id ?? "";
+	const listedTitle = useSessionStore(selectSessionTitle(watcherId));
+	const [unwatching, setUnwatching] = useState(false);
+	const [error, setError] = useState<string | null>(null);
+
+	if (!watcher) return null;
+	const worktree = watcher.worktree ?? "";
+	const name =
+		worktree === currentWorktree
+			? (listedTitle ?? UNLISTED_SESSION_NAME)
+			: `a session in ${worktree || "main"}`;
+
+	const handleUnwatch = async () => {
+		setError(null);
+		setUnwatching(true);
+		try {
+			await unwatchWork(work.id);
+		} catch (err) {
+			setError(err instanceof Error ? err.message : String(err));
+		} finally {
+			setUnwatching(false);
+		}
+	};
+
+	return (
+		<div className="mt-2 text-xs text-th-text-secondary">
+			<div className="flex min-w-0 items-center gap-2">
+				<Eye
+					className="size-3 shrink-0 text-th-text-muted"
+					aria-hidden="true"
+				/>
+				<span className="shrink-0">Watched by</span>
+				<button
+					type="button"
+					onClick={() => onNavigateToSession(watcher.session_id, worktree)}
+					// The name truncates itself: `truncate` on the button would clip
+					// `touch-target`'s overlay along with the text.
+					className="touch-target flex min-w-0 max-w-[16rem] rounded text-th-accent hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent"
+				>
+					<span className="truncate">{name}</span>
+				</button>
+				<span aria-hidden="true">·</span>
+				<button
+					type="button"
+					onClick={handleUnwatch}
+					disabled={unwatching}
+					aria-label={`Unwatch — stop waking ${name} with this story's news`}
+					className="touch-target shrink-0 rounded underline hover:text-th-text-primary focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent disabled:opacity-50"
+				>
+					Unwatch
+				</button>
+			</div>
+			{error && (
+				<p className="mt-1 text-th-error" role="alert">
+					Failed to unwatch: {error}
+				</p>
+			)}
+		</div>
 	);
 }
 

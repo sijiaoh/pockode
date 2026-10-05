@@ -1530,6 +1530,83 @@ func TestFindBySessionID_NotFound(t *testing.T) {
 	}
 }
 
+// --- WatchedBy ---
+
+// A stopped story is still watched — its watcher may be waiting for it to be
+// restarted and finish — and a closed one is not.
+func TestWatchedBy_CountsEveryStoryThatHasNotClosed(t *testing.T) {
+	s := newTestStore(t)
+	watcher := Watcher{SessionID: "sess-watcher"}
+	running := createStory(t, s, "Running")
+	stopped := createStory(t, s, "Stopped")
+	closed := createStory(t, s, "Closed")
+	for _, story := range []Work{running, stopped, closed} {
+		if _, _, err := s.Claim(context.Background(), story.ID, &watcher); err != nil {
+			t.Fatalf("Claim %s: %v", story.Title, err)
+		}
+	}
+	if err := s.Stop(context.Background(), stopped.ID); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+	if _, err := s.StepDone(context.Background(), closed.ID, 0); err != nil {
+		t.Fatalf("StepDone: %v", err)
+	}
+
+	watched, err := s.WatchedBy("sess-watcher")
+	if err != nil {
+		t.Fatalf("WatchedBy: %v", err)
+	}
+	var titles []string
+	for _, w := range watched {
+		titles = append(titles, w.Title)
+	}
+	if !slices.Equal(titles, []string{"Running", "Stopped"}) {
+		t.Errorf("watched = %v, want the running and the stopped story", titles)
+	}
+}
+
+// The rule does not lean on closing having released the watcher: a closed
+// story wakes nobody, whatever its record still says.
+func TestWatchedBySession_LeavesOutAClosedStoryThatStillNamesItsWatcher(t *testing.T) {
+	watcher := &Watcher{SessionID: "sess-watcher"}
+	works := []Work{
+		{ID: "a", Status: StatusActive, Watcher: watcher},
+		{ID: "b", Status: StatusClosed, Watcher: watcher},
+		{ID: "c", Status: StatusActive},
+	}
+
+	got := WatchedBySession(works)
+	if len(got) != 1 || len(got["sess-watcher"]) != 1 || got["sess-watcher"][0].ID != "a" {
+		t.Errorf("index = %+v, want only story a under its watcher", got)
+	}
+}
+
+// The count is held to the rule the news is delivered by (WakesWatcher): a
+// story's own session and a session whose work the engine is not driving are
+// never woken, so neither counts as watching.
+func TestWatchedBySession_CountsOnlyTheWatchersTheNewsWakes(t *testing.T) {
+	works := []Work{
+		{ID: "lead-work", Status: StatusActive, SessionID: "sess-lead"},
+		{ID: "stopped-work", Status: StatusStopped, SessionID: "sess-stopped"},
+		{ID: "a", Status: StatusActive, SessionID: "sess-a", Watcher: &Watcher{SessionID: "sess-lead"}},
+		{ID: "b", Status: StatusActive, SessionID: "sess-b", Watcher: &Watcher{SessionID: "sess-chat"}},
+		{ID: "c", Status: StatusActive, SessionID: "sess-c", Watcher: &Watcher{SessionID: "sess-stopped"}},
+		{ID: "d", Status: StatusActive, SessionID: "sess-d", Watcher: &Watcher{SessionID: "sess-d"}},
+	}
+
+	got := WatchedBySession(works)
+	ids := map[string][]string{}
+	for sessionID, stories := range got {
+		for _, story := range stories {
+			ids[sessionID] = append(ids[sessionID], story.ID)
+		}
+	}
+	want := map[string][]string{"sess-lead": {"a"}, "sess-chat": {"b"}}
+	if len(ids) != len(want) || !slices.Equal(ids["sess-lead"], want["sess-lead"]) || !slices.Equal(ids["sess-chat"], want["sess-chat"]) {
+		t.Errorf("index = %v, want %v", ids, want)
+	}
+}
+
 // --- Test helpers ---
 
 type listenerFunc func(ChangeEvent)

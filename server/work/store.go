@@ -17,6 +17,10 @@ type Store interface {
 	List() ([]Work, error)
 	Get(id string) (Work, bool, error)
 	FindBySessionID(sessionID string) (Work, bool, error)
+	// WatchedBy returns the stories a session watches whose news would wake it
+	// (WatchedBySession), in listing order: what a session's row counts as
+	// `watching`.
+	WatchedBy(sessionID string) ([]Work, error)
 
 	Create(ctx context.Context, w Work) (Work, error)
 	Update(ctx context.Context, id string, fields UpdateFields) error
@@ -233,6 +237,13 @@ func (s *FileStore) FindBySessionID(sessionID string) (Work, bool, error) {
 		}
 	}
 	return Work{}, false, nil
+}
+
+func (s *FileStore) WatchedBy(sessionID string) ([]Work, error) {
+	s.worksMu.RLock()
+	defer s.worksMu.RUnlock()
+
+	return WatchedBySession(s.works)[sessionID], nil
 }
 
 // --- Write operations ---
@@ -1067,6 +1078,53 @@ func IDsBySession(works []Work) map[string]string {
 		}
 	}
 	return byID
+}
+
+// WatchedBySession indexes the stories each session watches and would be woken
+// by, for the same readers IDsBySession serves.
+//
+// A closed story is left out even though closing releases its watcher
+// (FileStore.StepDone): a watch is counted because the session will be woken by
+// the story, and a closed story wakes nobody — so the rule says so itself rather
+// than leaning on every write that closes one. A stopped story stays in: its
+// watcher may be waiting for it to be restarted and finish.
+//
+// The watching side is held to WakesWatcher, the rule Engine.notifyWatcher
+// delivers by: a count that included a watcher the news never reaches would
+// tell the user the chat is waiting to be woken when it is not.
+func WatchedBySession(works []Work) map[string][]Work {
+	own := make(map[string]*Work, len(works))
+	for i := range works {
+		if works[i].SessionID != "" {
+			own[works[i].SessionID] = &works[i]
+		}
+	}
+	watched := make(map[string][]Work)
+	for _, item := range works {
+		if item.Watcher == nil || item.Status == StatusClosed {
+			continue
+		}
+		watcher := item.Watcher.SessionID
+		if WakesWatcher(item, watcher, own[watcher]) {
+			watched[watcher] = append(watched[watcher], item)
+		}
+	}
+	return watched
+}
+
+// WakesWatcher reports whether news of story reaches the session watcherID,
+// which runs the work own — nil for a plain chat session. Two watchers are
+// never told:
+//
+//   - The story's own session: it is the one doing the telling.
+//   - A session running a work the engine is not driving. A message starts a
+//     turn, and starting one under a stopped or closed work is the thing
+//     notifyParentOfChild refuses to do for the same reason.
+//
+// The one rule both the delivery (Engine.notifyWatcher) and the count a
+// session's row shows (WatchedBySession) are held to.
+func WakesWatcher(story Work, watcherID string, own *Work) bool {
+	return watcherID != story.SessionID && (own == nil || own.Status == StatusActive)
 }
 
 // UnclosedWorkByWorktree returns the works assigned to the given worktree whose

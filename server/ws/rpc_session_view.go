@@ -5,7 +5,7 @@ import (
 
 	"github.com/pockode/server/rpc"
 	"github.com/pockode/server/session"
-	"github.com/pockode/server/work"
+	"github.com/pockode/server/watch"
 	"github.com/sourcegraph/jsonrpc2"
 )
 
@@ -103,7 +103,7 @@ func (h *rpcMethodHandler) handleSessionViewList(ctx context.Context, conn *json
 	// The work index is read once for the whole page rather than once per row,
 	// as the live list does. Session ids are unique across worktrees, so it
 	// needs no worktree filter.
-	workIDs, err := h.workIDsBySession()
+	relations, err := h.sessionWorkBySession()
 	if err != nil {
 		h.replyInternalError(ctx, conn, req.ID, "failed to read work items", err)
 		return
@@ -111,11 +111,11 @@ func (h *rpcMethodHandler) handleSessionViewList(ctx context.Context, conn *json
 
 	items := make([]rpc.SessionListItem, 0, len(sessions))
 	for _, sess := range sessions {
-		workID := workIDs[sess.ID]
-		if params.ExcludeWorkSessions && workID != "" {
+		sw := relations[sess.ID]
+		if params.ExcludeWorkSessions && sw.WorkID != "" {
 			continue
 		}
-		items = append(items, rpc.NewSessionListItem(sess, workID))
+		items = append(items, rpc.NewSessionListItem(sess, sw))
 	}
 
 	// Cut after the filter, for the reason session.PageList gives.
@@ -137,9 +137,9 @@ func (h *rpcMethodHandler) handleSessionViewList(ctx context.Context, conn *json
 	}
 }
 
-// workIDsBySession indexes the work store by the session each item runs, so a
-// page of rows costs one read of it rather than one per row.
-func (h *rpcMethodHandler) workIDsBySession() (map[string]string, error) {
+// sessionWorkBySession indexes the work store by session, so a page of rows
+// costs one read of it rather than one per row.
+func (h *rpcMethodHandler) sessionWorkBySession() (map[string]rpc.SessionWork, error) {
 	if h.workStore == nil {
 		return nil, nil
 	}
@@ -147,7 +147,7 @@ func (h *rpcMethodHandler) workIDsBySession() (map[string]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	return work.IDsBySession(works), nil
+	return rpc.SessionWorkBySession(works), nil
 }
 
 func (h *rpcMethodHandler) handleSessionViewGet(ctx context.Context, conn *jsonrpc2.Conn, req *jsonrpc2.Request) {
@@ -162,20 +162,18 @@ func (h *rpcMethodHandler) handleSessionViewGet(ctx context.Context, conn *jsonr
 		return
 	}
 
-	workID := ""
+	var sw rpc.SessionWork
 	if h.workStore != nil {
-		item, found, err := h.workStore.FindBySessionID(params.SessionID)
+		var err error
+		sw, err = watch.ResolveSessionWork(h.workStore, params.SessionID)
 		if err != nil {
 			h.replyInternalError(ctx, conn, req.ID, "failed to look up the work a session belongs to", err,
 				"sessionId", params.SessionID)
 			return
 		}
-		if found {
-			workID = item.ID
-		}
 	}
 
-	result := rpc.SessionViewGetResult{Session: rpc.NewSessionDetail(meta, workID)}
+	result := rpc.SessionViewGetResult{Session: rpc.NewSessionDetail(meta, sw)}
 	if err := conn.Reply(ctx, req.ID, result); err != nil {
 		h.log.Error("failed to send session view get response", "error", err)
 	}
