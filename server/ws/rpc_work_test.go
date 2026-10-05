@@ -1,7 +1,6 @@
 package ws
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -11,7 +10,6 @@ import (
 
 	"github.com/pockode/server/rpc"
 	"github.com/pockode/server/work"
-	"github.com/sourcegraph/jsonrpc2"
 )
 
 // --- work.create ---
@@ -822,51 +820,5 @@ func TestHandler_WorkStop_EndsTheProcessAndKeepsTheSession(t *testing.T) {
 	// rather than start over.
 	if _, found, _ := wt.SessionStore.Get(sessionID); !found {
 		t.Error("stopping a work deleted its session; only its process should end")
-	}
-}
-
-// A person unwatches from the UI on the story's behalf, not as its watcher, so
-// the RPC releases whoever is watching — a chat it never heard of included.
-func TestHandler_WorkUnwatch_ReleasesWhoeverIsWatching(t *testing.T) {
-	env := newTestEnv(t, &mockAgent{})
-	story, err := env.workStore.Create(context.Background(), work.Work{AgentRoleID: env.testRoleID, Title: "Story"})
-	if err != nil {
-		t.Fatalf("create: %v", err)
-	}
-	if _, _, err := env.workStore.Claim(context.Background(), story.ID, &work.Watcher{SessionID: "sess-some-chat"}); err != nil {
-		t.Fatalf("claim: %v", err)
-	}
-
-	if resp := env.call("work.unwatch", rpc.WorkUnwatchParams{ID: story.ID}); resp.Error != nil {
-		t.Fatalf("unwatch failed: %s", resp.Error.Message)
-	}
-
-	got, _, _ := env.workStore.Get(story.ID)
-	if got.Watcher != nil {
-		t.Errorf("watcher = %+v, want it released", got.Watcher)
-	}
-	if got.Status != work.StatusActive {
-		t.Errorf("status = %q, want the story still active", got.Status)
-	}
-	// Nobody watching any more is the outcome the person asked for, not an error.
-	if resp := env.call("work.unwatch", rpc.WorkUnwatchParams{ID: story.ID}); resp.Error != nil {
-		t.Errorf("unwatching an unwatched story failed: %s", resp.Error.Message)
-	}
-}
-
-func TestHandler_WorkUnwatch_RefusesATask(t *testing.T) {
-	env := newTestEnv(t, &mockAgent{})
-	story, err := env.workStore.Create(context.Background(), work.Work{AgentRoleID: env.testRoleID, Title: "Story"})
-	if err != nil {
-		t.Fatalf("create story: %v", err)
-	}
-	task, err := env.workStore.Create(context.Background(), work.Work{StoryID: story.ID, AgentRoleID: env.testRoleID, Title: "Task"})
-	if err != nil {
-		t.Fatalf("create task: %v", err)
-	}
-
-	resp := env.call("work.unwatch", rpc.WorkUnwatchParams{ID: task.ID})
-	if resp.Error == nil || resp.Error.Code != jsonrpc2.CodeInvalidParams {
-		t.Errorf("error = %+v, want invalid params", resp.Error)
 	}
 }

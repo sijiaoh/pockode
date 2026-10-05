@@ -1219,7 +1219,7 @@ func (e *Engine) releaseWatchesOf(watcher Watcher) {
 		if w.Watcher == nil || *w.Watcher != watcher {
 			continue
 		}
-		if _, released, err := e.store.Unwatch(e.ctx, w.ID, &watcher); err != nil {
+		if _, released, err := e.store.Unwatch(e.ctx, w.ID, watcher); err != nil {
 			if e.ctx.Err() == nil {
 				slog.Warn("failed to release a deleted session's watch",
 					"storyId", w.ID, "sessionId", watcher.SessionID, "worktree", watcher.Worktree, "error", err)

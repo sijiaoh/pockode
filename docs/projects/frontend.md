@@ -25,7 +25,7 @@ Both stores expose the same action pattern:
 Mutation operations are defined as RPC action creators, injected into `wsStore.actions`:
 
 **Work** (`web/src/lib/rpc/work.ts`):
-`createWork`, `updateWork`, `deleteWork`, `startWork`, `stopWork`, `reopenWork`, `unwatchWork`
+`createWork`, `updateWork`, `deleteWork`, `startWork`, `stopWork`, `reopenWork`
 
 **AgentRole** (`web/src/lib/rpc/agentRole.ts`):
 `createAgentRole`, `updateAgentRole`, `deleteAgentRole`, `resetAgentRoleDefaults`

@@ -500,9 +500,6 @@ func (h *rpcMethodHandler) Handle(ctx context.Context, conn *jsonrpc2.Conn, req 
 	case "work.reopen":
 		h.handleWorkReopen(ctx, conn, req)
 		return
-	case "work.unwatch":
-		h.handleWorkUnwatch(ctx, conn, req)
-		return
 	case "work.detail.subscribe":
 		h.handleWorkDetailSubscribe(ctx, conn, req)
 		return
