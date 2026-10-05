@@ -62,8 +62,8 @@ has a bubble.
   clear, 44px of the row's width in all. In the slot stands a `MoreHorizontal`
   `…`; pressing it opens a `Sheet` in which fork is a row.
 - **The agent's messages** have no bubble: the text runs the full reading width,
-  and a **turn-end row** under it holds Copy, Fork and `…`
-  (*The agent's turn-end row*, below).
+  and a **turn-end row** under it holds Copy and Fork — no `…`, since the
+  menu would hold nothing the row does not (*The agent's turn-end row*, below).
 
 The rest of this section is about the user's slot. The inside is where it goes
 because the outside is the avatar's, and because the inside is space the message
@@ -194,8 +194,7 @@ saves ink and not one pixel of layout.
 Under every settled agent message (`hasMessageActions`) stands one row of icon
 buttons, left-aligned under the text: **Copy** (the message's own top-level
 text as Markdown, blank-line joined — no tool calls, cards or subagent notes),
-**Fork from here**, and **`…`**, which opens the same `MessageMenu` (titled
-*Agent message*) with Fork and **Copy text** in it. Every settled agent message
+and **Fork from here**. Every settled agent message
 gets one, not only the last: forking an old answer is a main use, and a turn
 split by a mid-reply message is two messages, each a valid anchor.
 
@@ -213,9 +212,13 @@ split by a mid-reply message is two messages, each a valid anchor.
 - **A blocked fork** is drawn `aria-disabled` at lower opacity but still
   answers a press — by opening the menu, where the disabled row says why in
   words (*Blocked and failed*). An icon cannot say it and a touch device shows
-  no tooltip.
-- **A session that cannot fork** has no Fork and no `…` — the menu would only
-  repeat Copy. A message with neither text nor fork draws no row once settled.
+  no tooltip. That press is the only way into the agent's `MessageMenu`
+  (titled *Agent message*), and the menu is the same list the user's side
+  gets — Fork alone, no Copy text.
+- **No `…`** — the menu holds nothing the row does not (*Why the agent's side
+  has a standing row after all*).
+- **A session that cannot fork** has only Copy. A message with neither text nor
+  fork draws no row once settled.
 - The buttons are `iconButtonClass()` (they grow to 44px under a thumb, 8px
   apart), at 60% opacity until hover or focus. The row's negative left margin
   puts the first **icon**, not its box, on the text's left edge.
@@ -260,7 +263,14 @@ redone when the bubble went away, and came out the other way:
   point; the 44px slot beside it is the column that text gets back.
 - **The first icon is no longer alone.** Copy is a second action, so the row no
   longer pays its whole height for one glyph — and the blocked Fork still has
-  its sentence, one tap away in the `…` menu.
+  its sentence, one tap away: pressing the blocked icon opens the menu.
+- **So the row drops the `…`.** The user's side needs one because its slot
+  holds a single glyph and the actions sit behind it. The agent's row already
+  shows every action the menu holds; a `…` there opened onto the same Fork and
+  Copy that stood beside it — a second way to each, not a menu. **A `…` is drawn
+  only where it holds something the surface around it does not**, so an action
+  added to the menu without a button of its own in the row brings the agent's
+  `…` back.
 
 What may be added to the menu later — two append-only groups, no mirroring, one
 level deep, disable rather than remove — is written at the top of
@@ -340,9 +350,9 @@ less useless.
 A running turn does **not** disable anything above it. Forking an older, settled
 message is well defined while the agent writes — everything the fork keeps is
 already final, and everything still arriving falls after the anchor and is
-dropped anyway. So an older message's `…` neither blinks out for the length of
-every turn nor opens onto a refusal; only the unsettled message itself is
-unforkable.
+dropped anyway. So an older message's `…` or Fork neither blinks out for the
+length of every turn nor opens onto a refusal; only the unsettled message
+itself is unforkable.
 
 ## The fork sheet
 
@@ -400,7 +410,7 @@ server sends the resulting table to the frontend (`agent.list`), so the UI asks
 ([code/agent-integration.md](code/agent-integration.md#session-forking)).
 
 - **`"none"`** — the agent cannot reopen an earlier conversation at all, so there
-  is no fork to have memory in: the session shows no `…` at all and the
+  is no fork to have memory in: the session shows no `…` and no Fork, and the
   backend refuses the request (*Blocked and failed* below). **No shipped agent
   answers this today** — Codex did until it gained the ability to reopen a
   conversation from disk
@@ -426,11 +436,11 @@ all, which has no memory to carry in any case. Both get the same warning as any
 other fork that could not carry memory.
 
 **The fork sheet promises nothing about memory, and that is deliberate.** An agent
-that cannot follow a fork never gets that far — there is no `…` to press, so
-neither sheet ever opens. For one that can, a fork can still come back with
-nothing, for server-side facts no client can see: a source that never ran that
-agent, or whose provider conversation the agent already gave up on. The UI does
-not guess at those. The backend states the fact where it cannot be missed
+that cannot follow a fork never gets that far — there is no `…` or Fork to
+press, so neither sheet ever opens. For one that can, a fork can still come back
+with nothing, for server-side facts no client can see: a source that never ran
+that agent, or whose provider conversation the agent already gave up on. The UI
+does not guess at those. The backend states the fact where it cannot be missed
 instead — a history record in the forked transcript (`chat.Client.Fork`, written
 on the `carried == false` answer described in `server/agent/fork.go`,
 `SessionForker`), rendered
@@ -657,8 +667,8 @@ New, all in `web/src/components/Chat/` unless noted:
 | File | Role |
 | --- | --- |
 | `MessageMenuTrigger.tsx` | The slot beside a user row and the `…` in it, plus whether its menu is open. Props: `{ onFork?: () => void; forkBlocked?: "nothing-before" \| "no-anchor-seq" \| "pending-request" }`. No `onFork` means this message is not a turn — the slot renders, the glyph does not. It also owns the `ForkBlocked` type, though only `nothing-before` is spelled there: the other two are `forkAnchor.ts`'s `ForkUnavailable`, declared beside the check that produces them, since a utility module does not import from the components that use it. `MessageMenu` imports `ForkBlocked`, as a type, which is erased at compile time and so is not a runtime cycle |
-| `MessageActions.tsx` | The agent's turn-end row (*The agent's turn-end row*) under a settled message: Copy, Fork and `…`, plus the copy state and whether the menu is open. Props: `{ copyText?; onFork?; forkBlocked? }`. While the message is pending, `TurnTail.tsx` holds the slot instead ([turn-progress-ui.md §2](turn-progress-ui.md#2-the-tail-line)) |
-| `MessageMenu.tsx` | The `Sheet` behind the `…`: everything this message can do, titled by speaker — **Your message** / **Agent message**, since a sheet here names its subject the way `Fork session` and a file's own name do. `onCopy` adds *Copy text*, which only the agent's side passes. The rules for adding a row live at its top, where the list is |
+| `MessageActions.tsx` | The agent's turn-end row (*The agent's turn-end row*) under a settled message: Copy and Fork, plus the copy state and whether the menu a blocked Fork opens is open. Props: `{ copyText?; onFork?; forkBlocked? }`. While the message is pending, `TurnTail.tsx` holds the slot instead ([turn-progress-ui.md §2](turn-progress-ui.md#2-the-tail-line)) |
+| `MessageMenu.tsx` | The `Sheet` behind the user's `…` and the agent's blocked Fork: everything this message can do, titled by speaker — **Your message** / **Agent message**, since a sheet here names its subject the way `Fork session` and a file's own name do. One list for both sides, with no *Copy text*: the only side with text to copy stands Copy as a button. The rules for adding a row live at its top, where the list is |
 | `ForkSessionSheet.tsx` | The confirm sheet above. Props: `{ anchor, droppedCount, agentType, defaultTitle, isForking, error, onFork, onClose }` |
 | `ForkOriginBanner.tsx` | The lineage row at the top of `MessageList` |
 
@@ -809,7 +819,7 @@ implementations compiled into the server and cannot change while it runs. Until
 the answer arrives, forking is offered; the reasoning for that default and for
 retrying it after a reconnect is with the hook. Reserving the slot makes that
 default visible — in a session that turns out to answer `"none"`, the slots and
-the agent's Fork and `…` appear and then go away once, widening every user
+the agent's Fork appear and then go away once, widening every user
 bubble as they do. Accepted, and
 not patched over with a second default inside the component, which would be a
 copy of the hook's policy waiting to disagree with it.
@@ -817,18 +827,19 @@ copy of the hook's policy waiting to disagree with it.
 Accessibility, beyond the sentence a blocked row says out loud (*Blocked and
 failed*):
 
-- **The `…` names its speaker** — *"Actions for your message"* or *"Actions for
-  the agent's message"*, plus `aria-haspopup="dialog"` and `aria-expanded`.
-  There is one of these per message, and a screen reader's button list — or a
-  voice command naming one — is unusable when every entry reads "Message
-  actions". The menu's title names the speaker again for whoever arrives after
-  it has opened.
+- **The `…` names its speaker** — *"Actions for your message"*, plus
+  `aria-haspopup="dialog"` and `aria-expanded`. There is one of these per user
+  message, and a screen reader's button list — or a voice command naming one —
+  is unusable when every entry reads "Message actions". A blocked agent Fork,
+  which opens the menu instead of forking, carries the same `aria-haspopup` and
+  `aria-expanded`. The menu's title names the speaker again for whoever arrives
+  after it has opened.
 - **Focus is `Sheet`'s, not this feature's.** `Sheet` takes focus on open,
   cycles Tab inside itself and hands focus back to whatever opened it; the fork
   sheet's own title field wins over the box `Sheet` would otherwise take. Both
   sheets here rely on that and neither writes any focus code of its own — the
-  menu's `…` gets focus back on close, and a second copy of the logic would one
-  day disagree with `Sheet`'s.
+  button that opened the menu gets focus back on close, and a second copy of
+  the logic would one day disagree with `Sheet`'s.
 
 ## Considered and not done
 
@@ -839,10 +850,10 @@ failed*):
   session's input bar is one tap away — and on the case this would have helped
   most, forking off one's own prompt, the text is already sitting in it
   (*The dropped prompt*).
-- **`Copy text` in the menu.** Genuinely useful on a phone, and the menu is
-  built to take it — the *Which messages get a menu* split exists precisely so
-  that the second action does not inherit fork's reasons for being unavailable.
-  It is still not this feature. No placeholder was left for it either; the menu
-  is the placeholder, and it is the reason the second action costs no layout at
-  all now.
+- **`Copy text` in the menu.** It was there for a while, on the agent's side,
+  and went back out: Copy stands as a button in the agent's row, so the menu row
+  was a second way to the same action, and it was the only thing keeping a `…`
+  in a row that shows everything else already. The user's bubble has no Copy
+  anywhere; if it ever gets one, the *Which messages get a menu* split is what
+  keeps it from inheriting fork's reasons for being unavailable.
 - **A marker on the parent.** Rejected on the grounds in *The rule*.

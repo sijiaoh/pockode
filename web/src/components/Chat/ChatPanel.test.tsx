@@ -3993,19 +3993,15 @@ describe("ChatPanel", () => {
 		});
 
 		/**
-		 * Opens the nth message menu of one speaker; -1 is the last. The user's
-		 * `…` stands beside their bubble, the agent's at the end of its message.
+		 * Opens the menu of the nth user message; -1 is the last. Only the user's
+		 * side has a `…`: the agent's row stands its actions as buttons.
 		 */
 		const openMenu = async (
 			user: ReturnType<typeof userEvent.setup>,
-			side: "user" | "assistant",
 			index = 0,
 		) => {
 			const triggers = await screen.findAllByRole("button", {
-				name:
-					side === "user"
-						? "Actions for your message"
-						: "More actions for the agent's message",
+				name: "Actions for your message",
 			});
 			await user.click(triggers[index < 0 ? triggers.length + index : index]);
 		};
@@ -4190,7 +4186,7 @@ describe("ChatPanel", () => {
 
 			// "Hello", the message with no seq — the one above it opens the session
 			// and is refused for its own reason.
-			await openMenu(user, "user", 1);
+			await openMenu(user, 1);
 			const fork = menuForkRow();
 			expect(fork).toHaveAttribute("aria-disabled", "true");
 			// Written out where a finger can read it: a tooltip never fires on a
@@ -4220,7 +4216,7 @@ describe("ChatPanel", () => {
 			render(<ChatPanel {...defaultProps} onSelectSession={vi.fn()} />);
 			await waitForHistoryLoad();
 
-			await openMenu(user, "user", 0);
+			await openMenu(user, 0);
 			const fork = menuForkRow();
 			expect(fork).toHaveAttribute("aria-disabled", "true");
 			expect(fork).toHaveTextContent("Nothing before this message to keep.");
@@ -4252,7 +4248,7 @@ describe("ChatPanel", () => {
 			render(<ChatPanel {...defaultProps} onSelectSession={vi.fn()} />);
 			await waitForHistoryLoad();
 
-			await openMenu(user, "user", 0);
+			await openMenu(user, 0);
 			const fork = menuForkRow();
 			expect(fork).not.toHaveAttribute("aria-disabled");
 			expect(fork).not.toHaveTextContent("Nothing before this message");
@@ -4283,7 +4279,7 @@ describe("ChatPanel", () => {
 			// Nothing was resubscribed and no history was replayed: the only place
 			// this seq can have come from is the reply to the send itself.
 			expect(mockState.chatMessagesSubscribe).toHaveBeenCalledTimes(1);
-			await openMenu(user, "user", -1);
+			await openMenu(user, -1);
 			const fork = menuForkRow();
 			expect(fork).not.toHaveAttribute("aria-disabled");
 
@@ -4314,7 +4310,7 @@ describe("ChatPanel", () => {
 			await waitForHistoryLoad();
 
 			// "Try again", the second thing the user said.
-			await openMenu(user, "user", 1);
+			await openMenu(user, 1);
 			await user.click(menuForkRow());
 
 			const sheet = within(screen.getByRole("dialog"));
@@ -4342,8 +4338,8 @@ describe("ChatPanel", () => {
 			expect(mockState.sendMessage).not.toHaveBeenCalled();
 		});
 
-		/** The menu `openMenu` raises from an agent message. */
-		const menu = () => screen.queryByRole("dialog", { name: "Agent message" });
+		/** The menu `openMenu` raises. */
+		const menu = () => screen.queryByRole("dialog", { name: "Your message" });
 
 		// Both sheets below are portalled to the body, which is the whole of the
 		// problem: `invisible` and `inert` travel down the DOM, and a portal is
@@ -4359,7 +4355,7 @@ describe("ChatPanel", () => {
 			const { rerender } = render(<ChatPanel {...props} />);
 			await waitForHistoryLoad();
 
-			await openMenu(user, "assistant");
+			await openMenu(user);
 			expect(menu()).toBeInTheDocument();
 
 			rerender(<ChatPanel {...props} overlay={workList} />);
@@ -4406,7 +4402,7 @@ describe("ChatPanel", () => {
 			render(<ChatPanel {...defaultProps} onSelectSession={vi.fn()} />);
 			await waitForHistoryLoad();
 
-			await openMenu(user, "assistant");
+			await openMenu(user);
 			expect(menu()).toBeInTheDocument();
 
 			// Pushed onto this transcript rather than seeded with the answer

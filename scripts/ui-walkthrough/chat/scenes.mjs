@@ -319,6 +319,46 @@ const SCENES = [
 		},
 	},
 	{
+		name: "message-actions",
+		run: async ({ page, shared, shot }) => {
+			const row = () =>
+				page.getByRole("group", { name: "Message actions" }).last();
+			await openChat(page, shared.attachments, "files changed");
+			await scrollTranscript(page, "end");
+			await shot("message-actions");
+			await page
+				.getByRole("button", { name: "Actions for your message" })
+				.click();
+			await settle(page);
+			await shot("message-menu-user");
+
+			// A settled reply cannot hold a pending permission (an open turn
+			// keeps its reply streaming), so the blocked Fork a real chat can
+			// reach is `no-anchor-seq`: history records the server never
+			// addressed. Staged by taking the seqs off this chat's history.
+			await page.routeWebSocket(/./, (ws) => {
+				const server = ws.connectToServer();
+				server.onMessage((message) => {
+					const data = typeof message === "string" && JSON.parse(message);
+					for (const record of data?.result?.history ?? []) delete record.seq;
+					ws.send(data ? JSON.stringify(data) : message);
+				});
+			});
+			await page.reload();
+			await row().waitFor();
+			await settle(page);
+			await scrollTranscript(page, "end");
+			await shot("message-actions-fork-blocked");
+			// Forced: Playwright reads `aria-disabled` as not clickable, but a
+			// blocked Fork is meant to be pressed — it opens the menu saying why.
+			await row()
+				.getByRole("button", { name: "Fork from here" })
+				.click({ force: true });
+			await settle(page);
+			await shot("message-menu-fork-blocked");
+		},
+	},
+	{
 		name: "permission",
 		run: async ({ page, shared, shot, vp }) => {
 			await openChat(page, shared.permission, (p) =>
