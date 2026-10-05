@@ -13,6 +13,7 @@ export interface WorkActions {
 	startWork: (id: string) => Promise<Work>;
 	stopWork: (id: string) => Promise<void>;
 	reopenWork: (id: string) => Promise<void>;
+	unwatchWork: (id: string) => Promise<void>;
 }
 
 /**
@@ -50,6 +51,10 @@ export function createWorkActions(
 
 		reopenWork: async (id: string): Promise<void> => {
 			await client().request("work.reopen", { id });
+		},
+
+		unwatchWork: async (id: string): Promise<void> => {
+			await client().request("work.unwatch", { id });
 		},
 	};
 }

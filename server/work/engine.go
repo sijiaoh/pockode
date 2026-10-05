@@ -81,7 +81,7 @@ const DefaultMaxNudges = 3
 //   - OnWorkChange (a child leaving active) — a subtask finished, or stopped
 //     being something its parent's wait could be waiting for. A watched story
 //     closing or stopping is read off the same event.
-//   - OnSessionChange (a deletion) — the work's session was deleted.
+//   - OnSessionDeleted — the work's session, or a story's watcher, was deleted.
 //   - RecoverStartup — the server started with work left over from a previous run.
 //
 // There are no other triggers and no special cases beside them. What the old
@@ -875,8 +875,8 @@ func (e *Engine) notifyWatcherOfEnd(event ChangeEvent) {
 // Two watchers are skipped on purpose rather than failed on:
 //
 //   - A session that no longer exists. Deleting a chat is an ordinary thing to
-//     do, and a story does not have to be told; the watch is left in place and
-//     simply reaches nobody.
+//     do, and a story does not have to be told. Deletion releases the watch
+//     (OnSessionDeleted), but news already on its way can still arrive after.
 //   - A session running a work the engine is not driving. A message starts a
 //     turn, and starting one under a stopped or closed work is the thing
 //     notifyParentOfChild refuses to do for the same reason.
@@ -1180,25 +1180,57 @@ func (e *Engine) failedToReach(parentID, reason, comment string) {
 const deletedSessionComment = "Stopped automatically: this work's chat session was deleted, so there is nowhere " +
 	"for its agent to continue. Restarting the work begins a new session."
 
-// OnSessionChange implements session.OnChangeListener. A deleted session takes
-// away the place every answer and every nudge would have gone, so the work above
-// it stops — including one that was waiting, which is the case a dying process
-// deliberately does not cover (a process can die and be resumed; a deleted
-// session cannot).
-func (e *Engine) OnSessionChange(event session.SessionChangeEvent) {
-	if event.Op != session.OperationDelete {
+// OnSessionDeleted is the engine's input for a deleted session. worktree is the
+// one the session lived in ("" being the main one): a watch names its session
+// by both, because sessions are stored per worktree, so the session's id alone
+// is not who it was. The worktree manager calls this for every way a session is
+// deleted, with or without its worktree still there.
+//
+// Two things went with the session. The work above it stops, because the place
+// every answer and every nudge would have gone is gone — including a work that
+// was waiting, which is the case a dying process deliberately does not cover (a
+// process can die and be resumed; a deleted session cannot). And every story it
+// was watching is released, so that no story goes on naming a chat that no
+// longer exists; the stories themselves run on untouched.
+func (e *Engine) OnSessionDeleted(worktree, sessionID string) {
+	// The session store may hold its lock across this call, and everything
+	// below reads and writes the work store.
+	e.goFollowUp(func() {
+		if w, found := e.findWork(sessionID); found && w.Status != StatusStopped && ValidateProgress(w.Status) == nil {
+			e.stop(w.ID, "session deleted", deletedSessionComment)
+		}
+		e.releaseWatchesOf(Watcher{SessionID: sessionID, Worktree: worktree})
+	})
+}
+
+// releaseWatchesOf releases every story watcher is watching. Only open stories
+// can be found here — closing a story releases its watch in the same write — so
+// "watching" needs no status check of its own.
+//
+// The listing only picks candidates; the release itself compares and clears
+// under the store's lock (FileStore.Unwatch), so a story that changed hands in
+// between keeps its new watcher.
+func (e *Engine) releaseWatchesOf(watcher Watcher) {
+	works, err := e.store.List()
+	if err != nil {
+		slog.Warn("failed to list works to release a deleted session's watches",
+			"sessionId", watcher.SessionID, "worktree", watcher.Worktree, "error", err)
 		return
 	}
-	sessionID := event.Session.ID
-	// The session store holds its lock across this call, and everything below
-	// reads and writes the work store.
-	e.goFollowUp(func() {
-		w, found := e.findWork(sessionID)
-		if !found || w.Status == StatusStopped || ValidateProgress(w.Status) != nil {
-			return
+	for _, w := range works {
+		if w.Watcher == nil || *w.Watcher != watcher {
+			continue
 		}
-		e.stop(w.ID, "session deleted", deletedSessionComment)
-	})
+		if _, released, err := e.store.Unwatch(e.ctx, w.ID, &watcher); err != nil {
+			if e.ctx.Err() == nil {
+				slog.Warn("failed to release a deleted session's watch",
+					"storyId", w.ID, "sessionId", watcher.SessionID, "worktree", watcher.Worktree, "error", err)
+			}
+		} else if released {
+			slog.Info("watch released: the watching session was deleted",
+				"storyId", w.ID, "sessionId", watcher.SessionID, "worktree", watcher.Worktree)
+		}
+	}
 }
 
 // --- Input 7: startup ---

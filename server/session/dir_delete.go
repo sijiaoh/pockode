@@ -16,17 +16,19 @@ import (
 // continue — and says nothing about whether the record may be dropped.
 //
 // A missing session is not an error, as FileStore.Delete treats it: the caller
-// asked for it to be gone and it is. The index is what vouches for the id
-// before it becomes a path, the same rule every read path here follows, so an
-// id this directory does not know never reaches the filesystem.
+// asked for it to be gone and it is. deleted says whether there was one, so
+// that a caller can tell a deletion apart from an id that named nothing here.
+// The index is what vouches for the id before it becomes a path, the same rule
+// every read path here follows, so an id this directory does not know never
+// reaches the filesystem.
 //
 // It must not be used on a directory a FileStore has open: that store holds the
 // index in memory and the next write of its own would put the session back.
 // worktree.Manager.DeleteSession is what picks the store whenever there is one.
-func DeleteInDir(dataDir, sessionID string) error {
+func DeleteInDir(dataDir, sessionID string) (deleted bool, err error) {
 	idx, err := readIndexFile(dataDir)
 	if err != nil {
-		return err
+		return false, err
 	}
 
 	kept := make([]SessionMeta, 0, len(idx.Sessions))
@@ -39,18 +41,21 @@ func DeleteInDir(dataDir, sessionID string) error {
 		kept = append(kept, sess)
 	}
 	if !found {
-		return nil
+		return false, nil
 	}
 
 	if err := os.RemoveAll(filepath.Join(dataDir, "sessions", sessionID)); err != nil {
-		return err
+		return false, err
 	}
 
 	// Written with this build's version, as persistIndex does: what is left
 	// behind has been through the same migrations a store would have applied.
 	data, err := filestore.MarshalIndex(indexData{Version: indexVersion, Sessions: kept})
 	if err != nil {
-		return err
+		return false, err
 	}
-	return filestore.WriteFileAtomic(indexPath(dataDir), data, 0644)
+	if err := filestore.WriteFileAtomic(indexPath(dataDir), data, 0644); err != nil {
+		return false, err
+	}
+	return true, nil
 }

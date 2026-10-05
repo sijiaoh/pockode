@@ -50,7 +50,7 @@ type QuestionWithdrawer interface {
 	WithdrawQuestions(worktree, sessionID string, reason agent.CancelReason)
 }
 
-// Operations is the whole command surface of a work item: the six things a
+// Operations is the whole command surface of a work item: the seven things a
 // person or an agent can ask for, each with its store transition and its
 // agent-facing side effects.
 //
@@ -188,6 +188,20 @@ func (o *Operations) StartWork(ctx context.Context, id string, watcher *Watcher)
 // machine as well as for the model.
 func (o *Operations) StopWork(ctx context.Context, id string) error {
 	return o.store.Stop(ctx, id)
+}
+
+// Unwatch stops a story's news from going to the session watching it. The
+// story itself is not touched — its status, step and tasks run on exactly as
+// before; only who is told about them changes.
+//
+// by is who is asking to let go. An agent passes its own session, and only
+// its own watch is released: the watch was its flag to raise and is its flag
+// to lower, but another chat's watch is that chat's. A person passes nil and
+// releases whoever is watching, because they act on the story from the UI
+// rather than as a watcher. It reports the watcher found and whether this call
+// released it, so each transport can say which of the three things happened.
+func (o *Operations) Unwatch(ctx context.Context, id string, by *Watcher) (prev *Watcher, released bool, err error) {
+	return o.store.Unwatch(ctx, id, by)
 }
 
 // ReopenWork transitions a closed work item back to active and delivers the

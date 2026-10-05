@@ -40,7 +40,7 @@ type Work struct {
     SessionID   string     // Active AI session, empty when not running
     CurrentStep int        // 0-indexed; used only when agent role has Steps
     Worktree    string     // Worktree the session runs in; empty = main
-    Watcher     *Watcher   // Stories only: the session woken with its news; released when the story closes (see "A story's watcher")
+    Watcher     *Watcher   // Stories only: the session woken with its news; released when the story closes, or earlier when let go (see "A story's watcher")
     CreatedAt   time.Time
     UpdatedAt   time.Time
 }
@@ -433,6 +433,7 @@ AI agents interact with the Work system through MCP (Model Context Protocol) too
 | `work_update` | Modify title/body/role | `id`, fields to update |
 | `work_delete` | Delete (a story takes its tasks with it) | `id` |
 | `story_start` | Begin execution of a story | `id`, `worktree?`, `watch?` |
+| `story_unwatch` | Stop watching a story from this chat | `id` |
 | `task_start` | Begin execution of a task | `id` |
 | `story_wait` | Pause for task completion | `id` |
 | `work_reopen` | Reopen a closed work item | `id` |
@@ -615,7 +616,7 @@ instead.
 | A posted question was answered | `chat.message` with `answering`, or the `question_answer` MCP tool |
 | An agent posted a question | the `question_post` MCP tool |
 | A child work left active (and a watched story closed or stopped) | the work store's own change event |
-| The session was deleted | the session store's own change event |
+| The session was deleted | `Engine.OnSessionDeleted`, wired per worktree by `worktree.Manager` |
 | The server started | `RecoverStartup`, before any session exists |
 
 ### Input 1: a turn ended
@@ -950,13 +951,23 @@ write.
 A deleted session takes away the place every answer and every nudge would have
 gone, so the work above it stops — including one that was *waiting*, which is the
 case a dying process deliberately does not cover. The difference is the whole
-point: a process can die and be resumed, a deleted session cannot.
+point: a process can die and be resumed, a deleted session cannot. Every story
+it was [watching](#a-storys-watcher) is released for the same reason; the
+stories themselves run on untouched.
 
-It is reached through the session store's own deletion event
-(`Engine.OnSessionChange`), so it covers every way a session can be deleted
-rather than being a special case in one RPC handler. Deleting a *work* needs no
-such rule: it cascades into its sessions, so no work is left behind to lie about
-its status.
+It is reached as `Engine.OnSessionDeleted(worktree, sessionID)`, and the
+worktree is part of the input because a watch is: sessions are stored per
+worktree, so an id alone would also release a same-id session's watch in
+another worktree. The session store's change event carries only the id, so
+`worktree.Manager` registers on each worktree's store a listener that knows
+which worktree it belongs to (`sessionDeletions`, wired beside the turn-ended
+hook). Hanging off the store's own deletion event, it covers every way a
+session can be deleted rather than being a special case in one RPC handler. A
+session deleted on disk after its worktree is gone reaches the engine too
+([what a deletion leaves behind](#what-a-deletion-leaves-behind)) — but only one
+that was actually there, since the id is the caller's and could otherwise name
+a live session elsewhere. Deleting a *work* needs no such rule: it cascades into
+its sessions, so no work is left behind to lie about its status.
 
 ### Input 7: startup
 
@@ -1103,6 +1114,30 @@ closed and reopened is unwatched until a later start with `watch`; since
 `Reopen` makes it `active` directly, that start can come only after it next
 stops.
 
+**Letting go is asymmetric.** Before the close, a watch ends in three ways, all
+through `FileStore.Unwatch`, which compares and clears under the store's lock
+for the reason `SetChildWait` does — a watched start landing between a check and
+a write would otherwise be released by a call meant for its predecessor:
+
+| Who lets go | Through | Releases |
+|---|---|---|
+| the watcher itself | `story_unwatch` | only the caller's own watch (`{session_id, worktree}` must match exactly) |
+| a person | `work.unwatch` | whoever is watching |
+| nobody — the watching session was deleted | [input 6](#input-6-the-session-was-deleted) | every watch held by exactly that session |
+
+An agent lowers only the flag it raised: another chat's watch is that chat's,
+and finding one, or none, is not an error — the caller wanted not to be told,
+and is not; the result says why nothing changed. A person acts on the story
+rather than as a watcher, so the UI releases whoever it is. Only `Watcher` is
+cleared: the story's status, wait, session, step and tasks are untouched, so an
+unwatched story runs on exactly as before, and the update event it emits
+changes no status, so `notifyWatcherOfEnd` reads nothing into it. A watcher
+that has lost track of what it watches finds it through `story_list`, which
+marks exactly the caller's watches `watched: true` — the same exact match, read
+from the live `Work.Watcher`, so a closed story is never marked. `story_start`,
+`story_unwatch` and `story_list` take "this chat" from one place,
+`mcp.Caller.watcher()`, so the three cannot disagree about who it is.
+
 **Endings are read off the transition, not the status.** `ChangeEvent.PrevStatus`
 carries the status from the store's pre-mutation snapshot, and
 `Engine.notifyWatcherOfEnd` fires only when it differs — otherwise every later
@@ -1128,11 +1163,12 @@ user is already being asked, and nothing nudges a watcher that leaves it.
 **Delivery is owed nothing, like [input 4](#input-4-a-subtasks-question-reaches-its-story).**
 The watcher declared no wait, so an undelivered message leaves nobody stuck:
 nothing is retried and nothing is stopped. Two watchers are skipped on purpose
-rather than failed on — a session that has been deleted (the send fails with
-`session.ErrSessionNotFound`, which `chat.ErrSessionNotFound` is an alias of so
-that `work` can tell it apart without importing `chat`), and a session running a
-work that is not `active`, because a message starts a turn — the reason
-[a stopped parent](#input-5-a-child-work-left-active) is told nothing either.
+rather than failed on — a session that has been deleted, which matters only for
+news already on its way, since the deletion itself releases the watch (the send
+fails with `session.ErrSessionNotFound`, which `chat.ErrSessionNotFound` is an
+alias of so that `work` can tell it apart without importing `chat`), and a
+session running a work that is not `active`, because a message starts a turn —
+the reason [a stopped parent](#input-5-a-child-work-left-active) is told nothing either.
 Anything else is logged as a fault — including a watcher whose turn is holding
 a request on screen, which refuses every message: that news is lost, not
 queued, and the story's status and comments are where it is found again. A
@@ -1145,7 +1181,7 @@ keeps its rules only for as long as its own context does.
 
 ### Commands
 
-The six things a person or an agent can ask for live in `work.Operations`, and
+The seven things a person or an agent can ask for live in `work.Operations`, and
 both transports go through it — the WebSocket handler (user actions) and the MCP
 `Executor` (AI actions). A user-triggered command and an AI-triggered one are
 therefore the same command and cannot drift apart; before, the waits and stop had
@@ -1156,6 +1192,7 @@ other.
 |---|---|---|
 | `StartWork` | `Claim` (atomic restart/session decision) | `WorkStartHandler` creates the session and sends the kickoff; rolls back on failure |
 | `StopWork` | `Stop` | the process ends with the transition |
+| `Unwatch` | `Unwatch` (compare and clear under the lock) | none — the story is not touched ([A story's watcher](#a-storys-watcher)) |
 | `ReopenWork` | `Reopen` | reopen nudge |
 | `StepDone` | `StepDone` | next-step prompt while steps remain; withdraws the step's questions; refused when it would close a work whose subtasks are still active |
 | `Wait` | `SetChildWait` | refused when no subtask of the work is running |
@@ -1393,11 +1430,13 @@ open on it, and the main worktree's *is* the project's `.pockode`. Deleting the
 worktree checks the same thing, so a worktree whose sessions were all deleted
 before it was leaves nothing behind either.
 
-Nothing is notified along the on-disk path, and there is nobody to notify: the
-worktree's watchers stopped with it, and the work engine's interest in a deleted
-session is to stop the work that was waiting in it — which the protection above
-means cannot exist. A client that deletes this way re-reads instead of waiting to
-be told.
+No subscriber is notified along the on-disk path, and there is nobody to notify:
+the worktree's watchers stopped with it. A client that deletes this way re-reads
+instead of waiting to be told. The work engine is still told
+([input 6](#input-6-the-session-was-deleted)): there is no work waiting in such
+a session for it to stop — the protection above means none can exist — but a
+chat there may have been watching a story that lives elsewhere and is still
+open.
 
 One consequence to know about: a closed work whose session is deleted this way
 keeps the `session_id` in its record, so its detail points at a session that is

@@ -119,7 +119,7 @@ has seven inputs and no special cases beside them:
 | A posted question was answered, by the user or by another agent (`question_answer`) | nudges cleared and a `stopped` work woken, the same either way; a `child` wait deliberately left standing — no subtask closed |
 | An agent posted a question | passed up to an *active* parent story as `child_question`, which clears nothing and is never retried; a story's own question goes to its watcher, if any, as `watched_story_question` |
 | A child work left `active` | a child that *closed*: tell an *active* parent and clear a `child` wait; a child that left any other way: clear a `child` wait nothing is left to end, and wake the parent to decide; a watched story closing or being stopped tells its watcher |
-| The session was deleted | → `stopped` |
+| The session was deleted | → `stopped`; every story it was watching is released |
 | Server startup | `active` with no wait → `stopped` + comment; a work with an unanswered question is preserved; a work waiting on children is preserved only while one of them is still `active`, and otherwise `stopped` + comment |
 
 The full reasoning for each — including why a work with a question outstanding

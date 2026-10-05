@@ -158,7 +158,6 @@ func newTestEnvWithAgent(t *testing.T, mock *mockAgent, ag agent.Agent, workDir 
 	worktreeManager.SetWorkEngine(workEngine)
 	worktreeManager.SetWorkStore(workStore)
 	workStore.AddOnChangeListener(worktreeManager)
-	worktreeManager.AddSessionChangeListener(workEngine)
 	t.Cleanup(workEngine.Stop)
 	workStarter := worktree.NewWorkStarter(worktreeManager, agentRoleStore, settingsStore)
 	workOps := work.NewOperations(workStore, workStarter, workEngine, agentrole.Steps{Store: agentRoleStore})

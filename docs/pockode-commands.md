@@ -213,9 +213,11 @@ single units; create each with a role; start each with `story_start`, with
 `watch` set and a new worktree; leave the stories' tasks alone; do not edit or
 comment on a story once it has started; answer a story's questions when the
 discussion or the project settles them, and otherwise leave them, since the
-user is already being asked; merge each closed story into the branch; report
-when all are merged. The template itself is the source of truth, and this
-summary does not replace it.
+user is already being asked; merge each closed story into the branch; release
+with `story_unwatch` a story it no longer needs to follow before it closes —
+dropped, or taken over by the user — finding its watches through `story_list`'s
+`watched` if it has lost track; report when all are merged. The template itself
+is the source of truth, and this summary does not replace it.
 
 - **The branch is injected at expansion time.** `{{.Branch}}` is the branch the
   invoking session's worktree is on, read with `git.CurrentBranch`. This works

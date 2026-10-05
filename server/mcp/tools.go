@@ -33,7 +33,7 @@ type propertySchema struct {
 var toolDefinitions = []toolDefinition{
 	{
 		Name:        "story_list",
-		Description: "List the stories in this project. A story is a top-level work item; its tasks are listed separately with task_list. Each item is a summary and does not include the body. Call work_get with an item's id to read its body. An item's status is one of: open (never started), active (Pockode is driving it), stopped (handed back to a person; no agent runs for it), closed (finished).",
+		Description: "List the stories in this project. A story is a top-level work item; its tasks are listed separately with task_list. Each item is a summary and does not include the body. Call work_get with an item's id to read its body. An item's status is one of: open (never started), active (Pockode is driving it), stopped (handed back to a person; no agent runs for it), closed (finished). A story this chat is watching (see story_start's watch) carries watched: true; the field is absent on every other story, including one watched by another chat.",
 		InputSchema: inputSchema{
 			Type:       "object",
 			Properties: map[string]propertySchema{},
@@ -121,7 +121,18 @@ var toolDefinitions = []toolDefinition{
 			Properties: map[string]propertySchema{
 				"id":       {Type: "string", Description: "Story ID to start"},
 				"worktree": {Type: "string", Description: "Name of the git worktree to run this story in, created (with a branch of the same name) if it does not exist yet. Omit it to run in the worktree the story is already assigned to (the main one, unless it was set elsewhere). Only in a git repository: outside one there are no worktrees, so omit it."},
-				"watch":    {Type: "boolean", Description: "Set true to watch the story from this chat: Pockode sends a message here — starting a turn if this chat is idle — when the story closes, when it is stopped (handed back to a person), and when the story itself posts a question, which you may answer with question_answer. Its tasks' questions, starts and closings are not reported. The watch lasts until the story closes — through stops and restarts, but not past the close, so a story closed and reopened is unwatched until a later start with watch — and a story has one watcher, so a later start with watch moves it to whoever made that call. Omit it to start the story without changing who is watching it."},
+				"watch":    {Type: "boolean", Description: "Set true to watch the story from this chat: Pockode sends a message here — starting a turn if this chat is idle — when the story closes, when it is stopped (handed back to a person), and when the story itself posts a question, which you may answer with question_answer. Its tasks' questions, starts and closings are not reported. The watch lasts until the story closes — through stops and restarts, but not past the close, so a story closed and reopened is unwatched until a later start with watch — or until this chat lets go of it with story_unwatch, and a story has one watcher, so a later start with watch moves it to whoever made that call. Omit it to start the story without changing who is watching it."},
+			},
+			Required: []string{"id"},
+		},
+	},
+	{
+		Name:        "story_unwatch",
+		Description: "Stop watching a story from this chat: Pockode no longer sends a message here when it closes, is stopped, or posts a question. The story itself is not touched — it keeps running, with its status, steps and tasks as they were. Only this chat's own watch is released: a story watched by another chat, or by nobody, is left as it is, and the result says which. A story stops being watched by itself when it closes, so there is no need to call this for a story that has finished.",
+		InputSchema: inputSchema{
+			Type: "object",
+			Properties: map[string]propertySchema{
+				"id": {Type: "string", Description: "Story ID to stop watching"},
 			},
 			Required: []string{"id"},
 		},

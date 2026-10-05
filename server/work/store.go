@@ -47,6 +47,19 @@ type Store interface {
 	// asked for, and the next start honours it.
 	Claim(ctx context.Context, id string, watcher *Watcher) (w Work, restart bool, err error)
 
+	// Unwatch releases a story's watcher, and reports who was watching before
+	// the call and whether this call is what released them. With a non-nil
+	// only, the watcher is released only when it is exactly that session — an
+	// agent may let go of its own watch, not take away another chat's; nil
+	// releases whoever it is. A story nobody watches is left alone, and so is
+	// everything else about the story: a watch is who hears the news, not part
+	// of how the story runs. Only a story can be watched, so a task is refused.
+	//
+	// Decided under the store lock, for the reason SetChildWait is: a watched
+	// start moving the watch to another chat between a check and a write would
+	// otherwise have this call release a watch it was never asked about.
+	Unwatch(ctx context.Context, id string, only *Watcher) (prev *Watcher, released bool, err error)
+
 	// Stop hands the work back to a person: the engine stops driving it and its
 	// session loses its lease. Allowed from any live status.
 	Stop(ctx context.Context, id string) error
@@ -444,6 +457,40 @@ func (s *FileStore) Claim(_ context.Context, id string, watcher *Watcher) (Work,
 	}
 
 	return result, restart, nil
+}
+
+func (s *FileStore) Unwatch(_ context.Context, id string, only *Watcher) (*Watcher, bool, error) {
+	s.worksMu.Lock()
+
+	idx := s.findIndex(id)
+	if idx < 0 {
+		s.worksMu.Unlock()
+		return nil, false, ErrWorkNotFound
+	}
+	w := &s.works[idx]
+	if w.Type() != WorkTypeStory {
+		s.worksMu.Unlock()
+		return nil, false, fmt.Errorf("%w: work %s is a task, and only a story can be watched", ErrInvalidWork, id)
+	}
+	if w.Watcher == nil {
+		s.worksMu.Unlock()
+		return nil, false, nil
+	}
+	watched := *w.Watcher
+	if only != nil && watched != *only {
+		s.worksMu.Unlock()
+		return &watched, false, nil
+	}
+
+	prev := s.snapshotWorks()
+
+	w.Watcher = nil
+	w.UpdatedAt = time.Now()
+
+	if err := s.persistAndNotifyUpdates(prev, map[string]bool{id: true}); err != nil {
+		return &watched, false, err
+	}
+	return &watched, true, nil
 }
 
 // setLiveStatus moves a work between the live statuses. Every live status is a
