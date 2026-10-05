@@ -160,7 +160,7 @@ and tablets are untouched. The scroll-to-bottom button belongs to the column too
 **Only the user speaks in bubbles.** The agent's message has no bubble: its text,
 tool calls and cards run the full width of the column in `text-th-text-primary`,
 and below them a turn-end row (`Chat/MessageActions.tsx`) holds Copy, Fork and
-the `…` menu — while the turn is running, the tail line (`Working  1m 4s`)
+the `…` menu — while the turn is running, the tail line (`Working 1m 4s`)
 stands in that row's place instead
 ([turn-progress-ui.md](turn-progress-ui.md#2-the-tail-line)). A turn that
 changed files lists them just above the turn-end row, each opening on its

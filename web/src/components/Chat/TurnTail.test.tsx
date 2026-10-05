@@ -126,6 +126,19 @@ describe("TurnTail", () => {
 		).toBeInTheDocument();
 	});
 
+	// The clock follows the word, where a changing latest line cannot push it
+	// around: `Thinking… 12s` reads like the `Thought for 12s` it settles into.
+	it("puts the clock after the word and before the latest line", () => {
+		vi.useFakeTimers();
+		renderTail({
+			openedAt: Date.now() - 64_000,
+			thinking: thinking({ content: "Checking how it retries" }),
+		});
+		expect(
+			screen.getByRole("button", { name: "Agent's thinking so far" }),
+		).toHaveTextContent(/^Thinking…\s*1m 4s\s*·\s*Checking how it retries$/);
+	});
+
 	it("hides a thought under way while the turn is blocked", () => {
 		renderTail({ phase: "blocked", thinking: thinking({ content: "x" }) });
 		expect(screen.queryByText("Thinking…")).not.toBeInTheDocument();

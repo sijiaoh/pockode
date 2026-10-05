@@ -6,8 +6,8 @@ way. Two elements, one grammar:
 - **The thinking row** — what the agent thought, as one muted, foldable line in
   the transcript: `Thought for 12s`, opening on the full text.
 - **The tail line** — the one line at the end of the reply being written while
-  the turn runs: `Working  1m 4s`, or `Thinking… <latest line>` while the agent
-  is thinking. It is gone when the turn settles.
+  the turn runs: `Working 1m 4s`, or `Thinking… 1m 4s · <latest line>` while
+  the agent is thinking. It is gone when the turn settles.
 
 The surfaces around them are [tool-call-ui.md](tool-call-ui.md) (the list,
 groups, the turn's changes) and [lifecycle-ui.md](lifecycle-ui.md) (`Activity`,
@@ -62,12 +62,20 @@ as a pulse, not compared to the decimal.
 The sender retries on 429 and 503.
 ```
 
+Alone, with no call beside it, the same row is drawn bare (§1.2):
+
+```
+✻ Thought for 12s ›
+The sender retries on 429 and 503.
+```
+
 ### 1.1 What it is
 
-A row in [the list](tool-call-ui.md#the-list): the tool row's box (`RowButton`),
-so its height, hover, focus ring and touch floor cannot differ from a tool
-row's. It is told from a tool row by what it lacks, the way a group's summary
-is: **no accent title and no detail** — the title is `text-th-text-secondary`,
+A row in [the list](tool-call-ui.md#the-list). Beside tool calls it is drawn
+in the tool row's box (`RowButton`), so its height, hover, focus ring and touch
+floor cannot differ from a tool row's; alone it is drawn bare (§1.2). It is
+told from a tool row by what it lacks, the way a group's summary is: **no
+accent title and no detail** — the title is `text-th-text-secondary`,
 the glyph is lucide `Brain` in `text-th-text-muted`, and the meta slot stays
 empty (the duration is in the title, where it reads as a sentence).
 
@@ -102,17 +110,41 @@ In transcript order, where the engine produced it — usually before a tool call
 or before the answer text. It is a list member, so a thinking next to tool calls
 shares their frame. One standing alone before text is a list of one row, as one
 call alone is — but **a list that holds nothing but thinking is not framed**:
-its border is `border-transparent` rather than absent, so the row keeps both
-the columns a framed list gives it and its 44px coarse-pointer target.
+no border, no hairline, and its row is drawn bare (`BareRow`):
+
+- **On the text's left edge.** The glyph starts where the reply's text starts —
+  the line the turn-end row's first icon stands on — with no chevron column
+  before it. A frame's columns exist so its rows line up with each other; a
+  row with no rows around it has nothing to line up with but the text.
+- **The chevron after the words**, `Thought for 12s ›`, rotated when open, and
+  only when there is a body to open (§1.1).
+- **A box fitted to its words**, not spanning the column: with no frame around
+  it, a full-width hover would be a bar floating in the transcript. The hover
+  fill and the focus ring reach 8px out past the glyph and the chevron while
+  the glyph stays on the text's edge; 8px because the narrowest gutter the row
+  is drawn in is a subagent's Process (§3), whose rule the fill must not cover —
+  for the same reason the ring is inset. Past the third level a Process has no
+  gutter ([tool-call-ui.md](tool-call-ui.md#process)), and there the
+  translucent fill crosses the rule on hover; that depth gets no special case.
+  Its height is a tool row's, `min-h-9`, `pointer-coarse:min-h-11`, so the
+  touch floor holds.
+- **A row that is not a button keeps the same box**, so a `Thinking…` that
+  gains text and becomes openable does not move by a pixel.
+- **What it opens is a box of its own** under the row (`BareBody`): bordered,
+  rounded, on `bg-th-bg-secondary`, from the text's left edge to the column's
+  right — edge to edge with a framed list, holding the body §1.3 describes.
+
+The tail line (§2) is drawn the same way, with the same body.
 
 The frame came off because of what it cost on a phone. Nearly every reply opens
 with a thinking, so nearly every reply opened with a bordered `Thought for 1s` —
 about 60px of box on a phone for a line that says almost nothing, and on a
 desktop an empty full-width frame. And the live `Thinking…` tail line it settles
 from (§2.3) is unframed, so a frame appearing around it the moment it settled
-was a jump on the one line the reader was watching. Unframed, `Thinking…`
-becomes `Thought for 12s` in place. A thinking among tool calls keeps their
-frame, since there the frame is the calls'.
+was a jump on the one line the reader was watching. Bare, on the same edge and
+at the same height as the tail line, `Thinking…` becomes `Thought for 12s` in
+place. A thinking among tool calls keeps their frame, since there the frame is
+the calls'.
 
 In [groups](tool-call-ui.md#groups) a thinking part is **foldable, but it is
 not a call**:
@@ -214,11 +246,11 @@ row says `Thought` (§1.1).
 
 ```
 … the last rows of the reply being written …
-⟳  Working                                1m 4s     ← the tail line
+⟳ Working 1m 4s                       ← the tail line
 ```
 
 ```
-⟳  Thinking… Checking how the sender retries   1m 4s
+⟳ Thinking… 1m 4s · Checking how the sender retr… ›
 ```
 
 ### 2.1 Where it is
@@ -242,13 +274,13 @@ There is at most one reply being written, so there is at most one tail line:
   that reply is where the work is happening. At the read point a new reply opens
   under the message and the tail line moves into it, its clock unchanged.
 
-**Its row** is unframed, on the list row's columns, so it lines up with the rows
-above it: the chevron column (empty unless there is a body to open, §2.3), the
-glyph column, the label where a row's title starts, the clock in the meta slot.
-Its height is the turn-end row's (both hold `min-h-9`, `pointer-coarse:min-h-11`),
-and **the slot keeps that height while the line is hidden**: when the turn
-blocks and resumes, nothing above or below moves; when the turn settles, the
-turn-end row, when it draws one, takes the same height.
+**Its row** is drawn bare, as a thinking alone in its list is (§1.2): the glyph
+on the reply text's left edge, where the turn-end row's first icon will stand,
+so the line settling into that row makes no sideways jump. Its height is the
+turn-end row's (both hold `min-h-9`, `pointer-coarse:min-h-11`), and **the slot
+keeps that height while the line is hidden**: when the turn blocks and
+resumes, nothing above or below moves; when the turn settles, the turn-end
+row, when it draws one, takes the same height.
 
 ### 2.2 When it shows
 
@@ -281,14 +313,21 @@ says why).
 
 ### 2.3 What it says
 
-Two states, one line. The glyph and the clock stay put across the switch, and
-only the words change — it is one line saying what the turn is doing now, not
-two elements taking turns.
+Two states, one line. The glyph stays put across the switch, and only the
+words change — it is one line saying what the turn is doing now, not two
+elements taking turns.
 
-| State | Glyph | Label | Meta |
-|---|---|---|---|
-| working | `Spinner`, `text-th-accent` | `Working` | turn clock |
-| thinking | `Spinner`, `text-th-accent` | `Thinking…`, then the latest line when there is text | turn clock |
+| State | Glyph | Label | Clock | After the clock |
+|---|---|---|---|---|
+| working | `Spinner`, `text-th-accent` | `Working` | turn clock | — |
+| thinking | `Spinner`, `text-th-accent` | `Thinking…` | turn clock | `·` and the latest line, when there is text; then the chevron |
+
+**The clock follows the label**, not the latest line: the latest line changes
+length several times a second and would drag a clock after it across the row,
+while after the label the clock moves only when the word switches or gains a
+digit. And `Thinking… 12s` reads as the `Thought for 12s` it settles into. The
+`·` keeps the clock and the latest line, both muted, from reading as one phrase,
+as it separates the entries of a group summary.
 
 Label in `text-th-text-secondary`, latest line and clock in
 `text-th-text-muted`, `text-xs` — the strip's and the fork banner's size,
@@ -330,11 +369,15 @@ them. Inside a formed group the row folds into the summary at once — its
 `Thought for …` entry grows — unless the user had opened it.
 
 **While it has text, the line is a disclosure** like the row it will become: the
-whole line becomes the button (`RowButton`, so the tap target is the line, not
-the chevron), a chevron appears, and a tap opens the text so far below the line,
-growing in place. At the tail this pushes nothing. After a reconnect in the
-middle of a thinking the deltas before it are gone (§2.4), so the open body
-begins with the muted line *Earlier thinking appears in full when it finishes.*
+whole line becomes the button (so the tap target is the line, not the chevron),
+a chevron appears after the latest line, and a tap opens the text so far below
+the line, growing in place, in the body a settled thinking opens on (§1.2) — so
+a body opened while `Thinking…` looks the same once it is `Thought for 12s`.
+The chevron moves right as the latest line grows and stops where the line
+starts to truncate, as a cursor would. At the tail this pushes nothing. After
+a reconnect in the middle of a thinking the deltas before it are gone (§2.4),
+so the open body begins with the muted line *Earlier thinking appears in full
+when it finishes.*
 — which it does, in the settled record.
 
 **The turn clock** counts from the moment the turn opened, which the server
@@ -364,6 +407,8 @@ left out and `Working` stands alone — the strip's rule for `since`.
 
 A subagent's thinking is a thinking row in its
 [Process](tool-call-ui.md#process), under the same rules, folded the same way.
+A Process list holding nothing but a thinking draws it bare too (§1.2), on the
+Process text's left edge, inside its rule.
 A subagent has no tail line — its call row's spinner and second line already
 are its pulse
 ([tool-call-ui.md](tool-call-ui.md#the-second-line-steps-and-what-it-is-doing)).
@@ -413,10 +458,12 @@ this design, and the tail line is that spinner given words and a clock.
 
 ## 6. Width and pointer
 
-Nothing is width-dependent. Both elements are one line at every tier, a body
-opens in place at every tier, and the latest line truncates at the column's
-edge rather than wrapping. The thinking row and the tail line hold the row's
-`pointer-coarse:` height floor. As for tool rows, nothing is behind hover
+Nothing is width-dependent. Both elements are one line at every tier, and a
+body opens in place at every tier. On a narrow screen only the tail line's
+latest line gives way: it truncates with an ellipsis rather than wrapping, and
+the label, the clock and the chevron are always shown. The thinking row and the
+tail line hold the row's `pointer-coarse:` height floor. As for tool rows,
+nothing is behind hover
 ([tool-call-ui.md](tool-call-ui.md#width-and-pointer)).
 
 ## 7. Deliberately not done

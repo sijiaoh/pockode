@@ -78,9 +78,9 @@ no gap and no fill of its own, so the rows sit on the transcript's ground. Text,
 a question card and every other part end the list and stand on their own, with
 the message's `space-y-2` around them. One call alone is a list of one row, so
 a row looks the same wherever it is. The one list without a visible frame is one
-holding nothing but thinking rows: its border is `border-transparent`, so the
-columns stay where a framed list puts them, while a thinking beside tool calls
-shares their frame (`RowList` in `Chat/ToolList.tsx`; why, in
+holding nothing but thinking rows: it has no border, and its row is drawn bare
+on the text's left edge, while a thinking beside tool calls shares their frame
+(`RowList` in `Chat/ToolList.tsx`; how and why, in
 [turn-progress-ui.md §1.2](turn-progress-ui.md#12-where-it-goes-and-groups)).
 
 ```

@@ -29,3 +29,12 @@ export function useRowExpanded(
 	if (!list) return [own, setOwn];
 	return [list.choice ?? own, list.setChoice];
 }
+
+/**
+ * Whether the list a row sits in is framed. A list of nothing but a thinking
+ * is not, and its row is drawn bare, on the text's left edge, rather than on
+ * the columns a frame's rows share
+ * (docs/turn-progress-ui.md#12-where-it-goes-and-groups). Outside a list a row
+ * is drawn as in a frame.
+ */
+export const RowFrameContext = createContext(true);
