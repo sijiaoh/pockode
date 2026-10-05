@@ -190,9 +190,16 @@ subagent's second line already speaks: `6 steps · Bash  npm run build…  12s` 
 every call in the group counted, then the newest running one worded as its own
 row, with its elapsed time. One line either way, so it does not change height
 when it settles. It does not spin while a card in the group waits on the user:
-then the machine is waiting for them, and with nothing settled yet the row says
-only `N steps`, with an empty glyph — neither busy nor done. Its text is `aria-hidden` while it moves,
-and the running glyph says `Tool calls running`.
+then the machine is waiting for them. The tick says only that every folded call
+is over — the card is pinned below, in sight — so a waiting card neither takes
+it away once that is true nor brings it early: while folded calls still run
+behind the card, the glyph is empty, neither busy nor done, and `K running`
+leads whatever has settled — `1 running · Edited 2 files · Read 3 files`, or
+`2 running` alone — first because it is the one entry a narrow screen must not
+cut. With nothing running and nothing settled yet the glyph is empty too and
+the row says only `N steps`. The spinning form's text is `aria-hidden` while
+it moves, and the running glyph says `Tool calls running`;
+`K running` changes only with the count, so it is read out as it is.
 
 **Rendering.** Every part is rendered once, in transcript order; the group adds
 a summary entry before its first part and hides its foldable parts with the
@@ -1951,7 +1958,10 @@ decisions, and reachability is a CSS variant
 24. One foldable call, with any number of failures beside it: no summary.
 25. A pending card in a group: pinned under the summary, which does not spin.
     Allow it: the card stays until its row comes back, then both fold. Deny it:
-    the card and the failed row both stay.
+    the card and the failed row both stay. With a folded call still running
+    beside a settled one when the card arrives: no tick and no spinner, the row
+    reads `1 running · <verbs>`, and the spinner returns if it is still
+    running once the card is answered.
 26. A backgrounded `Bash`: folded while it is an ordinary running call, pinned
     from the moment it goes to the background, still pinned when it settles —
     second line becomes the outcome, height unchanged.

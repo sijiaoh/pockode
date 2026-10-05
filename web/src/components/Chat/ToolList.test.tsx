@@ -1,14 +1,14 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
-import type { ContentPart } from "../../types/message";
+import type { ContentPart, ToolRunStatus } from "../../types/message";
 import ThinkingItem from "./ThinkingItem";
 import { PartBlocks } from "./ToolList";
 import { OpenedThoughtsContext } from "./turnTailContext";
 
-const bash = (id: string): ContentPart => ({
+const bash = (id: string, status: ToolRunStatus = "success"): ContentPart => ({
 	type: "tool_call",
-	tool: { id, name: "Bash", input: { command: id }, status: "success" },
+	tool: { id, name: "Bash", input: { command: id }, status },
 });
 
 const parts: ContentPart[] = [
@@ -94,5 +94,44 @@ describe("PartBlocks with thinking", () => {
 		await user.click(row);
 		expect(row).toHaveAttribute("aria-expanded", "true");
 		expect(screen.getByText("Plan it.")).toBeVisible();
+	});
+});
+
+describe("PartBlocks group summary", () => {
+	it("shows no tick while a folded call runs behind a waiting card", () => {
+		render(
+			<List
+				shown={[
+					{
+						type: "tool_call",
+						tool: {
+							id: "a",
+							name: "Read",
+							input: { file_path: "/x" },
+							status: "success",
+						},
+					},
+					bash("b", "background"),
+					bash("c", "running"),
+					{
+						type: "permission_request",
+						request: {
+							requestId: "req-d",
+							toolName: "Bash",
+							toolInput: {},
+							toolUseId: "d",
+						},
+						status: "pending",
+					} as ContentPart,
+				]}
+			/>,
+		);
+		expect(
+			screen.getByRole("button", { name: /^1 running·Read 1 file$/ }),
+		).toBeInTheDocument();
+		expect(screen.queryByLabelText("done")).not.toBeInTheDocument();
+		expect(
+			screen.queryByLabelText("Tool calls running"),
+		).not.toBeInTheDocument();
 	});
 });

@@ -30,6 +30,11 @@ export interface GroupSummary {
 	segments: string[];
 	/** How many folded calls were cut short. */
 	interrupted: number;
+	/**
+	 * How many folded calls are still running — counted while a card waits too,
+	 * when `current` is gone, so a group still at work never reads as done.
+	 */
+	running: number;
 }
 
 export type RowEntry<T> =
@@ -113,10 +118,14 @@ function summarize<T>(
 	// counts calls. A call naming no file stands for one of its own.
 	const counted = new Map<ToolVerb, Set<string>>();
 	let interrupted = 0;
+	let running = 0;
 	let current: ToolRun | undefined;
 	for (const { row, call } of folding) {
 		if (!row) continue;
-		if (row.status === "running") current = row;
+		if (row.status === "running") {
+			current = row;
+			running++;
+		}
 		if (row.status === "interrupted") interrupted++;
 		// Only what succeeded: a failed Edit changed nothing, and it is pinned
 		// in sight anyway.
@@ -143,6 +152,7 @@ function summarize<T>(
 		current: waiting ? undefined : current,
 		segments,
 		interrupted,
+		running,
 	};
 }
 
