@@ -62,28 +62,36 @@ export function ToolGroupSummary({ summary, expanded, onToggle }: Props) {
 		);
 	}
 
+	// A card waits on the user while folded calls still run: neither busy nor
+	// done, so no spinner and no tick, and the count leads because it is the
+	// one thing a narrow screen must not cut.
+	const stillRunning = summary.running > 0;
+	const segments = stillRunning
+		? [`${summary.running} running`, ...summary.segments]
+		: summary.segments;
 	const Icon = summary.interrupted > 0 ? Ban : Check;
 	return (
 		<RowButton
 			expanded={expanded}
 			onToggle={onToggle}
 			glyph={
-				summary.segments.length > 0 ? (
+				!stillRunning && summary.segments.length > 0 ? (
 					<Icon
 						className="mt-0.5 size-3 shrink-0 text-th-text-muted"
 						aria-label={summary.interrupted > 0 ? "interrupted" : "done"}
 					/>
 				) : (
-					// Nothing settled yet, and nothing spinning either: every call in
-					// it is waiting behind a card that waits on the user.
+					// Nothing settled yet, or something folded still running, and
+					// nothing spinning either: the group waits on a card that waits
+					// on the user.
 					<span className="mt-0.5 size-3 shrink-0" />
 				)
 			}
 		>
 			<span className="block truncate text-th-text-secondary">
-				{summary.segments.length === 0
+				{segments.length === 0
 					? stepsLabel(summary.steps)
-					: summary.segments.map((segment, index) => (
+					: segments.map((segment, index) => (
 							<Fragment key={segment}>
 								{index > 0 && <span className="text-th-text-muted"> · </span>}
 								{segment}

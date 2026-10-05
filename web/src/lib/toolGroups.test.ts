@@ -242,6 +242,20 @@ describe("rowEntries", () => {
 		expect(summary?.segments).toEqual(["Ran 2 commands"]);
 	});
 
+	// The tick says every folded call is over; one still running behind a
+	// waiting card is counted instead.
+	it("counts folded calls still running while a card waits", () => {
+		const summary = summaryOf([
+			read("a", "/x"),
+			bash("b", "background"),
+			bash("c", "running"),
+			card("d", "pending"),
+		]);
+		expect(summary?.current).toBeUndefined();
+		expect(summary?.running).toBe(1);
+		expect(summary?.segments).toEqual(["Read 1 file"]);
+	});
+
 	it("stops spinning once its running call goes to the background", () => {
 		const summary = summaryOf([bash("a"), bash("b"), bash("c", "background")]);
 		expect(summary?.current).toBeUndefined();
