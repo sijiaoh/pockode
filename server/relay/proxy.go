@@ -45,8 +45,13 @@ func newLocalProxy(backendPort, frontendPort int, site previewSite, auth preview
 		DialContext: (&net.Dialer{Timeout: 5 * time.Second}).DialContext,
 		// net/http defaults to 2 idle connections per host, which would
 		// make every relayed request past the second re-dial localhost.
-		// The relay caps its concurrent streams, so this bounds naturally.
-		MaxIdleConnsPerHost:   maxIdleLocalConns,
+		MaxIdleConnsPerHost: maxIdleLocalConns,
+		// That cap is per port and per transport, and each tunnel builds its
+		// own transport, so idle connections must also expire: otherwise
+		// every reconnect strands its predecessor's pool on every port it
+		// reached, and previews reach any port. 90 s is
+		// http.DefaultTransport's value.
+		IdleConnTimeout:       90 * time.Second,
 		ResponseHeaderTimeout: localResponseHeaderTimeout,
 	}
 
