@@ -22,7 +22,7 @@ const localResponseHeaderTimeout = 30 * time.Second
 // maxIdleLocalConns keeps a connection pooled per concurrent relayed request.
 // Sized to the relay's per-tunnel stream budget so a busy page load does not
 // re-dial localhost for every asset.
-const maxIdleLocalConns = 32
+const maxIdleLocalConns = 64
 
 // forwardedHeaders are set by the cloud relay from the public request. Rewrite
 // strips them from the outbound request, so they are copied back explicitly;
