@@ -42,7 +42,13 @@ func startLocalServer(t *testing.T, handler http.Handler) int {
 // the same way a relay stream would.
 func serveProxy(t *testing.T, backendPort, frontendPort int) *httptest.Server {
 	t.Helper()
-	server := httptest.NewServer(newLocalProxy(backendPort, frontendPort, testLogger()))
+	return serveProxyFor(t, backendPort, frontendPort, testSite, newTestSessions())
+}
+
+func serveProxyFor(t *testing.T, backendPort, frontendPort int, site previewSite, sessions SessionStore) *httptest.Server {
+	t.Helper()
+	auth := previewAuth{password: testPassword, sessions: sessions}
+	server := httptest.NewServer(newLocalProxy(backendPort, frontendPort, site, auth, testLogger()))
 	t.Cleanup(server.Close)
 	return server
 }

@@ -2,7 +2,6 @@ package cluster
 
 import (
 	"context"
-	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"log/slog"
@@ -13,6 +12,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/pockode/server/cluster/node"
 	"github.com/pockode/server/logger"
+	"github.com/pockode/server/password"
 	"github.com/pockode/server/rpc"
 	"github.com/pockode/server/ws"
 	"github.com/sourcegraph/jsonrpc2"
@@ -188,9 +188,9 @@ func (h *clusterRPCHandler) handleAuth(ctx context.Context, conn *jsonrpc2.Conn,
 // diverge. This one issues the token itself, because unlike the server's there
 // is no worktree still to bind that could fail after the check.
 func (h *clusterRPCHandler) authenticate(ctx context.Context, conn *jsonrpc2.Conn, req *jsonrpc2.Request, params AuthParams) (string, bool) {
-	password := rpc.OrLegacy(params.Password, params.Token)
+	given := rpc.OrLegacy(params.Password, params.Token)
 
-	if password != "" && params.SessionToken != "" {
+	if given != "" && params.SessionToken != "" {
 		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "password and session_token are mutually exclusive")
 		conn.Close()
 		return "", false
@@ -206,7 +206,7 @@ func (h *clusterRPCHandler) authenticate(ctx context.Context, conn *jsonrpc2.Con
 		return params.SessionToken, true
 	}
 
-	if subtle.ConstantTimeCompare([]byte(password), []byte(h.password)) != 1 {
+	if !password.Matches(given, h.password) {
 		h.log.Warn("invalid password")
 		h.replyAuthError(ctx, conn, req.ID, "invalid password", rpc.AuthReasonInvalidPassword)
 		conn.Close()

@@ -52,13 +52,15 @@ network is not trusted, and to treat a LAN as trusted only when it is.
 | HTTP API | `Authorization: Bearer <password or session token>` | `server/middleware/auth.go` |
 | WebSocket | First RPC must be `auth { password }` or `auth { session_token }`; all other methods are rejected until it succeeds | `server/ws/rpc.go`, `server/cluster/ws.go` |
 | Relay | The relay tunnels the same HTTP/WS traffic; no separate app credential | `server/relay/` |
+| Port preview | A session cookie, issued by posting the password to `/__pockode/preview/login` on the preview host; see [Port Previews](relay-system.md#port-previews) | `server/relay/preview_auth.go` |
 
 Both credentials are accepted on HTTP so that `curl` and scripts have something
 to send: a browser exchanges the password for a session token and sends that
 (see [Sessions](#sessions-what-the-browser-keeps)), while a shell one-liner can
-keep sending the password. All comparisons use
-`crypto/subtle.ConstantTimeCompare` to avoid leaking either through response
-timing. The password is supplied by the operator; the server does not generate a
+keep sending the password. Every surface checks the password through
+`password.Matches`, which uses `crypto/subtle.ConstantTimeCompare` to avoid
+leaking it through response timing; session tokens are compared the same way.
+The password is supplied by the operator; the server does not generate a
 default and refuses to start without one.
 
 A missing `Authorization` header, a malformed one and a wrong credential all get
@@ -205,6 +207,7 @@ unconditional and stays until the rest of the deprecations go
 **Each origin holds its own token.** The same server reached over the LAN
 (`http://ip:port`) and through the relay (`https://<subdomain>…`) are different
 browser origins with separate `localStorage`, so each gets a session of its own.
+Each port preview host likewise holds its own session, in a host-only cookie.
 That is correct, and it is one reason the cap is 50 rather than 5.
 
 ### The password fingerprint, and what it is *not*
@@ -349,7 +352,8 @@ model (e.g. multi-user hosting) revisits them rather than rediscovering them:
   `auth` RPC or the HTTP Bearer path keeps a failure count, backs off, or locks
   out. A wrong password closes the WebSocket connection, so each guess costs
   one new connection — a cost, not a defence, and one that opening connections
-  in parallel removes; on HTTP not even that. The only trace left is a log line
+  in parallel removes; on HTTP — the Bearer path and the port preview login
+  alike — not even that. The only trace left is a log line
   per wrong password. Behind that door is arbitrary code execution on the host,
   and the entropy of the secret is entirely the user's choice. The whole
   argument for calling it a password (see [Trust Model](#trust-model)) is that
@@ -393,10 +397,11 @@ model (e.g. multi-user hosting) revisits them rather than rediscovering them:
 
 | Concern | Path |
 |---------|------|
-| Password source & env scrubbing | `server/password/` |
+| Password source, env scrubbing & comparison | `server/password/` |
 | Session issue/validate, password fingerprint | `server/authsession/` |
 | HTTP Bearer auth | `server/middleware/auth.go` |
 | WebSocket `auth` gate | `server/ws/rpc.go`, `server/cluster/ws.go` |
+| Port preview login & cookie | `server/relay/preview_auth.go` |
 | Wire types and refusal reasons | `server/rpc/types.go` |
 | Frontend credential store | `packages/shared/src/stores/createAuthStore.ts`, `packages/shared/src/utils/auth.ts` |
 | MCP local API token | `server/mcp/handler.go`, `server/serverinfo/serverinfo.go` |

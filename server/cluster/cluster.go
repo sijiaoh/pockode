@@ -93,6 +93,8 @@ func Run(cfg Config) error {
 			CloudURL:      cfg.CloudURL,
 			DataDir:       cfg.DataDir,
 			ClientVersion: cfg.Version,
+			Password:      cfg.Password,
+			Sessions:      sessions,
 		}
 
 		frontendPort := port

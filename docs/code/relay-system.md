@@ -169,7 +169,7 @@ The split exists for dev mode, where the Vite dev server owns the UI. In product
 
 The predicate lives in `server/apiroute` rather than here because `main.go`'s SPA handler needs exactly the same rule to decide what to serve from the embedded static files. Two copies would silently diverge: add a backend endpoint, forget the relay's list, and the endpoint becomes unreachable through the relay in dev mode only.
 
-`/api/mcp/*` is refused outright, with a 404, before any port is chosen. It is the local MCP API: it drives this machine's tools on behalf of an agent CLI running here, and it authenticates with a token of its own rather than the user's. Nothing that reaches this machine from outside has a reason to call it. The refusal has to come first because in the default single-port setup `frontendPort == backendPort`, so routing alone would not keep it out of reach. `apiroute.IsLocalOnly` holds the predicate and `mcp.TestAPIPathStaysLocalOnly` pins the endpoint to it.
+`/api/mcp/*` is refused outright, with a 404, before any port is chosen — a [preview](#port-previews)'s port included. It is the local MCP API: it drives this machine's tools on behalf of an agent CLI running here, and it authenticates with a token of its own rather than the user's. Nothing that reaches this machine from outside has a reason to call it. The refusal has to come first because in the default single-port setup `frontendPort == backendPort`, so routing alone would not keep it out of reach. `apiroute.IsLocalOnly` holds the predicate and `mcp.TestAPIPathStaysLocalOnly` pins the endpoint to it.
 
 ### Preserving the Public Request
 
@@ -177,11 +177,61 @@ The predicate lives in `server/apiroute` rather than here because `main.go`'s SP
 pr.Out.Host = pr.In.Host
 ```
 
-**The original `Host` must survive both proxy hops.** This is not cosmetic: `websocket.Accept` rejects an upgrade whose `Origin` disagrees with `Host`, so rewriting `Host` to `localhost:8080` would make every legitimate mobile WebSocket fail the same-origin check. It also means the SPA sees the URL the browser actually used when building absolute URLs.
+**The original `Host` must survive both proxy hops** — for the app; [port previews](#port-previews) are the exception. This is not cosmetic: `websocket.Accept` rejects an upgrade whose `Origin` disagrees with `Host`, so rewriting `Host` to `localhost:8080` would make every legitimate mobile WebSocket fail the same-origin check. It also means the SPA sees the URL the browser actually used when building absolute URLs.
 
 The same-origin check is now the *only* origin defence for mobile clients — the cloud no longer terminates their WebSocket, so it cannot inspect their `Origin`. Strict same-origin at this layer is stricter than the wildcard allow-list the cloud used to apply.
 
 `X-Forwarded-For` / `-Host` / `-Proto` are copied from the inbound request, since the cloud already filled them from the public request.
+
+### Port Previews
+
+What a preview looks like to its user — the address, logging in, the limitations — is in [port-preview.md](../port-preview.md). This section is why it works that way.
+
+The cloud also routes `<subdomain>-<port>.<relay server>` to this tunnel, Host unchanged. Such a request is not for this server at all: after the `/api/mcp/*` refusal and before any routing rule above, `newLocalProxy` recognizes the host and hands it to `previewProxy` (`server/relay/preview.go`), which dials `localhost:<port>` and nothing else. The host is matched against this tunnel's own subdomain and relay server, so the port is the only thing read from it.
+
+Here the public request is deliberately *not* preserved. Dev servers check `Host` (Vite's `allowedHosts`) and `Origin` (Next's `allowedDevOrigins`) against an allowlist that knows `localhost` and not the preview host, and answer 403. So the request is made to look as if the browser had opened `localhost:<port>` itself:
+
+| | Rewritten to | When |
+|---|---|---|
+| `Host` | `localhost:<port>` | always |
+| `Origin` | `http://localhost:<port>` | when it names the preview host; anything else that gets this far — `Origin: null` from the preview's own page (see below) — passes unchanged |
+| `Location` (response) | the preview URL | only when it points at `localhost:<port>`, with or without a scheme |
+
+Of `X-Forwarded-*` only `-For` is copied. `-Host` and `-Proto` would name the public URL beside a `localhost` `Host` and `Origin`, and frameworks that trust them refuse the mismatch: Next's Server Actions compare `X-Forwarded-Host` with `Origin`, Rails checks it against its host allowlist. The preview session cookie is removed from `Cookie`, so the token never reaches the previewed app; the app's own cookies pass through.
+
+#### Logging In
+
+A previewed server knows nothing of Pockode's credentials, so the preview is guarded by the app's own: the same password, checked by the same `password.Matches` as the WebSocket `auth`, exchanged for a session from the same `authsession` store (see [Authentication](authentication.md#sessions-what-the-browser-keeps)). It cannot be the bearer token the SPA sends: navigations, subresources and a dev server's HMR socket carry no `Authorization` header. So the session lives in a cookie, which in turn means a login over HTTP, since only a response can set an `HttpOnly` cookie.
+
+- A request without a live session is answered 401 and not forwarded. A page load (`Sec-Fetch-Mode: navigate`, or `Accept: text/html` from a browser without fetch metadata) gets a built-in login page in the body, which does not load the SPA.
+- The page posts the password (form-encoded `password`) to `/__pockode/preview/login` on the same host: 204 with the cookie, 401 on a wrong password. It then reloads; the address bar never left the page asked for, so there is no redirect parameter.
+- A request that already carries a live session is answered 204 without issuing another, so a second tab does not spend a session slot.
+
+| Cookie | https | http (local development relay) |
+|---|---|---|
+| Name | `__Host-pockode_preview` | `pockode_preview` |
+| Attributes | `Secure; HttpOnly; SameSite=Lax; Path=/` | `HttpOnly; SameSite=Lax; Path=/` |
+
+`Max-Age` is the 400 days browsers cap it at: expiry is the session store's decision, as it is for the app's token. The `__Host-` prefix makes the cookie host-only and stops any other subdomain of the relay domain from planting one of that name; plain http cannot carry it.
+
+#### Other Users' Pages
+
+Every user's app and previews live under the same relay domain, so they are all **same-site** to one another, and `SameSite=Lax` sends the preview cookie along with requests another user's page makes. Same-site is therefore not good enough; every preview request must be same-origin, with one exception:
+
+- A top-level `GET`/`HEAD` navigation (`Sec-Fetch-Mode: navigate` and `Sec-Fetch-Dest: document`) is let through from anywhere, so a link to the preview works: the page it opens is the preview's own, out of reach of the page that linked to it. A frame is not: it stays inside the embedding page, which could overlay it to steer the user's clicks.
+- Anything else — frames, fetches, subresources, form posts, WebSocket upgrades, the login itself — is refused with 403 unless `Sec-Fetch-Site` is `same-origin` or `none`.
+- A browser that sends no `Sec-Fetch-Site` is judged by `Origin` instead, by the rule the app's `/ws` gets from `websocket.Accept`: no `Origin`, or one whose host equals `Host`.
+
+`Sec-Fetch-Site` decides when present, as in Go's `http.CrossOriginProtection`: it covers requests that carry no `Origin` at all, such as a `<script>` tag, and a same-origin request may still carry `Origin: null` (a page with `Referrer-Policy: no-referrer` posting to itself). The check has to happen here, before `Origin` is rewritten to localhost, because whether the previewed server checks it is up to that server.
+
+The cost: one preview cannot call or frame another directly, even on the same tunnel — the two are different origins — and no other page, the app's own included, can embed a preview in a frame. A dev server's own proxy (Vite's `server.proxy`) is unaffected, since that call never leaves the machine.
+
+#### Paths That Stay Local
+
+- `/__pockode/` is reserved for Pockode on every preview host; only the login endpoint answers there.
+- `/api/mcp/*` is refused here too, by the same check as for the app's host and before the preview host is even recognized. It is not enough to refuse it on this server's own ports: the previewed port may be another Pockode on the machine — a cluster node, a second server — serving the same local-only API. The cost is that an app of the user's own with routes under `/api/mcp/` cannot have them previewed.
+
+There is no port allowlist: the tunnel is the user's own, and so is everything listening on their machine. A port with nothing listening answers 502 with a message naming the port; a server that is there but fails to answer gets a 502 carrying the error instead, since the advice differs.
 
 ### Timeouts
 
@@ -227,9 +277,9 @@ if errors.Is(err, ErrInvalidToken) {
 
 Tokens can be invalidated by a cloud reset, expiry, or manual revocation. The client re-registers automatically, transparently to the user.
 
-### Auth is Unchanged by the Relay
+### Auth Through the Relay
 
-Requests arriving through the tunnel go through the same `middleware.Auth` and the same WebSocket `auth` RPC as local requests. The relay proxies; it never authorizes on the application's behalf.
+Requests for the app arriving through the tunnel go through the same `middleware.Auth` and the same WebSocket `auth` RPC as local requests; the relay never authorizes them on the app's behalf. Port previews are the exception: the previewed server knows nothing of Pockode's credentials, so the relay checks them itself before forwarding — with the app's password and session store, not a credential of its own (see [Logging In](#logging-in)).
 
 ## Code Paths
 
@@ -240,5 +290,7 @@ Requests arriving through the tunnel go through the same `middleware.Auth` and t
 | Client | `server/relay/client.go` | Communication with the cloud HTTP API |
 | Tunnel | `server/relay/tunnel.go` | yamux session, serving HTTP over its streams |
 | Local proxy | `server/relay/proxy.go` | Reverse proxy onto local backend/frontend |
+| Preview proxy | `server/relay/preview.go` | Preview host recognition, same-origin gate, forwarding to `localhost:<port>` |
+| Preview auth | `server/relay/preview_auth.go` | Preview login page, login endpoint, session cookie |
 | Store | `server/relay/store.go` | Configuration persistence |
 | API path split | `server/apiroute/` | Shared with `main.go`'s SPA handler |

@@ -12,7 +12,7 @@ Index of Pockode code explanation documents. These documents focus on "why it's 
 | [Work/Project Management](work-system.md) | Task decomposition and coordination | `server/work/`, `server/mcp/`, `web/src/lib/workStore.ts` |
 | [Real-time Subscription System](subscription-system.md) | Who names a subscription, watcher architecture, backpressure handling | `server/watch/`, `web/src/hooks/useSubscription.ts` |
 | [Frontend State Management](frontend-state.md) | Zustand stores and extension system | `web/src/lib/` |
-| [Relay NAT Traversal](relay-system.md) | Mobile access to local PC | `server/relay/` |
+| [Relay NAT Traversal](relay-system.md) | Mobile access to local PC, and port previews | `server/relay/` |
 | [AI CLI Sign-in](cli-auth.md) | Whether each AI CLI is signed in on the server machine, signing in from a phone, and signing out | `server/cliauth/`, `server/agent/*/auth.go`, `server/agent/*/login.go` |
 | [AI CLI Update](cli-update.md) | Whether each AI CLI has a newer release, and updating it from a phone | `server/cliupdate/`, `server/agent/*/update.go` |
 
