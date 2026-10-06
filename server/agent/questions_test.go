@@ -135,6 +135,28 @@ func TestUnansweredQuestions_ResolutionsInTheCopiedHistory(t *testing.T) {
 	}
 }
 
+// TestUnansweredQuestions_ADiscardedAnswerIsNoAnswer: a fork cut after a Stop
+// threw away an answer unread inherits the question as the source had it then —
+// open again — and one answered afresh after that stays answered.
+func TestUnansweredQuestions_ADiscardedAnswerIsNoAnswer(t *testing.T) {
+	answer := func(messageID string) json.RawMessage {
+		return recordJSON(t, MessageEvent{
+			MessageID: messageID,
+			Content:   "Answering: Postgres",
+			Answering: []QuestionAnswer{{RequestID: "req-1", Answers: []string{"Postgres"}}},
+		})
+	}
+	discarded := recordJSON(t, MessageDiscardedEvent{MessageID: "msg-a"})
+
+	records := []json.RawMessage{postedRecord(t, "req-1"), postedRecord(t, "req-2"), answer("msg-a"), discarded}
+	wantIDs(t, gotIDs(t, records), []string{"req-2", "req-1"})
+	if q := UnansweredQuestions(records)[1]; q.Header != "Database" || len(q.Options) != 2 {
+		t.Errorf("reopened question = %+v, want it whole", q)
+	}
+
+	wantIDs(t, gotIDs(t, append(records, answer("msg-b"))), []string{"req-2"})
+}
+
 // TestUnansweredQuestions_OnlyWhatTheRecordsSay: a resolution that fell past the
 // cut is not in the copied records, so the question is still open in the fork —
 // which is the point. This is the case that a live read of the source's state

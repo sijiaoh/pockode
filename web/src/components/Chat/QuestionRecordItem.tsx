@@ -1,5 +1,5 @@
-import { Check, ChevronRight, CircleHelp, X } from "lucide-react";
-import { useState } from "react";
+import { Check, ChevronRight, CircleHelp, EyeOff, X } from "lucide-react";
+import { useContext, useState } from "react";
 import type {
 	ExpiryReason,
 	QuestionAnswerRecord,
@@ -11,6 +11,7 @@ import {
 	type QuestionSelection,
 } from "../../utils/questionAnswer";
 import { CollapsibleBody, ScrollableContent } from "../ui";
+import { DiscardedMessagesContext } from "./discardedMessagesContext";
 import QuestionForm from "./QuestionForm";
 
 interface Props {
@@ -18,6 +19,8 @@ interface Props {
 	status: QuestionRecordStatus;
 	/** What was said back; set on `answered` and `declined`. */
 	answer?: QuestionAnswerRecord;
+	/** The message that carried `answer`; see `isUnread`. */
+	answerMessageId?: string;
 	/** Why it was withdrawn, when the server could say. */
 	reason?: ExpiryReason;
 	/**
@@ -57,6 +60,21 @@ const statusConfig: Record<
 		chip: "bg-th-bg-tertiary text-th-text-muted",
 	},
 };
+
+// Muted like Declined: whatever was said back, nothing of it reached the agent.
+const UNREAD = {
+	label: "Not read",
+	chip: "bg-th-bg-tertiary text-th-text-muted",
+};
+
+/**
+ * Said beside the answer rather than instead of it: the answer was given, and
+ * the card still shows what it was. Not "Stop" — an expired lease interrupts a
+ * turn the same way — and nothing about the question being open again, which
+ * it is not when the step or the work ended in between (docs/answering-ui.md §6).
+ */
+const UNREAD_LINE =
+	"The agent never read this answer: the turn was interrupted first.";
 
 /**
  * What took the question back, when the server said. Appended to
@@ -125,7 +143,8 @@ function answeredSelection(
 }
 
 /**
- * The record of a question the agent posted, in one of four states.
+ * The record of a question the agent posted, in one of four states — and an
+ * answered or declined one whose answer a Stop threw away reads `Not read`.
  *
  * A record and nothing more: it holds no form the user can submit and no live
  * state. Whether the question is still open is the session's turn's answer, and
@@ -142,12 +161,20 @@ function QuestionRecordItem({
 	record,
 	status,
 	answer,
+	answerMessageId,
 	reason,
 	legacy = false,
 	onAnswer,
 }: Props) {
 	const [expanded, setExpanded] = useState(false);
-	const { label: statusLabel, chip } = statusConfig[status];
+	// Read from the transcript's discarded messages rather than carried on the
+	// card: the Stop's record may land before the sender learns its own answer's
+	// id, and a card on an older page may be settled long after the record was
+	// read (docs/code/frontend-state.md#discarded-messages).
+	const { discarded } = useContext(DiscardedMessagesContext);
+	const isUnread =
+		answerMessageId !== undefined && discarded.has(answerMessageId);
+	const { label: statusLabel, chip } = isUnread ? UNREAD : statusConfig[status];
 	const outcome = outcomeLine(status, answer, legacy);
 	const isAnswered = status === "answered";
 	const selection = isAnswered ? answeredSelection(answer) : EMPTY_SELECTION;
@@ -179,7 +206,11 @@ function QuestionRecordItem({
 				<ChevronRight
 					className={`size-3 shrink-0 text-th-text-muted transition-transform ${expanded ? "rotate-90" : ""}`}
 				/>
-				<StatusGlyph status={status} legacy={legacy} />
+				{isUnread ? (
+					<EyeOff className="size-3 shrink-0 text-th-text-muted" />
+				) : (
+					<StatusGlyph status={status} legacy={legacy} />
+				)}
 				<span className="shrink-0 text-th-accent">Question</span>
 				<span className="max-w-[40%] shrink-0 truncate rounded bg-th-accent/20 px-1.5 py-0.5 text-th-text-primary">
 					{record.question.header || "Question"}
@@ -200,9 +231,9 @@ function QuestionRecordItem({
 					    it is held to the answer panel's reading measure
 					    (docs/answering-ui.md §6). */}
 					<div className="max-w-2xl">
-						{outcome && (
+						{(outcome || isUnread) && (
 							<p className="mb-3 rounded bg-th-bg-tertiary px-2 py-1.5 text-th-text-muted">
-								{outcome}
+								{[outcome, isUnread && UNREAD_LINE].filter(Boolean).join(" ")}
 								{withdrawalCause(reason)}
 							</p>
 						)}

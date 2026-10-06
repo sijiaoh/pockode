@@ -10,9 +10,17 @@ import {
 import { openAssistantIndex } from "../../lib/messageReducer";
 import { useChatUIConfig } from "../../lib/registries/chatUIRegistry";
 import type { TurnTail } from "../../lib/thinking";
-import type { Message, PermissionRequest } from "../../types/message";
+import type {
+	Message,
+	PermissionRequest,
+	UserMessage,
+} from "../../types/message";
 import type { AgentType } from "../../types/settings";
 import { Spinner } from "../ui";
+import {
+	DiscardedMessagesContext,
+	useDiscardedMessagesValue,
+} from "./discardedMessagesContext";
 import ForkOriginBanner from "./ForkOriginBanner";
 import MessageItem, {
 	type PermissionChoice,
@@ -97,6 +105,8 @@ interface Props {
 	onForkMessage?: (messageId: string) => void;
 	/** Must be stable: it reaches the memoized `MessageItem`. */
 	onSignIn?: (agent: AgentType, messageId: string) => void;
+	/** Must be stable: it reaches the memoized `MessageItem`. */
+	onRestoreMessages?: (messages: UserMessage[]) => void;
 	/**
 	 * The transcript belongs to another worktree and can only be read. Only the
 	 * empty state needs telling: everything else here already goes quiet when
@@ -131,6 +141,7 @@ function MessageList({
 	onOpenSession,
 	onForkMessage,
 	onSignIn,
+	onRestoreMessages,
 	isReadOnly = false,
 	tail,
 	openedThoughtIds = NO_OPENED_THOUGHTS,
@@ -230,6 +241,7 @@ function MessageList({
 	// (docs/lifecycle-ui.md §2.3): the last row is then the message, not the turn.
 	const openIndex = openAssistantIndex(messages);
 	const unfiled = useUnfiledChildrenValue(messages);
+	const discardedContext = useDiscardedMessagesValue(messages, hasMoreHistory);
 
 	const highlightRef = useRef<{
 		card: HTMLElement;
@@ -387,36 +399,44 @@ function MessageList({
 					<TurnTailContext value={tail ?? IDLE_TAIL}>
 						<OpenedThoughtsContext value={openedThoughtIds}>
 							<UnfiledChildrenContext value={unfiled}>
-								{messages.map((message, index) => {
-									return (
-										<div
-											key={message.id}
-											data-message-id={message.id}
-											// This wrapper is the row the view can be held still over, and
-											// it is here rather than on anything `MessageItem` renders
-											// because it is unpositioned (see `scrollAnchor`).
-											{...anchorCandidateProps}
-											className="py-1.5 sm:py-2"
-										>
-											<MessageItem
-												message={message}
-												sessionId={sessionId}
-												// Top of the loaded transcript is the session's own start
-												// only once there are no older pages left above it.
-												isFirst={index === 0 && !hasMoreHistory}
-												isOpenTurn={index === openIndex}
-												isCodex={isCodex}
-												onPermissionRespond={onPermissionRespond}
-												onAnswerQuestion={onAnswerQuestion}
-												promptError={promptError}
-												onOpenWorkDetail={onOpenWorkDetail}
-												onOpenFile={onOpenFile}
-												onForkMessage={onForkMessage}
-												onSignIn={onSignIn}
-											/>
-										</div>
-									);
-								})}
+								<DiscardedMessagesContext value={discardedContext}>
+									{messages.map((message, index) => {
+										return (
+											<div
+												key={message.id}
+												data-message-id={message.id}
+												// This wrapper is the row the view can be held still over, and
+												// it is here rather than on anything `MessageItem` renders
+												// because it is unpositioned (see `scrollAnchor`).
+												{...anchorCandidateProps}
+												className="py-1.5 sm:py-2"
+											>
+												<MessageItem
+													message={message}
+													sessionId={sessionId}
+													// Top of the loaded transcript is the session's own start
+													// only once there are no older pages left above it.
+													isFirst={index === 0 && !hasMoreHistory}
+													isOpenTurn={index === openIndex}
+													isCodex={isCodex}
+													onPermissionRespond={onPermissionRespond}
+													onAnswerQuestion={onAnswerQuestion}
+													promptError={promptError}
+													onOpenWorkDetail={onOpenWorkDetail}
+													onOpenFile={onOpenFile}
+													onForkMessage={onForkMessage}
+													onSignIn={onSignIn}
+													isDiscarded={
+														message.role === "user" &&
+														message.messageId !== undefined &&
+														discardedContext.discarded.has(message.messageId)
+													}
+													onRestoreMessages={onRestoreMessages}
+												/>
+											</div>
+										);
+									})}
+								</DiscardedMessagesContext>
 							</UnfiledChildrenContext>
 						</OpenedThoughtsContext>
 					</TurnTailContext>

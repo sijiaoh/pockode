@@ -53,3 +53,19 @@ type PendingQuestion struct {
 	// list keeps the order they were appended in.
 	AskedAt time.Time `json:"asked_at"`
 }
+
+// DeliveredAnswer is a question whose answer has been handed to the agent in a
+// message the agent may still not have read.
+//
+// It exists for one way an answer can be lost after delivery: Claude's Stop
+// discards messages the CLI has queued but not folded into its turn
+// (agent.MessageDiscardedEvent). The question has already left the unanswered
+// list by then — it leaves once the agent has the message — so without this the
+// discard would take the answer away and leave nothing for the user to answer
+// again. Held here, the discard puts the question back where it was.
+type DeliveredAnswer struct {
+	Question PendingQuestion
+	// MessageID is the message the answer went out in, which is what a discard
+	// names.
+	MessageID string
+}

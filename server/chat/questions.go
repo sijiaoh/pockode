@@ -181,10 +181,24 @@ func (c *Client) CancelQuestion(ctx context.Context, sessionID, requestID string
 // with a reason. It is what a work closing does to the questions beneath it:
 // nobody is coming back to answer them, and a question left pending on a
 // finished work is one the user can never clear.
+//
+// It also lets go of the answered questions whose message the agent may not
+// have read yet (session.TurnState.Delivered), so that a Stop discarding that
+// message later cannot bring them back to a step that is over. Those get no
+// record: they were answered, the transcript says so, and nothing about that
+// has changed.
 func (c *Client) WithdrawQuestions(ctx context.Context, sessionID string, reason agent.CancelReason) {
 	meta, found, err := c.store.Get(sessionID)
 	if err != nil || !found {
 		return
+	}
+	for _, d := range meta.Turn.Delivered {
+		if _, err := c.store.ApplyTurn(ctx, sessionID, session.TurnInput{
+			Signal: session.SignalQuestionResolved, RequestID: d.Question.RequestID, At: time.Now(),
+		}); err != nil {
+			slog.Warn("failed to let go of an answered question",
+				"sessionId", sessionID, "requestId", d.Question.RequestID, "reason", reason, "error", err)
+		}
 	}
 	for _, q := range meta.Turn.Unanswered {
 		if err := c.withdraw(ctx, sessionID, q.RequestID, reason); err != nil {
@@ -243,7 +257,9 @@ func (c *Client) withdraw(ctx context.Context, sessionID, requestID string, reas
 // The questions leave the unanswered list only once the agent has the message.
 // A send that failed handed it nothing, and a question cleared for a message
 // nobody received is one the user is no longer offered and the agent is still
-// waiting on.
+// waiting on. Having it is not yet having read it, though: Claude's Stop can
+// still discard the message, so the questions are held against its id until
+// the turn ends and come back if it is discarded (session.TurnState.Delivered).
 //
 // Two clients answering the same question at the same instant can therefore
 // both be accepted: the checks read the list before the send and clear it
@@ -251,7 +267,7 @@ func (c *Client) withdraw(ctx context.Context, sessionID, requestID string, reas
 // answered twice, which is a thing it can make sense of; the alternative is
 // holding the session's state across a write to a subprocess's stdin, for a
 // race that needs two people answering one question in the same breath.
-func (c *Client) SendAnswers(ctx context.Context, sessionID string, answers []Answer, exclude any) (session.HistorySeq, string, error) {
+func (c *Client) SendAnswers(ctx context.Context, sessionID string, answers []Answer, exclude any) (Sent, string, error) {
 	return c.deliverAnswers(ctx, sessionID, answers, agent.UserResolver(), exclude)
 }
 
@@ -281,37 +297,38 @@ func (c *Client) AnswerQuestion(ctx context.Context, sessionID string, answer An
 
 // deliverAnswers is the one path an answer takes, whoever gave it, and returns
 // the body the agent was sent.
-func (c *Client) deliverAnswers(ctx context.Context, sessionID string, answers []Answer, by agent.QuestionResolver, exclude any) (session.HistorySeq, string, error) {
+func (c *Client) deliverAnswers(ctx context.Context, sessionID string, answers []Answer, by agent.QuestionResolver, exclude any) (Sent, string, error) {
 	if len(answers) == 0 {
 		// A body with no answers in it would be a bare "Answering:" that starts
 		// a turn about nothing.
-		return session.NoHistorySeq, "", fmt.Errorf("%w: a message answering questions has to answer at least one", ErrAnswerShape)
+		return Sent{}, "", fmt.Errorf("%w: a message answering questions has to answer at least one", ErrAnswerShape)
 	}
 	meta, found, err := c.store.Get(sessionID)
 	if err != nil {
-		return session.NoHistorySeq, "", fmt.Errorf("get session: %w", err)
+		return Sent{}, "", fmt.Errorf("get session: %w", err)
 	}
 	if !found {
-		return session.NoHistorySeq, "", ErrSessionNotFound
+		return Sent{}, "", ErrSessionNotFound
 	}
 
 	now := time.Now()
 	answering, err := c.resolveAnswers(ctx, sessionID, meta.Turn, answers, by, now)
 	if err != nil {
-		return session.NoHistorySeq, "", err
+		return Sent{}, "", err
 	}
 
 	content := answerMessage(answering, by)
-	seq, err := c.sendEvent(ctx, sessionID, agent.MessageEvent{
+	sent, err := c.sendEvent(ctx, sessionID, agent.MessageEvent{
 		Content: content, Answering: answering, Origin: originOf(by),
 	}, nil, exclude)
 	if err != nil {
-		return seq, "", err
+		return sent, "", err
 	}
 
 	for _, a := range answering {
 		if _, err := c.store.ApplyTurn(ctx, sessionID, session.TurnInput{
-			Signal: session.SignalQuestionResolved, RequestID: a.RequestID, At: now,
+			Signal: session.SignalQuestionResolved, RequestID: a.RequestID,
+			MessageID: sent.MessageID, At: now,
 		}); err != nil {
 			// The agent has the answer; the list is what is behind. Worth
 			// shouting about — the question stays on screen and answering it
@@ -321,7 +338,7 @@ func (c *Client) deliverAnswers(ctx context.Context, sessionID string, answers [
 				"sessionId", sessionID, "requestId", a.RequestID, "error", err)
 		}
 	}
-	return seq, content, nil
+	return sent, content, nil
 }
 
 // originOf says how a message carrying these answers is marked.

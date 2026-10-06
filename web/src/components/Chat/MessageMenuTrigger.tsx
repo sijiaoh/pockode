@@ -1,5 +1,5 @@
 import { MoreHorizontal } from "lucide-react";
-import { useState } from "react";
+import { type ComponentProps, useState } from "react";
 import type { ForkUnavailable } from "../../utils/forkAnchor";
 import { iconButtonClass } from "../ui/iconButtonClass";
 import MessageMenu from "./MessageMenu";
@@ -26,6 +26,8 @@ interface Props {
 	 */
 	onFork?: () => void;
 	forkBlocked?: ForkBlocked;
+	/** See `MessageMenu`. */
+	restore?: ComponentProps<typeof MessageMenu>["restore"];
 }
 
 /**
@@ -35,7 +37,8 @@ interface Props {
  *
  * The slot is always drawn, empty or not, on every user row of a session that
  * can fork at all: a message going from sending to settled does not move a
- * pixel. Work event lines get none — they are never turns.
+ * pixel. Work event lines get none — they are never turns. A message a Stop
+ * threw away gets one wherever it can be restored, fork or no fork.
  *
  * The slot sits on the inside of the bubble, the side facing the middle of the
  * conversation: the outside is the avatar's, and the inside is space this
@@ -65,12 +68,13 @@ interface Props {
  * these three dots, and forty copies of a *feature's* icon down a transcript
  * read as forty announcements of that feature.
  */
-function MessageMenuTrigger({ onFork, forkBlocked }: Props) {
+function MessageMenuTrigger({ onFork, forkBlocked, restore }: Props) {
 	const [open, setOpen] = useState(false);
+	const hasActions = onFork !== undefined || restore !== undefined;
 
 	return (
 		<div className="size-9 shrink-0 self-end">
-			{onFork && (
+			{hasActions && (
 				<button
 					type="button"
 					onClick={() => setOpen(true)}
@@ -86,11 +90,12 @@ function MessageMenuTrigger({ onFork, forkBlocked }: Props) {
 					<MoreHorizontal className="size-4" aria-hidden="true" />
 				</button>
 			)}
-			{open && onFork && (
+			{open && hasActions && (
 				<MessageMenu
 					side="user"
 					onFork={onFork}
 					forkBlocked={forkBlocked}
+					restore={restore}
 					onClose={() => setOpen(false)}
 				/>
 			)}

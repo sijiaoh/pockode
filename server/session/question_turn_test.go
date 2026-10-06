@@ -189,3 +189,111 @@ func TestTurnState_PendingQuestionFor(t *testing.T) {
 }
 
 func ptr[T any](v T) *T { return &v }
+
+func answerIn(state TurnState, id, messageID string, at time.Time) TurnState {
+	return ReduceTurn(state, TurnInput{
+		Signal: SignalQuestionResolved, RequestID: id, MessageID: messageID, At: at,
+	}).State
+}
+
+func discard(state TurnState, messageID string, at time.Time) TurnTransition {
+	return ReduceTurn(state, TurnInput{Signal: SignalMessageDiscarded, MessageID: messageID, At: at})
+}
+
+// TestReduceTurn_DiscardedAnswerReopensItsQuestions is the case Delivered
+// exists for: the answer reached the CLI, so the question left the list, and
+// then a Stop threw the message away unread. The question is the user's to
+// answer again — and only the ones that message answered.
+func TestReduceTurn_DiscardedAnswerReopensItsQuestions(t *testing.T) {
+	now := time.Now()
+	state := ReduceTurn(NewTurnState(now), TurnInput{Signal: SignalPrompt, At: now}).State
+	state = post(state, "req-1", now)
+	state = post(state, "req-2", now)
+	state = post(state, "req-3", now)
+
+	state = answerIn(state, "req-1", "msg-a", now)
+	state = answerIn(state, "req-2", "msg-b", now)
+	assertUnanswered(t, state, "req-3")
+
+	tr := discard(state, "msg-a", now)
+	if !tr.Changed {
+		t.Error("Changed = false, want a question coming back to be announced")
+	}
+	// Appended: it reaches the user again now, after what was already waiting.
+	assertUnanswered(t, tr.State, "req-3", "req-1")
+	if q, _ := tr.State.PendingQuestionFor("req-1"); q.Question != "Which database?" || len(q.Options) != 2 {
+		t.Errorf("reopened question = %+v, want it whole, as it was posted", q)
+	}
+	if tr.State.Phase != PhaseRunning {
+		t.Errorf("phase = %q, want the discard to leave the turn to the interrupt behind it", tr.State.Phase)
+	}
+
+	// Ending the turn settles msg-b as read: a later discard naming it is
+	// nothing to do with any question.
+	ended := ReduceTurn(tr.State, TurnInput{Signal: SignalInterrupted, At: now}).State
+	assertUnanswered(t, discard(ended, "msg-b", now).State, "req-3", "req-1")
+}
+
+// TestReduceTurn_EveryTurnEndingSettlesDeliveredAnswers: a message the CLI took
+// in before its turn ended has been read, so no later discard can bring its
+// questions back. Every way a turn ends is checked, because the failure is one
+// of them leaving an answer the agent did read open to being taken back.
+func TestReduceTurn_EveryTurnEndingSettlesDeliveredAnswers(t *testing.T) {
+	now := time.Now()
+	endings := []TurnSignal{
+		SignalDone, SignalFailed, SignalAuthFailed, SignalInterrupted,
+		SignalProcessEnded, SignalProcessStarted,
+	}
+	for _, sig := range endings {
+		t.Run(string(sig), func(t *testing.T) {
+			state := ReduceTurn(NewTurnState(now), TurnInput{Signal: SignalPrompt, At: now}).State
+			state = answerIn(post(state, "req-1", now), "req-1", "msg-a", now)
+			state = ReduceTurn(state, TurnInput{Signal: sig, At: now}).State
+			if len(state.Delivered) != 0 {
+				t.Errorf("delivered = %v, want none once the turn is over", state.Delivered)
+			}
+			assertUnanswered(t, discard(state, "msg-a", now).State)
+		})
+	}
+}
+
+// TestReduceTurn_WithdrawingLetsGoOfDeliveredAnswers: resolving with no message
+// is a withdrawal (a step completing, a work closing), and it reaches a
+// question whose answer is still in flight — otherwise a Stop afterwards would
+// bring it back onto a step that is over.
+func TestReduceTurn_WithdrawingLetsGoOfDeliveredAnswers(t *testing.T) {
+	now := time.Now()
+	state := ReduceTurn(NewTurnState(now), TurnInput{Signal: SignalPrompt, At: now}).State
+	state = answerIn(post(state, "req-1", now), "req-1", "msg-a", now)
+
+	state = answerIn(state, "req-1", "", now)
+	if len(state.Delivered) != 0 {
+		t.Fatalf("delivered = %v, want the withdrawal to let it go", state.Delivered)
+	}
+	assertUnanswered(t, discard(state, "msg-a", now).State)
+}
+
+// TestReduceTurn_AnswerToAnUnlistedQuestionHoldsNothing: two answers racing for
+// one question are both accepted (chat.SendAnswers), and only the one that
+// took it off the list holds it. Otherwise discarding the loser alone would
+// reopen a question the winner's answer is still on its way to.
+func TestReduceTurn_AnswerToAnUnlistedQuestionHoldsNothing(t *testing.T) {
+	now := time.Now()
+	state := ReduceTurn(NewTurnState(now), TurnInput{Signal: SignalPrompt, At: now}).State
+	state = answerIn(post(state, "req-1", now), "req-1", "msg-a", now)
+	state = answerIn(state, "req-1", "msg-b", now)
+
+	assertUnanswered(t, discard(state, "msg-b", now).State)
+}
+
+// TestNormalizeTurn_DropsDeliveredAnswers: no process survives a restart, so
+// no Stop can discard anything sent before it.
+func TestNormalizeTurn_DropsDeliveredAnswers(t *testing.T) {
+	now := time.Now()
+	state := ReduceTurn(NewTurnState(now), TurnInput{Signal: SignalPrompt, At: now}).State
+	state = answerIn(post(state, "req-1", now), "req-1", "msg-a", now)
+
+	if got := NormalizeTurn(state, now).State.Delivered; len(got) != 0 {
+		t.Errorf("delivered = %v, want none after a restart", got)
+	}
+}

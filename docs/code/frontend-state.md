@@ -479,8 +479,9 @@ opens at the end of the transcript, under the message, for everything written
 afterwards ([agent-integration.md](agent-integration.md#the-read-point)). One turn has
 one ending, but not one bubble; the two facts were conflated for as long as a mid-turn
 message had nowhere of its own to be answered. The record's `message_id` is not used
-to place that bubble — the client that sent the message never learns the id the server
-minted for it, so joining on it would lay out the sending tab differently from every
+to place that bubble — the client that sent the message learns the id the server
+minted for it only from the reply to `chat.message`, which can arrive after the read
+point does, so joining on it would lay out the sending tab differently from every
 other tab and differently again after a refresh, which is the one thing the split must
 keep identical. Records apply in order, so the end of the transcript already *is*
 under the message that was read. With several messages queued into one turn that
@@ -531,6 +532,46 @@ first being the only one a seam can grow older content inside, and a bubble that
 grows under the anchor holds nothing still
 ([agent-chat.md](../agent-chat.md#reading-a-page-on-the-client)). Moving the
 identity to the older half would move that boundary, not just rename a key.
+
+### Discarded Messages
+
+A Stop on a Claude turn can throw away messages the agent had not read yet; the
+server records each as `message_discarded` naming the message by `message_id`,
+inside the turn the Stop ended, ahead of its `interrupted`
+([agent-integration.md](agent-integration.md#stop-ends-the-background-work-too)).
+What the transcript draws from it is in
+[discarded-messages-ui.md](../discarded-messages-ui.md); this is how the state is
+kept.
+
+Unlike the read point, this record can only be joined by id: its position says
+which turn, not which message. The reducer keeps the message's server id on the
+`UserMessage` (`messageId`) and files the record's id on the turn's bubble
+(`discardedMessageIds`) — the bubble the record lands in by the same rule any
+other record of the turn follows. Neither is the ending itself: "this message
+was discarded" is derived on every render by `discardedMessages`, which joins the
+two across the whole loaded transcript. Writing it onto the message when the
+record arrived would be wrong twice over:
+
+- **The sender learns its id late.** Its own echo has no `messageId` until the
+  `chat.message` reply brings one, and a Stop pressed before that reply lands
+  delivers the record first. Looking the bubble up once, at arrival, would lose
+  the ending on exactly the tab that pressed Stop.
+- **Pages arrive newest first.** The turn's record can be loaded a page before
+  the message it names; the message joins the answer when its page does.
+
+A bubble holding discarded ids is not an empty placeholder even with no parts:
+the end of the turn is where the Stop's summary is drawn, and the page join
+carries the older half's ids into the merged bubble for the same reason.
+
+A posted question's card is read the same way. `applyAnswering` keeps the
+answering message's id on the card (`answerMessageId`), and the card reads
+`Not read` when that id is in the derived set
+([answering-ui.md](../answering-ui.md#6-the-record-card-in-the-stream)). What
+the reducer does decide from records alone is that a later answer or a
+withdrawal takes an answered card over: the server takes either only while the
+question is unanswered, and an answered question is only unanswered again after
+its answer was discarded, so a later record naming it is proof enough without
+knowing which messages were discarded.
 
 ### Tool Runs
 

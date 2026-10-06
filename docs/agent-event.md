@@ -66,6 +66,7 @@ type AgentEvent interface {
 | Legacy | `ask_user_question`, `question_response` — read from old transcripts, never written | No |
 | Message | `message` (user-typed or system-driven; persisted + broadcast) | No |
 | Read point | `message_ingested` (the agent has taken in a message sent mid-turn) | No |
+| Message ending | `message_discarded` (a Stop threw away a message the agent had not read) | No |
 
 Terminal events end the current message response. Non-terminal events are appended to the active assistant message.
 
@@ -201,8 +202,8 @@ moment of delivery — a little of what was already being written lands under th
 new message, which is the conservative direction to be wrong in. Delivery is not
 reading, though: a Stop can still discard a message the turn never folded in.
 The record is not taken back — it says what Pockode believed then — and a
-`message_discarded` warning in the stopped turn says what became of the message
-([code/agent-integration.md](code/agent-integration.md#stop-ends-the-background-work-too)).
+`message_discarded` record in the stopped turn says what became of the message
+([below](#a-discarded-message-message_discarded)).
 A client is told neither which agent it is talking to nor which of the two
 produced the record: it sees one kind of record and follows one rule. An agent
 that gains an echo later is a change to that agent alone
@@ -215,6 +216,34 @@ because nothing on the wire attributes a sentence to a message. Only the model
 knows, and it does not say, so a finer split could only be guessed at; a
 transcript that is confidently wrong about who a sentence answers is worse than
 one that is coarsely right about where the answering began.
+
+#### A Discarded Message (`message_discarded`)
+
+A Stop on a Claude turn can throw away messages the CLI was holding but had not
+folded into the turn yet; they will never be answered. Each is recorded as
+`{"type": "message_discarded", "message_id": "..."}`, written inside the turn
+the Stop ended, ahead of its `interrupted` — several of them when several
+messages were waiting. How the server learns which ones is in
+[code/agent-integration.md](code/agent-integration.md#stop-ends-the-background-work-too);
+Codex never writes one.
+
+**Only `message_id` says which message**, and it is never empty. Unlike the read
+point, position is no help: it names the turn that was stopped, not the message,
+and the message record may sit pages earlier. It is a record of something that
+happened *to* the message, not a correction of it: the `message` record and any
+`message_ingested` above it stay as written, and a client derives the ending by
+joining the two on that id
+([code/frontend-state.md](code/frontend-state.md#discarded-messages)).
+
+It ends nothing. Of the four state predicates only `Persisted` holds: it neither
+ends the turn (the `interrupted` after it does), nor counts as the agent
+working, nor starts a session. A discarded message that answered posted
+questions can put them back on the unanswered list — live state, not a record
+([code/agent-integration.md](code/agent-integration.md#a-discarded-answer-reopens-its-question)).
+
+Transcripts written before this record existed carry a `warning` with
+`code: "message_discarded"` and an excerpt instead; it names no message and is
+drawn as the plain warning it is.
 
 #### Questions and Their Answers
 
@@ -295,20 +324,23 @@ answer it and the card offers none.
 
 Key fields: `Type`, `Content`, `ToolName`, `ToolInput`, `ToolResult`, `ParentToolUseID`, `Error`, `RequestID`, `PermissionSuggestions`, `Questions`, `Reason`, `AskedAt`, `ResolvedAt`, `Answering`, `Command` (a message expanded from a [Pockode command](pockode-commands.md#what-is-recorded)), and (for system-driven `message` events) `Origin`, `Subtype`, `Meta`.
 
-`MessageID` is on two record types and joins them: Pockode's own id for a
+`MessageID` is on three record types and joins them: Pockode's own id for a
 message, carried by the `message` record and quoted by the `message_ingested`
-record that says the agent read it. It is what names *which* of several messages
-queued into one turn was read, which position cannot say.
+record that says the agent read it and the `message_discarded` record that says
+a Stop threw it away unread. It is what names *which* of several messages
+queued into one turn was read or discarded, which position cannot say.
 
-**It is not what a client cuts the transcript on**, and the transcript is the
-only consumer so far: a read point is applied where it sits, so the cut lands
-under the newest message anyway, and the client that sent a message is never
-told the id minted for it — it is the one subscriber excluded from that
-broadcast. Laying a transcript out by this id would therefore give the sending
-tab a different transcript from every other tab, and a different one again after
-a reload ([code/frontend-state.md](code/frontend-state.md)). It is empty on every
-record written before the field existed, and a `message_ingested` without one
-still marks the boundary it sits at.
+**It is not what a client cuts the transcript on**: a read point is applied
+where it sits, so the cut lands under the newest message anyway, and the client
+that sent a message learns the id minted for it only from the `chat.message`
+reply ([Broadcasting](#broadcasting)), which can arrive after the read point
+does. Laying a transcript out by this id would therefore give the sending tab a
+different transcript from every other tab, and a different one again after a
+reload ([code/frontend-state.md](code/frontend-state.md)). A discard is the one
+consumer that does join on it, because it has nothing else to go by — and it
+derives the result on every render rather than at arrival for exactly that
+lateness. It is empty on every record written before the field existed, and a
+`message_ingested` without one still marks the boundary it sits at.
 
 Two field-level decisions worth knowing before adding one — why `AskedAt` and
 `ResolvedAt` are pointers, and why a field a record on disk carries (the legacy
@@ -380,7 +412,7 @@ owns them.
 
 `server/watch/chat_messages.go` — `ChatMessagesWatcher` implements `process.ChatMessageListener`. Receives already-persisted events (persistence happens in `ProcessManager.streamEvents()` via `store.AppendToHistory`), converts them to `EventRecord` via `ToRecord()`, then broadcasts JSON-RPC notifications with method `"chat.<event-type>"` and the subscription ID for client-side routing. Each notification also carries the record's `seq`, the same address a history page carries on its records ([paging](agent-chat.md#history-paging)), so a client cannot tell a replayed record from a live one when it names a point in the conversation ([code/agent-integration.md](code/agent-integration.md#history-storage)). Events that were not persisted carry none.
 
-A user message is broadcast to every subscriber except the tab that sent it, which has already echoed the message into its own transcript. That tab therefore learns its own record's address from a third source — the reply to the `chat.message` call it made (`rpc.MessageResult`), the only channel that reaches it. Replayed history, live notification and that reply all carry the same `seq`, so what a client can name does not depend on which of the three delivered the record. For a message that invoked a [Pockode command](pockode-commands.md) the reply also carries the record's `content` and `command`, for the same reason: the sender typed `/pockode-lead`, and the prompt the agent was sent instead reaches it nowhere else. A message carrying `answering` gets `content` back the same way: the sender sent none, and the body the server wrote from the answers reaches it nowhere else. A message carrying files gets `attachments` back too: the sender knew only what the browser guessed about each file. A message no record names stays unaddressable, and a client must not number it itself.
+A user message is broadcast to every subscriber except the tab that sent it, which has already echoed the message into its own transcript. That tab therefore learns its own record's address from a third source — the reply to the `chat.message` call it made (`rpc.MessageResult`), the only channel that reaches it. Replayed history, live notification and that reply all carry the same `seq` and `message_id`, so what a client can name does not depend on which of the three delivered the record. For a message that invoked a [Pockode command](pockode-commands.md) the reply also carries the record's `content` and `command`, for the same reason: the sender typed `/pockode-lead`, and the prompt the agent was sent instead reaches it nowhere else. A message carrying `answering` gets `content` back the same way: the sender sent none, and the body the server wrote from the answers reaches it nowhere else. A message carrying files gets `attachments` back too: the sender knew only what the browser guessed about each file. A message no record names stays unaddressable, and a client must not number it itself.
 
 ## Frontend
 

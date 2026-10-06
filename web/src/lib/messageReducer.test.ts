@@ -8,6 +8,7 @@ import type {
 	UserMessage,
 } from "../types/message";
 import {
+	applyBackReference,
 	applyEventToParts,
 	applyServerEvent,
 	applyToolActivitySnapshot,
@@ -2149,6 +2150,146 @@ describe("messageReducer", () => {
 	// answers *that* message and belongs under it. Whichever CLI is behind it —
 	// the record is the same, and no branch here asks which one
 	// (docs/code/agent-integration.md#the-read-point).
+	// A Stop threw a message away unread (docs/discarded-messages-ui.md). The
+	// record is filed on the turn it ended; the message it names is found by id.
+	describe("a discarded message", () => {
+		const stopped = [
+			{ type: "message", content: "do the thing", message_id: "m-1" },
+			{ type: "text", content: "working" },
+			{ type: "message", content: "Do X instead", message_id: "m-2" },
+			{ type: "message_ingested", message_id: "m-2" },
+			{ type: "message_discarded", message_id: "m-2" },
+			{ type: "interrupted" },
+		];
+
+		it("files the id on the turn the Stop ended, and draws nothing", () => {
+			const messages = replayHistory(stopped);
+			const turn = messages[messages.length - 1] as AssistantMessage;
+
+			expect(messages[2]).toMatchObject({
+				role: "user",
+				content: "Do X instead",
+				messageId: "m-2",
+			});
+			expect(turn.status).toBe("interrupted");
+			expect(turn.discardedMessageIds).toEqual(["m-2"]);
+			expect(turn.parts).toEqual([]);
+		});
+
+		// The page above opens on the record: what it names is the turn the page
+		// below trails off on, and the join must not drop it.
+		it("keeps the id when a page boundary falls just before it", () => {
+			const older = replayHistory(stopped.slice(0, 4));
+			const newer = replayHistory(stopped.slice(4));
+
+			const joined = prependHistoryPage(older, newer);
+			const turn = joined[joined.length - 1] as AssistantMessage;
+
+			expect(turn.discardedMessageIds).toEqual(["m-2"]);
+			expect(turn.status).toBe("interrupted");
+		});
+
+		// Both halves of the bubble hold one: the join is one turn again, and it
+		// threw both away.
+		it("keeps the ids of a turn the boundary cut between two of them", () => {
+			const records = [
+				...stopped.slice(0, 3),
+				{ type: "message", content: "And Y", message_id: "m-3" },
+				{ type: "message_ingested", message_id: "m-2" },
+				{ type: "message_discarded", message_id: "m-2" },
+				{ type: "message_discarded", message_id: "m-3" },
+				{ type: "interrupted" },
+			];
+			const joined = prependHistoryPage(
+				replayHistory(records.slice(0, 6)),
+				replayHistory(records.slice(6)),
+			);
+			const turn = joined[joined.length - 1] as AssistantMessage;
+
+			expect(joined.filter((m) => m.role === "assistant")).toHaveLength(2);
+			expect(turn.discardedMessageIds).toEqual(["m-2", "m-3"]);
+		});
+
+		// An answer the Stop threw away reopens its question on the server; the
+		// card reads that off the message that answered it
+		// (docs/answering-ui.md §6), so it has to know which one that was.
+		describe("that answered a posted question", () => {
+			const asked = [
+				{ type: "message", content: "go", message_id: "m-1" },
+				{
+					type: "question_posted",
+					request_id: "r1",
+					questions: sampleQuestions,
+					asked_at: "2026-01-01T00:00:00Z",
+				},
+			];
+			const answer = (messageId: string, picked: string) => ({
+				type: "message",
+				content: "",
+				message_id: messageId,
+				answering: [
+					{
+						request_id: "r1",
+						answers: [picked],
+						answered_at: "2026-01-01T00:01:00Z",
+					},
+				],
+			});
+			const card = (messages: Message[]) =>
+				messages
+					.flatMap((m) => (m.role === "assistant" ? m.parts : []))
+					.find((part) => part.type === "question_record");
+
+			it("names the message that answered the card", () => {
+				expect(
+					card(replayHistory([...asked, answer("m-2", "React")])),
+				).toMatchObject({
+					status: "answered",
+					answerMessageId: "m-2",
+				});
+			});
+
+			// The server only takes a second answer after the first was thrown
+			// away, so the second is the one the agent read.
+			it("lets an answer given after the reopening take the card", () => {
+				const messages = replayHistory([
+					...asked,
+					answer("m-2", "React"),
+					{ type: "message_discarded", message_id: "m-2" },
+					{ type: "interrupted" },
+					answer("m-3", "Vue"),
+				]);
+				expect(card(messages)).toMatchObject({
+					status: "answered",
+					answer: { answers: ["Vue"] },
+					answerMessageId: "m-3",
+				});
+			});
+
+			it("lets the agent withdraw the question it reopened", () => {
+				const messages = replayHistory([
+					...asked,
+					answer("m-2", "React"),
+					{ type: "message_discarded", message_id: "m-2" },
+					{ type: "interrupted" },
+					{ type: "request_cancelled", request_id: "r1" },
+				]);
+				const cancelled = card(messages);
+				expect(cancelled).toMatchObject({ status: "cancelled" });
+				expect(cancelled).not.toHaveProperty("answer");
+				expect(cancelled).not.toHaveProperty("answerMessageId");
+			});
+
+			// The same message settling the card twice — a back-reference replayed
+			// over the page that already holds it — is not a second answer.
+			it("keeps the card when the same message settles it again", () => {
+				const once = replayHistory([...asked, answer("m-2", "React")]);
+				const again = applyBackReference(once, answer("m-2", "React"));
+				expect(card(again)).toBe(card(once));
+			});
+		});
+	});
+
 	describe("the read point", () => {
 		const midTurn = () => {
 			const messages = applyServerEvent([], {

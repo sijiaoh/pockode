@@ -33,3 +33,23 @@ func TestMessageIngested_AnswersTheStatePredicates(t *testing.T) {
 		t.Error("the read point puts nothing of the agent's into the conversation")
 	}
 }
+
+// The discarded record is the read point's counterpart and answers the same
+// way, for the same reasons: it is written from the interrupt's acknowledgement,
+// which is the CLI saying what it dropped, not the model saying anything.
+func TestMessageDiscarded_AnswersTheStatePredicates(t *testing.T) {
+	e := EventTypeMessageDiscarded
+
+	if !e.Persisted() {
+		t.Error("the discard is not recorded, so a reload shows the message as merely sent")
+	}
+	if e.AwaitsUserInput() {
+		t.Error("the discard ends nothing: the interrupted record after it does")
+	}
+	if e.IndicatesAgentActivity() {
+		t.Error("the discard must not read as the CLI producing output")
+	}
+	if e.ActivatesSession() {
+		t.Error("the discard puts nothing of the agent's into the conversation")
+	}
+}

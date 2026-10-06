@@ -121,12 +121,12 @@ func TestClient_MessageDuringARunningTurnGoesThrough(t *testing.T) {
 	f := newMidTurnFixture(t)
 	sess := f.startTurn(t)
 
-	seq, err := f.client.SendMessageExcluding(context.Background(), "sess", "second", nil, nil)
+	sent, err := f.client.SendMessageExcluding(context.Background(), "sess", "second", nil, nil)
 	if err != nil {
 		t.Fatalf("SendMessageExcluding during a running turn = %v, want it delivered", err)
 	}
-	if !seq.Valid() {
-		t.Errorf("seq = %d, want the record's address", seq)
+	if !sent.Seq.Valid() {
+		t.Errorf("seq = %d, want the record's address", sent.Seq)
 	}
 
 	if got := sess.sentPrompts(); len(got) != 2 || got[1] != "second" {
