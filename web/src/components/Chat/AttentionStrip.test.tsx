@@ -727,12 +727,18 @@ describe("AttentionStrip", () => {
 		afterEach(() => useWorkStore.getState().reset());
 
 		it.each([
-			[1, "Watching 1 story — this chat wakes when it closes, stops, or asks."],
+			[
+				1,
+				"Watching 1 story.",
+				"This chat wakes when it closes, stops, or asks.",
+			],
 			[
 				2,
-				"Watching 2 stories — this chat wakes when one closes, stops, or asks.",
+				"Watching 2 stories.",
+				"This chat wakes when one closes, stops, or asks.",
 			],
-		])("says how many it watches (%i)", (n, text) => {
+		])("says how many it watches (%i), and when it wakes behind Details", async (n, line, wake) => {
+			const user = userEvent.setup();
 			render(
 				<AttentionStrip
 					turn={turn("idle")}
@@ -740,7 +746,11 @@ describe("AttentionStrip", () => {
 					watchedStories={stories.slice(0, n)}
 				/>,
 			);
-			expect(screen.getByText(text)).toBeInTheDocument();
+			expect(screen.getByText(line)).toBeInTheDocument();
+			expect(screen.queryByText(wake)).toBeNull();
+
+			await user.click(screen.getByRole("button", { name: "Details" }));
+			expect(screen.getByText(wake)).toBeInTheDocument();
 		});
 
 		it("lists them behind Details, each a way to its page", async () => {

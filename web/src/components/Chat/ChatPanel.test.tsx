@@ -409,11 +409,7 @@ describe("ChatPanel", () => {
 			);
 			await waitForHistoryLoad();
 
-			expect(
-				screen.getByText(
-					"Watching 1 story — this chat wakes when it closes, stops, or asks.",
-				),
-			).toBeInTheDocument();
+			expect(screen.getByText("Watching 1 story.")).toBeInTheDocument();
 			await user.click(screen.getByRole("button", { name: "Details" }));
 			await user.click(screen.getByText("Ship the importer"));
 			expect(onOpenWorkDetail).toHaveBeenCalledWith("st1");
