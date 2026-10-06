@@ -427,11 +427,11 @@ side of it the cut falls on is decided in `chat.Client.Fork` and nowhere else: a
 agent message is kept, because the agent had finished saying it; a message the
 user sent is dropped, because the fork returns to before they sent it — and
 because the agent's own context stopped one message short of it regardless, there
-being no uuid for a prompt Pockode sent ([Claude's case](#forking)). A client
-sends back the seq it was handed and does no arithmetic on it. An anchor the user
-sent with nothing before it leaves no conversation to keep and is refused,
-`ErrForkAnchorNoHistory`, rather than producing an empty session that would
-answer "forked" to a request that carried nothing across. The reasoning the user
+being no anchor recorded for a prompt Pockode sent ([Claude's case](#forking)).
+A client sends back the seq it was handed and does no arithmetic on it. An
+anchor the user sent with nothing before it leaves no conversation to keep and
+is refused, `ErrForkAnchorNoHistory`, rather than producing an empty session
+that would answer "forked" to a request that carried nothing across. The reasoning the user
 is shown is in [session-fork-ui.md](../session-fork-ui.md#the-rule).
 
 The cut is not snapped to a turn boundary. Cutting mid-turn leaves a last turn
@@ -1710,11 +1710,14 @@ tool call whose result was cut away as failed, which is a better mismatch than
 dropping the very message the user forked at.
 
 The mismatch runs the other way wherever the **last kept record names no
-message** — a prompt Pockode sent, which the CLI never streams back and so has no
-uuid here, or a warning Pockode wrote itself. The replay then stops at the last
-message the agent did speak, while the transcript shows more, which is the safe
-direction — carrying less than the transcript shows rather than more — and the
-only one available.
+message** — a prompt Pockode sent, which the CLI never streams back and so leaves
+without a `ProviderMessageID`, or a warning Pockode wrote itself. (A prompt does
+have a uuid in the CLI's transcript: it goes out with its message id as its
+`uuid` ([why](#stop-ends-the-background-work-too)), and claude 2.1.289 keeps that
+as the transcript entry's uuid. Nothing records it as an anchor, though.) The
+replay then stops at the last message the agent did speak, while the transcript
+shows more, which is the safe direction — carrying less than the transcript
+shows rather than more — and the only one available.
 
 A fork anchored on a user message used to be the ordinary way into that
 mismatch, and is not any more: `chat.Client.Fork` cuts that message away (*What
@@ -1778,7 +1781,8 @@ recording one is precisely what stops a session being unstarted.
 | `control_request` | `can_use_tool`, `tool_name` is `AskUserQuestion` | `WarningEvent` + a `deny` that does not interrupt ([why](#refusing-the-clis-own-question)) |
 | `control_request` | `can_use_tool` | `PermissionRequestEvent` |
 | `control_request` | anything else | `WarningEvent` + a `control_response` error (the CLI blocks until answered) |
-| `control_response` | — | `InterruptedEvent` (only for interrupts we sent) |
+| `control_response` | answers an `interrupt` we sent | `InterruptedEvent` |
+| `control_response` | answers a `stop_task` we sent | (no event — logged against its `task_id`, see [Stop Ends the Background Work Too](#stop-ends-the-background-work-too)) |
 | `control_cancel_request` | — | `RequestCancelledEvent` |
 | `system` | `background_tasks_changed` | (no event — updates the live task set, see [Background Waits](#background-waits)) |
 | `system` | `task_progress` | `ToolActivityEvent` (see [The Task Lifecycle](#the-task-lifecycle)) |
@@ -1959,9 +1963,97 @@ to the idle row with `lastActive` untouched, which by then is a day old, so it i
 collected on the next pass rather than granted a fresh idle window for an ending
 Pockode wrote itself.
 
-Stopping during a wait needed no compensation: the CLI answers an `interrupt`
-control request within about a second even with no active turn (measured), which
-produces an `InterruptedEvent` through the normal path.
+#### Stop Ends the Background Work Too
+
+Stopping during a wait was once thought to need no compensation: the CLI
+acknowledges an `interrupt` even with no turn running, so a parked turn gets its
+`InterruptedEvent` through the normal path. That part holds. The conclusion did
+not, because **an `interrupt` only ends the turn** (measured on claude
+2.1.289). A backgrounded Bash, a `Monitor`, a background subagent all keep
+running. When one finishes, the CLI queues its notification and **starts a new
+turn of its own**, which Pockode correctly reads as the CLI resuming
+(`SignalOutput`). The user pressed Stop, saw `interrupted`, and some time later
+the agent went on talking. Session histories carried instances of exactly that:
+tool calls after an `interrupted`, with no message from the user in between.
+
+So `SendInterrupt` stops the turn **and the background work it left running**.
+That is what the CLI's own protocol means by Stop: its description of
+`cancel_queued` names "a remote UI's Stop button" as the client that wants
+everything stopped. The process is not killed. Its lifecycle (leases, resume,
+the lost-task report) is a separate matter, and a Stop must not drag it in.
+Claude's `SendInterrupt` sends, in this order:
+
+1. **`stop_task` for every live non-ambient task**, read from the same tracked
+   set that parks the turn. A stopped task ends with a `task_notification` of
+   `status: "stopped"` and **does not wake the model**. For a backgrounded call
+   that notification is recorded as its `background_result` like any other
+   outcome — an error saying the task was stopped before it finished — so the
+   transcript shows what the Stop ended. Ambient tasks are left alone, because
+   they are the CLI's own housekeeping and not the turn's work.
+2. **`interrupt` with `cancel_queued: true`.** This drops notifications already
+   queued for a turn that has not started. It is not enough without step 1: a
+   task that finishes *after* the interrupt queues a new notification and wakes
+   the model anyway. An older CLI ignores the field. The queue it empties is not
+   only notifications: a message the user sent mid-turn that the CLI has not
+   folded in yet waits there too, and goes with them — without the field it
+   would survive the interrupt and run as a turn of its own. So each prompt
+   goes out with its message record's id (`Prompt.ID`) as its `uuid`, and every
+   one of those the response lists under `cancelled` becomes a
+   `message_discarded` warning quoting the message, ahead of the
+   `InterruptedEvent` so that it lands in the turn the Stop ended. The response
+   is the signal, not the CLI's `command_lifecycle` frames: the message whose
+   turn the interrupt aborts gets a lifecycle `cancelled` too, yet it was read,
+   and is not in the list (measured on 2.1.289). A uuid in the list that
+   Pockode did not send — the CLI may enqueue commands of its own — is only
+   logged. Two cases go unreported: a message with no record, and so no id, to
+   send (its failed history write is already logged as an error); and an older
+   CLI without `interrupt_cancel_queued_v1`, which ignores the field, so nothing
+   is discarded and the list never comes. Which messages to read the list
+   against is kept in `unreadMessages`, taken whole at every Stop — why that is
+   enough is in its comment.
+
+The tasks are stopped first, so the window in which one finishes and queues a
+notification is as small as possible. The order also decides what comes back,
+and on 2.1.289 it was the same every time, for background Bash, Monitor, and
+Bash started by a background subagent: `background_tasks_changed []`, then
+`task_updated status: killed`, then `task_notification status: stopped`, then
+the `stop_task` response, then the interrupt's. The adapter depends on that last
+step. A `stopped` notification arriving *after* the interrupt's acknowledgement
+would read as the CLI resuming and open a turn that only the idle lease would
+end. That has not been observed. Keeping it from happening would mean a
+`background_result` no longer opens a turn, which changes how a parked turn
+resumes, so it is deliberately not done until a CLI is seen breaking the order.
+`TestIntegration_StopDuringBackgroundWait` would catch it: after Stop it watches
+past the time the task would have finished, and any output fails it.
+
+**A `stop_task` response is never the interrupt's acknowledgement.** The turn
+ends on the interrupt's `control_response` alone. A task that cannot be stopped
+must not keep the turn from stopping, so each `stop_task` is fire-and-forget:
+success is logged, and failure is logged at warn level with its `task_id`. A
+failure does not mean the task had already ended, because the CLI acknowledges
+an unknown or finished `task_id` with `success`. It means the CLI cannot handle
+the request at all: an older one does not know the subtype, a host without the
+callback registered says so, or the `task_id` is not a string.
+
+**A lease that expires stops the same way.** `requestStop` (the turn and answer
+rows of [the lease table](#the-lease-table)) calls the same `SendInterrupt` a
+user's Stop does: once Pockode says a turn is over, the agent must not come back
+on its own. **The background row deliberately does not.** Running out of the
+wait budget means Pockode stops *waiting* for the work, not that anyone asked for
+it to stop, so it delivers the ending the CLI never sent — a warning, a note for
+the agent ([above](#background-waits)), then the usual auto-continuation — and
+leaves the tasks running. If one finishes, the CLI resumes as it would have
+without the budget; if the process is collected first, the next start reports
+them lost.
+
+**Scheduled work is not stopped.** The CLI's cron jobs (`CronCreate`,
+`ScheduleWakeup`) are not background tasks, and on 2.1.289 they still fire on
+time after an interrupt. The protocol has no request to cancel them. They are
+future actions the agent explicitly scheduled, not the interrupted turn carrying
+on, so Stop does not reach them: an agent that scheduled a wakeup can still come
+back after Stop.
+
+Codex has no background tasks, so its interrupt only has the turn to stop.
 
 #### The Task Lifecycle
 
@@ -2134,19 +2226,22 @@ type controlResponse struct {
 }
 ```
 
-**Interrupt mechanism**:
+**Control requests Pockode sends** (Stop sends both, `stop_task` first — [why](#stop-ends-the-background-work-too)):
+
+| Request | Payload | Sent | Its response |
+|---|---|---|---|
+| `interrupt` | `{subtype: "interrupt", cancel_queued: true}` | on every Stop, by the user or by an expired lease | `InterruptedEvent` — the only thing that ends the turn — preceded by a `message_discarded` warning for each of our uuids under `cancelled` |
+| `stop_task` | `{subtype: "stop_task", task_id}` | on Stop, once for each live non-ambient background task | no event; success logged, error logged with the `task_id` |
 
 ```go
-type interruptRequest struct {
-    Type      string `json:"type"`      // "control_request"
+type controlRequestOut struct {
+    Type      string `json:"type"`       // "control_request"
     RequestID string `json:"request_id"`
-    Request   struct {
-        Subtype string `json:"subtype"` // "interrupt"
-    }
+    Request   any    `json:"request"`    // interruptRequestData or stopTaskRequestData
 }
 ```
 
-Pending control requests we need to correlate later are tracked via `pendingRequests *sync.Map`. It holds interrupt markers and nothing else, matched against an incoming `control_response` to emit `InterruptedEvent`. It used to hold a second kind — the original `AskUserQuestion` tool input, to echo back with an answer — and that is gone with the answer path: the question is refused where it arrives, so no answer can arrive to need it. Which is also why `control_cancel_request` no longer deletes from this map: the ids in it are ones Pockode generated, in a namespace disjoint from the CLI's, so a cancel from the CLI could never name one.
+Pending control requests we need to correlate later are tracked via `pendingRequests *sync.Map`. It holds a marker for each request Pockode sent, matched against an incoming `control_response`: an interrupt marker emits `InterruptedEvent`, and a stop-task marker carries its `task_id` so that the log line can name the task. It used to hold a second kind — the original `AskUserQuestion` tool input, to echo back with an answer — and that is gone with the answer path: the question is refused where it arrives, so no answer can arrive to need it. Which is also why `control_cancel_request` no longer deletes from this map: the ids in it are ones Pockode generated, in a namespace disjoint from the CLI's, so a cancel from the CLI could never name one.
 
 ## Codex Implementation
 
@@ -2218,7 +2313,7 @@ client passes.
 | Turn boundary | one `result` frame | `turn/started` … `turn/completed` |
 | A message sent mid-turn | **steers** the running turn: both messages share one turn and therefore one ending | the same, and a change from the MCP channel it replaced (below) |
 | Permission requests | `control_request` / `can_use_tool` | server→client JSON-RPC *requests*, answered with a `decision` |
-| Interrupt | `control_request` / `interrupt` | `turn/interrupt {threadId, turnId}` |
+| Interrupt | `control_request` / `stop_task` for each live background task, then `interrupt` with `cancel_queued` | `turn/interrupt {threadId, turnId}` |
 | Session recovery | `claude_resume.json` + a recovery ladder ([above](#session-recovery-ladder)) | `codex_resume.json` + `thread/resume` ([below](#thread-recovery)) |
 | Session forking | `--resume-session-at <message uuid>` ([above](#forking)) | `thread/fork` + `lastTurnId` ([below](#forking-a-thread)) |
 

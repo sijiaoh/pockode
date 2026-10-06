@@ -601,10 +601,9 @@ hang:
 
 - **Nothing is stuck.** The agent resumes on its own when the task finishes.
 - **The only lever is Stop.** There is no per-task kill: a blocker is not a task
-  manager, and the model gives the host no way to kill one task without ending
-  the turn. Stop ends the turn; tasks are lost and reported on the next start,
-  which is the existing loss report. The strip says so before the user presses
-  it: Stop's confirmation copy is in §3.
+  manager. Stop ends the turn and stops the tasks with it
+  ([code/agent-integration.md](code/agent-integration.md#stop-ends-the-background-work-too)).
+  The strip says so before the user presses it: Stop's confirmation copy is in §3.
 
 Expanded copy, verbatim:
 

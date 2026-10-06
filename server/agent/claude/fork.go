@@ -129,7 +129,7 @@ func carriableProviderSession(opts agent.ForkOptions, log *slog.Logger) (provide
 // It lands at or before the end of the kept history, never past it: only records
 // the fork kept are searched. It lands strictly before it whenever the last kept
 // records name no message — Pockode's own warnings, and the prompts it sends the
-// CLI, which the CLI never streams back and so have no uuid here. The new
+// CLI, which the CLI never streams back and so carry no ProviderMessageID. The new
 // session then ends on a message its agent does not have in context. Carrying
 // less than the transcript shows is the safe side of that mismatch, and it is
 // the only side available.

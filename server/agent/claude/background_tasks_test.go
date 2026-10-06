@@ -2,7 +2,11 @@ package claude
 
 import (
 	"bytes"
+	"encoding/json"
+	"log/slog"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/pockode/server/agent"
@@ -145,5 +149,90 @@ func TestSession_QueuedNoteRidesOnTheNextPromptOnly(t *testing.T) {
 	}
 	if strings.Contains(buf.String(), "Pockode stopped waiting") {
 		t.Errorf("expected the note to be delivered once, got %s", buf.String())
+	}
+}
+
+// Stop has to end what the turn left running, or a task finishing later starts
+// a turn of its own. Each live non-ambient task is stopped, and before the
+// interrupt, so as little as possible can finish and queue in between.
+func TestSession_InterruptStopsLiveTasksFirst(t *testing.T) {
+	tracker := &backgroundTaskTracker{}
+	parseTestLineWithTracker(testLogger(), []byte(`{"type":"system","subtype":"background_tasks_changed","tasks":[`+
+		`{"task_id":"bash1","task_type":"local_bash"},`+
+		`{"task_id":"amb1","task_type":"local_bash","ambient":true},`+
+		`{"task_id":"agent1","task_type":"local_agent"}]}`), tracker)
+
+	var buf bytes.Buffer
+	sess := &cliSession{log: testLogger(), stdin: nopWriteCloser{&buf}, pendingRequests: &sync.Map{}, backgroundTasks: tracker}
+	if err := sess.SendInterrupt(); err != nil {
+		t.Fatalf("SendInterrupt failed: %v", err)
+	}
+
+	type sent struct {
+		Request struct {
+			Subtype      string `json:"subtype"`
+			TaskID       string `json:"task_id"`
+			CancelQueued *bool  `json:"cancel_queued"`
+		} `json:"request"`
+	}
+	var got []string
+	for _, line := range strings.Split(strings.TrimSpace(buf.String()), "\n") {
+		var req sent
+		if err := json.Unmarshal([]byte(line), &req); err != nil {
+			t.Fatalf("unparseable request %q: %v", line, err)
+		}
+		switch req.Request.Subtype {
+		case "stop_task":
+			got = append(got, "stop_task "+req.Request.TaskID)
+		case "interrupt":
+			if req.Request.CancelQueued == nil || !*req.Request.CancelQueued {
+				t.Errorf("interrupt must carry cancel_queued: true, got %s", line)
+			}
+			got = append(got, "interrupt")
+		default:
+			t.Errorf("unexpected request %s", line)
+		}
+	}
+
+	want := []string{"stop_task bash1", "stop_task agent1", "interrupt"}
+	if !slices.Equal(got, want) {
+		t.Errorf("sent %v, want %v", got, want)
+	}
+}
+
+// The answer to a stop_task is not the turn ending — only the interrupt's is —
+// and a task that could not be stopped is reported against its id, without
+// holding up the interrupt's acknowledgement that follows.
+func TestParseLine_StopTaskResponseIsNotTheInterruptAck(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		response string
+		wantLog  string
+	}{
+		{"stopped", `{"type":"control_response","response":{"subtype":"success","request_id":"req-stop"}}`, ""},
+		{"failed", `{"type":"control_response","response":{"subtype":"error","request_id":"req-stop","error":"stop_task is not supported in this context (callback not registered)"}}`, "taskId=bash1"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var logs bytes.Buffer
+			log := slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelWarn}))
+			pending := &sync.Map{}
+			pending.Store("req-stop", stopTaskMarker{taskID: "bash1"})
+			pending.Store(interruptRequestID, interruptMarker{})
+
+			if events := parseTestLine(log, []byte(tc.response), pending); events != nil {
+				t.Errorf("stop_task response produced %#v, want nothing", events)
+			}
+			if tc.wantLog != "" && !strings.Contains(logs.String(), tc.wantLog) {
+				t.Errorf("expected the failure logged with %s, got %q", tc.wantLog, logs.String())
+			}
+			if tc.wantLog == "" && logs.Len() != 0 {
+				t.Errorf("expected no warning for a stopped task, got %q", logs.String())
+			}
+
+			events := parseTestLine(log, []byte(interruptResponse), pending)
+			if !agentEventsEqual(events, []agent.AgentEvent{agent.InterruptedEvent{}}) {
+				t.Errorf("interrupt response produced %#v, want InterruptedEvent", events)
+			}
+		})
 	}
 }
