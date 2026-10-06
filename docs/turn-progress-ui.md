@@ -146,25 +146,24 @@ at the same height as the tail line, `Thinking…` becomes `Thought for 12s` in
 place. A thinking among tool calls keeps their frame, since there the frame is
 the calls'.
 
-In [groups](tool-call-ui.md#groups) a thinking part is **foldable, but it is
-not a call**:
+In [groups](tool-call-ui.md#groups) a thinking part **folds, but it is not a
+call**:
 
 - **It never breaks a run.** Claude interleaves thinking with tool calls
   (think → `Read` → think → `Edit` …), and codex sends a reasoning item before
   most calls; if thinking ended a group, a fourteen-call turn would never fold.
-- **It does not count toward the two-call minimum**, and is not a step in the
-  running form's `N steps` nor in a subagent's second line. With codex, a
+- **It does not count toward the
+  [two-settled-call minimum](tool-call-ui.md#groups)**, and is not a step in
+  the running form's `N steps` nor in a subagent's second line. With codex, a
   thinking before nearly every call would otherwise fold every single call into
   a summary that hides its own title — the very case the minimum exists for. So
-  a thinking and one call lie flat as two rows; a group that forms for two calls
-  takes the thinking among them with it.
+  a thinking and one call lie flat as two rows; a group that forms takes the
+  thinking among its calls with it.
 - **The summary's settled verbs gain one last entry**, after `Used N tools` and
   before `N interrupted` — least consequential, so it is the end a narrow screen
   cuts: `Thought for 1m 20s`, the sum over the folded thinking, under the
-  merged row's rule (every part measured, or the entry says `Thought`). Never
-  alone: with nothing else settled to report — every folded call still
-  running or waiting on a card — a summary of only a thought would read as a
-  settled group.
+  merged row's rule (every part measured, or the entry says `Thought`). It is
+  never the summary's only entry, since a group forms only on settled calls.
 
 [The turn's changes](tool-call-ui.md#the-turns-changes) does not change:
 thinking edits nothing, and the card lists files.

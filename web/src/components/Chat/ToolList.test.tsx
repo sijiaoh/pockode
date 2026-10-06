@@ -111,6 +111,15 @@ describe("PartBlocks group summary", () => {
 							status: "success",
 						},
 					},
+					{
+						type: "tool_call",
+						tool: {
+							id: "e",
+							name: "Read",
+							input: { file_path: "/y" },
+							status: "success",
+						},
+					},
 					bash("b", "background"),
 					bash("c", "running"),
 					{
@@ -127,7 +136,7 @@ describe("PartBlocks group summary", () => {
 			/>,
 		);
 		expect(
-			screen.getByRole("button", { name: /^1 running·Read 1 file$/ }),
+			screen.getByRole("button", { name: /^1 running·Read 2 files$/ }),
 		).toBeInTheDocument();
 		expect(screen.queryByLabelText("done")).not.toBeInTheDocument();
 		expect(

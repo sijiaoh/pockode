@@ -141,19 +141,23 @@ fold into one row that says what they did:
 
 `rowEntries` (`lib/toolGroups.ts`) decides it, a pure function of the parts as
 they are now; `PartBlocks` draws it, so a subagent's Process folds exactly as a
-message does. Every part of a list falls into one of three kinds:
+message does. Every part of a list falls into one of these kinds:
 
 | Kind | Parts | In a group |
 |---|---|---|
 | **Breaker** | a subagent call, `ExitPlanMode`, and their cards — and, since they already end the list, text, a question card and every other part | ends the group and stands as itself |
-| **Pinned** | a call that is `error`; one that is `background` or `fromBackground`, running or settled; a card that is not `allowed`, or is `allowed` while its row has not come back | belongs to the group, never folds |
-| **Foldable** | every other call (`running` / `success` / `interrupted`), with its `allowed` card once its row is back; a thinking row, which folds but is not a call and counts toward nothing ([turn-progress-ui.md](turn-progress-ui.md#12-where-it-goes-and-groups)) | folds into the summary |
+| **Pinned** | a call that is `error`; one that is `background` or `fromBackground`, running or settled, unless it was interrupted; a card that is not `allowed`; an `allowed` card whose row has not come back, or whose call is still running | belongs to the group, never folds |
+| **Settled** | a call that is `success` or `interrupted`, with its `allowed` card if it had one — an `interrupted` one even once a background result reaches it, since the interrupt came first | folds into the summary, and is the only kind that decides whether there is a group |
+| **Running** | a `running` call that never had a card | folds into a group its settled neighbours form — the newest is the step the summary is on; otherwise lies flat |
+| **Thinking** | a thinking row — not a call, and counts toward nothing ([turn-progress-ui.md](turn-progress-ui.md#12-where-it-goes-and-groups)) | folds into a group the calls form |
 
 - **A call is one member, by id.** A card and the row it stands for share a
   `tool_use_id` and are counted, pinned and folded together.
-- **Two foldable calls or no group.** With fewer the rows lie flat as they
-  are: one call needs no summary, and a summary over one success and a failure
-  costs a line and saves none.
+- **Two settled calls or no group.** Only settled calls count; running and
+  pinned calls and thinking do not. With fewer the rows lie flat as they are,
+  running ones included: one call needs no summary, a summary over one success
+  and a failure costs a line and saves none, and why a running call cannot
+  count is [the next section](#why-a-group-forms-only-on-settled-calls).
 - **Why a subagent breaks the run.** Its row already is a summary — its Process
   is the folded list — and its waiting card sits under it, which must stay in
   sight. A plan is written for the user to read, prose in all but shape.
@@ -161,19 +165,48 @@ message does. Every part of a list falls into one of three kinds:
   the reader moved on; moving it into the summary then deletes a row above
   them — the height change [the second line](#the-second-line-problem-1) works
   to avoid — and its settled second line, *"Build succeeded in 4m12s"*, is what
-  they came back for. The reducer's known corner, a call marked backgrounded
-  only after its placeholder
-  ([tool-call-model.md](tool-call-model.md#background-lives-on-tool_result-twice)),
-  folds until its outcome arrives and then comes out; it is accepted, not
-  patched over.
-- **Why an approved card stays pinned until its row is back.** Claude does not
+  they came back for.
+- **Why an approved card stays pinned until its call settles.** Claude does not
   resend the call after approval; until progress or a result rebuilds the row,
   the card is all there is of the call, and folding it would put a tick over a
-  command still running.
+  command still running. Once the row is back the reader who approved the
+  command watches it run to the end, card and row in sight under the summary;
+  when it settles both fold.
+
+### Why a group forms only on settled calls
+
+**What is already on screen folds away only on a fact that cannot be undone;
+what has never been on screen may appear directly in the summary.** A settled
+call stays settled. A running one does not stay running: it may yet turn into
+a permission card, a failure or background work, each of them pinned. When
+running calls counted toward the minimum, a settled `Read` and a `Bash` in
+flight formed a group, and the moment the `Bash` became a permission card the
+group fell below two and dissolved — every row folded a moment ago popped
+back out under the reader's eyes, a flash on the one line they were watching.
+
+So a group exists only once two calls have settled, and a running call only
+folds into one that already does. What is left is accepted, not patched over:
+
+1. **A call inside a group turns pinned.** A running call folded into the
+   summary becomes a card, a failure or a background row. The group stands on
+   its settled calls; the call comes into sight as one pinned row under the
+   summary, and nothing folds away. A `question_post` is the exception: its
+   question card replaces the row and, being no row, ends the list there, so
+   calls that settled after it in parallel start a list of their own, and a
+   side left with fewer than two settled calls lies flat again. It takes a
+   question asked in parallel with other calls, and is rare.
+2. **A running call already in sight folds.** With parallel calls, one may be
+   showing flat while it runs and then fold when others settle into a group
+   around it.
+3. **The reducer's known corner.** A call marked backgrounded only after a
+   `success` placeholder
+   ([tool-call-model.md](tool-call-model.md#background-lives-on-tool_result-twice))
+   counts as settled until it is marked, then turns pinned; a group that had
+   exactly two settled calls dissolves. It is rare and accepted.
 
 **The summary row** is the tool row's box (`RowButton` in `ToolRow.tsx`) with a
 different text column, so the two cannot differ in height. Settled, it is the
-verbs of its **successful** foldable calls — a failed `Edit` changed nothing,
+verbs of its **successful** calls — a failed `Edit` changed nothing,
 and it is pinned below anyway — in a fixed order by consequence, so the end a
 narrow screen cuts is the least important: `Edited N files · Ran N commands ·
 Read N files · Searched N times · Fetched N pages · Updated todos · Used N
@@ -185,7 +218,7 @@ The glyph is a muted `Check`, or `Ban` when something was interrupted — never
 green, never red; red is the pinned rows'. No accent title: that is what tells
 it from a tool row.
 
-While a foldable call runs, the summary is on that step, in the grammar a
+While a running call is folded, the summary is on that step, in the grammar a
 subagent's second line already speaks: `6 steps · Bash  npm run build…  12s` —
 every call in the group counted, then the newest running one worded as its own
 row, with its elapsed time. One line either way, so it does not change height
@@ -194,15 +227,14 @@ then the machine is waiting for them. The tick says only that every folded call
 is over — the card is pinned below, in sight — so a waiting card neither takes
 it away once that is true nor brings it early: while folded calls still run
 behind the card, the glyph is empty, neither busy nor done, and `K running`
-leads whatever has settled — `1 running · Edited 2 files · Read 3 files`, or
-`2 running` alone — first because it is the one entry a narrow screen must not
-cut. With nothing running and nothing settled yet the glyph is empty too and
-the row says only `N steps`. The spinning form's text is `aria-hidden` while
-it moves, and the running glyph says `Tool calls running`;
+leads what has settled — `1 running · Edited 2 files · Read 3 files` — first
+because it is the one entry a narrow screen must not cut. A group always has
+settled calls, so the settled form is never empty. The spinning form's text is
+`aria-hidden` while it moves, and the running glyph says `Tool calls running`;
 `K running` changes only with the count, so it is read out as it is.
 
 **Rendering.** Every part is rendered once, in transcript order; the group adds
-a summary entry before its first part and hides its foldable parts with the
+a summary entry before its first part and hides its folded parts with the
 `hidden` attribute. Nothing is copied or remounted — a pending card is in the
 DOM once, so a jump to it lands, and a row folded and unfolded comes back as it
 was. A hidden part is not a scroll anchor candidate: an element that is not
@@ -213,7 +245,7 @@ A row's open body is held by the list (`rowExpansionContext.ts`), which keeps a
 row the user opened in sight when its group forms or closes, until they close
 it themselves — the run they were watching does not vanish because the next
 call arrived. Only the user's own choice counts: a pending card opens itself,
-and folding it once it is answered and its row is back is the point.
+and folding it once it is answered and its call has settled is the point.
 
 ## The turn's changes
 
@@ -1955,21 +1987,29 @@ decisions, and reachability is a CSS variant
 23. While the group runs: `N steps · <current call>  <elapsed>` on one line,
     and the verb summary when it settles, **without the row changing height**.
     A failed `Edit` is not in `Edited N files`.
-24. One foldable call, with any number of failures beside it: no summary.
+24. One settled call, with any number of failures or running calls beside
+    it: no summary. A `Read` that succeeded, then a `Bash` that asks for
+    permission: the two rows stay flat while the `Bash` runs and when its card
+    replaces it — no summary appears and vanishes. Inside a group of two
+    settled calls, a `Bash` shown as the current step that fails: the summary
+    turns to its verbs and the failure comes into sight under it; nothing else
+    moves.
 25. A pending card in a group: pinned under the summary, which does not spin.
-    Allow it: the card stays until its row comes back, then both fold. Deny it:
-    the card and the failed row both stay. With a folded call still running
-    beside a settled one when the card arrives: no tick and no spinner, the row
-    reads `1 running · <verbs>`, and the spinner returns if it is still
-    running once the card is answered.
-26. A backgrounded `Bash`: folded while it is an ordinary running call, pinned
-    from the moment it goes to the background, still pinned when it settles —
-    second line becomes the outcome, height unchanged.
+    Allow it: the card stays, and its row comes back under it and runs in
+    sight; when the call settles both fold. Deny it: the card and the failed
+    row both stay. With a folded call still running beside the settled ones
+    when the card arrives: no tick and no spinner, the row reads
+    `1 running · <verbs>`, and the spinner returns if it is still running once
+    the card is answered.
+26. A backgrounded `Bash` in a group: folded while it is an ordinary running
+    call, pinned from the moment it goes to the background, still pinned when
+    it settles — second line becomes the outcome, height unchanged.
 27. A subagent call between calls splits them into two groups; its Process
     folds its own calls the same way.
-28. Open a running `Bash` to watch it, then let the next call arrive: it stays
-    open and in place; close it and it folds. A hidden row is never where the
-    view is held, and a group whose last row is hidden leaves no doubled line.
+28. Open a running `Bash` to watch it, then let the calls around it settle
+    into a group: it stays open and in place; close it and it folds. A hidden
+    row is never where the view is held, and a group whose last row is hidden
+    leaves no doubled line.
 29. On a 375px phone, open a `Read` of a long file and drag the page up and down
     across its body: the transcript moves, the body never does. *Content* is on
     top, cut and faded, with *Show all* and *Full screen*; *File* is folded under
