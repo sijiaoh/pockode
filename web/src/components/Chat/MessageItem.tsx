@@ -28,8 +28,10 @@ import type {
 	PockodeCommandInvocation,
 	QuestionAnswerRecord,
 	SystemMessageMeta,
+	UserMessage,
 } from "../../types/message";
 import type { AgentType } from "../../types/settings";
+import { isRestorable } from "../../utils/discardedMessage";
 import { HIGHLIGHT_LIMIT } from "../../utils/fileView";
 import { forkUnavailableReason } from "../../utils/forkAnchor";
 import { hasMessageActions } from "../../utils/messageActions";
@@ -43,6 +45,7 @@ import {
 } from "../ui";
 import AttachmentStrip from "./AttachmentStrip";
 import AuthFailureNotice from "./AuthFailureNotice";
+import { DiscardedNote, DiscardedSummary } from "./DiscardedMessage";
 import MessageActions from "./MessageActions";
 import MessageMenuTrigger, { type ForkBlocked } from "./MessageMenuTrigger";
 import { ProposedChange, proposedChangeHeader } from "./ProposedChange";
@@ -104,6 +107,8 @@ interface WorkEventItemProps {
 	subtype?: string;
 	meta?: SystemMessageMeta;
 	onOpenWorkDetail?: (workId: string) => void;
+	/** A Stop threw this message away before the agent read it. */
+	discarded?: boolean;
 }
 
 /**
@@ -116,6 +121,7 @@ function WorkEventItem({
 	subtype,
 	meta,
 	onOpenWorkDetail,
+	discarded,
 }: WorkEventItemProps) {
 	const [expanded, setExpanded] = useState(false);
 	const { label, summary } = workEventWording(subtype, meta);
@@ -138,6 +144,9 @@ function WorkEventItem({
 				<span className="shrink-0 text-th-text-muted">{`Pockode · ${label}`}</span>
 				{summary && (
 					<span className="min-w-0 truncate text-th-text-muted">{summary}</span>
+				)}
+				{discarded && (
+					<span className="shrink-0 text-th-text-muted">· not read</span>
 				)}
 			</button>
 			<CollapsibleBody expanded={expanded}>
@@ -820,6 +829,7 @@ function ContentPartItem(props: ContentPartItemProps) {
 				record={part.record}
 				status={part.status}
 				answer={part.answer}
+				answerMessageId={part.answerMessageId}
 				reason={part.reason}
 				legacy={part.legacy}
 				onAnswer={onAnswerQuestion}
@@ -903,6 +913,17 @@ interface Props {
 	 * component is memoized.
 	 */
 	onSignIn?: (agent: AgentType, messageId: string) => void;
+	/**
+	 * A Stop threw this message away before the agent read it. Derived from the
+	 * whole transcript by `MessageList`, since the record saying so sits in a
+	 * turn below.
+	 */
+	isDiscarded?: boolean;
+	/**
+	 * Puts discarded messages back into the composer. Absent where there is no
+	 * composer to put them into. Must be stable: this component is memoized.
+	 */
+	onRestoreMessages?: (messages: UserMessage[]) => void;
 }
 
 /**
@@ -1000,9 +1021,11 @@ function AnsweringBody({ answering }: { answering: QuestionAnswerRecord[] }) {
 function AgentAnswerItem({
 	content,
 	answering,
+	discarded,
 }: {
 	content: string;
 	answering: QuestionAnswerRecord[] | undefined;
+	discarded?: boolean;
 }) {
 	return (
 		<div className="rounded border border-th-border bg-th-bg-secondary p-2.5 text-xs text-th-text-secondary sm:p-3">
@@ -1020,6 +1043,7 @@ function AgentAnswerItem({
 			) : (
 				<p className="whitespace-pre-wrap">{content}</p>
 			)}
+			{discarded && <DiscardedNote className="mt-2 text-th-text-muted" />}
 		</div>
 	);
 }
@@ -1074,12 +1098,14 @@ function PockodeCommandItem({
 	attachments,
 	sessionId,
 	onOpenFile,
+	discarded,
 }: {
 	command: PockodeCommandInvocation;
 	content: string;
 	attachments?: FileBlock[];
 	sessionId: string;
 	onOpenFile?: (path: string) => void;
+	discarded?: boolean;
 }) {
 	const [expanded, setExpanded] = useState(false);
 	return (
@@ -1100,6 +1126,7 @@ function PockodeCommandItem({
 					onOpenFile={onOpenFile}
 				/>
 			)}
+			{discarded && <DiscardedNote className="px-2 pb-2 text-th-text-muted" />}
 			<CollapsibleBody expanded={expanded}>
 				<div className="border-t border-th-border p-2">
 					<Section label="Sent to the agent">
@@ -1135,6 +1162,8 @@ const MessageItem = memo(function MessageItem({
 	onOpenWorkDetail,
 	onForkMessage,
 	onSignIn,
+	isDiscarded,
+	onRestoreMessages,
 }: Props) {
 	const chatUIConfig = useChatUIConfig();
 	const UserAvatar = chatUIConfig.UserAvatar;
@@ -1153,9 +1182,21 @@ const MessageItem = memo(function MessageItem({
 	const forkBlocked = forkBlockedReason(message, isFirst);
 
 	if (message.role === "user") {
-		const slot = onForkMessage ? (
-			<MessageMenuTrigger onFork={onFork} forkBlocked={forkBlocked} />
-		) : null;
+		// Restoring needs no navigation, so it brings the slot along even where
+		// fork is not on offer (docs/session-fork-ui.md, "Which rows reserve a
+		// slot").
+		const restore =
+			isDiscarded && onRestoreMessages && isRestorable(message)
+				? { message, sessionId, onRestore: onRestoreMessages }
+				: undefined;
+		const slot =
+			onForkMessage || restore ? (
+				<MessageMenuTrigger
+					onFork={onFork}
+					forkBlocked={forkBlocked}
+					restore={restore}
+				/>
+			) : null;
 		// An agent's answer is neither a bubble nor an event line; see
 		// AgentAnswerItem. Full-bleed, but it is conversation the user can fork
 		// from, so it keeps the slot and its `…`.
@@ -1164,6 +1205,7 @@ const MessageItem = memo(function MessageItem({
 				<AgentAnswerItem
 					content={message.content}
 					answering={message.answering}
+					discarded={isDiscarded}
 				/>
 			);
 			return slot ? (
@@ -1186,6 +1228,7 @@ const MessageItem = memo(function MessageItem({
 					subtype={message.subtype}
 					meta={message.meta}
 					onOpenWorkDetail={onOpenWorkDetail}
+					discarded={isDiscarded}
 				/>
 			);
 		}
@@ -1197,6 +1240,7 @@ const MessageItem = memo(function MessageItem({
 					attachments={message.attachments}
 					sessionId={sessionId}
 					onOpenFile={onOpenFile}
+					discarded={isDiscarded}
 				/>
 			);
 			// Full-bleed like the answer above, and the user's own, so it keeps the
@@ -1235,6 +1279,10 @@ const MessageItem = memo(function MessageItem({
 							divided={false}
 						/>
 					)}
+					{/* Inside the bubble and in its own colour: the ending belongs to
+					    this message, the user is about to read it to decide whether
+					    to send it again, and the row's alignment stays as it was. */}
+					{isDiscarded && <DiscardedNote className="mt-2" />}
 				</div>
 				{UserAvatar && <UserAvatar className="size-10 shrink-0" />}
 			</div>
@@ -1332,6 +1380,13 @@ const MessageItem = memo(function MessageItem({
 					))}
 				{message.status === "interrupted" && (
 					<p className="mt-2 text-sm text-th-text-muted">Interrupted</p>
+				)}
+				{message.discardedMessageIds && (
+					<DiscardedSummary
+						ids={message.discardedMessageIds}
+						sessionId={sessionId}
+						onRestore={onRestoreMessages}
+					/>
 				)}
 				{message.status === "process_ended" && (
 					<p className="mt-2 text-sm text-th-warning">Process ended</p>

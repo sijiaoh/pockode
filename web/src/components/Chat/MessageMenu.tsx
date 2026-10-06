@@ -1,6 +1,8 @@
 import { GitBranch } from "lucide-react";
+import type { UserMessage } from "../../types/message";
 import MenuRow from "../common/MenuRow";
 import { Sheet } from "../ui";
+import { RestoreMenuRow } from "./DiscardedMessage";
 import type { ForkBlocked } from "./MessageMenuTrigger";
 
 /**
@@ -32,8 +34,18 @@ const FORK_BLOCKED_DESCRIPTION = {
 interface Props {
 	/** Who spoke, which is all the title needs to name the subject. */
 	side: "user" | "assistant";
-	onFork: () => void;
+	/** Absent when the session cannot fork, which removes the row. */
+	onFork?: () => void;
 	forkBlocked?: ForkBlocked;
+	/**
+	 * Set only on a message a Stop threw away unread, the one kind of message
+	 * that can be restored into the composer.
+	 */
+	restore?: {
+		message: UserMessage;
+		sessionId: string;
+		onRestore: (messages: UserMessage[]) => void;
+	};
 	onClose: () => void;
 }
 
@@ -51,8 +63,9 @@ interface Props {
  * turn-end row): this is where a blocked action says why in a whole sentence,
  * which an icon could only whisper into `aria-label` where no finger ever reads
  * it — so on the agent's side only a blocked Fork opens it. On the user's side
- * it is a one-row sheet behind the `…` — an accepted middle, not an oversight
- * (docs/session-fork-ui.md).
+ * it is usually a one-row sheet behind the `…` — an accepted middle, not an
+ * oversight (docs/session-fork-ui.md) — with a second row only on a message a
+ * Stop threw away (docs/discarded-messages-ui.md).
  *
  * Focus is `Sheet`'s job, not this menu's: it takes focus on open, cycles Tab
  * inside itself and hands focus back to the button that opened it on close.
@@ -71,28 +84,31 @@ interface Props {
  * - A row that cannot run right now is disabled with a reason, not removed.
  *   Removal is only for actions this kind of message could never have.
  */
-function MessageMenu({ side, onFork, forkBlocked, onClose }: Props) {
+function MessageMenu({ side, onFork, forkBlocked, restore, onClose }: Props) {
 	return (
 		<Sheet
 			title={side === "user" ? "Your message" : "Agent message"}
 			onClose={onClose}
 		>
 			<div className="py-1">
-				<MenuRow
-					icon={GitBranch}
-					label="Fork from here"
-					description={
-						forkBlocked ? FORK_BLOCKED_DESCRIPTION[forkBlocked] : undefined
-					}
-					disabled={forkBlocked !== undefined}
-					// Closed first so the two sheets replace one another rather than
-					// stacking: the fork confirmation is what the user is looking at
-					// next, and this menu has nothing left to say.
-					onClick={() => {
-						onClose();
-						onFork();
-					}}
-				/>
+				{onFork && (
+					<MenuRow
+						icon={GitBranch}
+						label="Fork from here"
+						description={
+							forkBlocked ? FORK_BLOCKED_DESCRIPTION[forkBlocked] : undefined
+						}
+						disabled={forkBlocked !== undefined}
+						// Closed first so the two sheets replace one another rather than
+						// stacking: the fork confirmation is what the user is looking at
+						// next, and this menu has nothing left to say.
+						onClick={() => {
+							onClose();
+							onFork();
+						}}
+					/>
+				)}
+				{restore && <RestoreMenuRow {...restore} onClose={onClose} />}
 			</div>
 		</Sheet>
 	);

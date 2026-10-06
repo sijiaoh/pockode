@@ -164,7 +164,9 @@ func (m *Manager) WithdrawQuestions(worktree, sessionID string, reason agent.Can
 			"worktree", worktree, "sessionId", sessionID, "reason", reason, "error", err)
 		return
 	}
-	if len(turns[sessionID].Unanswered) == 0 {
+	// Delivered only ever lives in a loaded worktree's memory, which is the
+	// branch of SessionTurns that reports it.
+	if turn := turns[sessionID]; len(turn.Unanswered) == 0 && len(turn.Delivered) == 0 {
 		return
 	}
 

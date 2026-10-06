@@ -405,7 +405,7 @@ func (s *cliSession) SendMessage(prompt agent.Prompt) error {
 		return fmt.Errorf("failed to marshal message: %w", err)
 	}
 	s.log.Debug("sending prompt", "length", len(text), "images", len(images), "files", len(byPath))
-	if err := s.unread.send(prompt.ID, prompt.Text, func() error { return s.writeStdin(data) }); err != nil {
+	if err := s.unread.send(prompt.ID, func() error { return s.writeStdin(data) }); err != nil {
 		return err
 	}
 	s.thinking.messageSent(time.Now())
@@ -565,7 +565,7 @@ func (s *cliSession) declineControlRequest(requestID, message string) {
 type interruptMarker struct {
 	// unread is what the CLI may still have been holding unread when the
 	// interrupt went out, for its response to be read against.
-	unread map[string]string
+	unread map[string]struct{}
 }
 
 // stopTaskMarker is stored in pendingRequests for each stop_task sent, so its
@@ -581,12 +581,12 @@ type stopTaskMarker struct {
 // makes the CLI start a new turn of its own. So every live non-ambient task gets
 // a stop_task first, which ends it without waking the model, and the interrupt
 // carries cancel_queued to drop any notification already queued — and with it
-// any message the user sent that the turn had not read yet, which is reported
-// rather than lost (see unreadMessages). Stopping first happens to make each
-// stopped notification arrive before the interrupt's acknowledgement (measured
-// on claude 2.1.289), but nothing relies on that order: the notification is
-// recorded as a background result, and that is not a turn signal
-// (agent.ToolResultEvent.SettlesBackgroundWork), so arriving after the
+// any message the user sent that the turn had not read yet, which is recorded
+// as discarded rather than lost (see unreadMessages). Stopping first happens to
+// make each stopped notification arrive before the interrupt's acknowledgement
+// (measured on claude 2.1.289), but nothing relies on that order: the
+// notification is recorded as a background result, and that is not a turn
+// signal (agent.ToolResultEvent.SettlesBackgroundWork), so arriving after the
 // acknowledgement cannot reopen the turn. The measurements, and what is
 // deliberately left running (cron jobs), are in docs/code/agent-integration.md
 // under "Stop Ends the Background Work Too".
@@ -615,7 +615,7 @@ func (s *cliSession) SendInterrupt() error {
 		return fmt.Errorf("failed to marshal interrupt request: %w", err)
 	}
 
-	return s.unread.takeAll(func(unread map[string]string) error {
+	return s.unread.takeAll(func(unread map[string]struct{}) error {
 		// Store marker so parseControlResponse can identify interrupt responses.
 		s.pendingRequests.Store(requestID, interruptMarker{unread: unread})
 
@@ -1526,8 +1526,8 @@ func parseControlResponse(log *slog.Logger, line []byte, pendingRequests *sync.M
 		switch marker := pending.(type) {
 		case interruptMarker:
 			log.Info("interrupt acknowledged", "requestId", requestID)
-			// Ahead of the ending, so the warnings belong to the turn stopped.
-			events := discardedWarnings(log, marker.unread, resp.Response.Response.Cancelled)
+			// Ahead of the ending, so the records belong to the turn stopped.
+			events := discardedMessages(log, marker.unread, resp.Response.Response.Cancelled)
 			return append(events, agent.InterruptedEvent{})
 		case stopTaskMarker:
 			// Never an event: the turn ends on the interrupt's response alone.

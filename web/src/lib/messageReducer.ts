@@ -201,6 +201,8 @@ export type NormalizedEvent =
 			// User message or system-driven message (history replay or broadcast)
 			type: "message";
 			content: string;
+			/** See `UserMessage.messageId`. */
+			messageId?: string;
 			origin?: MessageOrigin;
 			subtype?: string;
 			meta?: SystemMessageMeta;
@@ -261,6 +263,14 @@ export type NormalizedEvent =
 			 * draws nothing.
 			 */
 			type: "message_ingested";
+	  }
+	| {
+			/**
+			 * A Stop threw the message named away unread. Draws nothing in the
+			 * transcript by itself; it is filed on the turn it ended.
+			 */
+			type: "message_discarded";
+			messageId: string;
 	  }
 	| { type: "raw"; content: string }
 	| { type: "command_output"; content: string };
@@ -380,6 +390,9 @@ export function normalizeEvent(
 			return {
 				type: "message",
 				content: (record.content as string) ?? "",
+				...(typeof record.message_id === "string" && record.message_id
+					? { messageId: record.message_id }
+					: {}),
 				origin: normalizeOrigin(record.origin),
 				subtype: record.subtype as string | undefined,
 				meta: record.meta as SystemMessageMeta | undefined,
@@ -449,6 +462,11 @@ export function normalizeEvent(
 			// `applyEvent`), and a field nobody reads is a field the next reader
 			// has to prove nobody reads.
 			return { type: "message_ingested" };
+		case "message_discarded":
+			return {
+				type: "message_discarded",
+				messageId: (record.message_id as string) ?? "",
+			};
 		case "raw":
 			return { type: "raw", content: (record.content as string) ?? "" };
 		case "command_output":
@@ -932,12 +950,13 @@ export function applyServerEvent(
 		// the pass over `messages` off the message just added, which answers
 		// nothing of its own.
 		const settled = event.answering
-			? applyAnswering(messages, event.answering)
+			? applyAnswering(messages, event.answering, event.messageId)
 			: messages;
 		// Stamped inside applyUserMessage rather than by stampAnchorSeq: when the
 		// message opens a turn it is followed by an empty assistant placeholder, so
 		// the last element is not the one holding the record.
 		return applyUserMessage(settled, event.content, {
+			messageId: event.messageId,
 			source: event.origin,
 			subtype: event.subtype,
 			meta: event.meta,
@@ -1011,8 +1030,9 @@ function applyEvent(
 	//
 	// It goes at the end, and the record's `message_id` is deliberately not used
 	// to place it — records apply in order, so the end already is under the
-	// message that was read, and the client that sent that message is the one
-	// never told its id (docs/code/frontend-state.md).
+	// message that was read, and the client that sent that message learns its
+	// id only from the reply to its send, which may come later than this record
+	// (docs/code/frontend-state.md).
 	//
 	// Unconditional, with nothing tested first: a page of history can begin at a
 	// read point, and there the bubble being cut is in the page below and there
@@ -1185,10 +1205,24 @@ function applyEvent(
 		return updated; // Type guard - should never happen
 	}
 
-	const message: AssistantMessage = {
-		...current,
-		parts: applyEventToParts(current.parts, event, options),
-	};
+	// A discarded message is filed on the turn the Stop ended rather than drawn
+	// where the record stands: the record says which turn, and the message it
+	// names may be anywhere above — or, on the sender, not yet know its own id
+	// (docs/discarded-messages-ui.md). It takes the generic path to find that
+	// turn, so a page that opens on one still reaches the bubble below.
+	const message: AssistantMessage =
+		event.type === "message_discarded"
+			? {
+					...current,
+					discardedMessageIds: [
+						...(current.discardedMessageIds ?? []),
+						event.messageId,
+					],
+				}
+			: {
+					...current,
+					parts: applyEventToParts(current.parts, event, options),
+				};
 
 	// An ended turn keeps the status it ended with: output trailing it cannot
 	// reopen it.
@@ -1534,8 +1568,11 @@ function applyCancellation(
 		// question is the one thing that can still name it.
 		if (part.type === "question_record") {
 			if (part.record.requestId !== requestId) return part;
-			if (part.status !== "pending") return part;
-			return { ...part, status: "cancelled" as const, reason };
+			if (part.status !== "pending" && !isSupersededAnswer(part)) {
+				return part;
+			}
+			const { answer: _, answerMessageId: __, ...rest } = part;
+			return { ...rest, status: "cancelled" as const, reason };
 		}
 		if (part.type !== "permission_request") return part;
 		if (part.request.requestId !== requestId) return part;
@@ -1605,14 +1642,20 @@ export function updatePermissionRequestStatus(
  * `answered` or `declined`. It guards on `pending`: a card something else has
  * already resolved keeps what resolved it, because that is what happened first
  * and nothing arriving later can know better.
+ *
+ * Except an earlier answer ({@link isSupersededAnswer}): a question answered
+ * once is only ever answered again after a Stop threw the first answer away
+ * unread, and the second one is then what the agent read.
  */
 export function applyAnswering(
 	messages: Message[],
 	answering: QuestionAnswerRecord[],
+	messageId?: string,
 ): Message[] {
 	const byRequest = new Map(answering.map((a) => [a.request_id, a]));
 	return mapAllParts(messages, (part) => {
-		if (part.type !== "question_record" || part.status !== "pending") {
+		if (part.type !== "question_record") return part;
+		if (part.status !== "pending" && !isSupersededAnswer(part, messageId)) {
 			return part;
 		}
 		const answer = byRequest.get(part.record.requestId);
@@ -1620,8 +1663,42 @@ export function applyAnswering(
 		const status: QuestionRecordStatus = answer.declined
 			? "declined"
 			: "answered";
-		return { ...part, status, answer };
+		const { answerMessageId: _, ...rest } = part;
+		return {
+			...rest,
+			status,
+			answer,
+			...(messageId ? { answerMessageId: messageId } : {}),
+		};
 	});
+}
+
+/**
+ * Whether a card's answer may be overtaken by a record naming its question
+ * again: `by`, a later message answering it, or — absent — the question being
+ * withdrawn.
+ *
+ * The server takes an answer, and withdraws a question, only while the
+ * question is on the session's unanswered list, and an answered question is
+ * only put back there when a Stop throws its answer away unread
+ * (docs/code/agent-integration.md#a-discarded-answer-reopens-its-question). So
+ * a later record naming it is itself the proof the first answer was never
+ * read, and the reducer can follow history order without knowing which
+ * messages were discarded — which it cannot, for the sender's own answer
+ * (docs/code/frontend-state.md#discarded-messages).
+ *
+ * A legacy card is the CLI's own question and was never reopened.
+ */
+function isSupersededAnswer(
+	part: Extract<ContentPart, { type: "question_record" }>,
+	by?: string,
+): boolean {
+	return (
+		!part.legacy &&
+		(part.status === "answered" || part.status === "declined") &&
+		part.answerMessageId !== undefined &&
+		part.answerMessageId !== by
+	);
 }
 
 /**
@@ -1639,7 +1716,7 @@ export function applyBackReference(
 	const event = normalizeEvent(record as Record<string, unknown>);
 	if (event.type === "message") {
 		return event.answering
-			? applyAnswering(messages, event.answering)
+			? applyAnswering(messages, event.answering, event.messageId)
 			: messages;
 	}
 	return applyServerEvent(messages, event);
@@ -2131,6 +2208,7 @@ export function settleRunningToolRuns(messages: Message[]): Message[] {
 }
 
 interface UserMessageOptions {
+	messageId?: string;
 	source?: MessageOrigin;
 	subtype?: string;
 	meta?: SystemMessageMeta;
@@ -2154,6 +2232,8 @@ function isEmptyPlaceholder(message: Message): boolean {
 	return (
 		message.role === "assistant" &&
 		message.parts.length === 0 &&
+		// What a Stop threw away is said at the end of the turn it ended.
+		!message.discardedMessageIds &&
 		message.status === "complete"
 	);
 }
@@ -2229,6 +2309,7 @@ export function applyUserMessage(
 		...(options?.anchorSeq !== undefined
 			? { anchorSeq: options.anchorSeq }
 			: {}),
+		...(options?.messageId ? { messageId: options.messageId } : {}),
 		// Only tag the messages a person did not type; a plain user message stays
 		// source-less. An agent's answer carries no subtype or meta — what there
 		// is to say about it is on the answers themselves.
@@ -2550,6 +2631,14 @@ export function prependHistoryPage(
 		// is where a fork of this message has to cut.
 		...(head.anchorSeq === undefined && tail.anchorSeq !== undefined
 			? { anchorSeq: tail.anchorSeq }
+			: {}),
+		...(tail.discardedMessageIds
+			? {
+					discardedMessageIds: [
+						...tail.discardedMessageIds,
+						...(head.discardedMessageIds ?? []),
+					],
+				}
 			: {}),
 	};
 	return [...closed.slice(0, -1), merged, ...current.slice(1)];

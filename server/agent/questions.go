@@ -28,14 +28,18 @@ import (
 // way, and refusing to fork over one malformed line would be the larger harm.
 func UnansweredQuestions(records []json.RawMessage) []session.PendingQuestion {
 	var open []session.PendingQuestion
-	drop := func(requestID string) {
+	drop := func(requestID string) (session.PendingQuestion, bool) {
 		for i, q := range open {
 			if q.RequestID == requestID {
 				open = append(open[:i], open[i+1:]...)
-				return
+				return q, true
 			}
 		}
+		return session.PendingQuestion{}, false
 	}
+	// What each message answered, for a Stop that discards it before the agent
+	// read it: the questions it took off the list are open again.
+	answeredBy := make(map[string][]session.PendingQuestion)
 
 	for _, raw := range records {
 		var rec EventRecord
@@ -50,8 +54,13 @@ func UnansweredQuestions(records []json.RawMessage) []session.PendingQuestion {
 		case EventTypeMessage:
 			// A message is the answer record: see QuestionAnswer.
 			for _, answer := range rec.Answering {
-				drop(answer.RequestID)
+				if q, ok := drop(answer.RequestID); ok && rec.MessageID != "" {
+					answeredBy[rec.MessageID] = append(answeredBy[rec.MessageID], q)
+				}
 			}
+		case EventTypeMessageDiscarded:
+			open = append(open, answeredBy[rec.MessageID]...)
+			delete(answeredBy, rec.MessageID)
 		case EventTypeRequestCancelled:
 			drop(rec.RequestID)
 		}

@@ -39,8 +39,8 @@ func interruptAck(requestID, cancelled string) []byte {
 
 // A Stop's cancel_queued drops messages the turn had not read yet. The CLI
 // names them only by the uuid they were sent with, so each message carries its
-// record's id, and every one of ours the interrupt cancelled is reported —
-// before the ending, inside the turn that was stopped.
+// record's id, and every one of ours the interrupt cancelled is recorded as
+// discarded under that id — before the ending, inside the turn that was stopped.
 func TestSession_StopReportsTheMessagesItDiscarded(t *testing.T) {
 	pending, requestID, lines := stopAfter(t,
 		agent.Prompt{Text: "run the long build", ID: "msg-1"},
@@ -61,10 +61,7 @@ func TestSession_StopReportsTheMessagesItDiscarded(t *testing.T) {
 	events := parseTestLine(testLogger(), interruptAck(requestID, `["msg-2","cli-internal"]`), pending)
 
 	want := []agent.AgentEvent{
-		agent.WarningEvent{
-			Message: `Stopping the turn discarded a message the agent had not read yet, so it will not be answered: "actually, do X instead"`,
-			Code:    discardedMessageCode,
-		},
+		agent.MessageDiscardedEvent{MessageID: "msg-2"},
 		agent.InterruptedEvent{},
 	}
 	if !agentEventsEqual(events, want) {
@@ -103,18 +100,5 @@ func TestSession_SendMessage_NoIDNoUUID(t *testing.T) {
 	}
 	if strings.Contains(buf.String(), `"uuid"`) {
 		t.Errorf("message without an id sent a uuid: %s", buf.String())
-	}
-}
-
-func TestExcerpt(t *testing.T) {
-	long := strings.Repeat("あ", excerptRunes+5)
-	for _, tc := range []struct{ in, want string }{
-		{"  two\n\tlines ", `"two lines"`},
-		{long, `"` + strings.Repeat("あ", excerptRunes) + `…"`},
-		{"", "(attachments only)"},
-	} {
-		if got := excerpt(tc.in); got != tc.want {
-			t.Errorf("excerpt(%q) = %s, want %s", tc.in, got, tc.want)
-		}
 	}
 }

@@ -2,6 +2,7 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import type { QuestionRecord } from "../../types/message";
+import { DiscardedMessagesContext } from "./discardedMessagesContext";
 import QuestionRecordItem from "./QuestionRecordItem";
 
 const record: QuestionRecord = {
@@ -100,6 +101,49 @@ describe("QuestionRecordItem", () => {
 			expect(screen.getByText(label)).toBeInTheDocument();
 			unmount();
 		}
+	});
+
+	// A Stop threw the answering message away before the agent read it. The card
+	// still holds what was said — it was said — but must not claim it landed.
+	describe("an answer the agent never read", () => {
+		const renderUnread = (discardedId: string) =>
+			render(
+				<DiscardedMessagesContext
+					value={{
+						discarded: new Map([[discardedId, undefined]]),
+						hasMoreHistory: false,
+					}}
+				>
+					<QuestionRecordItem
+						record={record}
+						status="answered"
+						answerMessageId="m-2"
+						answer={{
+							request_id: "r1",
+							answers: ["Postgres"],
+							answered_at: "2026-01-02T14:05:00Z",
+						}}
+					/>
+				</DiscardedMessagesContext>,
+			);
+
+		it("reads Not read, and still shows what was answered", async () => {
+			const user = userEvent.setup();
+			renderUnread("m-2");
+			expect(screen.getByText("Not read")).toBeInTheDocument();
+			expect(screen.queryByText("Answered")).not.toBeInTheDocument();
+			await user.click(screen.getByRole("button", { name: /Database/ }));
+			expect(
+				screen.getByText(/The agent never read this answer/),
+			).toBeInTheDocument();
+			expect(screen.getByRole("radio", { name: /Postgres/ })).toBeChecked();
+		});
+
+		it("reads Answered when another message was the one discarded", () => {
+			renderUnread("m-9");
+			expect(screen.getByText("Answered")).toBeInTheDocument();
+			expect(screen.queryByText("Not read")).not.toBeInTheDocument();
+		});
 	});
 
 	// A card that states `Pending` and offers nothing is a dead end. It holds no

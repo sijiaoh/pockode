@@ -172,6 +172,13 @@ Two levels, and they are what makes the slot steady:
   agent's answer. Only what stands in the slot differs. The reason is constant
   geometry: a message going from sending to settled does not move a pixel.
 
+The second row the menu holds, *Restore to input* on a message a Stop threw away
+([discarded-messages-ui.md](discarded-messages-ui.md#4-in-the-menu)), needs no
+navigation, so it brings a slot of its own to that message in any session that
+is not read-only — and the fork row is absent from that menu where fork is not
+on offer. The session gate above stays fork's: the slot is still not paid on
+every row of a session for a row only a discarded message can have.
+
 The collapsed one-line Work events draw **no** slot. They used to keep an empty
 one so they would end where the widest bubble ended; now the agent's text runs
 to the column's edge, so there is no bubble edge left to line up with, and an

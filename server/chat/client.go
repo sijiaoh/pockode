@@ -117,18 +117,20 @@ func (c *Client) SetBroadcaster(fn EventBroadcastFunc) {
 // notifier — the caller that has already shown the message to itself (the
 // WebSocket client that sent it).
 //
-// It returns where the message landed in the session's history so the caller can
-// hand that address back to the sender. This is the only way the sender can
-// learn it: the broadcast that tells every other subscriber a record's seq is
-// the very thing being excluded here, so without this the one message a client
-// can never name is its own (see session.HistorySeq).
+// It returns where the message landed in the session's history, and the id
+// minted for it, so the caller can hand both back to the sender. This is the
+// only way the sender can learn them: the broadcast that tells every other
+// subscriber a record's seq and id is the very thing being excluded here, so
+// without this the one message a client can never name is its own (see
+// session.HistorySeq). The id is what a later record about the message names it
+// by — the read point, or the record of a Stop discarding it.
 //
-// session.NoHistorySeq when the record was not persisted — see sendEvent.
+// The zero Sent when the record was not persisted — see sendEvent.
 //
 // attachments are files already in the session's attachment store; the message
 // is refused whole with ErrAttachmentsUnsupported when the agent cannot take
 // them.
-func (c *Client) SendMessageExcluding(ctx context.Context, sessionID, content string, attachments []agent.Attachment, exclude any) (session.HistorySeq, error) {
+func (c *Client) SendMessageExcluding(ctx context.Context, sessionID, content string, attachments []agent.Attachment, exclude any) (Sent, error) {
 	return c.sendEvent(ctx, sessionID, agent.MessageEvent{Content: content}, attachments, exclude)
 }
 
@@ -136,7 +138,7 @@ func (c *Client) SendMessageExcluding(ctx context.Context, sessionID, content st
 // the prompt the command expanded to, which is what the agent reads and what the
 // record holds, and cmd is what the user typed. It is still the user's message —
 // the origin is theirs, so it forks and drives a work like any other.
-func (c *Client) SendCommandExcluding(ctx context.Context, sessionID, content string, cmd agent.CommandInvocation, attachments []agent.Attachment, exclude any) (session.HistorySeq, error) {
+func (c *Client) SendCommandExcluding(ctx context.Context, sessionID, content string, cmd agent.CommandInvocation, attachments []agent.Attachment, exclude any) (Sent, error) {
 	return c.sendEvent(ctx, sessionID, agent.MessageEvent{Content: content, Command: &cmd}, attachments, exclude)
 }
 
@@ -155,13 +157,20 @@ func (c *Client) SendSystemMessage(ctx context.Context, sessionID, content, subt
 	return err
 }
 
+// Sent names the record a message was written to: its address in history and
+// the id minted for it. Both are zero when the record could not be written —
+// there is then nothing to name.
+type Sent struct {
+	Seq       session.HistorySeq
+	MessageID string
+}
+
 // sendEvent delivers one message to the agent, records it, and tells subscribers.
-// It returns the record's address in history, or session.NoHistorySeq if there
-// is none.
-func (c *Client) sendEvent(ctx context.Context, sessionID string, event agent.MessageEvent, attachments []agent.Attachment, exclude any) (session.HistorySeq, error) {
+// It returns what names the record, or the zero Sent if there is none.
+func (c *Client) sendEvent(ctx context.Context, sessionID string, event agent.MessageEvent, attachments []agent.Attachment, exclude any) (Sent, error) {
 	proc, err := c.getOrCreateProcess(ctx, sessionID)
 	if err != nil {
-		return session.NoHistorySeq, err
+		return Sent{}, err
 	}
 
 	// Before the append, not after: a refused message must leave no trace. A
@@ -174,10 +183,10 @@ func (c *Client) sendEvent(ctx context.Context, sessionID string, event agent.Me
 	// does, and a work nudged into a session that is holding a request open is
 	// nudged into nothing.
 	if proc.TurnState().AwaitingUserAnswer() {
-		return session.NoHistorySeq, ErrTurnAwaitingAnswer
+		return Sent{}, ErrTurnAwaitingAnswer
 	}
 	if len(attachments) > 0 && !proc.ReceivesAttachments() {
-		return session.NoHistorySeq, ErrAttachmentsUnsupported
+		return Sent{}, ErrAttachmentsUnsupported
 	}
 	for _, a := range attachments {
 		event.Attachments = append(event.Attachments, a.File)
@@ -204,7 +213,7 @@ func (c *Client) sendEvent(ctx context.Context, sessionID string, event agent.Me
 
 	openedTurn, err := proc.SendMessage(agent.Prompt{Text: event.Content, ID: event.MessageID, Attachments: attachments})
 	if err != nil {
-		return session.NoHistorySeq, err
+		return Sent{}, err
 	}
 
 	if c.broadcast != nil {
@@ -223,7 +232,7 @@ func (c *Client) sendEvent(ctx context.Context, sessionID string, event agent.Me
 		c.noteIngested(ctx, sessionID, event.MessageID)
 	}
 
-	return seq, nil
+	return Sent{Seq: seq, MessageID: event.MessageID}, nil
 }
 
 // noteIngested writes the read point for an agent that cannot report its own:

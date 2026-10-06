@@ -16,6 +16,8 @@ import { normalizeCommand, readHistorySeq } from "../messageReducer";
 /** What the server said about a message it accepted; see `MessageResult`. */
 export interface SentMessage {
 	seq?: HistorySeq;
+	/** See `UserMessage.messageId`. */
+	messageId?: string;
 	/**
 	 * Present when the server wrote the text the agent was sent rather than
 	 * taking it as typed: the prompt a Pockode command expanded to, with the
@@ -97,6 +99,7 @@ export function createChatActions(
 			const files = parseFileBlocks(result?.attachments);
 			return {
 				...(seq !== undefined ? { seq } : {}),
+				...(result?.message_id ? { messageId: result.message_id } : {}),
 				...(files ? { attachments: files } : {}),
 				...(typeof result?.content === "string"
 					? {

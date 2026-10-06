@@ -13,6 +13,7 @@ import {
 	useState,
 } from "react";
 import { useChatMessages } from "../../hooks/useChatMessages";
+import { readDraft } from "../../hooks/useComposerDraft";
 import { SKELETON_DELAY_MS, useDelayedFlag } from "../../hooks/useDelayedFlag";
 import { useForkSession } from "../../hooks/useForkSession";
 import { useForkSupport } from "../../hooks/useForkSupport";
@@ -45,6 +46,7 @@ import type {
 	HistorySeq,
 	PermissionRequest,
 	QuestionAnswerRecord,
+	UserMessage,
 } from "../../types/message";
 import {
 	isGitOverlay,
@@ -52,6 +54,7 @@ import {
 	type WorkSegment,
 } from "../../types/overlay";
 import type { AgentType } from "../../types/settings";
+import { restoreIntoDraft } from "../../utils/discardedMessage";
 import { type ForkAnchor, resolveForkAnchor } from "../../utils/forkAnchor";
 import { buildForkTitle } from "../../utils/forkTitle";
 import { parsePockodeCommand } from "../../utils/pockodeCommand";
@@ -602,6 +605,25 @@ function ChatPanel({
 		setInputFocusRequest((n) => n + 1);
 	}, [resendText, resendMessage, sessionId]);
 
+	// Messages a Stop threw away, back into the composer: added after whatever
+	// is there and never over it, only the parts it is missing, and never sent
+	// (docs/discarded-messages-ui.md). The draft is read at the press, so the
+	// memoized bubbles keep one handler.
+	const handleRestoreMessages = useCallback(
+		(restored: UserMessage[]) => {
+			const { text, attachments } = restoreIntoDraft(
+				readDraft(sessionId),
+				restored,
+			);
+			if (text !== undefined) inputActions.set(sessionId, text);
+			if (attachments.length > 0) {
+				attachmentActions.adopt(sessionId, attachments);
+			}
+			setInputFocusRequest((n) => n + 1);
+		},
+		[sessionId],
+	);
+
 	// Whether the answer panel is open. Held rather than derived from
 	// `unanswered.length`, which is the obvious shortcut and a lossy one: the
 	// panel has to stay up saying "Nothing left to answer." when the last
@@ -721,6 +743,20 @@ function ChatPanel({
 
 	const unanswered = turn.unanswered ?? [];
 
+	// The seen set below holds only what is still waiting. A question that
+	// leaves the list leaves the set too, so one coming back — its answer
+	// thrown away unread by a Stop (docs/answering-ui.md §4) — is one this
+	// stretch has not shown: the close was about it waiting, and the answer
+	// since given has been taken back. Not before the first snapshot, whose
+	// placeholder turn carries no list at all.
+	if (isSessionDetailLoaded) {
+		for (const id of seenQuestionIdsRef.current) {
+			if (!unanswered.some((q) => q.request_id === id)) {
+				seenQuestionIdsRef.current.delete(id);
+			}
+		}
+	}
+
 	// The panel shows itself. Nothing has to be pressed to read a question, and
 	// the one way it stays down is the user having closed it during this same
 	// stretch of looking at this chat.
@@ -738,7 +774,7 @@ function ChatPanel({
 	// uncovered transcript first, and the panel appearing a beat after the chat
 	// reads as something the app did rather than as the state it was in.
 	//
-	// Only the open branch writes the set, and it says one thing: what is on
+	// Only the open branch adds to the set, and it says one thing: what is on
 	// screen has been seen. Opening leaves it alone and lets the very next
 	// render — the one this setState causes, before anything is painted — do
 	// the writing, so a render that runs twice (StrictMode does that) cannot
@@ -1096,17 +1132,17 @@ function ChatPanel({
 				forkedFromSessionId={forkedFromSessionId}
 				onOpenSession={onSelectSession}
 				// Forking without a way to open the result would leave the user in
-				// the parent with no sign anything happened, so the menu waits for
-				// a host that can navigate. Today that withholds the whole slot,
-				// fork being the only row in the menu; a second action needing no
-				// navigation would move this gate onto fork's own row instead
-				// (docs/session-fork-ui.md, "Which rows reserve a slot").
+				// the parent with no sign anything happened, so the fork row waits
+				// for a host that can navigate. Restoring a discarded message needs
+				// none and brings its own slot (docs/session-fork-ui.md, "Which rows
+				// reserve a slot").
 				onForkMessage={
 					!isReadOnly && onSelectSession && forkSupport !== "none"
 						? handleStartFork
 						: undefined
 				}
 				onSignIn={isReadOnly ? undefined : handleSignIn}
+				onRestoreMessages={isReadOnly ? undefined : handleRestoreMessages}
 			/>
 		);
 	};

@@ -53,6 +53,9 @@ const (
 	// EventTypeMessageIngested says the agent has taken in a message that
 	// reached it while it was already working. See MessageIngestedEvent.
 	EventTypeMessageIngested EventType = "message_ingested"
+	// EventTypeMessageDiscarded says a Stop threw away a message the agent had
+	// not read yet. See MessageDiscardedEvent.
+	EventTypeMessageDiscarded EventType = "message_discarded"
 	// EventTypeThinking is a finished stretch of the agent's thinking. See
 	// ThinkingEvent.
 	EventTypeThinking EventType = "thinking"
@@ -1029,6 +1032,33 @@ func (MessageIngestedEvent) EventType() EventType { return EventTypeMessageInges
 func (MessageIngestedEvent) isAgentEvent()        {}
 
 func (e MessageIngestedEvent) ToRecord() EventRecord {
+	return EventRecord{Type: e.EventType(), MessageID: e.MessageID}
+}
+
+// MessageDiscardedEvent says a Stop threw away a message the agent had not read
+// yet: it will never be answered. Only Claude produces it — its Stop carries
+// cancel_queued, which drops what the CLI has taken in but not folded into the
+// turn (see claude.unreadMessages).
+//
+// It is the message's ending, recorded as what it is: something that happened
+// to the message after it was sent. The message record and its read point stay
+// as they were written — a read point may well stand above this, because for
+// Claude Pockode writes that the moment the message is handed over — and a
+// client derives what to show from the two together. It lands inside the turn
+// the Stop ended, ahead of that turn's interrupted record.
+type MessageDiscardedEvent struct {
+	// MessageID names the message record that was discarded. Unlike a read
+	// point's, it is what a client has to go by: the position of this record
+	// says nothing about which message it is about. Never empty — a message
+	// with no record has no id to send the CLI, so it cannot be named as
+	// discarded either.
+	MessageID string
+}
+
+func (MessageDiscardedEvent) EventType() EventType { return EventTypeMessageDiscarded }
+func (MessageDiscardedEvent) isAgentEvent()        {}
+
+func (e MessageDiscardedEvent) ToRecord() EventRecord {
 	return EventRecord{Type: e.EventType(), MessageID: e.MessageID}
 }
 

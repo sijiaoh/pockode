@@ -216,15 +216,15 @@ func (h *rpcMethodHandler) handleMessage(ctx context.Context, conn *jsonrpc2.Con
 		log.Info("received prompt", "length", len(content), "attachments", len(attached))
 	}
 
-	var seq session.HistorySeq
+	var sent chat.Sent
 	var err error
 	if isCommand {
-		seq, err = wt.ChatClient.SendCommandExcluding(ctx, params.SessionID, content, cmd, attached, h.state.getNotifier())
+		sent, err = wt.ChatClient.SendCommandExcluding(ctx, params.SessionID, content, cmd, attached, h.state.getNotifier())
 	} else if len(params.Answering) > 0 {
-		seq, content, err = wt.ChatClient.SendAnswers(ctx, params.SessionID,
+		sent, content, err = wt.ChatClient.SendAnswers(ctx, params.SessionID,
 			chatAnswers(params.Answering), h.state.getNotifier())
 	} else {
-		seq, err = wt.ChatClient.SendMessageExcluding(ctx, params.SessionID, content, attached, h.state.getNotifier())
+		sent, err = wt.ChatClient.SendMessageExcluding(ctx, params.SessionID, content, attached, h.state.getNotifier())
 	}
 	if err != nil {
 		h.replyErrorForChat(ctx, conn, req, params.SessionID, err)
@@ -254,8 +254,8 @@ func (h *rpcMethodHandler) handleMessage(ctx context.Context, conn *jsonrpc2.Con
 	}
 
 	// This connection is the one excluded from the broadcast, so the reply is
-	// where it learns its own message's seq (see rpc.MessageResult).
-	result := rpc.MessageResult{Seq: seq}
+	// where it learns its own message's seq and id (see rpc.MessageResult).
+	result := rpc.MessageResult{Seq: sent.Seq, MessageID: sent.MessageID}
 	if isCommand {
 		result.Content, result.Command = content, &cmd
 	} else if len(params.Answering) > 0 {

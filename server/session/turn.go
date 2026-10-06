@@ -149,6 +149,17 @@ type TurnState struct {
 	// running, idle or blocked exactly as it would have been without one.
 	// Nothing is stuck — the agent posted it and carried on.
 	Unanswered []PendingQuestion `json:"unanswered,omitempty"`
+	// Delivered are the questions answered by a message the open turn may not
+	// have read yet: a Stop can still discard it, and SignalMessageDiscarded
+	// moves its questions back to Unanswered. Every turn ending clears it — a
+	// message the CLI took in before its turn ended has been read, and only a
+	// Stop discards — so it never outlives the turn it was answered in.
+	//
+	// Not stored and not sent, like OpenedAt and for the same reason: no turn
+	// survives a restart, so neither does a message waiting to be read. It is
+	// Pockode's bookkeeping for a discard that may never come; to a client the
+	// question is answered until the discard says otherwise.
+	Delivered []DeliveredAnswer `json:"-"`
 }
 
 // TurnSignal is one thing that happened to a session, in the vocabulary the
@@ -210,7 +221,17 @@ const (
 	// answered, declined, withdrawn by the agent — because the list only records
 	// that a question is outstanding, and which of the three it was is a fact
 	// about the past, kept in the transcript where facts about the past belong.
+	//
+	// TurnInput.MessageID says the answer went out in that message, and the
+	// question is held in Delivered until the message is surely read. Without
+	// one the question is let go entirely, Delivered included: a withdrawal
+	// means nobody is waiting for its answer, read or not.
 	SignalQuestionResolved TurnSignal = "question_resolved"
+	// SignalMessageDiscarded is a Stop throwing away the message named by
+	// TurnInput.MessageID before the agent read it. The questions it answered
+	// are unanswered again. It moves nothing else: the turn ends on the
+	// interrupt that follows it.
+	SignalMessageDiscarded TurnSignal = "message_discarded"
 	// SignalProcessEnded is the process going away — reaped, closed, crashed, or
 	// killed with the server. Every blocker it raised expires with it, and a
 	// turn still open when it arrives was aborted.
@@ -227,6 +248,10 @@ type TurnInput struct {
 	// other signal, and required by that one — a posted signal without it moves
 	// nothing.
 	Question *PendingQuestion
+	// MessageID names the message SignalQuestionResolved delivered an answer in,
+	// or the one SignalMessageDiscarded says was thrown away. Ignored by every
+	// other signal.
+	MessageID string
 	// At is when this happened. Supplied by the caller rather than read from the
 	// clock inside so that the reducer stays a function of its arguments.
 	At time.Time
@@ -283,6 +308,7 @@ func ReduceTurn(state TurnState, in TurnInput) TurnTransition {
 	next := state
 	next.Blockers = cloneBlockers(state.Blockers)
 	next.Unanswered = cloneQuestions(state.Unanswered)
+	next.Delivered = cloneDelivered(state.Delivered)
 
 	var expired []Blocker
 	ended := false
@@ -389,7 +415,27 @@ func ReduceTurn(state TurnState, in TurnInput) TurnTransition {
 		// makes withdrawing one idempotent — two callers can reach the same
 		// question at once (a user answering as the agent withdraws it), and the
 		// loser must not be an error.
+		if in.MessageID == "" {
+			next.Delivered = dropDelivered(next.Delivered, func(d DeliveredAnswer) bool {
+				return d.Question.RequestID == in.RequestID
+			})
+		} else if q, listed := next.PendingQuestionFor(in.RequestID); listed {
+			next.Delivered = append(next.Delivered, DeliveredAnswer{Question: q, MessageID: in.MessageID})
+		}
 		next.Unanswered = dropQuestion(next.Unanswered, in.RequestID)
+
+	case SignalMessageDiscarded:
+		// Appended like a newly posted question rather than put back where it
+		// was: the list is the order questions reached the user, and this one
+		// reaches them again now.
+		for _, d := range next.Delivered {
+			if in.MessageID != "" && d.MessageID == in.MessageID {
+				next.Unanswered = addQuestion(next.Unanswered, d.Question)
+			}
+		}
+		next.Delivered = dropDelivered(next.Delivered, func(d DeliveredAnswer) bool {
+			return d.MessageID == in.MessageID
+		})
 
 	case SignalProcessEnded:
 		expired = next.Blockers
@@ -413,6 +459,10 @@ func ReduceTurn(state TurnState, in TurnInput) TurnTransition {
 	}
 	if !next.Open {
 		next.OpenedAt = time.Time{}
+		// Read, all of them: a turn ends only once the CLI has taken in every
+		// message written before it, and the one thing that discards a message
+		// — a Stop — reports it ahead of the ending (SignalMessageDiscarded).
+		next.Delivered = nil
 	}
 
 	next.Phase = phaseFor(next.Open, next.Blockers)
@@ -535,6 +585,28 @@ func cloneQuestions(questions []PendingQuestion) []PendingQuestion {
 	return out
 }
 
+func cloneDelivered(delivered []DeliveredAnswer) []DeliveredAnswer {
+	if len(delivered) == 0 {
+		return nil
+	}
+	out := make([]DeliveredAnswer, len(delivered))
+	copy(out, delivered)
+	return out
+}
+
+func dropDelivered(delivered []DeliveredAnswer, drop func(DeliveredAnswer) bool) []DeliveredAnswer {
+	kept := delivered[:0]
+	for _, d := range delivered {
+		if !drop(d) {
+			kept = append(kept, d)
+		}
+	}
+	if len(kept) == 0 {
+		return nil
+	}
+	return kept
+}
+
 func cloneBlockers(blockers []Blocker) []Blocker {
 	if len(blockers) == 0 {
 		return nil
@@ -568,6 +640,15 @@ func (t TurnState) equal(other TurnState) bool {
 	}
 	for i := range t.Unanswered {
 		if t.Unanswered[i].RequestID != other.Unanswered[i].RequestID {
+			return false
+		}
+	}
+	if len(t.Delivered) != len(other.Delivered) {
+		return false
+	}
+	for i := range t.Delivered {
+		if t.Delivered[i].Question.RequestID != other.Delivered[i].Question.RequestID ||
+			t.Delivered[i].MessageID != other.Delivered[i].MessageID {
 			return false
 		}
 	}

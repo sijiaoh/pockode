@@ -1348,6 +1348,8 @@ func turnInputFor(event agent.AgentEvent) (session.TurnInput, bool) {
 		in.Signal = session.SignalInterrupted
 	case agent.ProcessEndedEvent:
 		in.Signal = session.SignalProcessEnded
+	case agent.MessageDiscardedEvent:
+		in.Signal, in.MessageID = session.SignalMessageDiscarded, e.MessageID
 	default:
 		switch {
 		// The tool results that are not content: the record of how background

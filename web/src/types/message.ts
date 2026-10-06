@@ -360,6 +360,13 @@ export type ContentPart =
 			status: QuestionRecordStatus;
 			/** What was said back. Set on `answered` and `declined`. */
 			answer?: QuestionAnswerRecord;
+			/**
+			 * The `message_id` of the message that carried `answer`, when its record
+			 * had one. It is how the card learns that a Stop threw that answer away
+			 * unread (docs/answering-ui.md §6), which is derived as the card is drawn,
+			 * never written onto it.
+			 */
+			answerMessageId?: string;
 			/** Absent reason on a `cancelled` card means the agent withdrew it. */
 			reason?: ExpiryReason;
 			/**
@@ -446,6 +453,14 @@ export interface UserMessage {
 	 * those by position.
 	 */
 	anchorSeq?: HistorySeq;
+	/**
+	 * The server's id for the message record — what a later record names it by
+	 * (`message_discarded`). Not `id`, which is this client's key for the row and
+	 * is made up afresh on every replay. On the sender's echo it arrives with the
+	 * `chat.message` reply; absent until then, and for good when the record could
+	 * not be written or the server is too old to send one.
+	 */
+	messageId?: string;
 	// Present only for system-driven messages; absent means a user-typed message.
 	source?: MessageOrigin;
 	subtype?: string;
@@ -514,6 +529,14 @@ export interface AssistantMessage {
 	 * running. Nothing renders it.
 	 */
 	openedByCard?: true;
+	/**
+	 * The messages the Stop that ended this turn threw away unread, by their
+	 * `messageId`, in the order the records came. The turn is where the records
+	 * stand, and where the summary of what the Stop did is drawn; each message's
+	 * own bubble learns its ending by being named here
+	 * (docs/discarded-messages-ui.md).
+	 */
+	discardedMessageIds?: string[];
 }
 
 export type Message = UserMessage | AssistantMessage;
@@ -822,6 +845,8 @@ export interface MessageAttachmentParams {
  */
 export interface MessageResult {
 	seq?: HistorySeq;
+	/** The id the message's record carries; omitted exactly when `seq` is. */
+	message_id?: string;
 	/**
 	 * Set when the server wrote the text the agent was sent: the prompt a Pockode
 	 * command expanded to (with `command` as the server parsed it), or the body
@@ -1161,6 +1186,7 @@ export type ServerMethod =
 	| "system"
 	| "message"
 	| "message_ingested"
+	| "message_discarded"
 	| "command_output";
 
 export type ServerNotification =
@@ -1178,6 +1204,8 @@ export type ServerNotification =
 	| {
 			type: "message";
 			content: string;
+			/** See `UserMessage.messageId`. */
+			message_id?: string;
 			origin?: MessageOrigin;
 			subtype?: string;
 			meta?: SystemMessageMeta;
@@ -1345,5 +1373,16 @@ export type ServerNotification =
 			 */
 			type: "message_ingested";
 			message_id?: string;
+	  }
+	| {
+			/**
+			 * A Stop threw away a message the agent had not read: it will never be
+			 * answered (Claude only). Lands inside the turn the Stop ended, ahead
+			 * of its `interrupted`; a read point for the same message may stand
+			 * above it, and this one wins. Unlike the read point it is joined by
+			 * `message_id` — its position says which turn, not which message.
+			 */
+			type: "message_discarded";
+			message_id: string;
 	  }
 	| { type: "command_output"; content: string };

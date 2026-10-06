@@ -198,10 +198,16 @@ type QuestionAnswerParams struct {
 // Pockode command expanded to, with Command beside it as parsed, or the body
 // written from the answers of a message carrying Answering. The sender has only
 // what it sent, and this reply is its one way to learn what the agent was sent.
+//
+// MessageID is the id the message's record carries, omitted exactly when Seq
+// is. It is how later records name this message — above all message_discarded,
+// a Stop throwing it away unread, which the sender has to find on the very
+// bubble it drew itself.
 type MessageResult struct {
-	Seq     session.HistorySeq       `json:"seq,omitempty"`
-	Content string                   `json:"content,omitempty"`
-	Command *agent.CommandInvocation `json:"command,omitempty"`
+	Seq       session.HistorySeq       `json:"seq,omitempty"`
+	MessageID string                   `json:"message_id,omitempty"`
+	Content   string                   `json:"content,omitempty"`
+	Command   *agent.CommandInvocation `json:"command,omitempty"`
 	// Attachments describe the files the message carried as its record does —
 	// type, size and dimensions read from the stored bytes — for the same
 	// reason as Content: the sender is left out of the broadcast.

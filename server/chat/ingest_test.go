@@ -41,7 +41,8 @@ func TestClient_MidTurnMessageRecordsTheReadPoint(t *testing.T) {
 	f := newMidTurnFixture(t)
 	sess := f.startTurn(t)
 
-	if _, err := f.client.SendMessageExcluding(context.Background(), "sess", "second", nil, nil); err != nil {
+	reply, err := f.client.SendMessageExcluding(context.Background(), "sess", "second", nil, nil)
+	if err != nil {
 		t.Fatalf("SendMessageExcluding: %v", err)
 	}
 
@@ -66,6 +67,11 @@ func TestClient_MidTurnMessageRecordsTheReadPoint(t *testing.T) {
 	sent := sess.sent()
 	if len(sent) != 2 || sent[1].ID != second.MessageID {
 		t.Errorf("prompts handed to the agent = %+v, want the second carrying %q", sent, second.MessageID)
+	}
+	// And so was the sender, which the broadcast of the record leaves out: it
+	// has to recognise its own message when a later record names it.
+	if reply.MessageID != second.MessageID {
+		t.Errorf("sender told id %q, want the record's %q", reply.MessageID, second.MessageID)
 	}
 
 	// Everyone is told, the sender included: unlike the message itself, no

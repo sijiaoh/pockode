@@ -217,3 +217,36 @@ func TestChatMessagesHistory_RejectsBadRequests(t *testing.T) {
 		})
 	}
 }
+
+// The sender is left out of the broadcast of its own message, so the reply is
+// the one place it learns how that record is named — by seq to fork from it,
+// by message_id to find it again when a later record (a Stop discarding it) is
+// about it. Both have to be the record's own, as a reload would show it.
+func TestChatMessage_ReplyNamesTheRecord(t *testing.T) {
+	env := newTestEnv(t, &mockAgent{})
+	if _, err := env.getMainWorktree().SessionStore.Create(bgCtx, "sess", session.CreateSpec{}); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	reply := env.sendMessage("sess", "hello")
+
+	page := env.subscribeChatMessagesWithLimit("sess", 10)
+	if len(page.History) == 0 {
+		t.Fatal("history is empty, want the message record")
+	}
+	var rec struct {
+		Type      string             `json:"type"`
+		MessageID string             `json:"message_id"`
+		Seq       session.HistorySeq `json:"seq"`
+	}
+	if err := json.Unmarshal(page.History[0], &rec); err != nil {
+		t.Fatalf("unparseable record: %v", err)
+	}
+	if rec.Type != "message" || rec.MessageID == "" {
+		t.Fatalf("first record = %+v, want the message carrying its id", rec)
+	}
+	if reply.Seq != rec.Seq || reply.MessageID != rec.MessageID {
+		t.Errorf("reply named seq %d id %q, want the record's seq %d id %q",
+			reply.Seq, reply.MessageID, rec.Seq, rec.MessageID)
+	}
+}

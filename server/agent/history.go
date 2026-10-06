@@ -76,10 +76,11 @@ type EventRecord struct {
 	Attachments []FileBlock   `json:"attachments,omitempty"`
 	Origin      MessageOrigin `json:"origin,omitempty"`
 	// MessageID is Pockode's own id for a message, carried by the message record
-	// itself and by the message_ingested record that says the agent read it. It
-	// is what joins the two, and it exists because position cannot do that job:
-	// several messages can be queued into one turn, and they are read one at a
-	// time.
+	// itself, by the message_ingested record that says the agent read it, and by
+	// the message_discarded record that says a Stop threw it away unread. It is
+	// what joins them, and it exists because position cannot do that job:
+	// several messages can be queued into one turn, and they are read — or
+	// discarded — one at a time.
 	//
 	// Pockode's own id rather than the agent's: the agent that echoes one back
 	// (Codex) echoes back the id it was given, and the agent that echoes nothing

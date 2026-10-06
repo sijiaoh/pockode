@@ -247,12 +247,12 @@ func TestClient_MessageWithNoRecordHasNoAddress(t *testing.T) {
 		broadcastSeq = seq
 	})
 
-	seq, err := client.SendMessageExcluding(context.Background(), "sess", "hello", nil, nil)
+	sent, err := client.SendMessageExcluding(context.Background(), "sess", "hello", nil, nil)
 	if err != nil {
 		t.Fatalf("SendMessageExcluding = %v, want the prompt to go through anyway", err)
 	}
-	if seq.Valid() {
-		t.Errorf("seq = %d, want no address for a record that was not written", seq)
+	if sent != (Sent{}) {
+		t.Errorf("sent = %+v, want neither an address nor an id for a record that was not written", sent)
 	}
 	if broadcastSeq.Valid() {
 		t.Errorf("broadcast seq = %d, want no address for a record that was not written", broadcastSeq)

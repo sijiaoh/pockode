@@ -814,6 +814,7 @@ export function useChatMessages({
 				// the message unaddressable, as every locally sent one used to be.
 				const {
 					seq,
+					messageId,
 					expanded,
 					attachments: described,
 				} = await sendMessage(
@@ -832,12 +833,17 @@ export function useChatMessages({
 					//
 					// The files likewise: the echo had only the browser's guess at each
 					// type, the reply has what the stored bytes are.
+					//
+					// And the record's id, which is how a Stop throwing this message
+					// away names it: without it the one tab that pressed Stop is the
+					// one that could not show the message's ending.
 					const update = {
 						...expanded,
 						...(described ? { attachments: described } : {}),
+						...(messageId ? { messageId } : {}),
 					};
 					const filled =
-						expanded || described
+						expanded || described || messageId
 							? prev.map((m) =>
 									m.id === userMessageId && m.role === "user"
 										? { ...m, ...update }
@@ -849,7 +855,9 @@ export function useChatMessages({
 					// them itself: the sender is left out of the broadcast that
 					// carries the record, so nothing else is coming to do it. Only
 					// after the send — a refused answer settles nothing.
-					return answers ? applyAnswering(stamped, answers) : stamped;
+					return answers
+						? applyAnswering(stamped, answers, messageId)
+						: stamped;
 				});
 				// Not at click time: the server records a slash command's use only
 				// once the send has gone through, and a list fetched in between would

@@ -625,6 +625,36 @@ describe("ChatPanel", () => {
 			expect(screen.queryByText("Pending")).not.toBeInTheDocument();
 		});
 
+		// This tab's own answer, thrown away by a Stop whose record lands before
+		// the reply naming the answer's id: the card must still find out.
+		it("stops calling the card Answered when a Stop threw the answer away", async () => {
+			const user = userEvent.setup();
+			let reply: (sent: SentMessage) => void = () => {};
+			mockState.sendMessage.mockReturnValueOnce(
+				new Promise((resolve) => {
+					reply = resolve;
+				}),
+			);
+			seedUnansweredQuestion();
+			render(<ChatPanel {...defaultProps} />);
+			await waitForHistoryLoad();
+
+			const panel = within(answerPanel());
+			await user.click(panel.getByRole("radio", { name: /SQLite/ }));
+			await user.click(panel.getByRole("button", { name: "Send" }));
+			act(() => {
+				mockState.onNotification?.({
+					type: "message_discarded",
+					message_id: "m-9",
+				});
+				mockState.onNotification?.({ type: "interrupted" });
+			});
+			act(() => reply({ seq: 3, messageId: "m-9" }));
+
+			expect(await screen.findByText("Not read")).toBeInTheDocument();
+			expect(screen.queryByText("Answered")).not.toBeInTheDocument();
+		});
+
 		// Nothing was written and nothing was delivered, so the transcript must
 		// look exactly as it did — no phantom message, no error bubble under it.
 		it("takes its echo back when the server refuses the whole message", async () => {
@@ -1883,6 +1913,28 @@ describe("ChatPanel", () => {
 
 				// "Not now" was said about what was on screen at the time. This one
 				// was not.
+				expect(answerPanel()).toBeInTheDocument();
+			});
+
+			// A Stop threw away the message answering it before the agent read it,
+			// so the server lists the question again. The close was about it
+			// waiting, and it has been answered since.
+			it("comes back for a question whose answer was taken back", async () => {
+				const user = userEvent.setup();
+				seedUnansweredQuestion();
+				render(<ChatPanel {...defaultProps} />);
+				await waitForHistoryLoad();
+				await closeThePanel(user);
+
+				const listing = (unanswered: (typeof question)[]) =>
+					act(() =>
+						acceptSetting({
+							turn: { phase: "idle", open: false, since: "", unanswered },
+						}),
+					);
+				listing([]);
+				listing([question]);
+
 				expect(answerPanel()).toBeInTheDocument();
 			});
 		});
@@ -4830,6 +4882,165 @@ describe("ChatPanel", () => {
 					"test-session",
 				),
 			);
+		});
+	});
+
+	// A Stop that threw away a message the agent had not read
+	// (docs/discarded-messages-ui.md). The ending is drawn on the message, and
+	// the end of the stopped turn offers it back to the composer.
+	describe("discarded messages", () => {
+		const stoppedTurn = [
+			{ type: "message", content: "Start", message_id: "m-1", seq: 1 },
+			{ type: "text", content: "Working", seq: 2 },
+			{ type: "message", content: "Do X instead", message_id: "m-2", seq: 3 },
+			{ type: "message_ingested", message_id: "m-2", seq: 4 },
+			{ type: "message_discarded", message_id: "m-2", seq: 5 },
+			{ type: "interrupted", seq: 6 },
+		];
+		const restoreButton = () =>
+			screen.getByRole("button", { name: "Restore to input" });
+
+		it("draws the ending on the message and restores it into the input", async () => {
+			const user = userEvent.setup();
+			mockState.mockHistory = stoppedTurn;
+			render(<ChatPanel {...defaultProps} />);
+			await waitForHistoryLoad();
+
+			// On the message it happened to, and on no other.
+			expect(
+				await screen.findAllByText("Not read — won't be answered"),
+			).toHaveLength(1);
+			const transcript = document.body.textContent ?? "";
+			expect(transcript.indexOf("Do X instead")).toBeLessThan(
+				transcript.indexOf("Not read — won't be answered"),
+			);
+			expect(
+				screen.getByText("1 unread message was discarded."),
+			).toBeInTheDocument();
+
+			await user.click(restoreButton());
+
+			expect(screen.getByRole("textbox")).toHaveValue("Do X instead");
+			// Not sent: restoring only fills the draft.
+			expect(mockState.sendMessage).not.toHaveBeenCalled();
+			expect(
+				screen.getByRole("button", { name: "In input" }),
+			).toBeInTheDocument();
+		});
+
+		it("adds to a draft the user is writing rather than replacing it", async () => {
+			const user = userEvent.setup();
+			mockState.mockHistory = stoppedTurn;
+			render(<ChatPanel {...defaultProps} />);
+			await waitForHistoryLoad();
+
+			await user.type(screen.getByRole("textbox"), "Half a thought");
+			await user.click(
+				await screen.findByRole("button", { name: "Restore to input" }),
+			);
+
+			expect(screen.getByRole("textbox")).toHaveValue(
+				"Half a thought\n\nDo X instead",
+			);
+		});
+
+		// The tab that sent the message learns its id from the reply, which may
+		// land after the Stop's record: the ending is read off both whenever they
+		// are both there, not looked up once when the record arrives.
+		it("marks this tab's own message, whichever of reply and record comes first", async () => {
+			const user = userEvent.setup();
+			let reply: (sent: SentMessage) => void = () => {};
+			mockState.sendMessage.mockReturnValueOnce(
+				new Promise((resolve) => {
+					reply = resolve;
+				}),
+			);
+			render(<ChatPanel {...defaultProps} />);
+			await waitForHistoryLoad();
+
+			await user.type(screen.getByRole("textbox"), "Do X instead");
+			await user.click(screen.getByRole("button", { name: /Send/ }));
+			act(() => {
+				mockState.onNotification?.({
+					type: "message_discarded",
+					message_id: "m-9",
+				});
+				mockState.onNotification?.({ type: "interrupted" });
+			});
+			expect(
+				await screen.findByText("1 unread message was discarded."),
+			).toBeInTheDocument();
+			expect(
+				screen.queryByText("Not read — won't be answered"),
+			).not.toBeInTheDocument();
+			// Not "scroll up for it": there is no earlier history, only a reply
+			// still on its way.
+			expect(screen.queryByText(/earlier history/)).not.toBeInTheDocument();
+
+			act(() => reply({ seq: 1, messageId: "m-9" }));
+
+			expect(
+				await screen.findByText("Not read — won't be answered"),
+			).toBeInTheDocument();
+		});
+
+		// A command only runs as the whole message, so it is never appended to
+		// words already in the input.
+		it("refuses to put a command after a draft, and says why", async () => {
+			const user = userEvent.setup();
+			mockState.mockHistory = [
+				{ type: "message", content: "Start", message_id: "m-1", seq: 1 },
+				{
+					type: "message",
+					content: "expanded prompt",
+					command: { name: "pockode-lead", args: "now" },
+					message_id: "m-2",
+					seq: 2,
+				},
+				{ type: "message_discarded", message_id: "m-2", seq: 3 },
+				{ type: "interrupted", seq: 4 },
+			];
+			render(<ChatPanel {...defaultProps} />);
+			await waitForHistoryLoad();
+
+			await user.type(screen.getByRole("textbox"), "Something else");
+			await user.click(
+				await screen.findByRole("button", { name: "Restore to input" }),
+			);
+
+			expect(screen.getByRole("textbox")).toHaveValue("Something else");
+			expect(
+				screen.getByText(
+					"Clear the input first. A command only runs as a whole message.",
+				),
+			).toBeInTheDocument();
+
+			await user.clear(screen.getByRole("textbox"));
+			await user.click(restoreButton());
+			expect(screen.getByRole("textbox")).toHaveValue("/pockode-lead now");
+		});
+
+		// Restoring needs no navigation, so the message's menu offers it even
+		// where fork is not on offer at all.
+		it("offers restoring from the message's menu", async () => {
+			const user = userEvent.setup();
+			mockState.mockHistory = stoppedTurn;
+			render(<ChatPanel {...defaultProps} />);
+			await waitForHistoryLoad();
+
+			const triggers = await screen.findAllByRole("button", {
+				name: "Actions for your message",
+			});
+			// Only the discarded message has one: no host to fork into here.
+			expect(triggers).toHaveLength(1);
+			await user.click(triggers[0]);
+			await user.click(
+				within(screen.getByRole("dialog")).getByRole("button", {
+					name: "Restore to input",
+				}),
+			);
+
+			expect(screen.getByRole("textbox")).toHaveValue("Do X instead");
 		});
 	});
 });

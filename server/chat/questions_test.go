@@ -1066,3 +1066,98 @@ func TestAnswerQuestion_NoteRulesLikeAnyOther(t *testing.T) {
 		t.Fatalf("error = %v, want ErrAnswerShape saying it takes no note", err)
 	}
 }
+
+// TestSendAnswers_DiscardedAnswerReopensTheQuestion: the answer reached the
+// CLI, so its question left the list, and then a Stop threw the message away
+// unread. The question is the user's to answer again — not answered with
+// something the agent never saw — and answering it again goes through.
+func TestSendAnswers_DiscardedAnswerReopensTheQuestion(t *testing.T) {
+	f := newQuestionFixture(t)
+	answered := f.post(t, "Database")
+	other := f.post(t, "Runtime")
+
+	if _, err := f.client.SendMessageExcluding(context.Background(), "sess", "go", nil, nil); err != nil {
+		t.Fatalf("SendMessageExcluding: %v", err)
+	}
+	sent, _, err := f.client.SendAnswers(context.Background(), "sess", []Answer{
+		{RequestID: answered, Answers: []string{"Postgres"}},
+	}, nil)
+	if err != nil {
+		t.Fatalf("SendAnswers: %v", err)
+	}
+	if sent.MessageID == "" {
+		t.Fatal("the answer went out with no message id for a discard to name")
+	}
+
+	sess := f.agent.session(t, 1)
+	sess.events <- agent.MessageDiscardedEvent{MessageID: sent.MessageID}
+	sess.events <- agent.InterruptedEvent{}
+	waitFor(t, func() bool {
+		meta, _, _ := f.store.Get("sess")
+		return meta.Turn.Phase == session.PhaseIdle
+	})
+
+	if got := requestIDsOf(f.unanswered(t)); !slices.Equal(got, []string{other, answered}) {
+		t.Fatalf("unanswered = %v, want the discarded answer's question back after the one still open", got)
+	}
+	// The transcript is left as it was: the answer was sent, and the discard
+	// is its own record.
+	for _, rec := range f.records(t) {
+		if rec.Type == agent.EventTypeRequestCancelled {
+			t.Errorf("history has %+v, want nothing written about the question itself", rec)
+		}
+	}
+
+	if _, _, err := f.client.SendAnswers(context.Background(), "sess", []Answer{
+		{RequestID: answered, Answers: []string{"SQLite"}},
+	}, nil); err != nil {
+		t.Fatalf("answering again: %v", err)
+	}
+	if got := requestIDsOf(f.unanswered(t)); !slices.Equal(got, []string{other}) {
+		t.Errorf("unanswered = %v, want the second answer to settle it", got)
+	}
+}
+
+// TestWithdrawQuestions_LetsGoOfAnswersInFlight: a step completing between the
+// answer going out and a Stop discarding it leaves the question answered. The
+// agent finished without it, and bringing it back would put it on a step that
+// is over, where nothing will ever withdraw it.
+func TestWithdrawQuestions_LetsGoOfAnswersInFlight(t *testing.T) {
+	f := newQuestionFixture(t)
+	id := f.post(t, "Database")
+
+	if _, err := f.client.SendMessageExcluding(context.Background(), "sess", "go", nil, nil); err != nil {
+		t.Fatalf("SendMessageExcluding: %v", err)
+	}
+	sent, _, err := f.client.SendAnswers(context.Background(), "sess", []Answer{
+		{RequestID: id, Answers: []string{"Postgres"}},
+	}, nil)
+	if err != nil {
+		t.Fatalf("SendAnswers: %v", err)
+	}
+	before := len(f.records(t))
+
+	f.client.WithdrawQuestions(context.Background(), "sess", agent.ReasonStepDone)
+	if got := len(f.records(t)); got != before {
+		t.Errorf("history grew by %d records, want an answered question to get no withdrawal", got-before)
+	}
+
+	sess := f.agent.session(t, 1)
+	sess.events <- agent.MessageDiscardedEvent{MessageID: sent.MessageID}
+	sess.events <- agent.InterruptedEvent{}
+	waitFor(t, func() bool {
+		meta, _, _ := f.store.Get("sess")
+		return meta.Turn.Phase == session.PhaseIdle
+	})
+	if got := f.unanswered(t); len(got) != 0 {
+		t.Errorf("unanswered = %+v, want the question to stay settled", got)
+	}
+}
+
+func requestIDsOf(questions []session.PendingQuestion) []string {
+	ids := make([]string, len(questions))
+	for i, q := range questions {
+		ids[i] = q.RequestID
+	}
+	return ids
+}

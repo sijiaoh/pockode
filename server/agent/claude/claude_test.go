@@ -485,6 +485,9 @@ func agentEventEqual(a, b agent.AgentEvent) bool {
 	case agent.WarningEvent:
 		bv, ok := b.(agent.WarningEvent)
 		return ok && av.Message == bv.Message && av.Code == bv.Code
+	case agent.MessageDiscardedEvent:
+		bv, ok := b.(agent.MessageDiscardedEvent)
+		return ok && av == bv
 	case agent.ErrorEvent:
 		bv, ok := b.(agent.ErrorEvent)
 		return ok && av.Error == bv.Error

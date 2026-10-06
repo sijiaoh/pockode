@@ -1101,10 +1101,14 @@ Within one visit, exactly one thing brings the panel back up on its own: **a
 `request_id` it has not shown yet**. The same list arriving again is not a new
 question, and neither is a question that was on screen when the user closed the
 panel over it — otherwise a close would be undone in the next frame by the very
-question it was closing.
+question it was closing. A question that left the list and came back *is* one it
+has not shown: that happens when a Stop throws away the message answering it
+before the agent read it (§7), and the close was about a question that had since
+been answered.
 
-Mechanically this is one set of ids, "what this visit has put on screen", and
-every way of leaving empties it. A reload needs no code at all: the set is in
+Mechanically this is one set of ids, "what this visit has put on screen and is
+still waiting", and every way of leaving empties it; a question leaving the list
+leaves the set. A reload needs no code at all: the set is in
 memory, so the answer is the empty set by construction. Nothing about it is ever
 written to a record — it is live state about this browser tab, and an event
 record would have no way to stop lying about it.
@@ -1474,6 +1478,21 @@ is what it is — the record of a question, in one of four states.
   (muted). Four states; `Expired` is gone with the thing that produced it — a
   question outlives the process that asked it now, so a process ending is no longer
   an ending for the question.
+- **An answer the agent never read is not `Answered`.** When a Stop throws
+  away the message that answered or declined the card, the chip reads
+  `Not read` (muted, with the bubble's `EyeOff`), and the body adds *"The agent
+  never read this answer: the turn was interrupted first."* after whatever it
+  already said. The form stays filled in and the collapsed summary stays: the
+  answer was given, and the card is still its record. It says nothing about the
+  question being open again, because that is live state and not always true —
+  a step that finished or a work that closed in between leaves the question
+  answered (§7); when it is open, the strip and the panel already say so, and
+  a `Pending` chip here could promise an answer nobody can give. Derived as the
+  card is drawn from the answering message's id and the transcript's discarded
+  messages ([discarded-messages-ui.md](discarded-messages-ui.md)), so the tab
+  that sent the answer, other devices and reloads agree. Answering the reopened
+  question again, or the agent withdrawing it, takes the card over as usual:
+  the server takes neither for a question whose answer stands.
 - **`Declined` and `Cancelled` are told apart in the body, not by the chip's
   colour.** Both are "no answer was given", they differ in who decided, and that
   is a sentence: "You declined to answer this." (plus the note, when there was one)
@@ -1571,6 +1590,7 @@ to carry.
 | Fork | The fork's session has its own unanswered list, with the inherited `request_id`s. The panel is the fork's panel and needs no rule of its own — including the case where the original was answered after the fork point and the copy is open again |
 | A question whose card has not been paged in | Answerable. That is the whole design: the panel reads the list, not the transcript. The `Answer this` opener does not exist for it, because its card is not on screen to hold one |
 | `Answer this` on a card while the panel is already up | Cannot be reached: the card is behind the backdrop and `inert` (§3). It is a way to *that one* question, not a way in, so nothing is lost — the question already has a block in the panel. Closing first reaches the button, and closing keeps every draft (§5) |
+| A Stop throws away the answering message before the agent read it (Claude only) | The question is back on the list, appended at the end, and the panel comes up for it even if it was closed this visit (§4) — its draft is gone with the send, so it is answered afresh. The card reads `Not read` rather than `Answered` (§6), keeping the answer that was given; answering again makes it `Answered` with the new answer. If the step advanced or the work closed in between, the question stays answered — nobody is waiting for it any more. The server side is in [code/agent-integration.md](code/agent-integration.md#a-discarded-answer-reopens-its-question) |
 | An agent answers the question (`question_answer`) | The block leaves the panel by the two rules above; the card reads `Answered`, and the answering message is drawn as the named block of §6 rather than as a user bubble |
 | A permission request arrives while the panel is up | The panel **does not close** — it may hold half-typed answers, and a surface that disappears under the user is worse than one that explains itself. The strip shows row 1 instead of row 2 (which is not rendered anyway while the panel is up), and a submit is refused with the line above. The card itself is behind the backdrop and `inert` whether or not it is scrolled into view, so row 1's jump — which closes the panel on its way, and so waits out a submit in flight — is the only route to it; row 1's Deny and Allow answer it without leaving the panel (§2) |
 | Reduced motion | The panel's anchor scroll degrades, as every scroll in this app does. There is nothing else to degrade: the panel has no enter or leave animation (§8) |

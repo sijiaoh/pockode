@@ -137,7 +137,7 @@ half stands in for the other.
 
 ### Event Types
 
-Events are divided into four categories:
+Events are divided into these categories:
 
 | Category | Event Types | Description |
 |----------|-------------|-------------|
@@ -147,6 +147,7 @@ Events are divided into four categories:
 | **Permission** | `permission_request`, `permission_response`, `request_cancelled` | Tool execution authorization |
 | **Questions** | `question_posted` | a question the agent asked through `question_post`. Nothing waits on it; the answer arrives as a `message` carrying `answering` |
 | **Read point** | `message_ingested` | the agent has taken in a message that reached it mid-turn ([agent-event.md](../agent-event.md#the-read-point-message_ingested)) |
+| **Message ending** | `message_discarded` | a Stop threw away a message the agent had not read; Claude only ([agent-event.md](../agent-event.md#a-discarded-message-message_discarded)) |
 | **Legacy** | `ask_user_question`, `question_response` | the CLI's own blocking question, read from old transcripts and never written ([agent-event.md](../agent-event.md#legacy-ask_user_question-and-question_response)) |
 
 ```go
@@ -2020,11 +2021,12 @@ Claude's `SendInterrupt` sends, in this order:
    would survive the interrupt and run as a turn of its own. So each prompt
    goes out with its message record's id (`Prompt.ID`) as its `uuid`, and every
    one of those the response lists under `cancelled` becomes a
-   `message_discarded` warning quoting the message, ahead of the
-   `InterruptedEvent` so that it lands in the turn the Stop ended. The response
-   is the signal, not the CLI's `command_lifecycle` frames: the message whose
-   turn the interrupt aborts gets a lifecycle `cancelled` too, yet it was read,
-   and is not in the list (measured on 2.1.289). A uuid in the list that
+   `MessageDiscardedEvent` naming the message by that id, ahead of the
+   `InterruptedEvent` so that it lands in the turn the Stop ended
+   ([the record](../agent-event.md#a-discarded-message-message_discarded)).
+   The response is the signal, not the CLI's `command_lifecycle` frames: the
+   message whose turn the interrupt aborts gets a lifecycle `cancelled` too, yet
+   it was read, and is not in the list (measured on 2.1.289). A uuid in the list that
    Pockode did not send — the CLI may enqueue commands of its own — is only
    logged. Two cases go unreported: a message with no record, and so no id, to
    send (its failed history write is already logged as an error); and an older
@@ -2075,6 +2077,48 @@ on, so Stop does not reach them: an agent that scheduled a wakeup can still come
 back after Stop.
 
 Codex has no background tasks, so its interrupt only has the turn to stop.
+
+#### A Discarded Answer Reopens Its Question
+
+A message answering posted questions (`answering`) can be among those a Stop
+discards, and the questions left the unanswered list the moment the message
+reached the CLI (`chat.deliverAnswers`). So the turn keeps them aside rather than
+letting them go: `SignalQuestionResolved` carrying the message's id moves each
+question from `TurnState.Unanswered` into `TurnState.Delivered`, and the
+`message_discarded` event translates to `SignalMessageDiscarded`, which moves the
+ones that message answered back, appended at the end. Nothing is written about
+the question itself: the message record still says it was answered, and the
+discard record says what became of the message — the reopening is live state,
+held where the list is.
+
+`Delivered` lives only as long as the turn. Every ending clears it, because a
+message the CLI took in before its turn ended has been read, and the one thing
+that discards a message reports it ahead of the ending; so it is neither stored
+nor sent, and no restart can find a discard to wait for. Two lifecycle edges
+are settled by the same list:
+
+- **A step advancing or a work closing** lets go of `Delivered` along with
+  withdrawing `Unanswered` (`chat.Client.WithdrawQuestions`), without a record:
+  the question was answered and the transcript says so. A discard arriving after
+  that leaves it answered — bringing it back would put it on a step that is over,
+  where nothing would ever withdraw it.
+- **Two answers racing for one question** are both accepted (see
+  `SendAnswers`), and only the one that took it off the list holds it; a discard
+  of the other changes nothing.
+
+A fork reads the same thing off the copied records (`agent.UnansweredQuestions`):
+a `message_discarded` reopens what the named message answered. It differs from
+the live list in one place, deliberately: a step advancing between the answer
+and the discard writes nothing, so a fork cut after the discard has the question
+open where the source has it answered. That is the truth for the fork — its
+agent never read the answer either — and a fork is a plain session on no work's
+step, so there is no step for the question to be stranded on.
+
+Two narrow windows are left open. A Stop answered before `deliverAnswers` has
+applied its resolve (the CLI round trip has to beat a few lines of Go) finds
+nothing in `Delivered`, and the question stays answered. And a turn that ends
+(`result`) with an answer still queued while a Stop is already in flight clears
+`Delivered` before the interrupt's response can name the message.
 
 #### The Task Lifecycle
 
@@ -2251,7 +2295,7 @@ type controlResponse struct {
 
 | Request | Payload | Sent | Its response |
 |---|---|---|---|
-| `interrupt` | `{subtype: "interrupt", cancel_queued: true}` | on every Stop, by the user or by an expired lease | `InterruptedEvent` — the only thing that ends the turn — preceded by a `message_discarded` warning for each of our uuids under `cancelled` |
+| `interrupt` | `{subtype: "interrupt", cancel_queued: true}` | on every Stop, by the user or by an expired lease | `InterruptedEvent` — the only thing that ends the turn — preceded by a `message_discarded` for each of our uuids under `cancelled` |
 | `stop_task` | `{subtype: "stop_task", task_id}` | on Stop, once for each live non-ambient background task | no event; success logged, error logged with the `task_id` |
 
 ```go
