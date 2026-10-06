@@ -102,6 +102,24 @@ export function enclosingCandidate(el: HTMLElement): HTMLElement {
 	return el.closest<HTMLElement>(`[${ANCHOR_ATTR}]`) ?? el;
 }
 
+/**
+ * Whether the anchor can still say where the reader is. It cannot once its
+ * element has left the container — a page spliced its row into another, a tool
+ * row was replaced by the card that took its place — nor while the element is
+ * still there but not laid out: a row folded into a tool group is only
+ * `hidden`, and an element that is not displayed reports an `offsetTop` of 0,
+ * which would take the view to the top of the loaded transcript. A null
+ * `offsetParent` is what says so, from the same family of reads the anchor is
+ * measured with; nothing the transcript anchors to is `position: fixed`, the
+ * other case that has none.
+ */
+export function anchorHolds(
+	container: HTMLElement,
+	anchor: ScrollAnchor,
+): boolean {
+	return container.contains(anchor.el) && anchor.el.offsetParent !== null;
+}
+
 /** Where the view has to sit for the anchored element to be back in place. */
 export function anchorScrollTop(anchor: ScrollAnchor): number {
 	return anchor.el.offsetTop - anchor.offset;

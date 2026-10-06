@@ -415,8 +415,11 @@ above their eyes would push what they are reading down. Nothing inside a
 collapsible body is a candidate — collapsed, it has no position at all — and
 neither is the first row or its first part ([the paging
 seam](#reading-a-page-on-the-client)). The anchor is taken again on every scroll
-the reader causes, and one whose element has left the list is replaced by a fresh
-anchor for wherever the view is now, never by a return to the tail.
+the reader causes, and one whose element has left the list — or is still in it but
+no longer displayed, like a part folded into a tool group — is replaced by a fresh
+anchor for wherever the view is now, never by a return to the tail. An element that
+is not displayed measures as sitting at the top of the loaded transcript, so
+holding it still would carry the reader there.
 
 **Only the reader's own scrolling changes the state**, and which scroll that was
 is decided by direction rather than by listening for the gestures that caused it:

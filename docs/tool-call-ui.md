@@ -206,7 +206,9 @@ a summary entry before its first part and hides its foldable parts with the
 `hidden` attribute. Nothing is copied or remounted — a pending card is in the
 DOM once, so a jump to it lands, and a row folded and unfolded comes back as it
 was. A hidden part is not a scroll anchor candidate: an element that is not
-displayed measures as sitting at the top.
+displayed measures as sitting at the top. For the same reason a part the reader
+was anchored on that folds away gives up the anchor, and a fresh one is taken
+where the view sits ([agent-chat.md](agent-chat.md#where-the-view-sits)).
 
 **Nothing opens a group but the user, and nothing folds what the user opened.**
 A row's open body is held by the list (`rowExpansionContext.ts`), which keeps a
