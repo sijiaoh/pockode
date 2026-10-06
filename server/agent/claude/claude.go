@@ -582,9 +582,12 @@ type stopTaskMarker struct {
 // a stop_task first, which ends it without waking the model, and the interrupt
 // carries cancel_queued to drop any notification already queued — and with it
 // any message the user sent that the turn had not read yet, which is reported
-// rather than lost (see unreadMessages). Stopping first also makes each stopped
-// notification arrive before the interrupt's acknowledgement, which the turn
-// state relies on. The measurements, and what is
+// rather than lost (see unreadMessages). Stopping first happens to make each
+// stopped notification arrive before the interrupt's acknowledgement (measured
+// on claude 2.1.289), but nothing relies on that order: the notification is
+// recorded as a background result, and that is not a turn signal
+// (agent.ToolResultEvent.SettlesBackgroundWork), so arriving after the
+// acknowledgement cannot reopen the turn. The measurements, and what is
 // deliberately left running (cron jobs), are in docs/code/agent-integration.md
 // under "Stop Ends the Background Work Too".
 //

@@ -185,6 +185,9 @@ func (e EventType) ActivatesSession() bool
   about one at all.
 - `ActivatesSession` — the agent has put something on its own side of the
   conversation. Sets `SessionMeta.Activated` (see [Activation](#activation)).
+  It is not, on its own, what says a turn has resumed: see
+  [Background Waits](#background-waits) for the results it includes that are no
+  turn signal.
 
 **`Persisted` is the one denylist among the four**, and the asymmetry is the
 point rather than an inconsistency to tidy away. The other three are allowlists
@@ -244,6 +247,13 @@ each says a turn is under way without putting anything of the agent's into it.
 (`tool_activity` no longer buys a parked turn extra time: the background lease is
 a flat cap on how long a turn may stay parked, not a silence budget — see
 [The Lease Table](#the-lease-table).)
+
+That gap is not the whole of what must not end a wait. A `tool_result` that
+settles background work (`ToolResultEvent.SettlesBackgroundWork`) is inside
+`ActivatesSession` and still is not the CLI resuming. It stays in, because it
+only ever follows a call the agent made and so cannot cost anyone the escape
+hatch; `process.turnInputFor` keeps it from moving the turn by its subtype,
+which no predicate on the type can see.
 
 The exclusion this section claims is not something the predicate can enforce on
 its own. The CLI's account of the failure arrives as an `assistant` message like
@@ -1892,7 +1902,17 @@ in the transcript where it happened.
 clears the blocker, because it is the only proof the CLI resumed. A `system`
 frame does not, and that exclusion is load-bearing rather than cautious: the
 background task list changing *is* a `system` frame, so counting it would make a
-task **finishing** look like the turn coming back.
+task **finishing** look like the turn coming back. The task's outcome itself is
+excluded for the same reason. A `tool_result` with subtype `background_result` or
+`background_lost` records how background work ended — as the CLI reported it, or
+as Pockode observed it — not the model saying anything, so `turnInputFor` maps it
+to `SignalNoise`: it is stored and shown like any result, but it neither ends a
+wait nor opens a turn. The proof the CLI resumed is what the model writes after
+it. The same holds once the turn
+is over: a task that outlives the wait's budget is recorded when it finishes and
+leaves the session idle, and only the model's reply to it starts a turn. A
+`background_lost` delivered when a session restarts cannot open a turn ahead of
+the prompt the process was started for, either.
 
 **Tracking what is live.** The only usable signal is `system` /
 `background_tasks_changed`, whose payload is every live task after the change.
@@ -1971,10 +1991,11 @@ acknowledges an `interrupt` even with no turn running, so a parked turn gets its
 not, because **an `interrupt` only ends the turn** (measured on claude
 2.1.289). A backgrounded Bash, a `Monitor`, a background subagent all keep
 running. When one finishes, the CLI queues its notification and **starts a new
-turn of its own**, which Pockode correctly reads as the CLI resuming
-(`SignalOutput`). The user pressed Stop, saw `interrupted`, and some time later
-the agent went on talking. Session histories carried instances of exactly that:
-tool calls after an `interrupted`, with no message from the user in between.
+turn of its own**, and what the model writes in it Pockode correctly reads as
+the CLI resuming (`SignalOutput`). The user pressed Stop, saw `interrupted`, and
+some time later the agent went on talking. Session histories carried instances
+of exactly that: tool calls after an `interrupted`, with no message from the
+user in between.
 
 So `SendInterrupt` stops the turn **and the background work it left running**.
 That is what the CLI's own protocol means by Stop: its description of
@@ -2017,14 +2038,14 @@ notification is as small as possible. The order also decides what comes back,
 and on 2.1.289 it was the same every time, for background Bash, Monitor, and
 Bash started by a background subagent: `background_tasks_changed []`, then
 `task_updated status: killed`, then `task_notification status: stopped`, then
-the `stop_task` response, then the interrupt's. The adapter depends on that last
-step. A `stopped` notification arriving *after* the interrupt's acknowledgement
-would read as the CLI resuming and open a turn that only the idle lease would
-end. That has not been observed. Keeping it from happening would mean a
-`background_result` no longer opens a turn, which changes how a parked turn
-resumes, so it is deliberately not done until a CLI is seen breaking the order.
-`TestIntegration_StopDuringBackgroundWait` would catch it: after Stop it watches
-past the time the task would have finished, and any output fails it.
+the `stop_task` response, then the interrupt's. Nothing depends on that last
+step. A `stopped` notification is recorded as a `background_result`, which is not
+a turn signal ([Background Waits](#background-waits)), so one arriving *after*
+the interrupt's acknowledgement is recorded in place and the turn stays aborted.
+`TestIntegration_StopDuringBackgroundWait` checks what Stop is for, not the
+order: after Stop it watches past the time the task would have finished, lets
+the stopped task's own error result through, and fails on anything else — the
+task completing, or the model producing anything.
 
 **A `stop_task` response is never the interrupt's acknowledgement.** The turn
 ends on the interrupt's `control_response` alone. A task that cannot be stopped
@@ -3354,10 +3375,11 @@ directions — the tool is refused where it arrives ([Refusing the CLIs' Own
 Question](#refusing-the-clis-own-question)), and a question an agent asks through
 `question_post` is not a blocker at all.
 
-A `system` frame or a live progress line produces `SignalNoise`, which moves
-nothing at all. It must not clear a `background` blocker (the task list changing
-*is* a `system` frame, so a task finishing would look like the turn coming back),
-and it must not open a turn either: noise keeps arriving after a turn is over — a
+A `system` frame, a live progress line, or a `tool_result` settling background
+work produces `SignalNoise`, which moves nothing at all. It must not clear a
+`background` blocker (the task list changing *is* a `system` frame, so a task
+finishing would look like the turn coming back), and it must not open a turn
+either: noise keeps arriving after a turn is over — a
 background task that outlived its budget goes on reporting progress — and a turn
 nothing started is a turn nothing will end.
 
@@ -3376,8 +3398,9 @@ a restart-killed run leaves behind (see [Restart Repair](#restart-repair)).
 the translation, and it exists because the mapping is not one-to-one in either
 direction: five event types all mean "the agent produced content", while a
 `system` frame means "the turn is alive" and must specifically *not* mean "the
-CLI resumed". Nothing else in the server reads event types to decide what a
-session is doing.
+CLI resumed". Nor is it keyed on the type alone: a `tool_result` settling
+background work is noise, every other one is output. Nothing else in the server
+reads event types to decide what a session is doing.
 
 The send path supplies the two signals no event carries: `SignalPrompt` when a
 prompt goes out, `SignalAnswered` with the request id when an answer goes back.

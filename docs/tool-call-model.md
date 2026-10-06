@@ -383,6 +383,12 @@ already replays tool results over older pages as "update it wherever it is", and
 history is append-only so the later record wins on every path without anyone
 ordering it. A new type would fork all three for no behavioural gain.
 
+Being a result does not make the outcome record a turn signal. It says how the
+work ended, not anything the model said, so it neither ends a
+background wait nor opens a turn; what the model writes after it does
+([Background Waits](code/agent-integration.md#background-waits)). The same holds
+for `background_lost` below.
+
 The `subtype` is what keeps it honest. The placeholder is what the *agent* read;
 the outcome is what *happened*. A row that shows the second without saying so is
 asserting the agent saw something it did not, so both are kept and the UI labels

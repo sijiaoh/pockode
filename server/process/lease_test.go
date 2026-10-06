@@ -344,6 +344,29 @@ func TestLease_ProgressAfterTheTurnEndedDoesNotReviveIt(t *testing.T) {
 	}
 }
 
+// The wait ran out and Pockode ended the turn, but the task is still running and
+// the CLI was never told to give up on it. When it finishes, its result is
+// recorded without reviving anything; what the model then says about it is a
+// turn of its own, as for any output nobody prompted.
+func TestLease_ATaskFinishingAfterTheWaitExpiredIsNotATurn(t *testing.T) {
+	m, mock, store, proc := startedTurn(t, leaseTestBudgets)
+	sess := mock.session(t, "sess-1")
+
+	sess.emit(t, agent.BackgroundWaitEvent{})
+	waitUntil(t, "the turn to park", func() bool { return holdOf(proc) == session.LeaseBackground })
+	m.reapLeasesAsOf(pastBudget(leaseTestBudgets.Background))
+
+	sess.emit(t, agent.ToolResultEvent{ToolUseID: "call-1", Subtype: agent.ToolResultBackgroundResult})
+	// background_wait, the expiry's warning, its done, and the result.
+	waitForHistory(t, store, "sess-1", 4)
+	if turn := proc.turnState(); turn.Phase != session.PhaseIdle {
+		t.Fatalf("phase = %q, want idle: a task finishing is not the agent resuming", turn.Phase)
+	}
+
+	sess.emit(t, agent.TextEvent{Content: "the task finished"})
+	waitUntil(t, "the reply to open a turn", func() bool { return proc.turnState().Phase == session.PhaseRunning })
+}
+
 // A process whose CLI exited on its own is removed from the manager, but nothing
 // set its closed flag — that is reserved for a process Pockode ended. An expiry
 // decided from a snapshot taken a moment earlier must still write nothing: the

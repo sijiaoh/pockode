@@ -149,10 +149,10 @@ func (s backgroundLossStore) clear(log *slog.Logger) {
 // the loss once it has.
 //
 // Per-call results arrive first so that the rows are already true by the time
-// the explanation is read. They are ordinary tool results, which means the
-// process counts as running while they stream (EventType.IndicatesAgentActivity)
-// — and that is accurate rather than incidental: a CLI process is only ever
-// started to carry a message, so a turn is under way here and will end with a
+// the explanation is read. They move no turn (ToolResultEvent.SettlesBackgroundWork):
+// they are Pockode's record of what the last process took down, not anything
+// this one said. Nothing depends on them doing so — a CLI process is only ever
+// started to carry a message, so the turn is the message's, and it ends with a
 // done event of its own.
 func deliverBackgroundLoss(ctx context.Context, events chan<- agent.AgentEvent, loss backgroundLossRecord) bool {
 	for _, toolUseID := range loss.LostCalls {

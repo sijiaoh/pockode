@@ -1350,10 +1350,18 @@ func turnInputFor(event agent.AgentEvent) (session.TurnInput, bool) {
 		in.Signal = session.SignalProcessEnded
 	default:
 		switch {
+		// The tool results that are not content: the record of how background
+		// work ended. A task finishing, or being stopped, is not the
+		// CLI resuming — what the model writes next is — so this must neither
+		// end a wait nor open a turn. Otherwise the stopped notification of a
+		// task Stop ended would reopen the turn whenever it lands after the
+		// interrupt's acknowledgement, an order the CLI never promised.
+		case isBackgroundSettlement(event):
+			in.Signal = session.SignalNoise
 		// Content is the one thing that ends a background wait: it is the proof
-		// that the CLI resumed by itself. ActivatesSession is exactly that set —
-		// what the agent put into the conversation, as opposed to what it said
-		// about it.
+		// that the CLI resumed by itself. ActivatesSession, less the case above, is
+		// exactly that set — what the agent put into the conversation, as opposed
+		// to what it said about it.
 		case event.EventType().ActivatesSession():
 			in.Signal = session.SignalOutput
 		// Everything else that only arrives mid-turn shows the turn is alive
@@ -1368,6 +1376,11 @@ func turnInputFor(event agent.AgentEvent) (session.TurnInput, bool) {
 		}
 	}
 	return in, true
+}
+
+func isBackgroundSettlement(event agent.AgentEvent) bool {
+	result, ok := event.(agent.ToolResultEvent)
+	return ok && result.SettlesBackgroundWork()
 }
 
 // streamEvents routes events to history and emits to the event listener.

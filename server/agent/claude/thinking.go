@@ -140,7 +140,9 @@ func (c *thinkingClock) observe(event agent.AgentEvent, at time.Time) (agent.Age
 			// Work finishing in the background is nothing the agent said, so
 			// it does not cut short a thinking under way, nor start a clock for
 			// a turn that is over. Only a parked turn is brought back by one,
-			// and there it is where the quiet begins.
+			// and there it is where the quiet begins. This is the clock's turn
+			// only: the session's stays parked until the model writes something
+			// (agent.ToolResultEvent.SettlesBackgroundWork).
 			if !c.parked {
 				break
 			}
