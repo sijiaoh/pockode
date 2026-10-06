@@ -6,6 +6,7 @@ import type {
 	ToolRun,
 	ToolRunStatus,
 } from "../types/message";
+import { replayHistory } from "./messageReducer";
 import { type RowEntry, rowEntries } from "./toolGroups";
 
 type Item = { part: ContentPart };
@@ -91,7 +92,7 @@ describe("rowEntries", () => {
 
 	// A summary over one call and a failure says nothing the rows do not, and
 	// costs a line.
-	it("does not group one foldable call beside any number of failures", () => {
+	it("does not group one settled call beside any number of failures", () => {
 		expect(
 			shape(rowEntries([bash("a", "error"), bash("b"), bash("c", "error")])),
 		).toEqual(["a", "b", "c"]);
@@ -121,6 +122,19 @@ describe("rowEntries", () => {
 			"b",
 			"c↓",
 		]);
+	});
+
+	// A cut-short call's background result can land turns later; the call had
+	// settled long before and must stay folded, or its group could dissolve.
+	it("keeps an interrupted call folded once a background result reaches it", () => {
+		expect(
+			shape(
+				rowEntries([
+					read("a", "/x"),
+					bash("b", "interrupted", { fromBackground: true }),
+				]),
+			),
+		).toEqual(["[Read 1 file · 1 interrupted]", "a↓", "b↓"]);
 	});
 
 	it("ends a group at a subagent call and at a plan", () => {
@@ -191,21 +205,43 @@ describe("rowEntries", () => {
 		).toEqual(["[Ran 3 commands]", "a↓", "card:b↓", "b↓", "c↓"]);
 	});
 
-	it("counts a card and its row as one step", () => {
+	it("keeps an approved card's call pinned while it runs", () => {
 		expect(
-			summaryOf([
-				bash("a", "running"),
-				card("b", "allowed"),
-				bash("b", "running"),
-			])?.steps,
-		).toBe(2);
+			shape(
+				rowEntries([
+					bash("a"),
+					card("b", "allowed"),
+					bash("b", "running"),
+					bash("c"),
+				]),
+			),
+		).toEqual(["[Ran 2 commands]", "a↓", "card:b", "b", "c↓"]);
+	});
+
+	it("counts a card and its row as one step", () => {
+		expect(summaryOf([bash("a"), card("b", "allowed"), bash("b")])?.steps).toBe(
+			2,
+		);
+	});
+
+	// A running call may yet turn into a card, a failure or background work;
+	// a group it formed would dissolve again under the reader's eyes.
+	it("does not group calls that have not settled", () => {
+		expect(shape(rowEntries([bash("a"), bash("b", "running")]))).toEqual([
+			"a",
+			"b",
+		]);
 	});
 
 	it("follows a run as it streams in, keyed on its first call", () => {
 		const first = rowEntries([bash("a", "running")]);
 		expect(shape(first)).toEqual(["a"]);
-		const second = rowEntries([bash("a"), bash("b", "running")]);
-		expect(shape(second)).toEqual(["[running b]", "a↓", "b↓"]);
+		const second = rowEntries([
+			bash("a"),
+			bash("b"),
+			read("c", "/x", "running"),
+		]);
+		expect(shape(second)).toEqual(["[running c]", "a↓", "b↓", "c↓"]);
 		const third = rowEntries([bash("a"), bash("b"), read("c", "/x")]);
 		expect(shape(third)).toEqual([
 			"[Ran 2 commands · Read 1 file]",
@@ -226,9 +262,10 @@ describe("rowEntries", () => {
 			bash("b", "error"),
 			bash("c", "running"),
 			bash("d"),
+			bash("e"),
 		]);
 		expect(summary?.current?.id).toBe("c");
-		expect(summary?.steps).toBe(4);
+		expect(summary?.steps).toBe(5);
 	});
 
 	it("does not spin while a card in the group waits on the user", () => {
@@ -248,12 +285,13 @@ describe("rowEntries", () => {
 		const summary = summaryOf([
 			read("a", "/x"),
 			bash("b", "background"),
+			read("e", "/y"),
 			bash("c", "running"),
 			card("d", "pending"),
 		]);
 		expect(summary?.current).toBeUndefined();
 		expect(summary?.running).toBe(1);
-		expect(summary?.segments).toEqual(["Read 1 file"]);
+		expect(summary?.segments).toEqual(["Read 2 files"]);
 	});
 
 	it("stops spinning once its running call goes to the background", () => {
@@ -317,17 +355,6 @@ describe("rowEntries", () => {
 				summaryOf([thinking(1000), bash("a"), thinking(undefined), bash("b")])
 					?.segments,
 			).toEqual(["Ran 2 commands", "Thought"]);
-		});
-
-		it("leaves the thinking out while nothing has settled", () => {
-			expect(
-				summaryOf([
-					thinking(1000),
-					card("a", "pending"),
-					bash("b", "running"),
-					bash("c", "running"),
-				])?.segments,
-			).toEqual([]);
 		});
 
 		it("leaves failed and interrupted calls out of the verbs", () => {
@@ -413,6 +440,100 @@ describe("rowEntries", () => {
 					}),
 				])?.segments,
 			).toEqual(["Ran 1 command", "Read 1 file", "Searched once"]);
+		});
+	});
+
+	// Driven through the reducer, since what dissolved a group was a call
+	// changing kind under it: a row turning into a card, a failure.
+	describe("as the reducer streams a turn in", () => {
+		const toolCall = (id: string, name: string) => ({
+			type: "tool_call",
+			tool_use_id: id,
+			tool_name: name,
+			tool_input: name === "Read" ? { file_path: `/${id}` } : { command: id },
+		});
+		const result = (id: string, isError = false) => ({
+			type: "tool_result",
+			tool_use_id: id,
+			tool_result: "ok",
+			is_error: isError,
+		});
+		const permission = (id: string) => ({
+			type: "permission_request",
+			request_id: `req-${id}`,
+			tool_use_id: id,
+			tool_name: "Bash",
+			tool_input: { command: id },
+		});
+		const allow = (id: string) => ({
+			type: "permission_response",
+			request_id: `req-${id}`,
+			choice: "allow",
+		});
+
+		/** The shape after each record in turn, as the reader saw it then. */
+		function shapes(...records: object[]): string[][] {
+			return records.map((_, end) => {
+				const messages = replayHistory([
+					{ type: "message", content: "Go" },
+					...records.slice(0, end + 1),
+				]);
+				const last = messages.at(-1);
+				const parts = last?.role === "assistant" ? last.parts : [];
+				return shape(rowEntries(parts.map((part) => ({ part }))));
+			});
+		}
+
+		it("never groups a running row that a permission card replaces", () => {
+			expect(
+				shapes(
+					toolCall("r", "Read"),
+					result("r"),
+					toolCall("b", "Bash"),
+					permission("b"),
+				).slice(2),
+			).toEqual([
+				["r", "b"],
+				["r", "card:b"],
+			]);
+		});
+
+		it("pins a failure inside a group without dissolving it", () => {
+			expect(
+				shapes(
+					toolCall("r1", "Read"),
+					result("r1"),
+					toolCall("r2", "Read"),
+					result("r2"),
+					toolCall("b", "Bash"),
+					result("b", true),
+				).slice(4),
+			).toEqual([
+				["[running b]", "r1↓", "r2↓", "b↓"],
+				["[Read 2 files]", "r1↓", "r2↓", "b"],
+			]);
+		});
+
+		// Claude's order: the call, its card in the row's place, and after the
+		// approval nothing but the activity that brings the row back.
+		it("keeps an approved call in sight while it runs, and folds it once it settles", () => {
+			expect(
+				shapes(
+					toolCall("r1", "Read"),
+					result("r1"),
+					toolCall("r2", "Read"),
+					result("r2"),
+					toolCall("b", "Bash"),
+					permission("b"),
+					allow("b"),
+					{ type: "tool_activity", tool_use_id: "b", activity: "Running" },
+					result("b"),
+				).slice(6),
+			).toEqual([
+				["[Read 2 files]", "r1↓", "r2↓", "card:b"],
+				["[Read 2 files]", "r1↓", "r2↓", "card:b", "b"],
+				["[Ran 1 command · Read 2 files]", "r1↓", "r2↓", "card:b↓", "b↓"],
+			]);
 		});
 	});
 });

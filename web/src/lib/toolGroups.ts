@@ -11,7 +11,7 @@ import { isTaskTool, TOOL_VERBS, type ToolVerb, toolVerb } from "./toolSummary";
  * so a group re-derives from scratch on every render and cannot go stale.
  */
 
-/** How many calls that can fold it takes before a run is worth a summary. */
+/** How many settled calls it takes before a run is worth a summary. */
 const MIN_FOLDABLE = 2;
 
 export interface GroupSummary {
@@ -25,7 +25,8 @@ export interface GroupSummary {
 	current?: ToolRun;
 	/**
 	 * What the settled calls did, `Edited 2 files`, in consequence order, and
-	 * then how long the folded thinking took.
+	 * then how long the folded thinking took. Never empty: a group forms only
+	 * on settled calls.
 	 */
 	segments: string[];
 	/** How many folded calls were cut short. */
@@ -77,22 +78,47 @@ interface Member<T> {
 	items: T[];
 }
 
+type Fold = "settled" | "running" | "pinned";
+
 /**
- * Whether a call stays in sight when its group folds. A failure is the one row
- * the reader has to notice. Background work is pinned for good, finished or
- * not: it settles long after the reader moved on, and moving it into the
- * summary then would delete a row above them. A card is pinned until it is
- * answered *and* its row is back — until then the card is all there is of the
- * call, and folding it would show a tick over a command still running.
+ * Where a call stands in its group. Only what cannot be undone folds a row the
+ * reader already has in sight: a call that has settled stays settled, while a
+ * running one may yet turn into a card, a failure or background work and would
+ * pop back out of the summary, dissolving a group it had just formed
+ * (docs/tool-call-ui.md#groups).
+ *
+ * - `settled` — finished, and the only kind that decides whether a group
+ *   exists.
+ * - `running` — a call that never had a card. It joins whatever group its
+ *   settled neighbours form, as the step the group is on, and lies flat while
+ *   they form none. Usually it arrives after the group did and so was never
+ *   in sight; one already on screen folds only when other calls settle into a
+ *   group around it. Either way, if it then turns pinned the group stands on
+ *   its settled calls: the call comes into sight under the summary and
+ *   nothing else moves.
+ * - `pinned` — stays in sight. A failure is the one row the reader has to
+ *   notice. Background work is pinned for good, finished or not: it settles
+ *   long after the reader moved on, and moving it into the summary then would
+ *   delete a row above them. A card is pinned until it is answered *and* its
+ *   call has settled — until the row is back the card is all there is of the
+ *   call, and once it is, the reader who approved the command watches it run
+ *   to the end.
  */
-function isPinned({ row, card }: Member<unknown>): boolean {
-	if (card && (card.status !== "allowed" || !row)) return true;
-	if (!row) return true;
-	return (
-		row.status === "error" ||
-		row.status === "background" ||
-		!!row.fromBackground
-	);
+function foldOf({ row, card }: Member<unknown>): Fold {
+	if (!row || (card && card.status !== "allowed")) return "pinned";
+	// Ahead of `fromBackground`: the reducer keeps an interrupt over any result
+	// that turns up later, background ones included, so a call cut short is
+	// settled before it can be marked and must not come back out of its group.
+	if (row.status === "interrupted") return "settled";
+	if (row.fromBackground) return "pinned";
+	switch (row.status) {
+		case "success":
+			return "settled";
+		case "running":
+			return card ? "pinned" : "running";
+		default:
+			return "pinned";
+	}
 }
 
 function plural(count: number, one: string, many: string): string {
@@ -140,12 +166,8 @@ function summarize<T>(
 		const count = counted.get(verb)?.size;
 		return count ? [VERB_WORDING[verb](count)] : [];
 	});
-	// Least consequential of all, so it is the end a narrow screen cuts; and
-	// never alone, since a summary of nothing but a thought would read as a
-	// settled group while every call in it still waits on the user.
-	if (thoughts.length > 0 && (segments.length > 0 || interrupted > 0)) {
-		segments.push(thoughtLabel(thoughts));
-	}
+	// Least consequential of all, so it is the end a narrow screen cuts.
+	if (thoughts.length > 0) segments.push(thoughtLabel(thoughts));
 	if (interrupted > 0) segments.push(`${interrupted} interrupted`);
 	return {
 		steps: members.length,
@@ -195,14 +217,16 @@ function groupEntries<T extends { part: ContentPart }>(
 		callOf.set(item, `thinking:${item.part.id}`);
 		thoughts.push(...item.part.thoughts);
 	}
-	const folding = members.filter((member) => !isPinned(member));
-	if (folding.length < MIN_FOLDABLE) {
+	const fold = new Map(members.map((member) => [member, foldOf(member)]));
+	const settled = members.filter((member) => fold.get(member) === "settled");
+	if (settled.length < MIN_FOLDABLE) {
 		return items.map((item) => ({
 			kind: "item",
 			item,
 			call: callOf.get(item) ?? "",
 		}));
 	}
+	const folding = members.filter((member) => fold.get(member) !== "pinned");
 	const key = `group:${members[0].call}`;
 	const foldingCalls = new Set(folding.map((member) => member.call));
 	return [

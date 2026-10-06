@@ -703,10 +703,6 @@ describe("MessageItem", () => {
 				message={message([call("tool-1", "make a"), call("tool-2", "make b")])}
 			/>,
 		);
-		// Two running calls fold into a group; open it to reach the row.
-		await user.click(
-			screen.getByRole("button", { name: "Tool calls running" }),
-		);
 		await user.click(screen.getByRole("button", { name: /make b/ }));
 
 		rerender(
@@ -1587,10 +1583,7 @@ describe("MessageItem", () => {
 			rerender(
 				<MessageItem
 					sessionId="session-1"
-					message={message(
-						[bash("a", "running"), bash("b", "running")],
-						"streaming",
-					)}
+					message={message([bash("a"), bash("b")], "streaming")}
 				/>,
 			);
 			expect(row("a")).toBeVisible();

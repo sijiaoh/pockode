@@ -75,28 +75,23 @@ export function ToolGroupSummary({ summary, expanded, onToggle }: Props) {
 			expanded={expanded}
 			onToggle={onToggle}
 			glyph={
-				!stillRunning && summary.segments.length > 0 ? (
+				stillRunning ? (
+					<span className="mt-0.5 size-3 shrink-0" />
+				) : (
 					<Icon
 						className="mt-0.5 size-3 shrink-0 text-th-text-muted"
 						aria-label={summary.interrupted > 0 ? "interrupted" : "done"}
 					/>
-				) : (
-					// Nothing settled yet, or something folded still running, and
-					// nothing spinning either: the group waits on a card that waits
-					// on the user.
-					<span className="mt-0.5 size-3 shrink-0" />
 				)
 			}
 		>
 			<span className="block truncate text-th-text-secondary">
-				{segments.length === 0
-					? stepsLabel(summary.steps)
-					: segments.map((segment, index) => (
-							<Fragment key={segment}>
-								{index > 0 && <span className="text-th-text-muted"> · </span>}
-								{segment}
-							</Fragment>
-						))}
+				{segments.map((segment, index) => (
+					<Fragment key={segment}>
+						{index > 0 && <span className="text-th-text-muted"> · </span>}
+						{segment}
+					</Fragment>
+				))}
 			</span>
 		</RowButton>
 	);
