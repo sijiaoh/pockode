@@ -26,6 +26,28 @@ function changePatches(change: ProposedChangeData): string[] | undefined {
 }
 
 /**
+ * The rows the change is drawn in, for counting what a cut hides: a new
+ * file's lines, or a diff's hunk headers and lines without the file headers
+ * the viewer leaves out.
+ */
+export function changeRowCount(change: ProposedChangeData): number {
+	const patches = changePatches(change);
+	if (!patches) {
+		return change.kind === "write"
+			? change.input.content.replace(/\n+$/, "").split("\n").length
+			: 0;
+	}
+	let rows = 0;
+	for (const patch of patches) {
+		for (const line of patch.split("\n")) {
+			if (line.startsWith("+++") || line.startsWith("---")) continue;
+			if (/^[ +\-@]/.test(line)) rows++;
+		}
+	}
+	return rows;
+}
+
+/**
  * `+N −M`, with a side that is zero or unknown left out rather than `−0`.
  * Muted for a change that was never applied: the counts still say what was
  * asked, but green and red would read as lines that changed.

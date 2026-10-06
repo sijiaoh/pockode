@@ -16,7 +16,7 @@ import type {
 	UserMessage,
 } from "../../types/message";
 import type { AgentType } from "../../types/settings";
-import { Spinner } from "../ui";
+import { Spinner, TRANSCRIPT_HEIGHT_VAR } from "../ui";
 import {
 	DiscardedMessagesContext,
 	useDiscardedMessagesValue,
@@ -161,6 +161,24 @@ function MessageList({
 			messages,
 			loadedHistoryPages,
 		});
+
+	// The view's height, for the blocks inside it whose budget is a share of it
+	// (`ClampedContent`) — a share of the window would be most of a transcript
+	// squeezed under the software keyboard, or between a header and an input.
+	const hasContainer = messages.length > 0;
+	// biome-ignore lint/correctness/useExhaustiveDependencies: hasContainer triggers re-observe when the scroll container mounts
+	useLayoutEffect(() => {
+		const el = scrollRef.current;
+		if (!el) return;
+		const publish = () =>
+			el.style.setProperty(TRANSCRIPT_HEIGHT_VAR, `${el.clientHeight}px`);
+		// At once as well as on resize: the first observation arrives after the
+		// sections have already measured themselves against the fallback.
+		publish();
+		const observer = new ResizeObserver(publish);
+		observer.observe(el);
+		return () => observer.disconnect();
+	}, [hasContainer]);
 
 	// Mirrors the prop rather than closing over it: `requestOlderPage` must keep
 	// its identity, or the sentinel effect below would re-observe every time a page
@@ -453,11 +471,11 @@ function MessageList({
 					    Open — and there the button covered the only number on the line,
 					    while in the middle it covers prose that reads around it. */}
 					{showScrollButton && (
-						// `z-2`: over an open row's bar (`row-bar`, z-index 1, or 2
+						// `z-3`: over an open row's bar (`row-bar`, z-index 2, or 3
 						// while focused — this comes later, so it still wins), which
 						// passes under the button whenever an open row's first line is
 						// at the bottom of the view.
-						<div className="pointer-events-none sticky bottom-3 z-2 h-0">
+						<div className="pointer-events-none sticky bottom-3 z-3 h-0">
 							<div className="absolute inset-x-0 bottom-0 flex justify-center">
 								<button
 									type="button"

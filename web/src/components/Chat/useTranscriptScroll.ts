@@ -16,6 +16,7 @@ import {
 	type ScrollAnchor,
 } from "./scrollAnchor";
 import type { TranscriptView } from "./transcriptViewContext";
+import { coveredAbove } from "./useFoldLanding";
 
 /**
  * How close to the end counts as the end. Never asked on its own: reaching it is
@@ -436,6 +437,9 @@ export function useTranscriptScroll({
 	const view = useMemo<TranscriptView>(
 		() => ({
 			top: () => scrollRef.current?.getBoundingClientRect().top ?? 0,
+			bottom: () => scrollRef.current?.getBoundingClientRect().bottom ?? 0,
+			scrollTop: () => scrollRef.current?.scrollTop ?? 0,
+			coveredAbove,
 			holdAt,
 		}),
 		[scrollRef, holdAt],

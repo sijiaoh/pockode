@@ -3,9 +3,9 @@ import { useEffect, useState } from "react";
 import { ACTIVITY_VIEW } from "../../lib/activity";
 import { hasText, type LiveThinking, latestLine } from "../../lib/thinking";
 import { formatElapsed } from "../../lib/toolRun";
-import { CollapsibleBody, ScrollableContent, Spinner } from "../ui";
+import { CollapsibleBody, Spinner } from "../ui";
 import { BareBody, BareRow } from "./BareRow";
-import { ThoughtBody } from "./ThinkingItem";
+import { ThoughtBody, ThoughtScroller } from "./ThinkingItem";
 import { useTurnTail } from "./turnTailContext";
 
 interface Props {
@@ -69,14 +69,16 @@ function TurnClock({ openedAt }: { openedAt: number }) {
 function ThinkingSoFar({ thinking }: { thinking: LiveThinking }) {
 	return (
 		<BareBody>
-			<ScrollableContent className="max-h-[60vh] overflow-auto px-2.5 py-2">
-				{thinking.joinedLate && (
-					<p className="mb-2 text-th-text-muted">
-						Earlier thinking appears in full when it finishes.
-					</p>
-				)}
-				<ThoughtBody thought={{ ...thinking, redacted: false }} />
-			</ScrollableContent>
+			<ThoughtScroller className="px-2.5">
+				<div className="py-2">
+					{thinking.joinedLate && (
+						<p className="mb-2 text-th-text-muted">
+							Earlier thinking appears in full when it finishes.
+						</p>
+					)}
+					<ThoughtBody thought={{ ...thinking, redacted: false }} />
+				</div>
+			</ThoughtScroller>
 		</BareBody>
 	);
 }

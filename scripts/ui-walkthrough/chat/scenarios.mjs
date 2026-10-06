@@ -136,6 +136,38 @@ export function nextDelay(attempt: number, retryAfterMs?: number): number {
 
 > The two failures in the first test run were the old behaviour being asserted against — both pass now.`;
 
+// A full test run's log, long enough that its output is cut to a fraction
+// of itself and read from its tail.
+const FULL_RUN_LOG = Array.from({ length: 2000 }, (_, i) =>
+	i === 1999
+		? " Test Files  412 passed (412) · Tests  1999 passed (1999)"
+		: ` ✓ src/suite-${String(Math.floor(i / 5)).padStart(3, "0")}.test.ts > case ${i + 1} ${(i * 7) % 90}ms`,
+).join("\n");
+
+// A command of 20 lines, so its own section is cut too.
+const FULL_RUN_COMMAND = [
+	"set -euo pipefail",
+	"export NODE_OPTIONS=--max-old-space-size=4096",
+	"export TZ=UTC",
+	"export CI=1",
+	"pnpm install --frozen-lockfile",
+	"pnpm -w run lint",
+	"pnpm --filter web exec tsc -b",
+	"pnpm --filter web run build",
+	"for shard in 1 2 3 4; do",
+	"  pnpm vitest run \\",
+	"    --shard=$shard/4 \\",
+	"    --reporter=verbose \\",
+	"    --pool=forks \\",
+	"    --poolOptions.forks.singleFork=false \\",
+	"    --testTimeout=20000 \\",
+	"    --hookTimeout=20000 \\",
+	"    --bail=0",
+	"done",
+	"pnpm vitest run --coverage --reporter=dot",
+	"echo done",
+].join("\n");
+
 // --- the turns ----------------------------------------------------------------
 
 /**
@@ -656,6 +688,27 @@ export const CHAT = {
 				description: "Dry-run the pending migrations",
 			});
 			await agent.hang();
+		},
+	},
+	// One command whose body is taller than a phone: a 20-line command and a
+	// 2000-line log, for opening and closing them without losing one's place.
+	fullRun: {
+		title: "Full test run",
+		prompt: "Run the whole test suite with coverage.",
+		async play(agent) {
+			// Prose above and below, so that holding a place is never cut short
+			// by the transcript's own top or end.
+			agent.say(
+				"Running everything, sharded four ways so the slow integration suites do not sit behind each other.\n\nLint and the type check run first: a type error fails in seconds, where the test run would take minutes to reach it. The build comes next, because two of the suites load the built bundle rather than the sources.\n\nCoverage is collected in a separate pass at the end, with the dot reporter, so the verbose log of the sharded runs stays readable and the coverage numbers come from one process rather than four partial ones that would have to be merged.",
+			);
+			agent.tool(
+				"Bash",
+				{ command: FULL_RUN_COMMAND, description: "Run the full suite" },
+				FULL_RUN_LOG,
+			);
+			agent.say(
+				"All 1999 tests pass.\n\n### Where the time went\n\n- Install and lint: 41s\n- Type check: 18s\n- Build: 52s\n- The four shards: 3m 12s, 2m 58s, 3m 40s and 3m 05s — the third is slow because it holds the database suites\n- Coverage: 2m 21s\n\n### Coverage\n\nStatements are at 87.4%, branches at 79.1%. The lowest file is `src/webhooks/dead-letter.ts` at 52%: its retry-exhausted path is only reached through the dispatcher, and no test drives the dispatcher that far.\n\nNothing is left running.",
+			);
 		},
 	},
 	attachments: {

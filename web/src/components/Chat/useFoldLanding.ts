@@ -11,12 +11,13 @@ const FOLD_PLACE_ATTR = "data-fold-place";
 export const foldPlaceProps = { [FOLD_PLACE_ATTR]: "" };
 
 /**
- * The height of the bar the innermost open row around this one pins at the
- * view's top. Every bar sticks to the same top, so that is all the outer rows
- * can cover.
+ * The height of the bar the innermost open row around `el` pins at the view's
+ * top. Every bar sticks to the same top, so that is all the outer rows can
+ * cover. For a row, that is the rows around it; for anything in a row's body,
+ * that row's own bar.
  */
-function coveredAbove(row: HTMLElement): number {
-	const outerBar = row.parentElement
+export function coveredAbove(el: HTMLElement): number {
+	const outerBar = el.parentElement
 		?.closest(".row-bar ~ *")
 		?.parentElement?.querySelector(":scope > .row-bar");
 	return outerBar ? outerBar.getBoundingClientRect().height : 0;

@@ -8,8 +8,8 @@ import { useWSStore } from "../../lib/wsStore";
 import type { ContentBlock } from "../../types/content";
 import { HIGHLIGHT_LIMIT } from "../../utils/fileView";
 import { formatFilePath, relativeToWorkDir } from "../../utils/path";
-import { FileContentDisplay, MarkdownContent } from "../ui";
-import { ProposedChange } from "./ProposedChange";
+import { type ClampCount, FileContentDisplay, MarkdownContent } from "../ui";
+import { changeRowCount, ProposedChange } from "./ProposedChange";
 
 const ansiUp = new AnsiUp();
 ansiUp.use_classes = true;
@@ -61,6 +61,21 @@ function ReadResultDisplay({
 const FILE_LIST_LIMIT = 100;
 
 /**
+ * The files a search answered with, or null when the answer is not a list of
+ * them: Grep answers with counts and matches too, depending on its mode, and
+ * only a list of paths is a list of paths.
+ */
+function filePaths(result: string): string[] | null {
+	const paths = result
+		.split("\n")
+		.map((line) => line.trim())
+		.filter((line) => line.length > 0);
+	if (paths.length === 0 || paths.some((path) => path.includes(" ")))
+		return null;
+	return paths;
+}
+
+/**
  * A search's result is a list of files, and reading one is scanning for a
  * name. Drawn as rows shortened against the work directory, each offering the
  * way over to the Files tab — before this it was one long unwrapped line.
@@ -73,18 +88,9 @@ function FileListDisplay({
 	onOpenFile?: (path: string) => void;
 }) {
 	const workDir = useWSStore((s) => s.workDir);
-	const paths = useMemo(
-		() =>
-			result
-				.split("\n")
-				.map((line) => line.trim())
-				.filter((line) => line.length > 0),
-		[result],
-	);
+	const paths = useMemo(() => filePaths(result), [result]);
 
-	// Grep answers with counts and matches too, depending on its mode; only a
-	// list of paths is a list of paths.
-	if (paths.length === 0 || paths.some((path) => path.includes(" "))) {
+	if (!paths) {
 		return (
 			<pre className="whitespace-pre-wrap text-th-text-muted">{result}</pre>
 		);
@@ -123,6 +129,30 @@ function FileListDisplay({
 }
 
 /**
+ * Only the Grep mode that answers with paths. `content` and `count` put a
+ * `path:line:` prefix on every line, and a short match with no space in it
+ * would pass `filePaths`'s shape check and be drawn as a file that does not
+ * exist.
+ */
+function grepListsFiles(input: Record<string, unknown> | undefined): boolean {
+	return (
+		input?.output_mode === undefined ||
+		input.output_mode === "files_with_matches"
+	);
+}
+
+function prettyJson(result: string): string | null {
+	if (result.length > HIGHLIGHT_LIMIT) return null;
+	const trimmed = result.trim();
+	if (!trimmed.startsWith("{") && !trimmed.startsWith("[")) return null;
+	try {
+		return JSON.stringify(JSON.parse(trimmed), null, 2);
+	} catch {
+		return null;
+	}
+}
+
+/**
  * Whatever a tool Pockode has no view for answered with.
  *
  * JSON is pretty-printed and highlighted — MCP tools answer with it, and one
@@ -134,16 +164,7 @@ function FileListDisplay({
  * seconds — the same ceiling the file viewer uses, for the same reason.
  */
 function UnknownResultDisplay({ result }: { result: string }) {
-	const pretty = useMemo(() => {
-		if (result.length > HIGHLIGHT_LIMIT) return null;
-		const trimmed = result.trim();
-		if (!trimmed.startsWith("{") && !trimmed.startsWith("[")) return null;
-		try {
-			return JSON.stringify(JSON.parse(trimmed), null, 2);
-		} catch {
-			return null;
-		}
-	}, [result]);
+	const pretty = useMemo(() => prettyJson(result), [result]);
 
 	if (pretty)
 		return (
@@ -174,7 +195,7 @@ function outputLines(result: string): string[] {
 	return result.replace(/\n+$/, "").split("\n");
 }
 
-/** What the output's *Show all* says: a log is measured in lines. */
+/** Lines in a text, not counting the newlines it ends with. */
 export function outputLineCount(result: string): number {
 	return outputLines(result).length;
 }
@@ -259,6 +280,59 @@ export function resultCopyText(
 }
 
 /**
+ * What the result block is counted in when it is cut — mirroring how
+ * `ToolResultDisplay` draws it, since what is counted is what is drawn. None
+ * for what is not read by its lines: Markdown, content blocks.
+ */
+export function resultCount(
+	toolName: string,
+	toolInput: unknown,
+	result: string,
+	contents?: ContentBlock[],
+): ClampCount | undefined {
+	if (contents) return undefined;
+	const input = toolInput as Record<string, unknown> | undefined;
+
+	switch (toolName) {
+		case "Glob":
+		case "Grep": {
+			const paths =
+				toolName === "Glob" || grepListsFiles(input) ? filePaths(result) : null;
+			if (paths)
+				return {
+					noun: "file",
+					total: Math.min(paths.length, FILE_LIST_LIMIT),
+				};
+			return { noun: "line", total: outputLineCount(result) };
+		}
+		case "WebFetch":
+			return undefined;
+		// Drawn as it came, never pretty-printed: a command that printed JSON
+		// printed one line.
+		case "Bash":
+			return { noun: "line", total: outputLineCount(result) };
+		case "Read":
+			return { noun: "line", total: outputLineCount(readResultCode(result)) };
+		case "Edit":
+		case "MultiEdit":
+		case "Write": {
+			const change = proposedChange(toolName, toolInput);
+			return {
+				noun: "line",
+				total: change
+					? changeRowCount(change)
+					: outputLineCount(prettyJson(result) ?? result),
+			};
+		}
+		default:
+			return {
+				noun: "line",
+				total: outputLineCount(prettyJson(result) ?? result),
+			};
+	}
+}
+
+/**
  * The names a tool search answered with.
  *
  * A row of labels rather than a list of lines: what the agent got back is a set
@@ -320,14 +394,7 @@ function ToolResultDisplay({
 
 	switch (toolName) {
 		case "Grep":
-			// Only the mode that answers with paths. `content` and `count` put a
-			// `path:line:` prefix on every line, and a short match with no space
-			// in it would pass the shape check below and be drawn as a file that
-			// does not exist.
-			if (
-				input.output_mode !== undefined &&
-				input.output_mode !== "files_with_matches"
-			) {
+			if (!grepListsFiles(input)) {
 				return (
 					<pre className="whitespace-pre-wrap text-th-text-muted">{result}</pre>
 				);

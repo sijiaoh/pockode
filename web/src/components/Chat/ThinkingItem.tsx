@@ -1,5 +1,5 @@
 import { Brain } from "lucide-react";
-import { memo, useContext } from "react";
+import { memo, type ReactNode, useContext, useRef } from "react";
 import { hasText, spokenThoughtLabel, thoughtLabel } from "../../lib/thinking";
 import type { Thought } from "../../types/message";
 import { CollapsibleBody, MarkdownContent, ScrollableContent } from "../ui";
@@ -7,6 +7,10 @@ import { BareBody, BareRow } from "./BareRow";
 import { RowFrameContext, useRowExpanded } from "./rowExpansionContext";
 import { Chip, RowButton, StaticRow } from "./ToolRow";
 import { Section } from "./ToolSection";
+import {
+	TranscriptViewContext,
+	useScrollerView,
+} from "./transcriptViewContext";
 
 interface Props {
 	thoughts: Thought[];
@@ -37,10 +41,38 @@ export function ThoughtBody({ thought }: { thought: Thought }) {
 	return (
 		<div className="space-y-3">
 			<ThoughtText content={thought.content} />
-			<Section label="Full reasoning">
+			<Section label="Full reasoning" budget="main">
 				<ThoughtText content={thought.fullReasoning} />
 			</Section>
 		</div>
+	);
+}
+
+/**
+ * The box a thought's records scroll in, here and in the live turn's tail. A
+ * scroller of its own with no row bar over it: an opened "Full reasoning" pins
+ * its header at the scroller's top (`section-bar`), and opening and closing it
+ * keep the place in this scroller rather than in the transcript. No vertical
+ * padding of its own, which a pinned header would leave a gap above.
+ */
+export function ThoughtScroller({
+	className,
+	children,
+}: {
+	className: string;
+	children: ReactNode;
+}) {
+	const ref = useRef<HTMLDivElement>(null);
+	const view = useScrollerView(ref);
+	return (
+		<TranscriptViewContext value={view}>
+			<ScrollableContent
+				ref={ref}
+				className={`max-h-[60vh] overflow-auto [--section-bar-top:0px] ${className}`}
+			>
+				{children}
+			</ScrollableContent>
+		</TranscriptViewContext>
 	);
 }
 
@@ -116,14 +148,14 @@ const ThinkingItem = memo(function ThinkingItem({ thoughts }: Props) {
 			)}
 			<CollapsibleBody expanded={expanded}>
 				{framed ? (
-					<ScrollableContent className="max-h-[60vh] divide-y divide-th-border overflow-auto border-t border-th-border bg-th-bg-secondary px-2">
+					<ThoughtScroller className="divide-y divide-th-border border-t border-th-border bg-th-bg-secondary px-2">
 						{records}
-					</ScrollableContent>
+					</ThoughtScroller>
 				) : (
 					<BareBody>
-						<ScrollableContent className="max-h-[60vh] divide-y divide-th-border overflow-auto px-2.5">
+						<ThoughtScroller className="divide-y divide-th-border px-2.5">
 							{records}
-						</ScrollableContent>
+						</ThoughtScroller>
 					</BareBody>
 				)}
 			</CollapsibleBody>

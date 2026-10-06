@@ -12,6 +12,7 @@ import { useWSStore } from "../../lib/wsStore";
 import type { ContentPart } from "../../types/message";
 import { CollapsibleBody } from "../ui";
 import {
+	changeRowCount,
 	LineCountsLabel,
 	ProposedChange,
 	proposedChangeHeader,
@@ -84,6 +85,10 @@ function EditSection({
 	const { change, run } = edit;
 	// Counting reads the whole diff; `change` is the same object every render.
 	const header = useMemo(() => proposedChangeHeader(change), [change]);
+	const count = useMemo(
+		() => ({ noun: "line" as const, total: changeRowCount(change) }),
+		[change],
+	);
 	const noun = change.kind === "write" ? "Content" : "Change";
 	return (
 		<Section
@@ -93,6 +98,8 @@ function EditSection({
 			{...header}
 			copyText={proposedChangeText(change)}
 			fullScreenTitle={`${run.name} · ${fileName}`}
+			budget="main"
+			count={count}
 		>
 			{/* Not "not in the transcript": an earlier step of this turn may have
 			    written the very content this one replaced. */}
@@ -183,7 +190,9 @@ function FileRow({
 			</RowButton>
 			<div id={bodyId}>
 				<CollapsibleBody expanded={expanded}>
-					<div className="space-y-3 border-t border-th-border bg-th-bg-secondary p-2">
+					{/* A file row does not stick, so an opened diff's header pins at the
+					    transcript's top rather than under a bar (`section-bar`). */}
+					<div className="space-y-3 border-t border-th-border bg-th-bg-secondary p-2 [--section-bar-top:0px]">
 						<FileBody file={file} onOpenFile={onOpenFile} />
 					</div>
 				</CollapsibleBody>
@@ -241,7 +250,10 @@ export function TurnChangesCard({ parts, onOpenFile }: Props) {
 			<div
 				role="group"
 				aria-labelledby={titleId}
-				className="overflow-hidden rounded-lg border border-th-border text-xs"
+				// `overflow-clip`, not `overflow-hidden`, as `ToolList`'s: `hidden`
+				// would make the card the scroll container an opened diff's header
+				// pins to, and the card never scrolls.
+				className="overflow-clip rounded-lg border border-th-border text-xs"
 			>
 				<div ref={rowsRef} className="-mt-px">
 					<div className="flex min-h-9 flex-col justify-center border-t border-th-border px-2 py-1.5 sm:px-2.5">

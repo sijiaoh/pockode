@@ -134,9 +134,19 @@ async function pageThrough(page, shot, state) {
 	}
 }
 
+let pinned = 0;
+
 /** Opens a disclosure, puts it at the top of the transcript, and shoots. */
 async function expandAndShoot(page, shot, text, state) {
-	const target = disclosure(page, text);
+	// Pinned before the click: an open row's second line leaves its button
+	// (docs/tool-call-ui.md#the-sticky-title-line), so a row found by that text
+	// would not be found again once open.
+	const id = `walk-${++pinned}`;
+	await disclosure(page, text).evaluate(
+		(el, id) => el.setAttribute("data-walk", id),
+		id,
+	);
+	const target = page.locator(`[data-walk="${id}"]`);
 	await scrollIntoView(target);
 	await target.click();
 	await settle(page);
@@ -233,6 +243,109 @@ async function foldAndLog(target, label, how = "tap") {
 	);
 }
 
+/**
+ * Where a clamped block's edges and the line the reader sees at its bottom
+ * sit against the top of the transcript, for the block `button` opens or
+ * closes. The line is the one drawn just above whichever comes first, the
+ * block's bottom or the view's.
+ */
+async function measureClamp(button) {
+	return button.evaluate((el) => {
+		const box = document.getElementById(el.getAttribute("aria-controls"));
+		const scroller = box.closest(".overflow-y-auto");
+		const view = scroller.getBoundingClientRect();
+		const rect = box.getBoundingClientRect();
+		const own = el.getBoundingClientRect();
+		const y = Math.min(rect.bottom, view.bottom) - 6;
+		const caret = document.caretRangeFromPoint(rect.left + 12, y);
+		const text = caret?.startContainer.textContent ?? "";
+		const at = caret?.startOffset ?? 0;
+		const line = text.slice(
+			text.lastIndexOf("\n", at - 1) + 1,
+			(text.indexOf("\n", at) + 1 || text.length + 1) - 1,
+		);
+		return {
+			top: Math.round(rect.top - view.top),
+			bottom: Math.round(rect.bottom - view.top),
+			button: Math.round(own.top - view.top),
+			view: Math.round(view.height),
+			fromEnd: Math.round(
+				scroller.scrollHeight - scroller.clientHeight - scroller.scrollTop,
+			),
+			line: line.trim().slice(0, 48),
+		};
+	});
+}
+
+/**
+ * Logs the row's pinned title and the pinned section header under it, and
+ * what is drawn at the title's middle — the title, or a header passing over
+ * it — and whether a tap just above the header's collapse control is still
+ * the control's.
+ */
+async function logPinnedHeader(page, label) {
+	const state = await page.locator(".section-bar").evaluate((header) => {
+		const scroller = header.closest(".overflow-y-auto");
+		const top = scroller.getBoundingClientRect().top;
+		const bar = header
+			.closest(".row-bar ~ *")
+			.parentElement.querySelector(":scope > .row-bar");
+		const b = bar.getBoundingClientRect();
+		const h = header.getBoundingClientRect();
+		const atTitle = document.elementFromPoint(b.left + 40, b.bottom - 4);
+		return {
+			bar: [Math.round(b.top - top), Math.round(b.bottom - top)],
+			header: [Math.round(h.top - top), Math.round(h.bottom - top)],
+			headerStuck: header.hasAttribute("data-stuck"),
+			pinnedBars: document.querySelectorAll("[data-stuck]").length,
+			titleOnTop: bar.contains(atTitle),
+			// A tap 8px above the collapse control, inside its hit area:
+			// still the control's, not the row's bar under it.
+			tapAboveCollapse: (() => {
+				const c = header
+					.querySelector("button[aria-controls]")
+					.getBoundingClientRect();
+				return header.contains(
+					document.elementFromPoint(c.left + c.width / 2, c.top - 8),
+				);
+			})(),
+		};
+	});
+	console.log(label, JSON.stringify(state));
+}
+
+/**
+ * Presses a clamp's button and logs the block before and after. The button is
+ * pinned first, since pressing it renames it. Place it in sight first: the
+ * driver scrolls a button out of sight into view before tapping it, and the
+ * "before" would then be somewhere the reader never was.
+ */
+async function toggleAndLog(locator, label, { unseen = false } = {}) {
+	const id = `walk-${++pinned}`;
+	await locator.evaluate((el, id) => el.setAttribute("data-walk", id), id);
+	const button = locator.page().locator(`[data-walk="${id}"]`);
+	const before = await measureClamp(button);
+	// A button out of sight is pressed from script: a tap would have the
+	// driver scroll it into view first, which is not the state being shot.
+	if (unseen) await button.evaluate((el) => el.click());
+	else await button.click();
+	await settle(button.page());
+	const after = await measureClamp(button);
+	console.log(label, JSON.stringify({ before, after }));
+}
+
+/** Scrolls the transcript so the element's top is `y` pixels below its top. */
+async function placeAt(locator, y) {
+	await locator.evaluate((el, y) => {
+		const scroller = el.closest(".overflow-y-auto");
+		scroller.scrollTop +=
+			el.getBoundingClientRect().top -
+			scroller.getBoundingClientRect().top -
+			y;
+	}, y);
+	await locator.page().waitForTimeout(200);
+}
+
 /** The composer focused with a draft, and the soft keyboard up. */
 async function typeWithKeyboard(page, vp, draft) {
 	await composer(page).click();
@@ -287,9 +400,36 @@ const SCENES = [
 				"Read 2 files",
 				"expanded-group-reads",
 			);
-			await close(
-				await expandAndShoot(page, shot, "handlers.ts", "expanded-read-long"),
+			const read = await expandAndShoot(
+				page,
+				shot,
+				"handlers.ts",
+				"expanded-read-long",
 			);
+			// Opened in place and put back: the button turns into Show less, and
+			// Show less cuts the content to its budget again.
+			const more = page.getByRole("button", { name: /^Show \d+ more lines/ });
+			await more.click();
+			await settle(page);
+			const less = page
+				.getByRole("button", { name: /^Show less/ })
+				.filter({ hasText: "Show less" });
+			await scrollIntoView(less, { end: true });
+			await shot("expanded-read-open");
+			await less.click();
+			await settle(page);
+			console.log(
+				"read-show-less",
+				JSON.stringify({
+					clamped: await more.evaluate((el) =>
+						document
+							.getElementById(el.getAttribute("aria-controls"))
+							.hasAttribute("data-clamped"),
+					),
+					expanded: await more.getAttribute("aria-expanded"),
+				}),
+			);
+			await close(read);
 			await close(reads);
 
 			const edits = await expandAndShoot(
@@ -372,7 +512,10 @@ const SCENES = [
 			await scrollIntoView(read);
 			await read.click();
 			await settle(page);
-			await page.getByRole("button", { name: /^Show all/ }).first().click();
+			await page
+				.getByRole("button", { name: /^Show (all\b|\d+ (more|earlier) )/ })
+				.first()
+				.click();
 			await settle(page);
 			await scrollRowAbove(read, 1200);
 			const landed = await read.evaluate((button) => {
@@ -502,7 +645,10 @@ const SCENES = [
 			const read = disclosure(page, "handlers.ts");
 			await read.click();
 			await settle(page);
-			await page.getByRole("button", { name: /^Show all/ }).first().click();
+			await page
+				.getByRole("button", { name: /^Show (all\b|\d+ (more|earlier) )/ })
+				.first()
+				.click();
 			await settle(page);
 			await reads.click();
 			await settle(page);
@@ -584,6 +730,116 @@ const SCENES = [
 			await transcript(page).evaluate(() =>
 				document.getElementById("tail-probe")?.remove(),
 			);
+		},
+	},
+	{
+		name: "keep-place",
+		run: async ({ page, shared, shot }) => {
+			await openChat(page, shared.fullRun, "All 1999 tests pass.");
+			// Pinned before the click, as in `expandAndShoot`.
+			await disclosure(page, "set -euo pipefail").evaluate((el) =>
+				el.setAttribute("data-walk", "full-run"),
+			);
+			const row = page.locator('[data-walk="full-run"]');
+			await row.click();
+			await settle(page);
+			// The whole open row on one screen, its bar at the top.
+			await row.evaluate((button) => {
+				const r = button.closest(".row-bar").parentElement;
+				const scroller = r.closest(".overflow-y-auto");
+				scroller.scrollTop +=
+					r.getBoundingClientRect().top - scroller.getBoundingClientRect().top;
+			});
+			await settle(page);
+			await shot("keep-open");
+			const height = await row.evaluate((button) => {
+				const r = button.closest(".row-bar").parentElement;
+				return Math.round(r.getBoundingClientRect().height);
+			});
+			const earlier = page.getByRole("button", {
+				name: /^Show \d+ earlier lines of output/,
+			});
+			const viewHeight = (await measureClamp(earlier)).view;
+			console.log("keep-fits", JSON.stringify({ row: height, viewHeight }));
+
+			// Opened with the output's tail in the middle of the screen: its
+			// bottom, and the line there, stay put.
+			await placeAt(earlier, 150);
+			await toggleAndLog(earlier, "keep-earlier");
+			await shot("keep-earlier");
+			// Closed from its button: the button stays where it was pressed. The
+			// pinned header's control has the same name and no text.
+			const less = page
+				.getByRole("button", { name: /^Show less of output/ })
+				.filter({ hasText: "Show less" });
+			await placeAt(less, 200);
+			await toggleAndLog(less, "keep-less");
+
+			// Closed with its button out of sight under the pinned title — a
+			// screen reader can press it there: the section's header lands just
+			// under that title.
+			await placeAt(earlier, 150);
+			await earlier.click();
+			await settle(page);
+			await placeAt(less, 10);
+			await toggleAndLog(less, "keep-less-unseen", { unseen: true });
+			await shot("keep-less-unseen");
+
+			// Opened and read in its middle: the output's header pinned under
+			// the row's title; at its end, carried off under that title; closed
+			// from the header there, landed just under the title.
+			await placeAt(earlier, 150);
+			await earlier.click();
+			await settle(page);
+			await placeAt(less, -1200);
+			await logPinnedHeader(page, "keep-header-pinned");
+			await shot("keep-header-pinned");
+			await less.evaluate((el) => {
+				const section = el.closest(".tool-section");
+				const scroller = el.closest(".overflow-y-auto");
+				scroller.scrollTop +=
+					section.getBoundingClientRect().bottom -
+					scroller.getBoundingClientRect().top -
+					56;
+			});
+			await page.waitForTimeout(200);
+			await logPinnedHeader(page, "keep-header-leaving");
+			await shot("keep-header-leaving");
+			await placeAt(less, -1200);
+			const collapse = page.locator(".section-bar button[aria-controls]");
+			await collapse.click();
+			await settle(page);
+			console.log(
+				"keep-header-closed",
+				JSON.stringify(
+					await earlier.evaluate((el) => {
+						const header = el.closest(".tool-section").firstElementChild;
+						const scroller = el.closest(".overflow-y-auto");
+						return {
+							header: Math.round(
+								header.getBoundingClientRect().top -
+									scroller.getBoundingClientRect().top,
+							),
+							pinned: header.classList.contains("section-bar"),
+							focus: document.activeElement?.getAttribute("aria-label"),
+						};
+					}),
+				),
+			);
+			await shot("keep-header-closed");
+
+			// The command, cut at its end: opening keeps its top, closing its
+			// button.
+			const more = page.getByRole("button", {
+				name: /^Show (\d+ more lines|all) of command/,
+			});
+			await placeAt(more, 400);
+			await toggleAndLog(more, "keep-more-command");
+			const lessCommand = page
+				.getByRole("button", { name: /^Show less of command/ })
+				.filter({ hasText: "Show less" });
+			await placeAt(lessCommand, 450);
+			await toggleAndLog(lessCommand, "keep-less-command");
 		},
 	},
 	{
@@ -828,6 +1084,7 @@ async function setup({ rpc, jobs }) {
 		asking: await open("asking"),
 		running: await open("running"),
 		parked: await open("parked"),
+		fullRun: await open("fullRun"),
 	};
 	for (const job of jobs) {
 		if (job.scene.fresh) job.session = await rpc.emptySession(job.scene.fresh);

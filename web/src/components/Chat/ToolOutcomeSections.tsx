@@ -1,6 +1,8 @@
 import type { ReactNode } from "react";
 import { type FetchedOutput, fetchedOutputs } from "../../lib/toolRun";
 import type { ToolRun } from "../../types/message";
+import type { ClampCount } from "../ui";
+import { outputLineCount } from "./ToolResultDisplay";
 import { Section } from "./ToolSection";
 
 /**
@@ -56,7 +58,18 @@ function FetchedBody({ fetched }: { fetched: FetchedOutput }) {
  */
 function FetchedOutputSection({ fetched }: { fetched: FetchedOutput[] }) {
 	return (
-		<Section label={fetchedLabel(fetched)}>
+		<Section
+			label={fetchedLabel(fetched)}
+			// A log, read by its lines; each fetch's own subheading is one more.
+			count={{
+				noun: "line",
+				total: fetched.reduce(
+					(sum, one) =>
+						sum + outputLineCount(one.text) + (fetched.length > 1 ? 1 : 0),
+					0,
+				),
+			}}
+		>
 			{fetched.length === 1 ? (
 				<FetchedBody fetched={fetched[0]} />
 			) : (
@@ -98,7 +111,7 @@ export function ToolOutcomeSections({
 	outcomeCopyText,
 	outcomeFullScreenTitle,
 	outcomeClampFrom,
-	outcomeShowAllLabel,
+	outcomeCount,
 	block,
 }: {
 	run: ToolRun;
@@ -120,7 +133,7 @@ export function ToolOutcomeSections({
 	/** See `Section`. */
 	outcomeClampFrom?: "start" | "end";
 	/** See `Section`. */
-	outcomeShowAllLabel?: string;
+	outcomeCount?: ClampCount;
 	/**
 	 * Draw as a block of the body rather than inline in one: `TaskItem`'s body
 	 * is a stack of bordered blocks, `ToolCallItem`'s a single padded one.
@@ -151,8 +164,9 @@ export function ToolOutcomeSections({
 					actions={outcomeActions}
 					copyText={outcomeCopyText}
 					fullScreenTitle={outcomeFullScreenTitle}
+					budget="main"
 					clampFrom={outcomeClampFrom}
-					showAllLabel={outcomeShowAllLabel}
+					count={outcomeCount}
 				>
 					{outcome}
 				</Section>
