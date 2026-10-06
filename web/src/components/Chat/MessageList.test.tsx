@@ -155,11 +155,19 @@ interface Layout {
 function layout({ partHeights = () => [ROW_HEIGHT], top = () => 0 }: Layout) {
 	const rowHeight = (messageId: string) =>
 		partHeights(messageId).reduce((total, height) => total + height, 0);
+	// What a browser reports for an element that is not displayed: no offset
+	// parent and an offset of 0.
+	Object.defineProperty(HTMLElement.prototype, "offsetParent", {
+		configurable: true,
+		get(this: HTMLElement) {
+			return this.closest("[hidden]") ? null : document.body;
+		},
+	});
 	Object.defineProperty(HTMLElement.prototype, "offsetTop", {
 		configurable: true,
 		get(this: HTMLElement) {
 			const row = this.closest<HTMLElement>("[data-message-id]");
-			if (!row) return 0;
+			if (!row || this.closest("[hidden]")) return 0;
 			let offset = top();
 			for (const other of document.querySelectorAll<HTMLElement>(
 				"[data-message-id]",
@@ -1065,6 +1073,46 @@ describe("MessageList following the tail", () => {
 		// Anchored to the row, the view would have stayed at 200 and the reader
 		// would be looking at the part above instead.
 		expect(scroller.scrollTop).toBe(350);
+	});
+
+	// A row folding into its tool group stays in the DOM, only `hidden`, and an
+	// element that is not displayed sits at offset 0 — holding it still took the
+	// view to the top of the loaded transcript.
+	it("keeps the reader where they are when the part they are on folds away", async () => {
+		const bash = (id: string): ContentPart => ({
+			type: "tool_call",
+			tool: { id, name: "Bash", input: { command: id }, status: "success" },
+		});
+		const tools: Message = {
+			id: "m1",
+			role: "assistant",
+			status: "complete",
+			createdAt: new Date(),
+			parts: [bash("a"), bash("b")],
+		};
+		const { scroller } = renderScrolling([
+			textMessage("m0"),
+			tools,
+			textMessage("m2"),
+			textMessage("m3"),
+			textMessage("m4"),
+		]);
+		const user = userEvent.setup();
+		const summary = screen.getByRole("button", { name: /Ran 2 commands/ });
+		// Open, m1 is its summary and both calls; folded, the summary alone.
+		const m1Parts = (parts: number[]) =>
+			layout({ partHeights: (id) => (id === "m1" ? parts : [100]) });
+		m1Parts([100, 100, 100]);
+		await user.click(summary);
+		dragTo(scroller, 300);
+
+		// The fold is the list's own state, so it is the content shrinking that
+		// reaches the scroll, not a commit of the transcript.
+		await user.click(summary);
+		m1Parts([100]);
+		triggerResize(contentBox(scroller));
+
+		expect(scroller.scrollTop).toBe(300);
 	});
 
 	// The other half of requiring a *direction*: reaching the end is only a return

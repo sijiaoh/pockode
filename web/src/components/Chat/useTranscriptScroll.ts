@@ -8,6 +8,7 @@ import {
 import type { Message } from "../../types/message";
 import { isTypedByUser } from "../../utils/messageSource";
 import {
+	anchorHolds,
 	anchorScrollTop,
 	enclosingCandidate,
 	pickAnchor,
@@ -225,11 +226,11 @@ export function useTranscriptScroll({
 			return;
 		}
 		let anchor = anchorRef.current;
-		// The anchored element can leave the list: a page spliced its row into
-		// another, a tool row was replaced by the card that took its place. Taking a
-		// fresh anchor for where the view is now keeps the reader where they are,
-		// which is why losing an anchor is not a reason to go back to the tail.
-		if (!anchor || !el.contains(anchor.el)) {
+		// The anchored element can leave the list or stop being laid out (see
+		// `anchorHolds`). Taking a fresh anchor for where the view is now keeps the
+		// reader where they are, which is why losing an anchor is not a reason to go
+		// back to the tail.
+		if (!anchor || !anchorHolds(el, anchor)) {
 			anchor = pickAnchor(el);
 			anchorRef.current = anchor;
 			if (!anchor) return;
