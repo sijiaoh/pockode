@@ -17,6 +17,7 @@ import { WorktreeChangedError } from "../../lib/gitWriteStore";
 import { overlayToNavigation } from "../../lib/navigation";
 import { flattenGitStatus, stageFailureSummary } from "../../types/git";
 import { describeGitFailure, type GitFailure } from "../../utils/gitErrors";
+import { FilePageHeader } from "../Layout/PageHeader";
 import {
 	BottomActionBar,
 	ContentView,
@@ -109,6 +110,14 @@ function DiffView({ path, staged, onBack }: Props) {
 
 	return (
 		<div className="flex flex-1 flex-col overflow-hidden">
+			{/* The side is spelled out rather than coloured: colour on this page
+			    belongs to the Stage / Unstage action, which is the opposite one. */}
+			<FilePageHeader
+				path={path}
+				status={staged ? "Staged" : "Unstaged"}
+				back={{ to: "chat", onClick: onBack }}
+				onTitleClick={handlePathClick}
+			/>
 			{error && (
 				<ErrorBanner
 					summary={error.summary}
@@ -116,13 +125,7 @@ function DiffView({ path, staged, onBack }: Props) {
 					onDismiss={() => setError(null)}
 				/>
 			)}
-			<ContentView
-				path={path}
-				pathColor={staged ? "text-th-success" : "text-th-warning"}
-				isLoading={isLoading}
-				onBack={onBack}
-				onPathClick={handlePathClick}
-			>
+			<ContentView isLoading={isLoading}>
 				{diff !== undefined && (
 					<DiffContent
 						diff={diff.diff}

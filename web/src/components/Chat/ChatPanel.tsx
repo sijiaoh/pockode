@@ -68,6 +68,10 @@ import CliLoginSheet from "../CliLogin/CliLoginSheet";
 import { FileEditor, FileView } from "../Files";
 import { CommitDiffView, CommitFileView, CommitView, DiffView } from "../Git";
 import MainContainer from "../Layout/MainContainer";
+import PageHeader, {
+	PageHeaderTarget,
+	usePageHeaderHost,
+} from "../Layout/PageHeader";
 import {
 	AgentRoleDetailOverlay,
 	AgentRoleListOverlay,
@@ -1152,6 +1156,36 @@ function ChatPanel({
 	// reads that can only fail and flash their error first.
 	const isOverlayHeld = isGitOverlay(overlay) && !isGitRepo;
 
+	// An overlay is a page of its own, so the header names that page rather than
+	// the session behind it: no session there to read or reconfigure. The page
+	// supplies its own heading; until it does, the project's name stands.
+	const pageHeader = usePageHeaderHost();
+	const renderHeading = () => {
+		if (overlay) return pageHeader.claimed ? pageHeader.outlet : undefined;
+		// A route naming no session leaves nothing to describe, so the header
+		// keeps the project's name and offers no panel.
+		if (sessionId === "") return undefined;
+		return (
+			<SessionHeader
+				title={headerTitle}
+				detail={sessionDetail}
+				onOpenWorkDetail={onOpenWorkDetail}
+				readOnly={isReadOnly}
+				agentType={agentType}
+				model={model}
+				effort={effort}
+				mode={mode}
+				hasSessionSettings={hasSessionSettings}
+				isSessionActivated={isSessionActivated}
+				turnOpen={turnOpen}
+				onAgentTypeChange={setAgentType}
+				onModelChange={setModel}
+				onEffortChange={setEffort}
+				onModeChange={setMode}
+			/>
+		);
+	};
+
 	const renderOverlay = (overlay: NonNullable<OverlayState>) => {
 		switch (overlay.type) {
 			case "diff":
@@ -1268,7 +1302,15 @@ function ChatPanel({
 					{renderTranscript()}
 				</CoveredSurface>
 			</div>
-			{overlay && !isOverlayHeld && renderOverlay(overlay)}
+			<PageHeaderTarget value={pageHeader.target}>
+				{overlay &&
+					(isOverlayHeld ? (
+						// Which page this will be is known, what it is about is not.
+						<PageHeader back={null} title={null} subtitle={null} />
+					) : (
+						renderOverlay(overlay)
+					))}
+			</PageHeaderTarget>
 			{answerPanelDrawn && (
 				<AnswerPanel
 					sessionId={sessionId}
@@ -1289,30 +1331,8 @@ function ChatPanel({
 	return (
 		<SessionViewProvider value={view}>
 			<MainContainer
-				title={resolvedTitle || projectTitle}
-				// A route naming no session leaves nothing to describe, so the
-				// header keeps the project's name and offers no panel.
-				heading={
-					sessionId === "" ? undefined : (
-						<SessionHeader
-							title={headerTitle}
-							detail={sessionDetail}
-							onOpenWorkDetail={onOpenWorkDetail}
-							readOnly={isReadOnly}
-							agentType={agentType}
-							model={model}
-							effort={effort}
-							mode={mode}
-							hasSessionSettings={hasSessionSettings}
-							isSessionActivated={isSessionActivated}
-							turnOpen={turnOpen}
-							onAgentTypeChange={setAgentType}
-							onModelChange={setModel}
-							onEffortChange={setEffort}
-							onModeChange={setMode}
-						/>
-					)
-				}
+				title={overlay ? projectTitle : resolvedTitle || projectTitle}
+				heading={renderHeading()}
 				onOpenSidebar={onOpenSidebar}
 				onOpenSettings={onOpenSettings}
 			>
@@ -1345,11 +1365,9 @@ function ChatPanel({
 						onOpenWorkDetail={onOpenWorkDetail}
 					/>
 				)}
-				{/* Not held back by an overlay, unlike the composer's errors: the
-				    session panel that raised it opens from the header, which stays
-				    up over every overlay, and closes on a refusal so this can be
-				    read. */}
-				{settingError && (
+				{/* Held back by an overlay like the composer's errors: the session
+				    panel that raised it is not reachable from a page either. */}
+				{!overlay && settingError && (
 					<ComposerErrorBar
 						message={settingError}
 						onDismiss={clearSettingError}

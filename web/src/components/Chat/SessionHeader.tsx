@@ -10,6 +10,12 @@ import type { SessionDetail, SessionMode } from "../../types/message";
 import type { AgentType } from "../../types/settings";
 import { PanelSection } from "../ui";
 import { ChoiceRow } from "../ui/ChoiceList";
+import {
+	HeaderTitleLines,
+	headerSkeletonClass,
+	headerTitleBoxClass,
+	headerTitlePressableClass,
+} from "../ui/HeaderTitle";
 import ResponsivePanel from "../ui/ResponsivePanel";
 import EngineSections, { useEngineSummary } from "./EngineSections";
 import SessionUsageSection from "./SessionUsageSection";
@@ -52,8 +58,6 @@ interface Props {
 	onEffortChange: (effort: string) => Promise<void>;
 	onModeChange: (mode: SessionMode) => Promise<void>;
 }
-
-const skeletonClass = "animate-pulse rounded bg-th-text-muted/20";
 
 /**
  * The session's name, and under it what runs it, as the one button in the
@@ -207,7 +211,7 @@ function SessionHeader({
 					) : (
 						<span
 							aria-hidden="true"
-							className={`size-4 shrink-0 rounded-full ${skeletonClass}`}
+							className={`size-4 shrink-0 rounded-full ${headerSkeletonClass}`}
 						/>
 					)}
 					<span className="min-w-0 flex-1">
@@ -220,7 +224,7 @@ function SessionHeader({
 						) : (
 							<span
 								aria-hidden="true"
-								className={`block h-3.5 w-28 ${skeletonClass}`}
+								className={`block h-3.5 w-28 ${headerSkeletonClass}`}
 							/>
 						)}
 						{lockedReason && (
@@ -315,42 +319,41 @@ function SessionHeader({
 					aria-expanded={isOpen}
 					aria-label={`Session: ${title || "loading"}, ${subtitleText}`}
 					title={title || undefined}
-					className="-ml-1 flex h-11 min-w-0 flex-1 flex-col items-start justify-center rounded px-2 sm:h-12 text-left transition-colors hover:bg-th-bg-tertiary focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent"
+					className={`-ml-1 ${headerTitleBoxClass} ${headerTitlePressableClass}`}
 				>
-					<span className="flex max-w-full min-w-0 items-center gap-1">
-						{title === "" ? (
-							<span
+					<HeaderTitleLines
+						title={
+							title === "" ? null : TitleComponent ? (
+								<TitleComponent title={title} />
+							) : (
+								// A session still wearing the server's name reads as a
+								// placeholder rather than as something the user called it.
+								<span
+									className={`truncate text-sm font-semibold ${
+										isPlaceholderTitle
+											? "text-th-text-secondary"
+											: "text-th-text-primary"
+									}`}
+								>
+									{title}
+								</span>
+							)
+						}
+						hint={
+							<ChevronDown
+								className="size-3.5 shrink-0 text-th-text-muted"
 								aria-hidden="true"
-								className={`h-3.5 w-28 ${skeletonClass}`}
 							/>
-						) : TitleComponent ? (
-							<TitleComponent title={title} />
-						) : (
-							// A session still wearing the server's name reads as a
-							// placeholder rather than as something the user called it.
-							<span
-								className={`truncate text-sm font-semibold ${
-									isPlaceholderTitle
-										? "text-th-text-secondary"
-										: "text-th-text-primary"
-								}`}
-							>
-								{title}
-							</span>
-						)}
-						<ChevronDown
-							className="size-3.5 shrink-0 text-th-text-muted"
-							aria-hidden="true"
-						/>
-					</span>
-					{subtitleReady ? (
-						<span className="flex max-w-full min-w-0 items-center text-xs text-th-text-muted">
-							{readOnly ? (
+						}
+						// Not a placeholder "Default": a session running in YOLO must
+						// not wear the safe mode's name for a round trip.
+						subtitle={
+							!subtitleReady ? null : readOnly ? (
 								"Read-only"
 							) : (
 								<>
 									{/* The engine gives way first: the mode is the one that
-								    decides whether the next turn asks before it acts. */}
+									    decides whether the next turn asks before it acts. */}
 									<span className="min-w-0 truncate">{engineText}</span>
 									<span className="shrink-0 px-1">·</span>
 									<span className="flex shrink-0 items-center gap-0.5">
@@ -363,16 +366,9 @@ function SessionHeader({
 										{modeInfo.label}
 									</span>
 								</>
-							)}
-						</span>
-					) : (
-						// Not a placeholder "Default": a session running in YOLO must not
-						// wear the safe mode's name for a round trip.
-						<span
-							aria-hidden="true"
-							className={`mt-1 h-3 w-20 ${skeletonClass}`}
-						/>
-					)}
+							)
+						}
+					/>
 				</button>
 			</h1>
 

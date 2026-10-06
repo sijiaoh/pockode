@@ -3,6 +3,7 @@ import {
 	formatFilePath,
 	isSameNativePath,
 	relativeToWorkDir,
+	splitExtension,
 	splitNativePath,
 	splitPath,
 } from "./path";
@@ -178,5 +179,24 @@ describe("isSameNativePath", () => {
 		expect(isSameNativePath("/home/me/project/src", "/home/me/project")).toBe(
 			false,
 		);
+	});
+});
+
+describe("splitExtension", () => {
+	it("splits a short extension off a named stem", () => {
+		expect(splitExtension("ChatPanel.integration.test.tsx")).toEqual({
+			stem: "ChatPanel.integration.test",
+			extension: ".tsx",
+		});
+	});
+
+	// A dot file is a name, a long tail is likely part of one, and neither is
+	// worth keeping whole at the stem's expense.
+	it.each([
+		".gitignore",
+		"Makefile",
+		"notes.verylongtail",
+	])("leaves %s whole", (name) => {
+		expect(splitExtension(name)).toEqual({ stem: name, extension: "" });
 	});
 });

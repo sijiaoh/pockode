@@ -109,7 +109,8 @@ ctx.headerUI.configure({
 });
 
 // Or just replace the title's text (the open session's title, or the
-// project's name when none is open); the host keeps the h1 and the button
+// project's name when none is open — never a page's own title, such as a
+// file's or a commit's); the host keeps the h1 and the button
 ctx.headerUI.configure({
   TitleComponent: CustomTitle, // receives { title }
 });
@@ -130,8 +131,11 @@ See `headerUIRegistry.ts` for prop interfaces (`HeaderContentProps`, `TitleCompo
 >
 > The menu / settings buttons must likewise be re-implemented from the
 > `onOpenSidebar` / `onOpenSettings` props if you want to keep them. Render
-> `heading` too whenever it is given: it is the open session's title button,
-> the only way to the session's engine, permission mode, work and usage.
+> `heading` too whenever it is given: it is the heading of whatever is on
+> screen — in a chat the open session's title button, the only way to the
+> session's engine, permission mode, work and usage; over a page (a diff, a
+> file, a commit) the page's way back and its title. It changes with the page,
+> so a header that renders it follows every page without knowing any of them.
 
 ### ctx.sidebarUI.configure()
 

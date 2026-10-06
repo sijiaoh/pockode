@@ -86,6 +86,20 @@ describe("CommitFileView", () => {
 		expect(screen.getByText(/Do a thing/)).toBeInTheDocument();
 	});
 
+	it("goes back to the diff it came from", async () => {
+		const user = userEvent.setup();
+		renderView();
+
+		await user.click(screen.getByRole("button", { name: "Back to diff" }));
+
+		expect(navigate).toHaveBeenCalledWith(
+			expect.objectContaining({
+				to: "/commit/$hash/diff/$",
+				params: { hash: "abc1234def", _splat: "docs/readme.md" },
+			}),
+		);
+	});
+
 	it("offers no way to change or delete the file", () => {
 		renderView();
 

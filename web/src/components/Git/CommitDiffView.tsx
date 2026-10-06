@@ -12,6 +12,7 @@ import { useRouteState } from "../../hooks/useRouteState";
 import { useDiffSettings } from "../../lib/diffSettingsStore";
 import { overlayToNavigation } from "../../lib/navigation";
 import { splitPath } from "../../utils/path";
+import { FilePageHeader } from "../Layout/PageHeader";
 import {
 	BottomActionBar,
 	ContentView,
@@ -90,15 +91,15 @@ function CommitDiffView({ hash, path }: Props) {
 
 	return (
 		<div className="flex flex-1 flex-col overflow-hidden">
-			<ContentView
+			<FilePageHeader
 				path={path}
-				pathColor="text-th-accent"
-				onPathClick={handlePathClick}
-				pathActionLabel={`Open current ${splitPath(path).fileName}`}
-				isLoading={isLoading}
-				error={error ?? undefined}
-				onBack={handleBack}
-			>
+				status={shortHash}
+				mono
+				back={{ to: "parent", label: "Back to commit", onClick: handleBack }}
+				onTitleClick={handlePathClick}
+				titleActionLabel={`Open current ${splitPath(path).fileName}`}
+			/>
+			<ContentView isLoading={isLoading} error={error ?? undefined}>
 				{diff && (
 					<DiffContent
 						diff={diff.diff}

@@ -24,6 +24,7 @@ import {
 	getFileViewState,
 } from "../../utils/fileView";
 import { parentDir, splitPath } from "../../utils/path";
+import { FilePageHeader } from "../Layout/PageHeader";
 import { BottomActionBar, ContentView, getActionIconButtonClass } from "../ui";
 import EntryNameDialog from "./EntryNameDialog";
 import FileBody from "./FileBody";
@@ -211,11 +212,10 @@ function FileView({ path, onBack }: Props) {
 
 	return (
 		<div className="flex flex-1 flex-col overflow-hidden">
+			<FilePageHeader path={path} back={{ to: "chat", onClick: onBack }} />
 			<ContentView
-				path={path}
 				isLoading={isLoading}
 				error={error instanceof Error ? error : null}
-				onBack={onBack}
 			>
 				{actionError && (
 					<div className="border-b border-th-error/20 bg-th-error/10 px-4 py-2 text-sm text-th-error">

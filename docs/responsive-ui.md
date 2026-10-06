@@ -424,7 +424,9 @@ row's Delete. `ConnectionStatus`'s retry button is a third: the app header is a
 fixed `h-11 sm:h-12`, so growing that box would push the header open, while the
 overlay reaches the floor inside it. (Below 640 its `Offline` label folds away
 and it becomes an icon-only button — on a screen where reconnection has already
-given up, so it is the only way out.)
+given up, so it is the only way out.) The header itself keeps its two clusters
+`gap-2` apart, so a pressable heading — the session's title, a page's — stops
+8px short of that retry and of Settings rather than running into them.
 
 **A box written on an `<a>`, a `<span>` or a `<label>` needs a `display` beside
 it.** Those tags are `inline` by default, and CSS drops `height`, `min-height`
@@ -554,13 +556,13 @@ noticed. One representation with a test on it is the only thing that ends that.
      paste the expected side of its diff. Do not edit by hand. -->
 
 ```text
-45 controls render text, state no height of their own and carry no touch-target.
+44 controls render text, state no height of their own and carry no touch-target.
 
 26 state their own font size, so the height below is exact: 16–40px.
-19 inherit it, so the height below is an upper bound — the ancestor that
+18 inherit it, so the height below is an upper bound — the ancestor that
   sets it may well set a smaller one: 24–48px.
 
-5 are under the 36px fine-pointer floor.
+4 are under the 36px fine-pointer floor.
 5 reach the 44px coarse floor, 0 of them on a read height.
 0 state type this scan cannot read, listed as 0px and `unread`.
 
@@ -568,7 +570,6 @@ noticed. One representation with a test on it is the only thing that ends that.
   20px  exact  web/src/components/Worktree/WorktreeCreateSheet.tsx
   24px  bound  web/src/components/Settings/sections/AppearanceSections.tsx
   28px  bound  web/src/components/Chat/MessageItem.tsx
-  32px  bound  web/src/components/ui/ContentView.tsx
   36px  exact  packages/shared/src/components/ConfirmDialog.tsx ×2
   36px  exact  web/src/components/AppShell.tsx ×2
   36px  exact  web/src/components/Chat/DialogShell.tsx
@@ -641,8 +642,6 @@ name does not say what a control is for:
   route.
 - **`Settings/sections/AppearanceSections`** — the theme card, which is the
   over-report described above and needs nothing done to it.
-- **`ui/ContentView`** — the path button at the top of a file or diff view, the
-  way into the file it names.
 - **`Worktree/WorktreeCreateSheet`** — the link out of the setup-script note.
 
 One more is worth naming although it clears the fine floor: `ConfirmDialog`'s
@@ -696,7 +695,7 @@ Either of:
   file them as R1, which is wrong.
 
 **R1 — frequent navigation, where a mis-tap costs time and not work.** List
-titles, jump links, the path button. Going back and tapping again is the whole
+titles, jump links. Going back and tapping again is the whole
 cost, **and** this screen or the one before it holds another route to the same
 place.
 
@@ -753,9 +752,10 @@ Written down so the next reader does not grade it again.
   answering happens in the answer panel now, whose own controls clear the floor, and the card that replaced it holds no form at all
   ([answering-ui.md](answering-ui.md)).
 - **Batch 3 — R1, text targets centred in a tall row.** `MessageItem`'s Details
-  link and `ContentView`'s path button. They share a *structural* cause — a 44px
-  row using `items-center` to centre a 20px text target rather than stretch it —
-  so they are worth one answer between them rather than one each.
+  link: a 44px row using `items-center` to centre a 20px text target rather than
+  stretch it. `ContentView`'s path button had the same cause and is out of it:
+  a file or diff page's title now sits in the app header (`Layout/PageHeader`),
+  where the pressable title box is the header's own `h-11 sm:h-12`.
   `WorkListOverlay`, `WorkDetailOverlay` and `AgentRoleListOverlay` were in this
   batch for their row titles and are out of it: the first two now list work
   through `WorkRow`, and the agent role list's row was rebuilt on the same

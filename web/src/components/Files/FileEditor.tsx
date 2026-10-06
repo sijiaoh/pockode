@@ -16,6 +16,7 @@ import {
 import { useWSStore } from "../../lib/wsStore";
 import { isFileContent } from "../../types/contents";
 import { EDITOR_HIGHLIGHT_LIMIT } from "../../utils/fileView";
+import { FilePageHeader } from "../Layout/PageHeader";
 import { BottomActionBar, ContentView, getActionIconButtonClass } from "../ui";
 
 interface Props {
@@ -101,12 +102,12 @@ function FileEditor({ path, onBack }: Props) {
 
 	return (
 		<div className="flex flex-1 flex-col overflow-hidden">
-			<ContentView
+			<FilePageHeader
 				path={path}
-				isLoading={isLoading}
-				error={displayError}
-				onBack={onBack}
-			>
+				status="Editing"
+				back={{ to: "chat", onClick: onBack }}
+			/>
+			<ContentView isLoading={isLoading} error={displayError}>
 				{/* `min-h-full` fills the scroll area even for a short file and `grow`
 				    hands the spare height to the editor, whose textarea covers its whole
 				    root. That is what turns the blank space under a one-line file into

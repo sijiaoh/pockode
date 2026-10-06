@@ -7,7 +7,9 @@ import {
 	GIT_STATUS_INFO,
 	type GitFileStatus,
 } from "../../types/git";
+import PageHeader from "../Layout/PageHeader";
 import { BottomActionBar, ContentView } from "../ui";
+import { HeaderSubtitle, headerTitleTextClass } from "../ui/HeaderTitle";
 
 function formatDate(isoDate: string): string {
 	const date = new Date(isoDate);
@@ -63,13 +65,29 @@ function CommitView({ hash, onBack }: Props) {
 
 	return (
 		<div className="flex flex-1 flex-col overflow-hidden">
-			<ContentView
-				path={commit?.subject ?? shortHash}
-				pathColor="text-th-accent"
-				isLoading={isLoading}
-				error={error ?? undefined}
-				onBack={onBack}
-			>
+			{commit || !error ? (
+				// The hash is in the route, so it shows at once; the subject waits
+				// for the commit as a skeleton rather than borrowing the hash.
+				<PageHeader
+					back={{ to: "chat", onClick: onBack }}
+					title={commit?.subject ?? null}
+					subtitle={<HeaderSubtitle status={shortHash} mono />}
+					fullText={commit && `${commit.subject} — ${commit.hash}`}
+				/>
+			) : (
+				// No subject is coming. The hash is still true, so it is the title;
+				// why the rest is missing is the body's to say.
+				<PageHeader
+					back={{ to: "chat", onClick: onBack }}
+					title={
+						<span className={`${headerTitleTextClass} font-mono`}>
+							{shortHash}
+						</span>
+					}
+					fullText={hash}
+				/>
+			)}
+			<ContentView isLoading={isLoading} error={error ?? undefined}>
 				{commit && (
 					<div className="flex flex-col">
 						{/* Commit metadata */}

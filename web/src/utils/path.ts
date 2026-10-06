@@ -115,3 +115,22 @@ export function formatFilePath(filePath: string, workDir: string): string {
 	const dirParts = parts.slice(0, -1);
 	return `${fileName} (${dirParts[dirParts.length - 1]})`;
 }
+
+/**
+ * Split a file name into the part that may be truncated and the extension that
+ * must stay readable — `ChatPanel.integration.te….tsx` still says what it is.
+ *
+ * Only a short tail after the last dot counts as an extension, and only behind
+ * a non-empty stem: `.gitignore` is a name, not an extension, and a long tail
+ * is more likely part of the name than something worth keeping whole.
+ */
+export function splitExtension(fileName: string): {
+	stem: string;
+	extension: string;
+} {
+	const dot = fileName.lastIndexOf(".");
+	if (dot <= 0 || fileName.length - dot - 1 > 8) {
+		return { stem: fileName, extension: "" };
+	}
+	return { stem: fileName.slice(0, dot), extension: fileName.slice(dot) };
+}

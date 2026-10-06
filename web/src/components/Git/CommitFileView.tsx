@@ -7,6 +7,7 @@ import { useRouteState } from "../../hooks/useRouteState";
 import { overlayToNavigation } from "../../lib/navigation";
 import { getFileViewState } from "../../utils/fileView";
 import FileBody from "../Files/FileBody";
+import { FilePageHeader } from "../Layout/PageHeader";
 import { BottomActionBar, ContentView, ToggleIconButton } from "../ui";
 
 interface Props {
@@ -47,12 +48,15 @@ function CommitFileView({ hash, path }: Props) {
 
 	return (
 		<div className="flex flex-1 flex-col overflow-hidden">
-			<ContentView
+			<FilePageHeader
 				path={path}
-				pathColor="text-th-accent"
+				status={shortHash}
+				mono
+				back={{ to: "parent", label: "Back to diff", onClick: handleBack }}
+			/>
+			<ContentView
 				isLoading={isLoading}
 				error={error instanceof Error ? error : null}
-				onBack={handleBack}
 			>
 				{/* One banner for both facts: which version this is and that it
 				    cannot be changed. Two would read as two separate problems. */}

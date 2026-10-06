@@ -63,6 +63,20 @@ describe("CommitDiffView", () => {
 		);
 	});
 
+	it("goes back to the commit it came from", async () => {
+		const user = userEvent.setup();
+		renderView();
+
+		await user.click(screen.getByRole("button", { name: "Back to commit" }));
+
+		expect(navigate).toHaveBeenCalledWith(
+			expect.objectContaining({
+				to: "/commit/$",
+				params: { _splat: "abc1234def" },
+			}),
+		);
+	});
+
 	it("opens the commit's own version from the bottom bar", async () => {
 		const user = userEvent.setup();
 		renderView();
