@@ -1,64 +1,11 @@
-// TODO: Overlay structure is duplicated across FileView, DiffView, SettingsPage.
-// When a 4th overlay is needed, extract a shared Overlay component.
-
 import { Spinner } from "@pockode/shared";
-import { ChevronRight } from "lucide-react";
 import type { ReactNode } from "react";
 import { isNotFoundError } from "../../hooks/useContents";
-import { splitPath } from "../../utils/path";
-import BackToChatButton from "./BackToChatButton";
 
 interface Props {
-	path: string;
-	pathColor?: string;
 	isLoading?: boolean;
 	error?: Error | null;
-	onBack: () => void;
-	onPathClick?: () => void;
-	/**
-	 * Accessible name for the path button. Worth setting wherever "Open <file>"
-	 * is ambiguous — a historical diff has more than one version to open.
-	 */
-	pathActionLabel?: string;
 	children: ReactNode;
-}
-
-function PathDisplay({
-	path,
-	pathColor = "text-th-text-primary",
-	onClick,
-	actionLabel,
-}: {
-	path: string;
-	pathColor?: string;
-	onClick?: () => void;
-	actionLabel?: string;
-}) {
-	const { fileName, directory } = splitPath(path);
-	const content = (
-		<>
-			<div className={`truncate text-sm ${pathColor}`}>{fileName}</div>
-			{directory && (
-				<div className="truncate text-xs text-th-text-muted">{directory}</div>
-			)}
-		</>
-	);
-
-	if (onClick) {
-		return (
-			<button
-				type="button"
-				onClick={onClick}
-				className="min-w-0 max-w-full flex items-center gap-1 text-left rounded-md border border-th-border bg-th-bg-secondary px-2 py-1 transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent text-th-text-secondary hover:border-th-border-focus hover:text-th-text-primary active:scale-95"
-				aria-label={actionLabel ?? `Open ${fileName}`}
-			>
-				<div className="min-w-0 flex-1">{content}</div>
-				<ChevronRight className="h-4 w-4 shrink-0" />
-			</button>
-		);
-	}
-
-	return <div className="min-w-0 max-w-full px-2">{content}</div>;
 }
 
 const actionButtonBase =
@@ -81,28 +28,14 @@ export const actionIconButtonDisabledClass = `${actionButtonBase} ${actionIconBu
 export const getActionIconButtonClass = (enabled: boolean) =>
 	enabled ? actionIconButtonClass : actionIconButtonDisabledClass;
 
-export default function ContentView({
-	path,
-	pathColor,
-	isLoading,
-	error,
-	onBack,
-	onPathClick,
-	pathActionLabel,
-	children,
-}: Props) {
+/**
+ * The scrolling body of a file, diff or commit page, standing in for it while
+ * it loads or fails. The page's heading is its own `PageHeader`, drawn in the
+ * app header.
+ */
+export default function ContentView({ isLoading, error, children }: Props) {
 	return (
 		<div className="flex min-h-0 flex-1 flex-col">
-			<div className="flex items-center gap-1.5 border-b border-th-border bg-th-bg-secondary px-2 py-2">
-				<BackToChatButton onClick={onBack} />
-				<PathDisplay
-					path={path}
-					pathColor={pathColor}
-					onClick={onPathClick}
-					actionLabel={pathActionLabel}
-				/>
-			</div>
-
 			<div className="min-h-0 flex-1 overflow-auto">
 				{isLoading ? (
 					<div className="flex items-center justify-center p-8">

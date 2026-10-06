@@ -29,7 +29,7 @@ React SPA ──WebSocket──▶ Go Server ──spawn──▶ AI CLI (subpro
 | Agent interface | `server/agent/agent.go` | `Session` and `AgentEvent` interfaces |
 | Claude impl | `server/agent/claude/claude.go` | Claude CLI subprocess, stream-json parsing, MCP server config |
 | Process manager | `server/process/manager.go` | Process lifecycle, event stream, lease reaper |
-| Frontend panel | `web/src/components/Chat/ChatPanel.tsx` | The session screen: the header (`SessionHeader.tsx` — the session's title, and the panel behind it holding engine, permission mode, work and usage), the transcript and the composer (`InputBar.tsx`) ([layout](#the-session-screen)) |
+| Frontend panel | `web/src/components/Chat/ChatPanel.tsx` | The session screen: the header (`SessionHeader.tsx` — the session's title, and the panel behind it holding engine, permission mode, work and usage; over a page, the page's own heading, `Layout/PageHeader.tsx` — [why](#the-session-screen)), the transcript and the composer (`InputBar.tsx`) ([layout](#the-session-screen)) |
 | Transcript | `web/src/components/Chat/MessageList.tsx` | Rendering the loaded messages, and every scroll decision made over them: [where the view sits](#where-the-view-sits) (with `useTranscriptScroll.ts` and `scrollAnchor.ts` beside it), the sentinel behind [history paging](#history-paging), and the jump to a pending permission request ([lifecycle-ui.md §2.2](lifecycle-ui.md#22-chat-the-attention-strip)) |
 | Chat hook | `web/src/hooks/useChatMessages.ts` | Message state, streaming, permission handling, and the session's unanswered questions |
 | RPC actions | `web/src/lib/rpc/chat.ts` | `sendMessage` (which carries `answering` when it is an answer, [answering-ui.md §3](answering-ui.md#3-the-answer-panel)), `interrupt`, `permissionResponse` |
@@ -81,6 +81,40 @@ at all. A route naming no session has nothing to describe, so the header keeps
 the project's name and offers no button. The project's name otherwise lives in
 the sidebar's worktree switcher.
 
+**Over a page, the header names the page.** Whatever is on screen gets one
+header, and it is about that screen. A page opened over the chat — a diff, a
+file, a commit — is a page of its own, so its header carries no session: no
+title, no engine or mode, no panel to change them from. A project-level page
+under a session's name read as belonging to that session, it stacked a second
+bar under the first on a phone, and it offered YOLO from a screen that had
+nothing to do with the session.
+
+```
+[☰] [💬] [ ChatPanel.tsx ›          ] [●] [⚙]
+         [ web/src/comp… · Unstaged ]
+```
+
+The page draws its heading with `Layout/PageHeader.tsx`, and the header hosts it
+in the session title's place (a portal into `MainContainer`'s `heading`): the
+title and the way back come from the page's own data, so `ChatPanel` keeps no
+second, per-type copy of them. Rendered on its own — in a unit test — the same
+heading draws as a bar where it stands. The menu button stays: on a phone it is
+the way from one diff to the next file in the list. The way back is
+`MessageSquare` ("Back to chat", with the unread dot) on a page opened from the chat, and `ArrowLeft`
+labelled with where it goes (`Back to commit`, `Back to diff`) on a page opened
+from another page; both are borderless icon buttons like the menu and settings.
+Then the same two lines in the same box as the session's (`ui/HeaderTitle.tsx`
+is shared by both). A title that can be pressed ends in `ChevronRight`, and one
+that cannot has no chevron and no hover. A file name keeps its extension when it
+truncates (`ChatPanel.integration.te….tsx`). The second line ends in what says
+which version of the thing this is (`Staged`, `Editing`, a short hash), in
+words rather than a colour, and that part is kept whole while the folder before
+it truncates; the whole text is in the title box's `title`. Each line is a
+skeleton until its own data arrives, never a stand-in — a commit's hash shows at
+once, its subject when it loads — and while a Git page waits on the repository
+check the way back and both lines are skeletons. File, diff and commit pages
+draw one; a page that does not yet gets the project's name, above its own bar.
+
 **The mode is there to be read, not announced.** Many users run YOLO all day; for
 them it is the normal state, not an exception, and a mark that keeps warning
 about a choice made on purpose is one they learn to look past while it goes on
@@ -118,9 +152,10 @@ order, what decides the next message and then what describes the ones sent:
 A change that succeeds leaves the panel open — a radio group moves its selection
 with the arrow keys, and closing on select would leave a keyboard user only the
 neighbouring choice. One that fails closes it, and the reason shows in the bar
-above the composer — over an overlay too, since the header the panel hangs off
-is usable there. While a turn is open (the server takes no setting change
-then) or the settings are still loading, Engine and Permissions stay listed but
+above the composer. Over a page the header names that page, not the session
+([above](#the-session-screen)), so neither the panel nor that bar is shown
+there; the bar comes back with the chat. While a turn is open (the server
+takes no setting change then) or the settings are still loading, Engine and Permissions stay listed but
 unavailable, each saying why. On a read-only session they are not listed at all:
 what is missing there is the execution environment, not a moment's availability.
 

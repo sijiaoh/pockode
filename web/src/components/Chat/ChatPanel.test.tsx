@@ -75,10 +75,23 @@ function render(ui: React.ReactElement) {
 // route, and this suite renders no router. The file overlay is the one used
 // here that leaves the composer mounted, which is what makes it the honest
 // stand-in for "an overlay came and went".
-vi.mock("../Files", () => ({
-	FileView: () => <div data-testid="file-view" />,
-	FileEditor: () => <div data-testid="file-editor" />,
-}));
+// The file view draws a heading of its own, as a page does; the others stand
+// for a page that does not (yet). Its way back is the plain kind: the chat kind
+// reads the route for its unread dot, and this suite renders no router.
+vi.mock("../Files", async () => {
+	const { default: PageHeader } = await import("../Layout/PageHeader");
+	return {
+		FileView: ({ path, onBack }: { path: string; onBack: () => void }) => (
+			<div data-testid="file-view">
+				<PageHeader
+					back={{ to: "parent", label: "Back", onClick: onBack }}
+					title={path}
+				/>
+			</div>
+		),
+		FileEditor: () => <div data-testid="file-editor" />,
+	};
+});
 
 vi.mock("../Git", () => ({
 	DiffView: () => <div data-testid="diff-view" />,
@@ -3668,26 +3681,26 @@ describe("ChatPanel", () => {
 			);
 		});
 
-		// The header stays up over every overlay, so its panel can be refused
-		// there too — and closes on the refusal so the reason can be read.
-		it("reports a refused switch made over an overlay", async () => {
+		// The panel that raised it is not reachable from a page, so neither is its
+		// reason — until the user is back where they can act on it.
+		it("holds a refused switch's reason back while an overlay is up", async () => {
 			const user = userEvent.setup();
 			seedSession(false);
 			mockState.setSessionMode.mockRejectedValueOnce(new Error("no such mode"));
 
-			render(
-				<ChatPanel
-					{...defaultProps}
-					overlay={{ type: "file", path: "a.ts" }}
-				/>,
-			);
-
+			const { rerender } = render(<ChatPanel {...defaultProps} />);
+			await waitForHistoryLoad();
 			await user.click(sessionTrigger());
 			await user.click(screen.getByRole("radio", { name: /YOLO/ }));
-
 			expect(await screen.findByRole("alert")).toHaveTextContent(
 				"Failed to change mode: no such mode",
 			);
+
+			rerender(<ChatPanel {...defaultProps} overlay={workList} />);
+			expect(screen.queryByRole("alert")).toBeNull();
+
+			rerender(<ChatPanel {...defaultProps} />);
+			expect(screen.getByRole("alert")).toHaveTextContent("no such mode");
 		});
 	});
 
@@ -3922,6 +3935,51 @@ describe("ChatPanel", () => {
 
 			act(() => worktreeActions.setIsGitRepo(true));
 			expect(screen.getByTestId("diff-view")).toBeInTheDocument();
+		});
+
+		// An overlay is a page of its own: the header names it, and the session
+		// behind it is neither shown nor reconfigurable from there.
+		it("puts the page's heading in the header in place of the session's", async () => {
+			const user = userEvent.setup();
+			const onCloseOverlay = vi.fn();
+			render(
+				<ChatPanel
+					{...defaultProps}
+					overlay={{ type: "file", path: "a.ts" }}
+					onCloseOverlay={onCloseOverlay}
+				/>,
+			);
+			await waitForHistoryLoad();
+
+			const header = within(screen.getByRole("banner"));
+			expect(header.getByRole("heading", { level: 1 })).toHaveTextContent(
+				"a.ts",
+			);
+			expect(screen.queryByRole("button", { name: /^Session:/ })).toBeNull();
+
+			await user.click(header.getByRole("button", { name: "Back" }));
+			expect(onCloseOverlay).toHaveBeenCalled();
+		});
+
+		it("keeps the project's name over a page that draws no heading", async () => {
+			render(<ChatPanel {...defaultProps} overlay={workList} />);
+			await waitForHistoryLoad();
+
+			expect(
+				screen.getByRole("heading", { level: 1, name: "Pockode" }),
+			).toBeInTheDocument();
+			expect(screen.queryByRole("button", { name: /^Session:/ })).toBeNull();
+		});
+
+		it("shows a held git view's heading as loading", async () => {
+			const diff = { type: "diff", path: "a.ts", staged: false } as const;
+			render(<ChatPanel {...defaultProps} overlay={diff} />);
+			await waitForHistoryLoad();
+
+			expect(screen.getByRole("heading", { level: 1 })).toHaveAttribute(
+				"aria-busy",
+				"true",
+			);
 		});
 
 		it("hides the covered transcript without taking its box away", async () => {
