@@ -374,6 +374,38 @@ a `413`. `max_upload_size` still travels on the `auth` reply — a client should
 not carry its own copy of a server-side number — but it is now the same value on
 every route.
 
+**`POST /api/chat/attachments`** — store files a chat message is about to carry.
+
+| Param | Required | Meaning |
+|-------|:--------:|---------|
+| `session_id` | ✓ | The session the message will be sent to |
+| `worktree` | | Worktree name; the session must belong to it |
+
+Not a file-namespace endpoint: the files go into the session's attachment store
+(`server/attachments`), not the work directory, because they are part of the
+conversation rather than of the project and are deleted with the session. The
+body is `multipart/form-data` like `/api/files/upload`'s; every part with a
+filename is stored, under an id derived from its content plus the original
+extension (the agent's own tools decide by extension whether a file is a PDF or
+an image). Success is `200` with `{ "files": [{ "id", "name", "size" }] }`, and
+`chat.message` then names the files by `id`
+([code/agent-integration.md](code/agent-integration.md#files-the-user-sends)).
+
+Content-addressed, so the same file uploaded twice is one file with one id and
+retrying a failed request is always safe — which is also why a failure reports
+no `written`. A file uploaded and never sent stays until its session is deleted.
+
+| Status | Code | When |
+|--------|------|------|
+| `400` | `invalid_request` | Missing `session_id`, not `multipart/form-data`, a body cut short, or no file parts |
+| `404` | `worktree_not_found` | Unknown `worktree` |
+| `404` | `session_not_found` | The worktree has no such session |
+| `413` | `too_large` | Over `filetransfer.MaxAttachmentSize`, **20 MiB** of file content per request, or a body more than 1 MiB past that in total; also sent ahead of time as `max_attachment_size` in the `auth` reply |
+| `500` | `internal` | Reading the session or storing a file failed |
+
+The ceiling is lower than a workspace upload's because these are read whole —
+the id is the hash of the content — where a workspace upload streams to disk.
+
 ## Search behavior
 
 Candidate files come from `git ls-files -z --cached --others --exclude-standard`

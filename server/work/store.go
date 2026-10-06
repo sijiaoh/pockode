@@ -17,6 +17,10 @@ type Store interface {
 	List() ([]Work, error)
 	Get(id string) (Work, bool, error)
 	FindBySessionID(sessionID string) (Work, bool, error)
+	// WatchedBy returns the stories a session watches whose news would wake it
+	// (WatchedBySession), in listing order: what a session's row counts as
+	// `watching`.
+	WatchedBy(sessionID string) ([]Work, error)
 
 	Create(ctx context.Context, w Work) (Work, error)
 	Update(ctx context.Context, id string, fields UpdateFields) error
@@ -46,6 +50,18 @@ type Store interface {
 	// watched. A rollback leaves the watch where it is: it is what the caller
 	// asked for, and the next start honours it.
 	Claim(ctx context.Context, id string, watcher *Watcher) (w Work, restart bool, err error)
+
+	// Unwatch releases a story's watcher if it is exactly the given session,
+	// and reports who was watching before the call and whether this call is
+	// what released them. A story watched by another session, or by nobody, is
+	// left alone, and so is everything else about the story: a watch is who
+	// hears the news, not part of how the story runs. Only a story can be
+	// watched, so a task is refused.
+	//
+	// Decided under the store lock, for the reason SetChildWait is: a watched
+	// start moving the watch to another chat between a check and a write would
+	// otherwise have this call release a watch it was never asked about.
+	Unwatch(ctx context.Context, id string, watcher Watcher) (prev *Watcher, released bool, err error)
 
 	// Stop hands the work back to a person: the engine stops driving it and its
 	// session loses its lease. Allowed from any live status.
@@ -220,6 +236,13 @@ func (s *FileStore) FindBySessionID(sessionID string) (Work, bool, error) {
 		}
 	}
 	return Work{}, false, nil
+}
+
+func (s *FileStore) WatchedBy(sessionID string) ([]Work, error) {
+	s.worksMu.RLock()
+	defer s.worksMu.RUnlock()
+
+	return WatchedBySession(s.works)[sessionID], nil
 }
 
 // --- Write operations ---
@@ -444,6 +467,40 @@ func (s *FileStore) Claim(_ context.Context, id string, watcher *Watcher) (Work,
 	}
 
 	return result, restart, nil
+}
+
+func (s *FileStore) Unwatch(_ context.Context, id string, watcher Watcher) (*Watcher, bool, error) {
+	s.worksMu.Lock()
+
+	idx := s.findIndex(id)
+	if idx < 0 {
+		s.worksMu.Unlock()
+		return nil, false, ErrWorkNotFound
+	}
+	w := &s.works[idx]
+	if w.Type() != WorkTypeStory {
+		s.worksMu.Unlock()
+		return nil, false, fmt.Errorf("%w: work %s is a task, and only a story can be watched", ErrInvalidWork, id)
+	}
+	if w.Watcher == nil {
+		s.worksMu.Unlock()
+		return nil, false, nil
+	}
+	watched := *w.Watcher
+	if watched != watcher {
+		s.worksMu.Unlock()
+		return &watched, false, nil
+	}
+
+	prev := s.snapshotWorks()
+
+	w.Watcher = nil
+	w.UpdatedAt = time.Now()
+
+	if err := s.persistAndNotifyUpdates(prev, map[string]bool{id: true}); err != nil {
+		return &watched, false, err
+	}
+	return &watched, true, nil
 }
 
 // setLiveStatus moves a work between the live statuses. Every live status is a
@@ -1020,6 +1077,53 @@ func IDsBySession(works []Work) map[string]string {
 		}
 	}
 	return byID
+}
+
+// WatchedBySession indexes the stories each session watches and would be woken
+// by, for the same readers IDsBySession serves.
+//
+// A closed story is left out even though closing releases its watcher
+// (FileStore.StepDone): a watch is counted because the session will be woken by
+// the story, and a closed story wakes nobody — so the rule says so itself rather
+// than leaning on every write that closes one. A stopped story stays in: its
+// watcher may be waiting for it to be restarted and finish.
+//
+// The watching side is held to WakesWatcher, the rule Engine.notifyWatcher
+// delivers by: a count that included a watcher the news never reaches would
+// tell the user the chat is waiting to be woken when it is not.
+func WatchedBySession(works []Work) map[string][]Work {
+	own := make(map[string]*Work, len(works))
+	for i := range works {
+		if works[i].SessionID != "" {
+			own[works[i].SessionID] = &works[i]
+		}
+	}
+	watched := make(map[string][]Work)
+	for _, item := range works {
+		if item.Watcher == nil || item.Status == StatusClosed {
+			continue
+		}
+		watcher := item.Watcher.SessionID
+		if WakesWatcher(item, watcher, own[watcher]) {
+			watched[watcher] = append(watched[watcher], item)
+		}
+	}
+	return watched
+}
+
+// WakesWatcher reports whether news of story reaches the session watcherID,
+// which runs the work own — nil for a plain chat session. Two watchers are
+// never told:
+//
+//   - The story's own session: it is the one doing the telling.
+//   - A session running a work the engine is not driving. A message starts a
+//     turn, and starting one under a stopped or closed work is the thing
+//     notifyParentOfChild refuses to do for the same reason.
+//
+// The one rule both the delivery (Engine.notifyWatcher) and the count a
+// session's row shows (WatchedBySession) are held to.
+func WakesWatcher(story Work, watcherID string, own *Work) bool {
+	return watcherID != story.SessionID && (own == nil || own.Status == StatusActive)
 }
 
 // UnclosedWorkByWorktree returns the works assigned to the given worktree whose

@@ -52,7 +52,7 @@ var version = "dev"
 //go:embed static/*
 var staticFS embed.FS
 
-func newHandler(serverPassword string, sessions middleware.SessionValidator, devMode bool, wsHandler *ws.RPCHandler, mcpHandler http.Handler, transferHandler *filetransfer.Handler) http.Handler {
+func newHandler(serverPassword string, sessions middleware.SessionValidator, devMode bool, wsHandler *ws.RPCHandler, mcpHandler http.Handler, transferHandler *filetransfer.Handler, attachmentHandler *filetransfer.AttachmentHandler) http.Handler {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
@@ -71,6 +71,7 @@ func newHandler(serverPassword string, sessions middleware.SessionValidator, dev
 	// filetransfer package for why.
 	mux.HandleFunc("GET /api/files/download", transferHandler.Download)
 	mux.HandleFunc("POST /api/files/upload", transferHandler.Upload)
+	mux.HandleFunc("POST /api/chat/attachments", attachmentHandler.Upload)
 
 	// Local MCP API. middleware.Auth bypasses this exact route; mcpHandler
 	// self-auths with the locally-generated MCP token instead of the user
@@ -388,9 +389,6 @@ Flags:
 	// other order would drop every change that arrived in between, and a dropped
 	// change is a wait nothing comes back to.
 	workStore.AddOnChangeListener(workEngine)
-	// A deleted session takes away the place every answer would have gone, which
-	// is one of the engine's six inputs.
-	worktreeManager.AddSessionChangeListener(workEngine)
 	workStarter := worktree.NewWorkStarter(worktreeManager, agentRoleStore, settingsStore)
 	// Single implementation of every work command, shared by the WebSocket
 	// handler (user actions) and the MCP Executor (AI actions).
@@ -459,7 +457,8 @@ Flags:
 
 	wsHandler := ws.NewRPCHandler(cred.Password, sessions, version, remoteURL, devMode, commandStore, worktreeManager, settingsStore, workStore, workOps, workEngine, agentRoleStore, cliAuth, cliUpdate)
 	transferHandler := filetransfer.NewHandler(registry, slog.Default())
-	handler := newHandler(cred.Password, sessions, devMode, wsHandler, mcpHandler, transferHandler)
+	attachmentHandler := filetransfer.NewAttachmentHandler(worktreeManager, worktree.ErrWorktreeNotFound, worktree.ErrSessionNotFound, slog.Default())
+	handler := newHandler(cred.Password, sessions, devMode, wsHandler, mcpHandler, transferHandler, attachmentHandler)
 
 	portStr := strconv.Itoa(port)
 	srv := &http.Server{

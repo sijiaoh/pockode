@@ -1,10 +1,7 @@
 import mermaid from "mermaid";
 import { useId, useLayoutEffect, useState, useSyncExternalStore } from "react";
-import {
-	CodeHighlighter,
-	getIsDarkMode,
-	subscribeToDarkMode,
-} from "../../lib/shikiUtils";
+import { getIsDarkMode, subscribeToDarkMode } from "../../lib/shikiUtils";
+import { CodeBlock } from "./CodeBlock";
 
 function getMermaidTheme(): "dark" | "default" {
 	return getIsDarkMode() ? "dark" : "default";
@@ -55,7 +52,7 @@ export function MermaidBlock({ code }: MermaidBlockProps) {
 	}, [id, code, theme]);
 
 	if (error) {
-		return <CodeHighlighter language="mermaid">{code}</CodeHighlighter>;
+		return <CodeBlock code={code} language="mermaid" />;
 	}
 
 	if (!svg) {

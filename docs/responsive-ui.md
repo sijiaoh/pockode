@@ -554,21 +554,20 @@ noticed. One representation with a test on it is the only thing that ends that.
      paste the expected side of its diff. Do not edit by hand. -->
 
 ```text
-50 controls render text, state no height of their own and carry no touch-target.
+47 controls render text, state no height of their own and carry no touch-target.
 
 28 state their own font size, so the height below is exact: 16–40px.
-22 inherit it, so the height below is an upper bound — the ancestor that
+19 inherit it, so the height below is an upper bound — the ancestor that
   sets it may well set a smaller one: 24–48px.
 
-8 are under the 36px fine-pointer floor.
-6 reach the 44px coarse floor, 0 of them on a read height.
+5 are under the 36px fine-pointer floor.
+5 reach the 44px coarse floor, 0 of them on a read height.
 0 state type this scan cannot read, listed as 0px and `unread`.
 
   16px  exact  web/src/components/Project/WorkDetailOverlay.tsx
   20px  exact  web/src/components/Worktree/WorktreeCreateSheet.tsx
   24px  bound  web/src/components/Settings/sections/AppearanceSections.tsx
   28px  bound  web/src/components/Chat/MessageItem.tsx
-  32px  bound  web/src/components/Chat/MessageItem.tsx ×3
   32px  bound  web/src/components/ui/ContentView.tsx
   36px  exact  packages/shared/src/components/ConfirmDialog.tsx ×2
   36px  exact  web/src/components/AppShell.tsx ×2
@@ -579,7 +578,7 @@ noticed. One representation with a test on it is the only thing that ends that.
   40px  bound  web/src/components/Chat/ForkOriginBanner.tsx
   40px  bound  web/src/components/Chat/MessageItem.tsx ×4
   40px  bound  web/src/components/Chat/QuestionRecordItem.tsx
-  40px  bound  web/src/components/Chat/TaskItem.tsx
+  40px  bound  web/src/components/Chat/TaskItem.tsx ×2
   40px  bound  web/src/components/Worktree/WorktreeSwitcher.tsx
   40px  bound  web/src/components/common/SidebarListItem.tsx
   40px  bound  web/src/extensions/ExampleExtension/settings/AboutSection.tsx
@@ -591,7 +590,6 @@ noticed. One representation with a test on it is the only thing that ends that.
   40px  exact  web/src/components/Project/ProjectTab.tsx ×2
   40px  exact  web/src/components/Worktree/WorktreeCreateSheet.tsx ×3
   40px  exact  web/src/extensions/ExampleExtension/sidebarUI/CustomSidebarContent.tsx
-  44px  bound  web/src/components/Chat/ModeSelector.tsx
   44px  bound  web/src/components/Worktree/WorktreeDropdown.tsx
   48px  bound  web/src/components/Auth/PasswordInput.tsx
   48px  bound  web/src/components/Chat/CommandPalette.tsx
@@ -619,11 +617,12 @@ height; a `bound` row is a ceiling.
 
 **Every `bound` row anyone has chased to its ancestor has come back shorter
 than the register reported, without a single exception.** Of the ones still
-listed above, the permission card is a `text-xs` shell, so its three buttons
-read 32 and are 24 and its Details reads 28 and is 20. Of the ones raised out of
-the register since — the reconnect and session-error banners set `text-sm` on
-the row, so their buttons read 24 and were 20; the settings-error text is a
-`text-xs` paragraph, so its Retry read 24 and was 16. Not one came back taller,
+listed above, the work-event card's Details reads 28 and is 20, being inside a
+`text-xs` shell. Of the ones raised out of the register since — the permission
+card's three buttons read 32 and were 24 for the same reason; the reconnect and
+session-error banners set `text-sm` on the row, so their buttons read 24 and
+were 20; the settings-error text is a `text-xs` paragraph, so its Retry read 24
+and was 16. Not one came back taller,
 and not one came back equal. So on the type axis `bound` does not mean
 *possibly fine*: it means **worse than it looks**, and the ceiling is the
 optimistic reading. The theme card runs the other way only because its height
@@ -633,9 +632,9 @@ counterexample to this one.
 The block above is the whole list. What the shortest of them *are*, since a file
 name does not say what a control is for:
 
-- **`Chat/MessageItem`** — Allow, Always Allow and Deny on a permission request,
-  and the Details link out to a work item. Deciding for the agent is the most
-  consequential thing that screen does, and none of these clears the fine floor.
+- **`Chat/MessageItem`** — the Details link out to a work item. (Allow, Always
+  Allow and Deny on a permission request were here; they now state
+  `min-h-9 pointer-coarse:min-h-11` and left the list.)
 - **`Project/WorkDetailOverlay`** — the link up to the parent work, under the
   heading of a task. The header's Back button on that same screen goes to the
   same place and is already 44 (`onBack={() => onOpenWorkDetail(parent.id)}`,
@@ -692,8 +691,8 @@ Either of:
 - **(b) A mis-tap that cannot be undone.** Missing costs more than a wasted tap
   — an authorization, a refusal, an overwrite, with nothing to undo it with.
   `MessageItem`'s Deny / Always Allow / Allow fail (a), since they are not an
-  exit from an error, but they are the most expensive mis-tap in the app: 24px
-  tall, 8px apart, side by side, and hitting Allow while aiming at Deny is a
+  exit from an error, but they are the most expensive mis-tap in the app — they
+  were 24px tall, side by side, and hitting Allow while aiming at Deny is a
   tool call that has already run. A rule that knew only about error exits would
   file them as R1, which is wrong.
 
@@ -737,21 +736,22 @@ only occupies the extra pixels while something is failing, and since nothing
 here can be rendered, the batch admits only places whose height can be computed
 to the pixel without rendering them.
 
-The chat-transcript controls are **R0 too and still wait**, which is the point
+The chat-transcript controls were **R0 too and waited**, which is the point
 of cutting by shape: bubble geometry belongs to
-[session-fork-ui.md](session-fork-ui.md), the permission card is a dense
-`text-xs` card, and taking its three buttons from 24px to 44px re-spaces the
-whole card vertically. That wants doing together with the bubble geometry, and
-it is the next batch rather than an open question.
+[session-fork-ui.md](session-fork-ui.md), and the permission card is a dense
+`text-xs` card whose three buttons going from 24px to 44px re-spaced the whole
+card vertically. They went up when the card itself was redesigned
+([tool-call-ui.md](tool-call-ui.md#the-permission-card-takes-the-rows-place)):
+one full-width row, `gap-2`, each box growing to the floor.
 
 #### What is left, already graded
 
 Written down so the next reader does not grade it again.
 
-- **Batch 2 — R0, the chat transcript.** `MessageItem`'s Deny, Always Allow and
-  Allow. All R0 (b). The question card's Cancel and Submit were in this batch and
-  are out of it: answering happens in the answer panel now, whose own controls
-  clear the floor, and the card that replaced it holds no form at all
+- **Batch 2 — R0, the chat transcript.** Done: `MessageItem`'s Deny, Always
+  Allow and Allow, all R0 (b), went up with the permission card's redesign. The
+  question card's Cancel and Submit were in this batch and are out of it:
+  answering happens in the answer panel now, whose own controls clear the floor, and the card that replaced it holds no form at all
   ([answering-ui.md](answering-ui.md)).
 - **Batch 3 — R1, text targets centred in a tall row.** `MessageItem`'s Details
   link and `ContentView`'s path button. They share a *structural* cause — a 44px
@@ -816,15 +816,15 @@ One consequence is shared by all nine: the keyboard focus ring now outlines the
 time this repository could not render: Playwright's `headless_shell` is missing
 `libatk-1.0.so.0` and the other system libraries beside it, and installing them
 needs `sudo`. It can now —
-[`scripts/question-walkthrough/`](../scripts/question-walkthrough/README.md)
-unpacks those libraries without root and drives the real server at phone sizes
-on a coarse pointer — but it only walks the answering UI, and batch 1's screens
-have not been through it. So every height, offset and clearance in this section
-— and the two technique precedents this batch contributed above — is arithmetic
-over `padding + line box`. What *is* machine-checked is the static reading of
-the class lists in `touchTarget.test.ts` and the behavioural assertions in the
-component suites. The walkthrough remains the acceptance criterion, and it
-remains owed.
+[`scripts/ui-walkthrough/`](../scripts/ui-walkthrough/README.md) unpacks those
+libraries without root and drives the real server at phone sizes on a coarse
+pointer — but it only walks the answering UI and the chat screen, and batch 1's
+screens have not been through it. So every height, offset and clearance in this
+section — and the two technique precedents this batch contributed above — is
+arithmetic over `padding + line box`. What *is* machine-checked is the static
+reading of the class lists in `touchTarget.test.ts` and the behavioural
+assertions in the component suites. The walkthrough remains the acceptance
+criterion, and it remains owed.
 
 ## Which event primitive
 

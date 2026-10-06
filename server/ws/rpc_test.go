@@ -115,7 +115,8 @@ func newForkableTestEnv(t *testing.T) *testEnv {
 }
 
 // newTestEnvWithAgent registers ag for claude sessions. mock is the same agent in
-// every case but the forkable one, where it is the mock ag records into.
+// every case but the wrapping ones (forkable, attachment-receiving), where it is
+// the mock ag records into.
 func newTestEnvWithAgent(t *testing.T, mock *mockAgent, ag agent.Agent, workDir string) *testEnv {
 	dataDir := t.TempDir()
 	cmdStore, err := command.NewStore(dataDir)
@@ -157,7 +158,6 @@ func newTestEnvWithAgent(t *testing.T, mock *mockAgent, ag agent.Agent, workDir 
 	worktreeManager.SetWorkEngine(workEngine)
 	worktreeManager.SetWorkStore(workStore)
 	workStore.AddOnChangeListener(worktreeManager)
-	worktreeManager.AddSessionChangeListener(workEngine)
 	t.Cleanup(workEngine.Stop)
 	workStarter := worktree.NewWorkStarter(worktreeManager, agentRoleStore, settingsStore)
 	workOps := work.NewOperations(workStore, workStarter, workEngine, agentrole.Steps{Store: agentRoleStore})

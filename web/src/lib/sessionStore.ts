@@ -239,6 +239,12 @@ export const useSessionStore = create<SessionStore>((set) => ({
 }));
 
 /**
+ * The title the server gives a session it creates, which the chat replaces with
+ * the first message — so a session still wearing it has not been named yet.
+ */
+export const NEW_SESSION_TITLE = "New Chat";
+
+/**
  * The title of the session with this id, and null for one the list has no row
  * for. Null rather than undefined so a caller has to answer for the absence.
  */

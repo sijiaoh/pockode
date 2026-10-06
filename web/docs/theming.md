@@ -84,8 +84,6 @@
 | `th-code-text` | 代码块文字 | 代码文本 |
 | `th-user-bubble` | 用户消息气泡 | 用户发送的消息 |
 | `th-user-bubble-text` | 用户消息文字 | 用户消息内的文字 |
-| `th-ai-bubble` | AI 消息气泡 | AI 回复的消息 |
-| `th-ai-bubble-text` | AI 消息文字 | AI 消息内的文字 |
 
 ## 使用规范
 
@@ -115,13 +113,9 @@
 
 ### 组合规范
 
-**消息气泡**
+**消息气泡**（只有用户消息有气泡，助手消息直接落在对话底色上）
 ```html
-<!-- 用户消息 -->
 <div class="bg-th-user-bubble text-th-user-bubble-text">
-
-<!-- AI 消息 -->
-<div class="bg-th-ai-bubble text-th-ai-bubble-text">
 ```
 
 **按钮**

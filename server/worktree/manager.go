@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"sync"
 	"time"
@@ -75,7 +76,8 @@ func (m *Manager) Registry() *Registry {
 }
 
 // SetWorkEngine installs what drives work items. Every worktree built after
-// this call reports its settled turn endings to it — the engine's main input.
+// this call reports its settled turn endings to it — the engine's main input —
+// and its deleted sessions.
 func (m *Manager) SetWorkEngine(e *work.Engine) {
 	m.workEngine = e
 }
@@ -87,8 +89,12 @@ func (m *Manager) SetWorkStore(s work.Store) {
 }
 
 // OnWorkChange implements work.OnChangeListener: a session names the work item
-// it runs — on its list row and on its detail — and nothing about the session
-// moves when that relation does.
+// it runs and counts the stories it watches — on its list row and on its
+// detail — and nothing about the session moves when either relation does.
+//
+// The change goes to the work's own worktree and to the worktrees of the
+// story's watcher before and after it, each once: a chat in main may watch a
+// story running in a worktree of its own.
 //
 // Routed through the manager rather than each worktree's watcher registering on
 // the work store itself, because that store is global and keeps its listeners
@@ -100,9 +106,17 @@ func (m *Manager) SetWorkStore(s work.Store) {
 // there is nobody to notify, and building it here would defeat the cleanup that
 // unloaded it.
 func (m *Manager) OnWorkChange(event work.ChangeEvent) {
-	if wt, ok := m.loaded(event.Work.Worktree); ok {
-		wt.SessionListWatcher.HandleWorkChange(event)
-		wt.SessionDetailWatcher.HandleWorkChange(event)
+	names := []string{event.Work.Worktree}
+	for _, watcher := range []*work.Watcher{event.Work.Watcher, event.PrevWatcher} {
+		if watcher != nil && !slices.Contains(names, watcher.Worktree) {
+			names = append(names, watcher.Worktree)
+		}
+	}
+	for _, name := range names {
+		if wt, ok := m.loaded(name); ok {
+			wt.SessionListWatcher.HandleWorkChange(event)
+			wt.SessionDetailWatcher.HandleWorkChange(event)
+		}
 	}
 }
 
@@ -249,18 +263,39 @@ func (m *Manager) sessionDeleter(name string) (func(context.Context, string) err
 	if dirErr != nil {
 		return nil, nil, dirErr
 	}
-	// Nothing is notified along this branch, and there is nobody to notify: the
-	// worktree's watchers stopped with it, and the work engine's interest in a
-	// deleted session is to stop the work that was waiting in it — which a
-	// worktree with unclosed work cannot be deleted while.
+	// No store is open here to notify anyone, and the watchers stopped with the
+	// worktree. The work engine is still told: a chat here may have been
+	// watching a story that lives elsewhere and is still open.
 	return func(ctx context.Context, sessionID string) error {
 			if err := ctx.Err(); err != nil {
 				return err
 			}
-			return session.DeleteInDir(dir, sessionID)
+			deleted, err := session.DeleteInDir(dir, sessionID)
+			// Only a session that was here: the id is the caller's, and telling
+			// the engine about one that named nothing would act on whatever
+			// session elsewhere carries it.
+			if deleted && m.workEngine != nil {
+				m.workEngine.OnSessionDeleted(name, sessionID)
+			}
+			return err
 		}, func() {
 			m.pruneEmptySessionData(name, dir)
 		}, nil
+}
+
+// sessionDeletions tells the work engine about one worktree's deleted sessions.
+// The store's event names only the session, and the engine needs the worktree
+// too: a story's watcher is a session *in a worktree*.
+type sessionDeletions struct {
+	engine   *work.Engine
+	worktree string
+}
+
+// OnSessionChange implements session.OnChangeListener.
+func (d sessionDeletions) OnSessionChange(event session.SessionChangeEvent) {
+	if event.Op == session.OperationDelete {
+		d.engine.OnSessionDeleted(d.worktree, event.Session.ID)
+	}
 }
 
 // pruneEmptySessionData removes a deleted worktree's data directory once the
@@ -381,6 +416,38 @@ func (m *Manager) ResolveSessionWorktree(sessionID string) (string, error) {
 	return "", fmt.Errorf("%w: %s", ErrSessionNotFound, sessionID)
 }
 
+// AttachmentDataDir is the data directory a file uploaded to one of the named
+// worktree's sessions is stored under (see package attachments), once both the
+// worktree and the session are known to exist.
+//
+// Uploads arrive over HTTP, off the WebSocket connection that would otherwise
+// hold the worktree, so this vouches for both names before either becomes a
+// path. A session of a deleted worktree is refused: it can be read, never
+// continued (SessionReader), and a file sent to it has nowhere to go.
+func (m *Manager) AttachmentDataDir(name, sessionID string) (string, error) {
+	// Any failure to resolve the name is the worktree not being there — a
+	// named one in a project that is not a git repository has no worktrees —
+	// and is wrapped so a caller can tell it from a fault reading the index.
+	if _, err := m.registry.Resolve(name); err != nil {
+		if errors.Is(err, ErrWorktreeNotFound) {
+			return "", err
+		}
+		return "", fmt.Errorf("%w: %w", ErrWorktreeNotFound, err)
+	}
+	reader, err := m.SessionReader(name)
+	if err != nil {
+		return "", err
+	}
+	_, found, err := reader.Get(sessionID)
+	if err != nil {
+		return "", err
+	}
+	if !found {
+		return "", fmt.Errorf("%w: %s", ErrSessionNotFound, sessionID)
+	}
+	return m.SessionDataDir(name)
+}
+
 // AgentProcessCount is how many sessions have a process of agentType's CLI
 // running, across every worktree. Only loaded worktrees are looked at, which is
 // exact for the reason StopSession gives.
@@ -424,7 +491,8 @@ func (m *Manager) ResolveSender(name string) (work.MessageSender, func(), error)
 // store — the ones already built and the ones built later. For state that is
 // keyed by session but owned elsewhere: the work detail's usage aggregation and
 // the work list's activity, which have to be told when a session they read
-// changed, and the work engine, which stops a work whose session was deleted.
+// changed. The work engine is not one of them: it needs to know which worktree
+// a deleted session was in, and is wired per worktree instead (sessionDeletions).
 //
 // The already-built ones are not a formality. Worktrees are created lazily by
 // whoever needs one first, and the engine resolves senders for work it restarts
@@ -749,6 +817,7 @@ func (m *Manager) create(name, workDir string) (*Worktree, error) {
 		processManager.SetOnTurnEnded(func(end session.TurnEnd) {
 			engine.HandleTurnEnded(end.SessionID, end.Outcome)
 		})
+		sessionStore.AddOnChangeListener(sessionDeletions{engine: engine, worktree: name})
 	}
 
 	chatClient := chat.NewClient(sessionStore, processManager)

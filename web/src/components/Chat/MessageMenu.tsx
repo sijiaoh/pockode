@@ -47,19 +47,17 @@ interface Props {
  * already a drawer on a phone and a centered modal on a wide screen, so no
  * second breakpoint is written here.
  *
- * One row today — the very shape the standing action row was once chosen over,
- * for charging two taps and handing back one thing. What changed is the other
- * side of the trade: this row can carry a whole sentence saying why fork cannot
- * run, which an icon could only whisper into `aria-label` where no finger ever
- * reads it, and the transcript gets back the 36-44px per message that a
- * standing row spends on its first icon. A one-row sheet is an accepted middle,
- * not an oversight.
+ * The full list even where all of it also stands as a button (the agent's
+ * turn-end row): this is where a blocked action says why in a whole sentence,
+ * which an icon could only whisper into `aria-label` where no finger ever reads
+ * it — so on the agent's side only a blocked Fork opens it. On the user's side
+ * it is a one-row sheet behind the `…` — an accepted middle, not an oversight
+ * (docs/session-fork-ui.md).
  *
  * Focus is `Sheet`'s job, not this menu's: it takes focus on open, cycles Tab
- * inside itself and hands focus back to the `…` on close.
+ * inside itself and hands focus back to the button that opened it on close.
  *
- * Rules for whoever adds the second action, so the menu is not redesigned per
- * row:
+ * Rules for whoever adds an action, so the menu is not redesigned per row:
  * - Two groups: reversible above, destructive below, one divider between (the
  *   shape `FileEntryMenu` already has). Each group is append-only — a new row
  *   goes last in its group and existing rows never move, because what this

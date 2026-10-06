@@ -86,7 +86,7 @@ function Row({ label, children }: { label: string; children: ReactNode }) {
  * about this item, above the list of items it aggregates.
  *
  * Figures are abbreviated here (`1.2M`): a total is read as a proportion, and
- * three columns of grouped exact counts do not fit a 360px viewport. The exact ones are one Open Chat away, in the session info panel.
+ * three columns of grouped exact counts do not fit a 360px viewport. The exact ones are one Open Chat away, in the header's session panel.
  */
 function WorkUsageSection({ type, usage }: Props) {
 	const { own, total, task_count: taskCount } = usage;

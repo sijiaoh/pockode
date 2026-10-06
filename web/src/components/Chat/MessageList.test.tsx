@@ -7,7 +7,7 @@ import {
 	type ScrollBox,
 	stubScrollBox,
 } from "../../test/scrollBox";
-import type { Message } from "../../types/message";
+import type { ContentPart, Message } from "../../types/message";
 import MessageList, { type MessageListHandle } from "./MessageList";
 
 vi.mock("../../lib/wsStore", () => ({
@@ -1085,12 +1085,153 @@ describe("MessageList following the tail", () => {
 
 		// Read as a return to the tail, the next output would drag the reader to the
 		// bottom of the conversation.
-		expect(
-			screen.getByRole("button", { name: "Scroll to bottom" }),
-		).toBeInTheDocument();
 		viewport.contentHeight = 1000;
 		triggerResize(contentBox(scroller));
 		expect(scroller.scrollTop).toBe(100);
+		expect(
+			screen.getByRole("button", { name: "Scroll to bottom" }),
+		).toBeInTheDocument();
+	});
+
+	// Anchored at the end, the button would sit over the last row's bottom-right
+	// controls with no scrolling left that could move them out from under it.
+	it("keeps the button off a view anchored at the end until the end moves away", () => {
+		const ref = createRef<MessageListHandle>();
+		const { scroller, viewport } = renderScrolling(
+			[...transcript, permissionMessage("card", "p1")],
+			{ box: { contentHeight: 600, viewportHeight: 500 }, ref },
+		);
+
+		act(() => ref.current?.jumpToRequest("p1"));
+		expect(scroller.scrollTop).toBe(maxScrollTop(viewport));
+		expect(
+			screen.queryByRole("button", { name: /Scroll to bottom/ }),
+		).toBeNull();
+
+		viewport.contentHeight = 1000;
+		triggerResize(contentBox(scroller));
+		expect(scroller.scrollTop).toBe(100);
+		expect(
+			screen.getByRole("button", { name: /Scroll to bottom/ }),
+		).toBeInTheDocument();
+	});
+
+	// Rows below a pending card — the turn-end slot keeps its height while the
+	// turn waits — can hold it more than "near the end" away from the end, so
+	// distance cannot be what keeps the button off its answers.
+	it("keeps the button off a pending permission card's answers", () => {
+		render(
+			<MessageList
+				sessionId="session-1"
+				messages={[...transcript, permissionMessage("card", "p1")]}
+				onPermissionRespond={() => {}}
+			/>,
+		);
+		const scroller = scrollContainer();
+		stubScrollBox(scroller, { contentHeight: 1000, viewportHeight: 500 });
+		triggerResize(scroller);
+		const rect = (top: number, bottom: number) => ({ top, bottom }) as DOMRect;
+		vi.spyOn(scroller, "getBoundingClientRect").mockReturnValue(rect(0, 500));
+		const answers = screen.getByRole("button", { name: "Allow" }).parentElement;
+		if (!answers) throw new Error("no answer row");
+		const answersAt = vi
+			.spyOn(answers, "getBoundingClientRect")
+			.mockReturnValue(rect(-200, -150));
+
+		dragTo(scroller, 200);
+		expect(
+			screen.getByRole("button", { name: "Scroll to bottom" }),
+		).toBeInTheDocument();
+
+		answersAt.mockReturnValue(rect(440, 490));
+		dragTo(scroller, 190);
+		expect(
+			screen.queryByRole("button", { name: /Scroll to bottom/ }),
+		).toBeNull();
+	});
+
+	// A send to an idle agent lands with its reply's placeholder below it, so the
+	// newest row is not the one the reader typed.
+	it("returns to the tail when a send to an idle agent opens a reply below it", () => {
+		const { rerender, scroller, viewport } = renderFollowing();
+		dragTo(scroller, 200);
+
+		rerender(
+			<MessageList
+				sessionId="session-1"
+				messages={[
+					...transcript,
+					userMessage("sent"),
+					{
+						id: "reply",
+						role: "assistant",
+						status: "streaming",
+						createdAt: new Date(),
+						parts: [],
+					},
+				]}
+			/>,
+		);
+
+		expect(scroller.scrollTop).toBe(maxScrollTop(viewport));
+	});
+
+	// Re-subscribing replays history with fresh ids. With no older page loaded the
+	// page count has nothing to drop, so the replacement is all there is to go on.
+	it("returns to the tail when a reconnect replaces the transcript", () => {
+		const { rerender, scroller, viewport } = renderFollowing();
+		dragTo(scroller, 200);
+
+		rerender(
+			<MessageList
+				sessionId="session-1"
+				messages={transcript.map((m) => ({ ...m, id: `${m.id}-replayed` }))}
+			/>,
+		);
+
+		expect(scroller.scrollTop).toBe(maxScrollTop(viewport));
+		expect(
+			screen.queryByRole("button", { name: /Scroll to bottom/ }),
+		).toBeNull();
+	});
+
+	// The newest row before the send can be an empty reply bubble, which the
+	// send's own turn closing drops.
+	it("returns to the tail when a send drops the empty bubble it lands after", () => {
+		const emptyReply: Message = {
+			id: "empty",
+			role: "assistant",
+			status: "complete",
+			createdAt: new Date(),
+			parts: [],
+		};
+		const { rerender, scroller, viewport } = renderScrolling([
+			...transcript,
+			emptyReply,
+		]);
+		dragTo(scroller, 200);
+
+		rerender(
+			<MessageList
+				sessionId="session-1"
+				messages={[...transcript, userMessage("sent")]}
+			/>,
+		);
+
+		expect(scroller.scrollTop).toBe(maxScrollTop(viewport));
+	});
+
+	// Taking an empty reply bubble back out removes the newest row, which is not a
+	// replacement and must not drag the reader to the end.
+	it("stays put when the newest row is taken back out", () => {
+		const { rerender, scroller } = renderFollowing();
+		dragTo(scroller, 200);
+
+		rerender(
+			<MessageList sessionId="session-1" messages={transcript.slice(0, -1)} />,
+		);
+
+		expect(scroller.scrollTop).toBe(200);
 	});
 
 	// Sending is an explicit return to the tail — the reader just wrote at the
@@ -1223,5 +1364,200 @@ describe("MessageList following the tail", () => {
 		);
 
 		expect(scroller.scrollTop).toBe(maxScrollTop(viewport));
+	});
+});
+
+describe("the scroll button's new-content dot", () => {
+	const transcript = Array.from({ length: 5 }, (_, i) =>
+		textMessage(`m${i + 1}`),
+	);
+
+	function leaveTail() {
+		const view = renderScrolling(transcript);
+		dragTo(view.scroller, 200);
+		return view;
+	}
+
+	const dot = () => screen.queryByTestId("unseen-dot");
+
+	it("appears when the last message streams more output after the reader left", () => {
+		const { rerender } = leaveTail();
+		expect(dot()).toBeNull();
+
+		const last = transcript[transcript.length - 1];
+		if (last.role !== "assistant") throw new Error("fixture");
+		rerender(
+			<MessageList
+				sessionId="session-1"
+				messages={[
+					...transcript.slice(0, -1),
+					{
+						...last,
+						parts: [...last.parts, { type: "text", content: "more" }],
+					},
+				]}
+			/>,
+		);
+
+		expect(dot()).not.toBeNull();
+		expect(
+			screen.getByRole("button", { name: "Scroll to bottom, new messages" }),
+		).toBeInTheDocument();
+	});
+
+	it("appears when a new message lands at the end", () => {
+		const { rerender } = leaveTail();
+		rerender(
+			<MessageList
+				sessionId="session-1"
+				messages={[...transcript, textMessage("m6")]}
+			/>,
+		);
+		expect(dot()).not.toBeNull();
+	});
+
+	// Neither is anything the reader has not seen: a backfilled sequence number
+	// replaces the message object without touching what it shows, and a page of
+	// older history grows the transcript at the other end.
+	it.each([
+		[
+			"the last message is only backfilled",
+			[
+				...transcript.slice(0, -1),
+				{ ...transcript[transcript.length - 1], anchorSeq: 7 },
+			] as Message[],
+		],
+		["an older page lands above", [textMessage("older"), ...transcript]],
+	])("stays off when %s", (_, messages) => {
+		const { rerender } = leaveTail();
+		rerender(<MessageList sessionId="session-1" messages={messages} />);
+		expect(dot()).toBeNull();
+	});
+
+	it("appears when the turn at the end fails", () => {
+		const { rerender } = leaveTail();
+		const last = transcript[transcript.length - 1];
+		rerender(
+			<MessageList
+				sessionId="session-1"
+				messages={[
+					...transcript.slice(0, -1),
+					{ ...last, status: "error", error: "boom" } as Message,
+				]}
+			/>,
+		);
+		expect(dot()).not.toBeNull();
+	});
+
+	// The newest row absorbs the older half of its own turn when a page lands, so
+	// its parts change without anything new at the end.
+	it("stays off when a page joins onto the newest row", () => {
+		const { rerender } = leaveTail();
+		const last = transcript[transcript.length - 1];
+		if (last.role !== "assistant") throw new Error("fixture");
+		rerender(
+			<MessageList
+				sessionId="session-1"
+				loadedHistoryPages={1}
+				messages={[
+					...transcript.slice(0, -1),
+					{
+						...last,
+						parts: [{ type: "text", content: "older half" }, ...last.parts],
+					},
+				]}
+			/>,
+		);
+		expect(dot()).toBeNull();
+	});
+
+	// Coming back within reach of the end shows the end, even where it is not a
+	// return to the tail.
+	it("clears once the reader comes within reach of the end", () => {
+		const { rerender, scroller, viewport } = leaveTail();
+		rerender(
+			<MessageList
+				sessionId="session-1"
+				messages={[...transcript, textMessage("m6")]}
+			/>,
+		);
+		expect(dot()).not.toBeNull();
+
+		// Upward, so it stays anchored: the end was reached by the content
+		// shrinking under the view, not by the reader scrolling down to it.
+		viewport.contentHeight = 520;
+		dragTo(scroller, 10);
+		expect(dot()).toBeNull();
+
+		viewport.contentHeight = 1000;
+		triggerResize(contentBox(scroller));
+		expect(
+			screen.getByRole("button", { name: "Scroll to bottom" }),
+		).toBeInTheDocument();
+	});
+
+	it("clears once the reader is back at the tail", async () => {
+		const { rerender, scroller } = leaveTail();
+		const grown = [...transcript, textMessage("m6")];
+		rerender(<MessageList sessionId="session-1" messages={grown} />);
+
+		await userEvent.click(
+			screen.getByRole("button", { name: "Scroll to bottom, new messages" }),
+		);
+		dragTo(scroller, 200);
+
+		// Left again with nothing new since: the button is back, the dot is not.
+		expect(
+			screen.getByRole("button", { name: "Scroll to bottom" }),
+		).toBeInTheDocument();
+		expect(dot()).toBeNull();
+	});
+});
+
+// Children that loaded flat, before their call did, stay where they are; the
+// call's row in another bubble still counts them (docs/tool-call-ui.md#what-is-not-filed).
+describe("a subagent's unfiled children", () => {
+	it("are counted by their call's row", () => {
+		const message = (id: string, parts: ContentPart[]): Message => ({
+			id,
+			role: "assistant",
+			status: "complete",
+			createdAt: new Date(),
+			parts,
+		});
+		const read = (id: string, parentToolUseId?: string): ContentPart => ({
+			type: "tool_call",
+			tool: {
+				id,
+				name: "Read",
+				input: { file_path: "/a.go" },
+				status: "success",
+			},
+			...(parentToolUseId ? { parentToolUseId } : {}),
+		});
+		render(
+			<MessageList
+				sessionId="session-1"
+				messages={[
+					message("m1", [
+						{
+							type: "tool_call",
+							tool: {
+								id: "t1",
+								name: "Agent",
+								input: { description: "find usages" },
+								status: "success",
+								result: "done",
+								children: [read("c1")],
+							},
+						},
+					]),
+					message("m2", [read("c2", "t1"), read("c3", "t1")]),
+				]}
+			/>,
+		);
+		expect(
+			screen.getByRole("button", { name: /find usages/ }),
+		).toHaveAccessibleName(/3 steps/);
 	});
 });

@@ -20,23 +20,22 @@ import MessageMenu from "./MessageMenu";
 export type ForkBlocked = "nothing-before" | ForkUnavailable;
 
 interface Props {
-	/** Which side the bubble sits on, so the menu can name whose message it is. */
-	side: "user" | "assistant";
 	/**
-	 * Absent when this message is not a conversation turn — a bubble still being
-	 * written, a Pockode event line. The slot stays, the glyph does not.
+	 * Absent while the message is still being sent: it is not a turn yet. The
+	 * slot stays, the glyph does not.
 	 */
 	onFork?: () => void;
 	forkBlocked?: ForkBlocked;
 }
 
 /**
- * The 36px slot beside a chat bubble, and the `…` in it.
+ * The 36px slot beside a row the user sent, and the `…` in it. The agent's
+ * messages have no bubble and no slot; their actions are a row at the end of
+ * the message instead (`MessageActions`).
  *
- * The slot is always drawn, empty or not, and every row in a session that can
- * fork at all gets one. That buys two things: a message going from streaming to
- * settled does not move a pixel, and the full-bleed event lines end where the
- * widest bubble ends instead of overhanging it by the slot's width.
+ * The slot is always drawn, empty or not, on every user row of a session that
+ * can fork at all: a message going from sending to settled does not move a
+ * pixel. Work event lines get none — they are never turns.
  *
  * The slot sits on the inside of the bubble, the side facing the middle of the
  * conversation: the outside is the avatar's, and the inside is space this
@@ -52,12 +51,8 @@ interface Props {
  * those reasons changed, and the author would not know they had moved it.
  *
  * The glyph fades in rather than appearing (`animate-message-menu-in`, not a
- * transition: it is mounted, and there is no before-value to transition from).
- * The mount the fade is written for is a turn settling — the one moment the
- * user is certainly watching this bubble — and it lands at the bubble's *end*,
- * which is exactly where the writing just was. The same fade plays wherever
- * else a glyph mounts, on a transcript's first paint or on a page of older
- * messages, and costs nothing there: the slot is already the size it will stay.
+ * transition: it is mounted, and there is no before-value to transition from),
+ * and costs nothing: the slot is already the size it will stay.
  *
  * Visible under both pointers, never revealed on hover: the slot's width is
  * paid whether or not anything is drawn in it, so hiding the glyph would save
@@ -70,7 +65,7 @@ interface Props {
  * these three dots, and forty copies of a *feature's* icon down a transcript
  * read as forty announcements of that feature.
  */
-function MessageMenuTrigger({ side, onFork, forkBlocked }: Props) {
+function MessageMenuTrigger({ onFork, forkBlocked }: Props) {
 	const [open, setOpen] = useState(false);
 
 	return (
@@ -81,13 +76,9 @@ function MessageMenuTrigger({ side, onFork, forkBlocked }: Props) {
 					onClick={() => setOpen(true)}
 					aria-haspopup="dialog"
 					aria-expanded={open}
-					// Named per speaker: forty buttons called "Message actions" is a
+					// Named for the speaker: forty buttons called "Message actions" is a
 					// list no screen reader user can navigate.
-					aria-label={
-						side === "user"
-							? "Actions for your message"
-							: "Actions for the agent's message"
-					}
+					aria-label="Actions for your message"
 					className={`${iconButtonClass({ grow: false })} animate-message-menu-in ${
 						open ? "opacity-100" : "opacity-50 hover:opacity-100"
 					} focus-visible:opacity-100`}
@@ -97,7 +88,7 @@ function MessageMenuTrigger({ side, onFork, forkBlocked }: Props) {
 			)}
 			{open && onFork && (
 				<MessageMenu
-					side={side}
+					side="user"
 					onFork={onFork}
 					forkBlocked={forkBlocked}
 					onClose={() => setOpen(false)}

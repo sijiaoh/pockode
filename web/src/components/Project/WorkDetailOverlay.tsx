@@ -2,6 +2,7 @@ import { ConfirmDialog } from "@pockode/shared";
 import {
 	AlertCircle,
 	Check,
+	Eye,
 	Loader2,
 	MessageSquare,
 	Pencil,
@@ -17,6 +18,12 @@ import { useWorkDetailSubscription } from "../../hooks/useWorkDetailSubscription
 import type { Activity } from "../../lib/activity";
 import { useAgentRoleStore } from "../../lib/agentRoleStore";
 import { requestAnswerPanel } from "../../lib/answerIntent";
+import {
+	selectSessionTitle,
+	UNLISTED_SESSION_NAME,
+	useSessionStore,
+} from "../../lib/sessionStore";
+import { useWorktreeStore } from "../../lib/worktreeStore";
 import { useWSStore } from "../../lib/wsStore";
 import type { AgentRole } from "../../types/agentRole";
 import type { PendingQuestion } from "../../types/message";
@@ -137,6 +144,10 @@ function WorkDetailPage({
 							<WorktreeBadge work={work} className="max-w-[16rem]" />
 						</div>
 						<WaitLine work={work} />
+						<WatcherLine
+							work={work}
+							onNavigateToSession={onNavigateToSession}
+						/>
 					</div>
 
 					<PendingQuestionsSection
@@ -372,6 +383,58 @@ function WaitLine({ work }: { work: Work }) {
 		<p className="mt-2 text-xs text-th-text-secondary">
 			Waiting for its subtasks to finish.
 		</p>
+	);
+}
+
+/**
+ * Which chat this story wakes, and a way back to it.
+ *
+ * Shown whenever the detail names a watcher: closing releases the watch, so the
+ * line goes by itself, and a stopped story keeps it because the watch outlives
+ * a stop. There is no way to unwatch from here: the watch is the watching
+ * agent's to release (story_unwatch), and a person who wants it gone tells
+ * that chat.
+ *
+ * The chat is named from the session list rather than from a copy on the
+ * detail, which would go stale on a rename. The list holds only the worktree in
+ * view, so a watcher elsewhere is named by its worktree; either way the link
+ * still opens it.
+ */
+function WatcherLine({
+	work,
+	onNavigateToSession,
+}: {
+	work: Work;
+	onNavigateToSession: (sessionId: string, worktree: string) => void;
+}) {
+	// The worktree the session list is read out of, which is what decides
+	// whether the list can name the watcher.
+	const currentWorktree = useWorktreeStore((s) => s.current);
+	const watcher = work.watcher;
+	const watcherId = watcher?.session_id ?? "";
+	const listedTitle = useSessionStore(selectSessionTitle(watcherId));
+
+	if (!watcher) return null;
+	const worktree = watcher.worktree ?? "";
+	const name =
+		worktree === currentWorktree
+			? (listedTitle ?? UNLISTED_SESSION_NAME)
+			: `a session in ${worktree || "main"}`;
+
+	return (
+		<div className="mt-2 flex min-w-0 items-center gap-2 text-xs text-th-text-secondary">
+			<Eye className="size-3 shrink-0 text-th-text-muted" aria-hidden="true" />
+			<span className="shrink-0">Watched by</span>
+			<button
+				type="button"
+				onClick={() => onNavigateToSession(watcher.session_id, worktree)}
+				// The name truncates itself: `truncate` on the button would clip
+				// `touch-target`'s overlay along with the text.
+				className="touch-target flex min-w-0 max-w-[16rem] rounded text-th-accent hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent"
+			>
+				<span className="truncate">{name}</span>
+			</button>
+		</div>
 	);
 }
 

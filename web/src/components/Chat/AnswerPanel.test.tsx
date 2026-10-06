@@ -9,7 +9,7 @@ import {
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ComponentProps } from "react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	EMPTY_DRAFT,
 	questionDraftActions,
@@ -93,10 +93,11 @@ describe("AnswerPanel", () => {
 	});
 
 	// With the host's chrome folded on a short viewport the card is all that is
-	// left to answer in, so it takes the room: the whole rectangle, and a header
-	// and footer cut to what their controls need. Send keeps its 44px — that is
-	// the one row the user must reach with the keyboard up.
-	it("takes the whole rectangle and tightens its edges when the chrome is folded", () => {
+	// left to answer in, so it takes the room: the whole rectangle, and the
+	// header folded into a footer cut to Send's 44px — that is the one row the
+	// user must reach with the keyboard up. The dialog keeps its name, and there
+	// is still exactly one way to close it.
+	it("takes the whole rectangle and folds its header into the footer when the chrome is folded", () => {
 		const props = {
 			sessionId: "s1",
 			unanswered: [database],
@@ -105,22 +106,175 @@ describe("AnswerPanel", () => {
 			takeFocus: false,
 		};
 		const { rerender } = render(<AnswerPanel {...props} />);
-		const panel = screen.getByRole("dialog", { name: /question/ });
-		const header = screen.getByRole("heading", {
-			name: "1 question",
-		}).parentElement;
-		const send = screen.getByRole("button", { name: "Send" });
-		const footer = send.parentElement;
-		expect(header).toHaveClass("py-3");
-		expect(footer).toHaveClass("py-4");
+		const panel = screen.getByRole("dialog", { name: "1 question" });
+		expect(screen.getByRole("heading", { name: "1 question" })).toBeVisible();
+		expect(
+			screen.getByRole("button", { name: "Send" }).parentElement,
+		).toHaveClass("py-4");
 
 		rerender(<AnswerPanel {...props} chromeCollapsed />);
 
 		expect(panel).toHaveClass("max-h-full");
 		expect(panel).not.toHaveClass("max-h-[85%]");
-		expect(header).toHaveClass("py-2.5");
+		expect(screen.getByRole("dialog", { name: "1 question" })).toBe(panel);
+		expect(screen.getByRole("heading", { name: "1 question" })).toHaveClass(
+			"sr-only",
+		);
+		const send = screen.getByRole("button", { name: "Send" });
+		const footer = send.parentElement;
 		expect(footer).toHaveClass("py-1");
 		expect(send).toHaveClass("min-h-[44px]");
+		const close = screen.getByRole("button", { name: "Close" });
+		expect(footer).toContainElement(close);
+		// At the far end from Send, so a thumb aimed at one misses the other.
+		expect(footer?.firstElementChild).toBe(close);
+	});
+
+	// The browser scrolls a focused field into view when focus arrives, at
+	// best; it does nothing when the soft keyboard then shortens the body, or
+	// the field grows a line — and on a short viewport either puts the caret
+	// behind the footer. jsdom lays nothing out, so the geometry is stated.
+	describe("keeping the field being typed in on screen", () => {
+		const place = (el: Element, top: number, bottom: number) => {
+			el.getBoundingClientRect = () => ({ top, bottom }) as DOMRect;
+		};
+		// jsdom's scrollTop is always 0; this one remembers what it was set to.
+		const scrollable = (el: HTMLElement) => {
+			let top = 0;
+			Object.defineProperty(el, "scrollTop", {
+				get: () => top,
+				set: (value: number) => {
+					top = value;
+				},
+			});
+		};
+
+		it("scrolls the body so the focused field and a line below it are in view", () => {
+			renderPanel([database]);
+			const field = screen.getByRole("textbox", {
+				name: "Other answer for Database",
+			});
+			const body = screen.getByRole("dialog").querySelector(".overflow-y-auto");
+			if (!(body instanceof HTMLElement)) throw new Error("no body");
+			scrollable(body);
+			place(body, 100, 218);
+			place(field, 200, 236);
+
+			act(() => field.focus());
+
+			// 236 + one 24px line, against a bottom at 218.
+			expect(body.scrollTop).toBe(42);
+		});
+
+		it("leaves the body alone for a field already in view, and for a pick", () => {
+			renderPanel([database]);
+			const body = screen.getByRole("dialog").querySelector(".overflow-y-auto");
+			if (!(body instanceof HTMLElement)) throw new Error("no body");
+			scrollable(body);
+			place(body, 100, 400);
+			const field = screen.getByRole("textbox", {
+				name: "Other answer for Database",
+			});
+			place(field, 200, 236);
+			const radio = screen.getByRole("radio", { name: /SQLite/ });
+			place(radio, 500, 516);
+
+			act(() => field.focus());
+			act(() => radio.focus());
+
+			expect(body.scrollTop).toBe(0);
+		});
+
+		// The two cases the browser leaves alone, both of which arrive as a
+		// resize: the global stub resizes nothing, so this one hands the test the
+		// callback and the boxes it was asked to watch.
+		describe("when something changes size under a focused field", () => {
+			let watched: Set<Element>;
+			let resized: () => void;
+			beforeEach(() => {
+				watched = new Set();
+				vi.stubGlobal(
+					"ResizeObserver",
+					class {
+						constructor(callback: () => void) {
+							resized = () => act(callback);
+						}
+						observe(target: Element) {
+							watched.add(target);
+						}
+						unobserve(target: Element) {
+							watched.delete(target);
+						}
+						disconnect() {
+							watched.clear();
+						}
+					},
+				);
+			});
+			afterEach(() => {
+				vi.unstubAllGlobals();
+			});
+
+			const setUp = () => {
+				renderPanel([database]);
+				const field = screen.getByRole("textbox", {
+					name: "Other answer for Database",
+				});
+				const body = screen
+					.getByRole("dialog")
+					.querySelector(".overflow-y-auto");
+				if (!(body instanceof HTMLElement)) throw new Error("no body");
+				scrollable(body);
+				place(body, 100, 400);
+				place(field, 200, 236);
+				act(() => field.focus());
+				expect(body.scrollTop).toBe(0);
+				return { body, field };
+			};
+
+			it("follows the keyboard shortening the body", () => {
+				const { body } = setUp();
+				expect(watched.has(body)).toBe(true);
+
+				place(body, 100, 230);
+				resized();
+
+				expect(body.scrollTop).toBe(30);
+			});
+
+			it("follows the field growing a line, and stops once it is left", () => {
+				const { body, field } = setUp();
+				expect(watched.has(field)).toBe(true);
+
+				place(field, 200, 400);
+				resized();
+				expect(body.scrollTop).toBe(24);
+
+				act(() => field.blur());
+				expect(watched.has(field)).toBe(false);
+				place(field, 200, 500);
+				resized();
+				expect(body.scrollTop).toBe(24);
+			});
+
+			// Above the view, it comes back down only as far as its end allows:
+			// the end is where the caret is.
+			it("brings a field above the view back without losing its end", () => {
+				const { body, field } = setUp();
+				body.scrollTop = 100;
+
+				place(field, 50, 376);
+				resized();
+
+				// 74px short at the top, and its end plus a line exactly fills the view.
+				expect(body.scrollTop).toBe(100);
+
+				place(field, 50, 300);
+				resized();
+				// Now 76px to spare below; the top needs 74 of it.
+				expect(body.scrollTop).toBe(26);
+			});
+		});
 	});
 
 	// One `question_post` call stamps every question with the same `asked_at`,

@@ -53,6 +53,13 @@ const (
 	// EventTypeMessageIngested says the agent has taken in a message that
 	// reached it while it was already working. See MessageIngestedEvent.
 	EventTypeMessageIngested EventType = "message_ingested"
+	// EventTypeThinking is a finished stretch of the agent's thinking. See
+	// ThinkingEvent.
+	EventTypeThinking EventType = "thinking"
+	// EventTypeThinkingDelta says the main agent is thinking right now, with the
+	// next piece of the text when the engine streams one. Broadcast, never
+	// recorded; see ThinkingDeltaEvent.
+	EventTypeThinkingDelta EventType = "thinking_delta"
 )
 
 // Persisted returns true for the events that belong in session history.
@@ -68,7 +75,7 @@ const (
 // no sequence number (session.NoHistorySeq), because there is no record for one
 // to name.
 func (e EventType) Persisted() bool {
-	return e != EventTypeToolActivity
+	return e != EventTypeToolActivity && e != EventTypeThinkingDelta
 }
 
 // AwaitsUserInput returns true for the events after which the agent produces
@@ -124,13 +131,17 @@ func (e EventType) AwaitsUserInput() bool {
 // the first message ever goes out. The remaining types are only ever replayed
 // from history, never streamed.
 //
-// System and tool_activity events belong here but not in ActivatesSession, and
-// the gap between the two predicates is exactly the set that must *not* end a
-// background wait: the background task list changing is a `system` frame, so
+// System, tool_activity and thinking_delta events belong here but not in
+// ActivatesSession, and the gap between the two predicates is exactly the set
+// that must *not* end a background wait: the background task list changing is a `system` frame, so
 // counting it would make a task finishing look like the turn coming back (see
 // process.turnInputFor). That gap is this predicate's whole remaining job.
 func (e EventType) IndicatesAgentActivity() bool {
-	return e == EventTypeSystem || e == EventTypeToolActivity || e.ActivatesSession()
+	switch e {
+	case EventTypeSystem, EventTypeToolActivity, EventTypeThinkingDelta:
+		return true
+	}
+	return e.ActivatesSession()
 }
 
 // ActivatesSession returns true for the events that put something on the agent's
@@ -159,9 +170,14 @@ func (e EventType) IndicatesAgentActivity() bool {
 // output. The borderline cases (a local command's output, output we could not
 // parse) are in anyway, despite that bias: neither can come from a turn that
 // failed to start, so including them cannot cost anyone the escape hatch.
+//
+// A thinking record is in for the same reason text is: only the model writes
+// one, so the turn reached it. Its live signal (thinking_delta) is not — the
+// Claude one is a CLI token estimate, and a level signal of that kind is
+// IndicatesAgentActivity's.
 func (e EventType) ActivatesSession() bool {
 	switch e {
-	case EventTypeText, EventTypeToolCall, EventTypeToolResult,
+	case EventTypeText, EventTypeToolCall, EventTypeToolResult, EventTypeThinking,
 		EventTypeCommandOutput, EventTypeRaw:
 		return true
 	default:
@@ -258,6 +274,9 @@ type AgentEvent interface {
 
 type TextEvent struct {
 	Content string
+	// ParentToolUseID names the subagent call this text was written inside; see
+	// EventRecord.ParentToolUseID.
+	ParentToolUseID string
 	// ProviderMessageID names the part of the agent's own conversation this text
 	// came out of, when the agent puts ids on them. See
 	// EventRecord.ProviderMessageID.
@@ -268,7 +287,12 @@ func (TextEvent) EventType() EventType { return EventTypeText }
 func (TextEvent) isAgentEvent()        {}
 
 func (e TextEvent) ToRecord() EventRecord {
-	return EventRecord{Type: e.EventType(), Content: e.Content, ProviderMessageID: e.ProviderMessageID}
+	return EventRecord{
+		Type:              e.EventType(),
+		Content:           e.Content,
+		ParentToolUseID:   e.ParentToolUseID,
+		ProviderMessageID: e.ProviderMessageID,
+	}
 }
 
 type ToolCallEvent struct {
@@ -279,6 +303,9 @@ type ToolCallEvent struct {
 	// only identifies it by something Pockode's join key cannot be recovered
 	// from. See EventRecord.OriginToolUseID.
 	OriginToolUseID string
+	// ParentToolUseID names the subagent call this call was made inside; see
+	// EventRecord.ParentToolUseID.
+	ParentToolUseID string
 	// ProviderMessageID names the part of the agent's own conversation this call
 	// came out of, when the agent puts ids on them. See
 	// EventRecord.ProviderMessageID.
@@ -295,6 +322,7 @@ func (e ToolCallEvent) ToRecord() EventRecord {
 		ToolInput:         e.ToolInput,
 		ToolUseID:         e.ToolUseID,
 		OriginToolUseID:   e.OriginToolUseID,
+		ParentToolUseID:   e.ParentToolUseID,
 		ProviderMessageID: e.ProviderMessageID,
 	}
 }
@@ -350,6 +378,9 @@ type ToolResultEvent struct {
 	// IsError reports that the tool call failed. Best-effort: only set when the
 	// agent CLI says so, never inferred from the result text.
 	IsError bool
+	// ParentToolUseID names the subagent call this result came back inside; see
+	// EventRecord.ParentToolUseID.
+	ParentToolUseID string
 	// ProviderMessageID names the part of the agent's own conversation this
 	// result came out of, when the agent puts ids on them. See
 	// EventRecord.ProviderMessageID.
@@ -369,6 +400,7 @@ func (e ToolResultEvent) ToRecord() EventRecord {
 		ExitCode:          e.ExitCode,
 		Contents:          e.Contents,
 		IsError:           e.IsError,
+		ParentToolUseID:   e.ParentToolUseID,
 		ProviderMessageID: e.ProviderMessageID,
 	}
 }
@@ -402,6 +434,89 @@ func (e ToolActivityEvent) ToRecord() EventRecord {
 		ToolUseID:   e.ToolUseID,
 		Activity:    e.Activity,
 		OutputDelta: e.OutputDelta,
+	}
+}
+
+// ThinkingEvent is a stretch of the agent's thinking, recorded once it is over:
+// what was thought, and how long it took.
+//
+// That the agent is thinking *now* is not in here and must never be: it lasts
+// seconds and only changes what the tail line says, so it travels as
+// ThinkingDeltaEvent, which is never recorded. This record is the history half,
+// and a replayed transcript draws the same row a live one does.
+type ThinkingEvent struct {
+	// Content is the thinking as written for a reader: Claude's thinking text,
+	// or the parts of Codex's reasoning summary joined as paragraphs. Empty when
+	// the engine shared nothing, which is ordinary — Claude sends none unless
+	// asked for summaries, and Codex none unless a summary is configured.
+	Content string
+	// FullReasoning is Codex's raw reasoning, its `content` parts joined as
+	// paragraphs, kept apart from Content because it is not written for a
+	// reader and the client labels it. Usually empty for OpenAI models; always
+	// empty for Claude.
+	FullReasoning string
+	// Redacted says the model provider encrypted the thinking (Claude's
+	// redacted_thinking). Content is then empty because it was withheld, not
+	// because there was nothing.
+	Redacted bool
+	// DurationMs is how long the thinking took, measured by the server while it
+	// happened; zero when nothing was there to measure. Never estimated from
+	// when records reached a client — a replayed record has no honest clock,
+	// which is why it is measured live and stored. How each engine is measured
+	// is in docs/agent-event.md.
+	DurationMs int64
+	// ParentToolUseID names the subagent call this thinking happened inside;
+	// see EventRecord.ParentToolUseID.
+	ParentToolUseID string
+	// ProviderMessageID names the part of the agent's own conversation this
+	// thinking came out of; see EventRecord.ProviderMessageID.
+	ProviderMessageID string
+}
+
+func (ThinkingEvent) EventType() EventType { return EventTypeThinking }
+func (ThinkingEvent) isAgentEvent()        {}
+
+func (e ThinkingEvent) ToRecord() EventRecord {
+	return EventRecord{
+		Type:              e.EventType(),
+		Content:           e.Content,
+		FullReasoning:     e.FullReasoning,
+		Redacted:          e.Redacted,
+		DurationMs:        e.DurationMs,
+		ParentToolUseID:   e.ParentToolUseID,
+		ProviderMessageID: e.ProviderMessageID,
+	}
+}
+
+// ThinkingDeltaEvent says the main agent is thinking right now — never a
+// subagent, whose own row is where its work is described. It ends with the
+// ThinkingEvent that settles it, or with the turn.
+//
+// Broadcast and never recorded (EventType.Persisted), like ToolActivityEvent and
+// for the same reason: "is thinking" is a latest value. Unlike tool activity,
+// nothing keeps a snapshot for a client that subscribes mid-thinking — it loses
+// one word until the next signal, and the full text arrives with the record.
+type ThinkingDeltaEvent struct {
+	// ContentDelta and FullReasoningDelta are the next pieces of the text that
+	// will become ThinkingEvent.Content and FullReasoning. They accumulate, and
+	// a new part already carries the blank line that separates it from the
+	// last, so all of them concatenate into exactly the recorded text — a
+	// best-effort copy, since a delta can be dropped under load or missed by a
+	// client that subscribed late; the record is what holds. Both empty is the
+	// signal alone: the engine is thinking and has no text to stream (Claude,
+	// or Codex before its first words).
+	ContentDelta       string
+	FullReasoningDelta string
+}
+
+func (ThinkingDeltaEvent) EventType() EventType { return EventTypeThinkingDelta }
+func (ThinkingDeltaEvent) isAgentEvent()        {}
+
+func (e ThinkingDeltaEvent) ToRecord() EventRecord {
+	return EventRecord{
+		Type:               e.EventType(),
+		ContentDelta:       e.ContentDelta,
+		FullReasoningDelta: e.FullReasoningDelta,
 	}
 }
 
@@ -820,6 +935,10 @@ type MessageEvent struct {
 	// Command is the Pockode command the user typed, when Content is what it
 	// expanded to rather than what they wrote. See CommandInvocation.
 	Command *CommandInvocation
+	// Attachments describe the files the user sent with the message, by their
+	// ids in the session's attachment store. What the agent was handed for each
+	// is not recorded: that is the agent's business, decided at delivery.
+	Attachments []FileBlock
 }
 
 // CommandInvocation is a Pockode command as the user typed it: the name without
@@ -836,14 +955,15 @@ func (MessageEvent) isAgentEvent()        {}
 
 func (e MessageEvent) ToRecord() EventRecord {
 	return EventRecord{
-		Type:      e.EventType(),
-		Content:   e.Content,
-		Origin:    e.Origin,
-		Subtype:   e.Subtype,
-		Meta:      e.Meta,
-		Answering: e.Answering,
-		MessageID: e.MessageID,
-		Command:   e.Command,
+		Type:        e.EventType(),
+		Content:     e.Content,
+		Origin:      e.Origin,
+		Subtype:     e.Subtype,
+		Meta:        e.Meta,
+		Answering:   e.Answering,
+		MessageID:   e.MessageID,
+		Command:     e.Command,
+		Attachments: e.Attachments,
 	}
 }
 

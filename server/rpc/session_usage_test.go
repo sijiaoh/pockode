@@ -24,7 +24,7 @@ func TestSessionListItemCarriesNoUsage(t *testing.T) {
 		},
 	}
 
-	row, err := json.Marshal(NewSessionListItem(meta, ""))
+	row, err := json.Marshal(NewSessionListItem(meta, SessionWork{}))
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
@@ -49,7 +49,7 @@ func TestSessionDetailCarriesUsage(t *testing.T) {
 			ContextTokens: 9000,
 			ContextWindow: 200000,
 		},
-	}, "")})
+	}, SessionWork{})})
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
@@ -79,7 +79,7 @@ func TestSessionListItemCarriesTheTurn(t *testing.T) {
 		},
 	}
 
-	row, err := json.Marshal(NewSessionListItem(meta, ""))
+	row, err := json.Marshal(NewSessionListItem(meta, SessionWork{}))
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}

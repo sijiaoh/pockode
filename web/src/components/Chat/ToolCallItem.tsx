@@ -1,22 +1,33 @@
-import { memo, useMemo, useState } from "react";
+import { memo, useMemo } from "react";
 import {
 	contentBlockFiles,
 	type FileReference,
 	partitionFileBlocks,
 } from "../../lib/contentBlocks";
-import { CodeHighlighter } from "../../lib/shikiUtils";
-import { lastOutputLines, toolSecondLine } from "../../lib/toolRun";
+import { proposedChange } from "../../lib/proposedChange";
+import { toolBodyLayout } from "../../lib/toolBodyLayout";
+import {
+	lastOutputLines,
+	shownResult,
+	toolSecondLine,
+} from "../../lib/toolRun";
 import { toolSummary } from "../../lib/toolSummary";
 import { useWSStore } from "../../lib/wsStore";
 import type { ToolRun } from "../../types/message";
 import { omittedLabel } from "../../utils/attachment";
-import { HIGHLIGHT_LIMIT } from "../../utils/fileView";
-import { relativeToWorkDir } from "../../utils/path";
-import { CollapsibleBody, ScrollableContent } from "../ui";
+import { CollapsibleBody, useEverExpanded } from "../ui";
 import AttachmentStrip from "./AttachmentStrip";
-import { Section, ToolOutcomeSections } from "./ToolOutcomeSections";
-import ToolResultDisplay from "./ToolResultDisplay";
+import { proposedChangeHeader } from "./ProposedChange";
+import { useRowExpanded } from "./rowExpansionContext";
+import { PathLine, ToolInvocation } from "./ToolInvocation";
+import { ToolOutcomeSections } from "./ToolOutcomeSections";
+import ToolResultDisplay, {
+	FAILURE_TEXT,
+	outputLineCount,
+	resultCopyText,
+} from "./ToolResultDisplay";
 import { ToolMeta, ToolRow, ToolStatusGlyph } from "./ToolRow";
+import { Section } from "./ToolSection";
 
 /** How much of a running call's output the body shows. */
 const LIVE_OUTPUT_LINES = 50;
@@ -26,35 +37,6 @@ interface Props {
 	/** The session whose attachment store holds this call's file blocks. */
 	sessionId: string;
 	onOpenFile?: (path: string) => void;
-}
-
-/** A path in full, with the way over to the Files tab when there is one. */
-function PathLine({
-	path,
-	onOpenFile,
-}: {
-	path: string;
-	onOpenFile?: (path: string) => void;
-}) {
-	const workDir = useWSStore((state) => state.workDir);
-	const relative = relativeToWorkDir(path, workDir);
-
-	return (
-		<div className="flex items-start gap-2">
-			<span className="min-w-0 flex-1 break-all font-mono text-th-text-primary">
-				{path}
-			</span>
-			{relative && onOpenFile && (
-				<button
-					type="button"
-					onClick={() => onOpenFile(relative)}
-					className="min-h-[36px] shrink-0 rounded px-2 text-th-accent pointer-coarse:min-h-11 hover:bg-th-overlay-hover"
-				>
-					Open
-				</button>
-			)}
-		</div>
-	);
 }
 
 /**
@@ -68,9 +50,9 @@ function PathLine({
  * directory, it had no button either: a card-shaped thing that could not be
  * tapped.
  *
- * The full path, not the file name the block also carries: the body does not
- * truncate, so the tail of the path *is* the name and a second copy of it would
- * only take a line.
+ * Through `PathLine`, not the file name the block also carries: the line keeps
+ * the name whole and cuts the directories first, so a second copy of the name
+ * would only take a line.
  */
 function ReferenceLine({
 	file,
@@ -89,103 +71,6 @@ function ReferenceLine({
 	);
 }
 
-function asObject(input: unknown): Record<string, unknown> {
-	return input && typeof input === "object"
-		? (input as Record<string, unknown>)
-		: {};
-}
-
-/**
- * What the agent asked for, in full — the answer to a row that truncated it.
- *
- * Always present, which is what makes the chevron unconditional: before this
- * section existed a running call and a call that answered with an image alone
- * could not be opened at all.
- *
- * `command_actions` is Codex's parse of the command and is the row's title
- * already; repeating the array here would only ask the reader to parse it
- * again.
- */
-function ToolInvocation({
-	run,
-	onOpenFile,
-}: {
-	run: ToolRun;
-	onOpenFile?: (path: string) => void;
-}) {
-	const input = asObject(run.input);
-	const description =
-		typeof input.description === "string" ? input.description : null;
-
-	const json = useMemo(() => {
-		try {
-			return JSON.stringify(run.input, null, 2);
-		} catch {
-			return String(run.input);
-		}
-	}, [run.input]);
-	// Shiki tokenizes on the main thread, so an argument past the viewer's own
-	// ceiling is shown as plain text rather than freezing the transcript.
-	const plain = json.length > HIGHLIGHT_LIMIT;
-
-	if (run.name === "Bash" && typeof input.command === "string") {
-		return (
-			<Section label="Invocation">
-				{description && <p className="text-th-text-muted">{description}</p>}
-				<CodeHighlighter
-					language="bash"
-					plain={input.command.length > HIGHLIGHT_LIMIT}
-				>
-					{input.command}
-				</CodeHighlighter>
-			</Section>
-		);
-	}
-
-	// Before the path branch, exactly as `toolSummary` orders them: a search's
-	// `path` is the scope it ran in, not what it was looking for. Taking that
-	// branch first would leave the pattern — the whole of what the row
-	// truncated — in no part of the body at all.
-	if (run.name === "Grep" || run.name === "Glob") {
-		return (
-			<Section label="Invocation">
-				<dl className="space-y-0.5">
-					{Object.entries(input).map(([key, value]) => (
-						<div key={key} className="flex gap-2">
-							<dt className="shrink-0 text-th-text-muted">{key}</dt>
-							<dd className="min-w-0 break-all font-mono text-th-text-primary">
-								{typeof value === "string" ? value : JSON.stringify(value)}
-							</dd>
-						</div>
-					))}
-				</dl>
-			</Section>
-		);
-	}
-
-	const filePath =
-		typeof input.file_path === "string"
-			? input.file_path
-			: typeof input.path === "string"
-				? input.path
-				: null;
-	if (filePath) {
-		return (
-			<Section label="Invocation">
-				<PathLine path={filePath} onOpenFile={onOpenFile} />
-			</Section>
-		);
-	}
-
-	return (
-		<Section label="Invocation">
-			<CodeHighlighter language="json" plain={plain}>
-				{json}
-			</CodeHighlighter>
-		</Section>
-	);
-}
-
 /**
  * One tool call, as a row that opens into everything the row could not say.
  *
@@ -197,7 +82,7 @@ const ToolCallItem = memo(function ToolCallItem({
 	sessionId,
 	onOpenFile,
 }: Props) {
-	const [expanded, setExpanded] = useState(false);
+	const [expanded, setExpanded] = useRowExpanded();
 	const workDir = useWSStore((state) => state.workDir);
 	const summary = useMemo(
 		() => toolSummary(run.name, run.input, workDir),
@@ -229,12 +114,125 @@ const ToolCallItem = memo(function ToolCallItem({
 	const live = run.status === "running" || run.status === "background";
 	const liveOutput =
 		live && run.output ? lastOutputLines(run.output, LIVE_OUTPUT_LINES) : "";
-	const hasResult = Boolean(run.result || run.contents);
+	const layout = toolBodyLayout(run.name);
+	// A result that only acknowledges the call is no answer to show.
+	const showsResult =
+		Boolean(run.result || run.contents) &&
+		!(layout.resultIsAcknowledgement && !failed);
+	// Eager rather than a function handed to the button, because whether there
+	// is anything to copy decides whether there is a button. Gated on the body
+	// having been opened: a collapsed `Read` should not pay to strip its line
+	// numbers.
+	const everExpanded = useEverExpanded(expanded);
+	const result = shownResult(run.result ?? "");
+	const copyText = useMemo(
+		() =>
+			everExpanded && showsResult
+				? resultCopyText(run.name, run.input, result, run.contents)
+				: undefined,
+		[everExpanded, showsResult, run.name, run.input, result, run.contents],
+	);
+	// Gated the same way: diffing means reading the whole input. Mirrors when
+	// `ToolResultDisplay` draws the change rather than content blocks.
+	const change = useMemo(
+		() =>
+			everExpanded && showsResult && !run.contents
+				? proposedChange(run.name, run.input)
+				: null,
+		[everExpanded, showsResult, run.name, run.input, run.contents],
+	);
+	const changeHeader = useMemo(
+		() => proposedChangeHeader(change, { applied: !failed }),
+		[change, failed],
+	);
+	// A change is drawn from the input, so its result is shown nowhere else —
+	// and when the tool refused it, the result is the reason.
+	const changeError = change && failed ? result : "";
+	// Gated the same way: counting means splitting the whole output.
+	const showAllLabel = useMemo(
+		() =>
+			everExpanded && layout.resultFromEnd && result
+				? `Show all ${outputLineCount(result)} lines`
+				: undefined,
+		[everExpanded, layout.resultFromEnd, result],
+	);
+
+	const invocation = (
+		<ToolInvocation
+			toolName={run.name}
+			input={run.input}
+			onOpenFile={onOpenFile}
+			// Folded only once there is an answer to read instead; until then the
+			// call is all the body has to say. Read when the body first mounts,
+			// so a result arriving later does not fold what the user is reading.
+			collapsible={
+				layout.resultFirst ? { defaultOpen: !showsResult } : undefined
+			}
+		/>
+	);
+
+	const outcome = (
+		<>
+			{liveOutput && (
+				<Section label="Output so far" clampFrom="end">
+					<pre className="whitespace-pre-wrap font-mono text-th-text-muted">
+						{liveOutput}
+					</pre>
+				</Section>
+			)}
+			{changeError && (
+				<Section label="Error">
+					<pre
+						className={`whitespace-pre-wrap break-words font-mono ${FAILURE_TEXT}`}
+					>
+						{changeError}
+					</pre>
+				</Section>
+			)}
+			<ToolOutcomeSections
+				run={run}
+				outcomeLabel={layout.resultLabel}
+				outcomeClampFrom={layout.resultFromEnd ? "end" : undefined}
+				outcomeShowAllLabel={showAllLabel}
+				outcomeMeta={changeHeader.meta}
+				outcomeActions={changeHeader.actions}
+				outcomeCopyText={copyText}
+				outcomeFullScreenTitle={
+					layout.fullScreen
+						? [summary.title, summary.detail + summary.detailTail]
+								.filter(Boolean)
+								.join(" · ")
+						: undefined
+				}
+				outcome={
+					showsResult && (
+						<>
+							<ToolResultDisplay
+								toolName={run.name}
+								toolInput={run.input}
+								result={result}
+								contents={run.contents}
+								onOpenFile={onOpenFile}
+								failed={failed}
+							/>
+							{/* No condition of its own: a reference can only have come
+							    from `run.contents`, which is half of `showsResult`. */}
+							{references.map((file) => (
+								<ReferenceLine
+									key={file.path}
+									file={file}
+									onOpenFile={onOpenFile}
+								/>
+							))}
+						</>
+					)
+				}
+			/>
+		</>
+	);
 
 	return (
-		<div
-			className={`rounded bg-th-bg-secondary text-xs ${failed ? "border border-th-error/40" : ""}`}
-		>
+		<div className="text-xs">
 			<ToolRow
 				expanded={expanded}
 				onToggle={() => setExpanded(!expanded)}
@@ -257,56 +255,33 @@ const ToolCallItem = memo(function ToolCallItem({
 				/>
 			)}
 			<CollapsibleBody expanded={expanded}>
-				<ScrollableContent className="max-h-[60vh] space-y-3 overflow-auto border-t border-th-border p-2">
-					{/* No `useEverExpanded` gate: `CollapsibleBody` renders nothing
-					    at all until the body is first opened, so the pretty-printing
-					    and the highlighting below are already paid for only once
-					    somebody asks. */}
-					<ToolInvocation run={run} onOpenFile={onOpenFile} />
-					{liveOutput && (
-						// No scroller of its own: `ScrollableContent` above already owns
-						// one, and a scroll area inside a scroll area swallows the drag
-						// that was meant for the transcript.
-						<Section label="Output so far">
-							<pre className="whitespace-pre-wrap font-mono text-th-text-muted">
-								{liveOutput}
-							</pre>
-						</Section>
+				{/* No height of its own and no scroller: each block clamps itself
+				    (`Section`), because a scroll box inside the transcript takes the
+				    drag a phone meant for the page. No `useEverExpanded` gate either:
+				    `CollapsibleBody` renders nothing at all until the body is first
+				    opened, so the pretty-printing and the highlighting below are
+				    already paid for only once somebody asks. */}
+				<div className="space-y-3 border-t border-th-border bg-th-bg-secondary p-2">
+					{layout.resultFirst ? (
+						<>
+							{outcome}
+							{invocation}
+						</>
+					) : (
+						<>
+							{invocation}
+							{outcome}
+						</>
 					)}
-					<ToolOutcomeSections
-						run={run}
-						outcome={
-							hasResult && (
-								<>
-									<ToolResultDisplay
-										toolName={run.name}
-										toolInput={run.input}
-										result={run.result ?? ""}
-										contents={run.contents}
-										onOpenFile={onOpenFile}
-									/>
-									{/* No condition of its own: a reference can only have come
-									    from `run.contents`, which is half of `hasResult`. */}
-									{references.map((file) => (
-										<ReferenceLine
-											key={file.path}
-											file={file}
-											onOpenFile={onOpenFile}
-										/>
-									))}
-								</>
-							)
-						}
-					/>
 					{run.exitCode !== undefined && run.exitCode !== 0 && (
 						<p className="text-th-text-muted">Exit code {run.exitCode}</p>
 					)}
-					{run.status === "interrupted" && hasResult && (
+					{run.status === "interrupted" && showsResult && (
 						<p className="text-th-text-muted">
 							Returned after the turn was interrupted.
 						</p>
 					)}
-				</ScrollableContent>
+				</div>
 			</CollapsibleBody>
 		</div>
 	);

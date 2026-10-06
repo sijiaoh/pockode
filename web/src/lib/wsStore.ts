@@ -249,6 +249,8 @@ interface WSState {
 	remoteUrl: string;
 	/** See `AuthResult.max_upload_size`; 0 until an auth reply has arrived. */
 	maxUploadSize: number;
+	/** See `AuthResult.max_attachment_size`; 0 until an auth reply has arrived. */
+	maxAttachmentSize: number;
 	actions: RPCActions;
 }
 
@@ -783,6 +785,7 @@ export const useWSStore = create<WSState>((set, get) => ({
 	workDir: "",
 	remoteUrl: "",
 	maxUploadSize: 0,
+	maxAttachmentSize: 0,
 
 	actions: {
 		connect: (credential: AuthCredential) => {
@@ -865,6 +868,7 @@ export const useWSStore = create<WSState>((set, get) => ({
 						workDir: result.work_dir,
 						remoteUrl: result.remote_url,
 						maxUploadSize: result.max_upload_size,
+						maxAttachmentSize: result.max_attachment_size ?? 0,
 					});
 				} catch (error) {
 					// Not a rejection: the request timed out or the socket died

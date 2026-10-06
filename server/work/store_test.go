@@ -392,6 +392,106 @@ func TestClaim_RefusesToWatchATask(t *testing.T) {
 	}
 }
 
+// Unwatch releases only the watch it was asked about, and only the watch: the
+// story keeps running exactly as it was, and the release survives a reload.
+func TestUnwatch(t *testing.T) {
+	watcher := Watcher{SessionID: "sess-watcher", Worktree: "feature-x"}
+	other := Watcher{SessionID: "sess-other"}
+
+	tests := []struct {
+		name         string
+		watched      bool
+		by           Watcher
+		wantReleased bool
+	}{
+		{name: "the watcher itself", watched: true, by: watcher, wantReleased: true},
+		{name: "another session", watched: true, by: other, wantReleased: false},
+		{name: "nobody watching", watched: false, by: watcher, wantReleased: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			s, err := NewFileStore(dir)
+			if err != nil {
+				t.Fatalf("NewFileStore: %v", err)
+			}
+			story := createStory(t, s, "S")
+			var claimWatcher *Watcher
+			if tt.watched {
+				claimWatcher = &watcher
+			}
+			started, _, err := s.Claim(context.Background(), story.ID, claimWatcher)
+			if err != nil {
+				t.Fatalf("Claim: %v", err)
+			}
+			waitOnChild(t, s, story.ID)
+			before := getWork(t, s, story.ID)
+			changes := 0
+			s.AddOnChangeListener(listenerFunc(func(ChangeEvent) { changes++ }))
+
+			prev, released, err := s.Unwatch(context.Background(), story.ID, tt.by)
+			if err != nil {
+				t.Fatalf("Unwatch: %v", err)
+			}
+
+			if released != tt.wantReleased {
+				t.Errorf("released = %v, want %v", released, tt.wantReleased)
+			}
+			if !tt.watched && prev != nil {
+				t.Errorf("prev = %+v, want none: nobody was watching", prev)
+			}
+			if tt.watched && (prev == nil || *prev != watcher) {
+				t.Errorf("prev = %+v, want the watcher found, %+v", prev, watcher)
+			}
+			if wantChanges := map[bool]int{true: 1, false: 0}[tt.wantReleased]; changes != wantChanges {
+				t.Errorf("change events = %d, want %d", changes, wantChanges)
+			}
+
+			reloaded, err := NewFileStore(dir)
+			if err != nil {
+				t.Fatalf("reload: %v", err)
+			}
+			got := getWork(t, reloaded, story.ID)
+			switch {
+			case tt.wantReleased && got.Watcher != nil:
+				t.Errorf("watcher = %+v, want it released", got.Watcher)
+			case !tt.wantReleased && tt.watched && (got.Watcher == nil || *got.Watcher != watcher):
+				t.Errorf("watcher = %+v, want it left as %+v", got.Watcher, watcher)
+			}
+			if got.Status != before.Status || got.Wait != before.Wait || got.SessionID != started.SessionID || got.CurrentStep != before.CurrentStep {
+				t.Errorf("story = %q/%q in %q at step %d, want it running as before: %q/%q in %q at step %d",
+					got.Status, got.Wait, got.SessionID, got.CurrentStep, before.Status, before.Wait, started.SessionID, before.CurrentStep)
+			}
+			works, err := reloaded.List()
+			if err != nil {
+				t.Fatalf("List: %v", err)
+			}
+			for _, task := range TasksOf(works, story.ID) {
+				if task.Status != StatusActive {
+					t.Errorf("task %q = %q, want it still active", task.Title, task.Status)
+				}
+			}
+		})
+	}
+}
+
+func TestUnwatch_RefusesATask(t *testing.T) {
+	s := newTestStore(t)
+	story := createStory(t, s, "S")
+	task := createTask(t, s, story.ID, "T")
+
+	if _, _, err := s.Unwatch(context.Background(), task.ID, Watcher{SessionID: "sess-watcher"}); !errors.Is(err, ErrInvalidWork) {
+		t.Errorf("err = %v, want ErrInvalidWork", err)
+	}
+}
+
+func TestUnwatch_NotFound(t *testing.T) {
+	s := newTestStore(t)
+	if _, _, err := s.Unwatch(context.Background(), "missing", Watcher{SessionID: "sess-watcher"}); !errors.Is(err, ErrWorkNotFound) {
+		t.Errorf("err = %v, want ErrWorkNotFound", err)
+	}
+}
+
 func TestClaim_NotFound(t *testing.T) {
 	s := newTestStore(t)
 	if _, _, err := s.Claim(context.Background(), "missing", nil); !errors.Is(err, ErrWorkNotFound) {
@@ -1426,6 +1526,83 @@ func TestFindBySessionID_NotFound(t *testing.T) {
 	}
 	if found {
 		t.Error("expected not found")
+	}
+}
+
+// --- WatchedBy ---
+
+// A stopped story is still watched — its watcher may be waiting for it to be
+// restarted and finish — and a closed one is not.
+func TestWatchedBy_CountsEveryStoryThatHasNotClosed(t *testing.T) {
+	s := newTestStore(t)
+	watcher := Watcher{SessionID: "sess-watcher"}
+	running := createStory(t, s, "Running")
+	stopped := createStory(t, s, "Stopped")
+	closed := createStory(t, s, "Closed")
+	for _, story := range []Work{running, stopped, closed} {
+		if _, _, err := s.Claim(context.Background(), story.ID, &watcher); err != nil {
+			t.Fatalf("Claim %s: %v", story.Title, err)
+		}
+	}
+	if err := s.Stop(context.Background(), stopped.ID); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+	if _, err := s.StepDone(context.Background(), closed.ID, 0); err != nil {
+		t.Fatalf("StepDone: %v", err)
+	}
+
+	watched, err := s.WatchedBy("sess-watcher")
+	if err != nil {
+		t.Fatalf("WatchedBy: %v", err)
+	}
+	var titles []string
+	for _, w := range watched {
+		titles = append(titles, w.Title)
+	}
+	if !slices.Equal(titles, []string{"Running", "Stopped"}) {
+		t.Errorf("watched = %v, want the running and the stopped story", titles)
+	}
+}
+
+// The rule does not lean on closing having released the watcher: a closed
+// story wakes nobody, whatever its record still says.
+func TestWatchedBySession_LeavesOutAClosedStoryThatStillNamesItsWatcher(t *testing.T) {
+	watcher := &Watcher{SessionID: "sess-watcher"}
+	works := []Work{
+		{ID: "a", Status: StatusActive, Watcher: watcher},
+		{ID: "b", Status: StatusClosed, Watcher: watcher},
+		{ID: "c", Status: StatusActive},
+	}
+
+	got := WatchedBySession(works)
+	if len(got) != 1 || len(got["sess-watcher"]) != 1 || got["sess-watcher"][0].ID != "a" {
+		t.Errorf("index = %+v, want only story a under its watcher", got)
+	}
+}
+
+// The count is held to the rule the news is delivered by (WakesWatcher): a
+// story's own session and a session whose work the engine is not driving are
+// never woken, so neither counts as watching.
+func TestWatchedBySession_CountsOnlyTheWatchersTheNewsWakes(t *testing.T) {
+	works := []Work{
+		{ID: "lead-work", Status: StatusActive, SessionID: "sess-lead"},
+		{ID: "stopped-work", Status: StatusStopped, SessionID: "sess-stopped"},
+		{ID: "a", Status: StatusActive, SessionID: "sess-a", Watcher: &Watcher{SessionID: "sess-lead"}},
+		{ID: "b", Status: StatusActive, SessionID: "sess-b", Watcher: &Watcher{SessionID: "sess-chat"}},
+		{ID: "c", Status: StatusActive, SessionID: "sess-c", Watcher: &Watcher{SessionID: "sess-stopped"}},
+		{ID: "d", Status: StatusActive, SessionID: "sess-d", Watcher: &Watcher{SessionID: "sess-d"}},
+	}
+
+	got := WatchedBySession(works)
+	ids := map[string][]string{}
+	for sessionID, stories := range got {
+		for _, story := range stories {
+			ids[sessionID] = append(ids[sessionID], story.ID)
+		}
+	}
+	want := map[string][]string{"sess-lead": {"a"}, "sess-chat": {"b"}}
+	if len(ids) != len(want) || !slices.Equal(ids["sess-lead"], want["sess-lead"]) || !slices.Equal(ids["sess-chat"], want["sess-chat"]) {
+		t.Errorf("index = %v, want %v", ids, want)
 	}
 }
 

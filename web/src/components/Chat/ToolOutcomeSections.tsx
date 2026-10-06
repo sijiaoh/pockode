@@ -1,23 +1,7 @@
 import type { ReactNode } from "react";
 import { type FetchedOutput, fetchedOutputs } from "../../lib/toolRun";
 import type { ToolRun } from "../../types/message";
-import { ScrollableContent } from "../ui";
-
-/** One labelled block of a tool call's body. */
-export function Section({
-	label,
-	children,
-}: {
-	label: string;
-	children: ReactNode;
-}) {
-	return (
-		<div className="space-y-1">
-			<p className="text-th-text-muted">{label}</p>
-			{children}
-		</div>
-	);
-}
+import { Section } from "./ToolSection";
 
 /**
  * The heading of the fetched-output section.
@@ -108,16 +92,38 @@ function FetchedOutputSection({ fetched }: { fetched: FetchedOutput[] }) {
 export function ToolOutcomeSections({
 	run,
 	outcome,
+	outcomeLabel = "Result",
+	outcomeMeta,
+	outcomeActions,
+	outcomeCopyText,
+	outcomeFullScreenTitle,
+	outcomeClampFrom,
+	outcomeShowAllLabel,
 	block,
 }: {
 	run: ToolRun;
 	/** How it ended, drawn by whichever renderer knows how. */
 	outcome?: ReactNode;
 	/**
-	 * Draw as a block of the body rather than inline in one. `TaskItem`'s body
-	 * is a stack of bordered blocks that each carry their own ceiling, while
-	 * `ToolCallItem`'s is a single scroller that already has one — and a scroll
-	 * area inside a scroll area swallows the drag meant for the transcript.
+	 * The outcome's name when the call returned it in its own turn; one that
+	 * arrived after the turn is always called that, whatever the tool.
+	 */
+	outcomeLabel?: string;
+	/** See `Section`. */
+	outcomeMeta?: ReactNode;
+	/** See `Section`. */
+	outcomeActions?: ReactNode;
+	/** See `Section`. */
+	outcomeCopyText?: string | (() => string);
+	/** See `Section`. */
+	outcomeFullScreenTitle?: string;
+	/** See `Section`. */
+	outcomeClampFrom?: "start" | "end";
+	/** See `Section`. */
+	outcomeShowAllLabel?: string;
+	/**
+	 * Draw as a block of the body rather than inline in one: `TaskItem`'s body
+	 * is a stack of bordered blocks, `ToolCallItem`'s a single padded one.
 	 */
 	block?: boolean;
 }) {
@@ -140,7 +146,13 @@ export function ToolOutcomeSections({
 			{fetched.length > 0 && <FetchedOutputSection fetched={fetched} />}
 			{outcome && (
 				<Section
-					label={run.fromBackground ? "Outcome · after the turn" : "Result"}
+					label={run.fromBackground ? "Outcome · after the turn" : outcomeLabel}
+					meta={outcomeMeta}
+					actions={outcomeActions}
+					copyText={outcomeCopyText}
+					fullScreenTitle={outcomeFullScreenTitle}
+					clampFrom={outcomeClampFrom}
+					showAllLabel={outcomeShowAllLabel}
 				>
 					{outcome}
 				</Section>
@@ -149,9 +161,5 @@ export function ToolOutcomeSections({
 	);
 
 	if (!block) return sections;
-	return (
-		<ScrollableContent className="max-h-[60vh] overflow-auto border-t border-th-border p-2">
-			{sections}
-		</ScrollableContent>
-	);
+	return <div className="border-t border-th-border p-2">{sections}</div>;
 }

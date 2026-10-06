@@ -230,6 +230,18 @@ type appSession struct {
 	// and they all run on the one goroutine reading app-server's output.
 	turnAuthFailed bool
 
+	// subagentCalls maps a subagent's thread to the spawn that started it; see
+	// rememberSubagent. Read and written only by the notification handlers, on
+	// the one goroutine reading app-server's output.
+	subagentCalls map[string]subagentSpawn
+	// subagentReports holds each subagent thread's latest words; see
+	// settleSubagent. Same goroutine as subagentCalls.
+	subagentReports map[string]string
+	// reasoningItems are the reasoning items still in flight, by item id; see
+	// reasoningProgress. Same goroutine as subagentCalls, and forgotten when
+	// their thread's turn ends.
+	reasoningItems map[string]*reasoningProgress
+
 	usage  *usageObserver
 	resume *resumeStateStore
 
@@ -276,9 +288,22 @@ func (s *appSession) SendMessage(prompt agent.Prompt) error {
 		return errors.New("codex session has no open thread")
 	}
 
+	// Images by path: codex reads them itself, so nothing here has to hold the
+	// bytes, and it applies its own limits to what it reads.
+	images, byPath := agent.SplitAttachments(prompt.Attachments, func(a agent.Attachment) bool {
+		return agent.InlineImageMIMEs[a.File.MIME]
+	})
+	input := make([]map[string]interface{}, 0, len(images)+1)
+	for _, a := range images {
+		input = append(input, map[string]interface{}{"type": "localImage", "path": a.Path})
+	}
+	if text := agent.AppendNote(prompt.Text, agent.AttachedFilesNote(byPath)); text != "" {
+		input = append(input, map[string]interface{}{"type": "text", "text": text})
+	}
+
 	params := map[string]interface{}{
 		"threadId": threadID,
-		"input":    []map[string]interface{}{{"type": "text", "text": prompt.Text}},
+		"input":    input,
 	}
 	if prompt.ID != "" {
 		// Codex echoes this back as the `clientId` of the userMessage item it
@@ -297,6 +322,10 @@ func (s *appSession) SendMessage(prompt agent.Prompt) error {
 		s.emitEvent(agent.ErrorEvent{Error: redactSecrets(fmt.Sprintf("codex could not start the turn: %s", err))})
 	})
 }
+
+// ReceivesAttachments marks this session as one that delivers attachments; see
+// agent.AttachmentReceiver.
+func (s *appSession) ReceivesAttachments() {}
 
 // ReportsMessageIngest marks this session as one that says for itself when the
 // agent has read a message; see agent.MessageIngestReporter and
@@ -600,6 +629,7 @@ func (s *appSession) buildThreadParams() map[string]interface{} {
 	if s.opts.Effort != "" {
 		overrides["model_reasoning_effort"] = s.opts.Effort
 	}
+	overrides["model_reasoning_summary"] = reasoningSummary
 
 	params := map[string]interface{}{
 		"cwd":    s.opts.WorkDir,

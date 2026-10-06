@@ -1,4 +1,4 @@
-package cliupdate
+package agent
 
 import (
 	"fmt"
@@ -6,10 +6,10 @@ import (
 	"strings"
 )
 
-// compareVersions orders two semantic versions as semver does: -1 when a is
+// CompareVersions orders two semantic versions as semver does: -1 when a is
 // older than b, 1 when newer, 0 when they are the same release. Build metadata
 // is ignored, and a pre-release is older than the release it precedes.
-func compareVersions(a, b string) (int, error) {
+func CompareVersions(a, b string) (int, error) {
 	va, err := parseSemver(a)
 	if err != nil {
 		return 0, err

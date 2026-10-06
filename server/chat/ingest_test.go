@@ -41,7 +41,7 @@ func TestClient_MidTurnMessageRecordsTheReadPoint(t *testing.T) {
 	f := newMidTurnFixture(t)
 	sess := f.startTurn(t)
 
-	if _, err := f.client.SendMessageExcluding(context.Background(), "sess", "second", nil); err != nil {
+	if _, err := f.client.SendMessageExcluding(context.Background(), "sess", "second", nil, nil); err != nil {
 		t.Fatalf("SendMessageExcluding: %v", err)
 	}
 
@@ -98,7 +98,7 @@ func TestClient_MessageBetweenTurnsRecordsNoReadPoint(t *testing.T) {
 	sess.events <- agent.DoneEvent{}
 	f.waitForPhase(t, session.PhaseIdle)
 
-	if _, err := f.client.SendMessageExcluding(context.Background(), "sess", "second", nil); err != nil {
+	if _, err := f.client.SendMessageExcluding(context.Background(), "sess", "second", nil, nil); err != nil {
 		t.Fatalf("SendMessageExcluding: %v", err)
 	}
 
@@ -118,7 +118,7 @@ func TestClient_EachQueuedMessageGetsItsOwnReadPoint(t *testing.T) {
 	f.startTurn(t)
 
 	for _, text := range []string{"second", "third"} {
-		if _, err := f.client.SendMessageExcluding(context.Background(), "sess", text, nil); err != nil {
+		if _, err := f.client.SendMessageExcluding(context.Background(), "sess", text, nil, nil); err != nil {
 			t.Fatalf("SendMessageExcluding(%q): %v", text, err)
 		}
 	}
@@ -171,7 +171,7 @@ func TestClient_NoReadPointForAMessageThatWasNotRecorded(t *testing.T) {
 
 	client := NewClient(store, pm)
 	for _, text := range []string{"first", "second"} {
-		if _, err := client.SendMessageExcluding(context.Background(), "sess", text, nil); err != nil {
+		if _, err := client.SendMessageExcluding(context.Background(), "sess", text, nil, nil); err != nil {
 			t.Fatalf("SendMessageExcluding(%q) = %v, want the prompt to go through anyway", text, err)
 		}
 	}
@@ -189,7 +189,7 @@ func TestClient_ReadPointLeftToAnAgentThatReportsItsOwn(t *testing.T) {
 	f.agent.reportsIngest = true
 	f.startTurn(t)
 
-	if _, err := f.client.SendMessageExcluding(context.Background(), "sess", "second", nil); err != nil {
+	if _, err := f.client.SendMessageExcluding(context.Background(), "sess", "second", nil, nil); err != nil {
 		t.Fatalf("SendMessageExcluding: %v", err)
 	}
 

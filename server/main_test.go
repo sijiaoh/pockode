@@ -58,7 +58,9 @@ func newTestServer(t *testing.T, serverPassword, mcpToken string) (http.Handler,
 	mcpHandler := mcp.NewAPIHandler(mcp.NewExecutor(workStore, agentRoleStore, workOps, settingsStore, registry, scopeManager), mcpToken)
 	transferHandler := filetransfer.NewHandler(registry, slog.Default())
 
-	return newHandler(serverPassword, sessions, true, wsHandler, mcpHandler, transferHandler), workDir, sessions
+	attachmentHandler := filetransfer.NewAttachmentHandler(scopeManager, worktree.ErrWorktreeNotFound, worktree.ErrSessionNotFound, slog.Default())
+
+	return newHandler(serverPassword, sessions, true, wsHandler, mcpHandler, transferHandler, attachmentHandler), workDir, sessions
 }
 
 func TestHealthEndpoint(t *testing.T) {

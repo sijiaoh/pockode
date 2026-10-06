@@ -21,6 +21,11 @@ interface Props {
 	sessionId: string;
 	/** Absent when the host cannot navigate to a file. */
 	onOpenFile?: (path: string) => void;
+	/**
+	 * Draws the rule that sets the strip off from the header line above it. Off
+	 * in a user bubble, where what is above is the message's own text.
+	 */
+	divided?: boolean;
 }
 
 /**
@@ -36,7 +41,12 @@ interface Props {
  * (`lib/contentBlocks.ts`) is where that split is made, and it is the one to
  * extend rather than adding a second weight of entry to this row.
  */
-function AttachmentStrip({ files, sessionId, onOpenFile }: Props) {
+function AttachmentStrip({
+	files,
+	sessionId,
+	onOpenFile,
+	divided = true,
+}: Props) {
 	const workDir = useWSStore((state) => state.workDir);
 	// One at a time: two images open at full size in a chat bubble push
 	// everything else off the screen, and picking a second is a clear signal the
@@ -51,7 +61,7 @@ function AttachmentStrip({ files, sessionId, onOpenFile }: Props) {
 	const open = expanded === null ? null : entries[expanded];
 
 	return (
-		<div className="border-t border-th-border">
+		<div className={divided ? "border-t border-th-border" : undefined}>
 			<div className="flex items-start gap-2 overflow-x-auto p-2">
 				{entries.map(({ file, source, path }, index) => {
 					const key = `${file.attachment_id ?? file.path ?? file.mime}-${index}`;

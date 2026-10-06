@@ -103,12 +103,15 @@ name the next reader has to work around.
 
 Everything else about it is unchanged — one line between the transcript and the
 composer, `ForkOriginBanner`'s chrome, centred, `text-xs`, `size-3` glyph, muted,
-one bordered row so the composer moves by at most one line's height
-([lifecycle-ui.md §2.2](lifecycle-ui.md#22-chat-the-attention-strip)).
+one bordered row so the composer moves by at most one row's height
+([lifecycle-ui.md §2.2](lifecycle-ui.md#22-chat-the-attention-strip)). Row 1
+alone is left-aligned and 44px, because it is a decision rather than a
+statement; its layout, arming, receipt and fallback are in
+[lifecycle-ui.md](lifecycle-ui.md#the-permission-row).
 
 | # | State | Glyph | Copy | Trailing action |
 |---|---|---|---|---|
-| 1 | `permission` blocker | `Lock` | "Waiting for your permission. Answer above or Stop before sending." | "Jump to request" |
+| 1 | `permission` blocker | `Lock` | {tool} [+N] {detail} — the request on one line, the summary a jump to its card ([lifecycle-ui.md §2.2](lifecycle-ui.md#the-permission-row)) | **Deny** **Allow** (plan: **Review**) |
 | 2 | `unanswered.length > 0` | `CircleHelp` | "1 question is waiting for your answer." / "{n} questions are waiting for your answer." | **Answer** |
 | 3 | a message went into a turn already open, unread so far | `CornerDownRight` | "Sent — the agent has not read it yet." | — |
 | 4 | `background` blocker | `Hourglass` | "Waiting on a background task — nothing to answer." | "Details" (expands) |
@@ -139,14 +142,21 @@ below. Passing the strip no `onAnswer` while the panel is up would hide the row
 as a side effect, and the strip would then take itself to be a chat with no way
 to answer at all and fall through to row 3 or 4.
 
-**Row 1's "Jump to request" closes the panel before it jumps, and it is now the
-only way to reach a permission card at all.** A permission request can arrive
+**Row 1's jump — its summary, its Review, or the fallback's "Jump to request" —
+closes the panel before it jumps, and it is now the only way to reach a
+permission card at all.** A permission request can arrive
 while the panel is up (§7) — and while the panel is up the whole transcript is
 behind the backdrop and `inert` (§3), so no card in it can be seen or pressed,
 whether or not it happens to be scrolled into view. Scrolling to something
 under a backdrop would be the dead end this surface exists to remove, so the
 jump closes the panel on its way. Closing costs nothing: the drafts stay (§5),
 and the panel is one tap away afterwards.
+
+**Row 1's Deny and Allow do not need the card, so they do not close the
+panel.** Approving reads nothing from the transcript, and it is exactly what
+lets the panel's own send through afterwards — so it stays available while the
+panel sends, too. Both keep focus where it was on the press, the same way
+**Answer** does, so a caret in the panel's field survives them.
 
 **Except mid-send, when the jump is disabled.** It closes the panel as surely as
 the `×` does, so it stands down with the panel's own ways out (§3). This is the
@@ -179,9 +189,9 @@ avoid.
 **Row 2 says nothing about sending**, and that is the visible half of the model
 change. Sending is not refused while a question is open — the agent may be
 running, and a typed message is an ordinary message that answers nothing (§6).
-Row 1's second sentence exists to explain a disabled Send; row 2 has no disabled
-control to explain, so a sentence there would be inventing a restriction to
-explain.
+Row 1 explains its disabled Send — in the composer's placeholder now
+(`sendBlockedReason`); row 2 has no disabled control to explain, so a sentence
+there would be inventing a restriction to explain.
 
 **"Answer" is a button, not a link.** Every other action on this strip is a way
 to *look* at something — jump, expand — and wears the strip's underlined-text
@@ -214,7 +224,8 @@ nothing it renders nothing — unchanged.
 
 `web/src/components/Chat/AnswerPanel.tsx`. It is a **card centred in the
 transcript's rectangle, over a backdrop that dims that rectangle and nothing
-else**: a scrolling body between a fixed header and footer, drawn on
+else**: a scrolling body between a fixed header and footer (on a short viewport
+the header folds into the footer — *Room on a short viewport*), drawn on
 `bg-th-bg-secondary` with `Sheet`'s centred rounding and shadow, at most
 `max-w-2xl` wide, never taller than **85% of that rectangle** — all of it while
 the chrome below is folded (*Room on a short viewport*) — and usually shorter,
@@ -260,8 +271,7 @@ converse, the card stepping aside while the caret is in the composer.
 │ ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░│
 ├──────────────────────────────────────────────┤
 │ AttentionStrip (row 2 absent — §2)           │ ← not covered
-│ engine · mode                         [Stop] │ ← not covered
-│ [ type a message… ]                  [ Send ]│ ← not covered, and usable
+│ [+] [ type a message… ]          [Send/Stop] │ ← not covered, and usable
 └──────────────────────────────────────────────┘
 ```
 
@@ -344,9 +354,9 @@ knowingly:
   It is a way to *that one* question, not a way in, and reaching it now means
   closing the panel first — which costs nothing (§5). The button itself is
   unchanged; what changed is that its host is behind a backdrop.
-- A **permission card cannot be approved in place.** The strip's "Jump to
-  request" is the only route to one while the panel is up, and it closes the
-  panel on its way (§2, §7).
+- A **permission card cannot be approved in place.** Row 1's jump is the only
+  route to one while the panel is up, and it closes the panel on its way; its
+  Deny and Allow answer without it, and leave the panel up (§2, §7).
 
 **The dimming is the point, not a decoration.** It says which surface the next
 press belongs to, which is the thing the drawer form had to keep re-explaining:
@@ -370,8 +380,8 @@ is never near the screen's width.
 **The cap is a reading measure, not a share of the screen.** The card holds
 prose and code — question text and option descriptions are Markdown — so what
 it is sized for is line length. At `max-w-2xl` (672px) the question text gets
-about 614px once the body and block padding are taken off: roughly 88 Latin
-characters or 44 CJK ones per line of `prose-sm`, the top of the comfortable
+about 640px once the body's padding is taken off: roughly 90 Latin
+characters or 45 CJK ones per line of `prose-sm`, the top of the comfortable
 range for each. One step wider (`max-w-3xl`) runs Latin text past 100 a line,
 and a percentage width would keep growing with the monitor, so the cap stops
 here at every width. It is not a new number either: `DialogShell` caps its
@@ -403,18 +413,19 @@ to the two axes rather than a third one.
 
 The case is a phone with the soft keyboard up. The card is capped at 85% of the
 transcript's rectangle, and that rectangle is the screen less the session
-header, the strip, the session action bar and the composer; the keyboard takes
+header, the strip and the composer; the keyboard takes
 most of what is left. On a 667px phone under a 300px keyboard the card's body —
-what remains after its own header and footer — comes to about **19px**. The
+what remains after its own header and footer — comes to about **68px**, and
+came to 19px while a settings row still sat above the composer. The
 panel is competing for a screen that has nothing left, against chrome that has
 nothing to do with answering.
 
-> **While the user is answering on a short viewport, the session action bar and
-> the composer are folded away, and the card takes the room they leave.**
+> **While the user is answering on a short viewport, the composer — Stop
+> included — is folded away, and the card takes the room it leaves.**
 
 The fold came first, and was meant to be the whole of it: hide what is useless
 right now, raise no cap, tighten no padding. A walkthrough in a real browser,
-with the keyboard simulated (`scripts/question-walkthrough/`), measured that as
+with the keyboard simulated (`scripts/ui-walkthrough/`), measured that as
 not enough. Folded, under the keyboard, a 667px phone left a body of about
 150px, with the Other field being typed into cut in half by its lower edge; a
 560px one left about 58px — not one option — while the card's own header and
@@ -423,16 +434,46 @@ margin.
 
 So the card has a **folded shape**, and it is the same flag (`chromeCollapsed`,
 passed down as a prop rather than worked out again): the cap becomes the whole
-rectangle, and the header and footer lose most of their vertical padding — 49
-and 77px become 45 and 53, Send keeps its 44px. At that height every row of
-margin is a row of the question being typed in, and what lies past the card's
-edges is folded chrome anyway. The header stops at 45 because the close button's
-44px coarse-pointer overlay has to fit inside it: the card clips its overflow,
-and in this state it sits flush under the session header, so a slimmer header
-would leave a strip of the overlay unpressable. Measured again, the body is
-about 225px at 667 and 118px at 560 — 33px less each while the strip has
-something else to say: enough for the control being edited, a line of context
-on either side, and Send, all at once.
+rectangle, the footer loses most of its vertical padding — 77px becomes 53,
+Send's 44px with 4px above and below it and its top rule — and the **header is
+folded into the footer**, which becomes the card's only fixed row:
+
+```
+│ [×]  1 of 5 ready                               [ Send ] │
+```
+
+At that height every row of margin is a row of the question being typed in, and
+what lies past the card's edges is folded chrome anyway.
+
+The first folded shape kept the header, tightened from 49px to 45 and no
+further: the close button's 44px coarse-pointer overlay had to fit inside it,
+because the card clips its overflow and in this state sits flush under the
+session header. Screenshots of a 375×560 phone with the keyboard up showed what
+that header cost. It was 45px of a 118px body — 38% of it — to say "5
+questions" above a footer saying "1 of 5 ready", the same number twice; and the
+Other field the caret was in sat under the footer. Folding it away gives the
+body those 45px: about **163px at 560**, measured, and about 270 at 667 by the
+same arithmetic — 33px less each while the strip has something else to say.
+
+- **The `×` goes to the far left of the footer**, the end farthest from Send,
+  so a thumb reaching for one does not land on the other. Its overlay fits the
+  footer's 44px row the way it once had to fit the header.
+- **With nothing left to answer there is no `×`.** Send has already become
+  Close (*When it closes*), and two ways out side by side would be one too many.
+- **The title stays, as `sr-only` text**, so the dialog's accessible name is
+  the same in both shapes; a sighted reader has the footer's count, which says
+  the same thing.
+
+The unfolded card keeps its header and footer as they were.
+
+Every keyboard-up figure in this section comes from the walkthrough's simulated
+keyboard, which shrinks the layout viewport the way Android Chrome does under
+`interactive-widget=resizes-content`
+([scripts/ui-walkthrough/README.md](../scripts/ui-walkthrough/README.md) says
+how). iOS Safari ignores that setting: its keyboard covers the bottom of the
+visual viewport and leaves the layout alone, so on an iPhone neither these
+numbers nor the short-viewport gate flipping under the keyboard are established
+— that needs a real device.
 
 One flag rather than two judgements is the point: the card can never be in its
 folded shape with the chrome still there, or the other way round. It stays
@@ -486,7 +527,8 @@ protect.
 **`AttentionStrip` stays.** It is one line, and it is where a permission request
 speaks — the one thing that can arrive mid-answer that the user must be told
 about (§7). It is also the only route to the card holding that request while the
-panel is up (§2), and the server refuses answers until that request is dealt
+panel is up (§2) — and, through its Deny and Allow, a way to deal with it
+without leaving — and the server refuses answers until that request is dealt
 with; folding the strip for the room would wall the user in with a panel that
 cannot be submitted.
 
@@ -510,12 +552,37 @@ dragged under the threshold to see at all. It is `InputBar`'s existing behaviour
 on every mount, and it is left alone: a fold that only hides things has no
 business rewriting what happens when a component comes back.
 
+#### The field being typed in stays in view
+
+In either shape, the card keeps the text field that has focus — Other, a note,
+the decline's note, a free-text answer — inside its body with a line (24px) on
+either side of it, and scrolls the body only when the field would otherwise be
+covered. It checks when focus arrives and again whenever the body or the field
+changes size (a `ResizeObserver` on both): the keyboard shortening the body, the
+strip gaining a row, the field growing a line. A pick — a radio or a checkbox —
+is not a field and is left where it is. A field taller than the body is never
+scrolled so far that its **end** leaves the view, because that is where the
+caret is while someone types.
+
+This was first left to the folded shape and to the browser (§8 said so, and
+named it as the half to reopen). The browser does not hold up: it scrolls a
+focused field into view when focus arrives, at best, and not when the keyboard
+then shortens the body under it or the field grows a line — and at 375×560 any
+one of those puts the caret behind the footer. A headless browser's viewport
+resize does not do Android Chrome's own scroll-into-view either, so the
+screenshots could not tell the two apart; the card no longer needs them to. On
+iOS Safari the keyboard covers the body rather than shortening it, so nothing
+here changes size for it and bringing the field up is Safari's own doing — part
+of the real-device check above.
+
 #### The converse: the caret in the composer
 
 The fold answers a caret in the card. A caret in the composer is the case it
 deliberately leaves alone, and on a 560px phone under a keyboard that leaves the
-card about 83px — less than its own header and footer, so Send is cut off — and
-on a 667px one a body of about 48px. Neither can be answered in.
+card about 131px — less than its own header and footer, so Send is cut off — and
+on a 667px one a body of about 96px. Neither can be answered in. (Measured at 83
+and 48px with a settings row above the composer; the figures here are that
+measurement less the row, derived rather than measured again.)
 
 > **On a short touch screen the card and the chrome below it never share the
 > screen, and the caret decides which one has it.** In the card, the chrome
@@ -525,10 +592,10 @@ Aside, the screen is exactly the one a close leaves: no card, no backdrop, the
 transcript undimmed and live, and the strip's row 2 offering **Answer** (§2).
 That is the minimised form §8 already names, reused rather than joined by a
 third one. The alternatives were each worse: folding the chrome here takes away
-the sentence condition two exists to protect; squeezing the card further cannot
-fit a header, a footer and one line into ~98px, and would be a third set of
-sizes; laying the card over the composer breaks the one promise this section
-opens with.
+the sentence condition two exists to protect; squeezing the card further would
+leave, of its ~131px at 560, about 78 beside even the folded shape's 53px
+footer, and would be a third set of sizes; laying the card over the composer
+breaks the one promise this section opens with.
 
 **Four conditions** (`answerPanelYielded` in `ChatPanel`): the panel is up, the
 viewport is short (the same `useShortViewport`), the **primary pointer is
@@ -586,14 +653,16 @@ Desktops, tall viewports and the folded shape are untouched.
 
 **The threshold is one constant**, `SHORT_VIEWPORT_MAX_HEIGHT` in
 `web/src/hooks/useShortViewport.ts`, which carries the arithmetic it came from:
-each chrome row's height, the 85% cap, and the card's own header and footer in
-both shapes. It lives there rather than in the shared responsive module for the
-reason responsive-ui.md gives, and nothing else may read it.
+each chrome row's height, the 85% cap, and the card's own fixed rows in both
+shapes — header and footer unfolded, the footer alone folded. It lives there
+rather than in the shared responsive module for the reason responsive-ui.md
+gives, and nothing else may read it.
 
 It is a **derivation, not a measurement** — the walkthrough above measured the
 card on either side of it in headless Chromium, but a simulated keyboard is not
-a keyboard, and nobody has held a phone up to it yet. A 390×844 phone under the
-simulated keyboard is 544px, four above the line, and does not fold. The comment
+a keyboard (and models Android's alone — see above), and nobody has held a
+phone up to it yet. A 390×844 phone under the
+simulated keyboard is 544px, above the line, and does not fold. The comment
 on the constant says to re-derive it rather than nudge it when a chrome row's
 height changes, and the number should be checked against a real device before
 it is trusted.
@@ -632,13 +701,21 @@ as questions are resolved while the panel is up. The verb is on the footer
 button, where the thing it names actually happens. A title that said "Answer
 questions" would spend the one fixed line on a word the button already carries,
 while the count is the one fact that otherwise takes scrolling to work out — and
-the one that answers "am I nearly done".
+the one that answers "am I nearly done". In the folded shape the title is
+screen-reader text only, and the footer's `N of M ready` carries the count
+(*Room on a short viewport*).
 
 **One block per `request_id`, in the list's order — oldest first, a batch in
 the order it was asked — in one flat scroll.** Not an
 accordion and not a wizard: a wizard hides how much is left, forbids answering out
 of order, and turns two questions into four taps. The stack is skimmable, and the
-panel's body already scrolls between a pinned header and footer.
+panel's body already scrolls above a pinned footer.
+
+**The blocks sit on the card itself, a thin rule between two** (`divide-y`), not
+each in a bordered box of its own. A box was a third border around every
+option, inside the card's and the option's, and its padding came out of the
+question's width on a phone. The options keep their borders, being what is
+pressed.
 
 Each block reuses `web/src/components/Chat/QuestionForm.tsx`, which was a
 private helper inside the old `AskUserQuestionItem.tsx` and is now a component
@@ -652,6 +729,14 @@ Three shapes, decided by the question:
 | `options` non-empty, `multi_select` false | radios, plus an **Other** radio with an input that grows from one line |
 | `options` non-empty, `multi_select` true | checkboxes, plus an **Other** checkbox with an input that grows from one line |
 | `options` empty | a multi-line `textarea`, placeholder "Your answer" |
+
+The radios and checkboxes — the options, Other, and *Won't answer* — are drawn
+by `ChoiceInput` rather than left to the browser: under a dark theme Chromium
+fills an unpicked native control grey, which reads as disabled. Unpicked is a
+2px ring or box on a clear ground in every theme; picking thickens the ring into
+a dot or fills the box under a tick, in the accent while it can still change,
+success once it went out, muted when it is kept but not sent (and *Won't answer*
+whenever it is locked).
 
 The third row is the shape a question with nothing to pick takes. It needs no
 second surface and no second copy, and it opens three lines tall where the Other
@@ -1118,23 +1203,24 @@ them:
 |---|---|---|
 | `ConfirmDialog` | `document`, and it calls `stopPropagation` | closes itself, and the press never reaches `window` at all |
 | `Sheet` — a message's menu, and every other sheet | `document`, and it calls `stopPropagation` | the same, and it claims the press even while it is refusing to be dismissed — then it swallows without closing |
-| `ResponsivePanel` — the session-info panel, the engine picker, the worktree and session-filter dropdowns | `document`, and it calls `preventDefault` | closes itself and **marks the press handled**; while open, at every width, it counts itself as covering the page |
-| `ModeSelector` — the mode dropdown in the composer row | `document`, and it calls `preventDefault` | closes itself and **marks the press handled**; while open, it counts itself as covering the page |
+| `ResponsivePanel` — the header's session panel, the worktree and session-filter dropdowns | `document`, and it calls `preventDefault` | closes itself and **marks the press handled**; while open, at every width, it counts itself as covering the page |
 | `Sidebar` — the session drawer, below the expanded tier | `document`, and it calls `preventDefault` | closes itself and **marks the press handled**; while open as a drawer, it counts itself as covering the page |
 | `InputBar`'s command palette | the textarea, and it calls `preventDefault` | closes the palette; the press never gets past it unmarked |
+| `InputBar`'s `+` menu | `document`, and it calls `preventDefault` | closes itself and **marks the press handled**; while open, it counts itself as covering the page |
 | the answer panel | **`window`** | closes, unless the press is already `defaultPrevented` |
 | `ChatPanel`'s interrupt | `document` | ends the agent's turn — the fallback, and the only one that cannot be undone. It stands down (`isSheetOpen`) while anything counts itself as covering the page (`useIsPageCovered`) or the answer panel is up |
 
 Two rules, and they are the whole of it:
 
 1. **A surface drawn over the answer panel claims the key**, by
-   `preventDefault` or by `stopPropagation`. Four needed the line adding. Three
-   of them for one reason: they open from the session header or the composer
-   row, both of which stay lit beside the panel, so each genuinely can be on top
-   of one, and without the mark a single press put away both it and a panel the
-   user was not even looking at — the drawer's case is the worst of the three,
-   since it covers the panel outright. `ConfirmDialog` and the command palette
-   already satisfied the rule for their own reasons. The fourth is the shared
+   `preventDefault` or by `stopPropagation`. Three needed the line adding. Two
+   of them for one reason: they open from the session header, which stays lit
+   beside the panel, so each genuinely can be on top of it, and without the mark
+   a single press put away both it and a panel the user was not even looking
+   at — the drawer's case is the worse of the two, since it covers the panel
+   outright. `ConfirmDialog` and the command palette already satisfied the rule
+   for their own reasons, and the composer's `+` menu was written to it. The
+   third is the shared
    `Sheet`, and it arrives over the panel from the other direction: not opened
    beside it, but already open when the panel rose underneath. A message's menu
    stays up while a question puts the panel up under it, because the panel dims
@@ -1169,8 +1255,8 @@ not wait to be told — it **asks whether the page is covered** before it acts:
   `Sheet` and `ConfirmDialog` is in it without asking — locking the body
   registers a layer — so the fork sheet, a Git sheet, a sheet raised from
   anywhere in the app is counted by having been written as one. The surfaces
-  that only mark the press — `ResponsivePanel`, `ModeSelector` and the session
-  drawer — take no shared lock (`ResponsivePanel` locks the body by hand, and
+  that only mark the press — `ResponsivePanel` (the header's session panel is
+  one), the composer's `+` menu and the session drawer — take no shared lock (`ResponsivePanel` locks the body by hand, and
   only below the expanded tier; its migration is deferred in
   [cluster-ui.md](cluster-ui.md)), so each joins the count with a
   `useCoverPage(isOpen)` of its own. They have to: each re-adds its listener
@@ -1211,8 +1297,9 @@ exposed:
 
 | Surface | What it does with the press |
 |---|---|
-| `ResponsivePanel` **in the expanded tier** — the session-info panel, the engine picker, the worktree and session-filter dropdowns | closes itself and calls `stopPropagation`, and only on the press it actually closes on |
+| `ResponsivePanel` **in the expanded tier** — the header's session panel, the worktree and session-filter dropdowns | closes itself and calls `stopPropagation`, and only on the press it actually closes on |
 | `InputBar`'s command palette | the same. It hangs over the composer at *every* width, so it is the one that overlaps here on a phone as well as on a desktop |
+| `InputBar`'s `+` menu | the same, at every width, for the same reason |
 | the answer panel | closes, on a **`window`** listener, if the press landed on the backdrop element itself |
 
 The two rules, restated for the pointer:
@@ -1485,7 +1572,7 @@ to carry.
 | A question whose card has not been paged in | Answerable. That is the whole design: the panel reads the list, not the transcript. The `Answer this` opener does not exist for it, because its card is not on screen to hold one |
 | `Answer this` on a card while the panel is already up | Cannot be reached: the card is behind the backdrop and `inert` (§3). It is a way to *that one* question, not a way in, so nothing is lost — the question already has a block in the panel. Closing first reaches the button, and closing keeps every draft (§5) |
 | An agent answers the question (`question_answer`) | The block leaves the panel by the two rules above; the card reads `Answered`, and the answering message is drawn as the named block of §6 rather than as a user bubble |
-| A permission request arrives while the panel is up | The panel **does not close** — it may hold half-typed answers, and a surface that disappears under the user is worse than one that explains itself. The strip shows row 1 instead of row 2 (which is not rendered anyway while the panel is up), and a submit is refused with the line above. The card itself is behind the backdrop and `inert` whether or not it is scrolled into view, so "Jump to request" — which closes the panel on its way, and so waits out a submit in flight — is the only route to it (§2) |
+| A permission request arrives while the panel is up | The panel **does not close** — it may hold half-typed answers, and a surface that disappears under the user is worse than one that explains itself. The strip shows row 1 instead of row 2 (which is not rendered anyway while the panel is up), and a submit is refused with the line above. The card itself is behind the backdrop and `inert` whether or not it is scrolled into view, so row 1's jump — which closes the panel on its way, and so waits out a submit in flight — is the only route to it; row 1's Deny and Allow answer it without leaving the panel (§2) |
 | Reduced motion | The panel's anchor scroll degrades, as every scroll in this app does. There is nothing else to degrade: the panel has no enter or leave animation (§8) |
 
 ## 8. Deliberately not done
@@ -1540,15 +1627,14 @@ to carry.
 - **One folded shape for a short viewport, and no more; the panel does not go
   full-screen under a keyboard.** This bullet once ruled out resizing the card
   at all, and said a measurement might reopen it; one did (§3, *Room on a short
-  viewport*). The folded shape — whole-rectangle cap, slimmer header and footer
-  — exists only under the fold's own flag, so there are two sets of sizes and
-  never a third: no question block is re-laid out, and going full-screen would
-  still reopen every one of the four arguments §3 settles. Scrolling the focused
-  control into view stays out — the folded card is meant to make it
-  unnecessary. A headless browser cannot say whether it does, because a resize
-  there does not bring the focused field into view the way a real keyboard
-  does; if a phone shows the field scrolled out of the body, this is the half
-  of the bullet to reopen.
+  viewport*). The folded shape — whole-rectangle cap, header folded into a
+  slimmer footer — exists only under the fold's own flag, so there are two sets
+  of sizes and never a third: no question block is re-laid out, and going
+  full-screen would still reopen every one of the four arguments §3 settles.
+  The bullet's other half — leaving the focused field to the folded card and
+  the browser — has been reopened: the browser does not scroll it back into
+  view when the keyboard shortens the body or the field grows, so the card
+  does (§3, *The field being typed in stays in view*).
 - **No pill, and no jump to a question card.** Both existed to reach the place
   answering happened, and answering does not happen there any more.
   `web/src/utils/pendingQuestions.ts`, `PendingQuestionPill.tsx` and
@@ -1571,12 +1657,13 @@ silent, and this design simply never enters it.
 | File | Role |
 |---|---|
 | `web/src/components/Chat/AttentionStrip.tsx` | renamed from `BlockerStrip.tsx`; gains row 2, an `onAnswer` prop, and the `answerPanelOpen` that withholds row 2 while the card is on the screen, and the `jumpDisabled` that holds row 1's jump while the panel is sending (§2) |
-| `web/src/components/Chat/AnswerPanel.tsx` | the panel, its blocks, the footer (§3); a card centred in the transcript's rectangle over a backdrop that covers that rectangle alone, capped at 85% of it — all of it, with a slimmer header and footer, when told `chromeCollapsed` — measuring nothing; owns Escape and the backdrop press on `window` (§4); reports whether focus is inside it and decides nothing about the screen around it (§3); steps aside — `invisible` + `inert`, still mounted — when told it has `yielded` (§3); reports whether a submit is in flight, for the one way out of it that is not its own (§2) |
+| `web/src/components/Chat/AnswerPanel.tsx` | the panel, its blocks, the footer (§3); a card centred in the transcript's rectangle over a backdrop that covers that rectangle alone, capped at 85% of it — all of it, with the header folded into a slimmer footer, when told `chromeCollapsed` — sizing itself without measuring anything; keeps the focused text field and a line either side of it in its body's view (§3); owns Escape and the backdrop press on `window` (§4); reports whether focus is inside it and decides nothing about the screen around it (§3); steps aside — `invisible` + `inert`, still mounted — when told it has `yielded` (§3); reports whether a submit is in flight, for the one way out of it that is not its own (§2) |
 | `web/src/components/ui/ResponsivePanel.tsx` | marks its Escape handled, and claims the click it dismisses on, so the answer panel underneath it does not close on the same press; counts itself as covering the page while open, so the chat's interrupt stands down (§4) |
-| `web/src/components/Chat/ModeSelector.tsx`, `web/src/components/Layout/Sidebar.tsx` | the same Escape line, for the same reason: both open from surfaces the backdrop leaves lit — the composer row and the session header — so both can be the thing on top of the panel. The same cover line too, the sidebar's only while it is a drawer. Neither needs the click line: both portal a backdrop of their own (§4) |
-| `web/src/components/Chat/InputBar.tsx` | claims the click its command palette dismisses on — the palette hangs over the composer with no backdrop, at every width (§4) |
+| `web/src/components/Layout/Sidebar.tsx` | the same Escape line, for the same reason: it opens from the session header, which the backdrop leaves lit, so it can be the thing on top of the panel. The same cover line too, only while it is a drawer. It needs no click line: it portals a backdrop of its own (§4) |
+| `web/src/components/Chat/InputBar.tsx` | claims the click its command palette and `+` menu dismiss on — both hang over the composer with no backdrop, at every width (§4) |
 | `packages/shared/src/hooks/useOutsideClick.ts` | hands the caller the event beside the target, which is what lets a caller claim the gesture at all (§4) |
 | `web/src/components/Chat/QuestionForm.tsx` | extracted from `AskUserQuestionItem.tsx`; the one renderer of a question, across every host that draws one — including the third shape, a textarea for a question with no options — and of the note beside an answer, editable or read-only (§3) |
+| `web/src/components/Chat/ChoiceInput.tsx` | new — the drawn radio and checkbox for options, Other and Won't answer, in three tones (§3) |
 | `web/src/components/ui/RecommendedTag.tsx` | the `Recommended` tag on an option, the one copy of its wording and style for all three places that draw options (§3) |
 | `web/src/components/Chat/QuestionRecordItem.tsx` | replaces `AskUserQuestionItem.tsx` — the record card: four states, no form, collapsed by default, `Answer this` in the body (§6), and the one card a legacy `ask_user_question` record draws through |
 | `web/src/components/Chat/ChatPanel.tsx` | holds whether the panel is up, what it is anchored to and the ids this visit has shown; wraps the message list so the panel has a rectangle, and derives the panel's rendering, the transcript's `inert` and the Escape guard from one expression (§3); remembers the last focused element for the rescue and stands its interrupt down while the panel or anything covering the page is up (§4); consumes the navigation intent of §4; and owns `chromeCollapsed`, the one place all three short-viewport conditions are known, and its converse `answerPanelYielded`, read off a focus wrapper around the composer (§3) |

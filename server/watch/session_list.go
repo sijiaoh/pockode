@@ -124,7 +124,7 @@ func NewSessionListWatcher(store session.Store, works SessionWorkSource) *Sessio
 	w := &SessionListWatcher{
 		BaseWatcher: NewBaseWatcher(),
 		store:       store,
-		works:       newSessionWorkIndex(works),
+		works:       newSessionWorkIndex(works, sameRow),
 		eventCh:     make(chan sessionListEvent, 64), // Buffer to avoid blocking
 	}
 	store.AddOnChangeListener(w)
@@ -178,24 +178,26 @@ func (w *SessionListWatcher) notifyChange(event session.SessionChangeEvent) {
 		return
 	}
 
-	workID, ok := w.works.resolve(event.Session.ID)
+	sw, ok := w.works.resolve(event.Session.ID)
 	if !ok {
 		return
 	}
-	w.pushSession(event.Op, event.Session, workID)
+	w.pushSession(event.Op, event.Session, sw)
 
 	slog.Debug("notified session list change", "operation", event.Op)
 }
 
-// notifyWorkChange re-sends the row of the session a changed work item runs in.
-// Nothing about the session moves when the relation does, so without this a row
-// would keep saying what was true when the session was last touched.
+// notifyWorkChange re-sends the rows of the sessions a changed work item names:
+// the one it runs in, and the one watching it (sessionsTouchedBy). Nothing
+// about a session moves when either relation does, so without this a row would
+// keep saying what was true when the session was last touched.
 //
 // The relation is resolved from the store rather than read off the event: a
 // delete carries the work as it was, and the row has to say what it is now,
 // which is gone.
 //
-// A work with no session names no session to re-resolve, so nothing is pushed.
+// A work with no session and no watcher names no session to re-resolve, so
+// nothing is pushed.
 // That is the whole answer for a work that was never started, and for a start
 // rolled back because the session could not be created. It is also right for a
 // rollback after a failed kickoff, where the session *was* created: that session
@@ -207,16 +209,22 @@ func (w *SessionListWatcher) notifyChange(event session.SessionChangeEvent) {
 // survives with a row still naming the work that no longer runs it, until a full
 // sync or a fresh subscription reads the relation again.
 func (w *SessionListWatcher) notifyWorkChange(event work.ChangeEvent) {
-	sessionID := event.Work.SessionID
-	if sessionID == "" || !w.HasSubscriptions() {
+	if !w.HasSubscriptions() {
 		return
 	}
+	for _, sessionID := range sessionsTouchedBy(event) {
+		w.refreshSession(sessionID, event.Work.ID)
+	}
+}
 
-	workID, ok := w.works.resolve(sessionID)
+// refreshSession re-sends one session's row if its relation to the work layer
+// moved since it last went out.
+func (w *SessionListWatcher) refreshSession(sessionID, changedWorkID string) {
+	sw, ok := w.works.resolve(sessionID)
 	if !ok {
 		return
 	}
-	if w.works.alreadySent(sessionID, workID) {
+	if w.works.alreadySent(sessionID, sw) {
 		return
 	}
 
@@ -228,11 +236,13 @@ func (w *SessionListWatcher) notifyWorkChange(event work.ChangeEvent) {
 	if !found {
 		// A work is given its session id before that session exists (work.Claim,
 		// then WorkStarter). The session's own create event carries the relation.
+		// A watcher in another worktree is not this store's either; that
+		// worktree's watcher answers for it (worktree.Manager.OnWorkChange).
 		return
 	}
 
-	w.pushSession(session.OperationUpdate, meta, workID)
-	slog.Debug("notified session list of a work change", "workId", event.Work.ID, "sessionId", sessionID)
+	w.pushSession(session.OperationUpdate, meta, sw)
+	slog.Debug("notified session list of a work change", "workId", changedWorkID, "sessionId", sessionID)
 }
 
 // pushSession sends one session's row, which is news to a subscriber that wants
@@ -248,11 +258,11 @@ func (w *SessionListWatcher) notifyWorkChange(event work.ChangeEvent) {
 // session: if that was already this work item, no subscriber can be holding the
 // row. Unknown counts as maybe, so the removal goes out — a client drops a
 // session id it does not hold, the same as any delete it cannot place.
-func (w *SessionListWatcher) pushSession(op session.Operation, meta session.SessionMeta, workID string) {
+func (w *SessionListWatcher) pushSession(op session.Operation, meta session.SessionMeta, sw rpc.SessionWork) {
 	// Built once and shared by pointer across subscribers; read-only from here on.
-	item := rpc.NewSessionListItem(meta, workID)
-	previous, known := w.works.remember(item.ID, item.WorkID)
-	retract := !known || previous == ""
+	item := rpc.NewSessionListItem(meta, sw)
+	previous, known := w.works.remember(item.ID, sw)
+	retract := !known || previous.WorkID == ""
 	unread := w.unreadFlags()
 
 	w.NotifyAll("session.list.changed", func(sub *Subscription) any {
@@ -340,49 +350,50 @@ func (w *SessionListWatcher) unreadFlags() unreadTally {
 		return unreadTally{known: true}
 	}
 
-	workIDs, err := w.works.bySession()
+	relations, err := w.works.bySession()
 	if err != nil {
 		slog.Error("failed to read work items for the unread flag", "error", err)
 		return unreadTally{}
 	}
 	for _, sess := range unread {
-		if workIDs[sess.ID] == "" {
+		if relations[sess.ID].WorkID == "" {
 			return unreadTally{known: true, all: true, plain: true}
 		}
 	}
 	return unreadTally{known: true, all: true}
 }
 
-// listRows reads the whole session list and resolves each row's work item,
-// reading the work index once rather than once per row. Session ids are unique
-// across worktrees, so the index needs no worktree filter.
-func (w *SessionListWatcher) listRows() ([]rpc.SessionListItem, error) {
+// listRows reads the whole session list and resolves each row's relation to
+// the work layer, reading the work index once rather than once per row. Session
+// ids are unique across worktrees, so the index needs no worktree filter. The
+// index is returned beside the rows for the one caller that records it.
+func (w *SessionListWatcher) listRows() ([]rpc.SessionListItem, map[string]rpc.SessionWork, error) {
 	sessions, err := w.store.List()
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
-	workIDs, err := w.works.bySession()
+	relations, err := w.works.bySession()
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	items := make([]rpc.SessionListItem, len(sessions))
 	for i, sess := range sessions {
-		items[i] = rpc.NewSessionListItem(sess, workIDs[sess.ID])
+		items[i] = rpc.NewSessionListItem(sess, relations[sess.ID])
 	}
 
-	return items, nil
+	return items, relations, nil
 }
 
 // resetSentWorkIDs records a whole list as sent. Only for a sync, which goes to
 // every subscriber: recording a list that went to one of them — a snapshot a new
 // subscriber asked for — would suppress the very notification that tells all the
 // others about the change it read.
-func (w *SessionListWatcher) resetSentWorkIDs(items []rpc.SessionListItem) {
-	entries := make(map[string]string, len(items))
+func (w *SessionListWatcher) resetSentWorkIDs(items []rpc.SessionListItem, relations map[string]rpc.SessionWork) {
+	entries := make(map[string]rpc.SessionWork, len(items))
 	for _, item := range items {
-		entries[item.ID] = item.WorkID
+		entries[item.ID] = relations[item.ID]
 	}
 	w.works.reset(entries)
 }
@@ -409,7 +420,7 @@ func (w *SessionListWatcher) notifySync() {
 		return
 	}
 
-	items, err := w.listRows()
+	items, relations, err := w.listRows()
 	if err != nil {
 		// The flag goes back up: this sync is the only thing that can replace the
 		// events that were dropped, and without it the next event would push one
@@ -418,7 +429,7 @@ func (w *SessionListWatcher) notifySync() {
 		slog.Error("failed to list sessions for sync", "error", err)
 		return
 	}
-	w.resetSentWorkIDs(items)
+	w.resetSentWorkIDs(items, relations)
 	// Both narrowings built once rather than per subscriber: there are only two,
 	// and a sync goes to every subscriber at once.
 	plain := filterRows(items, SessionListFilter{ExcludeWorkSessions: true})
@@ -473,7 +484,7 @@ func (w *SessionListWatcher) Subscribe(id string, notifier Notifier, filter Sess
 		return SessionListSnapshot{}, err
 	}
 
-	items, err := w.listRows()
+	items, _, err := w.listRows()
 	if err != nil {
 		w.RemoveSubscription(id)
 		return SessionListSnapshot{}, err
@@ -512,7 +523,7 @@ func (w *SessionListWatcher) Page(id, cursor string, limit int) (SessionListPage
 	}
 	state := stateOf(sub)
 
-	items, err := w.listRows()
+	items, _, err := w.listRows()
 	if err != nil {
 		return SessionListPage{}, err
 	}

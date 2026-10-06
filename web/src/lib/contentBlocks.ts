@@ -51,6 +51,18 @@ function parseFileBlock(raw: unknown): FileBlock | null {
 }
 
 /**
+ * Reads the `attachments` of a message record — the files the user sent with
+ * it. Undefined for none, which is every message without any.
+ */
+export function parseFileBlocks(raw: unknown): FileBlock[] | undefined {
+	if (!Array.isArray(raw)) return undefined;
+	const files = raw
+		.map(parseFileBlock)
+		.filter((file): file is FileBlock => file !== null);
+	return files.length > 0 ? files : undefined;
+}
+
+/**
  * Reads the `contents` of a `tool_result` record.
  *
  * Returns undefined for a result that carried none, which is every result

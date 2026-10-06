@@ -4,8 +4,10 @@ package claude
 import (
 	"context"
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -14,6 +16,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -147,6 +150,14 @@ func buildArgs(opts agent.StartOptions, launch claudeLaunch) []string {
 		args = append(args, "--effort", opts.Effort)
 	}
 
+	// Files the user sends live in the session's attachment store, outside the
+	// work directory, and claude asks before reading outside its directories:
+	// without this every PDF sent by path would raise a permission request, and
+	// a work running unattended would stall on one. Measured on claude 2.1.286.
+	if dir := attachmentDir(opts); dir != "" {
+		args = append(args, "--add-dir", dir)
+	}
+
 	if launch.sessionID != "" {
 		if launch.resume {
 			args = append(args, "--resume", launch.sessionID)
@@ -185,6 +196,27 @@ func (a *Agent) Start(ctx context.Context, opts agent.StartOptions) (agent.Sessi
 		}
 		removeMCPConfig = remove
 		claudeArgs = append(claudeArgs, "--mcp-config", mcpConfigPath)
+	}
+
+	// Asked on every launch rather than once: the CLI can be updated under a
+	// running server, and --version answers in milliseconds.
+	version, err := agent.Version(ctx, log, Binary)
+	var notFound *agent.BinaryNotFoundError
+	// A missing CLI is StartProcess's to report, below.
+	if err != nil && !errors.As(err, &notFound) {
+		log.Warn("could not read the claude version; thinking text will not be requested", "error", err)
+	}
+	claudeArgs = append(claudeArgs, thinkingDisplayArgs(version)...)
+
+	// Created up front rather than left to the first upload: the directory is
+	// handed to the CLI once, at launch, and an upload can arrive while this
+	// process is running.
+	if dir := attachmentDir(opts); dir != "" {
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			removeMCPConfig()
+			cancel()
+			return nil, fmt.Errorf("failed to create attachment dir: %w", err)
+		}
 	}
 
 	proc, err := agent.StartProcess(procCtx, log, Binary, claudeArgs, opts.WorkDir)
@@ -260,7 +292,7 @@ func (a *Agent) Start(ctx context.Context, opts agent.StartOptions) (agent.Sessi
 			lossStore.clear(log)
 		}
 
-		streamOutput(procCtx, log, proc.Stdout, events, pendingRequests, resumeState, backgroundTasks, usage, sess.refusals(), attachmentStore)
+		streamOutput(procCtx, log, proc.Stdout, events, pendingRequests, resumeState, backgroundTasks, &sess.thinking, usage, sess.refusals(), attachmentStore)
 		agent.WaitForProcess(procCtx, log, proc, stderrCh, events)
 		resumeState.processExited(procCtx.Err() != nil)
 
@@ -288,6 +320,7 @@ type cliSession struct {
 	stdinMu         sync.Mutex
 	pendingRequests *sync.Map // tracks sent control requests by requestID for response matching
 	backgroundTasks *backgroundTaskTracker
+	thinking        thinkingClock
 	lossStore       backgroundLossStore
 	cancel          func()
 	closeOnce       sync.Once
@@ -326,25 +359,102 @@ func (s *cliSession) takeNote() string {
 // So this session does not implement agent.MessageIngestReporter and the send
 // path writes the read point for it; see agent.MessageIngestedEvent.
 func (s *cliSession) SendMessage(prompt agent.Prompt) error {
-	text := prompt.Text
+	// Read before anything else is done with the prompt: a file that cannot be
+	// read fails the send, and the queued note must still be there for the
+	// prompt the user sends next.
+	images, byPath := splitInlineImages(prompt.Attachments)
+	content := make([]inputBlock, 0, len(images)+1)
+	for _, a := range images {
+		data, err := os.ReadFile(a.Path)
+		if err != nil {
+			return fmt.Errorf("read attachment %q: %w", a.File.Name, err)
+		}
+		content = append(content, inputBlock{
+			Type: "image",
+			Source: &imageSource{
+				Type:      "base64",
+				MediaType: a.File.MIME,
+				Data:      base64.StdEncoding.EncodeToString(data),
+			},
+		})
+	}
+
+	text := agent.AppendNote(prompt.Text, agent.AttachedFilesNote(byPath))
 	if note := s.takeNote(); note != "" {
 		text = fmt.Sprintf("<system-reminder>%s</system-reminder>\n\n%s", note, text)
+	}
+	// The API refuses an empty text block, and a message of images alone has
+	// nothing to put in one.
+	if text != "" {
+		content = append(content, inputBlock{Type: "text", Text: text})
 	}
 
 	msg := userMessage{
 		Type: "user",
 		Message: userContent{
 			Role:    "user",
-			Content: []textContent{{Type: "text", Text: text}},
+			Content: content,
 		},
 	}
 	data, err := json.Marshal(msg)
 	if err != nil {
 		return fmt.Errorf("failed to marshal message: %w", err)
 	}
-	s.log.Debug("sending prompt", "length", len(text))
-	return s.writeStdin(data)
+	s.log.Debug("sending prompt", "length", len(text), "images", len(images), "files", len(byPath))
+	if err := s.writeStdin(data); err != nil {
+		return err
+	}
+	s.thinking.messageSent(time.Now())
+	return nil
 }
+
+// Limits on what goes to claude as image content, from the Anthropic API's
+// documented ceilings. An image block the API refuses is not refused once: it
+// stays in claude's own transcript and is sent again with every later turn, so
+// one bad image would break the session for good. Anything outside these goes
+// by path instead, where claude's Read scales the image down before the model
+// sees it.
+const (
+	// maxInlineImage is the API's 5 MB per image, which it measures on the
+	// base64 — a third larger than the file.
+	maxInlineImage = 5_000_000 / 4 * 3
+	// maxInlineSide is the API's 8000 px on either side; past 20 images in one
+	// request that drops to 2000, which maxInlineImages keeps one message from
+	// reaching on its own. A conversation that collects more across turns is
+	// past what one message can see, and is left to the CLI's own handling of
+	// a long transcript.
+	maxInlineSide   = 8000
+	maxInlineImages = 20
+	// maxInlineTotal keeps one message well inside the API's 32 MB request,
+	// which also has to carry the conversation itself.
+	maxInlineTotal = 15 << 20
+)
+
+// splitInlineImages picks the attachments that go to claude as image blocks.
+// Dimensions of zero mean the header could not be read, which is as good as a
+// file the API will refuse to decode.
+func splitInlineImages(attachments []agent.Attachment) (inlined, byPath []agent.Attachment) {
+	var total int64
+	var count int
+	return agent.SplitAttachments(attachments, func(a agent.Attachment) bool {
+		f := a.File
+		ok := count < maxInlineImages &&
+			agent.InlineImageMIMEs[f.MIME] &&
+			f.Size <= maxInlineImage &&
+			f.Width > 0 && f.Height > 0 &&
+			f.Width <= maxInlineSide && f.Height <= maxInlineSide &&
+			total+f.Size <= maxInlineTotal
+		if ok {
+			total += f.Size
+			count++
+		}
+		return ok
+	})
+}
+
+// ReceivesAttachments marks this session as one that delivers attachments; see
+// agent.AttachmentReceiver.
+func (s *cliSession) ReceivesAttachments() {}
 
 // SendPermissionResponse sends a permission response to Claude.
 func (s *cliSession) SendPermissionResponse(data agent.PermissionRequestData, choice agent.PermissionChoice) error {
@@ -511,21 +621,38 @@ func (s *cliSession) writeStdin(data []byte) error {
 	return err
 }
 
-func streamOutput(ctx context.Context, log *slog.Logger, stdout io.Reader, events chan<- agent.AgentEvent, pendingRequests *sync.Map, resumeState *claudeResumeStateManager, backgroundTasks *backgroundTaskTracker, usage *usageObserver, refusals controlRefusals, store attachments.Store) {
+func streamOutput(ctx context.Context, log *slog.Logger, stdout io.Reader, events chan<- agent.AgentEvent, pendingRequests *sync.Map, resumeState *claudeResumeStateManager, backgroundTasks *backgroundTaskTracker, thinking *thinkingClock, usage *usageObserver, refusals controlRefusals, store attachments.Store) {
 	scanner := agent.NewLineScanner(stdout, agent.MaxLineBytes)
 	authFailures := &authFailureTracker{}
+
+	// send is the one way an event leaves here, so that none bypasses the
+	// thinking clock: a result it never saw would put the call's whole runtime
+	// into the next thinking's duration. False once the context is done.
+	send := func(ev agent.AgentEvent, arrived time.Time) bool {
+		ev, ok := thinking.observe(ev, arrived)
+		if !ok {
+			return true
+		}
+		select {
+		case events <- ev:
+			return true
+		case <-ctx.Done():
+			return false
+		}
+	}
 
 	for scanner.Scan() {
 		line := scanner.Bytes()
 		if len(line) == 0 {
 			continue
 		}
+		// Read once per line, before parsing: everything parsed out of one frame
+		// arrived at the same moment.
+		arrived := time.Now()
 
 		if scanner.Truncated() {
 			for _, ev := range oversizedLineEvents(log, line, scanner.Len(), refusals.decline) {
-				select {
-				case events <- ev:
-				case <-ctx.Done():
+				if !send(ev, arrived) {
 					return
 				}
 			}
@@ -537,12 +664,10 @@ func streamOutput(ctx context.Context, log *slog.Logger, stdout io.Reader, event
 		var event cliEvent
 		if err := json.Unmarshal(line, &event); err != nil {
 			log.Warn("failed to parse JSON from CLI", "error", err, "lineLength", len(line))
-			select {
-			case events <- agent.TextEvent{Content: string(line)}:
-				continue
-			case <-ctx.Done():
+			if !send(agent.TextEvent{Content: string(line)}, arrived) {
 				return
 			}
+			continue
 		}
 
 		if resumeState != nil {
@@ -551,9 +676,7 @@ func streamOutput(ctx context.Context, log *slog.Logger, stdout io.Reader, event
 		usage.observe(line, event)
 
 		for _, ev := range parseLine(log, line, event, pendingRequests, backgroundTasks, authFailures, refusals, store) {
-			select {
-			case events <- ev:
-			case <-ctx.Done():
+			if !send(ev, arrived) {
 				return
 			}
 		}
@@ -937,13 +1060,22 @@ type userMessage struct {
 }
 
 type userContent struct {
-	Role    string        `json:"role"`
-	Content []textContent `json:"content"`
+	Role    string       `json:"role"`
+	Content []inputBlock `json:"content"`
 }
 
-type textContent struct {
-	Type string `json:"type"`
-	Text string `json:"text"`
+// inputBlock is one content block of a user message, in the Anthropic API's
+// shape, which is what stream-json input takes.
+type inputBlock struct {
+	Type   string       `json:"type"`
+	Text   string       `json:"text,omitempty"`
+	Source *imageSource `json:"source,omitempty"`
+}
+
+type imageSource struct {
+	Type      string `json:"type"`
+	MediaType string `json:"media_type"`
+	Data      string `json:"data"`
 }
 
 type controlRequest struct {
@@ -1014,6 +1146,23 @@ type cliEvent struct {
 	// telemetry) it names something the transcript has no entry for, so those
 	// ids are deliberately not carried into history.
 	UUID string `json:"uuid,omitempty"`
+	// ParentToolUseID is set on the assistant and user frames a subagent
+	// produced, naming the Task/Agent call it runs under. A backgrounded
+	// subagent's frames arrive interleaved with the main conversation's, so
+	// this is the only thing that says whose they are (measured on 2.1.286).
+	ParentToolUseID string `json:"parent_tool_use_id,omitempty"`
+}
+
+// anchorID is the frame's uuid when it can anchor a fork, and empty when the
+// frame is a subagent's: those uuids are entries of the subagent's sidechain
+// transcript (subagents/agent-<id>.jsonl beside the session's own), so
+// --resume-session-at cannot find them in the main one. See
+// agent.EventRecord.ProviderMessageID.
+func (e cliEvent) anchorID() string {
+	if e.ParentToolUseID != "" {
+		return ""
+	}
+	return e.UUID
 }
 
 type cliMessage struct {
@@ -1027,8 +1176,11 @@ type cliMessageString struct {
 }
 
 type cliContentBlock struct {
-	Type      string          `json:"type"`
-	Text      string          `json:"text,omitempty"`
+	Type string `json:"type"`
+	Text string `json:"text,omitempty"`
+	// Thinking is a thinking block's text; see thinkingDisplayArgs for why it
+	// is often empty.
+	Thinking  string          `json:"thinking,omitempty"`
 	ID        string          `json:"id,omitempty"`
 	Name      string          `json:"name,omitempty"`
 	Input     json.RawMessage `json:"input,omitempty"`
@@ -1108,9 +1260,9 @@ func parseLine(log *slog.Logger, line []byte, event cliEvent, pendingRequests *s
 // surfaces for a retry banner and a denial dialog — Pockode has neither, so
 // without these a stalled turn or an auto-denied tool would go unexplained.
 //
-// Two notable exclusions: `init` is session-start metadata that the CLI re-emits
-// at the start of every turn, and `thinking_tokens` is a per-delta token
-// estimate — both are pure noise in a transcript.
+// One notable exclusion: `init` is session-start metadata that the CLI re-emits
+// at the start of every turn, pure noise in a transcript. `thinking_tokens` is
+// read before this map is consulted, as the signal that the agent is thinking.
 var userVisibleSystemSubtypes = map[string]bool{
 	"compact_boundary":          true, // conversation was compacted
 	"informational":             true, // loop text banner, e.g. hook feedback
@@ -1147,6 +1299,20 @@ func parseSystemEvent(log *slog.Logger, line []byte, event cliEvent, backgroundT
 			return nil
 		}
 		return []agent.AgentEvent{agent.CommandOutputEvent{Content: payload.Content}}
+	}
+
+	// A per-delta estimate of the thinking tokens so far, written while the
+	// model thinks and before its thinking block arrives. The number is not
+	// shown; that the frame arrived is the signal (agent.ThinkingDeltaEvent),
+	// which thinkingClock cuts down to one per stretch. Only the main agent's:
+	// a subagent's thinking is described in its own row. The frames carry no
+	// parent_tool_use_id, and a subagent writes none, forwarded or not
+	// (measured on 2.1.289), so the check is for a CLI that starts to.
+	if event.Subtype == "thinking_tokens" {
+		if event.ParentToolUseID != "" {
+			return nil
+		}
+		return []agent.AgentEvent{agent.ThinkingDeltaEvent{}}
 	}
 
 	// The task lifecycle. Read as signals about live state — which call is
@@ -1385,7 +1551,7 @@ func parseAssistantEvent(log *slog.Logger, line []byte, event cliEvent, backgrou
 	var msg cliMessage
 	if err := json.Unmarshal(event.Message, &msg); err != nil {
 		log.Warn("failed to parse assistant message from CLI", "error", err)
-		return []agent.AgentEvent{agent.TextEvent{Content: string(event.Message)}}
+		return []agent.AgentEvent{agent.TextEvent{Content: string(event.Message), ParentToolUseID: event.ParentToolUseID}}
 	}
 
 	if msg.Model == syntheticModel {
@@ -1396,18 +1562,37 @@ func parseAssistantEvent(log *slog.Logger, line []byte, event cliEvent, backgrou
 	var events []agent.AgentEvent
 	var textParts []string
 
-	// TODO: Handle thinking/redacted_thinking blocks and other missing fields.
+	flushText := func() {
+		if len(textParts) > 0 {
+			events = append(events, textEvent(event, textParts))
+			textParts = nil
+		}
+	}
+
 	for _, block := range msg.Content {
 		switch block.Type {
 		case "text":
 			if block.Text != "" {
 				textParts = append(textParts, block.Text)
 			}
+		case "thinking", "redacted_thinking":
+			flushText()
+			// An empty thinking is still recorded: that the agent thought, and
+			// for how long, is worth a row even when it shared nothing. The
+			// duration is stamped later, by thinkingClock.
+			//
+			// No ProviderMessageID: a fork anchored on this frame would resume
+			// a conversation ending in a thinking-only assistant message, which
+			// nothing has shown --resume-session-at to accept. Without it the
+			// anchor falls back to the record before, and a fork cut there only
+			// loses the thinking.
+			events = append(events, agent.ThinkingEvent{
+				Content:         strings.TrimSpace(block.Thinking),
+				Redacted:        block.Type == "redacted_thinking",
+				ParentToolUseID: event.ParentToolUseID,
+			})
 		case "tool_use", "server_tool_use":
-			if len(textParts) > 0 {
-				events = append(events, agent.TextEvent{Content: strings.Join(textParts, ""), ProviderMessageID: event.UUID})
-				textParts = nil
-			}
+			flushText()
 			events = append(events, agent.ToolCallEvent{
 				ToolUseID: block.ID,
 				ToolName:  block.Name,
@@ -1417,16 +1602,23 @@ func parseAssistantEvent(log *slog.Logger, line []byte, event cliEvent, backgrou
 				// join is resolved now, while the task is still tracked, and
 				// travels with the record.
 				OriginToolUseID:   backgroundTasks.originOfCall(block.Name, block.Input),
-				ProviderMessageID: event.UUID,
+				ParentToolUseID:   event.ParentToolUseID,
+				ProviderMessageID: event.anchorID(),
 			})
 		}
 	}
 
-	if len(textParts) > 0 {
-		events = append(events, agent.TextEvent{Content: strings.Join(textParts, ""), ProviderMessageID: event.UUID})
-	}
+	flushText()
 
 	return events
+}
+
+func textEvent(event cliEvent, parts []string) agent.TextEvent {
+	return agent.TextEvent{
+		Content:           strings.Join(parts, ""),
+		ParentToolUseID:   event.ParentToolUseID,
+		ProviderMessageID: event.anchorID(),
+	}
 }
 
 func parseUserEvent(log *slog.Logger, event cliEvent, backgroundTasks *backgroundTaskTracker, store attachments.Store) []agent.AgentEvent {
@@ -1441,7 +1633,7 @@ func parseUserEvent(log *slog.Logger, event cliEvent, backgroundTasks *backgroun
 		var msgStr cliMessageString
 		if err := json.Unmarshal(event.Message, &msgStr); err != nil {
 			// Unknown format - output raw for visibility
-			return []agent.AgentEvent{agent.TextEvent{Content: string(event.Message)}}
+			return []agent.AgentEvent{agent.TextEvent{Content: string(event.Message), ParentToolUseID: event.ParentToolUseID}}
 		}
 		return extractEventsFromText(log, msgStr.Content)
 	}
@@ -1465,7 +1657,8 @@ func parseUserEvent(log *slog.Logger, event cliEvent, backgroundTasks *backgroun
 				Subtype:           subtype,
 				Contents:          result.blocks,
 				IsError:           block.IsError,
-				ProviderMessageID: event.UUID,
+				ParentToolUseID:   event.ParentToolUseID,
+				ProviderMessageID: event.anchorID(),
 			})
 
 		default:
@@ -1631,4 +1824,13 @@ func (r resultEvent) errorMessage() string {
 		return fmt.Sprintf("Claude ended the turn with an error (%s)", r.Subtype)
 	}
 	return "Claude ended the turn with an error"
+}
+
+// attachmentDir is where this session's attachments live, or "" for a session
+// started without a data directory to keep any in.
+func attachmentDir(opts agent.StartOptions) string {
+	if opts.DataDir == "" || opts.SessionID == "" {
+		return ""
+	}
+	return attachments.Dir(opts.DataDir, opts.SessionID)
 }

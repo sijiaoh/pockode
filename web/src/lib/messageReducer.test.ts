@@ -81,14 +81,34 @@ describe("settleAgainstTurn", () => {
 		).toMatchObject({ status: "streaming" });
 	});
 
-	// A parked turn is producing nothing, which is the whole point of saying so.
-	it("finishes a bubble the turn parked on background work", () => {
+	// Whatever an open turn is blocked on, clearing it resumes the turn in this
+	// same reply, and until then its slot must not offer Copy and Fork on a reply
+	// that is half written — the live path never finishes it either.
+	it.each([
+		{ kind: "permission" as const, request_id: "p1", raised_at: "" },
+		{ kind: "background" as const, raised_at: "" },
+	])("leaves a bubble an open turn is blocked on ($kind) streaming", (blocker) => {
+		const settled = settleAgainstTurn(
+			streaming(),
+			turnState("blocked", { blockers: [blocker] }),
+		);
+		expect(settled.at(-1)).toMatchObject({ status: "streaming" });
+
+		const resumed = applyServerEvent(settled, {
+			type: "text",
+			content: " on",
+		});
+		expect(resumed).toHaveLength(settled.length);
+		expect(resumed.at(-1)).toMatchObject({
+			id: settled.at(-1)?.id,
+			status: "streaming",
+		});
+
+		// A blocker that outlived its turn has nothing to resume.
 		expect(
 			settleAgainstTurn(
 				streaming(),
-				turnState("blocked", {
-					blockers: [{ kind: "background", raised_at: "" }],
-				}),
+				turnState("blocked", { open: false, blockers: [blocker] }),
 			).at(-1),
 		).toMatchObject({ status: "complete" });
 	});
@@ -161,6 +181,54 @@ describe("messageReducer", () => {
 				contents: undefined,
 				isError: false,
 			});
+		});
+
+		it("normalizes thinking records rather than falling back to raw", () => {
+			expect(
+				normalizeEvent({
+					type: "thinking",
+					content: "**Counting**",
+					duration_ms: 12000,
+					parent_tool_use_id: "task-1",
+				}),
+			).toEqual({
+				type: "thinking",
+				thought: {
+					content: "**Counting**",
+					fullReasoning: "",
+					redacted: false,
+					durationMs: 12000,
+				},
+				parentToolUseId: "task-1",
+			});
+			// A redacted block with nothing measured: no text, no duration.
+			expect(normalizeEvent({ type: "thinking", redacted: true })).toEqual({
+				type: "thinking",
+				thought: { content: "", fullReasoning: "", redacted: true },
+				parentToolUseId: undefined,
+			});
+			// The signal alone, as Claude sends it.
+			expect(normalizeEvent({ type: "thinking_delta" })).toEqual({
+				type: "thinking_delta",
+				contentDelta: "",
+				fullReasoningDelta: "",
+			});
+		});
+
+		it("carries the subagent call a record was produced inside", () => {
+			const parent = { parent_tool_use_id: "task-1" };
+			expect(
+				normalizeEvent({ type: "text", content: "Looking.", ...parent }),
+			).toMatchObject({ parentToolUseId: "task-1" });
+			expect(
+				normalizeEvent({
+					type: "tool_call",
+					tool_use_id: "tool-1",
+					tool_name: "Grep",
+					tool_input: {},
+					...parent,
+				}),
+			).toMatchObject({ parentToolUseId: "task-1" });
 		});
 
 		it("normalizes a tool_result that carried blocks", () => {
@@ -411,13 +479,15 @@ describe("messageReducer", () => {
 			expect(parts).toEqual([{ type: "text", content: "Hello" }]);
 		});
 
-		it("concatenates consecutive text events", () => {
-			const parts1 = applyEventToParts([], { type: "text", content: "Hello " });
+		// Each record is a whole message: two back to back are two paragraphs,
+		// not one run-on sentence.
+		it("joins consecutive text events as paragraphs", () => {
+			const parts1 = applyEventToParts([], { type: "text", content: "Hello." });
 			const parts2 = applyEventToParts(parts1, {
 				type: "text",
-				content: "World",
+				content: "World.",
 			});
-			expect(parts2).toEqual([{ type: "text", content: "Hello World" }]);
+			expect(parts2).toEqual([{ type: "text", content: "Hello.\n\nWorld." }]);
 		});
 
 		it("adds tool_call as new part", () => {
@@ -1382,7 +1452,7 @@ describe("messageReducer", () => {
 				const updated = messages[0] as AssistantMessage;
 				expect(updated.status).toBe(status);
 				expect(updated.parts).toEqual([
-					{ type: "text", content: "Working...Task done" },
+					{ type: "text", content: "Working...\n\nTask done" },
 				]);
 			});
 
@@ -1605,6 +1675,40 @@ describe("messageReducer", () => {
 					role: "user",
 					content: "Lead the work…",
 					command: { name: "pockode-lead", args: "backend first" },
+				});
+			});
+
+			// The files a user sent travel on the record by id, so a replayed or
+			// broadcast message draws them as the sender's echo did.
+			it("carries the files a message was sent with", () => {
+				const event = normalizeEvent({
+					type: "message",
+					content: "",
+					attachments: [
+						{
+							name: "shot.png",
+							mime: "image/png",
+							size: 10,
+							width: 3,
+							height: 2,
+							attachment_id: "abc.png",
+						},
+						"not a block",
+					],
+				} as Record<string, unknown>);
+				const messages = applyServerEvent([], event);
+				expect(messages[0]).toMatchObject({
+					role: "user",
+					attachments: [
+						{
+							name: "shot.png",
+							mime: "image/png",
+							size: 10,
+							width: 3,
+							height: 2,
+							attachment_id: "abc.png",
+						},
+					],
 				});
 			});
 
@@ -1904,12 +2008,12 @@ describe("messageReducer", () => {
 		it("keeps streaming into the reply above the message", () => {
 			const messages = applyServerEvent(midTurn(), {
 				type: "text",
-				content: " second half",
+				content: "second half",
 			});
 
 			expect(messages).toHaveLength(2);
 			expect(partsOf(messages[0])).toEqual([
-				{ type: "text", content: "first half second half" },
+				{ type: "text", content: "first half\n\nsecond half" },
 			]);
 			expect(messages[1].role).toBe("user");
 		});
@@ -1945,12 +2049,12 @@ describe("messageReducer", () => {
 			let messages = midTurn();
 			messages = applyServerEvent(messages, {
 				type: "text",
-				content: " about X",
+				content: "about X",
 			});
 
 			expect(messages).toHaveLength(2);
 			expect(partsOf(messages[0])).toEqual([
-				{ type: "text", content: "first half about X" },
+				{ type: "text", content: "first half\n\nabout X" },
 			]);
 		});
 
@@ -2007,10 +2111,10 @@ describe("messageReducer", () => {
 
 			messages = applyServerEvent(messages, {
 				type: "text",
-				content: " second half",
+				content: "second half",
 			});
 			expect(partsOf(messages[0])).toEqual([
-				{ type: "text", content: "first half second half" },
+				{ type: "text", content: "first half\n\nsecond half" },
 			]);
 
 			messages = applyServerEvent(messages, { type: "done" });
@@ -2029,13 +2133,13 @@ describe("messageReducer", () => {
 			let messages = applyServerEvent(midTurn(), { type: "interrupted" });
 			messages = applyServerEvent(messages, {
 				type: "text",
-				content: " trailing",
+				content: "trailing",
 			});
 
 			expect(messages).toHaveLength(2);
 			expect((messages[0] as AssistantMessage).status).toBe("interrupted");
 			expect(partsOf(messages[0])).toEqual([
-				{ type: "text", content: "first half trailing" },
+				{ type: "text", content: "first half\n\ntrailing" },
 			]);
 		});
 	});
@@ -2256,7 +2360,7 @@ describe("messageReducer", () => {
 				{ type: "text", content: "first half" },
 				{ type: "message", content: "Also look at X" },
 				{ type: "message_ingested", message_id: "m-2" },
-				{ type: "text", content: "about " },
+				{ type: "text", content: "about" },
 			]);
 			const newer = replayHistory([
 				{ type: "text", content: "X" },
@@ -2272,7 +2376,7 @@ describe("messageReducer", () => {
 				"assistant",
 			]);
 			expect(partsOf(joined[3])).toEqual([
-				{ type: "text", content: "about X" },
+				{ type: "text", content: "about\n\nX" },
 			]);
 		});
 
@@ -2344,7 +2448,7 @@ describe("messageReducer", () => {
 			const assistant = messages[1] as AssistantMessage;
 			expect(assistant.status).toBe("complete");
 			expect(assistant.parts).toEqual([
-				{ type: "text", content: "Started.Finished." },
+				{ type: "text", content: "Started.\n\nFinished." },
 			]);
 			// The wait carries no address of its own: the message it did not touch
 			// keeps the seq of the record that did.
@@ -3703,6 +3807,834 @@ describe("messageReducer", () => {
 		});
 	});
 
+	describe("a subagent's own conversation", () => {
+		const task = (id: string, extra: Record<string, unknown> = {}) => ({
+			type: "tool_call",
+			tool_use_id: id,
+			tool_name: "Agent",
+			tool_input: { description: "explore", subagent_type: "Explore" },
+			...extra,
+		});
+		const call = (id: string, parent: string, toolName = "Read") => ({
+			type: "tool_call",
+			tool_use_id: id,
+			tool_name: toolName,
+			tool_input: { file_path: "/a.go" },
+			parent_tool_use_id: parent,
+		});
+		const result = (id: string, extra: Record<string, unknown> = {}) => ({
+			type: "tool_result",
+			tool_use_id: id,
+			tool_result: "ok",
+			...extra,
+		});
+		const say = (content: string, parent?: string) => ({
+			type: "text",
+			content,
+			...(parent ? { parent_tool_use_id: parent } : {}),
+		});
+		const runAt = (parts: ContentPart[], ...ids: string[]): ToolRun => {
+			let list = parts;
+			let run: ToolRun | undefined;
+			for (const id of ids) {
+				const part = list.find(
+					(p) => p.type === "tool_call" && p.tool.id === id,
+				);
+				if (part?.type !== "tool_call") throw new Error(`no run ${id}`);
+				run = part.tool;
+				list = run.children ?? [];
+			}
+			if (!run) throw new Error("no ids");
+			return run;
+		};
+		const lastParts = (messages: Message[]) =>
+			partsOf(messages[messages.length - 1]);
+
+		// The whole point: the subagent's words and rows go under its call, and
+		// the main agent's text on either side of it stays the main agent's —
+		// interleaved on the wire, never joined into one paragraph.
+		it("files a subagent's text and calls under the call that spawned it", () => {
+			const replayed = replayHistory([
+				{ type: "message", content: "go" },
+				task("t1"),
+				say("Looking.", "t1"),
+				say("Main agent waits.\n"),
+				call("c1", "t1"),
+				say(" More.", "t1"),
+				result("c1", { parent_tool_use_id: "t1" }),
+			]);
+			const parts = lastParts(replayed);
+			expect(parts).toMatchObject([
+				{ type: "tool_call", tool: { id: "t1" } },
+				{ type: "text", content: "Main agent waits.\n" },
+			]);
+			expect(runAt(parts, "t1").children).toMatchObject([
+				{ type: "text", content: "Looking." },
+				{ type: "tool_call", tool: { id: "c1", status: "success" } },
+				{ type: "text", content: " More." },
+			]);
+		});
+
+		it("files the live stream exactly as replay does", () => {
+			const records = [
+				{ type: "message", content: "go" },
+				task("t1"),
+				say("Looking.", "t1"),
+				call("c1", "t1"),
+			];
+			let live: Message[] = [];
+			for (const record of records) {
+				live = applyServerEvent(live, normalizeEvent(record), undefined, {
+					live: true,
+				});
+			}
+			const strip = (parts: ContentPart[]): unknown =>
+				JSON.parse(
+					JSON.stringify(parts, (k, v) => (k === "seenAt" ? undefined : v)),
+				);
+			expect(strip(lastParts(live))).toEqual(
+				strip(lastParts(replayHistory(records))),
+			);
+		});
+
+		it("nests a subagent's own subagent one level further down", () => {
+			const replayed = replayHistory([
+				{ type: "message", content: "go" },
+				task("t1"),
+				{ ...task("t2"), parent_tool_use_id: "t1" },
+				call("c1", "t2"),
+				result("c1", { parent_tool_use_id: "t2" }),
+			]);
+			const parts = lastParts(replayed);
+			expect(runAt(parts, "t1").children).toHaveLength(1);
+			expect(runAt(parts, "t1", "t2", "c1")).toMatchObject({
+				status: "success",
+			});
+		});
+
+		// A settled subagent leaves nothing spinning: its running child lost the
+		// only process that could report on it. A backgrounded child keeps its
+		// own lifecycle and is settled by its own notification.
+		it("interrupts running children when their subagent settles", () => {
+			const replayed = replayHistory([
+				{ type: "message", content: "go" },
+				task("t1"),
+				call("c1", "t1"),
+				call("c2", "t1", "Bash"),
+				result("c2", { subtype: "background_started" }),
+				result("t1", { tool_result: "# Report" }),
+			]);
+			const parts = lastParts(replayed);
+			expect(runAt(parts, "t1", "c1").status).toBe("interrupted");
+			expect(runAt(parts, "t1", "c2").status).toBe("background");
+		});
+
+		it("interrupts running children at any depth when the turn is cut", () => {
+			const replayed = replayHistory([
+				{ type: "message", content: "go" },
+				task("t1"),
+				{ ...task("t2"), parent_tool_use_id: "t1" },
+				call("c1", "t2"),
+				{ type: "interrupted" },
+			]);
+			const parts = lastParts(replayed);
+			expect(runAt(parts, "t1").status).toBe("interrupted");
+			expect(runAt(parts, "t1", "t2").status).toBe("interrupted");
+			expect(runAt(parts, "t1", "t2", "c1").status).toBe("interrupted");
+		});
+
+		// The card takes its call's place where the call is filed; approving it
+		// and the result arriving bring the row back beside it, still inside.
+		it("puts a subagent call's permission card in its place among the children", () => {
+			let messages = replayHistory([
+				{ type: "message", content: "go" },
+				task("t1"),
+				call("c1", "t1", "Bash"),
+				{
+					type: "permission_request",
+					request_id: "r1",
+					tool_name: "Bash",
+					tool_input: { command: "rm -rf build" },
+					tool_use_id: "c1",
+				},
+			]);
+			expect(runAt(lastParts(messages), "t1").children).toMatchObject([
+				{ type: "permission_request", status: "pending" },
+			]);
+			expect(lastParts(messages)).toHaveLength(1);
+
+			messages = applyServerEvent(
+				messages,
+				normalizeEvent({
+					type: "permission_response",
+					request_id: "r1",
+					choice: "allow",
+				}),
+			);
+			messages = applyServerEvent(
+				messages,
+				normalizeEvent(result("c1", { parent_tool_use_id: "t1" })),
+			);
+			expect(runAt(lastParts(messages), "t1").children).toMatchObject([
+				{ type: "permission_request", status: "allowed" },
+				{ type: "tool_call", tool: { id: "c1", status: "success" } },
+			]);
+		});
+
+		// The order claude 2.1.286 writes: a subagent's call is asked about before
+		// it is announced, so the card arrives with no row to join and the call
+		// that names its parent has to bring it along.
+		it("files a card that arrived ahead of its subagent call", () => {
+			let messages = replayHistory([
+				{ type: "message", content: "go" },
+				task("t1"),
+				{
+					type: "permission_request",
+					request_id: "r1",
+					tool_name: "Bash",
+					tool_input: { command: "touch new.txt" },
+					tool_use_id: "c1",
+				},
+				call("c1", "t1", "Bash"),
+				call("c2", "t1"),
+			]);
+			expect(lastParts(messages)).toHaveLength(1);
+			expect(runAt(lastParts(messages), "t1").children).toMatchObject([
+				{ type: "permission_request", status: "pending" },
+				{ type: "tool_call", tool: { id: "c2" } },
+			]);
+
+			messages = applyServerEvent(
+				messages,
+				normalizeEvent({
+					type: "permission_response",
+					request_id: "r1",
+					choice: "allow",
+				}),
+			);
+			messages = applyServerEvent(
+				messages,
+				normalizeEvent(result("c1", { parent_tool_use_id: "t1" })),
+			);
+			expect(lastParts(messages)).toHaveLength(1);
+			expect(runAt(lastParts(messages), "t1").children).toMatchObject([
+				{ type: "permission_request", status: "allowed" },
+				{ type: "tool_call", tool: { id: "c1", status: "success" } },
+				{ type: "tool_call", tool: { id: "c2" } },
+			]);
+		});
+
+		// The engine reported on the call before announcing it, so approval had
+		// already rebuilt its row beside the card: both go, and stay one call.
+		it("takes a row rebuilt beside the card along with it", () => {
+			const replayed = replayHistory([
+				{ type: "message", content: "go" },
+				task("t1"),
+				{
+					type: "permission_request",
+					request_id: "r1",
+					tool_name: "Bash",
+					tool_input: { command: "touch new.txt" },
+					tool_use_id: "c1",
+				},
+				{ type: "permission_response", request_id: "r1", choice: "allow" },
+				result("c1"),
+				call("c1", "t1", "Bash"),
+			]);
+			expect(lastParts(replayed)).toHaveLength(1);
+			expect(runAt(lastParts(replayed), "t1").children).toMatchObject([
+				{ type: "permission_request", status: "allowed" },
+				{ type: "tool_call", tool: { id: "c1", status: "success" } },
+			]);
+			expect(runAt(lastParts(replayed), "t1").children).toHaveLength(2);
+		});
+
+		// The call is what says whose the card is: with its parent not loaded the
+		// card stays flat, and keeps the owner the call named.
+		it("gives a card that came first the owner its call names", () => {
+			const replayed = replayHistory([
+				{ type: "message", content: "go" },
+				{
+					type: "permission_request",
+					request_id: "r1",
+					tool_name: "Bash",
+					tool_input: { command: "touch new.txt" },
+					tool_use_id: "c1",
+				},
+				call("c1", "elsewhere", "Bash"),
+			]);
+			expect(lastParts(replayed)).toMatchObject([
+				{ type: "permission_request", parentToolUseId: "elsewhere" },
+			]);
+		});
+
+		// A background subagent asking after its turn ended: the card opened a
+		// bubble, and once its call takes it along nothing is left in it.
+		it("leaves no empty bubble behind a card its call took along", () => {
+			const replayed = replayHistory([
+				{ type: "message", content: "go" },
+				task("t1"),
+				result("t1", { subtype: "background_started" }),
+				{ type: "done" },
+				{
+					type: "permission_request",
+					request_id: "r1",
+					tool_name: "Bash",
+					tool_input: { command: "touch new.txt" },
+					tool_use_id: "c1",
+				},
+				call("c1", "t1", "Bash"),
+			]);
+			expect(replayed.map((m) => m.role)).toEqual(["user", "assistant"]);
+			expect(runAt(lastParts(replayed), "t1").children).toMatchObject([
+				{ type: "permission_request", status: "pending" },
+			]);
+		});
+
+		// The bubble a read point opened is the turn's, though the card was the
+		// first thing in it: taking the card along leaves it open, empty.
+		it("keeps the bubble a read point opened when its only card is filed", () => {
+			const replayed = replayHistory([
+				{ type: "message", content: "go" },
+				task("t1"),
+				{ type: "message", content: "steer" },
+				{ type: "message_ingested", message_id: "m-2" },
+				{
+					type: "permission_request",
+					request_id: "r1",
+					tool_name: "Bash",
+					tool_input: { command: "touch new.txt" },
+					tool_use_id: "c1",
+				},
+				call("c1", "t1", "Bash"),
+			]);
+			expect(replayed.map((m) => m.role)).toEqual([
+				"user",
+				"assistant",
+				"user",
+				"assistant",
+			]);
+			expect(replayed[3]).toMatchObject({
+				status: "streaming",
+				openedAtReadPoint: true,
+				parts: [],
+			});
+			expect(runAt(partsOf(replayed[1]), "t1").children).toMatchObject([
+				{ type: "permission_request", status: "pending" },
+			]);
+		});
+
+		// The user's own placeholder for the next turn, which a background
+		// subagent's card landed in before the agent said anything.
+		it("keeps a send's placeholder when its only card is filed", () => {
+			let messages = replayHistory([
+				{ type: "message", content: "go" },
+				task("t1"),
+				result("t1", { subtype: "background_started" }),
+				{ type: "done" },
+			]);
+			messages = applyUserMessage(messages, "next");
+			for (const record of [
+				{
+					type: "permission_request",
+					request_id: "r1",
+					tool_name: "Bash",
+					tool_input: { command: "touch new.txt" },
+					tool_use_id: "c1",
+				},
+				call("c1", "t1", "Bash"),
+			]) {
+				messages = applyServerEvent(messages, normalizeEvent(record));
+			}
+			expect(messages.map((m) => m.role)).toEqual([
+				"user",
+				"assistant",
+				"user",
+				"assistant",
+			]);
+			expect(messages[3]).toMatchObject({ role: "assistant", parts: [] });
+		});
+
+		// A message whose turn ended with nothing to say leaves no bubble; the
+		// card that opens one after it is all that bubble was for.
+		it("leaves no empty bubble after a reply that said nothing", () => {
+			const replayed = replayHistory([
+				{ type: "message", content: "go" },
+				task("t1"),
+				result("t1", { subtype: "background_started" }),
+				{ type: "done" },
+				{ type: "message", content: "next" },
+				{ type: "done" },
+				{
+					type: "permission_request",
+					request_id: "r1",
+					tool_name: "Bash",
+					tool_input: { command: "touch new.txt" },
+					tool_use_id: "c1",
+				},
+				call("c1", "t1", "Bash"),
+			]);
+			expect(replayed.map((m) => m.role)).toEqual([
+				"user",
+				"assistant",
+				"user",
+			]);
+		});
+
+		// Its ending is a line of its own, and stays when the card goes.
+		it("keeps a bubble cut short when its only card is filed", () => {
+			const replayed = replayHistory([
+				{ type: "message", content: "go" },
+				task("t1"),
+				result("t1", { subtype: "background_started" }),
+				{ type: "done" },
+				{
+					type: "permission_request",
+					request_id: "r1",
+					tool_name: "Bash",
+					tool_input: { command: "touch new.txt" },
+					tool_use_id: "c1",
+				},
+				{ type: "interrupted" },
+				call("c1", "t1", "Bash"),
+			]);
+			expect(replayed.at(-1)).toMatchObject({
+				role: "assistant",
+				status: "interrupted",
+				parts: [],
+			});
+		});
+
+		it("retires a subagent's pending card when the process goes away", () => {
+			const replayed = replayHistory([
+				{ type: "message", content: "go" },
+				task("t1"),
+				call("c1", "t1", "Bash"),
+				{
+					type: "permission_request",
+					request_id: "r1",
+					tool_name: "Bash",
+					tool_input: {},
+					tool_use_id: "c1",
+				},
+				{ type: "process_ended" },
+			]);
+			expect(runAt(lastParts(replayed), "t1").children).toMatchObject([
+				{ type: "permission_request", status: "expired" },
+			]);
+		});
+
+		it("gives a subagent's posted question the place of its own call", () => {
+			const replayed = replayHistory([
+				{ type: "message", content: "go" },
+				task("t1"),
+				call("q1", "t1", "mcp__pockode__question_post"),
+				{
+					type: "question_posted",
+					request_id: "r1",
+					questions: sampleQuestions,
+					asked_at: "2026-01-01T00:00:00Z",
+				},
+			]);
+			expect(lastParts(replayed)).toHaveLength(1);
+			expect(runAt(lastParts(replayed), "t1").children).toMatchObject([
+				{ type: "question_record", status: "pending" },
+			]);
+		});
+
+		// A read point leaves a foreground subagent in the bubble above, and a
+		// backgrounded one keeps working while the conversation moves on: its
+		// work still goes under its call, and opens or reopens no bubble.
+		it("files work under a call in an earlier bubble without touching any turn", () => {
+			const replayed = replayHistory([
+				{ type: "message", content: "go" },
+				task("t1"),
+				result("t1", { subtype: "background_started" }),
+				{ type: "done" },
+				say("Still going.", "t1"),
+			]);
+			expect(replayed).toHaveLength(2);
+			expect(replayed[1]).toMatchObject({ status: "complete" });
+			expect(runAt(partsOf(replayed[1]), "t1").children).toMatchObject([
+				{ type: "text", content: "Still going." },
+			]);
+		});
+
+		// Taking a card's bubble out from above the user's message shifts the
+		// message into the last place; it is not the record's to address.
+		it("keeps a message's seq when a card's bubble above it goes", () => {
+			const replayed = replayHistory([
+				{ type: "message", content: "go", seq: 1 },
+				{ ...task("t1"), seq: 2 },
+				{ ...result("t1", { subtype: "background_started" }), seq: 3 },
+				{ type: "done", seq: 4 },
+				{
+					type: "permission_request",
+					request_id: "r1",
+					tool_name: "Bash",
+					tool_input: {},
+					tool_use_id: "c1",
+					seq: 5,
+				},
+				{ type: "message", content: "meanwhile", seq: 6 },
+				{ ...call("c1", "t1", "Bash"), seq: 7 },
+			]);
+			expect(replayed.at(-1)).toMatchObject({
+				role: "user",
+				anchorSeq: 6,
+			});
+		});
+
+		// Claude resumes a finished subagent when the agent writes to it
+		// (SendMessage, claude 2.1.286): the resumed work names the call that
+		// first spawned it, and its results are still to come.
+		it("leaves a resumed subagent's calls running until their results", () => {
+			const replayed = replayHistory([
+				{ type: "message", content: "go" },
+				task("t1"),
+				result("t1", { subtype: "background_started" }),
+				result("t1", { subtype: "background_result", tool_result: "done" }),
+				call("c1", "t1"),
+			]);
+			expect(runAt(lastParts(replayed), "t1", "c1").status).toBe("running");
+			const settled = replayHistory([
+				{ type: "message", content: "go" },
+				task("t1"),
+				result("t1", { subtype: "background_started" }),
+				result("t1", { subtype: "background_result", tool_result: "done" }),
+				call("c1", "t1"),
+				result("c1", { parent_tool_use_id: "t1" }),
+			]);
+			expect(runAt(lastParts(settled), "t1", "c1").status).toBe("success");
+		});
+
+		// The main agent's words either side of its subagents' work, which is
+		// filed away and no longer stands between them.
+		it("keeps the main agent's messages apart around filed work", () => {
+			const replayed = replayHistory([
+				{ type: "message", content: "go" },
+				task("t1"),
+				result("t1", { subtype: "background_started" }),
+				say("A is running."),
+				say("Looking.", "t1"),
+				say("A finished."),
+			]);
+			expect(lastParts(replayed).at(-1)).toEqual({
+				type: "text",
+				content: "A is running.\n\nA finished.",
+			});
+		});
+
+		// The parent's own failure, in a turn still running: nothing is left to
+		// report on what trails in under it.
+		it("settles a call that trails in after its subagent failed", () => {
+			const replayed = replayHistory([
+				{ type: "message", content: "go" },
+				task("t1"),
+				result("t1", { is_error: true }),
+				call("c1", "t1"),
+			]);
+			expect(lastParts(replayed).length).toBe(1);
+			expect(runAt(lastParts(replayed), "t1", "c1").status).toBe("interrupted");
+		});
+
+		// A turn cut short after its subagent had finished: the subagent resumed
+		// later (SendMessage) is still at work, and its calls report as usual.
+		it("leaves a resumed subagent's calls running in a bubble cut short", () => {
+			const replayed = replayHistory([
+				{ type: "message", content: "go" },
+				task("t1"),
+				result("t1"),
+				{ type: "interrupted" },
+				{ type: "message", content: "again" },
+				call("s1", "", "SendMessage"),
+				call("c1", "t1"),
+				result("c1", { parent_tool_use_id: "t1" }),
+			]);
+			expect(runAt(partsOf(replayed[1]), "t1", "c1").status).toBe("success");
+		});
+
+		// Cut short with its turn, then resumed by the next one (SendMessage):
+		// the resumed work is not trailing output, and reports as usual.
+		it("leaves an interrupted subagent's resumed calls running", () => {
+			const replayed = replayHistory([
+				{ type: "message", content: "go" },
+				task("t1"),
+				call("c1", "t1"),
+				{ type: "interrupted" },
+				{ type: "message", content: "continue it" },
+				call("s1", "", "SendMessage"),
+				call("c2", "t1"),
+			]);
+			expect(runAt(partsOf(replayed[1]), "t1", "c1").status).toBe(
+				"interrupted",
+			);
+			expect(runAt(partsOf(replayed[1]), "t1", "c2").status).toBe("running");
+		});
+
+		it("settles a call that trails in after its subagent settled", () => {
+			const replayed = replayHistory([
+				{ type: "message", content: "go" },
+				task("t1"),
+				{ type: "interrupted" },
+				call("c1", "t1"),
+			]);
+			expect(runAt(lastParts(replayed), "t1", "c1").status).toBe("interrupted");
+		});
+
+		it("files a subagent's question in an earlier bubble under its call", () => {
+			const replayed = replayHistory([
+				{ type: "message", content: "go" },
+				task("t1"),
+				result("t1", { subtype: "background_started" }),
+				{ type: "done" },
+				call("q1", "t1", "mcp__pockode__question_post"),
+				{
+					type: "question_posted",
+					request_id: "r1",
+					questions: sampleQuestions,
+					asked_at: "2026-01-01T00:00:00Z",
+				},
+			]);
+			expect(replayed).toHaveLength(2);
+			expect(runAt(partsOf(replayed[1]), "t1").children).toMatchObject([
+				{ type: "question_record", status: "pending" },
+			]);
+		});
+
+		// Whose call it was survives the card standing in for an unfiled row,
+		// and the row rebuilt on approval.
+		it("keeps an unfiled call's owner through its permission card", () => {
+			let messages = replayHistory([
+				{ type: "message", content: "go" },
+				call("c1", "elsewhere", "Bash"),
+				{
+					type: "permission_request",
+					request_id: "r1",
+					tool_name: "Bash",
+					tool_input: {},
+					tool_use_id: "c1",
+				},
+			]);
+			expect(lastParts(messages)).toMatchObject([
+				{ type: "permission_request", parentToolUseId: "elsewhere" },
+			]);
+			messages = applyServerEvent(messages, normalizeEvent(result("c1")));
+			expect(lastParts(messages)[1]).toMatchObject({
+				type: "tool_call",
+				parentToolUseId: "elsewhere",
+			});
+		});
+
+		// Its earlier children stay flat below, so what follows them goes after
+		// them rather than above them.
+		it("keeps a run's later children after the ones that loaded flat", () => {
+			const current = replayHistory([say("B", "t1")]);
+			const older = replayHistory([
+				{ type: "message", content: "go" },
+				task("t1"),
+				say("A", "t1"),
+			]);
+			let messages = prependHistoryPage(older, current);
+			messages = applyServerEvent(messages, normalizeEvent(say("C", "t1")));
+			const parts = lastParts(messages);
+			expect(runAt(parts, "t1").children).toMatchObject([
+				{ type: "text", content: "A" },
+			]);
+			expect(parts.slice(1)).toMatchObject([
+				{ type: "text", content: "B\n\nC", parentToolUseId: "t1" },
+			]);
+		});
+
+		// Replay has no progress line to bring an approved subagent's row back
+		// before its work arrives; the work itself has to.
+		it("files the work of a subagent approved through a card under its row", () => {
+			const replayed = replayHistory([
+				{ type: "message", content: "go" },
+				task("t1"),
+				{
+					type: "permission_request",
+					request_id: "r1",
+					tool_name: "Agent",
+					tool_input: { description: "explore" },
+					tool_use_id: "t1",
+				},
+				{ type: "permission_response", request_id: "r1", choice: "allow" },
+				say("Looking.", "t1"),
+			]);
+			const parts = lastParts(replayed);
+			expect(parts).toHaveLength(2);
+			expect(runAt(parts, "t1").children).toMatchObject([
+				{ type: "text", content: "Looking." },
+			]);
+		});
+
+		it("leaves nothing spinning under an approved subagent cut short", () => {
+			const replayed = replayHistory([
+				{ type: "message", content: "go" },
+				task("t1"),
+				{
+					type: "permission_request",
+					request_id: "r1",
+					tool_name: "Agent",
+					tool_input: { description: "explore" },
+					tool_use_id: "t1",
+				},
+				{ type: "permission_response", request_id: "r1", choice: "allow" },
+				{ type: "interrupted" },
+				call("c1", "t1"),
+			]);
+			const parts = lastParts(replayed);
+			expect(runAt(parts, "t1").status).toBe("interrupted");
+			expect(runAt(parts, "t1", "c1").status).toBe("interrupted");
+		});
+
+		// The same, with a read point between: the ending lands in the next
+		// bubble, and the subagent's row sits in one closed as complete.
+		it("leaves nothing spinning under an approved subagent cut short past a read point", () => {
+			const replayed = replayHistory([
+				{ type: "message", content: "go" },
+				task("t1"),
+				{
+					type: "permission_request",
+					request_id: "r1",
+					tool_name: "Agent",
+					tool_input: { description: "explore" },
+					tool_use_id: "t1",
+				},
+				{ type: "permission_response", request_id: "r1", choice: "allow" },
+				{ type: "message", content: "steer" },
+				{ type: "message_ingested", message_id: "m-2" },
+				say("On it."),
+				{ type: "interrupted" },
+				call("c1", "t1"),
+			]);
+			const parts = partsOf(replayed[1]);
+			expect(runAt(parts, "t1").status).toBe("interrupted");
+			expect(runAt(parts, "t1", "c1").status).toBe("interrupted");
+		});
+
+		// A subagent under a backgrounded one is not the turn's to cut short.
+		it("leaves a backgrounded subagent's own subagent running past an interrupt", () => {
+			const replayed = replayHistory([
+				{ type: "message", content: "go" },
+				task("t1"),
+				result("t1", { subtype: "background_started" }),
+				{ ...task("t2"), parent_tool_use_id: "t1" },
+				{ type: "interrupted" },
+				call("c1", "t2"),
+			]);
+			const parts = lastParts(replayed);
+			expect(runAt(parts, "t1", "t2").status).toBe("running");
+			expect(runAt(parts, "t1", "t2", "c1").status).toBe("running");
+		});
+
+		// The call may be on an earlier page, or one no client draws (Codex's
+		// spawn). Its work then sits flat where it arrived, saying whose it is.
+		it("leaves work whose call is not loaded flat, apart from the main agent's", () => {
+			const replayed = replayHistory([
+				{ type: "message", content: "go" },
+				say("Main.\n"),
+				say("Sub.", "elsewhere"),
+				call("c1", "elsewhere"),
+			]);
+			expect(lastParts(replayed)).toMatchObject([
+				{ type: "text", content: "Main.\n" },
+				{ type: "text", content: "Sub.", parentToolUseId: "elsewhere" },
+				{
+					type: "tool_call",
+					tool: { id: "c1" },
+					parentToolUseId: "elsewhere",
+				},
+			]);
+		});
+
+		it("keeps flat work flat when the page holding its call loads", () => {
+			const current = replayHistory([say("Sub.", "t1"), call("c1", "t1")]);
+			const older = replayHistory([
+				{ type: "message", content: "go" },
+				task("t1"),
+			]);
+			const joined = prependHistoryPage(older, current);
+			const parts = lastParts(joined);
+			expect(runAt(parts, "t1").children).toBeUndefined();
+			expect(parts).toMatchObject([
+				{ type: "tool_call", tool: { id: "t1" } },
+				{ type: "text", content: "Sub." },
+				{ type: "tool_call", tool: { id: "c1" } },
+			]);
+		});
+
+		// Codex's spawn reaches the client as a Task call naming only its agent,
+		// and its child's last words come back as the spawn's result. The order
+		// here is the one codex-cli 0.159.3 produced end to end.
+		describe("a Codex spawn", () => {
+			const spawn = {
+				type: "tool_call",
+				tool_use_id: "call_spawn",
+				tool_name: "Task",
+				tool_input: { agent_path: "/root/read_a" },
+			};
+			const bash = (parent: string) => ({
+				type: "tool_call",
+				tool_use_id: "exec-1",
+				tool_name: "Bash",
+				tool_input: { command: "cat a.txt", cwd: "/tmp" },
+				parent_tool_use_id: parent,
+			});
+
+			it("files the child's work under the spawn and settles it with the report", () => {
+				const records = [
+					{ type: "message", content: "go" },
+					say("I'll spawn one subagent."),
+					spawn,
+					bash("call_spawn"),
+					result("exec-1", { parent_tool_use_id: "call_spawn" }),
+					say("It says hi.", "call_spawn"),
+					result("call_spawn", { tool_result: "It says hi." }),
+					say("The subagent reported: it says hi."),
+					{ type: "done" },
+				];
+				const parts = lastParts(replayHistory(records));
+				expect(parts).toMatchObject([
+					{ type: "text", content: "I'll spawn one subagent." },
+					{ type: "tool_call", tool: { id: "call_spawn" } },
+					{ type: "text", content: "The subagent reported: it says hi." },
+				]);
+				expect(runAt(parts, "call_spawn")).toMatchObject({
+					status: "success",
+					result: "It says hi.",
+					children: [
+						{ type: "tool_call", tool: { id: "exec-1", status: "success" } },
+						{ type: "text", content: "It says hi." },
+					],
+				});
+			});
+
+			// Nothing makes a Codex parent wait for its child: the turn can end
+			// with the spawn still running, and the child's work and result then
+			// arrive after the ending. They still go under the spawn, in the
+			// bubble it was drawn in.
+			it("keeps filing under a spawn that outlives its turn", () => {
+				const replayed = replayHistory([
+					{ type: "message", content: "go" },
+					spawn,
+					{ type: "done" },
+					bash("call_spawn"),
+					result("exec-1", { parent_tool_use_id: "call_spawn" }),
+					result("call_spawn", { tool_result: "done" }),
+				]);
+				expect(replayed).toHaveLength(2);
+				const parts = lastParts(replayed);
+				expect(parts).toHaveLength(1);
+				expect(runAt(parts, "call_spawn")).toMatchObject({
+					status: "success",
+					children: [{ type: "tool_call", tool: { id: "exec-1" } }],
+				});
+			});
+		});
+	});
+
 	describe("paging backwards through history", () => {
 		describe("isBackReference", () => {
 			it("picks out the records that settle something recorded earlier", () => {
@@ -3895,7 +4827,7 @@ describe("messageReducer", () => {
 				// message event preceded.
 				const older = replayHistory([
 					{ type: "message", content: "Explain" },
-					{ type: "text", content: "first half " },
+					{ type: "text", content: "first half" },
 				]);
 				const current = replayHistory([
 					{ type: "text", content: "second half" },
@@ -3906,7 +4838,7 @@ describe("messageReducer", () => {
 
 				expect(joined.map((m) => m.role)).toEqual(["user", "assistant"]);
 				expect(partsOf(joined[1])).toMatchObject([
-					{ type: "text", content: "first half second half" },
+					{ type: "text", content: "first half\n\nsecond half" },
 				]);
 				// The bubble already on screen keeps its identity, so it is not remounted
 				// and whatever was expanded inside it survives.
@@ -4053,7 +4985,7 @@ describe("messageReducer", () => {
 				// above opens on content that belongs to the turn that already ended.
 				const older = replayHistory([
 					{ type: "message", content: "Explain" },
-					{ type: "text", content: "half " },
+					{ type: "text", content: "half" },
 					{ type: "interrupted" },
 				]);
 				const current = replayHistory([{ type: "text", content: "an answer" }]);
@@ -4063,9 +4995,154 @@ describe("messageReducer", () => {
 				const turn = joined[joined.length - 1];
 				expect(turn).toMatchObject({ status: "interrupted" });
 				expect(partsOf(turn)).toMatchObject([
-					{ type: "text", content: "half an answer" },
+					{ type: "text", content: "half\n\nan answer" },
 				]);
 			});
 		});
+	});
+});
+
+describe("thinking", () => {
+	const think = (extra: Record<string, unknown> = {}) => ({
+		type: "thinking",
+		content: "Checking the sender.",
+		duration_ms: 2000,
+		...extra,
+	});
+	const thoughtsOf = (part: ContentPart | undefined) =>
+		part?.type === "thinking" ? part.thoughts.map((t) => t.durationMs) : null;
+
+	it("draws consecutive records as one row, and text between as two", () => {
+		const parts = partsOf(
+			replayHistory([
+				{ type: "message", content: "go" },
+				think(),
+				think({ content: "", redacted: true, duration_ms: 1000 }),
+				{ type: "text", content: "Found it." },
+				think({ content: "Next." }),
+			]).at(-1) as Message,
+		);
+		expect(parts).toEqual([
+			{
+				type: "thinking",
+				id: expect.any(String),
+				thoughts: [
+					{
+						content: "Checking the sender.",
+						fullReasoning: "",
+						redacted: false,
+						durationMs: 2000,
+					},
+					{
+						content: "",
+						fullReasoning: "",
+						redacted: true,
+						durationMs: 1000,
+					},
+				],
+			},
+			{ type: "text", content: "Found it." },
+			{
+				type: "thinking",
+				id: expect.any(String),
+				thoughts: [
+					{
+						content: "Next.",
+						fullReasoning: "",
+						redacted: false,
+						durationMs: 2000,
+					},
+				],
+			},
+		]);
+		// Two rows, two keys.
+		expect(parts[0]).not.toMatchObject({
+			id: (parts[2] as { id: string }).id,
+		});
+	});
+
+	// A bare `Thought` with nothing behind it is noise, and set aside before it
+	// could split a run or open a reply of its own.
+	it("sets aside a record with nothing to draw", () => {
+		const empty = think({ content: "", duration_ms: undefined });
+		const replayed = replayHistory([
+			{ type: "message", content: "go" },
+			think(),
+			empty,
+			think(),
+			{ type: "done" },
+			empty,
+		]);
+		expect(replayed).toHaveLength(2);
+		expect(thoughtsOf(partsOf(replayed[1])[0])).toEqual([2000, 2000]);
+	});
+
+	it("files a subagent's thinking under the call that spawned it", () => {
+		const parts = partsOf(
+			replayHistory([
+				{ type: "message", content: "go" },
+				{
+					type: "tool_call",
+					tool_use_id: "t1",
+					tool_name: "Agent",
+					tool_input: {},
+				},
+				think({ duration_ms: 1000 }),
+				think({ parent_tool_use_id: "t1" }),
+				think({ duration_ms: 3000 }),
+			]).at(-1) as Message,
+		);
+		expect(parts).toMatchObject([
+			{
+				type: "tool_call",
+				tool: { id: "t1", children: [{ type: "thinking" }] },
+			},
+			// Filed away, the subagent's thinking does not split the main run.
+			{ type: "thinking" },
+		]);
+		expect(thoughtsOf(parts[1])).toEqual([1000, 3000]);
+	});
+
+	// Unfiled, a subagent's thinking sits flat beside the main agent's, and
+	// joined they would be one row nobody could attribute.
+	it("does not join one speaker's thinking with another's", () => {
+		const parts = partsOf(
+			replayHistory([
+				{ type: "message", content: "go" },
+				think({ duration_ms: 1000 }),
+				think({ parent_tool_use_id: "not-loaded" }),
+			]).at(-1) as Message,
+		);
+		expect(parts.map(thoughtsOf)).toEqual([[1000], [2000]]);
+	});
+
+	it("rejoins a thinking a page boundary cut in half", () => {
+		const older = replayHistory([
+			{ type: "message", content: "go" },
+			think({ duration_ms: 1000 }),
+		]);
+		const newer = replayHistory([
+			think({ duration_ms: 3000 }),
+			{ type: "done" },
+		]);
+		const shownId = (partsOf(newer[0])[0] as { id: string }).id;
+		const joined = prependHistoryPage(older, newer);
+		expect(partsOf(joined[1]).map(thoughtsOf)).toEqual([[1000, 3000]]);
+		expect(partsOf(joined[1])[0]).toMatchObject({ id: shownId });
+	});
+
+	// Its id is its key: a new one would remount the row on screen.
+	it("keeps a thinking's id when a page joins above it", () => {
+		const older = replayHistory([
+			{ type: "message", content: "go" },
+			{ type: "text", content: "Looking." },
+		]);
+		const newer = replayHistory([think(), { type: "done" }]);
+		const shownId = (partsOf(newer[0])[0] as { id: string }).id;
+		const joined = prependHistoryPage(older, newer);
+		expect(partsOf(joined[1])).toMatchObject([
+			{ type: "text" },
+			{ type: "thinking", id: shownId },
+		]);
 	});
 });

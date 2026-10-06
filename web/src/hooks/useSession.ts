@@ -1,5 +1,6 @@
 import { useMutation } from "@tanstack/react-query";
 import { useCallback, useRef } from "react";
+import { attachmentActions } from "../lib/inputStore";
 import {
 	selectSessionDetailStatus,
 	useSessionDetailStore,
@@ -73,6 +74,9 @@ export function useSession({
 
 	const deleteMutation = useMutation({
 		mutationFn: wsActions.deleteSession,
+		// Its files went with its store; what the draft still holds of them is
+		// memory and uploads with nowhere left to go.
+		onSuccess: (_, sessionId) => attachmentActions.discard(sessionId),
 	});
 
 	const updateTitleMutation = useMutation({

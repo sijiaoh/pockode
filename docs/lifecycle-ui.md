@@ -26,7 +26,7 @@ The new model makes waiting explicit, so the UI's job becomes narrow:
 
 ### 1.1 Activity
 
-`Activity` is the only state any surface paints. Eight leaves, and there is never
+`Activity` is the only state any surface paints. Nine leaves, and there is never
 more than one — the layers it is derived from are each exclusive.
 
 It answers **what the session is doing**, and only that. What the user has to
@@ -42,16 +42,17 @@ two answers, and both halves are true at once.
 | `needs_permission` | Turn blocked on a permission request | `Lock` | warning | Needs permission |
 | `background` | Turn blocked on a background task | `Hourglass` | secondary | Background task |
 | `waiting_children` | Work waits on subtasks (`story_wait`) | `Clock` | accent | Waiting on subtasks |
+| `watching` | Session between turns watches stories that have not closed | `Eye` | accent | Watching stories |
 | `idle` | Engine drives the work, nothing is happening | `CircleDot` | muted | Idle |
 | `stopped` | Engine does not touch it; a human must act | `CircleStop` | error | Stopped |
 | `closed` | Finished | `CircleCheck` | muted | Closed |
 
 Glyphs are all lucide icons the app already imports, except `Lock` and
-`Hourglass`. Nothing else is new: tones are the existing `th-*` semantic tokens
+`Hourglass` (`Eye` was already the file editor's). Nothing else is new: tones are the existing `th-*` semantic tokens
 (`text-th-accent`, `text-th-warning`, `text-th-text-secondary`,
 `text-th-text-muted`, `text-th-error`).
 
-Four decisions inside that table are load-bearing:
+Five decisions inside that table are load-bearing:
 
 - **`running` and `idle` share `CircleDot`; only the colour differs.** They are
   the same thing — a live, engine-driven work — differing in whether a turn is
@@ -73,6 +74,13 @@ Four decisions inside that table are load-bearing:
 - **`waiting_children` keeps accent.** Unlike `background` it is a structural
   state the user reads on purpose ("this story is coordinating"), and it is the
   state whose subtasks are the next place to look.
+- **`watching` keeps accent too.** A chat that started a story with `watch` and
+  stepped back is not finished — it is woken when the story closes, stops or
+  asks ([work-system.md § A story's watcher](code/work-system.md#a-storys-watcher)) —
+  and a muted glyph, or none, would tell the user it was. It is not a blocker
+  and not a wait the engine keeps: nothing about nudging reads it
+  ([lifecycle.md](lifecycle.md#activity-one-derived-answer)), and it never reaches a
+  work row (§1.2).
 
 ### 1.2 Deriving it
 
@@ -82,7 +90,7 @@ One rule, stated once, and the reason it is short:
 > for when nothing is happening.**
 
 ```
-activity(work, turn):            // work may be absent; turn may be absent
+activity(work, turn, watching):  // work may be absent; turn may be absent
   no work                  -> skip to the turn branches below
   work.status == "open"    -> open
   work.status == "closed"  -> closed
@@ -93,6 +101,7 @@ activity(work, turn):            // work may be absent; turn may be absent
                               otherwise (background)      -> background
   // turn.phase == "idle", or there is no turn at all
   work.wait == "child"     -> waiting_children
+  watching > 0             -> watching
   otherwise                -> idle
 ```
 
@@ -102,7 +111,8 @@ one subtle call in this document:
 ```
 sessionActivity(session):
   work = the work the row names, looked up by session.work_id in workStore
-  activity(work?.status == "active" ? work : undefined, session.turn)
+  activity(work?.status == "active" ? work : undefined, session.turn,
+           session.watching)
 ```
 
 **A session row sees a work's `wait`, never its `status`.** The wait is a fact
@@ -124,6 +134,23 @@ the right list, still says what its own `turn` is doing, and still links to the
 right work. Inverting the list instead would make *membership* depend on the
 list being complete, and that is a wrong row rather than a row missing one
 field.
+
+**`watching` is the session's, counted by the server, and comes last.** It is
+how many stories the session watches whose news would actually wake it, carried
+on the row as `watching` — a client holding a paged work list cannot count what
+it was never sent, which is the reason `work_id` is the server's too. The count
+is held to the rule the engine delivers by (`work.WakesWatcher`): a story's own
+session is not counted, and a session whose own work is not `active` counts
+nothing, because the news would not reach either and "this chat wakes when…"
+would be false. On the story's side it is "not closed" and nothing finer: a
+stopped story still counts, since its watcher may be waiting for it to be
+restarted and finish. It ranks below `wait` because a session waiting on its
+subtasks is doing what it was started for, and the stories it watches are
+something it does on the side. A plain chat — no work at all — reaches this
+branch, and that is the common case: a lead chat is usually one. A work row
+always passes zero: what it reports is the engine driving the work, and an idle
+`active` work is about to be nudged whether or not its session watches
+anything.
 
 Why phase outranks `wait` rather than the other way round: a `wait` is a standing
 intention, a phase is a fact about this second. A story that has called
@@ -198,17 +225,32 @@ interface TurnState {
   unanswered?: PendingQuestion[];
   /** When the session entered this phase. ISO 8601. Drives "since HH:MM". */
   since: string;
+  /**
+   * How long the open turn has run, as of the moment this state was sent;
+   * absent while `open` is false. Derived at send time — see below. Drives the
+   * tail line's clock (docs/turn-progress-ui.md §2.3).
+   */
+  open_elapsed_ms?: number;
   /** How the previous turn ended; says nothing while the phase is not idle. */
   last_outcome?: "completed" | "failed" | "auth_failed" | "aborted";
 }
 ```
 
-This is `session.TurnState` serialized as it stands, rather than the separate
-`blocker_detail` an earlier cut of this document specified. The reason is that
-the detail the strip needs is already the blocker's own: `request_id` belongs to
-the prompt that raised it, and a second field carrying "the request id of
-whichever blocker leads" would be a second place where the precedence in §1.2 is
-decided, free to disagree with the first.
+This is `session.TurnState` serialized as it stands — with one derived field,
+below — rather than the separate `blocker_detail` an earlier cut of this
+document specified. The reason is that the detail the strip needs is already the
+blocker's own: `request_id` belongs to the prompt that raised it, and a second
+field carrying "the request id of whichever blocker leads" would be a second
+place where the precedence in §1.2 is decided, free to disagree with the first.
+
+The derived field is `open_elapsed_ms`. What the server keeps on the turn is the
+instant it opened, on the server's clock; it changes only when a turn opens, so
+it is an ordinary part of the state. What goes on the wire is that instant
+subtracted from the server's now at the moment of sending, on every path that
+carries `turn`. A reading rather than a timestamp, because the client counts on
+from when it received it and so never has to trust its own clock to agree with
+the server's; and not `since`, which resets every time the turn blocks and
+resumes.
 
 **Background task names are not sent, and no count is either.** The CLI's own
 schema says the background task level and the task lifecycle frames have no
@@ -221,6 +263,13 @@ copy below is written to need neither.
 `needs_input: boolean` are replaced by `turn: TurnState`. `unread` stays exactly
 as it is. `WorkListItem`: `status: "open" | "active" | "stopped" | "closed"`,
 plus `activity` and `wait?: "child"`.
+
+**`watching` is the same shape.** A row carries the count alone; the open
+session's `SessionDetail` carries it beside `watched_stories` (`{id, title,
+status}` each, in listing order), which is what the strip lists (§2.2). A
+title rides with the session rather than being looked up, so a story the work
+list has not paged in is still named; its activity is the one thing read from
+`workStore`, and is simply not drawn when the story is not there.
 
 **Every row also carries `unanswered_questions: number`, and only the number.**
 That is the second dimension in its list-shaped form: thirty sidebar rows do not
@@ -236,8 +285,9 @@ the worse of the two).
 
 ### 1.4 The three components
 
-`web/src/lib/activity.ts` — `deriveActivity(work, turn)`,
-`sessionActivity(session, work)` (the three-line wrapper in §1.2),
+`web/src/lib/activity.ts` — `deriveActivity(work, turn, watching)`,
+`sessionActivity(turn, work, watching)` (the three-line wrapper in §1.2),
+`watchingLabel(count)` (the counted form of `watching`'s label),
 `ACTIVITY_VIEW` (`{ Icon, tone, label, ariaLabel }` per leaf),
 `needsAttention(activity, unansweredQuestions)`.
 
@@ -280,15 +330,16 @@ needed where the glyph stands alone.
 
 ### 1.5 The spinner rule
 
-**Exactly one surface animates: a session row whose activity is `running`.**
-Everything else uses the static `CircleDot`.
+**Exactly two surfaces animate, and only for `running`: a session row, and the
+chat's tail line.** Everything else uses the static `CircleDot`.
 
 A spinner asserts "output is arriving right now". Under the new model that
 assertion is finally true and bounded — `running` is a reducer phase that a
-background wait can no longer squat in — and the session list is the one place
-where liveness is the question being asked. Work rows keep the static glyph for
-the reason already recorded in work-system.md: an `active` work with an idle
-process is an ordinary resting state, and a settle delay is not an emergency.
+background wait can no longer squat in — and the session list and the end of
+the transcript are the two places where liveness is the question being asked.
+Work rows keep the static glyph for the reason already recorded in
+work-system.md: an `active` work with an idle process is an ordinary resting
+state, and a settle delay is not an emergency.
 
 A row shows **at most two** indicators, and they are not in competition, because
 they answer different questions:
@@ -311,6 +362,14 @@ motion — a streaming bubble, a tool call's own progress — is untouched and i
 covered by this rule: those describe one message, not a state, and a message that
 is arriving is the one thing a spinner has always been honest about.
 
+The chat's **tail line** is the session row's spinner for the reader who is
+already in the session: it paints `running` and is hidden in every other leaf
+— including both `blocked` ones, where the turn-end row's spinner used to keep
+turning. The one moment it shows that a row does not is the round trip before
+the server reports `running`, through the composer's optimistic half (§2.3),
+which the sidebar never sees
+([turn-progress-ui.md §2.2](turn-progress-ui.md#22-when-it-shows)).
+
 ## 2. Session surfaces
 
 ### 2.1 Session list row
@@ -320,7 +379,7 @@ is arriving is the one thing a spinner has always been honest about.
 its markup and becomes one branch of the indicator slot; every other leaf renders
 `ActivityIcon` (a 12px glyph reads as an indicator, not as an action, so it needs
 no hit area). Every `aria-label` in the table below, the spinner's included,
-comes from `ACTIVITY_VIEW` — the spinner is the one element here that had a
+comes from `ACTIVITY_VIEW` (`watching`'s with its count put in, below) — the spinner is the one element here that had a
 hand-written label, and leaving it hand-written would have kept one row of the
 vocabulary outside the map that owns it.
 
@@ -330,12 +389,23 @@ vocabulary outside the map that owns it.
 | `needs_permission` | `Lock` warning | "Waiting for your permission" |
 | `waiting_children` | `Clock` accent | "Waiting on subtasks" |
 | `background` | `Hourglass` secondary | "Waiting on a background task" |
+| `watching` | `Eye` accent | "Watching 1 story" / "Watching {n} stories" |
 | `idle` | unread dot, or nothing | — |
 
 `waiting_children` is the one a session row can only get from a work, and only
 from an `active` one, by the rule in §1.2; `open`, `stopped` and `closed` never
-reach a session row at all. Everything else in the table is read from the
-session's own turn, so it reaches a row whether or not any work is behind it.
+reach a session row at all. `watching` comes from the row's own `watching`
+count, so it reaches a plain chat as readily as a work session. Everything else
+in the table is read from the session's own turn, so it reaches a row whether or
+not any work is behind it.
+
+`watching`'s label is the one the row adds to: it knows the count, so `SidebarListItem` takes `watchingCount` and hands
+`ActivityIcon` the counted form (`watchingLabel`) through its `ariaLabel`
+override. The leaf's own "Watching stories" stays the fallback for a surface
+that has no count. Like `waiting_children`, it takes the indicator slot and so
+hides the unread dot (§1.5, rung 3); while a turn runs or is blocked, the
+turn's leaf wins and the `Eye` comes back when it settles — the rule in §1.2,
+with nothing added for it.
 
 **The question count is a second indicator beside that one, never instead of
 it** — rung 2 of §1.5. When `unanswered_questions > 0` the row draws `CircleHelp`
@@ -356,7 +426,7 @@ running *and* owes two answers used to have to pick one of those to say.
 
 One line between the transcript and `InputBar`, saying **what needs the user** —
 and, when nothing does, that a message reached the reply the agent is working
-on. `BlockerStrip` is renamed `AttentionStrip` with this change: two of its four
+on. `BlockerStrip` is renamed `AttentionStrip` with this change: most of its
 rows are not blockers, a question does not block a turn at all, and a name that
 describes one row of four is a name every later reader works around. It
 borrows `ForkOriginBanner`'s chrome — centred, `text-xs`, `size-3` glyph, muted —
@@ -364,14 +434,15 @@ because both are one-line statements about the transcript rather than controls,
 and the pane should have one vocabulary for them. It sits below the list (not at
 the top like the fork banner) because it describes the transcript's *end*.
 
-Four things it can say, in the order it prefers them:
+Five things it can say, in the order it prefers them:
 
 | State | Copy | Trailing action |
 |---|---|---|
-| `permission` | "Waiting for your permission. Answer above or Stop before sending." | "Jump to request" |
+| `permission` | `Lock` {tool} [+N] {detail, cut like the card's title} — see below | **Deny** **Allow** (plan: **Review**) |
 | unanswered questions | "1 question is waiting for your answer." / "{n} questions are waiting for your answer." | **Answer** |
 | a message went into a turn already open, unread so far | "Sent — the agent has not read it yet." | — |
 | `background` | "Waiting on a background task — nothing to answer." | "Details" (expands) |
+| `watching` | "Watching 1 story — this chat wakes when it closes, stops, or asks." / "Watching {n} stories — this chat wakes when one closes, stops, or asks." | "Details" (expands) |
 
 The layout, copy and controls of the question row are
 [answering-ui.md §2](answering-ui.md#2-the-strip); only its rank is decided here.
@@ -380,8 +451,92 @@ Permission is first, and now for a sharper reason than the precedence §1.2 uses
 it is the only row left that Send is refused under (§2.3), and it is also the
 state in which *answering a question is refused*, because the CLI holding the
 request open reads nothing else. It is the thing that has to happen first in both
-senses. Its second sentence stays, because a disabled control with no reason on
-screen is the silent failure this project forbids.
+senses.
+
+#### The permission row
+
+It is the one row that is a decision rather than a statement, so it is the one
+that leaves the strip's grammar — left-aligned and 44px rather than centred and
+one text line, read "what, then how" with the answers at the thumb's end:
+
+```
+🔒 Bash +2  rm -rf build/ && npm run b…   [ Deny ] [ Allow ]
+└──────── summary (jumps to the card) ──┘
+```
+
+- **The summary** is the card's own title line — `toolSummary`, its chip (an
+  MCP call's server) and the row's `Detail`, so the strip, the card and the
+  tool row cut one string one way.
+  Pressing it is the old "Jump to request": scroll, ring, focus the card, with
+  the answer panel closed on the way and held while it sends.
+- **Deny and Allow** go through the card's answer path (`handlePermissionRespond`),
+  optimistic update included. There is **no Always Allow**: what it adds is
+  spelled out on the card, and a rule should not be written from a line too
+  short to show it. Pressing either leaves focus where it was (`onMouseDown`
+  `preventDefault`), so a draft's keyboard stays up and a collapsed composer
+  does not come back mid-press. They do **not** close the answer panel —
+  approving needs nothing from the transcript, and it is what lets the panel's
+  send through afterwards.
+- **Armed per request.** The answers sit in a fixed place while what they
+  answer changes: answering one request brings the next into the same place, and
+  a request can arrive under a press meant for something else. So for `ARM_MS`
+  (500ms, the composer's Stop uses the same `Armed`) after each new request takes
+  the row, Deny and Allow are `inert`. The summary is not held: a jump has no
+  side effect.
+- **Several requests** (parallel subagents, parallel calls) are taken in the
+  order the server raised them: the row speaks for the oldest pending one, and a
+  `+N` chip counts the rest. No carousel — answer in order, or jump to a card to
+  take another first. A Deny holds the row on its receipt for as long as its
+  blocker is listed, instead of handing it to the next request: on Claude a
+  deny interrupts the turn, so the rest are about to expire, and their answers
+  could only be refused. On Codex the blocker goes at once and the next takes
+  over.
+- **Receipt.** Between the press and the server taking the blocker down, the
+  card is already answered and nothing else is pending; the row holds still with
+  a muted `Allowed` / `Denied` (an `<output>`, so it is announced) in place of
+  the answers, instead of flashing the send receipt or the background row for
+  one round trip. An answer given from the keyboard moves focus to the summary
+  (to the row itself while the summary is disabled mid-send), since the pressed
+  button is gone; a pointer press never took focus.
+- **Refusal.** When the server refuses the row's answer (`promptError` on its
+  request), the card has gone back to pending and the error takes the detail's
+  place, in `text-th-error`, behind an `AlertTriangle`. The title stays: the
+  answers stay too, so it can be tried again, and Allow must not stand beside
+  nothing but an error. The card holds the full alert and the detail.
+- **A plan** (`ExitPlanMode`) shows **Review**, a jump, in Allow's place: it
+  approves all the work after it, and one cut line is not enough to decide that.
+- **Card not loaded** — the event has not arrived, or the card sits in history
+  not paged in: the row falls back to the old statement, "Waiting for your
+  permission. Answer above or Stop before sending." with "Jump to request".
+
+The strip reads the cards as `ChatPanel` hands them over — the blockers'
+requests looked up at every depth of the transcript (a subagent's card is filed
+under its call), whatever their status — and reads no store for them itself.
+
+The old row's second sentence explained why Send is refused, and a disabled
+control with no reason on screen is the silent failure this project forbids.
+The new row has no room for it, so the reason is now said in two places. The
+row itself is the first: a lock and Deny/Allow directly above the composer are
+the decision Send is waiting on. The composer is the second, through
+`InputBarProps.sendBlockedReason`, which `ChatPanel` sets to "Allow or deny to
+send" exactly while a permission request owns the input, and which the default
+bar shows as its placeholder. `canSend` keeps its meaning; the reason is only
+ever read when it is false.
+
+The copy is short on purpose, and the bar does not let its length matter
+anyway. The first wording, "Answer the permission request to send", wrapped to
+two lines at 375px and below, and the autosizing textarea sizes itself by its
+placeholder while the draft is empty — so the bar grew by a line (~24px) exactly
+as the request arrived, and the composer moved 69px rather than the 45px this
+section promises below. That is the tightest state there is: on a 375×560 phone
+with the keyboard up, the transcript has about 87px left. "Allow or deny to
+send" fits one line at 360px and names the two buttons directly above it in the
+strip. The bar also holds the empty textarea to one row (`maxRows={1}` while the
+draft is empty, `placeholder:truncate`), so a longer reason a host might pass is
+cut rather than allowed to move the composer. A placeholder is hidden by a
+draft, so with one written the row alone says it — accepted, because the row
+is on the screen whenever the composer is, and stays when the composer folds
+([answering-ui.md §3](answering-ui.md), "`AttentionStrip` stays").
 
 The question row carries no such sentence. Sending is not refused while a
 question is open — the agent may well be running — so a second sentence there
@@ -417,11 +572,19 @@ agent has written anything, through `turnOpen`'s optimistic half (§2.3) — two
 messages typed inside one round trip put the second one here while the server has
 yet to report the first — and "not read yet" is true of that moment too.
 
-Whichever it says, it is one bordered row, so the composer moves by at most one
-line's height however many of the four states hold.
+**What the strip does not say is that the turn is running.** That is the
+transcript's tail line, and the two never speak at once about the turn: the
+tail line shows only while `running`, which is the one phase whose strip rows
+are about something else (questions, the receipt). The full boundary is
+[turn-progress-ui.md §4](turn-progress-ui.md#4-what-it-does-not-say).
 
-"Jump to request" uses the jump `MessageList` owns — scroll, ring, focus the
-header row — via the permission blocker's `request_id`. The strip does not
+Whichever it says, it is one bordered row, so the composer moves by at most one
+row's height however many of the five states hold — 33px for a statement, 45px
+for the permission row. The composer's own height does not change with the
+state (the placeholder above is held to one line), so this is the whole of it.
+
+The permission row's jump uses the jump `MessageList` owns — scroll, ring,
+focus the header row — via the permission blocker's `request_id`. The strip does not
 re-implement it: the scroll container is there, and a second implementation of a
 scroll-and-highlight is a second set of edge cases.
 
@@ -458,6 +621,34 @@ an outcome they would not recognise, is worse than the sentence above; the lease
 expiring produces a visible warning in the transcript (existing `WarningEvent`
 path), which is where a deadline belongs.
 
+#### The watching row
+
+The last row says what a chat that started stories and stepped back is waiting
+for, which an idle composer would otherwise answer with "nothing". It shows
+exactly when the session's activity is `watching`: `ChatPanel` evaluates
+`sessionActivity` with the open session's `work_id` and `watching`, the rule
+the session's row is drawn by, so the row's `Eye` and this line come and go
+together, and the strip is handed `watched_stories` only then. It shares the
+lowest rank with `background` and never meets it, since both are leaves; the
+question row and the receipt outrank it, and while the turn runs the tail line
+has the floor.
+
+- **The glyph is `Eye`, muted** like every glyph on the strip; the accent is
+  the row indicator's.
+- **"Details" expands the list**, `<ul aria-label="Watched stories">`, scrolled
+  inside `max-h-32` so a long list cannot push the composer off a short
+  screen. Each story is one button: its activity glyph and label read from
+  `workStore` the way a work row's are, and its title from `watched_stories`.
+  A story the work list has not paged in is still named, and drawn without an
+  activity — except a stopped one, whose status the session's detail carries.
+  Pressing it opens the story's detail page (`onOpenWorkDetail`), the route the
+  `watched_story_*` messages already take.
+- **No Unwatch anywhere in the web.** The watch is the watching agent's to
+  release with `story_unwatch`; a person who wants it gone tells that chat
+  ([work-system.md § A story's watcher](code/work-system.md#a-storys-watcher)).
+- **Its expanded state is its own.** It is not shared with the background
+  row's, so switching from one row to the other does not carry "open" across.
+
 ### 2.3 Chat: composer and Stop
 
 `isStreaming` — today `lastIsSending || (lastIsStreaming && isProcessRunning)` —
@@ -481,16 +672,36 @@ most. What the `turn` half removes is the part that was never reliable — infer
 liveness from the last message's status and a `process_ended` that a restart never
 wrote.
 
-`turnOpen` governs Stop, the Escape shortcut and the model / mode / effort
-selectors. It is **not** the composer's gate, and the table below is where those two
+`turnOpen` governs Stop, the Escape shortcut and the session panel's engine
+and mode ([agent-chat.md](agent-chat.md#the-session-screen)). It is **not** the composer's gate, and the table below is where those two
 questions part company:
 
 | `phase` | Stop button | Escape shortcut | Send | Composer hint |
 |---|---|---|---|---|
 | `idle` | hidden | inactive | enabled | — |
-| `running` | shown | active | enabled | the strip, once a message has gone in |
-| `blocked(permission)` | shown | active | disabled | the strip |
-| `blocked(background)` | shown | active | enabled | the strip |
+| `running` | shown while the draft is empty | active | enabled | the strip, once a message has gone in |
+| `blocked(permission)` | shown | active | disabled | the strip, and the placeholder (`sendBlockedReason`, §2.2) |
+| `blocked(background)` | shown while the draft is empty | active | enabled | the strip |
+
+Stop and Send share one slot at the composer's end and are never on screen
+together, so a destructive target never sits beside Send under a thumb. Stop
+takes the slot whenever Send has nothing to do — no draft (text, or files
+ready to go), or the host not taking sends (`canSend={false}`) — and Send keeps
+it for a draft written mid-turn; interrupting then is an emptied draft away, or
+Escape. Because the Stop that replaces Send lands under
+the thumb that just pressed it, it ignores presses for its first 500ms
+(`Armed` in `Chat/SendStopSlot.tsx`, which the strip's permission row reuses).
+
+**Stop is neutral, not red**: a solid `bg-th-text-primary` with a
+`text-th-text-inverse` square — dark on a light theme, light on a dark one.
+It was `bg-th-error`, and on a phone that did not hold: Stop owns the slot for
+nearly the whole of every turn, so saturated red was the loudest thing on the
+screen for most of the time the app is in use, and red there reads as
+"something went wrong" while nothing has. Red is kept for errors and failures.
+The colour had no protective job to give up: what keeps Stop from being pressed
+by mistake is the exclusion with Send above and `Armed`, neither of which
+changed, nor did its size or place. And with Stop neutral, a permission wait has
+one accent on screen — Allow — which is the press it is waiting for.
 
 **Unanswered questions are not in this table at all**, and their absence is the
 model change made visible. They are not a `phase`, so they gate nothing: the
@@ -530,8 +741,8 @@ reports that refusal rather than swallowing it
 ([answering-ui.md §7](answering-ui.md#7-edge-cases)).
 
 Typing is never blocked in any of these states — only sending — so a drafted
-message survives the wait. Model / mode / effort selectors stay disabled for the
-whole open turn, as they are today — and mid-turn sending is a reason they stay
+message survives the wait. The session panel's engine and mode stay disabled for the
+whole open turn, as they always have — and mid-turn sending is a reason they stay
 that way rather than an argument against it: a message that joins the turn already
 running is answered by the engine and mode that turn started under, so offering to
 change them beside it would offer something that cannot take effect.
@@ -546,7 +757,19 @@ outlives the process that asked it, which is what §5.1 below gives up.
 The subscription result carries `turn`, so the client no longer infers liveness
 from the absence of `process_ended` in history. Rule: **on subscribe, if
 `turn.phase != "running"`, every message still `streaming` is finalised** — as
-`interrupted` when `turn` reports the last turn aborted, `complete` otherwise.
+`interrupted` when `turn` reports the last turn aborted, `complete` otherwise —
+**unless the turn is still open**, whatever it is blocked on. An open turn
+resumes in the same reply — after the permission is answered, or, for a
+background wait, when the CLI picks the turn back up itself once the task
+finishes ([agent-integration.md](code/agent-integration.md#background-waits))
+— so the reply stays `streaming`: its turn-end slot stays empty on a
+reload exactly as it does live
+([turn-progress-ui.md §2.2](turn-progress-ui.md#22-when-it-shows)), and the text
+written after the wait lands in that same bubble rather than opening a second
+one under a reply already marked finished. Finalising it as `complete`, which
+this rule first did, put Copy and Fork on a half-written reply after every
+reload during a wait. A permission prompt that outlived its turn (`open`
+false) has nothing to resume, and its reply is finalised as before.
 This replaces the `isProcessRunning` bookkeeping in `useChatMessages` and is the
 only thing that closes out a transcript whose server died mid-stream.
 
@@ -650,7 +873,7 @@ carries it one step further out.
 
 Deliberately outside the dot:
 
-- **`background` and `waiting_children`.** There is nothing to do. A dot that
+- **`background`, `waiting_children` and `watching`.** There is nothing to do. A dot that
   means "something is happening" is a dot the user learns to ignore, and that
   habit is what made the old needs-input dot worthless.
 - **`stopped`.** A stopped work needs a human, but it needs one *whenever the
@@ -879,6 +1102,23 @@ place the redesign is trying to separate them.
   ([answering-ui.md §4](answering-ui.md#4-when-the-panel-is-up)). The plain
   `Open Chat` control beside it is unchanged: it names no question, so the panel
   comes up on the oldest one and takes no focus.
+- **Under the wait line, who watches the story**, whenever the detail names a
+  `watcher`:
+
+  ```
+  👁 Watched by  Refactor the sidebar
+  ```
+
+  Gated on the field and nothing else. Closing releases the watch, so the line
+  goes by itself; a stopped story keeps it, because the watch outlives a stop;
+  a task never has one. The session's name is a link to it
+  (`onNavigateToSession`). It is looked up in `sessionStore` by id rather than
+  copied onto the detail, where a rename would leave it stale; the list holds
+  only the worktree in view, so a watcher there that the list does not hold is
+  `UNLISTED_SESSION_NAME`, and one in another worktree is "a session in
+  ‹worktree›". The link works either way.
+
+  The line is read-only: there is no Unwatch beside it (§2.2).
 - Children section header gains an active count — "{n} active" — whenever any
   child is `active`. This is what makes both §7 rejections legible without a
   second explanation: it is the same count each of them turns on, and "0 active"
@@ -1038,7 +1278,7 @@ a user who stopped one subtask restart two things.
 | A question open while a background task runs | Two dimensions, not a contest. The leaf is `background`; the strip shows the question row above the background row, because the question is the one with something to press. Neither hides the other |
 | A question open while the agent is running | The row says `Running` *and* `2 to answer`; the strip shows the question row; the composer is live. This is the case the two deleted leaves could not express |
 | Fork of a session mid-turn | the fork starts at `phase: idle`, so it has a live composer and no Stop button on its first frame |
-| Message sent into a running turn | until the agent reads it the transcript ends on the message with no bubble under it and the strip says so (§2.2); the reply above keeps growing where it is, since arriving underneath a reply never closes it (§2.3). At the read point that reply is closed and a fresh bubble opens under the message, so what answers it is below it. Either way the spinner asks whether a bubble is the open turn rather than whether it is the last row |
+| Message sent into a running turn | until the agent reads it the transcript ends on the message with no bubble under it and the strip says so (§2.2); the reply above keeps growing where it is, since arriving underneath a reply never closes it (§2.3). At the read point that reply is closed and a fresh bubble opens under the message, so what answers it is below it. Either way the tail line asks whether a bubble is the open turn rather than whether it is the last row |
 | Message sent a moment before a request appears | the accepted message takes the card off screen and the turn is left waiting for an answer nobody can give. Stop recovers it — the half of the strip's advice that survives the card going away, and measured to land from under a request. The window is between the server's check and the prompt reaching the turn state, is milliseconds wide, and is accepted on purpose rather than closed with a lock spanning the CLI's stdin (`session.ReduceTurn`, `SignalPrompt`) |
 | Send refused because a request is on screen | the reason is reported as a bubble directly under the message it refused, not at the end of a transcript that may have moved on since. A refusal shown nowhere would leave the message looking delivered, which is the failure shape §2.3 forbids |
 | Work stopped by the nudge limit | `stopped`, plus the engine's comment saying so. Chat shows nothing extra — the transcript already ends where the agent stopped answering |
@@ -1047,13 +1287,13 @@ a user who stopped one subtask restart two things.
 | Server restart with a blocked turn | blockers expire on process death and are written to history, so on reconnect the permission cards read Expired and the composer is live. Unanswered questions are untouched: they are turn state on disk, not a blocker, and they are still listed when the next process starts |
 | `activity` the client does not know | normalised to `idle` at the wire boundary; an unknown state must not blank a row |
 | Story with children in several activities | the story shows its *own* activity. What children contribute to a story row is counts, not a state: "{n} active" and "{closed}/{total} tasks" in its meta line |
-| A decision pressed on a permission card that expired a moment ago | the RPC fails with the server's own reason ("this request is no longer waiting for an answer"); the card flips to Expired with §5's banner and the error is shown inline under the buttons. There is no second route: an expired permission is a denial. The refusal is the session's turn speaking — a request it no longer lists as a blocker cannot be answered, which also covers a decision that arrives after another client's |
+| A decision pressed on a permission card that expired a moment ago | the RPC fails with the server's own reason ("this request is no longer waiting for an answer"); the card flips to Expired with §5's banner and the error is shown inline where the buttons were. There is no second route: an expired permission is a denial. The refusal is the session's turn speaking — a request it no longer lists as a blocker cannot be answered, which also covers a decision that arrives after another client's |
 | Session deleted while its work is `active` | the work moves to `stopped`. The delete confirmation says so: "Delete "{title}"? The work "{work}" will stop." — a session delete that silently stops work is the kind of silent failure this project forbids |
 | Work closed while its turn is still finishing (grace: 2 minutes) | the work row reads `Closed` immediately while its session row may still read `Running` for the length of the grace period. That is two layers telling the truth about themselves, not a contradiction: the engine has let go, the process has not finished speaking. Nothing waits for the other before it updates |
 | Work reopened during the close grace | the reopen's restart message cancels the retirement outright — the premise of it was that nobody was coming back. The session keeps its process and its transcript, and the work is `active` again with no trace of the two minutes it spent closed |
 | Blocker raised *during* the close grace period | it never appears as `Closed` work needing input: it is cancelled with reason `work_closed` (§5), and the session's phase returns to idle. A question posted then is cancelled by the same rule — a closed work must not leave a card waiting on an answer nobody will act on |
 | 240px sidebar | every indicator is `shrink-0` and icon-only; the title is the one `flex-1 min-w-0` element ([sidebar-ui.md](sidebar-ui.md#the-narrow-width-rule)) |
-| Reduced motion | the one spinner degrades the way the existing one does |
+| Reduced motion | the session row's spinner degrades the way it always has; the tail line ([turn-progress-ui.md §2.3](turn-progress-ui.md#23-what-it-says)), a running tool row and a running group summary ([tool-call-ui.md § Status](tool-call-ui.md#status)) swap their `Spinner` for a still accent `CircleDot`, since the shared `Spinner` does not stop itself |
 
 ## 9. Deliberately not done
 
@@ -1080,17 +1320,24 @@ Three of `web/tests/`'s scans read this work without being told to, and two new
 controls are what they will land on:
 
 - **Hit areas.** The attention strip's trailing actions ("Jump to request",
-  "Answer", "Details"), the answer panel's option rows and its per-question
-  "Won't answer" checkbox, and the list row's Restart button are interactive and
-  must clear the floor in
+  "Answer", "Details", and the permission row's summary, Deny and Allow), the
+  answer panel's option rows and its per-question "Won't answer" checkbox, and
+  the list row's Restart button are interactive and must clear the floor in
   [responsive-ui.md](responsive-ui.md#hit-areas-and-spacing). The row's button is
   icon-only on every row (§3), so it owes a box on both axes and never appears in
   the register's deferred list at all. The strip's actions carry text, so they owe
   only the height — `touch-target` over a `text-xs` line, which is the shape the
   strip already uses and the one thing worth keeping from the pill it replaced.
-  The panel's option rows are the exception and take a real
-  `pointer-coarse:min-h-11` box rather than an overlay: a panel has room to grow
-  the box, and a real box is always simpler.
+  The permission row's controls are `h-7` boxes under the same overlay, in a row
+  exactly 44px tall, so no overlay leaves the row. The panel's option rows are
+  the exception and take a real `pointer-coarse:min-h-11` box rather than an
+  overlay: a panel has room to grow the box, and a real box is always simpler.
+  The watching row's story list is the same exception for the same reason —
+  stacked overlays would overlap each other — at `min-h-9`, the fine-pointer
+  floor, growing to `min-h-11` under a coarse one. The detail page's "Watched
+  by" link is text on its line and takes `touch-target`; it truncates inside
+  its own `<span>`, because `truncate` on the button would clip the overlay
+  with the text.
 - **Indicators are not controls.** `ActivityIcon` and `ActivityDot` render no
   button and take no handler anywhere in this design; a 12px glyph that could be
   tapped is a 12px glyph somebody will try to tap.
@@ -1105,22 +1352,23 @@ controls are what they will land on:
 
 | File | Change |
 |---|---|
-| `web/src/lib/activity.ts` | new — `deriveActivity`, `ACTIVITY_VIEW`, `needsAttention` |
+| `web/src/lib/activity.ts` | new — `deriveActivity`, `ACTIVITY_VIEW`, `needsAttention`, `watchingLabel` |
 | `web/src/components/ui/Activity{Icon,Badge,Dot}.tsx` | new — replace `StatusIcon` / `StatusBadge` |
 | `web/src/components/ui/StatusIcon.tsx`, `StatusBadge.tsx` | deleted |
-| `web/src/components/common/SidebarListItem.tsx` | `activity` + `unread` replace three booleans. It is a `web` component, not a `@pockode/shared` one — `web-cluster` has no sessions and no work, so nothing here is shared code |
-| `web/src/components/Session/SessionItem.tsx` | looks the row's own `work_id` up in `workStore` and passes `sessionActivity` (§1.2) |
-| `web/src/components/Chat/ChatPanel.tsx` | `turn.phase` replaces `isStreaming`; mounts the attention strip and the answer panel |
-| `web/src/components/Chat/AttentionStrip.tsx` | renamed from `BlockerStrip.tsx` — §2.2 |
+| `web/src/components/ui/ActivityIcon.tsx` | an `ariaLabel` override, for the row that knows how many stories it watches (§2.1) |
+| `web/src/components/common/SidebarListItem.tsx` | `activity` + `unread` replace three booleans; `watchingCount` for `watching`'s label. It is a `web` component, not a `@pockode/shared` one — `web-cluster` has no sessions and no work, so nothing here is shared code |
+| `web/src/components/Session/SessionItem.tsx` | looks the row's own `work_id` up in `workStore` and passes `sessionActivity` with the row's `watching` (§1.2) |
+| `web/src/components/Chat/ChatPanel.tsx` | `turn.phase` replaces `isStreaming`; mounts the attention strip and the answer panel; decides the watching row by `sessionActivity` |
+| `web/src/components/Chat/AttentionStrip.tsx` | renamed from `BlockerStrip.tsx` — §2.2, the watching row included |
 | `web/src/components/Chat/AnswerPanel.tsx` | new — [answering-ui.md §3](answering-ui.md#3-the-answer-panel) |
 | `web/src/components/Chat/QuestionRecordItem.tsx` | replaces `AskUserQuestionItem.tsx` — a record card: four states, no form ([answering-ui.md §6](answering-ui.md#6-the-record-card-in-the-stream)) |
 | `web/src/components/Chat/MessageItem.tsx` | permission card's expired banners |
 | `web/src/hooks/useChatMessages.ts` | `isProcessRunning` bookkeeping replaced by §2.4 |
 | `web/src/components/Project/WorkListOverlay.tsx` | the groups of §6.1, headed by a fixed `ActivityIcon` per group |
 | `web/src/components/Project/WorkRow.tsx` | the row itself — `ActivityIcon`, the activity label in its meta line, the icon-only lifecycle control ([project-ui.md §3](project-ui.md#3-the-row)) |
-| `web/src/components/Project/WorkDetailOverlay.tsx` | `ActivityBadge`, the `child`-only wait line, the unanswered-questions block, four-status button table |
+| `web/src/components/Project/WorkDetailOverlay.tsx` | `ActivityBadge`, the `child`-only wait line, the "Watched by" line, the unanswered-questions block, four-status button table |
 | `web/src/components/Project/WorkPrimaryAction.tsx` | new — the four-status table and the Stop confirmation. The row renders it; the action bar writes its own labelled button from the same hook and tables, which is why this has no labelled form of its own. It absorbs `WorkListOverlay`'s exported `StartButton`, which was the second answer to "which button does this row get" |
 | `web/src/components/Project/StepList.tsx` | §6.3 |
 | `web/src/components/Project/ProjectTab.tsx` | dot from `useWorkNeedsAttention` (`workStore.ts`) — the same bit `SessionSidebar` badges the tab itself with (§4) |
 | `web/src/utils/systemMessage.ts` | the `wait_stranded` work event (§7.2), laid out like `child_done` |
-| `web/src/types/{message,work}.ts` | `turn`; `status` / `activity` / `wait`; `unanswered_questions`, `PendingQuestion` |
+| `web/src/types/{message,work}.ts` | `turn`; `status` / `activity` / `wait`; `unanswered_questions`, `PendingQuestion`; `watching`, `WatchedStory`, `Work.watcher` |

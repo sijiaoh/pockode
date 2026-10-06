@@ -1,5 +1,17 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import {
+	useCallback,
+	useEffect,
+	useLayoutEffect,
+	useMemo,
+	useRef,
+	useState,
+} from "react";
 import { IDLE_TURN } from "../lib/activity";
+import {
+	type ChatAttachment,
+	toAttachmentParams,
+	toEchoFileBlocks,
+} from "../lib/chatAttachments";
 import {
 	appendUserMessage,
 	applyAnswering,
@@ -23,6 +35,11 @@ import {
 	useSessionDetailStore,
 } from "../lib/sessionDetailStore";
 import {
+	applyThinkingDelta,
+	type LiveThinking,
+	type TurnTail,
+} from "../lib/thinking";
+import {
 	type ConnectionStatus,
 	isInvalidParamsRejection,
 	useWSStore,
@@ -37,6 +54,7 @@ import type {
 	ServerNotification,
 	SessionMode,
 	SessionTurn,
+	Thought,
 	UserMessage,
 } from "../types/message";
 import type { AgentType } from "../types/settings";
@@ -106,6 +124,13 @@ interface UseChatMessagesReturn {
 	isSendPending: boolean;
 	/** What the session is doing, for the surfaces that need more than a boolean. */
 	turn: SessionTurn;
+	/** What the tail line draws; see `TurnTail`. */
+	tail: TurnTail;
+	/**
+	 * Thinking parts that settled while the user had their tail line open, so
+	 * their rows open as they appear.
+	 */
+	openedThoughtIds: ReadonlySet<string>;
 	/**
 	 * The session's own settings, from `session.detail`. Until its first snapshot
 	 * arrives they read as the placeholders below — no session has been described
@@ -140,10 +165,17 @@ interface UseChatMessagesReturn {
 	 * Pockode command (`/pockode-…`) the server refuses is taken back too, and
 	 * rethrows for the same reason: the one who has to hear is the input it was
 	 * typed into.
+	 *
+	 * `attachments` are files already uploaded to this session
+	 * (`uploadChatAttachment`); the message may then have no text. A send
+	 * carrying files that the server refuses — an id it does not have, an agent
+	 * that cannot receive files — is taken back and rethrows like a refused
+	 * command, so the composer can keep the files and say why.
 	 */
 	sendUserMessage: (
 		content: string,
 		answering?: QuestionAnswerRecord[],
+		attachments?: ChatAttachment[],
 	) => Promise<boolean>;
 	interrupt: () => Promise<void>;
 	permissionResponse: (params: PermissionResponseParams) => Promise<void>;
@@ -236,6 +268,26 @@ function newestSeq(history: unknown[]): HistorySeq | undefined {
 	return undefined;
 }
 
+/**
+ * The thinking part a record settled into, found by the record itself: the
+ * reducer keeps the thought it was handed, so neither its position nor what
+ * landed after it in the same commit can point at the wrong part.
+ */
+function thoughtPartId(
+	messages: Message[],
+	thought: Thought,
+): string | undefined {
+	for (let i = messages.length - 1; i >= 0; i--) {
+		const message = messages[i];
+		if (message.role !== "assistant") continue;
+		const part = message.parts.find(
+			(p) => p.type === "thinking" && p.thoughts.includes(thought),
+		);
+		if (part?.type === "thinking") return part.id;
+	}
+	return undefined;
+}
+
 export function useChatMessages({
 	sessionId,
 	enabled = true,
@@ -304,6 +356,14 @@ export function useChatMessages({
 	// reported as open would arm a Stop this screen cannot deliver and hold
 	// bubbles streaming that will never receive another byte.
 	const turn = isView ? IDLE_TURN : (sessionDetail?.turn ?? IDLE_TURN);
+	// The turn's clock, carried over to this device's: the server's reading of
+	// how long the turn had been open, taken back from when it arrived. Never
+	// the server's own timestamp, which this clock need not agree with.
+	const detailReceivedAt = useSessionDetailStore((s) => s.receivedAt);
+	const turnOpenedAt =
+		turn.open_elapsed_ms === undefined
+			? undefined
+			: detailReceivedAt - turn.open_elapsed_ms;
 
 	// Placeholders for the round trip before the first snapshot: never another
 	// session's values, because the selector above hands back nothing until the
@@ -358,9 +418,98 @@ export function useChatMessages({
 		};
 	}, []);
 
+	// What the main agent is thinking right now. Not a part of the transcript:
+	// it is never recorded, and it ends with the record that is. Coalesced per
+	// frame like tool activity, for the same two reasons — deltas outrun the
+	// screen, and a hidden tab flushes nothing, so they are held folded rather
+	// than queued.
+	const [liveThinking, setLiveThinking] = useState<LiveThinking | null>(null);
+	const liveThinkingRef = useRef(liveThinking);
+	liveThinkingRef.current = liveThinking;
+	const pendingThinkingRef = useRef<LiveThinking | null>(null);
+	const thinkingFrameRef = useRef<number | undefined>(undefined);
+	// Set when a thinking the user had open settles: its row opens with it.
+	const [openedThoughtIds, setOpenedThoughtIds] = useState<ReadonlySet<string>>(
+		new Set(),
+	);
+	const settlingOpenThoughtRef = useRef<Thought | null>(null);
+
+	const flushThinking = useCallback(() => {
+		thinkingFrameRef.current = undefined;
+		const pending = pendingThinkingRef.current;
+		if (!pending) return;
+		pendingThinkingRef.current = null;
+		setLiveThinking((prev) =>
+			prev ? applyThinkingDelta(prev, pending) : pending,
+		);
+	}, []);
+
+	// Deltas held for the next frame belong to the thinking being ended, and a
+	// flush after this would bring it back.
+	const endThinking = useCallback(() => {
+		if (thinkingFrameRef.current !== undefined) {
+			cancelAnimationFrame(thinkingFrameRef.current);
+			thinkingFrameRef.current = undefined;
+		}
+		pendingThinkingRef.current = null;
+		setLiveThinking(null);
+	}, []);
+
+	useEffect(() => {
+		return () => {
+			if (thinkingFrameRef.current !== undefined) {
+				cancelAnimationFrame(thinkingFrameRef.current);
+			}
+		};
+	}, []);
+
+	// A turn that is over thinks no more, however it ended — including the ways
+	// that leave no record to end it here (a restart, a stop that cut a codex
+	// reasoning item off before it completed).
+	useEffect(() => {
+		if (!turn.open) endThinking();
+	}, [turn.open, endThinking]);
+
+	const toggleThinking = useCallback(() => {
+		setLiveThinking((prev) => prev && { ...prev, expanded: !prev.expanded });
+	}, []);
+
+	const tail = useMemo<TurnTail>(
+		() => ({
+			phase: turn.phase,
+			openedAt: turnOpenedAt,
+			thinking: liveThinking,
+			onToggleThinking: toggleThinking,
+		}),
+		[turn.phase, turnOpenedAt, liveThinking, toggleThinking],
+	);
+
+	// Before paint, so the row a thinking settles into is never drawn closed.
+	useLayoutEffect(() => {
+		const thought = settlingOpenThoughtRef.current;
+		if (!thought) return;
+		// One look, in the commit the record was applied in: a record the reducer
+		// set aside is never going to be found.
+		settlingOpenThoughtRef.current = null;
+		const id = thoughtPartId(messages, thought);
+		if (id) setOpenedThoughtIds((prev) => new Set(prev).add(id));
+	}, [messages]);
+
 	const handleNotification = useCallback(
 		(notification: ServerNotification) => {
 			const seq = readHistorySeq(notification);
+			const event = normalizeEvent(notification);
+			// The thinking's own record ends it, and so does anything the main
+			// agent says after it: output proves the thinking is over even if its
+			// record never comes. Read before the skip below, because a record the
+			// page already has still proves it — and the deltas held across a
+			// subscribe are replayed with no seq to skip them by.
+			const endsThinking =
+				((event.type === "thinking" ||
+					event.type === "text" ||
+					event.type === "tool_call") &&
+					!event.parentToolUseId) ||
+				isTurnTerminal(notification);
 			// Already on screen: this record came back in the history page too, and
 			// applying it again would put a second copy of the message in the
 			// transcript. Only a record the page actually reaches is skipped — seqs
@@ -373,13 +522,34 @@ export function useChatMessages({
 				newestHistorySeqRef.current !== undefined &&
 				seq <= newestHistorySeqRef.current
 			) {
+				if (endsThinking) endThinking();
 				return;
 			}
 
 			if (isBackReference(notification)) {
 				backReferencesRef.current.push(notification);
 			}
-			const event = normalizeEvent(notification);
+			if (event.type === "thinking_delta") {
+				pendingThinkingRef.current = applyThinkingDelta(
+					pendingThinkingRef.current,
+					{
+						content: event.contentDelta,
+						fullReasoning: event.fullReasoningDelta,
+					},
+				);
+				if (thinkingFrameRef.current === undefined) {
+					thinkingFrameRef.current = requestAnimationFrame(flushThinking);
+				}
+				return;
+			}
+			if (endsThinking) {
+				// Only here: a skipped record is never applied, so there would be no
+				// part for it to settle into.
+				if (event.type === "thinking" && liveThinkingRef.current?.expanded) {
+					settlingOpenThoughtRef.current = event.thought;
+				}
+				endThinking();
+			}
 			if (event.type === "tool_activity") {
 				mergeActivity(pendingActivityRef.current, event);
 				if (activityFrameRef.current === undefined) {
@@ -391,7 +561,7 @@ export function useChatMessages({
 			// replayed one has no honest clock to draw from.
 			setMessages((prev) => applyServerEvent(prev, event, seq, { live: true }));
 		},
-		[flushActivity],
+		[flushActivity, flushThinking, endThinking],
 	);
 
 	// Reset when the session changes. During render rather than in an effect: an
@@ -418,6 +588,9 @@ export function useChatMessages({
 		historyGenerationRef.current++;
 		// Progress held for the next frame belongs to the session being left.
 		pendingActivityRef.current.clear();
+		pendingThinkingRef.current = null;
+		setLiveThinking(null);
+		setOpenedThoughtIds(new Set());
 	}
 
 	// The transcript's own subscription, opened through the common layer like
@@ -462,8 +635,11 @@ export function useChatMessages({
 			boundaryTerminalRef.current = leadingTurnTerminal(initial.history);
 			newestHistorySeqRef.current = newestSeq(initial.history);
 			subscribedTurnRef.current = initial.turn;
-			// Progress for the transcript being replaced.
+			// Progress for the transcript being replaced. A thinking under way
+			// carries on, but every delta of it before now is gone: the next one
+			// starts it over as joined late.
 			pendingActivityRef.current.clear();
+			endThinking();
 			const replayed = replayHistory(initial.history);
 			// The turn is the authority the records are missing: a transcript the
 			// server died in the middle of ends with a bubble still streaming and
@@ -481,7 +657,7 @@ export function useChatMessages({
 			);
 			setIsLoadingHistory(false);
 		},
-		[],
+		[endThinking],
 	);
 
 	const handleSubscribeError = useCallback((err: unknown) => {
@@ -585,11 +761,13 @@ export function useChatMessages({
 		async (
 			content: string,
 			answering?: QuestionAnswerRecord[],
+			attachments?: ChatAttachment[],
 		): Promise<boolean> => {
 			// Normalised once, so "present" and "non-empty" cannot come apart: an
 			// empty list would otherwise echo a bubble drawn from no answers, send
 			// no `answering`, and take the wrong branch on failure.
 			const answers = answering?.length ? answering : undefined;
+			const files = attachments?.length ? attachments : undefined;
 			// Drawn as the command row from the first frame rather than as a bubble
 			// that turns into one: the prompt it stands for is the server's to
 			// expand, and arrives with the reply.
@@ -607,6 +785,7 @@ export function useChatMessages({
 				// Echoed with the bubble so an answer draws as answers rather than
 				// as the flattened text the agent reads.
 				...(answers ? { answering: answers } : {}),
+				...(files ? { attachments: toEchoFileBlocks(files) } : {}),
 			};
 
 			// Empty assistant message ready to receive streaming content
@@ -633,23 +812,38 @@ export function useChatMessages({
 				// Without it the bubble just added could not be forked from until the
 				// session was reloaded. An older server sends none, which simply leaves
 				// the message unaddressable, as every locally sent one used to be.
-				const { seq, expanded } = await sendMessage(
+				const {
+					seq,
+					expanded,
+					attachments: described,
+				} = await sendMessage(
 					sessionId,
 					content,
 					answers && toAnswerParams(answers),
+					// Only when there are any, so a message without files is sent with
+					// exactly the arguments it always was.
+					...(files ? [toAttachmentParams(files)] : []),
 				);
 				setMessages((prev) => {
 					// The server's text over the echo's — a command's parse and prompt,
 					// or the body written from the answers: the sender is left out of
 					// the broadcast, so this is its one copy of what the agent was
 					// actually sent.
-					const filled = expanded
-						? prev.map((m) =>
-								m.id === userMessageId && m.role === "user"
-									? { ...m, ...expanded }
-									: m,
-							)
-						: prev;
+					//
+					// The files likewise: the echo had only the browser's guess at each
+					// type, the reply has what the stored bytes are.
+					const update = {
+						...expanded,
+						...(described ? { attachments: described } : {}),
+					};
+					const filled =
+						expanded || described
+							? prev.map((m) =>
+									m.id === userMessageId && m.role === "user"
+										? { ...m, ...update }
+										: m,
+								)
+							: prev;
 					const stamped = stampMessageAnchorSeq(filled, userMessageId, seq);
 					// The cards this message settled, and this client has to settle
 					// them itself: the sender is left out of the broadcast that
@@ -675,8 +869,14 @@ export function useChatMessages({
 				// same way, and the caller restores what was typed and says why.
 				// Only a refusal: a timeout or a dropped socket may have been
 				// delivered, and handing the draft back would invite running the
-				// command twice — that takes the ordinary path below.
-				if (answers || (command && isInvalidParamsRejection(error))) {
+				// command twice — that takes the ordinary path below. A message
+				// carrying files is taken back on a refusal for the same reason: the
+				// files are the composer's to keep, and an agent that cannot receive
+				// them is said so there.
+				if (
+					answers ||
+					((command || files) && isInvalidParamsRejection(error))
+				) {
 					setMessages((prev) =>
 						prev.filter(
 							(m) => m.id !== userMessageId && m.id !== assistantMessageId,
@@ -843,6 +1043,8 @@ export function useChatMessages({
 		turnOpen,
 		isSendPending,
 		turn,
+		tail,
+		openedThoughtIds,
 		mode,
 		agentType,
 		model,

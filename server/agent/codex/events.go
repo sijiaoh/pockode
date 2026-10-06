@@ -53,23 +53,45 @@ var ignoredNotifications = map[string]bool{
 	// rememberToolInput on the day one of those stops being true.
 	"item/fileChange/patchUpdated": true,
 
-	// Real information with no surface in Pockode yet — reasoning, plans and the
-	// turn's accumulated diff. The whole form of each is dropped as well, in
+	// A new part of a reasoning summary beginning. The deltas carry their part
+	// index too, which is what handleReasoningDelta reads, so this says nothing
+	// they do not.
+	"item/reasoning/summaryPartAdded": true,
+
+	// Real information with no surface in Pockode yet — plans and the turn's
+	// accumulated diff. The whole form of each is dropped as well, in
 	// handleItemCompleted's switch, so these are not increments of anything
 	// rendered.
-	"item/reasoning/textDelta":        true,
-	"item/reasoning/summaryTextDelta": true,
-	"item/reasoning/summaryPartAdded": true,
-	"item/plan/delta":                 true,
-	"turn/plan/updated":               true,
-	"turn/diff/updated":               true,
-	"turn/moderationMetadata":         true,
-	"model/rerouted":                  true,
-	"model/safetyBuffering/updated":   true,
+	"item/plan/delta":               true,
+	"turn/plan/updated":             true,
+	"turn/diff/updated":             true,
+	"turn/moderationMetadata":       true,
+	"model/rerouted":                true,
+	"model/safetyBuffering/updated": true,
 }
 
 // handleNotification dispatches one server notification.
 func (s *appSession) handleNotification(msg rpcMessage) {
+	switch msg.Method {
+	case "turn/started", "turn/completed", "thread/tokenUsage/updated":
+		// A subagent runs in a thread of its own, and app-server reports that
+		// thread's turns and usage on this same connection (measured on
+		// codex-cli 0.159.3, where multi_agent is on by default). Its turn
+		// ending is not this session's — taken for one it would end the turn
+		// while the parent is still waiting on the subagent. Its usage is a
+		// running total of its own thread, which read as this thread's would
+		// wreck the deltas the accumulator takes and report the subagent's
+		// prompt as this thread's context; the subagent's tokens therefore go
+		// uncounted, which a per-thread accumulator would fix.
+		if thread := notificationThread(msg.Params); !s.isOwnThread(thread) {
+			if msg.Method == "turn/completed" {
+				s.settleSubagent(thread, msg.Params)
+				s.forgetReasoning(func(t string) bool { return t == thread })
+			}
+			return
+		}
+	}
+
 	switch msg.Method {
 	case "turn/started":
 		s.handleTurnStarted(msg.Params)
@@ -88,6 +110,12 @@ func (s *appSession) handleNotification(msg rpcMessage) {
 
 	case "item/mcpToolCall/progress":
 		s.handleMCPToolProgress(msg.Params)
+
+	case "item/reasoning/summaryTextDelta":
+		s.handleReasoningDelta(msg.Params, false)
+
+	case "item/reasoning/textDelta":
+		s.handleReasoningDelta(msg.Params, true)
 
 	case "thread/tokenUsage/updated":
 		// Usage accounting, not a transcript entry: it updates the session's
@@ -164,6 +192,7 @@ func (s *appSession) handleTurnCompleted(params json.RawMessage) {
 
 	s.clearTurn()
 	s.forgetToolInputs()
+	s.forgetReasoning(s.isOwnThread)
 	authFailed := s.turnAuthFailed
 	s.turnAuthFailed = false
 	if notif.Turn.Error != nil {
@@ -199,6 +228,190 @@ func (s *appSession) handleTurnCompleted(params json.RawMessage) {
 	}
 }
 
+// notificationThread reads the thread a notification is about, empty when it
+// names none.
+func notificationThread(params json.RawMessage) string {
+	var notif struct {
+		ThreadID string `json:"threadId"`
+	}
+	if err := json.Unmarshal(params, &notif); err != nil {
+		// Reported by the handler that reads the rest of the frame; here it
+		// just names no thread.
+		return ""
+	}
+	return notif.ThreadID
+}
+
+// isOwnThread reports whether a notification naming threadID is about this
+// session's own thread rather than a subagent's. A notification naming none,
+// or one arriving before the thread is known, is taken as the session's: only
+// a thread that is demonstrably another one is set apart.
+func (s *appSession) isOwnThread(threadID string) bool {
+	own := s.currentThreadID()
+	return threadID == "" || own == "" || threadID == own
+}
+
+// settleSubagent closes the row of a subagent whose turn has ended: the spawn
+// is drawn as a Task call (see rememberSubagent), and this is its result. The
+// child's own last words are the report, which is what the parent reads back
+// from its wait — the same thing a Claude Task's result carries.
+//
+// Taken from the child's turn/completed rather than the subAgentActivity
+// "completed" item the parent's thread gets: only the former says how the turn
+// ended. A child given more work later (sendInput, followupTask) runs another
+// turn under the same spawn and settles it again; the report is still its
+// latest words, so a turn that said nothing does not wipe out the last one.
+//
+// A child whose spawn was never seen — one a previous process started — has no
+// row to settle, and only a failure is said for it, as a warning: without one
+// the user would see its work stop and nothing say why. An interrupted one is
+// somebody's doing, which explains itself, and a completed one reports through
+// its own text.
+func (s *appSession) settleSubagent(threadID string, params json.RawMessage) {
+	var notif struct {
+		Turn struct {
+			Status string     `json:"status"`
+			Error  *turnError `json:"error"`
+		} `json:"turn"`
+	}
+	if err := json.Unmarshal(params, &notif); err != nil {
+		s.log.Warn("failed to parse a subagent's turn/completed", "threadId", threadID, "error", err)
+		return
+	}
+	s.log.Debug("subagent turn ended", "threadId", threadID, "status", notif.Turn.Status)
+	failure := "no message"
+	if notif.Turn.Error != nil {
+		failure = firstNonEmpty(redactSecrets(notif.Turn.Error.Message), failure)
+	}
+
+	spawn, seen := s.subagentCalls[threadID]
+	if !seen {
+		if notif.Turn.Status == "failed" {
+			s.emitEvent(agent.WarningEvent{
+				Message: "A subagent failed: " + failure,
+				Code:    "subagent_failed",
+			})
+		}
+		return
+	}
+
+	// The spawn's own parent, so that a nested spawn's result is marked as its
+	// subagent's record like the call it settles.
+	result := agent.ToolResultEvent{
+		ToolUseID:       spawn.CallID,
+		ToolResult:      s.subagentReports[threadID],
+		ParentToolUseID: spawn.ParentToolUseID,
+	}
+	switch notif.Turn.Status {
+	case "completed":
+	case "interrupted":
+		result.IsError = true
+		result.ToolResult = "The subagent was interrupted before it finished."
+	default:
+		result.IsError = true
+		result.ToolResult = "The subagent failed: " + failure
+	}
+	s.emitEvent(result)
+}
+
+// rememberSubagent records which call spawned a subagent's thread, read off
+// the subAgentActivity item that reports the spawn, and draws that spawn as a
+// Task call — the row the child's records are filed under (see
+// agent.EventRecord.ParentToolUseID) and that settleSubagent closes. The item
+// arrives on the spawning thread before anything from the new one, and its id
+// is the id of the model's spawn call — the one thing that ties the two threads
+// together. Read from both item/started and item/completed, which carry the
+// same item: either is enough, so a version that sends only one still nests,
+// and the call is emitted for whichever comes first.
+//
+// The item names the agent and nothing else — no prompt, no task description
+// (measured on codex-cli 0.159.3; the child's prompt is not echoed on its
+// thread either) — so the call's input is the agent's path as Codex gave it,
+// and naming the row after it is the frontend's business.
+//
+// The same codex-cli reports a spawn in a second shape, depending on the model
+// (measured with gpt-5.6-luna): a collabAgentToolCall whose tool is spawnAgent,
+// carrying the prompt, and naming the new thread in receiverThreadIds only once
+// it has completed. The child's items follow that completion, so reading it
+// there is in time; the call's input is then the prompt.
+func (s *appSession) rememberSubagent(item threadItem) {
+	threadID, input, ok := spawnOf(item)
+	if !ok {
+		return
+	}
+	if _, seen := s.subagentCalls[threadID]; seen {
+		return
+	}
+	if s.subagentCalls == nil {
+		s.subagentCalls = map[string]subagentSpawn{}
+	}
+	s.subagentCalls[threadID] = subagentSpawn{CallID: item.ID, ParentToolUseID: item.ParentToolUseID}
+
+	s.emitEvent(agent.ToolCallEvent{
+		ToolUseID:         item.ID,
+		ToolName:          subagentToolName,
+		ToolInput:         input,
+		ParentToolUseID:   item.ParentToolUseID,
+		ProviderMessageID: item.TurnID,
+	})
+}
+
+// spawnOf reads the thread a spawn started, and the input its row is drawn
+// from, off either shape of spawn item; ok is false for an item that started
+// no thread (yet).
+func spawnOf(item threadItem) (threadID string, input json.RawMessage, ok bool) {
+	switch item.Type {
+	case "subAgentActivity":
+		var ev struct {
+			Kind          string `json:"kind"`
+			AgentThreadID string `json:"agentThreadId"`
+			AgentPath     string `json:"agentPath"`
+		}
+		if err := json.Unmarshal(item.Raw, &ev); err != nil || ev.Kind != "started" || ev.AgentThreadID == "" {
+			return "", nil, false
+		}
+		input, _ = json.Marshal(map[string]string{"agent_path": ev.AgentPath})
+		return ev.AgentThreadID, input, true
+	case "collabAgentToolCall":
+		var ev struct {
+			Tool              string   `json:"tool"`
+			ReceiverThreadIDs []string `json:"receiverThreadIds"`
+			Prompt            string   `json:"prompt"`
+		}
+		// One spawn starts one thread; a call naming none has not started it
+		// yet (item/started) or failed to.
+		if err := json.Unmarshal(item.Raw, &ev); err != nil || ev.Tool != "spawnAgent" || len(ev.ReceiverThreadIDs) != 1 {
+			return "", nil, false
+		}
+		input, _ = json.Marshal(map[string]string{"prompt": ev.Prompt})
+		return ev.ReceiverThreadIDs[0], input, true
+	}
+	return "", nil, false
+}
+
+// subagentToolName is one of the names Claude's subagent call goes by, which
+// is what makes the frontend draw a spawn as a subagent row (isTaskTool in
+// web/src/lib/toolSummary.ts accepts it).
+const subagentToolName = "Task"
+
+// subagentSpawn is the call that started a subagent's thread, and the call
+// that call was itself made inside — empty unless the spawning thread was a
+// subagent's too.
+type subagentSpawn struct {
+	CallID          string
+	ParentToolUseID string
+}
+
+// rememberSubagentReport keeps a child's latest words for settleSubagent: the
+// last thing a subagent says is its answer. Kept as the items pass
+// rather than read off turn/completed, whose items are only a summary view.
+func (s *appSession) rememberSubagentReport(threadID, text string) {
+	if s.subagentReports == nil {
+		s.subagentReports = map[string]string{}
+	}
+	s.subagentReports[threadID] = text
+}
+
 // threadItem is the part of a thread item every branch below reads. The rest is
 // left in Raw, because which fields exist depends on Type.
 type threadItem struct {
@@ -214,15 +427,35 @@ type threadItem struct {
 	// though the session tracks the running turn for turn/interrupt: which turn
 	// an item belonged to is a fact that arrived with it, and a record has to
 	// keep saying it after the session has moved on to the next turn.
+	//
+	// Empty for a subagent's item: its turn belongs to the subagent's thread,
+	// and a fork anchored on it would name a turn this thread never had.
 	TurnID string
+
+	// FromSubagent marks an item of a subagent's thread rather than this
+	// session's, and ParentToolUseID names the call that spawned that thread
+	// when the spawn was seen. See agent.EventRecord.ParentToolUseID.
+	FromSubagent    bool   `json:"-"`
+	ParentToolUseID string `json:"-"`
+	// ThreadID is the thread the notification named, read off it like TurnID.
+	ThreadID string `json:"-"`
+	// AtMs is the engine's clock reading the notification carried: startedAtMs
+	// on item/started, completedAtMs on item/completed. Zero when it carried
+	// none.
+	AtMs int64 `json:"-"`
 }
 
-func parseItemNotification(params json.RawMessage) (threadItem, bool) {
+// parseItemNotification reads an item notification and places it: an item of
+// a subagent's thread is stamped with the call that spawned it.
+func (s *appSession) parseItemNotification(params json.RawMessage) (threadItem, bool) {
 	var notif struct {
 		Item json.RawMessage `json:"item"`
 		// Required on both item/started and item/completed, per the protocol
 		// schema codex-cli 0.153.0 generates.
-		TurnID string `json:"turnId"`
+		TurnID        string `json:"turnId"`
+		ThreadID      string `json:"threadId"`
+		StartedAtMs   int64  `json:"startedAtMs"`
+		CompletedAtMs int64  `json:"completedAtMs"`
 	}
 	if err := json.Unmarshal(params, &notif); err != nil || len(notif.Item) == 0 {
 		return threadItem{}, false
@@ -233,27 +466,44 @@ func parseItemNotification(params json.RawMessage) (threadItem, bool) {
 	}
 	item.Raw = notif.Item
 	item.TurnID = notif.TurnID
+	item.ThreadID = notif.ThreadID
+	item.AtMs = max(notif.StartedAtMs, notif.CompletedAtMs)
+	if !s.isOwnThread(notif.ThreadID) {
+		item.FromSubagent = true
+		item.ParentToolUseID = s.subagentCalls[notif.ThreadID].CallID
+		item.TurnID = ""
+	}
 	return item, true
 }
 
 // handleItemStarted turns the beginning of a tool-shaped item into a tool call,
 // and the echo of a message into the signal that Codex has read it.
 //
-// The remaining items with no counterpart in Pockode's transcript (the agent's
-// own messages, reasoning, plans, web searches) are left to item/completed or
-// dropped there.
+// A reasoning item's start is remembered for its duration and, on the main
+// thread, signals that the agent is thinking. The remaining items with no
+// counterpart in Pockode's transcript (the agent's own messages, plans, web
+// searches) are left to item/completed or dropped there.
 func (s *appSession) handleItemStarted(params json.RawMessage) {
-	item, ok := parseItemNotification(params)
+	item, ok := s.parseItemNotification(params)
 	if !ok {
 		s.log.Warn("failed to parse item/started")
 		return
 	}
 
-	if item.Type == "userMessage" {
-		s.handleUserMessageItem(item)
+	switch item.Type {
+	case "userMessage":
+		// A subagent's prompt is not a message the user sent this session, so
+		// it is nobody's read point here.
+		if !item.FromSubagent {
+			s.handleUserMessageItem(item)
+		}
 		return
+	case "subAgentActivity", "collabAgentToolCall":
+		s.rememberSubagent(item)
+	case "reasoning":
+		s.handleReasoningStarted(item)
 	}
-	s.modelReached(item.Type)
+	s.modelReached(item)
 
 	toolName, toolInput, ok := s.toolCallOf(item)
 	if !ok {
@@ -268,6 +518,7 @@ func (s *appSession) handleItemStarted(params json.RawMessage) {
 		ToolUseID:         item.ID,
 		ToolName:          toolName,
 		ToolInput:         toolInput,
+		ParentToolUseID:   item.ParentToolUseID,
 		ProviderMessageID: item.TurnID,
 	})
 }
@@ -389,16 +640,19 @@ func (s *appSession) toolCallOf(item threadItem) (toolName string, toolInput jso
 // handleItemCompleted turns a finished item into the text or tool result it
 // produced.
 func (s *appSession) handleItemCompleted(params json.RawMessage) {
-	item, ok := parseItemNotification(params)
+	item, ok := s.parseItemNotification(params)
 	if !ok {
 		s.log.Warn("failed to parse item/completed")
 		return
 	}
 
 	s.forgetToolInput(item.ID)
-	s.modelReached(item.Type)
+	s.modelReached(item)
 
 	switch item.Type {
+	case "subAgentActivity", "collabAgentToolCall":
+		s.rememberSubagent(item)
+
 	case "agentMessage":
 		var ev struct {
 			Text string `json:"text"`
@@ -407,8 +661,16 @@ func (s *appSession) handleItemCompleted(params json.RawMessage) {
 			s.log.Warn("failed to parse agentMessage item", "error", err)
 			return
 		}
+		// Only a child whose spawn was seen has a row for the report to settle.
+		if ev.Text != "" && item.ParentToolUseID != "" {
+			s.rememberSubagentReport(item.ThreadID, ev.Text)
+		}
 		if ev.Text != "" {
-			s.emitEvent(agent.TextEvent{Content: ev.Text, ProviderMessageID: item.TurnID})
+			s.emitEvent(agent.TextEvent{
+				Content:           ev.Text,
+				ParentToolUseID:   item.ParentToolUseID,
+				ProviderMessageID: item.TurnID,
+			})
 		}
 
 	case "commandExecution":
@@ -444,6 +706,7 @@ func (s *appSession) handleItemCompleted(params json.RawMessage) {
 			ExitCode:          ev.ExitCode,
 			DurationMs:        ev.DurationMs,
 			IsError:           failed,
+			ParentToolUseID:   item.ParentToolUseID,
 			ProviderMessageID: item.TurnID,
 		})
 
@@ -467,6 +730,7 @@ func (s *appSession) handleItemCompleted(params json.RawMessage) {
 			ToolUseID:         item.ID,
 			ToolResult:        result,
 			IsError:           failed,
+			ParentToolUseID:   item.ParentToolUseID,
 			ProviderMessageID: item.TurnID,
 		})
 
@@ -475,6 +739,9 @@ func (s *appSession) handleItemCompleted(params json.RawMessage) {
 
 	case "imageView":
 		s.handleImageViewCompleted(item)
+
+	case "reasoning":
+		s.handleReasoningCompleted(item)
 	}
 }
 
@@ -558,6 +825,7 @@ func mcpToolResult(item threadItem) agent.ToolResultEvent {
 			ToolUseID:         item.ID,
 			IsError:           true,
 			ToolResult:        "Pockode could not read this tool call's result.",
+			ParentToolUseID:   item.ParentToolUseID,
 			ProviderMessageID: item.TurnID,
 		}
 	}
@@ -580,6 +848,7 @@ func mcpToolResult(item threadItem) agent.ToolResultEvent {
 		ToolResult:        result,
 		DurationMs:        ev.DurationMs,
 		IsError:           ev.Status != itemStatusCompleted,
+		ParentToolUseID:   item.ParentToolUseID,
 		ProviderMessageID: item.TurnID,
 	}
 }
@@ -624,9 +893,9 @@ var notFromTheModel = map[string]bool{
 
 // modelReached reads an item of the running turn: one the model produced says
 // the turn got past authentication, so a refusal earlier in it is not what it
-// ends on.
-func (s *appSession) modelReached(itemType string) {
-	if !notFromTheModel[itemType] {
+// ends on. A subagent's item is of its own thread's turn, not this one.
+func (s *appSession) modelReached(item threadItem) {
+	if !item.FromSubagent && !notFromTheModel[item.Type] {
 		s.turnAuthFailed = false
 	}
 }

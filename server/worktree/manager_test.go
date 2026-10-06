@@ -45,6 +45,10 @@ type stubWorkSource struct{ works []work.Work }
 
 func (s *stubWorkSource) List() ([]work.Work, error) { return s.works, nil }
 
+func (s *stubWorkSource) WatchedBy(sessionID string) ([]work.Work, error) {
+	return work.WatchedBySession(s.works)[sessionID], nil
+}
+
 func (s *stubWorkSource) FindBySessionID(sessionID string) (work.Work, bool, error) {
 	for _, w := range s.works {
 		if w.SessionID == sessionID {
@@ -139,6 +143,47 @@ func TestOnWorkChange_ReachesTheSessionWatchersOfTheWorksWorktree(t *testing.T) 
 	}
 }
 
+// A chat may watch a story running in a worktree of its own, and its row counts
+// that story — so the change has to reach the watcher's worktree as well as the
+// story's, including when the story's worktree is not loaded at all.
+func TestOnWorkChange_ReachesTheWatchersWorktree(t *testing.T) {
+	sessionStore, err := session.NewFileStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("session.NewFileStore: %v", err)
+	}
+	if _, err := sessionStore.Create(context.Background(), "sess-chat", session.CreateSpec{}); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	story := work.Work{
+		ID: "story-1", Status: work.StatusActive, SessionID: "sess-story", Worktree: "feature-1",
+		Watcher: &work.Watcher{SessionID: "sess-chat"},
+	}
+	listWatcher := watch.NewSessionListWatcher(sessionStore, &stubWorkSource{works: []work.Work{story}})
+	listWatcher.Start()
+	defer listWatcher.Stop()
+
+	m := &Manager{
+		worktrees: map[string]*Worktree{
+			"": {SessionStore: sessionStore, SessionListWatcher: listWatcher, SessionDetailWatcher: watch.NewSessionDetailWatcher(sessionStore, nil)},
+		},
+	}
+	listNotifier := &capturingNotifier{}
+	if _, err := listWatcher.Subscribe("client-1", listNotifier, watch.SessionListFilter{}); err != nil {
+		t.Fatalf("subscribe to the list: %v", err)
+	}
+
+	m.OnWorkChange(work.ChangeEvent{Op: work.OperationUpdate, Work: story})
+
+	deadline := time.Now().Add(2 * time.Second)
+	for listNotifier.calls() == 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("the watcher's worktree was never notified")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
 // createSessionIn records a session in the on-disk index of the given worktree,
 // the way a real session start does.
 func createSessionIn(t *testing.T, m *Manager, worktree, sessionID string) {
@@ -183,6 +228,67 @@ func TestResolveSessionWorktree(t *testing.T) {
 	// An empty id belongs to nobody; it must not resolve to the main worktree.
 	if _, err := m.ResolveSessionWorktree(""); !errors.Is(err, ErrSessionNotFound) {
 		t.Errorf("empty session id: err = %v, want ErrSessionNotFound", err)
+	}
+}
+
+// An upload names a worktree and a session over HTTP, so both names are
+// vouched for here before either becomes a path a file is written under.
+func TestAttachmentDataDir(t *testing.T) {
+	repo := initGitRepo(t)
+	dataDir := t.TempDir()
+	registry := NewRegistry(repo, dataDir)
+	if _, _, err := registry.EnsureWorktree("feature-x"); err != nil {
+		t.Fatalf("EnsureWorktree: %v", err)
+	}
+
+	// The main worktree is loaded and answers from its live store; feature-x is
+	// not, and answers from its index on disk.
+	mainStore, err := session.NewFileStore(dataDir)
+	if err != nil {
+		t.Fatalf("session.NewFileStore: %v", err)
+	}
+	if _, err := mainStore.Create(context.Background(), "main-session", session.CreateSpec{}); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	m := &Manager{
+		registry:  registry,
+		dataDir:   dataDir,
+		worktrees: map[string]*Worktree{"": {SessionStore: mainStore}},
+	}
+	createSessionIn(t, m, "feature-x", "feature-session")
+	// A deleted worktree keeps its sessions readable, but none can take a file.
+	createSessionIn(t, m, "gone", "gone-session")
+
+	tests := []struct {
+		name      string
+		worktree  string
+		sessionID string
+		wantDir   string
+		wantErr   error
+	}{
+		{"loaded worktree", "", "main-session", dataDir, nil},
+		{"unloaded worktree", "feature-x", "feature-session", filepath.Join(dataDir, "worktrees", "feature-x"), nil},
+		{"unknown worktree", "no-such-worktree", "feature-session", "", ErrWorktreeNotFound},
+		{"deleted worktree", "gone", "gone-session", "", ErrWorktreeNotFound},
+		{"session of another worktree", "feature-x", "main-session", "", ErrSessionNotFound},
+		{"unknown session", "feature-x", "no-such-session", "", ErrSessionNotFound},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := m.AttachmentDataDir(tt.worktree, tt.sessionID)
+			if tt.wantErr != nil {
+				if !errors.Is(err, tt.wantErr) {
+					t.Errorf("err = %v, want %v", err, tt.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("AttachmentDataDir: %v", err)
+			}
+			if got != tt.wantDir {
+				t.Errorf("dir = %q, want %q", got, tt.wantDir)
+			}
+		})
 	}
 }
 
@@ -317,6 +423,101 @@ func TestDeleteSession_GoesThroughTheStoreOfAnExistingWorktree(t *testing.T) {
 	}
 	if _, err := os.Stat(m.dataDirFor("feature-x")); err != nil {
 		t.Errorf("the data directory of a worktree that still exists was removed: %v", err)
+	}
+}
+
+// A deleted session releases the stories it was watching however it was
+// deleted: through a worktree that is still open, or straight off the disk of
+// one that is gone. The engine is told which worktree the session was in,
+// because a watch names its session by both.
+func TestDeleteSession_ReleasesTheSessionsWatches(t *testing.T) {
+	live := func(t *testing.T, engine *work.Engine) *Manager {
+		repo := initGitRepo(t)
+		dataDir := t.TempDir()
+		registry := NewRegistry(repo, dataDir)
+		if _, _, err := registry.EnsureWorktree("feature-x"); err != nil {
+			t.Fatalf("EnsureWorktree: %v", err)
+		}
+		m := NewManager(registry, agent.NewRegistry(), dataDir, session.LeaseBudgets{})
+		m.SetWorkEngine(engine)
+		t.Cleanup(m.Shutdown)
+		wt, err := m.Get("feature-x")
+		if err != nil {
+			t.Fatalf("Get: %v", err)
+		}
+		t.Cleanup(func() { m.Release(wt) })
+		if _, err := wt.SessionStore.Create(context.Background(), "sess-1", session.CreateSpec{}); err != nil {
+			t.Fatalf("create session: %v", err)
+		}
+		return m
+	}
+	gone := func(t *testing.T, engine *work.Engine) *Manager {
+		m, _ := managerOverDeletedWorktree(t, "feature-x", "sess-1")
+		m.SetWorkEngine(engine)
+		return m
+	}
+
+	for name, build := range map[string]func(*testing.T, *work.Engine) *Manager{"live worktree": live, "gone worktree": gone} {
+		t.Run(name, func(t *testing.T) {
+			store, err := work.NewFileStore(t.TempDir())
+			if err != nil {
+				t.Fatalf("NewFileStore: %v", err)
+			}
+			engine := work.NewEngine(store, work.DefaultMaxNudges)
+			m := build(t, engine)
+
+			story, err := store.Create(context.Background(), work.Work{Title: "Watched", AgentRoleID: "role"})
+			if err != nil {
+				t.Fatalf("Create: %v", err)
+			}
+			if _, _, err := store.Claim(context.Background(), story.ID, &work.Watcher{SessionID: "sess-1", Worktree: "feature-x"}); err != nil {
+				t.Fatalf("Claim: %v", err)
+			}
+
+			if err := m.DeleteSession(context.Background(), "feature-x", "sess-1"); err != nil {
+				t.Fatalf("DeleteSession: %v", err)
+			}
+			engine.Stop() // waits for the release the deletion set off
+
+			got, found, err := store.Get(story.ID)
+			if err != nil || !found {
+				t.Fatalf("Get: %v (found=%v)", err, found)
+			}
+			if got.Watcher != nil {
+				t.Errorf("watcher = %+v, want none: its session was deleted", *got.Watcher)
+			}
+		})
+	}
+}
+
+// An id that names no session in a deleted worktree deleted nothing, so the
+// engine hears nothing: told otherwise, it would stop whatever work runs on a
+// session elsewhere that carries the id.
+func TestDeleteSession_AnAbsentSessionInAWorktreeThatIsGoneReachesNoWork(t *testing.T) {
+	store, err := work.NewFileStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewFileStore: %v", err)
+	}
+	engine := work.NewEngine(store, work.DefaultMaxNudges)
+	m, _ := managerOverDeletedWorktree(t, "feature-x", "sess-1")
+	m.SetWorkEngine(engine)
+
+	story, err := store.Create(context.Background(), work.Work{Title: "Running in main", AgentRoleID: "role"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	running, _, err := store.Claim(context.Background(), story.ID, nil)
+	if err != nil {
+		t.Fatalf("Claim: %v", err)
+	}
+
+	if err := m.DeleteSession(context.Background(), "feature-x", running.SessionID); err != nil {
+		t.Fatalf("DeleteSession: %v", err)
+	}
+	engine.Stop()
+
+	if got, _, err := store.Get(story.ID); err != nil || got.Status != work.StatusActive {
+		t.Errorf("story = %q (%v), want it still active", got.Status, err)
 	}
 }
 

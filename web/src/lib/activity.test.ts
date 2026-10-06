@@ -48,20 +48,27 @@ describe("sessionActivity", () => {
 		"stopped",
 		"closed",
 	])("never shows a %s work's status on a session row", (status) => {
-		expect(sessionActivity(turn("idle"), work(status))).toBe("idle");
+		expect(sessionActivity(turn("idle"), work(status), 0)).toBe("idle");
 	});
 
 	// The other half of the same call: the wait *is* a fact about this
 	// conversation, and it is what tells the user a session they are not looking
 	// at is waiting on them.
 	it("shows an active work's wait", () => {
-		expect(sessionActivity(turn("idle"), work("active", "child"))).toBe(
+		expect(sessionActivity(turn("idle"), work("active", "child"), 0)).toBe(
 			"waiting_children",
 		);
 	});
 
+	// A lead chat runs no work, which is the common watcher. Which watchers a
+	// story's news actually wakes is decided by the server's count
+	// (work.WakesWatcher), so the row takes it as it stands.
+	it("shows a plain chat's watch", () => {
+		expect(sessionActivity(turn("idle"), undefined, 2)).toBe("watching");
+	});
+
 	it("draws a session with no work from its turn alone", () => {
-		expect(sessionActivity(turn("blocked", ["permission"]), undefined)).toBe(
+		expect(sessionActivity(turn("blocked", ["permission"]), undefined, 0)).toBe(
 			"needs_permission",
 		);
 	});

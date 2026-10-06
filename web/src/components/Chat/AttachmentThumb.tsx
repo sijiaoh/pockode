@@ -102,9 +102,9 @@ function AttachmentThumb({ file, source, expanded, onToggle }: Props) {
 	// What arrived is not something the strip can draw — too large to send, or
 	// not the image the agent's media type claimed. Why is what the reader needs
 	// here, so the server's reason wins over the description; and where it sent
-	// no reason, saying only the type and size would read as nothing being
-	// wrong. That case is the same as a `binary` omission — content is there and
-	// none of it can be drawn — so it is deliberately the same words.
+	// no reason, saying only its size would read as nothing being wrong. That
+	// case is the same as a `binary` omission — content is there and none of it
+	// can be drawn — so it is deliberately the same words.
 	if (view.kind !== "image") {
 		return (
 			<AttachmentChip

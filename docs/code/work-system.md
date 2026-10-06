@@ -40,7 +40,7 @@ type Work struct {
     SessionID   string     // Active AI session, empty when not running
     CurrentStep int        // 0-indexed; used only when agent role has Steps
     Worktree    string     // Worktree the session runs in; empty = main
-    Watcher     *Watcher   // Stories only: the session woken with its news; released when the story closes (see "A story's watcher")
+    Watcher     *Watcher   // Stories only: the session woken with its news; released when the story closes, or earlier when let go (see "A story's watcher")
     CreatedAt   time.Time
     UpdatedAt   time.Time
 }
@@ -260,7 +260,7 @@ session at all.
 ### Activity
 
 `Activity` is what a work is *doing*, as one value, and it is derived —
-never stored. Eight leaves; the rule, in full:
+never stored. Nine leaves; the rule, in full:
 
 > The session says what is happening; the work's wait says what it is waiting
 > for when nothing is happening.
@@ -271,8 +271,9 @@ activity(work, turn):
   turn.phase == running          -> running
   turn.phase == blocked          -> permission > background
   otherwise (idle, or no turn):
-    wait child -> waiting_children
-    otherwise  -> idle
+    wait child   -> waiting_children
+    watching > 0 -> watching
+    otherwise    -> idle
 ```
 
 Phase outranks wait because a wait is a standing intention and a phase is a fact
@@ -283,6 +284,13 @@ nobody can act on — and those are the only two blockers a turn has.
 `needs_answer` was a ninth leaf and is gone with the CLI's own blocking question.
 Its replacement is not a leaf at all: a question an agent posts leaves the work
 `running`, and what says so is the count below.
+
+`watching` is the one leaf a work row never reaches: `RowStateFor` passes a
+count of zero. It is how many stories the *session* watches
+([A story's watcher](#a-storys-watcher)), and what a work row reports is the
+engine driving the work — an idle `active` work is nudged whether or not its
+session watches anything. It reaches session rows, plain chats included, from
+the row's `watching` count.
 
 Nothing here says "this work is waiting for a person", and that is the second
 dimension's job, not this one's — see below.
@@ -433,6 +441,7 @@ AI agents interact with the Work system through MCP (Model Context Protocol) too
 | `work_update` | Modify title/body/role | `id`, fields to update |
 | `work_delete` | Delete (a story takes its tasks with it) | `id` |
 | `story_start` | Begin execution of a story | `id`, `worktree?`, `watch?` |
+| `story_unwatch` | Stop watching a story from this chat | `id` |
 | `task_start` | Begin execution of a task | `id` |
 | `story_wait` | Pause for task completion | `id` |
 | `work_reopen` | Reopen a closed work item | `id` |
@@ -615,7 +624,7 @@ instead.
 | A posted question was answered | `chat.message` with `answering`, or the `question_answer` MCP tool |
 | An agent posted a question | the `question_post` MCP tool |
 | A child work left active (and a watched story closed or stopped) | the work store's own change event |
-| The session was deleted | the session store's own change event |
+| The session was deleted | `Engine.OnSessionDeleted`, wired per worktree by `worktree.Manager` |
 | The server started | `RecoverStartup`, before any session exists |
 
 ### Input 1: a turn ended
@@ -950,13 +959,23 @@ write.
 A deleted session takes away the place every answer and every nudge would have
 gone, so the work above it stops — including one that was *waiting*, which is the
 case a dying process deliberately does not cover. The difference is the whole
-point: a process can die and be resumed, a deleted session cannot.
+point: a process can die and be resumed, a deleted session cannot. Every story
+it was [watching](#a-storys-watcher) is released for the same reason; the
+stories themselves run on untouched.
 
-It is reached through the session store's own deletion event
-(`Engine.OnSessionChange`), so it covers every way a session can be deleted
-rather than being a special case in one RPC handler. Deleting a *work* needs no
-such rule: it cascades into its sessions, so no work is left behind to lie about
-its status.
+It is reached as `Engine.OnSessionDeleted(worktree, sessionID)`, and the
+worktree is part of the input because a watch is: sessions are stored per
+worktree, so an id alone would also release a same-id session's watch in
+another worktree. The session store's change event carries only the id, so
+`worktree.Manager` registers on each worktree's store a listener that knows
+which worktree it belongs to (`sessionDeletions`, wired beside the turn-ended
+hook). Hanging off the store's own deletion event, it covers every way a
+session can be deleted rather than being a special case in one RPC handler. A
+session deleted on disk after its worktree is gone reaches the engine too
+([what a deletion leaves behind](#what-a-deletion-leaves-behind)) — but only one
+that was actually there, since the id is the caller's and could otherwise name
+a live session elsewhere. Deleting a *work* needs no such rule: it cascades into
+its sessions, so no work is left behind to lie about its status.
 
 ### Input 7: startup
 
@@ -1103,6 +1122,30 @@ closed and reopened is unwatched until a later start with `watch`; since
 `Reopen` makes it `active` directly, that start can come only after it next
 stops.
 
+**Only the watcher lets go.** Before the close, a watch ends in two ways, both
+through `FileStore.Unwatch`, which compares and clears under the store's lock
+for the reason `SetChildWait` does — a watched start landing between a check and
+a write would otherwise be released by a call meant for its predecessor:
+
+| Who lets go | Through | Releases |
+|---|---|---|
+| the watcher itself | `story_unwatch` | only the caller's own watch (`{session_id, worktree}` must match exactly) |
+| nobody — the watching session was deleted | [input 6](#input-6-the-session-was-deleted) | every watch held by exactly that session |
+
+An agent lowers only the flag it raised: another chat's watch is that chat's,
+and finding one, or none, is not an error — the caller wanted not to be told,
+and is not; the result says why nothing changed. There is no web path: the
+watch is the watching agent's, and a person who wants it gone tells that chat.
+Only `Watcher` is cleared: the story's status, wait, session, step and tasks
+are untouched, so an unwatched story runs on exactly as before, and the update
+event it emits changes no status, so `notifyWatcherOfEnd` reads nothing into
+it. A watcher that has lost track of what it watches finds it through
+`story_list`, which marks exactly the caller's watches `watched: true` — the
+same exact match, read from the live `Work.Watcher`, so a closed story is never
+marked. `story_start`, `story_unwatch` and `story_list` take "this chat" from
+one place, `mcp.Caller.watcher()`, so the three cannot disagree about who it
+is.
+
 **Endings are read off the transition, not the status.** `ChangeEvent.PrevStatus`
 carries the status from the store's pre-mutation snapshot, and
 `Engine.notifyWatcherOfEnd` fires only when it differs — otherwise every later
@@ -1127,16 +1170,36 @@ user is already being asked, and nothing nudges a watcher that leaves it.
 
 **Delivery is owed nothing, like [input 4](#input-4-a-subtasks-question-reaches-its-story).**
 The watcher declared no wait, so an undelivered message leaves nobody stuck:
-nothing is retried and nothing is stopped. Two watchers are skipped on purpose
-rather than failed on — a session that has been deleted (the send fails with
-`session.ErrSessionNotFound`, which `chat.ErrSessionNotFound` is an alias of so
-that `work` can tell it apart without importing `chat`), and a session running a
+nothing is retried and nothing is stopped. Two kinds of watcher are skipped on
+purpose rather than failed on. One is a session that has been deleted, which
+matters only for news already on its way, since the deletion itself releases the
+watch (the send fails with `session.ErrSessionNotFound`, which
+`chat.ErrSessionNotFound` is an alias of so that `work` can tell it apart without
+importing `chat`). The other is whatever `work.WakesWatcher` rules out: the
+story's own session — it is the one doing the telling — and a session running a
 work that is not `active`, because a message starts a turn — the reason
 [a stopped parent](#input-5-a-child-work-left-active) is told nothing either.
 Anything else is logged as a fault — including a watcher whose turn is holding
 a request on screen, which refuses every message: that news is lost, not
-queued, and the story's status and comments are where it is found again. A
-story never notifies its own session.
+queued, and the story's status and comments are where it is found again.
+
+**The watching session says so, and the count is derived, not stored.** A
+session's list row carries `watching` — how many stories it watches — and its
+detail carries the same count beside `watched_stories` (`{id, title, status}`),
+which together make the session's `watching` activity
+([lifecycle-ui.md §1.2](../lifecycle-ui.md#12-deriving-it)). Nothing is written
+to the session for it: `Work.Watcher` *is* the relation, read the other way
+round by `work.WatchedBySession` / `Store.WatchedBy`, as `work_id` is read off
+`Work.SessionID`. A story counts while it is not closed — stopped included — and
+the watching side is held to `WakesWatcher`, the predicate the delivery above
+uses, so the count can never promise a wake-up the engine will not send. Nor is
+it read off the news: a `watched_story_*` message records that something
+happened to the story at one moment and goes stale the moment the story moves
+again (AGENTS.md, *Events are events, state is state*), so a chat's "watching"
+is the store's live answer, re-resolved whenever a work changes. How that
+reaches the client — which change re-pushes which session, across worktrees —
+is
+[subscription-system.md § What a Session Watches](subscription-system.md#what-a-session-watches).
 
 **The news carries no standing instructions.** A `watched_story_*` message says
 what happened to the story and how to act on that one event, nothing more — so a
@@ -1145,7 +1208,7 @@ keeps its rules only for as long as its own context does.
 
 ### Commands
 
-The six things a person or an agent can ask for live in `work.Operations`, and
+The seven things a person or an agent can ask for live in `work.Operations`, and
 both transports go through it — the WebSocket handler (user actions) and the MCP
 `Executor` (AI actions). A user-triggered command and an AI-triggered one are
 therefore the same command and cannot drift apart; before, the waits and stop had
@@ -1156,6 +1219,7 @@ other.
 |---|---|---|
 | `StartWork` | `Claim` (atomic restart/session decision) | `WorkStartHandler` creates the session and sends the kickoff; rolls back on failure |
 | `StopWork` | `Stop` | the process ends with the transition |
+| `Unwatch` | `Unwatch` (compare and clear under the lock) | none — the story is not touched ([A story's watcher](#a-storys-watcher)) |
 | `ReopenWork` | `Reopen` | reopen nudge |
 | `StepDone` | `StepDone` | next-step prompt while steps remain; withdraws the step's questions; refused when it would close a work whose subtasks are still active |
 | `Wait` | `SetChildWait` | refused when no subtask of the work is running |
@@ -1393,11 +1457,13 @@ open on it, and the main worktree's *is* the project's `.pockode`. Deleting the
 worktree checks the same thing, so a worktree whose sessions were all deleted
 before it was leaves nothing behind either.
 
-Nothing is notified along the on-disk path, and there is nobody to notify: the
-worktree's watchers stopped with it, and the work engine's interest in a deleted
-session is to stop the work that was waiting in it — which the protection above
-means cannot exist. A client that deletes this way re-reads instead of waiting to
-be told.
+No subscriber is notified along the on-disk path, and there is nobody to notify:
+the worktree's watchers stopped with it. A client that deletes this way re-reads
+instead of waiting to be told. The work engine is still told
+([input 6](#input-6-the-session-was-deleted)): there is no work waiting in such
+a session for it to stop — the protection above means none can exist — but a
+chat there may have been watching a story that lives elsewhere and is still
+open.
 
 One consequence to know about: a closed work whose session is deleted this way
 keeps the `session_id` in its record, so its detail points at a session that is
@@ -1644,7 +1710,7 @@ detail does ([api.md](../projects/api.md#work-list-rows-vs-work-detail)).
 Two surfaces paint a work's state — the project list and the detail page, the first of them through the shared `WorkRow` (docs/project-ui.md §3.1) — and they draw it from one set of sources so they cannot disagree: glyphs, tones and labels from `ACTIVITY_VIEW` (`web/src/lib/activity.ts`) through `ActivityIcon` and `ActivityBadge`, step arithmetic and wording from `web/src/utils/workSteps.ts` (`getStepProgress` / `formatStepProgress`), and the step markup from `StepList`, which renders a step's text as Markdown — the same rendering the agent role page gives that same string ([docs/lifecycle-ui.md §6.3](../lifecycle-ui.md#63-steplist)). The chat transcript is deliberately not on that list — it shows no status at all, and borrows only the step wording, never that markup (*Work Messages in Chat*). Three notes on the shared vocabulary:
 
 - **The value they paint is the derived `Activity`, never the raw `status`.** The row carries it (see *Activity*) and the detail gets its own beside the item, because it is derived from the session's turn rather than stored on the record. `status` still decides one thing, and only that one: which buttons exist (docs/lifecycle-ui.md §3). A control that appeared and vanished as turns settle is one the user cannot aim at.
-- **A work is a static glyph, never a spinner.** An `active` work with an idle process is an ordinary resting state, and a settle delay makes it a transient one too; a spinner would dramatize what a glyph states. The one place liveness is the question being asked is the session list (docs/lifecycle-ui.md §1.5).
+- **A work is a static glyph, never a spinner.** An `active` work with an idle process is an ordinary resting state, and a settle delay makes it a transient one too; a spinner would dramatize what a glyph states. Liveness is the question being asked only in the session list and at the end of the open chat transcript (docs/lifecycle-ui.md §1.5).
 - **Colour does not have to tell every status apart.** `open` and `closed` share one muted colour, and in the list the icon often stands without its label — but they are different glyphs (`Circle` against `CircleCheck`), so the glyph carries the distinction and the colour only says "nothing to attend to here".
 
 ### Displaying a Work's Worktree
@@ -1727,9 +1793,10 @@ risks leaving an orphan session behind.
 ### Session to Work Navigation
 
 The reverse direction of the shortcut above: from a conversation back to the
-work item that drives it. It is one row, `SessionWorkSection`, at the top of the
-session info panel on the chat action bar — above Usage, because what this
-session *is* comes before what it has spent. A session that runs no work draws
+work item that drives it. It is one row, `SessionWorkSection`, in the session
+panel the chat header's title opens
+([agent-chat.md](../agent-chat.md#the-session-screen)) — above Usage, because
+what this session *is* comes before what it has spent. A session that runs no work draws
 no section at all: `WorkStarter` creates the session from the work's own
 `SessionID`, and a restart reuses it, so a work never attaches itself to a
 session a user made — a session without one will never grow one later, and a
@@ -2061,7 +2128,7 @@ That form falls out of the rule this section opens with, and is the reason the r
 Three consequences worth stating outright, so none of them is later "fixed" back:
 
 - **A title freezes at the moment of the event.** The line words itself from `meta.title`, so renaming a work leaves its older messages reading the old name. That is correct — the record says what was true then — and the current title is one tap away behind *Details*.
-- **A work event offers no actions and cannot be a fork anchor.** `hasMessageActions` excludes `source === "system"`, and `isForkableMessage` follows it. These are Pockode's own annotations, not conversation turns. The line still reserves the empty slot every row of a forkable session gets, so it ends where the widest bubble ends rather than overhanging it ([session-fork-ui.md](../session-fork-ui.md#which-messages-get-a-menu-and-when-fork-is-on-it)).
+- **A work event offers no actions and cannot be a fork anchor.** `hasMessageActions` excludes `source === "system"`, and `isForkableMessage` follows it. These are Pockode's own annotations, not conversation turns. The line reserves no slot either: an always-empty one would only narrow it, and with the agent's text running to the column's edge there is no bubble edge left for it to line up with ([session-fork-ui.md](../session-fork-ui.md#which-rows-reserve-a-slot)).
 - **A fork's `droppedCount` counts each event separately.** A work's messages used to collapse into one card and be counted once; now each is one message, which is the honest number.
 
 **And nowhere else in the transcript either.** Chat used to answer "is my work still running?" from a status dot and `Step n/m` in its top bar, without the user scrolling to find a card. It no longer answers it at all: that question belongs to the work list and the detail overlay (*One Vocabulary for Work Status*), and giving it up is the price of a transcript that is only a transcript. The one piece of that vocabulary chat still borrows is step wording, so a step named on an event line and the same step named in `WorkDetailOverlay` cannot come out phrased differently.

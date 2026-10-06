@@ -16,6 +16,7 @@ import { SHORT_VIEWPORT_QUERY } from "../../hooks/useShortViewport";
 import { useAgentOptionsStore } from "../../lib/agentOptionsStore";
 import { useAgentRoleStore } from "../../lib/agentRoleStore";
 import { clearAnswerIntent, requestAnswerPanel } from "../../lib/answerIntent";
+import { uploadChatAttachment } from "../../lib/chatAttachments";
 import { useInputStore } from "../../lib/inputStore";
 import { useQuestionDraftStore } from "../../lib/questionDraftStore";
 import type { SentMessage } from "../../lib/rpc";
@@ -43,7 +44,6 @@ import type { WorkListItem } from "../../types/work";
 import Sidebar from "../Layout/Sidebar";
 import ResponsivePanel from "../ui/ResponsivePanel";
 import ChatPanel from "./ChatPanel";
-import ModeSelector from "./ModeSelector";
 
 // Mock scrollTo (not available in jsdom)
 Element.prototype.scrollTo = vi.fn();
@@ -212,6 +212,11 @@ vi.mock("../../lib/wsStore", () => {
 	};
 });
 
+vi.mock("../../lib/chatAttachments", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../../lib/chatAttachments")>()),
+	uploadChatAttachment: vi.fn(),
+}));
+
 vi.mock("../../utils/uuid", () => ({
 	generateUUID: () => `uuid-${++mockState.uuidCounter}`,
 }));
@@ -261,6 +266,12 @@ describe("ChatPanel", () => {
 		onUpdateTitle: vi.fn(),
 	};
 
+	/** The header's title, which opens the session panel. */
+	const sessionTrigger = () =>
+		screen.getByRole("button", { name: /^Session:/ });
+	const sessionPanel = () =>
+		screen.queryByRole("dialog", { name: defaultProps.sessionTitle });
+
 	beforeEach(() => {
 		vi.clearAllMocks();
 		mockState.sendMessage.mockResolvedValue({});
@@ -302,7 +313,7 @@ describe("ChatPanel", () => {
 			has_more: false,
 		});
 		useSessionStore.setState({ sessions: [] });
-		useInputStore.setState({ inputs: {} });
+		useInputStore.setState({ inputs: {}, attachments: {} });
 		useQuestionDraftStore.setState({ drafts: {}, restorable: {} });
 		clearAnswerIntent();
 		useWorkStore.getState().reset();
@@ -381,6 +392,46 @@ describe("ChatPanel", () => {
 	// destination is known. Whatever is still on screen belongs to the session the
 	// user came from: showing it reads as having opened the wrong chat, and the
 	// input would send the next message into it.
+	// The strip says the session is watching by the rule its row is drawn by:
+	// a settled turn with stories watched, and the stories' own work's wait
+	// does not come into it (docs/lifecycle-ui.md §1.2).
+	describe("the stories the chat watches", () => {
+		const watchedStories = [
+			{ id: "st1", title: "Ship the importer", status: "active" as const },
+		];
+
+		it("says it is watching once the turn settles, and opens a story from the list", async () => {
+			const user = userEvent.setup();
+			const onOpenWorkDetail = vi.fn();
+			seedSessionDetail({ watching: 1, watched_stories: watchedStories });
+			render(
+				<ChatPanel {...defaultProps} onOpenWorkDetail={onOpenWorkDetail} />,
+			);
+			await waitForHistoryLoad();
+
+			expect(
+				screen.getByText(
+					"Watching 1 story — this chat wakes when it closes, stops, or asks.",
+				),
+			).toBeInTheDocument();
+			await user.click(screen.getByRole("button", { name: "Details" }));
+			await user.click(screen.getByText("Ship the importer"));
+			expect(onOpenWorkDetail).toHaveBeenCalledWith("st1");
+		});
+
+		it("leaves a running turn to say what it is doing", async () => {
+			seedSessionDetail({
+				watching: 1,
+				watched_stories: watchedStories,
+				turn: { phase: "running", open: true, since: "" },
+			});
+			render(<ChatPanel {...defaultProps} />);
+			await waitForHistoryLoad();
+
+			expect(screen.queryByText(/^Watching/)).toBeNull();
+		});
+	});
+
 	describe("while the destination session is still resolving", () => {
 		it("drops the previous session's messages and refuses to send", async () => {
 			const user = userEvent.setup();
@@ -746,29 +797,12 @@ describe("ChatPanel", () => {
 			render(<ChatPanel {...defaultProps} />);
 			await waitForHistoryLoad();
 
-			await user.click(screen.getByRole("button", { name: "Session info" }));
-			const info = () => screen.queryByRole("dialog", { name: "Session info" });
+			await user.click(sessionTrigger());
+			const info = sessionPanel;
 			expect(info()).toBeInTheDocument();
 
 			await user.keyboard("{Escape}");
 			expect(info()).not.toBeInTheDocument();
-			expect(answerPanel()).toBeInTheDocument();
-		});
-
-		// The composer row stays lit too, and its mode dropdown is not a
-		// `ResponsivePanel` — it claims the key on its own line. Same press, same
-		// rule: whatever is over the panel answers for it.
-		it("leaves Escape to the mode dropdown the lit composer has opened", async () => {
-			const user = userEvent.setup();
-			seedUnansweredQuestion();
-			render(<ChatPanel {...defaultProps} />);
-			await waitForHistoryLoad();
-
-			await user.click(screen.getByRole("button", { name: "Default" }));
-			expect(screen.getByText("YOLO")).toBeInTheDocument();
-
-			await user.keyboard("{Escape}");
-			expect(screen.queryByText("YOLO")).not.toBeInTheDocument();
 			expect(answerPanel()).toBeInTheDocument();
 		});
 
@@ -793,9 +827,8 @@ describe("ChatPanel", () => {
 				render(<ChatPanel {...defaultProps} />);
 				await waitForHistoryLoad();
 
-				await user.click(screen.getByRole("button", { name: "Session info" }));
-				const info = () =>
-					screen.queryByRole("dialog", { name: "Session info" });
+				await user.click(sessionTrigger());
+				const info = sessionPanel;
 				expect(info()).toBeInTheDocument();
 
 				await user.click(screen.getByTestId("answer-panel-backdrop"));
@@ -823,9 +856,8 @@ describe("ChatPanel", () => {
 				render(<ChatPanel {...defaultProps} />);
 				await waitForHistoryLoad();
 
-				await user.click(screen.getByRole("button", { name: "Session info" }));
-				const info = () =>
-					screen.queryByRole("dialog", { name: "Session info" });
+				await user.click(sessionTrigger());
+				const info = sessionPanel;
 				expect(info()).toBeInTheDocument();
 
 				const panel = answerPanel();
@@ -847,7 +879,8 @@ describe("ChatPanel", () => {
 			render(<ChatPanel {...defaultProps} />);
 			await waitForHistoryLoad();
 
-			await user.click(screen.getByLabelText("Toggle commands"));
+			await user.click(screen.getByRole("button", { name: "Add" }));
+			await user.click(screen.getByRole("menuitem", { name: "Commands" }));
 			const palette = () => screen.queryByRole("listbox");
 			await waitFor(() => expect(palette()).toBeInTheDocument());
 
@@ -984,19 +1017,71 @@ describe("ChatPanel", () => {
 			// The panel is not what closes under a permission request.
 			expect(answerPanel()).toBeInTheDocument();
 
-			await user.click(screen.getByRole("button", { name: "Jump to request" }));
+			await user.click(
+				screen.getByRole("button", { name: /^Show permission request/ }),
+			);
 
 			expect(
 				screen.queryByRole("dialog", { name: /question/ }),
 			).not.toBeInTheDocument();
-			expect(screen.getByRole("button", { name: "Allow" })).toBeInTheDocument();
 
 			const card = document.querySelector<HTMLElement>(
 				"[data-permission-request-id='req-9']",
 			);
 			expect(card).not.toBeNull();
+			if (!card) return;
+			expect(
+				within(card).getByRole("button", { name: "Allow" }),
+			).toBeInTheDocument();
 			expect(card?.closest("[inert]")).toBeNull();
 			expect(card?.querySelector("button")).toHaveFocus();
+		});
+
+		// Unlike the jump, answering needs nothing from the transcript, and it is
+		// what lets the panel's own send through afterwards.
+		it("leaves the panel up when the strip answers a permission request", async () => {
+			const user = userEvent.setup();
+			seedUnansweredQuestion();
+			render(<ChatPanel {...defaultProps} />);
+			await waitForHistoryLoad();
+			act(() => {
+				mockState.onNotification?.({
+					type: "permission_request",
+					request_id: "req-9",
+					tool_name: "Bash",
+					tool_input: { command: "npm test" },
+					tool_use_id: "tool-9",
+				});
+			});
+			act(() =>
+				acceptSetting({
+					turn: {
+						phase: "blocked",
+						open: true,
+						since: "2024-01-01T00:00:00Z",
+						blockers: [
+							{
+								kind: "permission",
+								request_id: "req-9",
+								raised_at: "2024-01-01T00:00:00Z",
+							},
+						],
+						unanswered: [question],
+					},
+				}),
+			);
+
+			const allow = () =>
+				within(
+					screen.getByRole("group", { name: "Permission request" }),
+				).getByRole("button", { name: "Allow" });
+			await waitFor(() => expect(allow().closest("[inert]")).toBeNull());
+			await user.click(allow());
+
+			expect(mockState.permissionResponse).toHaveBeenCalledWith(
+				expect.objectContaining({ request_id: "req-9", choice: "allow" }),
+			);
+			expect(answerPanel()).toBeInTheDocument();
 		});
 
 		// The jump closes the panel from outside, so it stands down mid-send like
@@ -1140,7 +1225,7 @@ describe("ChatPanel", () => {
 		// say a question in, because the panel is sharing what is left of the
 		// screen with chrome that has nothing to do with answering. The room is
 		// taken back by folding that chrome away, and the card takes it on the
-		// same flag — its whole rectangle, a tighter header and footer — so the
+		// same flag — its whole rectangle, its header folded into the footer — so the
 		// card's short shape never shows without the fold, nor the fold without
 		// it (docs/answering-ui.md §3, "Room on a short viewport").
 		describe("on a short viewport", () => {
@@ -1205,10 +1290,12 @@ describe("ChatPanel", () => {
 			});
 			afterEach(() => viewport.restore());
 
-			/** The session action bar, named by the one control only it carries. */
-			const actionBar = () =>
-				screen.queryByRole("button", { name: "Session info" });
-			const composer = () => screen.queryByPlaceholderText(/^Type a message/);
+			// Under a permission request the placeholder is the reason Send is
+			// refused, so both are the composer.
+			const composer = () =>
+				screen.queryByPlaceholderText(
+					/^(Type a message|Allow or deny to send)/,
+				);
 			/**
 			 * Whether the card is in its folded shape. jsdom lays nothing out, so
 			 * the cap is read off the class it is written in; the padding rides on
@@ -1225,7 +1312,7 @@ describe("ChatPanel", () => {
 				);
 			};
 
-			it("folds the action bar and the composer away while the user answers", async () => {
+			it("folds the composer away while the user answers", async () => {
 				const user = userEvent.setup();
 				viewport.set(true);
 				seedUnansweredQuestion();
@@ -1234,13 +1321,11 @@ describe("ChatPanel", () => {
 
 				// The panel being up is not enough on its own: until the caret is in
 				// the card, the chrome below it is still the user's.
-				expect(actionBar()).toBeInTheDocument();
 				expect(composer()).toBeInTheDocument();
 				expect(cardTakesTheRoom()).toBe(false);
 
 				await answerInThePanel(user);
 
-				expect(actionBar()).not.toBeInTheDocument();
 				expect(composer()).not.toBeInTheDocument();
 				expect(cardTakesTheRoom()).toBe(true);
 			});
@@ -1286,7 +1371,6 @@ describe("ChatPanel", () => {
 					screen.getByRole("button", { name: "Jump to request" }),
 				);
 				expect(composer()).toBeInTheDocument();
-				expect(actionBar()).toBeInTheDocument();
 			});
 
 			// Stop lives on the folded bar, and this is the whole of what that
@@ -1314,7 +1398,7 @@ describe("ChatPanel", () => {
 				await answerInThePanel(user);
 				expect(stop()).not.toBeInTheDocument();
 
-				await user.click(screen.getByRole("heading", { level: 1 }));
+				await user.click(screen.getByRole("banner"));
 				await waitFor(() => expect(stop()).toBeInTheDocument());
 			});
 
@@ -1330,10 +1414,9 @@ describe("ChatPanel", () => {
 				// A press on the session header is a press on lit, reachable screen
 				// — the panel stays up, and the chrome it was borrowing room from
 				// comes back with the caret.
-				await user.click(screen.getByRole("heading", { level: 1 }));
+				await user.click(screen.getByRole("banner"));
 
 				await waitFor(() => expect(composer()).toBeInTheDocument());
-				expect(actionBar()).toBeInTheDocument();
 				expect(cardTakesTheRoom()).toBe(false);
 			});
 
@@ -1351,7 +1434,6 @@ describe("ChatPanel", () => {
 				viewport.set(false);
 
 				expect(composer()).toBeInTheDocument();
-				expect(actionBar()).toBeInTheDocument();
 				expect(cardTakesTheRoom()).toBe(false);
 			});
 
@@ -1370,7 +1452,6 @@ describe("ChatPanel", () => {
 				await user.type(textarea, "half a sentence");
 
 				expect(composer()).toHaveValue("half a sentence");
-				expect(actionBar()).toBeInTheDocument();
 				expect(cardTakesTheRoom()).toBe(false);
 				// Under a mouse the card stays, too: there is no soft keyboard to
 				// make room for, and the composer that focuses itself on mount
@@ -1420,7 +1501,6 @@ describe("ChatPanel", () => {
 					// Nothing is dimmed any more, so nothing is out of reach either.
 					expect(screen.getByText("Pending").closest("[inert]")).toBeNull();
 					expect(composer()).toHaveValue("half a sentence");
-					expect(actionBar()).toBeInTheDocument();
 				});
 
 				// Stepping aside is not a close: the card that comes back is the
@@ -1429,7 +1509,7 @@ describe("ChatPanel", () => {
 				it("brings the card back as it was when the viewport grows", async () => {
 					const user = await renderYielded();
 					await answerInThePanel(user);
-					await user.click(screen.getByRole("heading", { level: 1 }));
+					await user.click(screen.getByRole("banner"));
 					await waitFor(() => expect(composer()).toBeInTheDocument());
 					const card = answerPanel();
 
@@ -1451,7 +1531,7 @@ describe("ChatPanel", () => {
 					await typeInComposer(user);
 					expect(cardYielded()).toBe(true);
 
-					await user.click(screen.getByRole("heading", { level: 1 }));
+					await user.click(screen.getByRole("banner"));
 
 					expect(cardYielded()).toBe(false);
 					expect(answerRow()).not.toBeInTheDocument();
@@ -1622,7 +1702,6 @@ describe("ChatPanel", () => {
 
 				expect(answerPanel()).toBeInTheDocument();
 				expect(composer()).toBeInTheDocument();
-				expect(actionBar()).toBeInTheDocument();
 			});
 
 			it("changes nothing on a viewport with room to spare", async () => {
@@ -1633,7 +1712,6 @@ describe("ChatPanel", () => {
 				await waitForHistoryLoad();
 				await answerInThePanel(user);
 
-				expect(actionBar()).toBeInTheDocument();
 				expect(composer()).toBeInTheDocument();
 				expect(cardTakesTheRoom()).toBe(false);
 			});
@@ -2058,6 +2136,100 @@ describe("ChatPanel", () => {
 		});
 	});
 
+	describe("a message with files", () => {
+		const shot = {
+			id: "a1.png",
+			name: "shot.png",
+			size: 4,
+			mime: "image/png",
+		};
+
+		beforeEach(() => {
+			URL.createObjectURL = vi.fn(() => "blob:preview");
+			URL.revokeObjectURL = vi.fn();
+			vi.mocked(uploadChatAttachment).mockResolvedValue(shot);
+			mockState.isInvalidParamsRejection.mockImplementation(
+				(error: unknown) =>
+					error instanceof JSONRPCErrorException &&
+					error.code === JSONRPCErrorCode.InvalidParams,
+			);
+		});
+
+		async function pickAndSend(user: ReturnType<typeof userEvent.setup>) {
+			await user.upload(
+				screen.getByTestId("photo-input"),
+				new File(["abcd"], "shot.png", { type: "image/png" }),
+			);
+			const send = screen.getByRole("button", { name: "Send" });
+			await waitFor(() => expect(send).toBeEnabled());
+			await user.click(send);
+		}
+
+		// Files the agent cannot receive are refused, and a refused message must
+		// not leave its name behind — so the rename waits, as a command's does.
+		it("names a new chat after its files once the message is accepted", async () => {
+			let accept: (value: SentMessage) => void = () => {};
+			mockState.sendMessage.mockReturnValueOnce(
+				new Promise((resolve) => {
+					accept = resolve;
+				}),
+			);
+			const onUpdateTitle = vi.fn();
+			const user = userEvent.setup();
+			render(
+				<ChatPanel
+					{...defaultProps}
+					sessionTitle="New Chat"
+					onUpdateTitle={onUpdateTitle}
+				/>,
+			);
+			await waitForHistoryLoad();
+
+			await pickAndSend(user);
+
+			expect(mockState.sendMessage).toHaveBeenCalledWith(
+				"test-session",
+				"",
+				undefined,
+				[{ id: "a1.png", name: "shot.png" }],
+			);
+			expect(onUpdateTitle).not.toHaveBeenCalled();
+			await act(async () => accept({ seq: 1 } as SentMessage));
+			expect(onUpdateTitle).toHaveBeenCalledWith("shot.png");
+		});
+
+		it("keeps the files and says why when the agent refuses them", async () => {
+			mockState.sendMessage.mockRejectedValueOnce(
+				new JSONRPCErrorException(
+					"this agent cannot receive attachments",
+					JSONRPCErrorCode.InvalidParams,
+				),
+			);
+			const onUpdateTitle = vi.fn();
+			const user = userEvent.setup();
+			render(
+				<ChatPanel
+					{...defaultProps}
+					sessionTitle="New Chat"
+					onUpdateTitle={onUpdateTitle}
+				/>,
+			);
+			await waitForHistoryLoad();
+
+			await user.type(screen.getByRole("textbox"), "what is this");
+			await pickAndSend(user);
+
+			expect(await screen.findByRole("alert")).toHaveTextContent(
+				"cannot receive attachments",
+			);
+			expect(
+				await screen.findByRole("img", { name: "shot.png" }),
+			).toBeInTheDocument();
+			expect(screen.getByRole("textbox")).toHaveValue("what is this");
+			expect(onUpdateTitle).not.toHaveBeenCalled();
+		});
+	});
+
 	// "A turn is open" stopped being a reason to refuse: both CLIs steer the
 	// running turn with what arrives mid-reply. What refuses now is a request
 	// owning the agent's next line of input — the server refuses those too, and
@@ -2107,17 +2279,26 @@ describe("ChatPanel", () => {
 			);
 		});
 
-		// Stop stays on screen throughout: sending into a turn is not an
-		// alternative to ending it, and the two controls sit in different rows.
-		it("keeps Stop alongside Send", async () => {
+		// Send and Stop share one slot, never side by side. A draft written
+		// mid-turn is a steering message, so it has the slot; emptying the draft
+		// hands it back to Stop.
+		it("gives the slot to Send while a draft is written", async () => {
 			const user = userEvent.setup();
 			render(<ChatPanel {...defaultProps} />);
 			await waitForHistoryLoad();
 			setTurn("running");
-			await user.type(screen.getByRole("textbox"), "Also look at X");
+			const send = () => screen.queryByRole("button", { name: "Send" });
+			const stop = () => screen.queryByRole("button", { name: "Stop" });
+			expect(stop()).toBeInTheDocument();
+			expect(send()).not.toBeInTheDocument();
 
-			expect(screen.getByRole("button", { name: /Send/ })).toBeEnabled();
-			expect(screen.getByRole("button", { name: /Stop/ })).toBeInTheDocument();
+			await user.type(screen.getByRole("textbox"), "Also look at X");
+			expect(send()).toBeEnabled();
+			expect(stop()).not.toBeInTheDocument();
+
+			await user.clear(screen.getByRole("textbox"));
+			expect(stop()).toBeInTheDocument();
+			expect(send()).not.toBeInTheDocument();
 		});
 
 		// A permission request is the one thing left that owns the agent's next line
@@ -2130,7 +2311,13 @@ describe("ChatPanel", () => {
 			setTurn("blocked", [permission]);
 
 			await user.type(screen.getByRole("textbox"), "never mind");
-			expect(screen.getByRole("button", { name: /Send/ })).toBeDisabled();
+			// Send has nothing to do, so the slot holds Stop — one of the two
+			// exits the strip names — draft or no draft.
+			expect(
+				screen.queryByRole("button", { name: "Send" }),
+			).not.toBeInTheDocument();
+			expect(screen.getByRole("button", { name: "Stop" })).toBeInTheDocument();
+			await user.keyboard("{Enter}");
 
 			// A disabled control with no reason on screen is a silent failure.
 			expect(
@@ -2220,11 +2407,13 @@ describe("ChatPanel", () => {
 
 			// The turn it failed to reach is untouched and still running.
 			act(() => {
-				mockState.onNotification?.({ type: "text", content: " — carrying on" });
+				mockState.onNotification?.({ type: "text", content: "Carrying on." });
 			});
-			expect(
-				screen.getByText("Working on it — carrying on"),
-			).toBeInTheDocument();
+			expect(screen.getByText("Carrying on.")).toBeInTheDocument();
+			const after = document.body.textContent ?? "";
+			expect(after.indexOf("Carrying on.")).toBeLessThan(
+				after.indexOf("Also look at X"),
+			);
 		});
 
 		// The other reason a mid-turn send finds no placeholder to fail in, and the
@@ -2284,20 +2473,19 @@ describe("ChatPanel", () => {
 			act(() => {
 				mockState.onNotification?.({ type: "text", content: "Working on it" });
 			});
-			// By label: the list's own scroll-position output is a `status` too.
-			expect(screen.getByLabelText("Loading")).toBeInTheDocument();
+			expect(await screen.findByText("Agent is running")).toBeInTheDocument();
 
 			await user.type(screen.getByRole("textbox"), "Also look at X");
 			await user.click(screen.getByRole("button", { name: /Send/ }));
 
 			await screen.findByText("Also look at X");
-			expect(screen.getByLabelText("Loading")).toBeInTheDocument();
+			expect(await screen.findByText("Agent is running")).toBeInTheDocument();
 
 			// And it goes when the turn does, rather than spinning on.
 			act(() => {
 				mockState.onNotification?.({ type: "done" });
 			});
-			expect(screen.queryByLabelText("Loading")).not.toBeInTheDocument();
+			expect(screen.queryByText("Agent is running")).not.toBeInTheDocument();
 		});
 
 		// The only receipt a mid-turn send gets until the agent reads it: nothing
@@ -2326,9 +2514,9 @@ describe("ChatPanel", () => {
 			// The reply carries on in the bubble it was already in, above the new
 			// message, and the receipt goes when the turn ends.
 			act(() => {
-				mockState.onNotification?.({ type: "text", content: " — and X" });
+				mockState.onNotification?.({ type: "text", content: "And X." });
 			});
-			expect(screen.getByText("Working on it — and X")).toBeInTheDocument();
+			expect(screen.getByText("And X.")).toBeInTheDocument();
 
 			act(() => {
 				mockState.onNotification?.({ type: "done" });
@@ -2385,7 +2573,7 @@ describe("ChatPanel", () => {
 	});
 
 	describe("receiving messages", () => {
-		it("accumulates streaming text into assistant message", async () => {
+		it("adds each text message to the assistant message", async () => {
 			const user = userEvent.setup();
 			render(<ChatPanel {...defaultProps} />);
 			await waitForHistoryLoad();
@@ -2397,15 +2585,16 @@ describe("ChatPanel", () => {
 			act(() => {
 				mockState.onNotification?.({
 					type: "text",
-					content: "Hello ",
+					content: "Hello.",
 				});
 				mockState.onNotification?.({
 					type: "text",
-					content: "there!",
+					content: "There!",
 				});
 			});
 
-			expect(screen.getByText("Hello there!")).toBeInTheDocument();
+			expect(screen.getByText("Hello.")).toBeInTheDocument();
+			expect(screen.getByText("There!")).toBeInTheDocument();
 		});
 
 		it("displays tool calls with results", async () => {
@@ -2540,6 +2729,122 @@ describe("ChatPanel", () => {
 			).not.toBeInTheDocument();
 		});
 
+		// The strip answers through the card's path, and the card shows the
+		// outcome straight away like a press on the card itself.
+		it("answers from the attention strip the way the card does", async () => {
+			const user = userEvent.setup();
+			render(<ChatPanel {...defaultProps} />);
+			await waitForHistoryLoad();
+			act(() => {
+				mockState.onNotification?.({
+					type: "permission_request",
+					request_id: "req-3",
+					tool_name: "Bash",
+					tool_input: { command: "npm test" },
+					tool_use_id: "tool-3",
+				});
+			});
+			act(() =>
+				acceptSetting({
+					turn: {
+						phase: "blocked",
+						open: true,
+						since: "2024-01-01T00:00:00Z",
+						blockers: [
+							{
+								kind: "permission",
+								request_id: "req-3",
+								raised_at: "2024-01-01T00:00:00Z",
+							},
+						],
+					},
+				}),
+			);
+
+			const strip = screen.getByRole("group", { name: "Permission request" });
+			expect(screen.getByRole("textbox")).toHaveAttribute(
+				"placeholder",
+				"Allow or deny to send",
+			);
+			// Armed after it arrives; the wait is real time here.
+			await waitFor(() =>
+				expect(
+					within(strip)
+						.getByRole("button", { name: "Allow" })
+						.closest("[inert]"),
+				).toBeNull(),
+			);
+			await user.click(within(strip).getByRole("button", { name: "Allow" }));
+
+			expect(mockState.permissionResponse).toHaveBeenCalledWith({
+				session_id: "test-session",
+				request_id: "req-3",
+				tool_use_id: "tool-3",
+				tool_input: { command: "npm test" },
+				permission_suggestions: undefined,
+				choice: "allow",
+			});
+			// The receipt holds the row until the server takes the blocker down.
+			expect(within(strip).getByText("Allowed")).toBeInTheDocument();
+			const card = document.querySelector<HTMLElement>(
+				"[data-permission-request-id='req-3']",
+			);
+			expect(
+				card && within(card).queryByRole("button", { name: "Allow" }),
+			).toBeNull();
+		});
+
+		// A subagent's request is filed under its Task call, not at the top of
+		// the message; the strip has to find it there all the same.
+		it("answers a subagent's request from the strip", async () => {
+			render(<ChatPanel {...defaultProps} />);
+			await waitForHistoryLoad();
+			act(() => {
+				mockState.onNotification?.({
+					type: "tool_call",
+					tool_use_id: "task-1",
+					tool_name: "Agent",
+					tool_input: { description: "explore", subagent_type: "Explore" },
+				});
+				mockState.onNotification?.({
+					type: "tool_call",
+					tool_use_id: "tool-4",
+					tool_name: "Bash",
+					tool_input: { command: "ls" },
+					parent_tool_use_id: "task-1",
+				});
+				mockState.onNotification?.({
+					type: "permission_request",
+					request_id: "req-4",
+					tool_name: "Bash",
+					tool_input: { command: "ls" },
+					tool_use_id: "tool-4",
+				});
+			});
+			act(() =>
+				acceptSetting({
+					turn: {
+						phase: "blocked",
+						open: true,
+						since: "2024-01-01T00:00:00Z",
+						blockers: [
+							{
+								kind: "permission",
+								request_id: "req-4",
+								raised_at: "2024-01-01T00:00:00Z",
+							},
+						],
+					},
+				}),
+			);
+
+			expect(
+				within(
+					screen.getByRole("group", { name: "Permission request" }),
+				).getByRole("button", { name: "Allow" }),
+			).toBeInTheDocument();
+		});
+
 		it("shows inline permission request and sends deny response", async () => {
 			const user = userEvent.setup();
 			render(<ChatPanel {...defaultProps} />);
@@ -2575,6 +2880,15 @@ describe("ChatPanel", () => {
 		// the thing that lists the prompts still waiting on someone
 		// (docs/lifecycle-ui.md §8).
 		describe("an answer the server refuses", () => {
+			// The card's, not the strip's: while blocked, the strip offers the same
+			// answers.
+			const cardButton = (name: string) =>
+				within(
+					document.querySelector<HTMLElement>(
+						"[data-permission-request-id='req-9']",
+					) ?? document.body,
+				).getByRole("button", { name });
+
 			const raisePermission = () =>
 				act(() => {
 					mockState.onNotification?.({
@@ -2612,15 +2926,13 @@ describe("ChatPanel", () => {
 				raisePermission();
 				act(() => blockedOn("req-9"));
 
-				await user.click(screen.getByRole("button", { name: "Allow" }));
+				await user.click(cardButton("Allow"));
 
 				expect(await screen.findByRole("alert")).toHaveTextContent(
 					"connection lost",
 				);
 				// Still pending, so the user can simply press it again.
-				expect(
-					screen.getByRole("button", { name: "Allow" }),
-				).toBeInTheDocument();
+				expect(cardButton("Allow")).toBeInTheDocument();
 			});
 
 			it("retires the card once the turn no longer lists the prompt", async () => {
@@ -2810,49 +3122,6 @@ describe("ChatPanel", () => {
 
 			expect(mockState.interrupt).toHaveBeenCalledWith("test-session");
 		});
-
-		// ChatPanel's own picker is disabled while a turn is open, so today its
-		// listener always predates the interrupt's and the mark alone keeps it
-		// out. That is an accident of order the cover count does not rely on, so
-		// the picker here is opened after the interrupt's listener is in place.
-		it("leaves Escape to an open mode picker, then interrupts once it is gone", async () => {
-			const user = userEvent.setup();
-			render(
-				<>
-					<ChatPanel {...defaultProps} />
-					<section aria-label="Other composer">
-						<ModeSelector
-							mode="default"
-							agentType="claude"
-							onModeChange={vi.fn()}
-						/>
-					</section>
-				</>,
-			);
-			await waitForHistoryLoad();
-
-			act(() => {
-				acceptSetting({
-					turn: { phase: "running", open: true, since: "2024-01-01T00:00:00Z" },
-				});
-			});
-			await user.click(
-				within(
-					screen.getByRole("region", { name: "Other composer" }),
-				).getByRole("button", { name: "Default" }),
-			);
-			expect(screen.getByText("YOLO")).toBeInTheDocument();
-			mockState.interrupt.mockClear();
-
-			await user.keyboard("{Escape}");
-
-			expect(screen.queryByText("YOLO")).toBeNull();
-			expect(mockState.interrupt).not.toHaveBeenCalled();
-
-			await user.keyboard("{Escape}");
-
-			expect(mockState.interrupt).toHaveBeenCalledWith("test-session");
-		});
 	});
 
 	// Transcripts written before Pockode stopped letting a CLI ask its own
@@ -2952,8 +3221,14 @@ describe("ChatPanel", () => {
 		const seedSession = (activated: boolean, model = "", effort = "") =>
 			seedSessionDetail({ model, effort, activated });
 
+		/** The engine's row in the session panel, opening the panel for it. */
+		const engineRow = async (name: string | RegExp) => {
+			if (!sessionPanel()) await userEvent.click(sessionTrigger());
+			return screen.getByRole("button", { name });
+		};
+
 		const openPanel = async (user: ReturnType<typeof userEvent.setup>) => {
-			await user.click(screen.getByRole("button", { name: /^Engine:/ }));
+			await user.click(await engineRow(/^Engine:/));
 		};
 
 		// Both lists name their empty value "Auto"; the legend above each is what
@@ -2961,7 +3236,7 @@ describe("ChatPanel", () => {
 		const section = (title: string) =>
 			within(screen.getByRole("group", { name: title }));
 
-		// The chip is built entirely from the session's own settings — agent
+		// The engine is described entirely from the session's own settings — agent
 		// included — and a session that has not described itself yet has none.
 		// Naming a placeholder would describe the session wrongly and then correct
 		// itself a round trip later.
@@ -2971,18 +3246,25 @@ describe("ChatPanel", () => {
 			render(<ChatPanel {...defaultProps} />);
 			await waitForHistoryLoad();
 
+			expect(sessionTrigger()).toHaveAccessibleName(
+				"Session: Test Chat, loading",
+			);
 			// Not "Engine: Claude, loading": the agent is a setting too, and Claude
-			// is only the placeholder the session would be misdescribed by.
-			expect(
-				screen.getByRole("button", { name: "Engine: loading" }),
-			).toBeDisabled();
+			// is only the placeholder the session would be misdescribed by. Held,
+			// too, because picking the shown value back would be taken for "no
+			// change" and swallowed.
+			expect(await engineRow("Engine: loading")).toHaveAttribute(
+				"aria-disabled",
+				"true",
+			);
 			// Same for the mode, and here the placeholder is the calm one: a YOLO
-			// session would wear Default's shield until the snapshot landed. The
-			// button is also disabled, because picking the shown mode back would be
-			// taken for "no change" and swallowed.
-			expect(
-				screen.getByRole("button", { name: "Mode: loading" }),
-			).toBeDisabled();
+			// session would wear Default's dot until the snapshot landed.
+			for (const radio of within(
+				screen.getByRole("group", { name: "Permissions" }),
+			).getAllByRole("radio")) {
+				expect(radio).not.toBeChecked();
+				expect(radio).toBeDisabled();
+			}
 		});
 
 		// A first turn that failed before the agent said anything leaves messages
@@ -3028,16 +3310,16 @@ describe("ChatPanel", () => {
 			).toBeInTheDocument();
 		});
 
-		it("shows the session's model on the chip and sends the new one", async () => {
+		it("shows the session's model in the header and sends the new one", async () => {
 			const user = userEvent.setup();
 			seedSession(false, "opus");
 
 			render(<ChatPanel {...defaultProps} />);
 			await waitForHistoryLoad();
 
-			expect(
-				screen.getByRole("button", { name: "Engine: Claude, Opus" }),
-			).toBeInTheDocument();
+			expect(sessionTrigger()).toHaveAccessibleName(
+				"Session: Test Chat, Opus · Default",
+			);
 
 			await openPanel(user);
 			await user.click(screen.getByRole("radio", { name: "Sonnet" }));
@@ -3146,9 +3428,7 @@ describe("ChatPanel", () => {
 			render(<ChatPanel {...defaultProps} />);
 			await waitForHistoryLoad();
 
-			expect(
-				screen.getByRole("button", { name: "Engine: Claude, opus-4" }),
-			).toBeInTheDocument();
+			expect(await engineRow("Engine: Claude, opus-4")).toBeInTheDocument();
 		});
 
 		// Switching is a deliberate act whose only other feedback is the control
@@ -3170,44 +3450,35 @@ describe("ChatPanel", () => {
 			expect(alert).toHaveTextContent("Failed to change model");
 			expect(alert).toHaveTextContent("model not available");
 
-			// The chip keeps reporting what the session is still set to.
-			expect(
-				screen.getByRole("button", { name: "Engine: Claude, Auto" }),
-			).toBeInTheDocument();
+			// The engine row keeps reporting what the session is still set to.
+			expect(await engineRow("Engine: Claude, Auto")).toBeInTheDocument();
 		});
 
-		// Non-Auto only, and inside the model's truncation budget rather than
-		// beside it: on a narrow action bar there is room for one of the two, and
-		// the model is the session's identity while the effort is a setting.
-		it("shows the effort next to the model on the chip", async () => {
+		// Non-Auto only: Auto has no level to name.
+		it("shows the effort next to the model on the engine row", async () => {
 			seedSession(false, "opus", "high");
 
 			render(<ChatPanel {...defaultProps} />);
 			await waitForHistoryLoad();
 
 			expect(
-				screen.getByRole("button", {
-					name: "Engine: Claude, Opus, High effort",
-				}),
-			).toBeInTheDocument();
-			expect(screen.getByText("· High")).toBeInTheDocument();
+				await engineRow("Engine: Claude, Opus, High effort"),
+			).toHaveTextContent("Claude · Opus · High");
 		});
 
 		// Auto has no value to report: what the CLI then picks is its own business.
-		it("leaves the chip alone while the effort is Auto", async () => {
+		it("leaves the engine row alone while the effort is Auto", async () => {
 			seedSession(false, "opus");
 
 			render(<ChatPanel {...defaultProps} />);
 			await waitForHistoryLoad();
 
-			expect(
-				screen.getByRole("button", { name: "Engine: Claude, Opus" }),
-			).toBeInTheDocument();
+			expect(await engineRow("Engine: Claude, Opus")).toBeInTheDocument();
 		});
 
-		// The two are one string on the chip, so a level named from a list that has
+		// The two are one string on the engine row, so a level named from a list that has
 		// not arrived would flash its raw id beside a model that waited properly.
-		it("waits for both names before showing either on the chip", async () => {
+		it("waits for both names before showing either on the engine row", async () => {
 			seedSession(false, "", "high");
 			useAgentOptionsStore.setState({
 				models: null,
@@ -3218,9 +3489,7 @@ describe("ChatPanel", () => {
 			render(<ChatPanel {...defaultProps} />);
 			await waitForHistoryLoad();
 
-			expect(
-				screen.getByRole("button", { name: "Engine: Claude, loading" }),
-			).toBeInTheDocument();
+			expect(await engineRow("Engine: Claude, loading")).toBeInTheDocument();
 		});
 
 		it("sends the picked effort, and the empty one for Auto", async () => {
@@ -3343,8 +3612,30 @@ describe("ChatPanel", () => {
 			render(<ChatPanel {...defaultProps} />);
 			await waitForHistoryLoad();
 
-			await user.click(screen.getByRole("button", { name: "Default" }));
-			await user.click(screen.getByRole("button", { name: /YOLO/ }));
+			await user.click(sessionTrigger());
+			await user.click(screen.getByRole("radio", { name: /YOLO/ }));
+
+			expect(await screen.findByRole("alert")).toHaveTextContent(
+				"Failed to change mode: no such mode",
+			);
+		});
+
+		// The header stays up over every overlay, so its panel can be refused
+		// there too — and closes on the refusal so the reason can be read.
+		it("reports a refused switch made over an overlay", async () => {
+			const user = userEvent.setup();
+			seedSession(false);
+			mockState.setSessionMode.mockRejectedValueOnce(new Error("no such mode"));
+
+			render(
+				<ChatPanel
+					{...defaultProps}
+					overlay={{ type: "file", path: "a.ts" }}
+				/>,
+			);
+
+			await user.click(sessionTrigger());
+			await user.click(screen.getByRole("radio", { name: /YOLO/ }));
 
 			expect(await screen.findByRole("alert")).toHaveTextContent(
 				"Failed to change mode: no such mode",
@@ -3368,7 +3659,7 @@ describe("ChatPanel", () => {
 			render(<ChatPanel {...defaultProps} />);
 			await waitForHistoryLoad();
 
-			await user.click(screen.getByRole("button", { name: "Session info" }));
+			await user.click(sessionTrigger());
 			expect(await screen.findByText("1,000")).toBeInTheDocument();
 
 			act(() => {
@@ -3463,16 +3754,19 @@ describe("ChatPanel", () => {
 			render(<ChatPanel {...defaultProps} />);
 			await waitForHistoryLoad();
 
+			act(() => {
+				acceptSetting({
+					turn: { phase: "running", open: true, since: "2024-01-01T00:00:00Z" },
+				});
+			});
 			emit(autoContinue, { type: "text", content: "wrapping up" });
 
 			setWorkStatus("closed");
 
 			// The turn is untouched by the work reaching its end: still streaming,
-			// still spinning, still showing what the agent wrote.
+			// still running, still showing what the agent wrote.
 			expect(screen.getByText("wrapping up")).toBeInTheDocument();
-			expect(
-				screen.getByRole("status", { name: "Loading" }),
-			).toBeInTheDocument();
+			expect(await screen.findByText("Agent is running")).toBeInTheDocument();
 		});
 	});
 
@@ -3652,6 +3946,41 @@ describe("ChatPanel", () => {
 			expect(mockState.sendMessage).not.toHaveBeenCalled();
 		});
 
+		// Text alone would send the message again without what it was about.
+		it("puts the failed message's files back with it", async () => {
+			mockState.mockHistory = [
+				{
+					...failedHistory[0],
+					attachments: [
+						{
+							name: "shot.png",
+							mime: "image/png",
+							size: 4,
+							attachment_id: "a1.png",
+						},
+					],
+				},
+				failedHistory[1],
+			];
+			const user = userEvent.setup();
+			render(<ChatPanel {...defaultProps} />);
+			await waitForHistoryLoad();
+
+			await signInAndFinish(user);
+			await user.click(screen.getByRole("button", { name: "Send again" }));
+
+			expect(
+				screen.getByRole("button", { name: "Remove shot.png" }),
+			).toBeInTheDocument();
+			await user.click(screen.getByRole("button", { name: "Send" }));
+			expect(mockState.sendMessage).toHaveBeenCalledWith(
+				"test-session",
+				"fix the build",
+				undefined,
+				[{ id: "a1.png", name: "shot.png" }],
+			);
+		});
+
 		it("leaves a draft already in the input alone", async () => {
 			const user = userEvent.setup();
 			useInputStore.setState({ inputs: { "test-session": "half-typed" } });
@@ -3703,29 +4032,35 @@ describe("ChatPanel", () => {
 			forked_from: { session_id: "test-session" },
 		});
 
-		/** Opens the menu beside the nth bubble of one speaker; -1 is the last. */
+		/**
+		 * Opens the menu of the nth user message; -1 is the last. Only the user's
+		 * side has a `…`: the agent's row stands its actions as buttons.
+		 */
 		const openMenu = async (
 			user: ReturnType<typeof userEvent.setup>,
-			side: "user" | "assistant",
 			index = 0,
 		) => {
 			const triggers = await screen.findAllByRole("button", {
-				name:
-					side === "user"
-						? "Actions for your message"
-						: "Actions for the agent's message",
+				name: "Actions for your message",
 			});
 			await user.click(triggers[index < 0 ? triggers.length + index : index]);
 		};
 
-		// Two steps now that the action lives in a menu: open the `…` beside the
-		// first assistant answer, then take the fork row. That answer is the first
-		// offer in the transcript — the opening prompt above it has nothing behind
-		// it to fork to.
+		// The Fork button at the end of the first assistant answer. That answer is
+		// the first offer in the transcript — the opening prompt above it has
+		// nothing behind it to fork to.
 		const openForkSheet = async (user: ReturnType<typeof userEvent.setup>) => {
-			await openMenu(user, "assistant");
-			await user.click(screen.getByRole("button", { name: /Fork from here/ }));
+			const forks = await screen.findAllByRole("button", {
+				name: "Fork from here",
+			});
+			await user.click(forks[0]);
 		};
+
+		/** The fork row of the menu that is open, not a turn's own Fork button. */
+		const menuForkRow = () =>
+			within(screen.getByRole("dialog")).getByRole("button", {
+				name: /Fork from here/,
+			});
 
 		// An agent that was never forkable has no refusal to explain, so it gets
 		// neither the `…` nor the slot the `…` would have sat in — a session that
@@ -3747,9 +4082,12 @@ describe("ChatPanel", () => {
 			// first paint, and `null` until then means "offer it" (useForkSupport).
 			await waitFor(() =>
 				expect(
-					screen.queryAllByRole("button", { name: /^Actions for/ }),
+					screen.queryAllByRole("button", { name: /actions for/i }),
 				).toHaveLength(0),
 			);
+			expect(
+				screen.queryByRole("button", { name: "Fork from here" }),
+			).not.toBeInTheDocument();
 			// The transcript really is on screen, so the absence below is the
 			// declaration talking and not a render that never happened.
 			expect(screen.getByText("Hi there!")).toBeInTheDocument();
@@ -3888,8 +4226,8 @@ describe("ChatPanel", () => {
 
 			// "Hello", the message with no seq — the one above it opens the session
 			// and is refused for its own reason.
-			await openMenu(user, "user", 1);
-			const fork = screen.getByRole("button", { name: /Fork from here/ });
+			await openMenu(user, 1);
+			const fork = menuForkRow();
 			expect(fork).toHaveAttribute("aria-disabled", "true");
 			// Written out where a finger can read it: a tooltip never fires on a
 			// touch screen, so a reason living only in a label is out of reach.
@@ -3918,8 +4256,8 @@ describe("ChatPanel", () => {
 			render(<ChatPanel {...defaultProps} onSelectSession={vi.fn()} />);
 			await waitForHistoryLoad();
 
-			await openMenu(user, "user", 0);
-			const fork = screen.getByRole("button", { name: /Fork from here/ });
+			await openMenu(user, 0);
+			const fork = menuForkRow();
 			expect(fork).toHaveAttribute("aria-disabled", "true");
 			expect(fork).toHaveTextContent("Nothing before this message to keep.");
 			// Permanent, so the sentence must not promise a later.
@@ -3950,8 +4288,8 @@ describe("ChatPanel", () => {
 			render(<ChatPanel {...defaultProps} onSelectSession={vi.fn()} />);
 			await waitForHistoryLoad();
 
-			await openMenu(user, "user", 0);
-			const fork = screen.getByRole("button", { name: /Fork from here/ });
+			await openMenu(user, 0);
+			const fork = menuForkRow();
 			expect(fork).not.toHaveAttribute("aria-disabled");
 			expect(fork).not.toHaveTextContent("Nothing before this message");
 
@@ -3981,8 +4319,8 @@ describe("ChatPanel", () => {
 			// Nothing was resubscribed and no history was replayed: the only place
 			// this seq can have come from is the reply to the send itself.
 			expect(mockState.chatMessagesSubscribe).toHaveBeenCalledTimes(1);
-			await openMenu(user, "user", -1);
-			const fork = screen.getByRole("button", { name: /Fork from here/ });
+			await openMenu(user, -1);
+			const fork = menuForkRow();
 			expect(fork).not.toHaveAttribute("aria-disabled");
 
 			await user.click(fork);
@@ -4012,8 +4350,8 @@ describe("ChatPanel", () => {
 			await waitForHistoryLoad();
 
 			// "Try again", the second thing the user said.
-			await openMenu(user, "user", 1);
-			await user.click(screen.getByRole("button", { name: /Fork from here/ }));
+			await openMenu(user, 1);
+			await user.click(menuForkRow());
 
 			const sheet = within(screen.getByRole("dialog"));
 			expect(sheet.getByText("Try again")).toBeInTheDocument();
@@ -4040,8 +4378,8 @@ describe("ChatPanel", () => {
 			expect(mockState.sendMessage).not.toHaveBeenCalled();
 		});
 
-		/** The menu `openMenu` raises beside an agent bubble. */
-		const menu = () => screen.queryByRole("dialog", { name: "Agent message" });
+		/** The menu `openMenu` raises. */
+		const menu = () => screen.queryByRole("dialog", { name: "Your message" });
 
 		// Both sheets below are portalled to the body, which is the whole of the
 		// problem: `invisible` and `inert` travel down the DOM, and a portal is
@@ -4057,7 +4395,7 @@ describe("ChatPanel", () => {
 			const { rerender } = render(<ChatPanel {...props} />);
 			await waitForHistoryLoad();
 
-			await openMenu(user, "assistant");
+			await openMenu(user);
 			expect(menu()).toBeInTheDocument();
 
 			rerender(<ChatPanel {...props} overlay={workList} />);
@@ -4104,7 +4442,7 @@ describe("ChatPanel", () => {
 			render(<ChatPanel {...defaultProps} onSelectSession={vi.fn()} />);
 			await waitForHistoryLoad();
 
-			await openMenu(user, "assistant");
+			await openMenu(user);
 			expect(menu()).toBeInTheDocument();
 
 			// Pushed onto this transcript rather than seeded with the answer
@@ -4276,7 +4614,8 @@ describe("ChatPanel", () => {
 			).not.toBeInTheDocument();
 		});
 
-		it("drops the controls that would change the session, keeping Session info", async () => {
+		it("drops the controls that would change the session, keeping its facts", async () => {
+			const user = userEvent.setup();
 			render(
 				<ChatPanel
 					{...defaultProps}
@@ -4287,16 +4626,17 @@ describe("ChatPanel", () => {
 			);
 			await waitForHistoryLoad();
 
+			expect(sessionTrigger()).toHaveAccessibleName(/, Read-only$/);
+			await user.click(sessionTrigger());
+
 			// Removed rather than disabled: there is no execution environment to
 			// come back.
 			expect(
-				screen.queryByRole("button", { name: /Agent:/ }),
+				screen.queryByRole("button", { name: /^Engine:/ }),
 			).not.toBeInTheDocument();
+			expect(screen.queryByRole("radio")).not.toBeInTheDocument();
 			expect(
-				screen.queryByRole("button", { name: /Mode:/ }),
-			).not.toBeInTheDocument();
-			expect(
-				screen.getByRole("button", { name: "Session info" }),
+				screen.getByRole("heading", { level: 3, name: "Usage" }),
 			).toBeInTheDocument();
 		});
 
@@ -4391,7 +4731,7 @@ describe("ChatPanel", () => {
 		});
 
 		// A work's chat link is the usual way onto this screen, so the row back to
-		// that work is the one thing Session info is kept open for here. It comes
+		// that work is the one thing the session panel is kept open for here. It comes
 		// off the viewed session's own detail — the detail store holds the bound
 		// worktree's session and has no entry for this one.
 		it("keeps the way back to the work the viewed session runs", async () => {
@@ -4416,7 +4756,7 @@ describe("ChatPanel", () => {
 			);
 			await waitForHistoryLoad();
 
-			await user.click(screen.getByRole("button", { name: "Session info" }));
+			await user.click(sessionTrigger());
 			await user.click(screen.getByRole("button", { name: "Old Chat" }));
 
 			expect(onOpenWorkDetail).toHaveBeenCalledWith("work-1");
@@ -4443,6 +4783,10 @@ describe("ChatPanel", () => {
 			// An empty transcript would read as "they never said anything".
 			expect(await screen.findByRole("alert")).toHaveTextContent(
 				'This session is not in "old-fix" any more.',
+			);
+			// No name is coming, so the header stops waiting for one.
+			expect(sessionTrigger()).toHaveAccessibleName(
+				"Session: Unavailable session, Read-only",
 			);
 		});
 

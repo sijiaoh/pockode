@@ -54,8 +54,9 @@ art. Four of its decisions are taken here:
 Two things happy does that Pockode deliberately does not. It folds the permission
 request into the tool call; Pockode keeps it its own part, with its own lifetime
 and its own buttons. And it maintains a `sidechains` map to nest a subagent's
-whole conversation under the call that spawned it — real, and much larger than
-this model needs.
+whole conversation under the call that spawned it. Pockode did not take that at
+first and now does, in a smaller form
+([below](#a-subagents-own-conversation)).
 
 Notably, happy does **not** track background shells either: `BashOutput` and
 `BashStop` are separate unconnected rows. On problem (1) there was no prior art
@@ -63,8 +64,9 @@ to copy, and the design below is Pockode's own.
 
 **claude-code-chat** (`refs/claude-code-chat`) never joins a result to its call
 at all — it matches a result to "the last tool use" by position. Its one
-transferable idea is progressive reveal, and Pockode's `ScrollableContent` is a
-better version of it that already shipped.
+transferable idea is progressive reveal, and Pockode's `ClampedContent` — a
+section cut to a height and opened in place by *Show all* — is a better version
+of it that already shipped.
 
 ## What the two engines actually emit
 
@@ -134,8 +136,10 @@ the completed item, so a missed delta costs a moment of liveness and nothing els
 
 ### Background work — Claude only
 
-Codex has no notion of a tool call that outlives its turn: a codex turn blocks on
-its command. Everything in this section is Claude's, and the model has to work
+Codex has no notion of a backgrounded tool call: a codex turn blocks on its
+command. (A Codex subagent's spawn can outlive the turn, but it is settled by the
+child's own turn ending, not by anything here —
+[code/agent-integration.md](code/agent-integration.md#subagent-threads).) Everything in this section is Claude's, and the model has to work
 when none of it ever arrives.
 
 Claude runs a full task lifecycle on `system` frames, and the edges carry a
@@ -179,6 +183,7 @@ says what is true now.*
 | `tool_result` + `subtype: "background_result"` | yes | the real outcome of that work, as the CLI reported it |
 | `tool_result` + `subtype: "background_lost"` | yes | …or the outcome Pockode wrote itself, because the CLI never will |
 | `tool_activity` | **no** | what a call that has not returned is doing right now |
+| `text` / `tool_call` / `tool_result` + `parent_tool_use_id` | yes | …and it happened inside *that* subagent call, not in the main conversation |
 
 And one derived object, `ToolRun`, that the message reducer maintains and the UI
 renders without inferring anything.
@@ -208,6 +213,8 @@ interface ToolRun {
     exitCode?: number
     /** When this client first saw the call. Live only — see below. */
     seenAt?: Date
+    /** A subagent call's own text and calls, in arrival order. Replay-safe. */
+    children?: ContentPart[]
 }
 
 type ToolRunStatus = 'running' | 'background' | 'success' | 'error' | 'interrupted'
@@ -290,8 +297,8 @@ Three things this is deliberately not:
   path**: a client has to read a fetch with no origin as a perfectly good call
   that simply stands alone.
 
-Nothing else emits it. Codex has no work that outlives its turn, so it has no
-tool shaped like this one.
+Nothing else emits it. Codex has no backgrounded call whose outcome a later
+tool fetches, so it has no tool shaped like this one.
 
 What the frontend does with it — when a fetch is filed under the row it names,
 when it keeps a row of its own, and why that is decided as the call arrives
@@ -439,12 +446,56 @@ every other title is, and `resultAfterInterrupt` is now
 `status === 'interrupted' && result !== undefined` — one fact read off two
 fields instead of a third that can fall out of step with them.
 
+### A subagent's own conversation
+
+This was out of scope once, on the grounds that no problem here asked for it.
+That was wrong, and the owner reversed it: the real stream interleaves a
+subagent's text and tool calls with the main agent's, and drawn flat they are
+indistinguishable — the one place the transcript makes a reader misjudge *who
+did what*. The drawing is
+[tool-call-ui.md](tool-call-ui.md#a-subagents-own-work); what it needs from the
+model is this:
+
+- **The join is the spawning call's `tool_use_id`.** Every `assistant` and
+  `user` message Claude emits for a subagent carries `parent_tool_use_id`
+  naming the `Task` / `Agent` call it runs under (`null` for the main agent).
+  It is the same key every other record here joins on, so no second one is
+  introduced.
+- **It is persisted with the record** — `parent_tool_use_id` on `text`,
+  `tool_call` and `tool_result` — not reconstructed on the client.
+  Replay has to file a subagent's work exactly as the live stream did, and a
+  record that does not say whose it is cannot be filed by anything later. A
+  record without it is the main agent's — which is also what every transcript
+  written before this reads as, and they stay flat. A record whose parent is not
+  loaded stays where it is too: the call may be on an earlier page, or one no
+  client draws.
+- **A run owns its children in arrival order: text and tool runs alike**, each
+  child an ordinary part that would otherwise sit in the message. They are not
+  a second kind of tool run; a child tool run is a `ToolRun` with every rule
+  above, and a child that is itself a subagent call owns children of its own.
+  Claude's `task_started` carries `spawn_depth`, so that recursion is a case the
+  CLI names.
+- **Steps are derived, not sent**: the count of child calls (by `tool_use_id`,
+  whether a row or a card stands for one at the moment), and the newest child,
+  are read off the children — the same reason there is no `title` field.
+- **A settled subagent settles what it leaves running.** A child still
+  `running` when its parent settles is `interrupted` with it; a backgrounded
+  child keeps its own lifecycle and settles by its own notification. The rules
+  belong to the reducer ([code/frontend-state.md](code/frontend-state.md#a-subagents-children)).
+
+Codex names the parent too: a subagent runs in a thread of its own, and the
+adapter stamps that thread's items with the id of the spawn call it saw start
+it. The spawn itself is drawn as a `Task` call carrying the agent's path or its
+prompt in place of a description, and settled by the child's turn ending, so a Codex
+subagent nests exactly as a Claude one does
+([code/agent-integration.md](code/agent-integration.md#subagent-threads)).
+
 ## Out of scope
 
-- **Nesting a subagent's conversation under its call.** happy does it; it needs a
-  sidechain tracer and a recursive renderer, and neither problem here asks for it.
 - **Codex item types Pockode still drops** — `webSearch`, `dynamicToolCall`,
-  `collabAgentToolCall`, `subAgentActivity`, `sleep`, `imageGeneration`. Each is
+  `collabAgentToolCall`, `sleep`, `imageGeneration` (a spawn is drawn, as a
+  subagent call — above — whether `subAgentActivity` or a `spawnAgent`
+  `collabAgentToolCall` reports it). Each is
   tool-shaped and each would fit this model unchanged, which is the point of
   having one; adding them is its own decision about what belongs in a transcript.
 - **Per-call token cost.** Claude's `task_progress.usage` and

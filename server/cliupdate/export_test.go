@@ -23,7 +23,6 @@ func (s *Service) SetLockDir(dir string) { s.lockDir = dir }
 func (s *Service) SetNotAppliedFor(d time.Duration) { s.notAppliedFor = d }
 
 var (
-	CompareVersions = compareVersions
-	Redact          = redact
-	OutputTail      = outputTail
+	Redact     = redact
+	OutputTail = outputTail
 )

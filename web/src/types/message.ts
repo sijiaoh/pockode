@@ -1,7 +1,7 @@
 import type { AuthCredentialParams } from "@pockode/shared";
-import type { ContentBlock } from "./content";
+import type { ContentBlock, FileBlock } from "./content";
 import type { AgentType } from "./settings";
-import type { WorkType } from "./work";
+import type { WorkStatus, WorkType } from "./work";
 
 export type SessionMode = "default" | "yolo";
 
@@ -68,6 +68,14 @@ export interface SessionListItem {
 	 * incomplete (docs/code/subscription-system.md#which-sessions-belong-to-work).
 	 */
 	work_id?: string;
+	/**
+	 * How many unclosed stories this session watches and would be woken by
+	 * (a session whose own work is not active is woken by none), counted by the
+	 * server — a client holding a paged work list cannot count what it was never
+	 * sent (docs/lifecycle-ui.md §1.2). Absent means none. The third input of
+	 * `sessionActivity`, beside the turn and the work's wait.
+	 */
+	watching?: number;
 	/** The row's subtitle, and what the list is ordered by. */
 	updated_at: string;
 	/**
@@ -86,6 +94,13 @@ export interface SessionListItem {
 	unanswered_questions?: number;
 	/** Absent on a session that was created rather than forked. */
 	forked_from?: ForkOrigin;
+}
+
+/** One story a session watches: enough to list it and open its detail. */
+export interface WatchedStory {
+	id: string;
+	title: string;
+	status: WorkStatus;
 }
 
 /**
@@ -210,6 +225,14 @@ export interface ToolRun {
 	 * no timestamp, so a replayed run gets none and draws no stopwatch.
 	 */
 	seenAt?: Date;
+	/**
+	 * A subagent call's own text and calls, in arrival order — the same shape a
+	 * message's content is. Persisted (each record names its parent), so a
+	 * replayed run has them exactly as the live one did. Absent for every call
+	 * that is not a subagent's, and for a subagent from a transcript recorded
+	 * before records named their parent (docs/tool-call-model.md#a-subagents-own-conversation).
+	 */
+	children?: ContentPart[];
 }
 
 /**
@@ -259,9 +282,51 @@ export interface QuestionRecord {
 	askedAt?: string;
 }
 
+/** One `thinking` record, as a thinking row draws it. */
+export interface Thought {
+	/** Claude's thinking, or Codex's reasoning summary; Markdown. */
+	content: string;
+	/** Codex's raw reasoning, drawn under its own label beside `content`. */
+	fullReasoning: string;
+	redacted: boolean;
+	/** Measured by the server; absent when nothing measured it. */
+	durationMs?: number;
+}
+
 export type ContentPart =
-	| { type: "text"; content: string }
-	| { type: "tool_call"; tool: ToolRun }
+	| {
+			type: "text";
+			content: string;
+			/**
+			 * Set only on a subagent's text that could not be filed under its call
+			 * because the call is not loaded; it then sits flat where it arrived.
+			 * Filed children carry none — where they sit already says whose they are.
+			 */
+			parentToolUseId?: string;
+	  }
+	| {
+			type: "tool_call";
+			tool: ToolRun;
+			/** See the `text` part. */
+			parentToolUseId?: string;
+	  }
+	| {
+			/**
+			 * A run of consecutive `thinking` records, drawn as one row
+			 * (docs/turn-progress-ui.md#11-what-it-is): the engine splitting one
+			 * pause into two blocks is nothing the reader can use. Never empty.
+			 */
+			type: "thinking";
+			/**
+			 * Minted by the reducer, since no record names one: a row's key and
+			 * its open body must survive the parts before it shifting, which a
+			 * history page joining from above does.
+			 */
+			id: string;
+			thoughts: Thought[];
+			/** See the `text` part. */
+			parentToolUseId?: string;
+	  }
 	| { type: "system"; content: string }
 	| {
 			type: "warning";
@@ -280,6 +345,8 @@ export type ContentPart =
 			status: PermissionStatus;
 			/** Only ever set alongside `expired`; see ExpiryReason. */
 			reason?: ExpiryReason;
+			/** Carried over from the unfiled row it took the place of; see `text`. */
+			parentToolUseId?: string;
 	  }
 	| {
 			/**
@@ -306,6 +373,8 @@ export type ContentPart =
 			 * instead of offering a way in.
 			 */
 			legacy?: boolean;
+			/** As on `permission_request`. */
+			parentToolUseId?: string;
 	  }
 	| { type: "raw"; content: string }
 	| { type: "command_output"; content: string };
@@ -393,6 +462,13 @@ export interface UserMessage {
 	 * expanded to. The row is drawn from this; `content` is what the agent read.
 	 */
 	command?: PockodeCommandInvocation;
+	/**
+	 * The files the user sent with the message, each fetched by its
+	 * `attachment_id` through `attachment.get`. On the sender's echo these are
+	 * what the client knew at send time until the reply replaces them with the
+	 * server's description (type and dimensions read from the stored bytes).
+	 */
+	attachments?: FileBlock[];
 }
 
 /**
@@ -428,6 +504,16 @@ export interface AssistantMessage {
 	 * and those two must not be joined back together. Nothing renders it.
 	 */
 	openedAtReadPoint?: true;
+	/**
+	 * This bubble was opened by a permission card no turn was open for — a
+	 * background subagent asking after its turn had ended.
+	 *
+	 * Read by `takeStrayCard` alone: when the subagent's call then takes the
+	 * card along into its Process, a bubble that existed only for the card has
+	 * nothing left in it, and left open and empty it would read as a turn still
+	 * running. Nothing renders it.
+	 */
+	openedByCard?: true;
 }
 
 export type Message = UserMessage | AssistantMessage;
@@ -688,6 +774,11 @@ export interface AuthResult {
 	 */
 	max_upload_size: number;
 	/**
+	 * The same ceiling for chat attachments (`POST /api/chat/attachments`),
+	 * which have one of their own. Absent from servers that predate them.
+	 */
+	max_attachment_size?: number;
+	/**
 	 * What the client stores in place of the password: freshly issued when it
 	 * authenticated with a password, and the very same token it sent when it
 	 * authenticated with one. Never a rotation, so it can be stored
@@ -706,6 +797,19 @@ export interface MessageParams {
 	 * pending — the body is one string, so there is no half of it to deliver.
 	 */
 	answering?: QuestionAnswerParams[];
+	/**
+	 * Files sent with the message, by the ids `POST /api/chat/attachments`
+	 * returned for this session. `content` may be empty when there are any.
+	 * Refused beside `answering`, and refused whole (`-32602`) when an id names
+	 * nothing the session has or the session's agent cannot receive files.
+	 */
+	attachments?: MessageAttachmentParams[];
+}
+
+/** One uploaded file a message carries; `name` is what the user calls it. */
+export interface MessageAttachmentParams {
+	id: string;
+	name?: string;
 }
 
 /**
@@ -731,6 +835,8 @@ export interface MessageResult {
 	 */
 	content?: string;
 	command?: PockodeCommandInvocation;
+	/** The files the message carried, as its record describes them. */
+	attachments?: FileBlock[];
 }
 
 export interface InterruptParams {
@@ -856,6 +962,14 @@ export interface SessionDetail {
 	 * (docs/code/subscription-system.md#which-sessions-belong-to-work).
 	 */
 	work_id?: string;
+	/** `SessionListItem.watching`, here for the reason `work_id` is. */
+	watching?: number;
+	/**
+	 * The stories `watching` counts, for the open session: the chat that says it
+	 * is watching is the surface that lists what. A row is sent the count alone.
+	 * Absent means none.
+	 */
+	watched_stories?: WatchedStory[];
 	/**
 	 * Always present: a session that has spent nothing carries an empty usage,
 	 * not a missing one, which is what "nothing reported yet" is keyed on.
@@ -904,6 +1018,14 @@ export interface SessionTurn {
 	blockers?: TurnBlocker[];
 	/** When the current phase was entered; it does not move while it holds. */
 	since: string;
+	/**
+	 * How long the open turn has run, as of the moment the server sent this;
+	 * absent while `open` is false. A reading rather than a timestamp, so the
+	 * tail line counts on from when it arrived and never compares the server's
+	 * clock with this device's (docs/turn-progress-ui.md §2.3). Unlike `since` it
+	 * does not reset when the turn blocks and resumes.
+	 */
+	open_elapsed_ms?: number;
 	/** How the previous turn ended. Cleared the moment a new one starts, so it
 	 * says nothing while `phase` is not `idle`. */
 	last_outcome?: TurnOutcome;
@@ -1029,6 +1151,8 @@ export type ServerMethod =
 	| "tool_call"
 	| "tool_result"
 	| "tool_activity"
+	| "thinking"
+	| "thinking_delta"
 	| "warning"
 	| "error"
 	| "done"
@@ -1045,7 +1169,17 @@ export type ServerMethod =
 	| "command_output";
 
 export type ServerNotification =
-	| { type: "text"; content: string }
+	| {
+			type: "text";
+			content: string;
+			/**
+			 * The subagent call (Claude's Task / Agent, Codex's spawn) this record
+			 * was produced inside. Absent for the main conversation. May name a
+			 * call that is not loaded or that a fork cut dropped; see
+			 * docs/agent-event.md.
+			 */
+			parent_tool_use_id?: string;
+	  }
 	| {
 			type: "message";
 			content: string;
@@ -1068,6 +1202,10 @@ export type ServerNotification =
 			 * call simply stands alone. See docs/tool-call-model.md.
 			 */
 			origin_tool_use_id?: string;
+			/**
+			 * See the `text` record.
+			 */
+			parent_tool_use_id?: string;
 	  }
 	| {
 			type: "tool_result";
@@ -1090,6 +1228,8 @@ export type ServerNotification =
 			duration_ms?: number;
 			/** Absent for every tool that is not a command that ran. */
 			exit_code?: number;
+			/** See the `text` record. */
+			parent_tool_use_id?: string;
 	  }
 	| {
 			/**
@@ -1101,6 +1241,37 @@ export type ServerNotification =
 			tool_use_id: string;
 			activity?: string;
 			output_delta?: string;
+	  }
+	| {
+			/**
+			 * A finished stretch of the agent's thinking (docs/turn-progress-ui.md).
+			 * Every field may be absent: an engine that shared no text leaves
+			 * `content` out, and a thinking nothing measured leaves out
+			 * `duration_ms`.
+			 */
+			type: "thinking";
+			/** Claude's thinking, or Codex's reasoning summary; Markdown. */
+			content?: string;
+			/** Codex's raw reasoning, shown under its own label when present. */
+			full_reasoning?: string;
+			/** The model provider withheld the text; `content` is then absent. */
+			redacted?: boolean;
+			/** Measured by the server while it happened. */
+			duration_ms?: number;
+			/** See the `text` record. */
+			parent_tool_use_id?: string;
+	  }
+	| {
+			/**
+			 * The main agent is thinking now. Never persisted, like
+			 * `tool_activity`, and never a subagent's. Ends with the next
+			 * `thinking` record or with the turn. Both deltas absent is the signal
+			 * alone (Claude); otherwise they accumulate into the coming record's
+			 * `content` and `full_reasoning`, separators included.
+			 */
+			type: "thinking_delta";
+			content_delta?: string;
+			full_reasoning_delta?: string;
 	  }
 	| {
 			type: "warning";

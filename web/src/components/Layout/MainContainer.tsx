@@ -14,7 +14,18 @@ interface Props {
 	 */
 	onOpenSidebar?: () => void;
 	onOpenSettings?: () => void;
+	/**
+	 * What the header is about, in words. Handed to a custom `HeaderContent` and,
+	 * when there is no `heading`, drawn here.
+	 */
 	title?: string;
+	/**
+	 * Replaces the default title with a control of the caller's own, which then
+	 * owns the `h1` and the `TitleComponent` inside it as well. It is given the
+	 * room between the menu and the status, since a heading that does something
+	 * has to be large enough to press.
+	 */
+	heading?: React.ReactNode;
 }
 
 function MainContainer({
@@ -22,6 +33,7 @@ function MainContainer({
 	onOpenSidebar,
 	onOpenSettings,
 	title = "Pockode",
+	heading,
 }: Props) {
 	const { HeaderContent, TitleComponent } = useHeaderUIConfig();
 
@@ -33,6 +45,7 @@ function MainContainer({
 					onOpenSidebar={onOpenSidebar}
 					onOpenSettings={onOpenSettings}
 					title={title}
+					heading={heading}
 				/>
 				{children}
 			</div>
@@ -42,22 +55,20 @@ function MainContainer({
 	return (
 		<div className="flex min-w-0 flex-1 flex-col overflow-hidden bg-th-bg-primary">
 			<header className="flex h-11 shrink-0 items-center justify-between border-b border-th-border px-3 sm:h-12 sm:px-4">
-				<div className="flex min-w-0 items-center gap-2">
+				<div className="flex min-w-0 flex-1 items-center gap-2">
 					{onOpenSidebar && (
 						<button
 							type="button"
 							onClick={onOpenSidebar}
-							className={`-ml-2 ${headerButtonClass}`}
+							className={`-ml-2 shrink-0 ${headerButtonClass}`}
 							aria-label="Open menu"
 						>
 							<Menu className="h-5 w-5" aria-hidden="true" />
 						</button>
 					)}
-					{TitleComponent ? (
-						<TitleComponent title={title} />
-					) : (
-						<h1 className="truncate text-base font-bold text-th-text-primary sm:text-lg">
-							{title}
+					{heading ?? (
+						<h1 className="min-w-0 truncate text-base font-bold text-th-text-primary sm:text-lg">
+							{TitleComponent ? <TitleComponent title={title} /> : title}
 						</h1>
 					)}
 				</div>

@@ -166,8 +166,6 @@ body {
 	/* Special - Chat bubbles */
 	--color-th-user-bubble: var(--th-user-bubble);
 	--color-th-user-bubble-text: var(--th-user-bubble-text);
-	--color-th-ai-bubble: var(--th-ai-bubble);
-	--color-th-ai-bubble-text: var(--th-ai-bubble-text);
 }
 
 /* =============================================================================
@@ -243,8 +241,6 @@ samp {
 	/* Chat bubbles */
 	--th-user-bubble: #0b7a70;
 	--th-user-bubble-text: #ffffff;
-	--th-ai-bubble: #e6eef2;
-	--th-ai-bubble-text: #0c1829;
 }
 
 .dark.theme-abyss {
@@ -284,8 +280,6 @@ samp {
 	/* Chat bubbles */
 	--th-user-bubble: #0f766e;
 	--th-user-bubble-text: #ccfbf1;
-	--th-ai-bubble: #1a2840;
-	--th-ai-bubble-text: #e8f0f5;
 }
 
 /* =============================================================================
@@ -335,8 +329,6 @@ samp {
 	/* Chat bubbles */
 	--th-user-bubble: #9333ea;
 	--th-user-bubble-text: #ffffff;
-	--th-ai-bubble: #ebe4f2;
-	--th-ai-bubble-text: #1e1228;
 }
 
 .dark.theme-aurora {
@@ -376,8 +368,6 @@ samp {
 	/* Chat bubbles */
 	--th-user-bubble: #7c3aed;
 	--th-user-bubble-text: #f3e8ff;
-	--th-ai-bubble: #2d1a48;
-	--th-ai-bubble-text: #f3e8ff;
 }
 
 /* =============================================================================
@@ -427,8 +417,6 @@ samp {
 	/* Chat bubbles */
 	--th-user-bubble: #c2410c;
 	--th-user-bubble-text: #ffffff;
-	--th-ai-bubble: #f5efe8;
-	--th-ai-bubble-text: #27201c;
 }
 
 .dark.theme-ember {
@@ -468,8 +456,6 @@ samp {
 	/* Chat bubbles */
 	--th-user-bubble: #c2410c;
 	--th-user-bubble-text: #fff7ed;
-	--th-ai-bubble: #382a24;
-	--th-ai-bubble-text: #f8f0e8;
 }
 
 /* =============================================================================
@@ -519,8 +505,6 @@ samp {
 	/* Chat bubbles */
 	--th-user-bubble: #077691;
 	--th-user-bubble-text: #ffffff;
-	--th-ai-bubble: #ddf0e5;
-	--th-ai-bubble-text: #0a2018;
 }
 
 .dark.theme-mint {
@@ -560,8 +544,6 @@ samp {
 	/* Chat bubbles */
 	--th-user-bubble: #0e7490;
 	--th-user-bubble-text: #ecfeff;
-	--th-ai-bubble: #1a3328;
-	--th-ai-bubble-text: #e8f8f0;
 }
 
 /* =============================================================================
@@ -611,8 +593,6 @@ samp {
 	/* Chat bubbles */
 	--th-user-bubble: #18181b;
 	--th-user-bubble-text: #fafafa;
-	--th-ai-bubble: #ececec;
-	--th-ai-bubble-text: #09090b;
 }
 
 .dark.theme-void {
@@ -652,8 +632,6 @@ samp {
 	/* Chat bubbles */
 	--th-user-bubble: #27272a;
 	--th-user-bubble-text: #fafafa;
-	--th-ai-bubble: #1c1c1f;
-	--th-ai-bubble-text: #fafafa;
 }
 
 /* =============================================================================
@@ -756,6 +734,44 @@ samp {
 	.diff-tailwindcss-wrapper .sticky {
 		/* biome-ignore lint/complexity/noImportantStyles: Override library's inline sticky positioning */
 		position: static !important;
+	}
+
+	/*
+	 * One narrow line-number column instead of the library's two: an old and a
+	 * new number side by side took about a third of a phone's width. Each row
+	 * keeps the number of the side it is on — a removed line its old number,
+	 * every other its new one — and the +/- in front of the code says which.
+	 *
+	 * The library writes the column's width inline as twice
+	 * --diff-aside-width-- (its measure of the widest number, at least 40px),
+	 * so one of them is the narrow column, and only !important reaches it.
+	 * Every selector goes through .diff-style-root because the library's own
+	 * utilities are `.diff-tailwindcss-wrapper .pl-[10px]` and the like: a tie
+	 * would leave the result to whichever stylesheet happened to load last.
+	 */
+	.diff-tailwindcss-wrapper .diff-style-root .diff-line-num,
+	.diff-tailwindcss-wrapper .diff-style-root .diff-line-hunk-action {
+		/* biome-ignore lint/complexity/noImportantStyles: Override library's inline width */
+		width: var(--diff-aside-width--) !important;
+		/* biome-ignore lint/complexity/noImportantStyles: Override library's inline width */
+		min-width: var(--diff-aside-width--) !important;
+		/* biome-ignore lint/complexity/noImportantStyles: Override library's inline width */
+		max-width: var(--diff-aside-width--) !important;
+		padding-inline: 4px;
+	}
+
+	/* An added line's empty old slot, a removed line's empty new slot, the gap
+	   between them — and on a context line, the old number. */
+	.diff-tailwindcss-wrapper .diff-style-root .diff-line-num span:empty,
+	.diff-tailwindcss-wrapper
+		.diff-style-root
+		.diff-line-num
+		[data-line-old-num]:has(~ [data-line-new-num]) {
+		display: none;
+	}
+
+	.diff-tailwindcss-wrapper .diff-style-root .diff-line-num span {
+		width: 100%;
 	}
 }
 
@@ -883,15 +899,68 @@ samp {
 /* react-shiki hands back shiki's own <pre class="shiki">, so once highlighting
  * lands there is a second <pre> nested inside .code-block. `32e9811` moved "the
  * parent container scrolls, not the library's own box" off `.shiki` and onto
- * `.code-block`, and reset the inner pre's font-size through `prose-pre:*` — but
- * margin and overflow were left behind, and the inner pre is in .prose, so
- * typography's `pre { margin: 1.667em 0; overflow-x: auto }` still reaches it.
- * The margin is the expensive half: every code block grew ~40px the instant it
- * was highlighted, against the 50px that counts as the end of the transcript
- * (`useTranscriptScroll`). */
+ * `.code-block` — but margin and overflow were left behind, and a <pre> keeps a
+ * margin of its own (the browser's 1em, or Typography's 1.667em where a block is
+ * still in .prose). The margin is the expensive half: every code block grew
+ * ~40px the instant it was highlighted, against the 50px that counts as the end
+ * of the transcript (`useTranscriptScroll`). */
 .code-block pre {
 	margin: 0;
 	overflow: visible;
+}
+
+/* Shiki's own <pre> and <code> inside are told to wrap too, or they keep the
+ * line whole and the wrap on the outer box does nothing. */
+.code-block--wrap {
+	min-width: 0;
+}
+
+/* A corner copy button is absolute over the top-right corner, so a wrapped first
+ * line would run underneath it; the right padding is the button's width. */
+.code-block--corner {
+	padding-right: 2.25rem;
+}
+
+.code-block--wrap,
+.code-block--wrap pre,
+.code-block--wrap code {
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+}
+
+/* A wrapped block breaks only between words: each word is held together
+ * (`wordWrapTransformer` in lib/shikiUtils.tsx) and moves to the next line
+ * whole, and only a word wider than the line breaks inside itself — the
+ * inline-block is then exactly the line's width. Each line is a block whose
+ * continuation is indented 2ch past the line's own indent (`--hang`, set per
+ * line), so a wrapped line reads as the rest of its line rather than a line of
+ * its own — or, in indented JSON, a shallower key. */
+.code-block--wrap .line {
+	display: block;
+	min-height: 1lh;
+	padding-left: var(--hang, 2ch);
+	text-indent: calc(-1 * var(--hang, 2ch));
+}
+
+.code-block--wrap .code-word {
+	display: inline-block;
+	max-width: 100%;
+	text-indent: 0;
+}
+
+/* In a tool call's body a code block draws no box of its own: the body is
+ * already a panel, and the box's padding only set a command 16px in from the
+ * label above it and the output beside it, with 12px of air above and below
+ * that made the gap between two blocks twice the one the body asks for. The
+ * background goes with the padding, because not every body is
+ * `--th-bg-secondary` (= `--th-code-bg`): a pending permission card's is
+ * tinted, and there a padless box would leave the command against its edges.
+ * A Markdown code block keeps its box: it has a header bar to sit under. A
+ * corner copy button would sit over the first line without its padding, so a
+ * block in a section carries its copy button in the section's header. */
+.tool-section .code-block:not(.markdown-code *) {
+	padding: 0;
+	background: transparent;
 }
 
 /* =============================================================================
@@ -946,6 +1015,115 @@ samp {
 }
 
 /* =============================================================================
+ * MARKDOWN IN A MESSAGE
+ *
+ * Typography's `prose-sm` is set for an article: a 20px h2 over 14px body, 16px
+ * between paragraphs, 2em around a table. In a conversation on a phone that is
+ * a reply mostly made of headings and gaps, so `prose-message` keeps the body
+ * and brings the rest in. Unlayered for the reason `prose-inherit-color` is —
+ * which also means every Typography rule these restate a margin over (the
+ * first/last-child reset, `h2 + *`) has to be restated here too.
+ * ============================================================================= */
+
+/* The blocks `MarkdownContent` draws itself — a code block, a table's scroll
+ * box, a diagram — are divs Typography does not space, so they are spaced
+ * here, in em so a note's blocks shrink with its text. */
+.markdown-block {
+	margin-top: 0.75em;
+	margin-bottom: 0.75em;
+}
+
+.markdown-block:first-child {
+	margin-top: 0;
+}
+
+.markdown-block:last-child {
+	margin-bottom: 0;
+}
+
+/* The scroll box carries the table's margin; one on the table inside it would
+ * be scrolled content, not space. */
+.markdown-block > table {
+	margin: 0;
+}
+
+/* Inline code breaks anywhere as a last resort, and `anywhere` also tells the
+ * table that a token can be one character wide — so its column is never sized
+ * for it and the token is cut mid-word. In a cell the table scrolls instead:
+ * `break-word` keeps the token's width as the column's floor. */
+.markdown-block :where(td, th) > code {
+	overflow-wrap: break-word;
+}
+
+/* The header bar shares the code's ground, so the box is one block with a
+ * rule across it rather than a bar stacked on a card. */
+.markdown-code {
+	border-radius: 0.375rem;
+	background-color: var(--th-code-bg);
+}
+
+.markdown-code .code-block {
+	border-radius: 0;
+}
+
+.prose-message :where(p, ul, ol, blockquote) {
+	margin-top: 0.75em;
+	margin-bottom: 0.75em;
+}
+
+.prose-message :where(li) :where(ul, ol) {
+	margin-top: 0.25em;
+	margin-bottom: 0.25em;
+}
+
+.prose-message :where(h1, h2, h3, h4, h5, h6) {
+	margin-top: 1.25em;
+	margin-bottom: 0.5em;
+	line-height: 1.4;
+}
+
+.prose-message :where(h1) {
+	font-size: 1.25em;
+}
+
+.prose-message :where(h2) {
+	font-size: 1.125em;
+}
+
+.prose-message :where(h3, h4, h5, h6) {
+	font-size: 1em;
+}
+
+.prose-message :where(h1, h2, h3, h4, h5, h6) + * {
+	margin-top: 0;
+}
+
+.prose-message :where(hr) {
+	margin-top: 1.25em;
+	margin-bottom: 1.25em;
+}
+
+.prose-message :where(th, td) {
+	padding: 0.375em 0.75em;
+}
+
+.prose-message :where(th, td):first-child {
+	padding-inline-start: 0;
+}
+
+.prose-message :where(th, td):last-child {
+	padding-inline-end: 0;
+}
+
+.prose-message > :first-child {
+	margin-top: 0;
+}
+
+.prose-message > :last-child {
+	margin-bottom: 0;
+}
+
+/* =============================================================================
  * MARKDOWN THAT BORROWS ITS COLOUR
  *
  * Typography sets a body colour on `.prose` itself, so a surface that paints
@@ -969,6 +1147,50 @@ samp {
 	--tw-prose-counters: currentColor;
 	--tw-prose-bullets: currentColor;
 	--tw-prose-quotes: currentColor;
+}
+
+/* =============================================================================
+ * MARKDOWN AS A NOTE
+ *
+ * A subagent's text inside its Process (docs/tool-call-ui.md#telling-the-
+ * subagents-words-from-the-main-agents): the row's `text-xs`, secondary colour,
+ * tight margins. Unlayered for the reason `prose-inherit-color` is — `.prose`
+ * sets its own size and colour variables in the utilities layer, where a
+ * utility of equal weight would win or lose by Tailwind's source order — which
+ * also means the first/last-child margin reset has to be restated here, since
+ * these rules outrank Typography's. */
+.prose-note {
+	--tw-prose-body: var(--th-text-secondary);
+	--tw-prose-headings: var(--th-text-secondary);
+	--tw-prose-bold: var(--th-text-secondary);
+	--tw-prose-counters: var(--th-text-secondary);
+	--tw-prose-bullets: var(--th-text-secondary);
+	--tw-prose-quotes: var(--th-text-secondary);
+	font-size: 0.75rem;
+	line-height: 1.5;
+}
+
+/* No code block or table: their margins are `.markdown-block`'s, already in em. */
+.prose-note :where(p, ul, ol, blockquote, h1, h2, h3, h4, h5, h6) {
+	margin-top: 0.5em;
+	margin-bottom: 0.5em;
+}
+
+.prose-note :where(h1, h2, h3, h4, h5, h6) {
+	font-size: 1em;
+}
+
+.prose-note :where(li) {
+	margin-top: 0.125em;
+	margin-bottom: 0.125em;
+}
+
+.prose-note > :first-child {
+	margin-top: 0;
+}
+
+.prose-note > :last-child {
+	margin-bottom: 0;
 }
 
 /* =============================================================================
@@ -1014,8 +1236,10 @@ samp {
 	transition: box-shadow 300ms ease-out;
 }
 
+/* Inset: the card is a row in a list that clips whatever is drawn outside its
+ * rows. A pending card's body has no fill of its own, so nothing covers it. */
 .jump-highlight {
-	box-shadow: 0 0 0 2px var(--th-warning);
+	box-shadow: inset 0 0 0 2px var(--th-warning);
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -1050,6 +1274,38 @@ samp {
 
 @media (prefers-reduced-motion: reduce) {
 	.animate-message-menu-in {
+		animation: none;
+	}
+}
+
+/* =============================================================================
+ * STOP ARMING
+ *
+ * Stop takes the composer's action slot the moment a send opens a turn, and
+ * holds still for `ARM_MS` (Chat/SendStopSlot.tsx) before it can be pressed;
+ * the attention strip's Deny and Allow do the same for each new permission
+ * request. The fade spans that same wait, so a button that is not yet live
+ * does not look live; the element sets the duration from the constant, so the
+ * one here is only a fallback. Mounted rather than revealed, hence an animation
+ * and only a `from`, for the reasons the message menu trigger above gives.
+ *
+ * Reduced motion drops the fade, not the wait: the wait is what keeps a double
+ * tap from interrupting the turn it just started, or approving a request
+ * nobody read.
+ * ============================================================================= */
+
+@theme {
+	--animate-stop-arm: stop-arm 500ms ease-in;
+
+	@keyframes stop-arm {
+		from {
+			opacity: 0;
+		}
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.animate-stop-arm {
 		animation: none;
 	}
 }

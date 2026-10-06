@@ -9,10 +9,13 @@ import {
 	SquareSlash,
 	X,
 } from "lucide-react";
-import { memo, useMemo, useState } from "react";
+import { memo, useId, useMemo, useState } from "react";
+import { proposedChange, proposedChangeText } from "../../lib/proposedChange";
 import { useChatUIConfig } from "../../lib/registries/chatUIRegistry";
+import { CodeHighlighter } from "../../lib/shikiUtils";
 import { isTaskTool, toolSummary } from "../../lib/toolSummary";
 import { useWSStore } from "../../lib/wsStore";
+import type { FileBlock } from "../../types/content";
 import type {
 	ContentPart,
 	ExpiryReason,
@@ -27,24 +30,35 @@ import type {
 	SystemMessageMeta,
 } from "../../types/message";
 import type { AgentType } from "../../types/settings";
+import { HIGHLIGHT_LIMIT } from "../../utils/fileView";
 import { forkUnavailableReason } from "../../utils/forkAnchor";
 import { hasMessageActions } from "../../utils/messageActions";
+import { formatFilePath } from "../../utils/path";
 import { workEventSubject, workEventWording } from "../../utils/systemMessage";
 import {
 	CollapsibleBody,
 	MarkdownContent,
 	ScrollableContent,
-	Spinner,
 	useEverExpanded,
 } from "../ui";
+import AttachmentStrip from "./AttachmentStrip";
 import AuthFailureNotice from "./AuthFailureNotice";
+import MessageActions from "./MessageActions";
 import MessageMenuTrigger, { type ForkBlocked } from "./MessageMenuTrigger";
+import { ProposedChange, proposedChangeHeader } from "./ProposedChange";
 import QuestionRecordItem from "./QuestionRecordItem";
+import { useRowExpanded } from "./rowExpansionContext";
 import { anchorCandidateProps } from "./scrollAnchor";
 import TaskItem from "./TaskItem";
+import ThinkingItem from "./ThinkingItem";
 import ToolCallItem from "./ToolCallItem";
-import { Section } from "./ToolOutcomeSections";
+import { invocationView, ToolInvocation } from "./ToolInvocation";
+import { PartBlocks } from "./ToolList";
 import { ToolRow } from "./ToolRow";
+import { Section } from "./ToolSection";
+import { TurnChangesCard } from "./TurnChangesCard";
+import TurnTail from "./TurnTail";
+import { keepClearProps } from "./useTranscriptScroll";
 
 interface SystemItemProps {
 	content: string;
@@ -249,20 +263,9 @@ interface PermissionRequestItemProps {
 	reason?: ExpiryReason;
 	isCodex?: boolean;
 	onRespond?: (request: PermissionRequest, choice: PermissionChoice) => void;
+	onOpenFile?: (path: string) => void;
 	/** Why the last attempt to answer failed. */
 	error?: string;
-}
-
-/** Extract plan content from ExitPlanMode input */
-function extractPlanContent(toolInput: unknown): string | null {
-	if (!toolInput || typeof toolInput !== "object") {
-		return null;
-	}
-	const input = toolInput as { plan?: unknown };
-	if (typeof input.plan === "string") {
-		return input.plan;
-	}
-	return null;
 }
 
 /**
@@ -319,12 +322,194 @@ function getDestinationLabel(destination: PermissionUpdateDestination): string {
 	}
 }
 
-/** Type guard for PermissionUpdate with rules */
-function hasRules(
-	update: PermissionUpdate,
-): update is PermissionUpdate & { rules: PermissionRuleValue[] } {
-	return "rules" in update;
+type PermissionMode = Extract<PermissionUpdate, { type: "setMode" }>["mode"];
+
+/** Claude's permission modes, as the one line that names them reads them. */
+function getModeLabel(mode: PermissionMode): string {
+	switch (mode) {
+		case "default":
+			return "Default";
+		case "acceptEdits":
+			return "Accept edits";
+		case "bypassPermissions":
+			return "Bypass permissions";
+		case "plan":
+			return "Plan";
+	}
 }
+
+/**
+ * The input as it arrived, folded away under the reading of it above.
+ *
+ * Kept because the reading is a reading: a key no branch draws is still part
+ * of what is being approved. A folded `Section` mounts nothing until the first
+ * open, so the serialization below is paid for only by someone who asked — or
+ * who copies it, which is why the header copies through a function.
+ */
+function RawInput({ input }: { input: unknown }) {
+	return (
+		<Section
+			label="Raw input"
+			copyText={() => formatInput(input)}
+			collapsible={{ defaultOpen: false }}
+		>
+			<RawInputBody input={input} />
+		</Section>
+	);
+}
+
+function RawInputBody({ input }: { input: unknown }) {
+	const json = useMemo(() => formatInput(input), [input]);
+	return (
+		<CodeHighlighter
+			language="json"
+			wrap
+			copyable={false}
+			plain={json.length > HIGHLIGHT_LIMIT}
+		>
+			{json}
+		</CodeHighlighter>
+	);
+}
+
+function RuleChips({ items }: { items: string[] }) {
+	return (
+		<span className="inline-flex flex-wrap gap-1 align-middle">
+			{items.map((item, idx) => (
+				<code
+					// biome-ignore lint/suspicious/noArrayIndexKey: a request's suggestions never change
+					key={idx}
+					className="rounded bg-th-bg-tertiary px-1 py-0.5 font-mono text-th-text-primary"
+				>
+					{item}
+				</code>
+			))}
+		</span>
+	);
+}
+
+/**
+ * One sentence of what pressing Always Allow writes.
+ *
+ * Every suggestion, not the first: the server answers with the whole list
+ * (`UpdatedPermissions = PermissionSuggestions`), so a card naming fewer would
+ * be agreeing to more than it says.
+ */
+function SuggestionLine({ update }: { update: PermissionUpdate }) {
+	const dest = getDestinationLabel(update.destination);
+	const workDir = useWSStore((state) => state.workDir);
+
+	switch (update.type) {
+		case "addRules":
+			return (
+				<>
+					adds to {dest}:{" "}
+					<RuleChips items={update.rules.map(formatPermissionRule)} />
+				</>
+			);
+		case "replaceRules":
+			return (
+				<>
+					replaces the rules in {dest} with:{" "}
+					<RuleChips items={update.rules.map(formatPermissionRule)} />
+				</>
+			);
+		case "removeRules":
+			return (
+				<>
+					removes from {dest}:{" "}
+					<RuleChips items={update.rules.map(formatPermissionRule)} />
+				</>
+			);
+		case "setMode":
+			// The mode is the weight of the sentence — bypassing permissions is the
+			// heaviest thing any suggestion can do — so it is not left muted.
+			return (
+				<>
+					switches {dest} to{" "}
+					<span className="font-medium text-th-text-primary">
+						{getModeLabel(update.mode)}
+					</span>{" "}
+					mode.
+				</>
+			);
+		case "addDirectories":
+			return (
+				<>
+					lets {dest} access:{" "}
+					<RuleChips
+						items={update.directories.map((dir) =>
+							formatFilePath(dir, workDir),
+						)}
+					/>
+				</>
+			);
+		case "removeDirectories":
+			return (
+				<>
+					removes access to:{" "}
+					<RuleChips
+						items={update.directories.map((dir) =>
+							formatFilePath(dir, workDir),
+						)}
+					/>
+				</>
+			);
+	}
+}
+
+/**
+ * What Always Allow does, said directly above the button that does it.
+ *
+ * Outside the scrolling body on purpose: a long command used to scroll this
+ * explanation out of sight while the button stayed in view.
+ */
+function AlwaysAllowEffect({
+	id,
+	suggestions,
+	isCodex,
+}: {
+	/** Described-by target of the Always Allow button. */
+	id: string;
+	suggestions: PermissionUpdate[];
+	isCodex?: boolean;
+}) {
+	const label = (
+		<span className="font-medium text-th-text-primary">Always Allow</span>
+	);
+
+	// Codex has no rules to show: its "always" is `acceptForSession`.
+	if (suggestions.length === 0) {
+		if (!isCodex) return null;
+		return (
+			<p id={id} className="px-2 pt-2 text-th-text-muted">
+				{label} stops Codex asking about requests like this until the session
+				ends.
+			</p>
+		);
+	}
+
+	return (
+		<div id={id} className="space-y-1 px-2 pt-2 text-th-text-muted">
+			{suggestions.map((update, idx) => (
+				// biome-ignore lint/suspicious/noArrayIndexKey: a request's suggestions never change
+				<p key={idx}>
+					{label} <SuggestionLine update={update} />
+				</p>
+			))}
+		</div>
+	);
+}
+
+// A decision, not a caption: the one place in this `text-xs` card that steps
+// up to `text-sm`. The card is a container that can grow, so the box itself
+// grows to the floor rather than borrowing a `touch-target` overlay.
+// One line at any width: the secondary buttons take their label's width and
+// Allow, the primary, takes what is left — a label wrapped at 360px made one
+// button two lines tall beside two that are one.
+const PERMISSION_BUTTON =
+	"min-h-9 whitespace-nowrap rounded-md px-3 text-sm font-medium pointer-coarse:min-h-11 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-th-accent";
+const PERMISSION_SECONDARY = `${PERMISSION_BUTTON} flex-none border border-th-border bg-th-bg-primary text-th-text-primary hover:bg-th-overlay-hover`;
 
 // What an expired permission request says, per reason. Every one of them states
 // the same outcome — the tool did not run — because a permission that is not
@@ -356,6 +541,7 @@ function PermissionRequestItem({
 	reason,
 	isCodex,
 	onRespond,
+	onOpenFile,
 	error,
 }: PermissionRequestItemProps) {
 	const isPending = status === "pending";
@@ -363,32 +549,16 @@ function PermissionRequestItem({
 	// The same derivation the tool row uses: a user who approved a command and
 	// then reads the row that ran it is looking at one string, cut one way.
 	const summary = toolSummary(request.toolName, request.toolInput, workDir);
-	const isExitPlanMode = request.toolName === "ExitPlanMode";
-	const planContent = isExitPlanMode
-		? extractPlanContent(request.toolInput)
-		: null;
-	const hasToolInput = !planContent && !isEmptyInput(request.toolInput);
-	const permissionSuggestion =
-		isPending &&
-		request.permissionSuggestions &&
-		request.permissionSuggestions.length > 0 &&
-		hasRules(request.permissionSuggestions[0])
-			? request.permissionSuggestions[0]
-			: null;
+	const hasToolInput = !isEmptyInput(request.toolInput);
+	const suggestions = request.permissionSuggestions ?? [];
+	const offersAlwaysAllow = isCodex || suggestions.length > 0;
+	const alwaysAllowEffectId = useId();
 	// The expired banner lives in the body, so a request with nothing else to
 	// show still has to be openable — otherwise the one thing the card has left
 	// to say is unreachable.
-	const hasExpandableContent = Boolean(
-		planContent || hasToolInput || permissionSuggestion || status === "expired",
-	);
-	const [expanded, setExpanded] = useState(isPending && hasExpandableContent);
-	const everExpanded = useEverExpanded(expanded);
-	// Whether there is an input to show is a cheap question; serializing it is
-	// not, and a denied request whose strip stays shut never needs the answer.
-	const toolInputContent = useMemo(
-		() =>
-			everExpanded && hasToolInput ? formatInput(request.toolInput) : null,
-		[everExpanded, hasToolInput, request.toolInput],
+	const hasExpandableContent = hasToolInput || status === "expired";
+	const [expanded, setExpanded] = useRowExpanded(
+		isPending && hasExpandableContent,
 	);
 
 	const statusConfig = {
@@ -409,7 +579,13 @@ function PermissionRequestItem({
 		// and is gone.
 		<div
 			data-permission-request-id={request.requestId}
-			className={`scroll-mt-14 rounded text-xs ${isPending ? "border border-th-warning bg-th-warning/10" : "bg-th-bg-secondary"}`}
+			//
+			// A pending card is the one row in a list that is still a card: tinted,
+			// and framed by an outline drawn inside its own edge. An outline rather
+			// than a border, so the frame does not shift the row against its
+			// neighbours; and rather than an inset ring, because an outline is
+			// painted over the children, so the row's hover cannot cover it.
+			className={`scroll-mt-14 text-xs ${isPending ? "bg-th-warning/10 outline-1 -outline-offset-1 outline-th-warning" : ""}`}
 		>
 			<ToolRow
 				expanded={expanded}
@@ -429,42 +605,26 @@ function PermissionRequestItem({
 			/>
 
 			<CollapsibleBody expanded={expanded}>
-				<ScrollableContent className="max-h-[60vh] overflow-auto border-t border-th-border p-2">
+				{/* A settled card's body is an opened drawer like a tool row's; a
+				    pending one keeps the card's tint, being what the card asks
+				    about. */}
+				<div
+					className={`space-y-3 border-t border-th-border p-2 ${isPending ? "" : "bg-th-bg-secondary"}`}
+				>
 					{/* An expired permission can only have been a denial, and the card
 					    states that outcome rather than offering anything to press: the
 					    two expired cards are told apart by their affordances, not their
 					    chrome (docs/lifecycle-ui.md §5.2). */}
 					{status === "expired" && (
-						<div className="mb-2 rounded bg-th-bg-tertiary px-2 py-1.5 text-th-text-muted">
+						<div className="rounded bg-th-bg-tertiary px-2 py-1.5 text-th-text-muted">
 							{(reason && PERMISSION_EXPIRY_COPY[reason]) ??
 								PERMISSION_EXPIRY_FALLBACK}
 						</div>
 					)}
-					{planContent && <MarkdownContent content={planContent} />}
-					{toolInputContent && (
-						<pre className="overflow-x-auto rounded bg-th-code-bg p-2 text-th-code-text">
-							{toolInputContent}
-						</pre>
+					{hasToolInput && (
+						<PermissionRequestBody request={request} onOpenFile={onOpenFile} />
 					)}
-					{permissionSuggestion && (
-						<div className="mt-2 rounded bg-th-bg-primary/50 p-2">
-							<p className="mb-1 text-th-text-muted">
-								"Always Allow" will add to{" "}
-								{getDestinationLabel(permissionSuggestion.destination)}:
-							</p>
-							<div className="flex flex-wrap gap-1">
-								{permissionSuggestion.rules.map((rule, idx) => (
-									<code
-										key={`${rule.toolName}-${idx}`}
-										className="rounded bg-th-success/20 px-1 py-0.5 text-th-success"
-									>
-										{formatPermissionRule(rule)}
-									</code>
-								))}
-							</div>
-						</div>
-					)}
-				</ScrollableContent>
+				</div>
 			</CollapsibleBody>
 
 			{/* Outside the button row on purpose. A refusal often takes the buttons
@@ -480,35 +640,104 @@ function PermissionRequestItem({
 			)}
 
 			{isPending && onRespond && (
-				<div className="flex justify-end gap-2 border-t border-th-border p-2">
-					<button
-						type="button"
-						onClick={() => onRespond(request, "deny")}
-						className="rounded bg-th-bg-secondary px-2 py-1 text-th-text-muted hover:bg-th-overlay-hover"
-					>
-						Deny
-					</button>
-					{(isCodex ||
-						(request.permissionSuggestions &&
-							request.permissionSuggestions.length > 0)) && (
+				<div className="border-t border-th-border">
+					{offersAlwaysAllow && (
+						<AlwaysAllowEffect
+							id={alwaysAllowEffectId}
+							suggestions={suggestions}
+							isCodex={isCodex}
+						/>
+					)}
+					{/* Allow keeps the right-hand end whether or not Always Allow is
+					    offered: the thumb's side, and the side Send sits on below. No
+					    Enter or Escape shortcut — Escape already interrupts the turn
+					    (docs/answering-ui.md#who-owns-escape), and a stray key on a
+					    prompt that runs arbitrary commands costs too much. */}
+					<div className="flex gap-2 p-2" {...keepClearProps}>
 						<button
 							type="button"
-							onClick={() => onRespond(request, "always_allow")}
-							className="rounded bg-th-success/20 px-2 py-1 text-th-success hover:bg-th-success/30"
+							onClick={() => onRespond(request, "deny")}
+							className={PERMISSION_SECONDARY}
 						>
-							Always Allow
+							Deny
 						</button>
-					)}
-					<button
-						type="button"
-						onClick={() => onRespond(request, "allow")}
-						className="rounded bg-th-accent px-2 py-1 text-th-accent-text hover:opacity-90"
-					>
-						Allow
-					</button>
+						{offersAlwaysAllow && (
+							<button
+								type="button"
+								onClick={() => onRespond(request, "always_allow")}
+								// The sentence above is the button's consequence; a screen
+								// reader landing on the button should hear it too.
+								aria-describedby={alwaysAllowEffectId}
+								className={PERMISSION_SECONDARY}
+							>
+								Always Allow
+							</button>
+						)}
+						<button
+							type="button"
+							onClick={() => onRespond(request, "allow")}
+							className={`${PERMISSION_BUTTON} flex-1 bg-th-accent text-th-accent-text hover:opacity-90`}
+						>
+							Allow
+						</button>
+					</div>
 				</div>
 			)}
 		</div>
+	);
+}
+
+/**
+ * The same reading of the input the tool row gives once the call has run, so
+ * what was approved and what ran are one text: the invocation, then — for a
+ * file tool — the change it will make, then the input as it arrived.
+ */
+function PermissionRequestBody({
+	request,
+	onOpenFile,
+}: {
+	request: PermissionRequest;
+	onOpenFile?: (path: string) => void;
+}) {
+	const view = useMemo(
+		() => invocationView(request.toolName, request.toolInput),
+		[request.toolName, request.toolInput],
+	);
+	const change = proposedChange(request.toolName, request.toolInput);
+	// Counting reads the whole diff; `change` is the same object every render.
+	const changeHeader = useMemo(() => proposedChangeHeader(change), [change]);
+	// Where the body already is the input — the JSON fallback or its fields, a
+	// string input, a plan that is the input's only key — the raw input would
+	// say it twice. A plan with anything beside it keeps it: whatever else the
+	// plan asks for is being approved with it.
+	const showRaw =
+		view.kind !== "json" &&
+		view.kind !== "params" &&
+		typeof request.toolInput !== "string" &&
+		!(
+			view.kind === "plan" &&
+			Object.keys(request.toolInput as object).length === 1
+		);
+
+	return (
+		<>
+			<ToolInvocation
+				toolName={request.toolName}
+				input={request.toolInput}
+				onOpenFile={onOpenFile}
+			/>
+			{change && (
+				<Section
+					label="Proposed change"
+					{...changeHeader}
+					copyText={proposedChangeText(change)}
+					fullScreenTitle="Proposed change"
+				>
+					<ProposedChange change={change} />
+				</Section>
+			)}
+			{showRaw && <RawInput input={request.toolInput} />}
+		</>
 	);
 }
 
@@ -529,6 +758,12 @@ interface ContentPartItemProps {
 	onAnswerQuestion?: (requestId: string) => void;
 	/** The failed answer, by request id; see `PromptError`. */
 	promptError?: PromptError;
+	/**
+	 * How many subagent Processes this part sits inside; 0 in the bubble
+	 * itself. Everything is drawn as it would be at the top, except text: a
+	 * subagent's words are a note, not a message.
+	 */
+	depth?: number;
 }
 
 /**
@@ -540,17 +775,24 @@ export interface PromptError {
 	message: string;
 }
 
-function ContentPartItem({
-	part,
-	sessionId,
-	onOpenFile,
-	isCodex,
-	onPermissionRespond,
-	onAnswerQuestion,
-	promptError,
-}: ContentPartItemProps) {
+function ContentPartItem(props: ContentPartItemProps) {
+	const {
+		part,
+		sessionId,
+		onOpenFile,
+		isCodex,
+		onPermissionRespond,
+		onAnswerQuestion,
+		promptError,
+		depth = 0,
+	} = props;
 	if (part.type === "text") {
-		return <MarkdownContent content={part.content} />;
+		return (
+			<MarkdownContent
+				content={part.content}
+				variant={depth > 0 ? "note" : "message"}
+			/>
+		);
 	}
 	if (part.type === "system") {
 		return <SystemItem content={part.content} />;
@@ -563,6 +805,7 @@ function ContentPartItem({
 				reason={part.reason}
 				isCodex={isCodex}
 				onRespond={onPermissionRespond}
+				onOpenFile={onOpenFile}
 				error={
 					promptError?.requestId === part.request.requestId
 						? promptError.message
@@ -592,10 +835,21 @@ function ContentPartItem({
 	if (part.type === "command_output") {
 		return <CommandOutputItem content={part.content} />;
 	}
+	if (part.type === "thinking") {
+		return <ThinkingItem thoughts={part.thoughts} />;
+	}
 	// A subagent call is a tool run like any other; only its body differs, so
 	// this is a renderer chosen by category rather than a second model.
 	if (isTaskTool(part.tool.name)) {
-		return <TaskItem run={part.tool} />;
+		return (
+			<TaskItem
+				run={part.tool}
+				depth={depth}
+				renderChild={(child) => (
+					<ContentPartItem {...props} part={child} depth={depth + 1} />
+				)}
+			/>
+		);
 	}
 	return (
 		<ToolCallItem
@@ -623,7 +877,7 @@ interface Props {
 	isFirst?: boolean;
 	/**
 	 * This bubble is the one the open turn is writing into, which is what makes a
-	 * spinner on it true. Not the same as `isLast` since a message sent mid-reply
+	 * tail line on it true. Not the same as `isLast` since a message sent mid-reply
 	 * is appended below the reply it went into — that reply is still being written
 	 * and has to keep saying so (docs/lifecycle-ui.md §2.3).
 	 */
@@ -817,9 +1071,15 @@ function answerText(entry: QuestionAnswerRecord): string {
 function PockodeCommandItem({
 	command,
 	content,
+	attachments,
+	sessionId,
+	onOpenFile,
 }: {
 	command: PockodeCommandInvocation;
 	content: string;
+	attachments?: FileBlock[];
+	sessionId: string;
+	onOpenFile?: (path: string) => void;
 }) {
 	const [expanded, setExpanded] = useState(false);
 	return (
@@ -833,8 +1093,15 @@ function PockodeCommandItem({
 				title={`/${command.name}`}
 				detail={command.args ?? ""}
 			/>
+			{attachments && (
+				<AttachmentStrip
+					files={attachments}
+					sessionId={sessionId}
+					onOpenFile={onOpenFile}
+				/>
+			)}
 			<CollapsibleBody expanded={expanded}>
-				<ScrollableContent className="max-h-[60vh] overflow-auto border-t border-th-border p-2">
+				<div className="border-t border-th-border p-2">
 					<Section label="Sent to the agent">
 						{/* Empty only on this client's own echo, until the server's
 						    reply brings the prompt it expanded the command to — or
@@ -849,7 +1116,7 @@ function PockodeCommandItem({
 							</p>
 						)}
 					</Section>
-				</ScrollableContent>
+				</div>
 			</CollapsibleBody>
 		</div>
 	);
@@ -875,24 +1142,23 @@ const MessageItem = memo(function MessageItem({
 	const userBubbleClass = chatUIConfig.userBubbleClass ?? "";
 	const assistantBubbleClass = chatUIConfig.assistantBubbleClass ?? "";
 
-	// Two conditions, one per level. The session decides whether there is a slot
-	// at all — a session nothing can be done to should not pay 44px a row for a
-	// glyph that will never come — and the message decides whether the slot has
-	// anything in it.
-	const slot = onForkMessage ? (
-		<MessageMenuTrigger
-			side={message.role}
-			onFork={
-				hasMessageActions(message) ? () => onForkMessage(message.id) : undefined
-			}
-			forkBlocked={forkBlockedReason(message, isFirst)}
-		/>
-	) : null;
+	// Two conditions, one per level. The session decides whether fork is on
+	// offer at all — a session nothing can be done to should not pay 44px a row
+	// for a glyph that will never come — and the message decides whether it is a
+	// turn yet.
+	const onFork =
+		onForkMessage && hasMessageActions(message)
+			? () => onForkMessage(message.id)
+			: undefined;
+	const forkBlocked = forkBlockedReason(message, isFirst);
 
 	if (message.role === "user") {
+		const slot = onForkMessage ? (
+			<MessageMenuTrigger onFork={onFork} forkBlocked={forkBlocked} />
+		) : null;
 		// An agent's answer is neither a bubble nor an event line; see
-		// AgentAnswerItem. It keeps the slot for the same reason the event line
-		// does — it is full-bleed, and the row has to end where the bubbles do.
+		// AgentAnswerItem. Full-bleed, but it is conversation the user can fork
+		// from, so it keeps the slot and its `…`.
 		if (message.source === "agent") {
 			const answer = (
 				<AgentAnswerItem
@@ -910,8 +1176,11 @@ const MessageItem = memo(function MessageItem({
 			);
 		}
 		// System-driven messages render as a collapsed event line, not a bubble.
+		// No slot: it would always be empty (not a turn), and the agent's text
+		// beside it runs to the reading column's edge now, so there is no bubble
+		// edge left for an empty slot to line up with.
 		if (message.source === "system") {
-			const event = (
+			return (
 				<WorkEventItem
 					content={message.content}
 					subtype={message.subtype}
@@ -919,26 +1188,19 @@ const MessageItem = memo(function MessageItem({
 					onOpenWorkDetail={onOpenWorkDetail}
 				/>
 			);
-			// An empty slot, so this full-bleed line ends where the widest bubble
-			// ends rather than reaching 44px past it.
-			return slot ? (
-				<div className="flex items-start gap-2">
-					<div className="min-w-0 flex-1">{event}</div>
-					{slot}
-				</div>
-			) : (
-				event
-			);
 		}
 		if (message.command) {
 			const item = (
 				<PockodeCommandItem
 					command={message.command}
 					content={message.content}
+					attachments={message.attachments}
+					sessionId={sessionId}
+					onOpenFile={onOpenFile}
 				/>
 			);
-			// Full-bleed like the lines above, so it keeps the slot for the same
-			// reason: the row has to end where the bubbles do.
+			// Full-bleed like the answer above, and the user's own, so it keeps the
+			// slot and its `…`.
 			return slot ? (
 				<div className="flex items-start gap-2">
 					<div className="min-w-0 flex-1">{item}</div>
@@ -957,7 +1219,21 @@ const MessageItem = memo(function MessageItem({
 					{message.answering ? (
 						<AnsweringBody answering={message.answering} />
 					) : (
-						<p className="whitespace-pre-wrap">{message.content}</p>
+						message.content && (
+							<p className="whitespace-pre-wrap">{message.content}</p>
+						)
+					)}
+					{/* The files are part of what was sent, so they are inside the
+					    bubble; a message can be nothing else. Spacing alone sets them
+					    off from the text: a rule the bubble's width under a paragraph
+					    reads as that paragraph's underline. */}
+					{message.attachments && (
+						<AttachmentStrip
+							files={message.attachments}
+							sessionId={sessionId}
+							onOpenFile={onOpenFile}
+							divided={false}
+						/>
 					)}
 				</div>
 				{UserAvatar && <UserAvatar className="size-10 shrink-0" />}
@@ -985,81 +1261,63 @@ const MessageItem = memo(function MessageItem({
 		);
 	const signIn = (agent: AgentType) =>
 		onSignIn ? () => onSignIn(agent, message.id) : undefined;
+	// What the agent wrote, as it wrote it: top-level text only. Tool calls,
+	// cards and a subagent's notes are the transcript's, not this message's prose.
+	const copyText = message.parts
+		.flatMap((part) => (part.type === "text" ? [part.content] : []))
+		.join("\n\n");
+	const pending =
+		message.status === "sending" || message.status === "streaming";
 
-	// Assistant message
+	// Assistant message: no bubble, the full reading width. Not `overflow-hidden`
+	// like the bubble was: the action row reaches left of the column so its first
+	// icon lines up with the text, and clipping would cut its box and focus ring.
 	return (
-		<div className="flex items-end justify-start gap-2">
+		<div className="flex items-start justify-start gap-2">
 			{AssistantAvatar && <AssistantAvatar className="size-10 shrink-0" />}
 			<div
-				className={`chat-bubble max-w-full min-w-0 overflow-hidden rounded-lg bg-th-ai-bubble p-2.5 text-th-ai-bubble-text sm:p-3 ${assistantBubbleClass}`}
+				className={`min-w-0 flex-1 text-th-text-primary ${assistantBubbleClass}`}
 			>
 				{shownParts.length > 0 && (
 					<div className="space-y-2">
-						{shownParts.map(({ part, index }) => {
-							// The tool use id alone: one part per call now, because a
-							// permission card takes its call's place and a resent
-							// tool_call updates the row it names rather than adding one.
-							const key =
-								part.type === "permission_request"
-									? part.request.requestId
-									: part.type === "question_record"
-										? // Not unique on its own for a legacy record, which
-											// could carry several questions under one request id;
-											// the index disambiguates those.
-											`${part.record.requestId}-${index}`
-										: part.type === "tool_call"
-											? part.tool.id
-											: `${part.type}-${index}`;
-							return (
-								// A wrapper of its own, and an unpositioned one, so this part can
-								// be what the view is held still over: one turn is one row and can
-								// be several screens tall, so holding the row still says nothing
-								// about where inside it the reader is (see `scrollAnchor`).
-								//
-								// It takes a `space-y-2` slot whether or not anything is drawn in
-								// it, so a part renderer must render something — every branch of
-								// `ContentPartItem` does today, and one returning null would show
-								// as a gap with nothing in it.
-								<div key={key} {...anchorCandidateProps}>
-									{index === liveAuthIndex &&
-									part.type === "warning" &&
-									part.authFailure ? (
-										<AuthFailureNotice
-											message={part.message}
-											agent={part.authFailure}
-											onSignIn={signIn(part.authFailure)}
-										/>
-									) : (
-										<ContentPartItem
-											part={part}
-											sessionId={sessionId}
-											onOpenFile={onOpenFile}
-											isCodex={isCodex}
-											onPermissionRespond={onPermissionRespond}
-											onAnswerQuestion={onAnswerQuestion}
-											promptError={promptError}
-										/>
-									)}
-								</div>
-							);
-						})}
+						{/* Every part has a wrapper of its own, and an unpositioned one,
+						    so this part can be what the view is held still over: one turn
+						    is one row and can be several screens tall, so holding the row
+						    still says nothing about where inside it the reader is (see
+						    `scrollAnchor`).
+
+						    A part on its own takes a `space-y-2` slot whether or not
+						    anything is drawn in it, so a part renderer must render
+						    something — every branch of `ContentPartItem` does today, and
+						    one returning null would show as a gap with nothing in it. */}
+						<PartBlocks
+							items={shownParts}
+							wrapperProps={anchorCandidateProps}
+							renderPart={({ part, index }) =>
+								index === liveAuthIndex &&
+								part.type === "warning" &&
+								part.authFailure ? (
+									<AuthFailureNotice
+										message={part.message}
+										agent={part.authFailure}
+										onSignIn={signIn(part.authFailure)}
+									/>
+								) : (
+									<ContentPartItem
+										part={part}
+										sessionId={sessionId}
+										onOpenFile={onOpenFile}
+										isCodex={isCodex}
+										onPermissionRespond={onPermissionRespond}
+										onAnswerQuestion={onAnswerQuestion}
+										promptError={promptError}
+									/>
+								)
+							}
+						/>
 					</div>
 				)}
 
-				{/* Status indicator */}
-				{message.status === "sending" && (
-					<Spinner variant="current" className="mt-2" />
-				)}
-				{/* Keyed on being the open turn rather than on being last. The two
-				    agreed until a message could be sent mid-reply; now the reply
-				    that is still growing routinely has that message under it, and
-				    reading position would take its spinner away at the one moment
-				    the user has just asked it something. A bubble left `streaming`
-				    that is *not* the open turn gets nothing, which is what stopped
-				    a superseded reply from claiming to still be running. */}
-				{message.status === "streaming" && isOpenTurn && (
-					<Spinner variant="current" className="mt-2" />
-				)}
 				{message.status === "error" &&
 					(authError ? (
 						<div className="mt-2">
@@ -1078,8 +1336,32 @@ const MessageItem = memo(function MessageItem({
 				{message.status === "process_ended" && (
 					<p className="mt-2 text-sm text-th-warning">Process ended</p>
 				)}
+				{/* Last before the actions however the turn ended, so it is always
+				    in one place; shown when they are, so the two replace the tail line
+				    together. */}
+				{!pending && (
+					<TurnChangesCard parts={message.parts} onOpenFile={onOpenFile} />
+				)}
+				{pending ? (
+					<TurnTail
+						// Keyed on being the open turn rather than on being last. The two
+						// agreed until a message could be sent mid-reply; now the reply
+						// that is still growing routinely has that message under it, and
+						// reading position would take its line away at the one moment the
+						// user has just asked it something. A message left `streaming`
+						// that is *not* the open turn keeps the slot empty, which is what
+						// stopped a superseded reply from claiming to still be running.
+						writing={message.status === "sending" || !!isOpenTurn}
+						placeholder={message.status === "sending"}
+					/>
+				) : (
+					<MessageActions
+						copyText={copyText || undefined}
+						onFork={onFork}
+						forkBlocked={forkBlocked}
+					/>
+				)}
 			</div>
-			{slot}
 		</div>
 	);
 });

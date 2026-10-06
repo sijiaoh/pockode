@@ -1,4 +1,10 @@
-import { relativeToWorkDir, splitNativePath } from "../utils/path";
+import {
+	isSameNativePath,
+	relativeToWorkDir,
+	splitNativePath,
+} from "../utils/path";
+import { codexChangePaths } from "./codexChanges";
+import { firstLine } from "./subagentRun";
 
 /**
  * What a tool call's row says about itself: a title naming the kind of call,
@@ -32,7 +38,9 @@ export interface ToolSummary {
 /**
  * The subagent tool goes by two names: the CLI renamed `Task` to `Agent`
  * (2.1.x emits `Agent`), and stored history holds whichever name was current
- * when it was recorded. Both render as the same part.
+ * when it was recorded. Both render as the same part. Codex's subagent spawn
+ * arrives as `Task` too: the server names it so, because it is the same thing
+ * (docs/code/agent-integration.md#subagent-threads).
  */
 export function isTaskTool(toolName: string): boolean {
 	return toolName === "Task" || toolName === "Agent";
@@ -53,22 +61,35 @@ export function taskPrompt(input: unknown): string | undefined {
 	return str(asObject(input).prompt);
 }
 
-/** What a subagent call was asked to do, for quoting the call in one line. */
+/**
+ * What a subagent call was asked to do, for quoting the call in one line.
+ *
+ * A Codex spawn carries no description: one shape has only the agent's path —
+ * `/root/read_a`, whose last segment is the name the model gave the agent for
+ * its task — so that name stands in; the other has only the prompt, whose
+ * first line does.
+ */
 export function taskDescription(input: unknown): string {
 	const obj = asObject(input);
-	return str(obj.description) ?? str(obj.subagent_type) ?? "Task";
+	return (
+		str(obj.description) ??
+		str(obj.subagent_type) ??
+		str(str(obj.agent_path)?.split("/").pop()) ??
+		str(firstLine(str(obj.prompt) ?? "")) ??
+		"Task"
+	);
 }
 
 /**
- * A path split for a row: the directories, which may fade out, and the file
- * name, which may not.
+ * A path split for one line — the row's, and a tool body's `PathLine`: the
+ * directories, which may fade out, and the file name, which may not.
  *
  * `truncate` removes the tail of a string, and a path's tail is the one part
  * that identifies it — so the two halves are drawn separately and only the
  * first is allowed to be cut. The path is shown relative to the work directory
  * when it is inside it, which is both shorter and what the Files tab names it.
  */
-function pathParts(
+export function pathParts(
 	filePath: string,
 	workDir: string,
 ): { head: string; tail: string } {
@@ -88,6 +109,18 @@ function pathSummary(
 ): ToolSummary {
 	const { head, tail } = pathParts(filePath, workDir);
 	return { title, detail: head, detailTail: tail, mono: true };
+}
+
+/**
+ * Where a search ran, as its row names it. Claude nearly always passes an
+ * absolute path, which on a phone left room for the home directory and nothing
+ * else — so a scope inside the work directory is named relative to it, and the
+ * work directory itself, being where every search runs anyway, is not named.
+ */
+function grepScope(scope: string | undefined, workDir: string) {
+	if (!scope) return undefined;
+	if (workDir && isSameNativePath(scope, workDir)) return undefined;
+	return relativeToWorkDir(scope, workDir) ?? scope;
 }
 
 interface CommandAction {
@@ -263,7 +296,7 @@ export function toolSummary(
 	// searched for.
 	if (toolName === "Grep") {
 		const pattern = str(obj.pattern) ?? "";
-		const scope = str(obj.path);
+		const scope = grepScope(str(obj.path), workDir);
 		return {
 			title: "Grep",
 			detail: scope ? `"${pattern}" in ${scope}` : `"${pattern}"`,
@@ -297,4 +330,84 @@ export function toolSummary(
 	if (mcp) return mcpSummary(mcp, input);
 
 	return fallbackSummary(toolName, input);
+}
+
+/**
+ * What kind of thing a call did, for the one-line summary a run of calls folds
+ * into (docs/tool-call-ui.md#groups). Ordered by consequence: a reader skimming
+ * a folded run wants to know first what was changed and what was run, and a
+ * narrow screen cuts the end of the line.
+ */
+export const TOOL_VERBS = [
+	"edit",
+	"run",
+	"read",
+	"search",
+	"fetch",
+	"todo",
+	"other",
+] as const;
+
+export type ToolVerb = (typeof TOOL_VERBS)[number];
+
+export interface ToolVerbReading {
+	verb: ToolVerb;
+	/**
+	 * The files the call touched, for the verbs counted in files rather than in
+	 * calls. Absent when the input names none; the call then counts once.
+	 */
+	paths?: string[];
+}
+
+function filePaths(obj: Record<string, unknown>): string[] | undefined {
+	const path = str(obj.file_path) ?? str(obj.notebook_path) ?? str(obj.path);
+	return path ? [path] : undefined;
+}
+
+/**
+ * The verb a call is summarised under. The same table of knowledge as
+ * `toolSummary`, and a Codex `Bash` is read through the same
+ * `singleCommandAction`: the summary has to say what the rows under it say.
+ */
+export function toolVerb(toolName: string, input: unknown): ToolVerbReading {
+	const obj = asObject(input);
+	switch (toolName) {
+		case "Write":
+		case "Edit":
+		case "MultiEdit":
+		case "NotebookEdit":
+			// One Codex file change can name several files.
+			return {
+				verb: "edit",
+				paths:
+					(toolName === "Edit" ? codexChangePaths(input) : null) ??
+					filePaths(obj),
+			};
+		case "Bash": {
+			const action = singleCommandAction(input);
+			if (action?.type === "read") {
+				const path = str(action.path);
+				return { verb: "read", paths: path ? [path] : undefined };
+			}
+			if (action?.type === "search" || action?.type === "listFiles") {
+				return { verb: "search" };
+			}
+			return { verb: "run" };
+		}
+		case "BashOutput":
+		case "KillShell":
+			return { verb: "run" };
+		case "Read":
+			return { verb: "read", paths: filePaths(obj) };
+		case "Grep":
+		case "Glob":
+		case "WebSearch":
+			return { verb: "search" };
+		case "WebFetch":
+			return { verb: "fetch" };
+		case "TodoWrite":
+			return { verb: "todo" };
+		default:
+			return { verb: "other" };
+	}
 }

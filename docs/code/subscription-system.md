@@ -588,8 +588,9 @@ a client change landing first.
 
 **And the re-send is judged on the relation, not on the work item.** A work is
 written many times while it runs — a wait declared, a nudge counted, a step
-advanced — and none of it moves the one thing a row takes from it. So the
-watcher remembers the work id it last broadcast per session and skips an event
+advanced — and almost none of it moves what a row takes from it. So the
+watcher remembers the work id (and [watch count](#what-a-session-watches)) it
+last broadcast per session and skips an event
 that would repeat it; otherwise every work transition re-pushes an unchanged row
 to every subscriber, and to one filtering work sessions out, each is a
 retraction of a row it never had. Per session rather than per subscription — the
@@ -613,7 +614,7 @@ worktree manager hands a work change to both watchers, both re-resolve the
 relation from the store rather than reading it off the event, and both skip an
 event that would repeat the work id already sent for that session. The
 bookkeeping is one type shared by the two (`watch.sessionWorkIndex`), because
-"the work id last put on the wire for this session" is one piece of knowledge.
+"the relation last put on the wire for this session" is one piece of knowledge.
 
 What the detail has to do differently is the subscribe. Its record of what was
 sent is per session, and sound only while it names what *every* subscriber of
@@ -629,6 +630,46 @@ A snapshot that cannot resolve the relation is refused, not answered without it
 subscriber has no reason to ask a second time. Mid-stream, the same failure
 sends nothing at all: the client keeps what it had, and the next change to
 either side resolves it again.
+
+#### What a Session Watches
+
+The same two watchers carry the session's second relation to the work layer:
+the stories it watches ([work-system.md § A story's watcher](work-system.md#a-storys-watcher)).
+The row carries `watching`, a count; the detail carries the count and
+`watched_stories`, the list behind it. Both are derived exactly as `work_id`
+is — read off `work.Work.Watcher` through `SessionWorkSource.WatchedBy`, never
+stored on the session — and they travel with it as one value, `rpc.SessionWork`,
+so the index, the resolve and the snapshot paths each handle one relation-shaped
+thing rather than two that could be resolved at different moments. A count
+because a client holding a paged work list cannot count what it was never sent.
+
+**One work change can move three sessions.** The session the work runs in, the
+story's watcher after the change, and its watcher before it
+(`ChangeEvent.PrevWatcher`): a close or an unwatch releases the watcher, and
+names it only as the previous one. `watch.sessionsTouchedBy` names each once,
+and each is re-resolved from the store and pushed only if what it carries moved.
+The watcher's own work stopping needs nothing extra — that work's session *is*
+the watcher, so its own change event re-resolves it, and the count drops to
+zero because the engine would no longer wake it.
+
+**The watcher may be in another worktree.** A chat in main can watch a story
+running in a worktree of its own, so `worktree.Manager.OnWorkChange` routes a
+work change to the work's worktree and to the worktrees of its watcher before
+and after, each once and only if loaded. A session a worktree's store does not
+hold is skipped by that worktree's watcher; the one that does hold it answers.
+
+**"Already sent" is judged per side.** `sessionWorkIndex` takes a comparison
+from its owner, because the two sides carry different amounts of the same
+relation: a row changes only when its work id or its count does (`sameRow`), so
+a watched story being retitled or stopped is not pushed to the list; the detail
+lists the stories, so it changes when any id, title or status in that list does
+(`sameDetail`). The subscribe rules above hold for this half unchanged — it is
+the same record.
+
+`session_view.get` / `session_view.list`, which answer for a session outside
+the subscribed worktree, resolve it the same way — `rpc.SessionWorkBySession`
+for a list, `watch.ResolveSessionWork` for one — so a cross-worktree view
+carries the count too.
 
 #### What the Client Gives Up by Letting the Server Filter
 
@@ -1073,26 +1114,29 @@ down under that same name to the engine and mode controls, which until it holds
 both refuse input and show nothing.
 
 **Refusing input**, because the placeholder can eat the correction. The
-placeholder mode is `default`, and `ModeSelector.handleSelect` is a no-op when
-the chosen mode equals the current one. So a session actually in `yolo` rendered
-as Default, and a user pressing "Default" to get back to it was silently ignored:
-the control believed nothing had changed.
+placeholder mode is `default`, and a mode row is a radio, which fires nothing when
+the choice pressed is the one already checked. So a session actually in `yolo`
+rendered as Default, and a user pressing "Default" to get back to it was silently
+ignored: the control believed nothing had changed. The panel's Engine row and
+Permissions rows are therefore unavailable, saying `Loading…`, and no mode row is
+checked.
 
 **Showing nothing**, because a disabled control is still making a claim, and
 every placeholder here is the reassuring one: `default` mode and `claude` agent
 say, of a session nothing is known about, that it is a Claude session that asks
-before it acts. The mode chip is the sharp case — its two states are a grey
-shield and an amber bolt, so the gap read as "this session prompts you" for a
-session running with no prompts at all. Both chips therefore draw a pulsing
-placeholder where the glyph goes and name no value, on a `hasSessionSettings`
-prop each (`EngineSelector`, `ModeSelector`).
+before it acts. The mode is the sharp case — its two states are a calm label and
+an amber bolt, so the gap read as "this session prompts you" for a session
+running with no prompts at all. The header's second line therefore draws a
+pulsing placeholder and names no value, and so does the panel's Engine row
+(`SessionHeader`, `useEngineSummary`); a registered `EngineSelector` or
+`ModeSelector` gets the same `hasSessionSettings` prop to do likewise.
 
-Note which flag gates which, because the chip waits on two. The agent glyph
+Note which flag gates which, because the engine waits on two. The agent glyph
 waits on `hasSessionSettings`, the agent being one of the settings the snapshot
 brings. The model *name* waits again, on `hasLabel`: the option lists it is
 named from load separately, and while they are the only thing outstanding the
-agent is known and its icon is the one true thing on the chip. That second gate
-is also why the chip skeletons the model rather than showing "Auto" — Auto is a
+agent is known and its icon is the one true thing in the row. That second gate
+is also why the model is a skeleton rather than "Auto" — Auto is a
 real setting, and a session set to Opus would claim to be on Auto until its
 lists arrived.
 

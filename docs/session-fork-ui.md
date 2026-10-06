@@ -54,18 +54,21 @@ is a live fact.
 
 ## Entry point
 
-Every row of a session that can fork reserves a **36px slot beside the bubble,
-on the inside** — the side facing the middle of the conversation, so right of an
-assistant bubble and left of a user one — 8px clear of it, 44px of the row's
-width in all. In the slot stands a `MoreHorizontal` `…`; pressing it opens a
-`Sheet` in which fork is a row.
+The two speakers get different entry points, because only one of them still
+has a bubble.
 
-The inside is where the slot goes because the outside is the avatar's, and
-because the inside is space the message was leaving empty anyway. One sentence
-covers both sides: **the trigger always hugs the bubble's edge that faces the
-middle of the conversation.** The two sides are mirrored by that rule, which
-cost something under a row of icons read left to right and costs nothing now — a
-menu has one way in and no reading order to get backwards.
+- **The user's rows** — bubbles, Pockode command lines, another agent's answer —
+  reserve a **36px slot beside the bubble, on the inside** (left of it), 8px
+  clear, 44px of the row's width in all. In the slot stands a `MoreHorizontal`
+  `…`; pressing it opens a `Sheet` in which fork is a row.
+- **The agent's messages** have no bubble: the text runs the full reading width,
+  and a **turn-end row** under it holds Copy and Fork — no `…`, since the
+  menu would hold nothing the row does not (*The agent's turn-end row*, below).
+
+The rest of this section is about the user's slot. The inside is where it goes
+because the outside is the avatar's, and because the inside is space the message
+was leaving empty anyway: **the trigger hugs the bubble's edge that faces the
+middle of the conversation.**
 
 It hugs the bubble rather than aligning to a fixed vertical rule down the edge
 of the row. Pinning it out there would buy a tidy column of dots, at the price
@@ -73,7 +76,7 @@ of a two-word user message whose `…` floats half a screen from anything it
 belongs to. **Belonging beats alignment.**
 
 Vertically it sits at the bubble's **end** (`self-end`). That is less a rule
-laid over the row than one taken off it: both bubble rows are already
+laid over the row than one taken off it: the bubble row is already
 `items-end`, so that the avatar sits on the baseline, and the slot used to
 override them with `self-start`. It is still written out rather than inherited,
 because where the `…` sits is the slot's own rule, while the rows that host one
@@ -82,15 +85,11 @@ line to start at the top. Inherited, the glyph would move the next time one of
 those reasons changed, and the author would not know they had moved it. Written,
 it is one line, readable and greppable.
 
-A bubble can be several screens tall — a diff, a long tool call — and then the
-`…` is off screen until the user scrolls to the message's end. That cost is the
-mirror of the one top alignment paid, not a new one: pinned to the top, the
-trigger asked the user to scroll back to a long message's *beginning*. What the
-flip trades is which end the user is more often already at. When a turn has just
-settled — the moment the glyph fades in, and the moment a fork is most often
-wanted — the eye is at the bubble's **bottom**, where the writing just appeared;
-only when scrolling back through old messages is the top the nearer edge. The
-common path wins.
+A long pasted prompt can make a user bubble taller than the screen, and then the
+`…` is off screen until the user scrolls to the message's end — the mirror of
+the cost top alignment paid, which asked them to scroll back to its *beginning*.
+Bottom keeps it next to the avatar and level with the bubble's last line, which
+is where a short message, the common case, ends anyway.
 
 Belonging survives the move on the current numbers, and only on them. Bottom
 alignment puts the `…` beside the seam with the next row, but the row spacing
@@ -98,13 +97,11 @@ alignment puts the `…` beside the seam with the next row, but the row spacing
 (8px), so the glyph is still nearer the bubble it belongs to than the row below.
 **Tighten the row spacing and this has to be checked again.**
 
-The work event row (`items-start`) is the one place the slot no longer agrees
-with the row around it, and there the difference is invisible: that slot is
-always empty, since `hasMessageActions` is false for `source === "system"`. The
-boundary worth recording is a future one — if such a row ever does draw a glyph,
-`self-end` would put it at the bottom of a body that runs to 60vh and scrolls
-inside itself, far from the collapsed header at the top. That row should then be
-given an alignment decision of its own rather than inherit the bubble rows'.
+The work event row has no slot (*Which rows reserve a slot*). If such a row ever
+does get an action, `self-end` would put it at the bottom of a body that runs to
+60vh and scrolls inside itself, far from the collapsed header at the top; that
+row should then be given an alignment decision of its own rather than inherit
+the bubble's.
 
 `MoreHorizontal` rather than `GitBranch`: the file tree, the Git log and the
 files panel already say *this thing has a menu* with these three dots, and chat
@@ -147,14 +144,14 @@ The glyph **fades in** when the message settles (`animate-message-menu-in`,
 150ms, off under `prefers-reduced-motion`). An animation and not a transition,
 because the glyph is mounted rather than restyled: a transition has no
 before-value to move from, so writing one would have produced no animation at
-all. Nothing else moves — the slot was already there while the message streamed,
-and the fade happens at the bubble's end, exactly where the agent's last words
-just landed.
+all. Nothing else moves — the slot was already there while the message was
+being sent. The agent's turn-end buttons use the same fade.
 
-**The trade, priced:** every message gives back the 36–44px of height a standing
-action row spent, and every bubble is at most 44px narrower for it. Diffs, code
-blocks and option cards inside a bubble get that much less width on a phone; all
-of them already scroll sideways, and vertical space has no second source.
+**The trade, priced:** every user message gives back the 36–44px of height a
+standing action row would spend, and every user bubble is at most 44px narrower
+for it. What a user bubble holds — their own words, attachments, answers — wraps
+or scrolls in that width, and vertical space has no second source. Wide content
+(diffs, code, option cards) is the agent's, and the agent's text pays no slot.
 
 That maximum width is never computed anywhere. The slot is a `shrink-0` flex
 item that is always present and the bubble is `min-w-0 max-w-full` beside it, so
@@ -169,15 +166,16 @@ Two levels, and they are what makes the slot steady:
   — where `ChatPanel` passed `onForkMessage` down, meaning the host can navigate
   and the agent's `fork_support` is not `"none"`. A session that can never fork
   should not pay 44px a row for a glyph that will never come.
-- **Message level.** Inside such a session **every** row draws the slot: settled
-  bubbles, streaming and sending ones, the collapsed one-line Work events, and
-  the one-line [Pockode command](pockode-commands.md#how-it-is-drawn) rows.
-  Only what stands in the slot differs.
-  - For bubbles the reason is constant geometry: a message going from streaming
-    to settled does not move a pixel.
-  - For event lines the reason is the opposite one — their state never changes —
-    and it is the **content edge**. A full-bleed line with no slot runs 44px past
-    the widest bubble and leaves the right edge of the transcript ragged.
+- **Message level.** Inside such a session every **user** row draws the slot:
+  settled bubbles, sending ones, the one-line
+  [Pockode command](pockode-commands.md#how-it-is-drawn) rows and another
+  agent's answer. Only what stands in the slot differs. The reason is constant
+  geometry: a message going from sending to settled does not move a pixel.
+
+The collapsed one-line Work events draw **no** slot. They used to keep an empty
+one so they would end where the widest bubble ended; now the agent's text runs
+to the column's edge, so there is no bubble edge left to line up with, and an
+always-empty slot would only narrow the line.
 
 Why not a long-press on the bubble: chat bubbles are the one place in this app
 where users select and copy text, and long-press is how a phone starts a
@@ -191,9 +189,43 @@ pointer and invisible under the other — and there is now a harder one: the
 slot's width is paid whether or not anything is drawn in it, so hiding the glyph
 saves ink and not one pixel of layout.
 
-### Why this is not the standing action row
+### The agent's turn-end row
 
-A thin row of icons under every bubble is what shipped before this, and the
+Under every settled agent message (`hasMessageActions`) stands one row of icon
+buttons, left-aligned under the text: **Copy** (the message's own top-level
+text as Markdown, blank-line joined — no tool calls, cards or subagent notes),
+and **Fork from here**. Every settled agent message
+gets one, not only the last: forking an old answer is a main use, and a turn
+split by a mid-reply message is two messages, each a valid anchor.
+
+- **While the message is written** its slot is already there, holding the
+  tail line ([turn-progress-ui.md §2](turn-progress-ui.md#2-the-tail-line));
+  settling swaps the line for the buttons (with the
+  `animate-message-menu-in` fade). Both hold the same height
+  (`min-h-9 pointer-coarse:min-h-11`), so the text above does not move when the
+  turn ends — what the user's slot buys by being reserved, this row buys by
+  replacing the tail line.
+- **Copy only where there is text.** A message that is only tool calls could
+  never have it, so it is removed rather than disabled. A failed copy (plain
+  http on a LAN has no clipboard) turns the icon into a red `X` labelled *Copy
+  failed*: the text is on screen to select by hand.
+- **A blocked fork** is drawn `aria-disabled` at lower opacity but still
+  answers a press — by opening the menu, where the disabled row says why in
+  words (*Blocked and failed*). An icon cannot say it and a touch device shows
+  no tooltip. That press is the only way into the agent's `MessageMenu`
+  (titled *Agent message*), and the menu is the same list the user's side
+  gets — Fork alone, no Copy text.
+- **No `…`** — the menu holds nothing the row does not (*Why the agent's side
+  has a standing row after all*).
+- **A session that cannot fork** has only Copy. A message with neither text nor
+  fork draws no row once settled.
+- The buttons are `iconButtonClass()` (they grow to 44px under a thumb, 8px
+  apart), at 60% opacity until hover or focus. The row's negative left margin
+  puts the first **icon**, not its box, on the text's left edge.
+
+### Why the agent's side has a standing row after all
+
+A thin row of icons under every bubble is what shipped before the slot, and the
 argument for it was that fork is a primary action, this app's main pointer is a
 thumb, and therefore rung 1 of
 [responsive-ui.md](responsive-ui.md#where-a-p1-goes-when-there-is-no-hover) —
@@ -221,6 +253,25 @@ Three decisions came through unchanged: long-press and tapping the bubble are
 both taken (above), and **a running turn does not grey out the messages above
 it** (*Which messages get a menu*).
 
+That accounting still holds for the user's bubble. On the agent's side it was
+redone when the bubble went away, and came out the other way:
+
+- **The row replaces, it does not add.** It takes the place of the tail line and
+  of the bubble's own padding (20px), so a settled message nets roughly 16–24px
+  — not the full 36–44px charged above.
+- **Width became the scarcer axis.** The agent's text going full width is the
+  point; the 44px slot beside it is the column that text gets back.
+- **The first icon is no longer alone.** Copy is a second action, so the row no
+  longer pays its whole height for one glyph — and the blocked Fork still has
+  its sentence, one tap away: pressing the blocked icon opens the menu.
+- **So the row drops the `…`.** The user's side needs one because its slot
+  holds a single glyph and the actions sit behind it. The agent's row already
+  shows every action the menu holds; a `…` there opened onto the same Fork and
+  Copy that stood beside it — a second way to each, not a menu. **A `…` is drawn
+  only where it holds something the surface around it does not**, so an action
+  added to the menu without a button of its own in the row brings the agent's
+  `…` back.
+
 What may be added to the menu later — two append-only groups, no mirroring, one
 level deep, disable rather than remove — is written at the top of
 `MessageMenu.tsx`, beside the list it governs. The row's three-icon ceiling is
@@ -240,14 +291,15 @@ files that say which is which: `utils/messageActions.ts` answers the first,
 - System-origin messages (`source === "system"`, the Work engine's prompts,
   which render as a collapsed one-line event rather than a bubble) get none.
   They are not conversation turns; they are Pockode's own annotations, and there
-  is nothing a user does *to* one. They keep the empty slot all the same, for
-  the edge it lines up (*Which rows reserve a slot*). A
+  is nothing a user does *to* one, and they draw no slot either (*Which rows
+  reserve a slot*). A
   [Pockode command](pockode-commands.md) is not one of these, although it is
   drawn as a line too: the user sent it, so its origin is theirs and it has a
   menu like any bubble.
 - A message still `sending` or `streaming` gets none either — it is not yet a
-  turn. Here too the slot stays, which is what lets the glyph arrive when the
-  turn ends without moving the bubble the agent has been writing into.
+  turn. Its place is held all the same — the user's slot, the agent's turn-end
+  slot with the tail line in it — which is what lets the actions arrive when the
+  turn ends without moving the text above them.
 
 **2. Can fork run on this message?** (`forkUnavailableReason`,
 `isForkableMessage`, `resolveForkAnchor`)
@@ -298,9 +350,9 @@ less useless.
 A running turn does **not** disable anything above it. Forking an older, settled
 message is well defined while the agent writes — everything the fork keeps is
 already final, and everything still arriving falls after the anchor and is
-dropped anyway. So an older message's `…` neither blinks out for the length of
-every turn nor opens onto a refusal; only the unsettled message itself is
-unforkable.
+dropped anyway. So an older message's `…` or Fork neither blinks out for the
+length of every turn nor opens onto a refusal; only the unsettled message
+itself is unforkable.
 
 ## The fork sheet
 
@@ -358,7 +410,7 @@ server sends the resulting table to the frontend (`agent.list`), so the UI asks
 ([code/agent-integration.md](code/agent-integration.md#session-forking)).
 
 - **`"none"`** — the agent cannot reopen an earlier conversation at all, so there
-  is no fork to have memory in: the session shows no `…` at all and the
+  is no fork to have memory in: the session shows no `…` and no Fork, and the
   backend refuses the request (*Blocked and failed* below). **No shipped agent
   answers this today** — Codex did until it gained the ability to reopen a
   conversation from disk
@@ -384,11 +436,11 @@ all, which has no memory to carry in any case. Both get the same warning as any
 other fork that could not carry memory.
 
 **The fork sheet promises nothing about memory, and that is deliberate.** An agent
-that cannot follow a fork never gets that far — there is no `…` to press, so
-neither sheet ever opens. For one that can, a fork can still come back with
-nothing, for server-side facts no client can see: a source that never ran that
-agent, or whose provider conversation the agent already gave up on. The UI does
-not guess at those. The backend states the fact where it cannot be missed
+that cannot follow a fork never gets that far — there is no `…` or Fork to
+press, so neither sheet ever opens. For one that can, a fork can still come back
+with nothing, for server-side facts no client can see: a source that never ran
+that agent, or whose provider conversation the agent already gave up on. The UI
+does not guess at those. The backend states the fact where it cannot be missed
 instead — a history record in the forked transcript (`chat.Client.Fork`, written
 on the `carried == false` answer described in `server/agent/fork.go`,
 `SessionForker`), rendered
@@ -486,8 +538,8 @@ one page, so a row can be missing simply because the reader has not scrolled
 that far ([list-paging-ui.md](list-paging-ui.md#23-an-absence-is-not-evidence)).
 The same wording spells the sidebar row's screen-reader text below.
 
-The transcript's top, not the chat header: the header belongs to the project
-title (`MainContainer title={projectTitle}`), and more to the point, "this
+The transcript's top, not the chat header: the header names the session and what
+runs it ([agent-chat.md](agent-chat.md#the-session-screen)), and more to the point, "this
 conversation begins as a copy of another one" is a fact about where the
 transcript starts — the top of the transcript is literally where it belongs.
 
@@ -518,9 +570,9 @@ the distinction the two cases below turn on.
 
 **The agent cannot fork at all** — the frontend is sent `fork_support: "none"` for
 it, the server's answer for an agent that implements no `agent.SessionForker`.
-**The whole session renders no `…`** — and since fork is the menu's only row
-today, no slot either: the bubbles get the 44px back (*Which rows reserve a
-slot*). Not a menu holding a permanently dead row: a transcript whose every
+**The whole session renders no `…` and no Fork** — no slot beside the user's
+bubbles, which get the 44px back (*Which rows reserve a slot*), and only Copy in
+the agent's turn-end row. Not a menu holding a permanently dead row: a transcript whose every
 message opens onto the same refusal is noise that never becomes usable. Fork is
 not an action being refused in such a session; it is a feature that has never
 applied to it. `session.fork` refuses the same case on the backend
@@ -614,13 +666,15 @@ New, all in `web/src/components/Chat/` unless noted:
 
 | File | Role |
 | --- | --- |
-| `MessageMenuTrigger.tsx` | The slot beside a bubble and the `…` in it, plus whether its menu is open. Props: `{ side: "user" \| "assistant"; onFork?: () => void; forkBlocked?: "nothing-before" \| "no-anchor-seq" \| "pending-request" }`. No `onFork` means this message is not a turn — the slot renders, the glyph does not. It also owns the `ForkBlocked` type, though only `nothing-before` is spelled there: the other two are `forkAnchor.ts`'s `ForkUnavailable`, declared beside the check that produces them, since a utility module does not import from the components that use it. `MessageMenu` imports `ForkBlocked`, as a type, which is erased at compile time and so is not a runtime cycle |
-| `MessageMenu.tsx` | The `Sheet` behind the `…`: everything this message can do, titled by speaker — **Your message** / **Agent message**, since a sheet here names its subject the way `Fork session` and a file's own name do. The rules for adding the second row live at its top, where the list is |
+| `MessageMenuTrigger.tsx` | The slot beside a user row and the `…` in it, plus whether its menu is open. Props: `{ onFork?: () => void; forkBlocked?: "nothing-before" \| "no-anchor-seq" \| "pending-request" }`. No `onFork` means this message is not a turn — the slot renders, the glyph does not. It also owns the `ForkBlocked` type, though only `nothing-before` is spelled there: the other two are `forkAnchor.ts`'s `ForkUnavailable`, declared beside the check that produces them, since a utility module does not import from the components that use it. `MessageMenu` imports `ForkBlocked`, as a type, which is erased at compile time and so is not a runtime cycle |
+| `MessageActions.tsx` | The agent's turn-end row (*The agent's turn-end row*) under a settled message: Copy and Fork, plus the copy state and whether the menu a blocked Fork opens is open. Props: `{ copyText?; onFork?; forkBlocked? }`. While the message is pending, `TurnTail.tsx` holds the slot instead ([turn-progress-ui.md §2](turn-progress-ui.md#2-the-tail-line)) |
+| `MessageMenu.tsx` | The `Sheet` behind the user's `…` and the agent's blocked Fork: everything this message can do, titled by speaker — **Your message** / **Agent message**, since a sheet here names its subject the way `Fork session` and a file's own name do. One list for both sides, with no *Copy text*: the only side with text to copy stands Copy as a button. The rules for adding a row live at its top, where the list is |
 | `ForkSessionSheet.tsx` | The confirm sheet above. Props: `{ anchor, droppedCount, agentType, defaultTitle, isForking, error, onFork, onClose }` |
 | `ForkOriginBanner.tsx` | The lineage row at the top of `MessageList` |
 
-`MessageActions.tsx`, the standing row, is **deleted**; `MessageMenuTrigger` took
-its place and its props. `MessageMenu.tsx` is the once-deleted `…` sheet brought
+`MessageActions.tsx`, the standing row, was once **deleted** in favour of
+`MessageMenuTrigger`; the name came back for the agent's turn-end row, which is
+a different row (it holds Copy as well, and only the agent has one). `MessageMenu.tsx` is the once-deleted `…` sheet brought
 back out of git history with a different job: "everything this message can do"
 rather than "what did not fit". `common/MenuRow` is a shared component again —
 `Files/FileEntryMenu` and this menu are both built out of it — which is why
@@ -631,13 +685,15 @@ Changed:
 
 - `ui/iconButtonClass.ts` — the signature became an options object and gained
   `grow` (see *The slot's weight*). Chat is its third caller after the Git and
-  Files panels, and the only one that asks for `grow: false`; the remaining call
-  sites changed shape and nothing else.
+  Files panels, and the user's slot is the only call that asks for
+  `grow: false` — the agent's turn-end row takes the grown default; the
+  remaining call sites changed shape and nothing else.
 - `common/MenuRow.tsx` — `disabled` and `description`, both for the blocked fork
   row (*Blocked and failed*). `description` renders inside the button, so it
   joins the row's accessible name without an `aria-describedby`.
-- `MessageItem.tsx` — renders `MessageMenuTrigger` on every row of a forkable
-  session, as a flex sibling on the bubble's inside, and assembles fork's
+- `MessageItem.tsx` — renders `MessageMenuTrigger` on every user row of a
+  forkable session, as a flex sibling on the bubble's inside, and
+  `MessageActions` at the end of every settled agent message, and assembles fork's
   blocked reason: the menu gate first, then `nothing-before`, the one cause that
   needs the transcript, then whatever `forkUnavailableReason` says about the
   message alone. Optional props `onForkMessage?: (messageId: string) => void`
@@ -762,26 +818,28 @@ learns something new — and it is not a subscription: the answers come from the
 implementations compiled into the server and cannot change while it runs. Until
 the answer arrives, forking is offered; the reasoning for that default and for
 retrying it after a reconnect is with the hook. Reserving the slot makes that
-default visible — in a session that turns out to answer `"none"`, the slots
-appear and then go away once, widening every bubble as they do. Accepted, and
+default visible — in a session that turns out to answer `"none"`, the slots and
+the agent's Fork appear and then go away once, widening every user
+bubble as they do. Accepted, and
 not patched over with a second default inside the component, which would be a
 copy of the hook's policy waiting to disagree with it.
 
 Accessibility, beyond the sentence a blocked row says out loud (*Blocked and
 failed*):
 
-- **The `…` names its speaker** — *"Actions for your message"* or *"Actions for
-  the agent's message"*, plus `aria-haspopup="dialog"` and `aria-expanded`.
-  There is one of these per message, and a screen reader's button list — or a
-  voice command naming one — is unusable when every entry reads "Message
-  actions". The menu's title names the speaker again for whoever arrives after
-  it has opened.
+- **The `…` names its speaker** — *"Actions for your message"*, plus
+  `aria-haspopup="dialog"` and `aria-expanded`. There is one of these per user
+  message, and a screen reader's button list — or a voice command naming one —
+  is unusable when every entry reads "Message actions". A blocked agent Fork,
+  which opens the menu instead of forking, carries the same `aria-haspopup` and
+  `aria-expanded`. The menu's title names the speaker again for whoever arrives
+  after it has opened.
 - **Focus is `Sheet`'s, not this feature's.** `Sheet` takes focus on open,
   cycles Tab inside itself and hands focus back to whatever opened it; the fork
   sheet's own title field wins over the box `Sheet` would otherwise take. Both
   sheets here rely on that and neither writes any focus code of its own — the
-  menu's `…` gets focus back on close, and a second copy of the logic would one
-  day disagree with `Sheet`'s.
+  button that opened the menu gets focus back on close, and a second copy of
+  the logic would one day disagree with `Sheet`'s.
 
 ## Considered and not done
 
@@ -792,10 +850,10 @@ failed*):
   session's input bar is one tap away — and on the case this would have helped
   most, forking off one's own prompt, the text is already sitting in it
   (*The dropped prompt*).
-- **`Copy text` in the menu.** Genuinely useful on a phone, and the menu is
-  built to take it — the *Which messages get a menu* split exists precisely so
-  that the second action does not inherit fork's reasons for being unavailable.
-  It is still not this feature. No placeholder was left for it either; the menu
-  is the placeholder, and it is the reason the second action costs no layout at
-  all now.
+- **`Copy text` in the menu.** It was there for a while, on the agent's side,
+  and went back out: Copy stands as a button in the agent's row, so the menu row
+  was a second way to the same action, and it was the only thing keeping a `…`
+  in a row that shows everything else already. The user's bubble has no Copy
+  anywhere; if it ever gets one, the *Which messages get a menu* split is what
+  keeps it from inheriting fork's reasons for being unavailable.
 - **A marker on the parent.** Rejected on the grounds in *The rule*.

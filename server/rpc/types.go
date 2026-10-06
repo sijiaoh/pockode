@@ -82,6 +82,9 @@ type AuthResult struct {
 	// It is the same on every route: the relay tunnel streams a request body and
 	// imposes no ceiling of its own.
 	MaxUploadSize int64 `json:"max_upload_size"`
+	// MaxAttachmentSize is the same thing for chat attachments
+	// (POST /api/chat/attachments), which have a ceiling of their own.
+	MaxAttachmentSize int64 `json:"max_attachment_size"`
 	// SessionToken is what the client stores in place of the password. It is a
 	// freshly issued token when the client authenticated with a password, and
 	// the very same token it sent when it authenticated with one — never a
@@ -144,6 +147,19 @@ type MessageParams struct {
 	// string written for all of them together, so there is no half of it to
 	// deliver — see chat.Client.SendAnswers.
 	Answering []QuestionAnswerParams `json:"answering,omitempty"`
+	// Attachments are files sent with the message, uploaded beforehand to the
+	// session's attachment store (POST /api/chat/attachments). Content may be
+	// empty when there are any. Refused beside Answering, and refused whole when
+	// any id names nothing the session has, or when the session's agent cannot
+	// receive files (chat.ErrAttachmentsUnsupported).
+	Attachments []MessageAttachmentParams `json:"attachments,omitempty"`
+}
+
+// MessageAttachmentParams names one uploaded file. Name is what the user calls
+// it, for display and for the agent: the id is a hash and keeps none of it.
+type MessageAttachmentParams struct {
+	ID   string `json:"id"`
+	Name string `json:"name,omitempty"`
 }
 
 // QuestionAnswerParams is one question answered by the message carrying it.
@@ -191,6 +207,10 @@ type MessageResult struct {
 	Seq     session.HistorySeq       `json:"seq,omitempty"`
 	Content string                   `json:"content,omitempty"`
 	Command *agent.CommandInvocation `json:"command,omitempty"`
+	// Attachments describe the files the message carried as its record does —
+	// type, size and dimensions read from the stored bytes — for the same
+	// reason as Content: the sender is left out of the broadcast.
+	Attachments []agent.FileBlock `json:"attachments,omitempty"`
 }
 
 type InterruptParams struct {
@@ -492,6 +512,13 @@ type SessionListItem struct {
 	// SessionDetail carries the same field, for the session a client has open,
 	// which under the "hide task sessions" filter has no row here to read.
 	WorkID string `json:"work_id,omitempty"`
+	// Watching is how many unclosed stories this session watches and would be
+	// woken by (work.WatchedBySession). Zero is absent. Derived from the
+	// stories' own Watcher for the reason WorkID is, and counted here rather
+	// than by the client because a client holding a paged work list cannot
+	// count what it was never sent (docs/lifecycle-ui.md §1.2). It is the third
+	// input of the session's activity, beside the turn and its work's wait.
+	Watching int `json:"watching,omitempty"`
 	// UpdatedAt is the row's subtitle, and what the list is ordered by.
 	UpdatedAt time.Time `json:"updated_at"`
 	// Turn is what the session is doing, whole: the client derives everything a
@@ -500,7 +527,7 @@ type SessionListItem struct {
 	// and, being volatile process state, arrived on their own schedule. This one
 	// is persisted with the session, so a row is drawn the same whether or not a
 	// process exists.
-	Turn session.TurnState `json:"turn"`
+	Turn Turn `json:"turn"`
 	// UnansweredQuestions is how many questions this session is waiting on
 	// answers to. It is `len(turn.unanswered)` and nothing else — derived here,
 	// at the one place a row is built, so it cannot drift from the list it
@@ -517,20 +544,97 @@ type SessionListItem struct {
 	ForkedFrom          *session.ForkOrigin `json:"forked_from,omitempty"`
 }
 
+// Turn is session.TurnState as a client receives it: the instant the open turn
+// began swapped for how long it has been open as of sending. A reading rather
+// than a timestamp because the client counts on from when it received it, so
+// the tail line's clock (docs/turn-progress-ui.md §2.3) never depends on the
+// phone's clock agreeing with the server's.
+//
+// Every wire type that carries a turn carries this one, which is what makes
+// "derived at send time" hold on every path rather than on the ones that
+// remembered to.
+type Turn struct {
+	session.TurnState
+	// OpenElapsedMs is absent while no turn is open.
+	OpenElapsedMs *int64 `json:"open_elapsed_ms,omitempty"`
+}
+
+// NewTurn takes the reading. now is the server's clock at the moment the value
+// is built, which is the moment it is sent: every caller builds one for a
+// message it is about to write.
+func NewTurn(state session.TurnState, now time.Time) Turn {
+	t := Turn{TurnState: state}
+	if state.Open && !state.OpenedAt.IsZero() {
+		elapsed := max(now.Sub(state.OpenedAt).Milliseconds(), 0)
+		t.OpenElapsedMs = &elapsed
+	}
+	return t
+}
+
+// SessionWork is everything a session's wire forms take from the work layer:
+// the work item it runs, and the stories it watches. Neither is stored on the
+// session — each is a field of the work records, inverted — so it is resolved
+// beside the session and handed to the constructors below. See
+// watch.SessionListWatcher.
+type SessionWork struct {
+	// WorkID is the work item the session runs, empty for a plain chat session.
+	WorkID string
+	// Watched are the unclosed stories the session watches and would be woken
+	// by (work.WatchedBySession), in listing order.
+	Watched []WatchedStory
+}
+
+// WatchedStory is one story a session watches, as much of it as a list of them
+// draws and links to. The rest is on work.detail.
+type WatchedStory struct {
+	ID     string          `json:"id"`
+	Title  string          `json:"title"`
+	Status work.WorkStatus `json:"status"`
+}
+
+// NewSessionWork builds a session's relation to the work layer from the work
+// item it runs and the stories it watches (work.WatchedBySession).
+func NewSessionWork(workID string, watched []work.Work) SessionWork {
+	sw := SessionWork{WorkID: workID}
+	for _, story := range watched {
+		sw.Watched = append(sw.Watched, WatchedStory{ID: story.ID, Title: story.Title, Status: story.Status})
+	}
+	return sw
+}
+
+// SessionWorkBySession inverts a whole work list into each session's relation
+// to it, for the readers that build a whole list of rows and would otherwise
+// read the work store once per row. A session missing from the map belongs to
+// no work and watches nothing.
+func SessionWorkBySession(works []work.Work) map[string]SessionWork {
+	workIDs := work.IDsBySession(works)
+	watched := work.WatchedBySession(works)
+	index := make(map[string]SessionWork, len(workIDs)+len(watched))
+	for sessionID, workID := range workIDs {
+		index[sessionID] = NewSessionWork(workID, watched[sessionID])
+	}
+	for sessionID, stories := range watched {
+		if _, done := index[sessionID]; !done {
+			index[sessionID] = NewSessionWork("", stories)
+		}
+	}
+	return index
+}
+
 // NewSessionListItem builds the row for a session. Every producer of a row goes
 // through here so that narrowing SessionMeta down to a row is decided in one
 // place.
 //
-// workID is the work item the session runs, empty for a plain chat session. It
-// is passed in rather than looked up here because resolving it reads the work
-// layer — see watch.SessionListWatcher.
-func NewSessionListItem(meta session.SessionMeta, workID string) SessionListItem {
+// The relation to the work layer is passed in rather than looked up here
+// because resolving it reads the work store — see watch.SessionListWatcher.
+func NewSessionListItem(meta session.SessionMeta, sw SessionWork) SessionListItem {
 	return SessionListItem{
 		ID:                  meta.ID,
-		WorkID:              workID,
+		WorkID:              sw.WorkID,
+		Watching:            len(sw.Watched),
 		Title:               meta.Title,
 		UpdatedAt:           meta.UpdatedAt,
-		Turn:                meta.Turn,
+		Turn:                NewTurn(meta.Turn, time.Now()),
 		UnansweredQuestions: len(meta.Turn.Unanswered),
 		Unread:              meta.Unread,
 		ForkedFrom:          meta.ForkedFrom,
@@ -621,6 +725,8 @@ type SessionDetailSubscribeParams struct {
 // leave a session's own settings with no subscription that carries them.
 type SessionDetail struct {
 	session.SessionMeta
+	// Turn shadows SessionMeta.Turn with its wire form; see Turn.
+	Turn Turn `json:"turn"`
 	// WorkID names the work item this session runs, absent for a plain chat
 	// session. Same field, same source and same rule as SessionListItem.WorkID:
 	// derived from work.Work.SessionID, never stored on the session.
@@ -630,10 +736,23 @@ type SessionDetail struct {
 	// session whose work id a client most needs — the open one — is the one with
 	// no row to read it off.
 	WorkID string `json:"work_id,omitempty"`
+	// Watching is SessionListItem.Watching, on the detail for the reason WorkID
+	// is on both.
+	Watching int `json:"watching,omitempty"`
+	// WatchedStories are the stories Watching counts, for the one session a
+	// client has open: the chat that says it is watching is the surface that
+	// lists what. A row has no room to list them and is sent the count alone.
+	WatchedStories []WatchedStory `json:"watched_stories,omitempty"`
 }
 
-func NewSessionDetail(meta session.SessionMeta, workID string) SessionDetail {
-	return SessionDetail{SessionMeta: meta, WorkID: workID}
+func NewSessionDetail(meta session.SessionMeta, sw SessionWork) SessionDetail {
+	return SessionDetail{
+		SessionMeta:    meta,
+		Turn:           NewTurn(meta.Turn, time.Now()),
+		WorkID:         sw.WorkID,
+		Watching:       len(sw.Watched),
+		WatchedStories: sw.Watched,
+	}
 }
 
 type SessionDetailSubscribeResult struct {
@@ -666,7 +785,7 @@ type ChatMessagesSubscribeResult struct {
 	// governs: a turn that is not running is what tells the client that every
 	// message still streaming has stopped, which is the only thing that closes
 	// out a transcript whose server died mid-stream (docs/lifecycle-ui.md §2.4).
-	Turn session.TurnState `json:"turn"`
+	Turn Turn `json:"turn"`
 	// ToolActivity is what each tool call still in flight last reported doing,
 	// by tool_use_id. It is here rather than in History because a tool_activity
 	// event is the latest value of something still changing and is never

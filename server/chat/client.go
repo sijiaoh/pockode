@@ -50,6 +50,13 @@ var ErrSessionNotRunning = errors.New("session is no longer running, send a mess
 // both ways forward: answer the request, or stop the turn and then send.
 var ErrTurnAwaitingAnswer = errors.New("this turn is waiting for an answer to the request on screen: answer it, or stop the turn, then send")
 
+// ErrAttachmentsUnsupported is returned when a message carries files and the
+// session's agent has no way to hand them over (agent.AttachmentReceiver).
+//
+// Refused rather than sent without them: the agent would answer a message whose
+// screenshot it never saw, and nothing on the screen would say so.
+var ErrAttachmentsUnsupported = errors.New("this session's agent cannot receive attached files; send the message without them")
+
 // ErrForkAnchorOutOfRange is returned when the anchor names no record of the
 // source session's history.
 var ErrForkAnchorOutOfRange = errors.New("fork anchor is outside the session's history")
@@ -117,16 +124,20 @@ func (c *Client) SetBroadcaster(fn EventBroadcastFunc) {
 // can never name is its own (see session.HistorySeq).
 //
 // session.NoHistorySeq when the record was not persisted — see sendEvent.
-func (c *Client) SendMessageExcluding(ctx context.Context, sessionID, content string, exclude any) (session.HistorySeq, error) {
-	return c.sendEvent(ctx, sessionID, agent.MessageEvent{Content: content}, exclude)
+//
+// attachments are files already in the session's attachment store; the message
+// is refused whole with ErrAttachmentsUnsupported when the agent cannot take
+// them.
+func (c *Client) SendMessageExcluding(ctx context.Context, sessionID, content string, attachments []agent.Attachment, exclude any) (session.HistorySeq, error) {
+	return c.sendEvent(ctx, sessionID, agent.MessageEvent{Content: content}, attachments, exclude)
 }
 
 // SendCommandExcluding is SendMessageExcluding for a Pockode command: content is
 // the prompt the command expanded to, which is what the agent reads and what the
 // record holds, and cmd is what the user typed. It is still the user's message —
 // the origin is theirs, so it forks and drives a work like any other.
-func (c *Client) SendCommandExcluding(ctx context.Context, sessionID, content string, cmd agent.CommandInvocation, exclude any) (session.HistorySeq, error) {
-	return c.sendEvent(ctx, sessionID, agent.MessageEvent{Content: content, Command: &cmd}, exclude)
+func (c *Client) SendCommandExcluding(ctx context.Context, sessionID, content string, cmd agent.CommandInvocation, attachments []agent.Attachment, exclude any) (session.HistorySeq, error) {
+	return c.sendEvent(ctx, sessionID, agent.MessageEvent{Content: content, Command: &cmd}, attachments, exclude)
 }
 
 // SendSystemMessage sends a system-driven automatic message (kickoff, restart,
@@ -140,14 +151,14 @@ func (c *Client) SendSystemMessage(ctx context.Context, sessionID, content, subt
 		Subtype: subtype,
 		Meta:    meta,
 	}
-	_, err := c.sendEvent(ctx, sessionID, event, nil)
+	_, err := c.sendEvent(ctx, sessionID, event, nil, nil)
 	return err
 }
 
 // sendEvent delivers one message to the agent, records it, and tells subscribers.
 // It returns the record's address in history, or session.NoHistorySeq if there
 // is none.
-func (c *Client) sendEvent(ctx context.Context, sessionID string, event agent.MessageEvent, exclude any) (session.HistorySeq, error) {
+func (c *Client) sendEvent(ctx context.Context, sessionID string, event agent.MessageEvent, attachments []agent.Attachment, exclude any) (session.HistorySeq, error) {
 	proc, err := c.getOrCreateProcess(ctx, sessionID)
 	if err != nil {
 		return session.NoHistorySeq, err
@@ -164,6 +175,12 @@ func (c *Client) sendEvent(ctx context.Context, sessionID string, event agent.Me
 	// nudged into nothing.
 	if proc.TurnState().AwaitingUserAnswer() {
 		return session.NoHistorySeq, ErrTurnAwaitingAnswer
+	}
+	if len(attachments) > 0 && !proc.ReceivesAttachments() {
+		return session.NoHistorySeq, ErrAttachmentsUnsupported
+	}
+	for _, a := range attachments {
+		event.Attachments = append(event.Attachments, a.File)
 	}
 
 	// Minted here, once, for every sender: it goes into the record, to the agent
@@ -185,7 +202,7 @@ func (c *Client) sendEvent(ctx context.Context, sessionID string, event agent.Me
 		event.MessageID = ""
 	}
 
-	openedTurn, err := proc.SendMessage(agent.Prompt{Text: event.Content, ID: event.MessageID})
+	openedTurn, err := proc.SendMessage(agent.Prompt{Text: event.Content, ID: event.MessageID, Attachments: attachments})
 	if err != nil {
 		return session.NoHistorySeq, err
 	}

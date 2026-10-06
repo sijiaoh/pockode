@@ -12,7 +12,7 @@ import (
 // happening right now. Nothing on screen may spell a state out of those parts
 // itself — see docs/lifecycle-ui.md.
 //
-// Eight leaves, and there is never more than one: the layers it is derived from
+// Nine leaves, and there is never more than one: the layers it is derived from
 // are each exclusive.
 //
 // It is not the whole of what a row draws. "This work has questions waiting for
@@ -33,6 +33,11 @@ const (
 	ActivityBackground Activity = "background"
 	// ActivityWaitingChildren is a story waiting for its subtasks to close.
 	ActivityWaitingChildren Activity = "waiting_children"
+	// ActivityWatching is a session between turns that watches stories which
+	// have not closed: it will be woken when one of them closes, stops or asks.
+	// It is a fact about the conversation, not a wait the engine keeps — nothing
+	// about nudging reads it.
+	ActivityWatching Activity = "watching"
 	// ActivityIdle is an engine-driven work with nothing happening in it right
 	// now — between turns, or waiting for the nudge that follows one.
 	ActivityIdle Activity = "idle"
@@ -64,6 +69,11 @@ func (a Activity) NeedsUser() bool {
 // has no session — which reads as idle, the same as a session sitting between
 // turns, because for a work item the two are the same nothing.
 //
+// watching is how many unclosed stories that session watches. It comes last,
+// below the work's own wait: a session waiting on its subtasks is doing the
+// thing it was started for, and the stories it watches are something it does
+// on the side. Work rows pass zero — see RowStateFor.
+//
 // Phase outranks wait rather than the other way round: a wait is a standing
 // intention, a phase is a fact about this second. An agent that calls story_wait
 // and then keeps writing for another ten seconds *is* running, and the row
@@ -78,7 +88,7 @@ func (a Activity) NeedsUser() bool {
 // evaluated in two places, for the reason docs/lifecycle-ui.md §1.3 gives: a
 // work list spans worktrees, and a client cannot hold the turn state of a
 // session in a worktree it has not opened.
-func DeriveActivity(w Work, turn session.TurnState) Activity {
+func DeriveActivity(w Work, turn session.TurnState, watching int) Activity {
 	switch w.Status {
 	case StatusOpen:
 		return ActivityOpen
@@ -98,6 +108,9 @@ func DeriveActivity(w Work, turn session.TurnState) Activity {
 	// Idle, or no session at all.
 	if w.Wait == WaitChild {
 		return ActivityWaitingChildren
+	}
+	if watching > 0 {
+		return ActivityWatching
 	}
 	return ActivityIdle
 }
@@ -148,8 +161,13 @@ func (s RowState) NeedsAttention() bool {
 
 // RowStateFor derives a row's state from a work item and the turn of the
 // session it runs in — the zero turn when it has no session.
+//
+// A work row never reads as watching. What a work's row reports is the engine
+// driving it, and an idle active work is one the engine is about to nudge
+// whether or not its session watches anything; the watch is the session's
+// business, and the session's row is where it shows.
 func RowStateFor(w Work, turn session.TurnState) RowState {
-	state := RowState{Activity: DeriveActivity(w, turn)}
+	state := RowState{Activity: DeriveActivity(w, turn, 0)}
 	if w.Status == StatusActive || w.Status == StatusStopped {
 		// A closed or never-started work draws no count. Closing withdraws the
 		// questions beneath it (worktree.Manager.RetireSession), and an open one
@@ -195,7 +213,7 @@ func NewActivityResolver(source TurnSource) *ActivityResolver {
 
 // Activity derives one work item's activity.
 func (r *ActivityResolver) Activity(w Work) Activity {
-	return DeriveActivity(w, r.turnFor(w))
+	return RowStateFor(w, r.turnFor(w)).Activity
 }
 
 // RowState derives everything one work item's row draws from the session layer.

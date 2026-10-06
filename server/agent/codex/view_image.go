@@ -52,6 +52,7 @@ func (s *appSession) handleImageViewCompleted(item threadItem) {
 	s.emitEvent(agent.ToolResultEvent{
 		ToolUseID:         item.ID,
 		Contents:          []agent.ContentBlock{{Type: agent.ContentBlockFile, File: file}},
+		ParentToolUseID:   item.ParentToolUseID,
 		ProviderMessageID: item.TurnID,
 	})
 }

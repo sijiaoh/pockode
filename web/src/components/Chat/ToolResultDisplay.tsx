@@ -1,20 +1,15 @@
 import { AnsiUp } from "ansi_up";
-import { createPatch } from "diff";
-import { Check, Circle, Loader2 } from "lucide-react";
 import { useMemo } from "react";
-import {
-	type CodexChangeView,
-	parseCodexChanges,
-} from "../../lib/codexChanges";
 import { groupContentBlocks } from "../../lib/contentBlocks";
+import { proposedChange, proposedChangeText } from "../../lib/proposedChange";
 import { CodeHighlighter } from "../../lib/shikiUtils";
 import { parseReadResult } from "../../lib/toolResultParser";
 import { useWSStore } from "../../lib/wsStore";
 import type { ContentBlock } from "../../types/content";
-import { GIT_STATUS_INFO } from "../../types/git";
 import { HIGHLIGHT_LIMIT } from "../../utils/fileView";
 import { formatFilePath, relativeToWorkDir } from "../../utils/path";
-import { DiffViewer, FileContentDisplay, MarkdownContent } from "../ui";
+import { FileContentDisplay, MarkdownContent } from "../ui";
+import { ProposedChange } from "./ProposedChange";
 
 const ansiUp = new AnsiUp();
 ansiUp.use_classes = true;
@@ -32,31 +27,15 @@ interface ToolResultDisplayProps {
 	 * there is none to read.
 	 */
 	contents?: ContentBlock[];
+	/** Whether the call failed, which a command's output shows at its end. */
+	failed?: boolean;
 }
 
-interface EditInput {
-	file_path: string;
-	old_string: string;
-	new_string: string;
-	replace_all?: boolean;
-}
-
-interface WriteInput {
-	file_path: string;
-	content: string;
-}
-
-interface MultiEditInput {
-	file_path: string;
-	edits: Array<{ old_string: string; new_string: string }>;
-}
-
-interface TodoWriteInput {
-	todos: Array<{
-		content: string;
-		status: "pending" | "in_progress" | "completed";
-		activeForm: string;
-	}>;
+/** The file a `Read` returned, without the line numbers the CLI prefixes. */
+function readResultCode(result: string): string {
+	const lines = parseReadResult(result);
+	if (lines.length === 0) return result;
+	return lines.map((l) => l.content).join("\n");
 }
 
 function ReadResultDisplay({
@@ -66,127 +45,10 @@ function ReadResultDisplay({
 	result: string;
 	filePath?: string;
 }) {
-	const lines = useMemo(() => parseReadResult(result), [result]);
-	const code = useMemo(() => lines.map((l) => l.content).join("\n"), [lines]);
-
-	if (lines.length === 0) {
-		return <FileContentDisplay content={result} filePath={filePath} />;
-	}
-
-	return <FileContentDisplay content={code} filePath={filePath} />;
-}
-
-function EditResultDisplay({ input }: { input: EditInput }) {
-	const unifiedDiff = useMemo(
-		() => createPatch(input.file_path, input.old_string, input.new_string),
-		[input.file_path, input.old_string, input.new_string],
-	);
-
-	return <DiffViewer fileName={input.file_path} hunks={[unifiedDiff]} />;
-}
-
-function CodexEditResultDisplay({ changes }: { changes: CodexChangeView[] }) {
-	const workDir = useWSStore((s) => s.workDir);
+	const code = useMemo(() => readResultCode(result), [result]);
 
 	return (
-		<div className="space-y-3">
-			{changes.map((change) => (
-				<div key={change.path} className="space-y-1">
-					<div className="flex items-center gap-2 text-sm">
-						<span
-							className={`shrink-0 font-mono ${GIT_STATUS_INFO[change.status].color}`}
-							// "?" means an unknown change type here, not git's "Untracked".
-							title={
-								change.status === "?"
-									? change.note
-									: GIT_STATUS_INFO[change.status].label
-							}
-						>
-							{change.status}
-						</span>
-						<span
-							className="truncate text-th-text-primary"
-							title={change.newPath}
-						>
-							{formatFilePath(change.newPath, workDir)}
-						</span>
-					</div>
-					{change.newPath !== change.path && (
-						<div className="text-th-text-muted text-xs" title={change.path}>
-							from {formatFilePath(change.path, workDir)}
-						</div>
-					)}
-					{change.patch ? (
-						<DiffViewer fileName={change.newPath} hunks={[change.patch]} />
-					) : (
-						<p className="text-th-text-muted">
-							{change.note ?? "No diff to show"}
-						</p>
-					)}
-				</div>
-			))}
-		</div>
-	);
-}
-
-function MultiEditResultDisplay({ input }: { input: MultiEditInput }) {
-	const diffs = useMemo(
-		() =>
-			input.edits.map((edit, index) => ({
-				index,
-				patch: createPatch(input.file_path, edit.old_string, edit.new_string),
-			})),
-		[input.file_path, input.edits],
-	);
-
-	return (
-		<div className="space-y-2">
-			{diffs.map(({ index, patch }) => (
-				<DiffViewer key={index} fileName={input.file_path} hunks={[patch]} />
-			))}
-		</div>
-	);
-}
-
-function WriteResultDisplay({ input }: { input: WriteInput }) {
-	return (
-		<FileContentDisplay content={input.content} filePath={input.file_path} />
-	);
-}
-
-function TodoWriteResultDisplay({ input }: { input: TodoWriteInput }) {
-	const getStatusIcon = (status: TodoWriteInput["todos"][number]["status"]) => {
-		switch (status) {
-			case "completed":
-				return <Check className="size-4 text-th-success" />;
-			case "in_progress":
-				return <Loader2 className="size-4 text-th-warning" />;
-			case "pending":
-				return <Circle className="size-4 text-th-text-muted" />;
-		}
-	};
-
-	return (
-		<div className="space-y-1 text-sm">
-			{input.todos.map((todo, index) => (
-				<div
-					// biome-ignore lint/suspicious/noArrayIndexKey: todos have no unique identifier
-					key={index}
-					className="flex items-center gap-2"
-				>
-					{getStatusIcon(todo.status)}
-					<span
-						className={
-							todo.status === "completed"
-								? "text-th-text-muted line-through"
-								: ""
-						}
-					>
-						{todo.content}
-					</span>
-				</div>
-			))}
-		</div>
+		<FileContentDisplay content={code} filePath={filePath} copyable={false} />
 	);
 }
 
@@ -284,44 +146,116 @@ function UnknownResultDisplay({ result }: { result: string }) {
 	}, [result]);
 
 	if (pretty)
-		return <CodeHighlighter language="json">{pretty}</CodeHighlighter>;
+		return (
+			<CodeHighlighter language="json" copyable={false}>
+				{pretty}
+			</CodeHighlighter>
+		);
 	return <pre className="whitespace-pre-wrap text-th-text-muted">{result}</pre>;
 }
 
-function BashResultDisplay({ result }: { result: string }) {
-	const html = useMemo(() => ansiUp.ansi_to_html(result), [result]);
+/**
+ * How many of a failed command's last lines are marked as its error. The
+ * failure is nearly always said at the end — a compiler's last errors, a test
+ * runner's `FAIL` — and a handful of lines holds it without painting a whole
+ * log red.
+ */
+const ERROR_TAIL_LINES = 5;
+
+/**
+ * How text that says why a call failed is drawn in its body — a failed
+ * command's last lines, a refused change's reason: red, on a red bar, so it is
+ * found without reading the rest.
+ */
+export const FAILURE_TEXT =
+	"border-l-2 border-th-error bg-th-error/10 pl-2 text-th-error";
+
+function outputLines(result: string): string[] {
+	return result.replace(/\n+$/, "").split("\n");
+}
+
+/** What the output's *Show all* says: a log is measured in lines. */
+export function outputLineCount(result: string): number {
+	return outputLines(result).length;
+}
+
+function AnsiPre({ text, className }: { text: string; className: string }) {
+	const html = useMemo(() => ansiUp.ansi_to_html(text), [text]);
 
 	return (
 		<pre
-			className="font-mono text-xs text-th-text-muted"
+			className={`whitespace-pre-wrap break-words font-mono text-xs ${className}`}
 			// biome-ignore lint/security/noDangerouslySetInnerHtml: ansi_up output is safe
 			dangerouslySetInnerHTML={{ __html: html }}
 		/>
 	);
 }
 
-function isEditInput(input: unknown): input is EditInput {
-	const i = input as Record<string, unknown>;
+/**
+ * A command's output, wrapped: a log line is read whole, and on a phone a
+ * sideways scroll hid the end of nearly every one. A failed command's last
+ * lines stand out, since that is where it says why.
+ */
+function BashResultDisplay({
+	result,
+	failed,
+}: {
+	result: string;
+	failed?: boolean;
+}) {
+	const [head, tail] = useMemo(() => {
+		if (!failed) return [result, ""];
+		const lines = outputLines(result);
+		return [
+			lines.slice(0, -ERROR_TAIL_LINES).join("\n"),
+			lines.slice(-ERROR_TAIL_LINES).join("\n"),
+		];
+	}, [result, failed]);
+
 	return (
-		typeof i?.file_path === "string" &&
-		typeof i?.old_string === "string" &&
-		typeof i?.new_string === "string"
+		<>
+			{head && <AnsiPre text={head} className="text-th-text-muted" />}
+			{tail && <AnsiPre text={tail} className={FAILURE_TEXT} />}
+		</>
 	);
 }
 
-function isWriteInput(input: unknown): input is WriteInput {
-	const i = input as Record<string, unknown>;
-	return typeof i?.file_path === "string" && typeof i?.content === "string";
-}
+// Built rather than written as a literal: a control character in a regex
+// literal is almost always a mistake, and the linter says so.
+const ANSI_ESCAPE = new RegExp(
+	`${String.fromCharCode(27)}\\[[0-?]*[ -/]*[@-~]`,
+	"g",
+);
 
-function isMultiEditInput(input: unknown): input is MultiEditInput {
-	const i = input as Record<string, unknown>;
-	return typeof i?.file_path === "string" && Array.isArray(i?.edits);
-}
+/**
+ * What the result block's copy button copies: the text a reader would select
+ * out of it, which is not always the result as it arrived — a `Read` comes back
+ * line-numbered and a command's output carries colour codes. Nothing for a
+ * result that is not text to begin with: a diff, content blocks.
+ */
+export function resultCopyText(
+	toolName: string,
+	toolInput: unknown,
+	result: string,
+	contents?: ContentBlock[],
+): string | undefined {
+	if (contents) return undefined;
 
-function isTodoWriteInput(input: unknown): input is TodoWriteInput {
-	const i = input as Record<string, unknown>;
-	return Array.isArray(i?.todos) && i.todos.length > 0;
+	switch (toolName) {
+		case "Read":
+			return readResultCode(result);
+		case "Bash":
+			return result.replace(ANSI_ESCAPE, "");
+		case "Edit":
+		case "MultiEdit":
+		case "Write": {
+			const change = proposedChange(toolName, toolInput);
+			if (change) return proposedChangeText(change);
+			return result || undefined;
+		}
+		default:
+			return result || undefined;
+	}
 }
 
 /**
@@ -375,14 +309,11 @@ function ToolResultDisplay({
 	result,
 	contents,
 	onOpenFile,
+	failed,
 }: ToolResultDisplayProps) {
 	const input = toolInput as Record<string, unknown>;
 	const filePath =
 		typeof input?.file_path === "string" ? input.file_path : undefined;
-	// Memoized because building add/delete patches diffs whole file contents,
-	// and a streaming session re-renders this tree while it stays expanded.
-	const codexChanges = useMemo(() => parseCodexChanges(toolInput), [toolInput]);
-
 	if (contents) {
 		return <ContentBlocksDisplay blocks={contents} />;
 	}
@@ -412,35 +343,18 @@ function ToolResultDisplay({
 		case "Read":
 			return <ReadResultDisplay result={result} filePath={filePath} />;
 
+		// What a file tool did is what it was asked to do: the view reads the
+		// input alone, and the permission card draws the same one before it runs.
 		case "Edit":
-			if (isEditInput(toolInput)) {
-				return <EditResultDisplay input={toolInput} />;
-			}
-			if (codexChanges) {
-				return <CodexEditResultDisplay changes={codexChanges} />;
-			}
-			return <UnknownResultDisplay result={result} />;
-
 		case "MultiEdit":
-			if (isMultiEditInput(toolInput)) {
-				return <MultiEditResultDisplay input={toolInput} />;
-			}
+		case "Write": {
+			const change = proposedChange(toolName, toolInput);
+			if (change) return <ProposedChange change={change} />;
 			return <UnknownResultDisplay result={result} />;
-
-		case "Write":
-			if (isWriteInput(toolInput)) {
-				return <WriteResultDisplay input={toolInput} />;
-			}
-			return <UnknownResultDisplay result={result} />;
+		}
 
 		case "Bash":
-			return <BashResultDisplay result={result} />;
-
-		case "TodoWrite":
-			if (isTodoWriteInput(toolInput)) {
-				return <TodoWriteResultDisplay input={toolInput} />;
-			}
-			return <pre className="text-th-text-muted">{result}</pre>;
+			return <BashResultDisplay result={result} failed={failed} />;
 
 		default:
 			return <UnknownResultDisplay result={result} />;

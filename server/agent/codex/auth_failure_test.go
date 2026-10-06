@@ -202,3 +202,23 @@ func TestWarningNotification_IsRedacted(t *testing.T) {
 		t.Errorf("key leaked into %q", got)
 	}
 }
+
+// A subagent's thread reaching the model says nothing of this turn's
+// credentials: its items are of its own turn.
+func TestAuthFailure_SubagentItemsDoNotClearIt(t *testing.T) {
+	sess := newTestSession()
+	defer sess.cancel()
+	sess.stateMu.Lock()
+	sess.threadID = "t"
+	sess.stateMu.Unlock()
+	sess.adoptTurn("u")
+
+	sess.notify("error", `{"threadId":"t","turnId":"u","willRetry":true,"error":{"message":"Reconnecting... 1/5","codexErrorInfo":{"responseStreamDisconnected":{"httpStatusCode":401}}}}`)
+	sess.notify("item/completed", `{"threadId":"child","turnId":"turn-child","completedAtMs":2,"item":{"type":"agentMessage","id":"msg-1","text":"hello","phase":"final_answer"}}`)
+	sess.notify("turn/completed", `{"threadId":"t","turn":{"id":"u","items":[],"status":"failed","error":{"message":"boom","codexErrorInfo":"other"}}}`)
+
+	events := drainEvents(sess.events)
+	if got := events[len(events)-1].(agent.ErrorEvent); got.AuthFailure == nil {
+		t.Errorf("a subagent's item cleared the turn's auth mark: %+v", got)
+	}
+}

@@ -33,6 +33,12 @@ interface Props {
 	 * words.
 	 */
 	disabled?: boolean;
+	/**
+	 * Set when the rows sit in a `role="menu"` rather than a sheet. The menu
+	 * then moves focus between rows with the arrow keys, so a row is not a
+	 * Tab stop of its own.
+	 */
+	role?: "menuitem";
 	onClick: () => void;
 }
 
@@ -42,11 +48,14 @@ function MenuRow({
 	danger,
 	description,
 	disabled,
+	role,
 	onClick,
 }: Props) {
 	return (
 		<button
 			type="button"
+			role={role}
+			tabIndex={role === "menuitem" ? -1 : undefined}
 			onClick={disabled ? undefined : onClick}
 			aria-disabled={disabled || undefined}
 			className={`${menuRowClass} ${focusClass} ${

@@ -50,6 +50,25 @@ export function splitNativePath(path: string): string[] {
 }
 
 /**
+ * Whether two host filesystem paths name the same directory, whichever
+ * separator each uses and with or without a trailing one.
+ */
+export function isSameNativePath(a: string, b: string): boolean {
+	const left = splitNativePath(a);
+	const right = splitNativePath(b);
+	return left.length === right.length && startsWithSegments(left, right);
+}
+
+/**
+ * Compared segment by segment rather than as a string prefix: that keeps
+ * "/home/me/project2" from matching "/home/me/project", and makes the check
+ * insensitive to which separator each side happens to use.
+ */
+function startsWithSegments(parts: string[], prefix: string[]): boolean {
+	return prefix.every((segment, i) => segment === parts[i]);
+}
+
+/**
  * `filePath` as a work-directory-relative path in Pockode's own slash form, or
  * null when it names nothing inside the work directory — the work directory
  * itself included, which is not a file the file namespace can serve.
@@ -64,13 +83,10 @@ export function relativeToWorkDir(
 ): string | null {
 	const parts = splitNativePath(filePath);
 	const workDirParts = splitNativePath(workDir);
-	// Compare segment by segment rather than as a string prefix: that keeps
-	// "/home/me/project2" from matching a work dir of "/home/me/project", and it
-	// makes the check insensitive to which separator each side happens to use.
 	if (workDirParts.length === 0 || workDirParts.length >= parts.length) {
 		return null;
 	}
-	if (!workDirParts.every((segment, i) => segment === parts[i])) return null;
+	if (!startsWithSegments(parts, workDirParts)) return null;
 
 	const relativeParts = parts.slice(workDirParts.length);
 	// A `..` in the remainder walks back out, so the prefix match says nothing

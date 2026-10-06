@@ -30,9 +30,10 @@ func (h *rpcMethodHandler) handleSessionCreate(ctx context.Context, conn *jsonrp
 
 	h.log.Info("session created", "sessionId", sessionID)
 
-	// A session created here belongs to no work item: a work's session is created
-	// by the work starter, under the id the work already claimed.
-	result := rpc.NewSessionListItem(sess, "")
+	// A session created here belongs to no work item — a work's session is created
+	// by the work starter, under the id the work already claimed — and has not
+	// had a turn in which to watch a story.
+	result := rpc.NewSessionListItem(sess, rpc.SessionWork{})
 
 	if err := conn.Reply(ctx, req.ID, result); err != nil {
 		h.log.Error("failed to send session create response", "error", err)
@@ -53,9 +54,9 @@ func (h *rpcMethodHandler) handleSessionFork(ctx context.Context, conn *jsonrpc2
 	}
 
 	// Not logged here: chat.Client already logged the fork with what it did.
-	// A fork belongs to no work item either: the work still names the session it
-	// was forked from.
-	result := rpc.NewSessionListItem(meta, "")
+	// A fork belongs to no work item either, and watches no story: the work and
+	// every watched story still name the session it was forked from.
+	result := rpc.NewSessionListItem(meta, rpc.SessionWork{})
 
 	if err := conn.Reply(ctx, req.ID, result); err != nil {
 		h.log.Error("failed to send session fork response", "error", err)

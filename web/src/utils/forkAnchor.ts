@@ -1,3 +1,5 @@
+import { somePartDeep } from "../lib/partTree";
+import type { FileBlock } from "../types/content";
 import type {
 	AssistantMessage,
 	HistorySeq,
@@ -52,7 +54,10 @@ export function forkUnavailableReason(
 	// the fork can answer it (agent.UnansweredQuestions). A legacy card is not one
 	// either — nothing can answer it in the source session, so cutting above it
 	// takes nothing away.
-	return message.parts.some(
+	// At any depth: a subagent's call waits on the user as surely as the main
+	// agent's does.
+	return somePartDeep(
+		message.parts,
 		(part) => part.type === "permission_request" && part.status === "pending",
 	)
 		? "pending-request"
@@ -105,6 +110,11 @@ export interface ForkAnchor {
 	 * the fork keeps.
 	 */
 	droppedText?: string;
+	/**
+	 * The files sent with those words, restored beside them. A fork clones the
+	 * session's attachment store, so the same ids name them in the new session.
+	 */
+	droppedAttachments?: FileBlock[];
 }
 
 /**
@@ -162,5 +172,7 @@ export function resolveForkAnchor(
 				: message.command
 					? formatPockodeCommand(message.command)
 					: message.content,
+		droppedAttachments:
+			message.role === "user" ? message.attachments : undefined,
 	};
 }

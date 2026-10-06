@@ -93,8 +93,8 @@ same row structure as a tool call (`PockodeCommandItem` in
   the agent read.
 
 A command message has no status and no chip, because it is an event that has
-already happened. It keeps the message-action slot like the other full-width
-lines (a work event, an agent's answer), so the row ends where the bubbles do
+already happened. It is still the user's own message, so it keeps the
+message-action slot and its `…` like every user row, an agent's answer included
 ([session-fork-ui.md](session-fork-ui.md#which-rows-reserve-a-slot)).
 
 **The local echo is the line from the first frame.** `sendUserMessage` parses
@@ -213,9 +213,11 @@ single units; create each with a role; start each with `story_start`, with
 `watch` set and a new worktree; leave the stories' tasks alone; do not edit or
 comment on a story once it has started; answer a story's questions when the
 discussion or the project settles them, and otherwise leave them, since the
-user is already being asked; merge each closed story into the branch; report
-when all are merged. The template itself is the source of truth, and this
-summary does not replace it.
+user is already being asked; merge each closed story into the branch; release
+with `story_unwatch` a story it no longer needs to follow before it closes —
+dropped, or taken over by the user — finding its watches through `story_list`'s
+`watched` if it has lost track; report when all are merged. The template itself
+is the source of truth, and this summary does not replace it.
 
 - **The branch is injected at expansion time.** `{{.Branch}}` is the branch the
   invoking session's worktree is on, read with `git.CurrentBranch`. This works

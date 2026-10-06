@@ -364,6 +364,20 @@ on the other side. This is the one thing in the lifecycle that could not be a
 single implementation, and the shared fixture is what keeps "two
 implementations" from meaning "two rules".
 
+**A session watching stories is the rule's last branch, and not a wait.** A
+chat that started a story with `watch` is woken when the story closes, stops or
+asks, so between turns it reads `watching` rather than `idle` — below a `child`
+wait, which is what the session was started for. What it counts is the stories
+whose news would actually wake that session: not closed (a stopped story still
+counts, since it may be restarted and finish), not the story's own session, and
+none at all while the session's own work is not `active`, because the engine
+delivers to no such watcher and a count that included one would promise a
+wake-up that never comes. The count and the delivery are one predicate for that
+reason. It is the session's fact, not the work's: nothing is written to the
+work it runs, the engine keeps no wait for it, and it changes nothing about
+nudging — an idle `active` work is nudged whether or not its session watches
+anything, which is also why a work row never reads `watching`.
+
 `Activity` is not the whole of what a surface draws, either: "this work has
 questions nobody has answered" is a second, independent dimension, carried
 beside it rather than folded into it — an agent that asked something and went on

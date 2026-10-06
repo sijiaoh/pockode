@@ -77,13 +77,7 @@ type resultUsage struct {
 // assistantUsage is the usage half of an assistant frame: one API request's own
 // figures, in the shape the Anthropic API reports them.
 type assistantUsage struct {
-	// ParentToolUseID names the tool call an assistant frame belongs to, and is
-	// set on every frame a subagent produced. A subagent is prompted with its own
-	// conversation — 11800 tokens against the main conversation's 24034 in the run
-	// this was checked on — so its prompt size says nothing about how full this
-	// session's window is.
-	ParentToolUseID *string `json:"parent_tool_use_id"`
-	Message         struct {
+	Message struct {
 		Usage struct {
 			InputTokens              int64 `json:"input_tokens"`
 			CacheReadInputTokens     int64 `json:"cache_read_input_tokens"`
@@ -108,7 +102,7 @@ func (o *usageObserver) observe(line []byte, event cliEvent) {
 	case event.Type == "system" && event.Subtype == "init":
 		o.observeInit(line)
 	case event.Type == "assistant":
-		o.observeAssistant(line)
+		o.observeAssistant(line, event)
 	case event.Type == "result":
 		o.observeResult(line)
 	}
@@ -129,7 +123,14 @@ func (o *usageObserver) observeInit(line []byte) {
 
 // observeAssistant records how large the prompt of one API request was. The last
 // one to arrive before a result frame is the conversation's current size.
-func (o *usageObserver) observeAssistant(line []byte) {
+func (o *usageObserver) observeAssistant(line []byte, event cliEvent) {
+	// A subagent is prompted with its own conversation — 11800 tokens against
+	// the main conversation's 24034 in the run this was checked on — so its
+	// prompt size says nothing about how full this session's window is.
+	if event.ParentToolUseID != "" {
+		return
+	}
+
 	var frame assistantUsage
 	if err := json.Unmarshal(line, &frame); err != nil {
 		// The parser reports the same frame to the user, so a broken one is already
@@ -137,10 +138,6 @@ func (o *usageObserver) observeAssistant(line []byte) {
 		o.log.Debug("failed to read usage from assistant frame", "error", err)
 		return
 	}
-	if frame.ParentToolUseID != nil {
-		return
-	}
-
 	tokens := frame.Message.Usage.InputTokens +
 		frame.Message.Usage.CacheReadInputTokens +
 		frame.Message.Usage.CacheCreationInputTokens

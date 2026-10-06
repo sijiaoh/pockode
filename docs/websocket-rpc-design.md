@@ -2,6 +2,13 @@
 
 All communication uses WebSocket JSON-RPC 2.0. REST APIs are not used.
 
+The one exception is whole-file transfer, which carries bytes rather than
+calls: `GET /api/files/download`, `POST /api/files/upload` and
+`POST /api/chat/attachments` are plain HTTP so a large body neither waits behind
+nor holds up the one connection ([file.md](file.md#transfer)). A chat
+attachment upload is only the first half of a send: `chat.message` then names
+the stored files by the ids the upload returned.
+
 ## Background
 
 Pockode communicates with user PCs behind NAT via a Relay:

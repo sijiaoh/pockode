@@ -141,7 +141,7 @@ func TestSessionListWatcher_Sync_RestoresWhatTheSubscriberHadLoaded(t *testing.T
 	w := &SessionListWatcher{
 		BaseWatcher: NewBaseWatcher(),
 		store:       store,
-		works:       newSessionWorkIndex(nil),
+		works:       newSessionWorkIndex(nil, sameRow),
 		eventCh:     make(chan sessionListEvent, 1),
 	}
 	store.AddOnChangeListener(w)
@@ -202,7 +202,7 @@ func TestSessionListWatcher_Sync_CapsWhatItRestores(t *testing.T) {
 	w := &SessionListWatcher{
 		BaseWatcher: NewBaseWatcher(),
 		store:       store,
-		works:       newSessionWorkIndex(nil),
+		works:       newSessionWorkIndex(nil, sameRow),
 		eventCh:     make(chan sessionListEvent, 1),
 	}
 	store.AddOnChangeListener(w)

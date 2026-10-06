@@ -88,9 +88,42 @@ func TestParseLine(t *testing.T) {
 			expected: nil,
 		},
 		{
-			name:     "system thinking_tokens event is filtered",
+			name:     "system thinking_tokens is the signal that the agent is thinking",
 			input:    `{"type":"system","subtype":"thinking_tokens","estimated_tokens":50,"estimated_tokens_delta":50}`,
+			expected: []agent.AgentEvent{agent.ThinkingDeltaEvent{}},
+		},
+		{
+			name:     "a subagent's thinking_tokens says nothing about the main agent",
+			input:    `{"type":"system","subtype":"thinking_tokens","estimated_tokens":50,"parent_tool_use_id":"toolu_task"}`,
 			expected: nil,
+		},
+		{
+			// Shapes measured on claude 2.1.289: the block arrives in a frame of
+			// its own, its text empty unless summaries were asked for.
+			name:  "thinking block becomes a thinking record",
+			input: `{"type":"assistant","uuid":"u1","message":{"content":[{"type":"thinking","thinking":"Counting multiples first.\n\n","signature":"sig"}]}}`,
+			expected: []agent.AgentEvent{agent.ThinkingEvent{
+				Content: "Counting multiples first.",
+			}},
+		},
+		{
+			name:     "empty thinking block is still recorded",
+			input:    `{"type":"assistant","message":{"content":[{"type":"thinking","thinking":"","signature":"sig"}]}}`,
+			expected: []agent.AgentEvent{agent.ThinkingEvent{}},
+		},
+		{
+			name:     "redacted thinking is recorded as hidden",
+			input:    `{"type":"assistant","message":{"content":[{"type":"redacted_thinking","data":"opaque"}]}}`,
+			expected: []agent.AgentEvent{agent.ThinkingEvent{Redacted: true}},
+		},
+		{
+			name:  "thinking keeps its place between text and a tool call",
+			input: `{"type":"assistant","parent_tool_use_id":"toolu_task","message":{"content":[{"type":"text","text":"Let me look."},{"type":"thinking","thinking":"Which file?"},{"type":"tool_use","id":"t1","name":"Read","input":{}}]}}`,
+			expected: []agent.AgentEvent{
+				agent.TextEvent{Content: "Let me look.", ParentToolUseID: "toolu_task"},
+				agent.ThinkingEvent{Content: "Which file?", ParentToolUseID: "toolu_task"},
+				agent.ToolCallEvent{ToolUseID: "t1", ToolName: "Read", ToolInput: json.RawMessage(`{}`), ParentToolUseID: "toolu_task"},
+			},
 		},
 		{
 			name:     "system compact_boundary is forwarded",
@@ -219,6 +252,40 @@ func TestParseLine(t *testing.T) {
 				ToolResult:        "done",
 				ProviderMessageID: "result-uuid",
 			}},
+		},
+		{
+			// A subagent's frames interleave with the main conversation's, so the
+			// call they run under is the only thing that says whose they are. Its
+			// uuid is an entry of the subagent's sidechain transcript, which the
+			// main conversation cannot be resumed at, so it anchors nothing.
+			name:  "a subagent's text and tool call name the call they run under",
+			input: `{"type":"assistant","parent_tool_use_id":"toolu_task","uuid":"side-uuid","message":{"content":[{"type":"text","text":"Looking."},{"type":"tool_use","id":"toolu_sub","name":"Grep","input":{"pattern":"x"}}]}}`,
+			expected: []agent.AgentEvent{
+				agent.TextEvent{Content: "Looking.", ParentToolUseID: "toolu_task"},
+				agent.ToolCallEvent{
+					ToolUseID:       "toolu_sub",
+					ToolName:        "Grep",
+					ToolInput:       json.RawMessage(`{"pattern":"x"}`),
+					ParentToolUseID: "toolu_task",
+				},
+			},
+		},
+		{
+			name:  "a subagent's tool result names the call it runs under",
+			input: `{"type":"user","parent_tool_use_id":"toolu_task","uuid":"side-uuid","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_sub","content":"match"}]}}`,
+			expected: []agent.AgentEvent{agent.ToolResultEvent{
+				ToolUseID:       "toolu_sub",
+				ToolResult:      "match",
+				ParentToolUseID: "toolu_task",
+			}},
+		},
+		{
+			// The main conversation's frames carry the field as an explicit null.
+			name:  "a main-conversation frame names no parent",
+			input: `{"type":"assistant","parent_tool_use_id":null,"uuid":"msg-uuid","message":{"content":[{"type":"text","text":"done"}]}}`,
+			expected: []agent.AgentEvent{
+				agent.TextEvent{Content: "done", ProviderMessageID: "msg-uuid"},
+			},
 		},
 		{
 			name:  "assistant text and tool_use in same message",
@@ -446,6 +513,12 @@ func agentEventEqual(a, b agent.AgentEvent) bool {
 	case agent.CommandOutputEvent:
 		bv, ok := b.(agent.CommandOutputEvent)
 		return ok && av.Content == bv.Content
+	case agent.ThinkingEvent:
+		bv, ok := b.(agent.ThinkingEvent)
+		return ok && av == bv
+	case agent.ThinkingDeltaEvent:
+		bv, ok := b.(agent.ThinkingDeltaEvent)
+		return ok && av == bv
 	default:
 		return false
 	}

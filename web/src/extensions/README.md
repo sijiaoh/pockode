@@ -75,7 +75,8 @@ ctx.chatUI.configure({
   UserAvatar: CustomUserAvatar,
   AssistantAvatar: CustomAssistantAvatar,
 
-  // Replace the input bar
+  // Replace the input bar. It owns Stop as well as Send: the host draws no
+  // Stop of its own (see `InputBarProps.turnOpen`)
   InputBar: CustomInputBar,
 
   // Replace the empty state (shown when no messages)
@@ -86,8 +87,8 @@ ctx.chatUI.configure({
 
   // Set to null to hide, or provide custom component
   ModeSelector: null,
-  EngineSelector: null, // the agent + model + effort chip
-  StopButton: null,
+  EngineSelector: null, // agent + model + effort; both are sections of the session panel
+  StopButton: null, // drawn in the default input bar's send slot
 
   // Style customization
   userBubbleClass: "custom-user-bubble",
@@ -104,10 +105,11 @@ Customize the header bar by replacing the entire header or just the title.
 ```ts
 // Replace the entire header (menu button, title, settings button, etc.)
 ctx.headerUI.configure({
-  HeaderContent: CustomHeader, // receives { onOpenSidebar, onOpenSettings, title }
+  HeaderContent: CustomHeader, // receives { onOpenSidebar, onOpenSettings, title, heading }
 });
 
-// Or just replace the title
+// Or just replace the title's text (the open session's title, or the
+// project's name when none is open); the host keeps the h1 and the button
 ctx.headerUI.configure({
   TitleComponent: CustomTitle, // receives { title }
 });
@@ -132,7 +134,9 @@ See `headerUIRegistry.ts` for prop interfaces (`HeaderContentProps`, `TitleCompo
 >
 > The menu / settings buttons must likewise be re-implemented from the
 > `onOpenSidebar` / `onOpenSettings` props if you want to keep them;
-> `headerButtonClass` from `components/ui` gives them the built-in look.
+> `headerButtonClass` from `components/ui` gives them the built-in look. Render
+> `heading` too whenever it is given: it is the open session's title button,
+> the only way to the session's engine, permission mode, work and usage.
 
 ### ctx.sidebarUI.configure()
 

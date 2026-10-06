@@ -770,7 +770,7 @@ func TestSendAnswers_RefusedWhileAPermissionIsOnScreen(t *testing.T) {
 	f := newQuestionFixture(t)
 	id := f.post(t, "Database")
 
-	if _, err := f.client.SendMessageExcluding(context.Background(), "sess", "go", nil); err != nil {
+	if _, err := f.client.SendMessageExcluding(context.Background(), "sess", "go", nil, nil); err != nil {
 		t.Fatalf("SendMessageExcluding: %v", err)
 	}
 	// The prompt has to be *reduced* before the permission is pushed, not merely

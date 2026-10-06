@@ -115,10 +115,20 @@ export function attachmentFileName(file: FileBlock): string {
 	return `${stem}.${formatMimeLabel(file.mime).toLowerCase()}`;
 }
 
-/** The one-line description under the name: `PNG · 2000×1333 · 433 KB`. */
+/**
+ * The one-line description under the name: `2000×1333 · 433 KB`.
+ *
+ * The type only when the name does not say it. An extension does, and so does
+ * the type-as-name of a block that names no file; a badge read off the MIME
+ * subtype beside either is noise that turns a `.log` into `PLAIN`. The
+ * composer's entry for the same file shows the size alone, and a file should
+ * not change its description by being sent.
+ */
 export function attachmentDetail(file: FileBlock): string {
+	const named = namedFile(file);
+	const nameSaysType = named === null || /\.[^.]+$/.test(named);
 	return [
-		file.mime ? formatMimeLabel(file.mime) : null,
+		file.mime && !nameSaysType ? formatMimeLabel(file.mime) : null,
 		file.width && file.height ? `${file.width}×${file.height}` : null,
 		file.size ? formatBytes(file.size) : null,
 	]

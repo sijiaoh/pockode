@@ -55,7 +55,7 @@ Pockode uses Zustand for state management, pure reducers for event processing, a
 | settingsStore | App settings, and why they are missing when they are | Holds the subscription's `refresh` too: the Retry is far below the hook that owns it |
 | cliLoginStore | Each AI CLI's sign-in status and update check on the server machine, and its latest sign-in flow and update ([cli-update.md](cli-update.md#the-web-client)) | Status is read on demand, never pushed ([why](cli-auth.md#no-subscription)); a flow outlives the sheet showing it. In memory only: a flow's link and codes are secrets |
 | authStore | The credential to connect with: the session token that survives a reload, or the password just typed | localStorage init; a leaf module written to by wsStore, never the other way round |
-| inputStore | Draft text, per session | persist middleware |
+| inputStore | The draft, per session: its text, and the files picked for it with their uploads | persist middleware for the text only — neither a `File` nor its `blob:` preview survives a reload. The files are here, not in the bar, because the bar is unmounted mid-draft and an upload outlives it |
 | questionDraftStore | What has been typed into each unanswered question, per session | persist middleware, plus a second map: what came out of storage waits there until the session's unanswered list vouches for it, so an answer to a withdrawn question can never reach the screen ([answering-ui.md §5](../answering-ui.md#5-drafts)) |
 | filesSearchStore | File search options | localStorage init |
 | gitPanelStore | Git panel UI state (History expanded) | Session-scoped override |
@@ -289,9 +289,9 @@ reach. The state and the anchor are read inside a layout effect and inside a
 update would deliver the new value a render later — after the frame whose scroll
 position was the whole question — and would reflow the very list being measured.
 
-One value in there is state, and it marks the boundary: whether the
-scroll-to-bottom button is showing, because that is something drawn. Something
-is state when a render has to happen because of it; the rest of this is
+What the scroll-to-bottom button draws is state, and it marks the boundary:
+whether it is showing and whether it carries the new-content dot, because those
+are drawn. Something is state when a render has to happen because of it; the rest of this is
 bookkeeping the render must not see.
 
 ## Server Cache vs Store
@@ -420,8 +420,10 @@ starts — and it never held this turn open in the first place
 ([answering-ui.md §6](../answering-ui.md#6-the-record-card-in-the-stream)).
 
 That matters because the CLI keeps talking for a moment after a turn is cut
-short — a Task subagent's last output is the usual source. Such content is
-appended to the ended message and leaves its status alone; without that it
+short — a Task subagent's last output is the usual source. A subagent's records
+name their call and are filed under it, wherever it is
+([below](#a-subagents-children)); anything else is appended to the ended
+message and leaves its status alone; without that it
 would open a fresh `streaming` bubble under a turn the user has already stopped.
 The composer no longer infers liveness from it — `turnOpen` reads the session's
 own turn ([lifecycle-ui.md](../lifecycle-ui.md#23-chat-composer-and-stop)) — but
@@ -442,12 +444,30 @@ bubble is ever open — a turn opens one only when `openAssistantIndex` finds no
 scanning past closed ones cannot pick the wrong turn.
 
 `openAssistantIndex` answers one more question that used to be read off position:
-which bubble may show a spinner. `MessageList` computes it once and hands each row
-`isOpenTurn`, replacing an `isLast` that agreed with it only until a message could
-land underneath the reply it went into — after which the reply still being written
-was no longer last, and lost its spinner at the moment the user had just asked it
-something. The bubbles that are *not* the open turn still show nothing, which is
-what keeps a reply the turn has moved on from claiming to be running.
+which bubble carries the tail line ([turn-progress-ui.md](../turn-progress-ui.md#2-the-tail-line)).
+`MessageList` computes it once and hands each row `isOpenTurn`, replacing an
+`isLast` that agreed with it only until a message could land underneath the reply
+it went into — after which the reply still being written was no longer last, and
+lost its line at the moment the user had just asked it something. The bubbles that
+are *not* the open turn still show nothing, which is what keeps a reply the turn
+has moved on from claiming to be running.
+
+What the line *says* does not come through the bubble's props: the turn's phase,
+its clock and what the main agent is thinking right now reach it through
+`TurnTailContext`, so that a thinking delta several times a second re-renders the
+one line rather than every memoized bubble. "Thinking now" is `useChatMessages`
+state beside the transcript, never a part of it — `thinking_delta` is not
+recorded, so it is dropped by the reducer and folded per frame into that state
+instead. What ends it is
+[turn-progress-ui.md §2.3](../turn-progress-ui.md#23-what-it-says)'s rule: the
+thinking's record, the main agent's next text or tool call, or the turn ending
+however it ends. If the user had opened the line, the row its
+record settles into opens too: the hook finds that part by the record's
+`Thought` object — which the reducer stores as it is, so neither position nor
+React batching the record with the text after it can mislead the search — and
+adds its id to `openedThoughtIds`, which `RowList` reads through
+`OpenedThoughtsContext` as that row's first choice. It is done in a layout
+effect, so the row is never painted closed first.
 
 That search is also what leaves only two things able to close a bubble: the turn's own
 ending, and the read point. A user message arriving underneath used to close it as a
@@ -472,7 +492,8 @@ The `done` dependency is therefore still single and explicit
 which is why `messageReducer.test.ts` states it as a test of its own rather than
 leaving it a thing everyone assumed. The net that is unchanged, and the one that
 matters in practice, is the subscribe-time settle: `turn` finalises whatever is still
-`streaming` ([lifecycle-ui.md §2.4](../lifecycle-ui.md#24-recovering-a-dangling-turn-after-a-restart)).
+`streaming` unless the turn is still open
+([lifecycle-ui.md §2.4](../lifecycle-ui.md#24-recovering-a-dangling-turn-after-a-restart)).
 
 The same lateness decides where a fork can cut. A message carries the `anchorSeq`
 of the last history record folded into it, and the reducer stamps it on the
@@ -515,7 +536,8 @@ identity to the older half would move that boundary, not just rename a key.
 
 Every tool call in a turn — a `Bash`, a `Read`, a subagent — is one
 `{ type: "tool_call" }` part holding a `ToolRun`, appended where its `tool_call`
-landed, so a call reads at the point in the turn that made it. Nothing groups
+landed — or, for a subagent's own call, in its parent run's children
+([below](#a-subagents-children)) — so a call reads at the point in the turn that made it. Nothing groups
 them: a summary across several calls can only restate what the individual rows
 already say, and it costs the one thing a transcript is for, which is knowing
 when each thing happened.
@@ -523,8 +545,9 @@ when each thing happened.
 A subagent call is not a second shape. It *is* a tool call — Claude even carries
 its `tool_use_id` on the task lifecycle frames — and keeping a `TaskRun` beside
 `ToolRun` meant two status machines and two settle-on-interrupt paths for one
-thing. `TaskItem` stays, as the renderer for that category, and its three extra
-fields (`description`, `subagent_type`, `prompt`) are derived from `input` the
+thing. `TaskItem` stays, as the renderer for that category, and its extra
+fields (`description`, `subagent_type`, `prompt`, and a Codex spawn's
+`agent_path`) are derived from `input` the
 way every other row's title is ([tool-call-model.md](../tool-call-model.md)).
 
 **One part per `tool_use_id`.** A `permission_request` *takes the place* of the
@@ -591,10 +614,10 @@ honest:
   ([agent-integration.md](agent-integration.md#background-waits)) — and so is
   `background`, for the same reason.
 - Replay adds no settling of its own — it feeds history through this same
-  reducer — so a call still running at the end of a history stays running,
-  which is right while the session is live. A process killed while Pockode was
-  down normally *is* in the history — the session store writes the
-  `process_ended` the killed run never got to
+  reducer — so a call still running at the end of a history stays running, which
+  is right while the session is live. A process killed while Pockode was down
+  normally *is* in the history — the session store writes the `process_ended`
+  the killed run never got to
   ([agent-integration.md](agent-integration.md#restart-repair)) — but the client
   does not rely on that record being there, because a session stored by a build
   from before that repair existed has none. The session's `turn` is the
@@ -603,10 +626,13 @@ honest:
   nothing about *when* the turn ended — over every older page pulled in after
   ([agent-chat.md](../agent-chat.md#reading-a-page-on-the-client),
   [lifecycle-ui.md](../lifecycle-ui.md#24-recovering-a-dangling-turn-after-a-restart)).
-  It settles three things at once and each on its own condition: a bubble still
-  `streaming` while the turn is not running, a pending card the turn does not
-  list as a blocker — a card it *does* list is still answerable and is left
-  alone — and a call still running once the turn is idle.
+  It settles three things at once, each on its own condition:
+  - a bubble still `streaming` while the turn is not open — an open turn,
+    whether it waits on a permission or a background task, resumes in that
+    same bubble;
+  - a pending card the turn does not list as a blocker (a card it *does* list
+    is still answerable and is left alone);
+  - a call still running once the turn is idle.
 - An interrupted run whose result finally arrives keeps its `interrupted`
   status. The content is kept and readable; what it cannot do is make the UI
   claim the call finished normally. No flag records that it came back late —
@@ -670,6 +696,80 @@ doing now".
 What the renderers make of the list — where it lands on the row and in the body,
 why each fetch keeps its own block, and what a failed or empty one says — is
 [tool-call-ui.md](../tool-call-ui.md#a-fetch-reads-on-the-row-it-came-from).
+
+#### A subagent's children
+
+A subagent's own `text` and `tool_call` records name the call they ran under
+(`parent_tool_use_id`), and the reducer files them into that run's `children` —
+a list of ordinary parts, the same shape a message's content is, built by the
+same `applyEventToParts`. A child that is itself a subagent call holds children
+of its own. So a message's content is a tree, and `lib/partTree.ts` holds the
+walks over it: every rule above that finds "the part with this id" or touches
+"every pending card" finds and touches it at any depth — a result settling a
+child, a card taking a child's place and its row coming back beside it, a
+process ending expiring a subagent's card, an answer settling a subagent's
+question. What the renderers do with the tree is
+[tool-call-ui.md](../tool-call-ui.md#a-subagents-own-work).
+
+The rules particular to children:
+
+- **Filed wherever the parent is**, which is not always the bubble the turn is
+  writing: a backgrounded subagent works on while the conversation moves on,
+  and a read point leaves a foreground one in the bubble above. A filed child
+  changes no bubble's status and opens no bubble — it is the subagent's, and
+  says nothing about the turn. A permission request names no parent, so a
+  subagent's card is found by its call, wherever that was filed, and a posted
+  question — which names no call — by the position join, at any depth. The
+  card can also come first: on claude 2.1.286 a subagent's call is asked about
+  before its `tool_call` is written, so the card finds no row and lands flat in
+  the turn's bubble; the `tool_call`, which does name the parent, then takes it
+  along into the parent's children, where it stands in for the row as usual —
+  with the row approval rebuilt beside it, should the engine have reported on
+  the call before announcing it. A bubble the card itself opened — a background subagent asking after its turn
+  ended, which the bubble records as `openedByCard` — goes with it rather than
+  staying behind open and empty, reading as a turn still running; so does any
+  bubble the card leaves empty once its turn completed, as the ending would
+  have dropped it. Any other open bubble is the turn's, empty or not, and one
+  whose turn was cut short keeps its ending line. Where the call cannot be
+  filed either, the card stays flat and takes the parent the call names; a flat
+  card that already names one was left by a page boundary and is not moved.
+- **A parent that is not loaded leaves the child flat**, where it arrived — an
+  earlier page, or a call a fork cut dropped. The part then keeps
+  `parentToolUseId`, which stops it running together with the main agent's
+  text and lets the parent's row count it once its page loads; a card that
+  takes such a row's place keeps it, and so does the row rebuilt on approval.
+  It is not moved then, by the rule a fetch follows: a row never leaves from
+  under the reader. And while any of a run's children sit flat, the ones that
+  follow go flat after them, so nothing is filed above words that came first.
+- **A settled subagent settles what it leaves running.** Its `tool_result`
+  interrupts every child still `running`, at any depth; a child in
+  `background` is left to settle by its own notification, and so is everything
+  under it. An aborted turn's sweep follows the same two rules, and so does a
+  call filed under a subagent that was interrupted or failed, or under one still
+  running once its turn was cut short — unless a backgrounded subagent is
+  above it. One filed under a subagent that *finished* is left running, whatever
+  became of its turn: Claude resumes a finished subagent when the agent writes
+  to it (`SendMessage`, measured on claude 2.1.286), the
+  resumed work names the call that first spawned it, and its results are still
+  to come — as they are for a Codex child given more work. So is one filed
+  under a subagent that was interrupted or failed once the user has sent a
+  turn since: that is the subagent resumed, not output trailing its end. The
+  parent row keeps the status it ended with; only its new children run.
+- **Each text record is its own paragraph.** Consecutive `text` from the same
+  speaker join with a blank line, not end to end: both adapters send whole
+  messages, never deltas. Filing made this matter — the main agent's "A and B
+  are running" and its "A finished" used to have the subagents' work between
+  them, and with that filed away they sat back to back.
+- **Consecutive thinking from the same speaker is one part.** A `thinking`
+  record joins the `thinking` part before it, as one more entry in its
+  `thoughts`, because the engine splitting one pause into two blocks is nothing
+  a reader can use ([turn-progress-ui.md](../turn-progress-ui.md#11-what-it-is)).
+  A record that would draw nothing — no text, not redacted, no duration — is
+  dropped in `applyServerEvent` before it can open a reply or join a run. The
+  part carries an `id` of its own, generated here, because a thinking has no
+  `tool_use_id` and a position-based key would remount the row — and close what
+  the user opened — whenever an older page loads; joining two pages across a
+  split run (`joinTurnParts`) keeps the newer half's id for the same reason.
 
 #### Live state on a run
 
@@ -845,8 +945,9 @@ export interface ChatUIConfig {
   UserAvatar?: ComponentType<AvatarProps>;
   AssistantAvatar?: ComponentType<AvatarProps>;
   InputBar?: ComponentType<InputBarProps>;
-  ModeSelector?: ComponentType<ModeSelectorProps> | null;  // null hides it
-  EngineSelector?: ComponentType<EngineSelectorProps> | null;  // agent + model + effort chip
+  ModeSelector?: ComponentType<ModeSelectorProps> | null;  // the session panel's Permissions; null drops it
+  EngineSelector?: ComponentType<EngineSelectorProps> | null;  // its Engine (agent + model + effort)
+  StopButton?: ComponentType<StopButtonProps> | null;  // the default InputBar's send slot
   // ...
 }
 ```
@@ -887,6 +988,7 @@ Key features:
 | `web/src/lib/wsStore.ts` | WebSocket + RPC + subscription management |
 | `web/src/lib/queryClient.ts` | react-query setup + worktree-dependent invalidation |
 | `web/src/lib/messageReducer.ts` | Event → Message state transformation |
+| `web/src/lib/partTree.ts` | Walks over a message's content, which nests a subagent's work under its call |
 | `web/src/lib/extensions.ts` | Extension loading and context creation |
 | `web/src/lib/registries/*.ts` | Runtime registries for themes, UI, settings |
 | `web/src/lib/*Store.ts` | Domain data stores |

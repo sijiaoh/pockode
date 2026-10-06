@@ -106,15 +106,88 @@ function latestFetchedText(run: ToolRun): string {
 }
 
 /**
+ * The text of a call the tool itself refused, out of the tag Claude wraps it
+ * in, or null when the result is not such a refusal.
+ *
+ * Claude answers an input its tool will not act on — an `Edit` whose
+ * `old_string` is not in the file, a `Read` of a file that does not exist —
+ * with `<tool_use_error>…</tool_use_error>`. The tag is the CLI's envelope, not
+ * anything the tool said, so nothing that draws the text shows it.
+ */
+const TOOL_USE_ERROR = /^\s*<tool_use_error>([\s\S]*?)<\/tool_use_error>\s*$/;
+
+function toolUseErrorText(text: string): string | null {
+	return TOOL_USE_ERROR.exec(text)?.[1].trim() ?? null;
+}
+
+/** A result as it is drawn and copied: a refusal without its envelope. */
+export function shownResult(text: string): string {
+	return toolUseErrorText(text) ?? text;
+}
+
+const FAILURE_WORD = /error|fail|panic|✗|×/i;
+/**
+ * Lines that name a failure without saying what it was: stack frames — Node's
+ * `at …`, Python's `File "…", line N`, Go's bare `path.go:N +0x…` (whose file
+ * may well be `panic.go`) — and the header of the table tsc closes a
+ * many-file failure with (`Errors  Files`).
+ */
+const NOT_A_VERDICT = [
+	/^at\s/,
+	/^File ".*", line \d+/,
+	/^\S+:\d+( \+0x[0-9a-f]+)?$/,
+	/^Errors\s+Files$/,
+];
+
+/**
+ * The line of a failed command's output that says why it failed: the last one
+ * naming a failure, or the last non-empty line when none does.
+ *
+ * Still read from the end, because that is where a build states its verdict
+ * (`make: *** [build] Error 1`, go test's `FAIL pkg`). But not simply the last
+ * line: a test runner ends on its timing (`Duration 1.31s`) and Node ends on a
+ * stack frame, and those are the two failures a phone sees most. A stack frame
+ * is skipped even when it names a failure — `at failTest (…)` is where, not why.
+ */
+function failureLine(text: string): string {
+	const lines = text.split("\n");
+	for (let i = lines.length - 1; i >= 0; i--) {
+		const line = lines[i].trim();
+		if (
+			FAILURE_WORD.test(line) &&
+			!NOT_A_VERDICT.some((pattern) => pattern.test(line))
+		) {
+			return line;
+		}
+	}
+	return lastNonEmptyLine(text).trim();
+}
+
+/**
+ * Claude's background notification, `Background command "<description>"
+ * <conclusion>` (server/agent/claude/task_lifecycle_test.go), cut to its
+ * conclusion. The description is already the row's first line — the command —
+ * and on a phone it is long enough to push the conclusion off the end, which is
+ * the one part the user is waiting for. Any other sentence is left as it is.
+ */
+const BACKGROUND_COMMAND = /^Background command ".*" (\S.*)$/;
+
+function backgroundConclusion(outcome: string): string {
+	const conclusion = BACKGROUND_COMMAND.exec(outcome)?.[1];
+	if (!conclusion) return outcome;
+	return conclusion[0].toUpperCase() + conclusion.slice(1);
+}
+
+/**
  * The run's latest word: one line under the title, or nothing.
  *
  * While the run is live that is what it reports doing. When a backgrounded run
  * settles the line hands over to the outcome, and a foreground failure hands it
- * over to the last line of the output. Either way it **stays** — the row must
- * not change height there, because a background row is by definition not at the
- * tail of the transcript, and `MessageList` only compensates for growth at the
- * tail or in a settling history page. A foreground run drops its line, and that
- * row is at the tail by construction.
+ * over to the line of the output that says why. Either way it **stays** — the
+ * row must not change height there, because a background row is by definition
+ * not at the tail of the transcript, and `MessageList` only compensates for
+ * growth at the tail or in a settling history page. A foreground run drops its
+ * line, and that row is at the tail by construction.
  */
 export interface ToolSecondLine {
 	text: string;
@@ -147,16 +220,22 @@ export function toolSecondLine(run: ToolRun): ToolSecondLine | null {
 		const outcome = toolRunText(run)
 			.split("\n")
 			.find((line) => line.trim());
-		return outcome ? { text: outcome.trim(), mono: false, live: false } : null;
+		return outcome
+			? { text: backgroundConclusion(outcome.trim()), mono: false, live: false }
+			: null;
 	}
 	// A failed row keeps a line, because nothing else on it says *how* it failed
-	// — the border and the glyph only say that it did. The last non-empty line
-	// rather than the first: it is the one the live line was already showing a
-	// moment earlier, so the text does not jump to the other end of the output as
-	// the run settles, and a build's verdict (`make: *** [build] Error 1`) is at
-	// the end while the head is noise.
+	// — the border and the glyph only say that it did.
 	if (run.status === "error") {
-		const line = lastNonEmptyLine(toolRunText(run));
+		const text = toolRunText(run);
+		// A refusal is a sentence about the input, not program output, and it
+		// opens with its reason; what follows is the input quoted back.
+		const refusal = toolUseErrorText(text);
+		if (refusal !== null) {
+			const reason = refusal.split("\n").find((line) => line.trim());
+			return reason ? { text: reason.trim(), mono: false, live: false } : null;
+		}
+		const line = failureLine(text);
 		return line ? { text: line, mono: true, live: false } : null;
 	}
 	return null;
@@ -186,4 +265,9 @@ export function formatDuration(ms: number): string {
 	const totalMinutes = Math.floor(seconds / 60);
 	if (totalMinutes < 60) return `${totalMinutes}m ${Math.floor(seconds % 60)}s`;
 	return `${Math.floor(totalMinutes / 60)}h ${totalMinutes % 60}m`;
+}
+
+/** A count of calls, as a subagent row and a folded group both word it. */
+export function stepsLabel(steps: number): string {
+	return steps === 1 ? "1 step" : `${steps} steps`;
 }

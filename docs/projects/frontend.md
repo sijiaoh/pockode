@@ -25,7 +25,7 @@ Both stores expose the same action pattern:
 Mutation operations are defined as RPC action creators, injected into `wsStore.actions`:
 
 **Work** (`web/src/lib/rpc/work.ts`):
-`createWork`, `updateWork`, `deleteWork`, `startWork`, `stopWork`
+`createWork`, `updateWork`, `deleteWork`, `startWork`, `stopWork`, `reopenWork`
 
 **AgentRole** (`web/src/lib/rpc/agentRole.ts`):
 `createAgentRole`, `updateAgentRole`, `deleteAgentRole`, `resetAgentRoleDefaults`
@@ -316,10 +316,12 @@ means the built-in default agent* is a rule of the server's that the UI has to
 restate to draw an honest row before any write happens; restating it once, in a
 hook, is what keeps it from being spelled `?? "claude"` in every panel that asks.
 
-The chat's `EngineSelector` stays separate, deliberately. It is shaped around a
-resolved, possibly running session — an agent locked by activation, a CLI that
-restarts on a switch — and is replaceable through `chatUIRegistry`, so its props
-are an extension contract. Merging it in would mean a component driven by boolean
+The chat's engine choices stay separate, deliberately: the session panel's
+Engine section, whose default content is `Chat/EngineSections.tsx`. It is shaped
+around a resolved, possibly running session — an agent locked by activation, a
+CLI that restarts on a switch — and the whole section is replaceable through
+`chatUIRegistry`'s `EngineSelector`, so `EngineSelectorProps` is an extension
+contract. Merging it in would mean a component driven by boolean
 switches. What it shares is the presentation of a pick-one list,
 `components/ui/ChoiceList.tsx` (`Section`, `ChoiceRow`, `SelectionDot`), so the
 touch-target floor and the radio semantics of those rows have one definition

@@ -312,7 +312,7 @@ func (s *Service) update(ctx context.Context, cli CLI, from, target string, from
 		return "", &Failure{Reason: FailureOther, Detail: fmt.Sprintf("`%s update` finished, but the version afterwards could not be read: %v", cli.Binary, toErr)}
 	}
 	if target != "" {
-		cmp, err := compareVersions(target, to)
+		cmp, err := agent.CompareVersions(target, to)
 		if err != nil {
 			return to, &Failure{Reason: FailureOther, Detail: fmt.Sprintf("`%s update` finished, but its result could not be judged: %v", cli.Binary, err)}
 		}

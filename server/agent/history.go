@@ -20,7 +20,22 @@ type EventRecord struct {
 	// replay still has it; absent whenever it could not be resolved, which is
 	// ordinary (see ToolCallEvent.OriginToolUseID). What a client does with the
 	// join — or nothing at all — is the client's decision.
-	OriginToolUseID string         `json:"origin_tool_use_id,omitempty"`
+	OriginToolUseID string `json:"origin_tool_use_id,omitempty"`
+	// ParentToolUseID is the subagent call a text, tool_call or tool_result
+	// record was produced inside: the subagent's own words and tool use, which
+	// the agent streams interleaved with the main conversation's — a
+	// backgrounded subagent writes between the main agent's own lines — so
+	// position cannot say whose they are. Empty for everything the main
+	// conversation produced, and on every record written before the field
+	// existed. A subagent's subagent names the call that spawned *it*, so the
+	// field nests rather than flattens.
+	//
+	// It points at a call that need not be loaded, or exist at all — the call
+	// may sit on an earlier history page, or have been dropped by a fork cut
+	// that kept its children but not its result (see TruncateHistory). A
+	// client that cannot find it shows the record where it sits, as it would
+	// without the field.
+	ParentToolUseID string         `json:"parent_tool_use_id,omitempty"`
 	ToolResult      string         `json:"tool_result,omitempty"`
 	Contents        []ContentBlock `json:"contents,omitempty"`
 	IsError         bool           `json:"is_error,omitempty"`
@@ -56,7 +71,10 @@ type EventRecord struct {
 	// Command is the Pockode command a message record was expanded from; see
 	// CommandInvocation.
 	Command *CommandInvocation `json:"command,omitempty"`
-	Origin  MessageOrigin      `json:"origin,omitempty"`
+	// Attachments are the files the user sent with a message record; see
+	// MessageEvent.Attachments.
+	Attachments []FileBlock   `json:"attachments,omitempty"`
+	Origin      MessageOrigin `json:"origin,omitempty"`
 	// MessageID is Pockode's own id for a message, carried by the message record
 	// itself and by the message_ingested record that says the agent read it. It
 	// is what joins the two, and it exists because position cannot do that job:
@@ -74,7 +92,8 @@ type EventRecord struct {
 	Subtype string       `json:"subtype,omitempty"`
 	Meta    *MessageMeta `json:"meta,omitempty"`
 	// DurationMs and ExitCode are what an agent CLI reported about a finished
-	// tool call as figures rather than as prose; see ToolResultEvent.
+	// tool call as figures rather than as prose; see ToolResultEvent. A thinking
+	// record carries DurationMs too, measured by the server; see ThinkingEvent.
 	DurationMs int64 `json:"duration_ms,omitempty"`
 	ExitCode   *int  `json:"exit_code,omitempty"`
 	// Activity and OutputDelta belong to tool_activity records, which are
@@ -83,6 +102,15 @@ type EventRecord struct {
 	// serialized, for the wire as much as for history.
 	Activity    string `json:"activity,omitempty"`
 	OutputDelta string `json:"output_delta,omitempty"`
+	// FullReasoning and Redacted belong to thinking records; see ThinkingEvent.
+	// The thinking text itself is Content.
+	FullReasoning string `json:"full_reasoning,omitempty"`
+	Redacted      bool   `json:"redacted,omitempty"`
+	// ContentDelta and FullReasoningDelta belong to thinking_delta records,
+	// which are broadcast and never stored, like tool_activity's; see
+	// ThinkingDeltaEvent.
+	ContentDelta       string `json:"content_delta,omitempty"`
+	FullReasoningDelta string `json:"full_reasoning_delta,omitempty"`
 	// ProviderMessageID is the agent's own id for the piece of its conversation
 	// this event was parsed out of, when the agent hands one out. It is a fact
 	// the event arrived with, not Pockode state, which is why it is recorded
@@ -95,6 +123,15 @@ type EventRecord struct {
 	// records either. Empty for events with nothing of the agent's behind them
 	// (a warning Pockode raised itself), for agents that expose no ids, and for
 	// every record written before this field existed.
+	//
+	// Also empty on a subagent's records (ParentToolUseID set): both CLIs keep a
+	// subagent's conversation apart from the main one — Claude in a sidechain
+	// transcript of its own, Codex in a thread of its own — so its ids name
+	// nothing the main conversation can be reopened at. LastProviderMessageID
+	// walks back past them, so a fork cut inside a subagent's run is anchored on
+	// the last main-conversation record TruncateHistory keeps — what preceded
+	// the spawning call, which is dropped with its result after the cut, or for
+	// a backgrounded subagent whatever the main agent went on to do while it ran.
 	//
 	// What the id names is each agent's own business, since only that agent ever
 	// reads it back: the anchor it accepts for reopening a conversation is what
