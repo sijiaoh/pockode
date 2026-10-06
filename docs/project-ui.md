@@ -83,7 +83,7 @@ segment it was opened from.
 
 ```
 ┌──────────────────────────────────────┐
-│ ‹  Project                           │  header
+│ 💬 Project                          │  the app header
 ├──────────────────────────────────────┤
 │  [ Current ]   Closed                │  segmented control, sticky
 ├──────────────────────────────────────┤
@@ -106,6 +106,11 @@ segment it was opened from.
 
 The glyphs in that sketch are stand-ins; the real ones are the lucide names in
 the tables below, and every one of them already exists in `ActivityIcon`.
+
+The header is the app's own, not a bar of the page's: the page names itself in
+it with the way back to the chat, as every page over the chat does
+([agent-chat.md](agent-chat.md#the-session-screen)). A work item's detail page
+is headed there the same way, as `Story` or `Task`.
 
 ### 2.1 The segmented control
 

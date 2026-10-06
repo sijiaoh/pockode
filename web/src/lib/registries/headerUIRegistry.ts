@@ -27,6 +27,7 @@ export interface HeaderUIConfig {
 export interface HeaderContentProps {
 	/** Absent when the sidebar is a persistent column: render no menu button. */
 	onOpenSidebar?: () => void;
+	/** Absent on the Settings page itself: render no settings button. */
 	onOpenSettings?: () => void;
 	/**
 	 * The open session's title in a chat; the project's name with no session

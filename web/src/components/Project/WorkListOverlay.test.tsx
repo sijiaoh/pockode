@@ -7,12 +7,8 @@ import type { WorkSegment } from "../../types/overlay";
 import type { WorkListItem } from "../../types/work";
 import WorkListOverlay from "./WorkListOverlay";
 
-vi.mock("../ui/BackToChatButton", () => ({
-	default: ({ onClick }: { onClick: () => void }) => (
-		<button type="button" onClick={onClick}>
-			Back to chat
-		</button>
-	),
+vi.mock("../../hooks/useRouteState", () => ({
+	useRouteState: () => ({ worktree: "", sessionId: null }),
 }));
 
 // The sheet has its own tests; here it stands for "the create flow answered

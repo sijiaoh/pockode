@@ -1,4 +1,5 @@
 import { act, render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { create } from "zustand";
 import {
@@ -7,7 +8,10 @@ import {
 } from "../../lib/registries/settingsRegistry";
 import SettingsPage from "./SettingsPage";
 
-vi.mock("../ui/BackToChatButton", () => ({ default: () => null }));
+// The way back to chat reads the route for its unread dot.
+vi.mock("../../hooks/useOpenSessionUnread", () => ({
+	useOpenSessionUnread: () => false,
+}));
 // jsdom has no layout; the nav centres its active entry with it.
 Element.prototype.scrollTo = vi.fn();
 
@@ -19,6 +23,18 @@ afterEach(() => {
 });
 
 describe("SettingsPage", () => {
+	it("is headed Settings, with the way back to chat", async () => {
+		const user = userEvent.setup();
+		const onBack = vi.fn();
+		render(<SettingsPage onBack={onBack} />);
+
+		expect(
+			screen.getByRole("heading", { level: 1, name: "Settings" }),
+		).toBeInTheDocument();
+		await user.click(screen.getByRole("button", { name: "Back to chat" }));
+		expect(onBack).toHaveBeenCalled();
+	});
+
 	// The heading and the navigation entry are the page's, not the section's,
 	// so a section that rendered null would leave both behind.
 	it("leaves out a section that says it does not apply, heading and navigation included", () => {

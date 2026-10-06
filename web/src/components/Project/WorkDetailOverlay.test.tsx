@@ -332,6 +332,52 @@ describe("WorkDetailOverlay", () => {
 		).toBeNull();
 	});
 
+	// The page is named by what it shows — Story or Task — and nothing stands in
+	// for that before the work arrives.
+	it("names the page by the work's type once it has arrived", () => {
+		mockUseWorkDetailSubscription.mockReturnValue({
+			work: null,
+			activity: "idle",
+			comments: [],
+			pendingQuestions: [],
+			loading: true,
+			error: null,
+			children: [],
+		});
+		const { rerender } = render(
+			<WorkDetailOverlay
+				workId="work-1"
+				onBack={vi.fn()}
+				onNavigateToSession={vi.fn()}
+				onOpenWorkDetail={vi.fn()}
+			/>,
+		);
+		const heading = screen.getByRole("heading", { level: 1 });
+		expect(heading).toHaveAttribute("aria-busy", "true");
+		expect(heading).toHaveTextContent("Loading");
+
+		mockUseWorkDetailSubscription.mockReturnValue({
+			work: createWork({ type: "task" }),
+			activity: "idle",
+			comments: [],
+			pendingQuestions: [],
+			loading: false,
+			error: null,
+			children: [],
+		});
+		rerender(
+			<WorkDetailOverlay
+				workId="work-1"
+				onBack={vi.fn()}
+				onNavigateToSession={vi.fn()}
+				onOpenWorkDetail={vi.fn()}
+			/>,
+		);
+		expect(
+			screen.getByRole("heading", { level: 1, name: "Task" }),
+		).not.toHaveAttribute("aria-busy");
+	});
+
 	// §8 check 6. Back has one job — undo the step that got here — and the step
 	// differs by what opened the page: a story is reached from the list, a task
 	// from its story's Tasks section. It was already right before the rewrite and

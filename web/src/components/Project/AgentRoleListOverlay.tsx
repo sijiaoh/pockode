@@ -14,7 +14,7 @@ import { useSettingsStore } from "../../lib/settingsStore";
 import { type ValueState, waitingLabel } from "../../lib/valueState";
 import { useWSStore } from "../../lib/wsStore";
 import type { AgentRole } from "../../types/agentRole";
-import BackToChatButton from "../ui/BackToChatButton";
+import PageHeader from "../Layout/PageHeader";
 import { inputClass } from "../ui/inputClass";
 import SettingsLoadError from "../ui/SettingsLoadError";
 import Skeleton from "../ui/Skeleton";
@@ -121,12 +121,7 @@ export default function AgentRoleListOverlay({
 		<div className="flex min-h-0 flex-1 flex-col">
 			{/* Navigation only: the one control that was up here acted on the whole
 			    set of roles, and that is what the footer is for. */}
-			<header className="flex items-center gap-1.5 border-b border-th-border bg-th-bg-secondary px-2 py-2">
-				<BackToChatButton onClick={onBack} />
-				<h1 className="flex-1 px-2 text-sm font-bold text-th-text-primary">
-					Agent Roles
-				</h1>
-			</header>
+			<PageHeader back={{ to: "chat", onClick: onBack }} title="Agent Roles" />
 
 			{/* The snapshot the stars and the footer field wait on, not the list. */}
 			<SettingsLoadError className="px-3 py-1.5" />

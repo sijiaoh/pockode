@@ -1334,7 +1334,10 @@ function ChatPanel({
 				title={overlay ? projectTitle : resolvedTitle || projectTitle}
 				heading={renderHeading()}
 				onOpenSidebar={onOpenSidebar}
-				onOpenSettings={onOpenSettings}
+				// Already there: a way to the page the user is on would only reopen it.
+				onOpenSettings={
+					overlay?.type === "settings" ? undefined : onOpenSettings
+				}
 			>
 				{!overlay && ChatTopContent && <ChatTopContent sessionId={sessionId} />}
 				{!overlay && view && <SessionOriginBar view={view} />}
