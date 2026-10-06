@@ -636,10 +636,9 @@ name does not say what a control is for:
   Allow and Deny on a permission request were here; they now state
   `min-h-9 pointer-coarse:min-h-11` and left the list.)
 - **`Project/WorkDetailOverlay`** — the link up to the parent work, under the
-  heading of a task. The header's Back button on that same screen goes to the
-  same place and is already 44 (`onBack={() => onOpenWorkDetail(parent.id)}`,
-  labelled "Back to parent story"), so this is a second route rather than the
-  route.
+  heading of a task. The app header's Back button on that same screen goes to
+  the same place and is already 44 (`headerIconButtonClass`, labelled "Back to
+  parent story"), so this is a second route rather than the route.
 - **`Settings/sections/AppearanceSections`** — the theme card, which is the
   over-report described above and needs nothing done to it.
 - **`Worktree/WorktreeCreateSheet`** — the link out of the setup-script note.

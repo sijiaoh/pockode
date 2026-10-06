@@ -100,6 +100,10 @@ vi.mock("../Git", () => ({
 	CommitFileView: () => null,
 }));
 
+vi.mock("../Settings", () => ({
+	SettingsPage: () => <div data-testid="settings-page" />,
+}));
+
 // Mock Project overlays to avoid router dependency
 vi.mock("../Project", () => ({
 	WorkListOverlay: () => <div data-testid="work-list-overlay" />,
@@ -3959,6 +3963,30 @@ describe("ChatPanel", () => {
 
 			await user.click(header.getByRole("button", { name: "Back" }));
 			expect(onCloseOverlay).toHaveBeenCalled();
+		});
+
+		it("offers no way to Settings over the Settings page itself", async () => {
+			const onOpenSettings = vi.fn();
+			const { rerender } = render(
+				<ChatPanel
+					{...defaultProps}
+					overlay={workList}
+					onOpenSettings={onOpenSettings}
+				/>,
+			);
+			await waitForHistoryLoad();
+			expect(
+				screen.getByRole("button", { name: "Settings" }),
+			).toBeInTheDocument();
+
+			rerender(
+				<ChatPanel
+					{...defaultProps}
+					overlay={{ type: "settings" }}
+					onOpenSettings={onOpenSettings}
+				/>,
+			);
+			expect(screen.queryByRole("button", { name: "Settings" })).toBeNull();
 		});
 
 		it("keeps the project's name over a page that draws no heading", async () => {

@@ -29,8 +29,8 @@ import type { AgentRole } from "../../types/agentRole";
 import type { PendingQuestion } from "../../types/message";
 import type { Comment, Work, WorkListItem, WorkType } from "../../types/work";
 import { formatStepCount, getStepProgress } from "../../utils/workSteps";
+import PageHeader from "../Layout/PageHeader";
 import { ActivityBadge, MarkdownContent, RecommendedTag } from "../ui";
-import BackButton from "../ui/BackButton";
 import BottomActionBar from "../ui/BottomActionBar";
 import { inputClass } from "../ui/inputClass";
 import { WorktreeBadge } from "../Worktree";
@@ -98,7 +98,7 @@ function WorkDetailPage({
 	if (loading) {
 		return (
 			<div className="flex min-h-0 flex-1 flex-col">
-				<DetailHeader onBack={onBack} />
+				<DetailHeader onBack={onBack} title={null} />
 				<div className="flex flex-1 flex-col items-center justify-center gap-2 text-sm text-th-text-muted">
 					<Loader2 className="size-5 animate-spin" />
 					<p>Loading...</p>
@@ -110,7 +110,9 @@ function WorkDetailPage({
 	if (error || !work) {
 		return (
 			<div className="flex min-h-0 flex-1 flex-col">
-				<DetailHeader onBack={onBack} />
+				{/* Not a skeleton: nothing is on its way that would say which kind
+				    of work this is. */}
+				<DetailHeader onBack={onBack} title="Work" />
 				<div className="flex flex-1 flex-col items-center justify-center gap-2 text-sm text-th-text-muted">
 					<AlertCircle className="size-5" />
 					<p>{error ?? "Item not found"}</p>
@@ -123,7 +125,7 @@ function WorkDetailPage({
 		<div className="flex min-h-0 flex-1 flex-col">
 			<DetailHeader
 				onBack={parent ? () => onOpenWorkDetail(parent.id) : onBack}
-				type={work.type}
+				title={typeLabels[work.type]}
 				backLabel={parent ? "Back to parent story" : "Back to project"}
 			/>
 			<div className="min-h-0 flex-1 overflow-auto">
@@ -200,20 +202,19 @@ const typeLabels: Record<WorkType, string> = {
 
 function DetailHeader({
 	onBack,
-	type,
+	title,
 	backLabel = "Back to project",
 }: {
 	onBack: () => void;
-	type?: WorkType;
+	/** `null` while the work has not arrived. */
+	title: string | null;
 	backLabel?: string;
 }) {
 	return (
-		<header className="flex items-center gap-1.5 border-b border-th-border bg-th-bg-secondary px-2 py-2">
-			<BackButton onClick={onBack} aria-label={backLabel} />
-			<h1 className="flex-1 px-2 text-sm font-bold text-th-text-primary">
-				{type ? typeLabels[type] : "Detail"}
-			</h1>
-		</header>
+		<PageHeader
+			back={{ to: "parent", label: backLabel, onClick: onBack }}
+			title={title}
+		/>
 	);
 }
 

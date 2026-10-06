@@ -83,11 +83,12 @@ the sidebar's worktree switcher.
 
 **Over a page, the header names the page.** Whatever is on screen gets one
 header, and it is about that screen. A page opened over the chat — a diff, a
-file, a commit — is a page of its own, so its header carries no session: no
-title, no engine or mode, no panel to change them from. A project-level page
-under a session's name read as belonging to that session, it stacked a second
-bar under the first on a phone, and it offered YOLO from a screen that had
-nothing to do with the session.
+file, a commit, Settings, the Project list or a work item, the agent roles — is
+a page of its own, so its header carries no session: no title, no engine or
+mode, no panel to change them from. A project-level page under a session's name
+read as belonging to that session, it stacked a second bar under the first on a
+phone, and it offered YOLO from a screen that had nothing to do with the
+session.
 
 ```
 [☰] [💬] [ ChatPanel.tsx ›          ] [●] [⚙]
@@ -100,20 +101,29 @@ title and the way back come from the page's own data, so `ChatPanel` keeps no
 second, per-type copy of them. Rendered on its own — in a unit test — the same
 heading draws as a bar where it stands. The menu button stays: on a phone it is
 the way from one diff to the next file in the list. The way back is
-`MessageSquare` ("Back to chat", with the unread dot) on a page opened from the chat, and `ArrowLeft`
-labelled with where it goes (`Back to commit`, `Back to diff`) on a page opened
-from another page; both are borderless icon buttons like the menu and settings.
-Then the same two lines in the same box as the session's (`ui/HeaderTitle.tsx`
-is shared by both). A title that can be pressed ends in `ChevronRight`, and one
-that cannot has no chevron and no hover. A file name keeps its extension when it
-truncates (`ChatPanel.integration.te….tsx`). The second line ends in what says
-which version of the thing this is (`Staged`, `Editing`, a short hash), in
-words rather than a colour, and that part is kept whole while the folder before
-it truncates; the whole text is in the title box's `title`. Each line is a
-skeleton until its own data arrives, never a stand-in — a commit's hash shows at
-once, its subject when it loads — and while a Git page waits on the repository
-check the way back and both lines are skeletons. File, diff and commit pages
-draw one; a page that does not yet gets the project's name, above its own bar.
+`MessageSquare` ("Back to chat", with the unread dot) on a page opened from the
+chat, and `ArrowLeft` labelled with where it goes (`Back to commit`, `Back to
+project`) on a page opened from another page; both are borderless icon buttons
+like the menu and settings. Then the same two lines in the same box as the
+session's (`ui/HeaderTitle.tsx` is shared by both). A title that can be pressed
+ends in `ChevronRight`, and one that cannot has no chevron and no hover. A file
+name keeps its extension when it truncates (`ChatPanel.integration.te….tsx`).
+The second line ends in what says which version of the thing this is (`Staged`,
+`Editing`, a short hash), in words rather than a colour, and that part is kept
+whole while the folder before it truncates; the whole text is in the title
+box's `title`. Each line is a skeleton until its own data arrives, never a
+stand-in — a commit's hash shows at once, its subject when it loads — and while
+a Git page waits on the repository check the way back and both lines are
+skeletons. A page whose kind is still
+unknown waits the same way — a work item's title is `Story` or `Task` once it
+has loaded, a skeleton until then — but one whose data is never coming (a work
+item that failed to load) gets a plain title (`Work`) rather than a skeleton
+that would spin forever. Every page over the chat draws its heading this way,
+so none keeps a bar of its own under the header.
+
+On Settings the header has no settings button: it would only reopen the page the
+user is on, so `ChatPanel` passes no `onOpenSettings` there and a custom
+`HeaderContent` sees it absent too.
 
 **The mode is there to be read, not announced.** Many users run YOLO all day; for
 them it is the normal state, not an exception, and a mark that keeps warning

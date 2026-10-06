@@ -39,7 +39,7 @@ else followed from having only that one line to work with:
 ## 1. Three regions, three jobs
 
 ```
-┌ header ────────────────────────────────┐  Back + "Agent Roles", nothing else
+┌ app header ────────────────────────────┐  Back + "Agent Roles", nothing else
 ├ scroll region ─────────────────────────┤  the roles, and only the roles
 │  ┌ card ──────────────────────────┐    │
 │  │ Engineer                    ★  │    │  line 1: name, and the default star
@@ -57,6 +57,11 @@ The three do not overlap. **The header navigates** — the one control that used
 be up there acted on the whole set of roles, which is what the footer is for.
 **The scroll region holds roles.** **The footer holds the three things that are
 about the set rather than about a member of it.**
+
+The header is the app's own, not a bar of the page's: this page names itself in
+it with the way back to the chat, and a role's detail page as `Agent Role` with
+the way back to this list, like every page over the chat
+([agent-chat.md](agent-chat.md#the-session-screen)).
 
 The footer being outside the scroll region buys one property nothing else can:
 **it is still on screen when the list is empty**, which is the state Reset to

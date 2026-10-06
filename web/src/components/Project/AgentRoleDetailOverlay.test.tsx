@@ -58,6 +58,18 @@ beforeEach(() => {
 	});
 });
 
+it("is headed Agent Role, with the way back to the list", async () => {
+	const user = userEvent.setup();
+	const onBack = vi.fn();
+	renderOverlay(onBack);
+
+	expect(
+		screen.getByRole("heading", { level: 1, name: "Agent Role" }),
+	).toBeInTheDocument();
+	await user.click(screen.getByRole("button", { name: "Back to agent roles" }));
+	expect(onBack).toHaveBeenCalled();
+});
+
 describe("deleting an agent role", () => {
 	// The server's refusal is a whole user-facing sentence and this is the one
 	// place it is printed. A prefix of this screen's own would read as

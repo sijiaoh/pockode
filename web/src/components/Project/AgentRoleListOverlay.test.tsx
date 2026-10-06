@@ -22,12 +22,8 @@ vi.mock("../../lib/wsStore", () => ({
 		}),
 }));
 
-vi.mock("../ui/BackToChatButton", () => ({
-	default: ({ onClick }: { onClick: () => void }) => (
-		<button type="button" onClick={onClick}>
-			Back to chat
-		</button>
-	),
+vi.mock("../../hooks/useRouteState", () => ({
+	useRouteState: () => ({ worktree: "", sessionId: null }),
 }));
 
 const onOpenAgentRoleDetail = vi.fn();
@@ -80,6 +76,23 @@ beforeEach(() => {
 });
 
 describe("AgentRoleListOverlay", () => {
+	it("is headed Agent Roles, with the way back to chat", async () => {
+		const user = userEvent.setup();
+		const onBack = vi.fn();
+		render(
+			<AgentRoleListOverlay
+				onBack={onBack}
+				onOpenAgentRoleDetail={onOpenAgentRoleDetail}
+			/>,
+		);
+
+		expect(
+			screen.getByRole("heading", { level: 1, name: "Agent Roles" }),
+		).toBeInTheDocument();
+		await user.click(screen.getByRole("button", { name: "Back to chat" }));
+		expect(onBack).toHaveBeenCalled();
+	});
+
 	it("opens a role and sets it as the default from its own row", async () => {
 		const user = userEvent.setup();
 		renderOverlay();

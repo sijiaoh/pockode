@@ -10,8 +10,8 @@ import {
 } from "../../lib/workStore";
 import type { WorkSegment } from "../../types/overlay";
 import type { WorkListItem } from "../../types/work";
+import PageHeader from "../Layout/PageHeader";
 import { ActivityIcon } from "../ui";
-import BackToChatButton from "../ui/BackToChatButton";
 import BottomActionBar from "../ui/BottomActionBar";
 import ArchivePager from "./ArchivePager";
 import CreateWorkSheet from "./CreateWorkSheet";
@@ -248,12 +248,7 @@ export default function WorkListOverlay({
 
 	return (
 		<div className="flex min-h-0 flex-1 flex-col">
-			<header className="flex items-center gap-1.5 border-b border-th-border bg-th-bg-secondary px-2 py-2">
-				<BackToChatButton onClick={onBack} />
-				<h1 className="flex-1 px-2 text-sm font-bold text-th-text-primary">
-					Project
-				</h1>
-			</header>
+			<PageHeader back={{ to: "chat", onClick: onBack }} title="Project" />
 
 			{/* Outside the scroll area on purpose: the archive is one tap away from
 			    wherever the list has been scrolled to. */}
