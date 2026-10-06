@@ -395,8 +395,9 @@ function WatchedStoryItem({
 /**
  * The lowest row, beside the background wait: a chat that started stories and
  * stepped back is not finished, and an idle composer would say it was. Nothing
- * here is for the user to do, so it is a statement with its list behind
- * Details, like the background row.
+ * here is for the user to do, so the row is the statement alone — short enough
+ * to stay one line at phone width — and Details holds when the chat wakes and
+ * the list, the way the background row keeps its explanation there.
  */
 function WatchingRow({
 	stories,
@@ -411,9 +412,7 @@ function WatchingRow({
 		<div className={STRIP_FRAME}>
 			<div className={STRIP_LINE}>
 				<Eye className="size-3 shrink-0" aria-hidden="true" />
-				<span>
-					{`${watchingLabel(count)} — this chat wakes when ${count === 1 ? "it" : "one"} closes, stops, or asks.`}
-				</span>
+				<span>{`${watchingLabel(count)}.`}</span>
 				<button
 					type="button"
 					onClick={() => setExpanded(!expanded)}
@@ -425,6 +424,9 @@ function WatchingRow({
 			</div>
 			{expanded && (
 				<div className="mx-auto max-w-3xl px-3 pb-2 text-xs">
+					<p className="px-2 pb-1 text-th-text-muted">
+						{`This chat wakes when ${count === 1 ? "it" : "one"} closes, stops, or asks.`}
+					</p>
 					<ul aria-label="Watched stories" className="max-h-32 overflow-y-auto">
 						{stories.map((story) => (
 							<WatchedStoryItem

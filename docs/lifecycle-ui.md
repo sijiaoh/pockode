@@ -442,7 +442,7 @@ Five things it can say, in the order it prefers them:
 | unanswered questions | "1 question is waiting for your answer." / "{n} questions are waiting for your answer." | **Answer** |
 | a message went into a turn already open, unread so far | "Sent — the agent has not read it yet." | — |
 | `background` | "Waiting on a background task — nothing to answer." | "Details" (expands) |
-| `watching` | "Watching 1 story — this chat wakes when it closes, stops, or asks." / "Watching {n} stories — this chat wakes when one closes, stops, or asks." | "Details" (expands) |
+| `watching` | "Watching 1 story." / "Watching {n} stories." | "Details" (expands) |
 
 The layout, copy and controls of the question row are
 [answering-ui.md §2](answering-ui.md#2-the-strip); only its rank is decided here.
@@ -635,8 +635,13 @@ has the floor.
 
 - **The glyph is `Eye`, muted** like every glyph on the strip; the accent is
   the row indicator's.
-- **"Details" expands the list**, `<ul aria-label="Watched stories">`, scrolled
-  inside `max-h-32` so a long list cannot push the composer off a short
+- **The line is the count alone.** When the chat wakes is secondary and made
+  the line too long for one row at phone width, so it waits behind Details,
+  the way the background row keeps its explanation there.
+- **"Details" expands the explanation, then the list.** First "This chat wakes
+  when it closes, stops, or asks." ("one" for several), outside the scroll area
+  so a long list cannot scroll it away; then `<ul aria-label="Watched stories">`,
+  scrolled inside `max-h-32` so a long list cannot push the composer off a short
   screen. Each story is one button: its activity glyph and label read from
   `workStore` the way a work row's are, and its title from `watched_stories`.
   A story the work list has not paged in is still named, and drawn without an
