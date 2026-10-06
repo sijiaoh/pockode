@@ -111,6 +111,18 @@
 	}
 }
 
+/* How far a `touch-target` overlay on a 24px control reaches past its box —
+ * to 36px, or 44px under a thumb. A pinned section header keeps this much
+ * clear above its buttons, where the row's bar would otherwise take a tap
+ * meant for them (docs/tool-call-ui.md#the-pinned-section-header). */
+:root {
+	--section-bar-clear: 6px;
+
+	@media (any-pointer: coarse) {
+		--section-bar-clear: 10px;
+	}
+}
+
 /* An open tool row's first line, pinned to the top of the transcript until its
  * body ends (docs/tool-call-ui.md#the-sticky-title-line).
  *
@@ -140,7 +152,7 @@
 @utility row-bar {
 	position: sticky;
 	top: 0;
-	z-index: 1;
+	z-index: 2;
 	border-start-start-radius: inherit;
 	border-start-end-radius: inherit;
 	background:
@@ -159,10 +171,10 @@
 	}
 
 	&:has(:focus-visible) {
-		z-index: 2;
+		z-index: 3;
 	}
 
-	&:has(~ * [data-stuck]):not(:has(:focus-visible)) {
+	&:has(~ * .row-bar[data-stuck]):not(:has(:focus-visible)) {
 		background: var(--row-ground, var(--th-bg-primary));
 
 		& > * {
@@ -171,8 +183,30 @@
 		}
 	}
 
-	&:has(~ * .row-ground-secondary [data-stuck]):not(:has(:focus-visible)) {
+	&:has(~ * .row-ground-secondary .row-bar[data-stuck]):not(
+			:has(:focus-visible)
+		) {
 		background: var(--th-bg-secondary);
+	}
+}
+
+/* A tool section's header while its block is open past its budget, pinned
+ * under the open row's bar (docs/tool-call-ui.md#the-pinned-section-header).
+ * One z-index under the bar: when the end of the section carries the header
+ * out, it passes under the row's title rather than over it. Its ground is the
+ * body's, which is a drawer's `th-bg-secondary` but for a pending card's,
+ * whose body restates its tinted ground as `--section-ground`. A body that
+ * scrolls on its own (a thought's) has no bar over it and sets
+ * `--section-bar-top` to 0. */
+@utility section-bar {
+	position: sticky;
+	top: var(--section-bar-top, var(--row-height));
+	z-index: 1;
+	padding-top: var(--section-bar-clear);
+	background: var(--section-ground, var(--th-bg-secondary));
+
+	&[data-stuck] {
+		box-shadow: 0 1px 0 var(--th-border);
 	}
 }
 
@@ -188,6 +222,16 @@
 @layer base {
 	:where(.row-bar ~ *) * {
 		scroll-margin-top: var(--row-height);
+	}
+
+	/* The pinned header under the bar as well: its clearance, `BlockHeader`'s
+	 * `min-h-6` line and its `pb-1`. */
+	:where(.section-bar ~ *) * {
+		scroll-margin-top: calc(
+			var(--section-bar-top, var(--row-height)) +
+			var(--section-bar-clear) +
+			1.75rem
+		);
 	}
 }
 

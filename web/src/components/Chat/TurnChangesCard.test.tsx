@@ -170,7 +170,7 @@ describe("TurnChangesCard", () => {
 		await user.click(screen.getByRole("button", { name: /^b\.ts/ }));
 		const diff = screen.getByText("edit diff of /repo/a.ts");
 		expect(screen.getByText("Change")).toBeInTheDocument();
-		expect(diff.closest(".max-h-80")).toHaveClass("overflow-y-hidden");
+		expect(diff.closest(".overflow-y-hidden")).toBeInTheDocument();
 		const group = card() as HTMLElement;
 		expect(
 			group.querySelector(".overflow-auto, .overflow-y-auto, [class*='60vh']"),

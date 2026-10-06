@@ -48,7 +48,11 @@ import AuthFailureNotice from "./AuthFailureNotice";
 import { DiscardedNote, DiscardedSummary } from "./DiscardedMessage";
 import MessageActions from "./MessageActions";
 import MessageMenuTrigger, { type ForkBlocked } from "./MessageMenuTrigger";
-import { ProposedChange, proposedChangeHeader } from "./ProposedChange";
+import {
+	changeRowCount,
+	ProposedChange,
+	proposedChangeHeader,
+} from "./ProposedChange";
 import QuestionRecordItem from "./QuestionRecordItem";
 import { useRowExpanded } from "./rowExpansionContext";
 import { anchorCandidateProps } from "./scrollAnchor";
@@ -620,9 +624,10 @@ function PermissionRequestItem({
 			<CollapsibleBody expanded={expanded}>
 				{/* A settled card's body is an opened drawer like a tool row's; a
 				    pending one keeps the card's tint, being what the card asks
-				    about. */}
+				    about — and restates it for a pinned section header
+				    (`section-bar`), which would otherwise paint a drawer's. */}
 				<div
-					className={`space-y-3 border-t border-th-border p-2 ${isPending ? "" : "bg-th-bg-secondary"}`}
+					className={`space-y-3 border-t border-th-border p-2 ${isPending ? "[--section-ground:linear-gradient(var(--row-tint),var(--row-tint)),var(--row-ground,var(--th-bg-primary))]" : "bg-th-bg-secondary"}`}
 				>
 					{/* An expired permission can only have been a denial, and the card
 					    states that outcome rather than offering anything to press: the
@@ -719,6 +724,13 @@ function PermissionRequestBody({
 	const change = proposedChange(request.toolName, request.toolInput);
 	// Counting reads the whole diff; `change` is the same object every render.
 	const changeHeader = useMemo(() => proposedChangeHeader(change), [change]);
+	const changeCount = useMemo(
+		() =>
+			change
+				? { noun: "line" as const, total: changeRowCount(change) }
+				: undefined,
+		[change],
+	);
 	// Where the body already is the input — the JSON fallback or its fields, a
 	// string input, a plan that is the input's only key — the raw input would
 	// say it twice. A plan with anything beside it keeps it: whatever else the
@@ -745,6 +757,8 @@ function PermissionRequestBody({
 					{...changeHeader}
 					copyText={proposedChangeText(change)}
 					fullScreenTitle="Proposed change"
+					budget="main"
+					count={changeCount}
 				>
 					<ProposedChange change={change} />
 				</Section>
@@ -1133,7 +1147,7 @@ function PockodeCommandItem({
 			{discarded && <DiscardedNote className="px-2 pb-2 text-th-text-muted" />}
 			<CollapsibleBody expanded={expanded}>
 				<div className="border-t border-th-border p-2">
-					<Section label="Sent to the agent">
+					<Section label="Sent to the agent" budget="main">
 						{/* Empty only on this client's own echo, until the server's
 						    reply brings the prompt it expanded the command to — or
 						    for good, when the send failed without a reply. */}

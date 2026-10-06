@@ -17,6 +17,7 @@ import { ClampedContent, CollapsibleBody, MarkdownContent } from "../ui";
 import { PartBlocks } from "./ToolList";
 import { ToolOutcomeSections } from "./ToolOutcomeSections";
 import { Detail, ToolMeta, ToolRow, ToolStatusGlyph } from "./ToolRow";
+import { useTranscriptView } from "./transcriptViewContext";
 import { useUnfiledChildren } from "./unfiledChildrenContext";
 
 interface Props {
@@ -137,6 +138,7 @@ function TaskItem({ run, depth = 0, renderChild }: Props) {
 	const [expanded, setExpanded] = useState(false);
 	const [processExpanded, setProcessExpanded] = useState(false);
 	const [promptExpanded, setPromptExpanded] = useState(false);
+	const view = useTranscriptView();
 	// No work directory: a subagent call is summarised from its description, and
 	// there is no path in it for one to shorten.
 	const summary = toolSummary(run.name, run.input, "");
@@ -249,7 +251,7 @@ function TaskItem({ run, depth = 0, renderChild }: Props) {
 					)}
 					{report ? (
 						<div className="p-2">
-							<ClampedContent>
+							<ClampedContent budget="main" name="report" view={view}>
 								<MarkdownContent content={report} />
 							</ClampedContent>
 						</div>
@@ -289,7 +291,7 @@ function TaskItem({ run, depth = 0, renderChild }: Props) {
 							<CollapsibleBody expanded={processExpanded}>
 								{/* Neither clamped nor scrolling: the rows inside open into
 								    bodies of their own, which a clamp would hide behind a
-								    "Show all", and a scroller in the transcript is a drag
+								    "Show N more", and a scroller in the transcript is a drag
 								    that goes to whichever box is under the thumb. */}
 								<div className="pb-2">
 									{/* biome-ignore lint/a11y/useSemanticElements: a column of transcript parts, not form controls a fieldset would group */}
@@ -332,7 +334,7 @@ function TaskItem({ run, depth = 0, renderChild }: Props) {
 							</button>
 							<CollapsibleBody expanded={promptExpanded}>
 								<div className="p-2">
-									<ClampedContent>
+									<ClampedContent name="prompt" view={view}>
 										<pre className="whitespace-pre-wrap text-th-text-muted">
 											{prompt}
 										</pre>

@@ -6,7 +6,14 @@ export { default as BadgeCount, formatBadgeCount } from "./BadgeCount";
 export { type BadgeDotTone, default as BadgeDot } from "./BadgeDot";
 export { BlockHeader, HeaderCopyButton } from "./BlockHeader";
 export { default as BottomActionBar } from "./BottomActionBar";
-export { ClampedContent } from "./ClampedContent";
+export {
+	type ClampBudget,
+	type ClampCount,
+	ClampedContent,
+	type ClampHandle,
+	type ClampView,
+	TRANSCRIPT_HEIGHT_VAR,
+} from "./ClampedContent";
 export { CollapsibleBody, useEverExpanded } from "./CollapsibleBody";
 export { default as ConnectionStatus } from "./ConnectionStatus";
 export {

@@ -1,8 +1,10 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Thought } from "../../types/message";
-import ThinkingItem from "./ThinkingItem";
+import type { ClampView } from "../ui";
+import ThinkingItem, { ThoughtBody, ThoughtScroller } from "./ThinkingItem";
+import { TranscriptViewContext } from "./transcriptViewContext";
 
 const thought = (extra: Partial<Thought> = {}): Thought => ({
 	content: "",
@@ -102,5 +104,76 @@ describe("ThinkingItem", () => {
 		expect(
 			screen.getByText("Thought for 1 second, no content shared"),
 		).toBeInTheDocument();
+	});
+});
+
+describe("ThoughtScroller", () => {
+	afterEach(() => {
+		vi.restoreAllMocks();
+	});
+
+	it("keeps an opened Full reasoning's place in its own scroller, not the transcript's", async () => {
+		const user = userEvent.setup();
+		// jsdom does no layout: the reasoning is 2000px tall and cut at the
+		// main budget's floor; the scroller's top is at 100 and the block's
+		// box at 300, and opening it would push the box 50px down.
+		vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockReturnValue(
+			2000,
+		);
+		vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockImplementation(
+			function (this: HTMLElement) {
+				if (this.hasAttribute("data-clamped")) return 128;
+				return this.style.maxHeight ? 224 : 2000;
+			},
+		);
+		const scroller = () => {
+			const el = document.querySelector(".overflow-auto");
+			if (!(el instanceof HTMLElement)) throw new Error("no scroller");
+			return el;
+		};
+		vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(
+			function (this: HTMLElement) {
+				const at = (top: number) => ({ top, bottom: top + 100 }) as DOMRect;
+				if (this === scroller()) return at(100);
+				if (this.id && this.parentElement?.querySelector("[aria-controls]")) {
+					const open = !this.style.maxHeight;
+					return at(300 + (open ? 50 : 0) - scroller().scrollTop);
+				}
+				return at(0);
+			},
+		);
+		const transcript: ClampView = {
+			top: () => 0,
+			bottom: () => 600,
+			scrollTop: () => 0,
+			coveredAbove: () => 0,
+			holdAt: vi.fn(),
+		};
+		render(
+			<TranscriptViewContext value={transcript}>
+				<ThoughtScroller className="">
+					<ThoughtBody
+						thought={thought({
+							content: "Summary.",
+							fullReasoning: "Raw reasoning.",
+						})}
+					/>
+				</ThoughtScroller>
+			</TranscriptViewContext>,
+		);
+		// jsdom keeps no scroll position of its own.
+		let scrolled = 0;
+		Object.defineProperty(scroller(), "scrollTop", {
+			get: () => scrolled,
+			set: (value: number) => {
+				scrolled = value;
+			},
+		});
+
+		await user.click(
+			screen.getByRole("button", { name: "Show all of full reasoning" }),
+		);
+		expect(scroller().scrollTop).toBe(50);
+		expect(transcript.holdAt).not.toHaveBeenCalled();
 	});
 });

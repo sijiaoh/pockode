@@ -238,6 +238,10 @@ describe("ToolCallItem", () => {
 			expect(screen.getByText("Todos")).toBeVisible();
 			expect(screen.getByText("Write tests")).toHaveClass("line-through");
 			expect(screen.getByText("Ship it")).toBeVisible();
+			// Never cut: every item on the list is the point.
+			expect(
+				screen.getByText("Ship it").closest(".overflow-y-hidden"),
+			).toBeNull();
 			expect(screen.queryByText(/"todos"/)).toBeNull();
 			expect(screen.queryByText(/modified successfully/)).toBeNull();
 			expect(screen.queryByText("Parameters")).toBeNull();
@@ -405,23 +409,31 @@ describe("ToolCallItem", () => {
 			// the end a long output is cut to keep.
 			it("keeps its end in view and counts what it cut", async () => {
 				// jsdom does no layout: every element is as tall as a long log, and
-				// the box as tall as the clamp.
+				// the box as tall as its budget allows — 320px cut, plus the six
+				// lines' tolerance uncut, and all of it open.
 				vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockReturnValue(
 					2000,
 				);
-				vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(
-					320,
-				);
+				vi.spyOn(
+					HTMLElement.prototype,
+					"clientHeight",
+					"get",
+				).mockImplementation(function (this: HTMLElement) {
+					if (this.hasAttribute("data-clamped")) return 320;
+					return this.style.maxHeight ? 416 : 2000;
+				});
 				const result = `${Array.from({ length: 120 }, (_, i) => `line ${i}`).join("\n")}\n`;
 				draw({ status: "success", result });
 				const user = await open();
 
 				const output = screen.getByText(/line 119/);
 				expect(output.closest("[data-clamped]")).toHaveClass("justify-end");
-				await user.click(
-					screen.getByRole("button", { name: "Show all 120 lines" }),
-				);
+				const button = screen.getByRole("button", {
+					name: "Show 101 earlier lines of output",
+				});
+				await user.click(button);
 				expect(output.closest("[data-clamped]")).toBeNull();
+				expect(button).toHaveAccessibleName("Show less of output");
 			});
 
 			// Why it failed is nearly always said at the end.
@@ -545,7 +557,13 @@ describe("ToolCallItem", () => {
 			 * `outerBar` stands in for an open row this one is nested in.
 			 */
 			async function openInTranscript({ outerBar = false } = {}) {
-				const view = { top: () => 100, holdAt: vi.fn() };
+				const view = {
+					top: () => 100,
+					bottom: () => 700,
+					scrollTop: () => 0,
+					coveredAbove: () => 0,
+					holdAt: vi.fn(),
+				};
 				const item = <ToolCallItem run={run()} sessionId="session-1" />;
 				render(
 					<TranscriptViewContext value={view}>
@@ -619,7 +637,13 @@ describe("ToolCallItem", () => {
 			// the group as it folds, and is no longer there to land on.
 			describe("out of sight into its group", () => {
 				async function keptOpenInClosedGroup() {
-					const view = { top: () => 100, holdAt: vi.fn() };
+					const view = {
+						top: () => 100,
+						bottom: () => 700,
+						scrollTop: () => 0,
+						coveredAbove: () => 0,
+						holdAt: vi.fn(),
+					};
 					const calls = ["first-cmd", "second-cmd"].map(
 						(command, index): ContentPart => ({
 							type: "tool_call",

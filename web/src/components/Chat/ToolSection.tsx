@@ -1,11 +1,16 @@
-import { ChevronRight } from "lucide-react";
-import { type ReactNode, useState } from "react";
+import { ChevronRight, ChevronsDownUp } from "lucide-react";
+import { type ReactNode, useId, useRef, useState } from "react";
 import {
 	BlockHeader,
+	type ClampBudget,
+	type ClampCount,
 	ClampedContent,
+	type ClampHandle,
 	CollapsibleBody,
 	HeaderCopyButton,
 } from "../ui";
+import { useTranscriptView } from "./transcriptViewContext";
+import { useStuckBar } from "./useStuckBar";
 
 interface Props {
 	label: string;
@@ -24,18 +29,32 @@ interface Props {
 	 * detail — and is in the body only so that it is somewhere in full.
 	 */
 	collapsible?: { defaultOpen: boolean };
+	/**
+	 * How tall the block may be before it is cut (`ClampBudget`): `main` for
+	 * what the body is opened for, `supporting` for what explains it. `none` for
+	 * what is never cut — a checklist whose every item is the point.
+	 */
+	budget?: ClampBudget | "none";
 	/** See `ClampedContent`. */
 	clampFrom?: "start" | "end";
 	/** See `ClampedContent`. */
+	count?: ClampCount;
+	/** See `ClampedContent`. */
 	fullScreenTitle?: string;
 	/** See `ClampedContent`. */
-	showAllLabel?: string;
+	follow?: boolean;
 }
 
 /**
  * One labelled block of a tool call's body: a header that names it and holds
  * what can be done with it, over content cut to a height the transcript can
  * scroll past.
+ *
+ * Opened past its budget, the block is the one thing being read, and its
+ * header sticks under the row's pinned title with a way to close it again
+ * (docs/tool-call-ui.md#the-pinned-section-header): a reader several screens
+ * into an output still sees which block it is, and can put it away without
+ * scrolling back to either of its buttons.
  */
 export function Section({
 	label,
@@ -45,11 +64,22 @@ export function Section({
 	copyText,
 	copyLabel,
 	collapsible,
+	budget = "supporting",
 	clampFrom,
+	count,
 	fullScreenTitle,
-	showAllLabel,
+	follow,
 }: Props) {
+	const view = useTranscriptView();
+	const headerRef = useRef<HTMLDivElement>(null);
+	const clampRef = useRef<ClampHandle>(null);
+	const boxId = useId();
 	const [open, setOpen] = useState(collapsible?.defaultOpen ?? true);
+	// Past its budget, that is: the clamp says so only once it has cut.
+	const [clampOpen, setClampOpen] = useState(false);
+	const pinned = clampOpen && open;
+	useStuckBar(headerRef, pinned);
+	const name = label.toLowerCase();
 
 	const title = collapsible ? (
 		<button
@@ -81,14 +111,27 @@ export function Section({
 				)
 			}
 			actions={
-				(actions || copyText) && (
+				(actions || copyText || pinned) && (
 					<>
 						{actions}
 						{copyText && (
 							<HeaderCopyButton
 								text={copyText}
-								label={copyLabel ?? `Copy ${label.toLowerCase()}`}
+								label={copyLabel ?? `Copy ${name}`}
 							/>
+						)}
+						{pinned && (
+							<button
+								type="button"
+								onClick={() => clampRef.current?.close()}
+								aria-expanded
+								aria-controls={boxId}
+								// The clamp's own button's name: the two do the same.
+								aria-label={`Show less of ${name}`}
+								className="touch-target flex size-6 items-center justify-center rounded text-th-text-muted hover:bg-th-overlay-hover hover:text-th-text-primary"
+							>
+								<ChevronsDownUp size={14} aria-hidden="true" />
+							</button>
 						)}
 					</>
 				)
@@ -96,19 +139,41 @@ export function Section({
 		/>
 	);
 
-	const body = (
-		<ClampedContent
-			from={clampFrom}
-			fullScreenTitle={fullScreenTitle}
-			showAllLabel={showAllLabel}
-		>
-			{children}
-		</ClampedContent>
-	);
+	const body =
+		budget === "none" ? (
+			children
+		) : (
+			<ClampedContent
+				budget={budget}
+				from={clampFrom}
+				count={count}
+				name={name}
+				fullScreenTitle={fullScreenTitle}
+				view={view}
+				landingRef={headerRef}
+				id={boxId}
+				ref={clampRef}
+				onOpenChange={setClampOpen}
+				follow={follow}
+			>
+				{children}
+			</ClampedContent>
+		);
 
 	return (
-		<div className="tool-section space-y-1">
-			{header}
+		<div
+			// A foldable title's hit area reaches 10px above the header under a
+			// thumb, as does a cut section's button below its content, and the
+			// body's 12px between sections cannot hold both: the title is moved
+			// clear (docs/responsive-ui.md, the overlay's two checks).
+			className={`tool-section ${collapsible ? "pointer-coarse:pt-2.5" : ""}`}
+		>
+			{/* The gap to the body is the header's padding, not a margin: a
+			    pinned header keeps its margin inside the section, and the
+			    section's last line would show under it as it is carried off. */}
+			<div ref={headerRef} className={`pb-1 ${pinned ? "section-bar" : ""}`}>
+				{header}
+			</div>
 			{collapsible ? (
 				<CollapsibleBody expanded={open}>{body}</CollapsibleBody>
 			) : (

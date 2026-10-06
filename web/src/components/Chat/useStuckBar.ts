@@ -11,14 +11,15 @@ function scrollParent(el: HTMLElement): HTMLElement | null {
 }
 
 /**
- * Marks a `row-bar` with `data-stuck` while it is pinned to the top of its
- * scroller, which CSS cannot ask: the hairline under a pinned bar, and an
- * outer bar giving way to an inner one, both hang on it (`row-bar` in
- * `src/index.css`).
+ * Marks a `row-bar` or a `section-bar` with `data-stuck` while it is pinned
+ * at its place near the top of its scroller, which CSS cannot ask: the
+ * hairline under a pinned bar, and an outer bar giving way to an inner one,
+ * both hang on it (`row-bar` in `src/index.css`).
  *
- * Pinned means the row has started above the scroller's top edge and the bar
- * still sits at that edge: one the end of its row has begun to carry out is no
- * longer pinned, so a bar it covered shows again under it as it leaves. Only
+ * Pinned means the row has started above the bar's place — the scroller's
+ * top edge plus the bar's sticky `top` — and the bar still sits there: one
+ * the end of its row has begun to carry out is no longer pinned, so a bar it
+ * covered shows again under it as it leaves. Only
  * read while `active`, so a transcript of closed rows listens to nothing. Read
  * on scroll, on the row changing size — a row folded away by its parent
  * closing is `display: none`, and the flag it held must not outlive it — and
@@ -41,7 +42,9 @@ export function useStuckBar(
 		if (!scroller) return;
 
 		const update = () => {
-			const edge = scroller.getBoundingClientRect().top;
+			const edge =
+				scroller.getBoundingClientRect().top +
+				(Number.parseFloat(getComputedStyle(bar).top) || 0);
 			const box = row.getBoundingClientRect();
 			// No height is a row that is not displayed, whose box reads as zeros.
 			const stuck =

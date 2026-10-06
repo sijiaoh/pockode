@@ -25,6 +25,7 @@ import ToolResultDisplay, {
 	FAILURE_TEXT,
 	outputLineCount,
 	resultCopyText,
+	resultCount,
 } from "./ToolResultDisplay";
 import { ToolMeta, ToolRow, ToolStatusGlyph } from "./ToolRow";
 import { Section } from "./ToolSection";
@@ -149,12 +150,12 @@ const ToolCallItem = memo(function ToolCallItem({
 	// and when the tool refused it, the result is the reason.
 	const changeError = change && failed ? result : "";
 	// Gated the same way: counting means splitting the whole output.
-	const showAllLabel = useMemo(
+	const count = useMemo(
 		() =>
-			everExpanded && layout.resultFromEnd && result
-				? `Show all ${outputLineCount(result)} lines`
+			everExpanded && showsResult
+				? resultCount(run.name, run.input, result, run.contents)
 				: undefined,
-		[everExpanded, layout.resultFromEnd, result],
+		[everExpanded, showsResult, run.name, run.input, result, run.contents],
 	);
 
 	const invocation = (
@@ -174,7 +175,13 @@ const ToolCallItem = memo(function ToolCallItem({
 	const outcome = (
 		<>
 			{liveOutput && (
-				<Section label="Output so far" clampFrom="end">
+				<Section
+					label="Output so far"
+					budget="main"
+					clampFrom="end"
+					follow
+					count={{ noun: "line", total: outputLineCount(liveOutput) }}
+				>
 					<pre className="whitespace-pre-wrap font-mono text-th-text-muted">
 						{liveOutput}
 					</pre>
@@ -193,7 +200,7 @@ const ToolCallItem = memo(function ToolCallItem({
 				run={run}
 				outcomeLabel={layout.resultLabel}
 				outcomeClampFrom={layout.resultFromEnd ? "end" : undefined}
-				outcomeShowAllLabel={showAllLabel}
+				outcomeCount={count}
 				outcomeMeta={changeHeader.meta}
 				outcomeActions={changeHeader.actions}
 				outcomeCopyText={copyText}

@@ -350,8 +350,8 @@ own, since `/etc/hosts` split into segments reads exactly like
 body [gave one up](#the-body-problems-2-and-3) — holding `PathLine` (with
 *Open* into the Files tab, except for a deleted file or one outside the work
 directory) and then one change per `Section`, in order, each drawn exactly as
-on its tool row: `ProposedChange` clamped by `ClampedContent` with *Show all*
-and *Full screen* (`Edit · deliver.ts`), `+N −M` and the one *Wrap long lines*
+on its tool row: `ProposedChange` clamped by `ClampedContent` with *Show N
+more lines* and *Full screen* (`Edit · deliver.ts`), `+N −M` and the one *Wrap long lines*
 switch in its header, and a Write's content copied from there. Being the same
 component, each diff also has the tool body's narrow gutter on a phone. A file
 changed once heads its block `Change` (`Content` for a Write), as the tool
@@ -1159,8 +1159,8 @@ One `CollapsibleBody` → one padded block, with **no height and no scroller of
 its own**. It used to be a `ScrollableContent max-h-[60vh]`, and on a phone that
 box was under the thumb most of the time a tall body was open, so the drag
 meant for the transcript scrolled the body instead. Now every section clamps
-itself (`ClampedContent`, `web/src/components/ui/`): past `max-h-80` it is cut,
-faded where it is cut, and opened in place by *Show all*. Clipped content
+itself (`ClampedContent`, `web/src/components/ui/`): past its budget it is cut,
+faded where it is cut, and opened in place by the button on that side. Clipped content
 scrolls nothing, so every vertical drag stays the page's — and a keyboard that
 tabs into the cut-off part opens it, because the browser would otherwise
 scroll the clipped box to the focused control and leave it where no drag can
@@ -1170,6 +1170,165 @@ scroll vertically hands a vertical drag on to the page. What is read at length
 rather than skimmed — a whole file (`Read`, `Write`) and a diff (`Edit`,
 `MultiEdit`) — also offers *Full screen*, the shared `Sheet` in its
 `fullScreen` form, once it runs past the clamp.
+
+### Budgets
+
+A flat clamp had no notion of a body's total: a long command over long output
+was two full clamps, more than a phone's whole transcript, while on a landscape
+phone one clamp alone was taller than the transcript. So a section's height is
+set by its **role** (`budget` on `Section`), in lines of the body's `text-xs`,
+which are `1rem`:
+
+| Role | Budget | Sections |
+|---|---|---|
+| main | `clamp(8 lines, 45% of the transcript, cap)` — cap 20 lines on a coarse primary pointer, 30 otherwise | Output, Content, Change, Matches, Results, Page, Result, *Outcome · after the turn*, *Output so far*, the `ExitPlanMode` plan, a permission card's *Proposed change*, a file's diff in [the turn's changes](#the-turns-changes), a subagent's report, *Full reasoning*, a command's *Sent to the agent* |
+| supporting | 8 lines | Command, File / Files (several paths, or one folded under a result), Parameters, Request, a search's arguments, *Returned to the agent*, *Fetched output*, Error, a permission card's *Raw input*, a subagent's prompt |
+| none | never cut | the `TodoWrite` checklist (a single file's path line on its own is not a section at all) |
+
+The 45% is of the **transcript**, not the window: `MessageList` keeps its
+scroller's height in `--transcript-height`, and outside a transcript the
+window's stands in. A main block and its supporting block together are then
+about half a screen plus eight lines, which leaves the row's own title and the
+block after it in view on a phone.
+
+**Tolerance.** A section is cut only when more than six lines would be hidden;
+anything up to that is shown whole. A button that reveals two lines costs more than
+the two lines, and pushes the same distance. The box is allowed budget + six
+lines while uncut, so content that fits there never needs measuring twice.
+
+**The button is on the side that is cut.** Content read from its start fades at
+the bottom with the button below it; content read from its end (a command's
+output, *Output so far*) fades at the top with the button between the header and
+the content, where the hidden part is. It says how much it hides, in the unit the
+content is drawn in: *Show 340 more lines*, *Show 340 earlier lines*, *Show 85
+more files* for a search's file list. The count is the hidden share of the
+height applied to the content's own total, which is exact for content drawn in
+even rows and close for a log with a few wrapped lines. Content with no unit a
+reader counts in — Markdown, a list of fields, a command — says *Show all*, and so do lines that wrap onto more than two rows each
+on average: a command that printed one minified JSON answer printed one line,
+and *Show 1 earlier line* over a screenful would say nothing. Opened, the button reads *Show less* and puts the clamp
+back.
+
+The buttons are a line high with a `touch-target` overlay for the hit area,
+not boxes as tall as it: at 44px the two between a command and its output
+alone took an open `Bash` row past a 375×667 phone's 562px transcript (606px;
+558px now). Why that is allowed, and the clearance it costs a foldable section
+below one, are in [responsive-ui.md](responsive-ui.md#which-technique-and-when).
+
+### Keeping the reader's place
+
+Opening or closing a block changes the height of everything below it, and the
+transcript holds the view still over the [part](#the-list) the reader is in —
+which, for a block inside that part, is the part's top. That is right for
+content read from its start and wrong for content read from its tail: opening
+*Show 1984 earlier lines* on a test log grew the box downward from the part's
+top, and the reader looking at its verdict was left on its first line with the
+verdict 31,000px below (measured at 375×667: the box's bottom went from 583px
+to 32,346px). So the block says where it is to be held, through the
+transcript's own anchor (`TranscriptView.holdAt`, the same call a row folding
+from its bar makes — [folding from the bar](#folding-from-the-bar)):
+
+| Action | Held |
+|---|---|
+| *Show N more* (cut at its end) | the box's top |
+| *Show N earlier* (read from its tail) | the box's bottom: the content grows upward, and the line the reader was on stays where it was |
+| *Show less* | the button, which is on the edge that is cut — any of it in sight counts, since a tap lands on the overlay round it |
+| *Show less* with the button out of sight (under the pinned title or the [pinned section header](#the-pinned-section-header), or off screen when closed from that header) | the section's header — or, for a block with none (a subagent's report and prompt, the `ExitPlanMode` plan), the block's own top: where it is when it is in sight — a pinned header is just under the row's title — and otherwise brought to just under the pinned row title (`coveredAbove`, the same height a fold lands under) |
+
+Keyboard focus opening a block takes the same landing; the browser then
+brings the focused control into view if the landing left it out, as it would
+for any focus. Holding is asked of the
+anchor rather than written to `scrollTop` here, so the next thing that moves the
+transcript keeps the place rather than undoing it, and a reader following the
+tail goes on following it when the place held is the end. What cannot be held is
+not: a place above the transcript's top or past its end is the nearest one it
+can reach.
+
+**Live output follows its tail** (`follow`, on *Output so far*), whenever it
+grows — uncut, or opened; cut, its box is the budget and the tail is already
+what it shows. While its bottom is in sight, growth that would carry the bottom
+out of the view holds it at the last place it was seen instead, so new lines
+push the old ones up, as a terminal does; growth that stays in the view moves
+nothing. The view scrolling up between two growths — the reader leaving —
+stops that, and scrolling back down with the bottom in sight starts it again,
+as does opening or closing the block. It is the view's `scrollTop` that says
+so, not where the block sits: the button that appears above output once it is
+cut pushes the block down without anyone scrolling. A transcript reading its
+own tail needs none of this, and nothing here leaves it.
+
+### The pinned section header
+
+A section opened past its budget can run for screens, and a reader in the
+middle of it had lost which block it was — a command's or its output's — and
+both ways to close it, one at each end. So while a section is open past its
+budget, and only then, its header sticks directly under the row's
+[pinned title](#the-sticky-title-line), carrying its copy button and a collapse
+control (`ChevronsDownUp`). A section that fits, or one cut and not opened, is
+drawn as before; a foldable section folded away lets its header go. One
+section is open around any point of the body, so there are at most two pinned
+bars: the row's and this.
+
+- **It is the section's own header** (`Section`, `Chat/ToolSection.tsx`), in a
+  `section-bar` box (`web/src/index.css`): `position: sticky; top:
+  var(--row-height)`, so it sits exactly under the row's bar, whose height
+  that is, and its containing block is the section, so the section's end
+  carries it off. `useStuckBar` marks it `data-stuck` while it is pinned, for
+  the hairline under it; the hook reads the bar's own `top`, so the same
+  pinned test serves both. The row bar's blanking under a deeper pinned bar
+  asks for a `.row-bar[data-stuck]`, so a pinned section header in a row's
+  body does not blank that row's own title.
+- **Stacking.** The header is `z-index: 1` and the row's bar is now 2 (3
+  focused): when the section's end carries the header out, it passes under
+  the row's title, not over it. The scroll-to-bottom button moved to `z-3`
+  with it.
+- **Clear of the row's bar.** `section-bar` keeps `--section-bar-clear` above
+  its line, so a thumb a little high on its buttons does not land on the bar
+  over it — the row's whole toggle — and fold the row
+  ([responsive-ui.md](responsive-ui.md#which-technique-and-when) has the
+  overlay's reach and the values).
+- **Ground.** The header repaints the body's ground, `--section-ground`,
+  defaulting to `--th-bg-secondary` — every drawer's — which a pending
+  permission card's body restates as its warning wash over the row's ground.
+- **Where nothing is pinned above it, it pins at the top**
+  (`--section-bar-top: 0`):
+  - A thought's body, which scrolls on its own (`max-h-[60vh]`) — a settled
+    thought's and the live one in the turn's tail alike, both
+    `ThoughtScroller`: an opened *Full reasoning* pins at that scroller's top,
+    and opening and closing it keep the place in that scroller, not the
+    transcript ([agent-chat.md](agent-chat.md#where-the-view-sits)). The
+    scroller has no vertical padding of its own, which would leave a gap above
+    the pinned header.
+  - The turn's changes card, whose file rows do not stick: an opened diff's
+    header pins at the transcript's top. The card clips its rounded frame
+    with `overflow-clip`, not `overflow-hidden`, for the same reason
+    `ToolList` does ([the sticky title line](#the-sticky-title-line)):
+    `hidden` made the card the scroll container the header stuck to, and the
+    card never scrolls.
+- **Its collapse control is *Show less*.** It calls the clamp's own close
+  (`ClampHandle.close`), so it lands exactly as the button would
+  ([keeping the reader's place](#keeping-the-readers-place)): the button held
+  where it is when any of it is in sight below the header, and otherwise —
+  the usual case, the reader being somewhere in the middle — the section's
+  header, which pinned is already just under the row's title, stays there.
+  Pressed with the header at rest on screen, the header stays where it is
+  rather than being brought up to the title. A button under the pinned header
+  counts as out of sight, as one under the row's title does. Closing takes the control
+  away, so focus goes to the clamp's own button rather than falling to the
+  page, without scrolling to it.
+- **The header unpins in the same commit as the clamp closes**: the clamp says
+  so from the handler that closes it (`onOpenChange`), not from an effect, so
+  the landing measures the header back in the flow rather than stuck partway
+  down a section that has just shrunk.
+- **A scroll margin under both.** Inside a pinned header's section, focus
+  moving up scrolls to the header's own `top` (`--row-height`, or 0 where it
+  pins at the top) plus the header — its clearance, its `1.5rem` line and the
+  `pb-1` under it (`:where(.section-bar ~ *) *`). That gap to the body
+  is the header's padding rather than the section's `space-y`, because a
+  pinned box keeps its margin inside its section: carried off, it stopped 4px
+  short of the section's end and the last line of output showed under it.
+
+The subagent's report, its prompt and the `ExitPlanMode` plan have no header,
+and so nothing to pin; they close from their own button.
 
 The block is `p-2` with `space-y-3` between its sections, and a code block in
 a section draws **no box of its own** — no padding, no background
@@ -1323,8 +1482,11 @@ In the default order, each section omitted when empty:
    view (`clampFrom="end"`), since the newest line is the one being watched. The
    50 lines are what a cap buys on top of that: a build that printed ten
    thousand of them does not become ten thousand DOM nodes in a row nobody has
-   finished reading. The body does not auto-scroll either; the row's second line
-   is the live glance, and the body is where someone reads at their own pace.
+   finished reading. As it grows it follows its tail while that is in sight,
+   and stops once the reader scrolls up away from it
+   ([keeping the reader's place](#keeping-the-readers-place)); the row's second
+   line is the live glance, and the body is where someone reads at their own
+   pace.
 3. **What became of the call**: the three shared blocks in their fixed order —
    *Returned to the agent*, *Fetched output*, and then *Result* or, when the run
    came from the background, *Outcome · after the turn*
@@ -1347,9 +1509,8 @@ In the default order, each section omitted when empty:
    - `Bash`: the output **wraps** — a log line is read whole, and a sideways
      scroll hid the end of nearly every one on a phone. Its clamp keeps the
      *end* in view (`resultFromEnd`), because a test run's or a build's verdict
-     is its last lines: `max-h-80` at the body's `text-xs` line height is the
-     last 20 lines or so, and the button that opens the rest says how much
-     there is — *Show all N lines*. A failed command's last five lines are
+     is its last lines, and the button above it says how many
+     earlier lines there are ([budgets](#budgets)). A failed command's last five lines are
      marked as its error (a red rule, tint and text — `FAILURE_TEXT` in
      `ToolResultDisplay.tsx`), since that is nearly always where it says why;
      five holds a compiler's last errors or a test runner's `FAIL` without
@@ -1508,7 +1669,7 @@ and folding it from there leaves the reader on the row
 utility in `web/src/index.css` and `useStuckBar` beside it.
 
 **It is the row's own button that sticks**, wrapped in a `row-bar` box —
-`position: sticky; top: 0; z-index: 1` — whose containing block is the row's
+`position: sticky; top: 0; z-index: 2` — whose containing block is the row's
 wrapper, so the end of the row carries it off. There is no copy of the row:
 one control, one focus and one accessible name, wherever it is drawn. Only an
 open, toggleable `ToolRow` gets the bar; a closed row is drawn exactly as
@@ -1563,7 +1724,7 @@ sticks to the same top as the subagent's row around it and comes later in the
 tree, so it paints over it — but it is indented (the Process rail, a pending
 card's inset) and cannot paint past its own list's clip, so the outer bar's
 chevron and title would show beside it. An outer bar whose row holds a pinned
-bar (`:has(~ * [data-stuck])`) therefore blanks: its contents go to opacity 0
+bar (`:has(~ * .row-bar[data-stuck])`) therefore blanks: its contents go to opacity 0
 with no pointer events, and it fills with the ground the inner bar is indented
 into — `--th-bg-secondary` when the pinned bar is inside a
 `row-ground-secondary` body, its own ground otherwise (a subagent's pending
@@ -1572,7 +1733,7 @@ card sits under its row, on the transcript's ground,
 `visibility`, so a focused outer row keeps its focus. Keyboard focus is the
 exception to the blanking: Shift+Tab from the inner button reaches the outer
 one without scrolling anything, both being at the top, so a bar holding
-`:focus-visible` is not blanked but raised to z-index 2, over the inner bar,
+`:focus-visible` is not blanked but raised to z-index 3, over the inner bar,
 until focus leaves it. When the inner bar is carried out it is no longer
 stuck, and the outer one shows again under it as it goes.
 
@@ -1584,8 +1745,9 @@ stuck, and the outer one shows again under it as it goes.
   makes the list a scroll container, and the bars stuck to the list — which
   never scrolls — and did nothing. Any wrapper added around rows later is under
   the same rule.
-- **Stacking.** The bar's z-index 1 (2 while it holds keyboard focus) is over
-  the body and the rows after it. The scroll-to-bottom button is `z-2` and
+- **Stacking.** The bar's z-index 2 (3 while it holds keyboard focus) is over
+  the body and the rows after it, and over a [pinned section
+  header](#the-pinned-section-header) at 1. The scroll-to-bottom button is `z-3` and
   comes later in the tree, to stay over a bar passing under it, and
   the answer panel's `z-10` is over both
   ([answering-ui.md](answering-ui.md#it-is-modal-over-one-rectangle-and-nothing-else)).
@@ -1601,7 +1763,8 @@ stuck, and the outer one shows again under it as it goes.
 **`--row-height`** is the row's floor — `2.25rem`, `2.75rem` under
 `any-pointer: coarse` — and so the pinned bar's height, declared on `:root`
 for whatever is stacked under a pinned bar to name; today that is the scroll
-margin above. It repeats `ROW_BOX`'s `min-h-9 pointer-coarse:min-h-11` in
+margin above and a [pinned section header](#the-pinned-section-header)'s
+`top`. It repeats `ROW_BOX`'s `min-h-9 pointer-coarse:min-h-11` in
 `ToolRow.tsx`, and that duplication is deliberate: the touch-target scan
 (`web/tests/touchTarget.test.ts`) reads the classes, and a `min-h` sized by a
 variable would drop the row out of its census without failing. Each side says
@@ -1842,7 +2005,7 @@ exactly as a message's do ([groups](#groups)).
 **It does not scroll on its own.** The `TaskItem` body is a stack of blocks
 whose report and prompt are clamped like a tool section, and this is the one
 block that is not: the rows inside it open into bodies of their own, and a cut
-around them would hide a row the reader opened behind a *Show all*. A scroller
+around them would hide a row the reader opened behind a *Show N more*. A scroller
 is out for the reason [the body](#the-body-problems-2-and-3) gives — a drag on a
 phone goes to whichever box is under the thumb. So the Process grows
 to its full height, and the cost — a long subagent is many rows once opened —
@@ -2044,6 +2207,15 @@ which restates that floor ([the sticky title line](#the-sticky-title-line)). Nei
 decisions, and reachability is a CSS variant
 ([responsive-ui.md](responsive-ui.md#the-two-pointer-gates)).
 
+**One pointer question is about size, not reach:** a main section's
+[budget](#budgets) caps at 20 lines where the primary pointer is coarse and 30
+elsewhere. A phone's transcript is short enough that 20 lines is already a long
+thumb-scroll past, while a desktop's holds more before a block stops being
+glanceable. It asks `useHasCoarsePointer` (the primary pointer — a phone, not a
+touchscreen laptop), and it is a height, not a hit area, so it is not bound by
+the reachability rule above. Width plays no part: the transcript's own height
+already says how much room there is.
+
 ## Accessibility
 
 - The row is a `<button>` with `aria-expanded` — unconditional now, since there
@@ -2064,6 +2236,16 @@ decisions, and reachability is a CSS variant
   the row's own button, not a copy, so there is still one control to reach and
   one name for it; folding from it leaves focus on it.
 - The `background` chip is real text, so it is read as part of the row.
+- A section's *Show* / *Show less* button carries `aria-expanded` and
+  `aria-controls` (the clamped box), and its accessible name completes the
+  visible text with what it opens: *Show 340 earlier lines of output*,
+  *Show less of output*, *Show all of plan*. Keyboard focus entering the cut-off part opens the
+  section ([the body](#the-body-problems-2-and-3)), landing where a press
+  would ([keeping the reader's place](#keeping-the-readers-place)).
+- An opened section's pinned header carries a collapse control with the same
+  name, *Show less of output*, `aria-expanded="true"` and `aria-controls` the
+  same box; closing from it leaves focus on the section's own button
+  ([the pinned section header](#the-pinned-section-header)).
 - A subagent's Process is a `role="group"` named for the subagent, and a pending
   permission card it raised sits inside the Task item's own DOM, so both say
   whose they are without the visual cues
@@ -2122,7 +2304,7 @@ decisions, and reachability is a CSS variant
     *Outcome · after the turn*, not passed off as what the call returned, with
     no empty-report sentence above it, and not drawn again at the end of the
     Process. A fetch of it is readable in the same body, cut to its clamp
-    with *Show all* rather than inside a scroll box.
+    with *Show N more lines* rather than inside a scroll box.
 14. Reload the page on any of the above: every fetched block is still there and
     the row's second line is present from the first frame — a fetch is persisted,
     unlike the activity line.
@@ -2187,15 +2369,15 @@ decisions, and reachability is a CSS variant
     leaves no doubled line.
 29. On a 375px phone, open a `Read` of a long file and drag the page up and down
     across its body: the transcript moves, the body never does. *Content* is on
-    top, cut and faded, with *Show all* and *Full screen*; *File* is folded under
+    top, cut and faded, with *Show N more lines* and *Full screen*; *File* is folded under
     it. Copy from the *Content* header: no line numbers in what was copied.
 30. On a 375px phone, with nothing scrolled sideways: an `Edit` of a deep file
     opens on `src/…/name.ts`, *Open* and a copy button on one row, with no
     `File` header above it, and the command or path in any section starts
     flush with its section's label; a `TodoWrite` opens on its
     checklist alone; an MCP call lists its arguments by name; a `go test` that
-    failed shows its last lines wrapped, the final five in red, with *Show all N
-    lines* under them.
+    failed shows its last lines wrapped, the final five in red, with *Show N
+    earlier lines* above them; opened, the same button reads *Show less*.
 31. On a 375px phone, open an `Edit`: its *Change* header reads `+N −M` (an
     edit that only adds reads `+N`, never `−0`); the
     gutter is one narrow column and the code takes most of the width. Turn on
@@ -2226,7 +2408,7 @@ decisions, and reachability is a CSS variant
     lands on the sixth row. Seven: all listed. Reload: the same card.
 36. On a 375px phone, open a card row onto a diff of hundreds of lines and drag
     up and down over it: the transcript moves, never the diff alone. The diff
-    is cut and faded with *Show all* and *Full screen* under it, `+N −M` and
+    is cut and faded with *Show N more lines* and *Full screen* under it, `+N −M` and
     the wrap switch in its header; a `Write`'s block copies its content.
 37. An `Edit` the tool refused (an `old_string` not in the file): the row's
     second line is the reason in prose, with no `</tool_use_error>` on it.
@@ -2251,6 +2433,25 @@ decisions, and reachability is a CSS variant
     row while following a running turn: the view stays at the end and goes on
     following it. The walkthrough's `sticky`, `sticky-fold` and `sticky-tail`
     scenes shoot all of these.
+41. On a 375×667 phone, open a `Bash` with a 20-line command and a 2000-line
+    output: the command is cut at 8 lines with *Show all* under it,
+    the output at about 45% of the transcript with *Show N earlier lines* above
+    it, and both fit on one screen. A block 5 lines over its budget shows whole
+    with no button. Turn the phone landscape: a cut output is at most about
+    half the transcript. A `TodoWrite`'s checklist is never cut.
+42. In that `Bash`, with the output's last line mid-screen, press *Show N
+    earlier lines*: the last line stays exactly where it was and the log grows
+    upward. *Show less* leaves its button where it was pressed; closed with its
+    button out of sight, the section's header lands just under the pinned title.
+    *Show all* on the command keeps the command's top. The walkthrough's
+    `keep-place` scene logs each edge before and after.
+43. Open that output with *Show N earlier lines* and scroll into it: the
+    *Output* header pins directly under the row's title with a hairline, the
+    copy button and a collapse control; there are never more than those two
+    bars. Scroll to the output's end: the header is carried off under the row's
+    title, not over it. Press the collapse control mid-output: the output is cut
+    again and its header lands just under the row's title, focus on *Show N
+    earlier lines*. A section that fits, or one cut and not opened, never pins.
 
 ## Out of scope
 

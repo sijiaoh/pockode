@@ -1,14 +1,17 @@
 import { ChevronDown } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { type RefObject, useEffect, useRef, useState } from "react";
 
 interface Props {
 	children: React.ReactNode;
 	className?: string;
+	/** The scrolling element itself, not the wrapper the indicator sits in. */
+	ref?: RefObject<HTMLDivElement | null>;
 }
 
 /** Scrollable container with bottom scroll indicator */
-function ScrollableContent({ children, className }: Props) {
-	const containerRef = useRef<HTMLDivElement>(null);
+function ScrollableContent({ children, className, ref }: Props) {
+	const ownRef = useRef<HTMLDivElement>(null);
+	const containerRef = ref ?? ownRef;
 	const [canScrollDown, setCanScrollDown] = useState(false);
 
 	useEffect(() => {
@@ -39,7 +42,7 @@ function ScrollableContent({ children, className }: Props) {
 			resizeObserver.disconnect();
 			mutationObserver.disconnect();
 		};
-	}, []);
+	}, [containerRef]);
 
 	return (
 		<div className="relative">

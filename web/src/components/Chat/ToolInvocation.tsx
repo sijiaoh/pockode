@@ -7,8 +7,10 @@ import { useWSStore } from "../../lib/wsStore";
 import { HIGHLIGHT_LIMIT } from "../../utils/fileView";
 import { isSameNativePath, relativeToWorkDir } from "../../utils/path";
 import { ClampedContent, HeaderCopyButton, MarkdownContent } from "../ui";
+import { outputLineCount } from "./ToolResultDisplay";
 import { Detail } from "./ToolRow";
 import { Section } from "./ToolSection";
+import { useTranscriptView } from "./transcriptViewContext";
 
 /**
  * A path on one line, relative to the work directory when it is inside it,
@@ -310,6 +312,7 @@ export function ToolInvocation({
 	collapsible?: { defaultOpen: boolean };
 }) {
 	const workDir = useWSStore((state) => state.workDir);
+	const transcriptView = useTranscriptView();
 	const view = useMemo(
 		() => invocationView(toolName, input),
 		[toolName, input],
@@ -322,6 +325,7 @@ export function ToolInvocation({
 			return String(input);
 		}
 	}, [view.kind, input]);
+	const jsonLines = useMemo(() => outputLineCount(json), [json]);
 	const label = invocationLabel(view);
 
 	switch (view.kind) {
@@ -329,7 +333,7 @@ export function ToolInvocation({
 		// label.
 		case "plan":
 			return (
-				<ClampedContent>
+				<ClampedContent budget="main" name="plan" view={transcriptView}>
 					<MarkdownContent content={view.plan} />
 				</ClampedContent>
 			);
@@ -381,7 +385,8 @@ export function ToolInvocation({
 
 		case "todos":
 			return (
-				<Section label={label} collapsible={collapsible}>
+				// Never cut: the list is short, and every item on it is the point.
+				<Section label={label} collapsible={collapsible} budget="none">
 					<TodoChecklist todos={view.todos} />
 				</Section>
 			);
@@ -405,6 +410,7 @@ export function ToolInvocation({
 					label={label}
 					copyText={view.paths.join("\n")}
 					collapsible={collapsible}
+					count={{ noun: "file", total: view.paths.length }}
 				>
 					{view.paths.map((path) => (
 						<PathLine key={path} path={path} onOpenFile={onOpenFile} />
@@ -423,7 +429,12 @@ export function ToolInvocation({
 
 		case "json":
 			return (
-				<Section label={label} copyText={json} collapsible={collapsible}>
+				<Section
+					label={label}
+					copyText={json}
+					collapsible={collapsible}
+					count={{ noun: "line", total: jsonLines }}
+				>
 					<CodeHighlighter
 						language="json"
 						wrap

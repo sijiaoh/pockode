@@ -501,9 +501,14 @@ a jump to a pending permission request anchors on the card.
 A third, beside the button and the jump, is a row asking for a place:
 `holdAt(el, offset)` puts `el`'s top `offset` pixels below the top edge. Rows
 reach it through `TranscriptViewContext` (`transcriptViewContext.ts`), which
-`MessageList` provides around them; today the one caller is an open tool row folding, which
+`MessageList` provides around them. Two kinds of caller use it: an open tool row folding, which
 lands the reader on the row instead of on whatever followed its body
-([tool-call-ui.md](tool-call-ui.md#folding-from-the-bar)). The place is clamped
+([tool-call-ui.md](tool-call-ui.md#folding-from-the-bar)), and a cut block
+opening, closing or following its live tail, which holds the edge the reader
+was looking at ([tool-call-ui.md](tool-call-ui.md#keeping-the-readers-place)).
+A block inside a box that scrolls on its own — a thought's — is held through a
+view over that box instead (`useScrollerView`), since this anchor knows nothing
+of an inner scroll position. The place is clamped
 to what the view can reach first, then judged. Reading the tail, a place the
 end already shows (within a pixel) *is* the end: the view stays there and keeps
 following — which is what folding a pinned row while following comes to, since

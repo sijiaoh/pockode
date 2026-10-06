@@ -427,6 +427,23 @@ and it becomes an icon-only button — on a screen where reconnection has alread
 given up, so it is the only way out.) The header itself keeps its two clusters
 `gap-2` apart, so a pressable heading — the session's title, a page's — stops
 8px short of that retry and of Settings rather than running into them.
+A tool section's *Show N more lines* / *Show less* / *Full screen*
+(`ClampedContent`) is a fourth, and its container is a height *budget* rather
+than a fixed box: two of them stand between a command and its output, and as
+44px boxes they alone took an open `Bash` row past a phone's transcript
+([tool-call-ui.md](tool-call-ui.md#budgets)). The box is a line of `text-xs`
+plus `py-1`, 24px. Of the two checks, the horizontal one is the row's `gap-2`;
+the vertical one met a foldable section title, whose own overlay reaches 10px
+above its header — 20px of reach in a 12px gap — so a foldable section is moved
+`pointer-coarse:pt-2.5` clear (`Chat/ToolSection.tsx`), as `WorktreeItem`'s row
+was raised for `DeleteButton`.
+A tool section's header, pinned under an open row's bar, meets the vertical
+check again, with the bar as the neighbour: flush against it, the header's 24px
+copy and collapse buttons left their overlay's top under the bar — the row's
+whole toggle — so a thumb a little high folded the row. A pinned header
+(`section-bar`) keeps `--section-bar-clear` above its line, the overlay's reach
+— 6px, 10px under a coarse pointer
+([tool-call-ui.md](tool-call-ui.md#the-pinned-section-header)).
 
 **A box written on an `<a>`, a `<span>` or a `<label>` needs a `display` beside
 it.** Those tags are `inline` by default, and CSS drops `height`, `min-height`
