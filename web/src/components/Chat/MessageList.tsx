@@ -27,6 +27,7 @@ import MessageItem, {
 	type PromptError,
 } from "./MessageItem";
 import { anchorCandidateProps } from "./scrollAnchor";
+import { TranscriptViewContext } from "./transcriptViewContext";
 import {
 	IDLE_TAIL,
 	OpenedThoughtsContext,
@@ -153,7 +154,7 @@ function MessageList({
 	// Everything about where the view sits lives in there: two states, one
 	// action. Called first so that the invariant for this commit is applied before
 	// anything below reads a position back out of the container.
-	const { showScrollButton, hasUnseen, scrollToBottom, jumpTo } =
+	const { showScrollButton, hasUnseen, scrollToBottom, jumpTo, view } =
 		useTranscriptScroll({
 			scrollRef,
 			contentRef,
@@ -400,42 +401,44 @@ function MessageList({
 						<OpenedThoughtsContext value={openedThoughtIds}>
 							<UnfiledChildrenContext value={unfiled}>
 								<DiscardedMessagesContext value={discardedContext}>
-									{messages.map((message, index) => {
-										return (
-											<div
-												key={message.id}
-												data-message-id={message.id}
-												// This wrapper is the row the view can be held still over, and
-												// it is here rather than on anything `MessageItem` renders
-												// because it is unpositioned (see `scrollAnchor`).
-												{...anchorCandidateProps}
-												className="py-1.5 sm:py-2"
-											>
-												<MessageItem
-													message={message}
-													sessionId={sessionId}
-													// Top of the loaded transcript is the session's own start
-													// only once there are no older pages left above it.
-													isFirst={index === 0 && !hasMoreHistory}
-													isOpenTurn={index === openIndex}
-													isCodex={isCodex}
-													onPermissionRespond={onPermissionRespond}
-													onAnswerQuestion={onAnswerQuestion}
-													promptError={promptError}
-													onOpenWorkDetail={onOpenWorkDetail}
-													onOpenFile={onOpenFile}
-													onForkMessage={onForkMessage}
-													onSignIn={onSignIn}
-													isDiscarded={
-														message.role === "user" &&
-														message.messageId !== undefined &&
-														discardedContext.discarded.has(message.messageId)
-													}
-													onRestoreMessages={onRestoreMessages}
-												/>
-											</div>
-										);
-									})}
+									<TranscriptViewContext value={view}>
+										{messages.map((message, index) => {
+											return (
+												<div
+													key={message.id}
+													data-message-id={message.id}
+													// This wrapper is the row the view can be held still over, and
+													// it is here rather than on anything `MessageItem` renders
+													// because it is unpositioned (see `scrollAnchor`).
+													{...anchorCandidateProps}
+													className="py-1.5 sm:py-2"
+												>
+													<MessageItem
+														message={message}
+														sessionId={sessionId}
+														// Top of the loaded transcript is the session's own start
+														// only once there are no older pages left above it.
+														isFirst={index === 0 && !hasMoreHistory}
+														isOpenTurn={index === openIndex}
+														isCodex={isCodex}
+														onPermissionRespond={onPermissionRespond}
+														onAnswerQuestion={onAnswerQuestion}
+														promptError={promptError}
+														onOpenWorkDetail={onOpenWorkDetail}
+														onOpenFile={onOpenFile}
+														onForkMessage={onForkMessage}
+														onSignIn={onSignIn}
+														isDiscarded={
+															message.role === "user" &&
+															message.messageId !== undefined &&
+															discardedContext.discarded.has(message.messageId)
+														}
+														onRestoreMessages={onRestoreMessages}
+													/>
+												</div>
+											);
+										})}
+									</TranscriptViewContext>
 								</DiscardedMessagesContext>
 							</UnfiledChildrenContext>
 						</OpenedThoughtsContext>
@@ -450,7 +453,11 @@ function MessageList({
 					    Open — and there the button covered the only number on the line,
 					    while in the middle it covers prose that reads around it. */}
 					{showScrollButton && (
-						<div className="pointer-events-none sticky bottom-3 h-0">
+						// `z-2`: over an open row's bar (`row-bar`, z-index 1, or 2
+						// while focused — this comes later, so it still wins), which
+						// passes under the button whenever an open row's first line is
+						// at the bottom of the view.
+						<div className="pointer-events-none sticky bottom-3 z-2 h-0">
 							<div className="absolute inset-x-0 bottom-0 flex justify-center">
 								<button
 									type="button"

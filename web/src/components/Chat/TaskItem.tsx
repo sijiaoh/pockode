@@ -238,7 +238,7 @@ function TaskItem({ run, depth = 0, renderChild }: Props) {
 			)}
 
 			<CollapsibleBody expanded={expanded}>
-				<div className="border-t border-th-border bg-th-bg-secondary">
+				<div className="row-ground-secondary border-t border-th-border bg-th-bg-secondary">
 					{/* The note belongs to the report it qualifies, not to the row:
 					    on a phone a fixed-width label there truncates the
 					    description away to nothing. */}

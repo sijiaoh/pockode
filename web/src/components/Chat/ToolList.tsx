@@ -12,6 +12,7 @@ import type { ContentPart } from "../../types/message";
 import { RowExpansionContext, RowFrameContext } from "./rowExpansionContext";
 import { ToolGroupSummary } from "./ToolGroupSummary";
 import { OpenedThoughtsContext } from "./turnTailContext";
+import { foldPlaceProps } from "./useFoldLanding";
 
 interface Item {
 	part: ContentPart;
@@ -140,9 +141,13 @@ function RowList<T extends Item>({
 	return (
 		<RowFrameContext value={framed}>
 			<div
+				// `overflow-clip`, not `overflow-hidden`: both cut the rows to the
+				// rounded frame, but `hidden` also makes the list a scroll container,
+				// and an open row's bar would then stick to the list — which never
+				// scrolls — instead of to the transcript.
 				className={
 					framed
-						? "overflow-hidden rounded-lg border border-th-border text-xs"
+						? "overflow-clip rounded-lg border border-th-border text-xs"
 						: "text-xs"
 				}
 			>
@@ -154,6 +159,7 @@ function RowList<T extends Item>({
 									key={entry.key}
 									className="border-t border-th-border"
 									{...wrapperProps}
+									{...foldPlaceProps}
 								>
 									<ToolGroupSummary
 										summary={entry.summary}

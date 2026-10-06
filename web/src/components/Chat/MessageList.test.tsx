@@ -446,6 +446,157 @@ describe("the jump the attention strip borrows", () => {
 	});
 });
 
+// The landing itself is `useFoldLanding`'s to decide (ToolCallItem.test.tsx);
+// what is held here is that the transcript carries it out through its own
+// anchor, and only as far as the reader's state allows.
+describe("folding an open tool row from its pinned bar", () => {
+	const bash = (id: string): Message => ({
+		id,
+		role: "assistant",
+		status: "complete",
+		createdAt: new Date(),
+		parts: [
+			{
+				type: "tool_call",
+				tool: {
+					id: `tool-${id}`,
+					name: "Bash",
+					input: { command: `run ${id}` },
+					status: "success",
+				},
+			},
+		],
+	});
+
+	/**
+	 * Opens the call, then puts its row 50px above the view's top edge. Folding
+	 * it can then shrink the content by `body`: a browser clamps the view to
+	 * the new end as it lays the fold out, which moves the row down the view
+	 * by as much as the view moved.
+	 */
+	async function openAbove(
+		id: string,
+		viewport: ScrollBox,
+		scroller: HTMLElement,
+	) {
+		const user = userEvent.setup();
+		const button = screen.getByRole("button", { name: new RegExp(id) });
+		await user.click(button);
+		const row = button.parentElement?.parentElement as HTMLElement;
+		const opened = { top: -50, scrollTop: 0 };
+		vi.spyOn(row, "getBoundingClientRect").mockImplementation(() =>
+			DOMRect.fromRect({
+				y: opened.top + opened.scrollTop - scroller.scrollTop,
+				height: 100,
+			}),
+		);
+		return {
+			fold: async (body = 0) => {
+				opened.scrollTop = scroller.scrollTop;
+				viewport.contentHeight -= body;
+				scroller.scrollTop = Math.min(
+					scroller.scrollTop,
+					maxScrollTop(viewport),
+				);
+				await user.click(button);
+			},
+		};
+	}
+
+	it("puts the row at the top of the view and reads from there", async () => {
+		const before = Array.from({ length: 40 }, (_, i) => textMessage(`m${i}`));
+		const after = Array.from({ length: 40 }, (_, i) => textMessage(`n${i}`));
+		const { scroller, viewport } = renderScrolling(
+			[...before, bash("fold-me"), ...after],
+			{ box: { contentHeight: 8100, viewportHeight: 500 } },
+		);
+		dragTo(scroller, before.length * ROW_HEIGHT + 50);
+		const { fold } = await openAbove("fold-me", viewport, scroller);
+
+		await fold();
+		expect(scroller.scrollTop).toBe(before.length * ROW_HEIGHT);
+
+		// Held there as the anchor, not merely scrolled to: output landing at the
+		// end does not move it, and the way back is the button.
+		viewport.contentHeight = 9000;
+		triggerResize(contentBox(scroller));
+		expect(scroller.scrollTop).toBe(before.length * ROW_HEIGHT);
+		expect(
+			screen.getByRole("button", { name: "Scroll to bottom" }),
+		).toBeInTheDocument();
+	});
+
+	// The fold takes the body out of the content, so the end comes up to meet
+	// the row: everything after it already fits in the view.
+	it("goes on following the tail when the end shows the row's place", async () => {
+		const before = Array.from({ length: 9 }, (_, i) => textMessage(`m${i}`));
+		const { scroller, viewport } = renderScrolling([
+			...before,
+			bash("fold-me"),
+		]);
+		const { fold } = await openAbove("fold-me", viewport, scroller);
+
+		await fold(100);
+		expect(scroller.scrollTop).toBe(maxScrollTop(viewport));
+
+		viewport.contentHeight = 1200;
+		triggerResize(contentBox(scroller));
+		expect(scroller.scrollTop).toBe(maxScrollTop(viewport));
+		expect(
+			screen.queryByRole("button", { name: "Scroll to bottom" }),
+		).toBeNull();
+	});
+
+	// Left at the end, the row would sit above the top, under the view's edge:
+	// no landing at all.
+	it("leaves the tail when the end would hide the row", async () => {
+		const before = Array.from({ length: 9 }, (_, i) => textMessage(`m${i}`));
+		const { scroller, viewport } = renderScrolling([
+			...before,
+			bash("fold-me"),
+		]);
+		const { fold } = await openAbove("fold-me", viewport, scroller);
+
+		// A body of 20px: the clamp takes the view 20px up, which leaves the row
+		// 30px above the edge at the end.
+		await fold(20);
+		expect(scroller.scrollTop).toBe(450);
+
+		viewport.contentHeight = 1200;
+		triggerResize(contentBox(scroller));
+		expect(scroller.scrollTop).toBe(450);
+	});
+	// Folded with its title on screen, a two-line row's title rises a few
+	// pixels, and holding it asks for a place above the top of a transcript
+	// that does not scroll: still the end, not a reason to stop following.
+	it("goes on following the tail when the title it holds is past the top", async () => {
+		const { scroller, viewport } = renderScrolling(
+			[textMessage("m0"), textMessage("m1"), bash("fold-me")],
+			{ box: { contentHeight: 400, viewportHeight: 500 } },
+		);
+		const user = userEvent.setup();
+		const button = screen.getByRole("button", { name: /fold-me/ });
+		await user.click(button);
+		const row = button.parentElement?.parentElement as HTMLElement;
+		vi.spyOn(row, "getBoundingClientRect").mockReturnValue(
+			DOMRect.fromRect({ y: 200, height: 300 }),
+		);
+		const title = screen.getByText("Bash").parentElement as HTMLElement;
+		vi.spyOn(title, "getBoundingClientRect")
+			.mockReturnValueOnce(DOMRect.fromRect({ y: 214, height: 16 }))
+			.mockReturnValue(DOMRect.fromRect({ y: 206, height: 16 }));
+
+		await user.click(button);
+
+		viewport.contentHeight = 1200;
+		triggerResize(contentBox(scroller));
+		expect(scroller.scrollTop).toBe(maxScrollTop(viewport));
+		expect(
+			screen.queryByRole("button", { name: "Scroll to bottom" }),
+		).toBeNull();
+	});
+});
+
 describe("MessageList history paging", () => {
 	const loaded = [textMessage("m1"), textMessage("m2")];
 	const pagedIn = [textMessage("older1"), textMessage("older2"), ...loaded];

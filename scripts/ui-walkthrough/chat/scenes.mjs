@@ -150,6 +150,89 @@ async function close(target) {
 	await settle(target.page());
 }
 
+/** The transcript, as the console of a run reads it: every open row's bar. */
+async function logBars(page, label) {
+	const bars = await page.evaluate(() => {
+		const scroller = document.querySelector("[data-message-id]")?.closest(
+			".overflow-y-auto",
+		);
+		const edge = scroller?.getBoundingClientRect().top ?? 0;
+		return [...document.querySelectorAll(".row-bar")].map((bar) => ({
+			text: bar.textContent?.slice(0, 40),
+			top: Math.round(bar.getBoundingClientRect().top - edge),
+			height: Math.round(bar.getBoundingClientRect().height),
+			stuck: bar.hasAttribute("data-stuck"),
+			shown: getComputedStyle(bar.firstElementChild).opacity,
+		}));
+	});
+	console.log(label, JSON.stringify(bars));
+}
+
+/**
+ * Scrolls so the open row a disclosure heads starts `by` pixels above the top
+ * of the transcript. Measured on the row, not the button: a pinned button sits
+ * at the top whatever the row under it is doing.
+ */
+async function scrollRowAbove(target, by) {
+	await target.evaluate((button, by) => {
+		const row = button.closest(".row-bar").parentElement;
+		let scroller = row.parentElement;
+		while (!/(auto|scroll)/.test(getComputedStyle(scroller).overflowY))
+			scroller = scroller.parentElement;
+		scroller.scrollTop +=
+			row.getBoundingClientRect().top - scroller.getBoundingClientRect().top + by;
+	}, by);
+	await target.page().waitForTimeout(200);
+}
+
+/**
+ * Folds an open row — by a tap, or by Enter with the row focused — and logs
+ * where its top and its title sat against the top of the transcript before
+ * and after, and whether focus stayed on it. `top` is the bar an outer row
+ * would leave pinned over it, so a row folded from its pinned bar should land
+ * there; one folded with its title on screen should leave the title at
+ * `titleBefore`.
+ */
+async function foldAndLog(target, label, how = "tap") {
+	const measure = () =>
+		target.evaluate((button) => {
+			const scroller = button.closest(".overflow-y-auto");
+			const edge = scroller.getBoundingClientRect().top;
+			const row = button.closest("[data-fold-probe]");
+			const title = button.querySelector(".min-w-0 > span:first-child");
+			return {
+				row: Math.round(row.getBoundingClientRect().top - edge),
+				title: Math.round(title.getBoundingClientRect().top - edge),
+				focused: document.activeElement === button,
+			};
+		});
+	await target.evaluate((button) => {
+		button.closest(".row-bar").parentElement.dataset.foldProbe = "";
+	});
+	const before = await measure();
+	if (how === "key") {
+		await target.focus();
+		await target.press("Enter");
+	} else {
+		await target.click();
+	}
+	await settle(target.page());
+	const after = await measure();
+	await target.evaluate((button) => {
+		delete button.closest("[data-fold-probe]").dataset.foldProbe;
+	});
+	console.log(
+		label,
+		JSON.stringify({
+			rowBefore: before.row,
+			titleBefore: before.title,
+			rowAfter: after.row,
+			titleAfter: after.title,
+			focused: after.focused,
+		}),
+	);
+}
+
 /** The composer focused with a draft, and the soft keyboard up. */
 async function typeWithKeyboard(page, vp, draft) {
 	await composer(page).click();
@@ -259,6 +342,248 @@ const SCENES = [
 				),
 			);
 			await close(task);
+		},
+	},
+	{
+		// An open row's title pinned over its own body, alone and nested
+		// (docs/tool-call-ui.md#the-sticky-title-line). Each shot is logged with
+		// where every open bar measured, since a bar covered by another is the
+		// one thing a picture shows as nothing.
+		name: "sticky",
+		run: async ({ page, shared, shot }) => {
+			await openLongTurn(page, shared);
+			const failed = disclosure(page, "--reporter=verbose");
+			await scrollIntoView(failed);
+			await failed.click();
+			await settle(page);
+			await scrollRowAbove(failed, 30);
+			await logBars(page, "sticky-row");
+			await shot("sticky-row");
+			await close(failed);
+
+			// A control scrolled up into view from inside a long body lands below
+			// the bar, not under it. `nearest` is how Safari and Firefox bring a
+			// focused control in; Chrome's focus() centres it, which hides this.
+			const reads = disclosure(page, "Read 2 files");
+			await scrollIntoView(reads);
+			await reads.click();
+			await settle(page);
+			const read = disclosure(page, "handlers.ts");
+			await scrollIntoView(read);
+			await read.click();
+			await settle(page);
+			await page.getByRole("button", { name: /^Show all/ }).first().click();
+			await settle(page);
+			await scrollRowAbove(read, 1200);
+			const landed = await read.evaluate((button) => {
+				const bar = button.closest(".row-bar");
+				const control = bar.parentElement.querySelector(
+					".row-bar ~ * button",
+				);
+				control.scrollIntoView({ block: "nearest" });
+				return {
+					stuck: bar.hasAttribute("data-stuck"),
+					gap: Math.round(
+						control.getBoundingClientRect().top -
+							bar.getBoundingClientRect().bottom,
+					),
+				};
+			});
+			console.log("sticky-focus", JSON.stringify(landed));
+			await shot("sticky-focus");
+			await close(read);
+			await close(reads);
+
+			const task = disclosure(page, "Survey retry tests");
+			await scrollIntoView(task);
+			await task.click();
+			await settle(page);
+			await disclosure(page, /^\s*Process/).click();
+			await settle(page);
+			const inner = disclosure(page, "slack/notifier");
+			await scrollIntoView(inner);
+			await inner.click();
+			await settle(page);
+			await scrollRowAbove(task, 120);
+			await logBars(page, "sticky-outer");
+			await shot("sticky-outer");
+			await scrollRowAbove(inner, 20);
+			await logBars(page, "sticky-nested");
+			await shot("sticky-nested");
+			// Keyboard focus reaching the subagent's button while the inner bar
+			// is pinned (Shift+Tab from a pending card's, with nothing between)
+			// moves nothing: that bar is raised over the inner one, not left
+			// blank. A key press first, so the focus that follows is visible.
+			await inner.focus();
+			await page.keyboard.press("Shift");
+			await task.focus();
+			await settle(page);
+			const raised = await task.evaluate((button) => ({
+				focused: button.matches(":focus-visible"),
+				innerStuck: !!document.querySelector(".row-bar ~ * [data-stuck]"),
+				shown: getComputedStyle(button).opacity,
+				zIndex: getComputedStyle(button.closest(".row-bar")).zIndex,
+			}));
+			console.log("sticky-nested-focus", JSON.stringify(raised));
+			await shot("sticky-nested-focus");
+			await inner.focus();
+			// Something above the inner row growing inside the Process moves it
+			// down without a scroll: it is no longer pinned, and says so.
+			await inner.evaluate((button) => {
+				const probe = document.createElement("div");
+				probe.id = "stuck-probe";
+				probe.style.height = "120px";
+				const row = button.closest(".row-bar").parentElement;
+				row.parentElement.insertBefore(probe, row);
+			});
+			await settle(page);
+			await logBars(page, "sticky-nested-pushed");
+			await inner.evaluate(() =>
+				document.getElementById("stuck-probe")?.remove(),
+			);
+			await settle(page);
+			await scrollRowAbove(inner, 20);
+			// The inner row's end carrying its bar out: the outer title is back.
+			const innerHeight = await inner.evaluate(
+				(button) =>
+					button.closest(".row-bar").parentElement.getBoundingClientRect()
+						.height,
+			);
+			await scrollRowAbove(inner, innerHeight - 20);
+			await logBars(page, "sticky-nested-leaving");
+			await shot("sticky-nested-leaving");
+
+			// A pending card's bar keeps the card's tint and frame.
+			await openChat(page, shared.permissionMulti, (p) =>
+				p.locator("[data-permission-request-id]").nth(1),
+			);
+			const card = page
+				.locator("[data-permission-request-id]")
+				.nth(1)
+				.locator("button[aria-expanded]")
+				.first();
+			await scrollRowAbove(card, 60);
+			await logBars(page, "sticky-pending");
+			await shot("sticky-pending");
+		},
+	},
+	{
+		// Folding an open row leaves the reader on it: from its pinned bar the
+		// row lands at the top (under an outer row's bar when nested), and from
+		// its title on screen the title does not move.
+		name: "sticky-fold",
+		run: async ({ page, shared, shot }) => {
+			await openLongTurn(page, shared);
+			const failed = disclosure(page, "--reporter=verbose");
+			await scrollIntoView(failed);
+			await failed.click();
+			await settle(page);
+			await scrollRowAbove(failed, 300);
+			await foldAndLog(failed, "fold-pinned");
+			await shot("fold-pinned");
+
+			await failed.click();
+			await settle(page);
+			await scrollRowAbove(failed, 400);
+			await foldAndLog(failed, "fold-pinned-key", "key");
+
+			await failed.click();
+			await settle(page);
+			await scrollRowAbove(failed, -150);
+			await foldAndLog(failed, "fold-on-screen");
+			await shot("fold-on-screen");
+
+			// A row kept open while its group was closed goes back into the group
+			// as it folds: the group's summary is what lands.
+			const reads = disclosure(page, "Read 2 files");
+			await scrollIntoView(reads);
+			await reads.click();
+			await settle(page);
+			const read = disclosure(page, "handlers.ts");
+			await read.click();
+			await settle(page);
+			await page.getByRole("button", { name: /^Show all/ }).first().click();
+			await settle(page);
+			await reads.click();
+			await settle(page);
+			await scrollRowAbove(read, 600);
+			await read.click();
+			await settle(page);
+			const group = await reads.evaluate((button) => ({
+				summary: Math.round(
+					button.getBoundingClientRect().top -
+						button.closest(".overflow-y-auto").getBoundingClientRect().top,
+				),
+				readShown: [...document.querySelectorAll("button")].some(
+					(b) => b.textContent.includes("handlers.ts") && b.checkVisibility(),
+				),
+			}));
+			console.log("fold-into-group", JSON.stringify(group));
+			await shot("fold-into-group");
+
+			const task = disclosure(page, "Survey retry tests");
+			await scrollIntoView(task);
+			await task.click();
+			await settle(page);
+			await disclosure(page, /^\s*Process/).click();
+			await settle(page);
+			const inner = disclosure(page, "slack/notifier");
+			await scrollIntoView(inner);
+			await inner.click();
+			await settle(page);
+			await scrollRowAbove(inner, 200);
+			await foldAndLog(inner, "fold-nested-pinned");
+			await shot("fold-nested-pinned");
+
+			await inner.click();
+			await settle(page);
+			await scrollRowAbove(inner, -150);
+			await foldAndLog(inner, "fold-nested-on-screen");
+			await shot("fold-nested-on-screen");
+		},
+	},
+	{
+		// Folding while following a turn that is still running: the view stays
+		// at the end and goes on following it (docs/agent-chat.md, "Where the
+		// View Sits"). Logged with whether the bar was pinned when folded, and
+		// whether growth after the fold was followed.
+		name: "sticky-tail",
+		run: async ({ page, shared, shot }) => {
+			await openChat(page, shared.running, "Running it 200 times");
+			const read = disclosure(page, "dispatcher.test.ts");
+			await read.click();
+			await settle(page);
+			await logBars(page, "tail-open");
+			await shot("tail-open");
+			const view = () =>
+				transcript(page).evaluate((el) => {
+					while (!/(auto|scroll)/.test(getComputedStyle(el).overflowY))
+						el = el.parentElement;
+					return {
+						fromEnd: Math.round(
+							el.scrollHeight - el.clientHeight - el.scrollTop,
+						),
+						scrollButton: !!document.querySelector(
+							'button[aria-label^="Scroll to bottom"]',
+						),
+					};
+				});
+			console.log("tail-before-fold", JSON.stringify(await view()));
+			await foldAndLog(read, "tail-fold");
+			console.log("tail-after-fold", JSON.stringify(await view()));
+			// Output arriving after the fold: a reader still following sees it.
+			await transcript(page).evaluate((el) => {
+				const probe = document.createElement("div");
+				probe.id = "tail-probe";
+				probe.style.height = "300px";
+				el.parentElement.append(probe);
+			});
+			await settle(page);
+			console.log("tail-after-growth", JSON.stringify(await view()));
+			await shot("tail-fold");
+			await transcript(page).evaluate(() =>
+				document.getElementById("tail-probe")?.remove(),
+			);
 		},
 	},
 	{

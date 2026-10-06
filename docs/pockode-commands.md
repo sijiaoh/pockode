@@ -90,7 +90,9 @@ same row structure as a tool call (`PockodeCommandItem` in
   to know is which command was sent and what the user added.
 - **Expanded** — *Sent to the agent*, followed by the prompt as plain text. It is
   not rendered as Markdown, which would change how it looks: this is the text
-  the agent read.
+  the agent read. Its line sticks to the top of the transcript while it is
+  open, as an open tool row's does
+  ([tool-call-ui.md](tool-call-ui.md#the-sticky-title-line)).
 
 A command message has no status and no chip, because it is an event that has
 already happened. It is still the user's own message, so it keeps the

@@ -2,6 +2,7 @@ import {
 	type RefObject,
 	useCallback,
 	useLayoutEffect,
+	useMemo,
 	useRef,
 	useState,
 } from "react";
@@ -14,6 +15,7 @@ import {
 	pickAnchor,
 	type ScrollAnchor,
 } from "./scrollAnchor";
+import type { TranscriptView } from "./transcriptViewContext";
 
 /**
  * How close to the end counts as the end. Never asked on its own: reaching it is
@@ -132,6 +134,8 @@ export interface TranscriptScroll {
 	scrollToBottom: () => void;
 	/** Puts `target` at the top of the view and reads from there. */
 	jumpTo: (target: HTMLElement) => void;
+	/** What the rows inside the transcript move the reader with. */
+	view: TranscriptView;
 }
 
 /**
@@ -392,10 +396,56 @@ export function useTranscriptScroll({
 		[scrollRef, moveTo, readAnchored],
 	);
 
+	const holdAt = useCallback(
+		(target: HTMLElement, offset: number) => {
+			const el = scrollRef.current;
+			if (!el) return;
+			// Measured on screen and turned into an offset of the view: the
+			// target is anything inside a row, whose own `offsetTop` is not the
+			// transcript's (see `scrollAnchor`).
+			const wanted =
+				el.scrollTop +
+				target.getBoundingClientRect().top -
+				el.getBoundingClientRect().top -
+				offset;
+			// Clamped before it is judged: the view can no more go above the top
+			// than past the end, and a place out of reach either way is the
+			// nearest one it can reach — at the end, the end itself.
+			const reachable = Math.min(Math.max(wanted, 0), maxScrollTop(el));
+			// Asked of a reader following the tail, a place the end already shows
+			// is the end: the view stays there and keeps following. Only a place the
+			// end cannot show — the target would sit above where it was asked for,
+			// under a pinned bar or off the view — leaves the tail, and then the
+			// view moves no further than that place.
+			if (
+				stateRef.current === "tail" &&
+				reachable >= maxScrollTop(el) - DRIFT_TOLERANCE
+			) {
+				moveTo(el, maxScrollTop(el));
+				return;
+			}
+			moveTo(el, reachable);
+			// Anchored the way the reader's own scrolling would leave it, which is
+			// also what keeps the anchor off the candidates a page landing grows
+			// from the inside.
+			readAnchored(pickAnchor(el));
+		},
+		[scrollRef, moveTo, readAnchored],
+	);
+
+	const view = useMemo<TranscriptView>(
+		() => ({
+			top: () => scrollRef.current?.getBoundingClientRect().top ?? 0,
+			holdAt,
+		}),
+		[scrollRef, holdAt],
+	);
+
 	return {
 		showScrollButton: isAnchored && !isNearEnd && !isOverKeepClear,
 		hasUnseen,
 		scrollToBottom,
 		jumpTo,
+		view,
 	};
 }

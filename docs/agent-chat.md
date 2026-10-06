@@ -498,7 +498,21 @@ surviving, since replaying history mints every row a new id. The
 scroll-to-bottom button — shown only while reading somewhere — reads the tail, and
 a jump to a pending permission request anchors on the card.
 
-Both move the view instantly, which is a decision and not an omission. Switching
+A third, beside the button and the jump, is a row asking for a place:
+`holdAt(el, offset)` puts `el`'s top `offset` pixels below the top edge. Rows
+reach it through `TranscriptViewContext` (`transcriptViewContext.ts`), which
+`MessageList` provides around them; today the one caller is an open tool row folding, which
+lands the reader on the row instead of on whatever followed its body
+([tool-call-ui.md](tool-call-ui.md#folding-from-the-bar)). The place is clamped
+to what the view can reach first, then judged. Reading the tail, a place the
+end already shows (within a pixel) *is* the end: the view stays there and keeps
+following — which is what folding a pinned row while following comes to, since
+everything after it already fits. Only a place the end cannot show leaves the
+tail; the view then moves to it and takes the anchor the way the reader's own
+scrolling would (`pickAnchor`), so it never anchors on a candidate the paging
+seam leaves out.
+
+All three move the view instantly, which is a decision and not an omission. Switching
 to the tail is itself a commit, so the invariant applied before that commit's
 paint would be the first thing to cut short an animation the button had just
 started — and exempting the invariant while an animation runs means knowing when
