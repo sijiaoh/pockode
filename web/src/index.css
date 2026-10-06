@@ -98,6 +98,99 @@
 	}
 }
 
+/* A transcript row's floor, and with it the height of an open tool row's bar
+ * while it sticks: one line is all the bar holds, centred in the floor. For
+ * whatever stacks under a pinned bar to name. The same two numbers as `ROW_BOX`
+ * in components/Chat/ToolRow.tsx, which keeps them as classes because that is
+ * what tests/touchTarget.test.ts reads; change both. */
+:root {
+	--row-height: 2.25rem;
+
+	@media (any-pointer: coarse) {
+		--row-height: 2.75rem;
+	}
+}
+
+/* An open tool row's first line, pinned to the top of the transcript until its
+ * body ends (docs/tool-call-ui.md#the-sticky-title-line).
+ *
+ * The bar repaints what the row sits on, because it now passes over other
+ * content. `--row-ground` is the transcript's, or a body's under
+ * `row-ground-secondary`; `--row-tint` and `--row-frame` restate the wash and
+ * the outline the row's container draws (a pending card's), which the bar would
+ * otherwise cover — an outline is painted under a child that has a z-index. A
+ * failed row's red is the button's own, inside the bar, so it needs nothing
+ * here. The top corners are the container's, so a rounded one keeps them; the
+ * bottom ones stay square, since the body always follows an open bar and a
+ * pinned one would otherwise let what it covers through at its corners.
+ *
+ * `data-stuck` is set by `useStuckBar` while the bar sits pinned at the top:
+ * the hairline is only drawn then, because at rest the row's own body border is
+ * already under it. A bar whose row holds a pinned bar deeper down is covered
+ * by that one — same top, later in the tree — but the inner bar is indented
+ * (the Process rail, a pending card's inset) and cannot paint past its own
+ * list's clip, so the outer bar's chevron would show beside it. The outer one
+ * therefore blanks its contents to the ground the inner bar is indented into,
+ * leaving one bar to be read. Opacity rather than `visibility`, so a focused
+ * outer row keeps focus — and an outer button the keyboard reaches (Shift+Tab
+ * from the inner one moves nothing, both being at the top) is not blanked but
+ * raised over the inner bar, so focus never sits on a control nobody can see.
+ * An inner bar being carried out by the end of its row is no longer pinned, so
+ * the outer one shows again under it as it goes. */
+@utility row-bar {
+	position: sticky;
+	top: 0;
+	z-index: 1;
+	border-start-start-radius: inherit;
+	border-start-end-radius: inherit;
+	background:
+		linear-gradient(var(--row-tint, transparent), var(--row-tint, transparent)),
+		var(--row-ground, var(--th-bg-primary));
+	--row-frame-edges:
+		inset 1px 0 var(--row-frame, transparent),
+		inset -1px 0 var(--row-frame, transparent),
+		inset 0 1px var(--row-frame, transparent);
+	box-shadow: var(--row-frame-edges);
+
+	&[data-stuck] {
+		box-shadow:
+			var(--row-frame-edges),
+			0 1px 0 var(--th-border);
+	}
+
+	&:has(:focus-visible) {
+		z-index: 2;
+	}
+
+	&:has(~ * [data-stuck]):not(:has(:focus-visible)) {
+		background: var(--row-ground, var(--th-bg-primary));
+
+		& > * {
+			opacity: 0;
+			pointer-events: none;
+		}
+	}
+
+	&:has(~ * .row-ground-secondary [data-stuck]):not(:has(:focus-visible)) {
+		background: var(--th-bg-secondary);
+	}
+}
+
+/* A body the rows inside it sit on: a subagent's Process, a command's card. */
+@utility row-ground-secondary {
+	--row-ground: var(--th-bg-secondary);
+}
+
+/* Whatever is under an open row's bar: focus moving up the body (Shift+Tab)
+ * scrolls only far enough to reach the top edge, which is where the pinned bar
+ * sits, so it would land the control under the bar. In the base
+ * layer and at no specificity, so an element's own `scroll-mt-*` still wins. */
+@layer base {
+	:where(.row-bar ~ *) * {
+		scroll-margin-top: var(--row-height);
+	}
+}
+
 /* =============================================================================
  * BASE RESETS
  * ============================================================================= */

@@ -108,12 +108,13 @@ load-bearing:
 
 - **Each row carries its own `border-t`, and the first one's is pulled up under
   the frame** (`-mt-px` on the inner column, clipped by the frame's
-  `overflow-hidden`). Not `divide-y`: that draws between DOM siblings whether or
+  `overflow-clip`, [not `overflow-hidden`](#the-sticky-title-line)). Not `divide-y`: that draws between DOM siblings whether or
   not they are displayed, so a hidden last row would leave a hairline on top of
   the frame's bottom edge — a doubled line.
 - **The frame clips.** Anything a row draws outside its own box is cut off, so
   everything a row draws on its edge is drawn inside it: the focus ring is
-  `ring-inset`, the pending card's frame is an inset outline, and the jump
+  `ring-inset`, the pending card's frame is an inset outline (redrawn by an
+  open row's bar, [which would cover it](#the-sticky-title-line)), and the jump
   highlight on it is an inset shadow.
 
 Each row's wrapper, not the list, is a scroll anchor candidate in the main
@@ -459,6 +460,9 @@ cannot drift from whatever the leading column is sized to.
 
 The row has no fill, corner or frame of its own: it is a line in
 [the list](#the-list). Both icons keep `size-3` and the row keeps `text-xs`.
+That is the closed row; an open one wraps the same button in a bar that sticks
+to the top of the transcript, and its second line moves out of the button to
+under the bar ([the sticky title line](#the-sticky-title-line)).
 
 **One line sits in the middle of the floor; two lines fill it.** The button is a
 column centred on the cross axis, and the two-column row inside it is
@@ -477,9 +481,12 @@ the buttons, not in it), and "there is always an invocation" is a fact about
 tool rows, not about cards.
 
 **Hit area.** The row is the only tap target on line 1, so it takes the floor
-directly: `min-h-9 pointer-coarse:min-h-11`. It is not a `touch-target`
-overlay — there is room to grow the box, and a real box is always simpler
-(`web/src/index.css`, the `touch-target` comment). Controls *inside* the body
+directly: `min-h-9 pointer-coarse:min-h-11`, restated as `--row-height` for
+what stacks under a pinned bar ([why twice](#the-sticky-title-line)). It is not
+a `touch-target` overlay — there is room to grow the box, and a real box is
+always simpler (`web/src/index.css`, the `touch-target` comment). Open, the
+button is only line 1 — the bar keeps the floor for it, and the second line
+under it is not part of the target. Controls *inside* the body
 (file chips, a section header's buttons) keep the ≥8px separation that overlay
 hit areas require.
 
@@ -619,7 +626,10 @@ blocked on the user, so it is the only one that gets to be loud before anything
 has gone wrong. An outline rather than a border, so the frame does not shift
 the card against the rows around it, and drawn inside because the list clips
 whatever is outside; an outline rather than an inset ring, because an outline is
-painted over the card's children and the row's hover cannot cover it. Its body
+painted over the card's children and the row's hover cannot cover it — except
+by a child with a z-index, which an open card's sticky bar is, so the card
+restates its tint and frame for the bar
+([the sticky title line](#the-sticky-title-line)). Its body
 keeps the tint. Once answered it is an ordinary row: no tint, and a body on
 `bg-th-bg-secondary` like a tool row's.
 
@@ -1480,6 +1490,163 @@ This is a common case, not the corner: on claude 2.1.286 the CLI backgrounds a
 main-agent `Agent` call of its own accord, `run_in_background` or not — every
 one in a run that launched two at once did.
 
+## The sticky title line
+
+```
+┌────────────────────────────────────────────┐  ← the transcript's top edge
+│ ⌄  ✗  Bash   go test ./relay/…             │  the row's bar, pinned
+├────────────────────────────────────────────┤  hairline, only while pinned
+│   …the body, three screens in…             │
+```
+
+An open body can run for screens — a long `Read`, a log, a subagent's
+Process — and a reader in the middle of one had lost both which call it
+belonged to and the only way to put it away, which was back at its top. So an
+open row's first line sticks to the top of the transcript until its body ends,
+and folding it from there leaves the reader on the row
+([below](#folding-from-the-bar)). `ToolRow` draws it, with the `row-bar`
+utility in `web/src/index.css` and `useStuckBar` beside it.
+
+**It is the row's own button that sticks**, wrapped in a `row-bar` box —
+`position: sticky; top: 0; z-index: 1` — whose containing block is the row's
+wrapper, so the end of the row carries it off. There is no copy of the row:
+one control, one focus and one accessible name, wherever it is drawn. Only an
+open, toggleable `ToolRow` gets the bar; a closed row is drawn exactly as
+before, and a group summary, a thinking row and the turn's changes card draw
+`RowButton` directly and do not stick.
+
+**The second line leaves the button while the row is open.** A pinned bar is
+one line, so the second goes on in the flow under it — in `RowColumns` with
+blank leading columns, so it still sits under the name, and in the row's red
+on a failed row. The bar keeps the whole floor for line 1, centred in it as a
+one-line row is ([the row](#the-row)), so a two-line row grows when it opens
+and its line 1 moves down 4px on a fine pointer and 8px on a coarse one. That
+is the one way an open row is drawn differently from a closed one.
+
+**The bar repaints the ground it passes over**, because pinned it is drawn
+over the body and the rows after it. Its fill is `--row-tint` laid over
+`--row-ground`, which defaults to the transcript's `--th-bg-primary`; a
+container that puts rows on another ground says so, rather than the bar
+guessing:
+
+| Container | Sets |
+|---|---|
+| a subagent's Process body, a Pockode command's card | `row-ground-secondary` (`--row-ground: var(--th-bg-secondary)`) |
+| a pending permission card | `--row-tint` (its 10% warning wash) and `--row-frame` (its outline's colour) |
+
+The card needs the frame restated because its outline is painted under a child
+with a z-index, so the bar would cut it along the top and sides — and a
+pending card opens itself. The bar draws `--row-frame` on its own left, right
+and top edges as inset shadows, pinned or not. A failed row's red is the
+button's own, inside the bar, and needs nothing. The bar inherits a rounded
+container's top corners and keeps its bottom ones square: the body always
+follows an open bar, and a pinned bar's rounded bottom corners would show the
+content it covers through them.
+
+**The hairline under it is drawn only while it is pinned.** At rest the bar
+sits in its row — the second line, or the body's own `border-t`, right under
+it — and a line there would cut the row in two or double the border.
+CSS cannot ask whether a sticky box is stuck, so `useStuckBar` sets
+`data-stuck` on the bar: while its row has started above the scroller's top
+edge *and* the bar still sits at that edge, with half a pixel of slack. A bar
+the end of its row has begun to carry out is no longer stuck. It is read on
+the scroller's scroll, on the row changing size — a row hidden by its
+parent folding reads as zeros and must not keep the flag — and on the
+scroller's content changing size, since a row above it growing inside the same
+Process moves it without a scroll (nothing inside a body is an anchor the
+view is held by), directly in each
+callback rather than a frame later, and only while the row is open, so a
+transcript of closed rows listens to nothing.
+
+**Nested, one bar is shown: the innermost.** A row inside an open Process
+sticks to the same top as the subagent's row around it and comes later in the
+tree, so it paints over it — but it is indented (the Process rail, a pending
+card's inset) and cannot paint past its own list's clip, so the outer bar's
+chevron and title would show beside it. An outer bar whose row holds a pinned
+bar (`:has(~ * [data-stuck])`) therefore blanks: its contents go to opacity 0
+with no pointer events, and it fills with the ground the inner bar is indented
+into — `--th-bg-secondary` when the pinned bar is inside a
+`row-ground-secondary` body, its own ground otherwise (a subagent's pending
+card sits under its row, on the transcript's ground,
+[not in the Process](#when-a-step-asks-the-user)). Opacity rather than
+`visibility`, so a focused outer row keeps its focus. Keyboard focus is the
+exception to the blanking: Shift+Tab from the inner button reaches the outer
+one without scrolling anything, both being at the top, so a bar holding
+`:focus-visible` is not blanked but raised to z-index 2, over the inner bar,
+until focus leaves it. When the inner bar is carried out it is no longer
+stuck, and the outer one shows again under it as it goes.
+
+**What it asks of everything around it:**
+
+- **No scroll container between a row and the transcript's scroller.** A
+  sticky box sticks to its nearest one. The framed list is `overflow-clip`,
+  not `overflow-hidden`: both cut the rows to the rounded frame, but `hidden`
+  makes the list a scroll container, and the bars stuck to the list — which
+  never scrolls — and did nothing. Any wrapper added around rows later is under
+  the same rule.
+- **Stacking.** The bar's z-index 1 (2 while it holds keyboard focus) is over
+  the body and the rows after it. The scroll-to-bottom button is `z-2` and
+  comes later in the tree, to stay over a bar passing under it, and
+  the answer panel's `z-10` is over both
+  ([answering-ui.md](answering-ui.md#it-is-modal-over-one-rectangle-and-nothing-else)).
+- **A scroll margin under the bar.** Focus moving up a pinned row's body
+  (Shift+Tab) scrolls the control only to the top edge, which is where the bar
+  is. Everything inside what follows a bar has
+  `scroll-margin-top: var(--row-height)`, in the base layer at no specificity
+  (`:where(.row-bar ~ *) *`), so an element's own `scroll-mt-*` still wins.
+- **Nothing of the scroll anchor.** The candidates are the row wrappers, which
+  are not positioned and hold no candidate of their own, and a sticky box being
+  pinned moves nothing in layout ([the list](#the-list)).
+
+**`--row-height`** is the row's floor — `2.25rem`, `2.75rem` under
+`any-pointer: coarse` — and so the pinned bar's height, declared on `:root`
+for whatever is stacked under a pinned bar to name; today that is the scroll
+margin above. It repeats `ROW_BOX`'s `min-h-9 pointer-coarse:min-h-11` in
+`ToolRow.tsx`, and that duplication is deliberate: the touch-target scan
+(`web/tests/touchTarget.test.ts`) reads the classes, and a `min-h` sized by a
+variable would drop the row out of its census without failing. Each side says
+so; change both.
+
+### Folding from the bar
+
+The bar's button is the row's `onToggle`, so a tap there folds the row. Left at
+that, the body would vanish from under the reader and they would be left on
+whatever followed it — possibly screens past the call they folded.
+`useFoldLanding` measures the row at the tap, while it is still open, and once
+the fold is laid out asks the transcript to hold a place:
+
+| Folded | Lands |
+|---|---|
+| from its pinned bar (the row starts above what can be seen) | the row's top at the top of the view |
+| … inside an open row that is still pinned | just under that row's bar: every bar sticks to the same top, so the innermost open row around it is what covers the view's top |
+| with its title on screen | the title exactly where it was |
+| out of sight, into its closed group | the group's summary at the top of the view, when the summary is above what can be seen |
+
+The title is held, rather than the row's top, because the two do not move
+together: the open bar centres line 1 in the floor, and a closed two-line row
+puts it at the top of its box. Holding the row's top would move the title the
+4px / 8px the other way.
+
+A row the user kept open while its group was closed is hidden by its own fold
+([groups](#groups)), and a hidden element measures as zeros — no place at
+all. So it lands on where it went: the nearest preceding slot marked
+with `foldPlaceProps` (`data-fold-place`, on the summary's wrapper in
+`ToolList.tsx`). When the summary is already on screen nothing is asked —
+the transcript's own anchor keeps everything above the reader still.
+
+The place goes to the transcript as `holdAt`, through `TranscriptViewContext`,
+rather than as a write to `scrollTop` here, so nothing else holding the view
+undoes it, and a reader following the tail stays on it when the place is the
+end ([agent-chat.md](agent-chat.md#where-the-view-sits)). Outside a
+transcript there is no context and a row only folds. Near the end the view is
+clamped, so a fold there cannot always keep the title where it was. Focus stays
+on the button, which is the same element, and Enter and Space go through the
+same click.
+
+**Opening is not compensated**: line 1 still moves down 4px / 8px when a
+two-line row opens. Holding it would mean anchoring on every open, which takes
+a reader following the tail off it.
+
 ## A subagent's own work
 
 While a subagent runs, everything it says and every tool it calls arrives on the
@@ -1872,7 +2039,8 @@ stay: there is room for them, and the old number is worth having.
 
 **No `pointer-fine:` reveal anywhere in this design.** Nothing is hover-only, so
 there is no fallback branch to get wrong. `pointer-coarse:` appears once, on the
-row's height floor. Neither gate is consulted from JS: these are reachability
+row's height floor — and the same query once more in CSS, on `--row-height`,
+which restates that floor ([the sticky title line](#the-sticky-title-line)). Neither gate is consulted from JS: these are reachability
 decisions, and reachability is a CSS variant
 ([responsive-ui.md](responsive-ui.md#the-two-pointer-gates)).
 
@@ -1885,11 +2053,16 @@ decisions, and reachability is a CSS variant
   `role="status"` named `<tool> running`. Colour is
   never the only carrier — an `error` row also has a border and red detail text.
 - The second line is `aria-hidden` while it is moving and exposed once it has
-  settled, so the row's accessible name stays put while stdout moves and still
+  settled, so a closed row's accessible name stays put while stdout moves and still
   carries the outcome afterwards (see above). What a screen reader is told is the
   spinner while it runs, the glyph when it settles, and the whole output on
   request, in the body. A fetched line is exposed even on a still-running row,
   because that text is standing still — the flag follows the text, not the run.
+- While the row is open the second line is not in the button
+  ([the sticky title line](#the-sticky-title-line)), so it leaves the button's
+  accessible name and, once settled, is read as the text right after it. The pinned bar is
+  the row's own button, not a copy, so there is still one control to reach and
+  one name for it; folding from it leaves focus on it.
 - The `background` chip is real text, so it is read as part of the row.
 - A subagent's Process is a `role="group"` named for the subagent, and a pending
   permission card it raised sits inside the Task item's own DOM, so both say
@@ -2065,6 +2238,19 @@ decisions, and reachability is a CSS variant
     `"pattern"`.
 39. With reduced motion on: every running row, and a running group summary,
     shows a still accent dot where the spinner was.
+40. On a 375px phone, open a failed `Bash` with a long output and scroll into
+    it: its title stays pinned at the top in its red, with a hairline under it,
+    and its second line scrolls away under it; at the end of the body the bar
+    is carried off. Open a subagent's Process and a row inside it: one bar at
+    the top, the inner one, and the subagent's back under it as the inner one
+    leaves. A pending card's bar keeps the warning wash and its frame. Tap a
+    pinned bar: the row folds and its top lands at the top of the view (inside
+    a Process, just under the subagent's bar), focus on it. Fold a row whose
+    title is on screen: the title does not move. Fold one kept open in a closed
+    group, from its bar: the group's summary lands at the top. Fold a pinned
+    row while following a running turn: the view stays at the end and goes on
+    following it. The walkthrough's `sticky`, `sticky-fold` and `sticky-tail`
+    scenes shoot all of these.
 
 ## Out of scope
 

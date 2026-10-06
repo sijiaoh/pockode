@@ -1,5 +1,5 @@
 import { Ban, Check, ChevronRight, CircleDot, X } from "lucide-react";
-import { type ReactNode, useEffect, useState } from "react";
+import { type ReactNode, useEffect, useRef, useState } from "react";
 import {
 	formatDuration,
 	formatElapsed,
@@ -7,6 +7,8 @@ import {
 } from "../../lib/toolRun";
 import type { ToolRun, ToolRunStatus } from "../../types/message";
 import { Spinner } from "../ui";
+import { useFoldLanding } from "./useFoldLanding";
+import { useStuckBar } from "./useStuckBar";
 
 /**
  * The one line every tool-shaped row in the transcript is drawn as: a tool
@@ -236,7 +238,9 @@ interface RowButtonProps {
 }
 
 // The row's box, a button or not: one line sits in the middle of the touch
-// floor, two fill it.
+// floor, two fill it. The floor is restated as `--row-height` in
+// src/index.css, for what stacks under a pinned bar; it stays spelled out here
+// because this is what the touch-target scan reads.
 const ROW_BOX =
 	"flex min-h-9 w-full flex-col justify-center px-2 py-1.5 text-left pointer-coarse:min-h-11 sm:px-2.5";
 
@@ -337,6 +341,21 @@ export function StaticRow({
 	);
 }
 
+/**
+ * An open row's first line sticks to the top of the transcript until its body
+ * ends, so a reader several screens into a result still sees which call it is
+ * and can fold it from there (docs/tool-call-ui.md#the-sticky-title-line). It
+ * is the row's own button that sticks, inside a bar that repaints the ground
+ * it passes over: one control, wherever it is drawn.
+ *
+ * The second line is therefore not in the button while the row is open — a
+ * pinned bar is one line, and the second goes on in the flow under it, aligned
+ * as before. That is the one way an open row is drawn differently from a closed
+ * one: a two-line row grows by the floor the bar keeps for its first line.
+ *
+ * Folding it leaves the reader on the row, wherever it was folded from
+ * (`useFoldLanding`).
+ */
 export function ToolRow({
 	expanded,
 	onToggle,
@@ -353,47 +372,73 @@ export function ToolRow({
 	error,
 	toggleable = true,
 }: Props) {
-	return (
-		<RowButton
-			expanded={expanded}
-			onToggle={onToggle}
-			glyph={glyph}
-			error={error}
-			toggleable={toggleable}
+	const barRef = useRef<HTMLDivElement>(null);
+	const titleRef = useRef<HTMLSpanElement>(null);
+	const sticky = expanded && toggleable;
+	useStuckBar(barRef, sticky);
+	const beforeFold = useFoldLanding(barRef, titleRef, expanded);
+
+	const second = richSecondLine ? (
+		<span
+			aria-hidden={richSecondLine.live}
+			className="flex min-w-0 items-baseline gap-1.5 text-th-text-muted"
 		>
-			<span className="flex items-baseline gap-1.5">
-				<span className="shrink-0 text-th-accent">{title}</span>
-				{chip && <Chip>{chip}</Chip>}
-				{background && <Chip>background</Chip>}
-				<Detail
-					detail={detail}
-					detailTail={detailTail}
-					mono={detailMono}
-					error={error}
-				/>
-				{meta}
+			{richSecondLine.content}
+		</span>
+	) : (
+		secondLine && (
+			<span
+				// Hidden from the accessible name while it moves, exposed once
+				// it has settled: the spinner already says the call is running,
+				// and a settled background outcome is the answer the user was
+				// waiting for.
+				aria-hidden={secondLine.live}
+				className={`block truncate text-th-text-muted ${secondLine.mono ? "font-mono" : ""}`}
+			>
+				{secondLine.text}
 			</span>
-			{richSecondLine ? (
-				<span
-					aria-hidden={richSecondLine.live}
-					className="flex min-w-0 items-baseline gap-1.5 text-th-text-muted"
+		)
+	);
+
+	return (
+		<>
+			<div ref={barRef} className={sticky ? "row-bar" : undefined}>
+				<RowButton
+					expanded={expanded}
+					onToggle={() => {
+						if (sticky) beforeFold();
+						onToggle();
+					}}
+					glyph={glyph}
+					error={error}
+					toggleable={toggleable}
 				>
-					{richSecondLine.content}
-				</span>
-			) : (
-				secondLine && (
-					<span
-						// Hidden from the accessible name while it moves, exposed once
-						// it has settled: the spinner already says the call is running,
-						// and a settled background outcome is the answer the user was
-						// waiting for.
-						aria-hidden={secondLine.live}
-						className={`block truncate text-th-text-muted ${secondLine.mono ? "font-mono" : ""}`}
-					>
-						{secondLine.text}
+					<span ref={titleRef} className="flex items-baseline gap-1.5">
+						<span className="shrink-0 text-th-accent">{title}</span>
+						{chip && <Chip>{chip}</Chip>}
+						{background && <Chip>background</Chip>}
+						<Detail
+							detail={detail}
+							detailTail={detailTail}
+							mono={detailMono}
+							error={error}
+						/>
+						{meta}
 					</span>
-				)
+					{!sticky && second}
+				</RowButton>
+			</div>
+			{sticky && second && (
+				// The row's box and columns without its floor, so the line sits
+				// where it did under the title; and its tint, being the row's.
+				<div
+					className={`px-2 pb-1.5 sm:px-2.5 ${error ? "bg-th-error/10" : ""}`}
+				>
+					<RowColumns lead={NO_CHEVRON} glyph={NO_CHEVRON}>
+						{second}
+					</RowColumns>
+				</div>
 			)}
-		</RowButton>
+		</>
 	);
 }

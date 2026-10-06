@@ -1,9 +1,11 @@
-import { render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useDiffSettingsStore } from "../../lib/diffSettingsStore";
-import type { ToolRun } from "../../types/message";
+import type { ContentPart, ToolRun } from "../../types/message";
 import ToolCallItem from "./ToolCallItem";
+import { PartBlocks } from "./ToolList";
+import { TranscriptViewContext } from "./transcriptViewContext";
 
 const mockWorkDir = vi.hoisted(() => ({ value: "/Users/test/project" }));
 
@@ -477,6 +479,205 @@ describe("ToolCallItem", () => {
 		it("falls back to the last line the command printed", () => {
 			draw({ output: "vite v7.1.14\nbuilding for production…\n" });
 			expect(screen.getByText("building for production…")).toBeVisible();
+		});
+	});
+
+	// jsdom lays nothing out, so whether the bar really sticks is the browser's
+	// to show; what is held here is what the stylesheet hangs on.
+	describe("an open row", () => {
+		it("pins its title line and leaves the second line under it", async () => {
+			draw({ activity: "Compiling 120 modules" });
+			const row = screen.getByRole("button", { name: /Bash running/ });
+			await userEvent.click(row);
+
+			expect(row.parentElement).toHaveClass("row-bar");
+			const line = screen.getByText("Compiling 120 modules");
+			expect(line).toBeVisible();
+			expect(row).not.toContainElement(line);
+		});
+
+		it("is marked stuck only while its title is pinned over its body", async () => {
+			render(
+				<div style={{ overflowY: "auto" }}>
+					<ToolCallItem run={run()} sessionId="session-1" />
+				</div>,
+			);
+			const row = screen.getByRole("button", { name: /Bash running/ });
+			await userEvent.click(row);
+			const bar = row.parentElement as HTMLElement;
+			const item = bar.parentElement as HTMLElement;
+			const scroller = item.parentElement as HTMLElement;
+			const at = (el: HTMLElement, top: number, height: number) =>
+				vi
+					.spyOn(el, "getBoundingClientRect")
+					.mockReturnValue(DOMRect.fromRect({ y: top, height }));
+			at(scroller, 100, 600);
+			const scrollTo = (rowTop: number, barTop: number) => {
+				at(item, rowTop, 800);
+				at(bar, barTop, 44);
+				fireEvent.scroll(scroller);
+			};
+
+			scrollTo(40, 100);
+			expect(bar).toHaveAttribute("data-stuck");
+			// Not yet scrolled past: the bar is where the row starts.
+			scrollTo(100, 100);
+			expect(bar).not.toHaveAttribute("data-stuck");
+			// The end of the row carrying the bar out over the edge.
+			scrollTo(-760, 56);
+			expect(bar).not.toHaveAttribute("data-stuck");
+
+			scrollTo(40, 100);
+			await userEvent.click(row);
+			expect(bar).not.toHaveClass("row-bar");
+			expect(bar).not.toHaveAttribute("data-stuck");
+		});
+
+		describe("folding", () => {
+			const at = (el: Element, top: number, height = 44) =>
+				vi
+					.spyOn(el, "getBoundingClientRect")
+					.mockReturnValue(DOMRect.fromRect({ y: top, height }));
+
+			/**
+			 * Opens the row inside a transcript whose top edge is at 100, and
+			 * returns where the fold asks the transcript to hold the reader.
+			 * `outerBar` stands in for an open row this one is nested in.
+			 */
+			async function openInTranscript({ outerBar = false } = {}) {
+				const view = { top: () => 100, holdAt: vi.fn() };
+				const item = <ToolCallItem run={run()} sessionId="session-1" />;
+				render(
+					<TranscriptViewContext value={view}>
+						{outerBar ? (
+							<div>
+								<div className="row-bar" data-testid="outer-bar" />
+								<div>{item}</div>
+							</div>
+						) : (
+							item
+						)}
+					</TranscriptViewContext>,
+				);
+				const button = screen.getByRole("button", { name: /Bash running/ });
+				await userEvent.click(button);
+				const row = button.parentElement?.parentElement as HTMLElement;
+				const title = screen.getByText("Bash").parentElement as HTMLElement;
+				return { view, button, row, title };
+			}
+
+			it("lands a row folded from its pinned bar at the top of the view", async () => {
+				const { view, button, row } = await openInTranscript();
+				at(row, -900, 1200);
+
+				await userEvent.click(button);
+
+				expect(view.holdAt).toHaveBeenCalledExactlyOnceWith(row, 0);
+			});
+
+			it("keeps the title where it was when the row is folded on screen", async () => {
+				const { view, button, row, title } = await openInTranscript();
+				at(row, 300, 1200);
+				// Where the fold moves it to, after the open position was read:
+				// what is held is where the reader saw it, not where it went.
+				vi.spyOn(title, "getBoundingClientRect")
+					.mockReturnValueOnce(DOMRect.fromRect({ y: 314, height: 16 }))
+					.mockReturnValue(DOMRect.fromRect({ y: 306, height: 16 }));
+
+				await userEvent.click(button);
+
+				expect(view.holdAt).toHaveBeenCalledExactlyOnceWith(title, 214);
+			});
+
+			it("lands a nested row under the outer row's pinned bar", async () => {
+				const { view, button, row } = await openInTranscript({
+					outerBar: true,
+				});
+				at(screen.getByTestId("outer-bar"), 100, 44);
+				// Started above the view, but only just: still covered by the
+				// outer bar, which is what it has to land below.
+				at(row, 120, 1200);
+
+				await userEvent.click(button);
+
+				expect(view.holdAt).toHaveBeenCalledExactlyOnceWith(row, 44);
+			});
+
+			it("lands the same from the keyboard, and keeps focus on the row", async () => {
+				const { view, button, row } = await openInTranscript();
+				at(row, -900, 1200);
+
+				button.focus();
+				await userEvent.keyboard("{Enter}");
+
+				expect(button).toHaveAttribute("aria-expanded", "false");
+				expect(view.holdAt).toHaveBeenCalledExactlyOnceWith(row, 0);
+				expect(button).toHaveFocus();
+			});
+
+			// A row the user kept open while its group was closed goes back into
+			// the group as it folds, and is no longer there to land on.
+			describe("out of sight into its group", () => {
+				async function keptOpenInClosedGroup() {
+					const view = { top: () => 100, holdAt: vi.fn() };
+					const calls = ["first-cmd", "second-cmd"].map(
+						(command, index): ContentPart => ({
+							type: "tool_call",
+							tool: run({
+								id: `t${index}`,
+								input: { command },
+								status: "success",
+							}),
+						}),
+					);
+					render(
+						<TranscriptViewContext value={view}>
+							<PartBlocks
+								items={calls.map((part, index) => ({ part, index }))}
+								renderPart={({ part }) =>
+									part.type === "tool_call" && (
+										<ToolCallItem run={part.tool} sessionId="session-1" />
+									)
+								}
+							/>
+						</TranscriptViewContext>,
+					);
+					const summary = screen.getByRole("button", {
+						name: /Ran 2 commands/,
+					});
+					await userEvent.click(summary);
+					const button = screen.getByRole("button", { name: /first-cmd/ });
+					await userEvent.click(button);
+					await userEvent.click(summary);
+					expect(button).toBeVisible();
+					at(button.parentElement?.parentElement as Element, -300, 1200);
+					return { view, button, place: summary.parentElement as HTMLElement };
+				}
+
+				it("lands on the group's summary when that is above the view", async () => {
+					const { view, button, place } = await keptOpenInClosedGroup();
+					at(place, -500);
+
+					await userEvent.click(button);
+
+					expect(button).not.toBeVisible();
+					expect(view.holdAt).toHaveBeenCalledExactlyOnceWith(place, 0);
+				});
+
+				it("leaves a summary that is in sight where it is", async () => {
+					const { view, button, place } = await keptOpenInClosedGroup();
+					at(place, 300);
+
+					await userEvent.click(button);
+
+					expect(view.holdAt).not.toHaveBeenCalled();
+				});
+			});
+
+			it("moves nothing when it opens", async () => {
+				const { view } = await openInTranscript();
+				expect(view.holdAt).not.toHaveBeenCalled();
+			});
 		});
 	});
 

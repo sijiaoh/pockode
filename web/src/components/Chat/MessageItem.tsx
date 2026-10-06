@@ -594,7 +594,11 @@ function PermissionRequestItem({
 			// than a border, so the frame does not shift the row against its
 			// neighbours; and rather than an inset ring, because an outline is
 			// painted over the children, so the row's hover cannot cover it.
-			className={`scroll-mt-14 text-xs ${isPending ? "bg-th-warning/10 outline-1 -outline-offset-1 outline-th-warning" : ""}`}
+			// The open row's bar is the exception: it has a z-index to stay over
+			// what it is pinned above, which also puts it over this outline, so
+			// the tint and the frame are restated for it as `--row-tint` and
+			// `--row-frame` (`row-bar`).
+			className={`scroll-mt-14 text-xs ${isPending ? "bg-th-warning/10 [--row-tint:color-mix(in_oklab,var(--th-warning)_10%,transparent)] outline-1 -outline-offset-1 outline-th-warning [--row-frame:var(--th-warning)]" : ""}`}
 		>
 			<ToolRow
 				expanded={expanded}
@@ -1109,7 +1113,7 @@ function PockodeCommandItem({
 }) {
 	const [expanded, setExpanded] = useState(false);
 	return (
-		<div className="rounded bg-th-bg-secondary text-xs">
+		<div className="row-ground-secondary rounded bg-th-bg-secondary text-xs">
 			<ToolRow
 				expanded={expanded}
 				onToggle={() => setExpanded(!expanded)}

@@ -535,7 +535,8 @@ function AnswerPanel({
 	return (
 		// `absolute inset-0` against ChatPanel's wrapper, so this covers the
 		// transcript and stops at its edges. `z-10` is enough: the list below
-		// carries no stacking of its own, and the portalled sheets — z-50, z-70 —
+		// stacks nothing higher than z-2 (an open row's bar, and the scroll
+		// button kept over it), and the portalled sheets — z-50, z-70 —
 		// still come out over this one.
 		//
 		// A yield is `invisible` + `inert`, the transcript's own way of leaving
