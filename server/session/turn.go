@@ -171,7 +171,9 @@ const (
 	SignalPrompt TurnSignal = "prompt"
 	// SignalOutput is the agent putting something into the conversation: text, a
 	// tool call, a result. This is the only signal that ends a background wait,
-	// because it is the only one that proves the CLI has resumed.
+	// because it is the only one that proves the CLI has resumed. The record of
+	// background work ending is not output, though it is shown as a
+	// result: it arrives as SignalNoise (see process.turnInputFor).
 	SignalOutput TurnSignal = "output"
 	// SignalNoise is the agent's process saying something that is not content —
 	// a `system` frame, a live progress line. It moves nothing at all, and the

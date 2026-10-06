@@ -256,6 +256,17 @@ func TestProcess_OutOfTurnEventsKeepProcessIdle(t *testing.T) {
 		{"warning", agent.WarningEvent{Message: "cannot resume", Code: "session_not_resumable"}},
 		{"request cancelled", agent.RequestCancelledEvent{RequestID: "r1"}},
 		{"process ended", agent.ProcessEndedEvent{}},
+		// What a new Claude process reports about the calls its predecessor took
+		// down. It can be handled before the prompt the process was started for,
+		// and must leave that prompt to be the one that starts the turn.
+		{"background work lost with the previous process", agent.ToolResultEvent{
+			ToolUseID: "call-1", Subtype: agent.ToolResultBackgroundLost, IsError: true,
+		}},
+		// A task that outlived its turn finishing. The model's reply to it, if
+		// one comes, is what starts a turn.
+		{"background work finishing after the turn", agent.ToolResultEvent{
+			ToolUseID: "call-1", Subtype: agent.ToolResultBackgroundResult,
+		}},
 	}
 
 	for _, tt := range tests {
@@ -386,6 +397,41 @@ func TestProcess_TurnStateTransitions(t *testing.T) {
 			wantTurn: turnShape{phase: session.PhaseIdle, outcome: session.OutcomeCompleted},
 		},
 		{
+			// The task finishing is not the CLI resuming; the model's reply is.
+			// The wait itself is checked in TestProcess_OnlyContentEndsABackgroundWait.
+			name: "a parked turn resumes on the reply, not on the task's result",
+			events: []agent.AgentEvent{
+				agent.BackgroundWaitEvent{},
+				agent.ToolResultEvent{ToolUseID: "call-1", Subtype: agent.ToolResultBackgroundResult},
+				agent.TextEvent{Content: "resumed"},
+				agent.DoneEvent{},
+			},
+			want:     []ProcessState{ProcessStateRunning, ProcessStateRunning, ProcessStateIdle},
+			wantTurn: turnShape{phase: session.PhaseIdle, outcome: session.OutcomeCompleted},
+		},
+		{
+			// Stop stops the turn's background tasks before interrupting, and the
+			// CLI never promised which of the two answers lands first. Both orders
+			// have to read as the one stop the user asked for.
+			name: "a stopped task's result before the interrupt",
+			events: []agent.AgentEvent{
+				agent.ToolResultEvent{ToolUseID: "call-1", Subtype: agent.ToolResultBackgroundResult, IsError: true},
+				agent.InterruptedEvent{},
+			},
+			want:     []ProcessState{ProcessStateIdle},
+			wantTurn: turnShape{phase: session.PhaseIdle, outcome: session.OutcomeAborted},
+		},
+		{
+			// The order that used to open a turn nothing would ever end.
+			name: "a stopped task's result after the interrupt does not reopen the turn",
+			events: []agent.AgentEvent{
+				agent.InterruptedEvent{},
+				agent.ToolResultEvent{ToolUseID: "call-1", Subtype: agent.ToolResultBackgroundResult, IsError: true},
+			},
+			want:     []ProcessState{ProcessStateIdle},
+			wantTurn: turnShape{phase: session.PhaseIdle, outcome: session.OutcomeAborted},
+		},
+		{
 			// Claude reports which messages stay queued after an interrupt; their
 			// output arrives with nothing on the send path to mark a new turn.
 			name: "output queued behind an interrupt starts a new turn",
@@ -476,13 +522,37 @@ func TestProcess_OnlyContentEndsABackgroundWait(t *testing.T) {
 	// recorded frame behind it, history reaching 2 means both have been reduced.
 	sess.emit(t, agent.ToolActivityEvent{ToolUseID: "call-1", Activity: "still building"})
 	sess.emit(t, agent.SystemEvent{Content: "background_tasks_changed"})
-	waitForHistory(t, store, "sess-1", 2) // the park and the system frame
+	// And the task's outcome itself: Pockode's record of the work ending, which
+	// the CLI hands over before the model has said anything about it.
+	sess.emit(t, agent.ToolResultEvent{ToolUseID: "call-1", Subtype: agent.ToolResultBackgroundResult})
+	waitForHistory(t, store, "sess-1", 3) // the park, the system frame and the result
 	if hold := holdOf(proc); hold != session.LeaseBackground {
-		t.Fatalf("hold = %q, want the wait to still be on — neither frame is the CLI resuming", hold)
+		t.Fatalf("hold = %q, want the wait to still be on — none of these is the CLI resuming", hold)
 	}
 
 	sess.emit(t, agent.TextEvent{Content: "resumed"})
 	waitUntil(t, "the wait to end", func() bool { return holdOf(proc) == session.LeaseTurn })
+}
+
+// The translation is keyed on the subtype, not on the event type: a tool result
+// is the agent's output unless it settles background work. Codex never sets one
+// of those subtypes, so every Codex result stays output.
+func TestTurnInputFor_BackgroundSettlementIsNotOutput(t *testing.T) {
+	tests := []struct {
+		subtype string
+		want    session.TurnSignal
+	}{
+		{"", session.SignalOutput},
+		{agent.ToolResultBackgroundStarted, session.SignalOutput},
+		{agent.ToolResultBackgroundResult, session.SignalNoise},
+		{agent.ToolResultBackgroundLost, session.SignalNoise},
+	}
+	for _, tt := range tests {
+		in, ok := turnInputFor(agent.ToolResultEvent{ToolUseID: "call-1", Subtype: tt.subtype})
+		if !ok || in.Signal != tt.want {
+			t.Errorf("subtype %q: signal = %q (ok=%v), want %q", tt.subtype, in.Signal, ok, tt.want)
+		}
+	}
 }
 
 // TestProcess_ConsecutiveTurns covers what a single-turn test cannot: dropping

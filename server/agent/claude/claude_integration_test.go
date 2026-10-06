@@ -604,7 +604,16 @@ func TestIntegration_StopDuringBackgroundWait(t *testing.T) {
 				t.Fatal("channel closed while waiting out the stopped task")
 			}
 			switch e := event.(type) {
-			case agent.TextEvent, agent.ThinkingEvent, agent.ToolCallEvent, agent.ToolResultEvent, agent.DoneEvent:
+			case agent.ToolResultEvent:
+				// The stopped task's own outcome may land after the interrupt's
+				// acknowledgement; it is a record, not a turn, so that order is
+				// fine. A result that is not that — the task completing, or the
+				// model running a tool — means Stop did not stop it.
+				if e.SettlesBackgroundWork() && e.IsError {
+					continue
+				}
+				t.Fatalf("the session carried on after Stop: %T %+v", e, e)
+			case agent.TextEvent, agent.ThinkingEvent, agent.ToolCallEvent, agent.DoneEvent:
 				t.Fatalf("the session carried on after Stop: %T %+v", e, e)
 			}
 		case <-quiet.C:

@@ -132,10 +132,14 @@ func (e EventType) AwaitsUserInput() bool {
 // from history, never streamed.
 //
 // System, tool_activity and thinking_delta events belong here but not in
-// ActivatesSession, and the gap between the two predicates is exactly the set
-// that must *not* end a background wait: the background task list changing is a `system` frame, so
-// counting it would make a task finishing look like the turn coming back (see
-// process.turnInputFor). That gap is this predicate's whole remaining job.
+// ActivatesSession, and the gap between the two predicates is the set that
+// must *not* end a background wait: the background task list changing is a
+// `system` frame, so counting it would make a task finishing look like the turn
+// coming back (see process.turnInputFor). That gap is this predicate's whole
+// remaining job. It is not the whole of what must not end a wait: a tool result
+// that settles background work is inside ActivatesSession and still is not the
+// CLI resuming (ToolResultEvent.SettlesBackgroundWork), which the translation
+// handles on its own because no predicate on the type can see a subtype.
 func (e EventType) IndicatesAgentActivity() bool {
 	switch e {
 	case EventTypeSystem, EventTypeToolActivity, EventTypeThinkingDelta:
@@ -175,6 +179,13 @@ func (e EventType) IndicatesAgentActivity() bool {
 // one, so the turn reached it. Its live signal (thinking_delta) is not — the
 // Claude one is a CLI token estimate, and a level signal of that kind is
 // IndicatesAgentActivity's.
+//
+// Starting a session is all this decides; it is not what decides that a turn
+// has resumed. A tool result that settles background work is in here — it
+// only ever follows a call the agent made, so it cannot cost anyone the escape
+// hatch — but it records work ending, not the agent saying anything, so
+// process.turnInputFor keeps it from opening a turn or ending a wait
+// (ToolResultEvent.SettlesBackgroundWork).
 func (e EventType) ActivatesSession() bool {
 	switch e {
 	case EventTypeText, EventTypeToolCall, EventTypeToolResult, EventTypeThinking,
@@ -389,6 +400,17 @@ type ToolResultEvent struct {
 
 func (ToolResultEvent) EventType() EventType { return EventTypeToolResult }
 func (ToolResultEvent) isAgentEvent()        {}
+
+// SettlesBackgroundWork reports a result that records how background work
+// ended — as the CLI reported it (ToolResultBackgroundResult) or as Pockode
+// observed it (ToolResultBackgroundLost) — rather than something the agent
+// read. It is still a record of the call and is stored and shown like any other
+// result, but it is not the agent saying anything: work finishing, or dying
+// with its process, can happen after a turn is over and does not mean the model
+// has resumed.
+func (e ToolResultEvent) SettlesBackgroundWork() bool {
+	return e.Subtype == ToolResultBackgroundResult || e.Subtype == ToolResultBackgroundLost
+}
 
 func (e ToolResultEvent) ToRecord() EventRecord {
 	return EventRecord{
