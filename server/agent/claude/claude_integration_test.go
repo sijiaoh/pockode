@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"io/fs"
 	"os"
@@ -499,11 +500,12 @@ func TestIntegration_BackgroundTaskDoesNotEndTheTurn(t *testing.T) {
 	}
 }
 
-// The CLI's behaviour when it is interrupted with no active turn was never
-// verified, and a background wait is exactly that situation: Pockode swallowed
-// the ending, the UI still shows a running turn with a Stop button, and the CLI
-// has nothing running. Whatever the CLI answers, Stop must land the session in a
-// state the user can read — it must not leave the spinner running forever.
+// A background wait is a turn the CLI has already ended: Pockode swallowed the
+// ending, the UI still shows a running turn with a Stop button, and the CLI has
+// nothing running but the task. Stop has to do two things there. It must land
+// the session in a state the user can read — no spinner running forever — and
+// it must end the task too: a task left running finishes later, wakes the model,
+// and the session the user stopped carries on talking by itself.
 func TestIntegration_StopDuringBackgroundWait(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 240*time.Second)
 	defer cancel()
@@ -519,28 +521,34 @@ func TestIntegration_StopDuringBackgroundWait(t *testing.T) {
 	}
 	defer sess.Close()
 
-	// Long enough that the task is certainly still running when Stop is pressed.
-	if err := sess.SendMessage(agent.Prompt{Text: "Use the Bash tool with run_in_background: true to run exactly: sleep 120; echo MARKER_DONE . " +
+	// Long enough that Stop (STARTED + 5s) lands while the task still runs, short
+	// enough that waiting out the task afterwards stays cheap in wall time.
+	const taskSleep = 30 * time.Second
+	if err := sess.SendMessage(agent.Prompt{Text: fmt.Sprintf("Use the Bash tool with run_in_background: true to run exactly: sleep %d; echo MARKER_DONE . ", int(taskSleep.Seconds())) +
 		"Do NOT poll or wait for it. Immediately end your turn with the single word STARTED. " +
 		"Later when you are notified that it finished, reply RESUMED followed by its output."}); err != nil {
 		t.Fatalf("SendMessage failed: %v", err)
 	}
 
-	var interruptSent bool
+	var taskStarted, interruptSentAt time.Time
 	// The result frame follows the last text within a second or so; this gives it
 	// room so the interrupt really lands during the wait and not before it.
 	interruptAfter := time.NewTimer(time.Hour)
 	defer interruptAfter.Stop()
 
-	for {
+	for ended := false; !ended; {
 		select {
 		case event, ok := <-sess.Events():
 			if !ok {
 				t.Fatal("channel closed before the session settled")
 			}
 			switch e := event.(type) {
+			case agent.ToolCallEvent:
+				if taskStarted.IsZero() && strings.Contains(string(e.ToolInput), "MARKER_DONE") {
+					taskStarted = time.Now()
+				}
 			case agent.TextEvent:
-				if !interruptSent && strings.Contains(e.Content, "STARTED") {
+				if interruptSentAt.IsZero() && strings.Contains(e.Content, "STARTED") {
 					interruptAfter.Reset(5 * time.Second)
 				}
 			case agent.DoneEvent:
@@ -549,29 +557,60 @@ func TestIntegration_StopDuringBackgroundWait(t *testing.T) {
 				// not a regression.
 				t.Skip("the turn ended before any background wait began")
 			case agent.InterruptedEvent:
-				if !interruptSent {
+				if interruptSentAt.IsZero() {
 					t.Fatal("got an interrupt event before Stop was pressed")
 				}
-				return
+				ended = true
 			case agent.ErrorEvent:
 				// Also acceptable: the user asked for a stop and got a readable
 				// explanation instead of a silent spinner.
-				if !interruptSent {
+				if interruptSentAt.IsZero() {
 					t.Fatalf("error event before Stop was pressed: %s", e.Error)
 				}
 				t.Logf("stop during the wait ended the turn with an error: %s", e.Error)
-				return
+				ended = true
 			}
 		case <-interruptAfter.C:
 			if err := sess.SendInterrupt(); err != nil {
 				t.Fatalf("SendInterrupt failed: %v", err)
 			}
-			interruptSent = true
+			interruptSentAt = time.Now()
 		case <-ctx.Done():
-			if !interruptSent {
+			if interruptSentAt.IsZero() {
 				t.Skip("the model never ended its turn on a background task, so Stop was never pressed")
 			}
 			t.Fatal("Stop during the background wait never produced an ending: the UI would spin forever")
+		}
+	}
+
+	// taskStarted is when the call was announced, a little before the shell ran,
+	// so this estimate errs early: Stop counts as landing mid-task only if it
+	// certainly did, and the margin below absorbs the gap.
+	taskWouldFinish := taskStarted.Add(taskSleep)
+	if taskStarted.IsZero() || !interruptSentAt.Before(taskWouldFinish) {
+		t.Skip("Stop was not pressed while the background task was known to be running")
+	}
+
+	// A task Stop failed to end finishes at taskWouldFinish; its notification and
+	// the model's reply to it follow within seconds (the resumed turn of
+	// TestIntegration_BackgroundTaskDoesNotEndTheTurn takes a few). 30s past the
+	// finish leaves that turn ample room to show itself.
+	quiet := time.NewTimer(time.Until(taskWouldFinish.Add(30 * time.Second)))
+	defer quiet.Stop()
+	for {
+		select {
+		case event, ok := <-sess.Events():
+			if !ok {
+				t.Fatal("channel closed while waiting out the stopped task")
+			}
+			switch e := event.(type) {
+			case agent.TextEvent, agent.ThinkingEvent, agent.ToolCallEvent, agent.ToolResultEvent, agent.DoneEvent:
+				t.Fatalf("the session carried on after Stop: %T %+v", e, e)
+			}
+		case <-quiet.C:
+			return
+		case <-ctx.Done():
+			t.Fatal("timeout while waiting out the stopped task")
 		}
 	}
 }

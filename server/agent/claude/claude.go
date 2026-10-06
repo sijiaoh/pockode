@@ -324,6 +324,7 @@ type cliSession struct {
 	lossStore       backgroundLossStore
 	cancel          func()
 	closeOnce       sync.Once
+	unread          unreadMessages
 
 	noteMu sync.Mutex
 	note   string // pending explanation for the agent; see QueueNote
@@ -352,12 +353,14 @@ func (s *cliSession) takeNote() string {
 
 // SendMessage sends a message to Claude.
 //
-// Prompt.ID goes nowhere: the stream-json user message has no field to carry a
-// client id, and nothing Claude sends back names the message it is answering —
-// the only user-direction frames it produces are tool results, and a message
-// steered into a running turn is never echoed (measured on claude-code 2.1.263).
-// So this session does not implement agent.MessageIngestReporter and the send
-// path writes the read point for it; see agent.MessageIngestedEvent.
+// Prompt.ID goes out as the message's uuid, which is what lets a Stop that
+// discards it say so (see unreadMessages). It does not make the read point
+// knowable: nothing Claude puts in the conversation names the message it is
+// answering — the only user-direction frames it produces are tool results, and
+// a message steered into a running turn is never echoed (measured on
+// claude-code 2.1.263). So this session does not implement
+// agent.MessageIngestReporter and the send path writes the read point for it;
+// see agent.MessageIngestedEvent.
 func (s *cliSession) SendMessage(prompt agent.Prompt) error {
 	// Read before anything else is done with the prompt: a file that cannot be
 	// read fails the send, and the queued note must still be there for the
@@ -391,6 +394,7 @@ func (s *cliSession) SendMessage(prompt agent.Prompt) error {
 
 	msg := userMessage{
 		Type: "user",
+		UUID: prompt.ID,
 		Message: userContent{
 			Role:    "user",
 			Content: content,
@@ -401,7 +405,7 @@ func (s *cliSession) SendMessage(prompt agent.Prompt) error {
 		return fmt.Errorf("failed to marshal message: %w", err)
 	}
 	s.log.Debug("sending prompt", "length", len(text), "images", len(images), "files", len(byPath))
-	if err := s.writeStdin(data); err != nil {
+	if err := s.unread.send(prompt.ID, prompt.Text, func() error { return s.writeStdin(data) }); err != nil {
 		return err
 	}
 	s.thinking.messageSent(time.Now())
@@ -558,16 +562,48 @@ func (s *cliSession) declineControlRequest(requestID, message string) {
 
 // interruptMarker is stored in pendingRequests to identify interrupt responses.
 // Needed because control_response only contains request_id, not the request type.
-type interruptMarker struct{}
+type interruptMarker struct {
+	// unread is what the CLI may still have been holding unread when the
+	// interrupt went out, for its response to be read against.
+	unread map[string]string
+}
 
-// SendInterrupt sends an interrupt signal to stop the current task.
+// stopTaskMarker is stored in pendingRequests for each stop_task sent, so its
+// response is recognised as not being the interrupt's and its failure can be
+// reported against the task it was for.
+type stopTaskMarker struct {
+	taskID string
+}
+
+// SendInterrupt stops the turn and the background work it left running.
+//
+// Interrupt alone only ends the turn: a background task that finishes later
+// makes the CLI start a new turn of its own. So every live non-ambient task gets
+// a stop_task first, which ends it without waking the model, and the interrupt
+// carries cancel_queued to drop any notification already queued — and with it
+// any message the user sent that the turn had not read yet, which is reported
+// rather than lost (see unreadMessages). Stopping first also makes each stopped
+// notification arrive before the interrupt's acknowledgement, which the turn
+// state relies on. The measurements, and what is
+// deliberately left running (cron jobs), are in docs/code/agent-integration.md
+// under "Stop Ends the Background Work Too".
+//
+// Each stop is fire-and-forget: its response is not the interrupt's
+// acknowledgement, and a task that cannot be stopped must not keep the turn
+// itself from stopping, so a failure is logged against its task_id and nothing
+// more.
 func (s *cliSession) SendInterrupt() error {
+	for _, taskID := range s.backgroundTasks.liveIDs() {
+		s.sendStopTask(taskID)
+	}
+
 	requestID := generateRequestID()
-	request := interruptRequest{
+	request := controlRequestOut{
 		Type:      "control_request",
 		RequestID: requestID,
 		Request: interruptRequestData{
-			Subtype: "interrupt",
+			Subtype:      "interrupt",
+			CancelQueued: true,
 		},
 	}
 
@@ -576,15 +612,40 @@ func (s *cliSession) SendInterrupt() error {
 		return fmt.Errorf("failed to marshal interrupt request: %w", err)
 	}
 
-	// Store marker so parseControlResponse can identify interrupt responses.
-	s.pendingRequests.Store(requestID, interruptMarker{})
+	return s.unread.takeAll(func(unread map[string]string) error {
+		// Store marker so parseControlResponse can identify interrupt responses.
+		s.pendingRequests.Store(requestID, interruptMarker{unread: unread})
 
-	s.log.Info("sending interrupt signal")
+		s.log.Info("sending interrupt signal")
+		if err := s.writeStdin(data); err != nil {
+			s.pendingRequests.Delete(requestID)
+			return err
+		}
+		return nil
+	})
+}
+
+// sendStopTask asks the CLI to stop one background task. It returns nothing
+// because nothing may depend on it; see SendInterrupt.
+func (s *cliSession) sendStopTask(taskID string) {
+	requestID := generateRequestID()
+	data, err := json.Marshal(controlRequestOut{
+		Type:      "control_request",
+		RequestID: requestID,
+		Request:   stopTaskRequestData{Subtype: "stop_task", TaskID: taskID},
+	})
+	if err != nil {
+		s.log.Error("failed to marshal stop_task request", "error", err, "taskId", taskID)
+		return
+	}
+
+	s.pendingRequests.Store(requestID, stopTaskMarker{taskID: taskID})
+
+	s.log.Info("stopping background task", "taskId", taskID)
 	if err := s.writeStdin(data); err != nil {
 		s.pendingRequests.Delete(requestID)
-		return err
+		s.log.Error("failed to send stop_task", "error", err, "taskId", taskID)
 	}
-	return nil
 }
 
 func generateRequestID() string {
@@ -1055,7 +1116,10 @@ func nextRecovery(stage string) string {
 // --- Types ---
 
 type userMessage struct {
-	Type    string      `json:"type"`
+	Type string `json:"type"`
+	// UUID is the CLI's command uuid, echoed back by an interrupt that cancels
+	// the message. Omitted for a message with no record to name.
+	UUID    string      `json:"uuid,omitempty"`
 	Message userContent `json:"message"`
 }
 
@@ -1123,14 +1187,26 @@ type controlErrorPayload struct {
 	Error     string `json:"error"`
 }
 
-type interruptRequest struct {
-	Type      string               `json:"type"`
-	RequestID string               `json:"request_id"`
-	Request   interruptRequestData `json:"request"`
+// controlRequestOut is a control request Pockode sends to the CLI.
+type controlRequestOut struct {
+	Type      string `json:"type"`
+	RequestID string `json:"request_id"`
+	Request   any    `json:"request"`
 }
 
 type interruptRequestData struct {
 	Subtype string `json:"subtype"`
+	// CancelQueued also cancels commands queued for a turn that has not started
+	// yet — which is where a background task's notification waits, and also a
+	// user message not yet folded into the turn being stopped. The response
+	// lists the uuids it cancelled; still_queued, the plain interrupt's list of
+	// survivors, is then empty for a local process like this one.
+	CancelQueued bool `json:"cancel_queued"`
+}
+
+type stopTaskRequestData struct {
+	Subtype string `json:"subtype"`
+	TaskID  string `json:"task_id"`
 }
 
 // --- Parsing ---
@@ -1426,6 +1502,11 @@ type cliControlResponse struct {
 	Response struct {
 		Subtype   string `json:"subtype"`
 		RequestID string `json:"request_id"`
+		Error     string `json:"error"`
+		Response  struct {
+			// Cancelled is an interrupt's: the uuids its cancel_queued dropped.
+			Cancelled []string `json:"cancelled"`
+		} `json:"response"`
 	} `json:"response"`
 }
 
@@ -1436,12 +1517,27 @@ func parseControlResponse(log *slog.Logger, line []byte, pendingRequests *sync.M
 		return nil
 	}
 
-	// Check if this response is for an interrupt request we sent.
+	// Check if this response is for a control request we sent.
 	requestID := resp.Response.RequestID
 	if pending, ok := pendingRequests.LoadAndDelete(requestID); ok {
-		if _, isInterrupt := pending.(interruptMarker); isInterrupt {
+		switch marker := pending.(type) {
+		case interruptMarker:
 			log.Info("interrupt acknowledged", "requestId", requestID)
-			return []agent.AgentEvent{agent.InterruptedEvent{}}
+			// Ahead of the ending, so the warnings belong to the turn stopped.
+			events := discardedWarnings(log, marker.unread, resp.Response.Response.Cancelled)
+			return append(events, agent.InterruptedEvent{})
+		case stopTaskMarker:
+			// Never an event: the turn ends on the interrupt's response alone.
+			// An error means the task may still be running. Not a task that
+			// already ended: claude 2.1.289 acknowledges an unknown task_id with
+			// success. It is a CLI that cannot serve the request — an older one
+			// answers an unknown subtype, a host without the callback says so.
+			if resp.Response.Subtype == "error" {
+				log.Warn("background task could not be stopped", "taskId", marker.taskID, "error", resp.Response.Error)
+			} else {
+				log.Info("background task stopped", "taskId", marker.taskID)
+			}
+			return nil
 		}
 	}
 
@@ -1456,8 +1552,9 @@ type controlCancelRequest struct {
 }
 
 // Nothing of the CLI's is held pending any more, so there is no map to clean up
-// here: pendingRequests holds only the interrupts Pockode itself sent, under ids
-// from its own namespace, which a cancel from the CLI can never name.
+// here: pendingRequests holds only the control requests Pockode itself sent
+// (interrupt, stop_task), under ids from its own namespace, which a cancel from
+// the CLI can never name.
 func parseControlCancelRequest(log *slog.Logger, line []byte) []agent.AgentEvent {
 	var req controlCancelRequest
 	if err := json.Unmarshal(line, &req); err != nil {

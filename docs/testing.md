@@ -422,9 +422,9 @@ other matches nothing. That one at least fails cheaply.
 
 ### Skip is not a pass, and it is not a failure
 
-Eight places give up rather than assert — three in the shared scenarios, five
+Nine places give up rather than assert — three in the shared scenarios, six
 in Claude's own tests, none in Codex's. Only the first turns on a capability;
-the other seven turn on what the model chose to do this time, which is why the
+the other eight turn on what the model chose to do this time, which is why the
 list can be empty on one run and not on the next.
 
 | Where | It skips when |
@@ -436,15 +436,16 @@ list can be empty on one run and not on the next.
 | `TestIntegration_BackgroundTaskDoesNotEndTheTurn` (same file) | the model waited on the task in-turn, so the background wait was never entered |
 | `TestIntegration_StopDuringBackgroundWait` (same file) | the turn ended before any background wait began |
 | `TestIntegration_StopDuringBackgroundWait` (same file) | the model never ended its turn on a background task, so Stop was never pressed |
+| `TestIntegration_StopDuringBackgroundWait` (same file) | Stop was not pressed while the background task was known to be running, so silence afterwards proves nothing |
 | `TestIntegration_LostBackgroundTasksAreReportedOnRestart` (same file) | the turn ended without leaving a background task running |
 
 A skip is the honest report of a run that proved nothing, and it is the right
-answer for all eight: none of these tests can tell "the behaviour is broken"
+answer for all nine: none of these tests can tell "the behaviour is broken"
 apart from "the model did not do the thing this run". But it follows that a
 scenario which skips every time is not covered by anything, and nothing goes red
 to say so. **Read the skip lines of a run, not just its last line.** The
-measured runs above skipped none of the eight, and that is luck rather than a
-property — particularly for the four background-task rows, which turn on whether
+measured runs above skipped none of the nine, and that is luck rather than a
+property — particularly for the five background-task rows, which turn on whether
 the model felt like backgrounding anything.
 
 ### The silent pass this suite used to carry

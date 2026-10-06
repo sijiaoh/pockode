@@ -198,10 +198,14 @@ it reads it, carrying the id Pockode sent with the turn (`clientUserMessageId`
 → `clientId`), so the record is written from the echo and the boundary is exact.
 Claude reports nothing of the kind, so Pockode writes the record itself at the
 moment of delivery — a little of what was already being written lands under the
-new message, which is the conservative direction to be wrong in. A client is
-told neither which agent it is talking to nor which of the two produced the
-record: it sees one kind of record and follows one rule. An agent that gains an
-echo later is a change to that agent alone
+new message, which is the conservative direction to be wrong in. Delivery is not
+reading, though: a Stop can still discard a message the turn never folded in.
+The record is not taken back — it says what Pockode believed then — and a
+`message_discarded` warning in the stopped turn says what became of the message
+([code/agent-integration.md](code/agent-integration.md#stop-ends-the-background-work-too)).
+A client is told neither which agent it is talking to nor which of the two
+produced the record: it sees one kind of record and follows one rule. An agent
+that gains an echo later is a change to that agent alone
 (`agent.MessageIngestReporter`).
 
 What it cannot promise: the model answers both messages in one breath often

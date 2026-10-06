@@ -137,8 +137,11 @@ type Session interface {
 	// SendPermissionResponse sends a permission response to the agent.
 	SendPermissionResponse(data PermissionRequestData, choice PermissionChoice) error
 
-	// SendInterrupt sends an interrupt signal to stop the current task.
-	// This is a soft stop that preserves the session for future messages.
+	// SendInterrupt stops the current turn and the background work it left
+	// running, so the agent does not come back on its own once that work
+	// finishes. This is a soft stop that preserves the session for future
+	// messages: the process is not killed. An agent with no background work
+	// (Codex) only has the turn to stop.
 	//
 	// Returning is not the stop landing: the InterruptedEvent on Events is what
 	// says the turn ended.
@@ -165,10 +168,11 @@ type Prompt struct {
 	// Text is what the agent reads.
 	Text string
 	// ID is Pockode's own id for the message record this text came from, for an
-	// agent that can carry an id through and echo it back when it reads the
-	// message (see MessageIngestReporter). An agent that cannot has nothing to do
-	// with it. Empty when the message has no record to name — nothing downstream
-	// may then claim it does.
+	// agent that can carry an id through and name the message by it later —
+	// when it reads the message (see MessageIngestReporter), or when a Stop
+	// discards it unread (Claude). An agent that cannot has nothing to do with
+	// it. Empty when the message has no record to name — nothing downstream may
+	// then claim it does.
 	ID string
 	// Attachments are the files the user sent with the message. Only a session
 	// that is an AttachmentReceiver is ever handed any.

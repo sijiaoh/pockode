@@ -93,6 +93,15 @@ func (t *backgroundTaskTracker) liveCount() int {
 	return len(t.live)
 }
 
+// liveIDs lists the non-ambient background tasks still running, as the CLI last
+// reported them. Safe to read outside the lock: observe replaces the slice and
+// never writes into one it has handed out.
+func (t *backgroundTaskTracker) liveIDs() []string {
+	t.liveMu.Lock()
+	defer t.liveMu.Unlock()
+	return t.live
+}
+
 // loss describes what this process is about to take down with it, for the next
 // process to explain.
 //
