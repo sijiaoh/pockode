@@ -21,6 +21,7 @@ function getInitialWidth(): number {
 }
 
 interface Props {
+	/** On screen: the drawer open, or the column not collapsed. */
 	isOpen: boolean;
 	onClose: () => void;
 	children: React.ReactNode;
@@ -31,7 +32,8 @@ function Sidebar({ isOpen, onClose, children, isExpanded }: Props) {
 	const [width, setWidth] = useState(getInitialWidth);
 	const [isDragging, setIsDragging] = useState(false);
 
-	// Escape closes the drawer; in the expanded tier the column is not dismissable.
+	// Escape closes the drawer; the column is not an overlay and ignores it —
+	// only its own button collapses it.
 	// The press is marked handled, because the drawer opens from the session
 	// header — which stays lit under the chat's answer panel — and that panel
 	// waits until `window` to ask so this answer is in by then
@@ -68,12 +70,27 @@ function Sidebar({ isOpen, onClose, children, isExpanded }: Props) {
 		}
 	}, [isOpen, isExpanded]);
 
-	// The handle exists only in the expanded tier, so a viewport shrinking out of
-	// it takes the drag with it: the element is gone before any pointerup or
+	// The column takes focus the same way when it is expanded back — a change of
+	// `isOpen` within the tier, which only the expand button makes. Mounting
+	// with the stored state and crossing tiers are not presses, so they leave
+	// focus where it was.
+	const columnRef = useRef<HTMLElement>(null);
+	const prevRef = useRef({ isOpen, isExpanded });
+	useEffect(() => {
+		const prev = prevRef.current;
+		prevRef.current = { isOpen, isExpanded };
+		if (isExpanded && prev.isExpanded && isOpen && !prev.isOpen) {
+			columnRef.current?.focus({ preventScroll: true });
+		}
+	}, [isOpen, isExpanded]);
+
+	// The handle is only on screen in the expanded tier and while the column is
+	// not collapsed, so a viewport shrinking out of the tier or a collapse takes
+	// the drag with it: the handle is gone before any pointerup or
 	// pointercancel can reach it, and without this the drag stays live forever.
 	useEffect(() => {
-		if (!isExpanded) setIsDragging(false);
-	}, [isExpanded]);
+		if (!isExpanded || !isOpen) setIsDragging(false);
+	}, [isExpanded, isOpen]);
 
 	// The page-wide cursor and selection lock belong to an effect so React
 	// guarantees the undo. Applied imperatively on pointerdown they outlive a
@@ -152,16 +169,25 @@ function Sidebar({ isOpen, onClose, children, isExpanded }: Props) {
 
 	const columnId = useId();
 
-	// Expanded: a persistent column in the flex layout
+	// Expanded: a column in the flex layout. Collapsed, it is hidden rather
+	// than unmounted, for the same reason the drawer is: the open tab, its
+	// scroll position and the file tree's expanded folders are still there
+	// when it comes back. The width is left alone, so it comes back as wide.
 	if (isExpanded) {
 		return (
 			// No height of its own: the row gives it, the way the chat panel
 			// beside it takes its own. Restating `h-dvh` here made the column
 			// outrun a row the shell had already shortened by its banners
 			// (docs/responsive-ui.md § Who owns the scroll boundary).
-			<div
+			//
+			// outline-none: focused on expand only to announce the region, as
+			// the drawer's panel is on open.
+			<aside
+				ref={columnRef}
 				id={columnId}
-				className="relative flex shrink-0 flex-col border-r border-th-border bg-th-bg-secondary"
+				aria-label="Sidebar"
+				tabIndex={-1}
+				className={`relative shrink-0 flex-col border-r border-th-border bg-th-bg-secondary outline-none ${isOpen ? "flex" : "hidden"}`}
 				style={{ width }}
 			>
 				<div className="flex flex-1 flex-col overflow-hidden">{children}</div>
@@ -204,7 +230,7 @@ function Sidebar({ isOpen, onClose, children, isExpanded }: Props) {
 						className={`absolute left-1/2 h-full w-0.5 -translate-x-1/2 transition-colors group-hover:bg-th-accent group-focus-visible:bg-th-accent ${isDragging ? "bg-th-accent" : "bg-transparent"}`}
 					/>
 				</div>
-			</div>
+			</aside>
 		);
 	}
 

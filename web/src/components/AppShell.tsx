@@ -26,12 +26,21 @@ import { ChatPanel } from "./Chat";
 import { SessionSidebar } from "./Session";
 import { ReconnectBanner } from "./ui";
 
+// "true" while the expanded tier's column is collapsed; anything else, or
+// nothing, is the default of showing it. The drawer never reads or writes it.
+const SIDEBAR_COLLAPSED_KEY = "pockode:sidebar-collapsed";
+
+function readColumnCollapsed(): boolean {
+	return localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === "true";
+}
+
 function AppShell() {
 	const wsStatus = useWSStore((state) => state.status);
 	const navigate = useNavigate();
 	const queryClient = useQueryClient();
 	const isExpanded = useIsExpanded();
-	const [sidebarOpen, setSidebarOpen] = useState(false);
+	const [drawerOpen, setDrawerOpen] = useState(false);
+	const [columnCollapsed, setColumnCollapsed] = useState(readColumnCollapsed);
 
 	// Here rather than in `MainContainer`, which only exists once a session has
 	// resolved: the password screen, the loading screen and the "can't reach the
@@ -378,35 +387,69 @@ function AppShell() {
 
 	// Below the expanded tier the sidebar is a modal drawer, and everything else
 	// in the shell is behind it.
-	const drawerOpen = sidebarOpen && !isExpanded;
+	const isDrawerUp = drawerOpen && !isExpanded;
+	// Whether the sidebar is on screen, in either tier. The drawer and the
+	// column keep separate state: closing the drawer is not a preference, and
+	// a column collapsed on a wide screen must not leave a narrow one with a
+	// drawer it cannot open.
+	const sidebarVisible = isExpanded ? !columnCollapsed : drawerOpen;
+
+	const setColumnCollapsedPersisted = useCallback((collapsed: boolean) => {
+		setColumnCollapsed(collapsed);
+		localStorage.setItem(SIDEBAR_COLLAPSED_KEY, String(collapsed));
+	}, []);
 
 	// The opener is taken here, in the press, because by the time any effect
 	// runs it may already have lost focus: the page behind the drawer goes
 	// `inert` in the very commit that opens it.
 	const drawerOpenerRef = useRef<Element | null>(null);
 	const handleOpenSidebar = useCallback(() => {
+		if (isExpanded) {
+			setColumnCollapsedPersisted(false);
+			return;
+		}
 		drawerOpenerRef.current = document.activeElement;
-		setSidebarOpen(true);
-	}, []);
+		setDrawerOpen(true);
+	}, [isExpanded, setColumnCollapsedPersisted]);
+
+	// One way to take the sidebar off the screen, whichever tier it is in.
+	const handleCloseSidebar = useCallback(() => {
+		if (isExpanded) setColumnCollapsedPersisted(true);
+		else setDrawerOpen(false);
+	}, [isExpanded, setColumnCollapsedPersisted]);
 
 	// Runs on close — however the drawer was closed — after the commit that took
 	// `inert` off the page again, which is what lets the opener take focus. An
-	// opener gone by then (grown into the expanded tier, which has none) is a
-	// detached node, and the DOM refuses it focus without being asked.
+	// opener gone by then is a detached node, and the DOM refuses it focus
+	// without being asked.
 	useEffect(() => {
-		if (!drawerOpen) return;
+		if (!isDrawerUp) return;
 		return () => {
 			const opener = drawerOpenerRef.current;
 			if (opener instanceof HTMLElement) opener.focus({ preventScroll: true });
 		};
-	}, [drawerOpen]);
+	}, [isDrawerUp]);
 
-	// Growing into the expanded tier turns the drawer into a persistent column,
-	// which has no open/closed state of its own. Without this the flag survives
-	// the transition, so rotating a mini pad to landscape and back would reopen
-	// a drawer the user never asked for.
+	// Collapsing hides the button that was pressed, which drops focus to the
+	// body; the button that brings the column back is where it lands instead.
+	// Only a press collapses the column — restoring the stored state is the
+	// initial value, not a change — so a change seen here is always one.
+	const sidebarToggleRef = useRef<HTMLButtonElement>(null);
+	const prevColumnCollapsedRef = useRef(columnCollapsed);
 	useEffect(() => {
-		if (isExpanded) setSidebarOpen(false);
+		const wasCollapsed = prevColumnCollapsedRef.current;
+		prevColumnCollapsedRef.current = columnCollapsed;
+		if (columnCollapsed && !wasCollapsed) {
+			sidebarToggleRef.current?.focus({ preventScroll: true });
+		}
+	}, [columnCollapsed]);
+
+	// Growing into the expanded tier turns the drawer into the column, whose
+	// collapsed state is its own and is left alone here. Without this the
+	// drawer flag survives the transition, so rotating a mini pad to landscape
+	// and back would reopen a drawer the user never asked for.
+	useEffect(() => {
+		if (isExpanded) setDrawerOpen(false);
 	}, [isExpanded]);
 
 	/**
@@ -446,7 +489,7 @@ function AppShell() {
 						: sessionTarget(id, worktree),
 				),
 			);
-			setSidebarOpen(false);
+			setDrawerOpen(false);
 		},
 		[navigate, urlWorktree, sessionTarget],
 	);
@@ -454,7 +497,7 @@ function AppShell() {
 	const handleCreateSession = useCallback(async () => {
 		try {
 			const newSession = await createSession();
-			setSidebarOpen(false);
+			setDrawerOpen(false);
 			navigate(
 				buildNavigation({
 					type: "session",
@@ -616,7 +659,7 @@ function AppShell() {
 	// an entrance that lands somewhere different depending on what the user last
 	// tapped is an entrance nobody can predict.
 	const handleOpenWorkList = useCallback(() => {
-		setSidebarOpen(false);
+		setDrawerOpen(false);
 		navigate(
 			overlayToNavigation(
 				{ type: "work-list", segment: "current" },
@@ -665,7 +708,7 @@ function AppShell() {
 	);
 
 	const handleOpenAgentRoleList = useCallback(() => {
-		setSidebarOpen(false);
+		setDrawerOpen(false);
 		navigate(
 			overlayToNavigation(
 				{ type: "agent-role-list" },
@@ -712,7 +755,7 @@ function AppShell() {
 	 */
 	const handleSelectChatSession = useCallback(
 		(id: string) => {
-			setSidebarOpen(false);
+			setDrawerOpen(false);
 			navigate(
 				buildNavigation({
 					type: "session",
@@ -821,7 +864,7 @@ function AppShell() {
 		<div className="flex h-dvh flex-col overflow-hidden">
 			{/* `contents`, so the wrapper only carries `inert` and takes no part in
 			    the layout; the same goes for the one around ChatPanel below. */}
-			<div className="contents" inert={drawerOpen}>
+			<div className="contents" inert={isDrawerUp}>
 				{createError && (
 					// Wraps rather than truncates: the reason is server text of any
 					// length, and the narrow screens this app targets are exactly where
@@ -853,8 +896,8 @@ function AppShell() {
 			</div>
 			<div className="flex min-h-0 flex-1">
 				<SessionSidebar
-					isOpen={sidebarOpen}
-					onClose={() => setSidebarOpen(false)}
+					isOpen={sidebarVisible}
+					onClose={handleCloseSidebar}
 					// The session on screen, whichever list it came from. A viewed
 					// one has no row in this worktree's list and so is not
 					// `currentSessionId` — but the filter has moved to the list it
@@ -878,7 +921,7 @@ function AppShell() {
 					isExpanded={isExpanded}
 					isSwitchingWorktree={worktreeSwitchInFlight}
 				/>
-				<div className="contents" inert={drawerOpen}>
+				<div className="contents" inert={isDrawerUp}>
 					<ChatPanel
 						view={sessionView}
 						onOpenSessionThere={handleOpenSessionThere}
@@ -890,7 +933,14 @@ function AppShell() {
 						onUpdateTitle={(title) => {
 							if (currentSessionId) updateTitle(currentSessionId, title);
 						}}
-						onOpenSidebar={isExpanded ? undefined : handleOpenSidebar}
+						// Only while the sidebar is off the screen, with one exception:
+						// the drawer's opener has to stay mounted under it, since that is
+						// where focus goes back when it closes.
+						onOpenSidebar={
+							isExpanded && !columnCollapsed ? undefined : handleOpenSidebar
+						}
+						sidebarKind={isExpanded ? "column" : "drawer"}
+						sidebarToggleRef={sidebarToggleRef}
 						onOpenSettings={handleOpenSettings}
 						overlay={overlay}
 						onCloseOverlay={handleCloseOverlay}

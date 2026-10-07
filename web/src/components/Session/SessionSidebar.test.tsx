@@ -12,12 +12,6 @@ import SessionSidebar from "./SessionSidebar";
 
 const wsState = {
 	maxUploadSize: 0,
-	// The sessions tab asks which worktrees still hold sessions, but only once
-	// the filter leaves this worktree — which it never does here.
-	actions: {
-		sessionViewWorktrees: vi.fn(),
-		sessionViewList: vi.fn(),
-	},
 };
 
 vi.mock("../../lib/wsStore", () => ({
@@ -32,19 +26,15 @@ vi.mock("../../lib/fileUpload", async (importOriginal) => ({
 	uploadFile: vi.fn(),
 }));
 
-vi.mock("../../hooks/useGitWatch", () => ({ useGitWatch: () => undefined }));
+let gitWatchEnabled: boolean | undefined;
+vi.mock("../../hooks/useGitWatch", () => ({
+	useGitWatch: ({ enabled }: { enabled: boolean }) => {
+		gitWatchEnabled = enabled;
+	},
+}));
 let gitChangeCount: number | undefined;
 vi.mock("../../hooks/useGitChangeCount", () => ({
 	useGitChangeCount: () => gitChangeCount,
-}));
-
-vi.mock("../../hooks/useSession", () => ({
-	useSession: () => ({
-		hasAnyUnread: false,
-		sessions: [],
-		isLoading: false,
-		refresh: vi.fn(),
-	}),
 }));
 
 // The tabs are not what is under test; the one call the Files tab makes back
@@ -67,15 +57,56 @@ vi.mock("../Files", () => ({
 		</>
 	),
 }));
-vi.mock("../Git", () => ({ DiffTab: () => null }));
+vi.mock("../Git", () => ({
+	DiffTab: ({
+		onSelectFile,
+		onSelectCommit,
+	}: {
+		onSelectFile: (path: string, staged: boolean) => void;
+		onSelectCommit: (hash: string) => void;
+	}) => (
+		<>
+			<button type="button" onClick={() => onSelectFile("src/main.tsx", false)}>
+				open diff
+			</button>
+			<button type="button" onClick={() => onSelectCommit("abc123")}>
+				open commit
+			</button>
+		</>
+	),
+}));
+vi.mock("./SessionsTab", () => ({
+	default: ({
+		onSelectSession,
+	}: {
+		onSelectSession: (id: string, worktree: string | null) => void;
+	}) => (
+		<button type="button" onClick={() => onSelectSession("s1", null)}>
+			open session
+		</button>
+	),
+}));
 vi.mock("../Project", () => ({ ProjectTab: () => null }));
 vi.mock("../Worktree", () => ({ WorktreeSwitcher: () => null }));
 
-function renderSidebar(onClose: () => void) {
-	render(
+interface RenderOptions {
+	isOpen?: boolean;
+	isExpanded?: boolean;
+	activeDiffFile?: { path: string; staged: boolean } | null;
+}
+
+function renderSidebar(
+	onClose: () => void,
+	{
+		isOpen = true,
+		isExpanded = false,
+		activeDiffFile = null,
+	}: RenderOptions = {},
+) {
+	return render(
 		<QueryClientProvider client={new QueryClient()}>
 			<SessionSidebar
-				isOpen={true}
+				isOpen={isOpen}
 				onClose={onClose}
 				currentSessionId={null}
 				onSelectSession={vi.fn()}
@@ -83,7 +114,7 @@ function renderSidebar(onClose: () => void) {
 				onDeleteSession={vi.fn()}
 				onSelectDiffFile={vi.fn()}
 				onCloseDiffFile={vi.fn()}
-				activeDiffFile={null}
+				activeDiffFile={activeDiffFile}
 				onSelectCommit={vi.fn()}
 				activeCommitHash={null}
 				onSelectFile={vi.fn()}
@@ -94,7 +125,7 @@ function renderSidebar(onClose: () => void) {
 				onOpenWorkList={vi.fn()}
 				onOpenAgentRoleList={vi.fn()}
 				isSwitchingWorktree={false}
-				isExpanded={false}
+				isExpanded={isExpanded}
 			/>
 		</QueryClientProvider>,
 	);
@@ -260,5 +291,74 @@ describe("the Project tab's attention badge", () => {
 		renderSidebar(vi.fn());
 
 		expect(tabBadge("Project")).toBeNull();
+	});
+});
+
+describe("picking a row", () => {
+	beforeEach(() => {
+		worktreeActions.setIsGitRepo(true);
+		return () => worktreeActions.reset();
+	});
+
+	const picks = [
+		"open session",
+		"open src/main.tsx",
+		"open diff",
+		"open commit",
+	];
+
+	// The column's `onClose` collapses it, so a pick that dismissed the drawer
+	// on a phone would take the column away with it.
+	it.each(picks)("stays on screen after %s", async (name) => {
+		const user = userEvent.setup();
+		const onClose = vi.fn();
+		renderSidebar(onClose, { isExpanded: true });
+
+		await user.click(screen.getByRole("button", { name }));
+
+		expect(onClose).not.toHaveBeenCalled();
+	});
+
+	// The other half of the same guard: on a phone the pick still makes way for
+	// what it opened.
+	it.each(picks)("closes the drawer after %s", async (name) => {
+		const user = userEvent.setup();
+		const onClose = vi.fn();
+		renderSidebar(onClose);
+
+		await user.click(screen.getByRole("button", { name }));
+
+		expect(onClose).toHaveBeenCalled();
+	});
+});
+
+describe("the git watcher", () => {
+	beforeEach(() => {
+		gitWatchEnabled = undefined;
+		worktreeActions.setIsGitRepo(true);
+		return () => worktreeActions.reset();
+	});
+
+	it("follows the column: on while expanded, off while collapsed", () => {
+		const { unmount } = renderSidebar(vi.fn(), { isExpanded: true });
+		expect(gitWatchEnabled).toBe(true);
+		unmount();
+
+		renderSidebar(vi.fn(), { isExpanded: true, isOpen: false });
+		expect(gitWatchEnabled).toBe(false);
+	});
+
+	it("keeps watching a collapsed column while a diff is still on screen", () => {
+		renderSidebar(vi.fn(), {
+			isExpanded: true,
+			isOpen: false,
+			activeDiffFile: { path: "src/main.tsx", staged: false },
+		});
+		expect(gitWatchEnabled).toBe(true);
+	});
+
+	it("stops with a closed drawer, as before", () => {
+		renderSidebar(vi.fn(), { isOpen: false });
+		expect(gitWatchEnabled).toBe(false);
 	});
 });

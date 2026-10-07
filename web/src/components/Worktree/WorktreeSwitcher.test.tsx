@@ -87,4 +87,19 @@ describe("WorktreeSwitcher", () => {
 			screen.getByRole("button", { name: "Select worktree" }),
 		).toHaveTextContent("Default");
 	});
+
+	// The row's end takes the sidebar off the screen in both tiers, named for
+	// what that is there: a drawer closes, a column collapses.
+	it.each([
+		[false, "Close sidebar", null],
+		[true, "Collapse sidebar", "true"],
+	])("ends the row with a way out of the sidebar (expanded: %s)", (isExpanded, name, expanded) => {
+		const onClose = vi.fn();
+		render(<WorktreeSwitcher onClose={onClose} isExpanded={isExpanded} />);
+
+		const button = screen.getByRole("button", { name });
+		expect(button.getAttribute("aria-expanded")).toBe(expanded);
+		button.click();
+		expect(onClose).toHaveBeenCalledTimes(1);
+	});
 });

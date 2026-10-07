@@ -1,13 +1,13 @@
-import type { ComponentType, ReactNode } from "react";
+import type { ComponentType, ReactNode, Ref } from "react";
 import { useSyncExternalStore } from "react";
 
 export interface HeaderUIConfig {
 	/**
 	 * Custom Header component (replaces default header).
-	 * Receives onOpenSidebar, onOpenSettings, title and heading as props.
+	 * Receives the props in `HeaderContentProps`.
 	 *
 	 * Replaces the entire header, including the connection status indicator
-	 * and the menu/settings buttons. Render `<ConnectionStatus />` from
+	 * and the sidebar/settings buttons. Render `<ConnectionStatus />` from
 	 * `components/ui` yourself if you want to keep it.
 	 */
 	HeaderContent?: ComponentType<HeaderContentProps>;
@@ -24,9 +24,30 @@ export interface HeaderUIConfig {
 	TitleComponent?: ComponentType<TitleComponentProps>;
 }
 
+/**
+ * What the sidebar is in the current tier: a modal `drawer` opened over the
+ * page, or a `column` beside it that collapses and expands in place.
+ */
+export type SidebarKind = "drawer" | "column";
+
 export interface HeaderContentProps {
-	/** Absent when the sidebar is a persistent column: render no menu button. */
+	/**
+	 * Absent while the sidebar is already on screen as a column: render no
+	 * button to open it. Present otherwise — including while the drawer is
+	 * open over the header, since that button is where focus goes back.
+	 */
 	onOpenSidebar?: () => void;
+	/**
+	 * Which sidebar `onOpenSidebar` brings onto the screen, for the button's
+	 * icon and accessible name: a drawer is a dialog it opens, a column is a
+	 * region it expands.
+	 */
+	sidebarKind: SidebarKind;
+	/**
+	 * Attach to the button that calls `onOpenSidebar`. Collapsing the column
+	 * moves focus here; a header that drops it leaves focus on the page body.
+	 */
+	sidebarToggleRef?: Ref<HTMLButtonElement>;
 	/** Absent on the Settings page itself: render no settings button. */
 	onOpenSettings?: () => void;
 	/**

@@ -9,14 +9,10 @@ import { useCallback, useMemo } from "react";
 import { invalidateGitQueries } from "../../hooks/gitQueries";
 import { useGitChangeCount } from "../../hooks/useGitChangeCount";
 import { useGitWatch } from "../../hooks/useGitWatch";
-import { useSession } from "../../hooks/useSession";
+import { useSidebarAttention } from "../../hooks/useSidebarAttention";
 import { useSidebarUIConfig } from "../../lib/registries/sidebarUIRegistry";
 import { SidebarContainerContext } from "../../lib/sidebarContainerContext";
-import {
-	useHasUnfinishedUploads,
-	useHasUploadActivity,
-} from "../../lib/uploadStore";
-import { useWorkNeedsAttention } from "../../lib/workStore";
+import { useHasUnfinishedUploads } from "../../lib/uploadStore";
 import { useIsGitRepo } from "../../lib/worktreeStore";
 import { FilesTab } from "../Files";
 import { DiffTab } from "../Git";
@@ -88,18 +84,15 @@ function SessionSidebar({
 	isExpanded,
 	isSwitchingWorktree,
 }: Props) {
-	const { hasAnyUnread } = useSession();
 	const { SidebarContent } = useSidebarUIConfig();
-	// The upload queue lives inside the Files tab and is hidden from every other
-	// one, so this is the only sign an upload is still running or has failed.
-	const hasUploadActivity = useHasUploadActivity();
+	// The same bits light the dot on the header button that brings the sidebar
+	// back, so a badge out of sight behind a closed drawer or a collapsed column
+	// is still seen from outside. `worksNeedAttention` also lights the dot inside
+	// the Project tab, which is what makes the two agree (see `ProjectTab`).
+	const { sessionsUnread, uploadActivity, worksNeedAttention } =
+		useSidebarAttention();
 	// Narrower than the badge, and deliberately so — see `handleSelectFile`.
 	const hasUnfinishedUploads = useHasUnfinishedUploads();
-	// The tab bar is as far out as this signal reaches — on a phone it is inside
-	// the drawer — so without it a work waiting on the user is only ever found by
-	// opening the drawer *and* picking this tab. The same bit lights the dot
-	// inside the tab, which is what makes the two agree (see `ProjectTab`).
-	const worksNeedAttention = useWorkNeedsAttention();
 	// Only a confirmed repository gets the Git tab: while the answer is pending
 	// a project without one would see the tab appear and vanish again.
 	const isGitRepo = useIsGitRepo() === true;
@@ -108,6 +101,8 @@ function SessionSidebar({
 	// count badge, which has to keep up while another tab is on top. Each term
 	// below closes a case where nobody is left to read the number — including the
 	// one easily dropped, a diff still open behind a drawer the tap closed.
+	// `isOpen` is whether the sidebar is on screen in either tier, so a collapsed
+	// column stops watching exactly as a closed drawer does.
 	// See docs/git-ui.md, *Who subscribes to `git.changed`*.
 	const queryClient = useQueryClient();
 	const refreshGit = useCallback(
@@ -116,10 +111,7 @@ function SessionSidebar({
 	);
 	useGitWatch({
 		onChanged: refreshGit,
-		enabled:
-			isGitRepo &&
-			!SidebarContent &&
-			(isExpanded || isOpen || !!activeDiffFile),
+		enabled: isGitRepo && !SidebarContent && (isOpen || !!activeDiffFile),
 	});
 
 	const gitChangeCount = useGitChangeCount();
@@ -144,13 +136,13 @@ function SessionSidebar({
 				id: "sessions",
 				label: "Sessions",
 				icon: MessageSquare,
-				showBadge: hasAnyUnread,
+				showBadge: sessionsUnread,
 			},
 			{
 				id: "files",
 				label: "Files",
 				icon: FolderOpen,
-				showBadge: hasUploadActivity,
+				showBadge: uploadActivity,
 			},
 			...(isGitRepo
 				? [
@@ -174,8 +166,8 @@ function SessionSidebar({
 			},
 		],
 		[
-			hasAnyUnread,
-			hasUploadActivity,
+			sessionsUnread,
+			uploadActivity,
 			isGitRepo,
 			gitCountBadge,
 			worksNeedAttention,

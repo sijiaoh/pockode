@@ -4,7 +4,7 @@ import {
 	createRouter,
 	RouterProvider,
 } from "@tanstack/react-router";
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { JSONRPCErrorCode, JSONRPCErrorException } from "json-rpc-2.0";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -28,8 +28,9 @@ import type { SessionListChangedNotification } from "../types/message";
 // ChatPanel is the attach point; render the session it was handed and whether
 // that session has resolved, which together are what the panel needs to show
 // the destination rather than the session left behind. `onOpenSidebar` is
-// reported as well: whether the header gets a hamburger is decided here, not in
-// the header (see MainContainer's Props).
+// reported as well: whether the header gets a sidebar button is decided here,
+// not in the header (see MainContainer's Props) — and so is which sidebar it
+// opens, which names the button.
 // The work-list wiring is reported too: which segment the shell hands down, and
 // the three navigations that read it back (switch segment, open a work, come
 // back out of one). They are the shell's, not the list's.
@@ -38,6 +39,8 @@ vi.mock("./Chat", () => ({
 		sessionId,
 		isSessionResolved,
 		onOpenSidebar,
+		sidebarKind,
+		sidebarToggleRef,
 		workSegment,
 		onSelectWorkSegment,
 		onOpenWorkDetail,
@@ -48,6 +51,8 @@ vi.mock("./Chat", () => ({
 		sessionId: string;
 		isSessionResolved: boolean;
 		onOpenSidebar?: () => void;
+		sidebarKind?: "drawer" | "column";
+		sidebarToggleRef?: React.Ref<HTMLButtonElement>;
 		workSegment?: string;
 		onSelectWorkSegment?: (segment: "current" | "closed") => void;
 		onOpenWorkDetail?: (workId: string) => void;
@@ -66,8 +71,8 @@ vi.mock("./Chat", () => ({
 		>
 			{sessionId}
 			{onOpenSidebar && (
-				<button type="button" onClick={onOpenSidebar}>
-					Open menu
+				<button type="button" ref={sidebarToggleRef} onClick={onOpenSidebar}>
+					{sidebarKind === "column" ? "Expand sidebar" : "Open sidebar"}
 				</button>
 			)}
 			<button
@@ -123,7 +128,7 @@ vi.mock("./Session", () => ({
 			data-open={String(isOpen)}
 		>
 			<button type="button" onClick={onClose}>
-				Close sidebar
+				{isExpanded ? "Collapse sidebar" : "Close sidebar"}
 			</button>
 			<button type="button" onClick={onCreateSession}>
 				New Chat
@@ -506,7 +511,7 @@ describe("AppShell cross-worktree navigation", () => {
 // while the sidebar chose its form from a hook. Two copies of one decision, in
 // two components — edit either and you get a sidebar with no switch, or a
 // switch with no sidebar. The tier is now read once, here, and the header is
-// simply not handed an opener when there is no drawer to open.
+// simply not handed an opener while the sidebar is already on screen.
 describe("AppShell sidebar form and its switch", () => {
 	const originalMatchMedia = window.matchMedia;
 
@@ -523,9 +528,13 @@ describe("AppShell sidebar form and its switch", () => {
 		useWorkStore.setState({ works: [] });
 		useAuthStore.setState({ sessionToken: "test-session-token" });
 		ws.status = "connected";
+		localStorage.clear();
 	});
 
 	afterEach(() => {
+		viewport.listeners.clear();
+		// The collapsed flag would otherwise reach the describes below.
+		localStorage.clear();
 		Object.defineProperty(window, "matchMedia", {
 			writable: true,
 			value: originalMatchMedia,
@@ -536,15 +545,30 @@ describe("AppShell sidebar form and its switch", () => {
 	// rather than an impossible one that is both expanded and compact. Only the
 	// three members useMediaQuery actually reads are modelled; anything else
 	// would imply coverage that is not here.
-	const setExpanded = (expanded: boolean) =>
+	const viewport = { expanded: false, listeners: new Set<() => void>() };
+	const setExpanded = (expanded: boolean) => {
+		viewport.expanded = expanded;
 		Object.defineProperty(window, "matchMedia", {
 			writable: true,
 			value: (query: string) => ({
-				matches: expanded && query.includes("min-width"),
-				addEventListener: () => {},
-				removeEventListener: () => {},
+				get matches() {
+					return viewport.expanded && query.includes("min-width");
+				},
+				addEventListener: (_: string, listener: () => void) =>
+					viewport.listeners.add(listener),
+				removeEventListener: (_: string, listener: () => void) =>
+					viewport.listeners.delete(listener),
 			}),
 		});
+	};
+	// A window dragged across the breakpoint, after the shell has mounted.
+	const resize = (expanded: boolean) =>
+		act(() => {
+			viewport.expanded = expanded;
+			for (const listener of viewport.listeners) listener();
+		});
+	const sidebarOpen = () =>
+		screen.getByTestId("session-sidebar").getAttribute("data-open");
 
 	it.each([
 		["a drawer", false],
@@ -574,7 +598,7 @@ describe("AppShell sidebar form and its switch", () => {
 		setExpanded(false);
 		renderAppShell("/w/A/s/a1");
 
-		const opener = await screen.findByRole("button", { name: "Open menu" });
+		const opener = await screen.findByRole("button", { name: "Open sidebar" });
 		expect(screen.getByTestId("chat-panel").closest("[inert]")).toBeNull();
 
 		await user.click(opener);
@@ -601,6 +625,70 @@ describe("AppShell sidebar form and its switch", () => {
 			expect(screen.getByTestId("chat-panel")).toHaveTextContent("a1");
 		});
 
+		expect(document.querySelector("[inert]")).toBeNull();
+	});
+
+	// The column collapses and comes back in place, and the choice outlives a
+	// reload — but only the column's: the drawer is never part of it.
+	it("collapses the column into the header's button and back", async () => {
+		const user = userEvent.setup();
+		setExpanded(true);
+		renderAppShell("/w/A/s/a1");
+
+		await user.click(
+			await screen.findByRole("button", { name: "Collapse sidebar" }),
+		);
+
+		expect(sidebarOpen()).toBe("false");
+		expect(localStorage.getItem("pockode:sidebar-collapsed")).toBe("true");
+		// The pressed button is gone with the column; focus lands on the one
+		// that brings it back rather than falling to the body.
+		const expand = screen.getByRole("button", { name: "Expand sidebar" });
+		expect(expand).toHaveFocus();
+
+		await user.click(expand);
+
+		expect(sidebarOpen()).toBe("true");
+		expect(localStorage.getItem("pockode:sidebar-collapsed")).toBe("false");
+		expect(
+			screen.queryByRole("button", { name: "Expand sidebar" }),
+		).not.toBeInTheDocument();
+	});
+
+	it("opens collapsed when the column was left collapsed", async () => {
+		localStorage.setItem("pockode:sidebar-collapsed", "true");
+		setExpanded(true);
+		renderAppShell("/w/A/s/a1");
+
+		expect(
+			await screen.findByRole("button", { name: "Expand sidebar" }),
+		).not.toHaveFocus();
+		expect(sidebarOpen()).toBe("false");
+	});
+
+	it("keeps the column's state apart from the drawer's across tiers", async () => {
+		const user = userEvent.setup();
+		localStorage.setItem("pockode:sidebar-collapsed", "true");
+		setExpanded(true);
+		renderAppShell("/w/A/s/a1");
+		await screen.findByRole("button", { name: "Expand sidebar" });
+
+		resize(false);
+		// Collapsed on a wide screen is not open on a narrow one, nor shut away.
+		expect(sidebarOpen()).toBe("false");
+		await user.click(screen.getByRole("button", { name: "Open sidebar" }));
+		expect(sidebarOpen()).toBe("true");
+		await user.click(screen.getByRole("button", { name: "Close sidebar" }));
+		await user.click(screen.getByRole("button", { name: "Open sidebar" }));
+
+		// Grown back with the drawer open: the column is as the user left it,
+		// and the drawer did not survive the trip — narrowing again finds it
+		// shut rather than reopening it unasked.
+		resize(true);
+		expect(sidebarOpen()).toBe("false");
+		expect(localStorage.getItem("pockode:sidebar-collapsed")).toBe("true");
+		resize(false);
+		expect(sidebarOpen()).toBe("false");
 		expect(document.querySelector("[inert]")).toBeNull();
 	});
 });
