@@ -1223,7 +1223,10 @@ Two rules, and they are the whole of it:
    beside the panel, so each genuinely can be on top of it, and without the mark
    a single press put away both it and a panel the user was not even looking
    at — the drawer's case is the worse of the two, since it covers the panel
-   outright. `ConfirmDialog` and the command palette already satisfied the rule
+   outright. The panel is `inert` under an open drawer, but that does not
+   remove the need: `inert` keeps focus and presses out of the panel, and the
+   panel listens on `window`, where a key pressed inside the drawer still
+   arrives. `ConfirmDialog` and the command palette already satisfied the rule
    for their own reasons, and the composer's `+` menu was written to it. The
    third is the shared
    `Sheet`, and it arrives over the panel from the other direction: not opened
@@ -1290,9 +1293,10 @@ over it is dismissed by the same press through `useOutsideClick` — so without
 them one click puts away two things.
 
 Most surfaces are safe by construction and need nothing: `Sheet` — a message's
-fork menu — as well as `ConfirmDialog`, the mode dropdown and the session drawer
-each portal a backdrop of their own over this one, and `ResponsivePanel` portals
-one below the expanded tier, so the press never reaches this backdrop at all.
+fork menu — as well as `ConfirmDialog` and the mode dropdown each portal a
+backdrop of their own over this one, the session drawer draws one beside
+`ChatPanel` rather than inside it, and `ResponsivePanel` portals one below the
+expanded tier, so the press never reaches this backdrop at all.
 (The key is not claimed the same way: a backdrop takes a press merely by
 existing, whereas Escape has nothing equivalent and every one of these surfaces
 claims it with a line of its own — which is why surfaces that need nothing here
@@ -1680,7 +1684,7 @@ silent, and this design simply never enters it.
 | `web/src/components/Chat/AttentionStrip.tsx` | renamed from `BlockerStrip.tsx`; gains row 2, an `onAnswer` prop, and the `answerPanelOpen` that withholds row 2 while the card is on the screen, and the `jumpDisabled` that holds row 1's jump while the panel is sending (§2) |
 | `web/src/components/Chat/AnswerPanel.tsx` | the panel, its blocks, the footer (§3); a card centred in the transcript's rectangle over a backdrop that covers that rectangle alone, capped at 85% of it — all of it, with the header folded into a slimmer footer, when told `chromeCollapsed` — sizing itself without measuring anything; keeps the focused text field and a line either side of it in its body's view (§3); owns Escape and the backdrop press on `window` (§4); reports whether focus is inside it and decides nothing about the screen around it (§3); steps aside — `invisible` + `inert`, still mounted — when told it has `yielded` (§3); reports whether a submit is in flight, for the one way out of it that is not its own (§2) |
 | `web/src/components/ui/ResponsivePanel.tsx` | marks its Escape handled, and claims the click it dismisses on, so the answer panel underneath it does not close on the same press; counts itself as covering the page while open, so the chat's interrupt stands down (§4) |
-| `web/src/components/Layout/Sidebar.tsx` | the same Escape line, for the same reason: it opens from the session header, which the backdrop leaves lit, so it can be the thing on top of the panel. The same cover line too, only while it is a drawer. It needs no click line: it portals a backdrop of its own (§4) |
+| `web/src/components/Layout/Sidebar.tsx` | the same Escape line, for the same reason: it opens from the session header, which the backdrop leaves lit, so it can be the thing on top of the panel. The same cover line too, only while it is a drawer. It needs no click line: it draws a backdrop of its own outside `ChatPanel` (§4) |
 | `web/src/components/Chat/InputBar.tsx` | claims the click its command palette and `+` menu dismiss on — both hang over the composer with no backdrop, at every width (§4) |
 | `packages/shared/src/hooks/useOutsideClick.ts` | hands the caller the event beside the target, which is what lets a caller claim the gesture at all (§4) |
 | `web/src/components/Chat/QuestionForm.tsx` | extracted from `AskUserQuestionItem.tsx`; the one renderer of a question, across every host that draws one — including the third shape, a textarea for a question with no options — and of the note beside an answer, editable or read-only (§3) |

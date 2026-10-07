@@ -106,6 +106,29 @@ being a dismissable drawer, so its 288px stopped being unrecoverable, and
 `Sheet` stopped turning bottom drawers into centred modals at 768 — on a portrait
 tablet the bottom drawer is the thumb-reachable one.
 
+### Below `expanded` the sidebar is a modal dialog
+
+The drawer covers the chat, so it behaves as a modal: `role="dialog"`,
+`aria-modal`, and while it is open `AppShell` puts `inert` on everything else in
+the shell — the banners and `ChatPanel`, the answer panel included. There is no
+hand-written focus trap. `inert` already keeps Tab and a screen reader inside the
+drawer, and a trap would be one more piece that can disagree with it. The two
+wrappers that carry the attribute are `display: contents`, so they do not change
+the layout. In the expanded tier the column is part of the page, so nothing is
+`inert` and the column takes no focus.
+
+Focus goes **in** to the panel itself, not to its first control, which is what a
+`Sheet` does too: landing on the dialog announces its name. Focus goes **back**
+to the opener on every way of closing. `AppShell` owns that, not `Sidebar`,
+because the page goes `inert` in the same commit that opens the drawer, so the
+opener has already lost focus before any effect inside `Sidebar` runs. The opener
+is recorded in the press handler for that reason.
+
+The backdrop's `Close sidebar` button sits **inside** the dialog on purpose. It is
+the one close control `Sidebar` guarantees whatever content it is given — the
+X in the tabbed sidebar's header belongs to that content, and an extension's
+`SidebarContent` need not have one — and a touch screen reader has no Escape key.
+
 ### One source for the numbers
 
 `BREAKPOINTS` in `packages/shared/src/utils/responsive.ts` is the only place the
@@ -566,6 +589,12 @@ width is a preference (P2); Delete is an operation.
 > easier at the cost of an operation.**
 
 This is written down so the next reader does not "fix" it in passing.
+
+A keyboard does not need the strip to be wider either. The handle is a focusable
+WAI-ARIA window splitter (`role="separator"` with its value): the arrow keys move
+it a step at a time, and Home and End jump to its limits. Its focus
+indicator is the same accent line that hover shows. A focus ring around an 8px
+strip would be drawn over the column's own border.
 
 ### Outside the floor today
 

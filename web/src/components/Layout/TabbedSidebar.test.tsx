@@ -1,5 +1,6 @@
 import { fireEvent, render, screen } from "@testing-library/react";
-import { GitCompare, MessageSquare } from "lucide-react";
+import userEvent from "@testing-library/user-event";
+import { Folder, GitCompare, MessageSquare } from "lucide-react";
 import { useContext } from "react";
 import { describe, expect, it } from "vitest";
 import { SidebarContext } from "./SidebarContext";
@@ -24,17 +25,124 @@ function renderWithCount(
 	);
 }
 
+const threeTabs: TabConfig[] = [
+	{ id: "sessions", label: "Sessions", icon: MessageSquare },
+	{ id: "files", label: "Files", icon: Folder },
+	{ id: "git", label: "Git", icon: GitCompare },
+];
+
+function renderThreeTabs() {
+	render(
+		<TabbedSidebar
+			isOpen={true}
+			onClose={() => {}}
+			tabs={threeTabs}
+			defaultTab="sessions"
+			isExpanded={true}
+		>
+			<div />
+		</TabbedSidebar>,
+	);
+}
+
+function expectSelected(name: string) {
+	const tab = screen.getByRole("tab", { name });
+	expect(tab).toHaveAttribute("aria-selected", "true");
+	expect(tab).toHaveAttribute("tabindex", "0");
+	expect(tab).toHaveFocus();
+	expect(screen.getByRole("tabpanel")).toHaveAccessibleName(name);
+}
+
 describe("TabbedSidebar", () => {
+	it("exposes the bar as a tablist whose selected tab labels the panel", () => {
+		renderThreeTabs();
+		expect(screen.getAllByRole("tab")).toHaveLength(3);
+		expect(screen.getByRole("tablist")).toBeInTheDocument();
+
+		const sessions = screen.getByRole("tab", { name: "Sessions" });
+		expect(sessions).toHaveAttribute("aria-selected", "true");
+		expect(screen.getByRole("tab", { name: "Files" })).toHaveAttribute(
+			"aria-selected",
+			"false",
+		);
+		const panel = screen.getByRole("tabpanel", { name: "Sessions" });
+		expect(sessions).toHaveAttribute("aria-controls", panel.id);
+
+		fireEvent.click(screen.getByRole("tab", { name: "Files" }));
+		expect(screen.getByRole("tab", { name: "Files" })).toHaveAttribute(
+			"aria-selected",
+			"true",
+		);
+		expect(sessions).toHaveAttribute("aria-selected", "false");
+		expect(screen.getByRole("tabpanel")).toHaveAccessibleName("Files");
+	});
+
+	it("keeps only the selected tab in the tab order", () => {
+		renderThreeTabs();
+		expect(screen.getByRole("tab", { name: "Sessions" })).toHaveAttribute(
+			"tabindex",
+			"0",
+		);
+		expect(screen.getByRole("tab", { name: "Files" })).toHaveAttribute(
+			"tabindex",
+			"-1",
+		);
+		expect(screen.getByRole("tab", { name: "Git" })).toHaveAttribute(
+			"tabindex",
+			"-1",
+		);
+	});
+
+	it("moves and selects with the arrow keys, wrapping at both ends", async () => {
+		const user = userEvent.setup();
+		renderThreeTabs();
+		screen.getByRole("tab", { name: "Sessions" }).focus();
+
+		await user.keyboard("{ArrowRight}");
+		expectSelected("Files");
+
+		await user.keyboard("{ArrowRight}");
+		expectSelected("Git");
+
+		await user.keyboard("{ArrowRight}");
+		expectSelected("Sessions");
+
+		await user.keyboard("{ArrowLeft}");
+		expectSelected("Git");
+	});
+
+	it("jumps to the first and last tab with Home and End", async () => {
+		const user = userEvent.setup();
+		renderThreeTabs();
+		screen.getByRole("tab", { name: "Sessions" }).focus();
+
+		await user.keyboard("{End}");
+		expectSelected("Git");
+
+		await user.keyboard("{Home}");
+		expectSelected("Sessions");
+	});
+
+	it("gives every tab the same bottom border so the selected icon does not sit higher", () => {
+		renderThreeTabs();
+		for (const tab of screen.getAllByRole("tab")) {
+			expect(tab).toHaveClass("border-b-2");
+		}
+		expect(screen.getByRole("tab", { name: "Files" })).toHaveClass(
+			"border-transparent",
+		);
+	});
+
 	it("speaks the count after the tab label", () => {
 		renderWithCount({ value: 5, label: "5 changed files" });
 		expect(
-			screen.getByRole("button", { name: "Git, 5 changed files" }),
+			screen.getByRole("tab", { name: "Git, 5 changed files" }),
 		).toBeInTheDocument();
 	});
 
 	it("speaks the plain tab label when there is no count", () => {
 		renderWithCount(undefined);
-		expect(screen.getByRole("button", { name: "Git" })).toBeInTheDocument();
+		expect(screen.getByRole("tab", { name: "Git" })).toBeInTheDocument();
 	});
 
 	it("falls back to the default tab when the open one is taken away, and stays there when it returns", () => {
@@ -60,7 +168,7 @@ describe("TabbedSidebar", () => {
 		);
 
 		const { rerender } = render(renderTabs([sessions, git]));
-		fireEvent.click(screen.getByRole("button", { name: "Git" }));
+		fireEvent.click(screen.getByRole("tab", { name: "Git" }));
 		expect(screen.getByText("active: git")).toBeInTheDocument();
 
 		rerender(renderTabs([sessions]));
