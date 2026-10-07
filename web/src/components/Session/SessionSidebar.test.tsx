@@ -192,7 +192,7 @@ describe("the Git tab's change count", () => {
 		gitChangeCount = 5;
 		renderSidebar(vi.fn());
 		expect(
-			screen.getByRole("button", { name: "Git, 5 changed files" }),
+			screen.getByRole("tab", { name: "Git, 5 changed files" }),
 		).toBeInTheDocument();
 	});
 
@@ -200,14 +200,14 @@ describe("the Git tab's change count", () => {
 		gitChangeCount = 1;
 		renderSidebar(vi.fn());
 		expect(
-			screen.getByRole("button", { name: "Git, 1 changed file" }),
+			screen.getByRole("tab", { name: "Git, 1 changed file" }),
 		).toBeInTheDocument();
 	});
 
 	it("says nothing at all when there is nothing changed", () => {
 		gitChangeCount = 0;
 		renderSidebar(vi.fn());
-		expect(screen.getByRole("button", { name: "Git" })).toBeInTheDocument();
+		expect(screen.getByRole("tab", { name: "Git" })).toBeInTheDocument();
 	});
 });
 
@@ -219,13 +219,13 @@ describe("the Git tab", () => {
 	it("is left out of a project that is not a git repository", () => {
 		worktreeActions.setIsGitRepo(false);
 		renderSidebar(vi.fn());
-		expect(screen.queryByRole("button", { name: "Git" })).toBeNull();
-		expect(screen.getByRole("button", { name: "Files" })).toBeInTheDocument();
+		expect(screen.queryByRole("tab", { name: "Git" })).toBeNull();
+		expect(screen.getByRole("tab", { name: "Files" })).toBeInTheDocument();
 	});
 
 	it("is left out until the server has said the project is one", () => {
 		renderSidebar(vi.fn());
-		expect(screen.queryByRole("button", { name: "Git" })).toBeNull();
+		expect(screen.queryByRole("tab", { name: "Git" })).toBeNull();
 	});
 });
 
