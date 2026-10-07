@@ -309,7 +309,7 @@ describe("ToolCallItem", () => {
 				draw(edit);
 				await open();
 
-				const header = screen.getByText("Change").parentElement;
+				const header = screen.getByText("Change").parentElement?.parentElement;
 				expect(header).toHaveTextContent("+2 −1");
 			});
 
@@ -330,7 +330,7 @@ describe("ToolCallItem", () => {
 				expect(error).toHaveTextContent(/^String to replace not found/);
 				expect(precedes(error, screen.getByText("Change"))).toBe(true);
 				expect(screen.queryByText(/tool_use_error/)).toBeNull();
-				const header = screen.getByText("Change").parentElement;
+				const header = screen.getByText("Change").parentElement?.parentElement;
 				expect(header).toHaveTextContent(/not applied\s*\+2 −1$/);
 			});
 
@@ -347,9 +347,9 @@ describe("ToolCallItem", () => {
 				await open();
 
 				expect(screen.getByText("Error")).toBeVisible();
-				expect(screen.getByText("Content").parentElement).toHaveTextContent(
-					/not applied$/,
-				);
+				expect(
+					screen.getByText("Content").parentElement?.parentElement,
+				).toHaveTextContent(/not applied$/);
 			});
 
 			// A phone's width cuts most lines of code; scrolling each one sideways
@@ -382,9 +382,9 @@ describe("ToolCallItem", () => {
 				});
 				await open();
 
-				expect(screen.getByText("Content").parentElement).not.toHaveTextContent(
-					"+",
-				);
+				expect(
+					screen.getByText("Content").parentElement?.parentElement,
+				).not.toHaveTextContent("+");
 				expect(
 					screen.queryByRole("button", { name: "Wrap long lines" }),
 				).toBeNull();

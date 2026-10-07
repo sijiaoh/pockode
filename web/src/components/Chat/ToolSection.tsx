@@ -1,5 +1,11 @@
-import { ChevronRight, ChevronsDownUp } from "lucide-react";
-import { type ReactNode, useId, useRef, useState } from "react";
+import { ChevronRight, ChevronsDownUp, Maximize2 } from "lucide-react";
+import { type ReactNode, useId, useMemo, useRef, useState } from "react";
+import {
+	FULL_SCREEN_OPENER_ATTR,
+	type FullScreenContent,
+	type FullScreenSource,
+	type FullScreenSubject,
+} from "../../lib/fullScreen";
 import {
 	BlockHeader,
 	type ClampBudget,
@@ -8,9 +14,24 @@ import {
 	type ClampHandle,
 	CollapsibleBody,
 	HeaderCopyButton,
+	headerButtonClass,
 } from "../ui";
+import { useFullScreen } from "./FullScreenHost";
+import { ContentSlice, hugeClamp, useHugeContent } from "./HugeContent";
 import { useTranscriptView } from "./transcriptViewContext";
 import { useStuckBar } from "./useStuckBar";
+
+/**
+ * What a section shows in full screen beyond what it already has — its label,
+ * meta, copy text and reading end are the viewer's too.
+ */
+export interface SectionFullScreen {
+	/** Names the block across remounts; see `FullScreenHost`. */
+	key: string;
+	title: string;
+	subject?: FullScreenSubject;
+	content: FullScreenContent;
+}
 
 interface Props {
 	label: string;
@@ -39,8 +60,17 @@ interface Props {
 	clampFrom?: "start" | "end";
 	/** See `ClampedContent`. */
 	count?: ClampCount;
-	/** See `ClampedContent`. */
-	fullScreenTitle?: string;
+	/**
+	 * Offered in full screen once the block is cut. Only for a `main` block:
+	 * what supports it is never long enough to need a screen of its own.
+	 */
+	fullScreen?: SectionFullScreen;
+	/**
+	 * What the block holds, lowercased, completing its controls' names — "Show
+	 * less of output", "Open output in full screen". The label lowercased where
+	 * that reads as a noun, which "Full reasoning" or "Output so far" does not.
+	 */
+	noun?: string;
 	/** See `ClampedContent`. */
 	follow?: boolean;
 }
@@ -67,10 +97,12 @@ export function Section({
 	budget = "supporting",
 	clampFrom,
 	count,
-	fullScreenTitle,
+	fullScreen,
+	noun,
 	follow,
 }: Props) {
 	const view = useTranscriptView();
+	const rootRef = useRef<HTMLDivElement>(null);
 	const headerRef = useRef<HTMLDivElement>(null);
 	const clampRef = useRef<ClampHandle>(null);
 	const boxId = useId();
@@ -79,7 +111,43 @@ export function Section({
 	const [clampOpen, setClampOpen] = useState(false);
 	const pinned = clampOpen && open;
 	useStuckBar(headerRef, pinned);
-	const name = label.toLowerCase();
+	const name = noun ?? label.toLowerCase();
+	const [cut, setCut] = useState(false);
+	const source = useMemo<FullScreenSource | undefined>(
+		() =>
+			fullScreen && {
+				title: fullScreen.title,
+				subject: fullScreen.subject,
+				label,
+				noun: name,
+				from: clampFrom ?? "start",
+				copyText,
+				meta,
+				content: fullScreen.content,
+			},
+		[fullScreen, label, name, clampFrom, copyText, meta],
+	);
+	const openFullScreen = useFullScreen(fullScreen?.key ?? "", source);
+	const { pending, huge } = useHugeContent({
+		content: budget === "main" ? fullScreen?.content : undefined,
+		from: clampFrom ?? "start",
+		noun: name,
+		rootRef,
+		openedInPlace: clampOpen,
+		enabled: openFullScreen !== null,
+	});
+	const fullScreenButton = cut && openFullScreen && fullScreen && (
+		<button
+			type="button"
+			onClick={openFullScreen}
+			aria-label={`Open ${name} in full screen`}
+			aria-haspopup="dialog"
+			{...{ [FULL_SCREEN_OPENER_ATTR]: fullScreen.key }}
+			className={headerButtonClass()}
+		>
+			<Maximize2 size={14} aria-hidden="true" />
+		</button>
+	);
 
 	const title = collapsible ? (
 		<button
@@ -102,16 +170,20 @@ export function Section({
 		<BlockHeader
 			label={
 				meta ? (
+					// The label gives way first, down to a few characters; only then
+					// the meta, which holds what the block amounts to.
 					<>
-						{title}
-						<span className="ml-2 shrink-0">{meta}</span>
+						<span className="flex min-w-[3ch] shrink-[1000] overflow-hidden">
+							{title}
+						</span>
+						<span className="ml-2 flex min-w-0">{meta}</span>
 					</>
 				) : (
 					title
 				)
 			}
 			actions={
-				(actions || copyText || pinned) && (
+				(actions || copyText || fullScreenButton || pinned) && (
 					<>
 						{actions}
 						{copyText && (
@@ -120,6 +192,9 @@ export function Section({
 								label={copyLabel ?? `Copy ${name}`}
 							/>
 						)}
+						{/* The last persistent action, so it sits at the same place in
+						    every header; collapsing comes and goes outside it. */}
+						{fullScreenButton}
 						{pinned && (
 							<button
 								type="button"
@@ -128,7 +203,7 @@ export function Section({
 								aria-controls={boxId}
 								// The clamp's own button's name: the two do the same.
 								aria-label={`Show less of ${name}`}
-								className="touch-target flex size-6 items-center justify-center rounded text-th-text-muted hover:bg-th-overlay-hover hover:text-th-text-primary"
+								className={headerButtonClass()}
 							>
 								<ChevronsDownUp size={14} aria-hidden="true" />
 							</button>
@@ -139,29 +214,30 @@ export function Section({
 		/>
 	);
 
-	const body =
-		budget === "none" ? (
-			children
-		) : (
-			<ClampedContent
-				budget={budget}
-				from={clampFrom}
-				count={count}
-				name={name}
-				fullScreenTitle={fullScreenTitle}
-				view={view}
-				landingRef={headerRef}
-				id={boxId}
-				ref={clampRef}
-				onOpenChange={setClampOpen}
-				follow={follow}
-			>
-				{children}
-			</ClampedContent>
-		);
+	const body = pending ? null : budget === "none" ? (
+		children
+	) : (
+		<ClampedContent
+			budget={budget}
+			from={clampFrom}
+			count={count}
+			name={name}
+			onCutChange={setCut}
+			huge={hugeClamp(huge, fullScreen?.key, openFullScreen)}
+			view={view}
+			landingRef={headerRef}
+			id={boxId}
+			ref={clampRef}
+			onOpenChange={setClampOpen}
+			follow={follow}
+		>
+			{huge ? <ContentSlice content={huge.slice} /> : children}
+		</ClampedContent>
+	);
 
 	return (
 		<div
+			ref={rootRef}
 			// A foldable title's hit area reaches 10px above the header under a
 			// thumb, as does a cut section's button below its content, and the
 			// body's 12px between sections cannot hold both: the title is moved

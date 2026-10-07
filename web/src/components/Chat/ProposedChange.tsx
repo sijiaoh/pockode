@@ -1,4 +1,3 @@
-import { WrapText } from "lucide-react";
 import type { ReactNode } from "react";
 import type { CodexChangeView } from "../../lib/codexChanges";
 import {
@@ -6,46 +5,24 @@ import {
 	useDiffSettingsStore,
 } from "../../lib/diffSettingsStore";
 import { diffStat } from "../../lib/diffStat";
-import type { ProposedChangeData } from "../../lib/proposedChange";
+import {
+	type FullScreenContent,
+	fileFullScreenContent,
+} from "../../lib/fullScreen";
+import {
+	changePatches,
+	type ProposedChangeData,
+} from "../../lib/proposedChange";
 import type { LineCounts } from "../../lib/turnChanges";
 import { useWSStore } from "../../lib/wsStore";
 import { GIT_STATUS_INFO } from "../../types/git";
 import { formatFilePath } from "../../utils/path";
-import { DiffViewer, FileContentDisplay } from "../ui";
-
-function changePatches(change: ProposedChangeData): string[] | undefined {
-	switch (change.kind) {
-		case "edit":
-		case "multiEdit":
-			return change.patches;
-		case "codex":
-			return change.changes.flatMap((c) => (c.patch ? [c.patch] : []));
-		case "write":
-			return undefined;
-	}
-}
-
-/**
- * The rows the change is drawn in, for counting what a cut hides: a new
- * file's lines, or a diff's hunk headers and lines without the file headers
- * the viewer leaves out.
- */
-export function changeRowCount(change: ProposedChangeData): number {
-	const patches = changePatches(change);
-	if (!patches) {
-		return change.kind === "write"
-			? change.input.content.replace(/\n+$/, "").split("\n").length
-			: 0;
-	}
-	let rows = 0;
-	for (const patch of patches) {
-		for (const line of patch.split("\n")) {
-			if (line.startsWith("+++") || line.startsWith("---")) continue;
-			if (/^[ +\-@]/.test(line)) rows++;
-		}
-	}
-	return rows;
-}
+import {
+	DiffViewer,
+	FileContentDisplay,
+	type HeaderButtonSize,
+	WrapLinesToggle,
+} from "../ui";
 
 /**
  * `+N −M`, with a side that is zero or unknown left out rather than `−0`.
@@ -99,38 +76,54 @@ export function proposedChangeHeader(
 	// No `·` before it: the header already sets meta off from the label by a
 	// gap, and a dot inside that gap sat closer to the words after it than to
 	// the label before.
-	const notApplied = !applied && <span>not applied</span>;
+	// Truncated first when the header runs out of room; the counts never are.
+	const notApplied = !applied && (
+		<span className="min-w-0 truncate">not applied</span>
+	);
 	const patches = changePatches(change);
 	// A Codex change of hunkless files only (an empty add, a pure rename) has
 	// nothing to count and nothing to wrap.
 	if (!patches?.length) return notApplied ? { meta: notApplied } : {};
 	return {
 		meta: (
-			<span className="flex items-baseline gap-1.5">
+			<span className="flex min-w-0 items-baseline gap-1.5">
 				{notApplied}
 				{notApplied && " "}
 				<LineCountsLabel lines={diffStat(patches)} muted={!applied} />
 			</span>
 		),
-		actions: <WrapLinesToggle />,
+		actions: <DiffWrapToggle />,
 	};
 }
 
-function WrapLinesToggle() {
+/** The diffs' wrap switch, whose choice every diff shares and is remembered. */
+export function DiffWrapToggle({ size }: { size?: HeaderButtonSize }) {
 	const wrap = useDiffSettingsStore((s) => s.wrapLines);
 	return (
-		<button
-			type="button"
-			aria-label="Wrap long lines"
-			aria-pressed={wrap}
-			onClick={diffSettingsActions.toggleWrapLines}
-			className={`touch-target flex size-6 items-center justify-center rounded hover:bg-th-overlay-hover hover:text-th-text-primary ${
-				wrap ? "bg-th-bg-tertiary text-th-text-primary" : "text-th-text-muted"
-			}`}
-		>
-			<WrapText size={14} aria-hidden="true" />
-		</button>
+		<WrapLinesToggle
+			pressed={wrap}
+			onToggle={diffSettingsActions.toggleWrapLines}
+			size={size}
+		/>
 	);
+}
+
+/** Whether the change is drawn as diffs, which is what a wrap switch is for. */
+export function changeHasDiffs(change: ProposedChangeData): boolean {
+	return Boolean(changePatches(change)?.length);
+}
+
+/**
+ * A change as the full screen viewer reads it. A Write is its new file's
+ * content rather than a change: drawn as one, it would go through the
+ * transcript's file view, which takes no wrap.
+ */
+export function changeFullScreenContent(
+	change: ProposedChangeData,
+): FullScreenContent {
+	return change.kind === "write"
+		? fileFullScreenContent(change.input.content, change.input.file_path)
+		: { kind: "change", change };
 }
 
 function PatchList({

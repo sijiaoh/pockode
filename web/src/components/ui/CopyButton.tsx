@@ -11,6 +11,7 @@ interface Props {
 	className: string;
 	/** The button's name until it has been pressed. */
 	label?: string;
+	iconSize?: number;
 }
 
 /**
@@ -19,7 +20,12 @@ interface Props {
  * Bare of any placement: inside a block's header (`BlockHeader`) or laid over a
  * code block's corner, the caller decides where it sits and how large.
  */
-export function CopyButton({ text, className, label = "Copy" }: Props) {
+export function CopyButton({
+	text,
+	className,
+	label = "Copy",
+	iconSize = 14,
+}: Props) {
 	const { state, copy } = useCopyToClipboard({ resetAfterMs: 2000 });
 
 	return (
@@ -39,11 +45,11 @@ export function CopyButton({ text, className, label = "Copy" }: Props) {
 			}
 		>
 			{state === "copied" ? (
-				<Check size={14} />
+				<Check size={iconSize} />
 			) : state === "failed" ? (
-				<X size={14} />
+				<X size={iconSize} />
 			) : (
-				<Copy size={14} />
+				<Copy size={iconSize} />
 			)}
 		</button>
 	);

@@ -735,7 +735,7 @@ const SCENES = [
 	{
 		name: "keep-place",
 		run: async ({ page, shared, shot }) => {
-			await openChat(page, shared.fullRun, "All 1999 tests pass.");
+			await openChat(page, shared.fullRun, "All 59 tests pass.");
 			// Pinned before the click, as in `expandAndShoot`.
 			await disclosure(page, "set -euo pipefail").evaluate((el) =>
 				el.setAttribute("data-walk", "full-run"),
@@ -791,7 +791,7 @@ const SCENES = [
 			await placeAt(earlier, 150);
 			await earlier.click();
 			await settle(page);
-			await placeAt(less, -1200);
+			await placeAt(less, -400);
 			await logPinnedHeader(page, "keep-header-pinned");
 			await shot("keep-header-pinned");
 			await less.evaluate((el) => {
@@ -805,7 +805,7 @@ const SCENES = [
 			await page.waitForTimeout(200);
 			await logPinnedHeader(page, "keep-header-leaving");
 			await shot("keep-header-leaving");
-			await placeAt(less, -1200);
+			await placeAt(less, -400);
 			const collapse = page.locator(".section-bar button[aria-controls]");
 			await collapse.click();
 			await settle(page);

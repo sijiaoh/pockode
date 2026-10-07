@@ -1,4 +1,10 @@
-import { type ReactNode, useEffect, useId, useRef } from "react";
+import {
+	type ReactNode,
+	type RefObject,
+	useEffect,
+	useId,
+	useRef,
+} from "react";
 import { createPortal } from "react-dom";
 import { useLockBodyScroll } from "../hooks/useLockBodyScroll.ts";
 import { useIsExpanded } from "../hooks/useResponsive.ts";
@@ -6,6 +12,8 @@ import { useCloseWhenCovered } from "./CoveredSurface.tsx";
 
 export interface SheetProps {
 	title: string;
+	/** Under the title, inside the header: what the sheet is about, in full. */
+	subtitle?: ReactNode;
 	onClose: () => void;
 	/**
 	 * Set false while an operation is in flight: the backdrop, Escape and the
@@ -25,13 +33,20 @@ export interface SheetProps {
 	 * modal's `max-w-md` would cut down to the size it was opened to escape.
 	 */
 	fullScreen?: boolean;
+	/**
+	 * Where focus goes on open instead of the dialog itself: a scroller that
+	 * the keys should move at once, which the dialog element would leave dead.
+	 * Landing inside the dialog still announces its name.
+	 */
+	initialFocusRef?: RefObject<HTMLElement | null>;
 	children: ReactNode;
 }
 
 /**
  * Moves focus into the sheet on open and hands it back on close.
  *
- * Focus goes to the dialog element itself, not to the first focusable element.
+ * Focus goes to the dialog element itself (or to `initialFocusRef`, which is
+ * inside it), not to the first focusable element.
  * First in the DOM is the close button, so the alternative opens every sheet
  * on "Close" — no information, and one stray Enter from dismissing it. The
  * dialog element is the one carrying `aria-labelledby`, so landing there reads
@@ -46,20 +61,23 @@ export interface SheetProps {
  * body by then, dropped there when the sheet holding it unmounted — not by
  * this call — and a sheet taking over claims it from there.
  */
-function useSheetFocus(ref: React.RefObject<HTMLElement | null>): void {
+function useSheetFocus(
+	ref: RefObject<HTMLElement | null>,
+	initialFocusRef?: RefObject<HTMLElement | null>,
+): void {
 	useEffect(() => {
 		const sheet = ref.current;
 		if (!sheet) return;
 
 		const opener = document.activeElement;
-		sheet.focus({ preventScroll: true });
+		(initialFocusRef?.current ?? sheet).focus({ preventScroll: true });
 
 		return () => {
 			if (opener instanceof HTMLElement) {
 				opener.focus({ preventScroll: true });
 			}
 		};
-	}, [ref]);
+	}, [ref, initialFocusRef]);
 }
 
 const FOCUSABLE_SELECTOR = [
@@ -89,11 +107,13 @@ const FOCUSABLE_SELECTOR = [
  */
 export function Sheet({
 	title,
+	subtitle,
 	onClose,
 	dismissible = true,
 	onSubmit,
 	footer,
 	fullScreen = false,
+	initialFocusRef,
 	children,
 }: SheetProps) {
 	const isExpanded = useIsExpanded();
@@ -133,7 +153,7 @@ export function Sheet({
 	}, [onClose, dismissible]);
 
 	useLockBodyScroll();
-	useSheetFocus(sheetRef);
+	useSheetFocus(sheetRef, initialFocusRef);
 	// This sheet is portalled to the body, so nothing its opener does to put
 	// itself away reaches it. Closing with the surface it was raised from is
 	// the sheet's own job, and the only one it can be (CoveredSurface).
@@ -238,13 +258,20 @@ export function Sheet({
 				    undeclared one keeps the class and emits nothing, leaving the
 				    button at 36px in that project only. Pinned by
 				    web/tests/responsiveTokens.test.ts. */}
-				<div className="flex shrink-0 items-center justify-between border-b border-th-border px-4 py-3">
-					<h2
-						id={titleId}
-						className="min-w-0 truncate text-base font-bold text-th-text-primary"
-					>
-						{title}
-					</h2>
+				<div
+					className={`flex shrink-0 justify-between gap-2 border-b border-th-border px-4 ${
+						subtitle ? "items-start py-2" : "items-center py-3"
+					}`}
+				>
+					<div className="min-w-0 flex-1">
+						<h2
+							id={titleId}
+							className="truncate text-base font-bold text-th-text-primary"
+						>
+							{title}
+						</h2>
+						{subtitle}
+					</div>
 					<button
 						type="button"
 						onClick={onClose}

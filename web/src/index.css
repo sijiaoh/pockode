@@ -1101,6 +1101,25 @@ samp {
 }
 
 /* =============================================================================
+ * FIND IN THE FULL SCREEN VIEWER
+ *
+ * Highlights over the rendered text (the Custom Highlight API) rather than
+ * `<mark>`s in it: shiki's and the diff library's DOM is left alone, and a
+ * mono column cannot shift. Every match has the transcript's `<mark>` tint;
+ * the current one is deeper and underlined, so hue is not the only cue —
+ * `::highlight` takes a text decoration where it takes no outline.
+ * ============================================================================= */
+
+::highlight(find-match) {
+	background-color: color-mix(in srgb, var(--th-accent) 20%, transparent);
+}
+
+::highlight(find-current) {
+	background-color: color-mix(in srgb, var(--th-accent) 45%, transparent);
+	text-decoration: underline 2px var(--th-accent);
+}
+
+/* =============================================================================
  * ASYNC MEDIA
  *
  * Chat scroll decisions (follow-the-tail, history-page anchoring) are measured

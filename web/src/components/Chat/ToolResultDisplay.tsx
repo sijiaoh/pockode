@@ -1,15 +1,24 @@
 import { AnsiUp } from "ansi_up";
 import { useMemo } from "react";
 import { groupContentBlocks } from "../../lib/contentBlocks";
-import { proposedChange, proposedChangeText } from "../../lib/proposedChange";
+import {
+	type FullScreenContent,
+	fileFullScreenContent,
+} from "../../lib/fullScreen";
+import {
+	changeRowCount,
+	proposedChange,
+	proposedChangeText,
+} from "../../lib/proposedChange";
 import { CodeHighlighter } from "../../lib/shikiUtils";
+import { outputLineCount, outputLines } from "../../lib/textLines";
 import { parseReadResult } from "../../lib/toolResultParser";
 import { useWSStore } from "../../lib/wsStore";
 import type { ContentBlock } from "../../types/content";
 import { HIGHLIGHT_LIMIT } from "../../utils/fileView";
 import { formatFilePath, relativeToWorkDir } from "../../utils/path";
 import { type ClampCount, FileContentDisplay, MarkdownContent } from "../ui";
-import { changeRowCount, ProposedChange } from "./ProposedChange";
+import { changeFullScreenContent, ProposedChange } from "./ProposedChange";
 
 const ansiUp = new AnsiUp();
 ansiUp.use_classes = true;
@@ -76,9 +85,56 @@ function filePaths(result: string): string[] | null {
 }
 
 /**
+ * A file as a row shortened against the work directory, offering the way over
+ * to the Files tab.
+ */
+export function FilePathRow({
+	path,
+	onOpenFile,
+}: {
+	path: string;
+	/** Given the path relative to the work directory. */
+	onOpenFile?: (path: string) => void;
+}) {
+	const workDir = useWSStore((s) => s.workDir);
+	const relative = relativeToWorkDir(path, workDir);
+	return (
+		<div className="flex items-center gap-2">
+			<span className="min-w-0 flex-1 truncate text-th-text-primary">
+				{formatFilePath(path, workDir)}
+			</span>
+			{relative && onOpenFile && (
+				<button
+					type="button"
+					onClick={() => onOpenFile(relative)}
+					className="min-h-[36px] shrink-0 rounded px-2 text-th-accent pointer-coarse:min-h-11 hover:bg-th-overlay-hover"
+				>
+					Open
+				</button>
+			)}
+		</div>
+	);
+}
+
+export function FilePathRows({
+	paths,
+	onOpenFile,
+}: {
+	paths: string[];
+	onOpenFile?: (path: string) => void;
+}) {
+	return (
+		<div className="space-y-0.5">
+			{paths.map((path) => (
+				<FilePathRow key={path} path={path} onOpenFile={onOpenFile} />
+			))}
+		</div>
+	);
+}
+
+/**
  * A search's result is a list of files, and reading one is scanning for a
- * name. Drawn as rows shortened against the work directory, each offering the
- * way over to the Files tab — before this it was one long unwrapped line.
+ * name — before this it was one long unwrapped line.
  */
 function FileListDisplay({
 	result,
@@ -87,7 +143,6 @@ function FileListDisplay({
 	result: string;
 	onOpenFile?: (path: string) => void;
 }) {
-	const workDir = useWSStore((s) => s.workDir);
 	const paths = useMemo(() => filePaths(result), [result]);
 
 	if (!paths) {
@@ -100,25 +155,7 @@ function FileListDisplay({
 
 	return (
 		<div className="space-y-0.5">
-			{shown.map((path) => {
-				const relative = relativeToWorkDir(path, workDir);
-				return (
-					<div key={path} className="flex items-center gap-2">
-						<span className="min-w-0 flex-1 truncate text-th-text-primary">
-							{formatFilePath(path, workDir)}
-						</span>
-						{relative && onOpenFile && (
-							<button
-								type="button"
-								onClick={() => onOpenFile(relative)}
-								className="min-h-[36px] shrink-0 rounded px-2 text-th-accent pointer-coarse:min-h-11 hover:bg-th-overlay-hover"
-							>
-								Open
-							</button>
-						)}
-					</div>
-				);
-			})}
+			<FilePathRows paths={shown} onOpenFile={onOpenFile} />
 			{paths.length > shown.length && (
 				<p className="text-th-text-muted">
 					and {paths.length - shown.length} more
@@ -181,7 +218,7 @@ function UnknownResultDisplay({ result }: { result: string }) {
  * runner's `FAIL` — and a handful of lines holds it without painting a whole
  * log red.
  */
-const ERROR_TAIL_LINES = 5;
+export const ERROR_TAIL_LINES = 5;
 
 /**
  * How text that says why a call failed is drawn in its body — a failed
@@ -191,21 +228,20 @@ const ERROR_TAIL_LINES = 5;
 export const FAILURE_TEXT =
 	"border-l-2 border-th-error bg-th-error/10 pl-2 text-th-error";
 
-function outputLines(result: string): string[] {
-	return result.replace(/\n+$/, "").split("\n");
-}
-
-/** Lines in a text, not counting the newlines it ends with. */
-export function outputLineCount(result: string): number {
-	return outputLines(result).length;
-}
-
-function AnsiPre({ text, className }: { text: string; className: string }) {
+function AnsiPre({
+	text,
+	className,
+	wrap,
+}: {
+	text: string;
+	className: string;
+	wrap: boolean;
+}) {
 	const html = useMemo(() => ansiUp.ansi_to_html(text), [text]);
 
 	return (
 		<pre
-			className={`whitespace-pre-wrap break-words font-mono text-xs ${className}`}
+			className={`${wrap ? "whitespace-pre-wrap break-words" : "whitespace-pre"} font-mono text-xs ${className}`}
 			// biome-ignore lint/security/noDangerouslySetInnerHtml: ansi_up output is safe
 			dangerouslySetInnerHTML={{ __html: html }}
 		/>
@@ -216,13 +252,17 @@ function AnsiPre({ text, className }: { text: string; className: string }) {
  * A command's output, wrapped: a log line is read whole, and on a phone a
  * sideways scroll hid the end of nearly every one. A failed command's last
  * lines stand out, since that is where it says why.
+ *
+ * Unwrapped only on request, in full screen, for output laid out in columns.
  */
-function BashResultDisplay({
+export function BashResultDisplay({
 	result,
 	failed,
+	wrap = true,
 }: {
 	result: string;
 	failed?: boolean;
+	wrap?: boolean;
 }) {
 	const [head, tail] = useMemo(() => {
 		if (!failed) return [result, ""];
@@ -235,8 +275,10 @@ function BashResultDisplay({
 
 	return (
 		<>
-			{head && <AnsiPre text={head} className="text-th-text-muted" />}
-			{tail && <AnsiPre text={tail} className={FAILURE_TEXT} />}
+			{head && (
+				<AnsiPre text={head} className="text-th-text-muted" wrap={wrap} />
+			)}
+			{tail && <AnsiPre text={tail} className={FAILURE_TEXT} wrap={wrap} />}
 		</>
 	);
 }
@@ -329,6 +371,75 @@ export function resultCount(
 				noun: "line",
 				total: outputLineCount(prettyJson(result) ?? result),
 			};
+	}
+}
+
+/** The text of a result in blocks; its images stay in the transcript. */
+function contentBlocksText(blocks: ContentBlock[]): string {
+	return groupContentBlocks(blocks)
+		.flatMap((group) => (group.kind === "text" ? [group.text] : []))
+		.join("\n");
+}
+
+/**
+ * The result as the full screen viewer reads it — mirroring how
+ * `ToolResultDisplay` draws it, with nothing cut: every file of a search, not
+ * the first hundred.
+ */
+export function resultFullScreenContent(
+	toolName: string,
+	toolInput: unknown,
+	result: string,
+	{
+		contents,
+		failed,
+		onOpenFile,
+	}: {
+		contents?: ContentBlock[];
+		failed?: boolean;
+		onOpenFile?: (path: string) => void;
+	} = {},
+): FullScreenContent {
+	if (contents)
+		return {
+			kind: "output",
+			text: contentBlocksText(contents),
+			withAttachments: true,
+		};
+	const input = toolInput as Record<string, unknown> | undefined;
+	const unknown = (): FullScreenContent => {
+		const pretty = prettyJson(result);
+		return pretty
+			? { kind: "code", text: pretty, language: "json" }
+			: { kind: "output", text: result };
+	};
+
+	switch (toolName) {
+		case "Glob":
+		case "Grep": {
+			const paths =
+				toolName === "Glob" || grepListsFiles(input) ? filePaths(result) : null;
+			return paths
+				? { kind: "files", paths, onOpenFile }
+				: { kind: "output", text: result };
+		}
+		case "WebFetch":
+			return { kind: "markdown", markdown: result };
+		case "Read":
+			return fileFullScreenContent(
+				readResultCode(result),
+				typeof input?.file_path === "string" ? input.file_path : undefined,
+			);
+		case "Edit":
+		case "MultiEdit":
+		case "Write": {
+			const change = proposedChange(toolName, toolInput);
+			return change ? changeFullScreenContent(change) : unknown();
+		}
+		case "Bash":
+			return { kind: "output", text: result, failedTail: failed };
+		default:
+			return unknown();
 	}
 }
 

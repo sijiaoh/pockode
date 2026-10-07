@@ -427,8 +427,8 @@ and it becomes an icon-only button — on a screen where reconnection has alread
 given up, so it is the only way out.) The header itself keeps its two clusters
 `gap-2` apart, so a pressable heading — the session's title, a page's — stops
 8px short of that retry and of Settings rather than running into them.
-A tool section's *Show N more lines* / *Show less* / *Full screen*
-(`ClampedContent`) is a fourth, and its container is a height *budget* rather
+A tool section's *Show N more lines* / *Show less* (`ClampedContent`), and the
+*Full screen* beside them on a block with no header, is a fourth, and its container is a height *budget* rather
 than a fixed box: two of them stand between a command and its output, and as
 44px boxes they alone took an open `Bash` row past a phone's transcript
 ([tool-call-ui.md](tool-call-ui.md#budgets)). The box is a line of `text-xs`
@@ -436,7 +436,21 @@ plus `py-1`, 24px. Of the two checks, the horizontal one is the row's `gap-2`;
 the vertical one met a foldable section title, whose own overlay reaches 10px
 above its header — 20px of reach in a 12px gap — so a foldable section is moved
 `pointer-coarse:pt-2.5` clear (`Chat/ToolSection.tsx`), as `WorktreeItem`'s row
-was raised for `DeleteButton`.
+was raised for `DeleteButton`. A huge block's *Open full output · 12,408 lines*
+([tool-call-ui.md](tool-call-ui.md#huge-content)) meets the same check from the
+other side: drawn between a header and the content read from its end, its long
+label runs under the header's buttons, and the two overlays — 10px below the
+header's 24px boxes, 10px above its own — are 20px of reach in the header's 4px
+`pb-1`. It is moved `pointer-coarse:mt-4` (16px) clear, 20px with the `pb-1`.
+The header's actions themselves — up to four 24px boxes, the wrap switch, copy,
+Full screen and the pinned collapse — are the horizontal check four times
+over: at `gap-2` their centres were 32px apart, and both the 36px and the 44px
+overlays overlapped. The cluster is `gap-3 pointer-coarse:gap-5` (`BlockHeader`),
+centres 36 and 44px apart, 156px wide at its widest under a thumb.
+The full screen viewer's subject line is a `touch-target` button whose overlay
+reaches 14px below it, onto the toolbar's buttons, so under a subject the
+toolbar is moved `pointer-coarse:mt-2.5` clear
+([tool-call-ui.md](tool-call-ui.md#full-screen)).
 A tool section's header, pinned under an open row's bar, meets the vertical
 check again, with the bar as the neighbour: flush against it, the header's 24px
 copy and collapse buttons left their overlay's top under the bar — the row's

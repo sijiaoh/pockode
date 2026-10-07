@@ -10,6 +10,7 @@ import {
 	createHighlighter,
 	type Highlighter,
 	type ShikiTransformer,
+	type ThemedToken,
 } from "shiki";
 import { CopyButton } from "../components/ui/CopyButton";
 import { splitNativePath } from "../utils/path";
@@ -86,7 +87,7 @@ const TAB_WIDTH = 8;
  * `--hang` to 2ch). An indented JSON key wrapped back to 2ch would read as a
  * shallower key.
  */
-function lineHang(line: string): string | undefined {
+export function lineHang(line: string): string | undefined {
 	const indent = /^[ \t]*/.exec(line)?.[0] ?? "";
 	if (!indent) return undefined;
 	let width = 0;
@@ -338,6 +339,25 @@ async function ensureLanguage(language: string): Promise<void> {
 			// Language not supported
 		}
 	}
+}
+
+/**
+ * Code's colours as tokens per line, for a view that draws its lines itself —
+ * the full screen viewer's, which draws only the lines in view. Over the whole
+ * text at once, because a line's colours depend on the lines before it (an
+ * open comment). Null for a language shiki does not know.
+ */
+export async function highlightLines(
+	code: string,
+	language: string,
+): Promise<ThemedToken[][] | null> {
+	await ensureLanguage(language);
+	const hl = await ensureHighlighter();
+	if (!hl.getLoadedLanguages().includes(language)) return null;
+	return hl.codeToTokens(code, {
+		lang: language as BundledLanguage,
+		theme: cssVarTheme.name ?? "css-variables",
+	}).tokens;
 }
 
 /**

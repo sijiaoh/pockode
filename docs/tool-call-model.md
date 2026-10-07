@@ -200,6 +200,8 @@ interface ToolRun {
     activity?: string
     /** The tail of a running call's output, if the engine streams one. Live state. */
     output?: string
+    /** How many first lines `output` has lost to the reducer's 200-line cap. Live state. */
+    outputDroppedLines?: number
     result?: string
     /** The placeholder a backgrounded call handed back, kept beside the outcome. */
     placeholderResult?: string

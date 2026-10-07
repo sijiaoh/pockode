@@ -1,4 +1,4 @@
-import { Sheet, useHasCoarsePointer } from "@pockode/shared";
+import { useHasCoarsePointer } from "@pockode/shared";
 import { Maximize2 } from "lucide-react";
 import {
 	type CSSProperties,
@@ -11,6 +11,7 @@ import {
 	useRef,
 	useState,
 } from "react";
+import { FULL_SCREEN_OPENER_ATTR } from "../../lib/fullScreen";
 
 /**
  * How much of the page a block may take before it is cut.
@@ -154,10 +155,23 @@ interface Props {
 	 */
 	name?: string;
 	/**
-	 * Offer the content a screen of its own under this title, for what is read
-	 * at length — a whole file, a long diff — rather than merely skimmed.
+	 * Told before paint whenever the content starts or stops being cut, for a
+	 * header that offers something only for content that is: Full screen.
 	 */
-	fullScreenTitle?: string;
+	onCutChange?: (cut: boolean) => void;
+	/**
+	 * Offer Full screen beside the clamp's own button, for a block with no
+	 * header to carry it — a plan, a subagent's report. `key` is what it is
+	 * published under (`FULL_SCREEN_OPENER_ATTR`).
+	 */
+	fullScreen?: { key: string; open: () => void };
+	/**
+	 * Content too long to open in place (docs/tool-call-ui.md#huge-content):
+	 * `children` is only a slice of it, always drawn cut, and the clamp's one
+	 * button opens the viewer instead — `label` on screen, `name` to a screen
+	 * reader. It replaces the headerless Full screen button too.
+	 */
+	huge?: { key: string; label: string; name: string; open: () => void };
 	/** See `ClampView`. */
 	view?: ClampView | null;
 	/**
@@ -248,7 +262,9 @@ export function ClampedContent({
 	from = "start",
 	count,
 	name,
-	fullScreenTitle,
+	onCutChange,
+	fullScreen,
+	huge,
 	view,
 	landingRef,
 	id,
@@ -273,12 +289,23 @@ export function ClampedContent({
 	// Null when the content fits.
 	const [cut, setCut] = useState<Cut | null>(null);
 	const [showAll, setShowAll] = useState(false);
-	const [fullScreen, setFullScreen] = useState(false);
 
-	const clamped = cut !== null && !showAll;
+	// Huge content is never measured: it is cut by definition, and what is
+	// drawn of it is a slice that says nothing about the whole.
+	const isHuge = huge !== undefined;
+	const clamped = isHuge || (cut !== null && !showAll);
 	// Kept once opened — the effect does not measure an open box — so "Show
 	// less" and Full screen stay on offer.
-	const overflowing = cut !== null;
+	const overflowing = isHuge || cut !== null;
+
+	const onCutChangeRef = useRef(onCutChange);
+	onCutChangeRef.current = onCutChange;
+	// From an effect on the decided cut, not from inside the measuring updater,
+	// and before paint, so the header's button never flashes in late.
+	useLayoutEffect(() => {
+		onCutChangeRef.current?.(overflowing);
+	}, [overflowing]);
+	useLayoutEffect(() => () => onCutChangeRef.current?.(false), []);
 
 	// Measured before paint, so content that fits never flashes its button.
 	// Both elements are watched: the content as it grows, the box as its budget
@@ -286,7 +313,7 @@ export function ClampedContent({
 	useLayoutEffect(() => {
 		const box = boxRef.current;
 		const content = box?.firstElementChild;
-		if (!box || !(content instanceof HTMLElement) || showAll) return;
+		if (!box || !(content instanceof HTMLElement) || showAll || isHuge) return;
 
 		// The content's height and not the box's `scrollHeight`: an end-anchored
 		// column overflows upwards, and overflow on that side is not scrollable
@@ -318,7 +345,7 @@ export function ClampedContent({
 		observer.observe(content);
 		observer.observe(box);
 		return () => observer.disconnect();
-	}, [showAll]);
+	}, [showAll, isHuge]);
 
 	// biome-ignore lint/correctness/useExhaustiveDependencies: showAll is the commit a landing waits for
 	useLayoutEffect(() => {
@@ -440,18 +467,33 @@ export function ClampedContent({
 
 	const limit = budgetHeight(budget, coarse);
 	const label = showAll ? "Show less" : cut && showLabel(from, cut, count);
-	const toggle = overflowing && (
+	const toggle = huge ? (
 		<button
 			ref={toggleRef}
 			type="button"
-			onClick={() => setOpen(!showAll)}
-			aria-expanded={showAll}
-			aria-controls={boxId}
-			aria-label={name ? `${label} of ${name}` : undefined}
-			className={TEXT_BUTTON}
+			onClick={huge.open}
+			{...{ [FULL_SCREEN_OPENER_ATTR]: huge.key }}
+			aria-haspopup="dialog"
+			aria-label={huge.name}
+			className={`flex items-center gap-1 text-left ${TEXT_BUTTON}`}
 		>
-			{label}
+			<Maximize2 className="size-3 shrink-0" aria-hidden="true" />
+			{huge.label}
 		</button>
+	) : (
+		overflowing && (
+			<button
+				ref={toggleRef}
+				type="button"
+				onClick={() => setOpen(!showAll)}
+				aria-expanded={showAll}
+				aria-controls={boxId}
+				aria-label={name ? `${label} of ${name}` : undefined}
+				className={TEXT_BUTTON}
+			>
+				{label}
+			</button>
+		)
 	);
 	// The button sits on the side the content is cut on: below for content cut
 	// at its end, above — between the header and the content — for content
@@ -460,7 +502,13 @@ export function ClampedContent({
 
 	return (
 		<div ref={rootRef}>
-			{toggleAbove && toggle && <div>{toggle}</div>}
+			{toggleAbove && toggle && (
+				// Under a header, whose buttons' hit areas reach 10px below its
+				// line under a thumb, as this one's reaches 10px above: a label as
+				// long as this one would run under them. The header's `pb-1` and
+				// this 16px make the 20px the two reach.
+				<div className={huge ? "pointer-coarse:mt-4" : undefined}>{toggle}</div>
+			)}
 			{/* biome-ignore lint/a11y/noStaticElementInteractions: the focus listener only watches focus arriving at a control inside; the box itself takes none */}
 			<div
 				ref={boxRef}
@@ -470,13 +518,20 @@ export function ClampedContent({
 				// browser scroll this clipped box to it — scrolling a box the user
 				// cannot scroll back. Opening it instead keeps the box at rest.
 				onFocus={(e) => {
-					if (clamped && e.target.matches(":focus-visible")) setOpen(true);
+					if (clamped && !huge && e.target.matches(":focus-visible"))
+						setOpen(true);
+				}}
+				// Huge content cannot be opened instead, so the browser's scroll
+				// to a control past the fade is undone: the box rests at its top.
+				onScroll={(e) => {
+					if (huge && e.currentTarget.scrollTop !== 0)
+						e.currentTarget.scrollTop = 0;
 				}}
 				// Uncut, the box is allowed the tolerance on top of the budget:
 				// content that fits there is shown whole, and content that does not
 				// is the content worth cutting.
 				style={
-					showAll
+					showAll && !huge
 						? undefined
 						: ({
 								[BUDGET_VAR]: limit,
@@ -497,13 +552,15 @@ export function ClampedContent({
 				    letting it overflow the top. */}
 				<div className="min-w-0 shrink-0">{children}</div>
 			</div>
-			{((!toggleAbove && toggle) || (overflowing && fullScreenTitle)) && (
+			{((!toggleAbove && toggle) || (overflowing && fullScreen && !huge)) && (
 				<div className="flex items-center gap-2">
 					{!toggleAbove && toggle}
-					{overflowing && fullScreenTitle && (
+					{overflowing && fullScreen && !huge && (
 						<button
 							type="button"
-							onClick={() => setFullScreen(true)}
+							onClick={fullScreen.open}
+							{...{ [FULL_SCREEN_OPENER_ATTR]: fullScreen.key }}
+							aria-haspopup="dialog"
 							className={`flex items-center gap-1 ${TEXT_BUTTON}`}
 						>
 							<Maximize2 className="size-3" aria-hidden="true" />
@@ -511,15 +568,6 @@ export function ClampedContent({
 						</button>
 					)}
 				</div>
-			)}
-			{fullScreen && fullScreenTitle && (
-				<Sheet
-					title={fullScreenTitle}
-					onClose={() => setFullScreen(false)}
-					fullScreen
-				>
-					<div className="overflow-x-auto p-2 text-xs">{children}</div>
-				</Sheet>
 			)}
 		</div>
 	);

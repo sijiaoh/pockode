@@ -108,13 +108,13 @@ with reduced motion, so a live row shows its still dot, not a spinner.
 
 | Chat (`chat/scenarios.mjs`) | What it is |
 |---|---|
-| `long` — *Webhook retries*, YOLO | one long turn: thinking, reads (one of a 180-line file), a failing command, a long command, a background command that finishes later in the turn, an Explore subagent with its own reads and failing command, edits to 8 files (one edit failing), and a Markdown answer with headings, a wide table and a long code block |
+| `long` — *Webhook retries*, YOLO | one long turn: thinking, reads (one of a 60-line file), a failing command, a long command, a background command that finishes later in the turn, an Explore subagent with its own reads and failing command, edits to 8 files (one edit failing), and a Markdown answer with headings, a wide table and a long code block |
 | `attachments` — *Crash report* | a message sent with an image and a log; a reply that edits 2 files |
 | `permission` — *Clean rebuild* | a turn waiting on one Bash permission, with an Always Allow rule |
 | `permissionMulti` — *Backoff cap* | a turn waiting on two at once, an Edit and a Write |
 | `asking` — *Durable job queue* | a turn that asked a question |
 | `running` — *Flaky dispatcher test* | a turn left open on a running command |
-| `fullRun` — *Full test run* | one command with a 20-line command and a 2000-line log, between paragraphs of prose |
+| `fullRun` — *Full test run* | one command with a 20-line command and a 60-line log, between paragraphs of prose |
 | `parked` — *Webhook load test* | a turn the CLI ended with its background command still running: parked on it (blocked: background) |
 | `thinking` — *Retry budget* | sent by the scene; a turn left open thinking |
 | `toolRunning` — *Migration dry run* | sent by the scene; a read, a search and a command left running, folded into a group |

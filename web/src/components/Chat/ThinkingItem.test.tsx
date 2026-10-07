@@ -171,7 +171,7 @@ describe("ThoughtScroller", () => {
 		});
 
 		await user.click(
-			screen.getByRole("button", { name: "Show all of full reasoning" }),
+			screen.getByRole("button", { name: "Show all of reasoning" }),
 		);
 		expect(scroller().scrollTop).toBe(50);
 		expect(transcript.holdAt).not.toHaveBeenCalled();

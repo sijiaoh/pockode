@@ -1,12 +1,12 @@
 import { Brain } from "lucide-react";
-import { memo, type ReactNode, useContext, useRef } from "react";
+import { memo, type ReactNode, useContext, useMemo, useRef } from "react";
 import { hasText, spokenThoughtLabel, thoughtLabel } from "../../lib/thinking";
 import type { Thought } from "../../types/message";
 import { CollapsibleBody, MarkdownContent, ScrollableContent } from "../ui";
 import { BareBody, BareRow } from "./BareRow";
 import { RowFrameContext, useRowExpanded } from "./rowExpansionContext";
 import { Chip, RowButton, StaticRow } from "./ToolRow";
-import { Section } from "./ToolSection";
+import { Section, type SectionFullScreen } from "./ToolSection";
 import {
 	TranscriptViewContext,
 	useScrollerView,
@@ -18,6 +18,15 @@ interface Props {
 
 const GLYPH = <Brain className="mt-0.5 size-3 shrink-0 text-th-text-muted" />;
 
+/** A short stable name for a text, for a key that also goes into the DOM. */
+function hashText(text: string): string {
+	let hash = 5381;
+	for (let i = 0; i < text.length; i++) {
+		hash = ((hash << 5) + hash + text.charCodeAt(i)) | 0;
+	}
+	return (hash >>> 0).toString(36);
+}
+
 /**
  * Thinking is drawn as a note — a tool row's size, in secondary colour — the
  * way a subagent's words are, and for the same reason: opened in the middle of
@@ -27,11 +36,36 @@ function ThoughtText({ content }: { content: string }) {
 	return <MarkdownContent content={content} variant="note" />;
 }
 
+/** The first 200 characters, or the first six lines if they end sooner. */
+function thoughtOpening(reasoning: string): string {
+	let end = -1;
+	for (let n = 0; n < 6; n++) {
+		end = reasoning.indexOf("\n", end + 1);
+		if (end === -1) return reasoning.slice(0, 200);
+	}
+	return reasoning.slice(0, Math.min(end, 200));
+}
+
 /**
  * One record's share of the body. Codex's raw reasoning goes under a label
  * only beside a summary; alone it is the body, and nothing is labelled twice.
  */
 export function ThoughtBody({ thought }: { thought: Thought }) {
+	const reasoning = thought.fullReasoning;
+	const fullScreen = useMemo<SectionFullScreen>(
+		() => ({
+			// A thought has no id, and is drawn first in the turn's tail and then
+			// in its row: its opening is what stays the same across the move.
+			// Full screen is offered only once the block is cut, past a dozen
+			// rows — 200 characters, or short lines of which the first six are
+			// whole — so by then the opening no longer changes as it streams;
+			// two thoughts sharing all of it would be the same reasoning.
+			key: `thought:${hashText(thoughtOpening(reasoning))}`,
+			title: "Reasoning",
+			content: { kind: "markdown", markdown: reasoning },
+		}),
+		[reasoning],
+	);
 	if (!hasText(thought)) {
 		return <p className="text-th-text-muted">Hidden by the model provider.</p>;
 	}
@@ -41,7 +75,12 @@ export function ThoughtBody({ thought }: { thought: Thought }) {
 	return (
 		<div className="space-y-3">
 			<ThoughtText content={thought.content} />
-			<Section label="Full reasoning" budget="main">
+			<Section
+				label="Full reasoning"
+				noun="reasoning"
+				budget="main"
+				fullScreen={fullScreen}
+			>
 				<ThoughtText content={thought.fullReasoning} />
 			</Section>
 		</div>

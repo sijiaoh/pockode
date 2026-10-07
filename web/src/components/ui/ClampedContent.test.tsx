@@ -55,7 +55,7 @@ describe("ClampedContent", () => {
 	it("leaves content that fits alone", () => {
 		layOut(100);
 		render(
-			<ClampedContent fullScreenTitle="notes.md">
+			<ClampedContent fullScreen={{ key: "k", open: () => {} }}>
 				<p>body text</p>
 			</ClampedContent>,
 		);
@@ -568,24 +568,28 @@ describe("ClampedContent", () => {
 		});
 	});
 
-	it("offers a long file a screen of its own", async () => {
+	it("offers a headerless block full screen, and says whether it is cut", async () => {
 		const user = userEvent.setup();
+		const onFullScreen = vi.fn();
+		const onCutChange = vi.fn();
 		layOut(2000);
 		render(
-			<ClampedContent fullScreenTitle="Read · src/main.ts">
+			<ClampedContent
+				fullScreen={{ key: "k", open: onFullScreen }}
+				onCutChange={onCutChange}
+			>
 				<p>body text</p>
 			</ClampedContent>,
 		);
 
+		expect(onCutChange).toHaveBeenLastCalledWith(true);
 		await user.click(screen.getByText("Full screen"));
-		const dialog = screen.getByRole("dialog");
-		expect(dialog).toHaveTextContent("Read · src/main.ts");
-		expect(dialog).toHaveTextContent("body text");
+		expect(onFullScreen).toHaveBeenCalledOnce();
 
 		// Still on offer after the content has been opened in place: being
 		// readable inline does not make a whole file comfortable to read there.
-		await user.click(screen.getByLabelText("Close"));
 		await user.click(screen.getByText("Show all"));
 		expect(screen.getByText("Full screen")).toBeInTheDocument();
+		expect(onCutChange).toHaveBeenLastCalledWith(true);
 	});
 });

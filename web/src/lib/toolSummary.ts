@@ -411,3 +411,10 @@ export function toolVerb(toolName: string, input: unknown): ToolVerbReading {
 			return { verb: "other" };
 	}
 }
+
+/** The row's summary as one line of text: `Bash · pnpm test`. */
+export function toolSummaryLine(summary: ToolSummary): string {
+	return [summary.title, summary.detail + summary.detailTail]
+		.filter(Boolean)
+		.join(" · ");
+}
