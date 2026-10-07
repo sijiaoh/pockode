@@ -177,4 +177,30 @@ describe("TabbedSidebar", () => {
 		rerender(renderTabs([sessions, git]));
 		expect(screen.getByText("active: sessions")).toBeInTheDocument();
 	});
+
+	it("refreshes when a collapsed column is expanded, not when it first mounts expanded", () => {
+		function Signal() {
+			return <p>signal: {useContext(SidebarContext)?.refreshSignal}</p>;
+		}
+		const renderColumn = (isOpen: boolean) => (
+			<TabbedSidebar
+				isOpen={isOpen}
+				onClose={() => {}}
+				tabs={threeTabs}
+				defaultTab="sessions"
+				isExpanded={true}
+			>
+				<Signal />
+			</TabbedSidebar>
+		);
+
+		const { rerender } = render(renderColumn(true));
+		expect(screen.getByText("signal: 0")).toBeInTheDocument();
+
+		rerender(renderColumn(false));
+		expect(screen.getByText("signal: 0")).toBeInTheDocument();
+
+		rerender(renderColumn(true));
+		expect(screen.getByText("signal: 1")).toBeInTheDocument();
+	});
 });

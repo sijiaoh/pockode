@@ -101,13 +101,17 @@ The page draws its heading with `Layout/PageHeader.tsx`, and the header hosts it
 in the session title's place (a portal into `MainContainer`'s `heading`): the
 title and the way back come from the page's own data, so `ChatPanel` keeps no
 second, per-type copy of them. Rendered on its own — in a unit test — the same
-heading draws as a bar where it stands. The menu button stays: on a phone it is
-the way from one diff to the next file in the list. The way back is
+heading draws as a bar where it stands. The sidebar button stays: on a phone it
+is the way from one diff to the next file in the list. Its dot and the one on
+"Back to chat" may be lit together, and say different things — the first
+stands for the sidebar's tab badges
+([responsive-ui.md](responsive-ui.md#at-expanded-the-column-collapses)), the
+second for the open session's own unread. The way back is
 `MessageSquare` ("Back to chat", with the unread dot) on a page opened from the
 chat, and `ArrowLeft` labelled with where it goes (`Back to commit`, `Back to
 project`) on a page opened from another page; both are borderless icon buttons
-like the menu and settings. Then the same two lines in the same box as the
-session's (`ui/HeaderTitle.tsx` is shared by both). A title that can be pressed
+like the sidebar and settings buttons. Then the same two lines in the same box
+as the session's (`ui/HeaderTitle.tsx` is shared by both). A title that can be pressed
 ends in `ChevronRight`, and one that cannot has no chevron and no hover. A file
 name keeps its extension when it truncates (`ChatPanel.integration.te….tsx`).
 The second line ends in what says which version of the thing this is (`Staged`,

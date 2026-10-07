@@ -77,7 +77,7 @@ picking whichever matched the screen in front of them.
 |---|---|---|---|
 | **compact** | <640 | none | One column. Sidebar is an overlay drawer. Tightest spacing and type. |
 | **regular** | 640–1023 | `sm:` | **Still one column, sidebar still a drawer.** Just room to breathe: spacing and type step up one notch. |
-| **expanded** | ≥1024 | `lg:` | Two columns side by side. Sidebar becomes a resizable standing column. |
+| **expanded** | ≥1024 | `lg:` | Two columns side by side. Sidebar becomes a resizable standing column that [collapses](#at-expanded-the-column-collapses). |
 
 The tiers are named by **what fits**, not by device. A boolean that is true on an
 iPad in landscape and is called `isDesktop` is exactly the lie that caused this
@@ -115,7 +115,7 @@ hand-written focus trap. `inert` already keeps Tab and a screen reader inside th
 drawer, and a trap would be one more piece that can disagree with it. The two
 wrappers that carry the attribute are `display: contents`, so they do not change
 the layout. In the expanded tier the column is part of the page, so nothing is
-`inert` and the column takes no focus.
+`inert` ([below](#at-expanded-the-column-collapses)).
 
 Focus goes **in** to the panel itself, not to its first control, which is what a
 `Sheet` does too: landing on the dialog announces its name. Focus goes **back**
@@ -128,6 +128,85 @@ The backdrop's `Close sidebar` button sits **inside** the dialog on purpose. It 
 the one close control `Sidebar` guarantees whatever content it is given — the
 X in the tabbed sidebar's header belongs to that content, and an extension's
 `SidebarContent` need not have one — and a touch screen reader has no Escape key.
+
+### At `expanded` the column collapses
+
+**The tier is not visibility.** The tier says *which* sidebar there is — a
+drawer or a column — and nothing about whether it is on screen. `AppShell`
+keeps the two forms' state apart, `drawerOpen` and `columnCollapsed`, and hands
+everything below it only their consequence: `isOpen` is *on screen* in either
+tier (the drawer open, or the column not collapsed), and the one `onClose` takes
+it *off* screen (closes the drawer, or collapses the column). Anything that once
+read `isExpanded` as "the sidebar is visible" reads `isOpen` now — the
+[`git.changed` watch](git-ui.md#who-subscribes-to-gitchanged) is the case that
+had to change. The `if (!isExpanded) onClose()` after picking a session, a file
+or a diff is the opposite case and stays: it means "close the drawer behind the
+pick", and without the guard every pick on a wide screen would collapse the
+column.
+
+**Two buttons, never side by side.**
+
+| | Collapse | Expand |
+|---|---|---|
+| Where | The worktree switcher row's end slot — the drawer's X, same slot and class ([sidebar-ui.md](sidebar-ui.md#the-top-of-the-sidebar)) | The header's leading button, where the drawer's opener is |
+| Icon / name | `PanelLeftClose`, `Collapse sidebar` | `PanelLeftOpen`, `Expand sidebar` |
+| State | `aria-expanded={true}` — it only exists expanded | `aria-expanded={false}` — it only exists collapsed |
+
+The drawer's opener is the same header button as `Menu`, `Open sidebar`,
+`aria-haspopup="dialog"` and no `aria-expanded`: it is `inert` behind the open
+drawer, so "expanded" could never be read from it. Neither button carries
+`aria-controls`, which would have to thread an id through an extension's
+`HeaderContent`. The header button exists **only while the sidebar is off
+screen** — `onOpenSidebar` is not handed down while the column is shown — with
+one exception: the drawer's opener stays mounted under the open drawer, because
+that is where focus goes back.
+
+Nothing else collapses the column. Escape does not: the column is not an
+overlay, and `Sidebar` listens only below `expanded`. Dragging the handle to its
+minimum does not either: Home on the handle already means "minimum width", and a
+drag that overshoots would become a collapse nobody meant. There is no keyboard
+shortcut — `Ctrl+B` is Firefox's bookmarks sidebar.
+
+**Focus moves only on a press.** Collapsing hides the button that was pressed,
+so focus goes to the header's `Expand sidebar` through `sidebarToggleRef`, a ref
+`AppShell` owns and hands to `MainContainer` — or to an extension's
+`HeaderContent`, which attaches it itself. Expanding focuses the column itself,
+`<aside aria-label="Sidebar" tabIndex={-1}>`, the way the drawer's panel is
+focused on open; `Sidebar` does that when `isOpen` turns true *within* the
+tier. Restoring the stored state on load and crossing tiers are not presses and
+move nothing. (One consequence of the opener rule above: a drawer open while
+the screen grows into `expanded` with the column collapsed hands focus back to
+its opener, which is now `Expand sidebar`.)
+
+**Hidden, not unmounted, and not animated.** The collapsed column is `hidden`,
+for the same reason the closed drawer is: the open tab, its scroll position and
+the file tree's expanded folders are still there when it comes back, and
+`display: none` takes it out of the accessibility tree and the Tab order
+besides. The width (`pockode:sidebar-width`) is neither read nor written, so it
+comes back as wide; a drag in progress ends with the collapse, as it does on
+leaving the tier, since the handle is gone before any `pointerup` can reach it.
+The switch is instant: the drawer has no transition either, and animating the
+column's width would relayout the chat beside it every frame.
+
+**Persistence.** `localStorage["pockode:sidebar-collapsed"]`, `"true"` for
+collapsed and anything else — absence included — for shown. Per device, not per
+project or worktree; written only by the two buttons, read in the `useState`
+initialiser so a reload does not flash the column; not synced across tabs, as
+the width is not. It describes **only the column**: the drawer neither reads nor
+writes it and starts closed on every load. Collapsed on a wide screen, then
+narrow: the drawer is closed and opens as usual, and opening it changes nothing
+stored. Wide again: still collapsed.
+
+**The button wears the tabs' badges.** With the sidebar off screen, so are the
+badges on its tabs, so the header button carries a `BadgeDot` in both tiers.
+`useSidebarAttention` (`web/src/hooks/useSidebarAttention.ts`) is the single
+source for it and for the Sessions, Files and Project tab badges — the dot is
+those badges seen from outside, and two copies of the rule could light one
+without the other. It is `warning` when a work is waiting on the user
+([lifecycle-ui.md §4](lifecycle-ui.md#4-attention-dots)) and the accent
+otherwise. The Git count stays out: it is the state of the repository, not
+something that happened. Nothing is lit when an extension's `SidebarContent`
+replaces the tabs, since the dot would point at badges that are not there.
 
 ### One source for the numbers
 
@@ -152,8 +231,9 @@ sidebar picked its shape from a hook in another component. Either shape can be
 edited alone, and then you have a sidebar with no switch, or a switch with no
 sidebar. Where two components must agree, one of them reads the tier and the
 other is given the *consequence* — `MainContainer` is simply not handed an
-`onOpenSidebar` when there is no drawer to open, so the disagreeing state cannot
-be written.
+`onOpenSidebar` while the sidebar is already on screen, and is told the tier's
+form as `sidebarKind` rather than reading `useIsExpanded` a second time, so the
+disagreeing state cannot be written.
 
 ### Only one tier boundary has a JS reader
 
@@ -1006,7 +1086,7 @@ of the source — and it has to hold for components nobody has written yet.
 | `web/tests/pointerEvents.test.ts` | Nothing tracks a gesture with mouse events (a bare `onMouseDown` prop is allowed — see the exception above) |
 | `web/tests/touchTarget.test.ts` | Every interactive element — `<button>`, `<a>`, or anything with `role="button"` — is held to the floors as far as its source can be read ([scope](#which-controls-the-floor-is-asked-of)): an icon-only one states a box on both axes, one with text is held to whatever height it wrote down itself, and a tag that is inline by default has to blockify or the size it wrote does not count. Neighbouring controls sit ≥8px apart, over that same set of tags, wherever their container states a gap at all. A class helper with a conditional box is read one class list per branch and **every** branch has to clear the floors, since the scan does not evaluate the argument that picks one. The same run rebuilds the register of controls the floor does not reach and fails if [Outside the floor today](#outside-the-floor-today) has drifted from it |
 | `web/tests/iconButtonClass.test.ts` | What the scan above still cannot say about this helper: the fixed branch's `size-9`, which is the visual rung rather than a hit area and is therefore excused by `touch-target`, and that `grow` defaults to the branch safe in a row with room to spare. The floors themselves are guarded at the call sites now |
-| `web/src/components/AppShell.test.tsx` | The hamburger and the sidebar's shape come from one source and can never disagree |
+| `web/src/components/AppShell.test.tsx` | The header's sidebar button and the sidebar's shape come from one source and can never disagree; the column's collapsed state survives a reload and a trip through the narrow tier, and stays apart from the drawer's |
 | `web/src/components/ui/Sheet.test.tsx` | Drawer sits at the bottom, modal is centred, and both follow the one hook |
 | `web/src/test/outsideClick.test.tsx` | A click outside dismisses and one inside does not; touch scrolling does not; the click that opened the overlay does not; the listener survives a host re-render |
 | `web/src/test/responsive.test.tsx` | The ladder's absolute numbers; all three pointer gates read together on a touchscreen laptop; and that a gate is subscribed rather than sampled once, so a resize or a mouse plugged in mid-session re-renders |

@@ -1698,7 +1698,7 @@ The split decides where each surface reads from:
   page. The cost is a few extra rows on every detail notification, bounded by
   one story's task count.
 - **The list side never wanted the dropped fields.** `WorkListOverlay`,
-  `useWorkNeedsAttention` (the Project tab's dot and its tab badge),
+  `useWorkNeedsAttention` (the Project tab's dot, its tab badge and the header's sidebar button),
   `WorktreeBadge` / `isWorktreeBound` and the session row's wait lookup read
   none of them, which is why narrowing the store changed no behaviour.
 

@@ -1,4 +1,4 @@
-import { ChevronDown, GitBranch, X } from "lucide-react";
+import { ChevronDown, GitBranch, PanelLeftClose, X } from "lucide-react";
 import { type ReactNode, useCallback, useRef, useState } from "react";
 import { useWorktree } from "../../hooks/useWorktree";
 import { useWSStore } from "../../lib/wsStore";
@@ -7,9 +7,9 @@ import WorktreeCreateSheet from "./WorktreeCreateSheet";
 import WorktreeDropdown from "./WorktreeDropdown";
 
 interface Props {
-	/** Called when close button is clicked (drawer only) */
+	/** Takes the sidebar off the screen; no button at the row's end without it. */
 	onClose?: () => void;
-	/** Two columns fit, so the sidebar is a persistent column with no close button. */
+	/** Two columns fit, so the sidebar is a column that collapses rather than a drawer that closes. */
 	isExpanded?: boolean;
 }
 
@@ -99,14 +99,22 @@ function WorktreeSwitcher({ onClose, isExpanded = true }: Props) {
 		[current],
 	);
 
-	const closeButton = !isExpanded && onClose && (
+	// The column's button only exists while the column is expanded, so its
+	// `aria-expanded` has one value.
+	const closeButton = onClose && (
 		<button
 			type="button"
 			onClick={onClose}
 			className="flex size-9 shrink-0 pointer-coarse:size-11 items-center justify-center rounded-lg text-th-text-muted hover:bg-th-bg-tertiary hover:text-th-text-primary"
-			aria-label="Close sidebar"
+			{...(isExpanded
+				? { "aria-label": "Collapse sidebar", "aria-expanded": true }
+				: { "aria-label": "Close sidebar" })}
 		>
-			<X className="h-5 w-5" aria-hidden="true" />
+			{isExpanded ? (
+				<PanelLeftClose className="h-5 w-5" aria-hidden="true" />
+			) : (
+				<X className="h-5 w-5" aria-hidden="true" />
+			)}
 		</button>
 	);
 

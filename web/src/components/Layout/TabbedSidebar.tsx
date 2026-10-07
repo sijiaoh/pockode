@@ -30,7 +30,7 @@ interface Props {
 	defaultTab: string;
 	isExpanded: boolean;
 	children: React.ReactNode;
-	/** Render function for header slot, receives onClose and isExpanded for mobile close button */
+	/** Render function for header slot, receives onClose and isExpanded for the drawer's close or the column's collapse button */
 	renderHeader?: (props: {
 		onClose: () => void;
 		isExpanded: boolean;
@@ -41,7 +41,7 @@ interface Props {
  * Generic tabbed sidebar container that manages refresh timing.
  *
  * Refresh signals are triggered when:
- * - Sidebar opens
+ * - Sidebar comes on screen (drawer opens, or column expands)
  * - Tab is clicked (including the active tab)
  *
  * Tab content should use useSidebarRefresh() to subscribe to refresh signals.

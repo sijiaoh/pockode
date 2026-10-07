@@ -93,9 +93,9 @@ not on the commit button**.
 
 ## The narrow-width rule
 
-The sidebar is `w-72` (288px) as a mobile drawer and 240–500px as a resizable
-desktop column (`web/src/components/Layout/Sidebar.tsx`). 240px is the design
-width; anything wider is slack.
+The sidebar is `w-72` (288px) as a mobile drawer and 240–500px as a resizable,
+collapsible desktop column (`web/src/components/Layout/Sidebar.tsx`). 240px is
+the design width; anything wider is slack.
 
 > In a fixed row, **exactly one** element is `flex-1 min-w-0` and truncates.
 > Every other element is `shrink-0` and is either icon-only or at most two short
@@ -392,10 +392,14 @@ taller.
   outside a repository ([git-ui.md](git-ui.md#projects-without-a-repository)) —
   renders in that one shell, `min-h-9 pointer-coarse:min-h-11`, so the tab bar
   does not jump as one state gives way to the next; the shell's floor is the
-  drawer's close button beside it, so the row is the same height with or without
-  one. The project name takes the button's type, `text-sm font-medium`, because
-  it is the same place showing different content. An error may wrap and grow
-  the row. The row is `px-2 py-1`: the inset lines the hover fill up with the
+  button at the row's end, so the row is the same height with or without one.
+  That slot is the sidebar's own way off the screen in both tiers — the
+  drawer's X, the column's `PanelLeftClose` — one icon-only `shrink-0` button
+  with one class, so the worktree name stays the row's only truncating element
+  ([responsive-ui.md](responsive-ui.md#at-expanded-the-column-collapses) has
+  its semantics). The project name takes the button's type, `text-sm
+  font-medium`, because it is the same place showing different content. An
+  error may wrap and grow the row. The row is `px-2 py-1`: the inset lines the hover fill up with the
   rows below it and the text with theirs, and the dropdown is positioned inside
   the inset, so on desktop it spans exactly the New Chat row below — New Chat
   and the filter together.

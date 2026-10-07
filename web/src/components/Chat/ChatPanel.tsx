@@ -5,6 +5,7 @@ import {
 } from "@pockode/shared";
 import { AlertTriangle, X } from "lucide-react";
 import {
+	type Ref,
 	useCallback,
 	useEffect,
 	useLayoutEffect,
@@ -39,6 +40,7 @@ import {
 	type SendOutcome,
 	useChatUIConfig,
 } from "../../lib/registries/chatUIRegistry";
+import type { SidebarKind } from "../../lib/registries/headerUIRegistry";
 import {
 	selectSessionDetail,
 	useSessionDetailStore,
@@ -176,6 +178,8 @@ interface Props {
 	isSessionResolved: boolean;
 	onUpdateTitle: (title: string) => void;
 	onOpenSidebar?: () => void;
+	sidebarKind?: SidebarKind;
+	sidebarToggleRef?: Ref<HTMLButtonElement>;
 	onOpenSettings?: () => void;
 	overlay?: OverlayState;
 	onCloseOverlay?: () => void;
@@ -210,6 +214,8 @@ function ChatPanel({
 	isSessionResolved,
 	onUpdateTitle,
 	onOpenSidebar,
+	sidebarKind,
+	sidebarToggleRef,
 	onOpenSettings,
 	overlay,
 	onCloseOverlay,
@@ -1399,6 +1405,8 @@ function ChatPanel({
 				title={overlay ? projectTitle : resolvedTitle || projectTitle}
 				heading={renderHeading()}
 				onOpenSidebar={onOpenSidebar}
+				sidebarKind={sidebarKind}
+				sidebarToggleRef={sidebarToggleRef}
 				// Already there: a way to the page the user is on would only reopen it.
 				onOpenSettings={
 					overlay?.type === "settings" ? undefined : onOpenSettings

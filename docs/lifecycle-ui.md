@@ -840,15 +840,20 @@ dimensions folded back into the one question a dot can ask.
 | Surface | Condition |
 |---|---|
 | The sidebar's Project tab, and its panel | any work in the list satisfies `needsAttention` |
+| The header button that brings the sidebar back | the same bit, while the sidebar is off screen ([responsive-ui.md](responsive-ui.md#at-expanded-the-column-collapses)) |
 | Session row | the row's own two facts (it *is* the leaf) — §2.1 |
 
 **That tab carries the dot twice, and the two are one dot.** They are both kept
 because they answer different halves of one journey: on a phone the tab bar is
 itself inside the drawer, so without a badge on the tab a waiting work is found
 only by opening the drawer *and* picking this tab. The badge says which tab; the
-dot in the panel says where to look once it is open. Neither derives the bit for
-itself — both read `useWorkNeedsAttention` (`workStore.ts`), where the rule lives
-so that no call site can restate it, following `isWorktreeBound`
+dot in the panel says where to look once it is open. With the sidebar closed
+or collapsed the tab bar is off screen too, so the header button that brings it
+back carries the bit a step further out — in this hue, outranking the accent of
+the other tabs it also stands for. None of them derives the bit for itself:
+all read `useWorkNeedsAttention` (`workStore.ts`; the tab badge and the header
+button by way of `useSidebarAttention`), which is where the rule lives so that
+no call site can restate it, following `isWorktreeBound`
 ([work-system.md § Displaying a Work's Worktree](code/work-system.md#displaying-a-works-worktree)).
 A second copy of *is anyone waiting on me* is a copy that can disagree, and what
 the user would see is a badge for a dot that is not there.

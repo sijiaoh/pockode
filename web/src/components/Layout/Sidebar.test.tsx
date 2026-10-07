@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import Sidebar from "./Sidebar";
@@ -88,6 +88,38 @@ describe("Sidebar", () => {
 		expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
 		expect(document.body).toHaveFocus();
 	});
+
+	// Hidden, not unmounted: what the user left open inside comes back with it.
+	it("keeps its content mounted while the column is collapsed", () => {
+		render(
+			<Sidebar isOpen={false} onClose={vi.fn()} isExpanded>
+				<p>sessions</p>
+			</Sidebar>,
+		);
+
+		// jsdom has no stylesheet, so `display: none` is read off the class.
+		expect(screen.getByText("sessions").closest("aside")).toHaveClass("hidden");
+	});
+
+	// Expanding within the tier is a press, so focus follows it onto the
+	// column; arriving in the tier with the column already shown is not.
+	it("takes focus when expanded back, and only then", () => {
+		const renderSidebar = (isOpen: boolean, isExpanded: boolean) => (
+			<Sidebar isOpen={isOpen} onClose={vi.fn()} isExpanded={isExpanded}>
+				<button type="button">New Chat</button>
+			</Sidebar>
+		);
+		const { rerender } = render(renderSidebar(false, false));
+
+		rerender(renderSidebar(true, true));
+		expect(document.body).toHaveFocus();
+
+		rerender(renderSidebar(false, true));
+		rerender(renderSidebar(true, true));
+		expect(
+			screen.getByRole("complementary", { name: "Sidebar" }),
+		).toHaveFocus();
+	});
 });
 
 describe("Sidebar resize handle", () => {
@@ -154,6 +186,25 @@ describe("Sidebar resize handle", () => {
 
 		expect(handle).toHaveAttribute("aria-valuenow", "288");
 		expect(localStorage.getItem("pockode:sidebar-width")).toBeNull();
+	});
+
+	// Collapsing takes the handle away mid-drag, so no release ever reaches it.
+	it("ends a drag the column is collapsed under", () => {
+		const renderSidebar = (isOpen: boolean) => (
+			<Sidebar isOpen={isOpen} onClose={vi.fn()} isExpanded>
+				<p>sessions</p>
+			</Sidebar>
+		);
+		const { rerender } = render(renderSidebar(true));
+		const handle = screen.getByRole("separator", { name: "Resize sidebar" });
+		handle.setPointerCapture = vi.fn();
+
+		fireEvent.pointerDown(handle, { pointerId: 1 });
+		expect(document.body.style.cursor).toBe("col-resize");
+
+		rerender(renderSidebar(false));
+		expect(document.body.style.cursor).toBe("");
+		expect(document.body.style.userSelect).toBe("");
 	});
 
 	it("opens at the width it was left at", () => {
