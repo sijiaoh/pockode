@@ -115,10 +115,6 @@ export default function WorkListOverlay({
 
 	// A page is a new set of rows, and reading it from the middle is not a thing
 	// anyone asked for (docs/list-paging-ui.md §4.2).
-	useEffect(() => {
-		if (segment === "closed") scrollToTop(scrollRef);
-	}, [segment]);
-
 	const goOlder = useCallback(() => {
 		if (!archiveNextCursor) return;
 		scrollToTop(scrollRef);
@@ -257,8 +253,18 @@ export default function WorkListOverlay({
 			{/* The inset belongs to the content, not the scroller: a sticky
 			    heading pins to the scroller's padding edge, so padding here
 			    would leave a strip above a pinned heading that the rows
-			    scrolling under it show through. */}
-			<div ref={scrollRef} className="min-h-0 flex-1 overflow-auto">
+			    scrolling under it show through.
+
+			    Keyed by segment: the two segments are two different lists, and
+			    one scroller shared between them hands each the other's offset.
+			    A scroller of their own opens each at the top on its first
+			    paint, where resetting a shared one from an effect would show
+			    the old offset for a frame (docs/project-ui.md §2.1). */}
+			<div
+				key={segment}
+				ref={scrollRef}
+				className="min-h-0 flex-1 overflow-auto"
+			>
 				<div className="p-2">
 					{isLoading ? (
 						<div className="flex items-center justify-center py-8">

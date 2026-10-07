@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { useState } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useWorkStore, workPagingActions } from "../../lib/workStore";
+import { stubScrollBox } from "../../test/scrollBox";
 import type { WorkSegment } from "../../types/overlay";
 import type { WorkListItem } from "../../types/work";
 import WorkListOverlay from "./WorkListOverlay";
@@ -638,6 +639,38 @@ describe("WorkListOverlay", () => {
 			"aria-pressed",
 			"true",
 		);
+	});
+
+	it("opens each segment at the top, whichever way it is switched", async () => {
+		const user = userEvent.setup();
+		setWorks([createWork({ id: "s1", title: "Live Story" })]);
+		setArchivePage([
+			createWork({
+				id: "closed",
+				title: "Older Story",
+				status: "closed",
+				activity: "closed",
+			}),
+		]);
+		// Tall enough to scroll, so an offset carried from the other segment
+		// would survive the clamp and show.
+		const scroller = (title: string) => {
+			const el = screen
+				.getByRole("heading", { level: 3, name: title })
+				.closest<HTMLElement>(".overflow-auto");
+			if (!el) throw new Error(`"${title}" is in no scroller`);
+			stubScrollBox(el, { contentHeight: 2000, viewportHeight: 500 });
+			return el;
+		};
+
+		renderList();
+		scroller("Live Story").scrollTop = 300;
+		await user.click(screen.getByRole("button", { name: "Closed" }));
+		expect(scroller("Older Story").scrollTop).toBe(0);
+
+		scroller("Older Story").scrollTop = 200;
+		await user.click(screen.getByRole("button", { name: "Current" }));
+		expect(scroller("Live Story").scrollTop).toBe(0);
 	});
 
 	it("navigates to a work's chat using the work's own worktree", async () => {

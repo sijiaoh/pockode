@@ -123,6 +123,13 @@ collapsed section — it is the other segment**, which is the answer to "it take
 a long scroll and a tap to see finished work". It now takes one tap on a control
 that is always in the same place, whatever the list is doing.
 
+**Each segment opens at the top.** They are two lists, not two filters over one
+position: an offset into `Current` says nothing about where to be in the archive,
+and the archive changes page by returning to the top anyway
+([list-paging-ui.md](list-paging-ui.md) §4.2). Nor does a segment come back to
+where it was left: `Current` regroups and reorders while nobody is looking at it,
+so an offset kept from earlier would land on different rows.
+
 The segment words are chosen against the state vocabulary rather than for
 brevity. "Closed" is exactly the status word for what is in it. "Current" names
 nothing in the vocabulary on purpose: "Open" and "Active" are both status
@@ -799,6 +806,7 @@ The checks, in the order they would fail, and where each one is now:
 | 19 | Each group is in `updated_at` order, newest first, and the comparison is of times rather than of strings — two timestamps written with different UTC offsets sort by instant, not by spelling | `workOrder.test.ts` for the rule, `WorkListOverlay.test.tsx` for the list actually using it |
 | 20 | Each capped group's heading counts its own hidden rows, and one failure to fetch them prints one message with one Retry however many groups are offering the control | `WorkListOverlay.test.tsx`; the server half is `work_list_segment_test.go` (see [list-paging-ui.md §4.1](list-paging-ui.md#41-current-is-loaded-whole-and-that-is-the-design)) |
 | 21 | Line 2 clips the other slots and never the date: the role is inside the clipping container and slot 7 is not | `WorkRow.test.tsx` |
+| 22 | Switching segment, either way, opens the new segment at the top rather than at the offset the other was left at (§2.1) | `WorkListOverlay.test.tsx` |
 
 Check 6 was the one that reached the end of the rewrite untested. It had been
 written down as the behaviour that was already right and could be lost while the
