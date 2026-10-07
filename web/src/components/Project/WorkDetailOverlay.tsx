@@ -18,6 +18,7 @@ import { useWorkDetailSubscription } from "../../hooks/useWorkDetailSubscription
 import type { Activity } from "../../lib/activity";
 import { useAgentRoleStore } from "../../lib/agentRoleStore";
 import { requestAnswerPanel } from "../../lib/answerIntent";
+import { roleAcceptsWorkType, WORK_TYPE_PLURAL } from "../../lib/roleWorkType";
 import {
 	selectSessionTitle,
 	UNLISTED_SESSION_NAME,
@@ -621,10 +622,24 @@ function RoleSection({ work }: { work: Work }) {
 	const [savingRole, setSavingRole] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 
-	const roleName = useMemo(() => {
-		if (!work.agent_role_id) return null;
-		return roles.find((r) => r.id === work.agent_role_id)?.name ?? null;
-	}, [work.agent_role_id, roles]);
+	const role = useMemo(
+		() =>
+			work.agent_role_id
+				? roles.find((r) => r.id === work.agent_role_id)
+				: undefined,
+		[work.agent_role_id, roles],
+	);
+	const otherType: WorkType = work.type === "story" ? "task" : "story";
+	// Legal on the server's side — assignments are checked when made, not kept
+	// in step with later restrictions — so this is said, not flagged as wrong.
+	const mismatch =
+		role && !roleAcceptsWorkType(role, work.type)
+			? `${role.name} only takes ${WORK_TYPE_PLURAL[otherType]}. It stays on this ${work.type} until you change it.`
+			: null;
+	// An empty list says nothing: the store empties it on every reconnect, and
+	// with no roles at all "set one to take tasks" names a role that is not there.
+	const noRoleTakesType =
+		roles.length > 0 && !roles.some((r) => roleAcceptsWorkType(r, work.type));
 
 	const handleRoleChange = useCallback(
 		async (newRoleId: string) => {
@@ -652,30 +667,42 @@ function RoleSection({ work }: { work: Work }) {
 				Role
 			</h3>
 			{editingRole ? (
-				<div className="flex items-center gap-2">
-					<RoleSelect
-						value={work.agent_role_id ?? ""}
-						onChange={handleRoleChange}
-						emptyLabel={work.agent_role_id ? undefined : "Select role..."}
-						onBlur={() => {
-							if (!savingRole) setEditingRole(false);
-						}}
-						disabled={savingRole}
-						autoFocus
-					/>
-					{savingRole && (
-						<Loader2 className="size-4 animate-spin text-th-text-muted" />
+				<>
+					<div className="flex items-center gap-2">
+						<RoleSelect
+							value={work.agent_role_id ?? ""}
+							workType={work.type}
+							onChange={handleRoleChange}
+							emptyLabel={work.agent_role_id ? undefined : "Select role..."}
+							onBlur={() => {
+								if (!savingRole) setEditingRole(false);
+							}}
+							disabled={savingRole}
+							autoFocus
+						/>
+						{savingRole && (
+							<Loader2 className="size-4 animate-spin text-th-text-muted" />
+						)}
+					</div>
+					{noRoleTakesType && (
+						<p className="mt-1 text-xs text-th-text-muted">
+							No role takes {WORK_TYPE_PLURAL[work.type]}. Set one to take{" "}
+							{WORK_TYPE_PLURAL[work.type]} in Agent Roles.
+						</p>
 					)}
-				</div>
+				</>
 			) : (
-				<button
-					type="button"
-					onClick={() => setEditingRole(true)}
-					className="group flex min-h-[44px] items-center gap-1.5 text-sm text-th-text-secondary hover:text-th-accent"
-				>
-					<span>{roleName ?? "—"}</span>
-					<Pencil className="size-3.5 text-th-text-muted opacity-80 group-hover:opacity-100" />
-				</button>
+				<>
+					<button
+						type="button"
+						onClick={() => setEditingRole(true)}
+						className="group flex min-h-[44px] items-center gap-1.5 text-sm text-th-text-secondary hover:text-th-accent"
+					>
+						<span>{role?.name ?? "—"}</span>
+						<Pencil className="size-3.5 text-th-text-muted opacity-80 group-hover:opacity-100" />
+					</button>
+					{mismatch && <p className="text-xs text-th-text-muted">{mismatch}</p>}
+				</>
 			)}
 			{error && (
 				<p className="mt-1 text-xs text-th-error" role="alert">

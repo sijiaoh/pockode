@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { act, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useAgentRoleStore } from "../../lib/agentRoleStore";
@@ -14,9 +14,14 @@ vi.mock("../../lib/wsStore", () => ({
 		selector({ actions: { createWork } }),
 }));
 
-const role = (id: string, name: string): AgentRole => ({
+const role = (
+	id: string,
+	name: string,
+	work_type?: AgentRole["work_type"],
+): AgentRole => ({
 	id,
 	name,
+	work_type,
 	role_prompt: "",
 	created_at: "2026-03-04T00:00:00Z",
 	updated_at: "2026-03-04T00:00:00Z",
@@ -155,6 +160,69 @@ describe("CreateWorkSheet", () => {
 		renderSheet();
 
 		expect(screen.getByLabelText("Role")).toHaveValue("role-2");
+	});
+
+	describe("for a kind some roles do not take", () => {
+		it("does not preselect a default role that cannot take it", () => {
+			setRoles([
+				role("pm", "PM", "story"),
+				role("e1", "Engineer", "task"),
+				role("e2", "Reviewer", "task"),
+			]);
+			useSettingsStore.setState({
+				settings: { default_agent_role_id: "pm" },
+				error: null,
+			});
+			renderSheet({ type: "task", storyId: "story-1" });
+
+			expect(screen.getByLabelText("Role")).toHaveValue("");
+			expect(
+				screen.queryByRole("option", { name: /PM/ }),
+			).not.toBeInTheDocument();
+		});
+
+		it("says where to go when no role takes it", () => {
+			setRoles([role("pm", "PM", "story")]);
+			renderSheet({ type: "task", storyId: "story-1" });
+
+			expect(screen.getByText("No agent role takes tasks.")).toBeVisible();
+			expect(screen.queryByLabelText("Title")).not.toBeInTheDocument();
+		});
+
+		// Restricted elsewhere while the sheet was open: the server would refuse
+		// the pick, so it is dropped rather than left beside a dead Create button.
+		it("drops a picked role that stops taking it while open", async () => {
+			const user = userEvent.setup();
+			setRoles([role("e1", "Engineer"), role("e2", "Reviewer")]);
+			renderSheet({ type: "task", storyId: "story-1" });
+			await user.type(screen.getByLabelText("Title"), "Wire the bar");
+			await user.selectOptions(screen.getByLabelText("Role"), "e1");
+
+			act(() =>
+				setRoles([role("e1", "Engineer", "story"), role("e2", "Reviewer")]),
+			);
+
+			// The only role left that takes tasks is preselected, as on opening.
+			expect(screen.getByLabelText("Role")).toHaveValue("e2");
+			expect(screen.getByRole("button", { name: "Create" })).toBeEnabled();
+
+			act(() =>
+				setRoles([
+					role("e1", "Engineer", "story"),
+					role("e2", "Reviewer"),
+					role("e3", "Tester"),
+				]),
+			);
+			await user.selectOptions(screen.getByLabelText("Role"), "e3");
+			act(() =>
+				setRoles([
+					role("e1", "Engineer", "story"),
+					role("e2", "Reviewer"),
+					role("e3", "Tester", "story"),
+				]),
+			);
+			expect(screen.getByLabelText("Role")).toHaveValue("e2");
+		});
 	});
 
 	it("will not submit a title of spaces", async () => {

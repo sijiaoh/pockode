@@ -10,10 +10,12 @@ import {
 import { useAgentRoleStore } from "../../lib/agentRoleStore";
 import { getAgentLabel } from "../../lib/agentType";
 import { resolveInitialRole } from "../../lib/initialRole";
+import { roleAcceptsWorkType, workTypeSuffix } from "../../lib/roleWorkType";
 import { useSettingsStore } from "../../lib/settingsStore";
 import { type ValueState, waitingLabel } from "../../lib/valueState";
 import { useWSStore } from "../../lib/wsStore";
 import type { AgentRole } from "../../types/agentRole";
+import type { WorkType } from "../../types/work";
 import PageHeader from "../Layout/PageHeader";
 import { inputClass } from "../ui/inputClass";
 import SettingsLoadError from "../ui/SettingsLoadError";
@@ -249,15 +251,8 @@ function DefaultRoleField({
 	// With no roles at all it says nothing: that form does not ask which role to
 	// use there, it refuses and sends the user back here, and the empty list
 	// above has already said so in the place the user is looking.
-	const initialRoleId = resolveInitialRole(roles, defaultRoleId);
 	const sentence =
-		roles.length === 0
-			? null
-			: initialRoleId && initialRoleId === defaultRoleId
-				? "New stories and tasks start with this role."
-				: initialRoleId
-					? `New stories and tasks use ${roles.find((r) => r.id === initialRoleId)?.name}, the only role.`
-					: "New stories and tasks ask which role to use.";
+		roles.length === 0 ? null : describeNewWork(roles, defaultRoleId);
 
 	return (
 		<div className="space-y-1.5 px-1 pb-1">
@@ -293,6 +288,57 @@ function DefaultRoleField({
 			)}
 		</div>
 	);
+}
+
+type NewWorkOutcome =
+	| { kind: "default" | "ask" | "none"; name?: undefined }
+	| { kind: "only"; name: string };
+
+/**
+ * What a new story and a new task start with, as one sentence when the two
+ * agree and two when they do not. They differ whenever the default role is
+ * restricted to one kind — after a reset, the default takes stories only.
+ */
+function describeNewWork(roles: AgentRole[], defaultRoleId: string): string {
+	const outcome = (type: WorkType): NewWorkOutcome => {
+		const initial = resolveInitialRole(roles, defaultRoleId, type);
+		if (initial && initial === defaultRoleId) return { kind: "default" };
+		if (initial)
+			return {
+				kind: "only",
+				name: roles.find((r) => r.id === initial)?.name ?? "",
+			};
+		return roles.some((r) => roleAcceptsWorkType(r, type))
+			? { kind: "ask" }
+			: { kind: "none" };
+	};
+	const story = outcome("story");
+	const task = outcome("task");
+
+	if (story.kind === task.kind && story.name === task.name) {
+		switch (story.kind) {
+			case "default":
+				return "New stories and tasks start with this role.";
+			case "only":
+				return `New stories and tasks use ${story.name}, the only role.`;
+			default:
+				return "New stories and tasks ask which role to use.";
+		}
+	}
+
+	const fragment = (o: NewWorkOutcome) => {
+		switch (o.kind) {
+			case "default":
+				return "start with this role";
+			case "only":
+				return `use ${o.name}, the only role that takes them`;
+			case "ask":
+				return "ask which role to use";
+			default:
+				return "have no role that takes them";
+		}
+	};
+	return `New stories ${fragment(story)}. New tasks ${fragment(task)}.`;
 }
 
 /**
@@ -339,7 +385,8 @@ function RoleRow({
 	// which puts the engine first and the count of other people's work last.
 	// Nothing here is a placeholder: steps ride on the role record and the
 	// reference counts arrive in the same reply the roles do, so a row on screen
-	// already has both.
+	// already has both. The work type comes before the steps: it decides which
+	// pickers the role appears in at all.
 	const slots: { key: string; node: ReactNode }[] = [
 		{
 			key: "engine",
@@ -354,6 +401,13 @@ function RoleRow({
 			),
 		},
 	];
+	const suffix = workTypeSuffix(role);
+	if (suffix) {
+		slots.push({
+			key: "work-type",
+			node: <span>{suffix.charAt(0).toUpperCase() + suffix.slice(1)}</span>,
+		});
+	}
 	if (role.steps && role.steps.length > 0) {
 		slots.push({
 			key: "steps",

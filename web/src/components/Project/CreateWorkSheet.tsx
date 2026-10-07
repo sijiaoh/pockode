@@ -2,6 +2,7 @@ import { Loader2 } from "lucide-react";
 import { useCallback, useEffect, useId, useState } from "react";
 import { useAgentRoleStore } from "../../lib/agentRoleStore";
 import { resolveInitialRole } from "../../lib/initialRole";
+import { roleAcceptsWorkType, WORK_TYPE_PLURAL } from "../../lib/roleWorkType";
 import { useSettingsStore } from "../../lib/settingsStore";
 import { useWSStore } from "../../lib/wsStore";
 import type { WorkType } from "../../types/work";
@@ -71,20 +72,34 @@ export default function CreateWorkSheet({
 		(s) => s.settings?.default_agent_role_id ?? "",
 	);
 
+	const selectedRole = roles.find((r) => r.id === agentRoleId);
+	const selectedRoleFits =
+		selectedRole !== undefined && roleAcceptsWorkType(selectedRole, type);
+	const hasEligibleRole = roles.some((r) => roleAcceptsWorkType(r, type));
+
 	// The roles can arrive after the sheet opens, so this runs on every change
 	// until one sticks — and never overwrites a role the user picked.
+	//
+	// The one exception is a pick that stopped taking this kind while the sheet
+	// was open (restricted elsewhere): the server would refuse it, and keeping
+	// it selected beside a disabled Create explains nothing. Dropping it puts
+	// the field back where opening the sheet would have, rule and all.
 	useEffect(() => {
+		if (selectedRole && !selectedRoleFits) {
+			setAgentRoleId("");
+			return;
+		}
 		if (!agentRoleId) {
-			const initial = resolveInitialRole(roles, defaultRoleId);
+			const initial = resolveInitialRole(roles, defaultRoleId, type);
 			if (initial) setAgentRoleId(initial);
 		}
-	}, [roles, defaultRoleId, agentRoleId]);
+	}, [roles, defaultRoleId, agentRoleId, type, selectedRole, selectedRoleFits]);
 
 	const handleSubmit = useCallback(
 		async (e: React.FormEvent) => {
 			e.preventDefault();
 			const trimmed = title.trim();
-			if (!trimmed || !agentRoleId || isSubmitting) return;
+			if (!trimmed || !selectedRoleFits || isSubmitting) return;
 
 			setError(null);
 			setIsSubmitting(true);
@@ -109,7 +124,16 @@ export default function CreateWorkSheet({
 				setIsSubmitting(false);
 			}
 		},
-		[title, type, storyId, agentRoleId, createWork, isSubmitting, onCreated],
+		[
+			title,
+			type,
+			storyId,
+			agentRoleId,
+			selectedRoleFits,
+			createWork,
+			isSubmitting,
+			onCreated,
+		],
 	);
 
 	// An empty list of roles is three different facts, and only one of them is
@@ -117,7 +141,10 @@ export default function CreateWorkSheet({
 	// back to loading on every reconnect, and it can fail outright. Saying "no
 	// agent roles registered" to a user whose roles are merely on their way is
 	// the same lie either of the other two states would tell.
-	if (roles.length === 0) {
+	//
+	// Roles that all belong to the other kind are a fourth fact, with its own
+	// way out: the fix is a restriction to change, not a role to create.
+	if (!hasEligibleRole) {
 		return (
 			<Sheet
 				title={TITLE[type]}
@@ -142,6 +169,17 @@ export default function CreateWorkSheet({
 							<Loader2 className="size-4 animate-spin" />
 							<p>Loading roles...</p>
 						</div>
+					) : roles.length > 0 ? (
+						<>
+							<p>No agent role takes {WORK_TYPE_PLURAL[type]}.</p>
+							<p className="text-th-text-muted">
+								Set a role to take {WORK_TYPE_PLURAL[type]} in{" "}
+								<span className="font-medium text-th-text-secondary">
+									Agent Roles
+								</span>{" "}
+								first.
+							</p>
+						</>
 					) : (
 						<>
 							{/* The control opened rather than refusing to: a disabled
@@ -186,7 +224,7 @@ export default function CreateWorkSheet({
 					</button>
 					<button
 						type="submit"
-						disabled={!title.trim() || !agentRoleId || isSubmitting}
+						disabled={!title.trim() || !selectedRoleFits || isSubmitting}
 						className="flex min-h-[44px] flex-1 items-center justify-center rounded-lg bg-th-accent px-4 text-sm font-medium text-th-accent-text transition-colors hover:bg-th-accent-hover disabled:cursor-not-allowed disabled:opacity-50"
 					>
 						{isSubmitting ? (
@@ -227,6 +265,7 @@ export default function CreateWorkSheet({
 						value={agentRoleId}
 						onChange={setAgentRoleId}
 						emptyLabel="Select role..."
+						workType={type}
 						disabled={isSubmitting}
 					/>
 				</div>

@@ -868,3 +868,81 @@ describe("the watcher line", () => {
 		expect(screen.queryByText("Watched by")).toBeNull();
 	});
 });
+
+// The server checks a role's work type when it is assigned, not afterwards, so
+// a role restricted later stays on the work it already had.
+describe("a role restricted to the other kind", () => {
+	beforeEach(() => {
+		mockUseWorkDetailSubscription.mockReset();
+		useWorkStore.setState({ works: [], isLoading: false, error: null });
+	});
+
+	it("says it stays, in words rather than as an error", () => {
+		useAgentRoleStore.setState({
+			roles: [createRole({ name: "PM", work_type: "story" })],
+			isLoading: false,
+			error: null,
+		});
+		renderWithWork(createWork({ type: "task", story_id: "story-1" }));
+
+		expect(
+			screen.getByText(
+				"PM only takes stories. It stays on this task until you change it.",
+			),
+		).toBeInTheDocument();
+		expect(screen.queryByRole("alert")).toBeNull();
+	});
+
+	it("offers only roles that take the work when changing it", async () => {
+		const user = userEvent.setup();
+		useAgentRoleStore.setState({
+			roles: [
+				createRole({ name: "PM", work_type: "story" }),
+				createRole({ id: "role-2", name: "Engineer", work_type: "task" }),
+				createRole({ id: "role-3", name: "Reviewer" }),
+			],
+			isLoading: false,
+			error: null,
+		});
+		renderWithWork(createWork({ type: "task", story_id: "story-1" }));
+
+		await user.click(screen.getByRole("button", { name: "PM" }));
+
+		expect(
+			within(screen.getByRole("combobox"))
+				.getAllByRole("option")
+				.map((o) => o.textContent),
+		).toEqual(["PM — stories only", "Engineer", "Reviewer"]);
+		expect(screen.queryByText(/No role takes tasks/)).toBeNull();
+	});
+
+	it("says where to go when no role takes the work", async () => {
+		const user = userEvent.setup();
+		useAgentRoleStore.setState({
+			roles: [createRole({ name: "PM", work_type: "story" })],
+			isLoading: false,
+			error: null,
+		});
+		renderWithWork(createWork({ type: "task", story_id: "story-1" }));
+
+		await user.click(screen.getByRole("button", { name: "PM" }));
+
+		expect(
+			screen.getByText(
+				"No role takes tasks. Set one to take tasks in Agent Roles.",
+			),
+		).toBeInTheDocument();
+	});
+
+	it("says nothing about kinds while the role list is empty", async () => {
+		const user = userEvent.setup();
+		// What a reconnect looks like: the store empties the list while it reloads.
+		useAgentRoleStore.setState({ roles: [], isLoading: true, error: null });
+		renderWithWork(createWork({ type: "task", story_id: "story-1" }));
+
+		await user.click(screen.getByRole("button", { name: "—" }));
+
+		expect(screen.getByRole("combobox")).toBeInTheDocument();
+		expect(screen.queryByText(/No role takes tasks/)).toBeNull();
+	});
+});

@@ -646,11 +646,14 @@ frequent action on this screen, and it is *fixed* because the top-of-list form
 it replaces scrolled away exactly when a long list made it most useful.
 
 The form is a `Sheet` (the shared component) holding the two fields the server
-requires and no others — title, and the role selector carrying the old inline
-form's default-role resolution unchanged. The description is not in the sheet:
-it is the brief the agent reads, it is usually several paragraphs, and it has a
-perfectly good editor on the page the user is about to land on. A second editor
-here would be two places to write one field.
+requires and no others — title, and the role selector, which offers only the
+roles that take the kind being created and preselects by the same rule the
+default-role footer describes
+([agent-roles-ui.md §8](agent-roles-ui.md#8-which-kind-of-work-a-role-takes)).
+The description is not in the sheet: it is the brief the agent reads, it is
+usually several paragraphs, and it has a perfectly good editor on the page the
+user is about to land on. A second editor here would be two places to write one
+field.
 
 When no agent role exists the sheet cannot ask for one, so it holds the old
 form's message instead of the fields — "No agent roles registered", and for a
@@ -662,6 +665,18 @@ An empty list of roles is three facts and only one of them is that message. The
 role subscription is app-wide, it starts out loading, it returns to loading on
 every reconnect, and it can fail — so the sheet says which of the three it is
 rather than telling a user whose roles are still arriving that there are none.
+
+Roles that exist but all take the other kind are a fourth fact, with a different
+way out — a restriction to change, not a role to create — so they get their own
+message in the same place and style, with the same single Close:
+
+```
+No agent role takes tasks.
+Set a role to take tasks in Agent Roles first.
+```
+
+(For a story, `stories` in both lines.) The create control stays enabled here
+too, for the same reason.
 
 The sequence, and what each step is for:
 
@@ -793,7 +808,7 @@ The checks, in the order they would fail, and where each one is now:
 | 6 | Back from a story detail reaches `/works`, and from a task detail its parent story | `WorkDetailOverlay.test.tsx` |
 | 7 | Both row controls are 44 × 44 under a coarse pointer | `web/tests/touchTarget.test.ts`, which reads every icon-only control |
 | 8 | The list and the story detail's Tasks section render the same row component, and only Tasks drops the parent slot | `WorkRow.test.tsx` (the slot), by construction elsewhere |
-| 9 | Creating with no agent role opens the sheet on its message rather than doing nothing | `CreateWorkSheet.test.tsx`, which also separates that message from *loading* and *failed* |
+| 9 | Creating with no agent role opens the sheet on its message rather than doing nothing | `CreateWorkSheet.test.tsx`, which also separates that message from *loading* and *failed*, and from roles that exist but none of which takes the kind |
 | 10 | A failed row command prints its message on the row, and the control keeps its own action label rather than wearing the error | `WorkRow.test.tsx` for the message and the label together, `WorkPrimaryAction.test.tsx` for the button on its own |
 | 11 | The message goes when the work's status changes under it without the row changing group | `WorkRow.test.tsx` |
 | 12 | The message is the control's accessible description while it is there, and the attribute is *absent* — not pointing at nothing — while it is not | `WorkRow.test.tsx`, in the same case as check 10. It asserts the missing attribute rather than an empty description, because a dangling id and no attribute compute the same empty description: assert the description and a dangling id passes |

@@ -146,9 +146,12 @@ server never assigns work from it: it only names the role a create form
 preselects ([agent-roles-ui.md §7](../agent-roles-ui.md#7-the-default-role-in-words-and-on-a-row)),
 and the one setting serves both the story and the task form, so tying it to one
 type would be wrong for the other. With the shipped defaults it is `PM`, which a
-task cannot take: a task created with that preselection is refused by the
-server, visibly, rather than accepted. Preselecting only a role that accepts the
-form's type is the client's job.
+task cannot take. Preselecting only a role that accepts the form's type is the
+client's job, and the web client does it: its task form treats a default of the
+other kind as no default
+([agent-roles-ui.md §8](../agent-roles-ui.md#8-which-kind-of-work-a-role-takes)).
+A client that does not has the create refused by the server, visibly, rather
+than accepted.
 
 ## Hierarchy
 

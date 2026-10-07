@@ -21,6 +21,7 @@ import PageHeader from "../Layout/PageHeader";
 import { MarkdownContent } from "../ui";
 import { inputClass, inputFocusWithinClass } from "../ui/inputClass";
 import AgentRoleEngineSelector from "./AgentRoleEngineSelector";
+import AgentRoleWorkTypeField from "./AgentRoleWorkTypeField";
 
 interface Props {
 	roleId: string;
@@ -55,6 +56,7 @@ export default function AgentRoleDetailOverlay({ roleId, onBack }: Props) {
 					{/* Before the role prompt, which is an arbitrarily long markdown
 					    block: one row after it sits off the first screen on a phone. */}
 					<AgentRoleEngineSelector role={role} />
+					<AgentRoleWorkTypeField role={role} />
 					<InlineEditableRolePrompt role={role} />
 					<StepsEditor role={role} />
 					<DeleteSection role={role} onDeleted={onBack} />

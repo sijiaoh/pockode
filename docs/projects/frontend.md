@@ -189,7 +189,7 @@ Tasks, not an order of its own:
 4. **Unanswered questions** — A read-only block, present whenever `pending_questions` is non-empty, with one Answer button into the chat when the work has a session ([lifecycle-ui.md §6.2](../lifecycle-ui.md#62-detail-page))
 5. **Tasks** (story only) — The story's child tasks as `WorkRow`s, the one place a story's tasks are listed, plus an `Add Task` control opening `CreateWorkSheet`. The rows differ from the list's in one slot only: the story name is left off, because every row here is a task of the story on screen. The heading carries `closed/total` and, whenever any child is `active`, an "{n} active" count — the same count that makes a refused `step_done` legible (docs/lifecycle-ui.md §6.2)
 6. **Description** — Inline-editable textarea with Markdown rendering. Shown in full in every status: it is the part users read most, and hidden behind one line it would cost a tap every time. The card scrolls wide content (a long code line, a table) sideways itself, since `.code-block` leaves that to an ancestor and the next one up is the whole page
-7. **Role** — Inline-editable `RoleSelect` (tap to switch role)
+7. **Role** — Inline-editable `RoleSelect` (tap to switch role), offering only roles that take the work's kind. A kept role that no longer takes it gets a muted line under its name rather than an error ([agent-roles-ui.md §8](../agent-roles-ui.md#8-which-kind-of-work-a-role-takes))
 8. **Steps** — Step progress indicator showing current step position (if agent role has steps defined). Each step's text renders as Markdown, like the role page's copy of it ([lifecycle-ui.md §6.3](../lifecycle-ui.md#63-steplist))
 9. **Usage** — Tokens and cost, this item's own beside the total over it and its tasks, from the same `work.detail` subscription and updating live as its sessions spend ([usage-display-ui.md](../usage-display-ui.md), [aggregation](../code/work-system.md#usage-aggregation))
 10. **Comments** — Loaded via `work.detail.subscribe` (real-time), and read-only: the list is the record agents and the engine write about what happened, and nothing here writes or edits one. A comment carries no author field ([data-model.md](data-model.md#comment)), so an edit would leave nothing to tell a user's wording from the agent's — and the next agent to read the story with `work_comment_list` would take the rewrite as its predecessor's report
@@ -244,7 +244,8 @@ subscription is app-wide, starts out loading and returns to loading on every
 reconnect: `error` reports the failure, `isLoading` says the roles are still
 arriving, and only an empty list that is neither says "No agent roles
 registered". Telling a user whose roles are in flight that they have none is the
-kind of silent failure the project forbids.
+kind of silent failure the project forbids. A list whose roles all take the other
+kind is a fourth state with its own message ("No agent role takes tasks.").
 
 On failure the sheet stays open with the error under the fields and the typed
 title intact; on success it hands the new `id` to `onCreated` and leaves closing
@@ -263,6 +264,11 @@ label — the `Select role...` placeholder while nothing is picked, or the foote
 `None`, which is a real answer there. An id with no role behind it is shown as
 `Unknown role`, never as some other role
 ([agent-roles-ui.md §7](../agent-roles-ui.md#7-the-default-role-in-words-and-on-a-row)).
+`workType` limits the options to roles that take that kind, keeping a stored
+role that does not as the selected option with its suffix (`PM — stories
+only`); without it — the footer — every role is offered and each restricted one
+carries the suffix
+([agent-roles-ui.md §8](../agent-roles-ui.md#8-which-kind-of-work-a-role-takes)).
 
 ### AgentRoleListOverlay
 
@@ -271,15 +277,16 @@ holds and why the controls sit where they do — is
 [agent-roles-ui.md](../agent-roles-ui.md); this section describes the components.
 
 Activates `useAgentRoleSubscription`. Each role is a two-line card — name and
-default-role star on the first, then its engine, its step count and how many work
-items use it — and the whole card opens the detail page. Deleting has one home,
-at the bottom of that detail page, rather than a button per row.
+default-role star on the first, then its engine, its work-type restriction, its
+step count and how many work items use it — and the whole card opens the detail
+page. Deleting has one home, at the bottom of that detail page, rather than a
+button per row.
 
 Below the list, outside the scroll region so it survives an empty list, a footer
 holds the three things that are about the set of roles rather than one of them:
-the default-role `RoleSelect` with a line saying what a new story would start with,
-the inline "Add Role" form (name only; `role_prompt` is set to empty string), and
-Reset to defaults.
+the default-role `RoleSelect` with a line saying what a new story and a new task
+would each start with, the inline "Add Role" form (name only; `role_prompt` is
+set to empty string), and Reset to defaults.
 
 ### AgentRoleDetailOverlay
 
@@ -287,6 +294,9 @@ Shows detail for a single agent role:
 - **Name** — Inline-editable
 - **Engine** — Collapsed summary row opening a `ResponsivePanel` with Agent /
   Model / Effort choices (`AgentRoleEngineSelector`)
+- **Work type** — `Both` / `Stories` / `Tasks`, applied on tap
+  (`AgentRoleWorkTypeField`, drawn with `components/ui/ToggleGroup.tsx`, which
+  Settings' Session section uses too)
 - **Role Prompt** — Inline-editable textarea with Markdown rendering
 - **Steps** — Reorderable list editor
 - **Delete** — Confirmation dialog

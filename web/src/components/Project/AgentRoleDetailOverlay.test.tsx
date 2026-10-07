@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useAgentOptionsStore } from "../../lib/agentOptionsStore";
@@ -149,5 +149,84 @@ describe("the steps list", () => {
 
 		const card = screen.getByDisplayValue("推进任务").closest("li > div");
 		expect(card?.classList).toContain("focus-within:border-th-border-focus");
+	});
+});
+
+describe("the work type field", () => {
+	const group = () => screen.getByRole("group", { name: "Work type" });
+	const segment = (name: string) =>
+		within(group()).getByRole("button", { name });
+
+	// "Both" is the cleared restriction, which the server reads from `""`;
+	// leaving the field out would leave the old restriction in place.
+	it.each([
+		["Stories", "story"],
+		["Tasks", "task"],
+		["Both", ""],
+	])("sends %s as work_type %j", async (label, workType) => {
+		const user = userEvent.setup();
+		useAgentRoleStore.setState({
+			roles: [{ ...role, work_type: workType === "" ? "task" : undefined }],
+		});
+		renderOverlay();
+
+		await user.click(segment(label));
+
+		expect(updateAgentRole).toHaveBeenCalledWith({
+			id: "r1",
+			work_type: workType,
+		});
+	});
+
+	// The lit segment is the server's record, not the tap: a refused write must
+	// not leave the screen claiming a restriction the role does not have.
+	it("lights the stored value and keeps it when the write is refused", async () => {
+		const user = userEvent.setup();
+		updateAgentRole.mockRejectedValue(new Error("nope"));
+		renderOverlay();
+
+		expect(segment("Both")).toHaveAttribute("aria-pressed", "true");
+		await user.click(segment("Tasks"));
+
+		expect(segment("Both")).toHaveAttribute("aria-pressed", "true");
+		expect(screen.getByRole("alert").textContent).toBe("nope");
+
+		updateAgentRole.mockResolvedValue(undefined);
+		await user.click(segment("Stories"));
+		expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+	});
+
+	it("says which work the role can be assigned to", () => {
+		useAgentRoleStore.setState({ roles: [{ ...role, work_type: "story" }] });
+		renderOverlay();
+
+		expect(
+			screen.getByText("Can only be assigned to stories."),
+		).toBeInTheDocument();
+	});
+
+	// The server checks only when an assignment changes, so a restriction never
+	// takes the role off work that has it — said only where there is such work.
+	it("says work already on a restricted role keeps it, when there is any", () => {
+		useAgentRoleStore.setState({
+			roles: [{ ...role, work_type: "task" }],
+			workRefCounts: { r1: 2 },
+		});
+		renderOverlay();
+
+		expect(
+			screen.getByText(
+				"Can only be assigned to tasks. Work items already using it keep it.",
+			),
+		).toBeInTheDocument();
+	});
+
+	it("does not mention existing work when the role is unrestricted", () => {
+		useAgentRoleStore.setState({ workRefCounts: { r1: 2 } });
+		renderOverlay();
+
+		expect(
+			screen.getByText("Can be assigned to stories and tasks."),
+		).toBeInTheDocument();
 	});
 });
