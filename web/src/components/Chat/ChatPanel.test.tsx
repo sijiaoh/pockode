@@ -19,6 +19,10 @@ import { clearAnswerIntent, requestAnswerPanel } from "../../lib/answerIntent";
 import { uploadChatAttachment } from "../../lib/chatAttachments";
 import { useInputStore } from "../../lib/inputStore";
 import { useQuestionDraftStore } from "../../lib/questionDraftStore";
+import {
+	resetChatUIConfig,
+	setChatUIConfig,
+} from "../../lib/registries/chatUIRegistry";
 import type { SentMessage } from "../../lib/rpc";
 import { useSessionDetailStore } from "../../lib/sessionDetailStore";
 import { useSessionStore } from "../../lib/sessionStore";
@@ -274,6 +278,43 @@ const acceptSetting = (overrides: Partial<SessionDetail>) => {
 		.getState()
 		.setDetail(mockState.sessionDetail.id, mockState.sessionDetail);
 };
+
+/** One dropped entry, as `DataTransferItem` describes it. */
+function dropItem(file: File, isDirectory = false) {
+	return {
+		kind: "file",
+		getAsFile: () => file,
+		webkitGetAsEntry: () => ({ isDirectory }),
+	};
+}
+
+/**
+ * A file drag over `target`, as far as the drop handlers read one. jsdom has no
+ * `DragEvent` or `DataTransfer`; React dispatches on the type name.
+ * `dropEffect` starts unset, so an assertion on it reads what the zone wrote.
+ */
+function dragFiles(target: Element, items: ReturnType<typeof dropItem>[] = []) {
+	const dataTransfer = {
+		types: ["Files"],
+		dropEffect: "",
+		files: [],
+		items,
+	};
+	const fire = (type: string) => {
+		const event = new MouseEvent(type, { bubbles: true, cancelable: true });
+		Object.defineProperty(event, "dataTransfer", { value: dataTransfer });
+		fireEvent(target, event);
+		return event;
+	};
+	fire("dragenter");
+	const over = fire("dragover");
+	return {
+		dataTransfer,
+		/** Whether anything under the window claimed the drag. */
+		claimed: over.defaultPrevented,
+		drop: () => fire("drop"),
+	};
+}
 
 describe("ChatPanel", () => {
 	const defaultProps = {
@@ -1373,6 +1414,26 @@ describe("ChatPanel", () => {
 				expect(cardTakesTheRoom()).toBe(true);
 			});
 
+			// Files dropped there would go into a draft nobody can see.
+			it("refuses a drop while the composer is folded away", async () => {
+				const user = userEvent.setup();
+				viewport.set(true);
+				seedUnansweredQuestion();
+				render(<ChatPanel {...defaultProps} />);
+				await waitForHistoryLoad();
+				await answerInThePanel(user);
+
+				const drag = dragFiles(answerPanel(), [
+					dropItem(new File(["a"], "a.txt")),
+				]);
+				expect(drag.dataTransfer.dropEffect).toBe("none");
+				expect(
+					screen.getByText("Close the question card to attach files"),
+				).toBeInTheDocument();
+				drag.drop();
+				expect(uploadChatAttachment).not.toHaveBeenCalled();
+			});
+
 			// The strip is what is deliberately *not* folded, and this is why: a
 			// permission request can arrive while the panel is up, the server
 			// refuses answers until it is dealt with, and the strip's first row is
@@ -2292,6 +2353,240 @@ describe("ChatPanel", () => {
 			).toBeInTheDocument();
 			expect(screen.getByRole("textbox")).toHaveValue("what is this");
 			expect(onUpdateTitle).not.toHaveBeenCalled();
+		});
+	});
+
+	// Dropping is a shortcut for the composer's `+`, taken exactly where that
+	// button can be used, and said no to — with the reason — everywhere else
+	// under the header.
+	describe("dropping files", () => {
+		const shot = {
+			id: "a1.png",
+			name: "shot.png",
+			size: 4,
+			mime: "image/png",
+		};
+		const file = () => new File(["abcd"], "shot.png", { type: "image/png" });
+		/** Everything under the header, whatever is drawn in it right now. */
+		const dropZone = () => {
+			const zone = screen.getByRole("banner").nextElementSibling;
+			if (!zone) throw new Error("nothing under the header");
+			return zone;
+		};
+		const overlayText = () =>
+			screen.queryByTestId("chat-drop-overlay")?.textContent ?? null;
+
+		beforeEach(() => {
+			URL.createObjectURL = vi.fn(() => "blob:preview");
+			URL.revokeObjectURL = vi.fn();
+			vi.mocked(uploadChatAttachment).mockResolvedValue(shot);
+		});
+		afterEach(() => resetChatUIConfig());
+
+		it("attaches what is dropped on the transcript", async () => {
+			render(<ChatPanel {...defaultProps} />);
+			await waitForHistoryLoad();
+
+			const drag = dragFiles(screen.getByText("Start a conversation..."), [
+				dropItem(file()),
+			]);
+			expect(drag.dataTransfer.dropEffect).toBe("copy");
+			expect(overlayText()).toBe("Drop files to attach");
+
+			drag.drop();
+			expect(overlayText()).toBeNull();
+			expect(
+				await screen.findByRole("img", { name: "shot.png" }),
+			).toBeInTheDocument();
+		});
+
+		// The composer stays under these pages, so the files land where the
+		// user can see them.
+		it("attaches over a page that keeps the composer", async () => {
+			render(
+				<ChatPanel
+					{...defaultProps}
+					overlay={{ type: "file", path: "a.ts" }}
+				/>,
+			);
+			await waitForHistoryLoad();
+
+			const drag = dragFiles(screen.getByTestId("file-view"), [
+				dropItem(file()),
+			]);
+			expect(drag.dataTransfer.dropEffect).toBe("copy");
+			drag.drop();
+			expect(
+				await screen.findByRole("img", { name: "shot.png" }),
+			).toBeInTheDocument();
+		});
+
+		// The `+` menu counts as covering the page, which is why the zone asks
+		// the DOM rather than the cover count.
+		it("still attaches with the + menu open", async () => {
+			const user = userEvent.setup();
+			render(<ChatPanel {...defaultProps} />);
+			await waitForHistoryLoad();
+			await user.click(screen.getByRole("button", { name: "Add" }));
+
+			const drag = dragFiles(screen.getByRole("menuitem", { name: /Files/ }), [
+				dropItem(file()),
+			]);
+			expect(drag.dataTransfer.dropEffect).toBe("copy");
+			drag.drop();
+			expect(uploadChatAttachment).toHaveBeenCalled();
+		});
+
+		it("attaches the files of a drop and says why its folder was not", async () => {
+			render(
+				<ChatPanel
+					{...defaultProps}
+					overlay={{ type: "file", path: "a.ts" }}
+				/>,
+			);
+			await waitForHistoryLoad();
+
+			dragFiles(screen.getByTestId("file-view"), [
+				dropItem(file()),
+				dropItem(new File([], "src"), true),
+			]).drop();
+
+			expect(await screen.findByRole("alert")).toHaveTextContent(
+				"Folders can't be uploaded",
+			);
+			expect(uploadChatAttachment).toHaveBeenCalledTimes(1);
+
+			// The next clean drop takes the refusal back.
+			dragFiles(screen.getByTestId("file-view"), [dropItem(file())]).drop();
+			expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+		});
+
+		it.each([
+			[
+				"a read-only session",
+				{
+					view: { worktree: "feature-x", exists: true, label: "feature-x" },
+				},
+				"Read-only — files can't be attached here",
+			],
+			[
+				"a route with no session",
+				{ sessionId: "", isSessionResolved: false },
+				"Open a session to attach files",
+			],
+			[
+				"a page that hides the composer",
+				{ overlay: { type: "work-list", segment: "current" } as const },
+				"Go back to the chat to attach files",
+			],
+			[
+				"a session still loading",
+				{ isSessionResolved: false },
+				"Wait for the session to load",
+			],
+		])("refuses on %s, and says why", async (_, props, reason) => {
+			render(<ChatPanel {...defaultProps} {...props} />);
+
+			const drag = dragFiles(dropZone(), [dropItem(file())]);
+			expect(drag.dataTransfer.dropEffect).toBe("none");
+			expect(overlayText()).toBe(reason);
+
+			drag.drop();
+			expect(uploadChatAttachment).not.toHaveBeenCalled();
+			expect(useInputStore.getState().attachments).toEqual({});
+		});
+
+		// Files must never go into a draft the user cannot see.
+		it("refuses under a message box of an extension's", async () => {
+			setChatUIConfig({ InputBar: () => <div>custom bar</div> });
+			render(<ChatPanel {...defaultProps} />);
+			await waitForHistoryLoad();
+
+			const drag = dragFiles(screen.getByText("custom bar"), [
+				dropItem(file()),
+			]);
+			expect(drag.dataTransfer.dropEffect).toBe("none");
+			expect(overlayText()).toBe("This message box doesn't take files");
+			drag.drop();
+			expect(uploadChatAttachment).not.toHaveBeenCalled();
+		});
+
+		it("leaves a drag over the header to the window guard", async () => {
+			render(<ChatPanel {...defaultProps} />);
+			await waitForHistoryLoad();
+
+			// No guard is mounted here, so nothing at all may touch the drag.
+			const drag = dragFiles(screen.getByRole("banner"));
+			expect(drag.claimed).toBe(false);
+			expect(drag.dataTransfer.dropEffect).toBe("");
+			expect(overlayText()).toBeNull();
+		});
+
+		// Pasting is the same shortcut again, for a screenshot on the clipboard.
+		describe("pasting into the composer", () => {
+			const paste = (
+				items: ReturnType<typeof dropItem>[],
+				text = "",
+			): ClipboardEvent => {
+				const event = new Event("paste", {
+					bubbles: true,
+					cancelable: true,
+				}) as ClipboardEvent;
+				Object.defineProperty(event, "clipboardData", {
+					value: {
+						types: [...(text ? ["text/plain"] : []), "Files"],
+						getData: (type: string) => (type === "text/plain" ? text : ""),
+						files: [],
+						items,
+					},
+				});
+				fireEvent(screen.getByRole("textbox"), event);
+				return event;
+			};
+
+			it("attaches a clipboard that holds only files", async () => {
+				render(<ChatPanel {...defaultProps} />);
+				await waitForHistoryLoad();
+
+				expect(paste([dropItem(file())]).defaultPrevented).toBe(true);
+				expect(
+					await screen.findByRole("img", { name: "shot.png" }),
+				).toBeInTheDocument();
+			});
+
+			// Copying from a spreadsheet or a web page brings a rendered picture
+			// along; the text is what was meant.
+			it("leaves a paste with text in it to the browser", async () => {
+				render(<ChatPanel {...defaultProps} />);
+				await waitForHistoryLoad();
+
+				expect(paste([dropItem(file())], "a | b").defaultPrevented).toBe(false);
+				expect(uploadChatAttachment).not.toHaveBeenCalled();
+			});
+
+			// A file manager puts the copied file's name beside it as text.
+			it("attaches a file copied in a file manager, not its name", async () => {
+				render(<ChatPanel {...defaultProps} />);
+				await waitForHistoryLoad();
+
+				expect(paste([dropItem(file())], "shot.png").defaultPrevented).toBe(
+					true,
+				);
+				expect(
+					await screen.findByRole("img", { name: "shot.png" }),
+				).toBeInTheDocument();
+			});
+
+			it("attaches the files of a paste and says why its folder was not", async () => {
+				render(<ChatPanel {...defaultProps} />);
+				await waitForHistoryLoad();
+
+				paste([dropItem(file()), dropItem(new File([], "src"), true)]);
+				expect(await screen.findByRole("alert")).toHaveTextContent(
+					"Folders can't be uploaded",
+				);
+				expect(uploadChatAttachment).toHaveBeenCalledTimes(1);
+			});
 		});
 	});
 

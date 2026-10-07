@@ -9,6 +9,7 @@ import {
 	useState,
 } from "react";
 import { contentsQueryKey } from "../../hooks/useContents";
+import { FOLDER_DROP_REFUSED } from "../../hooks/useFileDragZone";
 import {
 	FILE_SEARCH_QUERY_KEY,
 	useFileSearch,
@@ -42,7 +43,7 @@ import FileSearchResults from "./FileSearchResults";
 import FileTree from "./FileTree";
 import UploadConflictDialog from "./UploadConflictDialog";
 import UploadQueue from "./UploadQueue";
-import { FOLDER_DROP_REFUSED, useFileDrop } from "./useFileDrop";
+import { useFileDrop } from "./useFileDrop";
 
 interface Props {
 	onSelectFile: (path: string) => void;
