@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 
+	"github.com/pockode/server/agentrole"
 	"github.com/pockode/server/rpc"
 	"github.com/pockode/server/work"
 	"github.com/sourcegraph/jsonrpc2"
@@ -27,25 +28,18 @@ func (h *rpcMethodHandler) handleWorkCreate(ctx context.Context, conn *jsonrpc2.
 		return
 	}
 
-	// Validate agent_role_id is provided and exists
-	if params.AgentRoleID == "" {
-		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "agent_role_id is required")
-		return
-	}
-	if _, found, err := h.agentRoleStore.Get(params.AgentRoleID); err != nil {
-		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInternalError, "failed to validate agent role")
-		return
-	} else if !found {
-		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "agent role not found: "+params.AgentRoleID)
-		return
-	}
-
-	w, err := h.workStore.Create(ctx, work.Work{
+	w := work.Work{
 		StoryID:     params.StoryID,
 		AgentRoleID: params.AgentRoleID,
 		Title:       params.Title,
 		Body:        params.Body,
-	})
+	}
+	if err := agentrole.CheckAssignment(h.agentRoleStore, w.AgentRoleID, w.Type()); err != nil {
+		h.replyWorkError(ctx, conn, req.ID, err, "failed to validate agent role")
+		return
+	}
+
+	w, err := h.workStore.Create(ctx, w)
 	if err != nil {
 		h.replyWorkError(ctx, conn, req.ID, err, "failed to create work")
 		return
@@ -65,15 +59,9 @@ func (h *rpcMethodHandler) handleWorkUpdate(ctx context.Context, conn *jsonrpc2.
 		return
 	}
 
-	// Validate agent_role_id exists if specified
-	if params.AgentRoleID != nil && *params.AgentRoleID != "" {
-		if _, found, err := h.agentRoleStore.Get(*params.AgentRoleID); err != nil {
-			h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInternalError, "failed to validate agent role")
-			return
-		} else if !found {
-			h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "agent role not found: "+*params.AgentRoleID)
-			return
-		}
+	if err := agentrole.CheckReassignment(h.agentRoleStore, h.workStore, params.ID, params.AgentRoleID); err != nil {
+		h.replyWorkError(ctx, conn, req.ID, err, "failed to validate agent role")
+		return
 	}
 
 	fields := work.UpdateFields{

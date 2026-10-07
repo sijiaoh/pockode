@@ -8,8 +8,10 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/pockode/server/agentrole"
 	"github.com/pockode/server/rpc"
 	"github.com/pockode/server/work"
+	"github.com/sourcegraph/jsonrpc2"
 )
 
 // --- work.create ---
@@ -211,6 +213,42 @@ func TestHandler_WorkCreate_InvalidAgentRoleID(t *testing.T) {
 	}
 	if !strings.Contains(resp.Error.Message, "agent role not found") {
 		t.Errorf("expected 'agent role not found' error, got %q", resp.Error.Message)
+	}
+}
+
+// work.create and work.update refuse a role that does not take the work's type
+// as InvalidParams, so the client shows the reason instead of "internal error".
+func TestHandler_Work_RefusesARoleOfTheWrongWorkType(t *testing.T) {
+	env := newTestEnv(t, &mockAgent{})
+	resp := env.call("agent_role.create", map[string]any{"name": "Engineer", "work_type": "task"})
+	if resp.Error != nil {
+		t.Fatalf("create role: %s", resp.Error.Message)
+	}
+	var engineer agentrole.AgentRole
+	if err := json.Unmarshal(resp.Result, &engineer); err != nil {
+		t.Fatal(err)
+	}
+	storyResp := env.call("work.create", rpc.WorkCreateParams{AgentRoleID: env.testRoleID, Title: "S"})
+	if storyResp.Error != nil {
+		t.Fatalf("create story: %s", storyResp.Error.Message)
+	}
+	var story work.Work
+	if err := json.Unmarshal(storyResp.Result, &story); err != nil {
+		t.Fatal(err)
+	}
+
+	for method, params := range map[string]any{
+		"work.create": rpc.WorkCreateParams{AgentRoleID: engineer.ID, Title: "S2"},
+		"work.update": rpc.WorkUpdateParams{ID: story.ID, AgentRoleID: &engineer.ID},
+	} {
+		resp := env.call(method, params)
+		if resp.Error == nil || resp.Error.Code != jsonrpc2.CodeInvalidParams {
+			t.Errorf("%s: error = %+v, want InvalidParams", method, resp.Error)
+			continue
+		}
+		if !strings.Contains(resp.Error.Message, "only takes task work") {
+			t.Errorf("%s: message = %q, want the reason", method, resp.Error.Message)
+		}
 	}
 }
 

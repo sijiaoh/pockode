@@ -106,7 +106,7 @@ On creation (`FileStore.Create` in `server/work/store.go`):
 1. **Title required** — non-empty string
 2. **`StoryID` names a story** — when set, it must name a work that exists and is itself a story (`ValidateStory`); this is the one hierarchy rule [above](#two-level-tree-structure) leaves
 3. **Story not closed** — cannot add tasks to a closed story; reopen it first
-4. **AgentRoleID required** — non-empty here; that the role actually exists is checked one layer up, in `handleWorkCreate` (`server/ws/rpc_work.go`)
+4. **AgentRoleID required** — non-empty here; that the role exists and takes the work's type is checked one layer up, by `agentrole.CheckAssignment`, which MCP and WebSocket both call before `Create` ([Work Type Field](../projects/data-model.md#work-type-field))
 
 There is no type to validate: it is not an input (see above).
 
@@ -525,7 +525,7 @@ See [Posted Questions](agent-integration.md#posted-questions).
 
 | Tool | Purpose |
 |------|---------|
-| `agent_role_list` | List available roles (without prompts) |
+| `agent_role_list` | List available roles (without prompts); `work_type` narrows it to the roles that take that kind |
 | `agent_role_get` | Get role details including system prompt |
 | `agent_role_reset_defaults` | Reset to default roles |
 

@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/pockode/server/session"
+	"github.com/pockode/server/work"
 )
 
 var (
@@ -28,9 +29,13 @@ type AgentRole struct {
 	Model string `json:"model,omitempty"`
 	// Effort is agent-specific (see session/effort.go), with the same dependency
 	// on AgentType as Model. Empty means the CLI keeps its own default.
-	Effort    string    `json:"effort,omitempty"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	Effort string `json:"effort,omitempty"`
+	// WorkType is the kind of work item this role may be assigned to. Empty —
+	// what every role created before this field existed carries — means the role
+	// takes either kind. Judge it with AcceptsWorkType, never by comparing it.
+	WorkType  work.WorkType `json:"work_type,omitempty"`
+	CreatedAt time.Time     `json:"created_at"`
+	UpdatedAt time.Time     `json:"updated_at"`
 }
 
 // Engine is the role's preference for the sessions started under it. An empty
@@ -42,6 +47,22 @@ func (r AgentRole) Engine() session.Engine {
 		Model:     r.Model,
 		Effort:    r.Effort,
 	}
+}
+
+// AcceptsWorkType reports whether this role may be assigned to a work item of
+// type t. It is the single answer to that question: anything that filters roles
+// or refuses an assignment asks here, so "empty means any" is decided once.
+func (r AgentRole) AcceptsWorkType(t work.WorkType) bool {
+	return r.WorkType == "" || r.WorkType == t
+}
+
+// ValidateWorkType checks a role's WorkType: a known work type, or empty for no
+// restriction.
+func ValidateWorkType(t work.WorkType) error {
+	if t == "" || t.Valid() {
+		return nil
+	}
+	return fmt.Errorf("%w: work_type must be %q, %q or empty, got %q", ErrInvalidRole, work.WorkTypeStory, work.WorkTypeTask, t)
 }
 
 type Operation string

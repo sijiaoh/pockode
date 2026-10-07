@@ -26,6 +26,12 @@ const (
 	WorkTypeTask  WorkType = "task"
 )
 
+// Valid reports whether t names a work type. A work item's own type is always
+// derived and never needs this; it is for a type that arrives from outside.
+func (t WorkType) Valid() bool {
+	return t == WorkTypeStory || t == WorkTypeTask
+}
+
 // WorkStatus is what the engine is allowed to do with a work item, and nothing
 // else. Four values, all of them intent:
 //

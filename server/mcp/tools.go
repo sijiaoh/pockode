@@ -58,7 +58,7 @@ var toolDefinitions = []toolDefinition{
 			Properties: map[string]propertySchema{
 				"title":         {Type: "string", Description: "Title of the story"},
 				"body":          {Type: "string", Description: "Detailed description or instructions for the story"},
-				"agent_role_id": {Type: "string", Description: "Agent role ID (required)"},
+				"agent_role_id": {Type: "string", Description: "Agent role ID (required). The role must take stories: agent_role_list with work_type \"story\" lists those"},
 			},
 			Required: []string{"title", "agent_role_id"},
 		},
@@ -72,7 +72,7 @@ var toolDefinitions = []toolDefinition{
 				"story_id":      {Type: "string", Description: "The story this task belongs to"},
 				"title":         {Type: "string", Description: "Title of the task"},
 				"body":          {Type: "string", Description: "Detailed description or instructions for the task"},
-				"agent_role_id": {Type: "string", Description: "Agent role ID (required)"},
+				"agent_role_id": {Type: "string", Description: "Agent role ID (required). The role must take tasks: agent_role_list with work_type \"task\" lists those"},
 			},
 			Required: []string{"story_id", "title", "agent_role_id"},
 		},
@@ -86,7 +86,7 @@ var toolDefinitions = []toolDefinition{
 				"id":            {Type: "string", Description: "Work item ID"},
 				"title":         {Type: "string", Description: "New title"},
 				"body":          {Type: "string", Description: "New body content"},
-				"agent_role_id": {Type: "string", Description: "New agent role ID"},
+				"agent_role_id": {Type: "string", Description: "New agent role ID. A new role must take this work item's type (see agent_role_list's work_type)"},
 			},
 			Required: []string{"id"},
 		},
@@ -221,11 +221,15 @@ var toolDefinitions = []toolDefinition{
 		},
 	},
 	{
-		Name:        "agent_role_list",
-		Description: "List all available agent roles. Use this to find which roles can be assigned to work items. Use agent_role_get for full details including role_prompt.",
+		Name: "agent_role_list",
+		Description: "List all available agent roles. Use this to find which roles can be assigned to work items. " +
+			"A role's work_type says which kind of work item it takes (story or task); a role without one takes either. " +
+			"Use agent_role_get for full details including role_prompt.",
 		InputSchema: inputSchema{
-			Type:       "object",
-			Properties: map[string]propertySchema{},
+			Type: "object",
+			Properties: map[string]propertySchema{
+				"work_type": {Type: "string", Enum: []string{"story", "task"}, Description: "Only list roles that can take this kind of work item, including roles that take either"},
+			},
 		},
 	},
 	{

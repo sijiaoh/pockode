@@ -58,6 +58,7 @@ engine its sessions run on.
 | agent_type  | AgentType  | Agent to run on; empty = the global default  |
 | model       | string     | Agent-specific model id; empty = CLI decides |
 | effort      | string     | Agent-specific effort; empty = CLI decides   |
+| work_type   | WorkType   | `story` / `task` it may be assigned to; empty = either |
 | created_at  | time       | Creation timestamp                           |
 | updated_at  | time       | Last modification timestamp                  |
 
@@ -103,6 +104,52 @@ three fields is not judged by them. The retired value surfaces where it actually
 bites, at [work start](workflow-engine.md#workstarter), in an error naming the
 role to fix.
 
+#### Work Type Field
+
+`work_type` says which kind of work item the role may be put on: `story`,
+`task`, or empty for either. A story wants a role whose steps break it into
+tasks, drive them and commit; a task wants one that executes and does not
+commit. Written only in the role prompt, that constraint was invisible to the
+agent doing the assigning — it reads its own prompt, not the candidates' — so a story
+handed to an engineer was never split and never committed. The system therefore
+declares the type, filters `agent_role_list` by it, and refuses an assignment
+that breaks it.
+
+**Empty is a real value, not a missing one.** It means "no restriction", which
+is what every role written before the field existed reads as, so nothing is
+migrated and an old `index.json` behaves exactly as before. The question
+"does this role take this type?" is answered in one place, `AgentRole.AcceptsWorkType`;
+`agent_role_list`'s filter and the assignment check both ask it, so the meaning
+of empty cannot drift between them. Any other value is refused
+with `ErrInvalidRole`, the whole update rolled back as for the engine fields.
+
+**It is checked when a role is assigned, and never again.** The check —
+`agentrole.CheckAssignment`, and `CheckReassignment` for an update, in
+`server/agentrole/assign.go` — runs on every write that sets a role: MCP
+`story_create` / `task_create` / `work_update` and WebSocket `work.create` /
+`work.update`. Starting, stepping, reopening, and an update that leaves the role
+alone or names the role the work already has are not judged by it. The reason is
+the same as for a retired model above: restricting a role must not make the work
+that already uses it read-only or unstartable. A work keeps the role it was
+legitimately given; the restriction governs what is assigned from then on. A
+refusal wraps `work.ErrInvalidWork`, so both transports report it as the
+caller's mistake, and its message lists the roles that would have been
+accepted, so an agent can retry without another listing.
+
+**Defaults.** The built-in roles carry a type: `PM` takes stories; the engineer,
+UI designer, documentation writer and reviewer take tasks. That applies only to
+roles the defaults create — the first seed of a data dir and
+`ResetDefaults` — and never rewrites a role that already exists.
+
+**The default role (`settings.default_agent_role_id`) is not restricted.** The
+server never assigns work from it: it only names the role a create form
+preselects ([agent-roles-ui.md §7](../agent-roles-ui.md#7-the-default-role-in-words-and-on-a-row)),
+and the one setting serves both the story and the task form, so tying it to one
+type would be wrong for the other. With the shipped defaults it is `PM`, which a
+task cannot take: a task created with that preselection is refused by the
+server, visibly, rather than accepted. Preselecting only a role that accepts the
+form's type is the client's job.
+
 ## Hierarchy
 
 `story_id` *is* the hierarchy. A work without one is a story; a work with one is
@@ -113,7 +160,8 @@ cannot be written down at all.
 - The only rule left to check is that `story_id` names a work that exists and is
   itself a story — a task naming a task is how a third level would be built, and
   that is where it is refused.
-- `agent_role_id` is required on all work items.
+- `agent_role_id` is required on all work items, and the role must take the
+  work's type when it is assigned ([Work Type Field](#work-type-field)).
 - Deleting a story cascade-deletes its tasks.
 - "What is below this work" is one query, `work.TasksOf`, not a walk.
 
@@ -310,8 +358,8 @@ If `persistIndex` fails, the in-memory state is reverted to match the on-disk st
 | ------------------ | ------------------------------------------------------ | --------------------------------------------------------------------- |
 | List               | `() → ([]AgentRole, error)`                            | Returns all roles                                                     |
 | Get                | `(id) → (AgentRole, bool, error)`                      | Returns a single role; bool indicates found                           |
-| Create             | `(ctx, AgentRole) → (AgentRole, error)`                | Validates name, assigns ID and timestamps                             |
-| Update             | `(ctx, id, UpdateFields) → error`                      | Partial update; name cannot be empty; engine fields validated together |
+| Create             | `(ctx, AgentRole) → (AgentRole, error)`                | Validates name, engine fields and work_type; assigns ID and timestamps |
+| Update             | `(ctx, id, UpdateFields) → error`                      | Partial update; name cannot be empty; engine fields validated together; empty `work_type` clears the restriction |
 | Delete             | `(ctx, id) → error`                                    | Removes the role                                                      |
-| ResetDefaults      | `(ctx) → error`                                        | Deletes all roles and recreates built-in defaults                     |
+| ResetDefaults      | `(ctx) → error`                                        | Deletes all roles and recreates built-in defaults (with their `work_type`) |
 | AddOnChangeListener| `(OnChangeListener)`                                   | Registers a listener for create/update/delete events                  |

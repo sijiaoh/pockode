@@ -165,7 +165,7 @@ func (e *Executor) Execute(ctx context.Context, caller Caller, name string, args
 	case "work_comment_update":
 		return e.workCommentUpdate(ctx, args)
 	case "agent_role_list":
-		return e.agentRoleList()
+		return e.agentRoleList(args)
 	case "agent_role_get":
 		return e.agentRoleGet(args)
 	case "agent_role_reset_defaults":
@@ -344,22 +344,17 @@ func (e *Executor) createWork(ctx context.Context, args json.RawMessage, storyID
 		return "", userErrorf("invalid arguments: %w", err)
 	}
 
-	// Validate agent_role_id is provided and exists
-	if params.AgentRoleID == "" {
-		return "", userErrorf("agent_role_id is required")
-	}
-	if _, found, err := e.agentRoleStore.Get(params.AgentRoleID); err != nil {
-		return "", fmt.Errorf("failed to validate agent role: %w", err)
-	} else if !found {
-		return "", userErrorf("agent role %q not found", params.AgentRoleID)
-	}
-
-	created, err := e.workStore.Create(ctx, work.Work{
+	w := work.Work{
 		StoryID:     storyID,
 		Title:       params.Title,
 		Body:        params.Body,
 		AgentRoleID: params.AgentRoleID,
-	})
+	}
+	if err := agentrole.CheckAssignment(e.agentRoleStore, w.AgentRoleID, w.Type()); err != nil {
+		return "", err
+	}
+
+	created, err := e.workStore.Create(ctx, w)
 	if err != nil {
 		return "", err
 	}
@@ -378,13 +373,8 @@ func (e *Executor) workUpdate(ctx context.Context, args json.RawMessage) (string
 		return "", userErrorf("invalid arguments: %w", err)
 	}
 
-	// Validate agent_role_id exists if specified
-	if params.AgentRoleID != nil && *params.AgentRoleID != "" {
-		if _, found, err := e.agentRoleStore.Get(*params.AgentRoleID); err != nil {
-			return "", fmt.Errorf("failed to validate agent role: %w", err)
-		} else if !found {
-			return "", userErrorf("agent role %q not found", *params.AgentRoleID)
-		}
+	if err := agentrole.CheckReassignment(e.agentRoleStore, e.workStore, params.ID, params.AgentRoleID); err != nil {
+		return "", err
 	}
 
 	fields := work.UpdateFields{
@@ -780,22 +770,39 @@ func (e *Executor) workCommentUpdate(ctx context.Context, args json.RawMessage) 
 	return string(b), nil
 }
 
-func (e *Executor) agentRoleList() (string, error) {
+func (e *Executor) agentRoleList(args json.RawMessage) (string, error) {
+	var params struct {
+		WorkType work.WorkType `json:"work_type"`
+	}
+	if len(args) > 0 {
+		if err := json.Unmarshal(args, &params); err != nil {
+			return "", userErrorf("invalid arguments: %w", err)
+		}
+	}
+	if params.WorkType != "" && !params.WorkType.Valid() {
+		return "", userErrorf("work_type must be %q or %q, got %q", work.WorkTypeStory, work.WorkTypeTask, params.WorkType)
+	}
+
 	roles, err := e.agentRoleStore.List()
 	if err != nil {
 		return "", err
 	}
 
 	type roleItem struct {
-		ID   string `json:"id"`
-		Name string `json:"name"`
+		ID       string        `json:"id"`
+		Name     string        `json:"name"`
+		WorkType work.WorkType `json:"work_type,omitempty"`
 	}
-	items := make([]roleItem, len(roles))
-	for i, r := range roles {
-		items[i] = roleItem{
-			ID:   r.ID,
-			Name: r.Name,
+	items := make([]roleItem, 0, len(roles))
+	for _, r := range roles {
+		if params.WorkType != "" && !r.AcceptsWorkType(params.WorkType) {
+			continue
 		}
+		items = append(items, roleItem{
+			ID:       r.ID,
+			Name:     r.Name,
+			WorkType: r.WorkType,
+		})
 	}
 	b, err := json.Marshal(items)
 	if err != nil {
@@ -821,13 +828,15 @@ func (e *Executor) agentRoleGet(args json.RawMessage) (string, error) {
 	}
 
 	type roleDetail struct {
-		ID         string `json:"id"`
-		Name       string `json:"name"`
-		RolePrompt string `json:"role_prompt"`
+		ID         string        `json:"id"`
+		Name       string        `json:"name"`
+		WorkType   work.WorkType `json:"work_type,omitempty"`
+		RolePrompt string        `json:"role_prompt"`
 	}
 	b, err := json.Marshal(roleDetail{
 		ID:         role.ID,
 		Name:       role.Name,
+		WorkType:   role.WorkType,
 		RolePrompt: role.RolePrompt,
 	})
 	if err != nil {

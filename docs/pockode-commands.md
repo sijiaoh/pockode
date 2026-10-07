@@ -211,8 +211,9 @@ rules have to stay in step with those the engine gives the stories it starts.
 It is fixed in code for now. Users cannot edit it.
 
 What the agent is told, in short: split the agreed work into stories sized as
-single units; create each with a role; start each with `story_start`, with
-`watch` set and a new worktree; leave the stories' tasks alone; do not edit or
+single units; create each with a role from `agent_role_list` filtered to
+`work_type` `story`; start each with `story_start`, with `watch` set and a new
+worktree; leave the stories' tasks alone; do not edit or
 comment on a story once it has started; answer a story's questions when the
 discussion or the project settles them, and otherwise leave them, since the
 user is already being asked; merge each closed story into the branch; release
