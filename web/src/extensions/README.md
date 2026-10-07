@@ -103,9 +103,9 @@ See `chatUIRegistry.ts` for prop interfaces (`AvatarProps`, `InputBarProps`, etc
 Customize the header bar by replacing the entire header or just the title.
 
 ```ts
-// Replace the entire header (menu button, title, settings button, etc.)
+// Replace the entire header (sidebar button, title, settings button, etc.)
 ctx.headerUI.configure({
-  HeaderContent: CustomHeader, // receives { onOpenSidebar, onOpenSettings, title, heading }
+  HeaderContent: CustomHeader, // receives HeaderContentProps
 });
 
 // Or just replace the title's text (the open session's title, or the
@@ -119,7 +119,7 @@ ctx.headerUI.configure({
 See `headerUIRegistry.ts` for prop interfaces (`HeaderContentProps`, `TitleComponentProps`).
 
 > **Heads up:** `HeaderContent` replaces the **entire** header, including the
-> menu button, settings button, and the connection status indicator. Pockode
+> sidebar button, settings button, and the connection status indicator. Pockode
 > drives long-running AI sessions, so the connection indicator is part of the
 > baseline UX — if you replace `HeaderContent`, render it yourself:
 >
@@ -133,15 +133,25 @@ See `headerUIRegistry.ts` for prop interfaces (`HeaderContentProps`, `TitleCompo
 > (`import PortPreviewButton from "../../components/PortPreview/PortPreviewButton"`);
 > it renders nothing when the relay is disabled.
 >
-> The menu / settings buttons must likewise be re-implemented from the
+> The sidebar / settings buttons must likewise be re-implemented from the
 > `onOpenSidebar` / `onOpenSettings` props if you want to keep them, and left
-> out while their prop is absent (no menu beside a persistent sidebar, no
-> settings button on the Settings page); `headerIconButtonClass` from
-> `components/ui` gives them the built-in look. Render `heading` too whenever
-> it is given: it is the heading of whatever is on screen — in a chat the open
-> session's title button, the only way to the session's engine, permission
-> mode, work and usage; over a page (a diff, a file, Settings, a work item) the
-> page's way back and its title. It changes with the page, so a header that
+> out while their prop is absent (no sidebar button while the sidebar is
+> already on screen, no settings button on the Settings page);
+> `headerIconButtonClass` from `components/ui` gives them the built-in look.
+> The sidebar button needs two more props to match the built-in one:
+> `sidebarKind` (`"drawer"` or `"column"`) picks its icon and accessible name,
+> and `sidebarToggleRef` goes on it so that collapsing the column can move focus
+> there — without it focus drops to the page body. Keep `onOpenSidebar`'s button
+> mounted while the drawer is open over it; focus returns to it on close. To
+> show the built-in unread dot, call `useSidebarAttention()` from
+> `hooks/useSidebarAttention` and render a `BadgeDot` (`components/ui`) from
+> its `show` / `tone` — it stays off while a `SidebarContent` replaces the
+> built-in tabs, whose badges it stands for. The rules behind all three are in
+> [docs/responsive-ui.md](../../../docs/responsive-ui.md#at-expanded-the-column-collapses).
+> Render `heading` too whenever it is given: it is the heading of whatever is
+> on screen — in a chat the open session's title button, the only way to the
+> session's engine, permission mode, work and usage; over a page (a diff, a
+> file, Settings, a work item) the page's way back and its title. It changes with the page, so a header that
 > renders it follows every page without knowing any of them.
 
 ### ctx.sidebarUI.configure()
@@ -153,6 +163,16 @@ ctx.sidebarUI.configure({
   SidebarContent: CustomSidebarContent,
 });
 ```
+
+Inside it, `useSidebarContainer()` (`lib/sidebarContainerContext`) gives
+`isOpen` — the sidebar is **on screen**: the drawer is open, or the column is
+not collapsed — `onClose`, which takes it off screen in either tier (closes the
+drawer or collapses the column), and `isExpanded`, the width tier: which form
+the sidebar has, not whether it is visible. Render a button for `onClose` in
+both tiers, or the column has no way to collapse (`ExampleExtension`'s
+`SidebarHeader` shows the two labels). Guard any `onClose()` after a pick with
+`!isExpanded`: it closes the drawer behind the pick, and unguarded it would
+collapse the column on every click.
 
 ### A note on `configure()` and multiple extensions
 

@@ -365,9 +365,12 @@ Files tabs, so the two read as one family
 `th-warning` ([lifecycle-ui.md §4](lifecycle-ui.md#4-attention-dots)).
 
 The badge rides in the sidebar's tab bar, so it is visible exactly when that bar
-is: below `expanded` a closed drawer takes the whole bar with it, and the
-hamburger button that opens it carries nothing. A change indicator outside the
-drawer would be a different feature.
+is: a closed drawer or a collapsed column takes the whole bar with it. The
+header button that brings the sidebar back does wear a dot for the other tabs'
+badges, but not for this one
+([responsive-ui.md](responsive-ui.md#at-expanded-the-column-collapses)) — a
+count of changed files is the state of the repository, not something that
+happened. A change indicator outside the sidebar would be a different feature.
 
 ### Who subscribes to `git.changed`
 
@@ -376,22 +379,25 @@ the reason. Scoping the subscription to the Git tab being *active* is what the
 panel used to do, and it cannot feed a badge that exists to be read from the
 other tabs: `useGitStatus` never refetches on its own, so the number would be
 whatever it was when the user last left the panel. Subscribing unconditionally
-is no answer either, because below `expanded` the closed drawer is hidden with
-a class rather than unmounted — the server's 3-second poll would then run for a
-whole session in which the sidebar was never opened.
+is no answer either, because a closed drawer and a collapsed column are hidden
+with a class rather than unmounted — the server's 3-second poll would then run
+for a whole session in which the sidebar was never on screen.
 
 So it runs while somebody can read the answer, and stops otherwise:
 
 ```typescript
-enabled: isGitRepo && !SidebarContent && (isExpanded || isOpen || !!activeDiffFile)
+enabled: isGitRepo && !SidebarContent && (isOpen || !!activeDiffFile)
 ```
 
 - `isGitRepo` — **there is a repository to watch**, confirmed by the server;
   unknown counts as no ([below](#projects-without-a-repository)).
-- `isExpanded || isOpen` — **the tab bar is on screen**: the standing column at
-  `expanded` and above, an open drawer below it. A closed drawer is what this
-  excludes, and it is the whole reason a condition is needed at all — that
-  drawer is `hidden`, not gone.
+- `isOpen` — **the tab bar is on screen**: an open drawer below `expanded`, a
+  column that is not collapsed at and above it. A closed drawer or a collapsed
+  column is what this excludes, and it is the whole reason a condition is
+  needed at all — both are `hidden`, not gone. The term used to be
+  `isExpanded || isOpen`, from when the column could not be collapsed; the tier
+  says which sidebar there is, not whether it is visible
+  ([responsive-ui.md](responsive-ui.md#at-expanded-the-column-collapses)).
 - `activeDiffFile` — **a diff is open.** `DiffView` renders in the content area
   rather than in the sidebar and reads `git.status` for its previous/next file,
   and on a phone tapping a file closes the drawer behind it. Without this term
@@ -401,7 +407,8 @@ enabled: isGitRepo && !SidebarContent && (isExpanded || isOpen || !!activeDiffFi
   bar outright, so there is no badge to feed.
 
 Re-enabling resubscribes, and `useGitWatch` refreshes on `onSubscribed`, so
-opening the drawer shows a current number rather than a stale one for a frame.
+opening the drawer or expanding the column shows a current number rather than a
+stale one for a frame.
 
 ## Data behind the panel
 
