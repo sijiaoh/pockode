@@ -65,6 +65,11 @@ vi.mock("./Chat", () => ({
 			data-view-exists={view ? String(view.exists) : undefined}
 		>
 			{sessionId}
+			{onOpenSidebar && (
+				<button type="button" onClick={onOpenSidebar}>
+					Open menu
+				</button>
+			)}
 			<button
 				type="button"
 				onClick={() => onNavigateToSession?.("gone-session", "old-fix")}
@@ -90,8 +95,11 @@ vi.mock("./Chat", () => ({
 // The sidebar reports the row it would highlight, and fires onCreateSession for
 // the manual "+" path. Its rows can also belong to another worktree now, so it
 // offers one of each: what opening and deleting them mean is the shell's.
+// Whether it is open is the shell's too, so it reports that and offers a close.
 vi.mock("./Session", () => ({
 	SessionSidebar: ({
+		isOpen,
+		onClose,
 		currentSessionId,
 		onCreateSession,
 		onSelectSession,
@@ -99,6 +107,8 @@ vi.mock("./Session", () => ({
 		onOpenWorkList,
 		isExpanded,
 	}: {
+		isOpen: boolean;
+		onClose: () => void;
 		currentSessionId: string | null;
 		onCreateSession: () => void;
 		onSelectSession: (id: string, worktree: string | null) => void;
@@ -110,7 +120,11 @@ vi.mock("./Session", () => ({
 			data-testid="session-sidebar"
 			data-current-session={currentSessionId}
 			data-expanded={String(isExpanded)}
+			data-open={String(isOpen)}
 		>
+			<button type="button" onClick={onClose}>
+				Close sidebar
+			</button>
 			<button type="button" onClick={onCreateSession}>
 				New Chat
 			</button>
@@ -551,6 +565,43 @@ describe("AppShell sidebar form and its switch", () => {
 			"data-can-open-sidebar",
 			String(!expanded),
 		);
+	});
+
+	// The drawer is modal: what it is drawn over cannot be reached while it is
+	// up, and closing it puts the user back on the button that opened it.
+	it("takes the page behind out of reach while the drawer is open", async () => {
+		const user = userEvent.setup();
+		setExpanded(false);
+		renderAppShell("/w/A/s/a1");
+
+		const opener = await screen.findByRole("button", { name: "Open menu" });
+		expect(screen.getByTestId("chat-panel").closest("[inert]")).toBeNull();
+
+		await user.click(opener);
+
+		expect(screen.getByTestId("session-sidebar")).toHaveAttribute(
+			"data-open",
+			"true",
+		);
+		expect(screen.getByTestId("chat-panel").closest("[inert]")).not.toBeNull();
+		expect(screen.getByTestId("session-sidebar").closest("[inert]")).toBeNull();
+
+		await user.click(screen.getByRole("button", { name: "Close sidebar" }));
+
+		expect(screen.getByTestId("chat-panel").closest("[inert]")).toBeNull();
+		expect(opener).toHaveFocus();
+	});
+
+	// The column sits beside the chat, not over it.
+	it("leaves the page alone in the expanded tier", async () => {
+		setExpanded(true);
+		renderAppShell("/w/A/s/a1");
+
+		await waitFor(() => {
+			expect(screen.getByTestId("chat-panel")).toHaveTextContent("a1");
+		});
+
+		expect(document.querySelector("[inert]")).toBeNull();
 	});
 });
 

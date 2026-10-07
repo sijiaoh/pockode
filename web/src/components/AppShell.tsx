@@ -376,9 +376,30 @@ function AppShell() {
 		authActions.login(password);
 	};
 
+	// Below the expanded tier the sidebar is a modal drawer, and everything else
+	// in the shell is behind it.
+	const drawerOpen = sidebarOpen && !isExpanded;
+
+	// The opener is taken here, in the press, because by the time any effect
+	// runs it may already have lost focus: the page behind the drawer goes
+	// `inert` in the very commit that opens it.
+	const drawerOpenerRef = useRef<Element | null>(null);
 	const handleOpenSidebar = useCallback(() => {
+		drawerOpenerRef.current = document.activeElement;
 		setSidebarOpen(true);
 	}, []);
+
+	// Runs on close — however the drawer was closed — after the commit that took
+	// `inert` off the page again, which is what lets the opener take focus. An
+	// opener gone by then (grown into the expanded tier, which has none) is a
+	// detached node, and the DOM refuses it focus without being asked.
+	useEffect(() => {
+		if (!drawerOpen) return;
+		return () => {
+			const opener = drawerOpenerRef.current;
+			if (opener instanceof HTMLElement) opener.focus({ preventScroll: true });
+		};
+	}, [drawerOpen]);
 
 	// Growing into the expanded tier turns the drawer into a persistent column,
 	// which has no open/closed state of its own. Without this the flag survives
@@ -798,34 +819,38 @@ function AppShell() {
 		// list's overscroll chains into
 		// (docs/responsive-ui.md § Who owns the scroll boundary).
 		<div className="flex h-dvh flex-col overflow-hidden">
-			{createError && (
-				// Wraps rather than truncates: the reason is server text of any
-				// length, and the narrow screens this app targets are exactly where
-				// truncation would cut it off.
-				<div
-					className="flex flex-wrap items-center justify-center gap-3 bg-th-error/20 px-4 py-1 text-sm text-th-error"
-					role="alert"
-				>
-					<span className="break-words">
-						Couldn&apos;t start a new session: {createErrorMessage}
-					</span>
-					<button
-						type="button"
-						onClick={handleRetryCreateSession}
-						className="inline-flex min-h-9 shrink-0 items-center rounded px-2 underline pointer-coarse:min-h-11 pointer-coarse:min-w-11 hover:opacity-80"
+			{/* `contents`, so the wrapper only carries `inert` and takes no part in
+			    the layout; the same goes for the one around ChatPanel below. */}
+			<div className="contents" inert={drawerOpen}>
+				{createError && (
+					// Wraps rather than truncates: the reason is server text of any
+					// length, and the narrow screens this app targets are exactly where
+					// truncation would cut it off.
+					<div
+						className="flex flex-wrap items-center justify-center gap-3 bg-th-error/20 px-4 py-1 text-sm text-th-error"
+						role="alert"
 					>
-						Retry
-					</button>
-					<button
-						type="button"
-						onClick={clearCreateError}
-						className="inline-flex min-h-9 shrink-0 items-center rounded px-2 underline pointer-coarse:min-h-11 pointer-coarse:min-w-11 hover:opacity-80"
-					>
-						Dismiss
-					</button>
-				</div>
-			)}
-			<ReconnectBanner />
+						<span className="break-words">
+							Couldn&apos;t start a new session: {createErrorMessage}
+						</span>
+						<button
+							type="button"
+							onClick={handleRetryCreateSession}
+							className="inline-flex min-h-9 shrink-0 items-center rounded px-2 underline pointer-coarse:min-h-11 pointer-coarse:min-w-11 hover:opacity-80"
+						>
+							Retry
+						</button>
+						<button
+							type="button"
+							onClick={clearCreateError}
+							className="inline-flex min-h-9 shrink-0 items-center rounded px-2 underline pointer-coarse:min-h-11 pointer-coarse:min-w-11 hover:opacity-80"
+						>
+							Dismiss
+						</button>
+					</div>
+				)}
+				<ReconnectBanner />
+			</div>
 			<div className="flex min-h-0 flex-1">
 				<SessionSidebar
 					isOpen={sidebarOpen}
@@ -853,31 +878,33 @@ function AppShell() {
 					isExpanded={isExpanded}
 					isSwitchingWorktree={worktreeSwitchInFlight}
 				/>
-				<ChatPanel
-					view={sessionView}
-					onOpenSessionThere={handleOpenSessionThere}
-					sessionId={
-						sessionView ? (routeSessionId ?? "") : (currentSessionId ?? "")
-					}
-					sessionTitle={currentSession?.title ?? ""}
-					isSessionResolved={isSessionResolved}
-					onUpdateTitle={(title) => {
-						if (currentSessionId) updateTitle(currentSessionId, title);
-					}}
-					onOpenSidebar={isExpanded ? undefined : handleOpenSidebar}
-					onOpenSettings={handleOpenSettings}
-					overlay={overlay}
-					onCloseOverlay={handleCloseOverlay}
-					onNavigateToSession={handleNavigateToSession}
-					onSelectSession={handleSelectChatSession}
-					onOpenWorkDetail={handleOpenWorkDetail}
-					onOpenFile={handleSelectFile}
-					onOpenWorkList={handleBackToWorkList}
-					workSegment={workSegment}
-					onSelectWorkSegment={handleSelectWorkSegment}
-					onOpenAgentRoleList={handleOpenAgentRoleList}
-					onOpenAgentRoleDetail={handleOpenAgentRoleDetail}
-				/>
+				<div className="contents" inert={drawerOpen}>
+					<ChatPanel
+						view={sessionView}
+						onOpenSessionThere={handleOpenSessionThere}
+						sessionId={
+							sessionView ? (routeSessionId ?? "") : (currentSessionId ?? "")
+						}
+						sessionTitle={currentSession?.title ?? ""}
+						isSessionResolved={isSessionResolved}
+						onUpdateTitle={(title) => {
+							if (currentSessionId) updateTitle(currentSessionId, title);
+						}}
+						onOpenSidebar={isExpanded ? undefined : handleOpenSidebar}
+						onOpenSettings={handleOpenSettings}
+						overlay={overlay}
+						onCloseOverlay={handleCloseOverlay}
+						onNavigateToSession={handleNavigateToSession}
+						onSelectSession={handleSelectChatSession}
+						onOpenWorkDetail={handleOpenWorkDetail}
+						onOpenFile={handleSelectFile}
+						onOpenWorkList={handleBackToWorkList}
+						workSegment={workSegment}
+						onSelectWorkSegment={handleSelectWorkSegment}
+						onOpenAgentRoleList={handleOpenAgentRoleList}
+						onOpenAgentRoleDetail={handleOpenAgentRoleDetail}
+					/>
+				</div>
 			</div>
 		</div>
 	);

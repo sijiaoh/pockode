@@ -1,10 +1,13 @@
 import { useCoverPage } from "@pockode/shared";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 
 const SIDEBAR_WIDTH_KEY = "pockode:sidebar-width";
 const MIN_WIDTH = 240;
 const MAX_WIDTH = 500;
 const DEFAULT_WIDTH = 288; // w-72
+// One arrow press moves the edge by a step a sighted user can see land, and
+// MIN_WIDTH..MAX_WIDTH is then about sixteen presses across.
+const KEYBOARD_STEP = 16;
 
 function getInitialWidth(): number {
 	const saved = localStorage.getItem(SIDEBAR_WIDTH_KEY);
@@ -51,6 +54,19 @@ function Sidebar({ isOpen, onClose, children, isExpanded }: Props) {
 	// drawer: it is a sibling `document` listener, and if it was registered
 	// first it runs before the mark above is made.
 	useCoverPage(isOpen && !isExpanded);
+
+	// Focus goes to the panel rather than to its first control, as a `Sheet`'s
+	// does to the sheet: landing inside the dialog reads its name, and the first
+	// stop would only be whatever control the content happens to put first.
+	// Handing focus back on close is `AppShell`'s, because only it saw the
+	// opener: the page behind goes `inert` in the commit that opens the drawer,
+	// which drops focus off the opener before any effect here could note it.
+	const drawerRef = useRef<HTMLDivElement>(null);
+	useEffect(() => {
+		if (isOpen && !isExpanded) {
+			drawerRef.current?.focus({ preventScroll: true });
+		}
+	}, [isOpen, isExpanded]);
 
 	// The handle exists only in the expanded tier, so a viewport shrinking out of
 	// it takes the drag with it: the element is gone before any pointerup or
@@ -101,6 +117,41 @@ function Sidebar({ isOpen, onClose, children, isExpanded }: Props) {
 		localStorage.setItem(SIDEBAR_WIDTH_KEY, width.toString());
 	}, [isDragging, width]);
 
+	// The keyboard path to the same preference, after the WAI-ARIA window
+	// splitter: arrows step, Home and End go to the limits. Every press is
+	// final, so it is stored at once — there is no release to wait for.
+	// A chord is left alone: Alt+← is the browser's Back, and taking it here
+	// would strand a user whose focus happens to rest on the handle.
+	const handleKeyDown = useCallback(
+		(e: React.KeyboardEvent) => {
+			if (e.altKey || e.ctrlKey || e.metaKey) return;
+			let next: number;
+			switch (e.key) {
+				case "ArrowLeft":
+					next = width - KEYBOARD_STEP;
+					break;
+				case "ArrowRight":
+					next = width + KEYBOARD_STEP;
+					break;
+				case "Home":
+					next = MIN_WIDTH;
+					break;
+				case "End":
+					next = MAX_WIDTH;
+					break;
+				default:
+					return;
+			}
+			e.preventDefault();
+			next = Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, next));
+			setWidth(next);
+			localStorage.setItem(SIDEBAR_WIDTH_KEY, next.toString());
+		},
+		[width],
+	);
+
+	const columnId = useId();
+
 	// Expanded: a persistent column in the flex layout
 	if (isExpanded) {
 		return (
@@ -109,6 +160,7 @@ function Sidebar({ isOpen, onClose, children, isExpanded }: Props) {
 			// outrun a row the shell had already shortened by its banners
 			// (docs/responsive-ui.md § Who owns the scroll boundary).
 			<div
+				id={columnId}
 				className="relative flex shrink-0 flex-col border-r border-th-border bg-th-bg-secondary"
 				style={{ width }}
 			>
@@ -124,16 +176,32 @@ function Sidebar({ isOpen, onClose, children, isExpanded }: Props) {
 				 * taps that work today into drags. The floor is there to make
 				 * operations reachable, not to make a preference easier at the cost
 				 * of one.
+				 *
+				 * A focusable separator so a screen reader announces it as the
+				 * column's adjustable edge and a keyboard can move it. The focus
+				 * ring is the accent line hover already uses: an outline around an
+				 * 8px strip would sit over the column's own border.
 				 */}
+				{/* biome-ignore lint/a11y/useSemanticElements: an <hr> is a static rule; a focusable, valued separator is a widget and has no element */}
 				<div
+					role="separator"
+					aria-label="Resize sidebar"
+					aria-orientation="vertical"
+					aria-controls={columnId}
+					aria-valuenow={width}
+					aria-valuemin={MIN_WIDTH}
+					aria-valuemax={MAX_WIDTH}
+					aria-valuetext={`${width} pixels`}
+					tabIndex={0}
+					onKeyDown={handleKeyDown}
 					onPointerDown={handlePointerDown}
 					onPointerMove={handlePointerMove}
 					onPointerUp={handlePointerEnd}
 					onPointerCancel={handlePointerEnd}
-					className="group absolute top-0 right-0 z-10 h-full w-2 translate-x-1/2 cursor-col-resize touch-pan-y"
+					className="group absolute top-0 right-0 z-10 h-full w-2 translate-x-1/2 cursor-col-resize touch-pan-y outline-none"
 				>
 					<div
-						className={`absolute left-1/2 h-full w-0.5 -translate-x-1/2 transition-colors group-hover:bg-th-accent ${isDragging ? "bg-th-accent" : "bg-transparent"}`}
+						className={`absolute left-1/2 h-full w-0.5 -translate-x-1/2 transition-colors group-hover:bg-th-accent group-focus-visible:bg-th-accent ${isDragging ? "bg-th-accent" : "bg-transparent"}`}
 					/>
 				</div>
 			</div>
@@ -141,8 +209,19 @@ function Sidebar({ isOpen, onClose, children, isExpanded }: Props) {
 	}
 
 	// Compact and regular: overlay drawer (use CSS hiding to preserve scroll position)
+	//
+	// A modal dialog: `AppShell` makes everything behind it `inert` while it is
+	// open, so Tab and a screen reader stay inside without a trap of its own.
+	// The backdrop is inside the dialog on purpose — it is the one close control
+	// the drawer guarantees whatever content it holds, and a touch screen reader
+	// has no Escape to reach for.
 	return (
-		<div className={isOpen ? undefined : "hidden"}>
+		<div
+			className={isOpen ? undefined : "hidden"}
+			role="dialog"
+			aria-modal="true"
+			aria-label="Sidebar"
+		>
 			<button
 				type="button"
 				className="fixed inset-0 z-40 bg-th-bg-overlay"
@@ -150,7 +229,13 @@ function Sidebar({ isOpen, onClose, children, isExpanded }: Props) {
 				aria-label="Close sidebar"
 			/>
 
-			<div className="fixed inset-y-0 left-0 z-50 flex w-72 flex-col bg-th-bg-secondary">
+			{/* outline-none: focused on open only to announce the dialog, and a
+			    ring around the whole panel would read as a control. */}
+			<div
+				ref={drawerRef}
+				tabIndex={-1}
+				className="fixed inset-y-0 left-0 z-50 flex w-72 flex-col bg-th-bg-secondary outline-none"
+			>
 				<div className="flex flex-1 flex-col overflow-hidden">{children}</div>
 			</div>
 		</div>
