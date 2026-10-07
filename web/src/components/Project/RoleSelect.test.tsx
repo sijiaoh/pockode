@@ -5,9 +5,14 @@ import { useAgentRoleStore } from "../../lib/agentRoleStore";
 import type { AgentRole } from "../../types/agentRole";
 import RoleSelect from "./RoleSelect";
 
-const role = (id: string, name: string): AgentRole => ({
+const role = (
+	id: string,
+	name: string,
+	work_type?: AgentRole["work_type"],
+): AgentRole => ({
 	id,
 	name,
+	work_type,
 	role_prompt: "",
 	created_at: "2026-03-04T00:00:00Z",
 	updated_at: "2026-03-04T00:00:00Z",
@@ -54,5 +59,51 @@ describe("RoleSelect", () => {
 		expect(
 			screen.getByRole("option", { name: "Unknown role", selected: true }),
 		).toBeInTheDocument();
+	});
+
+	describe("for one kind of work", () => {
+		beforeEach(() => {
+			useAgentRoleStore.setState({
+				roles: [
+					role("pm", "PM", "story"),
+					role("r1", "Engineer", "task"),
+					role("r2", "Reviewer"),
+				],
+			});
+		});
+
+		it("offers only the roles that take it", () => {
+			render(
+				<RoleSelect
+					value=""
+					onChange={vi.fn()}
+					emptyLabel="Select role..."
+					workType="task"
+				/>,
+			);
+			expect(optionNames()).toEqual(["Select role...", "Engineer", "Reviewer"]);
+		});
+
+		// The server keeps an assignment made before the restriction, so the field
+		// still shows it — with the reason it is not otherwise on offer.
+		it("keeps a stored role that does not take it, saying why", () => {
+			render(<RoleSelect value="pm" onChange={vi.fn()} workType="task" />);
+
+			expect(screen.getByRole("combobox")).toHaveValue("pm");
+			expect(optionNames()).toEqual([
+				"PM — stories only",
+				"Engineer",
+				"Reviewer",
+			]);
+		});
+	});
+
+	it("names each restriction when offering roles for either kind", () => {
+		useAgentRoleStore.setState({
+			roles: [role("pm", "PM", "story"), role("r2", "Reviewer")],
+		});
+		render(<RoleSelect value="" onChange={vi.fn()} emptyLabel="None" />);
+
+		expect(optionNames()).toEqual(["None", "PM — stories only", "Reviewer"]);
 	});
 });

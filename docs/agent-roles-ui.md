@@ -114,8 +114,9 @@ on.
 | # | Slot | When | Why here |
 |---|---|---|---|
 | 1 | The engine, as one line | **every row** | It is the fact whose absence made two roles indistinguishable. Unconditional, so every card is exactly two lines tall and the list keeps one rhythm rather than growing and shrinking with the data |
-| 2 | `{n} steps` | the role has steps | Whether a role runs once or in stages, which the list says nowhere else |
-| 3 | `{n} work items` | the count is above zero | It decides whether deleting will be allowed (§5). Last, because it is the only fact here that is about something other than this role, and so the first thing worth losing when the line clips |
+| 2 | `Stories only` / `Tasks only` | the role is restricted to one kind | It decides which pickers the role appears in at all (§8), which matters more than how it runs once it is there |
+| 3 | `{n} steps` | the role has steps | Whether a role runs once or in stages, which the list says nowhere else |
+| 4 | `{n} work items` | the count is above zero | It decides whether deleting will be allowed (§5). Last, because it is the only fact here that is about something other than this role, and so the first thing worth losing when the line clips |
 
 The separator belongs to the slot that follows it, so an absent slot takes its
 separator with it. Nothing is right-aligned: there is no sort key on this list to
@@ -131,7 +132,9 @@ one-tier drop.
 **Zero is not written.** Both counts vanish at zero rather than reading `0 steps`;
 the slot's presence *is* the claim, and most roles would otherwise spend the
 line's width on something that has not happened. Same rule as the work row's
-`{n} active`.
+`{n} active`. A role that takes either kind writes no work-type slot for the same
+reason: unrestricted is the ordinary case, and `Both` on every such row would
+only spend width.
 
 ## 3. The engine is one sentence, written once
 
@@ -315,17 +318,28 @@ New stories and tasks start with this role.
 `RoleSelect` (`web/src/components/Project/RoleSelect.tsx`), the native
 `<select>` every role picker in this project uses — the create sheet and the work
 detail's Role field are the other two. `None` plus one option per role, and
-choosing `None` stores the empty string.
+choosing `None` stores the empty string. This is the one picker not tied to a
+kind of work, since the one setting serves both forms, so it offers every role
+and writes a restriction beside the name: `PM — stories only` (§8).
 
 **The sentence underneath changes with the answer**, and it is a description of
-what the create-work form will actually do:
+what the create-work form will actually do. The form preselects per kind, so the
+sentence is worked out for a new story and a new task separately, each landing on
+one of four outcomes:
 
-| State | Sentence |
+| Outcome for one kind | Fragment |
 |---|---|
-| The stored default is the one a new work would start on | `New stories and tasks start with this role.` |
-| No default, and more than one role to choose between | `New stories and tasks ask which role to use.` |
-| No default, and exactly one role | `New stories and tasks use <Name>, the only role.` |
-| No roles at all | *nothing* |
+| The stored default takes it, and is what the form starts on | `start with this role` |
+| Exactly one role takes it, and it is not the default | `use <Name>, the only role that takes them` |
+| Several take it and none is the default | `ask which role to use` |
+| No role takes it | `have no role that takes them` |
+
+When both kinds land on the same outcome it is one sentence, worded as it was
+before roles had a kind — `New stories and tasks start with this role.`,
+`… ask which role to use.`, `… use <Name>, the only role.` When they differ it is
+two: `New stories start with this role. New tasks ask which role to use.` — which
+is exactly what the shipped defaults read, because the default role `PM` takes
+stories only. With no roles at all it writes *nothing*.
 
 **Which is why the rule is shared, not restated.** `resolveInitialRole` in
 `web/src/lib/initialRole.ts` decides what the create sheet preselects, and this
@@ -333,11 +347,14 @@ sentence is read from the same call. A second copy of the rule here would be a
 sentence that starts lying the day the form's preselection changes, with nothing
 to turn red.
 
-The last row is the edge that shared rule cannot answer on its own: its return
-value says *which role to preselect*, so "there are none" and "there are several,
-ask" both come back as the empty string. With no roles the form does not ask — it
+The last two outcomes are the edge that shared rule cannot answer on its own: its
+return value says *which role to preselect*, so "there are none" and "there are
+several, ask" both come back as the empty string, and the footer tells them apart
+with `roleAcceptsWorkType` (§8). With no roles at all the form does not ask — it
 refuses and sends the user back to this screen — so the footer says nothing, and
 the empty-list message above is already saying it where the user is looking.
+Both kinds landing on *no role takes them* cannot happen while any role exists:
+an unrestricted role takes both, and a restricted one takes one.
 
 A stored id with no role behind it gets an `Unknown role` option of its own and
 stays selected, rather than falling back to `None`: `None` is an assertion that
@@ -370,11 +387,77 @@ contradiction:
    value, so the only thing needing an explanation is the sentence that claims to
    say what the default is — and the footer never scrolls away.
 
-## 8. The detail page, and what did not change
+## 8. Which kind of work a role takes
+
+A role may be restricted to stories or to tasks (`work_type`; the server's side,
+and why the field exists, is
+[projects/data-model.md](projects/data-model.md#work-type-field)). The server
+checks it only when an assignment changes, so a work keeps a role it was given
+before the role was restricted — and every surface below is written around that
+being a legal state, not an error.
+
+**One rule.** `roleAcceptsWorkType` in `web/src/lib/roleWorkType.ts` is the
+client's copy of the server's `AgentRole.AcceptsWorkType` — empty takes either —
+and every filter and check here asks it. `workTypeSuffix` beside it is the one
+wording of a restriction (`stories only` / `tasks only`), shared by the row's
+slot (§2) and the pickers' suffixes; `WORK_TYPE_PLURAL` is where the create
+sheet's and the work detail's sentences below get `stories` and `tasks` from.
+
+**On the detail page**, between Engine and Role prompt — for the same reason the
+engine sits above the prompt: one row after an arbitrarily long markdown block is
+off the first screen on a phone. A segmented control, `Both` / `Stories` /
+`Tasks`, that applies on tap like the engine does; `Both` sends `work_type: ""`,
+which is how `agent_role.update` clears the restriction. The lit segment is the
+server's record, not the tap, and a refused write leaves it where it was with the
+server's message under it, cleared on the next tap. No confirmation: it is
+reversible and takes nothing off existing work. The line under it says what the
+value means:
+
+| Value | Line |
+|---|---|
+| Both | `Can be assigned to stories and tasks.` |
+| Stories | `Can only be assigned to stories.` |
+| Tasks | `Can only be assigned to tasks.` |
+
+When the role is restricted and anything uses it (the row's `{n} work items`
+count), it adds `Work items already using it keep it.` That states the rule, not
+a finding about those items, so it is true whatever kind they are. The control is
+`components/ui/ToggleGroup.tsx`, the one Settings' Session section uses.
+
+**In a picker tied to a kind**, `RoleSelect` is given `workType` and offers only
+the roles that take it. A stored role that does not is still the stored one, so it
+stays as the selected option, named with the reason it would not otherwise be
+offered — `PM — stories only` — on the same principle as `Unknown role` (§7).
+
+**The create sheet** preselects by `resolveInitialRole` for its own kind, so a
+default restricted to the other kind is no default there: Add Task opens on
+`Select role...` after a reset, without an error, and the footer has already said
+so. A pick that stops taking the kind while the sheet is open (restricted from
+another tab or by an agent) is dropped and the field resolved again as on
+opening, rather than kept beside a disabled Create that explains nothing. Roles
+that exist but all take the other kind get the sheet's message instead of the
+fields — see [project-ui.md §4](project-ui.md#4-creating-work-lands-you-on-its-detail-page).
+
+**The work detail's Role field** filters its picker by the work's kind; choosing
+again a kept role that no longer fits is "unchanged" and sends nothing. Read-only,
+a kept role that does not fit gets a muted line under its name — muted, not the
+error colour, since the server holds it legal:
+
+> `PM only takes stories. It stays on this task until you change it.`
+
+and with roles listed but none taking the work's kind, the open picker says
+where to go: `No role takes tasks. Set one to take tasks in Agent Roles.` An empty
+list says nothing — it is what a reconnect looks like while roles reload.
+
+Deliberately not done: a default role per kind (one setting, and splitting it is
+a server change), and moving or refusing existing work when a role is restricted.
+
+## 9. The detail page, and what did not change
 
 The detail page keeps its shape: the name edited in place, the engine panel, the
-role prompt, the steps editor, and Delete Role at the bottom. One thing in it
-changed — the delete failure is printed without a prefix of its own (§5).
+role prompt, the steps editor, and Delete Role at the bottom. Two things in it
+changed — the delete failure is printed without a prefix of its own (§5), and a
+work-type field sits between the engine and the prompt (§8).
 
 Deliberately not done:
 
@@ -387,7 +470,7 @@ Deliberately not done:
 - **Grouping, sorting or filtering the list.** A user has a handful of roles;
   there is no axis worth spending a control on.
 
-## 9. What the implementation had to get right
+## 10. What the implementation had to get right
 
 | # | Check | Held by |
 |---|---|---|
@@ -395,12 +478,17 @@ Deliberately not done:
 | 2 | The engine line for an unset agent, an unset model, and an unset effort — each printing what §3 says | `AgentRoleListOverlay.test.tsx` for the row, `AgentRoleEngineSelector.test.tsx` for the detail page, and `agentOptions.test.ts` for the two rules neither component can reach: `Follow settings` not being resolved, and an unlisted id printing as itself |
 | 3 | Both counts absent at zero rather than written as `0` | `AgentRoleListOverlay.test.tsx` |
 | 4 | The footer selects a default and can reach `None`; a dangling id stays visible | `AgentRoleListOverlay.test.tsx`; the `Unknown role` option itself in `RoleSelect.test.tsx` |
-| 5 | The sentence matches the create form in all four states of §7 — the three it writes, and the empty list where it writes nothing | `AgentRoleListOverlay.test.tsx`, in two tests; `resolveInitialRole` is the shared rule the sentence and the create sheet both read |
+| 5 | The sentence matches the create form for each kind (§7) — one sentence when stories and tasks agree, two when they differ, each of the four fragments, and nothing for an empty list | `AgentRoleListOverlay.test.tsx`; `initialRole.test.ts` for `resolveInitialRole`, the shared rule the sentence and the create sheet both read |
 | 6 | A failed reset and a failed default-role change appear in their own places, and the reset message survives the list going back to loading | `AgentRoleListOverlay.test.tsx` |
 | 7 | Add Role and Reset are absent while the list is not there | `AgentRoleListOverlay.test.tsx` |
 | 8 | Before the settings snapshot, no star claims a default either way, each waiting star still names its own role in both waiting states, and nothing that does not depend on that snapshot is held up | `AgentRoleListOverlay.test.tsx`, in two tests |
 | 9 | The server's refusal is worded exactly as §5 quotes it, in both plural forms; the client prints that sentence and nothing around it, does not refuse ahead of the server, and does not leave a stale refusal standing through a retry | `rpc_agent_role_test.go` holds the wording, table-driven, character for character. `AgentRoleDetailOverlay.test.tsx` holds the other end: it asserts the alert's whole text **equals** the server's sentence, which is the only shape of assertion a prefix cannot survive |
 | 10 | The counts arrive with the snapshot and are replaced whole by `ref_counts` | `useAgentRoleSubscription.test.ts`, and `agent_role_list_test.go` on the server side |
+| 11 | The work-type field sends `""` for Both, lights the server's record and keeps it through a refusal, and adds the keep-it line only for a restricted role in use | `AgentRoleDetailOverlay.test.tsx` |
+| 12 | The row's work-type slot sits before the steps and is absent for an unrestricted role | `AgentRoleListOverlay.test.tsx` |
+| 13 | A picker for one kind offers only roles that take it, keeps a stored one that does not with its suffix, and the footer's picker suffixes every restricted role | `RoleSelect.test.tsx`, and `AgentRoleListOverlay.test.tsx` for the footer |
+| 14 | The create sheet skips a default that cannot take its kind, has a message for no role taking it, and drops a pick that stops fitting | `CreateWorkSheet.test.tsx`; `initialRole.test.ts` for the rule and `roleAcceptsWorkType` |
+| 15 | The work detail says a kept mismatch in words, not as an alert; its picker offers only roles that fit, and says where to go when none does — but not while the list is empty | `WorkDetailOverlay.test.tsx` |
 
 **Why this file lives here.** `docs/` holds per-feature design documents and
 `docs/projects/` describes the project-management system's implementation. A UI

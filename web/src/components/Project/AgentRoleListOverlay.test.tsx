@@ -169,6 +169,27 @@ describe("AgentRoleListOverlay", () => {
 			expect(screen.getByText(/3 work items/)).toBeInTheDocument();
 		});
 
+		it("names a work type restriction before the steps", () => {
+			setRoles([createRole({ work_type: "task", steps: ["one"] })], { r1: 3 });
+			renderOverlay();
+
+			const slot = screen.getByText("Tasks only");
+			expect(
+				slot.compareDocumentPosition(screen.getByText("1 step")) &
+					Node.DOCUMENT_POSITION_FOLLOWING,
+			).toBeTruthy();
+		});
+
+		// Taking either kind is the ordinary case, so it is not written.
+		it("leaves an unrestricted role's work type out", () => {
+			setRoles([createRole()]);
+			renderOverlay();
+
+			expect(
+				screen.queryByText(/(stories|tasks) only/i),
+			).not.toBeInTheDocument();
+		});
+
 		// Absence is the assertion; `0 steps` would spend the line's width on
 		// something that never happened.
 		it("leaves both out rather than writing zero", () => {
@@ -201,7 +222,7 @@ describe("AgentRoleListOverlay", () => {
 
 		// The sentence describes what the create form will do, so it has to change
 		// with what the create form would do.
-		it("describes what a new story would start with", () => {
+		it("describes what a new story and a new task would start with", () => {
 			setRoles([createRole(), createRole({ id: "r2", name: "Engineer" })]);
 			const { rerender } = renderOverlay();
 			expect(
@@ -231,6 +252,62 @@ describe("AgentRoleListOverlay", () => {
 			expect(
 				screen.getByText("New stories and tasks use Reviewer, the only role."),
 			).toBeInTheDocument();
+		});
+
+		// The default is one setting for both kinds, so a default restricted to
+		// one kind is no default for the other — and the sentence says so.
+		it("describes stories and tasks apart when they start differently", () => {
+			setRoles([
+				createRole({ id: "pm", name: "PM", work_type: "story" }),
+				createRole({ id: "e1", name: "Engineer", work_type: "task" }),
+				createRole({ id: "e2", name: "Reviewer", work_type: "task" }),
+			]);
+			useSettingsStore.setState({ settings: { default_agent_role_id: "pm" } });
+			renderOverlay();
+
+			expect(
+				screen.getByText(
+					"New stories start with this role. New tasks ask which role to use.",
+				),
+			).toBeInTheDocument();
+		});
+
+		it("names the only role that takes a kind, and a kind no role takes", () => {
+			setRoles([
+				createRole({ id: "e1", name: "Engineer", work_type: "task" }),
+				createRole({ id: "e2", name: "Reviewer", work_type: "task" }),
+			]);
+			const { unmount } = renderOverlay();
+			expect(
+				screen.getByText(
+					"New stories have no role that takes them. New tasks ask which role to use.",
+				),
+			).toBeInTheDocument();
+			unmount();
+
+			setRoles([
+				createRole({ id: "pm", name: "PM", work_type: "story" }),
+				createRole({ id: "e1", name: "Engineer" }),
+			]);
+			renderOverlay();
+			expect(
+				screen.getByText(
+					"New stories ask which role to use. New tasks use Engineer, the only role that takes them.",
+				),
+			).toBeInTheDocument();
+		});
+
+		it("writes a restriction beside the role it is offered as default", () => {
+			setRoles([
+				createRole({ id: "pm", name: "PM", work_type: "story" }),
+				createRole({ id: "e1", name: "Engineer" }),
+			]);
+			renderOverlay();
+
+			const field = screen.getByLabelText("Default role");
+			expect(
+				[...field.querySelectorAll("option")].map((o) => o.textContent),
+			).toEqual(["None", "PM — stories only", "Engineer"]);
 		});
 
 		// A stored id with no role behind it is not None: saying None would put an

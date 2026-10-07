@@ -1,4 +1,5 @@
 import type { AgentType } from "./settings";
+import type { WorkType } from "./work";
 
 export interface AgentRole {
 	id: string;
@@ -11,6 +12,13 @@ export interface AgentRole {
 	model?: string;
 	/** Absent means Auto — the CLI keeps its own default. */
 	effort?: string;
+	/**
+	 * The one kind of work this role may be assigned to; absent means it takes
+	 * either. Checked only when an assignment changes, so work already on the
+	 * role keeps it after a restriction is set. Ask `roleAcceptsWorkType`
+	 * rather than reading this directly.
+	 */
+	work_type?: WorkType;
 	created_at: string;
 	updated_at: string;
 }
@@ -34,6 +42,8 @@ export interface AgentRoleUpdateParams {
 	agent_type?: AgentType | "";
 	model?: string;
 	effort?: string;
+	/** Empty string clears the restriction; omitted leaves it alone. */
+	work_type?: WorkType | "";
 }
 
 export interface AgentRoleListSubscribeResult {

@@ -1,5 +1,8 @@
 import type { ComponentProps } from "react";
 import { useAgentRoleStore } from "../../lib/agentRoleStore";
+import { roleAcceptsWorkType, workTypeSuffix } from "../../lib/roleWorkType";
+import type { AgentRole } from "../../types/agentRole";
+import type { WorkType } from "../../types/work";
 import { inputClass } from "../ui/inputClass";
 
 type Props = Omit<
@@ -10,6 +13,17 @@ type Props = Omit<
 	onChange: (roleId: string) => void;
 	/** Offers `""` as a choice under this label; omit it to offer no empty choice. */
 	emptyLabel?: string;
+	/**
+	 * The kind of work the role is for: only roles that take it are offered.
+	 * Omit it where the choice applies to both kinds (the default role), and
+	 * every role is offered with its restriction written beside it instead.
+	 */
+	workType?: WorkType;
+};
+
+const labelWithSuffix = (role: AgentRole) => {
+	const suffix = workTypeSuffix(role);
+	return suffix ? `${role.name} — ${suffix}` : role.name;
 };
 
 /**
@@ -22,6 +36,7 @@ export default function RoleSelect({
 	value,
 	onChange,
 	emptyLabel,
+	workType,
 	...rest
 }: Props) {
 	const roles = useAgentRoleStore((s) => s.roles);
@@ -29,7 +44,15 @@ export default function RoleSelect({
 	// An id with no role behind it is a transient the list will settle: offering
 	// it as a row of its own keeps the field from showing, even for a frame, a
 	// role — or an empty choice — that is not the one stored.
-	const isDangling = value !== "" && !roles.some((r) => r.id === value);
+	const current = roles.find((r) => r.id === value);
+	const isDangling = value !== "" && !current;
+
+	// A stored role that cannot take this kind is still the stored one — the
+	// server keeps assignments made before the restriction — so it stays, named
+	// with the reason it would not be offered.
+	const options = workType
+		? roles.filter((r) => r === current || roleAcceptsWorkType(r, workType))
+		: roles;
 
 	return (
 		<select
@@ -40,9 +63,11 @@ export default function RoleSelect({
 		>
 			{emptyLabel !== undefined && <option value="">{emptyLabel}</option>}
 			{isDangling && <option value={value}>Unknown role</option>}
-			{roles.map((role) => (
+			{options.map((role) => (
 				<option key={role.id} value={role.id}>
-					{role.name}
+					{workType && roleAcceptsWorkType(role, workType)
+						? role.name
+						: labelWithSuffix(role)}
 				</option>
 			))}
 		</select>
