@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/pockode/server/session"
+	"github.com/pockode/server/work"
 )
 
 func newTestStore(t *testing.T) *FileStore {
@@ -885,5 +886,98 @@ func TestSteps_ReturnsTheRolesSteps(t *testing.T) {
 	}
 	if len(steps) != 2 {
 		t.Errorf("steps = %v, want the role's two", steps)
+	}
+}
+
+// --- Work type ---
+
+func workTypePtr(t work.WorkType) *work.WorkType { return &t }
+
+func TestAcceptsWorkType(t *testing.T) {
+	tests := []struct {
+		role work.WorkType
+		work work.WorkType
+		want bool
+	}{
+		{"", work.WorkTypeStory, true},
+		{"", work.WorkTypeTask, true},
+		{work.WorkTypeStory, work.WorkTypeStory, true},
+		{work.WorkTypeStory, work.WorkTypeTask, false},
+		{work.WorkTypeTask, work.WorkTypeTask, true},
+		{work.WorkTypeTask, work.WorkTypeStory, false},
+	}
+	for _, tt := range tests {
+		if got := (AgentRole{WorkType: tt.role}).AcceptsWorkType(tt.work); got != tt.want {
+			t.Errorf("role %q accepts %q = %v, want %v", tt.role, tt.work, got, tt.want)
+		}
+	}
+}
+
+func TestSeed_DefaultWorkTypes(t *testing.T) {
+	s := newTestStore(t)
+	roles, err := s.List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range roles {
+		want := work.WorkTypeTask
+		if r.Name == "PM" {
+			want = work.WorkTypeStory
+		}
+		if r.WorkType != want {
+			t.Errorf("default role %q work type = %q, want %q", r.Name, r.WorkType, want)
+		}
+	}
+}
+
+func TestCreate_WorkType(t *testing.T) {
+	s := newTestStore(t)
+
+	r, err := s.Create(context.Background(), AgentRole{Name: "Planner", WorkType: work.WorkTypeStory})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if got := getRole(t, s, r.ID).WorkType; got != work.WorkTypeStory {
+		t.Errorf("work type = %q, want %q", got, work.WorkTypeStory)
+	}
+
+	if _, err := s.Create(context.Background(), AgentRole{Name: "Bad", WorkType: "epic"}); !errors.Is(err, ErrInvalidRole) {
+		t.Errorf("unknown work type: err = %v, want ErrInvalidRole", err)
+	}
+}
+
+func TestUpdate_WorkType(t *testing.T) {
+	s := newTestStore(t)
+	role := createRole(t, s, "Engineer", "")
+
+	if err := s.Update(context.Background(), role.ID, UpdateFields{WorkType: workTypePtr(work.WorkTypeTask)}); err != nil {
+		t.Fatalf("set: %v", err)
+	}
+	if got := getRole(t, s, role.ID).WorkType; got != work.WorkTypeTask {
+		t.Fatalf("work type = %q, want %q", got, work.WorkTypeTask)
+	}
+
+	// A rejected update changes nothing, including the fields that were valid.
+	err := s.Update(context.Background(), role.ID, UpdateFields{Name: strPtr("Renamed"), WorkType: workTypePtr("epic")})
+	if !errors.Is(err, ErrInvalidRole) {
+		t.Fatalf("unknown work type: err = %v, want ErrInvalidRole", err)
+	}
+	if got := getRole(t, s, role.ID); got.Name != "Engineer" || got.WorkType != work.WorkTypeTask {
+		t.Errorf("rejected update left %q/%q, want Engineer/%q", got.Name, got.WorkType, work.WorkTypeTask)
+	}
+
+	if err := s.Update(context.Background(), role.ID, UpdateFields{WorkType: workTypePtr("")}); err != nil {
+		t.Fatalf("clear: %v", err)
+	}
+	if got := getRole(t, s, role.ID).WorkType; got != "" {
+		t.Errorf("work type = %q, want it cleared", got)
+	}
+}
+
+func TestDiffRoles_WorkTypeChange(t *testing.T) {
+	old := []AgentRole{{ID: "1", Name: "A"}}
+	updated := []AgentRole{{ID: "1", Name: "A", WorkType: work.WorkTypeTask}}
+	if events := diffRoles(old, updated); len(events) != 1 || events[0].Op != OperationUpdate {
+		t.Errorf("events = %+v, want one update", events)
 	}
 }

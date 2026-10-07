@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/pockode/server/filestore"
 	"github.com/pockode/server/session"
+	"github.com/pockode/server/work"
 )
 
 // Store provides CRUD operations and change notifications for AgentRole items.
@@ -36,6 +37,8 @@ type UpdateFields struct {
 	AgentType  *session.AgentType `json:"agent_type,omitempty"`
 	Model      *string            `json:"model,omitempty"`
 	Effort     *string            `json:"effort,omitempty"`
+	// WorkType set to empty clears the restriction.
+	WorkType *work.WorkType `json:"work_type,omitempty"`
 }
 
 type indexData struct {
@@ -87,6 +90,7 @@ var defaultRoles = []struct {
 	Name       string
 	RolePrompt string
 	Steps      []string
+	WorkType   work.WorkType
 }{
 	{
 		Name: "PM",
@@ -109,23 +113,27 @@ var defaultRoles = []struct {
 			"推进任务\n\n- 通过 MCP 启动任务，然后调用 story_wait 等待完成汇报\n- 根据任务结束时的汇报，必要时调整任务。但不要触碰已经开始的任务\n- 始终确保最后是文档维护任务(文档撰写者)和整体审查任务(审查者)",
 			"commit",
 		},
+		WorkType: work.WorkTypeStory,
 	},
 	{
 		Name:       "工程师",
 		RolePrompt: "世界级的工程师\n不commit",
 		Steps:      []string{"实现", "审查并且修复到没有问题"},
+		WorkType:   work.WorkTypeTask,
 	},
 	{
 		Name: "UI设计师",
 		RolePrompt: "世界级UI设计师\n" +
 			"将设计方案在投稿step中投稿至story comment\n\n" +
 			"不commit",
-		Steps: []string{"设计", "审查并且修复到没有问题", "投稿"},
+		Steps:    []string{"设计", "审查并且修复到没有问题", "投稿"},
+		WorkType: work.WorkTypeTask,
 	},
 	{
 		Name:       "文档撰写者",
 		RolePrompt: "世界级的开发者\n不commit",
 		Steps:      []string{"维护文档", "审查并且修复到没有问题"},
+		WorkType:   work.WorkTypeTask,
 	},
 	{
 		Name: "审查者",
@@ -133,7 +141,8 @@ var defaultRoles = []struct {
 			"只直接修复一些小问题，大问题写入审查结果提交\n" +
 			"将审查结果在投稿step中投稿至story comment\n\n" +
 			"不commit",
-		Steps: []string{"审查，小问题可以直接修复", "审查并且修复到没有问题", "投稿"},
+		Steps:    []string{"审查，小问题可以直接修复", "审查并且修复到没有问题", "投稿"},
+		WorkType: work.WorkTypeTask,
 	},
 }
 
@@ -162,6 +171,7 @@ func buildDefaultRoles() []AgentRole {
 			Name:       d.Name,
 			RolePrompt: d.RolePrompt,
 			Steps:      d.Steps,
+			WorkType:   d.WorkType,
 			CreatedAt:  now,
 			UpdatedAt:  now,
 		})
@@ -201,6 +211,9 @@ func (s *FileStore) Create(_ context.Context, r AgentRole) (AgentRole, error) {
 	if err := validateEngine(r); err != nil {
 		return AgentRole{}, err
 	}
+	if err := ValidateWorkType(r.WorkType); err != nil {
+		return AgentRole{}, err
+	}
 
 	s.rolesMu.Lock()
 
@@ -213,6 +226,7 @@ func (s *FileStore) Create(_ context.Context, r AgentRole) (AgentRole, error) {
 		AgentType:  r.AgentType,
 		Model:      r.Model,
 		Effort:     r.Effort,
+		WorkType:   r.WorkType,
 		CreatedAt:  now,
 		UpdatedAt:  now,
 	}
@@ -257,6 +271,14 @@ func (s *FileStore) Update(_ context.Context, id string, fields UpdateFields) er
 	}
 	if fields.Steps != nil {
 		r.Steps = *fields.Steps
+	}
+	if fields.WorkType != nil {
+		if err := ValidateWorkType(*fields.WorkType); err != nil {
+			*r = prev
+			s.rolesMu.Unlock()
+			return err
+		}
+		r.WorkType = *fields.WorkType
 	}
 	if err := applyEngineFields(r, fields); err != nil {
 		*r = prev
@@ -435,6 +457,7 @@ func roleChanged(a, b AgentRole) bool {
 		a.AgentType != b.AgentType ||
 		a.Model != b.Model ||
 		a.Effort != b.Effort ||
+		a.WorkType != b.WorkType ||
 		!stepsEqual(a.Steps, b.Steps) ||
 		!a.UpdatedAt.Equal(b.UpdatedAt)
 }

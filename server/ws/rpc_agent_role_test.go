@@ -107,6 +107,39 @@ func TestAgentRoleUpdate_RejectionReachesTheClient(t *testing.T) {
 	}
 }
 
+// TestAgentRoleWorkTypeOverTheWire covers create, update, clear and rejection of
+// work_type through the RPC; clearing is the case a JSON round trip could lose,
+// as with agent_type above.
+func TestAgentRoleWorkTypeOverTheWire(t *testing.T) {
+	env := newTestEnv(t, &mockAgent{})
+
+	resp := env.call("agent_role.create", map[string]any{"name": "Planner", "work_type": "story"})
+	if resp.Error != nil {
+		t.Fatalf("create: %s", resp.Error.Message)
+	}
+	var created agentrole.AgentRole
+	if err := json.Unmarshal(resp.Result, &created); err != nil {
+		t.Fatal(err)
+	}
+	if role := roleOverTheWire(t, env, created.ID); role.WorkType != work.WorkTypeStory {
+		t.Fatalf("work type after create = %q, want story", role.WorkType)
+	}
+
+	if resp := env.call("agent_role.update", map[string]any{"id": created.ID, "work_type": ""}); resp.Error != nil {
+		t.Fatalf("clear: %s", resp.Error.Message)
+	}
+	if role := roleOverTheWire(t, env, created.ID); role.WorkType != "" {
+		t.Errorf("work type after clear = %q, want empty", role.WorkType)
+	}
+
+	for _, method := range []string{"agent_role.create", "agent_role.update"} {
+		resp := env.call(method, map[string]any{"id": created.ID, "name": "Bad", "work_type": "epic"})
+		if resp.Error == nil || resp.Error.Code != jsonrpc2.CodeInvalidParams {
+			t.Errorf("%s with unknown work type: error = %+v, want InvalidParams", method, resp.Error)
+		}
+	}
+}
+
 // TestAgentRoleDelete_RefusalIsPrintedVerbatim pins the wording of the one
 // refusal the client prints without a prefix of its own: the reason is the
 // sentence the user reads — `AgentRoleDetailOverlay`'s delete section shows it

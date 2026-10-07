@@ -300,6 +300,46 @@ func TestTaskCreate_RefusesWithoutAStory(t *testing.T) {
 	}
 }
 
+// story_create, task_create and work_update all assign a role, so all three
+// refuse one that does not take the work's type — as the caller's mistake, with
+// the role that would fit named. The rules themselves are agentrole's to test.
+func TestRoleAssignment_RefusesARoleOfTheWrongWorkType(t *testing.T) {
+	store, arStore, settingsStore, plannerID := newStoresWithRole(t, agentrole.AgentRole{Name: "Planner", WorkType: work.WorkTypeStory})
+	engineer, err := arStore.Create(context.Background(), agentrole.AgentRole{Name: "Engineer", WorkType: work.WorkTypeTask})
+	if err != nil {
+		t.Fatal(err)
+	}
+	exec := NewExecutor(store, arStore, work.NewOperations(store, stubWorkStarter{}, stubNotifier{}, agentrole.Steps{Store: arStore}), settingsStore, &stubWorktrees{}, &stubSessions{})
+	call := func(name string, args map[string]string) error {
+		raw, err := json.Marshal(args)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = exec.Execute(context.Background(), Caller{}, name, raw)
+		return err
+	}
+
+	storyID := extractID(t, toolText(callTool(t, exec, "story_create", map[string]string{"title": "S", "agent_role_id": plannerID})))
+
+	for _, tc := range []struct {
+		tool string
+		args map[string]string
+	}{
+		{"story_create", map[string]string{"title": "S2", "agent_role_id": engineer.ID}},
+		{"task_create", map[string]string{"story_id": storyID, "title": "T", "agent_role_id": plannerID}},
+		{"work_update", map[string]string{"id": storyID, "agent_role_id": engineer.ID}},
+	} {
+		err := call(tc.tool, tc.args)
+		if err == nil || !isUserError(err) {
+			t.Errorf("%s: err = %v, want a user error", tc.tool, err)
+			continue
+		}
+		if !strings.Contains(err.Error(), "only takes") {
+			t.Errorf("%s: refusal %q does not say what the role takes", tc.tool, err)
+		}
+	}
+}
+
 // --- Tools: story_list / task_list ---
 
 func TestStoryList_Empty(t *testing.T) {
@@ -906,7 +946,68 @@ func TestAgentRoleList(t *testing.T) {
 	}
 }
 
+// TestAgentRoleList_FilterByWorkType relies on the seeded defaults (PM takes
+// stories, the rest tasks) beside the unrestricted test role, which must appear
+// under either filter.
+func TestAgentRoleList_FilterByWorkType(t *testing.T) {
+	ts := newTestExec(t)
+
+	names := func(workType string) map[string]string {
+		t.Helper()
+		result := callTool(t, ts.exec, "agent_role_list", map[string]string{"work_type": workType})
+		if result.IsError {
+			t.Fatalf("unexpected error: %s", toolText(result))
+		}
+		var items []struct {
+			Name     string `json:"name"`
+			WorkType string `json:"work_type"`
+		}
+		if err := json.Unmarshal([]byte(toolText(result)), &items); err != nil {
+			t.Fatal(err)
+		}
+		out := make(map[string]string, len(items))
+		for _, it := range items {
+			out[it.Name] = it.WorkType
+		}
+		return out
+	}
+
+	stories := names("story")
+	if len(stories) != 2 || stories["PM"] != "story" || stories["Test Engineer"] != "" {
+		t.Errorf("story roles = %v, want PM (story) and Test Engineer (unrestricted)", stories)
+	}
+	tasks := names("task")
+	if _, ok := tasks["PM"]; ok {
+		t.Errorf("task roles = %v, want PM left out", tasks)
+	}
+	if _, ok := tasks["Test Engineer"]; !ok || tasks["工程师"] != "task" {
+		t.Errorf("task roles = %v, want 工程师 (task) and Test Engineer", tasks)
+	}
+	if all := names(""); len(all) != len(stories)+len(tasks)-1 {
+		t.Errorf("unfiltered roles = %v, want every role", all)
+	}
+}
+
+func TestAgentRoleList_UnknownWorkType(t *testing.T) {
+	ts := newTestExec(t)
+	result := callTool(t, ts.exec, "agent_role_list", map[string]string{"work_type": "epic"})
+	if !result.IsError {
+		t.Errorf("expected an error for an unknown work type, got %q", toolText(result))
+	}
+}
+
 // --- Tool: agent_role_get ---
+
+func TestAgentRoleGet_WorkType(t *testing.T) {
+	exec, _, roleID := newExecWithRole(t, agentrole.AgentRole{Name: "Planner", WorkType: work.WorkTypeStory})
+	result := callTool(t, exec, "agent_role_get", map[string]string{"id": roleID})
+	if result.IsError {
+		t.Fatalf("unexpected error: %s", toolText(result))
+	}
+	if !strings.Contains(toolText(result), `"work_type":"story"`) {
+		t.Errorf("result = %q, want work_type", toolText(result))
+	}
+}
 
 func TestAgentRoleGet(t *testing.T) {
 	ts := newTestExec(t)

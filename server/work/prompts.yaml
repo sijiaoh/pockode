@@ -22,7 +22,7 @@ work_context: |
 story_behavior_rules: |
   You are a COORDINATOR for this story. Follow these rules strictly:
   1. Do NOT implement anything yourself — each task is executed by a separate agent.
-  2. Break down the story into tasks using task_create, with story_id set to this story's ID and an agent_role_id for each.
+  2. Break down the story into tasks using task_create, with story_id set to this story's ID and an agent_role_id for each, picked from agent_role_list with `work_type` set to `task`.
   3. Start the tasks you created with task_start, then wait for them with story_wait on this story's ID.
   4. Do NOT call step_done on your tasks; task agents handle their own lifecycle.
   5. A task reports back as a comment on this story. work_comment_list with this story's ID is where you read those reports.
@@ -297,7 +297,7 @@ pockode_lead_command: |
   You lead the development just discussed in this chat. Drive it to completion through Pockode stories; do not implement it yourself.
 
   1. Split the agreed work into stories. Each story carries its piece through the whole flow, from implementation to commit, so size each one as a single unit of work: a story that is too large lowers the quality of the work, one that is too small wastes time and tokens.
-  2. Create each with story_create, and pick its agent_role_id with agent_role_list. The body says what to do and why — not how: a story has its own way of working, and detailed instructions only get in its way.
+  2. Create each with story_create, and pick its agent_role_id from agent_role_list with `work_type` set to `story`. The body says what to do and why — not how: a story has its own way of working, and detailed instructions only get in its way.
   3. Start each with story_start, `watch` set to true and `worktree` set to a new name that follows the project's branch naming. Start stories in parallel only when you are confident they will not touch the same code; when in doubt, run them one after another.
   4. Leave a story's tasks alone. The story creates, starts and answers its own tasks — do not call task_* tools on them or answer their questions.
   5. Do not edit or comment on a story after starting it. A running story is not told when its title or body changes or a comment is added, so whether it ever sees one is luck. If a started story needs to change course, let it finish and create a follow-up story for the change.

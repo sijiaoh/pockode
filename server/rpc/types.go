@@ -1334,6 +1334,8 @@ type AgentRoleCreateParams struct {
 	Name       string   `json:"name"`
 	RolePrompt string   `json:"role_prompt"`
 	Steps      []string `json:"steps,omitempty"`
+	// WorkType is "story", "task", or empty for a role that takes either.
+	WorkType work.WorkType `json:"work_type,omitempty"`
 }
 
 type AgentRoleUpdateParams struct {
@@ -1348,6 +1350,8 @@ type AgentRoleUpdateParams struct {
 	AgentType *session.AgentType `json:"agent_type,omitempty"`
 	Model     *string            `json:"model,omitempty"`
 	Effort    *string            `json:"effort,omitempty"`
+	// An empty work_type clears the restriction; omitting it leaves it alone.
+	WorkType *work.WorkType `json:"work_type,omitempty"`
 }
 
 type AgentRoleDeleteParams struct {

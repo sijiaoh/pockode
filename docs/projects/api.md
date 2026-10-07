@@ -31,8 +31,8 @@ The MCP server runs as a stdio JSON-RPC 2.0 subprocess, spawned per Claude sessi
 | `work_comment_add` | `work_id`, `body` | — | Confirmation string with comment ID |
 | `work_comment_list` | `work_id` | — | JSON array of `{id, work_id, body, created_at}` |
 | `work_comment_update` | `id`, `body` | — | Updated comment as `{id, work_id, body, created_at}` |
-| `agent_role_list` | — | — | JSON array of `{id, name}` |
-| `agent_role_get` | `id` | — | `{id, name, role_prompt}` |
+| `agent_role_list` | — | `work_type` (`story` / `task`) | JSON array of `{id, name, work_type?}`; with `work_type`, only the roles that take it — unrestricted ones included |
+| `agent_role_get` | `id` | — | `{id, name, work_type?, role_prompt}` |
 | `agent_role_reset_defaults` | — | — | Confirmation string |
 | `question_post` | `questions` (each: `question`, `header`, optional `options` — each `label`, optional `description`, `recommended` — and `multi_select`) | — | Confirmation string naming each question's header and `request_id` |
 | `question_answer` | `request_id` | `answers`, `text`, `note`, `session_id` | Confirmation string |
@@ -46,7 +46,7 @@ Similarly, `agent_role_list` excludes `role_prompt` — use `agent_role_get` to 
 
 ### Behavior Notes
 
-- **`story_create` / `task_create`**: Both require `agent_role_id` (validated to exist). Which kind is created is decided by the tool the agent picked, not by an argument: `task_create` takes the `story_id`, `story_create` has nowhere to put one. There is no `type` to contradict it.
+- **`story_create` / `task_create`**: Both require `agent_role_id`, which must name a role that takes the kind being created ([Work Type Field](data-model.md#work-type-field)); a refusal lists the roles that would be accepted. Which kind is created is decided by the tool the agent picked, not by an argument: `task_create` takes the `story_id`, `story_create` has nowhere to put one. There is no `type` to contradict it.
 - **`story_list` / `task_list`**: The two listings partition the project. `task_list` requires its `story_id`: an empty one is what a story's own `story_id` is, so a listing that fell through would answer "which tasks?" with every story there is.
 - **`story_start` / `task_start`**: Require the work item to have an `agent_role_id`. Atomically transitions to `active` and attaches a session ID via `Store.Claim` (a fresh UUIDv7, or the existing session on restart), then creates the session and sends the kickoff via `WorkStartHandler` (in-process). The optional `worktree` names the git worktree to run in, and is settled *before* that transition so the session starts in it: the name is pinned via `Store.SetWorktree`, then `Registry.EnsureWorktree` creates the worktree (branch = name) if it does not exist yet, through the same path the `worktree.create` RPC uses — setup hook included, and a skipped hook is reported in the confirmation string. Only `story_start` takes it, and it is still refused on a task named to it — an id is a string, and the agent can reach for the wrong tool — because a task runs in the worktree of the story it belongs to. `task_start` refuses the argument rather than ignoring it: what is not on a schema is answered with a sentence, not discarded in silence. Naming a *different* worktree for an already-started story fails the call too, rather than starting it where it already lives ([work-system](../code/work-system.md#worktree-binding)). In a project that is not a git repository any `worktree` is refused before it is pinned, telling the agent to omit it ([git.md](../git.md#projects-without-a-repository)).
 - **`story_start`'s `watch`**: A flag, not a session id — it makes the **calling session** the story's watcher, recorded by `Store.Claim` in the same write as the start, and refused (without starting the story) on a call with no caller session. The watcher is sent a message when the story closes, is stopped, or posts a question of its own; its tasks' news is not reported. The watch ends when the story closes (the closing write clears it), so a reopened story is unwatched until a later watched start; it can end earlier only through `story_unwatch` or the watching session being deleted — there is no WebSocket method for it. Omitting it leaves any existing watcher in place ([work-system](../code/work-system.md#a-storys-watcher)).
@@ -55,7 +55,7 @@ Similarly, `agent_role_list` excludes `role_prompt` — use `agent_role_get` to 
 - **`story_wait`**: Calls `Operations.Wait()`. A story's wait on its subtasks, cleared by one of them closing. It can be **refused**: a child closing is the only thing that ends this wait, so a work with no child running would wait forever, and the error names which children could be started instead ([workflow-engine](workflow-engine.md#wait)). A task's id is refused too, with only the ways out a task has — never `task_create`, which would be a third level.
 - **`work_reopen`**: Calls `Operations.ReopenWork()`. Transitions `closed → active`, for a story or a task alike. Use when there is more to do on something that was finished — on a story, that includes giving it further tasks.
 - **Accepted statuses**: `step_done` / `story_wait` only require that the work is started and not closed, so a stale `stopped` never blocks the agent. Both have a second condition that is about the work's *children* rather than its status: `step_done` is refused when it would close a work whose subtasks are still running, and `story_wait` when none of them is. `story_start` / `task_start` are the ones with a different rule: they also accept `open`, but reject a work that is already `active` — including one that is waiting, for which the user is offered Stop rather than Restart. See [workflow-engine](workflow-engine.md#status-transitions).
-- **`work_update`**: Uses pointer fields (`*string`) to distinguish "not provided" from "set to empty". Only updates data fields (title, body, agent_role_id).
+- **`work_update`**: Uses pointer fields (`*string`) to distinguish "not provided" from "set to empty". Only updates data fields (title, body, agent_role_id). A *changed* `agent_role_id` must take the work's type; naming the role the work already has is never refused, even if that role has since been restricted away from it.
 - **`question_answer`**: Answers a question **another** session posted, for the case where the answer is already known and the user need not be interrupted — a story answering its subtask ([work-system](../code/work-system.md#input-4-a-subtasks-question-reaches-its-story)). Any agent may answer any question except one its own session posted, which is a withdrawal (`question_cancel`) wearing the wrong name. The answer is recorded with who gave it and arrives in the asking session as a message that says so, so nothing there mistakes it for the user's. A question is named by the pair `(session_id, request_id)`, and `session_id` may be left out only while exactly one session is waiting on that id: refused when more than one is — a fork carries a question across with its id — and the refusal lists the candidates with the work running in each, since the work is the half an agent recognises. A `stopped` work is answered like any other and is woken by the answer, as it is by the user's ([work-system](../code/work-system.md#input-3-a-posted-question-was-answered)). It returns only once the answer has reached the asking agent, which may mean starting that agent's process first.
 
 - **`question_post` / `question_cancel`**: The two tools that act on the **session the call came from** rather than on an id the model supplies, which is what the MCP caller identity is for ([agent-integration](../code/agent-integration.md#mcp-caller-identity)); a call that arrived without one is refused, because an agent started by hand has no chat to ask into. `question_post` returns immediately — each answer arrives later as an ordinary message — and takes every question the agent needs in one call, while still giving each its own `request_id` and record, so that declining one of several has a subject. It refuses only what would make an answer ambiguous, and sets no limit on counts or lengths ([agent-integration](../code/agent-integration.md#asking-several-at-once)). It is refused on a **closed** work: nobody is coming back to that chat. `question_cancel` withdraws a question the same session posted, sends nothing to anyone, and is refused for a question that is already answered, declined or withdrawn — with what became of it in the error. There is deliberately **no tool that lists questions**: a list would only invite polling inside the turn the agent was told not to wait in. See [agent-integration](../code/agent-integration.md#posted-questions).
@@ -119,8 +119,8 @@ QuestionOption            { label, description?, recommended? }   // recommended
 
 SubscribeParams           { id }   // the whole of a subscribe with no other arguments
 
-AgentRoleCreateParams   { name, role_prompt, steps? }
-AgentRoleUpdateParams   { id, name?, role_prompt?, steps?, agent_type?, model?, effort? }
+AgentRoleCreateParams   { name, role_prompt, steps?, work_type? }
+AgentRoleUpdateParams   { id, name?, role_prompt?, steps?, agent_type?, model?, effort?, work_type? }   // work_type "" clears the restriction
 AgentRoleDeleteParams   { id }
 ```
 
@@ -230,6 +230,15 @@ the other optional fields, with two additions:
 `agent_role.create` takes no engine fields: a new role follows the global
 defaults — agent type, and the model and effort set for it — which is the right
 starting point.
+
+### `work_type`
+
+`agent_role.create` and `agent_role.update` take it; `agent_role.update`
+follows "absent = unchanged", and `""` removes the restriction. A value other
+than `story`, `task` or `""` is `InvalidParams` naming it, and the rest of that
+update is not applied. `work.create` and `work.update` refuse a role that does
+not take the work's type with `InvalidParams` and the reason as its message —
+the same check and wording as MCP ([Work Type Field](data-model.md#work-type-field)).
 
 ### `agent_role.delete` Referential Integrity
 
