@@ -8,7 +8,8 @@ competed with its content.
 
 This document holds what the two panels have to agree on: the principles behind
 the redesign that fixed that, the visual weight ladder, what `th-accent` is
-allowed to mean, and the narrow-width rule every fixed row obeys. It does **not**
+allowed to mean, the narrow-width rule every fixed row obeys, and the rows at
+the top of the sidebar that every tab sits under. It does **not**
 describe either panel's own shape — [file.md](file.md) owns the Files panel
 (backend, search behaviour, the entry `…` menu and everything that hangs off it,
 the upload queue) and [git-ui.md](git-ui.md) owns the Git panel (layout, group
@@ -123,10 +124,10 @@ Five rungs. Existing Tailwind and `th-*` tokens only; nothing here is a new toke
 | Rung | Used for | Classes |
 |------|----------|---------|
 | **L1** Primary action | At most one per panel, and only while it applies | `min-h-[44px] w-full rounded-lg bg-th-accent text-sm font-medium text-th-accent-text` |
-| **L2** Panel header row | Branch bar, search row | `min-h-[44px]`, label `text-sm text-th-text-primary`, icons `text-th-text-muted`, bottom border `border-th-border` where the row is the whole header — the Files search row omits it, since the option chips render directly beneath it and a border would cut the header block in half |
+| **L2** Panel header row | Branch bar, search row, the worktree switcher | `min-h-[44px]`, label `text-sm text-th-text-primary`, icons `text-th-text-muted`, bottom border `border-th-border` where the row is the whole header — the Files search row omits it, since the option chips render directly beneath it and a border would cut the header block in half. The worktree switcher is the header *control* GitHub Desktop puts above its list: a transparent button, `th-bg-tertiary` only on hover or while open, name `text-sm font-medium`, and 36px rather than 44 under a fine pointer, since it is a control and not a row — see [The top of the sidebar](#the-top-of-the-sidebar) |
 | **L3** Group header | `Staged`, `Changes`, `History` | `min-h-[32px] px-3 text-xs uppercase tracking-wide text-th-text-muted`, no hover fill. A header carrying L5 actions grows to their 36px — the touch target wins over the nominal height — and grows again where a finger may land ([responsive-ui.md](responsive-ui.md#hit-areas-and-spacing)) |
 | **L4** List row | Tree node, changed file, commit | `min-h-[44px]`, `text-sm text-th-text-secondary`; active `bg-th-bg-tertiary text-th-text-primary` |
-| **L5** Inline icon action | Entry menu, stage, unstage, discard, collapse, dismiss | 36×36, no border and no fill at rest (a hover fill is allowed). Two shapes, by where the control sits: square where it sits inside a **list** row or a group header, over the list itself (`rounded-md text-th-text-secondary`, defined once in `ui/iconButtonClass.ts`), round where it does not — the project root's `…` in the L2 search row, the search field's clear button inside the input (`rounded-full text-th-text-muted hover:bg-th-bg-tertiary`). 36 is the visual size only; the hit area a coarse pointer gets on top of it is [responsive-ui.md](responsive-ui.md#hit-areas-and-spacing)'s |
+| **L5** Inline icon action | Entry menu, stage, unstage, discard, collapse, dismiss | 36×36, no border and no fill at rest (a hover fill is allowed). Two shapes, by where the control sits: square where it sits inside a **list** row or a group header, over the list itself (`rounded-md text-th-text-secondary`, defined once in `ui/iconButtonClass.ts`), round where it does not — the project root's `…` in the L2 search row, the session filter beside New Chat, the search field's clear button inside the input (`rounded-full text-th-text-muted hover:bg-th-bg-tertiary`). The filter is the `…`'s classes with `hover:` and `active:` behind `enabled:` and a `disabled:` dimming added, since it alone is disabled while its list is stale. 36 is the visual size only; the hit area a coarse pointer gets on top of it is [responsive-ui.md](responsive-ui.md#hit-areas-and-spacing)'s |
 
 The two rungs that matter most are L3 and L5, because that is where the panels
 had it wrong: the old `▾ Changes` header was L2-weight text on an L2-height row,
@@ -150,7 +151,7 @@ Colour, restated as rules rather than as a list of places:
 | Token | Means |
 |-------|-------|
 | `th-accent` | The one primary action, the active tab, the focus ring, a drag under the cursor right now, a progress bar, a tab's notification badge (the dot, and the Git tab's change count) — with one exception: the badge that means a person is being waited on is `th-warning`, because it stands for a warning dot inside that tab ([lifecycle-ui.md §4](lifecycle-ui.md#4-attention-dots)) |
-| `th-accent` as a 2px left bar | A row singled out: the selected row in `SidebarListItem` |
+| `th-accent` as a 2px left bar | A row singled out: the selected row in `SidebarListItem`. Drawn as a `before:` pseudo-element (`absolute inset-y-2 left-0 w-0.5 rounded-full`), not as `border-l-2`: a border takes 2px of layout, so selecting a row shifted its content sideways, and it followed `rounded-lg` into a crescent at both ends. `inset-y-2` is the 8px radius, so the bar starts where the corner ends and stays on the straight edge |
 | `th-bg-tertiary` | The row you are looking at (selected file, selected commit), and the fill of secondary buttons inside sheets |
 | `th-text-muted` | Group headers, metadata, and the icon of an action rare enough to sit below the row it lives on (a tree row's `…`). Quieter than the body colour, never quiet enough to stop being read — it owes AA 4.5 over the worst surface it lands on |
 | `th-error` / `th-success` | A failure / a completed outcome. Never a state that is merely unusual |
@@ -372,6 +373,41 @@ Spacing, so the two panels stop disagreeing: rows are `px-3`, row containers are
 `px-2`, the search row is `p-2`, controls within a row are `gap-2`, and a group
 header is preceded by `pt-2` so the first group does not butt against the header
 row above it.
+
+## The top of the sidebar
+
+Above every tab sit two rows the whole sidebar shares — the worktree switcher
+and the tab bar — and the Sessions tab adds a third, New Chat with the session
+filter beside it. All three are chrome over a list, so principle 1 applies to
+them as much as to either panel: each is as tall as its controls need and no
+taller.
+
+- **Worktree switcher** (`Worktree/WorktreeSwitcher.tsx`). L2: it names the
+  workspace the list beneath it belongs to, so it reads as a title rather than
+  as a field — no border, no resting fill, the name `font-medium` against the
+  regular weight of the L4 rows, `▾` directly after the name rather than at the
+  far edge, where it would read as an input. The button is as wide as its
+  content and truncates inside the row's one `flex-1 min-w-0` shell. Every
+  state — the skeleton, the switcher, a load error, and the plain project name
+  outside a repository ([git-ui.md](git-ui.md#projects-without-a-repository)) —
+  renders in that one shell, `min-h-9 pointer-coarse:min-h-11`, so the tab bar
+  does not jump as one state gives way to the next; the shell's floor is the
+  drawer's close button beside it, so the row is the same height with or without
+  one. The project name takes the button's type, `text-sm font-medium`, because
+  it is the same place showing different content. An error may wrap and grow
+  the row. The row is `px-2 py-1`: the inset lines the hover fill up with the
+  rows below it and the text with theirs, and the dropdown is positioned inside
+  the inset, so on desktop it spans exactly the New Chat row below — New Chat
+  and the filter together.
+- **Tab bar** (`Layout/TabbedSidebar.tsx`). Each tab is `min-h-11`, which is the
+  coarse-pointer floor and not slack — this row is not compressed.
+- **New Chat** is L1 (`Session/SessionsTab.tsx`): `min-h-[44px] px-3 text-sm
+  font-medium`, `flex-1` instead of `w-full` because the filter shares its row.
+  Its focus ring is offset by 2px onto `th-bg-secondary`, the sidebar's surface
+  in both the drawer and the desktop column, since an accent ring drawn
+  straight onto an accent fill cannot be seen. The row keeps the search row's
+  `p-2`, and `gap-2` keeps 8px between the two 44px hit areas on a coarse
+  pointer.
 
 ## Where each panel is described
 

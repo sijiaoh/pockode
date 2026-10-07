@@ -53,9 +53,13 @@ function SidebarListItem({
 }: Props) {
 	return (
 		<div
-			className={`group flex w-full min-h-[44px] items-center gap-2 rounded-lg transition-colors ${
+			// The bar is a pseudo-element rather than a left border: a border takes
+			// 2px of layout, so selecting a row would shift its content, and it bends
+			// along `rounded-lg`. `inset-y-2` matches the 8px radius, keeping the bar
+			// on the straight edge.
+			className={`group relative flex w-full min-h-[44px] items-center gap-2 rounded-lg transition-colors ${
 				isActive
-					? "bg-th-bg-tertiary border-l-2 border-th-accent"
+					? "bg-th-bg-tertiary before:pointer-events-none before:absolute before:inset-y-2 before:left-0 before:w-0.5 before:rounded-full before:bg-th-accent"
 					: "hover:bg-th-bg-tertiary"
 			}`}
 		>

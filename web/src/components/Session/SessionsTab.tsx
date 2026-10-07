@@ -186,9 +186,9 @@ function SessionsTab({
 					type="button"
 					onClick={onCreateSession}
 					disabled={isStale}
-					className="flex flex-1 items-center justify-center gap-2 rounded-lg bg-th-accent p-3 text-th-accent-text hover:bg-th-accent-hover disabled:cursor-not-allowed disabled:opacity-50"
+					className="flex min-h-[44px] flex-1 items-center justify-center gap-2 rounded-lg bg-th-accent px-3 text-sm font-medium text-th-accent-text hover:bg-th-accent-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent focus-visible:ring-offset-2 focus-visible:ring-offset-th-bg-secondary disabled:cursor-not-allowed disabled:opacity-50"
 				>
-					<Plus className="h-5 w-5" aria-hidden="true" />
+					<Plus className="h-4 w-4" aria-hidden="true" />
 					New Chat
 				</button>
 				<SessionFilterButton disabled={isStale} />
