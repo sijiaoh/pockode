@@ -80,17 +80,21 @@ export default function SessionFilterButton({ disabled }: Props) {
 				type="button"
 				onClick={handleToggle}
 				disabled={disabled}
-				className="relative flex items-center justify-center rounded-md border min-h-[44px] min-w-[44px] p-2 transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent active:scale-95 border-th-border bg-th-bg-tertiary text-th-text-secondary hover:border-th-border-focus hover:text-th-text-primary disabled:cursor-not-allowed disabled:opacity-50"
+				className="flex size-9 shrink-0 pointer-coarse:size-11 items-center justify-center rounded-full text-th-text-muted transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent enabled:hover:bg-th-bg-tertiary enabled:hover:text-th-text-primary enabled:active:scale-95 disabled:cursor-not-allowed disabled:opacity-50"
 				aria-label={triggerLabel(filter, selected?.label)}
 				aria-expanded={isOpen}
 			>
-				<ListFilter className="h-5 w-5" aria-hidden="true" />
-				{/* The filter is not persisted, so nothing else on screen says the
-				    list is somebody else's once the panel is closed. */}
-				<BadgeDot
-					show={filter.kind !== "current"}
-					className="top-1.5 right-1.5"
-				/>
+				{/* The dot hangs off the icon, not the button, so it stays put while
+				    the button grows from 36px to 44px on a coarse pointer. */}
+				<span className="relative flex">
+					<ListFilter className="h-4 w-4" aria-hidden="true" />
+					{/* The filter is not persisted, so nothing else on screen says the
+					    list is somebody else's once the panel is closed. */}
+					<BadgeDot
+						show={filter.kind !== "current"}
+						className="-top-0.5 -right-0.5"
+					/>
+				</span>
 			</button>
 
 			<ResponsivePanel

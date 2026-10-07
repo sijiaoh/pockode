@@ -1,5 +1,5 @@
 import { ChevronDown, GitBranch, X } from "lucide-react";
-import { useCallback, useRef, useState } from "react";
+import { type ReactNode, useCallback, useRef, useState } from "react";
 import { useWorktree } from "../../hooks/useWorktree";
 import { useWSStore } from "../../lib/wsStore";
 import type { WorktreeInfo } from "../../types/message";
@@ -99,7 +99,6 @@ function WorktreeSwitcher({ onClose, isExpanded = true }: Props) {
 		[current],
 	);
 
-	// Close button component (reused in multiple places)
 	const closeButton = !isExpanded && onClose && (
 		<button
 			type="button"
@@ -115,14 +114,11 @@ function WorktreeSwitcher({ onClose, isExpanded = true }: Props) {
 	// place of a switcher — no hint about `git init` (docs/git-ui.md).
 	if (isGitRepo === false) {
 		return (
-			<div className="mx-3 mt-3 mb-2 flex items-center gap-2">
-				<div className="flex min-w-0 flex-1 items-center px-1 py-2">
-					<span className="truncate text-base font-bold text-th-text-primary">
-						{projectTitle || "Pockode"}
-					</span>
-				</div>
-				{closeButton}
-			</div>
+			<SwitcherRow closeButton={closeButton}>
+				<span className="truncate px-3 text-sm font-medium text-th-text-primary">
+					{projectTitle || "Pockode"}
+				</span>
+			</SwitcherRow>
 		);
 	}
 
@@ -130,78 +126,109 @@ function WorktreeSwitcher({ onClose, isExpanded = true }: Props) {
 	// it is still coming, and "Default" would pass off an empty list as real.
 	if (error && worktrees.length === 0) {
 		return (
-			<div className="mx-3 mt-3 mb-2 flex items-center gap-2">
+			<SwitcherRow closeButton={closeButton}>
 				<p
-					className="min-w-0 flex-1 px-1 py-2 text-sm break-words text-th-error"
+					className="min-w-0 px-3 py-2 text-sm break-words text-th-error"
 					role="alert"
 				>
 					Couldn&apos;t load worktrees: {error.message}
 				</p>
-				{closeButton}
-			</div>
+			</SwitcherRow>
 		);
 	}
 
 	// Not known yet whether there is anything to switch: show skeleton
 	if (isGitRepo === null || isLoading) {
 		return (
-			<div className="mx-3 mt-3 mb-2 flex items-center gap-2">
-				<div className="flex min-w-0 flex-1 items-center gap-2 rounded-lg border border-th-border bg-th-bg-tertiary px-3 py-2">
-					<div className="h-4 w-4 shrink-0 rounded bg-th-text-muted/20 animate-pulse" />
-					<div className="h-4 flex-1 rounded bg-th-text-muted/20 animate-pulse" />
+			<SwitcherRow closeButton={closeButton}>
+				<div className="flex items-center gap-1.5 px-3" aria-hidden="true">
+					<div className="size-4 shrink-0 rounded bg-th-text-muted/20 animate-pulse" />
+					<div className="h-4 w-24 rounded bg-th-text-muted/20 animate-pulse" />
 				</div>
-				{closeButton}
-			</div>
+			</SwitcherRow>
 		);
 	}
 
 	return (
-		<div className="relative mx-3 mt-3 mb-2 flex items-center gap-2">
+		<SwitcherRow
+			closeButton={closeButton}
+			overlays={
+				<>
+					<WorktreeDropdown
+						isOpen={isOpen}
+						worktrees={worktrees}
+						onSelect={handleSelect}
+						onDelete={handleDelete}
+						onCreateNew={handleOpenCreate}
+						onClose={() => setIsOpen(false)}
+						getDisplayName={getDisplayName}
+						triggerRef={buttonRef}
+						isExpanded={isExpanded}
+						isCurrent={isCurrent}
+					/>
+					{isCreateOpen && (
+						<WorktreeCreateSheet
+							onClose={handleCloseCreate}
+							onCreate={handleCreate}
+							isCreating={isCreating}
+							setupHookSkip={setupHookSkip}
+						/>
+					)}
+				</>
+			}
+		>
 			<button
 				ref={buttonRef}
 				type="button"
 				onClick={() => setIsOpen(!isOpen)}
-				className="group flex min-w-0 flex-1 items-center gap-2 rounded-lg border border-th-border bg-th-bg-tertiary px-3 py-2 text-th-text-primary transition-colors hover:border-th-border-focus hover:bg-th-bg-secondary"
+				className="group flex min-h-9 min-w-0 items-center gap-1.5 rounded-lg px-3 text-th-text-primary transition-colors hover:bg-th-bg-tertiary aria-expanded:bg-th-bg-tertiary focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent pointer-coarse:min-h-11"
 				aria-expanded={isOpen}
 				aria-haspopup="listbox"
 				aria-label="Select worktree"
 			>
 				<GitBranch
-					className="h-4 w-4 shrink-0 text-th-text-muted"
+					className="size-4 shrink-0 text-th-text-muted"
 					aria-hidden="true"
 				/>
-				<span className="flex-1 truncate text-left text-sm">{displayName}</span>
+				<span className="truncate text-sm font-medium">{displayName}</span>
 				<ChevronDown
-					className={`h-4 w-4 shrink-0 text-th-text-muted transition-transform group-hover:text-th-text-primary ${
+					className={`size-3.5 shrink-0 text-th-text-muted transition-transform group-hover:text-th-text-primary ${
 						isOpen ? "rotate-180" : ""
 					}`}
 					aria-hidden="true"
 				/>
 			</button>
+		</SwitcherRow>
+	);
+}
 
-			{closeButton}
-
-			<WorktreeDropdown
-				isOpen={isOpen}
-				worktrees={worktrees}
-				onSelect={handleSelect}
-				onDelete={handleDelete}
-				onCreateNew={handleOpenCreate}
-				onClose={() => setIsOpen(false)}
-				getDisplayName={getDisplayName}
-				triggerRef={buttonRef}
-				isExpanded={isExpanded}
-				isCurrent={isCurrent}
-			/>
-
-			{isCreateOpen && (
-				<WorktreeCreateSheet
-					onClose={handleCloseCreate}
-					onCreate={handleCreate}
-					isCreating={isCreating}
-					setupHookSkip={setupHookSkip}
-				/>
-			)}
+/**
+ * The one shell every state renders in, so the row keeps its height — and the
+ * tab bar below stays put — as loading gives way to the switcher or an error.
+ * Its floor matches the close button beside it, with or without one.
+ *
+ * `relative` sits inside the `px-2` inset: the dropdown stretches to its
+ * positioned ancestor, and this way it spans exactly the New Chat row below
+ * (New Chat and the session filter together).
+ */
+function SwitcherRow({
+	closeButton,
+	overlays,
+	children,
+}: {
+	closeButton: ReactNode;
+	overlays?: ReactNode;
+	children: ReactNode;
+}) {
+	return (
+		<div className="px-2 py-1">
+			<div className="relative flex items-center gap-2">
+				<div className="flex min-h-9 min-w-0 flex-1 items-center pointer-coarse:min-h-11">
+					{children}
+				</div>
+				{closeButton}
+				{overlays}
+			</div>
 		</div>
 	);
 }
