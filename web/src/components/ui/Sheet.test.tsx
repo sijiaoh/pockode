@@ -24,7 +24,8 @@ function overlay(): HTMLElement {
 
 /** The flex column the header, body and footer live in. */
 function contentBox(): HTMLElement {
-	const box = screen.getByText("Title").parentElement?.parentElement;
+	const box =
+		screen.getByText("Title").parentElement?.parentElement?.parentElement;
 	if (!box) throw new Error("content box not found");
 	return box;
 }

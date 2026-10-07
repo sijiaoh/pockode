@@ -1,13 +1,15 @@
 import { Check, Circle, Loader2 } from "lucide-react";
 import { useMemo, useState } from "react";
 import { codexChangePaths } from "../../lib/codexChanges";
+import type { FullScreenSource } from "../../lib/fullScreen";
 import { CodeHighlighter } from "../../lib/shikiUtils";
+import { outputLineCount } from "../../lib/textLines";
 import { pathParts } from "../../lib/toolSummary";
 import { useWSStore } from "../../lib/wsStore";
 import { HIGHLIGHT_LIMIT } from "../../utils/fileView";
 import { isSameNativePath, relativeToWorkDir } from "../../utils/path";
-import { ClampedContent, HeaderCopyButton, MarkdownContent } from "../ui";
-import { outputLineCount } from "./ToolResultDisplay";
+import { HeaderCopyButton, MarkdownContent } from "../ui";
+import { HeaderlessMainBlock } from "./HeaderlessMainBlock";
 import { Detail } from "./ToolRow";
 import { Section } from "./ToolSection";
 import { useTranscriptView } from "./transcriptViewContext";
@@ -304,12 +306,18 @@ export function ToolInvocation({
 	input,
 	onOpenFile,
 	collapsible,
+	fullScreen,
 }: {
 	toolName: string;
 	input: unknown;
 	onOpenFile?: (path: string) => void;
 	/** See `Section`. */
 	collapsible?: { defaultOpen: boolean };
+	/**
+	 * Where a plan, which has no header of its own, is offered in full screen:
+	 * the key it is published under and the viewer's title.
+	 */
+	fullScreen?: { key: string; title: string };
 }) {
 	const workDir = useWSStore((state) => state.workDir);
 	const transcriptView = useTranscriptView();
@@ -327,15 +335,37 @@ export function ToolInvocation({
 	}, [view.kind, input]);
 	const jsonLines = useMemo(() => outputLineCount(json), [json]);
 	const label = invocationLabel(view);
+	const plan = view.kind === "plan" ? view.plan : undefined;
+	const planKey = fullScreen?.key ?? "";
+	const planTitle = fullScreen?.title;
+	const planSource = useMemo<FullScreenSource | undefined>(
+		() =>
+			plan !== undefined && planTitle !== undefined
+				? {
+						title: planTitle,
+						label: "Plan",
+						noun: "plan",
+						from: "start",
+						copyText: plan,
+						content: { kind: "markdown", markdown: plan },
+					}
+				: undefined,
+		[plan, planTitle],
+	);
 
 	switch (view.kind) {
 		// The plan is the whole of what is being asked, so it stands without a
 		// label.
 		case "plan":
 			return (
-				<ClampedContent budget="main" name="plan" view={transcriptView}>
+				<HeaderlessMainBlock
+					name="plan"
+					fullScreenKey={planKey}
+					source={planSource}
+					view={transcriptView}
+				>
 					<MarkdownContent content={view.plan} />
-				</ClampedContent>
+				</HeaderlessMainBlock>
 			);
 
 		case "command":

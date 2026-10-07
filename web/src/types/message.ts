@@ -184,6 +184,11 @@ export interface ToolRun {
 	activity?: string;
 	/** A running call's output so far, accumulated from the deltas. Live state. */
 	output?: string;
+	/**
+	 * How many first lines `output` has lost to the reducer's cap, so a reader
+	 * of it can tell where its lines sit in the whole.
+	 */
+	outputDroppedLines?: number;
 	/** Empty when the result arrived as `contents` instead. */
 	result?: string;
 	/**

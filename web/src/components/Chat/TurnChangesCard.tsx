@@ -1,6 +1,6 @@
 import { FileDiff } from "lucide-react";
 import { useEffect, useId, useMemo, useRef, useState } from "react";
-import { proposedChangeText } from "../../lib/proposedChange";
+import { changeRowCount, proposedChangeText } from "../../lib/proposedChange";
 import {
 	type FileEdit,
 	type LineCounts,
@@ -12,7 +12,7 @@ import { useWSStore } from "../../lib/wsStore";
 import type { ContentPart } from "../../types/message";
 import { CollapsibleBody } from "../ui";
 import {
-	changeRowCount,
+	changeFullScreenContent,
 	LineCountsLabel,
 	ProposedChange,
 	proposedChangeHeader,
@@ -20,7 +20,7 @@ import {
 import { anchorCandidateProps } from "./scrollAnchor";
 import { PathLine } from "./ToolInvocation";
 import { Chip, Detail, RowButton } from "./ToolRow";
-import { Section } from "./ToolSection";
+import { Section, type SectionFullScreen } from "./ToolSection";
 
 /**
  * Up to this many files are all listed. Past it the card lists FOLDED_ROWS and
@@ -74,13 +74,16 @@ function dirParts(dir: string): { head: string; tail: string } {
  */
 function EditSection({
 	edit,
+	index,
 	step,
-	fileName,
+	file,
 }: {
 	edit: FileEdit;
+	/** Its place in the file's edits, telling apart two of one run's. */
+	index: number;
 	/** Its place among the file's changes, when there is more than one. */
 	step?: number;
-	fileName: string;
+	file: TurnFile;
 }) {
 	const { change, run } = edit;
 	// Counting reads the whole diff; `change` is the same object every render.
@@ -90,14 +93,26 @@ function EditSection({
 		[change],
 	);
 	const noun = change.kind === "write" ? "Content" : "Change";
+	const fullScreen = useMemo<SectionFullScreen>(
+		() => ({
+			// A Codex change can list one path twice, so the run alone is not
+			// enough.
+			key: `turn:${run.id}:${file.path}:${index}`,
+			title: `${run.name} · ${file.name}`,
+			subject: { kind: "path", path: file.path },
+			content: changeFullScreenContent(change),
+		}),
+		[run.id, run.name, file.path, file.name, index, change],
+	);
 	return (
 		<Section
 			label={step ? `${step} · ${run.name}` : noun}
+			noun={noun.toLowerCase()}
 			// Named by what it copies, and by which step when several could.
 			copyLabel={`Copy ${noun.toLowerCase()}${step ? ` of ${step} · ${run.name}` : ""}`}
 			{...header}
 			copyText={proposedChangeText(change)}
-			fullScreenTitle={`${run.name} · ${fileName}`}
+			fullScreen={fullScreen}
 			budget="main"
 			count={count}
 		>
@@ -136,8 +151,9 @@ function FileBody({
 					// one path twice.
 					key={`${edit.run.id}:${index}`}
 					edit={edit}
+					index={index}
 					step={numbered ? index + 1 : undefined}
-					fileName={file.name}
+					file={file}
 				/>
 			))}
 		</>

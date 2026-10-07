@@ -53,8 +53,10 @@ const DELIVER_TS = [
 	"}",
 ];
 
-// A long file, so a Read body has to clamp.
-const QUEUE_TS = Array.from({ length: 180 }, (_, i) =>
+// A long file, so a Read body has to clamp — and short of huge content
+// (docs/tool-call-ui.md#huge-content) on the smallest viewport, so it still
+// opens in place.
+const QUEUE_TS = Array.from({ length: 60 }, (_, i) =>
 	i % 12 === 0
 		? `// --- section ${i / 12 + 1} ${"-".repeat(60)}`
 		: i % 12 === 1
@@ -137,10 +139,12 @@ export function nextDelay(attempt: number, retryAfterMs?: number): number {
 > The two failures in the first test run were the old behaviour being asserted against — both pass now.`;
 
 // A full test run's log, long enough that its output is cut to a fraction
-// of itself and read from its tail.
-const FULL_RUN_LOG = Array.from({ length: 2000 }, (_, i) =>
-	i === 1999
-		? " Test Files  412 passed (412) · Tests  1999 passed (1999)"
+// of itself and read from its tail, and short of huge content
+// (docs/tool-call-ui.md#huge-content) on the smallest viewport, so it still
+// opens in place.
+const FULL_RUN_LOG = Array.from({ length: 60 }, (_, i) =>
+	i === 59
+		? " Test Files  12 passed (12) · Tests  59 passed (59)"
 		: ` ✓ src/suite-${String(Math.floor(i / 5)).padStart(3, "0")}.test.ts > case ${i + 1} ${(i * 7) % 90}ms`,
 ).join("\n");
 
@@ -691,7 +695,7 @@ export const CHAT = {
 		},
 	},
 	// One command whose body is taller than a phone: a 20-line command and a
-	// 2000-line log, for opening and closing them without losing one's place.
+	// 60-line log, for opening and closing them without losing one's place.
 	fullRun: {
 		title: "Full test run",
 		prompt: "Run the whole test suite with coverage.",
@@ -707,7 +711,7 @@ export const CHAT = {
 				FULL_RUN_LOG,
 			);
 			agent.say(
-				"All 1999 tests pass.\n\n### Where the time went\n\n- Install and lint: 41s\n- Type check: 18s\n- Build: 52s\n- The four shards: 3m 12s, 2m 58s, 3m 40s and 3m 05s — the third is slow because it holds the database suites\n- Coverage: 2m 21s\n\n### Coverage\n\nStatements are at 87.4%, branches at 79.1%. The lowest file is `src/webhooks/dead-letter.ts` at 52%: its retry-exhausted path is only reached through the dispatcher, and no test drives the dispatcher that far.\n\nNothing is left running.",
+				"All 59 tests pass.\n\n### Where the time went\n\n- Install and lint: 41s\n- Type check: 18s\n- Build: 52s\n- The four shards: 3m 12s, 2m 58s, 3m 40s and 3m 05s — the third is slow because it holds the database suites\n- Coverage: 2m 21s\n\n### Coverage\n\nStatements are at 87.4%, branches at 79.1%. The lowest file is `src/webhooks/dead-letter.ts` at 52%: its retry-exhausted path is only reached through the dispatcher, and no test drives the dispatcher that far.\n\nNothing is left running.",
 			);
 		},
 	},

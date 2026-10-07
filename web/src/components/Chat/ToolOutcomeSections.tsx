@@ -1,9 +1,9 @@
 import type { ReactNode } from "react";
+import { outputLineCount } from "../../lib/textLines";
 import { type FetchedOutput, fetchedOutputs } from "../../lib/toolRun";
 import type { ToolRun } from "../../types/message";
 import type { ClampCount } from "../ui";
-import { outputLineCount } from "./ToolResultDisplay";
-import { Section } from "./ToolSection";
+import { Section, type SectionFullScreen } from "./ToolSection";
 
 /**
  * The heading of the fetched-output section.
@@ -109,7 +109,7 @@ export function ToolOutcomeSections({
 	outcomeMeta,
 	outcomeActions,
 	outcomeCopyText,
-	outcomeFullScreenTitle,
+	outcomeFullScreen,
 	outcomeClampFrom,
 	outcomeCount,
 	block,
@@ -129,7 +129,7 @@ export function ToolOutcomeSections({
 	/** See `Section`. */
 	outcomeCopyText?: string | (() => string);
 	/** See `Section`. */
-	outcomeFullScreenTitle?: string;
+	outcomeFullScreen?: SectionFullScreen;
 	/** See `Section`. */
 	outcomeClampFrom?: "start" | "end";
 	/** See `Section`. */
@@ -163,7 +163,9 @@ export function ToolOutcomeSections({
 					meta={outcomeMeta}
 					actions={outcomeActions}
 					copyText={outcomeCopyText}
-					fullScreenTitle={outcomeFullScreenTitle}
+					// Whatever the tool, what arrived after the turn is its output.
+					noun={run.fromBackground ? "output" : undefined}
+					fullScreen={outcomeFullScreen}
 					budget="main"
 					clampFrom={outcomeClampFrom}
 					count={outcomeCount}

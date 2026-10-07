@@ -83,6 +83,7 @@ import AnswerPanel from "./AnswerPanel";
 import AttentionStrip, { type PermissionEntry } from "./AttentionStrip";
 import ChatSkeleton from "./ChatSkeleton";
 import ForkSessionSheet from "./ForkSessionSheet";
+import { FullScreenHost } from "./FullScreenHost";
 import DefaultInputBar from "./InputBar";
 import type { PromptError } from "./MessageItem";
 import MessageList, { type MessageListHandle } from "./MessageList";
@@ -1299,7 +1300,7 @@ function ChatPanel({
 				}
 			>
 				<CoveredSurface covered={transcriptCovered}>
-					{renderTranscript()}
+					<FullScreenHost>{renderTranscript()}</FullScreenHost>
 				</CoveredSurface>
 			</div>
 			<PageHeaderTarget value={pageHeader.target}>

@@ -2103,12 +2103,18 @@ function updateToolResult(
  */
 const MAX_LIVE_OUTPUT_LINES = 200;
 
-function appendOutput(previous: string | undefined, delta: string): string {
-	const combined = (previous ?? "") + delta;
+function appendOutput(
+	run: ToolRun,
+	delta: string,
+): Pick<ToolRun, "output" | "outputDroppedLines"> {
+	const combined = (run.output ?? "") + delta;
 	const lines = combined.split("\n");
-	return lines.length <= MAX_LIVE_OUTPUT_LINES
-		? combined
-		: lines.slice(-MAX_LIVE_OUTPUT_LINES).join("\n");
+	if (lines.length <= MAX_LIVE_OUTPUT_LINES) return { output: combined };
+	return {
+		output: lines.slice(-MAX_LIVE_OUTPUT_LINES).join("\n"),
+		outputDroppedLines:
+			(run.outputDroppedLines ?? 0) + lines.length - MAX_LIVE_OUTPUT_LINES,
+	};
 }
 
 /**
@@ -2132,9 +2138,7 @@ function updateToolActivity(
 				// An empty activity leaves the last one standing: a line that
 				// blinks in and out re-flows every row below it.
 				...(event.activity ? { activity: event.activity } : {}),
-				...(event.outputDelta
-					? { output: appendOutput(run.output, event.outputDelta) }
-					: {}),
+				...(event.outputDelta ? appendOutput(run, event.outputDelta) : {}),
 			};
 		},
 		false,

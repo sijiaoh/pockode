@@ -1207,6 +1207,7 @@ them:
 |---|---|---|
 | `ConfirmDialog` | `document`, and it calls `stopPropagation` | closes itself, and the press never reaches `window` at all |
 | `Sheet` — a message's menu, and every other sheet | `document`, and it calls `stopPropagation` | the same, and it claims the press even while it is refusing to be dismissed — then it swallows without closing |
+| the full screen viewer's find bar | the viewer's column inside its `Sheet`, and it calls `stopPropagation` | while the bar is open, closes the bar — or, mid-composition, only cancels the composition — and the press never reaches the `Sheet`'s `document` listener, so the next press is the one that closes the viewer |
 | `ResponsivePanel` — the header's session panel, the worktree and session-filter dropdowns | `document`, and it calls `preventDefault` | closes itself and **marks the press handled**; while open, at every width, it counts itself as covering the page |
 | `Sidebar` — the session drawer, below the expanded tier | `document`, and it calls `preventDefault` | closes itself and **marks the press handled**; while open as a drawer, it counts itself as covering the page |
 | `InputBar`'s command palette | the textarea, and it calls `preventDefault` | closes the palette; the press never gets past it unmarked |

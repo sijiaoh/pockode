@@ -1,5 +1,6 @@
 import { ChevronRight } from "lucide-react";
-import { type ReactNode, useEffect, useRef, useState } from "react";
+import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import type { FullScreenSource } from "../../lib/fullScreen";
 import { collectPartsDeep } from "../../lib/partTree";
 import {
 	countSteps,
@@ -10,10 +11,15 @@ import {
 	withoutEchoedReport,
 } from "../../lib/subagentRun";
 import { stepsLabel, toolRunText, toolSecondLine } from "../../lib/toolRun";
-import { taskPrompt, toolSummary } from "../../lib/toolSummary";
+import {
+	taskPrompt,
+	toolSummary,
+	toolSummaryLine,
+} from "../../lib/toolSummary";
 import { useWSStore } from "../../lib/wsStore";
 import type { ContentPart, ToolRun } from "../../types/message";
 import { ClampedContent, CollapsibleBody, MarkdownContent } from "../ui";
+import { HeaderlessMainBlock } from "./HeaderlessMainBlock";
 import { PartBlocks } from "./ToolList";
 import { ToolOutcomeSections } from "./ToolOutcomeSections";
 import { Detail, ToolMeta, ToolRow, ToolStatusGlyph } from "./ToolRow";
@@ -153,6 +159,33 @@ function TaskItem({ run, depth = 0, renderChild }: Props) {
 	const report = run.fromBackground ? "" : subagentReport(text);
 	const failed = run.status === "error";
 	const nested = depth > 0;
+	const fullScreenTitle = toolSummaryLine(summary);
+	const reportSource = useMemo<FullScreenSource | undefined>(
+		() =>
+			report
+				? {
+						title: fullScreenTitle,
+						label: "Report",
+						noun: "report",
+						from: "start",
+						copyText: report,
+						content: { kind: "markdown", markdown: report },
+					}
+				: undefined,
+		[report, fullScreenTitle],
+	);
+	const reportKey = `report:${run.id}`;
+	const outcomeFullScreen = useMemo(
+		() =>
+			outcome
+				? {
+						key: `${run.id}:result`,
+						title: fullScreenTitle,
+						content: { kind: "markdown" as const, markdown: outcome },
+					}
+				: undefined,
+		[outcome, run.id, fullScreenTitle],
+	);
 
 	const children = run.children ?? [];
 	const unfiled = useUnfiledChildren(run.id);
@@ -251,9 +284,14 @@ function TaskItem({ run, depth = 0, renderChild }: Props) {
 					)}
 					{report ? (
 						<div className="p-2">
-							<ClampedContent budget="main" name="report" view={view}>
+							<HeaderlessMainBlock
+								name="report"
+								fullScreenKey={reportKey}
+								source={reportSource}
+								view={view}
+							>
 								<MarkdownContent content={report} />
-							</ClampedContent>
+							</HeaderlessMainBlock>
 						</div>
 					) : (
 						// A backgrounded subagent's outcome below is its report, and
@@ -271,6 +309,7 @@ function TaskItem({ run, depth = 0, renderChild }: Props) {
 					<ToolOutcomeSections
 						run={run}
 						outcome={outcome && <MarkdownContent content={outcome} />}
+						outcomeFullScreen={outcomeFullScreen}
 						block
 					/>
 					{hasProcess && (

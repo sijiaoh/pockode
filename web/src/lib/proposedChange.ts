@@ -1,5 +1,6 @@
 import { createPatch } from "diff";
 import { type CodexChangeView, parseCodexChanges } from "./codexChanges";
+import { outputLineCount } from "./textLines";
 
 export interface EditInput {
 	file_path: string;
@@ -133,4 +134,46 @@ export function proposedChangeText(
 	change: ProposedChangeData,
 ): string | undefined {
 	return change.kind === "write" ? change.input.content : undefined;
+}
+
+export function changePatches(
+	change: ProposedChangeData,
+): string[] | undefined {
+	switch (change.kind) {
+		case "edit":
+		case "multiEdit":
+			return change.patches;
+		case "codex":
+			return change.changes.flatMap((c) => (c.patch ? [c.patch] : []));
+		case "write":
+			return undefined;
+	}
+}
+
+/**
+ * The rows a patch is drawn in: its hunk headers and lines, without the file
+ * headers the viewer leaves out.
+ */
+export function patchRows(patch: string): number {
+	let rows = 0;
+	// The file headers are the lines before the first hunk; inside one, a
+	// line reading `---` is a removed `--` line, and is drawn.
+	let inHunk = false;
+	for (const line of patch.split("\n")) {
+		if (line.startsWith("@@")) inHunk = true;
+		if (inHunk && /^[ +\-@]/.test(line)) rows++;
+	}
+	return rows;
+}
+
+/**
+ * The rows the change is drawn in, for counting what a cut hides: a new
+ * file's lines, or its patches' rows.
+ */
+export function changeRowCount(change: ProposedChangeData): number {
+	const patches = changePatches(change);
+	if (!patches) {
+		return change.kind === "write" ? outputLineCount(change.input.content) : 0;
+	}
+	return patches.reduce((rows, patch) => rows + patchRows(patch), 0);
 }

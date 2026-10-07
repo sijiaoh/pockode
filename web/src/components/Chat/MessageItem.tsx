@@ -10,10 +10,19 @@ import {
 	X,
 } from "lucide-react";
 import { memo, useId, useMemo, useState } from "react";
-import { proposedChange, proposedChangeText } from "../../lib/proposedChange";
+import { fullScreenSubject } from "../../lib/fullScreen";
+import {
+	changeRowCount,
+	proposedChange,
+	proposedChangeText,
+} from "../../lib/proposedChange";
 import { useChatUIConfig } from "../../lib/registries/chatUIRegistry";
 import { CodeHighlighter } from "../../lib/shikiUtils";
-import { isTaskTool, toolSummary } from "../../lib/toolSummary";
+import {
+	isTaskTool,
+	toolSummary,
+	toolSummaryLine,
+} from "../../lib/toolSummary";
 import { useWSStore } from "../../lib/wsStore";
 import type { FileBlock } from "../../types/content";
 import type {
@@ -49,7 +58,7 @@ import { DiscardedNote, DiscardedSummary } from "./DiscardedMessage";
 import MessageActions from "./MessageActions";
 import MessageMenuTrigger, { type ForkBlocked } from "./MessageMenuTrigger";
 import {
-	changeRowCount,
+	changeFullScreenContent,
 	ProposedChange,
 	proposedChangeHeader,
 } from "./ProposedChange";
@@ -62,7 +71,7 @@ import ToolCallItem from "./ToolCallItem";
 import { invocationView, ToolInvocation } from "./ToolInvocation";
 import { PartBlocks } from "./ToolList";
 import { ToolRow } from "./ToolRow";
-import { Section } from "./ToolSection";
+import { Section, type SectionFullScreen } from "./ToolSection";
 import { TurnChangesCard } from "./TurnChangesCard";
 import TurnTail from "./TurnTail";
 import { keepClearProps } from "./useTranscriptScroll";
@@ -731,6 +740,25 @@ function PermissionRequestBody({
 				: undefined,
 		[change],
 	);
+	const workDir = useWSStore((state) => state.workDir);
+	const title = toolSummaryLine(
+		toolSummary(request.toolName, request.toolInput, workDir),
+	);
+	// Its own keys, apart from the row's: the card and the row it becomes can
+	// both be on screen.
+	const fullScreenKey = `card:${request.toolUseId}`;
+	const changeFullScreen = useMemo<SectionFullScreen | undefined>(
+		() =>
+			change
+				? {
+						key: `${fullScreenKey}:change`,
+						title,
+						subject: fullScreenSubject(request.toolName, request.toolInput),
+						content: changeFullScreenContent(change),
+					}
+				: undefined,
+		[change, fullScreenKey, title, request.toolName, request.toolInput],
+	);
 	// Where the body already is the input — the JSON fallback or its fields, a
 	// string input, a plan that is the input's only key — the raw input would
 	// say it twice. A plan with anything beside it keeps it: whatever else the
@@ -750,13 +778,15 @@ function PermissionRequestBody({
 				toolName={request.toolName}
 				input={request.toolInput}
 				onOpenFile={onOpenFile}
+				fullScreen={{ key: `${fullScreenKey}:plan`, title }}
 			/>
 			{change && (
 				<Section
 					label="Proposed change"
+					noun="change"
 					{...changeHeader}
 					copyText={proposedChangeText(change)}
-					fullScreenTitle="Proposed change"
+					fullScreen={changeFullScreen}
 					budget="main"
 					count={changeCount}
 				>
@@ -1111,6 +1141,7 @@ function answerText(entry: QuestionAnswerRecord): string {
  * looks.
  */
 function PockodeCommandItem({
+	id,
 	command,
 	content,
 	attachments,
@@ -1118,6 +1149,8 @@ function PockodeCommandItem({
 	onOpenFile,
 	discarded,
 }: {
+	/** The message's, naming its block in full screen. */
+	id: string;
 	command: PockodeCommandInvocation;
 	content: string;
 	attachments?: FileBlock[];
@@ -1126,6 +1159,17 @@ function PockodeCommandItem({
 	discarded?: boolean;
 }) {
 	const [expanded, setExpanded] = useState(false);
+	const fullScreen = useMemo<SectionFullScreen | undefined>(
+		() =>
+			content
+				? {
+						key: `sent:${id}`,
+						title: `/${command.name} · Sent to the agent`,
+						content: { kind: "output", text: content },
+					}
+				: undefined,
+		[id, command.name, content],
+	);
 	return (
 		<div className="row-ground-secondary rounded bg-th-bg-secondary text-xs">
 			<ToolRow
@@ -1147,7 +1191,12 @@ function PockodeCommandItem({
 			{discarded && <DiscardedNote className="px-2 pb-2 text-th-text-muted" />}
 			<CollapsibleBody expanded={expanded}>
 				<div className="border-t border-th-border p-2">
-					<Section label="Sent to the agent" budget="main">
+					<Section
+						label="Sent to the agent"
+						noun="message"
+						budget="main"
+						fullScreen={fullScreen}
+					>
 						{/* Empty only on this client's own echo, until the server's
 						    reply brings the prompt it expanded the command to — or
 						    for good, when the send failed without a reply. */}
@@ -1253,6 +1302,7 @@ const MessageItem = memo(function MessageItem({
 		if (message.command) {
 			const item = (
 				<PockodeCommandItem
+					id={message.id}
 					command={message.command}
 					content={message.content}
 					attachments={message.attachments}

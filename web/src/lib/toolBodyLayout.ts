@@ -13,11 +13,6 @@ export interface ToolBodyLayout {
 	resultFirst: boolean;
 	resultLabel: string;
 	/**
-	 * Whether the result is something read at length — a whole file, a diff —
-	 * and so worth a screen of its own once it runs past the clamp.
-	 */
-	fullScreen: boolean;
-	/**
 	 * Whether the result is read from its end, and so clamped keeping the end in
 	 * view: a test run's or a build's verdict is its last lines, not its first.
 	 */
@@ -33,14 +28,13 @@ export interface ToolBodyLayout {
 const DEFAULT_LAYOUT: ToolBodyLayout = {
 	resultFirst: false,
 	resultLabel: "Result",
-	fullScreen: false,
 	resultFromEnd: false,
 	resultIsAcknowledgement: false,
 };
 
 const LAYOUTS = new Map<string, ToolBodyLayout>(
 	Object.entries({
-		Read: { resultFirst: true, resultLabel: "Content", fullScreen: true },
+		Read: { resultFirst: true, resultLabel: "Content" },
 		Glob: { resultFirst: true, resultLabel: "Matches" },
 		Grep: { resultFirst: true, resultLabel: "Matches" },
 		WebSearch: { resultFirst: true, resultLabel: "Results" },
@@ -48,9 +42,9 @@ const LAYOUTS = new Map<string, ToolBodyLayout>(
 		// The command first: it is what has to be read before trusting the output.
 		Bash: { resultLabel: "Output", resultFromEnd: true },
 		WebFetch: { resultLabel: "Page" },
-		Edit: { resultLabel: "Change", fullScreen: true },
-		MultiEdit: { resultLabel: "Change", fullScreen: true },
-		Write: { resultLabel: "Content", fullScreen: true },
+		Edit: { resultLabel: "Change" },
+		MultiEdit: { resultLabel: "Change" },
+		Write: { resultLabel: "Content" },
 	} satisfies Record<string, Partial<ToolBodyLayout>>).map(([name, layout]) => [
 		name,
 		{ ...DEFAULT_LAYOUT, ...layout },

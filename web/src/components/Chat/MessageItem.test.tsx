@@ -930,7 +930,7 @@ describe("MessageItem", () => {
 			);
 
 			expect(
-				screen.getByText("Proposed change").parentElement,
+				screen.getByText("Proposed change").parentElement?.parentElement,
 			).toHaveTextContent("+2 −1");
 			expect(
 				screen.getByRole("button", { name: "Wrap long lines" }),

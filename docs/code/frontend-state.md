@@ -816,16 +816,17 @@ The rules particular to children:
 
 #### Live state on a run
 
-Two of a run's fields do not come from history and cannot: `activity` (the
-latest one-line status) and `output` (the deltas a streaming engine sends,
-accumulated client-side). They arrive as `tool_activity`, which is broadcast and
+Three of a run's fields do not come from history and cannot: `activity` (the
+latest one-line status), `output` (the deltas a streaming engine sends,
+accumulated client-side) and `outputDroppedLines` (what the cap on `output` has
+dropped, below). They arrive as `tool_activity`, which is broadcast and
 never persisted — a progress line is a *latest value*, and a snapshot of one in
 the transcript becomes a lie the moment the next one arrives
 ([agent-event.md](../agent-event.md#what-is-not-an-event)).
 
 Three consequences the reducer encodes:
 
-- **A replayed run has neither, and is still correct**, because `status` carries
+- **A replayed run has none of them, and is still correct**, because `status` carries
   "still going" on its own. This is the whole reason status is derived from
   persisted records while progress is not.
 - **Progress is ignored on a settled run.** `useChatMessages` coalesces updates
@@ -833,16 +834,20 @@ Three consequences the reducer encodes:
   so one held back may be applied after the result. A progress line under a
   finished row is worse than a moment of missing liveness.
 - **An empty update leaves the last line standing**, and the accumulation is
-  capped at its last lines. A line that blinks in and out re-flows every row
+  capped at its last 200 lines. A line that blinks in and out re-flows every row
   below it, and a build that printed ten thousand lines is not ten thousand DOM
-  nodes.
+  nodes. What the cap drops is counted in `outputDroppedLines`, live state like
+  `output` itself, so a reader of the buffer — the full screen viewer — knows
+  where its lines sit in what this client has received (a client that joined
+  mid-run starts from 0: the server keeps no output for it)
+  ([tool-call-ui.md](../tool-call-ui.md#full-screen)).
 
 A client that subscribes mid-run has missed everything it was not listening for,
 and on a phone that is the normal case. `chat.messages.subscribe` therefore
 returns the newest activity per call still in flight, which is applied over the
 replayed transcript ([agent-chat.md](../agent-chat.md)).
 
-`seenAt` is the third live-only field and exists for the same reason in reverse:
+`seenAt` is live-only too, and exists for the same reason in reverse:
 a history record carries no timestamp, so the only clock a client has is when it
 received something. That is right for a call it watched start and meaningless
 for one it replayed, so the reducer stamps it only for events that arrived live,

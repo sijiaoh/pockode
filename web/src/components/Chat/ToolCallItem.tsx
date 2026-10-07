@@ -4,14 +4,16 @@ import {
 	type FileReference,
 	partitionFileBlocks,
 } from "../../lib/contentBlocks";
+import { fullScreenSubject } from "../../lib/fullScreen";
 import { proposedChange } from "../../lib/proposedChange";
+import { outputLineCount } from "../../lib/textLines";
 import { toolBodyLayout } from "../../lib/toolBodyLayout";
 import {
 	lastOutputLines,
 	shownResult,
 	toolSecondLine,
 } from "../../lib/toolRun";
-import { toolSummary } from "../../lib/toolSummary";
+import { toolSummary, toolSummaryLine } from "../../lib/toolSummary";
 import { useWSStore } from "../../lib/wsStore";
 import type { ToolRun } from "../../types/message";
 import { omittedLabel } from "../../utils/attachment";
@@ -23,12 +25,12 @@ import { PathLine, ToolInvocation } from "./ToolInvocation";
 import { ToolOutcomeSections } from "./ToolOutcomeSections";
 import ToolResultDisplay, {
 	FAILURE_TEXT,
-	outputLineCount,
 	resultCopyText,
 	resultCount,
+	resultFullScreenContent,
 } from "./ToolResultDisplay";
 import { ToolMeta, ToolRow, ToolStatusGlyph } from "./ToolRow";
-import { Section } from "./ToolSection";
+import { Section, type SectionFullScreen } from "./ToolSection";
 
 /** How much of a running call's output the body shows. */
 const LIVE_OUTPUT_LINES = 50;
@@ -158,11 +160,76 @@ const ToolCallItem = memo(function ToolCallItem({
 		[everExpanded, showsResult, run.name, run.input, result, run.contents],
 	);
 
+	// The viewer's title is the row's, as the row reads it.
+	const fullScreenTitle = toolSummaryLine(summary);
+	const subject = useMemo(
+		() => fullScreenSubject(run.name, run.input),
+		[run.name, run.input],
+	);
+	// One key for the live output and the result that replaces it, so a viewer
+	// opened on the one carries on into the other.
+	const resultKey = `${run.id}:result`;
+	// The reducer's whole buffer, not the body's last lines: the viewer has the
+	// room for it.
+	const liveFullScreen = useMemo<SectionFullScreen | undefined>(
+		() =>
+			live && run.output
+				? {
+						key: resultKey,
+						title: fullScreenTitle,
+						subject,
+						content: {
+							kind: "output",
+							text: run.output,
+							live: { droppedLines: run.outputDroppedLines ?? 0 },
+						},
+					}
+				: undefined,
+		[
+			live,
+			run.output,
+			run.outputDroppedLines,
+			resultKey,
+			fullScreenTitle,
+			subject,
+		],
+	);
+	// Gated as the copy text is: building it reads the whole result.
+	const outcomeFullScreen = useMemo<SectionFullScreen | undefined>(
+		() =>
+			everExpanded && showsResult
+				? {
+						key: resultKey,
+						title: fullScreenTitle,
+						subject,
+						content: resultFullScreenContent(run.name, run.input, result, {
+							contents: run.contents,
+							failed,
+							onOpenFile,
+						}),
+					}
+				: undefined,
+		[
+			everExpanded,
+			showsResult,
+			resultKey,
+			fullScreenTitle,
+			subject,
+			run.name,
+			run.input,
+			result,
+			run.contents,
+			failed,
+			onOpenFile,
+		],
+	);
+
 	const invocation = (
 		<ToolInvocation
 			toolName={run.name}
 			input={run.input}
 			onOpenFile={onOpenFile}
+			fullScreen={{ key: `${run.id}:plan`, title: fullScreenTitle }}
 			// Folded only once there is an answer to read instead; until then the
 			// call is all the body has to say. Read when the body first mounts,
 			// so a result arriving later does not fold what the user is reading.
@@ -177,6 +244,8 @@ const ToolCallItem = memo(function ToolCallItem({
 			{liveOutput && (
 				<Section
 					label="Output so far"
+					noun="output"
+					fullScreen={liveFullScreen}
 					budget="main"
 					clampFrom="end"
 					follow
@@ -204,13 +273,7 @@ const ToolCallItem = memo(function ToolCallItem({
 				outcomeMeta={changeHeader.meta}
 				outcomeActions={changeHeader.actions}
 				outcomeCopyText={copyText}
-				outcomeFullScreenTitle={
-					layout.fullScreen
-						? [summary.title, summary.detail + summary.detailTail]
-								.filter(Boolean)
-								.join(" · ")
-						: undefined
-				}
+				outcomeFullScreen={outcomeFullScreen}
 				outcome={
 					showsResult && (
 						<>

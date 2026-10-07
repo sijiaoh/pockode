@@ -351,8 +351,9 @@ body [gave one up](#the-body-problems-2-and-3) — holding `PathLine` (with
 *Open* into the Files tab, except for a deleted file or one outside the work
 directory) and then one change per `Section`, in order, each drawn exactly as
 on its tool row: `ProposedChange` clamped by `ClampedContent` with *Show N
-more lines* and *Full screen* (`Edit · deliver.ts`), `+N −M` and the one *Wrap long lines*
-switch in its header, and a Write's content copied from there. Being the same
+more lines* under it; `+N −M`, the one *Wrap long lines* switch and the
+[full screen](#full-screen) ⤢ in its header (the viewer titled
+`Edit · deliver.ts`); and a Write's content copied from there. Being the same
 component, each diff also has the tool body's narrow gutter on a phone. A file
 changed once heads its block `Change` (`Content` for a Write), as the tool
 body does; with more than one, each is headed `1 · Edit`, `2 · Write`…; a
@@ -641,7 +642,7 @@ of its own either. Below it, for a file tool, a *Proposed change* section draws 
 diff or the file preview through `ProposedChange` — the same component the row's
 result uses, which reads only the input and so can be drawn before the call
 runs — header and all (`proposedChangeHeader`), so the count, the wrap switch
-and *Full screen* [below](#the-body-problems-2-and-3) are on the card too. Last,
+and the [full screen](#full-screen) ⤢ are on the card too. Last,
 folded and muted, *Raw input*: the input as it arrived, minus Codex's
 `command_actions`, copied from its header as JSON. It is left out where it would
 only repeat the body: when the body already is the input (the JSON fallback, an
@@ -1166,10 +1167,10 @@ tabs into the cut-off part opens it, because the browser would otherwise
 scroll the clipped box to the focused control and leave it where no drag can
 bring it back. Sideways a section
 does scroll — a file's lines keep their width — and a box with nothing to
-scroll vertically hands a vertical drag on to the page. What is read at length
-rather than skimmed — a whole file (`Read`, `Write`) and a diff (`Edit`,
-`MultiEdit`) — also offers *Full screen*, the shared `Sheet` in its
-`fullScreen` form, once it runs past the clamp.
+scroll vertically hands a vertical drag on to the page. Every main block
+([budgets](#budgets)) also offers to be read on a screen of its own once it is
+cut — a ⤢ in its header ([full screen](#full-screen)) — and one too long to
+open in place at all offers only that ([huge content](#huge-content)).
 
 ### Budgets
 
@@ -1214,6 +1215,85 @@ not boxes as tall as it: at 44px the two between a command and its output
 alone took an open `Bash` row past a 375×667 phone's 562px transcript (606px;
 558px now). Why that is allowed, and the clearance it costs a foldable section
 below one, are in [responsive-ui.md](responsive-ui.md#which-technique-and-when).
+
+### Huge content
+
+Opening a ten-thousand-line log in place builds ten thousand lines of DOM for
+a reader who will scroll past three screens and lose the block anyway. So a
+main block whose content is **huge** — estimated taller than three
+transcripts (`HUGE_SCREENS`, `lib/hugeContent.ts`) — never opens in place:
+the transcript draws a slice of it, and only the [viewer](#full-screen) draws
+it whole. At 375×667 that is about 105 rows, on a 900px desktop transcript
+about 170 — deliberately early, since past three screens the viewer reads
+better than the page.
+
+**Estimated, never measured** — the point is not to draw it to find out. In
+rows of `text-xs`, wrapped rows and a diff's rows counted only until past the
+threshold:
+
+| Content | Rows |
+|---|---|
+| output, Markdown (they wrap in the transcript) | Σ ⌈line length ÷ characters per row⌉, a final newline not counted; rough for Markdown, whose prose is not mono, and enough to tell three screens from one |
+| code, JSON (unwrapped) | lines |
+| a diff | its rows: hunk headers, context, added and removed (`patchRows`) |
+
+**Judged once** (`useHugeContent`, `Chat/HugeContent.tsx`), before paint, when
+the block first has content: the transcript's height (`--transcript-height`;
+the tallest enclosing scroller's while `MessageList` has not published it yet) and the
+characters a mono row holds in the block's box are taken then and kept — the
+characters once more when a block first judged under a folded row (no width
+yet) is first shown. Content that changes is judged again against those same numbers, never a resize: a
+keyboard opening or a rotation must not flip a block between the two ways of
+reading it. A block the reader has already opened in place stays open, with
+only its header's ⤢; *Show less* puts it back as huge. The one commit before the
+first judgment draws nothing rather than all of what may be huge — it is never
+painted.
+
+**Never huge**, because something else already bounds the DOM, or the slice
+would lose what matters:
+
+- **A file list.** The transcript caps it at 100 rows; it keeps *Show N more
+  files* in place, and its ⤢ opens the viewer on **every** path.
+- **Live output.** The transcript draws its last 50 lines (item 2
+  [below](#the-body-problems-2-and-3)).
+- **A result with attachments** between its text: the slice would be text
+  alone, and the images and files between it would vanish.
+
+**What the transcript draws** (`sliceContent`) is the end read first — the head,
+or for content [read from its end](#budgets) the tail — 40 lines, more than the
+largest main budget plus its tolerance so the fade has content under it, and at
+most 16,000 characters, since one line of minified JSON can be a megabyte. It is
+cut at whole units: lines for output and code; for Markdown the first blank line
+past 40 that is not inside a fence (a fence still open at the cut is closed, so
+what follows it is not drawn as code); for a diff its first whole hunks, file by
+file — a hunk over 40 rows that would overrun the slice (a new file's single
+hunk) is cut instead, its `@@` counts rewritten to the lines kept. A failed command's
+red tail survives only in a tail slice, where its last lines are.
+
+**The clamp** (`ClampedContent`'s `huge`) is always cut and never measured:
+no *Show N more* or *Show less*, never pinned, and focus moving past the fade
+does not open it: the rest is not in the DOM, and when the browser scrolls the
+clipped box to a control in the slice past the fade — a link in a page — the box
+is put back at its top. Its one
+button is on the cut side, as the in-place button would be:
+
+```
+│ Output                       ⧉       ⤢ │
+│ ⤢ Open full output · 12,408 lines        │  ← above: content read from its end
+│ ░░░░░░░ faded ░░░░░░░░░░░░░░░░░░░░░░░░░ │
+│ ✓ 812 passed                             │
+```
+
+- It is the clamp's text button with a leading `Maximize2`, and opens the
+  viewer. Above the content it is moved `pointer-coarse:mt-4` clear of the
+  header's buttons ([responsive-ui.md](responsive-ui.md#which-technique-and-when)).
+- Its label is `Open full <noun> · <n> <unit>` (`hugeOpenLabel`): a plural block
+  reads *Open all matches* / *Open all results*; the count is lines, a diff's
+  rows, with thousands separators; Markdown, which has no unit a reader counts
+  in, has none: *Open full page*, *Open full plan*.
+- A headed block keeps its header ⤢ as well. A headerless one — the plan, a
+  subagent's report (`HeaderlessMainBlock`) — has this one button, in place of
+  both *Show all* and its *Full screen*.
 
 ### Keeping the reader's place
 
@@ -1262,8 +1342,10 @@ A section opened past its budget can run for screens, and a reader in the
 middle of it had lost which block it was — a command's or its output's — and
 both ways to close it, one at each end. So while a section is open past its
 budget, and only then, its header sticks directly under the row's
-[pinned title](#the-sticky-title-line), carrying its copy button and a collapse
-control (`ChevronsDownUp`). A section that fits, or one cut and not opened, is
+[pinned title](#the-sticky-title-line), carrying its copy button, its
+[full screen](#full-screen) ⤢ — someone several screens into an opened log is
+exactly who wants to leave for the viewer — and a collapse control
+(`ChevronsDownUp`). A section that fits, or one cut and not opened, is
 drawn as before; a foldable section folded away lets its header go. One
 section is open around any point of the body, so there are at most two pinned
 bars: the row's and this.
@@ -1351,7 +1433,17 @@ is most of a command. `CodeHighlighter`'s corner button is turned off
 is `resultCopyText`: the text a reader would select, so a `Read` without its
 line numbers, a command's output without its colour codes, and a refused call
 without its `<tool_use_error>` tag ([above](#the-second-line-problem-1)); a diff
-or a checklist has no button. The one block with no header is a single file's
+or a checklist has no button. The actions run in one order — the block's own
+(the wrap switch), copy, the [full screen](#full-screen) ⤢, and the pinned
+collapse control while there is one — so ⤢, the last that stays, sits at the
+same place in every header, and the one that comes and goes is outside it. All
+are 24px boxes whose hit areas reach past them, so the cluster is spaced to
+keep those apart (`gap-3 pointer-coarse:gap-5` in `BlockHeader`;
+[responsive-ui.md](responsive-ui.md#which-technique-and-when) has the
+arithmetic). When the line runs short — a change's `not applied +120 −45`
+beside four buttons, deep in a subagent's Process — the label gives way first,
+down to `3ch`, then the meta, `not applied` before the counts, which never
+shrink: they are what the block amounts to. The one block with no header is a single file's
 path (*File tools*, below), which carries its copy button at the end of its own
 line. `BlockHeader` is meant for any block of content, not only tool sections: a
 fenced code block in the agent's text (`CodeBlock`, `components/ui/`) is the
@@ -1594,6 +1686,214 @@ transcript it sits. The gap predates rung 4 and is recorded rather than closed
 in passing, because closing it is a behavioural decision and not a typo: that
 report is still the only account of what went wrong, so the alternative to
 opening it has to be a way of reaching it, not silence.
+
+### Full screen
+
+A clamp keeps the transcript moving, and that is the wrong thing for the
+reader who came to read the block: a log, a file, a long report. So every main
+block ([budgets](#budgets)) offers a screen of its own **once it is cut** — more
+than budget + six lines, the same test that puts up its *Show* button — and
+keeps offering it after *Show N more* has opened it in place. A block that fits
+has none, and a supporting block (Command, Parameters, Error…) never has one.
+There is no list of tools: the rule is the budget.
+
+**The button is a ⤢ in the section's header** (`Maximize2`, a 24px box —
+`Section`, `Chat/ToolSection.tsx`), the last persistent action
+([the header bar](#the-pinned-section-header)), on the pinned header too.
+`ClampedContent` tells the section when it is cut (`onCutChange`) from a layout
+effect, so the button never flashes in late. The two main blocks with no
+header — the `ExitPlanMode` plan and a subagent's report
+(`HeaderlessMainBlock`) — keep a *⤢ Full screen* text button in their clamp's
+row, beside *Show all*: growing a header for one icon would cost 24px on every
+plan. [Huge content](#huge-content) adds its own *Open full …* button on the
+cut side.
+
+#### Who owns the viewer
+
+A sheet inside the block would die with it, and blocks are replaced while they
+are read: *Output so far* unmounts the moment the result arrives, a permission
+card the moment it is answered. So there is one viewer per transcript,
+`FullScreenHost` (`Chat/FullScreenHost.tsx`), rendered inside the transcript's
+`CoveredSurface` in `ChatPanel` so an overlay taking the chat closes it
+([answering-ui.md](answering-ui.md#who-owns-the-dismissing-click) has why). A
+block publishes a `FullScreenSource` (`lib/fullScreen.ts`) under a **key** for
+as long as it is mounted, and the viewer shows whatever is published under the
+key it was opened with:
+
+| Key | Block |
+|---|---|
+| `<run>:result` | a tool row's outcome, live or final — *Output so far* and *Output* share it, so an open viewer carries on into the result |
+| `<run>:plan` · `card:<toolUseId>:plan` · `card:<toolUseId>:change` | the row's plan; a permission card's plan and *Proposed change*, apart from the row's because both can be on screen |
+| `turn:<run>:<path>:<index>` | a diff in [the turn's changes](#the-turns-changes) — a Codex change can list one path twice |
+| `report:<run>` · `thought:<hash>` · `sent:<message>` | a subagent's report; *Full reasoning*, keyed by a hash of its opening (200 characters, or its first six lines if they end sooner) so it carries over from the turn's tail into its row; a command's *Sent to the agent* |
+
+A key left with no publisher closes the viewer — but only if it is still
+unpublished a frame later, since publishers legitimately unmount and remount
+across commits. The source is content, not the transcript's rendering, because
+the viewer draws it differently: unclamped, with its own wrap, and from the
+latest text.
+
+#### Layout
+
+```
+375px coarse                                  desktop: same structure
+┌───────────────────────────────────────────┐
+│ Bash · pnpm test                       ✕  │  the Sheet's title
+│ pnpm test --run --reporter=verbose…   ⌄   │  subject
+├───────────────────────────────────────────┤
+│ Output  12,408 lines      ↩     ⧉     🔍  │  toolbar
+├───────────────────────────────────────────┤
+│ [fail_________________] 3 / 17   ↑   ↓  ✕ │  find, only while open
+├───────────────────────────────────────────┤
+│ … content, a scroller of its own …        │
+└───────────────────────────────────────────┘
+```
+
+It is the shared `Sheet` in its `fullScreen` form, which gained two generic
+props for it: `subtitle`, drawn under the title, and `initialFocusRef`.
+
+- **Title**: the row's own summary, `Bash · pnpm test`, `Read · ToolSection.tsx`
+  (`toolSummaryLine`) — a subagent's report and a permission card's blocks take
+  their row's too, and the plan its row title. The rest name themselves:
+  `<tool> · <file name>` for a diff in the turn's changes, `Reasoning`,
+  `/<command> · Sent to the agent`.
+- **Subject**: what the tool acted on, in full, for the tools that act on one
+  thing (`fullScreenSubject`) — `Bash`'s command, a file tool's path, the
+  `Grep` / `Glob` pattern, the `WebFetch` URL, the `WebSearch` query. It is
+  shown even when the title holds it, since the title is cut to a few words on a
+  phone. Folded it is one truncated mono line — a path cut from the left, as
+  `PathLine` cuts it — ending in a chevron, a `touch-target` button with
+  `aria-expanded`. Pressed, the whole text appears **below** it, a path
+  absolute, wrapped, selectable and capped at `40dvh` with its own scroll: text
+  inside a button cannot be selected on a touch screen, and a command is copied
+  out of here as often as it is read.
+- **Toolbar**: the block's own header, so the reader sees the block they opened —
+  its label, its meta (a change's `+N −M`, `not applied`), the count
+  (`12,408 lines`, `3,204 files`), then *wrap*, *copy* and *find*, find last,
+  nearest the thumb. The buttons are at the Sheet close button's rung,
+  36px (`size="lg"`). Under a subject the toolbar is moved `pointer-coarse:mt-2.5`
+  clear of the subject's hit area.
+- **Content**: `p-3 sm:p-4`, the transcript's `text-xs` mono for lines, and
+  Markdown in `prose-message` at a measure for prose
+  ([width and pointer](#width-and-pointer)).
+- **Copy** copies the whole text (the block's own copy text), never the window
+  drawn.
+
+#### Per kind of content
+
+| Kind | Drawn | Wrap switch | Opens at |
+|---|---|---|---|
+| output (`Bash`, plain text results, *Sent to the agent*) | by the line, virtualized; colour kept; a result with attachments as its text alone, the images left to the transcript | the viewer's own, **on** | the end if the block is read from its end, else the top |
+| code (`Read`, a `Write`'s content, JSON) | by the line, virtualized; shiki colours | the viewer's own, **off** | the top |
+| a diff (`Edit`, `MultiEdit`, a Codex change) | `ProposedChange`, whole | the transcript's remembered one (`diffSettingsStore`) | the top |
+| files (`Glob`, `Grep`'s file lists) | by the row, virtualized; **every** path, each with *Open* | none | the top |
+| Markdown (`WebFetch`, the plan, a report, reasoning, a `.md` file) | `MarkdownContent`, whole; plain wrapped text past `HIGHLIGHT_LIMIT` | none: it reflows | the top |
+
+- **Wrap.** Only the diff's choice is remembered, and it is the same switch every
+  diff in the chat shares. Output wraps by default because the transcript always
+  wraps it, and code does not, to keep its shape; neither is remembered, since
+  unwrapping one log for its columns is an occasional move.
+- **A `Write` is never a diff here.** `ProposedChange` draws one through
+  `FileContentDisplay`, which highlights everything and draws it whole, so a
+  generated 5,000-line file goes to the viewer as code (or Markdown), with its
+  `not applied` in the toolbar's meta.
+- **A diff's gutters** are the transcript's: one narrow column below `sm`, two
+  above ([width and pointer](#width-and-pointer)). It is not virtualized — the
+  diff library draws a diff whole — which is affordable because diffs come from
+  edit inputs and are rarely thousands of rows.
+- **A failed command** keeps its last five lines red (`FAILURE_TEXT`).
+- **Live output** shows the reducer's whole 200-line buffer, not the
+  transcript's 50. Once lines have been dropped from its head
+  (`ToolRun.outputDroppedLines`) a muted line heads it: *Earlier output arrives
+  with the result*. It follows its tail while the reader is at the end and stops
+  when they scroll up — the transcript's rule. When the result arrives under the
+  same key the viewer stays, now with everything, and the reader's line, counted
+  from the end, stays where it was.
+
+**Virtualized** (`VirtualLines`, on `@tanstack/react-virtual`): only the rows
+around the view are drawn, so a 10,000-line log opens at once with a few dozen
+rows mounted. Each drawn row is measured, so wrapped rows of any height scroll
+true; unwrapped rows all take the widest line's width in `ch` (wide characters
+as two), so the block scrolls sideways as one. Colour is worked out once over the
+whole text and only drawing is windowed, because both carry state across
+lines: output is parsed by a **fresh `AnsiUp` per output**, fed a line at a time,
+so a colour left on carries over and never leaks into the next output
+(`parseOutput`, `Chat/FullScreenLines.tsx`); code goes through shiki's
+`codeToTokens` once (`highlightLines`, `lib/shikiUtils.tsx`), plain past
+`HIGHLIGHT_LIMIT`, and wrapped keeps the transcript's hanging indent. The place
+is kept in lines, not pixels: opening at the end, following it, the hand-off
+from live output to the result and toggling wrap all hold the line being read,
+and a gesture already under way is never pulled back.
+
+#### Find
+
+The browser's find cannot see lines that are not drawn, so the viewer has its
+own, for every kind (`FullScreenFind.tsx`, `lib/find.ts`). The toolbar's 🔍
+(`aria-expanded`, pressed while open) or **Ctrl/Cmd+F** anywhere in the viewer
+— taken from the browser with `preventDefault`, and recognised on non-Latin
+layouts by the key's position — opens the bar and focuses its field; either
+again refocuses it and selects the query.
+
+- **The field**: `Find in <noun>`, `enterKeyHint="search"`, `text-base` on a
+  coarse pointer so iOS does not zoom. Matching is literal, case-insensitive,
+  **line by line** (a character whose lowercase changes length then costs only
+  its own line), 100ms after typing. The subject is not searched.
+- **What is searched**: output, code and files in their text model — the same
+  parse that is drawn, so lines not mounted are found and counted; Markdown in
+  its rendered text; a diff in its code cells only, never its line numbers or
+  `@@` headers, searched again when the diff library swaps in highlighted nodes.
+- **Highlights** are the CSS Custom Highlight API (`::highlight(find-match)` at
+  20% accent, `::highlight(find-current)` at 45% plus an underline, so hue is not
+  the only cue): ranges over the text that is drawn, so no `<mark>` is put into
+  shiki's or the diff library's DOM, and for virtualized content only over the
+  rows mounted, refreshed as rows mount. A browser without the API still counts
+  and steps.
+- **The current match** after typing is the first at or after the top line in
+  view. A match already in view stays where it is; otherwise it is brought a
+  third of the way down the part of the view the keyboard leaves
+  (`visualViewport`), and sideways into view when lines are unwrapped.
+- **Next / previous**: Enter / Shift+Enter, or the ↓ / ↑ buttons, wrapping at both ends,
+  focus kept in the field so a phone's keyboard stays up. While an IME is
+  composing, Enter does nothing (`isComposing || keyCode === 229` — Safari
+  sends the committing Enter after `compositionend`).
+- **The count**: `3 / 17`, `No matches` (neutral, not an error), the buttons
+  disabled with no match or no query. A visually hidden `aria-live="polite"`
+  region says `3 of 17 matches` after typing settles and on each step, never as
+  content grows.
+- **Growing content**: live output is searched again with every change, and the
+  total updates silently. The current match is held by its absolute line while
+  the head is dropped, and by its distance from the end across the hand-off to
+  the result; a match whose line was dropped hands over to the next. With no
+  current match, new ones do not take the reader's place (`– / 17`).
+- **Closing**: its ✕ or Escape. The highlights go, the query is kept for this
+  viewer and restored, selected, on reopening, and focus returns to 🔍. Escape
+  is claimed on the viewer's column, so it works from the content as well as the
+  field; the first press closes find and the next closes the viewer
+  ([answering-ui.md](answering-ui.md#who-owns-escape)). Mid-composition it only
+  cancels the composition. From the subject or ✕, which are the sheet's header
+  and outside that column, it closes the viewer at once.
+
+#### Opening, focus and closing
+
+- **Focus on open** goes to the content's scroller (a `<section>` named by the
+  noun, `tabIndex=0`, through `initialFocusRef`), so arrows, Page Up / Down and
+  Home / End scroll at once.
+- **Closing**: ✕, Escape, the **back gesture** — Android's back, iOS's edge
+  swipe, the browser's Back — or the key going away. Back-to-close is
+  `useBackToClose` (`web/src/hooks/`), used only here: the viewer pushes a
+  same-href entry through the router's own history (never a raw `pushState`,
+  which would bypass TanStack's index and state) and closes on its `BACK` / `GO`
+  notification. Every other close takes that entry back, once, but only if it is
+  still the current one, so a page opened over the chat keeps its own entry, at
+  the cost of one later Back that changes nothing on screen. A file row's *Open*
+  closes the viewer first and navigates only once that entry is gone, or the
+  Back would undo it.
+- **The transcript is where it was.** The page is scroll-locked under the sheet
+  and focus returns to the opener without scrolling. What changes behind it — a
+  diff wrap toggled in the viewer, live output growing — is held by the
+  transcript's anchor as always, and a block opened in place stays open. If the
+  opener is gone (*Output so far* became *Output*), focus goes to the control
+  now opening the same key rather than falling to the page.
 
 ### The subagent body
 
@@ -2180,7 +2480,7 @@ omission.
 | Tier | What changes |
 |---|---|
 | compact (<640) | the baseline described above, and a diff's line numbers in one narrow column |
-| `sm:` (640–1023) | `p-2` → `sm:p-2.5` and nothing else |
+| `sm:` (640–1023) | `p-2` → `sm:p-2.5`, the [full screen](#full-screen) viewer's `p-3` / `px-3` → `sm:p-4` / `sm:px-4`, and nothing else |
 | `lg:` (≥1024) | nothing — the transcript column does not change shape |
 
 **No width tier gets a second title line, a tooltip, or a wider truncation
@@ -2198,12 +2498,27 @@ which side that is. The library writes its gutter width inline, so the override
 is in `web/src/index.css` with the other diff overrides, not in a component.
 It applies to every `DiffViewer`, the Git view's included — a gutter that eats
 a third of the screen is the same problem there. Above `sm` the two columns
-stay: there is room for them, and the old number is worth having.
+stay: there is room for them, and the old number is worth having. The full
+screen viewer's diffs are the same `DiffViewer`, so they follow it.
+
+**The viewer's rendered Markdown is capped at `max-w-3xl`**, centred, which is
+a measure for prose rather than a tier: below it nothing changes, and on a
+desktop a page of prose 1,900px wide is unreadable. Logs, code, file lists and
+Markdown too long to render keep the whole width.
 
 **No `pointer-fine:` reveal anywhere in this design.** Nothing is hover-only, so
-there is no fallback branch to get wrong. `pointer-coarse:` appears once, on the
+there is no fallback branch to get wrong. `pointer-coarse:` appears on the
 row's height floor — and the same query once more in CSS, on `--row-height`,
-which restates that floor ([the sticky title line](#the-sticky-title-line)). Neither gate is consulted from JS: these are reachability
+which restates that floor ([the sticky title line](#the-sticky-title-line)) —
+and on the heights of the *Open* buttons (`min-h-[36px]` → `min-h-11`) and the
+[full screen](#full-screen) viewer's toolbar (`min-h-10` → `min-h-11`);
+otherwise only to keep hit areas apart: the gaps in a header's, the toolbar's
+and the find bar's button clusters, the clearance above a foldable section's
+header, and the clearances under a header for a [huge](#huge-content) block's
+button and under the viewer's subject for its toolbar
+([responsive-ui.md](responsive-ui.md#which-technique-and-when)). The one
+`pointer-coarse:` that is not about reach is the find field's `text-base`,
+16px so iOS does not zoom into it. Neither gate is consulted from JS for these: they are reachability
 decisions, and reachability is a CSS variant
 ([responsive-ui.md](responsive-ui.md#the-two-pointer-gates)).
 
@@ -2214,7 +2529,10 @@ thumb-scroll past, while a desktop's holds more before a block stops being
 glanceable. It asks `useHasCoarsePointer` (the primary pointer — a phone, not a
 touchscreen laptop), and it is a height, not a hit area, so it is not bound by
 the reachability rule above. Width plays no part: the transcript's own height
-already says how much room there is.
+already says how much room there is. The viewer's file list asks the same hook
+for the same kind of reason — not to decide anything, only to estimate each
+row's height (an *Open* button is 44px under a thumb, 36px otherwise) before
+the virtualizer measures it.
 
 ## Accessibility
 
@@ -2246,6 +2564,19 @@ already says how much room there is.
   name, *Show less of output*, `aria-expanded="true"` and `aria-controls` the
   same box; closing from it leaves focus on the section's own button
   ([the pinned section header](#the-pinned-section-header)).
+- The header's ⤢ is named *Open output in full screen* — the block's noun, not
+  its label lowercased, so *Full reasoning* reads *Open reasoning in full
+  screen* — with `aria-haspopup="dialog"`. A huge block's button keeps its
+  visible words and drops the middot, *Open full output, 12,408 lines*
+  ([huge content](#huge-content)).
+- The viewer takes focus into its content scroller, a region named by the noun,
+  so the dialog's name is read as focus enters it and the keys scroll at once.
+  Tab runs subject → ✕ → wrap → copy → find → the find bar → content, trapped.
+  The subject line is a button whose name is its visible text, with
+  `aria-expanded` / `aria-controls` over the full text below it. Find's count is
+  repeated in a polite live region, and Escape, Ctrl/Cmd+F and the back gesture
+  all close or open what they say ([full screen](#full-screen)). Focus goes back
+  to the opener on close, or to whatever opens the same key now.
 - A subagent's Process is a `role="group"` named for the subagent, and a pending
   permission card it raised sits inside the Task item's own DOM, so both say
   whose they are without the visual cues
@@ -2367,9 +2698,9 @@ already says how much room there is.
     into a group: it stays open and in place; close it and it folds. A hidden
     row is never where the view is held, and a group whose last row is hidden
     leaves no doubled line.
-29. On a 375px phone, open a `Read` of a long file and drag the page up and down
+29. On a 375px phone, open a `Read` of a 60-line file and drag the page up and down
     across its body: the transcript moves, the body never does. *Content* is on
-    top, cut and faded, with *Show N more lines* and *Full screen*; *File* is folded under
+    top, cut and faded, with *Show N more lines* under it and ⤢ in its header; *File* is folded under
     it. Copy from the *Content* header: no line numbers in what was copied.
 30. On a 375px phone, with nothing scrolled sideways: an `Edit` of a deep file
     opens on `src/…/name.ts`, *Open* and a copy button on one row, with no
@@ -2406,10 +2737,10 @@ already says how much room there is.
     `1 · Edit` to `3 · Edit`; edited once, `Change`. A `Write` over a file: `rewritten`, `+N` only, and the line saying so above its diff.
 35. Nine changed files: five rows and `Show 4 more files`; press it and focus
     lands on the sixth row. Seven: all listed. Reload: the same card.
-36. On a 375px phone, open a card row onto a diff of hundreds of lines and drag
+36. On a 375px phone, open a card row onto a diff of about 60 lines and drag
     up and down over it: the transcript moves, never the diff alone. The diff
-    is cut and faded with *Show N more lines* and *Full screen* under it, `+N −M` and
-    the wrap switch in its header; a `Write`'s block copies its content.
+    is cut and faded with *Show N more lines* under it, `+N −M`, the wrap
+    switch and ⤢ in its header; a `Write`'s block copies its content.
 37. An `Edit` the tool refused (an `old_string` not in the file): the row's
     second line is the reason in prose, with no `</tool_use_error>` on it.
     Open it: an *Error* section in red above *Change*, the *Change* header
@@ -2433,12 +2764,14 @@ already says how much room there is.
     row while following a running turn: the view stays at the end and goes on
     following it. The walkthrough's `sticky`, `sticky-fold` and `sticky-tail`
     scenes shoot all of these.
-41. On a 375×667 phone, open a `Bash` with a 20-line command and a 2000-line
-    output: the command is cut at 8 lines with *Show all* under it,
+41. On a 375×667 phone, open a `Bash` with a 20-line command and a 60-line
+    output (the walkthrough's `fullRun`; thousands would be
+    [huge](#huge-content)): the command is cut at 8 lines with *Show all* under it,
     the output at about 45% of the transcript with *Show N earlier lines* above
     it, and both fit on one screen. A block 5 lines over its budget shows whole
     with no button. Turn the phone landscape: a cut output is at most about
-    half the transcript. A `TodoWrite`'s checklist is never cut.
+    half the transcript (rotated after opening: opened in landscape, 60 lines
+    are already [huge](#huge-content)). A `TodoWrite`'s checklist is never cut.
 42. In that `Bash`, with the output's last line mid-screen, press *Show N
     earlier lines*: the last line stays exactly where it was and the log grows
     upward. *Show less* leaves its button where it was pressed; closed with its
@@ -2447,11 +2780,36 @@ already says how much room there is.
     `keep-place` scene logs each edge before and after.
 43. Open that output with *Show N earlier lines* and scroll into it: the
     *Output* header pins directly under the row's title with a hairline, the
-    copy button and a collapse control; there are never more than those two
+    copy button, ⤢ and a collapse control; there are never more than those two
     bars. Scroll to the output's end: the header is carried off under the row's
     title, not over it. Press the collapse control mid-output: the output is cut
     again and its header lands just under the row's title, focus on *Show N
     earlier lines*. A section that fits, or one cut and not opened, never pins.
+44. On a 375×667 phone, a 30-line *Output* has ⤢ in its header and no *Open full* button; a 5-line
+    one has no ⤢; a 30-line *Command* never has one. The plan and a subagent's
+    report, cut, have *⤢ Full screen* beside *Show all*.
+45. On a 375×667 phone and on a desktop, a `Bash` that printed 10,000 lines:
+    never opens in place — its last lines faded under *⤢ Open full output ·
+    10,000 lines*, no *Show* button, never pinned. The viewer opens at its last
+    line with its command under the title; tap the command for all of it. Scroll
+    to the top: line 1. Turn wrap off: the block scrolls sideways as one.
+46. In that viewer, find `FAIL`: the count, a highlight on each match and a
+    stronger one on the current, Enter / Shift+Enter and the ↓ / ↑ buttons wrapping at the
+    ends and jumping to lines that were not drawn, the match a third of the way
+    down. With a Chinese or Japanese IME, committing a word with Enter jumps
+    nowhere and Escape mid-composition closes nothing. Escape closes find, focus
+    on 🔍; Ctrl/Cmd+F reopens it with the query back, selected; then Escape
+    closes find again, and the next one the viewer.
+47. A `Glob` of 3,000 files: 100 rows in place with *Show N more files*, and
+    ⤢ opens all 3,000; *Open* on one closes the viewer and opens the file.
+48. Open a running command's *Output so far* full screen and let it finish: the
+    viewer stays, now holding the whole output, and the reader's line stays put;
+    past 200 lines it first says *Earlier output arrives with the result*.
+49. Close the viewer with Back (Android back, iOS edge swipe, browser Back): it
+    closes, the page stays, and the transcript is where it was — also after
+    toggling diff wrap in a viewer, which every transcript diff follows. ✕ and
+    Escape leave no extra history entry behind: Back afterwards does what it did
+    before the viewer opened.
 
 ## Out of scope
 
@@ -2462,9 +2820,10 @@ already says how much room there is.
 - **A full-screen tool detail route.** happy's answer to long content is
   navigation, and it is a good one, but Pockode's row already owns a body that
   opens long content in place; adding a route for the same content would mean
-  deciding which of the two any given tool goes to. *Full screen* on a long file
-  or diff is a sheet over the transcript, not a route — closing it leaves the
-  reader where they were.
+  deciding which of the two any given tool goes to. [Full screen](#full-screen)
+  on a long block is a sheet over the transcript, not a route — closing it
+  leaves the reader where they were, and the history entry it takes exists only
+  so Back can close it.
 - **Per-call token cost.** Usage has an owner
   ([usage-display-ui.md](usage-display-ui.md)) and a row is not it.
 - **Re-theming.** Every colour here is an existing `th-` token; no new one is
