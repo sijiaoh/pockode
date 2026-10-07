@@ -15,6 +15,11 @@ import {
 import { useChatMessages } from "../../hooks/useChatMessages";
 import { readDraft } from "../../hooks/useComposerDraft";
 import { SKELETON_DELAY_MS, useDelayedFlag } from "../../hooks/useDelayedFlag";
+import {
+	type DroppedFiles,
+	FOLDER_DROP_REFUSED,
+	useFileDragZone,
+} from "../../hooks/useFileDragZone";
 import { useForkSession } from "../../hooks/useForkSession";
 import { useForkSupport } from "../../hooks/useForkSupport";
 import { useShortViewport } from "../../hooks/useShortViewport";
@@ -30,6 +35,7 @@ import {
 import { collectPartsDeep } from "../../lib/partTree";
 import { questionDraftActions } from "../../lib/questionDraftStore";
 import {
+	type InputBarProps,
 	type SendOutcome,
 	useChatUIConfig,
 } from "../../lib/registries/chatUIRegistry";
@@ -81,6 +87,7 @@ import {
 import { SettingsPage } from "../Settings";
 import AnswerPanel from "./AnswerPanel";
 import AttentionStrip, { type PermissionEntry } from "./AttentionStrip";
+import ChatDropOverlay from "./ChatDropOverlay";
 import ChatSkeleton from "./ChatSkeleton";
 import ForkSessionSheet from "./ForkSessionSheet";
 import { FullScreenHost } from "./FullScreenHost";
@@ -222,7 +229,6 @@ function ChatPanel({
 	const projectTitle = useWSStore((state) => state.projectTitle);
 	const isGitRepo = useIsGitRepo();
 	const { InputBar: CustomInputBar, ChatTopContent } = useChatUIConfig();
-	const InputBar = CustomInputBar ?? DefaultInputBar;
 
 	// Read, not held: `AppShell` owns the session's detail subscription, because
 	// whether the session exists is what that subscription answers and the shell
@@ -373,6 +379,16 @@ function ChatPanel({
 		sessionId: string;
 		message: string;
 	} | null>(null);
+	// Keyed like `commandError`, and cleared on a switch besides: a folder
+	// refused in one session is not news on coming back to it.
+	const [attachError, setAttachError] = useState<{
+		sessionId: string;
+		message: string;
+	} | null>(null);
+	// biome-ignore lint/correctness/useExhaustiveDependencies: the switch itself is the trigger
+	useEffect(() => {
+		setAttachError(null);
+	}, [sessionId]);
 
 	const handleSend = useCallback(
 		(content: string, attachments?: ChatAttachment[]): Promise<SendOutcome> => {
@@ -397,6 +413,7 @@ function ChatPanel({
 			if (!mayBeRefused) rename?.();
 
 			setCommandError(null);
+			setAttachError(null);
 			const sentTo = sessionId;
 			// Only a refused command or message with files rejects here (see
 			// `sendUserMessage`): its echo is gone, so what was typed goes back into
@@ -934,6 +951,42 @@ function ChatPanel({
 		if (!composerMounted) setComposerFocused(false);
 	}, [composerMounted]);
 
+	// Dropping is a shortcut for the composer's `+`, so it is taken exactly where
+	// that button can be used — and files never go into a draft the user cannot
+	// see. `canSend` is not here: it holds back the send, not the attaching.
+	// The order matters where two are true at once: with no session in the route
+	// it never resolves, so "wait" there would be a wait for ever.
+	const dropRefusal = isReadOnly
+		? "Read-only — files can't be attached here"
+		: sessionId === ""
+			? "Open a session to attach files"
+			: isInputBarHidden(overlay)
+				? "Go back to the chat to attach files"
+				: CustomInputBar
+					? "This message box doesn't take files"
+					: !isSessionResolved
+						? "Wait for the session to load"
+						: chromeCollapsed
+							? "Close the question card to attach files"
+							: null;
+	// Shared by a drop and a paste, which are the same shortcut taken two ways.
+	const attachFiles = useCallback(
+		({ files, hadFolder }: DroppedFiles) => {
+			if (files.length > 0) attachmentActions.add(sessionId, files);
+			setAttachError(
+				hadFolder ? { sessionId, message: FOLDER_DROP_REFUSED } : null,
+			);
+		},
+		[sessionId],
+	);
+	const drop = useFileDragZone({
+		enabled: dropRefusal === null,
+		onDrop: attachFiles,
+		// A sheet raised from in here is a portal whose drags still bubble up the
+		// React tree; taking those would put files behind the sheet.
+		ownDomOnly: true,
+	});
+
 	// Catching the focus the panel's arrival drops. The transcript goes `inert`
 	// in the same commit the panel comes on screen in — mounting, or returning
 	// from a yield — and a control focused inside it —
@@ -1329,6 +1382,17 @@ function ChatPanel({
 		</div>
 	);
 
+	const inputBarProps: InputBarProps = {
+		sessionId,
+		onSend: handleSend,
+		canSend: status === "connected" && !isChatPending && !promptOwnsInput,
+		sendBlockedReason: promptOwnsInput ? "Allow or deny to send" : undefined,
+		disabled: !isSessionResolved,
+		turnOpen,
+		onStop: handleInterrupt,
+		focusRequest: inputFocusRequest,
+	};
+
 	return (
 		<SessionViewProvider value={view}>
 			<MainContainer
@@ -1340,132 +1404,150 @@ function ChatPanel({
 					overlay?.type === "settings" ? undefined : onOpenSettings
 				}
 			>
-				{!overlay && ChatTopContent && <ChatTopContent sessionId={sessionId} />}
-				{!overlay && view && <SessionOriginBar view={view} />}
-				{renderContent()}
-				{/* What needs the user, stated where the transcript ends
-				    (docs/lifecycle-ui.md §2.2). */}
-				{!overlay && !isChatPending && !isReadOnly && (
-					<AttentionStrip
-						turn={turn}
-						onJumpToRequest={handleJumpToRequest}
-						onAnswer={handleOpenAnswerPanel}
-						// Driven by the same flags that draw the panel, so the row goes
-						// and the panel appears in one frame. Told rather than derived
-						// inside the strip: a frame where both are on screen moves the
-						// composer down and straight back up, and one open is then two
-						// visible jumps. A yielded card is off the screen, so the row
-						// is the way back to it, as after a close.
-						answerPanelOpen={answerPanelOnScreen}
-						sendPending={isSendPending}
-						jumpDisabled={answerPanelSending}
-						permissionRequests={blockingPermissions}
-						// Answering does not close the answer panel: unlike the jump, it
-						// needs nothing from the transcript, and it is what lets the
-						// panel's own send through afterwards.
-						onPermissionRespond={handlePermissionRespond}
-						promptError={promptError ?? undefined}
-						watchedStories={watchedStories}
-						onOpenWorkDetail={onOpenWorkDetail}
-					/>
-				)}
-				{/* Held back by an overlay like the composer's errors: the session
-				    panel that raised it is not reachable from a page either. */}
-				{!overlay && settingError && (
-					<ComposerErrorBar
-						message={settingError}
-						onDismiss={clearSettingError}
-					/>
-				)}
-				{!overlay && commandError?.sessionId === sessionId && (
-					<ComposerErrorBar
-						message={commandError.message}
-						onDismiss={() => setCommandError(null)}
-					/>
-				)}
-				{/* Gone if the anchor left the transcript — a session deleted, a
-				    worktree switched away from. There is nothing left to confirm.
+				{/* The drop zone: everything under the header. `isolate` keeps the
+				    overlay below the sheets portalled to the body; inside, it ties
+				    with the `+` menu at `z-50` and wins by being the last child. */}
+				<div
+					className="relative isolate flex min-h-0 flex-1 flex-col"
+					{...drop.dropProps}
+				>
+					{!overlay && ChatTopContent && (
+						<ChatTopContent sessionId={sessionId} />
+					)}
+					{!overlay && view && <SessionOriginBar view={view} />}
+					{renderContent()}
+					{/* What needs the user, stated where the transcript ends
+					    (docs/lifecycle-ui.md §2.2). */}
+					{!overlay && !isChatPending && !isReadOnly && (
+						<AttentionStrip
+							turn={turn}
+							onJumpToRequest={handleJumpToRequest}
+							onAnswer={handleOpenAnswerPanel}
+							// Driven by the same flags that draw the panel, so the row goes
+							// and the panel appears in one frame. Told rather than derived
+							// inside the strip: a frame where both are on screen moves the
+							// composer down and straight back up, and one open is then two
+							// visible jumps. A yielded card is off the screen, so the row
+							// is the way back to it, as after a close.
+							answerPanelOpen={answerPanelOnScreen}
+							sendPending={isSendPending}
+							jumpDisabled={answerPanelSending}
+							permissionRequests={blockingPermissions}
+							// Answering does not close the answer panel: unlike the jump, it
+							// needs nothing from the transcript, and it is what lets the
+							// panel's own send through afterwards.
+							onPermissionRespond={handlePermissionRespond}
+							promptError={promptError ?? undefined}
+							watchedStories={watchedStories}
+							onOpenWorkDetail={onOpenWorkDetail}
+						/>
+					)}
+					{/* Held back by an overlay like the composer's errors: the session
+					    panel that raised it is not reachable from a page either. */}
+					{!overlay && settingError && (
+						<ComposerErrorBar
+							message={settingError}
+							onDismiss={clearSettingError}
+						/>
+					)}
+					{!overlay && commandError?.sessionId === sessionId && (
+						<ComposerErrorBar
+							message={commandError.message}
+							onDismiss={() => setCommandError(null)}
+						/>
+					)}
+					{/* Not held back by an overlay: a drop is taken over the pages that
+					    keep the composer, and a refusal there must still be heard. */}
+					{composerMounted && attachError?.sessionId === sessionId && (
+						<ComposerErrorBar
+							message={attachError.message}
+							onDismiss={() => setAttachError(null)}
+						/>
+					)}
+					{/* Gone if the anchor left the transcript — a session deleted, a
+					    worktree switched away from. There is nothing left to confirm.
 
-				    Raised from the transcript, held here only because a fork is a
-				    session-level request belonging to no one bubble — so it is
-				    the transcript's cover that decides it, not this bar's. Inside
-				    the same `CoveredSurface` it closes when an overlay takes the
-				    chat, which also clears `forkTarget`: coming back hands the
-				    reader their conversation, not a confirmation of something
-				    they navigated away from. */}
-				<CoveredSurface covered={transcriptCovered}>
-					{forkTarget && forkAnchor && (
-						<ForkSessionSheet
-							anchor={forkAnchor.message}
-							droppedCount={forkAnchor.droppedCount}
-							agentType={agentType}
-							defaultTitle={forkTarget.defaultTitle}
-							isForking={isForking}
-							error={forkError}
-							onFork={(title) =>
-								handleFork(forkAnchor.anchorSeq, title, forkAnchor)
-							}
-							onClose={handleCloseFork}
-						/>
-					)}
-					{signInTarget && (
-						<CliLoginSheet
-							agent={signInTarget.agent}
-							onClose={handleCloseSignIn}
-							sendAgain={
-								resendText === undefined
-									? undefined
-									: {
-											text: resendText,
-											draftKept: hasDraft,
-											onSendAgain: handleSendAgain,
-										}
-							}
-						/>
-					)}
-				</CoveredSurface>
-				{/* The keyboard is in one field at a time, and while this is
-				    collapsed it is in the card's. Unmounting is safe for the same
-				    reason the overlays above may do it: a draft has to outlive its
-				    bar, which `InputBarProps` asks of every bar and the default one
-				    answers with `inputStore` (docs/answering-ui.md §3, §5). Stop
-				    lives in the bar and folds with it, though it is one of the
-				    user's two exits from a blocked turn: one press outside the card
-				    brings it back. */}
-				{!isInputBarHidden(overlay) &&
-					!chromeCollapsed &&
-					(view ? (
-						<ReadOnlyBar view={view} onOpenThere={onOpenSessionThere} />
-					) : (
-						// Read from outside the bar, the way the card reports its own
-						// focus: the bar is a registry component, and what it renders
-						// inside is its own business. `contents` so the wrapper takes no
-						// part in the column's layout.
-						// biome-ignore lint/a11y/noStaticElementInteractions: listens to focus moving through the bar; nothing here is a control
-						<div
-							className="contents"
-							onFocus={() => setComposerFocused(true)}
-							onBlur={(e) => {
-								if (e.currentTarget.contains(e.relatedTarget)) return;
-								setComposerFocused(false);
-							}}
-						>
-							<InputBar
-								sessionId={sessionId}
-								onSend={handleSend}
-								canSend={
-									status === "connected" && !isChatPending && !promptOwnsInput
+					    Raised from the transcript, held here only because a fork is a
+					    session-level request belonging to no one bubble — so it is
+					    the transcript's cover that decides it, not this bar's. Inside
+					    the same `CoveredSurface` it closes when an overlay takes the
+					    chat, which also clears `forkTarget`: coming back hands the
+					    reader their conversation, not a confirmation of something
+					    they navigated away from. */}
+					<CoveredSurface covered={transcriptCovered}>
+						{forkTarget && forkAnchor && (
+							<ForkSessionSheet
+								anchor={forkAnchor.message}
+								droppedCount={forkAnchor.droppedCount}
+								agentType={agentType}
+								defaultTitle={forkTarget.defaultTitle}
+								isForking={isForking}
+								error={forkError}
+								onFork={(title) =>
+									handleFork(forkAnchor.anchorSeq, title, forkAnchor)
 								}
-								sendBlockedReason={
-									promptOwnsInput ? "Allow or deny to send" : undefined
-								}
-								disabled={!isSessionResolved}
-								turnOpen={turnOpen}
-								onStop={handleInterrupt}
-								focusRequest={inputFocusRequest}
+								onClose={handleCloseFork}
 							/>
-						</div>
-					))}
+						)}
+						{signInTarget && (
+							<CliLoginSheet
+								agent={signInTarget.agent}
+								onClose={handleCloseSignIn}
+								sendAgain={
+									resendText === undefined
+										? undefined
+										: {
+												text: resendText,
+												draftKept: hasDraft,
+												onSendAgain: handleSendAgain,
+											}
+								}
+							/>
+						)}
+					</CoveredSurface>
+					{/* The keyboard is in one field at a time, and while this is
+					    collapsed it is in the card's. Unmounting is safe for the same
+					    reason the overlays above may do it: a draft has to outlive its
+					    bar, which `InputBarProps` asks of every bar and the default one
+					    answers with `inputStore` (docs/answering-ui.md §3, §5). Stop
+					    lives in the bar and folds with it, though it is one of the
+					    user's two exits from a blocked turn: one press outside the card
+					    brings it back. */}
+					{!isInputBarHidden(overlay) &&
+						!chromeCollapsed &&
+						(view ? (
+							<ReadOnlyBar view={view} onOpenThere={onOpenSessionThere} />
+						) : (
+							// Read from outside the bar, the way the card reports its own
+							// focus: the bar is a registry component, and what it renders
+							// inside is its own business. `contents` so the wrapper takes no
+							// part in the column's layout.
+							// biome-ignore lint/a11y/noStaticElementInteractions: listens to focus moving through the bar; nothing here is a control
+							<div
+								className="contents"
+								onFocus={() => setComposerFocused(true)}
+								onBlur={(e) => {
+									if (e.currentTarget.contains(e.relatedTarget)) return;
+									setComposerFocused(false);
+								}}
+							>
+								{CustomInputBar ? (
+									<CustomInputBar {...inputBarProps} />
+								) : (
+									<DefaultInputBar
+										{...inputBarProps}
+										// The same rules as a drop. The refusals that leave
+										// this bar up (no session, or one still loading) also
+										// disable its textarea, so they are a backstop here.
+										onPasteFiles={
+											dropRefusal === null ? attachFiles : undefined
+										}
+									/>
+								)}
+							</div>
+						))}
+					{drop.isDragging && <ChatDropOverlay refusal={dropRefusal} />}
+				</div>
 			</MainContainer>
 		</SessionViewProvider>
 	);

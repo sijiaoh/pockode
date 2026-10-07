@@ -1,11 +1,5 @@
 import { useEffect } from "react";
-
-function carriesFiles(dataTransfer: DataTransfer | null): boolean {
-	if (!dataTransfer) return false;
-	// `types` is what a drag exposes before it is dropped; `items` cannot be read
-	// during `dragover`.
-	return Array.from(dataTransfer.types).includes("Files");
-}
+import { carriesFiles } from "./useFileDragZone";
 
 /**
  * Keeps a file dropped anywhere outside a drop zone from replacing the app.

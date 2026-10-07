@@ -7,6 +7,7 @@ import {
 import { ArrowUp, Image, Paperclip, Plus, Slash, Square } from "lucide-react";
 import {
 	type ChangeEvent,
+	type ClipboardEvent,
 	type KeyboardEvent,
 	type MouseEvent,
 	useCallback,
@@ -17,6 +18,7 @@ import {
 } from "react";
 import TextareaAutosize from "react-textarea-autosize";
 import getCaretCoordinates from "textarea-caret";
+import { type DroppedFiles, readPasted } from "../../hooks/useFileDragZone";
 import { useInputHistory } from "../../hooks/useInputHistory";
 import type { ChatAttachment } from "../../lib/chatAttachments";
 import {
@@ -64,6 +66,12 @@ interface Props {
 	onStop?: () => void;
 	/** See `InputBarProps.focusRequest`. */
 	focusRequest?: number;
+	/**
+	 * Takes files pasted into the textarea; absent where the host would refuse
+	 * them, which leaves the paste to the browser. The host's rather than the
+	 * bar's because a refused folder is reported above the bar, by the host.
+	 */
+	onPasteFiles?: (pasted: DroppedFiles) => void;
 }
 
 // Slash command pattern per Claude Code naming conventions.
@@ -81,6 +89,7 @@ function InputBar({
 	turnOpen = false,
 	onStop,
 	focusRequest = 0,
+	onPasteFiles,
 }: Props) {
 	const input = useInputStore((state) => state.inputs[sessionId] ?? "");
 	const files = useInputStore(
@@ -288,6 +297,17 @@ function InputBar({
 			if (picked.length > 0) attachmentActions.add(sessionId, picked);
 		},
 		[sessionId],
+	);
+
+	const handlePaste = useCallback(
+		(e: ClipboardEvent<HTMLTextAreaElement>) => {
+			if (!onPasteFiles) return;
+			const pasted = readPasted(e.clipboardData);
+			if (!pasted) return;
+			e.preventDefault();
+			onPasteFiles(pasted);
+		},
+		[onPasteFiles],
 	);
 
 	const handleCommandSelect = useCallback(
@@ -601,6 +621,7 @@ function InputBar({
 						onChange={(e) => setInput(e.target.value)}
 						onKeyDown={handleKeyDown}
 						onKeyUp={handleKeyUp}
+						onPaste={handlePaste}
 						// The autosizer measures the placeholder when the draft is
 						// empty, so a reason that wraps on a narrow phone would grow
 						// the bar by a line exactly as a permission request arrives.

@@ -24,7 +24,7 @@ React SPA ──WebSocket──▶ Go Server ──spawn──▶ AI CLI (subpro
 | Session config | `server/ws/rpc_session.go` | `session.set_agent_type` / `set_mode` / `set_model` / `set_effort`, each closing the running process because a CLI is told these only at launch; `session.models` and `session.efforts` list the choices ([models](code/agent-integration.md#session-models), [effort](code/agent-integration.md#session-effort)). None of them answer with the new value: the settings in force reach the panel through `session.detail` ([why](code/subscription-system.md#why-a-session-is-two-subscriptions)) |
 | Another worktree's sessions | `server/ws/rpc_session_view.go` | `session_view.*` — reading (and discarding) a session stored under a worktree the connection is not in, including one that no longer exists ([how](#sessions-outlive-their-worktree)) |
 | Attachments | `server/ws/rpc_attachment.go` | `attachment.get` — the content a chat event references by id, answered in `file.get`'s own shape so one client path renders both ([why](code/agent-integration.md#content-blocks-and-attachments)) |
-| Sending files | `server/filetransfer/attachment.go`, `server/chat/attachments.go` | `POST /api/chat/attachments` stores a file in the session's store; `chat.message`'s `attachments` names it by id and each agent delivers it its own way ([how](code/agent-integration.md#files-the-user-sends)). Client side: `web/src/lib/chatAttachments.ts`; the composer's `+` menu (Photos / Files) uploads each file as it is picked (`inputStore`), holds Send until every one is stored, and takes the files back if the message is refused |
+| Sending files | `server/filetransfer/attachment.go`, `server/chat/attachments.go` | `POST /api/chat/attachments` stores a file in the session's store; `chat.message`'s `attachments` names it by id and each agent delivers it its own way ([how](code/agent-integration.md#files-the-user-sends)). Client side: `web/src/lib/chatAttachments.ts`; the composer's `+` menu (Photos / Files), a drop on the chat or a paste into the composer ([how](#attaching-by-drop-or-paste)) uploads each file as it arrives (`inputStore`), holds Send until every one is stored, and takes the files back if the message is refused |
 | Chat client | `server/chat/client.go` | Session coordination, message persistence, event broadcast; `SendMessageExcluding` (user) and `SendSystemMessage` (system automation) share one persist+broadcast path |
 | Agent interface | `server/agent/agent.go` | `Session` and `AgentEvent` interfaces |
 | Claude impl | `server/agent/claude/claude.go` | Claude CLI subprocess, stream-json parsing, MCP server config |
@@ -190,6 +190,10 @@ keyboard does not drop and rise again:
   has to be removed first, so nothing picked is dropped silently. How the files
   travel is in [Key Files](#key-files).
 
+Files can also be dropped anywhere under the header or pasted into the
+textarea; both are shortcuts for these two rows and follow their rules
+([Attaching by Drop or Paste](#attaching-by-drop-or-paste)).
+
 The menu and the palette are exclusive, and both follow the overlay conventions
 of [answering-ui.md §4](answering-ui.md#who-owns-escape) ([and the click](answering-ui.md#who-owns-the-dismissing-click)).
 
@@ -216,6 +220,124 @@ bubble keeps the `…` slot beside it. Why the two sides differ is in
 [session-fork-ui.md](session-fork-ui.md#entry-point). What the agent thought on
 the way is a muted `Thought for 12s` row in the reply, among the tool rows or on
 its own ([turn-progress-ui.md](turn-progress-ui.md#1-the-thinking-row)).
+
+## Attaching by Drop or Paste
+
+Besides the `+` menu ([above](#the-session-screen)), files reach the composer
+two more ways: dropped onto the chat, or pasted into the textarea. Both are
+shortcuts for the menu's Photos / Files, so they add no rules of their own:
+every file goes through `attachmentActions.add`, with the same size limit, the
+same failed chip and the same Send that waits for every file. Drop and paste
+end in one function in `ChatPanel` (`attachFiles`) and are taken or refused by
+one decision (`dropRefusal`).
+
+**A drop is taken exactly when the default composer is on screen and its `+`
+can be used** — files never go into a draft the user cannot see. `canSend` is
+not part of it: being disconnected, loading history or waiting on "Allow or
+deny to send" holds back the send, not the attaching. When a drop is not taken,
+the first of these that holds is the reason given:
+
+| # | Situation | Reason shown |
+|---|-----------|--------------|
+| 1 | Read-only session | `Read-only — files can't be attached here` |
+| 2 | The route names no session | `Open a session to attach files` |
+| 3 | A page that hides the composer (the Work pages, agent roles) | `Go back to the chat to attach files` |
+| 4 | A registry `InputBar` replaces the default one | `This message box doesn't take files` |
+| 5 | The session has not resolved yet | `Wait for the session to load` |
+| 6 | The composer is folded: a short screen with the answer card focused | `Close the question card to attach files` |
+
+The order matters where two hold at once: with no session in the route the
+session never resolves, so checking #5 first would say "wait" for ever. #4 is
+there because a custom bar's input is its own business — `InputBarProps` has
+no way to hand it files — and the only bar that takes a paste is the default
+one (`InputBar`'s `onPasteFiles`, a prop of that bar, not of the registry
+contract).
+
+### Dropping
+
+**The zone is everything `ChatPanel` hands `MainContainer`** — one wrapper
+around the top content, the origin bar, the transcript or page, the attention
+strip, the error bars and the composer — so the header (and anything hanging
+from it), the sidebar and the Files tab are outside it. A page that keeps the
+composer (a file, a diff, a commit, settings) keeps the zone taking drops:
+dragging a file in while reading another is the common case.
+
+**Only drags whose DOM target is inside the zone count** (`ownDomOnly` on the
+shared [drag hook](file.md#dropping-files-onto-the-tree)). A sheet raised from
+in here — the fork sheet, the CLI sign-in sheet, the full-screen tool viewer —
+is portalled to `document.body`, but its drag events still bubble up the React
+tree to the zone; taking them would put files into a composer behind the sheet
+and draw the overlay under it. Those drags are left to the window guard and
+its "not allowed" cursor. `useIsPageCovered` would have been the wrong test: it
+also counts the composer's own `+` menu and the header's dropdown, so a drag
+arriving while either was open would be turned away without a reason. A drag
+that carries no files — transcript text dragged into the textarea — is not
+touched at all.
+
+**While a file drag is over the zone, an overlay covers it** (`ChatDropOverlay`)
+with one centred pill and a paperclip: `Drop files to attach`, with an accent
+ring and an accent paperclip, when the drop will be taken, or the reason from
+the table on a neutral surface with no ring and a plain paperclip when it will
+not, and the cursor says `copy` or `none` to match. The
+Files tab docks a bar instead because an overlay would hide the rows being
+aimed at; the chat has nothing to aim at. The overlay is `pointer-events-none`
+(or the drag would be over it rather than the zone) and `aria-hidden`, has no
+animation, and sits inside the zone's `isolate` stacking context: above the
+answer card, level with the `+` menu at `z-50` and drawn over it by being the
+zone's last child, and below the sheets portalled to the body.
+
+### Pasting
+
+**Only into the default composer's textarea.** A paste is files only when the
+clipboard carries files and its `text/plain` is empty — or is nothing but the
+names of those files (`readPasted` in `hooks/useFileDragZone.ts`); then the
+paste is taken and the files attached, with nothing else changed: no focus
+move, the caret and draft left as they were. Any other text wins and pastes as
+text, as it always did: copying from a spreadsheet, a document or a web page
+brings a rendered picture along, and nobody pasting a table wants the picture.
+
+The exception is what a file manager puts on the clipboard. Copying a file
+there puts its name or path beside it as text — Finder the name, GNOME Files
+and Dolphin the absolute path or a `file:` URI, one per line; Explorer no text
+at all — and what was copied is the file. A line counts only when it is a bare
+name, an absolute path or a `file:` URI whose last segment is the name of a
+file (or folder) the clipboard carries. Matching the names rather than the
+shape of the text is what keeps a browser that hands over only Finder's icon
+pasting the name: the icon is not the file. A web address or a relative path
+never counts, even ending in a carried file's name.
+
+Known limits, each falling back to pasting the text:
+
+- A browser that exposes no file for a file-manager copy (Firefox in some
+  setups) pastes the name; dragging is the reliable way there.
+- Nautilus before GNOME 42 writes `x-special/nautilus-clipboard` / `copy` /
+  URIs into `text/plain`, which does not match.
+- A name that does not survive into the text — an extension Finder hides, if
+  its text leaves it out (unverified); leading or trailing spaces; a `\` in a
+  Linux name; an unencoded `#` or `?` in a URI.
+
+The reverse case is accepted too: text that is exactly the browser's synthetic
+image name (`image.png`) beside a picture attaches the picture, since excluding
+that name would break pasting a real file called `image.png`.
+
+Pasted files keep the name the browser gives, so several pastes can share
+`image.png`. That is harmless: the session's store keys a file by its content,
+and the name only travels beside the id
+([how](code/agent-integration.md#files-the-user-sends)).
+
+### Folders
+
+A folder cannot be attached. Dropped (or, where the browser exposes one,
+pasted), it is split out by the same `readDropped` the Files tab uses
+([why](file.md#dropping-files-onto-the-tree)): the files beside it are attached
+and the folder is reported in an error bar above the composer, with the Files
+tab's own wording (`FOLDER_DROP_REFUSED` — which says "Drop" even after a paste;
+it is rare enough there not to earn a second string). Unlike the session
+settings' and commands' bars, this one **stays up over a page**: it shows
+whenever the composer does, since a drop is taken over a file or a diff and a
+refusal there must still be heard. It sits closest to the composer, below the
+other two, and is per session — cleared by its ✕, by the next drop or paste
+that brings no folder, by a send, and by switching sessions.
 
 ## History Paging
 

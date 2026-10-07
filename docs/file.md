@@ -36,7 +36,7 @@ served through it; it is addressed by id in the session's own attachment store
 | RPC actions | `web/src/lib/rpc/file.ts` | `getFile`, `writeFile`, `createFile`, `deleteFile`, `renameFile`, `searchFiles`, `isAlreadyExistsError` |
 | HTTP transfer client | `web/src/lib/fileDownload.ts`, `web/src/lib/fileUpload.ts` | Authenticated download / upload (see [Downloading](#downloading), [Uploading](#uploading)) |
 | Upload queue state | `web/src/lib/uploadStore.ts` | Queue, concurrency, retry, worktree scope |
-| Drag and drop | `web/src/components/Files/useFileDrop.ts`, `web/src/hooks/useFileDropGuard.ts` | Drop target resolution and drag state, window-level drop backstop |
+| Drag and drop | `web/src/hooks/useFileDragZone.ts`, `web/src/components/Files/useFileDrop.ts`, `web/src/hooks/useFileDropGuard.ts` | What every drop zone shares (file detection, the depth count, folder splitting, claiming the drag); the tree's drop target resolution on top of it; the window-level drop backstop |
 
 ## Operations
 
@@ -963,9 +963,14 @@ project root. Resolution walks up from whatever the cursor is over to the
 nearest `data-entry-path`, which `FileTreeNode` puts on each row's **wrapper**
 rather than the row itself, so a folder answers for its whole subtree.
 
-Three things about drag and drop are not optional:
+The app has two drop zones, this tree and the chat
+([agent-chat.md](agent-chat.md#attaching-by-drop-or-paste)), and what they have
+in common is one hook, `hooks/useFileDragZone.ts`; `useFileDrop` is that hook
+plus the aiming, the spring-loading and the edge scrolling below. Four things
+about drag and drop are not optional; the counter and the resets are the shared
+hook's, so the chat has them too:
 
-- **The panel tracks a depth counter, not the events.** Each child bubbles a
+- **A zone tracks a depth counter, not the events.** Each child bubbles a
   `dragenter`/`dragleave` pair of its own as the cursor crosses it, so switching
   on the events themselves flickers on every row.
 - **`useFileDropGuard` is mounted on `AppShell`.** A file released anywhere
@@ -975,11 +980,21 @@ Three things about drag and drop are not optional:
   once a session has resolved: the password screen, the loading screen and the
   "can't reach the server" screen are all droppable too. It runs in the
   **capture phase** so a real drop zone, whose handler runs later on the way
-  back up, can still claim the drag with `dropEffect = "copy"`; everywhere else
-  the cursor keeps the "not allowed" mark. The panel additionally resets its own
-  drag state on the window's `drop` and `dragend`, because a drag that ends
-  outside the window never delivers its last `dragleave` and the counter alone
-  would leave the panel lit up.
+  back up, can still claim the drag — `dropEffect = "copy"` to take it, `"none"`
+  to keep it while saying why not; everywhere else, including the sheets the
+  chat raises, the cursor keeps the "not allowed" mark.
+- **A zone also resets on the window's `drop` and `dragend`**, because a drag
+  that ends outside the window never delivers its last `dragleave` and the
+  counter alone would leave the zone lit up. The counter can also run one too
+  high inside the window: an element removed from under the cursor never
+  delivers its `dragleave`, which a streaming transcript does all the time. So a
+  `dragleave` whose `relatedTarget` is outside the zone ends the drag whatever
+  the count says, and one whose `relatedTarget` is null ends it once a second
+  passes with no `dragover` — browsers repeat `dragover` every few hundred
+  milliseconds while a drag rests, so a drag still there always answers in time.
+  The first check is only for a zone that owns just its own DOM (the chat's
+  `ownDomOnly`): the tree treats its portals as part of itself, and they are
+  outside its element.
 - **The drop bar, the queue and the error banner are `pointer-events-none` while
   a drag is up.** The cursor crossing one would otherwise resolve the
   destination back to the root while the bar still read `Upload to src`.
@@ -998,7 +1013,9 @@ it somewhere:
 - **Search results.** A flat list of matches from everywhere has no answer to
   "into which folder".
 - **An open conflict dialog.** It is a portal, and a portal's events still
-  travel the React tree, so its overlay stops clicks but not drops.
+  travel the React tree, so its overlay stops clicks but not drops. (The chat
+  meets the same trap from the other side and answers it with `ownDomOnly`,
+  ignoring every drag whose DOM target is outside its element.)
 
 **An unanswered dialog turns away every batch, whatever it arrived through.** A
 drag has already been turned away on the bar; every other way in is refused
@@ -1024,8 +1041,9 @@ dialog is closed.
 **A dropped folder is refused, not flattened.** This version uploads files, and
 a folder also appears in `dataTransfer.files` as a zero-byte entry that would be
 stored as an empty file of that name; `webkitGetAsEntry` on the items is what
-tells the two apart. Files dropped alongside it are still taken, and the banner
-says what was left behind.
+tells the two apart (`readDropped`, shared with the chat, as is the wording,
+`FOLDER_DROP_REFUSED`). Files dropped alongside it are still taken, and the
+banner says what was left behind.
 
 Visually the panel takes a **ring**, not a border — a border takes a pixel from
 the layout and would nudge the whole tree sideways the moment a drag arrives —
