@@ -426,7 +426,8 @@ overlay reaches the floor inside it. (Below 640 its `Offline` label folds away
 and it becomes an icon-only button — on a screen where reconnection has already
 given up, so it is the only way out.) The header itself keeps its two clusters
 `gap-2` apart, so a pressable heading — the session's title, a page's — stops
-8px short of that retry and of Settings rather than running into them.
+8px short of that retry, the port preview and Settings rather than running
+into them.
 A tool section's *Show N more lines* / *Show less* / *Full screen*
 (`ClampedContent`) is a fourth, and its container is a height *budget* rather
 than a fixed box: two of them stand between a command and its output, and as
@@ -573,9 +574,9 @@ noticed. One representation with a test on it is the only thing that ends that.
      paste the expected side of its diff. Do not edit by hand. -->
 
 ```text
-44 controls render text, state no height of their own and carry no touch-target.
+46 controls render text, state no height of their own and carry no touch-target.
 
-26 state their own font size, so the height below is exact: 16–40px.
+28 state their own font size, so the height below is exact: 16–40px.
 18 inherit it, so the height below is an upper bound — the ancestor that
   sets it may well set a smaller one: 24–48px.
 
@@ -604,6 +605,7 @@ noticed. One representation with a test on it is the only thing that ends that.
   40px  exact  web/src/components/Files/EntryNameDialog.tsx ×2
   40px  exact  web/src/components/Git/CommitSheet.tsx ×2
   40px  exact  web/src/components/Git/NewBranchSheet.tsx ×2
+  40px  exact  web/src/components/PortPreview/PortPreviewSheet.tsx ×2
   40px  exact  web/src/components/Project/ProjectTab.tsx ×2
   40px  exact  web/src/components/Worktree/WorktreeCreateSheet.tsx ×3
   40px  exact  web/src/extensions/ExampleExtension/sidebarUI/CustomSidebarContent.tsx

@@ -2,7 +2,6 @@ package ws
 
 import (
 	"context"
-	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"log/slog"
@@ -18,6 +17,7 @@ import (
 	"github.com/pockode/server/command"
 	"github.com/pockode/server/filetransfer"
 	"github.com/pockode/server/logger"
+	"github.com/pockode/server/password"
 	"github.com/pockode/server/rpc"
 	"github.com/pockode/server/session"
 	"github.com/pockode/server/settings"
@@ -43,6 +43,7 @@ type RPCHandler struct {
 	password             string
 	sessions             SessionStore
 	version              string
+	remoteURL            string
 	devMode              bool
 	commandStore         *command.Store
 	worktreeManager      *worktree.Manager
@@ -61,7 +62,7 @@ type RPCHandler struct {
 	cliUpdateWatcher     *watch.CLIUpdateWatcher
 }
 
-func NewRPCHandler(password string, sessions SessionStore, version string, devMode bool, commandStore *command.Store, worktreeManager *worktree.Manager, settingsStore *settings.Store, workStore work.Store, workOps *work.Operations, workEngine *work.Engine, agentRoleStore agentrole.Store, cliAuth *cliauth.Service, cliUpdate *cliupdate.Service) *RPCHandler {
+func NewRPCHandler(password string, sessions SessionStore, version, remoteURL string, devMode bool, commandStore *command.Store, worktreeManager *worktree.Manager, settingsStore *settings.Store, workStore work.Store, workOps *work.Operations, workEngine *work.Engine, agentRoleStore agentrole.Store, cliAuth *cliauth.Service, cliUpdate *cliupdate.Service) *RPCHandler {
 	settingsWatcher := watch.NewSettingsWatcher(settingsStore)
 	settingsWatcher.Start()
 
@@ -95,6 +96,7 @@ func NewRPCHandler(password string, sessions SessionStore, version string, devMo
 		password:             password,
 		sessions:             sessions,
 		version:              version,
+		remoteURL:            remoteURL,
 		devMode:              devMode,
 		commandStore:         commandStore,
 		worktreeManager:      worktreeManager,
@@ -782,6 +784,7 @@ func (h *rpcMethodHandler) handleAuth(ctx context.Context, conn *jsonrpc2.Conn, 
 		Title:             title,
 		WorkDir:           wt.WorkDir,
 		WorktreeName:      wt.Name,
+		RemoteURL:         h.remoteURL,
 		MaxUploadSize:     filetransfer.MaxUploadSize,
 		MaxAttachmentSize: filetransfer.MaxAttachmentSize,
 		SessionToken:      sessionToken,
@@ -799,9 +802,9 @@ func (h *rpcMethodHandler) handleAuth(ctx context.Context, conn *jsonrpc2.Conn, 
 func (h *rpcMethodHandler) checkCredentials(ctx context.Context, conn *jsonrpc2.Conn, req *jsonrpc2.Request, params rpc.AuthParams) (string, bool) {
 	// Token is the pre-rename spelling of Password; a cached PWA may still be
 	// sending it. See rpc.AuthParams.
-	password := rpc.OrLegacy(params.Password, params.Token)
+	given := rpc.OrLegacy(params.Password, params.Token)
 
-	if password != "" && params.SessionToken != "" {
+	if given != "" && params.SessionToken != "" {
 		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "password and session_token are mutually exclusive")
 		conn.Close()
 		return "", false
@@ -817,7 +820,7 @@ func (h *rpcMethodHandler) checkCredentials(ctx context.Context, conn *jsonrpc2.
 		return params.SessionToken, true
 	}
 
-	if subtle.ConstantTimeCompare([]byte(password), []byte(h.password)) != 1 {
+	if !password.Matches(given, h.password) {
 		h.log.Warn("invalid password")
 		h.replyAuthError(ctx, conn, req.ID, "invalid password", rpc.AuthReasonInvalidPassword)
 		conn.Close()

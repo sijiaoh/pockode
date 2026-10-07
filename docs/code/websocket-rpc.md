@@ -376,7 +376,7 @@ Client                              Server
   │                                    │   Bind to worktree
   │                                    │   Issue a session token
   │   { version, title, work_dir,      │
-  │     worktree_name,                 │
+  │     worktree_name, remote_url,     │
   │     max_upload_size,               │
   │     max_attachment_size,           │
   │     session_token }                │
@@ -408,6 +408,10 @@ Client                              Server
   of its own. That is the workspace upload's ceiling; `max_attachment_size` is
   the same thing for chat attachments (`POST /api/chat/attachments`), which have
   a lower one of their own ([File § Transfer](../file.md#transfer)).
+- `remote_url` is the address the server is reachable at through the relay, such
+  as `https://abc123.cloud.pockode.com`, and empty when the relay is disabled. A
+  client cannot derive it from its own location, which is `localhost` on a local
+  connection.
 
 For where the server's password comes from (`--password` / `POCKODE_PASSWORD`), how a session token is issued and expired, and the overall trust model, see [Authentication](authentication.md).
 

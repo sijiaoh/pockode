@@ -57,9 +57,9 @@ git/                    # Git 操作
 logger/                 # 结构化日志 (slog)
 mcp/                    # MCP：stdio 代理客户端 + 服务端 Executor/APIHandler
 middleware/             # 密码 / session token 认证中间件
-password/               # 服务器密码的来源（--password / POCKODE_PASSWORD + 弃用别名）
+password/               # 服务器密码的来源（--password / POCKODE_PASSWORD + 弃用别名）与比较（各认证入口共用）
 process/                # 进程管理器
-relay/                  # NAT 穿透：yamux over WSS 隧道 + 本地反向代理
+relay/                  # NAT 穿透：yamux over WSS 隧道 + 本地反向代理 + 端口预览（认证与转发）
 serverinfo/             # 服务器运行时信息（server.json）
 rpc/                    # RPC 消息类型定义
 session/                # Session 存储 + 清理

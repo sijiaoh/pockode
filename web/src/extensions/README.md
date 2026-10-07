@@ -129,11 +129,16 @@ See `headerUIRegistry.ts` for prop interfaces (`HeaderContentProps`, `TitleCompo
 > <ConnectionStatus />
 > ```
 >
+> The port preview button is self-contained and can be placed as-is
+> (`import PortPreviewButton from "../../components/PortPreview/PortPreviewButton"`);
+> it renders nothing when the relay is disabled.
+>
 > The menu / settings buttons must likewise be re-implemented from the
 > `onOpenSidebar` / `onOpenSettings` props if you want to keep them, and left
 > out while their prop is absent (no menu beside a persistent sidebar, no
-> settings button on the Settings page). Render `heading` too whenever it is
-> given: it is the heading of whatever is on screen — in a chat the open
+> settings button on the Settings page); `headerIconButtonClass` from
+> `components/ui` gives them the built-in look. Render `heading` too whenever
+> it is given: it is the heading of whatever is on screen — in a chat the open
 > session's title button, the only way to the session's engine, permission
 > mode, work and usage; over a page (a diff, a file, Settings, a work item) the
 > page's way back and its title. It changes with the page, so a header that

@@ -144,10 +144,10 @@ Costs:
   and held until close. Measured against a browser-shaped client, heap growth is
   linear over 16 / 64 connections at about **1,261 KiB** each (24 KiB with
   compression off). Concurrency is bounded: a relayed mobile WebSocket holds one
-  yamux stream and the relay caps a tunnel at 32, so about 40 MB at saturation —
-  on a machine that is already running agent subprocesses an order of magnitude
-  larger than that. Opening and closing 64 connections leaves 3 KB behind, so the
-  state does not accumulate.
+  yamux stream and the relay caps a tunnel at 64, so about 80 MB at saturation —
+  on a machine that is already running agent subprocesses each larger than
+  that. Opening and closing 64 connections leaves 3 KB behind, so the state does
+  not accumulate.
 - **CPU**: compressing that whole conversation (898 KB over 710 messages) took
   0.17–0.28 s. Decompression happens in the browser.
 - **On the phone**: the library's `CompressionMode` is symmetric, so the browser

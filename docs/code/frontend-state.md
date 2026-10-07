@@ -21,6 +21,7 @@ Pockode uses Zustand for state management, pure reducers for event processing, a
 │  ├─ gitPanelStore                                           │   │
 │  ├─ gitSyncStore                                            │   │
 │  ├─ gitWriteStore                                           │   │
+│  ├─ portPreviewStore (localStorage)                         │   │
 │  └─ worktreeStore + listeners                               │   │
 ├─────────────────────────────────────────────────────────────────┤
 │  Domain Data Layer                                              │
@@ -61,6 +62,7 @@ Pockode uses Zustand for state management, pure reducers for event processing, a
 | gitPanelStore | Git panel UI state (History expanded) | Session-scoped override |
 | gitSyncStore | The fetch/pull/push in flight in each worktree, and how the last one ended | Keyed by worktree; outlives the sheet that started the run |
 | gitWriteStore | Each worktree's serial queue of stage/unstage/discard writes, and the paths they have pending | Keyed by worktree; one write at a time, so two taps cannot race |
+| portPreviewStore | The ports a preview was recently opened for ([port-preview.md](../port-preview.md#opening-a-preview-from-the-app)) | localStorage init; one key for every worktree, since ports belong to the machine |
 | worktreeStore | Current worktree, whether the project is a git repository, and whether the server can run the setup hook | External listener pattern; `isGitRepo` is `null` until the server has answered |
 | themeStore | Theme mode/name | Registry subscription |
 

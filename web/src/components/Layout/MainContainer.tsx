@@ -1,7 +1,7 @@
 import { Menu, Settings } from "lucide-react";
 import { useHeaderUIConfig } from "../../lib/registries/headerUIRegistry";
-import { ConnectionStatus } from "../ui";
-import { headerIconButtonClass } from "../ui/headerIconButtonClass";
+import PortPreviewButton from "../PortPreview/PortPreviewButton";
+import { ConnectionStatus, headerIconButtonClass } from "../ui";
 
 interface Props {
 	children: React.ReactNode;
@@ -55,7 +55,7 @@ function MainContainer({
 
 	return (
 		<div className="flex min-w-0 flex-1 flex-col overflow-hidden bg-th-bg-primary">
-			{/* `gap-2` keeps a pressable heading 8px off the status and settings,
+			{/* `gap-2` keeps a pressable heading 8px off the buttons beside it,
 			    which a thumb needs between any two targets. */}
 			<header className="flex h-11 shrink-0 items-center justify-between gap-2 border-b border-th-border px-3 sm:h-12 sm:px-4">
 				<div className="flex min-w-0 flex-1 items-center gap-2">
@@ -77,6 +77,7 @@ function MainContainer({
 				</div>
 				<div className="flex shrink-0 items-center gap-2">
 					<ConnectionStatus />
+					<PortPreviewButton />
 					{onOpenSettings && (
 						<button
 							type="button"

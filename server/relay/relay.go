@@ -35,6 +35,17 @@ type Config struct {
 	CloudURL      string
 	DataDir       string
 	ClientVersion string
+	// Password and Sessions are the app's own credentials. Port previews log
+	// in with them, since a previewed server knows nothing of Pockode's.
+	Password string
+	Sessions SessionStore
+}
+
+// SessionStore is what a preview login needs of the app's session store;
+// authsession.Store implements it.
+type SessionStore interface {
+	Issue() (string, error)
+	Validate(token string) bool
 }
 
 type Manager struct {
@@ -148,7 +159,7 @@ func (m *Manager) connectAndRun(ctx context.Context, cfg *StoredConfig) error {
 	// NetConn disables the WebSocket read limit, which is what a byte-stream
 	// tunnel wants: size limits belong to the HTTP layer above it.
 	tunnel := tunnelConn{Conn: websocket.NetConn(ctx, conn, websocket.MessageBinary), ws: conn}
-	return serveTunnel(ctx, tunnel, newLocalProxy(m.backendPort, m.frontendPort, m.log), m.log)
+	return serveTunnel(ctx, tunnel, newLocalProxy(m.backendPort, m.frontendPort, newPreviewSite(cfg), previewAuth{password: m.config.Password, sessions: m.config.Sessions}, m.log), m.log)
 }
 
 // uplinkDialOptions puts the relay token on the upgrade request itself, so the
@@ -199,16 +210,21 @@ func (m *Manager) RemoteURL() string {
 }
 
 func buildRemoteURL(cfg *StoredConfig) string {
-	scheme := "https"
+	return fmt.Sprintf("%s://%s.%s", publicScheme(cfg), cfg.Subdomain, cfg.RelayServer)
+}
+
+// publicScheme is the scheme browsers reach this server through the relay
+// with; the local development relay serves plain HTTP.
+func publicScheme(cfg *StoredConfig) string {
 	if cfg.RelayServer == "local.pockode.com" {
-		scheme = "http"
+		return "http"
 	}
-	return fmt.Sprintf("%s://%s.%s", scheme, cfg.Subdomain, cfg.RelayServer)
+	return "https"
 }
 
 func buildRelayWSURL(cfg *StoredConfig) string {
 	scheme := "wss"
-	if cfg.RelayServer == "local.pockode.com" {
+	if publicScheme(cfg) == "http" {
 		scheme = "ws"
 	}
 	return fmt.Sprintf("%s://%s.%s/relay", scheme, cfg.Subdomain, cfg.RelayServer)

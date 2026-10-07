@@ -22,7 +22,7 @@ pnpm -w run format       # 格式化
 
 ```
 src/
-  components/            # React 组件（Auth, Chat, common, Files, Git, Layout, Project, Session, Settings, Worktree, ui）
+  components/            # React 组件（Auth, Chat, CliLogin, common, Files, Git, Layout, PortPreview, Project, Session, Settings, Worktree, ui）
   extensions/            # 扩展系统（builtin, ExampleExtension）
   hooks/                 # 自定义 Hooks（useSession, useSubscription, useChatMessages 等）
   lib/                   # 状态管理 + RPC（*Store.ts, rpc/, registries/）

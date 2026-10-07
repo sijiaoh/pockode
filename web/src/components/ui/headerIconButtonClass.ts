@@ -1,7 +1,8 @@
 /**
- * An icon button in the app header: the menu, a page's way back, the settings.
+ * An icon button in the app header: the menu, a page's way back, the port
+ * preview, the settings.
  *
- * One definition because the three sit on one row and have to read as one
+ * One definition because they sit on one row and have to read as one
  * weight. 44px of box on every pointer: the header is 44px tall at its
  * shortest, so the box costs nothing to give a thumb, and no border or fill so
  * the row stays quieter than whatever the page is showing below it.

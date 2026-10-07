@@ -25,6 +25,7 @@ export { CopyButton } from "./CopyButton";
 export { DiffViewer } from "./DiffViewer";
 export { FileContentDisplay } from "./FileContentDisplay";
 export { FileStateCard } from "./FileStateCard";
+export { headerIconButtonClass } from "./headerIconButtonClass";
 export { iconButtonClass } from "./iconButtonClass";
 export { inputClass } from "./inputClass";
 export { MarkdownContent } from "./MarkdownContent";

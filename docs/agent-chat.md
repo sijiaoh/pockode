@@ -58,8 +58,8 @@ else is permanent — the attention strip and the composer's error bar come and 
 between the last two ([lifecycle-ui.md §2.2](lifecycle-ui.md#22-chat-the-attention-strip)).
 
 ```
-[☰] [ Session title ˅            ] [●] [⚙]   header, h-11 / sm:h-12
-    [ Opus · Default             ]
+[☰] [ Session title ˅        ] [●] [▭] [⚙]   header, h-11 / sm:h-12
+    [ Opus · Default         ]
 ┌─────────────────────────────────────────┐
 │        transcript (reading column)   [↓]│
 └─────────────────────────────────────────┘
@@ -80,6 +80,8 @@ has not arrived yet is a skeleton too; one read out of another worktree says
 at all. A route naming no session has nothing to describe, so the header keeps
 the project's name and offers no button. The project's name otherwise lives in
 the sidebar's worktree switcher.
+The preview button (`▭`) is there only when the relay is on
+([port-preview.md](port-preview.md)).
 
 **Over a page, the header names the page.** Whatever is on screen gets one
 header, and it is about that screen. A page opened over the chat — a diff, a
@@ -91,8 +93,8 @@ phone, and it offered YOLO from a screen that had nothing to do with the
 session.
 
 ```
-[☰] [💬] [ ChatPanel.tsx ›          ] [●] [⚙]
-         [ web/src/comp… · Unstaged ]
+[☰] [💬] [ ChatPanel.tsx ›      ] [●] [▭] [⚙]
+         [ web/src/… · Unstaged ]
 ```
 
 The page draws its heading with `Layout/PageHeader.tsx`, and the header hosts it

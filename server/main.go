@@ -422,20 +422,10 @@ Flags:
 	mcpExecutor.SetWorkEngine(workEngine)
 	mcpHandler := mcp.NewAPIHandler(mcpExecutor, mcpToken)
 
-	wsHandler := ws.NewRPCHandler(cred.Password, sessions, version, devMode, commandStore, worktreeManager, settingsStore, workStore, workOps, workEngine, agentRoleStore, cliAuth, cliUpdate)
-	transferHandler := filetransfer.NewHandler(registry, slog.Default())
-	attachmentHandler := filetransfer.NewAttachmentHandler(worktreeManager, worktree.ErrWorktreeNotFound, worktree.ErrSessionNotFound, slog.Default())
-	handler := newHandler(cred.Password, sessions, devMode, wsHandler, mcpHandler, transferHandler, attachmentHandler)
-
-	portStr := strconv.Itoa(port)
-	srv := &http.Server{
-		Addr:    ":" + portStr,
-		Handler: handler,
-	}
-
 	cloudURL := *cloudURLFlag
 
-	// Initialize relay if enabled
+	// Started before the RPC handler is built, which reports the remote URL to
+	// every client that authenticates.
 	var relayManager *relay.Manager
 	var remoteURL string
 	relayEnabled := *relayFlag
@@ -444,6 +434,8 @@ Flags:
 			CloudURL:      cloudURL,
 			DataDir:       dataDir,
 			ClientVersion: version,
+			Password:      cred.Password,
+			Sessions:      sessions,
 		}
 
 		frontendPort := *relayFrontendPortFlag
@@ -461,6 +453,17 @@ Flags:
 		}
 
 		slog.Info("remote access enabled", "url", remoteURL)
+	}
+
+	wsHandler := ws.NewRPCHandler(cred.Password, sessions, version, remoteURL, devMode, commandStore, worktreeManager, settingsStore, workStore, workOps, workEngine, agentRoleStore, cliAuth, cliUpdate)
+	transferHandler := filetransfer.NewHandler(registry, slog.Default())
+	attachmentHandler := filetransfer.NewAttachmentHandler(worktreeManager, worktree.ErrWorktreeNotFound, worktree.ErrSessionNotFound, slog.Default())
+	handler := newHandler(cred.Password, sessions, devMode, wsHandler, mcpHandler, transferHandler, attachmentHandler)
+
+	portStr := strconv.Itoa(port)
+	srv := &http.Server{
+		Addr:    ":" + portStr,
+		Handler: handler,
 	}
 
 	// Start listening for exit requests before publishing server.json: that file

@@ -22,7 +22,7 @@ const localResponseHeaderTimeout = 30 * time.Second
 // maxIdleLocalConns keeps a connection pooled per concurrent relayed request.
 // Sized to the relay's per-tunnel stream budget so a busy page load does not
 // re-dial localhost for every asset.
-const maxIdleLocalConns = 32
+const maxIdleLocalConns = 64
 
 // forwardedHeaders are set by the cloud relay from the public request. Rewrite
 // strips them from the outbound request, so they are copied back explicitly;
@@ -35,9 +35,25 @@ var forwardedHeaders = []string{"X-Forwarded-For", "X-Forwarded-Host", "X-Forwar
 // by a separate frontend dev server; in production both ports are the same and
 // the split is a no-op. Both path questions are answered by apiroute, which the
 // SPA handler shares.
-func newLocalProxy(backendPort, frontendPort int, log *slog.Logger) http.Handler {
+//
+// Requests for a preview host are not this server's at all: they go to the
+// previewed port instead (see previewProxy).
+func newLocalProxy(backendPort, frontendPort int, site previewSite, auth previewAuth, log *slog.Logger) http.Handler {
 	backend := localAuthority(backendPort)
 	frontend := localAuthority(frontendPort)
+	transport := &http.Transport{
+		DialContext: (&net.Dialer{Timeout: 5 * time.Second}).DialContext,
+		// net/http defaults to 2 idle connections per host, which would
+		// make every relayed request past the second re-dial localhost.
+		MaxIdleConnsPerHost: maxIdleLocalConns,
+		// That cap is per port and per transport, and each tunnel builds its
+		// own transport, so idle connections must also expire: otherwise
+		// every reconnect strands its predecessor's pool on every port it
+		// reached, and previews reach any port. 90 s is
+		// http.DefaultTransport's value.
+		IdleConnTimeout:       90 * time.Second,
+		ResponseHeaderTimeout: localResponseHeaderTimeout,
+	}
 
 	proxy := &httputil.ReverseProxy{
 		Rewrite: func(pr *httputil.ProxyRequest) {
@@ -61,14 +77,7 @@ func newLocalProxy(backendPort, frontendPort int, log *slog.Logger) http.Handler
 				}
 			}
 		},
-		Transport: &http.Transport{
-			DialContext: (&net.Dialer{Timeout: 5 * time.Second}).DialContext,
-			// net/http defaults to 2 idle connections per host, which would
-			// make every relayed request past the second re-dial localhost.
-			// The relay caps its concurrent streams, so this bounds naturally.
-			MaxIdleConnsPerHost:   maxIdleLocalConns,
-			ResponseHeaderTimeout: localResponseHeaderTimeout,
-		},
+		Transport: transport,
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
 			if r.Context().Err() != nil {
 				return
@@ -77,15 +86,22 @@ func newLocalProxy(backendPort, frontendPort int, log *slog.Logger) http.Handler
 			http.Error(w, "bad gateway", http.StatusBadGateway)
 		},
 	}
+	preview := &previewProxy{site: site, auth: auth, transport: transport, log: log}
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// The relay is the only thing that could make a local-only route
 		// remotely reachable, so it is the only thing that can refuse it — and
 		// it has to do so before a port is chosen, since in the default
-		// single-port setup routing alone would not keep it out of reach.
+		// single-port setup routing alone would not keep it out of reach. That
+		// includes a preview's port: it may be another Pockode on this machine,
+		// such as a cluster node, serving the same route.
 		// 404 because from the outside the route does not exist.
 		if apiroute.IsLocalOnly(r.URL.Path) {
 			http.NotFound(w, r)
+			return
+		}
+		if port, ok := site.port(r.Host); ok {
+			preview.serve(w, r, port)
 			return
 		}
 		proxy.ServeHTTP(w, r)
