@@ -70,7 +70,7 @@ All methods use JSON-RPC 2.0 over WebSocket. Work and agent_role methods are **a
 
 | Method | Params | Result | Description |
 |--------|--------|--------|-------------|
-| `work.create` | `WorkCreateParams` | `WorkDetailItem` | Create a work item. `story_id` alone says which kind: a request cannot state a type that contradicts the story it named, because there is no type to state |
+| `work.create` | `WorkCreateParams` | `WorkDetailItem` | Create a story. A person creates stories only; a task is created by its story's agent with MCP `task_create`, so a request naming a `story_id` is refused with InvalidParams rather than ignored — ignoring it would answer a request for a task with a new story |
 | `work.update` | `WorkUpdateParams` | `{}` | Update data fields (pointer semantics) |
 | `work.delete` | `WorkDeleteParams` | `{}` | Delete a work item (cascade-deletes children and sessions) |
 | `work.start` | `WorkStartParams` | `WorkDetailItem` | Atomic claim + session creation |
@@ -104,7 +104,7 @@ nothing left to tell the two apart ([frontend.md](frontend.md#workdetailoverlay)
 ### Wire Types
 
 ```
-WorkCreateParams          { title, agent_role_id, story_id?, body? }   // story_id names a story → a task; absent → a story
+WorkCreateParams          { title, agent_role_id, body? }   // always a story; a story_id is refused
 WorkUpdateParams          { id, title?, body?, agent_role_id? }
 WorkDeleteParams          { id }
 WorkStartParams           { id }
@@ -239,6 +239,11 @@ than `story`, `task` or `""` is `InvalidParams` naming it, and the rest of that
 update is not applied. `work.create` and `work.update` refuse a role that does
 not take the work's type with `InvalidParams` and the reason as its message —
 the same check and wording as MCP ([Work Type Field](data-model.md#work-type-field)).
+
+Narrowing the default story role to `task` is accepted and clears
+`settings.default_agent_role_id`, as deleting it does; `settings.update` refuses
+a newly chosen default that cannot run stories with `InvalidParams` naming the
+role ([why](data-model.md#work-type-field)).
 
 ### `agent_role.delete` Referential Integrity
 

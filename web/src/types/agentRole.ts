@@ -27,6 +27,8 @@ export interface AgentRoleCreateParams {
 	name: string;
 	role_prompt: string;
 	steps?: string[];
+	/** Omitted makes a role that takes either kind. */
+	work_type?: WorkType;
 }
 
 export interface AgentRoleUpdateParams {

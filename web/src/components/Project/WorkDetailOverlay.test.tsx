@@ -24,16 +24,6 @@ vi.mock("../ui/MarkdownContent", () => ({
 	MarkdownContent: ({ content }: { content: string }) => <div>{content}</div>,
 }));
 
-// The sheet has its own tests; here it stands for "the create flow answered
-// with an id", which is the wiring this screen owns.
-vi.mock("./CreateWorkSheet", () => ({
-	default: ({ onCreated }: { onCreated: (workId: string) => void }) => (
-		<button type="button" onClick={() => onCreated("new-task")}>
-			Pretend to create
-		</button>
-	),
-}));
-
 vi.mock("../Worktree", () => ({
 	WorktreeBadge: () => null,
 	useWorktreeBadgeVisible: () => false,
@@ -269,8 +259,8 @@ describe("WorkDetailOverlay", () => {
 	// the server derived from `story_id`
 	// (docs/projects/api.md#work-list-rows-vs-work-detail). Asserted from the
 	// task side as well as the story side above, because the tests that show the
-	// section only pin one direction — a condition stuck at "always" would put an
-	// `Add Task` on a task, and nothing below a task can be created at all.
+	// section only pin one direction — a condition stuck at "always" would hang
+	// a third level off a task.
 	it("gives a task no Tasks section to hang a third level off", () => {
 		mockUseWorkDetailSubscription.mockReturnValue({
 			work: createWork({ id: "task-1", type: "task", story_id: "story-1" }),
@@ -295,15 +285,11 @@ describe("WorkDetailOverlay", () => {
 		expect(
 			screen.queryByRole("heading", { name: /^Tasks/ }),
 		).not.toBeInTheDocument();
-		expect(
-			screen.queryByRole("button", { name: "Add Task" }),
-		).not.toBeInTheDocument();
 	});
 
-	// §4: a task lands on its own page too, where its brief gets written.
-	it("lands on the new task's detail page after adding one", async () => {
-		const user = userEvent.setup();
-		const onOpenWorkDetail = vi.fn();
+	// A story's tasks are its agent's to create (`task_create`); the page lists
+	// them and offers no way to add one by hand (docs/project-ui.md §4).
+	it("offers no way to add a task by hand", () => {
 		mockUseWorkDetailSubscription.mockReturnValue({
 			work: createWork(),
 			activity: "idle",
@@ -319,17 +305,14 @@ describe("WorkDetailOverlay", () => {
 				workId="work-1"
 				onBack={vi.fn()}
 				onNavigateToSession={vi.fn()}
-				onOpenWorkDetail={onOpenWorkDetail}
+				onOpenWorkDetail={vi.fn()}
 			/>,
 		);
 
-		await user.click(screen.getByRole("button", { name: "Add Task" }));
-		await user.click(screen.getByRole("button", { name: "Pretend to create" }));
-
-		expect(onOpenWorkDetail).toHaveBeenCalledWith("new-task");
+		expect(screen.getByText("No tasks yet")).toBeInTheDocument();
 		expect(
-			screen.queryByRole("button", { name: "Pretend to create" }),
-		).toBeNull();
+			screen.queryByRole("button", { name: /add task/i }),
+		).not.toBeInTheDocument();
 	});
 
 	// The page is named by what it shows — Story or Task — and nothing stands in

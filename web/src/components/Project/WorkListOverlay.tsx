@@ -13,8 +13,9 @@ import type { WorkListItem } from "../../types/work";
 import PageHeader from "../Layout/PageHeader";
 import { ActivityIcon } from "../ui";
 import BottomActionBar from "../ui/BottomActionBar";
+import ListGroupHeading from "../ui/ListGroupHeading";
 import ArchivePager from "./ArchivePager";
-import CreateWorkSheet from "./CreateWorkSheet";
+import CreateStorySheet from "./CreateStorySheet";
 import WorkRow from "./WorkRow";
 
 /**
@@ -386,8 +387,7 @@ export default function WorkListOverlay({
 			</BottomActionBar>
 
 			{creating && (
-				<CreateWorkSheet
-					type="story"
+				<CreateStorySheet
 					onClose={() => setCreating(false)}
 					onCreated={handleCreated}
 				/>
@@ -603,20 +603,16 @@ function ShowEarlierWork({
  * the archive out of the way, and the archive is a segment now; a heading is
  * also what lets a screen reader jump between groups, which the buttons never
  * offered.
+ *
+ * The count is rows in the group, not work items in a tree: the tasks folded
+ * into a story row are counted in that row's own meta line.
  */
 function GroupHeading({ group, count }: { group: WorkGroup; count: number }) {
 	return (
-		// Above the rows rather than level with them: a row lifts its own
-		// controls to `z-10`, and a Stop button sliding over the heading it is
-		// scrolling under would be drawn on top of it at the same level.
-		<h2 className="sticky top-0 z-20 flex min-h-[32px] items-center gap-2 bg-th-bg-primary px-3 text-xs font-medium text-th-text-muted">
-			<ActivityIcon activity={GROUP_GLYPH[group]} decorative />
-			<span className="flex-1">{GROUP_LABEL[group]}</span>
-			{/* Rows in the group, not work items in a tree: the tasks folded into a
-			    story row are counted in that row's own meta line. */}
-			<span className="rounded-full bg-th-bg-tertiary px-1.5 py-0.5 tabular-nums">
-				{count}
-			</span>
-		</h2>
+		<ListGroupHeading
+			label={GROUP_LABEL[group]}
+			count={count}
+			icon={<ActivityIcon activity={GROUP_GLYPH[group]} decorative />}
+		/>
 	);
 }

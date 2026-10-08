@@ -67,6 +67,10 @@ func (h *rpcMethodHandler) handleAgentRoleUpdate(ctx context.Context, conn *json
 		return
 	}
 
+	if params.WorkType != nil && *params.WorkType == work.WorkTypeTask {
+		h.dropDefaultStoryRole(params.ID)
+	}
+
 	h.log.Info("agent role updated", "roleId", params.ID)
 
 	if err := conn.Reply(ctx, req.ID, struct{}{}); err != nil {
@@ -107,18 +111,28 @@ func (h *rpcMethodHandler) handleAgentRoleDelete(ctx context.Context, conn *json
 		return
 	}
 
-	// Clear default agent role if the deleted role was the default
-	if s := h.settingsStore.Get(); s.DefaultAgentRoleID == params.ID {
-		s.DefaultAgentRoleID = ""
-		if err := h.settingsStore.Update(s); err != nil {
-			h.log.Error("failed to clear default agent role after deletion", "error", err)
-		}
-	}
+	h.dropDefaultStoryRole(params.ID)
 
 	h.log.Info("agent role deleted", "roleId", params.ID)
 
 	if err := conn.Reply(ctx, req.ID, struct{}{}); err != nil {
 		h.log.Error("failed to send agent role delete response", "error", err)
+	}
+}
+
+// dropDefaultStoryRole clears the default story role if it is roleID: called
+// once that role can no longer start a story — deleted, or narrowed to tasks.
+// The role change is accepted and the default goes with it, rather than the
+// change being refused, so that editing a role never has to be preceded by a
+// trip to a different setting. See docs/projects/data-model.md.
+func (h *rpcMethodHandler) dropDefaultStoryRole(roleID string) {
+	s := h.settingsStore.Get()
+	if s.DefaultAgentRoleID != roleID {
+		return
+	}
+	s.DefaultAgentRoleID = ""
+	if err := h.settingsStore.Update(s); err != nil {
+		h.log.Error("failed to clear the default story role", "roleId", roleID, "error", err)
 	}
 }
 

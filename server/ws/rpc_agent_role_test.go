@@ -9,6 +9,7 @@ import (
 	"github.com/pockode/server/agentrole"
 	"github.com/pockode/server/rpc"
 	"github.com/pockode/server/session"
+	"github.com/pockode/server/settings"
 	"github.com/pockode/server/work"
 	"github.com/sourcegraph/jsonrpc2"
 )
@@ -183,6 +184,65 @@ func TestAgentRoleDelete_RefusalIsPrintedVerbatim(t *testing.T) {
 			}
 			if resp.Error.Message != tc.want {
 				t.Errorf("message = %q, want %q", resp.Error.Message, tc.want)
+			}
+		})
+	}
+}
+
+// The default story role is accepted-and-cleared, never a reason to refuse: a
+// role that stops being able to run stories — narrowed to tasks, or deleted —
+// takes the default with it, and any other change leaves the default alone.
+func TestAgentRole_LosingStoriesClearsTheDefault(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		call      func(env *testEnv, id string) rpcResponse
+		wantClear bool
+	}{
+		{
+			name: "narrowed to tasks",
+			call: func(env *testEnv, id string) rpcResponse {
+				return env.call("agent_role.update", map[string]any{"id": id, "work_type": "task"})
+			},
+			wantClear: true,
+		},
+		{
+			name: "deleted",
+			call: func(env *testEnv, id string) rpcResponse {
+				return env.call("agent_role.delete", map[string]any{"id": id})
+			},
+			wantClear: true,
+		},
+		{
+			name: "narrowed to stories",
+			call: func(env *testEnv, id string) rpcResponse {
+				return env.call("agent_role.update", map[string]any{"id": id, "work_type": "story"})
+			},
+		},
+		{
+			name: "renamed",
+			call: func(env *testEnv, id string) rpcResponse {
+				return env.call("agent_role.update", map[string]any{"id": id, "name": "Lead"})
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			env := newTestEnv(t, &mockAgent{})
+
+			id := createRoleOverTheWire(t, env, "PM", "")
+			if resp := env.call("settings.update", rpc.SettingsUpdateParams{Settings: settings.Settings{DefaultAgentRoleID: id}}); resp.Error != nil {
+				t.Fatalf("settings.update: %s", resp.Error.Message)
+			}
+
+			if resp := tc.call(env, id); resp.Error != nil {
+				t.Fatalf("role change refused: %s", resp.Error.Message)
+			}
+
+			want := id
+			if tc.wantClear {
+				want = ""
+			}
+			if got := settingsOverTheWire(t, env).DefaultAgentRoleID; got != want {
+				t.Errorf("default = %q, want %q", got, want)
 			}
 		})
 	}

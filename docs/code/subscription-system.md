@@ -537,7 +537,7 @@ the counts.** A sync is the role half recovering, and the counts are not its to
 throw away — they move while no role changes, which is why they have a
 notification of their own. Clearing them there would invent a row whose count has
 gone missing, which is a state the screen otherwise has no way to be in
-([agent-roles-ui.md §4](../agent-roles-ui.md#4-nothing-on-line-2-waits) depends
+([agent-roles-ui.md §4](../agent-roles-ui.md#4-nothing-on-a-card-waits) depends
 on that). A disconnect clears both, because then nothing is known.
 
 ### Which Sessions Belong to Work
@@ -1182,13 +1182,13 @@ all. Nobody edits the settings from two clients today, so neither is built.
 
 The display half is the three call sites that compose those writes — the Engine
 and Mode fields in Settings, the worktree base path, and the agent role list's
-two entries into the default role, its per-row star and its footer field. Each
+default story role field (with the `Default` tag it puts on one card). Each
 waits on the one question `useGlobalSettingsStatus` answers, `settings !== null`,
 and never on whether the fields inside are filled: an empty snapshot is a real
 answer, and the resolved defaults are the honest thing to show for it. Until it
 arrives they draw a pulsing `Skeleton` where the value goes and refuse input,
 because every resolved default here is a reassuring one — Claude on Auto,
-Default mode, `../<repo>-worktrees`, a default role of "None" — and each says,
+Default mode, `../<repo>-worktrees`, a default story role of "None" — and each says,
 of settings nobody has been told, exactly what a user who set nothing would
 have. Only the part that claims a value is replaced: field names, the static
 help text, and everything in the role list that answers to its own subscription

@@ -278,9 +278,9 @@ row's whole card is a tap target (§3), and neighbouring targets owe each other
 **8px under a coarse pointer**
 ([responsive-ui.md](responsive-ui.md#hit-areas-and-spacing)) — at 2px apart every
 tap near a seam was a coin flip between two works. The same floor applies to the
-two controls that sit in the row flow rather than in a row: `Show earlier work`
-above a group's rows, and `Add Task` under the story detail's, both 44px targets
-against a card. They carry their own clearance for that reason.
+control that sits in the row flow rather than in a row: `Show earlier work`
+above a group's rows, a 44px target against a card. It carries its own
+clearance for that reason.
 
 A group with no rows is not rendered, header and all — which is the whole of
 *Stopped*'s empty state. No congratulation, no "all clear": the group simply is
@@ -629,16 +629,16 @@ which is what makes the two screens feel like one place.
 
 ## 4. Creating work lands you on its detail page
 
-One rule for both types: **`work.create` is followed by navigation to the new
-item's detail page.** Nothing is ever created into a list position the user then
-has to go and find.
+One rule: **`work.create` is followed by navigation to the new item's detail
+page.** Nothing is ever created into a list position the user then has to go
+and find.
 
-The trigger:
-
-| Screen | Control | Creates |
-|---|---|---|
-| Project | `New Story` in the bottom bar | a story |
-| Story detail | `Add Task` at the end of the Tasks section | a task under it |
+A person creates stories only, with `New Story` in the project's bottom bar.
+Tasks are the story agent's to create — it breaks its story down with MCP
+`task_create` — so the story detail's Tasks section lists them and offers no
+control to add one, and `work.create` refuses a `story_id`
+([projects/api.md](projects/api.md)). Everything else a person does to a task —
+open it, edit its title, brief and role, start, stop or delete it — is unchanged.
 
 The bottom bar is the existing `BottomActionBar`, with one primary button. It is
 at the bottom because that is where a thumb is and because creating is the most
@@ -647,17 +647,17 @@ it replaces scrolled away exactly when a long list made it most useful.
 
 The form is a `Sheet` (the shared component) holding the two fields the server
 requires and no others — title, and the role selector, which offers only the
-roles that take the kind being created and preselects by the same rule the
-default-role footer describes
-([agent-roles-ui.md §8](agent-roles-ui.md#8-which-kind-of-work-a-role-takes)).
+roles that take stories and preselects by the same rule the
+default story role field describes
+([agent-roles-ui.md §7](agent-roles-ui.md#7-the-default-story-role-in-words)).
 The description is not in the sheet: it is the brief the agent reads, it is
 usually several paragraphs, and it has a perfectly good editor on the page the
 user is about to land on. A second editor here would be two places to write one
 field.
 
 When no agent role exists the sheet cannot ask for one, so it holds the old
-form's message instead of the fields — "No agent roles registered", and for a
-story the line pointing at the Agent Roles screen. The create control stays
+form's message instead of the fields — "No agent roles registered", and the
+line pointing at the Agent Roles screen. The create control stays
 enabled and opens it: a disabled button with no explanation is the one version
 of this that tells the user nothing.
 
@@ -666,17 +666,16 @@ role subscription is app-wide, it starts out loading, it returns to loading on
 every reconnect, and it can fail — so the sheet says which of the three it is
 rather than telling a user whose roles are still arriving that there are none.
 
-Roles that exist but all take the other kind are a fourth fact, with a different
+Roles that exist but all take tasks only are a fourth fact, with a different
 way out — a restriction to change, not a role to create — so they get their own
 message in the same place and style, with the same single Close:
 
 ```
-No agent role takes tasks.
-Set a role to take tasks in Agent Roles first.
+No agent role takes stories.
+Set a role to take stories in Agent Roles first.
 ```
 
-(For a story, `stories` in both lines.) The create control stays enabled here
-too, for the same reason.
+The create control stays enabled here too, for the same reason.
 
 The sequence, and what each step is for:
 
@@ -704,15 +703,15 @@ Back from that detail page reaches the list (§1), where the new row is in
 looking for it.
 
 The wiring this needs is one callback: the create form takes an
-`onCreated(workId)` and both call sites pass the shell's existing
+`onCreated(workId)` and its call site passes the shell's existing
 `handleOpenWorkDetail`. The form does not navigate on its own — `AppShell` owns
 every navigation in this app, and a component that routes itself is a second
 place worktree-aware URLs get built.
 
-The sheet has no "create another" affordance. Entering several tasks in a row is
-a real workflow and this costs it a trip back, which is the deliberate trade: a
-task usually needs a brief too, and one rule for creation is worth more than the
-one workflow where landing on the detail is not what was wanted.
+The sheet has no "create another" affordance. Entering several stories in a row
+costs a trip back, which is the deliberate trade: a story needs its brief, and
+one rule for creation is worth more than the one workflow where landing on the
+detail is not what was wanted.
 
 ## 5. Where the segment lives
 
@@ -803,12 +802,12 @@ The checks, in the order they would fail, and where each one is now:
 | 1 | A task with an unanswered question is its own row in *Needs you*, and its story is not | `WorkListOverlay.test.tsx` |
 | 2 | A `stopped` story and a `stopped` task are both in *Stopped*, which is the first group, and the control on them is Restart | `WorkListOverlay.test.tsx` — the group and the group order, the row being the same component either way — and `WorkPrimaryAction.test.tsx` for the label itself |
 | 3 | No row renders a chevron or a collapse toggle, and no group heading is a button | `WorkListOverlay.test.tsx`, `WorkRow.test.tsx` |
-| 4 | `work.create` resolving lands on the new work's detail; rejecting leaves the sheet open with the error and does not navigate | `CreateWorkSheet.test.tsx` for the sheet, `WorkListOverlay.test.tsx` and `WorkDetailOverlay.test.tsx` for each caller's wiring |
+| 4 | `work.create` resolving lands on the new work's detail; rejecting leaves the sheet open with the error and does not navigate | `CreateStorySheet.test.tsx` for the sheet, `WorkListOverlay.test.tsx` for the caller's wiring |
 | 5 | Switching segment and then entering and leaving a detail returns to the chosen segment | `AppShell.test.tsx`, which owns the routing the segment now lives in (§5); `WorkListOverlay.test.tsx` holds only that the list asks for a switch rather than performing one |
 | 6 | Back from a story detail reaches `/works`, and from a task detail its parent story | `WorkDetailOverlay.test.tsx` |
 | 7 | Both row controls are 44 × 44 under a coarse pointer | `web/tests/touchTarget.test.ts`, which reads every icon-only control |
 | 8 | The list and the story detail's Tasks section render the same row component, and only Tasks drops the parent slot | `WorkRow.test.tsx` (the slot), by construction elsewhere |
-| 9 | Creating with no agent role opens the sheet on its message rather than doing nothing | `CreateWorkSheet.test.tsx`, which also separates that message from *loading* and *failed*, and from roles that exist but none of which takes the kind |
+| 9 | Creating with no agent role opens the sheet on its message rather than doing nothing | `CreateStorySheet.test.tsx`, which also separates that message from *loading* and *failed*, and from roles that exist but none of which takes stories |
 | 10 | A failed row command prints its message on the row, and the control keeps its own action label rather than wearing the error | `WorkRow.test.tsx` for the message and the label together, `WorkPrimaryAction.test.tsx` for the button on its own |
 | 11 | The message goes when the work's status changes under it without the row changing group | `WorkRow.test.tsx` |
 | 12 | The message is the control's accessible description while it is there, and the attribute is *absent* — not pointing at nothing — while it is not | `WorkRow.test.tsx`, in the same case as check 10. It asserts the missing attribute rather than an empty description, because a dangling id and no attribute compute the same empty description: assert the description and a dangling id passes |
@@ -822,6 +821,7 @@ The checks, in the order they would fail, and where each one is now:
 | 20 | Each capped group's heading counts its own hidden rows, and one failure to fetch them prints one message with one Retry however many groups are offering the control | `WorkListOverlay.test.tsx`; the server half is `work_list_segment_test.go` (see [list-paging-ui.md §4.1](list-paging-ui.md#41-current-is-loaded-whole-and-that-is-the-design)) |
 | 21 | Line 2 clips the other slots and never the date: the role is inside the clipping container and slot 7 is not | `WorkRow.test.tsx` |
 | 22 | Switching segment, either way, opens the new segment at the top rather than at the offset the other was left at (§2.1) | `WorkListOverlay.test.tsx` |
+| 23 | The story detail offers no control to add a task, and `work.create` refuses a `story_id` rather than ignoring it into a new story (§4) | `WorkDetailOverlay.test.tsx` for the page, `server/ws/rpc_work_test.go` for the refusal |
 
 Check 6 was the one that reached the end of the rewrite untested. It had been
 written down as the behaviour that was already right and could be lost while the

@@ -141,17 +141,35 @@ UI designer, documentation writer and reviewer take tasks. That applies only to
 roles the defaults create — the first seed of a data dir and
 `ResetDefaults` — and never rewrites a role that already exists.
 
-**The default role (`settings.default_agent_role_id`) is not restricted.** The
-server never assigns work from it: it only names the role a create form
-preselects ([agent-roles-ui.md §7](../agent-roles-ui.md#7-the-default-role-in-words-and-on-a-row)),
-and the one setting serves both the story and the task form, so tying it to one
-type would be wrong for the other. With the shipped defaults it is `PM`, which a
-task cannot take. Preselecting only a role that accepts the form's type is the
-client's job, and the web client does it: its task form treats a default of the
-other kind as no default
-([agent-roles-ui.md §8](../agent-roles-ui.md#8-which-kind-of-work-a-role-takes)).
-A client that does not has the create refused by the server, visibly, rather
-than accepted.
+**The default role (`settings.default_agent_role_id`) is the default *story*
+role.** The server never assigns work from it: it only names the role the create
+form preselects ([agent-roles-ui.md §7](../agent-roles-ui.md#7-the-default-story-role-in-words)),
+and that form makes stories only — a task's role is named by the agent that
+creates it with `task_create`, and MCP `story_create` names its role explicitly
+too. So it must name a role that can run stories, and one rule keeps it so:
+
+- **`settings.update` refuses a role that cannot run stories** (InvalidParams,
+  naming the role), as it refuses one that does not exist. It judges the value
+  only when it changes: `settings.update` replaces the whole object, so a stored
+  value that went stale outside the server — a hand-edited `settings.json` —
+  must not make every unrelated setting unsavable.
+- **A role that stops being able to run stories takes the default with it.**
+  Narrowing the default role to tasks (`agent_role.update` with
+  `work_type: "task"`) and deleting it are both *accepted*, and the default is
+  cleared to none. Refusing the role change instead would make editing a role
+  wait on a trip to a different setting; the default only ever names a
+  preselection, so losing it costs one pick in the create form.
+
+The field keeps its name, `default_agent_role_id`: it is stored in every
+existing `settings.json` and sent by every client, and a renamed key would be
+silently dropped by both decoders, quietly resetting the default. What changed is
+which roles it may name, and that lives here.
+
+Readers still treat a stored default that cannot run stories as no default — the
+web client's `resolveInitialRole` filters by `roleAcceptsWorkType`
+([agent-roles-ui.md §8](../agent-roles-ui.md#8-which-kind-of-work-a-role-runs))
+— because a hand-edited file can still produce one. A client that does not has
+the create refused by the server, visibly, rather than accepted.
 
 ## Hierarchy
 

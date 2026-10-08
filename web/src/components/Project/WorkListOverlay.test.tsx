@@ -14,7 +14,7 @@ vi.mock("../../hooks/useRouteState", () => ({
 
 // The sheet has its own tests; here it stands for "the create flow answered
 // with an id", which is the wiring this screen owns.
-vi.mock("./CreateWorkSheet", () => ({
+vi.mock("./CreateStorySheet", () => ({
 	default: ({ onCreated }: { onCreated: (workId: string) => void }) => (
 		<button type="button" onClick={() => onCreated("new-work")}>
 			Pretend to create

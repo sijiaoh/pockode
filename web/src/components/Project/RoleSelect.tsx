@@ -13,12 +13,8 @@ type Props = Omit<
 	onChange: (roleId: string) => void;
 	/** Offers `""` as a choice under this label; omit it to offer no empty choice. */
 	emptyLabel?: string;
-	/**
-	 * The kind of work the role is for: only roles that take it are offered.
-	 * Omit it where the choice applies to both kinds (the default role), and
-	 * every role is offered with its restriction written beside it instead.
-	 */
-	workType?: WorkType;
+	/** The kind of work the role is for: only roles that take it are offered. */
+	workType: WorkType;
 };
 
 const labelWithSuffix = (role: AgentRole) => {
@@ -50,9 +46,9 @@ export default function RoleSelect({
 	// A stored role that cannot take this kind is still the stored one — the
 	// server keeps assignments made before the restriction — so it stays, named
 	// with the reason it would not be offered.
-	const options = workType
-		? roles.filter((r) => r === current || roleAcceptsWorkType(r, workType))
-		: roles;
+	const options = roles.filter(
+		(r) => r === current || roleAcceptsWorkType(r, workType),
+	);
 
 	return (
 		<select
@@ -65,7 +61,7 @@ export default function RoleSelect({
 			{isDangling && <option value={value}>Unknown role</option>}
 			{options.map((role) => (
 				<option key={role.id} value={role.id}>
-					{workType && roleAcceptsWorkType(role, workType)
+					{roleAcceptsWorkType(role, workType)
 						? role.name
 						: labelWithSuffix(role)}
 				</option>

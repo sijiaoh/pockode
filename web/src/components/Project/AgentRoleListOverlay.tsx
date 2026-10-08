@@ -1,5 +1,5 @@
 import { ConfirmDialog } from "@pockode/shared";
-import { AlertCircle, Loader2, Plus, Star } from "lucide-react";
+import { AlertCircle, ChevronRight, Loader2, Plus } from "lucide-react";
 import { type ReactNode, useCallback, useId, useState } from "react";
 import { useGlobalSettingsStatus } from "../../hooks/useGlobalSettingsStatus";
 import { describeEngine } from "../../lib/agentOptions";
@@ -9,17 +9,24 @@ import {
 } from "../../lib/agentOptionsStore";
 import { useAgentRoleStore } from "../../lib/agentRoleStore";
 import { getAgentLabel } from "../../lib/agentType";
-import { resolveInitialRole } from "../../lib/initialRole";
-import { roleAcceptsWorkType, workTypeSuffix } from "../../lib/roleWorkType";
+import { isDefaultStoryRole, resolveInitialRole } from "../../lib/initialRole";
+import { markdownExcerpt } from "../../lib/markdownExcerpt";
+import {
+	RUNS_CHOICES,
+	type RunsChoice,
+	roleAcceptsWorkType,
+} from "../../lib/roleWorkType";
 import { useSettingsStore } from "../../lib/settingsStore";
-import { type ValueState, waitingLabel } from "../../lib/valueState";
 import { useWSStore } from "../../lib/wsStore";
 import type { AgentRole } from "../../types/agentRole";
-import type { WorkType } from "../../types/work";
+import { countOf } from "../../utils/plural";
 import PageHeader from "../Layout/PageHeader";
-import { inputClass } from "../ui/inputClass";
+import BottomActionBar from "../ui/BottomActionBar";
+import ListGroupHeading from "../ui/ListGroupHeading";
 import SettingsLoadError from "../ui/SettingsLoadError";
 import Skeleton from "../ui/Skeleton";
+import Tag from "../ui/Tag";
+import CreateAgentRoleSheet from "./CreateAgentRoleSheet";
 import RoleSelect from "./RoleSelect";
 
 interface Props {
@@ -27,27 +34,18 @@ interface Props {
 	onOpenAgentRoleDetail: (roleId: string) => void;
 }
 
-/** `1 step` / `2 steps`, written out rather than left as `step(s)`. */
-const count = (n: number, noun: string) => `${n} ${noun}${n === 1 ? "" : "s"}`;
+const GROUP_LABEL: Record<RunsChoice, string> = {
+	story: "Story roles",
+	task: "Task roles",
+	"": "Story & task roles",
+};
 
 /**
- * Two waits, one control: the settings snapshot says which role is the default,
- * the subscription says which roles exist, and the footer's field needs both.
- * The less certain of the two wins — a value that is never coming must not
- * pulse as though it were on its way.
- */
-function combineStates(a: ValueState, b: ValueState): ValueState {
-	if (a === "unavailable" || b === "unavailable") return "unavailable";
-	if (a === "pending" || b === "pending") return "pending";
-	return "known";
-}
-
-/**
- * Every agent role as a card, and — in the footer, outside the scroll region —
- * the three things that are about the set of roles rather than about one of
- * them: which one is the default, adding one, and putting them all back. The
- * footer sits outside the list so that a user who has deleted every role still
- * has Reset to defaults on screen.
+ * Every agent role, grouped by what it runs, under the one setting that is
+ * about the set of them: which role new stories start with. Creating is the
+ * frequent action and sits where `New Story` does on the project page;
+ * putting every role back is the rare, destructive one and sits at the end of
+ * the list.
  *
  * Every slot, control and placeholder here is argued for in
  * docs/agent-roles-ui.md.
@@ -64,40 +62,18 @@ export default function AgentRoleListOverlay({
 	const defaultRoleId = useSettingsStore(
 		(s) => s.settings?.default_agent_role_id ?? "",
 	);
-	const updateSettings = useWSStore((s) => s.actions.updateSettings);
-	// Only the stars and the footer's default role field wait on the settings
-	// snapshot. The list itself comes from the agent role subscription, a
-	// separate wait with its own loading and error states, so everything else
-	// here stays usable.
+	// Only the default story role waits on the settings snapshot. The list
+	// itself comes from the agent role subscription, a separate wait with its
+	// own loading and error states, so everything else here stays usable.
 	const { valueState } = useGlobalSettingsStatus();
 
-	const listState: ValueState = error
-		? "unavailable"
-		: isLoading
-			? "pending"
-			: "known";
-
-	const [defaultRoleError, setDefaultRoleError] = useState<string | null>(null);
-
-	const setDefaultRole = useCallback(
-		async (roleId: string) => {
-			setDefaultRoleError(null);
-			try {
-				await updateSettings({ default_agent_role_id: roleId });
-			} catch (err) {
-				setDefaultRoleError(
-					err instanceof Error ? err.message : "Failed to update default role",
-				);
-			}
+	const [creating, setCreating] = useState(false);
+	const handleCreated = useCallback(
+		(roleId: string) => {
+			setCreating(false);
+			onOpenAgentRoleDetail(roleId);
 		},
-		[updateSettings],
-	);
-
-	// The star toggles; the footer's field selects. Both write the same setting
-	// and both read it straight back, so the two can never disagree on screen.
-	const handleToggleDefault = useCallback(
-		(roleId: string) => setDefaultRole(defaultRoleId === roleId ? "" : roleId),
-		[defaultRoleId, setDefaultRole],
+		[onOpenAgentRoleDetail],
 	);
 
 	const resetAgentRoleDefaults = useWSStore(
@@ -119,101 +95,138 @@ export default function AgentRoleListOverlay({
 		}
 	}, [resetAgentRoleDefaults]);
 
+	const groups = RUNS_CHOICES.map((runs) => ({
+		runs,
+		rows: roles.filter((r) => (r.work_type ?? "") === runs),
+	})).filter((g) => g.rows.length > 0);
+
+	// Only a snapshot that has arrived may mark a row: before it, no row is the
+	// default as far as anything on screen knows, and a guess would be the
+	// reassuring one.
+	const isMarkedDefault = (role: AgentRole) =>
+		valueState === "known" && isDefaultStoryRole(role, defaultRoleId);
+
 	return (
 		<div className="flex min-h-0 flex-1 flex-col">
-			{/* Navigation only: the one control that was up here acted on the whole
-			    set of roles, and that is what the footer is for. */}
 			<PageHeader back={{ to: "chat", onClick: onBack }} title="Agent Roles" />
 
-			{/* The snapshot the stars and the footer field wait on, not the list. */}
-			<SettingsLoadError className="px-3 py-1.5" />
-
-			<div className="min-h-0 flex-1 overflow-auto p-2">
-				{isLoading ? (
-					<div className="flex items-center justify-center py-8">
-						<Loader2 className="size-5 animate-spin text-th-text-muted" />
-					</div>
-				) : error ? (
-					<div className="flex flex-col items-center gap-2 py-8 text-center text-sm text-th-error">
-						<AlertCircle className="size-5" />
-						<p>{error}</p>
-					</div>
-				) : roles.length === 0 ? (
-					// Reachable exactly one way — the user deleted the last role — so
-					// the way back is worth naming: the store seeds the defaults
-					// whenever it starts out empty.
-					<div className="space-y-1 py-8 text-center text-sm">
-						<p className="text-th-text-secondary">No agent roles yet</p>
-						<p className="text-th-text-muted">
-							Add one below, or reset to the defaults.
-						</p>
-					</div>
-				) : (
-					// Space, not a border or a fill, is what separates one card from the
-					// next: the card's own fill is worth ~1.05 against this page
-					// (docs/project-ui.md §3).
-					<div className="space-y-2">
-						{roles.map((role) => (
-							<RoleRow
-								key={role.id}
-								role={role}
-								workRefCount={workRefCounts[role.id] ?? 0}
-								isDefault={role.id === defaultRoleId}
-								defaultState={valueState}
-								onToggleDefault={handleToggleDefault}
-								onOpenDetail={onOpenAgentRoleDetail}
+			{/* No padding on the scroller itself: the group headings pin to its
+			    padding edge, and rows would show through the strip above them. */}
+			<div className="min-h-0 flex-1 overflow-auto">
+				<div className="mx-auto max-w-2xl px-4 py-4">
+					{isLoading ? (
+						<div className="flex items-center justify-center py-8">
+							<Loader2 className="size-5 animate-spin text-th-text-muted" />
+						</div>
+					) : error ? (
+						<div className="flex flex-col items-center gap-2 py-8 text-center text-sm text-th-error">
+							<AlertCircle className="size-5" />
+							<p>{error}</p>
+						</div>
+					) : roles.length === 0 ? (
+						// Reachable exactly one way — the user deleted the last role — so
+						// both ways back are named, and the reset is offered right here.
+						<div className="space-y-1 py-8 text-center text-sm">
+							<p className="text-th-text-secondary">No agent roles</p>
+							<p className="text-th-text-muted">
+								Create one with the button below, or reset to the built-in
+								roles.
+							</p>
+							<button
+								type="button"
+								onClick={() => setShowReset(true)}
+								className="mt-3 inline-flex min-h-[44px] items-center rounded-lg bg-th-bg-tertiary px-4 text-sm text-th-text-primary hover:opacity-90"
+							>
+								Reset to defaults
+							</button>
+						</div>
+					) : (
+						<>
+							<DefaultStoryRoleField
+								roles={roles}
+								defaultRoleId={defaultRoleId}
 							/>
-						))}
-					</div>
-				)}
+
+							<div className="mt-6 space-y-4">
+								{groups.map(({ runs, rows }) => (
+									<section key={runs || "both"}>
+										<ListGroupHeading
+											label={GROUP_LABEL[runs]}
+											count={rows.length}
+										/>
+										{/* Space, not a border or a fill, is what separates one
+										    card from the next: the card's own fill is worth
+										    ~1.05 against this page (docs/project-ui.md §3). */}
+										<div className="space-y-2">
+											{rows.map((role) => (
+												<RoleRow
+													key={role.id}
+													role={role}
+													workRefCount={workRefCounts[role.id] ?? 0}
+													isDefault={isMarkedDefault(role)}
+													onOpenDetail={onOpenAgentRoleDetail}
+												/>
+											))}
+										</div>
+									</section>
+								))}
+							</div>
+
+							<div className="mt-6 border-t border-th-border pt-4">
+								<button
+									type="button"
+									onClick={() => setShowReset(true)}
+									// No icon and muted rather than error-coloured: `text-th-error`
+									// fails AA 4.5 in the five light themes (docs/project-ui.md §3
+									// measures it), so red would say nothing in half of them, and
+									// the confirm dialog is what carries the weight of a
+									// destructive action.
+									className="flex min-h-[44px] w-full items-center rounded-lg px-3 text-sm text-th-text-muted hover:bg-th-bg-tertiary hover:text-th-text-primary"
+								>
+									Reset to defaults
+								</button>
+								<p className="px-3 text-xs text-th-text-muted">
+									Replaces every role with the built-in set.
+								</p>
+							</div>
+						</>
+					)}
+
+					{/* Outside every branch above: a reset in flight when the socket
+					    drops takes the list back to loading, and the button that raised
+					    this with it — leaving the failure with nowhere to be read. */}
+					{resetError && (
+						<p className="px-3 py-1 text-xs text-th-error" role="alert">
+							{resetError}
+						</p>
+					)}
+				</div>
 			</div>
 
-			<div className="border-t border-th-border p-2">
-				<DefaultRoleField
-					roles={roles}
-					defaultRoleId={defaultRoleId}
-					valueState={combineStates(valueState, listState)}
-					onSelect={setDefaultRole}
-					error={defaultRoleError}
+			{/* Usable while the list loads or fails, as `New Story` is: creating does
+			    not depend on the list, and a failure is reported in the sheet. */}
+			<BottomActionBar>
+				<button
+					type="button"
+					onClick={() => setCreating(true)}
+					className="mx-auto flex min-h-[44px] w-full max-w-2xl items-center justify-center gap-2 rounded-lg bg-th-accent text-sm font-medium text-th-accent-text"
+				>
+					<Plus className="size-4" />
+					New Role
+				</button>
+			</BottomActionBar>
+
+			{creating && (
+				<CreateAgentRoleSheet
+					onClose={() => setCreating(false)}
+					onCreated={handleCreated}
 				/>
-
-				{/* Both act on a list that is not on screen — Reset especially, which
-				    would overwrite roles the user cannot see. The scroll region above
-				    already says why they are gone, so this is not a control dimmed
-				    without a reason. */}
-				{listState === "known" && (
-					<>
-						<CreateRoleButton />
-						<button
-							type="button"
-							onClick={() => setShowReset(true)}
-							// No icon, and that absence is the step down from Add Role
-							// above it. Muted rather than error-coloured: `text-th-error`
-							// fails AA 4.5 in the five light themes (docs/project-ui.md §3
-							// measures it), so red would say nothing in half of them, and
-							// the confirm dialog is what carries the weight of a
-							// destructive action.
-							className="mt-1 flex min-h-[44px] w-full items-center rounded-lg px-3 text-sm text-th-text-muted hover:bg-th-bg-tertiary hover:text-th-text-primary"
-						>
-							Reset to defaults
-						</button>
-					</>
-				)}
-
-				{/* Outside the gate above: a reset in flight when the socket drops
-				    takes the list back to loading, and the button that raised this
-				    with it — leaving the failure with nowhere to be read. */}
-				{resetError && (
-					<p className="px-3 py-1 text-xs text-th-error" role="alert">
-						{resetError}
-					</p>
-				)}
-			</div>
+			)}
 
 			{showReset && (
 				<ConfirmDialog
 					title="Reset agent roles"
-					message="Reset all roles to defaults? Your customizations will be lost."
+					message="Replace every role with the built-in set? Custom roles and edits will be lost."
 					confirmLabel="Reset"
 					variant="danger"
 					onConfirm={handleReset}
@@ -225,126 +238,113 @@ export default function AgentRoleListOverlay({
 }
 
 /**
- * The only place the default role is written out as words, and the only way to
- * reach "None" — a star can clear the default, but no row then says that there
- * is none.
+ * The only control for the default story role. It offers only roles that run
+ * stories: the server refuses any other as the default.
  */
-function DefaultRoleField({
+function DefaultStoryRoleField({
 	roles,
 	defaultRoleId,
-	valueState,
-	onSelect,
-	error,
 }: {
 	roles: AgentRole[];
 	defaultRoleId: string;
-	valueState: ValueState;
-	onSelect: (roleId: string) => void;
-	error: string | null;
 }) {
 	const fieldId = useId();
+	const updateSettings = useWSStore((s) => s.actions.updateSettings);
+	const { valueState } = useGlobalSettingsStatus();
+	const [error, setError] = useState<string | null>(null);
 
-	// What `CreateWorkSheet` will actually do, asked rather than restated — the
-	// sentence below is a description of that form's behaviour, so it has to
-	// come from the same rule the form preselects with.
-	//
-	// With no roles at all it says nothing: that form does not ask which role to
-	// use there, it refuses and sends the user back here, and the empty list
-	// above has already said so in the place the user is looking.
-	const sentence =
-		roles.length === 0 ? null : describeNewWork(roles, defaultRoleId);
+	const select = useCallback(
+		async (roleId: string) => {
+			setError(null);
+			try {
+				await updateSettings({ default_agent_role_id: roleId });
+			} catch (err) {
+				setError(
+					err instanceof Error
+						? err.message
+						: "Failed to update default story role",
+				);
+			}
+		},
+		[updateSettings],
+	);
+
+	const runsStories = roles.some((r) => roleAcceptsWorkType(r, "story"));
 
 	return (
-		<div className="space-y-1.5 px-1 pb-1">
-			<label htmlFor={fieldId} className="block text-sm text-th-text-primary">
-				Default role
-			</label>
+		<section className="space-y-1.5">
+			<h2 className="text-xs uppercase tracking-wider text-th-text-muted">
+				<label htmlFor={fieldId}>Default story role</label>
+			</h2>
+			{/* The snapshot this field waits on, not the list. */}
+			<SettingsLoadError />
 			{valueState === "known" ? (
 				<>
 					<RoleSelect
 						id={fieldId}
 						value={defaultRoleId}
-						onChange={onSelect}
+						onChange={select}
 						emptyLabel="None"
+						workType="story"
+						disabled={!runsStories}
 					/>
-					{sentence && <p className="text-xs text-th-text-muted">{sentence}</p>}
+					<p className="text-xs text-th-text-muted">
+						{describeNewStory(roles, defaultRoleId)}
+					</p>
 				</>
 			) : (
-				// Never "None" first: that says there is no default role, and the
-				// user may well have one.
-				<Skeleton
-					className="h-11 w-full rounded-lg"
-					animated={valueState === "pending"}
-					label={waitingLabel("Default role", valueState)}
-				/>
+				valueState === "pending" && (
+					// Never "None" first: that says there is no default story role, and
+					// the user may well have one.
+					<>
+						<Skeleton
+							className="h-11 w-full rounded-lg"
+							label="Default story role: loading"
+						/>
+						<Skeleton className="h-3 w-2/3 rounded" />
+					</>
+				)
 			)}
-			{/* Every failure to change the default lands here, whichever control
-			    caused it: this is the one place on screen that says in words what
-			    the default currently is, and it never scrolls away. */}
 			{error && (
 				<p className="text-xs text-th-error" role="alert">
 					{error}
 				</p>
 			)}
-		</div>
+		</section>
 	);
 }
 
-type NewWorkOutcome =
-	| { kind: "default" | "ask" | "none"; name?: undefined }
-	| { kind: "only"; name: string };
-
 /**
- * What a new story and a new task start with, as one sentence when the two
- * agree and two when they do not. They differ whenever the default role is
- * restricted to one kind — after a reset, the default takes stories only.
+ * What a new story starts with, in words. It describes `CreateStorySheet`'s
+ * behaviour, so it asks the rule that form preselects with rather than
+ * restating it. Called only with at least one role: with none, that form
+ * refuses outright, and the empty list has already said so.
  */
-function describeNewWork(roles: AgentRole[], defaultRoleId: string): string {
-	const outcome = (type: WorkType): NewWorkOutcome => {
-		const initial = resolveInitialRole(roles, defaultRoleId, type);
-		if (initial && initial === defaultRoleId) return { kind: "default" };
-		if (initial)
-			return {
-				kind: "only",
-				name: roles.find((r) => r.id === initial)?.name ?? "",
-			};
-		return roles.some((r) => roleAcceptsWorkType(r, type))
-			? { kind: "ask" }
-			: { kind: "none" };
-	};
-	const story = outcome("story");
-	const task = outcome("task");
-
-	if (story.kind === task.kind && story.name === task.name) {
-		switch (story.kind) {
-			case "default":
-				return "New stories and tasks start with this role.";
-			case "only":
-				return `New stories and tasks use ${story.name}, the only role.`;
-			default:
-				return "New stories and tasks ask which role to use.";
-		}
+function describeNewStory(roles: AgentRole[], defaultRoleId: string): string {
+	const initial = resolveInitialRole(roles, defaultRoleId);
+	if (initial && initial === defaultRoleId)
+		return "New stories start with this role.";
+	if (initial) {
+		const name = roles.find((r) => r.id === initial)?.name ?? "";
+		return `New stories use ${name}, the only role that runs stories.`;
 	}
-
-	const fragment = (o: NewWorkOutcome) => {
-		switch (o.kind) {
-			case "default":
-				return "start with this role";
-			case "only":
-				return `use ${o.name}, the only role that takes them`;
-			case "ask":
-				return "ask which role to use";
-			default:
-				return "have no role that takes them";
-		}
-	};
-	return `New stories ${fragment(story)}. New tasks ${fragment(task)}.`;
+	if (!roles.some((r) => roleAcceptsWorkType(r, "story")))
+		return "No role runs stories. Set a role to run Stories (or Both), or add one.";
+	if (defaultRoleId) {
+		// Both from a settings file edited by hand: the server clears the default
+		// whenever a role stops running stories or is deleted.
+		const stored = roles.find((r) => r.id === defaultRoleId);
+		if (!stored)
+			return "The saved default no longer exists. New stories ask which role to use.";
+		return `${stored.name} can't run stories, so new stories ignore it. Pick a story role.`;
+	}
+	return "New stories ask which role to use.";
 }
 
 /**
- * One role as a card: line 1 is its name and whether it is the default, line 2
- * is what is true of it. The engine is on every row unconditionally, so every
- * card is exactly two lines tall and the list keeps one rhythm.
+ * One role as a card: its name, what it is for (the first line of its
+ * prompt), and what is true of it. The group heading already says what it
+ * runs, so the card does not repeat it.
  *
  * Deliberately without `WorkRow`'s 2px left edge: that edge carries a work's
  * state as hue, and a role has no state — a permanently neutral channel is a
@@ -354,17 +354,12 @@ function RoleRow({
 	role,
 	workRefCount,
 	isDefault,
-	defaultState,
-	onToggleDefault,
 	onOpenDetail,
 }: {
 	role: AgentRole;
 	/** How many work items name this role; 0 when none do. */
 	workRefCount: number;
 	isDefault: boolean;
-	/** Whether `isDefault` is the stored answer; see the list's own comment. */
-	defaultState: ValueState;
-	onToggleDefault: (roleId: string) => void;
 	onOpenDetail: (roleId: string) => void;
 }) {
 	const models = useModelsForAgent(role.agent_type);
@@ -380,13 +375,12 @@ function RoleRow({
 		efforts,
 		effort: role.effort ?? "",
 	});
+	const excerpt = markdownExcerpt(role.role_prompt);
 
 	// Fixed order, one appearance rule each, and the line clips from the right —
 	// which puts the engine first and the count of other people's work last.
 	// Nothing here is a placeholder: steps ride on the role record and the
-	// reference counts arrive in the same reply the roles do, so a row on screen
-	// already has both. The work type comes before the steps: it decides which
-	// pickers the role appears in at all.
+	// reference counts arrive in the same reply the roles do.
 	const slots: { key: string; node: ReactNode }[] = [
 		{
 			key: "engine",
@@ -401,188 +395,67 @@ function RoleRow({
 			),
 		},
 	];
-	const suffix = workTypeSuffix(role);
-	if (suffix) {
-		slots.push({
-			key: "work-type",
-			node: <span>{suffix.charAt(0).toUpperCase() + suffix.slice(1)}</span>,
-		});
-	}
 	if (role.steps && role.steps.length > 0) {
 		slots.push({
 			key: "steps",
-			node: <span>{count(role.steps.length, "step")}</span>,
+			node: <span>{countOf(role.steps.length, "step")}</span>,
 		});
 	}
 	if (workRefCount > 0) {
 		slots.push({
 			key: "refs",
-			node: <span>{count(workRefCount, "work item")}</span>,
+			node: <span>{countOf(workRefCount, "work item")}</span>,
 		});
 	}
 
 	return (
-		<div className="relative rounded-lg border border-th-border bg-th-bg-secondary px-2 hover:bg-th-bg-tertiary">
-			<div className="flex min-h-[44px] items-center gap-2">
-				{/* The page's `h1` is the only heading above this and there are no
-				    group headings between, so the rows are its children. */}
-				<h2 className="min-w-0 flex-1 text-sm font-normal">
-					{/* The whole card is the tap target — the overlay reaches the
-					    padding and line 2, growing with the card — while staying one
-					    button a keyboard can reach; the star lifts itself above it.
-					    The height is stated as well as covered: the overlay is the
-					    `::after` box and not this one, so it is the `min-h` that
-					    answers to the floors in docs/responsive-ui.md. */}
-					<button
-						type="button"
-						onClick={() => onOpenDetail(role.id)}
-						className="flex min-h-[44px] w-full items-center text-left text-sm text-th-text-primary after:absolute after:inset-0 after:content-[''] hover:text-th-accent"
-						aria-label={`${role.name} — ${engine.text}`}
-					>
-						<span className="truncate">{role.name}</span>
-					</button>
-				</h2>
-				{/* At the end of the line, where this project's row controls live; a
-				    leading position in that idiom belongs to decorative glyphs. It
-				    also makes DOM order the tab order: name, then star. */}
-				<div className="relative z-10 shrink-0">
-					<button
-						type="button"
-						onClick={() => onToggleDefault(role.id)}
-						disabled={defaultState !== "known"}
-						className="flex min-h-[44px] min-w-[44px] items-center justify-center disabled:pointer-events-none disabled:opacity-50"
-						// Named with the role, waiting or not: a column of
-						// identically-worded controls is a column a screen reader cannot
-						// tell apart, and there are as many of these as there are rows
-						// while the snapshot is still out.
-						aria-label={
-							defaultState !== "known"
-								? waitingLabel(`Default role for "${role.name}"`, defaultState)
-								: isDefault
-									? `Unset "${role.name}" as the default role`
-									: `Set "${role.name}" as the default role`
-						}
-						// No `aria-pressed` while waiting: `false` is as much a claim
-						// about the default role as `true` is.
-						aria-pressed={defaultState === "known" ? isDefault : undefined}
-						aria-busy={defaultState === "pending"}
-					>
-						{defaultState === "known" ? (
-							<Star
-								className={`size-4 ${isDefault ? "fill-th-accent text-th-accent" : "text-th-text-muted"}`}
-							/>
-						) : (
-							<Skeleton
-								className="size-4 rounded-full"
-								animated={defaultState === "pending"}
-							/>
-						)}
-					</button>
-				</div>
-			</div>
-
-			{/* No negative margins: every slot here is plain text with no focus ring
-			    to leave room for. */}
-			<div className="flex items-center gap-1.5 overflow-hidden whitespace-nowrap pb-1 text-xs text-th-text-muted">
-				{slots.map((slot, i) => (
-					// The separator belongs to the slot that follows it, so a slot that
-					// is absent takes its separator with it.
-					<span key={slot.key} className="flex shrink-0 items-center gap-1.5">
-						{i > 0 && <span aria-hidden="true">&middot;</span>}
-						{slot.node}
+		// One button and nothing else in the card, so it is read as it is drawn:
+		// name, tag, what it is for, what is true of it. Spans only — a button
+		// holds phrasing content — with a spoken comma wherever a line break or
+		// a drawn separator is all that parts two runs of text.
+		<button
+			type="button"
+			onClick={() => onOpenDetail(role.id)}
+			className="flex min-h-[44px] w-full items-center gap-2 rounded-lg border border-th-border bg-th-bg-secondary px-3 py-2 text-left hover:bg-th-bg-tertiary focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent"
+		>
+			<span className="block min-w-0 flex-1 space-y-0.5">
+				<span className="flex items-center text-sm text-th-text-primary">
+					<span className="truncate">{role.name}</span>
+					{isDefault && <Tag label="Default" srSuffix=" story role" />}
+				</span>
+				<span className="sr-only">, </span>
+				{excerpt ? (
+					<span className="block truncate text-xs text-th-text-secondary">
+						{excerpt}
 					</span>
-				))}
-			</div>
-		</div>
-	);
-}
-
-function CreateRoleButton() {
-	const [isCreating, setIsCreating] = useState(false);
-	const [name, setName] = useState("");
-	const [error, setError] = useState<string | null>(null);
-	const [isSubmitting, setIsSubmitting] = useState(false);
-	const createAgentRole = useWSStore((s) => s.actions.createAgentRole);
-
-	const handleSubmit = useCallback(
-		async (e: React.FormEvent) => {
-			e.preventDefault();
-			const trimmed = name.trim();
-			if (!trimmed || isSubmitting) return;
-
-			setError(null);
-			setIsSubmitting(true);
-			try {
-				await createAgentRole({ name: trimmed, role_prompt: "" });
-				setName("");
-				setIsCreating(false);
-			} catch (err) {
-				setError(err instanceof Error ? err.message : "Failed to create role");
-			} finally {
-				setIsSubmitting(false);
-			}
-		},
-		[name, createAgentRole, isSubmitting],
-	);
-
-	if (!isCreating) {
-		return (
-			<button
-				type="button"
-				onClick={() => setIsCreating(true)}
-				className="flex min-h-[44px] w-full items-center gap-2 rounded-lg px-3 text-sm text-th-text-muted hover:bg-th-bg-tertiary hover:text-th-text-primary"
-			>
-				<Plus className="size-4" />
-				Add Role
-			</button>
-		);
-	}
-
-	return (
-		<div className="rounded-lg bg-th-bg-secondary p-3">
-			<form onSubmit={handleSubmit} className="space-y-2">
-				<input
-					type="text"
-					value={name}
-					onChange={(e) => setName(e.target.value)}
-					placeholder="Role name"
-					className={`min-h-[44px] w-full rounded-lg bg-th-bg-primary px-3 py-2 text-sm text-th-text-primary placeholder:text-th-text-muted ${inputClass}`}
-					// biome-ignore lint/a11y/noAutofocus: inline creation form
-					autoFocus
-					onKeyDown={(e) => {
-						if (e.key === "Escape") {
-							setIsCreating(false);
-							setName("");
-							setError(null);
-						}
-					}}
-				/>
-				<div className="flex gap-2">
-					<button
-						type="submit"
-						disabled={!name.trim() || isSubmitting}
-						className="min-h-[44px] flex-1 rounded-lg bg-th-accent px-3 text-sm font-medium text-th-accent-text disabled:opacity-50"
-					>
-						{isSubmitting ? "Adding..." : "Add"}
-					</button>
-					<button
-						type="button"
-						onClick={() => {
-							setIsCreating(false);
-							setName("");
-							setError(null);
-						}}
-						className="min-h-[44px] rounded-lg px-3 text-sm text-th-text-muted hover:bg-th-bg-tertiary"
-					>
-						Cancel
-					</button>
-				</div>
-			</form>
-			{error && (
-				<p className="mt-2 text-xs text-th-error" role="alert">
-					{error}
-				</p>
-			)}
-		</div>
+				) : (
+					// A gap the user has to fill in, so it is shown rather than
+					// collapsed away.
+					<span className="block text-xs italic text-th-text-muted">
+						No role prompt
+					</span>
+				)}
+				<span className="sr-only">, </span>
+				<span className="flex items-center gap-1.5 overflow-hidden whitespace-nowrap text-xs text-th-text-muted">
+					{slots.map((slot, i) => (
+						// The separator belongs to the slot that follows it, so a slot
+						// that is absent takes its separator with it.
+						<span key={slot.key} className="flex shrink-0 items-center gap-1.5">
+							{i > 0 && (
+								<>
+									<span aria-hidden="true">&middot;</span>
+									<span className="sr-only">, </span>
+								</>
+							)}
+							{slot.node}
+						</span>
+					))}
+				</span>
+			</span>
+			<ChevronRight
+				className="size-4 shrink-0 text-th-text-muted"
+				aria-hidden="true"
+			/>
+		</button>
 	);
 }

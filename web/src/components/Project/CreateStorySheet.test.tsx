@@ -5,7 +5,7 @@ import { useAgentRoleStore } from "../../lib/agentRoleStore";
 import { useSettingsStore } from "../../lib/settingsStore";
 import type { AgentRole } from "../../types/agentRole";
 import type { Work } from "../../types/work";
-import CreateWorkSheet from "./CreateWorkSheet";
+import CreateStorySheet from "./CreateStorySheet";
 
 const createWork = vi.fn();
 
@@ -44,18 +44,11 @@ function setRoles(roles: AgentRole[]) {
 }
 
 function renderSheet(
-	props: Partial<React.ComponentProps<typeof CreateWorkSheet>> = {},
+	props: Partial<React.ComponentProps<typeof CreateStorySheet>> = {},
 ) {
 	const onClose = props.onClose ?? vi.fn();
 	const onCreated = props.onCreated ?? vi.fn();
-	render(
-		<CreateWorkSheet
-			type={props.type ?? "story"}
-			storyId={props.storyId}
-			onClose={onClose}
-			onCreated={onCreated}
-		/>,
-	);
+	render(<CreateStorySheet onClose={onClose} onCreated={onCreated} />);
 	return { onClose, onCreated };
 }
 
@@ -65,7 +58,7 @@ async function submitTitle(title: string) {
 	await user.click(screen.getByRole("button", { name: "Create" }));
 }
 
-describe("CreateWorkSheet", () => {
+describe("CreateStorySheet", () => {
 	beforeEach(() => {
 		createWork.mockReset();
 		useSettingsStore.setState({ settings: null, error: null });
@@ -78,27 +71,12 @@ describe("CreateWorkSheet", () => {
 
 		await submitTitle("Rebuild the project page");
 
+		// No `story_id`: that would ask for a task, which only an agent makes.
 		expect(createWork).toHaveBeenCalledWith({
-			story_id: undefined,
 			agent_role_id: "role-1",
 			title: "Rebuild the project page",
 		});
 		expect(onCreated).toHaveBeenCalledWith("work-9");
-	});
-
-	// The story is the whole of the request's shape: no `type` rides beside it,
-	// so the sheet cannot ask for a kind that contradicts the story it was
-	// opened from.
-	it("creates a task under the story that opened it", async () => {
-		createWork.mockResolvedValue(created("task-2"));
-		renderSheet({ type: "task", storyId: "story-1" });
-
-		await submitTitle("Wire the bottom bar");
-
-		expect(createWork).toHaveBeenCalledWith(
-			expect.objectContaining({ story_id: "story-1" }),
-		);
-		expect(createWork.mock.calls[0][0]).not.toHaveProperty("type");
 	});
 
 	// The one thing the user would have to retype is the one thing the server
@@ -162,30 +140,30 @@ describe("CreateWorkSheet", () => {
 		expect(screen.getByLabelText("Role")).toHaveValue("role-2");
 	});
 
-	describe("for a kind some roles do not take", () => {
-		it("does not preselect a default role that cannot take it", () => {
+	describe("when some roles take tasks only", () => {
+		it("does not preselect a default role that cannot take stories", () => {
 			setRoles([
-				role("pm", "PM", "story"),
 				role("e1", "Engineer", "task"),
-				role("e2", "Reviewer", "task"),
+				role("pm", "PM"),
+				role("lead", "Lead"),
 			]);
 			useSettingsStore.setState({
-				settings: { default_agent_role_id: "pm" },
+				settings: { default_agent_role_id: "e1" },
 				error: null,
 			});
-			renderSheet({ type: "task", storyId: "story-1" });
+			renderSheet();
 
 			expect(screen.getByLabelText("Role")).toHaveValue("");
 			expect(
-				screen.queryByRole("option", { name: /PM/ }),
+				screen.queryByRole("option", { name: /Engineer/ }),
 			).not.toBeInTheDocument();
 		});
 
-		it("says where to go when no role takes it", () => {
-			setRoles([role("pm", "PM", "story")]);
-			renderSheet({ type: "task", storyId: "story-1" });
+		it("says where to go when no role takes stories", () => {
+			setRoles([role("e1", "Engineer", "task")]);
+			renderSheet();
 
-			expect(screen.getByText("No agent role takes tasks.")).toBeVisible();
+			expect(screen.getByText("No agent role takes stories.")).toBeVisible();
 			expect(screen.queryByLabelText("Title")).not.toBeInTheDocument();
 		});
 
@@ -194,21 +172,21 @@ describe("CreateWorkSheet", () => {
 		it("drops a picked role that stops taking it while open", async () => {
 			const user = userEvent.setup();
 			setRoles([role("e1", "Engineer"), role("e2", "Reviewer")]);
-			renderSheet({ type: "task", storyId: "story-1" });
-			await user.type(screen.getByLabelText("Title"), "Wire the bar");
+			renderSheet();
+			await user.type(screen.getByLabelText("Title"), "Rebuild the page");
 			await user.selectOptions(screen.getByLabelText("Role"), "e1");
 
 			act(() =>
-				setRoles([role("e1", "Engineer", "story"), role("e2", "Reviewer")]),
+				setRoles([role("e1", "Engineer", "task"), role("e2", "Reviewer")]),
 			);
 
-			// The only role left that takes tasks is preselected, as on opening.
+			// The only role left that takes stories is preselected, as on opening.
 			expect(screen.getByLabelText("Role")).toHaveValue("e2");
 			expect(screen.getByRole("button", { name: "Create" })).toBeEnabled();
 
 			act(() =>
 				setRoles([
-					role("e1", "Engineer", "story"),
+					role("e1", "Engineer", "task"),
 					role("e2", "Reviewer"),
 					role("e3", "Tester"),
 				]),
@@ -216,9 +194,9 @@ describe("CreateWorkSheet", () => {
 			await user.selectOptions(screen.getByLabelText("Role"), "e3");
 			act(() =>
 				setRoles([
-					role("e1", "Engineer", "story"),
+					role("e1", "Engineer", "task"),
 					role("e2", "Reviewer"),
-					role("e3", "Tester", "story"),
+					role("e3", "Tester", "task"),
 				]),
 			);
 			expect(screen.getByLabelText("Role")).toHaveValue("e2");

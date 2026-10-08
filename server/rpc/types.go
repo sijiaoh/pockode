@@ -1036,11 +1036,11 @@ type SettingsUpdateParams struct {
 
 // Work namespace
 
-// WorkCreateParams says what to create by naming a story or not naming one:
-// with a story_id the new item is that story's task, without it a story. There
-// is no `type` beside it, so a caller cannot ask for one kind and describe
-// another — the contradiction the server used to have to refuse is not
-// expressible (docs/projects/api.md).
+// WorkCreateParams creates a story — the only kind a person creates. A task is
+// created by its story's agent with MCP task_create, so work.create refuses a
+// StoryID: the field is here to be refused, because dropping it would let
+// unknown-field decoding turn a request for a task into a new story
+// (docs/projects/api.md).
 type WorkCreateParams struct {
 	StoryID     string `json:"story_id,omitempty"`
 	AgentRoleID string `json:"agent_role_id"`
@@ -1095,8 +1095,7 @@ type WorkListItem struct {
 	ID string `json:"id"`
 	// Type is derived from StoryID rather than stored (work.Work.Type), and is
 	// sent because a row draws it: the server derives it once per row instead
-	// of every client doing it per row. Clients read it and never send it —
-	// work.create takes a story_id and nothing else.
+	// of every client doing it per row. Clients read it and never send it.
 	Type        work.WorkType   `json:"type"`
 	StoryID     string          `json:"story_id,omitempty"`
 	AgentRoleID string          `json:"agent_role_id,omitempty"`

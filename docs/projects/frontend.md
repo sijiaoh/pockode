@@ -98,16 +98,15 @@ ProjectTab
   ├── "Project"         → WorkListOverlay
   │                         ├── (tap row)     → WorkDetailOverlay
   │                         │                     ├── (tap task row) → WorkDetailOverlay
-  │                         │                     ├── "Add Task"     → CreateWorkSheet → WorkDetailOverlay
   │                         │                     ├── (row chat icon)→ Chat session
   │                         │                     └── "Open Chat"    → Chat session
   │                         ├── (row chat icon)→ Chat session
-  │                         └── "New Story"   → CreateWorkSheet → WorkDetailOverlay
+  │                         └── "New Story"   → CreateStorySheet → WorkDetailOverlay
   └── "Agent Roles"     → AgentRoleListOverlay
                              └── (tap role) → AgentRoleDetailOverlay
 ```
 
-Creating work always ends on the new item's detail page: `CreateWorkSheet` hands
+Creating a story always ends on its detail page: `CreateStorySheet` hands
 its caller the created `id` and the caller calls the `onOpenWorkDetail` it
 already has. No component routes itself — `AppShell` owns every navigation in
 this app ([project-ui.md §4](../project-ui.md#4-creating-work-lands-you-on-its-detail-page)).
@@ -126,7 +125,7 @@ Activates both `useWorkSubscription` and `useAgentRoleSubscription`.
 2. Inside `Current`, four inert sticky group headings — *Stopped*, *Needs you*, *In progress*, *Not running* — whose membership is the single `rowGroup()` function in the file, and whose order is the single `GROUP_ORDER` constant beside it. Every group is sorted `updated_at` newest first by `lib/workOrder.ts`, which is also the order the server cuts both its caps and the archive's pages along. `Closed` is the archive: closed stories, flat, same order, sorted by the server and never re-sorted here
 3. Every row is `WorkRow` (below). The screen draws no row of its own, nothing expands and no group collapses
 4. Loading, subscription failure and both empty states are the scroll area's; the segmented control and the bottom bar stay usable through all three
-5. A fixed `BottomActionBar` with `New Story`, which opens `CreateWorkSheet`
+5. A fixed `BottomActionBar` with `New Story`, which opens `CreateStorySheet`
 
 **What the screen resolves for its rows**, because a row is given facts rather
 than looking them up: the story's tasks (indexed by `story_id` into a
@@ -187,9 +186,9 @@ Tasks, not an order of its own:
 2. **Title** — Inline-editable (tap pencil icon to enter edit mode)
 3. **Status** — Read-only `ActivityBadge`, with a `WorktreeBadge` alongside it: the worktree binding isn't editable, but the badge is a link that navigates to that worktree's root (shown for both stories and tasks, since a task detail can be opened directly; hidden while neither the work nor its story has started, because only then can the worktree still change). Under them, the `child`-only wait line ([lifecycle-ui.md §6.2](../lifecycle-ui.md#62-detail-page))
 4. **Unanswered questions** — A read-only block, present whenever `pending_questions` is non-empty, with one Answer button into the chat when the work has a session ([lifecycle-ui.md §6.2](../lifecycle-ui.md#62-detail-page))
-5. **Tasks** (story only) — The story's child tasks as `WorkRow`s, the one place a story's tasks are listed, plus an `Add Task` control opening `CreateWorkSheet`. The rows differ from the list's in one slot only: the story name is left off, because every row here is a task of the story on screen. The heading carries `closed/total` and, whenever any child is `active`, an "{n} active" count — the same count that makes a refused `step_done` legible (docs/lifecycle-ui.md §6.2)
+5. **Tasks** (story only) — The story's child tasks as `WorkRow`s, the one place a story's tasks are listed. There is no control to add one: tasks are created by the story's agent with `task_create`, never by hand ([why](../project-ui.md#4-creating-work-lands-you-on-its-detail-page)). The rows differ from the list's in one slot only: the story name is left off, because every row here is a task of the story on screen. The heading carries `closed/total` and, whenever any child is `active`, an "{n} active" count — the same count that makes a refused `step_done` legible (docs/lifecycle-ui.md §6.2)
 6. **Description** — Inline-editable textarea with Markdown rendering. Shown in full in every status: it is the part users read most, and hidden behind one line it would cost a tap every time. The card scrolls wide content (a long code line, a table) sideways itself, since `.code-block` leaves that to an ancestor and the next one up is the whole page
-7. **Role** — Inline-editable `RoleSelect` (tap to switch role), offering only roles that take the work's kind. A kept role that no longer takes it gets a muted line under its name rather than an error ([agent-roles-ui.md §8](../agent-roles-ui.md#8-which-kind-of-work-a-role-takes))
+7. **Role** — Inline-editable `RoleSelect` (tap to switch role), offering only roles that take the work's kind. A kept role that no longer takes it gets a muted line under its name rather than an error ([agent-roles-ui.md §8](../agent-roles-ui.md#8-which-kind-of-work-a-role-runs))
 8. **Steps** — Step progress indicator showing current step position (if agent role has steps defined). Each step's text renders as Markdown, like the role page's copy of it ([lifecycle-ui.md §6.3](../lifecycle-ui.md#63-steplist))
 9. **Usage** — Tokens and cost, this item's own beside the total over it and its tasks, from the same `work.detail` subscription and updating live as its sessions spend ([usage-display-ui.md](../usage-display-ui.md), [aggregation](../code/work-system.md#usage-aggregation))
 10. **Comments** — Loaded via `work.detail.subscribe` (real-time), and read-only: the list is the record agents and the engine write about what happened, and nothing here writes or edits one. A comment carries no author field ([data-model.md](data-model.md#comment)), so an edit would leave nothing to tell a user's wording from the agent's — and the next agent to read the story with `work_comment_list` would take the rewrite as its predecessor's report
@@ -226,26 +225,22 @@ the user has aimed, and what they are about to lose depends on what is happening
 
 The delete button uses a subtle style (`text-th-text-muted`) to avoid accidental taps, switching to red (`text-th-error`) on hover to confirm intent. Confirmation dialog appears before deletion.
 
-### CreateWorkSheet
+### CreateStorySheet
 
-The one creation form, for both a story from the list and a task from a story's
-detail. A shared `Sheet` holding the two fields the server requires — title and
-role — and nothing else: the description is the brief the agent reads, and its
-editor is on the page the user is about to land on.
-
-Which of the two it is creating is the `type` prop, and that prop decides the
-sheet's heading and placeholder and nothing more. It is not sent: the request
-names a `story_id` or names none, and the server reads the kind off that
-([api.md](api.md#method-reference)), so the sheet cannot ask for a kind that
-contradicts the story it was opened from.
+The one creation form, and it creates stories only: tasks are their story
+agent's to create, and `work.create` refuses a `story_id`
+([api.md](api.md#method-reference)). A shared `Sheet` holding the two fields the
+server requires — title and role — and nothing else: the description is the
+brief the agent reads, and its editor is on the page the user is about to land
+on.
 
 It reads the agent-role store as **three** states rather than one, because the
 subscription is app-wide, starts out loading and returns to loading on every
 reconnect: `error` reports the failure, `isLoading` says the roles are still
 arriving, and only an empty list that is neither says "No agent roles
 registered". Telling a user whose roles are in flight that they have none is the
-kind of silent failure the project forbids. A list whose roles all take the other
-kind is a fourth state with its own message ("No agent role takes tasks.").
+kind of silent failure the project forbids. A list whose roles all take tasks
+only is a fourth state with its own message ("No agent role takes stories.").
 
 On failure the sheet stays open with the error under the fields and the typed
 title intact; on success it hands the new `id` to `onCreated` and leaves closing
@@ -256,19 +251,19 @@ it, and releasing early would allow a second work to be created.
 ### RoleSelect
 
 The one control for choosing an agent role, used by all three places that ask
-for one: `CreateWorkSheet`'s Role field, the work detail's Role field, and the
-default-role footer of `AgentRoleListOverlay`. It reads the roles from
+for one: `CreateStorySheet`'s Role field, the work detail's Role field, and the
+default story role field of `AgentRoleListOverlay`. It reads the roles from
 `useAgentRoleStore` itself, so a caller hands it the stored id and an
 `onChange` rather than the list. `emptyLabel` adds a `""` choice under that
-label — the `Select role...` placeholder while nothing is picked, or the footer's
-`None`, which is a real answer there. An id with no role behind it is shown as
+label — the `Select role...` placeholder while nothing is picked, or the
+default story role field's `None`, which is a real answer there. An id with no role behind it is shown as
 `Unknown role`, never as some other role
-([agent-roles-ui.md §7](../agent-roles-ui.md#7-the-default-role-in-words-and-on-a-row)).
-`workType` limits the options to roles that take that kind, keeping a stored
-role that does not as the selected option with its suffix (`PM — stories
-only`); without it — the footer — every role is offered and each restricted one
-carries the suffix
-([agent-roles-ui.md §8](../agent-roles-ui.md#8-which-kind-of-work-a-role-takes)).
+([agent-roles-ui.md §7](../agent-roles-ui.md#7-the-default-story-role-in-words)).
+`workType` is required and limits the options to roles that take that kind —
+`story` for the create sheet and the list's default story role — keeping a
+stored role that does not as the selected option with its suffix (`PM — stories
+only`)
+([agent-roles-ui.md §8](../agent-roles-ui.md#8-which-kind-of-work-a-role-runs)).
 
 ### AgentRoleListOverlay
 
@@ -276,27 +271,31 @@ The architecture of this screen and the detail page below it — what each slot
 holds and why the controls sit where they do — is
 [agent-roles-ui.md](../agent-roles-ui.md); this section describes the components.
 
-Activates `useAgentRoleSubscription`. Each role is a two-line card — name and
-default-role star on the first, then its engine, its work-type restriction, its
-step count and how many work items use it — and the whole card opens the detail
-page. Deleting has one home, at the bottom of that detail page, rather than a
-button per row.
+Activates `useAgentRoleSubscription`. At the top of the scroll region, the
+default story role `RoleSelect` with a line saying what a new story starts with
+(from `resolveInitialRole`, the rule `CreateStorySheet` preselects with). Below
+it the roles, grouped under `ListGroupHeading` by what they run — Story, Task,
+then Story & task roles. Each role is one card, a single button opening the
+detail page: name and a `Default` tag, the first line of its prompt
+(`lib/markdownExcerpt.ts`), then its engine, step count and how many work items
+use it. Deleting has one home, at the bottom of that detail page. Reset to
+defaults closes the scroll region; the empty list offers it too.
 
-Below the list, outside the scroll region so it survives an empty list, a footer
-holds the three things that are about the set of roles rather than one of them:
-the default-role `RoleSelect` with a line saying what a new story and a new task
-would each start with, the inline "Add Role" form (name only; `role_prompt` is
-set to empty string), and Reset to defaults.
+`New Role` sits in a `BottomActionBar` and opens `CreateAgentRoleSheet` (name
+and work type, Tasks preselected; `role_prompt` is empty), which hands the new
+id back so the page navigates to its detail.
 
 ### AgentRoleDetailOverlay
 
 Shows detail for a single agent role:
-- **Name** — Inline-editable
+- **Name** — Inline-editable, with a read-only summary under it (`Default story
+  role` tag, how many work items use it)
+- **Runs** — `Stories` / `Tasks` / `Both`, applied on tap
+  (`AgentRoleWorkTypeField`, drawn with `components/ui/ToggleGroup.tsx`, which
+  Settings' Session section uses too); making the default story role task-only
+  asks first, because the server clears the default along with it
 - **Engine** — Collapsed summary row opening a `ResponsivePanel` with Agent /
   Model / Effort choices (`AgentRoleEngineSelector`)
-- **Work type** — `Both` / `Stories` / `Tasks`, applied on tap
-  (`AgentRoleWorkTypeField`, drawn with `components/ui/ToggleGroup.tsx`, which
-  Settings' Session section uses too)
 - **Role Prompt** — Inline-editable textarea with Markdown rendering
 - **Steps** — Reorderable list editor
 - **Delete** — Confirmation dialog

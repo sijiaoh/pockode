@@ -35,9 +35,9 @@ const REFUSAL =
 const renderOverlay = (onBack = vi.fn()) =>
 	render(<AgentRoleDetailOverlay roleId="r1" onBack={onBack} />);
 
-/** Delete Role, then the dialog's own Delete. */
+/** Delete role, then the dialog's own Delete. */
 async function attemptDelete(user: ReturnType<typeof userEvent.setup>) {
-	await user.click(screen.getByRole("button", { name: "Delete Role" }));
+	await user.click(screen.getByRole("button", { name: "Delete role" }));
 	await user.click(screen.getByRole("button", { name: "Delete" }));
 }
 
@@ -70,6 +70,46 @@ it("is headed Agent Role, with the way back to the list", async () => {
 	expect(onBack).toHaveBeenCalled();
 });
 
+// The list starts out loading and goes back to loading on every reconnect.
+it("waits for the list rather than saying the role is not there", () => {
+	useAgentRoleStore.setState({ roles: [], isLoading: true });
+	const { rerender } = renderOverlay();
+
+	expect(screen.getByRole("status")).toHaveAccessibleName(
+		"Agent role: loading",
+	);
+	expect(screen.queryByText("Agent role not found")).not.toBeInTheDocument();
+
+	useAgentRoleStore.setState({ isLoading: false });
+	rerender(<AgentRoleDetailOverlay roleId="r1" onBack={vi.fn()} />);
+	expect(screen.getByText("Agent role not found")).toBeInTheDocument();
+});
+
+describe("the summary under the name", () => {
+	it("says the role is the default story role and how much uses it", () => {
+		useSettingsStore.setState({ settings: { default_agent_role_id: "r1" } });
+		useAgentRoleStore.setState({ workRefCounts: { r1: 12 } });
+		renderOverlay();
+
+		expect(screen.getByText("Default story role")).toBeInTheDocument();
+		expect(screen.getByText("Used by 12 work items")).toBeInTheDocument();
+	});
+
+	// Before the snapshot nothing is known about the default, and a task-only
+	// role a stale file names is no default at all.
+	it("claims no default it cannot stand behind", () => {
+		useSettingsStore.setState({ settings: null });
+		const { unmount } = renderOverlay();
+		expect(screen.queryByText("Default story role")).not.toBeInTheDocument();
+		unmount();
+
+		useSettingsStore.setState({ settings: { default_agent_role_id: "r1" } });
+		useAgentRoleStore.setState({ roles: [{ ...role, work_type: "task" }] });
+		renderOverlay();
+		expect(screen.queryByText("Default story role")).not.toBeInTheDocument();
+	});
+});
+
 describe("deleting an agent role", () => {
 	// The server's refusal is a whole user-facing sentence and this is the one
 	// place it is printed. A prefix of this screen's own would read as
@@ -100,6 +140,32 @@ describe("deleting an agent role", () => {
 		await attemptDelete(user);
 
 		expect(deleteAgentRole).toHaveBeenCalledWith("r1");
+	});
+
+	it("says ahead of time what stands in the way", () => {
+		useAgentRoleStore.setState({ workRefCounts: { r1: 1 } });
+		renderOverlay();
+
+		expect(
+			screen.getByText(
+				"1 work item uses this role. Change its role before deleting it.",
+			),
+		).toBeInTheDocument();
+	});
+
+	// The server accepts the delete and clears the default along with it.
+	it("warns that deleting the default story role clears the default", async () => {
+		const user = userEvent.setup();
+		useSettingsStore.setState({ settings: { default_agent_role_id: "r1" } });
+		renderOverlay();
+
+		await user.click(screen.getByRole("button", { name: "Delete role" }));
+
+		expect(
+			screen.getByText(
+				`Delete "Reviewer"? This cannot be undone. It's the default story role; deleting it clears that default.`,
+			),
+		).toBeInTheDocument();
 	});
 
 	// The reason a previous attempt was refused is not the reason this one will
@@ -152,8 +218,8 @@ describe("the steps list", () => {
 	});
 });
 
-describe("the work type field", () => {
-	const group = () => screen.getByRole("group", { name: "Work type" });
+describe("the Runs field", () => {
+	const group = () => screen.getByRole("group", { name: "Runs" });
 	const segment = (name: string) =>
 		within(group()).getByRole("button", { name });
 
@@ -196,13 +262,49 @@ describe("the work type field", () => {
 		expect(screen.queryByRole("alert")).not.toBeInTheDocument();
 	});
 
-	it("says which work the role can be assigned to", () => {
+	it("offers Stories, Tasks and Both, in the order the list groups by", () => {
+		renderOverlay();
+
+		expect(
+			within(group())
+				.getAllByRole("button")
+				.map((b) => b.textContent),
+		).toEqual(["Stories", "Tasks", "Both"]);
+	});
+
+	it("says where a role that runs stories turns up", () => {
 		useAgentRoleStore.setState({ roles: [{ ...role, work_type: "story" }] });
 		renderOverlay();
 
 		expect(
-			screen.getByText("Can only be assigned to stories."),
+			screen.getByText("Runs stories. Can be the default story role."),
 		).toBeInTheDocument();
+	});
+
+	// The server accepts it and clears the default: a second setting changing
+	// as a side effect is worth one question first.
+	it("asks before making the default story role task-only", async () => {
+		const user = userEvent.setup();
+		useSettingsStore.setState({ settings: { default_agent_role_id: "r1" } });
+		renderOverlay();
+
+		await user.click(segment("Tasks"));
+		expect(updateAgentRole).not.toHaveBeenCalled();
+		expect(
+			screen.getByText(
+				"Reviewer is the default story role. Making it task-only clears that default.",
+			),
+		).toBeInTheDocument();
+
+		await user.click(screen.getByRole("button", { name: "Cancel" }));
+		expect(updateAgentRole).not.toHaveBeenCalled();
+
+		await user.click(segment("Tasks"));
+		await user.click(screen.getByRole("button", { name: "Make task-only" }));
+		expect(updateAgentRole).toHaveBeenCalledWith({
+			id: "r1",
+			work_type: "task",
+		});
 	});
 
 	// The server checks only when an assignment changes, so a restriction never
@@ -216,7 +318,7 @@ describe("the work type field", () => {
 
 		expect(
 			screen.getByText(
-				"Can only be assigned to tasks. Work items already using it keep it.",
+				"Picked by story agents for the tasks they create. Work items already using it keep it.",
 			),
 		).toBeInTheDocument();
 	});
@@ -225,8 +327,6 @@ describe("the work type field", () => {
 		useAgentRoleStore.setState({ workRefCounts: { r1: 2 } });
 		renderOverlay();
 
-		expect(
-			screen.getByText("Can be assigned to stories and tasks."),
-		).toBeInTheDocument();
+		expect(screen.getByText("Can run stories and tasks.")).toBeInTheDocument();
 	});
 });

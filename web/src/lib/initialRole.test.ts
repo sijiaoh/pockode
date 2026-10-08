@@ -26,30 +26,26 @@ describe("roleAcceptsWorkType", () => {
 });
 
 describe("resolveInitialRole", () => {
-	it("starts with the default role when it takes the type", () => {
+	it("starts with the default role when it takes stories", () => {
 		const roles = [role("pm", "story"), role("a"), role("b")];
-		expect(resolveInitialRole(roles, "pm", "story")).toBe("pm");
+		expect(resolveInitialRole(roles, "pm")).toBe("pm");
 	});
 
-	// What the reset defaults produce for a new task: PM is the default and
-	// takes stories only, and four roles take tasks.
-	it("asks when the default role does not take the type", () => {
-		const roles = [role("pm", "story"), role("a", "task"), role("b", "task")];
-		expect(resolveInitialRole(roles, "pm", "task")).toBe("");
+	it("asks when the default role does not take stories", () => {
+		const roles = [role("e", "task"), role("a"), role("b")];
+		expect(resolveInitialRole(roles, "e")).toBe("");
 	});
 
-	it("picks the only role that takes the type, whatever the default", () => {
-		const roles = [role("pm", "story"), role("a", "task"), role("b", "story")];
-		expect(resolveInitialRole(roles, "pm", "task")).toBe("a");
+	it("picks the only role that takes stories, whatever the default", () => {
+		const roles = [role("pm"), role("a", "task"), role("b", "task")];
+		expect(resolveInitialRole(roles, "a")).toBe("pm");
 	});
 
-	it("asks when nothing takes the type", () => {
-		expect(resolveInitialRole([role("pm", "story")], "pm", "task")).toBe("");
+	it("asks when nothing takes stories", () => {
+		expect(resolveInitialRole([role("e", "task")], "e")).toBe("");
 	});
 
 	it("does not preselect a default that is no longer in the list", () => {
-		expect(resolveInitialRole([role("a"), role("b")], "gone", "story")).toBe(
-			"",
-		);
+		expect(resolveInitialRole([role("a"), role("b")], "gone")).toBe("");
 	});
 });

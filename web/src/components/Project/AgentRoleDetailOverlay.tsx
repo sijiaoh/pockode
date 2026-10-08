@@ -13,13 +13,19 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import TextareaAutosize from "react-textarea-autosize";
+import { useGlobalSettingsStatus } from "../../hooks/useGlobalSettingsStatus";
 import { useInlineEdit } from "../../hooks/useInlineEdit";
 import { useAgentRoleStore } from "../../lib/agentRoleStore";
+import { isDefaultStoryRole } from "../../lib/initialRole";
+import { useSettingsStore } from "../../lib/settingsStore";
 import { useWSStore } from "../../lib/wsStore";
 import type { AgentRole } from "../../types/agentRole";
+import { countOf } from "../../utils/plural";
 import PageHeader from "../Layout/PageHeader";
 import { MarkdownContent } from "../ui";
 import { inputClass, inputFocusWithinClass } from "../ui/inputClass";
+import Skeleton from "../ui/Skeleton";
+import Tag from "../ui/Tag";
 import AgentRoleEngineSelector from "./AgentRoleEngineSelector";
 import AgentRoleWorkTypeField from "./AgentRoleWorkTypeField";
 
@@ -30,19 +36,42 @@ interface Props {
 
 export default function AgentRoleDetailOverlay({ roleId, onBack }: Props) {
 	const roles = useAgentRoleStore((s) => s.roles);
+	const isLoading = useAgentRoleStore((s) => s.isLoading);
+	const listError = useAgentRoleStore((s) => s.error);
+	const workRefCount = useAgentRoleStore((s) => s.workRefCounts[roleId] ?? 0);
 	const role = useMemo(
 		() => roles.find((r) => r.id === roleId),
 		[roles, roleId],
 	);
 
+	// False until the settings snapshot has said: the tag and the warnings that
+	// hang on it are claims, and a missing snapshot is no reason to make them.
+	const defaultRoleId = useSettingsStore(
+		(s) => s.settings?.default_agent_role_id ?? "",
+	);
+	const { valueState } = useGlobalSettingsStatus();
+	const isDefault =
+		valueState === "known" &&
+		role !== undefined &&
+		isDefaultStoryRole(role, defaultRoleId);
+
 	if (!role) {
 		return (
 			<div className="flex min-h-0 flex-1 flex-col">
 				<DetailHeader onBack={onBack} />
-				<div className="flex flex-1 flex-col items-center justify-center gap-2 text-sm text-th-text-muted">
-					<AlertCircle className="size-5" />
-					<p>Agent role not found</p>
-				</div>
+				{/* The list starts out loading and goes back to loading on every
+				    reconnect: "not found" then would be said of a role that is
+				    merely on its way. */}
+				{isLoading ? (
+					<DetailSkeleton />
+				) : (
+					<div
+						className={`flex flex-1 flex-col items-center justify-center gap-2 text-sm ${listError ? "text-th-error" : "text-th-text-muted"}`}
+					>
+						<AlertCircle className="size-5" />
+						<p>{listError ?? "Agent role not found"}</p>
+					</div>
+				)}
 			</div>
 		);
 	}
@@ -51,18 +80,66 @@ export default function AgentRoleDetailOverlay({ roleId, onBack }: Props) {
 		<div className="flex min-h-0 flex-1 flex-col">
 			<DetailHeader onBack={onBack} />
 			<div className="min-h-0 flex-1 overflow-auto">
-				<div className="space-y-5 p-4">
-					<InlineEditableName role={role} />
-					{/* Before the role prompt, which is an arbitrarily long markdown
-					    block: one row after it sits off the first screen on a phone. */}
+				<div className="mx-auto max-w-2xl space-y-6 px-4 py-4">
+					<div>
+						<InlineEditableName role={role} />
+						<Summary
+							isDefaultStoryRole={isDefault}
+							workRefCount={workRefCount}
+						/>
+					</div>
+					{/* The two short controls before the role prompt, which is an
+					    arbitrarily long markdown block: one row after it sits off the
+					    first screen on a phone. */}
+					<AgentRoleWorkTypeField role={role} isDefaultStoryRole={isDefault} />
 					<AgentRoleEngineSelector role={role} />
-					<AgentRoleWorkTypeField role={role} />
 					<InlineEditableRolePrompt role={role} />
 					<StepsEditor role={role} />
-					<DeleteSection role={role} onDeleted={onBack} />
+					<DeleteSection
+						role={role}
+						workRefCount={workRefCount}
+						isDefaultStoryRole={isDefault}
+						onDeleted={onBack}
+					/>
 				</div>
 			</div>
 		</div>
+	);
+}
+
+function DetailSkeleton() {
+	return (
+		<div className="mx-auto w-full max-w-2xl space-y-6 px-4 py-4">
+			<Skeleton className="h-7 w-40 rounded" label="Agent role: loading" />
+			<Skeleton className="h-16 w-full rounded-lg" />
+			<Skeleton className="h-12 w-full rounded-lg" />
+			<Skeleton className="h-24 w-full rounded-lg" />
+		</div>
+	);
+}
+
+/**
+ * What is true of the role beyond its own fields. Read-only: the default story
+ * role is set from the list, its one control.
+ */
+function Summary({
+	isDefaultStoryRole,
+	workRefCount,
+}: {
+	isDefaultStoryRole: boolean;
+	workRefCount: number;
+}) {
+	if (!isDefaultStoryRole && workRefCount === 0) return null;
+	return (
+		<p className="flex items-center gap-1.5 text-xs text-th-text-muted">
+			{isDefaultStoryRole && <Tag label="Default story role" leading />}
+			{isDefaultStoryRole && workRefCount > 0 && (
+				<span aria-hidden="true">&middot;</span>
+			)}
+			{workRefCount > 0 && (
+				<span>Used by {countOf(workRefCount, "work item")}</span>
+			)}
+		</p>
 	);
 }
 
@@ -238,7 +315,7 @@ function InlineEditableRolePrompt({ role }: { role: AgentRole }) {
 					onClick={() => setEditing(true)}
 					className="min-h-[44px] w-full rounded-lg border border-dashed border-th-border px-3 text-left text-sm text-th-text-muted hover:border-th-text-muted hover:text-th-text-secondary"
 				>
-					Add role prompt...
+					Add a role prompt — it's what tells the agent how to act.
 				</button>
 			</div>
 		);
@@ -259,7 +336,9 @@ function InlineEditableRolePrompt({ role }: { role: AgentRole }) {
 					<Pencil className="size-3.5" />
 				</button>
 			</div>
-			<div className="rounded-lg bg-th-bg-secondary px-3 py-2">
+			{/* `.code-block` leaves sideways scrolling to an ancestor; without this
+			    one a wide line would slide the whole page. */}
+			<div className="overflow-x-auto rounded-lg bg-th-bg-secondary px-3 py-2">
 				<MarkdownContent content={role.role_prompt} />
 			</div>
 		</div>
@@ -580,8 +659,11 @@ function StepsEditor({ role }: { role: AgentRole }) {
 					onClick={() => setEditing(true)}
 					className="min-h-[44px] w-full rounded-lg border border-dashed border-th-border px-3 text-left text-sm text-th-text-muted hover:border-th-text-muted hover:text-th-text-secondary"
 				>
-					Add steps...
+					Add steps
 				</button>
+				<p className="mt-1 text-xs text-th-text-muted">
+					Without steps, work finishes in one go.
+				</p>
 			</div>
 		);
 	}
@@ -601,6 +683,9 @@ function StepsEditor({ role }: { role: AgentRole }) {
 					<Pencil className="size-3.5" />
 				</button>
 			</div>
+			<p className="mb-1.5 text-xs text-th-text-muted">
+				Work on this role moves through these steps in order.
+			</p>
 			<ol className="space-y-1 rounded-lg bg-th-bg-secondary px-3 py-2">
 				{displaySteps.map((step, index) => (
 					<li
@@ -620,9 +705,13 @@ function StepsEditor({ role }: { role: AgentRole }) {
 
 function DeleteSection({
 	role,
+	workRefCount,
+	isDefaultStoryRole,
 	onDeleted,
 }: {
 	role: AgentRole;
+	workRefCount: number;
+	isDefaultStoryRole: boolean;
 	onDeleted: () => void;
 }) {
 	const deleteAgentRole = useWSStore((s) => s.actions.deleteAgentRole);
@@ -648,13 +737,23 @@ function DeleteSection({
 
 	return (
 		<div className="border-t border-th-border pt-5">
+			{/* Said ahead, not enforced here: the server refuses a role work items
+			    still use, and its refusal is the one that counts — the count on
+			    screen can be a notification behind. */}
+			{workRefCount > 0 && (
+				<p className="mb-1 px-3 text-xs text-th-text-muted">
+					{workRefCount === 1
+						? "1 work item uses this role. Change its role before deleting it."
+						: `${workRefCount} work items use this role. Change their role before deleting it.`}
+				</p>
+			)}
 			<button
 				type="button"
 				onClick={() => setShowConfirm(true)}
 				className="flex min-h-[44px] items-center gap-2 rounded-lg px-3 text-sm text-th-error hover:bg-th-error/10"
 			>
 				<Trash2 className="size-4" />
-				Delete Role
+				Delete role
 			</button>
 			{error && (
 				<p className="mt-1 text-xs text-th-error" role="alert">
@@ -664,7 +763,11 @@ function DeleteSection({
 			{showConfirm && (
 				<ConfirmDialog
 					title="Delete agent role"
-					message={`Delete "${role.name}"? This cannot be undone.`}
+					message={`Delete "${role.name}"? This cannot be undone.${
+						isDefaultStoryRole
+							? " It's the default story role; deleting it clears that default."
+							: ""
+					}`}
 					confirmLabel="Delete"
 					variant="danger"
 					onConfirm={handleDelete}

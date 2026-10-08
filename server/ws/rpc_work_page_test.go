@@ -28,6 +28,21 @@ func createStory(t *testing.T, env *testEnv, title string) work.Work {
 	return created
 }
 
+// createTask makes a task the way its story's agent does — straight through
+// the work store, as MCP task_create does — since work.create refuses tasks.
+func createTask(t *testing.T, env *testEnv, storyID, title string) work.Work {
+	t.Helper()
+	created, err := env.workStore.Create(bgCtx, work.Work{
+		StoryID:     storyID,
+		AgentRoleID: env.testRoleID,
+		Title:       title,
+	})
+	if err != nil {
+		t.Fatalf("create task %q: %v", title, err)
+	}
+	return created
+}
+
 func subscribeWorkList(t *testing.T, env *testEnv, id string) rpc.WorkListSubscribeResult {
 	t.Helper()
 	resp := env.call("work.list.subscribe", rpc.SubscribeParams{ID: id})

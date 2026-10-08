@@ -116,11 +116,10 @@ export interface WorkWatcher {
 }
 
 /**
- * What to create, said once: naming a story makes that story's task, naming
- * none makes a story. There is no `type` beside it to disagree with.
+ * A story, the only kind `work.create` makes: a task is created by its story's
+ * agent with `task_create`, and the server refuses a `story_id` here.
  */
 export interface WorkCreateParams {
-	story_id?: string;
 	agent_role_id: string;
 	title: string;
 	body?: string;

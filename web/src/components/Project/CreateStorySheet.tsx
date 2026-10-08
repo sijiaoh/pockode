@@ -2,22 +2,14 @@ import { Loader2 } from "lucide-react";
 import { useCallback, useEffect, useId, useState } from "react";
 import { useAgentRoleStore } from "../../lib/agentRoleStore";
 import { resolveInitialRole } from "../../lib/initialRole";
-import { roleAcceptsWorkType, WORK_TYPE_PLURAL } from "../../lib/roleWorkType";
+import { roleAcceptsWorkType } from "../../lib/roleWorkType";
 import { useSettingsStore } from "../../lib/settingsStore";
 import { useWSStore } from "../../lib/wsStore";
-import type { WorkType } from "../../types/work";
 import { Sheet } from "../ui";
 import { inputClass } from "../ui/inputClass";
 import RoleSelect from "./RoleSelect";
 
 interface Props {
-	/**
-	 * Which sheet this is: the title and placeholder it shows. Not sent — the
-	 * server reads the kind off `storyId` (`WorkCreateParams`).
-	 */
-	type: WorkType;
-	/** The story a task is created under; absent for a story. */
-	storyId?: string;
 	onClose: () => void;
 	/**
 	 * The work that now exists. The caller navigates to it — this component
@@ -28,18 +20,13 @@ interface Props {
 	onCreated: (workId: string) => void;
 }
 
-const TITLE: Record<WorkType, string> = {
-	story: "New Story",
-	task: "Add Task",
-};
-
-const PLACEHOLDER: Record<WorkType, string> = {
-	story: "Story title",
-	task: "Task title",
-};
+const TITLE = "New Story";
 
 /**
  * The two fields the server requires, and no others (docs/project-ui.md §4).
+ *
+ * Stories only: a task is created by its story's agent with `task_create`,
+ * never by hand, and `work.create` refuses to make one.
  *
  * The description is deliberately absent: it is the brief the agent reads, it
  * is usually several paragraphs, and its editor is on the detail page the user
@@ -52,12 +39,7 @@ const PLACEHOLDER: Record<WorkType, string> = {
  * run. Focusing the field would mean outliving that on a timer, which trades a
  * documented shared-component decision for a race.
  */
-export default function CreateWorkSheet({
-	type,
-	storyId,
-	onClose,
-	onCreated,
-}: Props) {
+export default function CreateStorySheet({ onClose, onCreated }: Props) {
 	const titleFieldId = useId();
 	const roleFieldId = useId();
 	const [title, setTitle] = useState("");
@@ -74,13 +56,13 @@ export default function CreateWorkSheet({
 
 	const selectedRole = roles.find((r) => r.id === agentRoleId);
 	const selectedRoleFits =
-		selectedRole !== undefined && roleAcceptsWorkType(selectedRole, type);
-	const hasEligibleRole = roles.some((r) => roleAcceptsWorkType(r, type));
+		selectedRole !== undefined && roleAcceptsWorkType(selectedRole, "story");
+	const hasEligibleRole = roles.some((r) => roleAcceptsWorkType(r, "story"));
 
 	// The roles can arrive after the sheet opens, so this runs on every change
 	// until one sticks — and never overwrites a role the user picked.
 	//
-	// The one exception is a pick that stopped taking this kind while the sheet
+	// The one exception is a pick that stopped taking stories while the sheet
 	// was open (restricted elsewhere): the server would refuse it, and keeping
 	// it selected beside a disabled Create explains nothing. Dropping it puts
 	// the field back where opening the sheet would have, rule and all.
@@ -90,10 +72,10 @@ export default function CreateWorkSheet({
 			return;
 		}
 		if (!agentRoleId) {
-			const initial = resolveInitialRole(roles, defaultRoleId, type);
+			const initial = resolveInitialRole(roles, defaultRoleId);
 			if (initial) setAgentRoleId(initial);
 		}
-	}, [roles, defaultRoleId, agentRoleId, type, selectedRole, selectedRoleFits]);
+	}, [roles, defaultRoleId, agentRoleId, selectedRole, selectedRoleFits]);
 
 	const handleSubmit = useCallback(
 		async (e: React.FormEvent) => {
@@ -105,7 +87,6 @@ export default function CreateWorkSheet({
 			setIsSubmitting(true);
 			try {
 				const created = await createWork({
-					story_id: storyId,
 					agent_role_id: agentRoleId,
 					title: trimmed,
 				});
@@ -118,22 +99,11 @@ export default function CreateWorkSheet({
 				// The sheet stays open on a failure, with the typed title intact:
 				// the one thing the user would have to retype is the one thing the
 				// server never received.
-				setError(
-					err instanceof Error ? err.message : `Failed to create ${type}`,
-				);
+				setError(err instanceof Error ? err.message : "Failed to create story");
 				setIsSubmitting(false);
 			}
 		},
-		[
-			title,
-			type,
-			storyId,
-			agentRoleId,
-			selectedRoleFits,
-			createWork,
-			isSubmitting,
-			onCreated,
-		],
+		[title, agentRoleId, selectedRoleFits, createWork, isSubmitting, onCreated],
 	);
 
 	// An empty list of roles is three different facts, and only one of them is
@@ -142,12 +112,12 @@ export default function CreateWorkSheet({
 	// agent roles registered" to a user whose roles are merely on their way is
 	// the same lie either of the other two states would tell.
 	//
-	// Roles that all belong to the other kind are a fourth fact, with its own
+	// Roles that all take tasks only are a fourth fact, with its own
 	// way out: the fix is a restriction to change, not a role to create.
 	if (!hasEligibleRole) {
 		return (
 			<Sheet
-				title={TITLE[type]}
+				title={TITLE}
 				onClose={onClose}
 				footer={
 					<button
@@ -171,9 +141,9 @@ export default function CreateWorkSheet({
 						</div>
 					) : roles.length > 0 ? (
 						<>
-							<p>No agent role takes {WORK_TYPE_PLURAL[type]}.</p>
+							<p>No agent role takes stories.</p>
 							<p className="text-th-text-muted">
-								Set a role to take {WORK_TYPE_PLURAL[type]} in{" "}
+								Set a role to take stories in{" "}
 								<span className="font-medium text-th-text-secondary">
 									Agent Roles
 								</span>{" "}
@@ -186,9 +156,8 @@ export default function CreateWorkSheet({
 							    button with no explanation is the one version of this
 							    that tells the user nothing (§4). */}
 							<p>No agent roles registered.</p>
-							{/* Where to go next, from either entry point: a task is
-							    blocked by this for the same reason a story is, and the
-							    user is further from the sidebar, not nearer. */}
+							{/* Where to go next: the list this opens from is not
+							    where roles are made. */}
 							<p className="text-th-text-muted">
 								Create a role in{" "}
 								<span className="font-medium text-th-text-secondary">
@@ -205,7 +174,7 @@ export default function CreateWorkSheet({
 
 	return (
 		<Sheet
-			title={TITLE[type]}
+			title={TITLE}
 			onClose={onClose}
 			// Cancel is already disabled while creating; the backdrop and Escape
 			// have to agree with it, or the sheet vanishes mid-create and leaves
@@ -249,7 +218,7 @@ export default function CreateWorkSheet({
 						type="text"
 						value={title}
 						onChange={(e) => setTitle(e.target.value)}
-						placeholder={PLACEHOLDER[type]}
+						placeholder="Story title"
 						disabled={isSubmitting}
 						autoComplete="off"
 						className={`min-h-[44px] w-full rounded-lg bg-th-bg-primary px-3 py-2 text-sm text-th-text-primary placeholder:text-th-text-muted ${inputClass}`}
@@ -265,7 +234,7 @@ export default function CreateWorkSheet({
 						value={agentRoleId}
 						onChange={setAgentRoleId}
 						emptyLabel="Select role..."
-						workType={type}
+						workType="story"
 						disabled={isSubmitting}
 					/>
 				</div>

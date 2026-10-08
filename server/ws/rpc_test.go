@@ -434,15 +434,7 @@ func startWorkWaiting(t *testing.T, env *testEnv, wait work.WorkWait) (workID, s
 	if wait == work.WaitChild {
 		// A `child` wait is only ever set when there is a subtask that could end
 		// it, so the fixture has to make one — see work.Store.SetChildWait.
-		childResp := env.call("work.create", rpc.WorkCreateParams{
-			StoryID:     story.ID,
-			AgentRoleID: env.testRoleID,
-			Title:       "Subtask",
-		})
-		var child work.Work
-		if err := json.Unmarshal(childResp.Result, &child); err != nil {
-			t.Fatal(err)
-		}
+		child := createTask(t, env, story.ID, "Subtask")
 		if _, err := env.workStore.Start(bgCtx, child.ID, "child-session"); err != nil {
 			t.Fatal(err)
 		}

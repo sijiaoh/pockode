@@ -23,3 +23,25 @@ export const WORK_TYPE_PLURAL: Record<WorkType, string> = {
 export function workTypeSuffix(role: AgentRole): string | null {
 	return role.work_type ? `${WORK_TYPE_PLURAL[role.work_type]} only` : null;
 }
+
+/** What a role may run, as `agent_role.update` writes it: `""` is "Both". */
+export type RunsChoice = WorkType | "";
+
+/** The order the choices are offered in, and the order the role list groups by. */
+export const RUNS_CHOICES: readonly RunsChoice[] = ["story", "task", ""];
+
+export const RUNS_LABEL: Record<RunsChoice, string> = {
+	story: "Stories",
+	task: "Tasks",
+	"": "Both",
+};
+
+/**
+ * What each choice means for where the role turns up. Tasks are never made by
+ * hand, so a task role is one a story agent picks.
+ */
+export const RUNS_HINT: Record<RunsChoice, string> = {
+	story: "Runs stories. Can be the default story role.",
+	task: "Picked by story agents for the tasks they create.",
+	"": "Can run stories and tasks.",
+};

@@ -6,7 +6,6 @@ import {
 	Loader2,
 	MessageSquare,
 	Pencil,
-	Plus,
 	Trash2,
 	X,
 } from "lucide-react";
@@ -35,7 +34,6 @@ import { ActivityBadge, MarkdownContent, RecommendedTag } from "../ui";
 import BottomActionBar from "../ui/BottomActionBar";
 import { inputClass } from "../ui/inputClass";
 import { WorktreeBadge } from "../Worktree";
-import CreateWorkSheet from "./CreateWorkSheet";
 import RoleSelect from "./RoleSelect";
 import StepList from "./StepList";
 import {
@@ -165,7 +163,6 @@ function WorkDetailPage({
 					    starts. */}
 					{work.type === "story" && (
 						<ChildrenSection
-							storyId={work.id}
 							tasks={children}
 							roleNameMap={roleNameMap}
 							onOpenWorkDetail={onOpenWorkDetail}
@@ -821,30 +818,16 @@ function InlineEditableBody({ work }: { work: Work }) {
 }
 
 function ChildrenSection({
-	storyId,
 	tasks,
 	roleNameMap,
 	onOpenWorkDetail,
 	onNavigateToSession,
 }: {
-	storyId: string;
 	tasks: WorkListItem[];
 	roleNameMap: Map<string, string>;
 	onOpenWorkDetail: (workId: string) => void;
 	onNavigateToSession: (sessionId: string, worktree: string) => void;
 }) {
-	const [addingTask, setAddingTask] = useState(false);
-	// Created, then landed on: a task with a title and no brief is a task no
-	// agent can do, and the brief is written on the page this opens
-	// (docs/project-ui.md §4).
-	const handleCreated = useCallback(
-		(workId: string) => {
-			setAddingTask(false);
-			onOpenWorkDetail(workId);
-		},
-		[onOpenWorkDetail],
-	);
-
 	const closedTasks = tasks.filter((t) => t.status === "closed").length;
 	// The active count is what makes a rejected `step_done` legible without a
 	// second explanation: a story that will not finish says here how many
@@ -889,28 +872,6 @@ function ChildrenSection({
 						/>
 					))}
 				</div>
-			)}
-			{/* Clear of the last row by more than the rows are of each other: it is
-			    a 44px hit area next to another one, which owes it 8px on a coarse
-			    pointer (docs/responsive-ui.md#hit-areas-and-spacing), and it is not
-			    a task, so reading as one more of them would be a lie. */}
-			<div className="mt-3">
-				<button
-					type="button"
-					onClick={() => setAddingTask(true)}
-					className="flex min-h-[44px] w-full items-center gap-2 rounded-lg px-3 text-sm text-th-text-muted hover:bg-th-bg-tertiary hover:text-th-text-primary"
-				>
-					<Plus className="size-4" />
-					Add Task
-				</button>
-			</div>
-			{addingTask && (
-				<CreateWorkSheet
-					type="task"
-					storyId={storyId}
-					onClose={() => setAddingTask(false)}
-					onCreated={handleCreated}
-				/>
 			)}
 		</div>
 	);

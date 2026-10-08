@@ -50,39 +50,34 @@ func TestHandler_WorkCreate_Story(t *testing.T) {
 	}
 }
 
-func TestHandler_WorkCreate_TaskUnderStory(t *testing.T) {
+// A task is created by its story's agent (MCP task_create); work.create is the
+// human's door and makes stories only. Naming a story is refused rather than
+// ignored: ignoring it would answer a request for a task with a new story.
+func TestHandler_WorkCreate_RefusesATask(t *testing.T) {
 	env := newTestEnv(t, &mockAgent{})
+	story := createStory(t, env, "Parent story")
 
-	// Create the story the task hangs under
-	storyResp := env.call("work.create", rpc.WorkCreateParams{
-		AgentRoleID: env.testRoleID,
-		Title:       "Parent story",
-	})
-	var story work.Work
-	json.Unmarshal(storyResp.Result, &story)
-
-	// story_id is the whole of the request's shape: naming one makes a task.
 	resp := env.call("work.create", rpc.WorkCreateParams{
 		StoryID:     story.ID,
 		AgentRoleID: env.testRoleID,
 		Title:       "Implement auth",
 	})
 
-	if resp.Error != nil {
-		t.Fatalf("unexpected error: %s", resp.Error.Message)
+	if resp.Error == nil {
+		t.Fatal("work.create with a story_id was accepted, want a refusal")
 	}
-
-	var result work.Work
-	json.Unmarshal(resp.Result, &result)
-
-	if result.StoryID != story.ID {
-		t.Errorf("expected story_id %s, got %s", story.ID, result.StoryID)
+	if resp.Error.Code != jsonrpc2.CodeInvalidParams {
+		t.Errorf("error code = %d, want %d", resp.Error.Code, jsonrpc2.CodeInvalidParams)
 	}
-	if result.Type() != work.WorkTypeTask {
-		t.Errorf("expected type task, got %s", result.Type())
+	if !strings.Contains(resp.Error.Message, "task_create") {
+		t.Errorf("error = %q, want it to name task_create", resp.Error.Message)
 	}
-	if result.AgentRoleID != env.testRoleID {
-		t.Errorf("expected agent_role_id %q, got %q", env.testRoleID, result.AgentRoleID)
+	works, err := env.workStore.List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(works) != 1 {
+		t.Errorf("work count = %d, want only the story", len(works))
 	}
 }
 
@@ -90,7 +85,8 @@ func TestHandler_WorkCreate_TaskUnderStory(t *testing.T) {
 // the kind of the item a call just acted on is read the same way everywhere. A
 // key that is merely present proves nothing: what the caller needs is the kind
 // derived from the story_id the reply itself carries, which is why each case
-// asserts the value and both kinds are covered.
+// asserts the value and work.start covers both kinds (work.create only ever
+// makes a story).
 func TestHandler_WorkCreateAndStart_CarryTheDerivedType(t *testing.T) {
 	env := newTestEnv(t, &mockAgent{})
 
@@ -106,18 +102,7 @@ func TestHandler_WorkCreateAndStart_CarryTheDerivedType(t *testing.T) {
 		t.Errorf("work.create of a story: type = %q, want %q", story.Type, work.WorkTypeStory)
 	}
 
-	taskResp := env.call("work.create", rpc.WorkCreateParams{
-		StoryID:     story.ID,
-		AgentRoleID: env.testRoleID,
-		Title:       "Implement backend",
-	})
-	var task rpc.WorkDetailItem
-	if err := json.Unmarshal(taskResp.Result, &task); err != nil {
-		t.Fatalf("unmarshal task create result: %v", err)
-	}
-	if task.Type != work.WorkTypeTask {
-		t.Errorf("work.create of a task: type = %q, want %q", task.Type, work.WorkTypeTask)
-	}
+	task := createTask(t, env, story.ID, "Implement backend")
 
 	for _, tc := range []struct {
 		name string
@@ -154,34 +139,6 @@ func TestHandler_WorkCreate_EmptyTitle(t *testing.T) {
 
 	if resp.Error == nil {
 		t.Fatal("expected error for empty title")
-	}
-}
-
-// The only thing a work.create can now get wrong about the hierarchy: a
-// story_id that does not name a story. A task cannot hold tasks, so the third
-// level is refused here rather than being unrepresentable — the id is a string
-// and the caller can put anything in it.
-func TestHandler_WorkCreate_StoryIDMustNameAStory(t *testing.T) {
-	env := newTestEnv(t, &mockAgent{})
-	story := createStory(t, env, "Story")
-
-	taskResp := env.call("work.create", rpc.WorkCreateParams{
-		StoryID:     story.ID,
-		AgentRoleID: env.testRoleID,
-		Title:       "A task",
-	})
-	var task work.Work
-	json.Unmarshal(taskResp.Result, &task)
-
-	for _, storyID := range []string{task.ID, "no-such-work"} {
-		resp := env.call("work.create", rpc.WorkCreateParams{
-			StoryID:     storyID,
-			AgentRoleID: env.testRoleID,
-			Title:       "Third level",
-		})
-		if resp.Error == nil {
-			t.Errorf("work.create with story_id %q was accepted, want a refusal", storyID)
-		}
 	}
 }
 
@@ -333,13 +290,7 @@ func TestHandler_WorkDelete_WithChildren(t *testing.T) {
 	var story work.Work
 	json.Unmarshal(storyResp.Result, &story)
 
-	taskResp := env.call("work.create", rpc.WorkCreateParams{
-		StoryID:     story.ID,
-		AgentRoleID: env.testRoleID,
-		Title:       "Child task",
-	})
-	var task work.Work
-	json.Unmarshal(taskResp.Result, &task)
+	task := createTask(t, env, story.ID, "Child task")
 
 	// Cascade delete: parent and children should both be removed
 	resp := env.call("work.delete", rpc.WorkDeleteParams{ID: story.ID})
@@ -368,13 +319,7 @@ func TestHandler_WorkDelete_CascadesSessionDeletion(t *testing.T) {
 	var story work.Work
 	json.Unmarshal(storyResp.Result, &story)
 
-	taskResp := env.call("work.create", rpc.WorkCreateParams{
-		StoryID:     story.ID,
-		AgentRoleID: env.testRoleID,
-		Title:       "Child task",
-	})
-	var task work.Work
-	json.Unmarshal(taskResp.Result, &task)
+	task := createTask(t, env, story.ID, "Child task")
 
 	startResp := env.call("work.start", rpc.WorkStartParams{ID: task.ID})
 	var started work.Work
@@ -417,13 +362,7 @@ func TestHandler_WorkStart(t *testing.T) {
 	var story work.Work
 	json.Unmarshal(storyResp.Result, &story)
 
-	taskResp := env.call("work.create", rpc.WorkCreateParams{
-		StoryID:     story.ID,
-		AgentRoleID: env.testRoleID,
-		Title:       "Implement backend",
-	})
-	var task work.Work
-	json.Unmarshal(taskResp.Result, &task)
+	task := createTask(t, env, story.ID, "Implement backend")
 
 	// Start the task
 	resp := env.call("work.start", rpc.WorkStartParams{ID: task.ID})
@@ -499,13 +438,7 @@ func TestHandler_WorkStart_RollbackOnKickoffFailure(t *testing.T) {
 	var story work.Work
 	json.Unmarshal(storyResp.Result, &story)
 
-	taskResp := env.call("work.create", rpc.WorkCreateParams{
-		StoryID:     story.ID,
-		AgentRoleID: env.testRoleID,
-		Title:       "Implement backend",
-	})
-	var task work.Work
-	json.Unmarshal(taskResp.Result, &task)
+	task := createTask(t, env, story.ID, "Implement backend")
 
 	// Start should fail (agent start error propagates through ChatClient.SendMessage)
 	resp := env.call("work.start", rpc.WorkStartParams{ID: task.ID})
@@ -617,13 +550,7 @@ func TestHandler_WorkStart_CapturesFrontendWorktree(t *testing.T) {
 	}
 
 	// A child created under the started story inherits its worktree.
-	taskResp := env.call("work.create", rpc.WorkCreateParams{
-		StoryID:     story.ID,
-		AgentRoleID: env.testRoleID,
-		Title:       "Feature task",
-	})
-	var task work.Work
-	json.Unmarshal(taskResp.Result, &task)
+	task := createTask(t, env, story.ID, "Feature task")
 	if task.Worktree != "feature" {
 		t.Errorf("child worktree = %q, want inherited %q", task.Worktree, "feature")
 	}
@@ -750,7 +677,7 @@ func TestHandler_WorkDetailSubscribe_CarriesTheActivity(t *testing.T) {
 // asserts that derivation. What it cannot assert is that this reply goes through
 // it: a WorkDetailItem built as a struct literal here compiles and marshals, and
 // leaves `type` empty — which the detail page reads as "not a story", so a story
-// loses its Tasks section and its `Add Task` with nothing red.
+// loses its Tasks section with nothing red.
 //
 // Both kinds, because an empty value is wrong for one of them whichever way a
 // mistake falls.
@@ -765,15 +692,7 @@ func TestHandler_WorkDetailSubscribe_CarriesTheDerivedType(t *testing.T) {
 	if err := json.Unmarshal(storyResp.Result, &story); err != nil {
 		t.Fatalf("unmarshal story: %v", err)
 	}
-	taskResp := env.call("work.create", rpc.WorkCreateParams{
-		StoryID:     story.ID,
-		AgentRoleID: env.testRoleID,
-		Title:       "A task",
-	})
-	var task work.Work
-	if err := json.Unmarshal(taskResp.Result, &task); err != nil {
-		t.Fatalf("unmarshal task: %v", err)
-	}
+	task := createTask(t, env, story.ID, "A task")
 
 	for _, tc := range []struct {
 		name   string

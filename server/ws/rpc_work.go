@@ -28,8 +28,12 @@ func (h *rpcMethodHandler) handleWorkCreate(ctx context.Context, conn *jsonrpc2.
 		return
 	}
 
+	if params.StoryID != "" {
+		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "work.create makes stories only: a task is created by its story's agent with task_create")
+		return
+	}
+
 	w := work.Work{
-		StoryID:     params.StoryID,
 		AgentRoleID: params.AgentRoleID,
 		Title:       params.Title,
 		Body:        params.Body,

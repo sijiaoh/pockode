@@ -782,7 +782,8 @@ gets to act. A long list scrolls in the panel's body, with **Send** in the
 footer outside it.
 
 **The option the agent would pick carries a `Recommended` tag, and that is all
-it does.** The tag (`web/src/components/ui/RecommendedTag.tsx`) follows the
+it does.** The tag (`web/src/components/ui/RecommendedTag.tsx`, drawn by the
+neutral `Tag` beside it) follows the
 label — inside the `<label>`, so it is part of the control's accessible name —
 and is drawn in the same three places a question's options are: the panel's
 form, the record card (the same `QuestionForm`), and the work detail page's
@@ -1689,7 +1690,7 @@ silent, and this design simply never enters it.
 | `packages/shared/src/hooks/useOutsideClick.ts` | hands the caller the event beside the target, which is what lets a caller claim the gesture at all (§4) |
 | `web/src/components/Chat/QuestionForm.tsx` | extracted from `AskUserQuestionItem.tsx`; the one renderer of a question, across every host that draws one — including the third shape, a textarea for a question with no options — and of the note beside an answer, editable or read-only (§3) |
 | `web/src/components/Chat/ChoiceInput.tsx` | new — the drawn radio and checkbox for options, Other and Won't answer, in three tones (§3) |
-| `web/src/components/ui/RecommendedTag.tsx` | the `Recommended` tag on an option, the one copy of its wording and style for all three places that draw options (§3) |
+| `web/src/components/ui/RecommendedTag.tsx` | the `Recommended` tag on an option, the one copy of its wording for all three places that draw options (§3); its style is `ui/Tag.tsx`'s, shared with the agent role pages' `Default` tag |
 | `web/src/components/Chat/QuestionRecordItem.tsx` | replaces `AskUserQuestionItem.tsx` — the record card: four states, no form, collapsed by default, `Answer this` in the body (§6), and the one card a legacy `ask_user_question` record draws through |
 | `web/src/components/Chat/ChatPanel.tsx` | holds whether the panel is up, what it is anchored to and the ids this visit has shown; wraps the message list so the panel has a rectangle, and derives the panel's rendering, the transcript's `inert` and the Escape guard from one expression (§3); remembers the last focused element for the rescue and stands its interrupt down while the panel or anything covering the page is up (§4); consumes the navigation intent of §4; and owns `chromeCollapsed`, the one place all three short-viewport conditions are known, and its converse `answerPanelYielded`, read off a focus wrapper around the composer (§3) |
 | `web/src/hooks/useShortViewport.ts` | new — the height threshold and the media query that reads it, the app's one height gate, deliberately not in the shared responsive module ([responsive-ui.md](responsive-ui.md#the-two-axes)) |
