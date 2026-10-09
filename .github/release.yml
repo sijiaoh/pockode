@@ -1,0 +1,26 @@
+# Groups the merged PRs in GitHub's generated release notes by PR label: the
+# same bug / enhancement labels the issue forms use, and the dependencies label
+# Renovate puts on its PRs (renovate.json). Unlabeled PRs land in "Other changes".
+changelog:
+  exclude:
+    labels:
+      - duplicate
+      - invalid
+      - wontfix
+      - question
+  categories:
+    - title: New features
+      labels:
+        - enhancement
+    - title: Bug fixes
+      labels:
+        - bug
+    - title: Documentation
+      labels:
+        - documentation
+    - title: Dependencies
+      labels:
+        - dependencies
+    - title: Other changes
+      labels:
+        - "*"

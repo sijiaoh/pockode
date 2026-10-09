@@ -48,6 +48,8 @@ jobs:
           files: dist/*
           draft: true
           prerelease: ${{ contains(github.ref_name, '-') }}
+          # Categorized by .github/release.yml.
+          generate_release_notes: true
 
       # The accident this workflow is being fixed for was a release that ended
       # up published with no assets at all. The upload failure was reported, so
