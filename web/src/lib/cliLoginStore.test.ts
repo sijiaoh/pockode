@@ -1,3 +1,4 @@
+import { JSONRPCErrorException } from "json-rpc-2.0";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	createFakeCliAuth,
@@ -328,6 +329,100 @@ describe("cliLoginStore", () => {
 			);
 			expect(useCliLoginStore.getState().updatesSeenEnding).toEqual([]);
 			expect(server.actions.cliUpdateCheck).not.toHaveBeenCalled();
+		});
+	});
+
+	describe("installs", () => {
+		const notInstalled = {
+			agent: "claude",
+			state: "not_installed",
+			channel: "latest",
+			running_sessions: 0,
+		} as const;
+		const installed = {
+			agent: "claude",
+			state: "up_to_date",
+			version: "2.1.290",
+			channel: "latest",
+			running_sessions: 0,
+		} as const;
+
+		// An install is an update of kind "install": it ends the same way, and
+		// the check that answered `installing` is read again once it has.
+		it("reads the check and status again when an install it started ends", async () => {
+			server.setChecks([
+				{ ...notInstalled, state: "installing", update_id: "install-1" },
+			]);
+			await cliLoginActions.refreshCheck("claude");
+			const install = makeUpdate({
+				id: "install-1",
+				kind: "install",
+				from_version: undefined,
+				binary_path: undefined,
+			});
+			server.actions.cliUpdateInstall.mockResolvedValue(install);
+
+			await cliLoginActions.startInstall("claude");
+			expect(server.actions.cliUpdateInstall).toHaveBeenCalledWith("claude");
+			expect(useCliLoginStore.getState().updatesStartedHere).toEqual([
+				"install-1",
+			]);
+
+			server.setChecks([installed]);
+			server.setStatuses([{ agent: "claude", state: "signed_out" }]);
+			cliLoginActions.applyUpdate("claude", {
+				...install,
+				revision: 2,
+				phase: "succeeded",
+				to_version: "2.1.290",
+				binary_path: "/home/ada/.npm-global/bin/claude",
+			});
+
+			await vi.waitFor(() => {
+				const state = useCliLoginStore.getState();
+				expect(state.checks.claude?.state).toBe("up_to_date");
+				expect(state.statuses.claude?.state).toBe("signed_out");
+			});
+			expect(useCliLoginStore.getState().updatesSeenEnding).toEqual([
+				"install-1",
+			]);
+		});
+
+		// The card offered an install because it read `not_installed`; the
+		// server finding the CLI means that read is stale.
+		it("reads again when the server says the CLI is already installed", async () => {
+			server.setChecks([notInstalled]);
+			await cliLoginActions.refreshCheck("claude");
+			server.setChecks([installed]);
+			server.actions.cliUpdateInstall.mockRejectedValue(
+				new JSONRPCErrorException("claude is already installed", -32003, {
+					reason: "already_installed",
+				}),
+			);
+
+			await expect(cliLoginActions.startInstall("claude")).rejects.toThrow(
+				"claude is already installed",
+			);
+
+			await vi.waitFor(() =>
+				expect(useCliLoginStore.getState().checks.claude?.state).toBe(
+					"up_to_date",
+				),
+			);
+			expect(server.actions.cliAuthStatus).toHaveBeenCalledWith("claude");
+		});
+
+		it("leaves the reads alone on any other refusal", async () => {
+			server.actions.cliUpdateInstall.mockRejectedValue(
+				new JSONRPCErrorException("npm is not on the PATH", -32003, {
+					reason: "npm_not_found",
+				}),
+			);
+
+			await expect(cliLoginActions.startInstall("claude")).rejects.toThrow();
+
+			expect(server.actions.cliUpdateCheck).not.toHaveBeenCalled();
+			expect(server.actions.cliAuthStatus).not.toHaveBeenCalled();
 		});
 	});
 });
