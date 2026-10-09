@@ -5,7 +5,7 @@
 
 **Your dev machine in your pocket.**
 
-Pockode connects your phone to your home dev machine running Claude Code. Chat with AI, browse files, review diffs, and manage worktrees — from anywhere.
+Pockode connects your phone to your home dev machine running Claude Code or Codex. Chat with AI, browse files, review diffs, and manage worktrees — from anywhere.
 
 | Chat | Sessions | File | Diff |
 |:----:|:--------:|:----:|:----:|
@@ -24,7 +24,7 @@ Your powerful dev machine sits at home. With Pockode, you can use it from anywhe
 
 | Feature | Description |
 |---------|-------------|
-| **AI Chat** | Natural language coding with Claude Code |
+| **AI Chat** | Natural language coding with Claude Code or Codex |
 | **File Browser** | Navigate and edit your codebase |
 | **Diff Viewer** | Review changes with syntax highlighting |
 | **Session Management** | Switch between projects and conversations |
@@ -62,13 +62,13 @@ Scan the QR code with your phone. Done.
 
 ## Status
 
-Early-stage. Actively developed. APIs may change.
+Pre-1.0 and released often. Expect breaking changes between versions — check the [release notes](https://github.com/sijiaoh/pockode/releases) before upgrading.
 
 ## Feedback
 
 Ideas? Bugs? [Open an issue](https://github.com/sijiaoh/pockode/issues).
 
-> Not accepting code contributions yet (heavy refactoring in progress), but feedback shapes the roadmap.
+> Issues, [discussions](https://github.com/sijiaoh/pockode/discussions) and documentation PRs are welcome. For larger code changes, open an issue first. See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Links
 
@@ -77,4 +77,4 @@ Ideas? Bugs? [Open an issue](https://github.com/sijiaoh/pockode/issues).
 
 ## License
 
-[O'Saasy License](LICENSE.md) — Free for personal use.
+[O'Saasy License](LICENSE.md) — source available. You may use, modify and redistribute it, but not offer it to others as a competing hosted service.
