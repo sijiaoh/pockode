@@ -451,7 +451,7 @@ func (s *Service) BeginUpdate(agentType session.AgentType, updateID string) (wai
 		if busy.State == StateUpdating {
 			return nil, nil, fmt.Errorf("%s %w", agentType, ErrUpdating)
 		}
-		return nil, nil, fmt.Errorf("a sign-in to %s is in progress; finish or cancel it before updating", agentType)
+		return nil, nil, fmt.Errorf("a sign-in to %s is in progress; finish or cancel it first", agentType)
 	}
 	s.updating[agentType] = updateID
 	s.markBusy(agentType)

@@ -52,6 +52,44 @@ func (h *rpcMethodHandler) handleCLIUpdateStart(ctx context.Context, conn *jsonr
 	}
 }
 
+// handleCLIUpdateInstall installs a CLI the server cannot find, or answers
+// with the install already running for it. Like an update, the install is the
+// server's and is followed with cli_update.subscribe.
+func (h *rpcMethodHandler) handleCLIUpdateInstall(ctx context.Context, conn *jsonrpc2.Conn, req *jsonrpc2.Request) {
+	var params rpc.CLIUpdateInstallParams
+	if err := unmarshalParams(req, &params); err != nil || params.Agent == "" {
+		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "invalid params: agent is required")
+		return
+	}
+
+	update, err := h.cliUpdate.StartInstall(params.Agent)
+	if err != nil {
+		if reason := cliInstallRefusal(err); reason != "" {
+			h.replyErrorData(ctx, conn, req.ID, rpc.CodeCLIInstallRefused, err.Error(), rpc.CLIInstallRefusedData{Reason: reason})
+			return
+		}
+		h.replyCLIUpdateError(ctx, conn, req.ID, err)
+		return
+	}
+	if err := conn.Reply(ctx, req.ID, rpc.CLIUpdateInstallResult{Update: update}); err != nil {
+		h.log.Error("failed to send cli update install response", "error", err)
+	}
+}
+
+// cliInstallRefusal is the reason of an install refused for something a
+// client can show its own copy for, or "" for any other error.
+func cliInstallRefusal(err error) string {
+	switch {
+	case errors.Is(err, cliupdate.ErrAlreadyInstalled):
+		return rpc.CLIInstallRefusedAlreadyInstalled
+	case errors.Is(err, cliupdate.ErrInstallerNotFound):
+		return rpc.CLIInstallRefusedNPMNotFound
+	case errors.Is(err, cliupdate.ErrBusy):
+		return rpc.CLIInstallRefusedBusy
+	}
+	return ""
+}
+
 // handleCLIUpdateDismiss drops an ended update. Its subscribers are told the
 // CLI's latest update is now none.
 func (h *rpcMethodHandler) handleCLIUpdateDismiss(ctx context.Context, conn *jsonrpc2.Conn, req *jsonrpc2.Request) {

@@ -500,11 +500,13 @@ Flags:
 			slog.Error("server shutdown error", "error", err)
 		}
 		wsHandler.Stop()
+		// An update still running is killed rather than waited for: a download
+		// on a slow connection would hold the shutdown for minutes. Closed
+		// before sign-ins, so that a start in between is refused as the
+		// shutdown it is, not as a CLI the closed sign-in gate calls busy.
+		cliUpdate.Close()
 		// Sign-ins end with the server; their CLIs are not left waiting.
 		cliAuth.Close()
-		// An update still running is killed rather than waited for: a download
-		// on a slow connection would hold the shutdown for minutes.
-		cliUpdate.Close()
 		if err := sessions.Flush(); err != nil {
 			slog.Error("failed to persist sessions", "error", err)
 		}
