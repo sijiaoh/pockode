@@ -12,7 +12,7 @@ hand-back reused here, [responsive-ui.md](responsive-ui.md) for the width ladder
 and hit-area floors, [answering-ui.md](answering-ui.md#who-owns-escape) for the
 Escape and dismissing-click conventions `Sheet` already follows,
 [cluster.md](cluster.md) for why the cluster frontend has none of this,
-[cli-update-ui.md](cli-update-ui.md) for the version row the same cards carry
+[cli-update-ui.md](cli-update-ui.md) for the installation row the same cards carry
 and updating a CLI from it.
 
 ## The rules
@@ -75,30 +75,32 @@ AI CLIS
                                         ↻ Refresh
 ┌───────────────────────────────────────────────────┐
 │ Claude                                            │
-│ ● Signed in · ada@example.com · Max               │
-│                                        Sign out   │
-│  ─────────────────────────────────────────────    │
-│ ✓ Version 2.1.283 · Up to date                    │
+│ ✓  Version 2.1.283                                │  installation
+│    Up to date                                     │
+│ ●  Signed in                           Sign out   │  account
+│    ada@example.com · Max                          │
 ├───────────────────────────────────────────────────┤
 │ Codex                                             │
-│ ○ Not signed in                                   │
-│                                     [ Sign in ]   │
-│  ─────────────────────────────────────────────    │
-│ ↑ Version 0.153.0 · 0.160.0 available             │
-│                                     [ Update ]    │
+│ ↑  Version 0.153.0                     [ Update ] │
+│    0.160.0 available                              │
+│ ○  Not signed in                      [ Sign in ] │
+│    Sign in to use Codex                           │
 └───────────────────────────────────────────────────┘
 ```
 
-- **Name** in `text-sm text-th-text-primary`. The **version** is in the
-  version row at the card's foot, with whether a newer one is out and the way to
-  update — see [cli-update-ui.md](cli-update-ui.md). It matters here too, for
-  the day a CLI update breaks a flow (*Flow broke*): it is the first thing
-  anyone asks.
-- **Status line** — a coloured dot or icon, then the phrase and detail in
-  `text-sm text-th-text-primary`. Colour is on the dot or icon only: the success
-  and warning tokens do not reach text contrast on the light theme.
-- **Actions** — right-aligned on their own line, `min-h-11` on every pointer,
-  the floor the settings rows already hold. At most one primary action per card.
+- **Name** in `text-sm text-th-text-primary`, then two rows that are always
+  there: **installation** — the version, whether a newer one is out and the way
+  to update, see [cli-update-ui.md](cli-update-ui.md) — and **account**, the
+  sign-in. The version matters here too, for the day a CLI update breaks a flow
+  (*Flow broke*): it is the first thing anyone asks.
+- **A row** is a fixed box: an icon, a one-line title and a one-line subtitle,
+  and at most one action beside them, so values arriving never move the card.
+  Colour is on the dot or icon only: the success and warning tokens do not
+  reach text contrast on the light theme. The box, its skeleton and the notice
+  that holds a reason or an error are described once, in
+  [cli-update-ui.md](cli-update-ui.md#where-it-lives-settings--ai-clis).
+- **Actions** — `min-h-11` on every pointer, the floor the settings rows already
+  hold. At most one primary action per card.
 - **Refresh** — a text button with a `RefreshCw` icon, the first row of the
   section body (a section owns its body; the heading is `SettingsPage`'s).
   Status also refreshes when the section mounts and when the page becomes
@@ -112,23 +114,24 @@ cards would only move the button away from the name.
 
 ### The card states
 
-| State | Dot / icon | Phrase and detail | Actions |
-|-------|------------|-------------------|---------|
-| Checking | — | Skeleton the height of the line | Skeleton the size of a button |
-| Signed in | `●` `text-th-success` | "Signed in", then ` · ` account and ` · ` plan when the CLI reports them (a plan reported as `unknown` is left out). Nothing when it reports neither — never "unknown account" | **Sign out** — text button, `text-th-error` |
-| Not signed in | `○` `text-th-text-muted` | "Not signed in" | **Sign in** — primary |
-| Managed outside Pockode | `Info`, `text-th-text-muted` | "Managed outside Pockode", and a second line naming the source (below) | none |
-| Not installed | `CircleSlash`, `text-th-text-muted` | "Not installed", and "Install the `<command>` CLI on the machine running Pockode, then refresh." | **Install instructions ↗** — text link to the CLI's install page |
-| Sign-in in progress | Spinner | "Signing in…", and "Started earlier." when this page did not start it | **Continue** — primary, opens the sheet on the running flow · **Cancel** — text button |
-| Status unavailable | `AlertTriangle`, `text-th-error` | "Couldn't read sign-in status", and the server's error in `text-xs` | **Retry** — primary |
-| Update running | the last state read before it | that state's phrase, or "Sign-in status is checked after the update." with none to keep | none — "Wait for the update to finish." when a state is kept ([cli-update-ui.md](cli-update-ui.md#while-it-runs)) |
+| State | Dot / icon | Title / subtitle | Action | Notice |
+|-------|------------|------------------|--------|--------|
+| Checking | skeleton | skeleton / skeleton | — | — |
+| Signed in | `●` `text-th-success` | "Signed in" / account and ` · ` plan when the CLI reports them (a plan reported as `unknown` is left out). Nothing when it reports neither — never "unknown account" | **Sign out** — text button, `text-th-error` | — |
+| Not signed in | `○` `text-th-text-muted` | "Not signed in" / "Sign in to use Claude" | **Sign in** — primary | — |
+| Managed outside Pockode | `Info`, `text-th-text-muted` | "Managed outside Pockode" / the source alone: `ANTHROPIC_API_KEY`, "apiKeyHelper", "Amazon Bedrock", "API key", … | — | the source as a sentence (below) |
+| Not installed, or being installed | `○` `text-th-text-muted`, row dimmed | "Sign-in" / "Available once Claude is installed" — the installation row offers **Install**, or shows it running | — | — |
+| Just installed | — | "Sign-in" / skeleton — while status is read again after an install this page saw succeed | — | — |
+| Sign-in in progress | Spinner | "Signing in…" / "Started earlier." when this page did not start it | **Continue** — primary, opens the sheet on the running flow, whose **Cancel** cancels it: two buttons don't fit beside the line on a phone | why it can't be followed, if it can't |
+| Status unavailable | `AlertTriangle`, `text-th-error` | "Couldn't read sign-in status" / "Retry, or refresh" | **Retry** — primary | the server's error |
+| Update running | the last state read before it | that state's title / "Wait for the update to finish.", or "Sign-in" / "Checked after the update." with none to keep ([cli-update-ui.md](cli-update-ui.md#while-it-runs)) | — | — |
 
 "Started earlier" and not "on another screen": after a reload, the same phone is
 a new page, and nothing can tell it apart from a second device. What matters is
 that the flow is running and can be picked up.
 
 "Managed outside Pockode" says *why*, because the user's next step depends on
-it. The second line names the source and never its value, then says where to
+it. The notice names the source and never its value, then says where to
 change it:
 
 - "Using `ANTHROPIC_API_KEY` from the server's environment."
@@ -393,7 +396,7 @@ further than the screen it was pressed on: the credentials are machine-wide.
 
 While the request runs the card's action shows a spinner and is disabled. On
 success the card becomes *Not signed in*. On failure the card keeps its signed-in
-state and shows the error under the status line in `text-xs text-th-error`, the
+state and shows the error in the account row's notice in `text-xs text-th-error`, the
 pattern `SessionSection` uses for a refused write.
 
 There is no sign-out from the chat.
@@ -547,7 +550,7 @@ cluster nodes.
 |-------|-------|------|
 | `cliLoginStore` | `web/src/lib/` | Zustand, not persisted. Status per CLI and the latest flow per CLI; the flow comes back through each screen's subscription on reconnect, the status through a fresh read. A new global store is an *Ask First* item in `web/AGENTS.md`; it is needed because the flow outlives every component that shows it |
 | `CliSignInSection` | `web/src/components/Settings/sections/` | The settings section: refresh, one `CliStatusCard` per CLI, the sheet |
-| `CliStatusCard` | same | One card; renders the state table, and owns its sign-out confirm |
+| `CliStatusCard` | same | One card: the header, the installation row and the account row (`CliAccountRow`, which renders the state table); owns its sign-out confirm |
 | `CliLoginSheet` | `web/src/components/CliLogin/` | The sheet, both flows, every phase. Takes the agent type; the chat's way in adds an optional `sendAgain` offer (the text, whether a draft is in the way, the hand-back) |
 | `AuthFailureNotice` | `web/src/components/Chat/` | The transcript notice; asks `ChatPanel` to open the sheet, and reads live status to leave the button off an externally managed CLI |
 | `useCopyToClipboard` | `web/src/hooks/` | Copy with idle / copied / failed; the code block moves onto it |

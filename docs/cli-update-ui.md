@@ -23,8 +23,8 @@ update or by signing in from a terminal
 ([cli-login-ui.md](cli-login-ui.md#failed), *Flow broke*).
 
 **"Update", never "Upgrade" or "Install".** "Update" is the verb both CLIs use
-for themselves. "Install" is kept for a CLI that is not there at all, which this
-design does not do (*Considered and not done*).
+for themselves. "Install" is kept for a CLI that is not there at all
+(*Installing a missing CLI*).
 
 **The installed version is state, the update is an event.** The version on the
 card is always read from the CLI. An update's record says what happened: from
@@ -62,67 +62,101 @@ is still `cli-sign-in`, and its priority (50) and position are
 work engine's stop comment names it by the label; stop comments written before
 the rename keep the old "CLI sign-in": they are history.
 
-Each card has a **version row** at its foot, under the sign-in actions. The
-version is there rather than in the card's header, since the row can say more
-than a number:
+Each card is a header and exactly two rows, always both, in every state:
+**Installation** (the version, the update or install) first — a CLI has to be there before
+it can be signed in to — then **Account** (sign-in,
+[cli-login-ui.md](cli-login-ui.md#the-card-states)). The version is in a row
+rather than in the header, since the row can say more than a number:
 
 ```
 AI CLIS
                                         ↻ Refresh
 ┌───────────────────────────────────────────────────┐
 │ Claude                                            │
-│ ● Signed in · ada@example.com · Max               │
-│                                        Sign out   │
-│  ─────────────────────────────────────────────    │
-│ ↑ Version 2.1.283 · 2.1.290 available             │
-│                                     [ Update ]    │
+│ ↑  Version 2.1.283                     [ Update ] │  installation
+│    2.1.290 available                              │
+│ ●  Signed in                           Sign out   │  account
+│    ada@example.com · Max                          │
 ├───────────────────────────────────────────────────┤
 │ Codex                                             │
-│ ○ Not signed in                                   │
-│                                     [ Sign in ]   │
-│  ─────────────────────────────────────────────    │
-│ ✓ Version 0.153.0 · Up to date                    │
+│ ✓  Version 0.153.0                                │
+│    Up to date                                     │
+│ ○  Not signed in                      [ Sign in ] │
+│    Sign in to use Codex                           │
 └───────────────────────────────────────────────────┘
 ```
 
-- The row is separated from the sign-in part by an **inset** hairline
-  (`border-t border-th-border`, inside the card's padding) so it cannot be taken
-  for the full-width divider between two cards.
-- **Line** — icon, then "Version `<current>`" and ` · ` the update state, in
-  `text-sm text-th-text-primary`. The icon carries the colour, as on the status
-  line: the success and warning tokens do not reach text contrast on the light
-  theme. A second line, when there is one, is `text-xs text-th-text-muted`.
+**The card never changes shape while values arrive.** Status, check and update
+record are three requests that answer in any order; if each answer added or
+removed a line, the card would jump three times on every visit. So a row is a
+fixed box (`CliRow`, `web/src/components/Settings/sections/`) that values fill:
+
+- An icon slot, always there; a **title** in `text-sm leading-5
+  text-th-text-primary`; a **subtitle** in `text-xs leading-4
+  text-th-text-muted`, always rendered (a non-breaking space when there is
+  nothing to say). Both are one line, `truncate`, so a button appearing beside
+  them changes their width, never their height — which is why every ordinary
+  state's copy is short enough to stay whole beside its button on a 320px
+  phone. An attention state's title (a failure, *Couldn't read sign-in
+  status*) wraps instead: its height is news anyway. The icon carries the
+  colour: the success and warning tokens do not reach text contrast on the
+  light theme. A row that cannot act yet is dimmed by its title's colour and
+  its icon's opacity, never by fading the text, which would drop the muted
+  subtitle below text contrast.
+- A **trailing slot** for at most one action, inside the row. Every action is
+  `min-h-11`, as is the row, so a row is 44px with or without one.
+- **Loading** draws skeletons inside the same boxes — icon, title, subtitle —
+  and leaves the trailing slot empty: which button will come, if any, is not
+  known, and the row's height is held anyway. Refresh and the re-read on
+  visibility never go back to skeletons; the last values stay while the
+  spinner on Refresh turns.
+- A **notice** under a row is the only thing that adds height, and only for
+  *attention* states: a failure, a refused action, an unreadable value, a
+  reason, *Not yet available*, *Managed outside Pockode*. These are rare, and
+  the extra height is the news. A reason is never left only in a `title`
+  attribute — a phone has no hover. The notice is indented to the row's text
+  and holds, in order, a body in `text-xs text-th-text-muted`, a collapsed
+  **Details**, a red `role="alert"` for an action's error, and a right-aligned
+  footer of secondary actions.
+
+Buttons:
+
 - **Update** is `secondaryButtonClass`
-  (`web/src/components/CliLogin/loginParts.tsx`), right-aligned on its own
-  line. It is never primary: the card's one primary action is the sign-in's,
-  and an update is rarely what stands between the user and a working session.
-  **Try again** is the same; **Dismiss** is `cardTextButtonClass` in
-  `text-th-text-secondary`.
+  (`web/src/components/CliLogin/loginParts.tsx`), in the row's trailing slot.
+  It is never primary: the card's one primary action is the sign-in's, and an
+  update is rarely what stands between the user and a working session. An
+  update's **Try again** is the same; **Dismiss** is `cardTextButtonClass` in
+  `text-th-text-secondary`, in the notice's footer.
+- **Install**, and an install's **Try again**, are primary: a CLI that is not
+  there has no sign-in to offer (its account row is dimmed), so the install is
+  the card's one primary action.
 - **Refresh** at the top of the section reads the update check too, and its
   spinner turns while either read is in flight. The check also runs when the
   section mounts and when the page becomes visible again, beside the sign-in
   status — it is a separate request, so a slow registry never holds up the
-  sign-in line, nor the other way round.
+  sign-in row, nor the other way round.
 
 Desktop gets the same layout, as the sign-in cards do: Settings is `max-w-2xl`,
-and the button stays next to the thing it acts on. On a phone the state wraps
-onto a second line before anything is truncated; version strings are short,
-but "Couldn't check for updates" plus a reason is not.
+and the button stays next to the thing it acts on.
 
-### The version row's states
+### The installation row's states
 
-| State | Icon | Line, then second line | Actions |
-|-------|------|------------------------|---------|
-| Checking | — | "Version 2.1.283 · Checking for updates…" (the version from sign-in status while the check is out, if status has one) | none |
-| Up to date | `CheckCircle2` `text-th-text-muted` | "Version 2.1.283 · Up to date" — also when the installed version is newer than the channel's latest, which a prerelease or a switch of channel leaves behind; that is never offered as a downgrade | none |
-| Update available | `ArrowUpCircle` `text-th-accent` | "Version 2.1.283 · 2.1.290 available". When the channel is not `latest`: "2.1.290 available on stable" | **Update** |
-| Updating | Spinner | "Updating Claude…", then "Started 0:42 ago" (from `started_at`), or "Started earlier." when this page did not start it — after a reload the same phone is a new page, as with a sign-in | none |
-| Updated | `CheckCircle2` `text-th-success` | "Updated from 2.1.283 to 2.1.290". When the version did not move — the CLI was already at the newest release when the update ran (a terminal or Claude's auto-updater got there first), or the registry could not be read to say otherwise — "Claude was already up to date (2.1.283)" | none |
-| Not yet available to this install | `Info` `text-th-text-muted` | "Version 2.1.283 · 2.1.290 is out", then "The last update didn't reach it: the way Claude is installed may not have it yet, or the update went to another install on this machine." — both, since the server cannot tell them apart | none — it lifts by itself when the latest moves on, the installed version changes, or after a few hours ([code/cli-update.md](code/cli-update.md#not-yet-available)) |
-| Update failed | `AlertTriangle` `text-th-error` | See *Failed* | See *Failed* |
-| Couldn't check | `Info` `text-th-text-muted` | "Version 2.1.283 · Couldn't check for updates", then the server's reason | none — Refresh is the retry |
-| Version unreadable | `AlertTriangle` `text-th-error` | "Couldn't read the installed version", then the server's reason | none |
-| Not installed | — | no row: the sign-in part already says "Not installed", with **Install instructions ↗** | — |
+| State | Icon | Title / subtitle | Trailing | Notice |
+|-------|------|------------------|----------|--------|
+| Loading | skeleton | skeleton / skeleton — until the check answers or sign-in status brings a version | — | — |
+| Checking | — | "Version 2.1.283" / "Checking for updates…" (the version from sign-in status while the check is out) | — | — |
+| Up to date | `CheckCircle2` `text-th-text-muted` | "Version 2.1.283" / "Up to date" — also when the installed version is newer than the channel's latest, which a prerelease or a switch of channel leaves behind; that is never offered as a downgrade | — | — |
+| Update available | `ArrowUpCircle` `text-th-accent` | "Version 2.1.283" / "2.1.290 available"; when the channel is not `latest`, "2.1.290 on stable" | **Update** | — |
+| Updating | Spinner | "Updating Claude…" / "Started 0:42 ago" (from `started_at`), or "Started earlier." when this page did not start it — after a reload the same phone is a new page, as with a sign-in | — | why it can't be followed, if it can't |
+| Updated | `CheckCircle2` `text-th-success` | "Updated to 2.1.290" / "from 2.1.283". When the version did not move — the CLI was already at the newest release when the update ran (a terminal or Claude's auto-updater got there first), or the registry could not be read to say otherwise — "Already up to date" / "Version 2.1.283" | — | — |
+| Not yet available to this install | `Info` `text-th-text-muted` | "Version 2.1.283" / "2.1.290 is out · not reachable yet" | — it lifts by itself when the latest moves on, the installed version changes, or after a few hours ([code/cli-update.md](code/cli-update.md#not-yet-available)) | "The last update didn't reach it: the way Claude is installed may not have it yet, or the update went to another install on this machine." — both, since the server cannot tell them apart |
+| Update failed | `AlertTriangle` `text-th-error` | See *Failed* | See *Failed* | See *Failed* |
+| Couldn't check | `Info` `text-th-text-muted` | "Version 2.1.283" / "Couldn't check for updates" | — Refresh is the retry | the server's reason |
+| Version unreadable | `AlertTriangle` `text-th-error` | "Couldn't read the version" / "Version unknown" | — | the server's reason |
+| Not installed | `CircleSlash` `text-th-text-muted` | "Not installed" / "Installs with npm" — short enough to stay whole beside the button at 320px; the dialog says the rest | **Install** (primary) | — |
+| Installing | Spinner | "Installing Claude 2.1.290…" (no version when the server could not read the channel's release) / "Started 0:42 ago", from two minutes on "Started 2:10 ago · up to 10 min", the server's budget; "Started earlier." when this page did not start it | — no Cancel, for the reason an update has none | why it can't be followed, if it can't |
+| Installed | `CheckCircle2` `text-th-success` | "Installed Claude 2.1.290" / "Checking for updates…" until the check read after it answers, then "Version 2.1.290 · Up to date" (or "· 2.1.291 available", with **Update** offered once the row draws the check again); "Couldn't check for updates" if that read fails | — | the failed read's reason |
+| Install failed | `AlertTriangle` `text-th-error` | See *Failed* | See *Failed* | See *Failed* |
 
 "Couldn't check" and "Version unreadable" are the server's one `unavailable`
 state, told apart by which version it could not read: no installed version is
@@ -144,6 +178,10 @@ draws it by these rules, and otherwise draws the check:
   confirmation the update gets, and a user who pressed and looked away should
   find it when they look back. A success that ended before this page subscribed
   was confirmed on the screen that watched it; here the row draws the check.
+- **Failed install** — while the CLI is still missing: the check has not
+  answered, or reads `not_installed`, or `installing` for this same install.
+  Once the CLI is there, however it got there, or another install has started,
+  the failure is about a state that is gone.
 - **Failed** — until it is dismissed or another update starts, on every page
   and after a reload: a failure the user never saw would be a silent one. Except
   when the version the check reads now and the version the update left — the
@@ -166,15 +204,64 @@ draws it.
 Pockode on the machine is updating it, the server is shutting down, and the
 rest in [code/cli-update.md](code/cli-update.md#the-rpc) — produces no
 record, so it is drawn where a refused sign-out is: the server's message under
-the version row in `text-xs text-th-error role="alert"`, gone when the check or
-the record changes.
+the installation row in its notice, `text-xs text-th-error role="alert"`, gone
+when the check or the record changes.
 
-The status role is one visually hidden `<output>` that stays mounted in the
-row, and it holds the update-phase text only, so a screen reader hears
-"Updating Claude…", "Updated from … to …" and a failure's title once each — not
+The status role is one visually hidden `<output>` that stays mounted beside the
+row, and it holds the update- and install-phase text only, so a screen reader
+hears "Updating Claude…", "Updated from … to …", "Installing Claude…",
+"Installed Claude 2.1.290" and a failure's title once each — not
 "Checking for updates" and "Up to date" for both cards on every refresh. A
 region mounted with its text already in it is often not read at all, which is
 why it is not one per phase. The elapsed time is outside it.
+
+## Installing a missing CLI
+
+**Install** runs the server's npm install
+([code/cli-update.md](code/cli-update.md#installing-a-missing-cli)) — npm
+whichever way the user would otherwise install the CLI. It opens a
+`ConfirmDialog` (default variant), for the reasons **Update** does: Pockode
+cannot undo it, and it reaches the whole machine.
+
+> **Install Claude?**
+> Pockode runs npm install --global for the latest Claude (latest channel) on
+> the server, as the user running Pockode. It is for the whole machine: every
+> project and cluster node here will use it.
+>
+> Cancel · **Install**
+
+The message is plain text (`ConfirmDialog` takes a string), so it holds no
+link; the install page is offered where the npm route has failed instead
+(*Failed*). Opening the dialog reads the check again, and the dialog closes when
+that read — or the record — shows the CLI there, or an update or install
+already running.
+
+On confirm the button shows a spinner while the request is out, and the reply
+is the running record, so the row goes to *Installing* at once. While it runs
+the account row is dimmed, as for *Not installed*. When this page sees it
+succeed, the row says *Installed* and the store reads the check and sign-in
+status again: the account row draws "Sign-in" with a skeleton subtitle until
+status answers, then its state — usually **Sign in**. No reload, and no row
+added or removed: the card keeps its height. *Installed* stays until the user
+leaves Settings, as *Updated* does.
+
+A check or status read while the install ran — the page came back into view
+mid-install — answers `installing` / `updating` for it. Once the record has
+ended those reads are history (an update's too, by the same rule): the card sets them aside (the store's
+`isStaleRead`) and draws from the record and the last settled reads until the
+store's re-reads land, so the account row moves on as soon as status answers
+and a failure's **Try again** opens its dialog.
+
+**Refused installs** leave no record and are drawn as a refused update start:
+the server's message in the row's notice, gone when the check or record moves.
+`npm_not_found` adds **Install instructions ↗** to the notice's footer. A
+refusal for `already_installed` shows nothing: the store reads the CLI again
+and the row moves on by itself.
+
+An update that failed with *Not installed* offers **Install** in its trailing
+slot, in place of the install page. Until the CLI is read again, the card takes
+that failure's word over the check and sign-in status held from before it: the
+account row dims, and the Install dialog stays open.
 
 ## Pressing Update
 
@@ -214,19 +301,19 @@ belongs to the server, not to the page.
 
 ### While it runs
 
-- **The sign-in part holds still.** The CLI's files are being replaced, so its
-  sign-in commands are not run meanwhile: the card keeps the sign-in state it
-  last read, and its actions (Sign in, Sign out, Continue, Retry) give way to
-  "Wait for the update to finish." in `text-xs text-th-text-muted`. After a
-  reload there is no earlier state to keep, so that part reads "Sign-in status
-  is checked after the update." alone — with no actions, there is nothing to
-  wait for. The sign-in sheet, opened meanwhile from the
+- **The account row holds still.** The CLI's files are being replaced, so its
+  sign-in commands are not run meanwhile: the row keeps the icon and title of
+  the sign-in state it last read, its subtitle becomes "Wait for the update to
+  finish.", and its action (Sign in, Sign out, Continue, Retry) is withheld.
+  After a reload there is no earlier state to keep, so the row reads "Sign-in"
+  / "Checked after the update." The sign-in sheet, opened meanwhile from the
   chat, says "<CLI> is being updated" with Close and Retry, and starts
   nothing. When the update ends, the store reads sign-in status again, as it
   does when a sign-in ends.
-- **The reverse too:** while a sign-in to the CLI runs, its **Update** gives way
-  to "Finish or cancel the sign-in first." — the sign-in's process is the
-  binary the update replaces.
+- **The reverse too:** while a sign-in to the CLI runs, **Update** is withheld
+  and the subtitle reads "2.1.290 · update after sign-in" (a failure's
+  **Try again** gives way to "Finish or cancel the sign-in first." in its
+  footer) — the sign-in's process is the binary the update replaces.
 - **The other CLI's card is untouched.**
 - **Leaving closes nothing.** Navigating away, backgrounding the PWA, a dropped
   socket, a reload — the update runs on. On return the row follows the server's
@@ -241,36 +328,46 @@ with an honest elapsed time.
 
 ### Failed
 
-One layout, the sign-in sheet's failure layout folded into the row: the icon, a
-**title** in `text-sm` that says what happened, a **body** in
-`text-xs text-th-text-muted` that says what to do, a collapsed **Details**
+One layout, the sign-in sheet's failure layout folded into the row: the icon,
+the row's **title** saying what happened, its subtitle the version as the check
+reads it now (or "Not installed"), **Try again** in the trailing slot, and a
+notice with a **body** that says what to do, a collapsed **Details**
 (`Details`, `web/src/components/CliLogin/loginParts.tsx`) with the update
-command's last lines, and the actions. The title and body have to be enough
+command's last lines, and the footer. The title and body have to be enough
 without opening Details.
 
-| Reason | Title | Body | Actions |
-|--------|-------|------|---------|
-| The update command failed | "Claude couldn't update itself" | The last line of the command's output, verbatim, passing over npm's closing "A complete log of this run…", the advice paragraph npm puts before it ("If you believe this might be a permissions issue, … as root/Administrator") and the advice Claude closes with ("Possible causes:", "Try:" and their bullets) — it is where the CLI says why (no write access, a Homebrew install it wants `brew` for, a download that failed, files in use on Windows). Then: "Fix it on the server, or run `claude update` there." | Dismiss · **Try again** |
-| Not applied | "Claude was still at 2.1.283 after updating" | "The update didn't reach the `claude` Pockode runs (`<resolved path>`). Either the way it is installed doesn't have 2.1.290 yet, or the update went to a second install on this machine — update that one from a terminal, or remove one." Details start open. | Dismiss |
-| Timed out | "The update took too long" | "Pockode stopped waiting for it. If Claude no longer starts, run `claude update` on the server." | Dismiss · **Try again** |
-| Not installed | "Claude wasn't found" | "Pockode can't find the `claude` command. Install the `claude` CLI on the machine running Pockode, then refresh." | Dismiss · Install instructions ↗ (text link) |
-| Anything else | "Update failed" | The server's message, verbatim | Dismiss · **Try again** |
+| Reason | Title | Body | Trailing · footer |
+|--------|-------|------|-------------------|
+| The update command failed | "Claude couldn't update itself" | The last line of the command's output, verbatim, passing over npm's closing "A complete log of this run…", the advice paragraph npm puts before it ("If you believe this might be a permissions issue, … as root/Administrator") and the advice Claude closes with ("Possible causes:", "Try:" and their bullets) — it is where the CLI says why (no write access, a Homebrew install it wants `brew` for, a download that failed, files in use on Windows). Then: "Fix it on the server, or run `claude update` there." | **Try again** · Dismiss |
+| Not applied | "Claude was still at 2.1.283 after updating" — "Claude wasn't updated" when neither version was read | "The update didn't reach the `claude` Pockode runs (`<resolved path>`). Either the way it is installed doesn't have 2.1.290 yet, or the update went to a second install on this machine — update that one from a terminal, or remove one." Details start open. | — · Dismiss |
+| Timed out | "The update took too long" | "Pockode stopped waiting for it. If Claude no longer starts, run `claude update` on the server." | **Try again** · Dismiss |
+| Not installed | "Claude wasn't found" | "Pockode can't find the `claude` command. Install it again, or install it on the server yourself." | **Install** · Dismiss |
+| Anything else | "Update failed" | The server's message, verbatim | **Try again** · Dismiss |
+
+An install that failed has the same layout, its subtitle "Not installed" and
+its **Try again** primary — it reopens the Install dialog. Every body says how
+to get past the failure, since pressing again mostly fails the same way:
+
+| Reason | Title | Body | Trailing · footer |
+|--------|-------|------|-------------------|
+| `permission_denied` | "npm can't write its global folder" | "npm's global folder belongs to another user (usually root). Give it to this user, or set a prefix in your home directory (`npm config set prefix ~/.npm-global`), add its `bin` to the PATH pockode starts with, restart pockode, then try again." — without the PATH step, following it would fail as `not_on_path` | **Try again** · Install instructions ↗, Dismiss |
+| `not_on_path` | "Claude installed, but Pockode can't find it" | "npm installed it, but the folder npm puts commands in isn't on the PATH pockode was started with. Add it (`npm prefix --global`, plus `/bin` on Linux and macOS) and restart pockode." Details start open: they name the prefix when npm said | — (installing again lands in the same folder) · Dismiss |
+| `command_failed` | "npm couldn't install Claude" | npm's last line, picked as an update's is, then "Install it on the server yourself, or try again." | **Try again** · Install instructions ↗, Dismiss |
+| `timeout` | "The install took too long" | "Pockode stopped npm after 10 minutes. Try again, or install Claude on the server yourself." | **Try again** · Dismiss |
+| Anything else | "Install failed" | The server's message, verbatim | **Try again** · Install instructions ↗, Dismiss |
 
 - The command in the bodies — `claude update`, `codex update` — is the CLI's own
   name plus `update`, in `font-mono`, the terminal answer
   [cli-login-ui.md](cli-login-ui.md#failed) gives for a broken sign-in.
-- The row keeps the version line above the failure, from the check as it is now
-  — never the record's `from` — so a partly applied update shows what the CLI
-  really is.
+- The row's subtitle is the version from the check as it is now — never the
+  record's `from` — so a partly applied update shows what the CLI really is.
 - **Dismiss** asks the server to drop the failed record, for every client. The
   row then draws the check.
-- A failure of a CLI the check now reads as not installed keeps the row up to
-  show it, although a not-installed CLI otherwise has none.
+- A failure of a CLI the check now reads as not installed is drawn in place of
+  *Not installed*, until it is dismissed or an install replaces it.
 - **Not applied** is the server's verdict, not the UI's. Without it, a machine
   with two installs would report success forever while every session kept the
   old version.
-- Actions are listed in the order drawn: Dismiss first, the primary one on the
-  right.
 - Details go to every client, so the server strips the credentials it
   recognizes before the output is stored
   ([code/cli-update.md](code/cli-update.md#success-is-the-target-reached)).
@@ -314,8 +411,10 @@ updating the same CLI at once is the server's to rule out
 | Piece | Where | What |
 |-------|-------|------|
 | `cliLoginStore` | `web/src/lib/` | Also holds the check and the latest update per CLI, beside sign-in status and the latest sign-in, with the same revision rule. One store for one card: the card's states read both halves (*While it runs*), and splitting them would put that rule in two places |
-| `CliStatusCard` | `web/src/components/Settings/sections/` | Renders the version row under the sign-in part, follows its CLI's update (`useCliUpdateSubscription`) as it follows its sign-in, and owns the update dialog as it owns the sign-out one |
-| `CliVersionRow` | same | The version row's state table and *Failed* |
+| `CliStatusCard` | `web/src/components/Settings/sections/` | The header and the two rows, follows its CLI's update (`useCliUpdateSubscription`) as it follows its sign-in, and owns the update and install dialogs as it owns the sign-out one |
+| `CliRow` | same | The fixed row box and its skeleton; `CliRowNotice`, the one region that adds height |
+| `CliInstallRow` | same | The installation row's state table, *Installing a missing CLI* and *Failed* |
+| `CliAccountRow` | same | The account row: [cli-login-ui.md](cli-login-ui.md#the-card-states)'s state table |
 | `CliSignInSection` | same | Refresh also reads the check; its spinner covers both reads |
 
 None of it is in `@pockode/shared`: `web-cluster` does not use it.
@@ -348,7 +447,9 @@ cannot be drawn without:
 
 ## What to test
 
-- Each version-row state renders its row of the table; *Couldn't check* is
+- Every card has both rows from the first paint, skeletons in place of what
+  is not read yet.
+- Each installation-row state renders its row of the table; *Couldn't check* is
   never drawn as *Up to date*, and *Version unreadable* has no **Update**.
 - **Update** and **Try again** confirm first; the dialog names the running
   session count when there is one.
@@ -358,12 +459,18 @@ cannot be drawn without:
   every page until dismissed, and not once the installed version differs from
   the version the update left — both known; an empty one hides nothing.
 - *Not yet available to this install* has no **Update**. A refused start shows
-  the server's message under the row.
-- A running update replaces the CLI's sign-in actions with its message and keeps
-  the last sign-in state; a running sign-in hides **Update**; the other card is
+  the server's message in the row's notice.
+- A running update withholds the account row's action, says why in its subtitle
+  and keeps the last sign-in state; a running sign-in hides **Update**; the other card is
   untouched.
 - Each failure reason renders its title, body and actions.
 - The card's current version never comes from an update record.
+- **Install** confirms first; the row goes *Installing* → *Installed*, and the
+  account row from dimmed to its read state, without a reload. Each install
+  failure reason renders its row of the table, **Try again** reopens the
+  dialog, and a failed install is hidden once the check finds the CLI. Refusals
+  show the server's message (with the install page for `npm_not_found`), except
+  `already_installed`, which reads the CLI again.
 
 ## Considered and not done
 
@@ -390,9 +497,8 @@ cannot be drawn without:
   records the versions its CLI integration was verified with
   ([code/cli-auth.md](code/cli-auth.md)), but newer versions usually work, and a
   warning on every update would be noise.
-- **Installing a CLI that is not installed.** Picking an install method, and
-  needing Node for some of them, is its own design. *Not installed* keeps its
-  install-instructions link.
+- **Choosing how to install a missing CLI.** npm is the one installer both
+  CLIs share; the install page covers the rest, offered wherever npm failed.
 - **Showing each session's CLI version.** Useful for "which version did this
   turn run on", but it is per-turn history, not something the update needs.
 - **Stopping sessions to let an update through.** It would trade the user's
