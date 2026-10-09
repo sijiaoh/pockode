@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Questions and ideas
+    url: https://github.com/sijiaoh/pockode/discussions
+    about: Ask questions and share ideas in GitHub Discussions.
+  - name: Documentation
+    url: https://github.com/sijiaoh/pockode/tree/main/docs
+    about: Installation, platform support, cluster mode and more.
+  - name: Getting help
+    url: https://github.com/sijiaoh/pockode/blob/main/.github/SUPPORT.md
+    about: Where to go for which kind of question.

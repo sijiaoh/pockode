@@ -5,5 +5,5 @@ theme: pockode
 
 params:
   headline: Code from your pocket
-  subheadline: A mobile-first interface for Claude Code. Talk to AI, code from anywhere.
+  subheadline: A mobile-first interface for Claude Code and Codex. Talk to AI, code from anywhere.
   github: https://github.com/sijiaoh/pockode

@@ -392,7 +392,7 @@ Write-Host "Installed $reported to $target"
 if ($pathAdded) {
     Write-Host "Open a new terminal before 'pockode' resolves there."
 }
-Write-Host "Run 'pockode -auth-token YOUR_PASSWORD' from a project directory to get started."
+Write-Host "Run 'pockode --password YOUR_PASSWORD' from a project directory to get started."
 Write-Host "To uninstall: & ([scriptblock]::Create((irm https://pockode.com/install.ps1))) -Uninstall"
 
 } # end of the child scope opened after param()
