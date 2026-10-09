@@ -18,6 +18,9 @@ func (s *Service) SetUpdateTimeout(d time.Duration) { s.updateTimeout = d }
 // neither touch the user's nor contend with each other unless they share one.
 func (s *Service) SetLockDir(dir string) { s.lockDir = dir }
 
+// SetInstaller replaces npm with name, a test's fake.
+func (s *Service) SetInstaller(name string) { s.installer = name }
+
 // SetNotAppliedFor shortens how long an update that was not applied holds the
 // release back.
 func (s *Service) SetNotAppliedFor(d time.Duration) { s.notAppliedFor = d }

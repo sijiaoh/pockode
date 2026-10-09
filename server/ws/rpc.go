@@ -465,6 +465,9 @@ func (h *rpcMethodHandler) Handle(ctx context.Context, conn *jsonrpc2.Conn, req 
 	case "cli_update.start":
 		h.handleCLIUpdateStart(ctx, conn, req)
 		return
+	case "cli_update.install":
+		h.handleCLIUpdateInstall(ctx, conn, req)
+		return
 	case "cli_update.dismiss":
 		h.handleCLIUpdateDismiss(ctx, conn, req)
 		return

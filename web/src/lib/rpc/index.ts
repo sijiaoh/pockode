@@ -9,7 +9,11 @@ export {
 } from "./attachment";
 export { type ChatActions, createChatActions, type SentMessage } from "./chat";
 export { type CliAuthActions, createCliAuthActions } from "./cliAuth";
-export { type CliUpdateActions, createCliUpdateActions } from "./cliUpdate";
+export {
+	type CliUpdateActions,
+	cliInstallRefusedReason,
+	createCliUpdateActions,
+} from "./cliUpdate";
 export {
 	type Command,
 	type CommandActions,

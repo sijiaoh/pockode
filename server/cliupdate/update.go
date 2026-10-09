@@ -53,21 +53,41 @@ const (
 	// FailureTimeout is an update that ran past UpdateTimeout; its process
 	// tree was killed.
 	FailureTimeout FailureReason = "timeout"
+	// FailurePermissionDenied is an install npm could not write: its global
+	// prefix belongs to another user (root, usually). Detail is npm's output.
+	FailurePermissionDenied FailureReason = "permission_denied"
+	// FailureNotOnPath is an install npm finished while this server still
+	// cannot find the CLI: npm's global bin directory is not on the server's
+	// PATH. Detail names npm's global prefix when it could be read.
+	FailureNotOnPath FailureReason = "not_on_path"
 	// FailureOther is anything else; Detail says what.
 	FailureOther FailureReason = "other"
 )
 
-// Update is one run of a CLI's update command, as a client sees it.
+// Kind is what an Update does to its CLI.
+type Kind string
+
+const (
+	// KindUpdate runs the CLI's own update command (StartUpdate).
+	KindUpdate Kind = "update"
+	// KindInstall installs a CLI the server cannot find (StartInstall).
+	KindInstall Kind = "install"
+)
+
+// Update is one run of a CLI's update command, or of its install, as a client
+// sees it. A CLI has one at a time, whichever kind.
 type Update struct {
 	ID    string            `json:"id"`
 	Agent session.AgentType `json:"agent"`
+	Kind  Kind              `json:"kind"`
 	// Revision grows with every change to any update. A command's reply and a
 	// change notification travel separately and can arrive in either order, so
 	// a client keeps whichever copy of an update has the higher revision. Only
 	// copies with the same ID compare: revisions restart with the server.
 	Revision int64 `json:"revision"`
 	Phase    Phase `json:"phase"`
-	// FromVersion is the version before the update, once read.
+	// FromVersion is the version before the update, once read; never set on
+	// an install.
 	FromVersion string `json:"from_version,omitempty"`
 	// TargetVersion is the latest release as read when the update started,
 	// once read. The CLI decides what it installs; this is what it should be.
@@ -77,7 +97,8 @@ type Update struct {
 	// FromVersion when there was nothing newer to install.
 	ToVersion string `json:"to_version,omitempty"`
 	// BinaryPath is the executable Pockode runs for the CLI, the install the
-	// update has to reach. Empty when the CLI is not found.
+	// update has to reach. Empty when the CLI is not found; an install sets it
+	// when it ends, to where the installed CLI was found.
 	BinaryPath string     `json:"binary_path,omitempty"`
 	StartedAt  time.Time  `json:"started_at"`
 	EndedAt    *time.Time `json:"ended_at,omitempty"`
@@ -108,8 +129,9 @@ func (s *Service) AddListener(l Listener) {
 // running for it, so two screens pressing Update land in the same one.
 //
 // It is refused, with no record left behind, when the CLI cannot take an
-// update now: another Pockode on the machine is updating it (ErrUpdatingElsewhere),
-// or the Gate refuses — a sign-in to it is running.
+// update now — each such refusal matches ErrBusy: it is being installed,
+// another Pockode on the machine is updating it (ErrUpdatingElsewhere), or the
+// Gate refuses (a sign-in to it is running).
 //
 // The update belongs to the server, not to the request or the connection that
 // started it: it goes on through a reload or a dropped socket, and
@@ -121,28 +143,49 @@ func (s *Service) StartUpdate(agentType session.AgentType) (Update, error) {
 	if !ok {
 		return Update{}, fmt.Errorf("%w: %q", ErrUnknownAgent, agentType)
 	}
-	update, started, err := s.startUpdate(agentType, cli)
+	return s.start(agentType, KindUpdate, func() error { return nil },
+		func(ctx context.Context, u *Update, wait func(context.Context) error) (string, *Failure) {
+			return s.runUpdate(ctx, u, cli, wait)
+		})
+}
+
+// runFunc is an update's work once it has its record: run once wait lets it,
+// it returns the version afterwards, when read, and the failure unless it
+// succeeded.
+type runFunc func(ctx context.Context, u *Update, wait func(context.Context) error) (to string, failure *Failure)
+
+// start starts an update of kind, or returns the one of that kind already
+// running for agentType. precheck refuses the start, under updatesMu, once
+// nothing is running; run is the update, once it has its record.
+func (s *Service) start(agentType session.AgentType, kind Kind, precheck func() error, run runFunc) (Update, error) {
+	update, started, err := s.begin(agentType, kind, precheck, run)
 	if err != nil || !started {
 		return update, err
 	}
-	s.log.Info("AI CLI update started", "cli", agentType, "updateId", update.ID, "binary", update.BinaryPath)
+	s.log.Info("AI CLI "+string(kind)+" started", "cli", agentType, "updateId", update.ID, "binary", update.BinaryPath)
 	s.notify(agentType)
 	return update, nil
 }
 
-// startUpdate is StartUpdate under updatesMu. started is false when the update
-// returned is one already running.
-func (s *Service) startUpdate(agentType session.AgentType, cli CLI) (update Update, started bool, err error) {
+// begin is start under updatesMu. started is false when the update returned is
+// one already running.
+func (s *Service) begin(agentType session.AgentType, kind Kind, precheck func() error, run runFunc) (update Update, started bool, err error) {
 	s.updatesMu.Lock()
 	defer s.updatesMu.Unlock()
 	if s.closed {
 		return Update{}, false, ErrShuttingDown
 	}
 	if u := s.runningUpdate(agentType); u != nil {
+		if u.Kind != kind {
+			return Update{}, false, busyError{fmt.Errorf("%s is being %s; try again once that has finished", agentType, u.Kind.past())}
+		}
 		return *u, false, nil
 	}
+	if err := precheck(); err != nil {
+		return Update{}, false, err
+	}
 	if s.updateDir == "" {
-		return Update{}, false, fmt.Errorf("no home directory to run the update in: %w", s.updateDirErr)
+		return Update{}, false, fmt.Errorf("no home directory to run the %s in: %w", kind, s.updateDirErr)
 	}
 
 	unlockMachine, err := s.lockMachine(agentType)
@@ -152,6 +195,7 @@ func (s *Service) startUpdate(agentType session.AgentType, cli CLI) (update Upda
 	u := &Update{
 		ID:        uuid.NewString(),
 		Agent:     agentType,
+		Kind:      kind,
 		Phase:     PhaseRunning,
 		StartedAt: time.Now(),
 	}
@@ -160,12 +204,12 @@ func (s *Service) startUpdate(agentType session.AgentType, cli CLI) (update Upda
 		wait, endGate, err = s.gate.BeginUpdate(agentType, u.ID)
 		if err != nil {
 			unlockMachine()
-			return Update{}, false, err
+			return Update{}, false, busyError{err}
 		}
 	}
-	// A path that cannot be resolved is left out: the update fails as not
-	// installed, which says so.
-	u.BinaryPath, _ = agent.BinaryPath(cli.Binary)
+	// A path that cannot be resolved is left out: an update fails as not
+	// installed, which says so, and an install has none yet.
+	u.BinaryPath, _ = agent.BinaryPath(s.clis[agentType].Binary)
 	s.revision++
 	u.Revision = s.revision
 	s.updates[agentType] = u
@@ -175,7 +219,7 @@ func (s *Service) startUpdate(agentType session.AgentType, cli CLI) (update Upda
 	// past the closed check is always one Close waits for.
 	s.updateWG.Go(func() {
 		defer cancel()
-		to, failure := s.runUpdate(ctx, u, cli, wait)
+		to, failure := run(ctx, u, wait)
 		// Released before the end is recorded: a client that hears the update
 		// ended and reads the sign-in status, or starts another, finds the CLI
 		// free.
@@ -184,6 +228,13 @@ func (s *Service) startUpdate(agentType session.AgentType, cli CLI) (update Upda
 		s.end(u, to, failure)
 	})
 	return update, true, nil
+}
+
+func (k Kind) past() string {
+	if k == KindInstall {
+		return "installed"
+	}
+	return "updated"
 }
 
 // lockMachine takes agentType's machine-wide update lock, which is refused at
@@ -197,7 +248,7 @@ func (s *Service) lockMachine(agentType session.AgentType) (unlock func(), err e
 	}
 	unlock, err = filestore.TryLock(filepath.Join(s.lockDir, "cli-update-"+string(agentType)+".lock"))
 	if errors.Is(err, filestore.ErrLocked) {
-		return nil, fmt.Errorf("%s %w", agentType, ErrUpdatingElsewhere)
+		return nil, busyError{fmt.Errorf("%s %w", agentType, ErrUpdatingElsewhere)}
 	}
 	return unlock, err
 }
@@ -211,7 +262,7 @@ func (s *Service) runUpdate(ctx context.Context, u *Update, cli CLI, wait func(c
 	// a check: each may be running the CLI. A check is bounded by its own
 	// --version budget, so this needs no ctx.
 	if err := wait(ctx); err != nil {
-		return "", s.contextFailure(ctx)
+		return "", s.contextFailure(ctx, KindUpdate)
 	}
 	s.checking[agentType].Wait()
 
@@ -248,10 +299,18 @@ func (s *Service) runUpdate(ctx context.Context, u *Update, cli CLI, wait func(c
 // end records how u ended: with to, the version read afterwards when there is
 // one, and failure unless it succeeded.
 func (s *Service) end(u *Update, to string, failure *Failure) {
+	// Kind never changes, so it is read without the lock.
+	var installedAt string
+	if u.Kind == KindInstall {
+		installedAt, _ = agent.BinaryPath(s.clis[u.Agent].Binary)
+	}
 	s.updateRecord(u, func(u *Update) {
 		now := time.Now()
 		u.EndedAt = &now
 		u.ToVersion = to
+		if u.Kind == KindInstall {
+			u.BinaryPath = installedAt
+		}
 		if failure != nil {
 			u.Phase = PhaseFailed
 			failure.Detail = redact(failure.Detail)
@@ -262,10 +321,10 @@ func (s *Service) end(u *Update, to string, failure *Failure) {
 	})
 
 	if failure != nil {
-		s.log.Warn("AI CLI update failed", "cli", u.Agent, "updateId", u.ID, "reason", failure.Reason, "detail", failure.Detail)
+		s.log.Warn("AI CLI "+string(u.Kind)+" failed", "cli", u.Agent, "updateId", u.ID, "reason", failure.Reason, "detail", failure.Detail)
 		return
 	}
-	s.log.Info("AI CLI update ended", "cli", u.Agent, "updateId", u.ID, "from", u.FromVersion, "to", to)
+	s.log.Info("AI CLI "+string(u.Kind)+" ended", "cli", u.Agent, "updateId", u.ID, "from", u.FromVersion, "to", to, "binary", u.BinaryPath)
 }
 
 // update runs the CLI's update command and reads what it left behind: the
@@ -278,12 +337,12 @@ func (s *Service) update(ctx context.Context, cli CLI, from, target string, from
 		return "", &Failure{Reason: FailureNotInstalled, Detail: fromErr.Error()}
 	}
 	if ctx.Err() != nil {
-		return "", s.contextFailure(ctx)
+		return "", s.contextFailure(ctx, KindUpdate)
 	}
 
 	if err := s.checkUpdateCommand(ctx, cli); err != nil {
 		if ctx.Err() != nil {
-			return "", s.contextFailure(ctx)
+			return "", s.contextFailure(ctx, KindUpdate)
 		}
 		return "", &Failure{Reason: FailureOther, Detail: err.Error()}
 	}
@@ -291,7 +350,7 @@ func (s *Service) update(ctx context.Context, cli CLI, from, target string, from
 	res, err := agent.Run(ctx, s.log, cli.Binary, s.updateDir, "update")
 	switch {
 	case ctx.Err() != nil:
-		return "", s.contextFailure(ctx)
+		return "", s.contextFailure(ctx, KindUpdate)
 	case errors.As(err, &notFound):
 		return "", &Failure{Reason: FailureNotInstalled, Detail: err.Error()}
 	case err != nil:
@@ -364,14 +423,14 @@ func (s *Service) checkUpdateCommand(ctx context.Context, cli CLI) error {
 	return nil
 }
 
-// contextFailure is the failure of an update whose context ended: its budget
-// ran out, or the server is shutting down.
-func (s *Service) contextFailure(ctx context.Context) *Failure {
+// contextFailure is the failure of an update of kind whose context ended: its
+// budget ran out, or the server is shutting down.
+func (s *Service) contextFailure(ctx context.Context, kind Kind) *Failure {
 	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-		return &Failure{Reason: FailureTimeout, Detail: fmt.Sprintf("the update did not finish in time (limit %s)", s.updateTimeout)}
+		return &Failure{Reason: FailureTimeout, Detail: fmt.Sprintf("the %s did not finish in time (limit %s)", kind, s.updateTimeout)}
 	}
 	if errors.Is(context.Cause(ctx), ErrShuttingDown) {
-		return &Failure{Reason: FailureOther, Detail: "the server shut down while the update was running; check the CLI's version before relying on it"}
+		return &Failure{Reason: FailureOther, Detail: fmt.Sprintf("the server shut down while the %s was running; check the CLI's version before relying on it", kind)}
 	}
 	return &Failure{Reason: FailureOther, Detail: ctx.Err().Error()}
 }

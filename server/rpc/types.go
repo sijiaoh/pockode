@@ -1005,6 +1005,42 @@ type CLIUpdateStartResult struct {
 	Update cliupdate.Update `json:"update"`
 }
 
+type CLIUpdateInstallParams struct {
+	Agent session.AgentType `json:"agent"`
+}
+
+// CLIUpdateInstallResult is the install started — an update of kind
+// "install" — or the one already running for the CLI. It is followed with
+// cli_update.subscribe, as an update is.
+type CLIUpdateInstallResult struct {
+	Update cliupdate.Update `json:"update"`
+}
+
+// CodeCLIInstallRefused answers a cli_update.install the server refused before
+// starting anything; CLIInstallRefusedData says why. Nothing was attempted and
+// no record is left. The message says the whole thing in English; the reason is
+// what a client picks its own copy by.
+const CodeCLIInstallRefused = -32003
+
+// Reasons of a CodeCLIInstallRefused error.
+const (
+	// CLIInstallRefusedAlreadyInstalled is a CLI the server finds already;
+	// reading cli_update.check again shows it.
+	CLIInstallRefusedAlreadyInstalled = "already_installed"
+	// CLIInstallRefusedNPMNotFound is a server without npm on its PATH. It
+	// needs Node.js installed and the server restarted.
+	CLIInstallRefusedNPMNotFound = "npm_not_found"
+	// CLIInstallRefusedBusy is a CLI being updated, being updated or installed
+	// by another Pockode on the machine, or signed in to. Trying again once
+	// that has ended works.
+	CLIInstallRefusedBusy = "busy"
+)
+
+// CLIInstallRefusedData is the data member of a CodeCLIInstallRefused error.
+type CLIInstallRefusedData struct {
+	Reason string `json:"reason"`
+}
+
 // CLIUpdateDismissParams names an update that has ended, to drop it for every
 // client.
 type CLIUpdateDismissParams struct {

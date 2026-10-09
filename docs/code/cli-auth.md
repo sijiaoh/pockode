@@ -47,7 +47,7 @@ The sign-in methods are [below](#signing-in).
   "external": { "kind": "api_key", "source": "ANTHROPIC_API_KEY" },     // external
   "error": "...",                  // unavailable, not_installed
   "login_id": "...",               // signing_in: the running sign-in
-  "update_id": "..."               // updating: the running update
+  "update_id": "..."               // updating: the running update or install
 }
 ```
 
@@ -205,6 +205,9 @@ while a sign-in runs, since that sign-in's process is the binary it would
 replace. Unlike a sign-in, an update does not have to have the lock to start:
 it marks the CLI at once, so nothing new begins, and then waits for a read or a
 sign-out already running before it runs the CLI.
+An [install](cli-update.md#installing-a-missing-cli) goes through
+`BeginUpdate` too and is, to this package, an update: a status read answers
+`updating`, with the install's id.
 
 Server shutdown ends status reads and sign-outs too, and `Service.Close` waits
 for their CLIs to be gone. Their context is the connection's, and the HTTP

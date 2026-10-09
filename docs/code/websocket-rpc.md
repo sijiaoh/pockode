@@ -759,6 +759,10 @@ still says the whole thing, for a client that only displays it.
 is not a git repository at all; it needs no `data`, since what would make the
 request work — the repository appearing — arrives as `worktree.changed`
 ([git.md](../git.md#projects-without-a-repository)).
+`-32003` (`rpc.CodeCLIInstallRefused`) refuses a `cli_update.install` before
+anything ran, with `data.reason` — `already_installed`, `npm_not_found` or
+`busy` — because each asks the user for something different: nothing, Node.js,
+or waiting ([cli-update.md](cli-update.md#refused-before-it-starts)).
 
 A server's error message is therefore text to put in front of a user, never a
 value to branch on — it embeds an arbitrary error string, and its fixed half is

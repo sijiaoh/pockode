@@ -50,6 +50,10 @@ func TestMain(m *testing.M) {
 }
 
 func runFakeCLI(dir, role string, args []string) {
+	if len(args) > 0 && (args[0] == "install" || args[0] == "prefix") {
+		runFakeNPM(dir, role, args)
+		return
+	}
 	versionFile := filepath.Join(dir, "version")
 	switch strings.Join(args, " ") {
 	case "--version":
