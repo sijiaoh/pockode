@@ -388,10 +388,11 @@ them sits beside the sign-in's ([cli-auth.md](cli-auth.md#the-web-client)):
 | `web/src/lib/rpc/cliUpdate.ts` | the `cli_update.*` requests, and `cliInstallRefusedReason`, which reads a refused install's `data.reason` |
 | `web/src/lib/cliLoginStore.ts` | the check and latest update or install per CLI, beside sign-in status and the latest sign-in |
 | `web/src/hooks/useCliUpdateSubscription.ts` | follows a CLI's update into the store while a card shows it |
-| `web/src/components/Settings/sections/CliVersionRow.tsx` | the version row at the foot of each `CliStatusCard`, and the failure copy |
+| `web/src/components/Settings/sections/CliStatusCard.tsx` | one CLI's card: the install and update dialogs, refusals, and which reads are live |
+| `web/src/components/Settings/sections/CliInstallRow.tsx` | the installation row of each `CliStatusCard`, and the failure copy |
 
 One store for both halves because the card's states read both: a running update
-holds the sign-in part still, and a running sign-in holds **Update** off. The
+holds the account row still, and a running sign-in holds **Update** off. The
 revision rule is `applyUpdate`'s, as it is `applyLogin`'s for a sign-in. The
 store keeps the last status that was not `updating` (`settledStatuses`), which
 is what the card shows while an update runs. When it sees an update end that
@@ -413,11 +414,14 @@ with `cliInstallRefusedReason` — by code and `data.reason`, never the message,
 which is for showing as it is. An `already_installed` refusal also reads the
 check and status again, because the `not_installed` on screen is stale by then.
 
-The card does not offer an install yet. Until it does, an install record
-another client started is drawn with the update's copy: a success seen ending
-as *Updated*,
-`permission_denied` and `not_on_path` with the generic failure, and a check
-answered `installing` as an unknown state.
+The store's re-reads after an install supersede reads still out, but a read
+that already landed mid-install stays in the store until they answer. The card
+therefore sets aside any check or status that `isStaleRead` says belongs to an
+ended update or install — the rule is the same for both, though an install is
+where it shows — and draws from the record and the last settled status in the
+meantime — otherwise the account row would wait on the slower check, and a
+failure's **Try again** would close its own dialog
+([cli-update-ui.md](../cli-update-ui.md#installing-a-missing-cli)).
 
 ## Logged and not logged
 

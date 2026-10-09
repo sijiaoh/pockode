@@ -195,7 +195,7 @@ function afterUpdateEnded(
  * A read answered `updating` — or, for a check, `installing` — for an update
  * known to have ended since.
  */
-function isStaleRead(
+export function isStaleRead(
 	read: { state: string; update_id?: string } | undefined,
 	ended: CliUpdate | undefined,
 ): boolean {

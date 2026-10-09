@@ -33,6 +33,12 @@ const CLOUD_PROVIDERS: Record<string, string> = {
 // as a key's source is shown as it said it.
 const ENV_NAME = /^[A-Z][A-Z0-9_]*$/;
 
+function providerName(external: CliExternal | undefined): string | undefined {
+	return external?.provider
+		? (CLOUD_PROVIDERS[external.provider] ?? external.provider)
+		: undefined;
+}
+
 /**
  * Why a CLI is managed outside Pockode, naming the source and never its value,
  * then where to change it.
@@ -49,13 +55,33 @@ export function ExternalSource({
 	);
 }
 
+/**
+ * The source alone, short enough for one line beside the card's state:
+ * `ExternalSource` is the sentence.
+ */
+export function externalSourceLabel(external: CliExternal | undefined): string {
+	const provider = providerName(external);
+	switch (external?.kind) {
+		case "api_key":
+			return external.source && ENV_NAME.test(external.source)
+				? external.source
+				: "API key";
+		case "api_key_helper":
+			return "apiKeyHelper";
+		case "oauth_token":
+			return "Server environment token";
+		case "no_sign_in_needed":
+			return "No sign-in needed";
+		default:
+			return provider ?? "Credentials set up on the server";
+	}
+}
+
 function describeSource(agent: AgentType, external: CliExternal | undefined) {
 	const fallback = `${getAgentLabel(agent)} is set up with credentials Pockode doesn't manage.`;
 	if (!external) return fallback;
 
-	const provider = external.provider
-		? (CLOUD_PROVIDERS[external.provider] ?? external.provider)
-		: undefined;
+	const provider = providerName(external);
 
 	switch (external.kind) {
 		case "api_key":

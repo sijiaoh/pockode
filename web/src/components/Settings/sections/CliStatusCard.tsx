@@ -1,30 +1,23 @@
 import { ConfirmDialog } from "@pockode/shared";
-import { AlertTriangle, CircleSlash, Info } from "lucide-react";
-import { type ReactNode, useState } from "react";
+import { useState } from "react";
 import { useCliLoginSubscription } from "../../../hooks/useCliLoginSubscription";
 import { useCliUpdateSubscription } from "../../../hooks/useCliUpdateSubscription";
 import { getAgentLabel } from "../../../lib/agentType";
 import {
 	cliLoginActions,
 	isLoginEnded,
+	isStaleRead,
 	useCliLoginStore,
 } from "../../../lib/cliLoginStore";
-import type { CliUpdateCheck } from "../../../types/cliUpdate";
+import { cliInstallRefusedReason } from "../../../lib/rpc";
+import type {
+	CliInstallRefusedReason,
+	CliUpdateCheck,
+} from "../../../types/cliUpdate";
 import type { AgentType } from "../../../types/settings";
 import { errorMessage } from "../../../utils/errorMessage";
-import {
-	accountSummary,
-	ExternalSource,
-	InstallLink,
-	NotInstalledHint,
-} from "../../CliLogin/cliAuthText";
-import {
-	cardTextButtonClass,
-	primaryButtonClass,
-} from "../../CliLogin/loginParts";
-import { Spinner } from "../../ui";
-import Skeleton from "../../ui/Skeleton";
-import CliVersionRow, { shownUpdate } from "./CliVersionRow";
+import CliAccountRow from "./CliAccountRow";
+import CliInstallRow, { shownUpdate } from "./CliInstallRow";
 
 interface Props {
 	agent: AgentType;
@@ -33,8 +26,9 @@ interface Props {
 }
 
 /**
- * One CLI's sign-in status and version, and what can be done about either from
- * here.
+ * One CLI's installation and account, and what can be done about either from
+ * here: a header and two rows that are always there, so values arriving fill
+ * the card in place (docs/cli-update-ui.md, "Where it lives").
  */
 export default function CliStatusCard({ agent, onOpenSignIn }: Props) {
 	// Follows the running sign-in and update, so the card moves on when they end.
@@ -44,6 +38,7 @@ export default function CliStatusCard({ agent, onOpenSignIn }: Props) {
 	const settledStatus = useCliLoginStore((s) => s.settledStatuses[agent]);
 	const check = useCliLoginStore((s) => s.checks[agent]);
 	const checkError = useCliLoginStore((s) => s.checkErrors[agent]);
+	const checking = useCliLoginStore((s) => !!s.checking[agent]);
 	const record = useCliLoginStore((s) => s.updates[agent]);
 	const seenEnding = useCliLoginStore((s) =>
 		record ? s.updatesSeenEnding.includes(record.id) : false,
@@ -57,20 +52,30 @@ export default function CliStatusCard({ agent, onOpenSignIn }: Props) {
 		return !!login && !isLoginEnded(login);
 	});
 
-	// While the CLI is being replaced its sign-in is not read: the card keeps
-	// what it read before, and nothing that runs the CLI is offered.
+	// While the CLI is being replaced or installed its sign-in is not read: the
+	// card keeps what it read before, and nothing that runs the CLI is offered.
+	// Sign-in status says `updating` for both; the record tells them apart.
+	// A read taken while the record ran says nothing once it has ended: the
+	// store reads again, and until then the last settled reads stand in.
+	const liveCheck = isStaleRead(check, record) ? undefined : check;
+	const liveStatus = isStaleRead(readStatus, record) ? undefined : readStatus;
+	const installing =
+		liveCheck?.state === "installing" ||
+		(record?.kind === "install" && record.phase === "running");
 	const updating =
-		readStatus?.state === "updating" ||
-		check?.state === "updating" ||
+		liveStatus?.state === "updating" ||
+		liveCheck?.state === "updating" ||
+		installing ||
 		record?.phase === "running";
-	const status = updating ? settledStatus : readStatus;
+	const status = updating || !liveStatus ? settledStatus : liveStatus;
 	const signingIn = readStatus?.state === "signing_in" || loginRunning;
+	const reading = useCliLoginStore((s) => !!s.reading[agent]);
 	const startedHere = useCliLoginStore((s) =>
 		status?.login_id ? s.startedHere.includes(status.login_id) : false,
 	);
 	const label = getAgentLabel(agent);
 
-	const [busy, setBusy] = useState<"signing_out" | "cancelling" | null>(null);
+	const [signingOut, setSigningOut] = useState(false);
 	const loginError = useCliLoginStore((s) => s.loginErrors[agent]);
 	const [error, setError] = useState<string | null>(null);
 	// An action's error is about the state it was pressed in; once the status
@@ -82,33 +87,26 @@ export default function CliStatusCard({ agent, onOpenSignIn }: Props) {
 	}
 	const [confirmingSignOut, setConfirmingSignOut] = useState(false);
 
-	const run = async (
-		kind: NonNullable<typeof busy>,
-		action: () => Promise<void>,
-	) => {
-		setBusy(kind);
+	const signOut = async () => {
+		setConfirmingSignOut(false);
+		setSigningOut(true);
 		setError(null);
 		try {
-			await action();
+			await cliLoginActions.logout(agent);
 		} catch (err) {
 			setError(errorMessage(err));
 		} finally {
-			setBusy(null);
+			setSigningOut(false);
 		}
 	};
 
-	const signOut = () => {
-		setConfirmingSignOut(false);
-		void run("signing_out", () => cliLoginActions.logout(agent));
-	};
-
-	const cancel = (loginId: string) =>
-		void run("cancelling", () => cliLoginActions.cancelLogin(agent, loginId));
-
 	const [updateBusy, setUpdateBusy] = useState(false);
+	const [installPending, setInstallPending] = useState(false);
 	const [updateActionError, setUpdateActionError] = useState<string | null>(
 		null,
 	);
+	const [installRefusal, setInstallRefusal] =
+		useState<CliInstallRefusedReason | null>(null);
 	// A refused start is about the check and record it was pressed over. By
 	// content, not identity: the dialog re-reads the check, and that answer can
 	// land after the refusal without anything having changed.
@@ -123,6 +121,7 @@ export default function CliStatusCard({ agent, onOpenSignIn }: Props) {
 	if (errorBasis !== updateBasis) {
 		setErrorBasis(updateBasis);
 		setUpdateActionError(null);
+		setInstallRefusal(null);
 	}
 	const [confirmingUpdate, setConfirmingUpdate] = useState(false);
 	// Another device started one while the dialog was up (its re-read check or
@@ -132,6 +131,7 @@ export default function CliStatusCard({ agent, onOpenSignIn }: Props) {
 	const runUpdateAction = async (action: () => Promise<void>) => {
 		setUpdateBusy(true);
 		setUpdateActionError(null);
+		setInstallRefusal(null);
 		try {
 			await action();
 		} catch (err) {
@@ -152,178 +152,97 @@ export default function CliStatusCard({ agent, onOpenSignIn }: Props) {
 		void runUpdateAction(() => cliLoginActions.startUpdate(agent));
 	};
 
-	let icon: ReactNode = null;
-	let phrase: ReactNode = null;
-	let detail: ReactNode = null;
-	let actions: ReactNode = null;
+	const shown = shownUpdate(record, liveCheck, seenEnding);
+	// An install this page saw succeed outranks the reads from before it, which
+	// are being read again.
+	const installed = shown?.kind === "install" && shown.phase === "succeeded";
+	// Before the check answers, sign-in status says whether there is a CLI. A
+	// failure shown that found it missing is newer than the check held from
+	// before it, which is still being read again.
+	const notInstalled =
+		!installed &&
+		((shown?.phase === "failed" &&
+			(shown.kind === "install" ||
+				shown.failure?.reason === "not_installed")) ||
+			(liveCheck
+				? liveCheck.state === "not_installed"
+				: status?.state === "not_installed"));
 
-	switch (status?.state) {
-		case undefined:
-			break;
-		case "signed_in": {
-			const summary = accountSummary(status.account);
-			icon = <Dot className="text-th-success" filled />;
-			phrase = summary ? `Signed in · ${summary}` : "Signed in";
-			actions = (
-				<button
-					type="button"
-					onClick={() => setConfirmingSignOut(true)}
-					disabled={busy !== null}
-					className={`${cardTextButtonClass} text-th-error`}
-				>
-					{busy === "signing_out" && (
-						<Spinner variant="current" srText={null} />
-					)}
-					{busy === "signing_out" ? "Signing out…" : "Sign out"}
-				</button>
-			);
-			break;
-		}
-		case "signed_out":
-			icon = <Dot className="text-th-text-muted" />;
-			phrase = "Not signed in";
-			actions = (
-				<button
-					type="button"
-					onClick={onOpenSignIn}
-					className={primaryButtonClass}
-				>
-					Sign in
-				</button>
-			);
-			break;
-		case "external":
-			icon = <Info className="h-4 w-4 text-th-text-muted" />;
-			phrase = "Managed outside Pockode";
-			detail = <ExternalSource agent={agent} external={status.external} />;
-			break;
-		case "not_installed":
-			icon = <CircleSlash className="h-4 w-4 text-th-text-muted" />;
-			phrase = "Not installed";
-			detail = <NotInstalledHint agent={agent} />;
-			actions = <InstallLink agent={agent} variant="text" />;
-			break;
-		case "signing_in": {
-			const loginId = status.login_id;
-			icon = <Spinner srText={null} />;
-			phrase = "Signing in…";
-			detail = startedHere ? null : "Started earlier.";
-			// Otherwise "Signing in…" would stay up after the sign-in ended.
-			if (loginError) {
-				detail = `Couldn't follow this sign-in: ${loginError}. Refresh to check.`;
+	const [confirmingInstall, setConfirmingInstall] = useState(false);
+	// Started elsewhere, or found there after all, while the dialog was up.
+	if (confirmingInstall && (updating || !notInstalled)) {
+		setConfirmingInstall(false);
+	}
+
+	const openInstall = () => {
+		setConfirmingInstall(true);
+		void cliLoginActions.refreshCheck(agent);
+	};
+
+	const confirmInstall = () => {
+		setConfirmingInstall(false);
+		void runUpdateAction(async () => {
+			setInstallPending(true);
+			try {
+				await cliLoginActions.startInstall(agent);
+			} catch (err) {
+				const reason = cliInstallRefusedReason(err);
+				// The store reads the CLI again, and the row moves on by itself.
+				if (reason === "already_installed") return;
+				setInstallRefusal(reason);
+				throw err;
+			} finally {
+				setInstallPending(false);
 			}
-			actions = (
-				<>
-					{loginId && (
-						<button
-							type="button"
-							onClick={() => cancel(loginId)}
-							disabled={busy !== null}
-							className={`${cardTextButtonClass} text-th-accent`}
-						>
-							{busy === "cancelling" ? "Cancelling…" : "Cancel"}
-						</button>
-					)}
-					<button
-						type="button"
-						onClick={onOpenSignIn}
-						className={primaryButtonClass}
-					>
-						Continue
-					</button>
-				</>
-			);
-			break;
-		}
-		default:
-			// unavailable, and any state this build does not know: never drawn as
-			// "Not signed in", which would send the user into a sign-in that
-			// cannot fix what is wrong.
-			icon = <AlertTriangle className="h-4 w-4 text-th-error" />;
-			phrase = "Couldn't read sign-in status";
-			detail = status?.error ?? null;
-			actions = (
-				<button
-					type="button"
-					onClick={() => void cliLoginActions.refreshStatus(agent)}
-					className={primaryButtonClass}
-				>
-					Retry
-				</button>
-			);
-	}
-
-	if (updating) {
-		actions = null;
-		if (!status) {
-			// A reload mid-update: there is no earlier read to keep.
-			phrase = "Sign-in status is checked after the update.";
-		}
-	}
+		});
+	};
 
 	return (
-		<li className="space-y-2 px-4 py-3">
-			<h3 className="text-sm text-th-text-primary">{label}</h3>
+		<li className="space-y-1 px-4 py-3">
+			<h3 className="h-5 text-sm text-th-text-primary">{label}</h3>
 
-			{status || updating ? (
-				<>
-					<div className="flex items-start gap-2">
-						<span className="flex h-5 shrink-0 items-center" aria-hidden="true">
-							{icon}
-						</span>
-						<div className="min-w-0 space-y-0.5">
-							<p className="break-words text-sm text-th-text-primary">
-								{phrase}
-							</p>
-							{detail && (
-								<p className="break-words text-xs text-th-text-muted">
-									{detail}
-								</p>
-							)}
-							{error && (
-								<p className="break-words text-xs text-th-error" role="alert">
-									{error}
-								</p>
-							)}
-						</div>
-					</div>
-					{actions && <div className="flex justify-end gap-2">{actions}</div>}
-					{updating && status && (
-						<p className="text-right text-xs text-th-text-muted">
-							Wait for the update to finish.
-						</p>
-					)}
-				</>
-			) : (
-				<div className="space-y-2">
-					<Skeleton
-						className="h-5 w-40 rounded"
-						label={`Checking ${label} sign-in status`}
-					/>
-					<div className="flex justify-end">
-						<Skeleton className="h-11 w-20 rounded-lg" />
-					</div>
-				</div>
-			)}
-
-			<CliVersionRow
+			<CliInstallRow
 				agent={agent}
-				check={check}
+				check={liveCheck}
 				checkError={checkError}
+				checking={checking}
 				statusVersion={readStatus?.version ?? settledStatus?.version}
-				statusNotInstalled={readStatus?.state === "not_installed"}
-				update={shownUpdate(record, check, seenEnding)}
+				notInstalled={notInstalled}
+				update={shown}
 				startedHere={updateStartedHere}
 				followError={updateError}
 				signingIn={signingIn}
 				busy={updateBusy}
+				installPending={installPending}
 				error={updateActionError}
+				installRefusal={installRefusal}
 				onUpdate={openUpdate}
+				onInstall={openInstall}
 				onDismiss={(updateId) =>
 					void runUpdateAction(() =>
 						cliLoginActions.dismissUpdate(agent, updateId),
 					)
 				}
+			/>
+
+			<CliAccountRow
+				agent={agent}
+				status={status}
+				updating={updating && !installing}
+				notInstalled={notInstalled || installing}
+				awaitingStatus={
+					installed &&
+					reading &&
+					(!readStatus ||
+						readStatus.state === "not_installed" ||
+						readStatus.state === "updating")
+				}
+				startedHere={startedHere}
+				loginError={loginError}
+				signingOut={signingOut}
+				error={error}
+				onSignOut={() => setConfirmingSignOut(true)}
+				onOpenSignIn={onOpenSignIn}
 			/>
 
 			{confirmingUpdate && (
@@ -337,6 +256,17 @@ export default function CliStatusCard({ agent, onOpenSignIn }: Props) {
 				/>
 			)}
 
+			{confirmingInstall && (
+				<ConfirmDialog
+					title={`Install ${label}?`}
+					message={`Pockode runs npm install --global for the latest ${label} (${check?.channel || "latest"} channel) on the server, as the user running Pockode. It is for the whole machine: every project and cluster node here will use it.`}
+					confirmLabel="Install"
+					cancelLabel="Cancel"
+					onConfirm={confirmInstall}
+					onCancel={() => setConfirmingInstall(false)}
+				/>
+			)}
+
 			{confirmingSignOut && (
 				<ConfirmDialog
 					title={`Sign out of ${label}?`}
@@ -344,7 +274,7 @@ export default function CliStatusCard({ agent, onOpenSignIn }: Props) {
 					confirmLabel="Sign out"
 					cancelLabel="Cancel"
 					variant="danger"
-					onConfirm={signOut}
+					onConfirm={() => void signOut()}
 					onCancel={() => setConfirmingSignOut(false)}
 				/>
 			)}
@@ -385,14 +315,4 @@ function updateMessage(label: string, check: CliUpdateCheck | undefined) {
 		);
 	}
 	return sentences.join(" ");
-}
-
-function Dot({ className, filled }: { className: string; filled?: boolean }) {
-	return (
-		<span
-			className={`inline-block h-2.5 w-2.5 rounded-full border-2 border-current ${
-				filled ? "bg-current" : ""
-			} ${className}`}
-		/>
-	);
 }
