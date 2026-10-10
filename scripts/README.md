@@ -200,4 +200,7 @@ the cluster-mode stack instead of the normal one.
 Runs the server with a fake `claude` that plays scripted turns on demand — tool
 calls, subagents, permission requests, questions, turns left running — and
 drives a headless browser through the chat UI and the answering UI at phone and
-desktop sizes, light and dark. See [its README](ui-walkthrough/README.md).
+desktop sizes, light and dark. Its `assets` command also shoots a demo project
+and renders the marketing images, demo video and GIF in `site/static/marketing/`
+([docs/marketing-assets.md](../docs/marketing-assets.md)). See
+[its README](ui-walkthrough/README.md).

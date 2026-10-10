@@ -3,7 +3,7 @@
 // through every viewport and theme it is filed under. Run through run.sh,
 // which provides the environment this reads.
 
-import { mkdirSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { join } from "node:path";
 
@@ -29,7 +29,19 @@ export const VIEWPORTS = {
 	// twice, so this is where its rows run out of room first.
 	"360x740": { width: 360, height: 740, touch: true },
 	"1440x900": { width: 1440, height: 900, touch: false },
+	// The marketing captures (docs/marketing-assets.md §§2–3): a phone's screen
+	// less the status bar and home strip its frame draws, and the desktop at a
+	// retina density — named apart from 1440x900, so that a filter for one does
+	// not take the other too.
+	"390x804": { width: 390, height: 804, touch: true },
+	"desktop@2x": { width: 1440, height: 900, touch: false, scale: 2 },
+	// The page Port Preview opened: the phone less the browser's address bar
+	// its frame draws as well (§3.2).
+	"390x760": { width: 390, height: 760, touch: true },
 };
+
+/** The device pixels per CSS pixel a viewport's shots are taken at. */
+export const deviceScale = (vp) => vp.scale ?? (vp.touch ? 2 : 1);
 
 const THEME_NAMES = ["abyss", "aurora", "ember", "mint", "void"];
 const MODES = ["light", "dark"];
@@ -190,14 +202,14 @@ export async function keyboardDown(page, vp) {
 // --- the run ----------------------------------------------------------------
 
 /**
- * Takes every suite's scenes through every viewport and theme the filters
- * leave, one fresh browser context per scene.
+ * The jobs the filters leave: one per scene, viewport and theme.
  *
  * A filter is a substring of a suite, scene, viewport or theme name, or several
  * of them joined by commas to match any; with several filters, a scene runs
- * when every one of them matches.
+ * when every one of them matches. An `optIn` suite runs only when a filter
+ * names it.
  */
-export async function run(suites, argv) {
+export function plan(suites, argv) {
 	const allThemes = argv.includes("--themes=all");
 	const filters = argv.filter((a) => !a.startsWith("--"));
 	const themes = (allThemes ? THEME_NAMES : ["abyss"]).flatMap((name) =>
@@ -207,29 +219,48 @@ export async function run(suites, argv) {
 		filters.every((f) =>
 			f.split(",").some((alt) => names.some((n) => n.includes(alt))),
 		);
+	const named = (suite) =>
+		filters.some((f) => f.split(",").some((alt) => suite.name.includes(alt)));
 
 	const jobs = [];
-	for (const suite of suites)
+	for (const suite of suites) {
+		if (suite.optIn && !named(suite)) continue;
 		for (const vpName of suite.viewports)
 			for (const theme of themes)
 				for (const scene of suite.scenes) {
 					const vp = { name: vpName, ...VIEWPORTS[vpName] };
 					if (scene.touchOnly && !vp.touch) continue;
+					if (scene.viewports && !scene.viewports.includes(vp.name)) continue;
+					if (suite.themes && !suite.themes.includes(theme.id)) continue;
 					if (!matches(suite.name, scene.name, vp.name, theme.id)) continue;
 					jobs.push({ suite, vp, theme, scene });
 				}
+	}
+	return jobs;
+}
+
+/**
+ * Takes every suite's scenes through every viewport and theme the filters
+ * leave (see `plan`), one fresh browser context per scene.
+ */
+export async function run(suites, argv) {
+	const jobs = plan(suites, argv);
 	if (jobs.length === 0) {
 		console.error("No scene matches those filters.");
 		process.exit(2);
 	}
 
 	const dirOf = (suite) => join(SHOTS_DIR, suite.dir);
-	for (const suite of new Set(jobs.map((j) => j.suite))) {
+	// Shots accumulate across runs, so a filtered run adds to a full one; a
+	// failure is about one run only, and an old one would read as current. Only
+	// this run's own scenes' are cleared: two suites may share a directory, and
+	// one run after the other must not take the first one's failure with it.
+	for (const { suite, scene, vp, theme } of jobs) {
 		mkdirSync(dirOf(suite), { recursive: true });
-		// Shots accumulate across runs, so a filtered run adds to a full one; a
-		// failure is about one run only, and an old one would read as current.
-		for (const file of readdirSync(dirOf(suite)))
-			if (file.startsWith("FAILED_")) rmSync(join(dirOf(suite), file));
+		rmSync(
+			join(dirOf(suite), `FAILED_${scene.name}_${vp.name}_${theme.id}.png`),
+			{ force: true },
+		);
 	}
 
 	const rpc = await Rpc.connect();
@@ -243,7 +274,9 @@ export async function run(suites, argv) {
 		if (own.length) shared.set(suite, await suite.setup({ rpc, jobs: own }));
 	}
 
-	const browser = await chromium.launch();
+	const browser = await chromium.launch({
+		args: [...new Set(suites.flatMap((s) => s.browserArgs ?? []))],
+	});
 	// A set: a retried scene takes its earlier shots again.
 	const taken = new Set();
 	const failed = [];
@@ -255,11 +288,12 @@ export async function run(suites, argv) {
 		const where = `${scene.name}_${vp.name}_${theme.id}`;
 		const context = await browser.newContext({
 			viewport: { width: vp.width, height: vp.height },
-			deviceScaleFactor: vp.touch ? 2 : 1,
+			deviceScaleFactor: deviceScale(vp),
 			isMobile: vp.touch,
 			hasTouch: vp.touch,
 			colorScheme: theme.mode,
 			reducedMotion: "reduce",
+			...suite.contextOptions,
 		});
 		await context.addInitScript(
 			({ token, theme }) => {
@@ -273,14 +307,39 @@ export async function run(suites, argv) {
 		// Generous: the machines this runs on are shared, and a step that
 		// fails here costs the whole scene.
 		page.setDefaultTimeout(30_000);
-		const shot = async (state) => {
+		// `tap` is the element the user presses next: its centre, in viewport
+		// px, is saved beside the shot (<shot>.json), so a video built from the
+		// shots taps where the element really is.
+		// A state that taps nothing has no sidecar, not one left by an older run.
+		const shot = async (state, { tap } = {}) => {
 			const file = `${state}_${vp.name}_${theme.id}.png`;
-			await page.screenshot({ path: join(dirOf(suite), file) });
+			const sidecar = join(dirOf(suite), file.replace(/\.png$/, ".json"));
+			rmSync(sidecar, { force: true });
+			if (tap) {
+				const box = await tap.boundingBox();
+				const x = box && box.x + box.width / 2;
+				const y = box && box.y + box.height / 2;
+				// A box is also had for an element scrolled out of its container
+				// or in a closed drawer: the centre has to be on the screen.
+				if (!box || x < 0 || y < 0 || x > vp.width || y > vp.height)
+					throw new Error(
+						`${state}: the tap target is not on screen (${JSON.stringify(box)})`,
+					);
+				writeFileSync(sidecar, `${JSON.stringify({ tap: { x, y } })}\n`);
+			}
+			await page.screenshot({
+				path: join(dirOf(suite), file),
+				...suite.screenshotOptions,
+			});
 			taken.add(`${suite.dir}/${file}`);
 			console.log(`${suite.dir}/${file}`);
 		};
 		let error;
 		try {
+			// Before the scene's first navigation, which is all a context's
+			// routes and init scripts need; inside the try, so a failure here is
+			// retried and reported like any other.
+			await suite.prepare?.(context, scene);
 			await scene.run({
 				page,
 				shared: shared.get(suite),
@@ -309,14 +368,25 @@ export async function run(suites, argv) {
 		console.error(`FAILED ${suite.name}/${where}: ${reason}`);
 	}
 
+	// A `serial` suite's scenes depend on one another's order (one shoots a
+	// state the next changes), so they run one at a time, as listed — a scene on
+	// every viewport before the next scene on any — after the rest.
+	const parallel = jobs.filter((j) => !j.suite.serial);
+	const serial = jobs
+		.filter((j) => j.suite.serial)
+		.sort(
+			(a, b) =>
+				a.suite.scenes.indexOf(a.scene) - b.suite.scenes.indexOf(b.scene),
+		);
 	const workers = Number(process.env.WALKTHROUGH_WORKERS) || 4;
 	let next = 0;
 	try {
 		await Promise.all(
 			Array.from({ length: workers }, async () => {
-				while (next < jobs.length) await runJob(jobs[next++]);
+				while (next < parallel.length) await runJob(parallel[next++]);
 			}),
 		);
+		for (const job of serial) await runJob(job);
 	} finally {
 		await browser.close();
 		rpc.close();

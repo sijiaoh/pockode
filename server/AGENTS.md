@@ -54,6 +54,7 @@ datadir/                # 默认数据目录（<work>/.pockode）自带的 .giti
 filestore/              # 文件存储基础设施（原子写 / 文件锁 / JSONL / 变更监听）
 filetransfer/           # 文件上传 / 下载 HTTP 端点
 git/                    # Git 操作
+internal/cmd/marketingbanner/  # 打印启动横幅供营销视频截取（不是服务器的一部分；放在本模块里是为了让 CI 的 vet/build 覆盖它，见 docs/marketing-assets.md §3.3）
 logger/                 # 结构化日志 (slog)
 mcp/                    # MCP：stdio 代理客户端 + 服务端 Executor/APIHandler
 middleware/             # 密码 / session token 认证中间件
