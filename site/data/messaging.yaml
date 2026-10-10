@@ -52,7 +52,7 @@ pillars:
         text: "`-relay=false` keeps the app on your network"
 
 quickstart:
-  prerequisite: Pockode drives the `claude` or `codex` CLI, so install one of them on the same machine first.
+  prerequisite: Pockode drives the `claude` or `codex` CLI. Have neither? Install one and sign in from the app; that needs `npm` (Node.js).
   run_where: on your dev machine, in your project directory
   next: Scan the QR code with your phone.
   installers:
@@ -91,7 +91,7 @@ faq:
     answer: Your AI CLI sends code to its provider, as it does without Pockode. Through the relay, traffic is encrypted on both hops, and its content is never inspected or stored.
   - id: agents
     question: Which agents does it work with?
-    answer: Claude Code and Codex. Pockode drives the CLI you have installed, with your own login and subscription.
+    answer: Claude Code and Codex, with your own login and subscription. Pockode drives the CLI on your machine; if it is missing, install it and sign in from the app.
   - id: ports
     question: Do I have to open a port?
     answer: No. Pockode dials out to the relay. With `-relay=false` you connect over your own network instead, in plain HTTP.

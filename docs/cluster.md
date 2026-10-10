@@ -354,11 +354,11 @@ alternatives that were rejected on the way to it, are in
   still runs its own sign-in flows, so two nodes can sign the same CLI in at
   once; the one that finishes last wins
   ([cli-auth.md](code/cli-auth.md#one-per-cli-owned-by-the-server)).
-- **No AI CLI update.** The nodes share each CLI's install the same way, so
-  updating it from any node's Pockode (Settings → AI CLIs) updates it for all
-  of them ([cli-update-ui.md](cli-update-ui.md#cluster)). Unlike a sign-in, two
-  nodes cannot update the same CLI at once: a lock shared by every Pockode of
-  the OS user refuses the second
+- **No AI CLI install or update.** The nodes share each CLI's install the same
+  way, so installing or updating it from any node's Pockode (Settings → AI
+  CLIs) does it for all of them ([cli-update-ui.md](cli-update-ui.md#cluster)).
+  Unlike a sign-in, two nodes cannot install or update the same CLI at once: a
+  lock shared by every Pockode of the OS user refuses the second
   ([cli-update.md](code/cli-update.md#one-update-per-cli-per-os-user)).
 
 ### Available Methods

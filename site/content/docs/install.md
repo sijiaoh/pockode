@@ -15,7 +15,7 @@ weight: 40
 | Linux | amd64, arm64 | `pockode-linux-amd64`, `pockode-linux-arm64` |
 | Windows | x64 (also Windows 11 on Arm) | `pockode-windows-amd64.exe` |
 
-Windows 10 on Arm cannot run x64 programs and is not supported. Each file is the whole program, web app included. Pockode also needs `git` for its Git and worktree features, and the `claude` or `codex` CLI.
+Windows 10 on Arm cannot run x64 programs and is not supported. Each file is the whole program, web app included. Pockode also needs `git` for its Git and worktree features, and the `claude` or `codex` CLI, which it can install from the app if the machine has `npm`.
 
 ## macOS and Linux
 
