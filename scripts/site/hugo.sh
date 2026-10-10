@@ -1,10 +1,10 @@
 #!/bin/bash
 # Runs the Hugo pockode.com is built with, in site/, passing its arguments on.
-# CI and the host both build through it, so the version below is the one every
-# real build uses; why that matters is in site/README.md#building. Raise the
-# version, the checksum and that paragraph together.
+# CI builds the site that goes live through it, so the version below is the
+# one every real build uses; why that matters is in site/README.md#building.
+# Raise the version, the checksum and that paragraph together.
 #
-# Downloads on Linux x86-64 only, the platform of both builds; elsewhere, run
+# Downloads on Linux x86-64 only, the platform CI builds on; elsewhere, run
 # your own Hugo at this version or later.
 set -euo pipefail
 
