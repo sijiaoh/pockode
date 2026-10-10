@@ -252,6 +252,20 @@ var toolDefinitions = []toolDefinition{
 		},
 	},
 	{
+		Name: "html_render",
+		Description: "Show the user something richer than Markdown can carry — a comparison, a chart, a structured report — as an HTML page. " +
+			"The HTML is rendered as-is in a sandboxed iframe in the chat, where scripts and external resources load normally. " +
+			"The user already sees the rendered result, so do not repeat or summarize its content in your reply.",
+		InputSchema: inputSchema{
+			Type: "object",
+			Properties: map[string]propertySchema{
+				"title": {Type: "string", Description: "A short title for what the page shows."},
+				"html":  {Type: "string", Description: "The HTML to render: a full document or a fragment. At most 256KB."},
+			},
+			Required: []string{"title", "html"},
+		},
+	},
+	{
 		Name: "question_post",
 		Description: "Ask the user questions and keep working. The call returns immediately with a request id for each question; it does not wait for an answer. " +
 			"Each answer — or the user's refusal to answer — arrives later as an ordinary message in this chat, in a turn of its own, possibly long after this turn has ended. Do not wait for it here, and do not ask again because nothing came back. " +

@@ -170,6 +170,8 @@ func (e *Executor) Execute(ctx context.Context, caller Caller, name string, args
 		return e.agentRoleGet(args)
 	case "agent_role_reset_defaults":
 		return e.agentRoleResetDefaults(ctx)
+	case "html_render":
+		return htmlRender(args)
 	case "question_post":
 		return e.questionPost(ctx, caller, args)
 	case "question_cancel":
