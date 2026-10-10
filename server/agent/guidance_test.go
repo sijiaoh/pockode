@@ -12,7 +12,7 @@ import (
 // step's decisions and quietly took the rest, which a rule in the tool's own
 // description did not prevent. Each has to be in the text every session sees
 // from its first turn.
-func TestAskingGuidance_CarriesTheRulesNeededBeforeLoading(t *testing.T) {
+func TestGuidance_CarriesTheAskingRulesNeededBeforeLoading(t *testing.T) {
 	for _, want := range []string{
 		"question_post",
 		"tool search",             // the tool is only a name until loaded
@@ -23,8 +23,25 @@ func TestAskingGuidance_CarriesTheRulesNeededBeforeLoading(t *testing.T) {
 		"quietly decide the rest",
 		"passwords, tokens or API keys",
 	} {
-		if !strings.Contains(AskingGuidance, want) {
-			t.Errorf("AskingGuidance does not say %q", want)
+		if !strings.Contains(askingGuidance, want) {
+			t.Errorf("the asking guidance does not say %q", want)
+		}
+	}
+}
+
+// html_render is only a name until loaded, like question_post, so when to
+// reach for it — and that it does not replace Markdown or the reply — has to
+// be seen before then too.
+func TestGuidance_CarriesTheRenderingRulesNeededBeforeLoading(t *testing.T) {
+	for _, want := range []string{
+		"html_render",
+		"tool search",
+		"richer than Markdown",
+		"Keep plain prose and code in Markdown",
+		"Do not repeat",
+	} {
+		if !strings.Contains(renderingGuidance, want) {
+			t.Errorf("the rendering guidance does not say %q", want)
 		}
 	}
 }

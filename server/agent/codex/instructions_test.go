@@ -37,14 +37,14 @@ func newThreadOpts(t *testing.T) agent.StartOptions {
 	return agent.StartOptions{DataDir: t.TempDir(), SessionID: "s1", WorkDir: "/tmp/work"}
 }
 
-func TestDeveloperInstructions_ANewThreadCarriesTheAskingGuidance(t *testing.T) {
+func TestDeveloperInstructions_ANewThreadCarriesTheGuidance(t *testing.T) {
 	s := openWithMCP(t, newThreadOpts(t), map[string]*rpcResponse{
 		"config/read":  {Result: json.RawMessage(`{"config":{"developer_instructions":null}}`)},
 		"thread/start": threadReply("thread-new"),
 	})
 
-	if got, _ := startedWith(t, s); got != agent.AskingGuidance {
-		t.Errorf("developerInstructions = %q, want agent.AskingGuidance", got)
+	if got, _ := startedWith(t, s); got != agent.Guidance {
+		t.Errorf("developerInstructions = %q, want agent.Guidance", got)
 	}
 	// Project config layers are resolved from the directory asked about.
 	var params struct {
@@ -63,7 +63,7 @@ func TestDeveloperInstructions_KeepTheUsersOwn(t *testing.T) {
 		"thread/start": threadReply("thread-new"),
 	})
 
-	if got, _ := startedWith(t, s); got != "Answer tersely.\n\n"+agent.AskingGuidance {
+	if got, _ := startedWith(t, s); got != "Answer tersely.\n\n"+agent.Guidance {
 		t.Errorf("developerInstructions = %q, want the user's followed by the guidance", got)
 	}
 }
@@ -74,8 +74,8 @@ func TestDeveloperInstructions_UnreadableConfigWarnsAndCarriesOn(t *testing.T) {
 		"thread/start": threadReply("thread-new"),
 	})
 
-	if got, _ := startedWith(t, s); got != agent.AskingGuidance {
-		t.Errorf("developerInstructions = %q, want agent.AskingGuidance", got)
+	if got, _ := startedWith(t, s); got != agent.Guidance {
+		t.Errorf("developerInstructions = %q, want agent.Guidance", got)
 	}
 	var warned bool
 	for _, ev := range drainEvents(s.sess.events) {

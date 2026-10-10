@@ -8,7 +8,7 @@ import (
 	"github.com/pockode/server/agent"
 )
 
-// Codex has no channel of its own for Pockode's asking guidance that it shows
+// Codex has no channel of its own for Pockode's guidance that it shows
 // before a tool is loaded: an MCP server's instructions only become the
 // description of its tool namespace once the model has searched for one of its
 // tools (codex-cli 0.159.3). The thread's developer instructions are seen from
@@ -24,7 +24,7 @@ import (
 //     or before a change to it, goes on without it.
 
 // developerInstructions is the user's own developer_instructions for this
-// working directory, if any, followed by Pockode's asking guidance.
+// working directory, if any, followed by Pockode's guidance.
 func (s *appSession) developerInstructions(ctx context.Context) string {
 	user, err := s.readUserDeveloperInstructions(ctx)
 	// Not reading them is not a reason to refuse the session: the user is told
@@ -40,9 +40,9 @@ func (s *appSession) developerInstructions(ctx context.Context) string {
 	}
 
 	if user == "" {
-		return agent.AskingGuidance
+		return agent.Guidance
 	}
-	return user + "\n\n" + agent.AskingGuidance
+	return user + "\n\n" + agent.Guidance
 }
 
 // readUserDeveloperInstructions asks Codex for the developer_instructions its

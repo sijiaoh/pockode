@@ -59,10 +59,10 @@ func TestInitialize(t *testing.T) {
 	if result.ServerInfo.Name != "pockode" {
 		t.Errorf("name = %q, want pockode", result.ServerInfo.Name)
 	}
-	// The one channel through which Claude sees the asking guidance before it
-	// has loaded question_post.
-	if result.Instructions != agent.AskingGuidance {
-		t.Errorf("instructions = %q, want agent.AskingGuidance", result.Instructions)
+	// The one channel through which Claude sees Pockode's guidance before it
+	// has loaded question_post or html_render.
+	if result.Instructions != agent.Guidance {
+		t.Errorf("instructions = %q, want agent.Guidance", result.Instructions)
 	}
 }
 
