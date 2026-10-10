@@ -20,7 +20,7 @@ body:
     attributes:
       label: Steps to reproduce
       placeholder: |
-        1. Run `pockode --password ...` in a project
+        1. Run `pockode -password ...` in a project
         2. Open the chat on the phone
         3. ...
   - type: input

@@ -100,7 +100,7 @@ export default function App() {
 						    the field raises, and a reader who never sees the layout
 						    would otherwise never be given it. */}
 						<p id="password-help" className="mt-1 text-xs text-th-text-muted">
-							The <code className="font-mono">--password</code> you started the
+							The <code className="font-mono">-password</code> you started the
 							cluster with.
 						</p>
 						{inputError && (

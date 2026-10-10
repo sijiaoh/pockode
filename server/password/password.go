@@ -16,7 +16,7 @@ import (
 )
 
 // EnvVar is the environment variable the server reads its password from when
-// the --password flag is not provided.
+// the -password flag is not provided.
 //
 // Passing the password via the environment instead of a command-line flag keeps
 // it out of the process argv, which on Linux is world-readable through
@@ -28,7 +28,7 @@ const EnvVar = "POCKODE_PASSWORD"
 // launcher script keeps working across the rename.
 const LegacyEnvVar = "POCKODE_AUTH_TOKEN"
 
-// RemovalVersion is when the deprecated --auth-token flag and LegacyEnvVar stop
+// RemovalVersion is when the deprecated -auth-token flag and LegacyEnvVar stop
 // being read. The deprecation period is three minor releases (the rename landed
 // in v0.17.0), long enough for a pinned launcher script to be noticed and
 // updated.
@@ -47,8 +47,8 @@ type Credential struct {
 	DeprecationWarning string
 }
 
-// Resolve returns the password, preferring, in order: the --password flag, the
-// deprecated --auth-token flag, EnvVar, LegacyEnvVar.
+// Resolve returns the password, preferring, in order: the -password flag, the
+// deprecated -auth-token flag, EnvVar, LegacyEnvVar.
 //
 // Giving both names of a pair different values is refused rather than resolved
 // by precedence: the two spellings then disagree about what the password is,
@@ -59,7 +59,7 @@ func Resolve(flagValue, legacyFlagValue string) (Credential, error) {
 	legacyEnvValue := os.Getenv(LegacyEnvVar)
 
 	if flagValue != "" && legacyFlagValue != "" && flagValue != legacyFlagValue {
-		return Credential{}, fmt.Errorf("--password and --auth-token are both set with different values; remove --auth-token")
+		return Credential{}, fmt.Errorf("-password and -auth-token are both set with different values; remove -auth-token")
 	}
 	if envValue != "" && legacyEnvValue != "" && envValue != legacyEnvValue {
 		return Credential{}, fmt.Errorf("%s and %s are both set with different values; unset %s", EnvVar, LegacyEnvVar, LegacyEnvVar)
@@ -79,7 +79,7 @@ func Resolve(flagValue, legacyFlagValue string) (Credential, error) {
 
 	switch {
 	case legacyFlagValue != "":
-		cred.DeprecationWarning = "--auth-token is deprecated, use --password (env " + EnvVar + "); it will be removed in " + RemovalVersion
+		cred.DeprecationWarning = "-auth-token is deprecated, use -password (env " + EnvVar + "); it will be removed in " + RemovalVersion
 	case legacyEnvValue != "":
 		cred.DeprecationWarning = LegacyEnvVar + " is deprecated, use " + EnvVar + "; it will be removed in " + RemovalVersion
 	}

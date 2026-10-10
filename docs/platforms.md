@@ -124,7 +124,7 @@ curl -fsSL https://pockode.com/install.sh | sh
 ```
 
 Then run `pockode` from the project directory you want to work in — that is what
-it operates on by default (`--work`) — and scan the QR code it prints:
+it operates on by default (`-work`) — and scan the QR code it prints:
 
 ```bash
 pockode -password YOUR_PASSWORD
@@ -368,7 +368,7 @@ Finding them is where Windows differs, in three ways:
 ## Worktree Setup Hook on Windows
 
 The setup hook is a bash script: `worktree-setup.sh` in the data directory
-(`.pockode/` unless `--data` says otherwise), run after a new worktree is
+(`.pockode/` unless `-data` says otherwise), run after a new worktree is
 created.
 
 Windows has no bash of its own, so Pockode looks for the `bash.exe` bundled with
@@ -407,13 +407,13 @@ as a policy that forbids it, or a hook that genuinely needs PowerShell.
 
 ## Paths on Windows
 
-Anywhere Pockode takes a directory from you — the `--work`, `--data` and
-`--log-file` flags, a cluster node's path, the worktree base directory setting —
+Anywhere Pockode takes a directory from you — the `-work`, `-data` and
+`-log-file` flags, a cluster node's path, the worktree base directory setting —
 both separators work, and a leading `~` is expanded to your home directory.
 
 That last part is worth stating because it is not the shell doing it. `bash` and
 `zsh` expand `~` before the server ever sees it; neither `cmd.exe` nor PowerShell
-does, so on Windows `--work ~\projects` reaches the server verbatim. Pockode
+does, so on Windows `-work ~\projects` reaches the server verbatim. Pockode
 expands it itself, which is why the same value behaves the same on every
 platform.
 
@@ -429,7 +429,7 @@ readable by everyone on the machine, while the same directory under
 So Pockode does not rely on mode bits there. At startup it replaces the data
 directory's ACL with one naming only you, SYSTEM and Administrators, and the
 files inside — `server.json`, `relay.json`, session transcripts, `server.log` —
-inherit it. In `--git` mode the `.git` directory Pockode creates is restricted
+inherit it. In `-git` mode the `.git` directory Pockode creates is restricted
 the same way, so the PAT in `.git\.git-credentials` stays covered even though
 git rewrites that file after every push. Administrators stay on the list
 deliberately: they can take ownership of any file regardless, so removing them

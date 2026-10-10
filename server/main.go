@@ -139,7 +139,7 @@ func main() {
 
 	portFlag := flag.Int("port", defaultPort, "server port")
 	passwordFlag := flag.String("password", "", "password for the web UI (required; or set "+password.EnvVar+")")
-	legacyPasswordFlag := flag.String("auth-token", "", "deprecated alias for --password (removed in "+password.RemovalVersion+")")
+	legacyPasswordFlag := flag.String("auth-token", "", "deprecated alias for -password (removed in "+password.RemovalVersion+")")
 	workDirFlag := flag.String("work", ".", "working directory")
 	dataDirFlag := flag.String("data", "", "data directory (default: <work>/.pockode)")
 	devModeFlag := flag.Bool("dev", false, "enable development mode")
@@ -197,7 +197,7 @@ Flags:
 		os.Exit(1)
 	}
 	if cred.Password == "" {
-		slog.Error("a password is required: pass --password <password>, or set the " + password.EnvVar + " environment variable (which keeps it out of the process argv)")
+		slog.Error("a password is required: pass -password <password>, or set the " + password.EnvVar + " environment variable (which keeps it out of the process argv)")
 		os.Exit(1)
 	}
 
@@ -586,7 +586,7 @@ func runCluster() {
 	clusterFlags := flag.NewFlagSet("cluster", flag.ExitOnError)
 	portFlag := clusterFlags.Int("port", cluster.DefaultPort, "server port")
 	passwordFlag := clusterFlags.String("password", "", "password for the web UI (required; or set "+password.EnvVar+")")
-	legacyPasswordFlag := clusterFlags.String("auth-token", "", "deprecated alias for --password (removed in "+password.RemovalVersion+")")
+	legacyPasswordFlag := clusterFlags.String("auth-token", "", "deprecated alias for -password (removed in "+password.RemovalVersion+")")
 	dataDirFlag := clusterFlags.String("data", "", "data directory (default: ~/.pockode-cluster)")
 	relayFlag := clusterFlags.Bool("relay", true, "relay for remote access (use -relay=false to disable)")
 	relayFrontendPortFlag := clusterFlags.Int("relay-frontend-port", 0, "relay frontend port (default: same as server port)")
@@ -600,7 +600,7 @@ func runCluster() {
 		os.Exit(1)
 	}
 	if cred.Password == "" {
-		fmt.Fprintln(os.Stderr, "Error: a password is required: pass --password <password>, or set the "+password.EnvVar+" environment variable (which keeps it out of the process argv)")
+		fmt.Fprintln(os.Stderr, "Error: a password is required: pass -password <password>, or set the "+password.EnvVar+" environment variable (which keeps it out of the process argv)")
 		os.Exit(1)
 	}
 
