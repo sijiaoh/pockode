@@ -239,7 +239,7 @@ body {
 
 .value-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  grid-template-columns: repeat(2, 1fr);
   gap: 1.5rem;
 }
 
@@ -473,13 +473,13 @@ body {
 }
 
 #os-unix:checked ~ .install-tablist [for="os-unix"],
-#os-win:checked ~ .install-tablist [for="os-win"] {
+#os-windows:checked ~ .install-tablist [for="os-windows"] {
   background: var(--bg-elevated);
   color: var(--text);
 }
 
 #os-unix:focus-visible ~ .install-tablist [for="os-unix"],
-#os-win:focus-visible ~ .install-tablist [for="os-win"] {
+#os-windows:focus-visible ~ .install-tablist [for="os-windows"] {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
@@ -489,7 +489,7 @@ body {
 }
 
 #os-unix:checked ~ .install-panel[data-os="unix"],
-#os-win:checked ~ .install-panel[data-os="win"] {
+#os-windows:checked ~ .install-panel[data-os="windows"] {
   display: block;
 }
 

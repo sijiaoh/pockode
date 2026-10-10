@@ -1,18 +1,20 @@
 <!DOCTYPE html>
+{{- $m := hugo.Data.messaging -}}
+{{- $title := cond .IsHome $m.tagline .Title -}}
 <html lang="{{ .Site.LanguageCode }}">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{{ with .Title }}{{ . }} — {{ end }}{{ .Site.Title }}</title>
-  <meta name="description" content="{{ .Site.Params.subheadline }}">
+  <title>{{ with $title }}{{ . }} — {{ end }}{{ .Site.Title }}</title>
+  <meta name="description" content="{{ $m.subtitle }}">
   <meta name="theme-color" content="#0a0a0a">
 
   <link rel="icon" type="image/png" sizes="32x32" href="{{ "icons/favicon-32x32.png" | relURL }}">
   <link rel="apple-touch-icon" href="{{ "icons/apple-touch-icon.png" | relURL }}">
 
   <meta property="og:site_name" content="{{ .Site.Title }}">
-  <meta property="og:title" content="{{ with .Title }}{{ . }}{{ else }}{{ .Site.Title }}{{ end }}">
-  <meta property="og:description" content="{{ .Site.Params.subheadline }}">
+  <meta property="og:title" content="{{ with $title }}{{ . }}{{ else }}{{ .Site.Title }}{{ end }}">
+  <meta property="og:description" content="{{ $m.subtitle }}">
   <meta property="og:image" content="{{ "icons/og-image.jpg" | absURL }}">
   <meta property="og:url" content="{{ .Permalink }}">
   <meta property="og:type" content="website">
