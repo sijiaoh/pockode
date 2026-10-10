@@ -531,6 +531,51 @@ describe("MessageItem", () => {
 		expect(screen.getByText("Read")).toBeInTheDocument();
 	});
 
+	describe("an html_render call", () => {
+		const page = (name: string, status: "success" | "running"): Message => ({
+			id: "page",
+			role: "assistant",
+			parts: [
+				{
+					type: "tool_call",
+					tool: {
+						id: "tool-page",
+						name,
+						input: { title: "Latency report", html: "<h1>p99</h1>" },
+						status,
+					},
+				},
+			],
+			status: "complete",
+			createdAt: new Date(),
+		});
+
+		it.each([
+			"mcp__pockode__html_render",
+			"pockode:html_render",
+		])("is drawn as a page card once %s succeeds", (name) => {
+			render(
+				<MessageItem sessionId="session-1" message={page(name, "success")} />,
+			);
+			const card = screen.getByRole("region", { name: "Latency report" });
+			expect(
+				within(card).getByRole("button", { name: "Show source" }),
+			).toBeInTheDocument();
+			expect(screen.queryByText("html_render")).toBeNull();
+		});
+
+		it("stays a tool row while it runs", () => {
+			render(
+				<MessageItem
+					sessionId="session-1"
+					message={page("mcp__pockode__html_render", "running")}
+				/>,
+			);
+			expect(screen.getByText("html_render")).toBeInTheDocument();
+			expect(screen.queryByRole("region")).toBeNull();
+		});
+	});
+
 	it("renders tool call with result when expanded", async () => {
 		const user = userEvent.setup();
 		const message: Message = {

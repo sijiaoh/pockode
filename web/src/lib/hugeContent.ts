@@ -32,7 +32,8 @@ const SLICE_CHARS = 16_000;
  * both bound the DOM on their own.
  */
 export function canBeHuge(content: FullScreenContent): boolean {
-	if (content.kind === "files") return false;
+	// A page is drawn by its frame, and never sliced.
+	if (content.kind === "files" || content.kind === "html") return false;
 	if (content.kind === "output" && content.live) return false;
 	// Its slice would be text alone, and what sits between the text — an image,
 	// a file — would vanish from the transcript.
@@ -91,6 +92,8 @@ function estimateRows(
 		}
 		case "files":
 			return content.paths.length;
+		case "html":
+			return 0;
 	}
 }
 
@@ -296,6 +299,7 @@ export function sliceContent(
 		case "change":
 			return { kind: "change", change: sliceChange(content.change) };
 		case "files":
+		case "html":
 			return content;
 	}
 }
@@ -315,6 +319,7 @@ export function contentCount(
 		case "files":
 			return { noun: "file", total: content.paths.length };
 		case "markdown":
+		case "html":
 			return undefined;
 	}
 }

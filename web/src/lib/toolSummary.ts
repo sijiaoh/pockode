@@ -4,6 +4,7 @@ import {
 	splitNativePath,
 } from "../utils/path";
 import { codexChangePaths } from "./codexChanges";
+import { htmlRenderInput, isHtmlRenderTool } from "./htmlRender";
 import { firstLine } from "./subagentRun";
 
 /**
@@ -327,6 +328,10 @@ export function toolSummary(
 	}
 
 	const mcp = splitMcpName(toolName);
+	// Named by its title: the first value would as often be the whole page.
+	if (mcp && isHtmlRenderTool(toolName)) {
+		return { ...mcpSummary(mcp, {}), detail: htmlRenderInput(input).title };
+	}
 	if (mcp) return mcpSummary(mcp, input);
 
 	return fallbackSummary(toolName, input);

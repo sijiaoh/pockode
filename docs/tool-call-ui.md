@@ -17,7 +17,9 @@ change a result, the permission card and the turn's changes card all draw
 (read by `lib/proposedChange.ts`), `ToolOutcomeSections.tsx` for the blocks
 the two tool renderers share, `ToolSection.tsx` for the labelled,
 clamped section every one of those blocks is drawn as, and
-`TurnChangesCard.tsx` for [the files a turn changed](#the-turns-changes), all
+`TurnChangesCard.tsx` for [the files a turn changed](#the-turns-changes), and
+`HtmlRenderCard.tsx` over `HtmlFrame.tsx` for [a page the agent
+drew](#a-page-the-agent-drew-html_render), all
 under
 `web/src/components/Chat/`. The transcript around them
 is [agent-chat.md](agent-chat.md); the width ladder and the pointer gates are
@@ -75,7 +77,8 @@ Consecutive rows — tool calls, subagent calls and permission cards, whatever
 their state — are drawn as **one list**: a single `rounded-lg border
 border-th-border` frame with a 1px `border-th-border` hairline between rows, and
 no gap and no fill of its own, so the rows sit on the transcript's ground. Text,
-a question card and every other part end the list and stand on their own, with
+a question card, [a page the agent drew](#a-page-the-agent-drew-html_render)
+and every other part end the list and stand on their own, with
 the message's `space-y-2` around them. One call alone is a list of one row, so
 a row looks the same wherever it is. The one list without a visible frame is one
 holding nothing but thinking rows: it has no border, and its row is drawn bare
@@ -699,6 +702,7 @@ afterwards cannot word the same call differently.
 | `Task` / `Agent` (the CLI renamed it; history holds both) | the name | `description`, with `subagent_type` as a chip; without a description, `subagent_type`, else a Codex spawn's agent name or prompt ([below](#a-subagents-own-work)) | right |
 | `TaskOutput` | `TaskOutput` | the `task_id`, in mono | right |
 | `server:tool` (Codex MCP) or `mcp__server__tool` (Claude MCP) | the tool half | the server half as a chip, then the first scalar argument, else compact JSON | right |
+| `html_render` (Pockode's own MCP tool), while it is a row | `html_render` | `pockode` as a chip, then the `title` — never the first argument, which is as often the whole page | right |
 | anything else | the name | first non-empty scalar in `input` | right |
 
 Six decisions inside that table:
@@ -1725,6 +1729,7 @@ key it was opened with:
 | `<run>:result` | a tool row's outcome, live or final — *Output so far* and *Output* share it, so an open viewer carries on into the result |
 | `<run>:plan` · `card:<toolUseId>:plan` · `card:<toolUseId>:change` | the row's plan; a permission card's plan and *Proposed change*, apart from the row's because both can be on screen |
 | `turn:<run>:<path>:<index>` | a diff in [the turn's changes](#the-turns-changes) — a Codex change can list one path twice |
+| `<run>:page` | [a page the agent drew](#a-page-the-agent-drew-html_render) |
 | `report:<run>` · `thought:<hash>` · `sent:<message>` | a subagent's report; *Full reasoning*, keyed by a hash of its opening (200 characters, or its first six lines if they end sooner) so it carries over from the turn's tail into its row; a command's *Sent to the agent* |
 
 A key left with no publisher closes the viewer — but only if it is still
@@ -1788,6 +1793,7 @@ props for it: `subtitle`, drawn under the title, and `initialFocusRef`.
 | a diff (`Edit`, `MultiEdit`, a Codex change) | `ProposedChange`, whole | the transcript's remembered one (`diffSettingsStore`) | the top |
 | files (`Glob`, `Grep`'s file lists) | by the row, virtualized; **every** path, each with *Open* | none | the top |
 | Markdown (`WebFetch`, the plan, a report, reasoning, a `.md` file) | `MarkdownContent`, whole; plain wrapped text past `HIGHLIGHT_LIMIT` | none: it reflows | the top |
+| a page (`html_render`) | `HtmlFrame`, edge to edge with no padding, scrolling itself; its source, under the toolbar's `</>`, as code | the code's, while its source is shown | the top, in the mode the card was in |
 
 - **Wrap.** Only the diff's choice is remembered, and it is the same switch every
   diff in the chat shares. Output wraps by default because the transcript always
@@ -1842,6 +1848,9 @@ again refocuses it and selects the query.
   parse that is drawn, so lines not mounted are found and counted; Markdown in
   its rendered text; a diff in its code cells only, never its line numbers or
   `@@` headers, searched again when the diff library swaps in highlighted nodes.
+  A page only as its source: rendered, it is a document of another origin that
+  neither this find nor the browser's reaches, so there is no 🔍 and
+  Ctrl/Cmd+F is left to the browser rather than opening a bar that finds nothing.
 - **Highlights** are the CSS Custom Highlight API (`::highlight(find-match)` at
   20% accent, `::highlight(find-current)` at 45% plus an underline, so hue is not
   the only cue): ranges over the text that is drawn, so no `<mark>` is put into
@@ -2472,6 +2481,122 @@ renderer infers nothing.
   flat after them rather than being filed above words that came first — so the
   flat ones are the newest, and the row's latest child is read from them.
 
+## A page the agent drew (`html_render`)
+
+`html_render` is Pockode's own MCP tool: the agent passes a `title` and an
+`html` document (or fragment) to show the user something richer than Markdown.
+It arrives as an ordinary tool call — `mcp__pockode__html_render` from Claude,
+`pockode:html_render` from Codex — whose input already holds the whole page, so
+the frontend draws straight from the call and there is no event of its own. Both
+names, and which state is a card, are `lib/htmlRender.ts`, and nowhere else.
+
+**It is a row until it succeeds, and then a card.** `running`, `background`,
+`error` and `interrupted` are drawn exactly as any other call's, detail = the
+title ([title and detail](#title-and-detail)): a page that never arrived is no
+part of the reply. On `success` the call stops being a row part (`isRowPart`,
+`lib/partTree.ts`), so it is a block of its own, like text: it ends the list
+before it, starts a new one after it, folds into no group and counts in none.
+It leaves the list at the moment it settles, which is the same moment a group
+forms ([why](#why-a-group-forms-only-on-settled-calls)), so it is never first
+folded and then pulled out. A subagent's Process goes through the same
+`PartBlocks` and draws the same card.
+
+```
+┌──────────────────────────────────────────────┐  the list's frame, alone
+│ ▢  Q3 Latency Report                 </>  ⤢  │  header, no fill
+├──────────────────────────────────────────────┤
+│                                              │
+│    the page, white, as written, no padding   │  as tall as the page, ≤ 70%
+│                                              │
+├──────────────────────────────────────────────┤
+│ ⤢ Full screen                                │  only when the cap cuts it
+└──────────────────────────────────────────────┘
+```
+
+- **Frame**: the list's own `rounded-lg border border-th-border overflow-clip`.
+  The header keeps the row's height floor and puts an `AppWindow` where the
+  glyph column would be; the title is one `truncate`d line, `Untitled page`
+  when empty, and whole in the viewer's title. No chevron: the card does not
+  fold, it is the reply.
+- **`</>`** (`aria-pressed`, *Show source*) swaps the page for its source: the
+  `CodeBlock` every other code uses, clamped at the main budget
+  ([budgets](#budgets)), so the transcript keeps the drag. The frame is only
+  hidden under it, never unmounted, so the page keeps its state and its scripts
+  do not run again.
+- **⤢** is always there, and last: unlike a section's, it does not wait for a
+  cut, since a card is never the best place to read a page and nothing can tell
+  whether it was read to the end. The viewer ([per kind](#per-kind-of-content))
+  opens in the mode the card is in, titled by the page alone — the reader is
+  reading a page, not a tool call.
+- **Height** follows the page, up to 70% of the transcript's height
+  (`TRANSCRIPT_HEIGHT_VAR`, as the budgets are, so a phone on its side does not
+  overflow), and past it the page scrolls inside itself. A body refuses a
+  scroller of its own ([the body](#the-body-problems-2-and-3)), but a frame
+  cannot be cut and then opened in place as a body is: opening it would put a
+  page of any height into the transcript. Its scrollbar
+  is invisible on a phone, so once cut the card says so itself with *⤢ Full
+  screen* under it. A frame has no height of its own to measure — it is another
+  origin — so the card appends **one small script** to the page that posts the
+  document element's height on every resize — its scroll height instead once
+  that passes the frame, since a page pinned to its frame (`html, body {
+  height: 100% }`, common in generated pages) keeps its content in the
+  overflow; only messages whose `source` is
+  that frame's own window are taken, 0 is ignored (a hidden or momentarily
+  blank page), and the floor is 48px. The cap is CSS (`min(<reported>px,
+  calc(… * 0.7))`), so it moves with the transcript, and a page that is
+  `min-height: 100vh` — or pinned to 100% with the body's default margin, which
+  overflows the frame by that margin — settles at the cap instead of growing
+  with its frame.
+- **Mounted near the viewport, never unmounted.** Opening a long session must
+  not run every old page at once, so a frame mounts only when its card comes
+  within 200px of the viewport (`useInView`); before that it is a
+  `bg-th-bg-secondary` placeholder — grey, because a white block that has not
+  loaded glares in the dark theme. The placeholder takes the page's last
+  measured height, kept by call across remounts (160px the first time), so a
+  reopened session does not jump as frames arrive. Once mounted the frame
+  stays: unmounting would throw away what the user did in the page.
+- **White, whatever the theme.** The frame is `bg-white` under `color-scheme:
+  light` — without it a dark parent paints the canvas dark under a page that
+  assumed white. In the dark theme it reads as a sheet of paper on the
+  transcript, deliberately: it is an ordinary page, and the only colour here
+  that is not a `th-` token.
+
+### The sandbox, and nothing else
+
+The page is drawn **exactly as the agent wrote it**: no base stylesheet, no CSP,
+no filtering. External images, styles, scripts and links all work. It is the
+agent's own output, written for the user, and every rule added on top would be a
+page that renders wrong for a reason nobody can see; what has to be protected is
+not the page but Pockode around it. That is one floor, `HTML_FRAME_SANDBOX` in
+`HtmlFrame.tsx`, the one frame component the card and the viewer share:
+
+```
+<iframe srcdoc="…" sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox">
+```
+
+- **Never `allow-same-origin`.** A `srcdoc` frame inherits its parent's origin;
+  with this token it would keep it, and read Pockode's stored credentials and
+  open its WebSocket. That socket drives the agent — which runs commands on the
+  user's machine — so a page in a message would be a way to run anything there.
+  This is the class of hole Open WebUI's CVEs were. Without it the frame is an
+  opaque origin, which is also why its height has to be posted rather than
+  measured.
+- **Never `allow-modals`.** Pages stay in the session, and every one mounts
+  again when the session is reopened; a page with an `alert` or `confirm` would
+  throw it up from an old message each time.
+- **`allow-popups` and `allow-popups-to-escape-sandbox`** so a link the user
+  presses opens in a new tab as a normal page, not a crippled one.
+
+`HtmlFrame.test.tsx` holds both forbidden tokens out.
+
+**Known limits.** An unclosed `<script>` or `<!--` in the page swallows the
+appended script, and the card stays at its placeholder height (⤢ still reads
+it). While focus is inside the page, keys go to the page's document, so Escape
+never reaches the viewer — ✕ closes it. A link followed inside the frame is
+the page's own navigation and is left alone. A frame scrolled out of view is
+throttled by the browser and reports nothing until it comes back. The height
+reporting has been watched in headless Chromium only, not across engines.
+
 ## Width and pointer
 
 Almost nothing here is width-dependent, and that is the design rather than an
@@ -2810,6 +2935,19 @@ the virtualizer measures it.
     toggling diff wrap in a viewer, which every transcript diff follows. ✕ and
     Escape leave no extra history entry behind: Back afterwards does what it did
     before the viewer opened.
+50. An `html_render` call, from Claude and from Codex: a `pockode` row titled by
+    the page while it runs (or if it fails), then on success a card that splits
+    the list around it — never inside a group. In the dark theme the page is
+    white; its placeholder is not.
+51. A page taller than the screen: the card stops at 70% of the transcript with
+    *⤢ Full screen* under it; a short page has no footer and no inner scroll.
+    Toggle `</>` and back: the page has kept its state. A page that tries
+    `alert()` shows nothing; one that reads `localStorage` or `parent.document`
+    throws. A `target="_blank"` link opens a new tab.
+52. A session with many pages, reopened: only the frames near the screen
+    mount, and scrolling to the others does not make the transcript jump.
+53. A page full screen: edge to edge, no 🔍, Ctrl/Cmd+F the browser's own;
+    `</>` turns it into code with wrap and find.
 
 ## Out of scope
 
@@ -2827,7 +2965,8 @@ the virtualizer measures it.
 - **Per-call token cost.** Usage has an owner
   ([usage-display-ui.md](usage-display-ui.md)) and a row is not it.
 - **Re-theming.** Every colour here is an existing `th-` token; no new one is
-  introduced, and none is needed.
+  introduced, and none is needed. The one fixed colour, a page's white, is not
+  the theme's to change ([above](#a-page-the-agent-drew-html_render)).
 - **`BashOutput` and `KillShell`.** They are the same shape as `TaskOutput` and
   the rules above would apply to them unchanged, but whether they should be
   absorbed is a decision about each of them, not a consequence of this one.

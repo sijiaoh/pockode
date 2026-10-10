@@ -1,4 +1,5 @@
 import type { ContentPart } from "../types/message";
+import { isHtmlRenderCard } from "./htmlRender";
 
 /**
  * A message's content is a tree, not a list: a subagent call holds its own
@@ -165,11 +166,13 @@ export function partKey(part: ContentPart, index: number): string {
 /**
  * Whether a part is drawn as a row: a tool call (a subagent call included), a
  * permission card whatever its state, or a thinking. Everything else — text, a
- * question card, a notice — is drawn as itself.
+ * question card, a notice, a page an `html_render` call drew — is drawn as
+ * itself. That call is a row until it succeeds: the page is the reply, not a
+ * line in the tool log.
  */
 export function isRowPart(part: ContentPart): boolean {
 	return (
-		part.type === "tool_call" ||
+		(part.type === "tool_call" && !isHtmlRenderCard(part)) ||
 		part.type === "permission_request" ||
 		part.type === "thinking"
 	);

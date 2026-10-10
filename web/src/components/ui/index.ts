@@ -18,6 +18,7 @@ export {
 	ClampedContent,
 	type ClampHandle,
 	type ClampView,
+	TEXT_BUTTON,
 	TRANSCRIPT_HEIGHT_VAR,
 } from "./ClampedContent";
 export { CollapsibleBody, useEverExpanded } from "./CollapsibleBody";

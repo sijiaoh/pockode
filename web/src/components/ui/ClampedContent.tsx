@@ -241,7 +241,7 @@ const FADE_END =
 // area's height: two of these stand between a tool's command and its output,
 // and at 44px each they alone pushed an open Bash row past a phone's
 // transcript.
-const TEXT_BUTTON =
+export const TEXT_BUTTON =
 	"touch-target rounded px-2 py-1 text-th-accent hover:bg-th-overlay-hover";
 
 /**
