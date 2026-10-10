@@ -45,39 +45,26 @@ func clampArchiveLimit(limit int) (int, error) {
 }
 
 // hasCurrentRow reports whether a work item is drawn as a row of its own in the
-// `Current` segment.
+// `Current` segment: an unclosed story. A task is never a row — it is counted on
+// its story's row and seen on the story's own page.
 //
 // It mirrors `rowGroup` in web/src/components/Project/WorkListOverlay.tsx, and
 // has to: a cap is a decision about what to *fetch*, so the side doing the
 // fetching is the side that has to know which items are rows. Everything else
 // in the segment is sent because a row makes a claim about it — a story's tasks
-// for its `{closed}/{total}`, a task's story for its `in: <title>` — and is
-// counted nowhere (docs/list-paging-ui.md §2.2).
-// The two sides are deliberately not exact mirrors where they disagree about a
-// value neither recognises: here a row is kept, there it is not drawn. Sending
-// a row the client does not draw costs one row; withholding one it would have
-// drawn makes a work item unreachable, and a status nobody recognises — a
-// hand-edited or corrupted index — must not be one more way for that to happen
-// (the same rule as work.ValidateProgress).
+// for its `{closed}/{total}` — and is counted nowhere (docs/list-paging-ui.md
+// §2.2).
+// A story of a status neither side recognises is a row on both: the client
+// draws it under *Not running*, and here it is kept and never capped (see the
+// group predicates below). Withholding a row makes a work item unreachable, and
+// a status nobody recognises — a hand-edited or corrupted index — must not be
+// one more way for that to happen (the same rule as work.ValidateProgress).
 func hasCurrentRow(item rpc.WorkListItem) bool {
-	switch item.Status {
-	case work.StatusClosed:
-		return false
-	case work.StatusActive:
-		// A task earns a row only by needing a person; everything else about it
-		// is rolled up into its story's row. Both dimensions count — a task whose
-		// agent asked a question and went on working needs a person just as much
-		// as one whose turn is stuck (work.RowState.NeedsAttention).
-		return rowStateOf(item).NeedsAttention() || item.Type != work.WorkTypeTask
-	case work.StatusOpen:
-		return item.Type != work.WorkTypeTask
-	}
-	// Stopped, and anything unrecognised.
-	return true
+	return item.Type == work.WorkTypeStory && item.Status != work.StatusClosed
 }
 
 // The two groups of `Current` that accumulate and never empty by themselves,
-// which is why they are the two that are capped. Status and type alone decide
+// which is why they are the two that are capped. Status alone decides
 // membership, so a row does not leave or join a group when its activity moves.
 //
 // They are separate predicates rather than one because the client draws them as
@@ -86,22 +73,19 @@ func hasCurrentRow(item rpc.WorkListItem) bool {
 // one of them wrong (docs/list-paging-ui.md §4.1).
 //
 // A row of an unrecognised status belongs to neither, so the cap never reaches
-// it — the conservative half of the asymmetry above, and what keeps "rows sent
-// plus rows held back" exactly the group the client draws. Only the status can
+// it (see hasCurrentRow). The client draws it under *Not running* all the same,
+// among the rows it received, so that heading's count stays whole. Only the status can
 // be unrecognised: the type is derived from story_id and is always one of the
 // two (work.Work.Type).
 
-// isStoppedRow reports whether a row belongs to the *Stopped* group. Stories
-// and tasks alike: the group's membership rule is the status, and a stopped
-// task has a row of its own (hasCurrentRow).
+// isStoppedRow reports whether a row belongs to the *Stopped* group.
 func isStoppedRow(item rpc.WorkListItem) bool {
 	return item.Status == work.StatusStopped
 }
 
-// isOpenRow reports whether a row belongs to the *Not running* group, which
-// since *Stopped* left it holds open stories and nothing else.
+// isOpenRow reports whether a row belongs to the *Not running* group.
 func isOpenRow(item rpc.WorkListItem) bool {
-	return item.Status == work.StatusOpen && item.Type == work.WorkTypeStory
+	return item.Status == work.StatusOpen
 }
 
 // CurrentHidden is how many rows each capped group of `Current` had held back.
@@ -138,38 +122,18 @@ func currentSegment(items []rpc.WorkListItem, groupCap int) (kept []rpc.WorkList
 		}
 	}
 
-	// A story whose own task is a row cannot be dropped: the task would go with
-	// it, and *Needs you* is never truncated. Recorded before anything is
-	// dropped, so which stories are droppable does not depend on the order the
-	// drops happen in.
-	holdsRowChild := make(map[string]bool, len(items))
-	for _, item := range items {
-		if item.StoryID != "" && rows[item.ID] {
-			holdsRowChild[item.StoryID] = true
-		}
-	}
-
 	dropped := make(map[string]bool)
 	capGroup := func(group func(rpc.WorkListItem) bool) int {
 		if groupCap <= 0 {
 			return 0
 		}
-		excess := 0
-		// Only stories are droppable. Dropping a stopped *task* would save
-		// nothing: its story keeps every one of its tasks anyway, for the
-		// `{closed}/{total}` on its own row — which is also why the *Stopped*
-		// group's cap only ever bites on stopped stories.
-		var droppable []rpc.WorkListItem
+		var members []rpc.WorkListItem
 		for _, item := range items {
-			if !rows[item.ID] || !group(item) {
-				continue
-			}
-			excess++
-			if item.Type == work.WorkTypeStory && !holdsRowChild[item.ID] {
-				droppable = append(droppable, item)
+			if rows[item.ID] && group(item) {
+				members = append(members, item)
 			}
 		}
-		excess -= groupCap
+		excess := len(members) - groupCap
 		if excess <= 0 {
 			return 0
 		}
@@ -177,13 +141,11 @@ func currentSegment(items []rpc.WorkListItem, groupCap int) (kept []rpc.WorkList
 		// archive's own order, borrowed rather than restated so that the two
 		// segments cannot drift apart on a tie — and eaten from the end, so
 		// what goes is always the tail of what the user sees.
-		sort.Slice(droppable, session.ListOrder(droppable, rpc.WorkListItem.Cursor))
-		n := 0
-		for i := len(droppable) - 1; i >= 0 && n < excess; i-- {
-			dropped[droppable[i].ID] = true
-			n++
+		sort.Slice(members, session.ListOrder(members, rpc.WorkListItem.Cursor))
+		for _, item := range members[len(members)-excess:] {
+			dropped[item.ID] = true
 		}
-		return n
+		return excess
 	}
 	hidden = CurrentHidden{Stopped: capGroup(isStoppedRow), Open: capGroup(isOpenRow)}
 
@@ -194,16 +156,11 @@ func currentSegment(items []rpc.WorkListItem, groupCap int) (kept []rpc.WorkList
 		if dropped[item.ID] {
 			continue
 		}
-		switch {
-		case rows[item.ID]:
-		case item.StoryID != "" && rows[item.StoryID] && !dropped[item.StoryID]:
-			// A task kept for the roll-up on its story's row.
-		case holdsRowChild[item.ID]:
-			// A story kept for the name its task's row prints.
-		default:
-			continue
+		// A task goes with its story: kept for the roll-up on its row, dropped
+		// with it, and sent nowhere when the story has no row here.
+		if rows[item.ID] || (rows[item.StoryID] && !dropped[item.StoryID]) {
+			kept = append(kept, item)
 		}
-		kept = append(kept, item)
 	}
 	return kept, hidden
 }

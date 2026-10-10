@@ -33,8 +33,7 @@ const work = (overrides: Partial<WorkListItem> = {}): WorkListItem => ({
 
 /**
  * The line of facts under the title, in the order it is read left to right. This
- * is `textContent`, so it is what a screen reader gets: the `in` before a parent
- * title is the `sr-only` word standing in for the decorative arrow.
+ * is `textContent`, so it is what a screen reader gets.
  */
 function metaLine(): string {
 	const role = screen.getByText("Engineer");
@@ -141,13 +140,10 @@ describe("WorkRow", () => {
 				type: "task",
 				activity: "needs_permission",
 			}),
-			storyTitle: "Cluster mode",
 			roleName: "Engineer",
 		});
 
-		expect(metaLine()).toBe(
-			"in Cluster mode·Needs permission·feature-x·Engineer",
-		);
+		expect(metaLine()).toBe("Needs permission·feature-x·Engineer");
 	});
 
 	it("rolls its children up into the story's own line", () => {
@@ -162,17 +158,6 @@ describe("WorkRow", () => {
 		});
 
 		expect(metaLine()).toBe("Running·Engineer·1 active·1/3 tasks");
-	});
-
-	// §3.1: the story detail's children section drops the parent slot, and that
-	// is the only difference between the two screens' rows.
-	it("leaves the parent unnamed when the screen does not pass one", () => {
-		renderRow({
-			work: work({ type: "task" }),
-			roleName: "Engineer",
-		});
-
-		expect(metaLine()).toBe("Running·Engineer");
 	});
 
 	// The states nothing is waiting on the user for used to be told apart by a
@@ -253,41 +238,13 @@ describe("WorkRow", () => {
 		);
 	});
 
-	// Depth is decided by the work, not by the screen, so the list and the story
-	// detail's Tasks section indent the same rows.
+	// Depth is decided by the work, not by the screen: the story detail's Tasks
+	// section, the one place a task is listed, sits in under its heading.
 	it("sets a task a level in from a story", () => {
 		expect(
 			card(renderRow({ work: work({ type: "task" }) }).container),
 		).toHaveClass("ml-4");
 		expect(card(renderRow({ work: work() }).container)).not.toHaveClass("ml-4");
-	});
-
-	// A task row's only channel for "which story is this under" is this slot, and
-	// the line clips from the right.
-	it("names the parent before anything else on the line", () => {
-		renderRow({
-			work: work({ type: "task", activity: "needs_permission" }),
-			storyTitle: "Cluster mode",
-			roleName: "Engineer",
-		});
-
-		expect(metaLine()).toMatch(/^in Cluster mode·/);
-		expect(screen.getByText("Cluster mode").parentElement).toHaveClass(
-			"text-th-text-secondary",
-		);
-	});
-
-	// The arrow that replaced the words `in:` is decorative, so without them the
-	// line reads as a bare title that could equally be a role or a worktree —
-	// spoken, not drawn, because on screen the arrow is the whole point.
-	it("keeps the word the arrow stands for, for a screen reader", () => {
-		const { container } = renderRow({
-			work: work({ type: "task" }),
-			storyTitle: "Cluster mode",
-		});
-
-		const spoken = container.querySelectorAll(".sr-only");
-		expect([...spoken].map((el) => el.textContent)).toEqual(["in "]);
 	});
 
 	// A transparent left edge in a column of bordered cards reads as a card

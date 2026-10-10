@@ -38,10 +38,9 @@ interface Props {
  * The project list: one column of the work that needs a person or is under way,
  * and a second segment holding the archive (docs/project-ui.md §2).
  *
- * Nothing here expands. A story's tasks are listed in exactly one place, the
- * story's detail page, and the only tasks that appear here are the ones nobody
- * else is coming for — which is why a group can promise that what is in it is
- * for the user to do.
+ * Nothing here expands, and only stories are rows. A story's tasks are listed
+ * in exactly one place, the story's detail page; here they are only counted on
+ * their story's row.
  */
 export default function WorkListOverlay({
 	segment,
@@ -145,10 +144,10 @@ export default function WorkListOverlay({
 	// children, and an archive page arrives with the tasks its rows speak for
 	// (docs/list-paging-ui.md §2.2).
 	//
-	// Deduplicated by id, because the two lists genuinely overlap: a closed story
-	// with a stopped task is on the archive page *and* in the `Current` segment,
-	// which carries it so that its task's row can print `in: <title>`. Counted
-	// twice, its own row would then claim twice the tasks it has.
+	// Deduplicated by id, because the two lists can overlap: a push upserts a
+	// story that closes into `works`, beside the tasks the snapshot already sent
+	// for its row, and the archive page fetched after that close carries the same
+	// story and tasks. Counted twice, its row would claim twice the tasks it has.
 	const known = useMemo(() => {
 		const byId = new Map<string, WorkListItem>();
 		for (const w of [...works, ...archive]) byId.set(w.id, w);
@@ -169,11 +168,6 @@ export default function WorkListOverlay({
 		}
 		return map;
 	}, [known]);
-
-	const titleById = useMemo(
-		() => new Map(known.map((w) => [w.id, w.title])),
-		[known],
-	);
 
 	const groups = useMemo(() => {
 		const byGroup = new Map<WorkGroup, WorkListItem[]>();
@@ -222,15 +216,7 @@ export default function WorkListOverlay({
 		<WorkRow
 			key={work.id}
 			work={work}
-			tasks={work.type === "story" ? tasksByStoryId.get(work.id) : undefined}
-			// Slot 1 is the list's, not the row's: a task is here because it left
-			// its story, and without the story's name it is a title with no
-			// context (docs/project-ui.md §3.1).
-			storyTitle={
-				work.type === "task" && work.story_id
-					? titleById.get(work.story_id)
-					: undefined
-			}
+			tasks={tasksByStoryId.get(work.id)}
 			roleName={
 				work.agent_role_id ? roleNameMap.get(work.agent_role_id) : undefined
 			}
@@ -524,13 +510,12 @@ const GROUP_GLYPH: Record<WorkGroup, Activity> = {
 };
 
 /**
- * Which group a work is a row in, or `null` when it gets no row of its own.
+ * Which group a story is a row in, or `null` when the work gets no row.
  *
- * A row exists for every story, and for every task that needs a person —
- * `needsAttention` or `stopped`, the two ways a task can be stuck with nobody
- * coming for it. Everything else about a task is rolled up into its story's row
- * (docs/project-ui.md §2.2). Which items get rows is untouched by the split of
- * *Stopped* out of *Not running*: the same rows exist, in different groups.
+ * Only stories are rows, each grouped by its own status and activity alone. A
+ * task never is, whatever state it is in, and nothing of a task's state is
+ * rolled into its story's group either (docs/project-ui.md §2.2): a task row
+ * sorted among unrelated stories read as hanging under the wrong one.
  *
  * `stopped` still stays out of *Needs you* deliberately: that group's count is
  * "an agent is waiting on me right now", and a work stopped three days ago
@@ -540,16 +525,16 @@ const GROUP_GLYPH: Record<WorkGroup, Activity> = {
  * list of debts.
  */
 function rowGroup(work: WorkListItem): WorkGroup | null {
-	if (work.status === "closed") return null;
+	if (work.type !== "story" || work.status === "closed") return null;
 	// Before the activity is looked at: a stopped work has no agent, so whatever
 	// its last activity was says nothing about what happens next.
 	if (work.status === "stopped") return "stopped";
 	if (work.status === "active") {
-		if (needsAttention(work.activity, work.unanswered_questions))
-			return "needs_you";
-		return work.type === "story" ? "in_progress" : null;
+		return needsAttention(work.activity, work.unanswered_questions)
+			? "needs_you"
+			: "in_progress";
 	}
-	return work.type === "story" ? "not_running" : null;
+	return "not_running";
 }
 
 /**

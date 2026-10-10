@@ -152,7 +152,7 @@ needs:
 | Field | Why the list needs it |
 |-------|----------------------|
 | `id` | identity |
-| `type` | story rows group task rows beneath them. Derived by the server from `story_id` and sent because the row draws it; a client never sends one back |
+| `type` | only stories are rows, and a story row counts its tasks. Derived by the server from `story_id` and sent because the row draws it; a client never sends one back |
 | `story_id` | builds that tree, and is the story a task's worktree badge waits on ([`isWorktreeBound`](../code/work-system.md#displaying-a-works-worktree)) |
 | `agent_role_id` | the role name shown on the row |
 | `title`, `status` | the row itself |

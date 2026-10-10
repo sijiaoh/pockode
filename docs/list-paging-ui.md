@@ -68,14 +68,23 @@ and on every notification after it.
 ### 2.2 A story arrives with the tasks it speaks for
 
 A story's row states `{n} active` and `{closed}/{total} tasks` over its children
-(project-ui.md §3), and those children include tasks that get no row of their
-own — a closed task under an open story is counted here and listed nowhere. A
-task row, in turn, names its parent story, and can only get that name from the
-parent itself.
+(project-ui.md §3), and none of those children is a row of its own — the list
+draws stories only (project-ui.md §2.2), so every task is counted on its story's
+row and listed on no list at all.
 
 **A page is therefore not a set of rows; it is a set of rows plus everything
 those rows make claims about.** Whatever unit a page is cut along, a story and
-its tasks are on the same side of the cut, in both directions.
+its tasks are on the same side of the cut, and a task with no story row on that
+side is not sent at all: nothing there would count it.
+
+This used to run in both directions. While a task that needed a person had a
+row of its own, that row named its parent story, so the story had to come along
+for the task — even a closed one, into `Current`. With task rows gone it runs
+one way only, and `Current` carries no closed story. The client's copy of it
+still can: a push upserts a story that closes after the snapshot, beside the
+tasks the snapshot sent for its row, and the archive page fetched after that
+close carries the same story and tasks — so the list counts a story's tasks over
+both segments by id, not by position.
 
 The same rule reaches one screen this document did not anticipate. A story's
 *detail page* read its children out of the work list, which was sound while that
@@ -324,6 +333,19 @@ control fetches the rest; *Needs you* is exempt not because "groups that want yo
 may not be capped" but because it cannot accumulate — every row in it has a live
 agent waiting.
 
+**One signal does reach under the cap, and that is accepted.** A task travels
+only with its story's row (§2.2), so a story held back from *Stopped* or *Not
+running* holds back its tasks too — and a task of it that is waiting on the user
+does not light the Project tab's dot (§2.1) until "Show earlier work" fetches
+the story. For that, a story has to sit more than fifty rows down a group of
+work nobody is driving while still holding a task with a live agent asking for
+something; the
+ordinary such story — auto-stopped because a subtask's question went unanswered
+— was stopped recently, so it sits at the top of *Stopped*, inside the cap. The
+alternative, sparing every story with such a task from the cap, is the soft cap
+below that removing task rows retired, kept alive for one edge
+([lifecycle-ui.md §4](lifecycle-ui.md#4-attention-dots) has the dot's side).
+
 Off the bottom, and not off the front, because both groups are shown
 `updated_at` newest first (project-ui.md §2.3), so the bottom is the least
 recently touched — and a work the user just touched must not be the one that
@@ -353,28 +375,24 @@ count is a fact that comes *with* the list rather than the length of what
 arrived (§2.1); it is the one number on this screen that a client cannot
 count for itself.
 
-**And the number is a soft cap, deliberately.** What gets dropped is whole
-stories — a story cannot be dropped without its tasks, because it keeps every
-one of them for the roll-up on its own row (§2.2), so dropping the tasks alone
-saves nothing. But a story may hold a task that is itself a row of its own, and
-dropping that story would take the row with it. Those stories are skipped
-instead, so when there are not enough droppable ones left the group arrives a
-little over the number.
+**The number bounds rows, not items.** Every row is a story, and what gets
+dropped is whole stories with their tasks — a story keeps every one of its tasks
+for the roll-up on its own row (§2.2), so dropping the tasks alone would save
+nothing and dropping the story alone would leave tasks nothing counts. A capped
+group therefore arrives with exactly the number of rows, while the items that
+come with them still vary with how many tasks those stories hold.
 
-"Only stories are droppable" bites hardest on *Stopped*, and the shape of it is
-worth knowing: a stopped **task** is never dropped, so that group's hidden count
-is only ever made of stopped stories, and a project with many stopped tasks under
-few stopped stories is effectively uncapped there. That is not a defect — what
-accumulates without limit is stopped stories, and the number of stopped tasks is
-bounded by the stories holding them — but it means how hard the cap bites on
-*Stopped* depends on the shape of the data.
+The cap used to be soft. While a task that needed a person was a row of its own,
+a story holding one could not be dropped without taking that row with it, so
+such stories were skipped and a group could arrive a little over the number; a
+stopped task was never dropped at all, which left *Stopped* effectively uncapped
+on a project with many stopped tasks under few stopped stories. Both went with
+the task rows (project-ui.md §2.2).
 
-That is the right way round. "*Needs you* and *In progress* are never capped and
-never truncated" above is an **invariant**; the number is a **budget**; and of
-the two, a budget is the one that can be overrun without anybody being lied to.
-Nothing downstream may read the cap as an exact bound on how many rows arrive —
-which is also why the count that comes with the group, and not the length of
-what arrived, is the number the heading shows.
+"*Needs you* and *In progress* are never capped and never truncated" above is
+still the **invariant**; the number is a **budget**. Even so, the heading shows
+the count that comes with the group rather than the length of what arrived,
+because the budget is what was *sent* and the heading is about the whole group.
 
 ### 4.2 Closed pages
 

@@ -72,35 +72,47 @@ func TestCurrentSegment_CarriesWhatItsRowsSpeakFor(t *testing.T) {
 	}
 }
 
-// The second dimension earns a task its own row too. An agent that posted a
-// question and went on working is `running`, so a rule reading the activity
-// alone would roll this task up into its story and leave the question
-// unreachable from the list.
-func TestHasCurrentRow_ATaskWithAQuestionEarnsOne(t *testing.T) {
-	quiet := child("quiet", "story", work.WorkTypeTask, work.StatusActive, work.ActivityRunning)
-	if hasCurrentRow(quiet) {
-		t.Error("a running task needing nobody draws a row of its own")
-	}
-
-	asking := quiet
+// A task is never a row, however much it needs a person: it travels with its
+// story's row, for the roll-up there, and with nothing else. A story that has no
+// row here takes its tasks with it — a closed one into the archive, a capped one
+// behind "Show earlier work".
+func TestCurrentSegment_ATaskGoesOnlyWithItsStorysRow(t *testing.T) {
+	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	asking := child("asking", "live", work.WorkTypeTask, work.StatusActive, work.ActivityRunning)
 	asking.UnansweredQuestions = 1
-	if !hasCurrentRow(asking) {
-		t.Error("a running task with a question waiting draws no row, so the question is unreachable from the list")
-	}
-}
-
-// A task that left its story prints `in: <parent title>`, and can only get that
-// word from the parent — even when the parent is closed and has no row here.
-func TestCurrentSegment_CarriesTheParentATaskRowNames(t *testing.T) {
 	items := []rpc.WorkListItem{
+		updated(row("live", work.WorkTypeStory, work.StatusActive, work.ActivityRunning), base),
+		asking,
+		updated(child("stopped", "live", work.WorkTypeTask, work.StatusStopped, work.ActivityStopped), base),
 		row("archived", work.WorkTypeStory, work.StatusClosed, work.ActivityClosed),
 		child("stuck", "archived", work.WorkTypeTask, work.StatusActive, work.ActivityNeedsPermission),
+		updated(row("old-stopped", work.WorkTypeStory, work.StatusStopped, work.ActivityStopped), base),
+		updated(child("old-stuck", "old-stopped", work.WorkTypeTask, work.StatusActive, work.ActivityNeedsPermission), base),
+		updated(row("new-stopped", work.WorkTypeStory, work.StatusStopped, work.ActivityStopped), base.Add(time.Hour)),
 	}
 
-	kept, _ := currentSegment(items, CurrentGroupCap)
+	for _, item := range items {
+		if item.Type == work.WorkTypeTask && hasCurrentRow(item) {
+			t.Errorf("task %q draws a row of its own", item.ID)
+		}
+	}
 
-	if !contains(kept, "stuck") || !contains(kept, "archived") {
-		t.Errorf("a task row must arrive with its parent, got %v", ids(kept))
+	kept, hidden := currentSegment(items, 1)
+
+	// The stopped task does not count towards *Stopped*: only the two stopped
+	// stories do, and the older one is the one that goes.
+	if hidden.Stopped != 1 {
+		t.Fatalf("stopped hidden = %d, want 1", hidden.Stopped)
+	}
+	for _, id := range []string{"live", "asking", "stopped", "new-stopped"} {
+		if !contains(kept, id) {
+			t.Errorf("%q missing from the Current segment: %v", id, ids(kept))
+		}
+	}
+	for _, id := range []string{"archived", "stuck", "old-stopped", "old-stuck"} {
+		if contains(kept, id) {
+			t.Errorf("%q has no story row here and must not be sent: %v", id, ids(kept))
+		}
 	}
 }
 
@@ -159,35 +171,6 @@ func TestCurrentSegment_CapsEachGroupOnItsOwn(t *testing.T) {
 	}
 }
 
-// A stopped *task* is a row of the *Stopped* group and counts towards its cap,
-// but can never be the row that goes: its story keeps every one of its tasks
-// anyway, for the `{closed}/{total}` on its own row. So the hidden count is
-// only ever stopped stories — which is also the half of the group that grows
-// without bound.
-func TestCurrentSegment_StoppedCapDropsOnlyStories(t *testing.T) {
-	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	items := []rpc.WorkListItem{
-		updated(row("live", work.WorkTypeStory, work.StatusActive, work.ActivityRunning), base.Add(3*time.Hour)),
-		updated(child("stuck-a", "live", work.WorkTypeTask, work.StatusStopped, work.ActivityStopped), base),
-		updated(child("stuck-b", "live", work.WorkTypeTask, work.StatusStopped, work.ActivityStopped), base.Add(time.Hour)),
-		updated(row("old-story", work.WorkTypeStory, work.StatusStopped, work.ActivityStopped), base.Add(2*time.Hour)),
-	}
-
-	kept, hidden := currentSegment(items, 2)
-
-	if hidden.Stopped != 1 {
-		t.Fatalf("stopped hidden = %d, want 1", hidden.Stopped)
-	}
-	if contains(kept, "old-story") {
-		t.Errorf("the only droppable row should have gone, got %v", ids(kept))
-	}
-	for _, id := range []string{"stuck-a", "stuck-b"} {
-		if !contains(kept, id) {
-			t.Errorf("%q is a task and cannot be dropped, got %v", id, ids(kept))
-		}
-	}
-}
-
 // *Needs you* and *In progress* are never capped and never truncated: they are
 // the two groups the screen exists for. Two rows in each against a cap of one,
 // so a cap that reached them would have to drop one of each.
@@ -210,30 +193,6 @@ func TestCurrentSegment_CapNeverTouchesTheOtherGroups(t *testing.T) {
 		if !contains(kept, id) {
 			t.Errorf("%q must survive the cap, got %v", id, ids(kept))
 		}
-	}
-}
-
-// Dropping a story drops its tasks with it, so a story whose own task is a row
-// is not droppable at all — the row would go with it, and *Needs you* is never
-// truncated. It is passed over even when it is the oldest thing in the group.
-func TestCurrentSegment_CapSpares_AStoryWhoseTaskIsARow(t *testing.T) {
-	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	items := []rpc.WorkListItem{
-		updated(row("oldest", work.WorkTypeStory, work.StatusStopped, work.ActivityStopped), base),
-		updated(child("stuck", "oldest", work.WorkTypeTask, work.StatusActive, work.ActivityNeedsPermission), base),
-		updated(row("newer", work.WorkTypeStory, work.StatusStopped, work.ActivityStopped), base.Add(time.Hour)),
-	}
-
-	kept, hidden := currentSegment(items, 1)
-
-	if hidden.Stopped != 1 {
-		t.Fatalf("stopped hidden = %d, want 1", hidden.Stopped)
-	}
-	if !contains(kept, "oldest") || !contains(kept, "stuck") {
-		t.Errorf("a story holding a row must survive the cap, got %v", ids(kept))
-	}
-	if contains(kept, "newer") {
-		t.Errorf("the droppable story should have gone instead, got %v", ids(kept))
 	}
 }
 

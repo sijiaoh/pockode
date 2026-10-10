@@ -1,4 +1,4 @@
-import { CornerDownRight, MessageSquare } from "lucide-react";
+import { MessageSquare } from "lucide-react";
 import { type ReactNode, useId } from "react";
 import { ACTIVITY_VIEW, needsAttention } from "../../lib/activity";
 import type { WorkListItem } from "../../types/work";
@@ -18,14 +18,6 @@ interface Props {
 	 * stopping it would cost. A task passes nothing.
 	 */
 	tasks?: WorkListItem[];
-	/**
-	 * Slot 1. The list passes the title of the story a task belongs to; the story
-	 * detail's Tasks section passes nothing, because every row there is a task of
-	 * the story on screen and naming it once per row is noise
-	 * (docs/project-ui.md §3.1). It is the one slot decided by the screen rather
-	 * than by the work.
-	 */
-	storyTitle?: string;
 	/** Slot 4, resolved by the screen from the role map it already holds. */
 	roleName?: string;
 	/**
@@ -55,14 +47,13 @@ interface Props {
  *
  * The same component draws the project list and the story detail's children
  * section — the two places a work is ever listed — so the glyph, the two
- * controls and the seven slots are decided once. Nothing here reads the group a
+ * controls and the slots are decided once. Nothing here reads the group a
  * row was sorted into: a control that moves between groups is a control the
  * user has to look for.
  */
 export default function WorkRow({
 	work,
 	tasks,
-	storyTitle,
 	roleName,
 	showUpdatedAt,
 	headingLevel = 3,
@@ -100,33 +91,9 @@ export default function WorkRow({
 			: "border-l-th-border";
 
 	// Fixed order, one appearance rule each, and the line clips from the right —
-	// which is what puts depth and state first. The timestamp is not one of
+	// which is what puts the state first. The timestamp is not one of
 	// these: it is drawn outside the clip, below.
 	const slots: { key: string; node: ReactNode }[] = [];
-	if (storyTitle) {
-		// Ahead of the state, which overrules the order docs/project-ui.md §3 gave
-		// these two: that order was right while the state had exactly one channel,
-		// and the state now has three (this word, the left edge, the glyph) while
-		// "which story is this task under" still has only this one. The two only
-		// ever compete on a task row inside *Needs you*.
-		//
-		// The corner arrow replaces the words `in:` on screen — it is the shape of
-		// depth, and it buys about 20px of title width on a 320px screen. On screen
-		// only: the arrow is `aria-hidden`, so the word it stands for is kept
-		// `sr-only`. Without it the line is a bare `Cluster mode`, which a screen
-		// reader cannot tell from the role and worktree slots beside it — those are
-		// bare titles too, and the arrow was the only thing distinguishing this one.
-		slots.push({
-			key: "story",
-			node: (
-				<span className="flex items-center gap-1 text-th-text-secondary">
-					<CornerDownRight className="size-3 shrink-0" aria-hidden="true" />
-					<span className="sr-only">in </span>
-					<span className="max-w-[10rem] truncate">{storyTitle}</span>
-				</span>
-			),
-		});
-	}
 	// On every row, not just the ones waiting on the user. `Running` repeating its
 	// group heading is the cost; the gain is that `Waiting on subtasks`,
 	// `Background task` and `Idle` stop being distinguishable only by a 14px
@@ -216,10 +183,9 @@ export default function WorkRow({
 		// `hover:bg-th-bg-tertiary` is unchanged: once the resting state is
 		// secondary, tertiary is exactly the next step up.
 		//
-		// The indent is decided by the work and not by the screen, so one rule
-		// serves both surfaces: in the list a task sits a level in from the stories
-		// around it, and in the story detail's Tasks section — where every row is a
-		// task — the whole block sits in under its heading, which is what it is.
+		// The indent is decided by the work and not by the screen: a task is only
+		// ever listed in its story detail's Tasks section, where the whole block
+		// sits in under its heading, which is what it is.
 		<div
 			className={`relative rounded-lg border border-th-border border-l-2 bg-th-bg-secondary px-2 hover:bg-th-bg-tertiary ${edgeClass}${
 				work.type === "task" ? " ml-4" : ""

@@ -135,9 +135,13 @@ describe("WorkListOverlay", () => {
 		setArchivePage([]);
 	});
 
-	// §2.2: the group's promise is that what is in it is for the user to do, so
-	// the thing to do has to be what is in it.
-	it("gives a task that needs a person its own row, and not its story's", () => {
+	// §2.2: a task row sorted among unrelated stories read as hanging under the
+	// wrong one, so a task is never a row — not even one waiting on a person —
+	// and its state does not move its story to another group either. The story
+	// row only counts its tasks.
+	it("gives no task a row, and groups each story by its own state", () => {
+		const task = (id: string, overrides: Partial<WorkListItem>) =>
+			createWork({ id, type: "task", story_id: "s1", title: id, ...overrides });
 		setWorks([
 			createWork({
 				id: "s1",
@@ -145,106 +149,28 @@ describe("WorkListOverlay", () => {
 				status: "active",
 				activity: "waiting_children",
 			}),
-			createWork({
-				id: "t1",
-				type: "task",
-				story_id: "s1",
-				title: "Wire the relay",
+			task("Asks permission", {
 				status: "active",
 				activity: "needs_permission",
 			}),
-		]);
-
-		renderList();
-
-		expect(groupOf("Wire the relay")).toBe("Needs you");
-		expect(groupOf("Cluster mode")).toBe("In progress");
-	});
-
-	// The second dimension, and the one case an activity cannot express: the agent
-	// posted a question and carried on, so its task is `running` *and* needs a
-	// person. Without this, the task has no row of its own and the question cannot
-	// be reached from the list at all. The server's `hasCurrentRow` decides what to
-	// fetch by the same predicate (`work.RowState.NeedsAttention`), so the two have
-	// to agree or a fetched row goes undrawn.
-	it("gives a running task with an unanswered question its own row", () => {
-		setWorks([
-			createWork({
-				id: "s1",
-				title: "Cluster mode",
-				status: "active",
-				activity: "running",
-			}),
-			createWork({
-				id: "t1",
-				type: "task",
-				story_id: "s1",
-				title: "Wire the relay",
+			task("Asked a question", {
 				status: "active",
 				activity: "running",
 				unanswered_questions: 1,
 			}),
-		]);
-
-		renderList();
-
-		expect(groupOf("Wire the relay")).toBe("Needs you");
-	});
-
-	it("names the story a task left, whatever state that story is in", () => {
-		// The closed story comes with the `Current` segment for exactly this: its
-		// task's row prints its name and can get it from nowhere else (§2.2).
-		setWorks([
-			createWork({ id: "s1", title: "Cluster mode", status: "closed" }),
-			createWork({
-				id: "t1",
-				type: "task",
-				story_id: "s1",
-				title: "Wire the relay",
-				status: "stopped",
-				activity: "stopped",
-			}),
-		]);
-
-		renderList();
-
-		expect(groupOf("Wire the relay")).toBe("Stopped");
-		expect(screen.getByText("Cluster mode")).toBeInTheDocument();
-	});
-
-	// A running, idle, open or closed task has nobody waiting on it, so it is
-	// its story's business and is reached through the story.
-	it("rolls every other task into its story's row", () => {
-		setWorks([
-			createWork({
-				id: "s1",
-				title: "Cluster mode",
-				status: "active",
-				activity: "running",
-			}),
-			createWork({
-				id: "t1",
-				type: "task",
-				story_id: "s1",
-				title: "A running task",
-				status: "active",
-				activity: "running",
-			}),
-			createWork({
-				id: "t2",
-				type: "task",
-				story_id: "s1",
-				title: "A finished task",
-				status: "closed",
-				activity: "closed",
-			}),
+			task("Handed back", { status: "stopped", activity: "stopped" }),
+			task("Finished", { status: "closed", activity: "closed" }),
 		]);
 
 		renderList();
 
 		expect(rowTitles()).toEqual(["Cluster mode"]);
-		expect(screen.getByText("1 active")).toBeInTheDocument();
-		expect(screen.getByText("1/2 tasks")).toBeInTheDocument();
+		expect(groupOf("Cluster mode")).toBe("In progress");
+		expect(
+			screen.queryAllByRole("heading", { level: 2 }).map((h) => h.textContent),
+		).toEqual(["In progress1"]);
+		expect(screen.getByText("2 active")).toBeInTheDocument();
+		expect(screen.getByText("1/4 tasks")).toBeInTheDocument();
 	});
 
 	// §2.3: `open` is "nobody has started this", `stopped` is "something that
@@ -266,25 +192,15 @@ describe("WorkListOverlay", () => {
 				status: "stopped",
 				activity: "stopped",
 			}),
-			createWork({
-				id: "t1",
-				type: "task",
-				story_id: "s1",
-				title: "A stopped task",
-				status: "stopped",
-				activity: "stopped",
-			}),
 		]);
 
 		renderList();
 
-		// Stories and tasks alike: what puts a row here is the status.
 		expect(groupOf("Handed back")).toBe("Stopped");
-		expect(groupOf("A stopped task")).toBe("Stopped");
 		expect(groupOf("Never started")).toBe("Not running");
 		expect(
 			screen.queryAllByRole("heading", { level: 2 }).map((h) => h.textContent),
-		).toEqual(["Stopped2", "Needs you1", "Not running1"]);
+		).toEqual(["Stopped1", "Needs you1", "Not running1"]);
 		expect(
 			screen.getByRole("button", { name: 'Restart "Handed back"' }),
 		).toBeInTheDocument();
@@ -834,36 +750,35 @@ describe("WorkListOverlay", () => {
 		).toBeNull();
 	});
 
-	// The two segments genuinely overlap: a closed story with a stopped task is
-	// on the archive page *and* in the `Current` segment, which carries it so
-	// that its task's row can print `in: <title>`. Counted twice, the story's own
-	// row would claim twice the tasks it has.
 	it("counts a story's tasks once when it is in both segments", async () => {
 		const user = userEvent.setup();
+		// Closed after the snapshot: the push left the story in `works` beside
+		// the task the snapshot sent for its row, and the archive page fetched
+		// since carries both again.
 		const story = createWork({
 			id: "s1",
 			title: "Cluster mode",
 			status: "closed",
 			activity: "closed",
 		});
-		const stoppedTask = createWork({
+		const task = createWork({
 			id: "t1",
 			type: "task",
 			story_id: "s1",
 			title: "Wire the relay",
-			status: "stopped",
-			activity: "stopped",
-		});
-		const closedTask = createWork({
-			id: "t2",
-			type: "task",
-			story_id: "s1",
-			title: "A finished task",
 			status: "closed",
 			activity: "closed",
 		});
-		setWorks([story, stoppedTask]);
-		setArchivePage([story, stoppedTask, closedTask]);
+		const openTask = createWork({
+			id: "t2",
+			type: "task",
+			story_id: "s1",
+			title: "A leftover task",
+			status: "stopped",
+			activity: "stopped",
+		});
+		setWorks([story, task, openTask]);
+		setArchivePage([story, task, openTask]);
 
 		renderList();
 		await user.click(screen.getByRole("button", { name: "Closed" }));

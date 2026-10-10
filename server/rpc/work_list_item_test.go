@@ -92,11 +92,11 @@ func TestWorkDetailCarriesTheFieldsTheListDropped(t *testing.T) {
 }
 
 // `type` is the one field of a row that is derived rather than copied, and the
-// client reads it to decide where the row goes: story rows group task rows
-// beneath them, and a task row is indented and prints its story's name
-// (docs/project-ui.md). Nothing else in the suite looks at the value — the key
-// set above only asks that it is present — so a hard-coded or inverted
-// derivation here would put every row in the wrong group with every test green.
+// client reads it to decide what is a row at all: only stories are, and a task
+// is counted on its story's row (docs/project-ui.md). Nothing else in the suite
+// looks at the value — the key set above only asks that it is present — so a
+// hard-coded or inverted derivation here would list every task and no story
+// with every test green.
 func TestWorkListRowDerivesItsType(t *testing.T) {
 	for _, tc := range []struct {
 		name string

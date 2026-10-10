@@ -123,20 +123,20 @@ Activates both `useWorkSubscription` and `useAgentRoleSubscription`.
 
 1. A `Current` / `Closed` segmented control under the header and outside the scroll area. The chosen segment is a prop, read from the URL by `AppShell` and written back by tapping ([why](../project-ui.md#5-where-the-segment-lives)); this screen holds none of it. The scroll area is keyed by the segment, so each segment gets a scroller of its own and opens at the top on its first paint rather than inheriting the other's offset ([why](../project-ui.md#21-the-segmented-control))
 2. Inside `Current`, four inert sticky group headings — *Stopped*, *Needs you*, *In progress*, *Not running* — whose membership is the single `rowGroup()` function in the file, and whose order is the single `GROUP_ORDER` constant beside it. Every group is sorted `updated_at` newest first by `lib/workOrder.ts`, which is also the order the server cuts both its caps and the archive's pages along. `Closed` is the archive: closed stories, flat, same order, sorted by the server and never re-sorted here
-3. Every row is `WorkRow` (below). The screen draws no row of its own, nothing expands and no group collapses
+3. Every row is a story drawn by `WorkRow` (below); no task is a row ([why](../project-ui.md#22-which-work-gets-a-row)). The screen draws no row of its own, nothing expands and no group collapses
 4. Loading, subscription failure and both empty states are the scroll area's; the segmented control and the bottom bar stay usable through all three
 5. A fixed `BottomActionBar` with `New Story`, which opens `CreateStorySheet`
 
 **What the screen resolves for its rows**, because a row is given facts rather
 than looking them up: the story's tasks (indexed by `story_id` into a
-`Map<string, WorkListItem[]>`), the title of the story a task belongs to, the role name out of
+`Map<string, WorkListItem[]>`), the role name out of
 `useRoleNameMap`, and `showUpdatedAt` in the `Closed` segment.
 
 ### WorkRow
 
 One work as a row, and the only component that draws one: the project list and
 the story detail's Tasks section both render it, so the glyph, the two icon
-controls and the seven meta slots are decided once ([project-ui.md §3](../project-ui.md#3-the-row)).
+controls and the meta slots are decided once ([project-ui.md §3](../project-ui.md#3-the-row)).
 
 `WorkRow` owns the row's lifecycle command: `useWorkCommand` is called here
 rather than inside `WorkPrimaryAction`, because a failure has to be written
@@ -186,7 +186,7 @@ Tasks, not an order of its own:
 2. **Title** — Inline-editable (tap pencil icon to enter edit mode)
 3. **Status** — Read-only `ActivityBadge`, with a `WorktreeBadge` alongside it: the worktree binding isn't editable, but the badge is a link that navigates to that worktree's root (shown for both stories and tasks, since a task detail can be opened directly; hidden while neither the work nor its story has started, because only then can the worktree still change). Under them, the `child`-only wait line ([lifecycle-ui.md §6.2](../lifecycle-ui.md#62-detail-page))
 4. **Unanswered questions** — A read-only block, present whenever `pending_questions` is non-empty, with one Answer button into the chat when the work has a session ([lifecycle-ui.md §6.2](../lifecycle-ui.md#62-detail-page))
-5. **Tasks** (story only) — The story's child tasks as `WorkRow`s, the one place a story's tasks are listed. There is no control to add one: tasks are created by the story's agent with `task_create`, never by hand ([why](../project-ui.md#4-creating-work-lands-you-on-its-detail-page)). The rows differ from the list's in one slot only: the story name is left off, because every row here is a task of the story on screen. The heading carries `closed/total` and, whenever any child is `active`, an "{n} active" count — the same count that makes a refused `step_done` legible (docs/lifecycle-ui.md §6.2)
+5. **Tasks** (story only) — The story's child tasks as `WorkRow`s, the one place a story's tasks are listed. There is no control to add one: tasks are created by the story's agent with `task_create`, never by hand ([why](../project-ui.md#4-creating-work-lands-you-on-its-detail-page)). The rows differ from the list's in one slot only: they carry no date, because this list is in creation order and has no sort key to show (docs/project-ui.md §3.1). The heading carries `closed/total` and, whenever any child is `active`, an "{n} active" count — the same count that makes a refused `step_done` legible (docs/lifecycle-ui.md §6.2)
 6. **Description** — Inline-editable textarea with Markdown rendering. Shown in full in every status: it is the part users read most, and hidden behind one line it would cost a tap every time. The card scrolls wide content (a long code line, a table) sideways itself, since `.code-block` leaves that to an ancestor and the next one up is the whole page
 7. **Role** — Inline-editable `RoleSelect` (tap to switch role), offering only roles that take the work's kind. A kept role that no longer takes it gets a muted line under its name rather than an error ([agent-roles-ui.md §8](../agent-roles-ui.md#8-which-kind-of-work-a-role-runs))
 8. **Steps** — Step progress indicator showing current step position (if agent role has steps defined). Each step's text renders as Markdown, like the role page's copy of it ([lifecycle-ui.md §6.3](../lifecycle-ui.md#63-steplist))
