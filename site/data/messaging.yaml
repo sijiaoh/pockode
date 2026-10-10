@@ -27,19 +27,29 @@ repo: https://github.com/sijiaoh/pockode
 tagline: Your coding agents keep working. Steer them from your phone.
 subtitle: Hand stories to a team of Claude Code and Codex agents on your own machine, answer their questions and ship the result from any browser.
 
+# The homepage's screens 2-5, in order; the README lists the same title and
+# description.
 pillars:
   - id: delegate
     title: Delegate
-    description: Break a story into tasks and give each one to a Claude Code or Codex agent with its own role.
+    description: Split a story into tasks, each run by a Claude Code or Codex agent in its own role.
   - id: loop
     title: Stay in the loop
-    description: Agents stop and ask when they need a decision, and you answer from wherever you are.
+    description: When an agent needs a decision, it stops and asks; you answer from anywhere.
   - id: ship
     title: Review & ship
-    description: Read the diff, commit and sync with Git, and open your dev server on the phone with Port Preview.
+    description: Read the diff, commit, and open your dev server on your phone with Port Preview.
   - id: machine
     title: Your machine
-    description: Your CLI, your subscription, your machine — your code runs where Pockode runs. Add `-relay=false` to keep the app on your own network.
+    description: Pockode dials out from beside your project, so there is no port to forward.
+    # Shown on the homepage's Your machine screen, one icon each (keyed by id).
+    facts:
+      - id: cli
+        text: Your own `claude` or `codex` CLI
+      - id: tls
+        text: TLS on both relay hops
+      - id: local
+        text: "`-relay=false` keeps the app on your network"
 
 quickstart:
   prerequisite: Pockode drives the `claude` or `codex` CLI, so install one of them on the same machine first.
@@ -71,3 +81,31 @@ license:
   name: O'Saasy License
   file: LICENSE.md
   summary: You may use, modify and redistribute it, but not offer it to others as a competing hosted service.
+
+# The homepage's FAQ, in order. An entry with no answer takes it from
+# elsewhere in this file, keyed by id: `platforms` from platforms, `license`
+# from license. Any other entry without one fails the build.
+faq:
+  - id: code
+    question: Does my code leave my machine?
+    answer: Your AI CLI sends code to its provider, as it does without Pockode. Through the relay, traffic is encrypted on both hops, and its content is never inspected or stored.
+  - id: agents
+    question: Which agents does it work with?
+    answer: Claude Code and Codex. Pockode drives the CLI you have installed, with your own login and subscription.
+  - id: ports
+    question: Do I have to open a port?
+    answer: No. Pockode dials out to the relay. With `-relay=false` you connect over your own network instead, in plain HTTP.
+  - id: platforms
+    question: Which platforms does it run on?
+  - id: license
+    question: What is the license?
+
+# The homepage's remaining words: what its buttons and links say and how the
+# demo video is described to a screen reader.
+homepage:
+  demo: A 30-second demo of Pockode on a phone
+  get_started: Get started
+  github: GitHub
+  security: How it is secured
+  faq: Questions
+  docs: More in the docs

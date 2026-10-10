@@ -1,4 +1,32 @@
 baseURL: https://pockode.com/
-languageCode: en
+locale: en
 title: Pockode
 theme: pockode
+
+# Only the pages in content/ are published: no tag pages, no RSS feeds.
+disableKinds: [taxonomy, term, rss]
+enableRobotsTXT: true
+
+module:
+  mounts:
+    # Declaring any mount replaces the default ones, so static is listed again.
+    - source: static
+      target: static
+    # The generated marketing PNGs stay in static/ (the README links to them)
+    # and are also fed to Hugo's image pipeline, which encodes the WebP
+    # versions the pages serve.
+    - source: static/marketing
+      target: assets/marketing
+
+
+# The changelog reads GitHub Releases at build time (partials/releases.html).
+# Remote resources are cached forever by default, which would freeze the page at
+# its first build; 0 fetches them afresh on every build.
+caches:
+  getresource:
+    maxAge: 0
+
+security:
+  funcs:
+    # Hugo's defaults plus GITHUB_TOKEN, which lifts the API's rate limit.
+    getenv: ['^HUGO_', '^CI$', '^GITHUB_TOKEN$']

@@ -1,140 +1,129 @@
 {{ define "main" }}
 {{- $m := hugo.Data.messaging -}}
-<div class="grain"></div>
-
-<nav class="nav">
-  <a href="/" class="nav-logo">{{ $m.name }}</a>
-  <a href="{{ $m.repo }}" class="nav-link" target="_blank" rel="noopener">GitHub</a>
-</nav>
-
-<section class="hero">
-  <div class="hero-badge">{{ $m.license.label }}</div>
-  <h1 class="hero-title">{{ $m.tagline }}</h1>
-  <p class="hero-sub">{{ $m.subtitle }}</p>
-  <div class="hero-cta">
-    <a href="#install" class="btn-primary">Get Started</a>
-    <a href="{{ $m.repo }}" class="btn-ghost" target="_blank" rel="noopener">
-      <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"/></svg>
-      View on GitHub
-    </a>
-  </div>
-</section>
-
-<section class="demo">
-  <div class="demo-images">
-    <img src="/images/demo-desktop.png" alt="Pockode on desktop" class="demo-desktop">
-    <img src="/images/demo-mobile.jpg" alt="Pockode on mobile" class="demo-mobile">
-  </div>
-  <p class="demo-caption">Real conversation. Real code. From your phone.</p>
-</section>
-
-<section class="value">
-  <h2 class="section-title">Why {{ $m.name }}?</h2>
-  <div class="value-grid">
-    {{- range $m.pillars }}
-    <div class="value-card">
-      <div class="value-icon">
-        {{- partial "pillar-icon.html" .id -}}
-      </div>
-      <h3>{{ .title }}</h3>
-      <p>{{ .description | markdownify }}</p>
+{{- $h := $m.homepage -}}
+{{- $phone := slice 400 560 720 1020 -}}
+<section class="hero" id="top" aria-labelledby="top-title">
+  <div class="container">
+    <a class="hero-badge eyebrow" href="{{ $m.repo }}/blob/main/{{ $m.license.file }}" target="_blank" rel="noopener">{{ $m.license.label }}</a>
+    <h1 class="hero-title" id="top-title">{{ $m.tagline }}</h1>
+    <p class="hero-sub">{{ $m.subtitle }}</p>
+    <div class="hero-cta">
+      <a href="#get-started" class="btn btn-primary">{{ $h.get_started }}</a>
+      <a href="{{ $m.repo }}" class="btn btn-ghost" target="_blank" rel="noopener">
+        {{- partial "icon.html" "github" }}
+        {{ $h.github }}
+      </a>
     </div>
-    {{- end }}
-  </div>
-</section>
-
-<section class="feature">
-  <div class="feature-content">
-    <div class="feature-text">
-      <div class="feature-badge">Built-in</div>
-      <h2 class="feature-title">Git Worktree Management</h2>
-      <p class="feature-desc">Switch contexts without stashing. Work on multiple branches simultaneously with native Git worktree support — create, switch, and manage worktrees right from your phone.</p>
-      <ul class="feature-list">
-        <li>
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"></polyline></svg>
-          Parallel branch development
-        </li>
-        <li>
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"></polyline></svg>
-          Quick context switching
-        </li>
-        <li>
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"></polyline></svg>
-          No more git stash chaos
-        </li>
-      </ul>
-    </div>
-    <div class="feature-media">
-      <video autoplay loop muted playsinline class="feature-video" aria-label="Git worktree management demo">
-        <source src="/videos/demo-worktree.mp4" type="video/mp4">
-        Your browser does not support the video tag.
+    <figure class="demo">
+      {{- partial "picture.html" (dict
+        "src" "marketing/video/demo-poster.png"
+        "widths" (slice 640 960 1440 1920)
+        "sizes" "(min-width: 1152px) 1056px, calc(100vw - 32px)"
+        "alt" ""
+        "class" "demo-poster"
+        "eager" true
+      ) }}
+      {{- /* No poster attribute: the <img> above is the poster, with a srcset.
+      preload="none" fetches nothing until it plays: by itself in view on a wide
+      screen, on a phone only when the visitor presses Play (main.js). */}}
+      <video class="demo-video" muted loop playsinline preload="none" width="1920" height="1080" aria-label="{{ $h.demo }}">
+        <source src="{{ "marketing/video/demo.webm" | relURL }}" type="video/webm">
+        <source src="{{ "marketing/video/demo.mp4" | relURL }}" type="video/mp4">
       </video>
-    </div>
+      <button class="demo-toggle" type="button" aria-label="Play demo">
+        {{- partial "icon.html" "play" }}
+        {{- partial "icon.html" "pause" }}
+      </button>
+    </figure>
   </div>
 </section>
 
-<section id="install" class="install">
-  <h2 class="section-title">Get Started</h2>
-
-  <fieldset class="install-os">
-    <legend class="sr-only">Choose your platform</legend>
-
-    {{- range $i, $_ := $m.quickstart.installers }}
-    <input type="radio" name="install-os" id="os-{{ .id }}" class="install-radio" autocomplete="off"{{ if eq $i 0 }} checked{{ end }}>
-    {{- end }}
-
-    <div class="install-tablist">
-      {{- range $m.quickstart.installers }}
-      <label class="install-tab" for="os-{{ .id }}">{{ .label }}</label>
+{{- range $m.pillars }}
+<section class="screen screen-{{ .id }}" id="{{ .id }}" aria-labelledby="{{ .id }}-title">
+  <div class="container screen-inner">
+    <div class="screen-text">
+      <h2 class="screen-title" id="{{ .id }}-title">{{ .title }}</h2>
+      <p class="screen-lead">{{ .description | markdownify }}</p>
+      {{- with .facts }}
+      <ul class="facts-list">
+        {{- range . }}
+        <li>{{ partial "fact-icon.html" .id }}<span>{{ .text | markdownify }}</span></li>
+        {{- end }}
+      </ul>
+      {{- end }}
+      {{- if eq .id "machine" }}
+      <a class="text-link" href="{{ "security/" | relURL }}">{{ $h.security }} →</a>
       {{- end }}
     </div>
-
-    {{- range $m.quickstart.installers }}
-    <div class="install-panel" data-os="{{ .id }}">
-      <div class="install-box">
-        <pre class="install-code"><code><span class="code-comment"># Install{{ if eq .shell "powershell" }} (PowerShell){{ end }}</span>
-<span class="install-cmd">{{ .install }}</span>
-
-<span class="code-comment"># Run ({{ $m.quickstart.run_where }})</span>
-{{ .run }}</code></pre>
-        <button class="copy-btn" type="button">Copy</button>
+    <div class="screen-visual reveal">
+      {{- if eq .id "delegate" }}
+      {{- partial "picture.html" (dict
+        "sources" (slice (dict
+          "media" "(min-width: 1024px)"
+          "src" "marketing/screenshots/desktop.png"
+          "widths" (slice 1200 1800 2400)
+          "sizes" "(min-width: 1064px) 1000px, calc(100vw - 64px)"
+        ))
+        "src" "marketing/screenshots/phone-story.png"
+        "widths" $phone
+        "sizes" "(min-width: 640px) 320px, 280px"
+        "alt" (partial "shot-alt.html" "phone-story")
+        "class" "shot-delegate"
+      ) }}
+      {{- else if eq .id "loop" }}
+      {{- partial "picture.html" (dict
+        "src" "marketing/screenshots/phone-question.png"
+        "widths" $phone
+        "sizes" "(min-width: 1024px) 360px, (min-width: 640px) 320px, 280px"
+        "alt" (partial "shot-alt.html" "phone-question")
+        "class" "shot-loop"
+      ) }}
+      {{- else if eq .id "ship" }}
+      {{- /* DOM order is reading order: what was done first comes first. */}}
+      <div class="trio">
+        {{- partial "picture.html" (dict "src" "marketing/screenshots/phone-commit.png" "widths" $phone "sizes" "240px" "alt" (partial "shot-alt.html" "phone-commit") "class" "trio-side trio-left") }}
+        {{- partial "picture.html" (dict "src" "marketing/screenshots/phone-diff.png" "widths" $phone "sizes" "280px" "alt" (partial "shot-alt.html" "phone-diff") "class" "trio-main") }}
+        {{- partial "picture.html" (dict "src" "marketing/screenshots/phone-preview.png" "widths" $phone "sizes" "240px" "alt" (partial "shot-alt.html" "phone-preview") "class" "trio-side trio-right") }}
       </div>
+      {{- else if eq .id "machine" }}
+      {{- partial "architecture.html" (dict) }}
+      {{- else }}
+      {{- errorf "index.html: no homepage screen for pillar %q in data/messaging.yaml" .id }}
+      {{- end }}
     </div>
-    {{- end }}
-  </fieldset>
-
-  <script>
-    if (/Win/i.test(navigator.userAgentData?.platform || navigator.platform || "")) {
-      document.getElementById("os-windows").checked = true;
-    }
-
-    if (navigator.clipboard) {
-      document.documentElement.classList.add("has-clipboard");
-      for (const btn of document.querySelectorAll(".copy-btn")) {
-        btn.addEventListener("click", () => {
-          const cmd = btn.closest(".install-box").querySelector(".install-cmd").textContent;
-          navigator.clipboard.writeText(cmd).then(
-            () => flash(btn, "Copied"),
-            () => flash(btn, "Failed"),
-          );
-        });
-      }
-    }
-
-    // Without clearing the pending timer, a second click's feedback is wiped by
-    // the first click's timeout instead of lasting its own 1.5s.
-    const flashTimers = new Map();
-
-    function flash(btn, text) {
-      btn.textContent = text;
-      clearTimeout(flashTimers.get(btn));
-      flashTimers.set(btn, setTimeout(() => { btn.textContent = "Copy"; }, 1500));
-    }
-  </script>
-
-  <p class="install-note">{{ $m.quickstart.prerequisite | markdownify }}</p>
-  <p class="install-note">{{ $m.quickstart.next }}</p>
+  </div>
 </section>
+{{- end }}
 
-{{ partial "footer.html" . }}
+<section class="screen get-started" id="get-started" aria-labelledby="get-started-title">
+  <div class="container get-started-inner">
+    <h2 class="screen-title" id="get-started-title">{{ $h.get_started }}</h2>
+    <p class="screen-lead">{{ $m.quickstart.prerequisite | markdownify }}</p>
+    {{ partial "install.html" . }}
+    <p class="install-note">{{ $m.quickstart.next | markdownify }}</p>
+
+    <div class="faq">
+      <h3 class="eyebrow faq-title">{{ $h.faq }}</h3>
+      {{- range $m.faq }}
+      {{- $answer := .answer }}
+      {{- if not $answer }}
+        {{- if eq .id "platforms" }}
+          {{- $list := slice }}
+          {{- range $m.platforms }}{{ $list = $list | append (printf "%s (%s)" .name .arch) }}{{ end }}
+          {{- $answer = printf "%s." (delimit $list ", " " and ") }}
+        {{- else if eq .id "license" }}
+          {{- $answer = printf "%s under the [%s](%s/blob/main/%s). %s" $m.license.label $m.license.name $m.repo $m.license.file $m.license.summary }}
+        {{- else }}
+          {{- errorf "index.html: FAQ entry %q in data/messaging.yaml has no answer" .id }}
+        {{- end }}
+      {{- end }}
+      <details class="faq-item">
+        <summary>{{ .question }}{{ partial "icon.html" "chevron" }}</summary>
+        <p>{{ $answer | markdownify }}</p>
+      </details>
+      {{- end }}
+    </div>
+    <a class="text-link" href="{{ "docs/" | relURL }}">{{ $h.docs }} →</a>
+  </div>
+</section>
 {{ end }}

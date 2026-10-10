@@ -8,6 +8,10 @@ on:
 permissions:
   contents: write
 
+env:
+  # A tag with a dash (v0.21.0-alpha.1) is a pre-release, as in semver.
+  PRERELEASE: ${{ contains(github.ref_name, '-') }}
+
 jobs:
   release:
     runs-on: macos-latest
@@ -47,7 +51,7 @@ jobs:
         with:
           files: dist/*
           draft: true
-          prerelease: ${{ contains(github.ref_name, '-') }}
+          prerelease: ${{ env.PRERELEASE }}
           # Categorized by .github/release.yml.
           generate_release_notes: true
 
@@ -79,8 +83,24 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_ID: ${{ steps.draft.outputs.id }}
-          MAKE_LATEST: ${{ contains(github.ref_name, '-') && 'false' || 'true' }}
+          MAKE_LATEST: ${{ env.PRERELEASE == 'true' && 'false' || 'true' }}
         run: |
           gh api --method PATCH --silent \
             "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" \
             -F draft=false -f make_latest="$MAKE_LATEST"
+
+      # pockode.com builds its changelog and footer version from GitHub
+      # Releases at build time, and nothing else rebuilds it when a release is
+      # published, so the release would not appear there until the next deploy.
+      # SITE_DEPLOY_HOOK is the host's deploy hook URL. Pre-releases are left
+      # out because the site shows stable releases only.
+      - name: Rebuild pockode.com
+        if: ${{ env.PRERELEASE != 'true' }}
+        env:
+          SITE_DEPLOY_HOOK: ${{ secrets.SITE_DEPLOY_HOOK }}
+        run: |
+          if [ -z "$SITE_DEPLOY_HOOK" ]; then
+            echo "::warning::SITE_DEPLOY_HOOK is not set, so pockode.com shows $GITHUB_REF_NAME only after its next deploy."
+            exit 0
+          fi
+          curl --fail --silent --show-error --retry 3 -X POST "$SITE_DEPLOY_HOOK" > /dev/null

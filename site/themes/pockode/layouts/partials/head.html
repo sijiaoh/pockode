@@ -1,0 +1,44 @@
+{{- $m := hugo.Data.messaging -}}
+{{- $title := cond .IsHome $m.tagline .Title -}}
+{{- $description := .Description | default $m.subtitle -}}
+{{- /* Search engines cut a description at about 160 characters, and a page
+without its own would share the site's, so every page but the home page must
+carry one that fits. */ -}}
+{{- if not .IsHome }}
+  {{- if not .Description }}
+    {{- errorf "%s: front matter needs a description (160 characters at most)" .Path }}
+  {{- else if gt (strings.RuneCount .Description) 160 }}
+    {{- errorf "%s: description is %d characters; keep it to 160" .Path (strings.RuneCount .Description) }}
+  {{- end }}
+{{- end -}}
+{{- $og := resources.Get "marketing/og-image.png" -}}
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{ $title }} — {{ site.Title }}</title>
+<meta name="description" content="{{ $description }}">
+<link rel="canonical" href="{{ .Permalink }}">
+<meta name="theme-color" content="#0a0a0a">
+<meta name="color-scheme" content="dark">
+
+<link rel="icon" type="image/png" sizes="32x32" href="{{ "icons/favicon-32x32.png" | relURL }}">
+<link rel="apple-touch-icon" href="{{ "icons/apple-touch-icon.png" | relURL }}">
+
+<meta property="og:site_name" content="{{ site.Title }}">
+<meta property="og:title" content="{{ $title }}">
+<meta property="og:description" content="{{ $description }}">
+<meta property="og:url" content="{{ .Permalink }}">
+<meta property="og:type" content="{{ cond .IsHome "website" "article" }}">
+<meta property="og:image" content="{{ "marketing/og-image.png" | absURL }}">
+<meta property="og:image:width" content="{{ $og.Width }}">
+<meta property="og:image:height" content="{{ $og.Height }}">
+<meta property="og:image:alt" content="{{ $m.tagline }}">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:image" content="{{ "marketing/og-image.png" | absURL }}">
+
+{{- /* Hides what the script reveals or opens, so without it nothing stays hidden. */}}
+<script>document.documentElement.classList.add("js")</script>
+<link rel="preload" href="{{ "fonts/Geist-Regular.woff2" | relURL }}" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="{{ "fonts/Geist-Bold.woff2" | relURL }}" as="font" type="font/woff2" crossorigin>
+{{- with resources.Get "css/main.css" | minify | fingerprint }}
+<link rel="stylesheet" href="{{ .RelPermalink }}" integrity="{{ .Data.Integrity }}">
+{{- end }}

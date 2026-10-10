@@ -1,0 +1,65 @@
+{{- /* Returns the stable GitHub releases, newest first, each a GitHub release
+object plus what the templates derive from it once:
+  anchor   the tag with its dots turned into dashes (anchorize would give
+           v0.12.1 and v0.1.21 the same id)
+  notes    the body as markdown, "" when there are none
+  compare  the GitHub link a release without notes shows
+Call it through partialCached: it fetches every page of the releases API.
+
+Release notes have one source, GitHub Releases, so nothing here is written by
+hand. A fetch that fails stops `hugo` with the reason, and the deploy keeps the
+site that is live; `hugo server` warns and carries on with no releases, so the
+rest of the site can still be edited offline. */ -}}
+{{- $repo := hugo.Data.messaging.repo -}}
+{{- $api := replace $repo "https://github.com/" "https://api.github.com/repos/" -}}
+{{- $headers := dict "Accept" "application/vnd.github+json" "X-GitHub-Api-Version" "2022-11-28" -}}
+{{- with getenv "GITHUB_TOKEN" }}
+  {{- $headers = merge $headers (dict "Authorization" (printf "Bearer %s" .)) }}
+{{- end -}}
+{{- $all := slice -}}
+{{- $failure := "" -}}
+{{- /* 100 is the API's page-size ceiling; a short page is the last one. */ -}}
+{{- range $page := seq 1 50 }}
+  {{- $url := printf "%s/releases?per_page=100&page=%d" $api $page }}
+  {{- with try (resources.GetRemote $url (dict "headers" $headers)) }}
+    {{- with .Err }}
+      {{- $failure = printf "%s" . | replaceRE `^.*error calling GetRemote: ` "" }}
+    {{- else with .Value }}
+      {{- $batch := .Content | transform.Unmarshal }}
+      {{- $all = $all | append $batch }}
+      {{- if lt (len $batch) 100 }}{{ break }}{{ end }}
+    {{- else }}
+      {{- $failure = printf "%s returned nothing" $url }}
+    {{- end }}
+  {{- end }}
+  {{- if $failure }}{{ break }}{{ end }}
+{{- end -}}
+{{- if $failure }}
+  {{- $hint := "" }}
+  {{- /* GitHub answers an exhausted rate limit with 403 or 429. */}}
+  {{- if and (not (getenv "GITHUB_TOKEN")) (findRE `Forbidden|Too Many Requests` $failure) }}
+    {{- $hint = " Without GITHUB_TOKEN the API allows 60 requests an hour per IP address; set it to any token that can read public repositories." }}
+  {{- end }}
+  {{- $msg := printf "changelog: could not fetch the releases from GitHub: %s.%s" $failure $hint }}
+  {{- if hugo.IsServer }}
+    {{- warnf "%s The changelog and the footer's version are left out." $msg }}
+  {{- else }}
+    {{- errorf "%s" $msg }}
+  {{- end }}
+  {{- $all = slice }}
+{{- end -}}
+
+{{- $stable := sort (where (where $all "draft" false) "prerelease" false) "published_at" "desc" -}}
+{{- $releases := slice -}}
+{{- range $i, $r := $stable }}
+  {{- $notes := $r.body | default "" }}
+  {{- /* goldmark prints "raw HTML omitted" for the generator's leading
+  comment, and the head's GitHub link replaces the Full Changelog line. */}}
+  {{- $notes = $notes | replaceRE `(?s)^\s*<!--.*?-->` "" | replaceRE `(?m)^\*\*Full Changelog\*\*:.*$` "" | strings.TrimSpace }}
+  {{- $compare := $r.html_url }}
+  {{- if lt (add $i 1) (len $stable) }}
+    {{- $compare = printf "%s/compare/%s...%s" $repo (index $stable (add $i 1)).tag_name $r.tag_name }}
+  {{- end }}
+  {{- $releases = $releases | append (merge $r (dict "anchor" (replace $r.tag_name "." "-") "notes" $notes "compare" $compare)) }}
+{{- end -}}
+{{- return $releases -}}

@@ -1,0 +1,39 @@
+{{- /* Every image on the site: WebP encoded at build time from an asset under
+assets/ (static/marketing is mounted there), with its own width and height so
+nothing shifts while it loads.
+
+  src      asset path, e.g. "marketing/screenshots/phone-story.png"
+  widths   the encoded widths, e.g. (slice 400 560 720 1020)
+  sizes    the `sizes` attribute
+  alt      required; "" only for a decorative image
+  class    optional, on the <img>
+  eager    optional; true only for the image that is the page's largest paint
+  sources  optional art direction: a list of dicts with src, widths, sizes and
+           media, each becoming a <source> tried before the <img>
+*/ -}}
+{{- $p := . -}}
+{{- if not (isset $p "alt") }}{{ errorf "picture.html: %q has no alt" $p.src }}{{ end -}}
+{{- $img := partial "inline/webp-set" $p -}}
+{{- with $p.sources }}<picture>
+  {{- range . }}
+  {{- $s := partial "inline/webp-set" . }}
+  <source media="{{ .media }}" type="image/webp" srcset="{{ $s.srcset }}" sizes="{{ .sizes }}" width="{{ $s.width }}" height="{{ $s.height }}">
+  {{- end }}
+{{ end -}}
+<img src="{{ $img.src }}" srcset="{{ $img.srcset }}" sizes="{{ $p.sizes }}" width="{{ $img.width }}" height="{{ $img.height }}" alt="{{ $p.alt }}"
+  {{- with $p.class }} class="{{ . }}"{{ end }}
+  {{- if $p.eager }} fetchpriority="high"{{ else }} loading="lazy"{{ end }} decoding="async">
+{{- with $p.sources }}</picture>{{ end -}}
+
+{{- define "partials/inline/webp-set" -}}
+  {{- $orig := resources.Get .src -}}
+  {{- if not $orig }}{{ errorf "picture.html: no image asset %q" .src }}{{ end -}}
+  {{- $set := slice -}}
+  {{- $largest := false -}}
+  {{- range .widths -}}
+    {{- if gt . $orig.Width }}{{ errorf "picture.html: %q is %dpx wide, so it cannot be encoded at %dpx" $.src $orig.Width . }}{{ end -}}
+    {{- $largest = $orig.Resize (printf "%dx webp q82" .) -}}
+    {{- $set = $set | append (printf "%s %dw" $largest.RelPermalink .) -}}
+  {{- end -}}
+  {{- return dict "src" $largest.RelPermalink "srcset" (delimit $set ", ") "width" $orig.Width "height" $orig.Height -}}
+{{- end -}}

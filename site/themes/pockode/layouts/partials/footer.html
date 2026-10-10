@@ -1,12 +1,50 @@
 {{- $m := hugo.Data.messaging -}}
-<footer class="footer">
-  <p class="footer-logo">{{ $m.name }}</p>
-  <p class="footer-tagline">{{ $m.tagline }}</p>
-  <div class="footer-links">
-    <a href="{{ $m.repo }}" target="_blank" rel="noopener">GitHub</a>
-    <a href="{{ $m.repo }}/issues" target="_blank" rel="noopener">Issues</a>
-    <a href="{{ $m.repo }}/blob/main/{{ $m.license.file }}" target="_blank" rel="noopener">License</a>
-    <a href="/privacy">Privacy</a>
+<footer class="site-footer">
+  <div class="container">
+    <div class="footer-grid">
+      <div class="footer-about">
+        <a class="brand" href="{{ "/" | relURL }}">
+          <img src="{{ "images/logo.svg" | relURL }}" width="28" height="28" alt="">
+          {{ $m.name }}
+        </a>
+        <p class="footer-tagline">{{ $m.tagline }}</p>
+      </div>
+      <nav class="footer-col" aria-labelledby="footer-product">
+        <p class="eyebrow" id="footer-product">Product</p>
+        <ul>
+          {{- range slice "/docs" "/security" "/changelog" }}
+          {{- with site.GetPage . }}
+          <li><a href="{{ .RelPermalink }}">{{ .LinkTitle }}</a></li>
+          {{- else }}
+          {{- errorf "footer.html: no page at %s for the footer" . }}
+          {{- end }}
+          {{- end }}
+        </ul>
+      </nav>
+      <nav class="footer-col" aria-labelledby="footer-project">
+        <p class="eyebrow" id="footer-project">Project</p>
+        <ul>
+          <li><a href="{{ $m.repo }}" target="_blank" rel="noopener">GitHub</a></li>
+          <li><a href="{{ $m.repo }}/issues" target="_blank" rel="noopener">Issues</a></li>
+          <li><a href="{{ $m.repo }}/blob/main/{{ $m.license.file }}" target="_blank" rel="noopener">License</a></li>
+          {{- with site.GetPage "/privacy" }}
+          <li><a href="{{ .RelPermalink }}">Privacy</a></li>
+          {{- else }}
+          {{- errorf "footer.html: no page at /privacy for the footer" }}
+          {{- end }}
+        </ul>
+      </nav>
+    </div>
+    <div class="footer-bottom">
+      {{- /* The changelog's newest release, from the same fetch, so the two
+      cannot disagree. */}}
+      {{- with partialCached "latest-release.html" . }}
+      {{- $date := time.AsTime .published_at }}
+      <a class="footer-version" href="{{ "changelog/" | relURL }}#{{ .anchor }}">
+        <span><code>{{ .tag_name }}</code> · <time datetime="{{ $date.Format "2006-01-02" }}">{{ $date.Format "2 Jan 2006" }}</time></span>
+      </a>
+      {{- end }}
+      <p class="footer-license">{{ $m.license.label }} under the {{ $m.license.name }}.</p>
+    </div>
   </div>
-  <p class="footer-copy">{{ $m.license.label }} under the {{ $m.license.name }}.</p>
 </footer>

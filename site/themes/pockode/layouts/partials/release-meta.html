@@ -1,0 +1,5 @@
+{{- $date := time.AsTime .release.published_at -}}
+<span class="release-meta">
+  <time datetime="{{ $date.Format "2006-01-02" }}">{{ $date.Format "2 Jan 2006" }}</time>
+  <a href="{{ .href }}" target="_blank" rel="noopener">{{ .label }} ↗</a>
+</span>

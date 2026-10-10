@@ -1,0 +1,45 @@
+{{ define "main" }}
+{{- $prev := false -}}
+{{- $next := false -}}
+{{- $seen := false -}}
+{{- range (site.GetPage "/docs").RegularPages.ByWeight -}}
+  {{- if $seen -}}
+    {{- if not $next }}{{ $next = . }}{{ end -}}
+  {{- else if $.Eq . -}}
+    {{- $seen = true -}}
+  {{- else -}}
+    {{- $prev = . -}}
+  {{- end -}}
+{{- end -}}
+<div class="container docs">
+  <aside class="docs-sidebar">
+    <p class="eyebrow">Docs</p>
+    {{ partial "docs-nav.html" . }}
+  </aside>
+  <article class="docs-main">
+    <details class="docs-menu">
+      <summary>Docs · {{ .LinkTitle }}{{ partial "icon.html" "chevron" }}</summary>
+      {{ partial "docs-nav.html" . }}
+    </details>
+    <h1 class="page-title">{{ .Title }}</h1>
+    <p class="lead">{{ .Description }}</p>
+    <div class="prose">
+      {{ .Content }}
+    </div>
+    <nav class="pager card-grid" aria-label="Previous and next page">
+      {{- with $prev }}
+      <a class="card" href="{{ .RelPermalink }}" rel="prev">
+        <span class="eyebrow">Previous</span>
+        <span class="card-title">{{ .LinkTitle }}</span>
+      </a>
+      {{- end }}
+      {{- with $next }}
+      <a class="card pager-next" href="{{ .RelPermalink }}" rel="next">
+        <span class="eyebrow">Next</span>
+        <span class="card-title">{{ .LinkTitle }}</span>
+      </a>
+      {{- end }}
+    </nav>
+  </article>
+</div>
+{{ end }}
