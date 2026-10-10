@@ -1,4 +1,4 @@
-import { Spinner } from "@pockode/shared";
+import { Spinner, useSecondsUntil } from "@pockode/shared";
 import { useEffect, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { NodeList } from "./components";
@@ -14,7 +14,8 @@ import { useWSStore } from "./lib/wsStore";
 const CONNECTING_SPINNER_DELAY_MS = 300;
 
 export default function App() {
-	const { status, errorMessage, actions, version } = useWSStore();
+	const { status, errorMessage, actions, version, authRetryAt } = useWSStore();
+	const retryInSeconds = useSecondsUntil(authRetryAt);
 	// A fresh object per call, hence useShallow; see selectCredential.
 	const credential = useAuthStore(useShallow(selectCredential));
 	const [passwordInput, setPasswordInput] = useState("");
@@ -42,6 +43,9 @@ export default function App() {
 
 	const handleSubmitPassword = (e: React.FormEvent) => {
 		e.preventDefault();
+		// Every password is refused until the cluster's wait is over, the right
+		// one included.
+		if (retryInSeconds > 0) return;
 		const trimmed = passwordInput.trim();
 		if (!trimmed) {
 			setInputError("Password is required.");
@@ -103,12 +107,20 @@ export default function App() {
 							The <code className="font-mono">-password</code> you started the
 							cluster with.
 						</p>
-						{inputError && (
-							<p className="mt-2 text-sm text-th-error">{inputError}</p>
+						{retryInSeconds > 0 ? (
+							<p className="mt-2 text-sm text-th-error">
+								Too many attempts — try again in {retryInSeconds}{" "}
+								{retryInSeconds === 1 ? "second" : "seconds"}.
+							</p>
+						) : (
+							inputError && (
+								<p className="mt-2 text-sm text-th-error">{inputError}</p>
+							)
 						)}
 						<button
 							type="submit"
-							className="mt-4 min-h-[44px] w-full rounded-lg bg-th-accent py-2 text-sm font-medium text-th-accent-text hover:bg-th-accent-hover"
+							disabled={retryInSeconds > 0}
+							className="mt-4 min-h-[44px] w-full rounded-lg bg-th-accent py-2 text-sm font-medium text-th-accent-text hover:bg-th-accent-hover disabled:cursor-not-allowed disabled:bg-th-bg-tertiary disabled:text-th-text-muted"
 						>
 							Connect
 						</button>

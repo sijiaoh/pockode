@@ -18,6 +18,7 @@ export {
 	useIsPageCovered,
 	useMediaQuery,
 	useOutsideClick,
+	useSecondsUntil,
 } from "./hooks/index.ts";
 export {
 	type AuthStore,
@@ -29,6 +30,7 @@ export {
 	type AuthCredentialParams,
 	type AuthFailureReason,
 	authFailureReason,
+	authRetryAfterMs,
 	BREAKPOINTS,
 	credentialParams,
 	getWebSocketUrl,

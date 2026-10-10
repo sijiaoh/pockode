@@ -1,4 +1,4 @@
-import { act, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import App from "./App";
@@ -8,6 +8,7 @@ const wsState = {
 	status: "disconnected",
 	errorMessage: null as string | null,
 	version: null as string | null,
+	authRetryAt: null as number | null,
 	actions: { connect: vi.fn(), disconnect: vi.fn(), listNodes: vi.fn() },
 };
 const authState = {
@@ -30,6 +31,7 @@ vi.mock("./lib/authStore", () => ({
 
 afterEach(() => {
 	wsState.status = "disconnected";
+	wsState.authRetryAt = null;
 	authState.sessionToken = null;
 	authState.password = null;
 	// The URL is shared by every case in the file, and one of them writes to it.
@@ -89,6 +91,30 @@ describe("the password screen", () => {
 
 		expect(screen.getByLabelText("Password")).toBeInTheDocument();
 		expect(authActions.login).not.toHaveBeenCalled();
+	});
+
+	// Every password is refused until the cluster's wait is over, the right one
+	// included, so a submit before then would only spend another attempt.
+	// fireEvent rather than userEvent: the clock is frozen (see docs/testing.md).
+	it("holds off submitting until the rate limit has passed", () => {
+		vi.useFakeTimers();
+		try {
+			wsState.authRetryAt = Date.now() + 2000;
+			render(<App />);
+			fireEvent.change(screen.getByLabelText("Password"), {
+				target: { value: "hunter2" },
+			});
+
+			expect(screen.getByText(/try again in 2 seconds/i)).toBeInTheDocument();
+			expect(screen.getByRole("button", { name: "Connect" })).toBeDisabled();
+
+			act(() => vi.advanceTimersByTime(2000));
+			expect(screen.queryByText(/try again/i)).not.toBeInTheDocument();
+			fireEvent.click(screen.getByRole("button", { name: "Connect" }));
+			expect(authActions.login).toHaveBeenCalledWith("hunter2");
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 });
 

@@ -1,6 +1,7 @@
 import {
 	type AuthCredential,
 	authFailureReason,
+	authRetryAfterMs,
 	credentialParams,
 	getWebSocketUrl,
 } from "@pockode/shared";
@@ -70,6 +71,12 @@ interface WSState {
 	 * to can drive that.
 	 */
 	reconnectAttempts: number;
+	/**
+	 * When the cluster will take a password again (epoch milliseconds), after a
+	 * `rate_limited` refusal; null otherwise. It refuses every password until
+	 * then, the right one included.
+	 */
+	authRetryAt: number | null;
 	actions: RPCActions;
 }
 
@@ -214,12 +221,29 @@ export const useWSStore = create<WSState>()((set, get) => {
 
 				// A stored session the cluster no longer knows is nobody's mistake:
 				// drop it and fall back to the password screen without an error.
-				if (authFailureReason(err) === "session_expired") {
+				const reason = authFailureReason(err);
+				if (reason === "session_expired") {
 					authActions.forgetSession();
 					internal.credential = null;
 					// Status before close, as in disconnect(): onclose must see
 					// "disconnected" and not schedule a reconnect on the way past.
 					set({ status: "disconnected", errorMessage: null });
+					internal.socket?.close();
+					return;
+				}
+
+				// Too many wrong passwords lately: not this password's fault, and
+				// not worth retrying on our own before the wait is over. Back to the
+				// password screen, which holds off submitting until then.
+				if (reason === "rate_limited") {
+					const retryAfterMs = authRetryAfterMs(err) ?? 0;
+					authActions.logout();
+					internal.credential = null;
+					set({
+						status: "disconnected",
+						errorMessage: null,
+						authRetryAt: Date.now() + retryAfterMs,
+					});
 					internal.socket?.close();
 					return;
 				}
@@ -286,6 +310,7 @@ export const useWSStore = create<WSState>()((set, get) => {
 		version: null,
 		errorMessage: null,
 		reconnectAttempts: 0,
+		authRetryAt: null,
 		actions: {
 			...nodeActions,
 			connect: (credential: AuthCredential) => {
