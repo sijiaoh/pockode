@@ -451,7 +451,7 @@ func TestQuestionTools_AreAdvertised(t *testing.T) {
 		// question a model breaks unless told: never adding the "Other" the
 		// panel already offers. What must be known before the tool is loaded,
 		// asking a step's decisions in one call included, is
-		// agent.AskingGuidance's (see below).
+		// agent.Guidance's (see below).
 		if name == "question_post" {
 			for _, want := range []string{"returns immediately", "arrives later as an ordinary message", "question_cancel",
 				"\"Other\"", "recommended"} {

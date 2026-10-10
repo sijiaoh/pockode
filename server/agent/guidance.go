@@ -1,15 +1,15 @@
 package agent
 
-// AskingGuidance is what an agent has to know before it has loaded any tool:
-// that a decision of the user's is asked with question_post, that a step's
-// decisions are asked together, and what never to ask in the reply text. How to
-// word a question and its options stays in question_post's description, which
-// the agent reads once it goes for the tool.
+// Guidance is what an agent has to know about Pockode's own tools before it has
+// loaded any of them: when to reach for them, and what not to do in their place.
+// How to call a tool stays in its description, which the agent reads once it
+// goes for the tool.
 //
-// It cannot live in that description alone. Both CLIs load MCP tools lazily,
+// It cannot live in those descriptions alone. Both CLIs load MCP tools lazily,
 // and until a model loads one it sees the name and not the description — so an
-// agent that never thought of asking never read why it should. Each CLI gets
-// this text through the one channel it shows before loading:
+// agent that never thought of asking, or of rendering, never read why it
+// should. Each CLI gets this text through the one channel it shows before
+// loading:
 //   - Claude: the MCP server's initialize instructions, which it puts in the
 //     system prompt (mcp.Server). Codex shows those only once a tool from the
 //     server is loaded, as the description of its namespace.
@@ -17,10 +17,14 @@ package agent
 //     which are fixed when the thread starts: a thread started before this
 //     text existed, or before a change to it, goes on without it.
 //
-// Claude cuts server instructions at 2048 characters
-// (CLAUDE_CODE_MAX_MCP_DESCRIPTION_LENGTH, measured on 2.1.286), which this text
-// has to stay under.
-const AskingGuidance = "Asking the user something in Pockode:\n\n" +
+// Claude cuts server instructions at 2048 characters, which this text has to
+// stay under; mcp's TestToolDefinitions_FitClaudesLimit holds it there.
+const Guidance = askingGuidance + "\n\n" + renderingGuidance
+
+// askingGuidance: that a decision of the user's is asked with question_post,
+// that a step's decisions are asked together, and what never to ask in the
+// reply text.
+const askingGuidance = "Asking the user something in Pockode:\n\n" +
 	"- When you need a decision from the user, ask it with the question_post tool; load it through your tool search first if you only have its name. " +
 	"It is the only way to ask here: your CLI's own ask-the-user tool does not reach the user.\n" +
 	"- Ask only for a decision that belongs to the user and changes what you do next. " +
@@ -35,3 +39,10 @@ const AskingGuidance = "Asking the user something in Pockode:\n\n" +
 	"And do not act on the answer you expect before the user has given it.\n" +
 	"- Never ask for passwords, tokens or API keys, in your reply or in a question: whatever the user answers is stored in the transcript and sent to the model. " +
 	"Tell the user which environment variable or file to set instead."
+
+// renderingGuidance: that html_render exists for what Markdown carries badly,
+// and that it is not a replacement for Markdown or for the reply.
+const renderingGuidance = "Showing the user something in Pockode:\n\n" +
+	"- When a comparison, a chart or a structured report is shown better by something richer than Markdown, show it with the html_render tool; load it through your tool search first if you only have its name.\n" +
+	"- Keep plain prose and code in Markdown.\n" +
+	"- Do not repeat or summarize in your reply what you rendered: the user already sees it."

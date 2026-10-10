@@ -59,10 +59,10 @@ func TestInitialize(t *testing.T) {
 	if result.ServerInfo.Name != "pockode" {
 		t.Errorf("name = %q, want pockode", result.ServerInfo.Name)
 	}
-	// The one channel through which Claude sees the asking guidance before it
-	// has loaded question_post.
-	if result.Instructions != agent.AskingGuidance {
-		t.Errorf("instructions = %q, want agent.AskingGuidance", result.Instructions)
+	// The one channel through which Claude sees Pockode's guidance before it
+	// has loaded question_post or html_render.
+	if result.Instructions != agent.Guidance {
+		t.Errorf("instructions = %q, want agent.Guidance", result.Instructions)
 	}
 }
 
@@ -78,7 +78,7 @@ func TestToolsList(t *testing.T) {
 		names[td.Name] = true
 	}
 
-	for _, want := range []string{"story_list", "task_list", "story_create", "task_create", "work_update", "work_get", "work_delete", "story_start", "task_start", "story_wait", "step_done", "work_comment_add", "work_comment_list", "agent_role_list", "agent_role_get", "agent_role_reset_defaults"} {
+	for _, want := range []string{"story_list", "task_list", "story_create", "task_create", "work_update", "work_get", "work_delete", "story_start", "task_start", "story_wait", "step_done", "work_comment_add", "work_comment_list", "agent_role_list", "agent_role_get", "agent_role_reset_defaults", "html_render"} {
 		if !names[want] {
 			t.Errorf("missing tool %q", want)
 		}
