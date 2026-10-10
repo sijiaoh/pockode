@@ -106,7 +106,8 @@ On Cloudflare:
    The project stays connected to the repository, but Cloudflare stops
    building on a push: its build would bring its own Hugo and skip the checks.
 2. In the same place, check that the production branch is `main`: deploying
-   with `--branch=main` is what makes an upload the production deployment.
+   with `wrangler pages deploy --branch=main` is what makes an upload the
+   production deployment.
 3. Create an API token (My Profile → API Tokens → Create Token → Custom token)
    with only Account · Cloudflare Pages · Edit, limited to this account, and
    note the account ID (on the Workers & Pages overview).
