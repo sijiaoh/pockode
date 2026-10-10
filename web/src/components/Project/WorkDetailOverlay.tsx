@@ -855,9 +855,8 @@ function ChildrenSection({
 			) : (
 				<div className="space-y-2">
 					{tasks.map((child) => (
-						// The same row the project list draws, minus its parent slot:
-						// every row here is a task of the story on screen
-						// (docs/project-ui.md §3.1). Under the Tasks heading, so `h4`.
+						// The same row the project list draws for a story. Under the
+						// Tasks heading, so `h4`.
 						<WorkRow
 							key={child.id}
 							work={child}

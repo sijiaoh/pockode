@@ -873,12 +873,24 @@ drawn side by side, because what to do differs: allow or deny a command, or
 answer a question.
 
 A work row carries **no** dot, and the story row's child rollup is gone with it
-([project-ui.md §3](project-ui.md#3-the-row)): a task that needs the user now
-has a row of its own in *Needs you*, so both halves of what the dot used to
-roll up are already on screen beside the story, and a dot would point at them.
-The Project tab's dot is untouched, because it is read when the list is *not* on
+([project-ui.md §3](project-ui.md#3-the-row)). The list has no task rows
+either ([§2.2 there](project-ui.md#22-which-work-gets-a-row)), and putting a
+child's state back on its story's row was turned down there along with them. The
+Project tab's dot is untouched, because it is read when the list is *not* on
 screen — which is the whole reason it exists, and the reason the tab badge
 carries it one step further out.
+
+**"The list" the dot reads is the `Current` segment, which is more than its
+rows**: it carries the tasks of every story row, because the row counts them.
+So a task that needs the user still lights the dot even though the list draws
+no row for it, and a lit dot over a calm-looking list means the waiting task is
+behind some story's `{n} active`. The edges are the tasks `Current` does not
+carry — those of a story that is not a row in it. A task waiting on the user
+under a **closed** story (rare: `step_done` refuses to close a story with active
+subtasks), or under a stopped or open story held back by its group's cap
+([list-paging-ui.md §4.1](list-paging-ui.md#41-current-is-loaded-whole-and-that-is-the-design)),
+does not light it; the second lights again once "Show earlier work" fetches the
+story.
 
 Deliberately outside the dot:
 
@@ -1010,6 +1022,14 @@ Which groups the list has, which work gets a row and what a row holds is
 [project-ui.md §2](project-ui.md#2-the-project-screen), which owns the project
 page's information architecture. Only the part that is about *this* vocabulary
 is here.
+
+**The predicate is asked of a story about the story itself.** Only stories are
+rows, and a story's group is read off its own `status` and its own
+`needsAttention` — never off its tasks'. A story whose task is waiting on a
+permission is grouped by what the story itself is doing — usually
+`waiting_children`, so *In progress* — and the task is reached on the story's
+detail page ([project-ui.md §2.2](project-ui.md#22-which-work-gets-a-row)
+has the reasoning, and why there is no roll-up).
 
 **Grouping reads `status` plus the single `needsAttention` predicate (§1.4) —
 never the full `Activity`.** A list that regrouped on every phase change would reorder itself

@@ -140,10 +140,9 @@ export interface Comment {
 }
 
 /**
- * The `Current` segment of the project list: every row it draws plus everything
- * those rows make claims about — a story's tasks for its `{closed}/{total}`, a
- * task's story for its `in: <title>` — and nothing closed. The archive is
- * fetched a page at a time (`work.list.archive`).
+ * The `Current` segment of the project list: every row it draws — each story
+ * not yet closed — plus those stories' tasks, for their `{closed}/{total}`. The
+ * archive is fetched a page at a time (`work.list.archive`).
  *
  * `Current` itself is never paged: its group counts and the Project tab's
  * attention dot are read off it, and an "is there any" asked of a page answers

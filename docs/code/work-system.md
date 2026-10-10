@@ -330,13 +330,14 @@ withdraws the questions beneath it, and an open one has no session to have asked
 any, so a count on either would be a leftover nobody can act on.
 
 **`RowState.NeedsAttention` is where the two dimensions merge, and the only
-place they do**: `Activity.NeedsUser() || UnansweredQuestions > 0`. On the server
-it decides whether an active *task* earns a row of its own in the `Current`
-segment (`watch.hasCurrentRow`) — a task whose agent posted a question and went
-on working reads as `running`, and a rule looking only at the activity would roll
-it up into its story and leave the question unreachable from the list. The client
-mirrors the same predicate for the attention dot and the *Needs you* group
-([lifecycle-ui.md §1.4](../lifecycle-ui.md#14-the-three-components)).
+place they do**: `Activity.NeedsUser() || UnansweredQuestions > 0`. A work whose
+agent posted a question and went on working reads as `running`, so a rule
+looking only at the activity would miss it. The client mirrors the same
+predicate for the attention dot and the *Needs you* group
+([lifecycle-ui.md §1.4](../lifecycle-ui.md#14-the-three-components)). It no
+longer decides anything about the `Current` segment's rows: only stories are
+rows there, grouped by their own state, and a task never earns one
+([project-ui.md §2.2](../project-ui.md#22-which-work-gets-a-row)).
 
 Everywhere with room for two things — a session row, a work row's second line —
 draws them side by side instead. The merge is only for places that need a single
@@ -1627,10 +1628,11 @@ Three consequences worth stating on their own, because each is easy to undo:
 
 - **A page is not a set of rows; it is a set of rows plus everything they
   assert.** A story's row says `{n} active` and `{closed}/{total} tasks` over
-  *all* its children, including closed tasks that get no row anywhere, and a
-  task's row names its parent story. So a story and its tasks are always on the
-  same side of a cut — in `Current`, and again on whichever archive page the
-  story lands on.
+  *all* its children, and no task is a row anywhere. So a story and its tasks
+  are always on the same side of a cut — in `Current`, and again on whichever
+  archive page the story lands on — and a task is sent only with its story's
+  row: a task of a closed story, or of one the cap holds back, is not in
+  `Current` at all.
 - **`Current` is never paged, and that is the design.** Its group counts and the
   Project tab's attention dot are read off it, and an "is there any" asked of a
   page answers *no* for a list nobody has read that far. The question it exists
@@ -1650,18 +1652,19 @@ newest first, the archive's own order, borrowed from `session.ListOrder` rather
 than restated so the two cannot disagree on a tie — and eat from the end. What
 goes is the tail of what the user sees, never a work they just touched.
 
-**The cap is deliberately soft.** `CurrentGroupCap` is 50 for each group, but
-what the cap drops is whole stories — a story cannot be dropped without its
-tasks, since it keeps them all for its own roll-up — and a story holding a task
-that *is* a row is skipped rather than dropped. Skipping it means the group can
-come back slightly over the cap when there are not enough droppable stories.
-That is the intended trade: **"*Needs you* is never truncated" is the stronger
-invariant**, and a number that is approximate costs a little bandwidth, while a
-row that vanishes costs a user the one thing this screen exists to tell them.
-Nothing should read the cap as an exact bound on the rows that arrive — least of
-all on *Stopped*, where tasks are rows of their own, which makes that group's cap
-the softest of the two ([the shape of
-it](../list-paging-ui.md#41-current-is-loaded-whole-and-that-is-the-design)).
+**The cap bounds rows, not items.** `CurrentGroupCap` is 50 for each group,
+and every row is a story, so a capped group arrives with exactly 50 rows. What
+the cap drops is whole stories — a story cannot be dropped without its tasks,
+since it keeps them all for its own roll-up — so the items sent still vary with
+how many tasks the kept stories hold. The cap was soft while a task could be a
+row: a story holding one was skipped rather than dropped, and a stopped task was
+never dropped at all. That rule, and the `Current` carrying a closed story so a
+task row could print its title, went with the task rows.
+
+The one thing a held-back story takes with it that is not a row is the
+attention dot's view of its tasks: a task waiting on the user under a story the
+cap dropped does not light the dot until "Show earlier work" fetches it. That is
+accepted rather than spared ([why](../list-paging-ui.md#41-current-is-loaded-whole-and-that-is-the-design)).
 
 `hasCurrentRow` (`server/watch/work_list_segment.go`) and `rowGroup`
 (`web/src/components/Project/WorkListOverlay.tsx`) are mirrors of each other,
@@ -1722,7 +1725,7 @@ Design decisions specific to this display:
 - **A work whose worktree is not decided yet shows no badge at all**, since a badge would assert a binding that can still change. What counts as decided follows from *Worktree Binding* above: a work that is no longer `open` is already frozen, and an `open` one is decided the moment its **story** starts and propagates the captured worktree down. So an open task is judged by its story, not by itself — that is what keeps the badge on an open task under a running story while hiding it for the same task under a story that has not started. An open story has nothing above it and is simply undecided.
 - **The badge resolves that verdict itself rather than being told it.** `isWorktreeBound` (`workStore.ts`) owns the rule and `WorktreeBadge` reads it through a `useWorkStore` selector, so no call site can forget it. Reaching the story needs the whole work list, which is why the badge subscribes to the store instead of taking the verdict as a prop. It is one lookup and no walk — `story_id` names a story, and a story names nothing — so a story missing from that list (subscription not synced yet) leaves the task itself as the answer, which is `open`, which errs toward hiding.
 - **The binding is read-only, but the badge is a navigation link.** The worktree binding is frozen once a work starts (see *Worktree Binding*), so — unlike the editable role — the badge never *reassigns* a work's worktree. It is, however — for as long as that worktree exists (see below) — a clickable `<Link>` (target from `buildNavigation({ type: "home", worktree })`) that jumps to that worktree's root URL (main → `/`, feature → `/w/<worktree>/`), letting the user pivot from the mixed global list straight into the context of any work's worktree. It carries no work/chat context — just the worktree switch — and uses real anchor semantics (middle-click / open-in-new-tab) rather than a button.
-- **Stories and tasks are treated alike — the work's type is not part of the rule.** Visibility is the binding verdict above and nothing else, so every place the badge appears asks `useWorktreeBadgeVisible` the same question: the list's rows, the story detail's Tasks rows (the same `WorkRow`) and the detail header. Type did decide it on the list once, and the reason was sound for the list it was written for: a task was reachable only by expanding its story, so its badge would have restated the story badge directly above it. Neither half of that survives. A task that needs a person now gets a row of its own (docs/project-ui.md §2.2) with no story row above it — usually in a different group, and even in the same group nothing puts the two adjacent — and a task detail can be opened without its story on screen at all. A story subtree does normally share one worktree, but a task started ahead of its story (see *Worktree Binding*) is the case where it does not, and that is exactly the kind of task the list promotes.
+- **Stories and tasks are treated alike — the work's type is not part of the rule.** Visibility is the binding verdict above and nothing else, so every place the badge appears asks `useWorktreeBadgeVisible` the same question: the list's rows, the story detail's Tasks rows (the same `WorkRow`) and the detail header. Type did decide it on the list once, and the reason was sound for the list it was written for: a task was reachable only by expanding its story, so its badge would have restated the story badge directly above it. The list has no task rows now (docs/project-ui.md §2.2), so a task's row is drawn only in its story's Tasks section, under a header that does carry the story's badge — the old reason, back in its usual case. It still does not decide the rule, because the badge is not only on rows: a task detail can be opened without its story on screen at all. And a story subtree does normally share one worktree, but a task started ahead of its story (see *Worktree Binding*) is the case where it does not — exactly the row where a task's badge says something its story's does not, and the one a type rule would hide.
 - **Feature name comes straight from the stored `Worktree` string**, so a work still shows its original worktree name even after that worktree is deleted. The live worktree list is consulted for one thing only: whether that worktree is still there. Once it is not, the badge is a muted `Archive` marker instead of a link — there is nowhere to go, and the link used to bounce off the redirect guard back to main (the glyph and the ban on `th-error` for this state are [cross-worktree-session-ui.md](../cross-worktree-session-ui.md#gitbranch-and-archive)). An empty list reads as *not loaded yet* rather than *no worktrees*, the same reading the redirect guard takes.
 - **Empty `Worktree` (main) resolves to the main branch name**, matching `WorktreeSwitcher`, and falls back to a neutral `Default` until the worktree list loads (never a guessed `main`/`master` literal). Only this main path reads the worktree list, and it reuses the existing `["worktrees"]` react-query cache read-only rather than opening a new subscription. On non-git projects the main badge renders nothing, since there is no worktree concept to show — and it renders nothing while `isGitRepo` is still unknown, so a project without git never shows it for a frame. A non-main name left over from when the project was a repository needs no rule of its own: outside a repository the list holds only main, so that name is *gone* and gets the `Archive` marker above ([git-ui.md](../git-ui.md#projects-without-a-repository)).
 - **Visual hierarchy encodes the exception.** A feature worktree is accented (it is the noteworthy case, and accent doubles as the app's interactive/link color, so the chip also reads as clickable); the main worktree is muted, matching that it is the silent default.

@@ -93,8 +93,8 @@ segment it was opened from.
 │ ⏸ Needs you                      2   │
 │   ◦ Wire the relay handshake     💬⏹ │
 │     Running · 1 to answer · main 5m  │
-│    ◦ Rebuild the project page    💬⏹ │
-│      ↳ Cluster mode · Needs perm 12m │
+│   ◦ Rebuild the project page     💬⏹ │
+│     Needs perm · main · 1 active 12m │
 │ ⏵ In progress                    3   │
 │   ...                                │
 │ ○ Not running                    4   │
@@ -150,32 +150,47 @@ is what the archive is.
 
 ### 2.2 Which work gets a row
 
-> **A row exists for every story, and for every task that needs a person.**
-> Everything else about a task is rolled up into its story's row.
+> **A row exists for every story that is not closed, and for nothing else.** A
+> task never gets a row here, whatever state it is in. A story's tasks are
+> listed on the story's detail page, and on its row they are only counted.
 
-"Needs a person" is `needsAttention` — `needs_permission`, or any unanswered
-question ([lifecycle-ui.md §1.4](lifecycle-ui.md#14-the-three-components)) — or
-`status == "stopped"`: the two ways a task can be stuck with nobody coming for
-it. A task that is running,
-idle, open or closed has nobody waiting on it, so it is its story's business and
-is reached through the story.
+Each story is grouped by **its own** status and activity (§2.3). Nothing of its
+tasks' state reaches the row's group, its left edge or its glyph: what a story
+row says about its children is the two counts in its meta line, `{n} active` and
+`{closed}/{total} tasks` (§3).
 
-This is the paragraph that overruled
-[lifecycle-ui.md §6.1](lifecycle-ui.md#61-list-grouping)'s "a task never leaves
-its parent to join a group of its own" — a sentence that is gone from there now.
-The rule was sound about the list it was written for, where the story row could
-expand to reveal the task. It is
-not sound about a list with no expansion: the *Needs you* group's whole promise
-is that it holds the things for the user to do, and under the old rule the thing
-to do is a task, while the group only admits the story that is waiting on it.
-The user is told there is something to do and then has to go and find it. A task
-that needs a person is the one case where the parent is not where the user
-should be looking, so it is the one case where the task gets its own row.
+**This replaced a rule that gave a task that needs a person a row of its own** —
+`needsAttention` or `stopped`, the two ways a task can be stuck with nobody
+coming for it. The argument for it was the *Needs you* group's promise: the
+thing to do is the task, and a group admitting only the story waiting on it
+tells the user there is something to do and then makes them go and find it.
+In use it read as broken, and the reason is structural rather than cosmetic:
 
-Nothing is listed twice: a story row never contains child rows, so a story in
-*In progress* and its blocked task in *Needs you* are two rows about two
-different things, each with its own action. A task row names its parent in its
-meta line (§3) so it is never orphaned.
+- A task row was an indented card, which says "under the row above". But it was
+  sorted by `updated_at` among unrelated stories in *Needs you* or *Stopped*,
+  while its own story sat in another group — so the indent pointed at the wrong
+  story, almost every time.
+- Whether a story's tasks were on the list at all depended on their states, so
+  the same story showed some of its tasks one minute and none the next. A list
+  whose structure changes with the data's state is one the user cannot learn.
+
+The meta-line parent name (`↳ <story title>`) that a task row carried was the
+patch for the first point, and it did not undo the indent's claim.
+
+**No roll-up of child-task state, deliberately.** The obvious middle way — keep
+tasks off the list, but lift a story into *Needs you* or *Stopped*, or tint its
+edge, when one of its tasks is there — was considered and turned down in
+favour of the plain removal. A rolled-up story would be in a group for a
+reason its own row does not state, and the row would then need a slot saying
+which child put it there: the task row again, folded into its parent. The cost
+is accepted and stated plainly: **a task that needs a person is found on its
+story's detail page**, and the list says only that the story has `{n} active`
+tasks. The Project tab's attention dot still lights for such a task (§3, and
+[lifecycle-ui.md §4](lifecycle-ui.md#4-attention-dots)), so the signal is not
+lost — it just no longer has a row of its own to point at.
+
+Nothing is listed twice and nothing is orphaned: every row is a story, and no
+story row ever contains child rows.
 
 ### 2.3 Four groups, and why four
 
@@ -183,8 +198,8 @@ Inside `Current`, in this order:
 
 | Group | Contains | Header glyph | The question it answers |
 |---|---|---|---|
-| **Stopped** | `status == stopped` — stories *and* tasks | `CircleStop` error | What was handed back to me? |
-| **Needs you** | `status == active` and `needsAttention` — stories *and* tasks | `CirclePause` warning | What is waiting on me? |
+| **Stopped** | `status == stopped` stories | `CircleStop` error | What was handed back to me? |
+| **Needs you** | `status == active` stories with `needsAttention` | `CirclePause` warning | What is waiting on me? |
 | **In progress** | every other `active` story | `CircleDot` accent | What is being handled without me? |
 | **Not running** | `status == open` stories | `Circle` muted | What has never been started? |
 
@@ -211,9 +226,9 @@ of things gone wrong. Splitting them gives the top of the list back its meaning:
 all (below), so on a healthy project the list still opens on *Needs you* exactly
 as it did.
 
-**Which work gets a row did not change** — §2.2's rule is untouched, and a
-stopped task already had a row of its own. Only the group it is counted in, and
-where that group sits, are different.
+**Which work gets a row was not part of the split** — that is §2.2's rule
+alone. The split changed only which group a stopped row is counted in, and where
+that group sits.
 
 ***Stopped* leads, and *Needs you* is second.** It is the one group where
 nothing at all happens until a person acts; *Needs you* at least has an agent
@@ -235,9 +250,9 @@ its own heading and its own count, it does not join anyone else's.
 carries three channels — the 2px `border-l-th-error`, the error-toned
 `CircleStop`, and the word `Stopped` in slot 2 — and its position under an
 error-toned heading at the top of the list is the fourth. A row's appearance is
-decided by the work and never by which group it was sorted into (§3.1); making
-the row read its group would give one work two looks across this screen and the
-story detail's Tasks list. Nor does the group need a divider or a fill of its
+decided by the work and never by which group it was sorted into (§3.1), which
+is what lets the story detail's Tasks list draw the same component with no group
+around it at all. Nor does the group need a divider or a fill of its
 own: what separates it from the groups below is the rhythm the rest of the list
 already has (below), plus its sticky heading — the only error-toned heading in
 the column.
@@ -250,9 +265,10 @@ archive is a segment now. The header sticks to the top of the scroll area while
 its rows are being read, so a long group never leaves the user wondering what
 they are scrolling through.
 
-The count is the number of **rows** in the group. It is not a number of work
-items in some tree — the tasks folded into a story row are counted in that row's
-own meta line (§3), where they can be told apart from it.
+The count is the number of **rows** in the group — of stories. It is not a
+number of work items in some tree: a story's tasks are counted in that row's own
+meta line (§3), where they can be told apart from it, and a task that needs the
+user adds nothing to *Needs you*'s count (§2.2).
 
 **The spacing between rows is what separates them, and widening it is what does
 the work.** Rows are 8px apart (`space-y-2`) and groups 16px (`space-y-4`), up
@@ -344,8 +360,9 @@ story:  line 1:  [glyph]  Title, truncated to one line        [💬]  [⏹]
         line 2:  Running · main · Engineer · 1 active · 2/5 tasks    3m
         line 3:  invalid work: work is already running
 
-task:       line 1:  [glyph]  Title, truncated to one line    [💬]  [⏹]
-            line 2:  ↳ Story name · Running · 1 to answer · main     1h
+task (story detail's Tasks section only, §3.1):
+            line 1:  [glyph]  Title, truncated to one line    [💬]  [⏹]
+            line 2:  Running · 1 to answer · main · Engineer
 ```
 
 **The row is a card, and a task's card sits a level in.** `bg-th-bg-secondary`
@@ -354,20 +371,18 @@ detail page's sections already use; the `border-th-border` hairline is this
 row's addition, because a fill that close to the page behind it needs an edge to
 be read as one (the table below). Then `ml-4` when `work.type === "task"`.
 Neither of those is what makes the rows read as separate objects; the spacing in
-§2.3 is. `hover:bg-th-bg-tertiary` is unchanged, and is exactly one step up from
-the new resting state.
+§2.3 is. `hover:bg-th-bg-tertiary` is unchanged, and is exactly one step up
+from the new resting state. A task's card is only ever drawn in the story
+detail's Tasks section (§3.1): the list has no task rows (§2.2).
 
-The indent is decided by **the work** and not by the screen, which is what lets
-one rule serve both surfaces without breaking §3.1: in the list a task sits in
-from the stories around it, and in the story detail's Tasks section — where every
-row is a task — the whole block sits in under its heading, which is what it is.
+The indent is decided by **the work** and not by the screen, so the row needs
+no rule of its own for §3.1: in the story detail's Tasks section, where every
+row is a task, the whole block sits in under its heading, which is what it is.
 
-**No connector line into the indent.** In the list a task's parent story is
-almost never the row above it: the two are usually in different groups, and when
-they do share one (both waiting on the user, §6) the arrival order does not put
-them next to each other either. A line pointing up would be pointing at another
-work. The indent claims "one level down", nothing more; slot 1 names what it is
-down from.
+The indent is also the reason task rows had to leave the list rather than be
+patched there. An indent claims "one level down from the row above", and in a
+list grouped and sorted by state a task's story was almost never the row above
+it (§2.2).
 
 **What contrast this row is allowed to spend**, and the reason the rest of this
 section is shaped the way it is. Measured over all ten theme variants in
@@ -435,15 +450,14 @@ the register's entry for a control no user could reach.
 slot has one rule for when it appears, and the group never changes it; when the
 line is too narrow, the rightmost slots truncate first, which is why the order is
 what it is. Slot 7 is the exception: it stands outside the clip, so the
-truncation eats slots 1–6 from the right and never the date (its row says why).
-The line is **two tiers, not seven equals**: slots 1 and 2 are
+truncation eats slots 2–6 from the right and never the date (its row says why).
+The line is **two tiers, not six equals**: slots 2 and 2b are
 `text-th-text-secondary`, the rest keep the container's `text-th-text-muted`.
 Both clear AA in every variant (the table above) — the tiers are a difference in
 weight, not one tier reaching for legibility the other gives up.
 
 | # | Slot | When | Tier | Why here |
 |---|---|---|---|---|
-| 1 | `↳ <story title>` | the row is a task | structure | A task row only exists here because it left its story (§2.2); without this it is a title with no context. The corner arrow is the shape of depth, and it buys about 20px of title width over the words `in:` — but only on screen: the arrow is `aria-hidden`, so an `sr-only` `in` keeps the relationship for a screen reader, which would otherwise hear a bare title indistinguishable from the role and worktree slots beside it. |
 | 2 | Activity label | **every row** | state | Which of the eight leaves this is ([lifecycle-ui.md §1.1](lifecycle-ui.md#11-activity)). |
 | 2b | `1 to answer` / `{n} to answer` | `unanswered_questions > 0` | state | The second dimension. It sits against the activity label rather than replacing it, because a work can be `Running` and still owe two answers — that pair is the whole reason the `needs_answer` leaf was deleted ([answering-ui.md](answering-ui.md)). Short because line 2 clips from the right and this slot is near the front of it. |
 | 3 | `WorktreeBadge` | the work's worktree is fixed | attribute | The list is global across worktrees; the badge and its visibility rule are the old row's unchanged, including staying off rows whose worktree can still change. Its hit area is not: see the hit-area note below. |
@@ -452,11 +466,12 @@ weight, not one tier reaching for legibility the other gives up.
 | 6 | `{closed}/{total} tasks` | the row is a story with children | attribute | Progress. |
 | 7 | Relative `updated_at`, outside the clip, at the right edge | **both segments** of the list | attribute | Every list here is sorted by it (§2.3), and a sort key the user cannot see is a list in no order at all — which is also why it is the one slot the clip never reaches: as the last slot it would be the first thing a narrow line lost. It is drawn after the clipping container rather than inside it, and that container's `flex-1` pushes it to the right edge so it reads as a column: a date at a different x on every row is a sort order the user has to reconstruct. It is the one slot with no leading `·` — the gap already separates it, and a middot left floating mid-line reads as a slot that failed. That gap is twice the one either side of a `·`, because the clip cuts mid-glyph with no ellipsis: at the slots' spacing a cut-off `2 act` and the date `3m` read as one word. The story detail's Tasks list does not draw it: that list is in creation order (§2.3), so there is no sort key there to show. |
 
-**Slot 1 comes before slot 2, and that overrules the order this section used to
-give them.** Putting the state first was right while the state had exactly one
-channel; it now has three — this word, the left edge, the glyph — while "which
-story is this task under" still has one. The two only ever compete on a task row
-inside *Needs you*.
+**There is no slot 1, and the numbers are kept.** Slot 1 was `↳ <story
+title>`, the parent a task row named because it had left its story; with task
+rows gone from the list (§2.2) it named nothing on any row that is drawn, and it
+was removed rather than left as a branch nothing reaches. The other slots keep
+their numbers, so the references to them in the code and in other documents
+stay true.
 
 **The activity label is written on every row.** `Running` repeating the *In
 progress* heading above it is the cost. The gain is that `Waiting on subtasks`,
@@ -471,8 +486,8 @@ and only while a command has just failed.
 
 **The label is not tinted with the leaf's tone.** `text-th-warning` on the card
 is far under AA 4.5 in every light variant (the table), so a hue there would be
-saying nothing in half the themes — and the previous slot 1 carried exactly that
-defect, which this fixes as a side effect. The hue stays on the left edge and
+saying nothing in half the themes — and the state slot carried exactly that
+defect before, which this fixed as a side effect. The hue stays on the left edge and
 the glyph, which owe only the 3:1 non-text floor.
 
 **The left edge is always 2px and only its hue changes**: warning when
@@ -590,11 +605,18 @@ is gone. Children are listed in exactly one place, the story's detail page,
 which already has that section.
 
 **No child-rollup attention dot on a story row either.** It fired when the story
-or any of its tasks satisfied `needsAttention`, and both halves are now rows of their
-own in the group above it: the dot would point at something already on screen.
-The dot on the sidebar's ProjectTab is unaffected and its rule
-(lifecycle-ui.md §4) does not change — it is read when the list is *not* on
-screen, which is the whole reason it exists.
+or any of its tasks satisfied `needsAttention`. It was removed while a task that
+needed the user had a row of its own, and it stays removed now that it does not:
+bringing it back would be the roll-up §2.2 turns down, one channel at a time. A
+story that itself needs the user says so with its own edge, glyph and group; a
+task that does is found on the story's detail page.
+
+The dot on the sidebar's ProjectTab keeps its rule (lifecycle-ui.md §4) — it is
+read when the list is *not* on screen, which is the whole reason it exists — and
+it still reads the tasks `Current` carries for its story rows. So it can light
+while every row on the list looks calm: the waiting task is behind a story's
+`{n} active`. That is the accepted cost of §2.2, and the dot is the one place
+the screen still answers for it.
 
 Hit areas follow [responsive-ui.md](responsive-ui.md#hit-areas-and-spacing) and
 nothing here relaxes them: the two icon controls owe a 44 × 44 box on both axes
@@ -614,18 +636,16 @@ reason).
 
 ### 3.1 One row, two screens
 
-The story detail's Tasks section is now the *only* place a story's tasks are
-listed, so its rows and the list's rows are the same component with the same
-slots — not two row implementations that drift. Every slot rule above decides
-itself from the work, with one exception, and the exception is decided by the
-**screen** rather than by the group:
+The story detail's Tasks section is the *only* place a story's tasks are
+listed — the list has no task rows at all (§2.2) — and its rows are the list's
+row component with the same slots, not a second implementation that drifts.
+Every slot rule above decides itself from the work, so a story on the list and
+a task under its story carry the same kind of glyph, the same two controls and
+the same facts, which is what makes the two screens feel like one place.
 
-- Slot 1, `↳ <story title>`, is passed off on the Tasks section. Every row
-  there is a task of the story on screen, and naming it on each row is noise.
-
-That is the whole difference. A task row in *Needs you* and the same task's row
-under its story carry the same glyph, the same two controls and the same facts,
-which is what makes the two screens feel like one place.
+The one thing the screen decides is slot 7, and only by the order the screen is
+in: the Tasks section is in creation order, so it has no sort key to show.
+Nothing about a row is decided by which group it is in.
 
 ## 4. Creating work lands you on its detail page
 
@@ -753,12 +773,12 @@ second place worktree-aware URLs get built (§4).
 
 | Case | Behaviour |
 |---|---|
-| A task needs the user and its parent story also does | Two rows in *Needs you*; the task's slot 1 names the story. |
-| A story is `waiting_children` while a child needs the user | Story in *In progress* with its `Clock` leaf, child in *Needs you* above it. This is the arrangement §2.2 exists for. |
-| A `stopped` task under an `active` story | Task row in *Stopped*, story row in *In progress*. The task's own control is Restart. |
-| A needs-you or stopped task whose parent is `open` or `closed` | It still gets its row; slot 1 names the parent whatever state the parent is in. The list does not ask a parent's permission to show a task that needs a person. |
+| A task needs the user and its parent story also does | One row, the story's, in *Needs you* — for the story's own reason. |
+| A story is `waiting_children` while a child needs the user | Story in *In progress* with its `Clock` leaf, and the child counted in its `{n} active`. The child is reached on the story's detail page, and the Project tab's dot lights for it. This is the cost §2.2 accepts. |
+| A `stopped` task under an `active` story | Story row in *In progress*; the task is counted in its `{closed}/{total}` and nowhere else on the list. Restart is on the task's row in the story's Tasks section. |
+| A needs-you or stopped task whose parent is `closed` | No row. `Current` carries no closed story, and so none of its tasks; the task is reached through the story in the archive, and the Project tab's dot does not light for it ([lifecycle-ui.md §4](lifecycle-ui.md#4-attention-dots)). Rare: a story with active subtasks is refused `step_done`. |
 | A work changes group while on screen | It moves, and so does everything whose `updated_at` moved with it — its group is sorted newest first (§2.3). |
-| A closed task under a story that is not closed | No row, in either segment. It is inside its story, which is where a finished task is looked for. |
+| Any task, in any state | No row, in either segment. It is inside its story, which is where its tasks are looked for (§2.2). |
 | A work in another worktree | Badge in slot 3; the Chat control switches worktree, exactly as the old row's did. |
 | A title too long for one line | Truncates. The detail page is one tap away and has the whole of it. |
 | A work with no role | Slot 4 is omitted, not drawn as `—`. An empty slot is not a fact. |
@@ -799,23 +819,23 @@ The checks, in the order they would fail, and where each one is now:
 
 | # | Check | Held by |
 |---|---|---|
-| 1 | A task with an unanswered question is its own row in *Needs you*, and its story is not | `WorkListOverlay.test.tsx` |
-| 2 | A `stopped` story and a `stopped` task are both in *Stopped*, which is the first group, and the control on them is Restart | `WorkListOverlay.test.tsx` — the group and the group order, the row being the same component either way — and `WorkPrimaryAction.test.tsx` for the label itself |
+| 1 | No task is a row in `Current`, whatever its state — needing permission, holding a question, stopped or closed — and its story is grouped by its own state alone, still counting those tasks in its meta line (§2.2) | `WorkListOverlay.test.tsx`; the server half — a task is sent only with its story's row — is `work_list_segment_test.go` |
+| 2 | A `stopped` story is in *Stopped*, which is the first group, and the control on it is Restart | `WorkListOverlay.test.tsx` for the group and the group order, `WorkPrimaryAction.test.tsx` for the label itself |
 | 3 | No row renders a chevron or a collapse toggle, and no group heading is a button | `WorkListOverlay.test.tsx`, `WorkRow.test.tsx` |
 | 4 | `work.create` resolving lands on the new work's detail; rejecting leaves the sheet open with the error and does not navigate | `CreateStorySheet.test.tsx` for the sheet, `WorkListOverlay.test.tsx` for the caller's wiring |
 | 5 | Switching segment and then entering and leaving a detail returns to the chosen segment | `AppShell.test.tsx`, which owns the routing the segment now lives in (§5); `WorkListOverlay.test.tsx` holds only that the list asks for a switch rather than performing one |
 | 6 | Back from a story detail reaches `/works`, and from a task detail its parent story | `WorkDetailOverlay.test.tsx` |
 | 7 | Both row controls are 44 × 44 under a coarse pointer | `web/tests/touchTarget.test.ts`, which reads every icon-only control |
-| 8 | The list and the story detail's Tasks section render the same row component, and only Tasks drops the parent slot | `WorkRow.test.tsx` (the slot), by construction elsewhere |
+| 8 | The list and the story detail's Tasks section render the same row component, and only the list dates its rows | `WorkRow.test.tsx` (the date), by construction elsewhere |
 | 9 | Creating with no agent role opens the sheet on its message rather than doing nothing | `CreateStorySheet.test.tsx`, which also separates that message from *loading* and *failed*, and from roles that exist but none of which takes stories |
 | 10 | A failed row command prints its message on the row, and the control keeps its own action label rather than wearing the error | `WorkRow.test.tsx` for the message and the label together, `WorkPrimaryAction.test.tsx` for the button on its own |
 | 11 | The message goes when the work's status changes under it without the row changing group | `WorkRow.test.tsx` |
 | 12 | The message is the control's accessible description while it is there, and the attribute is *absent* — not pointing at nothing — while it is not | `WorkRow.test.tsx`, in the same case as check 10. It asserts the missing attribute rather than an empty description, because a dangling id and no attribute compute the same empty description: assert the description and a dangling id passes |
 | 13 | A task's card is indented and a story's is not, on both surfaces | `WorkRow.test.tsx` — the indent is read off the work, so one case covers both screens |
-| 14 | Slot 1 is the parent, ahead of the state, and in the structure tier | `WorkRow.test.tsx` |
+| 14 | The slots keep one order whatever the row is, the activity label first | `WorkRow.test.tsx` |
 | 15 | Every row writes its activity label, including the leaves nothing is waiting on the user for, and it is never tinted with the leaf's tone | `WorkRow.test.tsx`, a case each for `running`, `waiting_children`, `background`, `idle`, `stopped`, `open` and `closed` — all seven leaves that used to write nothing and can reach a row (`closed` only through the story detail's Tasks section, which lists the same children its `{closed}/{total}` counts). Each is paired with the status it actually arrives with, because a row whose two fields disagree is one the server never sends |
 | 16 | The left edge is present on a neutral row (`border-l-th-border`) rather than transparent, and takes the hue on a blocked one | `WorkRow.test.tsx` |
-| 17 | The parent relationship survives the arrow being decorative: the `sr-only` `in` is there, and it is the *only* `sr-only` text on the row | `WorkRow.test.tsx`, which asserts the whole set rather than its presence — a second one added later would mean a second glyph was replaced by a silent one |
+| 17 | *Retired with slot 1 (§3).* It held that the parent's decorative arrow had an `sr-only` `in` beside it; with no parent slot there is no arrow and nothing to stand in for it | — |
 | 18 | A project with nothing stopped renders no *Stopped* heading at all — not an empty one, not a gap — and opens on *Needs you* | `WorkListOverlay.test.tsx` |
 | 19 | Each group is in `updated_at` order, newest first, and the comparison is of times rather than of strings — two timestamps written with different UTC offsets sort by instant, not by spelling | `workOrder.test.ts` for the rule, `WorkListOverlay.test.tsx` for the list actually using it |
 | 20 | Each capped group's heading counts its own hidden rows, and one failure to fetch them prints one message with one Retry however many groups are offering the control | `WorkListOverlay.test.tsx`; the server half is `work_list_segment_test.go` (see [list-paging-ui.md §4.1](list-paging-ui.md#41-current-is-loaded-whole-and-that-is-the-design)) |
@@ -832,14 +852,21 @@ would have dropped it. Both destinations are asserted now.
 
 Checks 13–17 came with the visual-hierarchy pass. Two of them are the cases where
 the *old* assertion was that something is absent, which is the kind that
-disappears quietly (15 and 16), and one is a defect the redesign introduced and
-review caught rather than the design anticipating it (17: swapping the words `in:`
-for a glyph took the only thing that told a screen reader this slot from the role
-and worktree slots beside it, all three being bare titles). `WorkRow.test.tsx` asserted
-"writes no activity label for a work nobody is waiting on" and
-`WorkListOverlay.test.tsx` looked for the literal text `in: Cluster mode`, so both
-were rewritten against the rules above rather than deleted — a removed assertion
-is indistinguishable from one that never existed.
+disappears quietly (15 and 16), and one was a defect the redesign introduced and
+review caught rather than the design anticipating it (17, since retired with the
+slot it guarded). `WorkRow.test.tsx` asserted "writes no activity label for a
+work nobody is waiting on", so it was rewritten against the rules above rather
+than deleted — a removed assertion is indistinguishable from one that never
+existed.
+
+Removing task rows (§2.2) went the other way, and deliberately: the tests for a
+task row in *Needs you* or *Stopped* and for the parent slot were deleted,
+because the behaviour they held no longer exists. The test for counting a story
+once when it is in both segments stayed, rewritten for the overlap that remains:
+a story that closes after the snapshot is pushed into `Current`'s copy on the
+client while the archive page carries it too
+([list-paging-ui.md §2.2](list-paging-ui.md#22-a-story-arrives-with-the-tasks-it-speaks-for)). Check 1 was rewritten to hold its absence instead, so the
+rule that replaced it is asserted rather than merely no longer contradicted.
 
 Both gates named in the original design went red and were answered rather than
 silenced:
