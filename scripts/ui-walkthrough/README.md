@@ -400,7 +400,8 @@ Where each part comes from, so a change is made once:
 | which state is captured, or a new capture | `SCENES` in `marketing/scenes.mjs` (or `marketing-intro/`), keeping to the rules under *The marketing suite* | `assets` |
 | which capture a still frames, or a new still | `PHONE_SHOTS` / `DESKTOP_SHOT` in `marketing/stills/render.mjs` | `stills`, or `assets` |
 | the frames | `marketing/stills/frames.mjs` (the video uses them too) | `stills` and `video`, or `assets` |
-| the social image, the architecture figure | `marketing/stills/{social,architecture}.mjs` | `stills`, or `assets` |
+| what the assets say about Pockode — the social image's pitch, the title and end cards, the terminal's command | `site/data/messaging.yaml`, never a renderer ([*The copy*](../../docs/marketing-assets.md#the-copy)); `marketing/messaging.mjs` reads it | `stills` and `video`, or `assets` |
+| the social image's layout, the architecture figure | `marketing/stills/{social,architecture}.mjs` | `stills`, or `assets` |
 | a caption, a shot's length, its keyframes | `marketing/video/storyboard.mjs` | `video`, or `assets` |
 | the Port Preview page | `marketing/tidy.html` | `assets` |
 

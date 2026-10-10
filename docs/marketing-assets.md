@@ -14,6 +14,32 @@ given as numbers so the template can be written from this page.
 
 Units are CSS px unless stated. "Stage" is the 1920×1080 video canvas.
 
+## The copy
+
+Every word an asset says about Pockode comes from
+[`site/data/messaging.yaml`](../site/data/messaging.yaml), the one source the
+site and the README read too; no renderer words a claim of its own. The
+renderers read it through `scripts/ui-walkthrough/marketing/messaging.mjs`,
+which refuses to render if a field they show is missing:
+
+| Shown as | Field |
+|---|---|
+| the wordmark (§5), the title and end cards' name (§4.5) | `name` |
+| the headline (§5), the title card's line (§4.5) | `tagline` |
+| the sub-line (§5) | `subtitle` |
+| the footers (§4.5, §5): host · license | the host of `url`, `license.label` |
+| the end card's install line (§4.5) | the first installer's `install` |
+| the command above the terminal (§3.3) | the first installer's `run`, its `-password` value masked |
+
+So a wording change is an edit there and a re-render (`run.sh stills` and
+`run.sh video`, or `run.sh assets` for the committed copy) — never an edit to
+a renderer. What stays in the renderers is what describes the picture rather
+than the product: the video's captions narrate the shot they sit on and are
+timed to it (§4.4), and the architecture figure's labels name its parts (§6).
+
+A `code` span in a value is set in Geist Mono, never left to a fallback font
+(§1.3).
+
 ## 1. Look
 
 ### 1.1 One theme: abyss, dark
@@ -24,7 +50,7 @@ accent (`#2dd4bf`) is the cyan end of the logo's gradient, so the app and the
 marketing chrome read as one product. No light-mode captures: the README GIF
 and the social image sit on their own dark canvas, which reads on GitHub's
 light and dark pages alike. The architecture diagram is the one exception
-(§6) because it is a figure inside the text, not a picture of the app.
+(§6) because it is a figure meant to sit inside text, not a picture of the app.
 
 ### 1.2 Marketing palette
 
@@ -172,7 +198,7 @@ user, and convert the ANSI to spans. Inputs:
 
 | Field | Value |
 |---|---|
-| Command line shown above it | `$ pockode --password ••••••••` |
+| Command line shown above it | `$ ` and the first installer's `run` (see *The copy*), its `-password` value as `••••••••` |
 | Version | the nearest release tag (`git describe --tags --exclude '*-*'`) |
 | Local | `http://localhost:9870` |
 | Remote | `https://your-pc.cloud.pockode.com` |
@@ -271,14 +297,16 @@ live session at once.
 
 Centred on `canvas` + `canvas-glow`, no caption band, no step dots.
 
-- **Title** (shot 0): logo 120×120; 32 below it `Pockode` Geist 700 96px
-  letter-spacing −0.04em `text`; 16 below `Code from your pocket` Geist 500
-  40px `text-secondary`. Fades in over the first 300ms; crossfades into shot 1.
-- **End** (shot 8): logo 96×96; 28 below `Pockode` Geist 700 72px; 36 below the
+The words are the messaging source's (see *The copy*).
+
+- **Title** (shot 0): logo 120×120; 32 below it the name Geist 700 96px
+  letter-spacing −0.04em `text`; 16 below the tagline Geist 500 40px
+  `text-secondary`. Fades in over the first 300ms; crossfades into shot 1.
+- **End** (shot 8): logo 96×96; 28 below the name Geist 700 72px; 36 below the
   install line in a `card` box (radius 12, 1px `border`, padding 20 32):
-  `curl -fsSL https://pockode.com/install.sh | sh` Geist Mono 400 30px `text`;
-  28 below `pockode.com · Open source` Geist 500 28px `text-muted`. Holds to
-  the last frame, so the GIF's loop point is a still.
+  the install command, Geist Mono 400 30px `text`; 28 below host · license
+  Geist 500 28px `text-muted`. Holds to the last frame, so the GIF's loop
+  point is a still.
 
 ### 4.6 Rendering
 
@@ -307,27 +335,32 @@ lever, if it ever does, is the frame rate, then the size, in that order.
 ```
 ┌────────────────────────────────────────────────────────────┐
 │ 72                                                         │
-│  [logo] Pockode                              ┌──────────┐  │
+│  [logo] name                                 ┌──────────┐  │
 │                                              │          │  │
-│  Code from                                   │  phone:  │  │
-│  your pocket                                 │ question │  │
+│  tagline, wrapped to                         │  phone:  │  │
+│  the headline's width                        │ question │  │
 │                                              │  panel   │  │
-│  Talk to Claude Code and Codex from your     │          │  │
-│  phone. Your code stays on your machine.     │          │  │
+│  subtitle, wrapped to                        │          │  │
+│  the sub-line's width                        │          │  │
 │                                              │          │  │
-│  pockode.com · Open source                   │          │  │
+│  host · license                              │          │  │
 └──────────────────────────────────────────────┴──────────┴──┘
                                                  bleeds off the bottom
 ```
+
+The words are the messaging source's (see *The copy*), so the headline and
+sub-line wrap to whatever it says. The render fails if they end less than 24
+above the footer, rather than drawing one over the other: a longer tagline or
+subtitle is a choice between shortening it and resizing the type here.
 
 | Element | Geometry | Style |
 |---|---|---|
 | Background | full | `canvas` + `canvas-glow` centred at (900, 0) |
 | Logo | 56×56 at (72, 72) | `logo.svg` |
-| Wordmark | left 144, centred on the logo | `Pockode` Geist 700 32px −0.02em `text` |
-| Headline | left 72, top 196, width ≤ 560 | `Code from` / `your pocket` on two lines, Geist 700 76px, line-height 1.02, −0.04em; fill `linear-gradient(135deg, #fff 0%, #fff 50%, #60a5fa 100%)` (the site hero's) |
-| Sub-line | left 72, 32 below the headline, width 520 | the sentence in the sketch, Geist 400 24px, line-height 1.45, `text-secondary` |
-| Footer | left 72, baseline 558 | `pockode.com · Open source` Geist 500 20px `text-muted` |
+| Wordmark | left 144, centred on the logo | the name, Geist 700 32px −0.02em `text` |
+| Headline | left 72, top 172, width 620 | the tagline, Geist 700 56px, line-height 1.06, −0.035em; fill `linear-gradient(135deg, #fff 0%, #fff 50%, #60a5fa 100%)` (the site hero's) |
+| Sub-line | left 72, 28 below the headline, width 600 | the subtitle, Geist 400 22px, line-height 1.45, `text-secondary` |
+| Footer | left 72, baseline 558 | host · license, Geist 500 20px `text-muted` |
 | Phone | §2 frame scaled to 640 tall (scale 0.737), left 760, top 72 | shows the question shot (§4.4 shot 4a); its lower ~80px are cut off by the image edge |
 
 Everything that matters is inside x 72–1128, y 72–558, so the platforms that
@@ -341,8 +374,11 @@ existing `site/static/icons/og-image.jpg` is left alone; switching the site's
 
 ## 6. Architecture diagram
 
-The README is read on GitHub's light and dark pages, so this one figure comes
-in both, for a `<picture>` with `prefers-color-scheme`.
+A figure inside text sits on whatever page the reader has, light or dark, so
+this one comes in both, for a `<picture>` with `prefers-color-scheme`. The
+README does not use it: it draws its diagram in Mermaid, which GitHub themes
+itself. Nothing in the repository shows this figure today; it is kept for
+the site and for posts that need the picture as an image.
 
 ```
  ┌───────────┐  HTTPS / WSS   ┌───────────┐  outbound tunnel  ┌─ Your machine ──────────────────────┐

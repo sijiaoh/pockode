@@ -25,6 +25,7 @@ import {
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { escapeHtml, inline, messaging } from "../messaging.mjs";
 import marketing, { FONT_FACES } from "../scenes.mjs";
 import {
 	FRAME_CSS,
@@ -199,9 +200,6 @@ const GLYPHS = {
 	"▀": '<i class="q q-top"></i>',
 	"▄": '<i class="q q-bot"></i>',
 };
-const escapeHtml = (s) =>
-	s.replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" })[c]);
-
 /** The banner's ANSI colours as spans, its QR rows as rows of cells. */
 function ansiToHtml(text) {
 	return text
@@ -247,7 +245,7 @@ function ansiToHtml(text) {
 
 const terminal = () => `<div class="terminal">
 	<div class="terminal-title">~/tidy — pockode</div>
-	<pre><span class="a-dim">$</span> pockode --password ••••••••
+	<pre><span class="a-dim">$</span> ${escapeHtml(messaging.run)}
 ${ansiToHtml(banner())}</pre>
 </div>`;
 
@@ -255,22 +253,19 @@ ${ansiToHtml(banner())}</pre>
 
 const titleCard = () => `<div class="card" data-fade-in="0">
 	<img src="${ORIGIN}/logo.svg" width="120" height="120" />
-	<div class="title-name">Pockode</div>
-	<div class="title-sub">Code from your pocket</div>
+	<div class="title-name">${inline(messaging.name)}</div>
+	<div class="title-sub">${inline(messaging.tagline)}</div>
 </div>`;
 
 const endCard = () => `<div class="card">
 	<img src="${ORIGIN}/logo.svg" width="96" height="96" />
-	<div class="end-name">Pockode</div>
-	<div class="end-install">curl -fsSL https://pockode.com/install.sh | sh</div>
-	<div class="end-foot">pockode.com · Open source</div>
+	<div class="end-name">${inline(messaging.name)}</div>
+	<div class="end-install">${escapeHtml(messaging.install)}</div>
+	<div class="end-foot">${inline(messaging.host)} · ${inline(messaging.license)}</div>
 </div>`;
 
 /** `code` and **highlight** (storyboard.mjs) as markup. */
-const caption = (text) =>
-	escapeHtml(text)
-		.replace(/`([^`]+)`/g, "<code>$1</code>")
-		.replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>");
+const caption = (text) => inline(text).replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>");
 
 // --- the stage --------------------------------------------------------------
 
