@@ -11,6 +11,7 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
+import { PALETTE_CSS, painted } from "../palette.mjs";
 import marketing, { FONT_FACES, PREVIEW_URL } from "../scenes.mjs";
 import { ARCHITECTURE_FIGURES } from "./architecture.mjs";
 import {
@@ -69,14 +70,17 @@ if (problems.length) {
 	process.exit(1);
 }
 
+// FRAME_CSS is left out of the token check: the frames' colours are not the
+// site's (§1.2.2), and they set and read a variable of their own.
 const html = ({ css, body }) => `<!doctype html>
 <html><head><meta charset="utf-8" /><style>
 ${FONT_FACES}
+${PALETTE_CSS}
 html, body { margin: 0; }
 body { font-family: Geist; }
 ${FRAME_CSS}
-${css}
-</style></head><body>${body}</body></html>`;
+${painted(css)}
+</style></head><body>${painted(body)}</body></html>`;
 
 const browser = await chromium.launch({ args: marketing.browserArgs });
 

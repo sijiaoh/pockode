@@ -166,4 +166,5 @@ under `site/` for `pockode` flags the server does not have.
 
 Files under `static/marketing/` are generated. Re-render them as
 [docs/marketing-assets.md](../docs/marketing-assets.md) describes; don't edit
-them by hand.
+them by hand. They are painted with the `:root` tokens of `main.css`, so a
+change to those is a re-render too.

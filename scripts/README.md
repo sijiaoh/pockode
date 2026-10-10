@@ -209,7 +209,7 @@ the markers, then:
 ```bash
 pnpm run readme            # rewrite the README's messaging blocks
 pnpm run check:messaging   # what CI runs (the Messaging workflow)
-pnpm run test:messaging    # the checks' own tests
+pnpm run test:messaging    # the checks' own tests, and the marketing palette's
 ```
 
 `check:messaging` fails when:

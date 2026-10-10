@@ -26,6 +26,7 @@ import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { escapeHtml, inline, messaging } from "../messaging.mjs";
+import { PALETTE_CSS, painted } from "../palette.mjs";
 import marketing, { FONT_FACES } from "../scenes.mjs";
 import {
 	FRAME_CSS,
@@ -468,9 +469,9 @@ try {
 		viewport: STAGE,
 		deviceScaleFactor: 1,
 	});
-	const stage = readFileSync(join(HERE, "stage.html"), "utf8").replace(
-		"/* FONT_FACES, FRAME_CSS */",
-		FONT_FACES + FRAME_CSS,
+	const stage = painted(readFileSync(join(HERE, "stage.html"), "utf8")).replace(
+		"/* FONT_FACES, PALETTE_CSS, FRAME_CSS */",
+		FONT_FACES + PALETTE_CSS + FRAME_CSS,
 	);
 	await routeAssets(context, ORIGIN, CAPTURES, () => stage);
 	const page = await context.newPage();

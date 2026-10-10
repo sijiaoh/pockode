@@ -15,17 +15,17 @@
 <head>
 <meta charset="utf-8" />
 <style>
-/* FONT_FACES, FRAME_CSS */
+/* FONT_FACES, PALETTE_CSS, FRAME_CSS */
 * { box-sizing: border-box; margin: 0; padding: 0; }
 html, body { width: 1920px; height: 1080px; overflow: hidden; background: #000; }
-body { font-family: Geist, sans-serif; color: #fafafa; -webkit-font-smoothing: antialiased; }
+body { font-family: Geist, sans-serif; color: var(--text); -webkit-font-smoothing: antialiased; }
 
 #layers { position: absolute; inset: 0; isolation: isolate; background: #000; }
 .layer {
 	position: absolute; inset: 0; display: none; mix-blend-mode: plus-lighter;
 	background:
-		radial-gradient(ellipse at 50% 0%, rgba(59,130,246,.12) 0%, rgba(168,85,247,.06) 40%, transparent 70%),
-		#0a0a0a;
+		radial-gradient(ellipse at 50% 0%, var(--glow)),
+		var(--bg);
 }
 .device { position: absolute; transform-origin: 0 0; }
 
@@ -36,24 +36,24 @@ body { font-family: Geist, sans-serif; color: #fafafa; -webkit-font-smoothing: a
 .card img { display: block; }
 .card code { font-family: "Geist Mono", monospace; }
 .title-name { margin-top: 32px; font: 700 96px/1 Geist, sans-serif; letter-spacing: -0.04em; }
-.title-sub { margin-top: 16px; font: 500 40px/1.2 Geist, sans-serif; color: #a1a1a1; }
+.title-sub { margin-top: 16px; font: 500 40px/1.2 Geist, sans-serif; color: var(--text-2); }
 .end-name { margin-top: 28px; font: 700 72px/1 Geist, sans-serif; letter-spacing: -0.04em; }
 .end-install {
 	margin-top: 36px; padding: 20px 32px; border-radius: 12px;
-	background: #141414; border: 1px solid #262626;
+	background: var(--card); border: 1px solid var(--border);
 	font: 400 30px/1.2 "Geist Mono", monospace;
 }
-.end-foot { margin-top: 28px; font: 500 28px/1.2 Geist, sans-serif; color: #666666; }
+.end-foot { margin-top: 28px; font: 500 28px/1.2 Geist, sans-serif; color: var(--text-3); }
 
 .terminal {
 	position: absolute; left: 180px; top: 186px; width: 920px; height: 600px;
-	border-radius: 12px; background: #141414; border: 1px solid #262626; overflow: hidden;
+	border-radius: 12px; background: var(--card); border: 1px solid var(--border); overflow: hidden;
 }
 .terminal-title {
 	height: 36px; display: flex; align-items: center; justify-content: center;
-	font: 500 12px Geist, sans-serif; color: #666666;
+	font: 500 12px Geist, sans-serif; color: var(--text-3);
 }
-.terminal pre { padding: 24px 32px; font: 400 15px/1.35 "Geist Mono", monospace; color: #fafafa; }
+.terminal pre { padding: 24px 32px; font: 400 15px/1.35 "Geist Mono", monospace; color: var(--text); }
 /* A QR row: the half-block characters are drawn as cells, so the rows meet
    with no gap and the code does not depend on which font has those glyphs. */
 .terminal .qr { display: block; height: 18px; line-height: 18px; }
@@ -75,33 +75,33 @@ body { font-family: Geist, sans-serif; color: #fafafa; -webkit-font-smoothing: a
 .a-dim { color: #71717a; }
 .a-cyan { color: #22d3ee; }
 .a-green { color: #4ade80; }
-.a-white { color: #fafafa; }
+.a-white { color: var(--text); }
 .a-yellow { color: #facc15; }
 
 #overlay { position: absolute; inset: 0; pointer-events: none; }
 .caption {
 	position: absolute; left: 0; right: 0; top: 939.6px; display: none;
 	text-align: center; white-space: nowrap;
-	font: 600 44px/1.2 Geist, sans-serif; letter-spacing: -0.01em; color: #fafafa;
+	font: 600 44px/1.2 Geist, sans-serif; letter-spacing: -0.01em; color: var(--text);
 }
 .caption b {
 	font-weight: inherit;
-	background: linear-gradient(135deg, #06b6d4, #a855f7);
+	background: var(--brand);
 	-webkit-background-clip: text; background-clip: text; color: transparent;
 }
 .caption code {
-	font: 500 40px/1 "Geist Mono", monospace; letter-spacing: 0; color: #fafafa;
-	background: #1a1a1a; border-radius: 6px; padding: 2px 10px;
+	font: 500 40px/1 "Geist Mono", monospace; letter-spacing: 0; color: var(--text);
+	background: var(--card); border-radius: 6px; padding: 2px 10px;
 }
 #dots {
 	position: absolute; left: 0; right: 0; top: 1008px; height: 8px;
 	display: flex; justify-content: center; gap: 12px;
 }
-#dots > i { display: block; width: 8px; height: 8px; border-radius: 4px; background: #666666; }
-#dots > i.on { width: 24px; background: #fafafa; }
+#dots > i { display: block; width: 8px; height: 8px; border-radius: 4px; background: var(--text-3); }
+#dots > i.on { width: 24px; background: var(--text); }
 .tap {
 	position: absolute; width: 44px; height: 44px; margin: -22px 0 0 -22px; display: none;
-	border-radius: 50%; border: 3px solid #2dd4bf; background: rgba(45,212,191,.22);
+	border-radius: 50%; border: 3px solid var(--accent); background: color-mix(in srgb, var(--accent) 22%, transparent);
 }
 </style>
 </head>
