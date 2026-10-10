@@ -52,7 +52,7 @@ network is not trusted, and to treat a LAN as trusted only when it is.
 | HTTP API | `Authorization: Bearer <password or session token>` | `server/middleware/auth.go` |
 | WebSocket | First RPC must be `auth { password }` or `auth { session_token }`; all other methods are rejected until it succeeds | `server/ws/rpc.go`, `server/cluster/ws.go` |
 | Relay | The relay tunnels the same HTTP/WS traffic; no separate app credential | `server/relay/` |
-| Port preview | A session cookie, issued by posting the password to `/__pockode/preview/login` on the preview host; see [Port Previews](relay-system.md#port-previews) | `server/relay/preview_auth.go` |
+| Port preview | A session cookie, issued by posting the password to `/__pockode/preview/login` on the preview host, or by opening it with a one-time ticket the logged-in app got from `port_preview.ticket`; see [Port Previews](relay-system.md#logging-in) | `server/relay/preview_auth.go`, `server/authsession/ticket.go` |
 
 Both credentials are accepted on HTTP so that `curl` and scripts have something
 to send: a browser exchanges the password for a session token and sends that
@@ -209,6 +209,19 @@ unconditional and stays until the rest of the deprecations go
 browser origins with separate `localStorage`, so each gets a session of its own.
 Each port preview host likewise holds its own session, in a host-only cookie.
 That is correct, and it is one reason the cap is 50 rather than 5.
+
+**A preview tab can be logged in by the app.** So that a user already logged in
+to the app does not type the password again for each port, the app can ask over
+its authenticated WebSocket for a one-time ticket (`port_preview.ticket`) and
+open the preview host's login endpoint with it; the host exchanges the ticket
+for a session of its own. A ticket is not a credential of a new kind: it can
+only be obtained by a connection that already authenticated, and all it buys is
+an ordinary session from the same store. It is single-use, lives about 60
+seconds (`authsession.TicketTTL`), is held only in memory and only as its
+SHA-256, and anything that goes wrong with it falls back to the password page.
+A browser that already has a session on that host keeps it. Why it is a
+server-held ticket rather than a signed token, and the endpoint's rules, are in
+[Port Previews → Logging In](relay-system.md#logging-in).
 
 ### The password fingerprint, and what it is *not*
 
@@ -398,10 +411,11 @@ model (e.g. multi-user hosting) revisits them rather than rediscovering them:
 | Concern | Path |
 |---------|------|
 | Password source, env scrubbing & comparison | `server/password/` |
-| Session issue/validate, password fingerprint | `server/authsession/` |
+| Session issue/validate, password fingerprint, one-time preview tickets | `server/authsession/` |
 | HTTP Bearer auth | `server/middleware/auth.go` |
 | WebSocket `auth` gate | `server/ws/rpc.go`, `server/cluster/ws.go` |
-| Port preview login & cookie | `server/relay/preview_auth.go` |
+| Port preview login (password & ticket) & cookie | `server/relay/preview_auth.go` |
+| Preview ticket issue | `server/ws/rpc_port_preview.go` |
 | Wire types and refusal reasons | `server/rpc/types.go` |
 | Frontend credential store | `packages/shared/src/stores/createAuthStore.ts`, `packages/shared/src/utils/auth.ts` |
 | MCP local API token | `server/mcp/handler.go`, `server/serverinfo/serverinfo.go` |

@@ -47,8 +47,12 @@ func serveProxy(t *testing.T, backendPort, frontendPort int) *httptest.Server {
 
 func serveProxyFor(t *testing.T, backendPort, frontendPort int, site previewSite, sessions SessionStore) *httptest.Server {
 	t.Helper()
-	auth := previewAuth{password: testPassword, sessions: sessions}
-	server := httptest.NewServer(newLocalProxy(backendPort, frontendPort, site, auth, testLogger()))
+	return serveProxyWithAuth(t, backendPort, frontendPort, site, previewAuth{password: testPassword, sessions: sessions, tickets: newTestTickets()}, testLogger())
+}
+
+func serveProxyWithAuth(t *testing.T, backendPort, frontendPort int, site previewSite, auth previewAuth, log *slog.Logger) *httptest.Server {
+	t.Helper()
+	server := httptest.NewServer(newLocalProxy(backendPort, frontendPort, site, auth, log))
 	t.Cleanup(server.Close)
 	return server
 }
