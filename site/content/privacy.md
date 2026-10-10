@@ -1,8 +1,9 @@
 ---
 title: Privacy Policy
+description: What information the Pockode relay service and pockode.com collect, and how it is used and shared.
 ---
 
-**Effective Date:** January 7, 2026
+**Effective Date:** October 10, 2026
 
 This Privacy Policy describes how Pockode ("we," "us," or "our") collects, uses, and shares information in connection with your use of the Pockode relay service and website (collectively, the "Service").
 
@@ -17,6 +18,8 @@ When you use our relay service, we automatically collect certain technical infor
 - **Network Information:** IP addresses of connecting clients and servers
 - **Connection Data:** Timestamps, session identifiers, and connection duration
 - **Technical Logs:** Error logs and diagnostic information for troubleshooting
+
+The Pockode server also fetches a short announcement from us each time it starts, even when the relay is turned off (`-relay=false`). That request sends nothing from your machine or projects; we receive only its IP address and the time it was made, which we handle as described in this policy.
 
 ### 1.2 Information We Do Not Collect
 

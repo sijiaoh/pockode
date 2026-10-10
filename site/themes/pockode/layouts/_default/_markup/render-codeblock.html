@@ -1,0 +1,15 @@
+{{- /* Every fenced code block is drawn plain on the card colour (no Chroma
+highlighting). Shell blocks get the install box's Copy button (main.js copies them
+without their # comment lines) and those comment lines set in the muted colour. */ -}}
+{{- $shell := in (slice "sh" "bash" "shell" "powershell") .Type -}}
+<div class="code-block">
+  <pre><code{{ with .Type }} class="language-{{ . }}"{{ end }}>
+  {{- range $i, $line := split (strings.TrimRight "\n" .Inner) "\n" }}
+    {{- if $i }}{{ "\n" }}{{ end }}
+    {{- if and $shell (hasPrefix (strings.TrimLeft " \t" $line) "#") }}<span class="code-comment">{{ $line }}</span>{{ else }}{{ $line }}{{ end }}
+  {{- end -}}
+  </code></pre>
+  {{- if $shell }}
+  <button class="copy-btn" type="button">Copy</button>
+  {{- end }}
+</div>

@@ -1,0 +1,20 @@
+{
+	"ci": {
+		"collect": {
+			"staticDistDir": "./public",
+			"url": ["http://localhost/"],
+			"numberOfRuns": 5
+		},
+		"assert": {
+			"assertions": {
+				"categories:performance": ["error", { "minScore": 0.9, "aggregationMethod": "optimistic" }],
+				"categories:accessibility": ["error", { "minScore": 0.9, "aggregationMethod": "optimistic" }],
+				"categories:seo": ["error", { "minScore": 0.9, "aggregationMethod": "optimistic" }]
+			}
+		},
+		"upload": {
+			"target": "filesystem",
+			"outputDir": "./.lighthouseci/reports"
+		}
+	}
+}

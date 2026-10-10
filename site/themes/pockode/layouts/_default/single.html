@@ -1,17 +1,9 @@
 {{ define "main" }}
-<div class="grain"></div>
-
-<nav class="nav">
-  <a href="/" class="nav-logo">{{ hugo.Data.messaging.name }}</a>
-  <a href="{{ hugo.Data.messaging.repo }}" class="nav-link" target="_blank" rel="noopener">GitHub</a>
-</nav>
-
-<article class="page">
-  <h1>{{ .Title }}</h1>
-  <div class="page-content">
+{{- /* Front matter `class` adds a variant, e.g. `facts` for /security/. */}}
+<article class="page{{ with .Params.class }} {{ . }}{{ end }}">
+  <h1 class="page-title">{{ .Title }}</h1>
+  <div class="prose">
     {{ .Content }}
   </div>
 </article>
-
-{{ partial "footer.html" . }}
 {{ end }}

@@ -1,0 +1,10 @@
+{{- /* {{< shot "phone-story" >}}: a capture from static/marketing/screenshots,
+with its alt text from shot-alt.html. */ -}}
+{{- $name := .Get 0 -}}
+{{- partial "picture.html" (dict
+  "src" (printf "marketing/screenshots/%s.png" $name)
+  "widths" (slice 400 560 720 1020)
+  "sizes" "280px"
+  "alt" (partial "shot-alt.html" $name)
+  "class" "shot"
+) -}}

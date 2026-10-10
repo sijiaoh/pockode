@@ -1,0 +1,93 @@
+name: Site
+
+# Builds pockode.com, checks that the README's links to it land on pages the
+# build produces, and holds the mobile homepage to a Lighthouse score of 90 in
+# performance, accessibility and SEO, best of five runs (site/README.md#checks).
+# The README is watched because its links are half of that check.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "site/**"
+      - "README.md"
+      - "scripts/site/**"
+      - "package.json"
+      - "pnpm-lock.yaml"
+      - ".node-version"
+      - ".github/workflows/site.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "site/**"
+      - "README.md"
+      - "scripts/site/**"
+      - "package.json"
+      - "pnpm-lock.yaml"
+      - ".node-version"
+      - ".github/workflows/site.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  # The oldest Hugo the site supports (site/README.md#building), so a template
+  # that needs a newer one fails here and not on the host.
+  HUGO_VERSION: "0.158.0"
+  # hugo_${HUGO_VERSION}_linux-amd64.tar.gz in that release's checksums.txt.
+  HUGO_SHA256: d0d8f0735dccef76e900719a70102f269c418e010a02e3e0f9e206a208346e2f
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Install Hugo
+        run: |
+          curl -fsSL -o "$RUNNER_TEMP/hugo.tar.gz" \
+            "https://github.com/gohugoio/hugo/releases/download/v${HUGO_VERSION}/hugo_${HUGO_VERSION}_linux-amd64.tar.gz"
+          echo "$HUGO_SHA256  $RUNNER_TEMP/hugo.tar.gz" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/hugo.tar.gz" -C "$RUNNER_TEMP" hugo
+          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Test the link check
+        run: node --test "scripts/site/*.test.mjs"
+
+      # The changelog fetches GitHub Releases; without a token the API allows
+      # 60 requests an hour per IP, which a shared runner can run out of.
+      - name: Build the site
+        working-directory: site
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: hugo --gc --minify
+
+      - name: Check the README's links to the site
+        run: node scripts/site/links.mjs site/public
+
+      - name: Lighthouse on the mobile homepage
+        working-directory: site
+        run: pnpm exec lhci autorun
+
+      - name: Upload the Lighthouse reports
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: lighthouse
+          path: site/.lighthouseci/reports
+          if-no-files-found: ignore

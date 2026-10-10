@@ -78,6 +78,7 @@ makes `pockode -version` print `pockode 0.17.0`.
 | Create draft release | Uploads `dist/*` to a release that is still a **draft** |
 | Verify draft assets | `./scripts/verify-release-assets.sh dist` — see below |
 | Publish release | Flips the draft to published, setting `make_latest` explicitly |
+| Rebuild pockode.com | Stable releases only: POSTs to the `SITE_DEPLOY_HOOK` secret so the site's changelog picks the release up; warns when the secret is unset |
 
 Four properties of that sequence are worth knowing before you touch it. All but
 one have already gone wrong once; the exception — an asset's name saying nothing
@@ -221,6 +222,17 @@ pnpm run test:messaging    # the checks' own tests
   and YAML — a code span that is nothing but a flag (`` `-relay=false` ``). A
   flag of another tool belongs inside its own command line
   (`sh -s -- --version 0.16.0`), which the check leaves alone.
+
+## `site/` — pockode.com checks and fonts
+
+```bash
+node scripts/site/links.mjs site/public   # after `hugo`: the README's site links resolve
+node --test "scripts/site/*.test.mjs"     # the link check's own tests
+scripts/site/fonts.sh                     # rewrite the site's subset fonts (npm and uv)
+```
+
+The *Site* workflow runs the first two after building the site, beside
+Lighthouse; [site/README.md](../site/README.md#checks) says what each holds.
 
 ## `ui-walkthrough/` — Chat and answering UI screenshots
 

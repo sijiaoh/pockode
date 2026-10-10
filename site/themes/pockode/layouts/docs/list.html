@@ -1,0 +1,18 @@
+{{ define "main" }}
+<div class="page">
+  <h1 class="page-title">{{ .Title }}</h1>
+  <div class="lead prose">
+    {{ .Content }}
+  </div>
+  <ul class="card-grid docs-index">
+    {{- range .RegularPages.ByWeight }}
+    <li>
+      <a class="card" href="{{ .RelPermalink }}">
+        <span class="card-title">{{ .Title }}</span>
+        <span class="card-desc">{{ .Description }}</span>
+      </a>
+    </li>
+    {{- end }}
+  </ul>
+</div>
+{{ end }}

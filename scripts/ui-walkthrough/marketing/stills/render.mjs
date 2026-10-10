@@ -12,11 +12,7 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import marketing, { FONT_FACES, PREVIEW_URL } from "../scenes.mjs";
-import {
-	ARCHITECTURE,
-	ARCHITECTURE_THEMES,
-	architecturePage,
-} from "./architecture.mjs";
+import { ARCHITECTURE_FIGURES } from "./architecture.mjs";
 import {
 	FRAME_CSS,
 	PHONE,
@@ -183,11 +179,9 @@ try {
 			});
 		});
 
-	for (const variant of ARCHITECTURE_THEMES)
-		await render(
-			`architecture-${variant}.png`,
-			{ ...ARCHITECTURE, scale: 2, transparent: true },
-			() => architecturePage(variant, PROJECT_DIR),
+	for (const { file, width, height, page } of ARCHITECTURE_FIGURES)
+		await render(file, { width, height, scale: 2, transparent: true }, () =>
+			page(PROJECT_DIR),
 		);
 } finally {
 	await browser.close();

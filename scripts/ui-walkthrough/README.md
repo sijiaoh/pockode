@@ -309,6 +309,7 @@ layout `site/static/marketing/` takes (§9):
 | `screenshots/desktop.png` | `desktop-story` in the browser window (§3.1), 3072×2072, transparent |
 | `og-image.png`, `og-image@2x.png` | the social image (§5), 1200×630 and twice that |
 | `architecture-{dark,light}.png` | the architecture figure (§6), 2440×720, transparent |
+| `architecture-dark-portrait.png` | its portrait variant for narrow screens (§6.1), 720×1600, transparent |
 
 Each is an HTML page (`marketing/stills/`) rendered by the same headless shell
 and Geist as the captures, and nothing in it moves or reads the time, so the

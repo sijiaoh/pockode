@@ -1,0 +1,5 @@
+{{- /* The newest stable release, or nothing when the fetch came back empty
+(only under `hugo server`; see releases.html). */ -}}
+{{- $latest := false -}}
+{{- range first 1 (partialCached "releases.html" .) }}{{ $latest = . }}{{ end -}}
+{{- return $latest -}}

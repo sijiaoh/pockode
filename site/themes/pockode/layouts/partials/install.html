@@ -1,0 +1,30 @@
+{{- /* The install box: one tab per installer in the messaging source. The tabs
+are CSS-only radios with fixed ids (os-<id>) that the stylesheet and the
+Windows preselect in main.js key on, so a page carries at most one box. */ -}}
+{{- $q := hugo.Data.messaging.quickstart -}}
+<fieldset class="install-os" id="install">
+  <legend class="sr-only">Choose your platform</legend>
+
+  {{- range $i, $_ := $q.installers }}
+  <input type="radio" name="install-os" id="os-{{ .id }}" class="install-radio" autocomplete="off"{{ if eq $i 0 }} checked{{ end }}>
+  {{- end }}
+
+  <div class="install-tablist">
+    {{- range $q.installers }}
+    <label class="install-tab" for="os-{{ .id }}">{{ .label }}</label>
+    {{- end }}
+  </div>
+
+  {{- range $q.installers }}
+  <div class="install-panel" data-os="{{ .id }}">
+    <div class="install-box">
+      <pre class="install-code"><code><span class="code-comment"># Install{{ if eq .shell "powershell" }} (PowerShell){{ end }}</span>
+<span class="install-cmd">{{ .install }}</span>
+
+<span class="code-comment"># Run ({{ $q.run_where }})</span>
+{{ .run }}</code></pre>
+      <button class="copy-btn" type="button">Copy</button>
+    </div>
+  </div>
+  {{- end }}
+</fieldset>

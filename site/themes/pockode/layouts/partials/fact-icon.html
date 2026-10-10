@@ -1,0 +1,12 @@
+{{- /* The icon beside each of the Your machine screen's facts, keyed by its id
+in data/messaging.yaml. Decorative: the fact's text says it all. */ -}}
+{{- $paths := dict
+  "cli" `<path d="m4 17 6-5-6-5"/><path d="M12 19h8"/>`
+  "tls" `<rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/>`
+  "local" `<path d="M3 10.5 12 3l9 7.5"/><path d="M5 9v11h14V9"/><path d="M10 20v-6h4v6"/>`
+-}}
+{{- with index $paths . -}}
+<svg class="fact-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">{{ . | safeHTML }}</svg>
+{{- else -}}
+{{- errorf "fact-icon.html: no icon for fact %q in data/messaging.yaml" . -}}
+{{- end -}}

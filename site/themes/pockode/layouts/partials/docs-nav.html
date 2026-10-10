@@ -1,0 +1,8 @@
+{{- $current := . -}}
+<nav class="docs-nav" aria-label="Docs">
+  <ul>
+    {{- range (site.GetPage "/docs").RegularPages.ByWeight }}
+    <li><a href="{{ .RelPermalink }}"{{ if $current.Eq . }} aria-current="page"{{ end }}>{{ .LinkTitle }}</a></li>
+    {{- end }}
+  </ul>
+</nav>

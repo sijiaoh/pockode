@@ -56,10 +56,10 @@ Install options, verifying the download and upgrading: [platform support](docs/p
 ## Features
 
 <!-- messaging:pillars -->
-- **Delegate** — Break a story into tasks and give each one to a Claude Code or Codex agent with its own role.
-- **Stay in the loop** — Agents stop and ask when they need a decision, and you answer from wherever you are.
-- **Review & ship** — Read the diff, commit and sync with Git, and open your dev server on the phone with Port Preview.
-- **Your machine** — Your CLI, your subscription, your machine — your code runs where Pockode runs. Add `-relay=false` to keep the app on your own network.
+- **Delegate** — Split a story into tasks, each run by a Claude Code or Codex agent in its own role.
+- **Stay in the loop** — When an agent needs a decision, it stops and asks; you answer from anywhere.
+- **Review & ship** — Read the diff, commit, and open your dev server on your phone with Port Preview.
+- **Your machine** — Pockode dials out from beside your project, so there is no port to forward.
 <!-- /messaging:pillars -->
 
 <table>
@@ -84,7 +84,7 @@ flowchart LR
     pockode -- outbound tunnel --> relay
 ```
 
-Pockode runs beside your project and drives the AI CLI there; your phone reaches it through an outbound tunnel, so there is no port to forward. [How it is secured](https://pockode.com/security/).
+Pockode runs beside your project and drives the AI CLI there. [How it is secured](https://pockode.com/security/).
 
 ## Contributing · Security · License
 

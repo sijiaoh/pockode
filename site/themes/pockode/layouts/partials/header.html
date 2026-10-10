@@ -1,0 +1,30 @@
+{{- $m := hugo.Data.messaging -}}
+{{- $current := . -}}
+<header class="site-header">
+  <div class="container header-inner">
+    <a class="brand" href="{{ "/" | relURL }}">
+      <img src="{{ "images/logo.svg" | relURL }}" width="28" height="28" alt="">
+      {{ $m.name }}
+    </a>
+    <nav class="site-nav" aria-label="Main">
+      <button class="menu-toggle" type="button" aria-label="Menu" aria-expanded="false" aria-controls="nav-list">
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"/></svg>
+      </button>
+      <ul class="nav-list" id="nav-list">
+        {{- /* Each item is looked up as a page, so its link and aria-current
+        come from Hugo; a page that is gone fails the build rather than
+        quietly leaving the nav. */}}
+        {{- range $item := slice (dict "path" "/" "label" "Home") (dict "path" "/docs" "label" "Docs") (dict "path" "/security" "label" "Security") (dict "path" "/changelog" "label" "Changelog") }}
+        {{- with site.GetPage $item.path }}
+        <li><a class="nav-link" href="{{ .RelPermalink }}"
+          {{- if $current.Eq . }} aria-current="page"
+          {{- else if and (not .IsHome) ($current.IsDescendant .) }} aria-current="true"{{ end }}>{{ $item.label }}</a></li>
+        {{- else }}
+        {{- errorf "header.html: no page at %s for the nav" $item.path }}
+        {{- end }}
+        {{- end }}
+        <li><a class="nav-link" href="{{ $m.repo }}" target="_blank" rel="noopener">{{ partial "icon.html" "github" }}GitHub</a></li>
+      </ul>
+    </nav>
+  </div>
+</header>

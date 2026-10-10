@@ -1,0 +1,54 @@
+{{ define "main" }}
+{{- $m := hugo.Data.messaging -}}
+{{- $releases := partialCached "releases.html" . -}}
+{{- $latest := partialCached "latest-release.html" . | default dict -}}
+{{- $noted := where $releases "notes" "!=" "" -}}
+{{- $bare := where $releases "notes" "" -}}
+<div class="page changelog">
+  <h1 class="page-title">{{ .Title }}</h1>
+  <div class="lead prose">
+    {{ .Content }}
+    <p><a href="{{ $m.repo }}/releases" target="_blank" rel="noopener">Pre-releases are on GitHub ↗</a></p>
+  </div>
+  {{- if not $releases }}
+  <p class="release-empty">The releases could not be fetched; see the build log.</p>
+  {{- end }}
+  {{- /* Releases with notes lead; the ones without follow as one-line rows, so
+  the empty ones show that the project ships without making the page mostly
+  blank. */}}
+  {{- range $noted }}
+  <article class="release" id="{{ .anchor }}">
+    <header class="release-head">
+      <h2 class="release-version">{{ .tag_name }}</h2>
+      {{- if eq .id $latest.id }}<span class="pill eyebrow">Latest</span>{{ end }}
+      {{ partial "release-meta.html" (dict "release" . "label" "GitHub" "href" .html_url) }}
+    </header>
+    <div class="prose release-notes">
+      {{- $html := $.RenderString (dict "display" "block") .notes | string }}
+      {{- /* The version is the page's only h2, so every heading moves down a
+      level. Done on the HTML, where a "#" in a code block is not a heading. */}}
+      {{- range slice 5 4 3 2 1 }}
+        {{- $html = replaceRE (printf `<(/?)h%d([ >])` .) (printf `<${1}h%d${2}` (add . 1)) $html }}
+      {{- end }}
+      {{- /* Every release's notes have the same few headings (Bug fixes,
+      Added, ...), so their ids carry the release's to stay unique. */}}
+      {{ $html | replaceRE `(<h[2-6] id=")` (printf "${1}%s-" .anchor) | safeHTML }}
+    </div>
+  </article>
+  {{- end }}
+  {{- with $bare }}
+  {{- if $noted }}
+  <h2 class="eyebrow release-more">More releases</h2>
+  {{- end }}
+  <ul class="release-rows">
+    {{- range . }}
+    <li class="release-row" id="{{ .anchor }}">
+      <span class="release-version">{{ .tag_name }}</span>
+      {{- if eq .id $latest.id }}<span class="pill eyebrow">Latest</span>{{ end }}
+      {{ partial "release-meta.html" (dict "release" . "label" (cond (eq .compare .html_url) "GitHub" "Compare") "href" .compare) }}
+    </li>
+    {{- end }}
+  </ul>
+  {{- end }}
+</div>
+{{ end }}

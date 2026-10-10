@@ -1,0 +1,9 @@
+{{- /* {{< callout title="…" >}}markdown{{< /callout >}}: a warning the reader
+should not skim past. The title is the section's heading. Not role="alert":
+nothing about it is live. */ -}}
+{{- $title := .Get "title" -}}
+{{- $id := anchorize $title -}}
+<section class="callout" aria-labelledby="{{ $id }}">
+  <h2 id="{{ $id }}">{{ partial "icon.html" "alert" }}<span>{{ $title | .Page.RenderString }}</span></h2>
+  {{ .InnerDeindent | .Page.RenderString (dict "display" "block") }}
+</section>
