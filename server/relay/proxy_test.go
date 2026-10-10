@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+	"github.com/pockode/server/authguard"
 )
 
 func testLogger() *slog.Logger {
@@ -47,7 +48,7 @@ func serveProxy(t *testing.T, backendPort, frontendPort int) *httptest.Server {
 
 func serveProxyFor(t *testing.T, backendPort, frontendPort int, site previewSite, sessions SessionStore) *httptest.Server {
 	t.Helper()
-	return serveProxyWithAuth(t, backendPort, frontendPort, site, previewAuth{password: testPassword, sessions: sessions, tickets: newTestTickets()}, testLogger())
+	return serveProxyWithAuth(t, backendPort, frontendPort, site, previewAuth{password: testPassword, guard: authguard.New(), sessions: sessions, tickets: newTestTickets()}, testLogger())
 }
 
 func serveProxyWithAuth(t *testing.T, backendPort, frontendPort int, site previewSite, auth previewAuth, log *slog.Logger) *httptest.Server {

@@ -16,6 +16,7 @@ import (
 	"github.com/coder/websocket"
 	"github.com/pockode/server/agent"
 	"github.com/pockode/server/agentrole"
+	"github.com/pockode/server/authguard"
 	"github.com/pockode/server/authsession"
 	"github.com/pockode/server/cliauth"
 	"github.com/pockode/server/cliauth/cliauthtest"
@@ -168,7 +169,7 @@ func newTestEnvWithAgent(t *testing.T, mock *mockAgent, ag agent.Agent, workDir 
 	cliAuthService := cliauth.NewService(slog.Default())
 	cliAuthService.Register(session.AgentTypeClaude, cliAuth)
 
-	h := NewRPCHandler(testPassword, authsessiontest.New(), "test", "", authsession.NewTickets(), true, cmdStore, worktreeManager, settingsStore, workStore, workOps, workEngine, agentRoleStore, cliAuthService, cliupdate.NewService(slog.Default(), nil, nil))
+	h := NewRPCHandler(testPassword, authguard.New(), authsessiontest.New(), "test", "", authsession.NewTickets(), true, cmdStore, worktreeManager, settingsStore, workStore, workOps, workEngine, agentRoleStore, cliAuthService, cliupdate.NewService(slog.Default(), nil, nil))
 	server := httptest.NewServer(h)
 
 	// No deadline of its own: every read and write is bounded individually (see
@@ -545,7 +546,7 @@ func newTicketTestServer(t *testing.T, password, remoteURL string, sessions Sess
 	workStarter := worktree.NewWorkStarter(worktreeManager, agentRoleStore, settingsStore)
 	workOps := work.NewOperations(workStore, workStarter, nil, nil)
 
-	h := NewRPCHandler(password, sessions, "test", remoteURL, tickets, true, cmdStore, worktreeManager, settingsStore, workStore, workOps, work.NewEngine(workStore, work.DefaultMaxNudges), agentRoleStore, cliauth.NewService(slog.Default()), cliupdate.NewService(slog.Default(), nil, nil))
+	h := NewRPCHandler(password, authguard.NewFrozen(), sessions, "test", remoteURL, tickets, true, cmdStore, worktreeManager, settingsStore, workStore, workOps, work.NewEngine(workStore, work.DefaultMaxNudges), agentRoleStore, cliauth.NewService(slog.Default()), cliupdate.NewService(slog.Default(), nil, nil))
 	server := httptest.NewServer(h)
 	t.Cleanup(server.Close)
 	return server
@@ -672,6 +673,49 @@ func TestHandler_Auth_BothCredentialsRefused(t *testing.T) {
 	resp := callOnce(t, server.URL, "auth", rpc.AuthParams{Password: testPassword, SessionToken: live})
 	if resp.Error == nil || resp.Error.Code != jsonrpc2.CodeInvalidParams {
 		t.Fatalf("got %+v, want an invalid-params error", resp.Error)
+	}
+}
+
+// A lockout stops password guessing without locking out the devices already
+// logged in. The token is tried before the correct password, so the password's
+// refusal proves the token was accepted while the lockout was in force.
+func TestHandler_Auth_RateLimitedPasswordKeepsSessionTokens(t *testing.T) {
+	sessions := authsessiontest.New()
+	live, err := sessions.Issue()
+	if err != nil {
+		t.Fatalf("Issue: %v", err)
+	}
+	server := newAuthTestServer(t, testPassword, "", sessions)
+
+	// authguard tolerates 5 failures; the 6th starts a 1s lockout. An invalid
+	// session token in between must not count towards it.
+	for range 5 {
+		callOnce(t, server.URL, "auth", rpc.AuthParams{Password: "wrong-password"})
+	}
+	if got := authReason(t, callOnce(t, server.URL, "auth", rpc.AuthParams{SessionToken: live + "-tampered"})); got != rpc.AuthReasonSessionExpired {
+		t.Fatalf("tampered token: reason = %q, want %q", got, rpc.AuthReasonSessionExpired)
+	}
+	if got := authReason(t, callOnce(t, server.URL, "auth", rpc.AuthParams{Password: "wrong-password"})); got != rpc.AuthReasonInvalidPassword {
+		t.Fatalf("6th wrong password: reason = %q, want %q", got, rpc.AuthReasonInvalidPassword)
+	}
+
+	if resp := callOnce(t, server.URL, "auth", rpc.AuthParams{SessionToken: live}); resp.Error != nil {
+		t.Fatalf("session token refused while passwords are locked out: %v", resp.Error)
+	}
+
+	resp := callOnce(t, server.URL, "auth", rpc.AuthParams{Password: testPassword})
+	if got := authReason(t, resp); got != rpc.AuthReasonRateLimited {
+		t.Fatalf("correct password while locked: reason = %q, want %q", got, rpc.AuthReasonRateLimited)
+	}
+	// Decoded by its wire name, which the frontends read.
+	var data struct {
+		RetryAfterMS int64 `json:"retry_after_ms"`
+	}
+	if err := json.Unmarshal(*resp.Error.Data, &data); err != nil {
+		t.Fatalf("unmarshal error data: %v", err)
+	}
+	if data.RetryAfterMS <= 0 || data.RetryAfterMS > 1000 {
+		t.Errorf("retry_after_ms = %d, want within the 1s lockout", data.RetryAfterMS)
 	}
 }
 

@@ -13,6 +13,7 @@ import (
 	"github.com/pockode/server/agent"
 	"github.com/pockode/server/agent/claude"
 	"github.com/pockode/server/agentrole"
+	"github.com/pockode/server/authguard"
 	"github.com/pockode/server/authsession"
 	"github.com/pockode/server/cliauth"
 	"github.com/pockode/server/cliupdate"
@@ -54,13 +55,13 @@ func newTestServer(t *testing.T, serverPassword, mcpToken string) (http.Handler,
 	workStarter := worktree.NewWorkStarter(scopeManager, agentRoleStore, settingsStore)
 	workOps := work.NewOperations(workStore, workStarter, nil, nil)
 	workOps.SetSessionDeleter(scopeManager)
-	wsHandler := ws.NewRPCHandler(serverPassword, sessions, "test", "", authsession.NewTickets(), true, cmdStore, scopeManager, settingsStore, workStore, workOps, work.NewEngine(workStore, work.DefaultMaxNudges), agentRoleStore, cliauth.NewService(slog.Default()), cliupdate.NewService(slog.Default(), nil, nil))
+	wsHandler := ws.NewRPCHandler(serverPassword, authguard.New(), sessions, "test", "", authsession.NewTickets(), true, cmdStore, scopeManager, settingsStore, workStore, workOps, work.NewEngine(workStore, work.DefaultMaxNudges), agentRoleStore, cliauth.NewService(slog.Default()), cliupdate.NewService(slog.Default(), nil, nil))
 	mcpHandler := mcp.NewAPIHandler(mcp.NewExecutor(workStore, agentRoleStore, workOps, settingsStore, registry, scopeManager), mcpToken)
 	transferHandler := filetransfer.NewHandler(registry, slog.Default())
 
 	attachmentHandler := filetransfer.NewAttachmentHandler(scopeManager, worktree.ErrWorktreeNotFound, worktree.ErrSessionNotFound, slog.Default())
 
-	return newHandler(serverPassword, sessions, true, wsHandler, mcpHandler, transferHandler, attachmentHandler), workDir, sessions
+	return newHandler(serverPassword, authguard.New(), sessions, true, wsHandler, mcpHandler, transferHandler, attachmentHandler), workDir, sessions
 }
 
 func TestHealthEndpoint(t *testing.T) {

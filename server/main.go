@@ -20,6 +20,7 @@ import (
 	"github.com/pockode/server/agent/codex"
 	"github.com/pockode/server/agentrole"
 	"github.com/pockode/server/apiroute"
+	"github.com/pockode/server/authguard"
 	"github.com/pockode/server/authsession"
 	"github.com/pockode/server/cliauth"
 	"github.com/pockode/server/cliupdate"
@@ -52,7 +53,7 @@ var version = "dev"
 //go:embed static/*
 var staticFS embed.FS
 
-func newHandler(serverPassword string, sessions middleware.SessionValidator, devMode bool, wsHandler *ws.RPCHandler, mcpHandler http.Handler, transferHandler *filetransfer.Handler, attachmentHandler *filetransfer.AttachmentHandler) http.Handler {
+func newHandler(serverPassword string, passwordGuard *authguard.Guard, sessions middleware.SessionValidator, devMode bool, wsHandler *ws.RPCHandler, mcpHandler http.Handler, transferHandler *filetransfer.Handler, attachmentHandler *filetransfer.AttachmentHandler) http.Handler {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
@@ -78,7 +79,7 @@ func newHandler(serverPassword string, sessions middleware.SessionValidator, dev
 	// password. The relay also refuses to forward it (loopback-only).
 	mux.Handle("POST "+mcp.APIPath, mcpHandler)
 
-	authedMux := middleware.Auth(serverPassword, sessions)(mux)
+	authedMux := middleware.Auth(serverPassword, passwordGuard, sessions)(mux)
 
 	if !devMode {
 		return newSPAHandler(authedMux)
@@ -267,6 +268,9 @@ Flags:
 	// issued over the WebSocket and redeemed on the preview host, which must
 	// therefore share this one set.
 	previewTickets := authsession.NewTickets()
+	// Every place that checks the password counts its failures here: a guess is
+	// a guess whichever entry point it arrives at, so the lockout must be one.
+	passwordGuard := authguard.New()
 
 	if *gitEnabledFlag {
 		gitCfg := git.Config{
@@ -439,6 +443,7 @@ Flags:
 			DataDir:       dataDir,
 			ClientVersion: version,
 			Password:      cred.Password,
+			PasswordGuard: passwordGuard,
 			Sessions:      sessions,
 			Tickets:       previewTickets,
 		}
@@ -460,10 +465,10 @@ Flags:
 		slog.Info("remote access enabled", "url", remoteURL)
 	}
 
-	wsHandler := ws.NewRPCHandler(cred.Password, sessions, version, remoteURL, previewTickets, devMode, commandStore, worktreeManager, settingsStore, workStore, workOps, workEngine, agentRoleStore, cliAuth, cliUpdate)
+	wsHandler := ws.NewRPCHandler(cred.Password, passwordGuard, sessions, version, remoteURL, previewTickets, devMode, commandStore, worktreeManager, settingsStore, workStore, workOps, workEngine, agentRoleStore, cliAuth, cliUpdate)
 	transferHandler := filetransfer.NewHandler(registry, slog.Default())
 	attachmentHandler := filetransfer.NewAttachmentHandler(worktreeManager, worktree.ErrWorktreeNotFound, worktree.ErrSessionNotFound, slog.Default())
-	handler := newHandler(cred.Password, sessions, devMode, wsHandler, mcpHandler, transferHandler, attachmentHandler)
+	handler := newHandler(cred.Password, passwordGuard, sessions, devMode, wsHandler, mcpHandler, transferHandler, attachmentHandler)
 
 	portStr := strconv.Itoa(port)
 	srv := &http.Server{

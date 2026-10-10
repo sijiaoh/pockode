@@ -11,6 +11,7 @@ import (
 	"github.com/pockode/server/agent"
 	"github.com/pockode/server/agent/claude"
 	"github.com/pockode/server/agent/codex"
+	"github.com/pockode/server/authguard"
 	"github.com/pockode/server/authsession"
 	"github.com/pockode/server/cluster/node"
 	"github.com/pockode/server/internal/netutil"
@@ -78,8 +79,11 @@ func Run(cfg Config) error {
 	// started detached, so their own banners go to a log nobody is watching.
 	agentStatuses := agent.CheckBinaries(log, claude.Binary, codex.Binary)
 
-	wsHandler := newWSHandler(cfg.Password, sessions, cfg.Version, cfg.DevMode, nodeStore, processManager, log)
-	handler := newHandler(cfg.Password, sessions, cfg.DevMode, wsHandler)
+	// The cluster's own lockout, shared by every place it checks the password;
+	// the nodes it starts each keep theirs.
+	passwordGuard := authguard.New()
+	wsHandler := newWSHandler(cfg.Password, passwordGuard, sessions, cfg.Version, cfg.DevMode, nodeStore, processManager, log)
+	handler := newHandler(cfg.Password, passwordGuard, sessions, cfg.DevMode, wsHandler)
 
 	srv := &http.Server{
 		Addr:    ":" + strconv.Itoa(port),
@@ -94,6 +98,7 @@ func Run(cfg Config) error {
 			DataDir:       cfg.DataDir,
 			ClientVersion: cfg.Version,
 			Password:      cfg.Password,
+			PasswordGuard: passwordGuard,
 			Sessions:      sessions,
 		}
 

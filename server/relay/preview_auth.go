@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/pockode/server/authguard"
 	"github.com/pockode/server/password"
 )
 
@@ -27,12 +28,17 @@ const previewTicketParam = "ticket"
 // guarded by, and the one-time tickets the logged-in app logs a preview tab in
 // with.
 //
+// guard is the process's shared lockout. Only the password goes through it:
+// a session cookie or a ticket from the logged-in app keeps working while
+// passwords are locked out.
+//
 // A cookie rather than the app's bearer token: navigations, subresources and
 // a dev server's HMR socket carry no Authorization header, and an HttpOnly
 // cookie can only be set by an HTTP response — hence a login endpoint instead
 // of the WebSocket auth RPC.
 type previewAuth struct {
 	password string
+	guard    *authguard.Guard
 	sessions SessionStore
 	tickets  TicketRedeemer
 }
@@ -70,8 +76,14 @@ func (p *previewProxy) serveLogin(w http.ResponseWriter, r *http.Request) {
 	// Anyone can reach this before logging in, and form parsing would otherwise
 	// take a body of any size — spilling a multipart one to temporary files.
 	r.Body = http.MaxBytesReader(w, r.Body, previewLoginMaxBody)
-	if !password.Matches(r.PostFormValue("password"), p.auth.password) {
-		p.log.Warn("invalid preview password", "host", r.Host)
+	given := r.PostFormValue("password")
+	ok, retryAfter := p.auth.guard.Attempt(func() bool { return password.Matches(given, p.auth.password) })
+	if retryAfter > 0 {
+		w.Header().Set("Retry-After", authguard.RetryAfterSeconds(retryAfter))
+		http.Error(w, "too many failed password attempts, try again later", http.StatusTooManyRequests)
+		return
+	}
+	if !ok {
 		http.Error(w, "invalid password", http.StatusUnauthorized)
 		return
 	}
@@ -210,7 +222,9 @@ document.getElementById("login").addEventListener("submit", async (e) => {
   try {
     const res = await fetch("/__pockode/preview/login", { method: "POST", body: new URLSearchParams(new FormData(e.target)) });
     if (res.ok) { location.reload(); return; }
-    error.textContent = res.status === 401 ? "Wrong password." : "Login failed: " + (await res.text());
+    if (res.status === 401) { error.textContent = "Wrong password."; return; }
+    if (res.status === 429) { error.textContent = "Too many attempts. Try again in " + res.headers.get("Retry-After") + " s."; return; }
+    error.textContent = "Login failed: " + (await res.text());
   } catch (err) {
     error.textContent = "Login failed: " + err;
   }

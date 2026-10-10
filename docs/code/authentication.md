@@ -65,7 +65,67 @@ default and refuses to start without one.
 
 A missing `Authorization` header, a malformed one and a wrong credential all get
 the same `401 Invalid credentials`: telling an unauthenticated caller which of
-the three it got wrong is information it has not earned.
+the three it got wrong is information it has not earned. The one exception is a
+password refused during a lockout, below — that reply has to say how long to
+wait.
+
+### Failed password attempts are rate-limited
+
+Behind the password is arbitrary code execution on the host, the relay is on by
+default and so puts `/ws` on the public internet, and the password is a
+human-chosen one that may be short (see [Trust Model](#trust-model)). So
+failed password attempts are slowed down (`server/authguard/`):
+
+- **One global counter per process**, not per client IP. There is a single
+  credential, so there is nothing to partition; and on the relay path every
+  request arrives from the local relay client, so the remote address says
+  nothing about who is guessing. The server builds one guard and shares it
+  across every place that checks the password — WebSocket `auth`, HTTP Bearer,
+  the port preview login — because separate guards would each grant their own
+  round of guesses. The cluster process builds its own, for the same three.
+- **The first 5 failures are free**, so typos never lock the owner out. Failure
+  6 locks password attempts for 1 s, failure 7 for 2 s, and so on, doubling up to
+  a cap of 15 minutes. Once at the cap a guesser gets about four tries an hour.
+- **The count resets** on a successful password login, or once an hour has
+  passed since the last failure. Attempts refused during a lockout are not
+  counted and do not extend that hour.
+- **While locked, a password is refused without being checked** — the correct
+  one too. Checking it would let a guesser keep guessing straight through the
+  lockout and learn the moment one was right. The refusal is immediate,
+  not a sleep: a sleep holds a connection open per attempt and is bypassed by
+  guessing concurrently. The check, the comparison and the count happen under
+  one lock, so concurrent guesses cannot all get past the check before any of
+  them is counted.
+- **Session tokens and preview tickets never go through the guard.** A device
+  already logged in keeps working while someone else is locked out; only a
+  fresh password login waits. That is also the cost of the design: anyone who
+  can reach the server can keep the *owner's* password login locked, in
+  exchange for which the owner's existing sessions are untouched.
+- **State is in memory only.** A restart clears it, which is the owner's way out
+  of a lockout they cannot wait out.
+- **Logging is one Warn when a lockout starts**, with the failure count and the
+  lockout length, rather than a line per wrong password.
+
+What a locked password attempt gets back, per entry point:
+
+| Entry point | Reply while locked |
+|---|---|
+| WebSocket `auth` (server and cluster) | The usual auth refusal with `data.reason` `rate_limited` and `data.retry_after_ms` (integer milliseconds, rounded up), then the connection closes like any other refusal |
+| HTTP Bearer | `429` with `Retry-After` in whole seconds, rounded up |
+| Port preview login (`POST`) | `429` with `Retry-After`; the login page shows "Too many attempts. Try again in N s." |
+
+The HTTP Bearer credential can be either a session token or the password, and
+nothing on the wire says which. So the middleware tries it as a session token
+first and only then as a password, through the guard: a valid token never
+touches it. The flip side is that an expired or revoked token sent as Bearer is
+indistinguishable from a wrong password and counts as one failure. The web app
+logs out on its first 401, so a stale device spends only the requests it had
+in flight, not the five free failures. A request with no Bearer credential at
+all guessed no password and is not counted. On the WebSocket the two credentials are separate fields,
+so an invalid `session_token` is never counted.
+
+This slows online guessing; it does not make a weak password strong. Users are
+still told to generate the secret rather than choose one.
 
 ### The MCP local API uses a *separate* token
 
@@ -188,6 +248,7 @@ clients branch on that rather than on the prose message:
 | `data.reason` | Means | Client does |
 |---|---|---|
 | `invalid_password` | The password is wrong | Stay on the password screen, show the error |
+| `rate_limited` | Too many wrong passwords; passwords are refused unchecked for `data.retry_after_ms` more milliseconds (see [Failed password attempts](#failed-password-attempts-are-rate-limited)) | Stay on the password screen and say how long to wait |
 | `session_expired` | The stored token is unknown or past its idle window | Drop it silently and ask for the password — the user did nothing wrong |
 | `not_authenticated` | Some other method arrived before `auth`; the connection is closed | A client that reaches this has a bug — nothing is sent before `auth` |
 | `worktree_not_found` | The credential was fine; the worktree asked for is gone | Fall back to the main worktree and retry once |
@@ -361,30 +422,6 @@ The following were reviewed and **intentionally left as-is** under the
 single-credential trust model. They are recorded here so a future change of that
 model (e.g. multi-user hosting) revisits them rather than rediscovering them:
 
-- **Failed authentication is neither counted nor slowed.** Nothing on the
-  `auth` RPC or the HTTP Bearer path keeps a failure count, backs off, or locks
-  out. A wrong password closes the WebSocket connection, so each guess costs
-  one new connection — a cost, not a defence, and one that opening connections
-  in parallel removes; on HTTP — the Bearer path and the port preview login
-  alike — not even that. The only trace left is a log line
-  per wrong password. Behind that door is arbitrary code execution on the host,
-  and the entropy of the secret is entirely the user's choice. The whole
-  argument for calling it a password (see [Trust Model](#trust-model)) is that
-  it is a human-chosen one that may be short and guessable — so the consequence
-  of low entropy belongs here rather than left implicit in the new name.
-  **Sessions do not help**, and the two are easy to conflate: a session token
-  reduces how often the password crosses the network, it does **not** make the
-  password harder to guess. Nor is the door hard to reach: the relay is on by
-  default — that is the point of it — so a default deployment puts `/ws` on the
-  public internet. What is left to accept it on is thin, and worth naming
-  rather than dressing up: with one credential, no accounts and nothing to
-  enumerate, the whole defence is that secret's entropy, which is why users are
-  told to generate it rather than choose one. Any model with more than one
-  user, or any sign of guessing in the logs, should revisit this. The fix is a
-  single **global** progressive backoff on failures, not a sleep per failed
-  attempt, which is bypassed by guessing concurrently. That needs one shared
-  "not before" instant serializing attempts across connections: a subsystem of
-  its own, which is why it is not a line here.
 - **`.pockode` data directory is not path-fenced.** `file.*` / `git.*` RPCs are
   confined to the worktree's work directory, but that directory contains the
   server's own `.pockode` state (work store, setup hooks, sessions, `sessions.json`)
@@ -411,6 +448,7 @@ model (e.g. multi-user hosting) revisits them rather than rediscovering them:
 | Concern | Path |
 |---------|------|
 | Password source, env scrubbing & comparison | `server/password/` |
+| Failed-password lockout | `server/authguard/` |
 | Session issue/validate, password fingerprint, one-time preview tickets | `server/authsession/` |
 | HTTP Bearer auth | `server/middleware/auth.go` |
 | WebSocket `auth` gate | `server/ws/rpc.go`, `server/cluster/ws.go` |

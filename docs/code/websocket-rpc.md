@@ -399,7 +399,9 @@ Client                              Server
   the same one back for a token — so a client stores it unconditionally
 - A refusal carries `data.reason`, and clients branch on that rather than on the
   message: `invalid_password` keeps the user on the password screen with the
-  error, `session_expired` drops the stored token and returns there silently,
+  error, `rate_limited` keeps it there too and says how long to wait
+  (`data.retry_after_ms`; see [Authentication](authentication.md#failed-password-attempts-are-rate-limited)),
+  `session_expired` drops the stored token and returns there silently,
   `not_authenticated` means a method arrived before `auth`, and
   `worktree_not_found` — the one refusal the credential was fine for — sends the
   client back to the main worktree for one retry
