@@ -1,0 +1,71 @@
+name: Messaging
+
+# The README's messaging blocks are generated from site/data/messaging.yaml,
+# and the README and the site may only name flags the server has. Either side
+# can break that: an edit to the copy, or a flag renamed or removed in the
+# server, which is why all of server/ is watched and not only where the flags
+# are defined today. (The list is repeated because GitHub Actions does not
+# support YAML anchors.)
+on:
+  push:
+    branches: [main]
+    paths:
+      - "README.md"
+      - "site/**"
+      - "server/**"
+      - "scripts/messaging/**"
+      - "package.json"
+      - "pnpm-lock.yaml"
+      - ".node-version"
+      - ".github/workflows/messaging.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "README.md"
+      - "site/**"
+      - "server/**"
+      - "scripts/messaging/**"
+      - "package.json"
+      - "pnpm-lock.yaml"
+      - ".node-version"
+      - ".github/workflows/messaging.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      # The flag check builds the server and reads its own -h. The frontend is
+      # not built: the embed directories ship a .keep, which is all `go build`
+      # needs.
+      - name: Setup Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: server/.go-version
+          cache-dependency-path: server/go.sum
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Test the checks
+        run: pnpm run test:messaging
+
+      - name: Check the README and the site against their sources
+        run: pnpm run check:messaging

@@ -3,7 +3,7 @@
 Helper scripts for local development and release builds, plus how a tag turns
 into a published release.
 
-Every script here is bash, run only on macOS and Linux. On Windows use WSL
+The shell scripts here are bash, run only on macOS and Linux. On Windows use WSL
 — see [Developing Pockode on Windows](../docs/platforms.md#developing-pockode-on-windows)
 for why that is a decision rather than an oversight.
 
@@ -194,6 +194,33 @@ the cluster-mode stack instead of the normal one.
 ./scripts/dev.sh            # normal mode
 ./scripts/dev.sh --cluster  # cluster mode
 ```
+
+## `messaging/` — README generation and copy checks
+
+The README's tagline, quick start, platforms, features and license line are
+generated from [`site/data/messaging.yaml`](../site/data/messaging.yaml), the
+one source the site and the marketing assets read too. Each generated block
+sits between `<!-- messaging:NAME -->` and `<!-- /messaging:NAME -->`;
+everything outside the markers is hand-written. Change the wording in the
+source, never between the markers, then:
+
+```bash
+pnpm run readme            # rewrite the README's messaging blocks
+pnpm run check:messaging   # what CI runs (the Messaging workflow)
+pnpm run test:messaging    # the checks' own tests
+```
+
+`check:messaging` fails when:
+
+- the README's blocks disagree with the source (`readme.mjs --check`);
+- the README or anything under `site/` names a `pockode` flag the server does
+  not have, one it marks deprecated, or one written with two dashes
+  (`flags.mjs`). The server is the truth: the check builds it (Go required)
+  and reads its own `-h` and `cluster -h`, so there is no flag list to keep in
+  step. It reads a flag in a `pockode …` command line, and — in Markdown, HTML
+  and YAML — a code span that is nothing but a flag (`` `-relay=false` ``). A
+  flag of another tool belongs inside its own command line
+  (`sh -s -- --version 0.16.0`), which the check leaves alone.
 
 ## `ui-walkthrough/` — Chat and answering UI screenshots
 

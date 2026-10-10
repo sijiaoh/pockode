@@ -11,10 +11,14 @@
     "dev:cluster:server": "cd server && go run . cluster",
     "dev:cluster:web": "cd web-cluster && pnpm run dev",
     "lint": "biome check --error-on-warnings web web-cluster packages",
-    "format": "biome check --write --linter-enabled=false web web-cluster packages"
+    "format": "biome check --write --linter-enabled=false web web-cluster packages",
+    "readme": "node scripts/messaging/readme.mjs",
+    "check:messaging": "node scripts/messaging/readme.mjs --check && node scripts/messaging/flags.mjs",
+    "test:messaging": "node --test \"scripts/messaging/*.test.mjs\""
   },
   "devDependencies": {
     "@biomejs/biome": "^2.3.10",
-    "concurrently": "^9.2.1"
+    "concurrently": "^9.2.1",
+    "yaml": "^2.9.1"
   }
 }

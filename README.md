@@ -1,40 +1,33 @@
+<div align="center">
+
+<img src="site/static/images/logo.svg" alt="Pockode" width="96">
+
 # Pockode
+
+<!-- messaging:tagline -->
+**Your coding agents keep working. Steer them from your phone.**
+
+Hand stories to a team of Claude Code and Codex agents on your own machine, answer their questions and ship the result from any browser.
+<!-- /messaging:tagline -->
 
 [![Server](https://github.com/sijiaoh/pockode/actions/workflows/server.yml/badge.svg)](https://github.com/sijiaoh/pockode/actions/workflows/server.yml)
 [![Frontend](https://github.com/sijiaoh/pockode/actions/workflows/frontend.yml/badge.svg)](https://github.com/sijiaoh/pockode/actions/workflows/frontend.yml)
+[![Release](https://img.shields.io/github/v/release/sijiaoh/pockode)](https://github.com/sijiaoh/pockode/releases)
 
-**Your dev machine in your pocket.**
+[Website](https://pockode.com) · [Docs](https://pockode.com/docs/) · [Changelog](https://pockode.com/changelog/)
 
-Pockode connects your phone to your home dev machine running Claude Code or Codex. Chat with AI, browse files, review diffs, and manage worktrees — from anywhere.
+<img src="site/static/marketing/video/demo.gif" alt="Pockode demo: a story split into tasks, an agent asking a question, the diff, a commit and Port Preview" width="800">
 
-| Chat | Sessions | File | Diff |
-|:----:|:--------:|:----:|:----:|
-| <img src="site/static/images/screenshot-chat.jpg" alt="Chat" width="200"> | <img src="site/static/images/screenshot-sessions.jpg" alt="Sessions" width="200"> | <img src="site/static/images/screenshot-file.jpg" alt="File" width="200"> | <img src="site/static/images/screenshot-diff.jpg" alt="Diff" width="200"> |
-
-## Why Pockode?
-
-Your powerful dev machine sits at home. With Pockode, you can use it from anywhere.
-
-- **Commute coding** — Fix bugs on the train using your home workstation
-- **Quick hotfixes** — Push a fix from your couch, no laptop needed
-- **Code review** — Review diffs while waiting in line
-- **Stay in flow** — Your ideas don't wait for you to get home
-
-## Features
-
-| Feature | Description |
-|---------|-------------|
-| **AI Chat** | Natural language coding with Claude Code or Codex |
-| **File Browser** | Navigate and edit your codebase |
-| **Diff Viewer** | Review changes with syntax highlighting |
-| **Session Management** | Switch between projects and conversations |
-| **Worktree Support** | Manage multiple branches simultaneously |
+</div>
 
 ## Quick Start
 
+<!-- messaging:quickstart -->
+Pockode drives the `claude` or `codex` CLI, so install one of them on the same machine first.
+
 **macOS / Linux**
 
-```bash
+```sh
 # Install
 curl -fsSL https://pockode.com/install.sh | sh
 
@@ -52,29 +45,51 @@ irm https://pockode.com/install.ps1 | iex
 pockode -password YOUR_PASSWORD
 ```
 
-Neither installer needs `sudo` or administrator rights: macOS and Linux get `~/.local/bin`, and the script tells you if that is not on your `PATH` yet; on Windows, open a new terminal afterwards so `PATH` picks it up. Upgrading from an old `/usr/local/bin` install? The script prints the command that removes the old copy.
+Scan the QR code with your phone.
+<!-- /messaging:quickstart -->
 
-Scan the QR code with your phone. Done.
+<!-- messaging:platforms -->
+Runs on macOS (Intel and Apple silicon), Linux (amd64 and arm64) and Windows (x64, also on Windows 11 on Arm).
+<!-- /messaging:platforms -->
+Install options, verifying the download and upgrading: [platform support](docs/platforms.md). Several projects on one machine: [cluster mode](docs/cluster.md). Pre-1.0 and released often: read the [release notes](https://github.com/sijiaoh/pockode/releases) before upgrading.
 
-> Every prebuilt binary, how each download is verified, how to install a specific version or into another directory, how to uninstall, and what Windows needs installed alongside it: [platform support](docs/platforms.md).
+## Features
 
-> Need to manage multiple projects? Use [cluster mode](docs/cluster.md) — an orchestrator that registers project nodes and starts/stops their servers on demand.
+<!-- messaging:pillars -->
+- **Delegate** — Break a story into tasks and give each one to a Claude Code or Codex agent with its own role.
+- **Stay in the loop** — Agents stop and ask when they need a decision, and you answer from wherever you are.
+- **Review & ship** — Read the diff, commit and sync with Git, and open your dev server on the phone with Port Preview.
+- **Your machine** — Your CLI, your subscription, your machine — your code runs where Pockode runs. Add `-relay=false` to keep the app on your own network.
+<!-- /messaging:pillars -->
 
-## Status
+<table>
+  <tr>
+    <td><img src="site/static/marketing/screenshots/phone-story.png" alt="A story with its tasks, one waiting for your answer" width="240"></td>
+    <td><img src="site/static/marketing/screenshots/phone-question.png" alt="An agent asking a question" width="240"></td>
+  </tr>
+  <tr>
+    <td><img src="site/static/marketing/screenshots/phone-diff.png" alt="Reviewing a diff" width="240"></td>
+    <td><img src="site/static/marketing/screenshots/phone-preview.png" alt="Port Preview of the dev server" width="240"></td>
+  </tr>
+</table>
 
-Pre-1.0 and released often. Expect breaking changes between versions — check the [release notes](https://github.com/sijiaoh/pockode/releases) before upgrading.
+## How it works
 
-## Feedback
+```mermaid
+flowchart LR
+    subgraph machine["Your machine"]
+        pockode["pockode"] -- spawns --> cli["claude / codex"]
+    end
+    phone["Your phone<br/>(any browser)"] -- HTTPS / WSS --> relay["Relay<br/>(cloud)"]
+    pockode -- outbound tunnel --> relay
+```
 
-Ideas? Bugs? [Open an issue](https://github.com/sijiaoh/pockode/issues).
+Pockode runs beside your project and drives the AI CLI there; your phone reaches it through an outbound tunnel, so there is no port to forward. [How it is secured](https://pockode.com/security/).
 
-> Issues, [discussions](https://github.com/sijiaoh/pockode/discussions) and documentation PRs are welcome. For larger code changes, open an issue first. See [CONTRIBUTING.md](CONTRIBUTING.md).
+## Contributing · Security · License
 
-## Links
-
-- **Website:** [pockode.com](https://pockode.com)
-- **Issues:** [GitHub Issues](https://github.com/sijiaoh/pockode/issues)
-
-## License
-
-[O'Saasy License](LICENSE.md) — source available. You may use, modify and redistribute it, but not offer it to others as a competing hosted service.
+- **Contributing** — Issues, [discussions](https://github.com/sijiaoh/pockode/discussions) and documentation PRs are welcome; see [CONTRIBUTING.md](CONTRIBUTING.md).
+- **Security** — Report vulnerabilities privately; see [SECURITY.md](SECURITY.md).
+  <!-- messaging:license -->
+- **License** — Source available under the [O'Saasy License](LICENSE.md). You may use, modify and redistribute it, but not offer it to others as a competing hosted service.
+  <!-- /messaging:license -->
