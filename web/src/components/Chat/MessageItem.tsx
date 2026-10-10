@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 import { memo, useId, useMemo, useState } from "react";
 import { fullScreenSubject } from "../../lib/fullScreen";
+import { isHtmlRenderCard } from "../../lib/htmlRender";
 import {
 	changeRowCount,
 	proposedChange,
@@ -55,6 +56,7 @@ import {
 import AttachmentStrip from "./AttachmentStrip";
 import AuthFailureNotice from "./AuthFailureNotice";
 import { DiscardedNote, DiscardedSummary } from "./DiscardedMessage";
+import { HtmlRenderCard } from "./HtmlRenderCard";
 import MessageActions from "./MessageActions";
 import MessageMenuTrigger, { type ForkBlocked } from "./MessageMenuTrigger";
 import {
@@ -908,6 +910,9 @@ function ContentPartItem(props: ContentPartItemProps) {
 				)}
 			/>
 		);
+	}
+	if (isHtmlRenderCard(part)) {
+		return <HtmlRenderCard run={part.tool} />;
 	}
 	return (
 		<ToolCallItem

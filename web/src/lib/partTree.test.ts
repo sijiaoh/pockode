@@ -27,6 +27,15 @@ describe("partBlocks", () => {
 		).toEqual(["text", 3, "text", 1]);
 	});
 
+	// The page is the reply, not a line in the tool log.
+	it("leaves a successful html_render call out of the list, splitting it", () => {
+		const page = {
+			type: "tool_call",
+			tool: { id: "p", name: "pockode:html_render", status: "success" },
+		} as ContentPart;
+		expect(shape([tool("1"), page, tool("2")])).toEqual([1, "tool_call", 1]);
+	});
+
 	it("leaves a question card out of the list, splitting it", () => {
 		expect(shape([tool("1"), question("q"), tool("2")])).toEqual([
 			1,

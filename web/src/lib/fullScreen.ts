@@ -27,6 +27,11 @@ export type FullScreenContent =
 	  }
 	| { kind: "code"; text: string; language?: string }
 	| { kind: "markdown"; markdown: string }
+	/**
+	 * An agent's page (`html_render`), rendered or — `showSource` — read as its
+	 * code; the viewer switches between the two, opening on the card's choice.
+	 */
+	| { kind: "html"; html: string; showSource: boolean }
 	/** Drawn by `ProposedChange`: an edit's or a Codex change's diffs, never a Write. */
 	| { kind: "change"; change: ProposedChangeData }
 	/** Every path, not the transcript's first hundred. */

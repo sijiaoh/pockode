@@ -1,4 +1,4 @@
-import { ChevronDown, Search } from "lucide-react";
+import { ChevronDown, Code, Search } from "lucide-react";
 import {
 	type KeyboardEvent,
 	type RefObject,
@@ -40,6 +40,7 @@ import {
 	OutputLines,
 	parseOutput,
 } from "./FullScreenLines";
+import { HtmlFrame } from "./HtmlFrame";
 import {
 	changeHasDiffs,
 	DiffWrapToggle,
@@ -152,6 +153,7 @@ function findModelOf(
 }
 
 function ContentView({
+	title,
 	content,
 	contentLines,
 	from,
@@ -160,6 +162,8 @@ function ContentView({
 	linesRef,
 	onOpenFile,
 }: {
+	/** The viewer's, which names a page's frame. */
+	title: string;
 	content: FullScreenContent;
 	contentLines: ContentLines;
 	from: "start" | "end";
@@ -220,6 +224,9 @@ function ContentView({
 			);
 		case "change":
 			return <ProposedChange change={content.change} />;
+		// Edge to edge, scrolling itself: it is a page of its own.
+		case "html":
+			return <HtmlFrame html={content.html} title={title} className="h-full" />;
 	}
 }
 
@@ -265,7 +272,23 @@ export function FullScreenViewer({
 	closeThen,
 	afterCloseRef,
 }: Props) {
-	const { content } = source;
+	const published = source.content;
+	// A page read as its source is code, drawn and searched as any other.
+	const [pageSource, setPageSource] = useState(
+		published.kind === "html" && published.showSource,
+	);
+	const content = useMemo<FullScreenContent>(
+		() =>
+			published.kind === "html" && pageSource
+				? { kind: "code", text: published.html, language: "html" }
+				: published,
+		[published, pageSource],
+	);
+	// Rendered, the page is out of find's reach — the browser's and the
+	// viewer's alike — so find is not offered at all.
+	const isPage = content.kind === "html";
+	const isPageRef = useRef(isPage);
+	isPageRef.current = isPage;
 	const scrollerRef = useRef<HTMLElement>(null);
 	const linesRef = useRef<VirtualLinesHandle>(null);
 	// Output wraps by default as the transcript always wraps it; code keeps its
@@ -321,6 +344,7 @@ export function FullScreenViewer({
 	useEffect(() => {
 		const onKeyDown = (event: globalThis.KeyboardEvent) => {
 			if (
+				!isPageRef.current &&
 				(event.ctrlKey || event.metaKey) &&
 				!event.altKey &&
 				!event.shiftKey &&
@@ -371,6 +395,22 @@ export function FullScreenViewer({
 						{count && <span className="shrink-0 tabular-nums">{count}</span>}
 					</div>
 					<div className="flex shrink-0 items-center gap-1 pointer-coarse:gap-2">
+						{published.kind === "html" && (
+							<button
+								type="button"
+								aria-label="Show source"
+								aria-pressed={pageSource}
+								onClick={() => {
+									// Put away with the source it searched, or the next Escape
+									// would close a bar no longer drawn.
+									if (pageSource) setFindOpen(false);
+									setPageSource(!pageSource);
+								}}
+								className={headerButtonClass("lg", pageSource)}
+							>
+								<Code size={16} aria-hidden="true" />
+							</button>
+						)}
 						{wraps === "own" && (
 							<WrapLinesToggle
 								pressed={ownWrap}
@@ -387,17 +427,19 @@ export function FullScreenViewer({
 							/>
 						)}
 						{/* Last, nearest the thumb. */}
-						<button
-							ref={findButtonRef}
-							type="button"
-							aria-label="Find"
-							aria-expanded={findOpen}
-							aria-controls={findOpen ? findBarId : undefined}
-							onClick={openFind}
-							className={headerButtonClass("lg", findOpen)}
-						>
-							<Search size={16} aria-hidden="true" />
-						</button>
+						{!isPage && (
+							<button
+								ref={findButtonRef}
+								type="button"
+								aria-label="Find"
+								aria-expanded={findOpen}
+								aria-controls={findOpen ? findBarId : undefined}
+								onClick={openFind}
+								className={headerButtonClass("lg", findOpen)}
+							>
+								<Search size={16} aria-hidden="true" />
+							</button>
+						)}
 					</div>
 				</div>
 				{findOpen && (
@@ -419,10 +461,13 @@ export function FullScreenViewer({
 					// biome-ignore lint/a11y/noNoninteractiveTabindex: a scroller the keyboard has to reach
 					tabIndex={0}
 					aria-label={source.noun}
-					className="relative min-h-0 flex-1 overflow-auto p-3 outline-none focus-visible:ring-2 focus-visible:ring-th-accent focus-visible:ring-inset sm:p-4"
+					className={`relative min-h-0 flex-1 outline-none focus-visible:ring-2 focus-visible:ring-th-accent focus-visible:ring-inset ${
+						isPage ? "overflow-hidden" : "overflow-auto p-3 sm:p-4"
+					}`}
 				>
-					<div>
+					<div className={isPage ? "h-full" : undefined}>
 						<ContentView
+							title={source.title}
 							content={content}
 							contentLines={contentLines}
 							from={source.from}

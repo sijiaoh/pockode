@@ -133,6 +133,20 @@ describe("toolSummary", () => {
 		});
 	});
 
+	it("names an html_render call by its title, whatever order its input is in", () => {
+		expect(
+			toolSummary(
+				"pockode:html_render",
+				{ html: "<h1>p99</h1>", title: "Latency report" },
+				WORK_DIR,
+			),
+		).toMatchObject({
+			title: "html_render",
+			chip: "pockode",
+			detail: "Latency report",
+		});
+	});
+
 	it("counts a todo list rather than quoting one of them", () => {
 		expect(
 			toolSummary(
