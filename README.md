@@ -27,7 +27,7 @@ Hand stories to a team of Claude Code and Codex agents on your own machine, answ
 ## Quick Start
 
 <!-- messaging:quickstart -->
-Pockode drives the `claude` or `codex` CLI, so install one of them on the same machine first.
+Pockode drives the `claude` or `codex` CLI. Have neither? Install one and sign in from the app; that needs `npm` (Node.js).
 
 **macOS / Linux**
 

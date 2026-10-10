@@ -399,12 +399,12 @@ and not done*).
 
 ## Cluster
 
-`web-cluster` gets no update UI, for the reason it has no sign-in UI
+`web-cluster` gets no update or install UI, for the reason it has no sign-in UI
 ([cli-login-ui.md](cli-login-ui.md#cluster)): the nodes on one machine share one
-install of each CLI, so updating from any node's Pockode updates it for all of
-them. That sharing is why the dialog names cluster nodes, and why two nodes
-updating the same CLI at once is the server's to rule out
-([code/cli-update.md](code/cli-update.md#one-update-per-cli-per-os-user)).
+install of each CLI, so updating or installing it from any node's Pockode does
+it for all of them. That sharing is why the dialogs name cluster nodes, and why
+two nodes updating or installing the same CLI at once is the server's to rule
+out ([code/cli-update.md](code/cli-update.md#one-update-per-cli-per-os-user)).
 
 ## Components
 

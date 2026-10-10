@@ -26,7 +26,7 @@ A node whose process died without cleaning up shows under **Needs attention**. *
 
 ## Things the nodes share
 
-Every node runs as your user, so signing Claude Code or Codex in or out, or updating them, from any project's **Settings → AI CLIs** applies to all of them.
+Every node runs as your user, so installing Claude Code or Codex, signing them in or out, or updating them, from any project's **Settings → AI CLIs** applies to all of them.
 
 ## Flags
 
