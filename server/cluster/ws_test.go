@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+	"github.com/pockode/server/authguard"
 	"github.com/pockode/server/cluster/node"
 	"github.com/pockode/server/internal/authsessiontest"
 	"github.com/pockode/server/rpc"
@@ -34,7 +35,7 @@ func newAuthTestServer(t *testing.T, sessions *authsessiontest.Sessions) *httpte
 	if err != nil {
 		t.Fatalf("failed to create node store: %v", err)
 	}
-	h := newWSHandler(testPassword, sessions, "test", true, nodeStore, node.NewProcessManager(),
+	h := newWSHandler(testPassword, authguard.NewFrozen(), sessions, "test", true, nodeStore, node.NewProcessManager(),
 		slog.New(slog.DiscardHandler))
 	server := httptest.NewServer(h)
 	t.Cleanup(server.Close)
@@ -168,6 +169,46 @@ func TestClusterAuth_BothCredentialsRefused(t *testing.T) {
 	resp := callOnce(t, server.URL, "auth", AuthParams{Password: testPassword, SessionToken: live})
 	if resp.Error == nil || resp.Error.Code != jsonrpc2.CodeInvalidParams {
 		t.Fatalf("got %+v, want an invalid-params error", resp.Error)
+	}
+}
+
+// The cluster keeps its own lockout, with the same rules as the server's: see
+// TestHandler_Auth_RateLimitedPasswordKeepsSessionTokens in package ws. The
+// token is tried before the password, so the password's refusal proves the
+// token was accepted while the lockout was in force.
+func TestClusterAuth_RateLimitedPasswordKeepsSessionTokens(t *testing.T) {
+	sessions := authsessiontest.New()
+	live, err := sessions.Issue()
+	if err != nil {
+		t.Fatalf("Issue: %v", err)
+	}
+	server := newAuthTestServer(t, sessions)
+
+	// authguard tolerates 5 failures; the 6th starts a 1s lockout.
+	for range 6 {
+		callOnce(t, server.URL, "auth", AuthParams{Password: "wrong-password"})
+	}
+
+	if resp := callOnce(t, server.URL, "auth", AuthParams{SessionToken: live}); resp.Error != nil {
+		t.Fatalf("session token refused while passwords are locked out: %v", resp.Error)
+	}
+
+	resp := callOnce(t, server.URL, "auth", AuthParams{Password: testPassword})
+	if resp.Error == nil || resp.Error.Data == nil {
+		t.Fatalf("correct password while locked: got %+v, want a rate_limited refusal", resp)
+	}
+	var data struct {
+		Reason       string `json:"reason"`
+		RetryAfterMS int64  `json:"retry_after_ms"`
+	}
+	if err := json.Unmarshal(*resp.Error.Data, &data); err != nil {
+		t.Fatalf("unmarshal error data: %v", err)
+	}
+	if data.Reason != rpc.AuthReasonRateLimited {
+		t.Errorf("reason = %q, want %q", data.Reason, rpc.AuthReasonRateLimited)
+	}
+	if data.RetryAfterMS <= 0 || data.RetryAfterMS > 1000 {
+		t.Errorf("retry_after_ms = %d, want within the 1s lockout", data.RetryAfterMS)
 	}
 }
 

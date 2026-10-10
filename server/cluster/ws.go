@@ -10,6 +10,7 @@ import (
 
 	"github.com/coder/websocket"
 	"github.com/google/uuid"
+	"github.com/pockode/server/authguard"
 	"github.com/pockode/server/cluster/node"
 	"github.com/pockode/server/logger"
 	"github.com/pockode/server/password"
@@ -35,6 +36,7 @@ type AuthResult struct {
 
 type wsHandler struct {
 	password       string
+	passwordGuard  *authguard.Guard
 	sessions       ws.SessionStore
 	version        string
 	devMode        bool
@@ -43,9 +45,10 @@ type wsHandler struct {
 	log            *slog.Logger
 }
 
-func newWSHandler(password string, sessions ws.SessionStore, version string, devMode bool, nodeStore node.Store, processManager *node.ProcessManager, log *slog.Logger) *wsHandler {
+func newWSHandler(password string, passwordGuard *authguard.Guard, sessions ws.SessionStore, version string, devMode bool, nodeStore node.Store, processManager *node.ProcessManager, log *slog.Logger) *wsHandler {
 	return &wsHandler{
 		password:       password,
+		passwordGuard:  passwordGuard,
 		sessions:       sessions,
 		version:        version,
 		devMode:        devMode,
@@ -85,6 +88,7 @@ func (h *wsHandler) handleStream(ctx context.Context, stream jsonrpc2.ObjectStre
 
 	handler := &clusterRPCHandler{
 		password:       h.password,
+		passwordGuard:  h.passwordGuard,
 		sessions:       h.sessions,
 		version:        h.version,
 		nodeStore:      h.nodeStore,
@@ -100,6 +104,7 @@ func (h *wsHandler) handleStream(ctx context.Context, stream jsonrpc2.ObjectStre
 
 type clusterRPCHandler struct {
 	password       string
+	passwordGuard  *authguard.Guard
 	sessions       ws.SessionStore
 	version        string
 	nodeStore      node.Store
@@ -206,8 +211,14 @@ func (h *clusterRPCHandler) authenticate(ctx context.Context, conn *jsonrpc2.Con
 		return params.SessionToken, true
 	}
 
-	if !password.Matches(given, h.password) {
-		h.log.Warn("invalid password")
+	ok, retryAfter := h.passwordGuard.Attempt(func() bool { return password.Matches(given, h.password) })
+	if retryAfter > 0 {
+		h.replyErrorData(ctx, conn, req.ID, jsonrpc2.CodeInvalidRequest, "too many failed password attempts, try again later",
+			rpc.RateLimitedAuthErrorData(retryAfter))
+		conn.Close()
+		return "", false
+	}
+	if !ok {
 		h.replyAuthError(ctx, conn, req.ID, "invalid password", rpc.AuthReasonInvalidPassword)
 		conn.Close()
 		return "", false

@@ -44,6 +44,7 @@ agent/                  # Agent 抽象（接口, 事件, 进程管理, 注册表
 agentrole/              # AgentRole 存储 + 类型定义
 apiroute/               # 本进程 API 路径判定（SPA handler 与 relay 代理共用）
 attachments/            # 按 session 存放事件里以 id 引用的内容（内容寻址）
+authguard/              # 失败密码登录的全局退避锁（仅内存；各密码入口共用，session token / ticket 不经过它）
 authsession/            # 登录会话：密码换取的 session token + 密码指纹（sessions.json）；端口预览的一次性登录 ticket（仅内存）
 chat/                   # Chat 客户端
 cliauth/                # AI CLI 登录状态查询、远程登录流程与登出（各 CLI 的实现在 agent/*/auth.go、login.go，见 docs/code/cli-auth.md）

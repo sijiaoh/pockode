@@ -112,12 +112,30 @@ const (
 	// left as "a refusal with no reason", so that the retry is triggered by this
 	// case being present and not by the credential cases being absent.
 	AuthReasonWorktreeNotFound = "worktree_not_found"
+	// AuthReasonRateLimited: too many wrong passwords in a row, so passwords
+	// are refused unchecked for a while (see package authguard). RetryAfterMS
+	// says how long. Only a password is ever refused this way; a session token
+	// still works.
+	AuthReasonRateLimited = "rate_limited"
 )
 
 // AuthErrorData is the `data` member of the JSON-RPC error an auth refusal
 // replies with.
 type AuthErrorData struct {
 	Reason string `json:"reason"`
+	// RetryAfterMS is set with AuthReasonRateLimited only: how many
+	// milliseconds until a password is checked again.
+	RetryAfterMS int64 `json:"retry_after_ms,omitempty"`
+}
+
+// RateLimitedAuthErrorData is the refusal for a password attempt the guard
+// turned away. The wait is rounded up, so that a lockout with less than a
+// millisecond left is still reported as a wait rather than as none.
+func RateLimitedAuthErrorData(retryAfter time.Duration) AuthErrorData {
+	return AuthErrorData{
+		Reason:       AuthReasonRateLimited,
+		RetryAfterMS: (retryAfter + time.Millisecond - 1).Milliseconds(),
+	}
 }
 
 // OrLegacy picks the current spelling of a renamed request field, falling back

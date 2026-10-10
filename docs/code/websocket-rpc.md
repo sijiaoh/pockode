@@ -399,12 +399,13 @@ Client                              Server
   the same one back for a token — so a client stores it unconditionally
 - A refusal carries `data.reason`, and clients branch on that rather than on the
   message: `invalid_password` keeps the user on the password screen with the
-  error, `session_expired` drops the stored token and returns there silently,
-  `not_authenticated` means a method arrived before `auth`,
+  error, `rate_limited` returns there with no wrong-password error, holding
+  submit until `data.retry_after_ms` has passed (see
+  [Authentication](authentication.md#failed-password-attempts-are-rate-limited)),
+  `session_expired` drops the stored token and returns there silently,
+  `not_authenticated` means a method arrived before `auth`, and
   `worktree_not_found` — the credential was fine, the worktree is gone — sends the
-  client back to the main worktree for one retry, and `rate_limited` returns to
-  the password screen with no wrong-password error, holding submit until
-  `data.retry_after_ms` has passed
+  client back to the main worktree for one retry
 - Optionally specify worktree; uses main worktree if not specified
 - Authentication response includes version number for detecting client/server version mismatch
 - `max_upload_size` is the ceiling on one HTTP upload request in bytes, sent so a

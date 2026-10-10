@@ -11,6 +11,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+
+	"github.com/pockode/server/authguard"
 )
 
 const (
@@ -231,6 +233,41 @@ func TestPreviewLoginKeepsLiveSession(t *testing.T) {
 	}
 }
 
+// While passwords are locked out even the right one is refused with a wait;
+// a live session cookie and a ticket from the app are not passwords and still
+// log in.
+func TestPreviewLoginLockedOutKeepsSessionsAndTickets(t *testing.T) {
+	p := serveTicketProxy(t)
+	host := previewHost(5173)
+
+	// authguard tolerates 5 failures; the 6th starts a 1s lockout.
+	for i := range 6 {
+		if resp := login(t, p.url, host, "wrong", nil); resp.StatusCode != http.StatusUnauthorized {
+			t.Fatalf("wrong password %d: status %d, want %d", i+1, resp.StatusCode, http.StatusUnauthorized)
+		}
+	}
+
+	live := &http.Cookie{Name: testSite.cookieName(), Value: testToken}
+	if resp := login(t, p.url, host, "wrong", live); resp.StatusCode != http.StatusNoContent {
+		t.Errorf("live session while locked out: status %d, want %d", resp.StatusCode, http.StatusNoContent)
+	}
+	resp := ticketLogin(t, p.url, host, url.Values{"ticket": {testTicket}}.Encode(), nil)
+	if cookies := resp.Cookies(); len(cookies) != 1 || cookies[0].Name != testSite.cookieName() {
+		t.Errorf("ticket while locked out: cookies %v, want a session cookie", cookies)
+	}
+
+	resp = login(t, p.url, host, testPassword, nil)
+	if resp.StatusCode != http.StatusTooManyRequests {
+		t.Fatalf("password while locked out: status %d, want %d", resp.StatusCode, http.StatusTooManyRequests)
+	}
+	if got := resp.Header.Get("Retry-After"); got != "1" {
+		t.Errorf("Retry-After = %q, want 1 (the 1s lockout, rounded up)", got)
+	}
+	if len(resp.Cookies()) != 0 || p.sessions.issuedCount() != 1 {
+		t.Errorf("locked-out password got cookies %v; sessions issued %d, want only the ticket's", resp.Cookies(), p.sessions.issuedCount())
+	}
+}
+
 // testTicket is a ticket every test ticket set starts out with.
 const testTicket = "live-ticket"
 
@@ -280,14 +317,15 @@ type ticketProxy struct {
 	url      string
 	sessions *fakeSessions
 	tickets  *fakeTickets
+	guard    *authguard.Guard
 	log      *syncBuffer
 }
 
 func serveTicketProxy(t *testing.T) ticketProxy {
 	t.Helper()
-	p := ticketProxy{sessions: newTestSessions(), tickets: newTestTickets(), log: &syncBuffer{}}
+	p := ticketProxy{sessions: newTestSessions(), tickets: newTestTickets(), guard: authguard.NewFrozen(), log: &syncBuffer{}}
 	unused := closedPort(t)
-	auth := previewAuth{password: testPassword, sessions: p.sessions, tickets: p.tickets}
+	auth := previewAuth{password: testPassword, guard: p.guard, sessions: p.sessions, tickets: p.tickets}
 	p.url = serveProxyWithAuth(t, unused, unused, testSite, auth, slog.New(slog.NewTextHandler(p.log, nil))).URL
 	return p
 }

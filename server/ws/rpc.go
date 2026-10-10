@@ -12,6 +12,7 @@ import (
 	"github.com/coder/websocket"
 	"github.com/google/uuid"
 	"github.com/pockode/server/agentrole"
+	"github.com/pockode/server/authguard"
 	"github.com/pockode/server/cliauth"
 	"github.com/pockode/server/cliupdate"
 	"github.com/pockode/server/command"
@@ -48,6 +49,7 @@ type PreviewTickets interface {
 // RPCHandler handles JSON-RPC 2.0 over WebSocket.
 type RPCHandler struct {
 	password             string
+	passwordGuard        *authguard.Guard
 	sessions             SessionStore
 	version              string
 	remoteURL            string
@@ -70,7 +72,7 @@ type RPCHandler struct {
 	cliUpdateWatcher     *watch.CLIUpdateWatcher
 }
 
-func NewRPCHandler(password string, sessions SessionStore, version, remoteURL string, previewTickets PreviewTickets, devMode bool, commandStore *command.Store, worktreeManager *worktree.Manager, settingsStore *settings.Store, workStore work.Store, workOps *work.Operations, workEngine *work.Engine, agentRoleStore agentrole.Store, cliAuth *cliauth.Service, cliUpdate *cliupdate.Service) *RPCHandler {
+func NewRPCHandler(password string, passwordGuard *authguard.Guard, sessions SessionStore, version, remoteURL string, previewTickets PreviewTickets, devMode bool, commandStore *command.Store, worktreeManager *worktree.Manager, settingsStore *settings.Store, workStore work.Store, workOps *work.Operations, workEngine *work.Engine, agentRoleStore agentrole.Store, cliAuth *cliauth.Service, cliUpdate *cliupdate.Service) *RPCHandler {
 	settingsWatcher := watch.NewSettingsWatcher(settingsStore)
 	settingsWatcher.Start()
 
@@ -102,6 +104,7 @@ func NewRPCHandler(password string, sessions SessionStore, version, remoteURL st
 
 	return &RPCHandler{
 		password:             password,
+		passwordGuard:        passwordGuard,
 		sessions:             sessions,
 		version:              version,
 		remoteURL:            remoteURL,
@@ -835,8 +838,14 @@ func (h *rpcMethodHandler) checkCredentials(ctx context.Context, conn *jsonrpc2.
 		return params.SessionToken, true
 	}
 
-	if !password.Matches(given, h.password) {
-		h.log.Warn("invalid password")
+	ok, retryAfter := h.passwordGuard.Attempt(func() bool { return password.Matches(given, h.password) })
+	if retryAfter > 0 {
+		h.replyErrorData(ctx, conn, req.ID, jsonrpc2.CodeInvalidRequest, "too many failed password attempts, try again later",
+			rpc.RateLimitedAuthErrorData(retryAfter))
+		conn.Close()
+		return "", false
+	}
+	if !ok {
 		h.replyAuthError(ctx, conn, req.ID, "invalid password", rpc.AuthReasonInvalidPassword)
 		conn.Close()
 		return "", false
