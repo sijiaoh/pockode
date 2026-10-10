@@ -48,7 +48,7 @@ React SPA (Frontend)
 
 - **Locate before you code** — Determine where code belongs before writing it; especially for reusable logic, proper placement enables discovery and reuse
 - **Everything in its place** — Utility functions go in utility modules, business logic goes in business modules, follow the existing project structure
-- **Public copy has one source** — The README, pockode.com and the marketing assets say what Pockode is in words from `site/data/messaging.yaml`; change them there, never in a consumer (see [site/README.md](site/README.md#where-the-words-come-from))
+- **Public copy has one source** — The README, pockode.com and the marketing assets say what Pockode is in words from `site/data/messaging.yaml`; change them there, never in a consumer (see [site/README.md](site/README.md#where-the-words-come-from)); after editing the README or anything under `site/`, run `pnpm run check:messaging`
 - **Events are events, state is state** — An event record is immutable history: it says what was true at one moment. Live state belongs to the store that owns it. Never put state into an event record, and never read current state back out of one — the record cannot change when the state does, so it starts lying (worked example: [docs/code/work-system.md](docs/code/work-system.md#work-messages-in-chat))
 
 ### Shared Code (`@pockode/shared`)

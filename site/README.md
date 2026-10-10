@@ -224,8 +224,12 @@ page that touches the password or the relay link there instead of restating
 it. Where a page needs words the source already holds, it uses a shortcode
 rather than copying them (`install` for the commands).
 
-CI also checks the site's copy: `pnpm run check:messaging` scans everything
-under `site/` for `pockode` flags the server does not have.
+CI also checks the site's copy: `pnpm run check:messaging` (the *Messaging*
+workflow) scans everything under `site/`, this README included, for `pockode`
+flags the server does not have. A code span that is nothing but a flag counts
+as one of `pockode`'s, so another tool's flag goes inside its command line
+(`wrangler pages deploy --branch=main`); the rules are in
+[scripts/README.md](../scripts/README.md#messaging--readme-generation-and-copy-checks).
 
 Files under `static/marketing/` are generated. Re-render them as
 [docs/marketing-assets.md](../docs/marketing-assets.md) describes; don't edit
