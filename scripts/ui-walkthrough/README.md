@@ -206,7 +206,7 @@ package `run.sh` installs beside Playwright.
 | `answer` | `390x804` | `question` (just asked), `question-picked` (the recommended option picked, not sent) |
 | `transcript` | `390x804` | `chat-question` (the request, the answered question and the next turn starting), `chat-tools` (a group of edits opened), `chat-changes` (the turn's changes card) |
 | `diff` | `390x804` | `diff` — `TodoItem.tsx` |
-| `preview` | `390x804` | `preview-sheet` — the Port Preview sheet over task 3's chat, `5173` entered; then Open, whose tab must land on `your-pc-5173.cloud.pockode.com` |
+| `preview` | `390x804` | `preview-sheet` — the Port Preview sheet over task 3's chat, `5173` entered; then Open, whose tab must log in with a ticket and land on `your-pc-5173.cloud.pockode.com` |
 | `devserver` | `390x760` | `preview-page` — tidy's page (`marketing/tidy.html`), opened from its dev server directly |
 | `commit` | `390x804` | `git-changes`, `commit-sheet`, `committed` |
 | `reports` | `390x804` | `story-reports` — the closed story's page at the tasks' reports |
@@ -272,8 +272,12 @@ between write the same bytes, because every source of difference is pinned:
 - **Port Preview.** The app offers it only with a relay address, and there is
   no relay: for the `preview` scene alone (its `remoteUrl`), the `auth` reply
   carries `https://your-pc.cloud.pockode.com`, so no other shot gains the
-  header button. The tab Open makes is routed to the dev server, so nothing
-  leaves the machine. The dev server serves one static page.
+  header button. The server issues a preview ticket only with a relay up, so
+  the suite answers `port_preview.ticket` itself, and a route plays the
+  preview host's ticket login, sending the tab on to the root as the host's
+  redirect would — from the page, since a redirect a route answers is followed
+  past the routes, onto the network. The tab is routed to the dev server, so
+  nothing leaves the machine. The dev server serves one static page.
 - **Usage.** Each turn reports fixed tokens and price (a scenario's `usage`),
   which the fake's result frame carries.
 - **Rendering.** Shots are taken with `animations: "disabled"` — reduced

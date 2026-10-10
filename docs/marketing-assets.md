@@ -465,10 +465,10 @@ What the Port Preview shows: the *tidy* app itself, a static HTML page served
 by a small dev server the suite starts in the project. The sheet in shot 6a
 has `5173` typed, but the dev server listens on the walkthrough's own
 `DEV_SERVER_PORT` (default 18973), since the developer's own Vite is likely on
-5173; the tab *Open* makes at `your-pc-5173.cloud.pockode.com` is routed to it
-inside the browser, so nothing leaves the machine and no capture shows the real
-port. The walkthrough runs without a relay, and the app only offers Port
-Preview when the `auth` reply carries a `remote_url`
+5173; the tab *Open* makes at `your-pc-5173.cloud.pockode.com`, ticket login
+included, is routed to it inside the browser, so nothing leaves the machine and
+no capture shows the real port. The walkthrough runs without a relay, and the
+app only offers Port Preview when the `auth` reply carries a `remote_url`
 ([port-preview.md](port-preview.md#opening-a-preview-from-the-app)); the suite
 supplies `https://your-pc.cloud.pockode.com` there for shot 6a alone, and
 captures 6b by opening the page from the dev server directly at 390×760. It is deliberately **light and neutral**, unlike

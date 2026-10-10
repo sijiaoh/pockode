@@ -40,6 +40,12 @@ const REMOTE_URL = "https://your-pc.cloud.pockode.com";
 const PREVIEW_PORT = 5173;
 export const PREVIEW_URL = `https://your-pc-${PREVIEW_PORT}.cloud.pockode.com/`;
 const DEV_SERVER_URL = `http://localhost:${process.env.WALKTHROUGH_DEV_SERVER_PORT}/`;
+// What the tab Open makes logs in with (docs/port-preview.md#logging-in). The
+// server issues tickets only with a relay up, so the suite hands this one out
+// itself. The path is web/src/lib/portPreview.ts's TICKET_LOGIN_PATH.
+const PREVIEW_TICKET = "walkthrough";
+const PREVIEW_LOGIN = `${PREVIEW_URL}__pockode/preview/login?`;
+const PREVIEW_LOGIN_URL = `${PREVIEW_LOGIN}ticket=${PREVIEW_TICKET}`;
 
 const COMMIT_MESSAGE = "Add due dates to todos";
 const DIFF_FILE = "src/components/TodoItem.tsx";
@@ -193,6 +199,23 @@ function pinFrame(message, remoteUrl) {
 	if (remoteUrl && typeof pinned.result?.remote_url === "string")
 		pinned.result.remote_url = remoteUrl;
 	return JSON.stringify(pinned);
+}
+
+/** The reply to a `port_preview.ticket` request, or null for any other frame. */
+function ticketReply(message) {
+	if (typeof message !== "string") return null;
+	let frame;
+	try {
+		frame = JSON.parse(message);
+	} catch {
+		return null;
+	}
+	if (frame.method !== "port_preview.ticket") return null;
+	return JSON.stringify({
+		jsonrpc: "2.0",
+		id: frame.id,
+		result: { ticket: PREVIEW_TICKET },
+	});
 }
 
 // The faces the app asks for first (`--font-sans` / `--font-mono`) and does
@@ -386,10 +409,16 @@ const SCENES = [
 			await settle(page);
 			const openButton = sheet.getByRole("button", { name: "Open" });
 			await shot("preview-sheet", { tap: openButton });
+			// The ticket's login, not the password-page fallback a failed
+			// ticket request takes, which ends at the same address.
+			const login = page
+				.context()
+				.waitForEvent("request", (r) => r.url() === PREVIEW_LOGIN_URL);
 			const [tab] = await Promise.all([
 				page.waitForEvent("popup"),
 				openButton.click(),
 			]);
+			await login;
 			await tab.getByText("Water the plants").waitFor();
 			if (tab.url() !== PREVIEW_URL)
 				throw new Error(`Open went to ${tab.url()}, not ${PREVIEW_URL}`);
@@ -660,9 +689,27 @@ export default {
 					}),
 				}),
 			);
+		// The host redeems a ticket by redirecting to its root
+		// (server/relay/preview_auth.go's serveTicketLogin). Sent on by the page
+		// rather than with a 303: a fulfilled redirect is followed past the
+		// routes, out to the network. Added after the route above, so it is
+		// tried first.
+		if (scene.remoteUrl)
+			await context.route(
+				(url) => url.href.startsWith(PREVIEW_LOGIN),
+				(route) =>
+					route.fulfill({
+						contentType: "text/html",
+						body: `<script>location.replace(${JSON.stringify(PREVIEW_URL)})</script>`,
+					}),
+			);
 		await context.routeWebSocket(/\/ws$/, (ws) => {
 			const server = ws.connectToServer();
-			ws.onMessage((message) => server.send(message));
+			ws.onMessage((message) => {
+				const ticket = scene.remoteUrl && ticketReply(message);
+				if (ticket) ws.send(ticket);
+				else server.send(message);
+			});
 			server.onMessage((message) =>
 				ws.send(pinFrame(message, scene.remoteUrl)),
 			);
