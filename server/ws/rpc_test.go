@@ -16,6 +16,7 @@ import (
 	"github.com/coder/websocket"
 	"github.com/pockode/server/agent"
 	"github.com/pockode/server/agentrole"
+	"github.com/pockode/server/authsession"
 	"github.com/pockode/server/cliauth"
 	"github.com/pockode/server/cliauth/cliauthtest"
 	"github.com/pockode/server/cliupdate"
@@ -167,7 +168,7 @@ func newTestEnvWithAgent(t *testing.T, mock *mockAgent, ag agent.Agent, workDir 
 	cliAuthService := cliauth.NewService(slog.Default())
 	cliAuthService.Register(session.AgentTypeClaude, cliAuth)
 
-	h := NewRPCHandler(testPassword, authsessiontest.New(), "test", "", true, cmdStore, worktreeManager, settingsStore, workStore, workOps, workEngine, agentRoleStore, cliAuthService, cliupdate.NewService(slog.Default(), nil, nil))
+	h := NewRPCHandler(testPassword, authsessiontest.New(), "test", "", authsession.NewTickets(), true, cmdStore, worktreeManager, settingsStore, workStore, workOps, workEngine, agentRoleStore, cliAuthService, cliupdate.NewService(slog.Default(), nil, nil))
 	server := httptest.NewServer(h)
 
 	// No deadline of its own: every read and write is bounded individually (see
@@ -525,6 +526,13 @@ func getWorkOrFail(t *testing.T, env *testEnv, workID string) work.Work {
 // which newTestEnv, by construction, cannot give them.
 func newAuthTestServer(t *testing.T, password, remoteURL string, sessions SessionStore) *httptest.Server {
 	t.Helper()
+	return newTicketTestServer(t, password, remoteURL, sessions, authsession.NewTickets())
+}
+
+// newTicketTestServer is newAuthTestServer with the preview ticket set chosen
+// by the caller, which is the only way a test can redeem what it was handed.
+func newTicketTestServer(t *testing.T, password, remoteURL string, sessions SessionStore, tickets PreviewTickets) *httptest.Server {
+	t.Helper()
 	dataDir := t.TempDir()
 	workDir := t.TempDir()
 	cmdStore, _ := command.NewStore(dataDir)
@@ -537,7 +545,7 @@ func newAuthTestServer(t *testing.T, password, remoteURL string, sessions Sessio
 	workStarter := worktree.NewWorkStarter(worktreeManager, agentRoleStore, settingsStore)
 	workOps := work.NewOperations(workStore, workStarter, nil, nil)
 
-	h := NewRPCHandler(password, sessions, "test", remoteURL, true, cmdStore, worktreeManager, settingsStore, workStore, workOps, work.NewEngine(workStore, work.DefaultMaxNudges), agentRoleStore, cliauth.NewService(slog.Default()), cliupdate.NewService(slog.Default(), nil, nil))
+	h := NewRPCHandler(password, sessions, "test", remoteURL, tickets, true, cmdStore, worktreeManager, settingsStore, workStore, workOps, work.NewEngine(workStore, work.DefaultMaxNudges), agentRoleStore, cliauth.NewService(slog.Default()), cliupdate.NewService(slog.Default(), nil, nil))
 	server := httptest.NewServer(h)
 	t.Cleanup(server.Close)
 	return server
@@ -557,18 +565,25 @@ func callOnce(t *testing.T, serverURL, method string, params any) rpcResponse {
 	}
 	defer conn.Close(websocket.StatusNormalClosure, "")
 
-	data, _ := json.Marshal(rpcRequest{JSONRPC: "2.0", ID: 1, Method: method, Params: params})
+	return exchange(t, ctx, conn, 1, method, params)
+}
+
+// exchange sends one request on conn and reads the frame that answers it, for
+// connections that see nothing but replies: nothing is subscribed on them.
+func exchange(t *testing.T, ctx context.Context, conn *websocket.Conn, id int, method string, params any) rpcResponse {
+	t.Helper()
+	data, _ := json.Marshal(rpcRequest{JSONRPC: "2.0", ID: id, Method: method, Params: params})
 	if err := conn.Write(ctx, websocket.MessageText, data); err != nil {
-		t.Fatalf("failed to send: %v", err)
+		t.Fatalf("failed to send %s: %v", method, err)
 	}
 
 	_, respData, err := conn.Read(ctx)
 	if err != nil {
-		t.Fatalf("failed to read: %v", err)
+		t.Fatalf("failed to read %s reply: %v", method, err)
 	}
 	var resp rpcResponse
 	if err := json.Unmarshal(respData, &resp); err != nil {
-		t.Fatalf("failed to unmarshal: %v", err)
+		t.Fatalf("failed to unmarshal %s reply: %v", method, err)
 	}
 	return resp
 }

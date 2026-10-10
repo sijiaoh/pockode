@@ -38,12 +38,20 @@ type SessionStore interface {
 	Validate(token string) bool
 }
 
+// PreviewTickets issues the one-time tickets a port preview tab logs in with;
+// authsession.Tickets implements it. The preview host redeems them, so the two
+// must share one instance.
+type PreviewTickets interface {
+	Issue() (string, error)
+}
+
 // RPCHandler handles JSON-RPC 2.0 over WebSocket.
 type RPCHandler struct {
 	password             string
 	sessions             SessionStore
 	version              string
 	remoteURL            string
+	previewTickets       PreviewTickets
 	devMode              bool
 	commandStore         *command.Store
 	worktreeManager      *worktree.Manager
@@ -62,7 +70,7 @@ type RPCHandler struct {
 	cliUpdateWatcher     *watch.CLIUpdateWatcher
 }
 
-func NewRPCHandler(password string, sessions SessionStore, version, remoteURL string, devMode bool, commandStore *command.Store, worktreeManager *worktree.Manager, settingsStore *settings.Store, workStore work.Store, workOps *work.Operations, workEngine *work.Engine, agentRoleStore agentrole.Store, cliAuth *cliauth.Service, cliUpdate *cliupdate.Service) *RPCHandler {
+func NewRPCHandler(password string, sessions SessionStore, version, remoteURL string, previewTickets PreviewTickets, devMode bool, commandStore *command.Store, worktreeManager *worktree.Manager, settingsStore *settings.Store, workStore work.Store, workOps *work.Operations, workEngine *work.Engine, agentRoleStore agentrole.Store, cliAuth *cliauth.Service, cliUpdate *cliupdate.Service) *RPCHandler {
 	settingsWatcher := watch.NewSettingsWatcher(settingsStore)
 	settingsWatcher.Start()
 
@@ -97,6 +105,7 @@ func NewRPCHandler(password string, sessions SessionStore, version, remoteURL st
 		sessions:             sessions,
 		version:              version,
 		remoteURL:            remoteURL,
+		previewTickets:       previewTickets,
 		devMode:              devMode,
 		commandStore:         commandStore,
 		worktreeManager:      worktreeManager,
@@ -465,6 +474,9 @@ func (h *rpcMethodHandler) Handle(ctx context.Context, conn *jsonrpc2.Conn, req 
 	case "cli_update.start":
 		h.handleCLIUpdateStart(ctx, conn, req)
 		return
+	case "cli_update.install":
+		h.handleCLIUpdateInstall(ctx, conn, req)
+		return
 	case "cli_update.dismiss":
 		h.handleCLIUpdateDismiss(ctx, conn, req)
 		return
@@ -473,6 +485,9 @@ func (h *rpcMethodHandler) Handle(ctx context.Context, conn *jsonrpc2.Conn, req 
 		return
 	case "cli_update.unsubscribe":
 		h.handleWatcherUnsubscribe(ctx, conn, req, h.cliUpdateWatcher, "cli update")
+		return
+	case "port_preview.ticket":
+		h.handlePortPreviewTicket(ctx, conn, req)
 		return
 	case "settings.subscribe":
 		h.handleSettingsSubscribe(ctx, conn, req)

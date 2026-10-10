@@ -499,6 +499,7 @@ Linux, so a Windows leg would catch nothing the existing one misses. The
 release-path shell suite runs on `ubuntu-latest` alone; Windows is out of scope
 for it for the same reason as for the scripts it tests.
 
-This rests on the project [not taking code contributions yet](../README.md#feedback).
-When that changes, "frontend development on Windows has never been exercised"
-stops being hypothetical and this section should be re-evaluated.
+This was decided while the project took no code contributions. It now accepts
+them ([CONTRIBUTING.md](../CONTRIBUTING.md)), so "frontend development on Windows
+has never been exercised" is no longer hypothetical and this section should be
+re-evaluated; until then, contributors on Windows use WSL.

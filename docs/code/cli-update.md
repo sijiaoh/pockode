@@ -1,7 +1,8 @@
 # AI CLI Update
 
 How the server tells a client whether Claude Code and Codex have a newer release
-than the one it runs, and updates them from a phone. The screens that read this
+than the one it runs, updates them from a phone, and installs one the server
+cannot find. The screens that read this
 are in [cli-update-ui.md](../cli-update-ui.md); the sign-in state beside it is
 [cli-auth.md](cli-auth.md).
 
@@ -12,7 +13,7 @@ both installed with npm, on Linux.
 
 | Path | Holds |
 |------|-------|
-| `server/cliupdate/` | `Service`: the check (`cliupdate.go`), the update flow (`update.go`), the npm registry read (`registry.go`) |
+| `server/cliupdate/` | `Service`: the check (`cliupdate.go`), the update flow (`update.go`), the install (`install.go`), the npm registry read (`registry.go`) |
 | `server/agent/claude/update.go` | Claude as `cliupdate` sees it: its npm package, and its release channel read from the user's settings |
 | `server/agent/codex/update.go` | Codex, likewise |
 | `server/agent/version.go` | `agent.Version`, the `--version` read shared with sign-in status |
@@ -26,6 +27,7 @@ both installed with npm, on Linux.
 ```
 cli_update.check       { agent? }           ->  { checks: [Check] }
 cli_update.start       { agent }            ->  { update: Update }
+cli_update.install     { agent }            ->  { update: Update }   // kind "install"
 cli_update.dismiss     { update_id }        ->  {}
 cli_update.subscribe   { id, agent }        ->  { update: Update | null }
 cli_update.unsubscribe { id }
@@ -36,12 +38,12 @@ notification cli_update.changed { id, update: Update | null }
 // Check
 {
   "agent": "claude",
-  "state": "update_available",     // up_to_date | update_available | not_yet_available | updating | not_installed | unavailable
+  "state": "update_available",     // up_to_date | update_available | not_yet_available | updating | installing | not_installed | unavailable
   "version": "2.1.283",            // installed, when it could be read
   "latest_version": "2.1.285",     // the channel's release, when it could be read
   "channel": "latest",             // always set: the dist-tag latest_version is read from
   "error": "...",                  // unavailable, not_installed
-  "update_id": "...",              // updating: the running update
+  "update_id": "...",              // updating, installing: the running update or install
   "running_sessions": 2            // always set: this server's live processes of the CLI
 }
 
@@ -49,10 +51,12 @@ notification cli_update.changed { id, update: Update | null }
 {
   "id": "...",
   "agent": "claude",
+  "kind": "update",                // update | install
   "revision": 42,                  // grows with every change; keep the higher copy
   "phase": "running",              // running | succeeded | failed
   "binary_path": "/home/ada/.local/bin/claude",  // the install the update has to reach; empty when not found
-  "from_version": "2.1.283",       // once read
+                                   // install: empty until it ends, then where the CLI was found
+  "from_version": "2.1.283",       // once read; never on an install
   "target_version": "2.1.285",     // the latest when it started, once read
   "to_version": "2.1.285",         // read afterwards, on a failure too
   "started_at": "...", "ended_at": "...",
@@ -69,9 +73,15 @@ an unknown agent fails the request.
 
 `start` on a CLI with an update running returns that update. A start the server
 refuses leaves no record and fails the request with a message to show as it
-is: the CLI is being updated by another Pockode on this machine, a sign-in to it
-is running, the server is shutting down, or the server has no home directory to
-run the update in or no cache directory to lock it in.
+is: the CLI is being installed, it is being updated by another Pockode on this
+machine, a sign-in to it is running, the server is shutting down, or the server
+has no home directory to run the update in or no cache directory to lock it in.
+
+`install` is the same record with `kind: "install"`, so `subscribe`,
+`cli_update.changed`, `dismiss` and the revision rule below serve both. A CLI
+has one record at a time, of either kind. How an install runs, what it is
+refused with and how it fails are in
+[Installing a missing CLI](#installing-a-missing-cli).
 
 `dismiss` drops an update that has ended — a running one is refused — and every
 subscriber is sent `update: null`. An update, like a sign-in, belongs to the
@@ -85,7 +95,7 @@ what the client has.
 same reason: the installed version changes whenever Claude updates itself or
 someone updates a CLI in a terminal, where no Pockode process sees it. Nothing
 is cached. The client asks when the screen needs to know, and again when an
-update it followed ends.
+update or install it followed ends.
 
 ## Latest: the npm registry, on the CLI's channel
 
@@ -211,29 +221,95 @@ Six hours is meant to outlast a package manager's usual lag without leaving
 the card offering an update that has just failed.
 In memory: a restart offers it at once.
 
+## Installing a missing CLI
+
+`cli_update.install` installs a CLI `check` reports `not_installed`:
+
+```
+npm install --global --no-fund --no-audit <package>@<channel>
+```
+
+with the package and channel the check reads
+([above](#latest-the-npm-registry-on-the-clis-channel)). It is npm whichever
+way the user would otherwise install the CLI: both CLIs publish every release
+there, npm is the one installer both share, and the CLI it leaves updates
+itself the npm way. It runs [where an update runs](#running-the-update) — the
+user's home directory, as the server's own user, no `sudo` — under the same
+machine-wide lock, sign-in gate and 10-minute budget, and like `start` it
+answers at once; the rest arrives as `cli_update.changed`.
+
+### Refused before it starts
+
+An install the server refuses starts nothing and leaves no record. The refusals
+a client has its own copy for answer `-32003` (`rpc.CodeCLIInstallRefused`)
+with `data.reason`; the message is still a whole English sentence to show as
+it is ([websocket-rpc.md](websocket-rpc.md#error-replies)).
+
+| `data.reason` | When |
+|---|---|
+| `already_installed` | the server finds the CLI already; the message names the path. Reading `check` again shows it |
+| `npm_not_found` | npm is not on the server's PATH. The message says to install Node.js and restart pockode |
+| `busy` | the CLI is being updated on this server, another Pockode on the machine is updating or installing it ([below](#one-update-per-cli-per-os-user)), or a sign-in to it is running. Trying again once that has ended works |
+
+`-32602` is a missing or unknown `agent`; `-32603`, with a message only, is a
+server shutting down or one with no home or cache directory.
+
+An install already running for the CLI is returned, as `start` returns a
+running update. An install and an update exclude each other: each is refused
+(`busy` for the install) while the other runs.
+
+### Success is the CLI found
+
+npm resolves the channel itself, so `target_version` — the channel's release,
+read from the registry once the install has begun — is only what a client
+shows while it runs, and empty when the registry could not be read. There is
+no `from_version`. The install succeeded when npm exited 0 and the CLI's
+`--version` then reads: `to_version` is that version, and `binary_path` where
+the CLI was found. Nothing caches where a CLI is — `check`, `cli_auth.status`
+and every session start search the PATH afresh — so the next read after a
+success finds it; a client reads both again when it sees an install end, as
+it does for an update.
+
+| `failure.reason` | When |
+|---|---|
+| `permission_denied` | npm could not write its global prefix — its error block names `code EACCES` (Linux, macOS) or `code EPERM` (Windows), usually a prefix owned by root. `detail` is npm's output |
+| `not_on_path` | npm exited 0 but the server still cannot find the CLI: the directory npm puts commands in (its bin directory, or the prefix itself on Windows) is not on the server's PATH. `detail` names the prefix (`npm prefix --global`) when npm says; pockode has to be restarted with that directory on its PATH |
+| `command_failed` | npm exited non-zero for any other reason. `detail` starts with the npm command and its exit status, then npm's output |
+| `timeout` | it ran past the budget; its process tree was killed. `to_version` is read anyway |
+| `other` | anything else — npm could not be started, the installed CLI's `--version` failed, the server shut down — `detail` says what |
+
+`detail` is cut and redacted as an update's is ([above](#success-is-the-target-reached)).
+
 ## One update per CLI per OS user
 
 Every Pockode of the OS user — other projects, the nodes of a cluster —
-updates the same install, and two package managers replacing one directory at
-once can leave neither version whole. So a start takes an exclusive lock on
+updates the same install and installs into the same npm prefix, and two
+package managers replacing one directory at once can leave neither version
+whole. So a start takes an exclusive lock on
 `<user cache dir>/pockode/cli-update-<agent>.lock` (`os.UserCacheDir`:
 `~/.cache`, `~/Library/Caches`, `%LocalAppData%`) and a second Pockode's start is
-refused, not queued. It is an OS file lock (`flock`, `LockFileEx`), so a
-Pockode that crashed mid-update leaves nothing behind — a PID file would. A
-machine without a cache directory refuses every update, saying why.
+refused, not queued. An install takes the same lock, so an update and an
+install of one CLI exclude each other across Pockodes too. It is an OS file
+lock (`flock`, `LockFileEx`), so a Pockode that crashed mid-update leaves
+nothing behind — a PID file would. A machine without a cache directory refuses
+every update and install, saying why.
 
 Within one server the rule is the same without the file: a second `start`
-returns the running update.
+returns the running update, a second `install` the running install, and either
+is refused while the other kind runs.
 
 ## With sign-in
 
-An update and the CLI's sign-in commands exclude each other through
-`cliauth.Service.BeginUpdate`; what each side is refused, and why, is in
+An update or an install and the CLI's sign-in commands exclude each other
+through `cliauth.Service.BeginUpdate`; what each side is refused, and why, is in
 [cli-auth.md](cli-auth.md#one-command-per-cli-at-a-time). `cliupdate` sees
-this as a `Gate`, so it has no dependency on sign-in. Its own checks are held
-off the same way: a check that finds an update running answers
-`updating` without running the CLI, and an update that has begun waits for the
-checks already running `--version` before it runs anything.
+this as a `Gate`, so it has no dependency on sign-in. Sign-in does not know
+the kind: while an install runs, `cli_auth.status` answers `updating` with the
+install's id, and a client that wants to say *installing* reads the record's
+`kind`. The checks are held off the same way: a check that finds an update
+running answers `updating` (an install, `installing`) without running the CLI,
+and an update or install that has begun waits for the checks already running
+`--version` before it runs anything.
 This is per server, like sign-in's own lock: a sign-in on another cluster node
 is not seen.
 
@@ -275,9 +351,11 @@ turns out to happen.
 | registry read | 10s, beside `--version` |
 | `update --help` probe | 10s, inside the update's 10 minutes; running out of it fails as `other`, naming the limit |
 | update command | 10 minutes, everything from the start of the update on; a timed-out one then reads `--version` for up to 10s more |
+| install | the same 10 minutes; `--version` afterwards, and `npm prefix --global` for a `not_on_path` detail, 10s each on top |
 
 `check` is at most the longer of the first two, inside the client's default
-30s. `start`, `dismiss` and `subscribe` run nothing while the client waits.
+30s. `start`, `install`, `dismiss` and `subscribe` run nothing while the
+client waits.
 
 ## What it depends on
 
@@ -292,6 +370,10 @@ Much less than a sign-in does:
   but not silent.
 - `<cli> --version` printing the version (`agent/version.go`).
 - Both packages on npm carrying every release, with the dist-tags above.
+- For an install: `npm install --global` installing the package's commands
+  where the PATH finds them, and npm's error block naming `code EACCES` /
+  `code EPERM` when it cannot write. If that wording changes, a permission
+  failure reads `command_failed` with npm's output — explained, not silent.
 - Claude's `autoUpdatesChannel` keeping its name and values. If it changes,
   a `stable` user is offered the `latest` release, and the update ends
   `not_applied` — explained, not silent.
@@ -303,13 +385,14 @@ them sits beside the sign-in's ([cli-auth.md](cli-auth.md#the-web-client)):
 
 | Path | Holds |
 |------|-------|
-| `web/src/lib/rpc/cliUpdate.ts` | the `cli_update.*` requests |
-| `web/src/lib/cliLoginStore.ts` | the check and latest update per CLI, beside sign-in status and the latest sign-in |
+| `web/src/lib/rpc/cliUpdate.ts` | the `cli_update.*` requests, and `cliInstallRefusedReason`, which reads a refused install's `data.reason` |
+| `web/src/lib/cliLoginStore.ts` | the check and latest update or install per CLI, beside sign-in status and the latest sign-in |
 | `web/src/hooks/useCliUpdateSubscription.ts` | follows a CLI's update into the store while a card shows it |
-| `web/src/components/Settings/sections/CliVersionRow.tsx` | the version row at the foot of each `CliStatusCard`, and the failure copy |
+| `web/src/components/Settings/sections/CliStatusCard.tsx` | one CLI's card: the install and update dialogs, refusals, and which reads are live |
+| `web/src/components/Settings/sections/CliInstallRow.tsx` | the installation row of each `CliStatusCard`, and the failure copy |
 
 One store for both halves because the card's states read both: a running update
-holds the sign-in part still, and a running sign-in holds **Update** off. The
+holds the account row still, and a running sign-in holds **Update** off. The
 revision rule is `applyUpdate`'s, as it is `applyLogin`'s for a sign-in. The
 store keeps the last status that was not `updating` (`settledStatuses`), which
 is what the card shows while an update runs. When it sees an update end that
@@ -317,15 +400,33 @@ it was following, or that it started — a fast one can reach the page ended
 before the start's reply does — it reads the check and `cli_auth.status` again,
 superseding any read still out, and remembers the id (`updatesSeenEnding`):
 only such a success is drawn as *Updated*, and the list is forgotten when
-Settings unmounts. A read answered `updating` that lands after the update it
-names has ended is read once more, so a Refresh sent mid-update cannot leave
-the card held still. A failed check request leaves the
-last check in place and records why in `checkErrors`; it is drawn as
-*Couldn't check*, never as *Up to date*.
+Settings unmounts. A read answered `updating` (or a check answered
+`installing`) that lands after the update it names has ended is read once
+more, so a Refresh sent mid-update cannot leave the card held still. A failed check
+request leaves the last check in place and records why in `checkErrors`; it
+is drawn as *Couldn't check*, never as *Up to date*.
+
+An install is followed as an update is, since it is one: `startInstall` shares
+`startUpdate`'s path (`followStarted`), and its record arrives through the same
+subscription and `applyUpdate`, so its end triggers the same reads. A refused
+install rejects with the server's error; the caller tells the reasons apart
+with `cliInstallRefusedReason` — by code and `data.reason`, never the message,
+which is for showing as it is. An `already_installed` refusal also reads the
+check and status again, because the `not_installed` on screen is stale by then.
+
+The store's re-reads after an install supersede reads still out, but a read
+that already landed mid-install stays in the store until they answer. The card
+therefore sets aside any check or status that `isStaleRead` says belongs to an
+ended update or install — the rule is the same for both, though an install is
+where it shows — and draws from the record and the last settled status in the
+meantime — otherwise the account row would wait on the slower check, and a
+failure's **Try again** would close its own dialog
+([cli-update-ui.md](../cli-update-ui.md#installing-a-missing-cli)).
 
 ## Logged and not logged
 
-An update is logged when it starts (with the path it has to reach) and when it
-ends — from what version to what when it succeeded, the reason and the
+An update or install is logged when it starts (an update with the path it has
+to reach) and when it ends — from what version to what, and where the CLI is, when it
+succeeded, the reason and the
 redacted detail when it failed. A check that
 could not be read is logged unless its client went away.

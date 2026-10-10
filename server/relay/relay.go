@@ -39,6 +39,9 @@ type Config struct {
 	// in with them, since a previewed server knows nothing of Pockode's.
 	Password string
 	Sessions SessionStore
+	// Tickets are the one-time logins the app hands a preview tab, so it
+	// gets a session without the password being typed again.
+	Tickets TicketRedeemer
 }
 
 // SessionStore is what a preview login needs of the app's session store;
@@ -46,6 +49,12 @@ type Config struct {
 type SessionStore interface {
 	Issue() (string, error)
 	Validate(token string) bool
+}
+
+// TicketRedeemer is what a preview login needs of the app's one-time login
+// tickets; authsession.Tickets implements it.
+type TicketRedeemer interface {
+	Redeem(ticket string) bool
 }
 
 type Manager struct {
@@ -159,7 +168,7 @@ func (m *Manager) connectAndRun(ctx context.Context, cfg *StoredConfig) error {
 	// NetConn disables the WebSocket read limit, which is what a byte-stream
 	// tunnel wants: size limits belong to the HTTP layer above it.
 	tunnel := tunnelConn{Conn: websocket.NetConn(ctx, conn, websocket.MessageBinary), ws: conn}
-	return serveTunnel(ctx, tunnel, newLocalProxy(m.backendPort, m.frontendPort, newPreviewSite(cfg), previewAuth{password: m.config.Password, sessions: m.config.Sessions}, m.log), m.log)
+	return serveTunnel(ctx, tunnel, newLocalProxy(m.backendPort, m.frontendPort, newPreviewSite(cfg), previewAuth{password: m.config.Password, sessions: m.config.Sessions, tickets: m.config.Tickets}, m.log), m.log)
 }
 
 // uplinkDialOptions puts the relay token on the upgrade request itself, so the

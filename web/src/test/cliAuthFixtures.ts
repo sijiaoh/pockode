@@ -29,6 +29,7 @@ export function makeUpdate(overrides: Partial<CliUpdate> = {}): CliUpdate {
 	return {
 		id: "update-1",
 		agent: "claude",
+		kind: "update",
 		revision: 1,
 		phase: "running",
 		from_version: "2.1.283",
@@ -109,6 +110,7 @@ export function createFakeCliAuth() {
 			agent ? checks.filter((c) => c.agent === agent) : checks,
 		),
 		cliUpdateStart: vi.fn(),
+		cliUpdateInstall: vi.fn(),
 		cliUpdateDismiss: vi.fn(async (_updateId: string) => {}),
 		cliUpdateSubscribe: vi.fn(
 			async (

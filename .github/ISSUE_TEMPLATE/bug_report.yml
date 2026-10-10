@@ -1,0 +1,84 @@
+name: Bug report
+description: Something in Pockode does not work as expected
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting! Please search [existing issues](https://github.com/sijiaoh/pockode/issues) first.
+        Found a security vulnerability? Do not open an issue — follow [SECURITY.md](https://github.com/sijiaoh/pockode/blob/main/SECURITY.md) instead.
+        Never paste your password or tokens here.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Run `pockode --password ...` in a project
+        2. Open the chat on the phone
+        3. ...
+  - type: input
+    id: version
+    attributes:
+      label: Pockode version
+      description: Output of `pockode -version`.
+      placeholder: pockode v0.20.0
+    validations:
+      required: true
+  - type: dropdown
+    id: backend
+    attributes:
+      label: AI backend
+      options:
+        - Claude Code
+        - Codex
+        - Not related to the AI backend
+    validations:
+      required: true
+  - type: input
+    id: backend-version
+    attributes:
+      label: AI CLI version
+      description: Output of `claude --version` or `codex --version`, if the bug involves the AI backend.
+  - type: dropdown
+    id: run-mode
+    attributes:
+      label: How do you run Pockode?
+      options:
+        - Installed binary (install.sh / install.ps1)
+        - Docker / docker-compose
+        - Cluster mode
+        - Built from source
+    validations:
+      required: true
+  - type: dropdown
+    id: connection
+    attributes:
+      label: How do you connect?
+      options:
+        - Through the relay (default)
+        - Directly on the local network (-relay=false)
+  - type: input
+    id: server-os
+    attributes:
+      label: OS of the machine running Pockode
+      placeholder: macOS 15.5 / Ubuntu 24.04 / Windows 11
+    validations:
+      required: true
+  - type: input
+    id: client
+    attributes:
+      label: Device and browser you use Pockode from
+      placeholder: iPhone 16, Safari / Pixel 9, Chrome / desktop Firefox
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Relevant lines from `.pockode/server.log` in your project (or the `-log-file` path). Remove anything private first.
+      render: text

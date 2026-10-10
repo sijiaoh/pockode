@@ -9,6 +9,7 @@ import type { CliUpdate, CliUpdateCheck } from "../types/cliUpdate";
 import type { AgentType } from "../types/settings";
 import { errorMessage } from "../utils/errorMessage";
 import { AGENT_TYPES } from "./agentType";
+import { cliInstallRefusedReason } from "./rpc";
 import { useWSStore } from "./wsStore";
 
 interface CliLoginState {
@@ -46,11 +47,11 @@ interface CliLoginState {
 	checking: Partial<Record<AgentType, boolean>>;
 	/** Why the last check request failed; cleared by the next check to answer. */
 	checkErrors: Partial<Record<AgentType, string>>;
-	/** The latest update per CLI, as the server last reported it. */
+	/** The latest update or install per CLI, as the server last reported it. */
 	updates: Partial<Record<AgentType, CliUpdate>>;
 	/** Why the CLI's update could not be followed, as `loginErrors`. */
 	updateErrors: Partial<Record<AgentType, string>>;
-	/** Updates this page started, as `startedHere` for sign-ins. */
+	/** Updates and installs this page started, as `startedHere` for sign-ins. */
 	updatesStartedHere: string[];
 	/**
 	 * Updates this page saw running and then saw end. Only these are shown as
@@ -190,13 +191,16 @@ function afterUpdateEnded(
 	}
 }
 
-/** A read answered `updating` for an update known to have ended since. */
-function isStaleRead(
+/**
+ * A read answered `updating` — or, for a check, `installing` — for an update
+ * known to have ended since.
+ */
+export function isStaleRead(
 	read: { state: string; update_id?: string } | undefined,
 	ended: CliUpdate | undefined,
 ): boolean {
 	return (
-		read?.state === "updating" &&
+		(read?.state === "updating" || read?.state === "installing") &&
 		!!ended &&
 		ended.id === read.update_id &&
 		isUpdateEnded(ended)
@@ -232,6 +236,22 @@ function staleAgents(
 			return true;
 		})
 		.map((r) => r.agent);
+}
+
+/** Takes the reply to a start or install as an update this page started. */
+function followStarted(agent: AgentType, update: CliUpdate) {
+	useCliLoginStore.setState((s) => ({
+		updatesStartedHere: s.updatesStartedHere.includes(update.id)
+			? s.updatesStartedHere
+			: [...s.updatesStartedHere, update.id],
+	}));
+	cliLoginActions.applyUpdate(agent, update);
+	// An update over before its start's reply came back ended with nothing
+	// running on this page to see, and the reply lost to the ended copy.
+	const stored = useCliLoginStore.getState().updates[agent];
+	if (stored?.id === update.id && isUpdateEnded(stored)) {
+		afterUpdateEnded(agent, stored, true);
+	}
 }
 
 export const cliLoginActions = {
@@ -447,19 +467,28 @@ export const cliLoginActions = {
 	 * server's reason when it refused — a refused start leaves no record.
 	 */
 	startUpdate: async (agent: AgentType): Promise<void> => {
-		const update = await actions().cliUpdateStart(agent);
-		useCliLoginStore.setState((s) => ({
-			updatesStartedHere: s.updatesStartedHere.includes(update.id)
-				? s.updatesStartedHere
-				: [...s.updatesStartedHere, update.id],
-		}));
-		cliLoginActions.applyUpdate(agent, update);
-		// An update over before its start's reply came back ended with nothing
-		// running on this page to see, and the reply lost to the ended copy.
-		const stored = useCliLoginStore.getState().updates[agent];
-		if (stored?.id === update.id && isUpdateEnded(stored)) {
-			afterUpdateEnded(agent, stored, true);
+		followStarted(agent, await actions().cliUpdateStart(agent));
+	},
+
+	/**
+	 * Starts an install of a CLI the server does not have, or joins the one
+	 * already running; it is followed as an update is. Rejects when the server
+	 * refused, which `cliInstallRefusedReason` tells apart.
+	 */
+	startInstall: async (agent: AgentType): Promise<void> => {
+		let install: CliUpdate;
+		try {
+			install = await actions().cliUpdateInstall(agent);
+		} catch (err) {
+			// The CLI is there after all — installed by hand since the card read
+			// `not_installed` — so what is on screen is stale.
+			if (cliInstallRefusedReason(err) === "already_installed") {
+				void cliLoginActions.refreshCheck(agent);
+				void cliLoginActions.refreshStatus(agent);
+			}
+			throw err;
 		}
+		followStarted(agent, install);
 	},
 
 	/** Drops an ended update for every client. Rejects when the server refused. */

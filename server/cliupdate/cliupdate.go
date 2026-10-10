@@ -1,5 +1,5 @@
 // Package cliupdate tells whether each AI CLI has a newer release and updates
-// it.
+// it, or installs one that is missing.
 //
 // The update itself is the CLI's own `update` command. Both CLIs know how they
 // were installed — Claude Code's native build, npm, Homebrew; Codex's npm, bun,
@@ -48,6 +48,8 @@ func (c CLI) channel() string {
 // the one. BeginUpdate refuses an update the CLI cannot take now (a sign-in is
 // running), and otherwise holds the CLI's other commands off until end: wait
 // is for those already running, and the update runs the CLI only after it.
+// Its refusal is taken for the CLI being busy (ErrBusy): a Gate knows every CLI
+// the Service does, and is closed only after the Service is.
 type Gate interface {
 	BeginUpdate(agentType session.AgentType, updateID string) (wait func(context.Context) error, end func(), err error)
 }
@@ -75,7 +77,10 @@ const (
 	StateNotYetAvailable State = "not_yet_available"
 	// StateUpdating is a CLI with an update running; UpdateID names it. The
 	// versions are not read meanwhile: the files are being replaced.
-	StateUpdating     State = "updating"
+	StateUpdating State = "updating"
+	// StateInstalling is a CLI with an install running; UpdateID names it, an
+	// Update of KindInstall.
+	StateInstalling   State = "installing"
 	StateNotInstalled State = "not_installed"
 	// StateUnavailable is a check that could not tell: the installed or the
 	// latest version could not be read. Error says which, and whichever could
@@ -96,7 +101,8 @@ type Check struct {
 	Channel string `json:"channel"`
 	// Error is why, with StateUnavailable and StateNotInstalled.
 	Error string `json:"error,omitempty"`
-	// UpdateID is the running update, with StateUpdating.
+	// UpdateID is the running update, with StateUpdating, or the running
+	// install, with StateInstalling.
 	UpdateID string `json:"update_id,omitempty"`
 	// RunningSessions is how many of this server's sessions have a process of
 	// this CLI running right now. They go on with the version they started
@@ -112,12 +118,28 @@ var (
 	// ErrShuttingDown is an update asked for after the server began shutting
 	// down.
 	ErrShuttingDown = errors.New("the server is shutting down")
-	// ErrUpdatingElsewhere is an update refused because another Pockode on
-	// this machine is updating the same CLI.
-	ErrUpdatingElsewhere = errors.New("is being updated by another Pockode on this machine")
+	// ErrUpdatingElsewhere is an update or install refused because another
+	// Pockode on this machine is updating or installing the same CLI.
+	ErrUpdatingElsewhere = errors.New("is being updated or installed by another Pockode on this machine")
 	ErrUpdateNotFound    = errors.New("no such update; it may have been replaced by a newer one")
 	ErrUpdateRunning     = errors.New("the update is still running")
+	// ErrBusy is what every start refused because the CLI is busy with
+	// something else matches: an install while an update runs or the other way
+	// round, another Pockode's (ErrUpdatingElsewhere), or a sign-in. Repeating
+	// the start once that has ended works.
+	ErrBusy = errors.New("the CLI is busy")
+	// ErrAlreadyInstalled is an install of a CLI this server already finds.
+	ErrAlreadyInstalled = errors.New("is already installed")
+	// ErrInstallerNotFound is an install refused because npm, which installs
+	// every CLI, is not on this server's PATH.
+	ErrInstallerNotFound = errors.New("npm not found")
 )
+
+// busyError marks a refusal as ErrBusy while keeping its own message.
+type busyError struct{ error }
+
+func (e busyError) Is(target error) bool { return target == ErrBusy }
+func (e busyError) Unwrap() error        { return e.error }
 
 // Service checks and updates every registered CLI.
 type Service struct {
@@ -131,6 +153,8 @@ type Service struct {
 	// the user has no home directory, which refuses every update.
 	updateDir    string
 	updateDirErr error
+	// installer is the npm an install runs; "npm" everywhere but in tests.
+	installer string
 	// lockDir holds the machine-wide update locks, one file per CLI: every
 	// Pockode of the OS user — other projects, other cluster nodes — updates
 	// the same install, and two package managers replacing one directory at
@@ -208,6 +232,7 @@ func NewService(log *slog.Logger, sessions SessionCounter, gate Gate) *Service {
 		gate:          gate,
 		updateDir:     home,
 		updateDirErr:  homeErr,
+		installer:     "npm",
 		lockDir:       lockDir,
 		lockDirErr:    lockDirErr,
 		updates:       make(map[session.AgentType]*Update),
@@ -266,6 +291,9 @@ func (s *Service) check(ctx context.Context, agentType session.AgentType) Check 
 	s.updatesMu.Unlock()
 	if running != nil {
 		c.State = StateUpdating
+		if running.Kind == KindInstall {
+			c.State = StateInstalling
+		}
 		c.UpdateID = running.ID
 		return c
 	}

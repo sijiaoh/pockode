@@ -263,6 +263,10 @@ Flags:
 		slog.Error("failed to initialize session store", "error", err)
 		os.Exit(1)
 	}
+	// One-time tickets a logged-in app hands to a port preview tab. They are
+	// issued over the WebSocket and redeemed on the preview host, which must
+	// therefore share this one set.
+	previewTickets := authsession.NewTickets()
 
 	if *gitEnabledFlag {
 		gitCfg := git.Config{
@@ -436,6 +440,7 @@ Flags:
 			ClientVersion: version,
 			Password:      cred.Password,
 			Sessions:      sessions,
+			Tickets:       previewTickets,
 		}
 
 		frontendPort := *relayFrontendPortFlag
@@ -455,7 +460,7 @@ Flags:
 		slog.Info("remote access enabled", "url", remoteURL)
 	}
 
-	wsHandler := ws.NewRPCHandler(cred.Password, sessions, version, remoteURL, devMode, commandStore, worktreeManager, settingsStore, workStore, workOps, workEngine, agentRoleStore, cliAuth, cliUpdate)
+	wsHandler := ws.NewRPCHandler(cred.Password, sessions, version, remoteURL, previewTickets, devMode, commandStore, worktreeManager, settingsStore, workStore, workOps, workEngine, agentRoleStore, cliAuth, cliUpdate)
 	transferHandler := filetransfer.NewHandler(registry, slog.Default())
 	attachmentHandler := filetransfer.NewAttachmentHandler(worktreeManager, worktree.ErrWorktreeNotFound, worktree.ErrSessionNotFound, slog.Default())
 	handler := newHandler(cred.Password, sessions, devMode, wsHandler, mcpHandler, transferHandler, attachmentHandler)
@@ -500,11 +505,13 @@ Flags:
 			slog.Error("server shutdown error", "error", err)
 		}
 		wsHandler.Stop()
+		// An update still running is killed rather than waited for: a download
+		// on a slow connection would hold the shutdown for minutes. Closed
+		// before sign-ins, so that a start in between is refused as the
+		// shutdown it is, not as a CLI the closed sign-in gate calls busy.
+		cliUpdate.Close()
 		// Sign-ins end with the server; their CLIs are not left waiting.
 		cliAuth.Close()
-		// An update still running is killed rather than waited for: a download
-		// on a slow connection would hold the shutdown for minutes.
-		cliUpdate.Close()
 		if err := sessions.Flush(); err != nil {
 			slog.Error("failed to persist sessions", "error", err)
 		}

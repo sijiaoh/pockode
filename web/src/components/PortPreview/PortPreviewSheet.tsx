@@ -2,11 +2,12 @@ import { useHasCoarsePointer } from "@pockode/shared";
 import { ExternalLink, X } from "lucide-react";
 import { useEffect, useId, useRef, useState } from "react";
 import { flushSync } from "react-dom";
-import { openInNewTab, parsePort, previewUrl } from "../../lib/portPreview";
+import { openPreviewTab, parsePort, previewUrl } from "../../lib/portPreview";
 import {
 	portPreviewActions,
 	usePortPreviewStore,
 } from "../../lib/portPreviewStore";
+import { wsActions } from "../../lib/wsStore";
 import { iconButtonClass, Sheet } from "../ui";
 import { inputClass } from "../ui/inputClass";
 
@@ -48,7 +49,7 @@ function PortPreviewSheet({ remoteUrl, onClose }: Props) {
 		// Recorded before opening, so a blocked tab leaves a link in Recent —
 		// and a link click is never blocked.
 		portPreviewActions.recordPort(port);
-		if (openInNewTab(url)) {
+		if (openPreviewTab(url, wsActions.portPreviewTicket)) {
 			onClose();
 		} else {
 			setBlockedCount((n) => n + 1);
@@ -168,7 +169,8 @@ function PortPreviewSheet({ remoteUrl, onClose }: Props) {
 				)}
 
 				<p className="text-xs text-th-text-muted">
-					The first visit to each port asks for your Pockode password.
+					Previews open already logged in. A port opened another way, such as a
+					copied link, asks for your Pockode password once.
 				</p>
 			</div>
 		</Sheet>
@@ -177,8 +179,12 @@ function PortPreviewSheet({ remoteUrl, onClose }: Props) {
 
 /**
  * A native link rather than a button calling `window.open`: a link click is
- * never blocked, and it keeps long-press and middle-click. The remove button
- * is its sibling, since interactive elements must not nest.
+ * never blocked, and it keeps long-press and middle-click. A plain click opens
+ * the tab logged in instead, falling back to the link when the tab is blocked;
+ * everything else — a modified or middle click, a long-press menu — is the
+ * link's own and lands on the password page of a port not yet logged in. The
+ * ticket never goes in the `href`, which can be copied. The remove button is
+ * its sibling, since interactive elements must not nest.
  */
 function RecentPortRow({
 	port,
@@ -199,7 +205,13 @@ function RecentPortRow({
 				href={href}
 				target="_blank"
 				rel="noopener noreferrer"
-				onClick={() => {
+				onClick={(e) => {
+					if (
+						isPlainClick(e) &&
+						openPreviewTab(href, wsActions.portPreviewTicket)
+					) {
+						e.preventDefault();
+					}
 					portPreviewActions.recordPort(port);
 					onOpen();
 				}}
@@ -223,6 +235,10 @@ function RecentPortRow({
 			</button>
 		</li>
 	);
+}
+
+function isPlainClick(e: React.MouseEvent): boolean {
+	return e.button === 0 && !(e.metaKey || e.ctrlKey || e.shiftKey || e.altKey);
 }
 
 export default PortPreviewSheet;

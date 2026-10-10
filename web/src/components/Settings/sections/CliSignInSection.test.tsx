@@ -1,5 +1,6 @@
-import { render, screen, within } from "@testing-library/react";
+import { act, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { JSONRPCErrorException } from "json-rpc-2.0";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	createFakeCliAuth,
@@ -9,7 +10,7 @@ import {
 	resetCliLoginStore,
 } from "../../../test/cliAuthFixtures";
 import type { CliAuthStatus } from "../../../types/cliAuth";
-import type { CliUpdateCheck } from "../../../types/cliUpdate";
+import type { CliUpdate, CliUpdateCheck } from "../../../types/cliUpdate";
 import CliSignInSection from "./CliSignInSection";
 
 const ws = vi.hoisted(() => ({ actions: {} as Record<string, unknown> }));
@@ -40,6 +41,20 @@ async function card(name: string) {
 	return within(item);
 }
 
+/**
+ * Finds a row by its title and checks the line under it: every row is the two
+ * lines, whatever its state.
+ */
+async function findRow(
+	scope: Awaited<ReturnType<typeof card>>,
+	title: string,
+	subtitle: string,
+) {
+	const line = await scope.findByText(title, { selector: "p" });
+	expect(line.nextElementSibling).toHaveTextContent(subtitle);
+	return line;
+}
+
 function renderWith(
 	claude: Omit<CliAuthStatus, "agent">,
 	codex?: Omit<CliAuthStatus, "agent">,
@@ -63,25 +78,45 @@ describe("CliSignInSection", () => {
 		);
 
 		const claude = await card("Claude");
-		expect(
-			await claude.findByText("Signed in · ada@example.com · Max"),
-		).toBeInTheDocument();
+		await findRow(claude, "Signed in", "ada@example.com · Max");
 		expect(
 			claude.getByRole("button", { name: "Sign out" }),
 		).toBeInTheDocument();
 
 		const codex = await card("Codex");
-		expect(codex.getByText("Not signed in")).toBeInTheDocument();
+		await findRow(codex, "Not signed in", "Sign in to use Codex");
 		expect(codex.getByRole("button", { name: "Sign in" })).toBeInTheDocument();
 
 		const headings = screen.getAllByRole("heading").map((h) => h.textContent);
 		expect(headings).toEqual(["Claude", "Codex"]);
 	});
 
+	// The rows are there from the first paint, holding the place of the values
+	// they wait for, so nothing moves when the answers land.
+	it("draws both rows of every card while nothing has been read", async () => {
+		server.actions.cliAuthStatus.mockReturnValue(new Promise(() => {}));
+		server.actions.cliUpdateCheck.mockReturnValue(new Promise(() => {}));
+		render(<CliSignInSection />);
+
+		for (const name of ["Claude", "Codex"]) {
+			const scope = await card(name);
+			expect(
+				scope.getByRole("status", { name: `Checking ${name} version` }),
+			).toBeInTheDocument();
+			expect(
+				scope.getByRole("status", {
+					name: `Checking ${name} sign-in status`,
+				}),
+			).toBeInTheDocument();
+			expect(scope.queryByRole("button")).not.toBeInTheDocument();
+		}
+	});
+
 	it("says nothing about an account the CLI did not report", async () => {
 		renderWith({ state: "signed_in", account: { plan: "unknown" } });
 		const claude = await card("Claude");
 		expect(await claude.findByText("Signed in")).toBeInTheDocument();
+		expect(claude.queryByText(/unknown/i)).not.toBeInTheDocument();
 	});
 
 	// Guessing "Not signed in" would send the user into a sign-in that cannot
@@ -91,9 +126,8 @@ describe("CliSignInSection", () => {
 		renderWith({ state: "unavailable", error: "claude auth status timed out" });
 
 		const claude = await card("Claude");
-		expect(
-			await claude.findByText("Couldn't read sign-in status"),
-		).toBeInTheDocument();
+		await findRow(claude, "Couldn't read sign-in status", "Retry, or refresh");
+		// The reason is on the screen, not behind a hover.
 		expect(
 			claude.getByText("claude auth status timed out"),
 		).toBeInTheDocument();
@@ -114,11 +148,13 @@ describe("CliSignInSection", () => {
 		);
 
 		const claude = await card("Claude");
+		await findRow(claude, "Managed outside Pockode", "ANTHROPIC_API_KEY");
 		expect(
-			await claude.findByText("Managed outside Pockode"),
+			claude.getByText(/from the server's environment\. Change it/),
 		).toBeInTheDocument();
-		expect(claude.getByText("ANTHROPIC_API_KEY")).toBeInTheDocument();
-		expect(claude.queryByRole("button")).not.toBeInTheDocument();
+		expect(
+			claude.queryByRole("button", { name: /Sign in|Sign out/ }),
+		).not.toBeInTheDocument();
 
 		const codex = await card("Codex");
 		expect(
@@ -128,18 +164,20 @@ describe("CliSignInSection", () => {
 		).toBeInTheDocument();
 	});
 
-	it("points a missing CLI at its install page", async () => {
+	it("offers to install a missing CLI, with sign-in waiting for it", async () => {
 		renderWith({ state: "not_installed", error: "claude CLI not found" });
 		const claude = await card("Claude");
-		expect(await claude.findByText("Not installed")).toBeInTheDocument();
+		await findRow(claude, "Not installed", "Installs with npm");
+		expect(claude.getByRole("button", { name: "Install" })).toBeInTheDocument();
+		await findRow(claude, "Sign-in", "Available once Claude is installed");
 		expect(
-			claude.getByRole("link", { name: /Install instructions/ }),
-		).toHaveAttribute("href", expect.stringContaining("https://"));
+			claude.queryByRole("button", { name: "Sign in" }),
+		).not.toBeInTheDocument();
 	});
 
 	// After a reload the same phone is a new page: what matters is that the
 	// flow is running and can be picked up.
-	it("offers to continue or cancel a sign-in started earlier", async () => {
+	it("offers to continue a sign-in started earlier, and cancel it from the sheet", async () => {
 		const user = userEvent.setup();
 		server.setLatest(makeLogin({ id: "codex-1" }));
 		renderWith(
@@ -148,14 +186,21 @@ describe("CliSignInSection", () => {
 		);
 
 		const codex = await card("Codex");
-		expect(await codex.findByText("Signing in…")).toBeInTheDocument();
-		expect(codex.getByText("Started earlier.")).toBeInTheDocument();
+		await findRow(codex, "Signing in…", "Started earlier.");
+		// Two buttons don't fit beside the line on a phone: Cancel is the sheet's.
+		expect(
+			codex.queryByRole("button", { name: "Cancel" }),
+		).not.toBeInTheDocument();
 
 		server.actions.cliLoginCancel.mockResolvedValue(
 			makeLogin({ id: "codex-1", revision: 2, phase: "canceled" }),
 		);
 		server.setStatuses([{ agent: "codex", state: "signed_out" }]);
-		await user.click(codex.getByRole("button", { name: "Cancel" }));
+		await user.click(codex.getByRole("button", { name: "Continue" }));
+		const sheet = await screen.findByRole("dialog", {
+			name: "Sign in to Codex",
+		});
+		await user.click(within(sheet).getByRole("button", { name: "Cancel" }));
 
 		expect(server.actions.cliLoginCancel).toHaveBeenCalledWith("codex-1");
 		expect(await codex.findByText("Not signed in")).toBeInTheDocument();
@@ -300,13 +345,13 @@ describe("CliSignInSection", () => {
 		}
 
 		it.each([
-			[{ state: "up_to_date" as const }, "Version 2.1.283 · Up to date"],
-			[{}, "Version 2.1.283 · 2.1.290 available"],
-			[{ channel: "stable" }, "Version 2.1.283 · 2.1.290 available on stable"],
-		])("draws a check of %o", async (check, line) => {
+			[{ state: "up_to_date" as const }, "Up to date"],
+			[{}, "2.1.290 available"],
+			[{ channel: "stable" }, "2.1.290 on stable"],
+		])("draws a check of %o", async (check, state) => {
 			renderChecked(check);
 			const claude = await card("Claude");
-			expect(await claude.findByText(line)).toBeInTheDocument();
+			await findRow(claude, "Version 2.1.283", state);
 		});
 
 		// "Couldn't check" is never folded into the benign "Up to date".
@@ -317,9 +362,7 @@ describe("CliSignInSection", () => {
 				error: "registry.npmjs.org: no such host",
 			});
 			const claude = await card("Claude");
-			expect(
-				await claude.findByText("Version 2.1.283 · Couldn't check for updates"),
-			).toBeInTheDocument();
+			await findRow(claude, "Version 2.1.283", "Couldn't check for updates");
 			expect(
 				claude.getByText("registry.npmjs.org: no such host"),
 			).toBeInTheDocument();
@@ -335,9 +378,7 @@ describe("CliSignInSection", () => {
 			);
 			renderWith({ state: "signed_in", version: "2.1.283" });
 			const claude = await card("Claude");
-			expect(
-				await claude.findByText("Version 2.1.283 · Couldn't check for updates"),
-			).toBeInTheDocument();
+			await findRow(claude, "Version 2.1.283", "Couldn't check for updates");
 			expect(claude.getByText("Request timed out")).toBeInTheDocument();
 		});
 
@@ -345,23 +386,25 @@ describe("CliSignInSection", () => {
 			[
 				"an unreadable version",
 				{ state: "unavailable" as const, version: undefined, error: "exit 1" },
-				"Couldn't read the installed version",
+				"Couldn't read the version",
+				"Version unknown",
 			],
 			[
 				"a release this install hasn't got",
 				{ state: "not_yet_available" as const },
-				"Version 2.1.283 · 2.1.290 is out",
+				"Version 2.1.283",
+				"2.1.290 is out · not reachable yet",
 			],
-		])("offers no update for %s", async (_, check, line) => {
+		])("offers no update for %s", async (_, check, title, subtitle) => {
 			renderChecked(check);
 			const claude = await card("Claude");
-			expect(await claude.findByText(line)).toBeInTheDocument();
+			await findRow(claude, title, subtitle);
 			expect(
 				claude.queryByRole("button", { name: "Update" }),
 			).not.toBeInTheDocument();
 		});
 
-		it("draws no version row for a CLI that isn't installed", async () => {
+		it("draws no version for a CLI that isn't installed", async () => {
 			renderChecked(
 				{
 					state: "not_installed",
@@ -449,9 +492,7 @@ describe("CliSignInSection", () => {
 			// answered the same, did not take it away.
 			server.setChecks([claudeCheck({ state: "up_to_date" })]);
 			await user.click(screen.getByRole("button", { name: "Refresh" }));
-			expect(
-				await claude.findByText("Version 2.1.283 · Up to date"),
-			).toBeInTheDocument();
+			await findRow(claude, "Version 2.1.283", "Up to date");
 			expect(claude.queryByRole("alert")).not.toBeInTheDocument();
 		});
 
@@ -469,12 +510,7 @@ describe("CliSignInSection", () => {
 				await claude.findByText("Updating Claude…", { selector: "p" }),
 			).toBeInTheDocument();
 			expect(claude.getByText("Started earlier.")).toBeInTheDocument();
-			expect(
-				claude.getByText("Signed in · ada@example.com"),
-			).toBeInTheDocument();
-			expect(
-				claude.getByText("Wait for the update to finish."),
-			).toBeInTheDocument();
+			await findRow(claude, "Signed in", "Wait for the update to finish.");
 			expect(
 				claude.queryByRole("button", { name: "Sign out" }),
 			).not.toBeInTheDocument();
@@ -493,9 +529,7 @@ describe("CliSignInSection", () => {
 			);
 
 			const claude = await card("Claude");
-			expect(
-				await claude.findByText("Sign-in status is checked after the update."),
-			).toBeInTheDocument();
+			await findRow(claude, "Sign-in", "Checked after the update.");
 			expect(claude.queryByRole("button")).not.toBeInTheDocument();
 		});
 
@@ -504,9 +538,11 @@ describe("CliSignInSection", () => {
 			renderChecked({}, { state: "signing_in", login_id: "claude-1" });
 
 			const claude = await card("Claude");
-			expect(
-				await claude.findByText("Finish or cancel the sign-in first."),
-			).toBeInTheDocument();
+			await findRow(
+				claude,
+				"Version 2.1.283",
+				"2.1.290 · update after sign-in",
+			);
 			expect(
 				claude.queryByRole("button", { name: "Update" }),
 			).not.toBeInTheDocument();
@@ -535,11 +571,7 @@ describe("CliSignInSection", () => {
 				makeUpdate({ revision: 2, phase: "succeeded", to_version: "2.1.290" }),
 			);
 
-			expect(
-				await claude.findByText("Updated from 2.1.283 to 2.1.290", {
-					selector: "p",
-				}),
-			).toBeInTheDocument();
+			await findRow(claude, "Updated to 2.1.290", "from 2.1.283");
 			expect(claude.getByRole("status")).toBe(status);
 			expect(status).toHaveTextContent("Updated from 2.1.283 to 2.1.290");
 			await vi.waitFor(() =>
@@ -566,11 +598,10 @@ describe("CliSignInSection", () => {
 				"claude",
 				makeUpdate({ revision: 2, phase: "succeeded", to_version: "2.1.283" }),
 			);
-			expect(
-				await claude.findByText("Claude was already up to date (2.1.283)", {
-					selector: "p",
-				}),
-			).toBeInTheDocument();
+			await findRow(claude, "Already up to date", "Version 2.1.283");
+			expect(claude.getByRole("status")).toHaveTextContent(
+				"Claude was already up to date (2.1.283)",
+			);
 		});
 
 		// "Updated" is the confirmation on the screen that watched; it goes when
@@ -593,19 +624,13 @@ describe("CliSignInSection", () => {
 				"claude",
 				makeUpdate({ revision: 2, phase: "succeeded", to_version: "2.1.290" }),
 			);
-			expect(
-				await claude.findByText("Updated from 2.1.283 to 2.1.290", {
-					selector: "p",
-				}),
-			).toBeInTheDocument();
+			await findRow(claude, "Updated to 2.1.290", "from 2.1.283");
 
 			unmount();
 			render(<CliSignInSection />);
 			const again = await card("Claude");
-			expect(
-				await again.findByText("Version 2.1.290 · Up to date"),
-			).toBeInTheDocument();
-			expect(again.queryByText(/Updated from/)).not.toBeInTheDocument();
+			await findRow(again, "Version 2.1.290", "Up to date");
+			expect(again.queryByText(/Updated/)).not.toBeInTheDocument();
 		});
 
 		// The update runs on the server; a page that left and came back, or
@@ -646,9 +671,7 @@ describe("CliSignInSection", () => {
 			server.actions.cliUpdateCheck.mockReturnValue(new Promise(() => {}));
 			renderWith({ state: "signed_in", version: "2.1.283" });
 			const claude = await card("Claude");
-			expect(
-				await claude.findByText("Version 2.1.283 · Checking for updates…"),
-			).toBeInTheDocument();
+			await findRow(claude, "Version 2.1.283", "Checking for updates…");
 		});
 
 		it("leaves a success that ended before the page came to the screen that saw it", async () => {
@@ -659,10 +682,8 @@ describe("CliSignInSection", () => {
 			renderChecked({ state: "up_to_date", version: "2.1.290" });
 
 			const claude = await card("Claude");
-			expect(
-				await claude.findByText("Version 2.1.290 · Up to date"),
-			).toBeInTheDocument();
-			expect(claude.queryByText(/Updated from/)).not.toBeInTheDocument();
+			await findRow(claude, "Version 2.1.290", "Up to date");
+			expect(claude.queryByText(/Updated/)).not.toBeInTheDocument();
 		});
 
 		describe("a failed update", () => {
@@ -691,9 +712,7 @@ describe("CliSignInSection", () => {
 				expect(server.actions.cliUpdateDismiss).toHaveBeenCalledWith(
 					"update-1",
 				);
-				expect(
-					await claude.findByText("Version 2.1.283 · 2.1.290 available"),
-				).toBeInTheDocument();
+				await findRow(claude, "Version 2.1.283", "2.1.290 available");
 			});
 
 			// Someone changed the CLI since: the failure is about a version gone.
@@ -705,9 +724,7 @@ describe("CliSignInSection", () => {
 				renderChecked({ state: "up_to_date", version: "2.1.290" });
 
 				const claude = await card("Claude");
-				expect(
-					await claude.findByText("Version 2.1.290 · Up to date"),
-				).toBeInTheDocument();
+				await findRow(claude, "Version 2.1.290", "Up to date");
 				expect(
 					claude.queryByText("The update took too long"),
 				).not.toBeInTheDocument();
@@ -755,7 +772,7 @@ describe("CliSignInSection", () => {
 				).toBeInTheDocument();
 			});
 
-			it("points a CLI that went missing at its install page", async () => {
+			it("offers to install a CLI that went missing", async () => {
 				server.setLatestUpdate(
 					"claude",
 					makeUpdate({ phase: "failed", failure: { reason: "not_installed" } }),
@@ -769,11 +786,35 @@ describe("CliSignInSection", () => {
 				expect(
 					await claude.findByText("Claude wasn't found", { selector: "p" }),
 				).toBeInTheDocument();
+				await userEvent
+					.setup()
+					.click(claude.getByRole("button", { name: "Install" }));
 				expect(
-					claude.getAllByRole("link", { name: /Install instructions/ }),
-				).not.toHaveLength(0);
+					await screen.findByRole("dialog", { name: "Install Claude?" }),
+				).toBeInTheDocument();
 				expect(
 					claude.getByRole("button", { name: "Dismiss" }),
+				).toBeInTheDocument();
+			});
+
+			// The check and status held from before the update still say it is there.
+			it("treats the CLI as missing before it is read again", async () => {
+				server.setLatestUpdate(
+					"claude",
+					makeUpdate({ phase: "failed", failure: { reason: "not_installed" } }),
+				);
+				renderChecked({}, { state: "signed_out" });
+
+				const claude = await card("Claude");
+				await findRow(claude, "Sign-in", "Available once Claude is installed");
+				expect(
+					claude.queryByRole("button", { name: "Sign in" }),
+				).not.toBeInTheDocument();
+				await userEvent
+					.setup()
+					.click(claude.getByRole("button", { name: "Install" }));
+				expect(
+					await screen.findByRole("dialog", { name: "Install Claude?" }),
 				).toBeInTheDocument();
 			});
 
@@ -863,9 +904,9 @@ describe("CliSignInSection", () => {
 
 				const claude = await card("Claude");
 				const heading = await claude.findByText(title, { selector: "p" });
-				const row = heading.closest("div.border-t");
-				if (!(row instanceof HTMLElement)) throw new Error("no version row");
-				expect(row).toHaveTextContent(body);
+				const item = heading.closest("li");
+				if (!item) throw new Error("no card");
+				expect(item).toHaveTextContent(body);
 				expect(
 					claude.queryByRole("button", { name: "Try again" }) !== null,
 				).toBe(tryAgain);
@@ -892,6 +933,447 @@ describe("CliSignInSection", () => {
 				expect(
 					claude.getByText("Successfully updated to 2.1.290"),
 				).toBeVisible();
+			});
+		});
+	});
+
+	describe("installing a missing CLI", () => {
+		const missing: CliUpdateCheck = {
+			agent: "claude",
+			state: "not_installed",
+			channel: "latest",
+			running_sessions: 0,
+		};
+		const installed: CliUpdateCheck = {
+			...missing,
+			state: "up_to_date",
+			version: "2.1.290",
+			latest_version: "2.1.290",
+		};
+
+		function makeInstall(overrides: Partial<CliUpdate> = {}): CliUpdate {
+			return makeUpdate({
+				kind: "install",
+				from_version: undefined,
+				binary_path: undefined,
+				...overrides,
+			});
+		}
+
+		function renderMissing() {
+			server.setChecks([missing]);
+			return renderWith({ state: "not_installed" });
+		}
+
+		async function confirmInstall() {
+			const user = userEvent.setup();
+			const claude = await card("Claude");
+			await user.click(await claude.findByRole("button", { name: "Install" }));
+			const dialog = await screen.findByRole("dialog", {
+				name: "Install Claude?",
+			});
+			await user.click(within(dialog).getByRole("button", { name: "Install" }));
+			return claude;
+		}
+
+		function refusal(reason: string, message: string) {
+			return new JSONRPCErrorException(message, -32003, { reason });
+		}
+
+		it("confirms, shows the install running, then the CLI ready to sign in to", async () => {
+			const user = userEvent.setup();
+			renderMissing();
+			// Past two minutes: npm's silence no longer looks like progress.
+			server.actions.cliUpdateInstall.mockResolvedValue(
+				makeInstall({
+					started_at: new Date(Date.now() - 130_000).toISOString(),
+				}),
+			);
+
+			const claude = await card("Claude");
+			await user.click(await claude.findByRole("button", { name: "Install" }));
+			const dialog = await screen.findByRole("dialog", {
+				name: "Install Claude?",
+			});
+			expect(dialog).toHaveTextContent(
+				"npm install --global for the latest Claude (latest channel)",
+			);
+			expect(dialog).toHaveTextContent("every project and cluster node");
+			expect(server.actions.cliUpdateInstall).not.toHaveBeenCalled();
+			await user.click(within(dialog).getByRole("button", { name: "Install" }));
+
+			expect(server.actions.cliUpdateInstall).toHaveBeenCalledWith("claude");
+			await findRow(claude, "Installing Claude 2.1.290…", "· up to 10 min");
+			const status = claude.getByRole("status");
+			expect(status).toHaveTextContent("Installing Claude 2.1.290…");
+			await findRow(claude, "Sign-in", "Available once Claude is installed");
+			expect(claude.queryByRole("button")).not.toBeInTheDocument();
+
+			// The reads the ending sets off are held, to see the card between.
+			let answerCheck = () => {};
+			let answerStatus = () => {};
+			server.actions.cliUpdateCheck.mockImplementationOnce(
+				() =>
+					new Promise((resolve) => {
+						answerCheck = () => resolve([installed]);
+					}),
+			);
+			server.actions.cliAuthStatus.mockImplementationOnce(
+				() =>
+					new Promise((resolve) => {
+						answerStatus = () =>
+							resolve([
+								{ agent: "claude", state: "signed_out", version: "2.1.290" },
+							]);
+					}),
+			);
+			server.pushUpdate(
+				"claude",
+				makeInstall({
+					revision: 2,
+					phase: "succeeded",
+					to_version: "2.1.290",
+				}),
+			);
+
+			await findRow(
+				claude,
+				"Installed Claude 2.1.290",
+				"Checking for updates…",
+			);
+			expect(status).toHaveTextContent("Installed Claude 2.1.290");
+			expect(
+				claude.getByRole("status", { name: "Checking Claude sign-in status" }),
+			).toBeInTheDocument();
+
+			act(() => {
+				answerCheck();
+				answerStatus();
+			});
+			await findRow(
+				claude,
+				"Installed Claude 2.1.290",
+				"Version 2.1.290 · Up to date",
+			);
+			await findRow(claude, "Not signed in", "Sign in to use Claude");
+			expect(claude.getByRole("button", { name: "Sign in" })).toBeEnabled();
+		});
+
+		it("shows an install started elsewhere, with sign-in waiting for it", async () => {
+			server.setLatestUpdate(
+				"claude",
+				makeInstall({ target_version: undefined }),
+			);
+			server.setChecks([
+				{ ...missing, state: "installing", update_id: "update-1" },
+			]);
+			renderWith({ state: "updating", update_id: "update-1" });
+
+			const claude = await card("Claude");
+			await findRow(claude, "Installing Claude…", "Started earlier.");
+			await findRow(claude, "Sign-in", "Available once Claude is installed");
+			expect(claude.queryByRole("button")).not.toBeInTheDocument();
+		});
+
+		// Coming back to the page mid-install reads `installing` and `updating`
+		// for it; once it has ended, those reads are history.
+		describe("after reads taken while it ran", () => {
+			function renderRunning() {
+				server.setLatestUpdate("claude", makeInstall());
+				server.setChecks([
+					{ ...missing, state: "installing", update_id: "update-1" },
+				]);
+				return renderWith({ state: "updating", update_id: "update-1" });
+			}
+
+			function holdCheck() {
+				server.actions.cliUpdateCheck.mockImplementation(
+					() => new Promise(() => {}),
+				);
+			}
+
+			it("shows the sign-in as soon as it is read, without waiting for the check", async () => {
+				renderRunning();
+				const claude = await card("Claude");
+				await findRow(claude, "Installing Claude 2.1.290…", "Started earlier.");
+
+				holdCheck();
+				server.setStatuses([{ agent: "claude", state: "signed_out" }]);
+				server.pushUpdate(
+					"claude",
+					makeInstall({
+						revision: 2,
+						phase: "succeeded",
+						to_version: "2.1.290",
+					}),
+				);
+
+				await findRow(claude, "Not signed in", "Sign in to use Claude");
+				await findRow(
+					claude,
+					"Installed Claude 2.1.290",
+					"Checking for updates…",
+				);
+			});
+
+			it("lets Try again open the dialog", async () => {
+				const user = userEvent.setup();
+				renderRunning();
+				const claude = await card("Claude");
+				await findRow(claude, "Installing Claude 2.1.290…", "Started earlier.");
+
+				holdCheck();
+				server.actions.cliAuthStatus.mockImplementation(
+					() => new Promise(() => {}),
+				);
+				server.pushUpdate(
+					"claude",
+					makeInstall({
+						revision: 2,
+						phase: "failed",
+						failure: { reason: "timeout" },
+					}),
+				);
+
+				await user.click(
+					await claude.findByRole("button", { name: "Try again" }),
+				);
+				expect(
+					await screen.findByRole("dialog", { name: "Install Claude?" }),
+				).toBeInTheDocument();
+			});
+		});
+
+		it("says so when the check after an install fails", async () => {
+			server.setLatestUpdate("claude", makeInstall());
+			renderMissing();
+			const claude = await card("Claude");
+			await findRow(claude, "Installing Claude 2.1.290…", "Started earlier.");
+
+			server.actions.cliUpdateCheck.mockRejectedValue(
+				new Error("connection lost"),
+			);
+			server.pushUpdate(
+				"claude",
+				makeInstall({ revision: 2, phase: "succeeded", to_version: "2.1.290" }),
+			);
+
+			await findRow(
+				claude,
+				"Installed Claude 2.1.290",
+				"Couldn't check for updates",
+			);
+			expect(claude.getByText(/connection lost/)).toBeInTheDocument();
+		});
+
+		describe("refused", () => {
+			it("says npm is missing, pointing at the other ways", async () => {
+				renderMissing();
+				server.actions.cliUpdateInstall.mockRejectedValue(
+					refusal(
+						"npm_not_found",
+						"npm was not found on the server's PATH; install Node.js and restart pockode",
+					),
+				);
+				const claude = await confirmInstall();
+
+				expect(await claude.findByRole("alert")).toHaveTextContent(
+					"npm was not found on the server's PATH",
+				);
+				expect(
+					claude.getByRole("link", { name: /Install instructions/ }),
+				).toBeInTheDocument();
+				expect(claude.getByRole("button", { name: "Install" })).toBeEnabled();
+			});
+
+			it("says the CLI is busy, without pointing elsewhere", async () => {
+				renderMissing();
+				server.actions.cliUpdateInstall.mockRejectedValue(
+					refusal("busy", "claude is being installed by another Pockode"),
+				);
+				const claude = await confirmInstall();
+
+				expect(await claude.findByRole("alert")).toHaveTextContent(
+					"claude is being installed by another Pockode",
+				);
+				expect(claude.queryByRole("link")).not.toBeInTheDocument();
+
+				// Gone once the check has moved on.
+				server.setChecks([
+					{ ...missing, state: "installing", update_id: "update-2" },
+				]);
+				await userEvent
+					.setup()
+					.click(screen.getByRole("button", { name: "Refresh" }));
+				await findRow(claude, "Installing Claude…", "Started earlier.");
+				expect(claude.queryByRole("alert")).not.toBeInTheDocument();
+			});
+
+			it("says nothing when the CLI is there after all, and reads it again", async () => {
+				renderMissing();
+				server.actions.cliUpdateInstall.mockImplementation(async () => {
+					server.setChecks([installed]);
+					server.setStatuses([{ agent: "claude", state: "signed_out" }]);
+					throw refusal("already_installed", "claude is already installed");
+				});
+				const claude = await confirmInstall();
+
+				await findRow(claude, "Version 2.1.290", "Up to date");
+				await findRow(claude, "Not signed in", "Sign in to use Claude");
+				expect(claude.queryByRole("alert")).not.toBeInTheDocument();
+			});
+		});
+
+		describe("failed", () => {
+			it.each([
+				{
+					reason: "permission_denied" as const,
+					title: "npm can't write its global folder",
+					body: "npm config set prefix ~/.npm-global), add its bin to the PATH pockode starts with, restart pockode",
+					tryAgain: true,
+					instructions: true,
+				},
+				{
+					reason: "not_on_path" as const,
+					title: "Claude installed, but Pockode can't find it",
+					body: "isn't on the PATH pockode was started with",
+					tryAgain: false,
+					instructions: false,
+				},
+				{
+					reason: "command_failed" as const,
+					detail:
+						"npm install --global exited 1\nnpm error 404 Not Found - GET https://registry.npmjs.org/@anthropic-ai%2fclaude-code\nnpm error A complete log of this run can be found in: /home/ada/.npm/_logs/debug.log",
+					title: "npm couldn't install Claude",
+					body: "npm error 404 Not Found - GET https://registry.npmjs.org/@anthropic-ai%2fclaude-code Install it on the server yourself, or try again.",
+					tryAgain: true,
+					instructions: true,
+				},
+				{
+					reason: "timeout" as const,
+					title: "The install took too long",
+					body: "Pockode stopped npm after 10 minutes.",
+					tryAgain: true,
+					instructions: false,
+				},
+				{
+					reason: "other" as const,
+					detail: "claude --version failed: exit status 1",
+					title: "Install failed",
+					body: "claude --version failed: exit status 1",
+					tryAgain: true,
+					instructions: true,
+				},
+			])("explains $reason", async ({
+				reason,
+				detail,
+				title,
+				body,
+				tryAgain,
+				instructions,
+			}) => {
+				server.setLatestUpdate(
+					"claude",
+					makeInstall({ phase: "failed", failure: { reason, detail } }),
+				);
+				renderMissing();
+
+				const claude = await card("Claude");
+				await findRow(claude, title, "Not installed");
+				const item = screen
+					.getByRole("heading", { name: "Claude" })
+					.closest("li");
+				expect(item).toHaveTextContent(body);
+				expect(claude.getByRole("status")).toHaveTextContent(title);
+				expect(
+					claude.queryByRole("button", { name: "Try again" }) !== null,
+				).toBe(tryAgain);
+				expect(
+					claude.queryByRole("link", { name: /Install instructions/ }) !== null,
+				).toBe(instructions);
+				expect(claude.getByRole("button", { name: "Dismiss" })).toBeEnabled();
+			});
+
+			it("is dismissed back to Not installed", async () => {
+				const user = userEvent.setup();
+				server.setLatestUpdate(
+					"claude",
+					makeInstall({ phase: "failed", failure: { reason: "timeout" } }),
+				);
+				renderMissing();
+
+				const claude = await card("Claude");
+				await user.click(
+					await claude.findByRole("button", { name: "Dismiss" }),
+				);
+				expect(server.actions.cliUpdateDismiss).toHaveBeenCalledWith(
+					"update-1",
+				);
+				await findRow(claude, "Not installed", "Installs with npm");
+			});
+
+			it("confirms Try again before installing again", async () => {
+				const user = userEvent.setup();
+				server.setLatestUpdate(
+					"claude",
+					makeInstall({ phase: "failed", failure: { reason: "timeout" } }),
+				);
+				renderMissing();
+
+				const claude = await card("Claude");
+				await user.click(
+					await claude.findByRole("button", { name: "Try again" }),
+				);
+				expect(
+					await screen.findByRole("dialog", { name: "Install Claude?" }),
+				).toBeInTheDocument();
+				expect(server.actions.cliUpdateInstall).not.toHaveBeenCalled();
+			});
+
+			it("keeps Dismiss when Try again is refused for lack of npm", async () => {
+				const user = userEvent.setup();
+				server.setLatestUpdate(
+					"claude",
+					makeInstall({ phase: "failed", failure: { reason: "timeout" } }),
+				);
+				server.actions.cliUpdateInstall.mockRejectedValue(
+					refusal("npm_not_found", "npm was not found on the server's PATH"),
+				);
+				renderMissing();
+
+				const claude = await card("Claude");
+				await user.click(
+					await claude.findByRole("button", { name: "Try again" }),
+				);
+				const dialog = await screen.findByRole("dialog", {
+					name: "Install Claude?",
+				});
+				await user.click(
+					within(dialog).getByRole("button", { name: "Install" }),
+				);
+
+				expect(await claude.findByRole("alert")).toHaveTextContent(
+					"npm was not found on the server's PATH",
+				);
+				expect(
+					claude.getByRole("link", { name: /Install instructions/ }),
+				).toBeInTheDocument();
+				expect(claude.getByRole("button", { name: "Dismiss" })).toBeEnabled();
+			});
+
+			it("is not shown once the CLI is there", async () => {
+				server.setLatestUpdate(
+					"claude",
+					makeInstall({ phase: "failed", failure: { reason: "timeout" } }),
+				);
+				server.setChecks([installed]);
+				renderWith({ state: "signed_out" });
+
+				const claude = await card("Claude");
+				await findRow(claude, "Version 2.1.290", "Up to date");
+				expect(
+					claude.queryByText("The install took too long"),
+				).not.toBeInTheDocument();
 			});
 		});
 	});
