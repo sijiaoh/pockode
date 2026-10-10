@@ -106,7 +106,8 @@ On Cloudflare:
    The project stays connected to the repository, but Cloudflare stops
    building on a push: its build would bring its own Hugo and skip the checks.
 2. In the same place, check that the production branch is `main`: deploying
-   with `--branch=main` is what makes an upload the production deployment.
+   with `wrangler pages deploy --branch=main` is what makes an upload the
+   production deployment.
 3. Create an API token (My Profile → API Tokens → Create Token → Custom token)
    with only Account · Cloudflare Pages · Edit, limited to this account, and
    note the account ID (on the Workers & Pages overview).
@@ -223,8 +224,12 @@ page that touches the password or the relay link there instead of restating
 it. Where a page needs words the source already holds, it uses a shortcode
 rather than copying them (`install` for the commands).
 
-CI also checks the site's copy: `pnpm run check:messaging` scans everything
-under `site/` for `pockode` flags the server does not have.
+CI also checks the site's copy: `pnpm run check:messaging` (the *Messaging*
+workflow) scans everything under `site/`, this README included, for `pockode`
+flags the server does not have. A code span that is nothing but a flag counts
+as one of `pockode`'s, so another tool's flag goes inside its command line
+(`wrangler pages deploy --branch=main`); the rules are in
+[scripts/README.md](../scripts/README.md#messaging--readme-generation-and-copy-checks).
 
 Files under `static/marketing/` are generated. Re-render them as
 [docs/marketing-assets.md](../docs/marketing-assets.md) describes; don't edit
