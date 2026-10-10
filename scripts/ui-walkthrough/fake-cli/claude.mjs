@@ -2,27 +2,31 @@
 // (through the `claude` wrapper beside it) so that an agent's turn is something
 // that happens on demand, the same way every run, and costs nothing.
 //
-// It speaks just enough stream-json for Pockode to run a turn. When it asks a
-// question it asks through the real path: question_post goes to the server's
+// It speaks just enough stream-json for Pockode to run a turn. Every Pockode
+// tool it calls goes through the real path: the call goes to the server's
 // local MCP API with this process's own session identity, exactly what the
-// stdio proxy would send, so the transcript gets the tool row, the
-// question_posted records and the session's unanswered list just as a real
-// agent's call would leave them.
+// stdio proxy would send, so the transcript gets the tool row, and the work
+// store and the session's unanswered list get what a real agent's call would
+// leave in them.
 //
 // What it does is picked by the prompt:
+//   - a prompt containing a chat or marketing scenario's `prompt` plays that
+//     scenario's turn (../chat/scenarios.mjs, ../marketing/scenarios.mjs) —
+//     "containing", because a message with attachments reaches the CLI with
+//     their paths beside the text, an answer with its question, and a work's
+//     every message with the work's title;
 //   - a prompt that is exactly a question scenario's `prompt` asks that
 //     scenario (../question/scenarios.mjs);
-//   - a work's kickoff prompt ("(Work ID: ...") asks scenario "work";
-//   - a prompt containing a chat scenario's `prompt` plays that scenario's
-//     turn (../chat/scenarios.mjs) — "containing", because a message with
-//     attachments reaches the CLI with their paths beside the text;
-//   - anything else, answers included, is acknowledged in one line.
+//   - any other work's kickoff prompt ("(Work ID: ...") asks scenario "work";
+//   - anything else, answers to a question no scenario plays included, is
+//     acknowledged in one line.
 
 import { randomUUID } from "node:crypto";
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { createInterface } from "node:readline";
 import { CHAT } from "../chat/scenarios.mjs";
+import { MARKETING } from "../marketing/scenarios.mjs";
 import { SCENARIOS } from "../question/scenarios.mjs";
 
 const args = process.argv.slice(2);
@@ -54,24 +58,29 @@ function argValue(name) {
 const cliSessionId =
 	argValue("--session-id") ?? argValue("--resume") ?? randomUUID();
 
-// The identity the stdio proxy would have been spawned with, read back out of
-// the MCP config Pockode wrote for this process.
-function mcpCaller() {
+// A flag the stdio proxy would have been spawned with, read back out of the
+// MCP config Pockode wrote for this process.
+function proxyFlag(name) {
 	const configPath = argValue("--mcp-config");
 	if (!configPath) throw new Error("no --mcp-config: Pockode tools disabled");
 	const config = JSON.parse(readFileSync(configPath, "utf8"));
 	const proxyArgs = config.mcpServers.pockode.args;
-	const flag = (name) => {
-		const i = proxyArgs.indexOf(name);
-		return i >= 0 ? proxyArgs[i + 1] : undefined;
-	};
+	const i = proxyArgs.indexOf(name);
+	return i >= 0 ? proxyArgs[i + 1] : undefined;
+}
+
+// The identity the stdio proxy would have been spawned with.
+function mcpCaller() {
 	const info = JSON.parse(
-		readFileSync(join(flag("--data-dir"), "server.json"), "utf8"),
+		readFileSync(join(proxyFlag("--data-dir"), "server.json"), "utf8"),
 	);
 	return {
 		url: `${info.local_url || `http://localhost:${info.port}`}/api/mcp/tools/call`,
 		token: info.token,
-		caller: { session_id: flag("--session-id"), worktree: flag("--worktree") },
+		caller: {
+			session_id: proxyFlag("--session-id"),
+			worktree: proxyFlag("--worktree"),
+		},
 	};
 }
 
@@ -96,12 +105,21 @@ function emit(frame) {
 	);
 }
 
+const memoryFile = () =>
+	join(proxyFlag("--data-dir"), "walkthrough-cli", `${cliSessionId}.json`);
+
 const toolUseId = () => `toolu_${randomUUID().replaceAll("-", "")}`;
 
 // Permission requests waiting on Pockode's answer, by request_id.
 const awaitingPermission = new Map();
 // Set while a turn hangs on purpose.
 let endHang = null;
+// Set while a turn holds at a gate.
+let leaveGate = null;
+// What the turn being played says it spent (a scenario's `usage`), and what
+// this process has spent in all, which is how the CLI's result frame counts.
+let turnUsage = null;
+const spent = { modelUsage: {}, costUsd: 0 };
 
 // What the real CLI does on an interrupt: whatever the turn was waiting on
 // ends — a permission request as denied — and the turn finishes.
@@ -111,6 +129,8 @@ function interrupt() {
 	awaitingPermission.clear();
 	endHang?.();
 	endHang = null;
+	leaveGate?.();
+	leaveGate = null;
 }
 
 /**
@@ -132,6 +152,13 @@ const agent = {
 				role: "assistant",
 				model: "fake-walkthrough",
 				content,
+				...(turnUsage && {
+					usage: {
+						input_tokens: turnUsage.contextTokens,
+						cache_read_input_tokens: 0,
+						cache_creation_input_tokens: 0,
+					},
+				}),
 			},
 		});
 	},
@@ -203,17 +230,82 @@ const agent = {
 			});
 	},
 
+	/**
+	 * Calls a Pockode tool through the real MCP path, as its row in the
+	 * transcript, and returns the result's text. A refused call fails the turn:
+	 * a scenario that is refused has stopped being the one it describes.
+	 */
+	async mcp(name, input) {
+		const id = agent.call(`mcp__pockode__${name}`, input);
+		const result = await callTool(name, input);
+		agent.result(id, [{ type: "text", text: result.text }], {
+			isError: !!result.is_error,
+		});
+		if (result.is_error) throw new Error(`${name}: ${result.text}`);
+		return result.text;
+	},
+
 	/** Posts questions through the real MCP path, as question_post does. */
 	async ask(questions) {
 		const input = { questions };
 		const id = agent.call("mcp__pockode__question_post", input);
+		// The call goes over HTTP and the frame above over stdout, and the HTTP
+		// request can win: the question then lands before its call, and the
+		// transcript draws them as two rows rather than one card. The real CLI
+		// streams the call long before it runs it. Nothing here can see when the
+		// server has read the frame, so this only makes losing unlikely; the
+		// marketing suite checks the order the server recorded and fails if
+		// it was lost.
+		await agent.sleep(500);
 		const result = await callTool("question_post", input);
 		agent.result(id, [{ type: "text", text: result.text }], {
 			isError: !!result.is_error,
 		});
+		if (result.is_error) throw new Error(`question_post: ${result.text}`);
+	},
+
+	/**
+	 * Holds the turn, with the call `pending` still running, until the suite
+	 * lets it through — which is how a suite driving several agents at once
+	 * decides the order they move in. Both ends are files in the server's data
+	 * directory: `<name>.parked` names the running call once its frame is on
+	 * stdout, so the suite can wait for the server to have recorded it, and the
+	 * suite creating `<name>` lets the turn on. An interrupt ends the turn
+	 * instead, as it would a real one.
+	 */
+	async gate(name, pending = "") {
+		const dir = join(proxyFlag("--data-dir"), "walkthrough-gates");
+		mkdirSync(dir, { recursive: true });
+		writeFileSync(join(dir, `${name}.parked`), pending);
+		let interrupted = false;
+		leaveGate = () => {
+			interrupted = true;
+		};
+		while (!existsSync(join(dir, name))) {
+			if (interrupted) throw new Error(`interrupted at ${name}`);
+			await agent.sleep(100);
+		}
+		leaveGate = null;
 	},
 
 	sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+
+	/**
+	 * What this conversation knows from earlier turns — the ids its kickoff
+	 * named, say. Kept on disk under the CLI's session id, as the real CLI
+	 * keeps its transcript, so a process Pockode restarts with --resume still
+	 * knows it.
+	 */
+	get memory() {
+		const file = memoryFile();
+		return existsSync(file) ? JSON.parse(readFileSync(file, "utf8")) : {};
+	},
+
+	remember(values) {
+		const file = memoryFile();
+		mkdirSync(dirname(file), { recursive: true });
+		writeFileSync(file, JSON.stringify({ ...agent.memory, ...values }));
+	},
 
 	/**
 	 * Leaves the turn open until it is interrupted, so the page finds it still
@@ -256,26 +348,48 @@ function questionScenarioFor(text) {
 async function runTurn(text) {
 	emit({ type: "system", subtype: "init", model: "fake-walkthrough" });
 
-	const asked = questionScenarioFor(text);
-	const played = Object.values(CHAT).find((s) => text.includes(s.prompt));
+	// A scenario that `follows` another plays only in the conversation that
+	// remembers being that one (`agent.remember`).
+	const played = [...Object.values(CHAT), ...Object.values(MARKETING)].find(
+		(s) =>
+			text.includes(s.prompt) &&
+			(!s.follows || agent.memory.task === s.follows),
+	);
+	// After `played`: a marketing work's messages are work messages too.
+	const asked = played ? null : questionScenarioFor(text);
+	turnUsage = played?.usage ?? null;
 	if (asked) {
 		agent.say(asked.lead);
 		await agent.ask(asked.questions);
 		agent.say("Asked. I'll carry on once you answer.");
 	} else if (played) {
-		await played.play(agent);
+		await played.play(agent, text);
 	} else if (text.startsWith("Answering:")) {
 		agent.say("Thanks — going with that.");
 	} else {
 		agent.say("Noted.");
 	}
 
+	if (turnUsage) {
+		for (const [model, add] of Object.entries(turnUsage.modelUsage)) {
+			const total = spent.modelUsage[model];
+			if (!total) spent.modelUsage[model] = { ...add };
+			else
+				for (const key of Object.keys(add))
+					if (key !== "contextWindow") total[key] += add[key];
+		}
+		spent.costUsd += turnUsage.costUsd;
+	}
 	emit({
 		type: "result",
 		subtype: "success",
 		is_error: false,
 		terminal_reason: "completed",
 		result: "",
+		...(turnUsage && {
+			modelUsage: spent.modelUsage,
+			total_cost_usd: spent.costUsd,
+		}),
 	});
 }
 

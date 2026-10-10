@@ -1,0 +1,248 @@
+<!doctype html>
+<!--
+	The demo video's stage (docs/marketing-assets.md §4): 1920×1080, built by
+	render.mjs through `build(data)` and drawn at any time `t` by `seek(t)`.
+	Nothing here runs on its own clock — no CSS transition or animation — so a
+	frame is a function of `t` alone.
+
+	Every state the content band can be in (a card, a shot, a keyframe) is a
+	layer that paints the whole stage, background included. A crossfade weighs
+	the two with `plus-lighter`, which adds them: (1 − a)·old + a·new, exactly,
+	so a frame both states share — the phone's body, the canvas — stays put
+	while only what differs fades.
+-->
+<html>
+<head>
+<meta charset="utf-8" />
+<style>
+/* FONT_FACES, FRAME_CSS */
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { width: 1920px; height: 1080px; overflow: hidden; background: #000; }
+body { font-family: Geist, sans-serif; color: #fafafa; -webkit-font-smoothing: antialiased; }
+
+#layers { position: absolute; inset: 0; isolation: isolate; background: #000; }
+.layer {
+	position: absolute; inset: 0; display: none; mix-blend-mode: plus-lighter;
+	background:
+		radial-gradient(ellipse at 50% 0%, rgba(59,130,246,.12) 0%, rgba(168,85,247,.06) 40%, transparent 70%),
+		#0a0a0a;
+}
+.device { position: absolute; transform-origin: 0 0; }
+
+.card {
+	position: absolute; inset: 0; display: flex; flex-direction: column;
+	align-items: center; justify-content: center;
+}
+.card img { display: block; }
+.title-name { margin-top: 32px; font: 700 96px/1 Geist, sans-serif; letter-spacing: -0.04em; }
+.title-sub { margin-top: 16px; font: 500 40px/1.2 Geist, sans-serif; color: #a1a1a1; }
+.end-name { margin-top: 28px; font: 700 72px/1 Geist, sans-serif; letter-spacing: -0.04em; }
+.end-install {
+	margin-top: 36px; padding: 20px 32px; border-radius: 12px;
+	background: #141414; border: 1px solid #262626;
+	font: 400 30px/1.2 "Geist Mono", monospace;
+}
+.end-foot { margin-top: 28px; font: 500 28px/1.2 Geist, sans-serif; color: #666666; }
+
+.terminal {
+	position: absolute; left: 180px; top: 186px; width: 920px; height: 600px;
+	border-radius: 12px; background: #141414; border: 1px solid #262626; overflow: hidden;
+}
+.terminal-title {
+	height: 36px; display: flex; align-items: center; justify-content: center;
+	font: 500 12px Geist, sans-serif; color: #666666;
+}
+.terminal pre { padding: 24px 32px; font: 400 15px/1.35 "Geist Mono", monospace; color: #fafafa; }
+/* A QR row: the half-block characters are drawn as cells, so the rows meet
+   with no gap and the code does not depend on which font has those glyphs. */
+.terminal .qr { display: block; height: 18px; line-height: 18px; }
+.q { display: inline-block; width: 1ch; height: 18px; vertical-align: top; }
+.q-full { background: currentColor; }
+.q-top { background: linear-gradient(currentColor 50%, transparent 50%); }
+.q-bot { background: linear-gradient(transparent 50%, currentColor 50%); }
+/* The banner's two glyphs Geist Mono lacks, drawn rather than left to
+   whichever fallback font the machine has. */
+.g-diamond {
+	display: inline-block; width: 0.5em; height: 0.5em; margin: 0 0.25ch;
+	background: currentColor; transform: rotate(45deg); vertical-align: 0.1em;
+}
+.g-tri {
+	display: inline-block; width: 1ch; height: 0.6em; vertical-align: 0.05em;
+	background: currentColor; clip-path: polygon(25% 10%, 75% 50%, 25% 90%);
+}
+.a-bold { font-weight: 700; }
+.a-dim { color: #71717a; }
+.a-cyan { color: #22d3ee; }
+.a-green { color: #4ade80; }
+.a-white { color: #fafafa; }
+.a-yellow { color: #facc15; }
+
+#overlay { position: absolute; inset: 0; pointer-events: none; }
+.caption {
+	position: absolute; left: 0; right: 0; top: 939.6px; display: none;
+	text-align: center; white-space: nowrap;
+	font: 600 44px/1.2 Geist, sans-serif; letter-spacing: -0.01em; color: #fafafa;
+}
+.caption b {
+	font-weight: inherit;
+	background: linear-gradient(135deg, #06b6d4, #a855f7);
+	-webkit-background-clip: text; background-clip: text; color: transparent;
+}
+.caption code {
+	font: 500 40px/1 "Geist Mono", monospace; letter-spacing: 0; color: #fafafa;
+	background: #1a1a1a; border-radius: 6px; padding: 2px 10px;
+}
+#dots {
+	position: absolute; left: 0; right: 0; top: 1008px; height: 8px;
+	display: flex; justify-content: center; gap: 12px;
+}
+#dots > i { display: block; width: 8px; height: 8px; border-radius: 4px; background: #666666; }
+#dots > i.on { width: 24px; background: #fafafa; }
+.tap {
+	position: absolute; width: 44px; height: 44px; margin: -22px 0 0 -22px; display: none;
+	border-radius: 50%; border: 3px solid #2dd4bf; background: rgba(45,212,191,.22);
+}
+</style>
+</head>
+<body>
+<div id="layers"></div>
+<div id="overlay"><div id="dots"></div></div>
+<script>
+// cubic-bezier(x1, y1, x2, y2) as CSS has it: y at the x that is `p`.
+function bezier(x1, y1, x2, y2) {
+	const at = (a, b, s) => 3 * a * s * (1 - s) ** 2 + 3 * b * s * s * (1 - s) + s ** 3;
+	return (p) => {
+		let lo = 0;
+		let hi = 1;
+		for (let i = 0; i < 40; i++) {
+			const mid = (lo + hi) / 2;
+			if (at(x1, x2, mid) < p) lo = mid;
+			else hi = mid;
+		}
+		return at(y1, y2, (lo + hi) / 2);
+	};
+}
+const EASE_IN = bezier(0.2, 0.8, 0.2, 1);
+const EASE_OUT = bezier(0.4, 0, 1, 1);
+const EASE_TAP = bezier(0, 0, 0.58, 1);
+const clamp = (v) => Math.min(1, Math.max(0, v));
+
+let STAGE;
+
+/**
+ * data: { motion, steps, layers: [{ html, from, fade, enter? }],
+ *         captions: [{ html, start, end, step }], taps: [{ x, y, at }],
+ *         dots: { from, to } }
+ * Layers are in the order they come on; each fades in over `fade` seconds
+ * from `from`, over the one before it.
+ */
+window.build = async (data) => {
+	STAGE = data;
+	const layers = document.getElementById("layers");
+	const overlay = document.getElementById("overlay");
+	STAGE.layerEls = data.layers.map((layer) => {
+		const el = document.createElement("div");
+		el.className = "layer";
+		el.innerHTML = layer.html;
+		layers.append(el);
+		return el;
+	});
+	STAGE.captionEls = data.captions.map((caption) => {
+		const el = document.createElement("div");
+		el.className = "caption";
+		el.innerHTML = caption.html;
+		overlay.append(el);
+		return el;
+	});
+	STAGE.tapEls = data.taps.map((tap) => {
+		const el = document.createElement("div");
+		el.className = "tap";
+		el.style.left = `${tap.x}px`;
+		el.style.top = `${tap.y}px`;
+		overlay.append(el);
+		return el;
+	});
+	const dots = document.getElementById("dots");
+	for (let i = 0; i < data.steps; i++) dots.append(document.createElement("i"));
+	await document.fonts.ready;
+	await Promise.all([...document.images].map((img) => img.decode()));
+};
+
+/**
+ * Draws the frame at `t` seconds; `cut` turns every move into a cut (§4.6).
+ * Returns the state drawn: equal states are equal frames.
+ */
+window.seek = (t, cut) => {
+	const m = STAGE.motion;
+	const progress = (from, length) =>
+		cut ? (t >= from ? 1 : 0) : clamp((t - from) / length);
+
+	// The newest layer that has begun, over the one before it.
+	let top = 0;
+	STAGE.layers.forEach((layer, i) => {
+		if (layer.from <= t) top = i;
+	});
+	const a = top === 0 ? 1 : progress(STAGE.layers[top].from, STAGE.layers[top].fade);
+	STAGE.layerEls.forEach((el, i) => {
+		const opacity = i === top ? a : i === top - 1 ? 1 - a : 0;
+		el.style.display = opacity > 0 ? "block" : "none";
+		el.style.opacity = String(opacity);
+	});
+
+	// Whatever moves inside a layer: the title's fade-in, the phone's entrance.
+	for (const el of document.querySelectorAll("[data-fade-in]")) {
+		el.style.opacity = String(progress(Number(el.dataset.fadeIn), m.titleIn));
+	}
+	for (const el of document.querySelectorAll("[data-enter]")) {
+		const p = progress(Number(el.dataset.enter), m.enter);
+		const e = cut ? p : EASE_IN(p);
+		el.style.opacity = String(e);
+		el.style.translate = `0 ${40 * (1 - e)}px`;
+	}
+
+	let step = -1;
+	STAGE.captions.forEach((caption, i) => {
+		const el = STAGE.captionEls[i];
+		const on = caption.start <= t && t < caption.end;
+		el.style.display = on ? "block" : "none";
+		if (!on) return;
+		step = caption.step;
+		const enter = progress(caption.start, m.captionIn);
+		const leave = cut ? 0 : clamp((t - (caption.end - m.captionOut)) / m.captionOut);
+		const e = cut ? enter : EASE_IN(enter);
+		const l = EASE_OUT(leave);
+		el.style.opacity = String(Math.min(e, 1 - l));
+		el.style.translate = `0 ${leave > 0 ? -8 * l : 12 * (1 - e)}px`;
+	});
+
+	const dots = document.getElementById("dots");
+	const { from, to } = STAGE.dots;
+	dots.style.opacity = String(
+		t < to ? progress(from, m.shotFade) : 1 - progress(to, m.shotFade),
+	);
+	for (const [i, dot] of [...dots.children].entries())
+		dot.classList.toggle("on", i === step);
+
+	STAGE.taps.forEach((tap, i) => {
+		const el = STAGE.tapEls[i];
+		// The GIF has no ring to grow: it is drawn whole, until the change.
+		const length = cut ? m.tapLead : m.tapLength;
+		const on = tap.at <= t && t < tap.at + length;
+		const e = on && !cut ? EASE_TAP((t - tap.at) / length) : 0;
+		// Every property, every call: the GIF is drawn on the page the video
+		// was, and a ring must not keep the last style a video frame left it.
+		el.style.display = on ? "block" : "none";
+		el.style.opacity = String(1 - e);
+		el.style.scale = String(cut ? 1 : 0.6 + 0.4 * e);
+	});
+
+	// What was drawn, so the renderer can tell a held frame from a new one.
+	return [
+		...document.querySelectorAll(".layer, [data-fade-in], [data-enter], .caption, .tap, #dots, #dots > i"),
+	]
+		.map((el) => el.className + el.style.cssText)
+		.join("|");
+};
+</script>
+</body>
+</html>

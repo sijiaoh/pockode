@@ -1,0 +1,160 @@
+<!doctype html>
+<!-- tidy as its dev server shows it (docs/marketing-assets.md §8.4): light and
+     neutral, so it reads as the user's app and not Pockode. Undated todos sort
+     last, as the answer to task 3's question has it. -->
+<html lang="en">
+	<head>
+		<meta charset="UTF-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+		<title>tidy</title>
+		<style>
+			* {
+				box-sizing: border-box;
+			}
+			body {
+				margin: 0;
+				padding: 24px 20px;
+				background: #ffffff;
+				color: #18181b;
+				font-family: Geist, system-ui, sans-serif;
+				font-size: 15px;
+			}
+			h1 {
+				margin: 0;
+				font-size: 28px;
+				font-weight: 700;
+				line-height: 1.2;
+			}
+			.add {
+				display: flex;
+				align-items: center;
+				gap: 8px;
+				height: 44px;
+				margin-top: 20px;
+				padding: 0 8px 0 14px;
+				border: 1px solid #e4e4e7;
+				border-radius: 10px;
+			}
+			.add input {
+				flex: 1;
+				min-width: 0;
+				border: 0;
+				outline: 0;
+				padding: 0;
+				font: inherit;
+				color: inherit;
+				background: none;
+			}
+			.add input::placeholder {
+				color: #a1a1aa;
+			}
+			.chip {
+				display: flex;
+				align-items: center;
+				gap: 4px;
+				padding: 4px 8px;
+				border-radius: 6px;
+				background: #f4f4f5;
+				color: #52525b;
+				font-size: 12px;
+				font-weight: 500;
+			}
+			ul {
+				margin: 12px 0 0;
+				padding: 0;
+				list-style: none;
+			}
+			li {
+				display: flex;
+				align-items: center;
+				gap: 12px;
+				height: 52px;
+				border-bottom: 1px solid #f4f4f5;
+			}
+			li:last-child {
+				border-bottom: 0;
+			}
+			.check {
+				flex: none;
+				display: grid;
+				place-items: center;
+				width: 20px;
+				height: 20px;
+				border: 1.5px solid #d4d4d8;
+				border-radius: 50%;
+			}
+			.title {
+				flex: 1;
+			}
+			.badge {
+				padding: 2px 8px;
+				border-radius: 6px;
+				background: #f4f4f5;
+				color: #52525b;
+				font-size: 12px;
+				font-weight: 500;
+			}
+			.overdue {
+				background: #fef2f2;
+				color: #dc2626;
+			}
+			.today {
+				background: #eef2ff;
+				color: #4f46e5;
+			}
+			.done {
+				opacity: 0.5;
+			}
+			.done .check {
+				border-color: #6366f1;
+				background: #6366f1;
+			}
+			.done .title {
+				text-decoration: line-through;
+			}
+		</style>
+	</head>
+	<body>
+		<h1>tidy</h1>
+		<form class="add">
+			<input placeholder="Add a todo…" aria-label="New todo" />
+			<span class="chip">
+				<svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.2" aria-hidden="true">
+					<rect x="1.5" y="2.5" width="9" height="8" rx="1.5" />
+					<path d="M1.5 5h9M4 1v2.5M8 1v2.5" />
+				</svg>
+				Due date
+			</span>
+		</form>
+		<ul>
+			<li>
+				<span class="check"></span>
+				<span class="title">Renew passport</span>
+				<span class="badge overdue">Overdue · May 10</span>
+			</li>
+			<li>
+				<span class="check"></span>
+				<span class="title">Book the dentist</span>
+				<span class="badge today">Today</span>
+			</li>
+			<li>
+				<span class="check"></span>
+				<span class="title">Write release notes</span>
+				<span class="badge">May 15</span>
+			</li>
+			<li class="done">
+				<span class="check">
+					<svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="#ffffff" stroke-width="1.8" aria-hidden="true">
+						<path d="M2.5 6.2l2.3 2.3 4.7-4.9" />
+					</svg>
+				</span>
+				<span class="title">Buy coffee beans</span>
+				<span class="badge">May 11</span>
+			</li>
+			<li>
+				<span class="check"></span>
+				<span class="title">Water the plants</span>
+			</li>
+		</ul>
+	</body>
+</html>
