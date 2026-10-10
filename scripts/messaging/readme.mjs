@@ -21,8 +21,27 @@ const joinAnd = (items) =>
 		? items.join("")
 		: `${items.slice(0, -1).join(", ")} and ${items.at(-1)}`;
 
+/** A value as an HTML attribute's text, for the README's `<img>` tags. */
+const attr = (text) =>
+	text
+		.replaceAll("&", "&amp;")
+		.replaceAll('"', "&quot;")
+		.replaceAll("<", "&lt;");
+
+/** The paths are the README's own; only the alt text comes from the source. */
+const img = (src, alt, width) =>
+	`<img src="site/static/${src}" alt="${attr(alt)}" width="${width}">`;
+
+/** The README's screenshot grid: rows of file names in images.screenshots. */
+const SCREENSHOT_ROWS = [
+	["phone-story", "phone-question"],
+	["phone-diff", "phone-preview"],
+];
+
 const BLOCKS = {
+	logo: (m) => [img("images/logo.svg", m.name, 96)],
 	tagline: (m) => [`**${m.tagline}**`, "", m.subtitle],
+	demo: (m) => [img("marketing/video/demo.gif", m.images.demo, 800)],
 	quickstart: (m) => [
 		m.quickstart.prerequisite,
 		"",
@@ -44,6 +63,22 @@ const BLOCKS = {
 		`Runs on ${joinAnd(m.platforms.map((p) => `${p.name} (${p.arch})`))}.`,
 	],
 	pillars: (m) => m.pillars.map((p) => `- **${p.title}** — ${p.description}`),
+	screenshots: (m) => [
+		"<table>",
+		...SCREENSHOT_ROWS.flatMap((row) => [
+			"  <tr>",
+			...row.map((name) => {
+				const alt = m.images.screenshots[name];
+				if (!alt)
+					throw new Error(
+						`${relative(ROOT, SOURCE)} has no images.screenshots alt text for ${name}.`,
+					);
+				return `    <td>${img(`marketing/screenshots/${name}.png`, alt, 240)}</td>`;
+			}),
+			"  </tr>",
+		]),
+		"</table>",
+	],
 	license: (m) => [
 		`- **License** — ${m.license.label} under the [${m.license.name}](${m.license.file}). ${m.license.summary}`,
 	],

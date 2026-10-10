@@ -84,8 +84,8 @@ without an installed Chrome), Chrome cannot start its sandbox; add
   height (the logo is an SVG). `hugo.yaml` mounts
   `static/marketing` as assets for it, beside the default `static` mount.
 - Shortcodes for content: `{{</* install */>}}` (the install box, at most one
-  per page), `{{</* shot "phone-story" */>}}` (a screenshot; its alt text is in
-  `partials/shot-alt.html`), `{{</* architecture */>}}` and
+  per page), `{{</* shot "phone-story" */>}}` (a screenshot; its alt text is
+  `images.screenshots` in the messaging source), `{{</* architecture */>}}` and
   `{{</* callout title="…" */>}}`. Write a screenshot with `shot`, never as a
   markdown image, which gets no WebP and no dimensions.
 - The theme serves its own fonts (Geist, from the `geist` npm package the
@@ -117,25 +117,28 @@ release reaches the site with its next deploy.
 ## Where the words come from
 
 The site's messaging comes from [`data/messaging.yaml`](data/messaging.yaml):
-the site-wide description, the tagline, the pillars, the install
-commands and the license line. The README and the marketing assets read the
-same file, and its header comment gives the rules for writing it. On the site
-it reaches every page, not just the home page: the shell (`head.html`,
-`header.html`, `footer.html`) takes the name, tagline, subtitle, repository and
-license from it, the `install` shortcode puts the same install box in the docs
-as on the home page, and the changelog builds its GitHub links from `repo`. To change
-the copy, edit that file, then regenerate the README (`pnpm run readme`; see
+the site-wide description, the tagline, the pillars, the install commands, the
+license line and the alt texts of the pictures (`images`). The README and the
+marketing assets read the same file, and its header comment gives the rules for
+writing it. On the site it reaches every page, not just the home page: the
+shell (`head.html`, `header.html`, `footer.html`) takes the name, tagline,
+subtitle, repository and license from it, the `install` shortcode puts the same
+install box in the docs as on the home page, and the changelog builds its
+GitHub links from `repo`. To change the copy, edit that file, then regenerate
+the README (`pnpm run readme`; see
 [scripts/README.md](../scripts/README.md#messaging--readme-generation-and-copy-checks))
 and re-render the assets if they show the changed field
 ([docs/marketing-assets.md](../docs/marketing-assets.md#the-copy)).
 
-The home page has no copy of its own: its six screens are the tagline, the
-four pillars (with the `facts` of *Your machine*), the quick start and the
-`faq`, and its button and link labels and the demo video's description are in
-the `homepage` block. Only interface words stay in the templates, such as
-the nav and footer labels, Copy, Play / Pause demo, Menu, Previous / Next and
-Latest. Two FAQ answers are derived rather than written:
-`platforms` from the platform list and `license` from the license line.
+The home page has no copy of its own: its six screens are the tagline, the four
+pillars (with the `facts` of *Your machine*), the quick start and the `faq`;
+its button and link labels are in the `homepage` block, and the demo video's
+description and the alt texts of the screenshots and the architecture figure
+are in `images`, which the docs' `shot` shortcode and the README read too. Only
+interface words stay in the templates, such as the nav and footer labels, Copy,
+Play / Pause demo, Menu, Previous / Next and Latest. Two FAQ answers are
+derived rather than written: `platforms` from the platform list and `license`
+from the license line.
 
 What the source does not hold is how things look. The templates key that on
 the `id`s in the source:

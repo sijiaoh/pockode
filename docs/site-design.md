@@ -291,7 +291,7 @@ a column.
   <figure class="demo">
     <img …demo-poster, eager, fetchpriority="high"…>   <!-- the LCP element -->
     <video muted loop playsinline preload="none" width="1920" height="1080"
-           aria-label="{homepage.demo}">
+           aria-label="{images.demo}">
       <source src="/marketing/video/demo.webm" type="video/webm">
       <source src="/marketing/video/demo.mp4" type="video/mp4">
     </video>
@@ -368,7 +368,8 @@ a column.
 - Expanded: everything stacked, with the text block centred above the full-width
   figure. The facts become a three-column row (`repeat(3, 1fr)`, gap 32), each
   centred with its icon above its text.
-- The figure's one alt text, for both variants, is in `architecture.html`.
+- The figure's one alt text, for both variants, is `images.architecture` in
+  the messaging source.
 
 ### 4.6 Get started and FAQ
 
@@ -444,7 +445,7 @@ Shortcodes, so a docs page never restates what another source holds:
 | Shortcode | Renders |
 |---|---|
 | `{{< install >}}` | the homepage's install box: one partial, `install.html`, used by both. Its radios have fixed `id`s (`os-unix`, `os-windows`) that the Windows preselect and the CSS key on, so a page carries at most one box. |
-| `{{< shot "name" >}}` | `marketing/screenshots/<name>.png` through `picture.html`, box 280 and centred, with the alt text from the same map the homepage uses: one partial, `shot-alt.html`, keyed by name, so an alt text is written once |
+| `{{< shot "name" >}}` | `marketing/screenshots/<name>.png` through `picture.html`, box 280 and centred, with the alt text the homepage and the README use too: `shot-alt.html` looks the name up in the messaging source's `images.screenshots`, so an alt text is written once |
 
 ### 5.2 Docs index
 

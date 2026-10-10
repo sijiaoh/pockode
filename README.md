@@ -1,6 +1,8 @@
 <div align="center">
 
+<!-- messaging:logo -->
 <img src="site/static/images/logo.svg" alt="Pockode" width="96">
+<!-- /messaging:logo -->
 
 # Pockode
 
@@ -16,7 +18,9 @@ Hand stories to a team of Claude Code and Codex agents on your own machine, answ
 
 [Website](https://pockode.com) · [Docs](https://pockode.com/docs/) · [Changelog](https://pockode.com/changelog/)
 
-<img src="site/static/marketing/video/demo.gif" alt="Pockode demo: a story split into tasks, an agent asking a question, the diff, a commit and Port Preview" width="800">
+<!-- messaging:demo -->
+<img src="site/static/marketing/video/demo.gif" alt="A 30-second demo of Pockode: a story split into tasks that agents work on in parallel, an agent's question answered from a phone, the diff, Port Preview and a commit" width="800">
+<!-- /messaging:demo -->
 
 </div>
 
@@ -62,16 +66,18 @@ Install options, verifying the download and upgrading: [platform support](docs/p
 - **Your machine** — Pockode dials out from beside your project, so there is no port to forward.
 <!-- /messaging:pillars -->
 
+<!-- messaging:screenshots -->
 <table>
   <tr>
-    <td><img src="site/static/marketing/screenshots/phone-story.png" alt="A story with its tasks, one waiting for your answer" width="240"></td>
-    <td><img src="site/static/marketing/screenshots/phone-question.png" alt="An agent asking a question" width="240"></td>
+    <td><img src="site/static/marketing/screenshots/phone-story.png" alt="A story, Add due dates to todos, with three tasks assigned to Engineer agents and one question waiting for your answer" width="240"></td>
+    <td><img src="site/static/marketing/screenshots/phone-question.png" alt="An agent's question on a phone: where should todos without a due date go? The recommended answer is to put them after dated todos." width="240"></td>
   </tr>
   <tr>
-    <td><img src="site/static/marketing/screenshots/phone-diff.png" alt="Reviewing a diff" width="240"></td>
-    <td><img src="site/static/marketing/screenshots/phone-preview.png" alt="Port Preview of the dev server" width="240"></td>
+    <td><img src="site/static/marketing/screenshots/phone-diff.png" alt="The diff of TodoItem.tsx on a phone" width="240"></td>
+    <td><img src="site/static/marketing/screenshots/phone-preview.png" alt="The todo app's dev server, opened on the phone with Port Preview" width="240"></td>
   </tr>
 </table>
+<!-- /messaging:screenshots -->
 
 ## How it works
 

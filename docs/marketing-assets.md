@@ -37,6 +37,11 @@ a renderer. What stays in the renderers is what describes the picture rather
 than the product: the video's captions narrate the shot they sit on and are
 timed to it (§4.4), and the architecture figure's labels name its parts (§6).
 
+The same file describes the pictures for a screen reader: `images` holds the
+alt texts of the demo, the architecture figure and the screenshots, wherever
+the site or the README shows them. They say what a picture shows, so a
+storyboard or capture change that alters that is an edit there as well.
+
 A `code` span in a value is set in Geist Mono, never left to a fallback font
 (§1.3).
 
