@@ -24,6 +24,7 @@ The project layout and conventions are in [AGENTS.md](AGENTS.md). Commands live 
 | ---- | ----- |
 | Go server (run, test, `gofmt`, `go vet`) | [server/AGENTS.md](server/AGENTS.md) |
 | Web frontend (dev, test, type check) | [web/AGENTS.md](web/AGENTS.md) |
+| README, website and marketing copy | [site/README.md](site/README.md#where-the-words-come-from) |
 | Lint and format (all frontends) | `pnpm run lint` / `pnpm run format` from the repository root |
 | Why a test is red | [docs/testing.md](docs/testing.md) |
 

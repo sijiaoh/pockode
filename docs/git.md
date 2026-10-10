@@ -214,4 +214,4 @@ The rest needs no special case: `worktree list --porcelain` still names the bran
 
 ## Configuration
 
-Git is opt-in via `--git` flag. When enabled, the server initializes the repo with remote config from command line arguments (`--git-repo-url`, `--git-repo-token`, `--git-user-name`, `--git-user-email`). See `server/AGENTS.md` for the full argument list.
+Git is opt-in via `-git` flag. When enabled, the server initializes the repo with remote config from command line arguments (`-git-repo-url`, `-git-repo-token`, `-git-user-name`, `-git-user-email`). See `server/AGENTS.md` for the full argument list.

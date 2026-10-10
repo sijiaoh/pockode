@@ -1,5 +1,5 @@
 // The architecture figure (docs/marketing-assets.md §6), on a transparent
-// background in a dark and a light variant for the README's <picture>:
+// background in a dark and a light variant for a <picture>:
 // phone → relay ← PC → AI CLIs, the PC and the CLIs inside "Your machine".
 
 import { join } from "node:path";

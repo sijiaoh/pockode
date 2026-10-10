@@ -62,7 +62,7 @@ describe("the password screen", () => {
 		render(<App />);
 
 		expect(screen.getByLabelText("Password")).toHaveAccessibleDescription(
-			/--password/,
+			/-password/,
 		);
 	});
 

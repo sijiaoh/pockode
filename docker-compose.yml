@@ -10,9 +10,9 @@ services:
     ports:
       - "${PORT:-80}:8080"
     command:
-      - "--port=8080"
-      - "--work=/workspace"
-    # Through the environment rather than as a --password flag: a flag lands in
+      - "-port=8080"
+      - "-work=/workspace"
+    # Through the environment rather than as a -password flag: a flag lands in
     # the container's argv, which `docker inspect` and every process in the
     # container can read.
     environment:

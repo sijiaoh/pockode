@@ -1,0 +1,73 @@
+# Pockode's public messaging — the one place its copy is written.
+#
+# Read by the Hugo site (hugo.Data.messaging), the README generator
+# (scripts/messaging; `pnpm run readme` rewrites the README's marked blocks) and
+# the marketing asset renderers (scripts/ui-walkthrough/marketing). Change
+# wording here, never in a consumer; CI fails when the README disagrees.
+# What to run after an edit: site/README.md.
+#
+# Rules that keep it readable by all three:
+# - Plain YAML only: no anchors, no tags, no multi-document files.
+# - Values are plain text. The one markup allowed is inline `code` in
+#   backticks; each consumer renders it its own way.
+# - Lists keep their order; consumers draw items in the order given. An `id`
+#   is a stable key for a consumer's own presentation (an icon, a tab), never
+#   shown.
+# - Command-line flags use the single-dash style Go's flag package prints
+#   (`-password`, `-relay=false`), and only flags the server actually has —
+#   CI checks both against the server's own -h, here and across the site.
+# - Claim only what the product does. The license is source-available, not
+#   open source, and the AI CLI sends code to its provider, so never say code
+#   stays on the machine.
+
+name: Pockode
+url: https://pockode.com
+repo: https://github.com/sijiaoh/pockode
+
+tagline: Your coding agents keep working. Steer them from your phone.
+subtitle: Hand stories to a team of Claude Code and Codex agents on your own machine, answer their questions and ship the result from any browser.
+
+pillars:
+  - id: delegate
+    title: Delegate
+    description: Break a story into tasks and give each one to a Claude Code or Codex agent with its own role.
+  - id: loop
+    title: Stay in the loop
+    description: Agents stop and ask when they need a decision, and you answer from wherever you are.
+  - id: ship
+    title: Review & ship
+    description: Read the diff, commit and sync with Git, and open your dev server on the phone with Port Preview.
+  - id: machine
+    title: Your machine
+    description: Your CLI, your subscription, your machine — your code runs where Pockode runs. Add `-relay=false` to keep the app on your own network.
+
+quickstart:
+  prerequisite: Pockode drives the `claude` or `codex` CLI, so install one of them on the same machine first.
+  run_where: on your dev machine, in your project directory
+  next: Scan the QR code with your phone.
+  installers:
+    - id: unix
+      label: macOS / Linux
+      shell: sh
+      install: curl -fsSL https://pockode.com/install.sh | sh
+      run: pockode -password YOUR_PASSWORD
+    - id: windows
+      label: Windows
+      shell: powershell
+      install: irm https://pockode.com/install.ps1 | iex
+      run: pockode -password YOUR_PASSWORD
+
+# The release binaries (docs/platforms.md has the full table).
+platforms:
+  - name: macOS
+    arch: Intel and Apple silicon
+  - name: Linux
+    arch: amd64 and arm64
+  - name: Windows
+    arch: x64, also on Windows 11 on Arm
+
+license:
+  label: Source available
+  name: O'Saasy License
+  file: LICENSE.md
+  summary: You may use, modify and redistribute it, but not offer it to others as a competing hosted service.

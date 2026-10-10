@@ -113,7 +113,7 @@ The file is deleted when the server shuts down gracefully.
 
 **How the spawned node receives its password:** the cluster passes it to each
 node server through the `POCKODE_PASSWORD` environment variable, never as a
-`--password` command-line flag. On Linux a process's argv is world-readable via
+`-password` command-line flag. On Linux a process's argv is world-readable via
 `/proc/<pid>/cmdline` and `ps`, so any local user on a shared cluster host could
 otherwise read it — and because spawned nodes enable the relay by default, that
 password grants full remote read/write and AI execution over the project. The
@@ -178,20 +178,20 @@ restarted.
 
 ```bash
 # Required: the password the cluster UI asks for
-./pockode cluster --password=your-secret-password
+./pockode cluster -password=your-secret-password
 ```
 
 ## Command Line Arguments
 
 | Argument | Default | Description |
 |----------|---------|-------------|
-| `--password` | (required) | Password for the cluster UI (falls back to the `POCKODE_PASSWORD` environment variable when the flag is unset; `--auth-token` / `POCKODE_AUTH_TOKEN` are deprecated aliases — see [Authentication](code/authentication.md#where-the-password-comes-from)) |
-| `--port` | `9871` | HTTP server port |
-| `--data` | `~/.pockode-cluster` | Data directory |
-| `--relay` | `true` | Enable relay for remote access (`-relay=false` to disable) |
-| `--relay-frontend-port` | (same as server port) | Target port for relay HTTP proxy frontend requests |
-| `--cloud-url` | `https://cloud.pockode.com` | Relay server URL |
-| `--dev` | `false` | Development mode (disables embedded SPA) |
+| `-password` | (required) | Password for the cluster UI (falls back to the `POCKODE_PASSWORD` environment variable when the flag is unset; `-auth-token` / `POCKODE_AUTH_TOKEN` are deprecated aliases — see [Authentication](code/authentication.md#where-the-password-comes-from)) |
+| `-port` | `9871` | HTTP server port |
+| `-data` | `~/.pockode-cluster` | Data directory |
+| `-relay` | `true` | Enable relay for remote access (`-relay=false` to disable) |
+| `-relay-frontend-port` | (same as server port) | Target port for relay HTTP proxy frontend requests |
+| `-cloud-url` | `https://cloud.pockode.com` | Relay server URL |
+| `-dev` | `false` | Development mode (disables embedded SPA) |
 
 Data is stored in `~/.pockode-cluster/` (created automatically if it doesn't exist):
 
@@ -257,7 +257,7 @@ alternatives that were rejected on the way to it, are in
 [cluster-ui.md](cluster-ui.md).
 
 - **Password screen.** The field can be revealed, and says where the password
-  comes from (the `--password` the cluster was started with). It is usually
+  comes from (the `-password` the cluster was started with). It is usually
   typed on a phone keyboard; typing it blind and being turned away is the worst
   way to learn a character was wrong. A password the cluster rejects leads to an
   "Authentication failed" screen carrying the server's own message; its Try
@@ -390,7 +390,7 @@ This provides a consistent user experience across both deployment modes.
 
 ## Relay Integration
 
-When `--relay` is enabled (default), cluster mode registers with the cloud relay server and accepts connections through it. This allows mobile devices to connect without direct network access to the server.
+When `-relay` is enabled (default), cluster mode registers with the cloud relay server and accepts connections through it. This allows mobile devices to connect without direct network access to the server.
 
 The relay uses the same infrastructure as the main server mode—see [relay.md](relay.md) for the design, and [code/relay-system.md](code/relay-system.md) for how the tunnel detects a dead connection and recovers from one. The cluster frontend's reconnect behaviour mirrors the main web client for the same reasons described there.
 

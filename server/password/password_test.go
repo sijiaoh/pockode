@@ -64,8 +64,8 @@ func TestResolve_ConflictingValuesAreRefused(t *testing.T) {
 	t.Run("flags", func(t *testing.T) {
 		clearEnv(t)
 		_, err := Resolve("new", "old")
-		if err == nil || !strings.Contains(err.Error(), "--auth-token") {
-			t.Fatalf("Resolve() error = %v, want one naming --auth-token", err)
+		if err == nil || !strings.Contains(err.Error(), "-auth-token") {
+			t.Fatalf("Resolve() error = %v, want one naming -auth-token", err)
 		}
 	})
 
