@@ -55,8 +55,12 @@ light and dark pages alike. The architecture diagram is the one exception
 ### 1.2 Marketing palette
 
 The chrome around the captures — canvas, captions, cards, frames — uses the
-site's tokens (`site/themes/pockode/static/css/style.css`) and the logo's
-gradient (`site/static/images/logo.svg`). Nothing new is introduced.
+values below; the renderers write them into their pages. They were taken from the
+site's stylesheet before its redesign (the third column names that
+stylesheet's tokens) and from the logo's gradient
+(`site/static/images/logo.svg`); the site's own palette is in
+[site-design.md §2.1](site-design.md#21-colour) and no longer matches them
+everywhere.
 
 | Token | Value | Where it comes from | Used for |
 |---|---|---|---|
@@ -358,7 +362,7 @@ subtitle is a choice between shortening it and resizing the type here.
 | Background | full | `canvas` + `canvas-glow` centred at (900, 0) |
 | Logo | 56×56 at (72, 72) | `logo.svg` |
 | Wordmark | left 144, centred on the logo | the name, Geist 700 32px −0.02em `text` |
-| Headline | left 72, top 172, width 620 | the tagline, Geist 700 56px, line-height 1.06, −0.035em; fill `linear-gradient(135deg, #fff 0%, #fff 50%, #60a5fa 100%)` (the site hero's) |
+| Headline | left 72, top 172, width 620 | the tagline, Geist 700 56px, line-height 1.06, −0.035em; fill `linear-gradient(135deg, #fff 0%, #fff 50%, #60a5fa 100%)` (the pre-redesign site hero's) |
 | Sub-line | left 72, 28 below the headline, width 600 | the subtitle, Geist 400 22px, line-height 1.45, `text-secondary` |
 | Footer | left 72, baseline 558 | host · license, Geist 500 20px `text-muted` |
 | Phone | §2 frame scaled to 640 tall (scale 0.737), left 760, top 72 | shows the question shot (§4.4 shot 4a); its lower ~80px are cut off by the image edge |
@@ -369,16 +373,16 @@ crop every major platform uses; it is not designed to survive a square crop.
 
 Output: `og-image.png`, 1200×630 at DPR 1 (the size platforms ask for), plus
 `og-image@2x.png` for the site to use as a large hero if it wants one. The
-existing `site/static/icons/og-image.jpg` is left alone; switching the site's
-`<meta>` to the new file is a later story's.
+site's `og:image` and `twitter:image` point at `og-image.png`.
 
 ## 6. Architecture diagram
 
 A figure inside text sits on whatever page the reader has, light or dark, so
 this one comes in both, for a `<picture>` with `prefers-color-scheme`. The
 README does not use it: it draws its diagram in Mermaid, which GitHub themes
-itself. Nothing in the repository shows this figure today; it is kept for
-the site and for posts that need the picture as an image.
+itself. The site, which is dark only, shows the dark variant (and below 1024px
+the portrait one, §6.1) on the homepage and `/security/`; the light one is kept
+for posts that need the picture as an image.
 
 ```
  ┌───────────┐  HTTPS / WSS   ┌───────────┐  outbound tunnel  ┌─ Your machine ──────────────────────┐
@@ -436,6 +440,34 @@ Node x positions (left edges): 24, 328, 656, 1008 — the gaps (136, 160, 184)
 are sized to their edge labels, and the 24 margin is the same on both ends.
 All cards top at 116 (centre y 180); the boundary spans x 636–1196,
 y 60–300, also centred on 180.
+
+### 6.1 Portrait variant
+
+At a 375px-wide page the landscape figure shrinks to 0.28× and its 12px
+labels become 3px. The site therefore shows a portrait figure below 1024px
+([site-design.md](site-design.md#45-your-machine)): the same nodes, edges, labels
+and paint as the dark table above, stacked top to bottom. It is drawn in dark
+only, since only the site uses it, and the site is dark only.
+
+Logical size **360×800**, rendered at 2× → **720×1600** PNG,
+`architecture-dark-portrait.png`.
+
+| Element | Geometry |
+|---|---|
+| Node card | 240×88 at x 60, radius 14. Icon 28×28 at (20, 30) inside the card; title (Geist 600 17px) and sub (Geist Mono 400 13px, 4 below the title) left-aligned at x 64 inside the card, the pair centred vertically |
+| Card tops | Phone 16, Relay 196, PC 400, CLI 580 |
+| Edges | all on x 180, 2px, 8px arrowhead, each end 6px clear of its card |
+| Phone → Relay | y 110–190, arrow at Relay; lock centred at y 150 |
+| PC → Relay | y 394–290, arrow at **Relay** (pointing up); lock centred at y 312, outside the boundary, so it never sits on the dashed line |
+| PC → CLI | y 494–574, arrow at CLI; no lock |
+| Edge label | Geist 500 13px, left-aligned at x 196, centred on the lock's y (PC → CLI: on y 534) |
+| Machine boundary | x 24–336, y 336–784, radius 18, dashed as above |
+| Boundary label | inside top-left at (38, 350), 13px |
+| Boundary footnote | centred on x 180, baseline 760, 13px |
+
+The labels, subs and boundary text are 13px here, not 12px: the site draws
+the figure at up to 360 CSS px wide and never larger, so 1px more keeps them
+at 12px or above on a 343px column.
 
 ## 7. Framed screenshots
 
@@ -547,7 +579,8 @@ site/static/marketing/
 ├── screenshots/   phone-*.png, desktop.png         (§7)
 ├── video/         demo.mp4, demo.webm, demo.gif, demo-poster.png  (§4)
 ├── og-image.png, og-image@2x.png                   (§5)
-└── architecture-dark.png, architecture-light.png   (§6)
+├── architecture-dark.png, architecture-light.png   (§6)
+└── architecture-dark-portrait.png                  (§6.1)
 ```
 
 Raw captures, keyframes and the stage's intermediate frames stay in
