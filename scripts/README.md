@@ -78,7 +78,7 @@ makes `pockode -version` print `pockode 0.17.0`.
 | Create draft release | Uploads `dist/*` to a release that is still a **draft** |
 | Verify draft assets | `./scripts/verify-release-assets.sh dist` — see below |
 | Publish release | Flips the draft to published, setting `make_latest` explicitly |
-| Rebuild pockode.com | Stable releases only: POSTs to the `SITE_DEPLOY_HOOK` secret so the site's changelog picks the release up; warns when the secret is unset |
+| Rebuild pockode.com | Stable releases only, as a job of its own after publishing: dispatches the *Site* workflow on main so the site's changelog picks the release up ([site/README.md](../site/README.md#the-changelog)) |
 
 Four properties of that sequence are worth knowing before you touch it. All but
 one have already gone wrong once; the exception — an asset's name saying nothing
@@ -227,14 +227,16 @@ pnpm run test:messaging    # the checks' own tests, and the marketing palette's
 ## `site/` — pockode.com build, checks and fonts
 
 ```bash
-scripts/site/hugo.sh --gc --minify        # build with the pinned Hugo (CI and the host run this)
+scripts/site/hugo.sh --gc --minify        # build with the pinned Hugo (CI runs this)
 node scripts/site/links.mjs site/public   # after the build: the README's site links resolve
 node --test "scripts/site/*.test.mjs"     # the link check's own tests
 scripts/site/fonts.sh                     # rewrite the site's subset fonts (npm and uv)
 ```
 
 The *Site* workflow builds with the first and runs the next two after it, beside
-Lighthouse; [site/README.md](../site/README.md#checks) says what each holds.
+Lighthouse; [site/README.md](../site/README.md#checks) says what each holds. On
+main it then deploys that build to Cloudflare Pages
+([site/README.md](../site/README.md#deploying)).
 
 ## `ui-walkthrough/` — Chat and answering UI screenshots
 

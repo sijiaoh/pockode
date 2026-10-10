@@ -25,21 +25,22 @@ downloads that Hugo (Linux x86-64), checks its checksum and runs it in `site/`
 with the arguments it was given:
 
 ```bash
-scripts/site/hugo.sh --gc --minify   # what CI and the host run; output in site/public
+scripts/site/hugo.sh --gc --minify   # what CI runs; output in site/public
 scripts/site/hugo.sh server          # preview with that Hugo, nothing to install
 ```
 
 CI builds with it (see [Checks](#checks)), so a template that needs a newer
-Hugo fails there. The host's build command must be that first line (from the
-repository root; output `site/public`): a host left to its own Hugo builds with
+Hugo fails there, and that build is the one that goes live (see
+[Deploying](#deploying)): nothing else builds the site for real. Cloudflare
+Pages is kept from building it because a build left to its own Hugo gets
 whatever its image ships, and Cloudflare Pages' image ships v0.147.7, on which
 every page fails. Raise the version (and the script's checksum, and
 `hugoVersion.min` when a template is the reason) and this paragraph together.
 
 The build reads GitHub Releases over the network (see [the
-changelog](#the-changelog)), so set `GITHUB_TOKEN` wherever the site is built
-for real: without it the API allows 60 requests an hour per IP address, which a
-shared build machine can run out of.
+changelog](#the-changelog)), so CI builds with the run's own `GITHUB_TOKEN`:
+without a token the API allows 60 requests an hour per IP address, which a
+shared runner can run out of. A local build can do without one.
 
 The build also fails when a page other than the home page has no front-matter
 `description`, or one over 160 characters: it is the page's meta description.
@@ -76,6 +77,52 @@ pnpm exec lhci autorun                                        # reports in .ligh
 Where unprivileged user namespaces are disabled (Ubuntu 23.10 and later
 without an installed Chrome), Chrome cannot start its sandbox; add
 `--collect.settings.chromeFlags=--no-sandbox` for a local run.
+
+## Deploying
+
+pockode.com is a Cloudflare Pages project that builds nothing itself. On main,
+the *Site* workflow's `deploy` job takes the `site/public` that its `check` job
+built and that passed every check above, and uploads it with `wrangler pages
+deploy` as the production deployment; the project name and the wrangler
+version are in that step. Pull requests and other branches stop at the checks.
+
+A deploy happens on:
+
+- a push to main that changes a file the workflow's `paths` list;
+- a manual run of the workflow on main (Actions → Site → Run workflow), for
+  example to redeploy;
+- a stable release, which dispatches the workflow (see [The
+  changelog](#the-changelog)).
+
+Runs on main go one at a time, and a waiting run gives way to a newer one, so an
+older build never replaces a newer one on the live site.
+
+### One-time setup
+
+On Cloudflare:
+
+1. In the Pages project, under Settings → Build → Branch control, turn off
+   automatic deployments for both the production branch and preview branches.
+   The project stays connected to the repository, but Cloudflare stops
+   building on a push: its build would bring its own Hugo and skip the checks.
+2. In the same place, check that the production branch is `main`: deploying
+   with `--branch=main` is what makes an upload the production deployment.
+3. Create an API token (My Profile → API Tokens → Create Token → Custom token)
+   with only Account · Cloudflare Pages · Edit, limited to this account, and
+   note the account ID (on the Workers & Pages overview).
+4. Delete what only the old Cloudflare build used, if it is there: the
+   project's `GITHUB_TOKEN` variable, a token nothing reads now, and its deploy
+   hook, which would still start a Cloudflare build with its own Hugo.
+
+On GitHub, under Settings → Secrets and variables → Actions:
+
+5. Add the repository secrets `CLOUDFLARE_API_TOKEN` and
+   `CLOUDFLARE_ACCOUNT_ID`. Until both are set, the deploy job fails and names
+   the missing one; the checks still run.
+6. Delete the `SITE_DEPLOY_HOOK` secret if it is there; nothing reads it now.
+
+The job deploys through the `production` environment, which its first run
+creates; protection rules on it are optional.
 
 ## Pages and templates
 
@@ -123,10 +170,11 @@ publishing an empty changelog. `hugo server` only warns and leaves the
 changelog and the footer's version out, so the rest of the site can still be
 edited offline.
 
-Publishing a release does not touch the site by itself. The release workflow's
-last step POSTs to the host's deploy hook, stored as the `SITE_DEPLOY_HOOK`
-repository secret, for stable releases; without the secret it warns, and the
-release reaches the site with its next deploy.
+Publishing a release does not touch the site by itself, and a release published
+with a workflow's own token starts no other workflow. So for stable releases
+the release workflow ends with a job that dispatches the *Site* workflow on
+main — main rather than the tag, so a release cannot put older site sources
+live — and that run checks and [deploys](#deploying) like any other.
 
 ## Where the words come from
 

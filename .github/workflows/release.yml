@@ -89,18 +89,24 @@ jobs:
             "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" \
             -F draft=false -f make_latest="$MAKE_LATEST"
 
-      # pockode.com builds its changelog and footer version from GitHub
-      # Releases at build time, and nothing else rebuilds it when a release is
-      # published, so the release would not appear there until the next deploy.
-      # SITE_DEPLOY_HOOK is the host's deploy hook URL. Pre-releases are left
-      # out because the site shows stable releases only.
+  # pockode.com builds its changelog and footer version from GitHub Releases at
+  # build time, and nothing else rebuilds it when a release is published, so the
+  # release would not appear there until the next deploy. A release published
+  # with this run's token raises no event that starts another workflow, but a
+  # dispatch does: it runs the site's checks and deploy on main, the branch
+  # production is built from, not on the tag. Pre-releases are left out because
+  # the site shows stable releases only.
+  site:
+    needs: release
+    # PRERELEASE spelled out again: a job's if cannot read the env context.
+    if: ${{ !contains(github.ref_name, '-') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: write
+
+    steps:
       - name: Rebuild pockode.com
-        if: ${{ env.PRERELEASE != 'true' }}
         env:
-          SITE_DEPLOY_HOOK: ${{ secrets.SITE_DEPLOY_HOOK }}
-        run: |
-          if [ -z "$SITE_DEPLOY_HOOK" ]; then
-            echo "::warning::SITE_DEPLOY_HOOK is not set, so pockode.com shows $GITHUB_REF_NAME only after its next deploy."
-            exit 0
-          fi
-          curl --fail --silent --show-error --retry 3 -X POST "$SITE_DEPLOY_HOOK" > /dev/null
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run site.yml --repo "$GITHUB_REPOSITORY" --ref main

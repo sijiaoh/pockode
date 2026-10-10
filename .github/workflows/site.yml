@@ -4,6 +4,13 @@ name: Site
 # build produces, and holds the mobile homepage to a Lighthouse score of 90 in
 # performance, accessibility and SEO, best of five runs (site/README.md#checks).
 # The README is watched because its links are half of that check.
+#
+# On main, the build that passed is what goes live: the deploy job publishes
+# this run's site/public to Cloudflare Pages rather than building again, so
+# production is never a build the checks did not see. Cloudflare's own Git
+# builds are switched off for the project. A push only runs this when the site's
+# sources change, but the changelog is built from GitHub Releases, so
+# release.yml dispatches this workflow on main after a stable release.
 on:
   push:
     branches: [main]
@@ -30,6 +37,13 @@ on:
 permissions:
   contents: read
 
+# On main, runs go one at a time from check to deploy, and a waiting run is
+# replaced by a newer one, so an older build can never go live after a newer
+# one and a deploy is never cut off. Elsewhere only the latest push matters.
+concurrency:
+  group: site-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
 jobs:
   check:
     runs-on: ubuntu-latest
@@ -54,9 +68,9 @@ jobs:
       - name: Test the link check
         run: node --test "scripts/site/*.test.mjs"
 
-      # Through the script the host builds with too, so both use the Hugo it
-      # pins. The changelog fetches GitHub Releases; without a token the API
-      # allows 60 requests an hour per IP, which a shared runner can run out of.
+      # Through the script, so the build uses the Hugo it pins. The changelog
+      # fetches GitHub Releases; without a token the API allows 60 requests an
+      # hour per IP, which a shared runner can run out of.
       - name: Build the site
         env:
           GITHUB_TOKEN: ${{ github.token }}
@@ -69,6 +83,15 @@ jobs:
         working-directory: site
         run: pnpm exec lhci autorun
 
+      # Taken by the deploy job only after every check above has passed.
+      - name: Upload the site
+        uses: actions/upload-artifact@v4
+        with:
+          name: site
+          path: site/public
+          if-no-files-found: error
+          retention-days: 7
+
       - name: Upload the Lighthouse reports
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v4
@@ -76,3 +99,64 @@ jobs:
           name: lighthouse
           path: site/.lighthouseci/reports
           if-no-files-found: ignore
+
+  deploy:
+    needs: check
+    # Pull requests and other branches stop at the checks. Both push and
+    # workflow_dispatch on main deploy: the dispatch is how release.yml brings a
+    # new release to the changelog.
+    if: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment:
+      name: production
+      url: https://pockode.com
+
+    steps:
+      # For .node-version, and the commit wrangler labels the deployment with.
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version-file: .node-version
+
+      - name: Download the site
+        uses: actions/download-artifact@v4
+        with:
+          name: site
+          path: public
+
+      # Missing secrets would otherwise reach wrangler as empty strings and fail
+      # with an authentication error that does not say which one is unset.
+      - name: Check the Cloudflare secrets
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          missing=0
+          for name in CLOUDFLARE_API_TOKEN CLOUDFLARE_ACCOUNT_ID; do
+            if [ -z "${!name}" ]; then
+              echo "::error::The $name secret is not set, so pockode.com cannot be deployed."
+              missing=1
+            fi
+          done
+          exit "$missing"
+
+      # The project is Git-connected, which wrangler can still deploy to;
+      # --branch=main makes this the production deployment, main being the
+      # project's production branch. wrangler is fetched at a fixed version here
+      # rather than kept in package.json, so every other install of the
+      # workspace does not pull in its runtime.
+      - name: Deploy to Cloudflare Pages
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          PAGES_PROJECT: pockode
+          WRANGLER_VERSION: 4.149.0
+        run: |
+          npx --yes "wrangler@$WRANGLER_VERSION" pages deploy public \
+            --project-name="$PAGES_PROJECT" --branch=main \
+            --commit-hash="$GITHUB_SHA" --commit-dirty=false
