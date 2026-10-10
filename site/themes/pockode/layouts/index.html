@@ -26,7 +26,7 @@
       {{- /* No poster attribute: the <img> above is the poster, with a srcset.
       preload="none" fetches nothing until it plays: by itself in view on a wide
       screen, on a phone only when the visitor presses Play (main.js). */}}
-      <video class="demo-video" muted loop playsinline preload="none" width="1920" height="1080" aria-label="{{ $h.demo }}">
+      <video class="demo-video" muted loop playsinline preload="none" width="1920" height="1080" aria-label="{{ $m.images.demo }}">
         <source src="{{ "marketing/video/demo.webm" | relURL }}" type="video/webm">
         <source src="{{ "marketing/video/demo.mp4" | relURL }}" type="video/mp4">
       </video>

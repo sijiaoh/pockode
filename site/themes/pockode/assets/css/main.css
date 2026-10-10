@@ -45,7 +45,21 @@
   --on-accent: #0a0a0a;
   --warn: #fbbf24;
   /* Lighter stops than the logo's: its purple fails AA on a card (§2.1). */
-  --brand: linear-gradient(135deg, #22d3ee, #c084fc);
+  --brand-1: #22d3ee;
+  --brand-2: #c084fc;
+  --brand: linear-gradient(135deg, var(--brand-1), var(--brand-2));
+  --headline: linear-gradient(
+    135deg,
+    var(--text) 0%,
+    var(--text) 55%,
+    var(--brand-1) 80%,
+    var(--brand-2) 100%
+  );
+  /* Stops, not a gradient: each picture places the glow itself. */
+  --glow:
+    color-mix(in srgb, var(--accent) 12%, transparent) 0%,
+    color-mix(in srgb, var(--brand-2) 6%, transparent) 40%,
+    transparent 70%;
 
   --font: "Geist", system-ui, -apple-system, "Segoe UI", sans-serif;
   --mono: "Geist Mono", ui-monospace, "SF Mono", "Cascadia Code", monospace;
@@ -1140,12 +1154,7 @@ details[open] > summary .chevron {
   left: 0;
   right: 0;
   height: 600px;
-  background: radial-gradient(
-    ellipse at center,
-    rgba(45, 212, 191, 0.12) 0%,
-    rgba(192, 132, 252, 0.06) 40%,
-    transparent 70%
-  );
+  background: radial-gradient(ellipse at center, var(--glow));
   pointer-events: none;
   z-index: -1;
 }
@@ -1179,7 +1188,7 @@ details[open] > summary .chevron {
   line-height: 1.05;
   letter-spacing: -0.035em;
   text-wrap: balance;
-  background: linear-gradient(135deg, #fafafa 0%, #fafafa 55%, #22d3ee 80%, #c084fc 100%);
+  background: var(--headline);
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
   background-clip: text;

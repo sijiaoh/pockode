@@ -37,6 +37,11 @@ a renderer. What stays in the renderers is what describes the picture rather
 than the product: the video's captions narrate the shot they sit on and are
 timed to it (§4.4), and the architecture figure's labels name its parts (§6).
 
+The same file describes the pictures for a screen reader: `images` holds the
+alt texts of the demo, the architecture figure and the screenshots, wherever
+the site or the README shows them. They say what a picture shows, so a
+storyboard or capture change that alters that is an edit there as well.
+
 A `code` span in a value is set in Geist Mono, never left to a fallback font
 (§1.3).
 
@@ -46,33 +51,85 @@ A `code` span in a value is set in Geist Mono, never left to a fallback font
 
 Every app capture is the **abyss** theme in **dark** mode — the default theme,
 and the one that sits on the site's near-black page without a seam. Its teal
-accent (`#2dd4bf`) is the cyan end of the logo's gradient, so the app and the
-marketing chrome read as one product. No light-mode captures: the README GIF
-and the social image sit on their own dark canvas, which reads on GitHub's
-light and dark pages alike. The architecture diagram is the one exception
-(§6) because it is a figure meant to sit inside text, not a picture of the app.
+accent (`#2dd4bf`) is the cyan end of the logo's gradient and the site's
+`--accent`, so the app, the site and the marketing chrome read as one product.
+No light-mode captures: the README GIF and the social image sit on their own
+dark canvas, which reads on GitHub's light and dark pages alike. The
+architecture diagram is the one exception (§6) because it is a figure meant to
+sit inside text, not a picture of the app.
 
 ### 1.2 Marketing palette
 
-The chrome around the captures — canvas, captions, cards, frames — uses the
-values below; the renderers write them into their pages. They were taken from the
-site's stylesheet before its redesign (the third column names that
-stylesheet's tokens) and from the logo's gradient
-(`site/static/images/logo.svg`); the site's own palette is in
-[site-design.md §2.1](site-design.md#21-colour) and no longer matches them
-everywhere.
+The chrome around the captures — canvas, captions, cards, glow — is painted in
+**the site's palette**, read from the site's stylesheet at render time, so an
+asset and the page that shows it cannot drift apart. The renderers keep no
+copy of a site colour: `scripts/ui-walkthrough/marketing/palette.mjs` (beside
+`messaging.mjs`, and like it) takes the custom properties of the top-level
+`:root` rule of `site/themes/pockode/assets/css/main.css` and every template
+page gets them injected, as it gets the `@font-face` rules (§1.3). Only the
+custom properties: that rule also sets `color-scheme: dark`, which would give
+the diagram's transparent page a dark canvas. Templates then write
+`var(--text-3)`, never `#8f8f8f`. A render refuses a page that uses a token
+missing from that rule, rather than letting `var()` fall back to nothing; and
+`palette.test.mjs`, run by the Messaging workflow on any change under
+`site/`, checks the same of every renderer's source, and that none writes a
+site colour as a literal.
 
-| Token | Value | Where it comes from | Used for |
-|---|---|---|---|
-| `canvas` | `#0a0a0a` | site `--bg` | stage, social image background |
-| `canvas-glow` | `radial-gradient(ellipse at 50% 0%, rgba(59,130,246,.12) 0%, rgba(168,85,247,.06) 40%, transparent 70%)` | site `.hero::before` | top glow on stage and social image |
-| `card` | `#141414` | site `--bg-elevated` | terminal window, diagram nodes (dark) |
-| `border` | `#262626` | site `--border` | card strokes |
-| `text` | `#fafafa` | site `--text` | captions, headlines |
-| `text-secondary` | `#a1a1a1` | site `--text-secondary` | sub-lines |
-| `text-muted` | `#666666` | site `--text-muted` | footers, inactive step dots |
-| `brand` | `linear-gradient(135deg, #06b6d4, #a855f7)` | logo | the logo, caption highlight, diagram edges |
-| `accent` | `#2dd4bf` | abyss dark `--th-accent` | tap indicator ring, focus outline |
+The tokens, their values and the contrast of every pair are in
+[site-design.md §2.1](site-design.md#21-colour); this page names tokens only,
+so a palette change there is a re-render here (`run.sh assets`), never an edit.
+
+| Site token | Used for |
+|---|---|
+| `--bg` | stage, title and end cards, social image background |
+| `--glow` | the top glow on the stage, the cards and the social image (§1.2.1) |
+| `--card` | terminal window, end card's install box, caption's inline code, diagram nodes (dark) |
+| `--border` | strokes of those cards |
+| `--text` | captions, names, headlines, the terminal's default text, the current step dot, diagram titles and locks (dark) |
+| `--text-2` | the title card's tagline, the social sub-line, every small label of the dark diagram |
+| `--text-3` | footers, the terminal's title, inactive step dots |
+| `--headline` | the social image's headline |
+| `--brand` | caption highlight |
+| `--brand-1`, `--brand-2` | the dark diagram's icons and edges (SVG gradient stops cannot take a CSS gradient, so they read the stops) |
+| `--accent` | tap ring; its fill is `--accent` at 22% (`color-mix(in srgb, var(--accent) 22%, transparent)`) |
+
+`--brand-1`, `--brand-2`, `--glow` and `--headline` are the site's own
+gradients made tokens: before, the site wrote them out inside `--brand`,
+`.hero::before` and `.hero-title`, where nothing outside that rule could read
+them. The site now uses the tokens itself, so the hero renders as before.
+
+The logo's own stops (`#06b6d4`, `#a855f7`) are not in that rule: they are
+the logo's, in `site/static/images/logo.svg`, which the assets show as it is.
+Its purple is 4.4:1 on a card, which is why `--brand` has lighter stops and
+the caption highlight, the one gradient text here, takes `--brand`. The only
+other place the logo's stops appear is the light diagram (§6), which reads
+them from that file.
+
+#### 1.2.1 The glow
+
+`--glow` is a list of colour stops, not a gradient, so each picture can place
+it: the site centres it in a 600px box above the hero; the stage and the
+cards anchor it at the top centre, `radial-gradient(ellipse at 50% 0%,
+var(--glow))`, and the social image at the top over the phone,
+`radial-gradient(ellipse at 900px 0, var(--glow))`. The stops are `--accent`
+at 12% fading through `--brand-2` at 6% to transparent at 70% — teal into
+purple, where the pre-redesign glow was blue into purple.
+
+#### 1.2.2 What is not the site's
+
+These describe things that are not Pockode's page, so the site has no
+equivalent, and each stays a literal in its renderer:
+
+| Values | Where | Why it is not a site token |
+|---|---|---|
+| `#1c1f24`, `#2a2e35`, `#0b0d10`, `#16191e`, `#0c0e12`, `#8a93a0`, `rgba(255,255,255,.08)`, the shadows | phone and browser frames (§2, §3.1) | device and browser chrome: a cool grey hardware tone that sets the device apart from the page it sits on |
+| `#e8f0f5` / `#18181b` | the phone's status bar and home strip glyphs (§2) | the app's abyss `--th-text-primary`, and a dark one for a light capture: they continue the capture, not the page |
+| `#f4f4f5`, `#e4e4e7`, `#52525b`, `#3f3f46` | the Port Preview address bar (§3.2) | a light browser's chrome |
+| `#71717a`, `#22d3ee`, `#4ade80`, `#facc15` | the terminal's ANSI dim, cyan, green, yellow (§3.3) | what a terminal draws for `pockode`'s colours; bold-white is `--text` |
+| `#3f3f46` | the dark diagram's machine boundary (§6) | a dashed, decorative outline the label explains; `--border` (1.3:1) all but vanishes in a scaled-down figure, and `--border-strong` is the site's mark of a control |
+| the light diagram's column (§6) | `architecture-light.png` | the site is dark only and has no light palette |
+| the *tidy* page (§8.4) | Port Preview capture | the user's app, deliberately not ours |
+| `#000` | under the stage's layers (§4) | not a colour of the picture: the layers add onto it, so it has to be zero |
 
 ### 1.3 Type
 
@@ -188,10 +245,11 @@ above it samples this bar's colour as usual.
 
 ### 3.3 Terminal window (shot 1)
 
-`card` background, radius 12, 1px `border`, title bar 36px with
-`~/tidy — pockode` Geist 500 12px `text-muted` centred. Body: Geist Mono 15px,
-line-height 1.35, padding 24 32, ANSI colours mapped to: cyan `#22d3ee`, green
-`#4ade80`, yellow `#facc15`, dim `#71717a`, bold-white `#fafafa`.
+`--card` background, radius 12, 1px `--border`, title bar 36px with
+`~/tidy — pockode` Geist 500 12px `--text-3` centred. Body: Geist Mono 15px,
+line-height 1.35, padding 24 32, `--text`; ANSI colours mapped to: cyan
+`#22d3ee`, green `#4ade80`, yellow `#facc15`, dim `#71717a`, bold-white
+`--text` (§1.2.2).
 
 Content is the real startup banner — `startup.PrintBanner` and
 `startup.PrintQRCode` — not a re-typed copy, so it cannot drift from what
@@ -222,7 +280,7 @@ character the stage has no drawing for fails the render.
 
 ### 4.1 Stage
 
-1920×1080, `canvas` + `canvas-glow`. Two bands:
+1920×1080, `--bg` + `--glow` (§1.2.1). Two bands:
 
 | Band | y | Holds |
 |---|---|---|
@@ -244,18 +302,18 @@ capture, so they need no backing box.
 | Property | Value |
 |---|---|
 | Font | Geist 600, 44px, line-height 1.2, letter-spacing −0.01em |
-| Colour | `text` `#fafafa` on `#0a0a0a` — contrast 19.3:1 |
-| Highlight | the one key phrase per caption (bold in §4.4) painted with `brand` via `background-clip: text` |
+| Colour | `--text` on `--bg` — 18.97:1 |
+| Highlight | the one key phrase per caption (bold in §4.4) painted with `--brand` via `background-clip: text` (its stops clear 7.4:1 on `--bg`) |
 | Layout | one line, centred, ≤ 48 characters; no wrapping, so the band never grows |
 | In | starts with its shot: opacity 0→1, translateY 12→0, 320ms, `cubic-bezier(.2,.8,.2,1)` |
 | Out | ends with its shot: opacity 1→0, translateY 0→−8, 200ms, `cubic-bezier(.4,0,1,1)` |
 
 Step dots: seven dots for shots 1–7, 8px circles 12px apart, inactive
-`text-muted`; the current one is a 24×8 pill in `text`. It changes at the
+`--text-3`; the current one is a 24×8 pill in `--text`. It changes at the
 caption's in.
 
-Inline code in a caption (`pockode`) is Geist Mono 500 at 40px, `text`, with a
-`#1a1a1a` rounded (6px) background padded 2px 10px.
+Inline code in a caption (`pockode`) is Geist Mono 500 at 40px, `--text`, with a
+`--card` rounded (6px) background padded 2px 10px — the site's inline code.
 
 ### 4.3 Motion vocabulary
 
@@ -268,7 +326,7 @@ without a second storyboard.
 |---|---|
 | Shot change | 400ms crossfade of the content band |
 | Keyframe change within a shot | 250ms crossfade of the screen only (the frame stays put) |
-| Tap | at the target's centre, starting 300ms before the keyframe change: ring Ø44, 3px `accent`, fill `rgba(45,212,191,.22)`; scale .6→1 and opacity 1→0 over 450ms, ease-out |
+| Tap | at the target's centre, starting 300ms before the keyframe change: ring Ø44, 3px `--accent`, fill `--accent` at 22%; scale .6→1 and opacity 1→0 over 450ms, ease-out |
 | Typing | two keyframes, field empty then filled; no per-character animation |
 | Entrance (shot 1 phone) | translateY 40→0 and opacity 0→1, 400ms, `cubic-bezier(.2,.8,.2,1)` |
 
@@ -299,17 +357,17 @@ live session at once.
 
 ### 4.5 Title and end cards
 
-Centred on `canvas` + `canvas-glow`, no caption band, no step dots.
+Centred on `--bg` + `--glow`, no caption band, no step dots.
 
 The words are the messaging source's (see *The copy*).
 
 - **Title** (shot 0): logo 120×120; 32 below it the name Geist 700 96px
-  letter-spacing −0.04em `text`; 16 below the tagline Geist 500 40px
-  `text-secondary`. Fades in over the first 300ms; crossfades into shot 1.
+  letter-spacing −0.04em `--text`; 16 below the tagline Geist 500 40px
+  `--text-2`. Fades in over the first 300ms; crossfades into shot 1.
 - **End** (shot 8): logo 96×96; 28 below the name Geist 700 72px; 36 below the
-  install line in a `card` box (radius 12, 1px `border`, padding 20 32):
-  the install command, Geist Mono 400 30px `text`; 28 below host · license
-  Geist 500 28px `text-muted`. Holds to the last frame, so the GIF's loop
+  install line in a `--card` box (radius 12, 1px `--border`, padding 20 32):
+  the install command, Geist Mono 400 30px `--text`; 28 below host · license
+  Geist 500 28px `--text-3`. Holds to the last frame, so the GIF's loop
   point is a still.
 
 ### 4.6 Rendering
@@ -359,12 +417,12 @@ subtitle is a choice between shortening it and resizing the type here.
 
 | Element | Geometry | Style |
 |---|---|---|
-| Background | full | `canvas` + `canvas-glow` centred at (900, 0) |
+| Background | full | `--bg` + `--glow` at (900, 0) (§1.2.1) |
 | Logo | 56×56 at (72, 72) | `logo.svg` |
-| Wordmark | left 144, centred on the logo | the name, Geist 700 32px −0.02em `text` |
-| Headline | left 72, top 172, width 620 | the tagline, Geist 700 56px, line-height 1.06, −0.035em; fill `linear-gradient(135deg, #fff 0%, #fff 50%, #60a5fa 100%)` (the pre-redesign site hero's) |
-| Sub-line | left 72, 28 below the headline, width 600 | the subtitle, Geist 400 22px, line-height 1.45, `text-secondary` |
-| Footer | left 72, baseline 558 | host · license, Geist 500 20px `text-muted` |
+| Wordmark | left 144, centred on the logo | the name, Geist 700 32px −0.02em `--text` |
+| Headline | left 72, top 172, width 620 | the tagline, Geist 700 56px, line-height 1.06, −0.035em; fill `--headline`, the site hero's, through `background-clip: text` |
+| Sub-line | left 72, 28 below the headline, width 600 | the subtitle, Geist 400 22px, line-height 1.45, `--text-2` |
+| Footer | left 72, baseline 558 | host · license, Geist 500 20px `--text-3` |
 | Phone | §2 frame scaled to 640 tall (scale 0.737), left 760, top 72 | shows the question shot (§4.4 shot 4a); its lower ~80px are cut off by the image edge |
 
 Everything that matters is inside x 72–1128, y 72–558, so the platforms that
@@ -400,16 +458,16 @@ Logical size **1220×360**, rendered at 2× → **2440×720** PNG.
 | Element | Geometry | Dark | Light |
 |---|---|---|---|
 | Background | full | transparent | transparent |
-| Node card | 168×128, radius 14, 1px stroke | fill `#141414`, stroke `#262626` | fill `#ffffff`, stroke `#e4e4e7` |
-| Node icon | 32×32 line icon (lucide `smartphone`, `cloud`, `laptop`, `terminal`), stroke 1.75, 20 from the card top, centred | `brand` gradient stroke | same |
-| Node title | 16 under the icon | Geist 600 17px `#fafafa` | `#18181b` |
-| Node sub | 4 under the title | Geist Mono 400 12px `#a1a1a1` | `#52525b` |
-| Edge | 2px line, 8px arrowhead | `brand` gradient | same |
-| Edge label | 10 above the line, centred | Geist 500 12px `#a1a1a1` | `#52525b` |
-| Lock | 12×14 padlock on the line's midpoint; the line stops 6px either side of it (the background is transparent, so nothing can be knocked out behind it) | `#fafafa` | `#18181b` |
+| Node card | 168×128, radius 14, 1px stroke | fill `--card`, stroke `--border` | fill `#ffffff`, stroke `#e4e4e7` |
+| Node icon | 32×32 line icon (lucide `smartphone`, `cloud`, `laptop`, `terminal`), stroke 1.75, 20 from the card top, centred | gradient stroke `--brand-1` → `--brand-2` | the logo's stops, `#06b6d4` → `#a855f7`, read from `logo.svg` |
+| Node title | 16 under the icon | Geist 600 17px `--text` | `#18181b` |
+| Node sub | 4 under the title | Geist Mono 400 12px `--text-2` | `#52525b` |
+| Edge | 2px line, 8px arrowhead | gradient `--brand-1` → `--brand-2` | the logo's stops |
+| Edge label | 10 above the line, centred | Geist 500 12px `--text-2` | `#52525b` |
+| Lock | 12×14 padlock on the line's midpoint; the line stops 6px either side of it (the background is transparent, so nothing can be knocked out behind it) | `--text` | `#18181b` |
 | Machine boundary | dashed 1.5px (6 4), radius 18, round PC + CLI: 20 either side, 56 above and below (the span below) | `#3f3f46` | `#a1a1aa` |
-| Boundary label | `Your machine`, inside top-left, 14/12 inset | Geist 600 12px uppercase +0.06em `#a1a1aa` | `#52525b` |
-| Boundary footnote | `no open ports · code runs here`, inside bottom, centred | Geist 400 12px `#a1a1aa` | `#52525b` |
+| Boundary label | `Your machine`, inside top-left, 14/12 inset | Geist 600 12px uppercase +0.06em `--text-2` | `#52525b` |
+| Boundary footnote | `no open ports · code runs here`, inside bottom, centred | Geist 400 12px `--text-2` | `#52525b` |
 
 | Node | Title | Sub |
 |---|---|---|
@@ -430,11 +488,13 @@ figure exists to make obvious. Requests still flow phone → PC through that
 tunnel: the arrows say who connects to whom, not which way data goes, and the
 boundary footnote spells out why that matters.
 
-The small text — `#a1a1a1` for subs and edge labels, `#a1a1aa` for the
-boundary's label and footnote in dark; `#52525b` for all of it in light — is
-kept brighter than `text-muted` because the figure sits on GitHub's page
-colours (`#0d1117` / `#ffffff`), not on ours: every one keeps 12px text above
-4.5:1 there.
+The small text — `--text-2` for all of it in dark, `#52525b` in light — is
+the brighter of the site's two secondary greys, not `--text-3`, because the
+figure is shown scaled down: its 12px labels reach the page at 9.4–10.4px
+([site-design.md §4.5](site-design.md#45-your-machine)). The dark variant
+takes the site's lighter brand stops, like everything else on its page that
+is not the logo; the light one keeps the logo's, since the lighter stops fall
+to 1.8:1 on white.
 
 Node x positions (left edges): 24, 328, 656, 1008 — the gaps (136, 160, 184)
 are sized to their edge labels, and the 24 margin is the same on both ends.

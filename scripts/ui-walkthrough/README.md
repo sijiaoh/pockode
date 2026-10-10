@@ -402,6 +402,7 @@ Where each part comes from, so a change is made once:
 | which capture a still frames, or a new still | `PHONE_SHOTS` / `DESKTOP_SHOT` in `marketing/stills/render.mjs` | `stills`, or `assets` |
 | the frames | `marketing/stills/frames.mjs` (the video uses them too) | `stills` and `video`, or `assets` |
 | what the assets say about Pockode — the social image's pitch, the title and end cards, the terminal's command | `site/data/messaging.yaml`, never a renderer ([*The copy*](../../docs/marketing-assets.md#the-copy)); `marketing/messaging.mjs` reads it | `stills` and `video`, or `assets` |
+| the colours of the canvas, captions, cards and the dark architecture figure | the `:root` tokens of `site/themes/pockode/assets/css/main.css`, never a renderer ([§1.2](../../docs/marketing-assets.md#12-marketing-palette)); `marketing/palette.mjs` reads them | `stills` and `video`, or `assets` |
 | the social image's layout, the architecture figure | `marketing/stills/{social,architecture}.mjs` | `stills`, or `assets` |
 | a caption, a shot's length, its keyframes | `marketing/video/storyboard.mjs` | `video`, or `assets` |
 | the Port Preview page | `marketing/tidy.html` | `assets` |

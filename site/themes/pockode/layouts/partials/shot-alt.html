@@ -1,13 +1,5 @@
-{{- /* Alt text for each capture in static/marketing/screenshots, keyed by
-file name, so a screenshot is described once wherever it appears. */ -}}
-{{- $alt := dict
-  "desktop" "Pockode in a desktop browser: a story, its three running tasks and their sessions in the sidebar"
-  "phone-story" "A story, Add due dates to todos, with three tasks assigned to Engineer agents and one question waiting for your answer"
-  "phone-question" "An agent's question on a phone: where should todos without a due date go? The recommended answer is to put them after dated todos."
-  "phone-commit" "The Git commit sheet with the message Add due dates to todos"
-  "phone-diff" "The diff of TodoItem.tsx on a phone"
-  "phone-preview" "The todo app's dev server, opened on the phone with Port Preview"
--}}
-{{- $text := index $alt . -}}
-{{- if not $text }}{{ errorf "shot-alt.html: no alt text for screenshot %q" . }}{{ end -}}
+{{- /* The alt text of a capture in static/marketing/screenshots, by file name,
+from the messaging source's images.screenshots. */ -}}
+{{- $text := index hugo.Data.messaging.images.screenshots . -}}
+{{- if not $text }}{{ errorf "shot-alt.html: no alt text for screenshot %q in data/messaging.yaml" . }}{{ end -}}
 {{- return $text -}}

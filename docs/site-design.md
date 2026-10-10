@@ -33,6 +33,9 @@ no others. Every layout is written mobile first, at 375 wide.
 ### 2.1 Colour
 
 These are the tokens at the top of `themes/pockode/assets/css/main.css`.
+The marketing assets read the same rule and paint with these tokens
+([marketing-assets.md §1.2](marketing-assets.md#12-marketing-palette)), so a
+change here is a re-render of them too.
 The accent is the app's teal, the cyan end of the logo's gradient. The muted
 grey is `#8f8f8f` because `#666` fails AA at 3.0–3.5:1.
 
@@ -50,11 +53,15 @@ grey is `#8f8f8f` because `#666` fails AA at 3.0–3.5:1.
 | `--accent-hover` | `#5eead4` | primary button fill and prose and text links on hover |
 | `--on-accent` | `#0a0a0a` | text on `--accent` |
 | `--warn` | `#fbbf24` | the security callout's rule and icon |
-| `--brand` | `linear-gradient(135deg, #22d3ee, #c084fc)` | the hero headline's tail, the logo, the hero glow |
+| `--brand-1`, `--brand-2` | `#22d3ee`, `#c084fc` | the brand gradient's stops |
+| `--brand` | `linear-gradient(135deg, var(--brand-1), var(--brand-2))` | the brand gradient whole; the site itself paints with `--headline` and `--glow`, the demo video's caption highlight with this |
+| `--headline` | `linear-gradient(135deg, var(--text) 0%, var(--text) 55%, var(--brand-1) 80%, var(--brand-2) 100%)` | the hero `h1` (§4.1) |
+| `--glow` | `color-mix(in srgb, var(--accent) 12%, transparent) 0%, color-mix(in srgb, var(--brand-2) 6%, transparent) 40%, transparent 70%` | the hero glow's stops, placed by `.hero::before` (§4.1) |
 
 The brand gradient uses lighter stops than the logo's (`#06b6d4`, `#a855f7`).
-The logo's purple drops to 4.4:1 on a card, so it is kept for the logo and
-never used for text.
+The logo's purple drops to 4.4:1 on a card, so it is kept for the logo file
+and never used for text. `--glow` is a list of stops rather than a gradient so
+that each picture places it where it needs it.
 
 Every text and background pair the site uses, by WCAG 2.x contrast ratio
 (AA asks for 4.5 for body text and 3.0 for large text and control outlines):
@@ -268,12 +275,13 @@ a column.
 ### 4.1 Hero
 
 - A 600px radial glow (`.hero::before`) starts 200px above the hero:
-  `--accent` at 12% fading through the gradient's purple at 6%.
+  `radial-gradient(ellipse at center, var(--glow))`, `--accent` at 12% fading
+  through the gradient's purple at 6%.
 - An eyebrow pill reads `license.label` and links to the license file. It is
   `--accent` text on `rgba(45,212,191,.12)` with a 1px `rgba(45,212,191,.35)`
   border (accent text on that fill, composited over `--bg`, is 8.9:1).
-- `h1` is the `tagline`, filled with `linear-gradient(135deg, #fafafa 0%,
-  #fafafa 55%, #22d3ee 80%, #c084fc 100%)` through `background-clip: text`.
+- `h1` is the `tagline`, filled with `--headline` (`--text` to 55%, then the
+  brand stops at 80% and 100%) through `background-clip: text`.
   Every stop clears 6.5:1, so the tagline stays readable whichever word lands
   on the tail. It is centred, with `max-width: 14ch` expanded and the full
   width below.
@@ -291,7 +299,7 @@ a column.
   <figure class="demo">
     <img …demo-poster, eager, fetchpriority="high"…>   <!-- the LCP element -->
     <video muted loop playsinline preload="none" width="1920" height="1080"
-           aria-label="{homepage.demo}">
+           aria-label="{images.demo}">
       <source src="/marketing/video/demo.webm" type="video/webm">
       <source src="/marketing/video/demo.mp4" type="video/mp4">
     </video>
@@ -368,7 +376,8 @@ a column.
 - Expanded: everything stacked, with the text block centred above the full-width
   figure. The facts become a three-column row (`repeat(3, 1fr)`, gap 32), each
   centred with its icon above its text.
-- The figure's one alt text, for both variants, is in `architecture.html`.
+- The figure's one alt text, for both variants, is `images.architecture` in
+  the messaging source.
 
 ### 4.6 Get started and FAQ
 
@@ -444,7 +453,7 @@ Shortcodes, so a docs page never restates what another source holds:
 | Shortcode | Renders |
 |---|---|
 | `{{< install >}}` | the homepage's install box: one partial, `install.html`, used by both. Its radios have fixed `id`s (`os-unix`, `os-windows`) that the Windows preselect and the CSS key on, so a page carries at most one box. |
-| `{{< shot "name" >}}` | `marketing/screenshots/<name>.png` through `picture.html`, box 280 and centred, with the alt text from the same map the homepage uses: one partial, `shot-alt.html`, keyed by name, so an alt text is written once |
+| `{{< shot "name" >}}` | `marketing/screenshots/<name>.png` through `picture.html`, box 280 and centred, with the alt text the homepage and the README use too: `shot-alt.html` looks the name up in the messaging source's `images.screenshots`, so an alt text is written once |
 
 ### 5.2 Docs index
 

@@ -4,7 +4,9 @@ name: Messaging
 # and the README and the site may only name flags the server has. Either side
 # can break that: an edit to the copy, or a flag renamed or removed in the
 # server, which is why all of server/ is watched and not only where the flags
-# are defined today. (The list is repeated because GitHub Actions does not
+# are defined today. The marketing renderers paint with the site's palette
+# tokens, so a token renamed there is caught here too, not at the next
+# hand-started render. (The list is repeated because GitHub Actions does not
 # support YAML anchors.)
 on:
   push:
@@ -14,6 +16,7 @@ on:
       - "site/**"
       - "server/**"
       - "scripts/messaging/**"
+      - "scripts/ui-walkthrough/marketing/**"
       - "package.json"
       - "pnpm-lock.yaml"
       - ".node-version"
@@ -25,6 +28,7 @@ on:
       - "site/**"
       - "server/**"
       - "scripts/messaging/**"
+      - "scripts/ui-walkthrough/marketing/**"
       - "package.json"
       - "pnpm-lock.yaml"
       - ".node-version"

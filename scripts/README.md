@@ -198,17 +198,18 @@ the cluster-mode stack instead of the normal one.
 
 ## `messaging/` — README generation and copy checks
 
-The README's tagline, quick start, platforms, features and license line are
-generated from [`site/data/messaging.yaml`](../site/data/messaging.yaml), the
-one source the site and the marketing assets read too. Each generated block
-sits between `<!-- messaging:NAME -->` and `<!-- /messaging:NAME -->`;
-everything outside the markers is hand-written. Change the wording in the
-source, never between the markers, then:
+The README's logo, tagline, demo GIF, quick start, platforms, features,
+screenshots and license line are generated from
+[`site/data/messaging.yaml`](../site/data/messaging.yaml), the one source the
+site and the marketing assets read too. Each generated block sits between
+`<!-- messaging:NAME -->` and `<!-- /messaging:NAME -->`; everything outside
+the markers is hand-written. Change the wording in the source, never between
+the markers, then:
 
 ```bash
 pnpm run readme            # rewrite the README's messaging blocks
 pnpm run check:messaging   # what CI runs (the Messaging workflow)
-pnpm run test:messaging    # the checks' own tests
+pnpm run test:messaging    # the checks' own tests, and the marketing palette's
 ```
 
 `check:messaging` fails when:

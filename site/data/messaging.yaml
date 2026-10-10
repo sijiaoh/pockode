@@ -100,12 +100,28 @@ faq:
   - id: license
     question: What is the license?
 
-# The homepage's remaining words: what its buttons and links say and how the
-# demo video is described to a screen reader.
+# The homepage's remaining words: what its buttons and links say.
 homepage:
-  demo: A 30-second demo of Pockode on a phone
   get_started: Get started
   github: GitHub
   security: How it is secured
   faq: Questions
   docs: More in the docs
+
+# How the pictures are described to a screen reader, on the site and in the
+# README alike. Plain text only: an alt text cannot show `code`. Describe what
+# the picture shows, and claim no more than the rest of this file does.
+images:
+  # The demo video on the homepage and its GIF in the README.
+  demo: "A 30-second demo of Pockode: a story split into tasks that agents work on in parallel, an agent's question answered from a phone, the diff, Port Preview and a commit"
+  # The architecture figure, both its variants, on the homepage and /security/.
+  architecture: Your phone connects to the relay over HTTPS. Your PC opens an outbound tunnel to the relay and runs the claude or codex CLI. Both links to the relay are encrypted, and your machine opens no port.
+  # Keyed by file name in site/static/marketing/screenshots, so a capture is
+  # described once wherever it appears.
+  screenshots:
+    desktop: "Pockode in a desktop browser: a story, its three running tasks and their sessions in the sidebar"
+    phone-story: A story, Add due dates to todos, with three tasks assigned to Engineer agents and one question waiting for your answer
+    phone-question: "An agent's question on a phone: where should todos without a due date go? The recommended answer is to put them after dated todos."
+    phone-commit: The Git commit sheet with the message Add due dates to todos
+    phone-diff: The diff of TodoItem.tsx on a phone
+    phone-preview: The todo app's dev server, opened on the phone with Port Preview

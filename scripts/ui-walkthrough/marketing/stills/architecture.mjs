@@ -5,25 +5,30 @@
 
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
+import { LOGO_STOPS } from "../palette.mjs";
 
+// The dark variant is the site's, in its tokens, bar the boundary: dashed
+// and decorative, it would all but vanish in `--border`. The site has no
+// light palette, so the light variant is the figure's own, and keeps the
+// logo's stops, which hold up on white where the site's lighter ones do not.
 const THEMES = {
 	dark: {
-		card: "#141414",
-		stroke: "#262626",
-		title: "#fafafa",
-		small: "#a1a1aa",
-		sub: "#a1a1a1",
-		lock: "#fafafa",
+		card: "var(--card)",
+		stroke: "var(--border)",
+		title: "var(--text)",
+		small: "var(--text-2)",
+		lock: "var(--text)",
 		boundary: "#3f3f46",
+		brand: ["var(--brand-1)", "var(--brand-2)"],
 	},
 	light: {
 		card: "#ffffff",
 		stroke: "#e4e4e7",
 		title: "#18181b",
 		small: "#52525b",
-		sub: "#52525b",
 		lock: "#18181b",
 		boundary: "#a1a1aa",
+		brand: LOGO_STOPS,
 	},
 };
 
@@ -77,10 +82,14 @@ const cards = (projectDir, size, style) =>
 		),
 	);
 
-const BRAND = `
+// Through `style`, not the attributes: a presentation attribute takes no var().
+const stops = ({ brand: [from, to] }) =>
+	`<stop offset="0" style="stop-color: ${from}" /><stop offset="1" style="stop-color: ${to}" />`;
+
+const brand = (theme) => `
 	<defs>
 		<linearGradient id="brand" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="24" y2="24">
-			<stop offset="0" stop-color="#06b6d4" /><stop offset="1" stop-color="#a855f7" />
+			${stops(theme)}
 		</linearGradient>
 	</defs>`;
 
@@ -115,7 +124,7 @@ function line({ axis, at, tail, tip, lock }, id, theme) {
 	const [b2x, b2y] = xy(base, at + ARROW / 2);
 	return `
 	<linearGradient id="${id}" gradientUnits="userSpaceOnUse" x1="${gx1}" y1="${gy1}" x2="${gx2}" y2="${gy2}">
-		<stop offset="0" stop-color="#06b6d4" /><stop offset="1" stop-color="#a855f7" />
+		${stops(theme)}
 	</linearGradient>
 	${segments
 		.map(([a, b]) => {
@@ -130,8 +139,8 @@ function line({ axis, at, tail, tip, lock }, id, theme) {
 
 /** The padlock, centred on (x, y). */
 const lockIcon = (x, y, theme) =>
-	`<g transform="translate(${x - LOCK.width / 2} ${y - LOCK.height / 2})" fill="${theme.lock}">
-		<path d="M3 6.5V4a3 3 0 0 1 6 0v2.5" fill="none" stroke="${theme.lock}" stroke-width="1.5" />
+	`<g transform="translate(${x - LOCK.width / 2} ${y - LOCK.height / 2})" style="fill: ${theme.lock}">
+		<path d="M3 6.5V4a3 3 0 0 1 6 0v2.5" style="fill: none; stroke: ${theme.lock}" stroke-width="1.5" />
 		<rect x="0" y="6" width="12" height="8" rx="2" />
 	</g>`;
 
@@ -159,14 +168,14 @@ async function landscapePage(theme, projectDir) {
 		css: `
 body { width: 1220px; height: 360px; position: relative; }
 svg.edges { position: absolute; inset: 0; }
-.label { font: 500 12px Geist; fill: ${theme.sub}; }
+.label { font: 500 12px Geist; fill: ${theme.small}; }
 .card {
 	position: absolute; top: ${card.top}px; width: ${card.width}px; height: ${card.height}px;
 	box-sizing: border-box; border: 1px solid ${theme.stroke}; border-radius: 14px; background: ${theme.card};
 	display: flex; flex-direction: column; align-items: center; padding-top: 19px;
 }
 .title { margin-top: 16px; font: 600 17px Geist; color: ${theme.title}; }
-.sub { margin-top: 4px; font: 400 12px "Geist Mono"; color: ${theme.sub}; }
+.sub { margin-top: 4px; font: 400 12px "Geist Mono"; color: ${theme.small}; }
 .machine {
 	position: absolute; left: ${left}px; top: ${top}px; width: ${right - left}px; height: ${bottom - top}px;
 	font-size: 12px; color: ${theme.small};
@@ -177,7 +186,7 @@ svg.edges { position: absolute; inset: 0; }
 }
 .machine > div:last-child { position: absolute; left: 0; right: 0; bottom: 12px; text-align: center; }`,
 		body: `
-<svg class="edges" width="1220" height="360">${BRAND}${boundary(LANDSCAPE.boundary, theme)}
+<svg class="edges" width="1220" height="360">${brand(theme)}${boundary(LANDSCAPE.boundary, theme)}
 	${edges.join("")}
 </svg>
 <div class="machine"><div>Your machine</div><div>no open ports · code runs here</div></div>
@@ -216,7 +225,7 @@ async function portraitPage(theme, projectDir) {
 		css: `
 body { width: 360px; height: 800px; position: relative; }
 svg.edges { position: absolute; inset: 0; }
-.label { font: 500 13px Geist; fill: ${theme.sub}; }
+.label { font: 500 13px Geist; fill: ${theme.small}; }
 .card {
 	position: absolute; left: ${card.left}px; width: ${card.width}px; height: ${card.height}px;
 	box-sizing: border-box; border: 1px solid ${theme.stroke}; border-radius: 14px; background: ${theme.card};
@@ -224,14 +233,14 @@ svg.edges { position: absolute; inset: 0; }
 }
 .card > svg { position: absolute; left: 20px; top: 30px; }
 .title { font: 600 17px Geist; color: ${theme.title}; }
-.sub { margin-top: 4px; font: 400 13px "Geist Mono"; color: ${theme.sub}; }
+.sub { margin-top: 4px; font: 400 13px "Geist Mono"; color: ${theme.small}; }
 .machine {
 	position: absolute; left: ${left + 14}px; top: ${boxTop + 14}px;
 	font: 600 13px Geist; text-transform: uppercase; letter-spacing: 0.06em; color: ${theme.small};
 }
 .footnote { font: 400 13px Geist; fill: ${theme.small}; }`,
 		body: `
-<svg class="edges" width="360" height="800">${BRAND}${boundary(PORTRAIT.boundary, theme)}
+<svg class="edges" width="360" height="800">${brand(theme)}${boundary(PORTRAIT.boundary, theme)}
 	${edges.join("")}
 	<text x="${(left + right) / 2}" y="${PORTRAIT.footnoteBaseline}" text-anchor="middle" class="footnote">no open ports · code runs here</text>
 </svg>

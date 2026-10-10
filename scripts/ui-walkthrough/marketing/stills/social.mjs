@@ -16,24 +16,24 @@ const PITCH_CLEARANCE = 24;
 export function socialPage({ logo, phone }) {
 	return {
 		css: `
-body { width: 1200px; height: 630px; background: #0a0a0a; position: relative; overflow: hidden; }
+body { width: 1200px; height: 630px; background: var(--bg); position: relative; overflow: hidden; }
 .glow {
 	position: absolute; inset: 0;
-	background: radial-gradient(ellipse at 900px 0, rgba(59,130,246,.12) 0%, rgba(168,85,247,.06) 40%, transparent 70%);
+	background: radial-gradient(ellipse at 900px 0, var(--glow));
 }
 .logo { position: absolute; left: 72px; top: 72px; width: 56px; height: 56px; }
 .wordmark {
 	position: absolute; left: 144px; top: 72px; height: 56px; display: flex; align-items: center;
-	font: 700 32px Geist; letter-spacing: -0.02em; color: #fafafa;
+	font: 700 32px Geist; letter-spacing: -0.02em; color: var(--text);
 }
 .pitch { position: absolute; left: 72px; top: 172px; }
 h1 {
 	margin: 0; width: 620px; font: 700 56px/1.06 Geist; letter-spacing: -0.035em;
-	background: linear-gradient(135deg, #fff 0%, #fff 50%, #60a5fa 100%);
+	background: var(--headline);
 	-webkit-background-clip: text; background-clip: text; color: transparent;
 }
-.pitch p { margin: 28px 0 0; width: 600px; font: 400 22px/1.45 Geist; color: #a1a1a1; }
-.footer { position: absolute; left: 72px; font: 500 20px Geist; color: #666666; }
+.pitch p { margin: 28px 0 0; width: 600px; font: 400 22px/1.45 Geist; color: var(--text-2); }
+.footer { position: absolute; left: 72px; font: 500 20px Geist; color: var(--text-3); }
 .footer i { display: inline-block; }
 code { font-family: "Geist Mono"; }`,
 		body: `
