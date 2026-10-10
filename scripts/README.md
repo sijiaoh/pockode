@@ -224,15 +224,16 @@ pnpm run test:messaging    # the checks' own tests, and the marketing palette's
   flag of another tool belongs inside its own command line
   (`sh -s -- --version 0.16.0`), which the check leaves alone.
 
-## `site/` — pockode.com checks and fonts
+## `site/` — pockode.com build, checks and fonts
 
 ```bash
-node scripts/site/links.mjs site/public   # after `hugo`: the README's site links resolve
+scripts/site/hugo.sh --gc --minify        # build with the pinned Hugo (CI and the host run this)
+node scripts/site/links.mjs site/public   # after the build: the README's site links resolve
 node --test "scripts/site/*.test.mjs"     # the link check's own tests
 scripts/site/fonts.sh                     # rewrite the site's subset fonts (npm and uv)
 ```
 
-The *Site* workflow runs the first two after building the site, beside
+The *Site* workflow builds with the first and runs the next two after it, beside
 Lighthouse; [site/README.md](../site/README.md#checks) says what each holds.
 
 ## `ui-walkthrough/` — Chat and answering UI screenshots

@@ -16,11 +16,25 @@ hugo          # build into public/ (gitignored)
 
 It needs **Hugo v0.158 or later**: the templates read the messaging source
 through `hugo.Data` (v0.156) and the page language through
-`site.Language.Locale` (v0.158), so an older Hugo fails the build. The standard
-edition is enough: WebP encoding stopped needing the extended one in v0.153. CI
-builds with exactly v0.158 (see [Checks](#checks)), so a template that needs a
-newer Hugo fails there; raise the version (and the workflow's checksum) and
-this paragraph together.
+`site.Language.Locale` (v0.158), so an older Hugo fails the build, after
+warning that `hugo.yaml`'s `module.hugoVersion.min` is not met. The standard
+edition is enough: WebP encoding stopped needing the extended one in v0.153.
+
+Every real build runs exactly v0.158, through `scripts/site/hugo.sh`, which
+downloads that Hugo (Linux x86-64), checks its checksum and runs it in `site/`
+with the arguments it was given:
+
+```bash
+scripts/site/hugo.sh --gc --minify   # what CI and the host run; output in site/public
+scripts/site/hugo.sh server          # preview with that Hugo, nothing to install
+```
+
+CI builds with it (see [Checks](#checks)), so a template that needs a newer
+Hugo fails there. The host's build command must be that first line (from the
+repository root; output `site/public`): a host left to its own Hugo builds with
+whatever its image ships, and Cloudflare Pages' image ships v0.147.7, on which
+every page fails. Raise the version (and the script's checksum, and
+`hugoVersion.min` when a template is the reason) and this paragraph together.
 
 The build reads GitHub Releases over the network (see [the
 changelog](#the-changelog)), so set `GITHUB_TOKEN` wherever the site is built
@@ -54,9 +68,9 @@ Chromium if none is installed (the walkthrough's headless shell works):
 
 ```bash
 cd site
-hugo --gc --minify --cleanDestinationDir   # a stale public/ would hide a removed page
+../scripts/site/hugo.sh --gc --minify --cleanDestinationDir   # a stale public/ would hide a removed page
 node ../scripts/site/links.mjs public
-pnpm exec lhci autorun                     # reports in .lighthouseci/reports
+pnpm exec lhci autorun                                        # reports in .lighthouseci/reports
 ```
 
 Where unprivileged user namespaces are disabled (Ubuntu 23.10 and later

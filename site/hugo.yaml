@@ -8,6 +8,10 @@ disableKinds: [taxonomy, term, rss]
 enableRobotsTXT: true
 
 module:
+  # The oldest Hugo the templates run on (README.md#building). An older one
+  # still fails, but this puts the reason on the first line of its log.
+  hugoVersion:
+    min: "0.158.0"
   mounts:
     # Declaring any mount replaces the default ones, so static is listed again.
     - source: static
