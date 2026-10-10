@@ -1530,3 +1530,10 @@ type SessionViewDeleteParams struct {
 	Worktree  string `json:"worktree"`
 	SessionID string `json:"session_id"`
 }
+
+// PortPreviewTicketResult carries a one-time ticket that logs a port preview
+// tab in without the password. It is redeemable once, within
+// authsession.TicketTTL, on any preview host of this server.
+type PortPreviewTicketResult struct {
+	Ticket string `json:"ticket"`
+}

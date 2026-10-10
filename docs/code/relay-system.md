@@ -214,12 +214,26 @@ A previewed server knows nothing of Pockode's credentials, so the preview is gua
 
 `Max-Age` is the 400 days browsers cap it at: expiry is the session store's decision, as it is for the app's token. The `__Host-` prefix makes the cookie host-only and stops any other subdomain of the relay domain from planting one of that name; plain http cannot carry it.
 
+##### Ticket Login
+
+The password is not the only way in. A preview host is a different origin from the app, so the app's login never reaches it, and a user already logged in to the app would otherwise type the password again for every port. The logged-in app can instead ask for a one-time ticket over its WebSocket (`port_preview.ticket`, see [WebSocket JSON-RPC](websocket-rpc.md#scope-classification)) and open `/__pockode/preview/login?ticket=<ticket>` on the preview host in a new tab:
+
+- A live ticket is exchanged for the same session cookie the password login sets, from the same store, and the response is `303` to `/`, so the ticket leaves the address bar and the history entry. The target is fixed; nothing in the request can choose it, so this is no open redirect.
+- A spent, expired, unknown or missing ticket lands on `/` all the same, which shows the password page to a browser without a session. The failure is logged with the host, never the ticket: a live ticket in a log would be a login.
+- A browser that already has a live session on that host keeps it and gets no new one, so no session slot is spent; the ticket is spent anyway, since it is still sitting in the URL.
+- Only a top-level document navigation (`Sec-Fetch-Dest` absent or `document`) is taken as a ticket login. The app only ever opens a ticket in a tab, so a same-origin frame or a fetch carrying one gets `405`, as any non-`POST` did before, and does not spend it; a cross-origin frame is refused with 403 before it gets here (see [Other Users' Pages](#other-users-pages)).
+- Every answer carries `Cache-Control: no-store` and, as defense in depth, `Referrer-Policy: no-referrer`.
+
+The ticket itself (`authsession.Tickets`) is redeemable once, within 60 seconds (`authsession.TicketTTL`) — enough for the new tab's first request to arrive, and no longer, since anything more is time for a leaked ticket to be used. Tickets live only in this process's memory, keyed by their SHA-256 like session tokens, so the plaintext is never stored; at most 64 are outstanding, the oldest evicted first, so a client asking for tickets it never redeems cannot grow the set. A restart spends every outstanding ticket, which costs the user one password prompt.
+
+It is not a self-contained signed token with an expiry, though that would spare the server its record. A signature lets a verifier trust a token without asking the issuer; here the issuer and the verifier are the same process, so there is nothing for it to save. And single use needs server-side state regardless: a signed token replays until it expires unless the server records it as spent. A signing key would only add one more secret to keep and rotate.
+
 #### Other Users' Pages
 
 Every user's app and previews live under the same relay domain, so they are all **same-site** to one another, and `SameSite=Lax` sends the preview cookie along with requests another user's page makes. Same-site is therefore not good enough; every preview request must be same-origin, with one exception:
 
-- A top-level `GET`/`HEAD` navigation (`Sec-Fetch-Mode: navigate` and `Sec-Fetch-Dest: document`) is let through from anywhere, so a link to the preview works: the page it opens is the preview's own, out of reach of the page that linked to it. A frame is not: it stays inside the embedding page, which could overlay it to steer the user's clicks.
-- Anything else — frames, fetches, subresources, form posts, WebSocket upgrades, the login itself — is refused with 403 unless `Sec-Fetch-Site` is `same-origin` or `none`.
+- A top-level `GET`/`HEAD` navigation (`Sec-Fetch-Mode: navigate` and `Sec-Fetch-Dest: document`) is let through from anywhere, so a link to the preview works — and so does the app opening a ticket login in a new tab: the page it opens is the preview's own, out of reach of the page that linked to it. A frame is not: it stays inside the embedding page, which could overlay it to steer the user's clicks.
+- Anything else — frames, fetches, subresources, form posts, WebSocket upgrades, the password login — is refused with 403 unless `Sec-Fetch-Site` is `same-origin` or `none`.
 - A browser that sends no `Sec-Fetch-Site` is judged by `Origin` instead, by the rule the app's `/ws` gets from `websocket.Accept`: no `Origin`, or one whose host equals `Host`.
 
 `Sec-Fetch-Site` decides when present, as in Go's `http.CrossOriginProtection`: it covers requests that carry no `Origin` at all, such as a `<script>` tag, and a same-origin request may still carry `Origin: null` (a page with `Referrer-Policy: no-referrer` posting to itself). The check has to happen here, before `Origin` is rewritten to localhost, because whether the previewed server checks it is up to that server.
@@ -291,6 +305,6 @@ Requests for the app arriving through the tunnel go through the same `middleware
 | Tunnel | `server/relay/tunnel.go` | yamux session, serving HTTP over its streams |
 | Local proxy | `server/relay/proxy.go` | Reverse proxy onto local backend/frontend |
 | Preview proxy | `server/relay/preview.go` | Preview host recognition, same-origin gate, forwarding to `localhost:<port>` |
-| Preview auth | `server/relay/preview_auth.go` | Preview login page, login endpoint, session cookie |
+| Preview auth | `server/relay/preview_auth.go` | Preview login page, password and ticket login, session cookie |
 | Store | `server/relay/store.go` | Configuration persistence |
 | API path split | `server/apiroute/` | Shared with `main.go`'s SPA handler |

@@ -44,6 +44,7 @@ Method names are organized using the `namespace.method` format, solving two prob
 | `agent.*` | app | `ws/rpc_agent.go` |
 | `cli_auth.*` | app | `ws/rpc_cli_auth.go` |
 | `cli_update.*` | app | `ws/rpc_cli_update.go` |
+| `port_preview.*` | app | `ws/rpc_port_preview.go` |
 
 - **Worktree scope**: Operations that depend on the current working directory (files, Git, etc.)
 - **App scope**: Global operations across worktrees (settings, project management, etc.)
@@ -54,6 +55,12 @@ worktree it reads from and binding one says nothing about which of them may be
 called. Why that makes those sessions read-only, and what its single non-read is
 for, is in [websocket-rpc-design.md](../websocket-rpc-design.md#method-naming-convention);
 what a user does with them is [cross-worktree-session-ui.md](../cross-worktree-session-ui.md).
+
+`port_preview.ticket` takes no params and answers `{ ticket }`: a one-time
+ticket that logs a [port preview](relay-system.md#logging-in) tab in without
+the password. It is refused with `CodeInvalidRequest` when the relay is
+disabled — the same signal as an empty `remote_url` in the `auth` reply — since
+previews do not exist then.
 
 ### Frontend Implementation Pattern
 

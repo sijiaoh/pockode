@@ -26,6 +26,8 @@ A preview is guarded by the app's own password, not by anything of the previewed
 2. Entering the app's password reloads the same page, now forwarded to the local server.
 3. The browser keeps the login in a cookie for that one host. Each port is a separate host, so each is logged into once.
 
+The server can also log a tab in without the password, for a browser already logged in to the app: the app asks the server for a one-time ticket and opens `https://<subdomain>-<port>.<relay server>/__pockode/preview/login?ticket=<ticket>` in a new tab; the preview host exchanges the ticket for its login cookie and redirects to `/`, so the ticket does not stay in the address bar. A ticket works once, within about 60 seconds, and is forgotten when the server restarts. One that is spent, expired or missing lands on the password page instead, and a tab already logged in on that host keeps its login. The server half of this is in place; the app's preview button does not use it yet, so for now each port still asks for the password once.
+
 A preview login is an ordinary app session: it expires after 30 days unused, ends when the password changes, and counts toward the session cap — logging into many ports can evict the least recently used session, the app's own included. See [Authentication](code/authentication.md#sessions-what-the-browser-keeps).
 
 ## What to Expect
@@ -52,6 +54,7 @@ A preview login is an ordinary app session: it expires after 30 days unused, end
 | 401 `Pockode preview: not logged in` | A non-page request without a session; load the page itself to log in |
 | 403 `Pockode preview: cross-origin request refused` | The request came from another origin — see [Limitations](#limitations) |
 | 404 | A `/__pockode/` path other than the login endpoint, or any `/api/mcp/*` path |
+| Password page after opening a ticket link | The ticket was spent, expired (about 60 s) or issued before a server restart — enter the app's password |
 | 502 `Pockode preview: nothing is listening on localhost:<port>` | Start the server on the PC, then reload |
 | 502 `Pockode preview: localhost:<port> did not answer: …` | The server is there but failed or took over 30 s to answer |
 

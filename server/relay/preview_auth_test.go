@@ -1,7 +1,9 @@
 package relay
 
 import (
+	"bytes"
 	"context"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -226,6 +228,202 @@ func TestPreviewLoginKeepsLiveSession(t *testing.T) {
 	}
 	if len(resp.Cookies()) != 0 || sessions.issuedCount() != 0 {
 		t.Errorf("live session got cookies %v and %d new sessions", resp.Cookies(), sessions.issuedCount())
+	}
+}
+
+// testTicket is a ticket every test ticket set starts out with.
+const testTicket = "live-ticket"
+
+type fakeTickets struct {
+	liveMu sync.Mutex
+	live   map[string]bool
+}
+
+func newTestTickets() *fakeTickets {
+	return &fakeTickets{live: map[string]bool{testTicket: true}}
+}
+
+func (t *fakeTickets) Redeem(ticket string) bool {
+	t.liveMu.Lock()
+	defer t.liveMu.Unlock()
+	live := t.live[ticket]
+	delete(t.live, ticket)
+	return live
+}
+
+func (t *fakeTickets) isLive(ticket string) bool {
+	t.liveMu.Lock()
+	defer t.liveMu.Unlock()
+	return t.live[ticket]
+}
+
+// syncBuffer is a log sink the proxy's handler goroutines can write to while
+// the test reads it.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+type ticketProxy struct {
+	url      string
+	sessions *fakeSessions
+	tickets  *fakeTickets
+	log      *syncBuffer
+}
+
+func serveTicketProxy(t *testing.T) ticketProxy {
+	t.Helper()
+	p := ticketProxy{sessions: newTestSessions(), tickets: newTestTickets(), log: &syncBuffer{}}
+	unused := closedPort(t)
+	auth := previewAuth{password: testPassword, sessions: p.sessions, tickets: p.tickets}
+	p.url = serveProxyWithAuth(t, unused, unused, testSite, auth, slog.New(slog.NewTextHandler(p.log, nil))).URL
+	return p
+}
+
+// ticketLogin opens the preview login endpoint with query the way the app
+// does: a top-level navigation from the app's own host, which is same-site.
+func ticketLogin(t *testing.T, proxy, host, query string, cookie *http.Cookie) *http.Response {
+	t.Helper()
+	req, err := http.NewRequest(http.MethodGet, proxy+previewLoginPath+"?"+query, nil)
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	req.Host = host
+	req.Header.Set("Sec-Fetch-Site", "same-site")
+	req.Header.Set("Sec-Fetch-Mode", "navigate")
+	req.Header.Set("Sec-Fetch-Dest", "document")
+	if cookie != nil {
+		req.AddCookie(cookie)
+	}
+	resp, _ := doRequest(t, req)
+	return resp
+}
+
+// wantRedirectToRoot checks the ticket leaves the address bar for the preview
+// root, and nowhere else, whatever the request asked for.
+func wantRedirectToRoot(t *testing.T, resp *http.Response) {
+	t.Helper()
+	if resp.StatusCode != http.StatusSeeOther || resp.Header.Get("Location") != "/" {
+		t.Errorf("status %d, Location %q; want %d to /", resp.StatusCode, resp.Header.Get("Location"), http.StatusSeeOther)
+	}
+	if got := resp.Header.Get("Referrer-Policy"); got != "no-referrer" {
+		t.Errorf("Referrer-Policy = %q, want no-referrer", got)
+	}
+}
+
+func TestPreviewTicketLoginIssuesSessionCookie(t *testing.T) {
+	port, reached := reachablePort(t)
+	p := serveTicketProxy(t)
+	host := previewHost(port)
+
+	resp := ticketLogin(t, p.url, host, url.Values{"ticket": {testTicket}, "next": {"https://evil.example/"}}.Encode(), nil)
+	wantRedirectToRoot(t, resp)
+	cookies := resp.Cookies()
+	if len(cookies) != 1 || cookies[0].Name != testSite.cookieName() || !cookies[0].HttpOnly || !cookies[0].Secure ||
+		cookies[0].SameSite != http.SameSiteLaxMode || cookies[0].MaxAge != previewCookieMaxAge {
+		t.Fatalf("cookies = %v, want the password login's session cookie", cookies)
+	}
+	if p.tickets.isLive(testTicket) {
+		t.Error("the ticket is still redeemable after logging in")
+	}
+
+	req, _ := http.NewRequest(http.MethodGet, p.url+"/", nil)
+	req.Host = host
+	req.AddCookie(&http.Cookie{Name: cookies[0].Name, Value: cookies[0].Value})
+	if resp, _ := doRequest(t, req); resp.StatusCode != http.StatusOK || !reached.Load() {
+		t.Errorf("request with the issued cookie: status %d, forwarded %v", resp.StatusCode, reached.Load())
+	}
+}
+
+// A ticket that does not redeem lands on the root, where a browser without a
+// session gets the password page.
+func TestPreviewTicketLoginFallsBackToPasswordPage(t *testing.T) {
+	tests := []struct {
+		name   string
+		ticket string
+		spend  bool
+	}{
+		{name: "spent", ticket: testTicket, spend: true},
+		// Expired is the same answer from the ticket set: not redeemable.
+		{name: "unknown or expired", ticket: "not-a-ticket"},
+		{name: "missing"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := serveTicketProxy(t)
+			if tt.spend {
+				p.tickets.Redeem(tt.ticket)
+			}
+			query := ""
+			if tt.ticket != "" {
+				query = url.Values{"ticket": {tt.ticket}}.Encode()
+			}
+
+			resp := ticketLogin(t, p.url, previewHost(5173), query, nil)
+			wantRedirectToRoot(t, resp)
+			if len(resp.Cookies()) != 0 || p.sessions.issuedCount() != 0 {
+				t.Errorf("got cookies %v and %d sessions", resp.Cookies(), p.sessions.issuedCount())
+			}
+			log := p.log.String()
+			if !strings.Contains(log, "ticket not redeemable") {
+				t.Errorf("failure not logged; log = %q", log)
+			}
+			if tt.ticket != "" && strings.Contains(log, tt.ticket) {
+				t.Errorf("log carries the ticket: %q", log)
+			}
+		})
+	}
+}
+
+// A second tab opened from the app must not spend a session slot, and the
+// ticket it carried is spent anyway rather than left in its URL to be reused.
+func TestPreviewTicketLoginKeepsLiveSession(t *testing.T) {
+	p := serveTicketProxy(t)
+
+	live := &http.Cookie{Name: testSite.cookieName(), Value: testToken}
+	resp := ticketLogin(t, p.url, previewHost(5173), url.Values{"ticket": {testTicket}}.Encode(), live)
+	wantRedirectToRoot(t, resp)
+	if len(resp.Cookies()) != 0 || p.sessions.issuedCount() != 0 {
+		t.Errorf("live session got cookies %v and %d new sessions", resp.Cookies(), p.sessions.issuedCount())
+	}
+	if p.tickets.isLive(testTicket) {
+		t.Error("the ticket is still redeemable")
+	}
+}
+
+// Only a tab of its own redeems a ticket: a frame stays inside whatever page
+// embeds it.
+func TestPreviewTicketLoginRefusesFrames(t *testing.T) {
+	p := serveTicketProxy(t)
+
+	req, err := http.NewRequest(http.MethodGet, p.url+previewLoginPath+"?ticket="+testTicket, nil)
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	req.Host = previewHost(5173)
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
+	req.Header.Set("Sec-Fetch-Mode", "navigate")
+	req.Header.Set("Sec-Fetch-Dest", "iframe")
+	resp, _ := doRequest(t, req)
+
+	if resp.StatusCode != http.StatusMethodNotAllowed {
+		t.Errorf("status = %d, want %d", resp.StatusCode, http.StatusMethodNotAllowed)
+	}
+	if len(resp.Cookies()) != 0 || !p.tickets.isLive(testTicket) {
+		t.Errorf("a frame got cookies %v or spent the ticket", resp.Cookies())
 	}
 }
 
