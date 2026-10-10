@@ -18,8 +18,13 @@ import { extname, join, relative } from "node:path";
 
 const ROOT = join(import.meta.dirname, "../..");
 
-// Hugo's output and caches are generated, not written.
-const SKIP_DIRS = new Set(["public", "resources", "node_modules"]);
+// Hugo's output and caches and the Lighthouse reports are generated, not written.
+const SKIP_DIRS = new Set([
+	"public",
+	"resources",
+	"node_modules",
+	".lighthouseci",
+]);
 const TEXT = new Set([".md", ".html", ".yaml", ".yml", ".toml", ".sh", ".ps1"]);
 const PROSE = new Set([".md", ".html", ".yaml", ".yml"]);
 

@@ -2,6 +2,9 @@
 public/
 resources/_gen/
 
+# Lighthouse CI runs and reports (lighthouserc.json)
+.lighthouseci/
+
 # OS files
 .DS_Store
 Thumbs.db

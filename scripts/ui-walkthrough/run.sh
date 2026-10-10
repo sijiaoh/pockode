@@ -25,6 +25,7 @@ PASSWORD="walkthrough"
 # Pinned so that every run drives the same browser build, and draws the
 # marketing captures in the same Geist (docs/marketing-assets.md §1.3).
 PLAYWRIGHT_VERSION="${PLAYWRIGHT_VERSION:-1.63.0}"
+# pockode.com serves this Geist too: after a bump, run scripts/site/fonts.sh.
 GEIST_VERSION="1.7.2"
 # The ffmpeg the demo video is encoded with (docs/marketing-assets.md §4.6):
 # this release of the package fetches one fixed static build (7.0.2), and the
