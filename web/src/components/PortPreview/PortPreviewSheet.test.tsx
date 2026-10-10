@@ -1,34 +1,42 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { usePortPreviewStore } from "../../lib/portPreviewStore";
+import { wsActions } from "../../lib/wsStore";
 import PortPreviewSheet from "./PortPreviewSheet";
 
 const REMOTE_URL = "https://abc123.cloud.pockode.com";
+const PREVIEW_5173 = "https://abc123-5173.cloud.pockode.com/";
+const LOGIN_5173 = `${PREVIEW_5173}__pockode/preview/login?ticket=t1`;
+
+function openTab() {
+	const tab = { opener: window, closed: false, location: { replace: vi.fn() } };
+	const open = vi
+		.spyOn(window, "open")
+		.mockReturnValue(tab as unknown as Window);
+	return { open, replace: tab.location.replace };
+}
 
 describe("PortPreviewSheet", () => {
 	beforeEach(() => {
 		localStorage.clear();
 		usePortPreviewStore.setState({ recentPorts: [] });
+		vi.spyOn(wsActions, "portPreviewTicket").mockResolvedValue("t1");
 	});
 
 	afterEach(() => {
 		vi.restoreAllMocks();
 	});
 
-	it("opens the preview of the typed port and closes", async () => {
-		const open = vi
-			.spyOn(window, "open")
-			.mockReturnValue({ opener: window } as unknown as Window);
+	it("opens the typed port logged in and closes", async () => {
+		const { open, replace } = openTab();
 		const onClose = vi.fn();
 		render(<PortPreviewSheet remoteUrl={REMOTE_URL} onClose={onClose} />);
 
 		await userEvent.setup().type(screen.getByLabelText("Port"), "5173{Enter}");
 
-		expect(open).toHaveBeenCalledWith(
-			"https://abc123-5173.cloud.pockode.com/",
-			"_blank",
-		);
+		expect(open).toHaveBeenCalledWith("", "_blank");
+		await vi.waitFor(() => expect(replace).toHaveBeenCalledWith(LOGIN_5173));
 		expect(onClose).toHaveBeenCalled();
 		expect(usePortPreviewStore.getState().recentPorts).toEqual([5173]);
 	});
@@ -59,11 +67,54 @@ describe("PortPreviewSheet", () => {
 		expect(alert).toHaveTextContent("The browser blocked the new tab");
 		expect(
 			screen.getByRole("link", { name: "localhost:5173" }),
-		).toHaveAttribute("href", "https://abc123-5173.cloud.pockode.com/");
+		).toHaveAttribute("href", PREVIEW_5173);
 
 		// A retry that is blocked again is a new alert, so it is announced again.
 		await user.keyboard("{Enter}");
 		expect(screen.getByRole("alert")).not.toBe(alert);
+	});
+
+	// fireEvent rather than userEvent: its return value is whether the link's
+	// own navigation went ahead, which is the fallback under test.
+	describe("a recent port", () => {
+		beforeEach(() => {
+			usePortPreviewStore.setState({ recentPorts: [5173] });
+		});
+
+		function link() {
+			return screen.getByRole("link", { name: "localhost:5173" });
+		}
+
+		it("opens logged in on a plain click, keeping the ticket out of the link", async () => {
+			const { replace } = openTab();
+			const onClose = vi.fn();
+			render(<PortPreviewSheet remoteUrl={REMOTE_URL} onClose={onClose} />);
+
+			expect(link()).toHaveAttribute("href", PREVIEW_5173);
+			expect(fireEvent.click(link())).toBe(false);
+
+			await vi.waitFor(() => expect(replace).toHaveBeenCalledWith(LOGIN_5173));
+			expect(link()).toHaveAttribute("href", PREVIEW_5173);
+			expect(onClose).toHaveBeenCalled();
+		});
+
+		it("falls back to the link when the tab is blocked", () => {
+			vi.spyOn(window, "open").mockReturnValue(null);
+			const onClose = vi.fn();
+			render(<PortPreviewSheet remoteUrl={REMOTE_URL} onClose={onClose} />);
+
+			expect(fireEvent.click(link())).toBe(true);
+			expect(onClose).toHaveBeenCalled();
+		});
+
+		it("leaves a modified click to the link", () => {
+			const { open } = openTab();
+			render(<PortPreviewSheet remoteUrl={REMOTE_URL} onClose={vi.fn()} />);
+
+			expect(fireEvent.click(link(), { ctrlKey: true })).toBe(true);
+			expect(open).not.toHaveBeenCalled();
+			expect(wsActions.portPreviewTicket).not.toHaveBeenCalled();
+		});
 	});
 
 	it("keeps focus in the sheet as recent ports are removed", async () => {

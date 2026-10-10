@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { openInNewTab, parsePort, previewUrl } from "./portPreview";
+import { openPreviewTab, parsePort, previewUrl } from "./portPreview";
 
 describe("parsePort", () => {
 	it.each([
@@ -40,28 +40,56 @@ describe("previewUrl", () => {
 	});
 });
 
-describe("openInNewTab", () => {
+describe("openPreviewTab", () => {
+	const PREVIEW = "https://abc-5173.example.com/";
+
 	afterEach(() => {
 		vi.restoreAllMocks();
 	});
 
-	it("opens the address in a new tab with its opener cut", () => {
-		const tab = { opener: window };
+	function fakeTab() {
+		return { opener: window, closed: false, location: { replace: vi.fn() } };
+	}
+
+	it("opens a tab before the ticket arrives, then logs it in", async () => {
+		const tab = fakeTab();
 		const open = vi
 			.spyOn(window, "open")
 			.mockReturnValue(tab as unknown as Window);
+		let resolve = (_ticket: string) => {};
+		const promise = new Promise<string>((r) => {
+			resolve = r;
+		});
 
-		expect(openInNewTab("https://abc-5173.example.com/")).toBe(true);
-		expect(open).toHaveBeenCalledWith(
-			"https://abc-5173.example.com/",
-			"_blank",
-		);
+		expect(openPreviewTab(PREVIEW, () => promise)).toBe(true);
+		expect(open).toHaveBeenCalledWith("", "_blank");
 		expect(tab.opener).toBeNull();
+		expect(tab.location.replace).not.toHaveBeenCalled();
+
+		resolve("t/1+");
+		await vi.waitFor(() =>
+			expect(tab.location.replace).toHaveBeenCalledWith(
+				"https://abc-5173.example.com/__pockode/preview/login?ticket=t%2F1%2B",
+			),
+		);
 	});
 
-	it("reports a blocked tab", () => {
-		vi.spyOn(window, "open").mockReturnValue(null);
+	it("sends the tab to the preview itself when there is no ticket", async () => {
+		const tab = fakeTab();
+		vi.spyOn(window, "open").mockReturnValue(tab as unknown as Window);
 
-		expect(openInNewTab("https://abc-5173.example.com/")).toBe(false);
+		openPreviewTab(PREVIEW, () => Promise.reject(new Error("Not connected")));
+
+		await vi.waitFor(() =>
+			expect(tab.location.replace).toHaveBeenCalledWith(PREVIEW),
+		);
+	});
+
+	it("reports a blocked tab without asking for a ticket", () => {
+		vi.spyOn(window, "open").mockReturnValue(null);
+		const getTicket = vi.fn();
+
+		expect(openPreviewTab(PREVIEW, getTicket)).toBe(false);
+		expect(getTicket).not.toHaveBeenCalled();
 	});
 });
