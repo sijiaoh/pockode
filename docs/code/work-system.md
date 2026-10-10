@@ -516,11 +516,38 @@ the sessions waiting, the refusal names the candidates the same way.
 There is deliberately **no tool that lists questions**: the answer arrives as a
 message, so a list would only invite an agent to poll for it inside the turn it
 was told not to wait in. The mechanism and how to word a question are in the
-`question_post` description; when to ask, and that it is the only way to, are in
-the asking guidance every session gets before it has loaded a tool
-([agent-integration.md](agent-integration.md#telling-the-agent-when-to-ask)).
+`question_post` description; when to ask, and that it is the only way to, are
+in the asking section of the guidance every session gets before it has loaded a
+tool ([agent-integration.md](agent-integration.md#telling-the-agent-when-to-ask)).
 
 See [Posted Questions](agent-integration.md#posted-questions).
+
+### Rendering Tool
+
+| Tool | Purpose | Key Parameters |
+|------|---------|----------------|
+| `html_render` | Show the user an HTML page — a comparison, a chart, a structured report — that Markdown carries badly | `title`, `html` |
+
+**The call's input is the page.** The server only validates it
+(`server/mcp/html_render.go`): it stores nothing and emits no event, because the
+frontend draws the page straight from the tool call recorded in the session
+history, like any other tool call's input. So the contract the frontend reads is
+the input schema, and nothing else:
+
+- `title` — required; a short name for what the page shows.
+- `html` — required; a full document or a fragment, rendered as-is in a
+  sandboxed iframe where scripts and external resources load normally.
+
+Either one empty or whitespace-only is refused as a user error — blank HTML is
+a blank frame, not a page, and a page with no title leaves the user nothing to
+tell it by. `html` over 256KB
+(`maxHTMLRenderBytes`) is refused too, naming the size: that history keeps the
+whole input, so the cap is what it can afford to carry, not what a browser could
+draw. The reply on success tells the agent the page is shown and not to repeat
+its content, which is the one rule worth restating at the moment it applies.
+When to reach for the tool at all is in the guidance every session gets before
+it has loaded one
+([agent-integration.md](agent-integration.md#telling-the-agent-when-to-ask)).
 
 ### Agent Role Tools
 
@@ -1939,9 +1966,9 @@ both over every message a task can be sent.
 **Asking is one sentence here, and one fact the tool cannot carry.** How to
 ask — when, and that the CLI's own ask-the-user tool does not reach the user
 ([agent-integration.md](agent-integration.md#refusing-the-clis-own-question)) —
-is `agent.AskingGuidance`, which every session gets, worked or not; the
-mechanism and wording are the `question_post` description, read on loading the
-tool ([agent-integration.md](agent-integration.md#telling-the-agent-when-to-ask)).
+is the asking section of `agent.Guidance`, which every session gets, worked or
+not; the mechanism and wording are the `question_post` description, read on
+loading the tool ([agent-integration.md](agent-integration.md#telling-the-agent-when-to-ask)).
 Repeating either here would be a second copy for them to drift apart in, so the
 section says "Ask with `question_post`, as the "Asking the user something in
 Pockode" guidance says" — naming the guidance by its heading, since this

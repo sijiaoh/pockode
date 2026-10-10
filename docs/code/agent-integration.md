@@ -1124,7 +1124,8 @@ never reads why it should. The guidance eval's first run measured exactly that
 the run after this split is what says it worked
 ([testing.md](../testing.md#the-question_post-eval)).
 
-- **`agent.AskingGuidance`** is what has to be known before any tool is loaded:
+- **The asking section of `agent.Guidance`** (`server/agent/guidance.go`) is
+  what has to be known before any tool is loaded:
   ask a user's decision with `question_post` (loading it through tool search
   first), and that it is the only way to ask; when to ask (only a decision that
   is the user's and changes what happens next; look things up first; take
@@ -1146,6 +1147,21 @@ the run after this split is what says it worked
   limit, which is exactly what the table in [Asking several at
   once](#asking-several-at-once) declines to set.
 
+`agent.Guidance` is not only about asking. Rendering has the same problem — an
+agent that never loaded `html_render` has no idea it can show the user a page —
+so the guidance carries a second section, "Showing the user something in
+Pockode", with what has to be known before that tool is loaded: reach for
+`html_render` (loading it through tool search first) when a comparison, a chart
+or a structured report is shown better by something richer than Markdown; keep
+plain prose and code in Markdown; and do not repeat or summarize in the reply
+what was rendered, since the user already sees it. The tool's description
+says again what it is for and not to repeat the page, and its success reply
+repeats the latter at the moment it applies; what the page may contain and how
+big it may be are in the description alone
+([work-system.md](work-system.md#rendering-tool)). The two sections
+are separate constants joined into one text, so a test of either checks that
+section's own words and cannot be satisfied by the other.
+
 The guidance has one source and reaches each CLI through the channel that CLI
 shows before loading, both chosen from what was measured on Claude 2.1.286 and
 Codex 0.159.3:
@@ -1156,9 +1172,9 @@ Codex 0.159.3:
 | Codex | `developerInstructions` on `thread/start` | Codex shows server instructions only once a tool of the server is loaded, as the description of its namespace. The parameter *replaces* the user's own `developer_instructions`, so the user's value is read with `config/read` first and sent ahead of the guidance; a failed read warns the user and carries on. It is fixed when the thread starts: `thread/resume` and `thread/fork` ignore the parameter and keep what the thread started with, so it is sent on `thread/start` alone, and a thread started before the guidance existed, or before a change to it, goes on without it. |
 
 Both go only where the MCP server does: a session started without it has no
-`question_post` to point at. Codex receives the server instructions as well,
-on loading a tool; repeating them there costs a few hundred tokens and is not
-worth a second text to keep in step.
+`question_post` or `html_render` to point at. Codex receives the server
+instructions as well, on loading a tool; repeating them there costs a few
+hundred tokens and is not worth a second text to keep in step.
 
 Ruled out: turning lazy loading off for everything (`ENABLE_TOOL_SEARCH=false`
 on Claude — every tool description in every turn; Codex has no switch, its
@@ -1172,8 +1188,10 @@ needed before the tool is loaded on both.
 Claude cuts a tool description and a server's instructions at 2048 characters
 (`CLAUDE_CODE_MAX_MCP_DESCRIPTION_LENGTH`), silently and from the end;
 `question_post`'s description had grown past it, taking the secrets rule with
-it, until that rule moved into the guidance. `mcp`'s tests hold every
-description and the guidance under it.
+it, until that rule moved into the guidance. `mcp`'s
+`TestToolDefinitions_FitClaudesLimit` holds every description and the whole of
+`agent.Guidance` — both sections together, since they travel as one
+instructions text — under it.
 
 The lifecycle prompt points at the guidance rather than repeating it
 ([work-system.md](work-system.md#prompt-format)).
