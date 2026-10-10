@@ -3,6 +3,7 @@ export {
 	type AuthCredentialParams,
 	type AuthFailureReason,
 	authFailureReason,
+	authRetryAfterMs,
 	credentialParams,
 } from "./auth.ts";
 export { getWebSocketUrl } from "./getWebSocketUrl.ts";

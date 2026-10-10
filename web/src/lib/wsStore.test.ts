@@ -146,7 +146,10 @@ class MockWebSocket {
 			result,
 		});
 	}
-	mockAuthFailure(reason = "invalid_password") {
+	mockAuthFailure(
+		reason = "invalid_password",
+		extra: Record<string, unknown> = {},
+	) {
 		this.send = vi.fn((data: string) => {
 			const parsed = JSON.parse(data);
 			if (parsed.id !== undefined && parsed.method === "auth") {
@@ -154,7 +157,11 @@ class MockWebSocket {
 					this.simulateMessage({
 						jsonrpc: "2.0",
 						id: parsed.id,
-						error: { code: -32600, message: "refused", data: { reason } },
+						error: {
+							code: -32600,
+							message: "refused",
+							data: { reason, ...extra },
+						},
 					});
 				});
 			}
@@ -313,6 +320,40 @@ describe("wsStore", () => {
 
 			expect(useAuthStore.getState().sessionToken).toBeNull();
 			expect(useWSStore.getState().status).toBe("disconnected");
+		});
+
+		// Every password is refused until the wait is over, so retrying on our
+		// own would only spend attempts that cannot succeed; the user is told
+		// when to try again instead.
+		it("fails auth with the server's retry time when rate limited", async () => {
+			vi.setSystemTime(1_000_000);
+
+			wsActions.connect(TEST_PASSWORD);
+			const ws = getMockWs();
+			ws?.mockAuthFailure("rate_limited", { retry_after_ms: 4000 });
+			ws?.simulateOpen();
+			await vi.runAllTimersAsync();
+
+			expect(useWSStore.getState().status).toBe("auth_failed");
+			expect(useWSStore.getState().authRetryAt).toBe(1_004_000);
+			expect(mockWsInstances.length).toBe(1);
+		});
+
+		// The password screen reads a retry time as "rate limited", so one left
+		// over from an earlier refusal would hide that this password was wrong.
+		it("drops the retry time when a later refusal is a wrong password", async () => {
+			wsActions.connect(TEST_PASSWORD);
+			getMockWs()?.mockAuthFailure("rate_limited", { retry_after_ms: 4000 });
+			getMockWs()?.simulateOpen();
+			await vi.runAllTimersAsync();
+
+			wsActions.connect(TEST_PASSWORD);
+			getMockWs()?.mockAuthFailure("invalid_password");
+			getMockWs()?.simulateOpen();
+			await vi.runAllTimersAsync();
+
+			expect(useWSStore.getState().status).toBe("auth_failed");
+			expect(useWSStore.getState().authRetryAt).toBeNull();
 		});
 
 		// The two halves of one rule: a refusal that names the worktree is retried

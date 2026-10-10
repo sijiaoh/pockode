@@ -1,3 +1,4 @@
+import { useSecondsUntil } from "@pockode/shared";
 import { useState } from "react";
 import { inputClass } from "../ui/inputClass";
 
@@ -5,15 +6,23 @@ interface Props {
 	onSubmit: (password: string) => void;
 	/** Why the last attempt was turned away, if it was. */
 	error?: string | null;
+	/**
+	 * When the server takes a password again (epoch milliseconds), after it
+	 * turned the last one away for too many attempts. Submitting is held off
+	 * until then: every password, the right one included, would be refused.
+	 */
+	retryAt?: number | null;
 }
 
-function PasswordInput({ onSubmit, error }: Props) {
+function PasswordInput({ onSubmit, error, retryAt = null }: Props) {
 	const [password, setPassword] = useState("");
+	const retryInSeconds = useSecondsUntil(retryAt);
+	const isLocked = retryInSeconds > 0;
 
 	const handleSubmit = (e: React.FormEvent) => {
 		e.preventDefault();
 		const trimmed = password.trim();
-		if (trimmed) {
+		if (trimmed && !isLocked) {
 			onSubmit(trimmed);
 		}
 	};
@@ -39,10 +48,17 @@ function PasswordInput({ onSubmit, error }: Props) {
 					placeholder="Password"
 					className={`mb-4 w-full rounded-lg bg-th-bg-secondary p-3 text-th-text-primary placeholder:text-th-text-muted ${inputClass}`}
 				/>
-				{error && <p className="mb-4 text-sm text-th-error">{error}</p>}
+				{isLocked ? (
+					<p className="mb-4 text-sm text-th-error">
+						Too many attempts — try again in {retryInSeconds}{" "}
+						{retryInSeconds === 1 ? "second" : "seconds"}.
+					</p>
+				) : (
+					error && <p className="mb-4 text-sm text-th-error">{error}</p>
+				)}
 				<button
 					type="submit"
-					disabled={!password.trim()}
+					disabled={!password.trim() || isLocked}
 					className="w-full rounded-lg bg-th-accent p-3 text-th-accent-text transition-colors hover:bg-th-accent-hover disabled:cursor-not-allowed disabled:bg-th-bg-tertiary disabled:text-th-text-muted"
 				>
 					Connect

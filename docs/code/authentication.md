@@ -191,6 +191,7 @@ clients branch on that rather than on the prose message:
 | `session_expired` | The stored token is unknown or past its idle window | Drop it silently and ask for the password — the user did nothing wrong |
 | `not_authenticated` | Some other method arrived before `auth`; the connection is closed | A client that reaches this has a bug — nothing is sent before `auth` |
 | `worktree_not_found` | The credential was fine; the worktree asked for is gone | Fall back to the main worktree and retry once |
+| `rate_limited` | Passwords are refused for now — the right one included — for `data.retry_after_ms` more milliseconds | Return to the password screen without a "wrong password" error, count the wait down there and hold submit until it is over; never retry on its own |
 
 `worktree_not_found` exists so that the retry is driven by a reason being
 present rather than by the credential reasons being absent. A client that

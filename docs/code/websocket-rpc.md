@@ -400,9 +400,11 @@ Client                              Server
 - A refusal carries `data.reason`, and clients branch on that rather than on the
   message: `invalid_password` keeps the user on the password screen with the
   error, `session_expired` drops the stored token and returns there silently,
-  `not_authenticated` means a method arrived before `auth`, and
-  `worktree_not_found` — the one refusal the credential was fine for — sends the
-  client back to the main worktree for one retry
+  `not_authenticated` means a method arrived before `auth`,
+  `worktree_not_found` — the credential was fine, the worktree is gone — sends the
+  client back to the main worktree for one retry, and `rate_limited` returns to
+  the password screen with no wrong-password error, holding submit until
+  `data.retry_after_ms` has passed
 - Optionally specify worktree; uses main worktree if not specified
 - Authentication response includes version number for detecting client/server version mismatch
 - `max_upload_size` is the ceiling on one HTTP upload request in bytes, sent so a
@@ -533,6 +535,14 @@ no credential to retry *with*; a connection that merely keeps failing stays in
 *session token* reaches neither: it is nobody's mistake, so the token is dropped
 and the status goes to `disconnected`, which is the password screen with no
 error on it.
+
+A `rate_limited` refusal is not the password's fault either. The store keeps
+when the wait ends as `authRetryAt` (epoch milliseconds) for the password screen
+to count down to. The two frontends reach that screen differently: web sets
+`auth_failed`, as for a wrong password, and logs out to it, while the cluster
+drops the credential and goes to `disconnected`, as for an expired session, so
+it does not land on its terminal `auth_failed` screen. Neither retries when the
+wait ends; the user submits again.
 
 ### Auto-Reconnect
 

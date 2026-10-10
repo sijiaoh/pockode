@@ -1,6 +1,7 @@
 import {
 	type AuthCredential,
 	authFailureReason,
+	authRetryAfterMs,
 	credentialParams,
 } from "@pockode/shared";
 import {
@@ -254,6 +255,12 @@ interface WSState {
 	maxUploadSize: number;
 	/** See `AuthResult.max_attachment_size`; 0 until an auth reply has arrived. */
 	maxAttachmentSize: number;
+	/**
+	 * When the server will take a password again (epoch milliseconds), set by
+	 * the "auth_failed" of a `rate_limited` refusal and null for any other. It
+	 * refuses every password until then, the right one included.
+	 */
+	authRetryAt: number | null;
 	actions: RPCActions;
 }
 
@@ -790,6 +797,7 @@ export const useWSStore = create<WSState>((set, get) => ({
 	remoteUrl: "",
 	maxUploadSize: 0,
 	maxAttachmentSize: 0,
+	authRetryAt: null,
 
 	actions: {
 		connect: (credential: AuthCredential) => {
@@ -915,7 +923,13 @@ export const useWSStore = create<WSState>((set, get) => ({
 						return;
 					}
 					console.error("WebSocket auth failed:", error);
-					set({ status: "auth_failed" });
+					set({
+						status: "auth_failed",
+						authRetryAt:
+							reason === "rate_limited"
+								? Date.now() + (authRetryAfterMs(error) ?? 0)
+								: null,
+					});
 					socket.close(1000, "auth_failed");
 				}
 			};
@@ -1452,5 +1466,6 @@ export function resetWSStore() {
 		projectTitle: "",
 		workDir: "",
 		remoteUrl: "",
+		authRetryAt: null,
 	});
 }

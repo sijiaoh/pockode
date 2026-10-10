@@ -75,7 +75,7 @@ class MockWebSocket {
 	// own close() call.
 	// Answers auth with a refusal carrying the machine-readable reason clients
 	// branch on.
-	mockAuthFailure(reason: string) {
+	mockAuthFailure(reason: string, extra: Record<string, unknown> = {}) {
 		this.send = vi.fn((data: string) => {
 			const parsed = JSON.parse(data);
 			if (parsed.id !== undefined && parsed.method === "auth") {
@@ -83,7 +83,11 @@ class MockWebSocket {
 					this.simulateMessage({
 						jsonrpc: "2.0",
 						id: parsed.id,
-						error: { code: -32600, message: "refused", data: { reason } },
+						error: {
+							code: -32600,
+							message: "refused",
+							data: { reason, ...extra },
+						},
 					});
 				});
 			}
@@ -169,6 +173,28 @@ describe("wsStore credentials", () => {
 
 		expect(useAuthStore.getState().sessionToken).toBeNull();
 		expect(useWSStore.getState().status).toBe("disconnected");
+	});
+
+	// Every password is refused until the wait is over, so retrying on our own
+	// would only spend attempts that cannot succeed: the user goes back to the
+	// password screen, told when to try again.
+	it("returns to the password screen with the retry time when rate limited", async () => {
+		vi.setSystemTime(1_000_000);
+		const useWSStore = await getStore();
+		const { authActions, useAuthStore } = await import("./authStore");
+		authActions.login("hunter2");
+
+		useWSStore.getState().actions.connect(TEST_PASSWORD);
+		currentMockWs?.mockAuthFailure("rate_limited", { retry_after_ms: 4000 });
+		currentMockWs?.simulateOpen();
+		await vi.runAllTimersAsync();
+
+		expect(useAuthStore.getState().password).toBeNull();
+		expect(useWSStore.getState()).toMatchObject({
+			status: "disconnected",
+			authRetryAt: 1_004_000,
+		});
+		expect(mockWsInstances.length).toBe(1);
 	});
 });
 

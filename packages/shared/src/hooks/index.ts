@@ -6,3 +6,4 @@ export {
 	useHasFinePointer,
 	useIsExpanded,
 } from "./useResponsive.ts";
+export { useSecondsUntil } from "./useSecondsUntil.ts";

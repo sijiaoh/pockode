@@ -36,6 +36,7 @@ function readColumnCollapsed(): boolean {
 
 function AppShell() {
 	const wsStatus = useWSStore((state) => state.status);
+	const authRetryAt = useWSStore((state) => state.authRetryAt);
 	const navigate = useNavigate();
 	const queryClient = useQueryClient();
 	const isExpanded = useIsExpanded();
@@ -108,10 +109,16 @@ function AppShell() {
 
 	useEffect(() => {
 		if (wsStatus === "auth_failed") {
-			setAuthError("Authentication failed — check your password.");
+			// A rate-limited refusal says nothing about the password; the password
+			// screen counts down to the retry time instead.
+			setAuthError(
+				authRetryAt === null
+					? "Authentication failed — check your password."
+					: null,
+			);
 			authActions.logout();
 		}
-	}, [wsStatus]);
+	}, [wsStatus, authRetryAt]);
 
 	const {
 		worktrees,
@@ -785,7 +792,13 @@ function AppShell() {
 	const createErrorMessage = createError?.message || "Unknown error";
 
 	if (!isAuthenticated) {
-		return <PasswordInput onSubmit={handlePasswordSubmit} error={authError} />;
+		return (
+			<PasswordInput
+				onSubmit={handlePasswordSubmit}
+				error={authError}
+				retryAt={authRetryAt}
+			/>
+		);
 	}
 
 	const showShell =

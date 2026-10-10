@@ -45,7 +45,8 @@ export type AuthFailureReason =
 	| "invalid_password"
 	| "session_expired"
 	| "not_authenticated"
-	| "worktree_not_found";
+	| "worktree_not_found"
+	| "rate_limited";
 
 /**
  * The reason on an auth refusal, or null when the error carries none.
@@ -56,7 +57,24 @@ export type AuthFailureReason =
  * reason".
  */
 export function authFailureReason(error: unknown): AuthFailureReason | null {
-	const data = (error as { data?: { reason?: AuthFailureReason } } | null)
-		?.data;
-	return data?.reason ?? null;
+	return refusalData(error)?.reason ?? null;
+}
+
+/**
+ * How long a `rate_limited` refusal says to wait before offering a password
+ * again, or null when the error carries no wait. The server refuses every
+ * password until then — the right one included — so the client holds off
+ * rather than spending attempts that cannot succeed.
+ */
+export function authRetryAfterMs(error: unknown): number | null {
+	return refusalData(error)?.retry_after_ms ?? null;
+}
+
+interface AuthRefusalData {
+	reason?: AuthFailureReason;
+	retry_after_ms?: number;
+}
+
+function refusalData(error: unknown): AuthRefusalData | undefined {
+	return (error as { data?: AuthRefusalData } | null)?.data;
 }
