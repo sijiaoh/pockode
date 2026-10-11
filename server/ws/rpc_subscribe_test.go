@@ -52,6 +52,7 @@ func TestHandler_SubscribeTakesTheClientsID(t *testing.T) {
 		}},
 		{"worktree.subscribe", func(id string) any { return rpc.SubscribeParams{ID: id} }},
 		{"settings.subscribe", func(id string) any { return rpc.SubscribeParams{ID: id} }},
+		{"remote_url.subscribe", func(id string) any { return rpc.SubscribeParams{ID: id} }},
 		{"session.list.subscribe", func(id string) any { return rpc.SubscribeParams{ID: id} }},
 		{"session.detail.subscribe", func(id string) any {
 			return rpc.SessionDetailSubscribeParams{ID: id, SessionID: "sess"}

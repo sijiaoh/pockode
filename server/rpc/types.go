@@ -74,9 +74,10 @@ type AuthResult struct {
 	// RemoteURL is the address this server is reachable at through the relay,
 	// such as "https://abc123.cloud.pockode.com"; empty when the relay is
 	// disabled or has stopped for good. It is current as of this reply:
-	// renewing the relay credentials can change it mid-run. Sent so the client
-	// does not have to infer it from the page it was loaded from, which is
-	// localhost on a local connection.
+	// renewing the relay credentials can change it mid-run, which a client
+	// follows with remote_url.subscribe. Sent so the client does not have to
+	// infer it from the page it was loaded from, which is localhost on a local
+	// connection.
 	RemoteURL string `json:"remote_url"`
 	// MaxUploadSize is the ceiling on one HTTP upload request, in bytes, sent so
 	// a client can refuse an oversized file before spending a slow link on it
@@ -1557,4 +1558,11 @@ type SessionViewDeleteParams struct {
 // authsession.TicketTTL, on any preview host of this server.
 type PortPreviewTicketResult struct {
 	Ticket string `json:"ticket"`
+}
+
+// RemoteURLSubscribeResult carries the remote URL as of the subscription; see
+// AuthResult.RemoteURL for what it holds. Later values arrive as
+// remote_url.changed notifications.
+type RemoteURLSubscribeResult struct {
+	RemoteURL string `json:"remote_url"`
 }

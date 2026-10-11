@@ -30,6 +30,8 @@ import type {
 	ChatMessagesHistoryResult,
 	ChatMessagesSubscribeResult,
 	HistorySeq,
+	RemoteUrlChangedNotification,
+	RemoteUrlSubscribeResult,
 	ServerNotification,
 	SessionDetailChangedNotification,
 	SessionDetailSubscribeResult,
@@ -215,6 +217,11 @@ export interface WatchActions {
 		callback: (params: CliUpdateChangedNotification) => void,
 	) => Promise<WatchSubscribeResult<CliUpdate | null>>;
 	cliUpdateUnsubscribe: (id: string) => Promise<void>;
+	/** The remote URL as it is now; see `AuthResult.remote_url`. */
+	remoteUrlSubscribe: (
+		callback: (params: RemoteUrlChangedNotification) => void,
+	) => Promise<WatchSubscribeResult<string>>;
+	remoteUrlUnsubscribe: (id: string) => Promise<void>;
 }
 
 type RPCActions = ConnectionActions &
@@ -246,9 +253,10 @@ interface WSState {
 	projectTitle: string;
 	workDir: string;
 	/**
-	 * See `AuthResult.remote_url`. Kept across disconnects: opening a preview
-	 * needs no connection, and clearing it would flicker the entry away on
-	 * every reconnect.
+	 * See `AuthResult.remote_url`. Kept up to date while connected by
+	 * `useRemoteUrlSubscription`, since the relay can move mid-run. Kept across
+	 * disconnects: opening a preview needs no connection, and clearing it would
+	 * flicker the entry away on every reconnect.
 	 */
 	remoteUrl: string;
 	/** See `AuthResult.max_upload_size`; 0 until an auth reply has arrived. */
@@ -324,6 +332,10 @@ const cliUpdateWatchCallbacks = new Map<
 	string,
 	(params: CliUpdateChangedNotification) => void
 >();
+const remoteUrlWatchCallbacks = new Map<
+	string,
+	(params: RemoteUrlChangedNotification) => void
+>();
 
 /**
  * Clear worktree-scoped watch subscriptions. Called when switching worktrees.
@@ -359,6 +371,7 @@ function clearAllWatchSubscriptions(): void {
 	agentRoleListWatchCallbacks.clear();
 	cliLoginWatchCallbacks.clear();
 	cliUpdateWatchCallbacks.clear();
+	remoteUrlWatchCallbacks.clear();
 }
 
 /**
@@ -644,6 +657,11 @@ const watchNotificationHandlers: Record<string, WatchNotificationHandler> = {
 	"cli_update.changed": (params) => {
 		const changedParams = params as CliUpdateChangedNotification;
 		cliUpdateWatchCallbacks.get(changedParams.id)?.(changedParams);
+		return true;
+	},
+	"remote_url.changed": (params) => {
+		const changedParams = params as RemoteUrlChangedNotification;
+		remoteUrlWatchCallbacks.get(changedParams.id)?.(changedParams);
 		return true;
 	},
 };
@@ -1309,6 +1327,24 @@ export const useWSStore = create<WSState>((set, get) => ({
 
 		cliUpdateUnsubscribe: (id: string) =>
 			closeSubscription("cli_update.unsubscribe", id, cliUpdateWatchCallbacks),
+
+		remoteUrlSubscribe: async (
+			callback: (params: RemoteUrlChangedNotification) => void,
+		) => {
+			const { id, result } = await openSubscription(
+				"remote_url.subscribe",
+				{},
+				remoteUrlWatchCallbacks,
+				callback,
+			);
+			return {
+				id,
+				initial: (result as RemoteUrlSubscribeResult).remote_url,
+			};
+		},
+
+		remoteUrlUnsubscribe: (id: string) =>
+			closeSubscription("remote_url.unsubscribe", id, remoteUrlWatchCallbacks),
 
 		// Spread namespace-specific actions
 		...agentActions,

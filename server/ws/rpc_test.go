@@ -536,6 +536,15 @@ func newAuthTestServer(t *testing.T, password, remoteURL string, sessions Sessio
 // by the caller, which is the only way a test can redeem what it was handed.
 func newTicketTestServer(t *testing.T, password string, remoteURL func() string, sessions SessionStore, tickets PreviewTickets) *httptest.Server {
 	t.Helper()
+	server := httptest.NewServer(newMinimalTestHandler(t, password, remoteURL, sessions, tickets))
+	t.Cleanup(server.Close)
+	return server
+}
+
+// newMinimalTestHandler is the handler behind newTicketTestServer, for a test
+// that has to call it directly, as the relay does.
+func newMinimalTestHandler(t *testing.T, password string, remoteURL func() string, sessions SessionStore, tickets PreviewTickets) *RPCHandler {
+	t.Helper()
 	dataDir := t.TempDir()
 	workDir := t.TempDir()
 	cmdStore, _ := command.NewStore(dataDir)
@@ -549,9 +558,8 @@ func newTicketTestServer(t *testing.T, password string, remoteURL func() string,
 	workOps := work.NewOperations(workStore, workStarter, nil, nil)
 
 	h := NewRPCHandler(password, authguard.NewFrozen(), sessions, "test", remoteURL, tickets, true, cmdStore, worktreeManager, settingsStore, workStore, workOps, work.NewEngine(workStore, work.DefaultMaxNudges), agentRoleStore, cliauth.NewService(slog.Default()), cliupdate.NewService(slog.Default(), nil, nil))
-	server := httptest.NewServer(h)
-	t.Cleanup(server.Close)
-	return server
+	t.Cleanup(h.Stop)
+	return h
 }
 
 // callOnce sends one request over a fresh connection and returns the reply. A

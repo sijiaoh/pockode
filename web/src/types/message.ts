@@ -817,6 +817,20 @@ export interface AuthResult {
 	session_token: string;
 }
 
+/** What `remote_url.subscribe` replies with; see `AuthResult.remote_url`. */
+export interface RemoteUrlSubscribeResult {
+	remote_url: string;
+}
+
+/**
+ * The remote URL moved: renewing the relay credentials put the server on a new
+ * subdomain, or remote access ended for good (empty). Carries the URL as it is
+ * now, never a delta.
+ */
+export interface RemoteUrlChangedNotification extends RemoteUrlSubscribeResult {
+	id: string;
+}
+
 export interface MessageParams {
 	session_id: string;
 	content: string;

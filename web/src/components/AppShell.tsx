@@ -8,6 +8,7 @@ import { useAgentOptions } from "../hooks/useAgentOptions";
 import { useAgentRoleSubscription } from "../hooks/useAgentRoleSubscription";
 import { useDocumentTitle } from "../hooks/useDocumentTitle";
 import { useFileDropGuard } from "../hooks/useFileDropGuard";
+import { useRemoteUrlSubscription } from "../hooks/useRemoteUrlSubscription";
 import { useRouteState } from "../hooks/useRouteState";
 import { useSession } from "../hooks/useSession";
 import { useSessionDetailSubscription } from "../hooks/useSessionDetailSubscription";
@@ -141,6 +142,7 @@ function AppShell() {
 	const isSessionViewReady = isWorktreesLoaded;
 
 	useSettingsSubscription(isAuthenticated);
+	useRemoteUrlSubscription(isAuthenticated);
 	useWorkSubscription(isAuthenticated);
 	useAgentRoleSubscription(isAuthenticated);
 	useAgentOptions(isAuthenticated);
