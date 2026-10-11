@@ -2,7 +2,6 @@ package contents
 
 import (
 	"bytes"
-	"encoding/base64"
 	"errors"
 	"fmt"
 	"os"
@@ -12,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pockode/server/attachments"
 	"github.com/pockode/server/internal/fifotest"
 	"github.com/pockode/server/internal/symlinktest"
 )
@@ -80,6 +80,16 @@ func writeTestFile(t *testing.T, workDir, name string, data []byte) {
 	}
 }
 
+// writeTestImage writes a PNG of size bytes. Sparse past the header, so an
+// image at the attachment ceiling costs no disk.
+func writeTestImage(t *testing.T, workDir, name string, size int64) {
+	t.Helper()
+	writeTestFile(t, workDir, name, pngHeader)
+	if err := os.Truncate(filepath.Join(workDir, name), size); err != nil {
+		t.Fatalf("failed to size %s: %v", name, err)
+	}
+}
+
 func getFile(t *testing.T, workDir, path string) *FileContent {
 	t.Helper()
 	result, err := GetContents(workDir, path)
@@ -116,21 +126,58 @@ func TestGetContents_ReadFile(t *testing.T) {
 		}
 	})
 
-	t.Run("returns images as base64 with their real mime", func(t *testing.T) {
+	// A raster image's bytes are fetched over HTTP, so the response is metadata
+	// alone — and, since MaxFileSize is the JSON-RPC message's ceiling, that
+	// holds for an image past it too, up to the attachment ceiling.
+	for _, tc := range []struct {
+		name string
+		size int
+	}{
+		{"that is small", len(pngHeader) + 8},
+		{"over the size limit", MaxFileSize + 1},
+		{"at the attachment limit", attachments.MaxSize},
+	} {
+		t.Run("describes a raster image "+tc.name+" for fetching over http", func(t *testing.T) {
+			workDir := t.TempDir()
+			writeTestImage(t, workDir, "logo.png", int64(tc.size))
+
+			file := getFile(t, workDir, "logo.png")
+
+			if file.Encoding != EncodingHTTP {
+				t.Errorf("got encoding %q, want %q", file.Encoding, EncodingHTTP)
+			}
+			if file.Content != "" {
+				t.Errorf("expected no content, got %d bytes", len(file.Content))
+			}
+			if file.MIME != "image/png" {
+				t.Errorf("got mime %q, want image/png", file.MIME)
+			}
+			if file.Size != int64(tc.size) {
+				t.Errorf("got size %d, want %d", file.Size, tc.size)
+			}
+			if file.Omitted != "" || file.Limit != 0 {
+				t.Errorf("got omitted %q limit %d, want neither", file.Omitted, file.Limit)
+			}
+		})
+	}
+
+	// Past the attachment ceiling an image is not previewed, and is reported the
+	// way any content too large to show is.
+	t.Run("omits a raster image over the attachment limit", func(t *testing.T) {
 		workDir := t.TempDir()
-		content := append(append([]byte{}, pngHeader...), []byte("pixels\x00\x01")...)
-		writeTestFile(t, workDir, "logo.png", content)
+		size := int64(attachments.MaxSize + 1)
+		writeTestImage(t, workDir, "huge.png", size)
 
-		file := getFile(t, workDir, "logo.png")
+		file := getFile(t, workDir, "huge.png")
 
-		if file.Encoding != EncodingBase64 {
-			t.Errorf("got encoding %q, want %q", file.Encoding, EncodingBase64)
+		if file.Encoding != EncodingNone || file.Omitted != OmitTooLarge {
+			t.Errorf("got %q/%q, want none/too_large", file.Encoding, file.Omitted)
 		}
-		if file.MIME != "image/png" {
-			t.Errorf("got mime %q, want image/png", file.MIME)
+		if file.Limit != attachments.MaxSize {
+			t.Errorf("got limit %d, want %d", file.Limit, attachments.MaxSize)
 		}
-		if file.Content != base64.StdEncoding.EncodeToString(content) {
-			t.Error("content is not the base64 of the file")
+		if file.Size != size || file.MIME != "image/png" {
+			t.Errorf("got size %d mime %q, want %d image/png", file.Size, file.MIME, size)
 		}
 	})
 
@@ -148,6 +195,21 @@ func TestGetContents_ReadFile(t *testing.T) {
 		}
 		if file.Encoding != EncodingText || file.Content != svg {
 			t.Errorf("got encoding %q content %q, want the svg source as text", file.Encoding, file.Content)
+		}
+	})
+
+	// AVIF is named by its extension alone, so a text file carrying one (a
+	// git-LFS pointer, say) must still come back as the text it is rather than
+	// as an image the client cannot draw.
+	t.Run("keeps text under an image extension as text", func(t *testing.T) {
+		workDir := t.TempDir()
+		pointer := "version https://git-lfs.github.com/spec/v1\noid sha256:abc\nsize 12345\n"
+		writeTestFile(t, workDir, "photo.avif", []byte(pointer))
+
+		file := getFile(t, workDir, "photo.avif")
+
+		if file.Encoding != EncodingText || file.Content != pointer {
+			t.Errorf("got encoding %q content %q, want the pointer as text", file.Encoding, file.Content)
 		}
 	})
 

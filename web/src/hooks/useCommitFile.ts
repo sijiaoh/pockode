@@ -2,6 +2,9 @@ import { useQuery } from "@tanstack/react-query";
 import { DEFAULT_RETRY_COUNT } from "../lib/queryClient";
 import { isRPCTimeout, useWSStore } from "../lib/wsStore";
 
+export const commitFileQueryKey = (hash: string | null, path: string | null) =>
+	["commit-file", hash, path] as const;
+
 /**
  * The file as it stood in a commit.
  *
@@ -12,7 +15,7 @@ export function useCommitFile(hash: string | null, path: string | null) {
 	const getCommitFile = useWSStore((state) => state.actions.getCommitFile);
 
 	return useQuery({
-		queryKey: ["commit-file", hash, path],
+		queryKey: commitFileQueryKey(hash, path),
 		queryFn: () => {
 			if (!hash || !path) throw new Error("Hash and path are required");
 			return getCommitFile(hash, path);

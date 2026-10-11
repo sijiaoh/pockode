@@ -1,9 +1,10 @@
 import { useQuery } from "@tanstack/react-query";
 import { DEFAULT_RETRY_COUNT } from "../lib/queryClient";
 import { useSessionView } from "../lib/sessionView";
+import { useWorktreeStore } from "../lib/worktreeStore";
 import { isRPCTimeout, useWSStore } from "../lib/wsStore";
 import type { AttachmentSource } from "../types/content";
-import type { FileContent } from "../types/contents";
+import type { FileContent, ImageOrigin } from "../types/contents";
 import { contentsQueryKey } from "./useContents";
 
 /**
@@ -31,7 +32,23 @@ export function attachmentQueryKey(
 }
 
 /**
- * Reads an attachment's content.
+ * Where an attachment's raster image is read from over HTTP: where its
+ * description came from — the transcript's own worktree when it is being read
+ * from outside, otherwise the one the WebSocket is bound to now.
+ */
+export function useAttachmentImageOrigin(
+	source: AttachmentSource,
+): ImageOrigin {
+	const view = useSessionView();
+	const bound = useWorktreeStore((state) => state.current);
+	return source.kind === "attachment"
+		? { ...source, worktree: view?.worktree ?? bound }
+		: source;
+}
+
+/**
+ * Reads an attachment's description, which carries the content itself only
+ * when it is text; a raster image's bytes are read separately (`useImageSrc`).
  *
  * `enabled` is how the strip keeps a history page from pulling every image it
  * scrolls past: the caller turns it on when the thumbnail comes into view. The

@@ -25,10 +25,12 @@ const CHANGED_MID_DOWNLOAD =
 	"The file changed while it was being downloaded. Try again.";
 
 /**
- * What the endpoint sends, carried onto the assembled Blob.
+ * What the endpoint sends, and what every saved Blob is typed as (`saveBlob`).
  *
  * A Blob with no type is handled inconsistently by iOS Safari, which may show
  * it inline instead of saving it — and a phone is where this app is most used.
+ * A Blob under its real type is worse: its object URL is same-origin with the
+ * app, so an SVG or HTML file shown inline would run its scripts as the app.
  */
 const DOWNLOAD_MIME = "application/octet-stream";
 
@@ -45,7 +47,7 @@ const ERROR_MESSAGES = new Map([
 	["worktree_not_found", "Worktree not found"],
 ]);
 
-function downloadUrl(path: string, worktree: string): string {
+export function downloadUrl(path: string, worktree: string): string {
 	const params = new URLSearchParams({ path });
 	if (worktree) params.set("worktree", worktree);
 	return apiUrl(`/api/files/download?${params.toString()}`);
@@ -59,7 +61,7 @@ function downloadUrl(path: string, worktree: string): string {
  * text — so a body that is not that JSON is expected rather than exceptional,
  * and the status stands in for it.
  */
-async function readError(response: Response): Promise<Error> {
+export async function readError(response: Response): Promise<Error> {
 	// A rejected credential is the end of the session rather than of this download;
 	// saying so and returning to login beats a banner naming a status code.
 	if (logoutIfUnauthorized(response.status)) {
@@ -225,9 +227,13 @@ export async function fetchFileBlob({
  */
 const OBJECT_URL_LIFETIME_MS = 1000;
 
-/** Hands a Blob to the browser under `fileName`. */
+/** Hands a Blob to the browser under `fileName`, typed `DOWNLOAD_MIME`. */
 export function saveBlob(blob: Blob, fileName: string): void {
-	const url = URL.createObjectURL(blob);
+	const url = URL.createObjectURL(
+		blob.type === DOWNLOAD_MIME
+			? blob
+			: blob.slice(0, blob.size, DOWNLOAD_MIME),
+	);
 	const link = document.createElement("a");
 	link.href = url;
 	link.download = fileName;

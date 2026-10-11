@@ -72,7 +72,9 @@ func newHandler(serverPassword string, passwordGuard *authguard.Guard, sessions 
 	// filetransfer package for why.
 	mux.HandleFunc("GET /api/files/download", transferHandler.Download)
 	mux.HandleFunc("POST /api/files/upload", transferHandler.Upload)
+	mux.HandleFunc("GET /api/git/show/file", transferHandler.GitFile)
 	mux.HandleFunc("POST /api/chat/attachments", attachmentHandler.Upload)
+	mux.HandleFunc("GET /api/chat/attachments", attachmentHandler.Download)
 
 	// Local MCP API. middleware.Auth bypasses this exact route; mcpHandler
 	// self-auths with the locally-generated MCP token instead of the user

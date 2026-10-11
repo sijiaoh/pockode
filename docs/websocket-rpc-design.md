@@ -2,12 +2,14 @@
 
 All communication uses WebSocket JSON-RPC 2.0. REST APIs are not used.
 
-The one exception is whole-file transfer, which carries bytes rather than
-calls: `GET /api/files/download`, `POST /api/files/upload` and
-`POST /api/chat/attachments` are plain HTTP so a large body neither waits behind
-nor holds up the one connection ([file.md](file.md#transfer)). A chat
-attachment upload is only the first half of a send: `chat.message` then names
-the stored files by the ids the upload returned.
+The one exception is bytes rather than calls — whole-file transfer and the
+bytes of a raster image: `GET /api/files/download`, `POST /api/files/upload`,
+`POST` / `GET /api/chat/attachments` and `GET /api/git/show/file` are plain
+HTTP so a large body neither waits behind nor holds up the one connection
+([file.md](file.md#transfer)). An image is still described over JSON-RPC
+(`encoding: "http"`); only its bytes take the HTTP route. A chat attachment
+upload is only the first half of a send: `chat.message` then names the stored
+files by the ids the upload returned.
 
 ## Background
 
@@ -125,8 +127,8 @@ compressed. That needs `coder/websocket` **v1.8.15 or later**, and is the reason
 the dependency is pinned no lower. Before it, the compressed path had no buffer
 between the deflate writer and the framer, so a frame left every time
 `compress/flate` flushed its 240-byte bit writer — an 8 MiB `file.get` response
-measured at 3,463 frames of source text, or **52,583** of the base64 a binary
-file turns into.
+measured at 3,463 frames of source text, or **52,583** of the base64 an image
+was then sent as.
 
 What that cost depends entirely on the receiver, and it was measured rather than
 reasoned about. Chromium took the 52,583-fragment message in 4.0 s and showed no

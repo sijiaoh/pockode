@@ -586,7 +586,7 @@ func (s diffSide) read() (size int64, content []byte, err error) {
 	if s.spec == "" {
 		return readWorktree(filepath.Join(s.dir, s.path))
 	}
-	size, content, err = readBlobBounded(s.dir, s.spec)
+	size, content, err = readBlobBounded(s.dir, s.spec, nil)
 	if err != nil {
 		return 0, nil, nil
 	}

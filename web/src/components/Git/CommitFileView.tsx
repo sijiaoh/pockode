@@ -32,7 +32,11 @@ function CommitFileView({ hash, path }: Props) {
 	const { data: commit } = useGitCommit(hash);
 	const { data: file, isLoading, error } = useCommitFile(hash, path);
 
-	const state = useMemo(() => (file ? getFileViewState(file) : null), [file]);
+	const state = useMemo(
+		() =>
+			file ? getFileViewState(file, { kind: "commit", hash, path }) : null,
+		[file, hash, path],
+	);
 
 	const handleBack = () => {
 		navigate(

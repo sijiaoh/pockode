@@ -92,7 +92,7 @@ function FileBody({
 		case "image":
 			return (
 				<ImagePreview
-					src={state.src}
+					source={state.source}
 					fileName={splitPath(path).fileName}
 					mime={state.mime}
 					size={state.size}

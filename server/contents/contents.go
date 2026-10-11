@@ -3,7 +3,6 @@ package contents
 
 import (
 	"bytes"
-	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
@@ -14,6 +13,8 @@ import (
 	"sort"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/pockode/server/attachments"
 )
 
 var (
@@ -62,14 +63,16 @@ const (
 	// carry, in either direction: what file.get will read out, what each
 	// version in a git diff may be, and what file.write will take in. One
 	// number because it is one constraint — the whole content is held in
-	// memory and travels as one WebSocket message (base64 inflating it by a
-	// further 4/3 on the way out), and a connection carries one message at a
-	// time, so a few megabytes stall every request already in flight on it.
-	// The ceiling is about that connection as much as about memory.
+	// memory and travels as one WebSocket message, and a connection carries
+	// one message at a time, so a few megabytes stall every request already in
+	// flight on it. The ceiling is about that connection as much as about
+	// memory.
 	//
 	// The blocking is this connection's own, not the relay's: over a tunnel
 	// /ws gets a yamux stream to itself and yamux frames what it writes, so
 	// other streams keep moving. Whole files go over HTTP; see docs/file.md.
+	// So do raster images (EncodingHTTP), which is why this ceiling does not
+	// apply to them; they are held to attachments.MaxSize instead.
 	MaxFileSize = 2 << 20 // 2 MiB
 
 	// SniffLen is the most http.DetectContentType inspects, and so the least a
@@ -80,8 +83,16 @@ const (
 type Encoding string
 
 const (
-	EncodingText   Encoding = "text"
-	EncodingBase64 Encoding = "base64"
+	EncodingText Encoding = "text"
+	// EncodingHTTP is a raster image (IsRasterImage) within attachments.MaxSize,
+	// sent without content: the client fetches its bytes over HTTP from the
+	// endpoint that serves whatever this describes — the download endpoint for
+	// a workspace file, the attachment endpoint for an attachment, the commit
+	// file endpoint for a version git.show.file read out of history. An image
+	// is the one binary a client wants whole, and the one most likely to be
+	// megabytes, so it stays off the JSON-RPC connection for the reason
+	// MaxFileSize gives.
+	EncodingHTTP Encoding = "http"
 	// EncodingNone means no content was sent; Omitted says why.
 	EncodingNone Encoding = "none"
 )
@@ -126,7 +137,7 @@ type FileContent struct {
 	Omitted  OmitReason `json:"omitted,omitempty"`
 	// Limit is the size ceiling that kept Content out, sent only with
 	// OmitTooLarge. It travels with the response so the UI can name the
-	// threshold without keeping a second copy of MaxFileSize.
+	// threshold without keeping a second copy of the ceiling that applied.
 	Limit int64 `json:"limit,omitempty"`
 }
 
@@ -217,12 +228,17 @@ func listDir(relPath, fullPath string) ([]Entry, error) {
 	return entries, nil
 }
 
-// readFile describes a file, and reads it only when its content is something
-// the client can use: text, or an image small enough to send. Anything else
-// comes back as metadata alone — a client that cannot render a binary blob has
-// no use for the megabytes it would cost to ship one.
+// readFile describes a file, carrying its content only when it is text small
+// enough to send. Anything else is described by metadata alone: a raster image
+// because its bytes are fetched over HTTP, any other binary because a client
+// that cannot render it has no use for the megabytes it would cost to ship.
 func readFile(relPath, fullPath string) (*FileContent, error) {
-	size, content, err := ReadBounded(fullPath)
+	// The head decides before the rest is read: an image's bytes are not
+	// going to be sent, so reading up to MaxFileSize of them only to drop
+	// them would make every image's metadata cost the image.
+	size, content, err := readBounded(fullPath, func(head []byte) bool {
+		return IsRasterImage(relPath, head)
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -234,6 +250,12 @@ func readFile(relPath, fullPath string) (*FileContent, error) {
 // of content that is not going to be sent. size is the file's full size, so
 // size > MaxFileSize is how a caller tells the two apart.
 func ReadBounded(fullPath string) (size int64, content []byte, err error) {
+	return readBounded(fullPath, nil)
+}
+
+// readBounded is ReadBounded that also stops at the head when headOnly says
+// the head is all the caller needs. headOnly may be nil.
+func readBounded(fullPath string, headOnly func(head []byte) bool) (size int64, content []byte, err error) {
 	f, err := os.Open(fullPath)
 	if err != nil {
 		return 0, nil, fmt.Errorf("failed to read file: %w", err)
@@ -248,21 +270,23 @@ func ReadBounded(fullPath string) (size int64, content []byte, err error) {
 		return 0, nil, fmt.Errorf("failed to stat file: %w", err)
 	}
 
-	if info.Size() > MaxFileSize {
-		head := make([]byte, SniffLen)
-		n, err := io.ReadFull(f, head)
-		if err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF) {
-			return 0, nil, fmt.Errorf("failed to read file: %w", err)
-		}
-		return info.Size(), head[:n], nil
+	head := make([]byte, SniffLen)
+	n, err := io.ReadFull(f, head)
+	if err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF) {
+		return 0, nil, fmt.Errorf("failed to read file: %w", err)
+	}
+	head = head[:n]
+	if info.Size() > MaxFileSize || (headOnly != nil && headOnly(head)) {
+		return info.Size(), head, nil
 	}
 
 	// Bounded rather than sized from info: the file may have grown since the
 	// stat, and memory use must not depend on that race.
-	content, err = io.ReadAll(io.LimitReader(f, MaxFileSize+1))
+	rest, err := io.ReadAll(io.LimitReader(f, MaxFileSize+1-int64(len(head))))
 	if err != nil {
 		return 0, nil, fmt.Errorf("failed to read file: %w", err)
 	}
+	content = append(head, rest...)
 
 	size = info.Size()
 	if int64(len(content)) > MaxFileSize {
@@ -295,6 +319,22 @@ func NewFileContent(relPath string, size int64, content []byte) *FileContent {
 	}
 
 	switch {
+	// Ahead of the size check: the ceiling is the JSON-RPC message's, and an
+	// image's bytes never travel in one. The MIME needs only the head, so an
+	// image of any size is named from what a too-large read leaves.
+	//
+	// An image still has a ceiling, because the client holds the whole of it
+	// in memory to decode it: attachments.MaxSize, so that a preview stops at
+	// one size whatever it came from. It limits the preview only — the
+	// endpoints that download a file serve it at any size.
+	case IsRasterImage(relPath, content):
+		if size > attachments.MaxSize {
+			file.Encoding = EncodingNone
+			file.Omitted = OmitTooLarge
+			file.Limit = attachments.MaxSize
+		} else {
+			file.Encoding = EncodingHTTP
+		}
 	case size > MaxFileSize || int64(len(content)) > MaxFileSize:
 		file.Encoding = EncodingNone
 		file.Omitted = OmitTooLarge
@@ -302,9 +342,6 @@ func NewFileContent(relPath string, size int64, content []byte) *FileContent {
 	case !IsBinary(content):
 		file.Encoding = EncodingText
 		file.Content = string(content)
-	case IsImageMIME(file.MIME):
-		file.Encoding = EncodingBase64
-		file.Content = base64.StdEncoding.EncodeToString(content)
 	default:
 		file.Encoding = EncodingNone
 		file.Omitted = OmitBinary
@@ -369,6 +406,35 @@ func DetectMIME(name string, head []byte) string {
 // side stores is a format the other refuses to send back.
 func IsImageMIME(mime string) bool {
 	return strings.HasPrefix(mime, "image/")
+}
+
+// IsRasterImageMIME reports whether content of this type is an image delivered
+// as bytes over HTTP (EncodingHTTP) rather than as text.
+//
+// SVG is the exception, and a security boundary rather than a preference: it
+// is source the user can edit, so it is sent as text, and a client rendering
+// it never needs its bytes as a same-origin blob — which is the one form in
+// which "open image in new tab" would run the SVG's scripts in the app's
+// origin, where they can read the login token.
+func IsRasterImageMIME(mime string) bool {
+	return IsImageMIME(mime) && !strings.HasPrefix(mime, "image/svg+xml")
+}
+
+// IsRasterImage reports whether the file name, whose leading bytes are head, is
+// a raster image — the content NewFileContent describes as EncodingHTTP up to
+// attachments.MaxSize. head need be no longer than SniffLen.
+//
+// The type alone is not enough, because for the formats sniffing cannot name
+// (AVIF, HEIC, TIFF) it comes from the extension: a text file that only
+// carries one — a git-LFS pointer committed as photo.avif — would otherwise be
+// handed to the client as an image it cannot draw, instead of as the text it
+// is. Every real raster format opens with binary bytes, so requiring them costs
+// nothing an image could need.
+func IsRasterImage(name string, head []byte) bool {
+	if len(head) > SniffLen {
+		head = head[:SniffLen]
+	}
+	return IsRasterImageMIME(DetectMIME(name, head)) && IsBinaryProbe(head)
 }
 
 // isGenericType reports whether http.DetectContentType matched no signature and

@@ -4,6 +4,7 @@ import {
 	DOWNLOAD_CHUNK_SIZE,
 	downloadFile,
 	fetchFileBlob,
+	saveBlob,
 } from "./fileDownload";
 
 vi.mock("../utils/config", () => ({
@@ -306,7 +307,7 @@ describe("fetchFileBlob", () => {
 	});
 });
 
-describe("downloadFile", () => {
+describe("saving to the device (downloadFile, saveBlob)", () => {
 	const createObjectURL = vi.fn(() => "blob:fake");
 	const revokeObjectURL = vi.fn();
 	const clicks: { download: string; href: string | null }[] = [];
@@ -346,6 +347,16 @@ describe("downloadFile", () => {
 		expect(clicks).toEqual([{ download: "app.ts", href: "blob:fake" }]);
 		// The link is a way of handing the blob over, not part of the page.
 		expect(document.querySelector("a")).toBeNull();
+	});
+
+	// The object URL is same-origin with the app: if a browser opened an SVG
+	// under its own type instead of saving it, its scripts would run as the app.
+	it("saves a blob as bytes, whatever type it carried", () => {
+		saveBlob(new Blob(["<svg/>"], { type: "image/svg+xml" }), "a.svg");
+
+		const [[saved]] = createObjectURL.mock.calls as unknown as [[Blob]];
+		expect(saved.type).toBe("application/octet-stream");
+		expect(clicks).toEqual([{ download: "a.svg", href: "blob:fake" }]);
 	});
 
 	it("does not save a file the user cancelled on the last chunk", async () => {

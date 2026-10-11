@@ -2,8 +2,13 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { LARGE_DOWNLOAD_WARNING_SIZE } from "../../lib/fileDownload";
+import {
+	reportEverythingInView,
+	stubImageFetch,
+	stubObjectUrls,
+} from "../../test/imageFixtures";
 import type { Entry, FileContent } from "../../types/contents";
 import { HIGHLIGHT_LIMIT } from "../../utils/fileView";
 import FileView from "./FileView";
@@ -99,6 +104,10 @@ function downloadButton() {
 }
 
 describe("FileView", () => {
+	afterEach(() => {
+		vi.unstubAllGlobals();
+	});
+
 	beforeEach(() => {
 		getFile.mockReset();
 		downloadFile.mockReset();
@@ -115,22 +124,55 @@ describe("FileView", () => {
 		expect(editButton()).toBeEnabled();
 	});
 
-	it("renders images from the server's MIME type, and blocks editing", async () => {
+	it("reads a raster image over HTTP from the server's MIME type, and blocks editing", async () => {
+		reportEverythingInView();
+		stubObjectUrls();
+		const fetchMock = stubImageFetch();
 		await renderFileView(
 			fileContent({
 				path: "logo.avif",
 				mime: "image/avif",
-				encoding: "base64",
-				content: "AAAA",
+				encoding: "http",
+				content: "",
 				size: 4,
 			}),
 		);
 
-		expect(screen.getByRole("img", { name: "logo.avif" })).toHaveAttribute(
-			"src",
-			"data:image/avif;base64,AAAA",
-		);
+		expect(
+			await screen.findByRole("img", { name: "logo.avif" }),
+		).toHaveAttribute("src", "blob:test/1");
+		const [url] = fetchMock.mock.calls[0] as unknown as [string];
+		expect(url).toContain("/api/files/download?path=logo.avif");
 		expect(editButton()).toBeDisabled();
+	});
+
+	it("says why an image's bytes could not be read, and reads them again on Retry", async () => {
+		const user = userEvent.setup();
+		reportEverythingInView();
+		stubObjectUrls();
+		const fetchMock = stubImageFetch();
+		fetchMock.mockResolvedValueOnce(
+			new Response(JSON.stringify({ error: "gone", code: "not_found" }), {
+				status: 404,
+			}),
+		);
+		await renderFileView(
+			fileContent({
+				path: "logo.png",
+				mime: "image/png",
+				encoding: "http",
+				content: "",
+				size: 4,
+			}),
+		);
+
+		expect(await screen.findByText("Couldn't load image")).toBeInTheDocument();
+		expect(screen.getByText(/File not found/)).toBeInTheDocument();
+
+		await user.click(screen.getByRole("button", { name: "Retry" }));
+		expect(
+			await screen.findByRole("img", { name: "logo.png" }),
+		).toHaveAttribute("src", "blob:test/1");
 	});
 
 	it("renders SVG as an image while keeping its source editable", async () => {
@@ -144,7 +186,11 @@ describe("FileView", () => {
 			}),
 		);
 
-		expect(screen.getByRole("img", { name: "icon.svg" })).toBeInTheDocument();
+		// Shown from its source: SVG is never read into a same-origin object URL.
+		expect(screen.getByRole("img", { name: "icon.svg" })).toHaveAttribute(
+			"src",
+			"data:image/svg+xml,%3Csvg%2F%3E",
+		);
 		expect(editButton()).toBeEnabled();
 	});
 

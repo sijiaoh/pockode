@@ -1,7 +1,6 @@
 package ws
 
 import (
-	"encoding/base64"
 	"encoding/json"
 	"testing"
 
@@ -52,15 +51,15 @@ func TestHandler_AttachmentGet(t *testing.T) {
 	if result.File.MIME != "image/png" {
 		t.Errorf("expected image/png, got %q", result.File.MIME)
 	}
-	if result.File.Encoding != contents.EncodingBase64 {
-		t.Fatalf("expected base64, got %q (%q)", result.File.Encoding, result.File.Omitted)
+	// A raster image's bytes are fetched over HTTP; this describes them only.
+	if result.File.Encoding != contents.EncodingHTTP {
+		t.Fatalf("expected http, got %q (%q)", result.File.Encoding, result.File.Omitted)
 	}
-	decoded, err := base64.StdEncoding.DecodeString(result.File.Content)
-	if err != nil {
-		t.Fatalf("decode content: %v", err)
+	if result.File.Content != "" {
+		t.Errorf("expected no content, got %d bytes", len(result.File.Content))
 	}
-	if string(decoded) != string(pngPixel) {
-		t.Error("served content differs from what was stored")
+	if result.File.Size != int64(len(pngPixel)) {
+		t.Errorf("expected size %d, got %d", len(pngPixel), result.File.Size)
 	}
 }
 
@@ -114,6 +113,9 @@ func TestHandler_AttachmentGet_Rejects(t *testing.T) {
 		// out of one.
 		{"traversing session id", rpc.AttachmentGetParams{SessionID: "../..", ID: id}},
 		{"traversing attachment id", rpc.AttachmentGetParams{SessionID: created.ID, ID: "../../history.jsonl"}},
+		// The store's atomic write leaves this beside the content; it is not an
+		// attachment, and the HTTP endpoint refuses it too.
+		{"lock file", rpc.AttachmentGetParams{SessionID: created.ID, ID: id + ".lock"}},
 		{"missing id", rpc.AttachmentGetParams{SessionID: created.ID}},
 	}
 

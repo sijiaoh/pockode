@@ -709,11 +709,13 @@ Transport was never the constraint. The Claude parser used to carry a comment
 deferring images until a "10 MB HTTP relay limit" lifted; that ceiling belonged
 to a relay transport which packed a whole request into one WebSocket message and
 has since been replaced, and today's relay lowers no limit at all
-([file.md](../file.md#transfer)). The ceilings that do apply are
-`ws.maxClientMessage` (16 MiB, client to server only, so not this direction at
-all), `contents.MaxFileSize` (2 MiB, what one JSON-RPC message carries) and
-`filetransfer.MaxUploadSize` (32 MiB, on the HTTP upload route). Claude's inline
-images sit far under the one that applies: it re-encodes anything large as JPEG
+([file.md](../file.md#transfer)). Nor is one JSON-RPC message: a raster image's
+bytes are read back over HTTP ([Reading It Back](#reading-it-back)), so the
+ceiling that applies is the store's own, `attachments.MaxSize` (20 MiB, the same
+one a user's upload is held to). Claude's inline images also have to fit on one
+stdout line, `agent.MaxLineBytes` (8 MiB of base64, about 6 MiB of image —
+[Graceful Degradation](#graceful-degradation)), and sit far under
+both: it re-encodes anything large as JPEG
 before handing it over, and measured against claude 2.1.263 an 18 MB PNG arrived
 as 591 KB of base64, with ~650 KB the largest seen from any input. The cost was
 always the writing down, not the sending.
@@ -726,9 +728,9 @@ namespace omits with, so one client code path renders both:
 
 | Case | `omitted` | Why |
 |------|-----------|-----|
-| An image within `contents.MaxFileSize` | — | stored; this is the whole point |
+| A raster image within `attachments.MaxSize` (20 MiB); a Codex SVG within `contents.MaxFileSize` (2 MiB) | — | stored; this is the whole point |
 | A PDF or other non-image | `binary` | the UI lists it rather than rendering it, and the read that produced it names the file on disk in the text block beside it, so half a megabyte of base64 would buy nothing. The file namespace omits non-image binaries for the same reason. On the Codex side this is also the boundary of the copy: the event says the file is an image and the path is the agent's, so what does not sniff as one is described where it lies rather than copied in on the strength of that claim |
-| An image over `contents.MaxFileSize` | `too_large` (+ `limit`) | it could not be sent back through one JSON-RPC message, so storing it would only defer the failure |
+| An image over its ceiling | `too_large` (+ `limit`) | a raster image is held to what the store keeps; an SVG is read back as text in one JSON-RPC message, which refuses past 2 MiB, so storing more would keep bytes no client can be shown |
 | Content that could not be read, decoded or stored; a path the server cannot use | `unavailable` | there is nothing to keep |
 | A file the agent only named and Pockode deliberately did not read — a background task's log | `not_fetched` | nothing was attempted. The answer to that call is the prose beside the block, and the log can be arbitrarily large; the path is how it is still reached. A client draws such a block as a reference line in the body rather than as an attachment ([tool-call-ui.md](../tool-call-ui.md#the-body-problems-2-and-3)) |
 
@@ -788,22 +790,27 @@ its images is still the conversation the user asked for.
 
 `attachment.get` (`ws/rpc_attachment.go`) takes a session id and an attachment
 id and answers with the same `contents.FileContent` that `file.get` answers
-with — MIME sniffed from the bytes, base64 for an image, text for content that
-is text, omitted with a reason for the rest — so a client renders an attachment
-through the file viewer's existing code path instead of a second one built to
-say the same things.
+with — MIME sniffed from the bytes, `encoding: "http"` for a raster image, text
+for content that is text, omitted with a reason for the rest — so a client
+renders an attachment through the file viewer's existing code path instead of a
+second one built to say the same things.
 
-It is a WebSocket method and not an HTTP endpoint because an `<img src>` cannot
-carry the bearer header ([file.md](../file.md#downloading)); the viewer already
-fetches and builds a data URL, and this fits that without inventing a way to
-authenticate an image tag.
+The description and the bytes take different routes. The description is a
+WebSocket method, small and answered in the shape every other viewer already
+reads. A raster image's bytes are read from `GET /api/chat/attachments`
+([file.md](../file.md#transfer)) with the bearer header, as the file viewer
+reads a workspace image, because an image of megabytes in one JSON-RPC message
+would hold up every other message behind it
+([file.md](../file.md#loading-image-bytes)).
 
-Two things confine it. The session id is checked against this worktree's own
-sessions before it is allowed to pick a directory — it selects the path, so an
-unknown one must not become one — and the attachment id goes through
-`contents.ValidatePath` inside a directory that holds nothing but
-content-addressed files. An attachment that no longer exists is an error reply,
-the same as a missing file is on `file.get`.
+Two things confine it, and the HTTP endpoint applies both the same way. The
+session id is checked against this worktree's own sessions before it is allowed
+to pick a directory — it selects the path, so an unknown one must not become
+one — and the attachment id goes through `attachments.Resolve`: a bare file
+name the store could have handed out, a regular file, never a path or a lock
+file. One check for both routes, so an id one side describes is always one the
+other serves. An attachment that no longer exists is an error reply, the same
+as a missing file is on `file.get`.
 
 ### Why This Is Not the File Namespace
 
@@ -839,7 +846,8 @@ attachment's entry is never invalidated by anything
 (`web/src/hooks/useAttachmentContent.ts` — which is also why a block that has
 only a path shares the Files tab's entry instead of getting one of its own).
 Saving an attachment does not reach the HTTP download route either, since there
-is no path to ask it with: the viewer saves the content it already fetched
+is no path to ask it with: the viewer saves the content it already fetched — the
+text, or the image Blob it cached for the preview
 (`web/src/components/Chat/AttachmentPreview.tsx`).
 
 The one crossing is the `unavailable` fallback above, where a block naming a
@@ -4408,7 +4416,7 @@ The following conditions send an `ErrorEvent` and end the session:
 | Claude background waits | `server/agent/claude/background_tasks.go`, `background_loss.go` |
 | Codex implementation | `server/agent/codex/codex.go` (process, JSON-RPC, thread lifecycle), `events.go` (notification mapping), `approval.go` (server requests), `resume.go` (`codex_resume.json`), `view_image.go` (the image an `imageView` item names) |
 | Thinking | `server/agent/claude/thinking.go` (the `--thinking-display` gate, `thinkingClock`), `server/agent/codex/reasoning.go` |
-| Content blocks and attachments | `server/agent/content.go` (block shapes), `server/agent/claude/tool_result.go` (Claude's blocks), `server/attachments/attachments.go` (per-session store), `server/ws/rpc_attachment.go` (`attachment.get`), `web/src/lib/contentBlocks.ts`, `web/src/components/Chat/AttachmentStrip.tsx` |
+| Content blocks and attachments | `server/agent/content.go` (block shapes), `server/agent/claude/tool_result.go` (Claude's blocks), `server/attachments/attachments.go` (per-session store), `server/ws/rpc_attachment.go` (`attachment.get`), `server/filetransfer/attachment.go` (an image's bytes), `web/src/lib/contentBlocks.ts`, `web/src/components/Chat/AttachmentStrip.tsx` |
 | Session forking | `server/agent/fork.go`, `claude/fork.go`, `codex/fork.go` |
 | Codex protocol drift check | `server/agent/codex/schema_integration_test.go` |
 | Fork capability over the wire | `server/ws/rpc_agent.go`, `web/src/lib/rpc/agent.ts`, `web/src/hooks/useForkSupport.ts` |

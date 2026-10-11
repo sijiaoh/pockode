@@ -177,11 +177,39 @@ func TestFileTransferEndpoints(t *testing.T) {
 		}
 	})
 
+	// The image routes are fetched by the client rather than saved, and answer
+	// for content that is not in the workspace — so they are checked for being
+	// mounted (a JSON refusal from the handler, not the mux's 404 or 405) as
+	// well as for being behind the middleware.
+	imageRoutes := []string{
+		"/api/chat/attachments?session_id=none&id=none",
+		"/api/git/show/file?hash=0000000&path=a.png",
+	}
+
+	t.Run("mounts the image routes", func(t *testing.T) {
+		for _, target := range imageRoutes {
+			req := httptest.NewRequest(http.MethodGet, target, nil)
+			req.Header.Set("Authorization", "Bearer "+serverPassword)
+			rec := httptest.NewRecorder()
+
+			handler.ServeHTTP(rec, req)
+
+			if got := rec.Header().Get("Content-Type"); got != "application/json" {
+				t.Errorf("GET %s: got status %d, Content-Type %q, want the handler's JSON error (body %q)", target, rec.Code, got, rec.Body.String())
+			}
+		}
+	})
+
 	t.Run("rejects transfers without a credential", func(t *testing.T) {
-		for _, req := range []*http.Request{
+		reqs := []*http.Request{
 			httptest.NewRequest(http.MethodGet, "/api/files/download?path=a.txt", nil),
 			httptest.NewRequest(http.MethodPost, "/api/files/upload", strings.NewReader("")),
-		} {
+			httptest.NewRequest(http.MethodPost, "/api/chat/attachments", strings.NewReader("")),
+		}
+		for _, target := range imageRoutes {
+			reqs = append(reqs, httptest.NewRequest(http.MethodGet, target, nil))
+		}
+		for _, req := range reqs {
 			rec := httptest.NewRecorder()
 			handler.ServeHTTP(rec, req)
 			if rec.Code != http.StatusUnauthorized {

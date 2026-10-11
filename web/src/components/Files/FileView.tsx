@@ -61,7 +61,10 @@ function FileView({ path, onBack }: Props) {
 	const takenNames = useTakenNames(showRename ? parentDir(path) : null);
 
 	const file = data && isFileContent(data) ? data : null;
-	const state = useMemo(() => (file ? getFileViewState(file) : null), [file]);
+	const state = useMemo(
+		() => (file ? getFileViewState(file, { kind: "file", path }) : null),
+		[file, path],
+	);
 
 	const navigateToEdit = useCallback(() => {
 		navigate(

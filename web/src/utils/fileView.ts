@@ -1,4 +1,4 @@
-import type { FileContent } from "../types/contents";
+import type { FileContent, ImageOrigin } from "../types/contents";
 
 /**
  * Byte ceiling above which file content is shown without syntax highlighting.
@@ -22,6 +22,15 @@ export const HIGHLIGHT_LIMIT = 256 * 1024;
  */
 export const EDITOR_HIGHLIGHT_LIMIT = 32 * 1024;
 
+/**
+ * How to get an image on screen: a URL that is already here, or bytes still to
+ * be read from where the description came from (`useImageSrc` turns those into
+ * one).
+ */
+export type ImageSource =
+	| { kind: "inline"; src: string }
+	| { kind: "remote"; origin: ImageOrigin; mime: string };
+
 export type FileViewState =
 	| { kind: "empty" }
 	| { kind: "text"; content: string; highlight: boolean }
@@ -29,7 +38,7 @@ export type FileViewState =
 	// the user can still open in the editor.
 	| {
 			kind: "image";
-			src: string;
+			source: ImageSource;
 			mime: string;
 			size: number;
 			editable: boolean;
@@ -71,35 +80,40 @@ export function isImageMime(mime: string): boolean {
 	return getMimeType(mime).startsWith("image/");
 }
 
-/** Data URL for a file the server identified as an image. */
-export function getImageSrc(file: FileContent): string {
-	if (file.encoding === "base64") {
-		return `data:${getMimeType(file.mime)};base64,${file.content}`;
+/**
+ * Where to get the picture for a file the server identified as an image.
+ *
+ * SVG is the one image that arrives as source text, and it stays a data URL
+ * rather than becoming a Blob: an object URL is same-origin with this document,
+ * so a script in an SVG opened through one would run as the app.
+ */
+export function getImageSource(
+	file: FileContent,
+	origin: ImageOrigin,
+): ImageSource {
+	if (file.encoding === "http") {
+		return { kind: "remote", origin, mime: file.mime };
 	}
-	// SVG arrives as source text. Percent-encoding rather than base64 keeps the
-	// `#` in colour literals from truncating the URL at a fragment.
-	return `data:image/svg+xml,${encodeURIComponent(file.content)}`;
+	// Percent-encoding rather than base64 keeps the `#` in colour literals from
+	// truncating the URL at a fragment.
+	return {
+		kind: "inline",
+		src: `data:image/svg+xml,${encodeURIComponent(file.content)}`,
+	};
 }
 
 /**
- * The bytes of content the server sent, for handing to the browser as a file.
+ * The text content the server sent, for handing to the browser as a file.
  *
  * Not `lib/fileDownload`'s `downloadFile`, which reads a work-directory path
  * over the download endpoint in 4 MiB chunks: this content is already here and
- * has no path to ask for it by.
+ * has no path to ask for it by. Null for anything else — content sent over
+ * HTTP is read from its origin instead (`fetchImageBlob`). Untyped: `saveBlob`
+ * gives every saved Blob the one type that is safe to hand the browser.
  */
 export function fileContentToBlob(file: FileContent): Blob | null {
-	const mime = getMimeType(file.mime);
-	if (file.encoding === "base64") {
-		const binary = atob(file.content);
-		const bytes = new Uint8Array(binary.length);
-		for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-		return new Blob([bytes], { type: mime });
-	}
-	if (file.encoding === "text") {
-		return new Blob([file.content], { type: mime });
-	}
-	return null;
+	if (file.encoding !== "text") return null;
+	return new Blob([file.content]);
 }
 
 /**
@@ -107,10 +121,19 @@ export function fileContentToBlob(file: FileContent): Blob | null {
  *
  * Order is priority: a file the server declined to send has no content to
  * classify, and everything the server did send is either an image or text.
- * SVG lands in `image` while still arriving as `text`, which is why the image
- * test is on `mime` rather than on `encoding`.
+ * An image is a raster one sent as `http`, or an SVG, the one image that
+ * arrives as `text`. Text under any other image type stays text: the server
+ * names AVIF, HEIC and TIFF from the extension alone, so a git-LFS pointer
+ * committed as `photo.avif` arrives as `text` typed `image/avif`, and drawing
+ * it would only show a broken picture of something readable.
+ *
+ * `origin` is what the file was asked for by, which is where a raster image's
+ * bytes are read from.
  */
-export function getFileViewState(file: FileContent): FileViewState {
+export function getFileViewState(
+	file: FileContent,
+	origin: ImageOrigin,
+): FileViewState {
 	if (file.encoding === "none") {
 		switch (file.omitted) {
 			case "binary":
@@ -131,10 +154,10 @@ export function getFileViewState(file: FileContent): FileViewState {
 		return { kind: "empty" };
 	}
 
-	if (isImageMime(file.mime)) {
+	if (file.encoding === "http" || getMimeType(file.mime) === "image/svg+xml") {
 		return {
 			kind: "image",
-			src: getImageSrc(file),
+			source: getImageSource(file, origin),
 			mime: file.mime,
 			size: file.size,
 			// Only SVG arrives as text, and text is exactly what the editor can

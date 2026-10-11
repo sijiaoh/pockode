@@ -1,6 +1,10 @@
 import { ImageOff } from "lucide-react";
 import { useState } from "react";
-import { useAttachmentContent } from "../../hooks/useAttachmentContent";
+import {
+	useAttachmentContent,
+	useAttachmentImageOrigin,
+} from "../../hooks/useAttachmentContent";
+import { useImageSrc } from "../../hooks/useImageSrc";
 import { useInView } from "../../hooks/useInView";
 import type { AttachmentSource, FileBlock } from "../../types/content";
 import {
@@ -25,10 +29,10 @@ interface Props {
 /**
  * One image in a tool result's attachment strip.
  *
- * The bytes are fetched only once the thumbnail is scrolled into view: paging
- * back through a transcript puts every image the session ever produced into the
- * DOM, and reading them all would spend the connection on pictures nobody
- * looked at.
+ * Nothing is read until the thumbnail is scrolled into view — neither the
+ * description nor the bytes: paging back through a transcript puts every image
+ * the session ever produced into the DOM, and reading them all would spend the
+ * connection on pictures nobody looked at.
  *
  * It renders through `<img>`, which is also what keeps an SVG safe: a browser
  * refuses scripts and external references in an image loaded that way, so
@@ -36,7 +40,13 @@ interface Props {
  */
 function AttachmentThumb({ file, source, expanded, onToggle }: Props) {
 	const { ref, inView } = useInView<HTMLDivElement>();
+	const origin = useAttachmentImageOrigin(source);
 	const { data, error, refetch } = useAttachmentContent(source, inView);
+	const view = data ? getFileViewState(data, origin) : null;
+	const image = useImageSrc(
+		view?.kind === "image" ? view.source : null,
+		inView,
+	);
 	// Bumped to remount the <img>: re-assigning the same src after a failure
 	// does not make the browser try again.
 	const [attempt, setAttempt] = useState(0);
@@ -46,7 +56,7 @@ function AttachmentThumb({ file, source, expanded, onToggle }: Props) {
 	const aspect =
 		file.width && file.height ? file.width / file.height : FALLBACK_ASPECT;
 
-	if (error || decodeFailed) {
+	if (error || image.error || decodeFailed) {
 		return (
 			<AttachmentChip
 				icon={ImageOff}
@@ -64,10 +74,28 @@ function AttachmentThumb({ file, source, expanded, onToggle }: Props) {
 						// spend the connection re-sending content nothing is wrong
 						// with.
 						if (error) refetch();
+						if (image.error) image.retry();
 						setDecodeFailed(false);
 						setAttempt((n) => n + 1);
 					},
 				}}
+			/>
+		);
+	}
+
+	// What arrived is not something the strip can draw — too large to send, or
+	// not the image the agent's media type claimed. Why is what the reader needs
+	// here, so the server's reason wins over the description; and where it sent
+	// no reason, saying only its size would read as nothing being wrong. That
+	// case is the same as a `binary` omission — content is there and none of it
+	// can be drawn — so it is deliberately the same words.
+	if (data && view && view.kind !== "image") {
+		return (
+			<AttachmentChip
+				icon={ImageOff}
+				title={name}
+				detail={omittedLabel(data) ?? "Can't be previewed"}
+				tooltip={attachmentDetail(file) || undefined}
 			/>
 		);
 	}
@@ -86,7 +114,7 @@ function AttachmentThumb({ file, source, expanded, onToggle }: Props) {
 	// Written out in both branches rather than shared through a constant: the
 	// hit-area scan reads the height off the class list at the call site, and a
 	// height arriving through a variable is a height it cannot check.
-	if (!data) {
+	if (!image.src) {
 		return (
 			<div
 				ref={ref}
@@ -95,24 +123,6 @@ function AttachmentThumb({ file, source, expanded, onToggle }: Props) {
 			>
 				<Skeleton className="h-full w-full rounded-lg" label={name} />
 			</div>
-		);
-	}
-
-	const view = getFileViewState(data);
-	// What arrived is not something the strip can draw — too large to send, or
-	// not the image the agent's media type claimed. Why is what the reader needs
-	// here, so the server's reason wins over the description; and where it sent
-	// no reason, saying only its size would read as nothing being wrong. That
-	// case is the same as a `binary` omission — content is there and none of it
-	// can be drawn — so it is deliberately the same words.
-	if (view.kind !== "image") {
-		return (
-			<AttachmentChip
-				icon={ImageOff}
-				title={name}
-				detail={omittedLabel(data) ?? "Can't be previewed"}
-				tooltip={attachmentDetail(file) || undefined}
-			/>
 		);
 	}
 
@@ -129,7 +139,7 @@ function AttachmentThumb({ file, source, expanded, onToggle }: Props) {
 		>
 			<img
 				key={attempt}
-				src={view.src}
+				src={image.src}
 				alt={name}
 				onError={() => setDecodeFailed(true)}
 				className="h-full w-full object-contain"

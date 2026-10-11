@@ -231,8 +231,9 @@ func TestResolveSessionWorktree(t *testing.T) {
 	}
 }
 
-// An upload names a worktree and a session over HTTP, so both names are
-// vouched for here before either becomes a path a file is written under.
+// An upload or a fetch names a worktree and a session over HTTP, so both names
+// are vouched for here before either becomes a path. Only an upload needs the
+// worktree to still exist.
 func TestAttachmentDataDir(t *testing.T) {
 	repo := initGitRepo(t)
 	dataDir := t.TempDir()
@@ -259,35 +260,46 @@ func TestAttachmentDataDir(t *testing.T) {
 	// A deleted worktree keeps its sessions readable, but none can take a file.
 	createSessionIn(t, m, "gone", "gone-session")
 
+	featureDir := filepath.Join(dataDir, "worktrees", "feature-x")
+	goneDir := filepath.Join(dataDir, "worktrees", "gone")
 	tests := []struct {
 		name      string
 		worktree  string
 		sessionID string
-		wantDir   string
-		wantErr   error
+		// wantDir is the answer from whichever method has no error to give.
+		wantDir       string
+		wantUploadErr error
+		wantStoredErr error
 	}{
-		{"loaded worktree", "", "main-session", dataDir, nil},
-		{"unloaded worktree", "feature-x", "feature-session", filepath.Join(dataDir, "worktrees", "feature-x"), nil},
-		{"unknown worktree", "no-such-worktree", "feature-session", "", ErrWorktreeNotFound},
-		{"deleted worktree", "gone", "gone-session", "", ErrWorktreeNotFound},
-		{"session of another worktree", "feature-x", "main-session", "", ErrSessionNotFound},
-		{"unknown session", "feature-x", "no-such-session", "", ErrSessionNotFound},
+		{"loaded worktree", "", "main-session", dataDir, nil, nil},
+		{"unloaded worktree", "feature-x", "feature-session", featureDir, nil, nil},
+		{"unknown worktree", "no-such-worktree", "feature-session", "", ErrWorktreeNotFound, ErrSessionNotFound},
+		{"deleted worktree", "gone", "gone-session", goneDir, ErrWorktreeNotFound, nil},
+		{"name that is not a directory name", "../gone", "gone-session", "", ErrWorktreeNotFound, ErrWorktreeNotFound},
+		{"session of another worktree", "feature-x", "main-session", "", ErrSessionNotFound, ErrSessionNotFound},
+		{"unknown session", "feature-x", "no-such-session", "", ErrSessionNotFound, ErrSessionNotFound},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := m.AttachmentDataDir(tt.worktree, tt.sessionID)
-			if tt.wantErr != nil {
-				if !errors.Is(err, tt.wantErr) {
-					t.Errorf("err = %v, want %v", err, tt.wantErr)
+			check := func(method string, got string, err, wantErr error) {
+				t.Helper()
+				if wantErr != nil {
+					if !errors.Is(err, wantErr) {
+						t.Errorf("%s: err = %v, want %v", method, err, wantErr)
+					}
+					return
 				}
-				return
+				if err != nil {
+					t.Fatalf("%s: %v", method, err)
+				}
+				if got != tt.wantDir {
+					t.Errorf("%s: dir = %q, want %q", method, got, tt.wantDir)
+				}
 			}
-			if err != nil {
-				t.Fatalf("AttachmentDataDir: %v", err)
-			}
-			if got != tt.wantDir {
-				t.Errorf("dir = %q, want %q", got, tt.wantDir)
-			}
+			got, err := m.AttachmentDataDir(tt.worktree, tt.sessionID)
+			check("AttachmentDataDir", got, err, tt.wantUploadErr)
+			got, err = m.StoredAttachmentDataDir(tt.worktree, tt.sessionID)
+			check("StoredAttachmentDataDir", got, err, tt.wantStoredErr)
 		})
 	}
 }

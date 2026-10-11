@@ -2,13 +2,15 @@ package git
 
 import (
 	"bytes"
-	"encoding/base64"
+	"context"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/pockode/server/attachments"
 	"github.com/pockode/server/contents"
 )
 
@@ -122,9 +124,11 @@ func TestShowFile_Binary(t *testing.T) {
 	dir, cleanup := setupTestRepo(t)
 	defer cleanup()
 
-	// A PNG header, so the MIME type is an image and the content comes back
-	// base64-encoded rather than omitted.
-	png := append([]byte("\x89PNG\r\n\x1a\n"), bytes.Repeat([]byte{0x00, 0x01}, 64)...)
+	// A PNG header, so the MIME type is an image, described for fetching over
+	// HTTP rather than omitted. Under the size ceiling, so ShowFile reads only
+	// the head and stops git partway; and well past a pipe buffer, so git
+	// really is stopped rather than finishing before the pipe closes.
+	png := append([]byte("\x89PNG\r\n\x1a\n"), bytes.Repeat([]byte{0x00, 0x01}, 512<<10)...)
 	writeTestBinaryFile(t, dir, "image.png", png)
 	// A blob that is binary but not renderable, which is omitted instead.
 	writeTestBinaryFile(t, dir, "blob.bin", bytes.Repeat([]byte{0x00, 0xff}, 64))
@@ -136,15 +140,40 @@ func TestShowFile_Binary(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ShowFile() error: %v", err)
 	}
-	if image.Encoding != contents.EncodingBase64 {
-		t.Fatalf("Encoding = %q, want base64", image.Encoding)
+	if image.Encoding != contents.EncodingHTTP || image.Content != "" {
+		t.Fatalf("Encoding = %q with %d bytes of content, want http and none", image.Encoding, len(image.Content))
 	}
-	decoded, err := base64.StdEncoding.DecodeString(image.Content)
+	if image.MIME != "image/png" || image.Size != int64(len(png)) {
+		t.Errorf("MIME/Size = %q/%d, want image/png/%d", image.MIME, image.Size, len(png))
+	}
+
+	// What the client then fetches.
+	stream, err := OpenFile(context.Background(), dir, hash, "image.png")
 	if err != nil {
-		t.Fatalf("Content is not base64: %v", err)
+		t.Fatalf("OpenFile() error: %v", err)
 	}
-	if !bytes.Equal(decoded, png) {
-		t.Error("decoded content does not match the committed bytes")
+	streamed, err := io.ReadAll(stream)
+	if err != nil {
+		t.Fatalf("read blob: %v", err)
+	}
+	if err := stream.Close(); err != nil {
+		t.Errorf("Close() error: %v", err)
+	}
+	if stream.Size != int64(len(png)) || !bytes.Equal(streamed, png) {
+		t.Error("streamed content does not match the committed bytes")
+	}
+
+	// A client that goes away mid-image is not a git failure, so closing early
+	// must not report one.
+	partial, err := OpenFile(context.Background(), dir, hash, "image.png")
+	if err != nil {
+		t.Fatalf("OpenFile() error: %v", err)
+	}
+	if _, err := io.ReadFull(partial, make([]byte, 16)); err != nil {
+		t.Fatalf("read blob head: %v", err)
+	}
+	if err := partial.Close(); err != nil {
+		t.Errorf("Close() after a partial read = %v, want nil", err)
 	}
 
 	blob, err := ShowFile(dir, hash, "blob.bin")
@@ -190,6 +219,48 @@ func TestShowFile_TooLarge(t *testing.T) {
 	}
 }
 
+// A raster image is held to the attachment ceiling, not MaxFileSize; past it
+// it is reported like any other content too large to show. OpenFile still
+// serves it, since the ceiling is the preview's, not the download's.
+func TestShowFile_ImageOverAttachmentLimit(t *testing.T) {
+	dir, cleanup := setupTestRepo(t)
+	defer cleanup()
+
+	size := int64(attachments.MaxSize + 1)
+	png := make([]byte, size)
+	copy(png, "\x89PNG\r\n\x1a\n")
+	writeTestBinaryFile(t, dir, "huge.png", png)
+	runGit(t, dir, "add", ".")
+	runGit(t, dir, "commit", "--no-gpg-sign", "-m", "initial")
+	hash := gitHead(t, dir)
+
+	file, err := ShowFile(dir, hash, "huge.png")
+	if err != nil {
+		t.Fatalf("ShowFile() error: %v", err)
+	}
+	if file.Encoding != contents.EncodingNone || file.Omitted != contents.OmitTooLarge {
+		t.Errorf("huge.png = %q/%q, want none/too_large", file.Encoding, file.Omitted)
+	}
+	if file.Limit != attachments.MaxSize {
+		t.Errorf("Limit = %d, want %d", file.Limit, attachments.MaxSize)
+	}
+	if file.Size != size || file.MIME != "image/png" {
+		t.Errorf("Size/MIME = %d/%q, want %d/image/png", file.Size, file.MIME, size)
+	}
+
+	stream, err := OpenFile(context.Background(), dir, hash, "huge.png")
+	if err != nil {
+		t.Fatalf("OpenFile() error: %v", err)
+	}
+	defer stream.Close()
+	if stream.Size != size {
+		t.Errorf("OpenFile Size = %d, want %d", stream.Size, size)
+	}
+}
+
+// Refused before git runs, and as ErrInvalidArgument — which is what lets
+// git.show.file and the commit file endpoint answer it as the client's mistake
+// rather than a fault here. OpenFile shares the gate.
 func TestShowFile_RejectsBadInput(t *testing.T) {
 	dir, cleanup := setupTestRepoWithCommit(t)
 	defer cleanup()
@@ -210,8 +281,8 @@ func TestShowFile_RejectsBadInput(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if _, err := ShowFile(dir, tt.hash, tt.path); err == nil {
-				t.Fatal("ShowFile() succeeded, want an error")
+			if _, err := ShowFile(dir, tt.hash, tt.path); !errors.Is(err, ErrInvalidArgument) {
+				t.Errorf("ShowFile() = %v, want ErrInvalidArgument", err)
 			}
 		})
 	}

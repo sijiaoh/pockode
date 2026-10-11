@@ -12,6 +12,7 @@ import (
 	"github.com/coder/websocket"
 	"github.com/google/uuid"
 	"github.com/pockode/server/agentrole"
+	"github.com/pockode/server/attachments"
 	"github.com/pockode/server/authguard"
 	"github.com/pockode/server/cliauth"
 	"github.com/pockode/server/cliupdate"
@@ -804,7 +805,7 @@ func (h *rpcMethodHandler) handleAuth(ctx context.Context, conn *jsonrpc2.Conn, 
 		WorktreeName:      wt.Name,
 		RemoteURL:         h.remoteURL,
 		MaxUploadSize:     filetransfer.MaxUploadSize,
-		MaxAttachmentSize: filetransfer.MaxAttachmentSize,
+		MaxAttachmentSize: attachments.MaxSize,
 		SessionToken:      sessionToken,
 	}
 	if err := conn.Reply(ctx, req.ID, result); err != nil {
