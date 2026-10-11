@@ -585,3 +585,21 @@ func TestUpload(t *testing.T) {
 		}
 	})
 }
+
+// A too_large message names its limit, and the real ceilings are too big to push
+// through a request in a test, so the wording is checked here directly.
+func TestFormatSize(t *testing.T) {
+	for _, tc := range []struct {
+		bytes int64
+		want  string
+	}{
+		{MaxUploadSize, "1 GiB"},
+		{32 << 20, "32 MiB"},
+		{3 << 29, "1536 MiB"},
+		{16, "16 bytes"},
+	} {
+		if got := formatSize(tc.bytes); got != tc.want {
+			t.Errorf("formatSize(%d) = %q, want %q", tc.bytes, got, tc.want)
+		}
+	}
+}
