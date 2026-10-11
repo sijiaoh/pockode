@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -2281,7 +2282,7 @@ func TestHandler_GitDiffSubscribe_Unstaged(t *testing.T) {
 		t.Fatalf("unexpected error: %s", resp.Error.Message)
 	}
 
-	var result rpc.GitDiffSubscribeResult
+	var result git.DiffResult
 	json.Unmarshal(resp.Result, &result)
 
 	if result.OldContent != "original" {
@@ -2312,7 +2313,7 @@ func TestHandler_GitDiffSubscribe_Staged(t *testing.T) {
 		t.Fatalf("unexpected error: %s", resp.Error.Message)
 	}
 
-	var result rpc.GitDiffSubscribeResult
+	var result git.DiffResult
 	json.Unmarshal(resp.Result, &result)
 
 	if result.OldContent != "original" {
@@ -2320,6 +2321,35 @@ func TestHandler_GitDiffSubscribe_Staged(t *testing.T) {
 	}
 	if result.NewContent != "staged change" {
 		t.Errorf("expected new content 'staged change', got %q", result.NewContent)
+	}
+}
+
+func TestHandler_GitDiffSubscribe_TooLarge(t *testing.T) {
+	dir := setupGitRepo(t)
+	big := strings.Repeat("a", contents.MaxFileSize+1)
+	os.WriteFile(filepath.Join(dir, "big.txt"), []byte(big), 0644)
+
+	env := newWorkDirTestEnv(t, dir)
+	resp := env.call("git.diff.subscribe", rpc.GitDiffSubscribeParams{ID: "client-1", Path: "big.txt"})
+	if resp.Error != nil {
+		t.Fatalf("unexpected error: %s", resp.Error.Message)
+	}
+
+	var result map[string]any
+	if err := json.Unmarshal(resp.Result, &result); err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]any{
+		"diff":        "",
+		"old_content": "",
+		"new_content": "",
+		"omitted":     "too_large",
+		"size":        float64(len(big)),
+		"mime":        "text/plain; charset=utf-8",
+		"limit":       float64(contents.MaxFileSize),
+	}
+	if !reflect.DeepEqual(result, want) {
+		t.Errorf("got %v, want %v", result, want)
 	}
 }
 

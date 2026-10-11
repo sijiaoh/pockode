@@ -9,7 +9,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/pockode/server/contents"
 	"github.com/pockode/server/internal/fspermtest"
+	"github.com/pockode/server/internal/symlinktest"
 )
 
 func TestExtractHost(t *testing.T) {
@@ -320,7 +322,7 @@ func setupTestRepo(t *testing.T) (string, func()) {
 	return tempDir, cleanup
 }
 
-func TestDiff_FileNotInStatus(t *testing.T) {
+func TestDiffWithContent_FileNotInStatus(t *testing.T) {
 	dir, cleanup := setupTestRepo(t)
 	defer cleanup()
 
@@ -339,12 +341,12 @@ func TestDiff_FileNotInStatus(t *testing.T) {
 	runGit(t, dir, "add", "test.txt")
 
 	// Request unstaged diff - file is staged only, not in unstaged status
-	diff, err := Diff(dir, "test.txt", DiffOptions{Staged: false})
+	result, err := DiffWithContent(dir, "test.txt", DiffOptions{Staged: false})
 	if err != nil {
-		t.Fatalf("Diff() error: %v", err)
+		t.Fatalf("DiffWithContent() error: %v", err)
 	}
-	if diff != "" {
-		t.Errorf("expected empty diff for file not in unstaged status, got: %q", diff)
+	if result.Diff != "" {
+		t.Errorf("expected empty diff for file not in unstaged status, got: %q", result.Diff)
 	}
 }
 
@@ -354,30 +356,6 @@ func runGit(t *testing.T, dir string, args ...string) {
 	cmd.Dir = dir
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("git %v failed: %v\n%s", args, err, out)
-	}
-}
-
-func TestDiff_WithSubmodule(t *testing.T) {
-	parentRepo, cleanup := setupTestRepoWithSubmodule(t)
-	defer cleanup()
-
-	// Modify a file in the submodule
-	subFile := filepath.Join(parentRepo, "mysub", "sub.txt")
-	if err := os.WriteFile(subFile, []byte("modified content\n"), 0644); err != nil {
-		t.Fatalf("failed to modify sub.txt: %v", err)
-	}
-
-	diff, err := Diff(parentRepo, "mysub/sub.txt", DiffOptions{Staged: false})
-	if err != nil {
-		t.Fatalf("Diff() error: %v", err)
-	}
-
-	if diff == "" {
-		t.Error("expected non-empty diff")
-	}
-
-	if !strings.Contains(diff, "-sub content") || !strings.Contains(diff, "+modified content") {
-		t.Errorf("diff doesn't contain expected changes:\n%s", diff)
 	}
 }
 
@@ -396,8 +374,8 @@ func TestDiffWithContent_WithSubmodule(t *testing.T) {
 		t.Fatalf("DiffWithContent() error: %v", err)
 	}
 
-	if result.Diff == "" {
-		t.Error("expected non-empty diff")
+	if !strings.Contains(result.Diff, "-sub content") || !strings.Contains(result.Diff, "+modified content") {
+		t.Errorf("diff doesn't contain expected changes:\n%s", result.Diff)
 	}
 	if result.OldContent != "sub content\n" {
 		t.Errorf("OldContent = %q, want %q", result.OldContent, "sub content\n")
@@ -407,7 +385,113 @@ func TestDiffWithContent_WithSubmodule(t *testing.T) {
 	}
 }
 
-func TestDiff_HideWhitespace(t *testing.T) {
+// Either side over the limit withholds the diff and both versions alike: the
+// three travel in one message, so sending the small side alone saves nothing
+// worth having and leaves the client with half a diff.
+func TestDiffWithContent_TooLarge(t *testing.T) {
+	big := strings.Repeat("a", contents.MaxFileSize+1)
+
+	tests := []struct {
+		name   string
+		staged bool
+		// setup leaves big.txt changed on the side the test diffs.
+		setup func(t *testing.T, dir string)
+	}{
+		{"untracked file over the limit", false, func(t *testing.T, dir string) {
+			writeTestFile(t, dir, "big.txt", big)
+		}},
+		{"new side over the limit", false, func(t *testing.T, dir string) {
+			writeTestFile(t, dir, "big.txt", "small\n")
+			runGit(t, dir, "add", ".")
+			runGit(t, dir, "commit", "--no-gpg-sign", "-m", "initial")
+			writeTestFile(t, dir, "big.txt", big)
+		}},
+		{"deleted file over the limit", false, func(t *testing.T, dir string) {
+			writeTestFile(t, dir, "big.txt", big)
+			runGit(t, dir, "add", ".")
+			runGit(t, dir, "commit", "--no-gpg-sign", "-m", "initial")
+			if err := os.Remove(filepath.Join(dir, "big.txt")); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"old side over the limit", true, func(t *testing.T, dir string) {
+			writeTestFile(t, dir, "big.txt", big)
+			runGit(t, dir, "add", ".")
+			runGit(t, dir, "commit", "--no-gpg-sign", "-m", "initial")
+			writeTestFile(t, dir, "big.txt", "small\n")
+			runGit(t, dir, "add", ".")
+		}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir, cleanup := setupTestRepo(t)
+			defer cleanup()
+			tt.setup(t, dir)
+
+			result, err := DiffWithContent(dir, "big.txt", DiffOptions{Staged: tt.staged})
+			if err != nil {
+				t.Fatalf("DiffWithContent() error: %v", err)
+			}
+			assertDiffTooLarge(t, result, int64(len(big)))
+		})
+	}
+}
+
+// A symlink is compared as git stores it, by its target: the file it points to
+// is someone else's, however large.
+func TestDiffWithContent_SymlinkIsItsTarget(t *testing.T) {
+	dir, cleanup := setupTestRepo(t)
+	defer cleanup()
+
+	// Git for Windows defaults core.symlinks to false, under which a link is
+	// not treated as one.
+	runGit(t, dir, "config", "core.symlinks", "true")
+	writeTestFile(t, dir, "small.txt", "small\n")
+	writeTestFile(t, dir, "big.txt", strings.Repeat("a", contents.MaxFileSize+1))
+	symlinktest.Make(t, "small.txt", filepath.Join(dir, "link"))
+	runGit(t, dir, "add", ".")
+	runGit(t, dir, "commit", "--no-gpg-sign", "-m", "initial")
+
+	if err := os.Remove(filepath.Join(dir, "link")); err != nil {
+		t.Fatal(err)
+	}
+	symlinktest.Make(t, "big.txt", filepath.Join(dir, "link"))
+
+	result, err := DiffWithContent(dir, "link", DiffOptions{})
+	if err != nil {
+		t.Fatalf("DiffWithContent() error: %v", err)
+	}
+	if result.Omitted != "" {
+		t.Fatalf("got omitted %q (size %d), want the link's own diff", result.Omitted, result.Size)
+	}
+	if result.OldContent != "small.txt" || result.NewContent != "big.txt" {
+		t.Errorf("got old %q new %q, want the two targets", result.OldContent, result.NewContent)
+	}
+}
+
+func TestDiffWithContent_AtLimitIsSent(t *testing.T) {
+	dir, cleanup := setupTestRepo(t)
+	defer cleanup()
+
+	writeTestFile(t, dir, "limit.txt", "small\n")
+	runGit(t, dir, "add", ".")
+	runGit(t, dir, "commit", "--no-gpg-sign", "-m", "initial")
+	writeTestFile(t, dir, "limit.txt", strings.Repeat("a", contents.MaxFileSize))
+
+	result, err := DiffWithContent(dir, "limit.txt", DiffOptions{})
+	if err != nil {
+		t.Fatalf("DiffWithContent() error: %v", err)
+	}
+	if result.Omitted != "" || result.Limit != 0 || result.Size != 0 || result.MIME != "" {
+		t.Errorf("got omitted %q size %d mime %q limit %d, want none of them", result.Omitted, result.Size, result.MIME, result.Limit)
+	}
+	if result.Diff == "" || result.OldContent != "small\n" || len(result.NewContent) != contents.MaxFileSize {
+		t.Errorf("got diff %d bytes, old %q, new %d bytes; want the diff and both sides", len(result.Diff), result.OldContent, len(result.NewContent))
+	}
+}
+
+func TestDiffWithContent_HideWhitespace(t *testing.T) {
 	dir, cleanup := setupTestRepo(t)
 	defer cleanup()
 
@@ -425,24 +509,24 @@ func TestDiff_HideWhitespace(t *testing.T) {
 	}
 
 	// Without HideWhitespace, diff should show changes
-	diffWithWS, err := Diff(dir, "test.txt", DiffOptions{Staged: false, HideWhitespace: false})
+	result, err := DiffWithContent(dir, "test.txt", DiffOptions{Staged: false, HideWhitespace: false})
 	if err != nil {
-		t.Fatalf("Diff() error: %v", err)
+		t.Fatalf("DiffWithContent() error: %v", err)
 	}
-	if diffWithWS == "" {
+	if result.Diff == "" {
 		t.Error("expected non-empty diff when HideWhitespace=false")
 	}
-	if !strings.Contains(diffWithWS, "-hello world") || !strings.Contains(diffWithWS, "+hello world  ") {
-		t.Errorf("diff should show whitespace change, got: %q", diffWithWS)
+	if !strings.Contains(result.Diff, "-hello world") || !strings.Contains(result.Diff, "+hello world  ") {
+		t.Errorf("diff should show whitespace change, got: %q", result.Diff)
 	}
 
 	// With HideWhitespace, diff should be empty (only whitespace changed)
-	diffNoWS, err := Diff(dir, "test.txt", DiffOptions{Staged: false, HideWhitespace: true})
+	result, err = DiffWithContent(dir, "test.txt", DiffOptions{Staged: false, HideWhitespace: true})
 	if err != nil {
-		t.Fatalf("Diff() error: %v", err)
+		t.Fatalf("DiffWithContent() error: %v", err)
 	}
-	if diffNoWS != "" {
-		t.Errorf("expected empty diff when HideWhitespace=true, got: %q", diffNoWS)
+	if result.Diff != "" {
+		t.Errorf("expected empty diff when HideWhitespace=true, got: %q", result.Diff)
 	}
 
 	// Now add a real content change along with whitespace
@@ -451,15 +535,15 @@ func TestDiff_HideWhitespace(t *testing.T) {
 	}
 
 	// With HideWhitespace, should still show content changes
-	diffMixed, err := Diff(dir, "test.txt", DiffOptions{Staged: false, HideWhitespace: true})
+	result, err = DiffWithContent(dir, "test.txt", DiffOptions{Staged: false, HideWhitespace: true})
 	if err != nil {
-		t.Fatalf("Diff() error: %v", err)
+		t.Fatalf("DiffWithContent() error: %v", err)
 	}
-	if diffMixed == "" {
+	if result.Diff == "" {
 		t.Error("expected non-empty diff for content changes even with HideWhitespace=true")
 	}
-	if !strings.Contains(diffMixed, "+new line") {
-		t.Errorf("diff should contain content change, got: %q", diffMixed)
+	if !strings.Contains(result.Diff, "+new line") {
+		t.Errorf("diff should contain content change, got: %q", result.Diff)
 	}
 }
 
@@ -753,6 +837,43 @@ func TestShowFileDiff_NewFile(t *testing.T) {
 	}
 	if result.NewContent != "new content\n" {
 		t.Errorf("NewContent = %q, want %q", result.NewContent, "new content\n")
+	}
+}
+
+func TestShowFileDiff_TooLarge(t *testing.T) {
+	dir, cleanup := setupTestRepo(t)
+	defer cleanup()
+
+	big := strings.Repeat("a", contents.MaxFileSize+1)
+	writeTestFile(t, dir, "big.txt", big)
+	runGit(t, dir, "add", ".")
+	runGit(t, dir, "commit", "--no-gpg-sign", "-m", "initial")
+	writeTestFile(t, dir, "big.txt", "small\n")
+	runGit(t, dir, "add", ".")
+	runGit(t, dir, "commit", "--no-gpg-sign", "-m", "shrink")
+
+	// The commit's own version is small; the parent's is what is over.
+	result, err := ShowFileDiff(dir, gitHead(t, dir), "big.txt", false)
+	if err != nil {
+		t.Fatalf("ShowFileDiff() error: %v", err)
+	}
+	assertDiffTooLarge(t, result, int64(len(big)))
+}
+
+func assertDiffTooLarge(t *testing.T, result *DiffResult, size int64) {
+	t.Helper()
+	if result.Diff != "" || result.OldContent != "" || result.NewContent != "" {
+		t.Errorf("got diff %d bytes, old %d bytes, new %d bytes; want no content at all",
+			len(result.Diff), len(result.OldContent), len(result.NewContent))
+	}
+	if result.Omitted != contents.OmitTooLarge || result.Limit != contents.MaxFileSize {
+		t.Errorf("got omitted %q limit %d, want %q limit %d", result.Omitted, result.Limit, contents.OmitTooLarge, contents.MaxFileSize)
+	}
+	if result.Size != size {
+		t.Errorf("Size = %d, want %d", result.Size, size)
+	}
+	if !strings.HasPrefix(result.MIME, "text/plain") {
+		t.Errorf("MIME = %q, want text/plain", result.MIME)
 	}
 }
 

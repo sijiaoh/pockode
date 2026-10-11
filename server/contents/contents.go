@@ -59,13 +59,13 @@ const (
 
 const (
 	// MaxFileSize is the ceiling on the content a single JSON-RPC message may
-	// carry, in either direction: what file.get will read out and what
-	// file.write will take in. One number because it is one constraint — the
-	// whole content is held in memory and travels as one WebSocket message
-	// (base64 inflating it by a further 4/3 on the way out), and a connection
-	// carries one message at a time, so a few megabytes stall every request
-	// already in flight on it. The ceiling is about that connection as much as
-	// about memory.
+	// carry, in either direction: what file.get will read out, what each
+	// version in a git diff may be, and what file.write will take in. One
+	// number because it is one constraint — the whole content is held in
+	// memory and travels as one WebSocket message (base64 inflating it by a
+	// further 4/3 on the way out), and a connection carries one message at a
+	// time, so a few megabytes stall every request already in flight on it.
+	// The ceiling is about that connection as much as about memory.
 	//
 	// The blocking is this connection's own, not the relay's: over a tunnel
 	// /ws gets a yamux stream to itself and yamux frames what it writes, so
@@ -222,9 +222,21 @@ func listDir(relPath, fullPath string) ([]Entry, error) {
 // comes back as metadata alone — a client that cannot render a binary blob has
 // no use for the megabytes it would cost to ship one.
 func readFile(relPath, fullPath string) (*FileContent, error) {
+	size, content, err := ReadBounded(fullPath)
+	if err != nil {
+		return nil, err
+	}
+	return NewFileContent(relPath, size, content), nil
+}
+
+// ReadBounded reads the file at fullPath whole when it is within MaxFileSize,
+// and otherwise only its first SniffLen bytes — enough to name the MIME type
+// of content that is not going to be sent. size is the file's full size, so
+// size > MaxFileSize is how a caller tells the two apart.
+func ReadBounded(fullPath string) (size int64, content []byte, err error) {
 	f, err := os.Open(fullPath)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read file: %w", err)
+		return 0, nil, fmt.Errorf("failed to read file: %w", err)
 	}
 	defer f.Close()
 
@@ -233,35 +245,37 @@ func readFile(relPath, fullPath string) (*FileContent, error) {
 	// describe a different file than the content beside it.
 	info, err := f.Stat()
 	if err != nil {
-		return nil, fmt.Errorf("failed to stat file: %w", err)
+		return 0, nil, fmt.Errorf("failed to stat file: %w", err)
 	}
 
 	if info.Size() > MaxFileSize {
 		head := make([]byte, SniffLen)
 		n, err := io.ReadFull(f, head)
 		if err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF) {
-			return nil, fmt.Errorf("failed to read file: %w", err)
+			return 0, nil, fmt.Errorf("failed to read file: %w", err)
 		}
-		return NewFileContent(relPath, info.Size(), head[:n]), nil
+		return info.Size(), head[:n], nil
 	}
 
 	// Bounded rather than sized from info: the file may have grown since the
 	// stat, and memory use must not depend on that race.
-	content, err := io.ReadAll(io.LimitReader(f, MaxFileSize+1))
+	content, err = io.ReadAll(io.LimitReader(f, MaxFileSize+1))
 	if err != nil {
-		return nil, fmt.Errorf("failed to read file: %w", err)
+		return 0, nil, fmt.Errorf("failed to read file: %w", err)
 	}
 
-	size := info.Size()
+	size = info.Size()
 	if int64(len(content)) > MaxFileSize {
 		// The file outgrew the limit while it was being read, so the size taken
 		// before the read would contradict the verdict sitting next to it.
-		if grown, err := f.Stat(); err == nil {
+		size = int64(len(content))
+		if grown, err := f.Stat(); err == nil && grown.Size() > size {
 			size = grown.Size()
 		}
+		content = content[:SniffLen]
 	}
 
-	return NewFileContent(relPath, size, content), nil
+	return size, content, nil
 }
 
 // NewFileContent describes content already held in memory — a git blob, say —

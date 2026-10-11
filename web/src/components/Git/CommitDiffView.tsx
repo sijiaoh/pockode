@@ -100,14 +100,7 @@ function CommitDiffView({ hash, path }: Props) {
 				titleActionLabel={`Open current ${splitPath(path).fileName}`}
 			/>
 			<ContentView isLoading={isLoading} error={error ?? undefined}>
-				{diff && (
-					<DiffContent
-						diff={diff.diff}
-						fileName={path}
-						oldContent={diff.old_content}
-						newContent={diff.new_content}
-					/>
-				)}
+				{diff && <DiffContent data={diff} fileName={path} />}
 			</ContentView>
 			<BottomActionBar>
 				<div className="flex items-center justify-between">

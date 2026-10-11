@@ -1,3 +1,5 @@
+import type { OmitReason } from "./contents";
+
 export interface FileStatus {
 	path: string;
 	status: "M" | "A" | "D" | "R" | "?";
@@ -9,15 +11,30 @@ export interface GitStatus {
 	submodules?: Record<string, GitStatus>;
 }
 
-export interface GitDiffData {
-	diff: string;
-	old_content: string;
-	new_content: string;
-}
+/**
+ * A file's diff, or — when either version of the file is over the server's
+ * inline limit — a statement that it was withheld. The withheld form keeps the
+ * three strings, empty, and describes the larger version in `FileContent`'s
+ * words for the same refusal.
+ */
+export type GitDiffData =
+	| {
+			diff: string;
+			old_content: string;
+			new_content: string;
+			omitted?: undefined;
+	  }
+	| {
+			diff: "";
+			old_content: "";
+			new_content: "";
+			omitted: Extract<OmitReason, "too_large">;
+			size: number;
+			mime: string;
+			limit: number;
+	  };
 
-export interface GitDiffChangedNotification extends GitDiffData {
-	id: string;
-}
+export type GitDiffChangedNotification = GitDiffData & { id: string };
 
 export interface GitCommit {
 	hash: string;

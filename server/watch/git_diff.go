@@ -5,10 +5,12 @@ import (
 	"crypto/md5"
 	"encoding/hex"
 	"log/slog"
+	"strconv"
 	"sync"
 	"time"
 
 	"github.com/pockode/server/git"
+	"github.com/pockode/server/rpc"
 )
 
 const gitDiffPollInterval = 3 * time.Second
@@ -156,12 +158,7 @@ func (w *GitDiffWatcher) checkOne(sub *Subscription) {
 
 	n := Notification{
 		Method: "git.diff.changed",
-		Params: map[string]any{
-			"id":          sub.ID,
-			"diff":        result.Diff,
-			"old_content": result.OldContent,
-			"new_content": result.NewContent,
-		},
+		Params: rpc.GitDiffChangedParams{ID: sub.ID, DiffResult: result},
 	}
 	if err := sub.Notifier.Notify(context.Background(), n); err != nil {
 		slog.Debug("failed to notify git diff change", "id", sub.ID, "error", err)
@@ -175,5 +172,11 @@ func (w *GitDiffWatcher) hashDiff(result *git.DiffResult) string {
 	h.Write([]byte(result.OldContent))
 	h.Write([]byte{0})
 	h.Write([]byte(result.NewContent))
+	// A file growing past the limit leaves all three above empty, the same as a
+	// file with no changes; only these tell the two apart.
+	h.Write([]byte{0})
+	h.Write([]byte(result.Omitted))
+	h.Write([]byte{0})
+	h.Write(strconv.AppendInt(nil, result.Size, 10))
 	return hex.EncodeToString(h.Sum(nil))
 }

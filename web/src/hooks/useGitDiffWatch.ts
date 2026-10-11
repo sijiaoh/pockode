@@ -41,13 +41,12 @@ export function useGitDiffWatch({
 		[gitDiffSubscribe, path, staged, hideWhitespace],
 	);
 
-	const onNotification = useCallback((params: GitDiffChangedNotification) => {
-		setData({
-			diff: params.diff,
-			old_content: params.old_content,
-			new_content: params.new_content,
-		});
-	}, []);
+	const onNotification = useCallback(
+		({ id: _, ...diff }: GitDiffChangedNotification) => {
+			setData(diff);
+		},
+		[],
+	);
 
 	useSubscription<GitDiffChangedNotification, GitDiffData>(
 		subscribe,
@@ -56,11 +55,7 @@ export function useGitDiffWatch({
 		{
 			enabled: enabled && !!path,
 			onSubscribed: (initial: GitDiffData) => {
-				setData({
-					diff: initial.diff,
-					old_content: initial.old_content,
-					new_content: initial.new_content,
-				});
+				setData(initial);
 				setIsLoading(false);
 			},
 			onReset: () => {
