@@ -69,7 +69,9 @@ content results too — unless the probe happens to catch only its ASCII.
 `"too_large"` (over `contents.MaxFileSize`, **2 MiB**). Neither is an error —
 the response is a normal result and the client shows a placeholder built from
 `size` and `mime`. A `"too_large"` result also carries `limit`, the ceiling in
-bytes, so the UI can name the threshold without keeping its own copy of it.
+bytes, so the UI can name the threshold without keeping its own copy of it. A
+git diff is held to the same ceiling and refuses in the same fields — see
+[git.md](git.md#diffs).
 
 The size ceiling is a transport limit as much as a memory one. The response is
 one WebSocket message holding the whole file — an image inflated by a further
