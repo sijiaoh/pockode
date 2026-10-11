@@ -126,14 +126,7 @@ function DiffView({ path, staged, onBack }: Props) {
 				/>
 			)}
 			<ContentView isLoading={isLoading}>
-				{diff !== undefined && (
-					<DiffContent
-						diff={diff.diff}
-						fileName={path}
-						oldContent={diff.old_content}
-						newContent={diff.new_content}
-					/>
-				)}
+				{diff !== undefined && <DiffContent data={diff} fileName={path} />}
 			</ContentView>
 			<BottomActionBar>
 				<div className="flex items-center justify-between">

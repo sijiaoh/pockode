@@ -42,13 +42,25 @@ func ShowFile(dir, hash, path string) (*contents.FileContent, error) {
 		return nil, fmt.Errorf("%w: %s is not a file in commit %s (git object type %s)", contents.ErrInvalidPath, path, hash, objectType)
 	}
 
+	size, content, err := readBlobBounded(dir, spec)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read %s in commit %s: %w", path, hash, err)
+	}
+
+	return contents.NewFileContent(path, size, content), nil
+}
+
+// readBlobBounded is contents.ReadBounded for the git object named by spec: the
+// whole blob when it is within contents.MaxFileSize, otherwise only its first
+// contents.SniffLen bytes, with size always the blob's full size.
+func readBlobBounded(dir, spec string) (size int64, content []byte, err error) {
 	sizeOutput, err := execGit(dir, "cat-file", "-s", spec)
 	if err != nil {
-		return nil, fmt.Errorf("git cat-file -s failed for %s in commit %s: %w", path, hash, err)
+		return 0, nil, err
 	}
-	size, err := strconv.ParseInt(sizeOutput, 10, 64)
+	size, err = strconv.ParseInt(sizeOutput, 10, 64)
 	if err != nil {
-		return nil, fmt.Errorf("unreadable object size %q for %s in commit %s: %w", sizeOutput, path, hash, err)
+		return 0, nil, fmt.Errorf("unreadable object size %q: %w", sizeOutput, err)
 	}
 
 	// A blob over the limit is never read past its head: the content is not
@@ -59,12 +71,11 @@ func ShowFile(dir, hash, path string) (*contents.FileContent, error) {
 		limit = contents.SniffLen
 	}
 
-	content, err := readBlob(dir, spec, limit, oversized)
+	content, err = readBlob(dir, spec, limit, oversized)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read %s in commit %s: %w", path, hash, err)
+		return 0, nil, err
 	}
-
-	return contents.NewFileContent(path, size, content), nil
+	return size, content, nil
 }
 
 // readBlob reads the object named by spec, at most limit bytes of it.

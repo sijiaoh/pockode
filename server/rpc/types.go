@@ -396,10 +396,11 @@ type GitDiffSubscribeParams struct {
 	HideWhitespace bool   `json:"hide_whitespace"`
 }
 
-type GitDiffSubscribeResult struct {
-	Diff       string `json:"diff"`
-	OldContent string `json:"old_content"`
-	NewContent string `json:"new_content"`
+// GitDiffChangedParams is a git.diff.changed notification: the
+// git.diff.subscribe result again, with the subscription it belongs to.
+type GitDiffChangedParams struct {
+	ID string `json:"id"`
+	*git.DiffResult
 }
 
 // GitPathsParams is used for git.add, git.reset and git.discard operations.

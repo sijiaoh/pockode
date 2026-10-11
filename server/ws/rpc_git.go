@@ -115,12 +115,7 @@ func (h *rpcMethodHandler) handleGitDiffSubscribe(ctx context.Context, conn *jso
 
 	h.log.Debug("subscribed", "watcher", "git-diff", "watchId", params.ID, "path", params.Path, "staged", params.Staged)
 
-	response := rpc.GitDiffSubscribeResult{
-		Diff:       result.Diff,
-		OldContent: result.OldContent,
-		NewContent: result.NewContent,
-	}
-	if err := conn.Reply(ctx, req.ID, response); err != nil {
+	if err := conn.Reply(ctx, req.ID, result); err != nil {
 		h.log.Error("failed to send git diff subscribe response", "error", err)
 	}
 }

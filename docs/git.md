@@ -94,6 +94,28 @@ It is also why `Add` and `Reset` take a whole request's paths in one call rather
 
 **And these locks only serialise the git *this server* runs.** An AI CLI session in the same worktree runs `git commit` in its own shell, which never passes through this package; the server cannot stop it and does not pretend to. What the locks are for is the panel's own concurrency — one user, several taps, and a UI that offers no way to see that two of them collided.
 
+## Diffs
+
+One file's diff reaches the client three ways — the `git.diff.subscribe` reply, each `git.diff.changed` notification after it, and `git.show.diff` for a file in a commit — and all three carry the same `git.DiffResult` (the notification adds the subscription `id`):
+
+```
+{ "diff": string, "old_content": string, "new_content": string,
+  "omitted"?: "too_large", "size"?: int, "mime"?: string, "limit"?: int }
+```
+
+`old_content` and `new_content` are the two whole versions, sent beside the hunks so the client can highlight them.
+
+**A version over `contents.MaxFileSize` sends none of the three.** They travel in one message, and each version in it is held to the ceiling a file in a `file.get` reply is held to, for the reasons in [file.md](file.md#operations). When either version is over it, `diff`, `old_content` and `new_content` are all empty and the result carries `omitted: "too_large"` with `size`, `mime` and `limit` — the fields and meanings of a `file.get` that refused a file, describing the larger of the two versions. It is not an error, and the client draws the same too-large card the file viewer does ([file.md](file.md#viewer-ui)). A version of exactly the limit is still sent.
+
+- **Sizes are measured before anything is read or diffed.** A blob is sized with `git cat-file -s`, a working-tree file with `fstat`; an oversized version is read only as far as `contents.SniffLen` to name its type, and `git diff` is not run at all. An untracked file's diff is built from the bounded content already read, never from a second read of a file that may have grown since.
+- **The limit is per version, not per message.** A full rewrite of a file just within it carries the file roughly four times over: twice as content, twice in the hunks.
+- **The check comes before the diff, so it cannot know whether there is one.** A large file whose only changes `-w` hides, or that a commit lists without changing its content, reads as too large rather than as "no changes". Diffing it to find out is the cost the check exists to avoid.
+- **`git.diff.changed` compares `omitted` and `size` too.** The three content fields are empty both for a file with no changes and for one over the limit, so without them a file growing past the limit would never be announced. A file over the limit whose size changes is announced as well, since the `size` the client shows has changed.
+
+**A working-tree symlink is diffed as the link, not as what it points at.** Its content is the target path, which is what the index holds and what `git diff` compares — the same reading `git.show.file` gives a link ([Historical File Contents](#historical-file-contents)). Following it would size, or show, an unrelated file.
+
+A version that does not exist — the old side of an added file, the new side of a deleted one — reads as empty. A working-tree file that exists but cannot be read is returned as an error; a git object that cannot be read reads as empty too, since git's exit status does not tell a missing path from any other failure; a repository that is really broken fails the diff itself.
+
 ## Merge Commits
 
 `git.show` and `git.show.diff` present a merge as an ordinary diff against its **first parent** (`-m --first-parent`, a no-op on ordinary commits). The `old_content` returned with a diff comes from `hash^`, which is that same parent.
@@ -187,7 +209,7 @@ Paths are validated up front, before anything runs, so a rejected path stops the
 Two watchers deliver live updates via the subscription system. Both poll every 3 seconds and only while they have subscribers — see [watcher.md](watcher.md) for the watcher inventory and [code/subscription-system.md](code/subscription-system.md) for why git polls instead of using fsnotify.
 
 - **GitWatcher** — Polls `git rev-parse HEAD` + `git status` and compares the result against the previous one. Subscribers receive `git.changed` notifications when it differs (e.g., after `git add`).
-- **GitDiffWatcher** — Recomputes the diff behind each `git.diff.subscribe` subscription and sends `git.diff.changed` to that subscriber when the result changes. Each notification carries the full diff and file contents, not a delta.
+- **GitDiffWatcher** — Recomputes the diff behind each `git.diff.subscribe` subscription and sends `git.diff.changed` to that subscriber when the result changes. Each notification carries the full result described in [Diffs](#diffs), not a delta.
 
 ## Projects Without a Repository
 

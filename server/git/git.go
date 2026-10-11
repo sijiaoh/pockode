@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"net/url"
 	"os"
@@ -12,6 +13,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/pockode/server/contents"
 	"github.com/pockode/server/internal/fsperm"
 )
 
@@ -446,37 +448,9 @@ type DiffOptions struct {
 	HideWhitespace bool
 }
 
-// Diff returns the unified diff for a specific file.
-// If staged is true, returns diff of staged changes (index vs HEAD).
-// If staged is false, returns diff of unstaged changes (worktree vs index).
-// If hideWhitespace is true, ignores whitespace changes (-w flag).
-// Returns empty string if file is not in git status (no changes).
-// For submodule paths (e.g., "submodule/path/to/file"), it runs diff inside the submodule.
-func Diff(dir, path string, opts DiffOptions) (string, error) {
-	return diffWith(dir, path, opts, getSubmodulePaths(dir))
-}
-
-// diffWith is Diff with the directory's submodule paths already computed, so a
-// single DiffWithContent call resolves them once instead of forking git for
-// Status, the diff-side path resolution, and the content-side path resolution.
-func diffWith(dir, path string, opts DiffOptions, submodules []string) (string, error) {
-	status, err := statusWithSubmodules(dir, submodules)
-	if err != nil {
-		return "", err
-	}
-	if !status.HasFile(path, opts.Staged) {
-		return "", nil
-	}
-
-	// Untracked files don't have a diff against index, generate synthetic diff
-	if !opts.Staged && status.IsUntracked(path) {
-		actualDir, relativePath := resolveSubmodulePathWith(submodules, dir, path)
-		return showUntrackedFile(actualDir, relativePath)
-	}
-
-	// Resolve submodule path if needed
-	actualDir, relativePath := resolveSubmodulePathWith(submodules, dir, path)
-
+// diffFile runs git diff for a tracked path git status reports as changed,
+// with dir and path already resolved into the submodule that holds it.
+func diffFile(dir, path string, opts DiffOptions) (string, error) {
 	var args []string
 	if opts.Staged {
 		args = []string{"diff", "--cached"}
@@ -486,13 +460,13 @@ func diffWith(dir, path string, opts DiffOptions, submodules []string) (string, 
 	if opts.HideWhitespace {
 		args = append(args, "-w")
 	}
-	pathspec, err := literalPathspec(relativePath)
+	pathspec, err := literalPathspec(path)
 	if err != nil {
 		return "", fmt.Errorf("%w: %s", err, path)
 	}
 	args = append(args, "--", pathspec)
 
-	cmd := gitCommand(actualDir, args...)
+	cmd := gitCommand(dir, args...)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return "", fmt.Errorf("git diff failed: %w (output: %s)", err, string(output))
@@ -520,22 +494,17 @@ func resolveSubmodulePathWith(submodules []string, dir, path string) (string, st
 	return dir, path
 }
 
-// showUntrackedFile generates a diff-like output for untracked files.
-func showUntrackedFile(dir, path string) (string, error) {
-	fullPath := filepath.Join(dir, path)
-	content, err := os.ReadFile(fullPath)
-	if err != nil {
-		return "", fmt.Errorf("failed to read file: %w", err)
-	}
-
+// untrackedDiff generates a diff-like output for an untracked file, which has
+// no diff against the index for git to produce.
+func untrackedDiff(path, content string) string {
 	if len(content) == 0 {
 		var result strings.Builder
 		result.WriteString(fmt.Sprintf("diff --git a/%s b/%s\n", path, path))
 		result.WriteString("new file mode 100644\n")
-		return result.String(), nil
+		return result.String()
 	}
 
-	text := string(content)
+	text := content
 	hasTrailingNewline := strings.HasSuffix(text, "\n")
 	if hasTrailingNewline {
 		text = text[:len(text)-1]
@@ -558,42 +527,174 @@ func showUntrackedFile(dir, path string) (string, error) {
 		result.WriteString("\\ No newline at end of file\n")
 	}
 
-	return result.String(), nil
+	return result.String()
 }
 
 // DiffResult contains diff output and file contents for syntax highlighting.
+//
+// When either version of the file is over contents.MaxFileSize, none of the
+// three is sent: they travel together in one message, and no part of it may be
+// larger than file.get would send (contents.MaxFileSize says why). Omitted,
+// Size, MIME and Limit then describe the larger version in the words a
+// FileContent uses for the same refusal, so a client explains it the way it
+// explains a file too large to open; all four are empty otherwise.
+//
+// The limit is per version, not per message: a full rewrite of a file just
+// within it still costs about four times the file.
 type DiffResult struct {
-	Diff       string `json:"diff"`
-	OldContent string `json:"old_content"`
-	NewContent string `json:"new_content"`
+	Diff       string              `json:"diff"`
+	OldContent string              `json:"old_content"`
+	NewContent string              `json:"new_content"`
+	Omitted    contents.OmitReason `json:"omitted,omitempty"`
+	Size       int64               `json:"size,omitempty"`
+	MIME       string              `json:"mime,omitempty"`
+	Limit      int64               `json:"limit,omitempty"`
+}
+
+// diffSide is one of the two versions of a file a diff compares.
+type diffSide struct {
+	dir string
+	// spec names a git object — "HEAD:<path>", ":<path>" for the index — and is
+	// empty for the file in the working tree at dir/path.
+	spec string
+	path string
+}
+
+func objectSide(dir, rev, path string) diffSide {
+	return diffSide{dir: dir, spec: rev + ":" + path, path: path}
+}
+
+// indexSide is the staged version: a revision left empty in "<rev>:<path>"
+// names the index.
+func indexSide(dir, path string) diffSide {
+	return objectSide(dir, "", path)
+}
+
+func worktreeSide(dir, path string) diffSide {
+	return diffSide{dir: dir, path: path}
+}
+
+// read returns the side's content bounded the way contents.ReadBounded bounds
+// it. A version that does not exist — the old side of an added file, the new
+// side of a deleted one — reads as empty, which is what the diff shows for it.
+//
+// A git object that cannot be read reads as empty too, since git's exit status
+// does not tell a missing path from any other failure. That costs at most the
+// highlighting the content would have fed: a repository that is really broken
+// fails the diff itself.
+func (s diffSide) read() (size int64, content []byte, err error) {
+	if s.spec == "" {
+		return readWorktree(filepath.Join(s.dir, s.path))
+	}
+	size, content, err = readBlobBounded(s.dir, s.spec)
+	if err != nil {
+		return 0, nil, nil
+	}
+	return size, content, nil
+}
+
+// readWorktree reads a working-tree file as git would store it. For a symlink
+// that is the link's target, not the file it points to: that is what the index
+// holds and what git diff compares, and following the link would size, or
+// show, an unrelated file.
+func readWorktree(fullPath string) (int64, []byte, error) {
+	info, err := os.Lstat(fullPath)
+	if errors.Is(err, fs.ErrNotExist) {
+		return 0, nil, nil
+	}
+	if err != nil {
+		return 0, nil, err
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		target, err := os.Readlink(fullPath)
+		if err != nil {
+			return 0, nil, err
+		}
+		// git records the target with forward slashes on every platform.
+		target = filepath.ToSlash(target)
+		return int64(len(target)), []byte(target), nil
+	}
+	return contents.ReadBounded(fullPath)
+}
+
+// diffSides reads both versions of path, or returns the too-large result when
+// either is over contents.MaxFileSize. Callers produce the diff only after
+// this, so a file too large to send is never diffed either.
+func diffSides(path string, oldSide, newSide diffSide) (oldContent, newContent string, tooLarge *DiffResult, err error) {
+	oldSize, oldBytes, err := oldSide.read()
+	if err != nil {
+		return "", "", nil, err
+	}
+	newSize, newBytes, err := newSide.read()
+	if err != nil {
+		return "", "", nil, err
+	}
+
+	size, head := newSize, newBytes
+	if oldSize > newSize {
+		size, head = oldSize, oldBytes
+	}
+	if size > contents.MaxFileSize {
+		return "", "", &DiffResult{
+			Omitted: contents.OmitTooLarge,
+			Size:    size,
+			MIME:    contents.DetectMIME(path, head),
+			Limit:   contents.MaxFileSize,
+		}, nil
+	}
+	return string(oldBytes), string(newBytes), nil, nil
 }
 
 // DiffWithContent returns the unified diff along with old and new file contents.
 // For staged changes: old = HEAD, new = index
 // For unstaged changes: old = index, new = worktree
+// The result is empty when the file has no changes of the kind opts.Staged
+// asks for, and carries no content when the file is too large to send (see
+// DiffResult).
 // Supports submodule paths (e.g., "submodule/path/to/file").
 func DiffWithContent(dir, path string, opts DiffOptions) (*DiffResult, error) {
 	submodules := getSubmodulePaths(dir)
 
-	diff, err := diffWith(dir, path, opts, submodules)
+	status, err := statusWithSubmodules(dir, submodules)
 	if err != nil {
 		return nil, err
 	}
-	if diff == "" {
+	if !status.HasFile(path, opts.Staged) {
 		return &DiffResult{}, nil
 	}
 
-	// Resolve submodule path for content retrieval
 	actualDir, relativePath := resolveSubmodulePathWith(submodules, dir, path)
 
-	var oldContent, newContent string
-
+	var oldSide, newSide diffSide
 	if opts.Staged {
-		oldContent, _ = getFileFromRef(actualDir, "HEAD", relativePath)
-		newContent, _ = getFileFromIndex(actualDir, relativePath)
+		oldSide = objectSide(actualDir, "HEAD", relativePath)
+		newSide = indexSide(actualDir, relativePath)
 	} else {
-		oldContent, _ = getFileFromIndex(actualDir, relativePath)
-		newContent, _ = getFileFromWorktree(actualDir, relativePath)
+		oldSide = indexSide(actualDir, relativePath)
+		newSide = worktreeSide(actualDir, relativePath)
+	}
+
+	oldContent, newContent, tooLarge, err := diffSides(path, oldSide, newSide)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read %s: %w", path, err)
+	}
+	if tooLarge != nil {
+		return tooLarge, nil
+	}
+
+	var diff string
+	if !opts.Staged && status.IsUntracked(path) {
+		// From the content already read rather than the file again, which may
+		// have grown past the limit in between.
+		diff = untrackedDiff(relativePath, newContent)
+	} else {
+		diff, err = diffFile(actualDir, relativePath, opts)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if diff == "" {
+		return &DiffResult{}, nil
 	}
 
 	return &DiffResult{
@@ -601,41 +702,6 @@ func DiffWithContent(dir, path string, opts DiffOptions) (*DiffResult, error) {
 		OldContent: oldContent,
 		NewContent: newContent,
 	}, nil
-}
-
-// getFileFromRef gets file content from a git ref (e.g., HEAD).
-// Returns (content, found) where found indicates if the file exists in that ref.
-func getFileFromRef(dir, ref, path string) (string, bool) {
-	cmd := exec.Command("git", "show", ref+":"+path)
-	cmd.Dir = dir
-	output, err := cmd.Output()
-	if err != nil {
-		return "", false
-	}
-	return string(output), true
-}
-
-// getFileFromIndex gets file content from git index (staging area).
-// Returns (content, found) where found indicates if the file exists in the index.
-func getFileFromIndex(dir, path string) (string, bool) {
-	cmd := exec.Command("git", "show", ":"+path)
-	cmd.Dir = dir
-	output, err := cmd.Output()
-	if err != nil {
-		return "", false
-	}
-	return string(output), true
-}
-
-// getFileFromWorktree reads file content from working directory.
-// Returns (content, found) where found indicates if the file exists.
-func getFileFromWorktree(dir, path string) (string, bool) {
-	fullPath := filepath.Join(dir, path)
-	content, err := os.ReadFile(fullPath)
-	if err != nil {
-		return "", false
-	}
-	return string(content), true
 }
 
 // extractHost extracts the host from a git URL (HTTPS or SSH format).
@@ -979,7 +1045,15 @@ func ShowFileDiff(dir, hash, path string, hideWhitespace bool) (*DiffResult, err
 		return nil, err
 	}
 
-	// Get the diff using git show
+	// hash^ is the first parent, the same one firstParentShowArgs diffs against.
+	oldContent, newContent, tooLarge, err := diffSides(path, objectSide(dir, hash+"^", path), objectSide(dir, hash, path))
+	if err != nil {
+		return nil, fmt.Errorf("failed to read %s in commit %s: %w", path, hash, err)
+	}
+	if tooLarge != nil {
+		return tooLarge, nil
+	}
+
 	args := firstParentShowArgs("--format=", hash)
 	if hideWhitespace {
 		args = append(args, "-w")
@@ -996,15 +1070,8 @@ func ShowFileDiff(dir, hash, path string, hideWhitespace bool) (*DiffResult, err
 		return nil, fmt.Errorf("git show failed: %w", err)
 	}
 
-	diff := string(output)
-
-	// Get old content (parent commit)
-	oldContent, _ := getFileFromRef(dir, hash+"^", path)
-	// Get new content (the commit itself)
-	newContent, _ := getFileFromRef(dir, hash, path)
-
 	return &DiffResult{
-		Diff:       diff,
+		Diff:       string(output),
 		OldContent: oldContent,
 		NewContent: newContent,
 	}, nil
