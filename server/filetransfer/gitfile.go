@@ -11,14 +11,18 @@ import (
 	"github.com/pockode/server/git"
 )
 
-// GitFile streams one file as it stood in a commit — the bytes git.show.file
-// describes but does not carry for a raster image (contents.EncodingHTTP),
-// since that version is not in the work directory for Download to reach.
+// GitFile streams one file as it stood in a commit, since that version is not
+// in the work directory for Download to reach: the bytes git.show.file
+// describes but does not carry for a raster image (contents.EncodingHTTP), and
+// the whole file when the user downloads it.
 //
 // GET /api/git/show/file?hash=<commit>&path=<repository path>&worktree=<name>
 //
 // Same headers as Download. No Range: the content comes off a git pipe, not a
-// seekable file, and what reads this is an image fetched whole.
+// seekable file, so serving a range would mean reading and discarding
+// everything before it on every chunk. A download of a commit's file therefore
+// arrives as one unbounded response rather than in the bounded pieces Download
+// serves — the price of not running git once per chunk.
 func (h *Handler) GitFile(w http.ResponseWriter, r *http.Request) {
 	workDir, resolveErr := h.workDir(r)
 	if resolveErr != nil {

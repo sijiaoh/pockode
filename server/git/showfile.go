@@ -88,9 +88,9 @@ type Blob struct {
 
 // OpenFile streams path as it stood in commit hash, refusing it exactly as
 // ShowFile does. It serves the bytes ShowFile leaves out — a raster image's,
-// which travel over HTTP rather than in a JSON-RPC message — so unlike
-// ShowFile it applies no size ceiling: the content is copied through, never
-// held.
+// which travel over HTTP rather than in a JSON-RPC message, and any file the
+// user downloads — so unlike ShowFile it applies no size ceiling: the content
+// is copied through, never held.
 //
 // Cancelling ctx stops git, which is what keeps a client that went away from
 // leaving a process behind.

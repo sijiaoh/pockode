@@ -105,11 +105,11 @@ export function getImageSource(
 /**
  * The text content the server sent, for handing to the browser as a file.
  *
- * Not `lib/fileDownload`'s `downloadFile`, which reads a work-directory path
- * over the download endpoint in 4 MiB chunks: this content is already here and
- * has no path to ask for it by. Null for anything else — content sent over
- * HTTP is read from its origin instead (`fetchImageBlob`). Untyped: `saveBlob`
- * gives every saved Blob the one type that is safe to hand the browser.
+ * Not `lib/fileDownload`'s `downloadFile`, which reads a file by its path over
+ * HTTP: this content is already here and has no path to ask for it by. Null
+ * for anything else — content sent over HTTP is read from its origin instead
+ * (`fetchImageBlob`). Untyped: `saveBlob` gives every saved Blob the one type
+ * that is safe to hand the browser.
  */
 export function fileContentToBlob(file: FileContent): Blob | null {
 	if (file.encoding !== "text") return null;

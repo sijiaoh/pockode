@@ -1,12 +1,17 @@
 import { useNavigate } from "@tanstack/react-router";
 import { Type } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useCommitFile } from "../../hooks/useCommitFile";
+import { useFileDownload } from "../../hooks/useFileDownload";
 import { useGitCommit } from "../../hooks/useGitCommit";
 import { useRouteState } from "../../hooks/useRouteState";
 import { overlayToNavigation } from "../../lib/navigation";
 import { getFileViewState } from "../../utils/fileView";
 import FileBody from "../Files/FileBody";
+import {
+	DownloadButton,
+	LargeDownloadDialog,
+} from "../Files/FileDownloadControls";
 import { FilePageHeader } from "../Layout/PageHeader";
 import { BottomActionBar, ContentView, ToggleIconButton } from "../ui";
 
@@ -20,8 +25,7 @@ interface Props {
  *
  * Read-only throughout: history cannot be edited, so the bottom bar carries no
  * write action at all rather than a disabled one, which would read as a bug or
- * a permission problem. No download either — `/api/files/download` only serves
- * the working tree.
+ * a permission problem.
  */
 function CommitFileView({ hash, path }: Props) {
 	const navigate = useNavigate();
@@ -31,6 +35,21 @@ function CommitFileView({ hash, path }: Props) {
 	const [plain, setPlain] = useState(false);
 	const { data: commit } = useGitCommit(hash);
 	const { data: file, isLoading, error } = useCommitFile(hash, path);
+	const [downloadError, setDownloadError] = useState<string | null>(null);
+	const download = useFileDownload({
+		path,
+		worktree,
+		hash,
+		size: file?.size,
+		onError: setDownloadError,
+	});
+
+	// The view is reused across files, so a failure belongs to the one it was
+	// reported for.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: the file's identity is the trigger, not values the body reads
+	useEffect(() => {
+		setDownloadError(null);
+	}, [hash, path, worktree]);
 
 	const state = useMemo(
 		() =>
@@ -70,7 +89,20 @@ function CommitFileView({ hash, path }: Props) {
 					</span>
 					{commit && <span className="truncate">· {commit.subject}</span>}
 				</div>
-				{state && <FileBody state={state} path={path} plain={plain} readOnly />}
+				{downloadError && (
+					<div className="border-b border-th-error/20 bg-th-error/10 px-4 py-2 text-sm text-th-error">
+						{downloadError}
+					</div>
+				)}
+				{state && (
+					<FileBody
+						state={state}
+						path={path}
+						plain={plain}
+						readOnly
+						downloadAction={{ label: download.label, onClick: download.toggle }}
+					/>
+				)}
 			</ContentView>
 			<BottomActionBar>
 				<div className="flex items-center gap-2">
@@ -87,9 +119,11 @@ function CommitFileView({ hash, path }: Props) {
 							label={plain ? "Show rendered" : "Show plain text"}
 						/>
 					)}
+					{state && <DownloadButton download={download} />}
 					<div className="ml-auto text-xs text-th-text-muted">{shortHash}</div>
 				</div>
 			</BottomActionBar>
+			{file && <LargeDownloadDialog download={download} size={file.size} />}
 		</div>
 	);
 }
