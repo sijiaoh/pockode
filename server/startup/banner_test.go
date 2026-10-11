@@ -157,3 +157,44 @@ func TestAgentLinesWarnsWithoutColor(t *testing.T) {
 		t.Errorf("the warning does not survive without color:\n%s", strings.Join(got, "\n"))
 	}
 }
+
+// The notice replaces the banner's Remote line for a user who has already read
+// past it, so it has to say that the old URL is dead and what, if anything,
+// takes its place.
+func TestPrintRemoteURLChanged(t *testing.T) {
+	tests := []struct {
+		name    string
+		url     string
+		want    []string
+		notWant []string
+	}{
+		{
+			name: "new URL comes with its QR code",
+			url:  "https://def456.cloud.pockode.com",
+			want: []string{"⚠ Remote URL changed", "▸ Remote https://def456.cloud.pockode.com", "Scan to connect"},
+		},
+		{
+			name:    "no URL says remote access stopped and what to do",
+			url:     "",
+			want:    []string{"⚠ Remote access stopped", "Update pockode, then restart it"},
+			notWant: []string{"▸ Remote", "Scan to connect"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			noColor(t)
+			out := captureStdout(t, func() { PrintRemoteURLChanged(tt.url) })
+			for _, want := range tt.want {
+				if !strings.Contains(out, want) {
+					t.Errorf("missing %q in:\n%s", want, out)
+				}
+			}
+			for _, notWant := range tt.notWant {
+				if strings.Contains(out, notWant) {
+					t.Errorf("unexpected %q in:\n%s", notWant, out)
+				}
+			}
+		})
+	}
+}

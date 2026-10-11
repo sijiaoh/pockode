@@ -91,7 +91,6 @@ func Run(cfg Config) error {
 	}
 
 	var relayManager *relay.Manager
-	var remoteURL string
 	if cfg.RelayEnabled {
 		relayCfg := relay.Config{
 			CloudURL:      cfg.CloudURL,
@@ -100,6 +99,8 @@ func Run(cfg Config) error {
 			Password:      cfg.Password,
 			PasswordGuard: passwordGuard,
 			Sessions:      sessions,
+			// The banner is the only place the cluster shows its remote URL.
+			OnRemoteURLChange: startup.PrintRemoteURLChanged,
 		}
 
 		frontendPort := port
@@ -108,16 +109,22 @@ func Run(cfg Config) error {
 		}
 		relayManager = relay.NewManager(relayCfg, port, frontendPort, log)
 
-		var err error
-		remoteURL, err = relayManager.Start(context.Background())
+		url, err := relayManager.Start(context.Background())
 		if err != nil {
 			return fmt.Errorf("failed to start relay: %w", err)
 		}
-		log.Info("remote access enabled", "url", remoteURL)
+		log.Info("remote access enabled", "url", url)
 	}
 
 	// Fetch announcement from cloud
 	announcement := relay.NewClient(cfg.CloudURL).GetAnnouncement(context.Background())
+
+	// Read at print time rather than kept from Start: the announcement fetch
+	// above gives the relay time to move, and announce it, first.
+	var remoteURL string
+	if relayManager != nil {
+		remoteURL = relayManager.RemoteURL()
+	}
 
 	// Display startup banner
 	localURL := fmt.Sprintf("http://localhost:%d", port)

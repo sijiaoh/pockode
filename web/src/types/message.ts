@@ -791,7 +791,8 @@ export interface AuthResult {
 	work_dir: string;
 	/**
 	 * The address this server is reachable at through the relay, such as
-	 * `https://abc123.cloud.pockode.com`; empty when the relay is disabled.
+	 * `https://abc123.cloud.pockode.com`; empty when the relay is disabled or
+	 * has stopped for good.
 	 */
 	remote_url: string;
 	/**

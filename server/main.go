@@ -434,10 +434,14 @@ Flags:
 
 	cloudURL := *cloudURLFlag
 
-	// Started before the RPC handler is built, which reports the remote URL to
-	// every client that authenticates.
+	portStr := strconv.Itoa(port)
+	localURL := "http://localhost:" + portStr
+
+	// The remote URL is read live wherever it is exposed: renewing the relay
+	// credentials mid-run can move the server to a new subdomain.
 	var relayManager *relay.Manager
-	var remoteURL string
+	remoteURL := func() string { return "" }
+	var serverInfo *serverinfo.Publisher
 	relayEnabled := *relayFlag
 	if relayEnabled {
 		relayCfg := relay.Config{
@@ -448,6 +452,12 @@ Flags:
 			PasswordGuard: passwordGuard,
 			Sessions:      sessions,
 			Tickets:       previewTickets,
+			OnRemoteURLChange: func(url string) {
+				startup.PrintRemoteURLChanged(url)
+				if err := serverInfo.Refresh(); err != nil {
+					slog.Error("failed to update server.json with the new remote URL", "error", err)
+				}
+			},
 		}
 
 		frontendPort := *relayFrontendPortFlag
@@ -455,16 +465,21 @@ Flags:
 			frontendPort = port
 		}
 		relayManager = relay.NewManager(relayCfg, port, frontendPort, slog.Default())
+		remoteURL = relayManager.RemoteURL
+	}
+	// Assigned before the relay starts, so the reconnect loop that calls
+	// OnRemoteURLChange never sees it unset.
+	serverInfo = serverinfo.NewPublisher(dataDir, port, localURL, mcpToken, remoteURL)
 
-		var err error
-		remoteURL, err = relayManager.Start(context.Background())
+	if relayManager != nil {
+		url, err := relayManager.Start(context.Background())
 		if err != nil {
 			slog.Error("failed to start relay", "error", err)
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
 
-		slog.Info("remote access enabled", "url", remoteURL)
+		slog.Info("remote access enabled", "url", url)
 	}
 
 	wsHandler := ws.NewRPCHandler(cred.Password, passwordGuard, sessions, version, remoteURL, previewTickets, devMode, commandStore, worktreeManager, settingsStore, workStore, workOps, workEngine, agentRoleStore, cliAuth, cliUpdate)
@@ -472,7 +487,6 @@ Flags:
 	attachmentHandler := filetransfer.NewAttachmentHandler(worktreeManager, worktree.ErrWorktreeNotFound, worktree.ErrSessionNotFound, slog.Default())
 	handler := newHandler(cred.Password, passwordGuard, sessions, devMode, wsHandler, mcpHandler, transferHandler, attachmentHandler)
 
-	portStr := strconv.Itoa(port)
 	srv := &http.Server{
 		Addr:    ":" + portStr,
 		Handler: handler,
@@ -484,8 +498,7 @@ Flags:
 	exitRequests := shutdown.Listen()
 
 	// Write server.json for orchestration programs to discover the running server
-	localURL := "http://localhost:" + portStr
-	if err := serverinfo.Write(dataDir, port, localURL, remoteURL, mcpToken); err != nil {
+	if err := serverInfo.Publish(); err != nil {
 		slog.Error("failed to write server.json", "error", err)
 		os.Exit(1)
 	}
@@ -535,18 +548,20 @@ Flags:
 	// Fetch announcement from cloud
 	announcement := relay.NewClient(cloudURL).GetAnnouncement(context.Background())
 
-	// Display startup banner
+	// Display startup banner. The remote URL is read now, not kept from Start:
+	// the announcement fetch above gives the relay time to move first.
+	remote := remoteURL()
 	startup.PrintBanner(startup.BannerOptions{
 		Version:      version,
-		LocalURL:     "http://localhost:" + portStr,
-		RemoteURL:    remoteURL,
+		LocalURL:     localURL,
+		RemoteURL:    remote,
 		Announcement: announcement,
 		Agents:       agentStatuses,
 	})
 
 	// Print QR code if relay is enabled
-	if remoteURL != "" {
-		startup.PrintQRCode(remoteURL)
+	if remote != "" {
+		startup.PrintQRCode(remote)
 		fmt.Println()
 	}
 

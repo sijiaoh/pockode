@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -170,7 +171,7 @@ func newTestEnvWithAgent(t *testing.T, mock *mockAgent, ag agent.Agent, workDir 
 	cliAuthService := cliauth.NewService(slog.Default())
 	cliAuthService.Register(session.AgentTypeClaude, cliAuth)
 
-	h := NewRPCHandler(testPassword, authguard.New(), authsessiontest.New(), "test", "", authsession.NewTickets(), true, cmdStore, worktreeManager, settingsStore, workStore, workOps, workEngine, agentRoleStore, cliAuthService, cliupdate.NewService(slog.Default(), nil, nil))
+	h := NewRPCHandler(testPassword, authguard.New(), authsessiontest.New(), "test", func() string { return "" }, authsession.NewTickets(), true, cmdStore, worktreeManager, settingsStore, workStore, workOps, workEngine, agentRoleStore, cliAuthService, cliupdate.NewService(slog.Default(), nil, nil))
 	server := httptest.NewServer(h)
 
 	// No deadline of its own: every read and write is bounded individually (see
@@ -528,12 +529,12 @@ func getWorkOrFail(t *testing.T, env *testEnv, workID string) work.Work {
 // which newTestEnv, by construction, cannot give them.
 func newAuthTestServer(t *testing.T, password, remoteURL string, sessions SessionStore) *httptest.Server {
 	t.Helper()
-	return newTicketTestServer(t, password, remoteURL, sessions, authsession.NewTickets())
+	return newTicketTestServer(t, password, func() string { return remoteURL }, sessions, authsession.NewTickets())
 }
 
 // newTicketTestServer is newAuthTestServer with the preview ticket set chosen
 // by the caller, which is the only way a test can redeem what it was handed.
-func newTicketTestServer(t *testing.T, password, remoteURL string, sessions SessionStore, tickets PreviewTickets) *httptest.Server {
+func newTicketTestServer(t *testing.T, password string, remoteURL func() string, sessions SessionStore, tickets PreviewTickets) *httptest.Server {
 	t.Helper()
 	dataDir := t.TempDir()
 	workDir := t.TempDir()
@@ -751,24 +752,48 @@ func TestHandler_Auth_PasswordIssuesReusableSessionToken(t *testing.T) {
 	}
 }
 
-func TestHandler_Auth_ReportsRemoteURL(t *testing.T) {
-	const remoteURL = "https://abc123.cloud.pockode.com"
-	server := newAuthTestServer(t, testPassword, remoteURL, authsessiontest.New())
+// The remote URL can change mid-run when the relay credentials are renewed, so
+// auth reports the one current at the time rather than the one at startup.
+func TestHandler_Auth_ReportsCurrentRemoteURL(t *testing.T) {
+	const (
+		oldURL = "https://abc123.cloud.pockode.com"
+		newURL = "https://def456.cloud.pockode.com"
+	)
+	var remoteURLMu sync.Mutex
+	remoteURL := oldURL
+	server := newTicketTestServer(t, testPassword, func() string {
+		remoteURLMu.Lock()
+		defer remoteURLMu.Unlock()
+		return remoteURL
+	}, authsessiontest.New(), authsession.NewTickets())
 
-	resp := callOnce(t, server.URL, "auth", rpc.AuthParams{Password: testPassword})
-	if resp.Error != nil {
-		t.Fatalf("auth failed: %v", resp.Error)
+	authRemoteURL := func() string {
+		t.Helper()
+		resp := callOnce(t, server.URL, "auth", rpc.AuthParams{Password: testPassword})
+		if resp.Error != nil {
+			t.Fatalf("auth failed: %v", resp.Error)
+		}
+		// Decoded by its wire name rather than into rpc.AuthResult, which would
+		// agree with itself even if the tag drifted from what the web client reads.
+		var result struct {
+			RemoteURL string `json:"remote_url"`
+		}
+		if err := json.Unmarshal(resp.Result, &result); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
+		return result.RemoteURL
 	}
-	// Decoded by its wire name rather than into rpc.AuthResult, which would
-	// agree with itself even if the tag drifted from what the web client reads.
-	var result struct {
-		RemoteURL string `json:"remote_url"`
+
+	if got := authRemoteURL(); got != oldURL {
+		t.Errorf("remote_url = %q, want %q", got, oldURL)
 	}
-	if err := json.Unmarshal(resp.Result, &result); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
-	if result.RemoteURL != remoteURL {
-		t.Errorf("remote_url = %q, want %q", result.RemoteURL, remoteURL)
+
+	remoteURLMu.Lock()
+	remoteURL = newURL
+	remoteURLMu.Unlock()
+
+	if got := authRemoteURL(); got != newURL {
+		t.Errorf("remote_url after the change = %q, want %q", got, newURL)
 	}
 }
 
