@@ -71,8 +71,8 @@ func (h *wsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *wsHandler) handleConnection(ctx context.Context, wsConn *websocket.Conn) {
-	stream := ws.NewWebSocketStream(wsConn)
 	connID := uuid.Must(uuid.NewV7()).String()
+	stream := ws.NewWebSocketStream(wsConn, h.log.With("connId", connID))
 	h.handleStream(ctx, stream, connID)
 }
 

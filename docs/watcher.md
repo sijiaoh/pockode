@@ -49,7 +49,7 @@ type Notification struct {
 }
 ```
 
-`ws/notifier.go` provides `JSONRPCNotifier` that bridges to `jsonrpc2.Conn.Notify()`.
+`ws/notifier.go` provides `JSONRPCNotifier` that bridges to `jsonrpc2.Conn.Notify()`. `Notify` only queues the message on the connection's own writer, so a client that stops reading cannot hold up the watcher's other subscribers; how that queue is bounded is in [code/websocket-rpc.md](code/websocket-rpc.md#outbound-delivery).
 
 ## Watcher Implementations
 

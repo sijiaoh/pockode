@@ -197,8 +197,8 @@ func (h *RPCHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *RPCHandler) handleConnection(ctx context.Context, wsConn *websocket.Conn) {
-	stream := NewWebSocketStream(wsConn)
 	connID := uuid.Must(uuid.NewV7()).String()
+	stream := NewWebSocketStream(wsConn, slog.With("connId", connID))
 	h.handleStream(ctx, stream, connID)
 }
 

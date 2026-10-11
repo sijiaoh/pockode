@@ -188,7 +188,7 @@ func (w *WorkListWatcher) OnWorkChange(event work.ChangeEvent) {
 
 2. **Non-blocking stores**: Store operations should be fast. Offloading notification to a separate goroutine keeps write latency predictable.
 
-3. **Backpressure isolation**: When notification is slow (network issues), the store isn't affected.
+3. **Backpressure isolation**: A slow client holds up neither the store nor the other subscribers: a notification only queues on its connection's writer, which closes a connection that falls too far behind ([websocket-rpc.md](websocket-rpc.md#outbound-delivery)).
 
 ### Why Backpressure via Dirty Flag Instead of Blocking?
 
