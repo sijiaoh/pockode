@@ -46,6 +46,12 @@ type Config struct {
 	// Tickets are the one-time logins the app hands a preview tab, so it
 	// gets a session without the password being typed again.
 	Tickets TicketRedeemer
+	// OnRemoteURLChange, if set, is called whenever renewing the credentials
+	// moves the server to a different remote URL; RemoteURL already reports
+	// the new one by then. An empty URL means remote access has ended for
+	// good, because the cloud requires a newer Pockode to register again. It
+	// runs on the reconnect loop, which waits for it before dialing again.
+	OnRemoteURLChange func(remoteURL string)
 }
 
 // SessionStore is what a preview login needs of the app's session store;
@@ -69,6 +75,7 @@ type Manager struct {
 	client         *Client
 	log            *slog.Logger
 	cancel         context.CancelFunc
+	remoteURLMu    sync.Mutex // renewing the credentials can replace remoteURL
 	remoteURL      string
 	wg             sync.WaitGroup
 	connectTimeout time.Duration
@@ -87,54 +94,13 @@ func NewManager(cfg Config, backendPort, frontendPort int, log *slog.Logger) *Ma
 }
 
 func (m *Manager) Start(ctx context.Context) (string, error) {
-	storedCfg, err := m.store.Load()
+	storedCfg, err := m.credentials(ctx)
 	if err != nil {
-		return "", fmt.Errorf("load config: %w", err)
+		return "", err
 	}
 
-	if storedCfg == nil {
-		m.log.Info("registering with cloud", "url", m.config.CloudURL)
-
-		storedCfg, err = m.client.Register(ctx)
-		if errors.Is(err, ErrUpgradeRequired) {
-			return "", ErrUpgradeRequired
-		}
-		if err != nil {
-			return "", fmt.Errorf("register: %w", err)
-		}
-
-		if err := m.store.Save(storedCfg); err != nil {
-			return "", fmt.Errorf("save config: %w", err)
-		}
-
-		m.log.Info("registered with cloud", "subdomain", storedCfg.Subdomain)
-	} else {
-		m.log.Info("refreshing config from cloud", "subdomain", storedCfg.Subdomain)
-
-		refreshedCfg, err := m.client.Refresh(ctx, storedCfg.RelayToken)
-		if errors.Is(err, ErrUpgradeRequired) {
-			return "", ErrUpgradeRequired
-		}
-		if errors.Is(err, ErrInvalidToken) {
-			m.log.Warn("stored token is invalid, re-registering")
-			if err := m.store.Delete(); err != nil {
-				return "", fmt.Errorf("delete config: %w", err)
-			}
-			return m.Start(ctx)
-		}
-		if err != nil {
-			return "", fmt.Errorf("refresh: %w", err)
-		}
-
-		if err := m.store.Save(refreshedCfg); err != nil {
-			return "", fmt.Errorf("save config: %w", err)
-		}
-
-		storedCfg = refreshedCfg
-		m.log.Info("config refreshed", "subdomain", storedCfg.Subdomain)
-	}
-
-	m.remoteURL = buildRemoteURL(storedCfg)
+	remoteURL := buildRemoteURL(storedCfg)
+	m.setRemoteURL(remoteURL)
 
 	relayCtx, cancel := context.WithCancel(context.Background())
 	m.cancel = cancel
@@ -147,23 +113,100 @@ func (m *Manager) Start(ctx context.Context) (string, error) {
 				logger.LogPanic(r, "relay connection crashed")
 			}
 		}()
-		r := &reconnector{connect: m.connectAndRun, clock: realClock{}, log: m.log}
+		r := &reconnector{connect: m.connectAndRun, renew: m.renewCredentials, clock: realClock{}, log: m.log}
 		r.run(relayCtx, storedCfg)
 	}()
 
-	return m.remoteURL, nil
+	return remoteURL, nil
+}
+
+// credentials returns the relay credentials to connect with: the stored ones
+// once the cloud has confirmed them, or fresh ones from a new registration when
+// there are none or the cloud no longer recognizes them.
+func (m *Manager) credentials(ctx context.Context) (*StoredConfig, error) {
+	storedCfg, err := m.store.Load()
+	if err != nil {
+		return nil, fmt.Errorf("load config: %w", err)
+	}
+
+	if storedCfg != nil {
+		m.log.Info("refreshing config from cloud", "subdomain", storedCfg.Subdomain)
+
+		refreshedCfg, err := m.client.Refresh(ctx, storedCfg.RelayToken)
+		switch {
+		case err == nil:
+			if err := m.store.Save(refreshedCfg); err != nil {
+				return nil, fmt.Errorf("save config: %w", err)
+			}
+			m.log.Info("config refreshed", "subdomain", refreshedCfg.Subdomain)
+			return refreshedCfg, nil
+		case errors.Is(err, ErrUpgradeRequired):
+			return nil, ErrUpgradeRequired
+		case errors.Is(err, ErrInvalidToken):
+			m.log.Warn("stored token is invalid, re-registering")
+			if err := m.store.Delete(); err != nil {
+				return nil, fmt.Errorf("delete config: %w", err)
+			}
+		default:
+			return nil, fmt.Errorf("refresh: %w", err)
+		}
+	}
+
+	m.log.Info("registering with cloud", "url", m.config.CloudURL)
+
+	registeredCfg, err := m.client.Register(ctx)
+	if errors.Is(err, ErrUpgradeRequired) {
+		return nil, ErrUpgradeRequired
+	}
+	if err != nil {
+		return nil, fmt.Errorf("register: %w", err)
+	}
+
+	if err := m.store.Save(registeredCfg); err != nil {
+		return nil, fmt.Errorf("save config: %w", err)
+	}
+
+	m.log.Info("registered with cloud", "subdomain", registeredCfg.Subdomain)
+	return registeredCfg, nil
+}
+
+// renewCredentials is how the reconnect loop recovers from an uplink rejected
+// for its token: the same check startup makes, so a token the cloud has lost
+// track of mid-run is replaced instead of being retried forever.
+//
+// A new registration comes with a new subdomain, and the old URL stops
+// working, so the change is passed on to whoever exposes the remote URL. So is
+// a cloud demanding a newer client: the loop gives up on that, and the URL of
+// the rejected token is dead.
+func (m *Manager) renewCredentials(ctx context.Context) (*StoredConfig, error) {
+	cfg, err := m.credentials(ctx)
+	if errors.Is(err, ErrUpgradeRequired) {
+		m.changeRemoteURL("")
+	}
+	if err != nil {
+		return nil, err
+	}
+	if remoteURL := buildRemoteURL(cfg); remoteURL != m.RemoteURL() {
+		m.log.Warn("remote URL changed", "url", remoteURL)
+		m.changeRemoteURL(remoteURL)
+	}
+	return cfg, nil
+}
+
+func (m *Manager) changeRemoteURL(url string) {
+	m.setRemoteURL(url)
+	if m.config.OnRemoteURLChange != nil {
+		m.config.OnRemoteURLChange(url)
+	}
 }
 
 func (m *Manager) connectAndRun(ctx context.Context, cfg *StoredConfig) error {
 	url := buildRelayWSURL(cfg)
 	m.log.Info("connecting to relay", "url", url)
 
-	conn, resp, err := websocket.Dial(ctx, url, m.uplinkDialOptions(cfg.RelayToken))
+	conn, err := m.dialUplink(ctx, url, cfg.RelayToken)
 	if err != nil {
-		if resp != nil && resp.StatusCode == http.StatusUnauthorized {
-			return fmt.Errorf("relay rejected relay_token: %w", err)
-		}
-		return fmt.Errorf("dial: %w", err)
+		return err
 	}
 	defer conn.CloseNow()
 
@@ -173,6 +216,19 @@ func (m *Manager) connectAndRun(ctx context.Context, cfg *StoredConfig) error {
 	// tunnel wants: size limits belong to the HTTP layer above it.
 	tunnel := tunnelConn{Conn: websocket.NetConn(ctx, conn, websocket.MessageBinary), ws: conn}
 	return serveTunnel(ctx, tunnel, newLocalProxy(m.backendPort, m.frontendPort, newPreviewSite(cfg), previewAuth{password: m.config.Password, guard: m.config.PasswordGuard, sessions: m.config.Sessions, tickets: m.config.Tickets}, m.log), m.log)
+}
+
+// dialUplink reports a rejected token as ErrInvalidToken, which is what the
+// reconnect loop tells apart from a connection that merely failed.
+func (m *Manager) dialUplink(ctx context.Context, url, relayToken string) (*websocket.Conn, error) {
+	conn, resp, err := websocket.Dial(ctx, url, m.uplinkDialOptions(relayToken))
+	if err != nil {
+		if resp != nil && resp.StatusCode == http.StatusUnauthorized {
+			return nil, fmt.Errorf("relay rejected relay_token: %w: %w", ErrInvalidToken, err)
+		}
+		return nil, fmt.Errorf("dial: %w", err)
+	}
+	return conn, nil
 }
 
 // uplinkDialOptions puts the relay token on the upgrade request itself, so the
@@ -219,7 +275,15 @@ func (m *Manager) Stop() {
 }
 
 func (m *Manager) RemoteURL() string {
+	m.remoteURLMu.Lock()
+	defer m.remoteURLMu.Unlock()
 	return m.remoteURL
+}
+
+func (m *Manager) setRemoteURL(url string) {
+	m.remoteURLMu.Lock()
+	defer m.remoteURLMu.Unlock()
+	m.remoteURL = url
 }
 
 func buildRemoteURL(cfg *StoredConfig) string {
