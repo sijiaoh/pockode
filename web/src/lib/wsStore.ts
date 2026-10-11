@@ -871,8 +871,6 @@ export const useWSStore = create<WSState>((set, get) => ({
 						return;
 					}
 
-					document.title = `${result.title} | Pockode`;
-
 					set({
 						status: "connected",
 						reconnectAttempts: 0,
