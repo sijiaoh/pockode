@@ -30,8 +30,14 @@ therefore a second request, made when the UI has somewhere to draw it:
 UI (attachment strip scrolled into view)
   → attachment.get {session_id, id}
     → contents.GetContents(<dataDir>/sessions/<id>/attachments)
-      → FileContent (base64) → the same file viewer the Files tab renders with
+      → FileContent → the same file viewer the Files tab renders with
+        → raster image (encoding "http"):
+          GET /api/chat/attachments?session_id=&id= → the bytes
 ```
+
+The description is small and comes over the WebSocket; an image's bytes come
+over HTTP on a request of their own
+([code/agent-integration.md](code/agent-integration.md#reading-it-back)).
 
 ## Backend
 

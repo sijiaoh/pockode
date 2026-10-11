@@ -50,7 +50,7 @@ whether or not any content came with it. `encoding` says how to read `content`:
 | `encoding` | `content` | When |
 |------------|-----------|------|
 | `text` | UTF-8 source | The bytes are valid text |
-| `base64` | Encoded bytes | An image the UI can render |
+| `http` | Empty; fetch the bytes over HTTP | A raster image |
 | `none` | Empty; see `omitted` | Everything else |
 
 "Valid text" means valid UTF-8, checked over the whole file — anything else is
@@ -66,7 +66,8 @@ content results too — unless the probe happens to catch only its ASCII.
 
 `omitted` is set only alongside `encoding: "none"` and explains it:
 `"binary"` (a non-image binary, which the UI cannot display anyway) or
-`"too_large"` (over `contents.MaxFileSize`, **2 MiB**). Neither is an error —
+`"too_large"` (over `contents.MaxFileSize`, **2 MiB**; for a raster image,
+over `attachments.MaxSize`, **20 MiB** — see below). Neither is an error —
 the response is a normal result and the client shows a placeholder built from
 `size` and `mime`. A `"too_large"` result also carries `limit`, the ceiling in
 bytes, so the UI can name the threshold without keeping its own copy of it. A
@@ -74,11 +75,26 @@ git diff is held to the same ceiling and refuses in the same fields — see
 [git.md](git.md#diffs).
 
 The size ceiling is a transport limit as much as a memory one. The response is
-one WebSocket message holding the whole file — an image inflated by a further
-4/3 on its way through base64 — and the JSON-RPC connection carries one message
-at a time, so a few megabytes stall every other request the app has in flight on
-it. Oversized files are therefore never read: only their first 512 bytes, to
-name the type.
+one WebSocket message holding the whole file, and the JSON-RPC connection
+carries one message at a time, so a few megabytes stall every other request the
+app has in flight on it. Oversized files are therefore never read: only their
+first 512 bytes, to name the type.
+
+**A raster image never travels on that connection, whatever its size.** It is
+the one binary the client wants whole and the one most likely to be megabytes —
+a screenshot, a photo — so `file.get` describes it and leaves the bytes to
+`GET /api/files/download` ([Transfer](#transfer)), which streams them on a
+request of their own. Only the first 512 bytes are read, as for an oversized
+file, and the 2 MiB ceiling does not apply. Its ceiling is
+`attachments.MaxSize` (**20 MiB**) instead, the one every attachment is stored
+under, so a preview is one size whatever it came from. That one is a preview
+limit only — the client holds the whole image in memory to decode it — and the
+endpoints still serve a larger file to anyone downloading it. The response carries no URL; the client knows which endpoint to
+ask from which method described the file. "Raster" means two things together: a
+`mime` under `image/` other than `image/svg+xml`, and binary leading bytes
+(`contents.IsRasterImage`). The second matters for the formats named by
+extension below — a git-LFS pointer committed as `photo.avif` is text, and is
+returned as `text` rather than as an image nobody can draw.
 
 Anything that is neither a directory nor a regular file — a named pipe, a
 device node — is rejected with `InvalidParams` from the stat, before it is
@@ -89,8 +105,12 @@ the request for good.
 its extension — a `.svg` holding a PNG is reported as `image/png`. The
 extension is consulted only for image formats no sniffer recognises (SVG, AVIF,
 HEIC, TIFF), and only when sniffing produced nothing more specific than
-"some text" or "some bytes". SVG is the one image served as `text`: it is
-source the user can edit, and the UI can render it from the text just as well.
+"some text" or "some bytes". SVG is the one image served as `text`, and so the
+one still held to the 2 MiB ceiling: it is source the user can edit, and the UI
+can render it from the text just as well. It is also a security boundary rather
+than a preference — SVG can carry script, and its bytes fetched into a
+same-origin Blob would run as the app if opened on their own, where they can
+read the login token. Text rendered through an `<img>` never needs that Blob.
 
 **`file.write`** — Write file content to disk with upsert semantics.
 - Creates the file if it doesn't exist
@@ -225,10 +245,11 @@ the error doesn't depend on whether the repository is a git one.
 ## Transfer
 
 Uploading and downloading whole files goes over **HTTP**, not the WebSocket, and
-is the one file operation that does. `file.get`/`file.write` carry the content
-inside a single JSON-RPC message: the file is held in memory whole, base64
-inflates it by 4/3, and that one write occupies the connection until it drains —
-which is the reason for the 2 MiB ceiling above. Transferred files are routinely
+is the one file operation that does, besides reading an image's bytes for
+display ([above](#operations)). `file.get`/`file.write` carry the content
+inside a single JSON-RPC message: the file is held in memory whole, and that
+one write occupies the connection until it drains — which is the reason for the
+2 MiB ceiling above. Transferred files are routinely
 larger than that, so putting them on the same connection would stall every
 request the app has in flight. HTTP keeps them off it, lets the endpoint stream
 both directions rather than hold a file in memory, and is what the browser
@@ -236,23 +257,25 @@ already speaks for files: `Content-Disposition`
 for a download, `multipart/form-data` for an upload, `Range` for reading a large
 file in pieces.
 
-Both routes sit behind the same bearer middleware as the rest of `/api`
+Every route here sits behind the same bearer middleware as the rest of `/api`
 (`Authorization: Bearer <credential>` — a session token from the app, the
 password from a script) — they carry no auth of their own. A download therefore
 cannot be a plain `<a href>`; the client fetches it with the header and saves
 the response itself.
 
-Both take an optional `worktree` query parameter (omitted or empty = the main
+Each takes an optional `worktree` query parameter (omitted or empty = the main
 worktree), matching the worktree a WebSocket connection binds at auth.
 
 Errors are JSON — `{ "error": "<message>", "code": "<code>" }` — with the code
 naming the cause: `invalid_path`, `invalid_request`, `not_found`, `not_a_file`,
-`not_a_directory`, `worktree_not_found`, `conflict`, `too_large`, `internal`.
+`not_a_directory`, `worktree_not_found`, `session_not_found`, `conflict`,
+`too_large`, `internal`.
 Two more fields appear where they mean something: `limit` on `too_large`, and
 `written` on a partly-completed upload.
 
 What follows here is the contract and the two size limits that govern it. What
 the clients make of it is the rest of the story, in order:
+[Loading image bytes](#loading-image-bytes) for the viewer's images,
 [Downloading](#downloading) for the viewer's action, [Uploading](#uploading) for
 the Files tab and its queue,
 [Dropping files onto the tree](#dropping-files-onto-the-tree) for the desktop
@@ -293,6 +316,29 @@ yamux's per-stream windows do that on their own ([Transfer](#transfer)).
 | `404` | `not_found` | No such file |
 | `404` | `worktree_not_found` | Unknown `worktree` |
 | `500` | `internal` | Stat or open failed |
+
+**`GET /api/git/show/file`** — send one file as it stood in a commit.
+
+| Param | Required | Meaning |
+|-------|:--------:|---------|
+| `hash` | ✓ | Commit |
+| `path` | ✓ | Path relative to the repository root |
+| `worktree` | | Worktree name |
+
+The bytes `git.show.file` describes but does not carry for a raster image
+([git.md](git.md#historical-file-contents)): that version is not in the work
+directory, so the download endpoint cannot reach it. The headers are the
+download endpoint's, with a `Content-Length` and **no `Range`** — the content
+comes off a `git cat-file` pipe rather than a seekable file, and what reads it is
+an image fetched whole. git is stopped when the request is cancelled.
+
+| Status | Code | When |
+|--------|------|------|
+| `400` | `invalid_request` | Missing `hash` or `path`, or one malformed (refused before git runs) |
+| `400` | `not_a_file` | The path is a directory or a submodule in that commit |
+| `404` | `not_found` | The commit does not contain the path |
+| `404` | `worktree_not_found` | Unknown `worktree` |
+| `500` | `internal` | git failed |
 
 **`POST /api/files/upload`** — store files into one directory.
 
@@ -402,11 +448,38 @@ no `written`. A file uploaded and never sent stays until its session is deleted.
 | `400` | `invalid_request` | Missing `session_id`, not `multipart/form-data`, a body cut short, or no file parts |
 | `404` | `worktree_not_found` | Unknown `worktree` |
 | `404` | `session_not_found` | The worktree has no such session |
-| `413` | `too_large` | Over `filetransfer.MaxAttachmentSize`, **20 MiB** of file content per request, or a body more than 1 MiB past that in total; also sent ahead of time as `max_attachment_size` in the `auth` reply |
+| `413` | `too_large` | Over `attachments.MaxSize`, **20 MiB** of file content per request, or a body more than 1 MiB past that in total; also sent ahead of time as `max_attachment_size` in the `auth` reply |
 | `500` | `internal` | Reading the session or storing a file failed |
 
 The ceiling is lower than a workspace upload's because these are read whole —
 the id is the hash of the content — where a workspace upload streams to disk.
+It is the same constant that caps an image an agent's tool returned
+([code/agent-integration.md](code/agent-integration.md#content-blocks-and-attachments))
+and an image previewed from the workspace or a commit ([above](#operations)),
+so an image is shown up to one size whatever delivered it.
+
+**`GET /api/chat/attachments`** — send one stored attachment.
+
+| Param | Required | Meaning |
+|-------|:--------:|---------|
+| `session_id` | ✓ | The session holding it |
+| `id` | ✓ | Attachment id, as a chat event or `attachment.get` names it |
+| `worktree` | | Worktree name; the session must belong to it |
+
+The bytes `attachment.get` and `session_view.attachment` describe but do not
+carry for a raster image. Served exactly as the download endpoint serves a file,
+headers and `Range` included. The worktree may be one that has been deleted, as
+for `session_view.attachment`: its sessions stay readable, images included. The
+`id` passes `attachments.Resolve`, the check `attachment.get` applies too
+([why one check](code/agent-integration.md#reading-it-back)).
+
+| Status | Code | When |
+|--------|------|------|
+| `400` | `invalid_request` | Missing `session_id` or `id` |
+| `404` | `worktree_not_found` | A `worktree` that cannot be a worktree's name |
+| `404` | `session_not_found` | No such session stored under that worktree, including a worktree that never existed |
+| `404` | `not_found` | No such attachment, or an id that is not one |
+| `500` | `internal` | Reading the session or the attachment failed |
 
 ## Search behavior
 
@@ -570,11 +643,13 @@ else (`utils/fileView.ts`, priority order):
 | `binary` | `omitted: "binary"` | Placeholder card | Disabled |
 | `too-large` | `omitted: "too_large"` | Placeholder card naming `limit` | Disabled |
 | `empty` | `size` is 0 | "Empty file" card | **Enabled** |
-| `image` | `mime` starts `image/` | `<img>` with dimensions and size | Disabled, except SVG |
+| `image` | `encoding: "http"`, or SVG | `<img>` with dimensions and size | Disabled, except SVG |
 | `text` | anything else | Highlighted, or plain past the limit | Enabled |
 
-Whether something is an image is decided by `mime` alone; the client keeps no
-extension list of its own. Formats Go's sniffer cannot name — SVG, AVIF, HEIC,
+Whether something is an image is decided by what the server sent — a raster
+image as `http`, an SVG by its `mime` — and the client keeps no extension list
+of its own. Text typed as a raster image (the git-LFS pointer above) is shown
+as text. Formats Go's sniffer cannot name — SVG, AVIF, HEIC,
 TIFF — still display, because the server settled what they are before the
 response left, and a format added there needs no client change. SVG is the one
 image that arrives as `text`, and renders from a percent-encoded data URL; an
@@ -630,11 +705,58 @@ plain, which is how a reader gets at a rendered Markdown file's source and the
 copy button that comes with it, there being no Edit to open it in.
 See [git-ui.md](git-ui.md#viewing-a-file-from-a-commit).
 
+### Loading image bytes
+
+An `http` image's bytes are read from the endpoint matching the method that
+described it — `file.get` → `/api/files/download`, `git.show.file` →
+`/api/git/show/file`, `attachment.get` / `session_view.attachment` →
+`/api/chat/attachments` (`lib/imageFetch.ts`). The client keeps that origin
+beside the description (`ImageOrigin`) because the server sends no URL. Like a
+download, the read carries the bearer header, so it is a `fetch` turned into an
+object URL rather than an `<img src>` pointing at the endpoint; a `401` logs out.
+
+- **Typed from the description, never from the response.** The endpoint answers
+  `application/octet-stream`, so the Blob is retyped to the sniffed `mime` — and
+  only to a raster one. Anything else, SVG included, stays octet-stream, so even
+  a wrong description cannot produce a same-origin SVG object URL
+  ([why SVG matters](#operations)).
+- **Read when on screen.** `ImagePreview` and the chat's attachment thumbnails
+  hold the read (and a thumbnail its metadata RPC too) until the frame is in
+  view (`useInView`). A transcript can carry dozens of screenshots; reading the
+  ones nobody scrolled to would spend the connection for nothing.
+- **Four at a time, newest first.** Reads go through one limiter,
+  `IMAGE_FETCH_CONCURRENCY` = 4 (`utils/limiter.ts`). Through the relay every
+  request is a stream on one tunnel capped at 64, the WebSocket included
+  ([websocket-rpc-design.md](websocket-rpc-design.md#compression)), and a burst of
+  thumbnails must not leave nothing for the rest of the app. A few at a time
+  also brings pictures in one by one rather than all slowly together. The queue
+  is LIFO: what was asked for last is what the user is looking at now. A read
+  whose component unmounted while queued is dropped and never takes a slot; one
+  in flight is aborted.
+- **Cached beside the description.** A workspace file's Blob lives in
+  react-query under its description's key plus `"image"`
+  (`hooks/useImageSrc.ts`), so whatever invalidates or drops the description —
+  an FS-watch change, a worktree switch, a rename or delete — reaches the bytes
+  by prefix with nothing extra to keep in step. A commit's file and an
+  attachment never change, so their keys only have to tell one from another. A
+  thumbnail and its full-size preview share one entry, so the bytes are read
+  once; the object URL is made per component and revoked on unmount.
+- **Retry by status.** A `4xx` — an attachment cleaned up, a path the commit
+  lacks — would be refused the same way again, so the failure and a Retry
+  action show at once (a card on the preview, the chip on a thumbnail). A `5xx`
+  or a network failure (a relay tunnel reconnecting) is retried automatically
+  first. A decode failure is a separate card, as before.
+
+An image past the preview ceiling never gets here: it arrives as `too_large`
+and takes the `too-large` card like any other oversized file — with Download in
+the Files tab, without it on a commit's file (above).
+
 ### Downloading
 
 Download sits between Edit and Delete and is available in every state, from
 `GET /api/files/download` in all of them (`lib/fileDownload.ts`). Reusing the
-content already in hand for `text` and `image` would save a request, but it
+content already in hand for `text` (or the Blob cached for an image) would save
+a request, but it
 would mean two ways of producing a file and would trust `IsBinary`'s UTF-8 check
 to keep being the thing that decides which one runs: the day a non-UTF-8 file
 reached the `text` branch, the download would quietly save a corrupted copy.
