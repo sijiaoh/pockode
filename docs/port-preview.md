@@ -10,7 +10,7 @@ This document is what a preview looks like from the outside: the address, loggin
 https://<subdomain>-<port>.<relay server>
 ```
 
-It is the app's own relay address with `-<port>` added to the first label: the app at `https://abc123.cloud.pockode.com` previews port 5173 at `https://abc123-5173.cloud.pockode.com`. A client learns the app's address from `remote_url` in the `auth` reply ([websocket-rpc.md](code/websocket-rpc.md)), which is empty when the relay is disabled — and with it, previews.
+It is the app's own relay address with `-<port>` added to the first label: the app at `https://abc123.cloud.pockode.com` previews port 5173 at `https://abc123-5173.cloud.pockode.com`. A client learns the app's address from `remote_url` in the `auth` reply ([websocket-rpc.md](code/websocket-rpc.md)), which is empty when the relay is disabled or has stopped — and with it, previews.
 
 The port is written plainly: `-5173`, not `-05173`. Any port from 1 to 65535 can be previewed; there is no allowlist, since the tunnel and everything listening on the machine are the user's own. Only `localhost:<port>` is ever dialed, so a preview cannot reach another machine on the PC's network.
 

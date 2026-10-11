@@ -59,8 +59,8 @@ what a user does with them is [cross-worktree-session-ui.md](../cross-worktree-s
 `port_preview.ticket` takes no params and answers `{ ticket }`: a one-time
 ticket that logs a [port preview](relay-system.md#logging-in) tab in without
 the password. It is refused with `CodeInvalidRequest` when the relay is
-disabled — the same signal as an empty `remote_url` in the `auth` reply — since
-previews do not exist then.
+disabled or has stopped — the same signal as an empty `remote_url` in the
+`auth` reply — since previews do not exist then.
 
 ### Frontend Implementation Pattern
 
@@ -419,8 +419,10 @@ Client                              Server
   the same thing for chat attachments (`POST /api/chat/attachments`), which have
   a lower one of their own ([File § Transfer](../file.md#transfer)).
 - `remote_url` is the address the server is reachable at through the relay, such
-  as `https://abc123.cloud.pockode.com`, and empty when the relay is disabled. A
-  client cannot derive it from its own location, which is `localhost` on a local
+  as `https://abc123.cloud.pockode.com`, and empty when the relay is disabled or
+  has stopped for good. It is current as of the reply and can change mid-run
+  ([relay-system.md](relay-system.md#when-the-remote-url-changes)). A client
+  cannot derive it from its own location, which is `localhost` on a local
   connection.
 
 For where the server's password comes from (`--password` / `POCKODE_PASSWORD`), how a session token is issued and expired, and the overall trust model, see [Authentication](authentication.md).
