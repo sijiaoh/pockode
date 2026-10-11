@@ -75,6 +75,31 @@ describe("fetchFileBlob", () => {
 		);
 	});
 
+	// A commit's content never changes, so its endpoint's one whole answer to
+	// the first range is a single version, not something to splice.
+	it("reads a commit's version from the commit endpoint, whole", async () => {
+		vi.mocked(fetch).mockResolvedValueOnce(
+			new Response("old bytes", { status: 200 }),
+		);
+
+		const blob = await fetchFileBlob({
+			path: "src/app.ts",
+			worktree: "feature",
+			hash: "abc123",
+		});
+
+		expect(await blob.text()).toBe("old bytes");
+		expect(fetch).toHaveBeenCalledTimes(1);
+		const url = new URL(String(vi.mocked(fetch).mock.calls[0][0]));
+		expect(url.pathname).toBe("/api/git/show/file");
+		expect(Object.fromEntries(url.searchParams)).toEqual({
+			hash: "abc123",
+			path: "src/app.ts",
+			worktree: "feature",
+		});
+		expect(requestHeaders(0).get("Authorization")).toBe("Bearer test-token");
+	});
+
 	it("assembles a file larger than one chunk from ranged requests", async () => {
 		const total = DOWNLOAD_CHUNK_SIZE + 3;
 		const head = "a".repeat(DOWNLOAD_CHUNK_SIZE);

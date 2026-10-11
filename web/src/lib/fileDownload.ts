@@ -9,6 +9,10 @@ import { apiUrl, authHeaders, logoutIfUnauthorized } from "./api";
  * It does not bound what the download holds: the chunks already collected are
  * kept until the file is whole, which is LARGE_DOWNLOAD_WARNING_SIZE's problem,
  * not this one's. One extra round trip per 4 MiB is what it costs.
+ *
+ * A commit's file is the exception: its endpoint reads a git pipe it cannot
+ * seek, so it ignores the range and answers whole (the `200` case in
+ * `fetchFileBlob`).
  */
 export const DOWNLOAD_CHUNK_SIZE = 4 * 1024 * 1024;
 
@@ -51,6 +55,17 @@ export function downloadUrl(path: string, worktree: string): string {
 	const params = new URLSearchParams({ path });
 	if (worktree) params.set("worktree", worktree);
 	return apiUrl(`/api/files/download?${params.toString()}`);
+}
+
+/** Where a file's bytes are read from as commit `hash` left it. */
+export function commitFileUrl(
+	hash: string,
+	path: string,
+	worktree: string,
+): string {
+	const params = new URLSearchParams({ hash, path });
+	if (worktree) params.set("worktree", worktree);
+	return apiUrl(`/api/git/show/file?${params.toString()}`);
 }
 
 /**
@@ -124,11 +139,17 @@ export interface DownloadRequest {
 	path: string;
 	/** Worktree name; empty for the main one. */
 	worktree: string;
+	/**
+	 * The commit to read `path` from, which makes `path` relative to the
+	 * repository root. Absent for the file in the work directory.
+	 */
+	hash?: string;
 	signal?: AbortSignal;
 }
 
 /**
- * Reads a workspace file into a Blob, one `Range` request at a time.
+ * Reads a file into a Blob, one `Range` request at a time where the endpoint
+ * honours them.
  *
  * The endpoint is behind the auth middleware, so a bare `<a href download>`
  * cannot reach it — the bytes have to come through `fetch` and be handed to the
@@ -137,9 +158,12 @@ export interface DownloadRequest {
 export async function fetchFileBlob({
 	path,
 	worktree,
+	hash,
 	signal,
 }: DownloadRequest): Promise<Blob> {
-	const url = downloadUrl(path, worktree);
+	const url = hash
+		? commitFileUrl(hash, path, worktree)
+		: downloadUrl(path, worktree);
 	const chunks: Blob[] = [];
 	let offset = 0;
 	let total: number | null = null;
@@ -164,10 +188,11 @@ export async function fetchFileBlob({
 		if (response.status === 412) throw new Error(CHANGED_MID_DOWNLOAD);
 
 		if (response.status === 200) {
-			// No partial content: an empty file, which no range can overlap, or
-			// something between here and the handler that dropped the `Range`
-			// header. Either way this body is one whole, self-consistent file, so
-			// it replaces anything collected so far rather than extending it.
+			// No partial content: an empty file, which no range can overlap, a
+			// commit's file (see DOWNLOAD_CHUNK_SIZE), or something between here
+			// and the handler that dropped the `Range` header. In every case this
+			// body is one whole, self-consistent file, so it replaces anything
+			// collected so far rather than extending it.
 			return await response.blob();
 		}
 
@@ -243,7 +268,7 @@ export function saveBlob(blob: Blob, fileName: string): void {
 	setTimeout(() => URL.revokeObjectURL(url), OBJECT_URL_LIFETIME_MS);
 }
 
-/** Downloads a workspace file and saves it under its workspace name. */
+/** Downloads a file and saves it under the last segment of its path. */
 export async function downloadFile(request: DownloadRequest): Promise<void> {
 	const blob = await fetchFileBlob(request);
 	// Aborting a fetch that has already settled does nothing, so the last chunk

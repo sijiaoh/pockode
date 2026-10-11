@@ -6,7 +6,14 @@ import { HIGHLIGHT_LIMIT } from "../../utils/fileView";
 import CommitFileView from "./CommitFileView";
 
 const navigate = vi.fn();
+const downloadFile = vi.fn();
 let file: FileContent;
+
+// Only the transfer itself is replaced; what it is asked for is the contract.
+vi.mock("../../lib/fileDownload", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../../lib/fileDownload")>()),
+	downloadFile: (...args: unknown[]) => downloadFile(...args),
+}));
 
 vi.mock("@tanstack/react-router", () => ({
 	useNavigate: () => navigate,
@@ -50,6 +57,8 @@ vi.mock("../ui/MarkdownContent", () => ({
 
 beforeEach(() => {
 	navigate.mockClear();
+	downloadFile.mockReset();
+	downloadFile.mockResolvedValue(undefined);
 	file = {
 		name: "readme.md",
 		type: "file",
@@ -72,6 +81,18 @@ const binaryFile: FileContent = {
 	content: "",
 	encoding: "none",
 	omitted: "binary",
+};
+
+const tooLargeFile: FileContent = {
+	name: "readme.md",
+	type: "file",
+	path: "docs/readme.md",
+	size: 3 * 1024 * 1024,
+	mime: "text/markdown; charset=utf-8",
+	content: "",
+	encoding: "none",
+	omitted: "too_large",
+	limit: 2 * 1024 * 1024,
 };
 
 function renderView() {
@@ -110,14 +131,45 @@ describe("CommitFileView", () => {
 		expect(screen.queryByRole("button", { name: /^Open/ })).toBeNull();
 	});
 
-	// The download affordance lives on the stand-in cards, so only a file that
-	// cannot be previewed can show its absence.
-	it("does not offer to download a binary version it cannot preview", () => {
-		file = binaryFile;
+	// Past its preview limit, or when it is binary, the card is all there is of
+	// the file, so the card is where getting it has to be.
+	it.each([
+		["too large to preview", tooLargeFile],
+		["binary", binaryFile],
+	])("downloads this version of a file that is %s", async (_kind, version) => {
+		const user = userEvent.setup();
+		file = version;
 		renderView();
 
-		expect(screen.getByText("Binary file")).toBeInTheDocument();
-		expect(screen.queryByRole("button", { name: /download/i })).toBeNull();
+		// The bottom bar's icon carries the same name only as `aria-label`, so the
+		// one with visible text is the card's.
+		await user.click(screen.getByText("Download"));
+
+		expect(downloadFile).toHaveBeenCalledWith(
+			expect.objectContaining({
+				hash: "abc1234def",
+				path: "docs/readme.md",
+				worktree: "",
+			}),
+		);
+	});
+
+	it("reports a failed download, and only for the version it was about", async () => {
+		const user = userEvent.setup();
+		downloadFile.mockRejectedValue(new Error("File not found"));
+		file = tooLargeFile;
+		const { rerender } = renderView();
+
+		await user.click(screen.getByText("Download"));
+		expect(
+			await screen.findByText("Download failed: File not found"),
+		).toBeInTheDocument();
+
+		// The view is reused across commits, so a banner about one version would
+		// otherwise sit above another.
+		rerender(<CommitFileView hash="fedcba9876" path="docs/readme.md" />);
+
+		expect(screen.queryByText(/Download failed/)).toBeNull();
 	});
 
 	// The stand-in cards explain why editing is disabled, which is written for

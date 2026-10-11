@@ -35,6 +35,7 @@ served through it; it is addressed by id in the session's own attachment store
 | Search UI state | `web/src/hooks/useFileSearch.ts`, `web/src/lib/filesSearchStore.ts` | Debounce + query cache, persisted options |
 | RPC actions | `web/src/lib/rpc/file.ts` | `getFile`, `writeFile`, `createFile`, `deleteFile`, `renameFile`, `searchFiles`, `isAlreadyExistsError` |
 | HTTP transfer client | `web/src/lib/fileDownload.ts`, `web/src/lib/fileUpload.ts` | Authenticated download / upload (see [Downloading](#downloading), [Uploading](#uploading)) |
+| Download action | `web/src/hooks/useFileDownload.ts`, `web/src/components/Files/FileDownloadControls.tsx` | The viewer's Download — cancel, large-file confirmation, error — shared by `FileView` and `CommitFileView` |
 | Upload queue state | `web/src/lib/uploadStore.ts` | Queue, concurrency, retry, worktree scope |
 | Drag and drop | `web/src/hooks/useFileDragZone.ts`, `web/src/components/Files/useFileDrop.ts`, `web/src/hooks/useFileDropGuard.ts` | What every drop zone shares (file detection, the depth count, folder splitting, claiming the drag); the tree's drop target resolution on top of it; the window-level drop backstop |
 
@@ -325,12 +326,17 @@ yamux's per-stream windows do that on their own ([Transfer](#transfer)).
 | `path` | ✓ | Path relative to the repository root |
 | `worktree` | | Worktree name |
 
-The bytes `git.show.file` describes but does not carry for a raster image
-([git.md](git.md#historical-file-contents)): that version is not in the work
-directory, so the download endpoint cannot reach it. The headers are the
+That version is not in the work directory, so the download endpoint cannot
+reach it; this one serves it instead, for two readers: the bytes
+`git.show.file` describes but does not carry for a raster image
+([git.md](git.md#historical-file-contents)), and the whole file when the user
+downloads it from a commit ([Downloading](#downloading)). The headers are the
 download endpoint's, with a `Content-Length` and **no `Range`** — the content
-comes off a `git cat-file` pipe rather than a seekable file, and what reads it is
-an image fetched whole. git is stopped when the request is cancelled.
+comes off a `git cat-file` pipe rather than a seekable file, so answering a
+range would mean running git again for every chunk and discarding everything
+before it. A commit's file is therefore always one unbounded response, without
+the bounded pieces the download endpoint gives. git is stopped when the request
+is cancelled.
 
 | Status | Code | When |
 |--------|------|------|
@@ -696,10 +702,10 @@ re-read, re-encode and re-send the whole file — see
 [code/websocket-rpc.md](code/websocket-rpc.md#request-timeout).
 
 A file as it stood in a commit reuses this same `FileViewState` and `FileBody`,
-so a historical binary or oversized blob is described by the same card — less
-the two things on it that only make sense beside controls that screen does not
-have: the download button, and the footnote naming why Edit is disabled. That
-screen's bottom bar tells the same story — no write action, no download — and
+so a historical binary or oversized blob is described by the same card,
+Download included — less the footnote naming why Edit is disabled, which only
+makes sense beside an Edit button that screen does not have. That screen's
+bottom bar tells the same story — no write action, but Download as here — and
 adds one control the viewer above does not have: a toggle that drops text to
 plain, which is how a reader gets at a rendered Markdown file's source and the
 copy button that comes with it, there being no Edit to open it in.
@@ -748,8 +754,8 @@ object URL rather than an `<img src>` pointing at the endpoint; a `401` logs out
   first. A decode failure is a separate card, as before.
 
 An image past the preview ceiling never gets here: it arrives as `too_large`
-and takes the `too-large` card like any other oversized file — with Download in
-the Files tab, without it on a commit's file (above).
+and takes the `too-large` card like any other oversized file, Download
+included.
 
 ### Downloading
 
@@ -763,6 +769,11 @@ reached the `text` branch, the download would quietly save a corrupted copy.
 There is no size limit on the endpoint and it streams from disk, so one path to
 the real bytes costs little and cannot go wrong that way.
 
+A file as it stood in a commit downloads the same way — the same card action,
+bottom-bar icon, cancel, confirmation and banner, shared through
+`hooks/useFileDownload.ts` — and by the same rule, from its own endpoint,
+`GET /api/git/show/file`, rather than from the content `git.show.file` returned.
+
 `binary` and `too-large` also carry the action on their placeholder card. Those
 are the files that cannot be previewed at all, which makes them the ones most
 likely to be wanted elsewhere, and a bare icon in the bottom bar is easy to miss
@@ -774,9 +785,12 @@ handed to the browser as an object URL. A `401` ends the session rather than the
 download — the credential every other request carries has just been refused —
 so it logs out instead of showing a banner naming a status code.
 
-**Reads are always chunked**, 4 MiB per `Range` request. What it buys now is a
-bound on memory — the assembly holds one chunk at a time rather than a whole
-file of unknown size — and a transfer that can be abandoned partway. It began as
+**Reads are chunked**, 4 MiB per `Range` request — except a commit's file,
+whose endpoint has no `Range` ([Transfer](#transfer)) and answers with the
+`200` described below. What chunking buys now is a
+bound on every response — none carries more than 4 MiB, though the chunks
+collected are kept until the file is whole (hence the confirmation past
+200 MiB below) — and a transfer that can be abandoned partway. It began as
 a workaround for the old relay transport, which read an unchunked response into
 memory whole; that reason is gone, but one extra round trip per 4 MiB is a low
 price for the two that remain.

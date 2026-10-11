@@ -2,7 +2,7 @@ import type { ImageOrigin } from "../types/contents";
 import { getMimeType, isImageMime } from "../utils/fileView";
 import { createLimiter } from "../utils/limiter";
 import { apiUrl, authHeaders } from "./api";
-import { downloadUrl, readError } from "./fileDownload";
+import { commitFileUrl, downloadUrl, readError } from "./fileDownload";
 import { worktreeActions } from "./worktreeStore";
 
 /**
@@ -49,10 +49,11 @@ export function imageUrl(origin: ImageOrigin): string {
 		case "file":
 			return downloadUrl(origin.path, worktreeActions.getCurrent());
 		case "commit":
-			return endpoint("/api/git/show/file", {
-				hash: origin.hash,
-				path: origin.path,
-			});
+			return commitFileUrl(
+				origin.hash,
+				origin.path,
+				worktreeActions.getCurrent(),
+			);
 		case "attachment":
 			return endpoint(
 				"/api/chat/attachments",
@@ -65,7 +66,7 @@ export function imageUrl(origin: ImageOrigin): string {
 function endpoint(
 	path: string,
 	params: Record<string, string>,
-	worktree = worktreeActions.getCurrent(),
+	worktree: string,
 ): string {
 	const query = new URLSearchParams(params);
 	if (worktree) query.set("worktree", worktree);

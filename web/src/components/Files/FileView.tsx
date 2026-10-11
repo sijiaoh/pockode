@@ -1,23 +1,18 @@
 import { ConfirmDialog } from "@pockode/shared";
 import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
-import { Download, Loader2, Pencil, PencilLine, Trash2 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Loader2, Pencil, PencilLine, Trash2 } from "lucide-react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { contentsQueryKey, useContents } from "../../hooks/useContents";
+import { useFileDownload } from "../../hooks/useFileDownload";
 import { useFSWatch } from "../../hooks/useFSWatch";
 import { useCurrentWorktree, useRouteState } from "../../hooks/useRouteState";
 import { useTakenNames } from "../../hooks/useTakenNames";
-import { isAbortError } from "../../lib/api";
 import { applyEntryGone } from "../../lib/fileCache";
-import {
-	downloadFile,
-	LARGE_DOWNLOAD_WARNING_SIZE,
-} from "../../lib/fileDownload";
 import { overlayToNavigation } from "../../lib/navigation";
 import { isAlreadyExistsError } from "../../lib/rpc/file";
 import { useWSStore } from "../../lib/wsStore";
 import { isFileContent } from "../../types/contents";
-import { formatBytes } from "../../utils/bytes";
 import {
 	canEditFileView,
 	getEditLabel,
@@ -28,6 +23,7 @@ import { FilePageHeader } from "../Layout/PageHeader";
 import { BottomActionBar, ContentView, getActionIconButtonClass } from "../ui";
 import EntryNameDialog from "./EntryNameDialog";
 import FileBody from "./FileBody";
+import { DownloadButton, LargeDownloadDialog } from "./FileDownloadControls";
 
 interface Props {
 	path: string;
@@ -50,12 +46,9 @@ function FileView({ path, onBack }: Props) {
 	const [isRenaming, setIsRenaming] = useState(false);
 	const [renameError, setRenameError] = useState<string | null>(null);
 	const [isDeleting, setIsDeleting] = useState(false);
-	const [showSizeConfirm, setShowSizeConfirm] = useState(false);
-	const [isDownloading, setIsDownloading] = useState(false);
 	// One banner for every file-level action: two stacked error bars would read
 	// as two separate failures.
 	const [actionError, setActionError] = useState<string | null>(null);
-	const downloadAbort = useRef<AbortController | null>(null);
 	// Only fetched while the sheet is open: the folder around a file opened from
 	// search or a chat link has never been listed here.
 	const takenNames = useTakenNames(showRename ? parentDir(path) : null);
@@ -65,6 +58,12 @@ function FileView({ path, onBack }: Props) {
 		() => (file ? getFileViewState(file, { kind: "file", path }) : null),
 		[file, path],
 	);
+	const download = useFileDownload({
+		path,
+		worktree,
+		size: file?.size,
+		onError: setActionError,
+	});
 
 	const navigateToEdit = useCallback(() => {
 		navigate(
@@ -145,58 +144,16 @@ function FileView({ path, onBack }: Props) {
 		}
 	}, [deleteFile, path, queryClient, onBack]);
 
-	const startDownload = useCallback(async () => {
-		const controller = new AbortController();
-		downloadAbort.current = controller;
-		setIsDownloading(true);
-		setActionError(null);
-		try {
-			await downloadFile({ path, worktree, signal: controller.signal });
-		} catch (err) {
-			// A cancellation is the user's own doing and needs no report.
-			if (!isAbortError(err)) {
-				const message = err instanceof Error ? err.message : String(err);
-				setActionError(`Download failed: ${message}`);
-			}
-		} finally {
-			// Only if it is still this download's: a controller belonging to a
-			// newer one must stay reachable, or it could never be cancelled.
-			if (downloadAbort.current === controller) downloadAbort.current = null;
-			setIsDownloading(false);
-		}
-	}, [path, worktree]);
-
-	const handleDownloadClick = useCallback(() => {
-		if (isDownloading) {
-			downloadAbort.current?.abort();
-			return;
-		}
-		// The whole file is assembled in memory before the browser takes it, so a
-		// very large one is worth a word before the tab is on the hook for it.
-		if (file && file.size > LARGE_DOWNLOAD_WARNING_SIZE) {
-			setActionError(null);
-			setShowSizeConfirm(true);
-			return;
-		}
-		startDownload();
-	}, [isDownloading, file, startDownload]);
-
 	// The view is reused across paths (`ChatPanel` renders it with no key), so
 	// everything the action bar holds has to be dropped when the file changes:
-	// otherwise "File not found" from a.zip sits above b.txt, a confirmation
-	// quoting one file's size confirms another's, and the spinner keeps turning
-	// for a transfer that belonged to the previous file.
+	// otherwise "File not found" from a.zip sits above b.txt. The download
+	// drops its own (`useFileDownload`).
 	// biome-ignore lint/correctness/useExhaustiveDependencies: the setters are stable; path and worktree are the trigger, not values the body reads
 	useEffect(() => {
 		setActionError(null);
-		setShowSizeConfirm(false);
 		setShowDeleteConfirm(false);
 		setShowRename(false);
 		setRenameError(null);
-		setIsDownloading(false);
-		// Nor should a transfer keep running for a page nobody is looking at, or
-		// save the file the user has just navigated away from.
-		return () => downloadAbort.current?.abort();
 	}, [path, worktree]);
 
 	useFSWatch({
@@ -211,7 +168,6 @@ function FileView({ path, onBack }: Props) {
 	// failed to load there is nothing to act on at all.
 	const canEdit = state !== null && canEditFileView(state);
 	const { fileName } = splitPath(path);
-	const downloadLabel = isDownloading ? "Cancel download" : "Download";
 
 	return (
 		<div className="flex flex-1 flex-col overflow-hidden">
@@ -230,8 +186,8 @@ function FileView({ path, onBack }: Props) {
 						state={state}
 						path={path}
 						downloadAction={{
-							label: downloadLabel,
-							onClick: handleDownloadClick,
+							label: download.label,
+							onClick: download.toggle,
 							// Matches the bottom bar's button: two entry points for one
 							// action must not disagree about when it is available.
 							disabled: isDeleting,
@@ -269,20 +225,7 @@ function FileView({ path, onBack }: Props) {
 						>
 							<PencilLine className="h-4 w-4" aria-hidden="true" />
 						</button>
-						<button
-							type="button"
-							onClick={handleDownloadClick}
-							disabled={isDeleting}
-							className={getActionIconButtonClass(!isDeleting)}
-							aria-label={downloadLabel}
-							title={downloadLabel}
-						>
-							{isDownloading ? (
-								<Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
-							) : (
-								<Download className="h-4 w-4" aria-hidden="true" />
-							)}
-						</button>
+						<DownloadButton download={download} disabled={isDeleting} />
 						{/* Last on purpose: the destructive action is the one a thumb
 						    should not reach by accident on a small screen. */}
 						<button
@@ -324,18 +267,7 @@ function FileView({ path, onBack }: Props) {
 					onCancel={() => setShowDeleteConfirm(false)}
 				/>
 			)}
-			{showSizeConfirm && file && (
-				<ConfirmDialog
-					title="Download this file?"
-					message={`This file is ${formatBytes(file.size)}. Your browser holds the whole file until the download finishes — you get nothing if it is interrupted.`}
-					confirmLabel="Download"
-					onConfirm={() => {
-						setShowSizeConfirm(false);
-						startDownload();
-					}}
-					onCancel={() => setShowSizeConfirm(false)}
-				/>
-			)}
+			{file && <LargeDownloadDialog download={download} size={file.size} />}
 		</div>
 	);
 }
