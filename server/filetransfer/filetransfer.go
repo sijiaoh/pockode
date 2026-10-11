@@ -31,13 +31,14 @@ import (
 )
 
 // MaxUploadSize caps one upload request, counting the content of every file in
-// it. Uploads land on the caller's disk and are read into no buffer larger than
-// a copy window, so the ceiling is about bounding what a single request can
-// cost — disk, and the time the connection is held — not about memory.
+// it. Uploads stream to the caller's disk through no buffer larger than a copy
+// window, so memory gives no reason for a ceiling. This one only catches a huge
+// file picked by mistake: it sits well above everyday files — a phone video, a
+// screen recording, an archive — which a user picks on purpose.
 //
 // It holds for a client on the relay as much as for one on this machine: the
 // tunnel carries a request as a stream and imposes no size of its own.
-const MaxUploadSize = 32 << 20 // 32 MiB
+const MaxUploadSize = 1 << 30 // 1 GiB
 
 // Error codes returned in the JSON error body, so a client can react to the
 // cause without parsing the message.
@@ -63,7 +64,7 @@ type Handler struct {
 	resolver WorkDirResolver
 	log      *slog.Logger
 	// maxUpload is MaxUploadSize outside tests, which lower it rather than
-	// pushing 32 MiB through a request to see the limit refuse it.
+	// pushing 1 GiB through a request to see the limit refuse it.
 	maxUpload int64
 }
 
@@ -416,10 +417,13 @@ func (h *Handler) writeError(w http.ResponseWriter, err *apiError, written []Upl
 }
 
 // formatSize names a byte count the way the limit is written down, so a message
-// about it reads like the documentation. Whole MiB only: a limit lowered below
-// one (as tests do) would otherwise be reported as "0 MiB".
+// about it reads like the documentation. Whole units only: a limit lowered
+// below one MiB (as tests do) would otherwise be reported as "0 MiB".
 func formatSize(bytes int64) string {
-	const mib = 1 << 20
+	const mib, gib = 1 << 20, 1 << 30
+	if bytes >= gib && bytes%gib == 0 {
+		return fmt.Sprintf("%d GiB", bytes/gib)
+	}
 	if bytes >= mib && bytes%mib == 0 {
 		return fmt.Sprintf("%d MiB", bytes/mib)
 	}

@@ -193,12 +193,12 @@ describe("uploadFile", () => {
 		const done = uploadFile(request());
 		only().respond(
 			413,
-			errorBody("too_large", "over the limit", { limit: 33554432 }),
+			errorBody("too_large", "over the limit", { limit: 1073741824 }),
 		);
 
 		const error = await done.catch((e: unknown) => e);
 		expect(error).toMatchObject({
-			message: "Too large (max 32 MB)",
+			message: "Too large (max 1 GB)",
 			canRetry: false,
 		});
 	});
