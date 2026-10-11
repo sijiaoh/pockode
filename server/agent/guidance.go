@@ -41,8 +41,7 @@ const askingGuidance = "Asking the user something in Pockode:\n\n" +
 	"Tell the user which environment variable or file to set instead."
 
 // renderingGuidance: that html_render exists for what Markdown carries badly,
-// and that it is not a replacement for Markdown or for the reply.
+// and that the reply does not repeat what it showed.
 const renderingGuidance = "Showing the user something in Pockode:\n\n" +
 	"- When a comparison, a chart or a structured report is shown better by something richer than Markdown, show it with the html_render tool; load it through your tool search first if you only have its name.\n" +
-	"- Keep plain prose and code in Markdown.\n" +
 	"- Do not repeat or summarize in your reply what you rendered: the user already sees it."

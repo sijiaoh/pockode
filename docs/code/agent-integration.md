@@ -1152,14 +1152,16 @@ agent that never loaded `html_render` has no idea it can show the user a page â€
 so the guidance carries a second section, "Showing the user something in
 Pockode", with what has to be known before that tool is loaded: reach for
 `html_render` (loading it through tool search first) when a comparison, a chart
-or a structured report is shown better by something richer than Markdown; keep
-plain prose and code in Markdown; and do not repeat or summarize in the reply
-what was rendered, since the user already sees it. The tool's description
-says again what it is for and not to repeat the page, and its success reply
-repeats the latter at the moment it applies; what the page may contain and how
-big it may be are in the description alone
-([work-system.md](work-system.md#rendering-tool)). The two sections
-are separate constants joined into one text, so a test of either checks that
+or a structured report is shown better by something richer than Markdown, and
+do not repeat or summarize in the reply what was rendered, since the user
+already sees it. The reply's own format is left to the agent and its CLI:
+Pockode says when a page is worth rendering and what the reply should then
+leave out, never how to write the reply. The tool's description says again
+what it is for and not to repeat the page, and its success reply repeats the
+latter at the moment it applies; what the page may contain and how big it may
+be are in the description alone
+([work-system.md](work-system.md#rendering-tool)). The two sections are
+separate constants joined into one text, so a test of either checks that
 section's own words and cannot be satisfied by the other.
 
 The guidance has one source and reaches each CLI through the channel that CLI
