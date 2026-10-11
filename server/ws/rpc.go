@@ -53,7 +53,7 @@ type RPCHandler struct {
 	passwordGuard        *authguard.Guard
 	sessions             SessionStore
 	version              string
-	remoteURL            string
+	remoteURL            func() string // live: renewing the relay credentials can change it
 	previewTickets       PreviewTickets
 	devMode              bool
 	commandStore         *command.Store
@@ -73,7 +73,7 @@ type RPCHandler struct {
 	cliUpdateWatcher     *watch.CLIUpdateWatcher
 }
 
-func NewRPCHandler(password string, passwordGuard *authguard.Guard, sessions SessionStore, version, remoteURL string, previewTickets PreviewTickets, devMode bool, commandStore *command.Store, worktreeManager *worktree.Manager, settingsStore *settings.Store, workStore work.Store, workOps *work.Operations, workEngine *work.Engine, agentRoleStore agentrole.Store, cliAuth *cliauth.Service, cliUpdate *cliupdate.Service) *RPCHandler {
+func NewRPCHandler(password string, passwordGuard *authguard.Guard, sessions SessionStore, version string, remoteURL func() string, previewTickets PreviewTickets, devMode bool, commandStore *command.Store, worktreeManager *worktree.Manager, settingsStore *settings.Store, workStore work.Store, workOps *work.Operations, workEngine *work.Engine, agentRoleStore agentrole.Store, cliAuth *cliauth.Service, cliUpdate *cliupdate.Service) *RPCHandler {
 	settingsWatcher := watch.NewSettingsWatcher(settingsStore)
 	settingsWatcher.Start()
 
@@ -803,7 +803,7 @@ func (h *rpcMethodHandler) handleAuth(ctx context.Context, conn *jsonrpc2.Conn, 
 		Title:             title,
 		WorkDir:           wt.WorkDir,
 		WorktreeName:      wt.Name,
-		RemoteURL:         h.remoteURL,
+		RemoteURL:         h.remoteURL(),
 		MaxUploadSize:     filetransfer.MaxUploadSize,
 		MaxAttachmentSize: attachments.MaxSize,
 		SessionToken:      sessionToken,

@@ -2,8 +2,11 @@ package relay
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -119,6 +122,150 @@ func TestUplinkDialOptionsNegotiateContextTakeover(t *testing.T) {
 	}
 	if strings.Contains(got, "no_context_takeover") {
 		t.Errorf("Sec-WebSocket-Extensions = %q, want context takeover in both directions", got)
+	}
+}
+
+// The reconnect loop renews credentials only on ErrInvalidToken, so a 401 must
+// come back as one and any other refusal must not.
+func TestDialUplinkReportsOnlyARejectedTokenAsInvalid(t *testing.T) {
+	tests := []struct {
+		status      int
+		wantInvalid bool
+	}{
+		{http.StatusUnauthorized, true},
+		{http.StatusServiceUnavailable, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(http.StatusText(tt.status), func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(tt.status)
+			}))
+			defer server.Close()
+
+			conn, err := newTestManager(5*time.Second).dialUplink(context.Background(), "ws"+strings.TrimPrefix(server.URL, "http"), "token")
+			if err == nil {
+				conn.CloseNow()
+				t.Fatal("dial succeeded, want an error")
+			}
+			if got := errors.Is(err, ErrInvalidToken); got != tt.wantInvalid {
+				t.Errorf("errors.Is(%v, ErrInvalidToken) = %v, want %v", err, got, tt.wantInvalid)
+			}
+		})
+	}
+}
+
+// Renewal makes the check startup makes. A token the cloud has lost track of is
+// replaced by a new registration; one it still confirms is kept, since
+// registering anew would move the server to a new subdomain for nothing. Only
+// a URL that actually moved is reported as a change, and a cloud that demands
+// a newer client leaves no URL at all: the rejected one is dead.
+func TestRenewCredentials(t *testing.T) {
+	stale := StoredConfig{Subdomain: "kept", RelayToken: "old-token", RelayServer: "cloud.pockode.com"}
+	registered := StoredConfig{Subdomain: "fresh", RelayToken: "new-token", RelayServer: "cloud.pockode.com"}
+
+	tests := []struct {
+		name           string
+		refreshStatus  int
+		registerStatus int           // 0: registering is not expected
+		want           *StoredConfig // nil: renewal fails with wantErr
+		wantErr        error
+		wantChanges    []string
+	}{
+		{
+			name:           "invalid token re-registers",
+			refreshStatus:  http.StatusUnauthorized,
+			registerStatus: http.StatusCreated,
+			want:           &registered,
+			wantChanges:    []string{buildRemoteURL(&registered)},
+		},
+		{
+			name:          "confirmed token is kept",
+			refreshStatus: http.StatusOK,
+			want:          &stale,
+		},
+		{
+			name:           "refused registration ends remote access",
+			refreshStatus:  http.StatusUnauthorized,
+			registerStatus: http.StatusForbidden,
+			wantErr:        ErrUpgradeRequired,
+			wantChanges:    []string{""},
+		},
+		{
+			name:          "refused refresh ends remote access",
+			refreshStatus: http.StatusForbidden,
+			wantErr:       ErrUpgradeRequired,
+			wantChanges:   []string{""},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cloud := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch {
+				case r.URL.Path == "/api/relay/refresh" && tt.refreshStatus == http.StatusOK:
+					json.NewEncoder(w).Encode(stale)
+				case r.URL.Path == "/api/relay/refresh":
+					w.WriteHeader(tt.refreshStatus)
+				case r.URL.Path == "/api/relay/register" && tt.registerStatus == http.StatusCreated:
+					w.WriteHeader(http.StatusCreated)
+					json.NewEncoder(w).Encode(registered)
+				case r.URL.Path == "/api/relay/register" && tt.registerStatus != 0:
+					w.WriteHeader(tt.registerStatus)
+				default:
+					t.Errorf("unexpected request to %s", r.URL.Path)
+					w.WriteHeader(http.StatusInternalServerError)
+				}
+			}))
+			defer cloud.Close()
+
+			dataDir := t.TempDir()
+			if err := NewStore(dataDir).Save(&stale); err != nil {
+				t.Fatalf("save: %v", err)
+			}
+			var m *Manager
+			var changes []string
+			cfg := Config{
+				CloudURL: cloud.URL,
+				DataDir:  dataDir,
+				OnRemoteURLChange: func(url string) {
+					// Consumers read the URL back rather than keep the argument,
+					// so it has to be in place before they are told.
+					if got := m.RemoteURL(); got != url {
+						t.Errorf("RemoteURL() during OnRemoteURLChange = %q, want %q", got, url)
+					}
+					changes = append(changes, url)
+				},
+			}
+			m = NewManager(cfg, 0, 0, testLogger())
+			m.setRemoteURL(buildRemoteURL(&stale))
+
+			got, err := m.renewCredentials(context.Background())
+			if !errors.Is(err, tt.wantErr) {
+				t.Fatalf("renewCredentials error = %v, want %v", err, tt.wantErr)
+			}
+
+			wantURL := ""
+			if tt.want != nil {
+				wantURL = buildRemoteURL(tt.want)
+				if *got != *tt.want {
+					t.Errorf("renewed config = %+v, want %+v", *got, *tt.want)
+				}
+				saved, err := NewStore(dataDir).Load()
+				if err != nil {
+					t.Fatalf("load: %v", err)
+				}
+				if *saved != *tt.want {
+					t.Errorf("stored config = %+v, want %+v", *saved, *tt.want)
+				}
+			}
+			if m.RemoteURL() != wantURL {
+				t.Errorf("RemoteURL() = %q, want %q", m.RemoteURL(), wantURL)
+			}
+			if !slices.Equal(changes, tt.wantChanges) {
+				t.Errorf("OnRemoteURLChange calls = %q, want %q", changes, tt.wantChanges)
+			}
+		})
 	}
 }
 

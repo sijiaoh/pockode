@@ -13,8 +13,8 @@ import (
 func (h *rpcMethodHandler) handlePortPreviewTicket(ctx context.Context, conn *jsonrpc2.Conn, req *jsonrpc2.Request) {
 	// Previews exist only through the relay, and remoteURL is how this handler
 	// knows it is up — the same field auth reports previews by.
-	if h.remoteURL == "" {
-		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidRequest, "port previews are unavailable: the relay is disabled")
+	if h.remoteURL() == "" {
+		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidRequest, "port previews are unavailable: the relay is disabled or has stopped")
 		return
 	}
 	ticket, err := h.previewTickets.Issue()

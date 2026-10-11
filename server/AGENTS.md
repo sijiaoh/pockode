@@ -238,7 +238,7 @@ if err := json.Unmarshal(data, &parsed); err != nil {
 | `remote_url` | string | Relay 远程访问 URL（可选） |
 | `token` | string | 本地 API（MCP）认证 token，每次启动随机生成，区别于用户的 `--password`，不写入磁盘外的任何位置 |
 
-生命周期：启动时写入 → 运行期间保持 → 优雅关闭时删除
+生命周期：启动时写入 → 运行期间保持 → 优雅关闭时删除。唯一的例外是 `remote_url`：relay 凭据更新导致远程 URL 变化时，文件会被重写，只换 `remote_url`，其余字段（包括 `started_at`）不变；relay 永久停止时该字段被移除（原因见 [relay-system.md](../docs/code/relay-system.md#when-the-remote-url-changes)）。读取方需要最新 URL 时应每次现读，不要缓存。
 
 ### MCP 本地 API
 

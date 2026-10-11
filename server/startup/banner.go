@@ -74,13 +74,37 @@ func PrintBanner(opts BannerOptions) {
 
 	fmt.Printf("%s%s  %s\n", indent, color(dim, "▸ Local"), color(green, opts.LocalURL))
 	if opts.RemoteURL != "" {
-		fmt.Printf("%s%s %s\n", indent, color(dim, "▸ Remote"), color(green, opts.RemoteURL))
+		printRemoteURL(opts.RemoteURL)
 	}
 
 	for _, line := range agentLines(opts.Agents) {
 		fmt.Println(line)
 	}
 
+	fmt.Println()
+}
+
+func printRemoteURL(url string) {
+	fmt.Printf("%s%s %s\n", indent, color(dim, "▸ Remote"), color(green, url))
+}
+
+// PrintRemoteURLChanged announces a remote URL that has replaced the one the
+// banner showed, in the banner's own form, since the QR code scanned from the
+// banner now leads nowhere. An empty URL is remote access ending for good,
+// which the relay reports only when the cloud requires a newer Pockode.
+func PrintRemoteURLChanged(url string) {
+	fmt.Println()
+	if url == "" {
+		fmt.Printf("%s%s\n", indent, color(bold+yellow, "⚠ Remote access stopped — the cloud requires a newer Pockode"))
+		fmt.Printf("%s%s\n", indent, color(dim, "  Update pockode, then restart it"))
+		fmt.Println()
+		return
+	}
+	fmt.Printf("%s%s\n", indent, color(bold+yellow, "⚠ Remote URL changed — the previous one no longer works"))
+	fmt.Println()
+	printRemoteURL(url)
+	fmt.Println()
+	PrintQRCode(url)
 	fmt.Println()
 }
 

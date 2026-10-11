@@ -196,3 +196,66 @@ func TestWriteOmitsEmptyURLs(t *testing.T) {
 		t.Error("remote_url should be omitted when empty")
 	}
 }
+
+// Refresh before Publish must not write: server.json is how a cluster finds a
+// server, and it may act on the file the moment it appears. Publish then reads
+// the URL itself, so a change that came first is not lost.
+func TestPublisherRefreshWaitsForPublish(t *testing.T) {
+	dir := t.TempDir()
+	remoteURL := "https://old.cloud.pockode.com"
+	p := NewPublisher(dir, 9870, "http://localhost:9870", "token", func() string { return remoteURL })
+
+	remoteURL = "https://new.cloud.pockode.com"
+	if err := p.Refresh(); err != nil {
+		t.Fatalf("Refresh failed: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, filename)); !os.IsNotExist(err) {
+		t.Fatalf("server.json exists before Publish (stat error: %v)", err)
+	}
+
+	if err := p.Publish(); err != nil {
+		t.Fatalf("Publish failed: %v", err)
+	}
+	info, err := Read(dir)
+	if err != nil {
+		t.Fatalf("Read failed: %v", err)
+	}
+	if info.RemoteURL != remoteURL {
+		t.Errorf("RemoteURL = %q, want %q", info.RemoteURL, remoteURL)
+	}
+}
+
+// A remote URL that changes mid-run replaces the published one and nothing
+// else: the cluster reports started_at as the node's start time.
+func TestPublisherRefreshRewritesTheRemoteURL(t *testing.T) {
+	dir := t.TempDir()
+	remoteURL := "https://old.cloud.pockode.com"
+	p := NewPublisher(dir, 9870, "http://localhost:9870", "token", func() string { return remoteURL })
+	// started_at has one-second resolution, so a write that restamped it would
+	// almost always go unnoticed against the real clock.
+	const startedAt = "2000-01-01T00:00:00Z"
+	p.info.StartedAt = startedAt
+	if err := p.Publish(); err != nil {
+		t.Fatalf("Publish failed: %v", err)
+	}
+	before, err := Read(dir)
+	if err != nil {
+		t.Fatalf("Read failed: %v", err)
+	}
+
+	remoteURL = "https://new.cloud.pockode.com"
+	if err := p.Refresh(); err != nil {
+		t.Fatalf("Refresh failed: %v", err)
+	}
+
+	after, err := Read(dir)
+	if err != nil {
+		t.Fatalf("Read failed: %v", err)
+	}
+	want := *before
+	want.StartedAt = startedAt
+	want.RemoteURL = remoteURL
+	if *after != want {
+		t.Errorf("server.json = %+v, want %+v", *after, want)
+	}
+}

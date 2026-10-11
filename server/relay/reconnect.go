@@ -2,6 +2,7 @@ package relay
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"math/rand/v2"
 	"time"
@@ -54,34 +55,70 @@ func (realClock) Sleep(ctx context.Context, d time.Duration) {
 }
 
 // reconnector keeps the uplink up for as long as its context lives, retrying
-// with exponential backoff whenever the connection drops. It never gives up:
-// the relay is this server's only route in from the outside, so a client that
-// stopped trying would be indistinguishable from one that had crashed.
+// with exponential backoff whenever the connection drops. It never gives up on
+// a dropped connection: the relay is this server's only route in from the
+// outside, so a client that stopped trying would be indistinguishable from one
+// that had crashed.
 //
-// connect and clock are fields rather than direct calls so tests can fail the
-// uplink on demand and observe the resulting delays.
+// A rejected token is different: dialing again with it can only be rejected
+// again, so the loop renews the credentials instead and dials again only once
+// that succeeds. The one thing it gives up on is a cloud that demands a newer
+// client, which no number of retries from this binary can satisfy.
+//
+// connect, renew and clock are fields rather than direct calls so tests can
+// fail the uplink and its renewal on demand and observe the resulting delays.
 type reconnector struct {
 	connect func(context.Context, *StoredConfig) error
+	renew   func(context.Context) (*StoredConfig, error)
 	clock   clock
 	log     *slog.Logger
 }
 
 func (r *reconnector) run(ctx context.Context, cfg *StoredConfig) {
 	backoff := reconnectInitialBackoff
+	nextDelay := func() time.Duration {
+		d := withJitter(backoff)
+		backoff = min(backoff*2, reconnectMaxBackoff)
+		return d
+	}
+	renewing := false
 
 	for ctx.Err() == nil {
+		if renewing {
+			renewed, err := r.renew(ctx)
+			if ctx.Err() != nil {
+				return
+			}
+			if errors.Is(err, ErrUpgradeRequired) {
+				r.log.Error("relay stopped: relay token rejected and the cloud requires a newer Pockode to register again", "error", err)
+				return
+			}
+			// Success leaves the backoff where it is, so that a cloud which
+			// confirms a token its relay keeps rejecting is still asked at the
+			// backoff's pace rather than in a tight loop.
+			if err == nil {
+				cfg = renewed
+				renewing = false
+				continue
+			}
+			delay := nextDelay()
+			r.log.Error("failed to renew relay credentials", "error", err, "retry_in", delay)
+			r.clock.Sleep(ctx, delay)
+			continue
+		}
+
 		start := r.clock.Now()
 		err := r.connect(ctx, cfg)
 		if ctx.Err() != nil {
 			return
 		}
+		renewing = errors.Is(err, ErrInvalidToken)
 
 		var delay time.Duration
 		if r.clock.Now().Sub(start) >= stableConnection {
 			backoff = reconnectInitialBackoff
 		} else {
-			delay = withJitter(backoff)
-			backoff = min(backoff*2, reconnectMaxBackoff)
+			delay = nextDelay()
 		}
 
 		r.log.Error("relay connection failed", "error", err, "retry_in", delay)

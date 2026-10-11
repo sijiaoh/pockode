@@ -85,14 +85,14 @@ When a node starts, Pockode writes runtime information to `{node.path}/.pockode/
 | `port` | int | Yes | Server port number |
 | `started_at` | string | Yes | ISO 8601 timestamp of server start |
 | `local_url` | string | Yes | URL for local access |
-| `remote_url` | string | No | URL for remote access via relay (only present when relay is enabled) |
+| `remote_url` | string | No | URL for remote access via relay (only present when relay is enabled; can change, or disappear, while the node runs) |
 
 This file is used to:
 - Track which process is running for a node
 - Detect stale state (file exists but process is dead)
 - Provide port, URL, and start time information
 
-The file is deleted when the server shuts down gracefully.
+The file is deleted when the server shuts down gracefully. `remote_url` can be rewritten while the node runs (see [server.json](../server/AGENTS.md#serverjson)); the cluster reads the file on every status check, so it always reports the current URL.
 
 **Operations:**
 

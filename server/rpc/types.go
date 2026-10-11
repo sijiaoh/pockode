@@ -73,8 +73,10 @@ type AuthResult struct {
 	WorktreeName string `json:"worktree_name"`
 	// RemoteURL is the address this server is reachable at through the relay,
 	// such as "https://abc123.cloud.pockode.com"; empty when the relay is
-	// disabled. Sent so the client does not have to infer it from the page it
-	// was loaded from, which is localhost on a local connection.
+	// disabled or has stopped for good. It is current as of this reply:
+	// renewing the relay credentials can change it mid-run. Sent so the client
+	// does not have to infer it from the page it was loaded from, which is
+	// localhost on a local connection.
 	RemoteURL string `json:"remote_url"`
 	// MaxUploadSize is the ceiling on one HTTP upload request, in bytes, sent so
 	// a client can refuse an oversized file before spending a slow link on it

@@ -55,16 +55,18 @@ The full diagnosis lives in the cloud's relay design document.
 ```
 Manager.Start()
     │
-    ├─ Load stored config (relay.json)
+    ├─ credentials()
     │   │
-    │   ├─ nil → Register with cloud
-    │   │         └─ Receive subdomain + relay_token
-    │   │         └─ Save to relay.json
+    │   ├─ Load stored config (relay.json)
+    │   │   ├─ corrupt → quarantined as relay.json.corrupt, treated as nil
+    │   │   └─ exists → Refresh token
+    │   │                ├─ valid → Save, use it
+    │   │                ├─ invalid → Delete config, fall through to Register
+    │   │                └─ upgrade required / other error → return it
     │   │
-    │   ├─ corrupt → quarantined as relay.json.corrupt, treated as nil
-    │   │
-    │   └─ exists → Refresh token
-    │                └─ Invalid? → Delete config, re-register
+    │   └─ nil / invalid → Register with cloud
+    │                      └─ Receive subdomain + relay_token
+    │                      └─ Save to relay.json
     │
     └─ Start background reconnect loop
         └─ Return public URL: https://{subdomain}.{relay_server}
@@ -72,9 +74,11 @@ Manager.Start()
 
 On first run the PC registers with the cloud to obtain a unique subdomain and token. Later startups refresh the token to verify it is still valid. Configuration is persisted so a restart does not consume a new subdomain.
 
+`credentials` is not only a startup step: the reconnect loop runs the same check when the relay rejects the token mid-run — see [Recovering From a Rejected Token](#recovering-from-a-rejected-token).
+
 A config file damaged by an interrupted write takes the same recovery path as an invalid token: it is set aside and the server registers again. That costs the user their subdomain, which is not free — but the file is unreadable either way, and a relay that comes back at a new address beats one that refuses to start at all. The damaged copy is kept at `relay.json.corrupt` in case the old subdomain is worth recovering by hand.
 
-Note that "register" here means the HTTP call that claims a subdomain, made only when there is no stored config yet. A tunnel does not register: it presents the stored relay token on the upgrade request — see [Authentication](#authentication).
+Note that "register" here means the HTTP call that claims a subdomain, made only when there is no usable stored config. A tunnel does not register: it presents the stored relay token on the upgrade request — see [Authentication](#authentication).
 
 ### Reconnection Mechanism
 
@@ -84,11 +88,38 @@ Note that "register" here means the HTTP call that claims a subdomain, made only
 
 **A stable connection resets the budget**: if the uplink had lasted over a minute, the drop is a new problem rather than a continuing one — retry at once instead of inheriting a backoff that belonged to an earlier outage.
 
-**There is no attempt limit.** The relay is this server's only route in from outside, so a client that stopped retrying would be indistinguishable from one that had crashed.
+**There is no attempt limit.** The relay is this server's only route in from outside, so a client that stopped retrying would be indistinguishable from one that had crashed. The one exception is a cloud that demands a newer client — see [Recovering From a Rejected Token](#recovering-from-a-rejected-token).
 
 **The 10s ceiling is not arbitrary**: it must stay below the cloud's tunnel grace period (30s). A reconnect that lands inside that window reclaims the subdomain's entry, so public requests that arrived during the gap are served instead of answered 503. The two values must move together — the grace period is set by the cloud relay and documented in the cloud's relay design document.
 
 `connectAndRun` returns only when the session ends, so the tunnel's lifetime and one iteration of the reconnect loop are the same thing. It is injected into `reconnector` rather than called directly, which is what lets the backoff be tested by failing the uplink on demand against a fake clock.
+
+### Recovering From a Rejected Token
+
+A dropped connection and a rejected token need opposite answers. Redialing fixes the first; it can never fix the second, since the same token is rejected again on every attempt. The cloud's tokens do not expire, so a rejection means the cloud no longer recognizes this server's token at all — its relay records were reset, for instance.
+
+`dialUplink` therefore reports a 401 on the upgrade request as `ErrInvalidToken`, and only a 401: any other failure is a dropped connection. On `ErrInvalidToken` the loop waits out the usual backoff and then, instead of dialing, renews the credentials with `credentials` — the same check startup makes:
+
+```
+uplink 401 ─▶ backoff ─▶ renew (refresh; re-register if the token is invalid)
+                           ├─ ok              → dial with the result
+                           ├─ upgrade required → stop the loop, clear the remote URL
+                           └─ other error     → backoff, renew again (no dial)
+```
+
+- **A failed renewal is retried, not followed by a dial.** The token is already known to be bad, so dialing with it would only spend another 401 at the cloud.
+- **A successful renewal does not reset the backoff.** A cloud whose refresh confirms a token its relay keeps rejecting would otherwise be asked in a tight loop; this way it is asked at the backoff's pace.
+- **Upgrade required ends remote access for good.** No number of retries from this binary can renew its credentials, so the loop stops instead of sending the cloud requests that are bound to fail. The rest of the server keeps running. At startup the same error stops the process, since nothing has started yet that would be worth keeping alive.
+
+#### When the Remote URL Changes
+
+A new registration comes with a new subdomain — the cloud cannot give the old one back — so the URL the user scanned stops working. A refresh can move it too, if the cloud reports a different subdomain or relay server. The change is not transparent, so it is made visible everywhere the URL is exposed:
+
+- `Manager.RemoteURL()` is the single source. Nothing copies the URL at startup: the `auth` reply's `remote_url` and the port preview's "is the relay up" check read it on every call.
+- `Config.OnRemoteURLChange` is called after the new value is in place, and only when it actually differs. The server prints the new URL and its QR code in the banner's own form, and rewrites `server.json` (see [server/AGENTS.md](../../server/AGENTS.md#serverjson)); cluster mode only prints, since its banner is the only place it shows the URL.
+- An empty URL means remote access has stopped for good. The terminal tells the user to update Pockode and restart it; `remote_url` drops out of `server.json` and the `auth` reply, which also takes [port previews](#port-previews) down.
+
+A client that is already connected is not pushed the new URL; it gets it from the `auth` reply the next time it connects.
 
 ### Bounding the Connect Path
 
@@ -277,19 +308,7 @@ if resp.StatusCode == http.StatusForbidden {
 }
 ```
 
-The cloud can reject outdated clients, which is what makes it possible to fix a protocol or security problem without waiting for every user to upgrade voluntarily.
-
-### Token Invalidation Handling
-
-```go
-if errors.Is(err, ErrInvalidToken) {
-    m.log.Warn("stored token is invalid, re-registering")
-    m.store.Delete()
-    return m.Start(ctx)  // Recursive retry with fresh registration
-}
-```
-
-Tokens can be invalidated by a cloud reset, expiry, or manual revocation. The client re-registers automatically, transparently to the user.
+The cloud can reject outdated clients, which is what makes it possible to fix a protocol or security problem without waiting for every user to upgrade voluntarily. The check runs on register and refresh, so an outdated server fails at startup, or mid-run when it next has to renew its credentials (see [Recovering From a Rejected Token](#recovering-from-a-rejected-token)).
 
 ### Auth Through the Relay
 
@@ -300,7 +319,7 @@ Requests for the app arriving through the tunnel go through the same `middleware
 | Component | Path | Responsibility |
 |-----------|------|----------------|
 | Manager | `server/relay/relay.go` | Lifecycle, dial + authentication |
-| Reconnector | `server/relay/reconnect.go` | Backoff loop keeping the uplink up |
+| Reconnector | `server/relay/reconnect.go` | Backoff loop keeping the uplink up, renewing a rejected token |
 | Client | `server/relay/client.go` | Communication with the cloud HTTP API |
 | Tunnel | `server/relay/tunnel.go` | yamux session, serving HTTP over its streams |
 | Local proxy | `server/relay/proxy.go` | Reverse proxy onto local backend/frontend |

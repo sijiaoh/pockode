@@ -33,7 +33,7 @@ func callAuthenticated(t *testing.T, serverURL, method string, params any) rpcRe
 
 func TestHandler_PortPreviewTicket_IssuesRedeemableTicket(t *testing.T) {
 	tickets := authsession.NewTickets()
-	server := newTicketTestServer(t, testPassword, "https://abc123.cloud.pockode.com", authsessiontest.New(), tickets)
+	server := newTicketTestServer(t, testPassword, func() string { return "https://abc123.cloud.pockode.com" }, authsessiontest.New(), tickets)
 
 	resp := callAuthenticated(t, server.URL, "port_preview.ticket", nil)
 	if resp.Error != nil {
