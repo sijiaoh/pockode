@@ -374,7 +374,7 @@ carries `written`, the same shape as `files`, listing what was already stored.
 | `404` | `not_found` | Destination directory does not exist |
 | `404` | `worktree_not_found` | Unknown `worktree` |
 | `409` | `conflict` | A file of that name exists and `overwrite` is not set; or the name is a directory, a symlink, or another non-regular file (never replaced, even with `overwrite`) |
-| `413` | `too_large` | Over `filetransfer.MaxUploadSize`, **32 MiB** |
+| `413` | `too_large` | Over `filetransfer.MaxUploadSize`, **1 GiB** |
 | `500` | `internal` | Write failed (disk full, permissions) |
 
 A connection that dies mid-upload is reported as `invalid_request`, not
@@ -394,7 +394,7 @@ The two carry the same number but are not interchangeable, and the difference is
 the only moment at which an oversized file can still be refused cheaply, while
 the `413`'s `limit` describes a request the browser has already finished
 uploading and is good for phrasing that one failure and nothing else. Neither is
-a place for the client to hardcode 32 MiB.
+a place for the client to hardcode the number.
 
 Same-name files are refused rather than replaced: an upload is a bulk action —
 a drop of a dozen files — and silently overwriting a source file in the user's
