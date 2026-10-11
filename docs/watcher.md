@@ -59,7 +59,7 @@ type Notification struct {
 |----------|----------|-----------|
 | OS-level | FSWatcher | `fsnotify` library, 100ms debounce |
 | Polling | GitWatcher, GitDiffWatcher, WorktreeWatcher | 3s interval, state hash comparison |
-| Event-driven | SessionList, SessionDetail, ChatMessages, WorkList, WorkDetail, Settings, AgentRoleList, CLILogin, CLIUpdate | Store `OnChangeListener` callbacks via async channels (CLILogin, CLIUpdate: `cliauth.LoginListener` / `cliupdate.Listener` marking a pending set) |
+| Event-driven | SessionList, SessionDetail, ChatMessages, WorkList, WorkDetail, Settings, AgentRoleList, CLILogin, CLIUpdate, RemoteURL | Store `OnChangeListener` callbacks via async channels (CLILogin, CLIUpdate: `cliauth.LoginListener` / `cliupdate.Listener` marking a pending set; RemoteURL: the relay's `OnRemoteURLChange` waking it) |
 
 ### OS-Level: FSWatcher
 
@@ -90,8 +90,9 @@ These watchers implement store listener interfaces and use async buffered channe
 | AgentRoleListWatcher | `watch/agent_role_list.go` | `agentrole.OnChangeListener` + `work.OnChangeListener` (for the per-role work reference counts) | `agent_role.list.changed` |
 | CLILoginWatcher | `watch/cli_login.go` | `cliauth.LoginListener` (a CLI's sign-in flow changed) | `cli_auth.login.changed` |
 | CLIUpdateWatcher | `watch/cli_update.go` | `cliupdate.Listener` (a CLI's update changed or was dismissed) | `cli_update.changed` |
+| RemoteURLWatcher | `watch/remote_url.go` | `relay.Config.OnRemoteURLChange`, through `RPCHandler.RemoteURLChanged` ([relay-system.md](code/relay-system.md#when-the-remote-url-changes)) | `remote_url.changed` |
 
-**Backpressure:** Event channels have fixed capacity (16–256). When full, events are dropped and a `dirty` flag is set. The next delivered event triggers a full sync instead of an incremental update, ensuring clients converge to correct state. Two cases need no flag. AgentRoleListWatcher's *work* events carry no payload and are answered with a whole recomputed map: a full channel means events are still queued, and each of those recomputes the same map, so a dropped one costs nothing. That watcher listens to two stores and pushes two shapes down one channel — why, and why only one half needs the flag, is in [code/subscription-system.md](code/subscription-system.md#why-one-channel-carries-two-stores-changes). CLILoginWatcher and CLIUpdateWatcher have no queue at all: both are `watch/cli_record.go`, which keeps the set of CLIs with a pending change and sends each one's whole record — its sign-in, its update — as it is at sending time, so changes collapse and none is lost ([code/subscription-system.md](code/subscription-system.md#buffer-size-tuning)).
+**Backpressure:** Event channels have fixed capacity (16–256). When full, events are dropped and a `dirty` flag is set. The next delivered event triggers a full sync instead of an incremental update, ensuring clients converge to correct state. Three cases need no flag. AgentRoleListWatcher's *work* events carry no payload and are answered with a whole recomputed map: a full channel means events are still queued, and each of those recomputes the same map, so a dropped one costs nothing. That watcher listens to two stores and pushes two shapes down one channel — why, and why only one half needs the flag, is in [code/subscription-system.md](code/subscription-system.md#why-one-channel-carries-two-stores-changes). CLILoginWatcher and CLIUpdateWatcher have no queue at all: both are `watch/cli_record.go`, which keeps the set of CLIs with a pending change and sends each one's whole record — its sign-in, its update — as it is at sending time, so changes collapse and none is lost ([code/subscription-system.md](code/subscription-system.md#buffer-size-tuning)). RemoteURLWatcher has no queue either: a change only wakes it through a one-slot channel, and it reads the URL when it sends, so changes that pile up collapse into one that carries the latest URL — and the relay's reconnect loop, which reports the change, never waits on a client.
 
 **Filtered watchers:** WorkDetailWatcher and SessionDetailWatcher each notify only the subscribers watching the affected id, not all subscribers. Both key their subscriptions on `Subscription.Key` and deliver through `BaseWatcher.NotifyForKey`.
 
@@ -124,7 +125,7 @@ These watchers implement store listener interfaces and use async buffered channe
 1. Component calls `actions.fsSubscribe(path, callback)` → `openSubscription` generates the subscription id, stores the callback under it, *then* sends the RPC. Registering first is what makes a change landing mid-subscribe deliverable
 2. WebSocket `onmessage` routes notifications by method name → looks up callback by subscription ID → invokes it
 3. On unmount or unsubscribe: callback removed, unsubscribe RPC sent
-4. On worktree switch: `clearWorktreeWatchSubscriptions()` clears only the worktree-scoped maps (fs, git, git-diff, session list, session detail, chat). App-level maps (work list/detail, agent role list, settings, CLI sign-in, CLI update, worktree) are kept, mirroring the Manager-level watchers the server preserves across switches (see Worktree Integration below)
+4. On worktree switch: `clearWorktreeWatchSubscriptions()` clears only the worktree-scoped maps (fs, git, git-diff, session list, session detail, chat). App-level maps (work list/detail, agent role list, settings, CLI sign-in, CLI update, remote URL, worktree) are kept, mirroring the Manager-level watchers the server preserves across switches (see Worktree Integration below)
 5. On disconnect: `clearAllWatchSubscriptions()` clears all callback maps; `useSubscription` hook resubscribes on reconnect
 
 ## Worktree Integration
@@ -134,7 +135,7 @@ These watchers implement store listener interfaces and use async buffered channe
 - FSWatcher, GitWatcher, GitDiffWatcher (worktree-specific paths)
 - SessionListWatcher, SessionDetailWatcher, ChatMessagesWatcher (worktree-specific sessions)
 
-Manager-level watchers (WorkList, WorkDetail, Settings, AgentRoleList, CLILogin, CLIUpdate, Worktree) are shared across all connections.
+Manager-level watchers (WorkList, WorkDetail, Settings, AgentRoleList, CLILogin, CLIUpdate, RemoteURL, Worktree) are shared across all connections.
 
 Watchers start with the worktree and stop on cleanup. Worktrees are reference-counted and idle-cleaned after 30 seconds.
 
