@@ -1,7 +1,13 @@
 import { ImageOff } from "lucide-react";
 import { useState } from "react";
+import { useImageSrc } from "../../hooks/useImageSrc";
+import { useInView } from "../../hooks/useInView";
 import { formatBytes } from "../../utils/bytes";
-import { formatMimeLabel, getMimeType } from "../../utils/fileView";
+import {
+	formatMimeLabel,
+	getMimeType,
+	type ImageSource,
+} from "../../utils/fileView";
 import { FileStateCard, Spinner } from "../ui";
 
 interface Dimensions {
@@ -10,7 +16,7 @@ interface Dimensions {
 }
 
 interface Props {
-	src: string;
+	source: ImageSource;
 	fileName: string;
 	mime: string;
 	size: number;
@@ -29,7 +35,15 @@ interface Props {
 
 type Status = "loading" | "loaded" | "error";
 
-function ImagePreview({ src, fileName, mime, size, dimensions }: Props) {
+/**
+ * An image at full size. Its bytes are read once the frame is on screen, the
+ * same rule the strip's thumbnails follow, so nothing that shows an image
+ * spends the connection on one nobody is looking at.
+ */
+function ImagePreview({ source, fileName, mime, size, dimensions }: Props) {
+	const { ref, inView } = useInView<HTMLDivElement>();
+	const image = useImageSrc(source, inView);
+	const src = image.src;
 	const [status, setStatus] = useState<Status>("loading");
 	const [measured, setMeasured] = useState<Dimensions | null>(
 		dimensions ?? null,
@@ -50,6 +64,24 @@ function ImagePreview({ src, fileName, mime, size, dimensions }: Props) {
 		setMeasured(dimensions ?? null);
 	}
 
+	const details = [
+		{ label: "Type", value: getMimeType(mime) },
+		{ label: "Size", value: formatBytes(size) },
+	];
+
+	if (image.error) {
+		return (
+			<FileStateCard
+				icon={ImageOff}
+				iconClassName="text-th-error"
+				title="Couldn't load image"
+				description={image.error.message}
+				details={details}
+				action={{ label: "Retry", onClick: image.retry }}
+			/>
+		);
+	}
+
 	if (status === "error") {
 		return (
 			<FileStateCard
@@ -57,10 +89,7 @@ function ImagePreview({ src, fileName, mime, size, dimensions }: Props) {
 				iconClassName="text-th-error"
 				title="Image can't be displayed"
 				description="The browser couldn't decode this file."
-				details={[
-					{ label: "Type", value: getMimeType(mime) },
-					{ label: "Size", value: formatBytes(size) },
-				]}
+				details={details}
 				action={{
 					label: "Retry",
 					onClick: () => {
@@ -84,28 +113,33 @@ function ImagePreview({ src, fileName, mime, size, dimensions }: Props) {
 		<div className="flex flex-col items-center gap-2 p-4">
 			{/* min-height holds the frame open while loading; the secondary
 			    background keeps transparent images legible in both themes. */}
-			<div className="relative flex min-h-[8rem] w-full items-center justify-center rounded-lg border border-th-border bg-th-bg-secondary p-2">
-				<img
-					key={attempt}
-					src={src}
-					alt={fileName}
-					width={dimensions?.width}
-					height={dimensions?.height}
-					onLoad={(event) => {
-						setMeasured({
-							width: event.currentTarget.naturalWidth,
-							height: event.currentTarget.naturalHeight,
-						});
-						setStatus("loaded");
-					}}
-					onError={() => setStatus("error")}
-					// Hidden rather than unmounted: when a browser decodes a
-					// `display: none` image is up to the browser.
-					className={`max-h-[70vh] max-w-full object-contain ${
-						status === "loading" ? "invisible" : ""
-					}`}
-				/>
-				{status === "loading" && (
+			<div
+				ref={ref}
+				className="relative flex min-h-[8rem] w-full items-center justify-center rounded-lg border border-th-border bg-th-bg-secondary p-2"
+			>
+				{src && (
+					<img
+						key={attempt}
+						src={src}
+						alt={fileName}
+						width={dimensions?.width}
+						height={dimensions?.height}
+						onLoad={(event) => {
+							setMeasured({
+								width: event.currentTarget.naturalWidth,
+								height: event.currentTarget.naturalHeight,
+							});
+							setStatus("loaded");
+						}}
+						onError={() => setStatus("error")}
+						// Hidden rather than unmounted: when a browser decodes a
+						// `display: none` image is up to the browser.
+						className={`max-h-[70vh] max-w-full object-contain ${
+							status === "loading" ? "invisible" : ""
+						}`}
+					/>
+				)}
+				{(!src || status === "loading") && (
 					<div className="absolute inset-0 flex items-center justify-center">
 						<Spinner variant="current" className="text-th-text-muted" />
 					</div>

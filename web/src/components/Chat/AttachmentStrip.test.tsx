@@ -2,7 +2,12 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+	reportEverythingInView,
+	stubImageFetch,
+	stubObjectUrls,
+} from "../../test/imageFixtures";
 import type { FileBlock } from "../../types/content";
 import type { FileContent } from "../../types/contents";
 import AttachmentStrip from "./AttachmentStrip";
@@ -16,32 +21,27 @@ vi.mock("../../lib/wsStore", () => ({
 	isRPCTimeout: () => false,
 }));
 
-// The suite's global stub never reports anything, so a thumbnail gated on
-// visibility would never ask for its bytes. This one says everything it is
-// given is on screen, which is what a transcript scrolled to a tool call is.
-beforeEach(() => {
-	globalThis.IntersectionObserver = class {
-		callback: IntersectionObserverCallback;
-		constructor(callback: IntersectionObserverCallback) {
-			this.callback = callback;
-		}
-		observe(target: Element) {
-			this.callback(
-				[{ isIntersecting: true, target } as IntersectionObserverEntry],
-				this as unknown as IntersectionObserver,
-			);
-		}
-		unobserve() {}
-		disconnect() {}
-	} as unknown as typeof globalThis.IntersectionObserver;
+let fetchMock: ReturnType<typeof stubImageFetch>;
+let revoked: string[];
 
+// A transcript scrolled to a tool call: everything given is on screen.
+beforeEach(() => {
+	reportEverythingInView();
+	({ revoked } = stubObjectUrls());
+	fetchMock = stubImageFetch();
 	getAttachment.mockReset();
 	getFile.mockReset();
 });
 
-// A 1×1 PNG, so the data URL an <img> gets is a real one.
-const PNG_BASE64 =
-	"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+afterEach(() => {
+	vi.unstubAllGlobals();
+});
+
+function fetchedUrls(): URL[] {
+	return fetchMock.mock.calls.map(
+		(call) => new URL(String((call as unknown[])[0]), "http://host"),
+	);
+}
 
 function imageContent(overrides: Partial<FileContent> = {}): FileContent {
 	return {
@@ -50,8 +50,8 @@ function imageContent(overrides: Partial<FileContent> = {}): FileContent {
 		path: "abc",
 		size: 68,
 		mime: "image/png",
-		content: PNG_BASE64,
-		encoding: "base64",
+		content: "",
+		encoding: "http",
 		...overrides,
 	};
 }
@@ -91,8 +91,39 @@ describe("AttachmentStrip", () => {
 		]);
 
 		const image = await screen.findByRole("img", {}, { timeout: 10_000 });
-		expect(image).toHaveAttribute("src", `data:image/png;base64,${PNG_BASE64}`);
+		expect(image).toHaveAttribute("src", "blob:test/1");
 		expect(getAttachment).toHaveBeenCalledWith("session-1", "abc");
+		const [url] = fetchedUrls();
+		expect(url.pathname).toBe("/api/chat/attachments");
+		expect(url.searchParams.get("session_id")).toBe("session-1");
+		expect(url.searchParams.get("id")).toBe("abc");
+	});
+
+	it("reads nothing for a thumbnail that has not come into view", async () => {
+		globalThis.IntersectionObserver = class {
+			observe() {}
+			unobserve() {}
+			disconnect() {}
+		} as unknown as typeof globalThis.IntersectionObserver;
+		getAttachment.mockResolvedValue(imageContent());
+
+		renderStrip([{ mime: "image/png", attachment_id: "abc" }]);
+
+		expect(await screen.findByLabelText("PNG image")).toBeInTheDocument();
+		expect(getAttachment).not.toHaveBeenCalled();
+		expect(fetchMock).not.toHaveBeenCalled();
+	});
+
+	it("lets go of the image's object URL once the thumbnail unmounts", async () => {
+		getAttachment.mockResolvedValue(imageContent());
+
+		const { unmount } = renderStrip([
+			{ mime: "image/png", attachment_id: "abc" },
+		]);
+		await screen.findByRole("img", {}, { timeout: 10_000 });
+		unmount();
+
+		expect(revoked).toEqual(["blob:test/1"]);
 	});
 
 	it("opens the picked image at full size and offers to save it", async () => {
@@ -108,8 +139,10 @@ describe("AttachmentStrip", () => {
 		expect(
 			await screen.findByRole("button", { name: "Save" }),
 		).toBeInTheDocument();
-		// The thumbnail and the full-size copy, so the preview really opened.
-		expect(screen.getAllByRole("img")).toHaveLength(2);
+		// The thumbnail and the full-size copy, so the preview really opened —
+		// and both from one read of the bytes.
+		await waitFor(() => expect(screen.getAllByRole("img")).toHaveLength(2));
+		expect(fetchMock).toHaveBeenCalledTimes(1);
 	});
 
 	// The CLI's block type is what says a result is an image, so the server keeps
@@ -122,7 +155,7 @@ describe("AttachmentStrip", () => {
 
 		expect(
 			await screen.findByRole("img", {}, { timeout: 10_000 }),
-		).toHaveAttribute("src", `data:image/png;base64,${PNG_BASE64}`);
+		).toHaveAttribute("src", "blob:test/1");
 	});
 
 	it("says why a file has nothing behind it instead of asking for it", async () => {
@@ -171,6 +204,7 @@ describe("AttachmentStrip", () => {
 
 		await screen.findByRole("img", {}, { timeout: 10_000 });
 		expect(getFile).toHaveBeenCalledWith("shots/a.png");
+		expect(fetchedUrls()[0].pathname).toBe("/api/files/download");
 	});
 
 	// `unavailable` says the server could not keep the content, not that there
@@ -203,6 +237,23 @@ describe("AttachmentStrip", () => {
 		expect(screen.queryByRole("img")).toBeNull();
 	});
 
+	it("draws an SVG from its source, never reading it over HTTP", async () => {
+		getAttachment.mockResolvedValue(
+			imageContent({
+				mime: "image/svg+xml",
+				content: "<svg/>",
+				encoding: "text",
+			}),
+		);
+
+		renderStrip([{ mime: "image/svg+xml", size: 6, attachment_id: "abc" }]);
+
+		expect(
+			await screen.findByRole("img", {}, { timeout: 10_000 }),
+		).toHaveAttribute("src", "data:image/svg+xml,%3Csvg%2F%3E");
+		expect(fetchMock).not.toHaveBeenCalled();
+	});
+
 	it("offers no way over to a file outside the work directory", async () => {
 		const onOpenFile = vi.fn();
 		renderStrip([{ mime: "application/pdf", path: "/tmp/a.pdf" }], onOpenFile);
@@ -228,5 +279,42 @@ describe("AttachmentStrip", () => {
 		getAttachment.mockResolvedValue(imageContent());
 		await user.click(retry);
 		await waitFor(() => expect(screen.getByRole("img")).toBeInTheDocument());
+	});
+
+	it("offers to retry when the bytes cannot be read", async () => {
+		const user = userEvent.setup();
+		getAttachment.mockResolvedValue(imageContent());
+		fetchMock.mockResolvedValueOnce(
+			new Response(JSON.stringify({ error: "gone", code: "not_found" }), {
+				status: 404,
+			}),
+		);
+
+		renderStrip([{ mime: "image/png", attachment_id: "abc" }]);
+
+		await user.click(
+			await screen.findByRole("button", { name: "Retry" }, { timeout: 10_000 }),
+		);
+		expect(await screen.findByRole("img")).toHaveAttribute(
+			"src",
+			"blob:test/1",
+		);
+		// Only the bytes were read again; the description was fine.
+		expect(getAttachment).toHaveBeenCalledTimes(1);
+		expect(fetchMock).toHaveBeenCalledTimes(2);
+	});
+
+	// A refusal is shown at once (above), but a failure on the way — the relay
+	// answering while the tunnel reconnects — may well go through next time.
+	it("tries again by itself when the server fails rather than refuses", async () => {
+		getAttachment.mockResolvedValue(imageContent());
+		fetchMock.mockResolvedValueOnce(new Response("", { status: 502 }));
+
+		renderStrip([{ mime: "image/png", attachment_id: "abc" }]);
+
+		expect(
+			await screen.findByRole("img", {}, { timeout: 10_000 }),
+		).toHaveAttribute("src", "blob:test/1");
+		expect(fetchMock).toHaveBeenCalledTimes(2);
 	});
 });

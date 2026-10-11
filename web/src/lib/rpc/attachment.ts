@@ -12,12 +12,10 @@ interface AttachmentGetResult {
 
 export interface AttachmentActions {
 	/**
-	 * Reads content a chat event references by id.
-	 *
-	 * Over the WebSocket rather than an HTTP endpoint: the bearer token cannot
-	 * ride on an `<img src>`, so a link would have to be fetched into a Blob
-	 * anyway — and this is the connection that is already authenticated. The
-	 * reply has the same shape as `file.get`'s, so one code path renders both.
+	 * Describes content a chat event references by id, carrying it inline only
+	 * when it is text; a raster image's bytes are read over HTTP afterwards
+	 * (`fetchImageBlob`). The reply has the same shape as `file.get`'s, so one
+	 * code path renders both.
 	 */
 	getAttachment: (sessionId: string, id: string) => Promise<FileContent>;
 }

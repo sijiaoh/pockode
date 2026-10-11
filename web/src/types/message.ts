@@ -483,8 +483,9 @@ export interface UserMessage {
 	 */
 	command?: PockodeCommandInvocation;
 	/**
-	 * The files the user sent with the message, each fetched by its
-	 * `attachment_id` through `attachment.get`. On the sender's echo these are
+	 * The files the user sent with the message, each described by its
+	 * `attachment_id` through `attachment.get` (a raster image's bytes then
+	 * come from `GET /api/chat/attachments`). On the sender's echo these are
 	 * what the client knew at send time until the reply replaces them with the
 	 * server's description (type and dimensions read from the stored bytes).
 	 */

@@ -1,5 +1,11 @@
+import { useQueryClient } from "@tanstack/react-query";
 import { Download, ExternalLink } from "lucide-react";
-import { useAttachmentContent } from "../../hooks/useAttachmentContent";
+import { useState } from "react";
+import {
+	useAttachmentContent,
+	useAttachmentImageOrigin,
+} from "../../hooks/useAttachmentContent";
+import { imageBlobQuery } from "../../hooks/useImageSrc";
 import { saveBlob } from "../../lib/fileDownload";
 import type { AttachmentSource, FileBlock } from "../../types/content";
 import { attachmentFileName, attachmentName } from "../../utils/attachment";
@@ -30,7 +36,10 @@ interface Props {
  * large to send are described here in the same words the Files tab uses.
  */
 function AttachmentPreview({ file, source, workspacePath, onOpenFile }: Props) {
+	const queryClient = useQueryClient();
+	const origin = useAttachmentImageOrigin(source);
 	const { data, error } = useAttachmentContent(source);
+	const [saveError, setSaveError] = useState<string | null>(null);
 	const name = attachmentName(file);
 
 	if (error) {
@@ -48,16 +57,31 @@ function AttachmentPreview({ file, source, workspacePath, onOpenFile }: Props) {
 		);
 	}
 
-	// Reading a field, not the content: the bytes are decoded in the click
-	// handler instead. Building the Blob here would turn megabytes of base64
-	// into bytes on every render this component has — for a button that is
-	// usually never pressed.
+	// Reading a field, not the content: the Blob is built in the click handler,
+	// since this is a button that is usually never pressed.
 	const canSave = data.encoding !== "none";
+
+	const save = async () => {
+		setSaveError(null);
+		try {
+			// An image's bytes are the ones the preview above already read, so
+			// this is a cache hit unless the reader saves before it arrives.
+			const blob =
+				data.encoding === "http"
+					? await queryClient.fetchQuery(imageBlobQuery(origin, data.mime))
+					: fileContentToBlob(data);
+			if (blob) saveBlob(blob, attachmentFileName(file));
+		} catch (err) {
+			setSaveError(
+				`Couldn't save ${name}: ${err instanceof Error ? err.message : String(err)}`,
+			);
+		}
+	};
 
 	return (
 		<div className="border-t border-th-border">
 			<FileBody
-				state={getFileViewState(data)}
+				state={getFileViewState(data, origin)}
 				path={name}
 				readOnly
 				// Dimensions the agent reported, so the frame is the right shape
@@ -84,10 +108,7 @@ function AttachmentPreview({ file, source, workspacePath, onOpenFile }: Props) {
 					{canSave && (
 						<button
 							type="button"
-							onClick={() => {
-								const blob = fileContentToBlob(data);
-								if (blob) saveBlob(blob, attachmentFileName(file));
-							}}
+							onClick={save}
 							aria-label="Save"
 							title="Save"
 							className={getActionIconButtonClass(true)}
@@ -97,6 +118,7 @@ function AttachmentPreview({ file, source, workspacePath, onOpenFile }: Props) {
 					)}
 				</div>
 			)}
+			{saveError && <div className="px-2 pb-2 text-th-error">{saveError}</div>}
 		</div>
 	);
 }
