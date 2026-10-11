@@ -105,16 +105,16 @@ One file's diff reaches the client three ways — the `git.diff.subscribe` reply
 
 `old_content` and `new_content` are the two whole versions, sent beside the hunks so the client can highlight them.
 
-**A version over `contents.MaxFileSize` sends none of the three.** They travel in one message, and that message is held to the ceiling `file.get` is held to, for the reasons in [file.md](file.md#operations). When either version is over it, `diff`, `old_content` and `new_content` are all empty and the result carries `omitted: "too_large"` with `size`, `mime` and `limit` — the fields and meanings of a `file.get` that refused a file, describing the larger of the two versions. Neither is an error, and the client draws the same too-large card the file viewer does ([file.md](file.md#viewer-ui)). A version of exactly the limit is still sent.
+**A version over `contents.MaxFileSize` sends none of the three.** They travel in one message, and each version in it is held to the ceiling a file in a `file.get` reply is held to, for the reasons in [file.md](file.md#operations). When either version is over it, `diff`, `old_content` and `new_content` are all empty and the result carries `omitted: "too_large"` with `size`, `mime` and `limit` — the fields and meanings of a `file.get` that refused a file, describing the larger of the two versions. It is not an error, and the client draws the same too-large card the file viewer does ([file.md](file.md#viewer-ui)). A version of exactly the limit is still sent.
 
 - **Sizes are measured before anything is read or diffed.** A blob is sized with `git cat-file -s`, a working-tree file with `fstat`; an oversized version is read only as far as `contents.SniffLen` to name its type, and `git diff` is not run at all. An untracked file's diff is built from the bounded content already read, never from a second read of a file that may have grown since.
 - **The limit is per version, not per message.** A full rewrite of a file just within it carries the file roughly four times over: twice as content, twice in the hunks.
 - **The check comes before the diff, so it cannot know whether there is one.** A large file whose only changes `-w` hides, or that a commit lists without changing its content, reads as too large rather than as "no changes". Diffing it to find out is the cost the check exists to avoid.
-- **`git.diff.changed` fires on the transition.** A file that grows past the limit, or shrinks back under it, is a change even though the three content fields may be empty both times.
+- **`git.diff.changed` compares `omitted` and `size` too.** The three content fields are empty both for a file with no changes and for one over the limit, so without them a file growing past the limit would never be announced. A file over the limit whose size changes is announced as well, since the `size` the client shows has changed.
 
 **A working-tree symlink is diffed as the link, not as what it points at.** Its content is the target path, which is what the index holds and what `git diff` compares — the same reading `git.show.file` gives a link ([Historical File Contents](#historical-file-contents)). Following it would size, or show, an unrelated file.
 
-A working-tree version that does not exist reads as empty — the old side of an added file, the new side of a deleted one. Any other failure to read it is returned as an error. A git object that cannot be read also reads as empty, since git's exit status does not tell a missing path from any other failure; a repository that is really broken fails the diff itself.
+A version that does not exist — the old side of an added file, the new side of a deleted one — reads as empty. A working-tree file that exists but cannot be read is returned as an error; a git object that cannot be read reads as empty too, since git's exit status does not tell a missing path from any other failure; a repository that is really broken fails the diff itself.
 
 ## Merge Commits
 
