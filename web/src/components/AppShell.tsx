@@ -6,6 +6,7 @@ import { useShallow } from "zustand/react/shallow";
 import { invalidateSessionViewQueries } from "../hooks/sessionViewQueries";
 import { useAgentOptions } from "../hooks/useAgentOptions";
 import { useAgentRoleSubscription } from "../hooks/useAgentRoleSubscription";
+import { useDocumentTitle } from "../hooks/useDocumentTitle";
 import { useFileDropGuard } from "../hooks/useFileDropGuard";
 import { useRouteState } from "../hooks/useRouteState";
 import { useSession } from "../hooks/useSession";
@@ -48,6 +49,7 @@ function AppShell() {
 	// server" screen are all screens someone can drop a file on, and every one of
 	// them would be replaced by it.
 	useFileDropGuard();
+	useDocumentTitle();
 
 	const {
 		overlay,
