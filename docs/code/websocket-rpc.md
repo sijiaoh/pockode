@@ -670,6 +670,45 @@ a transport limit does not reply, it closes the connection with
 `StatusMessageTooBig`. Any limit here has to stay above every method's own, or
 it silently takes over from it.
 
+### Outbound Delivery
+
+Every message the server sends on a connection — replies and notifications
+alike, on `/ws` and on the cluster's `/ws` — goes through that connection's own
+writer (`WebSocketStream` in `server/ws/stream.go`): a FIFO queue drained by one
+goroutine. Sending only enqueues and never waits on the network; order on a
+connection is preserved.
+
+The reason is that one watcher notifies its subscribers in turn. With
+synchronous writes, a client that stops reading without closing — a phone that
+lost its network — fills its socket buffer, and the next notification to it
+blocks the watcher, so every other connection subscribed to it stops receiving
+updates as well. The queue moves that wait off the shared path.
+
+A queue only moves the problem unless it is bounded, so a connection is closed
+when either limit is reached:
+
+| Limit | Value | Why this value |
+|-------|-------|----------------|
+| Queued bytes (`maxQueuedBytes`) | 16 MiB waiting behind the message being written | Equals `maxClientMessage` ([above](#inbound-message-size)): the server holds no more on the way out than a client can make it hold on the way in. Counted in bytes, not messages: a turn's deltas arrive as thousands of small messages a healthy client on a slow link must be allowed to fall behind on, while a single `file.get` reply can be megabytes, so a count says nothing about memory. An empty queue always accepts one message, so no single message is too large to send |
+| One message write (`writeTimeout`) | 30 s | The web client's `RPC_TIMEOUT_MS` ([below](#request-timeout)): a client that has not taken a message in that long has already given up on what it was waiting for. It covers the whole message, so a link too slow to carry one large reply in 30 s is closed as well |
+
+Both are logged at Warn with the `connId` — `closing websocket: client is not
+keeping up` and `closing websocket: write timed out`. After either, or any
+other write failure, the stream drops its queue, closes the connection at once
+and refuses every later message: accepting them would only lose them silently
+in the moment before jsonrpc2 notices the connection is gone.
+
+Closing is safe because nothing here was ever guaranteed to arrive: delivery is
+at-most-once, the client reconnects and resubscribes to full state
+([Reconnection Recovery](#reconnection-recovery)), and a request whose reply
+was lost fails at once with "Connection lost" rather than waiting out its
+timeout ([Request Timeout](#request-timeout)).
+
+A normal `Close` is different: it sends what is already queued, then closes
+with a normal closure, so a reply sent just before closing — an auth refusal —
+still reaches the client. It does not wait for that to finish, because jsonrpc2
+calls it while holding the lock every send takes.
+
 ### Compression
 
 `websocket.Accept` negotiates permessage-deflate with the browser
