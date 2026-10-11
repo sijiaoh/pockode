@@ -1,7 +1,6 @@
 package ws
 
 import (
-	"encoding/base64"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -9,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/pockode/server/attachments"
+	"github.com/pockode/server/contents"
 	"github.com/pockode/server/rpc"
 	"github.com/pockode/server/session"
 )
@@ -156,12 +156,9 @@ func TestSessionView_SessionDataSurvivesItsWorktree(t *testing.T) {
 	if attachment.File == nil || attachment.File.MIME != "image/png" {
 		t.Fatalf("attachment = %+v, want the image the session kept", attachment.File)
 	}
-	decoded, err := base64.StdEncoding.DecodeString(attachment.File.Content)
-	if err != nil {
-		t.Fatalf("decode attachment: %v", err)
-	}
-	if string(decoded) != string(pngPixel) {
-		t.Error("the attachment came back as different bytes than were stored")
+	// The bytes themselves are fetched over HTTP; this describes the ones kept.
+	if attachment.File.Encoding != contents.EncodingHTTP || attachment.File.Size != int64(len(pngPixel)) {
+		t.Errorf("attachment = %+v, want the %d stored bytes described for fetching over http", attachment.File, len(pngPixel))
 	}
 }
 

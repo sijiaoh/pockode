@@ -377,18 +377,13 @@ func TestViewImage_OversizedImageIsDescribedButNotStored(t *testing.T) {
 	sess := newTestSession()
 	sess.attachments = attachments.NewStore(dataDir, "session-1")
 
-	// Over the ceiling one JSON-RPC message may carry, so the client could not
-	// be sent it however it was stored.
-	data := pngBytes(t, 900, 900)
-	if int64(len(data)) <= contents.MaxFileSize {
-		t.Fatalf("test image is only %d bytes, under the %d limit", len(data), contents.MaxFileSize)
-	}
+	data := paddedPNG(t, 900, 900, attachments.MaxSize+1)
 	path := writeFile(t, t.TempDir(), "huge.png", data)
 
 	viewImage(t, sess, "exec-1", path)
 	file := fileBlockOf(t, drainEvents(sess.events), path)
 
-	if file.Omitted != contents.OmitTooLarge || file.Limit != contents.MaxFileSize {
+	if file.Omitted != contents.OmitTooLarge || file.Limit != attachments.MaxSize {
 		t.Errorf("expected too_large with the limit, got %q limit=%d", file.Omitted, file.Limit)
 	}
 	if file.AttachmentID != "" {
@@ -405,6 +400,59 @@ func TestViewImage_OversizedImageIsDescribedButNotStored(t *testing.T) {
 	if entries, err := os.ReadDir(attachments.Dir(dataDir, "session-1")); err == nil && len(entries) > 0 {
 		t.Errorf("expected nothing stored, found %d entries", len(entries))
 	}
+}
+
+// The image reaches the client over HTTP, so the JSON-RPC message ceiling that
+// once bounded what was worth storing no longer does.
+func TestViewImage_StoresAnImagePastTheMessageCeiling(t *testing.T) {
+	dataDir := t.TempDir()
+	sess := newTestSession()
+	sess.attachments = attachments.NewStore(dataDir, "session-1")
+
+	data := paddedPNG(t, 9, 9, contents.MaxFileSize+1)
+	path := writeFile(t, t.TempDir(), "photo.png", data)
+
+	viewImage(t, sess, "exec-1", path)
+	file := fileBlockOf(t, drainEvents(sess.events), path)
+
+	if file.AttachmentID == "" || file.Omitted != "" {
+		t.Fatalf("expected the image to be stored, got %+v", file)
+	}
+	if file.Size != int64(len(data)) {
+		t.Errorf("expected size %d, got %d", len(data), file.Size)
+	}
+}
+
+// An SVG is read back as text in one JSON-RPC message, so the raster ceiling
+// does not apply to it: storing one past the message ceiling would keep bytes
+// no client can be shown.
+func TestViewImage_OversizedSVGIsHeldToTheMessageCeiling(t *testing.T) {
+	dataDir := t.TempDir()
+	sess := newTestSession()
+	sess.attachments = attachments.NewStore(dataDir, "session-1")
+
+	svg := append([]byte(`<svg xmlns="http://www.w3.org/2000/svg">`), bytes.Repeat([]byte(" "), contents.MaxFileSize)...)
+	path := writeFile(t, t.TempDir(), "big.svg", svg)
+
+	viewImage(t, sess, "exec-1", path)
+	file := fileBlockOf(t, drainEvents(sess.events), path)
+
+	if file.Omitted != contents.OmitTooLarge || file.Limit != contents.MaxFileSize {
+		t.Errorf("expected too_large with the message ceiling, got %q limit=%d", file.Omitted, file.Limit)
+	}
+	if file.AttachmentID != "" {
+		t.Error("expected the svg not to be stored")
+	}
+}
+
+// paddedPNG is a decodable PNG of the given dimensions grown to size bytes with
+// trailing zeroes, which the header-only reads here never look at — a large
+// file without the time it takes to encode one.
+func paddedPNG(t *testing.T, width, height, size int) []byte {
+	t.Helper()
+	data := make([]byte, size)
+	copy(data, pngBytes(t, width, height))
+	return data
 }
 
 func TestViewImage_StoreFailureIsReportedNotDropped(t *testing.T) {

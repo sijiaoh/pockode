@@ -425,7 +425,8 @@ func (m *Manager) ResolveSessionWorktree(sessionID string) (string, error) {
 // Uploads arrive over HTTP, off the WebSocket connection that would otherwise
 // hold the worktree, so this vouches for both names before either becomes a
 // path. A session of a deleted worktree is refused: it can be read, never
-// continued (SessionReader), and a file sent to it has nowhere to go.
+// continued (SessionReader), and a file sent to it has nowhere to go —
+// StoredAttachmentDataDir is the read side, which does answer for one.
 func (m *Manager) AttachmentDataDir(name, sessionID string) (string, error) {
 	// Any failure to resolve the name is the worktree not being there — a
 	// named one in a project that is not a git repository has no worktrees —
@@ -436,9 +437,22 @@ func (m *Manager) AttachmentDataDir(name, sessionID string) (string, error) {
 		}
 		return "", fmt.Errorf("%w: %w", ErrWorktreeNotFound, err)
 	}
+	return m.StoredAttachmentDataDir(name, sessionID)
+}
+
+// StoredAttachmentDataDir is the data directory one of the named worktree's
+// sessions keeps its attachments under, once the session is known to be stored
+// there — whether or not the worktree still exists, since a deleted worktree's
+// sessions stay readable (SessionReader) and their images with them.
+//
+// The session is vouched for, not merely the name checked, because the session
+// id picks the directory an attachment is read from: an id this worktree does
+// not have must not become a path at all.
+func (m *Manager) StoredAttachmentDataDir(name, sessionID string) (string, error) {
 	reader, err := m.SessionReader(name)
 	if err != nil {
-		return "", err
+		// The only failure is a name that could never be a worktree's.
+		return "", fmt.Errorf("%w: %w", ErrWorktreeNotFound, err)
 	}
 	_, found, err := reader.Get(sessionID)
 	if err != nil {

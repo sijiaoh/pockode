@@ -11,7 +11,9 @@ import (
 	"github.com/sourcegraph/jsonrpc2"
 )
 
-// handleAttachmentGet serves the content a chat event references by id.
+// handleAttachmentGet describes the content a chat event references by id,
+// carrying it inline only when it is text; a raster image's bytes come from
+// GET /api/chat/attachments.
 //
 // The bytes are fetched on demand rather than carried in the event because an
 // event is written into the session history and replayed with every page of it;
@@ -55,12 +57,12 @@ func (h *rpcMethodHandler) handleAttachmentGet(ctx context.Context, conn *jsonrp
 // directory, answering the client itself on every failure. ok=false means the
 // request has already been answered.
 //
-// It reads through contents.GetContents, the same way file.get does, so an
-// attachment is described to the client exactly as a file is — MIME sniffed
-// from the bytes, base64 for an image, omitted with a reason when it is not
-// something to show. The root is the session's attachment directory rather than
-// the work directory, which is also what confines the id: a directory holding
-// nothing but content-addressed files has nothing else to reach.
+// The id is held to what the store hands out by attachments.Resolve — the same
+// gate GET /api/chat/attachments applies, so an id described here is one that
+// endpoint serves. It is then read through contents.GetContents, the same way
+// file.get does, so an attachment is described to the client exactly as a file
+// is — MIME sniffed from the bytes, a raster image left for the client to fetch
+// over HTTP, omitted with a reason when it is not something to show.
 //
 // Shared by attachment.get and session_view.attachment so that an id is
 // confined and answered the same way whichever worktree the session belongs to.
@@ -69,9 +71,20 @@ func (h *rpcMethodHandler) handleAttachmentGet(ctx context.Context, conn *jsonrp
 // directory it passes; that check is what keeps an unknown session id from
 // becoming a path at all.
 func (h *rpcMethodHandler) readAttachment(ctx context.Context, conn *jsonrpc2.Conn, req *jsonrpc2.Request, dataDir, sessionID, id string) (*contents.FileContent, bool) {
+	if _, err := attachments.Resolve(dataDir, sessionID, id); err != nil {
+		if errors.Is(err, attachments.ErrNotFound) {
+			h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "attachment not found")
+			return nil, false
+		}
+		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInternalError, err.Error())
+		return nil, false
+	}
+
 	result, err := contents.GetContents(attachments.Dir(dataDir, sessionID), id)
 	if err != nil {
-		if errors.Is(err, contents.ErrNotFound) || errors.Is(err, contents.ErrInvalidPath) {
+		// Resolve has vouched for the id, so not finding it now means it was
+		// removed in between — the session deleted under the request.
+		if errors.Is(err, contents.ErrNotFound) {
 			h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "attachment not found")
 			return nil, false
 		}

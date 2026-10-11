@@ -26,6 +26,20 @@ import (
 	"github.com/pockode/server/filestore"
 )
 
+// MaxSize is the ceiling on what one attachment may be, whoever delivered it:
+// the files a user sends with a message (counted per upload request), the image
+// a tool returned, the one codex's view_image looked at. It is also the
+// ceiling on previewing any raster image, including one in the workspace or in
+// a commit (contents.NewFileContent), so that an image is shown up to the same
+// size wherever it came from. (An SVG is read back as text, and so is still
+// held to contents.MaxFileSize.)
+//
+// It is sized for what a phone sends: a photo or a screen recording's still is
+// a few megabytes, a PDF rarely more. Content is read whole before it is stored
+// — the store names a file by the hash of its content — so the ceiling bounds
+// memory as well as disk.
+const MaxSize = 20 << 20 // 20 MiB
+
 // ErrDisabled is returned by Put on a store with no directory behind it.
 var ErrDisabled = errors.New("attachment store disabled")
 

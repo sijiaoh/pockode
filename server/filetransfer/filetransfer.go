@@ -1,4 +1,6 @@
-// Package filetransfer serves whole-file upload and download over HTTP.
+// Package filetransfer serves whole-file upload and download over HTTP — and
+// the bytes of every raster image the client renders, which the JSON-RPC side
+// describes but never carries (contents.EncodingHTTP).
 //
 // These files are too big for the WebSocket RPC path: file.get/file.write carry
 // the whole content inside one JSON-RPC message (2 MiB ceiling, see
@@ -130,37 +132,41 @@ func (h *Handler) Download(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	fullPath := filepath.Join(workDir, relPath)
+	h.serveFile(w, r, filepath.Join(workDir, relPath), relPath)
+}
 
+// serveFile streams the regular file at fullPath, naming it display in errors
+// and logs.
+func (h *Handler) serveFile(w http.ResponseWriter, r *http.Request, fullPath, display string) {
 	// Stat before opening, like contents.GetContents: opening a fifo blocks
 	// until someone writes to it, which would hang the request for good.
 	info, statErr := os.Stat(fullPath)
 	if statErr != nil {
 		if os.IsNotExist(statErr) {
-			h.writeError(w, errf(http.StatusNotFound, CodeNotFound, "not found: %s", relPath), nil)
+			h.writeError(w, errf(http.StatusNotFound, CodeNotFound, "not found: %s", display), nil)
 			return
 		}
-		h.log.Error("failed to stat download target", "path", relPath, "error", statErr)
-		h.writeError(w, errf(http.StatusInternalServerError, CodeInternal, "failed to stat %s: %v", relPath, statErr), nil)
+		h.log.Error("failed to stat download target", "path", display, "error", statErr)
+		h.writeError(w, errf(http.StatusInternalServerError, CodeInternal, "failed to stat %s: %v", display, statErr), nil)
 		return
 	}
 	if info.IsDir() {
-		h.writeError(w, errf(http.StatusBadRequest, CodeNotAFile, "%s is a directory, not a file", relPath), nil)
+		h.writeError(w, errf(http.StatusBadRequest, CodeNotAFile, "%s is a directory, not a file", display), nil)
 		return
 	}
 	if !info.Mode().IsRegular() {
-		h.writeError(w, errf(http.StatusBadRequest, CodeNotAFile, "%s is not a regular file", relPath), nil)
+		h.writeError(w, errf(http.StatusBadRequest, CodeNotAFile, "%s is not a regular file", display), nil)
 		return
 	}
 
 	f, err := os.Open(fullPath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			h.writeError(w, errf(http.StatusNotFound, CodeNotFound, "not found: %s", relPath), nil)
+			h.writeError(w, errf(http.StatusNotFound, CodeNotFound, "not found: %s", display), nil)
 			return
 		}
-		h.log.Error("failed to open download target", "path", relPath, "error", err)
-		h.writeError(w, errf(http.StatusInternalServerError, CodeInternal, "failed to open %s: %v", relPath, err), nil)
+		h.log.Error("failed to open download target", "path", display, "error", err)
+		h.writeError(w, errf(http.StatusInternalServerError, CodeInternal, "failed to open %s: %v", display, err), nil)
 		return
 	}
 	defer f.Close()
@@ -169,28 +175,16 @@ func (h *Handler) Download(w http.ResponseWriter, r *http.Request) {
 	// between the stat and the open, and ServeContent would then block on it.
 	fi, err := f.Stat()
 	if err != nil {
-		h.log.Error("failed to stat download descriptor", "path", relPath, "error", err)
-		h.writeError(w, errf(http.StatusInternalServerError, CodeInternal, "failed to stat %s: %v", relPath, err), nil)
+		h.log.Error("failed to stat download descriptor", "path", display, "error", err)
+		h.writeError(w, errf(http.StatusInternalServerError, CodeInternal, "failed to stat %s: %v", display, err), nil)
 		return
 	}
 	if !fi.Mode().IsRegular() {
-		h.writeError(w, errf(http.StatusBadRequest, CodeNotAFile, "%s is not a regular file", relPath), nil)
+		h.writeError(w, errf(http.StatusBadRequest, CodeNotAFile, "%s is not a regular file", display), nil)
 		return
 	}
 
-	// Always octet-stream: the response exists to be saved, and naming a real
-	// type would invite a browser to render a file from the workspace in the
-	// app's own origin. nosniff keeps it from guessing one back.
-	w.Header().Set("Content-Type", "application/octet-stream")
-	w.Header().Set("X-Content-Type-Options", "nosniff")
-	w.Header().Set("Content-Disposition", contentDisposition(fi.Name()))
-	// A response with no freshness of its own lets a browser invent one from
-	// Last-Modified — around a tenth of the file's age, so hours for a file
-	// edited yesterday — and answer the next download from its own cache with
-	// the content from before the last edit, silently and without asking here.
-	// Refusing storage also keeps the workspace out of the disk cache, which
-	// outlives the token that was allowed to read it.
-	w.Header().Set("Cache-Control", "no-store")
+	setContentHeaders(w, fi.Name())
 
 	// Empty name so ServeContent keeps the Content-Type set above; it still
 	// serves Range requests, which is what lets a client show progress and read
@@ -438,6 +432,32 @@ func (h *Handler) writeJSON(w http.ResponseWriter, status int, v any) {
 	if err := json.NewEncoder(w).Encode(v); err != nil {
 		h.log.Error("failed to encode file transfer response", "error", err)
 	}
+}
+
+// setContentHeaders sets what every response carrying stored bytes sends —
+// a workspace file, a chat attachment, a file as it stood in a commit.
+//
+// Shared rather than repeated per route because these headers are the security
+// boundary, not a detail of one endpoint: the client renders some of these
+// bytes (an image fetched into a blob) as readily as it saves others, and
+// whatever the route, the browser must never render them as a real type in the
+// app's own origin.
+func setContentHeaders(w http.ResponseWriter, name string) {
+	// Always octet-stream: naming a real type would invite a browser to render
+	// the content in the app's own origin — an SVG or an HTML file running its
+	// scripts where the login token lives. nosniff keeps it
+	// from guessing one back. A client that renders the bytes (an image) types
+	// them itself, from the metadata the JSON-RPC side already sent.
+	w.Header().Set("Content-Type", "application/octet-stream")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("Content-Disposition", contentDisposition(name))
+	// A response with no freshness of its own lets a browser invent one from
+	// Last-Modified — around a tenth of the file's age, so hours for a file
+	// edited yesterday — and answer the next download from its own cache with
+	// the content from before the last edit, silently and without asking here.
+	// Refusing storage also keeps the content out of the disk cache, which
+	// outlives the token that was allowed to read it.
+	w.Header().Set("Cache-Control", "no-store")
 }
 
 // contentDisposition names the download without letting the file name break out

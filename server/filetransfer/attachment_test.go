@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -38,6 +39,15 @@ func (r sessionResolver) AttachmentDataDir(worktree, sessionID string) (string, 
 		return "", fmt.Errorf("%w: %s", errNoSession, sessionID)
 	}
 	return r.dataDir, nil
+}
+
+// StoredAttachmentDataDir also answers for "gone", a deleted worktree whose
+// sessions are still stored, and which AttachmentDataDir refuses.
+func (r sessionResolver) StoredAttachmentDataDir(worktree, sessionID string) (string, error) {
+	if worktree == "gone" {
+		worktree = ""
+	}
+	return r.AttachmentDataDir(worktree, sessionID)
 }
 
 func newAttachmentHandler(t *testing.T) (*AttachmentHandler, string) {
@@ -160,5 +170,100 @@ func TestAttachmentUpload(t *testing.T) {
 		h, _ := newAttachmentHandler(t)
 		rec := uploadAttachments(t, h, "session_id=sess")
 		assertError(t, rec, http.StatusBadRequest, CodeInvalidRequest)
+	})
+}
+
+func downloadAttachment(t *testing.T, h *AttachmentHandler, query string) *httptest.ResponseRecorder {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	h.Download(rec, httptest.NewRequest(http.MethodGet, "/api/chat/attachments?"+query, nil))
+	return rec
+}
+
+func TestAttachmentDownload(t *testing.T) {
+	// The headers are the security boundary: an attachment is user content, and
+	// must neither render as a real type in the app's origin nor outlive the
+	// token in the disk cache.
+	t.Run("streams a stored attachment with the download endpoint's headers", func(t *testing.T) {
+		h, dataDir := newAttachmentHandler(t)
+		id, err := attachments.NewStore(dataDir, "sess").Put([]byte("<svg onload=alert(1)>"), ".svg")
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		rec := downloadAttachment(t, h, "session_id=sess&id="+id)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status %d: %s", rec.Code, rec.Body.String())
+		}
+		if rec.Body.String() != "<svg onload=alert(1)>" {
+			t.Errorf("body = %q", rec.Body.String())
+		}
+		for header, want := range map[string]string{
+			"Content-Type":           "application/octet-stream",
+			"X-Content-Type-Options": "nosniff",
+			"Cache-Control":          "no-store",
+		} {
+			if got := rec.Header().Get(header); got != want {
+				t.Errorf("%s = %q, want %q", header, got, want)
+			}
+		}
+	})
+
+	t.Run("serves a session of a deleted worktree", func(t *testing.T) {
+		h, dataDir := newAttachmentHandler(t)
+		id, err := attachments.NewStore(dataDir, "sess").Put([]byte("png"), "")
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		rec := downloadAttachment(t, h, "session_id=sess&worktree=gone&id="+id)
+
+		if rec.Code != http.StatusOK || rec.Body.String() != "png" {
+			t.Errorf("status %d body %q", rec.Code, rec.Body.String())
+		}
+	})
+
+	// The id is the client's, so nothing it spells may reach past the store —
+	// not a file elsewhere in the data directory, not the store's lock files.
+	t.Run("refuses an id that is not one the store hands out", func(t *testing.T) {
+		h, dataDir := newAttachmentHandler(t)
+		writeFile(t, dataDir, "secret.txt", []byte("secret"))
+		writeFile(t, attachments.Dir(dataDir, "sess"), "abc.lock", []byte("lock"))
+		if err := os.MkdirAll(filepath.Join(attachments.Dir(dataDir, "sess"), "sub"), 0755); err != nil {
+			t.Fatal(err)
+		}
+
+		for _, id := range []string{
+			"../../../secret.txt",
+			"/etc/passwd",
+			"sub",
+			".",
+			"abc.lock",
+			"no-such-id",
+		} {
+			rec := downloadAttachment(t, h, "session_id=sess&id="+id)
+			assertError(t, rec, http.StatusNotFound, CodeNotFound)
+		}
+	})
+
+	t.Run("refuses a session the worktree does not have", func(t *testing.T) {
+		h, _ := newAttachmentHandler(t)
+		rec := downloadAttachment(t, h, "session_id=other&id=x")
+		assertError(t, rec, http.StatusNotFound, CodeSessionUnknown)
+	})
+
+	t.Run("refuses an unknown worktree", func(t *testing.T) {
+		h, _ := newAttachmentHandler(t)
+		rec := downloadAttachment(t, h, "session_id=sess&worktree=ghost&id=x")
+		assertError(t, rec, http.StatusNotFound, CodeWorktreeUnknown)
+	})
+
+	t.Run("refuses a request missing session id or id", func(t *testing.T) {
+		h, _ := newAttachmentHandler(t)
+		for _, query := range []string{"id=x", "session_id=sess"} {
+			rec := downloadAttachment(t, h, query)
+			assertError(t, rec, http.StatusBadRequest, CodeInvalidRequest)
+		}
 	})
 }

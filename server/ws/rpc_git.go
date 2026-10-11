@@ -332,7 +332,7 @@ func (h *rpcMethodHandler) handleGitShowFile(ctx context.Context, conn *jsonrpc2
 	if err != nil {
 		// Asking for a path the commit never had is the caller's mistake, not a
 		// server fault, and file.get answers it the same way.
-		if errors.Is(err, contents.ErrNotFound) || errors.Is(err, contents.ErrInvalidPath) {
+		if errors.Is(err, contents.ErrNotFound) || errors.Is(err, contents.ErrInvalidPath) || errors.Is(err, git.ErrInvalidArgument) {
 			h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, err.Error())
 			return
 		}

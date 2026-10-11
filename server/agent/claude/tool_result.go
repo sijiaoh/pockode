@@ -157,11 +157,9 @@ func fileBlock(log *slog.Logger, store attachments.Store, elem toolResultBlock, 
 
 	file.Width, file.Height = agent.ImageDimensions(log, data)
 
-	// The attachment travels back through one JSON-RPC message, so anything the
-	// file namespace would refuse to send is not worth storing either.
-	if file.Size > contents.MaxFileSize {
+	if file.Size > attachments.MaxSize {
 		file.Omitted = contents.OmitTooLarge
-		file.Limit = contents.MaxFileSize
+		file.Limit = attachments.MaxSize
 		return file
 	}
 

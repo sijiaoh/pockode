@@ -177,15 +177,30 @@ func TestParseToolResultDocument(t *testing.T) {
 	}
 }
 
-func TestParseToolResultOversizedImage(t *testing.T) {
-	store, dir := testStore(t)
+// The image reaches the client over HTTP, so the JSON-RPC message ceiling that
+// once bounded what was worth storing no longer does.
+func TestParseToolResultStoresAnImagePastTheMessageCeiling(t *testing.T) {
+	store, _ := testStore(t)
 	data := make([]byte, contents.MaxFileSize+1)
 	copy(data, pngBytes(t, 4, 4))
 	content := fmt.Sprintf(`[{"type":"image","source":{"type":"base64","media_type":"image/png","data":%q}}]`,
 		base64.StdEncoding.EncodeToString(data))
 
 	file := parseToolResultLine(t, store, content).Contents[0].File
-	if file.Omitted != contents.OmitTooLarge || file.Limit != contents.MaxFileSize {
+	if file.AttachmentID == "" || file.Omitted != "" {
+		t.Errorf("expected the image to be stored, got %+v", file)
+	}
+}
+
+func TestParseToolResultOversizedImage(t *testing.T) {
+	store, dir := testStore(t)
+	data := make([]byte, attachments.MaxSize+1)
+	copy(data, pngBytes(t, 4, 4))
+	content := fmt.Sprintf(`[{"type":"image","source":{"type":"base64","media_type":"image/png","data":%q}}]`,
+		base64.StdEncoding.EncodeToString(data))
+
+	file := parseToolResultLine(t, store, content).Contents[0].File
+	if file.Omitted != contents.OmitTooLarge || file.Limit != attachments.MaxSize {
 		t.Errorf("expected a too_large verdict, got %+v", file)
 	}
 	if file.AttachmentID != "" {
