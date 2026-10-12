@@ -271,7 +271,8 @@ they hold is *drawn*: which rows show a spinner, and which button says `Pushing�
 ### Why Scroll State Is Neither a Store nor State
 
 The transcript's scroll decisions — which of the two things the reader is doing,
-and the element an anchor is holding still — live in refs inside
+the element an anchor is holding still, and the seam a page landing is held
+by — live in refs inside
 `useTranscriptScroll` (`web/src/components/Chat/useTranscriptScroll.ts`,
 [the model](../agent-chat.md#where-the-view-sits)), and that is the exact
 opposite of the reasoning above.
@@ -528,12 +529,13 @@ when the newer one never got one, a message without an anchor being one the user
 cannot fork from at all.
 
 The joined message keeps the newer half's **id** as well, the bubble being keyed
-on it, and that one is load-bearing outside the reducer: it is why the
-transcript never anchors its scroll position on the first message it holds — the
-first being the only one a seam can grow older content inside, and a bubble that
-grows under the anchor holds nothing still
-([agent-chat.md](../agent-chat.md#reading-a-page-on-the-client)). Moving the
-identity to the older half would move that boundary, not just rename a key.
+on it, and that one is load-bearing outside the reducer: the transcript holds
+the reader still across a page by the first loaded row's bottom edge — the first
+row being the only one a seam can grow older content inside — and that edge
+only measures what went in above it if the row is the same node before and after
+the page ([agent-chat.md](../agent-chat.md#reading-a-page-on-the-client)). Moving
+the identity to the older half would remount the bubble under the reader, not
+just rename a key.
 
 ### Part Identity
 

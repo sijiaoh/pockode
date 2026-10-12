@@ -6,6 +6,7 @@ import {
 	answerPageRequest,
 	chatHistoryRequests,
 	resetChatHistoryServer,
+	streamRecords,
 } from "./chatHistoryServer";
 
 export interface TranscriptOptions {
@@ -22,8 +23,16 @@ export interface RenderedTranscript {
 	requests: () => number;
 	/** Scrolls the view as the reader would, and lets the list react. */
 	scrollTo: (top: number) => Promise<void>;
-	/** Answers the page request in flight, and lets the list react. */
-	landPage: () => Promise<void>;
+	/**
+	 * Answers the page request in flight, and lets the list react. `live` is
+	 * output that arrives in the same commit as the page.
+	 */
+	landPage: (live?: unknown[]) => Promise<void>;
+	/**
+	 * Lets the list react to a change the test made to the page itself — a box
+	 * settling on its size, which reaches the list through no commit at all.
+	 */
+	settle: () => Promise<void>;
 	/**
 	 * How far below the view's top edge the element showing `text` sits now —
 	 * the number that has to hold still for the reader's content to stay put.
@@ -104,14 +113,19 @@ export async function renderTranscript({
 			scroller.scrollTop = top;
 			await settle();
 		},
-		landPage: async () => {
+		landPage: async (live = []) => {
+			// One `act`, which holds every update made inside it to a single commit
+			// — the page's, once its answer has been read, and the live output's.
 			await act(async () => {
 				if (!answerPageRequest()) {
 					throw new Error("no page request is in flight");
 				}
+				streamRecords(live);
+				await new Promise((resolve) => setTimeout(resolve));
 			});
 			await settle();
 		},
+		settle,
 		viewTopOf: (text) =>
 			screen.getByText(text).getBoundingClientRect().top -
 			scroller.getBoundingClientRect().top,

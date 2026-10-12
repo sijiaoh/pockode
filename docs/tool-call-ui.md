@@ -123,8 +123,10 @@ load-bearing:
 Each row's wrapper, not the list, is a scroll anchor candidate in the main
 transcript, exactly as a part on its own is (`scrollAnchor.ts`): a list with
 its rows open can be several screens tall, and holding it still would say
-nothing about where inside it the reader is. A group's summary row is one too; a
-row folded into it is not ([groups](#groups)).
+nothing about where inside it the reader is. For the same reason an open row's
+sections are candidates beneath it — one result can be screens long too — while
+a closed row's body, being `hidden`, offers none. A group's summary row is a
+candidate as well; a row folded into it is not ([groups](#groups)).
 
 ## Groups
 
@@ -243,8 +245,11 @@ a summary entry before its first part and hides its folded parts with the
 DOM once, so a jump to it lands, and a row folded and unfolded comes back as it
 was. A hidden part is not a scroll anchor candidate: an element that is not
 displayed measures as sitting at the top. For the same reason a part the reader
-was anchored on that folds away gives up the anchor, and a fresh one is taken
-where the view sits ([agent-chat.md](agent-chat.md#where-the-view-sits)).
+was anchored on that folds away hands the anchor to the group's summary, held
+where the part's top was but never above the view's top or under a bar pinned
+there — where a fold from the row's own bar would have landed them ([folding
+from the bar](#folding-from-the-bar),
+[agent-chat.md](agent-chat.md#where-the-view-sits)).
 
 **Nothing opens a group but the user, and nothing folds what the user opened.**
 A row's open body is held by the list (`rowExpansionContext.ts`), which keeps a
@@ -2044,9 +2049,9 @@ the end of its row has begun to carry out is no longer stuck. It is read on
 the scroller's scroll, on the row changing size — a row hidden by its
 parent folding reads as zeros and must not keep the flag — and on the
 scroller's content changing size, since a row above it growing inside the same
-Process moves it without a scroll (nothing inside a body is an anchor the
-view is held by), directly in each
-callback rather than a frame later, and only while the row is open, so a
+Process moves it without a scroll (the anchor holds still what the reader is
+reading, not where the row starts), directly in each callback rather than a
+frame later, and only while the row is open, so a
 transcript of closed rows listens to nothing.
 
 **Nested, one bar is shown: the innermost.** A row inside an open Process
@@ -2086,9 +2091,11 @@ stuck, and the outer one shows again under it as it goes.
   is. Everything inside what follows a bar has
   `scroll-margin-top: var(--row-height)`, in the base layer at no specificity
   (`:where(.row-bar ~ *) *`), so an element's own `scroll-mt-*` still wins.
-- **Nothing of the scroll anchor.** The candidates are the row wrappers, which
-  are not positioned and hold no candidate of their own, and a sticky box being
-  pinned moves nothing in layout ([the list](#the-list)).
+- **Nothing of the scroll anchor.** The candidates are the row wrappers and the
+  sections of an open body ([the list](#the-list)), never the bar or a section
+  header that sticks: a pinned box is drawn away from where it sits in the flow,
+  and being pinned moves nothing in layout, so nothing the anchor measures moves
+  with it.
 
 **`--row-height`** is the row's floor — `2.25rem`, `2.75rem` under
 `any-pointer: coarse` — and so the pinned bar's height, declared on `:root`

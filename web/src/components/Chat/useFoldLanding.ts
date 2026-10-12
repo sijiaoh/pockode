@@ -27,7 +27,7 @@ export function coveredAbove(el: HTMLElement): number {
  * Where a row whose fold hid it went: the summary of the group it folded
  * into, which precedes its hidden slot among the list's slots.
  */
-function foldPlace(slot: Element): HTMLElement | null {
+export function foldPlace(slot: Element): HTMLElement | null {
 	for (
 		let el = slot.previousElementSibling;
 		el;

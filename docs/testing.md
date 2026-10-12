@@ -301,8 +301,7 @@ job of its own, `browser` in `.github/workflows/frontend.yml`, so the jsdom jobs
 never wait on a download. That job downloads both browsers on every run, each
 roughly 280 MB unpacked, and apt-installs WebKit's libraries. Its header says
 why none of that is cached. A failing test leaves a screenshot in
-`__screenshots__/` beside the file, which is gitignored; the expected failure
-below leaves one on every run, and it means nothing.
+`__screenshots__/` beside the file, which is gitignored.
 
 **What belongs here.** Only what needs real layout: measured heights, scroll
 offsets the browser clamps, what an observer reports after a resize. Anything
@@ -316,10 +315,14 @@ become better by moving here.
 real `useChatMessages`, in a box of fixed height. A test gives it a session's
 history records cut into pages. Subscribing returns the newest page. Each older
 page is asked for by the list itself as the reader scrolls up, and arrives only
-when the test calls `landPage()`. Only the three history RPCs are stubbed
-(`web/src/test/chatHistoryServer.ts`), and every file using the fixture has to
-carry the `vi.mock` shown on `stubChatHistoryRpc`. Two things about writing
-tests with it:
+when the test calls `landPage()`. `landPage(live)` delivers `live` records to the
+subscription in the same commit as the page — output landing at the end while a
+page lands above, which is the case a total-height measure gets wrong. `settle()`
+lets the list react to a size change the test made to the page directly, such as
+a box growing, which reaches the list through no commit at all. Only the three
+history RPCs are stubbed (`web/src/test/chatHistoryServer.ts`), and every file
+using the fixture has to carry the `vi.mock` shown on `stubChatHistoryRpc`. Two
+things about writing tests with it:
 
 - **Assert relative movement, never pixels.** Offsets depend on width and fonts,
   and differ between the two browsers. Read where the reader's line sits before
@@ -328,17 +331,6 @@ tests with it:
   correct code.
 - **Marker text must be unique across every page**, because `viewTopOf` finds
   its element with `getByText`.
-
-**The expected failure.** `web/src/components/Chat/MessageList.browser.test.tsx`
-holds an `it.fails` test that reproduces the known paging bug where a page cut
-inside a turn loses the reader's place
-([agent-chat.md](agent-chat.md#reading-a-page-on-the-client); the TODO above the
-test has the mechanism). `it.fails` is green while the bug is there, so **when a
-fix lands this test turns red, and the fix must drop `.fails` in the same
-change.** Red here means fixed, not broken. Keep the two passing tests next to
-it. `it.fails` passes on any throw, including a broken fixture. The control
-proves the anchor holds without a splice, and the splice test proves the splice
-really happens. Without them a broken harness would look like a reproduced bug.
 
 **A local-only red: Vite reloading mid-run.** With a warm Vite cache
 (`web/node_modules/.vite`), a dependency imported for the first time is only

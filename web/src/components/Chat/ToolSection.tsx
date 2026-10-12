@@ -18,6 +18,7 @@ import {
 } from "../ui";
 import { useFullScreen } from "./FullScreenHost";
 import { ContentSlice, hugeClamp, useHugeContent } from "./HugeContent";
+import { anchorCandidateProps } from "./scrollAnchor";
 import { useTranscriptView } from "./transcriptViewContext";
 import { useStuckBar } from "./useStuckBar";
 
@@ -238,6 +239,9 @@ export function Section({
 	return (
 		<div
 			ref={rootRef}
+			// A section of an open row is the finest place in a tool's body the
+			// view can be held still over (see `scrollAnchor`).
+			{...anchorCandidateProps}
 			// A foldable title's hit area reaches 10px above the header under a
 			// thumb, as does a cut section's button below its content, and the
 			// body's 12px between sections cannot hold both: the title is moved

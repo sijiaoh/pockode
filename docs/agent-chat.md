@@ -467,30 +467,44 @@ Reconnecting re-subscribes and so lands back on the newest page: pages already
 scrolled in are dropped rather than stitched back together, since the cursor
 chain would have to be replayed from the bottom anyway.
 
-Scroll position is held by holding one element still, not by comparing scroll
-heights before and after — the agent can go on writing at the bottom while the
-page is in flight, and that growth is indistinguishable from the growth above
-that has to be compensated for. Beyond that, a page landing on top needs no rule
-of its own: it moved the element the reader is looking at, and putting that
-element back is what the transcript does after every commit
-([where the view sits](#where-the-view-sits)).
-
-One fact about the seam belongs here rather than there. The first loaded row and
-its first part are never anchored to, because the first row is the one an
-incoming page can be merged into and the merge keeps its identity
+**A page is held by its seam, not by the anchor.** The seam is the bottom edge
+of the first loaded row (`Seam` in `web/src/components/Chat/scrollAnchor.ts`). A
+page only ever adds content above that edge — rows before the first one, or the
+older half of its turn spliced into it from the top, the merge keeping the row's
+identity so that it is the same node afterwards
 ([code/frontend-state.md](code/frontend-state.md#turn-boundaries-and-late-events)).
-The older half grows *inside* it, so holding its top edge still holds nothing
-still: it carries everything the reader was looking at down the screen, which is
-the jump the anchor exists to prevent. Every candidate below it moves with that
-growth instead, which is what makes it measurable.
+How far the edge moved is therefore exactly how much went in above the reader,
+wherever they are reading, the spliced part included. The view is moved by that
+much from wherever it is when the page commits, not put back where it was last
+reported to be: a flick still in flight whose scroll event the browser has not
+delivered yet is the reader's, and rewinding it would undo their scroll. Then the
+anchor is taken afresh from the corrected view; the one held before the page is
+not carried across it.
 
-Skipping the first part is not yet enough. A merge also rebuilds the parts
-inside the first row, and a later part keyed by its index is remounted. When the
-reader is anchored on that part, the anchor leaves the DOM, a fresh one is taken
-at the top of the view, the view stays at 0, and the next page is asked for at
-once. This is a known bug. It is reproduced by an expected failure in
-`web/src/components/Chat/MessageList.browser.test.tsx`, and a fix has to flip
-that test ([testing.md](testing.md#frontend-the-real-browser-entry)).
+Neither of the two obvious measures says the same thing. The content's total
+height also counts what the agent writes at the end while the page is in flight,
+and that output can commit together with the page — growth below that is
+indistinguishable from the growth above that has to be compensated for. The
+anchor ([where the view sits](#where-the-view-sits)) says it only of an element
+the page left alone, and inside a spliced row that may be none of them: the text
+at the seam grows from the top of its own part, and the merge rebuilds the row's
+parts, so the element the reader was anchored on can have grown above its own top
+edge or left the DOM. That is how the anchor used to lose the reader on a splice:
+the anchored part was remounted, a fresh anchor was taken at the top of the view,
+the view stayed at 0 and the next page was asked for at once.
+
+The seam is recorded every time the view is placed or the reader scrolls, not
+when a page arrives: by the time the commit that lands a page is seen, the page
+is already laid out above the edge. Recording it on the reader's scroll matters
+for one more reason. Layout can change and the reader scroll over it before a
+resize observation reaches the list; from then on that layout is where they are,
+and a page landing must not count the growth a second time.
+
+Because nothing on the anchor has to survive a page, the first row and its first
+part are ordinary candidates, and a reader inside the merged row is held as
+finely as anywhere else. If the seam's row is itself gone after the page, the
+view stays where it is and no anchor is held until the reader scrolls — the same
+answer as an anchor with nothing left ([below](#where-the-view-sits)).
 
 A page count that went *down* is not a page landing, and the transcript reads the
 tail again when it sees one. Paging starts over exactly one way — a reconnect
@@ -502,8 +516,8 @@ there would leave the transcript refusing to page for good, since refusing while
 page is on its way is exactly how it stays down to one. A reader who never paged
 at all has no such edge — their count was already zero — so the state they were in
 simply stands, which costs nothing: the replacement usually renders the same rows
-under the same ids and the anchor holds, and where it does not, a lost anchor is
-replaced where the view already is.
+under the same ids and the anchor holds, and where it does not, what is left of
+it holds the reader, or failing that the view stays where it is.
 
 **Asking for a page is a state, not an event.** While the top of history is on
 screen, nothing is in flight and nothing has failed, the next page is asked for.
@@ -568,10 +582,11 @@ every session — and a reconnect starts over from the newest page.
 The action is "apply the invariant of the state you are in"
 (`web/src/components/Chat/useTranscriptScroll.ts`), and it runs at exactly two
 moments: after every commit of `MessageList`, before paint, and on every callback
-of a `ResizeObserver` watching both boxes. A page landing, a diagram settling, a
-card expanding, the keyboard opening, the container growing back as an overlay
-closes — none of them is a case here, each being one of those two moments already.
-Nothing is on a timer.
+of a `ResizeObserver` watching both boxes. A diagram settling, a card expanding,
+the keyboard opening, the container growing back as an overlay closes — none of
+them is a case here, each being one of those two moments already. The one case
+named is the commit a page lands in, which an anchored reader is held through by
+[the seam](#reading-a-page-on-the-client) instead. Nothing is on a timer.
 
 Neither moment covers the other. A commit is where the transcript's own changes
 land, and the invariant is applied before the frame that would show them in the
@@ -588,21 +603,57 @@ Any programmatic write to `scrollTop` cancels iOS momentum scrolling, so a write
 that moves nothing still costs something. "Already right" means within a pixel:
 the two heights a scroll box is made of are integers while `scrollTop` is not.
 
-**The anchor** is the last candidate element to start at or above the top edge of
-the view, paired with how far below that edge it started. The candidates are
-message rows *and* the top-level parts inside them
-(`web/src/components/Chat/scrollAnchor.ts`): one assistant turn is a single row
-and can be several screens tall, so anchoring on rows alone says nothing about
-where inside one the reader is, and a tool result landing in that same bubble
-above their eyes would push what they are reading down. Nothing inside a
-collapsible body is a candidate — collapsed, it has no position at all — and
-neither is the first row or its first part ([the paging
-seam](#reading-a-page-on-the-client)). The anchor is taken again on every scroll
-the reader causes, and one whose element has left the list — or is still in it but
-no longer displayed, like a part folded into a tool group — is replaced by a fresh
-anchor for wherever the view is now, never by a return to the tail. An element that
-is not displayed measures as sitting at the top of the loaded transcript, so
-holding it still would carry the reader there.
+**The anchor** is the finest candidate to start at or above the top edge of the
+view, paired with how far below that edge it started, and the path down to it
+(`web/src/components/Chat/scrollAnchor.ts`). The path is taken a level at a time
+— the last row to start at or above the edge, then the last candidate inside
+that row, and so on as deep as the candidates go: message rows, the top-level
+parts inside a row, the top-level blocks of a text part's Markdown, the sections
+of an open tool row. One assistant turn is a single row and can be several
+screens tall, and one text part can be screens of prose by itself, so anything
+coarser says nothing about where inside it the reader is: a tool result landing
+in that bubble, or a diagram or an image settling inside the same part, above
+their eyes would push what they are reading down. Every level keeps its own
+offset, because the levels above the anchored element are what it falls back on.
+
+Positions are read from the layout (`getBoundingClientRect`) and turned into
+distance below the top of the content, which does not change while the view
+scrolls and so can be compared with a `scrollTop` from another frame. That holds
+for any element, so a candidate is whatever node is natural to mark — a Markdown
+root's children, a section's own root — where `offsetTop`, measured from the
+nearest positioned ancestor, required every candidate to be an unpositioned
+wrapper made for the purpose. The walk leaves out what has no place worth
+holding: a `hidden` subtree (a collapsed body, a part folded into a tool group),
+anything without layout boxes, and anything inside a box the reader sees its
+content through — a nested vertical scroller or a clamp — whose position follows
+the box's own scroll or sits where nothing shows it. A table or a code block that
+scrolls sideways overflows the other way and is a candidate like any block. Each
+level is a binary search rather than a walk, since the anchor is taken again on
+every scroll event and a long session has thousands of rows; document order is
+top-to-bottom order, which is what makes the search sound.
+
+**A lost anchor falls back along its path.** The anchored element can leave the
+list — a tool row replaced by the card that took its place, a Markdown block
+re-rendered as another element while it streams — or stay in it without being
+laid out, and an element with no boxes measures as sitting at the top of the
+loaded transcript, so holding it would carry the reader there. It can also stay
+laid out but come to sit inside a box seen through — a thought's scroller that
+only started to overflow as it grew — where the box's own scroll would move it
+under a reader who has not moved. The path is
+walked from the deepest level up, and the first level still laid out is held at
+the offset recorded for it. A level that was folded into a tool group stands in
+for itself by the group's summary, kept where the row's top was but never above
+the view's top or under a bar pinned there — the place a fold the reader made
+would land them ([tool-call-ui.md](tool-call-ui.md#folding-from-the-bar)). With
+nothing of the path left, the view stays where it is and no anchor is held until
+the reader scrolls again; losing an anchor is never a reason to return to the
+tail.
+
+What a lost anchor never does is take a fresh one from where the view sits. The
+commit that lost it has already moved everything under a `scrollTop` that still
+belongs to the layout before it, so whatever is at the edge now is not what the
+reader was looking at. Re-picking there is how a lost anchor used to strand a
+reader at the top of the history.
 
 **Only the reader's own scrolling changes the state**, and which scroll that was
 is decided by direction rather than by listening for the gestures that caused it:
@@ -613,10 +664,10 @@ is decided by direction rather than by listening for the gestures that caused it
   does move the view, is the reader.
 - Reading somewhere, every scroll event is the reader's. Movement *downward* that
   reaches the end returns to the tail; anything else takes the anchor again. A
-  restore of our own that lands here re-takes the same anchor in the same place,
-  which costs nothing. The direction is required: a card collapsing *below* the
-  reader clamps the view to the end, and without it that clamp would read as a
-  return to the tail.
+  restore of our own that lands here re-takes the anchor from a view already
+  where it should be, which costs nothing. The direction is required: a card
+  collapsing *below* the reader clamps the view to the end, and without it that
+  clamp would read as a return to the tail.
 
 Sampling where the view happens to sit cannot tell those apart, and that is the
 failure this replaced: a scroll event says where the view went one frame after it
@@ -634,7 +685,9 @@ whose newest row is one the reader typed. "Replaced" is the page count dropping,
 or — when the page count has not changed — none of the previous rows
 surviving, since replaying history mints every row a new id. The
 scroll-to-bottom button — shown only while reading somewhere — reads the tail, and
-a jump to a pending permission request anchors on the card.
+a jump to a pending permission request anchors on the card — on the card itself,
+with the candidates around it as the path above it, since the card need not be a
+candidate.
 
 A third, beside the button and the jump, is a row asking for a place:
 `holdAt(el, offset)` puts `el`'s top `offset` pixels below the top edge. Rows
@@ -652,8 +705,7 @@ end already shows (within a pixel) *is* the end: the view stays there and keeps
 following — which is what folding a pinned row while following comes to, since
 everything after it already fits. Only a place the end cannot show leaves the
 tail; the view then moves to it and takes the anchor the way the reader's own
-scrolling would (`pickAnchor`), so it never anchors on a candidate the paging
-seam leaves out.
+scrolling would (`pickAnchor`).
 
 All three move the view instantly, which is a decision and not an omission. Switching
 to the tail is itself a commit, so the invariant applied before that commit's
@@ -795,6 +847,14 @@ that covers half of one problem and adds a coordination problem is not a saving.
   fewer of them, which is why the sentinel row is a fixed height and why nothing
   in the transcript changes height after it commits if it can be helped
   ([above](#content-height-on-the-first-frame)).
+- **A page landing while the newest row streams can over-count.** The seam is the
+  first loaded row's bottom edge, and when that row is also the one output is
+  streaming into — the newest page a single bubble still growing — output landing
+  in it in the same commit as a page moves the seam too, and is counted as height
+  added above the reader. Both the output and the page have to reach React
+  between the same two renders, which is a narrow window, and the alternative —
+  total height — would over-count in that window wherever the output lands, not
+  only in the first row.
 - **A card expanded while reading the tail can be pushed out of view.** Opening a
   body adds height above the end, and re-pinning to the end carries the card that
   was just opened upward — off the top of the screen, if the body is tall enough.
