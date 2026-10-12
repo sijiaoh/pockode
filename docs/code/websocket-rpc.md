@@ -45,6 +45,7 @@ Method names are organized using the `namespace.method` format, solving two prob
 | `cli_auth.*` | app | `ws/rpc_cli_auth.go` |
 | `cli_update.*` | app | `ws/rpc_cli_update.go` |
 | `port_preview.*` | app | `ws/rpc_port_preview.go` |
+| `remote_url.*` | app | `ws/rpc_remote_url.go` |
 
 - **Worktree scope**: Operations that depend on the current working directory (files, Git, etc.)
 - **App scope**: Global operations across worktrees (settings, project management, etc.)
@@ -61,6 +62,23 @@ ticket that logs a [port preview](relay-system.md#logging-in) tab in without
 the password. It is refused with `CodeInvalidRequest` when the relay is
 disabled or has stopped — the same signal as an empty `remote_url` in the
 `auth` reply — since previews do not exist then.
+
+### Following the Remote URL
+
+`remote_url.subscribe` takes the usual `{ id }` and answers `{ remote_url }` as
+it is now; `remote_url.changed` then carries `{ id, remote_url }` whenever the
+relay moves the server or remote access ends. Every notification is the whole
+current URL, never a delta, and `""` means remote access is over; the field is
+never omitted. The `auth` reply keeps its `remote_url` so a client has the
+address the moment it connects, before any subscription.
+
+The web client subscribes once per connection (`useRemoteUrlSubscription`,
+mounted by `AppShell` and not re-subscribed on a worktree switch) and writes both
+the snapshot and every notification into `wsStore.remoteUrl`, which is what
+[port previews](../port-preview.md) read. Unlike other subscriptions, a reset
+keeps the value instead of clearing it: opening a preview needs no connection,
+and clearing would flicker the entry away on every reconnect. The snapshot that
+follows the reconnect replaces it.
 
 ### Frontend Implementation Pattern
 
@@ -358,6 +376,7 @@ This pattern ensures:
 | `work.list.subscribe` | ✅ The `Current` segment | `onSubscribed` replaces state ([why it is not paged](../list-paging-ui.md#41-current-is-loaded-whole-and-that-is-the-design)) |
 | `work.detail.subscribe` | ✅ Full details, with `children` / `parent` | `onSubscribed` replaces state |
 | `settings.subscribe` | ✅ Full settings | `onSubscribed` replaces state |
+| `remote_url.subscribe` | ✅ Current remote URL | `onSubscribed` replaces state; a reset keeps it ([why](#following-the-remote-url)) |
 | `agent_role.list.subscribe` | ✅ Full list | `onSubscribed` replaces state |
 | `chat.messages.subscribe` | ✅ Newest history page | `onSubscribed` replaces state ([paging](../agent-chat.md#history-paging)) |
 | `git.diff.subscribe` | ✅ Diff data | `onSubscribed` updates state |
@@ -421,9 +440,10 @@ Client                              Server
 - `remote_url` is the address the server is reachable at through the relay, such
   as `https://abc123.cloud.pockode.com`, and empty when the relay is disabled or
   has stopped for good. It is current as of the reply and can change mid-run
-  ([relay-system.md](relay-system.md#when-the-remote-url-changes)). A client
-  cannot derive it from its own location, which is `localhost` on a local
-  connection.
+  ([relay-system.md](relay-system.md#when-the-remote-url-changes)); a client
+  follows it with `remote_url.subscribe`
+  ([Following the Remote URL](#following-the-remote-url)). A client cannot
+  derive it from its own location, which is `localhost` on a local connection.
 
 For where the server's password comes from (`--password` / `POCKODE_PASSWORD`), how a session token is issued and expired, and the overall trust model, see [Authentication](authentication.md).
 

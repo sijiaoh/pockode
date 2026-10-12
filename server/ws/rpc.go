@@ -54,6 +54,7 @@ type RPCHandler struct {
 	sessions             SessionStore
 	version              string
 	remoteURL            func() string // live: renewing the relay credentials can change it
+	remoteURLWatcher     *watch.RemoteURLWatcher
 	previewTickets       PreviewTickets
 	devMode              bool
 	commandStore         *command.Store
@@ -103,12 +104,16 @@ func NewRPCHandler(password string, passwordGuard *authguard.Guard, sessions Ses
 	cliUpdateWatcher := watch.NewCLIUpdateWatcher(cliUpdate)
 	cliUpdateWatcher.Start()
 
+	remoteURLWatcher := watch.NewRemoteURLWatcher(remoteURL)
+	remoteURLWatcher.Start()
+
 	return &RPCHandler{
 		password:             password,
 		passwordGuard:        passwordGuard,
 		sessions:             sessions,
 		version:              version,
 		remoteURL:            remoteURL,
+		remoteURLWatcher:     remoteURLWatcher,
 		previewTickets:       previewTickets,
 		devMode:              devMode,
 		commandStore:         commandStore,
@@ -137,6 +142,14 @@ func (h *RPCHandler) Stop() {
 	h.agentRoleListWatcher.Stop()
 	h.cliLoginWatcher.Stop()
 	h.cliUpdateWatcher.Stop()
+	h.remoteURLWatcher.Stop()
+}
+
+// RemoteURLChanged pushes the current remote URL to every client following it.
+// The relay calls it, through relay.Config.OnRemoteURLChange, whenever the URL
+// moves or remote access ends; it never blocks.
+func (h *RPCHandler) RemoteURLChanged() {
+	h.remoteURLWatcher.Changed()
 }
 
 // clientCompression negotiates permessage-deflate with the browser.
@@ -492,6 +505,12 @@ func (h *rpcMethodHandler) Handle(ctx context.Context, conn *jsonrpc2.Conn, req 
 		return
 	case "port_preview.ticket":
 		h.handlePortPreviewTicket(ctx, conn, req)
+		return
+	case "remote_url.subscribe":
+		h.handleRemoteURLSubscribe(ctx, conn, req)
+		return
+	case "remote_url.unsubscribe":
+		h.handleWatcherUnsubscribe(ctx, conn, req, h.remoteURLWatcher, "remote url")
 		return
 	case "settings.subscribe":
 		h.handleSettingsSubscribe(ctx, conn, req)

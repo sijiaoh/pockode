@@ -23,4 +23,5 @@ var (
 	_ Watcher = (*AgentRoleListWatcher)(nil)
 	_ Watcher = (*CLILoginWatcher)(nil)
 	_ Watcher = (*CLIUpdateWatcher)(nil)
+	_ Watcher = (*RemoteURLWatcher)(nil)
 )

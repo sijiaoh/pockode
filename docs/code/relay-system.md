@@ -116,10 +116,10 @@ uplink 401 ─▶ backoff ─▶ renew (refresh; re-register if the token is inv
 A new registration comes with a new subdomain — the cloud cannot give the old one back — so the URL the user scanned stops working. A refresh can move it too, if the cloud reports a different subdomain or relay server. The change is not transparent, so it is made visible everywhere the URL is exposed:
 
 - `Manager.RemoteURL()` is the single source. Nothing copies the URL at startup: the `auth` reply's `remote_url` and the port preview's "is the relay up" check read it on every call.
-- `Config.OnRemoteURLChange` is called after the new value is in place, and only when it actually differs. The server prints the new URL and its QR code in the banner's own form, and rewrites `server.json` (see [server/AGENTS.md](../../server/AGENTS.md#serverjson)); cluster mode only prints, since its banner is the only place it shows the URL.
-- An empty URL means remote access has stopped for good. The terminal tells the user to update Pockode and restart it; `remote_url` drops out of `server.json` and the `auth` reply, which also takes [port previews](#port-previews) down.
+- `Config.OnRemoteURLChange` is called after the new value is in place, and only when it actually differs. The server prints the new URL and its QR code in the banner's own form, rewrites `server.json` (see [server/AGENTS.md](../../server/AGENTS.md#serverjson)), and pushes `remote_url.changed` to every connected client that subscribed with `remote_url.subscribe` ([websocket-rpc.md](websocket-rpc.md#following-the-remote-url)); cluster mode only prints, since its banner is the only place it shows the URL.
+- An empty URL means remote access has stopped for good. The terminal tells the user to update Pockode and restart it; `remote_url` drops out of `server.json` and comes back empty in the `auth` reply and in `remote_url.changed`, which also takes [port previews](#port-previews) down.
 
-A client that is already connected is not pushed the new URL; it gets it from the `auth` reply the next time it connects.
+The callback runs on the reconnect loop, so none of this may wait on a client: the push only wakes a watcher, which reads `Manager.RemoteURL()` when it sends ([watcher.md](../watcher.md#event-driven)).
 
 ### Bounding the Connect Path
 

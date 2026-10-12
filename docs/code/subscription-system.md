@@ -1031,7 +1031,7 @@ During a switch both skeletons wait 150ms (`useDelayedFlag`), so one that lands 
 
 ### Why App-Level Subscriptions Survive Worktree Switches
 
-Not every subscription is worktree-scoped. Work list/detail, agent role list, settings, and the worktree list are backed by Manager-level watchers that keep pushing across worktree switches. Their hooks set `resubscribeOnWorktreeChange: false`, so they never re-subscribe on switch — and they don't need to.
+Not every subscription is worktree-scoped. Work list/detail, agent role list, settings, CLI sign-in and update, the remote URL, and the worktree list are backed by Manager-level watchers that keep pushing across worktree switches. Their hooks set `resubscribeOnWorktreeChange: false`, so they never re-subscribe on switch — and they don't need to.
 
 This is why wsStore separates its callback maps into two groups and, on switch, clears only the worktree-scoped ones (`clearWorktreeWatchSubscriptions`), reserving the full clear (`clearAllWatchSubscriptions`) for disconnect. Clearing app-level callbacks on switch would leave the server pushing to a connection whose local handlers are gone, silently dropping `work.list.changed` and similar notifications. Keeping the local teardown aligned with the server's watcher lifetime is what keeps the global work list live after a worktree switch.
 
@@ -1235,6 +1235,7 @@ places, and that the names never say "loading" where nothing is loading.
 | SessionDetail | 64 | Same store events as SessionList; see [above](#why-a-session-is-two-subscriptions) |
 | Settings | 16 | Low frequency; settings rarely change |
 | CLILogin, CLIUpdate | none | A set of CLIs with a pending change instead of a queue (`watch/cli_record.go`): every notification is the whole sign-in or update as it is when sent, so changes collapse and none is ever dropped ([cli-auth.md](cli-auth.md#signing-in), [cli-update.md](cli-update.md#the-rpc)) |
+| RemoteURL | 1 (wake only) | No queue: the URL is read when sent, so a dropped wake loses nothing ([watcher.md](../watcher.md#event-driven)) |
 
 These values were chosen empirically. The key insight: buffer overflow triggers full sync, which is more expensive than the incremental update but still correct. Thus, buffers should be large enough to handle typical bursts, but not so large that they consume excessive memory.
 

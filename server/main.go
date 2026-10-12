@@ -442,6 +442,7 @@ Flags:
 	var relayManager *relay.Manager
 	remoteURL := func() string { return "" }
 	var serverInfo *serverinfo.Publisher
+	var wsHandler *ws.RPCHandler
 	relayEnabled := *relayFlag
 	if relayEnabled {
 		relayCfg := relay.Config{
@@ -457,6 +458,7 @@ Flags:
 				if err := serverInfo.Refresh(); err != nil {
 					slog.Error("failed to update server.json with the new remote URL", "error", err)
 				}
+				wsHandler.RemoteURLChanged()
 			},
 		}
 
@@ -467,9 +469,10 @@ Flags:
 		relayManager = relay.NewManager(relayCfg, port, frontendPort, slog.Default())
 		remoteURL = relayManager.RemoteURL
 	}
-	// Assigned before the relay starts, so the reconnect loop that calls
-	// OnRemoteURLChange never sees it unset.
+	// Both assigned before the relay starts, so the reconnect loop that calls
+	// OnRemoteURLChange never sees them unset.
 	serverInfo = serverinfo.NewPublisher(dataDir, port, localURL, mcpToken, remoteURL)
+	wsHandler = ws.NewRPCHandler(cred.Password, passwordGuard, sessions, version, remoteURL, previewTickets, devMode, commandStore, worktreeManager, settingsStore, workStore, workOps, workEngine, agentRoleStore, cliAuth, cliUpdate)
 
 	if relayManager != nil {
 		url, err := relayManager.Start(context.Background())
@@ -482,7 +485,6 @@ Flags:
 		slog.Info("remote access enabled", "url", url)
 	}
 
-	wsHandler := ws.NewRPCHandler(cred.Password, passwordGuard, sessions, version, remoteURL, previewTickets, devMode, commandStore, worktreeManager, settingsStore, workStore, workOps, workEngine, agentRoleStore, cliAuth, cliUpdate)
 	transferHandler := filetransfer.NewHandler(registry, slog.Default())
 	attachmentHandler := filetransfer.NewAttachmentHandler(worktreeManager, worktree.ErrWorktreeNotFound, worktree.ErrSessionNotFound, slog.Default())
 	handler := newHandler(cred.Password, passwordGuard, sessions, devMode, wsHandler, mcpHandler, transferHandler, attachmentHandler)
