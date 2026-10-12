@@ -1,6 +1,6 @@
 import { type ReactNode, useRef, useState } from "react";
 import type { FullScreenSource } from "../../lib/fullScreen";
-import { ClampedContent, type ClampView } from "../ui";
+import { type ClampCount, ClampedContent, type ClampView } from "../ui";
 import { useFullScreen } from "./FullScreenHost";
 import { ContentSlice, hugeClamp, useHugeContent } from "./HugeContent";
 
@@ -14,6 +14,9 @@ export function HeaderlessMainBlock({
 	fullScreenKey,
 	source,
 	view,
+	count,
+	follow,
+	sliceable = true,
 	children,
 }: {
 	/** What the block is, lowercased: "plan". */
@@ -22,6 +25,16 @@ export function HeaderlessMainBlock({
 	fullScreenKey: string;
 	source: FullScreenSource | undefined;
 	view: ClampView | null;
+	/** See `ClampCount`. */
+	count?: ClampCount;
+	/** See `ClampedContent`. */
+	follow?: boolean;
+	/**
+	 * False where `source` is only part of what `children` draws — a question
+	 * card's question, over its options and answer — so a slice of it cannot
+	 * stand in for the block when it is huge.
+	 */
+	sliceable?: boolean;
 	children: ReactNode;
 }) {
 	const rootRef = useRef<HTMLDivElement>(null);
@@ -33,7 +46,7 @@ export function HeaderlessMainBlock({
 		noun: name,
 		rootRef,
 		openedInPlace: opened,
-		enabled: open !== null,
+		enabled: open !== null && sliceable,
 	});
 
 	return (
@@ -41,11 +54,14 @@ export function HeaderlessMainBlock({
 			{!pending && (
 				<ClampedContent
 					budget="main"
+					from={source?.from}
 					name={name}
+					count={count}
 					view={view}
 					onOpenChange={setOpened}
 					fullScreen={open ? { key: fullScreenKey, open } : undefined}
 					huge={hugeClamp(huge, fullScreenKey, open)}
+					follow={follow}
 				>
 					{huge ? <ContentSlice content={huge.slice} /> : children}
 				</ClampedContent>

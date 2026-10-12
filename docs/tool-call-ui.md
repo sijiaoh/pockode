@@ -1187,7 +1187,7 @@ it is non-zero, and then the glyph has already said so.
 ## The body (problems 2 and 3)
 
 One `CollapsibleBody` → one padded block, with **no height and no scroller of
-its own**. It used to be a `ScrollableContent max-h-[60vh]`, and on a phone that
+its own**. It used to be a `max-h-[60vh]` box scrolling on its own, and on a phone that
 box was under the thumb most of the time a tall body was open, so the drag
 meant for the transcript scrolled the body instead. Now every section clamps
 itself (`ClampedContent`, `web/src/components/ui/`): past its budget it is cut,
@@ -1202,6 +1202,20 @@ scroll vertically hands a vertical drag on to the page. Every main block
 cut — a ⤢ in its header ([full screen](#full-screen)) — and one too long to
 open in place at all offers only that ([huge content](#huge-content)).
 
+### One vertical scroll surface
+
+The reason reaches past tool rows, so the rule does too: **the transcript is the
+only thing in it that scrolls vertically.** Every tall block in it is clamped
+the same way — a thought's text, a system, raw, command-output or work-event
+message, a question record — where each used to be a `max-h-[60vh]` box
+scrolling on its own. Besides the drag under the thumb, a box like that had two
+places of its own to keep — its scroll position and the reader's place inside it
+— that the transcript's [anchor](agent-chat.md#where-the-view-sits) could not
+see, and that a pinned section header had to be taught to stick to. With none
+left, the anchor reaches every block and holds it; overlays, the input bar and
+the viewer are not the transcript and keep their own scroll. A new block that
+runs long is a clamp, not a box.
+
 ### Budgets
 
 A flat clamp had no notion of a body's total: a long command over long output
@@ -1212,7 +1226,7 @@ which are `1rem`:
 
 | Role | Budget | Sections |
 |---|---|---|
-| main | `clamp(8 lines, 45% of the transcript, cap)` — cap 20 lines on a coarse primary pointer, 30 otherwise | Output, Content, Change, Matches, Results, Page, Result, *Outcome · after the turn*, *Output so far*, the `ExitPlanMode` plan, a permission card's *Proposed change*, a file's diff in [the turn's changes](#the-turns-changes), a subagent's report, *Full reasoning*, a command's *Sent to the agent* |
+| main | `clamp(8 lines, 45% of the transcript, cap)` — cap 20 lines on a coarse primary pointer, 30 otherwise | Output, Content, Change, Matches, Results, Page, Result, *Outcome · after the turn*, *Output so far*, the `ExitPlanMode` plan, a permission card's *Proposed change*, a file's diff in [the turn's changes](#the-turns-changes), a subagent's report, a thought's text and its *Full reasoning*, a command's *Sent to the agent*, the body of a system, raw, command-output or work-event message, a question record's body |
 | supporting | 8 lines | Command, File / Files (several paths, or one folded under a result), Parameters, Request, a search's arguments, *Returned to the agent*, *Fetched output*, Error, a permission card's *Raw input*, a subagent's prompt |
 | none | never cut | the `TodoWrite` checklist (a single file's path line on its own is not a section at all) |
 
@@ -1229,7 +1243,7 @@ lines while uncut, so content that fits there never needs measuring twice.
 
 **The button is on the side that is cut.** Content read from its start fades at
 the bottom with the button below it; content read from its end (a command's
-output, *Output so far*) fades at the top with the button between the header and
+output, *Output so far*, a thought still being thought) fades at the top with the button between the header and
 the content, where the hidden part is. It says how much it hides, in the unit the
 content is drawn in: *Show 340 more lines*, *Show 340 earlier lines*, *Show 85
 more files* for a search's file list. The count is the hidden share of the
@@ -1288,6 +1302,10 @@ would lose what matters:
   [below](#the-body-problems-2-and-3)).
 - **A result with attachments** between its text: the slice would be text
   alone, and the images and files between it would vanish.
+- **A question record.** Its viewer source is the question, but the card draws
+  its options and answer under it too; a slice of the question would take
+  their place. It is clamped and offered full screen like any main block
+  (`sliceable={false}` on `HeaderlessMainBlock`).
 
 **What the transcript draws** (`sliceContent`) is the end read first — the head,
 or for content [read from its end](#budgets) the tail — 40 lines, more than the
@@ -1321,9 +1339,10 @@ button is on the cut side, as the in-place button would be:
   reads *Open all matches* / *Open all results*; the count is lines, a diff's
   rows, with thousands separators; Markdown, which has no unit a reader counts
   in, has none: *Open full page*, *Open full plan*.
-- A headed block keeps its header ⤢ as well. A headerless one — the plan, a
-  subagent's report (`HeaderlessMainBlock`) — has this one button, in place of
-  both *Show all* and its *Full screen*.
+- A headed block keeps its header ⤢ as well. A headerless one
+  (`HeaderlessMainBlock`: the plan, a subagent's report, a thought's text, a
+  message body, a question record) has this one button, in place of both
+  *Show all* and its *Full screen*.
 
 ### Keeping the reader's place
 
@@ -1343,7 +1362,7 @@ from its bar makes — [folding from the bar](#folding-from-the-bar)):
 | *Show N more* (cut at its end) | the box's top |
 | *Show N earlier* (read from its tail) | the box's bottom: the content grows upward, and the line the reader was on stays where it was |
 | *Show less* | the button, which is on the edge that is cut — any of it in sight counts, since a tap lands on the overlay round it |
-| *Show less* with the button out of sight (under the pinned title or the [pinned section header](#the-pinned-section-header), or off screen when closed from that header) | the section's header — or, for a block with none (a subagent's report and prompt, the `ExitPlanMode` plan), the block's own top: where it is when it is in sight — a pinned header is just under the row's title — and otherwise brought to just under the pinned row title (`coveredAbove`, the same height a fold lands under) |
+| *Show less* with the button out of sight (under the pinned title or the [pinned section header](#the-pinned-section-header), or off screen when closed from that header) | the section's header — or, for a block with none (a subagent's prompt, any `HeaderlessMainBlock`), the block's own top: where it is when it is in sight — a pinned header is just under the row's title — and otherwise brought to just under the pinned row title (`coveredAbove`, the same height a fold lands under) |
 
 Keyboard focus opening a block takes the same landing; the browser then
 brings the focused control into view if the landing left it out, as it would
@@ -1354,7 +1373,8 @@ tail goes on following it when the place held is the end. What cannot be held is
 not: a place above the transcript's top or past its end is the nearest one it
 can reach.
 
-**Live output follows its tail** (`follow`, on *Output so far*), whenever it
+**Live output follows its tail** (`follow`, on *Output so far* and on the
+live thought's text and *Full reasoning* in the turn's tail), whenever it
 grows — uncut, or opened; cut, its box is the budget and the tail is already
 what it shows. While its bottom is in sight, growth that would carry the bottom
 out of the view holds it at the last place it was seen instead, so new lines
@@ -1403,13 +1423,15 @@ bars: the row's and this.
   permission card's body restates as its warning wash over the row's ground.
 - **Where nothing is pinned above it, it pins at the top**
   (`--section-bar-top: 0`):
-  - A thought's body, which scrolls on its own (`max-h-[60vh]`) — a settled
-    thought's and the live one in the turn's tail alike, both
-    `ThoughtScroller`: an opened *Full reasoning* pins at that scroller's top,
-    and opening and closing it keep the place in that scroller, not the
-    transcript ([agent-chat.md](agent-chat.md#where-the-view-sits)). The
-    scroller has no vertical padding of its own, which would leave a gap above
-    the pinned header.
+  - A thought's body — a settled thought's and the live one in the turn's
+    tail alike (`THOUGHT_BODY`): a thinking row has no bar over its body, so
+    an opened *Full reasoning* pins at the transcript's top — or, inside an
+    open subagent row's *Process*, under that row's bar. Every row bar sticks
+    at the top, so whatever follows one inherits `--row-bar-above`, one bar's
+    height, however deep it is, and the thought's body sets
+    `--section-bar-top` to it (falling back to 0). A bare row's box clips its
+    corners with `overflow-clip`, not `overflow-hidden`, for the reason the
+    card below gives.
   - The turn's changes card, whose file rows do not stick: an opened diff's
     header pins at the transcript's top. The card clips its rounded frame
     with `overflow-clip`, not `overflow-hidden`, for the same reason
@@ -1731,11 +1753,11 @@ There is no list of tools: the rule is the budget.
 `Section`, `Chat/ToolSection.tsx`), the last persistent action
 ([the header bar](#the-pinned-section-header)), on the pinned header too.
 `ClampedContent` tells the section when it is cut (`onCutChange`) from a layout
-effect, so the button never flashes in late. The two main blocks with no
-header — the `ExitPlanMode` plan and a subagent's report
-(`HeaderlessMainBlock`) — keep a *⤢ Full screen* text button in their clamp's
-row, beside *Show all*: growing a header for one icon would cost 24px on every
-plan. [Huge content](#huge-content) adds its own *Open full …* button on the
+effect, so the button never flashes in late. The main blocks with no
+header (`HeaderlessMainBlock`) — the `ExitPlanMode` plan, a subagent's report,
+a thought's text, a message's body, a question record — keep a *⤢ Full screen*
+text button in their clamp's row, beside *Show all*: growing a header for one
+icon would cost 24px on every plan. [Huge content](#huge-content) adds its own *Open full …* button on the
 cut side.
 
 #### Who owns the viewer
@@ -1756,7 +1778,9 @@ key it was opened with:
 | `<run>:plan` · `card:<toolUseId>:plan` · `card:<toolUseId>:change` | the row's plan; a permission card's plan and *Proposed change*, apart from the row's because both can be on screen |
 | `turn:<run>:<path>:<index>` | a diff in [the turn's changes](#the-turns-changes) — a Codex change can list one path twice |
 | `<run>:page` | [a page the agent drew](#a-page-the-agent-drew-html_render) |
-| `report:<run>` · `thought:<hash>` · `sent:<message>` | a subagent's report; *Full reasoning*, keyed by a hash of its opening (200 characters, or its first six lines if they end sooner) so it carries over from the turn's tail into its row; a command's *Sent to the agent* |
+| `report:<run>` · `thought:<hash>` · `sent:<message>` | a subagent's report; a thought's text and its *Full reasoning*, each keyed by a hash of its opening (200 characters, or its first six lines if they end sooner) so it carries over from the turn's tail into its row; a command's *Sent to the agent* |
+| `system:<part>` · `raw:<part>` · `command-output:<part>` · `event:<message>` | a system, raw or command-output message's body; a work event's message |
+| `question:<request>` | a question record — the viewer shows the question, not its options |
 
 A key left with no publisher closes the viewer — but only if it is still
 unpublished a frame later, since publishers legitimately unmount and remount

@@ -73,24 +73,8 @@ function holdsCandidates(el: HTMLElement): boolean {
 }
 
 /**
- * A box the reader sees its content through rather than the content itself: a
- * nested scroller, or a clamp cutting what it holds. Where an element inside
- * one sits says nothing about where the transcript's view should be — it moves
- * with the box's own scroll position, or sits where nothing shows it. Overflow
- * in the block direction is what makes one, so a table or a code block that
- * scrolls sideways is not.
- */
-function seenThrough(el: HTMLElement): boolean {
-	// The cheap read first: almost nothing overflows, and the style is only
-	// worth computing for what does.
-	if (el.scrollHeight <= el.clientHeight + 1) return false;
-	return getComputedStyle(el).overflowY !== "visible";
-}
-
-/**
  * The candidates one level below `parent`, in document order: the nearest
- * marked descendants, none inside another, a `hidden` subtree or a box seen
- * through (`seenThrough`).
+ * marked descendants, none inside another or a `hidden` subtree.
  */
 function candidatesIn(parent: HTMLElement): HTMLElement[] {
 	const found: HTMLElement[] = [];
@@ -101,27 +85,11 @@ function candidatesIn(parent: HTMLElement): HTMLElement[] {
 			// Asked natively before walking: the deepest levels hold no candidates
 			// and can be thousands of nodes — a highlighted code block, a long diff
 			// — which this runs over on every scroll event.
-			else if (holdsCandidates(child) && !seenThrough(child)) visit(child);
+			else if (holdsCandidates(child)) visit(child);
 		}
 	};
 	visit(parent);
 	return found;
-}
-
-/**
- * Whether `el` has come to sit in a box seen through (`seenThrough`) since it
- * was taken inside `parent` — a nested scroller that only started to overflow
- * once its content grew, and that the reader can now scroll on its own.
- */
-function seenThroughBelow(parent: HTMLElement, el: HTMLElement): boolean {
-	for (
-		let box = el.parentElement;
-		box && box !== parent;
-		box = box.parentElement
-	) {
-		if (seenThrough(box)) return true;
-	}
-	return false;
 }
 
 function laidOut(container: HTMLElement, el: HTMLElement): boolean {
@@ -253,12 +221,11 @@ export function anchorOn(
  *
  * An element can leave the container — a tool row replaced by the card that
  * took its place — or stay in it without being laid out: a row folded into a
- * tool group is only `hidden`. Or it can stay laid out but come to sit in a box
- * seen through, whose own scroll then moves it under a still reader. A row folded into a group stands in for itself
+ * tool group is only `hidden`. A row folded into a group stands in for itself
  * by the group's summary (`foldPlaceProps`), kept where the row's top was but
  * never above the view's top or under a bar pinned there, just as a fold the
- * reader made lands (`useFoldLanding`). Anything else lost gives way to the next level up, held
- * where that level sat.
+ * reader made lands (`useFoldLanding`). Anything else lost gives way to the
+ * next level up, held where that level sat.
  *
  * Never a fresh anchor taken from where the view sits: the commit that lost
  * the anchor has already moved everything under a `scrollTop` that still
@@ -274,7 +241,7 @@ export function holdingAnchor(
 	for (let i = path.length - 1; i >= 0; i--) {
 		const { el, offset } = path[i];
 		const parent = path[i - 1]?.el ?? container;
-		if (laidOut(container, el) && !seenThroughBelow(parent, el)) {
+		if (laidOut(container, el)) {
 			return i === path.length - 1 ? anchor : { path: path.slice(0, i + 1) };
 		}
 		const foldedIn =

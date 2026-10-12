@@ -5,7 +5,7 @@ import { hasText, type LiveThinking, latestLine } from "../../lib/thinking";
 import { formatElapsed } from "../../lib/toolRun";
 import { CollapsibleBody, Spinner } from "../ui";
 import { BareBody, BareRow } from "./BareRow";
-import { ThoughtBody, ThoughtScroller } from "./ThinkingItem";
+import { THOUGHT_BODY, ThoughtBody } from "./ThinkingItem";
 import { useTurnTail } from "./turnTailContext";
 
 interface Props {
@@ -69,16 +69,14 @@ function TurnClock({ openedAt }: { openedAt: number }) {
 function ThinkingSoFar({ thinking }: { thinking: LiveThinking }) {
 	return (
 		<BareBody>
-			<ThoughtScroller className="px-2.5">
-				<div className="py-2">
-					{thinking.joinedLate && (
-						<p className="mb-2 text-th-text-muted">
-							Earlier thinking appears in full when it finishes.
-						</p>
-					)}
-					<ThoughtBody thought={{ ...thinking, redacted: false }} />
-				</div>
-			</ThoughtScroller>
+			<div className={`px-2.5 py-2 ${THOUGHT_BODY}`}>
+				{thinking.joinedLate && (
+					<p className="mb-2 text-th-text-muted">
+						Earlier thinking appears in full when it finishes.
+					</p>
+				)}
+				<ThoughtBody thought={{ ...thinking, redacted: false }} live />
+			</div>
 		</BareBody>
 	);
 }

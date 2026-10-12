@@ -171,7 +171,10 @@ thinking edits nothing, and the card lists files.
 ### 1.3 Opening it
 
 A tap opens it in place, at every width, like a tool row: `CollapsibleBody` →
-`ScrollableContent max-h-[60vh]` on `bg-th-bg-secondary`. The text is rendered
+a padded box on `bg-th-bg-secondary` with no scroller of its own. A long text is
+a main block, cut and faded at its end and opened in place or full screen like
+a subagent's report (`HeaderlessMainBlock`; the transcript has [one vertical
+scroll surface](tool-call-ui.md#one-vertical-scroll-surface)). The text is rendered
 through `MarkdownContent` because codex summaries are Markdown with a bold
 heading per part, and Claude's thinking is prose that sometimes uses lists —
 in its `note` variant, the style a subagent's narration between its steps uses:
@@ -186,7 +189,9 @@ gives: on a desktop the sheet is narrower than the column being read.
 A codex reasoning item carries two lists of parts: `summary` (written for a
 reader) and `content` (the raw reasoning, usually empty for OpenAI models). Each
 list's parts are joined as paragraphs. The body shows the summary; if `content`
-is non-empty too, it follows under a muted `Full reasoning` label. With only one
+is non-empty too, it follows under a muted `Full reasoning` label — a main
+`Section`, clamped the same way, whose header pins while it is open
+([tool-call-ui.md](tool-call-ui.md#the-pinned-section-header)). With only one
 non-empty, that one is the body, unlabelled. Nothing is dropped and nothing is
 labelled twice.
 
@@ -372,7 +377,11 @@ whole line becomes the button (so the tap target is the line, not the chevron),
 a chevron appears after the latest line, and a tap opens the text so far below
 the line, growing in place, in the body a settled thinking opens on (§1.2) — so
 a body opened while `Thinking…` looks the same once it is `Thought for 12s`.
-The chevron moves right as the latest line grows and stops where the line
+Only the end it is cut from differs: live, each text is read from its newest
+line — cut and faded at its top, its button above it — and, uncut or
+opened, follows that line as it grows, as *Output so far* does
+([tool-call-ui.md](tool-call-ui.md#keeping-the-readers-place)); settled, it is
+read from its start. The chevron moves right as the latest line grows and stops where the line
 starts to truncate, as a cursor would. At the tail this pushes nothing. After
 a reconnect in the middle of a thinking the deltas before it are gone (§2.4),
 so the open body begins with the muted line *Earlier thinking appears in full

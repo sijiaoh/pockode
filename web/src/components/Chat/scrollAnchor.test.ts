@@ -91,30 +91,6 @@ describe("pickAnchor", () => {
 		tops.set(blocks[1], 1400);
 		expect(anchorScrollTop(container, anchor)).toBe(1450);
 	});
-
-	it("does not reach into a box that scrolls on its own", () => {
-		const { part, blocks } = transcript();
-		const scroller = el({ style: "overflow-y: auto" }, [
-			el(anchorBlocksProps, blocks),
-		]);
-		stubScrollBox(scroller, { contentHeight: 600, viewportHeight: 200 });
-		part.replaceChildren(scroller);
-
-		expect(anchored(anchorAt(1150))?.el).toBe(part);
-	});
-
-	// A wide table or code block scrolls sideways, which moves nothing up or
-	// down: what is inside it sits where the transcript puts it.
-	it("reaches into a box that scrolls only sideways", () => {
-		const { part, blocks } = transcript();
-		const scroller = el({ style: "overflow-x: auto" }, [
-			el(anchorBlocksProps, blocks),
-		]);
-		stubScrollBox(scroller, { contentHeight: 300, viewportHeight: 300 });
-		part.replaceChildren(scroller);
-
-		expect(anchored(anchorAt(1150))?.el).toBe(blocks[1]);
-	});
 });
 
 describe("holdingAnchor", () => {
@@ -142,27 +118,6 @@ describe("holdingAnchor", () => {
 		const anchor = anchorAt(1150);
 
 		blocks[1].hidden = true;
-
-		expect(anchored(holdingAnchor(container, anchor))?.el).toBe(part);
-	});
-
-	// A box that did not overflow when the anchor was taken holds its blocks
-	// like any other; once it scrolls on its own, where they sit follows its
-	// scroll, not the reader.
-	it("falls back to the next level up when the anchored element comes to sit in a box that scrolls on its own", () => {
-		const { part, blocks } = transcript();
-		const scroller = el({ style: "overflow-y: auto" }, [
-			el(anchorBlocksProps, blocks),
-		]);
-		const box = stubScrollBox(scroller, {
-			contentHeight: 300,
-			viewportHeight: 300,
-		});
-		part.replaceChildren(scroller);
-		const anchor = anchorAt(1150);
-		expect(anchored(anchor)?.el).toBe(blocks[1]);
-
-		box.contentHeight = 600;
 
 		expect(anchored(holdingAnchor(container, anchor))?.el).toBe(part);
 	});

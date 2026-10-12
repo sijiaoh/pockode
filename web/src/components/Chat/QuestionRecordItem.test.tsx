@@ -1,8 +1,10 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { layOutClamp } from "../../test/clampLayout";
 import type { QuestionRecord } from "../../types/message";
 import { DiscardedMessagesContext } from "./discardedMessagesContext";
+import { FullScreenHost } from "./FullScreenHost";
 import QuestionRecordItem from "./QuestionRecordItem";
 
 const record: QuestionRecord = {
@@ -174,6 +176,64 @@ describe("QuestionRecordItem", () => {
 		expect(
 			screen.getByRole("group", { name: "Question" }).closest(".max-w-2xl"),
 		).not.toBeNull();
+	});
+
+	// A scroll box inside the transcript takes the drag meant for the page.
+	describe("a long body", () => {
+		afterEach(() => {
+			vi.restoreAllMocks();
+		});
+
+		it("is cut in place and its question opened full screen", async () => {
+			const user = userEvent.setup();
+			layOutClamp(2000);
+			render(
+				<FullScreenHost>
+					<QuestionRecordItem
+						record={record}
+						status="pending"
+						onAnswer={vi.fn()}
+					/>
+				</FullScreenHost>,
+			);
+			await user.click(screen.getByRole("button", { name: /Database/ }));
+
+			expect(document.querySelector(".overflow-auto")).toBeNull();
+			const show = screen.getByRole("button", { name: "Show all of question" });
+			await user.click(show);
+			expect(show).toHaveAccessibleName("Show less of question");
+
+			await user.click(screen.getByRole("button", { name: "Full screen" }));
+			expect(
+				screen.getByRole("dialog", { name: "Question · Database" }),
+			).toHaveTextContent("Which database should I use?");
+		});
+
+		// Full screen holds the question alone, so a slice of it in the card's
+		// place would drop the options and the answer from the transcript.
+		it("is never replaced by a slice of its question, however long", async () => {
+			const user = userEvent.setup();
+			layOutClamp(2000);
+			// One paragraph wrapping past three transcripts: huge, and cheap to draw.
+			const question = "word ".repeat(20_000);
+			render(
+				<FullScreenHost>
+					<QuestionRecordItem
+						record={{
+							...record,
+							question: { ...record.question, question },
+						}}
+						status="cancelled"
+					/>
+				</FullScreenHost>,
+			);
+			await user.click(screen.getByRole("button", { name: /Database/ }));
+
+			expect(screen.getByRole("radio", { name: /SQLite/ })).toBeInTheDocument();
+			expect(
+				screen.getByRole("button", { name: "Show all of question" }),
+			).toBeInTheDocument();
+		});
 	});
 
 	it("shows an answered card as the form that was filled in", async () => {
