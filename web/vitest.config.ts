@@ -1,6 +1,7 @@
 import { vitestRuntimeOptions } from "@pockode/shared/vitest";
 import react from "@vitejs/plugin-react";
-import { defineConfig } from "vitest/config";
+import { configDefaults, defineConfig } from "vitest/config";
+import { BROWSER_TEST_FILES } from "./vitest.files";
 
 export default defineConfig({
 	plugins: [react()],
@@ -12,5 +13,6 @@ export default defineConfig({
 		environment: "jsdom",
 		setupFiles: ["./vitest.setup.ts", "./src/test/setup.ts"],
 		include: ["src/**/*.test.{ts,tsx}", "tests/**/*.test.ts"],
+		exclude: [...configDefaults.exclude, BROWSER_TEST_FILES],
 	},
 });

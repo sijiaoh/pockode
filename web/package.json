@@ -12,7 +12,8 @@
 		"build:release": "tsc -b && vite build --outDir ../server/static --emptyOutDir",
 		"preview": "vite preview",
 		"test": "vitest run",
-		"test:watch": "vitest"
+		"test:watch": "vitest",
+		"test:browser": "vitest run --config vitest.browser.config.ts"
 	},
 	"dependencies": {
 		"@git-diff-view/react": "^0.0.35",
@@ -53,7 +54,9 @@
 		"@types/react": "^19.2.5",
 		"@types/react-dom": "^19.2.3",
 		"@vitejs/plugin-react": "^5.1.1",
+		"@vitest/browser-playwright": "^4.0.18",
 		"jsdom": "^27.3.0",
+		"playwright": "^1.64.0",
 		"typescript": "~5.9.3",
 		"vite": "^7.2.4",
 		"vite-plugin-compression": "^0.5.1",

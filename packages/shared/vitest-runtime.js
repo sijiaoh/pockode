@@ -1,7 +1,9 @@
 import { availableParallelism } from "node:os";
 
 /**
- * Runner tuning shared by every frontend project's `vitest.config.ts`.
+ * Runner tuning shared by every frontend Vitest config, the jsdom entries and
+ * `web`'s real-browser one alike — there `maxWorkers` caps how many test files
+ * run at once per browser.
  *
  * Lives outside `src` because it needs Node types, which the browser package
  * deliberately does not have — the same reason `web/vitest.setup.ts` sits
