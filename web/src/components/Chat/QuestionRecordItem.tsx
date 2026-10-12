@@ -1,5 +1,6 @@
 import { Check, ChevronRight, CircleHelp, EyeOff, X } from "lucide-react";
-import { useContext, useState } from "react";
+import { useContext, useMemo, useState } from "react";
+import type { FullScreenSource } from "../../lib/fullScreen";
 import type {
 	ExpiryReason,
 	QuestionAnswerRecord,
@@ -10,9 +11,11 @@ import {
 	EMPTY_SELECTION,
 	type QuestionSelection,
 } from "../../utils/questionAnswer";
-import { CollapsibleBody, ScrollableContent } from "../ui";
+import { CollapsibleBody } from "../ui";
 import { DiscardedMessagesContext } from "./discardedMessagesContext";
+import { HeaderlessMainBlock } from "./HeaderlessMainBlock";
 import QuestionForm from "./QuestionForm";
+import { useTranscriptView } from "./transcriptViewContext";
 
 interface Props {
 	record: QuestionRecord;
@@ -167,6 +170,7 @@ function QuestionRecordItem({
 	onAnswer,
 }: Props) {
 	const [expanded, setExpanded] = useState(false);
+	const view = useTranscriptView();
 	// Read from the transcript's discarded messages rather than carried on the
 	// card: the Stop's record may land before the sender learns its own answer's
 	// id, and a card on an older page may be settled long after the record was
@@ -178,6 +182,22 @@ function QuestionRecordItem({
 	const outcome = outcomeLine(status, answer, legacy);
 	const isAnswered = status === "answered";
 	const selection = isAnswered ? answeredSelection(answer) : EMPTY_SELECTION;
+
+	// The question alone: it is what runs long — a plan to approve, code to
+	// read — while its options and answer are short lines the card shows.
+	const header = record.question.header || "Question";
+	const question = record.question.question;
+	const source = useMemo<FullScreenSource>(
+		() => ({
+			title: `Question · ${header}`,
+			label: "Question",
+			noun: "question",
+			from: "start",
+			copyText: question,
+			content: { kind: "markdown", markdown: question },
+		}),
+		[header, question],
+	);
 
 	// The summary the collapsed header carries. Only an answered card has one —
 	// the rest say everything they have to say in the chip.
@@ -213,7 +233,7 @@ function QuestionRecordItem({
 				)}
 				<span className="shrink-0 text-th-accent">Question</span>
 				<span className="max-w-[40%] shrink-0 truncate rounded bg-th-accent/20 px-1.5 py-0.5 text-th-text-primary">
-					{record.question.header || "Question"}
+					{header}
 				</span>
 				<span className={`shrink-0 rounded px-1.5 py-0.5 ${chip}`}>
 					{statusLabel}
@@ -226,43 +246,51 @@ function QuestionRecordItem({
 			</button>
 
 			<CollapsibleBody expanded={expanded}>
-				<ScrollableContent className="max-h-[60vh] overflow-auto border-t border-th-border p-2">
-					{/* The frame is as wide as every other tool row; what is read in
-					    it is held to the answer panel's reading measure
-					    (docs/answering-ui.md §6). */}
-					<div className="max-w-2xl">
-						{(outcome || isUnread) && (
-							<p className="mb-3 rounded bg-th-bg-tertiary px-2 py-1.5 text-th-text-muted">
-								{[outcome, isUnread && UNREAD_LINE].filter(Boolean).join(" ")}
-								{withdrawalCause(reason)}
-							</p>
-						)}
-						{/* Always disabled: this card is a record. An answered one shows
-						    the selection filled in, which is what keeps it looking like the
-						    form that was filled in; every other state shows the question
-						    with nothing picked. The form disables its own choices rather
-						    than a disabled fieldset doing it, which would also disable the
-						    copy button on a code block in the question. min-w-0 against a
-						    fieldset's UA `min-inline-size: min-content`: a wide code block
-						    would otherwise floor the whole form at its width, and the body
-						    would scroll options and all sideways instead of the block. */}
-						<fieldset aria-label="Question" className="min-w-0 space-y-2">
-							<QuestionForm
-								question={record.question}
-								askedAt={record.askedAt}
-								name={record.requestId}
-								selection={selection}
-								// A declined card's note is its reason, already in the
-								// outcome line above.
-								note={isAnswered ? answer?.note : undefined}
-								disabled
-								onSelectOption={noop}
-								onSelectOther={noop}
-								onOtherTextChange={noop}
-							/>
-						</fieldset>
-					</div>
-				</ScrollableContent>
+				<div className="border-t border-th-border p-2">
+					<HeaderlessMainBlock
+						name="question"
+						fullScreenKey={`question:${record.requestId}`}
+						source={source}
+						view={view}
+						sliceable={false}
+					>
+						{/* The frame is as wide as every other tool row; what is read in
+						    it is held to the answer panel's reading measure
+						    (docs/answering-ui.md §6). */}
+						<div className="max-w-2xl">
+							{(outcome || isUnread) && (
+								<p className="mb-3 rounded bg-th-bg-tertiary px-2 py-1.5 text-th-text-muted">
+									{[outcome, isUnread && UNREAD_LINE].filter(Boolean).join(" ")}
+									{withdrawalCause(reason)}
+								</p>
+							)}
+							{/* Always disabled: this card is a record. An answered one shows
+							    the selection filled in, which is what keeps it looking like the
+							    form that was filled in; every other state shows the question
+							    with nothing picked. The form disables its own choices rather
+							    than a disabled fieldset doing it, which would also disable the
+							    copy button on a code block in the question. min-w-0 against a
+							    fieldset's UA `min-inline-size: min-content`: a wide code block
+							    would otherwise floor the whole form at its width, and the body
+							    would scroll options and all sideways instead of the block. */}
+							<fieldset aria-label="Question" className="min-w-0 space-y-2">
+								<QuestionForm
+									question={record.question}
+									askedAt={record.askedAt}
+									name={record.requestId}
+									selection={selection}
+									// A declined card's note is its reason, already in the
+									// outcome line above.
+									note={isAnswered ? answer?.note : undefined}
+									disabled
+									onSelectOption={noop}
+									onSelectOther={noop}
+									onOtherTextChange={noop}
+								/>
+							</fieldset>
+						</div>
+					</HeaderlessMainBlock>
+				</div>
 			</CollapsibleBody>
 
 			{/* In the body rather than on the header row: the header row is the

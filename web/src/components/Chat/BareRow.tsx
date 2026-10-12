@@ -62,11 +62,13 @@ export function BareRow({ glyph, toggle, children }: Props) {
  * What a bare row opens: a box of its own under the row, edge to edge with the
  * column like a framed list. The tail line and the thinking it settles into
  * share it, so a body opened while `Thinking…` looks the same once it is
- * `Thought for 12s`.
+ * `Thought for 12s`. Clipped to its corners with `overflow-clip`, not
+ * `-hidden`, which would make it the scroller a pinned section header sticks
+ * to.
  */
 export function BareBody({ children }: { children: ReactNode }) {
 	return (
-		<div className="overflow-hidden rounded-lg border border-th-border bg-th-bg-secondary">
+		<div className="overflow-clip rounded-lg border border-th-border bg-th-bg-secondary">
 			{children}
 		</div>
 	);

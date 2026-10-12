@@ -98,8 +98,8 @@ alignment puts the `…` beside the seam with the next row, but the row spacing
 **Tighten the row spacing and this has to be checked again.**
 
 The work event row has no slot (*Which rows reserve a slot*). If such a row ever
-does get an action, `self-end` would put it at the bottom of a body that runs to
-60vh and scrolls inside itself, far from the collapsed header at the top; that
+does get an action, `self-end` would put it at the bottom of a body that can
+run to half a screen and more once opened, far from the collapsed header at the top; that
 row should then be given an alignment decision of its own rather than inherit
 the bubble's.
 

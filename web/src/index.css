@@ -195,9 +195,9 @@
  * One z-index under the bar: when the end of the section carries the header
  * out, it passes under the row's title rather than over it. Its ground is the
  * body's, which is a drawer's `th-bg-secondary` but for a pending card's,
- * whose body restates its tinted ground as `--section-ground`. A body that
- * scrolls on its own (a thought's) has no bar over it and sets
- * `--section-bar-top` to 0. */
+ * whose body restates its tinted ground as `--section-ground`. A body with
+ * no bar of its own over it (a thought's) sets `--section-bar-top` to
+ * `--row-bar-above`: the bar of a row it sits inside, or else the top. */
 @utility section-bar {
 	position: sticky;
 	top: var(--section-bar-top, var(--row-height));
@@ -222,6 +222,12 @@
 @layer base {
 	:where(.row-bar ~ *) * {
 		scroll-margin-top: var(--row-height);
+	}
+
+	/* How much of an open row's body its pinned bar covers: every bar sticks at
+	 * the top, so it is one bar's height however deep the row is. */
+	:where(.row-bar ~ *) {
+		--row-bar-above: var(--row-height);
 	}
 
 	/* The pinned header under the bar as well: its clearance, `BlockHeader`'s

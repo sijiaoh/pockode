@@ -623,11 +623,14 @@ for any element, so a candidate is whatever node is natural to mark — a Markdo
 root's children, a section's own root — where `offsetTop`, measured from the
 nearest positioned ancestor, required every candidate to be an unpositioned
 wrapper made for the purpose. The walk leaves out what has no place worth
-holding: a `hidden` subtree (a collapsed body, a part folded into a tool group),
-anything without layout boxes, and anything inside a box the reader sees its
-content through — a nested vertical scroller or a clamp — whose position follows
-the box's own scroll or sits where nothing shows it. A table or a code block that
-scrolls sideways overflows the other way and is a candidate like any block. Each
+holding: a `hidden` subtree (a collapsed body, a part folded into a tool group)
+and anything without layout boxes. Nothing in the transcript scrolls vertically
+on its own ([one vertical scroll surface](tool-call-ui.md#one-vertical-scroll-surface)),
+so every candidate's position is the transcript's to hold; a table or a code
+block that scrolls sideways is a candidate like any block. No clamp holds a
+candidate either — a clamped block is held by what holds it: its section, its part, its row.
+If one ever does (a clamped Markdown marking its blocks), its cut-off blocks
+sit where nothing shows them, and the walk must learn to leave them out again. Each
 level is a binary search rather than a walk, since the anchor is taken again on
 every scroll event and a long session has thousands of rows; document order is
 top-to-bottom order, which is what makes the search sound.
@@ -636,10 +639,7 @@ top-to-bottom order, which is what makes the search sound.
 list — a tool row replaced by the card that took its place, a Markdown block
 re-rendered as another element while it streams — or stay in it without being
 laid out, and an element with no boxes measures as sitting at the top of the
-loaded transcript, so holding it would carry the reader there. It can also stay
-laid out but come to sit inside a box seen through — a thought's scroller that
-only started to overflow as it grew — where the box's own scroll would move it
-under a reader who has not moved. The path is
+loaded transcript, so holding it would carry the reader there. The path is
 walked from the deepest level up, and the first level still laid out is held at
 the offset recorded for it. A level that was folded into a tool group stands in
 for itself by the group's summary, kept where the row's top was but never above
@@ -697,9 +697,7 @@ lands the reader on the row instead of on whatever followed its body
 ([tool-call-ui.md](tool-call-ui.md#folding-from-the-bar)), and a cut block
 opening, closing or following its live tail, which holds the edge the reader
 was looking at ([tool-call-ui.md](tool-call-ui.md#keeping-the-readers-place)).
-A block inside a box that scrolls on its own — a thought's — is held through a
-view over that box instead (`useScrollerView`), since this anchor knows nothing
-of an inner scroll position. The place is clamped
+The place is clamped
 to what the view can reach first, then judged. Reading the tail, a place the
 end already shows (within a pixel) *is* the end: the view stays there and keeps
 following — which is what folding a pinned row while following comes to, since

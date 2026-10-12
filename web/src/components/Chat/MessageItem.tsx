@@ -10,7 +10,7 @@ import {
 	X,
 } from "lucide-react";
 import { memo, useId, useMemo, useState } from "react";
-import { fullScreenSubject } from "../../lib/fullScreen";
+import { type FullScreenSource, fullScreenSubject } from "../../lib/fullScreen";
 import { isHtmlRenderCard } from "../../lib/htmlRender";
 import {
 	changeRowCount,
@@ -19,6 +19,7 @@ import {
 } from "../../lib/proposedChange";
 import { useChatUIConfig } from "../../lib/registries/chatUIRegistry";
 import { CodeHighlighter } from "../../lib/shikiUtils";
+import { outputLineCount } from "../../lib/textLines";
 import {
 	isTaskTool,
 	toolSummary,
@@ -47,15 +48,11 @@ import { forkUnavailableReason } from "../../utils/forkAnchor";
 import { hasMessageActions } from "../../utils/messageActions";
 import { formatFilePath } from "../../utils/path";
 import { workEventSubject, workEventWording } from "../../utils/systemMessage";
-import {
-	CollapsibleBody,
-	MarkdownContent,
-	ScrollableContent,
-	useEverExpanded,
-} from "../ui";
+import { CollapsibleBody, MarkdownContent, useEverExpanded } from "../ui";
 import AttachmentStrip from "./AttachmentStrip";
 import AuthFailureNotice from "./AuthFailureNotice";
 import { DiscardedNote, DiscardedSummary } from "./DiscardedMessage";
+import { HeaderlessMainBlock } from "./HeaderlessMainBlock";
 import { HtmlRenderCard } from "./HtmlRenderCard";
 import MessageActions from "./MessageActions";
 import MessageMenuTrigger, { type ForkBlocked } from "./MessageMenuTrigger";
@@ -76,9 +73,12 @@ import { ToolRow } from "./ToolRow";
 import { Section, type SectionFullScreen } from "./ToolSection";
 import { TurnChangesCard } from "./TurnChangesCard";
 import TurnTail from "./TurnTail";
+import { useTranscriptView } from "./transcriptViewContext";
 import { keepClearProps } from "./useTranscriptScroll";
 
 interface SystemItemProps {
+	/** The part's, naming its body in full screen. */
+	id: string;
 	content: string;
 }
 
@@ -87,14 +87,26 @@ interface SystemContent {
 	status?: string;
 }
 
-function SystemItem({ content }: SystemItemProps) {
+function SystemItem({ id, content }: SystemItemProps) {
 	const [expanded, setExpanded] = useState(false);
+	const view = useTranscriptView();
 	const label = useMemo(() => {
 		const parsed: SystemContent = JSON.parse(content);
 		return parsed.status
 			? `${parsed.subtype}: ${parsed.status}`
 			: parsed.subtype;
 	}, [content]);
+	const source = useMemo<FullScreenSource>(
+		() => ({
+			title: label,
+			label: "System",
+			noun: "system message",
+			from: "start",
+			copyText: content,
+			content: { kind: "code", text: content, language: "json" },
+		}),
+		[label, content],
+	);
 
 	return (
 		<div className="rounded bg-th-bg-secondary text-xs">
@@ -109,15 +121,25 @@ function SystemItem({ content }: SystemItemProps) {
 				<span className="italic text-th-text-muted">{label}</span>
 			</button>
 			<CollapsibleBody expanded={expanded}>
-				<ScrollableContent className="max-h-[60vh] overflow-auto border-t border-th-border p-2">
-					<pre className="text-th-text-muted">{content}</pre>
-				</ScrollableContent>
+				<div className="border-t border-th-border p-2">
+					<HeaderlessMainBlock
+						name="system message"
+						fullScreenKey={`system:${id}`}
+						source={source}
+						view={view}
+						count={{ noun: "line", total: outputLineCount(content) }}
+					>
+						<pre className="text-th-text-muted">{content}</pre>
+					</HeaderlessMainBlock>
+				</div>
 			</CollapsibleBody>
 		</div>
 	);
 }
 
 interface WorkEventItemProps {
+	/** The message's, naming its body in full screen. */
+	id: string;
 	content: string;
 	subtype?: string;
 	meta?: SystemMessageMeta;
@@ -132,6 +154,7 @@ interface WorkEventItemProps {
  * event is over, and what the work is doing now lives behind Details.
  */
 function WorkEventItem({
+	id,
 	content,
 	subtype,
 	meta,
@@ -143,6 +166,18 @@ function WorkEventItem({
 	// The subject's own title, even where the collapsed line names something
 	// else (a finished child): expanded, it sits next to the link into that work.
 	const { workId, title } = workEventSubject(subtype, meta);
+	const view = useTranscriptView();
+	const source = useMemo<FullScreenSource>(
+		() => ({
+			title: `Pockode · ${label}`,
+			label: "Message",
+			noun: "message",
+			from: "start",
+			copyText: content,
+			content: { kind: "markdown", markdown: content },
+		}),
+		[label, content],
+	);
 
 	return (
 		<div className="rounded bg-th-bg-secondary text-xs">
@@ -165,7 +200,7 @@ function WorkEventItem({
 				)}
 			</button>
 			<CollapsibleBody expanded={expanded}>
-				<ScrollableContent className="max-h-[60vh] space-y-2 overflow-auto border-t border-th-border p-2">
+				<div className="space-y-2 border-t border-th-border p-2">
 					{(title || (workId && onOpenWorkDetail)) && (
 						<div className="flex items-start gap-2">
 							<p className="min-w-0 flex-1 break-words text-sm text-th-text-primary">
@@ -183,8 +218,15 @@ function WorkEventItem({
 							)}
 						</div>
 					)}
-					<MarkdownContent content={content} />
-				</ScrollableContent>
+					<HeaderlessMainBlock
+						name="message"
+						fullScreenKey={`event:${id}`}
+						source={source}
+						view={view}
+					>
+						<MarkdownContent content={content} />
+					</HeaderlessMainBlock>
+				</div>
 			</CollapsibleBody>
 		</div>
 	);
@@ -208,11 +250,14 @@ function WarningItem({ message, code }: WarningItemProps) {
 }
 
 interface RawItemProps {
+	/** The part's, naming its body in full screen. */
+	id: string;
 	content: string;
 }
 
-function RawItem({ content }: RawItemProps) {
+function RawItem({ id, content }: RawItemProps) {
 	const [expanded, setExpanded] = useState(false);
+	const view = useTranscriptView();
 	const everExpanded = useEverExpanded(expanded);
 	const parsed = useMemo(() => {
 		try {
@@ -228,6 +273,22 @@ function RawItem({ content }: RawItemProps) {
 			everExpanded ? (parsed ? JSON.stringify(parsed, null, 2) : content) : "",
 		[everExpanded, parsed, content],
 	);
+	const source = useMemo<FullScreenSource | undefined>(
+		() =>
+			everExpanded
+				? {
+						title: label,
+						label: "Raw",
+						noun: "raw event",
+						from: "start",
+						copyText: formatted,
+						content: parsed
+							? { kind: "code", text: formatted, language: "json" }
+							: { kind: "output", text: formatted },
+					}
+				: undefined,
+		[everExpanded, label, formatted, parsed],
+	);
 
 	return (
 		<div className="rounded bg-th-bg-secondary text-xs">
@@ -242,20 +303,42 @@ function RawItem({ content }: RawItemProps) {
 				<span className="italic text-th-text-muted">{label}</span>
 			</button>
 			<CollapsibleBody expanded={expanded}>
-				<ScrollableContent className="max-h-[60vh] overflow-auto border-t border-th-border p-2">
-					<pre className="text-th-text-muted">{formatted}</pre>
-				</ScrollableContent>
+				<div className="border-t border-th-border p-2">
+					<HeaderlessMainBlock
+						name="raw event"
+						fullScreenKey={`raw:${id}`}
+						source={source}
+						view={view}
+						count={{ noun: "line", total: outputLineCount(formatted) }}
+					>
+						<pre className="text-th-text-muted">{formatted}</pre>
+					</HeaderlessMainBlock>
+				</div>
 			</CollapsibleBody>
 		</div>
 	);
 }
 
 interface CommandOutputItemProps {
+	/** The part's, naming its body in full screen. */
+	id: string;
 	content: string;
 }
 
-function CommandOutputItem({ content }: CommandOutputItemProps) {
+function CommandOutputItem({ id, content }: CommandOutputItemProps) {
 	const [expanded, setExpanded] = useState(true);
+	const view = useTranscriptView();
+	const source = useMemo<FullScreenSource>(
+		() => ({
+			title: "Command Output",
+			label: "Command Output",
+			noun: "command output",
+			from: "start",
+			copyText: content,
+			content: { kind: "markdown", markdown: content },
+		}),
+		[content],
+	);
 
 	return (
 		<div className="rounded bg-th-bg-secondary text-xs">
@@ -270,9 +353,16 @@ function CommandOutputItem({ content }: CommandOutputItemProps) {
 				<span className="text-th-accent">Command Output</span>
 			</button>
 			<CollapsibleBody expanded={expanded}>
-				<ScrollableContent className="max-h-[60vh] overflow-auto border-t border-th-border p-2">
-					<MarkdownContent content={content} />
-				</ScrollableContent>
+				<div className="border-t border-th-border p-2">
+					<HeaderlessMainBlock
+						name="command output"
+						fullScreenKey={`command-output:${id}`}
+						source={source}
+						view={view}
+					>
+						<MarkdownContent content={content} />
+					</HeaderlessMainBlock>
+				</div>
 			</CollapsibleBody>
 		</div>
 	);
@@ -857,7 +947,7 @@ function ContentPartItem(props: ContentPartItemProps) {
 		);
 	}
 	if (part.type === "system") {
-		return <SystemItem content={part.content} />;
+		return <SystemItem id={part.id} content={part.content} />;
 	}
 	if (part.type === "permission_request") {
 		return (
@@ -893,10 +983,10 @@ function ContentPartItem(props: ContentPartItemProps) {
 		return <WarningItem message={part.message} code={part.code} />;
 	}
 	if (part.type === "raw") {
-		return <RawItem content={part.content} />;
+		return <RawItem id={part.id} content={part.content} />;
 	}
 	if (part.type === "command_output") {
-		return <CommandOutputItem content={part.content} />;
+		return <CommandOutputItem id={part.id} content={part.content} />;
 	}
 	if (part.type === "thinking") {
 		return <ThinkingItem thoughts={part.thoughts} />;
@@ -1299,6 +1389,7 @@ const MessageItem = memo(function MessageItem({
 		if (message.source === "system") {
 			return (
 				<WorkEventItem
+					id={message.id}
 					content={message.content}
 					subtype={message.subtype}
 					meta={message.meta}

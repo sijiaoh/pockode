@@ -1,11 +1,13 @@
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { layOutClamp } from "../../test/clampLayout";
 import type {
 	AssistantMessage,
 	Message,
 	PermissionRequest,
 } from "../../types/message";
+import { FullScreenHost } from "./FullScreenHost";
 import MessageItem from "./MessageItem";
 import { IDLE_TAIL, TurnTailContext } from "./turnTailContext";
 
@@ -259,6 +261,10 @@ describe("MessageItem", () => {
 	});
 
 	describe("work event", () => {
+		afterEach(() => {
+			vi.restoreAllMocks();
+		});
+
 		const systemMessage = (
 			overrides: Partial<Extract<Message, { role: "user" }>> = {},
 		): Message => ({
@@ -294,6 +300,26 @@ describe("MessageItem", () => {
 				"aria-expanded",
 				"true",
 			);
+		});
+
+		it("cuts a long body in place and opens it full screen", async () => {
+			const user = userEvent.setup();
+			layOutClamp(2000);
+			render(
+				<FullScreenHost>
+					<MessageItem sessionId="session-1" message={systemMessage()} />
+				</FullScreenHost>,
+			);
+			await user.click(screen.getByRole("button", { name: /Started/ }));
+
+			const show = screen.getByRole("button", { name: "Show all of message" });
+			expect(document.querySelector(".overflow-auto")).toBeNull();
+			await user.click(show);
+			expect(show).toHaveAccessibleName("Show less of message");
+
+			await user.click(screen.getByRole("button", { name: "Full screen" }));
+			const dialog = screen.getByRole("dialog", { name: "Pockode · Started" });
+			expect(dialog).toHaveTextContent("Do the thing");
 		});
 
 		it("makes the step itself the action for step_advance", () => {
@@ -1219,6 +1245,73 @@ describe("MessageItem", () => {
 				.getAllByRole("button", { name: /^(Deny|Always Allow|Allow)$/ })
 				.map((button) => button.textContent);
 			expect(names).toEqual(["Deny", "Always Allow", "Allow"]);
+		});
+	});
+
+	// A scroll box inside the transcript takes the drag meant for the page, so
+	// an expanded record is cut and opened like a tool's body instead.
+	describe("an expanded record body", () => {
+		afterEach(() => {
+			vi.restoreAllMocks();
+		});
+
+		const SYSTEM = '{"type":"system","subtype":"init"}';
+		it.each([
+			{
+				kind: "a system message",
+				part: { type: "system" as const, id: "p-1", content: SYSTEM },
+				toggle: "init",
+				noun: "system message",
+				title: "init",
+			},
+			{
+				kind: "a raw event",
+				part: { type: "raw" as const, id: "p-1", content: SYSTEM },
+				toggle: "system",
+				noun: "raw event",
+				title: "system",
+			},
+			{
+				kind: "command output",
+				part: {
+					type: "command_output" as const,
+					id: "p-1",
+					content: "Done",
+				},
+				noun: "command output",
+				title: "Command Output",
+			},
+		])("cuts $kind in place and opens it full screen", async ({
+			part,
+			toggle,
+			noun,
+			title,
+		}) => {
+			const user = userEvent.setup();
+			layOutClamp(2000);
+			const message: Message = {
+				id: "m-1",
+				role: "assistant",
+				parts: [part],
+				status: "complete",
+				createdAt: new Date(),
+			};
+			render(
+				<FullScreenHost>
+					<MessageItem sessionId="session-1" message={message} />
+				</FullScreenHost>,
+			);
+			if (toggle)
+				await user.click(screen.getByRole("button", { name: toggle }));
+
+			expect(
+				screen.getByRole("button", {
+					name: new RegExp(`^Show .* of ${noun}$`),
+				}),
+			).toHaveAttribute("aria-expanded", "false");
+			expect(document.querySelector(".overflow-auto")).toBeNull();
+			await user.click(screen.getByRole("button", { name: "Full screen" }));
+			expect(screen.getByRole("dialog", { name: title })).toBeInTheDocument();
 		});
 	});
 

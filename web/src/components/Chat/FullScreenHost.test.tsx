@@ -4,22 +4,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useDiffSettingsStore } from "../../lib/diffSettingsStore";
 import type { FullScreenContent } from "../../lib/fullScreen";
 import { useWSStore } from "../../lib/wsStore";
+import { layOutClamp } from "../../test/clampLayout";
 import { FullScreenHost } from "./FullScreenHost";
 import { Section, type SectionFullScreen } from "./ToolSection";
-
-// jsdom does no layout: content is `height` tall, and a box with a max-height
-// stops at the main budget's minimum of 8 lines (+ 6 while uncut).
-function layOut(height: number) {
-	vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockReturnValue(
-		height,
-	);
-	vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockImplementation(
-		function (this: HTMLElement) {
-			if (this.hasAttribute("data-clamped")) return 128;
-			return this.style.maxHeight ? Math.min(height, 224) : height;
-		},
-	);
-}
 
 function source(
 	content: FullScreenContent,
@@ -74,7 +61,7 @@ afterEach(() => {
 
 describe("full screen", () => {
 	it("is offered in a block's header only once the block is cut", () => {
-		layOut(100);
+		layOutClamp(100);
 		const { unmount } = render(
 			<FullScreenHost>
 				<Output />
@@ -83,7 +70,7 @@ describe("full screen", () => {
 		expect(screen.queryByRole("button", OPEN)).not.toBeInTheDocument();
 		unmount();
 
-		layOut(2000);
+		layOutClamp(2000);
 		render(
 			<FullScreenHost>
 				<Output />
@@ -96,14 +83,14 @@ describe("full screen", () => {
 	});
 
 	it("is not offered outside a transcript, where there is nothing to open it in", () => {
-		layOut(2000);
+		layOutClamp(2000);
 		render(<Output />);
 		expect(screen.queryByRole("button", OPEN)).not.toBeInTheDocument();
 	});
 
 	it("shows the block under the tool's summary, and Escape hands focus back", async () => {
 		const user = userEvent.setup();
-		layOut(2000);
+		layOutClamp(2000);
 		render(
 			<FullScreenHost>
 				<Output />
@@ -146,7 +133,7 @@ describe("full screen", () => {
 
 	it("opens content read from its end at its end", async () => {
 		const user = userEvent.setup();
-		layOut(2000);
+		layOutClamp(2000);
 		vi.spyOn(HTMLElement.prototype, "scrollHeight", "get").mockReturnValue(
 			5000,
 		);
@@ -162,7 +149,7 @@ describe("full screen", () => {
 
 	it("carries on into the block that takes over the key, and closes when none does", async () => {
 		const user = userEvent.setup();
-		layOut(2000);
+		layOutClamp(2000);
 		const live = source({
 			kind: "output",
 			text: "so far",
@@ -200,7 +187,7 @@ describe("full screen", () => {
 
 	it("shares the remembered wrap choice with the transcript's diffs", async () => {
 		const user = userEvent.setup();
-		layOut(2000);
+		layOutClamp(2000);
 		render(
 			<FullScreenHost>
 				<Output
@@ -230,7 +217,7 @@ describe("full screen", () => {
 
 	it("lists every file, and opening one closes the viewer first", async () => {
 		const user = userEvent.setup();
-		layOut(2000);
+		layOutClamp(2000);
 		const onOpenFile = vi.fn();
 		const paths = Array.from({ length: 150 }, (_, i) => `/w/f${i}.ts`);
 		render(
@@ -268,7 +255,7 @@ describe("full screen", () => {
 		// Rows a line tall, the viewer's scroller a screen tall over all of them;
 		// everything else as `layOut` has it.
 		function layOutRows() {
-			layOut(2000);
+			layOutClamp(2000);
 			const isScroller = (el: HTMLElement) =>
 				el.getAttribute("aria-label") === "output" && el.tagName === "SECTION";
 			vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockImplementation(

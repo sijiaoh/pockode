@@ -40,5 +40,4 @@ export { default as PanelSection } from "./PanelSection";
 export { default as PullToRefresh } from "./PullToRefresh";
 export { default as RecommendedTag } from "./RecommendedTag";
 export { default as ReconnectBanner } from "./ReconnectBanner";
-export { default as ScrollableContent } from "./ScrollableContent";
 export { default as ToggleIconButton } from "./ToggleIconButton";
