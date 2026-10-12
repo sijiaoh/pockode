@@ -70,7 +70,7 @@ The `packages/shared` package contains UI components, hooks, stores, and utiliti
 - Hooks: `useMediaQuery`, `useOutsideClick`, `useIsExpanded`, `useHasCoarsePointer`, `useHasFinePointer`, `useCoverPage`, `useIsPageCovered`, `useSecondsUntil`
 - Stores: `createAuthStore` (factory function for the auth store, with configurable localStorage keys)
 - Utils: `getWebSocketUrl`, `BREAKPOINTS`, `MEDIA_QUERIES`, `hasCoarsePointer`, `credentialParams` / `authFailureReason` / `authRetryAfterMs` (the `auth` RPC contract both frontends share with the server — see [docs/code/authentication.md](docs/code/authentication.md))
-- `@pockode/shared/vitest`: `vitestRuntimeOptions` — the worker and timeout settings both `vitest.config.ts` files spread in. A separate subpath because it needs Node types, which the browser entry must not pull in; it lives outside `src` for the same reason. It is the one plain-JavaScript file here: vite leaves a config's bare imports external, so Node loads this one itself, and the Node that `.node-version` pins cannot read `.ts`.
+- `@pockode/shared/vitest`: `vitestRuntimeOptions` — the worker and timeout settings every Vitest config spreads in (both `vitest.config.ts` files and `web/vitest.browser.config.ts`). A separate subpath because it needs Node types, which the browser entry must not pull in; it lives outside `src` for the same reason. It is the one plain-JavaScript file here: vite leaves a config's bare imports external, so Node loads this one itself, and the Node that `.node-version` pins cannot read `.ts`.
 
 These components carry Tailwind classes, which puts two obligations on the
 projects rather than on this package: each stylesheet has to name
@@ -203,7 +203,7 @@ This repository is public; the cloud service it connects to is developed in a se
 - **Test public interfaces** — Testing public methods naturally covers internal implementation, no need to separately test private methods
 - **Keep it lean** — Each test should have a clear purpose; redundant tests are a burden, not an asset
 - Ensure tests pass before committing
-- **A red test is a diagnosis, not a verdict** — Before assuming the code broke, tell apart a contended machine, a timing assumption, a fabricated state, and a test that silently never ran; [docs/testing.md](docs/testing.md) has the checks, the timeout knobs, how to reproduce a macOS- or Windows-only failure on Linux, the two suites neither test entry point runs (one of them spends real money per turn), and which "passing" commands check nothing
+- **A red test is a diagnosis, not a verdict** — Before assuming the code broke, tell apart a contended machine, a timing assumption, a fabricated state, and a test that silently never ran; [docs/testing.md](docs/testing.md) has the checks, the timeout knobs, how to reproduce a macOS- or Windows-only failure on Linux, `web`'s real-browser entry for what needs real layout (and the expected-failure test there that must flip when its bug is fixed), the two suites neither test entry point runs (one of them spends real money per turn), and which "passing" commands check nothing
 
 ### Error Handling
 

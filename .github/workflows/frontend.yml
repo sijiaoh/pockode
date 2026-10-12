@@ -93,3 +93,37 @@ jobs:
       - name: Build
         run: pnpm run build
         working-directory: ${{ matrix.project }}
+
+  # web's real-browser entry (`test:browser`), apart from `check` so the jsdom
+  # suites never wait on a browser download. Browsers are not cached: on Linux
+  # WebKit also needs system libraries that only apt can put back, so a cache
+  # would save the download and still leave `install-deps` to run — Playwright's
+  # own CI guide advises against it for the same reason. `--only-shell` skips
+  # the full Chromium, which a headless run never launches.
+  browser:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install browsers
+        run: pnpm exec playwright install --with-deps --only-shell chromium webkit
+        working-directory: web
+
+      - name: Browser tests
+        run: pnpm run test:browser
+        working-directory: web

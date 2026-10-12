@@ -22,3 +22,6 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Vitest browser mode drops a screenshot beside every failing *.browser.test
+__screenshots__

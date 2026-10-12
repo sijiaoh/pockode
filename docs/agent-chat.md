@@ -482,6 +482,14 @@ still: it carries everything the reader was looking at down the screen, which is
 the jump the anchor exists to prevent. Every candidate below it moves with that
 growth instead, which is what makes it measurable.
 
+Skipping the first part is not yet enough. A merge also rebuilds the parts
+inside the first row, and a later part keyed by its index is remounted. When the
+reader is anchored on that part, the anchor leaves the DOM, a fresh one is taken
+at the top of the view, the view stays at 0, and the next page is asked for at
+once. This is a known bug. It is reproduced by an expected failure in
+`web/src/components/Chat/MessageList.browser.test.tsx`, and a fix has to flip
+that test ([testing.md](testing.md#frontend-the-real-browser-entry)).
+
 A page count that went *down* is not a page landing, and the transcript reads the
 tail again when it sees one. Paging starts over exactly one way — a reconnect
 re-subscribes and so lands back on the newest page — and the rows an anchor names

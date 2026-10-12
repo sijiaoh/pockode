@@ -11,6 +11,7 @@ pnpm run dev             # 开发服务器
 pnpm run build           # 构建
 pnpm run test            # 测试
 pnpm run test:watch      # 测试（监视模式）
+pnpm run test:browser    # 真浏览器测试（Chromium + WebKit；首次运行前的浏览器安装、Linux 系统依赖与成本见 docs/testing.md）
 pnpm exec tsc -b         # 类型检查
 
 # 本项目没有 lint / format 脚本，统一在仓库根目录执行（理由见根 AGENTS.md）
@@ -28,7 +29,7 @@ src/
   lib/                   # 状态管理 + RPC（*Store.ts, rpc/, registries/）
   types/                 # 类型定义
   utils/                 # 工具函数
-  test/                  # 测试配置（setup.ts）
+  test/                  # 测试配置（setup.ts、browserSetup.ts）与共用测试夹具
   router.tsx             # 路由配置
   main.tsx               # 入口
 ```
@@ -95,7 +96,7 @@ export default Dialog;
 
 ## 测试
 
-测试文件与源文件同目录：`ComponentName.test.tsx`
+测试文件与源文件同目录：`ComponentName.test.tsx`。需要真实布局（高度、滚动位置）的测试命名为 `*.browser.test.{ts,tsx}`，只由 `test:browser` 运行（划分规则见 `vitest.files.ts`；什么该放这里、transcript 夹具怎么用见 [docs/testing.md](../docs/testing.md#frontend-the-real-browser-entry)）
 
 遵循 [Testing Library 指导原则](https://testing-library.com/docs/guiding-principles)：
 - 按用户视角测试，优先 `getByRole` > `getByLabelText` > `getByText` > `getByTestId`
