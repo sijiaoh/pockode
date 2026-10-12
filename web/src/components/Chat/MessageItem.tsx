@@ -66,7 +66,7 @@ import {
 } from "./ProposedChange";
 import QuestionRecordItem from "./QuestionRecordItem";
 import { useRowExpanded } from "./rowExpansionContext";
-import { anchorCandidateProps } from "./scrollAnchor";
+import { anchorBlocksProps, anchorCandidateProps } from "./scrollAnchor";
 import TaskItem from "./TaskItem";
 import ThinkingItem from "./ThinkingItem";
 import ToolCallItem from "./ToolCallItem";
@@ -850,6 +850,9 @@ function ContentPartItem(props: ContentPartItemProps) {
 			<MarkdownContent
 				content={part.content}
 				variant={depth > 0 ? "note" : "message"}
+				// One part can be screens of prose, so its blocks are where the
+				// reader's place is held (see `scrollAnchor`).
+				rootProps={anchorBlocksProps}
 			/>
 		);
 	}
@@ -1401,11 +1404,10 @@ const MessageItem = memo(function MessageItem({
 			>
 				{shownParts.length > 0 && (
 					<div className="space-y-2">
-						{/* Every part has a wrapper of its own, and an unpositioned one,
-						    so this part can be what the view is held still over: one turn
-						    is one row and can be several screens tall, so holding the row
-						    still says nothing about where inside it the reader is (see
-						    `scrollAnchor`).
+						{/* Every part has a wrapper of its own, so this part can be what
+						    the view is held still over: one turn is one row and can be
+						    several screens tall, so holding the row still says nothing
+						    about where inside it the reader is (see `scrollAnchor`).
 
 						    A part on its own takes a `space-y-2` slot whether or not
 						    anything is drawn in it, so a part renderer must render

@@ -1,6 +1,10 @@
 import { IDLE_TURN } from "../lib/activity";
 import type * as WSStoreModule from "../lib/wsStore";
-import type { ChatMessagesHistoryResult, HistorySeq } from "../types/message";
+import type {
+	ChatMessagesHistoryResult,
+	HistorySeq,
+	ServerNotification,
+} from "../types/message";
 
 type RPCActions = ReturnType<
 	typeof WSStoreModule.useWSStore.getState
@@ -18,12 +22,15 @@ const server = {
 	requests: 0,
 	/** Answers the page request in flight, held until the test lands it. */
 	pending: null as (() => void) | null,
+	/** Where the transcript's subscription delivers live records. */
+	notify: null as ((notification: ServerNotification) => void) | null,
 };
 
 export function resetChatHistoryServer(pages: unknown[][]) {
 	server.pages = pages;
 	server.requests = 0;
 	server.pending = null;
+	server.notify = null;
 }
 
 export function chatHistoryRequests(): number {
@@ -37,6 +44,13 @@ export function answerPageRequest(): boolean {
 	server.pending = null;
 	answer();
 	return true;
+}
+
+/** Delivers `records` to the transcript as live output, in order. */
+export function streamRecords(records: unknown[]) {
+	const { notify } = server;
+	if (!notify) throw new Error("the transcript has not subscribed");
+	for (const record of records) notify(record as ServerNotification);
 }
 
 // A page's cursor is its own index: asking with `i` returns page `i - 1`. Page 0
@@ -53,10 +67,12 @@ function page(index: number): ChatMessagesHistoryResult {
 /**
  * Stands in for the server end of a transcript's history, and nothing else:
  * subscribing hands back the newest page, `chat.messages.history` each older
- * one, on the real store, which is marked connected. Everything above the RPCs
- * is the app's own — `useChatMessages` replays the records, splices each page in
- * with `prependHistoryPage`, and keeps the paging flags. A request for an older
- * page is held until the test answers it (`answerPageRequest`).
+ * one, on the real store, which is marked connected. Live records reach the
+ * subscription only when the test streams them (`streamRecords`). Everything
+ * above the RPCs is the app's own — `useChatMessages` replays the records,
+ * splices each page in with `prependHistoryPage`, and keeps the paging flags. A
+ * request for an older page is held until the test answers it
+ * (`answerPageRequest`).
  *
  * For a `vi.mock` factory, so it runs before anything reads the actions:
  *
@@ -75,10 +91,16 @@ export function stubChatHistoryRpc(
 ): typeof WSStoreModule {
 	const { actions } = module.useWSStore.getState();
 	const stubs = {
-		chatMessagesSubscribe: async () => ({
-			id: "transcript-fixture",
-			initial: { ...page(server.pages.length - 1), turn: IDLE_TURN },
-		}),
+		chatMessagesSubscribe: async (
+			_sessionId: string,
+			callback: (notification: ServerNotification) => void,
+		) => {
+			server.notify = callback;
+			return {
+				id: "transcript-fixture",
+				initial: { ...page(server.pages.length - 1), turn: IDLE_TURN },
+			};
+		},
 		chatMessagesUnsubscribe: async () => {},
 		chatMessagesHistory: (_sessionId: string, beforeSeq: HistorySeq) => {
 			server.requests++;

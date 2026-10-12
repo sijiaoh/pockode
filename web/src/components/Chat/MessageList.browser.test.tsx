@@ -81,9 +81,9 @@ async function readToTop(transcript: RenderedTranscript) {
 }
 
 /**
- * The reader's line is where it was, to the pixel the anchor can promise: it
- * is restored from `offsetTop`, a whole number, and a move under a pixel is not
- * written at all (`DRIFT_TOLERANCE` in `useTranscriptScroll`).
+ * The reader's line is where it was, to the pixel the anchor can promise: a
+ * move under a pixel is not written at all (`DRIFT_TOLERANCE` in
+ * `useTranscriptScroll`).
  */
 function expectHeldStill(transcript: RenderedTranscript, before: number) {
 	expect(
@@ -106,8 +106,8 @@ describe("MessageList paging in a real layout", () => {
 		expect(transcript.requests()).toBe(1);
 	});
 
-	// What the expected failure below stands on: `it.fails` passes on any throw,
-	// so this proves the page really is spliced, and the fixture really lands it.
+	// The test below passes just as well on a page that lands as a bubble of its
+	// own; this keeps it covering the splice.
 	it("splices a page cut inside a turn into the bubble at the top", async () => {
 		const transcript = await renderTranscript({ pages: session(true) });
 		await readToTop(transcript);
@@ -120,18 +120,7 @@ describe("MessageList paging in a real layout", () => {
 		expect(bubble).toContainElement(screen.getByText(READER_LINE));
 	});
 
-	// TODO: Drop `.fails` once paging survives the splice; this is the bug it
-	// reproduces. The page's last records are the first half of the bubble at the
-	// top, so the two are spliced into one bubble that keeps its id, and the
-	// parts inside it are rebuilt. The prose the reader is anchored on is keyed
-	// by its index, which the older parts shift (`text-2` becomes `text-4`), so
-	// its wrapper is unmounted and the anchor leaves the DOM; that alone is what
-	// loses it here. (The call list above it remounts too — it now opens on an
-	// older call — which would close a row the reader had opened.) A fresh anchor
-	// is then taken at the top of the view, the view stays at 0 with the reader's
-	// line pushed down by the whole older half, and the sentinel still in view
-	// asks for the next page in the same commit.
-	it.fails("holds the reader's content still when a page is spliced into the bubble at the top", async () => {
+	it("holds the reader's content still when a page is spliced into the bubble at the top", async () => {
 		const transcript = await renderTranscript({ pages: session(true) });
 		await readToTop(transcript);
 		const before = transcript.viewTopOf(READER_LINE);
@@ -141,5 +130,75 @@ describe("MessageList paging in a real layout", () => {
 		expect(transcript.scroller.scrollTop).toBeGreaterThan(0);
 		expectHeldStill(transcript, before);
 		expect(transcript.requests()).toBe(1);
+	});
+
+	// The page and the output can reach React between two renders and commit
+	// together. Measured by the content's total height, the output would count
+	// as history added above the reader and push them down by its height.
+	it("holds the reader's content still when output lands at the end in the same commit as a page", async () => {
+		const transcript = await renderTranscript({ pages: session(true) });
+		await readToTop(transcript);
+		const before = transcript.viewTopOf(READER_LINE);
+
+		// Not a message: one the reader typed would take them to the tail.
+		await transcript.landPage([
+			write("Live output."),
+			write("More live output."),
+		]);
+
+		expect(screen.getByText("More live output.")).toBeInTheDocument();
+		expectHeldStill(transcript, before);
+		expect(transcript.requests()).toBe(1);
+	});
+});
+
+describe("MessageList holding the reader inside one long part", () => {
+	/**
+	 * Never loads: its frame, not its pixels, is what takes up room. Not a
+	 * `data:` URL, which the Markdown renderer strips.
+	 */
+	const IMAGE = "diagram.png";
+
+	/**
+	 * One answer several screens long — an image near its top, the reader's
+	 * line well below it — above enough turns to scroll.
+	 */
+	const longAnswer = [
+		...turns(1, 1),
+		say("Explain it at length"),
+		{
+			type: "text",
+			content: [
+				"Here is the picture.",
+				`![diagram](${IMAGE})`,
+				...Array(6).fill(FILLER),
+				READER_LINE,
+				...Array(6).fill(FILLER),
+			].join("\n\n"),
+		},
+		done,
+		...turns(10, 3),
+	];
+
+	// What settles is the frame a diagram or an image is drawn in: it reaches
+	// the list through the resize observer and through no commit at all.
+	it("holds the reader still when something above them in the same part settles", async () => {
+		const transcript = await renderTranscript({ pages: [longAnswer] });
+		await transcript.scrollTo(
+			transcript.scroller.scrollTop + transcript.viewTopOf(READER_LINE) - 100,
+		);
+		const frame = screen
+			.getByRole("img", { name: "diagram" })
+			.closest<HTMLElement>(".markdown-image");
+		if (!frame) throw new Error("the image has no frame");
+		// The part starts above the view, so holding the part still would hold
+		// the image's growth against the reader.
+		expect(transcript.viewTopOf("Here is the picture.")).toBeLessThan(0);
+		const before = transcript.viewTopOf(READER_LINE);
+
+		frame.style.height = `${frame.offsetHeight + 300}px`;
+		await transcript.settle();
+
+		expectHeldStill(transcript, before);
 	});
 });

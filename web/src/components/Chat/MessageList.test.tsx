@@ -150,40 +150,57 @@ interface Layout {
  * Lays the transcript out. jsdom lays nothing out, and an element's position in
  * the list is the whole of what an anchor is made of — both the rows and the
  * parts inside them, since a part is what the view is held over once the reader
- * is somewhere in the middle of a long turn.
+ * is somewhere in the middle of a long turn. Anything inside a part sits at the
+ * part's top with no height of its own, so the finer levels of the anchor's path
+ * move exactly with the part they are in.
  */
 function layout({ partHeights = () => [ROW_HEIGHT], top = () => 0 }: Layout) {
 	const rowHeight = (messageId: string) =>
 		partHeights(messageId).reduce((total, height) => total + height, 0);
-	// What a browser reports for an element that is not displayed: no offset
-	// parent and an offset of 0.
-	Object.defineProperty(HTMLElement.prototype, "offsetParent", {
+	const partsOf = (row: HTMLElement) =>
+		[...row.querySelectorAll<HTMLElement>("[data-scroll-anchor]")].filter(
+			(part) => part.parentElement?.closest("[data-scroll-anchor]") === row,
+		);
+	/** Where `el` sits in the transcript and how tall it is, if it is in a row. */
+	const place = (el: HTMLElement) => {
+		const row = el.closest<HTMLElement>("[data-message-id]");
+		if (!row) return null;
+		const messageId = row.dataset.messageId ?? "";
+		let offset = top();
+		for (const other of document.querySelectorAll<HTMLElement>(
+			"[data-message-id]",
+		)) {
+			if (other === row) break;
+			offset += rowHeight(other.dataset.messageId ?? "");
+		}
+		if (el === row) return { offset, height: rowHeight(messageId) };
+		const heights = partHeights(messageId);
+		for (const [index, part] of partsOf(row).entries()) {
+			if (part.contains(el)) {
+				return { offset, height: part === el ? (heights[index] ?? 0) : 0 };
+			}
+			offset += heights[index] ?? 0;
+		}
+		return { offset, height: 0 };
+	};
+	const native = Element.prototype.getBoundingClientRect;
+	// What a browser reports for an element that is not displayed: no boxes at
+	// all, and a rectangle of zeros.
+	Object.defineProperty(HTMLElement.prototype, "getClientRects", {
 		configurable: true,
-		get(this: HTMLElement) {
-			return this.closest("[hidden]") ? null : document.body;
+		value(this: HTMLElement) {
+			return this.closest("[hidden]") ? [] : [this.getBoundingClientRect()];
 		},
 	});
-	Object.defineProperty(HTMLElement.prototype, "offsetTop", {
+	Object.defineProperty(HTMLElement.prototype, "getBoundingClientRect", {
 		configurable: true,
-		get(this: HTMLElement) {
-			const row = this.closest<HTMLElement>("[data-message-id]");
-			if (!row || this.closest("[hidden]")) return 0;
-			let offset = top();
-			for (const other of document.querySelectorAll<HTMLElement>(
-				"[data-message-id]",
-			)) {
-				if (other === row) break;
-				offset += rowHeight(other.dataset.messageId ?? "");
-			}
-			if (this === row) return offset;
-			const heights = partHeights(row.dataset.messageId ?? "");
-			for (const [index, part] of [
-				...row.querySelectorAll<HTMLElement>("[data-scroll-anchor]"),
-			].entries()) {
-				if (part === this) break;
-				offset += heights[index] ?? 0;
-			}
-			return offset;
+		value(this: HTMLElement) {
+			const at = this.closest("[hidden]") ? null : place(this);
+			if (!at) return native.call(this);
+			return DOMRect.fromRect({
+				y: at.offset - scrollContainer().scrollTop,
+				height: at.height,
+			});
 		},
 	});
 }
@@ -726,8 +743,8 @@ describe("MessageList history paging", () => {
 		);
 
 		// Anchored to the row that grew, the view would not move at all and the
-		// whole transcript would drop two rows down the screen — which is why
-		// neither the first row nor its first part is ever the anchor.
+		// whole transcript would drop two rows down the screen — which is why a
+		// page is held by that row's bottom edge, not by the anchor.
 		expect(scroller.scrollTop).toBe(3 * ROW_HEIGHT);
 	});
 
@@ -744,6 +761,23 @@ describe("MessageList history paging", () => {
 			<MessageList {...props} messages={pagedIn} loadedHistoryPages={1} />,
 		);
 
+		expect(scroller.scrollTop).toBe(4 * ROW_HEIGHT);
+	});
+
+	it("keeps a scroll the browser has not reported yet when a page lands", () => {
+		const { scroller, rerender, props } = renderPaging();
+		dragTo(scroller, ROW_HEIGHT);
+		triggerHistorySentinel();
+
+		// A flick still running: the view has moved on, and its scroll event is
+		// due at the next frame, after the commit the page lands in.
+		scroller.scrollTop = 2 * ROW_HEIGHT;
+		rerender(
+			<MessageList {...props} messages={pagedIn} loadedHistoryPages={1} />,
+		);
+
+		// Moved by the two rows the page added, from where the reader is — not
+		// put back to where the last reported scroll left them.
 		expect(scroller.scrollTop).toBe(4 * ROW_HEIGHT);
 	});
 
@@ -875,7 +909,7 @@ describe("MessageList history paging", () => {
 	// state has to be shown to settle, and to settle on the right number: one
 	// request per page and not one more, with the reader untouched throughout.
 	it("fills the top page after page and stops at the start of the conversation", () => {
-		const { land, scroller, viewport, pages, calls } = renderPaging();
+		const { land, viewport, pages, calls } = renderPaging();
 		// Shorter than the view, so nothing the paging does can move the view or the
 		// rows: `min-h-full` holds them on the bottom edge and a page fills space
 		// that was empty above them. No crossing ever happens — and the observer is
@@ -897,7 +931,7 @@ describe("MessageList history paging", () => {
 		const readerRowOnScreen = () => {
 			const row = document.querySelector<HTMLElement>('[data-message-id="m2"]');
 			if (!row) throw new Error("the row the reader is on left the transcript");
-			return row.offsetTop - scroller.scrollTop;
+			return row.getBoundingClientRect().top;
 		};
 		const startedAt = readerRowOnScreen();
 
@@ -1032,19 +1066,20 @@ describe("MessageList history paging", () => {
 		expect(scroller.scrollTop).toBe(3 * ROW_HEIGHT);
 	});
 
-	it("keeps the reader where they are when the anchored element is gone", () => {
+	it("keeps the reader where they are when the first row is gone", () => {
 		const { scroller, rerender, props, viewport } = renderPaging();
 		dragTo(scroller, ROW_HEIGHT);
 		triggerHistorySentinel();
 
-		// The page landed, but the row the anchor named is not in the list any more.
-		// A fresh anchor for where the view is now is the answer; going back to the
-		// tail would take the reader off the history they asked for.
+		// The page landed, but the row whose bottom edge it is measured by is not
+		// in the list any more, so nothing says how much went in above the reader.
+		// Staying put is the answer; going back to the tail would take the reader
+		// off the history they asked for.
 		viewport.contentHeight = 1400;
 		rerender(
 			<MessageList
 				{...props}
-				messages={[textMessage("older1"), textMessage("older2"), loaded[0]]}
+				messages={[textMessage("older1"), textMessage("older2"), loaded[1]]}
 				loadedHistoryPages={1}
 			/>,
 		);
@@ -1231,8 +1266,9 @@ describe("MessageList following the tail", () => {
 
 	// A row folding into its tool group stays in the DOM, only `hidden`, and an
 	// element that is not displayed sits at offset 0 — holding it still took the
-	// view to the top of the loaded transcript.
-	it("keeps the reader where they are when the part they are on folds away", async () => {
+	// view to the top of the loaded transcript. Taking a fresh anchor wherever
+	// the view then sat left the reader on whatever the fold pulled up under it.
+	it("lands the reader on the group's summary when the part they are on folds into it", async () => {
 		const bash = (id: string): ContentPart => ({
 			type: "tool_call",
 			id: `call-${id}`,
@@ -1267,7 +1303,9 @@ describe("MessageList following the tail", () => {
 		m1Parts([100]);
 		triggerResize(contentBox(scroller));
 
-		expect(scroller.scrollTop).toBe(300);
+		// The summary takes the place of the row the reader was on: at the top
+		// of the view, where that row's top was.
+		expect(scroller.scrollTop).toBe(ROW_HEIGHT);
 	});
 
 	// The other half of requiring a *direction*: reaching the end is only a return

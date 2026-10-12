@@ -217,16 +217,24 @@ interface MarkdownContentProps {
 	 * mistaken for the main agent talking.
 	 */
 	variant?: "message" | "note";
+	/**
+	 * Data attributes for the prose root, for a surface that marks it — the
+	 * transcript, whose scroll anchor takes each top-level block as a place to
+	 * hold the reader.
+	 */
+	rootProps?: Record<`data-${string}`, string>;
 }
 
 export const MarkdownContent = memo(function MarkdownContent({
 	content,
 	className,
 	variant = "message",
+	rootProps,
 }: MarkdownContentProps) {
 	const size = variant === "note" ? "prose-note" : "prose-sm prose-message";
 	return (
 		<div
+			{...rootProps}
 			className={`prose dark:prose-invert ${size} max-w-none min-w-0 prose-code:before:content-none prose-code:after:content-none ${className ?? ""}`}
 		>
 			<Markdown remarkPlugins={REMARK_PLUGINS} components={MARKDOWN_COMPONENTS}>

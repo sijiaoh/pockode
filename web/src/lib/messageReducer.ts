@@ -2654,9 +2654,10 @@ export function prependHistoryPage(
 	const merged: AssistantMessage = {
 		// Keeps the head's identity rather than the tail's: MessageList keys on it,
 		// so adopting the older id would remount the bubble and throw away whatever
-		// the user had expanded inside it. Load-bearing outside this file too: it is
-		// why the head is the one row the transcript never anchors on — it grows
-		// from the inside (docs/agent-chat.md#reading-a-page-on-the-client).
+		// the user had expanded inside it. Load-bearing outside this file too: the
+		// transcript holds a page landing by this row's bottom edge, so the row has
+		// to be the same node before and after the page
+		// (docs/agent-chat.md#reading-a-page-on-the-client).
 		...head,
 		...(endedAtBoundary
 			? {

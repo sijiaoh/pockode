@@ -425,9 +425,8 @@ function MessageList({
 												<div
 													key={message.id}
 													data-message-id={message.id}
-													// This wrapper is the row the view can be held still over, and
-													// it is here rather than on anything `MessageItem` renders
-													// because it is unpositioned (see `scrollAnchor`).
+													// This wrapper is the row the view can be held still over
+													// (see `scrollAnchor`).
 													{...anchorCandidateProps}
 													className="py-1.5 sm:py-2"
 												>

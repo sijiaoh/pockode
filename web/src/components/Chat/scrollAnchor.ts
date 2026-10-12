@@ -1,126 +1,354 @@
+import { coveredAbove, foldPlace } from "./useFoldLanding";
+
 /**
  * Where a reader is looking, when they are not reading the tail.
  *
  * An anchor is an element plus how far below the container's top edge it sat,
- * and holding that pair still is the whole of "read somewhere": a page landing
- * above, a diagram settling, the keyboard opening and the container shrinking
- * are then all the same event — something moved the element, put it back.
+ * and holding that pair still is almost the whole of "read somewhere": a
+ * diagram settling, a card expanding, the keyboard opening and the container
+ * shrinking are then all the same event — something moved the element, put it
+ * back. The one exception is a page landing above, which is held by the seam
+ * instead (`Seam`).
  *
- * Positions are read through `offsetTop` rather than `getBoundingClientRect`,
- * because `offsetTop` does not change while the view scrolls and can therefore
- * be compared with a `scrollTop` recorded in an earlier frame. It is measured
- * against the nearest positioned ancestor, so every candidate has to be a node
- * the transcript itself owns and leaves unpositioned (the row wrapper in
- * `MessageList`, the part wrapper in `MessageItem`) — a component's own root may
- * be `relative` and would be measured against itself.
+ * The element is the finest thing at the top edge along a path: the row, the
+ * part inside it, the top-level block of that part's Markdown, the section of
+ * an open tool row. One part can be several screens of prose, so anything
+ * coarser lets a diagram or an image settling above the reader inside the same
+ * part push them away. The rest of the path is kept beside it, each level with
+ * its own offset, because it is what the anchor falls back on.
+ *
+ * Positions are read from the layout (`getBoundingClientRect`) and turned into
+ * transcript coordinates — distance below the top of the content, which does
+ * not change while the view scrolls and can therefore be compared with a
+ * `scrollTop` recorded in an earlier frame. That works for any element, so a
+ * candidate can be whatever node is natural to mark, positioned or not.
  */
 
 const ANCHOR_ATTR = "data-scroll-anchor";
+const BLOCKS_ATTR = "data-scroll-anchor-blocks";
+/** Anything that is, or holds, a candidate. */
+const MARKED = `[${ANCHOR_ATTR}], [${BLOCKS_ATTR}]`;
 
 /**
- * Marks a node as something the view can be held still over. Spread onto the
- * wrapper: `<div {...anchorCandidateProps}>`.
+ * Marks a node as something the view can be held still over. Spread onto it:
+ * `<div {...anchorCandidateProps}>`.
  */
 export const anchorCandidateProps = { [ANCHOR_ATTR]: "" };
 
-export interface ScrollAnchor {
+/**
+ * Marks a node whose children are each a candidate — a Markdown root, whose
+ * top-level blocks are rendered by a library that offers no hook on each.
+ */
+export const anchorBlocksProps = { [BLOCKS_ATTR]: "" };
+
+/**
+ * Half a pixel: positions read from the layout are fractional, and an element
+ * flush with the edge has not started below it.
+ */
+const EDGE_SLACK = 0.5;
+
+interface Hold {
 	el: HTMLElement;
 	/** How far below the container's top edge the element's top edge sat. */
 	offset: number;
 }
 
-/**
- * The elements the view may be held still over, in document order.
- *
- * Message rows *and* the top-level parts inside them: one assistant turn is a
- * single row and can be several screens tall, so a row anchor says nothing about
- * where inside it the reader is — a tool result that lands in the same bubble
- * above their eyes would push what they are reading down. Nothing inside a
- * collapsible body is a candidate, since collapsing it leaves the anchor with no
- * position at all.
- *
- * The first row and its first part are not candidates: when an older page's last
- * message is the other half of that turn the two are spliced into one bubble
- * that keeps this row's identity (see `prependHistoryPage`), so both the row and
- * its first part grow from the inside and holding either of them still holds
- * nothing still. Every candidate below them moves with that growth, which is
- * exactly what makes it measurable.
- */
-export function anchorCandidates(container: HTMLElement): HTMLElement[] {
-	const found = [
-		...container.querySelectorAll<HTMLElement>(`[${ANCHOR_ATTR}]`),
-	];
-	const [firstRow, next] = found;
-	if (!firstRow) return found;
-	return found.slice(next && firstRow.contains(next) ? 2 : 1);
+export interface ScrollAnchor {
+	/**
+	 * The row first, the anchored element last, every level between them.
+	 * Never empty.
+	 */
+	path: Hold[];
+}
+
+function isCandidate(el: HTMLElement): boolean {
+	return (
+		el.hasAttribute(ANCHOR_ATTR) ||
+		(el.parentElement?.hasAttribute(BLOCKS_ATTR) ?? false)
+	);
+}
+
+function holdsCandidates(el: HTMLElement): boolean {
+	return el.hasAttribute(BLOCKS_ATTR) || el.querySelector(MARKED) !== null;
 }
 
 /**
- * Takes the anchor for where the view sits now: the last candidate to start at
- * or above the top edge of the view.
- *
- * "Last" is what picks the part over the row containing it — both start above
- * the edge, and the part is the one whose movement tracks what the reader can
- * see. When the view is above every candidate (reading the very top of the
- * loaded history) the first candidate is used instead, which is the one the
- * paging seam leaves alone.
+ * A box the reader sees its content through rather than the content itself: a
+ * nested scroller, or a clamp cutting what it holds. Where an element inside
+ * one sits says nothing about where the transcript's view should be — it moves
+ * with the box's own scroll position, or sits where nothing shows it. Overflow
+ * in the block direction is what makes one, so a table or a code block that
+ * scrolls sideways is not.
  */
-export function pickAnchor(container: HTMLElement): ScrollAnchor | null {
-	const candidates = anchorCandidates(container);
-	if (candidates.length === 0) return null;
-	const viewTop = container.scrollTop;
-	// Searched rather than walked: this runs on every scroll event, and a long
-	// session has thousands of candidates — a walk would read that many offsets
-	// per event while the reader's finger is still moving. Document order is
-	// top-to-bottom order, which is what makes the search sound; a row and its
-	// first part start at the same offset, so what is wanted is the *last* index
-	// at or above the edge.
+function seenThrough(el: HTMLElement): boolean {
+	// The cheap read first: almost nothing overflows, and the style is only
+	// worth computing for what does.
+	if (el.scrollHeight <= el.clientHeight + 1) return false;
+	return getComputedStyle(el).overflowY !== "visible";
+}
+
+/**
+ * The candidates one level below `parent`, in document order: the nearest
+ * marked descendants, none inside another, a `hidden` subtree or a box seen
+ * through (`seenThrough`).
+ */
+function candidatesIn(parent: HTMLElement): HTMLElement[] {
+	const found: HTMLElement[] = [];
+	const visit = (el: HTMLElement) => {
+		for (const child of el.children) {
+			if (!(child instanceof HTMLElement) || child.hidden) continue;
+			if (isCandidate(child)) found.push(child);
+			// Asked natively before walking: the deepest levels hold no candidates
+			// and can be thousands of nodes — a highlighted code block, a long diff
+			// — which this runs over on every scroll event.
+			else if (holdsCandidates(child) && !seenThrough(child)) visit(child);
+		}
+	};
+	visit(parent);
+	return found;
+}
+
+/**
+ * Whether `el` has come to sit in a box seen through (`seenThrough`) since it
+ * was taken inside `parent` — a nested scroller that only started to overflow
+ * once its content grew, and that the reader can now scroll on its own.
+ */
+function seenThroughBelow(parent: HTMLElement, el: HTMLElement): boolean {
+	for (
+		let box = el.parentElement;
+		box && box !== parent;
+		box = box.parentElement
+	) {
+		if (seenThrough(box)) return true;
+	}
+	return false;
+}
+
+function laidOut(container: HTMLElement, el: HTMLElement): boolean {
+	// An element that is not displayed has no boxes, and measures as sitting at
+	// the top of the loaded transcript: holding it still would carry the reader
+	// there.
+	return container.contains(el) && el.getClientRects().length > 0;
+}
+
+/**
+ * Where `el`'s top edge sits in the transcript, or null when it is not laid
+ * out.
+ */
+function transcriptTop(container: HTMLElement, el: HTMLElement): number | null {
+	if (el.getClientRects().length === 0) return null;
+	return (
+		el.getBoundingClientRect().top -
+		container.getBoundingClientRect().top -
+		container.clientTop +
+		container.scrollTop
+	);
+}
+
+/**
+ * The last of `list` to start at or above `edge`, skipping any that are not
+ * laid out.
+ *
+ * Searched rather than walked: this runs on every scroll event, and a long
+ * session has thousands of rows — a walk would read that many positions per
+ * event while the reader's finger is still moving. Document order is
+ * top-to-bottom order, which is what makes the search sound.
+ */
+function lastAtOrAbove(
+	container: HTMLElement,
+	list: HTMLElement[],
+	edge: number,
+): Hold | null {
 	let low = 0;
-	let high = candidates.length - 1;
-	let chosen = 0;
+	let high = list.length - 1;
+	let found: Hold | null = null;
 	while (low <= high) {
 		const mid = (low + high) >> 1;
-		if (candidates[mid].offsetTop <= viewTop) {
-			chosen = mid;
-			low = mid + 1;
-		} else {
+		let probe = mid;
+		let top = transcriptTop(container, list[probe]);
+		while (top === null && probe < high) {
+			probe++;
+			top = transcriptTop(container, list[probe]);
+		}
+		if (top === null || top > edge + EDGE_SLACK) {
 			high = mid - 1;
+		} else {
+			found = { el: list[probe], offset: top - edge };
+			low = probe + 1;
 		}
 	}
-	const el = candidates[chosen];
-	return { el, offset: el.offsetTop - viewTop };
+	return found;
+}
+
+function firstLaidOut(
+	container: HTMLElement,
+	list: HTMLElement[],
+	edge: number,
+): Hold | null {
+	for (const el of list) {
+		const top = transcriptTop(container, el);
+		if (top !== null) return { el, offset: top - edge };
+	}
+	return null;
 }
 
 /**
- * The candidate `el` sits in, or `el` itself when it is not inside one.
+ * Takes the anchor for where the view sits now: from the rows down, at each
+ * level the last candidate to start at or above the top edge of the view, as
+ * deep as the path goes. When the view is above every row (reading the very top
+ * of the loaded history, under the paging sentinel), the first row is used
+ * instead, from below the edge.
  *
- * What a jump anchors to: the card asked for is inside a part wrapper, and the
- * wrapper is the node whose `offsetTop` can be trusted (see the note on
- * measuring above).
+ * Every row is a candidate, the first one too: a page landing above is not held
+ * by the anchor at all (`takeSeam`), so a row growing from the inside as a page
+ * splices into it never has to be held still by.
  */
-export function enclosingCandidate(el: HTMLElement): HTMLElement {
-	return el.closest<HTMLElement>(`[${ANCHOR_ATTR}]`) ?? el;
+export function pickAnchor(container: HTMLElement): ScrollAnchor | null {
+	const rows = candidatesIn(container);
+	const edge = container.scrollTop;
+
+	const path: Hold[] = [];
+	let level = rows;
+	for (;;) {
+		const found = lastAtOrAbove(container, level, edge);
+		if (!found) break;
+		path.push(found);
+		level = candidatesIn(found.el);
+	}
+	if (path.length > 0) return { path };
+
+	const below = firstLaidOut(container, rows, edge);
+	return below && { path: [below] };
 }
 
 /**
- * Whether the anchor can still say where the reader is. It cannot once its
- * element has left the container — a page spliced its row into another, a tool
- * row was replaced by the card that took its place — nor while the element is
- * still there but not laid out: a row folded into a tool group is only
- * `hidden`, and an element that is not displayed reports an `offsetTop` of 0,
- * which would take the view to the top of the loaded transcript. A null
- * `offsetParent` is what says so, from the same family of reads the anchor is
- * measured with; nothing the transcript anchors to is `position: fixed`, the
- * other case that has none.
+ * The anchor for `el` where it sits now, with the candidates around it as the
+ * path above it. What a jump anchors to: the card asked for need not be a
+ * candidate itself.
  */
-export function anchorHolds(
+export function anchorOn(
+	container: HTMLElement,
+	el: HTMLElement,
+): ScrollAnchor {
+	const edge = container.scrollTop;
+	const path: Hold[] = [];
+	for (
+		let node: HTMLElement | null = el;
+		node && node !== container;
+		node = node.parentElement
+	) {
+		if (node !== el && !isCandidate(node)) continue;
+		path.unshift({
+			el: node,
+			offset: (transcriptTop(container, node) ?? 0) - edge,
+		});
+	}
+	return { path };
+}
+
+/**
+ * What of `anchor` can still say where the reader is, as the anchor to hold
+ * from now on — `anchor` itself while its element holds, null once nothing on
+ * its path does.
+ *
+ * An element can leave the container — a tool row replaced by the card that
+ * took its place — or stay in it without being laid out: a row folded into a
+ * tool group is only `hidden`. Or it can stay laid out but come to sit in a box
+ * seen through, whose own scroll then moves it under a still reader. A row folded into a group stands in for itself
+ * by the group's summary (`foldPlaceProps`), kept where the row's top was but
+ * never above the view's top or under a bar pinned there, just as a fold the
+ * reader made lands (`useFoldLanding`). Anything else lost gives way to the next level up, held
+ * where that level sat.
+ *
+ * Never a fresh anchor taken from where the view sits: the commit that lost
+ * the anchor has already moved everything under a `scrollTop` that still
+ * belongs to the layout before it, so what is at the edge now is not what the
+ * reader was looking at. That is how a lost anchor used to become a reader
+ * stuck at the top of the history.
+ */
+export function holdingAnchor(
 	container: HTMLElement,
 	anchor: ScrollAnchor,
-): boolean {
-	return container.contains(anchor.el) && anchor.el.offsetParent !== null;
+): ScrollAnchor | null {
+	const { path } = anchor;
+	for (let i = path.length - 1; i >= 0; i--) {
+		const { el, offset } = path[i];
+		const parent = path[i - 1]?.el ?? container;
+		if (laidOut(container, el) && !seenThroughBelow(parent, el)) {
+			return i === path.length - 1 ? anchor : { path: path.slice(0, i + 1) };
+		}
+		const foldedIn =
+			container.contains(el) && el.closest<HTMLElement>("[hidden]");
+		if (!foldedIn || foldedIn === parent || !parent.contains(foldedIn)) {
+			continue;
+		}
+		const place = foldPlace(foldedIn);
+		if (place && laidOut(container, place)) {
+			return {
+				path: [
+					...path.slice(0, i),
+					{ el: place, offset: Math.max(offset, coveredAbove(place)) },
+				],
+			};
+		}
+	}
+	return null;
+}
+
+/**
+ * Where a page landing is held: the first loaded row and where its bottom edge
+ * sat in the transcript.
+ *
+ * A page only ever adds content above that edge — rows before the first one, or
+ * the older half of its turn spliced into it from the top (`prependHistoryPage`
+ * keeps the row's identity, so it is the same node) — and nothing else does in
+ * the commit it lands in. How far the edge moved is therefore exactly how much
+ * was added above the reader, wherever they are reading, the merged part
+ * itself included, whose text grows from its own top. The view moves by that
+ * much from wherever it is now: a reader still scrolling may have moved since
+ * the seam was taken, and a scroll the browser has not reported yet is still
+ * theirs.
+ *
+ * Neither of the two other measures says that. The content's total height
+ * also counts output streaming in at the end in the same commit. The anchor
+ * says it only of an element the page left alone, which inside a spliced row
+ * it may not have: the part it names can have grown above its own top edge.
+ */
+export interface Seam {
+	row: HTMLElement;
+	/** Where the row's bottom edge sat, in transcript coordinates. */
+	bottom: number;
+}
+
+/** The seam as it sits now, to hold if the next commit is a page landing. */
+export function takeSeam(container: HTMLElement): Seam | null {
+	// The first marked node in document order is the first row: a row comes
+	// before everything marked inside it.
+	const row = container.querySelector<HTMLElement>(`[${ANCHOR_ATTR}]`);
+	const top = row && transcriptTop(container, row);
+	if (!row || top === null) return null;
+	return { row, bottom: top + row.getBoundingClientRect().height };
+}
+
+/**
+ * Where the view has to sit to take the reader past what went in above `seam`
+ * since it was taken, or null when its row is no longer laid out.
+ */
+export function seamScrollTop(
+	container: HTMLElement,
+	seam: Seam,
+): number | null {
+	if (!laidOut(container, seam.row)) return null;
+	const top = transcriptTop(container, seam.row) ?? 0;
+	const bottom = top + seam.row.getBoundingClientRect().height;
+	return container.scrollTop + bottom - seam.bottom;
 }
 
 /** Where the view has to sit for the anchored element to be back in place. */
-export function anchorScrollTop(anchor: ScrollAnchor): number {
-	return anchor.el.offsetTop - anchor.offset;
+export function anchorScrollTop(
+	container: HTMLElement,
+	anchor: ScrollAnchor,
+): number {
+	const { el, offset } = anchor.path[anchor.path.length - 1];
+	return (transcriptTop(container, el) ?? 0) - offset;
 }

@@ -9,11 +9,14 @@ import {
 import type { Message } from "../../types/message";
 import { isTypedByUser } from "../../utils/messageSource";
 import {
-	anchorHolds,
+	anchorOn,
 	anchorScrollTop,
-	enclosingCandidate,
+	holdingAnchor,
 	pickAnchor,
 	type ScrollAnchor,
+	type Seam,
+	seamScrollTop,
+	takeSeam,
 } from "./scrollAnchor";
 import type { TranscriptView } from "./transcriptViewContext";
 import { coveredAbove } from "./useFoldLanding";
@@ -144,10 +147,12 @@ export interface TranscriptScroll {
  *
  * The action is "apply the current state's invariant", and it runs at exactly
  * two moments — after every commit, before paint, and on every resize of either
- * box. Everything that used to need a case of its own (a page landing, a diagram
- * rendering, a card expanding, the software keyboard, the container growing back
- * when an overlay closes) is one of those two, so none of them is named here.
- * Nothing is on a timer and no height is reserved.
+ * box. Everything that used to need a case of its own (a diagram rendering, a
+ * card expanding, the software keyboard, the container growing back when an
+ * overlay closes) is one of those two, so none of them is named here. The one
+ * named exception is the commit a page lands in, which an anchored reader is
+ * held through by the seam instead (`holdSeam`). Nothing is on a timer and no
+ * height is reserved.
  *
  * The state changes only on the reader's own scrolling, decided by direction,
  * plus the explicit returns to the tail below.
@@ -160,6 +165,12 @@ export function useTranscriptScroll({
 }: Options): TranscriptScroll {
 	const stateRef = useRef<ReadingState>("tail");
 	const anchorRef = useRef<ScrollAnchor | null>(null);
+	/**
+	 * The seam as it sat the last time the view was placed or read. Kept current
+	 * rather than taken when a page lands, because by the time the commit that
+	 * lands it is seen here the page is already laid out above it.
+	 */
+	const seamRef = useRef<Seam | null>(null);
 	/**
 	 * The offset the view was last known to be at, which is what makes a scroll
 	 * event a direction rather than a position. Our own writes update it too:
@@ -218,6 +229,7 @@ export function useTranscriptScroll({
 			// direction compared against a position the view never reached would
 			// read the next event as the reader moving.
 			lastTopRef.current = el.scrollTop;
+			seamRef.current = takeSeam(el);
 			noteEnd(el);
 		},
 		[noteEnd],
@@ -230,17 +242,36 @@ export function useTranscriptScroll({
 			moveTo(el, maxScrollTop(el));
 			return;
 		}
-		let anchor = anchorRef.current;
-		// The anchored element can leave the list or stop being laid out (see
-		// `anchorHolds`). Taking a fresh anchor for where the view is now keeps the
-		// reader where they are, which is why losing an anchor is not a reason to go
-		// back to the tail.
-		if (!anchor || !anchorHolds(el, anchor)) {
-			anchor = pickAnchor(el);
-			anchorRef.current = anchor;
-			if (!anchor) return;
+		const taken = anchorRef.current;
+		// The anchored element can leave the list or stop being laid out; what is
+		// left of its path holds the reader instead (see `holdingAnchor`). With
+		// nothing left the view stays where it is until the reader scrolls, which
+		// is still not a reason to go back to the tail.
+		const anchor = taken && holdingAnchor(el, taken);
+		anchorRef.current = anchor;
+		if (anchor) {
+			moveTo(el, anchorScrollTop(el, anchor));
+		} else {
+			seamRef.current = takeSeam(el);
 		}
-		moveTo(el, anchorScrollTop(anchor));
+	}, [scrollRef, moveTo]);
+
+	// A page landing moves the reader by exactly what it added above the seam
+	// (see `Seam`), so the seam is what goes back in place — the anchor is not
+	// carried across the page. Then a fresh one is taken, from a view that is
+	// where the reader was again.
+	const holdSeam = useCallback(() => {
+		const el = scrollRef.current;
+		const seam = seamRef.current;
+		if (!el) return;
+		const top = seam && seamScrollTop(el, seam);
+		if (top === null) {
+			anchorRef.current = null;
+			seamRef.current = takeSeam(el);
+			return;
+		}
+		moveTo(el, top);
+		anchorRef.current = pickAnchor(el);
 	}, [scrollRef, moveTo]);
 
 	// The rows of the previous commit, read by id: what makes a message "just
@@ -296,7 +327,11 @@ export function useTranscriptScroll({
 			}
 		}
 
-		applyInvariant();
+		if (stateRef.current === "anchored" && loadedHistoryPages > prevPages) {
+			holdSeam();
+		} else {
+			applyInvariant();
+		}
 	});
 
 	// The scroll container only exists while there are rows to put in it (see
@@ -314,6 +349,11 @@ export function useTranscriptScroll({
 			const top = el.scrollTop;
 			const moved = top - lastTopRef.current;
 			lastTopRef.current = top;
+			// Not for the scroll itself, which leaves the seam where it is in the
+			// transcript: the reader may have scrolled over a layout that changed
+			// since the invariant last saw it, and from here on that layout is
+			// where they are — a page must not count its growth a second time.
+			seamRef.current = takeSeam(el);
 			const atBottom = maxScrollTop(el) - top <= AT_BOTTOM_THRESHOLD;
 			noteEnd(el);
 
@@ -386,13 +426,17 @@ export function useTranscriptScroll({
 			// `scrollIntoView`: a smooth jump would be cut short by the first output
 			// that lands during it, and `scrollIntoView` also scrolls whatever
 			// contains the container, which is the app shell.
-			const anchored = enclosingCandidate(target);
-			moveTo(el, anchored.offsetTop);
+			moveTo(
+				el,
+				el.scrollTop +
+					target.getBoundingClientRect().top -
+					el.getBoundingClientRect().top,
+			);
 			// Where it ended up, not where it was aimed: the end of the transcript
 			// cannot be scrolled past, so a card near it stops short of the top edge
 			// and the anchor has to say so — otherwise the next commit would keep
 			// trying to take it further.
-			readAnchored({ el: anchored, offset: anchored.offsetTop - el.scrollTop });
+			readAnchored(anchorOn(el, target));
 		},
 		[scrollRef, moveTo, readAnchored],
 	);
@@ -401,9 +445,6 @@ export function useTranscriptScroll({
 		(target: HTMLElement, offset: number) => {
 			const el = scrollRef.current;
 			if (!el) return;
-			// Measured on screen and turned into an offset of the view: the
-			// target is anything inside a row, whose own `offsetTop` is not the
-			// transcript's (see `scrollAnchor`).
 			const wanted =
 				el.scrollTop +
 				target.getBoundingClientRect().top -
@@ -426,9 +467,7 @@ export function useTranscriptScroll({
 				return;
 			}
 			moveTo(el, reachable);
-			// Anchored the way the reader's own scrolling would leave it, which is
-			// also what keeps the anchor off the candidates a page landing grows
-			// from the inside.
+			// Anchored the way the reader's own scrolling would leave it.
 			readAnchored(pickAnchor(el));
 		},
 		[scrollRef, moveTo, readAnchored],
