@@ -30,6 +30,7 @@ import {
 	findPartPath,
 	findToolRunPath,
 	mapPartsDeep,
+	newPartId,
 	type PartPath,
 } from "./partTree";
 import { isDrawnThought } from "./thinking";
@@ -348,6 +349,7 @@ export function normalizeEvent(
 			return {
 				type: "thinking",
 				thought: {
+					id: newPartId(),
 					content: (record.content as string) ?? "",
 					fullReasoning: (record.full_reasoning as string) ?? "",
 					redacted: record.redacted === true,
@@ -603,6 +605,7 @@ function applyToolCall(
 	return [
 		...parts,
 		{
+			id: newPartId(),
 			type: "tool_call",
 			tool: {
 				id: toolUseId,
@@ -617,17 +620,22 @@ function applyToolCall(
 }
 
 /**
- * `card` taking the place of `row`, keeping whose call it was. Only an
- * unfiled row says so — a filed one is placed — and losing it would drop the
- * call from its subagent's count, and give the row rebuilt on approval to the
- * main agent.
+ * `card` taking the place of `row`: in its place on screen, so under its id —
+ * a list named after the row stays named after the card (`oldestPart`) — and
+ * keeping whose call it was. Only an unfiled row says the latter — a filed one
+ * is placed — and losing it would drop the call from its subagent's count, and
+ * give the row rebuilt on approval to the main agent.
  */
-function withParentOf(row: ContentPart, card: ContentPart): ContentPart {
-	if (row.type !== "tool_call" || !row.parentToolUseId) return card;
-	if (card.type !== "permission_request" && card.type !== "question_record") {
-		return card;
+function inPlaceOf(row: ContentPart, card: ContentPart): ContentPart {
+	const placed = { ...card, id: row.id };
+	if (row.type !== "tool_call" || !row.parentToolUseId) return placed;
+	if (
+		placed.type !== "permission_request" &&
+		placed.type !== "question_record"
+	) {
+		return placed;
 	}
-	return { ...card, parentToolUseId: row.parentToolUseId };
+	return { ...placed, parentToolUseId: row.parentToolUseId };
 }
 
 export function applyEventToParts(
@@ -659,6 +667,7 @@ export function applyEventToParts(
 			return [
 				...parts,
 				{
+					id: newPartId(),
 					type: "text",
 					content: event.content,
 					...(event.parentToolUseId
@@ -678,6 +687,7 @@ export function applyEventToParts(
 			);
 		case "permission_request": {
 			const permissionPart: ContentPart = {
+				id: newPartId(),
 				type: "permission_request",
 				request: {
 					requestId: event.requestId,
@@ -701,7 +711,7 @@ export function applyEventToParts(
 
 			return editAtPath(parts, path, (list, index) => {
 				const updated = [...list];
-				updated[index] = withParentOf(list[index], permissionPart);
+				updated[index] = inPlaceOf(list[index], permissionPart);
 				return updated;
 			});
 		}
@@ -712,6 +722,7 @@ export function applyEventToParts(
 			// `request_id` is right, not a collision: an answer to that request
 			// settled every question in it at once.
 			const cards: ContentPart[] = event.questions.map((question) => ({
+				id: newPartId(),
 				type: "question_record",
 				record: { requestId: event.requestId, question },
 				status: "pending",
@@ -728,12 +739,20 @@ export function applyEventToParts(
 				: -1;
 			if (toolCallIndex === -1) return [...parts, ...cards];
 
+			// The first card stands where the row stood, so it goes by the row's id.
 			const updated = [...parts];
-			updated.splice(toolCallIndex, 1, ...cards);
+			updated.splice(
+				toolCallIndex,
+				1,
+				...cards.map((card, i) =>
+					i === 0 ? { ...card, id: parts[toolCallIndex].id } : card,
+				),
+			);
 			return updated;
 		}
 		case "question_posted": {
 			const questionPart: ContentPart = {
+				id: newPartId(),
 				type: "question_record",
 				record: {
 					requestId: event.requestId,
@@ -765,7 +784,7 @@ export function applyEventToParts(
 
 			return editAtPath(parts, path, (list, index) => {
 				const updated = [...list];
-				updated[index] = withParentOf(list[index], questionPart);
+				updated[index] = inPlaceOf(list[index], questionPart);
 				return updated;
 			});
 		}
@@ -786,8 +805,8 @@ export function applyEventToParts(
 			return [
 				...parts,
 				{
+					id: newPartId(),
 					type: "thinking",
-					id: generateUUID(),
 					thoughts: [thought],
 					...(event.parentToolUseId
 						? { parentToolUseId: event.parentToolUseId }
@@ -796,11 +815,15 @@ export function applyEventToParts(
 			];
 		}
 		case "system":
-			return [...parts, { type: "system", content: event.content }];
+			return [
+				...parts,
+				{ id: newPartId(), type: "system", content: event.content },
+			];
 		case "warning":
 			return [
 				...parts,
 				{
+					id: newPartId(),
 					type: "warning",
 					message: event.message,
 					code: event.code,
@@ -808,9 +831,15 @@ export function applyEventToParts(
 				},
 			];
 		case "raw":
-			return [...parts, { type: "raw", content: event.content }];
+			return [
+				...parts,
+				{ id: newPartId(), type: "raw", content: event.content },
+			];
 		case "command_output":
-			return [...parts, { type: "command_output", content: event.content }];
+			return [
+				...parts,
+				{ id: newPartId(), type: "command_output", content: event.content },
+			];
 		default:
 			return parts;
 	}
@@ -1948,6 +1977,7 @@ function updateRunById(
 			const card = list[cardIndex];
 			if (card.type !== "permission_request") return list; // Type guard - never happens
 			const restored: ContentPart = {
+				id: newPartId(),
 				type: "tool_call",
 				tool: update({
 					id: toolUseId,
@@ -2483,23 +2513,29 @@ function joinTurnParts(
 	before: ContentPart[],
 	after: ContentPart[],
 ): ContentPart[] {
-	// Through the same rule the stream itself uses, so the messages either side
-	// of the boundary come back as one part, a paragraph apart, as they would
-	// have been had the page not been split there.
+	// A part the join makes of two keeps the newer half's id: that half was on
+	// screen first, and a new key would remount it and close what the user had
+	// opened, as `prependHistoryPage` keeps the bubble's own id for the same
+	// reason. The older half was never drawn, so its ids are free to go.
+	//
+	// Text goes through the same rule the stream itself uses, so the messages
+	// either side of the boundary come back as one part, a paragraph apart, as
+	// they would have been had the page not been split there. Joined or not, the
+	// text that rule leaves last is the one holding the newer half's words.
 	const first = after[0];
 	if (first?.type === "text") {
+		const joined = applyEventToParts(before, {
+			type: "text",
+			content: first.content,
+			parentToolUseId: first.parentToolUseId,
+		});
+		const text = joined[joined.length - 1];
 		return [
-			...applyEventToParts(before, {
-				type: "text",
-				content: first.content,
-				parentToolUseId: first.parentToolUseId,
-			}),
+			...joined.slice(0, -1),
+			{ ...text, id: first.id },
 			...after.slice(1),
 		];
 	}
-	// The joined row keeps the newer half's id: that half was on screen first,
-	// and a new key would remount it and close what the user had opened, as
-	// `prependHistoryPage` keeps the bubble's own id for the same reason.
 	const last = before.at(-1);
 	if (
 		first?.type === "thinking" &&

@@ -31,6 +31,7 @@ beforeEach(() => {
 });
 
 const claudeNotice: ContentPart = {
+	id: "warning-1",
 	type: "warning",
 	message: "Not logged in · Please run /login",
 	code: "authentication_failed",
@@ -118,6 +119,7 @@ describe("an auth failure in the transcript", () => {
 	// The CLI retries a refused key for minutes; the notice does not wait.
 	it("draws the notice on the latest refused retry while the turn runs", () => {
 		const retry = (message: string): ContentPart => ({
+			id: message,
 			type: "warning",
 			message,
 			code: "stream_error",

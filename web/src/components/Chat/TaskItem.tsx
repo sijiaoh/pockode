@@ -196,8 +196,8 @@ function TaskItem({ run, depth = 0, renderChild }: Props) {
 	// measured on claude 2.1.286) — is drawn in full above the Process, and
 	// not again at its end.
 	const shownChildren = withoutEchoedReport(children, report || outcome)
-		.map((part, index) => ({ part, index }))
-		.filter(({ part }) => !isPendingCard(part));
+		.filter((part) => !isPendingCard(part))
+		.map((part) => ({ part }));
 	const hasProcess = shownChildren.length > 0 || (unfiled?.count ?? 0) > 0;
 	// Cards from every depth, so a subagent's subagent asking is not hidden
 	// under a row that is itself inside a closed Process. Only the outermost
@@ -266,7 +266,7 @@ function TaskItem({ run, depth = 0, renderChild }: Props) {
 				// is what tells a screen reader whose request it is.
 				<div className="px-2 pb-2">
 					<PartBlocks
-						items={pendingCards.map((part, index) => ({ part, index }))}
+						items={pendingCards.map((part) => ({ part }))}
 						renderPart={({ part }) => renderChild(part)}
 					/>
 				</div>

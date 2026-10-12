@@ -535,6 +535,41 @@ grows under the anchor holds nothing still
 ([agent-chat.md](../agent-chat.md#reading-a-page-on-the-client)). Moving the
 identity to the older half would move that boundary, not just rename a key.
 
+### Part Identity
+
+Every `ContentPart` carries an `id`, and so does every `Thought` inside a
+thinking part; every list of either is keyed by it. No record names one for
+most kinds of part, and position cannot stand in: a page joining from above
+puts parts in front of the ones on screen, and an index key would hand each
+row's DOM and state — an open body, a clamp — to whichever part slid into its
+place.
+
+- **Minted on the client, as the part is created.** `newPartId`
+  (`lib/partTree.ts`) is called by the reducer wherever it creates a part, so
+  streaming and replay mint the same way; a thought's id is minted in
+  `normalizeEvent` instead, because `useChatMessages` finds a thought's part by
+  the very object the reducer filed ([above](#turn-boundaries-and-late-events)).
+  The id is client state and never enters an event record; two replays of the
+  same records mint different ids, which costs nothing, since a replay
+  rebuilds the bubbles too.
+- **Ids sort in mint order.** A module counter in base 36, zero-padded to a
+  fixed width, so comparing two as strings says which came first. `oldestPart`
+  is the only reader of that order — see
+  [tool-call-ui.md](../tool-call-ui.md#what-a-list-and-a-group-are-keyed-by)
+  for why a list and a group are named after their oldest member.
+- **A part rewritten in place keeps its id**: appended text, a result, a
+  settled call. **A card that takes a row's place takes the row's id**
+  (`inPlaceOf`) — a permission card, a posted question's card, a legacy
+  `ask_user_question`'s first card — so one place on screen keeps one identity.
+  The row rebuilt once a permission card is answered is a new part with a
+  new id.
+- **Joining two halves of a turn keeps the newer half's ids.** The newer half
+  is the one on screen; the older half was never drawn, so its ids name
+  nothing yet. `joinTurnParts` still runs text across the seam through the
+  streaming rule, and whatever text part that leaves last takes the newer
+  half's first text id, merged or not; a thinking split across the seam keeps
+  the newer half's id, its thoughts keeping their own.
+
 ### Discarded Messages
 
 A Stop on a Claude turn can throw away messages the agent had not read yet; the
@@ -808,11 +843,7 @@ The rules particular to children:
   `thoughts`, because the engine splitting one pause into two blocks is nothing
   a reader can use ([turn-progress-ui.md](../turn-progress-ui.md#11-what-it-is)).
   A record that would draw nothing — no text, not redacted, no duration — is
-  dropped in `applyServerEvent` before it can open a reply or join a run. The
-  part carries an `id` of its own, generated here, because a thinking has no
-  `tool_use_id` and a position-based key would remount the row — and close what
-  the user opened — whenever an older page loads; joining two pages across a
-  split run (`joinTurnParts`) keeps the newer half's id for the same reason.
+  dropped in `applyServerEvent` before it can open a reply or join a run.
 
 #### Live state on a run
 
@@ -1036,7 +1067,7 @@ Key features:
 | `web/src/lib/wsStore.ts` | WebSocket + RPC + subscription management |
 | `web/src/lib/queryClient.ts` | react-query setup + worktree-dependent invalidation |
 | `web/src/lib/messageReducer.ts` | Event → Message state transformation |
-| `web/src/lib/partTree.ts` | Walks over a message's content, which nests a subagent's work under its call |
+| `web/src/lib/partTree.ts` | Walks over a message's content, which nests a subagent's work under its call; mints part ids |
 | `web/src/lib/extensions.ts` | Extension loading and context creation |
 | `web/src/lib/registries/*.ts` | Runtime registries for themes, UI, settings |
 | `web/src/lib/*Store.ts` | Domain data stores |

@@ -1,4 +1,5 @@
 import type { ContentPart, Thought, ToolRun } from "../types/message";
+import { oldestPart } from "./partTree";
 import { stepId } from "./subagentRun";
 import { thoughtLabel } from "./thinking";
 import { isTaskTool, TOOL_VERBS, type ToolVerb, toolVerb } from "./toolSummary";
@@ -227,7 +228,10 @@ function groupEntries<T extends { part: ContentPart }>(
 		}));
 	}
 	const folding = members.filter((member) => fold.get(member) !== "pinned");
-	const key = `group:${members[0].call}`;
+	// Named after its oldest member, not its first, for the reason a list is
+	// (`oldestPart`): which groups are open is remembered by this key.
+	const oldest = oldestPart(members.flatMap((member) => member.items));
+	const key = `group:${oldest.part.id}`;
 	const foldingCalls = new Set(folding.map((member) => member.call));
 	return [
 		{ kind: "summary", key, summary: summarize(members, folding, thoughts) },

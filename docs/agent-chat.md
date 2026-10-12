@@ -438,7 +438,9 @@ cannot reopen it, at a page seam for the same reason it cannot in one stream.
 mid-answer and the page above opens on content that no `message` event preceded,
 and the two halves are joined. Text at the seam goes through the same rule
 streaming uses, so the messages either side of it come back as one part, a
-paragraph apart, as they would have streamed.
+paragraph apart, as they would have streamed. What was on screen keeps its
+identity through the join, so nothing the user opened closes
+([code/frontend-state.md](code/frontend-state.md#part-identity)).
 
 The reducer produces a leading assistant message in one other case, and it is the
 one case that must *not* be joined: a page beginning at a read point, where the

@@ -49,8 +49,9 @@ function thoughtOpening(reasoning: string): string {
 /**
  * One record's share of the body. Codex's raw reasoning goes under a label
  * only beside a summary; alone it is the body, and nothing is labelled twice.
+ * Also the live tail's body, which is no record yet and so has no id.
  */
-export function ThoughtBody({ thought }: { thought: Thought }) {
+export function ThoughtBody({ thought }: { thought: Omit<Thought, "id"> }) {
 	const reasoning = thought.fullReasoning;
 	const fullScreen = useMemo<SectionFullScreen>(
 		() => ({
@@ -159,10 +160,8 @@ const ThinkingItem = memo(function ThinkingItem({ thoughts }: Props) {
 	const words = (
 		<span className="block truncate text-th-text-secondary">{label}</span>
 	);
-	const records = shown.map((thought, index) => (
-		// Records only ever append, so the position is the identity.
-		// biome-ignore lint/suspicious/noArrayIndexKey: see above
-		<div key={index} className="py-2">
+	const records = shown.map((thought) => (
+		<div key={thought.id} className="py-2">
 			<ThoughtBody thought={thought} />
 		</div>
 	));

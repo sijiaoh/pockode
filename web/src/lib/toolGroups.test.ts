@@ -18,7 +18,11 @@ const call = (
 	status: ToolRunStatus = "success",
 	extra: Partial<ToolRun> = {},
 ): Item => ({
-	part: { type: "tool_call", tool: { id, name, input, status, ...extra } },
+	part: {
+		type: "tool_call",
+		id: `call-${id}`,
+		tool: { id, name, input, status, ...extra },
+	},
 });
 const read = (id: string, path: string, status?: ToolRunStatus) =>
 	call(id, "Read", { file_path: path }, status);
@@ -31,6 +35,7 @@ const card = (
 ): Item => ({
 	part: {
 		type: "permission_request",
+		id: `card-${toolUseId}`,
 		request: {
 			requestId: `req-${toolUseId}`,
 			toolName,
@@ -47,7 +52,8 @@ const thinking = (...durations: (number | undefined)[]): Item => ({
 		type: "thinking",
 		id: `thinking-${++thinkingId}`,
 		thoughts: durations.map(
-			(durationMs): Thought => ({
+			(durationMs, index): Thought => ({
+				id: `thought-${index}`,
 				content: "Hmm.",
 				fullReasoning: "",
 				redacted: false,
@@ -233,7 +239,7 @@ describe("rowEntries", () => {
 		]);
 	});
 
-	it("follows a run as it streams in, keyed on its first call", () => {
+	it("follows a run as it streams in, keyed on its oldest call", () => {
 		const first = rowEntries([bash("a", "running")]);
 		expect(shape(first)).toEqual(["a"]);
 		const second = rowEntries([
@@ -254,6 +260,17 @@ describe("rowEntries", () => {
 		);
 		expect(keys[0]).toBeDefined();
 		expect(keys[0]).toBe(keys[1]);
+	});
+
+	// A page joining from above puts calls in front of the run, and its ids
+	// were minted after those on screen. Ids compare as strings, so `call-z`
+	// stands for such a call; the group is still named after `a`.
+	it("keeps its key when calls join in front of it", () => {
+		const keyOf = (entries: ReturnType<typeof rowEntries>) =>
+			entries[0].kind === "summary" ? entries[0].key : undefined;
+		const shown = keyOf(rowEntries([bash("a"), bash("b")]));
+		expect(shown).toBeDefined();
+		expect(keyOf(rowEntries([bash("z"), bash("a"), bash("b")]))).toBe(shown);
 	});
 
 	it("is on the newest running call, and counts every call as a step", () => {

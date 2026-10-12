@@ -111,7 +111,7 @@ function TurnTail({ writing, placeholder }: Props) {
 	const shown =
 		writing && (phase === "running" || (placeholder && phase === "idle"));
 	const live = shown && phase === "running" ? thinking : null;
-	const text = live && hasText({ ...live, redacted: false });
+	const text = live && hasText(live);
 
 	const latest = live ? latestLine(live.content || live.fullReasoning) : "";
 	// The clock follows the word rather than the latest line: the line changes

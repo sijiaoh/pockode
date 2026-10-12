@@ -5,8 +5,7 @@ import {
 	useMemo,
 	useState,
 } from "react";
-import { partBlocks, partKey } from "../../lib/partTree";
-import { stepId } from "../../lib/subagentRun";
+import { oldestPart, partBlocks } from "../../lib/partTree";
 import { rowEntries } from "../../lib/toolGroups";
 import type { ContentPart } from "../../types/message";
 import { RowExpansionContext, RowFrameContext } from "./rowExpansionContext";
@@ -16,8 +15,6 @@ import { foldPlaceProps } from "./useFoldLanding";
 
 interface Item {
 	part: ContentPart;
-	/** The part's position in its own list, which its key falls back on. */
-	index: number;
 }
 
 interface Props<T extends Item> {
@@ -30,18 +27,6 @@ interface Props<T extends Item> {
 	 * about where inside it the reader is.
 	 */
 	wrapperProps?: Record<string, string>;
-}
-
-/**
- * Which call a row stands for. A list keys on its first row's call rather than
- * on the part: Claude's card replaces the row of the call it asks about, in
- * place, and a list keyed on the part would remount every row in it — open
- * bodies closing — when the first one is replaced. `stepId` rather than the
- * card's bare `toolUseId`, which can be empty: two lists opening on such cards
- * would share a key.
- */
-function callKey({ part, index }: Item): string {
-	return stepId(part) ?? partKey(part, index);
 }
 
 interface SlotProps {
@@ -116,20 +101,25 @@ function RowList<T extends Item>({
 			return next;
 		});
 
+	// What the user chose for a row belongs to its call: the row rebuilt once a
+	// card is answered is a new part, and opens as the one the card replaced
+	// was left. The card itself keeps that row's id but not its choice: a
+	// pending card opens itself.
+	const choiceKey = (part: ContentPart) =>
+		part.type === "tool_call"
+			? `tool_call:${part.tool.id}`
+			: `${part.type}:${part.id}`;
 	// A thinking the user opened while it was still the tail line is a choice
 	// they made before the row existed.
 	const openedThoughts = useContext(OpenedThoughtsContext);
-	const choiceFor = (key: string) =>
-		choices.get(key) ?? (openedThoughts.has(key) || undefined);
+	const choiceFor = (part: ContentPart) =>
+		choices.get(choiceKey(part)) ?? (openedThoughts.has(part.id) || undefined);
 
 	const entries = rowEntries(items);
 	// A card and its row are one call, shown and hidden together.
 	const openedCalls = new Set(
 		entries.flatMap((entry) =>
-			entry.kind === "item" &&
-			choiceFor(partKey(entry.item.part, entry.item.index))
-				? [entry.call]
-				: [],
+			entry.kind === "item" && choiceFor(entry.item.part) ? [entry.call] : [],
 		),
 	);
 
@@ -169,17 +159,17 @@ function RowList<T extends Item>({
 								</div>
 							);
 						}
-						const key = partKey(entry.item.part, entry.item.index);
+						const { part } = entry.item;
 						const hidden =
 							entry.group !== undefined &&
 							!openGroups.has(entry.group) &&
 							!openedCalls.has(entry.call);
 						return (
 							<RowSlot
-								key={key}
-								rowKey={key}
+								key={part.id}
+								rowKey={choiceKey(part)}
 								framed={framed}
-								choice={choiceFor(key)}
+								choice={choiceFor(part)}
 								onChoice={onChoice}
 								hidden={hidden}
 								wrapperProps={wrapperProps}
@@ -212,16 +202,15 @@ export function PartBlocks<T extends Item>({
 }: Props<T>) {
 	return partBlocks(items).map((block) => {
 		if (block.kind === "single") {
-			const { part, index } = block.item;
 			return (
-				<div key={partKey(part, index)} {...wrapperProps}>
+				<div key={block.item.part.id} {...wrapperProps}>
 					{renderPart(block.item)}
 				</div>
 			);
 		}
 		return (
 			<RowList
-				key={`rows:${callKey(block.items[0])}`}
+				key={`rows:${oldestPart(block.items).part.id}`}
 				items={block.items}
 				renderPart={renderPart}
 				wrapperProps={wrapperProps}

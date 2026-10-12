@@ -24,7 +24,7 @@ function assistantMessage(
 	return {
 		id: "a1",
 		role: "assistant",
-		parts: [{ type: "text", content: "Hi" }],
+		parts: [{ id: "text-1", type: "text", content: "Hi" }],
 		status: "complete",
 		createdAt: new Date(),
 		anchorSeq: 2,
@@ -41,6 +41,7 @@ describe("forkUnavailableReason", () => {
 		assistantMessage({
 			parts: [
 				{
+					id: "card-1",
 					type: "permission_request",
 					request: {
 						requestId: "r1",
@@ -71,6 +72,7 @@ describe("forkUnavailableReason", () => {
 		const answered = assistantMessage({
 			parts: [
 				{
+					id: "card-1",
 					type: "permission_request",
 					request: {
 						requestId: "r1",

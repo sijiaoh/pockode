@@ -12,6 +12,7 @@ const call = (
 	extra: Partial<ToolRun> = {},
 ): ContentPart => ({
 	type: "tool_call",
+	id: `call-${id}`,
 	tool: { id, name, input, status, ...extra },
 });
 const edit = (
@@ -144,6 +145,7 @@ describe("turnChanges", () => {
 				// A subagent's call whose parent is not loaded sits flat.
 				{
 					type: "tool_call",
+					id: "call-f",
 					tool: {
 						id: "f",
 						name: "Edit",

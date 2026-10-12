@@ -277,6 +277,7 @@ describe("TaskItem", () => {
 	describe("a subagent's own work", () => {
 		const read = (id: string): ContentPart => ({
 			type: "tool_call",
+			id: `call-${id}`,
 			tool: {
 				id,
 				name: "Read",
@@ -284,9 +285,15 @@ describe("TaskItem", () => {
 				status: "success",
 			},
 		});
-		const text = (content: string): ContentPart => ({ type: "text", content });
+		let textId = 0;
+		const text = (content: string): ContentPart => ({
+			type: "text",
+			id: `text-${++textId}`,
+			content,
+		});
 		const pendingCard = (toolUseId: string): ContentPart => ({
 			type: "permission_request",
+			id: `card-${toolUseId}`,
 			request: {
 				requestId: `r-${toolUseId}`,
 				toolName: "Bash",
@@ -305,6 +312,7 @@ describe("TaskItem", () => {
 			const user = userEvent.setup();
 			const failed: ContentPart = {
 				type: "tool_call",
+				id: "call-c2",
 				tool: {
 					id: "c2",
 					name: "Bash",
@@ -587,7 +595,10 @@ describe("TaskItem", () => {
 				<TaskItemWithChildren
 					run={task("running", {
 						result: undefined,
-						children: [pendingCard("c1"), { type: "tool_call", tool: inner }],
+						children: [
+							pendingCard("c1"),
+							{ type: "tool_call", id: "call-t2", tool: inner },
+						],
 					})}
 				/>,
 			);
@@ -617,7 +628,10 @@ describe("TaskItem", () => {
 				<TaskItemWithChildren
 					run={task("running", {
 						result: undefined,
-						children: [read("c1"), { type: "tool_call", tool: inner }],
+						children: [
+							read("c1"),
+							{ type: "tool_call", id: "call-t2", tool: inner },
+						],
 					})}
 				/>,
 			);
@@ -659,7 +673,7 @@ describe("TaskItem", () => {
 			render(
 				<TaskItemWithChildren
 					run={task("success", {
-						children: [{ type: "tool_call", tool: inner }],
+						children: [{ type: "tool_call", id: "call-t2", tool: inner }],
 					})}
 				/>,
 			);
