@@ -253,6 +253,27 @@ it themselves — the run they were watching does not vanish because the next
 call arrived. Only the user's own choice counts: a pending card opens itself,
 and folding it once it is answered and its call has settled is the point.
 
+### What a list and a group are keyed by
+
+Rows are keyed by their part's `id`, which nothing around them can shift
+([frontend-state.md](code/frontend-state.md#part-identity)). A list and a group
+need a name too — it is what keeps a list's rows mounted, and what the open
+groups are remembered by — and they take it from their **oldest** member
+(`oldestPart`), not their first: rows arrive at both ends, a live call after
+the last and an older page in front of the first, and the oldest is the one
+neither displaces. A card that takes a row's place takes its id too, so the
+card does not rename the list either. Only a member *leaving* renames it — a
+`question_post` row replaced by its card when it was the oldest, an
+`html_render` call drawn on its own once it succeeds — and that remounts the
+list.
+
+Whether the user opened a row is remembered apart from its key: under its call
+(`tool_call:<tool_use_id>`) for a tool row, under its part for anything else. A
+card shares its row's key but not its choice, so a pending card opens itself
+even where the user had closed the row; and the row rebuilt once a permission
+card is answered — a new part for the same call — opens as the user left the
+row the card replaced.
+
 ## The turn's changes
 
 The tool rows say what a turn *did*; nothing said what it *left behind*. To
@@ -565,17 +586,17 @@ Two rules govern how it sits in the transcript.
 **An unanswered card is that call's row.** It *takes the place* of the
 `tool_call` part with the same `tool_use_id` rather than appearing beside it —
 and when the card comes first, as it can on Codex, the call adds no row of its
-own. Before this, the card was appended beside the row, which is why the part key
-was `` `${part.tool.id}-${index}` `` instead of the id alone: the same id could
-be in the list twice and the index was what kept React from collapsing them.
+own. In the row's place it also takes the row's part id, so the row's place
+keeps its key ([what a list is keyed by](#what-a-list-and-a-group-are-keyed-by)).
+Before this, the card was appended beside the row, so the same call was in the
+list twice.
 Adding a spinner to that first row is what turned the duplication from untidy
 into false — it would say the machine is busy while the machine is waiting for
 the user. The precedent was already in the reducer, one case away:
 `ask_user_question` — the CLI's own question, now read from old transcripts
 only — finds the `tool_call` part with its `toolUseId` and takes its place,
 because "all three describe one tool use". `permission_request` carries
-`toolUseId` for exactly the same join. Generalising it removed the duplicate rows
-and the index suffix with them.
+`toolUseId` for exactly the same join. Generalising it removed the duplicate rows.
 
 **A question record takes its row the same way.** `question_post` succeeds
 immediately — it is not blocked on the user, so it never wears the waiting rung —

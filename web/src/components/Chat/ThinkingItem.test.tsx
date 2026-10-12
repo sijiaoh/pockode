@@ -6,7 +6,9 @@ import type { ClampView } from "../ui";
 import ThinkingItem, { ThoughtBody, ThoughtScroller } from "./ThinkingItem";
 import { TranscriptViewContext } from "./transcriptViewContext";
 
+let thoughtId = 0;
 const thought = (extra: Partial<Thought> = {}): Thought => ({
+	id: `thought-${++thoughtId}`,
 	content: "",
 	fullReasoning: "",
 	redacted: false,

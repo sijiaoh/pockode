@@ -8,7 +8,8 @@ import {
 } from "./thinking";
 
 const timed = (...durations: number[]): Thought[] =>
-	durations.map((durationMs) => ({
+	durations.map((durationMs, index) => ({
+		id: `thought-${index}`,
 		content: "",
 		fullReasoning: "",
 		redacted: false,

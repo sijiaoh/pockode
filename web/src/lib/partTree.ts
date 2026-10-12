@@ -139,28 +139,30 @@ export function collectPartsDeep(
 	return found;
 }
 
+let partsMinted = 0;
+
 /**
- * A part's React key within its list: one part per call, because a
- * permission card takes its call's place and a resent `tool_call` updates the
- * row it names rather than adding one — so a row keys on its tool use id, a
- * card on its request id, a thinking on the id the reducer gave it, and only
- * parts with none of these fall back to position.
+ * A new part's `id`, or a thought's. Fixed-width, so that comparing two as strings compares
+ * when they were minted — which is what {@link oldestPart} reads.
  */
-export function partKey(part: ContentPart, index: number): string {
-	switch (part.type) {
-		case "permission_request":
-			return part.request.requestId;
-		case "question_record":
-			// Not unique on its own for a legacy record, which could carry several
-			// questions under one request id; the index disambiguates those.
-			return `${part.record.requestId}-${index}`;
-		case "tool_call":
-			return part.tool.id;
-		case "thinking":
-			return part.id;
-		default:
-			return `${part.type}-${index}`;
-	}
+export function newPartId(): string {
+	partsMinted += 1;
+	return partsMinted.toString(36).padStart(10, "0");
+}
+
+/**
+ * The item whose part was minted first: the one that has been on screen
+ * longest. A list or a group of rows is named after it rather than after its
+ * first member, because rows are added at both ends — a live call after the
+ * last, and a history page joining from above in front of the first — and
+ * the oldest member is the one neither displaces. Nor does a card, which keeps
+ * the id of the row whose place it took. Only a member leaving the list, such
+ * as a call whose page is drawn on its own once it succeeds, renames it.
+ */
+export function oldestPart<T extends { part: ContentPart }>(items: T[]): T {
+	return items.reduce((oldest, item) =>
+		item.part.id < oldest.part.id ? item : oldest,
+	);
 }
 
 /**

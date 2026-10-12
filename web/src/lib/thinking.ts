@@ -6,7 +6,9 @@ import { formatElapsed } from "./toolRun";
  * A row may hold several records, merged; every rule here is over all of them.
  */
 
-export function hasText(thought: Thought): boolean {
+export function hasText(
+	thought: Pick<Thought, "content" | "fullReasoning">,
+): boolean {
 	return Boolean(thought.content || thought.fullReasoning);
 }
 

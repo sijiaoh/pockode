@@ -255,6 +255,7 @@ function questionMessage(id: string, requestId: string): Message {
 		parts: [
 			{
 				type: "question_record",
+				id: `question-${requestId}`,
 				record: {
 					requestId,
 					question: {
@@ -276,7 +277,7 @@ function textMessage(id: string): Message {
 		role: "assistant",
 		status: "complete",
 		createdAt: new Date(),
-		parts: [{ type: "text", content: `text ${id}` }],
+		parts: [{ type: "text", id: `text-${id}`, content: `text ${id}` }],
 	};
 }
 
@@ -314,6 +315,7 @@ function permissionMessage(id: string, requestId: string): Message {
 		parts: [
 			{
 				type: "permission_request",
+				id: `card-${requestId}`,
 				status: "pending",
 				request: {
 					requestId,
@@ -458,6 +460,7 @@ describe("folding an open tool row from its pinned bar", () => {
 		parts: [
 			{
 				type: "tool_call",
+				id: `call-${id}`,
 				tool: {
 					id: `tool-${id}`,
 					name: "Bash",
@@ -1201,8 +1204,8 @@ describe("MessageList following the tail", () => {
 			status: "complete",
 			createdAt: new Date(),
 			parts: [
-				{ type: "text", content: "the part above" },
-				{ type: "text", content: "the part being read" },
+				{ type: "text", id: "text-above", content: "the part above" },
+				{ type: "text", id: "text-read", content: "the part being read" },
 			],
 		};
 		const { scroller, viewport } = renderScrolling([
@@ -1232,6 +1235,7 @@ describe("MessageList following the tail", () => {
 	it("keeps the reader where they are when the part they are on folds away", async () => {
 		const bash = (id: string): ContentPart => ({
 			type: "tool_call",
+			id: `call-${id}`,
 			tool: { id, name: "Bash", input: { command: id }, status: "success" },
 		});
 		const tools: Message = {
@@ -1592,7 +1596,10 @@ describe("the scroll button's new-content dot", () => {
 					...transcript.slice(0, -1),
 					{
 						...last,
-						parts: [...last.parts, { type: "text", content: "more" }],
+						parts: [
+							...last.parts,
+							{ type: "text", id: "text-more", content: "more" },
+						],
 					},
 				]}
 			/>,
@@ -1662,7 +1669,10 @@ describe("the scroll button's new-content dot", () => {
 					...transcript.slice(0, -1),
 					{
 						...last,
-						parts: [{ type: "text", content: "older half" }, ...last.parts],
+						parts: [
+							{ type: "text", id: "text-older", content: "older half" },
+							...last.parts,
+						],
 					},
 				]}
 			/>,
@@ -1726,6 +1736,7 @@ describe("a subagent's unfiled children", () => {
 		});
 		const read = (id: string, parentToolUseId?: string): ContentPart => ({
 			type: "tool_call",
+			id: `call-${id}`,
 			tool: {
 				id,
 				name: "Read",
@@ -1741,6 +1752,7 @@ describe("a subagent's unfiled children", () => {
 					message("m1", [
 						{
 							type: "tool_call",
+							id: "call-t1",
 							tool: {
 								id: "t1",
 								name: "Agent",

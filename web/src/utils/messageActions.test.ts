@@ -16,7 +16,7 @@ describe("hasMessageActions", () => {
 			hasMessageActions({
 				id: "a1",
 				role: "assistant",
-				parts: [{ type: "text", content: "Hi" }],
+				parts: [{ id: "text-1", type: "text", content: "Hi" }],
 				status: "complete",
 				createdAt: new Date(),
 			}),

@@ -8,6 +8,7 @@ import { OpenedThoughtsContext } from "./turnTailContext";
 
 const bash = (id: string, status: ToolRunStatus = "success"): ContentPart => ({
 	type: "tool_call",
+	id: `call-${id}`,
 	tool: { id, name: "Bash", input: { command: id }, status },
 });
 
@@ -17,6 +18,7 @@ const parts: ContentPart[] = [
 		id: "th-1",
 		thoughts: [
 			{
+				id: "thought-1",
 				content: "Plan it.",
 				fullReasoning: "",
 				redacted: false,
@@ -31,7 +33,7 @@ const parts: ContentPart[] = [
 function List({ shown = parts }: { shown?: ContentPart[] }) {
 	return (
 		<PartBlocks
-			items={shown.map((part, index) => ({ part, index }))}
+			items={shown.map((part) => ({ part }))}
 			renderPart={({ part }) =>
 				part.type === "thinking" ? (
 					<ThinkingItem thoughts={part.thoughts} />
@@ -104,6 +106,7 @@ describe("PartBlocks group summary", () => {
 				shown={[
 					{
 						type: "tool_call",
+						id: "call-a",
 						tool: {
 							id: "a",
 							name: "Read",
@@ -113,6 +116,7 @@ describe("PartBlocks group summary", () => {
 					},
 					{
 						type: "tool_call",
+						id: "call-e",
 						tool: {
 							id: "e",
 							name: "Read",
@@ -124,6 +128,7 @@ describe("PartBlocks group summary", () => {
 					bash("c", "running"),
 					{
 						type: "permission_request",
+						id: "card-d",
 						request: {
 							requestId: "req-d",
 							toolName: "Bash",
@@ -142,5 +147,36 @@ describe("PartBlocks group summary", () => {
 		expect(
 			screen.queryByLabelText("Tool calls running"),
 		).not.toBeInTheDocument();
+	});
+});
+
+// A page joining from above puts rows in front of a list, and its ids were
+// minted after those on screen. Ids compare as strings, so `call-z` stands for
+// such a row against the `call-a` already shown.
+describe("PartBlocks with rows joined in front", () => {
+	it("keeps the rows on screen mounted", () => {
+		const { rerender } = render(<List shown={[bash("a", "running")]} />);
+		const shown = screen.getByText("a");
+
+		rerender(<List shown={[bash("z", "running"), bash("a", "running")]} />);
+
+		expect(screen.getByText("z")).toBeInTheDocument();
+		expect(screen.getByText("a")).toBe(shown);
+	});
+
+	it("keeps a group the user opened open", async () => {
+		const user = userEvent.setup();
+		const { rerender } = render(<List shown={[bash("a"), bash("b")]} />);
+		await user.click(
+			screen.getByRole("button", { name: /^doneRan 2 commands$/ }),
+		);
+		expect(screen.getByText("a")).toBeVisible();
+
+		rerender(<List shown={[bash("z"), bash("a"), bash("b")]} />);
+
+		expect(
+			screen.getByRole("button", { name: /^doneRan 3 commands$/ }),
+		).toHaveAttribute("aria-expanded", "true");
+		expect(screen.getByText("a")).toBeVisible();
 	});
 });

@@ -16,7 +16,7 @@ const anchor: UserMessage = {
 const assistantAnchor: AssistantMessage = {
 	id: "a1",
 	role: "assistant",
-	parts: [{ type: "text", content: "Here is the plan" }],
+	parts: [{ id: "text-1", type: "text", content: "Here is the plan" }],
 	status: "complete",
 	createdAt: new Date(),
 	anchorSeq: 4,

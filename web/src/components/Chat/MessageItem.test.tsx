@@ -395,7 +395,7 @@ describe("MessageItem", () => {
 		const message: Message = {
 			id: "2",
 			role: "assistant",
-			parts: [{ type: "text", content: "Hello human" }],
+			parts: [{ id: "text-1", type: "text", content: "Hello human" }],
 			status: "complete",
 			createdAt: new Date(),
 		};
@@ -443,7 +443,7 @@ describe("MessageItem", () => {
 		const message: Message = {
 			id: "3",
 			role: "assistant",
-			parts: [{ type: "text", content: "half an answer" }],
+			parts: [{ id: "text-1", type: "text", content: "half an answer" }],
 			status: "streaming",
 			createdAt: new Date(),
 		};
@@ -460,7 +460,7 @@ describe("MessageItem", () => {
 		const message: Message = {
 			id: "3",
 			role: "assistant",
-			parts: [{ type: "text", content: "Previous response" }],
+			parts: [{ id: "text-1", type: "text", content: "Previous response" }],
 			status: "streaming",
 			createdAt: new Date(),
 		};
@@ -498,7 +498,7 @@ describe("MessageItem", () => {
 		const message: Message = {
 			id: "4b",
 			role: "assistant",
-			parts: [{ type: "text", content: "Partial response" }],
+			parts: [{ id: "text-1", type: "text", content: "Partial response" }],
 			status: "interrupted",
 			createdAt: new Date(),
 		};
@@ -512,9 +512,10 @@ describe("MessageItem", () => {
 			id: "5",
 			role: "assistant",
 			parts: [
-				{ type: "text", content: "I'll read the file" },
+				{ id: "text-1", type: "text", content: "I'll read the file" },
 				{
 					type: "tool_call",
+					id: "call-tool-1",
 					tool: {
 						id: "tool-1",
 						name: "Read",
@@ -538,6 +539,7 @@ describe("MessageItem", () => {
 			parts: [
 				{
 					type: "tool_call",
+					id: "call-tool-page",
 					tool: {
 						id: "tool-page",
 						name,
@@ -584,6 +586,7 @@ describe("MessageItem", () => {
 			parts: [
 				{
 					type: "tool_call",
+					id: "call-tool-2",
 					tool: {
 						id: "tool-2",
 						name: "Bash",
@@ -617,6 +620,7 @@ describe("MessageItem", () => {
 			parts: [
 				{
 					type: "tool_call",
+					id: "call-tool-2b",
 					tool: {
 						id: "tool-2b",
 						name: "Read",
@@ -665,6 +669,7 @@ describe("MessageItem", () => {
 			parts: [
 				{
 					type: "tool_call",
+					id: "call-tool-2c",
 					tool: {
 						id: "tool-2c",
 						name: "ToolSearch",
@@ -696,6 +701,7 @@ describe("MessageItem", () => {
 			parts: [
 				{
 					type: "permission_request",
+					id: "card-1",
 					request: {
 						requestId: "req-1",
 						toolName: "Bash",
@@ -727,6 +733,7 @@ describe("MessageItem", () => {
 		const user = userEvent.setup();
 		const call = (id: string, command: string) => ({
 			type: "tool_call" as const,
+			id: `call-${id}`,
 			tool: {
 				id,
 				name: "Bash",
@@ -756,6 +763,8 @@ describe("MessageItem", () => {
 				message={message([
 					{
 						type: "permission_request",
+						// The card takes the place, and so the id, of the row it replaces.
+						id: "call-tool-1",
 						request: {
 							requestId: "req-1",
 							toolName: "Bash",
@@ -775,6 +784,114 @@ describe("MessageItem", () => {
 		);
 	});
 
+	// The card stands in the row's place, under its id, but the row's body is
+	// not the card's: a pending card opens itself whatever the row was left as.
+	it("opens a card whose row the user had closed", async () => {
+		const user = userEvent.setup();
+		const row = {
+			type: "tool_call" as const,
+			id: "call-tool-1",
+			tool: {
+				id: "tool-1",
+				name: "Bash",
+				input: { command: "make a" },
+				status: "running" as const,
+			},
+		};
+		const message = (parts: AssistantMessage["parts"]): Message => ({
+			id: "closed",
+			role: "assistant",
+			parts,
+			status: "streaming",
+			createdAt: new Date(),
+		});
+
+		const { rerender } = render(
+			<MessageItem sessionId="session-1" message={message([row])} />,
+		);
+		const toggle = screen.getByRole("button", { name: /make a/ });
+		await user.click(toggle);
+		await user.click(toggle);
+		expect(toggle).toHaveAttribute("aria-expanded", "false");
+
+		rerender(
+			<MessageItem
+				sessionId="session-1"
+				message={message([
+					{
+						type: "permission_request",
+						id: row.id,
+						request: {
+							requestId: "req-1",
+							toolName: "Bash",
+							toolInput: { command: "make a" },
+							toolUseId: "tool-1",
+						},
+						status: "pending",
+					},
+				])}
+				onPermissionRespond={vi.fn()}
+			/>,
+		);
+
+		expect(screen.getByRole("button", { name: /make a/ })).toHaveAttribute(
+			"aria-expanded",
+			"true",
+		);
+	});
+
+	// The row rebuilt once its card is answered is a new part beside the card,
+	// but the same call: it opens as the user left the row the card replaced.
+	it("opens the row rebuilt after its card as the user left it", async () => {
+		const user = userEvent.setup();
+		const row = (id: string) => ({
+			type: "tool_call" as const,
+			id,
+			tool: {
+				id: "tool-1",
+				name: "Bash",
+				input: { command: "make a" },
+				status: "running" as const,
+			},
+		});
+		const message = (parts: AssistantMessage["parts"]): Message => ({
+			id: "rebuilt",
+			role: "assistant",
+			parts,
+			status: "streaming",
+			createdAt: new Date(),
+		});
+
+		const { rerender } = render(
+			<MessageItem sessionId="session-1" message={message([row("row-1")])} />,
+		);
+		await user.click(screen.getByRole("button", { name: /make a/ }));
+
+		rerender(
+			<MessageItem
+				sessionId="session-1"
+				message={message([
+					{
+						type: "permission_request",
+						id: "row-1",
+						request: {
+							requestId: "req-1",
+							toolName: "Bash",
+							toolInput: { command: "make a" },
+							toolUseId: "tool-1",
+						},
+						status: "allowed",
+					},
+					row("row-2"),
+				])}
+			/>,
+		);
+
+		expect(
+			screen.getAllByRole("button", { name: /make a/ }).at(-1),
+		).toHaveAttribute("aria-expanded", "true");
+	});
+
 	it("calls onPermissionRespond when Allow is clicked", async () => {
 		const user = userEvent.setup();
 		const onRespond = vi.fn();
@@ -784,6 +901,7 @@ describe("MessageItem", () => {
 			parts: [
 				{
 					type: "permission_request",
+					id: "card-1",
 					request: {
 						requestId: "req-1",
 						toolName: "Bash",
@@ -826,6 +944,7 @@ describe("MessageItem", () => {
 			parts: [
 				{
 					type: "permission_request",
+					id: "card-1",
 					request: {
 						requestId: "req-1",
 						toolName: "Bash",
@@ -857,6 +976,7 @@ describe("MessageItem", () => {
 			parts: [
 				{
 					type: "permission_request",
+					id: "card-1",
 					request: {
 						requestId: "req-1",
 						toolName: "Bash",
@@ -888,6 +1008,7 @@ describe("MessageItem", () => {
 			parts: [
 				{
 					type: "permission_request",
+					id: "card-1",
 					request: {
 						requestId: "req-1",
 						toolName,
@@ -1108,6 +1229,7 @@ describe("MessageItem", () => {
 			parts: [
 				{
 					type: "system",
+					id: "system-1",
 					content:
 						'{"type":"system","subtype":"compacting","status":"started"}',
 				},
@@ -1127,6 +1249,7 @@ describe("MessageItem", () => {
 			parts: [
 				{
 					type: "system",
+					id: "system-1",
 					content: '{"type":"system","subtype":"init"}',
 				},
 			],
@@ -1263,9 +1386,10 @@ describe("MessageItem", () => {
 			id: "slot-1",
 			role: "assistant",
 			parts: [
-				{ type: "text", content: "First **part**" },
+				{ id: "text-1", type: "text", content: "First **part**" },
 				{
 					type: "tool_call",
+					id: "call-t0",
 					tool: {
 						id: "t0",
 						name: "Bash",
@@ -1274,7 +1398,7 @@ describe("MessageItem", () => {
 						result: "a.txt",
 					},
 				},
-				{ type: "text", content: "Second part" },
+				{ id: "text-2", type: "text", content: "Second part" },
 			],
 			status: "complete",
 			createdAt: new Date(),
@@ -1283,6 +1407,7 @@ describe("MessageItem", () => {
 
 		const pendingRequest = () => ({
 			type: "permission_request" as const,
+			id: "card-r1",
 			request: {
 				requestId: "r1",
 				toolName: "Bash",
@@ -1472,6 +1597,7 @@ describe("MessageItem", () => {
 				parts: [
 					{
 						type: "tool_call",
+						id: "call-t1",
 						tool: {
 							id: "t1",
 							name: "Agent",
@@ -1479,9 +1605,14 @@ describe("MessageItem", () => {
 							status: "success",
 							result: "The report.",
 							children: [
-								{ type: "text", content: "Looking at the sender." },
+								{
+									id: "text-1",
+									type: "text",
+									content: "Looking at the sender.",
+								},
 								{
 									type: "tool_call",
+									id: "call-c1",
 									tool: {
 										id: "c1",
 										name: "Grep",
@@ -1491,6 +1622,7 @@ describe("MessageItem", () => {
 								},
 								{
 									type: "tool_call",
+									id: "call-t2",
 									tool: {
 										id: "t2",
 										name: "Agent",
@@ -1539,6 +1671,7 @@ describe("MessageItem", () => {
 				parts: [
 					{
 						type: "tool_call",
+						id: "call-tool-fp-1",
 						tool: {
 							id: "tool-fp-1",
 							name: "Read",
@@ -1566,6 +1699,7 @@ describe("MessageItem", () => {
 			status: "running" | "success" | "error" = "success",
 		) => ({
 			type: "tool_call" as const,
+			id: `call-${id}`,
 			tool: { id, name: "Bash", input: { command: `make ${id}` }, status },
 		});
 		const message = (

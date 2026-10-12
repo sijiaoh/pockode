@@ -646,6 +646,7 @@ describe("ToolCallItem", () => {
 					};
 					const calls = ["first-cmd", "second-cmd"].map(
 						(command, index): ContentPart => ({
+							id: `call-${index}`,
 							type: "tool_call",
 							tool: run({
 								id: `t${index}`,
@@ -657,7 +658,7 @@ describe("ToolCallItem", () => {
 					render(
 						<TranscriptViewContext value={view}>
 							<PartBlocks
-								items={calls.map((part, index) => ({ part, index }))}
+								items={calls.map((part) => ({ part }))}
 								renderPart={({ part }) =>
 									part.type === "tool_call" && (
 										<ToolCallItem run={part.tool} sessionId="session-1" />

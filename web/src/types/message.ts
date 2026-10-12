@@ -289,6 +289,12 @@ export interface QuestionRecord {
 
 /** One `thinking` record, as a thinking row draws it. */
 export interface Thought {
+	/**
+	 * Its key within its row, minted with the record's normalized event —
+	 * the object the reducer files as it is. Not its position: a page joining
+	 * from above puts the older half's thoughts in front of the newer half's.
+	 */
+	id: string;
 	/** Claude's thinking, or Codex's reasoning summary; Markdown. */
 	content: string;
 	/** Codex's raw reasoning, drawn under its own label beside `content`. */
@@ -298,7 +304,18 @@ export interface Thought {
 	durationMs?: number;
 }
 
-export type ContentPart =
+/**
+ * One piece of an assistant message's content.
+ *
+ * `id` is the part's identity, which every list keys it by. Minted by the
+ * reducer as the part is created, since no record names one for most kinds and
+ * a part must keep its key while the parts around it change: a history page
+ * joining from above puts parts in front of it, and an index would hand its DOM
+ * and state to whichever part slid into its place. A part rewritten in place
+ * keeps it, and a card that takes a row's place takes the row's. Ids sort in
+ * the order they were minted — see `newPartId`.
+ */
+export type ContentPart = { id: string } & (
 	| {
 			type: "text";
 			content: string;
@@ -322,12 +339,6 @@ export type ContentPart =
 			 * pause into two blocks is nothing the reader can use. Never empty.
 			 */
 			type: "thinking";
-			/**
-			 * Minted by the reducer, since no record names one: a row's key and
-			 * its open body must survive the parts before it shifting, which a
-			 * history page joining from above does.
-			 */
-			id: string;
 			thoughts: Thought[];
 			/** See the `text` part. */
 			parentToolUseId?: string;
@@ -389,7 +400,8 @@ export type ContentPart =
 			parentToolUseId?: string;
 	  }
 	| { type: "raw"; content: string }
-	| { type: "command_output"; content: string };
+	| { type: "command_output"; content: string }
+);
 
 /**
  * Origin of a message: user-typed, Pockode's own system automation, or another

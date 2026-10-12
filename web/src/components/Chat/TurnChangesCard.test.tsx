@@ -33,6 +33,7 @@ const edit = (
 	newString: string,
 ): ContentPart => ({
 	type: "tool_call",
+	id: `call-${id}`,
 	tool: {
 		id,
 		name: "Edit",
@@ -43,6 +44,7 @@ const edit = (
 const write = (id: string, path: string, content: string, result: string) =>
 	({
 		type: "tool_call",
+		id: `call-${id}`,
 		tool: {
 			id,
 			name: "Write",
@@ -215,6 +217,7 @@ describe("TurnChangesCard", () => {
 				parts={[
 					{
 						type: "tool_call",
+						id: "call-1",
 						tool: {
 							id: "1",
 							name: "Edit",
@@ -268,6 +271,7 @@ describe("TurnChangesCard", () => {
 				parts={[
 					{
 						type: "tool_call",
+						id: "call-1",
 						tool: {
 							id: "1",
 							name: "Edit",
@@ -290,7 +294,7 @@ describe("TurnChangesCard", () => {
 			id: "m",
 			role: "assistant",
 			parts: [
-				{ type: "text", content: "Done." },
+				{ id: "text-1", type: "text", content: "Done." },
 				edit("1", "/repo/a.ts", "a", "b"),
 			],
 			status,
