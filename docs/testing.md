@@ -82,7 +82,8 @@ looking at how long each test is allowed to take.
 CI is the other half of this: a GitHub runner does own its machine, the premise
 for halving does not hold there, and the config hands `maxWorkers` back to
 vitest's default under `CI`. `.github/workflows/frontend.yml` runs test and
-build per project with a 10-minute budget, plus one workspace-wide lint job.
+build per project with a 10-minute budget, plus one workspace-wide lint job and
+[`web`'s browser job](#frontend-the-real-browser-entry).
 
 ### A test that really is slow
 
@@ -257,6 +258,96 @@ appear only once `listCommands` answers.
   an idle machine, which shows you all of them at once instead of whichever one
   happened to lose the race.
 
+## Frontend: the real-browser entry
+
+jsdom has no layout engine (see [Verification that
+verifies](#verification-that-verifies)), so in `pnpm run test` an element has no
+height and `scrollTop` is whatever `web/src/test/setup.ts` says it is. A
+contract about where the view sits after something changes size cannot be
+checked there at all. `web` therefore has a second Vitest script,
+`test:browser`, that runs inside real browsers, Chromium and WebKit. WebKit is
+there because it is the closest stand-in for iOS Safari, where this app is
+mostly used:
+
+```sh
+cd web
+pnpm exec playwright install --only-shell chromium webkit   # once per machine, and after a playwright bump
+pnpm run test:browser
+```
+
+On Linux, WebKit also needs system libraries (libgbm, libsecret, libhyphen,
+libGLESv2, libx264, …) that `playwright install` will not fetch. Install them
+once per machine with `pnpm exec playwright install-deps chromium webkit`, which
+asks for sudo itself. On Ubuntu, apt's `needrestart` may then show a "pending
+kernel upgrade" dialog that fails without a terminal. The packages are installed
+anyway.
+
+The two entries split files by name alone. `*.browser.test.{ts,tsx}` under
+`src` belongs to `test:browser`, and every other `*.test.*` file belongs to
+jsdom. The glob is written once, in `web/vitest.files.ts`: the browser config
+includes it and the jsdom config excludes it. So `pnpm run test` never needs a
+browser and never runs one of these files. `web/vitest.browser.config.ts` loads
+the Tailwind plugin, and `web/src/test/browserSetup.ts` imports the app's real
+stylesheet, so classes get their real sizes. It also gives testing-library the
+same `asyncUtilTimeout` as `setup.ts`. Runs are headless. Add
+`--browser.headless=false` to watch one. `web/src/test/layout.browser.test.tsx`
+is the smoke test for all of that: it fails if the styles or the scroll clamping
+are not real.
+
+**What it costs.** The current suite takes about 15s on a quiet machine and
+twice that under load, most of it browser start-up and Vite's transform. Each
+test file runs once per browser, so a new file is paid for twice. CI gives it a
+job of its own, `browser` in `.github/workflows/frontend.yml`, so the jsdom jobs
+never wait on a download. That job downloads both browsers on every run, each
+roughly 280 MB unpacked, and apt-installs WebKit's libraries. Its header says
+why none of that is cached. A failing test leaves a screenshot in
+`__screenshots__/` beside the file, which is gitignored; the expected failure
+below leaves one on every run, and it means nothing.
+
+**What belongs here.** Only what needs real layout: measured heights, scroll
+offsets the browser clamps, what an observer reports after a resize. Anything
+jsdom can answer stays in jsdom, which is several times cheaper per test and
+needs nothing installed. That is the testing pyramid, and it means this entry
+should stay a handful of files. A test that only renders and clicks does not
+become better by moving here.
+
+**The transcript fixture.** `renderTranscript` in
+`web/src/test/transcriptFixture.tsx` renders the real `MessageList`, fed by the
+real `useChatMessages`, in a box of fixed height. A test gives it a session's
+history records cut into pages. Subscribing returns the newest page. Each older
+page is asked for by the list itself as the reader scrolls up, and arrives only
+when the test calls `landPage()`. Only the three history RPCs are stubbed
+(`web/src/test/chatHistoryServer.ts`), and every file using the fixture has to
+carry the `vi.mock` shown on `stubChatHistoryRpc`. Two things about writing
+tests with it:
+
+- **Assert relative movement, never pixels.** Offsets depend on width and fonts,
+  and differ between the two browsers. Read where the reader's line sits before
+  the change and compare after. The restore works in whole pixels and ignores
+  drift under one (`DRIFT_TOLERANCE`), so a tolerance tighter than 1px fails
+  correct code.
+- **Marker text must be unique across every page**, because `viewTopOf` finds
+  its element with `getByText`.
+
+**The expected failure.** `web/src/components/Chat/MessageList.browser.test.tsx`
+holds an `it.fails` test that reproduces the known paging bug where a page cut
+inside a turn loses the reader's place
+([agent-chat.md](agent-chat.md#reading-a-page-on-the-client); the TODO above the
+test has the mechanism). `it.fails` is green while the bug is there, so **when a
+fix lands this test turns red, and the fix must drop `.fails` in the same
+change.** Red here means fixed, not broken. Keep the two passing tests next to
+it. `it.fails` passes on any throw, including a broken fixture. The control
+proves the anchor holds without a splice, and the splice test proves the splice
+really happens. Without them a broken harness would look like a reproduced bug.
+
+**A local-only red: Vite reloading mid-run.** With a warm Vite cache
+(`web/node_modules/.vite`), a dependency imported for the first time is only
+found at runtime. Vite re-optimizes and reloads the page, and the run reports
+"Vite unexpectedly reloaded a test", "Failed to fetch dynamically imported
+module", or, when the new import is in `browserSetup.ts`, "No test suite found".
+It is loud, exit 1, never a silent pass. Rerun, or `rm -rf
+web/node_modules/.vite`. CI starts cold and does not hit it.
+
 ## Go: there is no equivalent knob
 
 There is no repository-level concurrency setting to correct on the Go side. Test
@@ -335,9 +426,12 @@ you which of your guesses was the right one.
 ## Shell: a suite neither entry point runs
 
 `go test ./...` and `pnpm run test` do not reach every test in the repository.
-The release gate — `scripts/verify-release-assets.sh`, which decides whether a
-draft release is complete enough to publish — is bash, and so are its tests,
-which no local command runs for you:
+`web`'s `*.browser.test.{ts,tsx}` files have a script and CI job of their own,
+`test:browser` ([the real-browser entry](#frontend-the-real-browser-entry)). The
+two suites below are reached by none of the three. The release gate —
+`scripts/verify-release-assets.sh`, which decides whether a draft release is
+complete enough to publish — is bash, and so are its tests, which no local
+command runs for you:
 
 ```sh
 ./scripts/verify-release-assets.test.sh
@@ -687,7 +781,9 @@ evidence.
   could have said so, because the gap is in the environment rather than in the
   assertion: mutating the implementation does not turn it red either. Both are
   filled in `web/src/test/setup.ts`, globally and on purpose, since the next
-  test to depend on one will not know it is missing.
+  test to depend on one will not know it is missing. What actually needs layout
+  goes to [the real-browser entry](#frontend-the-real-browser-entry) rather
+  than to a better fake.
 - **Green does not mean the assertion works.** Break the implementation on
   purpose and confirm the test goes red. This is the only way to catch a silent
   pass, and it is cheap: revert the mutation right after. Under load,
