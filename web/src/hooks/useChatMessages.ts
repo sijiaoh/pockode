@@ -625,8 +625,8 @@ export function useChatMessages({
 			isLoadingMoreRef.current = false;
 			setIsLoadingMoreHistory(false);
 			// Keyed on the cursor rather than on `has_more`: the cursor is what
-			// an earlier page is actually asked for with, so the sentinel can
-			// never be left offering a page there is no way to request.
+			// an earlier page is actually asked for with, so the history reserve
+			// can never be left offering a page there is no way to request.
 			setHasMoreHistory(initial.next_before_seq !== undefined);
 			setLoadedHistoryPages(0);
 			setHistoryError(null);

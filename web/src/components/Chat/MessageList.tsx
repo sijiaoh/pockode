@@ -16,12 +16,13 @@ import type {
 	UserMessage,
 } from "../../types/message";
 import type { AgentType } from "../../types/settings";
-import { Spinner, TRANSCRIPT_HEIGHT_VAR } from "../ui";
+import { TRANSCRIPT_HEIGHT_VAR } from "../ui";
 import {
 	DiscardedMessagesContext,
 	useDiscardedMessagesValue,
 } from "./discardedMessagesContext";
 import ForkOriginBanner from "./ForkOriginBanner";
+import HistoryReserve from "./HistoryReserve";
 import MessageItem, {
 	type PermissionChoice,
 	type PromptError,
@@ -41,6 +42,13 @@ import { useTranscriptScroll } from "./useTranscriptScroll";
 
 const HIGHLIGHT_DURATION_MS = 1500;
 const HIGHLIGHT_CLASS = "jump-highlight";
+
+/**
+ * How far above the view, in views, the top of the loaded history may be before
+ * an older page is asked for. One: a page asked for then has a screen of reading
+ * to arrive in before the reader is shown the skeleton in its place.
+ */
+const PAGE_AHEAD_VIEWS = 1;
 
 // Attribute lookup rather than a `[data-...="id"]` selector so request ids never
 // need CSS escaping.
@@ -149,17 +157,20 @@ function MessageList({
 }: Props) {
 	const { EmptyState: CustomEmptyState } = useChatUIConfig();
 	const scrollRef = useRef<HTMLDivElement>(null);
+	const trackRef = useRef<HTMLDivElement>(null);
 	const contentRef = useRef<HTMLDivElement>(null);
-	const sentinelRef = useRef<HTMLDivElement>(null);
+	const reserveRef = useRef<HTMLDivElement>(null);
 	// Everything about where the view sits lives in there: two states, one
 	// action. Called first so that the invariant for this commit is applied before
 	// anything below reads a position back out of the container.
 	const { showScrollButton, hasUnseen, scrollToBottom, jumpTo, view } =
 		useTranscriptScroll({
 			scrollRef,
+			trackRef,
 			contentRef,
 			messages,
 			loadedHistoryPages,
+			hasMoreHistory,
 		});
 
 	// The view's height, for the blocks inside it whose budget is a share of it
@@ -181,9 +192,9 @@ function MessageList({
 	}, [hasContainer]);
 
 	// Mirrors the prop rather than closing over it: `requestOlderPage` must keep
-	// its identity, or the sentinel effect below would re-observe every time a page
-	// starts or finishes loading — and a fresh observer reports a sentinel that is
-	// still on screen straight away.
+	// its identity, or the reserve's observer below would re-observe every time a
+	// page starts or finishes loading — and a fresh observer reports a reserve
+	// that is still in range straight away.
 	const isLoadingMoreRef = useRef(isLoadingMoreHistory);
 	useLayoutEffect(() => {
 		isLoadingMoreRef.current = isLoadingMoreHistory;
@@ -198,60 +209,80 @@ function MessageList({
 		onLoadMoreHistory?.();
 	}, [onLoadMoreHistory]);
 
-	// One observer for as long as the sentinel is mounted, never rebuilt per page:
+	// The top of the loaded history coming within `PAGE_AHEAD_VIEWS` of the view
+	// is what asks for a page — ahead of the reader, so that on a steady read up
+	// the next page is usually in before they get there. Landing mid-flick costs
+	// nothing: the page goes into the reserve and nothing is written
+	// (`useTranscriptScroll`).
+	//
+	// Watched through the reserve, whose bottom edge is the rows' top wherever
+	// the track puts them, with the observer's root stretched upwards by that
+	// much: the browser then reports the crossing off the scroll itself, with no
+	// work of ours on every frame of a flick. The reserve's own top can never be
+	// below the view's bottom edge, so its bottom edge is the whole of the
+	// question.
+	//
+	// One observer for as long as the reserve is mounted — except while a failure
+	// stands, when there is nothing to ask until Retry — never rebuilt per page:
 	// rebuilding it is what produced the paging loop, because a new observer
-	// reports a target already on screen immediately and a page that moved nothing
+	// reports a target already in range immediately and a page that moved nothing
 	// leaves it exactly there.
 	//
 	// The report is acted on as given, and it is the only thing that can say the
-	// reader has read back up to the top: scrolling commits nothing, so there is no
-	// frame in which the list could have measured that for itself. Nor is it the
-	// remembered visibility the effect below deliberately does without — a
+	// reader has read up towards the top: scrolling commits nothing, so there is
+	// no frame in which the list could have measured that for itself. Nor is it
+	// the remembered visibility the effect below deliberately does without — a
 	// delivered entry was computed at the most recent layout, which is one this
-	// commit's own scroll write has already gone into.
+	// commit's own writes have already gone into.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: hasContainer triggers re-observe when the scroll container mounts
 	useEffect(() => {
-		const sentinel = sentinelRef.current;
+		const reserve = reserveRef.current;
 		const scrollEl = scrollRef.current;
-		if (!sentinel || !scrollEl || !hasMoreHistory || historyError) return;
+		if (!reserve || !scrollEl || !hasMoreHistory || historyError) return;
 
 		const observer = new IntersectionObserver(
 			(entries) => {
 				if (entries[entries.length - 1].isIntersecting) requestOlderPage();
 			},
-			{ root: scrollEl, threshold: 0 },
+			{
+				root: scrollEl,
+				rootMargin: `${PAGE_AHEAD_VIEWS * 100}% 0px 0px 0px`,
+				threshold: 0,
+			},
 		);
-		observer.observe(sentinel);
+		observer.observe(reserve);
 		return () => observer.disconnect();
-	}, [hasMoreHistory, historyError, requestOlderPage]);
+	}, [hasContainer, hasMoreHistory, historyError, requestOlderPage]);
 
-	// The other half of the paging trigger, and the reason a short conversation
-	// fills up: an observer reports a *crossing*, so a page that lands without
-	// pushing the sentinel out of the view is never reported again — and a
-	// transcript too short to fill the viewport moves nothing when a page lands
-	// above it. So the sentinel is measured here as well, on every commit, after
-	// the invariant above has placed the view.
+	// The other half of the paging trigger, and the reason paging keeps going
+	// until the reader is a view ahead again: an observer reports a *crossing*,
+	// so a page that lands without taking the rows' top out of range is never
+	// reported again — and a page landing goes into the reserve and moves nothing
+	// the reader can see. A short page, or a view taller than a page, is exactly
+	// that. So the rows' top is measured here as well, on every commit, after the
+	// invariant above has placed the view.
 	//
-	// A state ("the top of history is on screen") rather than an event ("a page
-	// landed"): asking is idempotent — a request in flight is refused, and each one
-	// that does go out moves the cursor further back, so this settles at
-	// `hasMoreHistory` being false. Keyed on a page landing instead, the whole
-	// continuation would hang on the loading flag and the page count reaching this
-	// in the same commit.
+	// A state ("the top of history is within reach") rather than an event ("a
+	// page landed"): asking is idempotent — a request in flight is refused, and
+	// each one that does go out moves the cursor further back, so this settles at
+	// the rows' top out of range or `hasMoreHistory` being false. Keyed on a page
+	// landing instead, the whole continuation would hang on the loading flag and
+	// the page count reaching this in the same commit.
 	useLayoutEffect(() => {
 		if (!hasMoreHistory || historyError) return;
-		const sentinel = sentinelRef.current;
+		const rows = contentRef.current;
 		const scrollEl = scrollRef.current;
-		if (!sentinel || !scrollEl) return;
+		if (!rows || !scrollEl) return;
 
 		// A container with no height shows nothing, so nothing is in view — it has
-		// not been laid out yet, and answering "is the top of history on screen?"
-		// from that would ask for history nobody has come near.
+		// not been laid out yet, and answering "is the top of history near?" from
+		// that would ask for history nobody has come near.
 		if (scrollEl.clientHeight === 0) return;
-		const viewTop = scrollEl.scrollTop;
-		const inView =
-			sentinel.offsetTop <= viewTop + scrollEl.clientHeight &&
-			sentinel.offsetTop + sentinel.offsetHeight >= viewTop;
-		if (inView) requestOlderPage();
+		const viewTop = scrollEl.getBoundingClientRect().top + scrollEl.clientTop;
+		const ahead = PAGE_AHEAD_VIEWS * scrollEl.clientHeight;
+		if (rows.getBoundingClientRect().top >= viewTop - ahead) {
+			requestOlderPage();
+		}
 	});
 
 	// Which bubble the open turn is writing into, so a reply can say it is still
@@ -354,112 +385,93 @@ function MessageList({
 		<div className="relative min-h-0 flex-1 overflow-hidden">
 			{/* Browser scroll anchoring is off because the anchoring here is written
 			    by hand (see `useTranscriptScroll`): left on, it rewrites scrollTop
-			    under the invariant, and Safari does not implement it at all, so the
-			    two would not even disagree the same way on each platform. */}
+			    under the invariant, and Safari before 27 does not implement it at
+			    all, so the two would not even disagree the same way on each
+			    platform. */}
 			<div
 				ref={scrollRef}
 				className="h-full overflow-x-hidden overflow-y-auto overscroll-y-contain [overflow-anchor:none]"
 			>
+				{/* The track: its height is `useTranscriptScroll`'s to write, and the
+				    rows sit on its bottom edge, so growth above the reader goes up
+				    into the reserve without moving them. `min-h-full` only until the
+				    first write, which never goes below it either.
+
+				    The reading width is on the track, not the scroller: the scrollbar
+				    stays at the pane's edge and the wheel works over the margins. */}
 				<div
-					ref={contentRef}
-					// The reading width is on the rows, not the scroller: the scrollbar
-					// stays at the pane's edge and the wheel works over the margins.
+					ref={trackRef}
 					className="mx-auto flex min-h-full w-full max-w-3xl flex-col justify-end px-3 sm:px-4"
 				>
-					{historyError ? (
-						<div
-							role="alert"
-							className="flex flex-wrap items-center justify-center gap-2 py-2 text-th-error text-xs"
-						>
-							<span>{historyError}</span>
-							<button
-								type="button"
-								onClick={requestOlderPage}
-								className="touch-target rounded px-1 underline transition-colors hover:text-th-text-primary"
-							>
-								Retry
-							</button>
-						</div>
-					) : (
-						hasMoreHistory && (
-							// A fixed height, not padding around the spinner: this row sits
-							// above everything the reader is looking at, so growing it as
-							// the spinner appears moves them. The anchor would hold them
-							// still through it, but holding still is a write to
-							// `scrollTop`, and what brought the sentinel into view was a
-							// flick whose momentum that write would cancel. Fixed is the
-							// whole point, so nothing here has to track the spinner's
-							// size; h-8 is where that size and the py-2 this row used to
-							// add left it.
-							<div
-								ref={sentinelRef}
-								className="flex h-8 items-center justify-center"
-							>
-								{isLoadingMoreHistory && (
-									<Spinner
-										variant="current"
-										className="text-th-text-muted"
-										srText="Loading earlier messages"
-									/>
-								)}
-							</div>
-						)
+					{hasMoreHistory && (
+						<HistoryReserve
+							ref={reserveRef}
+							error={historyError}
+							onRetry={requestOlderPage}
+						/>
 					)}
-					{forkBanner}
-					{/* Only after the user has actually paged back — on a conversation
+					{/* `shrink-0`: the rows keep their height when the track is shorter
+					    than they are, and go past its top instead, which is out of reach
+					    until the view is at rest and the track is put right. */}
+					<div ref={contentRef} className="flex shrink-0 flex-col">
+						{forkBanner}
+						{/* Only after the user has actually paged back — on a conversation
 					    that never needed a second page, saying where it starts states
 					    the obvious — and only where the fork banner is not already
 					    saying the same thing in more detail. */}
-					{!hasMoreHistory && loadedHistoryPages > 0 && !forkBanner && (
-						<p className="py-2 text-center text-th-text-muted text-xs">
-							Beginning of conversation
-						</p>
-					)}
-					<TurnTailContext value={tail ?? IDLE_TAIL}>
-						<OpenedThoughtsContext value={openedThoughtIds}>
-							<UnfiledChildrenContext value={unfiled}>
-								<DiscardedMessagesContext value={discardedContext}>
-									<TranscriptViewContext value={view}>
-										{messages.map((message, index) => {
-											return (
-												<div
-													key={message.id}
-													data-message-id={message.id}
-													// This wrapper is the row the view can be held still over
-													// (see `scrollAnchor`).
-													{...anchorCandidateProps}
-													className="py-1.5 sm:py-2"
-												>
-													<MessageItem
-														message={message}
-														sessionId={sessionId}
-														// Top of the loaded transcript is the session's own start
-														// only once there are no older pages left above it.
-														isFirst={index === 0 && !hasMoreHistory}
-														isOpenTurn={index === openIndex}
-														isCodex={isCodex}
-														onPermissionRespond={onPermissionRespond}
-														onAnswerQuestion={onAnswerQuestion}
-														promptError={promptError}
-														onOpenWorkDetail={onOpenWorkDetail}
-														onOpenFile={onOpenFile}
-														onForkMessage={onForkMessage}
-														onSignIn={onSignIn}
-														isDiscarded={
-															message.role === "user" &&
-															message.messageId !== undefined &&
-															discardedContext.discarded.has(message.messageId)
-														}
-														onRestoreMessages={onRestoreMessages}
-													/>
-												</div>
-											);
-										})}
-									</TranscriptViewContext>
-								</DiscardedMessagesContext>
-							</UnfiledChildrenContext>
-						</OpenedThoughtsContext>
-					</TurnTailContext>
+						{!hasMoreHistory && loadedHistoryPages > 0 && !forkBanner && (
+							<p className="py-2 text-center text-th-text-muted text-xs">
+								Beginning of conversation
+							</p>
+						)}
+						<TurnTailContext value={tail ?? IDLE_TAIL}>
+							<OpenedThoughtsContext value={openedThoughtIds}>
+								<UnfiledChildrenContext value={unfiled}>
+									<DiscardedMessagesContext value={discardedContext}>
+										<TranscriptViewContext value={view}>
+											{messages.map((message, index) => {
+												return (
+													<div
+														key={message.id}
+														data-message-id={message.id}
+														// This wrapper is the row the view can be held still over
+														// (see `scrollAnchor`).
+														{...anchorCandidateProps}
+														className="py-1.5 sm:py-2"
+													>
+														<MessageItem
+															message={message}
+															sessionId={sessionId}
+															// Top of the loaded transcript is the session's own start
+															// only once there are no older pages left above it.
+															isFirst={index === 0 && !hasMoreHistory}
+															isOpenTurn={index === openIndex}
+															isCodex={isCodex}
+															onPermissionRespond={onPermissionRespond}
+															onAnswerQuestion={onAnswerQuestion}
+															promptError={promptError}
+															onOpenWorkDetail={onOpenWorkDetail}
+															onOpenFile={onOpenFile}
+															onForkMessage={onForkMessage}
+															onSignIn={onSignIn}
+															isDiscarded={
+																message.role === "user" &&
+																message.messageId !== undefined &&
+																discardedContext.discarded.has(
+																	message.messageId,
+																)
+															}
+															onRestoreMessages={onRestoreMessages}
+														/>
+													</div>
+												);
+											})}
+										</TranscriptViewContext>
+									</DiscardedMessagesContext>
+								</UnfiledChildrenContext>
+							</OpenedThoughtsContext>
+						</TurnTailContext>
+					</div>
 					{/* Sticky inside the column rather than absolute over the pane, so
 					    it centres on the column by construction — the pane also holds
 					    the scrollbar, which the column is centred without. Zero height,

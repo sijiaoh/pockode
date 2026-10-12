@@ -319,7 +319,13 @@ when the test calls `landPage()`. `landPage(live)` delivers `live` records to th
 subscription in the same commit as the page — output landing at the end while a
 page lands above, which is the case a total-height measure gets wrong. `settle()`
 lets the list react to a size change the test made to the page directly, such as
-a box growing, which reaches the list through no commit at all. Only the three
+a box growing, which reaches the list through no commit at all. The list puts
+its track right only once the view is at rest
+([agent-chat.md](agent-chat.md#the-track-and-three-kinds-of-write)): `rest()`
+waits for that, `press()` holds a mouse button down on the view so it never
+comes to rest — a test's stand-in for a flick still under way — and `release()`
+lets go and waits for rest. `trackTopOf` says where a row starts in the track,
+below zero being past its top, where no scroll can reach. Only the three
 history RPCs are stubbed (`web/src/test/chatHistoryServer.ts`), and every file
 using the fixture has to carry the `vi.mock` shown on `stubChatHistoryRpc`. Two
 things about writing tests with it:

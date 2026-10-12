@@ -1177,6 +1177,31 @@ samp {
 }
 
 /* =============================================================================
+ * HISTORY RESERVE
+ *
+ * The space above the oldest loaded row that a page of history lands into
+ * without moving the reader (`useTranscriptScroll`). Its height is whatever the
+ * track leaves it and changes under the reader's flick, so what is drawn there
+ * must never lay anything out: a mask over one absolutely placed layer, the
+ * tile repeating upward from the first real row so the seam is always the same
+ * and any height is cut at the top, where the fade hides the cut. Only the
+ * layer's opacity is ever animated — animating the mask would repaint a
+ * viewport-tall area on every frame of the flick.
+ * ============================================================================= */
+
+.history-reserve-skeleton {
+	mask-image:
+		linear-gradient(to bottom, transparent, #000 48px),
+		url("./assets/history-reserve-tile.svg");
+	mask-size:
+		100% 100%,
+		100% 336px;
+	mask-repeat: no-repeat, repeat-y;
+	mask-position: top, bottom;
+	mask-composite: intersect;
+}
+
+/* =============================================================================
  * MARKDOWN IN A MESSAGE
  *
  * Typography's `prose-sm` is set for an article: a 20px h2 over 14px body, 16px

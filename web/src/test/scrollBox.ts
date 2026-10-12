@@ -29,12 +29,3 @@ export function stubScrollBox(el: HTMLElement, box: ScrollBox): ScrollBox {
 	});
 	return box;
 }
-
-/**
- * The offset the bottom of the content sits at — what a browser clamps a
- * scroll-to-the-end write down to, and therefore what "pinned to the tail"
- * means in an assertion.
- */
-export function maxScrollTop(box: ScrollBox): number {
-	return Math.max(0, box.contentHeight - box.viewportHeight);
-}

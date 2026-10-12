@@ -293,7 +293,7 @@ Reading is untouched: images and attachments, tool-call expansion, a code block'
 copy button. **Scrolling back pages exactly as it does in a live session** — the
 newest page arrives where a subscription's snapshot would have, and earlier ones
 come from the same cursor under a different method name, so the transcript, its
-sentinel and its scroll anchoring are the same code
+history reserve and its scroll anchoring are the same code
 ([agent-chat.md](agent-chat.md#history-paging)). What goes is anything that would
 speak:
 
