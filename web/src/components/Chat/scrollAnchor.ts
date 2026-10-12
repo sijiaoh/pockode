@@ -164,7 +164,7 @@ function firstLaidOut(
  * Takes the anchor for where the view sits now: from the rows down, at each
  * level the last candidate to start at or above the top edge of the view, as
  * deep as the path goes. When the view is above every row (reading the very top
- * of the loaded history, under the paging sentinel), the first row is used
+ * of the loaded history, over the reserve above it), the first row is used
  * instead, from below the edge.
  *
  * Every row is a candidate, the first one too: a page landing above is not held
@@ -227,10 +227,10 @@ export function anchorOn(
  * reader made lands (`useFoldLanding`). Anything else lost gives way to the
  * next level up, held where that level sat.
  *
- * Never a fresh anchor taken from where the view sits: the commit that lost
- * the anchor has already moved everything under a `scrollTop` that still
- * belongs to the layout before it, so what is at the edge now is not what the
- * reader was looking at. That is how a lost anchor used to become a reader
+ * Never a fresh anchor taken from where the view sits to put this look right:
+ * the commit that lost the anchor has already moved everything, so what is at
+ * the edge now is not what the reader was looking at — one is taken there only
+ * for the next look (`useTranscriptScroll`). That is how a lost anchor used to become a reader
  * stuck at the top of the history.
  */
 export function holdingAnchor(
@@ -268,18 +268,16 @@ export function holdingAnchor(
  *
  * A page only ever adds content above that edge — rows before the first one, or
  * the older half of its turn spliced into it from the top (`prependHistoryPage`
- * keeps the row's identity, so it is the same node) — and nothing else does in
- * the commit it lands in. How far the edge moved is therefore exactly how much
- * was added above the reader, wherever they are reading, the merged part
- * itself included, whose text grows from its own top. The view moves by that
- * much from wherever it is now: a reader still scrolling may have moved since
- * the seam was taken, and a scroll the browser has not reported yet is still
- * theirs.
+ * keeps the row's identity, so it is the same node). The rows sit on the
+ * bottom edge of their track, so nothing added above the edge moves it: what
+ * does, in the commit a page lands in, is output landing at the end, which
+ * carries the reader by as much wherever they are reading. How far the edge
+ * moved is therefore how far the reader was carried.
  *
  * Neither of the two other measures says that. The content's total height
- * also counts output streaming in at the end in the same commit. The anchor
- * says it only of an element the page left alone, which inside a spliced row
- * it may not have: the part it names can have grown above its own top edge.
+ * counts the page and that output together. The anchor says it only of an
+ * element the page left alone, which inside a spliced row it may not have: the
+ * part it names can have grown above its own top edge.
  */
 export interface Seam {
 	row: HTMLElement;
@@ -298,8 +296,8 @@ export function takeSeam(container: HTMLElement): Seam | null {
 }
 
 /**
- * Where the view has to sit to take the reader past what went in above `seam`
- * since it was taken, or null when its row is no longer laid out.
+ * Where the view would sit had it moved with `seam` since it was taken, or
+ * null when its row is no longer laid out.
  */
 export function seamScrollTop(
 	container: HTMLElement,

@@ -67,6 +67,22 @@ function keepClearInBand(el: HTMLElement): boolean {
 const DRIFT_TOLERANCE = 1;
 
 /**
+ * How long without a scroll event, with nothing pressed, counts as the view
+ * being at rest — the only time the track and `scrollTop` are put back in line
+ * (`settle`). Long enough to span the gap between two scroll events of an iOS
+ * flick's momentum, which arrive a frame or two apart; short enough that a
+ * reader who stopped does not wait on it.
+ */
+const REST_DELAY_MS = 120;
+
+/**
+ * The least the history reserve is restored to, so the failure band placed on
+ * its bottom edge — two lines and their padding — always fits once the view is
+ * at rest (`HistoryReserve`).
+ */
+const MIN_RESERVE = 96;
+
+/**
  * Which of the two things the reader is doing. There is no third state, and
  * nothing samples where the view happens to sit to decide between them: a
  * position sample cannot tell a frame of our own following from the reader
@@ -118,11 +134,18 @@ function maxScrollTop(el: HTMLElement): number {
 
 interface Options {
 	scrollRef: RefObject<HTMLDivElement | null>;
+	/**
+	 * The scroller's only child, whose height is written here and nowhere else:
+	 * a column that lays its last child, the rows, on its bottom edge.
+	 */
+	trackRef: RefObject<HTMLDivElement | null>;
 	/** The box holding the rows, watched for the growth output causes. */
 	contentRef: RefObject<HTMLDivElement | null>;
 	messages: Message[];
 	/** Bumped once per older page; a *drop* means the transcript was replaced. */
 	loadedHistoryPages: number;
+	/** Whether the track keeps a reserve above the rows for pages to land in. */
+	hasMoreHistory: boolean;
 }
 
 export interface TranscriptScroll {
@@ -143,25 +166,41 @@ export interface TranscriptScroll {
 }
 
 /**
- * Keeps the transcript where the reader wants it: two states, one action.
+ * Keeps the transcript where the reader wants it: two states, one action —
+ * and, because any write to `scrollTop` ends iOS momentum scrolling, as few of
+ * those writes as the action can be carried out with.
  *
- * The action is "apply the current state's invariant", and it runs at exactly
- * two moments — after every commit, before paint, and on every resize of either
- * box. Everything that used to need a case of its own (a diagram rendering, a
- * card expanding, the software keyboard, the container growing back when an
- * overlay closes) is one of those two, so none of them is named here. The one
- * named exception is the commit a page lands in, which an anchored reader is
- * held through by the seam instead (`holdSeam`). Nothing is on a timer and no
- * height is reserved.
+ * The rows sit on the bottom edge of a track whose height is written here, so
+ * where something changes decides who moves:
  *
- * The state changes only on the reader's own scrolling, decided by direction,
- * plus the explicit returns to the tail below.
+ * - (A) Above the reader, nothing is written. What is above them moves up, into
+ *   the reserve left over the rows or past the top of the track.
+ * - (B) Below the reader, only the track's height is written, by as much as the
+ *   reader's place moved, which puts it back without touching `scrollTop`. The
+ *   anchor says where that place is — or the seam, in the commit a page lands in.
+ * - (C) The track and `scrollTop` are put back in line together — the reserve
+ *   restored, what went past the top brought back in reach, the reserve dropped
+ *   once history has run out — only when the view is at rest (`settle`), and
+ *   just before a deliberate move, which writes `scrollTop` anyway.
+ *
+ * Reading the tail, everything is above the reader, and the view is pinned to
+ * the end.
+ *
+ * The action runs at exactly two moments — after every commit, before paint,
+ * and on every resize of either box — and the putting right of C on a third:
+ * when the view comes to rest. Everything that used to need a case of its
+ * own (a diagram rendering, a card expanding, the software keyboard, the
+ * container growing back when an overlay closes) is one of those two, so none
+ * of them is named here. The state changes only on the reader's own scrolling,
+ * decided by direction, plus the explicit returns to the tail below.
  */
 export function useTranscriptScroll({
 	scrollRef,
+	trackRef,
 	contentRef,
 	messages,
 	loadedHistoryPages,
+	hasMoreHistory,
 }: Options): TranscriptScroll {
 	const stateRef = useRef<ReadingState>("tail");
 	const anchorRef = useRef<ScrollAnchor | null>(null);
@@ -219,13 +258,14 @@ export function useTranscriptScroll({
 		}
 	}, []);
 
-	const moveTo = useCallback(
-		(el: HTMLElement, target: number) => {
-			const clamped = Math.min(Math.max(target, 0), maxScrollTop(el));
-			if (Math.abs(el.scrollTop - clamped) >= DRIFT_TOLERANCE) {
-				el.scrollTop = clamped;
-			}
-			// Read back rather than assumed: the browser clamps the write, and a
+	/**
+	 * Notes where the view now is: the position the next scroll event is a
+	 * direction from, the seam a page landing next would be held by, and how far
+	 * the end is.
+	 */
+	const record = useCallback(
+		(el: HTMLElement) => {
+			// Read back rather than assumed: the browser clamps a write, and a
 			// direction compared against a position the view never reached would
 			// read the next event as the reader moving.
 			lastTopRef.current = el.scrollTop;
@@ -235,44 +275,161 @@ export function useTranscriptScroll({
 		[noteEnd],
 	);
 
-	const applyInvariant = useCallback(() => {
-		const el = scrollRef.current;
-		if (!el) return;
-		if (stateRef.current === "tail") {
-			moveTo(el, maxScrollTop(el));
-			return;
-		}
-		const taken = anchorRef.current;
-		// The anchored element can leave the list or stop being laid out; what is
-		// left of its path holds the reader instead (see `holdingAnchor`). With
-		// nothing left the view stays where it is until the reader scrolls, which
-		// is still not a reason to go back to the tail.
-		const anchor = taken && holdingAnchor(el, taken);
-		anchorRef.current = anchor;
-		if (anchor) {
-			moveTo(el, anchorScrollTop(el, anchor));
-		} else {
-			seamRef.current = takeSeam(el);
-		}
-	}, [scrollRef, moveTo]);
+	const moveTo = useCallback(
+		(el: HTMLElement, target: number) => {
+			const clamped = Math.min(Math.max(target, 0), maxScrollTop(el));
+			if (Math.abs(el.scrollTop - clamped) >= DRIFT_TOLERANCE) {
+				el.scrollTop = clamped;
+			}
+			record(el);
+		},
+		[record],
+	);
 
-	// A page landing moves the reader by exactly what it added above the seam
-	// (see `Seam`), so the seam is what goes back in place — the anchor is not
-	// carried across the page. Then a fresh one is taken, from a view that is
-	// where the reader was again.
-	const holdSeam = useCallback(() => {
-		const el = scrollRef.current;
-		const seam = seamRef.current;
-		if (!el) return;
-		const top = seam && seamScrollTop(el, seam);
-		if (top === null) {
-			anchorRef.current = null;
-			seamRef.current = takeSeam(el);
-			return;
-		}
-		moveTo(el, top);
-		anchorRef.current = pickAnchor(el);
-	}, [scrollRef, moveTo]);
+	/**
+	 * The track's height as last written, read off its own style rather than the
+	 * layout — and never shorter than the view, which `min-h-full` holds it to
+	 * before the first write: a short transcript sits on the bottom.
+	 */
+	const trackHeight = useCallback(
+		(el: HTMLElement) =>
+			Math.max(
+				Number.parseFloat(trackRef.current?.style.height ?? "") || 0,
+				el.clientHeight,
+			),
+		[trackRef],
+	);
+	const writeTrackHeight = useCallback(
+		(el: HTMLElement, height: number) => {
+			const track = trackRef.current;
+			if (track) track.style.height = `${Math.max(height, el.clientHeight)}px`;
+		},
+		[trackRef],
+	);
+
+	// Read by `settle`, which also runs from the rest timer; kept current by the
+	// per-commit effect below.
+	const hasMoreHistoryRef = useRef(hasMoreHistory);
+
+	/**
+	 * Kind C: the track as it should be, and `scrollTop` moved by as much as the
+	 * rows moved with it, so nothing on screen moves. As it should be is the rows
+	 * plus a reserve of a screen while older history remains — enough to take a
+	 * page landing mid-flick without anything going out of reach — and the rows
+	 * alone once it has run out.
+	 */
+	const settle = useCallback(
+		(el: HTMLElement) => {
+			const rows = contentRef.current;
+			if (!rows) return;
+			const reserve = hasMoreHistoryRef.current
+				? Math.max(el.clientHeight, MIN_RESERVE)
+				: 0;
+			const before = trackHeight(el);
+			const shift =
+				Math.max(
+					rows.getBoundingClientRect().height + reserve,
+					el.clientHeight,
+				) - before;
+			const top = el.scrollTop;
+			if (Math.abs(shift) >= DRIFT_TOLERANCE) {
+				writeTrackHeight(el, before + shift);
+			}
+			if (stateRef.current === "tail") {
+				moveTo(el, maxScrollTop(el));
+			} else if (Math.abs(shift) >= DRIFT_TOLERANCE) {
+				moveTo(el, top + shift);
+			}
+		},
+		[contentRef, trackHeight, writeTrackHeight, moveTo],
+	);
+
+	const restingRef = useRef(true);
+	const pressedRef = useRef(false);
+	const restTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+	const clearRestTimer = useCallback(() => {
+		if (restTimerRef.current !== null) clearTimeout(restTimerRef.current);
+		restTimerRef.current = null;
+	}, []);
+
+	const leaveRest = useCallback(() => {
+		restingRef.current = false;
+		clearRestTimer();
+	}, [clearRestTimer]);
+
+	/** Starts the wait for rest over; see `REST_DELAY_MS`. */
+	const awaitRest = useCallback(() => {
+		leaveRest();
+		restTimerRef.current = setTimeout(() => {
+			restTimerRef.current = null;
+			if (pressedRef.current) return;
+			restingRef.current = true;
+			const el = scrollRef.current;
+			if (el) settle(el);
+		}, REST_DELAY_MS);
+	}, [leaveRest, scrollRef, settle]);
+
+	/**
+	 * Kinds A and B, then C if the view is at rest. Reading the tail there is no
+	 * place to hold — everything is above the reader — only the end to pin.
+	 *
+	 * Anchored, the reader's place is the anchor; in the commit a page lands in,
+	 * the seam (see `Seam`), and the anchor is taken afresh afterwards — it is
+	 * not carried across the page. However far that place moved, the track's
+	 * height moves it back, which only growth or shrinking *below* it can have
+	 * done: the rows are laid on the track's bottom edge, so what changes above
+	 * moves only what is above.
+	 *
+	 * The anchored element can leave the list or stop being laid out; what is
+	 * left of its path holds the reader instead (see `holdingAnchor`). With
+	 * nothing left, this look leaves the view where it is — which is still not a
+	 * reason to go back to the tail — and the next is held by whatever it now
+	 * shows.
+	 */
+	const hold = useCallback(
+		(pageLanded: boolean) => {
+			const el = scrollRef.current;
+			if (!el) return;
+			if (stateRef.current === "tail") {
+				moveTo(el, maxScrollTop(el));
+			} else {
+				let moved: number | null = null;
+				if (pageLanded) {
+					const seam = seamRef.current;
+					const top = seam && seamScrollTop(el, seam);
+					if (top !== null) moved = top - el.scrollTop;
+				} else {
+					const taken = anchorRef.current;
+					const anchor = taken && holdingAnchor(el, taken);
+					anchorRef.current = anchor;
+					if (anchor) moved = anchorScrollTop(el, anchor) - el.scrollTop;
+				}
+				if (moved !== null && Math.abs(moved) >= DRIFT_TOLERANCE) {
+					// Never so short that the view would be past the new end: the
+					// browser would clamp it, which is a scroll of its own, and the next
+					// look would take that for the reader's place moving and shorten
+					// the track again — until what is above went out of reach. Content
+					// collapsing below a reader at the end moves what they see; that
+					// is the end coming up, not something to hold.
+					writeTrackHeight(
+						el,
+						Math.max(trackHeight(el) - moved, el.scrollTop + el.clientHeight),
+					);
+				}
+				if (pageLanded) anchorRef.current = null;
+				// A fresh one from where the view now sits, for the next look: the
+				// one held was lost, or not carried across a page. Not to put this
+				// look right — that is already done or cannot be — but because the
+				// rows sit on the track's bottom edge, so without a place to hold,
+				// every line output adds below would carry the reader up the screen.
+				if (!anchorRef.current) anchorRef.current = pickAnchor(el);
+				record(el);
+			}
+			if (restingRef.current) settle(el);
+		},
+		[scrollRef, moveTo, record, settle, trackHeight, writeTrackHeight],
+	);
 
 	// The rows of the previous commit, read by id: what makes a message "just
 	// sent" is that it was not there a commit ago, and a count cannot say that — an
@@ -289,6 +446,7 @@ export function useTranscriptScroll({
 	// invariant they change.
 	useLayoutEffect(() => {
 		messagesRef.current = messages;
+		hasMoreHistoryRef.current = hasMoreHistory;
 		const prevPages = prevPagesRef.current;
 		prevPagesRef.current = loadedHistoryPages;
 		const prevMessages = prevMessagesRef.current;
@@ -327,11 +485,7 @@ export function useTranscriptScroll({
 			}
 		}
 
-		if (stateRef.current === "anchored" && loadedHistoryPages > prevPages) {
-			holdSeam();
-		} else {
-			applyInvariant();
-		}
+		hold(stateRef.current === "anchored" && loadedHistoryPages > prevPages);
 	});
 
 	// The scroll container only exists while there are rows to put in it (see
@@ -349,6 +503,12 @@ export function useTranscriptScroll({
 			const top = el.scrollTop;
 			const moved = top - lastTopRef.current;
 			lastTopRef.current = top;
+			// A write of our own was recorded as it was made and arrives here as no
+			// movement at all; anything else is the view moving, so not at rest.
+			if (moved !== 0) {
+				if (pressedRef.current) leaveRest();
+				else awaitRest();
+			}
 			// Not for the scroll itself, which leaves the seam where it is in the
 			// transcript: the reader may have scrolled over a layout that changed
 			// since the invariant last saw it, and from here on that layout is
@@ -379,9 +539,99 @@ export function useTranscriptScroll({
 			anchorRef.current = pickAnchor(el);
 		};
 
+		// Pressed is a finger or a pen on the screen, or a mouse button held —
+		// dragging the scrollbar, selecting text — and the view is not at rest
+		// while it is, moving or not: the reader is about to move it. Fingers and
+		// pens are told by the touch events alone, because a touch that starts a
+		// scroll is a `pointercancel` the moment the browser takes it over, still
+		// down.
+		const press = () => {
+			pressedRef.current = true;
+			leaveRest();
+		};
+		const release = () => {
+			if (!pressedRef.current) return;
+			pressedRef.current = false;
+			awaitRest();
+		};
+		const handleTouchEnd = (e: TouchEvent) => {
+			if (e.touches.length === 0) release();
+		};
+		// The end of a touch goes to the node it started on, wherever that is by
+		// then: a row replaced under the finger takes it out of the document, and
+		// from there it reaches neither the scroller nor the window.
+		const handleTouchStart = (e: TouchEvent) => {
+			press();
+			const target = e.target;
+			if (!(target instanceof Node) || target === el) return;
+			target.addEventListener("touchend", handleTouchEnd as EventListener, {
+				once: true,
+			});
+			target.addEventListener("touchcancel", handleTouchEnd as EventListener, {
+				once: true,
+			});
+		};
+		const handlePointerDown = (e: PointerEvent) => {
+			if (e.pointerType === "mouse") press();
+		};
+		const handlePointerUp = (e: PointerEvent) => {
+			if (e.pointerType === "mouse") release();
+		};
+		// A mouse moving with no button down has been released, whether or not a
+		// `pointerup` said so: Chromium can leave one out after a scrollbar drag.
+		const handlePointerMove = (e: PointerEvent) => {
+			if (pressedRef.current && e.pointerType === "mouse" && e.buttons === 0) {
+				release();
+			}
+		};
+
 		el.addEventListener("scroll", handleScroll, { passive: true });
-		return () => el.removeEventListener("scroll", handleScroll);
-	}, [hasContainer, noteEnd, readAnchored, readTail, scrollRef]);
+		el.addEventListener("touchstart", handleTouchStart, { passive: true });
+		el.addEventListener("touchend", handleTouchEnd);
+		el.addEventListener("touchcancel", handleTouchEnd);
+		el.addEventListener("pointerdown", handlePointerDown);
+		// On the window: a button is released wherever the pointer has got to —
+		// and a drag of a link or an image, or the window losing focus mid-press,
+		// ends without a `pointerup` at all.
+		window.addEventListener("pointerup", handlePointerUp);
+		window.addEventListener("pointercancel", handlePointerUp);
+		window.addEventListener("pointermove", handlePointerMove, {
+			passive: true,
+		});
+		window.addEventListener("dragend", release);
+		window.addEventListener("blur", release);
+		return () => {
+			el.removeEventListener("scroll", handleScroll);
+			el.removeEventListener("touchstart", handleTouchStart);
+			el.removeEventListener("touchend", handleTouchEnd);
+			el.removeEventListener("touchcancel", handleTouchEnd);
+			el.removeEventListener("pointerdown", handlePointerDown);
+			window.removeEventListener("pointerup", handlePointerUp);
+			window.removeEventListener("pointercancel", handlePointerUp);
+			window.removeEventListener("pointermove", handlePointerMove);
+			window.removeEventListener("dragend", release);
+			window.removeEventListener("blur", release);
+			// A press this scroller saw the start of can only end on it, and a
+			// scroller that is gone is not being moved: the next one starts at rest.
+			if (pressedRef.current) {
+				pressedRef.current = false;
+				restingRef.current = true;
+			}
+		};
+	}, [
+		hasContainer,
+		awaitRest,
+		leaveRest,
+		noteEnd,
+		readAnchored,
+		readTail,
+		scrollRef,
+	]);
+
+	// A timer left behind would settle a list that is gone. Only the timer: under
+	// StrictMode this cleanup also runs on a list that stays, which must not be
+	// left believing it is never at rest.
+	useLayoutEffect(() => clearRestTimer, [clearRestTimer]);
 
 	// biome-ignore lint/correctness/useExhaustiveDependencies: hasContainer triggers re-observe when the scroll container mounts
 	useLayoutEffect(() => {
@@ -389,18 +639,19 @@ export function useTranscriptScroll({
 		const el = scrollRef.current;
 		if (!content || !el) return;
 
-		const observer = new ResizeObserver(applyInvariant);
+		const observer = new ResizeObserver(() => hold(false));
 		// Both boxes, because both of them move the view: the content grows as
 		// output streams in and as anything inside it finishes rendering, while the
 		// container shrinks under the software keyboard or a growing input box
 		// without the content changing at all. A child settling on its own size — a
 		// diagram, a thumbnail, a subagent body expanding itself — arrives here and
 		// nowhere else, which is why this is the only other place the invariant is
-		// applied from.
+		// applied from. Not the track, whose height only changes by being written
+		// here.
 		observer.observe(content);
 		observer.observe(el);
 		return () => observer.disconnect();
-	}, [hasContainer, applyInvariant, contentRef, scrollRef]);
+	}, [hasContainer, hold, contentRef, scrollRef]);
 
 	const scrollToBottom = useCallback(() => {
 		const el = scrollRef.current;
@@ -415,13 +666,16 @@ export function useTranscriptScroll({
 		// change commits, the invariant is applied before the next paint, and an
 		// animation of ours would be the first thing it cut short.
 		readTail();
-		moveTo(el, maxScrollTop(el));
-	}, [scrollRef, moveTo, readTail]);
+		settle(el);
+	}, [scrollRef, settle, readTail]);
 
 	const jumpTo = useCallback(
 		(target: HTMLElement) => {
 			const el = scrollRef.current;
 			if (!el) return;
+			// The jump writes `scrollTop` anyway, so the track is put right first
+			// and the jump measured against the layout that will stay.
+			settle(el);
 			// Instant, and written on the container rather than through
 			// `scrollIntoView`: a smooth jump would be cut short by the first output
 			// that lands during it, and `scrollIntoView` also scrolls whatever
@@ -438,13 +692,15 @@ export function useTranscriptScroll({
 			// trying to take it further.
 			readAnchored(anchorOn(el, target));
 		},
-		[scrollRef, moveTo, readAnchored],
+		[scrollRef, settle, moveTo, readAnchored],
 	);
 
 	const holdAt = useCallback(
 		(target: HTMLElement, offset: number) => {
 			const el = scrollRef.current;
 			if (!el) return;
+			// As for a jump: the move is a write, so the track is put right first.
+			settle(el);
 			const wanted =
 				el.scrollTop +
 				target.getBoundingClientRect().top -
@@ -470,18 +726,30 @@ export function useTranscriptScroll({
 			// Anchored the way the reader's own scrolling would leave it.
 			readAnchored(pickAnchor(el));
 		},
-		[scrollRef, moveTo, readAnchored],
+		[scrollRef, settle, moveTo, readAnchored],
 	);
 
 	const view = useMemo<TranscriptView>(
 		() => ({
 			top: () => scrollRef.current?.getBoundingClientRect().top ?? 0,
 			bottom: () => scrollRef.current?.getBoundingClientRect().bottom ?? 0,
-			scrollTop: () => scrollRef.current?.scrollTop ?? 0,
+			// From the top of the rows rather than of the track: the rows move inside
+			// the track without the view scrolling, and putting the track right moves
+			// the view with them, neither of which is the view moving over the rows.
+			scrollTop: () => {
+				const el = scrollRef.current;
+				const rows = contentRef.current;
+				if (!el || !rows) return 0;
+				return (
+					el.getBoundingClientRect().top +
+					el.clientTop -
+					rows.getBoundingClientRect().top
+				);
+			},
 			coveredAbove,
 			holdAt,
 		}),
-		[scrollRef, holdAt],
+		[scrollRef, contentRef, holdAt],
 	);
 
 	return {

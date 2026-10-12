@@ -34,6 +34,23 @@ export interface RenderedTranscript {
 	 */
 	settle: () => Promise<void>;
 	/**
+	 * Waits until the view counts as at rest — no scroll for a while, nothing
+	 * pressed — and lets the list put its track right.
+	 */
+	rest: () => Promise<void>;
+	/**
+	 * Holds a button down on the view, which keeps it from ever coming to rest:
+	 * how a test stands in for a reader whose flick is still under way.
+	 */
+	press: () => void;
+	/** Lets go of what `press` held, and waits for the view to come to rest. */
+	release: () => Promise<void>;
+	/**
+	 * Where the element showing `text` starts in the track — below zero is past
+	 * its top, where no scroll can reach.
+	 */
+	trackTopOf: (text: string) => number;
+	/**
 	 * How far below the view's top edge the element showing `text` sits now —
 	 * the number that has to hold still for the reader's content to stay put.
 	 */
@@ -74,6 +91,14 @@ function nextFrame(): Promise<void> {
  */
 async function settle() {
 	for (let i = 0; i < 3; i++) await act(nextFrame);
+}
+
+/** Comfortably past `REST_DELAY_MS` in `useTranscriptScroll`. */
+const REST_WAIT_MS = 200;
+
+async function rest() {
+	await act(() => new Promise((resolve) => setTimeout(resolve, REST_WAIT_MS)));
+	await settle();
 }
 
 /**
@@ -126,8 +151,27 @@ export async function renderTranscript({
 			await settle();
 		},
 		settle,
+		rest,
+		press: () => {
+			scroller.dispatchEvent(
+				new PointerEvent("pointerdown", {
+					bubbles: true,
+					pointerType: "mouse",
+				}),
+			);
+		},
+		release: async () => {
+			window.dispatchEvent(
+				new PointerEvent("pointerup", { bubbles: true, pointerType: "mouse" }),
+			);
+			await rest();
+		},
 		viewTopOf: (text) =>
 			screen.getByText(text).getBoundingClientRect().top -
 			scroller.getBoundingClientRect().top,
+		trackTopOf: (text) =>
+			screen.getByText(text).getBoundingClientRect().top -
+			scroller.getBoundingClientRect().top +
+			scroller.scrollTop,
 	};
 }

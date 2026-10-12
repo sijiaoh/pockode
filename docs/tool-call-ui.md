@@ -926,12 +926,11 @@ being jitter:
 
 Those two re-flows need one more rule. The transcript does hold a reader's place
 through a height change above them, wherever they are reading
-([agent-chat.md](agent-chat.md#where-the-view-sits)) — but holding it means
-writing `scrollTop`, which ends momentum scrolling on iOS, and everything below
-the change moves on the screen whatever is done about the reader. A row that
-keeps one height asks for neither.
+([agent-chat.md](agent-chat.md#where-the-view-sits)), without a write that
+could cut a flick short — but everything above the change moves on the screen
+whatever is done about the reader. A row that keeps one height asks for none of that.
 
-For a foreground run neither cost lands anywhere: the turn is blocked on it, so
+For a foreground run that cost lands nowhere: the turn is blocked on it, so
 it is the last thing in the transcript — a reader at the tail is following that
 row itself, and a reader further up has it below them, where a height change
 moves nothing they can see. **A background run is exactly the row that is not**,
@@ -1728,9 +1727,9 @@ steps or not: it is the one failed row whose body is not supposed to open (next
 paragraph), so the line is not a copy of anything on screen.
 
 **A `background` run must not open itself** — a 30-minute task that unfolds
-itself shoves the transcript around long after the user stopped caring, and the
-reader's place is held through that at the price of a write to `scrollTop` each
-time ([above](#the-second-line-problem-1)). It is also the one rule on this page
+itself shoves the transcript around long after the user stopped caring: the
+reader's place is held through it, but what is around it moves each time
+([above](#the-second-line-problem-1)). It is also the one rule on this page
 the code does not keep: `TaskItem`'s `autoExpandedRef` keys on
 `run.status === "error"` alone and never reads `fromBackground`, so a
 backgrounded subagent that fails opens its report anyway, wherever in the

@@ -271,8 +271,8 @@ they hold is *drawn*: which rows show a spinner, and which button says `Pushing�
 ### Why Scroll State Is Neither a Store nor State
 
 The transcript's scroll decisions — which of the two things the reader is doing,
-the element an anchor is holding still, and the seam a page landing is held
-by — live in refs inside
+the element an anchor is holding still, the seam a page landing is held by, and
+whether the view is at rest or something is pressed on it — live in refs inside
 `useTranscriptScroll` (`web/src/components/Chat/useTranscriptScroll.ts`,
 [the model](../agent-chat.md#where-the-view-sits)), and that is the exact
 opposite of the reasoning above.
@@ -287,10 +287,15 @@ exists.
 
 They are refs rather than `useState` because **nothing should re-render when
 they change**, and more than that: they are read at moments a render cannot
-reach. The state and the anchor are read inside a layout effect and inside a
-`ResizeObserver` callback, against the DOM as it is at that instant. A state
+reach. The state and the anchor are read inside a layout effect and a
+`ResizeObserver` callback, and the state again by the timer that says the view
+has come to rest, against the DOM as it is at that instant. A state
 update would deliver the new value a render later — after the frame whose scroll
 position was the whole question — and would reflow the very list being measured.
+
+The height of the track the rows sit on is not even a ref: it is read back off
+the track's own inline style, the one place it is written, so there is no second
+copy to fall out of step with the layout.
 
 What the scroll-to-bottom button draws is state, and it marks the boundary:
 whether it is showing and whether it carries the new-content dot, because those

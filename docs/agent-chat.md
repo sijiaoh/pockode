@@ -30,7 +30,7 @@ React SPA ──WebSocket──▶ Go Server ──spawn──▶ AI CLI (subpro
 | Claude impl | `server/agent/claude/claude.go` | Claude CLI subprocess, stream-json parsing, MCP server config |
 | Process manager | `server/process/manager.go` | Process lifecycle, event stream, lease reaper |
 | Frontend panel | `web/src/components/Chat/ChatPanel.tsx` | The session screen: the header (`SessionHeader.tsx` — the session's title, and the panel behind it holding engine, permission mode, work and usage; over a page, the page's own heading, `Layout/PageHeader.tsx` — [why](#the-session-screen)), the transcript and the composer (`InputBar.tsx`) ([layout](#the-session-screen)) |
-| Transcript | `web/src/components/Chat/MessageList.tsx` | Rendering the loaded messages, and every scroll decision made over them: [where the view sits](#where-the-view-sits) (with `useTranscriptScroll.ts` and `scrollAnchor.ts` beside it), the sentinel behind [history paging](#history-paging), and the jump to a pending permission request ([lifecycle-ui.md §2.2](lifecycle-ui.md#22-chat-the-attention-strip)) |
+| Transcript | `web/src/components/Chat/MessageList.tsx` | Rendering the loaded messages, and every scroll decision made over them: [where the view sits](#where-the-view-sits) (with `useTranscriptScroll.ts` and `scrollAnchor.ts` beside it), the reserve (`HistoryReserve.tsx`) and trigger behind [history paging](#history-paging), and the jump to a pending permission request ([lifecycle-ui.md §2.2](lifecycle-ui.md#22-chat-the-attention-strip)) |
 | Chat hook | `web/src/hooks/useChatMessages.ts` | Message state, streaming, permission handling, and the session's unanswered questions |
 | RPC actions | `web/src/lib/rpc/chat.ts` | `sendMessage` (which carries `answering` when it is an answer, [answering-ui.md §3](answering-ui.md#3-the-answer-panel)), `interrupt`, `permissionResponse` |
 
@@ -473,19 +473,19 @@ page only ever adds content above that edge — rows before the first one, or th
 older half of its turn spliced into it from the top, the merge keeping the row's
 identity so that it is the same node afterwards
 ([code/frontend-state.md](code/frontend-state.md#turn-boundaries-and-late-events)).
-How far the edge moved is therefore exactly how much went in above the reader,
-wherever they are reading, the spliced part included. The view is moved by that
-much from wherever it is when the page commits, not put back where it was last
-reported to be: a flick still in flight whose scroll event the browser has not
-delivered yet is the reader's, and rewinding it would undo their scroll. Then the
-anchor is taken afresh from the corrected view; the one held before the page is
-not carried across it.
+The rows sit on the bottom edge of the track ([where the view
+sits](#where-the-view-sits)), so what a page adds above that edge moves nothing
+below it — the reader included — and writes nothing while the view is moving,
+which is what lets a page land in the middle of a flick. What can move the edge in that commit is
+what changed *below* it: output the agent wrote at the end, committed together
+with the page, which moves the seam and the reader alike. How far the edge moved
+is therefore how far the reader was carried, and the track's height takes it
+back out without touching `scrollTop`. Then the anchor is taken afresh from the
+view as it now is; the one held before the page is not carried across it.
 
 Neither of the two obvious measures says the same thing. The content's total
-height also counts what the agent writes at the end while the page is in flight,
-and that output can commit together with the page — growth below that is
-indistinguishable from the growth above that has to be compensated for. The
-anchor ([where the view sits](#where-the-view-sits)) says it only of an element
+height counts the page and that output together and cannot say which part was
+which. The anchor ([where the view sits](#where-the-view-sits)) says it only of an element
 the page left alone, and inside a spliced row that may be none of them: the text
 at the seam grows from the top of its own part, and the merge rebuilds the row's
 parts, so the element the reader was anchored on can have grown above its own top
@@ -503,8 +503,9 @@ and a page landing must not count the growth a second time.
 Because nothing on the anchor has to survive a page, the first row and its first
 part are ordinary candidates, and a reader inside the merged row is held as
 finely as anywhere else. If the seam's row is itself gone after the page, the
-view stays where it is and no anchor is held until the reader scrolls — the same
-answer as an anchor with nothing left ([below](#where-the-view-sits)).
+track is left as it is for that commit and the next is held by whatever the view
+now shows — the same answer as an anchor with nothing left
+([below](#where-the-view-sits)).
 
 A page count that went *down* is not a page landing, and the transcript reads the
 tail again when it sees one. Paging starts over exactly one way — a reconnect
@@ -519,56 +520,101 @@ simply stands, which costs nothing: the replacement usually renders the same row
 under the same ids and the anchor holds, and where it does not, what is left of
 it holds the reader, or failing that the view stays where it is.
 
-**Asking for a page is a state, not an event.** While the top of history is on
-screen, nothing is in flight and nothing has failed, the next page is asked for.
+**Asking for a page is a state, not an event.** While the top of the loaded
+history is within one view above the view's top edge (`PAGE_AHEAD_VIEWS` in
+`MessageList`), nothing is in flight and nothing has failed, the next page is
+asked for. Ahead of the reader rather than when they arrive, so that on a steady
+read back up the next page is usually in before they get there; one landing
+mid-flick costs nothing, because it goes into [the reserve](#the-history-reserve)
+and nothing is written.
+
 Two things notice that state and they answer different halves of it. The
-`IntersectionObserver` on the sentinel is the only one that can see the reader
-*arrive* there: scrolling commits nothing, so there is no frame in which the list
-could have measured it. The measurement taken after every commit — once the
-invariant has placed the view — is the only one that can see a page land without
-carrying the sentinel out of view, which is every page in a transcript still
-shorter than the viewport. An observer reports a *crossing*; nothing crossed, so
-nothing is reported, and a short conversation would stop filling after one page.
+`IntersectionObserver` on the reserve is the only one that can see the reader
+*approach*: scrolling commits nothing, so there is no frame in which the list
+could have measured it. It watches the reserve with the observer's root stretched
+upwards by a view (`rootMargin`), because the reserve's bottom edge is the rows'
+top wherever the track puts them — past the track's top included — and its own
+top can never be below the view, so the bottom edge is the whole question; the
+browser then reports the crossing off the scroll itself, with no work of ours on
+any frame of a flick. The measurement of the rows' top taken after every commit —
+once the invariant has placed the view — is the only one that can see a page land
+without taking that top out of range: a page lands in the reserve and moves
+nothing the reader can see, so a short page, or a view taller than a page, crosses
+nothing. An observer reports a *crossing*; nothing crossed, so nothing is
+reported, and paging would stop a page short of where the reader is heading.
 
 Being asked twice is therefore ordinary, and harmless. A request made while one
 is in flight is refused outright, and every request that does go out moves the
-cursor further back, so the rule settles at `has_more` being false however many
-times it is put. Nothing judges how much a page added — an empty one, or one
-whose records all rendered to nothing, simply leads to the next — which is what
-removed the last reason to ask whether "the view moved", and with it the stall
-that question used to leave behind. The one state not answered from is a
-container of zero height: it has not been laid out yet, and treating that as
-"nothing is on screen" would ask for history nobody has come near.
+cursor further back, so the rule settles at the rows' top out of range or
+`has_more` being false however many times it is put. Nothing judges how much a
+page added — an empty one, or one whose records all rendered to nothing, simply
+leads to the next — which is what removed the last reason to ask whether "the
+view moved", and with it the stall that question used to leave behind. The one
+state not answered from is a container of zero height: it has not been laid out
+yet, and treating that as "the top is near" would ask for history nobody has
+come near.
 
 The observer is never rebuilt per page. A fresh observer reports a target already
-on screen immediately, so rebuilding it is a loop rather than a rule: one page
-that leaves the sentinel where it was becomes an unbounded run of them. It lives
-exactly as long as the sentinel node does, and what it reports is acted on as
-given — a delivered entry was computed at the most recent layout, which is one
-this commit's own write to `scrollTop` has already gone into.
-
-The sentinel row keeps one height whether or not a page is loading, the spinner
-appearing inside space already reserved for it. The row sits above everything the
-reader is looking at, so growing it moves them. The anchor would put them back,
-but putting them back is a write to `scrollTop`, and what brought the sentinel
-into view was a flick whose momentum that write cancels — so the height is fixed
-to save the write ([the gap that remains](#known-gaps-and-what-they-were-traded-for)).
-
-A page that fails replaces the sentinel with the reason and a Retry button, so
-nothing is left to ask for the next page until the user presses it. Saying nothing would
-read as *this is where the conversation starts* — the one conclusion a failure
-must not let the user draw — and retrying on a sentinel that has not moved would
-loop out of sight. "Beginning of conversation" is therefore said only on the
-server's word that nothing older exists, and only to a user who has actually
-scrolled back far enough to wonder.
+in range immediately, so rebuilding it is a loop rather than a rule: one page
+that leaves the reserve where it was becomes an unbounded run of them. It lives
+exactly as long as the reserve node does, except while a failure stands — the
+fresh one Retry brings reports at once, which is what a retry wants — and is
+attached again when the scroll container mounts. A newest page that replays to
+no rows mounts none: the list shows its empty state, with no reserve and nothing
+to ask from, until the first live message arrives. What it reports is acted on as
+given: a delivered entry was computed at the most recent layout, which is one
+this commit's own writes have already gone into.
 
 Whatever has been paged in stays rendered: `MessageList` does not virtualize
 ([why not](#roads-not-taken)), and a collapsible body it has opened once stays
 mounted so that reopening is free (`web/src/components/ui/CollapsibleBody.tsx`). Scrolling back therefore
 grows the DOM for as long as the session stays open. That is the trade the
-cursor makes affordable — growth happens one page at a time and only because the
-user asked for it, where replaying the whole transcript on open imposed it on
+cursor makes affordable — growth happens one page at a time and only as the
+user reads back towards it, where replaying the whole transcript on open imposed it on
 every session — and a reconnect starts over from the newest page.
+
+### The history reserve
+
+While older history remains, the track keeps room above the oldest loaded row
+(`web/src/components/Chat/HistoryReserve.tsx`) for a page to land into without
+moving the reader. At rest it is a view tall, never under 96px; mid-flick it is
+whatever the track leaves it, down to nothing, as pages and output take its
+space ([where the view sits](#where-the-view-sits)). So nothing inside it is laid
+out in normal flow: the skeleton is a CSS mask (`.history-reserve-skeleton` in
+`web/src/index.css`, the tile in `web/src/assets/history-reserve-tile.svg`) on a
+layer placed over the whole reserve, and the failure band is placed against its
+bottom edge. Loading, failing and retrying therefore change no layout at all,
+and running out moves nothing the reader sees: the reserve's height comes from
+the track alone.
+
+The tile repeats upward from the first real row, so the seam with that row is
+always the same and any height is cut at the top, where a fade hides the cut.
+The skeleton pulses while more history can come, and only its opacity animates:
+animating the mask or a shimmer would repaint a viewport-tall area on every frame
+of the flick it exists to keep smooth. Reduced motion stills it. Loading is not
+announced — pages are fetched without the reader asking and mostly land out of
+sight, so a live region would speak on every one — and the skeleton is
+`aria-hidden` decoration.
+
+> **Not yet verified on a device.** Whether the pulse repaints every frame
+> during an iOS flick has not been checked (Web Inspector → Layers). If it does,
+> drop the pulse and keep the still skeleton, which is the reduced-motion look
+> already.
+
+A page that fails stills and dims the skeleton — a pulse would say more is on its
+way — and puts the reason and a Retry button on the reserve's bottom edge, right
+above the oldest row, with `role="alert"`; nothing asks for the next page until
+the user presses it. Saying nothing would read as *this is where the conversation
+starts* — the one conclusion a failure must not let the user draw — and retrying
+on a reserve that has not moved would loop out of sight. A reserve shrunk
+mid-flick below the band lets the band rise past the track's top rather than
+clipping it; nobody can reach it there mid-flick, and the next rest brings it
+back. "Beginning of conversation" is said only on the server's word that nothing
+older exists, and only to a user who has actually paged back far enough to
+wonder. When history runs out the reserve unmounts and its space is left blank
+until the view is at rest, when the track drops it: a skeleton drawn over
+"Beginning of conversation" would be false, and the marker itself, mounting
+above the reader, moves nothing.
 
 ## Where the View Sits
 
@@ -586,7 +632,9 @@ of a `ResizeObserver` watching both boxes. A diagram settling, a card expanding,
 the keyboard opening, the container growing back as an overlay closes — none of
 them is a case here, each being one of those two moments already. The one case
 named is the commit a page lands in, which an anchored reader is held through by
-[the seam](#reading-a-page-on-the-client) instead. Nothing is on a timer.
+[the seam](#reading-a-page-on-the-client) instead. The putting right of the
+track ([below](#the-track-and-three-kinds-of-write)) has a third moment of its
+own: the view coming to rest.
 
 Neither moment covers the other. A commit is where the transcript's own changes
 land, and the invariant is applied before the frame that would show them in the
@@ -600,8 +648,10 @@ push the tail out of view.
 
 **No write without drift.** A position that is already right is not written to.
 Any programmatic write to `scrollTop` cancels iOS momentum scrolling, so a write
-that moves nothing still costs something. "Already right" means within a pixel:
-the two heights a scroll box is made of are integers while `scrollTop` is not.
+that moves nothing still costs something — which is also why there are as few of
+them as there are ([the track](#the-track-and-three-kinds-of-write)). "Already
+right" means within a pixel: the two heights a scroll box is made of are integers while
+`scrollTop` is not.
 
 **The anchor** is the finest candidate to start at or above the top edge of the
 view, paired with how far below that edge it started, and the path down to it
@@ -645,15 +695,15 @@ the offset recorded for it. A level that was folded into a tool group stands in
 for itself by the group's summary, kept where the row's top was but never above
 the view's top or under a bar pinned there — the place a fold the reader made
 would land them ([tool-call-ui.md](tool-call-ui.md#folding-from-the-bar)). With
-nothing of the path left, the view stays where it is and no anchor is held until
-the reader scrolls again; losing an anchor is never a reason to return to the
-tail.
+nothing of the path left, that look leaves the view where it is; losing an anchor
+is never a reason to return to the tail.
 
-What a lost anchor never does is take a fresh one from where the view sits. The
-commit that lost it has already moved everything under a `scrollTop` that still
-belongs to the layout before it, so whatever is at the edge now is not what the
-reader was looking at. Re-picking there is how a lost anchor used to strand a
-reader at the top of the history.
+What a lost anchor never does is take a fresh one from where the view sits *to
+put that look right*. The commit that lost it has already moved everything, so
+whatever is at the edge now is not what the reader was looking at. Re-picking
+there is how a lost anchor used to strand a reader at the top of the history.
+One is taken afterwards for the next look only
+([why](#the-track-and-three-kinds-of-write)).
 
 **Only the reader's own scrolling changes the state**, and which scroll that was
 is decided by direction rather than by listening for the gestures that caused it:
@@ -751,9 +801,10 @@ newest row as seen. Reading the tail again clears it.
 
 The browser's own scroll anchoring is turned off on the container. The anchoring
 here is written by hand, and leaving the browser's on means a second writer of
-`scrollTop` that cannot be coordinated with. Safari does not implement scroll
-anchoring at all, so leaving it on would not even produce the same disagreement
-on each platform.
+`scrollTop` that cannot be coordinated with. Safari before 27 does not implement
+scroll anchoring at all, and on Safari 27, which shipped it, a field report has
+it not compensating here either — so leaving it on would not even produce the
+same disagreement on each platform, and it stays `overflow-anchor: none`.
 
 **An overlay covers the transcript rather than unmounting it**, so that the
 reader gets back their place, the cards they had opened and the highlight ring —
@@ -762,13 +813,77 @@ none of which survive a remount, where the history would
 The container is one height while covered and another when it comes back, which
 is a resize, which is already the whole of the mechanism above.
 
+### The track, and three kinds of write
+
+Reading back up a transcript is a flick — the very gesture that brings pages in
+and during which output keeps arriving — and a write to `scrollTop` ends it
+([above](#where-the-view-sits)). So the invariant is kept with as few of those
+writes as it can be, by handing the work to layout. The scroller's only child is
+a **track** (`trackRef` in `MessageList`): a column whose height
+`useTranscriptScroll` alone writes, read back off its own inline style. The rows
+sit on its bottom edge (`justify-end`, the rows' box `shrink-0`), and above them,
+while older history remains, is [the history reserve](#the-history-reserve),
+which takes whatever height the track leaves. Growth anywhere therefore moves
+only what is above it, and where a change happens decides who moves:
+
+| Kind | Change | What is written |
+|---|---|---|
+| A | above the reader | Nothing. What is above moves up — into the reserve, or, once that is used up, past the track's top, where no scroll can reach it |
+| B | below the reader | The track's height, by however far the reader's place moved, which puts it back without touching `scrollTop`. The place is the anchor, or [the seam](#reading-a-page-on-the-client) in the commit a page lands in |
+| C | none — the view came to rest | The track to the rows plus a full reserve, and `scrollTop` by the same amount, so nothing on screen moves |
+
+C is what brings back into reach whatever A pushed past the top, restores the
+reserve a page landed in to [its size](#the-history-reserve), and drops it once
+history has run out. Reading the tail, everything is above the reader, so there
+is nothing to hold and only the end to pin.
+
+**At rest** is 120ms without a scroll event while nothing is pressed
+(`REST_DELAY_MS`), long enough to span the gap between two scroll events of a
+momentum flick. Pressed is a finger or a pen on the screen, or a mouse button
+held — dragging the scrollbar, selecting text: the reader is about to move the
+view, moving or not. Fingers and pens are told by touch events alone, because a
+touch that starts a pan is a `pointercancel` the moment the browser takes it
+over while still down; a touch's end is listened for on the node it started on,
+which still hears it after React replaces that row. A mouse is told by pointer
+events, its release listened for on the window, with `dragend`, the window
+losing focus, and the mouse moving with no button down also ending a press —
+each can end one with no `pointerup` at all (Chromium can leave it out after a
+scrollbar drag). A press that never ended would keep the view from rest for good, and with it
+the reserve, paging and anything past the top. Our own writes come back as scroll
+events of no movement and do not count as the view moving. C also runs at once
+when a change arrives while the view is already at rest, and just before every
+deliberate move — the button, a jump, `holdAt` — which writes `scrollTop` anyway.
+
+Two rules keep B honest. The track is never written shorter than `scrollTop`
+plus the view's height: shorter, the browser clamps `scrollTop`, which is a
+scroll of its own, and the next look reads it as the reader's place moving and
+shortens the track again — until what is above has gone out of reach. Content
+collapsing below a reader at the end therefore moves what they see; it is the end
+coming up, not something to hold. And a look that ends holding no anchor — the
+one held was lost, or not carried across a page — takes a fresh one from where
+the view now sits, for the next look: not to put this one right, which is done
+or cannot be, but because with the rows on the bottom edge, holding nothing means
+every line of output below carries the reader up the screen.
+
+What A costs is reach. A page taller than the reserve, landing mid-flick, puts
+its oldest rows past the track's top until the reader lets go and the view comes
+to rest: a flick going on up meets the top of the track and stops there, short
+of them. The alternative is the write that would have stopped it anyway, and
+earlier.
+
+A row asking how far the view has moved over it (`TranscriptView.scrollTop`,
+which `ClampedContent` uses) is answered from the rows' top, not the track's: the
+rows move inside the track without the view scrolling, and C moves the view with
+them, and neither is the view moving over the rows.
+
 ## Content Height on the First Frame
 
 A height that changes a few frames after the content commits no longer breaks
 anything: the resize is the same event as everything else, and the invariant puts
-the reader back. What it still costs is a write to `scrollTop` the reader can
-feel — one more chance to cancel their momentum scrolling — and, in the tail
-state, a threshold that has to be answered on the frame it is asked on: 50px
+the reader back, and above an anchored reader without a write that could cut a
+flick short ([the track](#the-track-and-three-kinds-of-write)). What it still costs is movement
+the reader can see — whatever is on the far side of the change from them moves on
+the screen — and, in the tail state, a threshold that has to be answered on the frame it is asked on: 50px
 decides whether a scroll that moved up came to rest at the end. Content that
 settles late is therefore worth avoiding on its own terms, and this section is
 what was done about it.
@@ -822,11 +937,11 @@ momentum and selection inside a reversed container, and the product is
 mobile-first; it also puts the DOM in the opposite order from the one the
 transcript is read in.
 
-**CSS `overflow-anchor` as the anchoring mechanism.** Safari does not implement
-it, so on the platform this product is built for first it does nothing at all; a
-hand-written anchor is required either way, which leaves the browser's version
-as a second writer of `scrollTop` rather than a feature
-([turned off](#where-the-view-sits)).
+**CSS `overflow-anchor` as the anchoring mechanism.** On iOS, the platform this
+product is built for first, it does nothing before Safari 27 and did not
+compensate here on 27 either. A hand-written anchor is required either way,
+which leaves the browser's version as a second writer of `scrollTop` rather than
+a feature ([turned off](#where-the-view-sits)).
 
 **A ready-made follow library** (`use-stick-to-bottom` and its kind). What such
 a library does is half of what is described here — a `ResizeObserver` and a held
@@ -837,22 +952,15 @@ that covers half of one problem and adds a coordination problem is not a saving.
 
 ## Known Gaps and What They Were Traded For
 
-- **Growth above the anchor still cancels iOS momentum.** Holding an element
-  still means writing `scrollTop`, and on iOS any write ends momentum scrolling —
-  so a flick to the top of the transcript stops dead if the page it asked for
-  lands while the finger is already off the screen. Nothing avoids the write
-  without giving up the invariant it exists for; what can be done is to make
-  fewer of them, which is why the sentinel row is a fixed height and why nothing
-  in the transcript changes height after it commits if it can be helped
-  ([above](#content-height-on-the-first-frame)).
-- **A page landing while the newest row streams can over-count.** The seam is the
-  first loaded row's bottom edge, and when that row is also the one output is
-  streaming into — the newest page a single bubble still growing — output landing
-  in it in the same commit as a page moves the seam too, and is counted as height
-  added above the reader. Both the output and the page have to reach React
-  between the same two renders, which is a narrow window, and the alternative —
-  total height — would over-count in that window wherever the output lands, not
-  only in the first row.
+- **A page landing while the newest row streams can let output carry the
+  reader.** The seam is the first loaded row's bottom edge, and when that row is
+  also the one output is streaming into — the newest page a single bubble still
+  growing — output landing in it in the same commit as a page grows the row
+  *above* that edge, where it moves the seam no more than the page does: it is
+  not counted, and the reader inside the row is carried up by it, once. Both the
+  output and the page have to reach React between the same two renders, which is
+  a narrow window, and the alternative — total height — would miscount on every
+  page landing, since it counts the page itself, which needs no correction.
 - **A card expanded while reading the tail can be pushed out of view.** Opening a
   body adds height above the end, and re-pinning to the end carries the card that
   was just opened upward — off the top of the screen, if the body is tall enough.
@@ -862,13 +970,8 @@ that covers half of one problem and adds a coordination problem is not a saving.
   it renders at. Removing the jump would mean scaling every diagram into a fixed
   frame, which spends the readability of large diagrams — the thing they are
   there for — on a scroll-position detail. The invariant absorbs it: the reader
-  keeps their place, the content below simply moves.
-- **A page that fails moves the view once.** The sentinel row is held at one
-  height so the spinner cannot push the transcript down, but the row a failure
-  replaces it with carries the reason and a Retry button and is genuinely
-  taller. Reserving that much space for a failure that normally never comes
-  would put a gap above every conversation, and the jump lands on a reader who
-  is being told, in that same row, what just happened.
+  keeps their place, and what is on the far side of the diagram from them simply
+  moves.
 - **The first layout of a session opens at the tail, whatever was asked for.** A
   conversation shorter than the viewport sits on its bottom edge, so a jump to a
   permission card in it cannot put the card at the top — there is nothing to
@@ -877,11 +980,12 @@ that covers half of one problem and adds a coordination problem is not a saving.
   return the reader to yet. Both are the absence of a previous position rather
   than the loss of one.
 - **An overlay does not stop paging.** `IntersectionObserver` is specified to
-  ignore `visibility`, so a covered transcript whose sentinel is in view goes on
+  ignore `visibility`, and the measurement after a commit does not ask either, so
+  a covered transcript whose loaded history's top is within a view of it goes on
   asking for history — and the container growing by the height of the unmounted
-  composer can bring the sentinel into view and buy one more page than the
-  reader would have. It is harmless: it only happens to a reader already at the
-  top of what is loaded, the cursor is finite and the run settles at `has_more`
+  composer can bring that top into range and buy one more page than the reader
+  would have. It is harmless: it only happens to a reader already near the top
+  of what is loaded, the cursor is finite and the run settles at `has_more`
   being false, and the anchor holds their place for the way back. The fix would
   be a rule that knows whether the list is on screen, which is a third piece of
   state of exactly the kind this design is made of removing — the cost of

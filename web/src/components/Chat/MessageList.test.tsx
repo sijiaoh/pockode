@@ -1,12 +1,8 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { createRef, type RefObject } from "react";
+import { createRef, type RefObject, StrictMode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-	maxScrollTop,
-	type ScrollBox,
-	stubScrollBox,
-} from "../../test/scrollBox";
+import type { ScrollBox } from "../../test/scrollBox";
 import type { ContentPart, Message } from "../../types/message";
 import MessageList, { type MessageListHandle } from "./MessageList";
 
@@ -21,7 +17,7 @@ vi.mock("../../lib/wsStore", () => ({
  */
 class MockIntersectionObserver {
 	static instances: MockIntersectionObserver[] = [];
-	/** Targets a test has put on screen; see `observe`. */
+	/** Targets a test has put in range; see `observe`. */
 	static inView = new Set<Element>();
 	targets = new Set<Element>();
 
@@ -35,8 +31,9 @@ class MockIntersectionObserver {
 	observe(target: Element) {
 		this.targets.add(target);
 		// A real observer reports a target that is already intersecting as soon as
-		// it starts watching it, and that is the whole mechanism behind paging on:
-		// re-observing a sentinel still on screen is what asks for the next page.
+		// it starts watching it — which is why the list builds one observer per
+		// reserve and never rebuilds it per page: rebuilt, it would ask again for
+		// every page that left the reserve where it was.
 		// No act() here — the report only reaches refs and the callback prop, and
 		// every caller below is inside one already.
 		if (MockIntersectionObserver.inView.has(target)) {
@@ -113,14 +110,94 @@ function dragTo(el: HTMLElement, scrollTop: number) {
 }
 
 /**
- * The box holding the messages, which is the scroller's only child. Which of
- * the two resizes is the whole point of several tests below: the content grows
- * as output streams in, the container shrinks under the software keyboard.
+ * The box holding the messages. Which of the two resizes is the whole point of
+ * several tests below: the content grows as output streams in, the container
+ * shrinks under the software keyboard.
  */
-function contentBox(scroller: HTMLElement): Element {
-	const el = scroller.firstElementChild;
+function contentBox(scroller: HTMLElement): HTMLElement {
+	const el = scroller.querySelector("[data-message-id]")?.parentElement;
 	if (!el) throw new Error("no content box");
 	return el;
+}
+
+/**
+ * The transcript's two heights, as `stubTranscript` was given them: the rows'
+ * box (`contentHeight`) and the view. Null in a test that gave none, where
+ * nothing is laid out at all.
+ */
+let transcriptBox: ScrollBox | null = null;
+
+/**
+ * How tall the track is: what the list last wrote on it, never less than the
+ * view — `min-h-full` until the first write.
+ */
+function trackHeight(): number {
+	const track = scrollContainer().firstElementChild as HTMLElement;
+	const written = Number.parseFloat(track.style.height) || 0;
+	return Math.max(written, transcriptBox?.viewportHeight ?? 0);
+}
+
+/**
+ * Where the rows' box starts in the track: on its bottom edge, so above the
+ * track's top — out of reach — when the rows are the taller.
+ */
+function rowsTop(): number {
+	return transcriptBox ? trackHeight() - transcriptBox.contentHeight : 0;
+}
+
+/**
+ * Gives the scroller its view's height and the rows their box's, both live.
+ * Unlike a plain scroll box, how far the content scrolls is not one of them:
+ * that is the track, whose height the list writes — the rows growing changes
+ * it only if the list says so.
+ */
+function stubTranscript(scroller: HTMLElement, box: ScrollBox): ScrollBox {
+	transcriptBox = box;
+	Object.defineProperty(scroller, "scrollHeight", {
+		configurable: true,
+		get: trackHeight,
+	});
+	Object.defineProperty(scroller, "clientHeight", {
+		configurable: true,
+		get: () => box.viewportHeight,
+	});
+	return box;
+}
+
+/** How tall a row is laid out, as `layout` was last told. */
+let layoutRowHeight: (messageId: string) => number = () => ROW_HEIGHT;
+
+/**
+ * The rows' box as tall as the rows in it, as it really is — plus `below`, for
+ * output at the end that no row here stands for — however the rows change.
+ */
+function fitRows(box: ScrollBox, below = 0) {
+	Object.defineProperty(box, "contentHeight", {
+		configurable: true,
+		get: () =>
+			[...document.querySelectorAll<HTMLElement>("[data-message-id]")].reduce(
+				(total, row) => total + layoutRowHeight(row.dataset.messageId ?? ""),
+				below,
+			),
+	});
+}
+
+function maxScrollTop(scroller: HTMLElement): number {
+	return Math.max(0, scroller.scrollHeight - scroller.clientHeight);
+}
+
+/** How far below the view's top edge a row sits — what the reader sees move. */
+function onScreen(messageId: string): number {
+	const row = document.querySelector<HTMLElement>(
+		`[data-message-id="${messageId}"]`,
+	);
+	if (!row) throw new Error(`no row ${messageId}`);
+	return row.getBoundingClientRect().top;
+}
+
+/** The reader scrolls so that `messageId`'s row starts `offset` above the view. */
+function dragRowTo(scroller: HTMLElement, messageId: string, offset = 0) {
+	dragTo(scroller, scroller.scrollTop + onScreen(messageId) + offset);
 }
 
 function permissionCard(requestId: string): HTMLElement | null {
@@ -142,8 +219,6 @@ interface Layout {
 	 * hold the container itself makes impossible.
 	 */
 	partHeights?: (messageId: string) => number[];
-	/** Where the first row starts; see `bottomAlignRows`. */
-	top?: () => number;
 }
 
 /**
@@ -154,19 +229,31 @@ interface Layout {
  * part's top with no height of its own, so the finer levels of the anchor's path
  * move exactly with the part they are in.
  */
-function layout({ partHeights = () => [ROW_HEIGHT], top = () => 0 }: Layout) {
+function layout({ partHeights = () => [ROW_HEIGHT] }: Layout) {
 	const rowHeight = (messageId: string) =>
 		partHeights(messageId).reduce((total, height) => total + height, 0);
+	layoutRowHeight = rowHeight;
 	const partsOf = (row: HTMLElement) =>
 		[...row.querySelectorAll<HTMLElement>("[data-scroll-anchor]")].filter(
 			(part) => part.parentElement?.closest("[data-scroll-anchor]") === row,
 		);
-	/** Where `el` sits in the transcript and how tall it is, if it is in a row. */
+	/**
+	 * Where `el` sits in the transcript and how tall it is, if it is the rows'
+	 * box, the reserve over it, or in a row.
+	 */
 	const place = (el: HTMLElement) => {
+		if (el.dataset.testid === "history-reserve") {
+			// Whatever the track leaves over the rows, and nothing at all — at the
+			// rows' top edge — once they are taller than the track.
+			return { offset: Math.min(0, rowsTop()), height: Math.max(0, rowsTop()) };
+		}
+		if (transcriptBox && el.querySelector(":scope > [data-message-id]")) {
+			return { offset: rowsTop(), height: transcriptBox.contentHeight };
+		}
 		const row = el.closest<HTMLElement>("[data-message-id]");
 		if (!row) return null;
 		const messageId = row.dataset.messageId ?? "";
-		let offset = top();
+		let offset = rowsTop();
 		for (const other of document.querySelectorAll<HTMLElement>(
 			"[data-message-id]",
 		)) {
@@ -222,21 +309,6 @@ function layoutRows(height: (messageId: string) => number) {
 	layout({ partHeights: (messageId) => [height(messageId)] });
 }
 
-/**
- * Lays the rows on the bottom edge of the viewport, which is where `justify-end`
- * holds them while the transcript is shorter than it. A page landing above then
- * fills space that was empty and leaves every row already on screen exactly
- * where it was — the state where nothing about the view can say whether the top
- * of history is still on screen.
- */
-function bottomAlignRows(viewportHeight: number) {
-	layout({
-		top: () =>
-			viewportHeight -
-			document.querySelectorAll("[data-message-id]").length * ROW_HEIGHT,
-	});
-}
-
 function scrollContainer(): HTMLElement {
 	const el = document.querySelector<HTMLElement>(".overflow-y-auto");
 	if (!el) throw new Error("no scroll container");
@@ -244,12 +316,13 @@ function scrollContainer(): HTMLElement {
 }
 
 /**
- * Scrolls the top-of-history sentinel into view, as reading back up does. It is
- * the only node the list observes at all now, so nothing has to be told apart
- * from it. It stays in view until a test says otherwise, so that any observer
+ * Reports the history reserve above the rows as in range — the top of the
+ * loaded history within a screen of the view — as reading back up brings it. It
+ * is the only node the list observes at all now, so nothing has to be told apart
+ * from it. It stays in range until a test says otherwise, so that any observer
  * armed afterwards reports it the way a real one would.
  */
-function triggerHistorySentinel() {
+function revealReserve() {
 	for (const observer of MockIntersectionObserver.instances) {
 		for (const target of observer.targets) {
 			MockIntersectionObserver.inView.add(target);
@@ -318,7 +391,7 @@ function renderScrolling(
 		<MessageList ref={ref} sessionId="session-1" messages={messages} />,
 	);
 	const scroller = scrollContainer();
-	const viewport = stubScrollBox(scroller, box);
+	const viewport = stubTranscript(scroller, box);
 	triggerResize(scroller);
 	return { ...view, scroller, viewport };
 }
@@ -356,6 +429,7 @@ function userMessage(id: string): Message {
 }
 
 beforeEach(() => {
+	transcriptBox = null;
 	MockIntersectionObserver.instances = [];
 	MockIntersectionObserver.inView.clear();
 	globalThis.IntersectionObserver =
@@ -428,16 +502,15 @@ describe("the jump the attention strip borrows", () => {
 	// view or drop the follow flag on the strength of an id it cannot place.
 	it("does nothing for a request id no card carries", () => {
 		const ref = createRef<MessageListHandle>();
-		const { scroller, viewport } = renderScrolling(
-			[questionMessage("m1", "r1")],
-			{ ref },
-		);
+		const { scroller } = renderScrolling([questionMessage("m1", "r1")], {
+			ref,
+		});
 
 		act(() => ref.current?.jumpToRequest("r1"));
 
 		// Neither the view nor the state may move on the strength of an id that
 		// places nothing.
-		expect(scroller.scrollTop).toBe(maxScrollTop(viewport));
+		expect(scroller.scrollTop).toBe(maxScrollTop(scroller));
 		expect(
 			screen.queryByRole("button", { name: "Scroll to bottom" }),
 		).toBeNull();
@@ -516,7 +589,7 @@ describe("folding an open tool row from its pinned bar", () => {
 				viewport.contentHeight -= body;
 				scroller.scrollTop = Math.min(
 					scroller.scrollTop,
-					maxScrollTop(viewport),
+					maxScrollTop(scroller),
 				);
 				await user.click(button);
 			},
@@ -557,11 +630,11 @@ describe("folding an open tool row from its pinned bar", () => {
 		const { fold } = await openAbove("fold-me", viewport, scroller);
 
 		await fold(100);
-		expect(scroller.scrollTop).toBe(maxScrollTop(viewport));
+		expect(scroller.scrollTop).toBe(maxScrollTop(scroller));
 
 		viewport.contentHeight = 1200;
 		triggerResize(contentBox(scroller));
-		expect(scroller.scrollTop).toBe(maxScrollTop(viewport));
+		expect(scroller.scrollTop).toBe(maxScrollTop(scroller));
 		expect(
 			screen.queryByRole("button", { name: "Scroll to bottom" }),
 		).toBeNull();
@@ -610,7 +683,7 @@ describe("folding an open tool row from its pinned bar", () => {
 
 		viewport.contentHeight = 1200;
 		triggerResize(contentBox(scroller));
-		expect(scroller.scrollTop).toBe(maxScrollTop(viewport));
+		expect(scroller.scrollTop).toBe(maxScrollTop(scroller));
 		expect(
 			screen.queryByRole("button", { name: "Scroll to bottom" }),
 		).toBeNull();
@@ -621,7 +694,7 @@ describe("MessageList history paging", () => {
 	const loaded = [textMessage("m1"), textMessage("m2")];
 	const pagedIn = [textMessage("older1"), textMessage("older2"), ...loaded];
 
-	function renderPaging() {
+	function renderPaging({ below = 1000 }: { below?: number } = {}) {
 		/** Pages actually requested. */
 		const pages = vi.fn();
 		/** Every call the list makes, including the ones refused below. */
@@ -629,7 +702,7 @@ describe("MessageList history paging", () => {
 		// Stands in for `useChatMessages.loadMoreHistory`, which refuses a request
 		// while one is in flight — synchronously, before any render. Asking is
 		// therefore idempotent, and the list asks on two triggers that legitimately
-		// coincide: the observer reporting the sentinel, and the commit that measured
+		// coincide: the observer reporting the reserve, and the commit that measured
 		// it. A plain spy would count that as two pages.
 		let inFlight = false;
 		const onLoadMoreHistory = () => {
@@ -647,12 +720,15 @@ describe("MessageList history paging", () => {
 			<MessageList {...props} messages={loaded} loadedHistoryPages={0} />,
 		);
 		const scroller = scrollContainer();
-		// More content than the view holds, so there is something for a page to
-		// push the view over. The case where there is not is its own test.
-		const viewport = stubScrollBox(scroller, {
-			contentHeight: 1000,
+		// The rows, and `below` more of output under them. With the default, the
+		// top of the loaded history is more than a screen above the tail, so there
+		// is something to scroll back up through before anything is asked for. The
+		// case where there is not is its own test.
+		const viewport = stubTranscript(scroller, {
+			contentHeight: 0,
 			viewportHeight: 500,
 		});
+		fitRows(viewport, below);
 		// The container learning its size is what pins the tail. Until then there is
 		// nothing to be at the end of, so a drag away from the end would not read as
 		// one — which is what tells the list the reader has left the tail.
@@ -693,129 +769,254 @@ describe("MessageList history paging", () => {
 			/>,
 		);
 
-		// A container with no height shows nothing, so nothing is on screen. Reading
-		// "the top of history is in view" out of that is how a transcript asks for a
-		// page before the reader has been shown a single line of the one it has.
+		// A container with no height shows nothing, so nothing is near. Reading
+		// "the top of history is within a screen" out of that is how a transcript
+		// asks for a page before the reader has been shown a single line of the
+		// one it has.
 		expect(scrollContainer().clientHeight).toBe(0);
 		expect(onLoadMoreHistory).not.toHaveBeenCalled();
 	});
 
-	it("asks for an earlier page when the top of the loaded history comes into view", () => {
+	it("asks for nothing while the loaded history reaches more than a screen above the view", () => {
+		const { scroller, land, pages } = renderPaging();
+		expect(onScreen("m1")).toBeLessThan(-scroller.clientHeight);
+
+		// Commits go on arriving, and each one measures; none of them is near.
+		land(loaded, 0);
+		expect(pages).not.toHaveBeenCalled();
+	});
+
+	// The newest page can replay to no rows at all while older history remains;
+	// the reserve then only appears with the first message, and has to be
+	// watched from there, or a reader scrolling up later is never answered.
+	it("watches the reserve of a transcript that started out empty", () => {
+		const props = {
+			sessionId: "session-1",
+			hasMoreHistory: true,
+			onLoadMoreHistory: vi.fn(),
+		};
+		const { rerender } = render(<MessageList {...props} messages={[]} />);
+		rerender(<MessageList {...props} messages={loaded} />);
+
+		const reserve = screen.getByTestId("history-reserve");
+		expect(
+			MockIntersectionObserver.instances.some((o) => o.targets.has(reserve)),
+		).toBe(true);
+	});
+
+	it("asks for an earlier page when the top of the loaded history comes within a screen of the view", () => {
 		const { pages } = renderPaging();
 
-		triggerHistorySentinel();
+		revealReserve();
 		expect(pages).toHaveBeenCalledTimes(1);
 	});
 
-	it("holds the view over the messages already on screen when a page lands above them", () => {
-		const { scroller, rerender, props } = renderPaging();
+	// Ahead of the reader: by the time they reach the top of what is loaded, the
+	// page is usually in, and they never see the skeleton at all.
+	it("asks before the top of the loaded history is on screen", () => {
+		const { scroller, rerender, props, pages } = renderPaging();
+		dragRowTo(scroller, "m1", 300);
+		expect(onScreen("m1")).toBeLessThan(0);
+		expect(onScreen("m1")).toBeGreaterThan(-scroller.clientHeight);
+
+		// Any commit measures, not only the observer's report.
+		rerender(
+			<MessageList {...props} messages={loaded} loadedHistoryPages={0} />,
+		);
+		expect(pages).toHaveBeenCalledTimes(1);
+	});
+
+	it("holds the rows on screen still when a page lands above them, writing nothing", () => {
+		const { scroller, land } = renderPaging();
 		// Reading back up is what takes the list off the tail: the state changes on
 		// the reader's own scrolling and on nothing else.
-		dragTo(scroller, ROW_HEIGHT);
+		dragRowTo(scroller, "m2");
+		revealReserve();
+		const top = scroller.scrollTop;
+		const at = onScreen("m2");
 
-		triggerHistorySentinel();
+		land(pagedIn, 1);
 
-		rerender(
-			<MessageList {...props} messages={pagedIn} loadedHistoryPages={1} />,
-		);
-
-		// Two rows went in above the anchor, so the view has to move down by
-		// exactly two rows to leave it where it was on screen.
-		expect(scroller.scrollTop).toBe(3 * ROW_HEIGHT);
+		// The page went into the reserve above the rows. Nothing below it moved, so
+		// nothing had to be put back — and on iOS putting it back would have been a
+		// write that stopped the reader's flick dead.
+		expect(onScreen("m2")).toBe(at);
+		expect(scroller.scrollTop).toBe(top);
 	});
 
 	it("holds the view still when the page is merged into the message it lands above", () => {
-		const { scroller, rerender, props, viewport } = renderPaging();
-		// The reader is looking at the second row, with the first one just above
-		// the top edge.
-		dragTo(scroller, ROW_HEIGHT);
-
-		triggerHistorySentinel();
+		const { scroller, land } = renderPaging();
+		// The reader is inside the first row, its top just above the edge.
+		dragRowTo(scroller, "m1", 50);
+		revealReserve();
+		const top = scroller.scrollTop;
+		const at = onScreen("m2");
 
 		// The page's last message and this transcript's first one are two halves of
 		// one turn, so they are spliced into one bubble that keeps the first one's
-		// id: the list is the same length, and the row grows by the two rows'
-		// worth of older content now inside it.
+		// id: the list is the same length, and the row grows from its top by the
+		// two rows' worth of older content now inside it.
 		layoutRows((id) => (id === "m1" ? 3 * ROW_HEIGHT : ROW_HEIGHT));
-		viewport.contentHeight = 1400;
-		rerender(
-			<MessageList {...props} messages={loaded} loadedHistoryPages={1} />,
-		);
+		land(loaded, 1);
 
-		// Anchored to the row that grew, the view would not move at all and the
-		// whole transcript would drop two rows down the screen — which is why a
-		// page is held by that row's bottom edge, not by the anchor.
-		expect(scroller.scrollTop).toBe(3 * ROW_HEIGHT);
-	});
-
-	it("restores to where the reader left the view, not to where they asked from", () => {
-		const { scroller, rerender, props } = renderPaging();
-
-		triggerHistorySentinel();
-		// The flick that brought the sentinel into view carries on afterwards, and
-		// the page is still in flight. Where it comes to rest is where the page has
-		// to land the reader.
-		dragTo(scroller, 2 * ROW_HEIGHT);
-
-		rerender(
-			<MessageList {...props} messages={pagedIn} loadedHistoryPages={1} />,
-		);
-
-		expect(scroller.scrollTop).toBe(4 * ROW_HEIGHT);
+		expect(onScreen("m2")).toBe(at);
+		expect(scroller.scrollTop).toBe(top);
 	});
 
 	it("keeps a scroll the browser has not reported yet when a page lands", () => {
-		const { scroller, rerender, props } = renderPaging();
-		dragTo(scroller, ROW_HEIGHT);
-		triggerHistorySentinel();
+		const { scroller, land } = renderPaging();
+		dragRowTo(scroller, "m2");
+		revealReserve();
 
 		// A flick still running: the view has moved on, and its scroll event is
 		// due at the next frame, after the commit the page lands in.
-		scroller.scrollTop = 2 * ROW_HEIGHT;
-		rerender(
-			<MessageList {...props} messages={pagedIn} loadedHistoryPages={1} />,
-		);
+		scroller.scrollTop += 50;
+		const top = scroller.scrollTop;
+		const at = onScreen("m2");
+		land(pagedIn, 1);
 
-		// Moved by the two rows the page added, from where the reader is — not
-		// put back to where the last reported scroll left them.
-		expect(scroller.scrollTop).toBe(4 * ROW_HEIGHT);
+		// Not put back to where the last reported scroll left them.
+		expect(scroller.scrollTop).toBe(top);
+		expect(onScreen("m2")).toBe(at);
 	});
 
-	it("counts growth above the anchor once when it lands between the request and a scroll", () => {
-		const { scroller, rerender, props, viewport } = renderPaging();
-		dragTo(scroller, ROW_HEIGHT);
+	it("counts growth below the reader once when it lands between the request and a scroll", () => {
+		const { scroller, land, viewport } = renderPaging();
+		dragRowTo(scroller, "m2");
+		revealReserve();
 
-		triggerHistorySentinel();
+		// Output lands at the end while the page is still in flight, and the reader
+		// then scrolls, which takes the seam again over the layout as it now is.
+		fitRows(viewport, 1000);
+		triggerResize(contentBox(scroller));
+		dragTo(scroller, scroller.scrollTop - 50);
+		const at = onScreen("m2");
 
-		// A late event — a tool result that belongs to a turn already on screen —
-		// grows the first message while the page is still in flight. `overflow-
-		// anchor: none` means the view does not follow it, so the reader's content
-		// has moved down the screen under them.
-		layoutRows((id) => (id === "m1" ? 3 * ROW_HEIGHT : ROW_HEIGHT));
-		viewport.contentHeight = 1200;
-		// They then scroll, which takes the anchor again — element and offset
-		// together. Pairing a fresh offset with a position read before that growth
-		// would charge the restore for the same 200px twice.
-		dragTo(scroller, 350);
+		// Measured against a seam taken before that growth, the page would charge
+		// the output a second time and push the reader by it.
+		land(pagedIn, 1);
+		expect(onScreen("m2")).toBe(at);
+	});
 
-		layoutRows((id) => (id === "m1" ? 3 * ROW_HEIGHT : ROW_HEIGHT));
-		viewport.contentHeight = 1400;
-		rerender(
-			<MessageList {...props} messages={pagedIn} loadedHistoryPages={1} />,
+	it("moves only the track when output lands below the reader", () => {
+		const { scroller, viewport } = renderPaging();
+		dragRowTo(scroller, "m2");
+		const top = scroller.scrollTop;
+		const at = onScreen("m2");
+		const height = scroller.scrollHeight;
+
+		fitRows(viewport, 1400);
+		triggerResize(contentBox(scroller));
+
+		// The track grew by what was added below, so the rows' top stayed where it
+		// was in it; the view is where it was, and so is everything the reader sees.
+		expect(scroller.scrollHeight).toBe(height + 400);
+		expect(scroller.scrollTop).toBe(top);
+		expect(onScreen("m2")).toBe(at);
+	});
+
+	it("writes nothing to the scroll position until the reader has stopped scrolling", () => {
+		vi.useFakeTimers();
+		const { scroller, land, viewport } = renderPaging();
+		const writes = vi.spyOn(scroller, "scrollTop", "set");
+		dragRowTo(scroller, "m2");
+		revealReserve();
+		writes.mockClear();
+		const at = onScreen("m2");
+
+		// Everything that used to be held still by a write, while the reader's
+		// flick is still under way: a page above, output below, a row above them
+		// settling on a new height, and history running out.
+		land(pagedIn, 1);
+		fitRows(viewport, 1200);
+		triggerResize(contentBox(scroller));
+		layoutRows((id) => (id === "older2" ? 2 * ROW_HEIGHT : ROW_HEIGHT));
+		triggerResize(contentBox(scroller));
+		land(pagedIn, 2, { hasMoreHistory: false });
+
+		expect(writes).not.toHaveBeenCalled();
+		expect(onScreen("m2")).toBe(at);
+
+		// At rest, the track is put right in one go, with the view moved by as much
+		// as the rows moved inside it.
+		act(() => vi.advanceTimersByTime(200));
+		expect(writes).toHaveBeenCalledTimes(1);
+		expect(onScreen("m2")).toBe(at);
+	});
+
+	it("brings what went past the top back into reach once the view is at rest", () => {
+		vi.useFakeTimers();
+		const { scroller, land } = renderPaging();
+		dragRowTo(scroller, "m2");
+		revealReserve();
+		const at = onScreen("m2");
+
+		// A page taller than the reserve over the rows: what does not fit goes past
+		// the top of the track, where no scroll can reach it yet.
+		const older = Array.from({ length: 8 }, (_, i) =>
+			textMessage(`older${i + 1}`),
+		);
+		land([...older, ...loaded], 1);
+		const reach = (id: string) => scroller.scrollTop + onScreen(id);
+		expect(reach("older1")).toBeLessThan(0);
+		expect(onScreen("m2")).toBe(at);
+
+		act(() => vi.advanceTimersByTime(200));
+
+		// The track was grown back to the rows plus a fresh reserve of a screen,
+		// and the view moved down with the rows: nothing on screen moved.
+		expect(reach("older1")).toBe(scroller.clientHeight);
+		expect(
+			screen.getByTestId("history-reserve").getBoundingClientRect().height,
+		).toBe(scroller.clientHeight);
+		expect(onScreen("m2")).toBe(at);
+	});
+
+	it("does not come to rest while a finger is on the screen", () => {
+		vi.useFakeTimers();
+		const { scroller, land } = renderPaging();
+		const writes = vi.spyOn(scroller, "scrollTop", "set");
+		fireEvent.touchStart(scroller);
+		dragRowTo(scroller, "m2");
+		revealReserve();
+		writes.mockClear();
+
+		land(pagedIn, 1);
+		// Held still, the reader is about to move the view again: anything written
+		// now would be fought by their finger.
+		act(() => vi.advanceTimersByTime(1000));
+		expect(writes).not.toHaveBeenCalled();
+
+		fireEvent.touchEnd(scroller);
+		act(() => vi.advanceTimersByTime(200));
+		expect(writes).toHaveBeenCalled();
+	});
+
+	it("puts the track right before going back to the end", async () => {
+		vi.useFakeTimers();
+		const { scroller, land } = renderPaging();
+		dragRowTo(scroller, "m2");
+		revealReserve();
+		land(
+			[...Array.from({ length: 8 }, (_, i) => textMessage(`o${i}`)), ...loaded],
+			1,
 		);
 
-		// Two rows landed above the anchor, and only those two rows may move the
-		// view.
-		expect(scroller.scrollTop).toBe(350 + 2 * ROW_HEIGHT);
+		fireEvent.click(screen.getByRole("button", { name: "Scroll to bottom" }));
+
+		// A move the reader asked for writes the position anyway, so it is made
+		// against the track as it will stay — not one a later rest would shift.
+		expect(scroller.scrollTop + onScreen("o0")).toBe(scroller.clientHeight);
+		expect(scroller.scrollTop).toBe(maxScrollTop(scroller));
 	});
 
 	it("does not even ask while the prop says a page is in flight", () => {
 		const { rerender, props, calls } = renderPaging();
 
-		triggerHistorySentinel();
+		revealReserve();
 		expect(calls).toHaveBeenCalledTimes(1);
 
-		// The observer goes on watching the sentinel, which is still on screen. The
+		// The observer goes on watching the reserve, which is still in range. The
 		// request that is out would refuse a second one anyway — this is the list not
 		// making it.
 		rerender(
@@ -826,82 +1027,86 @@ describe("MessageList history paging", () => {
 				loadedHistoryPages={0}
 			/>,
 		);
-		triggerHistorySentinel();
+		revealReserve();
 		expect(calls).toHaveBeenCalledTimes(1);
 	});
 
 	it("reads the tail again when a reconnect replaces the transcript", () => {
-		const { scroller, rerender, props, viewport } = renderPaging();
-		dragTo(scroller, ROW_HEIGHT);
-		triggerHistorySentinel();
-
-		rerender(
-			<MessageList {...props} messages={pagedIn} loadedHistoryPages={1} />,
-		);
-		expect(scroller.scrollTop).toBe(3 * ROW_HEIGHT);
+		const { scroller, land } = renderPaging();
+		dragRowTo(scroller, "m2");
+		revealReserve();
+		land(pagedIn, 1);
 
 		// The connection drops, and re-subscribing lands back on the newest page:
 		// the transcript is replaced and the page count starts over. An anchor names
 		// a row in there at an offset it was never measured against, and the newest
 		// page is what was just asked for.
-		rerender(
-			<MessageList
-				{...props}
-				messages={pagedIn.slice(1)}
-				loadedHistoryPages={0}
-			/>,
-		);
+		land(pagedIn.slice(1), 0);
 
-		expect(scroller.scrollTop).toBe(maxScrollTop(viewport));
+		expect(scroller.scrollTop).toBe(maxScrollTop(scroller));
 	});
 
 	it("holds the anchor as the page that landed goes on rendering", () => {
-		const { scroller, rerender, props, viewport } = renderPaging();
-		dragTo(scroller, ROW_HEIGHT);
-		triggerHistorySentinel();
-
-		rerender(
-			<MessageList {...props} messages={pagedIn} loadedHistoryPages={1} />,
-		);
-		expect(scroller.scrollTop).toBe(3 * ROW_HEIGHT);
+		const { scroller, land } = renderPaging();
+		dragRowTo(scroller, "m2");
+		revealReserve();
+		land(pagedIn, 1);
+		const at = onScreen("m2");
 
 		// A diagram inside the page that just landed finishes rendering, and every
-		// row above the anchor doubles in height. Nothing about that is a case of
-		// its own: it is one more resize, and the anchor is held on the frame it
-		// arrives in — there is no window after which it stops being held, so
-		// nothing has to guess how long rendering takes.
+		// row doubles in height — the reader's own too, below its top edge. Nothing
+		// about that is a case of its own: it is one more resize, and the anchor is
+		// held on the frame it arrives in — there is no window after which it stops
+		// being held, so nothing has to guess how long rendering takes.
 		stretchRows(2);
-		viewport.contentHeight = 2000;
 		triggerResize(contentBox(scroller));
-		expect(scroller.scrollTop).toBe(3 * 2 * ROW_HEIGHT);
+		expect(onScreen("m2")).toBe(at);
 	});
 
-	it("stops asking once the page that landed pushed the top of history off the view", () => {
+	it("asks again when the page that landed leaves the top of history within a screen", () => {
 		const { scroller, land, pages } = renderPaging();
-		dragTo(scroller, ROW_HEIGHT);
-		triggerHistorySentinel();
+		// Up to the top of the loaded rows, with the reserve's last few pixels
+		// showing above them.
+		dragRowTo(scroller, "m1", -10);
+		revealReserve();
+		const at = onScreen("m2");
 
+		// Two rows went in above the reader: less than a screen, so the reader is
+		// still not a page ahead, and the commit the page landed in asks for the
+		// next one — without the reader having moved.
 		land(pagedIn, 1);
+		expect(onScreen("m2")).toBe(at);
+		expect(pages).toHaveBeenCalledTimes(2);
+	});
 
-		// The page went in above the reader, so the top of history is off the top of
-		// the view: they have what they asked for and nothing asks for more.
-		expect(scroller.scrollTop).toBe(3 * ROW_HEIGHT);
+	it("stops asking once the page that landed takes the top of history more than a screen up", () => {
+		const { scroller, land, pages } = renderPaging();
+		dragRowTo(scroller, "m1", -10);
+		revealReserve();
+
+		const older = Array.from({ length: 8 }, (_, i) =>
+			textMessage(`older${i + 1}`),
+		);
+		land([...older, ...loaded], 1);
+
+		// A page ahead of the reader again: they have what they asked for and
+		// nothing asks for more until they read on up.
+		expect(onScreen("older1")).toBeLessThan(-scroller.clientHeight);
 		expect(pages).toHaveBeenCalledTimes(1);
 	});
 
 	it("keeps filling a viewport the transcript does not reach the bottom of", () => {
-		const { land, scroller, viewport, pages } = renderPaging();
-		// Nothing to scroll: the content box is `min-h-full`, so a transcript this
-		// short leaves the view pinned at 0 however well the page lands, and the
-		// rows it holds on the bottom edge do not move either. An observer reports
-		// crossings and there is no crossing to report, so what keeps this going is
-		// the list measuring the sentinel itself, on the commit the page landed in.
-		viewport.contentHeight = 500;
-		bottomAlignRows(viewport.viewportHeight);
-		triggerHistorySentinel();
+		const { land, pages } = renderPaging({ below: 0 });
+		// Shorter than the view, so the reserve stays in view however well the page
+		// lands, and the rows on the bottom edge do not move either. An observer
+		// reports crossings and there is no crossing to report, so what keeps this
+		// going is the list measuring the reserve itself, on the commit the page
+		// landed in.
+		const at = onScreen("m2");
+		revealReserve();
 
 		land(pagedIn, 1);
-		expect(scroller.scrollTop).toBe(0);
+		expect(onScreen("m2")).toBe(at);
 		expect(pages).toHaveBeenCalledTimes(2);
 	});
 
@@ -909,14 +1114,12 @@ describe("MessageList history paging", () => {
 	// state has to be shown to settle, and to settle on the right number: one
 	// request per page and not one more, with the reader untouched throughout.
 	it("fills the top page after page and stops at the start of the conversation", () => {
-		const { land, viewport, pages, calls } = renderPaging();
-		// Shorter than the view, so nothing the paging does can move the view or the
-		// rows: `min-h-full` holds them on the bottom edge and a page fills space
-		// that was empty above them. No crossing ever happens — and the observer is
-		// never rebuilt either, so it reports once and then has nothing to say. What
-		// carries this is the list measuring the sentinel on each commit.
-		viewport.contentHeight = 500;
-		bottomAlignRows(viewport.viewportHeight);
+		const { land, pages, calls } = renderPaging({ below: 0 });
+		// Shorter than the view, so nothing the paging does can move the rows: they
+		// sit on the bottom edge and a page fills the reserve above them. No crossing
+		// ever happens — and the observer is never rebuilt either, so it reports once
+		// and then has nothing to say. What carries this is the list measuring the
+		// reserve on each commit.
 
 		/** The rows a page at a time brings in, oldest first. */
 		const older = (pageCount: number) =>
@@ -924,18 +1127,13 @@ describe("MessageList history paging", () => {
 				textMessage(`older${pageCount - i}`),
 			);
 		/**
-		 * Where the row the reader is looking at sits on the screen. Every page goes
-		 * in above it, so this is the number that must not move: the reader asked for
+		 * Every page goes in above the row the reader is looking at, so where it
+		 * sits on the screen is the number that must not move: the reader asked for
 		 * history, not to be taken somewhere else.
 		 */
-		const readerRowOnScreen = () => {
-			const row = document.querySelector<HTMLElement>('[data-message-id="m2"]');
-			if (!row) throw new Error("the row the reader is on left the transcript");
-			return row.getBoundingClientRect().top;
-		};
-		const startedAt = readerRowOnScreen();
+		const startedAt = onScreen("m2");
 
-		triggerHistorySentinel();
+		revealReserve();
 		expect(pages).toHaveBeenCalledTimes(1);
 
 		// One message per page, and three pages before the server runs out: enough
@@ -943,34 +1141,31 @@ describe("MessageList history paging", () => {
 		// not have shown.
 		land([...older(1), ...loaded], 1);
 		expect(pages).toHaveBeenCalledTimes(2);
-		expect(readerRowOnScreen()).toBe(startedAt);
+		expect(onScreen("m2")).toBe(startedAt);
 
 		land([...older(2), ...loaded], 2);
 		expect(pages).toHaveBeenCalledTimes(3);
-		expect(readerRowOnScreen()).toBe(startedAt);
+		expect(onScreen("m2")).toBe(startedAt);
 
 		// The last page, and the server says so with it.
 		land([...older(3), ...loaded], 3, { hasMoreHistory: false });
 		expect(screen.getByText("Beginning of conversation")).toBeInTheDocument();
-		expect(readerRowOnScreen()).toBe(startedAt);
+		expect(onScreen("m2")).toBe(startedAt);
 
 		// Three pages arrived, three were asked for, and nothing was asked for that
 		// was refused: the list stopped on the answer rather than on a request it
-		// then had to take back. Commits go on arriving afterwards — every one of
-		// them measures the sentinel — and none of them asks.
+		// then had to take back. Commits go on arriving afterwards and none of them
+		// asks.
 		land([...older(3), ...loaded], 3, { hasMoreHistory: false });
 		expect(pages).toHaveBeenCalledTimes(3);
 		expect(calls).toHaveBeenCalledTimes(3);
 	});
 
 	it("stops asking when a page fails, and asks again once the error clears", () => {
-		const { land, viewport, pages } = renderPaging();
-		// The short transcript again: the top of history stays on screen whatever
-		// happens, so nothing about the view is going to stop this on its own.
-		viewport.contentHeight = 500;
-		bottomAlignRows(viewport.viewportHeight);
-
-		triggerHistorySentinel();
+		const { land, pages } = renderPaging({ below: 0 });
+		// The short transcript again: the reserve stays on screen whatever happens,
+		// so nothing about the view is going to stop this on its own.
+		revealReserve();
 		expect(pages).toHaveBeenCalledTimes(1);
 
 		// The request failed. Commits go on arriving — output lands, a card opens —
@@ -993,98 +1188,77 @@ describe("MessageList history paging", () => {
 		const { scroller, land, pages } = renderPaging();
 		// Read right up to the top, which is where paging used to run away.
 		dragTo(scroller, 0);
-		triggerHistorySentinel();
+		revealReserve();
 		expect(pages).toHaveBeenCalledTimes(1);
 
 		// A page whose records render to nothing: the cursor moved on, the
-		// transcript did not, and the top of history is still on screen. Asking
-		// again is what gets the reader past it, and it is bounded without a gate of
-		// its own — every request moves the cursor further back and history is
-		// finite.
+		// transcript did not, and the reserve is still on screen. Asking again is
+		// what gets the reader past it, and it is bounded without a gate of its own
+		// — every request moves the cursor further back and history is finite.
 		land(loaded, 1);
 		expect(pages).toHaveBeenCalledTimes(2);
 	});
 
 	it("lets a jump back to the tail take the view over from the anchor", () => {
-		const { scroller, rerender, props, viewport } = renderPaging();
+		const { scroller, land } = renderPaging();
 		dragTo(scroller, 0);
-		triggerHistorySentinel();
-
-		rerender(
-			<MessageList {...props} messages={pagedIn} loadedHistoryPages={1} />,
-		);
-		expect(scroller.scrollTop).toBe(2 * ROW_HEIGHT);
+		revealReserve();
+		land(pagedIn, 1);
 
 		fireEvent.click(screen.getByRole("button", { name: "Scroll to bottom" }));
 
 		// The page that landed finishes rendering. Holding the anchor now would undo
 		// the jump the reader just asked for.
 		stretchRows(2);
-		viewport.contentHeight = 1400;
 		triggerResize(contentBox(scroller));
-		expect(scroller.scrollTop).toBe(maxScrollTop(viewport));
+		expect(scroller.scrollTop).toBe(maxScrollTop(scroller));
 	});
 
 	it("stops cleanly once the server says there is nothing older", () => {
-		const { rerender, props, scroller, pages } = renderPaging();
-		dragTo(scroller, ROW_HEIGHT);
-		triggerHistorySentinel();
+		const { scroller, land, pages } = renderPaging();
+		dragRowTo(scroller, "m2");
+		revealReserve();
 
-		// The last page, and with it the sentinel: nothing is left to observe or to
+		// The last page, and with it the reserve: nothing is left to observe or to
 		// measure, so nothing can ask again.
-		rerender(
-			<MessageList
-				{...props}
-				hasMoreHistory={false}
-				messages={pagedIn}
-				loadedHistoryPages={1}
-			/>,
-		);
+		land(pagedIn, 1, { hasMoreHistory: false });
 
 		expect(pages).toHaveBeenCalledTimes(1);
 		expect(screen.getByText("Beginning of conversation")).toBeInTheDocument();
 	});
 
 	it("does not read the tail again because the page landed under a sent message", () => {
-		const { scroller, rerender, props } = renderPaging();
+		const { scroller, land } = renderPaging();
 		const sent = [...loaded, userMessage("sent")];
-		rerender(<MessageList {...props} messages={sent} loadedHistoryPages={0} />);
-		dragTo(scroller, ROW_HEIGHT);
-		triggerHistorySentinel();
+		land(sent, 0);
+		dragRowTo(scroller, "m2");
+		revealReserve();
+		const at = onScreen("m2");
 
 		// The newest row is one the reader typed, and it is still the newest row
 		// after the page lands: a prepend adds nothing at the end, so nothing about
 		// it says they want to be back there.
-		rerender(
-			<MessageList
-				{...props}
-				messages={[textMessage("older1"), textMessage("older2"), ...sent]}
-				loadedHistoryPages={1}
-			/>,
-		);
+		land([textMessage("older1"), textMessage("older2"), ...sent], 1);
 
-		expect(scroller.scrollTop).toBe(3 * ROW_HEIGHT);
+		expect(onScreen("m2")).toBe(at);
+		expect(
+			screen.getByRole("button", { name: "Scroll to bottom" }),
+		).toBeInTheDocument();
 	});
 
 	it("keeps the reader where they are when the first row is gone", () => {
-		const { scroller, rerender, props, viewport } = renderPaging();
-		dragTo(scroller, ROW_HEIGHT);
-		triggerHistorySentinel();
+		const { scroller, land } = renderPaging();
+		dragRowTo(scroller, "m2");
+		revealReserve();
+		const top = scroller.scrollTop;
 
 		// The page landed, but the row whose bottom edge it is measured by is not
 		// in the list any more, so nothing says how much went in above the reader.
 		// Staying put is the answer; going back to the tail would take the reader
 		// off the history they asked for.
-		viewport.contentHeight = 1400;
-		rerender(
-			<MessageList
-				{...props}
-				messages={[textMessage("older1"), textMessage("older2"), loaded[1]]}
-				loadedHistoryPages={1}
-			/>,
-		);
+		land([textMessage("older1"), textMessage("older2"), loaded[1]], 1);
 
-		expect(scroller.scrollTop).toBe(ROW_HEIGHT);
+		expect(scroller.scrollTop).toBe(top);
 	});
 
 	it("offers a retry instead of quietly stopping when a page fails", async () => {
@@ -1100,13 +1274,53 @@ describe("MessageList history paging", () => {
 		);
 
 		expect(screen.getByRole("alert")).toHaveTextContent("connection lost");
-		// Nothing left to observe, so the failure cannot spin into a retry loop
-		// the user never asked for.
-		triggerHistorySentinel();
+		// Nothing watches the reserve while a page has failed, so the failure
+		// cannot spin into a retry loop the user never asked for.
+		revealReserve();
 		expect(onLoadMoreHistory).not.toHaveBeenCalled();
 
 		await userEvent.click(screen.getByRole("button", { name: "Retry" }));
 		expect(onLoadMoreHistory).toHaveBeenCalledTimes(1);
+	});
+
+	// Loading is not announced: pages are asked for without the reader asking and
+	// mostly land out of sight, so a live region would speak on every one.
+	it("draws earlier messages to come as decoration, saying nothing", () => {
+		render(
+			<MessageList
+				sessionId="session-1"
+				messages={[textMessage("m1")]}
+				hasMoreHistory
+				isLoadingMoreHistory
+			/>,
+		);
+
+		const reserve = screen.getByTestId("history-reserve");
+		expect(reserve.firstElementChild).toHaveAttribute("aria-hidden", "true");
+		expect(reserve).toHaveTextContent("");
+		expect(screen.queryByRole("status")).toBeNull();
+	});
+
+	// The last page usually lands mid-flick, and the space it leaves stays until
+	// the view is at rest; a skeleton drawn there would promise history that does
+	// not exist.
+	it("leaves the space blank once history has run out, and takes it away at rest", () => {
+		vi.useFakeTimers();
+		const { scroller, land } = renderPaging();
+		dragRowTo(scroller, "m2");
+		revealReserve();
+		const at = onScreen("m2");
+
+		land(pagedIn, 1, { hasMoreHistory: false });
+
+		expect(screen.queryByTestId("history-reserve")).toBeNull();
+		const reach = (id: string) => scroller.scrollTop + onScreen(id);
+		expect(reach("older1")).toBeGreaterThan(0);
+		expect(onScreen("m2")).toBe(at);
+
+		act(() => vi.advanceTimersByTime(200));
+		expect(reach("older1")).toBe(0);
+		expect(onScreen("m2")).toBe(at);
 	});
 
 	it("says where the conversation starts, but only once the user has paged back", () => {
@@ -1172,7 +1386,7 @@ describe("MessageList following the tail", () => {
 		// content as it stands this frame.
 		viewport.contentHeight = 1400;
 		triggerResize(contentBox(scroller));
-		expect(scroller.scrollTop).toBe(maxScrollTop(viewport));
+		expect(scroller.scrollTop).toBe(maxScrollTop(scroller));
 
 		// Frame 2: more output lands before the scroll event frame 1 caused has
 		// been delivered. The view really is 400px above the bottom when that
@@ -1185,7 +1399,7 @@ describe("MessageList following the tail", () => {
 		expect(
 			scroller.scrollTop,
 			"following was dropped by a scroll event nobody caused: after a tap and two frames of output the view stopped moving with the tail",
-		).toBe(maxScrollTop(viewport));
+		).toBe(maxScrollTop(scroller));
 	});
 
 	it("follows again once the user scrolls back to the bottom", () => {
@@ -1196,7 +1410,7 @@ describe("MessageList following the tail", () => {
 
 		viewport.contentHeight = 1400;
 		triggerResize(contentBox(scroller));
-		expect(scroller.scrollTop).toBe(maxScrollTop(viewport));
+		expect(scroller.scrollTop).toBe(maxScrollTop(scroller));
 	});
 
 	it("pins the tail again when the viewport shrinks under it", () => {
@@ -1207,7 +1421,7 @@ describe("MessageList following the tail", () => {
 		viewport.viewportHeight = 250;
 		triggerResize(scroller);
 
-		expect(scroller.scrollTop).toBe(maxScrollTop(viewport));
+		expect(scroller.scrollTop).toBe(maxScrollTop(scroller));
 	});
 
 	it("hands the endpoint back to the tail rather than to one frame's bottom", async () => {
@@ -1217,7 +1431,7 @@ describe("MessageList following the tail", () => {
 		await userEvent.click(
 			screen.getByRole("button", { name: "Scroll to bottom" }),
 		);
-		expect(scroller.scrollTop).toBe(maxScrollTop(viewport));
+		expect(scroller.scrollTop).toBe(maxScrollTop(scroller));
 
 		// Syntax highlighting lands and the bottom moves past the offset the button
 		// aimed at. Reading the tail is a state, not a destination, so the view goes
@@ -1225,7 +1439,7 @@ describe("MessageList following the tail", () => {
 		// button was pressed.
 		viewport.contentHeight = 1500;
 		triggerResize(contentBox(scroller));
-		expect(scroller.scrollTop).toBe(maxScrollTop(viewport));
+		expect(scroller.scrollTop).toBe(maxScrollTop(scroller));
 	});
 
 	// Root cause 2 of the scroll rework: while the reader is somewhere in the
@@ -1251,17 +1465,28 @@ describe("MessageList following the tail", () => {
 		// m0 takes the first row, m1's two parts the next two, m2 the last: the
 		// reader is on m1's second part, with its first part just above the edge.
 		layout({ partHeights: (id) => (id === "m1" ? [100, 100] : [100]) });
+		vi.useFakeTimers();
 		dragTo(scroller, 200);
+		const read = () =>
+			screen.getByText("the part being read").getBoundingClientRect().top;
+		const at = read();
 
-		// A code block inside the part above finishes highlighting, so everything
-		// under it moves 150px down the content.
+		// A code block inside the part above finishes highlighting, so the part
+		// above grows by 150px.
 		layout({ partHeights: (id) => (id === "m1" ? [250, 100] : [100]) });
 		viewport.contentHeight = 1150;
 		triggerResize(contentBox(scroller));
 
-		// Anchored to the row, the view would have stayed at 200 and the reader
-		// would be looking at the part above instead.
+		// Anchored to the row, the reader would be held by the row's top, and the
+		// part above would push what they are reading down by its growth.
+		expect(read()).toBe(at);
+
+		// The growth went up past the top of the track, and comes back into reach
+		// at rest with the view moved down by as much: still nothing on screen
+		// moves.
+		act(() => vi.advanceTimersByTime(200));
 		expect(scroller.scrollTop).toBe(350);
+		expect(read()).toBe(at);
 	});
 
 	// A row folding into its tool group stays in the DOM, only `hidden`, and an
@@ -1305,30 +1530,31 @@ describe("MessageList following the tail", () => {
 
 		// The summary takes the place of the row the reader was on: at the top
 		// of the view, where that row's top was.
-		expect(scroller.scrollTop).toBe(ROW_HEIGHT);
+		expect(onScreen("m1")).toBe(0);
 	});
 
 	// The other half of requiring a *direction*: reaching the end is only a return
 	// to the tail when the reader moved there.
-	it("stays where it is when content collapsing below clamps the view", () => {
+	it("stays where it is when content collapsing below brings the end up to the view", () => {
 		const { scroller, viewport } = renderFollowing();
 		dragTo(scroller, 200);
 
-		// A tool result below the view is collapsed, and the content is suddenly
-		// shorter than the offset the view sits at: the browser clamps the view up,
-		// which lands it at the end without anyone having scrolled there. Writing the
-		// clamped offset back is the scroll event the clamp itself causes — the one
-		// thing that could be mistaken for the reader arriving at the end.
+		// A tool result below the view is collapsed, and the end comes up to meet
+		// the view: it is at the end without anyone having scrolled there. The
+		// track is not shortened past the view, which would have the browser clamp
+		// the view up — a scroll event, the one thing that could be mistaken for
+		// the reader arriving at the end.
 		viewport.contentHeight = 600;
 		triggerResize(contentBox(scroller));
 		dragTo(scroller, scroller.scrollTop);
-		expect(scroller.scrollTop).toBe(maxScrollTop(viewport));
+		expect(scroller.scrollTop).toBe(maxScrollTop(scroller));
+		const at = onScreen("m2");
 
 		// Read as a return to the tail, the next output would drag the reader to the
 		// bottom of the conversation.
 		viewport.contentHeight = 1000;
 		triggerResize(contentBox(scroller));
-		expect(scroller.scrollTop).toBe(100);
+		expect(onScreen("m2")).toBe(at);
 		expect(
 			screen.getByRole("button", { name: "Scroll to bottom" }),
 		).toBeInTheDocument();
@@ -1344,7 +1570,7 @@ describe("MessageList following the tail", () => {
 		);
 
 		act(() => ref.current?.jumpToRequest("p1"));
-		expect(scroller.scrollTop).toBe(maxScrollTop(viewport));
+		expect(scroller.scrollTop).toBe(maxScrollTop(scroller));
 		expect(
 			screen.queryByRole("button", { name: /Scroll to bottom/ }),
 		).toBeNull();
@@ -1369,7 +1595,7 @@ describe("MessageList following the tail", () => {
 			/>,
 		);
 		const scroller = scrollContainer();
-		stubScrollBox(scroller, { contentHeight: 1000, viewportHeight: 500 });
+		stubTranscript(scroller, { contentHeight: 1000, viewportHeight: 500 });
 		triggerResize(scroller);
 		const rect = (top: number, bottom: number) => ({ top, bottom }) as DOMRect;
 		vi.spyOn(scroller, "getBoundingClientRect").mockReturnValue(rect(0, 500));
@@ -1394,7 +1620,7 @@ describe("MessageList following the tail", () => {
 	// A send to an idle agent lands with its reply's placeholder below it, so the
 	// newest row is not the one the reader typed.
 	it("returns to the tail when a send to an idle agent opens a reply below it", () => {
-		const { rerender, scroller, viewport } = renderFollowing();
+		const { rerender, scroller } = renderFollowing();
 		dragTo(scroller, 200);
 
 		rerender(
@@ -1414,13 +1640,13 @@ describe("MessageList following the tail", () => {
 			/>,
 		);
 
-		expect(scroller.scrollTop).toBe(maxScrollTop(viewport));
+		expect(scroller.scrollTop).toBe(maxScrollTop(scroller));
 	});
 
 	// Re-subscribing replays history with fresh ids. With no older page loaded the
 	// page count has nothing to drop, so the replacement is all there is to go on.
 	it("returns to the tail when a reconnect replaces the transcript", () => {
-		const { rerender, scroller, viewport } = renderFollowing();
+		const { rerender, scroller } = renderFollowing();
 		dragTo(scroller, 200);
 
 		rerender(
@@ -1430,7 +1656,7 @@ describe("MessageList following the tail", () => {
 			/>,
 		);
 
-		expect(scroller.scrollTop).toBe(maxScrollTop(viewport));
+		expect(scroller.scrollTop).toBe(maxScrollTop(scroller));
 		expect(
 			screen.queryByRole("button", { name: /Scroll to bottom/ }),
 		).toBeNull();
@@ -1446,10 +1672,7 @@ describe("MessageList following the tail", () => {
 			createdAt: new Date(),
 			parts: [],
 		};
-		const { rerender, scroller, viewport } = renderScrolling([
-			...transcript,
-			emptyReply,
-		]);
+		const { rerender, scroller } = renderScrolling([...transcript, emptyReply]);
 		dragTo(scroller, 200);
 
 		rerender(
@@ -1459,7 +1682,7 @@ describe("MessageList following the tail", () => {
 			/>,
 		);
 
-		expect(scroller.scrollTop).toBe(maxScrollTop(viewport));
+		expect(scroller.scrollTop).toBe(maxScrollTop(scroller));
 	});
 
 	// Taking an empty reply bubble back out removes the newest row, which is not a
@@ -1516,7 +1739,7 @@ describe("MessageList following the tail", () => {
 		triggerResize(contentBox(scroller));
 
 		expect(scroller.scrollTop).toBe(
-			name === "typed by the user" ? maxScrollTop(viewport) : 200,
+			name === "typed by the user" ? maxScrollTop(scroller) : 200,
 		);
 	});
 
@@ -1530,7 +1753,7 @@ describe("MessageList following the tail", () => {
 			/>,
 		);
 		const scroller = scrollContainer();
-		const viewport = stubScrollBox(scroller, {
+		const viewport = stubTranscript(scroller, {
 			contentHeight: 1200,
 			viewportHeight: 500,
 		});
@@ -1562,15 +1785,16 @@ describe("MessageList following the tail", () => {
 			/>,
 		);
 		const scroller = scrollContainer();
-		const viewport = stubScrollBox(scroller, {
-			contentHeight: 1000,
+		const viewport = stubTranscript(scroller, {
+			contentHeight: 0,
 			viewportHeight: 500,
 		});
+		fitRows(viewport, 800);
 		triggerResize(scroller);
 
-		// Reading back up to the top is what brings the sentinel into view at all.
-		dragTo(scroller, 0);
-		triggerHistorySentinel();
+		// Reading back up to the top is what brings the reserve into view at all.
+		dragRowTo(scroller, "m1");
+		revealReserve();
 
 		rerender(
 			<MessageList
@@ -1584,17 +1808,17 @@ describe("MessageList following the tail", () => {
 				loadedHistoryPages={1}
 			/>,
 		);
-		expect(scroller.scrollTop).toBe(2 * ROW_HEIGHT);
+		const at = onScreen("m1");
 
-		// The page that just landed finishes rendering. The user is reading up
-		// here, so this must not be taken as licence to jump to the bottom.
-		viewport.contentHeight = 1400;
+		// Output goes on landing at the end. The user is reading up here, so this
+		// must not be taken as licence to jump to the bottom.
+		fitRows(viewport, 1200);
 		triggerResize(contentBox(scroller));
-		expect(scroller.scrollTop).toBe(2 * ROW_HEIGHT);
+		expect(onScreen("m1")).toBe(at);
 	});
 
 	it("returns to the tail when the user sends a message from further up", () => {
-		const { rerender, scroller, viewport } = renderFollowing();
+		const { rerender, scroller } = renderFollowing();
 		dragTo(scroller, 200);
 
 		rerender(
@@ -1604,7 +1828,144 @@ describe("MessageList following the tail", () => {
 			/>,
 		);
 
-		expect(scroller.scrollTop).toBe(maxScrollTop(viewport));
+		expect(scroller.scrollTop).toBe(maxScrollTop(scroller));
+	});
+});
+
+// Putting the track right waits for the view to be at rest — nothing pressed,
+// nothing scrolling — so whatever can leave "pressed" standing leaves the track
+// wrong for good: rows past its top out of reach, the reserve never restored.
+describe("MessageList coming to rest", () => {
+	const transcript = Array.from({ length: 5 }, (_, i) =>
+		textMessage(`m${i + 1}`),
+	);
+
+	/**
+	 * Output lands while the reader is not at rest: reading the tail it goes up
+	 * past the track's top, and only coming to rest grows the track to take it.
+	 */
+	function growWhileHeld(scroller: HTMLElement, viewport: ScrollBox) {
+		viewport.contentHeight = 1400;
+		triggerResize(contentBox(scroller));
+		expect(scroller.scrollHeight).toBe(1000);
+	}
+
+	it("comes to rest when a finger lifts off a row that left the transcript under it", () => {
+		vi.useFakeTimers();
+		const { rerender, scroller, viewport } = renderScrolling(transcript);
+		const finger = screen.getByText("text m3");
+		fireEvent.touchStart(finger);
+
+		// The row the finger is on is replaced, so the end of the touch goes to a
+		// node no longer in the document, and bubbles nowhere it can be heard.
+		rerender(
+			<MessageList
+				sessionId="session-1"
+				messages={transcript.filter((m) => m.id !== "m3")}
+			/>,
+		);
+		growWhileHeld(scroller, viewport);
+		fireEvent.touchEnd(finger);
+		act(() => vi.advanceTimersByTime(200));
+
+		expect(scroller.scrollHeight).toBe(1400);
+	});
+
+	// A pen pan is taken over by the browser like a finger's, with a
+	// `pointercancel` while the pen is still down; only the touch events say
+	// when it lifts.
+	it("does not come to rest while a pen is still down", () => {
+		vi.useFakeTimers();
+		const { scroller, viewport } = renderScrolling(transcript);
+		fireEvent.touchStart(scroller);
+		fireEvent.pointerDown(scroller, { pointerType: "pen" });
+		fireEvent.pointerCancel(window, { pointerType: "pen" });
+
+		growWhileHeld(scroller, viewport);
+		act(() => vi.advanceTimersByTime(1000));
+		expect(scroller.scrollHeight).toBe(1000);
+
+		fireEvent.touchEnd(scroller);
+		act(() => vi.advanceTimersByTime(200));
+		expect(scroller.scrollHeight).toBe(1400);
+	});
+
+	// Chromium can leave out the `pointerup` after a scrollbar drag; the mouse
+	// moving on with no button down is the release it never sent.
+	it("comes to rest once a mouse moves with no button down after a press with no release", () => {
+		vi.useFakeTimers();
+		const { scroller, viewport } = renderScrolling(transcript);
+		fireEvent.pointerDown(scroller, { pointerType: "mouse", buttons: 1 });
+
+		growWhileHeld(scroller, viewport);
+		fireEvent.pointerMove(window, { pointerType: "mouse", buttons: 1 });
+		act(() => vi.advanceTimersByTime(1000));
+		expect(scroller.scrollHeight).toBe(1000);
+
+		fireEvent.pointerMove(window, { pointerType: "mouse", buttons: 0 });
+		act(() => vi.advanceTimersByTime(200));
+		expect(scroller.scrollHeight).toBe(1400);
+	});
+
+	// The transcript emptying mid-press takes the scroller, and the end of the
+	// press, with it.
+	it("is at rest in a scroller that came back after one went away mid-press", () => {
+		const { rerender, scroller } = renderScrolling(transcript);
+		fireEvent.pointerDown(scroller, { pointerType: "mouse" });
+
+		rerender(<MessageList sessionId="session-1" messages={[]} />);
+		rerender(<MessageList sessionId="session-1" messages={transcript} />);
+		const next = scrollContainer();
+		const viewport = stubTranscript(next, {
+			contentHeight: 1000,
+			viewportHeight: 500,
+		});
+		triggerResize(next);
+
+		expect(next.scrollHeight).toBe(1000);
+		viewport.contentHeight = 1400;
+		triggerResize(contentBox(next));
+		expect(next.scrollHeight).toBe(1400);
+	});
+
+	// StrictMode runs every effect's cleanup once on a list that stays mounted.
+	it("is at rest after mounting under StrictMode", () => {
+		render(
+			<StrictMode>
+				<MessageList sessionId="session-1" messages={transcript} />
+			</StrictMode>,
+		);
+		const scroller = scrollContainer();
+		const viewport = stubTranscript(scroller, {
+			contentHeight: 1000,
+			viewportHeight: 500,
+		});
+		triggerResize(scroller);
+
+		viewport.contentHeight = 1400;
+		triggerResize(contentBox(scroller));
+
+		expect(scroller.scrollHeight).toBe(1400);
+		expect(scroller.scrollTop).toBe(maxScrollTop(scroller));
+	});
+
+	// Rows sit on the track's bottom edge, so with no place held, output landing
+	// below would carry everything the reader sees up the screen.
+	it("holds the reader by what they now see once the row they were on is gone", () => {
+		const { rerender, scroller, viewport } = renderScrolling(transcript);
+		dragRowTo(scroller, "m3");
+
+		rerender(
+			<MessageList
+				sessionId="session-1"
+				messages={transcript.filter((m) => m.id !== "m3")}
+			/>,
+		);
+		const at = onScreen("m4");
+
+		viewport.contentHeight = 1400;
+		triggerResize(contentBox(scroller));
+		expect(onScreen("m4")).toBe(at);
 	});
 });
 
@@ -1730,10 +2091,12 @@ describe("the scroll button's new-content dot", () => {
 		);
 		expect(dot()).not.toBeNull();
 
-		// Upward, so it stays anchored: the end was reached by the content
-		// shrinking under the view, not by the reader scrolling down to it.
+		// The end comes up to the view as the content shrinks under it, and the
+		// reader then moves upward, so it stays anchored: the end was reached by
+		// the content, not by the reader scrolling down to it.
 		viewport.contentHeight = 520;
-		dragTo(scroller, 10);
+		triggerResize(contentBox(scroller));
+		dragTo(scroller, scroller.scrollTop - 10);
 		expect(dot()).toBeNull();
 
 		viewport.contentHeight = 1000;

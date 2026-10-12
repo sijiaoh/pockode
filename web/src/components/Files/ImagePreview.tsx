@@ -25,9 +25,8 @@ interface Props {
 	 * agent's content block reports them. Given here they reach the `<img>` as
 	 * its `width`/`height` attributes, so the browser reserves the right box
 	 * before the image decodes instead of growing into it. That matters in the
-	 * transcript: a picture growing above the reader is held still for them, but
-	 * holding still is a write to `scrollTop` that ends momentum scrolling on
-	 * iOS, and everything below the picture moves either way
+	 * transcript: the reader is held still through a picture growing near them,
+	 * but whatever is on its far side from them moves on the screen either way
 	 * (docs/agent-chat.md#where-the-view-sits).
 	 */
 	dimensions?: Dimensions;
