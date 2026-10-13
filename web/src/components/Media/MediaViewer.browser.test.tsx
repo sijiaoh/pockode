@@ -1,13 +1,23 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import {
+	createBrowserHistory,
+	createRootRoute,
+	createRouter,
+	RouterProvider,
+} from "@tanstack/react-router";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { page } from "vitest/browser";
+import { page, userEvent as realUserEvent } from "vitest/browser";
 import { useWSStore, wsActions } from "../../lib/wsStore";
 // A 64×36 VP9 clip, served by the test server as a capability path would be.
 import clipPath from "../../test/clip-64x36.webm?url";
+// A page linking to a second one beside it, served the same way: their folder
+// stands for a directory capability.
+import pagePath from "../../test/page/index.htm?url";
 import { MediaViewer } from "./MediaViewer";
-import type { ImageMediaItem, VideoMediaItem } from "./types";
+import type { HtmlMediaItem, ImageMediaItem, VideoMediaItem } from "./types";
 
 // Gestures are asserted on where the image lands on screen, read from real
 // layout: its box at fit against the frame, and its drawn size against that
@@ -366,5 +376,153 @@ describe("MediaViewer video stage", () => {
 		expect(drawn.height).toBeCloseTo(box.height, 0);
 		expect(getComputedStyle(video).objectFit).toBe("contain");
 		expect(Math.min(box.width / 64, box.height / 36)).toBeGreaterThan(2);
+	});
+});
+
+describe("MediaViewer html stage", () => {
+	const item: HtmlMediaItem = {
+		kind: "html",
+		name: "index.htm",
+		saveAs: "index.htm",
+		mime: "text/html",
+		size: 64,
+		origin: { kind: "file", path: "site/index.htm" },
+	};
+	const cleanups: (() => void)[] = [];
+
+	afterEach(async () => {
+		// Closed here, while the router still listens: unmounted by the global
+		// cleanup instead, it would go back after the next test has pushed its
+		// own entries.
+		const close = screen.queryByRole("button", { name: "Close" });
+		if (close) {
+			const closed = popped();
+			await userEvent.click(close);
+			await closed;
+		}
+		for (const cleanup of cleanups.splice(0)) cleanup();
+		vi.restoreAllMocks();
+	});
+
+	/**
+	 * The viewer open over a page of the app, on the window's own history as
+	 * in the app, with an entry before the page's to tell where Back lands.
+	 */
+	async function openOverHistory() {
+		useWSStore.setState({ status: "connected" });
+		vi.spyOn(wsActions, "rawCapability").mockResolvedValue({
+			path: pagePath.slice(0, pagePath.lastIndexOf("/") + 1),
+			expiresAt: Date.now() + 60 * 60 * 1000,
+		});
+		const entry = (tag: string, index: number) => ({
+			tag,
+			key: tag,
+			__TSR_key: tag,
+			__TSR_index: index,
+		});
+		window.history.pushState(entry("before", 0), "");
+		window.history.pushState(entry("opener", 1), "");
+
+		function Opener() {
+			const [open, setOpen] = useState(true);
+			return open ? (
+				<MediaViewer item={item} onClose={() => setOpen(false)} />
+			) : (
+				<p>closed</p>
+			);
+		}
+		const history = createBrowserHistory();
+		cleanups.push(() => history.destroy());
+		const router = createRouter({
+			routeTree: createRootRoute({ component: Opener }),
+			history,
+		});
+		render(
+			<QueryClientProvider client={new QueryClient()}>
+				<RouterProvider router={router} />
+			</QueryClientProvider>,
+		);
+		const frame = await screen.findByTitle<HTMLIFrameElement>("index.htm");
+		await expect.poll(() => window.history.state?.fullScreen).toBeTruthy();
+		// ↻ spins until the page's first load. A navigation before the page
+		// has finished loading is made a replace, so give it a moment more.
+		const reload = screen.getByRole("button", { name: "Reload page" });
+		await expect
+			.poll(() => reload.querySelector(".animate-spin"), { timeout: 5_000 })
+			.toBeNull();
+		await settle();
+		return frame;
+	}
+
+	/**
+	 * The window's state once a traversal changes its entry; "no popstate" if
+	 * none does, as a Back onto an entry of a frame no longer there.
+	 */
+	function popped() {
+		return new Promise<unknown>((resolve) => {
+			const timer = setTimeout(() => resolve("no popstate"), 3_000);
+			window.addEventListener(
+				"popstate",
+				() => {
+					clearTimeout(timer);
+					resolve(window.history.state);
+				},
+				{ once: true },
+			);
+		});
+	}
+
+	function settle() {
+		return new Promise((resolve) => setTimeout(resolve, 200));
+	}
+
+	function loaded(frame: HTMLIFrameElement) {
+		return new Promise<void>((resolve) =>
+			frame.addEventListener("load", () => resolve(), { once: true }),
+		);
+	}
+
+	it("closes with ✕ onto the opener's entry after the page navigated, so one Back leaves it", async () => {
+		const frame = await openOverHistory();
+		// As a link followed in the page would: an entry each.
+		const before = window.history.length;
+		for (const name of ["next.htm", "index.htm", "next.htm"]) {
+			const landed = loaded(frame);
+			if (frame.contentWindow) {
+				frame.contentWindow.location.href = new URL(name, frame.src).href;
+			}
+			await landed;
+			await settle();
+		}
+		expect(window.history.length).toBe(before + 3);
+
+		const closed = popped();
+		await userEvent.click(screen.getByRole("button", { name: "Close" }));
+		expect(await closed).toMatchObject({ tag: "opener" });
+		expect(await screen.findByText("closed")).toBeInTheDocument();
+
+		const left = popped();
+		window.history.back();
+		expect(await left).toMatchObject({ tag: "before" });
+	});
+
+	it("keeps Tab in the sheet past the page's last element", async () => {
+		const frame = await openOverHistory();
+		frame.focus();
+		// The page's link, then out of the page.
+		await realUserEvent.keyboard("{Tab}");
+		await realUserEvent.keyboard("{Tab}");
+
+		await expect
+			.poll(() => document.activeElement)
+			.toBe(screen.getByRole("button", { name: "Close" }));
+	});
+
+	it("takes Shift+Tab from the sheet's first control round into the page", async () => {
+		const frame = await openOverHistory();
+		screen.getByRole("button", { name: "Close" }).focus();
+		await realUserEvent.keyboard("{Shift>}{Tab}{/Shift}");
+
+		await expect.poll(() => document.activeElement).toBe(frame);
 	});
 });

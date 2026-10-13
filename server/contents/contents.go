@@ -404,15 +404,22 @@ var playableExtMIMEs = map[string]string{
 // is consulted only where sniffing gave up, so a .svg holding a PNG is still
 // reported as a PNG.
 //
+// HTML is the exception both ways, because text/html is what makes a client
+// render a file as a page (docs/file.md, "HTML pages"), and sniffing alone
+// answers it wrongly in both directions: a page that opens with text rather
+// than a tag sniffs as plain text, and a .svelte or .vue component that opens
+// with <script> sniffs as HTML. So text is HTML exactly when it is named .html
+// or .htm.
+//
 // head need be no longer than SniffLen. Exported for the callers that describe
 // content this package never reads off disk — the image an agent says it
 // looked at — so that one answer is given about what a file is.
 func DetectMIME(name string, head []byte) string {
-	sniffed := http.DetectContentType(head)
+	ext := strings.ToLower(filepath.Ext(name))
+	sniffed := htmlByName(ext, http.DetectContentType(head))
 	if !isGenericType(sniffed) {
 		return sniffed
 	}
-	ext := strings.ToLower(filepath.Ext(name))
 	if mime, ok := imageExtMIMEs[ext]; ok {
 		return mime
 	}
@@ -420,6 +427,28 @@ func DetectMIME(name string, head []byte) string {
 		return mime
 	}
 	return sniffed
+}
+
+// htmlByName settles whether text sniffed as sniffed is HTML, from its
+// extension (see DetectMIME), keeping the charset sniffing found. Anything
+// that is not text is left alone: a binary named .html is still binary. Text
+// that is not HTML comes back as plain text, which DetectMIME's extension
+// tables may still name — an .svg opening with a comment sniffs as HTML.
+func htmlByName(ext, sniffed string) string {
+	isHTMLName := ext == ".html" || ext == ".htm"
+	isHTML := strings.HasPrefix(sniffed, "text/html")
+	isText := isHTML || strings.HasPrefix(sniffed, "text/plain") || strings.HasPrefix(sniffed, "text/xml")
+	if !isText || isHTMLName == isHTML {
+		return sniffed
+	}
+	mime := "text/plain"
+	if isHTMLName {
+		mime = "text/html"
+	}
+	if _, params, found := strings.Cut(sniffed, ";"); found {
+		mime += ";" + params
+	}
+	return mime
 }
 
 // Formats a page loads that http.DetectContentType cannot name. Stylesheets
@@ -442,6 +471,10 @@ var servedExtMIMEs = map[string]string{
 // than through the app: a page, its stylesheets and scripts, a video or audio
 // file. It adds the types those need and sniffing cannot name, under the same
 // rule — the extension is consulted only where sniffing gave up.
+//
+// HTML no name accounts for is served as sniffed: DetectMIME's rule is about
+// which files the app offers as pages, and a page navigating to a document of
+// its own with no .html extension still needs it served as one.
 func DetectServedMIME(name string, head []byte) string {
 	detected := DetectMIME(name, head)
 	if !isGenericType(detected) {
@@ -449,6 +482,9 @@ func DetectServedMIME(name string, head []byte) string {
 	}
 	if mime, ok := servedExtMIMEs[strings.ToLower(filepath.Ext(name))]; ok {
 		return mime
+	}
+	if sniffed := http.DetectContentType(head); strings.HasPrefix(sniffed, "text/html") {
+		return sniffed
 	}
 	return detected
 }

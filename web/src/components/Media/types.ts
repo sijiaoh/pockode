@@ -1,12 +1,13 @@
 import type { ComponentType, KeyboardEvent, RefObject } from "react";
-import type { ContentOrigin } from "../../types/contents";
+import type { PageIsolation } from "../../lib/rpc/raw";
+import type { ContentOrigin, TreeOrigin } from "../../types/contents";
 import type { ImageDimensions, ImageSource } from "../../utils/fileView";
 
 /**
  * Something the media viewer can show. One member per kind; each kind has a
  * stage of its own (`stages.ts`) and shares everything else.
  */
-export type MediaItem = ImageMediaItem | VideoMediaItem;
+export type MediaItem = ImageMediaItem | VideoMediaItem | HtmlMediaItem;
 
 export interface ImageMediaItem {
 	kind: "image";
@@ -39,6 +40,30 @@ export interface VideoMediaItem {
 	 * can pick up where the viewer left off (docs/media-viewer.md#handover).
 	 */
 	handoff?: PlaybackHandoff;
+}
+
+export interface HtmlMediaItem {
+	kind: "html";
+	/** Shown as the viewer's title. */
+	name: string;
+	/** The file name Save writes. */
+	saveAs: string;
+	mime: string;
+	size: number;
+	/**
+	 * The page, loaded through the same capability as the opener's frame — its
+	 * directory's, so the page's assets load too.
+	 */
+	origin: TreeOrigin;
+	/** See `usePageFrame`: a change loads the page again, as in place. */
+	revision?: unknown;
+	/** Set when the opener shows `PageNotice`, for the viewer to show it too. */
+	notice?: PageIsolation;
+	/**
+	 * The opener found the page's directory capability cannot reach it, so the
+	 * viewer loads it on its own straight away (`usePageFrame`).
+	 */
+	unreachableFolder?: boolean;
 }
 
 /** A position passed between two players of the same file. Mutable. */
@@ -80,6 +105,12 @@ export interface StageProps<Item extends MediaItem> {
 	 * not shown.
 	 */
 	onMetadata: (metadata: MediaMetadata | null) => void;
+	/**
+	 * Where a stage that knows better than the item what Save downloads
+	 * registers the URL: a page's is the one it loaded from, under its own
+	 * capability. Null while there is none.
+	 */
+	saveUrlRef: RefObject<string | null>;
 }
 
 export type StageComponent<Item extends MediaItem = MediaItem> = ComponentType<

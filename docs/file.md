@@ -115,7 +115,13 @@ its extension — a `.svg` holding a PNG is reported as `image/png`. The
 extension is consulted only for media no sniffer recognises — the image formats
 SVG, AVIF, HEIC and TIFF; a phone's `.mov`; an MP3 without an ID3 tag or an MP4
 whose brand Go does not know — and only when sniffing produced nothing more
-specific than "some text" or "some bytes". SVG is the one image served as `text`, and so the
+specific than "some text" or "some bytes". HTML is settled by name both ways,
+because `text/html` is what makes the client render a file as a
+[page](#html-pages): text named `.html` or `.htm` is `text/html` even when it
+opens with prose rather than a tag, and text sniffed as HTML under any other
+name — a `.svelte` or `.vue` component opening with `<script>` — is taken as
+plain text, which the extension tables may still name (an `.svg` opening with
+`<!--` is `image/svg+xml`). SVG is the one image served as `text`, and so the
 one still held to the 2 MiB ceiling: it is source the user can edit, and the UI
 can render it from the text just as well. It is also a security boundary rather
 than a preference — SVG can carry script, and its bytes fetched into a
@@ -290,6 +296,7 @@ What follows here is the contract and the two size limits that govern it. What
 the clients make of it is the rest of the story, in order:
 [Loading image bytes](#loading-image-bytes) for the viewer's images,
 [Playing audio and video](#playing-audio-and-video) for its players,
+[HTML pages](#html-pages) for a page and the files it links to,
 [Downloading](#downloading) for the viewer's action, [Uploading](#uploading) for
 the Files tab and its queue,
 [Dropping files onto the tree](#dropping-files-onto-the-tree) for the desktop
@@ -509,8 +516,9 @@ which also gives the path to open. It names the origin, which is a work-director
 file, a file in a commit or a chat attachment. It also names the scope, which is
 one file or one directory and everything beneath it. `<path>` is the file's own
 name for a file scope, and a path beneath the directory for a directory scope.
-What a capability is bound to, how long it lives, why it is in the path and what
-keeps a symlink from widening its scope are in
+What a capability is bound to, how long it lives, why it is in the path, why a
+directory scope never serves a dotfile, what keeps a symlink from widening its
+scope and why any origin may read it are in
 [code/authentication.md](code/authentication.md#raw-capabilities-urls-a-browser-element-loads-by-itself).
 
 Unlike the download endpoint, the content is served **as what it is**, since the
@@ -518,7 +526,11 @@ element has to play or render it. The type comes from the bytes, as for
 `file.get`'s `mime`. Where sniffing gives up, `file.get`'s extension table
 names media, and a second one adds what a page loads
 (`contents.DetectServedMIME`): a stylesheet or a script sniffs as plain text,
-and under `nosniff` a browser refuses to apply either one served that way. Both
+and under `nosniff` a browser refuses to apply either one served that way.
+Content sniffed as HTML is served as HTML when neither table names it —
+`file.get`'s rule is about which files the app offers as pages, and a page
+navigating to a document of its own without an `.html` extension still needs
+one. Both
 tables are spelled out rather than read from the machine's
 registry, which on Windows commonly maps `.js` to `text/plain`. Serving active
 content on the app's origin is safe only because of the sandbox and the other
@@ -536,13 +548,13 @@ never changes.
 
 | Status | Code | When |
 |--------|------|------|
-| `400` | `invalid_path` | An empty, absolute or `..` path, encoded or not — the directory scope's own trailing-`/` path included |
+| `400` | `invalid_path` | An empty or absolute path, or one that `..` leads out of, encoded or not — the directory scope's own trailing-`/` path included |
 | `400` | `not_a_file` | A directory, a fifo, a device node, or a directory or submodule in the commit |
-| `403` | `outside_scope` | A name other than the file's for a file scope; for a work-directory file, a path that leaves the scope through a symlink, a scope directory with anything but a plain directory on its way, or any other failure to open either — a permission, a link loop. `os.Root` reports a link out of it with an error that cannot be told apart from those, so all of them are answered as out of reach, with the reason in the message |
+| `403` | `outside_scope` | A name other than the file's for a file scope; a path with any component starting with `.` for a directory scope — a dotfile, a dot directory, `.` or `..`, and for a work-directory file on Windows a short name that resolves to one; for a work-directory file, a path that leaves the scope through a symlink, a scope directory with anything but a plain directory on its way, or any other failure to open either — a permission, a link loop. `os.Root` reports a link out of it with an error that cannot be told apart from those, so all of them are answered as out of reach, with the reason in the message |
 | `404` | `capability_not_found` | The capability was never issued, has expired, or its session has ended; ask `raw.capability` again |
 | `404` | `not_found` | No such file, commit path or attachment, or a commit that no longer exists. A hash git would refuse never gets this far: `raw.capability` resolved it when it issued the capability |
 | `404` | `worktree_not_found` / `session_not_found` | As for the endpoints above |
-| `405` | `invalid_request` | Any method but `GET` and `HEAD` |
+| `405` | `invalid_request` | Any method but `GET`, `HEAD` and `OPTIONS` (a CORS preflight, answered `204`; see [code/authentication.md](code/authentication.md#raw-capabilities-urls-a-browser-element-loads-by-itself)) |
 | `416` | | A `Range` the content cannot satisfy |
 | `500` | `internal` | Opening the work directory or an attachment, reading the content, or running git failed |
 
@@ -705,6 +717,7 @@ else (`utils/fileView.ts`, priority order):
 
 | State | When | Body | Edit |
 |-------|------|------|------|
+| `page` | `mime` `text/html` where the state would otherwise be `text` or `too-large` (an empty file stays `empty`), so a page past the ceiling still renders | The page, in a sandboxed frame ([below](#html-pages)); its source a toggle away | As its source |
 | `binary` | `omitted: "binary"` | Placeholder card | Disabled |
 | `too-large` | `omitted: "too_large"` | Placeholder card naming `limit` | Disabled |
 | `empty` | `size` is 0 | "Empty file" card | **Enabled** |
@@ -786,7 +799,8 @@ makes sense beside an Edit button that screen does not have. That screen's
 bottom bar tells the same story — no write action, but Download as here — and
 adds one control the viewer above does not have: a toggle that drops text to
 plain, which is how a reader gets at a rendered Markdown file's source and the
-copy button that comes with it, there being no Edit to open it in.
+copy button that comes with it, there being no Edit to open it in. For a page
+it is the page/source toggle the viewer above has.
 See [git-ui.md](git-ui.md#viewing-a-file-from-a-commit).
 
 ### Loading image bytes
@@ -855,7 +869,8 @@ stage plays through the same code, carrying on from the same second
   waits with the spinner up instead of failing: a relay reconnect is not
   something to make the user Retry.
 - **One capability per file.** The capability is cached in react-query under
-  `"raw-capability"`, the worktree and the origin, and stays fresh until five
+  `"raw-capability"`, the worktree, the origin and the scope (a page's
+  directory capability reaches more than a file one), and stays fresh until five
   minutes before it expires — so the preview and the viewer share one and the
   server's cap of 256 is not spent per mount. It is deliberately *not* under the
   description's key, where an image's bytes live: the description is
@@ -865,7 +880,7 @@ stage plays through the same code, carrying on from the same second
   refetched on focus or reconnect. A file's or a commit's capability is bound to
   the worktree the connection was on when it was issued, and the app's worktree
   moves before the connection does, so those are invalidated once a worktree
-  switch has landed (`queryClient.ts`).
+  switch has landed (`invalidateWorkspaceCapabilities`, from `queryClient.ts`).
 - **A new capability is the same content.** Whoever renewed it — this player
   recovering, another player of the file, a mount after it went stale — the
   element is put back at the second it was at, playing if the user had it
@@ -915,6 +930,104 @@ stage plays through the same code, carrying on from the same second
 
 There is no `canPlayType` pre-check: Chromium answers `""` for
 `video/quicktime` yet plays most H.264 `.mov` files, so the player always tries.
+
+### HTML pages
+
+An `.html` / `.htm` file opens rendered — a coverage report, a prototype —
+in the Files tab and in a commit, through `FileBody` (`Files/PagePreview.tsx`
+over `Media/usePageFrame.ts`). Diffs and chat attachments still show text.
+
+- **Which files are pages.** The server settles it: text is `text/html`
+  exactly when it is named `.html` or `.htm` ([`mime`](#operations)). The
+  client reads only `mime`. A page over the `file.get`
+  ceiling still renders, since the frame reads it over HTTP; only its source
+  side shows the too-large card, and Edit follows the source.
+- **Page or source.** A `ToggleIconButton` (`Code`, "Show source" / "Show
+  page") in the bottom bar. In the Files tab it sits after Download and before
+  Delete, is kept across files for the screen's lifetime and never persisted,
+  and applies only to pages: text opened next is highlighted as usual. The
+  source is the ordinary text view, highlighted and editable through Edit as
+  before. In a commit the same toggle shares the state of its plain-text
+  toggle, which it replaces for a page
+  ([git-ui.md](git-ui.md#viewing-a-file-from-a-commit)).
+- **Layout.** A page bar (`HTML · 18.2 KB`, ↻ Reload page, ⤢ View full
+  screen — the [media viewer](media-viewer.md#files-and-git-pagepreview)) over a frame that
+  fills the rest down to the bottom bar; nothing scrolls around it, so the
+  page's own scroll is the only one. The frame is `HTML_FRAME_SANDBOX`,
+  `referrerPolicy="no-referrer"`, white under a light color scheme, as an
+  agent's page is. Links navigate inside it, so a report can be browsed — and
+  each page opened there is a Back entry of the browser's, which Back steps
+  through before it leaves the file.
+- **Through the page's directory.** The frame loads a [raw
+  capability](code/authentication.md#raw-capabilities-urls-a-browser-element-loads-by-itself)
+  scoped to the directory the page is in, so its relative stylesheets,
+  scripts and images load from beside it; the page's URL is the capability
+  plus its encoded name. The client derives the scope from the path, mirroring
+  the server's grant rule (`pageRawTarget`): a page at the root of the worktree
+  or the commit, under any directory whose name starts with `.`, or named
+  with a leading `.` itself, gets a capability for itself alone
+  (`pageIsolation`), since the server refuses a directory scope there and
+  serves no dotfile under one — its relative assets do not load. Nor can
+  the path tell when the directory, or one above it, is a link — a directory
+  scope never follows one — or cannot be read: its capability cannot reach
+  even the page. The probe below says so (`403 outside_scope`), and the page
+  is loaded again, in a new frame, on a capability for itself alone
+  (`usePageFrame`'s `unreachableFolder`, remembered per worktree and handed
+  to the viewer so it starts there) rather than shown as a failure.
+- **Saying so.** Such a page still renders — many single-file pages work —
+  under a notice strip between the page bar and the frame
+  (`Media/PageNotice.tsx`): its linked files won't load, why (the root of the
+  project, or of the repository for a commit; a hidden folder; a hidden name;
+  a folder that could not be opened for it), and what frees it (move it into
+  a folder or out of the hidden one, rename it without the dot, open it from
+  a readable folder that is not a link). While the relay is there it ends "or serve it and use
+  Port Preview ›", which opens `PortPreviewSheet` — never inside a sheet, since
+  sheets do not nest, and never for a commit, since serving runs the worktree.
+  It is shown only when it matters: the text is scanned with `DOMParser`,
+  which runs nothing (`utils/pageReferences.ts`), for a relative `src`,
+  `srcset`, `href`, `xlink:href` or `poster` on any element (and `data` on
+  `object`), templates included and `<noscript>` left out, or `url(...)`,
+  `image-set(...)` or `@import` in a `<style>` or `style` attribute. Empty,
+  fragment, absolute, protocol-relative, root-relative and
+  `data:`/`blob:`/`mailto:`/`javascript:` values do not count, and a
+  `<base href>` that leaves the page's directory means nothing is relative. A
+  URL only a script builds (`fetch("data.json")`) is beyond a scan that runs
+  nothing, so such a page goes without the notice. A page too large to have
+  been sent is assumed to link to something. The strip has no dismiss: it
+  states where the file lives, which a tap does not change.
+- **Loading.** The capability is asked for once the frame is in view and the
+  WebSocket is up, as for video, with a spinner until then. The frame shows as soon as it has a
+  URL, not on `load` — a page waiting on one slow asset may be readable
+  already. Until the load the app started finishes, ↻ spins, and stays
+  pressable: a page stuck on an asset that never arrives is the one to reload.
+- **Never reloaded behind the user's back.** The frame keeps the URL it loaded
+  with. A capability renewed elsewhere (the shared cache, a stale one renewed
+  by another reader) waits for the next load the app starts: ↻, a rewrite,
+  Retry, or a remount. The exception is a worktree switch, when the capability
+  is replaced because it may serve the worktree left. ↻ starts over from the
+  entry page on a capability that will last: a frame's location cannot be read
+  across origins, so the page the user navigated to cannot be reloaded.
+- **A rewrite reloads it.** When the description refetched after an FS-watch
+  change really differs — the text, or for a page too large to send its size —
+  the page loads again. The description is invalidated on every reconnect too,
+  and reloading then would throw away the user's place for nothing, so an
+  identical one does not. A change to an asset alone is not watched; ↻ covers
+  it. A commit never changes.
+- **Each app load is a navigation of the same frame.** Reload, a rewrite and
+  recovery set `src` on the `<iframe>` there is — even to the URL it already
+  has — so Back steps back through them as through a link followed inside the
+  page. Remounting the frame instead would leave entries Back steps onto
+  with nothing visible happening ([media-viewer.md](media-viewer.md#history)).
+  Retry from a failure card is the one load
+  in a new frame, since the card had replaced the old one.
+- **Expiry.** An iframe reports no errors, so after each load the app started
+  the page's URL is probed with one byte (`lib/rawProbe.ts`, the probe video
+  uses). `capability_not_found` is renewed once, silently; dying again within
+  `RECOVERY_WINDOW_MS` shows "Couldn't load page" with Retry, which asks for a
+  new capability. `not_found` shows "File not found". The card replaces the
+  frame, and ↻ acts as Retry. Loads from navigation inside the page are the
+  page's own and are not probed: one that meets a dead capability shows the
+  server's JSON error inside the frame, and ↻ is the way out.
 
 ### Downloading
 

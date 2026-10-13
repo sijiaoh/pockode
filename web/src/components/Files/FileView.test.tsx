@@ -1,8 +1,16 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import {
+	act,
+	fireEvent,
+	render,
+	screen,
+	waitFor,
+	within,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { contentsQueryKey } from "../../hooks/useContents";
 import { LARGE_DOWNLOAD_WARNING_SIZE } from "../../lib/fileDownload";
 import {
 	reportEverythingInView,
@@ -25,11 +33,25 @@ vi.mock("../../lib/fileDownload", async (importOriginal) => ({
 	downloadFile: (...args: unknown[]) => downloadFile(...args),
 }));
 
-vi.mock("../../lib/wsStore", () => ({
-	useWSStore: (selector: (state: unknown) => unknown) =>
-		selector({ actions: { getFile, deleteFile: vi.fn(), renameFile } }),
-	isRPCTimeout: () => false,
-}));
+const rawCapability = vi.fn();
+
+vi.mock("../../lib/wsStore", () => {
+	// Built on each read: the factory is hoisted above the mocks it closes over.
+	const state = () => ({
+		status: "connected",
+		actions: { getFile, deleteFile: vi.fn(), renameFile },
+	});
+	return {
+		useWSStore: Object.assign(
+			(selector: (state: unknown) => unknown) => selector(state()),
+			{ getState: state },
+		),
+		wsActions: {
+			rawCapability: (...args: unknown[]) => rawCapability(...args),
+		},
+		isRPCTimeout: () => false,
+	};
+});
 
 vi.mock("@tanstack/react-router", () => ({
 	useNavigate: () => navigate,
@@ -92,7 +114,7 @@ async function renderFileView(file: FileContent, siblings: Entry[] = []) {
 	// Every case needs the fetch to have landed before it can assert anything,
 	// and the default 1s outruns a query round trip on a loaded machine.
 	await screen.findByRole("button", { name: /^Edit/ }, { timeout: 10_000 });
-	return result;
+	return { ...result, queryClient };
 }
 
 function editButton() {
@@ -250,6 +272,141 @@ describe("FileView", () => {
 
 		expect(screen.getByText("Empty file")).toBeInTheDocument();
 		expect(editButton()).toBeEnabled();
+	});
+
+	describe("HTML page", () => {
+		const page = (overrides: Partial<FileContent> = {}) =>
+			fileContent({
+				name: "index.html",
+				path: "site/index.html",
+				mime: "text/html; charset=utf-8",
+				content: "<h1>Hi</h1>",
+				size: 11,
+				...overrides,
+			});
+
+		beforeEach(() => {
+			reportEverythingInView();
+			let issued = 0;
+			rawCapability.mockReset();
+			rawCapability.mockImplementation(async () => ({
+				path: `/api/raw/cap${++issued}/`,
+				expiresAt: Date.now() + 60 * 60 * 1000,
+			}));
+			vi.stubGlobal(
+				"fetch",
+				vi.fn(async () => new Response("x", { status: 206 })),
+			);
+		});
+
+		function frame() {
+			return screen.findByTitle<HTMLIFrameElement>("index.html");
+		}
+
+		it("opens rendered, with its source a toggle away and still editable", async () => {
+			await renderFileView(page());
+
+			const element = await frame();
+			expect(element.tagName).toBe("IFRAME");
+			expect(element).toHaveAttribute("sandbox");
+			expect(screen.queryByText("<h1>Hi</h1>")).not.toBeInTheDocument();
+			expect(editButton()).toBeEnabled();
+
+			await userEvent.click(
+				screen.getByRole("button", { name: "Show source" }),
+			);
+			expect(screen.getByText("<h1>Hi</h1>")).toBeInTheDocument();
+			expect(screen.queryByTitle("index.html")).not.toBeInTheDocument();
+			expect(editButton()).toBeEnabled();
+			expect(screen.getByRole("button", { name: "Show page" })).toHaveAttribute(
+				"aria-pressed",
+				"true",
+			);
+		});
+
+		it("places the toggle after Download and before Delete", async () => {
+			await renderFileView(page());
+
+			const labels = screen
+				.getAllByRole("button")
+				.map((button) => button.getAttribute("aria-label"))
+				.filter((label): label is string =>
+					["Download", "Show source", "Delete"].includes(label ?? ""),
+				);
+			expect(labels).toEqual(["Download", "Show source", "Delete"]);
+		});
+
+		it("renders a page too large to send, with editing disabled", async () => {
+			await renderFileView(
+				page({
+					encoding: "none",
+					omitted: "too_large",
+					content: "",
+					size: 5 * 1024 * 1024,
+					limit: 2 * 1024 * 1024,
+				}),
+			);
+
+			await frame();
+			expect(editButton()).toBeDisabled();
+			await userEvent.click(
+				screen.getByRole("button", { name: "Show source" }),
+			);
+			expect(
+				screen.getByText("File is too large to preview"),
+			).toBeInTheDocument();
+		});
+
+		it("reloads the page when it is rewritten, not when it is only fetched again", async () => {
+			const { queryClient } = await renderFileView(page());
+			const element = await frame();
+			// Each load the app starts is checked once it lands, and a load from
+			// anything else is not: the probe count says which this was.
+			const probes = vi.mocked(fetch);
+			fireEvent.load(element);
+			await waitFor(() => expect(probes).toHaveBeenCalledTimes(1));
+
+			await act(() =>
+				queryClient.invalidateQueries({
+					queryKey: contentsQueryKey(page().path),
+				}),
+			);
+			expect(getFile).toHaveBeenCalledTimes(2);
+			fireEvent.load(element);
+			await act(async () => {});
+			expect(probes).toHaveBeenCalledTimes(1);
+
+			getFile.mockImplementation(async () => ({
+				type: "file",
+				file: page({ content: "<h1>Bye</h1>", size: 12 }),
+			}));
+			await act(() =>
+				queryClient.invalidateQueries({
+					queryKey: contentsQueryKey(page().path),
+				}),
+			);
+			// Until the reload has its capability, a load is the old one's.
+			await waitFor(() => {
+				fireEvent.load(element);
+				expect(probes).toHaveBeenCalledTimes(2);
+			});
+			expect(await frame()).toBe(element);
+		});
+
+		it("does not carry a page's source view over to text that is not a page", async () => {
+			const { rerender } = await renderFileView(page());
+			await userEvent.click(
+				screen.getByRole("button", { name: "Show source" }),
+			);
+
+			const text = fileContent({ content: "const a = 1;" });
+			getFile.mockImplementation(async () => ({ type: "file", file: text }));
+			rerender(<FileView path={text.path} onBack={vi.fn()} />);
+			expect(await screen.findByText("const a = 1;")).toBeInTheDocument();
+			expect(
+				screen.queryByRole("button", { name: /Show (source|page)/ }),
+			).not.toBeInTheDocument();
+		});
 	});
 
 	it("warns that a large text file is shown unhighlighted", async () => {

@@ -10,6 +10,8 @@ const loaders: Record<MediaKind, () => Promise<StageComponent>> = {
 		import("./ImageStage").then((module) => module.default as StageComponent),
 	video: () =>
 		import("./VideoStage").then((module) => module.default as StageComponent),
+	html: () =>
+		import("./HtmlStage").then((module) => module.default as StageComponent),
 };
 
 const loaded = new Map<MediaKind, StageComponent>();

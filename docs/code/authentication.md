@@ -330,21 +330,53 @@ that the path is now a secret. The relay proxy's error log masks it
 (`apiroute.LoggablePath`), and `Referrer-Policy: no-referrer` keeps it out of
 the `Referer` of anything the page loads from elsewhere.
 
-**Scope is least privilege, because the page can read its own URL.** A
+**Scope is least privilege, because the page can read its own URL — and,
+through CORS (below), what it reaches.** A
 previewed page's scripts can read `location`, capability included, and send it
-anywhere. So a capability reaches as little as its use needs:
+anywhere. They can also fetch every file the capability reaches and send the
+bytes out, which matters even where the URL alone would not: a server kept to
+its LAN is out of reach of whoever receives the URL, but not of the page
+running inside it. So a capability reaches as little as its use needs:
 
-- **One file** for a video, a sound or a standalone page. A request for any
-  other name is refused with `403 outside_scope`.
-- **One directory and everything beneath it** for a page that loads relative
-  assets: the page's own directory. A directory scope is never the root of the
-  work directory or the commit. At the root it would reach the project's
-  `.env`, its `.git` and, by default, Pockode's own data directory: every
-  session, every chat transcript. The price is that a page at the root of a
-  project gets only a file scope, so its relative assets do not load. That is
-  accepted.
+- **One file** for a video, a sound, or a page its directory may not be
+  granted for (below). A request for any other name is refused with `403 outside_scope`.
+- **One directory and everything beneath it, dotfiles excepted** for an HTML
+  page: the page's own directory. The page is opened as
+  `<capability>/<name>`, so its relative stylesheets, scripts and images
+  resolve against the capability's path ([file.md](../file.md#html-pages)). A directory scope is
+  never the root of the work directory or the commit. At the root it would
+  reach the project's `.env`, its `.git` and, by default, Pockode's own data
+  directory: every session, every chat transcript.
 - An attachment is always one file. An attachment store is flat, not a tree of
   files that refer to each other.
+
+**A directory scope never reaches a dot component**, above it or beneath it
+(`filetransfer.RawScopeDirectory`). A page usually sits beside the `.env` of
+the app it belongs to, and a page inside `.git` or `.pockode` would hand its
+scripts the repository or Pockode's own data. So the rule is checked twice:
+
+- **At issue.** A directory whose cleaned path has any component starting
+  with `.` — `.pockode`, `docs/.vitepress`, `site/../.pockode` — is refused as
+  `InvalidParams`, as the root is.
+- **At each request.** A path beneath a directory scope with such a component
+  — `.env`, `sub/.git/config`, `%2eenv` once decoded, and `sub/./x` too, which
+  no browser sends — is `403 outside_scope`. For a work-directory file it is
+  asked again of the name the file system resolved the open file to, from the
+  work directory down, scope included: on Windows an 8.3 short name such as
+  `ENV~1` is another spelling of `.env`, and `GIT~1` of `.git`
+  (`resolvedName`, `server/filetransfer/realname_windows.go`; a no-op
+  elsewhere). A name that
+  cannot be resolved is refused the same way, with the host path kept in the
+  log, since the error body is readable by the page. A volume whose file
+  system cannot report the name refuses every directory scope on it; the app
+  then loads each page on its own, as below.
+
+A dotfile the user opens on purpose still gets a file scope of its own, and a
+page that is itself a dotfile or sits under a dot directory gets only that.
+The price is that such a page's relative assets do not load, as for a page at
+the root of a project — a build output inside a dot directory
+(`docs/.vitepress/dist`, `.output/public`) is one. That is accepted; the app
+says so above the page ([file.md](../file.md#html-pages)).
 
 **Symlinks cannot widen a scope.** This is stricter than the rest of the file
 surface, which [does not resolve symlinks](#accepted-limitations). The
@@ -356,19 +388,31 @@ follows a link that stays inside it: `site -> .` would otherwise turn a
 directory scope into the work directory itself. A Windows junction is refused
 the same way. A file scope is held to the work directory rather than the file's
 own directory, so a file that is itself a link elsewhere in the project still
-opens: that file is what the user opened. A link swapped in between the `Lstat`
+opens: that file is what the user opened. A page whose directory is a link,
+or lies under one, is shown on a file scope instead: the app cannot tell from
+the path, so it falls back once a request answers `outside_scope`
+([file.md](../file.md#html-pages)). A link swapped in between the `Lstat`
 and the open is not caught. Doing that takes write access to the work
 directory, which is already more than any capability grants. A commit needs
 none of this: git looks a path up in the tree without following links.
 
-**Every response carries the same four headers, errors included:**
+The dotfile rule is on names, not on what a link leads to. A link inside a
+directory scope with a plain name that leads to a dotfile also inside it
+(`site/env -> .env`) is served on darwin and linux, as anything a link inside
+the scope leads to is; on Windows the resolved name is the target's, so it is
+refused. Making such a link takes write access to the work directory, as
+above.
+
+**Every response carries the same six headers, errors included:**
 
 | Header | Why |
 |---|---|
-| `Content-Security-Policy: sandbox allow-scripts allow-popups` | Content is served as what it is (`text/html` included), on the app's own origin. The sandbox gives a document opened from here an opaque origin, whether it is framed or opened top-level, so its scripts cannot reach the app's `localStorage` and the session token in it. `allow-scripts` and `allow-popups` are what a previewed page needs to run and to open its links; `allow-same-origin` is the one flag that must never be added |
+| `Content-Security-Policy: sandbox allow-scripts allow-popups allow-popups-to-escape-sandbox` | Content is served as what it is (`text/html` included), on the app's own origin. The sandbox gives a document opened from here an opaque origin, whether it is framed or opened top-level, so its scripts cannot reach the app's `localStorage` and the session token in it. `allow-scripts` and `allow-popups` are what a previewed page needs to run and to open its links, and `allow-popups-to-escape-sandbox` lets a link opened in a new tab be a normal page there, as from an agent's page in chat — one that opens `/api/raw` again is sandboxed by its own response; `allow-same-origin` is the one flag that must never be added |
 | `X-Content-Type-Options: nosniff` | The browser takes the server's type and does not guess another. Without it, a file the server named harmlessly could be rendered as something else |
 | `Referrer-Policy: no-referrer` | The capability is in the URL; see above |
 | `Cache-Control: private, no-cache` | The content is the user's, and a work-directory file changes under the same URL whenever the agent edits it. Revalidation is what tells |
+| `Access-Control-Allow-Origin: *` | A sandboxed page loads its module scripts, fonts and `fetch()`es in CORS mode from an opaque origin; see below. On errors too, or a page's `fetch()` sees a network failure rather than the status |
+| `Access-Control-Expose-Headers: Accept-Ranges, Content-Range, ETag` | What a page's ranged reader (pdf.js, a video or wasm loader) needs to learn a size and revalidate, beyond the safelisted headers |
 
 A response without the sandbox is a document that runs in the app's origin, so
 "every response" is enforced in two places rather than trusted to each code
@@ -383,6 +427,34 @@ The sandbox does not stop a page from making requests: it can still fetch any
 other origin and send what it read, which is the reason for the narrow scope
 above. Previewing a page means running its scripts. What the sandbox ensures is
 that those scripts run as nobody in particular, not as the logged-in app.
+
+**Any origin may read; none with credentials.** The sandbox's opaque origin (`Origin: null`) is cross-origin even to the server
+that served the page, so a page's `<script type="module">`, its `@font-face`
+and any `fetch()` of its own assets are CORS requests to its own capability.
+Without CORS a page's external module scripts do not load at all. So every response allows any
+origin, and none allows credentials: there is no
+`Access-Control-Allow-Credentials`, and the endpoint reads no cookie or
+`Authorization` header anyway. The capability that authorizes a read is in the
+URL, so a caller from any origin can read only what anyone holding the URL
+could already fetch with a plain GET. What it does add — the page's script
+reading the bytes rather than only the URL — is why the scope is held to least
+privilege above.
+
+A **preflight** (`OPTIONS` on any `/api/raw` path) is answered `204` before any
+capability check: it reads nothing, so there is nothing for a capability to
+authorize, and a dead one is reported by the request that follows. It allows
+`GET, HEAD, OPTIONS` (also its `Allow`) and echoes back whatever `Access-Control-Request-Headers` asked for, with
+`Vary: Access-Control-Request-Headers` and a one-day `Access-Control-Max-Age`.
+Echoing is safe for the same reason: with no credentials and only reads
+served, a request header can change nothing but what the page's own library
+gets back — a multi-range `Range`, say, which is not safelisted. Any other
+method is `405` (`file.md`'s [transfer table](../file.md#transfer)).
+
+In development the Vite dev server's own CORS middleware is off
+(`server.cors: false` in `web/vite.config.ts`): it runs ahead of the `/api`
+proxy and would answer every preflight itself, so a page's preflighted `fetch()`
+would fail in dev alone. Off, the backend owns this policy in dev as on the
+relay and in production.
 
 **Rejected alternatives**, recorded so they are not proposed again without a
 new argument:
@@ -568,7 +640,7 @@ model (e.g. multi-user hosting) revisits them rather than rediscovering them:
 | Port preview login (password & ticket) & cookie | `server/relay/preview_auth.go` |
 | Preview ticket issue | `server/ws/rpc_port_preview.go` |
 | Raw capability issue | `server/ws/rpc_raw.go` |
-| Raw endpoint: scope, path safety, response headers | `server/filetransfer/raw.go` |
+| Raw endpoint: scope, path safety, CORS and response headers | `server/filetransfer/raw.go`; resolved names for the dotfile rule in `realname_{unix,windows}.go` |
 | Raw endpoint routed ahead of auth; capability masked in logs | `server/main.go` (`newHandler`), `server/apiroute/`, `server/relay/proxy.go` |
 | Wire types and refusal reasons | `server/rpc/types.go` |
 | Frontend credential store | `packages/shared/src/stores/createAuthStore.ts`, `packages/shared/src/utils/auth.ts` |

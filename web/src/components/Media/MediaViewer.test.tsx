@@ -5,7 +5,7 @@ import {
 	createRouter,
 	RouterProvider,
 } from "@tanstack/react-router";
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -56,7 +56,11 @@ const video: VideoMediaItem = {
 	duration: 42,
 };
 
-function setup(openInFiles?: () => void, shown: MediaItem = item) {
+function setup(
+	openInFiles?: () => void,
+	shown: MediaItem = item,
+	afterClose?: () => void,
+) {
 	const history = createMemoryHistory({ initialEntries: ["/chat"] });
 	function Root() {
 		const [open, setOpen] = useState(true);
@@ -65,6 +69,7 @@ function setup(openInFiles?: () => void, shown: MediaItem = item) {
 				item={shown}
 				openInFiles={openInFiles}
 				onClose={() => setOpen(false)}
+				afterClose={afterClose}
 			/>
 		) : (
 			<p>closed</p>
@@ -123,6 +128,33 @@ describe("MediaViewer", () => {
 		await waitFor(() => expect(statesAtOpen).toHaveLength(1));
 		expect(statesAtOpen[0]).not.toHaveProperty("fullScreen");
 		expect(screen.getByText("closed")).toBeInTheDocument();
+	});
+
+	it("tells the host once its history entry is gone, however it closed", async () => {
+		const user = userEvent.setup();
+		const states: unknown[] = [];
+		const { history } = setup(undefined, item, () =>
+			states.push(history.location.state),
+		);
+		await waitFor(() =>
+			expect(history.location.state).toHaveProperty("fullScreen"),
+		);
+
+		await user.click(screen.getByRole("button", { name: "Close" }));
+		await waitFor(() => expect(states).toHaveLength(1));
+		expect(states[0]).not.toHaveProperty("fullScreen");
+	});
+
+	it("tells the host after a Back closed it", async () => {
+		const afterClose = vi.fn();
+		const { history } = setup(undefined, item, afterClose);
+		await waitFor(() =>
+			expect(history.location.state).toHaveProperty("fullScreen"),
+		);
+
+		act(() => history.back());
+		await screen.findByText("closed");
+		expect(afterClose).toHaveBeenCalledOnce();
 	});
 
 	it("saves the bytes under the item's file name", async () => {

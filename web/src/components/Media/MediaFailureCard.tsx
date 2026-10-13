@@ -1,11 +1,12 @@
-import { FileQuestion, VideoOff, VolumeX } from "lucide-react";
+import { FileQuestion, FileWarning, VideoOff, VolumeX } from "lucide-react";
 import { formatBytes } from "../../utils/bytes";
 import { getMimeType, type PlayableKind } from "../../utils/fileView";
 import { FileStateCard } from "../ui";
 import type { MediaFailure } from "./useMediaPlayback";
 
 interface Props {
-	kind: PlayableKind;
+	/** A page fails only to load: whatever a served page draws is its own. */
+	kind: PlayableKind | "page";
 	failure: MediaFailure;
 	mime: string;
 	size: number;
@@ -18,8 +19,8 @@ interface Props {
 }
 
 /**
- * What stands in for audio or video that would not play, said the same way in
- * the in-place preview and the full-screen viewer.
+ * What stands in for audio, video or a page that would not play or load, said
+ * the same way in the in-place preview and the full-screen viewer.
  */
 export function MediaFailureCard({
 	kind,
@@ -29,12 +30,11 @@ export function MediaFailureCard({
 	onRetry,
 	downloadAction,
 }: Props) {
-	const noun = kind === "video" ? "video" : "audio";
 	const details = [
 		{ label: "Type", value: getMimeType(mime) },
 		{ label: "Size", value: formatBytes(size) },
 	];
-	const icon = kind === "video" ? VideoOff : VolumeX;
+	const icon = { video: VideoOff, audio: VolumeX, page: FileWarning }[kind];
 
 	switch (failure.kind) {
 		case "unplayable":
@@ -67,7 +67,7 @@ export function MediaFailureCard({
 				<FileStateCard
 					icon={icon}
 					iconClassName="text-th-error"
-					title={`Couldn't load ${noun}`}
+					title={`Couldn't load ${kind}`}
 					description={failure.error.message}
 					details={details}
 					action={{ label: "Retry", onClick: onRetry }}

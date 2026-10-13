@@ -11,6 +11,7 @@ import {
 	formatMediaCaption,
 } from "../../utils/fileView";
 import { FileStateCard, headerButtonClass, Sheet, Spinner } from "../ui";
+import PageNotice from "./PageNotice";
 import { loadedStage, loadStage } from "./stages";
 import type {
 	MediaItem,
@@ -28,6 +29,13 @@ export interface MediaViewerProps {
 	 */
 	openInFiles?: () => void;
 	onClose: () => void;
+	/**
+	 * Runs once the viewer has closed — by any of the viewer's own ways — and
+	 * its history entry is gone, for an opener that must not change the history
+	 * under it before then: a navigation it makes then would be undone, or
+	 * stepped over, by the Back that takes the entry.
+	 */
+	afterClose?: () => void;
 }
 
 type StageState =
@@ -78,7 +86,11 @@ function useStage(kind: MediaKind) {
 }
 
 function caption(item: MediaItem, loaded: MediaMetadata | null): string {
-	const dimensions = loaded ? loaded.dimensions : item.dimensions;
+	const dimensions = loaded
+		? loaded.dimensions
+		: item.kind === "html"
+			? undefined
+			: item.dimensions;
 	if (item.kind === "image" && item.source.kind === "external") {
 		return formatExternalImageCaption(item.source.url, dimensions);
 	}
@@ -96,11 +108,14 @@ function caption(item: MediaItem, loaded: MediaMetadata | null): string {
  * Saves the item under `saveAs`. An image's bytes are read whole — usually a
  * cache hit on what the `<img>` already read. A video goes to disk straight
  * from its capability as it arrives: a long recording does not belong in a
- * Blob.
+ * Blob. A page is saved from the URL its stage loaded it from, under the
+ * directory capability it already holds, rather than a second capability for
+ * the file alone; only the `.html`, not its assets.
  */
 async function saveItem(
 	queryClient: ReturnType<typeof useQueryClient>,
 	item: MediaItem,
+	stageUrl: string | null,
 ): Promise<void> {
 	switch (item.kind) {
 		case "image":
@@ -108,6 +123,10 @@ async function saveItem(
 			return;
 		case "video":
 			saveUrl(await rawMediaUrl(queryClient, item.origin), item.saveAs);
+			return;
+		case "html":
+			if (!stageUrl) throw new Error("the page has not loaded");
+			saveUrl(stageUrl, item.saveAs);
 			return;
 	}
 }
@@ -121,14 +140,34 @@ async function saveItem(
  * the focus trap and closing when covered. Never open one from inside another
  * sheet: both listen for Escape on `document`, and one press would close both.
  */
-export function MediaViewer({ item, openInFiles, onClose }: MediaViewerProps) {
+export function MediaViewer({
+	item,
+	openInFiles,
+	onClose,
+	afterClose,
+}: MediaViewerProps) {
 	const queryClient = useQueryClient();
 	/** Run once the viewer's history entry is gone; see `useBackToClose`. */
 	const afterCloseRef = useRef<(() => void) | null>(null);
-	useBackToClose(onClose, afterCloseRef);
+	// Set as the viewer closes rather than ahead of time: `useBackToClose` runs
+	// and clears it at any unmount, StrictMode's rehearsal included.
+	const closeThen = (then?: () => void) => {
+		afterCloseRef.current =
+			afterClose || then
+				? () => {
+						afterClose?.();
+						then?.();
+					}
+				: null;
+		onClose();
+	};
+	// What the sheet gets: its backdrop passes the click on as an argument.
+	const close = () => closeThen();
+	useBackToClose(close, afterCloseRef);
 
 	const frameRef = useRef<HTMLElement>(null);
 	const keysRef = useRef<StageKeyHandler | null>(null);
+	const saveUrlRef = useRef<string | null>(null);
 	const [toolbarStart, setToolbarStart] = useState<HTMLElement | null>(null);
 	const [loaded, setLoaded] = useState<MediaMetadata | null>(null);
 	const [saveError, setSaveError] = useState<string | null>(null);
@@ -144,7 +183,7 @@ export function MediaViewer({ item, openInFiles, onClose }: MediaViewerProps) {
 	const save = async () => {
 		setSaveError(null);
 		try {
-			await saveItem(queryClient, item);
+			await saveItem(queryClient, item, saveUrlRef.current);
 		} catch (err) {
 			setSaveError(`Couldn't save ${item.name}: ${errorMessage(err)}`);
 		}
@@ -152,12 +191,7 @@ export function MediaViewer({ item, openInFiles, onClose }: MediaViewerProps) {
 
 	// Navigating lands after the history entry is gone, or the Back that takes
 	// it would undo the navigation.
-	const openFiles =
-		openInFiles &&
-		(() => {
-			afterCloseRef.current = openInFiles;
-			onClose();
-		});
+	const openFiles = openInFiles && (() => closeThen(openInFiles));
 
 	return (
 		<Sheet
@@ -167,7 +201,7 @@ export function MediaViewer({ item, openInFiles, onClose }: MediaViewerProps) {
 					{caption(item, loaded)}
 				</div>
 			}
-			onClose={onClose}
+			onClose={close}
 			fullScreen
 			initialFocusRef={frameRef}
 		>
@@ -215,6 +249,9 @@ export function MediaViewer({ item, openInFiles, onClose }: MediaViewerProps) {
 						)}
 					</div>
 				</div>
+				{item.kind === "html" && item.notice && (
+					<PageNotice isolation={item.notice} origin={item.origin.kind} />
+				)}
 				{saveError && (
 					<div
 						role="alert"
@@ -245,6 +282,7 @@ export function MediaViewer({ item, openInFiles, onClose }: MediaViewerProps) {
 							toolbarStart={toolbarStart}
 							keysRef={keysRef}
 							onMetadata={setLoaded}
+							saveUrlRef={saveUrlRef}
 						/>
 					)}
 					{stage.status === "loading" && (
@@ -257,7 +295,7 @@ export function MediaViewer({ item, openInFiles, onClose }: MediaViewerProps) {
 							<FileStateCard
 								icon={CircleAlert}
 								iconClassName="text-th-error"
-								title={`Couldn't load the ${item.kind} viewer`}
+								title={`Couldn't load the ${item.kind === "html" ? "page" : item.kind} viewer`}
 								description={errorMessage(stage.error)}
 								action={{ label: "Retry", onClick: retry }}
 							/>

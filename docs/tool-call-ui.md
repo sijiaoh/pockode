@@ -1947,12 +1947,15 @@ again refocuses it and selects the query.
   Home / End scroll at once.
 - **Closing**: ✕, Escape, the **back gesture** — Android's back, iOS's edge
   swipe, the browser's Back — or the key going away. Back-to-close is
-  `useBackToClose` (`web/src/hooks/`), used only here: the viewer pushes a
+  `useBackToClose` (`web/src/hooks/`), shared with the media viewer: the viewer pushes a
   same-href entry through the router's own history (never a raw `pushState`,
   which would bypass TanStack's index and state) and closes on its `BACK` / `GO`
   notification. Every other close takes that entry back, once, but only if it is
   still the current one, so a page opened over the chat keeps its own entry, at
-  the cost of one later Back that changes nothing on screen. A file row's *Open*
+  the cost of one later Back that changes nothing on screen. It goes back with
+  the Navigation API's `back()` where the browser has it, which skips the
+  entries an `<iframe>` inside left behind
+  ([media-viewer.md](media-viewer.md#history)). A file row's *Open*
   closes the viewer first and navigates only once that entry is gone, or the
   Back would undo it.
 - **The transcript is where it was.** The page is scroll-locked under the sheet

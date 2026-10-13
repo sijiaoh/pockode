@@ -85,7 +85,8 @@ A param that belongs to another origin is refused with `CodeInvalidParams`, not
 ignored: a `worktree` sent with a `file` origin would otherwise read the
 connection's worktree while the client believed it had chosen another. So are an
 unknown origin or scope, a missing `session_id`, a path that is not local, a
-directory scope at the root, a malformed, unknown, ambiguous or non-commit
+directory scope at the root or one that is or lies within a dot directory
+([why](authentication.md#raw-capabilities-urls-a-browser-element-loads-by-itself)), a malformed, unknown, ambiguous or non-commit
 `hash`, and an attachment `worktree` that cannot be a worktree's name; the
 message says which. A `commit` origin outside a git repository gets
 `CodeNotGitRepo`. A connection whose session has ended gets the `auth`
