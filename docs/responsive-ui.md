@@ -697,19 +697,20 @@ noticed. One representation with a test on it is the only thing that ends that.
      paste the expected side of its diff. Do not edit by hand. -->
 
 ```text
-43 controls render text, state no height of their own and carry no touch-target.
+44 controls render text, state no height of their own and carry no touch-target.
 
 28 state their own font size, so the height below is exact: 16–40px.
-15 inherit it, so the height below is an upper bound — the ancestor that
+16 inherit it, so the height below is an upper bound — the ancestor that
   sets it may well set a smaller one: 24–48px.
 
-4 are under the 36px fine-pointer floor.
+5 are under the 36px fine-pointer floor.
 3 reach the 44px coarse floor, 0 of them on a read height.
 0 state type this scan cannot read, listed as 0px and `unread`.
 
   16px  exact  web/src/components/Project/WorkDetailOverlay.tsx
   20px  exact  web/src/components/Worktree/WorktreeCreateSheet.tsx
   24px  bound  web/src/components/Settings/sections/AppearanceSections.tsx
+  24px  bound  web/src/components/ui/MarkdownContent.tsx
   28px  bound  web/src/components/Chat/MessageItem.tsx
   36px  exact  packages/shared/src/components/ConfirmDialog.tsx ×2
   36px  exact  web/src/components/AppShell.tsx ×2

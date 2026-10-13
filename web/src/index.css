@@ -1143,9 +1143,10 @@ samp {
 	--async-media-height: 12rem;
 }
 
-/* Mermaid arrives in two async steps — the lazy chunk, then mermaid.render() —
- * and ends as a diagram far taller than a line of text. Both waiting states hold
- * this box so the diagram does not arrive out of a single line. */
+/* Mermaid arrives in async steps — the lazy chunk, the frame starting, then the
+ * render, and the last two again after a Load of the diagram's images — and ends
+ * as a diagram far taller than a line of text. Every waiting state holds this
+ * box so the diagram does not arrive out of a single line. */
 .mermaid-placeholder {
 	display: flex;
 	align-items: center;
@@ -1158,6 +1159,12 @@ samp {
  * takes back typography's `img { margin: 1.714em 0 }`. The paragraph around it
  * is what spaces it from the rest of the message. */
 .markdown-image img {
+	margin: 0;
+}
+
+/* Takes back typography's `figure` margins: the `.markdown-block` around a
+ * diagram already spaces it. */
+.mermaid-diagram {
 	margin: 0;
 }
 

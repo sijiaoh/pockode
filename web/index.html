@@ -3,6 +3,10 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, interactive-widget=resizes-content" />
+    <!-- A page served over plain http (a LAN address) would otherwise resolve
+         the host of every link an agent writes before anyone taps it:
+         docs/markdown-images-ui.md#external-images-wait-for-the-reader -->
+    <meta http-equiv="x-dns-prefetch-control" content="off" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />

@@ -967,10 +967,13 @@ that covers half of one problem and adds a coordination problem is not a saving.
   was just opened upward — off the top of the screen, if the body is tall enough.
   Holding the pressed header still instead would be a third state, "read the tail
   except over this element", for something the reader undoes with one scroll.
-- **A mermaid diagram still jumps once**, from its reserved box to whatever size
-  it renders at. Removing the jump would mean scaling every diagram into a fixed
-  frame, which spends the readability of large diagrams — the thing they are
-  there for — on a scroll-position detail. The invariant absorbs it: the reader
+- **A mermaid diagram still jumps when it draws**, from its reserved box to
+  whatever size it renders at — and again when the reader loads its images,
+  which draws it in a new frame
+  ([markdown-images-ui.md](markdown-images-ui.md#diagrams-draw-in-a-sealed-frame)).
+  Removing the jump would mean scaling every diagram into a fixed frame, which
+  spends the readability of large diagrams — the thing they are there for — on
+  a scroll-position detail. The invariant absorbs it: the reader
   keeps their place, and what is on the far side of the diagram from them simply
   moves.
 - **The first layout of a session opens at the tail, whatever was asked for.** A
