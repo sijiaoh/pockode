@@ -1,11 +1,28 @@
 import type { AttachmentSource, FileBlock } from "../types/content";
 import type { OmitReason } from "../types/contents";
 import { formatBytes } from "./bytes";
-import { formatMimeLabel, isImageMime } from "./fileView";
+import {
+	formatMimeLabel,
+	getPlayableKind,
+	isImageMime,
+	type PlayableKind,
+} from "./fileView";
 import { relativeToWorkDir, splitNativePath } from "./path";
 
 export function isImageBlock(file: FileBlock): boolean {
 	return isImageMime(file.mime);
+}
+
+export type AttachmentKind = "image" | PlayableKind | "file";
+
+/**
+ * What a file's media type says it is — the agent's for a block, the browser's
+ * for a file picked in the composer — which picks its entry in the strip or
+ * the composer, and the icon it gets when there is nothing of it to show.
+ */
+export function attachmentKind(mime: string): AttachmentKind {
+	if (isImageMime(mime)) return "image";
+	return getPlayableKind(mime) ?? "file";
 }
 
 /**

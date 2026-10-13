@@ -86,6 +86,20 @@ func TestResolveAttachments(t *testing.T) {
 		t.Errorf("path = %q, want the stored file %q", got[1].Path, want)
 	}
 
+	// A voice memo is an MP4 the sniffer calls video; only the extension the id
+	// carried over from the upload says it is audio.
+	memoID, err := store.Put([]byte("\x00\x00\x00\x1cftypM4A \x00\x00\x00\x00M4A isommp42\x00\x00\x00\x00"), attachments.UploadExtension("Memo.M4A"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	memo, err := ResolveAttachments(log, dataDir, "sess", []AttachmentRef{{ID: memoID, Name: "Memo.M4A"}})
+	if err != nil {
+		t.Fatalf("ResolveAttachments: %v", err)
+	}
+	if memo[0].File.MIME != "audio/mp4" {
+		t.Errorf("voice memo described as %q, want audio/mp4", memo[0].File.MIME)
+	}
+
 	// One id the session does not have refuses the whole message.
 	_, err = ResolveAttachments(log, dataDir, "sess", []AttachmentRef{{ID: imageID}, {ID: "nope"}})
 	if !errors.Is(err, ErrAttachmentNotFound) {

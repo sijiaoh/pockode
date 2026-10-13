@@ -866,7 +866,9 @@ is megabytes and the WebSocket carries one message at a time:
    answers with its id ([file.md](../file.md#transfer)). The id keeps the
    original extension (`attachments.UploadExtension`): unlike content an agent
    delivered, these are read back by the agent's own tools, and claude's Read
-   decides by extension whether a file is a PDF or an image.
+   decides by extension whether a file is a PDF or an image. The read side
+   needs it too: a voice memo's container sniffs as video, and only its `.m4a`
+   says it is audio ([file.md](../file.md#operations)).
 2. `chat.message` names them in `attachments: [{id, name}]`. The handler
    resolves every id inside that session's directory before anything is sent
    (`chat.ResolveAttachments` — an id is a bare name, never a path) and

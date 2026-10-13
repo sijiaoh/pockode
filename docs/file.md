@@ -35,7 +35,7 @@ served through it; it is addressed by id in the session's own attachment store
 | Search UI state | `web/src/hooks/useFileSearch.ts`, `web/src/lib/filesSearchStore.ts` | Debounce + query cache, persisted options |
 | RPC actions | `web/src/lib/rpc/file.ts` | `getFile`, `writeFile`, `createFile`, `deleteFile`, `renameFile`, `searchFiles`, `isAlreadyExistsError` |
 | HTTP transfer client | `web/src/lib/fileDownload.ts`, `web/src/lib/fileUpload.ts` | Authenticated download / upload (see [Downloading](#downloading), [Uploading](#uploading)) |
-| Media playback | `web/src/components/Files/MediaPreview.tsx`, `web/src/components/Media/useMediaPlayback.ts`, `web/src/hooks/useRawMediaSource.ts` | Inline audio and video streamed from a raw capability, and its recovery (see [Playing audio and video](#playing-audio-and-video)) |
+| Media playback | `web/src/components/Files/MediaPreview.tsx`, `web/src/components/Media/useMediaPlayback.ts`, `web/src/hooks/useRawMediaSource.ts`, `web/src/components/Media/exclusivePlayback.ts` | Inline audio and video streamed from a raw capability, its recovery, and one sound at a time (see [Playing audio and video](#playing-audio-and-video)) |
 | Download action | `web/src/hooks/useFileDownload.ts`, `web/src/components/Files/FileDownloadControls.tsx` | The viewer's Download — cancel, large-file confirmation, error — shared by `FileView` and `CommitFileView` |
 | Upload queue state | `web/src/lib/uploadStore.ts` | Queue, concurrency, retry, worktree scope |
 | Drag and drop | `web/src/hooks/useFileDragZone.ts`, `web/src/components/Files/useFileDrop.ts`, `web/src/hooks/useFileDropGuard.ts` | What every drop zone shares (file detection, the depth count, folder splitting, claiming the drag); the tree's drop target resolution on top of it; the window-level drop backstop |
@@ -121,12 +121,33 @@ because `text/html` is what makes the client render a file as a
 opens with prose rather than a tag, and text sniffed as HTML under any other
 name — a `.svelte` or `.vue` component opening with `<script>` — is taken as
 plain text, which the extension tables may still name (an `.svg` opening with
-`<!--` is `image/svg+xml`). SVG is the one image served as `text`, and so the
-one still held to the 2 MiB ceiling: it is source the user can edit, and the UI
-can render it from the text just as well. It is also a security boundary rather
-than a preference — SVG can carry script, and its bytes fetched into a
-same-origin Blob would run as the app if opened on their own, where they can
-read the login token. Text rendered through an `<img>` never needs that Blob.
+`<!--` is `image/svg+xml`).
+
+The extension is also consulted inside a container that holds audio as readily
+as video, which the sniffer names by the container alone: an iPhone voice memo
+sniffs as `video/mp4`, a browser's voice recording as `video/webm`, an Opus
+note as `application/ogg`. The type is what decides which player a file gets —
+here, in the [media viewer](media-viewer.md) and in a chat attachment's
+strip — so a voice note typed by its container would open as a black video
+square, or as a plain file with no player at all. Inside one of those
+containers the extension picks — `.m4a` is `audio/mp4`, `.weba` `audio/webm`,
+`.ogg`/`.oga`/`.opus` `audio/ogg`, `.ogv` `video/ogg` — but only among what the content already is,
+so a PNG named `.m4a` is still a PNG and an MP4 named `.ogg` still an MP4. A
+browser recording is named `.webm` with or without a picture, so no extension
+can say which it is; there the track list in the file's first 512 bytes
+decides — those bytes and no more, however much of the file the caller holds,
+so a git blob read whole gets the answer a head-only read does — and one that
+lists audio and no video is `audio/webm`. A track list past them leaves the
+file video, as does an audio-only MP4 named `.mp4`: an MP4 states its tracks
+wherever its index sits, often at the end, so only its name could tell, and
+`.mp4` names video.
+
+SVG is the one image served as `text`, and so the one still held to the 2 MiB
+ceiling: it is source the user can edit, and the UI can render it from the text
+just as well. It is also a security boundary rather than a preference — SVG
+can carry script, and its bytes fetched into a same-origin Blob would run as
+the app if opened on their own, where they can read the login token. Text
+rendered through an `<img>` never needs that Blob.
 
 **`file.write`** — Write file content to disk with upsert semantics.
 - Creates the file if it doesn't exist
@@ -862,7 +883,11 @@ starts before the file has arrived, nothing is held whole, and there is no size
 ceiling. The machinery is `components/Media/useMediaPlayback.ts` over
 `hooks/useRawMediaSource.ts`, and the [media viewer](media-viewer.md)'s video
 stage plays through the same code, carrying on from the same second
-([Handover](media-viewer.md#handover)).
+([Handover](media-viewer.md#handover)). So does a chat attachment — an audio
+entry in place, a video thumbnail's poster — with the attachment as the
+capability's origin rather than a path
+([tool-call-ui.md](tool-call-ui.md#the-body-problems-2-and-3)): a voice note an
+agent was sent is no different, once streaming, from one opened in Files.
 
 - **Asked for when on screen, and connected.** As with an image, nothing is
   requested until the frame is in view. While the WebSocket is down the request
@@ -881,6 +906,8 @@ stage plays through the same code, carrying on from the same second
   the worktree the connection was on when it was issued, and the app's worktree
   moves before the connection does, so those are invalidated once a worktree
   switch has landed (`invalidateWorkspaceCapabilities`, from `queryClient.ts`).
+  An attachment's is keyed by the worktree its bytes are read from
+  (`useAttachmentOrigin`), so it is not among those.
 - **A new capability is the same content.** Whoever renewed it — this player
   recovering, another player of the file, a mount after it went stale — the
   element is put back at the second it was at, playing if the user had it
@@ -927,6 +954,16 @@ stage plays through the same code, carrying on from the same second
 - **Captioned** `MOV · 1080×1920 · 0:42 · 38.2 MB` (`formatMediaCaption`, the
   image's caption with a length); a length the file does not state, as a
   MediaRecorder `.webm`, is left out.
+- **One sound at a time.** Starting any player pauses whichever one was
+  sounding — this preview, the viewer's stage, a chat attachment's audio entry
+  (`components/Media/exclusivePlayback.ts`, claimed from `useMediaPlayback`'s
+  `play` handler, so every player takes part without opting in), and the
+  composer's audio entry, which plays a `blob:` outside that hook and claims
+  for itself. Two voice notes talking over each other is never what was meant,
+  nor one carrying on under a video just opened. What is told to stop is the
+  player, not its element, so one caught mid-swap of its capability does not
+  start again once the new one loads. A player off screen keeps playing, as in
+  any messenger; one that unmounts stops.
 
 There is no `canPlayType` pre-check: Chromium answers `""` for
 `video/quicktime` yet plays most H.264 `.mov` files, so the player always tries.

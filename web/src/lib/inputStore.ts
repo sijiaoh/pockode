@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import type { FileBlock } from "../types/content";
+import { type AttachmentKind, attachmentKind } from "../utils/attachment";
 import { formatBytes } from "../utils/bytes";
 import { isAbortError } from "./api";
 import { type ChatAttachment, uploadChatAttachment } from "./chatAttachments";
@@ -15,7 +16,12 @@ export interface DraftAttachment {
 	key: string;
 	name: string;
 	size: number;
-	/** A local `blob:` URL for an image, so the preview costs no round trip. */
+	/** From the file's media type, so the entry need not guess from its URL. */
+	kind: AttachmentKind;
+	/**
+	 * A local `blob:` URL for an image, a video or an audio file, so the
+	 * preview costs no round trip. Not a copy: a 500 MB video's costs nothing.
+	 */
 	previewUrl: string | null;
 	status: "uploading" | "ready" | "failed";
 	uploaded?: ChatAttachment;
@@ -93,26 +99,36 @@ export const attachmentActions = {
 		const maxSize = useWSStore.getState().maxAttachmentSize;
 		const added = files.map((file): DraftAttachment => {
 			const key = `attachment-${nextKey++}`;
+			const kind = attachmentKind(file.type);
 			// Refused here rather than by the server, so a photo too large to
 			// send is not uploaded in full only to be told so. No preview for it:
 			// a failed entry is drawn as a chip, so its blob URL would never be read.
 			if (maxSize > 0 && file.size > maxSize) {
+				// The file's own size beside the limit: a long screen recording
+				// is often several times over, and a bare "max" does not say by
+				// how much it has to shrink. Left out when it rounds to the
+				// limit, where it would read as no excess at all.
+				const over = formatBytes(file.size);
+				const limit = formatBytes(maxSize);
 				return {
 					key,
 					name: file.name,
 					size: file.size,
+					kind,
 					previewUrl: null,
 					status: "failed",
-					error: `Too large (max ${formatBytes(maxSize)})`,
+					error:
+						over === limit
+							? `Over the ${limit} limit`
+							: `${over}, over the ${limit} limit`,
 				};
 			}
 			const base = {
 				key,
 				name: file.name,
 				size: file.size,
-				previewUrl: file.type.startsWith("image/")
-					? URL.createObjectURL(file)
-					: null,
+				kind,
+				previewUrl: kind === "file" ? null : URL.createObjectURL(file),
 			};
 			const controller = new AbortController();
 			controllers.set(key, controller);
@@ -176,6 +192,7 @@ export const attachmentActions = {
 					key: `attachment-${nextKey++}`,
 					name,
 					size: file.size ?? 0,
+					kind: attachmentKind(file.mime),
 					previewUrl: null,
 					status: "ready",
 					uploaded: {

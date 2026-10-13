@@ -186,13 +186,31 @@ keyboard does not drop and rise again:
 - **Commands** — what typing `/` does: puts `/` in front of the draft, which opens
   the command palette when the result reads as a command name (an empty draft
   does). The menu row is how a phone user learns commands exist at all.
-- **Photos** / **Files** — the system pickers (`accept="image/*"` reaches the
-  photo library on a phone). Each file uploads as soon as it is picked and waits
+- **Photos** / **Files** — the system pickers (`accept="image/*,video/*"` reaches
+  the photo library on a phone; `image/*` alone hides its videos, screen
+  recordings included). Each file uploads as soon as it is picked and waits
   in a strip above the row (`Chat/ComposerAttachments.tsx`) with a spinner while it
   uploads, a remove button, and — on failure — the reason written out, since a `title` is
   out of reach under a thumb. Send waits until every file is stored; a failed one
-  has to be removed first, so nothing picked is dropped silently. How the files
-  travel is in [Key Files](#key-files).
+  has to be removed first, so nothing picked is dropped silently. A file over
+  the server's ceiling is refused at pick time, before any upload, with its
+  own size beside the limit ("48.2 MB, over the 20 MB limit"): for a long screen recording,
+  how far over it is says how much to trim. How the
+  files travel is in [Key Files](#key-files).
+
+  The preview is of the local file, through a `blob:` URL the store releases
+  with the entry, so nothing waits on the upload. An image is its own picture.
+  A video is its first frame (`#t=0.001`, `preload="metadata"`, `muted
+  playsInline` — what iOS needs to paint one and read no further) in the
+  image's square box, with its length and, once uploaded, a play mark; a frame
+  that is late or never comes (iOS may not preload a `blob:`) moves nothing.
+  An audio file is a chip with a play button, so a voice note can be checked
+  before it goes — even while it uploads, since the spinner veils only the
+  chip's text — and it takes part in [one sound at a
+  time](file.md#playing-audio-and-video). A file the browser cannot open (HEIC
+  outside Safari), or a video it can draw no picture of (HEVC in a Chromium
+  without it, which opens without an error and plays its sound over black),
+  falls back to a plain chip that says it can't be previewed; it is still sent.
 
 Files can also be dropped anywhere under the header or pasted into the
 textarea; both are shortcuts for these two rows and follow their rules
@@ -917,6 +935,16 @@ the placeholder and the loaded image are given the same box from them — a fixe
 height and that aspect ratio, with a default shape for content that reported
 none. So content fetched late, which it is (the read starts when the thumbnail
 scrolls into view), lands in space that was already the right size.
+
+Video and audio carry no dimensions (the server reads none out of them), so
+their entries take a box that needs none: a video thumbnail is a fixed square
+whatever the frame's shape, and an audio entry is a chip's height. The first
+frame or the length arrives inside it
+([tool-call-ui.md](tool-call-ui.md#the-body-problems-2-and-3)). What can still
+move happens once: a block with no type that turns out to be video or audio
+leaves the image placeholder's default shape for its entry's box, a video
+block described as audio leaves its square for the chip (and the reverse),
+and an entry that fails becomes a chip, as a failed image thumbnail does.
 
 ## Roads Not Taken
 

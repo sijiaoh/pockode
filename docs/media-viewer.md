@@ -2,7 +2,9 @@
 
 A full-screen viewer for media that the chat, the Files tab, Git and any
 Markdown image can all open. Its kinds are images, video and HTML pages. Audio
-has no stage: it plays in place ([file.md](file.md#playing-audio-and-video)).
+has no stage: it plays in place — in Files, in a chat message's attachment
+strip, and in the composer before it is sent
+([file.md](file.md#playing-audio-and-video)).
 
 ## Key Files
 
@@ -421,6 +423,15 @@ not be zoomed there. A file drawn as a chip is unchanged.
   viewer closes; the image does not change, so tapping it again brings it back.
 - **Open in Files** is offered when the attachment names a work-directory file
   (`workspacePath`) *and* the host can navigate (`onOpenFile`).
+- **A video thumbnail** is labelled "Play \<name\>", with
+  `pointer-fine:cursor-pointer`: it plays rather than zooms. It offers a way in
+  as soon as it has a source, before any frame has painted — iOS may load
+  nothing before a press. The item carries the `dimensions` and `duration` the
+  poster learnt, and `handoff: { time: 0, playing: true }`: the user pressed a
+  play mark, so the stage starts playing, or waits paused at 0:00 if the
+  browser refuses `play()` outside the gesture. The poster never plays, so
+  there is nothing to take back on close, and the viewer streams from the
+  capability the poster already holds.
 
 ### Files and Git: `ImagePreview`
 
@@ -513,7 +524,9 @@ phone.
 - `imageScale.test.ts` and `doubleTap.test.ts` cover the pure parts.
 - `Chat/AttachmentStrip.test.tsx` covers the chat way in: a thumbnail opens the
   viewer, Open in Files only for a work-directory file, and Save with the bytes
-  the thumbnail already read.
+  the thumbnail already read; a video thumbnail offers a way in before any frame
+  has painted, keeps its box when the frame arrives, and hands over
+  playing from 0:00 with the attachment as its origin.
 - `Files/ImagePreview.test.tsx` covers the Files and Git way in: the corner
   button and the image open the viewer only once loaded, with no Open in Files.
 - `ui/MarkdownImage.test.tsx` covers the Markdown way in: Save and Open in Files

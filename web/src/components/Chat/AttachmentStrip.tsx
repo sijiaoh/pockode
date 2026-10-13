@@ -1,19 +1,40 @@
-import { FileText, ImageOff } from "lucide-react";
+import {
+	FileText,
+	ImageOff,
+	type LucideIcon,
+	VideoOff,
+	VolumeX,
+} from "lucide-react";
 import { useState } from "react";
 import { useWSStore } from "../../lib/wsStore";
 import type { FileBlock } from "../../types/content";
 import {
+	type AttachmentKind,
 	attachmentDetail,
+	attachmentKind,
 	attachmentName,
 	attachmentSource,
-	isImageBlock,
 	omittedLabel,
 	previewsAsImage,
 	workspacePath,
 } from "../../utils/attachment";
-import { type ImageMediaItem, MediaViewer } from "../Media";
+import { type MediaItem, MediaViewer } from "../Media";
 import AttachmentChip from "../ui/AttachmentChip";
 import AttachmentThumb from "./AttachmentThumb";
+import PlayableEntry from "./PlayableEntry";
+
+/**
+ * The icon of an entry with nothing behind it. Media gets one of its own: the
+ * reader is looking for something to see or hear and will not find it, and a
+ * generic file glyph would not say that. The same glyphs a player's failure
+ * card uses.
+ */
+const UNAVAILABLE_ICON: Record<AttachmentKind, LucideIcon> = {
+	image: ImageOff,
+	video: VideoOff,
+	audio: VolumeX,
+	file: FileText,
+};
 
 interface Props {
 	files: FileBlock[];
@@ -53,7 +74,7 @@ function AttachmentStrip({
 	// it. The strip sits inside the transcript's `CoveredSurface`, which is what
 	// closes the viewer when the chat is covered.
 	const [viewing, setViewing] = useState<{
-		item: ImageMediaItem;
+		item: MediaItem;
 		openInFiles?: () => void;
 	} | null>(null);
 
@@ -69,6 +90,13 @@ function AttachmentStrip({
 				{entries.map(({ file, source, path }, index) => {
 					const key = `${file.attachment_id ?? file.path ?? file.mime}-${index}`;
 					const name = attachmentName(file);
+					const kind = attachmentKind(file.mime);
+					const open = (item: MediaItem) =>
+						setViewing({
+							item,
+							openInFiles:
+								path && onOpenFile ? () => onOpenFile(path) : undefined,
+						});
 
 					if (source && previewsAsImage(file)) {
 						return (
@@ -76,13 +104,18 @@ function AttachmentStrip({
 								key={key}
 								file={file}
 								source={source}
-								onOpen={(item) =>
-									setViewing({
-										item,
-										openInFiles:
-											path && onOpenFile ? () => onOpenFile(path) : undefined,
-									})
-								}
+								onOpen={open}
+							/>
+						);
+					}
+					if (source && (kind === "video" || kind === "audio")) {
+						return (
+							<PlayableEntry
+								key={key}
+								file={file}
+								source={source}
+								kind={kind}
+								onOpen={open}
 							/>
 						);
 					}
@@ -91,10 +124,7 @@ function AttachmentStrip({
 					return (
 						<AttachmentChip
 							key={key}
-							// An image with nothing behind it is the one case worth its own
-							// icon: the reader is looking for a picture and will not find
-							// one, and a generic file glyph would not say that.
-							icon={isImageBlock(file) ? ImageOff : FileText}
+							icon={source ? FileText : UNAVAILABLE_ICON[kind]}
 							title={name}
 							tooltip={file.path}
 							// The reason wins over the description: a reader looking at an

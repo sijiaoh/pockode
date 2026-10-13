@@ -596,11 +596,13 @@ function InputBar({
 						>
 							<Plus className="size-5" aria-hidden="true" />
 						</button>
-						{/* `image/*` is what puts the photo library first on a phone. */}
+						{/* `image/*` is what puts the photo library first on a phone, and
+						    `video/*` is what lets it show the videos there — screen
+						    recordings included — which `image/*` alone hides. */}
 						<input
 							ref={photoInputRef}
 							type="file"
-							accept="image/*"
+							accept="image/*,video/*"
 							multiple
 							hidden
 							onChange={handlePick}

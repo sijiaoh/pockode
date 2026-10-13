@@ -1227,9 +1227,11 @@ describe("InputBar", () => {
 			expect(click.mock.contexts.at(-1)).toBe(
 				screen.getByTestId("photo-input"),
 			);
+			// Videos too: `image/*` alone hides them in a phone's photo library,
+			// which is where screen recordings are.
 			expect(screen.getByTestId("photo-input")).toHaveAttribute(
 				"accept",
-				"image/*",
+				"image/*,video/*",
 			);
 
 			await user.click(screen.getByRole("button", { name: "Add" }));
@@ -1262,6 +1264,39 @@ describe("InputBar", () => {
 			expect(
 				screen.queryByRole("list", { name: "Attachments" }),
 			).not.toBeInTheDocument();
+			await waitFor(() =>
+				expect(URL.revokeObjectURL).toHaveBeenCalledWith("blob:preview"),
+			);
+		});
+
+		it("previews a video picked from Photos and sends it", async () => {
+			const user = userEvent.setup();
+			const upload = deferredUpload();
+			const onSend = vi.fn(sendAccepted);
+			const recording: ChatAttachment = {
+				id: "a2.mov",
+				name: "recording.mov",
+				size: 4,
+				mime: "video/quicktime",
+			};
+			render(<InputBar sessionId={TEST_SESSION_ID} onSend={onSend} />);
+
+			await user.upload(
+				screen.getByTestId("photo-input"),
+				new File(["abcd"], "recording.mov", { type: "video/quicktime" }),
+			);
+
+			const preview = screen.getByRole("img", {
+				name: "recording.mov, video",
+			});
+			expect(preview.querySelector("video")).toHaveAttribute(
+				"src",
+				"blob:preview#t=0.001",
+			);
+			await act(async () => upload.resolve(recording));
+			await user.click(screen.getByRole("button", { name: "Send" }));
+
+			expect(onSend).toHaveBeenCalledWith("", [recording]);
 			await waitFor(() =>
 				expect(URL.revokeObjectURL).toHaveBeenCalledWith("blob:preview"),
 			);
@@ -1335,7 +1370,7 @@ describe("InputBar", () => {
 			);
 
 			expect(uploadChatAttachment).not.toHaveBeenCalled();
-			expect(screen.getByText("Too large (max 1 KB)")).toBeInTheDocument();
+			expect(screen.getByText("2 KB, over the 1 KB limit")).toBeInTheDocument();
 		});
 
 		it("gives the files back when the message is refused", async () => {

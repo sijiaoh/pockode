@@ -10,7 +10,8 @@ import { useRawMediaSource } from "../../hooks/useRawMediaSource";
 import { isGone, probeRaw } from "../../lib/rawProbe";
 import type { ContentOrigin } from "../../types/contents";
 import { asError } from "../../utils/errorMessage";
-import type { PlayableKind } from "../../utils/fileView";
+import { mediaDuration, type PlayableKind } from "../../utils/fileView";
+import { claimPlayback, releasePlayback } from "./exclusivePlayback";
 import type { MediaMetadata, PlaybackHandoff } from "./types";
 
 export interface PlayableMedia {
@@ -49,7 +50,7 @@ const RECOVERED_AFTER_S = 1;
  * iOS Safari paints no frame for `preload="metadata"`; seeking a hair past the
  * start makes it paint the first one. A fragment never reaches the server.
  */
-const FIRST_FRAME_FRAGMENT = "#t=0.001";
+export const FIRST_FRAME_FRAGMENT = "#t=0.001";
 
 /**
  * `MediaError.MEDIA_ERR_NETWORK`: the element lost the bytes on the way, as
@@ -86,6 +87,8 @@ function initialState(identity: string): State {
  * different file (or a rewrite, which changes its size) starts over from the
  * beginning, paused, in a new element.
  *
+ * Starting it pauses whatever other player was sounding (`exclusivePlayback`).
+ *
  * A player taking over from another (the viewer's stage from the in-place
  * preview) passes `handoff`: it starts there instead of at the beginning, and
  * keeps the position in it current for whoever takes over next.
@@ -102,13 +105,6 @@ export function useMediaPlayback(
 	const { src, refresh } = source;
 	const identity = `${source.key}:${media.size}:${media.mime}`;
 
-	const [stored, setState] = useState(() => initialState(identity));
-	let state = stored;
-	if (stored.identity !== identity) {
-		state = initialState(identity);
-		setState(state);
-	}
-
 	// Where playback is, kept from `timeupdate`: by the time a new `src` is on
 	// the element, the element itself already reads 0.
 	const position = useRef(handoff?.time ?? 0);
@@ -117,6 +113,22 @@ export function useMediaPlayback(
 	// end pauses too, and clears it: `play()` at the end starts over, which a
 	// resume or a handover must not do.
 	const wantsPlay = useRef(handoff?.playing ?? false);
+	// The two above as a player draws them. Separate from the refs, which the
+	// element's handlers read between renders.
+	const [shownPosition, setShownPosition] = useState(position.current);
+	const [playing, setPlayingState] = useState(wantsPlay.current);
+
+	const [stored, setState] = useState(() => initialState(identity));
+	let state = stored;
+	if (stored.identity !== identity) {
+		state = initialState(identity);
+		setState(state);
+		// The drawn pair too, before this render commits rather than from the
+		// layout effect below: a player keyed by the new element would otherwise
+		// mount drawing the old file's position and Pause.
+		setShownPosition(0);
+		setPlayingState(false);
+	}
 	// What the next metadata puts back. Set when the source changes under the
 	// element, or by a handoff; until it is consumed, the element's own
 	// position is not news.
@@ -127,6 +139,7 @@ export function useMediaPlayback(
 	// A callback rather than the object: a `<video>`'s ref is typed for a
 	// video, and this one serves `<audio>` as well.
 	const elementRef = useCallback((node: HTMLMediaElement | null) => {
+		if (!node && element.current) releasePlayback(element.current);
 		element.current = node;
 	}, []);
 	const recovery = useRef<{ at: number; from: number } | null>(null);
@@ -134,13 +147,13 @@ export function useMediaPlayback(
 	const shown = useRef({ identity, src });
 
 	// A layout effect, so it runs before the new source can report anything.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: the setters only write refs, `handoff` and state
 	useLayoutEffect(() => {
 		const before = shown.current;
 		shown.current = { identity, src };
 		if (before.identity !== identity) {
-			position.current = 0;
-			wantsPlay.current = false;
-			if (handoff) Object.assign(handoff, { time: 0, playing: false });
+			setPosition(0);
+			setPlaying(false);
 			resume.current = null;
 			recovery.current = null;
 			return;
@@ -218,8 +231,7 @@ export function useMediaPlayback(
 		// position that is not the user's.
 		if (resume.current || state.busy) return;
 		const time = event.currentTarget.currentTime;
-		position.current = time;
-		if (handoff) handoff.time = time;
+		setPosition(time);
 		const last = recovery.current;
 		if (last && time > last.from + RECOVERED_AFTER_S) recovery.current = null;
 	};
@@ -231,7 +243,7 @@ export function useMediaPlayback(
 		update({
 			metadata: {
 				dimensions: width > 0 && height > 0 ? { width, height } : null,
-				duration: Number.isFinite(target.duration) ? target.duration : null,
+				duration: mediaDuration(target),
 			},
 		});
 
@@ -252,9 +264,32 @@ export function useMediaPlayback(
 		}
 	};
 
-	const setPlaying = (playing: boolean) => {
-		wantsPlay.current = playing;
-		if (handoff) handoff.playing = playing;
+	function setPlaying(next: boolean) {
+		wantsPlay.current = next;
+		if (handoff) handoff.playing = next;
+		setPlayingState(next);
+	}
+
+	function setPosition(time: number) {
+		position.current = time;
+		if (handoff) handoff.time = time;
+		setShownPosition(time);
+	}
+
+	// The element alone is not enough: one whose source is being swapped is
+	// already paused, with no `pause` event to come, and would start again once
+	// the new source's metadata lands.
+	const pause = () => {
+		element.current?.pause();
+		setPlaying(false);
+		if (resume.current) resume.current.playing = false;
+	};
+
+	// Likewise a seek while a new source loads goes to where it will resume.
+	const seek = (time: number) => {
+		setPosition(time);
+		if (resume.current) resume.current.time = time;
+		else if (element.current) element.current.currentTime = time;
 	};
 
 	const failure: MediaFailure | null =
@@ -276,6 +311,15 @@ export function useMediaPlayback(
 		status,
 		failure,
 		metadata: state.metadata,
+		/**
+		 * Whether the user means it to be playing — which it may not quite be
+		 * yet, while a new source loads or the bytes buffer.
+		 */
+		playing,
+		/** Where playback is, in seconds; held still while a source swaps. */
+		position: shownPosition,
+		pause,
+		seek,
 		/** Asks again, and puts back where the player was if it ever played. */
 		retry: recover,
 		/** The mounted element, for a stage's keys. */
@@ -286,11 +330,7 @@ export function useMediaPlayback(
 		 */
 		handOff: (): PlaybackHandoff => {
 			const taken = { time: position.current, playing: wantsPlay.current };
-			element.current?.pause();
-			setPlaying(false);
-			// A source swapped in while it played would otherwise start it again
-			// behind the viewer once its metadata lands.
-			if (resume.current) resume.current.playing = false;
+			pause();
 			return taken;
 		},
 		/**
@@ -298,10 +338,8 @@ export function useMediaPlayback(
 		 * sound behind a closing viewer is not what the user just asked for.
 		 */
 		takeBack: (time: number) => {
-			position.current = time;
-			setPlaying(false);
-			if (resume.current) resume.current = { time, playing: false };
-			else if (element.current) element.current.currentTime = time;
+			pause();
+			seek(time);
 		},
 		mediaProps: {
 			src:
@@ -315,7 +353,10 @@ export function useMediaPlayback(
 			onError,
 			onTimeUpdate,
 			onLoadedMetadata,
-			onPlay: () => setPlaying(true),
+			onPlay: (event: SyntheticEvent<HTMLMediaElement>) => {
+				claimPlayback(event.currentTarget, pause);
+				setPlaying(true);
+			},
 			onPause: () => setPlaying(false),
 		} as const,
 	};
