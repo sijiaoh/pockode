@@ -133,27 +133,26 @@ func (a *AttachmentHandler) Upload(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
-		// One byte past the budget tells "at the limit" from "over it".
-		data, err := io.ReadAll(io.LimitReader(part, remaining+1))
+		put, err := store.PutStream(part, attachments.UploadExtension(name), remaining)
 		part.Close()
-		if int64(len(data)) > remaining || errors.As(err, &overBody) {
+		if errors.Is(err, attachments.ErrTooLarge) || errors.As(err, &overBody) {
 			h.writeError(w, tooLarge, nil)
 			return
 		}
-		if err != nil {
+		// A body that stops mid-file is the connection's doing — the client went
+		// away or its upload was cut off — not a fault on this side.
+		if errors.Is(err, attachments.ErrIncomplete) {
 			h.writeError(w, errf(http.StatusBadRequest, CodeInvalidRequest,
 				"upload of %s was cut short before the file ended: %v", name, err), nil)
 			return
 		}
-
-		id, err := store.Put(data, attachments.UploadExtension(name))
 		if err != nil {
 			h.log.Error("failed to store chat attachment", "sessionId", sessionID, "error", err)
 			h.writeError(w, errf(http.StatusInternalServerError, CodeInternal, "failed to store %s: %v", name, err), nil)
 			return
 		}
-		remaining -= int64(len(data))
-		stored = append(stored, UploadedAttachment{ID: id, Name: name, Size: int64(len(data))})
+		remaining -= put.Size
+		stored = append(stored, UploadedAttachment{ID: put.ID, Name: name, Size: put.Size})
 	}
 
 	if len(stored) == 0 {

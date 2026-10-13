@@ -413,7 +413,7 @@ defer lock.release()
 tmpFile := OpenFile(path+".tmp", CREATE|WRONLY|TRUNC, perm)
 tmpFile.Write(data)
 tmpFile.Sync()            // fsync: bytes on disk before anything points at them
-renameFile(tmpFile, path) // atomic replace
+Rename(tmpFile, path)     // atomic replace
 ```
 
 The lock itself is platform-split (`lock_unix.go` / `lock_windows.go`): `flock(2)`

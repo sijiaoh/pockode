@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/pockode/server/agent"
+	"github.com/pockode/server/contents"
 	"github.com/pockode/server/session"
 )
 
@@ -1620,8 +1621,8 @@ func TestSendMessage_CarriesPockodesMessageID(t *testing.T) {
 	}
 }
 
-// Images go as localImage items codex reads itself; anything else is named in
-// the text for the model to open.
+// Images go as localImage items codex reads itself; anything else — an image
+// past the image ceiling included — is named in the text for the model to open.
 func TestSendMessage_Attachments(t *testing.T) {
 	sess := newTestSession()
 	defer sess.cancel()
@@ -1634,6 +1635,7 @@ func TestSendMessage_Attachments(t *testing.T) {
 	err := sess.SendMessage(agent.Prompt{Text: "look", Attachments: []agent.Attachment{
 		{File: agent.FileBlock{Name: "shot.png", MIME: "image/png"}, Path: "/data/shot"},
 		{File: agent.FileBlock{Name: "log.txt", MIME: "text/plain; charset=utf-8"}, Path: "/data/log"},
+		{File: agent.FileBlock{Name: "huge.png", MIME: "image/png", Size: contents.MaxImageSize + 1}, Path: "/data/huge"},
 	}})
 	if err != nil {
 		t.Fatalf("SendMessage error: %v", err)
@@ -1657,8 +1659,9 @@ func TestSendMessage_Attachments(t *testing.T) {
 		t.Errorf("first item = %+v, want the image by path", params.Input[0])
 	}
 	if params.Input[1].Type != "text" || !strings.HasPrefix(params.Input[1].Text, "look\n\n") ||
-		!strings.Contains(params.Input[1].Text, "/data/log") || strings.Contains(params.Input[1].Text, "/data/shot") {
-		t.Errorf("text item = %q, want the message and the text file's path", params.Input[1].Text)
+		!strings.Contains(params.Input[1].Text, "/data/log") || !strings.Contains(params.Input[1].Text, "/data/huge") ||
+		strings.Contains(params.Input[1].Text, "/data/shot") {
+		t.Errorf("text item = %q, want the message and the paths of the text file and the oversized image", params.Input[1].Text)
 	}
 }
 

@@ -14,8 +14,6 @@ import (
 	"sort"
 	"strings"
 	"unicode/utf8"
-
-	"github.com/pockode/server/attachments"
 )
 
 var (
@@ -73,8 +71,21 @@ const (
 	// /ws gets a yamux stream to itself and yamux frames what it writes, so
 	// other streams keep moving. Whole files go over HTTP; see docs/file.md.
 	// So does media (EncodingHTTP), which is why this ceiling does not apply
-	// to it; a raster image is held to attachments.MaxSize instead.
+	// to it; a raster image is held to MaxImageSize instead.
 	MaxFileSize = 2 << 20 // 2 MiB
+
+	// MaxImageSize is the ceiling on previewing a raster image, wherever it
+	// came from: the workspace, a commit, an attachment, or the image an
+	// agent's tool returned. The client holds an image whole in memory to
+	// decode it, which a phone does not do for much more than this, so a
+	// larger one is described as too large to show rather than handed to the
+	// browser. It limits the preview only: the endpoints that download a file
+	// serve it at any size.
+	//
+	// It is not the ceiling on what may be attached (attachments.MaxSize):
+	// audio, video and documents are never decoded whole, and an attachment
+	// over this one is stored and handed to the agent all the same.
+	MaxImageSize = 20 << 20 // 20 MiB
 
 	// SniffLen is the most http.DetectContentType inspects, and so the least a
 	// caller has to hand NewFileContent for the MIME type to come out right.
@@ -86,7 +97,7 @@ type Encoding string
 const (
 	EncodingText Encoding = "text"
 	// EncodingHTTP is media (IsMedia) — a raster image within
-	// attachments.MaxSize, or audio or video of any size — sent without
+	// MaxImageSize, or audio or video of any size — sent without
 	// content: the client fetches its bytes over HTTP from the endpoint that
 	// serves whatever this describes — the download endpoint for a workspace
 	// file, the attachment endpoint for an attachment, the commit file endpoint
@@ -326,16 +337,13 @@ func NewFileContent(relPath string, size int64, content []byte) *FileContent {
 	// of any size is named from what a too-large read leaves.
 	//
 	// An image still has a ceiling, because the client holds the whole of it
-	// in memory to decode it: attachments.MaxSize, so that a preview stops at
-	// one size whatever it came from. It limits the preview only — the
-	// endpoints that download a file serve it at any size. Audio and video
-	// have none: a player streams them with Range requests and never holds
-	// the whole file.
+	// in memory to decode it: MaxImageSize. Audio and video have none: a
+	// player streams them with Range requests and never holds the whole file.
 	case IsMedia(relPath, content):
-		if IsRasterImageMIME(file.MIME) && size > attachments.MaxSize {
+		if IsRasterImageMIME(file.MIME) && size > MaxImageSize {
 			file.Encoding = EncodingNone
 			file.Omitted = OmitTooLarge
-			file.Limit = attachments.MaxSize
+			file.Limit = MaxImageSize
 		} else {
 			file.Encoding = EncodingHTTP
 		}
@@ -692,7 +700,7 @@ func isMediaMIME(mime string) bool {
 
 // IsMedia reports whether the file name, whose leading bytes are head, is
 // previewable media — the content NewFileContent describes as EncodingHTTP (a
-// raster image only up to attachments.MaxSize). head need be no longer than
+// raster image only up to MaxImageSize). head need be no longer than
 // SniffLen.
 //
 // The type alone is not enough, because for the formats sniffing cannot name

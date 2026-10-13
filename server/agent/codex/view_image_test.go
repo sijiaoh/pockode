@@ -377,13 +377,13 @@ func TestViewImage_OversizedImageIsDescribedButNotStored(t *testing.T) {
 	sess := newTestSession()
 	sess.attachments = attachments.NewStore(dataDir, "session-1")
 
-	data := paddedPNG(t, 900, 900, attachments.MaxSize+1)
+	data := paddedPNG(t, 900, 900, contents.MaxImageSize+1)
 	path := writeFile(t, t.TempDir(), "huge.png", data)
 
 	viewImage(t, sess, "exec-1", path)
 	file := fileBlockOf(t, drainEvents(sess.events), path)
 
-	if file.Omitted != contents.OmitTooLarge || file.Limit != attachments.MaxSize {
+	if file.Omitted != contents.OmitTooLarge || file.Limit != contents.MaxImageSize {
 		t.Errorf("expected too_large with the limit, got %q limit=%d", file.Omitted, file.Limit)
 	}
 	if file.AttachmentID != "" {

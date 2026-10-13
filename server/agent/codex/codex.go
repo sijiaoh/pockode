@@ -31,6 +31,7 @@ import (
 
 	"github.com/pockode/server/agent"
 	"github.com/pockode/server/attachments"
+	"github.com/pockode/server/contents"
 	"github.com/pockode/server/logger"
 	"github.com/pockode/server/session"
 )
@@ -289,9 +290,11 @@ func (s *appSession) SendMessage(prompt agent.Prompt) error {
 	}
 
 	// Images by path: codex reads them itself, so nothing here has to hold the
-	// bytes, and it applies its own limits to what it reads.
+	// bytes. It decodes and encodes a localImage whole, though, and an
+	// attachment may be far larger than any image it is meant for, so one
+	// past the image ceiling goes in the note like any other file.
 	images, byPath := agent.SplitAttachments(prompt.Attachments, func(a agent.Attachment) bool {
-		return agent.InlineImageMIMEs[a.File.MIME]
+		return agent.InlineImageMIMEs[a.File.MIME] && a.File.Size <= contents.MaxImageSize
 	})
 	input := make([]map[string]interface{}, 0, len(images)+1)
 	for _, a := range images {

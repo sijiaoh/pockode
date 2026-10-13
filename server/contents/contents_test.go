@@ -13,7 +13,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pockode/server/attachments"
 	"github.com/pockode/server/internal/fifotest"
 	"github.com/pockode/server/internal/symlinktest"
 )
@@ -83,7 +82,7 @@ func writeTestFile(t *testing.T, workDir, name string, data []byte) {
 }
 
 // writeTestImage writes a PNG of size bytes. Sparse past the header, so an
-// image at the attachment ceiling costs no disk.
+// image at the image ceiling costs no disk.
 func writeTestImage(t *testing.T, workDir, name string, size int64) {
 	t.Helper()
 	writeTestFile(t, workDir, name, pngHeader)
@@ -130,14 +129,14 @@ func TestGetContents_ReadFile(t *testing.T) {
 
 	// A raster image's bytes are fetched over HTTP, so the response is metadata
 	// alone — and, since MaxFileSize is the JSON-RPC message's ceiling, that
-	// holds for an image past it too, up to the attachment ceiling.
+	// holds for an image past it too, up to the image ceiling.
 	for _, tc := range []struct {
 		name string
 		size int
 	}{
 		{"that is small", len(pngHeader) + 8},
 		{"over the size limit", MaxFileSize + 1},
-		{"at the attachment limit", attachments.MaxSize},
+		{"at the image limit", MaxImageSize},
 	} {
 		t.Run("describes a raster image "+tc.name+" for fetching over http", func(t *testing.T) {
 			workDir := t.TempDir()
@@ -163,11 +162,11 @@ func TestGetContents_ReadFile(t *testing.T) {
 		})
 	}
 
-	// Past the attachment ceiling an image is not previewed, and is reported the
+	// Past the image ceiling an image is not previewed, and is reported the
 	// way any content too large to show is.
-	t.Run("omits a raster image over the attachment limit", func(t *testing.T) {
+	t.Run("omits a raster image over the image limit", func(t *testing.T) {
 		workDir := t.TempDir()
-		size := int64(attachments.MaxSize + 1)
+		size := int64(MaxImageSize + 1)
 		writeTestImage(t, workDir, "huge.png", size)
 
 		file := getFile(t, workDir, "huge.png")
@@ -175,8 +174,8 @@ func TestGetContents_ReadFile(t *testing.T) {
 		if file.Encoding != EncodingNone || file.Omitted != OmitTooLarge {
 			t.Errorf("got %q/%q, want none/too_large", file.Encoding, file.Omitted)
 		}
-		if file.Limit != attachments.MaxSize {
-			t.Errorf("got limit %d, want %d", file.Limit, attachments.MaxSize)
+		if file.Limit != MaxImageSize {
+			t.Errorf("got limit %d, want %d", file.Limit, MaxImageSize)
 		}
 		if file.Size != size || file.MIME != "image/png" {
 			t.Errorf("got size %d mime %q, want %d image/png", file.Size, file.MIME, size)
@@ -198,7 +197,7 @@ func TestGetContents_ReadFile(t *testing.T) {
 	} {
 		t.Run("describes "+tc.name+" over the image limit for fetching over http", func(t *testing.T) {
 			workDir := t.TempDir()
-			size := int64(attachments.MaxSize + 1)
+			size := int64(MaxImageSize + 1)
 			writeTestFile(t, workDir, tc.name, []byte(tc.head))
 			if err := os.Truncate(filepath.Join(workDir, tc.name), size); err != nil {
 				t.Fatalf("failed to size %s: %v", tc.name, err)
