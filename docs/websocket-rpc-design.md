@@ -9,7 +9,10 @@ HTTP so a large body neither waits behind nor holds up the one connection
 ([file.md](file.md#transfer)). An image is still described over JSON-RPC
 (`encoding: "http"`); only its bytes take the HTTP route. A chat attachment
 upload is only the first half of a send: `chat.message` then names the stored
-files by the ids the upload returned.
+files by the ids the upload returned. `GET /api/raw/<capability>/<path>` is the
+same split for content a `<video>`, `<audio>` or `<iframe>` loads by itself:
+`raw.capability` issues the URL over JSON-RPC, and only the bytes go over HTTP
+([authentication.md](code/authentication.md#raw-capabilities-urls-a-browser-element-loads-by-itself)).
 
 ## Background
 
@@ -44,13 +47,14 @@ Method names use the `namespace.method` format with namespaces.
 | `cli_auth.*` | app | `ws/rpc_cli_auth.go` |
 | `cli_update.*` | app | `ws/rpc_cli_update.go` |
 | `port_preview.*` | app | `ws/rpc_port_preview.go` |
+| `raw.*` | app | `ws/rpc_raw.go` |
 | `remote_url.*` | app | `ws/rpc_remote_url.go` |
 
 - **worktree scope**: Methods bound to the current worktree
 - **app scope**: Methods independent of any worktree
 
-`session_view.*` is the one namespace that reads a worktree other than the bound
-one, so it is app-scoped and every method names the worktree it reads from. It
+`session_view.*` is the one namespace built on reading a worktree other than the
+bound one, so it is app-scoped and every method names the worktree it reads from. It
 exists because session data outlives its worktree: deleting a worktree leaves
 its conversations in place, and they are then read from wherever the client
 happens to be. Nothing in it changes a conversation — that is what makes those

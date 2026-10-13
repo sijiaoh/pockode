@@ -49,10 +49,11 @@ network is not trusted, and to treat a LAN as trusted only when it is.
 
 | Surface | How the credential is presented | Code |
 |---------|---------------------------|------|
-| HTTP API | `Authorization: Bearer <password or session token>` | `server/middleware/auth.go` |
+| HTTP API | `Authorization: Bearer <password or session token>`; `/api/raw` takes a capability instead (below) | `server/middleware/auth.go` |
 | WebSocket | First RPC must be `auth { password }` or `auth { session_token }`; all other methods are rejected until it succeeds | `server/ws/rpc.go`, `server/cluster/ws.go` |
 | Relay | The relay tunnels the same HTTP/WS traffic; no separate app credential | `server/relay/` |
 | Port preview | A session cookie, issued by posting the password to `/__pockode/preview/login` on the preview host, or by opening it with a one-time ticket the logged-in app got from `port_preview.ticket`; see [Port Previews](relay-system.md#logging-in) | `server/relay/preview_auth.go`, `server/authsession/ticket.go` |
+| Raw content | A capability in the URL's path, `/api/raw/<capability>/<path>`, that the logged-in app got from `raw.capability`; see [Raw capabilities](#raw-capabilities-urls-a-browser-element-loads-by-itself) | `server/filetransfer/raw.go`, `server/authsession/capability.go` |
 
 Both credentials are accepted on HTTP so that `curl` and scripts have something
 to send: a browser exchanges the password for a session token and sends that
@@ -96,7 +97,8 @@ failed password attempts are slowed down (`server/authguard/`):
   guessing concurrently. The check, the comparison and the count happen under
   one lock, so concurrent guesses cannot all get past the check before any of
   them is counted.
-- **Session tokens and preview tickets never go through the guard.** A device
+- **Session tokens, preview tickets and raw capabilities never go through the
+  guard.** A device
   already logged in keeps working while someone else is locked out; only a
   fresh password login waits. That is also the cost of the design: anyone who
   can reach the server can keep the *owner's* password login locked, in
@@ -284,6 +286,115 @@ A browser that already has a session on that host keeps it. Why it is a
 server-held ticket rather than a signed token, and the endpoint's rules, are in
 [Port Previews → Logging In](relay-system.md#logging-in).
 
+### Raw capabilities: URLs a browser element loads by itself
+
+A `<video src>`, an `<audio src>` or an `<iframe src>` makes its requests on its
+own, and none of them can carry an `Authorization` header. Fetching the bytes
+into a Blob with the header instead works for an image, and is what images do
+([file.md](../file.md#loading-image-bytes)); for anything else it is the wrong
+shape. A video has to download whole before it plays, and sits whole in the
+phone's memory while it does. A page's relative stylesheets, scripts and images
+have nowhere to load from at all. So the logged-in app can ask over its
+WebSocket for a **capability** (`raw.capability`, see
+[WebSocket JSON-RPC](websocket-rpc.md#raw-capabilities)): a URL on this
+server that reads one file, or one directory and everything beneath it. The
+element loads that URL, `/api/raw/<capability>/<path>`
+([the endpoint](../file.md#transfer)), with no header.
+
+Like a preview ticket, a capability is not a credential of a new kind. Only a
+connection that has already authenticated can get one. It is bound to the
+session that connection authenticated as, and it buys read access to what it
+names and nothing else.
+
+| Property | Value | Why |
+|---|---|---|
+| Token | 32 bytes from `crypto/rand`, base64url | Nothing to guess, and safe as a path segment |
+| Stored as | its SHA-256, in memory only | Hashed as a session token is; held in memory as a ticket is, so a restart revokes every capability |
+| Lifetime | 4 hours (`authsession.CapabilityTTL`), any number of uses | A video watched to the end or a page left open must not lose its next request partway. A client is expected to ask again when a load fails with `capability_not_found`, so a shorter life would cost only a re-issue, and a longer one is more time for a leaked URL to stay good |
+| Bound to | the issuing session, asked on **every** request | A session ends by idling out as much as by anything done to it, and nothing fires when it does, so the session store is asked each time rather than told. Whatever ends the session — idle expiry, eviction, a changed password — ends its capabilities. Using a capability does not count as using the session, so it does not keep the session alive |
+| Cap | 256 outstanding, across all sessions; those of ended sessions are dropped first, then the oldest is evicted | Bounds what authenticated clients can make the server hold. A client needs one per file or page it shows, so this is far above normal use, and an evicted capability costs its holder a re-issue |
+
+A connection whose session has already ended is refused with the auth refusal's
+`session_expired`. Issuing a capability that is dead on arrival would only hide
+the real problem.
+
+Logging out in the app drops the session token on the device; nothing tells the
+server. So "dies with its session" means it dies when the session idles out, is
+evicted, or the password changes. A capability issued just before a logout
+stays good until its own 4 hours are up.
+
+**It lives in the path, not the query.** A page's `./style.css` resolves against
+the page's path and drops its query string. With the capability in the path,
+every relative URL the page makes carries it, with no rewriting. The cost is
+that the path is now a secret. The relay proxy's error log masks it
+(`apiroute.LoggablePath`), and `Referrer-Policy: no-referrer` keeps it out of
+the `Referer` of anything the page loads from elsewhere.
+
+**Scope is least privilege, because the page can read its own URL.** A
+previewed page's scripts can read `location`, capability included, and send it
+anywhere. So a capability reaches as little as its use needs:
+
+- **One file** for a video, a sound or a standalone page. A request for any
+  other name is refused with `403 outside_scope`.
+- **One directory and everything beneath it** for a page that loads relative
+  assets: the page's own directory. A directory scope is never the root of the
+  work directory or the commit. At the root it would reach the project's
+  `.env`, its `.git` and, by default, Pockode's own data directory: every
+  session, every chat transcript. The price is that a page at the root of a
+  project gets only a file scope, so its relative assets do not load. That is
+  accepted.
+- An attachment is always one file. An attachment store is flat, not a tree of
+  files that refer to each other.
+
+**Symlinks cannot widen a scope.** This is stricter than the rest of the file
+surface, which [does not resolve symlinks](#accepted-limitations). The
+difference is the holder: a capability may be in the hands of a page's script,
+not of the developer. A work-directory file is opened through an `os.Root`, so
+a link that leads out of the scope is refused. Every component of a directory
+scope must itself be a plain directory, checked with `Lstat`, because `os.Root`
+follows a link that stays inside it: `site -> .` would otherwise turn a
+directory scope into the work directory itself. A Windows junction is refused
+the same way. A file scope is held to the work directory rather than the file's
+own directory, so a file that is itself a link elsewhere in the project still
+opens: that file is what the user opened. A link swapped in between the `Lstat`
+and the open is not caught. Doing that takes write access to the work
+directory, which is already more than any capability grants. A commit needs
+none of this: git looks a path up in the tree without following links.
+
+**Every response carries the same four headers, errors included:**
+
+| Header | Why |
+|---|---|
+| `Content-Security-Policy: sandbox allow-scripts allow-popups` | Content is served as what it is (`text/html` included), on the app's own origin. The sandbox gives a document opened from here an opaque origin, whether it is framed or opened top-level, so its scripts cannot reach the app's `localStorage` and the session token in it. `allow-scripts` and `allow-popups` are what a previewed page needs to run and to open its links; `allow-same-origin` is the one flag that must never be added |
+| `X-Content-Type-Options: nosniff` | The browser takes the server's type and does not guess another. Without it, a file the server named harmlessly could be rendered as something else |
+| `Referrer-Policy: no-referrer` | The capability is in the URL; see above |
+| `Cache-Control: private, no-cache` | The content is the user's, and a work-directory file changes under the same URL whenever the agent edits it. Revalidation is what tells |
+
+A response without the sandbox is a document that runs in the app's origin, so
+"every response" is enforced in two places rather than trusted to each code
+path. The route is answered in `server/main.go` (`newHandler`) ahead of both the
+auth middleware and the `ServeMux`, so the mux's own redirects and 404s never
+answer it. `/api/raw` without the trailing slash is included
+(`apiroute.IsRaw`). A `ResponseWriter` wrapper sets the headers at the moment a
+status is written, because `http.ServeContent` clears `Cache-Control` before a
+`416`.
+
+The sandbox does not stop a page from making requests: it can still fetch any
+other origin and send what it read, which is the reason for the narrow scope
+above. Previewing a page means running its scripts. What the sandbox ensures is
+that those scripts run as nobody in particular, not as the logged-in app.
+
+**Rejected alternatives**, recorded so they are not proposed again without a
+new argument:
+
+- **A cookie on the app's origin.** A sandboxed frame has an opaque origin, so a
+  `SameSite=Lax` cookie is not sent with its requests. `SameSite=None` requires
+  `Secure`, and the LAN path is plain HTTP.
+- **A Service Worker that adds the header.** It is unreliable for media `Range`
+  requests on iOS Safari, which is exactly where video has to work.
+- **The port-preview subdomain** for a separate origin. It exists only through
+  the relay, and the LAN path has to work too.
+
 ### The password fingerprint, and what it is *not*
 
 `sessions.json` also holds a fingerprint of the password: PBKDF2-HMAC-SHA256,
@@ -438,7 +549,9 @@ model (e.g. multi-user hosting) revisits them rather than rediscovering them:
   `..` and absolute paths and re-checks that the joined path stays inside the work
   directory, but it does not resolve symlinks, so a symlink inside a worktree can
   point outside it. Again, this is a defense-in-depth gap, not a boundary crossing,
-  for a caller who already holds the one credential.
+  for a caller who already holds the one credential. The raw endpoint is the
+  exception, for the reason given in
+  [Raw capabilities](#raw-capabilities-urls-a-browser-element-loads-by-itself).
 - **Traffic on a plaintext LAN deployment is not encrypted.** See
   [The residual risk](#the-residual-risk-plaintext-http-on-a-lan) for why the
   client-side hashing that looks like a fix is not one, and what actually is.
@@ -449,11 +562,14 @@ model (e.g. multi-user hosting) revisits them rather than rediscovering them:
 |---------|------|
 | Password source, env scrubbing & comparison | `server/password/` |
 | Failed-password lockout | `server/authguard/` |
-| Session issue/validate, password fingerprint, one-time preview tickets | `server/authsession/` |
+| Session issue/validate, password fingerprint, one-time preview tickets, raw capabilities | `server/authsession/` |
 | HTTP Bearer auth | `server/middleware/auth.go` |
 | WebSocket `auth` gate | `server/ws/rpc.go`, `server/cluster/ws.go` |
 | Port preview login (password & ticket) & cookie | `server/relay/preview_auth.go` |
 | Preview ticket issue | `server/ws/rpc_port_preview.go` |
+| Raw capability issue | `server/ws/rpc_raw.go` |
+| Raw endpoint: scope, path safety, response headers | `server/filetransfer/raw.go` |
+| Raw endpoint routed ahead of auth; capability masked in logs | `server/main.go` (`newHandler`), `server/apiroute/`, `server/relay/proxy.go` |
 | Wire types and refusal reasons | `server/rpc/types.go` |
 | Frontend credential store | `packages/shared/src/stores/createAuthStore.ts`, `packages/shared/src/utils/auth.ts` |
 | MCP local API token | `server/mcp/handler.go`, `server/serverinfo/serverinfo.go` |

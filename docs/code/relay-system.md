@@ -326,4 +326,4 @@ Requests for the app arriving through the tunnel go through the same `middleware
 | Preview proxy | `server/relay/preview.go` | Preview host recognition, same-origin gate, forwarding to `localhost:<port>` |
 | Preview auth | `server/relay/preview_auth.go` | Preview login page, password and ticket login, session cookie |
 | Store | `server/relay/store.go` | Configuration persistence |
-| API path split | `server/apiroute/` | Shared with `main.go`'s SPA handler |
+| API path split | `server/apiroute/` | Shared with `main.go`'s SPA handler; also masks the [raw endpoint](authentication.md#raw-capabilities-urls-a-browser-element-loads-by-itself)'s capability in the proxy's error log (`LoggablePath`), since the path is that route's credential |

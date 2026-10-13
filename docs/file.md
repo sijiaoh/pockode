@@ -247,7 +247,8 @@ the error doesn't depend on whether the repository is a git one.
 
 Uploading and downloading whole files goes over **HTTP**, not the WebSocket, and
 is the one file operation that does, besides reading an image's bytes for
-display ([above](#operations)). `file.get`/`file.write` carry the content
+display ([above](#operations)) and serving content a browser element loads by
+itself (`/api/raw`, the last route below). `file.get`/`file.write` carry the content
 inside a single JSON-RPC message: the file is held in memory whole, and that
 one write occupies the connection until it drains — which is the reason for the
 2 MiB ceiling above. Transferred files are routinely
@@ -258,19 +259,21 @@ already speaks for files: `Content-Disposition`
 for a download, `multipart/form-data` for an upload, `Range` for reading a large
 file in pieces.
 
-Every route here sits behind the same bearer middleware as the rest of `/api`
-(`Authorization: Bearer <credential>` — a session token from the app, the
-password from a script) — they carry no auth of their own. A download therefore
-cannot be a plain `<a href>`; the client fetches it with the header and saves
-the response itself.
+Every route here but `/api/raw` sits behind the same bearer middleware as the
+rest of `/api` (`Authorization: Bearer <credential>` — a session token from the
+app, the password from a script) — they carry no auth of their own. A download
+therefore cannot be a plain `<a href>`; the client fetches it with the header
+and saves the response itself. `/api/raw` exists for the elements that cannot
+send a header: its credential is a capability in the path.
 
-Each takes an optional `worktree` query parameter (omitted or empty = the main
-worktree), matching the worktree a WebSocket connection binds at auth.
+Each but `/api/raw` takes an optional `worktree` query parameter (omitted or
+empty = the main worktree), matching the worktree a WebSocket connection binds at auth.
 
 Errors are JSON — `{ "error": "<message>", "code": "<code>" }` — with the code
 naming the cause: `invalid_path`, `invalid_request`, `not_found`, `not_a_file`,
 `not_a_directory`, `worktree_not_found`, `session_not_found`, `conflict`,
-`too_large`, `internal`.
+`too_large`, `internal`, and for `/api/raw` alone `capability_not_found` and
+`outside_scope`.
 Two more fields appear where they mean something: `limit` on `too_large`, and
 `written` on a partly-completed upload.
 
@@ -486,6 +489,52 @@ for `session_view.attachment`: its sessions stay readable, images included. The
 | `404` | `session_not_found` | No such session stored under that worktree, including a worktree that never existed |
 | `404` | `not_found` | No such attachment, or an id that is not one |
 | `500` | `internal` | Reading the session or the attachment failed |
+
+**`GET /api/raw/<capability>/<path>`** — serve content for a browser element to
+load by itself: a `<video>`, an `<audio>`, an `<iframe>`.
+
+There are no params and no `Authorization` header. The capability comes from
+`raw.capability` ([code/websocket-rpc.md](code/websocket-rpc.md#raw-capabilities)),
+which also gives the path to open. It names the origin, which is a work-directory
+file, a file in a commit or a chat attachment. It also names the scope, which is
+one file or one directory and everything beneath it. `<path>` is the file's own
+name for a file scope, and a path beneath the directory for a directory scope.
+What a capability is bound to, how long it lives, why it is in the path and what
+keeps a symlink from widening its scope are in
+[code/authentication.md](code/authentication.md#raw-capabilities-urls-a-browser-element-loads-by-itself).
+
+Unlike the download endpoint, the content is served **as what it is**, since the
+element has to play or render it. The type comes from the bytes, as for
+`file.get`'s `mime`. Where sniffing gives up, a fixed extension table supplies
+it (`contents.DetectServedMIME`). A stylesheet or a script sniffs as plain text,
+and under `nosniff` a browser refuses to apply either one served that way. The
+sniffer also cannot name some media: a phone records `.mov`, and an MP3 may have
+no ID3 tag. The table is spelled out rather than read from the machine's
+registry, which on Windows commonly maps `.js` to `text/plain`. Serving active
+content on the app's origin is safe only because of the sandbox and the other
+headers every response carries, errors included. The same page lists them and
+says why.
+
+**`Range` works for every origin**, a commit's file included. A video player
+will not play without it. The commit endpoint above declines that cost for a
+download read in chunks. Here a commit's file is a `ReadSeeker` over git's
+stream: seeking forward discards up to the offset, and seeking backward runs git
+again. A player asks for a handful of ranges, and the sniffed head is kept, so
+reading from the start again costs nothing. Revalidation uses `Last-Modified`
+for a file on disk and an `ETag` for a commit's file, whose content at a path
+never changes.
+
+| Status | Code | When |
+|--------|------|------|
+| `400` | `invalid_path` | An empty, absolute or `..` path, encoded or not — the directory scope's own trailing-`/` path included |
+| `400` | `not_a_file` | A directory, a fifo, a device node, or a directory or submodule in the commit |
+| `403` | `outside_scope` | A name other than the file's for a file scope; for a work-directory file, a path that leaves the scope through a symlink, a scope directory with anything but a plain directory on its way, or any other failure to open either — a permission, a link loop. `os.Root` reports a link out of it with an error that cannot be told apart from those, so all of them are answered as out of reach, with the reason in the message |
+| `404` | `capability_not_found` | The capability was never issued, has expired, or its session has ended; ask `raw.capability` again |
+| `404` | `not_found` | No such file, commit path or attachment, or a commit that no longer exists. A hash git would refuse never gets this far: `raw.capability` resolved it when it issued the capability |
+| `404` | `worktree_not_found` / `session_not_found` | As for the endpoints above |
+| `405` | `invalid_request` | Any method but `GET` and `HEAD` |
+| `416` | | A `Range` the content cannot satisfy |
+| `500` | `internal` | Opening the work directory or an attachment, reading the content, or running git failed |
 
 ## Search behavior
 
@@ -1327,7 +1376,11 @@ symlinks (checked with `Lstat`) — following one could return content from
 outside the workspace.
 
 The transfer routes inherit that same behavior on the read side — a download
-stats with `Stat`, exactly as `file.get` does — but not on the write side. An
+stats with `Stat`, exactly as `file.get` does — but not on the write side. The
+raw endpoint is an exception on the read side as well: it opens a
+work-directory file through an `os.Root` and refuses a link out of a
+capability's scope
+([why](code/authentication.md#raw-capabilities-urls-a-browser-element-loads-by-itself)). An
 upload replaces a **regular file** and nothing else: it checks the destination
 name with `Lstat`, so a symlink is the link itself rather than what it points
 at, and answers `409` for it even with `overwrite=true`. Following one would

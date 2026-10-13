@@ -45,23 +45,61 @@ Method names are organized using the `namespace.method` format, solving two prob
 | `cli_auth.*` | app | `ws/rpc_cli_auth.go` |
 | `cli_update.*` | app | `ws/rpc_cli_update.go` |
 | `port_preview.*` | app | `ws/rpc_port_preview.go` |
+| `raw.*` | app | `ws/rpc_raw.go` |
 | `remote_url.*` | app | `ws/rpc_remote_url.go` |
 
 - **Worktree scope**: Operations that depend on the current working directory (files, Git, etc.)
 - **App scope**: Global operations across worktrees (settings, project management, etc.)
 
-`session_view.*` is the one namespace that reads a worktree other than the bound
-one — its sessions outlive it, deletion included — so every method names the
+`session_view.*` is the one namespace built on reading a worktree other than the
+bound one — its sessions outlive it, deletion included — so every method names the
 worktree it reads from and binding one says nothing about which of them may be
 called. Why that makes those sessions read-only, and what its single non-read is
 for, is in [websocket-rpc-design.md](../websocket-rpc-design.md#method-naming-convention);
 what a user does with them is [cross-worktree-session-ui.md](../cross-worktree-session-ui.md).
+`raw.capability` does the same for an attachment, [below](#raw-capabilities), for
+the same reason.
 
 `port_preview.ticket` takes no params and answers `{ ticket }`: a one-time
 ticket that logs a [port preview](relay-system.md#logging-in) tab in without
 the password. It is refused with `CodeInvalidRequest` when the relay is
 disabled or has stopped — the same signal as an empty `remote_url` in the
 `auth` reply — since previews do not exist then.
+
+### Raw Capabilities
+
+`raw.capability` answers `{ path, expires_at }`: a URL path under `/api/raw/`
+that a `<video>`, `<audio>` or `<iframe>` loads without the session token, and
+when it stops working. Why it exists and what bounds it are in
+[Raw capabilities](authentication.md#raw-capabilities-urls-a-browser-element-loads-by-itself).
+The params name the content the way the client already reads it, by `origin`
+(the frontend's `ImageOrigin`), plus a `scope` of `file` or `directory`:
+
+| `origin` | Params | Read from |
+|---|---|---|
+| `file` | `path` | The connection's worktree |
+| `commit` | `hash`, `path` | The connection's repository; an abbreviated `hash` is resolved to the full one now, since the capability outlives the request and an abbreviation unique today need not stay so |
+| `attachment` | `session_id`, `id`, `worktree` (`""` = main) | The worktree it names, which need not be the connection's — as for `session_view.attachment`. Always `scope: "file"` |
+
+A param that belongs to another origin is refused with `CodeInvalidParams`, not
+ignored: a `worktree` sent with a `file` origin would otherwise read the
+connection's worktree while the client believed it had chosen another. So are an
+unknown origin or scope, a missing `session_id`, a path that is not local, a
+directory scope at the root, a malformed, unknown, ambiguous or non-commit
+`hash`, and an attachment `worktree` that cannot be a worktree's name; the
+message says which. A `commit` origin outside a git repository gets
+`CodeNotGitRepo`. A connection whose session has ended gets the `auth`
+refusal's `session_expired`. Whether the content exists is not checked: content
+comes and goes while a capability lives, so each request asks.
+
+`path` is where to open the content, already percent-encoded: the file for a
+file scope, and for a directory scope the directory with a trailing `/`, a base
+for relative URLs rather than something to load — there is no index file, and
+the directory itself answers `400`
+([what a path under it may be](../file.md#transfer)). A client must pass it
+through `apiUrl()` like any other HTTP path. The method is dispatched ahead of
+the bound-worktree gate, because an attachment needs no binding; a `file` or
+`commit` origin applies the gate's check itself.
 
 ### Following the Remote URL
 
