@@ -35,7 +35,7 @@ served through it; it is addressed by id in the session's own attachment store
 | Search UI state | `web/src/hooks/useFileSearch.ts`, `web/src/lib/filesSearchStore.ts` | Debounce + query cache, persisted options |
 | RPC actions | `web/src/lib/rpc/file.ts` | `getFile`, `writeFile`, `createFile`, `deleteFile`, `renameFile`, `searchFiles`, `isAlreadyExistsError` |
 | HTTP transfer client | `web/src/lib/fileDownload.ts`, `web/src/lib/fileUpload.ts` | Authenticated download / upload (see [Downloading](#downloading), [Uploading](#uploading)) |
-| Media playback | `web/src/components/Files/MediaPreview.tsx`, `web/src/components/Media/useMediaPlayback.ts`, `web/src/hooks/useRawMediaSource.ts` | Inline audio and video streamed from a raw capability, and its recovery (see [Playing audio and video](#playing-audio-and-video)) |
+| Media playback | `web/src/components/Files/MediaPreview.tsx`, `web/src/components/Media/useMediaPlayback.ts`, `web/src/hooks/useRawMediaSource.ts`, `web/src/components/Media/exclusivePlayback.ts` | Inline audio and video streamed from a raw capability, its recovery, and one sound at a time (see [Playing audio and video](#playing-audio-and-video)) |
 | Download action | `web/src/hooks/useFileDownload.ts`, `web/src/components/Files/FileDownloadControls.tsx` | The viewer's Download — cancel, large-file confirmation, error — shared by `FileView` and `CommitFileView` |
 | Upload queue state | `web/src/lib/uploadStore.ts` | Queue, concurrency, retry, worktree scope |
 | Drag and drop | `web/src/hooks/useFileDragZone.ts`, `web/src/components/Files/useFileDrop.ts`, `web/src/hooks/useFileDropGuard.ts` | What every drop zone shares (file detection, the depth count, folder splitting, claiming the drag); the tree's drop target resolution on top of it; the window-level drop backstop |
@@ -868,7 +868,11 @@ starts before the file has arrived, nothing is held whole, and there is no size
 ceiling. The machinery is `components/Media/useMediaPlayback.ts` over
 `hooks/useRawMediaSource.ts`, and the [media viewer](media-viewer.md)'s video
 stage plays through the same code, carrying on from the same second
-([Handover](media-viewer.md#handover)).
+([Handover](media-viewer.md#handover)). So does a chat attachment — an audio
+entry in place, a video thumbnail's poster — with the attachment as the
+capability's origin rather than a path
+([tool-call-ui.md](tool-call-ui.md#the-body-problems-2-and-3)): a voice note an
+agent was sent is no different, once streaming, from one opened in Files.
 
 - **Asked for when on screen, and connected.** As with an image, nothing is
   requested until the frame is in view. While the WebSocket is down the request
@@ -885,7 +889,9 @@ stage plays through the same code, carrying on from the same second
   refetched on focus or reconnect. A file's or a commit's capability is bound to
   the worktree the connection was on when it was issued, and the app's worktree
   moves before the connection does, so those are invalidated once a worktree
-  switch has landed (`queryClient.ts`).
+  switch has landed (`queryClient.ts`). An attachment's is keyed by the
+  worktree its bytes are read from (`useAttachmentOrigin`), so it is not
+  among those.
 - **A new capability is the same content.** Whoever renewed it — this player
   recovering, another player of the file, a mount after it went stale — the
   element is put back at the second it was at, playing if the user had it
@@ -932,6 +938,16 @@ stage plays through the same code, carrying on from the same second
 - **Captioned** `MOV · 1080×1920 · 0:42 · 38.2 MB` (`formatMediaCaption`, the
   image's caption with a length); a length the file does not state, as a
   MediaRecorder `.webm`, is left out.
+- **One sound at a time.** Starting any player pauses whichever one was
+  sounding — this preview, the viewer's stage, a chat attachment's audio entry
+  (`components/Media/exclusivePlayback.ts`, claimed from `useMediaPlayback`'s
+  `play` handler, so every player takes part without opting in), and the
+  composer's audio entry, which plays a `blob:` outside that hook and claims
+  for itself. Two voice notes talking over each other is never what was meant,
+  nor one carrying on under a video just opened. What is told to stop is the
+  player, not its element, so one caught mid-swap of its capability does not
+  start again once the new one loads. A player off screen keeps playing, as in
+  any messenger; one that unmounts stops.
 
 There is no `canPlayType` pre-check: Chromium answers `""` for
 `video/quicktime` yet plays most H.264 `.mov` files, so the player always tries.

@@ -309,6 +309,11 @@ body {
 	/* Special - Chat bubbles */
 	--color-th-user-bubble: var(--th-user-bubble);
 	--color-th-user-bubble-text: var(--th-user-bubble-text);
+
+	/* Special - Over media: one value in every theme, because what is under
+	   it — a video frame — looks the same in every theme. */
+	--color-th-media: #000000;
+	--color-th-on-media: #ffffff;
 }
 
 /* =============================================================================

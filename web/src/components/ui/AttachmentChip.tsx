@@ -1,5 +1,13 @@
 import type { LucideIcon } from "lucide-react";
 
+/**
+ * The chip's box, for an entry that has to sit level with one and turn into
+ * one without moving — the strip's audio player. The border colour is left to
+ * the caller.
+ */
+export const ATTACHMENT_CHIP_BOX =
+	"flex w-56 shrink-0 items-center gap-2 rounded-lg border bg-th-bg-secondary p-2";
+
 interface Props {
 	icon: LucideIcon;
 	iconClassName?: string;
@@ -42,7 +50,7 @@ function AttachmentChip({
 		// Its own type sizes rather than the surrounding text's: inside a user
 		// bubble that text is the message, and an entry at the message's size
 		// competes with it — and outgrows the composer's entry for the same file.
-		<span className="flex w-56 shrink-0 items-center gap-2 rounded-lg border border-th-border bg-th-bg-secondary p-2">
+		<span className={`${ATTACHMENT_CHIP_BOX} border-th-border`}>
 			<Icon className={`size-5 shrink-0 ${iconClassName}`} aria-hidden="true" />
 			<span className="min-w-0 flex-1 text-sm">
 				<span

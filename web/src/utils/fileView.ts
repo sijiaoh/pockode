@@ -163,6 +163,14 @@ export function inlineVideoBox(dimensions: ImageDimensions | null): {
 	};
 }
 
+/**
+ * A media element's length once its header is read, or null while it has no
+ * finite one: a MediaRecorder `.webm` reports Infinity until played through.
+ */
+export function mediaDuration(element: HTMLMediaElement): number | null {
+	return Number.isFinite(element.duration) ? element.duration : null;
+}
+
 /** `m:ss`, or `h:mm:ss` from an hour: `42` -> `0:42`, `3725` -> `1:02:05`. */
 export function formatDuration(seconds: number): string {
 	const total = Math.floor(seconds);

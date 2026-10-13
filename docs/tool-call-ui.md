@@ -1691,10 +1691,10 @@ marked `not_fetched` is not that — it is a *pointer* at a file nobody read —
 it is drawn as a reference line in the body instead
 ([above](#when-a-background-run-finishes)).
 
-A file in the strip that is not drawn as an image, here and in a user's
-message, is `AttachmentChip` (an image is a thumbnail, whose tooltip carries
-the same detail), which
-sets its own compact type — name `text-sm`, detail `text-xs` — rather than
+A file in the strip that is not drawn as an image, a video or audio, here and
+in a user's message, is `AttachmentChip` (an image or a video is a thumbnail,
+whose tooltip carries the same detail; audio is a player shaped like the chip),
+which sets its own compact type — name `text-sm`, detail `text-xs` — rather than
 taking the surrounding text's, so in a bubble it does not compete with the
 message or outgrow the composer's entry for the same file. Its detail
 (`attachmentDetail`, `utils/attachment.ts`) is dimensions and size,
@@ -1710,7 +1710,68 @@ sets the files off.
 
 A thumbnail is not expanded in place: tapping it opens the image in the
 [media viewer](media-viewer.md#chat-attachment-thumbnails), full screen, where
-it zooms and pans.
+it zooms and pans — or the video, where it plays.
+
+Which entry a block gets is `attachmentKind` (`utils/attachment.ts`): what the
+agent says it is. A block with something behind it is an image thumbnail
+(`AttachmentThumb`, which also takes a block with no type at all, and hands
+one that turns out to be a video or audio on), a video thumbnail (`VideoThumb`)
+or an audio entry (`AudioEntry`); anything else with something behind it is a
+chip with a file glyph. Both players read the description first, once on
+screen, through `PlayableAttachment`, which also words a description that
+cannot be read or is nothing it can play. A description of the other playable
+kind wins over the block: `PlayableEntry` hands it to that kind's entry. A
+block keeps the type it was written with, and the server once typed a voice
+note in an MP4 or WebM container as video; read back now it is audio, and
+should play as audio rather than say it cannot be previewed. A block with
+nothing behind it is a chip whose icon says what is missing — `ImageOff`,
+`VideoOff`, `VolumeX`, the glyphs a player's failure card uses — since a reader
+looking for something to see or hear will not find it, and a generic file glyph
+would not say that.
+
+A video thumbnail is a **fixed square** (`size-24 sm:size-32`, the image
+thumbnail's heights) from placeholder to first frame, its picture
+`object-cover`: a block carries no dimensions for a video, so no shape is known
+before the bytes are, and a square crops a phone's 9:16 and a desktop's 16:9
+alike to a recognisable centre. It is drawn with a paused `<video>` and no
+`controls`, streamed from a raw capability through `useMediaPlayback` — the
+same one the viewer then plays from — with `preload="metadata"` and the
+`#t=0.001` fragment, so only the header and the first frame are read and iOS
+paints that frame. Until it has a source it is a skeleton, as an image's
+placeholder is. From then until the frame paints — and for good on an iOS that
+loads nothing before a press, or for a video with no picture this browser can
+show — it is a black square with a play mark and a film glyph, already
+tappable; once painted, the length takes the glyph's corner. Nothing under it
+is themed, so neither is what is drawn over it: the square and the marks use
+`th-media` / `th-on-media`, one value in every theme. A failure swaps it for a
+chip titled as `MediaFailureCard` is: Retry for a load, Save for bytes this
+browser cannot play (no viewer opens from a failed entry, so its Save is out of
+reach), nothing for a file that is gone. That changes the entry's size, once,
+on an entry that is finished — as a failed image thumbnail turning into a chip
+always has.
+
+Audio plays **where it is**: a voice note is listened to beside the message it
+came with, and there is no audio stage. The entry is the chip's width and the
+height of a chip with an action, so it sits level in a row of chips, and
+turning into a failure chip with Retry or Save moves nothing. A failure chip
+with no action — a file that is gone, or not audio after all — is 8px shorter
+on a touch screen, the same one-off change as a failed video's.
+The entry is a play button, the name, and a line that reads length · size
+until the first play, then a scrubber and the time for as long as the entry is
+mounted, so a paused note still says where it got to. A recording that states
+no length (a MediaRecorder `.webm`) has nothing to scrub against and shows the
+elapsed time alone. Its `<audio>` has no `controls` — native ones do not fit a
+chip and look different in every browser — and streams through
+`useMediaPlayback` like the video thumbnail, `preload="metadata"`, nothing read
+until the entry is on screen. The button stays disabled until the element has
+its source, and `play()` is called in the press itself: iOS refuses one made
+outside the gesture, and a press that first waited for the capability would
+land outside it. The scrubber is the one control here under 44px on a touch
+screen (24px), deliberately: it is dragged along its length, not tapped, and a
+44px row would make the entry taller than its neighbours. The entry that is
+sounding has an accent border; starting one pauses any other player
+([one sound at a time](file.md#playing-audio-and-video)). Failure is the video
+thumbnail's chip, worded for audio.
 
 **Nothing opens a tool call's body but the user.** Trial and error is how an
 agent works: a turn routinely contains several failed calls, and four bodies

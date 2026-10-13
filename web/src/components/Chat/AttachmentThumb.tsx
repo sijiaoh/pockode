@@ -14,9 +14,10 @@ import {
 	omittedLabel,
 } from "../../utils/attachment";
 import { getFileViewState } from "../../utils/fileView";
-import type { ImageMediaItem } from "../Media";
+import type { MediaItem } from "../Media";
 import AttachmentChip from "../ui/AttachmentChip";
 import Skeleton from "../ui/Skeleton";
+import PlayableEntry from "./PlayableEntry";
 
 /** Fallback shape for an image whose dimensions the agent did not report. */
 const FALLBACK_ASPECT = 4 / 3;
@@ -25,7 +26,7 @@ interface Props {
 	file: FileBlock;
 	source: AttachmentSource;
 	/** Hands over what the media viewer shows for this image. */
-	onOpen: (item: ImageMediaItem) => void;
+	onOpen: (item: MediaItem) => void;
 }
 
 /**
@@ -81,6 +82,20 @@ function AttachmentThumb({ file, source, onOpen }: Props) {
 						setAttempt((n) => n + 1);
 					},
 				}}
+			/>
+		);
+	}
+
+	// A block the agent gave no type for is tried as an image (`previewsAsImage`),
+	// and may turn out to be a video or audio. Its box changes shape here, once;
+	// a typed block is routed to its own entry before anything loads.
+	if (view?.kind === "video" || view?.kind === "audio") {
+		return (
+			<PlayableEntry
+				file={file}
+				source={source}
+				kind={view.kind}
+				onOpen={onOpen}
 			/>
 		);
 	}
