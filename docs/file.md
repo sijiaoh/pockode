@@ -115,12 +115,32 @@ its extension — a `.svg` holding a PNG is reported as `image/png`. The
 extension is consulted only for media no sniffer recognises — the image formats
 SVG, AVIF, HEIC and TIFF; a phone's `.mov`; an MP3 without an ID3 tag or an MP4
 whose brand Go does not know — and only when sniffing produced nothing more
-specific than "some text" or "some bytes". SVG is the one image served as `text`, and so the
-one still held to the 2 MiB ceiling: it is source the user can edit, and the UI
-can render it from the text just as well. It is also a security boundary rather
-than a preference — SVG can carry script, and its bytes fetched into a
-same-origin Blob would run as the app if opened on their own, where they can
-read the login token. Text rendered through an `<img>` never needs that Blob.
+specific than "some text" or "some bytes".
+
+The extension is also consulted inside a container that holds audio as readily
+as video, which the sniffer names by the container alone: an iPhone voice memo
+sniffs as `video/mp4`, a browser's voice recording as `video/webm`, an Opus
+note as `application/ogg`. The type is what decides which player a file gets —
+here, in the [media viewer](media-viewer.md) and in a chat attachment's
+strip — so a voice note typed by its container would open as a black video
+square, or as a plain file with no player at all. Inside one of those containers the extension
+picks — `.m4a` is `audio/mp4`, `.weba` `audio/webm`, `.ogg`/`.oga`/`.opus`
+`audio/ogg`, `.ogv` `video/ogg` — but only among what the content already is,
+so a PNG named `.m4a` is still a PNG and an MP4 named `.ogg` still an MP4. A
+browser recording is named `.webm` with or without a picture, so no extension
+can say which it is; there the track list in the file's first 512 bytes
+decides — those bytes and no more, however much of the file the caller holds,
+so a git blob read whole gets the answer a head-only read does — and one that
+lists audio and no video is `audio/webm`. A track list past them leaves the
+file video, as does an audio-only MP4 named `.mp4`: an MP4 states its tracks
+wherever its index sits, often at the end, so only its name could tell, and
+`.mp4` names video.
+
+SVG is the one image served as `text`, and so the one still held to the 2 MiB
+ceiling: it is source the user can edit, and the UI can render it from the text
+just as well. It is also a security boundary rather than a preference — SVG
+can carry script, and its bytes fetched into a same-origin Blob would run as
+the app if opened on their own, where they can read the login token. Text rendered through an `<img>` never needs that Blob.
 
 **`file.write`** — Write file content to disk with upsert semantics.
 - Creates the file if it doesn't exist

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math/bits"
 	"net/http"
 	"os"
 	"path"
@@ -399,20 +400,56 @@ var playableExtMIMEs = map[string]string{
 	".flac": "audio/flac",
 }
 
+// Containers that hold audio as readily as video, which the sniffer names as
+// video (or, for Ogg, as nothing playable) whatever they hold: an iPhone voice
+// memo is an MP4 and an Opus voice note an Ogg. Inside the container the
+// extension says which one it is. Keyed by container so that an extension only
+// picks among what the content already is — a .m4a holding a WebM stays WebM.
+var containerExtMIMEs = map[string]map[string]string{
+	"video/mp4": {
+		".m4a": "audio/mp4",
+		".m4b": "audio/mp4",
+	},
+	"video/webm": {
+		".weba": "audio/webm",
+	},
+	"application/ogg": {
+		".ogg":  "audio/ogg",
+		".oga":  "audio/ogg",
+		".opus": "audio/ogg",
+		".spx":  "audio/ogg",
+		".ogv":  "video/ogg",
+	},
+}
+
 // DetectMIME reports the media type of a file whose leading bytes are head.
-// Content wins over extension — a file is what it contains — and the extension
-// is consulted only where sniffing gave up, so a .svg holding a PNG is still
-// reported as a PNG.
+// Content wins over extension — a file is what it contains, so a .svg holding
+// a PNG is still reported as a PNG. The extension is consulted only where
+// sniffing gave up, or where it named a container that could be audio or video
+// (containerExtMIMEs).
 //
 // head need be no longer than SniffLen. Exported for the callers that describe
 // content this package never reads off disk — the image an agent says it
 // looked at — so that one answer is given about what a file is.
 func DetectMIME(name string, head []byte) string {
 	sniffed := http.DetectContentType(head)
+	ext := strings.ToLower(filepath.Ext(name))
+	if inContainer, ok := containerExtMIMEs[sniffed]; ok {
+		if mime, ok := inContainer[ext]; ok {
+			return mime
+		}
+		// A recording made in a browser is named .webm whether it holds
+		// video or not, so there the content has to say. Only the first
+		// SniffLen bytes, whatever the caller holds: a file shown in full
+		// (a small git blob) must get the answer its head-only read gets.
+		if sniffed == "video/webm" && isAudioOnlyWebM(head[:min(len(head), SniffLen)]) {
+			return "audio/webm"
+		}
+		return sniffed
+	}
 	if !isGenericType(sniffed) {
 		return sniffed
 	}
-	ext := strings.ToLower(filepath.Ext(name))
 	if mime, ok := imageExtMIMEs[ext]; ok {
 		return mime
 	}
@@ -420,6 +457,135 @@ func DetectMIME(name string, head []byte) string {
 		return mime
 	}
 	return sniffed
+}
+
+// EBML element IDs (Matroska specification) that isAudioOnlyWebM walks.
+const (
+	ebmlSegment    = 0x18538067
+	ebmlTracks     = 0x1654AE6B
+	ebmlCluster    = 0x1F43B675
+	ebmlTrackEntry = 0xAE
+	ebmlTrackType  = 0x83
+
+	trackTypeVideo = 1
+	trackTypeAudio = 2
+)
+
+// isAudioOnlyWebM reports whether the WebM file opening with head declares an
+// audio track and no video track.
+//
+// A MediaRecorder writes its track list within the first couple of hundred
+// bytes, so it is in head. A file whose track list is not — a muxer that
+// reserves space for a seek index first — is left as video: false here only
+// means "not shown to be audio".
+func isAudioOnlyWebM(head []byte) bool {
+	// The EBML header comes first; the Segment holding everything else
+	// follows it, its size usually unknown while recording.
+	_, _, rest, ok := ebmlElement(head)
+	if !ok {
+		return false
+	}
+	id, segment, _, ok := ebmlElement(rest)
+	if !ok || id != ebmlSegment {
+		return false
+	}
+	for len(segment) > 0 {
+		id, body, next, ok := ebmlElement(segment)
+		// Tracks precede the first Cluster, so meeting one first means
+		// there is no track list to read.
+		if !ok || id == ebmlCluster {
+			return false
+		}
+		if id == ebmlTracks {
+			return next != nil && tracksAreAudioOnly(body)
+		}
+		if next == nil {
+			return false
+		}
+		segment = next
+	}
+	return false
+}
+
+func tracksAreAudioOnly(tracks []byte) bool {
+	sawAudio := false
+	for len(tracks) > 0 {
+		id, entry, next, ok := ebmlElement(tracks)
+		if !ok || next == nil {
+			return false
+		}
+		if id == ebmlTrackEntry {
+			switch trackType(entry) {
+			case trackTypeVideo:
+				return false
+			case trackTypeAudio:
+				sawAudio = true
+			}
+		}
+		tracks = next
+	}
+	return sawAudio
+}
+
+func trackType(entry []byte) uint64 {
+	for len(entry) > 0 {
+		id, body, next, ok := ebmlElement(entry)
+		if !ok || next == nil {
+			return 0
+		}
+		if id == ebmlTrackType {
+			var v uint64
+			for _, c := range body {
+				v = v<<8 | uint64(c)
+			}
+			return v
+		}
+		entry = next
+	}
+	return 0
+}
+
+// ebmlElement splits the EBML element at the start of b into its ID and body
+// and returns what follows it. An element whose size is unknown or runs past
+// b gets the rest of b as its body and a nil rest, which callers read as "not
+// wholly here".
+func ebmlElement(b []byte) (id uint64, body, rest []byte, ok bool) {
+	id, n, ok := ebmlVint(b, true)
+	if !ok || n > 4 {
+		return 0, nil, nil, false
+	}
+	b = b[n:]
+	size, n, ok := ebmlVint(b, false)
+	if !ok {
+		return 0, nil, nil, false
+	}
+	b = b[n:]
+	unknown := size == 1<<(7*n)-1
+	if unknown || size > uint64(len(b)) {
+		return id, b, nil, true
+	}
+	return id, b[:size], b[size:], true
+}
+
+// ebmlVint reads a variable-length integer: the count of leading zero bits in
+// the first byte says how many bytes follow. IDs keep that length marker as
+// part of their value; sizes do not.
+func ebmlVint(b []byte, keepMarker bool) (v uint64, n int, ok bool) {
+	if len(b) == 0 || b[0] == 0 {
+		return 0, 0, false
+	}
+	n = bits.LeadingZeros8(b[0]) + 1
+	if n > len(b) {
+		return 0, 0, false
+	}
+	v = uint64(b[0])
+	if !keepMarker {
+		v &= 0xFF >> n
+	}
+	for _, c := range b[1:n] {
+		v = v<<8 | uint64(c)
+	}
+	return v, n, true
 }
 
 // Formats a page loads that http.DetectContentType cannot name. Stylesheets

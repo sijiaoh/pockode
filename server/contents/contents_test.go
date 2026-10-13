@@ -2,11 +2,13 @@ package contents
 
 import (
 	"bytes"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -368,6 +370,75 @@ func TestGetContents_ReadFile(t *testing.T) {
 			t.Fatal("GetContents blocked on the fifo")
 		}
 	})
+}
+
+// Heads of what Chromium's MediaRecorder wrote for a short recording, cut
+// where the first Cluster begins. Both carry an Opus track; only the second
+// carries a VP8 one too.
+var (
+	chromeAudioWebM = mustHex("1a45dfa39f4286810142f7810142f2810442f381084282847765626d4287810442858102185380670100000000001f28114d9b74b94dbb8b53ab841549a96653ac816e4dbb8b53ab841654ae6b53ac81934dbb8b53ab841f43b67553ac81d74dbb8c53ab841c53bb6b53ac821f16ecae000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001549a966a02ad7b1830f424044898443d2578d4d80864368726f6d655741864368726f6d651654ae6bbfaebdd7810173c5878ed91aa04c1a1c8381028686415f4f50555363a2934f707573486561640102000080bb0000000000e18db584473b80009f810262648120")
+	chromeVideoWebM = mustHex("1a45dfa39f4286810142f7810142f2810442f381084282847765626d4287810442858102185380670100000000002499114d9b74ba4dbb8b53ab841549a96653ac816e4dbb8b53ab841654ae6b53ac81934dbb8c53ab841f43b67553ac8201134dbb8c53ab841c53bb6b53ac822486ecad0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001549a966a02ad7b1830f424044898443e03a3d4d80864368726f6d655741864368726f6d651654ae6bfbaebad7810173c58756179aa3c55e7083810155ee81018685565f565038e09db08140ba814053c0810155b09055b1810155b9810255ba810d55bb8101aebdd7810273c5879efa59bf2e7ad18381028686415f4f50555363a2934f707573486561640102000080bb0000000000e18db584473b80009f810262648120")
+	// The ftyp box of an iPhone Voice Memos recording.
+	voiceMemoM4A = []byte("\x00\x00\x00\x1cftypM4A \x00\x00\x00\x00M4A isommp42\x00\x00\x00\x00")
+	// The first Ogg page of an Opus stream: its only packet is the OpusHead.
+	opusOgg = []byte("OggS\x00\x02\x00\x00\x00\x00\x00\x00\x00\x00\x2a\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x01\x13OpusHead\x01\x01\x38\x01\x80\xbb\x00\x00\x00\x00\x00")
+	isomMP4 = []byte("\x00\x00\x00\x18ftypisom\x00\x00\x02\x00isommp41")
+	// The same recording with a 600-byte Void element ahead of its track list,
+	// as a muxer reserving room for a seek index writes it: whole, but with
+	// the Tracks past SniffLen.
+	paddedAudioWebM = slices.Concat(chromeAudioWebM[:48], []byte{0xEC, 0x42, 0x58}, make([]byte, 600), chromeAudioWebM[48:])
+)
+
+func mustHex(s string) []byte {
+	b, err := hex.DecodeString(s)
+	if err != nil {
+		panic(err)
+	}
+	return b
+}
+
+func TestDetectMIME(t *testing.T) {
+	tests := []struct {
+		name string
+		file string
+		head []byte
+		want string
+	}{
+		// Containers that hold audio as readily as video: the extension says
+		// which, since the sniffer only knows the container.
+		{"voice memo in mp4", "memo.m4a", voiceMemoM4A, "audio/mp4"},
+		{"audiobook in mp4", "book.M4B", isomMP4, "audio/mp4"},
+		{"weba whose track list the head does not reach", "note.weba", chromeAudioWebM[:40], "audio/webm"},
+		{"opus named .opus", "note.opus", opusOgg, "audio/ogg"},
+		{"ogg named .ogg", "song.ogg", opusOgg, "audio/ogg"},
+		{"ogg named .oga", "song.oga", opusOgg, "audio/ogg"},
+		{"ogg named .ogv", "clip.ogv", opusOgg, "video/ogg"},
+
+		// A recording is named .webm whether or not it has a picture, so
+		// there the track list decides.
+		{"audio-only browser recording", "rec.webm", chromeAudioWebM, "audio/webm"},
+		{"browser recording with video", "rec.webm", chromeVideoWebM, "video/webm"},
+		{"webm cut before its track list", "rec.webm", chromeAudioWebM[:100], "video/webm"},
+		{"webm whose track list runs past the head", "rec.webm", chromeAudioWebM[:len(chromeAudioWebM)-20], "video/webm"},
+		{"whole webm with its track list past SniffLen", "rec.webm", paddedAudioWebM, "video/webm"},
+
+		// Content still wins everywhere else.
+		{"mp4 video", "clip.mp4", isomMP4, "video/mp4"},
+		{"mp4 with no extension", "clip", voiceMemoM4A, "video/mp4"},
+		{"png named as audio", "memo.m4a", pngHeader, "image/png"},
+		{"webm named as mp4 audio", "memo.m4a", chromeVideoWebM, "video/webm"},
+		{"ogg named as mp4 audio", "memo.m4a", opusOgg, "application/ogg"},
+		{"mp4 named as ogg audio", "song.ogg", isomMP4, "video/mp4"},
+		{"unknown extension on ogg", "data.bin", opusOgg, "application/ogg"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := DetectMIME(tt.file, tt.head); got != tt.want {
+				t.Errorf("DetectMIME(%q) = %q, want %q", tt.file, got, tt.want)
+			}
+		})
+	}
 }
 
 func TestIsBinary(t *testing.T) {
