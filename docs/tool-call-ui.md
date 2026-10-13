@@ -1708,6 +1708,10 @@ divider above it (`divided={false}` in `MessageItem.tsx`): a rule the bubble's
 width under a paragraph read as that paragraph's underline, so spacing alone
 sets the files off.
 
+A thumbnail is not expanded in place: tapping it opens the image in the
+[media viewer](media-viewer.md#chat-attachment-thumbnails), full screen, where
+it zooms and pans.
+
 **Nothing opens a tool call's body but the user.** Trial and error is how an
 agent works: a turn routinely contains several failed calls, and four bodies
 unfolding themselves bury the answer the user is reading. What replaced the
@@ -1786,6 +1790,11 @@ unpublished a frame later, since publishers legitimately unmount and remount
 across commits. The source is content, not the transcript's rendering, because
 the viewer draws it differently: unclamped, with its own wrap, and from the
 latest text.
+
+An image is not one of these sources. Attachments and the images in Files and
+Git open in the [media viewer](media-viewer.md), a `Sheet` of its own; why it is
+not this host is
+[there](media-viewer.md#why-a-sheet-and-not-fullscreenhost-or-a-lightbox-library).
 
 #### Layout
 

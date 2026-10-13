@@ -1,4 +1,9 @@
-import { queryOptions, skipToken, useQuery } from "@tanstack/react-query";
+import {
+	type QueryClient,
+	queryOptions,
+	skipToken,
+	useQuery,
+} from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { fetchImageBlob, ImageResponseError } from "../lib/imageFetch";
 import { DEFAULT_RETRY_COUNT } from "../lib/queryClient";
@@ -49,6 +54,24 @@ export function imageBlobQuery(origin: ImageOrigin, mime: string) {
 			!(error instanceof ImageResponseError && error.status < 500) &&
 			failureCount < DEFAULT_RETRY_COUNT,
 	});
+}
+
+/**
+ * An image's bytes as a Blob, whichever way the image reached the page — for
+ * saving it. A remote image's are the ones its `<img>` already read, so this is
+ * a cache hit unless the reader saves before they arrive.
+ */
+export async function imageSourceBlob(
+	queryClient: QueryClient,
+	source: ImageSource,
+): Promise<Blob> {
+	if (source.kind === "remote") {
+		return queryClient.fetchQuery(imageBlobQuery(source.origin, source.mime));
+	}
+	// Inline sources are the percent-encoded data URLs `getImageSource` builds.
+	// Untyped: `saveBlob` retypes every Blob it saves.
+	const comma = source.src.indexOf(",");
+	return new Blob([decodeURIComponent(source.src.slice(comma + 1))]);
 }
 
 /**

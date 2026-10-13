@@ -664,6 +664,10 @@ free and must not become `dangerouslySetInnerHTML`. Being previewable as an
 image does not cost SVG its source: what Edit follows is whether the content
 arrived as text, not which state renders it.
 
+Once loaded, an image offers full screen — the ⤢ in its corner, or a click on
+the image — in the [media viewer](media-viewer.md#files-and-git-imagepreview),
+which zooms and pans it and has no Open in Files, since the file is already open.
+
 Edit is disabled rather than hidden, with the reason in its accessible name, and
 `binary`/`too-large` repeat it visibly on the card. **Delete stays available in
 every state** — being unable to preview a file is no reason to be unable to
@@ -745,8 +749,9 @@ object URL rather than an `<img src>` pointing at the endpoint; a `401` logs out
   an FS-watch change, a worktree switch, a rename or delete — reaches the bytes
   by prefix with nothing extra to keep in step. A commit's file and an
   attachment never change, so their keys only have to tell one from another. A
-  thumbnail and its full-size preview share one entry, so the bytes are read
-  once; the object URL is made per component and revoked on unmount.
+  thumbnail, the in-place preview and the [media viewer](media-viewer.md)
+  share one entry, so the bytes are read once; the object URL is made per
+  component and revoked on unmount.
 - **Retry by status.** A `4xx` — an attachment cleaned up, a path the commit
   lacks — would be refused the same way again, so the failure and a Retry
   action show at once (a card on the preview, the chip on a thumbnail). A `5xx`

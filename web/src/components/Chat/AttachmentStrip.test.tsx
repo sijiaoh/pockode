@@ -1,8 +1,9 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { saveBlob } from "../../lib/fileDownload";
 import {
 	reportEverythingInView,
 	stubImageFetch,
@@ -10,6 +11,7 @@ import {
 } from "../../test/imageFixtures";
 import type { FileBlock } from "../../types/content";
 import type { FileContent } from "../../types/contents";
+import type { StageComponent } from "../Media/types";
 import AttachmentStrip from "./AttachmentStrip";
 
 const getAttachment = vi.fn();
@@ -19,6 +21,19 @@ vi.mock("../../lib/wsStore", () => ({
 	useWSStore: (selector: (state: unknown) => unknown) =>
 		selector({ workDir: "/work", actions: { getAttachment, getFile } }),
 	isRPCTimeout: () => false,
+}));
+
+// The stage is the viewer's to test; here only that the strip opens it with
+// the right item matters.
+vi.mock("../Media/stages", () => {
+	const Stage: StageComponent = ({ item }) => <p>stage: {item.name}</p>;
+	return { loadedStage: () => Stage, loadStage: async () => Stage };
+});
+
+// Only the save: the rest of the module is how a file's bytes are read.
+vi.mock("../../lib/fileDownload", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../../lib/fileDownload")>()),
+	saveBlob: vi.fn(),
 }));
 
 let fetchMock: ReturnType<typeof stubImageFetch>;
@@ -31,6 +46,7 @@ beforeEach(() => {
 	fetchMock = stubImageFetch();
 	getAttachment.mockReset();
 	getFile.mockReset();
+	vi.mocked(saveBlob).mockReset();
 });
 
 afterEach(() => {
@@ -77,7 +93,7 @@ function renderStrip(files: FileBlock[], onOpenFile?: (path: string) => void) {
 }
 
 describe("AttachmentStrip", () => {
-	it("shows an image a tool returned inline, without expanding anything", async () => {
+	it("shows an image a tool returned inline, without opening anything", async () => {
 		getAttachment.mockResolvedValue(imageContent());
 
 		renderStrip([
@@ -126,22 +142,33 @@ describe("AttachmentStrip", () => {
 		expect(revoked).toEqual(["blob:test/1"]);
 	});
 
-	it("opens the picked image at full size and offers to save it", async () => {
+	it("opens the picked image in the media viewer and saves it from there", async () => {
 		const user = userEvent.setup();
 		getAttachment.mockResolvedValue(imageContent());
 
 		renderStrip([{ mime: "image/png", attachment_id: "abc" }]);
 
 		await user.click(
-			await screen.findByRole("button", {}, { timeout: 10_000 }),
+			await screen.findByRole(
+				"button",
+				{ name: "View PNG image" },
+				{ timeout: 10_000 },
+			),
 		);
 
+		const viewer = await screen.findByRole("dialog");
 		expect(
-			await screen.findByRole("button", { name: "Save" }),
+			await within(viewer).findByText("stage: PNG image"),
 		).toBeInTheDocument();
-		// The thumbnail and the full-size copy, so the preview really opened —
-		// and both from one read of the bytes.
-		await waitFor(() => expect(screen.getAllByRole("img")).toHaveLength(2));
+		// No way over to Files for an attachment that names no file.
+		expect(
+			within(viewer).queryByRole("button", { name: "Open in Files" }),
+		).toBeNull();
+
+		await user.click(within(viewer).getByRole("button", { name: "Save" }));
+		await waitFor(() => expect(saveBlob).toHaveBeenCalledOnce());
+		expect(vi.mocked(saveBlob).mock.calls[0][1]).toBe("image.png");
+		// The bytes the thumbnail already read.
 		expect(fetchMock).toHaveBeenCalledTimes(1);
 	});
 
@@ -189,12 +216,17 @@ describe("AttachmentStrip", () => {
 		);
 
 		await user.click(
-			await screen.findByRole("button", {}, { timeout: 10_000 }),
+			await screen.findByRole(
+				"button",
+				{ name: "View a.png" },
+				{ timeout: 10_000 },
+			),
 		);
 		await user.click(
 			await screen.findByRole("button", { name: "Open in Files" }),
 		);
-		expect(onOpenFile).toHaveBeenCalledWith("shots/a.png");
+		await waitFor(() => expect(onOpenFile).toHaveBeenCalledWith("shots/a.png"));
+		expect(screen.queryByRole("dialog")).toBeNull();
 	});
 
 	it("reads a file the agent only named, through the work directory", async () => {
