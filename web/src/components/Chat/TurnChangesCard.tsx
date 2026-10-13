@@ -77,6 +77,7 @@ function EditSection({
 	index,
 	step,
 	file,
+	onOpenFile,
 }: {
 	edit: FileEdit;
 	/** Its place in the file's edits, telling apart two of one run's. */
@@ -84,6 +85,7 @@ function EditSection({
 	/** Its place among the file's changes, when there is more than one. */
 	step?: number;
 	file: TurnFile;
+	onOpenFile?: (path: string) => void;
 }) {
 	const { change, run } = edit;
 	// Counting reads the whole diff; `change` is the same object every render.
@@ -100,9 +102,9 @@ function EditSection({
 			key: `turn:${run.id}:${file.path}:${index}`,
 			title: `${run.name} · ${file.name}`,
 			subject: { kind: "path", path: file.path },
-			content: changeFullScreenContent(change),
+			content: changeFullScreenContent(change, onOpenFile),
 		}),
-		[run.id, run.name, file.path, file.name, index, change],
+		[run.id, run.name, file.path, file.name, index, change, onOpenFile],
 	);
 	return (
 		<Section
@@ -123,7 +125,7 @@ function EditSection({
 					Whole file written — what it replaced is not in this call.
 				</p>
 			)}
-			<ProposedChange change={change} />
+			<ProposedChange change={change} onOpenFile={onOpenFile} />
 		</Section>
 	);
 }
@@ -154,6 +156,9 @@ function FileBody({
 					index={index}
 					step={numbered ? index + 1 : undefined}
 					file={file}
+					// Unlike the path line's, kept for a deleted file: its images
+					// are other files.
+					onOpenFile={onOpenFile}
 				/>
 			))}
 		</>

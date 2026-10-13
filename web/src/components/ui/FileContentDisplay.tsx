@@ -19,6 +19,8 @@ interface Props {
 	plain?: boolean;
 	/** See `CodeHighlighter`. */
 	copyable?: boolean;
+	/** Offered by a rendered `.md` file's images; takes a work-directory-relative path. */
+	onOpenFile?: (path: string) => void;
 }
 
 export function FileContentDisplay({
@@ -26,9 +28,16 @@ export function FileContentDisplay({
 	filePath,
 	plain,
 	copyable,
+	onOpenFile,
 }: Props) {
 	if (!plain && filePath && isMarkdownFile(filePath)) {
-		return <MarkdownFileContent content={content} filePath={filePath} />;
+		return (
+			<MarkdownFileContent
+				content={content}
+				filePath={filePath}
+				onOpenFile={onOpenFile}
+			/>
+		);
 	}
 
 	const language = filePath ? getLanguageFromPath(filePath) : undefined;
@@ -42,15 +51,18 @@ export function FileContentDisplay({
 function MarkdownFileContent({
 	content,
 	filePath,
+	onOpenFile,
 }: {
 	content: string;
 	filePath: string;
+	onOpenFile?: (path: string) => void;
 }) {
 	const workDir = useWSStore((state) => state.workDir);
 	return (
 		<MarkdownContent
 			content={content}
 			baseDir={markdownFileBaseDir(filePath, workDir)}
+			onOpenFile={onOpenFile}
 		/>
 	);
 }

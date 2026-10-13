@@ -2,10 +2,10 @@ import type { Element, ElementContent } from "hast";
 import {
 	type ComponentPropsWithoutRef,
 	type CSSProperties,
-	lazy,
 	memo,
 	type ReactNode,
-	Suspense,
+	useCallback,
+	useContext,
 	useEffect,
 	useMemo,
 	useRef,
@@ -19,13 +19,12 @@ import remarkBreaks from "remark-breaks";
 import remarkGfm from "remark-gfm";
 import { rehypeMarkdownImages } from "../../utils/markdownImage";
 import { CodeBlock } from "./CodeBlock";
-import { MarkdownImage, MarkdownImageContext } from "./MarkdownImage";
-
-// mermaid is a large dependency; load it only when a diagram actually renders
-// so it stays out of the main bundle.
-const MermaidBlock = lazy(() =>
-	import("./MermaidBlock").then((m) => ({ default: m.MermaidBlock })),
-);
+import {
+	heldImageHosts,
+	MarkdownImage,
+	MarkdownImageContext,
+} from "./MarkdownImage";
+import { MermaidDiagram } from "./MermaidDiagram";
 
 type CodeProps = ComponentPropsWithoutRef<"code"> & {
 	node?: Element;
@@ -89,13 +88,7 @@ function MarkdownPre({ node, children }: PreProps) {
 	if (language === "mermaid") {
 		return (
 			<div className="markdown-block">
-				<Suspense
-					fallback={
-						<div className="mermaid-placeholder">Loading diagram...</div>
-					}
-				>
-					<MermaidBlock code={code} />
-				</Suspense>
+				<MermaidDiagram code={code} />
 			</div>
 		);
 	}
@@ -179,6 +172,35 @@ function MarkdownHeaderCell({
 	);
 }
 
+type LinkProps = ComponentPropsWithoutRef<"a"> & {
+	node?: Element;
+};
+
+// An external image inside a link waits for the reader, and has no button of
+// its own there: a button may not nest in an <a>. So the link's first
+// activation — a tap, or Enter, which is a click on the <a> — loads what it
+// holds, and the next one follows it.
+function MarkdownLink({ node, href, onClick, children, ...props }: LinkProps) {
+	const { allowHost } = useContext(MarkdownImageContext);
+	return (
+		<a
+			{...props}
+			href={href}
+			onClick={(event) => {
+				const hosts = heldImageHosts(event.currentTarget);
+				if (hosts.length > 0) {
+					event.preventDefault();
+					for (const host of hosts) allowHost(host);
+					return;
+				}
+				onClick?.(event);
+			}}
+		>
+			{children}
+		</a>
+	);
+}
+
 const REMARK_PLUGINS = [remarkGfm, remarkBreaks];
 const REHYPE_PLUGINS = [rehypeMarkdownImages];
 
@@ -194,7 +216,16 @@ const MARKDOWN_COMPONENTS = {
 	table: MarkdownTable,
 	th: MarkdownHeaderCell,
 	img: MarkdownImage,
+	a: MarkdownLink,
 };
+
+interface Allowance {
+	/** The text when the reader last allowed a host. */
+	text: string;
+	hosts: ReadonlySet<string>;
+}
+
+const NO_ALLOWANCE: Allowance = { text: "", hosts: new Set() };
 
 interface MarkdownContentProps {
 	content: string;
@@ -243,9 +274,27 @@ export const MarkdownContent = memo(function MarkdownContent({
 	onOpenFile,
 }: MarkdownContentProps) {
 	const size = variant === "note" ? "prose-note" : "prose-sm prose-message";
+	// What the reader allowed holds while the text they allowed it in still
+	// starts what is shown: a message streaming in keeps it, and a host that
+	// swaps in another file or work item without remounting this does not pass
+	// it on (docs/markdown-images-ui.md#what-a-tap-allows).
+	const [allowance, setAllowance] = useState<Allowance>(NO_ALLOWANCE);
+	const allowedHosts = content.startsWith(allowance.text)
+		? allowance.hosts
+		: NO_ALLOWANCE.hosts;
+	const allowHost = useCallback(
+		(host: string) =>
+			setAllowance((current) => ({
+				text: content,
+				hosts: new Set(
+					content.startsWith(current.text) ? current.hosts : [],
+				).add(host),
+			})),
+		[content],
+	);
 	const images = useMemo(
-		() => ({ baseDir, onOpenFile }),
-		[baseDir, onOpenFile],
+		() => ({ baseDir, onOpenFile, allowedHosts, allowHost }),
+		[baseDir, onOpenFile, allowedHosts, allowHost],
 	);
 	return (
 		<div

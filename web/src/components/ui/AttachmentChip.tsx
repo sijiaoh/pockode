@@ -15,20 +15,29 @@ interface Props {
 	/** The line under the name: type, size, or why there is nothing to show. */
 	detail: string;
 	/**
+	 * Wraps the detail instead of cutting its end, for one whose end is what
+	 * matters: a host, whose owner is its last part.
+	 */
+	wrapDetail?: boolean;
+	/**
 	 * What the name stands for, when it is a shortening of something — the file
 	 * an agent named by its absolute path. It is the only place that path is
 	 * readable: a chat bubble has no room for one, and truncating it in the row
 	 * would cut off the end, which is the half that identifies the file.
 	 */
 	tooltip?: string;
-	/** Absent leaves the entry inert, which is right when there is nothing to do. */
-	action?: { label: string; onClick: () => void };
+	/**
+	 * Absent leaves the entry inert, which is right when there is nothing to do.
+	 * `ariaLabel` names what the action does to which entry, where several in
+	 * one message would otherwise read alike — Load, which also names the host.
+	 */
+	action?: { label: string; ariaLabel?: string; onClick: () => void };
 }
 
 /**
  * One non-image entry in a tool result's attachment strip — a PDF a read
  * delivered, an image that could not be shown — and a Markdown image that could
- * not be (docs/markdown-images-ui.md).
+ * not be, or that waits for the reader to load it (docs/markdown-images-ui.md).
  *
  * Not `FileStateCard`, which is a centred full-width empty state written for a
  * screen with nothing else on it. A chat message is not that screen — this sits
@@ -40,6 +49,7 @@ function AttachmentChip({
 	iconClassName = "text-th-text-muted",
 	title,
 	detail,
+	wrapDetail = false,
 	tooltip,
 	action,
 }: Props) {
@@ -59,7 +69,9 @@ function AttachmentChip({
 				>
 					{title}
 				</span>
-				<span className="block truncate text-xs text-th-text-muted">
+				<span
+					className={`block text-xs text-th-text-muted ${wrapDetail ? "[overflow-wrap:anywhere]" : "truncate"}`}
+				>
 					{detail}
 				</span>
 			</span>
@@ -67,7 +79,8 @@ function AttachmentChip({
 				<button
 					type="button"
 					onClick={action.onClick}
-					className="min-h-[36px] shrink-0 rounded px-2 text-sm text-th-accent pointer-coarse:min-h-11 hover:bg-th-overlay-hover"
+					aria-label={action.ariaLabel}
+					className="min-h-[36px] shrink-0 rounded px-2 text-sm text-th-accent pointer-coarse:min-h-11 hover:bg-th-overlay-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-th-accent"
 				>
 					{action.label}
 				</button>

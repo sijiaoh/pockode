@@ -1911,7 +1911,7 @@ props for it: `subtitle`, drawn under the title, and `initialFocusRef`.
 | code (`Read`, a `Write`'s content, JSON) | by the line, virtualized; shiki colours | the viewer's own, **off** | the top |
 | a diff (`Edit`, `MultiEdit`, a Codex change) | `ProposedChange`, whole | the transcript's remembered one (`diffSettingsStore`) | the top |
 | files (`Glob`, `Grep`'s file lists) | by the row, virtualized; **every** path, each with *Open* | none | the top |
-| Markdown (`WebFetch`, the plan, a report, reasoning, a `.md` file) | `MarkdownContent`, whole; plain wrapped text past `HIGHLIGHT_LIMIT` | none: it reflows | the top |
+| Markdown (`WebFetch`, the plan, a report, reasoning, a `.md` file) | `MarkdownContent`, whole — a `.md` file through `FileContentDisplay`, so its relative images resolve against its own directory; plain wrapped text past `HIGHLIGHT_LIMIT` | none: it reflows | the top |
 | a page (`html_render`) | `HtmlFrame`, edge to edge with no padding, scrolling itself; its source, under the toolbar's `</>`, as code | the code's, while its source is shown | the top, in the mode the card was in |
 
 - **Wrap.** Only the diff's choice is remembered, and it is the same switch every
@@ -2712,6 +2712,11 @@ not the page but Pockode around it. That is one floor, `HTML_FRAME_SANDBOX` in
   presses opens in a new tab as a normal page, not a crippled one.
 
 `HtmlFrame.test.tsx` holds both forbidden tokens out.
+
+The sandbox does not hold back a page's requests, so a page is the one agent
+output whose external hosts are contacted without the reader's tap, as a
+Markdown image's are not
+([markdown-images-ui.md](markdown-images-ui.md#external-images-wait-for-the-reader)).
 
 **Known limits.** An unclosed `<script>` or `<!--` in the page swallows the
 appended script, and the card stays at its placeholder height (⤢ still reads

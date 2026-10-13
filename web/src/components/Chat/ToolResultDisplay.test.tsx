@@ -1,16 +1,31 @@
-import { render, screen } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+	reportEverythingInView,
+	stubImageFetch,
+	stubObjectUrls,
+} from "../../test/imageFixtures";
+import type { StageComponent } from "../Media/types";
 import ToolResultDisplay, { resultCount } from "./ToolResultDisplay";
 
 const mockWorkDir = vi.hoisted(() => ({ value: "/Users/test/project" }));
+const getFile = vi.hoisted(() => vi.fn());
 
 vi.mock("../../lib/wsStore", () => ({
-	useWSStore: (selector: (state: { workDir: string }) => string) =>
-		selector({ workDir: mockWorkDir.value }),
+	useWSStore: (selector: (state: unknown) => unknown) =>
+		selector({ workDir: mockWorkDir.value, actions: { getFile } }),
+	isRPCTimeout: () => false,
 }));
 
-vi.mock("../../lib/shikiUtils", () => ({
+vi.mock("../Media/stages", () => {
+	const Stage: StageComponent = ({ item }) => <p>stage: {item.name}</p>;
+	return { loadedStage: () => Stage, loadStage: async () => Stage };
+});
+
+vi.mock("../../lib/shikiUtils", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../../lib/shikiUtils")>()),
 	CodeHighlighter: ({ children }: { children: string }) => (
 		<pre>{children}</pre>
 	),
@@ -75,6 +90,61 @@ describe("ToolResultDisplay", () => {
 		expect(
 			screen.getByText(result, { normalizer: (text) => text }),
 		).toHaveClass("whitespace-pre-wrap");
+	});
+});
+
+// Every file tool that shows a `.md` rendered is a host that navigates, and its
+// images are files of their own.
+describe("a Markdown file a tool read or wrote", () => {
+	afterEach(() => {
+		vi.unstubAllGlobals();
+	});
+
+	const path = `${mockWorkDir.value}/docs/guide.md`;
+	it.each([
+		{
+			toolName: "Read",
+			toolInput: { file_path: path },
+			result: "     1→![logo](logo.png)",
+		},
+		{
+			toolName: "Write",
+			toolInput: { file_path: path, content: "![logo](logo.png)" },
+			result: "",
+		},
+	])("offers its images in Files after $toolName", async (call) => {
+		reportEverythingInView();
+		stubObjectUrls();
+		stubImageFetch();
+		getFile.mockResolvedValue({
+			type: "file",
+			file: {
+				name: "logo.png",
+				type: "file",
+				path: "docs/logo.png",
+				size: 68,
+				mime: "image/png",
+				content: "",
+				encoding: "http",
+			},
+		});
+		const onOpenFile = vi.fn();
+		render(
+			<QueryClientProvider client={new QueryClient()}>
+				<ToolResultDisplay {...call} onOpenFile={onOpenFile} />
+			</QueryClientProvider>,
+		);
+
+		// jsdom never decodes an image on its own.
+		fireEvent.load(await screen.findByRole("img", { name: "logo" }));
+		await userEvent.click(screen.getByRole("button", { name: "View logo" }));
+		const viewer = await screen.findByRole("dialog");
+		await userEvent.click(
+			within(viewer).getByRole("button", { name: "Open in Files" }),
+		);
+
+		expect(getFile).toHaveBeenCalledWith("docs/logo.png");
+		expect(onOpenFile).toHaveBeenCalledWith("docs/logo.png");
 	});
 });
 

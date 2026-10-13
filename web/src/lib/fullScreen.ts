@@ -26,7 +26,16 @@ export type FullScreenContent =
 			withAttachments?: boolean;
 	  }
 	| { kind: "code"; text: string; language?: string }
-	| { kind: "markdown"; markdown: string }
+	| {
+			kind: "markdown";
+			markdown: string;
+			/**
+			 * The `.md` file the text is, whose directory its relative images
+			 * resolve against; absent for text that lives in no file (`WebFetch`).
+			 */
+			filePath?: string;
+			onOpenFile?: (path: string) => void;
+	  }
 	/**
 	 * An agent's page (`html_render`), rendered or — `showSource` — read as its
 	 * code; the viewer switches between the two, opening on the card's choice.
@@ -115,9 +124,10 @@ export function fullScreenSubject(
 export function fileFullScreenContent(
 	text: string,
 	filePath?: string,
+	onOpenFile?: (path: string) => void,
 ): FullScreenContent {
 	if (filePath && isMarkdownFile(filePath)) {
-		return { kind: "markdown", markdown: text };
+		return { kind: "markdown", markdown: text, filePath, onOpenFile };
 	}
 	return {
 		kind: "code",

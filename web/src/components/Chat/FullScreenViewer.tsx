@@ -21,6 +21,7 @@ import { useWSStore } from "../../lib/wsStore";
 import { HIGHLIGHT_LIMIT } from "../../utils/fileView";
 import { formatFilePath } from "../../utils/path";
 import {
+	FileContentDisplay,
 	HeaderCopyButton,
 	headerButtonClass,
 	MarkdownContent,
@@ -219,7 +220,15 @@ function ContentView({
 				</pre>
 			) : (
 				<div className="mx-auto max-w-3xl">
-					<MarkdownContent content={content.markdown} />
+					{/* No `onOpenFile`: inside a Sheet an image opens no viewer to offer it. */}
+					{content.filePath ? (
+						<FileContentDisplay
+							content={content.markdown}
+							filePath={content.filePath}
+						/>
+					) : (
+						<MarkdownContent content={content.markdown} />
+					)}
 				</div>
 			);
 		case "change":

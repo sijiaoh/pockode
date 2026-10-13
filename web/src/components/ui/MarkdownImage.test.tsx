@@ -58,6 +58,23 @@ function renderMarkdown(
 	);
 }
 
+let hosts = 0;
+/**
+ * A host no other test has loaded from: the page remembers every external URL
+ * it requested, for as long as the test file runs.
+ */
+function freshHost() {
+	hosts += 1;
+	return `h${hosts}.example.com`;
+}
+
+/** The reader's tap on a held external image. */
+async function allow(name: string, host: string) {
+	await userEvent.click(
+		screen.getByRole("button", { name: `Load ${name} from ${host}` }),
+	);
+}
+
 /** The `<img>` once its frame is laid out, which jsdom never decodes on its own. */
 async function loadImage(name: string) {
 	const image = await screen.findByRole("img", { name });
@@ -102,9 +119,12 @@ describe("a Markdown image", () => {
 			disconnect() {}
 		} as unknown as typeof globalThis.IntersectionObserver;
 
+		const host = freshHost();
 		const { container } = renderMarkdown(
-			"![shot](a.png)\n![badge](https://example.com/b.svg)",
+			`![shot](a.png)\n![badge](https://${host}/b.svg)`,
 		);
+		// Even an allowed host is asked only once the image is on screen.
+		await allow("badge", host);
 
 		expect(
 			await screen.findByRole("status", { name: "shot" }),
@@ -126,13 +146,15 @@ describe("a Markdown image", () => {
 	it("keeps the viewer open while the text around it grows", async () => {
 		const user = userEvent.setup();
 		const queryClient = new QueryClient();
-		const content = "Look:\n![badge](https://example.com/a.png)";
+		const host = freshHost();
+		const content = `Look:\n![badge](https://${host}/a.png)`;
 		const tree = (text: string) => (
 			<QueryClientProvider client={queryClient}>
 				<MarkdownContent content={text} />
 			</QueryClientProvider>
 		);
 		const { rerender } = render(tree(content));
+		await allow("badge", host);
 		await loadImage("badge");
 		await user.click(screen.getByRole("button", { name: "View badge" }));
 		await screen.findByRole("dialog");
@@ -213,24 +235,148 @@ describe("a Markdown image", () => {
 	});
 
 	describe("from another server", () => {
-		const SRC = "https://example.com/badge.svg";
+		let host: string;
+		let src: string;
+		beforeEach(() => {
+			host = freshHost();
+			src = `https://${host}/badge.svg`;
+		});
 
-		it("loads lazily and tells the host nothing about the page", () => {
-			renderMarkdown(`![badge](${SRC})`);
+		it("asks nothing of the host until the reader allows it", async () => {
+			const { container } = renderMarkdown(`Look:\n![badge](${src})`);
+
+			expect(screen.getByText(`Not loaded · ${host}`)).toBeInTheDocument();
+			expect(container.querySelector("img")).toBeNull();
+			await allow("badge", host);
+
+			expect(screen.getByRole("img", { name: "badge" })).toHaveAttribute(
+				"src",
+				src,
+			);
+		});
+
+		it("holds an inline image as a button naming the host", async () => {
+			const { container } = renderMarkdown(`Status ![badge](${src}) ok`);
+
+			expect(container.querySelector("img")).toBeNull();
+			const held = screen.getByRole("button", {
+				name: `Load badge from ${host}`,
+			});
+			expect(held).toHaveAttribute("title", src);
+			await userEvent.click(held);
+
+			expect(screen.getByRole("img", { name: "badge" })).toBeInTheDocument();
+		});
+
+		it("loads lazily and tells the host nothing about the page", async () => {
+			renderMarkdown(`![badge](${src})`);
+			await allow("badge", host);
 
 			const image = screen.getByRole("img", { name: "badge" });
-			expect(image).toHaveAttribute("src", SRC);
+			expect(image).toHaveAttribute("src", src);
 			expect(image).toHaveAttribute("loading", "lazy");
 			expect(image).toHaveAttribute("referrerpolicy", "no-referrer");
 		});
 
+		// A badge row is one tap, and stays allowed while the text streams in.
+		it("allows the host for every image of it in the same text", async () => {
+			const other = freshHost();
+			const queryClient = new QueryClient();
+			const tree = (text: string) => (
+				<QueryClientProvider client={queryClient}>
+					<MarkdownContent content={text} />
+				</QueryClientProvider>
+			);
+			const content = `![a](https://${host}/a.svg) ![b](https://${other}/b.svg)`;
+			const { rerender } = render(tree(content));
+
+			await allow("a", host);
+			rerender(tree(`${content} ![c](https://${host}/c.svg)`));
+
+			expect(screen.getByRole("img", { name: "a" })).toBeInTheDocument();
+			expect(screen.getByRole("img", { name: "c" })).toBeInTheDocument();
+			expect(screen.queryByRole("img", { name: "b" })).toBeNull();
+		});
+
+		it("keeps the reader's place when Load gives way to the image", async () => {
+			renderMarkdown(`Look:\n![badge](${src})`);
+
+			await allow("badge", host);
+
+			expect(document.activeElement).not.toBe(document.body);
+			expect(document.activeElement).toContainElement(
+				screen.getByRole("img", { name: "badge" }),
+			);
+		});
+
+		it("keeps the reader's place when the image then fails", async () => {
+			renderMarkdown(`Look:\n![badge](${src})`);
+			await allow("badge", host);
+
+			fireEvent.error(screen.getByRole("img", { name: "badge" }));
+
+			expect(document.activeElement).not.toBe(document.body);
+			expect(document.activeElement).toContainElement(
+				screen.getByRole("button", { name: "Retry" }),
+			);
+		});
+
+		// A host that shows another file or work item in the same place need not
+		// remount the text.
+		it("forgets the host when the text is swapped for another", async () => {
+			const queryClient = new QueryClient();
+			const tree = (text: string) => (
+				<QueryClientProvider client={queryClient}>
+					<MarkdownContent content={text} />
+				</QueryClientProvider>
+			);
+			const { rerender } = render(tree(`![a](https://${host}/a.svg)`));
+			await allow("a", host);
+
+			rerender(tree(`![b](https://${host}/b.svg)`));
+
+			expect(screen.queryByRole("img", { name: "b" })).toBeNull();
+			expect(
+				screen.getByRole("button", { name: `Load b from ${host}` }),
+			).toBeInTheDocument();
+		});
+
+		it("does not allow the host in another text", async () => {
+			const queryClient = new QueryClient();
+			render(
+				<QueryClientProvider client={queryClient}>
+					<MarkdownContent content={`![a](https://${host}/a.svg)`} />
+					<MarkdownContent content={`![b](https://${host}/b.svg)`} />
+				</QueryClientProvider>,
+			);
+
+			await allow("a", host);
+
+			expect(screen.getByRole("img", { name: "a" })).toBeInTheDocument();
+			expect(screen.queryByRole("img", { name: "b" })).toBeNull();
+		});
+
+		it("does not ask again for a URL it has already requested", async () => {
+			const first = renderMarkdown(`![badge](${src})`);
+			await allow("badge", host);
+			first.unmount();
+
+			renderMarkdown(`![badge](${src})`);
+
+			expect(screen.getByRole("img", { name: "badge" })).toHaveAttribute(
+				"src",
+				src,
+			);
+		});
+
 		it("names the host when it fails, and tries again on Retry", async () => {
 			const user = userEvent.setup();
-			renderMarkdown(`![badge](${SRC})`);
+			renderMarkdown(`![badge](${src})`);
+			await allow("badge", host);
 
 			fireEvent.error(screen.getByRole("img", { name: "badge" }));
 			expect(
-				screen.getByText("Couldn't load image · example.com"),
+				screen.getByText(`Couldn't load image · ${host}`),
 			).toBeInTheDocument();
 			await user.click(screen.getByRole("button", { name: "Retry" }));
 
@@ -239,26 +385,29 @@ describe("a Markdown image", () => {
 
 		it("opens in the viewer with the original instead of Save", async () => {
 			const user = userEvent.setup();
-			renderMarkdown(`![badge](${SRC})`);
+			renderMarkdown(`![badge](${src})`);
+			await allow("badge", host);
 			await loadImage("badge");
 
 			await user.click(screen.getByRole("button", { name: "View badge" }));
 
 			const viewer = await screen.findByRole("dialog");
-			expect(within(viewer).getByText("example.com")).toBeInTheDocument();
+			expect(within(viewer).getByText(host)).toBeInTheDocument();
 			expect(within(viewer).queryByRole("button", { name: "Save" })).toBeNull();
 			const original = within(viewer).getByRole("link", {
 				name: "Open original",
 			});
-			expect(original).toHaveAttribute("href", SRC);
+			expect(original).toHaveAttribute("href", src);
 			expect(original).toHaveAttribute("target", "_blank");
 			expect(original).toHaveAttribute("rel", "noopener noreferrer");
 		});
 	});
 
 	describe("shape", () => {
-		it("is a block alone on its line, with Retry on failure", () => {
-			renderMarkdown("Screenshot:\n![shot](https://example.com/a.png)");
+		it("is a block alone on its line, with Retry on failure", async () => {
+			const host = freshHost();
+			renderMarkdown(`Screenshot:\n![shot](https://${host}/a.png)`);
+			await allow("shot", host);
 
 			fireEvent.error(screen.getByRole("img", { name: "shot" }));
 			expect(screen.getByRole("button", { name: "Retry" })).toBeInTheDocument();
@@ -276,32 +425,34 @@ describe("a Markdown image", () => {
 		});
 
 		it.each([
-			["beside text", "Status ![badge](https://example.com/a.png) ok"],
+			["beside text", (src: string) => `Status ![badge](${src}) ok`],
 			[
 				"beside another image",
-				"![badge](https://example.com/a.png) ![b](https://example.com/b.png)",
+				(src: string) => `![badge](${src}) ![b](https://example.com/b.png)`,
 			],
 			[
 				"in a table cell",
-				"| a |\n| - |\n| ![badge](https://example.com/a.png) |",
+				(src: string) => `| a |\n| - |\n| ![badge](${src}) |`,
 			],
-			["in a heading", "# ![badge](https://example.com/a.png) Title"],
-		])("is inline %s, its failure a label with no Retry", (_, content) => {
-			renderMarkdown(content);
+			["in a heading", (src: string) => `# ![badge](${src}) Title`],
+		])("is inline %s, its failure a label with no Retry", async (_, content) => {
+			const host = freshHost();
+			const src = `https://${host}/a.png`;
+			renderMarkdown(content(src));
+			await allow("badge", host);
 
 			fireEvent.error(screen.getByRole("img", { name: "badge" }));
 			expect(screen.getByText("badge")).toHaveAttribute(
 				"title",
-				"https://example.com/a.png\nCouldn't load image · example.com",
+				`${src}\nCouldn't load image · ${host}`,
 			);
 			expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
 		});
 	});
 
 	it("follows its link rather than opening the viewer", async () => {
-		renderMarkdown(
-			"[![build](https://example.com/b.svg)](https://ci.example.com)",
-		);
+		getFile.mockResolvedValue(imageFile("b.svg"));
+		renderMarkdown("[![build](b.svg)](https://ci.example.com)");
 		await loadImage("build");
 
 		expect(screen.getByRole("link")).toHaveAttribute(
@@ -311,13 +462,51 @@ describe("a Markdown image", () => {
 		expect(screen.queryByRole("button", { name: "View build" })).toBeNull();
 	});
 
+	// A button may not nest in an <a>, so the link itself is the Load.
+	it("takes a link's first activation as Load when it holds an external image", async () => {
+		const user = userEvent.setup();
+		const host = freshHost();
+		const { container } = renderMarkdown(
+			`[![build](https://${host}/b.svg)](https://ci.example.com)`,
+		);
+		const link = screen.getByRole("link");
+		expect(container.querySelector("img")).toBeNull();
+		expect(within(link).queryByRole("button")).toBeNull();
+
+		// Read past React's root listener, then stopped: jsdom cannot navigate.
+		const follows = () => {
+			let followed: boolean | null = null;
+			window.addEventListener(
+				"click",
+				(event) => {
+					followed = !event.defaultPrevented;
+					event.preventDefault();
+				},
+				{ once: true },
+			);
+			return () => followed;
+		};
+
+		const first = follows();
+		link.focus();
+		await user.keyboard("{Enter}");
+		expect(first()).toBe(false);
+		expect(screen.getByRole("img", { name: "build" })).toBeInTheDocument();
+
+		const second = follows();
+		await user.click(link);
+		expect(second()).toBe(true);
+	});
+
 	// The viewer is a sheet, and sheets do not nest.
 	it("opens nothing inside a sheet", async () => {
-		renderMarkdown("![badge](https://example.com/a.png)", {}, (node) => (
+		const host = freshHost();
+		renderMarkdown(`![badge](https://${host}/a.png)`, {}, (node) => (
 			<Sheet title="Full screen" onClose={() => {}}>
 				{node}
 			</Sheet>
 		));
+		await allow("badge", host);
 		await loadImage("badge");
 
 		expect(screen.queryByRole("button", { name: "View badge" })).toBeNull();

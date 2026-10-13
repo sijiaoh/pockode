@@ -456,7 +456,9 @@ preview itself stays as it is — it is the page; the viewer is the zoom.
 
 A loaded image written in Markdown is itself the button that opens the viewer —
 the thumbnail's pattern — and owns the open state, as `ImagePreview` does. It is
-the one way in to an external image (`ImageSource` kind `external`). Which
+the one way in to an external image (`ImageSource` kind `external`), which is
+a button only once the reader has loaded it
+([markdown-images-ui.md](markdown-images-ui.md#external-images-wait-for-the-reader)). Which
 images offer it, and what the viewer shows for each source, is in
 [markdown-images-ui.md](markdown-images-ui.md#opening-the-viewer).
 

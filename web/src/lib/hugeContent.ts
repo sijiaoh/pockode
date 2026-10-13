@@ -295,7 +295,7 @@ export function sliceContent(
 		case "code":
 			return { ...content, text: sliceText(content.text, from) };
 		case "markdown":
-			return { kind: "markdown", markdown: sliceMarkdown(content.markdown) };
+			return { ...content, markdown: sliceMarkdown(content.markdown) };
 		case "change":
 			return { kind: "change", change: sliceChange(content.change) };
 		case "files":
