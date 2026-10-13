@@ -139,51 +139,12 @@ func (h *Handler) Download(w http.ResponseWriter, r *http.Request) {
 // serveFile streams the regular file at fullPath, naming it display in errors
 // and logs.
 func (h *Handler) serveFile(w http.ResponseWriter, r *http.Request, fullPath, display string) {
-	// Stat before opening, like contents.GetContents: opening a fifo blocks
-	// until someone writes to it, which would hang the request for good.
-	info, statErr := os.Stat(fullPath)
-	if statErr != nil {
-		if os.IsNotExist(statErr) {
-			h.writeError(w, errf(http.StatusNotFound, CodeNotFound, "not found: %s", display), nil)
-			return
-		}
-		h.log.Error("failed to stat download target", "path", display, "error", statErr)
-		h.writeError(w, errf(http.StatusInternalServerError, CodeInternal, "failed to stat %s: %v", display, statErr), nil)
-		return
-	}
-	if info.IsDir() {
-		h.writeError(w, errf(http.StatusBadRequest, CodeNotAFile, "%s is a directory, not a file", display), nil)
-		return
-	}
-	if !info.Mode().IsRegular() {
-		h.writeError(w, errf(http.StatusBadRequest, CodeNotAFile, "%s is not a regular file", display), nil)
-		return
-	}
-
-	f, err := os.Open(fullPath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			h.writeError(w, errf(http.StatusNotFound, CodeNotFound, "not found: %s", display), nil)
-			return
-		}
-		h.log.Error("failed to open download target", "path", display, "error", err)
-		h.writeError(w, errf(http.StatusInternalServerError, CodeInternal, "failed to open %s: %v", display, err), nil)
+	f, fi, apiErr := h.openRegular(osFS{}, fullPath, display, h.internalFailure)
+	if apiErr != nil {
+		h.writeError(w, apiErr, nil)
 		return
 	}
 	defer f.Close()
-
-	// Re-check on the descriptor: the path could have been swapped for a fifo
-	// between the stat and the open, and ServeContent would then block on it.
-	fi, err := f.Stat()
-	if err != nil {
-		h.log.Error("failed to stat download descriptor", "path", display, "error", err)
-		h.writeError(w, errf(http.StatusInternalServerError, CodeInternal, "failed to stat %s: %v", display, err), nil)
-		return
-	}
-	if !fi.Mode().IsRegular() {
-		h.writeError(w, errf(http.StatusBadRequest, CodeNotAFile, "%s is not a regular file", display), nil)
-		return
-	}
 
 	setContentHeaders(w, fi.Name())
 
@@ -191,6 +152,68 @@ func (h *Handler) serveFile(w http.ResponseWriter, r *http.Request, fullPath, di
 	// serves Range requests, which is what lets a client show progress and read
 	// a large file in bounded pieces rather than hold it whole.
 	http.ServeContent(w, r, "", fi.ModTime(), f)
+}
+
+// fileOpener is where openRegular looks a name up: the file system itself, or
+// an os.Root that holds names beneath one directory.
+type fileOpener interface {
+	Stat(name string) (os.FileInfo, error)
+	Open(name string) (*os.File, error)
+}
+
+type osFS struct{}
+
+func (osFS) Stat(name string) (os.FileInfo, error) { return os.Stat(name) }
+func (osFS) Open(name string) (*os.File, error)    { return os.Open(name) }
+
+// openRegular opens name in fsys if it is a regular file, naming it display in
+// errors. A failure other than the file not existing is turned into the
+// client's answer by failed, since only the caller knows whether that is a
+// fault on this side or a refusal.
+func (h *Handler) openRegular(fsys fileOpener, name, display string, failed func(op, display string, err error) *apiError) (*os.File, os.FileInfo, *apiError) {
+	// Stat before opening, like contents.GetContents: opening a fifo blocks
+	// until someone writes to it, which would hang the request for good.
+	info, statErr := fsys.Stat(name)
+	if statErr != nil {
+		if os.IsNotExist(statErr) {
+			return nil, nil, errf(http.StatusNotFound, CodeNotFound, "not found: %s", display)
+		}
+		return nil, nil, failed("stat", display, statErr)
+	}
+	if info.IsDir() {
+		return nil, nil, errf(http.StatusBadRequest, CodeNotAFile, "%s is a directory, not a file", display)
+	}
+	if !info.Mode().IsRegular() {
+		return nil, nil, errf(http.StatusBadRequest, CodeNotAFile, "%s is not a regular file", display)
+	}
+
+	f, err := fsys.Open(name)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil, errf(http.StatusNotFound, CodeNotFound, "not found: %s", display)
+		}
+		return nil, nil, failed("open", display, err)
+	}
+
+	// Re-check on the descriptor: the path could have been swapped for a fifo
+	// between the stat and the open, and ServeContent would then block on it.
+	fi, err := f.Stat()
+	if err != nil {
+		f.Close()
+		return nil, nil, h.internalFailure("stat", display, err)
+	}
+	if !fi.Mode().IsRegular() {
+		f.Close()
+		return nil, nil, errf(http.StatusBadRequest, CodeNotAFile, "%s is not a regular file", display)
+	}
+	return f, fi, nil
+}
+
+// internalFailure reports a file that exists but could not be read as a fault
+// on this side.
+func (h *Handler) internalFailure(op, display string, err error) *apiError {
+	h.log.Error("failed to read file for transfer", "op", op, "path", display, "error", err)
+	return errf(http.StatusInternalServerError, CodeInternal, "failed to %s %s: %v", op, display, err)
 }
 
 // Upload stores the files of a multipart request into a directory of the work
@@ -404,7 +427,10 @@ func (h *Handler) storePart(part *multipart.Part, destDir, destRel string, overw
 }
 
 func (h *Handler) workDir(r *http.Request) (string, *apiError) {
-	name := r.URL.Query().Get("worktree")
+	return h.resolveWorkDir(r.URL.Query().Get("worktree"))
+}
+
+func (h *Handler) resolveWorkDir(name string) (string, *apiError) {
 	workDir, err := h.resolver.Resolve(name)
 	if err != nil {
 		return "", errf(http.StatusNotFound, CodeWorktreeUnknown, "worktree %q: %v", name, err)

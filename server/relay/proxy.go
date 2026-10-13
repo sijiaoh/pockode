@@ -82,7 +82,7 @@ func newLocalProxy(backendPort, frontendPort int, site previewSite, auth preview
 			if r.Context().Err() != nil {
 				return
 			}
-			log.Error("local proxy failed", "method", r.Method, "path", r.URL.Path, "error", err)
+			log.Error("local proxy failed", "method", r.Method, "path", apiroute.LoggablePath(r.URL.Path), "error", err)
 			http.Error(w, "bad gateway", http.StatusBadGateway)
 		},
 	}

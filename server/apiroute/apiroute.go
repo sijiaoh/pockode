@@ -25,3 +25,28 @@ func IsAPI(path string) bool {
 func IsLocalOnly(path string) bool {
 	return strings.HasPrefix(path, "/api/mcp/")
 }
+
+// RawPrefix is where the raw endpoint answers: RawPrefix + <capability> + "/"
+// + <path>. The capability in the path is that route's credential.
+const RawPrefix = "/api/raw/"
+
+// IsRaw reports whether path belongs to the raw endpoint, which takes no
+// Authorization header and answers every request under it itself — "/api/raw"
+// included, so that not even a malformed one is answered without its headers.
+func IsRaw(path string) bool {
+	return strings.HasPrefix(path, RawPrefix) || path == strings.TrimSuffix(RawPrefix, "/")
+}
+
+// LoggablePath is path with the raw endpoint's capability masked, for a log
+// line: the capability is a credential, and a log outlives the hours it is
+// good for.
+func LoggablePath(path string) string {
+	rest, ok := strings.CutPrefix(path, RawPrefix)
+	if !ok {
+		return path
+	}
+	if _, file, found := strings.Cut(rest, "/"); found {
+		return RawPrefix + "<capability>/" + file
+	}
+	return RawPrefix + "<capability>"
+}

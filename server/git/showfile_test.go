@@ -294,3 +294,29 @@ func writeTestBinaryFile(t *testing.T, dir, path string, content []byte) {
 		t.Fatalf("failed to write %q: %v", path, err)
 	}
 }
+
+func TestResolveCommit(t *testing.T) {
+	dir, cleanup := setupTestRepoWithCommit(t)
+	defer cleanup()
+	full := gitHead(t, dir)
+
+	got, err := ResolveCommit(dir, full[:7])
+	if err != nil {
+		t.Fatalf("ResolveCommit(abbreviated) error: %v", err)
+	}
+	if got != full {
+		t.Errorf("ResolveCommit(%q) = %q, want %q", full[:7], got, full)
+	}
+
+	tree := gitOutput(t, dir, "rev-parse", "HEAD^{tree}")
+	for _, hash := range []string{"0123456789abcdef0123456789abcdef01234567", tree} {
+		if _, err := ResolveCommit(dir, hash); !errors.Is(err, contents.ErrNotFound) {
+			t.Errorf("ResolveCommit(%q) = %v, want ErrNotFound", hash, err)
+		}
+	}
+	for _, hash := range []string{"", "HEAD", "--all", "abc"} {
+		if _, err := ResolveCommit(dir, hash); !errors.Is(err, ErrInvalidArgument) {
+			t.Errorf("ResolveCommit(%q) = %v, want ErrInvalidArgument", hash, err)
+		}
+	}
+}

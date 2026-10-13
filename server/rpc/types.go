@@ -1560,6 +1560,43 @@ type PortPreviewTicketResult struct {
 	Ticket string `json:"ticket"`
 }
 
+// RawCapabilityParams asks for a capability URL that a browser element — a
+// <video>, an <audio>, an <iframe> — loads by itself, without the session
+// token. It names content the way the client already reads it, by origin:
+//
+//   - "file": Path in the work directory of the connection's worktree.
+//   - "commit": Path as commit Hash left it, in the connection's repository.
+//     An abbreviated hash is resolved once, now.
+//   - "attachment": attachment ID of session SessionID in Worktree, which is
+//     the worktree it was described from ("" is the main one), not
+//     necessarily the connection's — as for session_view.attachment.
+//
+// Scope is "file" for Path alone, or "directory" for Path as a directory and
+// everything beneath it: a page's directory, so that its relative URLs load.
+// A directory is never the root of the work directory or the commit; an
+// attachment is always a file.
+type RawCapabilityParams struct {
+	Origin    string `json:"origin"`
+	Scope     string `json:"scope"`
+	Path      string `json:"path,omitempty"`
+	Hash      string `json:"hash,omitempty"`
+	SessionID string `json:"session_id,omitempty"`
+	ID        string `json:"id,omitempty"`
+	Worktree  string `json:"worktree,omitempty"`
+}
+
+// RawCapabilityResult is where the granted content is read.
+//
+// Path is a URL path on this server: for a file scope the file itself, for a
+// directory scope the directory with a trailing slash, against which a path
+// beneath it resolves as a relative URL — each segment percent-encoded. A
+// request after ExpiresAt, or after the session that asked has ended, answers
+// 404 capability_not_found; the remedy is to ask again.
+type RawCapabilityResult struct {
+	Path      string    `json:"path"`
+	ExpiresAt time.Time `json:"expires_at"`
+}
+
 // RemoteURLSubscribeResult carries the remote URL as of the subscription; see
 // AuthResult.RemoteURL for what it holds. Later values arrive as
 // remote_url.changed notifications.

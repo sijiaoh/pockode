@@ -49,3 +49,29 @@ func TestIsLocalOnly(t *testing.T) {
 		}
 	}
 }
+
+func TestIsRaw(t *testing.T) {
+	for path, want := range map[string]bool{
+		"/api/raw/cap/a.txt": true,
+		"/api/raw/":          true,
+		"/api/raw":           true,
+		"/api/rawx":          false,
+		"/api/files/raw":     false,
+	} {
+		if got := IsRaw(path); got != want {
+			t.Errorf("IsRaw(%q) = %v, want %v", path, got, want)
+		}
+	}
+}
+
+func TestLoggablePathMasksTheCapability(t *testing.T) {
+	for path, want := range map[string]string{
+		"/api/raw/secret/site/a.css": "/api/raw/<capability>/site/a.css",
+		"/api/raw/secret":            "/api/raw/<capability>",
+		"/api/ping":                  "/api/ping",
+	} {
+		if got := LoggablePath(path); got != want {
+			t.Errorf("LoggablePath(%q) = %q, want %q", path, got, want)
+		}
+	}
+}

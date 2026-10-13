@@ -76,6 +76,7 @@ import {
 	createFileActions,
 	createGitActions,
 	createPortPreviewActions,
+	createRawActions,
 	createSessionActions,
 	createSessionViewActions,
 	createSettingsActions,
@@ -84,6 +85,7 @@ import {
 	type FileActions,
 	type GitActions,
 	type PortPreviewActions,
+	type RawActions,
 	type SessionActions,
 	type SessionViewActions,
 	type SettingsActions,
@@ -233,6 +235,7 @@ type RPCActions = ConnectionActions &
 	ChatActions &
 	CommandActions &
 	PortPreviewActions &
+	RawActions &
 	SessionActions &
 	SessionViewActions &
 	SettingsActions &
@@ -776,6 +779,7 @@ const attachmentActions = createAttachmentActions(getClient);
 const chatActions = createChatActions(getClient, getAgentStartClient);
 const commandActions = createCommandActions(getClient);
 const portPreviewRpcActions = createPortPreviewActions(getClient);
+const rawActions = createRawActions(getClient);
 const sessionActions = createSessionActions(getClient);
 const sessionViewActions = createSessionViewActions(getClient);
 const settingsActions = createSettingsActions(getClient);
@@ -1355,6 +1359,7 @@ export const useWSStore = create<WSState>((set, get) => ({
 		...chatActions,
 		...commandActions,
 		...portPreviewRpcActions,
+		...rawActions,
 		...sessionActions,
 		...sessionViewActions,
 		...settingsActions,
