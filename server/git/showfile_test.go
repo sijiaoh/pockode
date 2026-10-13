@@ -10,7 +10,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/pockode/server/attachments"
 	"github.com/pockode/server/contents"
 )
 
@@ -219,14 +218,14 @@ func TestShowFile_TooLarge(t *testing.T) {
 	}
 }
 
-// A raster image is held to the attachment ceiling, not MaxFileSize; past it
+// A raster image is held to contents.MaxImageSize, not MaxFileSize; past it
 // it is reported like any other content too large to show. OpenFile still
 // serves it, since the ceiling is the preview's, not the download's.
-func TestShowFile_ImageOverAttachmentLimit(t *testing.T) {
+func TestShowFile_ImageOverImageLimit(t *testing.T) {
 	dir, cleanup := setupTestRepo(t)
 	defer cleanup()
 
-	size := int64(attachments.MaxSize + 1)
+	size := int64(contents.MaxImageSize + 1)
 	png := make([]byte, size)
 	copy(png, "\x89PNG\r\n\x1a\n")
 	writeTestBinaryFile(t, dir, "huge.png", png)
@@ -241,8 +240,8 @@ func TestShowFile_ImageOverAttachmentLimit(t *testing.T) {
 	if file.Encoding != contents.EncodingNone || file.Omitted != contents.OmitTooLarge {
 		t.Errorf("huge.png = %q/%q, want none/too_large", file.Encoding, file.Omitted)
 	}
-	if file.Limit != attachments.MaxSize {
-		t.Errorf("Limit = %d, want %d", file.Limit, attachments.MaxSize)
+	if file.Limit != contents.MaxImageSize {
+		t.Errorf("Limit = %d, want %d", file.Limit, contents.MaxImageSize)
 	}
 	if file.Size != size || file.MIME != "image/png" {
 		t.Errorf("Size/MIME = %d/%q, want %d/image/png", file.Size, file.MIME, size)

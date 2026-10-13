@@ -711,11 +711,16 @@ to a relay transport which packed a whole request into one WebSocket message and
 has since been replaced, and today's relay lowers no limit at all
 ([file.md](../file.md#transfer)). Nor is one JSON-RPC message: a raster image's
 bytes are read back over HTTP ([Reading It Back](#reading-it-back)), so the
-ceiling that applies is the store's own, `attachments.MaxSize` (20 MiB, the same
-one a user's upload is held to). Claude's inline images also have to fit on one
-stdout line, `agent.MaxLineBytes` (8 MiB of base64, about 6 MiB of image —
-[Graceful Degradation](#graceful-degradation)), and sit far under
-both: it re-encodes anything large as JPEG
+ceiling that applies is the image preview's, `contents.MaxImageSize` (20 MiB,
+the one every raster image is drawn up to, wherever it came from —
+[file.md](../file.md#operations)). It is not the store's: a user's upload may be
+far larger (`attachments.MaxSize`, 512 MiB), but these images are kept only to be
+drawn, and no client draws one past the preview ceiling. For Codex it also
+bounds memory, since its file is read in whole (to one byte past the ceiling);
+Claude's are bounded before that by the stdout line they arrive on,
+`agent.MaxLineBytes` (8 MiB of base64, about 6 MiB of image —
+[Graceful Degradation](#graceful-degradation)), and in practice sit far under
+both ceilings: claude re-encodes anything large as JPEG
 before handing it over, and measured against claude 2.1.263 an 18 MB PNG arrived
 as 591 KB of base64, with ~650 KB the largest seen from any input. The cost was
 always the writing down, not the sending.
@@ -728,9 +733,9 @@ namespace omits with, so one client code path renders both:
 
 | Case | `omitted` | Why |
 |------|-----------|-----|
-| A raster image within `attachments.MaxSize` (20 MiB); a Codex SVG within `contents.MaxFileSize` (2 MiB) | — | stored; this is the whole point |
+| A raster image within `contents.MaxImageSize` (20 MiB); a Codex SVG within `contents.MaxFileSize` (2 MiB) | — | stored; this is the whole point |
 | A PDF or other non-image | `binary` | the UI lists it rather than rendering it, and the read that produced it names the file on disk in the text block beside it, so half a megabyte of base64 would buy nothing. The file namespace omits non-image binaries for the same reason. On the Codex side this is also the boundary of the copy: the event says the file is an image and the path is the agent's, so what does not sniff as one is described where it lies rather than copied in on the strength of that claim |
-| An image over its ceiling | `too_large` (+ `limit`) | a raster image is held to what the store keeps; an SVG is read back as text in one JSON-RPC message, which refuses past 2 MiB, so storing more would keep bytes no client can be shown |
+| An image over its ceiling | `too_large` (+ `limit`) | a raster image is held to what a client can be shown; an SVG is read back as text in one JSON-RPC message, which refuses past 2 MiB, so storing more would keep bytes no client can be shown |
 | Content that could not be read, decoded or stored; a path the server cannot use | `unavailable` | there is nothing to keep |
 | A file the agent only named and Pockode deliberately did not read — a background task's log | `not_fetched` | nothing was attempted. The answer to that call is the prose beside the block, and the log can be arbitrarily large; the path is how it is still reached. A client draws such a block as a reference line in the body rather than as an attachment ([tool-call-ui.md](../tool-call-ui.md#the-body-problems-2-and-3)) |
 
@@ -890,7 +895,7 @@ What the agent is handed is each adapter's business, decided at delivery:
 | | Image (PNG, JPEG, GIF, WebP) | Anything else |
 |--|--|--|
 | claude | An `image` content block, base64, beside the text block of the stream-json user message — when the API will take it: at most 5 MB of base64, both sides readable and within 8000 px (an image whose dimensions the server cannot read goes by path), no more than 20 images and 15 MiB inline per message. Anything else goes by path, and claude's Read scales it down. The limits are strict because a refused image block stays in claude's own transcript and is re-sent with every later turn | A note appended to the prompt text listing each file's name, type, size and absolute path, for the model to read with its tools |
-| codex | A `localImage` input item naming the stored file; codex reads it itself | The same note in the `text` item |
+| codex | A `localImage` input item naming the stored file; codex reads it itself. One over `contents.MaxImageSize` (20 MiB) goes by path instead: codex decodes a `localImage` whole, and an attachment may be far larger than any image it is meant for | The same note in the `text` item |
 
 A message may be files alone; neither adapter then sends an empty text block,
 which the API refuses. A message with neither text, files nor answers is

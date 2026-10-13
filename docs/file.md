@@ -69,7 +69,7 @@ content results too — unless the probe happens to catch only its ASCII.
 `omitted` is set only alongside `encoding: "none"` and explains it:
 `"binary"` (a binary that is not media, which the UI cannot display anyway) or
 `"too_large"` (over `contents.MaxFileSize`, **2 MiB**; for a raster image,
-over `attachments.MaxSize`, **20 MiB** — see below). Neither is an error —
+over `contents.MaxImageSize`, **20 MiB** — see below). Neither is an error —
 the response is a normal result and the client shows a placeholder built from
 `size` and `mime`. A `"too_large"` result also carries `limit`, the ceiling in
 bytes, so the UI can name the threshold without keeping its own copy of it. A
@@ -89,10 +89,12 @@ the bytes to `GET /api/files/download` ([Transfer](#transfer)), which streams
 them on a request of their own, or to the raw capability URL (`/api/raw`) a
 player loads. Only the first 512 bytes are read, as for an oversized file, and
 the 2 MiB ceiling does not apply. A raster image's ceiling is
-`attachments.MaxSize` (**20 MiB**) instead, the one every attachment is stored
-under, so a preview is one size whatever it came from. That one is a preview
-limit only — the client holds the whole image in memory to decode it — and the
-endpoints still serve a larger file to anyone downloading it. Audio and video
+`contents.MaxImageSize` (**20 MiB**) instead, whether the image is in the
+workspace, in a commit or in a chat. That one is a preview limit only — the
+client holds the whole image in memory to decode it — and the endpoints still
+serve a larger file to anyone downloading it. It is sent to clients as
+`max_image_preview_size` in the `auth` reply
+([why](code/websocket-rpc.md#authentication-flow)). Audio and video
 have **no ceiling**: a player streams them with `Range` requests, starts before
 the file has arrived and never holds it whole. The response carries no URL; the
 client knows which endpoint to ask from which method described the file.
@@ -492,18 +494,37 @@ no `written`. A file uploaded and never sent stays until its session is deleted.
 
 | Status | Code | When |
 |--------|------|------|
-| `400` | `invalid_request` | Missing `session_id`, not `multipart/form-data`, a body cut short, or no file parts |
+| `400` | `invalid_request` | Missing `session_id`, not `multipart/form-data`, a body cut short (including a client that disconnects mid-file), or no file parts |
 | `404` | `worktree_not_found` | Unknown `worktree` |
 | `404` | `session_not_found` | The worktree has no such session |
-| `413` | `too_large` | Over `attachments.MaxSize`, **20 MiB** of file content per request, or a body more than 1 MiB past that in total; also sent ahead of time as `max_attachment_size` in the `auth` reply |
+| `413` | `too_large` | Over `attachments.MaxSize`, **512 MiB** of file content per request, or a body more than 1 MiB past that in total; also sent ahead of time as `max_attachment_size` in the `auth` reply |
 | `500` | `internal` | Reading the session or storing a file failed |
 
-The ceiling is lower than a workspace upload's because these are read whole —
-the id is the hash of the content — where a workspace upload streams to disk.
-It is the same constant that caps an image an agent's tool returned
-([code/agent-integration.md](code/agent-integration.md#content-blocks-and-attachments))
-and an image previewed from the workspace or a commit ([above](#operations)),
-so an image is shown up to one size whatever delivered it.
+Each file streams to disk as it arrives (`attachments.Store.PutStream`): it is
+written to a temporary file under the session's `attachments/incoming/`,
+hashed on the way, fsynced, and only then renamed to its id. So memory per
+upload is one copy buffer whatever the file's size, and whatever stops an
+upload — the ceiling, a client that disconnects, the disk — removes the
+temporary file and hands out no id: nothing partial is ever stored under a name.
+`incoming/` is a directory, which the read side and a fork's clone pass
+over, and a temporary file a crash left behind goes with the session. Content
+that is already stored keeps its file; the identical copy is discarded.
+
+The ceiling is sized for what a phone records — a minute of 4K video or a long
+screen recording is a few hundred megabytes — and is half a workspace upload's,
+because these files sit in the data directory, out of the user's sight, until
+the session is deleted: a mistaken pick of something huge costs space nobody
+sees. Nothing on the way bounds the time an upload takes — the server sets no
+read timeout, and the relay streams the body as it does a workspace upload's
+([code/relay-system.md](code/relay-system.md)) — so at a 10 Mbit/s uplink the
+whole ceiling is about seven minutes; the composer shows each file's progress,
+and removing a file aborts its request.
+
+It is not the ceiling on showing an image: an attachment past
+`contents.MaxImageSize` is stored and handed to the agent all the same, and
+described as `too_large` when read back ([above](#operations)), as an image
+from the workspace or one an agent's tool returned would be
+([code/agent-integration.md](code/agent-integration.md#content-blocks-and-attachments)).
 
 **`GET /api/chat/attachments`** — send one stored attachment.
 

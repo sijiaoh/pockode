@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"io/fs"
 	"log/slog"
 	"mime/multipart"
 	"net/http"
@@ -13,6 +15,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"testing/iotest"
 
 	"github.com/pockode/server/attachments"
 )
@@ -125,14 +128,47 @@ func TestAttachmentUpload(t *testing.T) {
 		assertError(t, rec, http.StatusInternalServerError, CodeInternal)
 	})
 
-	t.Run("refuses a request over the ceiling and names it", func(t *testing.T) {
-		h, _ := newAttachmentHandler(t)
+	t.Run("refuses a request over the ceiling, names it and keeps nothing", func(t *testing.T) {
+		h, dataDir := newAttachmentHandler(t)
 		h.base.maxUpload = 4
 		rec := uploadAttachments(t, h, "session_id=sess", uploadFile{"a.png", []byte("12345")})
 		body := assertError(t, rec, http.StatusRequestEntityTooLarge, CodeTooLarge)
 		if body.Limit != 4 {
 			t.Errorf("limit = %d, want 4", body.Limit)
 		}
+		assertNoAttachmentFiles(t, dataDir)
+	})
+
+	// The budget is the request's, not each file's.
+	t.Run("counts the ceiling across every file in the request", func(t *testing.T) {
+		h, _ := newAttachmentHandler(t)
+		h.base.maxUpload = 4
+		rec := uploadAttachments(t, h, "session_id=sess",
+			uploadFile{"a.png", []byte("12")}, uploadFile{"b.png", []byte("345")})
+		assertError(t, rec, http.StatusRequestEntityTooLarge, CodeTooLarge)
+	})
+
+	// A client that goes away mid-file — the phone locked, the network
+	// dropped — is not a fault on this side, and must leave no partial file a
+	// retry could trip over.
+	t.Run("reports a client that disconnects mid-file and keeps nothing of it", func(t *testing.T) {
+		h, dataDir := newAttachmentHandler(t)
+		req := newUploadRequest(t, "session_id=sess", uploadFile{"clip.mov", bytes.Repeat([]byte("x"), 64)})
+		whole, err := io.ReadAll(req.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Body = io.NopCloser(io.MultiReader(bytes.NewReader(whole[:len(whole)-20]),
+			iotest.ErrReader(errors.New("connection reset by peer"))))
+
+		rec := httptest.NewRecorder()
+		h.Upload(rec, req)
+
+		body := assertError(t, rec, http.StatusBadRequest, CodeInvalidRequest)
+		if !strings.Contains(body.Error, "clip.mov") || !strings.Contains(body.Error, "cut short") {
+			t.Errorf("got error %q, want it to name clip.mov as cut short", body.Error)
+		}
+		assertNoAttachmentFiles(t, dataDir)
 	})
 
 	// The ceiling counts file content, so a part with no filename would
@@ -171,6 +207,27 @@ func TestAttachmentUpload(t *testing.T) {
 		rec := uploadAttachments(t, h, "session_id=sess")
 		assertError(t, rec, http.StatusBadRequest, CodeInvalidRequest)
 	})
+}
+
+// assertNoAttachmentFiles checks that the session's attachment directory,
+// spool included, holds no file.
+func assertNoAttachmentFiles(t *testing.T, dataDir string) {
+	t.Helper()
+	err := filepath.WalkDir(attachments.Dir(dataDir, "sess"), func(path string, d fs.DirEntry, err error) error {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if !d.IsDir() {
+			t.Errorf("left %s behind", path)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
 }
 
 func downloadAttachment(t *testing.T, h *AttachmentHandler, query string) *httptest.ResponseRecorder {

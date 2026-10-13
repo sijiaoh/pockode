@@ -452,6 +452,7 @@ Client                              Server
   │     worktree_name, remote_url,     │
   │     max_upload_size,               │
   │     max_attachment_size,           │
+  │     max_image_preview_size,        │
   │     session_token }                │
   │◀───────────────────────────────────┤
   │                                    │
@@ -484,6 +485,12 @@ Client                              Server
   of its own. That is the workspace upload's ceiling; `max_attachment_size` is
   the same thing for chat attachments (`POST /api/chat/attachments`), which have
   a lower one of their own ([File § Transfer](../file.md#transfer)).
+- `max_image_preview_size` is the largest raster image the server serves to be
+  drawn (`contents.MaxImageSize`); past it the server describes one as
+  `too_large`. It is sent for the one image the server is never asked about — a
+  file picked in the composer, previewed from a local `blob:` — so the client
+  decodes no image the transcript would not draw either, without keeping its own
+  copy of the number.
 - `remote_url` is the address the server is reachable at through the relay, such
   as `https://abc123.cloud.pockode.com`, and empty when the relay is disabled or
   has stopped for good. It is current as of the reply and can change mid-run

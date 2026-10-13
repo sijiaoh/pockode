@@ -14,11 +14,14 @@
 package attachments
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -26,22 +29,46 @@ import (
 	"github.com/pockode/server/filestore"
 )
 
-// MaxSize is the ceiling on what one attachment may be, whoever delivered it:
-// the files a user sends with a message (counted per upload request), the image
-// a tool returned, the one codex's view_image looked at. It is also the
-// ceiling on previewing any raster image, including one in the workspace or in
-// a commit (contents.NewFileContent), so that an image is shown up to the same
-// size wherever it came from. (An SVG is read back as text, and so is still
-// held to contents.MaxFileSize.)
+// MaxSize is the ceiling on the files a user sends with one message, counted
+// per upload request (POST /api/chat/attachments).
 //
-// It is sized for what a phone sends: a photo or a screen recording's still is
-// a few megabytes, a PDF rarely more. Content is read whole before it is stored
-// — the store names a file by the hash of its content — so the ceiling bounds
-// memory as well as disk.
-const MaxSize = 20 << 20 // 20 MiB
+// It is sized for what a phone records: a minute of 4K video is a few hundred
+// megabytes, a long screen recording at 1080p about as much, a voice note a
+// fraction of that. Memory sets no ceiling, since content streams to disk as it
+// is hashed (Store.PutStream). What remains is disk and time:
+//
+//   - The files live in the data directory, out of the user's sight, until the
+//     session is deleted — so a mistaken pick of something huge costs space
+//     nobody sees. Hence half of filetransfer.MaxUploadSize, which lands in the
+//     user's own project where they can see and remove it.
+//   - Nothing on the way cuts a long upload off: the server sets no read
+//     timeout, and the relay tunnel streams a request body with no size or
+//     duration limit of its own (docs/file.md#transfer). At a 10 Mbit/s mobile
+//     uplink the full ceiling takes about seven minutes, which is a deliberate
+//     act rather than something to refuse.
+//
+// It is not the ceiling on an image an agent produced or the one on previewing
+// an image; that is contents.MaxImageSize, for reasons of its own.
+const MaxSize = 512 << 20 // 512 MiB
 
-// ErrDisabled is returned by Put on a store with no directory behind it.
+// ErrDisabled is returned by Put and PutStream on a store with no directory
+// behind it.
 var ErrDisabled = errors.New("attachment store disabled")
+
+// ErrTooLarge is returned by PutStream for content longer than its limit.
+var ErrTooLarge = errors.New("attachment exceeds the size limit")
+
+// ErrIncomplete wraps a failure reading the content PutStream was handed — a
+// client that disconnected or a body cut short — so a caller can tell it from a
+// failure to write on this side.
+var ErrIncomplete = errors.New("attachment content ended early")
+
+// incomingDir is where content is spooled before it has a name. A directory
+// rather than a suffix, because Resolve and Clone already pass over
+// directories: a half-written file has no id a client could name and is
+// never cloned into a fork. A spool a crash left behind is removed with the
+// session, like everything else here.
+const incomingDir = "incoming"
 
 // Dir is where one session's attachments live. Exported because the read side
 // (the RPC that serves them) resolves the same directory from the worktree's
@@ -91,18 +118,133 @@ func (s Store) Put(data []byte, ext string) (string, error) {
 
 	sum := sha256.Sum256(data)
 	id := hex.EncodeToString(sum[:]) + ext
-	path := filepath.Join(s.dir, id)
-	if _, err := os.Stat(path); err == nil {
+	if existing(filepath.Join(s.dir, id)) {
 		return id, nil
 	}
+	stored, err := s.PutStream(bytes.NewReader(data), ext, int64(len(data)))
+	return stored.ID, err
+}
 
-	if err := os.MkdirAll(s.dir, 0755); err != nil {
-		return "", fmt.Errorf("create attachment dir: %w", err)
+// Stored is what PutStream wrote.
+type Stored struct {
+	ID   string
+	Size int64
+}
+
+// PutStream stores what r yields, up to limit bytes, as Put stores data.
+//
+// For content too large to hold in memory: it is written to disk as it is
+// read and hashed on the way, and only takes its name once it is whole. So
+// whatever stops it — content over limit (ErrTooLarge), r failing
+// (ErrIncomplete), the disk — leaves no file behind, and no id is handed out
+// for content that did not arrive.
+func (s Store) PutStream(r io.Reader, ext string, limit int64) (Stored, error) {
+	if s.dir == "" {
+		return Stored{}, ErrDisabled
 	}
-	if err := filestore.WriteFileAtomic(path, data, 0644); err != nil {
-		return "", fmt.Errorf("write attachment: %w", err)
+
+	tmp, sum, size, err := spool(s.dir, r, limit)
+	if err != nil {
+		return Stored{}, err
 	}
-	return id, nil
+	id := hex.EncodeToString(sum) + ext
+	if err := place(tmp, filepath.Join(s.dir, id)); err != nil {
+		return Stored{}, err
+	}
+	return Stored{ID: id, Size: size}, nil
+}
+
+// spool writes up to limit bytes of r to a new file under dir's incoming
+// directory, fsynced, and returns its path with the hash of what it holds. On
+// failure the file is already removed.
+func spool(dir string, r io.Reader, limit int64) (path string, sum []byte, size int64, err error) {
+	incoming := filepath.Join(dir, incomingDir)
+	if err := os.MkdirAll(incoming, 0755); err != nil {
+		return "", nil, 0, fmt.Errorf("create attachment dir: %w", err)
+	}
+	f, err := os.CreateTemp(incoming, "*")
+	if err != nil {
+		return "", nil, 0, fmt.Errorf("create attachment: %w", err)
+	}
+	defer func() {
+		if err != nil {
+			f.Close()
+			os.Remove(f.Name())
+		}
+	}()
+
+	hash := sha256.New()
+	src := &sourceReader{r: io.LimitReader(r, limit+1)}
+	size, err = io.Copy(io.MultiWriter(f, hash), src)
+	if src.err != nil {
+		return "", nil, 0, fmt.Errorf("%w: %w", ErrIncomplete, src.err)
+	}
+	if err != nil {
+		return "", nil, 0, fmt.Errorf("write attachment: %w", err)
+	}
+	// One byte past the limit tells "at it" from "over it" without reading the
+	// rest of what the source still has.
+	if size > limit {
+		return "", nil, 0, ErrTooLarge
+	}
+	// CreateTemp makes the file 0600; stored content is as readable as the
+	// rest of the data directory, as it was when written by WriteFileAtomic.
+	if err = f.Chmod(0644); err != nil {
+		return "", nil, 0, fmt.Errorf("chmod attachment: %w", err)
+	}
+	// The id is handed out the instant this returns, so the bytes are on disk
+	// before anything names them.
+	if err = f.Sync(); err != nil {
+		return "", nil, 0, fmt.Errorf("fsync attachment: %w", err)
+	}
+	if err = f.Close(); err != nil {
+		return "", nil, 0, fmt.Errorf("close attachment: %w", err)
+	}
+	return f.Name(), hash.Sum(nil), size, nil
+}
+
+// place renames a spooled file to path, its final name. The rename is what
+// makes the write atomic: a reader sees the whole file or none.
+//
+// Content-addressed, so a file already at path holds the same bytes: it is
+// kept rather than replaced, which on Windows would fail while anyone has it
+// open — a download in progress, the agent reading it. The same goes for one
+// that appears between the check and the rename, from an identical upload
+// racing this one.
+func place(tmp, path string) error {
+	if existing(path) {
+		os.Remove(tmp)
+		return nil
+	}
+	err := filestore.Rename(tmp, path)
+	if err == nil {
+		return nil
+	}
+	os.Remove(tmp)
+	if existing(path) {
+		return nil
+	}
+	return fmt.Errorf("store attachment: %w", err)
+}
+
+func existing(path string) bool {
+	info, err := os.Lstat(path)
+	return err == nil && info.Mode().IsRegular()
+}
+
+// sourceReader keeps the error its reader returned, which io.Copy reports
+// exactly as it does a failed write.
+type sourceReader struct {
+	r   io.Reader
+	err error
+}
+
+func (s *sourceReader) Read(p []byte) (int, error) {
+	n, err := s.r.Read(p)
+	if err != nil && err != io.EOF {
+		s.err = err
+	}
+	return n, err
 }
 
 // Clone gives dst its own copy of every attachment src has.
@@ -129,8 +271,9 @@ func Clone(dataDir, srcSessionID, dstSessionID string) error {
 
 	dstDir := Dir(dataDir, dstSessionID)
 	for _, entry := range entries {
-		// The lock filestore's atomic write leaves behind belongs to the write,
-		// not to the content.
+		// The lock filestore's atomic write left behind (before PutStream) belongs
+		// to the write, not to the content; the incoming directory is a
+		// directory.
 		if entry.IsDir() || filepath.Ext(entry.Name()) == ".lock" {
 			continue
 		}
@@ -143,15 +286,27 @@ func Clone(dataDir, srcSessionID, dstSessionID string) error {
 		if err := os.Link(src, dst); err == nil || errors.Is(err, fs.ErrExist) {
 			continue
 		}
-		data, err := os.ReadFile(src)
-		if err != nil {
-			return fmt.Errorf("read attachment: %w", err)
-		}
-		if err := filestore.WriteFileAtomic(dst, data, 0644); err != nil {
-			return fmt.Errorf("copy attachment: %w", err)
+		if err := copyFile(src, dstDir, dst); err != nil {
+			return err
 		}
 	}
 	return nil
+}
+
+// copyFile copies src to dst by way of dstDir's incoming directory, so a copy
+// cut short leaves nothing under dst's name. Streamed: an attachment can be
+// far larger than anything worth holding in memory.
+func copyFile(src, dstDir, dst string) error {
+	f, err := os.Open(src)
+	if err != nil {
+		return fmt.Errorf("read attachment: %w", err)
+	}
+	defer f.Close()
+	tmp, _, _, err := spool(dstDir, f, math.MaxInt64-1)
+	if err != nil {
+		return fmt.Errorf("copy attachment: %w", err)
+	}
+	return place(tmp, dst)
 }
 
 // ErrNotFound is returned by Resolve for an id that names no stored attachment.
@@ -193,8 +348,8 @@ func Resolve(dataDir, sessionID, id string) (string, error) {
 // more of it than that.
 func UploadExtension(name string) string {
 	ext := strings.ToLower(filepath.Ext(name))
-	// .lock is what filestore's atomic write names its lock file, which Clone
-	// and Resolve both pass over.
+	// .lock is what filestore's atomic write named its lock file in stores
+	// written before PutStream, which Clone and Resolve both pass over.
 	if len(ext) < 2 || len(ext) > 11 || ext == ".lock" {
 		return ""
 	}

@@ -18,6 +18,7 @@ import (
 	"github.com/pockode/server/cliauth"
 	"github.com/pockode/server/cliupdate"
 	"github.com/pockode/server/command"
+	"github.com/pockode/server/contents"
 	"github.com/pockode/server/filetransfer"
 	"github.com/pockode/server/logger"
 	"github.com/pockode/server/password"
@@ -854,14 +855,15 @@ func (h *rpcMethodHandler) handleAuth(ctx context.Context, conn *jsonrpc2.Conn, 
 
 	title := filepath.Base(h.worktreeManager.Registry().MainDir())
 	result := rpc.AuthResult{
-		Version:           h.version,
-		Title:             title,
-		WorkDir:           wt.WorkDir,
-		WorktreeName:      wt.Name,
-		RemoteURL:         h.remoteURL(),
-		MaxUploadSize:     filetransfer.MaxUploadSize,
-		MaxAttachmentSize: attachments.MaxSize,
-		SessionToken:      sessionToken,
+		Version:             h.version,
+		Title:               title,
+		WorkDir:             wt.WorkDir,
+		WorktreeName:        wt.Name,
+		RemoteURL:           h.remoteURL(),
+		MaxUploadSize:       filetransfer.MaxUploadSize,
+		MaxAttachmentSize:   attachments.MaxSize,
+		MaxImagePreviewSize: contents.MaxImageSize,
+		SessionToken:        sessionToken,
 	}
 	if err := conn.Reply(ctx, req.ID, result); err != nil {
 		h.log.Error("failed to send auth response", "error", err)

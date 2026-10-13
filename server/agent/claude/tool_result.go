@@ -157,9 +157,11 @@ func fileBlock(log *slog.Logger, store attachments.Store, elem toolResultBlock, 
 
 	file.Width, file.Height = agent.ImageDimensions(log, data)
 
-	if file.Size > attachments.MaxSize {
+	// The image limit rather than the attachment one: the image is kept only so
+	// a client can draw it, and no client draws one past this.
+	if file.Size > contents.MaxImageSize {
 		file.Omitted = contents.OmitTooLarge
-		file.Limit = attachments.MaxSize
+		file.Limit = contents.MaxImageSize
 		return file
 	}
 

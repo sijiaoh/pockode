@@ -18,6 +18,7 @@ import (
 	"github.com/coder/websocket"
 	"github.com/pockode/server/agent"
 	"github.com/pockode/server/agentrole"
+	"github.com/pockode/server/attachments"
 	"github.com/pockode/server/authguard"
 	"github.com/pockode/server/authsession"
 	"github.com/pockode/server/cliauth"
@@ -25,6 +26,7 @@ import (
 	"github.com/pockode/server/cliupdate"
 	"github.com/pockode/server/command"
 	"github.com/pockode/server/contents"
+	"github.com/pockode/server/filetransfer"
 	"github.com/pockode/server/git"
 	"github.com/pockode/server/internal/authsessiontest"
 	"github.com/pockode/server/internal/unwritabletest"
@@ -760,6 +762,32 @@ func TestHandler_Auth_PasswordIssuesReusableSessionToken(t *testing.T) {
 	}
 	if second.SessionToken != first.SessionToken {
 		t.Errorf("session token = %q, want it returned unchanged (%q)", second.SessionToken, first.SessionToken)
+	}
+}
+
+// The size limits are sent so a client never keeps its own copy of them; each
+// has to arrive under the name the web client reads.
+func TestHandler_Auth_ReportsSizeLimits(t *testing.T) {
+	server := newAuthTestServer(t, testPassword, "", authsessiontest.New())
+
+	resp := callOnce(t, server.URL, "auth", rpc.AuthParams{Password: testPassword})
+	if resp.Error != nil {
+		t.Fatalf("auth failed: %v", resp.Error)
+	}
+	// Decoded by wire name rather than into rpc.AuthResult, which would agree
+	// with itself even if a tag drifted from what the web client reads.
+	var result map[string]any
+	if err := json.Unmarshal(resp.Result, &result); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	for field, want := range map[string]int64{
+		"max_upload_size":        filetransfer.MaxUploadSize,
+		"max_attachment_size":    attachments.MaxSize,
+		"max_image_preview_size": contents.MaxImageSize,
+	} {
+		if got, _ := result[field].(float64); int64(got) != want {
+			t.Errorf("%s = %v, want %d", field, result[field], want)
+		}
 	}
 }
 

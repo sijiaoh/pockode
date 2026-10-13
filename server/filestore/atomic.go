@@ -111,7 +111,7 @@ func ReadJSONOrQuarantine(path, label string, v any) (bool, error) {
 // exclusive lock on path.
 func quarantineLocked(path string) (string, error) {
 	backup := path + ".corrupt"
-	if err := renameFile(path, backup); err != nil {
+	if err := Rename(path, backup); err != nil {
 		return "", err
 	}
 	return backup, nil
@@ -152,7 +152,7 @@ func writeAtomic(path string, data []byte, perm os.FileMode) error {
 	// power failure rolls back to the previous valid file, never a corrupt one,
 	// and the extra fsync adds a second full disk round-trip to every index
 	// write (measured on a slow disk: ~150ms → ~220ms).
-	if err := renameFile(tmpPath, path); err != nil {
+	if err := Rename(tmpPath, path); err != nil {
 		os.Remove(tmpPath)
 		return fmt.Errorf("rename temp file: %w", err)
 	}

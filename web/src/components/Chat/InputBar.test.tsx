@@ -50,6 +50,7 @@ const wsState = {
 		listCommands: mockListCommands,
 	},
 	maxAttachmentSize: 1024,
+	maxImagePreviewSize: 20 * 1024 * 1024,
 };
 
 vi.mock("../../lib/wsStore", () => ({
@@ -1371,6 +1372,68 @@ describe("InputBar", () => {
 
 			expect(uploadChatAttachment).not.toHaveBeenCalled();
 			expect(screen.getByText("2 KB, over the 1 KB limit")).toBeInTheDocument();
+		});
+
+		// A large recording takes minutes; a spinner alone reads as stuck.
+		it("shows how much of the upload has been sent", async () => {
+			const user = userEvent.setup();
+			const upload = deferredUpload();
+			render(<InputBar sessionId={TEST_SESSION_ID} onSend={sendAccepted} />);
+			await user.upload(screen.getByTestId("file-input"), png());
+
+			const progress = screen.getByRole("progressbar", {
+				name: "shot.png upload progress",
+			});
+			expect(progress).toHaveAttribute("aria-valuenow", "0");
+
+			const { onProgress } = vi.mocked(uploadChatAttachment).mock.calls[0][0];
+			act(() => onProgress?.(0.426));
+			expect(progress).toHaveAttribute("aria-valuenow", "43");
+
+			await act(async () => upload.resolve());
+			expect(screen.queryByRole("progressbar")).not.toBeInTheDocument();
+		});
+
+		// Decoded whole to draw it, and the transcript would not draw it either.
+		describe("an image near the preview ceiling", () => {
+			const MiB = 1024 * 1024;
+			let previous: number;
+			beforeEach(() => {
+				previous = wsState.maxAttachmentSize;
+				wsState.maxAttachmentSize = 512 * MiB;
+			});
+			afterEach(() => {
+				wsState.maxAttachmentSize = previous;
+			});
+
+			async function pickImageOfSize(size: number) {
+				const user = userEvent.setup();
+				deferredUpload();
+				render(<InputBar sessionId={TEST_SESSION_ID} onSend={sendAccepted} />);
+				const image = png();
+				Object.defineProperty(image, "size", { value: size });
+				await user.upload(screen.getByTestId("photo-input"), image);
+			}
+
+			it("still gets a thumbnail at the ceiling", async () => {
+				await pickImageOfSize(20 * MiB);
+
+				expect(screen.getByRole("img", { name: "shot.png" })).toHaveAttribute(
+					"src",
+					"blob:preview",
+				);
+			});
+
+			it("is uploaded as a chip past it", async () => {
+				await pickImageOfSize(20 * MiB + 1);
+
+				expect(uploadChatAttachment).toHaveBeenCalled();
+				expect(URL.createObjectURL).not.toHaveBeenCalled();
+				expect(
+					screen.queryByRole("img", { name: "shot.png" }),
+				).not.toBeInTheDocument();
+				expect(screen.getByText("20 MB")).toBeInTheDocument();
+			});
 		});
 
 		it("gives the files back when the message is refused", async () => {

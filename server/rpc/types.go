@@ -88,6 +88,12 @@ type AuthResult struct {
 	// MaxAttachmentSize is the same thing for chat attachments
 	// (POST /api/chat/attachments), which have a ceiling of their own.
 	MaxAttachmentSize int64 `json:"max_attachment_size"`
+	// MaxImagePreviewSize is the largest raster image the server serves for a
+	// client to draw (contents.MaxImageSize); past it the server describes one
+	// as too_large. Sent for what never reaches the server to be asked — a file
+	// picked in the composer, previewed locally — so the client decodes no
+	// image the transcript would not draw either.
+	MaxImagePreviewSize int64 `json:"max_image_preview_size"`
 	// SessionToken is what the client stores in place of the password. It is a
 	// freshly issued token when the client authenticated with a password, and
 	// the very same token it sent when it authenticated with one — never a

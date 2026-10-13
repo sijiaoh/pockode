@@ -150,8 +150,10 @@ func viewedImage(log *slog.Logger, store attachments.Store, path string) *agent.
 	defer f.Close()
 
 	// One byte past the ceiling is enough to know the file is over it, and
-	// bounding the read keeps memory off the size of whatever was named.
-	data, err := io.ReadAll(io.LimitReader(f, attachments.MaxSize+1))
+	// bounding the read keeps memory off the size of whatever was named. The
+	// image limit rather than the attachment one: the copy is kept only so a
+	// client can draw it, and no client draws one past this.
+	data, err := io.ReadAll(io.LimitReader(f, contents.MaxImageSize+1))
 	if err != nil {
 		log.Warn("failed to read the image codex viewed", "error", err, "path", path)
 		file.Omitted = contents.OmitUnavailable
@@ -167,13 +169,13 @@ func viewedImage(log *slog.Logger, store attachments.Store, path string) *agent.
 	}
 	file.Width, file.Height = agent.ImageDimensions(log, data)
 
-	// A raster image is fetched over HTTP and can be as large as an attachment
-	// may be. Anything else the UI draws — an SVG — travels as text in one
+	// A raster image is fetched over HTTP and can be as large as an image
+	// preview may be. Anything else the UI draws — an SVG — travels as text in one
 	// JSON-RPC message and is held to that ceiling when it is read back, so
 	// storing more of it would keep bytes no client can be shown.
 	limit := int64(contents.MaxFileSize)
 	if contents.IsRasterImage(path, data) {
-		limit = attachments.MaxSize
+		limit = contents.MaxImageSize
 	}
 	if int64(len(data)) > limit {
 		// The size is the whole file's, taken from the stat: what was read may

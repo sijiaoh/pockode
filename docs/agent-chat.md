@@ -189,17 +189,24 @@ keyboard does not drop and rise again:
 - **Photos** / **Files** — the system pickers (`accept="image/*,video/*"` reaches
   the photo library on a phone; `image/*` alone hides its videos, screen
   recordings included). Each file uploads as soon as it is picked and waits
-  in a strip above the row (`Chat/ComposerAttachments.tsx`) with a spinner while it
-  uploads, a remove button, and — on failure — the reason written out, since a `title` is
+  in a strip above the row (`Chat/ComposerAttachments.tsx`) with a spinner and a
+  progress bar while it uploads (a large video over a slow link takes minutes, and
+  a bare spinner cannot be told from a stuck one), a remove button that also
+  aborts an upload still in flight, and — on failure — the reason written out, since a `title` is
   out of reach under a thumb. Send waits until every file is stored; a failed one
   has to be removed first, so nothing picked is dropped silently. A file over
   the server's ceiling is refused at pick time, before any upload, with its
-  own size beside the limit ("48.2 MB, over the 20 MB limit"): for a long screen recording,
+  own size beside the limit ("600 MB, over the 512 MB limit"): for a long screen recording,
   how far over it is says how much to trim. How the
   files travel is in [Key Files](#key-files).
 
   The preview is of the local file, through a `blob:` URL the store releases
-  with the entry, so nothing waits on the upload. An image is its own picture.
+  with the entry, so nothing waits on the upload. An image is its own picture —
+  up to `max_image_preview_size` from the `auth` reply: the browser decodes an
+  image whole, so one past it is a chip with its size, as it will be in the
+  transcript ([file.md](file.md#operations)). Past those images, nothing here
+  reads a whole file into memory: the upload sends the `File` as it is, and a
+  video or audio preview reads only as far as it needs.
   A video is its first frame (`#t=0.001`, `preload="metadata"`, `muted
   playsInline` — what iOS needs to paint one and read no further) in the
   image's square box, with its length and, once uploaded, a play mark; a frame

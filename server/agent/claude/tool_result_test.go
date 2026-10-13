@@ -194,13 +194,13 @@ func TestParseToolResultStoresAnImagePastTheMessageCeiling(t *testing.T) {
 
 func TestParseToolResultOversizedImage(t *testing.T) {
 	store, dir := testStore(t)
-	data := make([]byte, attachments.MaxSize+1)
+	data := make([]byte, contents.MaxImageSize+1)
 	copy(data, pngBytes(t, 4, 4))
 	content := fmt.Sprintf(`[{"type":"image","source":{"type":"base64","media_type":"image/png","data":%q}}]`,
 		base64.StdEncoding.EncodeToString(data))
 
 	file := parseToolResultLine(t, store, content).Contents[0].File
-	if file.Omitted != contents.OmitTooLarge || file.Limit != attachments.MaxSize {
+	if file.Omitted != contents.OmitTooLarge || file.Limit != contents.MaxImageSize {
 		t.Errorf("expected a too_large verdict, got %+v", file)
 	}
 	if file.AttachmentID != "" {
@@ -298,10 +298,10 @@ func TestAttachmentStoreDeduplicates(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read dir: %v", err)
 	}
-	// The lock filestore's atomic write leaves behind is not an attachment.
+	// The store's spool directory is not an attachment.
 	stored := 0
 	for _, entry := range entries {
-		if filepath.Ext(entry.Name()) != ".lock" {
+		if !entry.IsDir() {
 			stored++
 		}
 	}

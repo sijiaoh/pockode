@@ -283,6 +283,14 @@ directory's `.gitignore` and the per-session Claude resume file. Files whose
 mode matters pass it explicitly — `server.json`, `relay.json` and
 `sessions.json` stay `0600` because they hold credentials.
 
+Attachments (`server/attachments`) keep the same guarantee without the
+primitive, because a user's upload is too large to hold in memory:
+`attachments.Store.PutStream` streams it into a temp file under the session's
+`attachments/incoming/`, fsyncs it, and renames it into place with
+`filestore.Rename`, the retrying rename `WriteFileAtomic` uses. No lock is needed — the name is the content's hash, so
+two writers of one name write the same bytes, and a name already present is kept
+([file.md](../file.md#transfer)).
+
 Session history is the one piece of state not rewritten whole: it is appended a
 record at a time through `filestore.AppendJSONL`, which gives up the whole-file
 guarantee for a per-record one. See

@@ -424,6 +424,11 @@ func (s *FileStore) CreateFork(ctx context.Context, sessionID string, fork ForkS
 	// at a session the fork does not own. Not fatal: a fork that loses its
 	// images is still the conversation the user asked for, and refusing to
 	// create it would be the worse trade.
+	//
+	// Under the lock, so a Delete of the new session cannot land between its
+	// creation and the copy and leave an orphaned directory behind. Clone hard
+	// links, which is instant; only a filesystem that refuses links makes it a
+	// copy, and then the store waits on it.
 	if err := attachments.Clone(s.dataDir, fork.Source.ID, sessionID); err != nil {
 		slog.Warn("failed to copy attachments into forked session",
 			"sessionId", sessionID, "sourceSessionId", fork.Source.ID, "error", err)

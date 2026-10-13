@@ -86,8 +86,8 @@ function Entry({ item }: { item: DraftAttachment }) {
 					<div className="truncate text-th-text-primary">{item.name}</div>
 					{/* Said aloud too: the spinner's status goes quietly, and Send
 					    turns off with nothing else to say why. Two lines, not one
-					    truncated: the end of a reason ("…the 20 MB limit") is the
-					    part to read, and two fit the entry's height. */}
+					    truncated: the end of a reason (the limit a file is over) is
+					    the part to read, and two fit the entry's height. */}
 					<div
 						role="alert"
 						className="line-clamp-2 break-words text-xs text-th-error"
@@ -99,9 +99,25 @@ function Entry({ item }: { item: DraftAttachment }) {
 		);
 	}
 
+	// The bar beside the spinner: a large recording takes minutes over a slow
+	// link, and a spinner alone cannot tell that apart from one that is stuck.
+	const percent = Math.round((item.progress ?? 0) * 100);
 	const spinner = uploading && (
 		<div className="absolute inset-0 flex items-center justify-center rounded-md bg-th-bg-primary/60">
 			<Spinner srText={`Uploading ${item.name}`} />
+			<div
+				role="progressbar"
+				aria-label={`${item.name} upload progress`}
+				aria-valuenow={percent}
+				aria-valuemin={0}
+				aria-valuemax={100}
+				className="absolute inset-x-1 bottom-1 h-0.5 overflow-hidden rounded-full bg-th-bg-tertiary"
+			>
+				<div
+					className="h-full bg-th-accent transition-[width]"
+					style={{ width: `${percent}%` }}
+				/>
+			</div>
 		</div>
 	);
 	const onUndrawable = () => setUndrawable(true);

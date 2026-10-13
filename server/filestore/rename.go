@@ -17,9 +17,11 @@ const (
 	renameRetryDelay = 20 * time.Millisecond
 )
 
-// renameFile renames oldpath to newpath, replacing newpath if it exists, and
-// retries while the failure looks like transient sharing contention.
-func renameFile(oldpath, newpath string) error {
+// Rename renames oldpath to newpath, replacing newpath if it exists, and
+// retries while the failure looks like transient sharing contention. For a
+// caller that writes its own temp file and renames it into place, as
+// WriteFileAtomic does.
+func Rename(oldpath, newpath string) error {
 	for attempt := 1; ; attempt++ {
 		err := os.Rename(oldpath, newpath)
 		if err == nil || attempt == renameAttempts || !isRetryableRenameError(err) {
