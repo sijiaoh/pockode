@@ -1,4 +1,5 @@
 import type { FileContent, ImageOrigin } from "../types/contents";
+import { formatBytes } from "./bytes";
 
 /**
  * Byte ceiling above which file content is shown without syntax highlighting.
@@ -69,6 +70,29 @@ export function formatMimeLabel(mime: string): string {
 	return name.replace(/^x-/, "").toUpperCase();
 }
 
+export interface ImageDimensions {
+	width: number;
+	height: number;
+}
+
+/**
+ * The one line said under an image wherever it is shown — the in-place
+ * preview and the full-screen viewer — e.g. `PNG · 2000×1333 · 433 KB`.
+ */
+export function formatImageCaption(
+	mime: string,
+	size: number,
+	dimensions: ImageDimensions | null | undefined,
+): string {
+	return [
+		formatMimeLabel(mime),
+		dimensions && `${dimensions.width}×${dimensions.height}`,
+		formatBytes(size),
+	]
+		.filter(Boolean)
+		.join(" · ");
+}
+
 /**
  * Whether content of this type is something to render as a picture.
  *
@@ -100,20 +124,6 @@ export function getImageSource(
 		kind: "inline",
 		src: `data:image/svg+xml,${encodeURIComponent(file.content)}`,
 	};
-}
-
-/**
- * The text content the server sent, for handing to the browser as a file.
- *
- * Not `lib/fileDownload`'s `downloadFile`, which reads a file by its path over
- * HTTP: this content is already here and has no path to ask for it by. Null
- * for anything else — content sent over HTTP is read from its origin instead
- * (`fetchImageBlob`). Untyped: `saveBlob` gives every saved Blob the one type
- * that is safe to hand the browser.
- */
-export function fileContentToBlob(file: FileContent): Blob | null {
-	if (file.encoding !== "text") return null;
-	return new Blob([file.content]);
 }
 
 /**

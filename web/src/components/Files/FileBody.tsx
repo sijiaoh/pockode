@@ -17,8 +17,7 @@ interface Props {
 	 * previewed is exactly the one the user needs to open elsewhere — the icon in
 	 * the bottom bar is easy to miss when the page says "can't be previewed".
 	 *
-	 * Omitted on a diff, which has no single file to offer, and on an
-	 * attachment preview, whose own Save button sits under it.
+	 * Omitted on a diff, which has no single file to offer.
 	 */
 	downloadAction?: { label: string; onClick: () => void; disabled?: boolean };
 	/**

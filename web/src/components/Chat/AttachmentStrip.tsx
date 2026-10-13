@@ -11,8 +11,8 @@ import {
 	previewsAsImage,
 	workspacePath,
 } from "../../utils/attachment";
+import { type ImageMediaItem, MediaViewer } from "../Media";
 import AttachmentChip from "./AttachmentChip";
-import AttachmentPreview from "./AttachmentPreview";
 import AttachmentThumb from "./AttachmentThumb";
 
 interface Props {
@@ -48,17 +48,20 @@ function AttachmentStrip({
 	divided = true,
 }: Props) {
 	const workDir = useWSStore((state) => state.workDir);
-	// One at a time: two images open at full size in a chat bubble push
-	// everything else off the screen, and picking a second is a clear signal the
-	// first is done with.
-	const [expanded, setExpanded] = useState<number | null>(null);
+	// Held here rather than by the thumbnail, so a thumbnail that changes state
+	// underneath (a read retried, a decode failing) does not take the viewer with
+	// it. The strip sits inside the transcript's `CoveredSurface`, which is what
+	// closes the viewer when the chat is covered.
+	const [viewing, setViewing] = useState<{
+		item: ImageMediaItem;
+		openInFiles?: () => void;
+	} | null>(null);
 
 	const entries = files.map((file) => ({
 		file,
 		source: attachmentSource(file, sessionId, workDir),
 		path: workspacePath(file, workDir),
 	}));
-	const open = expanded === null ? null : entries[expanded];
 
 	return (
 		<div className={divided ? "border-t border-th-border" : undefined}>
@@ -73,9 +76,12 @@ function AttachmentStrip({
 								key={key}
 								file={file}
 								source={source}
-								expanded={expanded === index}
-								onToggle={() =>
-									setExpanded((current) => (current === index ? null : index))
+								onOpen={(item) =>
+									setViewing({
+										item,
+										openInFiles:
+											path && onOpenFile ? () => onOpenFile(path) : undefined,
+									})
 								}
 							/>
 						);
@@ -103,12 +109,11 @@ function AttachmentStrip({
 					);
 				})}
 			</div>
-			{open?.source && (
-				<AttachmentPreview
-					file={open.file}
-					source={open.source}
-					workspacePath={open.path}
-					onOpenFile={onOpenFile}
+			{viewing && (
+				<MediaViewer
+					item={viewing.item}
+					openInFiles={viewing.openInFiles}
+					onClose={() => setViewing(null)}
 				/>
 			)}
 		</div>

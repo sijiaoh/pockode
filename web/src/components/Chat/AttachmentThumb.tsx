@@ -9,10 +9,12 @@ import { useInView } from "../../hooks/useInView";
 import type { AttachmentSource, FileBlock } from "../../types/content";
 import {
 	attachmentDetail,
+	attachmentFileName,
 	attachmentName,
 	omittedLabel,
 } from "../../utils/attachment";
 import { getFileViewState } from "../../utils/fileView";
+import type { ImageMediaItem } from "../Media";
 import Skeleton from "../ui/Skeleton";
 import AttachmentChip from "./AttachmentChip";
 
@@ -22,8 +24,8 @@ const FALLBACK_ASPECT = 4 / 3;
 interface Props {
 	file: FileBlock;
 	source: AttachmentSource;
-	expanded: boolean;
-	onToggle: () => void;
+	/** Hands over what the media viewer shows for this image. */
+	onOpen: (item: ImageMediaItem) => void;
 }
 
 /**
@@ -38,7 +40,7 @@ interface Props {
  * refuses scripts and external references in an image loaded that way, so
  * content from a tool never becomes content of this document.
  */
-function AttachmentThumb({ file, source, expanded, onToggle }: Props) {
+function AttachmentThumb({ file, source, onOpen }: Props) {
 	const { ref, inView } = useInView<HTMLDivElement>();
 	const origin = useAttachmentImageOrigin(source);
 	const { data, error, refetch } = useAttachmentContent(source, inView);
@@ -114,7 +116,7 @@ function AttachmentThumb({ file, source, expanded, onToggle }: Props) {
 	// Written out in both branches rather than shared through a constant: the
 	// hit-area scan reads the height off the class list at the call site, and a
 	// height arriving through a variable is a height it cannot check.
-	if (!image.src) {
+	if (!image.src || view?.kind !== "image") {
 		return (
 			<div
 				ref={ref}
@@ -129,12 +131,26 @@ function AttachmentThumb({ file, source, expanded, onToggle }: Props) {
 	return (
 		<button
 			type="button"
-			onClick={onToggle}
-			aria-expanded={expanded}
+			onClick={() =>
+				onOpen({
+					kind: "image",
+					name,
+					saveAs: attachmentFileName(file),
+					mime: view.mime,
+					size: view.size,
+					source: view.source,
+					dimensions:
+						file.width && file.height
+							? { width: file.width, height: file.height }
+							: undefined,
+				})
+			}
+			aria-haspopup="dialog"
+			aria-label={`View ${name}`}
 			// The secondary background is what keeps a transparent PNG legible in
 			// both themes; `object-contain` keeps a wide screenshot from being
 			// cropped to a square.
-			className="h-24 min-w-11 max-w-full shrink-0 overflow-hidden rounded-lg border border-th-border bg-th-bg-secondary sm:h-32"
+			className="h-24 min-w-11 max-w-full shrink-0 overflow-hidden rounded-lg border border-th-border bg-th-bg-secondary pointer-fine:cursor-zoom-in sm:h-32"
 			style={{ aspectRatio: aspect }}
 		>
 			<img

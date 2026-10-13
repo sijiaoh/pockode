@@ -846,9 +846,10 @@ attachment's entry is never invalidated by anything
 (`web/src/hooks/useAttachmentContent.ts` — which is also why a block that has
 only a path shares the Files tab's entry instead of getting one of its own).
 Saving an attachment does not reach the HTTP download route either, since there
-is no path to ask it with: the viewer saves the content it already fetched — the
-text, or the image Blob it cached for the preview
-(`web/src/components/Chat/AttachmentPreview.tsx`).
+is no path to ask it with: the [media viewer](../media-viewer.md)'s Save writes
+the content the client already fetched — the image Blob cached when the
+thumbnail read it, or an SVG's text back out of its data URL
+(`imageSourceBlob`, `web/src/hooks/useImageSrc.ts`).
 
 The one crossing is the `unavailable` fallback above, where a block naming a
 file that *is* in the work directory is read through `file.get`. That direction
