@@ -21,9 +21,12 @@ export interface DraftAttachment {
 	/**
 	 * A local `blob:` URL for an image, a video or an audio file, so the
 	 * preview costs no round trip. Not a copy: a 500 MB video's costs nothing.
+	 * None for an image past the server's preview ceiling, which is decoded whole.
 	 */
 	previewUrl: string | null;
 	status: "uploading" | "ready" | "failed";
+	/** Fraction of the upload sent, 0 to 1; only while `uploading`. */
+	progress?: number;
 	uploaded?: ChatAttachment;
 	error?: string;
 }
@@ -91,12 +94,48 @@ function patchAttachment(
 	);
 }
 
+/**
+ * Records progress only when it becomes visible: the entry shows whole
+ * percentages, and a large file over a slow link reports thousands of times,
+ * each a store write that re-renders the composer.
+ */
+function reportProgress(sessionId: string, key: string, fraction: number) {
+	const item = useInputStore
+		.getState()
+		.attachments[sessionId]?.find((i) => i.key === key);
+	if (!item || item.status !== "uploading") return;
+	if (Math.round((item.progress ?? 0) * 100) === Math.round(fraction * 100)) {
+		return;
+	}
+	patchAttachment(sessionId, key, { progress: fraction });
+}
+
+/**
+ * Whether a picked file gets a local preview. An image is decoded whole, so
+ * one past the server's preview ceiling (`maxImagePreviewSize`, 0 when the
+ * server sent none) is a chip in the draft, as it will be in the transcript;
+ * a video or audio file is only read as far as its header, whatever its size.
+ */
+function hasLocalPreview(
+	kind: AttachmentKind,
+	size: number,
+	maxImagePreviewSize: number,
+): boolean {
+	if (kind === "file") return false;
+	return !(
+		kind === "image" &&
+		maxImagePreviewSize > 0 &&
+		size > maxImagePreviewSize
+	);
+}
+
 export const attachmentActions = {
 	add: (sessionId: string, files: File[]) => {
 		// Read at pick time: the session's store is in the worktree that is
 		// current now, whatever is current when the upload lands.
 		const worktree = useWorktreeStore.getState().current;
-		const maxSize = useWSStore.getState().maxAttachmentSize;
+		const { maxAttachmentSize: maxSize, maxImagePreviewSize } =
+			useWSStore.getState();
 		const added = files.map((file): DraftAttachment => {
 			const key = `attachment-${nextKey++}`;
 			const kind = attachmentKind(file.type);
@@ -128,7 +167,9 @@ export const attachmentActions = {
 				name: file.name,
 				size: file.size,
 				kind,
-				previewUrl: kind === "file" ? null : URL.createObjectURL(file),
+				previewUrl: hasLocalPreview(kind, file.size, maxImagePreviewSize)
+					? URL.createObjectURL(file)
+					: null,
 			};
 			const controller = new AbortController();
 			controllers.set(key, controller);
@@ -136,15 +177,21 @@ export const attachmentActions = {
 				file,
 				sessionId,
 				worktree,
+				onProgress: (fraction) => reportProgress(sessionId, key, fraction),
 				signal: controller.signal,
 			})
 				.then(
 					(uploaded) =>
-						patchAttachment(sessionId, key, { status: "ready", uploaded }),
+						patchAttachment(sessionId, key, {
+							status: "ready",
+							progress: undefined,
+							uploaded,
+						}),
 					(error: unknown) => {
 						if (isAbortError(error)) return;
 						patchAttachment(sessionId, key, {
 							status: "failed",
+							progress: undefined,
 							error:
 								error instanceof Error && error.message
 									? error.message
@@ -153,7 +200,7 @@ export const attachmentActions = {
 					},
 				)
 				.finally(() => controllers.delete(key));
-			return { ...base, status: "uploading" };
+			return { ...base, status: "uploading", progress: 0 };
 		});
 		updateAttachments(sessionId, (items) => [...items, ...added]);
 	},

@@ -821,6 +821,14 @@ export interface AuthResult {
 	 */
 	max_attachment_size?: number;
 	/**
+	 * The largest raster image the server will serve to be drawn; past it one
+	 * is described as `too_large`. Sent for what never reaches the server to
+	 * be asked — a file picked in the composer, previewed from its local
+	 * `blob:` — so no image is decoded here that the transcript would not draw.
+	 * Absent from servers that predate it.
+	 */
+	max_image_preview_size?: number;
+	/**
 	 * What the client stores in place of the password: freshly issued when it
 	 * authenticated with a password, and the very same token it sent when it
 	 * authenticated with one. Never a rotation, so it can be stored

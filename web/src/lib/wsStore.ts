@@ -266,6 +266,8 @@ interface WSState {
 	maxUploadSize: number;
 	/** See `AuthResult.max_attachment_size`; 0 until an auth reply has arrived. */
 	maxAttachmentSize: number;
+	/** See `AuthResult.max_image_preview_size`; 0 until an auth reply has arrived. */
+	maxImagePreviewSize: number;
 	/**
 	 * When the server will take a password again (epoch milliseconds), set by
 	 * the "auth_failed" of a `rate_limited` refusal and null for any other. It
@@ -819,6 +821,7 @@ export const useWSStore = create<WSState>((set, get) => ({
 	remoteUrl: "",
 	maxUploadSize: 0,
 	maxAttachmentSize: 0,
+	maxImagePreviewSize: 0,
 	authRetryAt: null,
 
 	actions: {
@@ -901,6 +904,7 @@ export const useWSStore = create<WSState>((set, get) => ({
 						remoteUrl: result.remote_url,
 						maxUploadSize: result.max_upload_size,
 						maxAttachmentSize: result.max_attachment_size ?? 0,
+						maxImagePreviewSize: result.max_image_preview_size ?? 0,
 					});
 				} catch (error) {
 					// Not a rejection: the request timed out or the socket died
