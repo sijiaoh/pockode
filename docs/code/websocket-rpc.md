@@ -73,7 +73,7 @@ that a `<video>`, `<audio>` or `<iframe>` loads without the session token, and
 when it stops working. Why it exists and what bounds it are in
 [Raw capabilities](authentication.md#raw-capabilities-urls-a-browser-element-loads-by-itself).
 The params name the content the way the client already reads it, by `origin`
-(the frontend's `ImageOrigin`), plus a `scope` of `file` or `directory`:
+(the frontend's `ContentOrigin`), plus a `scope` of `file` or `directory`:
 
 | `origin` | Params | Read from |
 |---|---|---|

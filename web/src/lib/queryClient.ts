@@ -1,5 +1,6 @@
 import { QueryClient } from "@tanstack/react-query";
 import { invalidateGitQueries, removeGitQueries } from "../hooks/gitQueries";
+import { WORKSPACE_RAW_CAPABILITY_KEY } from "../hooks/useRawMediaSource";
 import { HttpError } from "./api";
 import { authActions } from "./authStore";
 import { worktreeActions } from "./worktreeStore";
@@ -61,6 +62,7 @@ export function createQueryClient(): QueryClient {
 		for (const key of WORKTREE_DEPENDENT_QUERY_KEYS) {
 			queryClient.invalidateQueries({ queryKey: [key] });
 		}
+		queryClient.invalidateQueries({ queryKey: WORKSPACE_RAW_CAPABILITY_KEY });
 	});
 
 	// Whatever the git panel cached belongs to the repository before the change.

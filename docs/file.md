@@ -35,6 +35,7 @@ served through it; it is addressed by id in the session's own attachment store
 | Search UI state | `web/src/hooks/useFileSearch.ts`, `web/src/lib/filesSearchStore.ts` | Debounce + query cache, persisted options |
 | RPC actions | `web/src/lib/rpc/file.ts` | `getFile`, `writeFile`, `createFile`, `deleteFile`, `renameFile`, `searchFiles`, `isAlreadyExistsError` |
 | HTTP transfer client | `web/src/lib/fileDownload.ts`, `web/src/lib/fileUpload.ts` | Authenticated download / upload (see [Downloading](#downloading), [Uploading](#uploading)) |
+| Media playback | `web/src/components/Files/MediaPreview.tsx`, `web/src/components/Media/useMediaPlayback.ts`, `web/src/hooks/useRawMediaSource.ts` | Inline audio and video streamed from a raw capability, and its recovery (see [Playing audio and video](#playing-audio-and-video)) |
 | Download action | `web/src/hooks/useFileDownload.ts`, `web/src/components/Files/FileDownloadControls.tsx` | The viewer's Download — cancel, large-file confirmation, error — shared by `FileView` and `CommitFileView` |
 | Upload queue state | `web/src/lib/uploadStore.ts` | Queue, concurrency, retry, worktree scope |
 | Drag and drop | `web/src/hooks/useFileDragZone.ts`, `web/src/components/Files/useFileDrop.ts`, `web/src/hooks/useFileDropGuard.ts` | What every drop zone shares (file detection, the depth count, folder splitting, claiming the drag); the tree's drop target resolution on top of it; the window-level drop backstop |
@@ -51,7 +52,7 @@ whether or not any content came with it. `encoding` says how to read `content`:
 | `encoding` | `content` | When |
 |------------|-----------|------|
 | `text` | UTF-8 source | The bytes are valid text |
-| `http` | Empty; fetch the bytes over HTTP | A raster image |
+| `http` | Empty; fetch the bytes over HTTP | Media: a raster image, audio or video |
 | `none` | Empty; see `omitted` | Everything else |
 
 "Valid text" means valid UTF-8, checked over the whole file — anything else is
@@ -66,7 +67,7 @@ same test over a probe of the file's head (see
 content results too — unless the probe happens to catch only its ASCII.
 
 `omitted` is set only alongside `encoding: "none"` and explains it:
-`"binary"` (a non-image binary, which the UI cannot display anyway) or
+`"binary"` (a binary that is not media, which the UI cannot display anyway) or
 `"too_large"` (over `contents.MaxFileSize`, **2 MiB**; for a raster image,
 over `attachments.MaxSize`, **20 MiB** — see below). Neither is an error —
 the response is a normal result and the client shows a placeholder built from
@@ -81,21 +82,28 @@ carries one message at a time, so a few megabytes stall every other request the
 app has in flight on it. Oversized files are therefore never read: only their
 first 512 bytes, to name the type.
 
-**A raster image never travels on that connection, whatever its size.** It is
-the one binary the client wants whole and the one most likely to be megabytes —
-a screenshot, a photo — so `file.get` describes it and leaves the bytes to
-`GET /api/files/download` ([Transfer](#transfer)), which streams them on a
-request of their own. Only the first 512 bytes are read, as for an oversized
-file, and the 2 MiB ceiling does not apply. Its ceiling is
+**Media never travels on that connection, whatever its size.** It is the binary
+the client can render and the one most likely to be megabytes — a screenshot, a
+photo, a screen recording, a voice memo — so `file.get` describes it and leaves
+the bytes to `GET /api/files/download` ([Transfer](#transfer)), which streams
+them on a request of their own, or to the raw capability URL (`/api/raw`) a
+player loads. Only the first 512 bytes are read, as for an oversized file, and
+the 2 MiB ceiling does not apply. A raster image's ceiling is
 `attachments.MaxSize` (**20 MiB**) instead, the one every attachment is stored
 under, so a preview is one size whatever it came from. That one is a preview
 limit only — the client holds the whole image in memory to decode it — and the
-endpoints still serve a larger file to anyone downloading it. The response carries no URL; the client knows which endpoint to
-ask from which method described the file. "Raster" means two things together: a
-`mime` under `image/` other than `image/svg+xml`, and binary leading bytes
-(`contents.IsRasterImage`). The second matters for the formats named by
-extension below — a git-LFS pointer committed as `photo.avif` is text, and is
-returned as `text` rather than as an image nobody can draw.
+endpoints still serve a larger file to anyone downloading it. Audio and video
+have **no ceiling**: a player streams them with `Range` requests, starts before
+the file has arrived and never holds it whole. The response carries no URL; the
+client knows which endpoint to ask from which method described the file.
+
+"Media" means two things together: a `mime` that is a raster image (under
+`image/`, other than `image/svg+xml`) or playable (under `audio/` or `video/`),
+and binary leading bytes (`contents.IsMedia`). The second matters for the
+formats named by extension below — a git-LFS pointer committed as `photo.avif`
+or `clip.mov` is text, and is returned as `text` rather than as media nobody can
+render. The client's counterpart of the type half is `getPlayableKind` beside
+`isImageMime` (`utils/fileView.ts`).
 
 Anything that is neither a directory nor a regular file — a named pipe, a
 device node — is rejected with `InvalidParams` from the stat, before it is
@@ -104,9 +112,10 @@ the request for good.
 
 `mime` comes from the file's own bytes (`http.DetectContentType`), never from
 its extension — a `.svg` holding a PNG is reported as `image/png`. The
-extension is consulted only for image formats no sniffer recognises (SVG, AVIF,
-HEIC, TIFF), and only when sniffing produced nothing more specific than
-"some text" or "some bytes". SVG is the one image served as `text`, and so the
+extension is consulted only for media no sniffer recognises — the image formats
+SVG, AVIF, HEIC and TIFF; a phone's `.mov`; an MP3 without an ID3 tag or an MP4
+whose brand Go does not know — and only when sniffing produced nothing more
+specific than "some text" or "some bytes". SVG is the one image served as `text`, and so the
 one still held to the 2 MiB ceiling: it is source the user can edit, and the UI
 can render it from the text just as well. It is also a security boundary rather
 than a preference — SVG can carry script, and its bytes fetched into a
@@ -280,6 +289,7 @@ Two more fields appear where they mean something: `limit` on `too_large`, and
 What follows here is the contract and the two size limits that govern it. What
 the clients make of it is the rest of the story, in order:
 [Loading image bytes](#loading-image-bytes) for the viewer's images,
+[Playing audio and video](#playing-audio-and-video) for its players,
 [Downloading](#downloading) for the viewer's action, [Uploading](#uploading) for
 the Files tab and its queue,
 [Dropping files onto the tree](#dropping-files-onto-the-tree) for the desktop
@@ -505,11 +515,11 @@ keeps a symlink from widening its scope are in
 
 Unlike the download endpoint, the content is served **as what it is**, since the
 element has to play or render it. The type comes from the bytes, as for
-`file.get`'s `mime`. Where sniffing gives up, a fixed extension table supplies
-it (`contents.DetectServedMIME`). A stylesheet or a script sniffs as plain text,
-and under `nosniff` a browser refuses to apply either one served that way. The
-sniffer also cannot name some media: a phone records `.mov`, and an MP3 may have
-no ID3 tag. The table is spelled out rather than read from the machine's
+`file.get`'s `mime`. Where sniffing gives up, `file.get`'s extension table
+names media, and a second one adds what a page loads
+(`contents.DetectServedMIME`): a stylesheet or a script sniffs as plain text,
+and under `nosniff` a browser refuses to apply either one served that way. Both
+tables are spelled out rather than read from the machine's
 registry, which on Windows commonly maps `.js` to `text/plain`. Serving active
 content on the app's origin is safe only because of the sandbox and the other
 headers every response carries, errors included. The same page lists them and
@@ -698,13 +708,16 @@ else (`utils/fileView.ts`, priority order):
 | `binary` | `omitted: "binary"` | Placeholder card | Disabled |
 | `too-large` | `omitted: "too_large"` | Placeholder card naming `limit` | Disabled |
 | `empty` | `size` is 0 | "Empty file" card | **Enabled** |
+| `audio` / `video` | `encoding: "http"` with an `audio/` / `video/` `mime` | Native player, streamed ([below](#playing-audio-and-video)) | Disabled |
 | `image` | `encoding: "http"`, or SVG | `<img>` with dimensions and size | Disabled, except SVG |
 | `text` | anything else | Highlighted, or plain past the limit | Enabled |
 
-Whether something is an image is decided by what the server sent — a raster
-image as `http`, an SVG by its `mime` — and the client keeps no extension list
-of its own. Text typed as a raster image (the git-LFS pointer above) is shown
-as text. Formats Go's sniffer cannot name — SVG, AVIF, HEIC,
+Whether something is media is decided by what the server sent — audio, video
+and raster images as `http`, told apart by `mime`; an SVG by its `mime` — and
+the client keeps no extension list of its own. Audio and video carry their
+`ContentOrigin` rather than a source, since a player loads them through a raw
+capability rather than as one fetched Blob. Text typed as media (the git-LFS
+pointer above) is shown as text. Formats Go's sniffer cannot name — SVG, AVIF, HEIC,
 TIFF — still display, because the server settled what they are before the
 response left, and a format added there needs no client change. SVG is the one
 image that arrives as `text`, and renders from a percent-encoded data URL; an
@@ -716,6 +729,10 @@ arrived as text, not which state renders it.
 Once loaded, an image offers full screen — the ⤢ in its corner, or a click on
 the image — in the [media viewer](media-viewer.md#files-and-git-imagepreview),
 which zooms and pans it and has no Open in Files, since the file is already open.
+A video offers it from a ⤢ at the end of its caption line as soon as it has a
+source, carrying on from the same second
+([why not the corner](media-viewer.md#files-and-git-mediapreview)); audio
+plays in place only.
 
 A `.md` file's text is rendered as Markdown, and an image it names by a
 relative path is read from the file's own directory, as on GitHub — see
@@ -778,7 +795,7 @@ An `http` image's bytes are read from the endpoint matching the method that
 described it — `file.get` → `/api/files/download`, `git.show.file` →
 `/api/git/show/file`, `attachment.get` / `session_view.attachment` →
 `/api/chat/attachments` (`lib/imageFetch.ts`). The client keeps that origin
-beside the description (`ImageOrigin`) because the server sends no URL. Like a
+beside the description (`ContentOrigin`) because the server sends no URL. Like a
 download, the read carries the bearer header, so it is a `fetch` turned into an
 object URL rather than an `<img src>` pointing at the endpoint; a `401` logs out.
 
@@ -819,6 +836,85 @@ object URL rather than an `<img src>` pointing at the endpoint; a `401` logs out
 An image past the preview ceiling never gets here: it arrives as `too_large`
 and takes the `too-large` card like any other oversized file, Download
 included.
+
+### Playing audio and video
+
+`MediaPreview` (Files tab and a file in a commit, through `FileBody`) plays
+audio and video in place with the browser's own controls. The bytes never pass
+through the app: the element loads a single-file [raw
+capability](code/authentication.md#raw-capabilities-urls-a-browser-element-loads-by-itself)
+URL (`wsActions.rawCapability`) and streams it with Range requests, so playback
+starts before the file has arrived, nothing is held whole, and there is no size
+ceiling. The machinery is `components/Media/useMediaPlayback.ts` over
+`hooks/useRawMediaSource.ts`, and the [media viewer](media-viewer.md)'s video
+stage plays through the same code, carrying on from the same second
+([Handover](media-viewer.md#handover)).
+
+- **Asked for when on screen, and connected.** As with an image, nothing is
+  requested until the frame is in view. While the WebSocket is down the request
+  waits with the spinner up instead of failing: a relay reconnect is not
+  something to make the user Retry.
+- **One capability per file.** The capability is cached in react-query under
+  `"raw-capability"`, the worktree and the origin, and stays fresh until five
+  minutes before it expires — so the preview and the viewer share one and the
+  server's cap of 256 is not spent per mount. It is deliberately *not* under the
+  description's key, where an image's bytes live: the description is
+  invalidated every time its FS watch is re-established, which is every
+  reconnect, and a new capability is a new `src` that would drop a playing
+  video's buffer for a file that did not change. For the same reason it is not
+  refetched on focus or reconnect. A file's or a commit's capability is bound to
+  the worktree the connection was on when it was issued, and the app's worktree
+  moves before the connection does, so those are invalidated once a worktree
+  switch has landed (`queryClient.ts`).
+- **A new capability is the same content.** Whoever renewed it — this player
+  recovering, another player of the file, a mount after it went stale — the
+  element is put back at the second it was at, playing if the user had it
+  playing. Playback position is tracked from `timeupdate`, since by the time
+  the new `src` is on the element it already reads 0.
+- **A rewrite starts over.** A different file, a worktree switch, or a rewrite
+  that changes the size or the type remounts the element: back to the start,
+  paused, and a video back to its reserved box. A rewrite that keeps the size
+  exactly is not noticed until the player next fails.
+- **Expiry is not a failure.** A capability dies after four hours, with its
+  login session, or on a server restart, and an element's `error` cannot tell
+  that 404 from a file it cannot play (`MediaError` carries no status). So the
+  first error is answered by a new capability on the **same** element — which
+  keeps iOS's permission to play unmuted — sought back to the second it was at
+  and played again if the user had it playing. A `play()` the browser refuses
+  leaves it paused at that second, which is not reported — and no longer meant
+  to be playing, so a later new source does not start it. A failure again within
+  a minute (`RECOVERY_WINDOW_MS`), with playback no further than where it
+  resumed, is one a new capability did not cure, and only then is one byte of
+  it fetched to say why: bytes served mean this browser
+  cannot play them ("can't be played", with Download — and for a `.mov`, a word
+  on HEVC), unless the element's own error was a network one
+  (`MEDIA_ERR_NETWORK`), when bytes served now say only that the connection is
+  back ("Couldn't load", with Retry); the server's `not_found` means the file is gone; anything else is
+  "Couldn't load" with a Retry that resumes where it was. No proactive renewal
+  before expiry: swapping `src` stutters a playing video for nothing in the
+  common case.
+- **Never hidden until loaded.** Unlike an image, the element shows from the
+  moment it has a source: iOS may load nothing before the user presses play
+  (Low Power Mode, its own `preload` policy), and a player kept behind a spinner
+  until it loaded could never be started. `preload="metadata"` fetches size and
+  length only; there is no autoplay.
+- **Video reserves its box.** The description carries no dimensions, so until
+  metadata arrives the box is 16:9 (a screen recording, a landscape phone clip)
+  within the frame and 70vh; then it takes the video's own shape, contained and
+  never enlarged, as an image is (`inlineVideoBox`). The one resize happens
+  before any frame is shown, top-anchored, on a screen where only the caption is
+  below. The URL carries `#t=0.001` so iOS paints the first frame instead of a
+  black box, and `playsInline` keeps an iPhone from taking playback full screen.
+- **No picture, still sound.** A video whose metadata reports no size — a codec
+  this browser cannot decode (HEVC in a Chromium without it plays sound over
+  black, with no error) or a file with no video track — is laid out as audio on
+  the same element, with a line saying there is no picture.
+- **Captioned** `MOV · 1080×1920 · 0:42 · 38.2 MB` (`formatMediaCaption`, the
+  image's caption with a length); a length the file does not state, as a
+  MediaRecorder `.webm`, is left out.
+
+There is no `canPlayType` pre-check: Chromium answers `""` for
+`video/quicktime` yet plays most H.264 `.mov` files, so the player always tries.
 
 ### Downloading
 

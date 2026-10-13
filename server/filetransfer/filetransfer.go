@@ -1,5 +1,5 @@
 // Package filetransfer serves whole-file upload and download over HTTP — and
-// the bytes of every raster image the client renders, which the JSON-RPC side
+// the bytes of all the media the client renders, which the JSON-RPC side
 // describes but never carries (contents.EncodingHTTP).
 //
 // These files are too big for the WebSocket RPC path: file.get/file.write carry

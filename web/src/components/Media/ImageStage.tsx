@@ -105,7 +105,7 @@ export default function ImageStage({
 	item,
 	toolbarStart,
 	keysRef,
-	onDimensions,
+	onMetadata,
 }: StageProps<ImageMediaItem>) {
 	const image = useImageSrc(item.source);
 	const src = image.src;
@@ -141,9 +141,9 @@ export default function ImageStage({
 
 	// A layout effect, so it runs before the new bytes' `onLoad` can report.
 	useLayoutEffect(() => {
-		onDimensions(null);
+		onMetadata(null);
 		if (src) apiRef.current?.centerView(1, 0);
-	}, [src, onDimensions]);
+	}, [src, onMetadata]);
 
 	// A smaller frame lowers the ceiling; a scale left above it is brought down.
 	useEffect(() => {
@@ -335,7 +335,7 @@ export default function ImageStage({
 										height: event.currentTarget.naturalHeight,
 									};
 									setNatural(decoded);
-									onDimensions(decoded);
+									onMetadata({ dimensions: decoded, duration: null });
 									setStatus("loaded");
 								}}
 								onError={() => setStatus("error")}

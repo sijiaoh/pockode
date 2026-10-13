@@ -3,8 +3,11 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { page } from "vitest/browser";
+import { useWSStore, wsActions } from "../../lib/wsStore";
+// A 64×36 VP9 clip, served by the test server as a capability path would be.
+import clipPath from "../../test/clip-64x36.webm?url";
 import { MediaViewer } from "./MediaViewer";
-import type { ImageMediaItem } from "./types";
+import type { ImageMediaItem, VideoMediaItem } from "./types";
 
 // Gestures are asserted on where the image lands on screen, read from real
 // layout: its box at fit against the frame, and its drawn size against that
@@ -316,5 +319,52 @@ describe("MediaViewer image stage", () => {
 			frame.getBoundingClientRect().height + 0.5,
 		);
 		await settlesAt(image, 1);
+	});
+});
+
+describe("MediaViewer video stage", () => {
+	afterEach(() => {
+		vi.restoreAllMocks();
+	});
+
+	it("fits a small clip to the frame, enlarging it, with the controls along the frame", async () => {
+		useWSStore.setState({ status: "connected" });
+		vi.spyOn(wsActions, "rawCapability").mockResolvedValue({
+			path: clipPath,
+			expiresAt: Date.now() + 60 * 60 * 1000,
+		});
+		const item: VideoMediaItem = {
+			kind: "video",
+			name: "clip.webm",
+			saveAs: "clip.webm",
+			mime: "video/webm",
+			size: 1342,
+			origin: { kind: "file", path: "clip.webm" },
+		};
+		render(
+			<QueryClientProvider client={new QueryClient()}>
+				<MediaViewer item={item} onClose={vi.fn()} />
+			</QueryClientProvider>,
+		);
+
+		const video = (await screen.findByLabelText("clip.webm", {
+			selector: "video",
+		})) as HTMLVideoElement;
+		// A real fetch and decode, which a loaded machine stretches past the
+		// default second.
+		await expect.poll(() => video.videoWidth, { timeout: 5_000 }).toBe(64);
+		// The caption takes the size the stage reported.
+		await screen.findByText(/64×36/);
+
+		// The element spans the frame, so the native controls run along all of
+		// its bottom edge, and `object-contain` draws the picture as large as
+		// the frame allows — far past the clip's own 64px.
+		const frame = screen.getByRole("region", { name: "clip.webm" });
+		const box = frame.getBoundingClientRect();
+		const drawn = video.getBoundingClientRect();
+		expect(drawn.width).toBeCloseTo(box.width, 0);
+		expect(drawn.height).toBeCloseTo(box.height, 0);
+		expect(getComputedStyle(video).objectFit).toBe("contain");
+		expect(Math.min(box.width / 64, box.height / 36)).toBeGreaterThan(2);
 	});
 });

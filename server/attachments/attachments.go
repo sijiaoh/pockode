@@ -80,8 +80,8 @@ func NewStore(dataDir, sessionID string) Store {
 // anything in the standard library (see contents.DetectMIME). Without it those
 // come back as plain text or as an unnamed binary, so an image that was stored
 // perfectly well could never be shown. Callers get it from
-// contents.ImageExtension, which answers from that same table — so an id ends
-// in an extension only where the extension is what names the content, and "" is
+// contents.ImageExtension, which answers from that table's image half — so an
+// id ends in an extension only where the extension is what names an image, and "" is
 // right for everything else, including content that arrived with no file name
 // at all.
 func (s Store) Put(data []byte, ext string) (string, error) {

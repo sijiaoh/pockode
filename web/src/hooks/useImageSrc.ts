@@ -7,7 +7,7 @@ import {
 import { useEffect, useState } from "react";
 import { fetchImageBlob, ImageResponseError } from "../lib/imageFetch";
 import { DEFAULT_RETRY_COUNT } from "../lib/queryClient";
-import type { ImageOrigin } from "../types/contents";
+import type { ContentOrigin } from "../types/contents";
 import type { ImageSource } from "../utils/fileView";
 import { commitFileQueryKey } from "./useCommitFile";
 import { contentsQueryKey } from "./useContents";
@@ -20,7 +20,7 @@ import { contentsQueryKey } from "./useContents";
  * nothing here having to know those rules. A commit's file and an attachment
  * never change, so their keys only have to tell one apart from another.
  */
-function imageQueryKey(origin: ImageOrigin): readonly unknown[] {
+function imageQueryKey(origin: ContentOrigin): readonly unknown[] {
 	switch (origin.kind) {
 		case "file":
 			return [...contentsQueryKey(origin.path), "image"] as const;
@@ -44,7 +44,7 @@ function imageQueryKey(origin: ImageOrigin): readonly unknown[] {
  * An image's bytes, for a reader that wants the Blob itself — saving it —
  * rather than something to put in an `<img>`.
  */
-export function imageBlobQuery(origin: ImageOrigin, mime: string) {
+export function imageBlobQuery(origin: ContentOrigin, mime: string) {
 	return queryOptions({
 		queryKey: imageQueryKey(origin),
 		queryFn: ({ signal }) => fetchImageBlob(origin, mime, signal),

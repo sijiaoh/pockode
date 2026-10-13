@@ -26,18 +26,18 @@ var ErrInvalidArgument = errors.New("invalid argument")
 // contents.ErrInvalidPath: there is no listing to fall back on the way file.get
 // has for a directory. A malformed hash or path is ErrInvalidArgument.
 //
-// A raster image is described without its content (contents.EncodingHTTP);
-// OpenFile is what streams its bytes.
+// Media is described without its content (contents.EncodingHTTP); OpenFile is
+// what streams its bytes.
 func ShowFile(dir, hash, path string) (*contents.FileContent, error) {
 	spec, err := fileSpec(dir, hash, path)
 	if err != nil {
 		return nil, err
 	}
 
-	// The head decides before the rest is read, as file.get's does: an image's
+	// The head decides before the rest is read, as file.get's does: media
 	// bytes are not going to be sent, so they are not worth reading either.
 	size, content, err := readBlobBounded(dir, spec, func(head []byte) bool {
-		return contents.IsRasterImage(path, head)
+		return contents.IsMedia(path, head)
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to read %s in commit %s: %w", path, hash, err)
@@ -107,8 +107,8 @@ type Blob struct {
 }
 
 // OpenFile streams path as it stood in commit hash, refusing it exactly as
-// ShowFile does. It serves the bytes ShowFile leaves out — a raster image's,
-// which travel over HTTP rather than in a JSON-RPC message, and any file the
+// ShowFile does. It serves the bytes ShowFile leaves out — media's, which
+// travel over HTTP rather than in a JSON-RPC message, and any file the
 // user downloads — so unlike ShowFile it applies no size ceiling: the content
 // is copied through, never held.
 //

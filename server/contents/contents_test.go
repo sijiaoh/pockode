@@ -181,6 +181,41 @@ func TestGetContents_ReadFile(t *testing.T) {
 		}
 	})
 
+	// Audio and video are streamed rather than held whole, so neither ceiling
+	// applies: past the image ceiling they are still described for fetching.
+	// A .mov is named by its extension alone, since sniffing does not know
+	// QuickTime's brand.
+	for _, tc := range []struct {
+		name string
+		head string
+		mime string
+	}{
+		{"clip.mov", "\x00\x00\x00\x14ftypqt  \x00\x00\x00\x00qt  ", "video/quicktime"},
+		{"clip.mp4", "\x00\x00\x00\x18ftypisom\x00\x00\x02\x00isommp41", "video/mp4"},
+		{"memo.mp3", "ID3\x04\x00\x00\x00\x00\x00\x00", "audio/mpeg"},
+	} {
+		t.Run("describes "+tc.name+" over the image limit for fetching over http", func(t *testing.T) {
+			workDir := t.TempDir()
+			size := int64(attachments.MaxSize + 1)
+			writeTestFile(t, workDir, tc.name, []byte(tc.head))
+			if err := os.Truncate(filepath.Join(workDir, tc.name), size); err != nil {
+				t.Fatalf("failed to size %s: %v", tc.name, err)
+			}
+
+			file := getFile(t, workDir, tc.name)
+
+			if file.Encoding != EncodingHTTP || file.Content != "" {
+				t.Errorf("got encoding %q with %d bytes of content, want http and none", file.Encoding, len(file.Content))
+			}
+			if file.MIME != tc.mime || file.Size != size {
+				t.Errorf("got mime %q size %d, want %q %d", file.MIME, file.Size, tc.mime, size)
+			}
+			if file.Omitted != "" || file.Limit != 0 {
+				t.Errorf("got omitted %q limit %d, want neither", file.Omitted, file.Limit)
+			}
+		})
+	}
+
 	// SVG is an image the UI can render and source the user can edit, so it
 	// keeps its text encoding while still reporting an image mime.
 	t.Run("reports svg as an image but keeps it text", func(t *testing.T) {
@@ -207,6 +242,18 @@ func TestGetContents_ReadFile(t *testing.T) {
 		writeTestFile(t, workDir, "photo.avif", []byte(pointer))
 
 		file := getFile(t, workDir, "photo.avif")
+
+		if file.Encoding != EncodingText || file.Content != pointer {
+			t.Errorf("got encoding %q content %q, want the pointer as text", file.Encoding, file.Content)
+		}
+	})
+
+	t.Run("keeps text under a video extension as text", func(t *testing.T) {
+		workDir := t.TempDir()
+		pointer := "version https://git-lfs.github.com/spec/v1\noid sha256:abc\nsize 12345\n"
+		writeTestFile(t, workDir, "clip.mov", []byte(pointer))
+
+		file := getFile(t, workDir, "clip.mov")
 
 		if file.Encoding != EncodingText || file.Content != pointer {
 			t.Errorf("got encoding %q content %q, want the pointer as text", file.Encoding, file.Content)

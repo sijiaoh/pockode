@@ -31,7 +31,7 @@ UI (attachment strip scrolled into view)
   → attachment.get {session_id, id}
     → contents.GetContents(<dataDir>/sessions/<id>/attachments)
       → FileContent → the same file viewer the Files tab renders with
-        → raster image (encoding "http"):
+        → a raster image (encoding "http"):
           GET /api/chat/attachments?session_id=&id= → the bytes
 ```
 

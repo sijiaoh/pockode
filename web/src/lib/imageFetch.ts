@@ -1,4 +1,4 @@
-import type { ImageOrigin } from "../types/contents";
+import type { ContentOrigin } from "../types/contents";
 import { getMimeType, isImageMime } from "../utils/fileView";
 import { createLimiter } from "../utils/limiter";
 import { apiUrl, authHeaders } from "./api";
@@ -42,9 +42,9 @@ export class ImageResponseError extends Error {
  * for the worktree it is bound to, which `worktreeActions` tracks, and a switch
  * invalidates every `contents` entry the bytes are cached under. A commit's
  * file is the same from any worktree of the repository. An attachment carries
- * its own (`ImageOrigin`), since its session lives in only one.
+ * its own (`ContentOrigin`), since its session lives in only one.
  */
-export function imageUrl(origin: ImageOrigin): string {
+export function imageUrl(origin: ContentOrigin): string {
 	switch (origin.kind) {
 		case "file":
 			return downloadUrl(origin.path, worktreeActions.getCurrent());
@@ -94,7 +94,7 @@ function blobType(mime: string): string {
  * bytes — is the type the browser should decode them as.
  */
 export async function fetchImageBlob(
-	origin: ImageOrigin,
+	origin: ContentOrigin,
 	mime: string,
 	signal?: AbortSignal,
 ): Promise<Blob> {

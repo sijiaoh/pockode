@@ -1,9 +1,9 @@
 export type EntryType = "file" | "dir";
 /**
  * `none` means the server sent no content; `omitted` says why. `http` means
- * the content is a raster image whose bytes are read over HTTP from wherever
- * the description came from (`ImageOrigin`): kept off the WebSocket so one
- * picture cannot hold up every other message behind it.
+ * the content is media — a raster image, audio or video — whose bytes are read
+ * over HTTP from wherever the description came from (`ContentOrigin`): kept
+ * off the WebSocket so one file cannot hold up every other message behind it.
  */
 export type Encoding = "text" | "http" | "none";
 /**
@@ -35,11 +35,12 @@ export interface FileContent {
 }
 
 /**
- * Where a `FileContent` with `encoding: "http"` came from, which is also where
- * its bytes are read: the server sends no URL, so the reader names the same
- * thing over HTTP that it asked about over the WebSocket.
+ * Where a `FileContent` came from, which is also where its bytes are read —
+ * directly for an `http` image, through a raw capability for anything a
+ * browser element loads by itself: the server sends no URL, so the reader
+ * names the same thing over HTTP that it asked about over the WebSocket.
  */
-export type ImageOrigin =
+export type ContentOrigin =
 	/** A file in the work directory, as `file.get` describes it. */
 	| { kind: "file"; path: string }
 	/** A file as a commit left it, as `git.show.file` describes it. */

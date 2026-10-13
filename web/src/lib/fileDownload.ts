@@ -268,6 +268,21 @@ export function saveBlob(blob: Blob, fileName: string): void {
 	setTimeout(() => URL.revokeObjectURL(url), OBJECT_URL_LIFETIME_MS);
 }
 
+/**
+ * Has the browser download `url` to disk as it arrives, never holding it in
+ * memory — for media that may be far larger than a Blob should be. The URL
+ * must carry its own credential (a raw capability), and be same-origin for
+ * `download` to name the file; elsewhere the browser opens it instead.
+ */
+export function saveUrl(url: string, fileName: string): void {
+	const link = document.createElement("a");
+	link.href = url;
+	link.download = fileName;
+	document.body.appendChild(link);
+	link.click();
+	link.remove();
+}
+
 /** Downloads a file and saves it under the last segment of its path. */
 export async function downloadFile(request: DownloadRequest): Promise<void> {
 	const blob = await fetchFileBlob(request);
