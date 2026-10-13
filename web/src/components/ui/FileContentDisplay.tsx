@@ -3,10 +3,13 @@ import {
 	getLanguageFromPath,
 	isMarkdownFile,
 } from "../../lib/shikiUtils";
+import { useWSStore } from "../../lib/wsStore";
+import { markdownFileBaseDir } from "../../utils/markdownImage";
 import { MarkdownContent } from "./MarkdownContent";
 
 interface Props {
 	content: string;
+	/** Work-directory-relative (Files) or a tool call's native path. */
 	filePath?: string;
 	/**
 	 * Skip both syntax highlighting and Markdown rendering. Markdown is not
@@ -25,7 +28,7 @@ export function FileContentDisplay({
 	copyable,
 }: Props) {
 	if (!plain && filePath && isMarkdownFile(filePath)) {
-		return <MarkdownContent content={content} />;
+		return <MarkdownFileContent content={content} filePath={filePath} />;
 	}
 
 	const language = filePath ? getLanguageFromPath(filePath) : undefined;
@@ -33,5 +36,21 @@ export function FileContentDisplay({
 		<CodeHighlighter language={language} plain={plain} copyable={copyable}>
 			{content}
 		</CodeHighlighter>
+	);
+}
+
+function MarkdownFileContent({
+	content,
+	filePath,
+}: {
+	content: string;
+	filePath: string;
+}) {
+	const workDir = useWSStore((state) => state.workDir);
+	return (
+		<MarkdownContent
+			content={content}
+			baseDir={markdownFileBaseDir(filePath, workDir)}
+		/>
 	);
 }

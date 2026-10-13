@@ -102,6 +102,9 @@ export function stubChatHistoryRpc(
 			};
 		},
 		chatMessagesUnsubscribe: async () => {},
+		// A picture the transcript names stays loading: its frame, not its
+		// pixels, is what a layout test measures.
+		getFile: () => new Promise<never>(() => {}),
 		chatMessagesHistory: (_sessionId: string, beforeSeq: HistorySeq) => {
 			server.requests++;
 			return new Promise<ChatMessagesHistoryResult>((resolve) => {

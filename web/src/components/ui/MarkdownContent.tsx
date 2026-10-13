@@ -7,13 +7,19 @@ import {
 	type ReactNode,
 	Suspense,
 	useEffect,
+	useMemo,
 	useRef,
 	useState,
 } from "react";
-import Markdown from "react-markdown";
+import Markdown, {
+	defaultUrlTransform,
+	type UrlTransform,
+} from "react-markdown";
 import remarkBreaks from "remark-breaks";
 import remarkGfm from "remark-gfm";
+import { rehypeMarkdownImages } from "../../utils/markdownImage";
 import { CodeBlock } from "./CodeBlock";
+import { MarkdownImage, MarkdownImageContext } from "./MarkdownImage";
 
 // mermaid is a large dependency; load it only when a diagram actually renders
 // so it stays out of the main bundle.
@@ -173,20 +179,15 @@ function MarkdownHeaderCell({
 	);
 }
 
-type ImageProps = ComponentPropsWithoutRef<"img"> & {
-	node?: Element;
-};
-
-// `node` is react-markdown's hast node and must not reach the DOM.
-function MarkdownImage({ node, alt, ...props }: ImageProps) {
-	return (
-		<span className="markdown-image">
-			<img alt={alt ?? ""} {...props} />
-		</span>
-	);
-}
-
 const REMARK_PLUGINS = [remarkGfm, remarkBreaks];
+const REHYPE_PLUGINS = [rehypeMarkdownImages];
+
+// An image's `src` reaches `MarkdownImage` as written, which decides what it
+// names and hands only http(s) to an `<img>` — and still needs the original of
+// one it drops, to say what was not shown. Every other URL keeps the default.
+const urlTransform: UrlTransform = (url, key, node) =>
+	node.tagName === "img" && key === "src" ? url : defaultUrlTransform(url);
+
 const MARKDOWN_COMPONENTS = {
 	code: MarkdownCode,
 	pre: MarkdownPre,
@@ -223,6 +224,14 @@ interface MarkdownContentProps {
 	 * hold the reader.
 	 */
 	rootProps?: Record<`data-${string}`, string>;
+	/**
+	 * The work-directory-relative directory a relative image path is read from,
+	 * for Markdown that lives in a file (`markdownFileBaseDir`); omitted is the
+	 * work directory's root, which is right for chat and work items.
+	 */
+	baseDir?: string | null;
+	/** Opens a work-directory file in Files; absent when the host cannot. */
+	onOpenFile?: (path: string) => void;
 }
 
 export const MarkdownContent = memo(function MarkdownContent({
@@ -230,16 +239,29 @@ export const MarkdownContent = memo(function MarkdownContent({
 	className,
 	variant = "message",
 	rootProps,
+	baseDir = "",
+	onOpenFile,
 }: MarkdownContentProps) {
 	const size = variant === "note" ? "prose-note" : "prose-sm prose-message";
+	const images = useMemo(
+		() => ({ baseDir, onOpenFile }),
+		[baseDir, onOpenFile],
+	);
 	return (
 		<div
 			{...rootProps}
 			className={`prose dark:prose-invert ${size} max-w-none min-w-0 prose-code:before:content-none prose-code:after:content-none ${className ?? ""}`}
 		>
-			<Markdown remarkPlugins={REMARK_PLUGINS} components={MARKDOWN_COMPONENTS}>
-				{content}
-			</Markdown>
+			<MarkdownImageContext.Provider value={images}>
+				<Markdown
+					remarkPlugins={REMARK_PLUGINS}
+					rehypePlugins={REHYPE_PLUGINS}
+					urlTransform={urlTransform}
+					components={MARKDOWN_COMPONENTS}
+				>
+					{content}
+				</Markdown>
+			</MarkdownImageContext.Provider>
 		</div>
 	);
 });

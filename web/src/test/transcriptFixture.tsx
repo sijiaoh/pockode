@@ -1,3 +1,4 @@
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, render, screen, waitFor } from "@testing-library/react";
 import { expect } from "vitest";
 import MessageList from "../components/Chat/MessageList";
@@ -119,9 +120,13 @@ export async function renderTranscript({
 }: TranscriptOptions): Promise<RenderedTranscript> {
 	resetChatHistoryServer(pages);
 	const { container } = render(
-		<div className="flex flex-col" style={{ height }}>
-			<Transcript />
-		</div>,
+		// The app's root provides one, and a picture in the transcript reads
+		// through it.
+		<QueryClientProvider client={new QueryClient()}>
+			<div className="flex flex-col" style={{ height }}>
+				<Transcript />
+			</div>
+		</QueryClientProvider>,
 	);
 	// The rows only exist once the subscription's newest page has been applied.
 	await waitFor(() =>

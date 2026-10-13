@@ -261,6 +261,11 @@ export default function ImageStage({
 						readError={image.error}
 						mime={item.mime}
 						size={item.size}
+						host={
+							item.source.kind === "external"
+								? new URL(item.source.url).host
+								: undefined
+						}
 						onRetry={
 							image.error
 								? image.retry
@@ -320,6 +325,9 @@ export default function ImageStage({
 								key={attempt}
 								src={src}
 								alt={item.name}
+								// Only an external image's request leaves the app, and it
+								// tells that host nothing about which page asked.
+								referrerPolicy="no-referrer"
 								draggable={false}
 								onLoad={(event) => {
 									const decoded = {

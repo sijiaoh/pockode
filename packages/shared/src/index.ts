@@ -9,6 +9,7 @@ export {
 	type SheetProps,
 	Spinner,
 	type SpinnerProps,
+	useIsInSheet,
 } from "./components/index.ts";
 export {
 	useCoverPage,
