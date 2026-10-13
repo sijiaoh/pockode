@@ -53,7 +53,7 @@ var version = "dev"
 //go:embed static/*
 var staticFS embed.FS
 
-func newHandler(serverPassword string, passwordGuard *authguard.Guard, sessions middleware.SessionValidator, devMode bool, wsHandler *ws.RPCHandler, mcpHandler http.Handler, transferHandler *filetransfer.Handler, attachmentHandler *filetransfer.AttachmentHandler) http.Handler {
+func newHandler(serverPassword string, passwordGuard *authguard.Guard, sessions middleware.SessionValidator, devMode bool, wsHandler *ws.RPCHandler, mcpHandler http.Handler, transferHandler *filetransfer.Handler, attachmentHandler *filetransfer.AttachmentHandler, rawHandler *filetransfer.RawHandler) http.Handler {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
@@ -83,11 +83,23 @@ func newHandler(serverPassword string, passwordGuard *authguard.Guard, sessions 
 
 	authedMux := middleware.Auth(serverPassword, passwordGuard, sessions)(mux)
 
+	// The raw endpoint is answered ahead of both the auth middleware and the
+	// mux: the capability in its path is its credential, and every response it
+	// gives has to carry its sandbox headers — which the mux's own redirect for
+	// a path with `..` in it and its 404s would not.
+	apiHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if apiroute.IsRaw(r.URL.Path) {
+			rawHandler.ServeHTTP(w, r)
+			return
+		}
+		authedMux.ServeHTTP(w, r)
+	})
+
 	if !devMode {
-		return newSPAHandler(authedMux)
+		return newSPAHandler(apiHandler)
 	}
 
-	return authedMux
+	return apiHandler
 }
 
 // newSPAHandler wraps an API handler with embedded SPA static file serving.
@@ -437,6 +449,11 @@ Flags:
 	portStr := strconv.Itoa(port)
 	localURL := "http://localhost:" + portStr
 
+	transferHandler := filetransfer.NewHandler(registry, slog.Default())
+	attachmentHandler := filetransfer.NewAttachmentHandler(worktreeManager, worktree.ErrWorktreeNotFound, worktree.ErrSessionNotFound, slog.Default())
+	// Issued over the WebSocket and resolved over HTTP: one instance for both.
+	rawHandler := filetransfer.NewRawHandler(sessions, transferHandler, attachmentHandler)
+
 	// The remote URL is read live wherever it is exposed: renewing the relay
 	// credentials mid-run can move the server to a new subdomain.
 	var relayManager *relay.Manager
@@ -472,7 +489,7 @@ Flags:
 	// Both assigned before the relay starts, so the reconnect loop that calls
 	// OnRemoteURLChange never sees them unset.
 	serverInfo = serverinfo.NewPublisher(dataDir, port, localURL, mcpToken, remoteURL)
-	wsHandler = ws.NewRPCHandler(cred.Password, passwordGuard, sessions, version, remoteURL, previewTickets, devMode, commandStore, worktreeManager, settingsStore, workStore, workOps, workEngine, agentRoleStore, cliAuth, cliUpdate)
+	wsHandler = ws.NewRPCHandler(cred.Password, passwordGuard, sessions, version, remoteURL, previewTickets, rawHandler, devMode, commandStore, worktreeManager, settingsStore, workStore, workOps, workEngine, agentRoleStore, cliAuth, cliUpdate)
 
 	if relayManager != nil {
 		url, err := relayManager.Start(context.Background())
@@ -485,9 +502,7 @@ Flags:
 		slog.Info("remote access enabled", "url", url)
 	}
 
-	transferHandler := filetransfer.NewHandler(registry, slog.Default())
-	attachmentHandler := filetransfer.NewAttachmentHandler(worktreeManager, worktree.ErrWorktreeNotFound, worktree.ErrSessionNotFound, slog.Default())
-	handler := newHandler(cred.Password, passwordGuard, sessions, devMode, wsHandler, mcpHandler, transferHandler, attachmentHandler)
+	handler := newHandler(cred.Password, passwordGuard, sessions, devMode, wsHandler, mcpHandler, transferHandler, attachmentHandler, rawHandler)
 
 	srv := &http.Server{
 		Addr:    ":" + portStr,

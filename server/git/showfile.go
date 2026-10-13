@@ -46,6 +46,26 @@ func ShowFile(dir, hash, path string) (*contents.FileContent, error) {
 	return contents.NewFileContent(path, size, content), nil
 }
 
+// ResolveCommit returns the full hash of the commit hash names, which may be
+// abbreviated. It is for whatever holds on to a commit for longer than one
+// request: an abbreviation that is unique now can become ambiguous as the
+// repository grows. A malformed hash is ErrInvalidArgument; one that names no
+// commit — unknown, ambiguous, or another kind of object — is
+// contents.ErrNotFound.
+func ResolveCommit(dir, hash string) (string, error) {
+	if err := validateCommitHash(hash); err != nil {
+		return "", fmt.Errorf("%w: %w", ErrInvalidArgument, err)
+	}
+	// Only hex gets this far, so the argument cannot be read as an option.
+	full, err := execGit(dir, "rev-parse", "--verify", hash+"^{commit}")
+	if err != nil {
+		// As in fileSpec, git's message is what tells an ambiguous abbreviation
+		// from an unknown commit or a directory that is not a repository.
+		return "", fmt.Errorf("%w: commit %s: %w", contents.ErrNotFound, hash, err)
+	}
+	return full, nil
+}
+
 // fileSpec names the blob path holds in commit hash, refusing it the ways
 // ShowFile documents.
 func fileSpec(dir, hash, path string) (string, error) {

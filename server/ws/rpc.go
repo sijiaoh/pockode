@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"path/filepath"
 	"sync"
+	"time"
 
 	"github.com/coder/websocket"
 	"github.com/google/uuid"
@@ -47,6 +48,13 @@ type PreviewTickets interface {
 	Issue() (string, error)
 }
 
+// RawCapabilities issues the capabilities /api/raw is read with;
+// filetransfer.RawHandler implements it. That handler resolves them, so the
+// two must be one instance.
+type RawCapabilities interface {
+	Issue(sessionToken string, grant filetransfer.RawGrant) (string, time.Time, error)
+}
+
 // RPCHandler handles JSON-RPC 2.0 over WebSocket.
 type RPCHandler struct {
 	password             string
@@ -56,6 +64,7 @@ type RPCHandler struct {
 	remoteURL            func() string // live: renewing the relay credentials can change it
 	remoteURLWatcher     *watch.RemoteURLWatcher
 	previewTickets       PreviewTickets
+	rawCapabilities      RawCapabilities
 	devMode              bool
 	commandStore         *command.Store
 	worktreeManager      *worktree.Manager
@@ -74,7 +83,7 @@ type RPCHandler struct {
 	cliUpdateWatcher     *watch.CLIUpdateWatcher
 }
 
-func NewRPCHandler(password string, passwordGuard *authguard.Guard, sessions SessionStore, version string, remoteURL func() string, previewTickets PreviewTickets, devMode bool, commandStore *command.Store, worktreeManager *worktree.Manager, settingsStore *settings.Store, workStore work.Store, workOps *work.Operations, workEngine *work.Engine, agentRoleStore agentrole.Store, cliAuth *cliauth.Service, cliUpdate *cliupdate.Service) *RPCHandler {
+func NewRPCHandler(password string, passwordGuard *authguard.Guard, sessions SessionStore, version string, remoteURL func() string, previewTickets PreviewTickets, rawCapabilities RawCapabilities, devMode bool, commandStore *command.Store, worktreeManager *worktree.Manager, settingsStore *settings.Store, workStore work.Store, workOps *work.Operations, workEngine *work.Engine, agentRoleStore agentrole.Store, cliAuth *cliauth.Service, cliUpdate *cliupdate.Service) *RPCHandler {
 	settingsWatcher := watch.NewSettingsWatcher(settingsStore)
 	settingsWatcher.Start()
 
@@ -115,6 +124,7 @@ func NewRPCHandler(password string, passwordGuard *authguard.Guard, sessions Ses
 		remoteURL:            remoteURL,
 		remoteURLWatcher:     remoteURLWatcher,
 		previewTickets:       previewTickets,
+		rawCapabilities:      rawCapabilities,
 		devMode:              devMode,
 		commandStore:         commandStore,
 		worktreeManager:      worktreeManager,
@@ -413,7 +423,10 @@ type rpcMethodHandler struct {
 	state         *rpcConnState
 	log           *slog.Logger
 	authenticated bool
-	authMu        sync.Mutex
+	// sessionToken is the session the connection authenticated as, which is
+	// what a credential derived from it — a raw capability — is bound to.
+	sessionToken string
+	authMu       sync.Mutex
 }
 
 func (h *rpcMethodHandler) Handle(ctx context.Context, conn *jsonrpc2.Conn, req *jsonrpc2.Request) {
@@ -505,6 +518,12 @@ func (h *rpcMethodHandler) Handle(ctx context.Context, conn *jsonrpc2.Conn, req 
 		return
 	case "port_preview.ticket":
 		h.handlePortPreviewTicket(ctx, conn, req)
+		return
+	// Ahead of the worktree gate because an attachment is read from the
+	// worktree it names, which needs no binding, as for
+	// session_view.attachment; a file or a commit passes the gate itself.
+	case "raw.capability":
+		h.handleRawCapability(ctx, conn, req)
 		return
 	case "remote_url.subscribe":
 		h.handleRemoteURLSubscribe(ctx, conn, req)
@@ -601,28 +620,8 @@ func (h *rpcMethodHandler) Handle(ctx context.Context, conn *jsonrpc2.Conn, req 
 	}
 
 	// All other methods require a valid worktree
-	wt := h.state.getWorktree()
-	if wt == nil {
-		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidRequest, "no worktree bound")
-		return
-	}
-
-	// A connection stays bound to a worktree that is deleted under it — the
-	// object survives, and its session store still reads — so this is where that
-	// binding stops meaning anything. Everything below acts on a working tree
-	// that is gone: a message would spawn a CLI in a directory that does not
-	// exist, a git command would fail halfway through, a subscription would
-	// follow watchers that have already stopped.
-	//
-	// Refused here rather than left to the client that gets worktree.deleted,
-	// because a client is not what makes it true. What the worktree left behind
-	// is read through the session_view namespace above, which is read-only and
-	// needs no binding.
-	if wt.Deleted() {
-		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidRequest,
-			"worktree "+wt.Name+" has been deleted; switch to another worktree. "+
-				"Its sessions are still stored and still readable (session_view.*), "+
-				"but nothing can run in a worktree that no longer exists")
+	wt, ok := h.boundWorktree(ctx, conn, req)
+	if !ok {
 		return
 	}
 
@@ -744,16 +743,53 @@ func (h *rpcMethodHandler) Handle(ctx context.Context, conn *jsonrpc2.Conn, req 
 	}
 }
 
+// boundWorktree is the worktree the connection is bound to, replying and
+// returning false when there is none to act on.
+func (h *rpcMethodHandler) boundWorktree(ctx context.Context, conn *jsonrpc2.Conn, req *jsonrpc2.Request) (*worktree.Worktree, bool) {
+	wt := h.state.getWorktree()
+	if wt == nil {
+		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidRequest, "no worktree bound")
+		return nil, false
+	}
+
+	// A connection stays bound to a worktree that is deleted under it — the
+	// object survives, and its session store still reads — so this is where that
+	// binding stops meaning anything. Whatever asks for it would act on a
+	// working tree that is gone: a message would spawn a CLI in a directory that
+	// does not exist, a git command would fail halfway through, a subscription
+	// would follow watchers that have already stopped.
+	//
+	// Refused here rather than left to the client that gets worktree.deleted,
+	// because a client is not what makes it true. What the worktree left behind
+	// is read through the session_view namespace, which is read-only and needs
+	// no binding.
+	if wt.Deleted() {
+		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidRequest,
+			"worktree "+wt.Name+" has been deleted; switch to another worktree. "+
+				"Its sessions are still stored and still readable (session_view.*), "+
+				"but nothing can run in a worktree that no longer exists")
+		return nil, false
+	}
+	return wt, true
+}
+
 func (h *rpcMethodHandler) isAuthenticated() bool {
 	h.authMu.Lock()
 	defer h.authMu.Unlock()
 	return h.authenticated
 }
 
-func (h *rpcMethodHandler) setAuthenticated() {
+func (h *rpcMethodHandler) setAuthenticated(sessionToken string) {
 	h.authMu.Lock()
 	h.authenticated = true
+	h.sessionToken = sessionToken
 	h.authMu.Unlock()
+}
+
+func (h *rpcMethodHandler) getSessionToken() string {
+	h.authMu.Lock()
+	defer h.authMu.Unlock()
+	return h.sessionToken
 }
 
 func (h *rpcMethodHandler) handleAuth(ctx context.Context, conn *jsonrpc2.Conn, req *jsonrpc2.Request) {
@@ -813,7 +849,7 @@ func (h *rpcMethodHandler) handleAuth(ctx context.Context, conn *jsonrpc2.Conn, 
 		}
 	}
 
-	h.setAuthenticated()
+	h.setAuthenticated(sessionToken)
 	h.log.Info("authenticated", "worktree", wt.Name, "workDir", wt.WorkDir)
 
 	title := filepath.Base(h.worktreeManager.Registry().MainDir())

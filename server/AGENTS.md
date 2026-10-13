@@ -42,10 +42,10 @@ agent/                  # Agent 抽象（接口, 事件, 进程管理, 注册表
   codex/                # Codex CLI 实现
   questioneval/         # question_post 引导评测：真实 CLI 跑场景并判定提问质量（付费，`integration` 标签 + `QUESTION_EVAL_RUNS`）
 agentrole/              # AgentRole 存储 + 类型定义
-apiroute/               # 本进程 API 路径判定（SPA handler 与 relay 代理共用）
+apiroute/               # 本进程 API 路径判定（SPA handler 与 relay 代理共用）；/api/raw 的路由判定与日志中 capability 的遮蔽
 attachments/            # 按 session 存放事件里以 id 引用的内容（内容寻址）
-authguard/              # 失败密码登录的全局退避锁（仅内存；各密码入口共用，session token / ticket 不经过它）
-authsession/            # 登录会话：密码换取的 session token + 密码指纹（sessions.json）；端口预览的一次性登录 ticket（仅内存）
+authguard/              # 失败密码登录的全局退避锁（仅内存；各密码入口共用，session token / ticket / capability 不经过它）
+authsession/            # 登录会话：密码换取的 session token + 密码指纹（sessions.json）；端口预览的一次性登录 ticket、绑定 session 的资源 capability（均仅内存）
 chat/                   # Chat 客户端
 cliauth/                # AI CLI 登录状态查询、远程登录流程与登出（各 CLI 的实现在 agent/*/auth.go、login.go，见 docs/code/cli-auth.md）
 cliupdate/              # AI CLI 新版本检查与更新（跑 CLI 自己的 update，再核对版本；各 CLI 的定义在 agent/*/update.go，见 docs/code/cli-update.md）
@@ -53,7 +53,7 @@ command/                # 命令存储 + Pockode 命令（`/pockode-*` 的解析
 contents/               # 文件内容获取
 datadir/                # 默认数据目录（<work>/.pockode）自带的 .gitignore（首行标记在时归 Pockode 管理、每次启动覆盖为当前版本的内容，用户删掉标记即接管，见 docs/projects/data-model.md）
 filestore/              # 文件存储基础设施（原子写 / 文件锁 / JSONL / 变更监听）
-filetransfer/           # 文件上传 / 下载 HTTP 端点
+filetransfer/           # 文件上传 / 下载 HTTP 端点；以 capability 为凭据的 /api/raw
 git/                    # Git 操作
 internal/cmd/marketingbanner/  # 打印启动横幅供营销视频截取（不是服务器的一部分；放在本模块里是为了让 CI 的 vet/build 覆盖它，见 docs/marketing-assets.md §3.3）
 logger/                 # 结构化日志 (slog)
@@ -135,10 +135,10 @@ Windows 与 darwin/linux 一样是发布目标（产物见 [docs/platforms.md](.
   | 来源 | 调用点 | 为什么 Windows 上做不到 |
   |---|---|---|
   | `internal/fifotest` | `agent/codex`×1、`contents`×1、`filetransfer`×2 | 命名管道只存在于 `\\.\pipe`，根本进不了工作目录，被测的阻塞隐患在那里不成立 |
-  | `internal/symlinktest` | `contents`×2、`filetransfer`×1、`git`×1、`search`×1 | 未开开发者模式时建符号链接要特权；开了就一条都不 skip |
+  | `internal/symlinktest` | `contents`×2、`filetransfer`×2、`git`×1、`search`×1 | 未开开发者模式时建符号链接要特权；开了就一条都不 skip |
   | `internal/unwritabletest` | `filestore`×1、`ws`×1 | 目录忽略只读属性，`os.Chmod` 挡不住写入；要真挡住得给当前用户的 SID 加一条 deny ACE |
 
-  **合计 6~10 条**，两个区间端点都是对的：`filetransfer` 的「refuses to overwrite anything but a regular file」一个子测试里同时要符号链接和 fifo，谁先 skip 就记在谁名下，于是前两行的条数此消彼长——没开开发者模式是 3+5，开了是 4+0。别按单行的数去对账，按合计。
+  **合计 6~11 条**，两个区间端点都是对的：`filetransfer` 的「refuses to overwrite anything but a regular file」一个子测试里同时要符号链接和 fifo，谁先 skip 就记在谁名下，于是前两行的条数此消彼长——没开开发者模式是 3+6，开了是 4+0。别按单行的数去对账，按合计。
 
   能用平台分表（如 `settings_test.go` 的路径用例）就不要 skip；断言本身在两个平台上形状不同时，把它抽成平台分文件的测试辅助（如 `internal/fspermtest`、`internal/termtest`、`internal/fifotest`），而不是在 Windows 上 skip 掉——权限测试恰恰在权限有问题的那个平台上 skip，等于什么都没证明。
 

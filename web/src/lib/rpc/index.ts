@@ -25,6 +25,12 @@ export {
 	createPortPreviewActions,
 	type PortPreviewActions,
 } from "./portPreview";
+export {
+	createRawActions,
+	type RawActions,
+	type RawCapability,
+	type RawTarget,
+} from "./raw";
 export { createSessionActions, type SessionActions } from "./session";
 export {
 	createSessionViewActions,

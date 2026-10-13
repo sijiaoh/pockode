@@ -87,6 +87,7 @@ type testEnv struct {
 	testRoleID      string                // pre-created agent role ID for tests
 	cliAuth         *cliauthtest.Provider // the claude CLI as cli_auth.* sees it
 	handler         *RPCHandler
+	raw             *rawCapabilitiesStub
 	server          *httptest.Server
 	conn            *websocket.Conn
 	ctx             context.Context
@@ -171,7 +172,8 @@ func newTestEnvWithAgent(t *testing.T, mock *mockAgent, ag agent.Agent, workDir 
 	cliAuthService := cliauth.NewService(slog.Default())
 	cliAuthService.Register(session.AgentTypeClaude, cliAuth)
 
-	h := NewRPCHandler(testPassword, authguard.New(), authsessiontest.New(), "test", func() string { return "" }, authsession.NewTickets(), true, cmdStore, worktreeManager, settingsStore, workStore, workOps, workEngine, agentRoleStore, cliAuthService, cliupdate.NewService(slog.Default(), nil, nil))
+	raw := &rawCapabilitiesStub{}
+	h := NewRPCHandler(testPassword, authguard.New(), authsessiontest.New(), "test", func() string { return "" }, authsession.NewTickets(), raw, true, cmdStore, worktreeManager, settingsStore, workStore, workOps, workEngine, agentRoleStore, cliAuthService, cliupdate.NewService(slog.Default(), nil, nil))
 	server := httptest.NewServer(h)
 
 	// No deadline of its own: every read and write is bounded individually (see
@@ -195,6 +197,7 @@ func newTestEnvWithAgent(t *testing.T, mock *mockAgent, ag agent.Agent, workDir 
 		testRoleID:      testRole.ID,
 		cliAuth:         cliAuth,
 		handler:         h,
+		raw:             raw,
 		server:          server,
 		conn:            conn,
 		ctx:             ctx,
@@ -557,7 +560,7 @@ func newMinimalTestHandler(t *testing.T, password string, remoteURL func() strin
 	workStarter := worktree.NewWorkStarter(worktreeManager, agentRoleStore, settingsStore)
 	workOps := work.NewOperations(workStore, workStarter, nil, nil)
 
-	h := NewRPCHandler(password, authguard.NewFrozen(), sessions, "test", remoteURL, tickets, true, cmdStore, worktreeManager, settingsStore, workStore, workOps, work.NewEngine(workStore, work.DefaultMaxNudges), agentRoleStore, cliauth.NewService(slog.Default()), cliupdate.NewService(slog.Default(), nil, nil))
+	h := NewRPCHandler(password, authguard.NewFrozen(), sessions, "test", remoteURL, tickets, &rawCapabilitiesStub{}, true, cmdStore, worktreeManager, settingsStore, workStore, workOps, work.NewEngine(workStore, work.DefaultMaxNudges), agentRoleStore, cliauth.NewService(slog.Default()), cliupdate.NewService(slog.Default(), nil, nil))
 	t.Cleanup(h.Stop)
 	return h
 }

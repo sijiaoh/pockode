@@ -243,3 +243,19 @@ func hashToken(token string) string {
 	sum := sha256.Sum256([]byte(token))
 	return hex.EncodeToString(sum[:])
 }
+
+// live reports whether the session whose token hashes to hash is still held,
+// without counting this as a use of it: what asks is a credential derived from
+// the session, and only the session's own holder should keep it from idling out.
+func (s *Store) live(hash string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.pruneLocked(time.Now())
+	for _, r := range s.data.Sessions {
+		if subtle.ConstantTimeCompare([]byte(r.Hash), []byte(hash)) == 1 {
+			return true
+		}
+	}
+	return false
+}

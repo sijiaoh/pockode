@@ -95,6 +95,39 @@ func TestLocalProxyRoutesAPIPathsToBackendPort(t *testing.T) {
 	}
 }
 
+// A capability URL is fetched by a <video> element straight from the relay, and
+// a player will not play without Range: the request header has to reach the
+// local server and the partial answer has to come back intact.
+func TestLocalProxyCarriesRangeRequests(t *testing.T) {
+	backendPort := startLocalServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Security-Policy", "sandbox allow-scripts allow-popups")
+		http.ServeContent(w, r, "clip.mp4", time.Time{}, strings.NewReader("0123456789"))
+	}))
+	proxy := serveProxy(t, backendPort, backendPort)
+
+	req, err := http.NewRequest(http.MethodGet, proxy.URL+"/api/raw/capability/clip.mp4", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Range", "bytes=2-5")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+
+	if resp.StatusCode != http.StatusPartialContent || string(body) != "2345" {
+		t.Errorf("got %d %q, want 206 \"2345\"", resp.StatusCode, body)
+	}
+	if got := resp.Header.Get("Content-Range"); got != "bytes 2-5/10" {
+		t.Errorf("Content-Range = %q, want bytes 2-5/10", got)
+	}
+	if got := resp.Header.Get("Content-Security-Policy"); got == "" {
+		t.Error("Content-Security-Policy was dropped on the way back")
+	}
+}
+
 // The relay carries the public host and client IP; both must reach the local
 // server. Host in particular: the WebSocket handler rejects an upgrade whose
 // Origin disagrees with it.

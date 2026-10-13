@@ -398,6 +398,48 @@ func DetectMIME(name string, head []byte) string {
 	return sniffed
 }
 
+// Formats a page or a media element loads that http.DetectContentType cannot
+// name. Stylesheets and scripts are plain text to a sniffer, and a browser
+// refuses either one served as text/plain under nosniff — a previewed page
+// would load without them. The media entries cover what the sniffer's table
+// lacks — a phone records video as .mov — and files whose bytes it does not
+// recognise: an MP3 without an ID3 tag, an MP4 whose brand it does not know.
+//
+// Spelled out here rather than taken from mime.TypeByExtension, which reads the
+// machine's own registry: on Windows that commonly maps .js to text/plain.
+var servedExtMIMEs = map[string]string{
+	".html": "text/html; charset=utf-8",
+	".htm":  "text/html; charset=utf-8",
+	".css":  "text/css; charset=utf-8",
+	".js":   "text/javascript; charset=utf-8",
+	".mjs":  "text/javascript; charset=utf-8",
+	".json": "application/json",
+	".mp4":  "video/mp4",
+	".m4v":  "video/mp4",
+	".mov":  "video/quicktime",
+	".webm": "video/webm",
+	".mp3":  "audio/mpeg",
+	".m4a":  "audio/mp4",
+	".aac":  "audio/aac",
+	".wav":  "audio/wav",
+	".flac": "audio/flac",
+}
+
+// DetectServedMIME is DetectMIME for content a browser loads directly rather
+// than through the app: a page, its stylesheets and scripts, a video or audio
+// file. It adds the types those need and sniffing cannot name, under the same
+// rule — the extension is consulted only where sniffing gave up.
+func DetectServedMIME(name string, head []byte) string {
+	detected := DetectMIME(name, head)
+	if !isGenericType(detected) {
+		return detected
+	}
+	if mime, ok := servedExtMIMEs[strings.ToLower(filepath.Ext(name))]; ok {
+		return mime
+	}
+	return detected
+}
+
 // IsImageMIME reports whether content of this type is something to render as a
 // picture, which is what decides whether it is worth sending at all.
 //
