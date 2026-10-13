@@ -9,6 +9,7 @@ import { splitPath } from "../../utils/path";
 import { FileContentDisplay, FileStateCard } from "../ui";
 import ImagePreview from "./ImagePreview";
 import MediaPreview from "./MediaPreview";
+import PagePreview from "./PagePreview";
 
 interface Props {
 	state: FileViewState;
@@ -22,9 +23,10 @@ interface Props {
 	 */
 	downloadAction?: { label: string; onClick: () => void; disabled?: boolean };
 	/**
-	 * Render text verbatim: no syntax highlighting, and Markdown as its source.
-	 * Large files force it on; a viewer may also offer it, which is the only way
-	 * to reach the highlighter's copy button on a Markdown file.
+	 * Drop the rendering to source. For text: no syntax highlighting, and
+	 * Markdown as its source — large files force it on, and a viewer may also
+	 * offer it, which is the only way to reach the highlighter's copy button on
+	 * a Markdown file. For a page: its source, highlighted, instead of the page.
 	 */
 	plain?: boolean;
 	/**
@@ -87,6 +89,31 @@ function FileBody({
 						/>
 					</div>
 				</>
+			);
+
+		case "page":
+			return plain ? (
+				<FileBody
+					state={state.source}
+					path={path}
+					downloadAction={downloadAction}
+					readOnly={readOnly}
+				/>
+			) : (
+				<PagePreview
+					origin={state.origin}
+					fileName={splitPath(path).fileName}
+					mime={state.mime}
+					size={state.size}
+					content={state.source.kind === "text" ? state.source.content : null}
+					// What a rewrite changes. A commit never changes, so its page is
+					// never reloaded by this.
+					revision={
+						state.source.kind === "text"
+							? state.source.content
+							: state.source.size
+					}
+				/>
 			);
 
 		case "image":

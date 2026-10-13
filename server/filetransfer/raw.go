@@ -56,10 +56,23 @@ type RawScope string
 const (
 	// RawScopeFile reaches the one file Path names.
 	RawScopeFile RawScope = "file"
-	// RawScopeDirectory reaches directory Path and everything beneath it. It
-	// is for a page whose relative URLs load its stylesheets, scripts and
-	// images; the page's own directory, never more, so that the page's
-	// scripts cannot read anything else in the project.
+	// RawScopeDirectory reaches directory Path and everything beneath it
+	// except dotfiles. It is for a page whose relative URLs load its
+	// stylesheets, scripts and images; the page's own directory, never more,
+	// so that the page's scripts cannot read anything else in the project.
+	//
+	// Nothing whose path has a dot-prefixed component, beneath the scope or
+	// above it: a page sits beside the .env of its app, and a page inside
+	// .git or .pockode would hand its scripts the repository or Pockode's own
+	// data. A dotfile the user means to see takes a file scope of its own. The
+	// price is that a build inside a dot directory (docs/.vitepress/dist,
+	// .output/public) gets only a file scope, as a page at the root does.
+	//
+	// The check is on the name asked for and, for a work-directory file, on
+	// the name the file system resolves it to (resolvedName): on Windows a
+	// short name such as ENV~1 is another spelling of .env. A link beneath
+	// the scope that leads to a dotfile also beneath it is served on unix, as
+	// anything a link inside the scope leads to is.
 	//
 	// Never the root of the origin, even for a page that sits there. The
 	// capability is in the page's own URL, where its scripts can read it and
@@ -96,6 +109,9 @@ func (g RawGrant) validate() error {
 	if !filepath.IsLocal(filepath.FromSlash(g.Path)) || cleanGrantPath(g.Path) == "." {
 		return fmt.Errorf("%w: path %q must name something beneath the root of its origin", ErrInvalidGrant, g.Path)
 	}
+	if g.Scope == RawScopeDirectory && hasDotComponent(cleanGrantPath(g.Path)) {
+		return fmt.Errorf("%w: directory %q is or lies within a dot directory", ErrInvalidGrant, g.Path)
+	}
 
 	switch g.Origin {
 	case RawOriginFile:
@@ -124,6 +140,18 @@ func (g RawGrant) validate() error {
 // opening as the root itself.
 func cleanGrantPath(p string) string {
 	return filepath.ToSlash(filepath.Clean(filepath.FromSlash(p)))
+}
+
+// hasDotComponent reports whether any component of p, a slash path, starts
+// with a dot. Split on the native separator as well, as openScope does: on
+// Windows "site\.env" is "site/.env".
+func hasDotComponent(p string) bool {
+	for _, name := range strings.Split(filepath.FromSlash(p), string(filepath.Separator)) {
+		if strings.HasPrefix(name, ".") {
+			return true
+		}
+	}
+	return false
 }
 
 // RawEntryPath is the URL path a grant issued as capability is opened at: the
@@ -158,6 +186,15 @@ func RawPath(capability, rel string) string {
 // Content-Security-Policy sandbox on every response, which gives a document
 // opened from here — top-level or framed — an opaque origin of its own, where
 // the login token is out of reach.
+//
+// That opaque origin is also why every response allows any origin: a module
+// script, a font or a fetch() is loaded in CORS mode, and from an opaque
+// origin it is cross-origin even to here. Credentials are never allowed; the
+// capability that authorizes the read is in the URL. It does let the page's
+// own scripts read what the scope reaches and send the bytes out, where
+// without it they could send only the URL — useless to whoever cannot reach
+// this server, as on a server kept to its LAN. That is why a scope reaches as
+// little as it does, dotfiles included.
 type RawHandler struct {
 	files        *Handler
 	attachments  *AttachmentHandler
@@ -191,8 +228,25 @@ func (h *RawHandler) Issue(sessionToken string, grant RawGrant) (string, time.Ti
 func (h *RawHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 	w := &rawResponseWriter{ResponseWriter: rw}
 
+	if r.Method == http.MethodOptions {
+		// A preflight carries no capability to check — the browser sends it
+		// before the request it asks about — and it reads nothing. Whatever
+		// headers it asks for are allowed: without credentials and with only
+		// reads served, a header can change nothing but what a page's library
+		// gets back, such as a multi-range Range, which is not safelisted.
+		header := w.Header()
+		header.Set("Allow", rawMethods)
+		header.Set("Access-Control-Allow-Methods", rawMethods)
+		if requested := r.Header.Get("Access-Control-Request-Headers"); requested != "" {
+			header.Set("Access-Control-Allow-Headers", requested)
+		}
+		header.Add("Vary", "Access-Control-Request-Headers")
+		header.Set("Access-Control-Max-Age", "86400")
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
-		w.Header().Set("Allow", "GET, HEAD")
+		w.Header().Set("Allow", rawMethods)
 		h.files.writeError(w, errf(http.StatusMethodNotAllowed, CodeInvalidRequest, "method %s is not allowed", r.Method), nil)
 		return
 	}
@@ -210,7 +264,8 @@ func (h *RawHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 		h.files.writeError(w, errf(http.StatusBadRequest, CodeInvalidPath, "invalid path: %s", rel), nil)
 		return
 	}
-	if grant.Scope == RawScopeFile && rel != path.Base(grant.Path) {
+	if grant.Scope == RawScopeFile && rel != path.Base(grant.Path) ||
+		grant.Scope == RawScopeDirectory && hasDotComponent(rel) {
 		h.files.writeError(w, errf(http.StatusForbidden, CodeOutsideScope, "%s is outside this capability", rel), nil)
 		return
 	}
@@ -225,11 +280,14 @@ func (h *RawHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 	}
 }
 
+const rawMethods = "GET, HEAD, OPTIONS"
+
 // rawResponseWriter puts the raw endpoint's headers on whatever response goes
 // out, errors included: a response without the sandbox is one a page could be
-// loaded from in the app's origin. They are applied as the status is written
-// rather than once up front, because ServeContent clears Cache-Control before
-// answering a Range it cannot satisfy.
+// loaded from in the app's origin, and an error without CORS is one a page's
+// fetch() sees only as a network failure. They are applied as the status is
+// written rather than once up front, because ServeContent clears Cache-Control
+// before answering a Range it cannot satisfy.
 type rawResponseWriter struct {
 	http.ResponseWriter
 	wroteHeader bool
@@ -239,9 +297,16 @@ func (w *rawResponseWriter) WriteHeader(status int) {
 	if !w.wroteHeader {
 		w.wroteHeader = true
 		header := w.Header()
-		header.Set("Content-Security-Policy", "sandbox allow-scripts allow-popups")
+		// A popup escapes the sandbox, so a link the page opens in a new tab is
+		// a normal page there, as from an agent's page in chat (HtmlFrame). One
+		// that opens /api/raw again is sandboxed by that response's own header.
+		header.Set("Content-Security-Policy", "sandbox allow-scripts allow-popups allow-popups-to-escape-sandbox")
 		header.Set("X-Content-Type-Options", "nosniff")
 		header.Set("Referrer-Policy", "no-referrer")
+		header.Set("Access-Control-Allow-Origin", "*")
+		// What a page's ranged reader (pdf.js, a video or wasm loader) needs to
+		// learn a size and revalidate, beyond the safelisted headers.
+		header.Set("Access-Control-Expose-Headers", "Accept-Ranges, Content-Range, ETag")
 		// Private: the content is the user's. no-cache rather than a
 		// lifetime: a work-directory file changes under the same URL whenever
 		// the agent edits it, and revalidation is what tells.
@@ -291,6 +356,7 @@ func (h *RawHandler) serveWorkDirFile(w http.ResponseWriter, r *http.Request, gr
 	// directory: the file is what the user opened, and if it is a link to
 	// elsewhere in the project, that is the file they asked for.
 	name := filepath.FromSlash(grant.Path)
+	workRoot := root
 	if grant.Scope == RawScopeDirectory {
 		scope, err := openScope(root, grant.Path)
 		if err != nil {
@@ -312,6 +378,23 @@ func (h *RawHandler) serveWorkDirFile(w http.ResponseWriter, r *http.Request, gr
 		return
 	}
 	defer f.Close()
+
+	// Asked of the whole path from the work directory, since the scope's own
+	// name is a spelling too.
+	if grant.Scope == RawScopeDirectory {
+		resolved, err := resolvedName(workRoot, filepath.Join(filepath.FromSlash(grant.Path), name), f)
+		if err != nil {
+			// Logged rather than answered: the error holds host paths, and the
+			// answer is readable by the page.
+			h.files.log.Warn("cannot resolve raw file name", "worktree", grant.Worktree, "path", rel, "error", err)
+			h.files.writeError(w, errf(http.StatusForbidden, CodeOutsideScope, "cannot resolve %s within this capability", rel), nil)
+			return
+		}
+		if hasDotComponent(filepath.ToSlash(resolved)) {
+			h.files.writeError(w, errf(http.StatusForbidden, CodeOutsideScope, "%s is outside this capability", rel), nil)
+			return
+		}
+	}
 	h.serveContent(w, r, rel, fi.ModTime(), "", f)
 }
 

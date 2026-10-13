@@ -1,6 +1,9 @@
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useWSStore, wsActions } from "../../lib/wsStore";
+import { reportEverythingInView } from "../../test/imageFixtures";
 import type { FileContent } from "../../types/contents";
 import { HIGHLIGHT_LIMIT } from "../../utils/fileView";
 import CommitFileView from "./CommitFileView";
@@ -211,5 +214,82 @@ describe("CommitFileView", () => {
 
 		expect(screen.queryByRole("button", { name: /plain text/i })).toBeNull();
 		expect(screen.getByText(/Large file/)).toBeInTheDocument();
+	});
+
+	describe("HTML page", () => {
+		const page: FileContent = {
+			name: "index.html",
+			type: "file",
+			path: "site/index.html",
+			size: 11,
+			mime: "text/html; charset=utf-8",
+			content: "<h1>Hi</h1>",
+			encoding: "text",
+		};
+
+		beforeEach(() => {
+			reportEverythingInView();
+			useWSStore.setState({ status: "connected" });
+			vi.spyOn(wsActions, "rawCapability").mockResolvedValue({
+				path: "/api/raw/cap1/",
+				expiresAt: Date.now() + 60 * 60 * 1000,
+			});
+			vi.stubGlobal(
+				"fetch",
+				vi.fn(async () => new Response("x", { status: 206 })),
+			);
+		});
+
+		afterEach(() => {
+			vi.restoreAllMocks();
+			vi.unstubAllGlobals();
+		});
+
+		function renderPage(version: FileContent = page) {
+			file = version;
+			const queryClient = new QueryClient({
+				defaultOptions: { queries: { retry: false } },
+			});
+			return render(
+				<QueryClientProvider client={queryClient}>
+					<CommitFileView hash="abc1234def" path={version.path} />
+				</QueryClientProvider>,
+			);
+		}
+
+		it("renders the page as of the commit, from the commit's folder", async () => {
+			renderPage();
+
+			expect(await screen.findByTitle("index.html")).toHaveAttribute("sandbox");
+			expect(wsActions.rawCapability).toHaveBeenCalledWith({
+				origin: { kind: "commit", hash: "abc1234def", path: "site" },
+				scope: "directory",
+			});
+		});
+
+		it("turns the plain toggle into page and source, for a page of any size", async () => {
+			const user = userEvent.setup();
+			renderPage({
+				...page,
+				content: "",
+				encoding: "none",
+				omitted: "too_large",
+				size: 3 * 1024 * 1024,
+				limit: 2 * 1024 * 1024,
+			});
+			await screen.findByTitle("index.html");
+			expect(screen.queryByRole("button", { name: /plain text/i })).toBeNull();
+
+			await user.click(screen.getByRole("button", { name: "Show source" }));
+
+			expect(screen.queryByTitle("index.html")).toBeNull();
+			expect(
+				screen.getByText("File is too large to preview"),
+			).toBeInTheDocument();
+			expect(screen.getByRole("button", { name: "Show page" })).toHaveAttribute(
+				"aria-pressed",
+				"true",
+			);
+		});
 	});
 });

@@ -7,7 +7,7 @@ import {
 } from "@tanstack/react-query";
 import { useCallback } from "react";
 import { apiUrl } from "../lib/api";
-import type { RawCapability } from "../lib/rpc/raw";
+import type { RawCapability, RawTarget } from "../lib/rpc/raw";
 import { useWorktreeStore } from "../lib/worktreeStore";
 import { useWSStore, wsActions } from "../lib/wsStore";
 import type { ContentOrigin } from "../types/contents";
@@ -25,12 +25,31 @@ const EXPIRY_MARGIN_MS = 5 * 60 * 1000;
  * them to the worktree the connection is on when they are issued, and the
  * store's worktree moves before the connection does, so one asked for during a
  * switch may serve the worktree being left: these are invalidated once the
- * switch has landed (`queryClient.ts`).
+ * switch has landed (`invalidateWorkspaceCapabilities`).
  */
 export const WORKSPACE_RAW_CAPABILITY_KEY = [
 	"raw-capability",
 	"workspace",
 ] as const;
+
+/**
+ * How many worktree switches have landed. A workspace capability asked for
+ * before the latest may serve the worktree that was left; what a reader
+ * loaded from one it has to load again — which only a page, which never
+ * otherwise swaps its `src`, needs to be told. A count stamped on each request
+ * as it is sent, rather than the cache's `isInvalidated` (a failed fetch sets
+ * that too) or a time (a fetch finishing after the switch was asked for
+ * before it, and two in one millisecond cannot be told apart).
+ */
+let switchEpoch = 0;
+
+/** Called once a worktree switch has landed (`queryClient.ts`). */
+export function invalidateWorkspaceCapabilities(queryClient: QueryClient) {
+	switchEpoch += 1;
+	return queryClient.invalidateQueries({
+		queryKey: WORKSPACE_RAW_CAPABILITY_KEY,
+	});
+}
 
 /**
  * A capability is worth one per file, however many players show it: the
@@ -40,19 +59,30 @@ export const WORKSPACE_RAW_CAPABILITY_KEY = [
  * bytes live: the description is invalidated whenever its watch is
  * re-established — every relay reconnect — and a new capability is a new
  * `src`, which drops a playing video's buffer for a file that did not change.
+ *
+ * The scope is part of it: a page's directory capability and a file
+ * capability for the same path reach different things. An attachment is
+ * always a file.
  */
 function rawCapabilityKey(
-	origin: ContentOrigin,
+	{ origin, scope }: RawTarget,
 	worktree: string,
 ): readonly unknown[] {
 	switch (origin.kind) {
 		case "file":
-			return [...WORKSPACE_RAW_CAPABILITY_KEY, worktree, "file", origin.path];
+			return [
+				...WORKSPACE_RAW_CAPABILITY_KEY,
+				worktree,
+				"file",
+				scope,
+				origin.path,
+			];
 		case "commit":
 			return [
 				...WORKSPACE_RAW_CAPABILITY_KEY,
 				worktree,
 				"commit",
+				scope,
 				origin.hash,
 				origin.path,
 			];
@@ -67,12 +97,15 @@ function rawCapabilityKey(
 	}
 }
 
-function rawCapabilityQuery(origin: ContentOrigin, worktree: string) {
+function rawCapabilityQuery(target: RawTarget, worktree: string) {
 	return queryOptions({
-		queryKey: rawCapabilityKey(origin, worktree),
-		queryFn: () => wsActions.rawCapability({ origin, scope: "file" }),
+		queryKey: rawCapabilityKey(target, worktree),
+		queryFn: async (): Promise<HeldCapability> => {
+			const epoch = switchEpoch;
+			return { ...(await wsActions.rawCapability(target)), epoch };
+		},
 		staleTime: (query) => {
-			const capability: RawCapability | undefined = query.state.data;
+			const capability: HeldCapability | undefined = query.state.data;
 			return capability
 				? Math.max(0, capability.expiresAt - EXPIRY_MARGIN_MS - Date.now())
 				: 0;
@@ -102,7 +135,7 @@ export async function rawMediaUrl(
 	origin: ContentOrigin,
 ): Promise<string> {
 	const options = rawCapabilityQuery(
-		origin,
+		{ origin, scope: "file" },
 		useWorktreeStore.getState().current,
 	);
 	const held = queryClient.getQueryState(options.queryKey);
@@ -118,21 +151,21 @@ export async function rawMediaUrl(
 }
 
 /**
- * A URL a `<video>` or `<audio>` streams `origin` from, with Range requests
- * and no Authorization header (docs/code/authentication.md, "Raw
- * capabilities"). Nothing is asked for until `enabled`, nor while the
+ * A URL a `<video>`, `<audio>` or page `<iframe>` loads `target` from, with
+ * Range requests and no Authorization header (docs/code/authentication.md,
+ * "Raw capabilities"). Nothing is asked for until `enabled`, nor while the
  * WebSocket is down: the wait shows as loading rather than as a failure the
  * user would have to retry.
  *
  * `refresh` asks for a new capability for a player whose load failed — the
  * old one may have expired or died with its session. The new one arrives as
- * `src`, to every player of the file at once.
+ * `src`, to every player of the file at once, and is what it resolves to.
  */
-export function useRawMediaSource(origin: ContentOrigin, enabled: boolean) {
+export function useRawMediaSource(target: RawTarget, enabled: boolean) {
 	const queryClient = useQueryClient();
 	const worktree = useWorktreeStore((s) => s.current);
 	const connected = useWSStore((s) => s.status === "connected");
-	const options = rawCapabilityQuery(origin, worktree);
+	const options = rawCapabilityQuery(target, worktree);
 	const query = useQuery({
 		...options,
 		queryFn: enabled && connected ? options.queryFn : skipToken,
@@ -140,12 +173,28 @@ export function useRawMediaSource(origin: ContentOrigin, enabled: boolean) {
 
 	const key = JSON.stringify(options.queryKey);
 	// biome-ignore lint/correctness/useExhaustiveDependencies: `key` is the identity of `options`, which is rebuilt every render
-	const refresh = useCallback(
-		async (signal: AbortSignal): Promise<void> => {
+	const request = useCallback(
+		async (signal: AbortSignal, renew: boolean): Promise<RawSource> => {
 			await whenConnected(signal);
-			await queryClient.fetchQuery({ ...options, staleTime: 0 });
+			const capability = await queryClient.fetchQuery(
+				renew ? { ...options, staleTime: 0 } : options,
+			);
+			return { src: apiUrl(capability.path), epoch: capability.epoch };
 		},
 		[queryClient, key],
+	);
+	const refresh = useCallback(
+		(signal: AbortSignal) => request(signal, true),
+		[request],
+	);
+	/**
+	 * The capability on hand while it is still fresh for a new load, and a new
+	 * one otherwise — for a page about to load again, which needs one that will
+	 * last but has no reason to think the one it has is dead.
+	 */
+	const fresh = useCallback(
+		(signal: AbortSignal) => request(signal, false),
+		[request],
 	);
 
 	return {
@@ -153,6 +202,15 @@ export function useRawMediaSource(origin: ContentOrigin, enabled: boolean) {
 		// Withheld while a retry is running, as `useImageSrc` does.
 		error: query.isFetching ? null : query.error,
 		refresh,
+		fresh,
+		/** The switch count the capability in `src` was asked for under. */
+		epoch: query.data?.epoch ?? 0,
+		/**
+		 * A capability asked for under an earlier count may serve the worktree
+		 * that was left (`switchEpoch`). Never for an attachment, which names
+		 * its own.
+		 */
+		currentEpoch: target.origin.kind === "attachment" ? 0 : switchEpoch,
 		/**
 		 * Changes when the player is for something else and has to start over.
 		 * `src` changing alone is the same content under a new capability.
@@ -160,6 +218,14 @@ export function useRawMediaSource(origin: ContentOrigin, enabled: boolean) {
 		key,
 	};
 }
+
+/** A capability's URL, and the switch count it was asked for under. */
+export interface RawSource {
+	src: string;
+	epoch: number;
+}
+
+type HeldCapability = RawCapability & { epoch: number };
 
 /**
  * Resolves once the WebSocket is connected. A failed load is often the relay

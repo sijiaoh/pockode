@@ -49,6 +49,7 @@ function renderStage(item: VideoMediaItem) {
 					toolbarStart={null}
 					keysRef={keysRef}
 					onMetadata={onMetadata}
+					saveUrlRef={{ current: null }}
 				/>
 			</section>
 		);

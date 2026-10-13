@@ -370,6 +370,59 @@ func TestGetContents_ReadFile(t *testing.T) {
 	})
 }
 
+// Whether text is a page decides whether the client renders it, so it is
+// settled by name: sniffing alone misses a page that opens with text and
+// catches a component that opens with a tag.
+func TestDetectMIME_HTML(t *testing.T) {
+	tests := []struct {
+		name string
+		file string
+		head string
+		want string
+	}{
+		{"page opening with a tag", "index.html", "<!doctype html><p>hi", "text/html; charset=utf-8"},
+		{"page opening with text", "index.html", "Hello <b>world</b>", "text/html; charset=utf-8"},
+		{".htm, any case", "OLD.HTM", "Hello", "text/html; charset=utf-8"},
+		{"page opening with an XML prolog", "page.html", "<?xml version=\"1.0\"?><html>", "text/html; charset=utf-8"},
+		{"empty page", "blank.html", "", "text/html; charset=utf-8"},
+		{"component opening with a script tag", "App.svelte", "<script>let x = 1</script>", "text/plain; charset=utf-8"},
+		{"vue component", "App.vue", "<template><div/></template><script>", "text/plain; charset=utf-8"},
+		{"no extension", "README", "<html><body>", "text/plain; charset=utf-8"},
+		{"svg opening with a comment is still an image", "logo.svg", "<!-- logo --><svg xmlns=\"http://www.w3.org/2000/svg\"/>", "image/svg+xml"},
+		{"binary named .html stays binary", "x.html", "\x89PNG\r\n\x1a\n\x00\x00", "image/png"},
+		{"text that is not HTML elsewhere is untouched", "notes.txt", "hello", "text/plain; charset=utf-8"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := DetectMIME(tt.file, []byte(tt.head)); got != tt.want {
+				t.Errorf("DetectMIME(%q) = %q, want %q", tt.file, got, tt.want)
+			}
+		})
+	}
+}
+
+// What a page loads is served as what it is: a document it navigates to keeps
+// its sniffed HTML type whatever it is named, and the page itself is HTML even
+// when it opens with text.
+func TestDetectServedMIME_HTML(t *testing.T) {
+	tests := []struct {
+		file string
+		head string
+		want string
+	}{
+		{"about", "<html><body>", "text/html; charset=utf-8"},
+		{"index.html", "Hello", "text/html; charset=utf-8"},
+		{"app.css", "body{}", "text/css; charset=utf-8"},
+		{"logo.svg", "<!-- logo --><svg/>", "image/svg+xml"},
+		{"app.js", "<!-- legacy guard -->\nvar x", "text/javascript; charset=utf-8"},
+	}
+	for _, tt := range tests {
+		if got := DetectServedMIME(tt.file, []byte(tt.head)); got != tt.want {
+			t.Errorf("DetectServedMIME(%q) = %q, want %q", tt.file, got, tt.want)
+		}
+	}
+}
+
 func TestIsBinary(t *testing.T) {
 	tests := []struct {
 		name string

@@ -9,6 +9,27 @@ const BACK_TIMEOUT_MS = 1000;
 /** The last close's `back()`, until its traversal has been reported. */
 let pendingBack: Promise<void> | null = null;
 
+interface NavigationApi {
+	canGoBack: boolean;
+	back(): { committed: Promise<unknown>; finished: Promise<unknown> };
+}
+
+/**
+ * Goes back to the top-level entry before the current one with the
+ * Navigation API, where the browser has it — TypeScript's DOM library does
+ * not declare it yet. False where it does not.
+ */
+function navigationBack(): boolean {
+	const navigation = (window as { navigation?: NavigationApi }).navigation;
+	if (!navigation?.canGoBack) return false;
+	const result = navigation.back();
+	// A traversal cut short (another navigation, the tab closing) rejects
+	// both; the router hears whatever did happen through `popstate`.
+	result.committed.catch(() => {});
+	result.finished.catch(() => {});
+	return true;
+}
+
 function ownsEntry(state: unknown, id: string): boolean {
 	return (
 		typeof state === "object" &&
@@ -32,6 +53,15 @@ function ownsEntry(state: unknown, id: string): boolean {
  * chat) is left alone, at the cost of one later Back that changes nothing on
  * screen. `afterClose` runs once the entry is gone, for an action that must
  * not land on it — opening a file navigates, and would be undone by the Back.
+ *
+ * What is open may hold an `<iframe>` the user navigated in, and each of those
+ * navigations is an entry of its own after ours. They outlive the frame:
+ * Chromium and WebKit keep a removed frame's entries, and a Back onto one
+ * changes nothing on screen. So the entry is taken back with the Navigation
+ * API's `back()`, which goes to the page's entry before ours however many
+ * frame entries follow it — and leaves a frame still on the page where its
+ * user left it. `history.back()` is the fallback; it costs one silent Back per
+ * frame entry (docs/media-viewer.md#history).
  */
 export function useBackToClose(
 	onBack: () => void,
@@ -91,8 +121,11 @@ export function useBackToClose(
 				// `popstate` — must not keep the next viewer, or the file the
 				// reader asked for, waiting for ever.
 				const fallback = setTimeout(done, BACK_TIMEOUT_MS);
+				// The router reports its own `back()` at once, before the window has
+				// moved; landed is when its location no longer is the entry.
 				const stop = history.subscribe(({ action }) => {
-					if (action.type === "BACK" || action.type === "GO") done();
+					if (action.type !== "BACK" && action.type !== "GO") return;
+					if (!ownsEntry(history.location.state, id)) done();
 				});
 				function done() {
 					clearTimeout(fallback);
@@ -105,7 +138,11 @@ export function useBackToClose(
 				if (pendingBack === landed) pendingBack = null;
 				after?.();
 			});
-			history.back();
+			// `navigation.back()` moves the window, so only when the router keeps
+			// its entries there: one on a memory history (tests) does not.
+			if (!ownsEntry(window.history.state, id) || !navigationBack()) {
+				history.back();
+			}
 		};
 	}, [router, id, afterClose]);
 }

@@ -100,6 +100,7 @@ Windows 与 darwin/linux 一样是发布目标（产物见 [docs/platforms.md](.
 | `internal/fsperm/fsperm.go` | `fsperm_{unix,windows}.go` — 0700/0600 mode 位 / 显式 DACL |
 | `cluster/node/process.go` | `process_{unix,windows}.go` — 与终端脱钩（`Setsid` / `CREATE_NO_WINDOW`）、优雅关闭与强杀的等待方式 |
 | `internal/shutdown/shutdown.go` | `request_{unix,windows}.go` — SIGTERM / 命名事件 |
+| `filetransfer/raw.go` | `realname_{unix,windows}.go` — 目录 capability 拒绝 dotfile 时看文件系统解析出的长名：Windows 的 8.3 短名（`ENV~1`）是 `.env` 的另一种写法；unix 上原样返回 |
 
 **路径处理统一走 `internal/pathutil`**，不要在各包里重新实现一遍：
 
@@ -137,8 +138,9 @@ Windows 与 darwin/linux 一样是发布目标（产物见 [docs/platforms.md](.
   | `internal/fifotest` | `agent/codex`×1、`contents`×1、`filetransfer`×2 | 命名管道只存在于 `\\.\pipe`，根本进不了工作目录，被测的阻塞隐患在那里不成立 |
   | `internal/symlinktest` | `contents`×2、`filetransfer`×2、`git`×1、`search`×1 | 未开开发者模式时建符号链接要特权；开了就一条都不 skip |
   | `internal/unwritabletest` | `filestore`×1、`ws`×1 | 目录忽略只读属性，`os.Chmod` 挡不住写入；要真挡住得给当前用户的 SID 加一条 deny ACE |
+  | `filetransfer/realname_windows_test.go` 的 `shortName` | `filetransfer`×0~2 | 临时目录所在的卷关掉了 8.3 短名（`fsutil 8dot3name`）时没有别名可测；开着就一条都不 skip |
 
-  **合计 6~11 条**，两个区间端点都是对的：`filetransfer` 的「refuses to overwrite anything but a regular file」一个子测试里同时要符号链接和 fifo，谁先 skip 就记在谁名下，于是前两行的条数此消彼长——没开开发者模式是 3+6，开了是 4+0。别按单行的数去对账，按合计。
+  **合计 6~13 条**，两个区间端点都是对的：`filetransfer` 的「refuses to overwrite anything but a regular file」一个子测试里同时要符号链接和 fifo，谁先 skip 就记在谁名下，于是前两行的条数此消彼长——没开开发者模式是 3+6，开了是 4+0。别按单行的数去对账，按合计。
 
   能用平台分表（如 `settings_test.go` 的路径用例）就不要 skip；断言本身在两个平台上形状不同时，把它抽成平台分文件的测试辅助（如 `internal/fspermtest`、`internal/termtest`、`internal/fifotest`），而不是在 Windows 上 skip 掉——权限测试恰恰在权限有问题的那个平台上 skip，等于什么都没证明。
 

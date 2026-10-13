@@ -27,6 +27,12 @@ export default defineConfig({
 	server: {
 		port: webPort,
 		allowedHosts: [".local.pockode.com", ".cloud.pockode.com"],
+		// Vite's own CORS middleware runs ahead of the proxy and answers every
+		// OPTIONS itself, so a previewed page's preflighted fetch() to /api/raw
+		// (from `Origin: null`) never reached the backend and failed in dev only.
+		// Off, dev matches the relay and production: the backend alone owns
+		// /api/raw's CORS policy, and the dev server grants none of its own.
+		cors: false,
 		proxy: {
 			"/api": {
 				target: `http://localhost:${serverPort}`,

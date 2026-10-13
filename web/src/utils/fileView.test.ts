@@ -239,6 +239,57 @@ describe("getFileViewState", () => {
 		expect(pointer).toMatchObject({ kind: "text" });
 	});
 
+	describe("HTML page", () => {
+		const html = "text/html; charset=utf-8";
+
+		it("renders HTML text as a page, with the text as its source", () => {
+			const state = view(file({ mime: html, content: "<p>x</p>", size: 8 }));
+			expect(state).toEqual({
+				kind: "page",
+				origin: ORIGIN,
+				mime: html,
+				size: 8,
+				source: { kind: "text", content: "<p>x</p>", highlight: true },
+			});
+			expect(canEditFileView(state)).toBe(true);
+		});
+
+		it("renders a page too large to send, whose source cannot be edited", () => {
+			const state = view(
+				file({
+					mime: html,
+					encoding: "none",
+					omitted: "too_large",
+					content: "",
+					size: 5_000_000,
+					limit: 2_000_000,
+				}),
+			);
+			expect(state).toMatchObject({
+				kind: "page",
+				source: { kind: "too-large", size: 5_000_000 },
+			});
+			expect(canEditFileView(state)).toBe(false);
+			expect(getEditLabel(state)).toBe("Edit (file is too large to edit)");
+		});
+
+		it("leaves an attachment's HTML as text: it has no folder for assets", () => {
+			const state = getFileViewState(file({ mime: html }), {
+				kind: "attachment",
+				sessionId: "s",
+				id: "a",
+				worktree: "",
+			});
+			expect(state.kind).toBe("text");
+		});
+
+		it("leaves an empty HTML file empty", () => {
+			expect(view(file({ mime: html, content: "", size: 0 })).kind).toBe(
+				"empty",
+			);
+		});
+	});
+
 	it("highlights text only up to the limit", () => {
 		expect(view(file({ size: HIGHLIGHT_LIMIT }))).toMatchObject({
 			kind: "text",

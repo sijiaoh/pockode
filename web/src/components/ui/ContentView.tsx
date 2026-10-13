@@ -5,6 +5,11 @@ import { isNotFoundError } from "../../hooks/useContents";
 interface Props {
 	isLoading?: boolean;
 	error?: Error | null;
+	/**
+	 * The content fills the view and scrolls itself — a page in a frame —
+	 * rather than being scrolled by it. Lay it out as a flexible child.
+	 */
+	fill?: boolean;
 	children: ReactNode;
 }
 
@@ -33,10 +38,17 @@ export const getActionIconButtonClass = (enabled: boolean) =>
  * it loads or fails. The page's heading is its own `PageHeader`, drawn in the
  * app header.
  */
-export default function ContentView({ isLoading, error, children }: Props) {
+export default function ContentView({
+	isLoading,
+	error,
+	fill,
+	children,
+}: Props) {
 	return (
 		<div className="flex min-h-0 flex-1 flex-col">
-			<div className="min-h-0 flex-1 overflow-auto">
+			<div
+				className={`min-h-0 flex-1 ${fill ? "flex flex-col overflow-hidden" : "overflow-auto"}`}
+			>
 				{isLoading ? (
 					<div className="flex items-center justify-center p-8">
 						<Spinner variant="current" className="text-th-text-muted" />

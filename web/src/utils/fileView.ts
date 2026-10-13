@@ -1,4 +1,4 @@
-import type { ContentOrigin, FileContent } from "../types/contents";
+import type { ContentOrigin, FileContent, TreeOrigin } from "../types/contents";
 import { formatBytes } from "./bytes";
 
 /**
@@ -36,9 +36,29 @@ export type ImageSource =
 
 export type PlayableKind = "audio" | "video";
 
+type TextViewState = { kind: "text"; content: string; highlight: boolean };
+type TooLargeViewState = {
+	kind: "too-large";
+	mime: string;
+	size: number;
+	limit?: number;
+};
+
 export type FileViewState =
 	| { kind: "empty" }
-	| { kind: "text"; content: string; highlight: boolean }
+	| TextViewState
+	// An HTML file, rendered in a sandboxed frame that reads it from `origin`
+	// over HTTP, so at any size. Never an attachment: its assets have no tree
+	// to be read from. `source` is for the reader who switches to it, and for
+	// editing: a page past the transfer ceiling has no text, and is as
+	// uneditable as any other file that large.
+	| {
+			kind: "page";
+			origin: TreeOrigin;
+			mime: string;
+			size: number;
+			source: TextViewState | TooLargeViewState;
+	  }
 	// `editable` is what SVG needs: it is an image the viewer renders and source
 	// the user can still open in the editor.
 	| {
@@ -57,7 +77,7 @@ export type FileViewState =
 			size: number;
 	  }
 	| { kind: "binary"; mime: string; size: number }
-	| { kind: "too-large"; mime: string; size: number; limit?: number }
+	| TooLargeViewState
 	// Nothing is wrong with the content — there just is none to read any more.
 	// Kept apart from the two above for that reason: those say this content
 	// cannot be shown, and retrying them is pointless.
@@ -197,6 +217,16 @@ export function getPlayableKind(mime: string): PlayableKind | null {
 }
 
 /**
+ * Whether content of this type is a page to render. The server types text as
+ * HTML only when it is named `.html` or `.htm` (`DetectMIME`), so a component
+ * that merely opens with `<script>` is not one, and the client needs no list
+ * of extensions of its own.
+ */
+export function isPageMime(mime: string): boolean {
+	return getMimeType(mime) === "text/html";
+}
+
+/**
  * Where to get the picture for a file the server identified as an image.
  *
  * SVG is the one image that arrives as source text, and it stays a data URL
@@ -237,6 +267,27 @@ export function getFileViewState(
 	file: FileContent,
 	origin: ContentOrigin,
 ): FileViewState {
+	const state = getPlainFileViewState(file, origin);
+	if (
+		origin.kind !== "attachment" &&
+		isPageMime(file.mime) &&
+		(state.kind === "text" || state.kind === "too-large")
+	) {
+		return {
+			kind: "page",
+			origin,
+			mime: file.mime,
+			size: file.size,
+			source: state,
+		};
+	}
+	return state;
+}
+
+function getPlainFileViewState(
+	file: FileContent,
+	origin: ContentOrigin,
+): Exclude<FileViewState, { kind: "page" }> {
 	if (file.encoding === "none") {
 		switch (file.omitted) {
 			case "binary":
@@ -290,6 +341,8 @@ export function canEditFileView(state: FileViewState): boolean {
 			return true;
 		case "image":
 			return state.editable;
+		case "page":
+			return canEditFileView(state.source);
 		default:
 			return false;
 	}
@@ -301,6 +354,7 @@ export function canEditFileView(state: FileViewState): boolean {
  */
 export function getEditLabel(state: FileViewState): string {
 	if (canEditFileView(state)) return "Edit";
+	if (state.kind === "page") return getEditLabel(state.source);
 
 	switch (state.kind) {
 		case "image":

@@ -71,10 +71,13 @@ func (f rawFixture) get(t *testing.T, target string, header http.Header) *httpte
 func assertRawHeaders(t *testing.T, rec *httptest.ResponseRecorder) {
 	t.Helper()
 	for header, want := range map[string]string{
-		"Content-Security-Policy": "sandbox allow-scripts allow-popups",
+		"Content-Security-Policy": "sandbox allow-scripts allow-popups allow-popups-to-escape-sandbox",
 		"X-Content-Type-Options":  "nosniff",
 		"Referrer-Policy":         "no-referrer",
 		"Cache-Control":           "private, no-cache",
+		// An error too, or a page's fetch() sees only a network failure.
+		"Access-Control-Allow-Origin":   "*",
+		"Access-Control-Expose-Headers": "Accept-Ranges, Content-Range, ETag",
 	} {
 		if got := rec.Header().Get(header); got != want {
 			t.Errorf("%s = %q, want %q (status %d)", header, got, want, rec.Code)
@@ -113,6 +116,12 @@ func TestRawIssue(t *testing.T) {
 		"the work directory, natively":   {Origin: RawOriginFile, Scope: RawScopeDirectory, Path: "site" + string(filepath.Separator) + ".."},
 		"the work directory as native .": {Origin: RawOriginFile, Scope: RawScopeDirectory, Path: "." + string(filepath.Separator)},
 		"the commit's root":              {Origin: RawOriginCommit, Scope: RawScopeDirectory, Hash: "abcdef0", Path: ""},
+		// A directory scope never reaches a dotfile, so it cannot be one.
+		"a dot directory":           {Origin: RawOriginFile, Scope: RawScopeDirectory, Path: ".pockode"},
+		"within a dot directory":    {Origin: RawOriginFile, Scope: RawScopeDirectory, Path: ".git/hooks"},
+		"a dot directory, cleaned":  {Origin: RawOriginFile, Scope: RawScopeDirectory, Path: "site/../.pockode"},
+		"a dot directory, natively": {Origin: RawOriginFile, Scope: RawScopeDirectory, Path: "site" + string(filepath.Separator) + ".git"},
+		"a commit's dot directory":  {Origin: RawOriginCommit, Scope: RawScopeDirectory, Hash: "abcdef0", Path: "docs/.vitepress"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			if _, _, err := f.h.Issue(f.session, grant); !errors.Is(err, ErrInvalidGrant) {
@@ -120,6 +129,10 @@ func TestRawIssue(t *testing.T) {
 			}
 		})
 	}
+
+	t.Run("a dotfile in a file scope", func(t *testing.T) {
+		f.issue(t, RawGrant{Origin: RawOriginFile, Scope: RawScopeFile, Path: ".github/page.html"})
+	})
 
 	t.Run("for a session that is not live", func(t *testing.T) {
 		grant := RawGrant{Origin: RawOriginFile, Scope: RawScopeFile, Path: "a.txt"}
@@ -252,6 +265,20 @@ func TestRawScope(t *testing.T) {
 		}
 	})
 
+	t.Run("a directory scope refuses dotfiles beneath it", func(t *testing.T) {
+		writeFile(t, f.workDir, "site/.env", []byte("SECRET=2"))
+		writeFile(t, f.workDir, "site/.git/config", []byte("config"))
+		for _, rel := range []string{".env", ".git/config", "sub/.hidden.css", "sub/../.env", "sub/./page.html"} {
+			assertError(t, f.get(t, RawPath(directory, rel), nil), http.StatusForbidden, CodeOutsideScope)
+		}
+		assertError(t, f.get(t, RawPathPrefix+directory+"/%2eenv", nil), http.StatusForbidden, CodeOutsideScope)
+	})
+
+	t.Run("a file scope serves the dotfile it names", func(t *testing.T) {
+		env := f.issue(t, RawGrant{Origin: RawOriginFile, Scope: RawScopeFile, Path: ".env"})
+		assertBody(t, f.get(t, RawPath(env, ".env"), nil), http.StatusOK, "SECRET=1")
+	})
+
 	t.Run("refuses a directory or the scope itself", func(t *testing.T) {
 		assertError(t, f.get(t, RawPath(directory, "sub"), nil), http.StatusBadRequest, CodeNotAFile)
 		assertError(t, f.get(t, RawPathPrefix+directory+"/", nil), http.StatusBadRequest, CodeInvalidPath)
@@ -281,11 +308,14 @@ func TestRawScope(t *testing.T) {
 		assertError(t, f.get(t, RawPath(linkedFile, "linked.txt"), nil), http.StatusForbidden, CodeOutsideScope)
 		// A link that stays in the project but leads to its root would give the
 		// directory scope the root it must never have, however deep it sits.
+		// The file asked for is no dotfile, which is refused before the scope
+		// is opened at all.
+		writeFile(t, f.workDir, "root.txt", []byte("root"))
 		symlinktest.Make(t, ".", filepath.Join(f.workDir, "root"))
 		symlinktest.Make(t, "..", filepath.Join(f.workDir, "site", "up"))
 		for _, dir := range []string{"root", "site/up", "site/up/site"} {
 			linked := f.issue(t, RawGrant{Origin: RawOriginFile, Scope: RawScopeDirectory, Path: dir})
-			assertError(t, f.get(t, RawPath(linked, ".env"), nil), http.StatusForbidden, CodeOutsideScope)
+			assertError(t, f.get(t, RawPath(linked, "root.txt"), nil), http.StatusForbidden, CodeOutsideScope)
 		}
 	})
 }
@@ -321,6 +351,38 @@ func TestRawRefusesOtherMethods(t *testing.T) {
 	f.h.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, RawPath(capability, "a.txt"), nil))
 	assertRawHeaders(t, rec)
 	assertError(t, rec, http.StatusMethodNotAllowed, CodeInvalidRequest)
+	if got := rec.Header().Get("Allow"); got != "GET, HEAD, OPTIONS" {
+		t.Errorf("Allow = %q", got)
+	}
+}
+
+// A page's fetch() with a header that is not CORS-safelisted, such as a
+// multi-range Range, is preceded by a preflight, which carries no credential.
+func TestRawAnswersAPreflight(t *testing.T) {
+	f := newRawFixture(t)
+
+	req := httptest.NewRequest(http.MethodOptions, RawPath("any-capability", "a.txt"), nil)
+	req.Header.Set("Origin", "null")
+	req.Header.Set("Access-Control-Request-Method", "GET")
+	req.Header.Set("Access-Control-Request-Headers", "range,x-requested-with")
+	rec := httptest.NewRecorder()
+	f.h.ServeHTTP(rec, req)
+	assertRawHeaders(t, rec)
+
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status %d, want 204: %s", rec.Code, rec.Body.String())
+	}
+	for header, want := range map[string]string{
+		"Access-Control-Allow-Methods": "GET, HEAD, OPTIONS",
+		"Access-Control-Allow-Headers": "range,x-requested-with",
+	} {
+		if got := rec.Header().Get(header); got != want {
+			t.Errorf("%s = %q, want %q", header, got, want)
+		}
+	}
+	if got := rec.Header().Get("Access-Control-Allow-Credentials"); got != "" {
+		t.Errorf("Access-Control-Allow-Credentials = %q, want none", got)
+	}
 }
 
 func TestRawCommitFile(t *testing.T) {
@@ -388,6 +450,7 @@ func TestRawCommitFile(t *testing.T) {
 	t.Run("refuses what is not in the commit or the scope", func(t *testing.T) {
 		assertError(t, f.get(t, RawPath(capability, "missing.mp4"), nil), http.StatusNotFound, CodeNotFound)
 		assertError(t, f.get(t, RawPathPrefix+capability+"/../site/clip.mp4", nil), http.StatusBadRequest, CodeInvalidPath)
+		assertError(t, f.get(t, RawPath(capability, ".env"), nil), http.StatusForbidden, CodeOutsideScope)
 	})
 }
 

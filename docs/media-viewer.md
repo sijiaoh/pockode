@@ -1,8 +1,7 @@
 # Media viewer
 
 A full-screen viewer for media that the chat, the Files tab, Git and any
-Markdown image can all open. Images and video are its kinds today; HTML is
-planned as a further kind of the same viewer, not as a viewer of its own. Audio
+Markdown image can all open. Its kinds are images, video and HTML pages. Audio
 has no stage: it plays in place ([file.md](file.md#playing-audio-and-video)).
 
 ## Key Files
@@ -16,6 +15,8 @@ has no stage: it plays in place ([file.md](file.md#playing-audio-and-video)).
 | `web/src/components/Media/imageScale.ts` | The image stage's scales: fit, actual size, ceiling, toggle |
 | `web/src/components/Media/doubleTap.ts` | Touch double-tap recognition from pointer events |
 | `web/src/components/Media/VideoStage.tsx` | The video stage: native controls, keys, the handover |
+| `web/src/components/Media/HtmlStage.tsx` | The HTML stage: the page's frame, ↻, the focus sentinel |
+| `web/src/hooks/useBackToClose.ts` | The viewer's history entry, and taking it back on close |
 
 ## Opening it
 
@@ -37,13 +38,17 @@ has no stage: it plays in place ([file.md](file.md#playing-audio-and-video)).
 A video is `kind: "video"` with an `origin` (what the stage asks a raw
 capability for) in place of `source`, the `dimensions` and `duration` the
 opener's player already knows, and an optional `handoff` (see
-[Handover](#handover)).
+[Handover](#handover)). A page is `kind: "html"` with an `origin` (a work
+directory or commit file, loaded through the capability the page in place
+uses — [its directory's, or its own](file.md#html-pages)), no
+dimensions, and an optional `revision` (see [the HTML stage](#the-html-stage)).
 
 The host owns the open state and renders the viewer while it is open. Pass
 `openInFiles` only when the item is a work-directory file *and* the host can
 navigate. Without it the viewer offers no Open in Files. The viewer runs it
 after its own history entry is gone (see below), so the host does not have to
-handle that.
+handle that. `afterClose`, for any host, runs then too, however the viewer
+closed itself (✕, Escape, Back); a host unmounting it runs nothing.
 
 **Never open the viewer from inside another `Sheet`.** Both listen for Escape on
 `document`, and `stopPropagation` does not silence a sibling listener there, so
@@ -59,6 +64,7 @@ MediaViewer            shared chrome: Sheet fullScreen, back gesture, title + ca
  └─ stage by kind      media-specific: drawing, moving, its own toolbar controls,
      ImageStage        its own loading / failure states
      VideoStage
+     HtmlStage
 ```
 
 What the viewer gets from where:
@@ -97,7 +103,8 @@ What the viewer gets from where:
   An external image has no Save: reading its bytes would be a cross-origin
   `fetch`, which fails on every host that sends no CORS headers. Its place is
   taken by **Open original**, a link to the URL in a new tab with
-  `noopener noreferrer`.
+  `noopener noreferrer`. A page saves from the URL its stage loaded
+  ([below](#the-html-stage)).
 - **The stage frame** is a focusable `<section>` that belongs to the viewer, not
   to the stage. It is the sheet's `initialFocusRef`, so focus lands on the
   content at open, even before the stage has loaded. Its `onKeyDown` forwards to
@@ -108,7 +115,9 @@ What the viewer gets from where:
   focus would stay on a toolbar button where the frame's keys never fire.
 
 A stage gets the item, the toolbar's start element to portal its own controls
-into, `keysRef`, and `onMetadata`. It owns everything about its media: how it
+into, `keysRef`, `onMetadata`, and `saveUrlRef`, where a stage that knows
+better than the item what Save downloads registers the URL (only the HTML
+stage does). It owns everything about its media: how it
 is drawn, the gestures and keys that move it, and its loading and failure states.
 
 **Loading a stage.** Each stage is a separate chunk, loaded on first use by
@@ -297,6 +306,99 @@ opener hands a mutable `{ time, playing }` in the item:
 A file rewritten while the viewer is open is a new video for both players:
 each starts over at the beginning, paused, and the handoff with them.
 
+## The HTML stage
+
+`HtmlStage` is a chunk of its own: the page in a sandboxed `<iframe>` through
+`usePageFrame`, the machine the in-place page runs on
+([file.md](file.md#html-pages)). It reads the same cached capability as the page in place,
+so opening the viewer costs no round trip, and recovers from a capability that
+died the same way. A failure shows `MediaFailureCard` (kind `page`) without
+Download, since Save is in the toolbar.
+
+- **The frame** is `absolute inset-0 size-full`, white under a light color
+  scheme, `HTML_FRAME_SANDBOX`, `referrerPolicy="no-referrer"`.
+- **No gestures, no keys, no `touch-none`.** Every touch, scroll, pinch and key
+  in the frame belongs to the page; the stage registers no `keysRef` handler.
+  Nothing conflicts, because the viewer has no swipe-to-dismiss or
+  tap-to-hide-chrome: its only controls are the chrome's, outside the frame.
+  Whether iOS hands the page every touch needs checking on a device.
+- **Toolbar.** ↻ Reload page at its start (`PageReloadButton`, the in-place
+  page bar's): it spins until the load the app started has finished and stays
+  pressable, and on a failure card it is Retry.
+- **Caption.** `HTML · 18.2 KB`; a page reports nothing to add.
+- **The notice.** A page whose linked files won't load
+  ([file.md](file.md#html-pages)) carries the opener's notice in the item
+  (`notice`), and the viewer shows the same strip under its toolbar — text
+  only, with no Port Preview, since that is a sheet and sheets do not nest.
+- **Save** downloads the URL the stage loaded the page from — for a page
+  loaded through its directory, the capability plus the file name — through
+  `saveUrlRef`, not `rawMediaUrl`, which would ask for a second capability for
+  the file alone. Only the `.html`
+  is saved, not its assets. Before the page has a URL, Save reports that it
+  has not loaded.
+- **No handover.** An opaque-origin page's scroll and state cannot be read, so
+  the viewer loads the page afresh at its entry page. The opener's frame stays
+  mounted underneath, so closing returns the user exactly where they were. Two
+  instances run at once meanwhile; a page that plays sound plays twice.
+- **A rewrite** (the item's `revision`, the opener's) reloads the viewer's
+  page, as it reloads the page in place. The opener's frame holds back until
+  the viewer has closed and its history entry is gone (`afterClose`), then
+  catches up: reloading under the viewer would be an entry after the viewer's,
+  and closing, which goes back to the entry before it, would put the opener's
+  frame back on the page from before the edit.
+
+### Focus
+
+- **Escape does nothing while focus is in the page.** Keys pressed inside a
+  cross-origin frame never reach the parent document, so the `Sheet`'s Escape
+  listener does not hear them. That is accepted, since the page may need its
+  keys (a report's search box). ✕ and the back gesture still close the viewer,
+  and Escape works again once focus is back on the chrome.
+- **The focus sentinel.** For the same reason the `Sheet`'s Tab trap never sees
+  a Tab pressed in the page, and Tab past the page's last element would leave
+  the sheet. A `tabIndex=0` element with no box sits after the frame. Focus
+  arriving there from the page (Chromium and WebKit report the `<iframe>` as
+  where it came from) goes on to the sheet's first control (✕). Focus arriving
+  from outside the stage frame — ✕, or the sheet's box — is the trap wrapping
+  Shift+Tab round to its last stop, which the sentinel is, and goes back to
+  the page's frame: to the page as a whole, since its last element cannot be
+  reached across origins. Shift+Tab out of the page lands on the stage frame,
+  inside the sheet, so nothing is needed before the frame.
+
+### History
+
+Each page the user opens inside the frame is an entry in the browser's joint
+session history, after the viewer's own. **Back** steps back through them first,
+as a browser does, and only then closes the viewer.
+
+**Closing any other way** — ✕, Escape, the opener going away — has to take the
+viewer's entry back without leaving the frame's entries behind as dead steps.
+Observed in Chromium and WebKit while this was built;
+`MediaViewer.browser.test.tsx` pins the outcome only — closing with ✕ after
+navigating in the frame lands on the opener's entry, and one Back leaves it:
+
+- Removing an `<iframe>` does **not** remove its entries. `history.back()`
+  after closing lands on the frame's previous page: a step that changes nothing
+  on screen and fires no `popstate`. It takes one silent Back for each page the
+  user opened before Back does anything. Unmounting the frame earlier changes
+  nothing, and pointing it at `about:blank` would add an entry of its own.
+- The Navigation API's `navigation.back()` goes to the window's previous
+  *top-level* entry — the page that opened the viewer — however many frame
+  entries lie in between, including when the user has already stepped back
+  through some of them. A frame still on that page (the opener's in-place one)
+  stays on the page the user had it on, provided nothing navigated it while
+  the viewer was up — which is why the opener holds back a rewrite's reload
+  until the viewer has closed (above). Chromium and WebKit take the nearest
+  such entry; a browser going to the entry's own step instead would put that
+  frame back on its first page.
+
+So `useBackToClose` closes with `navigation.back()` where the browser has it,
+as Chromium and WebKit both do, and with `history.back()` elsewhere, at the
+cost of those silent steps — and of `afterClose` (Open in Files, the opener's
+held reload) waiting out the one-second fallback, since a step onto a frame's
+entry fires no `popstate` to say the viewer's entry is gone. The router hears the traversal as an ordinary
+`popstate`. With nothing navigated in a frame the two do the same thing.
+
 ## Entry points
 
 ### Chat: attachment thumbnails
@@ -370,10 +472,25 @@ it has no picture to show.
   owns the open state and renders the viewer outside its failure branch, so
   the in-place player failing under the viewer leaves it open.
 
+### Files and Git: `PagePreview`
+
+A page rendered in place (the Files tab and a file in a commit, through
+`FileBody`) opens the viewer from a ⤢ button ("View full screen") at the end of
+the page bar, after ↻.
+
+- **A click on the frame does not open it.** Clicks belong to the page.
+- **Offered once the frame has a URL**, and not on a failure card.
+- **No Open in Files**, for the reason `ImagePreview` gives. `PagePreview` owns
+  the open state and renders the viewer outside the frame's branches, so the
+  in-place page failing or reloading under the viewer leaves it open.
+
 ## Not in v1
 
 Swiping between the images of one strip, swipe-down to dismiss, hiding the
-chrome on tap, rotation, and pixelated rendering past 100%.
+chrome on tap, rotation, and pixelated rendering past 100%. For a page: passing
+its place or state between the in-place frame and the viewer, pausing the
+in-place frame while the viewer is open, and desktop-width rendering on a
+phone.
 
 ## Tests
 
@@ -383,10 +500,14 @@ chrome on tap, rotation, and pixelated rendering past 100%.
   the keys, and refitting after a resize. Gestures are asserted on where the
   image lands on screen, relative to the measured frame.
   Its video case plays a 64×36 VP9 clip (`src/test/clip-64x36.webm`) and checks
-  the element spans the frame, so the picture is fitted and enlarged.
+  the element spans the frame, so the picture is fitted and enlarged. Its HTML
+  cases open two linked pages (`src/test/page/`) on the window's own history:
+  closing with ✕ after navigating in the frame lands on the opener's entry and
+  one Back leaves it, and Tab and Shift+Tab across the page stay in the sheet.
 - `MediaViewer.test.tsx` (jsdom) covers the chrome: Escape, Open in Files and its
   ordering against the history entry, Save (a video's straight from its
-  capability, never a Blob), the video caption, and the failed-load retry.
+  capability, never a Blob), the video caption, the failed-load retry, and
+  `afterClose` running once the entry is gone, after ✕ and after Back.
 - `VideoStage.test.tsx` covers the stage's keys (and leaving the `<video>`'s own
   to it) and both halves of the handover on the stage's side.
 - `imageScale.test.ts` and `doubleTap.test.ts` cover the pure parts.
@@ -406,3 +527,9 @@ chrome on tap, rotation, and pixelated rendering past 100%.
   across the frame before metadata, then a portrait clip
   (`src/test/clip-72x128.webm`) at its own size, never enlarged, and capped
   at 70vh.
+- `Files/PagePreview.test.tsx` covers the page way in: ⤢ only once the frame
+  has a URL and never on a failure card, the viewer loading through the same
+  capability with the in-place frame left mounted and no Open in Files, Save
+  from the stage's own URL, and a rewrite reloading the viewer's page at once
+  and the in-place one only once the viewer has closed, and the notice shown
+  in the viewer as text only.

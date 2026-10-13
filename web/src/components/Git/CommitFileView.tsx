@@ -1,5 +1,5 @@
 import { useNavigate } from "@tanstack/react-router";
-import { Type } from "lucide-react";
+import { Code, Type } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { useCommitFile } from "../../hooks/useCommitFile";
 import { useFileDownload } from "../../hooks/useFileDownload";
@@ -68,6 +68,7 @@ function CommitFileView({ hash, path }: Props) {
 	};
 
 	const shortHash = hash.substring(0, 7);
+	const isPage = state?.kind === "page";
 
 	return (
 		<div className="flex flex-1 flex-col overflow-hidden">
@@ -80,6 +81,7 @@ function CommitFileView({ hash, path }: Props) {
 			<ContentView
 				isLoading={isLoading}
 				error={error instanceof Error ? error : null}
+				fill={isPage && !plain}
 			>
 				{/* One banner for both facts: which version this is and that it
 				    cannot be changed. Two would read as two separate problems. */}
@@ -109,14 +111,23 @@ function CommitFileView({ hash, path }: Props) {
 					{/* Absent rather than present and inert wherever it could not
 					    change anything: an image or a binary has no rendering to drop
 					    to source, and a file past `HIGHLIGHT_LIMIT` is already plain
-					    with a banner that says so. The bar itself stays either way —
-					    the hash is identity, not an action. */}
+					    with a banner that says so. A page, of any size, has: its
+					    source. The bar itself stays either way — the hash is
+					    identity, not an action. */}
 					{state?.kind === "text" && state.highlight && (
 						<ToggleIconButton
 							icon={Type}
 							pressed={plain}
 							onClick={() => setPlain((v) => !v)}
 							label={plain ? "Show rendered" : "Show plain text"}
+						/>
+					)}
+					{isPage && (
+						<ToggleIconButton
+							icon={Code}
+							pressed={plain}
+							onClick={() => setPlain((v) => !v)}
+							label={plain ? "Show page" : "Show source"}
 						/>
 					)}
 					{state && <DownloadButton download={download} />}

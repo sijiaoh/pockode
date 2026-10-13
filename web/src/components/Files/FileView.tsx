@@ -1,7 +1,7 @@
 import { ConfirmDialog } from "@pockode/shared";
 import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
-import { Loader2, Pencil, PencilLine, Trash2 } from "lucide-react";
+import { Code, Loader2, Pencil, PencilLine, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { contentsQueryKey, useContents } from "../../hooks/useContents";
 import { useFileDownload } from "../../hooks/useFileDownload";
@@ -20,7 +20,12 @@ import {
 } from "../../utils/fileView";
 import { parentDir, splitPath } from "../../utils/path";
 import { FilePageHeader } from "../Layout/PageHeader";
-import { BottomActionBar, ContentView, getActionIconButtonClass } from "../ui";
+import {
+	BottomActionBar,
+	ContentView,
+	getActionIconButtonClass,
+	ToggleIconButton,
+} from "../ui";
 import EntryNameDialog from "./EntryNameDialog";
 import FileBody from "./FileBody";
 import { DownloadButton, LargeDownloadDialog } from "./FileDownloadControls";
@@ -46,6 +51,10 @@ function FileView({ path, onBack }: Props) {
 	const [isRenaming, setIsRenaming] = useState(false);
 	const [renameError, setRenameError] = useState<string | null>(null);
 	const [isDeleting, setIsDeleting] = useState(false);
+	// A page's source rather than the page. Kept across files, as the commit
+	// view's toggle is: someone reading several pages' source in a row should
+	// not have to press it again for each.
+	const [showSource, setShowSource] = useState(false);
 	// One banner for every file-level action: two stacked error bars would read
 	// as two separate failures.
 	const [actionError, setActionError] = useState<string | null>(null);
@@ -168,6 +177,7 @@ function FileView({ path, onBack }: Props) {
 	// failed to load there is nothing to act on at all.
 	const canEdit = state !== null && canEditFileView(state);
 	const { fileName } = splitPath(path);
+	const isPage = state?.kind === "page";
 
 	return (
 		<div className="flex flex-1 flex-col overflow-hidden">
@@ -175,6 +185,7 @@ function FileView({ path, onBack }: Props) {
 			<ContentView
 				isLoading={isLoading}
 				error={error instanceof Error ? error : null}
+				fill={isPage && !showSource}
 			>
 				{actionError && (
 					<div className="border-b border-th-error/20 bg-th-error/10 px-4 py-2 text-sm text-th-error">
@@ -185,6 +196,7 @@ function FileView({ path, onBack }: Props) {
 					<FileBody
 						state={state}
 						path={path}
+						plain={isPage && showSource}
 						downloadAction={{
 							label: download.label,
 							onClick: download.toggle,
@@ -226,6 +238,14 @@ function FileView({ path, onBack }: Props) {
 							<PencilLine className="h-4 w-4" aria-hidden="true" />
 						</button>
 						<DownloadButton download={download} disabled={isDeleting} />
+						{isPage && (
+							<ToggleIconButton
+								icon={Code}
+								pressed={showSource}
+								onClick={() => setShowSource((v) => !v)}
+								label={showSource ? "Show page" : "Show source"}
+							/>
+						)}
 						{/* Last on purpose: the destructive action is the one a thumb
 						    should not reach by accident on a small screen. */}
 						<button

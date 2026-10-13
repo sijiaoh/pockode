@@ -7,8 +7,9 @@ import {
 	useState,
 } from "react";
 import { useRawMediaSource } from "../../hooks/useRawMediaSource";
-import { readError } from "../../lib/fileDownload";
+import { isGone, probeRaw } from "../../lib/rawProbe";
 import type { ContentOrigin } from "../../types/contents";
+import { asError } from "../../utils/errorMessage";
 import type { PlayableKind } from "../../utils/fileView";
 import type { MediaMetadata, PlaybackHandoff } from "./types";
 
@@ -69,10 +70,6 @@ function initialState(identity: string): State {
 	return { identity, busy: false, failure: null, metadata: null };
 }
 
-function asError(error: unknown): Error {
-	return error instanceof Error ? error : new Error(String(error));
-}
-
 /**
  * A media element streamed from a raw capability, kept playing across the
  * capability's death (docs/file.md, "Playing audio and video").
@@ -98,7 +95,10 @@ export function useMediaPlayback(
 	enabled: boolean,
 	handoff?: PlaybackHandoff,
 ) {
-	const source = useRawMediaSource(media.origin, enabled);
+	const source = useRawMediaSource(
+		{ origin: media.origin, scope: "file" },
+		enabled,
+	);
 	const { src, refresh } = source;
 	const identity = `${source.key}:${media.size}:${media.mime}`;
 
@@ -333,33 +333,16 @@ async function probe(
 	lostOnTheWay: boolean,
 	signal: AbortSignal,
 ): Promise<MediaFailure> {
-	try {
-		const response = await fetch(src, {
-			headers: { Range: "bytes=0-0" },
-			signal,
-		});
-		if (response.ok) {
-			void response.body?.cancel();
-			return lostOnTheWay
-				? {
-						kind: "load",
-						error: new Error("The connection dropped while loading."),
-					}
-				: { kind: "unplayable" };
-		}
-		const error = await readError(response.clone());
-		const code = await response
-			.json()
-			.then((body: unknown) =>
-				body !== null && typeof body === "object" && "code" in body
-					? body.code
-					: undefined,
-			)
-			.catch(() => undefined);
-		return response.status === 404 && code === "not_found"
-			? { kind: "gone" }
-			: { kind: "load", error };
-	} catch (error) {
-		return { kind: "load", error: asError(error) };
+	const answer = await probeRaw(src, signal);
+	if (answer.ok) {
+		return lostOnTheWay
+			? {
+					kind: "load",
+					error: new Error("The connection dropped while loading."),
+				}
+			: { kind: "unplayable" };
 	}
+	return isGone(answer)
+		? { kind: "gone" }
+		: { kind: "load", error: answer.error };
 }

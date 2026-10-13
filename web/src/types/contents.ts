@@ -54,6 +54,13 @@ export type ContentOrigin =
 	 */
 	| { kind: "attachment"; sessionId: string; id: string; worktree: string };
 
+/**
+ * Content with a tree around it — a work directory or a commit — which is what
+ * a page needs for its assets and a directory capability reaches. An
+ * attachment store is flat.
+ */
+export type TreeOrigin = Exclude<ContentOrigin, { kind: "attachment" }>;
+
 export type ContentsResponse = Entry[] | FileContent;
 
 export function isFileContent(
