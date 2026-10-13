@@ -3,8 +3,9 @@ import { CircleAlert, Download, ExternalLink, Globe } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { useBackToClose } from "../../hooks/useBackToClose";
 import { imageSourceBlob } from "../../hooks/useImageSrc";
-import { rawMediaUrl } from "../../hooks/useRawMediaSource";
-import { saveBlob, saveUrl } from "../../lib/fileDownload";
+import { saveRawFile } from "../../hooks/useRawMediaSource";
+import { saveBlob } from "../../lib/fileDownload";
+import { saveCheckedUrl } from "../../lib/rawProbe";
 import { errorMessage } from "../../utils/errorMessage";
 import {
 	formatExternalImageCaption,
@@ -107,10 +108,10 @@ function caption(item: MediaItem, loaded: MediaMetadata | null): string {
 /**
  * Saves the item under `saveAs`. An image's bytes are read whole — usually a
  * cache hit on what the `<img>` already read. A video goes to disk straight
- * from its capability as it arrives: a long recording does not belong in a
- * Blob. A page is saved from the URL its stage loaded it from, under the
- * directory capability it already holds, rather than a second capability for
- * the file alone; only the `.html`, not its assets.
+ * from its capability as it arrives (`saveRawFile`): a long recording does
+ * not belong in a Blob. A page is saved from the URL its stage loaded it
+ * from, under the directory capability it already holds, rather than a second
+ * capability for the file alone; only the `.html`, not its assets.
  */
 async function saveItem(
 	queryClient: ReturnType<typeof useQueryClient>,
@@ -122,11 +123,11 @@ async function saveItem(
 			saveBlob(await imageSourceBlob(queryClient, item.source), item.saveAs);
 			return;
 		case "video":
-			saveUrl(await rawMediaUrl(queryClient, item.origin), item.saveAs);
+			await saveRawFile(queryClient, item.origin, item.saveAs);
 			return;
 		case "html":
 			if (!stageUrl) throw new Error("the page has not loaded");
-			saveUrl(stageUrl, item.saveAs);
+			await saveCheckedUrl(stageUrl, item.saveAs);
 			return;
 	}
 }
@@ -171,6 +172,9 @@ export function MediaViewer({
 	const [toolbarStart, setToolbarStart] = useState<HTMLElement | null>(null);
 	const [loaded, setLoaded] = useState<MediaMetadata | null>(null);
 	const [saveError, setSaveError] = useState<string | null>(null);
+	// A save waits on the server before the browser takes it — a capability,
+	// the byte it checks first — and a second press meanwhile would save twice.
+	const savingRef = useRef(false);
 	const { state: stage, retry } = useStage(item.kind);
 	// An external image's bytes are only ever the `<img>`'s: reading them for
 	// Save would be a cross-origin `fetch`, which fails on every host that sends
@@ -181,11 +185,15 @@ export function MediaViewer({
 			: null;
 
 	const save = async () => {
+		if (savingRef.current) return;
+		savingRef.current = true;
 		setSaveError(null);
 		try {
 			await saveItem(queryClient, item, saveUrlRef.current);
 		} catch (err) {
 			setSaveError(`Couldn't save ${item.name}: ${errorMessage(err)}`);
+		} finally {
+			savingRef.current = false;
 		}
 	};
 

@@ -8,10 +8,7 @@ import { useRouteState } from "../../hooks/useRouteState";
 import { overlayToNavigation } from "../../lib/navigation";
 import { getFileViewState } from "../../utils/fileView";
 import FileBody from "../Files/FileBody";
-import {
-	DownloadButton,
-	LargeDownloadDialog,
-} from "../Files/FileDownloadControls";
+import { DownloadButton } from "../Files/FileDownloadControls";
 import { FilePageHeader } from "../Layout/PageHeader";
 import { BottomActionBar, ContentView, ToggleIconButton } from "../ui";
 
@@ -40,7 +37,6 @@ function CommitFileView({ hash, path }: Props) {
 		path,
 		worktree,
 		hash,
-		size: file?.size,
 		onError: setDownloadError,
 	});
 
@@ -134,7 +130,6 @@ function CommitFileView({ hash, path }: Props) {
 					<div className="ml-auto text-xs text-th-text-muted">{shortHash}</div>
 				</div>
 			</BottomActionBar>
-			{file && <LargeDownloadDialog download={download} size={file.size} />}
 		</div>
 	);
 }

@@ -34,9 +34,9 @@ served through it; it is addressed by id in the session's own attachment store
 | Entry-action helpers | `web/src/hooks/useTakenNames.ts`, `web/src/lib/fileCache.ts` | Which names a directory has spoken for; the cache work a rename or a delete implies |
 | Search UI state | `web/src/hooks/useFileSearch.ts`, `web/src/lib/filesSearchStore.ts` | Debounce + query cache, persisted options |
 | RPC actions | `web/src/lib/rpc/file.ts` | `getFile`, `writeFile`, `createFile`, `deleteFile`, `renameFile`, `searchFiles`, `isAlreadyExistsError` |
-| HTTP transfer client | `web/src/lib/fileDownload.ts`, `web/src/lib/fileUpload.ts` | Authenticated download / upload (see [Downloading](#downloading), [Uploading](#uploading)) |
+| HTTP transfer client | `web/src/lib/fileDownload.ts`, `web/src/lib/rawProbe.ts`, `web/src/lib/fileUpload.ts` | Handing a download to the browser and wording its failures, upload (see [Downloading](#downloading), [Uploading](#uploading)) |
 | Media playback | `web/src/components/Files/MediaPreview.tsx`, `web/src/components/Media/useMediaPlayback.ts`, `web/src/hooks/useRawMediaSource.ts`, `web/src/components/Media/exclusivePlayback.ts` | Inline audio and video streamed from a raw capability, its recovery, and one sound at a time (see [Playing audio and video](#playing-audio-and-video)) |
-| Download action | `web/src/hooks/useFileDownload.ts`, `web/src/components/Files/FileDownloadControls.tsx` | The viewer's Download — cancel, large-file confirmation, error — shared by `FileView` and `CommitFileView` |
+| Download action | `web/src/hooks/useFileDownload.ts`, `web/src/components/Files/FileDownloadControls.tsx`, `saveRawFile` in `web/src/hooks/useRawMediaSource.ts` | The viewer's Download — check, hand-over, cancel, error — shared by `FileView` and `CommitFileView`; `saveRawFile` is every streamed Save that gets its own capability |
 | Upload queue state | `web/src/lib/uploadStore.ts` | Queue, concurrency, retry, worktree scope |
 | Drag and drop | `web/src/hooks/useFileDragZone.ts`, `web/src/components/Files/useFileDrop.ts`, `web/src/hooks/useFileDropGuard.ts` | What every drop zone shares (file detection, the depth count, folder splitting, claiming the drag); the tree's drop target resolution on top of it; the window-level drop backstop |
 
@@ -297,10 +297,11 @@ file in pieces.
 
 Every route here but `/api/raw` sits behind the same bearer middleware as the
 rest of `/api` (`Authorization: Bearer <credential>` — a session token from the
-app, the password from a script) — they carry no auth of their own. A download
-therefore cannot be a plain `<a href>`; the client fetches it with the header
-and saves the response itself. `/api/raw` exists for the elements that cannot
-send a header: its credential is a capability in the path.
+app, the password from a script) — they carry no auth of their own, so a
+plain `<a href>` or a `<video src>` cannot reach them. `/api/raw` exists for
+what cannot send a header — a player, a page's frame, and the link the app's
+own Download clicks ([Downloading](#downloading)): its credential is a
+capability in the path.
 
 Each but `/api/raw` takes an optional `worktree` query parameter (omitted or
 empty = the main worktree), matching the worktree a WebSocket connection binds at auth.
@@ -345,11 +346,11 @@ from before the last edit, which nothing on either side would notice. Refusing
 storage also keeps workspace files out of the disk cache, which outlives the
 session that could read them.
 
-A `Range` request is answered with `206` and `Content-Range`. That is not just
-an extra: it is what gives the client a progress indication, and what lets a
-download be read in bounded pieces rather than held whole. Keeping a large
-response from monopolising a relay tunnel is no longer part of the reason —
-yamux's per-stream windows do that on their own ([Transfer](#transfer)).
+A `Range` request is answered with `206` and `Content-Range`, so a script can
+resume an interrupted transfer. The app reads an image's bytes here
+([Loading image bytes](#loading-image-bytes)) and saves nothing through it: its
+Download goes through `/api/raw`, which a link can reach
+([Downloading](#downloading)).
 
 | Status | Code | When |
 |--------|------|------|
@@ -368,15 +369,14 @@ yamux's per-stream windows do that on their own ([Transfer](#transfer)).
 | `worktree` | | Worktree name |
 
 That version is not in the work directory, so the download endpoint cannot
-reach it; this one serves it instead, for two readers: the bytes
-`git.show.file` describes but does not carry for a raster image
-([git.md](git.md#historical-file-contents)), and the whole file when the user
-downloads it from a commit ([Downloading](#downloading)). The headers are the
-download endpoint's, with a `Content-Length` and **no `Range`** — the content
-comes off a `git cat-file` pipe rather than a seekable file, so answering a
-range would mean running git again for every chunk and discarding everything
-before it. A commit's file is therefore always one unbounded response, without
-the bounded pieces the download endpoint gives. git is stopped when the request
+reach it; this one serves it instead: the bytes `git.show.file` describes but
+does not carry for a raster image ([git.md](git.md#historical-file-contents)).
+Downloading a commit's file does not come here but goes through `/api/raw`
+([Downloading](#downloading)). The headers are the download endpoint's, with a
+`Content-Length` and **no `Range`** — the content comes off a `git cat-file`
+pipe rather than a seekable file, so answering a range would mean running git
+again for every request and discarding everything before it, and an image is
+read whole anyway. git is stopped when the request
 is cancelled.
 
 | Status | Code | When |
@@ -543,7 +543,16 @@ scope and why any origin may read it are in
 [code/authentication.md](code/authentication.md#raw-capabilities-urls-a-browser-element-loads-by-itself).
 
 Unlike the download endpoint, the content is served **as what it is**, since the
-element has to play or render it. The type comes from the bytes, as for
+element has to play or render it. A `download` query parameter
+(`filetransfer.RawDownloadParam`, any value) adds `Content-Disposition:
+attachment` to any response that reaches the content, for the link that saves
+a file rather than an element that shows it ([Downloading](#downloading)). It
+names no file: an attachment's URL names it by its id, and a filename in the
+header would outrank the one the link gives. It changes nothing else — not the
+capability, not the other headers — and being in the URL it is a cache key of
+its own, so a player's cached response is never handed to a download.
+
+The type comes from the bytes, as for
 `file.get`'s `mime`. Where sniffing gives up, `file.get`'s extension table
 names media, and a second one adds what a page loads
 (`contents.DetectServedMIME`): a stylesheet or a script sniffs as plain text,
@@ -559,13 +568,13 @@ headers every response carries, errors included. The same page lists them and
 says why.
 
 **`Range` works for every origin**, a commit's file included. A video player
-will not play without it. The commit endpoint above declines that cost for a
-download read in chunks. Here a commit's file is a `ReadSeeker` over git's
-stream: seeking forward discards up to the offset, and seeking backward runs git
-again. A player asks for a handful of ranges, and the sniffed head is kept, so
-reading from the start again costs nothing. Revalidation uses `Last-Modified`
-for a file on disk and an `ETag` for a commit's file, whose content at a path
-never changes.
+will not play without it. The commit endpoint above declines that cost. Here a
+commit's file is a `ReadSeeker` over git's stream: seeking forward discards up
+to the offset, and seeking backward runs git again. A player asks for a handful
+of ranges, a download for its first byte and then the whole, and the sniffed
+head is kept, so reading from the start again costs nothing. Revalidation uses
+`Last-Modified` for a file on disk and an `ETag` for a commit's file, whose
+content at a path never changes.
 
 | Status | Code | When |
 |--------|------|------|
@@ -831,8 +840,9 @@ described it — `file.get` → `/api/files/download`, `git.show.file` →
 `/api/git/show/file`, `attachment.get` / `session_view.attachment` →
 `/api/chat/attachments` (`lib/imageFetch.ts`). The client keeps that origin
 beside the description (`ContentOrigin`) because the server sends no URL. Like a
-download, the read carries the bearer header, so it is a `fetch` turned into an
-object URL rather than an `<img src>` pointing at the endpoint; a `401` logs out.
+The read carries the bearer header ([Transfer](#transfer)), so it is a `fetch`
+turned into an object URL rather than an `<img src>` pointing at the endpoint; a
+`401` logs out.
 
 - **Typed from the description, never from the response.** The endpoint answers
   `application/octet-stream`, so the Blob is retyped to the sniffed `mime` — and
@@ -1068,83 +1078,100 @@ over `Media/usePageFrame.ts`). Diffs and chat attachments still show text.
 
 ### Downloading
 
-Download sits between Edit and Delete and is available in every state, from
-`GET /api/files/download` in all of them (`lib/fileDownload.ts`). Reusing the
-content already in hand for `text` (or the Blob cached for an image) would save
-a request, but it
-would mean two ways of producing a file and would trust `IsBinary`'s UTF-8 check
-to keep being the thing that decides which one runs: the day a non-UTF-8 file
-reached the `text` branch, the download would quietly save a corrupted copy.
-There is no size limit on the endpoint and it streams from disk, so one path to
-the real bytes costs little and cannot go wrong that way.
-
-A file as it stood in a commit downloads the same way — the same card action,
-bottom-bar icon, cancel, confirmation and banner, shared through
-`hooks/useFileDownload.ts` — and by the same rule, from its own endpoint,
-`GET /api/git/show/file`, rather than from the content `git.show.file` returned.
-
+Download sits between Edit and Delete and is available in every state.
 `binary` and `too-large` also carry the action on their placeholder card. Those
 are the files that cannot be previewed at all, which makes them the ones most
 likely to be wanted elsewhere, and a bare icon in the bottom bar is easy to miss
-under a card that says the file cannot be shown.
+under a card that says the file cannot be shown. A file as it stood in a commit
+downloads the same way — the same card action, bottom-bar icon, cancel and
+banner, shared through `hooks/useFileDownload.ts`.
 
-The bearer header is why this cannot be a plain link (see
-[Transfer](#transfer)): the response is fetched, assembled into a Blob, and
-handed to the browser as an object URL. A `401` ends the session rather than the
-download — the credential every other request carries has just been refused —
-so it logs out instead of showing a banner naming a status code.
+Every state downloads the real bytes from the server, never the content already
+in hand. Reusing the `text` (or the Blob cached for an image) would save a
+request, but it would mean two ways of producing a file and would trust
+`IsBinary`'s UTF-8 check to keep being the thing that decides which one runs:
+the day a non-UTF-8 file reached the `text` branch, the download would quietly
+save a corrupted copy.
 
-**Reads are chunked**, 4 MiB per `Range` request — except a commit's file,
-whose endpoint has no `Range` ([Transfer](#transfer)) and answers with the
-`200` described below. What chunking buys now is a
-bound on every response — none carries more than 4 MiB, though the chunks
-collected are kept until the file is whole (hence the confirmation past
-200 MiB below) — and a transfer that can be abandoned partway. It began as
-a workaround for the old relay transport, which read an unchunked response into
-memory whole; that reason is gone, but one extra round trip per 4 MiB is a low
-price for the two that remain.
+**The browser streams the file to disk; the app never holds it.**
+`saveRawFile` (`hooks/useRawMediaSource.ts`) gets a [raw
+capability](code/authentication.md#raw-capabilities-urls-a-browser-element-loads-by-itself)
+for the file — a `file` or `commit` origin, `file` scope — and clicks a link
+to it (`saveUrl`, `lib/fileDownload.ts`). A file can be hundreds of
+megabytes, more than a phone's tab survives holding, and a link needs no
+`Authorization` header, which is why it is `/api/raw` and not
+`/api/files/download` or `/api/git/show/file` ([Transfer](#transfer)). The
+media viewer's Save for a video and the chat's Save for audio and video use it
+too; a page's Save does the same check and hand-over on the URL its stage
+already holds (`saveCheckedUrl`,
+[media-viewer.md](media-viewer.md#the-html-stage)). Only an image is saved
+from a Blob (`saveBlob`), because its bytes are already in memory to be shown.
+It works through the relay as the players do, on the same route.
 
-Three details make the assembly honest.
+- **Which capability.** The one the players hold for the file, while it has
+  more than 30 seconds to live, so a download does not put a new `src` under a
+  playing video; otherwise a new one.
+- **Checked before it is handed over.** Once the link is clicked the browser
+  owns the transfer and reports nothing back, so one byte is asked for first
+  (`Range: bytes=0-0`, `lib/rawProbe.ts`, the probe the players use; an empty
+  file answers `200`). A dead capability (`capability_not_found` — expired,
+  evicted, or its session ended) is renewed once, silently. Any other failure
+  — the file gone, not a file, out of scope, the server or relay out of reach
+  — is thrown before anything is saved, worded from the response `code` where
+  there is one (`readError`) and otherwise from the status or the network
+  error, so it is never left to fail out of sight or be saved as an error body
+  under the file's name.
+- **Asked for as an attachment.** The link names the file with its
+  `download` attribute, which works because the URL is same-origin in every
+  deployment. It also carries `?download=1`, so the server answers
+  `Content-Disposition: attachment` ([the endpoint](#transfer)): a browser that
+  ignores the attribute — a dev build pointed elsewhere by
+  `VITE_API_BASE_URL`, or a type it would rather preview — still saves rather
+  than opens it, named by the URL's last segment.
+- **From the worktree it was pressed in.** A capability for a file or a commit
+  reads from the connection's worktree, and one asked for during a switch may
+  still be bound to the worktree being left; `raw.capability` says which
+  ([why](code/websocket-rpc.md#raw-capabilities)). `saveRawFile` notes the
+  store's worktree when it starts and uses only a capability bound to it: one
+  bound to another is renewed once, and still wrong after that fails with
+  "The worktree is still switching. Try again in a moment." A switch made while
+  the save is being checked fails it with "The worktree changed before the
+  download started." (in the Files tab the switch cancels it first, as
+  navigating away does). It never saves the same path from the other worktree
+  under this one's name.
+- **A link out of the project is not downloaded.** A capability never follows
+  a symlink out of the work directory, so such a file is refused with
+  `outside_scope`, worded "This file can't be read from here — it may link to
+  outside the project, or not be readable". That is the capability's boundary
+  ([Security](#security)), kept rather than worked around through the bearer
+  routes, which do follow the link.
 
-Each chunk after the first carries `If-Unmodified-Since` with the previous
-response's `Last-Modified`, so a file rewritten mid-download is refused with a
-`412` instead of being spliced into a mixture of two versions. **Not
-`If-Range`**, which detects the same thing but answers it by sending the whole
-new file — and one unbounded response is precisely what the chunking above
-exists to prevent, so the mechanism guarding the download would undo it.
-`Last-Modified` is a weak validator (one-second
-granularity, and the endpoint sends no `ETag`), so an in-place rewrite that
-keeps the file's size and lands in the same second as the previous chunk's mtime
-still slips through; closing that would take a strong validator from the server.
+**Progress and cancelling belong to the browser.** The spinner that replaces
+the icon, and "Cancel download" on a second click, cover only getting the
+capability and the one-byte check. From the click on, progress, cancelling and
+retrying are in the browser's own download UI (iOS Safari asks first). The app
+shows no byte progress, deliberately: JS cannot see a transfer it does not
+hold, and holding it is what this avoids. A failure after the hand-over — the
+connection dropping mid-transfer — is the browser's to show. For the same
+reason there is no size confirmation: nothing is held in memory, and an
+interrupted download is the browser's to resume or retry: the route serves
+`Range` and a validator (`Last-Modified`, or an `ETag` for a commit's file), so
+a browser that resumes can, while the capability lives.
 
-Every chunk is appended at the offset its own `Content-Range` claims, never at
-the one that was asked for — a chunk that lands anywhere else is refused,
-because concatenating it would produce a file that looks whole and is not.
+Navigating to another file cancels a download still being checked, rather than
+letting it reach the browser and save the file the user has left; neither
+cancel reports anything, since both are the user's own doing. Failures share
+one banner with Delete (`actionError`) rather than stacking a second error bar,
+and name the cause from the response `code` — except `internal`, which keeps
+the server's technical detail, a fault the user cannot act on being the one
+where detail matters most.
 
-And a response that is not partial content is read for what it is rather than
-appended. A `200` means the `Range` went unanswered — by a server that ignored
-it, or by something in between that stripped the header — so its body is one
-whole, self-consistent file and replaces whatever was collected. A `416`
-reporting zero bytes is an empty file, the one case a range cannot be satisfied
-with nothing wrong; one reporting any other size is a file that shrank
-mid-download; and one reporting no size at all names the offset it refused
-instead of guessing which of those it was. An empty file may draw either the
-`200` or the `416` — that is the server's choice, not something worth depending
-on.
-
-Downloading shows a spinner in place of the icon and cancels on a second click.
-Navigating to another file cancels it too, rather than letting a transfer the
-user has left behind finish and save itself; neither reports anything, since
-both are the user's own doing. Failures share one banner with Delete
-(`actionError`) rather than stacking a second error bar, and name the cause from
-the response `code` — except `internal`, which keeps the server's technical
-detail, a fault the user cannot act on being the one where detail matters most.
-Past 200 MiB the download is confirmed first, quoting the size and then what it
-costs: the file is assembled whole before any of it is saved, and an
-interruption leaves nothing to resume from — the next attempt starts at the
-first byte again. It deliberately stops short of saying the browser holds it all
-in memory: where a Blob is kept is the browser's own business, and the answer
-does not turn on it.
+The download is one streamed `GET` from a file the server has open, with no
+check that the file stayed the same throughout. A save that replaces the file
+(write to a temporary file, rename over) leaves the download reading the old
+content whole, where an open file can be renamed (Linux and macOS); a rewrite
+in place while it runs can save a mixture of the two versions
+([Known transfer limits](#known-transfer-limits)).
 
 ## Entry actions
 
@@ -1300,9 +1327,11 @@ only asked to change a name. And the navigation **replaces** rather than pushes:
 nobody navigated, so a pushed entry would do nothing but point Back at a path
 that no longer resolves.
 
-Two consequences are left alone. A download in flight starts failing on its next
-range request — the rename does not change mtime, so `If-Unmodified-Since`
-cannot catch it — and says so in its banner; the download can simply be retried.
+Two consequences are left alone. A download the browser already has keeps
+reading the file the server opened, where the system lets an open file be
+renamed (Linux and macOS), and is saved under the old name; one still being
+checked is cancelled by the repoint, silently, as navigating away cancels it
+([Downloading](#downloading)).
 Uploads still queued for a renamed folder get `not_found` on their own rows and
 can be retried from there, exactly as they would if the folder had been deleted.
 
@@ -1510,7 +1539,7 @@ to send it a second time.
 
 `XMLHttpRequest`, not `fetch`: `fetch` reports nothing while a request body is
 going out, and `xhr.upload.onprogress` is what the per-file progress bar is made
-of. Authentication is the same `authHeaders()` the download uses, and a `401`
+of. Authentication is the same `authHeaders()` an image read uses, and a `401`
 ends the session the same way.
 
 **Three files at a time** (`uploadStore.ts`). A browser allows six connections
@@ -1605,10 +1634,12 @@ read as a tap that did nothing.
 Two gaps rather than decisions, collected here because each of them is easy to
 rediscover as a bug:
 
-- **`Last-Modified` is a weak validator**, so a file rewritten mid-download is
-  caught in every case but one: an in-place rewrite that keeps the file's size
-  and lands in the same second as the previous chunk's timestamp. Closing that
-  needs a strong validator from the endpoint — see [Downloading](#downloading).
+- **A file rewritten in place mid-download is not caught**: the download is
+  one streamed response the browser owns, so nothing compares the file's
+  versions across it, and the saved file can mix the two. A save by rename is
+  unaffected where an open file can be renamed — see
+  [Downloading](#downloading). Catching it would mean reading
+  in validated pieces again, which is the in-memory download this replaced.
 - **An upload's destination directory still follows symlinks**, though the file
   being written does not — see [Security](#security).
 
@@ -1635,12 +1666,15 @@ Search applies the same validation to its `path` scope, and never follows
 symlinks (checked with `Lstat`) — following one could return content from
 outside the workspace.
 
-The transfer routes inherit that same behavior on the read side — a download
-stats with `Stat`, exactly as `file.get` does — but not on the write side. The
-raw endpoint is an exception on the read side as well: it opens a
-work-directory file through an `os.Root` and refuses a link out of a
+The transfer routes inherit that same behavior on the read side —
+`/api/files/download` stats with `Stat`, exactly as `file.get` does — but not
+on the write side. The raw endpoint is an exception on the read side as well:
+it opens a work-directory file through an `os.Root` and refuses a link out of a
 capability's scope
-([why](code/authentication.md#raw-capabilities-urls-a-browser-element-loads-by-itself)). An
+([why](code/authentication.md#raw-capabilities-urls-a-browser-element-loads-by-itself)).
+The app's Download goes through it, so a file that links out of the project
+cannot be downloaded from the app, though it still shows in the viewer
+(`file.get` and the image read follow the link; [Downloading](#downloading)). An
 upload replaces a **regular file** and nothing else: it checks the destination
 name with `Lstat`, so a symlink is the link itself rather than what it points
 at, and answers `409` for it even with `overwrite=true`. Following one would

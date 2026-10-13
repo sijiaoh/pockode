@@ -24,6 +24,7 @@ const rawCapability = vi.fn(
 				? `/api/raw/cap${++issued}/`
 				: `/api/raw/cap${++issued}/index.html`,
 		expiresAt: Date.now() + 4 * 60 * 60 * 1000,
+		worktree: "",
 	}),
 );
 

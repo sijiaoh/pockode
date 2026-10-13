@@ -849,7 +849,9 @@ Saving an attachment does not reach the HTTP download route either, since there
 is no path to ask it with: the [media viewer](../media-viewer.md)'s Save writes
 the content the client already fetched — the image Blob cached when the
 thumbnail read it, or an SVG's text back out of its data URL
-(`imageSourceBlob`, `web/src/hooks/useImageSrc.ts`).
+(`imageSourceBlob`, `web/src/hooks/useImageSrc.ts`) — and an audio or video
+attachment is streamed from a raw capability that names it by session and id
+([file.md](../file.md#downloading)).
 
 The one crossing is the `unavailable` fallback above, where a block naming a
 file that *is* in the work directory is read through `file.get`. That direction

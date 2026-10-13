@@ -42,7 +42,7 @@ func (h *rpcMethodHandler) handleRawCapability(ctx context.Context, conn *jsonrp
 		return
 	}
 
-	result := rpc.RawCapabilityResult{Path: filetransfer.RawEntryPath(capability, grant), ExpiresAt: expiresAt}
+	result := rpc.RawCapabilityResult{Path: filetransfer.RawEntryPath(capability, grant), ExpiresAt: expiresAt, Worktree: grant.Worktree}
 	if err := conn.Reply(ctx, req.ID, result); err != nil {
 		h.log.Error("failed to send raw capability response", "error", err)
 	}

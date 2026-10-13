@@ -1,6 +1,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useWSStore, wsActions } from "../../lib/wsStore";
 import { reportEverythingInView } from "../../test/imageFixtures";
@@ -9,13 +10,14 @@ import { HIGHLIGHT_LIMIT } from "../../utils/fileView";
 import CommitFileView from "./CommitFileView";
 
 const navigate = vi.fn();
-const downloadFile = vi.fn();
+const saveRawFile = vi.fn();
 let file: FileContent;
 
-// Only the transfer itself is replaced; what it is asked for is the contract.
-vi.mock("../../lib/fileDownload", async (importOriginal) => ({
-	...(await importOriginal<typeof import("../../lib/fileDownload")>()),
-	downloadFile: (...args: unknown[]) => downloadFile(...args),
+// Only the hand-over to the browser is replaced; what it is asked for is the
+// contract.
+vi.mock("../../hooks/useRawMediaSource", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../../hooks/useRawMediaSource")>()),
+	saveRawFile: (...args: unknown[]) => saveRawFile(...args),
 }));
 
 vi.mock("@tanstack/react-router", () => ({
@@ -60,8 +62,8 @@ vi.mock("../ui/MarkdownContent", () => ({
 
 beforeEach(() => {
 	navigate.mockClear();
-	downloadFile.mockReset();
-	downloadFile.mockResolvedValue(undefined);
+	saveRawFile.mockReset();
+	saveRawFile.mockResolvedValue(undefined);
 	file = {
 		name: "readme.md",
 		type: "file",
@@ -99,7 +101,19 @@ const tooLargeFile: FileContent = {
 };
 
 function renderView() {
-	return render(<CommitFileView hash="abc1234def" path="docs/readme.md" />);
+	const queryClient = new QueryClient();
+	const view = render(
+		<QueryClientProvider client={queryClient}>
+			<CommitFileView hash="abc1234def" path="docs/readme.md" />
+		</QueryClientProvider>,
+	);
+	return {
+		...view,
+		rerender: (ui: ReactNode) =>
+			view.rerender(
+				<QueryClientProvider client={queryClient}>{ui}</QueryClientProvider>,
+			),
+	};
 }
 
 describe("CommitFileView", () => {
@@ -148,18 +162,17 @@ describe("CommitFileView", () => {
 		// one with visible text is the card's.
 		await user.click(screen.getByText("Download"));
 
-		expect(downloadFile).toHaveBeenCalledWith(
-			expect.objectContaining({
-				hash: "abc1234def",
-				path: "docs/readme.md",
-				worktree: "",
-			}),
+		expect(saveRawFile).toHaveBeenCalledWith(
+			expect.anything(),
+			{ kind: "commit", hash: "abc1234def", path: "docs/readme.md" },
+			"readme.md",
+			expect.any(AbortSignal),
 		);
 	});
 
 	it("reports a failed download, and only for the version it was about", async () => {
 		const user = userEvent.setup();
-		downloadFile.mockRejectedValue(new Error("File not found"));
+		saveRawFile.mockRejectedValue(new Error("File not found"));
 		file = tooLargeFile;
 		const { rerender } = renderView();
 
@@ -233,6 +246,7 @@ describe("CommitFileView", () => {
 			vi.spyOn(wsActions, "rawCapability").mockResolvedValue({
 				path: "/api/raw/cap1/",
 				expiresAt: Date.now() + 60 * 60 * 1000,
+				worktree: "",
 			});
 			vi.stubGlobal(
 				"fetch",

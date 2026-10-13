@@ -42,6 +42,7 @@ let issued = 0;
 const rawCapability = vi.fn(async () => ({
 	path: `/api/raw/cap${++issued}/clip.mov`,
 	expiresAt: Date.now() + 4 * 60 * 60 * 1000,
+	worktree: "",
 }));
 const play = vi.fn(async () => {});
 

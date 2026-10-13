@@ -11,7 +11,8 @@ described over JSON-RPC (`encoding: "http"`); only its bytes take the HTTP
 route. A chat attachment
 upload is only the first half of a send: `chat.message` then names the stored
 files by the ids the upload returned. `GET /api/raw/<capability>/<path>` is the
-same split for content a `<video>`, `<audio>` or `<iframe>` loads by itself:
+same split for content a `<video>`, `<audio>`, `<iframe>` or download link loads
+by itself:
 `raw.capability` issues the URL over JSON-RPC, and only the bytes go over HTTP
 ([authentication.md](code/authentication.md#raw-capabilities-urls-a-browser-element-loads-by-itself)).
 

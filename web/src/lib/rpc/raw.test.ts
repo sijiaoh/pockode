@@ -6,6 +6,7 @@ describe("rawCapability", () => {
 	const request = vi.fn(async () => ({
 		path: "/api/raw/cap/clip.mp4",
 		expires_at: "2026-01-02T03:04:05Z",
+		worktree: "feature",
 	}));
 	const client = { request } as unknown as JSONRPCRequester<void>;
 	const actions = createRawActions(() => client);
@@ -62,6 +63,7 @@ describe("rawCapability", () => {
 		expect(capability).toEqual({
 			path: "/api/raw/cap/clip.mp4",
 			expiresAt: Date.UTC(2026, 0, 2, 3, 4, 5),
+			worktree: "feature",
 		});
 	});
 });

@@ -68,9 +68,10 @@ disabled or has stopped — the same signal as an empty `remote_url` in the
 
 ### Raw Capabilities
 
-`raw.capability` answers `{ path, expires_at }`: a URL path under `/api/raw/`
-that a `<video>`, `<audio>` or `<iframe>` loads without the session token, and
-when it stops working. Why it exists and what bounds it are in
+`raw.capability` answers `{ path, expires_at, worktree }`: a URL path under
+`/api/raw/` that a `<video>`, `<audio>`, `<iframe>` or download link loads
+without the session token, when it stops working, and the worktree it reads
+from (`""` = main). Why it exists and what bounds it are in
 [Raw capabilities](authentication.md#raw-capabilities-urls-a-browser-element-loads-by-itself).
 The params name the content the way the client already reads it, by `origin`
 (the frontend's `ContentOrigin`), plus a `scope` of `file` or `directory`:
@@ -101,6 +102,13 @@ the directory itself answers `400`
 through `apiUrl()` like any other HTTP path. The method is dispatched ahead of
 the bound-worktree gate, because an attachment needs no binding; a `file` or
 `commit` origin applies the gate's check itself.
+
+`worktree` is in the reply because a client cannot know it otherwise. For a
+`file` or `commit` origin it is whichever worktree the connection was bound to
+when the request was handled, and requests are handled concurrently: one sent
+just after `worktree.switch` may still be answered under the worktree being
+left. A download checks it, so a save never reads the same path from the other
+worktree ([file.md](../file.md#downloading)).
 
 ### Following the Remote URL
 
