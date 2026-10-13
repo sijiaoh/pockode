@@ -1,7 +1,6 @@
 import { useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
-import { rawMediaUrl } from "../../hooks/useRawMediaSource";
-import { saveUrl } from "../../lib/fileDownload";
+import { useRef, useState } from "react";
+import { saveRawFile } from "../../hooks/useRawMediaSource";
 import type { ContentOrigin } from "../../types/contents";
 import { errorMessage } from "../../utils/errorMessage";
 import type { PlayableKind } from "../../utils/fileView";
@@ -32,14 +31,21 @@ function MediaFailureChip({
 }: Props) {
 	const queryClient = useQueryClient();
 	const [saveError, setSaveError] = useState<string | null>(null);
+	const savingRef = useRef(false);
 	const { icon, iconClassName, title } = mediaFailureHeadline(kind, failure);
 
 	const save = async () => {
+		// A save waits on the server before the browser takes it, and a second
+		// press meanwhile would save twice.
+		if (savingRef.current) return;
+		savingRef.current = true;
 		setSaveError(null);
 		try {
-			saveUrl(await rawMediaUrl(queryClient, origin), saveAs);
+			await saveRawFile(queryClient, origin, saveAs);
 		} catch (err) {
 			setSaveError(`Couldn't save: ${errorMessage(err)}`);
+		} finally {
+			savingRef.current = false;
 		}
 	};
 

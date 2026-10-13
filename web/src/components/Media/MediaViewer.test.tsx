@@ -15,6 +15,7 @@ import { wsActions } from "../../lib/wsStore";
 import { MediaViewer } from "./MediaViewer";
 import { loadStage } from "./stages";
 import type {
+	HtmlMediaItem,
 	ImageMediaItem,
 	MediaItem,
 	StageComponent,
@@ -26,12 +27,20 @@ vi.mock("./stages", () => ({
 	loadStage: vi.fn(),
 }));
 
-vi.mock("../../lib/fileDownload", () => ({
+vi.mock("../../lib/fileDownload", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../../lib/fileDownload")>()),
 	saveBlob: vi.fn(),
 	saveUrl: vi.fn(),
 }));
 
 const Stage: StageComponent = () => <p>stage</p>;
+
+function stubServedProbe() {
+	vi.stubGlobal(
+		"fetch",
+		vi.fn(async () => new Response("x", { status: 206 })),
+	);
+}
 
 const item: ImageMediaItem = {
 	kind: "image",
@@ -54,6 +63,21 @@ const video: VideoMediaItem = {
 	origin: { kind: "file", path: "rec/recording.mov" },
 	dimensions: { width: 1080, height: 1920 },
 	duration: 42,
+};
+
+const page: HtmlMediaItem = {
+	kind: "html",
+	name: "index.html",
+	saveAs: "index.html",
+	mime: "text/html",
+	size: 120,
+	origin: { kind: "file", path: "site/index.html" },
+};
+
+/** Registers the URL Save downloads, as the HTML stage does once loaded. */
+const PageStage: StageComponent = ({ saveUrlRef }) => {
+	saveUrlRef.current = "/api/raw/dircap/index.html";
+	return <p>stage</p>;
 };
 
 function setup(
@@ -96,6 +120,7 @@ describe("MediaViewer", () => {
 
 	afterEach(() => {
 		vi.restoreAllMocks();
+		vi.unstubAllGlobals();
 	});
 
 	it("closes on Escape", async () => {
@@ -181,9 +206,12 @@ describe("MediaViewer", () => {
 
 	it("saves a video straight from its capability, never through a Blob", async () => {
 		const user = userEvent.setup();
+		// The byte asked for before the browser is handed the URL.
+		stubServedProbe();
 		vi.spyOn(wsActions, "rawCapability").mockResolvedValue({
 			path: "/api/raw/cap1/recording.mov",
 			expiresAt: Date.now() + 60 * 60 * 1000,
+			worktree: "",
 		});
 		setup(undefined, video);
 
@@ -200,10 +228,13 @@ describe("MediaViewer", () => {
 
 	it("saves on the capability the players hold while it still works, rather than renewing it under them", async () => {
 		const user = userEvent.setup();
+		// The byte asked for before the browser is handed the URL.
+		stubServedProbe();
 		// Inside the margin where a player would no longer start on it.
 		const issue = vi.spyOn(wsActions, "rawCapability").mockResolvedValue({
 			path: "/api/raw/cap1/recording.mov",
 			expiresAt: Date.now() + 2 * 60 * 1000,
+			worktree: "",
 		});
 		setup(undefined, video);
 		const save = await screen.findByRole("button", { name: "Save" });
@@ -214,6 +245,50 @@ describe("MediaViewer", () => {
 
 		await waitFor(() => expect(saveUrl).toHaveBeenCalledTimes(2));
 		expect(issue).toHaveBeenCalledOnce();
+	});
+
+	it("saves a page from the URL its stage loaded, once it is served", async () => {
+		const user = userEvent.setup();
+		stubServedProbe();
+		vi.mocked(loadStage).mockResolvedValue(PageStage);
+		setup(undefined, page);
+		await screen.findByText("stage");
+
+		await user.click(screen.getByRole("button", { name: "Save" }));
+
+		await waitFor(() =>
+			expect(saveUrl).toHaveBeenCalledWith(
+				"/api/raw/dircap/index.html",
+				"index.html",
+			),
+		);
+	});
+
+	// Past the click the browser says nothing, and some save the error body
+	// under the page's name.
+	it("reports a page whose capability is refused instead of saving it", async () => {
+		const user = userEvent.setup();
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(
+				async () =>
+					new Response(JSON.stringify({ error: "gone", code: "not_found" }), {
+						status: 404,
+					}),
+			),
+		);
+		vi.mocked(loadStage).mockResolvedValue(PageStage);
+		setup(undefined, page);
+		await screen.findByText("stage");
+
+		await user.click(screen.getByRole("button", { name: "Save" }));
+
+		expect(
+			await screen.findByText(
+				"Couldn't save index.html: File not found — it may have been moved or deleted",
+			),
+		).toBeInTheDocument();
+		expect(saveUrl).not.toHaveBeenCalled();
 	});
 
 	it("offers a retry when the stage fails to load", async () => {

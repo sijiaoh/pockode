@@ -91,6 +91,12 @@ export interface RawCapability {
 	path: string;
 	/** Epoch milliseconds. */
 	expiresAt: number;
+	/**
+	 * The worktree it reads from (empty for the main one). For a file or a
+	 * commit, the one the connection was bound to when the server answered —
+	 * which during a switch may still be the worktree being left.
+	 */
+	worktree: string;
 }
 
 interface RawCapabilityParams {
@@ -106,6 +112,7 @@ interface RawCapabilityParams {
 interface RawCapabilityResult {
 	path: string;
 	expires_at: string;
+	worktree: string;
 }
 
 export interface RawActions {
@@ -145,7 +152,11 @@ export function createRawActions(
 			const result: RawCapabilityResult = await requireClient(
 				getClient,
 			).request("raw.capability", toParams(target));
-			return { path: result.path, expiresAt: Date.parse(result.expires_at) };
+			return {
+				path: result.path,
+				expiresAt: Date.parse(result.expires_at),
+				worktree: result.worktree,
+			};
 		},
 	};
 }

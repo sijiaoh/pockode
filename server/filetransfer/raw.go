@@ -27,6 +27,10 @@ import (
 // RawPathPrefix + <capability> + "/" + <path within the grant>.
 const RawPathPrefix = apiroute.RawPrefix
 
+// RawDownloadParam, present in a raw URL's query, serves the content as an
+// attachment, for a link that saves it instead of an element that plays it.
+const RawDownloadParam = "download"
+
 const (
 	// CodeCapabilityUnknown answers a capability that was never issued, has
 	// expired, or outlived its session. The client's remedy is to issue another.
@@ -519,6 +523,14 @@ func (h *RawHandler) serveContent(w http.ResponseWriter, r *http.Request, name s
 		return
 	}
 	w.Header().Set("Content-Type", contents.DetectServedMIME(name, head[:n]))
+	// A download link asks for the content to be saved rather than shown:
+	// a browser that ignores the link's `download` attribute — a cross-origin
+	// one, or a type it insists on previewing — still writes it to disk. No
+	// filename: an attachment's URL names it by its id, and a filename here
+	// would outrank the one the link gives.
+	if r.URL.Query().Has(RawDownloadParam) {
+		w.Header().Set("Content-Disposition", "attachment")
+	}
 	if etag != "" {
 		w.Header().Set("ETag", etag)
 	}
@@ -529,9 +541,10 @@ func (h *RawHandler) serveContent(w http.ResponseWriter, r *http.Request, name s
 // ServeContent answer a Range request for it — a video player will not play
 // without one. git streams a blob from its start only, so reading past where
 // the stream is discards up to the offset, and reading behind it runs git
-// again. That is the cost GitFile declines for a download read in chunks; a
-// player asks for a handful of ranges, and the head sniffed for the type is
-// kept so that reading from the start again costs nothing.
+// again. That is the cost GitFile declines; a player asks for a handful of
+// ranges, a download for its first byte and then the whole, and the head
+// sniffed for the type is kept so that reading from the start again costs
+// nothing.
 //
 // A multi-range answer is copied out by a goroutine of ServeContent's own,
 // which may still be reading when the handler returns and closes this — so

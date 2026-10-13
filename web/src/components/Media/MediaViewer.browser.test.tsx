@@ -342,6 +342,7 @@ describe("MediaViewer video stage", () => {
 		vi.spyOn(wsActions, "rawCapability").mockResolvedValue({
 			path: clipPath,
 			expiresAt: Date.now() + 60 * 60 * 1000,
+			worktree: "",
 		});
 		const item: VideoMediaItem = {
 			kind: "video",
@@ -413,6 +414,7 @@ describe("MediaViewer html stage", () => {
 		vi.spyOn(wsActions, "rawCapability").mockResolvedValue({
 			path: pagePath.slice(0, pagePath.lastIndexOf("/") + 1),
 			expiresAt: Date.now() + 60 * 60 * 1000,
+			worktree: "",
 		});
 		const entry = (tag: string, index: number) => ({
 			tag,

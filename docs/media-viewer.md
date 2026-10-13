@@ -93,15 +93,12 @@ What the viewer gets from where:
   (`imageSourceBlob`) — for a remote image a cache hit on the bytes the `<img>`
   already read — and `saveBlob` retypes the Blob to octet-stream, so saving an
   SVG never yields a renderable same-origin URL. A video is never read into a
-  Blob: a screen recording can be hundreds of megabytes. `saveUrl` clicks a
-  `download` link to its capability URL — the one its players share, for as
-  long as it still works, so saving does not put a new `src` under the playing
-  video (only one within 30 seconds of expiry, or one a worktree switch
-  invalidated, is renewed, and the players take that as any renewal: at the
-  same second) — and the browser writes it to disk as it arrives (iOS Safari asks
-  first). The URL is same-origin in every deployment, so `download` names the
-  file; a dev build pointed elsewhere by `VITE_API_BASE_URL` opens it in a tab
-  instead. A failed save is reported under the toolbar.
+  Blob: a screen recording can be hundreds of megabytes. It is saved as the
+  Files tab's Download saves a file (`saveRawFile`,
+  [file.md](file.md#downloading)), from the capability its players share; a
+  renewal the save does need the players take as any renewal, at the same
+  second. A failed save is reported under the toolbar, and a press while one
+  is being checked is ignored rather than saving twice.
   An external image has no Save: reading its bytes would be a cross-origin
   `fetch`, which fails on every host that sends no CORS headers. Its place is
   taken by **Open original**, a link to the URL in a new tab with
@@ -334,10 +331,12 @@ Download, since Save is in the toolbar.
   only, with no Port Preview, since that is a sheet and sheets do not nest.
 - **Save** downloads the URL the stage loaded the page from — for a page
   loaded through its directory, the capability plus the file name — through
-  `saveUrlRef`, not `rawMediaUrl`, which would ask for a second capability for
+  `saveUrlRef`, not `saveRawFile`, which would ask for a second capability for
   the file alone. Only the `.html`
-  is saved, not its assets. Before the page has a URL, Save reports that it
-  has not loaded.
+  is saved, not its assets. It checks one byte first (`saveCheckedUrl`), as
+  every streamed save does ([file.md](file.md#downloading)), but does not
+  renew: the capability is the stage's, so a dead one is reported. Before the
+  page has a URL, Save reports that it has not loaded.
 - **No handover.** An opaque-origin page's scroll and state cannot be read, so
   the viewer loads the page afresh at its entry page. The opener's frame stays
   mounted underneath, so closing returns the user exactly where they were. Two
@@ -517,7 +516,8 @@ phone.
   one Back leaves it, and Tab and Shift+Tab across the page stay in the sheet.
 - `MediaViewer.test.tsx` (jsdom) covers the chrome: Escape, Open in Files and its
   ordering against the history entry, Save (a video's straight from its
-  capability, never a Blob), the video caption, the failed-load retry, and
+  capability, never a Blob; a page's only once it is served), the video
+  caption, the failed-load retry, and
   `afterClose` running once the entry is gone, after ✕ and after Back.
 - `VideoStage.test.tsx` covers the stage's keys (and leaving the `<video>`'s own
   to it) and both halves of the handover on the stage's side.

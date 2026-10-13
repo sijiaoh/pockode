@@ -28,7 +28,7 @@ import {
 } from "../ui";
 import EntryNameDialog from "./EntryNameDialog";
 import FileBody from "./FileBody";
-import { DownloadButton, LargeDownloadDialog } from "./FileDownloadControls";
+import { DownloadButton } from "./FileDownloadControls";
 
 interface Props {
 	path: string;
@@ -70,7 +70,6 @@ function FileView({ path, onBack }: Props) {
 	const download = useFileDownload({
 		path,
 		worktree,
-		size: file?.size,
 		onError: setActionError,
 	});
 
@@ -287,7 +286,6 @@ function FileView({ path, onBack }: Props) {
 					onCancel={() => setShowDeleteConfirm(false)}
 				/>
 			)}
-			{file && <LargeDownloadDialog download={download} size={file.size} />}
 		</div>
 	);
 }

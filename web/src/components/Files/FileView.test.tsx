@@ -11,7 +11,6 @@ import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { contentsQueryKey } from "../../hooks/useContents";
-import { LARGE_DOWNLOAD_WARNING_SIZE } from "../../lib/fileDownload";
 import {
 	reportEverythingInView,
 	stubImageFetch,
@@ -22,15 +21,15 @@ import { HIGHLIGHT_LIMIT } from "../../utils/fileView";
 import FileView from "./FileView";
 
 const getFile = vi.fn();
-const downloadFile = vi.fn();
+const saveRawFile = vi.fn();
 const renameFile = vi.fn();
 const navigate = vi.fn();
 
-// Only the transfer itself is replaced; the size threshold and the abort check
-// are the real ones, so the view is tested against the rules it ships with.
-vi.mock("../../lib/fileDownload", async (importOriginal) => ({
-	...(await importOriginal<typeof import("../../lib/fileDownload")>()),
-	downloadFile: (...args: unknown[]) => downloadFile(...args),
+// Only the hand-over to the browser is replaced; the players' capabilities
+// are the real ones.
+vi.mock("../../hooks/useRawMediaSource", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../../hooks/useRawMediaSource")>()),
+	saveRawFile: (...args: unknown[]) => saveRawFile(...args),
 }));
 
 const rawCapability = vi.fn();
@@ -132,8 +131,8 @@ describe("FileView", () => {
 
 	beforeEach(() => {
 		getFile.mockReset();
-		downloadFile.mockReset();
-		downloadFile.mockResolvedValue(undefined);
+		saveRawFile.mockReset();
+		saveRawFile.mockResolvedValue(undefined);
 		renameFile.mockReset();
 		renameFile.mockResolvedValue(undefined);
 		navigate.mockReset();
@@ -292,6 +291,7 @@ describe("FileView", () => {
 			rawCapability.mockImplementation(async () => ({
 				path: `/api/raw/cap${++issued}/`,
 				expiresAt: Date.now() + 60 * 60 * 1000,
+				worktree: "",
 			}));
 			vi.stubGlobal(
 				"fetch",
@@ -428,8 +428,11 @@ describe("FileView", () => {
 
 			await user.click(downloadButton());
 
-			expect(downloadFile).toHaveBeenCalledWith(
-				expect.objectContaining({ path: "src/app.ts", worktree: "" }),
+			expect(saveRawFile).toHaveBeenCalledWith(
+				expect.anything(),
+				{ kind: "file", path: "src/app.ts" },
+				"app.ts",
+				expect.any(AbortSignal),
 			);
 		});
 
@@ -463,14 +466,17 @@ describe("FileView", () => {
 			// is an icon, so the labelled one is the card's.
 			await user.click(screen.getByText("Download"));
 
-			expect(downloadFile).toHaveBeenCalledWith(
-				expect.objectContaining({ path: "app.zip" }),
+			expect(saveRawFile).toHaveBeenCalledWith(
+				expect.anything(),
+				{ kind: "file", path: "app.zip" },
+				"app.zip",
+				expect.any(AbortSignal),
 			);
 		});
 
 		it("reports a failed download in the action banner", async () => {
 			const user = userEvent.setup();
-			downloadFile.mockRejectedValue(new Error("File not found"));
+			saveRawFile.mockRejectedValue(new Error("File not found"));
 			await renderFileView(fileContent({}));
 
 			await user.click(downloadButton());
@@ -483,16 +489,23 @@ describe("FileView", () => {
 		it("cancels a running download on the next click, without reporting it", async () => {
 			const user = userEvent.setup();
 			let abortSignal: AbortSignal | undefined;
-			downloadFile.mockImplementation(({ signal }: { signal: AbortSignal }) => {
-				abortSignal = signal;
-				return new Promise((_resolve, reject) => {
-					signal.addEventListener("abort", () => {
-						const aborted = new Error("The operation was aborted.");
-						aborted.name = "AbortError";
-						reject(aborted);
+			saveRawFile.mockImplementation(
+				(
+					_client: unknown,
+					_origin: unknown,
+					_name: string,
+					signal: AbortSignal,
+				) => {
+					abortSignal = signal;
+					return new Promise((_resolve, reject) => {
+						signal.addEventListener("abort", () => {
+							const aborted = new Error("The operation was aborted.");
+							aborted.name = "AbortError";
+							reject(aborted);
+						});
 					});
-				});
-			});
+				},
+			);
 			await renderFileView(fileContent({}));
 
 			await user.click(downloadButton());
@@ -508,7 +521,7 @@ describe("FileView", () => {
 
 		it("does not carry one file's failure over to the next", async () => {
 			const user = userEvent.setup();
-			downloadFile.mockRejectedValue(new Error("File not found"));
+			saveRawFile.mockRejectedValue(new Error("File not found"));
 			const { rerender } = await renderFileView(fileContent({}));
 			await user.click(downloadButton());
 			await screen.findByText("Download failed: File not found");
@@ -526,36 +539,6 @@ describe("FileView", () => {
 			// surviving banner and make this pass either way.
 			expect(await screen.findByText("the next file")).toBeInTheDocument();
 			expect(screen.queryByText(/Download failed/)).not.toBeInTheDocument();
-		});
-
-		it("confirms before a file large enough to strain the browser", async () => {
-			const user = userEvent.setup();
-			await renderFileView(
-				fileContent({
-					path: "dump.log",
-					encoding: "none",
-					omitted: "too_large",
-					content: "",
-					size: LARGE_DOWNLOAD_WARNING_SIZE + 1,
-				}),
-			);
-
-			await user.click(screen.getByText("Download"));
-			expect(downloadFile).not.toHaveBeenCalled();
-
-			const dialog = screen.getByRole("dialog", {
-				name: "Download this file?",
-			});
-			expect(
-				within(dialog).getByText(/This file is 200 MB/),
-			).toBeInTheDocument();
-			await user.click(
-				within(dialog).getByRole("button", { name: "Download" }),
-			);
-
-			expect(downloadFile).toHaveBeenCalledWith(
-				expect.objectContaining({ path: "dump.log" }),
-			);
 		});
 	});
 

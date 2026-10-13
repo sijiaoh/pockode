@@ -1,5 +1,5 @@
 import { asError } from "../utils/errorMessage";
-import { readError } from "./fileDownload";
+import { readError, saveUrl } from "./fileDownload";
 
 /**
  * What one byte of a raw capability URL says about it: served, or refused with
@@ -65,4 +65,32 @@ export function isOutsideScope(probe: RawProbe): boolean {
 /** The answer for a file that is no longer there. */
 export function isGone(probe: RawProbe): boolean {
 	return !probe.ok && probe.status === 404 && probe.code === "not_found";
+}
+
+/**
+ * Has the browser save `url`, a raw capability, once one byte of it has been
+ * served. Past the click the browser owns the transfer and reports nothing
+ * back, so a file that is gone, a dead capability or a server out of reach is
+ * thrown here, worded for the user, rather than failing out of sight — or,
+ * in a browser that saves whatever answers, as an error body under the
+ * file's name.
+ */
+export async function saveCheckedUrl(
+	url: string,
+	fileName: string,
+	signal: AbortSignal = new AbortController().signal,
+): Promise<void> {
+	const probe = await probeRaw(url, signal);
+	signal.throwIfAborted();
+	saveProbedUrl(url, fileName, probe);
+}
+
+/** `saveCheckedUrl` for a caller that has probed `url` itself. */
+export function saveProbedUrl(
+	url: string,
+	fileName: string,
+	probe: RawProbe,
+): void {
+	if (!probe.ok) throw probe.error;
+	saveUrl(url, fileName);
 }

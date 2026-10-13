@@ -288,13 +288,16 @@ server-held ticket rather than a signed token, and the endpoint's rules, are in
 
 ### Raw capabilities: URLs a browser element loads by itself
 
-A `<video src>`, an `<audio src>` or an `<iframe src>` makes its requests on its
-own, and none of them can carry an `Authorization` header. Fetching the bytes
-into a Blob with the header instead works for an image, and is what images do
+A `<video src>`, an `<audio src>`, an `<iframe src>` or an `<a download>` makes
+its requests on its own, and none of them can carry an `Authorization` header.
+Fetching the bytes into a Blob with the header instead works for an image, and
+is what images do
 ([file.md](../file.md#loading-image-bytes)); for anything else it is the wrong
 shape. A video has to download whole before it plays, and sits whole in the
-phone's memory while it does. A page's relative stylesheets, scripts and images
-have nowhere to load from at all. So the logged-in app can ask over its
+phone's memory while it does; so does a file being saved, which is why the
+app's downloads go through a capability too
+([file.md](../file.md#downloading)). A page's relative stylesheets, scripts and
+images have nowhere to load from at all. So the logged-in app can ask over its
 WebSocket for a **capability** (`raw.capability`, see
 [WebSocket JSON-RPC](websocket-rpc.md#raw-capabilities)): a URL on this
 server that reads one file, or one directory and everything beneath it. The

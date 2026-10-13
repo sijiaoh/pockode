@@ -7,6 +7,7 @@ import {
 } from "@tanstack/react-query";
 import { useCallback } from "react";
 import { apiUrl } from "../lib/api";
+import { isDeadCapability, probeRaw, saveProbedUrl } from "../lib/rawProbe";
 import type { RawCapability, RawTarget } from "../lib/rpc/raw";
 import { useWorktreeStore } from "../lib/worktreeStore";
 import { useWSStore, wsActions } from "../lib/wsStore";
@@ -125,29 +126,89 @@ function rawCapabilityQuery(target: RawTarget, worktree: string) {
 const ONE_OFF_MARGIN_MS = 30 * 1000;
 
 /**
- * The URL `origin` streams from, for a one-off use such as a download: the
- * capability the players hold for as long as it still works, not only while
- * it is fresh for them. Renewing it would put a new `src` under a playing
- * video for a request that did not need one.
+ * A capability for a one-off use of `origin`, such as a download: the one the
+ * players hold for as long as it still works, not only while it is fresh for
+ * them. Renewing it would put a new `src` under a playing video for a request
+ * that did not need one.
  */
-export async function rawMediaUrl(
+async function oneOffCapability(
 	queryClient: QueryClient,
 	origin: ContentOrigin,
-): Promise<string> {
-	const options = rawCapabilityQuery(
-		{ origin, scope: "file" },
-		useWorktreeStore.getState().current,
-	);
-	const held = queryClient.getQueryState(options.queryKey);
-	// An invalidated one may be for the worktree being left (see
-	// `WORKSPACE_RAW_CAPABILITY_KEY`), however long it has to live.
-	const capability =
-		held?.data &&
-		!held.isInvalidated &&
-		held.data.expiresAt - ONE_OFF_MARGIN_MS > Date.now()
-			? held.data
-			: await queryClient.fetchQuery({ ...options, staleTime: 0 });
-	return apiUrl(capability.path);
+	worktree: string,
+	renew: boolean,
+): Promise<HeldCapability> {
+	const options = rawCapabilityQuery({ origin, scope: "file" }, worktree);
+	const held = queryClient.getQueryState(options.queryKey)?.data;
+	return !renew &&
+		held &&
+		serves(origin, held, worktree) &&
+		held.expiresAt - ONE_OFF_MARGIN_MS > Date.now()
+		? held
+		: await queryClient.fetchQuery({ ...options, staleTime: 0 });
+}
+
+/**
+ * Whether `capability` reads from `worktree`. The store moves before the
+ * connection does, and the server answers requests concurrently, so one asked
+ * for while a switch is in flight may have been bound to the worktree being
+ * left — which no count of landed switches can tell before it lands. An
+ * attachment names its own worktree.
+ */
+function serves(
+	origin: ContentOrigin,
+	capability: RawCapability,
+	worktree: string,
+): boolean {
+	return origin.kind === "attachment" || capability.worktree === worktree;
+}
+
+/**
+ * Saves `origin` to disk under `fileName`, streamed by the browser from a raw
+ * capability rather than read into memory here — a recording can be hundreds
+ * of megabytes, more than a phone's tab survives holding.
+ *
+ * Its first byte is asked for before the browser is handed it, as
+ * `saveCheckedUrl` does. A capability that died early — its session ended —
+ * or one bound to the worktree a switch is leaving is renewed once, as a
+ * player renews its own. The file is the one in the worktree the save
+ * started in: a switch meanwhile fails it rather than saving the same path
+ * from the other worktree under this one's name. Rejects with `signal`'s
+ * reason once it is aborted, and then saves nothing.
+ */
+export async function saveRawFile(
+	queryClient: QueryClient,
+	origin: ContentOrigin,
+	fileName: string,
+	signal: AbortSignal = new AbortController().signal,
+): Promise<void> {
+	const worktree = useWorktreeStore.getState().current;
+	for (let renew = false; ; renew = true) {
+		const capability = await oneOffCapability(
+			queryClient,
+			origin,
+			worktree,
+			renew,
+		);
+		signal.throwIfAborted();
+		const url = apiUrl(capability.path);
+		const probe = await probeRaw(url, signal);
+		signal.throwIfAborted();
+		if (
+			origin.kind !== "attachment" &&
+			useWorktreeStore.getState().current !== worktree
+		) {
+			throw new Error("The worktree changed before the download started.");
+		}
+		const current = serves(origin, capability, worktree);
+		if (!renew && (!current || isDeadCapability(probe))) continue;
+		if (!current) {
+			throw new Error(
+				"The worktree is still switching. Try again in a moment.",
+			);
+		}
+		saveProbedUrl(url, fileName, probe);
+		return;
+	}
 }
 
 /**

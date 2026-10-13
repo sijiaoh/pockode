@@ -174,6 +174,31 @@ func TestRawWorkDirFile(t *testing.T) {
 		}
 	})
 
+	t.Run("serves a download as an attachment the link names", func(t *testing.T) {
+		f := newRawFixture(t)
+		writeFile(t, f.workDir, "site/index.html", []byte("<!doctype html><p>hi"))
+		capability := f.issue(t, RawGrant{Origin: RawOriginFile, Scope: RawScopeFile, Path: "site/index.html"})
+
+		rec := f.get(t, RawPath(capability, "index.html")+"?"+RawDownloadParam+"=1", nil)
+
+		assertBody(t, rec, http.StatusOK, "<!doctype html><p>hi")
+		if got := rec.Header().Get("Content-Disposition"); got != "attachment" {
+			t.Errorf("Content-Disposition = %q, want attachment", got)
+		}
+	})
+
+	// The client asks for the first byte before a download (saveRawFile); a
+	// 416 here would make every empty file undownloadable.
+	t.Run("serves an empty file asked for its first byte", func(t *testing.T) {
+		f := newRawFixture(t)
+		writeFile(t, f.workDir, "empty.txt", nil)
+		capability := f.issue(t, RawGrant{Origin: RawOriginFile, Scope: RawScopeFile, Path: "empty.txt"})
+
+		rec := f.get(t, RawPath(capability, "empty.txt"), http.Header{"Range": {"bytes=0-0"}})
+
+		assertBody(t, rec, http.StatusOK, "")
+	})
+
 	t.Run("answers a range", func(t *testing.T) {
 		f := newRawFixture(t)
 		writeFile(t, f.workDir, "media/clip.mp4", []byte("0123456789"))

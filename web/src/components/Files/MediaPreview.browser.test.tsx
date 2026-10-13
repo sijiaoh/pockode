@@ -53,7 +53,11 @@ describe("MediaPreview video box", () => {
 		expect(rect.width).toBeCloseTo(contentWidth(frame), 0);
 		expect(rect.width / rect.height).toBeCloseTo(16 / 9, 1);
 
-		issue({ path: clipPath, expiresAt: Date.now() + 60 * 60 * 1000 });
+		issue({
+			path: clipPath,
+			expiresAt: Date.now() + 60 * 60 * 1000,
+			worktree: "",
+		});
 		const video = (await screen.findByLabelText("clip.webm", {
 			selector: "video",
 		})) as HTMLVideoElement;

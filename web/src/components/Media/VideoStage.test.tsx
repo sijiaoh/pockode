@@ -16,6 +16,7 @@ import VideoStage from "./VideoStage";
 const rawCapability = vi.fn(async () => ({
 	path: "/api/raw/cap1/clip.mp4",
 	expiresAt: Date.now() + 4 * 60 * 60 * 1000,
+	worktree: "",
 }));
 const play = vi.fn(async () => {});
 const pause = vi.fn();

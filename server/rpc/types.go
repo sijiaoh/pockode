@@ -1592,9 +1592,16 @@ type RawCapabilityParams struct {
 // beneath it resolves as a relative URL — each segment percent-encoded. A
 // request after ExpiresAt, or after the session that asked has ended, answers
 // 404 capability_not_found; the remedy is to ask again.
+//
+// Worktree is the one the capability reads from (empty for the main one). For
+// a file or a commit that is whichever the connection was bound to when the
+// request was handled, which a client that has just asked to switch cannot
+// know otherwise: requests are handled concurrently, so one sent after the
+// switch may still be answered under the worktree being left.
 type RawCapabilityResult struct {
 	Path      string    `json:"path"`
 	ExpiresAt time.Time `json:"expires_at"`
+	Worktree  string    `json:"worktree"`
 }
 
 // RemoteURLSubscribeResult carries the remote URL as of the subscription; see

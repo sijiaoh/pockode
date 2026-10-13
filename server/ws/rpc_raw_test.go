@@ -169,6 +169,9 @@ func TestHandler_RawCapability_Grants(t *testing.T) {
 			if result.Path != tt.wantPath {
 				t.Errorf("path = %q, want %q", result.Path, tt.wantPath)
 			}
+			if result.Worktree != tt.want.Worktree {
+				t.Errorf("worktree = %q, want %q", result.Worktree, tt.want.Worktree)
+			}
 			if !result.ExpiresAt.Equal(rawStubExpiry) {
 				t.Errorf("expires_at = %v, want %v", result.ExpiresAt, rawStubExpiry)
 			}
@@ -244,5 +247,24 @@ func TestHandler_RawCapability_CommitNeedsGitRepo(t *testing.T) {
 	resp := env.call("raw.capability", rpc.RawCapabilityParams{Origin: "commit", Scope: "file", Hash: "abcdef0", Path: "a.txt"})
 	if resp.Error == nil || resp.Error.Code != rpc.CodeNotGitRepo {
 		t.Errorf("error = %+v, want CodeNotGitRepo", resp.Error)
+	}
+}
+
+// The worktree a file capability reads from is the connection's, and the reply
+// names it: a client that has just asked to switch cannot otherwise tell
+// whether the request was answered before the switch or after.
+func TestHandler_RawCapability_NamesTheBoundWorktree(t *testing.T) {
+	dir := setupGitRepo(t)
+	commitRawTestFile(t, dir, "a.txt")
+	env := newWorkDirTestEnv(t, dir)
+	createWorktree(t, env, "feature")
+	if resp := env.call("worktree.switch", rpc.WorktreeSwitchParams{Name: "feature"}); resp.Error != nil {
+		t.Fatalf("worktree switch failed: %s", resp.Error.Message)
+	}
+
+	result := env.rawCapability(rpc.RawCapabilityParams{Origin: "file", Scope: "file", Path: "a.txt"})
+
+	if result.Worktree != "feature" {
+		t.Errorf("worktree = %q, want feature", result.Worktree)
 	}
 }

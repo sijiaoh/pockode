@@ -78,6 +78,7 @@ beforeEach(() => {
 	rawCapability.mockReset().mockImplementation(async () => ({
 		path: `/api/raw/cap${++issued}/clip.mov`,
 		expiresAt: Date.now() + 4 * 60 * 60 * 1000,
+		worktree: "",
 	}));
 });
 
