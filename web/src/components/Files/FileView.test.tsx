@@ -4,6 +4,7 @@ import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { LARGE_DOWNLOAD_WARNING_SIZE } from "../../lib/fileDownload";
+import { overlayToNavigation } from "../../lib/navigation";
 import {
 	reportEverythingInView,
 	stubImageFetch,
@@ -51,7 +52,17 @@ vi.mock("../../lib/shikiUtils", () => ({
 		<pre>{children}</pre>
 	),
 	getLanguageFromPath: () => undefined,
-	isMarkdownFile: () => false,
+	isMarkdownFile: (path: string) => path.endsWith(".md"),
+}));
+
+// Stands in for an image's viewer, whose Open in Files hands back this path.
+vi.mock("../ui/MarkdownContent", () => ({
+	MarkdownContent: ({ onOpenFile }: { onOpenFile?: (path: string) => void }) =>
+		onOpenFile && (
+			<button type="button" onClick={() => onOpenFile("docs/a.png")}>
+				Image · Open in Files
+			</button>
+		),
 }));
 
 function fileContent(overrides: Partial<FileContent>): FileContent {
@@ -400,6 +411,22 @@ describe("FileView", () => {
 				expect.objectContaining({ path: "dump.log" }),
 			);
 		});
+	});
+
+	it("opens an image of a Markdown file in Files, over the document", async () => {
+		const user = userEvent.setup();
+		await renderFileView(
+			fileContent({ name: "guide.md", path: "docs/guide.md" }),
+		);
+
+		await user.click(
+			screen.getByRole("button", { name: "Image · Open in Files" }),
+		);
+
+		// Pushed: Back returns to the document.
+		expect(navigate).toHaveBeenCalledWith(
+			overlayToNavigation({ type: "file", path: "docs/a.png" }, "", null),
+		);
 	});
 
 	describe("renaming", () => {

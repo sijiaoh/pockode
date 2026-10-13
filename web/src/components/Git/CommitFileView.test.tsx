@@ -1,6 +1,7 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { overlayToNavigation } from "../../lib/navigation";
 import type { FileContent } from "../../types/contents";
 import { HIGHLIGHT_LIMIT } from "../../utils/fileView";
 import CommitFileView from "./CommitFileView";
@@ -49,9 +50,23 @@ vi.mock("../../lib/shikiUtils", () => ({
 	isMarkdownFile: (path: string) => path.endsWith(".md"),
 }));
 
+// Stands in for an image's viewer, whose Open in Files hands back this path.
 vi.mock("../ui/MarkdownContent", () => ({
-	MarkdownContent: ({ content }: { content: string }) => (
-		<div data-testid="markdown">{content}</div>
+	MarkdownContent: ({
+		content,
+		onOpenFile,
+	}: {
+		content: string;
+		onOpenFile?: (path: string) => void;
+	}) => (
+		<div data-testid="markdown">
+			{content}
+			{onOpenFile && (
+				<button type="button" onClick={() => onOpenFile("docs/a.png")}>
+					Image · Open in Files
+				</button>
+			)}
+		</div>
 	),
 }));
 
@@ -211,5 +226,19 @@ describe("CommitFileView", () => {
 
 		expect(screen.queryByRole("button", { name: /plain text/i })).toBeNull();
 		expect(screen.getByText(/Large file/)).toBeInTheDocument();
+	});
+
+	it("opens an image of the Markdown in Files, over the commit's file", async () => {
+		const user = userEvent.setup();
+		renderView();
+
+		await user.click(
+			screen.getByRole("button", { name: "Image · Open in Files" }),
+		);
+
+		// Pushed: Back returns to this version of the document.
+		expect(navigate).toHaveBeenCalledWith(
+			overlayToNavigation({ type: "file", path: "docs/a.png" }, "", null),
+		);
 	});
 });

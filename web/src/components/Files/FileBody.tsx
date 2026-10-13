@@ -40,6 +40,8 @@ interface Props {
 	 * decodes — an agent's content block reports it. See `ImagePreview`.
 	 */
 	imageDimensions?: { width: number; height: number };
+	/** Offered by a rendered `.md` file's images; takes a work-directory-relative path. */
+	onOpenFile?: (path: string) => void;
 }
 
 function fileDetails(mime: string, size: number) {
@@ -56,6 +58,7 @@ function FileBody({
 	plain,
 	readOnly,
 	imageDimensions,
+	onOpenFile,
 }: Props) {
 	switch (state.kind) {
 		case "empty":
@@ -84,6 +87,7 @@ function FileBody({
 							content={state.content}
 							filePath={path}
 							plain={!state.highlight || plain}
+							onOpenFile={onOpenFile}
 						/>
 					</div>
 				</>

@@ -75,6 +75,20 @@ function FileView({ path, onBack }: Props) {
 		);
 	}, [navigate, path, worktree, sessionId]);
 
+	// Pushed, so Back returns to the document the image was opened from.
+	const openFile = useCallback(
+		(target: string) => {
+			navigate(
+				overlayToNavigation(
+					{ type: "file", path: target },
+					worktree,
+					sessionId,
+				),
+			);
+		},
+		[navigate, worktree, sessionId],
+	);
+
 	const handleRename = useCallback(
 		async (name: string) => {
 			const dir = parentDir(path);
@@ -185,6 +199,7 @@ function FileView({ path, onBack }: Props) {
 					<FileBody
 						state={state}
 						path={path}
+						onOpenFile={openFile}
 						downloadAction={{
 							label: download.label,
 							onClick: download.toggle,

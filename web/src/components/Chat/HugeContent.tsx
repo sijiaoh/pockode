@@ -8,7 +8,11 @@ import {
 } from "../../lib/hugeContent";
 import { CodeHighlighter } from "../../lib/shikiUtils";
 import { HIGHLIGHT_LIMIT } from "../../utils/fileView";
-import { MarkdownContent, TRANSCRIPT_HEIGHT_VAR } from "../ui";
+import {
+	FileContentDisplay,
+	MarkdownContent,
+	TRANSCRIPT_HEIGHT_VAR,
+} from "../ui";
 import { ProposedChange } from "./ProposedChange";
 import { BashResultDisplay, FilePathRows } from "./ToolResultDisplay";
 
@@ -189,7 +193,15 @@ export function ContentSlice({ content }: { content: FullScreenContent }) {
 				</CodeHighlighter>
 			);
 		case "markdown":
-			return <MarkdownContent content={content.markdown} />;
+			return content.filePath ? (
+				<FileContentDisplay
+					content={content.markdown}
+					filePath={content.filePath}
+					onOpenFile={content.onOpenFile}
+				/>
+			) : (
+				<MarkdownContent content={content.markdown} />
+			);
 		case "change":
 			return <ProposedChange change={content.change} />;
 		case "files":

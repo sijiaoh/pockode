@@ -846,10 +846,17 @@ function PermissionRequestBody({
 						key: `${fullScreenKey}:change`,
 						title,
 						subject: fullScreenSubject(request.toolName, request.toolInput),
-						content: changeFullScreenContent(change),
+						content: changeFullScreenContent(change, onOpenFile),
 					}
 				: undefined,
-		[change, fullScreenKey, title, request.toolName, request.toolInput],
+		[
+			change,
+			fullScreenKey,
+			title,
+			request.toolName,
+			request.toolInput,
+			onOpenFile,
+		],
 	);
 	// Where the body already is the input — the JSON fallback or its fields, a
 	// string input, a plan that is the input's only key — the raw input would
@@ -882,7 +889,7 @@ function PermissionRequestBody({
 					budget="main"
 					count={changeCount}
 				>
-					<ProposedChange change={change} />
+					<ProposedChange change={change} onOpenFile={onOpenFile} />
 				</Section>
 			)}
 			{showRaw && <RawInput input={request.toolInput} />}

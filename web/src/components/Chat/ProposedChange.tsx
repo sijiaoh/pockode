@@ -120,9 +120,14 @@ export function changeHasDiffs(change: ProposedChangeData): boolean {
  */
 export function changeFullScreenContent(
 	change: ProposedChangeData,
+	onOpenFile?: (path: string) => void,
 ): FullScreenContent {
 	return change.kind === "write"
-		? fileFullScreenContent(change.input.content, change.input.file_path)
+		? fileFullScreenContent(
+				change.input.content,
+				change.input.file_path,
+				onOpenFile,
+			)
 		: { kind: "change", change };
 }
 
@@ -193,7 +198,14 @@ function CodexDiff({ changes }: { changes: CodexChangeView[] }) {
 	);
 }
 
-export function ProposedChange({ change }: { change: ProposedChangeData }) {
+export function ProposedChange({
+	change,
+	onOpenFile,
+}: {
+	change: ProposedChangeData;
+	/** Offered by a written `.md` file's images. */
+	onOpenFile?: (path: string) => void;
+}) {
 	switch (change.kind) {
 		case "edit":
 		case "multiEdit":
@@ -207,6 +219,7 @@ export function ProposedChange({ change }: { change: ProposedChangeData }) {
 					content={change.input.content}
 					filePath={change.input.file_path}
 					copyable={false}
+					onOpenFile={onOpenFile}
 				/>
 			);
 		case "codex":

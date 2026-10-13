@@ -1,6 +1,6 @@
 import { useNavigate } from "@tanstack/react-router";
 import { Type } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useCommitFile } from "../../hooks/useCommitFile";
 import { useFileDownload } from "../../hooks/useFileDownload";
 import { useGitCommit } from "../../hooks/useGitCommit";
@@ -67,6 +67,20 @@ function CommitFileView({ hash, path }: Props) {
 		);
 	};
 
+	// The working tree's file: that is what a relative image was read from.
+	const openFile = useCallback(
+		(target: string) => {
+			navigate(
+				overlayToNavigation(
+					{ type: "file", path: target },
+					worktree,
+					sessionId,
+				),
+			);
+		},
+		[navigate, worktree, sessionId],
+	);
+
 	const shortHash = hash.substring(0, 7);
 
 	return (
@@ -100,6 +114,7 @@ function CommitFileView({ hash, path }: Props) {
 						path={path}
 						plain={plain}
 						readOnly
+						onOpenFile={openFile}
 						downloadAction={{ label: download.label, onClick: download.toggle }}
 					/>
 				)}

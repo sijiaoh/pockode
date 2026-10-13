@@ -50,14 +50,21 @@ function readResultCode(result: string): string {
 function ReadResultDisplay({
 	result,
 	filePath,
+	onOpenFile,
 }: {
 	result: string;
 	filePath?: string;
+	onOpenFile?: (path: string) => void;
 }) {
 	const code = useMemo(() => readResultCode(result), [result]);
 
 	return (
-		<FileContentDisplay content={code} filePath={filePath} copyable={false} />
+		<FileContentDisplay
+			content={code}
+			filePath={filePath}
+			copyable={false}
+			onOpenFile={onOpenFile}
+		/>
 	);
 }
 
@@ -429,12 +436,13 @@ export function resultFullScreenContent(
 			return fileFullScreenContent(
 				readResultCode(result),
 				typeof input?.file_path === "string" ? input.file_path : undefined,
+				onOpenFile,
 			);
 		case "Edit":
 		case "MultiEdit":
 		case "Write": {
 			const change = proposedChange(toolName, toolInput);
-			return change ? changeFullScreenContent(change) : unknown();
+			return change ? changeFullScreenContent(change, onOpenFile) : unknown();
 		}
 		case "Bash":
 			return { kind: "output", text: result, failedTail: failed };
@@ -519,7 +527,13 @@ function ToolResultDisplay({
 			return <MarkdownContent content={result} />;
 
 		case "Read":
-			return <ReadResultDisplay result={result} filePath={filePath} />;
+			return (
+				<ReadResultDisplay
+					result={result}
+					filePath={filePath}
+					onOpenFile={onOpenFile}
+				/>
+			);
 
 		// What a file tool did is what it was asked to do: the view reads the
 		// input alone, and the permission card draws the same one before it runs.
@@ -527,7 +541,8 @@ function ToolResultDisplay({
 		case "MultiEdit":
 		case "Write": {
 			const change = proposedChange(toolName, toolInput);
-			if (change) return <ProposedChange change={change} />;
+			if (change)
+				return <ProposedChange change={change} onOpenFile={onOpenFile} />;
 			return <UnknownResultDisplay result={result} />;
 		}
 
