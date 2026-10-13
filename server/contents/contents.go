@@ -71,8 +71,8 @@ const (
 	// The blocking is this connection's own, not the relay's: over a tunnel
 	// /ws gets a yamux stream to itself and yamux frames what it writes, so
 	// other streams keep moving. Whole files go over HTTP; see docs/file.md.
-	// So do raster images (EncodingHTTP), which is why this ceiling does not
-	// apply to them; they are held to attachments.MaxSize instead.
+	// So does media (EncodingHTTP), which is why this ceiling does not apply
+	// to it; a raster image is held to attachments.MaxSize instead.
 	MaxFileSize = 2 << 20 // 2 MiB
 
 	// SniffLen is the most http.DetectContentType inspects, and so the least a
@@ -84,14 +84,15 @@ type Encoding string
 
 const (
 	EncodingText Encoding = "text"
-	// EncodingHTTP is a raster image (IsRasterImage) within attachments.MaxSize,
-	// sent without content: the client fetches its bytes over HTTP from the
-	// endpoint that serves whatever this describes — the download endpoint for
-	// a workspace file, the attachment endpoint for an attachment, the commit
-	// file endpoint for a version git.show.file read out of history. An image
-	// is the one binary a client wants whole, and the one most likely to be
-	// megabytes, so it stays off the JSON-RPC connection for the reason
-	// MaxFileSize gives.
+	// EncodingHTTP is media (IsMedia) — a raster image within
+	// attachments.MaxSize, or audio or video of any size — sent without
+	// content: the client fetches its bytes over HTTP from the endpoint that
+	// serves whatever this describes — the download endpoint for a workspace
+	// file, the attachment endpoint for an attachment, the commit file endpoint
+	// for a version git.show.file read out of history — or streams them through
+	// a raw capability. Media is the binary a client can render, and the one
+	// most likely to be megabytes, so it stays off the JSON-RPC connection for
+	// the reason MaxFileSize gives.
 	EncodingHTTP Encoding = "http"
 	// EncodingNone means no content was sent; Omitted says why.
 	EncodingNone Encoding = "none"
@@ -229,15 +230,15 @@ func listDir(relPath, fullPath string) ([]Entry, error) {
 }
 
 // readFile describes a file, carrying its content only when it is text small
-// enough to send. Anything else is described by metadata alone: a raster image
-// because its bytes are fetched over HTTP, any other binary because a client
-// that cannot render it has no use for the megabytes it would cost to ship.
+// enough to send. Anything else is described by metadata alone: media because
+// its bytes are fetched over HTTP, any other binary because a client that
+// cannot render it has no use for the megabytes it would cost to ship.
 func readFile(relPath, fullPath string) (*FileContent, error) {
-	// The head decides before the rest is read: an image's bytes are not
-	// going to be sent, so reading up to MaxFileSize of them only to drop
-	// them would make every image's metadata cost the image.
+	// The head decides before the rest is read: media bytes are not going to
+	// be sent, so reading up to MaxFileSize of them only to drop them would
+	// make every picture's or recording's metadata cost the file.
 	size, content, err := readBounded(fullPath, func(head []byte) bool {
-		return IsRasterImage(relPath, head)
+		return IsMedia(relPath, head)
 	})
 	if err != nil {
 		return nil, err
@@ -319,16 +320,18 @@ func NewFileContent(relPath string, size int64, content []byte) *FileContent {
 	}
 
 	switch {
-	// Ahead of the size check: the ceiling is the JSON-RPC message's, and an
-	// image's bytes never travel in one. The MIME needs only the head, so an
-	// image of any size is named from what a too-large read leaves.
+	// Ahead of the size check: the ceiling is the JSON-RPC message's, and
+	// media bytes never travel in one. The MIME needs only the head, so media
+	// of any size is named from what a too-large read leaves.
 	//
 	// An image still has a ceiling, because the client holds the whole of it
 	// in memory to decode it: attachments.MaxSize, so that a preview stops at
 	// one size whatever it came from. It limits the preview only — the
-	// endpoints that download a file serve it at any size.
-	case IsRasterImage(relPath, content):
-		if size > attachments.MaxSize {
+	// endpoints that download a file serve it at any size. Audio and video
+	// have none: a player streams them with Range requests and never holds
+	// the whole file.
+	case IsMedia(relPath, content):
+		if IsRasterImageMIME(file.MIME) && size > attachments.MaxSize {
 			file.Encoding = EncodingNone
 			file.Omitted = OmitTooLarge
 			file.Limit = attachments.MaxSize
@@ -367,7 +370,7 @@ var imageExtMIMEs = map[string]string{
 //
 // For a caller that stores content under a name of its own making — the
 // attachment store, whose names are hashes — this is which part of the original
-// name is worth carrying over. Answering from the same table DetectMIME
+// name is worth carrying over. Answering from the image table DetectMIME
 // consults is the point: an extension kept for any other reason would be a
 // guess, and one that is not on the table buys nothing, since sniffing already
 // names those formats.
@@ -377,6 +380,23 @@ func ImageExtension(name string) string {
 		return ext
 	}
 	return ""
+}
+
+// Audio and video formats http.DetectContentType cannot name: a phone records
+// video as .mov, which the sniffer's table lacks, and it does not recognise an
+// MP3 without an ID3 tag or an MP4 whose brand it does not know. Here rather
+// than among the served types because whether a file is media decides how it
+// is described (IsMedia), not only how it is served.
+var playableExtMIMEs = map[string]string{
+	".mp4":  "video/mp4",
+	".m4v":  "video/mp4",
+	".mov":  "video/quicktime",
+	".webm": "video/webm",
+	".mp3":  "audio/mpeg",
+	".m4a":  "audio/mp4",
+	".aac":  "audio/aac",
+	".wav":  "audio/wav",
+	".flac": "audio/flac",
 }
 
 // DetectMIME reports the media type of a file whose leading bytes are head.
@@ -392,18 +412,20 @@ func DetectMIME(name string, head []byte) string {
 	if !isGenericType(sniffed) {
 		return sniffed
 	}
-	if mime, ok := imageExtMIMEs[strings.ToLower(filepath.Ext(name))]; ok {
+	ext := strings.ToLower(filepath.Ext(name))
+	if mime, ok := imageExtMIMEs[ext]; ok {
+		return mime
+	}
+	if mime, ok := playableExtMIMEs[ext]; ok {
 		return mime
 	}
 	return sniffed
 }
 
-// Formats a page or a media element loads that http.DetectContentType cannot
-// name. Stylesheets and scripts are plain text to a sniffer, and a browser
-// refuses either one served as text/plain under nosniff — a previewed page
-// would load without them. The media entries cover what the sniffer's table
-// lacks — a phone records video as .mov — and files whose bytes it does not
-// recognise: an MP3 without an ID3 tag, an MP4 whose brand it does not know.
+// Formats a page loads that http.DetectContentType cannot name. Stylesheets
+// and scripts are plain text to a sniffer, and a browser refuses either one
+// served as text/plain under nosniff — a previewed page would load without
+// them. Media a page or a media element loads is already named by DetectMIME.
 //
 // Spelled out here rather than taken from mime.TypeByExtension, which reads the
 // machine's own registry: on Windows that commonly maps .js to text/plain.
@@ -414,15 +436,6 @@ var servedExtMIMEs = map[string]string{
 	".js":   "text/javascript; charset=utf-8",
 	".mjs":  "text/javascript; charset=utf-8",
 	".json": "application/json",
-	".mp4":  "video/mp4",
-	".m4v":  "video/mp4",
-	".mov":  "video/quicktime",
-	".webm": "video/webm",
-	".mp3":  "audio/mpeg",
-	".m4a":  "audio/mp4",
-	".aac":  "audio/aac",
-	".wav":  "audio/wav",
-	".flac": "audio/flac",
 }
 
 // DetectServedMIME is DetectMIME for content a browser loads directly rather
@@ -462,21 +475,44 @@ func IsRasterImageMIME(mime string) bool {
 	return IsImageMIME(mime) && !strings.HasPrefix(mime, "image/svg+xml")
 }
 
-// IsRasterImage reports whether the file name, whose leading bytes are head, is
-// a raster image — the content NewFileContent describes as EncodingHTTP up to
-// attachments.MaxSize. head need be no longer than SniffLen.
+// IsPlayableMIME reports whether content of this type is audio or video —
+// something a client plays rather than draws or reads.
+func IsPlayableMIME(mime string) bool {
+	return strings.HasPrefix(mime, "audio/") || strings.HasPrefix(mime, "video/")
+}
+
+// isMediaMIME reports whether content of this type is previewable media: a
+// raster image or something playable, the types NewFileContent describes as
+// EncodingHTTP.
+func isMediaMIME(mime string) bool {
+	return IsRasterImageMIME(mime) || IsPlayableMIME(mime)
+}
+
+// IsMedia reports whether the file name, whose leading bytes are head, is
+// previewable media — the content NewFileContent describes as EncodingHTTP (a
+// raster image only up to attachments.MaxSize). head need be no longer than
+// SniffLen.
 //
 // The type alone is not enough, because for the formats sniffing cannot name
-// (AVIF, HEIC, TIFF) it comes from the extension: a text file that only
-// carries one — a git-LFS pointer committed as photo.avif — would otherwise be
-// handed to the client as an image it cannot draw, instead of as the text it
-// is. Every real raster format opens with binary bytes, so requiring them costs
-// nothing an image could need.
+// (AVIF, HEIC, TIFF, a .mov) it comes from the extension: a text file that
+// only carries one — a git-LFS pointer committed as photo.avif or clip.mov —
+// would otherwise be handed to the client as media it cannot render, instead
+// of as the text it is. Every real image, audio and video format opens with
+// binary bytes, so requiring them costs nothing media could need.
+func IsMedia(name string, head []byte) bool {
+	return isMediaOf(name, head, isMediaMIME)
+}
+
+// IsRasterImage is IsMedia narrowed to raster images.
 func IsRasterImage(name string, head []byte) bool {
+	return isMediaOf(name, head, IsRasterImageMIME)
+}
+
+func isMediaOf(name string, head []byte, isType func(mime string) bool) bool {
 	if len(head) > SniffLen {
 		head = head[:SniffLen]
 	}
-	return IsRasterImageMIME(DetectMIME(name, head)) && IsBinaryProbe(head)
+	return isType(DetectMIME(name, head)) && IsBinaryProbe(head)
 }
 
 // isGenericType reports whether http.DetectContentType matched no signature and

@@ -8,6 +8,8 @@ import type { MediaKind, StageComponent } from "./types";
 const loaders: Record<MediaKind, () => Promise<StageComponent>> = {
 	image: () =>
 		import("./ImageStage").then((module) => module.default as StageComponent),
+	video: () =>
+		import("./VideoStage").then((module) => module.default as StageComponent),
 };
 
 const loaded = new Map<MediaKind, StageComponent>();

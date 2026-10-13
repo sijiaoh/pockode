@@ -3,7 +3,7 @@ import { useState } from "react";
 import { useImageSrc } from "../../hooks/useImageSrc";
 import { useInView } from "../../hooks/useInView";
 import {
-	formatImageCaption,
+	formatMediaCaption,
 	type ImageDimensions,
 	type ImageSource,
 } from "../../utils/fileView";
@@ -161,7 +161,7 @@ function ImagePreview({ source, fileName, mime, size, dimensions }: Props) {
 					)}
 				</div>
 				<div className="text-xs text-th-text-muted">
-					{formatImageCaption(mime, size, measured)}
+					{formatMediaCaption(mime, size, { dimensions: measured })}
 				</div>
 			</div>
 			{viewer}

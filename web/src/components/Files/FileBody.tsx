@@ -8,6 +8,7 @@ import {
 import { splitPath } from "../../utils/path";
 import { FileContentDisplay, FileStateCard } from "../ui";
 import ImagePreview from "./ImagePreview";
+import MediaPreview from "./MediaPreview";
 
 interface Props {
 	state: FileViewState;
@@ -96,6 +97,19 @@ function FileBody({
 					mime={state.mime}
 					size={state.size}
 					dimensions={imageDimensions}
+				/>
+			);
+
+		case "audio":
+		case "video":
+			return (
+				<MediaPreview
+					kind={state.kind}
+					origin={state.origin}
+					fileName={splitPath(path).fileName}
+					mime={state.mime}
+					size={state.size}
+					downloadAction={downloadAction}
 				/>
 			);
 

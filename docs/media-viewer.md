@@ -1,8 +1,9 @@
 # Media viewer
 
 A full-screen viewer for media that the chat, the Files tab and Git can all
-open. Images come first; video and HTML are planned as further kinds of the same
-viewer, not as viewers of their own.
+open. Images and video are its kinds today; HTML is planned as a further kind of
+the same viewer, not as a viewer of its own. Audio has no stage: it plays in
+place ([file.md](file.md#playing-audio-and-video)).
 
 ## Key Files
 
@@ -14,6 +15,7 @@ viewer, not as viewers of their own.
 | `web/src/components/Media/ImageStage.tsx` | The image stage: zoom, pan, double-tap, keys |
 | `web/src/components/Media/imageScale.ts` | The image stage's scales: fit, actual size, ceiling, toggle |
 | `web/src/components/Media/doubleTap.ts` | Touch double-tap recognition from pointer events |
+| `web/src/components/Media/VideoStage.tsx` | The video stage: native controls, keys, the handover |
 
 ## Opening it
 
@@ -31,6 +33,11 @@ viewer, not as viewers of their own.
   onClose={() => setViewing(null)}
 />
 ```
+
+A video is `kind: "video"` with an `origin` (what the stage asks a raw
+capability for) in place of `source`, the `dimensions` and `duration` the
+opener's player already knows, and an optional `handoff` (see
+[Handover](#handover)).
 
 The host owns the open state and renders the viewer while it is open. Pass
 `openInFiles` only when the item is a work-directory file *and* the host can
@@ -50,6 +57,7 @@ MediaViewer            shared chrome: Sheet fullScreen, back gesture, title + ca
  │                     toolbar, Save, Open in Files, the focusable stage frame
  └─ stage by kind      media-specific: drawing, moving, its own toolbar controls,
      ImageStage        its own loading / failure states
+     VideoStage
 ```
 
 What the viewer gets from where:
@@ -63,14 +71,24 @@ What the viewer gets from where:
   ([tool-call-ui.md](tool-call-ui.md#full-screen)). Open in Files is run through
   its `afterClose`, because navigating while the viewer's history entry is still
   current would be undone by the Back that takes it.
-- **The caption** (`PNG · 2000×1333 · 433 KB`) is `formatImageCaption`, the same
-  line the in-place `ImagePreview` shows. It uses the decoded size once the stage
-  reports it, and `item.dimensions` until then. New bytes withdraw the decoded
-  size, so bytes that fail to decode are never captioned with the old size.
-- **Save** reads the bytes from the item's source (`imageSourceBlob`). For a
-  remote image this is a cache hit on the bytes the `<img>` already read.
-  `saveBlob` retypes the Blob to octet-stream, so saving an SVG never yields a
-  renderable same-origin URL. A failed save is reported under the toolbar.
+- **The caption** (`PNG · 2000×1333 · 433 KB`, `MOV · 1080×1920 · 0:42 · 38.2 MB`)
+  is `formatMediaCaption`, the same line the in-place preview shows. It uses
+  what the stage reports once it has loaded the media (`onMetadata`), and the
+  item's `dimensions` and `duration` until then. New bytes withdraw the report,
+  so bytes that fail to decode are never captioned with the old size.
+- **Save** is per kind. An image's bytes are read from its source
+  (`imageSourceBlob`) — for a remote image a cache hit on the bytes the `<img>`
+  already read — and `saveBlob` retypes the Blob to octet-stream, so saving an
+  SVG never yields a renderable same-origin URL. A video is never read into a
+  Blob: a screen recording can be hundreds of megabytes. `saveUrl` clicks a
+  `download` link to its capability URL — the one its players share, for as
+  long as it still works, so saving does not put a new `src` under the playing
+  video (only one within 30 seconds of expiry, or one a worktree switch
+  invalidated, is renewed, and the players take that as any renewal: at the
+  same second) — and the browser writes it to disk as it arrives (iOS Safari asks
+  first). The URL is same-origin in every deployment, so `download` names the
+  file; a dev build pointed elsewhere by `VITE_API_BASE_URL` opens it in a tab
+  instead. A failed save is reported under the toolbar.
 - **The stage frame** is a focusable `<section>` that belongs to the viewer, not
   to the stage. It is the sheet's `initialFocusRef`, so focus lands on the
   content at open, even before the stage has loaded. Its `onKeyDown` forwards to
@@ -81,7 +99,7 @@ What the viewer gets from where:
   focus would stay on a toolbar button where the frame's keys never fire.
 
 A stage gets the item, the toolbar's start element to portal its own controls
-into, `keysRef`, and `onDimensions`. It owns everything about its media: how it
+into, `keysRef`, and `onMetadata`. It owns everything about its media: how it
 is drawn, the gestures and keys that move it, and its loading and failure states.
 
 **Loading a stage.** Each stage is a separate chunk, loaded on first use by
@@ -201,6 +219,75 @@ still works. Escape is not handled here; it belongs to the `Sheet`.
   change (a Files entry rewritten on disk), the image reloads from fit. A read or
   decode failure shows `ImageFailureCard`, the card the in-place preview shows.
 
+## The video stage
+
+`VideoStage` is a chunk of its own with no zoom library: a `<video controls
+playsInline>` through `useMediaPlayback`, the machine the in-place preview
+plays through ([file.md](file.md#playing-audio-and-video)). It reads the same
+cached capability as the preview, so opening the viewer costs no round trip,
+and recovers from a capability that died the same way. A failure shows
+`MediaFailureCard` without Download, since Save is in the toolbar; a video
+with no picture this browser can show keeps playing, with the "No picture"
+line where the picture would be.
+
+- **Fitted, and enlarged.** The element is `absolute inset-0 size-full
+  object-contain`. The image stage never enlarges because zoom is how a picture
+  gets bigger and 100% has to mean one pixel; a video has no zoom, and a
+  full-screen video smaller than the screen defeats opening it. The element
+  spans the frame, so the native controls run along the frame's whole bottom
+  edge. Letterbox is the sheet's own background, as around an image.
+- **No gestures of its own.** A tap, a double-tap and a drag on the scrubber
+  are the native controls'. The stage is `touch-none`, so a pinch does not zoom
+  the app page under the sheet; Chromium still drags the native scrubber under
+  it. On iOS Safari this needs checking on a device — if scrubbing stops,
+  `touch-pan-x touch-pan-y` blocks the pinch and keeps drags.
+- **Toolbar.** Nothing at its start: the native controls are the video's.
+
+### Keys
+
+Through the frame, as the image stage's are. A click on the video moves focus
+to it (it is focusable with `controls`), and its keys then bubble to the
+frame. The keys a focused `<video controls>` acts on by itself — Space, Enter,
+the arrows, Home, End — are left to it from there, since acting again would
+toggle play twice or seek double; the letters and `0`, which no browser binds,
+still work.
+
+| Key | Effect |
+|-----|--------|
+| Space, `k` | Play / pause |
+| ←, → | Back / forward 5 s |
+| `j`, `l` | Back / forward 10 s |
+| `m` | Mute / unmute |
+| `Home`, `0` | To the start |
+
+Modifiers held leave the key to the browser, and Escape is the `Sheet`'s. No
+volume keys: iOS makes `volume` read-only.
+
+### Handover
+
+Moving between the in-place player and the viewer does not start over. The
+opener hands a mutable `{ time, playing }` in the item:
+
+- **Opening** reads where the in-place player is and whether the user had it
+  playing, and pauses it. The stage seeks there on its first metadata and
+  plays if it was playing. iOS may refuse a `play()` that is no longer inside
+  the user's gesture (the stage's chunk took a moment to load), or in Low Power
+  Mode; the video then waits paused at that second, nothing is reported, and
+  `playing` is cleared, since the user is no longer watching it play.
+- **While open** the stage keeps `handoff.time` at its position (from
+  `timeupdate`, ignored until the handed-over seek has landed) and `playing` at
+  what the user last chose.
+- **Playing means the user's intent**, cleared by any pause — reaching the end
+  included, since `play()` at the end starts over. A video watched to the end
+  opens paused at its end, and a source swapped in under the inline player
+  just before opening does not start it again behind the viewer.
+- **Closing** puts the in-place player at `handoff.time`, **paused**: carrying
+  on with sound behind a closing sheet is not something the user just asked
+  for.
+
+A file rewritten while the viewer is open is a new video for both players:
+each starts over at the beginning, paused, and the handoff with them.
+
 ## Entry points
 
 ### Chat: attachment thumbnails
@@ -244,6 +331,28 @@ preview itself stays as it is — it is the page; the viewer is the zoom.
   loading and failure branches, so a rewritten file reloading under the viewer
   leaves it open; the stage reads the bytes for itself.
 
+### Files and Git: `MediaPreview`
+
+A video playing in place (the Files tab and a file in a commit, through
+`FileBody`) opens the viewer from a ⤢ button ("View full screen") **at the end
+of the caption line**. Audio has none, nor a video laid out as sound because
+it has no picture to show.
+
+- **Not on the picture's corner**, as an image's is. A video's corners belong
+  to the browser: iOS draws its inline volume, PiP and full-screen buttons in
+  the top corners, Chrome its overflow menu at the bottom right. A chip there
+  covers a native control on one browser or another; the caption line is the
+  app's on all of them.
+- **A click on the video does not open it.** On a video a click already means
+  play/pause, or show the controls on touch.
+- **Offered once there is a source**, not once loaded: iOS may load nothing
+  before a press of play, and the viewer loads the video for itself.
+- The native full-screen button stays. It is the OS's own full screen, without
+  title or Save, and iOS does not let it be removed; ⤢ is the app's.
+- **No Open in Files**, for the reason `ImagePreview` gives. `MediaPreview`
+  owns the open state and renders the viewer outside its failure branch, so
+  the in-place player failing under the viewer leaves it open.
+
 ## Not in v1
 
 Swiping between the images of one strip, swipe-down to dismiss, hiding the
@@ -256,11 +365,24 @@ chrome on tap, rotation, and pixelated rendering past 100%.
   the double-click and double-tap toggles, pinch limits, the pan edge, the wheel,
   the keys, and refitting after a resize. Gestures are asserted on where the
   image lands on screen, relative to the measured frame.
+  Its video case plays a 64×36 VP9 clip (`src/test/clip-64x36.webm`) and checks
+  the element spans the frame, so the picture is fitted and enlarged.
 - `MediaViewer.test.tsx` (jsdom) covers the chrome: Escape, Open in Files and its
-  ordering against the history entry, Save, and the failed-load retry.
+  ordering against the history entry, Save (a video's straight from its
+  capability, never a Blob), the video caption, and the failed-load retry.
+- `VideoStage.test.tsx` covers the stage's keys (and leaving the `<video>`'s own
+  to it) and both halves of the handover on the stage's side.
 - `imageScale.test.ts` and `doubleTap.test.ts` cover the pure parts.
 - `Chat/AttachmentStrip.test.tsx` covers the chat way in: a thumbnail opens the
   viewer, Open in Files only for a work-directory file, and Save with the bytes
   the thumbnail already read.
 - `Files/ImagePreview.test.tsx` covers the Files and Git way in: the corner
   button and the image open the viewer only once loaded, with no Open in Files.
+- `Files/MediaPreview.test.tsx` covers the video way in: the caption-line
+  button as soon as there is a source and never for sound, the position and
+  play intent handed over, the position taken back paused, and the viewer
+  staying open through a failure underneath.
+  `Files/MediaPreview.browser.test.tsx` (real browser) covers its box: 16:9
+  across the frame before metadata, then a portrait clip
+  (`src/test/clip-72x128.webm`) at its own size, never enlarged, and capped
+  at 70vh.

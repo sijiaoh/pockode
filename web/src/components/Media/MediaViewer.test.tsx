@@ -8,18 +8,28 @@ import {
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { saveBlob } from "../../lib/fileDownload";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { apiUrl } from "../../lib/api";
+import { saveBlob, saveUrl } from "../../lib/fileDownload";
+import { wsActions } from "../../lib/wsStore";
 import { MediaViewer } from "./MediaViewer";
 import { loadStage } from "./stages";
-import type { ImageMediaItem, StageComponent } from "./types";
+import type {
+	ImageMediaItem,
+	MediaItem,
+	StageComponent,
+	VideoMediaItem,
+} from "./types";
 
 vi.mock("./stages", () => ({
 	loadedStage: () => undefined,
 	loadStage: vi.fn(),
 }));
 
-vi.mock("../../lib/fileDownload", () => ({ saveBlob: vi.fn() }));
+vi.mock("../../lib/fileDownload", () => ({
+	saveBlob: vi.fn(),
+	saveUrl: vi.fn(),
+}));
 
 const Stage: StageComponent = () => <p>stage</p>;
 
@@ -35,13 +45,24 @@ const item: ImageMediaItem = {
 	},
 };
 
-function setup(openInFiles?: () => void) {
+const video: VideoMediaItem = {
+	kind: "video",
+	name: "recording.mov",
+	saveAs: "recording.mov",
+	mime: "video/quicktime",
+	size: 500 * 1024 * 1024,
+	origin: { kind: "file", path: "rec/recording.mov" },
+	dimensions: { width: 1080, height: 1920 },
+	duration: 42,
+};
+
+function setup(openInFiles?: () => void, shown: MediaItem = item) {
 	const history = createMemoryHistory({ initialEntries: ["/chat"] });
 	function Root() {
 		const [open, setOpen] = useState(true);
 		return open ? (
 			<MediaViewer
-				item={item}
+				item={shown}
 				openInFiles={openInFiles}
 				onClose={() => setOpen(false)}
 			/>
@@ -65,6 +86,11 @@ describe("MediaViewer", () => {
 	beforeEach(() => {
 		vi.mocked(loadStage).mockReset().mockResolvedValue(Stage);
 		vi.mocked(saveBlob).mockReset();
+		vi.mocked(saveUrl).mockReset();
+	});
+
+	afterEach(() => {
+		vi.restoreAllMocks();
 	});
 
 	it("closes on Escape", async () => {
@@ -109,6 +135,53 @@ describe("MediaViewer", () => {
 		const [blob, name] = vi.mocked(saveBlob).mock.calls[0];
 		expect(name).toBe("diagram-1.svg");
 		expect(await blob.text()).toBe("<svg>#fff</svg>");
+	});
+
+	it("loads the stage for a video, captioned with its length", async () => {
+		setup(undefined, video);
+
+		await screen.findByText("stage");
+		expect(loadStage).toHaveBeenCalledWith("video");
+		expect(
+			screen.getByText("MOV · 1080×1920 · 0:42 · 500 MB"),
+		).toBeInTheDocument();
+	});
+
+	it("saves a video straight from its capability, never through a Blob", async () => {
+		const user = userEvent.setup();
+		vi.spyOn(wsActions, "rawCapability").mockResolvedValue({
+			path: "/api/raw/cap1/recording.mov",
+			expiresAt: Date.now() + 60 * 60 * 1000,
+		});
+		setup(undefined, video);
+
+		await user.click(await screen.findByRole("button", { name: "Save" }));
+
+		await waitFor(() =>
+			expect(saveUrl).toHaveBeenCalledWith(
+				apiUrl("/api/raw/cap1/recording.mov"),
+				"recording.mov",
+			),
+		);
+		expect(saveBlob).not.toHaveBeenCalled();
+	});
+
+	it("saves on the capability the players hold while it still works, rather than renewing it under them", async () => {
+		const user = userEvent.setup();
+		// Inside the margin where a player would no longer start on it.
+		const issue = vi.spyOn(wsActions, "rawCapability").mockResolvedValue({
+			path: "/api/raw/cap1/recording.mov",
+			expiresAt: Date.now() + 2 * 60 * 1000,
+		});
+		setup(undefined, video);
+		const save = await screen.findByRole("button", { name: "Save" });
+
+		await user.click(save);
+		await waitFor(() => expect(saveUrl).toHaveBeenCalledOnce());
+		await user.click(save);
+
+		await waitFor(() => expect(saveUrl).toHaveBeenCalledTimes(2));
+		expect(issue).toHaveBeenCalledOnce();
 	});
 
 	it("offers a retry when the stage fails to load", async () => {

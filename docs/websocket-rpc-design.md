@@ -3,11 +3,12 @@
 All communication uses WebSocket JSON-RPC 2.0. REST APIs are not used.
 
 The one exception is bytes rather than calls — whole-file transfer and the
-bytes of a raster image: `GET /api/files/download`, `POST /api/files/upload`,
+bytes of media: `GET /api/files/download`, `POST /api/files/upload`,
 `POST` / `GET /api/chat/attachments` and `GET /api/git/show/file` are plain
 HTTP so a large body neither waits behind nor holds up the one connection
-([file.md](file.md#transfer)). An image is still described over JSON-RPC
-(`encoding: "http"`); only its bytes take the HTTP route. A chat attachment
+([file.md](file.md#transfer)). An image, an audio or a video file is still
+described over JSON-RPC (`encoding: "http"`); only its bytes take the HTTP
+route. A chat attachment
 upload is only the first half of a send: `chat.message` then names the stored
 files by the ids the upload returned. `GET /api/raw/<capability>/<path>` is the
 same split for content a `<video>`, `<audio>` or `<iframe>` loads by itself:

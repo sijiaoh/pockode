@@ -2,7 +2,7 @@ import { ImageOff } from "lucide-react";
 import { useState } from "react";
 import {
 	useAttachmentContent,
-	useAttachmentImageOrigin,
+	useAttachmentOrigin,
 } from "../../hooks/useAttachmentContent";
 import { useImageSrc } from "../../hooks/useImageSrc";
 import { useInView } from "../../hooks/useInView";
@@ -42,7 +42,7 @@ interface Props {
  */
 function AttachmentThumb({ file, source, onOpen }: Props) {
 	const { ref, inView } = useInView<HTMLDivElement>();
-	const origin = useAttachmentImageOrigin(source);
+	const origin = useAttachmentOrigin(source);
 	const { data, error, refetch } = useAttachmentContent(source, inView);
 	const view = data ? getFileViewState(data, origin) : null;
 	const image = useImageSrc(

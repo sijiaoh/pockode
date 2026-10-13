@@ -3,14 +3,16 @@ import { CircleAlert, Download, ExternalLink } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { useBackToClose } from "../../hooks/useBackToClose";
 import { imageSourceBlob } from "../../hooks/useImageSrc";
-import { saveBlob } from "../../lib/fileDownload";
+import { rawMediaUrl } from "../../hooks/useRawMediaSource";
+import { saveBlob, saveUrl } from "../../lib/fileDownload";
 import { errorMessage } from "../../utils/errorMessage";
-import { formatImageCaption, type ImageDimensions } from "../../utils/fileView";
+import { formatMediaCaption } from "../../utils/fileView";
 import { FileStateCard, headerButtonClass, Sheet, Spinner } from "../ui";
 import { loadedStage, loadStage } from "./stages";
 import type {
 	MediaItem,
 	MediaKind,
+	MediaMetadata,
 	StageComponent,
 	StageKeyHandler,
 } from "./types";
@@ -72,16 +74,35 @@ function useStage(kind: MediaKind) {
 	return { state, retry: () => setAttempt((n) => n + 1) };
 }
 
-function caption(item: MediaItem, decoded: ImageDimensions | null): string {
-	return formatImageCaption(item.mime, item.size, decoded ?? item.dimensions);
+function caption(item: MediaItem, loaded: MediaMetadata | null): string {
+	return formatMediaCaption(item.mime, item.size, {
+		dimensions: loaded ? loaded.dimensions : item.dimensions,
+		duration: loaded
+			? loaded.duration
+			: item.kind === "video"
+				? item.duration
+				: undefined,
+	});
 }
 
-/** The item's bytes, for Save. */
-function mediaBlob(
+/**
+ * Saves the item under `saveAs`. An image's bytes are read whole — usually a
+ * cache hit on what the `<img>` already read. A video goes to disk straight
+ * from its capability as it arrives: a long recording does not belong in a
+ * Blob.
+ */
+async function saveItem(
 	queryClient: ReturnType<typeof useQueryClient>,
 	item: MediaItem,
-): Promise<Blob> {
-	return imageSourceBlob(queryClient, item.source);
+): Promise<void> {
+	switch (item.kind) {
+		case "image":
+			saveBlob(await imageSourceBlob(queryClient, item.source), item.saveAs);
+			return;
+		case "video":
+			saveUrl(await rawMediaUrl(queryClient, item.origin), item.saveAs);
+			return;
+	}
 }
 
 /**
@@ -102,14 +123,14 @@ export function MediaViewer({ item, openInFiles, onClose }: MediaViewerProps) {
 	const frameRef = useRef<HTMLElement>(null);
 	const keysRef = useRef<StageKeyHandler | null>(null);
 	const [toolbarStart, setToolbarStart] = useState<HTMLElement | null>(null);
-	const [decoded, setDecoded] = useState<ImageDimensions | null>(null);
+	const [loaded, setLoaded] = useState<MediaMetadata | null>(null);
 	const [saveError, setSaveError] = useState<string | null>(null);
 	const { state: stage, retry } = useStage(item.kind);
 
 	const save = async () => {
 		setSaveError(null);
 		try {
-			saveBlob(await mediaBlob(queryClient, item), item.saveAs);
+			await saveItem(queryClient, item);
 		} catch (err) {
 			setSaveError(`Couldn't save ${item.name}: ${errorMessage(err)}`);
 		}
@@ -129,7 +150,7 @@ export function MediaViewer({ item, openInFiles, onClose }: MediaViewerProps) {
 			title={item.name}
 			subtitle={
 				<div className="truncate text-xs text-th-text-muted">
-					{caption(item, decoded)}
+					{caption(item, loaded)}
 				</div>
 			}
 			onClose={onClose}
@@ -180,7 +201,7 @@ export function MediaViewer({ item, openInFiles, onClose }: MediaViewerProps) {
 				    without focus moving when it does. */}
 				<section
 					ref={frameRef}
-					// biome-ignore lint/a11y/noNoninteractiveTabindex: the keys zoom and pan what is in it
+					// biome-ignore lint/a11y/noNoninteractiveTabindex: the keys drive the stage in it
 					tabIndex={0}
 					aria-label={item.name}
 					onKeyDown={(event) => keysRef.current?.(event)}
@@ -196,7 +217,7 @@ export function MediaViewer({ item, openInFiles, onClose }: MediaViewerProps) {
 							item={item}
 							toolbarStart={toolbarStart}
 							keysRef={keysRef}
-							onDimensions={setDecoded}
+							onMetadata={setLoaded}
 						/>
 					)}
 					{stage.status === "loading" && (

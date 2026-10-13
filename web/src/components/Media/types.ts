@@ -1,11 +1,12 @@
 import type { ComponentType, KeyboardEvent, RefObject } from "react";
+import type { ContentOrigin } from "../../types/contents";
 import type { ImageDimensions, ImageSource } from "../../utils/fileView";
 
 /**
  * Something the media viewer can show. One member per kind; each kind has a
  * stage of its own (`stages.ts`) and shares everything else.
  */
-export type MediaItem = ImageMediaItem;
+export type MediaItem = ImageMediaItem | VideoMediaItem;
 
 export interface ImageMediaItem {
 	kind: "image";
@@ -18,6 +19,41 @@ export interface ImageMediaItem {
 	source: ImageSource;
 	/** What the bytes will decode to, when something already knows. */
 	dimensions?: ImageDimensions;
+}
+
+export interface VideoMediaItem {
+	kind: "video";
+	/** Shown as the viewer's title. */
+	name: string;
+	/** The file name Save writes. */
+	saveAs: string;
+	mime: string;
+	size: number;
+	/** What the stage asks a raw capability for, shared with the opener's. */
+	origin: ContentOrigin;
+	/** What the opener's player already learnt from the metadata. */
+	dimensions?: ImageDimensions;
+	duration?: number;
+	/**
+	 * Where playback carries on from, written back as it moves so the opener
+	 * can pick up where the viewer left off (docs/media-viewer.md#handover).
+	 */
+	handoff?: PlaybackHandoff;
+}
+
+/** A position passed between two players of the same file. Mutable. */
+export interface PlaybackHandoff {
+	time: number;
+	/** Whether the user had it playing, so the receiving player plays too. */
+	playing: boolean;
+}
+
+/** What a stage learns about its media once it has loaded, for the caption. */
+export interface MediaMetadata {
+	/** Null for a video with no picture this browser can show. */
+	dimensions: ImageDimensions | null;
+	/** Null when the media has none, or the file does not say. */
+	duration: number | null;
 }
 
 export type MediaKind = MediaItem["kind"];
@@ -39,10 +75,11 @@ export interface StageProps<Item extends MediaItem> {
 	 */
 	keysRef: RefObject<StageKeyHandler | null>;
 	/**
-	 * Reports the media's real size once known, for the caption — and null when
-	 * the bytes change, so a size the new bytes have not confirmed is not shown.
+	 * Reports the media's real size and length once known, for the caption — and
+	 * null when the bytes change, so what the new bytes have not confirmed is
+	 * not shown.
 	 */
-	onDimensions: (dimensions: ImageDimensions | null) => void;
+	onMetadata: (metadata: MediaMetadata | null) => void;
 }
 
 export type StageComponent<Item extends MediaItem = MediaItem> = ComponentType<

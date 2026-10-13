@@ -1,16 +1,24 @@
 import { QueryObserver } from "@tanstack/react-query";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { gitStatusQueryKey } from "../hooks/gitQueries";
+import { WORKSPACE_RAW_CAPABILITY_KEY } from "../hooks/useRawMediaSource";
 import { HttpError } from "./api";
 import { authActions } from "./authStore";
 import { createQueryClient } from "./queryClient";
 import { worktreeActions } from "./worktreeStore";
+import { setOnWorktreeSwitched } from "./wsStore";
 
 // Mock authStore
 vi.mock("./authStore", () => ({
 	authActions: {
 		logout: vi.fn(),
 	},
+}));
+
+// Only the RPC layer calls the switch callback, so the test calls it itself.
+vi.mock("./wsStore", async (importOriginal) => ({
+	...(await importOriginal<typeof import("./wsStore")>()),
+	setOnWorktreeSwitched: vi.fn(),
 }));
 
 describe("createQueryClient", () => {
@@ -141,6 +149,32 @@ describe("createQueryClient", () => {
 				queryClient.getQueryCache().find({ queryKey: gitStatusQueryKey }),
 			).toBeUndefined();
 			unsubscribe();
+		});
+	});
+
+	describe("when the worktree switch lands", () => {
+		// A capability asked for mid-switch may serve the worktree being left;
+		// an attachment's names its own worktree, so the switch changes nothing.
+		it("invalidates workspace raw capabilities and leaves attachment ones", () => {
+			const queryClient = createQueryClient();
+			const switched = vi.mocked(setOnWorktreeSwitched).mock.calls[0]?.[0];
+			if (!switched) throw new Error("no switch callback registered");
+			const workspaceKey = [
+				...WORKSPACE_RAW_CAPABILITY_KEY,
+				"main",
+				"file",
+				"a.mp4",
+			];
+			const attachmentKey = ["raw-capability", "attachment", "main", "s", "1"];
+			queryClient.setQueryData(workspaceKey, { path: "/w" });
+			queryClient.setQueryData(attachmentKey, { path: "/a" });
+
+			switched();
+
+			expect(queryClient.getQueryState(workspaceKey)?.isInvalidated).toBe(true);
+			expect(queryClient.getQueryState(attachmentKey)?.isInvalidated).toBe(
+				false,
+			);
 		});
 	});
 });

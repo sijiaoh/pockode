@@ -790,7 +790,7 @@ its images is still the conversation the user asked for.
 
 `attachment.get` (`ws/rpc_attachment.go`) takes a session id and an attachment
 id and answers with the same `contents.FileContent` that `file.get` answers
-with — MIME sniffed from the bytes, `encoding: "http"` for a raster image, text
+with — MIME sniffed from the bytes, `encoding: "http"` for media, text
 for content that is text, omitted with a reason for the rest — so a client
 renders an attachment through the file viewer's existing code path instead of a
 second one built to say the same things.

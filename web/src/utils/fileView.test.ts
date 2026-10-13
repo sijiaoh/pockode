@@ -1,13 +1,16 @@
 import { describe, expect, it } from "vitest";
-import type { FileContent, ImageOrigin } from "../types/contents";
+import type { ContentOrigin, FileContent } from "../types/contents";
 import {
 	canEditFileView,
+	formatMediaCaption,
 	formatMimeLabel,
 	getEditLabel,
 	getFileViewState,
 	getImageSource,
 	getMimeType,
+	getPlayableKind,
 	HIGHLIGHT_LIMIT,
+	inlineVideoBox,
 } from "./fileView";
 
 function file(overrides: Partial<FileContent>): FileContent {
@@ -23,7 +26,7 @@ function file(overrides: Partial<FileContent>): FileContent {
 	};
 }
 
-const ORIGIN: ImageOrigin = { kind: "file", path: "src/app.ts" };
+const ORIGIN: ContentOrigin = { kind: "file", path: "src/app.ts" };
 
 const view = (content: FileContent) => getFileViewState(content, ORIGIN);
 
@@ -42,6 +45,63 @@ describe("formatMimeLabel", () => {
 		expect(formatMimeLabel("image/x-icon")).toBe("ICON");
 		expect(formatMimeLabel("image/vnd.microsoft.icon")).toBe("ICON");
 		expect(formatMimeLabel("text/plain; charset=utf-8")).toBe("PLAIN");
+		expect(formatMimeLabel("video/quicktime")).toBe("MOV");
+		expect(formatMimeLabel("audio/mpeg")).toBe("MP3");
+	});
+});
+
+describe("formatMediaCaption", () => {
+	it("says type, dimensions, length and size, in that order", () => {
+		expect(
+			formatMediaCaption("video/quicktime", 2048, {
+				dimensions: { width: 1080, height: 1920 },
+				duration: 42.7,
+			}),
+		).toBe("MOV · 1080×1920 · 0:42 · 2 KB");
+		expect(formatMediaCaption("audio/mpeg", 2048, { duration: 192 })).toBe(
+			"MP3 · 3:12 · 2 KB",
+		);
+		expect(formatMediaCaption("image/png", 2048)).toBe("PNG · 2 KB");
+	});
+
+	it("counts hours once there are any", () => {
+		expect(formatMediaCaption("audio/mpeg", 2048, { duration: 3725 })).toBe(
+			"MP3 · 1:02:05 · 2 KB",
+		);
+	});
+
+	it("leaves out a length the file does not state", () => {
+		for (const duration of [Number.POSITIVE_INFINITY, Number.NaN]) {
+			expect(formatMediaCaption("video/webm", 2048, { duration })).toBe(
+				"WEBM · 2 KB",
+			);
+		}
+	});
+});
+
+describe("inlineVideoBox", () => {
+	it("reserves 16:9 until the video says its shape", () => {
+		expect(inlineVideoBox(null)).toEqual({
+			aspectRatio: "16 / 9",
+			width: "min(100%, calc(70vh * 16 / 9))",
+		});
+	});
+
+	it("takes the video's shape, never wider than its own pixels", () => {
+		expect(inlineVideoBox({ width: 1080, height: 1920 })).toEqual({
+			aspectRatio: "1080 / 1920",
+			width: "min(100%, 1080px, calc(70vh * 1080 / 1920))",
+		});
+	});
+});
+
+describe("getPlayableKind", () => {
+	it("names the element that plays a type", () => {
+		expect(getPlayableKind("audio/mpeg")).toBe("audio");
+		expect(getPlayableKind("video/quicktime")).toBe("video");
+		expect(getPlayableKind("video/mp4; codecs=avc1")).toBe("video");
+		expect(getPlayableKind("image/png")).toBeNull();
+		expect(getPlayableKind("application/ogg")).toBeNull();
 	});
 });
 
@@ -143,6 +203,30 @@ describe("getFileViewState", () => {
 		expect(avif.kind).toBe("image");
 	});
 
+	it("routes audio and video to a player, reading from the origin", () => {
+		// Past the image ceiling: the server sends media of any size.
+		const size = 100 * 1024 * 1024;
+		expect(
+			view(
+				file({ encoding: "http", mime: "video/quicktime", content: "", size }),
+			),
+		).toEqual({ kind: "video", origin: ORIGIN, mime: "video/quicktime", size });
+		expect(
+			view(file({ encoding: "http", mime: "audio/mpeg", content: "" })),
+		).toMatchObject({ kind: "audio", origin: ORIGIN });
+	});
+
+	it("keeps text typed as audio or video as text", () => {
+		// A git-LFS pointer committed as clip.mov.
+		const pointer = view(
+			file({
+				mime: "video/quicktime",
+				content: "version https://git-lfs.github.com/spec/v1",
+			}),
+		);
+		expect(pointer).toMatchObject({ kind: "text" });
+	});
+
 	it("keeps text typed as a raster image as text", () => {
 		// A git-LFS pointer committed as photo.avif: typed from the extension,
 		// but the server found text and sent it as such.
@@ -189,6 +273,7 @@ describe("edit availability", () => {
 		mime: "application/zip",
 	});
 	const tooLarge = state({ encoding: "none", omitted: "too_large" });
+	const video = state({ encoding: "http", mime: "video/mp4", content: "" });
 
 	it("allows editing anything that arrived as text", () => {
 		expect(canEditFileView(text)).toBe(true);
@@ -199,6 +284,7 @@ describe("edit availability", () => {
 		expect(canEditFileView(png)).toBe(false);
 		expect(canEditFileView(binary)).toBe(false);
 		expect(canEditFileView(tooLarge)).toBe(false);
+		expect(canEditFileView(video)).toBe(false);
 	});
 
 	it("names the reason a file cannot be edited", () => {
@@ -207,5 +293,6 @@ describe("edit availability", () => {
 		expect(getEditLabel(png)).toMatch(/^Edit \(/);
 		expect(getEditLabel(binary)).toMatch(/^Edit \(/);
 		expect(getEditLabel(tooLarge)).toMatch(/^Edit \(/);
+		expect(getEditLabel(video)).toMatch(/^Edit \(/);
 	});
 });

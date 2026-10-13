@@ -61,8 +61,8 @@ func (h *rpcMethodHandler) handleAttachmentGet(ctx context.Context, conn *jsonrp
 // gate GET /api/chat/attachments applies, so an id described here is one that
 // endpoint serves. It is then read through contents.GetContents, the same way
 // file.get does, so an attachment is described to the client exactly as a file
-// is — MIME sniffed from the bytes, a raster image left for the client to fetch
-// over HTTP, omitted with a reason when it is not something to show.
+// is — MIME sniffed from the bytes, media left for the client to fetch over
+// HTTP, omitted with a reason when it is not something to show.
 //
 // Shared by attachment.get and session_view.attachment so that an id is
 // confined and answered the same way whichever worktree the session belongs to.

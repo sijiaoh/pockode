@@ -4,7 +4,7 @@ import { useSessionView } from "../lib/sessionView";
 import { useWorktreeStore } from "../lib/worktreeStore";
 import { isRPCTimeout, useWSStore } from "../lib/wsStore";
 import type { AttachmentSource } from "../types/content";
-import type { FileContent, ImageOrigin } from "../types/contents";
+import type { ContentOrigin, FileContent } from "../types/contents";
 import { contentsQueryKey } from "./useContents";
 
 /**
@@ -32,13 +32,11 @@ export function attachmentQueryKey(
 }
 
 /**
- * Where an attachment's raster image is read from over HTTP: where its
+ * Where an attachment's bytes are read from over HTTP: where its
  * description came from — the transcript's own worktree when it is being read
  * from outside, otherwise the one the WebSocket is bound to now.
  */
-export function useAttachmentImageOrigin(
-	source: AttachmentSource,
-): ImageOrigin {
+export function useAttachmentOrigin(source: AttachmentSource): ContentOrigin {
 	const view = useSessionView();
 	const bound = useWorktreeStore((state) => state.current);
 	return source.kind === "attachment"

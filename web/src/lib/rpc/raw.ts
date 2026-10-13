@@ -1,5 +1,5 @@
 import type { JSONRPCRequester } from "json-rpc-2.0";
-import type { ImageOrigin } from "../../types/contents";
+import type { ContentOrigin } from "../../types/contents";
 import { requireClient } from "./client";
 
 /**
@@ -10,9 +10,9 @@ import { requireClient } from "./client";
  * commit, since a page's scripts can read the capability out of its own URL.
  */
 export type RawTarget =
-	| { origin: ImageOrigin; scope: "file" }
+	| { origin: ContentOrigin; scope: "file" }
 	| {
-			origin: Exclude<ImageOrigin, { kind: "attachment" }>;
+			origin: Exclude<ContentOrigin, { kind: "attachment" }>;
 			scope: "directory";
 	  };
 
@@ -28,7 +28,7 @@ export interface RawCapability {
 }
 
 interface RawCapabilityParams {
-	origin: ImageOrigin["kind"];
+	origin: ContentOrigin["kind"];
 	scope: RawTarget["scope"];
 	path?: string;
 	hash?: string;
