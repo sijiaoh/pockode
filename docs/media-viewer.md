@@ -1,8 +1,8 @@
 # Media viewer
 
-A full-screen viewer for media that the chat, the Files tab and Git can all
-open. Images come first; video and HTML are planned as further kinds of the same
-viewer, not as viewers of their own.
+A full-screen viewer for media that the chat, the Files tab, Git and any
+Markdown image can all open. Images come first; video and HTML are planned as
+further kinds of the same viewer, not as viewers of their own.
 
 ## Key Files
 
@@ -40,8 +40,9 @@ handle that.
 
 **Never open the viewer from inside another `Sheet`.** Both listen for Escape on
 `document`, and `stopPropagation` does not silence a sibling listener there, so
-one press would close both. Every entry point today sits on a page, not in a
-sheet.
+one press would close both. An entry point that can be rendered in a sheet asks
+`useIsInSheet` (`@pockode/shared`) and offers no viewer there — a Markdown image
+does ([markdown-images-ui.md](markdown-images-ui.md#opening-the-viewer)).
 
 ## Shape: one viewer, a stage per kind
 
@@ -64,13 +65,20 @@ What the viewer gets from where:
   its `afterClose`, because navigating while the viewer's history entry is still
   current would be undone by the Back that takes it.
 - **The caption** (`PNG · 2000×1333 · 433 KB`) is `formatImageCaption`, the same
-  line the in-place `ImagePreview` shows. It uses the decoded size once the stage
+  line the in-place `ImagePreview` shows. An external image (an `ImageSource` of
+  kind `external`, which only a Markdown image makes) is captioned with its host
+  instead — `example.com · 2000×1333`, `formatExternalImageCaption` — since an
+  `<img>` reports no type or size. It uses the decoded size once the stage
   reports it, and `item.dimensions` until then. New bytes withdraw the decoded
   size, so bytes that fail to decode are never captioned with the old size.
 - **Save** reads the bytes from the item's source (`imageSourceBlob`). For a
   remote image this is a cache hit on the bytes the `<img>` already read.
   `saveBlob` retypes the Blob to octet-stream, so saving an SVG never yields a
   renderable same-origin URL. A failed save is reported under the toolbar.
+  An external image has no Save: reading its bytes would be a cross-origin
+  `fetch`, which fails on every host that sends no CORS headers. Its place is
+  taken by **Open original**, a link to the URL in a new tab with
+  `noopener noreferrer`.
 - **The stage frame** is a focusable `<section>` that belongs to the viewer, not
   to the stage. It is the sheet's `initialFocusRef`, so focus lands on the
   content at open, even before the stage has loaded. Its `onKeyDown` forwards to
@@ -244,6 +252,14 @@ preview itself stays as it is — it is the page; the viewer is the zoom.
   loading and failure branches, so a rewritten file reloading under the viewer
   leaves it open; the stage reads the bytes for itself.
 
+### Markdown: an image in the text
+
+A loaded image written in Markdown is itself the button that opens the viewer —
+the thumbnail's pattern — and owns the open state, as `ImagePreview` does. It is
+the one way in to an external image (`ImageSource` kind `external`). Which
+images offer it, and what the viewer shows for each source, is in
+[markdown-images-ui.md](markdown-images-ui.md#opening-the-viewer).
+
 ## Not in v1
 
 Swiping between the images of one strip, swipe-down to dismiss, hiding the
@@ -264,3 +280,6 @@ chrome on tap, rotation, and pixelated rendering past 100%.
   the thumbnail already read.
 - `Files/ImagePreview.test.tsx` covers the Files and Git way in: the corner
   button and the image open the viewer only once loaded, with no Open in Files.
+- `ui/MarkdownImage.test.tsx` covers the Markdown way in: Save and Open in Files
+  for a workspace image, Open original and no Save for an external one, no
+  viewer for a linked image or inside a sheet.

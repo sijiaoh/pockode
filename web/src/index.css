@@ -1154,25 +1154,10 @@ samp {
 	color: var(--th-text-muted);
 }
 
-/* A markdown image has no intrinsic size until it loads, so the frame keeps a
- * fixed height and the image sits inside it. Height therefore never changes;
- * the cost is whitespace around images smaller than the frame. `inline-flex`
- * rather than `flex` because an image can share a line with text.
- * The image gives up typography's own `img { margin: 1.714em 0 }` — margins on
- * a flex item do not collapse and would push it out of the frame. Its
- * surrounding <p> is what spaces it from the rest of the message. */
-.markdown-image {
-	display: inline-flex;
-	align-items: flex-start;
-	vertical-align: middle;
-	height: var(--async-media-height);
-	max-width: 100%;
-}
-
+/* A Markdown image is sized by its own classes (`MarkdownImage`); this only
+ * takes back typography's `img { margin: 1.714em 0 }`. The paragraph around it
+ * is what spaces it from the rest of the message. */
 .markdown-image img {
-	max-width: 100%;
-	max-height: 100%;
-	width: auto;
 	margin: 0;
 }
 

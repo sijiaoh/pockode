@@ -313,8 +313,8 @@ describe("the history reserve in a real layout", () => {
 
 describe("MessageList holding the reader inside one long part", () => {
 	/**
-	 * Never loads: its frame, not its pixels, is what takes up room. Not a
-	 * `data:` URL, which the Markdown renderer strips.
+	 * Never loads (`stubChatHistoryRpc` never answers the read): its frame, not
+	 * its pixels, is what takes up room.
 	 */
 	const IMAGE = "diagram.png";
 
@@ -347,7 +347,7 @@ describe("MessageList holding the reader inside one long part", () => {
 			transcript.scroller.scrollTop + transcript.viewTopOf(READER_LINE) - 100,
 		);
 		const frame = screen
-			.getByRole("img", { name: "diagram" })
+			.getByRole("status", { name: "diagram" })
 			.closest<HTMLElement>(".markdown-image");
 		if (!frame) throw new Error("the image has no frame");
 		// The part starts above the view, so holding the part still would hold

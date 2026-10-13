@@ -12,7 +12,7 @@ import {
 	workspacePath,
 } from "../../utils/attachment";
 import { type ImageMediaItem, MediaViewer } from "../Media";
-import AttachmentChip from "./AttachmentChip";
+import AttachmentChip from "../ui/AttachmentChip";
 import AttachmentThumb from "./AttachmentThumb";
 
 interface Props {

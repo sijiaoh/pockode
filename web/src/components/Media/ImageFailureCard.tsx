@@ -8,6 +8,11 @@ interface Props {
 	readError?: Error | null;
 	mime: string;
 	size: number;
+	/**
+	 * Set for an external image, whose `<img>` says nothing about why it failed
+	 * and reports no type or size: the host is all there is to say.
+	 */
+	host?: string;
 	onRetry: () => void;
 }
 
@@ -15,7 +20,24 @@ interface Props {
  * What stands in for an image that could not be shown, said the same way in
  * the in-place preview and the full-screen viewer.
  */
-export function ImageFailureCard({ readError, mime, size, onRetry }: Props) {
+export function ImageFailureCard({
+	readError,
+	mime,
+	size,
+	host,
+	onRetry,
+}: Props) {
+	if (host !== undefined) {
+		return (
+			<FileStateCard
+				icon={ImageOff}
+				iconClassName="text-th-error"
+				title="Couldn't load image"
+				description={`${host} didn't send an image the browser could show.`}
+				action={{ label: "Retry", onClick: onRetry }}
+			/>
+		);
+	}
 	return (
 		<FileStateCard
 			icon={ImageOff}

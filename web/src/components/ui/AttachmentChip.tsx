@@ -18,8 +18,9 @@ interface Props {
 }
 
 /**
- * One non-image entry in a tool result's attachment strip: a PDF a read
- * delivered, an image that could not be shown.
+ * One non-image entry in a tool result's attachment strip — a PDF a read
+ * delivered, an image that could not be shown — and a Markdown image that could
+ * not be (docs/markdown-images-ui.md).
  *
  * Not `FileStateCard`, which is a centred full-width empty state written for a
  * screen with nothing else on it. A chat message is not that screen — this sits
@@ -35,17 +36,25 @@ function AttachmentChip({
 	action,
 }: Props) {
 	return (
+		// Spans throughout: a Markdown image's stands in a paragraph, which may
+		// not hold a <div>.
+		//
 		// Its own type sizes rather than the surrounding text's: inside a user
 		// bubble that text is the message, and an entry at the message's size
 		// competes with it — and outgrows the composer's entry for the same file.
-		<div className="flex w-56 shrink-0 items-center gap-2 rounded-lg border border-th-border bg-th-bg-secondary p-2">
+		<span className="flex w-56 shrink-0 items-center gap-2 rounded-lg border border-th-border bg-th-bg-secondary p-2">
 			<Icon className={`size-5 shrink-0 ${iconClassName}`} aria-hidden="true" />
-			<div className="min-w-0 flex-1 text-sm">
-				<div className="truncate text-th-text-primary" title={tooltip ?? title}>
+			<span className="min-w-0 flex-1 text-sm">
+				<span
+					className="block truncate text-th-text-primary"
+					title={tooltip ?? title}
+				>
 					{title}
-				</div>
-				<div className="truncate text-xs text-th-text-muted">{detail}</div>
-			</div>
+				</span>
+				<span className="block truncate text-xs text-th-text-muted">
+					{detail}
+				</span>
+			</span>
 			{action && (
 				<button
 					type="button"
@@ -55,7 +64,7 @@ function AttachmentChip({
 					{action.label}
 				</button>
 			)}
-		</div>
+		</span>
 	);
 }
 

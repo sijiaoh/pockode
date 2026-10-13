@@ -68,6 +68,11 @@ export async function imageSourceBlob(
 	if (source.kind === "remote") {
 		return queryClient.fetchQuery(imageBlobQuery(source.origin, source.mime));
 	}
+	// An external image's bytes would take a cross-origin `fetch`, which fails
+	// on every host that sends no CORS headers; the viewer offers no Save for one.
+	if (source.kind === "external") {
+		throw new Error("an external image cannot be saved from here");
+	}
 	// Inline sources are the percent-encoded data URLs `getImageSource` builds.
 	// Untyped: `saveBlob` retypes every Blob it saves.
 	const comma = source.src.indexOf(",");
@@ -92,7 +97,12 @@ export function useImageSrc(source: ImageSource | null, enabled = true) {
 	const objectUrl = useObjectUrl(remote ? query.data : undefined);
 
 	return {
-		src: source?.kind === "inline" ? source.src : objectUrl,
+		src:
+			source?.kind === "inline"
+				? source.src
+				: source?.kind === "external"
+					? source.url
+					: objectUrl,
 		// Withheld while a retry is running, so the caller shows it loading
 		// rather than the failure it is already trying to get past.
 		error: remote && !query.isFetching ? query.error : null,

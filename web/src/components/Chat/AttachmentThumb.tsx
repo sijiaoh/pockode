@@ -15,8 +15,8 @@ import {
 } from "../../utils/attachment";
 import { getFileViewState } from "../../utils/fileView";
 import type { ImageMediaItem } from "../Media";
+import AttachmentChip from "../ui/AttachmentChip";
 import Skeleton from "../ui/Skeleton";
-import AttachmentChip from "./AttachmentChip";
 
 /** Fallback shape for an image whose dimensions the agent did not report. */
 const FALLBACK_ASPECT = 4 / 3;

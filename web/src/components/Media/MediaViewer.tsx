@@ -1,11 +1,15 @@
 import { useQueryClient } from "@tanstack/react-query";
-import { CircleAlert, Download, ExternalLink } from "lucide-react";
+import { CircleAlert, Download, ExternalLink, Globe } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { useBackToClose } from "../../hooks/useBackToClose";
 import { imageSourceBlob } from "../../hooks/useImageSrc";
 import { saveBlob } from "../../lib/fileDownload";
 import { errorMessage } from "../../utils/errorMessage";
-import { formatImageCaption, type ImageDimensions } from "../../utils/fileView";
+import {
+	formatExternalImageCaption,
+	formatImageCaption,
+	type ImageDimensions,
+} from "../../utils/fileView";
 import { FileStateCard, headerButtonClass, Sheet, Spinner } from "../ui";
 import { loadedStage, loadStage } from "./stages";
 import type {
@@ -73,7 +77,10 @@ function useStage(kind: MediaKind) {
 }
 
 function caption(item: MediaItem, decoded: ImageDimensions | null): string {
-	return formatImageCaption(item.mime, item.size, decoded ?? item.dimensions);
+	const dimensions = decoded ?? item.dimensions;
+	return item.source.kind === "external"
+		? formatExternalImageCaption(item.source.url, dimensions)
+		: formatImageCaption(item.mime, item.size, dimensions);
 }
 
 /** The item's bytes, for Save. */
@@ -105,6 +112,10 @@ export function MediaViewer({ item, openInFiles, onClose }: MediaViewerProps) {
 	const [decoded, setDecoded] = useState<ImageDimensions | null>(null);
 	const [saveError, setSaveError] = useState<string | null>(null);
 	const { state: stage, retry } = useStage(item.kind);
+	// An external image's bytes are only ever the `<img>`'s: reading them for
+	// Save would be a cross-origin `fetch`, which fails on every host that sends
+	// no CORS headers. Its own server is where to get it instead.
+	const externalUrl = item.source.kind === "external" ? item.source.url : null;
 
 	const save = async () => {
 		setSaveError(null);
@@ -156,15 +167,28 @@ export function MediaViewer({ item, openInFiles, onClose }: MediaViewerProps) {
 							</button>
 						)}
 						{/* Last, nearest the thumb. */}
-						<button
-							type="button"
-							onClick={save}
-							aria-label="Save"
-							title="Save"
-							className={headerButtonClass("lg")}
-						>
-							<Download size={16} aria-hidden="true" />
-						</button>
+						{externalUrl ? (
+							<a
+								href={externalUrl}
+								target="_blank"
+								rel="noopener noreferrer"
+								aria-label="Open original"
+								title="Open original"
+								className={headerButtonClass("lg")}
+							>
+								<Globe size={16} aria-hidden="true" />
+							</a>
+						) : (
+							<button
+								type="button"
+								onClick={save}
+								aria-label="Save"
+								title="Save"
+								className={headerButtonClass("lg")}
+							>
+								<Download size={16} aria-hidden="true" />
+							</button>
+						)}
 					</div>
 				</div>
 				{saveError && (

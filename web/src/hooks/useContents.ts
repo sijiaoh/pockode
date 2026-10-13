@@ -29,8 +29,12 @@ export function useContents(path = "", enabled = true) {
 		// re-read, re-encode and re-send the whole thing while the first attempt is
 		// very likely still in flight, turning one slow response into four. Every
 		// other kind of failure keeps the default retry budget. `useCommitFile`
-		// reads blobs of the same size and follows the same rule.
+		// reads blobs of the same size and follows the same rule. A path that is
+		// not there will not be there a second later either: asking again only
+		// keeps the reader waiting on a loading state for the answer they have.
 		retry: (failureCount, error) =>
-			!isRPCTimeout(error) && failureCount < DEFAULT_RETRY_COUNT,
+			!isRPCTimeout(error) &&
+			!isNotFoundError(error) &&
+			failureCount < DEFAULT_RETRY_COUNT,
 	});
 }

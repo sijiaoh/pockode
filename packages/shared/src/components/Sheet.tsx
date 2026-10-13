@@ -1,6 +1,8 @@
 import {
+	createContext,
 	type ReactNode,
 	type RefObject,
+	useContext,
 	useEffect,
 	useId,
 	useRef,
@@ -40,6 +42,18 @@ export interface SheetProps {
 	 */
 	initialFocusRef?: RefObject<HTMLElement | null>;
 	children: ReactNode;
+}
+
+const InSheetContext = createContext(false);
+
+/**
+ * Whether this is rendered inside a `Sheet`, for something that would open a
+ * sheet of its own: sheets do not nest — both listen for Escape on `document`,
+ * so one press would close both — and inside one it has to offer something
+ * else, or nothing.
+ */
+export function useIsInSheet(): boolean {
+	return useContext(InSheetContext);
 }
 
 /**
@@ -203,7 +217,11 @@ export function Sheet({
 
 	const body = (
 		<>
-			<div className="min-h-0 flex-1 overflow-y-auto">{children}</div>
+			<div className="min-h-0 flex-1 overflow-y-auto">
+				<InSheetContext.Provider value={true}>
+					{children}
+				</InSheetContext.Provider>
+			</div>
 			{footer && (
 				<div className="flex shrink-0 gap-3 border-t border-th-border p-4">
 					{footer}

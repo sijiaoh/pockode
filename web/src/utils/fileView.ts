@@ -24,13 +24,15 @@ export const HIGHLIGHT_LIMIT = 256 * 1024;
 export const EDITOR_HIGHLIGHT_LIMIT = 32 * 1024;
 
 /**
- * How to get an image on screen: a URL that is already here, or bytes still to
- * be read from where the description came from (`useImageSrc` turns those into
- * one).
+ * How to get an image on screen: a URL that is already here, bytes still to be
+ * read from where the description came from (`useImageSrc` turns those into
+ * one), or a picture on someone else's server that a Markdown text points at —
+ * which only an `<img>` reads, so nothing here ever holds its bytes.
  */
 export type ImageSource =
 	| { kind: "inline"; src: string }
-	| { kind: "remote"; origin: ImageOrigin; mime: string };
+	| { kind: "remote"; origin: ImageOrigin; mime: string }
+	| { kind: "external"; url: string };
 
 export type FileViewState =
 	| { kind: "empty" }
@@ -88,6 +90,22 @@ export function formatImageCaption(
 		formatMimeLabel(mime),
 		dimensions && `${dimensions.width}×${dimensions.height}`,
 		formatBytes(size),
+	]
+		.filter(Boolean)
+		.join(" · ");
+}
+
+/**
+ * The caption for an external image: its host stands in for the type and size,
+ * which an `<img>` does not report — `example.com · 2000×1333`.
+ */
+export function formatExternalImageCaption(
+	url: string,
+	dimensions: ImageDimensions | null | undefined,
+): string {
+	return [
+		new URL(url).host,
+		dimensions && `${dimensions.width}×${dimensions.height}`,
 	]
 		.filter(Boolean)
 		.join(" · ");

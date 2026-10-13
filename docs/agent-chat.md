@@ -900,13 +900,14 @@ inner `pre` sits next to the `overflow` it lost in the same refactor
 (`32e9811`), and the height now simply never changes.
 
 What genuinely cannot be known early — the lazy chunk behind a mermaid diagram,
-an image's intrinsic size — is given a reserved box instead
+a Markdown image's intrinsic size — is given a reserved box while it waits
 (`--async-media-height` in `web/src/index.css`). That reservation is no longer
 part of any mechanism: it is there so the waiting state and the settled state are
-roughly the same height and the transcript does not visibly jump between them. A
-reservation is a guess, paid for in whitespace around images smaller than the
-frame, and where it cannot be exact — a diagram is whatever size it turns out to
-be — the difference is simply a resize like any other.
+roughly the same height and the transcript does not visibly jump between them.
+A reservation is a guess, and where it cannot be exact — a diagram is whatever
+size it turns out to be, and an image takes its own fitted size once it loads
+([markdown-images-ui.md](markdown-images-ui.md#block)) — the difference is
+simply a resize like any other.
 
 An attachment in a tool result's strip needs no reservation of this kind,
 because its shape is known before its bytes are: the block carries the

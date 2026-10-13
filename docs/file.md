@@ -717,6 +717,10 @@ Once loaded, an image offers full screen — the ⤢ in its corner, or a click o
 the image — in the [media viewer](media-viewer.md#files-and-git-imagepreview),
 which zooms and pans it and has no Open in Files, since the file is already open.
 
+A `.md` file's text is rendered as Markdown, and an image it names by a
+relative path is read from the file's own directory, as on GitHub — see
+[markdown-images-ui.md](markdown-images-ui.md#where-the-bytes-come-from).
+
 Edit is disabled rather than hidden, with the reason in its accessible name, and
 `binary`/`too-large` repeat it visibly on the card. **Delete stays available in
 every state** — being unable to preview a file is no reason to be unable to
@@ -752,7 +756,11 @@ edit, and only its colours are negotiable.
 `useContents` does not retry a request its own clock gave up on
 (`isRPCTimeout`): the server is likely still reading, and a retry makes it
 re-read, re-encode and re-send the whole file — see
-[code/websocket-rpc.md](code/websocket-rpc.md#request-timeout).
+[code/websocket-rpc.md](code/websocket-rpc.md#request-timeout). Nor does it
+retry a path the server reported not found (`isNotFoundError`): the answer
+will not change a second later, and asking again only holds the reader on a
+loading state — a Markdown image naming a wrong path would pulse for seconds
+before saying so.
 
 A file as it stood in a commit reuses this same `FileViewState` and `FileBody`,
 so a historical binary or oversized blob is described by the same card,
@@ -779,10 +787,11 @@ object URL rather than an `<img src>` pointing at the endpoint; a `401` logs out
   only to a raster one. Anything else, SVG included, stays octet-stream, so even
   a wrong description cannot produce a same-origin SVG object URL
   ([why SVG matters](#operations)).
-- **Read when on screen.** `ImagePreview` and the chat's attachment thumbnails
-  hold the read (and a thumbnail its metadata RPC too) until the frame is in
-  view (`useInView`). A transcript can carry dozens of screenshots; reading the
-  ones nobody scrolled to would spend the connection for nothing.
+- **Read when on screen.** `ImagePreview`, the chat's attachment thumbnails and
+  a Markdown image hold the read (and a thumbnail or Markdown image its metadata
+  RPC too) until the frame is in view (`useInView`). A transcript can carry
+  dozens of screenshots; reading the ones nobody scrolled to would spend the
+  connection for nothing.
 - **Four at a time, newest first.** Reads go through one limiter,
   `IMAGE_FETCH_CONCURRENCY` = 4 (`utils/limiter.ts`). Through the relay every
   request is a stream on one tunnel capped at 64, the WebSocket included
@@ -798,9 +807,9 @@ object URL rather than an `<img src>` pointing at the endpoint; a `401` logs out
   an FS-watch change, a worktree switch, a rename or delete — reaches the bytes
   by prefix with nothing extra to keep in step. A commit's file and an
   attachment never change, so their keys only have to tell one from another. A
-  thumbnail, the in-place preview and the [media viewer](media-viewer.md)
-  share one entry, so the bytes are read once; the object URL is made per
-  component and revoked on unmount.
+  thumbnail, the in-place preview, a Markdown image and the
+  [media viewer](media-viewer.md) share one entry, so the bytes are read once;
+  the object URL is made per component and revoked on unmount.
 - **Retry by status.** A `4xx` — an attachment cleaned up, a path the commit
   lacks — would be refused the same way again, so the failure and a Retry
   action show at once (a card on the preview, the chip on a thumbnail). A `5xx`

@@ -940,6 +940,7 @@ function ContentPartItem(props: ContentPartItemProps) {
 			<MarkdownContent
 				content={part.content}
 				variant={depth > 0 ? "note" : "message"}
+				onOpenFile={onOpenFile}
 				// One part can be screens of prose, so its blocks are where the
 				// reader's place is held (see `scrollAnchor`).
 				rootProps={anchorBlocksProps}
