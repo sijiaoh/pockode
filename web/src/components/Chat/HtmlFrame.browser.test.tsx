@@ -19,14 +19,15 @@ import {
 // Says, from inside the page, that a request to another host went through.
 import landedPath from "../../test/page-hosts/landed.htm?url";
 import signalPath from "../../test/page-hosts/signal.js?url";
+import { otherHost } from "../../test/testServerHosts";
 import { PRESS_HOLD_MS } from "../ui/PageHostsStrip";
 import { HTML_FRAME_SANDBOX, HtmlFrame } from "./HtmlFrame";
 
 // What jsdom cannot do is enforce a policy, which is the whole guarantee: these
-// run real pages against real engines. The app is served from `localhost`; the
-// same server under `127.0.0.1` stands in for another host — a CDN — so a
+// run real pages against real engines. The same server under another name
+// stands in for another host — a CDN (`src/test/testServerHosts.ts`) — so a
 // request that is let through is seen to arrive.
-const OTHER_HOST = `127.0.0.1:${location.port}`;
+const OTHER_HOST = otherHost(location.port);
 const SIGNAL_URL = `http://${OTHER_HOST}${signalPath}`;
 const LANDED_URL = `http://${OTHER_HOST}${landedPath}`;
 const KEY = "call-under-test";
