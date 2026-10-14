@@ -120,7 +120,9 @@ function emptyReport(run: ToolRun, hasOutcome: boolean): string {
 		case "background":
 			return "No report yet — the subagent is still working.";
 		case "interrupted":
-			return "The turn was interrupted before the subagent reported anything.";
+			return run.lostWithProcess
+				? "The CLI process ended before the subagent reported anything."
+				: "The turn was interrupted before the subagent reported anything.";
 		case "error":
 			return "The subagent failed without reporting anything.";
 		default:

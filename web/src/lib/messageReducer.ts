@@ -1867,8 +1867,16 @@ function settleToolRun(
 					: "success",
 		// A settled subagent leaves nothing spinning under it: a child still
 		// running has lost the only process that could report on it. A
-		// backgrounded child is left to its own notification.
-		...(run.children ? { children: settleRunningToolParts(run.children) } : {}),
+		// backgrounded child is left to its own notification — unless this is
+		// `background_lost`, which says the process that would send it is gone.
+		...(run.children
+			? {
+					children: settleRunningToolParts(
+						run.children,
+						event.subtype === "background_lost",
+					),
+				}
+			: {}),
 	};
 
 	if (
@@ -1883,6 +1891,9 @@ function settleToolRun(
 			// then nothing marked the run. Both subtypes only ever describe a
 			// backgrounded call, so they can say so themselves.
 			fromBackground: true,
+			// Said by the record too, not only by the `process_ended` before it:
+			// that one may sit on a page this client never loaded.
+			...(event.subtype === "background_lost" ? { lostWithProcess: true } : {}),
 			// The row's second line hands over from the live activity to the
 			// outcome here, so the row settles without changing height.
 			activity: undefined,
@@ -2204,17 +2215,30 @@ export function applyToolActivitySnapshot(
  * definition, and its outcome is still coming. So is everything under it — a
  * backgrounded subagent's own calls are as alive as it is — while a subagent
  * that is settled here takes its running children with it.
+ *
+ * Unless `processGone`: background work outlives the turn, not the process
+ * running it, so once that is gone a backgrounded run and everything under it
+ * is settled too, and marked `lostWithProcess`. A result that still turns up
+ * for it (`background_lost`) keeps the `interrupted` this leaves, as any result
+ * reaching an interrupted run does.
  */
-function settleRunningToolParts(parts: ContentPart[]): ContentPart[] {
+function settleRunningToolParts(
+	parts: ContentPart[],
+	processGone = false,
+): ContentPart[] {
 	let changed = false;
 	const updated = parts.map((part) => {
-		if (part.type !== "tool_call" || part.tool.status === "background") {
+		if (
+			part.type !== "tool_call" ||
+			(part.tool.status === "background" && !processGone)
+		) {
 			return part;
 		}
 		const children = part.tool.children
-			? settleRunningToolParts(part.tool.children)
+			? settleRunningToolParts(part.tool.children, processGone)
 			: undefined;
-		const settle = part.tool.status === "running";
+		const lost = part.tool.status === "background";
+		const settle = part.tool.status === "running" || lost;
 		if (!settle && children === part.tool.children) return part;
 		changed = true;
 		return {
@@ -2222,6 +2246,7 @@ function settleRunningToolParts(parts: ContentPart[]): ContentPart[] {
 			tool: {
 				...part.tool,
 				...(settle ? { status: "interrupted" as const } : {}),
+				...(lost ? { lostWithProcess: true } : {}),
 				...(children ? { children } : {}),
 			},
 		};
@@ -2229,11 +2254,14 @@ function settleRunningToolParts(parts: ContentPart[]): ContentPart[] {
 	return changed ? updated : parts;
 }
 
-export function settleRunningToolRuns(messages: Message[]): Message[] {
+export function settleRunningToolRuns(
+	messages: Message[],
+	processGone = false,
+): Message[] {
 	let anyChanged = false;
 	const updated = messages.map((msg) => {
 		if (msg.role !== "assistant") return msg;
-		const parts = settleRunningToolParts(msg.parts);
+		const parts = settleRunningToolParts(msg.parts, processGone);
 		if (parts === msg.parts) return msg;
 		anyChanged = true;
 		return { ...msg, parts };
@@ -2390,9 +2418,11 @@ const BACK_REFERENCE_TYPES = new Set([
  */
 export function settleAfterProcessGone(messages: Message[]): Message[] {
 	// The reason is the record itself: every card still open when a process ends
-	// lost the only thing that could have taken its answer.
+	// lost the only thing that could have taken its answer — and every call still
+	// in flight, backgrounded or not, the only thing that could have run it.
 	return settleRunningToolRuns(
 		expirePendingDialogs(messages, undefined, "process_ended"),
+		true,
 	);
 }
 
@@ -2666,7 +2696,9 @@ export function prependHistoryPage(
 					authFailure: tail.authFailure,
 				}
 			: {}),
-		parts: endedAtBoundary ? settleRunningToolParts(joined) : joined,
+		parts: endedAtBoundary
+			? settleRunningToolParts(joined, tail.status === "process_ended")
+			: joined,
 		createdAt: tail.createdAt,
 		// The head's anchor wins when it has one: it names the later record, which
 		// is where a fork of this message has to cut.

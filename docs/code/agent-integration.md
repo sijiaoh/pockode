@@ -2227,10 +2227,15 @@ away. So what was running is persisted to the session directory and turned into 
 one delivery that works for every way a process can die and the moment it matters
 — when the conversation that was waiting continues. The record holds two fields:
 `lostTasks`, how many were running, and `lostCalls`, the `tool_use_id`s they
-belonged to. Each lost call is settled first, with a `tool_result` carrying
-`subtype: "background_lost"` and `is_error`, so that by the time the reader
-reaches the warning explaining it, the rows above it have stopped claiming to be
-running. The subtype is kept apart from `background_result` because the author
+belonged to. Each lost call gets a `tool_result` carrying `subtype:
+"background_lost"` and `is_error`, ahead of the warning. That result is not what
+makes the row true: the `process_ended` record the dying process left already
+settled it on the client, which has no reason to wait for a next start that may
+be days away ([frontend-state.md](frontend-state.md#tool-runs)). It is the
+explanation arriving later — on the row for the user, as the queued note for the
+agent — and it settles only a row whose `process_ended` the client never loaded,
+or that never got one (the shutdown that writes none is a known limit, stated
+there). The subtype is kept apart from `background_result` because the author
 differs — that one is what the CLI said, this one is what Pockode observed of a
 process it killed or watched die
 ([tool-call-model.md](../tool-call-model.md#a-third-subtype-with-a-different-author)).
@@ -2241,7 +2246,7 @@ lifecycle's own set of backgrounded calls that have not reported an outcome. The
 CLI's schema says the ordering between those streams is unspecified and that they
 must not be correlated, so neither is derived from the other, and each half
 stands alone: a count with no ids delivers the warning only, ids with no count
-settle the rows only, and a record written before `lostCalls` existed still reads
+reach the rows only, and a record written before `lostCalls` existed still reads
 as the summary-only behaviour it had then. Two details carry that
 guarantee: the record is written synchronously in `Close` (the last point a server
 shutdown waits for) with the streaming goroutine covering only deaths the process

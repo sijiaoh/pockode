@@ -4,8 +4,9 @@ How a tool call is drawn, on a phone first.
 [tool-call-model.md](tool-call-model.md) decides what a tool run **is**; this one
 decides how one looks and behaves. Read it first — every field named here
 (`status`, `activity`, `output`, `placeholderResult`, `fromBackground`,
-`fetches`, `durationMs`, `exitCode`, `seenAt`, and a subagent run's children) is
-its `ToolRun`, and nothing below asks for data it does not define.
+`lostWithProcess`, `fetches`, `durationMs`, `exitCode`, `seenAt`, and a subagent
+run's children) is its `ToolRun`, and nothing below asks for data it does not
+define.
 
 The surfaces are `ToolCallItem.tsx`, `TaskItem.tsx` (the subagent category),
 `ToolGroupSummary.tsx` (the row a run of calls folds into) and
@@ -152,8 +153,8 @@ message does. Every part of a list falls into one of these kinds:
 | Kind | Parts | In a group |
 |---|---|---|
 | **Breaker** | a subagent call, `ExitPlanMode`, and their cards — and, since they already end the list, text, a question card and every other part | ends the group and stands as itself |
-| **Pinned** | a call that is `error`; one that is `background` or `fromBackground`, running or settled, unless it was interrupted; a card that is not `allowed`; an `allowed` card whose row has not come back, or whose call is still running | belongs to the group, never folds |
-| **Settled** | a call that is `success` or `interrupted`, with its `allowed` card if it had one — an `interrupted` one even once a background result reaches it, since the interrupt came first | folds into the summary, and is the only kind that decides whether there is a group |
+| **Pinned** | a call that is `error`; one that is `background` or `fromBackground`, running or settled, unless it was interrupted; one `lostWithProcess`, interrupted or not; a card that is not `allowed`; an `allowed` card whose row has not come back, or whose call is still running | belongs to the group, never folds |
+| **Settled** | a call that is `success` or `interrupted` (but not `lostWithProcess`), with its `allowed` card if it had one — an `interrupted` one even once a background result reaches it, since the interrupt came first | folds into the summary, and is the only kind that decides whether there is a group |
 | **Running** | a `running` call that never had a card | folds into a group its settled neighbours form — the newest is the step the summary is on; otherwise lies flat |
 | **Thinking** | a thinking row — not a call, and counts toward nothing ([turn-progress-ui.md](turn-progress-ui.md#12-where-it-goes-and-groups)) | folds into a group the calls form |
 
@@ -171,7 +172,12 @@ message does. Every part of a list falls into one of these kinds:
   the reader moved on; moving it into the summary then deletes a row above
   them — the height change [the second line](#the-second-line-problem-1) works
   to avoid — and its settled second line, *"Build succeeded in 4m12s"*, is what
-  they came back for.
+  they came back for. Work lost with the process is pinned the same way,
+  although it settles `interrupted`: it was pinned as `background` up to that
+  moment, and the process ending lands just as long after the reader moved on.
+  The table's *unless it was interrupted* is for a call the *turn* cut short,
+  which settled before it could be marked and must not come back out of its
+  group.
 - **Why an approved card stays pinned until its call settles.** Claude does not
   resend the call after approval; until progress or a result rebuilds the row,
   the card is all there is of the call, and folding it would put a tick over a
@@ -817,7 +823,10 @@ has a second line only when it failed.
    Claude's own notification sentence, `Background command "<description>"
    <outcome>`, is cut to its outcome and capitalised — `Completed (exit code
    0)`; any other phrasing is shown as it came, and the body's *Outcome* keeps
-   the whole sentence.
+   the whole sentence. A run the process took down before any outcome came
+   (`lostWithProcess`) has none to show, so it reads **"Stopped when the CLI
+   process ended"** — prose, not live — until the `background_lost` text
+   arrives and takes the rung like any other outcome.
 4. for a settled foreground **failure**, the line of the result that says why
    (`failureLine` in `lib/toolRun.ts`): the **last line naming a failure** —
    `error`, `fail`, `panic`, `✗` or `×`, in any case — skipping lines that say
@@ -970,7 +979,10 @@ still going. That is the whole reason status is derived from persisted records
 and activity is not. The two things that do replay onto that row are the outcome,
 once it has finished, and any fetch of it: a fetch is a persisted `tool_result`,
 so a reloaded page shows the fetched line from its first frame and never changes
-height there.
+height there. The cost is the row that has neither: it grows from no line to one
+when its outcome arrives — or when the process ends live under it and rung 3's
+*Stopped when the CLI process ended* takes the slot. A row that was showing live
+activity keeps its height either way.
 
 ### When a background run finishes
 
@@ -1035,15 +1047,22 @@ outcome. The line says `Not fetched` rather than "can't be previewed" — nothin
 failed, the log was deliberately not read — and stops there rather than telling
 the reader to open something that may have no button.
 
-**When the outcome is one Pockode wrote.** A background task dies with the CLI
-process, and the outcome then delivered at the next session start carries
-`background_lost` instead ([tool-call-model.md](tool-call-model.md#a-third-subtype-with-a-different-author)).
-It draws like any other background outcome — `error` glyph, chip kept, the same
-*Outcome · after the turn* block — because that is what it is. What must not
-happen is for it to land in the *Returned to the agent* block, or in a plain
-`Result` block: the agent never read it, and no CLI ever said it. The record's
-own text names its author, so a reader of the transcript is told where the claim
-came from and not only that the work ended.
+**When the work died with the process.** A background task dies with the CLI
+process, and the row settles the moment the process ends — `interrupted`, chip
+kept, `lostWithProcess` set, and rung 3's *Stopped when the CLI process ended* as
+its second line ([code/frontend-state.md](code/frontend-state.md#tool-runs)). The
+outcome Pockode writes for it, delivered at the next session start, carries
+`background_lost` ([tool-call-model.md](tool-call-model.md#a-third-subtype-with-a-different-author)),
+and is the explanation arriving rather than the row becoming true: its text
+takes the second line and the *Outcome · after the turn* block, and the glyph
+stays the interrupt's (`error` only where the client has no `process_ended` for
+it). What must not happen is for it to land in the *Returned to the agent* block,
+or in a plain `Result` block: the agent never read it, and no CLI ever said it.
+Nor does the row say *Returned after the turn was interrupted*, which an
+interrupted run with a result otherwise says: nothing returned. A subagent lost
+this way with nothing reported says *The CLI process ended before the subagent
+reported anything*. The record's own text names its author, so a reader of the
+transcript is told where the claim came from and not only that the work ended.
 
 ### A fetch reads on the row it came from
 

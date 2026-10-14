@@ -207,6 +207,13 @@ export interface ToolRun {
 	/** Set once the call is known to have left work running past the turn. */
 	fromBackground?: boolean;
 	/**
+	 * Its backgrounded work died with the CLI process running it (a
+	 * `process_ended` under it, or Pockode's `background_lost`). Nothing
+	 * returned: a `result` it carries is Pockode's account of the loss, not the
+	 * work's own outcome, so a row must not present it as one that came back.
+	 */
+	lostWithProcess?: boolean;
+	/**
 	 * What later calls fetched back of this call's task, oldest first (Claude's
 	 * `TaskOutput`). Derived from persisted `tool_result` records, unlike
 	 * `activity` and `output`, so a replayed run still has it.

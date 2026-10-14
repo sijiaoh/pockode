@@ -687,9 +687,15 @@ honest:
   settles the run; both are kept, because the placeholder is what the *agent*
   read and the outcome is what *happened*. A third subtype, `background_lost`,
   is the outcome Pockode writes itself when the CLI process died with the work
-  still running: it settles the run as `error` like any failed outcome, and the
-  record says who authored it
+  still running, and the record says who authored it
   ([tool-call-model.md](../tool-call-model.md#a-third-subtype-with-a-different-author)).
+  It is not what settles the row — the `process_ended` before it already did
+  (below), and an interrupted run keeps `interrupted` under it as under any late
+  result. It is the explanation that arrives later. Only a run still
+  `background` when it arrives — its `process_ended` on a page this client
+  never loaded, or never written (the known limit below) — settles from it, as
+  `error` like any failed outcome, and takes everything under it along as
+  `interrupted`, backgrounded children included, as `process_ended` would.
 - A turn that ended as `interrupted` / `error` / `process_ended` settles the
   runs still `running` in it: nothing can report back on them, and a spinner
   that never stops is a lie. The rule keys on the turn's resulting **status**,
@@ -698,6 +704,43 @@ honest:
   excluded — background work outlives the turn that started it
   ([agent-integration.md](agent-integration.md#background-waits)) — and so is
   `background`, for the same reason.
+- **Background work outlives the turn, not the process.** It lives inside the
+  CLI process, so a `process_ended` settles `background` runs too, and
+  everything under them, as `interrupted` — on every path that record reaches
+  the reducer (`settleAfterProcessGone`): live, replayed, as a back-reference
+  over an older page, as a page's boundary terminal, and in the join of a page
+  whose tail ended that way. Nothing else does: an `interrupted` / `error`
+  ending and an idle turn in `retireAgainstTurn` leave them running, because the
+  process still is — a turn whose background budget ran out is idle with its
+  tasks still going
+  ([agent-integration.md](agent-integration.md#stop-ends-the-background-work-too)).
+  Waiting for `background_lost` instead would leave the row spinning for as long
+  as nobody writes to the session, because that record is only written when the
+  next process starts.
+- **`lostWithProcess` marks work that died with its process.** The reducer is
+  the only one to set it: on a run that was `background` when a `process_ended`
+  settled it — not on a run that was merely `running`, a foreground call beside
+  it or a subagent's call under it — and on any run a `background_lost` reaches,
+  since the `process_ended` before that may sit on a page this client never
+  loaded. It
+  tells a renderer that nothing came back: a `result` on such a run is Pockode's
+  account of the loss, not an outcome the work returned. It is state rather
+  than read off `fromBackground && interrupted`, because that pair also
+  describes a real late return — a `background_started` arriving after the
+  turn's interrupt, then a `background_result` — and a run the turn's own
+  interrupt settled is not marked when the process later ends. What renderers
+  make of it is [tool-call-ui.md](../tool-call-ui.md#when-a-background-run-finishes).
+- **Known limit: a shutdown while a background budget has run out writes no
+  `process_ended`.** Such a turn is idle while its tasks may still run, and
+  every event they produce renews the `lastActive` its idle lease is measured
+  from ([agent-integration.md](agent-integration.md#the-lease-table)), so the
+  process is often still alive when the server stops. Then nothing records its
+  end: the process manager's context is already cancelled, so the history
+  append is refused, and [restart repair](agent-integration.md#restart-repair) only
+  touches turns that were not idle. The row keeps spinning until a
+  `background_lost` settles it when the session's next message starts a
+  process — and after a hard kill, which skips the loss record as well, never.
+  Accepted for now rather than fixed.
 - Replay adds no settling of its own — it feeds history through this same
   reducer — so a call still running at the end of a history stays running, which
   is right while the session is live. A process killed while Pockode was down
@@ -722,8 +765,9 @@ honest:
   status. The content is kept and readable; what it cannot do is make the UI
   claim the call finished normally. No flag records that it came back late —
   `interrupted` with a result *is* that case, and a second field saying so could
-  only fall out of step. This is the "events are events, state is state" rule
-  applied to a single part.
+  only fall out of step. `lostWithProcess` is not that flag: it marks the one
+  case where nothing came back at all (above). This is the "events are events,
+  state is state" rule applied to a single part.
 
 Failure comes from the CLI's `is_error` flag
 ([agent-integration.md](agent-integration.md#eventrecord-unified-event-format)),
@@ -829,17 +873,18 @@ The rules particular to children:
 - **A settled subagent settles what it leaves running.** Its `tool_result`
   interrupts every child still `running`, at any depth; a child in
   `background` is left to settle by its own notification, and so is everything
-  under it. An aborted turn's sweep follows the same two rules, and so does a
-  call filed under a subagent that was interrupted or failed, or under one still
-  running once its turn was cut short — unless a backgrounded subagent is
-  above it. One filed under a subagent that *finished* is left running, whatever
-  became of its turn: Claude resumes a finished subagent when the agent writes
-  to it (`SendMessage`, measured on claude 2.1.286), the
-  resumed work names the call that first spawned it, and its results are still
-  to come — as they are for a Codex child given more work. So is one filed
-  under a subagent that was interrupted or failed once the user has sent a
-  turn since: that is the subagent resumed, not output trailing its end. The
-  parent row keeps the status it ended with; only its new children run.
+  under it — until the process ends, which settles them all (above), as does a
+  `background_lost` reaching the subagent. An aborted turn's sweep follows the
+  same two rules, and so does a call filed under a subagent that was interrupted
+  or failed, or under one still running once its turn was cut short — unless a
+  backgrounded subagent is above it. One filed under a subagent that *finished*
+  is left running, whatever became of its turn: Claude resumes a finished
+  subagent when the agent writes to it (`SendMessage`, measured on claude
+  2.1.286), the resumed work names the call that first spawned it, and its
+  results are still to come — as they are for a Codex child given more work.
+  So is one filed under a subagent that was interrupted or failed once the user
+  has sent a turn since: that is the subagent resumed, not output trailing its
+  end. The parent row keeps the status it ended with; only its new children run.
 - **Each text record is its own paragraph.** Consecutive `text` from the same
   speaker join with a blank line, not end to end: both adapters send whole
   messages, never deltas. Filing made this matter — the main agent's "A and B

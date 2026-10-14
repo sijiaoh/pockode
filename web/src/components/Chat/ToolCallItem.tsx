@@ -346,11 +346,15 @@ const ToolCallItem = memo(function ToolCallItem({
 					{run.exitCode !== undefined && run.exitCode !== 0 && (
 						<p className="text-th-text-muted">Exit code {run.exitCode}</p>
 					)}
-					{run.status === "interrupted" && showsResult && (
-						<p className="text-th-text-muted">
-							Returned after the turn was interrupted.
-						</p>
-					)}
+					{/* Not for work lost with the process: nothing of it returned,
+					    and its result is Pockode saying so. */}
+					{run.status === "interrupted" &&
+						showsResult &&
+						!run.lostWithProcess && (
+							<p className="text-th-text-muted">
+								Returned after the turn was interrupted.
+							</p>
+						)}
 				</div>
 			</CollapsibleBody>
 		</div>

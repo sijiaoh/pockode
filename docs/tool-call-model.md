@@ -208,6 +208,8 @@ interface ToolRun {
     contents?: ContentBlock[]
     /** Set when the result above is a background outcome, not what the agent read. */
     fromBackground?: boolean
+    /** Its background work died with the CLI process: nothing came back. Replay-safe. */
+    lostWithProcess?: boolean
     /** What later calls fetched of this call's task, oldest first. Replay-safe. */
     fetches?: ToolFetch[]
     /** How long the call took, when the engine says so. Replay-safe; Claude sends none. */
@@ -236,8 +238,8 @@ Status is derived from the records, never sent:
 | `running` | a call with no result yet |
 | `background` | newest result carries `background_started` |
 | `success` | a result with `is_error` false |
-| `error` | a result with `is_error` true — including every `background_lost`, which is one by construction |
-| `interrupted` | the turn was cut short; a result arriving afterwards does not undo it |
+| `error` | a result with `is_error` true — including a `background_lost`, which is one by construction, when it reaches a run still `background` |
+| `interrupted` | the turn was cut short, or the process ended under background work; a result arriving afterwards does not undo it |
 
 The exact reducer rules, and what replay can and cannot settle, are in
 [code/frontend-state.md](code/frontend-state.md#tool-runs). Deliberate omissions,
@@ -419,10 +421,15 @@ decision drew: Pockode may assert an outcome no CLI reported, and must say where
 the assertion came from. The result text says so too, for whoever is reading the
 transcript rather than the schema.
 
-Nothing needs a fourth status: `is_error` is true, so the run derives `error`.
-The record does not restate that the call was a background one, and the client
-does not infer it from an earlier `background_started` either: it treats both
-background subtypes as saying so themselves. That is not belt-and-braces. A call
+Nothing needs a fourth status. By the time the record arrives the row is normally
+settled already: the process's own `process_ended` interrupted the background
+work it took down, and a later result does not undo an interrupt
+([code/frontend-state.md](code/frontend-state.md#tool-runs)). The record is the
+explanation, and where that ending is not loaded or was never written,
+`is_error` makes the run `error`. The record does not restate that the call was
+a background one, and the client does not infer it from an earlier
+`background_started` either: it treats both background subtypes as saying so
+themselves. That is not belt-and-braces. A call
 can become a background task *after* its own result was parsed (`task_updated`
 carries `is_backgrounded`), which leaves a backgrounded call with no
 `background_started` on its run — and its lost outcome would then read as an
@@ -437,7 +444,7 @@ were running, counted from the `background_tasks_changed` level) and `lostCalls`
 two streams is unspecified and that they must not be correlated, so neither half
 is derived from the other. The price is that the halves can disagree, which is
 why **each stands alone**: a count with no ids produces the summary warning only,
-ids with no count settle the rows only, and a record written before `lostCalls`
+ids with no count reach the rows only, and a record written before `lostCalls`
 existed still reads as the old summary-only behaviour. Unifying them into one
 source would be the obvious tidy-up and would be building on an ordering the CLI
 refuses to promise.
