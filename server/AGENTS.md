@@ -164,7 +164,7 @@ if err := json.Unmarshal(data, &parsed); err != nil {
 | store 读回自己的状态文件 | `filestore.ReadFileLocked(path)`（共享锁；`filestore.New` 的 `File.Read` 走的就是它） |
 | 启动时加载 JSON 状态 | `filestore.ReadJSONOrQuarantine(path, label, v)`——解析失败则隔离为 `<path>.corrupt` 并以空状态启动，**不要**因为一个文件坏了就让服务器起不来 |
 | 大到不能整块进内存的文件 | 自己写临时文件 → fsync → `filestore.Rename`（带 Windows 重试的 rename；`attachments.Store.PutStream` 即此例；不加锁只在同名写入必然内容相同时成立，如内容寻址；`os.CreateTemp` 建出的是 0600，需要自己 chmod） |
-| 只追加的流式记录 | `filestore.AppendJSONL` / `filestore.ReadJSONL`（单次 write 系统调用、**不** fsync，读端跳过坏行；绝不能丢尾部的数据请改用整文件重写） |
+| 只追加的流式记录 | `filestore.AppendJSONL` / `filestore.ReadJSONL`（单次 write 系统调用、**不** fsync，读端跳过坏行；绝不能丢尾部的数据请改用整文件重写）；只需要最后一条时用 `filestore.ReadLastJSONL`（从文件尾往回读，跳坏行的规则与 `ReadJSONL` 一致） |
 
 用 `filestore.New` 建的 `File` 已经内建这套写入方式，直接用即可。
 

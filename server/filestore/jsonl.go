@@ -228,3 +228,79 @@ func discardLine(r *bufio.Reader) error {
 		}
 	}
 }
+
+// ReadLastJSONL returns the record ReadJSONL would return last — the last
+// well-formed line, past any a crash or an oversized write made unreadable — or
+// nil when there is none. It reads the file from the end, so it costs the size
+// of the last few lines rather than of the whole file: for a question asked of
+// every file in a directory, which ReadJSONL would answer by reading them all.
+// Pass 0 for maxLineBytes to use DefaultMaxLineBytes.
+func ReadLastJSONL(path string, maxLineBytes int) (json.RawMessage, error) {
+	return readLastJSONL(path, maxLineBytes, jsonlReadBuffer)
+}
+
+// readLastJSONL takes the read size as an argument so a test can put line
+// boundaries on both sides of a read without writing megabytes.
+func readLastJSONL(path string, maxLineBytes, readSize int) (json.RawMessage, error) {
+	if maxLineBytes <= 0 {
+		maxLineBytes = DefaultMaxLineBytes
+	}
+
+	f, err := os.Open(path)
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+
+	info, err := f.Stat()
+	if err != nil {
+		return nil, fmt.Errorf("stat jsonl file: %w", err)
+	}
+
+	buf := make([]byte, readSize)
+	// end is where the line being looked at stops, its newline included: each
+	// line is [start, end), and the one before it ends where this one starts.
+	end := info.Size()
+	for end > 0 {
+		// The line's own newline, at end-1, is not where it starts.
+		start, err := lineStart(f, end-1, buf)
+		if err != nil {
+			return nil, err
+		}
+
+		// Measured with its newline, as ReadJSONL measures it, so the two agree
+		// on which lines are too long.
+		if end-start <= int64(maxLineBytes) {
+			line := make([]byte, end-start)
+			if _, err := f.ReadAt(line, start); err != nil {
+				return nil, fmt.Errorf("read jsonl line: %w", err)
+			}
+			line = bytes.TrimRight(line, "\r\n")
+			if len(line) > 0 && json.Valid(line) {
+				return line, nil
+			}
+		}
+		end = start
+	}
+	return nil, nil
+}
+
+// lineStart returns the offset just past the last newline before pos, or 0 when
+// there is none: the start of the line that holds pos.
+func lineStart(f *os.File, pos int64, buf []byte) (int64, error) {
+	for pos > 0 {
+		n := min(int64(len(buf)), pos)
+		chunk := buf[:n]
+		if _, err := f.ReadAt(chunk, pos-n); err != nil {
+			return 0, fmt.Errorf("read jsonl file: %w", err)
+		}
+		pos -= n
+		if i := bytes.LastIndexByte(chunk, '\n'); i >= 0 {
+			return pos + int64(i) + 1, nil
+		}
+	}
+	return 0, nil
+}

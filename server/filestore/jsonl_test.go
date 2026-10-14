@@ -190,6 +190,57 @@ func TestAppendJSONL_ConcurrentAppendsStayIntact(t *testing.T) {
 	}
 }
 
+// ReadLastJSONL is a cheaper way to ask ReadJSONL a question, so its answer is
+// checked against ReadJSONL's rather than written down a second time. The read
+// size is shrunk below the lines so that every boundary lands on both sides of
+// a read.
+func TestReadLastJSONL_AgreesWithReadJSONL(t *testing.T) {
+	long := fmt.Sprintf(`{"text":%q}`, strings.Repeat("x", 40))
+
+	for _, tc := range []struct {
+		name    string
+		content string
+	}{
+		{"empty file", ""},
+		{"one record", `{"n":0}` + "\n"},
+		{"unterminated last record", `{"n":0}` + "\n" + `{"n":1}`},
+		{"truncated tail", `{"n":0}` + "\n" + `{"n":1}` + "\n" + `{"n":2`},
+		{"nothing readable", `{"n":0`},
+		{"oversized last line", `{"n":0}` + "\n" + strings.Repeat("y", 200) + "\n"},
+		{"blank lines and CRLF", `{"n":0}` + "\r\n\n\n"},
+		{"lines longer than one read", long + "\n" + long + "\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "history.jsonl")
+			writeRaw(t, path, tc.content)
+
+			records, _, err := ReadJSONL(path, 128)
+			if err != nil {
+				t.Fatalf("ReadJSONL failed: %v", err)
+			}
+			var want string
+			if len(records) > 0 {
+				want = string(records[len(records)-1])
+			}
+
+			got, err := readLastJSONL(path, 128, 8)
+			if err != nil {
+				t.Fatalf("readLastJSONL failed: %v", err)
+			}
+			if string(got) != want {
+				t.Errorf("last record = %q, want %q", got, want)
+			}
+		})
+	}
+}
+
+func TestReadLastJSONL_MissingFile(t *testing.T) {
+	got, err := ReadLastJSONL(filepath.Join(t.TempDir(), "missing.jsonl"), 0)
+	if err != nil || got != nil {
+		t.Fatalf("ReadLastJSONL = %q, %v; want nil, nil", got, err)
+	}
+}
+
 func writeRaw(t *testing.T, path, content string) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {

@@ -123,34 +123,55 @@ func NewFileStore(dataDir string) (*FileStore, error) {
 // the same — see agent.TestProcessEndedRecordTypeMatchesTheSessionStores.
 const HistoryTypeProcessEnded = "process_ended"
 
-// abortTurnsTheLastRunLeftOpen repairs the sessions that were mid-turn when the
-// server stopped, and is why there is no migration script for the session index.
+// abortTurnsTheLastRunLeftOpen repairs the sessions whose process was still
+// running when the server stopped, and is why there is no migration script for
+// the session index.
 //
 // Nothing survives a restart: every process is gone, so every blocker one of
-// them raised is unanswerable and every turn one of them was carrying was
-// aborted. A graceful shutdown records that itself, as each process's
-// process_ended; after a crash or a kill the server had no chance to write
-// anything on the way out, so the stored state still says otherwise and there is
-// nothing else to learn it from either. The CLI's own transcript cannot be
-// asked: it is killed with SIGKILL, so it may hold a question's tool_use with no
-// answer, a half-written last line, or no trace of the question at all.
+// them raised is unanswerable, every turn one of them was carrying was aborted,
+// and every background task one of them was running died with it. A graceful
+// shutdown records that itself, as each process's process_ended; after a crash
+// or a kill the server had no chance to write anything on the way out, so the
+// stored state still says otherwise and there is nothing else to learn it from
+// either. The CLI's own transcript cannot be asked: it is killed with SIGKILL,
+// so it may hold a question's tool_use with no answer, a half-written last
+// line, or no trace of the question at all.
 //
 // So the repair is Pockode's own record, in two parts. The state is reduced with
 // SignalProcessEnded — the same rule that handles a process dying while the
 // server runs, which is the point of there being one rule — and the history gets
 // the process_ended record that the killed run never wrote. That record is what
-// a client replaying the transcript reads to mark a pending permission card or
-// question expired; without it a restarted server shows prompts that look
-// answerable and are not.
+// a client replaying the transcript reads to mark a pending permission card
+// expired and a backgrounded call settled; without it a restarted server shows
+// prompts that look answerable and work that looks like it is still running.
 //
-// Sessions that were idle are left completely alone, which is nearly all of
-// them, and the ones written before turn state existed are idle by definition.
+// Which sessions get the record is decided by the history, not by the turn: a
+// run that was closed out — reaped, stopped or shut down gracefully alike —
+// writes process_ended, nearly always as its history's last record, so a
+// history that ends on anything else is a run the last server never closed out
+// or one of the harmless cases below. The turn alone misses one: a turn that
+// went idle on its background budget while the tasks went on running. Only the
+// last record is read, because this runs over every session at every start.
+// No other state is needed to keep it from repairing a session twice: the
+// record it writes is the last record the next start reads. A turn the
+// reduction aborts gets the record whatever its history ends on — the
+// reduction has already said a process was cut off.
+//
+// A history can also end on something written after its process was gone — a
+// fork's copied transcript, a question withdrawn after its process was reaped,
+// the expiry of a permission request the ending took down with it, which is
+// recorded after the process_ended — and gets the record too. That is harmless
+// by what the record says: no process is running for the session, which is
+// true of every session at startup, and the client
+// only retires on it what no process could still report back on. A posted
+// question is not among them; it belongs to the session. A session with no
+// history at all never ran and is left alone.
 //
 // Runs during construction and takes no lock: nothing else can reach the store
 // yet, and there are no listeners to notify.
 func (s *FileStore) abortTurnsTheLastRunLeftOpen() {
 	now := time.Now()
-	repaired := 0
+	repaired, closed := 0, 0
 
 	for i := range s.sessions {
 		transition := NormalizeTurn(s.sessions[i].Turn, now)
@@ -160,24 +181,28 @@ func (s *FileStore) abortTurnsTheLastRunLeftOpen() {
 		// phase is on the wire now, so the in-memory session has to carry the
 		// value the reducer read, rather than the blank the file held.
 		s.sessions[i].Turn = transition.State
-		if !transition.Changed {
-			continue
+		if transition.Changed {
+			repaired++
 		}
-		repaired++
 
-		// Only for a turn that was actually interrupted. A session merely holding
-		// a stale phase — nothing was streaming — has nothing to tell the
-		// transcript about.
-		if !transition.Ended && len(transition.Expired) == 0 {
+		// A session merely holding a stale phase — nothing was streaming — is not
+		// owed a record for that, only for a run its history left open.
+		aborted := transition.Ended || len(transition.Expired) > 0
+		if !aborted && !s.historyLeftRunOpen(s.sessions[i].ID) {
 			continue
 		}
 		if _, err := s.AppendToHistory(context.Background(), s.sessions[i].ID,
 			map[string]any{"type": HistoryTypeProcessEnded}); err != nil {
 			slog.Warn("failed to record the end of a session interrupted by a restart",
 				"sessionId", s.sessions[i].ID, "error", err)
+			continue
 		}
+		closed++
 	}
 
+	if closed > 0 {
+		slog.Info("closed out runs the previous run left open", "sessions", closed)
+	}
 	if repaired == 0 {
 		return
 	}
@@ -188,6 +213,30 @@ func (s *FileStore) abortTurnsTheLastRunLeftOpen() {
 		slog.Warn("failed to persist repaired session turn state", "error", err)
 	}
 	slog.Info("aborted turns left open by the previous run", "sessions", repaired)
+}
+
+// historyLeftRunOpen reports whether a session's history ends on anything but
+// its process having ended. An empty history ran nothing, so it left nothing
+// open. One that cannot be read is left for the next start rather than guessed
+// at.
+func (s *FileStore) historyLeftRunOpen(sessionID string) bool {
+	last, err := filestore.ReadLastJSONL(s.historyPath(sessionID), filestore.DefaultMaxLineBytes)
+	if err != nil {
+		slog.Warn("failed to read the end of a session's history",
+			"sessionId", sessionID, "error", err)
+		return false
+	}
+	if last == nil {
+		return false
+	}
+	var record struct {
+		Type string `json:"type"`
+	}
+	if err := json.Unmarshal(last, &record); err != nil {
+		// Valid JSON that is not a record object is not process_ended either.
+		return true
+	}
+	return record.Type != HistoryTypeProcessEnded
 }
 
 func (s *FileStore) indexPath() string {

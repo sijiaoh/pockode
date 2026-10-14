@@ -970,8 +970,8 @@ func TestManager_Shutdown_WaitsForStreamingToFinish(t *testing.T) {
 
 // What a stream drains at shutdown is what Shutdown waits for, so it has to
 // land: the CLI's own process_ended is the record a client settles a session's
-// background cards on. And landing once is the whole of it — the turn that
-// record ended is idle, so the restart repair has nothing left to add.
+// background cards on. And landing once is the whole of it — the history ends
+// with that record, so the restart repair has nothing left to add.
 func TestManager_Shutdown_PersistsWhatTheStreamDrains(t *testing.T) {
 	dataDir := t.TempDir()
 	store, _ := session.NewFileStore(dataDir)
