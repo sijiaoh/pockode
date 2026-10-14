@@ -535,8 +535,9 @@ history, like any other tool call's input. So the contract the frontend reads is
 the input schema, and nothing else:
 
 - `title` — required; a short name for what the page shows.
-- `html` — required; a full document or a fragment, rendered as-is in a
-  sandboxed iframe where scripts and external resources load normally.
+- `html` — required; a full document or a fragment, rendered as written in a
+  sandboxed iframe, where it reaches no other host until the user allows it
+  ([page-external-hosts-ui.md](../page-external-hosts-ui.md)).
 
 Either one empty or whitespace-only is refused as a user error — blank HTML is
 a blank frame, not a page, and a page with no title leaves the user nothing to

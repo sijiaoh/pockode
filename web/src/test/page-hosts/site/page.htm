@@ -1,0 +1,34 @@
+<!doctype html>
+<title>Workspace page</title>
+<!-- A workspace page for the real-browser tests (vitest.rawPages.ts). Loads
+     a script of its own and one from another host, and does what the test
+     asks of it, so a test can try every way a page might reach out. -->
+<script src="./own.js"></script>
+<script src="http://{{OTHER}}/src/test/page-hosts/signal.js"></script>
+<a id="inside" href="./second.htm">Inside</a>
+<a id="outside" href="http://{{OTHER}}/src/test/page-hosts/landed.htm">Outside</a>
+<script>
+	addEventListener("message", function (e) {
+		var d = e.data || {};
+		if (d.go) location = d.go;
+		if (d.click) document.getElementById(d.click).click();
+		if (d.submit) {
+			var f = document.createElement("form");
+			f.method = "get";
+			f.action = d.submit;
+			document.body.appendChild(f);
+			f.submit();
+		}
+		if (d.open) open(d.open, "_self");
+		if (d.embed) {
+			var frame = document.createElement("iframe");
+			frame.src = d.embed;
+			document.body.appendChild(frame);
+		}
+		if (d.post) {
+			for (var w = window; w !== w.parent; w = w.parent) {
+				w.parent.postMessage(d.post, "*");
+			}
+		}
+	});
+</script>

@@ -5,8 +5,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { invalidateWorkspaceCapabilities } from "../../hooks/useRawMediaSource";
 import { apiUrl } from "../../lib/api";
 import { saveUrl } from "../../lib/fileDownload";
+import { navigateWrapper } from "../../lib/pageHosts";
 import { useWSStore, wsActions } from "../../lib/wsStore";
 import { reportEverythingInView } from "../../test/imageFixtures";
+import { pageFrameOf, pageLoaded, pageUrlOf } from "../../test/pageFrame";
 import type { TreeOrigin } from "../../types/contents";
 import { HTML_FRAME_SANDBOX } from "../Chat/HtmlFrame";
 import PagePreview from "./PagePreview";
@@ -14,6 +16,10 @@ import PagePreview from "./PagePreview";
 vi.mock("../../lib/fileDownload", async (importOriginal) => ({
 	...(await importOriginal<typeof import("../../lib/fileDownload")>()),
 	saveUrl: vi.fn(),
+}));
+vi.mock("../../lib/pageHosts", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../../lib/pageHosts")>()),
+	navigateWrapper: vi.fn(),
 }));
 
 let issued = 0;
@@ -60,39 +66,23 @@ function frame() {
 }
 
 /** The capability the frame loads from. */
-function capabilityOf(element: HTMLIFrameElement) {
-	return element.getAttribute("src")?.match(/cap\d+/)?.[0];
+function capabilityOf(wrapper: HTMLIFrameElement) {
+	return pageUrlOf(wrapper)?.match(/cap\d+/)?.[0];
 }
 
-const afterEachRestore: (() => void)[] = [];
-
 /**
- * Every `src` the app sets on a frame by hand. Setting it, even to the URL it
- * has, is a navigation — which a change React makes to the attribute is too,
- * so a test of a load looks for either.
+ * Every load the app has a wrapper make of its page — a navigation of the
+ * same frame, unlike a new wrapper, which is drawn with its page.
  */
 function spyOnNavigation() {
-	const descriptor = Object.getOwnPropertyDescriptor(
-		HTMLIFrameElement.prototype,
-		"src",
-	);
-	// Called on the frame, so `mock.contexts` says which one navigated.
-	const set = vi.fn(function (this: HTMLIFrameElement, url: string) {
-		return url;
-	});
-	Object.defineProperty(HTMLIFrameElement.prototype, "src", {
-		...descriptor,
-		set(this: HTMLIFrameElement, url: string) {
-			set.call(this, url);
-			descriptor?.set?.call(this, url);
-		},
-	});
-	afterEachRestore.push(() => {
-		if (descriptor) {
-			Object.defineProperty(HTMLIFrameElement.prototype, "src", descriptor);
-		}
-	});
-	return set;
+	const navigate = vi.mocked(navigateWrapper);
+	navigate.mockClear();
+	return navigate;
+}
+
+/** Which wrappers were told to load their page again, in order. */
+function navigatedFrames(navigate: ReturnType<typeof spyOnNavigation>) {
+	return navigate.mock.calls.map(([wrapper]) => wrapper);
 }
 
 function stubProbe(...responses: Response[]) {
@@ -119,7 +109,6 @@ describe("PagePreview", () => {
 	});
 
 	afterEach(() => {
-		for (const restore of afterEachRestore.splice(0)) restore();
 		vi.restoreAllMocks();
 		vi.unstubAllGlobals();
 		rawCapability.mockClear();
@@ -133,12 +122,18 @@ describe("PagePreview", () => {
 		expect(rawCapability).toHaveBeenCalledWith({
 			origin: { kind: "file", path: "reports/cov erage" },
 			scope: "directory",
+			page: { hosts: [] },
 		});
-		expect(element.getAttribute("src")).toBe(
-			apiUrl("/api/raw/cap1/index.html"),
-		);
+		expect(pageUrlOf(element)).toBe(apiUrl("/api/raw/cap1/index.html"));
+		// The page and the wrapper holding it to its capability: the sandbox on
+		// both, and the page's own policy is the server's.
 		expect(element.getAttribute("sandbox")).toBe(HTML_FRAME_SANDBOX);
-		expect(element.getAttribute("referrerpolicy")).toBe("no-referrer");
+		expect(pageFrameOf(element).getAttribute("sandbox")).toBe(
+			HTML_FRAME_SANDBOX,
+		);
+		expect(pageFrameOf(element).getAttribute("referrerpolicy")).toBe(
+			"no-referrer",
+		);
 		expect(screen.getByText("HTML · 2 KB")).toBeInTheDocument();
 	});
 
@@ -150,6 +145,7 @@ describe("PagePreview", () => {
 		expect(rawCapability).toHaveBeenCalledWith({
 			origin: { kind: "commit", hash: "abc", path: "site" },
 			scope: "directory",
+			page: { hosts: [] },
 		});
 	});
 
@@ -166,10 +162,9 @@ describe("PagePreview", () => {
 		expect(rawCapability).toHaveBeenCalledWith({
 			origin: { kind: "file", path },
 			scope: "file",
+			page: { hosts: [] },
 		});
-		expect(element.getAttribute("src")).toBe(
-			apiUrl("/api/raw/cap1/index.html"),
-		);
+		expect(pageUrlOf(element)).toBe(apiUrl("/api/raw/cap1/index.html"));
 	});
 
 	// The server's directory scope never follows a link on its way: a folder
@@ -187,17 +182,16 @@ describe("PagePreview", () => {
 			'<script type="module" src="app.js"></script>',
 		);
 
-		fireEvent.load(await frame());
+		pageLoaded(await frame());
 		await vi.waitFor(async () =>
 			expect(capabilityOf(await frame())).toBe("cap2"),
 		);
 		expect(rawCapability).toHaveBeenLastCalledWith({
 			origin: { kind: "file", path: "site/index.html" },
 			scope: "file",
+			page: { hosts: [] },
 		});
-		expect((await frame()).getAttribute("src")).toBe(
-			apiUrl("/api/raw/cap2/index.html"),
-		);
+		expect(pageUrlOf(await frame())).toBe(apiUrl("/api/raw/cap2/index.html"));
 		expect(screen.getByRole("note")).toHaveTextContent(
 			"A page whose folder can't be opened for it is shown on its own",
 		);
@@ -210,7 +204,7 @@ describe("PagePreview", () => {
 		const staged = await within(
 			await screen.findByRole("dialog"),
 		).findByTitle<HTMLIFrameElement>("index.html");
-		expect(staged.getAttribute("src")).toBe(apiUrl("/api/raw/cap2/index.html"));
+		expect(pageUrlOf(staged)).toBe(apiUrl("/api/raw/cap2/index.html"));
 		expect(rawCapability).toHaveBeenCalledTimes(2);
 	});
 
@@ -219,26 +213,28 @@ describe("PagePreview", () => {
 		renderPage();
 
 		const element = await frame();
-		fireEvent.load(element);
+		pageLoaded(element);
 		await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
 		expect(fetchMock).toHaveBeenCalledWith(
 			apiUrl("/api/raw/cap1/index.html"),
 			expect.objectContaining({ headers: { Range: "bytes=0-0" } }),
 		);
 
-		fireEvent.load(element);
+		pageLoaded(element);
 		await act(async () => {});
 		expect(fetchMock).toHaveBeenCalledTimes(1);
 	});
 
-	it("renews a dead capability once, silently, on the same frame", async () => {
+	// Another capability is another wrapper: the one before holds its page to
+	// the capability it was drawn for.
+	it("renews a dead capability once, silently", async () => {
 		stubProbe(dead());
 		renderPage();
 
-		const element = await frame();
-		fireEvent.load(element);
-		await vi.waitFor(() => expect(capabilityOf(element)).toBe("cap2"));
-		expect(await frame()).toBe(element);
+		pageLoaded(await frame());
+		await vi.waitFor(async () =>
+			expect(capabilityOf(await frame())).toBe("cap2"),
+		);
 		expect(screen.queryByText("Couldn't load page")).not.toBeInTheDocument();
 	});
 
@@ -246,11 +242,11 @@ describe("PagePreview", () => {
 		stubProbe(dead(), dead());
 		renderPage();
 
-		fireEvent.load(await frame());
+		pageLoaded(await frame());
 		await vi.waitFor(async () =>
 			expect(capabilityOf(await frame())).toBe("cap2"),
 		);
-		fireEvent.load(await frame());
+		pageLoaded(await frame());
 
 		expect(await screen.findByText("Couldn't load page")).toBeInTheDocument();
 		expect(screen.queryByTitle("index.html")).not.toBeInTheDocument();
@@ -282,20 +278,22 @@ describe("PagePreview", () => {
 					issue = () => resolve(rawCapability(target));
 				}),
 		);
-		fireEvent.load(element);
+		pageLoaded(element);
 		await vi.waitFor(() => expect(rawCapability).toHaveBeenCalledTimes(2));
 
 		// The cached capability is the dead one, and still fresh by its expiry.
 		rerender("v2");
 		await act(async () => issue());
-		await vi.waitFor(() => expect(capabilityOf(element)).not.toBe("cap1"));
+		await vi.waitFor(async () =>
+			expect(capabilityOf(await frame())).not.toBe("cap1"),
+		);
 	});
 
 	it("says the file is gone when the server no longer has it", async () => {
 		stubProbe(Response.json({ code: "not_found" }, { status: 404 }));
 		renderPage();
 
-		fireEvent.load(await frame());
+		pageLoaded(await frame());
 		expect(await screen.findByText("File not found")).toBeInTheDocument();
 	});
 
@@ -303,7 +301,7 @@ describe("PagePreview", () => {
 		stubProbe();
 		const { queryClient } = renderPage();
 		const element = await frame();
-		fireEvent.load(element);
+		pageLoaded(element);
 
 		await act(() =>
 			queryClient.refetchQueries({ queryKey: ["raw-capability"] }),
@@ -317,7 +315,7 @@ describe("PagePreview", () => {
 		stubProbe();
 		const { queryClient } = renderPage();
 		const element = await frame();
-		fireEvent.load(element);
+		pageLoaded(element);
 
 		rawCapability.mockRejectedValueOnce(new Error("relay down"));
 		await act(() =>
@@ -333,18 +331,20 @@ describe("PagePreview", () => {
 		expect(capabilityOf(element)).toBe("cap1");
 	});
 
-	it("loads the page again, on the same frame, once a worktree switch has landed", async () => {
+	it("loads the page again once a worktree switch has landed", async () => {
 		stubProbe();
 		const { queryClient } = renderPage();
 		const element = await frame();
-		fireEvent.load(element);
+		pageLoaded(element);
 		const navigated = spyOnNavigation();
 
 		await act(() => invalidateWorkspaceCapabilities(queryClient));
 
-		await vi.waitFor(() => expect(capabilityOf(element)).toBe("cap2"));
-		expect(await frame()).toBe(element);
-		// React put the new URL on the attribute; nothing set it a second time.
+		await vi.waitFor(async () =>
+			expect(capabilityOf(await frame())).toBe("cap2"),
+		);
+		// A new wrapper, drawn with its page; nothing loaded it a second time.
+		expect(await frame()).not.toBe(element);
 		expect(navigated).not.toHaveBeenCalled();
 	});
 
@@ -354,7 +354,7 @@ describe("PagePreview", () => {
 	it("shows no frame from the worktree left while Retry asks again after a switch", async () => {
 		stubProbe();
 		const { queryClient } = renderPage();
-		fireEvent.load(await frame());
+		pageLoaded(await frame());
 
 		rawCapability.mockRejectedValueOnce(new Error("relay down"));
 		await act(() =>
@@ -379,13 +379,14 @@ describe("PagePreview", () => {
 		stubProbe();
 		renderPage();
 		const element = await frame();
-		fireEvent.load(element);
+		pageLoaded(element);
 		const navigated = spyOnNavigation();
 
 		await userEvent.click(screen.getByRole("button", { name: "Reload page" }));
 		// The capability was still fresh: nothing new was asked for.
 		await vi.waitFor(() =>
 			expect(navigated).toHaveBeenCalledWith(
+				element,
 				apiUrl("/api/raw/cap1/index.html"),
 			),
 		);
@@ -405,10 +406,10 @@ describe("PagePreview", () => {
 		// load's event arrives.
 		act(() => {
 			fireEvent.click(reload);
-			fireEvent.load(element);
+			pageLoaded(element);
 		});
 		await vi.waitFor(() => expect(navigated).toHaveBeenCalledTimes(1));
-		fireEvent.load(element);
+		pageLoaded(element);
 		await vi.waitFor(() =>
 			expect(reload.querySelector("svg")).not.toHaveClass("animate-spin"),
 		);
@@ -418,7 +419,7 @@ describe("PagePreview", () => {
 		stubProbe();
 		const { rerender } = renderPage(undefined, "v1");
 		const element = await frame();
-		fireEvent.load(element);
+		pageLoaded(element);
 		const navigated = spyOnNavigation();
 
 		rerender("v1");
@@ -445,7 +446,7 @@ describe("PagePreview", () => {
 				await within(dialog).findByTitle<HTMLIFrameElement>("index.html");
 			expect(staged).not.toBe(inPlace);
 			expect(inPlace).toBeInTheDocument();
-			expect(staged.getAttribute("src")).toBe(inPlace.getAttribute("src"));
+			expect(pageUrlOf(staged)).toBe(pageUrlOf(inPlace));
 			expect(staged.getAttribute("sandbox")).toBe(HTML_FRAME_SANDBOX);
 			expect(rawCapability).toHaveBeenCalledOnce();
 			expect(within(dialog).getByText("HTML · 2 KB")).toBeInTheDocument();
@@ -480,21 +481,24 @@ describe("PagePreview", () => {
 			const user = userEvent.setup();
 			const { rerender } = renderPage(undefined, "v1");
 			const inPlace = await frame();
-			fireEvent.load(inPlace);
+			pageLoaded(inPlace);
 			await user.click(
 				await screen.findByRole("button", { name: "View full screen" }),
 			);
 			const dialog = await screen.findByRole("dialog");
-			const staged = await within(dialog).findByTitle("index.html");
-			fireEvent.load(staged);
+			const staged =
+				await within(dialog).findByTitle<HTMLIFrameElement>("index.html");
+			pageLoaded(staged);
 			const navigated = spyOnNavigation();
 
 			rerender("v2");
-			await vi.waitFor(() => expect(navigated.mock.contexts).toEqual([staged]));
+			await vi.waitFor(() =>
+				expect(navigatedFrames(navigated)).toEqual([staged]),
+			);
 
 			await user.click(within(dialog).getByRole("button", { name: "Close" }));
 			await vi.waitFor(() =>
-				expect(navigated.mock.contexts).toEqual([staged, inPlace]),
+				expect(navigatedFrames(navigated)).toEqual([staged, inPlace]),
 			);
 		});
 
@@ -509,7 +513,7 @@ describe("PagePreview", () => {
 			expect(
 				screen.getByRole("button", { name: "View full screen" }),
 			).toBeInTheDocument();
-			fireEvent.load(element);
+			pageLoaded(element);
 			await screen.findByText("File not found");
 			expect(
 				screen.queryByRole("button", { name: "View full screen" }),

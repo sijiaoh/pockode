@@ -63,9 +63,18 @@ export function invalidateWorkspaceCapabilities(queryClient: QueryClient) {
  *
  * The scope is part of it: a page's directory capability and a file
  * capability for the same path reach different things. An attachment is
- * always a file.
+ * always a file. So are a page's hosts: a capability with hosts allowed must
+ * not be the one a sibling page opened on its own is handed.
  */
 function rawCapabilityKey(
+	target: RawTarget,
+	worktree: string,
+): readonly unknown[] {
+	const key = originKey(target, worktree);
+	return target.page ? [...key, "page", ...target.page.hosts] : key;
+}
+
+function originKey(
 	{ origin, scope }: RawTarget,
 	worktree: string,
 ): readonly unknown[] {

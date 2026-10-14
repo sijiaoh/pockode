@@ -94,6 +94,21 @@ message says which. A `commit` origin outside a git repository gets
 refusal's `session_expired`. Whether the content exists is not checked: content
 comes and goes while a capability lives, so each request asks.
 
+A capability for a page also takes `hosts` and `base_url`, for every origin
+and scope. `hosts` are the hosts beyond this server that the reader has allowed
+the page to reach, each as `URL.host` gives it; the server binds them to the
+capability and every response under it carries a policy refusing every other
+host ([why](authentication.md#raw-capabilities-urls-a-browser-element-loads-by-itself),
+[the design](../page-external-hosts-ui.md)). `base_url` is what the app puts
+the returned `path` under to load it (`getApiBaseUrl()`), which says where the
+page's own requests go; without it the policy uses each request's `Host`. More
+than 50 hosts, a host a CSP source cannot name (an IPv6 literal, a `_`, a
+wildcard), the `base_url`'s own host on any port or with a trailing dot, and a
+`base_url` that is not an `http(s)` URL are refused with `CodeInvalidParams`. A
+`base_url` a policy cannot name (an IPv6 literal) is accepted and names
+nothing: the page then gets none of its own files. A capability is a different one for each host set, so the
+client's cache keys on it too.
+
 `path` is where to open the content, already percent-encoded: the file for a
 file scope, and for a directory scope the directory with a trailing `/`, a base
 for relative URLs rather than something to load — there is no index file, and

@@ -6,7 +6,16 @@ import {
 	useRef,
 	useState,
 } from "react";
+import { usePageReports } from "../../hooks/usePageReports";
 import { useRawMediaSource } from "../../hooks/useRawMediaSource";
+import {
+	allowedPageHosts,
+	allowPageHosts,
+	capabilityRoot,
+	navigateWrapper,
+	rawPageWrapper,
+	useAllowedPageHosts,
+} from "../../lib/pageHosts";
 import {
 	isDeadCapability,
 	isGone,
@@ -48,18 +57,33 @@ function initialState(identity: string): State {
 	};
 }
 
+function sorted(hosts: ReadonlySet<string>): readonly string[] {
+	return [...hosts].sort();
+}
+
 /**
  * An HTML page in a sandboxed frame, loaded from a raw capability for the
  * directory it sits in so its relative assets load too (docs/file.md, "HTML
- * pages"). Spread `frameProps` on the `<iframe>`.
+ * pages"). Spread `frameProps` on the `<iframe>`, and `strip` on a
+ * `PageHostsStrip` above it.
+ *
+ * The page reaches no host the reader has not allowed for it
+ * (docs/page-external-hosts-ui.md): the server binds the hosts to the
+ * capability and refuses the page the rest, and the `<iframe>` is a wrapper,
+ * one per capability, that holds the page to it (`rawPageWrapper`). The hosts
+ * a frame is drawn under are the ones allowed when it was — a frame opened
+ * after an allowance starts with it — and change only by a load the app
+ * starts, never because the reader allowed them in another view.
  *
  * A page is never reloaded behind the user's back: the frame keeps the URL it
  * loaded with, and a capability renewed by anyone else waits for the next load
  * the app starts — `reload`, `retry`, a change of `revision`, or a remount.
- * Each such load sets `src` on the same frame, even to the URL it already
- * has: it is a navigation like one inside the page, so Back steps back through
- * it. A new frame would not do — Chromium and WebKit keep a removed frame's
- * entries in the session history, and Back onto one of them does nothing.
+ * Each such load under the same capability navigates the same frame, even to
+ * the URL it already has: it is a navigation like one inside the page, so
+ * Back steps back through it. Another capability — renewed, or with other
+ * hosts — needs another wrapper, whose `frame-src` names it; the old one's
+ * entries stay in the session history, where Chromium and WebKit keep a
+ * removed frame's, and Back onto one of them does nothing.
  *
  * An iframe reports no errors, so after each load the app started its URL is
  * probed for one byte. A capability that has died is renewed once, silently;
@@ -84,14 +108,31 @@ export function usePageFrame(
 	const worktree = useWorktreeStore((s) => s.current);
 	// Per worktree: the same path in another one may well be a plain folder.
 	const folderKey = `${worktree}:${JSON.stringify(origin)}`;
+	// What the reader's allowance is for: this file, wherever it is shown, and
+	// whatever the frame goes on to inside its directory.
+	const pageKey = `file:${folderKey}`;
+	const allowed = useAllowedPageHosts(pageKey);
+	const [drawn, setDrawn] = useState(() => ({
+		pageKey,
+		hosts: sorted(allowed),
+	}));
+	let hosts = drawn.hosts;
+	if (drawn.pageKey !== pageKey) {
+		hosts = sorted(allowed);
+		setDrawn({ pageKey, hosts });
+	}
 	const [unreachableFor, setUnreachableFor] = useState<string | null>(null);
 	const unreachableFolder =
 		page.unreachableFolder === true || unreachableFor === folderKey;
 	// biome-ignore lint/correctness/useExhaustiveDependencies: `folderKey` is the identity of `origin`, which callers rebuild every render
 	const target = useMemo<RawTarget>(
-		() =>
-			unreachableFolder ? { origin, scope: "file" } : pageRawTarget(origin),
-		[folderKey, unreachableFolder],
+		() => ({
+			...(unreachableFolder
+				? { origin, scope: "file" as const }
+				: pageRawTarget(origin)),
+			page: { hosts },
+		}),
+		[folderKey, unreachableFolder, hosts],
 	);
 	const source = useRawMediaSource(target, enabled);
 	const { refresh, fresh } = source;
@@ -247,22 +288,30 @@ export function usePageFrame(
 		});
 	};
 
-	// A load to the URL the frame already has is no change React would make to
-	// the attribute, so it is made here. A frame mounted by this very commit —
-	// the first, or one back after a failure card — is already loading it: an
-	// element remembers the load it was created for.
+	// A load under the capability the wrapper already holds is a navigation
+	// of its page, made here. A wrapper mounted by this very commit — the
+	// first, one back after a failure card, or one for another capability —
+	// is already loading its page: it was written with it.
 	const frame = useRef<HTMLIFrameElement | null>(null);
 	const generation = useRef(state.generation);
 	generation.current = state.generation;
 	const frameLoad = useRef(state.generation);
+	// The page a Load was pressed for, whose next frame takes the focus, so a
+	// keyboard or screen reader is not dropped to the top of the screen — and
+	// only that page's: another file opened before the frame comes up keeps
+	// its own place.
+	const focusFor = useRef<string | null>(null);
+	const shownPage = useRef(pageKey);
+	shownPage.current = pageKey;
 	const frameRef = useCallback((node: HTMLIFrameElement | null) => {
 		frame.current = node;
 		frameLoad.current = generation.current;
+		if (node && focusFor.current !== null) {
+			if (focusFor.current === shownPage.current) node.focus();
+			focusFor.current = null;
+		}
 	}, []);
-	const applied = useRef({ generation: state.generation, url: state.url });
 	useLayoutEffect(() => {
-		const before = applied.current;
-		applied.current = { generation: state.generation, url: state.url };
 		const element = frame.current;
 		if (
 			!element ||
@@ -272,9 +321,50 @@ export function usePageFrame(
 			return;
 		}
 		frameLoad.current = state.generation;
-		// A new URL React has just put on the attribute, which navigated.
-		if (before.url === state.url) element.src = state.url;
+		// To a wrapper mounted before this load: one mounted since is skipped
+		// above, having been written with the page. One not yet listening is
+		// still loading the page from this very URL.
+		navigateWrapper(element, state.url);
 	}, [state.generation, state.url]);
+
+	const root = state.url === null ? null : capabilityRoot(state.url);
+	const frameKey = `${identity}:${root}`;
+	// biome-ignore lint/correctness/useExhaustiveDependencies: written once per wrapper, which `frameKey` names; a load under it navigates instead
+	const srcDoc = useMemo(
+		() =>
+			state.url === null
+				? null
+				: rawPageWrapper(state.url, fileName, HTML_FRAME_SANDBOX),
+		[frameKey],
+	);
+
+	const onLoadRef = useRef(onLoad);
+	onLoadRef.current = onLoad;
+	const reports = usePageReports(frame, {
+		hosts,
+		allowed,
+		onLoaded: () => onLoadRef.current(),
+	});
+	// Each document the app loads is reported on afresh.
+	const reported = `${frameKey}:${state.generation}`;
+	const [reportedFor, setReportedFor] = useState(reported);
+	if (reportedFor !== reported) {
+		setReportedFor(reported);
+		reports.clear();
+	}
+
+	/**
+	 * Loads the page again from its entry URL. With hosts allowed since the
+	 * frame was drawn, that is a new frame under them.
+	 */
+	const reload = () => {
+		const now = sorted(allowedPageHosts(pageKey));
+		if (now.join(" ") !== hosts.join(" ")) {
+			setDrawn({ pageKey, hosts: now });
+		} else {
+			load(false);
+		}
+	};
 
 	const loadRef = useRef(load);
 	loadRef.current = load;
@@ -310,7 +400,7 @@ export function usePageFrame(
 		loading: !failure && (state.busy || stale || !state.loaded),
 		failure,
 		/** Starts the page over from its entry URL, where the user navigated. */
-		reload: () => load(false),
+		reload,
 		/** After a failure: a new capability, in case the old one is the fault. */
 		retry: () => {
 			recovery.current = Date.now();
@@ -320,18 +410,31 @@ export function usePageFrame(
 		unreachableFolder,
 		/** The URL the page was loaded from, for saving it. */
 		url: state.url,
-		/** Key the `<iframe>` by it: another page is another frame. */
-		frameKey: identity,
+		/**
+		 * Key the `<iframe>` by it: another page, or another capability, is
+		 * another frame.
+		 */
+		frameKey,
 		/** Null until there is a capability to load the page from. */
 		frameProps:
-			state.url === null
+			srcDoc === null
 				? null
-				: {
-						ref: frameRef,
-						src: state.url,
-						sandbox: HTML_FRAME_SANDBOX,
-						referrerPolicy: "no-referrer" as const,
-						onLoad,
-					},
+				: { ref: frameRef, srcDoc, sandbox: HTML_FRAME_SANDBOX },
+		/** For the `PageHostsStrip` above the frame, keyed by `stripKey`. */
+		strip: {
+			refusals: reports.refusals,
+			allowed,
+			link: reports.link,
+			left: reports.left,
+			onLoad: (more: string[]) => {
+				allowPageHosts(pageKey, more);
+				focusFor.current = pageKey;
+				setDrawn({ pageKey, hosts: sorted(allowedPageHosts(pageKey)) });
+			},
+			onReload: reload,
+			onOpenLink: reports.openLink,
+		},
+		/** Each document's strip is its own: reviewed, announced and held afresh. */
+		stripKey: reported,
 	} as const;
 }

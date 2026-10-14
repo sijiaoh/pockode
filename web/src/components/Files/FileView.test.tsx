@@ -1,12 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import {
-	act,
-	fireEvent,
-	render,
-	screen,
-	waitFor,
-	within,
-} from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -17,6 +10,7 @@ import {
 	stubImageFetch,
 	stubObjectUrls,
 } from "../../test/imageFixtures";
+import { pageLoaded } from "../../test/pageFrame";
 import type { Entry, FileContent } from "../../types/contents";
 import { HIGHLIGHT_LIMIT } from "../../utils/fileView";
 import FileView from "./FileView";
@@ -374,7 +368,7 @@ describe("FileView", () => {
 			// Each load the app starts is checked once it lands, and a load from
 			// anything else is not: the probe count says which this was.
 			const probes = vi.mocked(fetch);
-			fireEvent.load(element);
+			pageLoaded(element);
 			await waitFor(() => expect(probes).toHaveBeenCalledTimes(1));
 
 			await act(() =>
@@ -383,7 +377,7 @@ describe("FileView", () => {
 				}),
 			);
 			expect(getFile).toHaveBeenCalledTimes(2);
-			fireEvent.load(element);
+			pageLoaded(element);
 			await act(async () => {});
 			expect(probes).toHaveBeenCalledTimes(1);
 
@@ -398,7 +392,7 @@ describe("FileView", () => {
 			);
 			// Until the reload has its capability, a load is the old one's.
 			await waitFor(() => {
-				fireEvent.load(element);
+				pageLoaded(element);
 				expect(probes).toHaveBeenCalledTimes(2);
 			});
 			expect(await frame()).toBe(element);

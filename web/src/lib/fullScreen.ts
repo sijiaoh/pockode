@@ -40,7 +40,13 @@ export type FullScreenContent =
 	 * An agent's page (`html_render`), rendered or — `showSource` — read as its
 	 * code; the viewer switches between the two, opening on the card's choice.
 	 */
-	| { kind: "html"; html: string; showSource: boolean }
+	| {
+			kind: "html";
+			html: string;
+			showSource: boolean;
+			/** Whose allowance of external hosts the page is drawn under. */
+			pageKey: string;
+	  }
 	/** Drawn by `ProposedChange`: an edit's or a Codex change's diffs, never a Write. */
 	| { kind: "change"; change: ProposedChangeData }
 	/** Every path, not the transcript's first hundred. */

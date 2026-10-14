@@ -294,6 +294,17 @@ same `asyncUtilTimeout` as `setup.ts`. Runs are headless. Add
 is the smoke test for all of that: it fails if the styles or the scroll clamping
 are not real.
 
+The config also loads a stand-in for `/api/raw` (`web/vitest.rawPages.ts`), so
+workspace pages can be tested where an engine enforces their policy. It serves
+the pages under `web/src/test/page-hosts/site/` with the sandbox, policy and
+reporter read from `web/src/test/page-hosts/raw-contract.json`, which the Go
+test `TestRawPageContract` writes from the server's own code and checks on
+every run. So what the browsers enforce is the server's, not a copy: after
+changing any of them, regenerate it with `UPDATE_RAW_PAGE_CONTRACT=1 go test
+./filetransfer -run TestRawPageContract` from `server/`, or the Go test fails.
+The test server's other name, `127.0.0.1:<port>`, stands in for another host
+([page-external-hosts-ui.md](page-external-hosts-ui.md#where-it-is-tested)).
+
 **What it costs.** The current suite takes about 15s on a quiet machine and
 twice that under load, most of it browser start-up and Vite's transform. Each
 test file runs once per browser, so a new file is paid for twice. CI gives it a

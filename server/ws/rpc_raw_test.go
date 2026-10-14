@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -153,6 +154,14 @@ func TestHandler_RawCapability_Grants(t *testing.T) {
 			wantPath: "/api/raw/cap/",
 		},
 		{
+			// What only the reader allows travels with the capability, never in
+			// its URL.
+			name:     "page with hosts allowed",
+			params:   rpc.RawCapabilityParams{Origin: "file", Scope: "directory", Path: "site", Hosts: []string{"cdn.example"}, BaseURL: "https://app.example"},
+			want:     filetransfer.RawGrant{Origin: filetransfer.RawOriginFile, Scope: filetransfer.RawScopeDirectory, Path: "site", Hosts: []string{"cdn.example"}, BaseURL: "https://app.example"},
+			wantPath: "/api/raw/cap/",
+		},
+		{
 			// The attachment's own worktree, not the connection's.
 			name:     "attachment",
 			params:   rpc.RawCapabilityParams{Origin: "attachment", Scope: "file", SessionID: "s1", ID: "abc.png", Worktree: "feature-x"},
@@ -163,7 +172,7 @@ func TestHandler_RawCapability_Grants(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			result := env.rawCapability(tt.params)
-			if got := env.raw.last(t).grant; got != tt.want {
+			if got := env.raw.last(t).grant; !reflect.DeepEqual(got, tt.want) {
 				t.Errorf("grant = %+v, want %+v", got, tt.want)
 			}
 			if result.Path != tt.wantPath {

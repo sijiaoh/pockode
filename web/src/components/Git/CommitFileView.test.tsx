@@ -293,6 +293,7 @@ describe("CommitFileView", () => {
 			expect(wsActions.rawCapability).toHaveBeenCalledWith({
 				origin: { kind: "commit", hash: "abc1234def", path: "site" },
 				scope: "directory",
+				page: { hosts: [] },
 			});
 		});
 

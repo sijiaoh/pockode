@@ -2648,6 +2648,8 @@ folded and then pulled out. A subagent's Process goes through the same
 ┌──────────────────────────────────────────────┐  the list's frame, alone
 │ ▢  Q3 Latency Report                 </>  ⤢  │  header, no fill
 ├──────────────────────────────────────────────┤
+│ ⊘ Not loaded · cdn.jsdelivr.net       [Load] │  only when a host was refused
+├──────────────────────────────────────────────┤
 │                                              │
 │    the page, white, as written, no padding   │  as tall as the page, ≤ 70%
 │                                              │
@@ -2661,6 +2663,9 @@ folded and then pulled out. A subagent's Process goes through the same
   glyph column would be; the title is one `truncate`d line, `Untitled page`
   when empty, and whole in the viewer's title. No chevron: the card does not
   fold, it is the reply.
+- **Hosts not loaded.** The strip of hosts the page was refused sits between
+  the header and the page ([why](#the-sandbox-and-the-policy)). It is part of
+  what `</>` hides, and the full-screen view shows its own.
 - **`</>`** (`aria-pressed`, *Show source*) swaps the page for its source: the
   `CodeBlock` every other code uses, clamped at the main budget
   ([budgets](#budgets)), so the transcript keeps the drag. The frame is only
@@ -2684,7 +2689,8 @@ folded and then pulled out. A subagent's Process goes through the same
   that passes the frame, since a page pinned to its frame (`html, body {
   height: 100% }`, common in generated pages) keeps its content in the
   overflow; only messages whose `source` is
-  that frame's own window are taken, 0 is ignored (a hidden or momentarily
+  that page's own window — inside [its wrapper](#the-sandbox-and-the-policy) —
+  are taken, 0 is ignored (a hidden or momentarily
   blank page), and the floor is 48px. The cap is CSS (`min(<reported>px,
   calc(… * 0.7))`), so it moves with the transcript, and a page that is
   `min-height: 100vh` — or pinned to 100% with the body's default margin, which
@@ -2704,18 +2710,28 @@ folded and then pulled out. A subagent's Process goes through the same
   transcript, deliberately: it is an ordinary page, and the only colour here
   that is not a `th-` token.
 
-### The sandbox, and nothing else
+### The sandbox and the policy
 
-The page is drawn **exactly as the agent wrote it**: no base stylesheet, no CSP,
-no filtering. External images, styles, scripts and links all work. It is the
-agent's own output, written for the user, and every rule added on top would be a
-page that renders wrong for a reason nobody can see; what has to be protected is
-not the page but Pockode around it. That is one floor, `HTML_FRAME_SANDBOX` in
-`HtmlFrame.tsx`, the one frame component the card and the viewer share:
+The page is drawn **as the agent wrote it**: no base stylesheet, no filtering.
+It is the agent's own output, written for the user, and every rule added on top
+of how it looks would be a page that renders wrong for a reason nobody can see.
+Two things are protected instead, and neither is the page: Pockode around it,
+by a sandbox; and the reader's data, by a policy that lets the page reach no
+host the reader has not allowed for it — the rule every surface follows
+([markdown-images-ui.md](markdown-images-ui.md#external-requests-wait-for-the-reader)),
+and for a page, with its strip, wrapper and security boundary, in
+[page-external-hosts-ui.md](page-external-hosts-ui.md). Both are in
+`HtmlFrame.tsx`, the one frame component the card and the viewer share, which
+takes the policy from `lib/pageHosts.ts`. The frame the app holds is a wrapper whose one child is the page:
 
 ```
-<iframe srcdoc="…" sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox">
+<iframe srcdoc="<policy><wrapper's listener>
+                <iframe srcdoc='<policy><reporter>…the page…<height script>'
+                        sandbox='…'>"
+        sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox">
 ```
+
+The floor is `HTML_FRAME_SANDBOX`, on both frames:
 
 - **Never `allow-same-origin`.** A `srcdoc` frame inherits its parent's origin;
   with this token it would keep it, and read Pockode's stored credentials and
@@ -2730,18 +2746,20 @@ not the page but Pockode around it. That is one floor, `HTML_FRAME_SANDBOX` in
 - **`allow-popups` and `allow-popups-to-escape-sandbox`** so a link the user
   presses opens in a new tab as a normal page, not a crippled one.
 
-`HtmlFrame.test.tsx` holds both forbidden tokens out.
+`HtmlFrame.test.tsx` holds both forbidden tokens out, on both frames.
 
-The sandbox does not hold back a page's requests, so a page is the one agent
-output whose external hosts are contacted without the reader's tap, as a
-Markdown image's are not
-([markdown-images-ui.md](markdown-images-ui.md#external-images-wait-for-the-reader)).
+The sandbox does not hold back a page's requests; the policy does. It is a
+`<meta>` at byte 0 of both documents, so it is in force before anything the
+agent wrote, and the wrapper's `frame-src 'none'` keeps the page from leaving
+its frame for a host by navigating itself
+([how](page-external-hosts-ui.md#the-wrapper)).
 
 **Known limits.** An unclosed `<script>` or `<!--` in the page swallows the
 appended script, and the card stays at its placeholder height (⤢ still reads
 it). While focus is inside the page, keys go to the page's document, so Escape
-never reaches the viewer — ✕ closes it. A link followed inside the frame is
-the page's own navigation and is left alone. A frame scrolled out of view is
+never reaches the viewer — ✕ closes it. A link in the page does not navigate
+the frame: it opens in a new tab, on the reader's tap or from the strip
+([links](page-external-hosts-ui.md#links-inside-the-page)). A frame scrolled out of view is
 throttled by the browser and reports nothing until it comes back. The height
 reporting has been watched in headless Chromium only, not across engines.
 
@@ -3096,6 +3114,11 @@ the virtualizer measures it.
     mount, and scrolling to the others does not make the transcript jump.
 53. A page full screen: edge to edge, no 🔍, Ctrl/Cmd+F the browser's own;
     `</>` turns it into code with wrap and find.
+54. A page that loads a chart library from a CDN: the chart is missing and the
+    strip names the CDN; Load redraws it with the chart, and the full-screen
+    view opened afterwards needs no Load. Allowed full screen first, the card
+    underneath offers *Reload* rather than reloading itself
+    ([page-external-hosts-ui.md](page-external-hosts-ui.md)).
 
 ## Out of scope
 

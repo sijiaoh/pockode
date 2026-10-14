@@ -254,7 +254,7 @@ var toolDefinitions = []toolDefinition{
 	{
 		Name: "html_render",
 		Description: "Show the user something richer than Markdown can carry — a comparison, a chart, a structured report — as an HTML page. " +
-			"The HTML is rendered as-is in a sandboxed iframe in the chat, where scripts and external resources load normally. " +
+			"The HTML is rendered as written in a sandboxed iframe in the chat. Scripts run, but every request to another host (a CDN script, a font, an image, an API) is blocked until the user allows that host, so prefer a self-contained page. " +
 			"The user already sees the rendered result, so do not repeat or summarize its content in your reply.",
 		InputSchema: inputSchema{
 			Type: "object",

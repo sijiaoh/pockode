@@ -41,8 +41,8 @@ A video is `kind: "video"` with an `origin` (what the stage asks a raw
 capability for) in place of `source`, the `dimensions` and `duration` the
 opener's player already knows, and an optional `handoff` (see
 [Handover](#handover)). A page is `kind: "html"` with an `origin` (a work
-directory or commit file, loaded through the capability the page in place
-uses — [its directory's, or its own](file.md#html-pages)), no
+directory or commit file, loaded through the same kind of capability as the
+page in place — [its directory's, or its own](file.md#html-pages)), no
 dimensions, and an optional `revision` (see [the HTML stage](#the-html-stage)).
 
 The host owns the open state and renders the viewer while it is open. Pass
@@ -309,13 +309,17 @@ each starts over at the beginning, paused, and the handoff with them.
 
 `HtmlStage` is a chunk of its own: the page in a sandboxed `<iframe>` through
 `usePageFrame`, the machine the in-place page runs on
-([file.md](file.md#html-pages)). It reads the same cached capability as the page in place,
-so opening the viewer costs no round trip, and recovers from a capability that
-died the same way. A failure shows `MediaFailureCard` (kind `page`) without
+([file.md](file.md#html-pages)). It reads the same cached capability as the
+page in place whenever the hosts allowed for the page are the ones the page in
+place was drawn with, so opening the viewer usually costs no round trip; a
+viewer opened after an allowance made elsewhere asks for one with the hosts it
+starts with. It recovers from a capability that died the same way. A failure shows `MediaFailureCard` (kind `page`) without
 Download, since Save is in the toolbar.
 
 - **The frame** is `absolute inset-0 size-full`, white under a light color
-  scheme, `HTML_FRAME_SANDBOX`, `referrerPolicy="no-referrer"`.
+  scheme, `HTML_FRAME_SANDBOX`: the wrapper that holds the page to its
+  capability, with the page inside it
+  ([page-external-hosts-ui.md](page-external-hosts-ui.md#the-wrapper)).
 - **No gestures, no keys, no `touch-none`.** Every touch, scroll, pinch and key
   in the frame belongs to the page; the stage registers no `keysRef` handler.
   Nothing conflicts, because the viewer has no swipe-to-dismiss or
@@ -329,6 +333,11 @@ Download, since Save is in the toolbar.
   ([file.md](file.md#html-pages)) carries the opener's notice in the item
   (`notice`), and the viewer shows the same strip under its toolbar — text
   only, with no Port Preview, since that is a sheet and sheets do not nest.
+- **Hosts not loaded.** The strip sits at the top of the stage, under the
+  toolbar and the notice, as in place
+  ([page-external-hosts-ui.md](page-external-hosts-ui.md)). It is no overlay,
+  so it works inside the viewer's sheet. A Load here reloads the viewer's page
+  only; the page in place underneath offers *Reload* when the viewer closes.
 - **Save** downloads the URL the stage loaded the page from — for a page
   loaded through its directory, the capability plus the file name — through
   `saveUrlRef`, not `saveRawFile`, which would ask for a second capability for
@@ -392,6 +401,11 @@ navigating in the frame lands on the opener's entry, and one Back leaves it:
   until the viewer has closed (above). Chromium and WebKit take the nearest
   such entry; a browser going to the entry's own step instead would put that
   frame back on its first page.
+
+The first of these also happens with the viewer open: a page that moves to a
+new capability — a renewal, a Load of hosts ([file.md](file.md#html-pages)) —
+gets a new frame, since its wrapper holds it to one capability, and the old
+frame's entries stay behind as Back steps that change nothing on screen.
 
 So `useBackToClose` closes with `navigation.back()` where the browser has it,
 as Chromium and WebKit both do, and with `history.back()` elsewhere, at the
@@ -458,7 +472,7 @@ A loaded image written in Markdown is itself the button that opens the viewer �
 the thumbnail's pattern — and owns the open state, as `ImagePreview` does. It is
 the one way in to an external image (`ImageSource` kind `external`), which is
 a button only once the reader has loaded it
-([markdown-images-ui.md](markdown-images-ui.md#external-images-wait-for-the-reader)). Which
+([markdown-images-ui.md](markdown-images-ui.md#external-requests-wait-for-the-reader)). Which
 images offer it, and what the viewer shows for each source, is in
 [markdown-images-ui.md](markdown-images-ui.md#opening-the-viewer).
 

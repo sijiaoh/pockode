@@ -57,7 +57,7 @@ func (h *rpcMethodHandler) rawGrant(ctx context.Context, conn *jsonrpc2.Conn, re
 		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, message)
 		return filetransfer.RawGrant{}, false
 	}
-	grant := filetransfer.RawGrant{Scope: filetransfer.RawScope(params.Scope)}
+	grant := filetransfer.RawGrant{Scope: filetransfer.RawScope(params.Scope), Hosts: params.Hosts, BaseURL: params.BaseURL}
 
 	switch filetransfer.RawOrigin(params.Origin) {
 	case filetransfer.RawOriginFile:
