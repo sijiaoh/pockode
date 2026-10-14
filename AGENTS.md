@@ -81,6 +81,15 @@ failures are silent: the class stays on the element and compiles to nothing, in
 one project while the other is fine. `web/tests/sourceScan.test.ts` and
 `web/tests/responsiveTokens.test.ts` hold both.
 
+`Sheet` puts a third on each page that renders it: the viewport meta in the
+project's `index.html` has to carry `interactive-widget=resizes-content`. A
+sheet is a `fixed` overlay sized in `dvh`, and by default a soft keyboard
+shrinks only the visual viewport, so on Android it covers the bottom of the
+drawer — the field being typed in and the buttons under it. This one fails
+silently too, and only on a phone. `web/tests/viewportMeta.test.ts` holds it for
+every page listed in `PAGES` in `web/tests/sourceScan.ts`; a new frontend adds
+its `index.html` there.
+
 `useLockBodyScroll` is deliberately *not* exported: it is one counter shared by
 `Sheet` and `ConfirmDialog` so that two overlays up at once cannot restore each
 other's `overflow` — whether they close together or in the order they opened —

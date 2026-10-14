@@ -55,7 +55,7 @@ export const SHORT_VIEWPORT_QUERY = `(max-height: ${SHORT_VIEWPORT_MAX_HEIGHT}px
  * for `interactive-widget=resizes-content`, so a soft keyboard shrinks the
  * layout viewport itself and this flips with it — the same event the `dvh`
  * units in this app already follow. That meta tag is load-bearing and nothing
- * about it is local, so `web/tests/heightGate.test.ts` holds it.
+ * about it is local, so `web/tests/viewportMeta.test.ts` holds it.
  */
 export function useShortViewport(): boolean {
 	return useMediaQuery(SHORT_VIEWPORT_QUERY);
