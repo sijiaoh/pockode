@@ -1,5 +1,4 @@
 import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { ROOTS, repoPath, sourceFiles } from "./sourceScan";
 
@@ -35,20 +34,5 @@ describe("the height gate", () => {
 
 	it("is read by nothing but the answer panel's host", () => {
 		expect(readers.filter((f) => !ALLOWED.has(f))).toEqual([]);
-	});
-
-	// The gate is a `max-height` media query, so it only moves when the *layout*
-	// viewport does — and a soft keyboard, by default, shrinks the visual
-	// viewport and leaves the layout viewport where it was.
-	// `interactive-widget=resizes-content` is what asks the browser to shrink
-	// the layout viewport instead, and it is the whole reason a media query is
-	// enough here rather than a `visualViewport` pipeline. Take it out of the
-	// meta tag and the gate quietly stops firing on the one device it exists
-	// for, with every test still green.
-	it("is kept live by the viewport meta tag it depends on", () => {
-		const html = readFileSync(resolve(process.cwd(), "index.html"), "utf8");
-		expect(html).toMatch(
-			/name="viewport"[^>]*interactive-widget=resizes-content/,
-		);
 	});
 });

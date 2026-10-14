@@ -16,6 +16,12 @@ export const STYLESHEETS = {
 	"web-cluster/src/index.css": "../web-cluster/src/index.css",
 } as const;
 
+/** Every frontend's HTML entry page, which each declares its own viewport. */
+export const PAGES = {
+	"web/index.html": "index.html",
+	"web-cluster/index.html": "../web-cluster/index.html",
+} as const;
+
 /**
  * Which stylesheets each scanned root is compiled into.
  *
