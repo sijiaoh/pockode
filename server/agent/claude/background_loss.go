@@ -16,8 +16,8 @@ const backgroundLossFile = "background_tasks_lost.json"
 
 // The three tellings of "it must not be silent", as for the wait fallback: the
 // sentence the user reads in the transcript, what the agent is told on its next
-// prompt, and — the only one that lands on the rows that are wrong — the result
-// each killed call is settled with.
+// prompt, and — the only one that lands on the rows themselves — the result
+// recorded on each killed call.
 const (
 	backgroundTasksLostCode    = "background_tasks_lost"
 	backgroundTasksLostWarning = "The previous Claude process for this session ended with %s still running (a server restart, " +
@@ -66,8 +66,10 @@ func newBackgroundLossStore(opts agent.StartOptions) backgroundLossStore {
 type backgroundLossRecord struct {
 	LostTasks int `json:"lostTasks"`
 	// LostCalls are the calls whose background work died, by tool_use_id, so the
-	// next process can settle each of those rows instead of leaving them saying
-	// "still running" forever.
+	// next process can put the explanation on each of those rows. The client
+	// already settled them on the process_ended this process left; the result is
+	// what settles a row whose process_ended it never loaded, or one a shutdown
+	// left without that record.
 	//
 	// Optional on read, which is what keeps records written before this field
 	// existed readable: they carry the count alone, and the count is all the
@@ -142,14 +144,14 @@ func (s backgroundLossStore) clear(log *slog.Logger) {
 }
 
 // deliverBackgroundLoss tells the session about background work the previous
-// process took down with it: one settled result for each call that was left
-// running, then the sentence that explains why they all ended at once.
+// process took down with it: one result for each call that was left running,
+// then the sentence that explains why they all ended at once.
 //
 // It reports whether everything got through, because the caller may only forget
 // the loss once it has.
 //
-// Per-call results arrive first so that the rows are already true by the time
-// the explanation is read. They move no turn (ToolResultEvent.SettlesBackgroundWork):
+// Per-call results arrive first so that each row carries its own account by the
+// time the summary is read. They move no turn (ToolResultEvent.SettlesBackgroundWork):
 // they are Pockode's record of what the last process took down, not anything
 // this one said. Nothing depends on them doing so — a CLI process is only ever
 // started to carry a message, so the turn is the message's, and it ends with a

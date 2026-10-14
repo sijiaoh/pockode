@@ -4789,6 +4789,129 @@ describe("messageReducer", () => {
 			expect(runAt(parts, "t1", "t2", "c1").status).toBe("running");
 		});
 
+		// Background work outlives the turn, not the process running it.
+		describe("when the process ends under a backgrounded subagent", () => {
+			const backgrounded = [
+				{ type: "message", content: "go" },
+				task("t1"),
+				result("t1", { subtype: "background_started" }),
+				call("c1", "t1"),
+			];
+
+			it.each([
+				{ type: "done" },
+				{ type: "interrupted" },
+				{ type: "error", error: "boom" },
+			])("leaves it running past $type", (ending) => {
+				const parts = lastParts(replayHistory([...backgrounded, ending]));
+				expect(runAt(parts, "t1").status).toBe("background");
+				expect(runAt(parts, "t1", "c1").status).toBe("running");
+			});
+
+			it("interrupts it and everything under it, replayed", () => {
+				const parts = lastParts(
+					replayHistory([...backgrounded, { type: "process_ended" }]),
+				);
+				expect(runAt(parts, "t1")).toMatchObject({
+					status: "interrupted",
+					lostWithProcess: true,
+				});
+				expect(runAt(parts, "t1", "c1").status).toBe("interrupted");
+			});
+
+			it("interrupts it and everything under it, live", () => {
+				let live: Message[] = [];
+				for (const record of [...backgrounded, { type: "process_ended" }]) {
+					live = applyServerEvent(live, normalizeEvent(record), undefined, {
+						live: true,
+					});
+				}
+				const parts = lastParts(live);
+				expect(runAt(parts, "t1").status).toBe("interrupted");
+				expect(runAt(parts, "t1", "c1").status).toBe("interrupted");
+			});
+
+			// The process ended after its turn did: the turn's own ending left the
+			// run alone, and the process going is what settles it.
+			it("interrupts it when the process ends after the turn", () => {
+				const parts = lastParts(
+					replayHistory([
+						...backgrounded,
+						{ type: "done" },
+						{ type: "process_ended" },
+					]),
+				);
+				expect(runAt(parts, "t1").status).toBe("interrupted");
+			});
+
+			it("interrupts it when the process end opens the page above", () => {
+				const paged = prependHistoryPage(replayHistory(backgrounded), [], {
+					boundaryTerminal: { type: "process_ended" },
+				});
+				expect(runAt(lastParts(paged), "t1").status).toBe("interrupted");
+			});
+
+			// Pockode writes the lost outcome after it sees the process end: the
+			// row stays interrupted and still says what became of the task.
+			it("keeps it interrupted when its lost outcome arrives", () => {
+				const parts = lastParts(
+					replayHistory([
+						...backgrounded,
+						{ type: "process_ended" },
+						result("t1", {
+							subtype: "background_lost",
+							tool_result: "This background task did not finish",
+							is_error: true,
+						}),
+					]),
+				);
+				expect(runAt(parts, "t1")).toMatchObject({
+					status: "interrupted",
+					result: "This background task did not finish",
+					fromBackground: true,
+					lostWithProcess: true,
+				});
+			});
+
+			// Its process_ended is on a page never loaded, or was never written:
+			// the lost outcome alone has to say the process took the whole tree.
+			it("settles backgrounded work under it on its lost outcome alone", () => {
+				const parts = lastParts(
+					replayHistory([
+						...backgrounded,
+						call("c2", "t1", "Bash"),
+						result("c2", { subtype: "background_started" }),
+						result("t1", {
+							subtype: "background_lost",
+							tool_result: "This background task did not finish",
+							is_error: true,
+						}),
+					]),
+				);
+				expect(runAt(parts, "t1").status).toBe("error");
+				expect(runAt(parts, "t1", "c1").status).toBe("interrupted");
+				expect(runAt(parts, "t1", "c2")).toMatchObject({
+					status: "interrupted",
+					lostWithProcess: true,
+				});
+			});
+
+			// A call the turn's own interrupt cut short is not lost with the
+			// process: an outcome that still comes back is a genuine late return.
+			it("does not mark a run the turn's interrupt settled", () => {
+				const parts = lastParts(
+					replayHistory([
+						{ type: "message", content: "go" },
+						task("t1"),
+						{ type: "interrupted" },
+						{ type: "process_ended" },
+					]),
+				);
+				expect(runAt(parts, "t1").status).toBe("interrupted");
+				expect(runAt(parts, "t1").lostWithProcess).toBeUndefined();
+			});
+		});
+
 		// The call may be on an earlier page, or one no client draws (Codex's
 		// spawn). Its work then sits flat where it arrived, saying whose it is.
 		it("leaves work whose call is not loaded flat, apart from the main agent's", () => {

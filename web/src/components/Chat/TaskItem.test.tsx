@@ -208,6 +208,23 @@ describe("TaskItem", () => {
 			).toBeVisible();
 		});
 
+		// The turn may have ended normally: what took the subagent was the
+		// process running it.
+		it("says the process ended when it was lost with it", async () => {
+			const user = userEvent.setup();
+			render(
+				<TaskItemWithChildren
+					run={task("interrupted", { ...background, lostWithProcess: true })}
+				/>,
+			);
+			await user.click(screen.getByRole("button", { name: /find usages/ }));
+			expect(
+				screen.getByText(
+					"The CLI process ended before the subagent reported anything.",
+				),
+			).toBeVisible();
+		});
+
 		// A failure's outcome is the CLI's verdict, not the subagent's words.
 		it("points a failed one at its outcome", () => {
 			render(

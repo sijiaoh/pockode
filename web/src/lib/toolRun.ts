@@ -182,12 +182,13 @@ function backgroundConclusion(outcome: string): string {
  * The run's latest word: one line under the title, or nothing.
  *
  * While the run is live that is what it reports doing. When a backgrounded run
- * settles the line hands over to the outcome, and a foreground failure hands it
- * over to the line of the output that says why. Either way it **stays** — the
- * row must not change height there, because a background row is by definition
- * not at the tail of the transcript, and `MessageList` only compensates for
- * growth at the tail or in a settling history page. A foreground run drops its
- * line, and that row is at the tail by construction.
+ * settles the line hands over to the outcome — or, when the process took the
+ * work before any outcome came, to a line saying so — and a foreground failure
+ * hands it over to the line of the output that says why. Either way it
+ * **stays** — the row must not change height there, because a background row
+ * is by definition not at the tail of the transcript, and `MessageList` only
+ * compensates for growth at the tail or in a settling history page. A
+ * foreground run drops its line, and that row is at the tail by construction.
  */
 export interface ToolSecondLine {
 	text: string;
@@ -200,6 +201,12 @@ export interface ToolSecondLine {
 	 */
 	live: boolean;
 }
+
+const LOST_WITH_PROCESS_LINE: ToolSecondLine = {
+	text: "Stopped when the CLI process ended",
+	mono: false,
+	live: false,
+};
 
 export function toolSecondLine(run: ToolRun): ToolSecondLine | null {
 	if (run.status === "running" || run.status === "background") {
@@ -220,9 +227,16 @@ export function toolSecondLine(run: ToolRun): ToolSecondLine | null {
 		const outcome = toolRunText(run)
 			.split("\n")
 			.find((line) => line.trim());
-		return outcome
-			? { text: backgroundConclusion(outcome.trim()), mono: false, live: false }
-			: null;
+		if (outcome) {
+			return {
+				text: backgroundConclusion(outcome.trim()),
+				mono: false,
+				live: false,
+			};
+		}
+		// Settled by the process ending, before any outcome — which may never
+		// come: the row holds a line of its own until `background_lost` does.
+		return run.lostWithProcess ? LOST_WITH_PROCESS_LINE : null;
 	}
 	// A failed row keeps a line, because nothing else on it says *how* it failed
 	// — the border and the glyph only say that it did.

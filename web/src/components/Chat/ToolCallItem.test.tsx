@@ -139,6 +139,15 @@ describe("ToolCallItem", () => {
 			expect(screen.getByText("built in 2s")).toBeVisible();
 		});
 
+		// The output reads as if the call finished normally unless it says so.
+		it("says when its output came back after the interrupt", async () => {
+			draw({ status: "interrupted", result: "built in 2s" });
+			await open();
+			expect(
+				screen.getByText("Returned after the turn was interrupted."),
+			).toBeVisible();
+		});
+
 		// The row already says which file was read; the answer is what the row
 		// was opened for, and the input is folded under it.
 		it("puts a Read's content first and folds the file it was asked for", async () => {
@@ -753,6 +762,25 @@ describe("ToolCallItem", () => {
 			expect(line).toBeVisible();
 			expect(line).not.toHaveAttribute("aria-hidden", "true");
 			expect(screen.getByText("background")).toBeVisible();
+		});
+
+		// Nothing came back from work the process took with it: the text is
+		// Pockode's account of the loss, and calling it a return would be false.
+		it("does not call a loss with the process a late return", async () => {
+			const user = userEvent.setup();
+			draw({
+				...background,
+				status: "interrupted",
+				lostWithProcess: true,
+				result: "This background task did not finish",
+			});
+			await user.click(screen.getAllByRole("button", { expanded: false })[0]);
+			expect(
+				screen.getAllByText("This background task did not finish").length,
+			).toBeGreaterThan(0);
+			expect(
+				screen.queryByText("Returned after the turn was interrupted."),
+			).toBeNull();
 		});
 
 		// A background task's log can be arbitrarily large, so the server names

@@ -143,6 +143,23 @@ describe("rowEntries", () => {
 		).toEqual(["[Read 1 file · 1 interrupted]", "a↓", "b↓"]);
 	});
 
+	// It was pinned as background until the process ended under it, and that
+	// interrupt is no reason to fold a row the reader may have scrolled past.
+	it("keeps background work lost with the process pinned", () => {
+		expect(
+			shape(
+				rowEntries([
+					read("a", "/x"),
+					bash("b", "interrupted", {
+						fromBackground: true,
+						lostWithProcess: true,
+					}),
+					read("c", "/y"),
+				]),
+			),
+		).toEqual(["[Read 2 files]", "a↓", "b", "c↓"]);
+	});
+
 	it("ends a group at a subagent call and at a plan", () => {
 		expect(
 			shape(

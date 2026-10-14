@@ -107,6 +107,10 @@ type Fold = "settled" | "running" | "pinned";
  */
 function foldOf({ row, card }: Member<unknown>): Fold {
 	if (!row || (card && card.status !== "allowed")) return "pinned";
+	// Background work the process took with it was pinned as background up to
+	// that moment, and the interrupt that settles it lands long after the
+	// reader moved on — the same row above them that folding would delete.
+	if (row.lostWithProcess) return "pinned";
 	// Ahead of `fromBackground`: the reducer keeps an interrupt over any result
 	// that turns up later, background ones included, so a call cut short is
 	// settled before it can be marked and must not come back out of its group.

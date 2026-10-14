@@ -277,6 +277,37 @@ describe("toolSecondLine", () => {
 		).toBe("Completed (exit code 0)");
 	});
 
+	// Settled by the process ending, before Pockode wrote what became of it: the
+	// row is mid-transcript, so it keeps a line rather than shrink.
+	it("keeps a line on background work lost with the process", () => {
+		expect(
+			toolSecondLine(
+				run({
+					status: "interrupted",
+					fromBackground: true,
+					lostWithProcess: true,
+				}),
+			),
+		).toEqual({
+			text: "Stopped when the CLI process ended",
+			mono: false,
+			live: false,
+		});
+	});
+
+	it("hands that line over to the lost outcome once it arrives", () => {
+		expect(
+			toolSecondLine(
+				run({
+					status: "interrupted",
+					fromBackground: true,
+					lostWithProcess: true,
+					result: "This background task did not finish: the process ended",
+				}),
+			)?.text,
+		).toBe("This background task did not finish: the process ended");
+	});
+
 	// Replay carries no activity — it is never persisted — and the row is still
 	// correct, because the spinner and the badge come from the status.
 	it("leaves a replayed background call with no line at all", () => {
