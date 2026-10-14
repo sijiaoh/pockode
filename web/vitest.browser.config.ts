@@ -3,6 +3,7 @@ import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
 import { playwright } from "@vitest/browser-playwright";
 import { defineConfig } from "vitest/config";
+import { APP_HOST } from "./src/test/testServerHosts";
 import { BROWSER_TEST_FILES } from "./vitest.files";
 import { rawPages } from "./vitest.rawPages";
 
@@ -35,6 +36,11 @@ export default defineConfig({
 			// this locally are mostly agents with no display to open a window on.
 			// Watch a run with `--browser.headless=false`.
 			headless: true,
+			// An address, not left to what `localhost` resolves to: the tests
+			// reach this server under a second name, see
+			// `src/test/testServerHosts.ts`. `server.host` does not apply to the
+			// browser entry; this does.
+			api: { host: APP_HOST },
 			instances: [{ browser: "chromium" }, { browser: "webkit" }],
 		},
 	},

@@ -13,14 +13,15 @@ import {
 import { resetPageHosts, watchAppInput } from "../../lib/pageHosts";
 import type { RawTarget } from "../../lib/rpc/raw";
 import { useWSStore, wsActions } from "../../lib/wsStore";
+import { otherHost } from "../../test/testServerHosts";
 import { PRESS_HOLD_MS } from "../ui/PageHostsStrip";
 import PagePreview from "./PagePreview";
 
 // A workspace page, served by `/api/raw` as the server serves it — its policy,
 // its sandbox, its reporter (`vitest.rawPages.ts`) — in real engines, where
-// the policy is enforced. The app is served from `localhost`; the same server
-// under `127.0.0.1` stands in for another host.
-const OTHER_HOST = `127.0.0.1:${location.port}`;
+// the policy is enforced. The same server under another name stands in for
+// another host (`src/test/testServerHosts.ts`).
+const OTHER_HOST = otherHost(location.port);
 const LANDED_URL = `http://${OTHER_HOST}/src/test/page-hosts/landed.htm`;
 
 let issued = 0;

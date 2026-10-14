@@ -302,8 +302,19 @@ test `TestRawPageContract` writes from the server's own code and checks on
 every run. So what the browsers enforce is the server's, not a copy: after
 changing any of them, regenerate it with `UPDATE_RAW_PAGE_CONTRACT=1 go test
 ./filetransfer -run TestRawPageContract` from `server/`, or the Go test fails.
-The test server's other name, `127.0.0.1:<port>`, stands in for another host
+The app is served from `127.0.0.1`, and the same server under `localhost`
+stands in for another host
 ([page-external-hosts-ui.md](page-external-hosts-ui.md#where-it-is-tested)).
+Both names are written once, in `web/src/test/testServerHosts.ts`. The server
+binds an address and not a name, so the bind no longer depends on what
+`localhost` resolves to. CI's ubuntu runners resolve it to `::1` first, which
+once left the server on `[::1]` alone and refused every request to the other
+host. The address is `127.0.0.1` and not `::1` because every machine has IPv4
+loopback, while `::1` is missing in places such as Docker without IPv6. A
+browser tries every loopback address for `localhost`, so that name finds the
+listener whichever address comes first. The bind is `test.browser.api.host` in
+`web/vitest.browser.config.ts`; `server.host` does not apply to the browser
+entry.
 
 **What it costs.** The current suite takes about 15s on a quiet machine and
 twice that under load, most of it browser start-up and Vite's transform. Each

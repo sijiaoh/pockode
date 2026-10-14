@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import type { Plugin } from "vite";
+import { otherHost } from "./src/test/testServerHosts";
 
 const HERE = new URL("./src/test/page-hosts/", import.meta.url);
 
@@ -31,8 +32,8 @@ const TYPES: Record<string, string> = {
  *
  * A capability names the hosts the server would have bound to it, since
  * nothing here keeps any: `<id>~<host>~<host>`, a host's `:` written `_`.
- * `{{OTHER}}` in a page is the test server's other name (`127.0.0.1:<port>`),
- * which stands in for another host.
+ * `{{OTHER}}` in a page is the test server's other name (`otherHost` in
+ * `src/test/testServerHosts.ts`), which stands in for another host.
  */
 export function rawPages(): Plugin {
 	return {
@@ -75,8 +76,7 @@ export function rawPages(): Plugin {
 					res.end(JSON.stringify({ code: "not_found" }));
 					return;
 				}
-				const other = `127.0.0.1:${host.split(":")[1]}`;
-				body = body.replaceAll("{{OTHER}}", other);
+				body = body.replaceAll("{{OTHER}}", otherHost(host.split(":")[1]));
 				const type = TYPES[file.split(".").pop() ?? ""] ?? "text/plain";
 				res.setHeader("Content-Type", type);
 				if (
