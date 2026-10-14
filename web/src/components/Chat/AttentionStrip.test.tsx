@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useWorkStore } from "../../lib/workStore";
@@ -720,8 +720,8 @@ describe("AttentionStrip", () => {
 
 	describe("the stories the chat watches", () => {
 		const stories: WatchedStory[] = [
-			{ id: "st1", title: "Ship the importer", status: "active" },
-			{ id: "st2", title: "Fix the flaky test", status: "stopped" },
+			{ id: "st1", title: "Ship the importer" },
+			{ id: "st2", title: "Fix the flaky test" },
 		];
 
 		afterEach(() => useWorkStore.getState().reset());
@@ -779,10 +779,12 @@ describe("AttentionStrip", () => {
 			await user.click(screen.getByRole("button", { name: "Details" }));
 
 			const list = screen.getByRole("list", { name: "Watched stories" });
-			// The story's own activity, from the work list where it is paged in,
-			// and from its status alone where it is not.
+			// The story's own activity, from the work list where it is paged in;
+			// one the list has not paged in is still named, without it.
 			expect(list).toHaveTextContent("Ship the importerWaiting on subtasks");
-			expect(list).toHaveTextContent("Fix the flaky testStopped");
+			expect(
+				within(list).getByRole("button", { name: "Fix the flaky test" }),
+			).toBeInTheDocument();
 
 			await user.click(screen.getByText("Fix the flaky test"));
 			expect(onOpen).toHaveBeenCalledWith("st2");

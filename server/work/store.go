@@ -1082,11 +1082,13 @@ func IDsBySession(works []Work) map[string]string {
 // WatchedBySession indexes the stories each session watches and would be woken
 // by, for the same readers IDsBySession serves.
 //
-// A closed story is left out even though closing releases its watcher
-// (FileStore.StepDone): a watch is counted because the session will be woken by
-// the story, and a closed story wakes nobody — so the rule says so itself rather
-// than leaning on every write that closes one. A stopped story stays in: its
-// watcher may be waiting for it to be restarted and finish.
+// Only an active story is in: a watch is counted because the session will be
+// woken by the story, and a story the engine is not driving wakes nobody. A
+// closed one is left out even though closing releases its watcher
+// (FileStore.StepDone), so the rule says so itself rather than leaning on every
+// write that closes one. A stopped one keeps its watcher but drops out until a
+// person restarts it — otherwise a chat would say it is watching a story that
+// will never move again on its own.
 //
 // The watching side is held to WakesWatcher, the rule Engine.notifyWatcher
 // delivers by: a count that included a watcher the news never reaches would
@@ -1100,7 +1102,7 @@ func WatchedBySession(works []Work) map[string][]Work {
 	}
 	watched := make(map[string][]Work)
 	for _, item := range works {
-		if item.Watcher == nil || item.Status == StatusClosed {
+		if item.Watcher == nil || item.Status != StatusActive {
 			continue
 		}
 		watcher := item.Watcher.SessionID

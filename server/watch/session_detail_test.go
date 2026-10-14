@@ -433,7 +433,7 @@ func TestSessionDetailWatcher_HandleWorkChange_ListsTheWatchedStories(t *testing
 	waitFor(t, func() bool { return notifier.count() >= 1 })
 
 	params := decodeSessionDetailParams(t, notifier.last())
-	want := []rpc.WatchedStory{{ID: "story-1", Title: "Story", Status: work.StatusActive}}
+	want := []rpc.WatchedStory{{ID: "story-1", Title: "Story"}}
 	if params.Session == nil || params.Session.Watching != 1 || !slices.Equal(params.Session.WatchedStories, want) {
 		t.Fatalf("detail = %+v, want watching 1 listing %+v", params.Session, want)
 	}
@@ -446,6 +446,37 @@ func TestSessionDetailWatcher_HandleWorkChange_ListsTheWatchedStories(t *testing
 	params = decodeSessionDetailParams(t, notifier.last())
 	if params.Session == nil || len(params.Session.WatchedStories) != 1 || params.Session.WatchedStories[0].Title != "Renamed" {
 		t.Errorf("detail = %+v, want the watched story retitled", params.Session)
+	}
+}
+
+// Only active stories are listed, so a watched story stopping takes it off the
+// open chat's list and restarting it puts it back.
+func TestSessionDetailWatcher_HandleWorkChange_FollowsAWatchedStoryStoppingAndRestarting(t *testing.T) {
+	store, works := sessionsWithOneWorkSession()
+	story := watchedStory("Story", work.StatusActive)
+	works.works = append(works.works, story)
+	w := NewSessionDetailWatcher(store, works)
+	notifier := &captureNotifier{}
+	if _, err := w.Subscribe("client-1", "sess-chat", notifier); err != nil {
+		t.Fatalf("subscribe: %v", err)
+	}
+	w.Start()
+	defer w.Stop()
+
+	for i, status := range []work.WorkStatus{work.StatusStopped, work.StatusActive} {
+		changed := watchedStory("Story", status)
+		works.works[1] = changed
+		w.HandleWorkChange(work.ChangeEvent{Op: work.OperationUpdate, Work: changed, PrevWatcher: changed.Watcher})
+		waitFor(t, func() bool { return notifier.count() >= i+1 })
+
+		params := decodeSessionDetailParams(t, notifier.last())
+		want := 0
+		if status == work.StatusActive {
+			want = 1
+		}
+		if params.Session == nil || params.Session.Watching != want || len(params.Session.WatchedStories) != want {
+			t.Errorf("detail after the story went %s = %+v, want watching and listing %d", status, params.Session, want)
+		}
 	}
 }
 

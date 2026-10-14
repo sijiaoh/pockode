@@ -42,7 +42,7 @@ two answers, and both halves are true at once.
 | `needs_permission` | Turn blocked on a permission request | `Lock` | warning | Needs permission |
 | `background` | Turn blocked on a background task | `Hourglass` | secondary | Background task |
 | `waiting_children` | Work waits on subtasks (`story_wait`) | `Clock` | accent | Waiting on subtasks |
-| `watching` | Session between turns watches stories that have not closed | `Eye` | accent | Watching stories |
+| `watching` | Session between turns watches stories that are `active` | `Eye` | accent | Watching stories |
 | `idle` | Engine drives the work, nothing is happening | `CircleDot` | muted | Idle |
 | `stopped` | Engine does not touch it; a human must act | `CircleStop` | error | Stopped |
 | `closed` | Finished | `CircleCheck` | muted | Closed |
@@ -142,15 +142,17 @@ it was never sent, which is the reason `work_id` is the server's too. The count
 is held to the rule the engine delivers by (`work.WakesWatcher`): a story's own
 session is not counted, and a session whose own work is not `active` counts
 nothing, because the news would not reach either and "this chat wakes when…"
-would be false. On the story's side it is "not closed" and nothing finer: a
-stopped story still counts, since its watcher may be waiting for it to be
-restarted and finish. It ranks below `wait` because a session waiting on its
-subtasks is doing what it was started for, and the stories it watches are
-something it does on the side. A plain chat — no work at all — reaches this
-branch, and that is the common case: a lead chat is usually one. A work row
-always passes zero: what it reports is the engine driving the work, and an idle
-`active` work is about to be nudged whether or not its session watches
-anything.
+would be false. On the story's side it is `active` and nothing else: a stopped
+story keeps its watcher, but it will not move again until a person restarts it,
+so a chat counting it would say it is watching something that cannot wake it.
+Restarting the story brings it back into the count without a second `watch`,
+since the watch itself outlives the stop. It ranks below `wait` because a
+session waiting on its subtasks is doing what it was started for, and the
+stories it watches are something it does on the side. A plain chat — no work
+at all — reaches this branch, and that is the common case: a lead chat is
+usually one. A work row always passes zero: what it reports is the engine
+driving the work, and an idle `active` work is about to be nudged whether or
+not its session watches anything.
 
 Why phase outranks `wait` rather than the other way round: a `wait` is a standing
 intention, a phase is a fact about this second. A story that has called
@@ -265,8 +267,8 @@ as it is. `WorkListItem`: `status: "open" | "active" | "stopped" | "closed"`,
 plus `activity` and `wait?: "child"`.
 
 **`watching` is the same shape.** A row carries the count alone; the open
-session's `SessionDetail` carries it beside `watched_stories` (`{id, title,
-status}` each, in listing order), which is what the strip lists (§2.2). A
+session's `SessionDetail` carries it beside `watched_stories` (`{id, title}`
+each, in listing order), which is what the strip lists (§2.2). A
 title rides with the session rather than being looked up, so a story the work
 list has not paged in is still named; its activity is the one thing read from
 `workStore`, and is simply not drawn when the story is not there.
@@ -644,7 +646,9 @@ has the floor.
   screen. Each story is one button: its activity glyph and label read from
   `workStore` the way a work row's are, and its title from `watched_stories`.
   A story the work list has not paged in is still named, and drawn without an
-  activity — except a stopped one, whose status the session's detail carries.
+  activity. The list holds only `active` stories, so there is no status to
+  fall back on: a stopped story drops off the list rather than being drawn as
+  stopped, and comes back when it is restarted.
   Pressing it opens the story's detail page (`onOpenWorkDetail`), the route the
   `watched_story_*` messages already take.
 - **No Unwatch anywhere in the web.** The watch is the watching agent's to

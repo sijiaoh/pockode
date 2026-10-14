@@ -33,8 +33,8 @@ const (
 	ActivityBackground Activity = "background"
 	// ActivityWaitingChildren is a story waiting for its subtasks to close.
 	ActivityWaitingChildren Activity = "waiting_children"
-	// ActivityWatching is a session between turns that watches stories which
-	// have not closed: it will be woken when one of them closes, stops or asks.
+	// ActivityWatching is a session between turns that watches active stories:
+	// it will be woken when one of them closes, stops or asks.
 	// It is a fact about the conversation, not a wait the engine keeps — nothing
 	// about nudging reads it.
 	ActivityWatching Activity = "watching"
@@ -69,7 +69,7 @@ func (a Activity) NeedsUser() bool {
 // has no session — which reads as idle, the same as a session sitting between
 // turns, because for a work item the two are the same nothing.
 //
-// watching is how many unclosed stories that session watches. It comes last,
+// watching is how many active stories that session watches. It comes last,
 // below the work's own wait: a session waiting on its subtasks is doing the
 // thing it was started for, and the stories it watches are something it does
 // on the side. Work rows pass zero — see RowStateFor.

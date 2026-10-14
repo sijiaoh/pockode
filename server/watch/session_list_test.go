@@ -711,6 +711,47 @@ func TestSessionListWatcher_HandleWorkChange_PushesTheWatchersCount(t *testing.T
 	}
 }
 
+// Only active stories are counted, so a watched story stopping takes the
+// watcher's count down and restarting it brings it back — the count moves, so
+// unlike a retitle each change reaches the row.
+func TestSessionListWatcher_HandleWorkChange_FollowsAWatchedStoryStoppingAndRestarting(t *testing.T) {
+	store, works := sessionsWithOneWorkSession()
+	story := watchedStory("Story", work.StatusActive)
+	works.works = append(works.works, story)
+	w := NewSessionListWatcher(store, works)
+	notifier := &captureNotifier{}
+	snapshot, err := w.Subscribe("client-1", notifier, SessionListFilter{})
+	if err != nil {
+		t.Fatalf("subscribe: %v", err)
+	}
+	for _, item := range snapshot.Sessions {
+		if item.ID == "sess-chat" && item.Watching != 1 {
+			t.Fatalf("watching = %d in the snapshot, want 1", item.Watching)
+		}
+	}
+	w.Start()
+	defer w.Stop()
+
+	for i, status := range []work.WorkStatus{work.StatusStopped, work.StatusActive} {
+		changed := watchedStory("Story", status)
+		works.works[1] = changed
+		w.HandleWorkChange(work.ChangeEvent{Op: work.OperationUpdate, Work: changed, PrevWatcher: changed.Watcher})
+		waitFor(t, func() bool { return notifier.count() >= i+1 })
+
+		var params sessionListChangedParams
+		if err := json.Unmarshal(notifier.last(), &params); err != nil {
+			t.Fatalf("unmarshal params: %v", err)
+		}
+		want := 0
+		if status == work.StatusActive {
+			want = 1
+		}
+		if params.Session == nil || params.Session.ID != "sess-chat" || params.Session.Watching != want {
+			t.Errorf("row after the story went %s = %+v, want sess-chat watching %d", status, params.Session, want)
+		}
+	}
+}
+
 // A session whose own work leaves active is no longer woken by the stories it
 // watches (work.WakesWatcher), so that change — to the session's work, not to
 // any story — is what takes its count down.
