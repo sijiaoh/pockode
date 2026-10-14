@@ -235,7 +235,15 @@ function ContentView({
 			return <ProposedChange change={content.change} />;
 		// Edge to edge, scrolling itself: it is a page of its own.
 		case "html":
-			return <HtmlFrame html={content.html} title={title} className="h-full" />;
+			return (
+				<HtmlFrame
+					html={content.html}
+					title={title}
+					pageKey={content.pageKey}
+					className="flex h-full flex-col"
+					boxClassName="min-h-0 flex-1"
+				/>
+			);
 	}
 }
 

@@ -11,6 +11,7 @@ import PageNotice from "../Media/PageNotice";
 import { PageReloadButton } from "../Media/PageReloadButton";
 import { usePageFrame } from "../Media/usePageFrame";
 import { headerButtonClass, Spinner } from "../ui";
+import { PageHostsStrip } from "../ui/PageHostsStrip";
 
 const UNREACHABLE_FOLDER: PageIsolation = {
 	root: false,
@@ -106,6 +107,9 @@ function PagePreview({
 				)}
 			</div>
 			{notice && <PageNotice isolation={notice} origin={origin.kind} />}
+			{frameProps && !page.failure && (
+				<PageHostsStrip key={page.stripKey} {...page.strip} />
+			)}
 			<div ref={ref} className="relative min-h-0 flex-1 overflow-auto">
 				{page.failure ? (
 					<MediaFailureCard

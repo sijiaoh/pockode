@@ -1,5 +1,6 @@
 import type { JSONRPCRequester } from "json-rpc-2.0";
 import type { ContentOrigin, TreeOrigin } from "../../types/contents";
+import { getApiBaseUrl } from "../../utils/config";
 import { parentDir, splitPath } from "../../utils/path";
 import { requireClient } from "./client";
 
@@ -12,9 +13,19 @@ import { requireClient } from "./client";
  * can read the capability out of its own URL — and with it `.env` or `.git`.
  * A directory capability never serves a dotfile beneath it either.
  */
-export type RawTarget =
+export type RawTarget = (
 	| { origin: ContentOrigin; scope: "file" }
-	| { origin: TreeOrigin; scope: "directory" };
+	| { origin: TreeOrigin; scope: "directory" }
+) & {
+	/**
+	 * Set when what is read is shown as a page: the hosts beyond the server
+	 * the reader has allowed it to reach (docs/page-external-hosts-ui.md). The
+	 * server binds them to the capability and refuses the page everything
+	 * else, so a capability for a page is never the one for its siblings
+	 * unless their hosts are the same.
+	 */
+	page?: { hosts: readonly string[] };
+};
 
 /**
  * What a page at `origin` is loaded through: the directory it sits in, so its
@@ -107,6 +118,8 @@ interface RawCapabilityParams {
 	session_id?: string;
 	id?: string;
 	worktree?: string;
+	hosts?: string[];
+	base_url?: string;
 }
 
 interface RawCapabilityResult {
@@ -127,7 +140,17 @@ export interface RawActions {
 	rawCapability: (target: RawTarget) => Promise<RawCapability>;
 }
 
-function toParams({ origin, scope }: RawTarget): RawCapabilityParams {
+function toParams(target: RawTarget): RawCapabilityParams {
+	// The base is where the page's own requests go, which only the app knows
+	// for certain: a proxy in between may not pass its Host on.
+	const page = target.page && {
+		hosts: [...target.page.hosts],
+		base_url: getApiBaseUrl(),
+	};
+	return { ...originParams(target), ...page };
+}
+
+function originParams({ origin, scope }: RawTarget): RawCapabilityParams {
 	switch (origin.kind) {
 		case "file":
 			return { origin: "file", scope, path: origin.path };

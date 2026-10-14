@@ -1,0 +1,10 @@
+<!doctype html>
+<title>Landed</title>
+<!-- Where a test's page tries to navigate itself or embed a document; says so
+     if it ever arrives. To every window above it, since how deep it landed
+     depends on the way it got here. -->
+<script>
+	for (var w = window; w !== w.parent; w = w.parent) {
+		w.parent.postMessage({ signal: "landed" }, "*");
+	}
+</script>

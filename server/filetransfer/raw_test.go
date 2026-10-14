@@ -1,6 +1,8 @@
 package filetransfer
 
 import (
+	"bytes"
+	"encoding/json"
 	"errors"
 	"io"
 	"mime"
@@ -9,6 +11,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -70,11 +73,15 @@ func (f rawFixture) get(t *testing.T, target string, header http.Header) *httpte
 
 func assertRawHeaders(t *testing.T, rec *httptest.ResponseRecorder) {
 	t.Helper()
+	// The floor every response stands on, which the page's policy is added to.
+	if got := rec.Header().Get("Content-Security-Policy"); !strings.HasPrefix(got, "sandbox allow-scripts allow-popups allow-popups-to-escape-sandbox; default-src ") {
+		t.Errorf("Content-Security-Policy = %q, want the sandbox and a default-src (status %d)", got, rec.Code)
+	}
 	for header, want := range map[string]string{
-		"Content-Security-Policy": "sandbox allow-scripts allow-popups allow-popups-to-escape-sandbox",
-		"X-Content-Type-Options":  "nosniff",
-		"Referrer-Policy":         "no-referrer",
-		"Cache-Control":           "private, no-cache",
+		"X-DNS-Prefetch-Control": "off",
+		"X-Content-Type-Options": "nosniff",
+		"Referrer-Policy":        "no-referrer",
+		"Cache-Control":          "private, no-cache",
 		// An error too, or a page's fetch() sees only a network failure.
 		"Access-Control-Allow-Origin":   "*",
 		"Access-Control-Expose-Headers": "Accept-Ranges, Content-Range, ETag",
@@ -122,6 +129,17 @@ func TestRawIssue(t *testing.T) {
 		"a dot directory, cleaned":  {Origin: RawOriginFile, Scope: RawScopeDirectory, Path: "site/../.pockode"},
 		"a dot directory, natively": {Origin: RawOriginFile, Scope: RawScopeDirectory, Path: "site" + string(filepath.Separator) + ".git"},
 		"a commit's dot directory":  {Origin: RawOriginCommit, Scope: RawScopeDirectory, Hash: "abcdef0", Path: "docs/.vitepress"},
+		// A host goes into a header as written, so nothing in it may end a
+		// source or a directive.
+		"a host ending the directive":   {Origin: RawOriginFile, Scope: RawScopeFile, Path: "a.html", Hosts: []string{"cdn.example; script-src *"}},
+		"a host with a scheme":          {Origin: RawOriginFile, Scope: RawScopeFile, Path: "a.html", Hosts: []string{"https://cdn.example"}},
+		"a wildcard host":               {Origin: RawOriginFile, Scope: RawScopeFile, Path: "a.html", Hosts: []string{"*"}},
+		"an IPv6 host":                  {Origin: RawOriginFile, Scope: RawScopeFile, Path: "a.html", Hosts: []string{"[::1]:80"}},
+		"this server's own host":        {Origin: RawOriginFile, Scope: RawScopeFile, Path: "a.html", Hosts: []string{"app.example:8443"}, BaseURL: "https://app.example"},
+		"this server's, with a dot":     {Origin: RawOriginFile, Scope: RawScopeFile, Path: "a.html", Hosts: []string{"app.example."}, BaseURL: "https://app.example"},
+		"a host longer than DNS allows": {Origin: RawOriginFile, Scope: RawScopeFile, Path: "a.html", Hosts: []string{strings.Repeat("a", 254) + ".example"}},
+		"too many hosts":                {Origin: RawOriginFile, Scope: RawScopeFile, Path: "a.html", Hosts: manyHosts(MaxRawGrantHosts + 1)},
+		"a base URL of another scheme":  {Origin: RawOriginFile, Scope: RawScopeFile, Path: "a.html", BaseURL: "javascript:alert(1)"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			if _, _, err := f.h.Issue(f.session, grant); !errors.Is(err, ErrInvalidGrant) {
@@ -139,6 +157,201 @@ func TestRawIssue(t *testing.T) {
 		if _, _, err := f.h.Issue("not-a-session", grant); !errors.Is(err, authsession.ErrSessionNotLive) {
 			t.Errorf("err = %v, want ErrSessionNotLive", err)
 		}
+	})
+}
+
+func manyHosts(n int) []string {
+	hosts := make([]string, n)
+	for i := range hosts {
+		hosts[i] = "h" + strconv.Itoa(i) + ".example"
+	}
+	return hosts
+}
+
+func TestRawPagePolicy(t *testing.T) {
+	newPage := func(t *testing.T, grant RawGrant) (rawFixture, string) {
+		f := newRawFixture(t)
+		writeFile(t, f.workDir, "site/index.html", []byte("<!doctype html><p>hi"))
+		grant.Origin, grant.Scope, grant.Path = RawOriginFile, RawScopeDirectory, "site"
+		return f, f.issue(t, grant)
+	}
+	policy := func(rec *httptest.ResponseRecorder) string {
+		return strings.TrimPrefix(rec.Header().Get("Content-Security-Policy"), "sandbox allow-scripts allow-popups allow-popups-to-escape-sandbox; ")
+	}
+
+	t.Run("reaches its own capability and the hosts allowed for it, nothing else", func(t *testing.T) {
+		f, capability := newPage(t, RawGrant{Hosts: []string{"cdn.example", "fonts.example:8443"}, BaseURL: "https://app.example/base/"})
+
+		rec := f.get(t, RawPath(capability, "index.html"), nil)
+
+		own := "https://app.example/base" + RawPathPrefix + capability + "/"
+		hosts := "http://cdn.example https://cdn.example ws://cdn.example wss://cdn.example http://fonts.example:8443 https://fonts.example:8443 ws://fonts.example:8443 wss://fonts.example:8443"
+		reach := own + " data: blob: " + hosts
+		// Never an allowed host's documents: they would run under no policy.
+		local := own + " data: blob:"
+		want := "default-src " + reach + "; script-src 'unsafe-inline' 'unsafe-eval' " + reach + "; style-src 'unsafe-inline' " + reach + "; frame-src " + local + "; object-src 'none'; form-action " + own
+		if got := policy(rec); got != want {
+			t.Errorf("policy =\n%s\nwant\n%s", got, want)
+		}
+	})
+
+	t.Run("without a base URL, its own capability on the Host asked", func(t *testing.T) {
+		f, capability := newPage(t, RawGrant{})
+		req := httptest.NewRequest(http.MethodGet, RawPath(capability, "index.html"), nil)
+		req.Host = "192.168.1.5:9870"
+		rec := httptest.NewRecorder()
+		f.h.ServeHTTP(rec, req)
+
+		own := "http://192.168.1.5:9870" + RawPathPrefix + capability + "/ https://192.168.1.5:9870" + RawPathPrefix + capability + "/"
+		if got, want := policy(rec), "default-src "+own+" data: blob:;"; !strings.HasPrefix(got, want) {
+			t.Errorf("policy = %q, want it to start %q", got, want)
+		}
+	})
+
+	// Into a header as written, so nothing in it may end a source or a
+	// directive.
+	t.Run("a base URL a source cannot name names nothing", func(t *testing.T) {
+		for _, base := range []string{"http://[::1]:9870", "https://app.example/a b;script-src *"} {
+			f, capability := newPage(t, RawGrant{BaseURL: base})
+			rec := f.get(t, RawPath(capability, "index.html"), nil)
+			if got, want := policy(rec), "default-src data: blob:; script-src 'unsafe-inline' 'unsafe-eval' data: blob:; style-src 'unsafe-inline' data: blob:; frame-src data: blob:; object-src 'none'; form-action 'none'"; got != want {
+				t.Errorf("base %q: policy = %q, want %q", base, got, want)
+			}
+		}
+	})
+
+	// Without a base URL the issuer could not tell; the Host can.
+	t.Run("never allows the Host asked, under any spelling", func(t *testing.T) {
+		f, capability := newPage(t, RawGrant{Hosts: []string{"app.example:8443", "app.example.", "cdn.example"}})
+		req := httptest.NewRequest(http.MethodGet, RawPath(capability, "index.html"), nil)
+		req.Host = "app.example"
+		rec := httptest.NewRecorder()
+		f.h.ServeHTTP(rec, req)
+
+		got := policy(rec)
+		if strings.Contains(got, "//app.example:") || strings.Contains(got, "//app.example. ") || !strings.Contains(got, "https://cdn.example") {
+			t.Errorf("policy = %q, want cdn.example and no other name of app.example", got)
+		}
+	})
+
+	t.Run("a Host a source cannot name names nothing", func(t *testing.T) {
+		f, capability := newPage(t, RawGrant{})
+		req := httptest.NewRequest(http.MethodGet, RawPath(capability, "index.html"), nil)
+		req.Host = "[::1]:9870"
+		rec := httptest.NewRecorder()
+		f.h.ServeHTTP(rec, req)
+
+		if got, want := policy(rec), "default-src data: blob:; script-src 'unsafe-inline' 'unsafe-eval' data: blob:; style-src 'unsafe-inline' data: blob:; frame-src data: blob:; object-src 'none'; form-action 'none'"; got != want {
+			t.Errorf("policy = %q, want %q", got, want)
+		}
+	})
+
+	// The allowance is the capability's, never the URL's: the page can
+	// navigate itself anywhere, so whatever a URL says it could say too.
+	t.Run("nothing in the URL widens it", func(t *testing.T) {
+		f, capability := newPage(t, RawGrant{BaseURL: "https://app.example"})
+		plain := policy(f.get(t, RawPath(capability, "index.html"), nil))
+
+		for _, target := range []string{
+			RawPath(capability, "index.html") + "?hosts=evil.example&host=evil.example&h=evil.example",
+			RawPath(capability, "index.html") + "?" + RawDownloadParam + "=1&hosts=evil.example",
+			RawPath(capability, "evil.example/index.html"),
+		} {
+			if got := policy(f.get(t, target, nil)); got != plain {
+				t.Errorf("GET %s: policy = %q, want %q", target, got, plain)
+			}
+		}
+	})
+
+	t.Run("names its own capability on the base URL's host in lower case", func(t *testing.T) {
+		f, capability := newPage(t, RawGrant{BaseURL: "HTTPS://App.Example/Base"})
+		rec := f.get(t, RawPath(capability, "index.html"), nil)
+		if got, want := policy(rec), "default-src https://app.example/Base"+RawPathPrefix+capability+"/ "; !strings.HasPrefix(got, want) {
+			t.Errorf("policy = %q, want it to start %q", got, want)
+		}
+	})
+
+	t.Run("an unknown capability reaches nothing", func(t *testing.T) {
+		f := newRawFixture(t)
+		rec := f.get(t, RawPathPrefix+"nope/index.html", nil)
+		if got := policy(rec); got != "default-src 'none'" {
+			t.Errorf("policy = %q, want default-src 'none'", got)
+		}
+	})
+}
+
+func TestRawPageReporter(t *testing.T) {
+	framed := http.Header{"Sec-Fetch-Dest": {"iframe"}}
+	serve := func(t *testing.T, name, body string, header http.Header, query string) (*httptest.ResponseRecorder, string) {
+		t.Helper()
+		f := newRawFixture(t)
+		writeFile(t, f.workDir, "site/"+name, []byte(body))
+		capability := f.issue(t, RawGrant{Origin: RawOriginFile, Scope: RawScopeDirectory, Path: "site"})
+		return f.get(t, RawPath(capability, name)+query, header), pageReporter(capability)
+	}
+
+	for _, tt := range []struct {
+		name, body, before string
+	}{
+		// Ahead of a doctype the page would be in quirks mode.
+		{"after the doctype", "<!DOCTYPE html>\n<html><head><script src=x></script>", "<!DOCTYPE html>"},
+		{"after a doctype behind a comment", "\n<!-- built --> <!doctype html><p>", "\n<!-- built --> <!doctype html>"},
+		{"after a doctype behind comments an HTML parser closes at once", "<!--><!---><!doctype html><p>", "<!--><!---><!doctype html>"},
+		{"after the byte order mark", "\xEF\xBB\xBF<p>no doctype", "\xEF\xBB\xBF"},
+		{"after a doctype behind an XML prolog", "<?xml version=\"1.0\"?>\n<!DOCTYPE html PUBLIC \"-//W3C//DTD XHTML 1.0 Strict//EN\" \"x.dtd\"><html>", "<?xml version=\"1.0\"?>\n<!DOCTYPE html PUBLIC \"-//W3C//DTD XHTML 1.0 Strict//EN\" \"x.dtd\">"},
+		{"after a doctype behind a banner longer than the sniffed head", "<!-- " + strings.Repeat("licence ", 200) + "-->\n<!doctype html><p>", "<!-- " + strings.Repeat("licence ", 200) + "-->\n<!doctype html>"},
+		{"at the start without a doctype", "<html><p>hi", ""},
+		{"at the start when the doctype never ends", "<!doctype html", ""},
+	} {
+		t.Run("goes into a framed page "+tt.name, func(t *testing.T) {
+			rec, reporter := serve(t, "index.html", tt.body, framed, "")
+
+			want := tt.before + reporter + strings.TrimPrefix(tt.body, tt.before)
+			assertBody(t, rec, http.StatusOK, want)
+			if got := rec.Header().Get("Vary"); got != "Sec-Fetch-Dest" {
+				t.Errorf("Vary = %q, want Sec-Fetch-Dest", got)
+			}
+			if got := rec.Header().Get("ETag") + rec.Header().Get("Last-Modified"); got != "" {
+				t.Errorf("validators %q on bytes that are not the file's", got)
+			}
+		})
+	}
+
+	t.Run("goes into a page larger than what is sniffed", func(t *testing.T) {
+		body := "<!doctype html>" + strings.Repeat("x", 10000)
+		rec, reporter := serve(t, "index.html", body, framed, "")
+		assertBody(t, rec, http.StatusOK, "<!doctype html>"+reporter+strings.Repeat("x", 10000))
+	})
+
+	// What the page or Save reads is the file as it is.
+	for name, tt := range map[string]struct {
+		header http.Header
+		query  string
+	}{
+		"read by fetch()":        {http.Header{"Sec-Fetch-Dest": {"empty"}}, ""},
+		"without fetch metadata": {nil, ""},
+		"saved":                  {framed, "?" + RawDownloadParam + "=1"},
+		"asked for a range":      {http.Header{"Sec-Fetch-Dest": {"iframe"}, "Range": {"bytes=0-3"}}, ""},
+	} {
+		t.Run("stays out of a page "+name, func(t *testing.T) {
+			rec, reporter := serve(t, "index.html", "<!doctype html><p>hi", tt.header, tt.query)
+			if strings.Contains(rec.Body.String(), reporter) {
+				t.Errorf("body = %q, want the file as it is", rec.Body.String())
+			}
+		})
+	}
+
+	// The reporter's bytes are UTF-8; ahead of a UTF-16 page's byte order
+	// mark they would garble it.
+	t.Run("stays out of a page in UTF-16", func(t *testing.T) {
+		body := "\xFF\xFE<\x00!\x00d\x00o\x00c\x00t\x00y\x00p\x00e\x00 \x00h\x00t\x00m\x00l\x00>\x00"
+		rec, _ := serve(t, "index.html", body, framed, "")
+		assertBody(t, rec, http.StatusOK, body)
+	})
+
+	t.Run("stays out of what is not a page", func(t *testing.T) {
+		rec, _ := serve(t, "app.js", "console.log(1)", framed, "")
+		assertBody(t, rec, http.StatusOK, "console.log(1)")
 	})
 }
 
@@ -520,5 +733,46 @@ func TestCommitReaderRefusesReadsAfterClose(t *testing.T) {
 	}
 	if opened != 0 {
 		t.Errorf("git started %d times after Close, want 0", opened)
+	}
+}
+
+// rawPageContract is where the web's real-browser tests read what this server
+// tells a page, so that the pages they run in real engines are held by this
+// policy and report through this reporter, not a copy of them.
+const rawPageContract = "../../web/src/test/page-hosts/raw-contract.json"
+
+// TestRawPageContract keeps that file in step. After changing the policy or
+// the reporter, rewrite it with UPDATE_RAW_PAGE_CONTRACT=1.
+func TestRawPageContract(t *testing.T) {
+	const capability, base, host = "CAPABILITY", "http://base.invalid", "allowed.invalid:1"
+	contract := map[string]string{
+		"sandbox":        rawSandbox,
+		"capability":     capability,
+		"base":           base,
+		"host":           host,
+		"policy":         pagePolicy(RawGrant{BaseURL: base}, capability, ""),
+		"policyWithHost": pagePolicy(RawGrant{BaseURL: base, Hosts: []string{host}}, capability, ""),
+		"reporter":       pageReporter(capability),
+	}
+	var buf bytes.Buffer
+	encoder := json.NewEncoder(&buf)
+	encoder.SetEscapeHTML(false)
+	encoder.SetIndent("", "\t")
+	if err := encoder.Encode(contract); err != nil {
+		t.Fatal(err)
+	}
+	want := buf.Bytes()
+
+	if os.Getenv("UPDATE_RAW_PAGE_CONTRACT") != "" {
+		if err := os.WriteFile(rawPageContract, want, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := os.ReadFile(rawPageContract)
+	if err != nil {
+		t.Fatalf("read %s: %v", rawPageContract, err)
+	}
+	if string(got) != string(want) {
+		t.Errorf("%s is out of step with this server; rewrite it with UPDATE_RAW_PAGE_CONTRACT=1 and run the web's browser tests:\n%s", rawPageContract, want)
 	}
 }

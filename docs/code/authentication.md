@@ -336,10 +336,13 @@ the `Referer` of anything the page loads from elsewhere.
 **Scope is least privilege, because the page can read its own URL — and,
 through CORS (below), what it reaches.** A
 previewed page's scripts can read `location`, capability included, and send it
-anywhere. They can also fetch every file the capability reaches and send the
-bytes out, which matters even where the URL alone would not: a server kept to
-its LAN is out of reach of whoever receives the URL, but not of the page
-running inside it. So a capability reaches as little as its use needs:
+to any host the reader has allowed for the page — or, after any tap in the
+page, open a tab anywhere with it
+([what a page can reach](../page-external-hosts-ui.md#known-limits)). They can
+also fetch every file the capability reaches and send the bytes out the same
+way, which matters even where the URL alone would not: a server kept to its
+LAN is out of reach of whoever receives the URL, but not of the page running
+inside it. So a capability reaches as little as its use needs:
 
 - **One file** for a video, a sound, or a page its directory may not be
   granted for (below). A request for any other name is refused with `403 outside_scope`.
@@ -406,11 +409,12 @@ the scope leads to is; on Windows the resolved name is the target's, so it is
 refused. Making such a link takes write access to the work directory, as
 above.
 
-**Every response carries the same six headers, errors included:**
+**Every response carries the same seven headers, errors included:**
 
 | Header | Why |
 |---|---|
-| `Content-Security-Policy: sandbox allow-scripts allow-popups allow-popups-to-escape-sandbox` | Content is served as what it is (`text/html` included), on the app's own origin. The sandbox gives a document opened from here an opaque origin, whether it is framed or opened top-level, so its scripts cannot reach the app's `localStorage` and the session token in it. `allow-scripts` and `allow-popups` are what a previewed page needs to run and to open its links, and `allow-popups-to-escape-sandbox` lets a link opened in a new tab be a normal page there, as from an agent's page in chat — one that opens `/api/raw` again is sandboxed by its own response; `allow-same-origin` is the one flag that must never be added |
+| `Content-Security-Policy: sandbox allow-scripts allow-popups allow-popups-to-escape-sandbox; <page policy>` | Content is served as what it is (`text/html` included), on the app's own origin. The sandbox gives a document opened from here an opaque origin, whether it is framed or opened top-level, so its scripts cannot reach the app's `localStorage` and the session token in it. `allow-scripts` and `allow-popups` are what a previewed page needs to run and to open its links, and `allow-popups-to-escape-sandbox` lets a link opened in a new tab be a normal page there, as from an agent's page in chat — one that opens `/api/raw` again is sandboxed by its own response; `allow-same-origin` is the one flag that must never be added. The page policy after it is below |
+| `X-DNS-Prefetch-Control: off` | A host named in a page is not resolved ahead of a request the policy would refuse — a hostname can carry a secret as well as a path can |
 | `X-Content-Type-Options: nosniff` | The browser takes the server's type and does not guess another. Without it, a file the server named harmlessly could be rendered as something else |
 | `Referrer-Policy: no-referrer` | The capability is in the URL; see above |
 | `Cache-Control: private, no-cache` | The content is the user's, and a work-directory file changes under the same URL whenever the agent edits it. Revalidation is what tells |
@@ -426,10 +430,35 @@ answer it. `/api/raw` without the trailing slash is included
 status is written, because `http.ServeContent` clears `Cache-Control` before a
 `416`.
 
-The sandbox does not stop a page from making requests: it can still fetch any
-other origin and send what it read, which is the reason for the narrow scope
-above. Previewing a page means running its scripts. What the sandbox ensures is
-that those scripts run as nobody in particular, not as the logged-in app.
+The sandbox does not stop a page from making requests; the **page policy**
+does. Previewing a page means running its scripts, and what the sandbox ensures
+is only that they run as nobody in particular, not as the logged-in app. Beside
+it the CSP holds a policy built for each request from the capability
+(`pagePolicy`, `server/filetransfer/raw.go`):
+
+```
+default-src <base>/api/raw/<capability>/ data: blob: <hosts>;
+script-src 'unsafe-inline' 'unsafe-eval' <same>; style-src 'unsafe-inline' <same>;
+frame-src <base>/api/raw/<capability>/ data: blob:; object-src 'none';
+form-action <base>/api/raw/<capability>/
+```
+
+A document served here reaches its own capability and nothing else of this
+server's — not `'self'`, which in the opaque origin names nothing it can be
+held to — and no other host but those bound to the capability when it was
+issued (`raw.capability`'s `hosts`, each over `http`, `https`, `ws` and `wss`;
+[websocket-rpc.md](websocket-rpc.md#raw-capabilities)). `<base>` is the
+`base_url` the app sent — where it loads the capability from, which a proxy in
+between may not pass on as `Host` — or, without one, the request's own `Host`
+over both schemes. The hosts are the reader's allowance, made in the app; they
+are never read from the URL, which the page can navigate to anything it likes.
+A host matching the request's `Host` on any port or with a trailing dot is
+dropped when serving, as one matching the `base_url`'s host is refused at
+issue, since a request there could carry the app's cookies. An unknown capability's error goes out with
+`default-src 'none'`. Why the policy is what it is, the wrapper that keeps the
+page from navigating out of its capability, and the script injected into a
+framed page are in
+[page-external-hosts-ui.md](../page-external-hosts-ui.md#how-it-is-built).
 
 **Any origin may read; none with credentials.** The sandbox's opaque origin (`Origin: null`) is cross-origin even to the server
 that served the page, so a page's `<script type="module">`, its `@font-face`

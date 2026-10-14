@@ -1,4 +1,5 @@
 import { generateUUID } from "../utils/uuid";
+import { refusedHost } from "./pageHosts";
 
 /**
  * The document a Mermaid diagram is drawn in, and what it and the page say to
@@ -196,29 +197,19 @@ export function readFrameHandshake(
 	return { port, hosts: message.hosts };
 }
 
-/** Every host a CSP host-source can name as written: no IPv6 literal, no wildcard. */
-const HOST = /^[a-z0-9.-]+(:\d{1,5})?$/;
-
 /**
  * The host a refused image request may be allowed for, or null for one it may
- * not: anything but http(s), and the app's own host on any port — cookies are
- * not kept apart by port, so the frame never sends a request there, where it
- * could carry the app's.
+ * not: what a page may be allowed (`refusedHost`), over http(s) only, as an
+ * image is fetched.
  */
 export function blockedImageHost(
 	url: string,
 	ownHostname: string,
 ): string | null {
-	let parsed: URL;
-	try {
-		parsed = new URL(url);
-	} catch {
-		return null;
-	}
-	if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return null;
-	const host = parsed.host;
-	if (parsed.hostname === ownHostname || !HOST.test(host)) return null;
-	return host;
+	const refused = refusedHost(url, ownHostname);
+	if (!refused?.allowable) return null;
+	const { protocol } = new URL(url);
+	return protocol === "http:" || protocol === "https:" ? refused.host : null;
 }
 
 /** `data` if it is one of the messages the frame sends, else null. */

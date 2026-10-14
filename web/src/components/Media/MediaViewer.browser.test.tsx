@@ -185,7 +185,10 @@ describe("MediaViewer image stage", () => {
 		await expect
 			.poll(() => image.getBoundingClientRect().width)
 			.toBeCloseTo(BIG.width, -1);
-		expect(screen.getByRole("button", { name: /^Zoom: 100%/ })).toBeVisible();
+		// The label follows the scale a render later; under load, after the poll.
+		expect(
+			await screen.findByRole("button", { name: /^Zoom: 100%/ }),
+		).toBeVisible();
 
 		mouse(wrapper, "dblclick", x, y);
 		await settlesAt(image, 1);
@@ -478,10 +481,20 @@ describe("MediaViewer html stage", () => {
 		return new Promise((resolve) => setTimeout(resolve, 200));
 	}
 
+	/** The wrapper saying the page in it has loaded (`rawPageWrapper`). */
 	function loaded(frame: HTMLIFrameElement) {
-		return new Promise<void>((resolve) =>
-			frame.addEventListener("load", () => resolve(), { once: true }),
-		);
+		return new Promise<void>((resolve) => {
+			const onMessage = (event: MessageEvent) => {
+				if (
+					event.source === frame.contentWindow &&
+					event.data?.type === "pockode:page-loaded"
+				) {
+					window.removeEventListener("message", onMessage);
+					resolve();
+				}
+			};
+			window.addEventListener("message", onMessage);
+		});
 	}
 
 	it("closes with ✕ onto the opener's entry after the page navigated, so one Back leaves it", async () => {
@@ -490,9 +503,10 @@ describe("MediaViewer html stage", () => {
 		const before = window.history.length;
 		for (const name of ["next.htm", "index.htm", "next.htm"]) {
 			const landed = loaded(frame);
-			if (frame.contentWindow) {
-				frame.contentWindow.location.href = new URL(name, frame.src).href;
-			}
+			// The page's own frame, inside the wrapper the stage holds.
+			const page = frame.contentWindow?.[0];
+			if (page)
+				page.location.href = new URL(name, location.origin + pagePath).href;
 			await landed;
 			await settle();
 		}

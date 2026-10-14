@@ -2,6 +2,7 @@ import { type FocusEvent, useEffect } from "react";
 import { createPortal } from "react-dom";
 import { splitPath } from "../../utils/path";
 import { Spinner } from "../ui";
+import { PageHostsStrip } from "../ui/PageHostsStrip";
 import { MediaFailureCard } from "./MediaFailureCard";
 import { PageReloadButton } from "./PageReloadButton";
 import type { HtmlMediaItem, StageProps } from "./types";
@@ -33,8 +34,9 @@ function keepTabInSheet(event: FocusEvent<HTMLElement>) {
 
 /**
  * An HTML page on the full screen (docs/media-viewer.md#the-html-stage),
- * through the same frame machine and the same cached capability as the
- * in-place page. It loads afresh at the entry page: an opaque-origin page's
+ * through the same frame machine as the in-place page, and its cached
+ * capability while the hosts allowed for the page are the ones that was drawn
+ * with. It loads afresh at the entry page: an opaque-origin page's
  * place and state cannot be read, so there is nothing to hand over.
  *
  * No gestures and no keys of its own — every touch, scroll, pinch and key in
@@ -85,22 +87,26 @@ export default function HtmlStage({
 					/>
 				</div>
 			) : frameProps ? (
-				<>
-					<iframe
-						{...frameProps}
-						key={page.frameKey}
-						title={item.name}
-						className="absolute inset-0 block size-full border-0 bg-white"
-						style={{ colorScheme: "light" }}
-					/>
-					{/* biome-ignore lint/a11y/noStaticElementInteractions: a focus sentinel, never a stop of its own; see `keepTabInSheet` */}
-					<div
-						// biome-ignore lint/a11y/noNoninteractiveTabindex: as above
-						tabIndex={0}
-						onFocus={keepTabInSheet}
-						className="absolute size-0 overflow-hidden"
-					/>
-				</>
+				// The strip is under the toolbar and the notice, as in place.
+				<div className="absolute inset-0 flex flex-col">
+					<PageHostsStrip key={page.stripKey} {...page.strip} />
+					<div className="relative min-h-0 flex-1">
+						<iframe
+							{...frameProps}
+							key={page.frameKey}
+							title={item.name}
+							className="absolute inset-0 block size-full border-0 bg-white"
+							style={{ colorScheme: "light" }}
+						/>
+						{/* biome-ignore lint/a11y/noStaticElementInteractions: a focus sentinel, never a stop of its own; see `keepTabInSheet` */}
+						<div
+							// biome-ignore lint/a11y/noNoninteractiveTabindex: as above
+							tabIndex={0}
+							onFocus={keepTabInSheet}
+							className="absolute size-0 overflow-hidden"
+						/>
+					</div>
+				</div>
 			) : (
 				<div className="absolute inset-0 flex items-center justify-center">
 					<Spinner variant="current" className="text-th-text-muted" />

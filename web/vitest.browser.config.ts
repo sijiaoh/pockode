@@ -4,6 +4,7 @@ import react from "@vitejs/plugin-react";
 import { playwright } from "@vitest/browser-playwright";
 import { defineConfig } from "vitest/config";
 import { BROWSER_TEST_FILES } from "./vitest.files";
+import { rawPages } from "./vitest.rawPages";
 
 /**
  * The real-browser entry: tests that need an actual layout engine — measured
@@ -16,7 +17,10 @@ import { BROWSER_TEST_FILES } from "./vitest.files";
  * Safari, the platform this app is mostly used on.
  */
 export default defineConfig({
-	plugins: [react(), tailwindcss()],
+	// rawPages: a test-only `/api/raw` so workspace pages run under the server's
+	// real policy; it reads raw-contract.json, which TestRawPageContract checks
+	// against server/filetransfer. Never in vite.config.ts.
+	plugins: [react(), tailwindcss(), rawPages()],
 	define: {
 		__APP_VERSION__: JSON.stringify("test"),
 	},

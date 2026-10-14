@@ -1581,14 +1581,21 @@ type PortPreviewTicketResult struct {
 // everything beneath it: a page's directory, so that its relative URLs load.
 // A directory is never the root of the work directory or the commit; an
 // attachment is always a file.
+//
+// For a page, Hosts are the hosts beyond this server it may reach, as the
+// reader allowed them, and BaseURL is what the app puts the capability's path
+// under to load it — where the page's own requests go. Every response under
+// the capability carries a Content-Security-Policy refusing everything else.
 type RawCapabilityParams struct {
-	Origin    string `json:"origin"`
-	Scope     string `json:"scope"`
-	Path      string `json:"path,omitempty"`
-	Hash      string `json:"hash,omitempty"`
-	SessionID string `json:"session_id,omitempty"`
-	ID        string `json:"id,omitempty"`
-	Worktree  string `json:"worktree,omitempty"`
+	Origin    string   `json:"origin"`
+	Scope     string   `json:"scope"`
+	Path      string   `json:"path,omitempty"`
+	Hash      string   `json:"hash,omitempty"`
+	SessionID string   `json:"session_id,omitempty"`
+	ID        string   `json:"id,omitempty"`
+	Worktree  string   `json:"worktree,omitempty"`
+	Hosts     []string `json:"hosts,omitempty"`
+	BaseURL   string   `json:"base_url,omitempty"`
 }
 
 // RawCapabilityResult is where the granted content is read.

@@ -94,9 +94,9 @@ export function HtmlRenderCard({ run }: { run: ToolRun }) {
 			noun: "page",
 			from: "start",
 			copyText: html,
-			content: { kind: "html", html, showSource },
+			content: { kind: "html", html, showSource, pageKey: run.id },
 		}),
-		[name, html, showSource],
+		[name, html, showSource, run.id],
 	);
 	const openFullScreen = useFullScreen(fullScreenKey, source);
 	const opener = openFullScreen && {
@@ -151,17 +151,19 @@ export function HtmlRenderCard({ run }: { run: ToolRun }) {
 				</div>
 			</div>
 			{/* Hidden rather than unmounted under the source, so the page keeps
-			    its state and its scripts do not run again. */}
+			    its state and its scripts do not run again. The strip of hosts it
+			    was refused goes with it: the source has nothing to load. */}
 			<div ref={inViewRef} hidden={showSource}>
 				{inView ? (
-					<div ref={boxRef} style={{ height: boxHeight }}>
-						<HtmlFrame
-							html={html}
-							title={name}
-							onHeight={onHeight}
-							className="h-full"
-						/>
-					</div>
+					<HtmlFrame
+						html={html}
+						title={name}
+						pageKey={run.id}
+						onHeight={onHeight}
+						shown={!showSource}
+						boxRef={boxRef}
+						boxStyle={{ height: boxHeight }}
+					/>
 				) : (
 					// Grey rather than white: an unloaded white block glares in the
 					// dark theme, where grey reads as "not here yet".

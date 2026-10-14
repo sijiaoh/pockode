@@ -1,6 +1,7 @@
 package filetransfer
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -12,6 +13,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -98,7 +100,57 @@ type RawGrant struct {
 	// Path is, with forward slashes, the work-directory path, the repository
 	// path in the commit, or the attachment id.
 	Path string
+	// Hosts are the hosts beyond this server that a page served under the
+	// capability may reach (docs/page-external-hosts-ui.md), each as URL.host
+	// gives it. Only the reader allows them, through the app, so they are bound
+	// here and never said by the URL: the page can navigate itself to any URL
+	// it likes, and whatever a URL could say, it could say too.
+	Hosts []string
+	// BaseURL is what the app puts the capability's path under to load it —
+	// the scheme, host and any path the browser sees, which a proxy in between
+	// may not pass on — and so where the page's own requests go. Empty: the
+	// request's own Host, over either scheme. One a policy cannot name (an
+	// IPv6 literal) names nothing, and the page then has none of its files.
+	BaseURL string
 }
+
+// MaxRawGrantHosts is as many hosts as the app ever lists for a page to
+// allow.
+const MaxRawGrantHosts = 50
+
+// grantHost is every host a CSP host-source names as written: no IPv6
+// literal, no "_", no wildcard. Nothing in it can end a source or a directive.
+var grantHost = regexp.MustCompile(`^[a-z0-9.-]+(:[0-9]{1,5})?$`)
+
+// lowerOrigin is base with its scheme and host in lower case, as a policy
+// source has to name them to match what the browser asks for; its path is
+// kept as it is.
+func lowerOrigin(base string) string {
+	scheme, rest, ok := strings.Cut(base, "://")
+	if !ok {
+		return base
+	}
+	host, path, hasPath := strings.Cut(rest, "/")
+	lowered := strings.ToLower(scheme) + "://" + strings.ToLower(host)
+	if hasPath {
+		lowered += "/" + path
+	}
+	return lowered
+}
+
+// maxGrantHostLen is the longest name DNS allows, and a port.
+const maxGrantHostLen = 253 + len(":65535")
+
+// sameHostname is whether host, with or without a port, names hostname: a
+// trailing dot is the same name to DNS, and so another spelling of it.
+func sameHostname(host, hostname string) bool {
+	name, _, _ := strings.Cut(host, ":")
+	return strings.TrimSuffix(name, ".") == strings.TrimSuffix(hostname, ".")
+}
+
+// grantBaseURL is a base a CSP source can name, path included, with nothing in
+// it that could end the source or the directive.
+var grantBaseURL = regexp.MustCompile(`^https?://[a-z0-9.-]+(:[0-9]{1,5})?(/[A-Za-z0-9._~%!$&'()*+=:@/-]*)?$`)
 
 // ErrInvalidGrant refuses to issue a capability for a grant that names nothing
 // a request could reach.
@@ -115,6 +167,30 @@ func (g RawGrant) validate() error {
 	}
 	if g.Scope == RawScopeDirectory && hasDotComponent(cleanGrantPath(g.Path)) {
 		return fmt.Errorf("%w: directory %q is or lies within a dot directory", ErrInvalidGrant, g.Path)
+	}
+
+	if len(g.Hosts) > MaxRawGrantHosts {
+		return fmt.Errorf("%w: %d hosts, at most %d", ErrInvalidGrant, len(g.Hosts), MaxRawGrantHosts)
+	}
+	own := ""
+	if g.BaseURL != "" {
+		base, err := url.Parse(g.BaseURL)
+		if err != nil || base.Scheme != "http" && base.Scheme != "https" || base.Host == "" {
+			return fmt.Errorf("%w: base URL %q is not an http(s) URL", ErrInvalidGrant, g.BaseURL)
+		}
+		own = strings.ToLower(base.Hostname())
+	}
+	for _, host := range g.Hosts {
+		if len(host) > maxGrantHostLen || !grantHost.MatchString(host) {
+			return fmt.Errorf("%w: host %q is not one a policy can name", ErrInvalidGrant, host)
+		}
+		// A request to this server's own host, on any port, could carry its
+		// cookies; the app never offers one. Checked again against the Host
+		// each request comes in on (pagePolicy), which is all there is to go
+		// by without a base URL.
+		if own != "" && sameHostname(host, own) {
+			return fmt.Errorf("%w: host %q is this server's own", ErrInvalidGrant, host)
+		}
 	}
 
 	switch g.Origin {
@@ -195,10 +271,11 @@ func RawPath(capability, rel string) string {
 // script, a font or a fetch() is loaded in CORS mode, and from an opaque
 // origin it is cross-origin even to here. Credentials are never allowed; the
 // capability that authorizes the read is in the URL. It does let the page's
-// own scripts read what the scope reaches and send the bytes out, where
-// without it they could send only the URL — useless to whoever cannot reach
-// this server, as on a server kept to its LAN. That is why a scope reaches as
-// little as it does, dotfiles included.
+// own scripts read what the scope reaches and — to a host the reader has
+// allowed for the page (pagePolicy) — send the bytes out, where without it
+// they could send only the URL, useless to whoever cannot reach this server,
+// as on a server kept to its LAN. That is why a scope reaches as little as it
+// does, dotfiles included.
 type RawHandler struct {
 	files        *Handler
 	attachments  *AttachmentHandler
@@ -226,11 +303,12 @@ func (h *RawHandler) Issue(sessionToken string, grant RawGrant) (string, time.Ti
 	// Kept clean, so that a file is matched by the base name RawEntryPath
 	// gives it: "dir/a.mp4/." is "a.mp4", not ".".
 	grant.Path = cleanGrantPath(grant.Path)
+	grant.BaseURL = lowerOrigin(grant.BaseURL)
 	return h.capabilities.Issue(sessionToken, grant)
 }
 
 func (h *RawHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
-	w := &rawResponseWriter{ResponseWriter: rw}
+	w := &rawResponseWriter{ResponseWriter: rw, policy: "default-src 'none'"}
 
 	if r.Method == http.MethodOptions {
 		// A preflight carries no capability to check — the browser sends it
@@ -261,6 +339,10 @@ func (h *RawHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 		h.files.writeError(w, errf(http.StatusNotFound, CodeCapabilityUnknown, "capability is unknown, expired, or its session has ended"), nil)
 		return
 	}
+	w.policy = pagePolicy(grant, capability, r.Host)
+	if wantsReporter(r) {
+		w.reporter = pageReporter(capability)
+	}
 
 	// The lexical check comes first for every origin, so `..` is refused the
 	// same way whichever one would have been asked to resolve it.
@@ -286,6 +368,13 @@ func (h *RawHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 
 const rawMethods = "GET, HEAD, OPTIONS"
 
+// rawSandbox gives a document served here an opaque origin of its own, where
+// the login token is out of reach. A popup escapes the sandbox, so a link the
+// page opens in a new tab is a normal page there, as from an agent's page in
+// chat (HtmlFrame). One that opens /api/raw again is sandboxed by that
+// response's own header.
+const rawSandbox = "sandbox allow-scripts allow-popups allow-popups-to-escape-sandbox"
+
 // rawResponseWriter puts the raw endpoint's headers on whatever response goes
 // out, errors included: a response without the sandbox is one a page could be
 // loaded from in the app's origin, and an error without CORS is one a page's
@@ -295,16 +384,19 @@ const rawMethods = "GET, HEAD, OPTIONS"
 type rawResponseWriter struct {
 	http.ResponseWriter
 	wroteHeader bool
+	// policy is what a document served here may reach, beside the sandbox.
+	policy string
+	// reporter, when not empty, goes into an HTML page served to a frame
+	// (injectReporter).
+	reporter string
 }
 
 func (w *rawResponseWriter) WriteHeader(status int) {
 	if !w.wroteHeader {
 		w.wroteHeader = true
 		header := w.Header()
-		// A popup escapes the sandbox, so a link the page opens in a new tab is
-		// a normal page there, as from an agent's page in chat (HtmlFrame). One
-		// that opens /api/raw again is sandboxed by that response's own header.
-		header.Set("Content-Security-Policy", "sandbox allow-scripts allow-popups allow-popups-to-escape-sandbox")
+		header.Set("Content-Security-Policy", rawSandbox+"; "+w.policy)
+		header.Set("X-DNS-Prefetch-Control", "off")
 		header.Set("X-Content-Type-Options", "nosniff")
 		header.Set("Referrer-Policy", "no-referrer")
 		header.Set("Access-Control-Allow-Origin", "*")
@@ -339,10 +431,148 @@ func (w *rawResponseWriter) ReadFrom(r io.Reader) (int64, error) {
 // Unwrap lets http.ResponseController reach the connection beneath.
 func (w *rawResponseWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
 
+// pagePolicy is what a document served under capability may reach
+// (docs/page-external-hosts-ui.md): the capability's own path, which its
+// relative URLs resolve beneath, and the hosts the reader has allowed for the
+// page — nothing else of this server's, nor any other host. Everything else a
+// page does stays possible: inline scripts and styles and eval, which pages
+// and chart libraries need, and data: and blob:, which are no request.
+//
+// The page's own path is named in full, scheme and host included, because in
+// the opaque origin the sandbox gives the document 'self' names nothing it can
+// be held to. Without a base URL it is the Host the request came in on, over
+// either scheme.
+//
+// The hosts are allowed for what the page fetches, never for the documents it
+// embeds, and never as the Host the request came in on, on another port or
+// with a trailing dot. Where the page's own frame goes is not this policy's to
+// govern: the app frames it in a document whose frame-src holds it to this
+// capability.
+func pagePolicy(grant RawGrant, capability, requestHost string) string {
+	var own []string
+	switch {
+	case grant.BaseURL != "":
+		if grantBaseURL.MatchString(grant.BaseURL) {
+			own = []string{strings.TrimSuffix(grant.BaseURL, "/") + RawPathPrefix + capability + "/"}
+		}
+	case grantHost.MatchString(requestHost):
+		own = []string{"http://" + requestHost + RawPathPrefix + capability + "/", "https://" + requestHost + RawPathPrefix + capability + "/"}
+	}
+	local := strings.Join(append(append([]string{}, own...), "data:", "blob:"), " ")
+	reach := []string{local}
+	requestName, _, _ := strings.Cut(requestHost, ":")
+	for _, host := range grant.Hosts {
+		if sameHostname(host, requestName) {
+			continue
+		}
+		// Every scheme, each named: a source with one does not reach ws: from
+		// https: in every engine.
+		reach = append(reach, "http://"+host, "https://"+host, "ws://"+host, "wss://"+host)
+	}
+	sources := strings.Join(reach, " ")
+	formAction := "'none'"
+	if len(own) > 0 {
+		formAction = strings.Join(own, " ")
+	}
+	return strings.Join([]string{
+		"default-src " + sources,
+		"script-src 'unsafe-inline' 'unsafe-eval' " + sources,
+		"style-src 'unsafe-inline' " + sources,
+		// Never an allowed host's documents: what one serves runs under no
+		// policy of ours and can reach anywhere, and a CDN serves HTML anyone
+		// can publish. WebKit loads an <object> as such a document.
+		"frame-src " + local,
+		"object-src 'none'",
+		"form-action " + formAction,
+	}, "; ")
+}
+
+// wantsReporter is whether r loads a document into a frame — the app's, or one
+// a page makes — rather than reading its bytes: fetch() and Save get the file
+// as it is. The fetch metadata says so; a browser that sends none gets no
+// reporter, and its page no strip.
+func wantsReporter(r *http.Request) bool {
+	dest := r.Header.Get("Sec-Fetch-Dest")
+	return r.Method == http.MethodGet && (dest == "iframe" || dest == "frame") &&
+		r.Header.Get("Range") == "" && !r.URL.Query().Has(RawDownloadParam)
+}
+
+// pageReporter is the script that tells the app what the page under
+// capability was refused, which only the page's own document hears
+// (securitypolicyviolation fires where the request was made). It also takes a
+// plain click on a link out of the capability, which the frame's embedder
+// would only refuse, and hands it to the app to open. A link within the
+// capability is left to navigate the frame.
+//
+// Its messages are those of the reporter the app writes into an agent's page
+// (pageReporterScript in web/src/lib/pageHosts.ts), which reads them; they are
+// posted to the app's window, two frames up past the app's wrapper. Only in
+// the frame the wrapper holds, which it names pageFrameName: in a frame the
+// page makes, two up is the wrapper, which hears nothing, so a link taken
+// there would go nowhere — where left alone, the page's own policy refuses it
+// and the page's reporter says so. The page shares this document and can post
+// the same, so they are only ever reports.
+func pageReporter(capability string) string {
+	return `<script>(function(){if(window.name!=="` + pageFrameName + `")return;var app=parent.parent;var c="/` + capability + `/";var p=location.pathname;var own=location.host+p.slice(0,p.indexOf(c)+c.length);document.addEventListener("securitypolicyviolation",function(e){app.postMessage({type:"pockode:page-refused",url:String(e.blockedURI),directive:String(e.effectiveDirective)},"*");});addEventListener("click",function(e){if(e.defaultPrevented||e.button!==0||e.metaKey||e.ctrlKey||e.shiftKey||e.altKey)return;var t=e.target;var a=t&&t.closest?t.closest("a[href],area[href]"):null;if(!a)return;var w=(a.getAttribute("target")||"").toLowerCase();if(w&&w!=="_self"&&w!=="_parent"&&w!=="_top")return;var u;try{u=new URL(a.href);}catch(x){return;}if(u.protocol!=="http:"&&u.protocol!=="https:")return;if((u.host+u.pathname).indexOf(own)===0)return;e.preventDefault();app.postMessage({type:"pockode:page-link",href:u.href},"*");});})();</script>`
+}
+
+// pageFrameName is the name the app's wrapper gives the frame it holds a page
+// in (rawPageWrapper in web/src/lib/pageHosts.ts), which a frame keeps through
+// every page it goes to.
+const pageFrameName = "pockode-page"
+
+// reporterOffset is where in a page beginning with head the reporter goes:
+// after a doctype, past any comments and XML prolog ahead of it, since
+// anything else ahead of one puts the page in quirks mode. Without a doctype
+// within head, at the start, after a byte order mark, which only counts there.
+// Before anything else of the page's, so it hears what the page's head is
+// refused.
+func reporterOffset(head []byte) int {
+	i := 0
+	if bytes.HasPrefix(head, []byte("\xEF\xBB\xBF")) {
+		i = 3
+	}
+	start := i
+	for i < len(head) {
+		switch {
+		case strings.ContainsRune(" \t\n\f\r", rune(head[i])):
+			i++
+		// "<!-->" and "<!--->" are whole comments to an HTML parser.
+		case bytes.HasPrefix(head[i:], []byte("<!-->")):
+			i += len("<!-->")
+		case bytes.HasPrefix(head[i:], []byte("<!--->")):
+			i += len("<!--->")
+		case bytes.HasPrefix(head[i:], []byte("<!--")):
+			end := bytes.Index(head[i+4:], []byte("-->"))
+			if end < 0 {
+				return start
+			}
+			i += 4 + end + 3
+		// An XML prolog, which an HTML parser reads as a comment: XHTML
+		// generators put one before the doctype.
+		case bytes.HasPrefix(head[i:], []byte("<?")):
+			end := bytes.IndexByte(head[i:], '>')
+			if end < 0 {
+				return start
+			}
+			i += end + 1
+		case len(head)-i >= 9 && bytes.EqualFold(head[i:i+9], []byte("<!doctype")):
+			end := bytes.IndexByte(head[i:], '>')
+			if end < 0 {
+				return start
+			}
+			return i + end + 1
+		default:
+			return start
+		}
+	}
+	return start
+}
+
 // serveWorkDirFile reads through an os.Root rather than checking a path and
 // then opening it, so that a symlink — or a directory swapped for one after a
 // check — cannot lead out of the scope: the root refuses to follow it there.
-func (h *RawHandler) serveWorkDirFile(w http.ResponseWriter, r *http.Request, grant RawGrant, rel string) {
+func (h *RawHandler) serveWorkDirFile(w *rawResponseWriter, r *http.Request, grant RawGrant, rel string) {
 	workDir, apiErr := h.files.resolveWorkDir(grant.Worktree)
 	if apiErr != nil {
 		h.files.writeError(w, apiErr, nil)
@@ -440,7 +670,7 @@ func outsideScope(op, display string, err error) *apiError {
 	return errf(http.StatusForbidden, CodeOutsideScope, "cannot %s %s within this capability: %v", op, display, err)
 }
 
-func (h *RawHandler) serveAttachment(w http.ResponseWriter, r *http.Request, grant RawGrant) {
+func (h *RawHandler) serveAttachment(w *rawResponseWriter, r *http.Request, grant RawGrant) {
 	dataDir, ok := h.attachments.dataDir(w, h.attachments.sessions.StoredAttachmentDataDir, grant.Worktree, grant.SessionID)
 	if !ok {
 		return
@@ -464,7 +694,7 @@ func (h *RawHandler) serveAttachment(w http.ResponseWriter, r *http.Request, gra
 	h.serveContent(w, r, grant.Path, fi.ModTime(), "", f)
 }
 
-func (h *RawHandler) serveCommitFile(w http.ResponseWriter, r *http.Request, grant RawGrant, rel string) {
+func (h *RawHandler) serveCommitFile(w *rawResponseWriter, r *http.Request, grant RawGrant, rel string) {
 	workDir, apiErr := h.files.resolveWorkDir(grant.Worktree)
 	if apiErr != nil {
 		h.files.writeError(w, apiErr, nil)
@@ -511,7 +741,7 @@ func (h *RawHandler) serveCommitFile(w http.ResponseWriter, r *http.Request, gra
 // serveContent answers with content typed by its own bytes, Range included.
 // An etag, if any, is set only once the content has proved readable, so that
 // an error is never sent out under the validator of the content it failed on.
-func (h *RawHandler) serveContent(w http.ResponseWriter, r *http.Request, name string, modTime time.Time, etag string, content io.ReadSeeker) {
+func (h *RawHandler) serveContent(w *rawResponseWriter, r *http.Request, name string, modTime time.Time, etag string, content io.ReadSeeker) {
 	head := make([]byte, contents.SniffLen)
 	n, err := io.ReadFull(content, head)
 	if err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF) {
@@ -522,7 +752,18 @@ func (h *RawHandler) serveContent(w http.ResponseWriter, r *http.Request, name s
 		h.files.writeError(w, h.files.internalFailure("seek", name, err), nil)
 		return
 	}
-	w.Header().Set("Content-Type", contents.DetectServedMIME(name, head[:n]))
+	mime := contents.DetectServedMIME(name, head[:n])
+	w.Header().Set("Content-Type", mime)
+	if strings.HasPrefix(mime, "text/html") {
+		// Framed, a page carries the reporter; read, it does not. Only into
+		// UTF-8, which the reporter's bytes are: a UTF-16 page would read them
+		// as text, and lose its byte order mark behind them.
+		w.Header().Add("Vary", "Sec-Fetch-Dest")
+		if w.reporter != "" && mime == "text/html; charset=utf-8" {
+			h.injectReporter(w, name, content)
+			return
+		}
+	}
 	// A download link asks for the content to be saved rather than shown:
 	// a browser that ignores the link's `download` attribute — a cross-origin
 	// one, or a type it insists on previewing — still writes it to disk. No
@@ -535,6 +776,34 @@ func (h *RawHandler) serveContent(w http.ResponseWriter, r *http.Request, name s
 		w.Header().Set("ETag", etag)
 	}
 	http.ServeContent(w, r, "", modTime, content)
+}
+
+// reporterScanLen is how far into a page its doctype is looked for: past a
+// licence or build banner in a comment ahead of it, which the sniffed head is
+// too short for.
+const reporterScanLen = 64 << 10
+
+// injectReporter serves a page with its reporter in, content being read from
+// its start. Whole and unconditional: a frame asks for no range, and
+// validators would be the file's, not these bytes'.
+func (h *RawHandler) injectReporter(w *rawResponseWriter, name string, content io.Reader) {
+	head := make([]byte, reporterScanLen)
+	n, err := io.ReadFull(content, head)
+	if err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF) {
+		h.files.writeError(w, h.files.internalFailure("read", name, err), nil)
+		return
+	}
+	head = head[:n]
+	offset := reporterOffset(head)
+	w.WriteHeader(http.StatusOK)
+	for _, part := range [][]byte{head[:offset], []byte(w.reporter), head[offset:]} {
+		if _, err := w.Write(part); err != nil {
+			return
+		}
+	}
+	if _, err := io.Copy(w, content); err != nil {
+		h.files.log.Warn("raw page write failed", "path", name, "error", err)
+	}
 }
 
 // commitReader is a file in a commit as an io.ReadSeeker, which is what lets
