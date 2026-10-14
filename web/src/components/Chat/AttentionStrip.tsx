@@ -9,11 +9,7 @@ import {
 	X,
 } from "lucide-react";
 import { type MouseEvent, useRef, useState } from "react";
-import {
-	ACTIVITY_VIEW,
-	type Activity,
-	watchingLabel,
-} from "../../lib/activity";
+import { ACTIVITY_VIEW, watchingLabel } from "../../lib/activity";
 import { toolSummary } from "../../lib/toolSummary";
 import { useWorkStore } from "../../lib/workStore";
 import { useWSStore } from "../../lib/wsStore";
@@ -366,11 +362,9 @@ function WatchedStoryItem({
 	story: WatchedStory;
 	onOpen?: (workId: string) => void;
 }) {
-	const listed = useWorkStore(
+	const activity = useWorkStore(
 		(s) => s.works.find((w) => w.id === story.id)?.activity,
 	);
-	const activity: Activity | undefined =
-		listed ?? (story.status === "stopped" ? "stopped" : undefined);
 	return (
 		<li>
 			<button

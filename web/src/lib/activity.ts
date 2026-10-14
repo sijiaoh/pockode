@@ -212,7 +212,7 @@ export function isWorkActive(status: WorkStatus): boolean {
  * Permission outranks background when both are live: background is the one
  * nobody can act on, and those are the only two blockers a turn has.
  *
- * `watching` — how many unclosed stories the session watches, counted by the
+ * `watching` — how many active stories the session watches, counted by the
  * server (`SessionListItem.watching`) — comes last, below the work's own wait:
  * a session waiting on its subtasks is doing what it was started for, and the
  * stories it watches are something it does on the side. It is not a wait the

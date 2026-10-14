@@ -55,7 +55,8 @@ func newSessionWorkIndex(source SessionWorkSource, same func(a, b rpc.SessionWor
 }
 
 // sameRow is what a session row carries: the work id and a count. A watched
-// story being retitled or stopped is not news to it.
+// story being retitled is not news to it; one stopping or restarting is, since
+// only active stories are counted.
 func sameRow(a, b rpc.SessionWork) bool {
 	return a.WorkID == b.WorkID && len(a.Watched) == len(b.Watched)
 }

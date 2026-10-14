@@ -1,7 +1,7 @@
 import type { AuthCredentialParams } from "@pockode/shared";
 import type { ContentBlock, FileBlock } from "./content";
 import type { AgentType } from "./settings";
-import type { WorkStatus, WorkType } from "./work";
+import type { WorkType } from "./work";
 
 export type SessionMode = "default" | "yolo";
 
@@ -69,7 +69,7 @@ export interface SessionListItem {
 	 */
 	work_id?: string;
 	/**
-	 * How many unclosed stories this session watches and would be woken by
+	 * How many active stories this session watches and would be woken by
 	 * (a session whose own work is not active is woken by none), counted by the
 	 * server — a client holding a paged work list cannot count what it was never
 	 * sent (docs/lifecycle-ui.md §1.2). Absent means none. The third input of
@@ -100,7 +100,6 @@ export interface SessionListItem {
 export interface WatchedStory {
 	id: string;
 	title: string;
-	status: WorkStatus;
 }
 
 /**

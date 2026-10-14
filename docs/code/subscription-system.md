@@ -661,10 +661,10 @@ hold is skipped by that worktree's watcher; the one that does hold it answers.
 **"Already sent" is judged per side.** `sessionWorkIndex` takes a comparison
 from its owner, because the two sides carry different amounts of the same
 relation: a row changes only when its work id or its count does (`sameRow`), so
-a watched story being retitled or stopped is not pushed to the list; the detail
-lists the stories, so it changes when any id, title or status in that list does
-(`sameDetail`). The subscribe rules above hold for this half unchanged — it is
-the same record.
+a watched story being retitled is not pushed to the list, but one stopping or
+restarting is, since only `active` stories are counted; the detail lists the
+stories, so it changes when any id or title in that list does (`sameDetail`).
+The subscribe rules above hold for this half unchanged — it is the same record.
 
 `session_view.get` / `session_view.list`, which answer for a session outside
 the subscribed worktree, resolve it the same way — `rpc.SessionWorkBySession`

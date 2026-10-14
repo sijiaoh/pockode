@@ -546,7 +546,7 @@ type SessionListItem struct {
 	// SessionDetail carries the same field, for the session a client has open,
 	// which under the "hide task sessions" filter has no row here to read.
 	WorkID string `json:"work_id,omitempty"`
-	// Watching is how many unclosed stories this session watches and would be
+	// Watching is how many active stories this session watches and would be
 	// woken by (work.WatchedBySession). Zero is absent. Derived from the
 	// stories' own Watcher for the reason WorkID is, and counted here rather
 	// than by the client because a client holding a paged work list cannot
@@ -613,7 +613,7 @@ func NewTurn(state session.TurnState, now time.Time) Turn {
 type SessionWork struct {
 	// WorkID is the work item the session runs, empty for a plain chat session.
 	WorkID string
-	// Watched are the unclosed stories the session watches and would be woken
+	// Watched are the active stories the session watches and would be woken
 	// by (work.WatchedBySession), in listing order.
 	Watched []WatchedStory
 }
@@ -621,9 +621,8 @@ type SessionWork struct {
 // WatchedStory is one story a session watches, as much of it as a list of them
 // draws and links to. The rest is on work.detail.
 type WatchedStory struct {
-	ID     string          `json:"id"`
-	Title  string          `json:"title"`
-	Status work.WorkStatus `json:"status"`
+	ID    string `json:"id"`
+	Title string `json:"title"`
 }
 
 // NewSessionWork builds a session's relation to the work layer from the work
@@ -631,7 +630,7 @@ type WatchedStory struct {
 func NewSessionWork(workID string, watched []work.Work) SessionWork {
 	sw := SessionWork{WorkID: workID}
 	for _, story := range watched {
-		sw.Watched = append(sw.Watched, WatchedStory{ID: story.ID, Title: story.Title, Status: story.Status})
+		sw.Watched = append(sw.Watched, WatchedStory{ID: story.ID, Title: story.Title})
 	}
 	return sw
 }

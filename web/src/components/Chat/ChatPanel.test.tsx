@@ -454,9 +454,7 @@ describe("ChatPanel", () => {
 	// a settled turn with stories watched, and the stories' own work's wait
 	// does not come into it (docs/lifecycle-ui.md §1.2).
 	describe("the stories the chat watches", () => {
-		const watchedStories = [
-			{ id: "st1", title: "Ship the importer", status: "active" as const },
-		];
+		const watchedStories = [{ id: "st1", title: "Ship the importer" }];
 
 		it("says it is watching once the turn settles, and opens a story from the list", async () => {
 			const user = userEvent.setup();

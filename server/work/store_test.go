@@ -1531,9 +1531,10 @@ func TestFindBySessionID_NotFound(t *testing.T) {
 
 // --- WatchedBy ---
 
-// A stopped story is still watched — its watcher may be waiting for it to be
-// restarted and finish — and a closed one is not.
-func TestWatchedBy_CountsEveryStoryThatHasNotClosed(t *testing.T) {
+// Only an active story counts: a stopped one keeps its watcher but wakes nobody
+// until a person restarts it, and a closed one wakes nobody at all. Restarting
+// the stopped one — without naming a watcher again — brings it back.
+func TestWatchedBy_CountsOnlyActiveStories(t *testing.T) {
 	s := newTestStore(t)
 	watcher := Watcher{SessionID: "sess-watcher"}
 	running := createStory(t, s, "Running")
@@ -1551,16 +1552,27 @@ func TestWatchedBy_CountsEveryStoryThatHasNotClosed(t *testing.T) {
 		t.Fatalf("StepDone: %v", err)
 	}
 
-	watched, err := s.WatchedBy("sess-watcher")
-	if err != nil {
-		t.Fatalf("WatchedBy: %v", err)
+	watchedTitles := func() []string {
+		t.Helper()
+		watched, err := s.WatchedBy("sess-watcher")
+		if err != nil {
+			t.Fatalf("WatchedBy: %v", err)
+		}
+		var titles []string
+		for _, w := range watched {
+			titles = append(titles, w.Title)
+		}
+		return titles
 	}
-	var titles []string
-	for _, w := range watched {
-		titles = append(titles, w.Title)
+	if got := watchedTitles(); !slices.Equal(got, []string{"Running"}) {
+		t.Errorf("watched = %v, want the running story alone", got)
 	}
-	if !slices.Equal(titles, []string{"Running", "Stopped"}) {
-		t.Errorf("watched = %v, want the running and the stopped story", titles)
+
+	if _, _, err := s.Claim(context.Background(), stopped.ID, nil); err != nil {
+		t.Fatalf("restart Claim: %v", err)
+	}
+	if got := watchedTitles(); !slices.Equal(got, []string{"Running", "Stopped"}) {
+		t.Errorf("watched = %v after the restart, want the running and the restarted story", got)
 	}
 }
 

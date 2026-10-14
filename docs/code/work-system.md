@@ -1213,15 +1213,16 @@ queued, and the story's status and comments are where it is found again.
 
 **The watching session says so, and the count is derived, not stored.** A
 session's list row carries `watching` — how many stories it watches — and its
-detail carries the same count beside `watched_stories` (`{id, title, status}`),
+detail carries the same count beside `watched_stories` (`{id, title}`),
 which together make the session's `watching` activity
 ([lifecycle-ui.md §1.2](../lifecycle-ui.md#12-deriving-it)). Nothing is written
 to the session for it: `Work.Watcher` *is* the relation, read the other way
 round by `work.WatchedBySession` / `Store.WatchedBy`, as `work_id` is read off
-`Work.SessionID`. A story counts while it is not closed — stopped included — and
-the watching side is held to `WakesWatcher`, the predicate the delivery above
-uses, so the count can never promise a wake-up the engine will not send. Nor is
-it read off the news: a `watched_story_*` message records that something
+`Work.SessionID`. A story counts only while it is `active`: a stopped one keeps
+its watcher but wakes nobody until a person restarts it, and counts again from
+then. The watching side is held to `WakesWatcher`, the predicate the delivery
+above uses, so the count can never promise a wake-up the engine will not send.
+Nor is it read off the news: a `watched_story_*` message records that something
 happened to the story at one moment and goes stale the moment the story moves
 again (AGENTS.md, *Events are events, state is state*), so a chat's "watching"
 is the store's live answer, re-resolved whenever a work changes. How that
