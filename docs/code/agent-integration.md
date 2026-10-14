@@ -2234,10 +2234,12 @@ settled it on the client, which has no reason to wait for a next start that may
 be days away ([frontend-state.md](frontend-state.md#tool-runs)). It is the
 explanation arriving later — on the row for the user, as the queued note for the
 agent — and it settles only a row whose `process_ended` the client never loaded,
-or that never got one (the shutdown that writes none is a known limit, stated
-there). The subtype is kept apart from `background_result` because the author
-differs — that one is what the CLI said, this one is what Pockode observed of a
-process it killed or watched die
+or that never got one — a session stopped by an older build, whose shutdown
+wrote none, or one whose stream `Shutdown`'s drain gave up on. (A hard kill
+writes neither record, a known limit stated there.)
+The subtype is kept apart from `background_result` because the author differs —
+that one is what the CLI said, this one is what Pockode observed of a process it
+killed or watched die
 ([tool-call-model.md](../tool-call-model.md#a-third-subtype-with-a-different-author)).
 
 **The two fields come from two unrelated streams on purpose.** `lostTasks` is
@@ -3611,9 +3613,16 @@ premise is written down once here instead of being re-derived at each of them.
 #### Restart Repair
 
 Nothing survives a restart, so every blocker a process raised is unanswerable and
-every turn it was carrying was aborted — but the stored state still says
-otherwise, because a run killed with `SIGKILL` had no chance to write anything on
-the way out.
+every turn it was carrying was aborted. A graceful shutdown says so itself: it
+closes every process and waits for the streams to drain, and they write on
+`context.Background()` rather than the manager's context — which `Shutdown` has
+already cancelled, and on which the store would refuse every write — so the
+CLI's own `process_ended` is reduced and recorded like any other close. The
+stored turn is idle, and the repair below finds nothing to do. But a server
+killed with `SIGKILL`, crashed or cut off from power had no chance to write
+anything on the way out, and a session still streaming when `Shutdown`'s 10s
+drain gives up on it may not get to; for those the stored state may still say
+a turn is running.
 
 **The authoritative record is Pockode's own, not the CLI's.** A CLI killed
 mid-prompt may leave a dangling `tool_use` with no result, a last line written

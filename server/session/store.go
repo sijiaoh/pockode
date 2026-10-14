@@ -128,8 +128,9 @@ const HistoryTypeProcessEnded = "process_ended"
 //
 // Nothing survives a restart: every process is gone, so every blocker one of
 // them raised is unanswerable and every turn one of them was carrying was
-// aborted. The stored state still says otherwise, because the server had no
-// chance to write anything on the way out — and after a crash or a kill there is
+// aborted. A graceful shutdown records that itself, as each process's
+// process_ended; after a crash or a kill the server had no chance to write
+// anything on the way out, so the stored state still says otherwise and there is
 // nothing else to learn it from either. The CLI's own transcript cannot be
 // asked: it is killed with SIGKILL, so it may hold a question's tool_use with no
 // answer, a half-written last line, or no trace of the question at all.

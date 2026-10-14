@@ -339,7 +339,11 @@ func (m *Manager) GetOrCreateProcess(ctx context.Context, meta session.SessionMe
 			m.emitStateChange(sessionID, ProcessStateEnded)
 			slog.Info("process ended", "sessionId", sessionID)
 		}()
-		proc.streamEvents(m.ctx)
+		// context.Background rather than the manager's, for the reason inject
+		// gives: Shutdown cancels m.ctx and then waits for this stream to drain,
+		// and what it drains — the CLI's own process_ended included — is exactly
+		// what has to land. On m.ctx the store would refuse every one of them.
+		proc.streamEvents(context.Background())
 	}()
 
 	m.processesMu.Unlock()
@@ -683,7 +687,9 @@ func (p *Process) enforceRetirement() {
 // Shutdown closes all processes gracefully and returns once their streaming
 // goroutines have finished. Waiting matters because those goroutines still write
 // session history and flip session state: returning early would leave writes
-// landing in a data directory the caller already considers closed.
+// landing in a data directory the caller already considers closed. They write
+// on a context of their own rather than m.ctx, which the m.cancel below would
+// otherwise turn into refusals.
 func (m *Manager) Shutdown() {
 	m.processesMu.Lock()
 	m.cancel()
