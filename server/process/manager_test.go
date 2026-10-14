@@ -968,6 +968,61 @@ func TestManager_Shutdown_WaitsForStreamingToFinish(t *testing.T) {
 	}
 }
 
+// What a stream drains at shutdown is what Shutdown waits for, so it has to
+// land: the CLI's own process_ended is the record a client settles a session's
+// background cards on. And landing once is the whole of it — the turn that
+// record ended is idle, so the restart repair has nothing left to add.
+func TestManager_Shutdown_PersistsWhatTheStreamDrains(t *testing.T) {
+	dataDir := t.TempDir()
+	store, _ := session.NewFileStore(dataDir)
+	mock := &mockAgent{}
+	m := NewManager(mockRegistry(mock), "", "/tmp", "", "", store, idleOnly(testIdleTimeout))
+
+	proc, _, err := m.GetOrCreateProcess(context.Background(), createActivatedSession(t, store, "sess-1"))
+	if err != nil {
+		t.Fatalf("failed to create process: %v", err)
+	}
+	if _, err := proc.SendMessage(agent.Prompt{Text: "go"}); err != nil {
+		t.Fatalf("failed to send: %v", err)
+	}
+
+	// Cancelled first, by hand, so that every event below is handled after the
+	// manager's context is gone, as the ones Shutdown drains are — made certain
+	// rather than raced for.
+	m.cancel()
+	sess := mock.session(t, "sess-1")
+	sess.emit(t, agent.TextEvent{Content: "drained"})
+	sess.emit(t, agent.ProcessEndedEvent{})
+	m.Shutdown()
+
+	countTypes := func(records []agent.EventRecord) map[agent.EventType]int {
+		counts := make(map[agent.EventType]int)
+		for _, r := range records {
+			counts[r.Type]++
+		}
+		return counts
+	}
+	counts := countTypes(historyRecords(t, store, "sess-1"))
+	if counts[agent.EventTypeText] != 1 || counts[agent.EventTypeProcessEnded] != 1 {
+		t.Errorf("history after shutdown = %v, want one text and one process_ended", counts)
+	}
+	meta, _, err := store.Get("sess-1")
+	if err != nil {
+		t.Fatalf("failed to read session: %v", err)
+	}
+	if meta.Turn.Phase != session.PhaseIdle {
+		t.Errorf("turn phase after shutdown = %q, want idle", meta.Turn.Phase)
+	}
+
+	restarted, err := session.NewFileStore(dataDir)
+	if err != nil {
+		t.Fatalf("failed to reopen the data directory: %v", err)
+	}
+	if got := countTypes(historyRecords(t, restarted, "sess-1"))[agent.EventTypeProcessEnded]; got != 1 {
+		t.Errorf("process_ended records after restart = %d, want 1", got)
+	}
+}
+
 // A manager that has been shut down has already stopped waiting for event
 // streams, so it must not start another one.
 func TestManager_GetOrCreateProcess_AfterShutdown(t *testing.T) {
