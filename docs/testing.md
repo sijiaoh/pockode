@@ -432,6 +432,15 @@ after failing on macOS and Windows alone. Reach for it before reading the code
 for platform differences by eye: a red run on the machine in front of you tells
 you which of your guesses was the right one.
 
+**Red on Windows alone: suspect line endings next.** Git for Windows checks
+text out with CRLF by default, so a test that depends on a file's exact bytes —
+a Go source embedding a bash script, a checked-in file a test writes and diffs
+like `raw-contract.json` — breaks there and nowhere else. The fix is a rule in
+`.gitattributes`, which says why each one is pinned; a new file of that kind
+gets a rule of its own. Linux checks out what Windows does in a clone made with
+`git clone -c core.autocrlf=true`: there `git ls-files --eol <file>` shows
+`w/crlf` for a file no rule pins, and its test fails as it does on Windows.
+
 ## Shell: a suite neither entry point runs
 
 `go test ./...` and `pnpm run test` do not reach every test in the repository.

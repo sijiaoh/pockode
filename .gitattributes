@@ -8,3 +8,7 @@
 # Windows too, and break the same way.
 *.go text eol=lf
 *.sh text eol=lf
+
+# Written by a Go test (TestRawPageContract) and compared to what it would
+# write byte for byte, so a CRLF checkout fails it.
+web/src/test/page-hosts/raw-contract.json text eol=lf
