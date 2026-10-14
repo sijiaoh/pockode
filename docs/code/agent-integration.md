@@ -2236,7 +2236,8 @@ explanation arriving later — on the row for the user, as the queued note for t
 agent — and it settles only a row whose `process_ended` the client never loaded,
 or that never got one — a session stopped by an older build, whose shutdown
 wrote none, or one whose stream `Shutdown`'s drain gave up on. (A hard kill
-writes neither record, a known limit stated there.)
+writes neither record; the [restart repair](#restart-repair) supplies the
+`process_ended`, and the loss itself goes unreported.)
 The subtype is kept apart from `background_result` because the author differs —
 that one is what the CLI said, this one is what Pockode observed of a process it
 killed or watched die
@@ -3612,8 +3613,9 @@ premise is written down once here instead of being re-derived at each of them.
 
 #### Restart Repair
 
-Nothing survives a restart, so every blocker a process raised is unanswerable and
-every turn it was carrying was aborted. A graceful shutdown says so itself: it
+Nothing survives a restart, so every blocker a process raised is unanswerable,
+every turn it was carrying was aborted, and every background task it was running
+died with it. A graceful shutdown says so itself: it
 closes every process and waits for the streams to drain, and they write on
 `context.Background()` rather than the manager's context — which `Shutdown` has
 already cancelled, and on which the store would refuse every write — so the
@@ -3622,7 +3624,8 @@ stored turn is idle, and the repair below finds nothing to do. But a server
 killed with `SIGKILL`, crashed or cut off from power had no chance to write
 anything on the way out, and a session still streaming when `Shutdown`'s 10s
 drain gives up on it may not get to; for those the stored state may still say
-a turn is running.
+a turn is running, and the history may end on a call still running in the
+background.
 
 **The authoritative record is Pockode's own, not the CLI's.** A CLI killed
 mid-prompt may leave a dangling `tool_use` with no result, a last line written
@@ -3638,15 +3641,40 @@ So `session.FileStore` repairs it at load, in two parts:
 - **The transcript**, which gets the `process_ended` record the killed run never
   wrote. That record is what a replaying client reads to mark a pending
   permission card `expired`; without it a restarted server shows requests that
-  look decidable and are not. It deliberately does *not* touch a question card —
-  that card is not a prompt a process holds open.
+  look decidable and are not, and it is what settles a backgrounded call
+  ([frontend-state.md](frontend-state.md#tool-runs)). It deliberately does *not*
+  touch a question card — that card is not a prompt a process holds open.
 
-Sessions that were idle are left completely alone, and so are sessions written by
-a build from before turn state existed: those read back with no turn, an absent
-phase means idle, and the repair is a no-op for them. That is the whole of the
-migration — there is no migration script, and the obsolete `needs_input` still on
-disk is simply never read. The work index is normalised the same way, on load and
-with no script ([work-system.md](work-system.md#four-statuses-and-a-wait)).
+**Who gets the record is decided by the history, not by the turn.** A run that
+was closed out — reaped, stopped, or shut down gracefully — writes
+`process_ended`, since both adapters emit it as their last event, and that is
+nearly always the last record its history holds. So the record is written when
+the reduction aborted something, or when a non-empty history ends on anything
+else: a run left open, or one of the harmless cases below. The turn alone would
+miss one: a turn that went idle on its
+[background budget](#stop-ends-the-background-work-too) while its tasks kept
+running, killed with the server before anything was written. Only the last
+readable record is read (`filestore.ReadLastJSONL`, which skips a torn or
+oversized tail the way `ReadJSONL` does), because this runs over every session at
+every start. No other state is needed to keep it from repairing a session twice:
+the record it writes is the record the next start reads last.
+
+A history can also end on something written after its process was gone — a
+fork's copied transcript, a question withdrawn or answered after its process was
+reaped, the expiry of a permission request the ending took down with it
+(recorded after the `process_ended`, so the client sees the ending first) — and
+gets the record too. That is harmless by what the record says: no process is
+running for the session, which is true of every session at startup, and the
+client retires on it only what no process could still report back on. A posted
+question is not among them. A session with no history never ran and is left
+alone.
+
+The turn state is repaired the same way it always was, and so are sessions
+written by a build from before turn state existed: those read back with no turn,
+an absent phase means idle, and the state repair is a no-op for them. That is the
+whole of the migration — there is no migration script, and the obsolete
+`needs_input` still on disk is simply never read. The work index is normalised
+the same way, on load and with no script ([work-system.md](work-system.md#four-statuses-and-a-wait)).
 
 ### Event Stream Handling
 

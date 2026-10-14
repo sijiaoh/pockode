@@ -732,20 +732,20 @@ honest:
   turn's interrupt, then a `background_result` — and a run the turn's own
   interrupt settled is not marked when the process later ends. What renderers
   make of it is [tool-call-ui.md](../tool-call-ui.md#when-a-background-run-finishes).
-- **Known limit: a hard kill while a background budget has run out leaves the
-  row spinning.** Such a turn is idle while its tasks may still run, and every
+- **A hard kill while a background budget has run out settles the row at the
+  next start.** Such a turn is idle while its tasks may still run, and every
   event they produce renews the `lastActive` its idle lease is measured from
   ([agent-integration.md](agent-integration.md#the-lease-table)), so the
   process is often still alive when the server stops. A graceful shutdown
   records its end like any other close — the stream it drains writes on a
   context of its own, so the CLI's `process_ended` lands, and `Close` has
   already written the loss record before stopping the process. A server killed
-  with `SIGKILL`, crashed or cut off from power runs no code at all: neither
-  record is written, and
-  [restart repair](agent-integration.md#restart-repair) only touches turns that
-  were not idle. With no loss record there is no `background_lost` for the next
-  message to deliver either, so nothing settles the row. Accepted rather than
-  fixed: the server cannot record what happens after it is gone.
+  with `SIGKILL`, crashed or cut off from power writes neither, and the turn
+  alone gives no sign anything was cut off; the
+  [restart repair](agent-integration.md#restart-repair) goes by the history
+  instead, so the `process_ended` lands at the next start and settles the row.
+  The loss record is not recovered — the server cannot record what happens
+  after it is gone — so the row carries no `background_lost` explanation.
 - Replay adds no settling of its own — it feeds history through this same
   reducer — so a call still running at the end of a history stays running, which
   is right while the session is live. A process killed while Pockode was down

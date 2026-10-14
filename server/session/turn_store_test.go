@@ -217,8 +217,8 @@ func TestFileStore_RestartRepairIsWrittenOnce(t *testing.T) {
 	}
 }
 
-// A session that was idle is the overwhelming majority, and it must come back
-// untouched — no rewritten state, and above all no obituary in its transcript.
+// A session that was idle and never ran is left alone: no rewritten state, and
+// above all no obituary in a transcript that has nothing in it to close out.
 func TestFileStore_RestartLeavesAnIdleSessionAlone(t *testing.T) {
 	dir := t.TempDir()
 	store, err := NewFileStore(dir)
@@ -252,6 +252,87 @@ func TestFileStore_RestartLeavesAnIdleSessionAlone(t *testing.T) {
 	}
 	if len(records) != 0 {
 		t.Errorf("history = %s, want nothing written for a session that was already idle", records)
+	}
+}
+
+// A turn can go idle while its process runs on — the background budget ends the
+// turn, not the tasks — so a kill then leaves an idle turn and a history that
+// never says its process ended. The history is what tells: it gets the record,
+// once, and the record is what stops it being repaired again.
+func TestFileStore_RestartClosesOutARunWhoseTurnWasIdle(t *testing.T) {
+	dir := t.TempDir()
+	store, err := NewFileStore(dir)
+	if err != nil {
+		t.Fatalf("NewFileStore failed: %v", err)
+	}
+	if _, err := store.Create(ctx, "sess-1", CreateSpec{}); err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+	if _, err := store.ApplyTurn(ctx, "sess-1", TurnInput{Signal: SignalPrompt, At: at(0)}); err != nil {
+		t.Fatalf("ApplyTurn failed: %v", err)
+	}
+	if _, err := store.ApplyTurn(ctx, "sess-1", TurnInput{Signal: SignalDone, At: at(1)}); err != nil {
+		t.Fatalf("ApplyTurn failed: %v", err)
+	}
+	for _, record := range []string{"message", "done"} {
+		if _, err := store.AppendToHistory(ctx, "sess-1", map[string]any{"type": record}); err != nil {
+			t.Fatalf("AppendToHistory failed: %v", err)
+		}
+	}
+
+	for range 2 {
+		if _, err := NewFileStore(dir); err != nil {
+			t.Fatalf("NewFileStore failed: %v", err)
+		}
+	}
+
+	final, err := NewFileStore(dir)
+	if err != nil {
+		t.Fatalf("NewFileStore failed: %v", err)
+	}
+	records, err := final.GetHistory(ctx, "sess-1")
+	if err != nil {
+		t.Fatalf("GetHistory failed: %v", err)
+	}
+	if len(records) != 3 || recordType(t, records[2]) != HistoryTypeProcessEnded {
+		t.Fatalf("history = %s, want the two records and one process_ended after them", records)
+	}
+	meta, _, err := final.Get("sess-1")
+	if err != nil {
+		t.Fatalf("Get failed: %v", err)
+	}
+	if meta.Turn.LastOutcome != OutcomeCompleted {
+		t.Errorf("outcome = %q, want the completed turn's own outcome", meta.Turn.LastOutcome)
+	}
+}
+
+// A run that was closed out — reaped, stopped, or shut down gracefully — ended
+// its history itself, and there is nothing to add to it.
+func TestFileStore_RestartLeavesAClosedOutRunAlone(t *testing.T) {
+	dir := t.TempDir()
+	store, err := NewFileStore(dir)
+	if err != nil {
+		t.Fatalf("NewFileStore failed: %v", err)
+	}
+	if _, err := store.Create(ctx, "sess-1", CreateSpec{}); err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+	for _, record := range []string{"message", "done", HistoryTypeProcessEnded} {
+		if _, err := store.AppendToHistory(ctx, "sess-1", map[string]any{"type": record}); err != nil {
+			t.Fatalf("AppendToHistory failed: %v", err)
+		}
+	}
+
+	restarted, err := NewFileStore(dir)
+	if err != nil {
+		t.Fatalf("NewFileStore failed: %v", err)
+	}
+	records, err := restarted.GetHistory(ctx, "sess-1")
+	if err != nil {
+		t.Fatalf("GetHistory failed: %v", err)
+	}
+	if len(records) != 3 {
+		t.Errorf("history = %s, want the three records it had", records)
 	}
 }
 
