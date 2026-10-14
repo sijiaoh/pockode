@@ -49,6 +49,10 @@ Open `http://<your machine's IP>:9870` from a phone on the same network, and all
 
 Stop `pockode` and start it with a new one, then log in again on each device with it.
 
+## Too many attempts
+
+Each wrong password after the first five in a row locks password logins for a while — twice as long each time, up to 15 minutes — and until the lock ends the correct password is refused too. Wait the time the login page shows, or restart `pockode` to clear it. Devices already logged in keep working. If you did not cause it, someone else is guessing: see [Security](/security/#authentication).
+
 ## A story stopped by itself
 
 An agent that ends its turn without finishing its step or asking you anything is reminded to carry on; after a few reminders in a row Pockode stops the work and hands it back to you. Read its comments and session, then **Restart** it. See [Stories and agent roles](/docs/stories/#what-the-status-means).

@@ -17,7 +17,7 @@ Pockode gives your phone full read, write and AI-execution access to the machine
 ## Authentication
 
 - **One password guards everything.** There are no accounts or roles: whoever has the password can do anything you can on that machine. The server refuses to start without one and never generates a default.
-- **Generate it; do not reuse one.** Failed logins are not rate-limited or locked out, so the password's strength is the whole defence.
+- **Generate it; do not reuse one.** Five wrong passwords in a row are free; each one after that locks password logins for twice as long as the last, from 1 second up to 15 minutes. That slows guessing; it does not make a weak password safe. Devices already logged in are not affected, and restarting the server clears a lockout.
 - **On a shared machine, keep it out of the process list.** A `-password` flag is visible to every user on the machine. Set `POCKODE_PASSWORD` in your environment instead, from a file only you can read — a shell profile, for example, once no one else can read it; the server removes it at startup, so the AI CLI and anything it runs do not inherit it. Typed inline, as `POCKODE_PASSWORD=… pockode`, it lands in your shell history just as the flag does.
 - **The browser keeps a session, not the password.** Logging in exchanges the password for a random 256-bit session token, stored on the server only as a hash. A session expires after 30 days unused, and changing the password logs every device out.
 - **Credentials on disk are private to you.** The data directory that holds them is restricted to your user (and, on Windows, SYSTEM and Administrators).
