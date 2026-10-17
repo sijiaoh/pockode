@@ -2712,7 +2712,9 @@ folded and then pulled out. A subagent's Process goes through the same
 
 ### The sandbox and the policy
 
-The page is drawn **as the agent wrote it**: no base stylesheet, no filtering.
+The page is drawn **as the agent wrote it**: no base stylesheet, no filtering
+— only the base and the absolute paths that let it reach
+[project files](#project-files).
 It is the agent's own output, written for the user, and every rule added on top
 of how it looks would be a page that renders wrong for a reason nobody can see.
 Two things are protected instead, and neither is the page: Pockode around it,
@@ -2726,7 +2728,7 @@ takes the policy from `lib/pageHosts.ts`. The frame the app holds is a wrapper w
 
 ```
 <iframe srcdoc="<policy><wrapper's listener>
-                <iframe srcdoc='<policy><reporter>…the page…<height script>'
+                <iframe srcdoc='<policy><base><reporter>…the page…<height script>'
                         sandbox='…'>"
         sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox">
 ```
@@ -2754,11 +2756,71 @@ agent wrote, and the wrapper's `frame-src 'none'` keeps the page from leaving
 its frame for a host by navigating itself
 ([how](page-external-hosts-ui.md#the-wrapper)).
 
+### Project files
+
+A page reaches the project it was drawn in, as an `.html` file opened in Files
+does ([file.md](file.md#html-pages)). The screenshots, recordings, sounds and
+data an agent has just produced are already files, so its page names them by
+path instead of carrying their bytes, which the transcript would keep for good
+([the 256KB cap](code/work-system.md#rendering-tool)).
+
+- **Through the worktree's root.** Before drawing, the frame asks for the
+  [raw capability](code/authentication.md#raw-capabilities-urls-a-browser-element-loads-by-itself)
+  for the root of the worktree that `.html` file previews load through
+  (`PROJECT_TARGET` in `HtmlFrame.tsx`). It puts a `<base href>` to it right
+  after the policy, unless the page sets a `<base href>` of its own, which is
+  the one it was written against. So a relative URL — an image, a video, a
+  sound, a stylesheet, a script, a CSS `url()`, a `fetch("data.json")` —
+  resolves against the root of the worktree, the base a Markdown image in chat
+  resolves against too. The policy names the capability and nothing else of
+  the server ([the policy](page-external-hosts-ui.md#the-policy)), and what the
+  root scope withholds — dotfiles, other worktrees, Pockode's data — does not
+  load.
+- **Absolute paths under the work directory** are made relative before the
+  page is drawn (`projectRelativeHtml`, `lib/htmlRender.ts`), since an agent
+  names the file it saved by its full path as often as not: bare, as a
+  `file://` URL, and on Windows with either separator and in any case. Only a
+  path right after `src=`, `href=`, `poster=`, `data=`, `srcset=` (its first
+  candidate), `xlink:href=` or `url(` is rewritten, wherever that text stands;
+  a path anywhere else — in the page's prose, or as a script's own string — is
+  left as written, since the page cannot be parsed the way the browser will.
+  So `fetch("data.json")` reaches the project and
+  `fetch("/home/…/repo/data.json")` does not. A rewritten path resolves against
+  the page's own `<base href>` when it sets one, so there it does not reach the
+  project. Any other absolute path — outside the work directory, or in another
+  worktree — stays out of reach.
+- **Which worktree.** The one the user is in, also while viewing another
+  worktree's session read-only
+  ([known gaps](cross-worktree-session-ui.md#known-gaps)). A page drawn
+  while a worktree switch is still landing may get the capability of the
+  worktree being left — unlike a download, the frame does not check whom its
+  capability serves; a Reload once the switch has landed draws it from the new
+  one.
+- **The frame waits for it.** While connected, the frame is drawn only once the
+  capability has arrived — one request, cached under the same key as an `.html`
+  preview with no hosts allowed — so a page is never drawn first without its
+  files. Offline it does not wait: the page is drawn with no base and no reach
+  into the project, its project requests are refused, and the strip lists the
+  app's own host, which cannot be allowed. A request for the capability that fails draws the page the same way,
+  under a `PageNotice` below the strip that says so:
+  `Project files won't load on this page: <error>`.
+- **Each document asks again.** Every document drawn — a Load or a Reload in
+  the strip, the full-screen view, the card mounted again in a reopened session
+  — takes the cached capability only while it has at least five minutes left
+  (`fresh`, `useRawMediaSource`) and a new one otherwise, so a page drawn hours
+  later is not drawn under one that has expired. A page already on screen is
+  never redrawn for a capability — not on a renewal, not on a worktree switch —
+  so once its own has expired
+  ([its lifetime](code/authentication.md#raw-capabilities-urls-a-browser-element-loads-by-itself))
+  its later project requests fail with nothing said until the page is drawn
+  again; a page drawn offline stays without the project until then too.
+
 **Known limits.** An unclosed `<script>` or `<!--` in the page swallows the
 appended script, and the card stays at its placeholder height (⤢ still reads
 it). While focus is inside the page, keys go to the page's document, so Escape
 never reaches the viewer — ✕ closes it. A link in the page does not navigate
-the frame: it opens in a new tab, on the reader's tap or from the strip
+the frame, except into the page itself (`#section`): it opens in a new tab, on
+the reader's tap or from the strip
 ([links](page-external-hosts-ui.md#links-inside-the-page)). A frame scrolled out of view is
 throttled by the browser and reports nothing until it comes back. The height
 reporting has been watched in headless Chromium only, not across engines.
@@ -3119,6 +3181,10 @@ the virtualizer measures it.
     view opened afterwards needs no Load. Allowed full screen first, the card
     underneath offers *Reload* rather than reloading itself
     ([page-external-hosts-ui.md](page-external-hosts-ui.md)).
+55. A page that shows a screenshot, a recording and a sound from the project,
+    named once by a relative path and once by its absolute path: all load with
+    no strip; a dotfile it names does not. A `#section` link scrolls the page.
+    Offline, the page draws without them and the strip names the app's host.
 
 ## Out of scope
 

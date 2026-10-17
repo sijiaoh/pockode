@@ -22,7 +22,7 @@ there and is not repeated; this document is what it takes for a page.
 | `web/src/lib/pageHosts.ts` | The agent page's policy (`pagePolicy`), the in-page reporter and the messages it sends, which refused URL is which host (`refusedHost`, `addRefusal`), the workspace page's wrapper (`rawPageWrapper`), the app-input watch behind opening a link (`activatedIn`), and the allowance itself (`allowPageHosts`) |
 | `web/src/hooks/usePageReports.ts` | Takes a frame's reports — from the page's window and the wrapper's only — and turns them into what the strip shows |
 | `web/src/components/ui/PageHostsStrip.tsx` | The strip, on all four surfaces |
-| `web/src/components/Chat/HtmlFrame.tsx` | An agent page: its wrapper, its `srcdoc` and the height reporter |
+| `web/src/components/Chat/HtmlFrame.tsx` | An agent page: its wrapper, its `srcdoc`, the capability for the project's root and the height reporter |
 | `web/src/components/Media/usePageFrame.ts` | A workspace page: the capability for its hosts, one wrapper per capability, the strip's props |
 | `server/filetransfer/raw.go` | The workspace page's policy (`pagePolicy`), the hosts bound to a capability (`RawGrant.Hosts`), the reporter injected into a framed page (`pageReporter`, `reporterOffset`) |
 
@@ -30,8 +30,8 @@ there and is not repeated; this document is what it takes for a page.
 
 A page is the strongest version of the Markdown case. A Markdown image leaks
 by being drawn; a page runs scripts, so it can read whatever the agent put into
-it and send it anywhere with `fetch()`, an image, a stylesheet or a font, all
-while the reader is only looking at a chart. An agent page is drawn as soon as
+it, and the project's files, and send them anywhere with `fetch()`, an image,
+a stylesheet or a font, all while the reader is only looking at a chart. An agent page is drawn as soon as
 the call succeeds; a workspace page is drawn as soon as the file is opened, and
 in an app where the agent writes the files, opening one is not consent to
 contact every host it names.
@@ -134,7 +134,7 @@ a host they were not shown.
 **Hosts that cannot be allowed** are still listed, never silently dropped
 ([AGENTS.md](../AGENTS.md#error-handling)): the app's own host on any port
 ([why](markdown-images-ui.md#external-requests-wait-for-the-reader)), a
-trailing dot (`localhost.`) included (a workspace page's own capability is not
+trailing dot (`localhost.`) included (a page's own capability is not
 refused in the first place, see [the policy](#the-policy)), anything a CSP source cannot
 name (an IPv6 literal, a name with an `_`), anything that is not `http(s)` or
 `ws(s)`, a document the page embeds, from any host (below), and any host
@@ -325,7 +325,14 @@ would navigate the frame (no `target`, or `_self`, `_parent`, `_top`) to an
 `http(s)` URL, stops it, and reports it, and the app opens the URL in a new
 tab, `noopener` and `noreferrer`. On a workspace page a link within the page's
 own capability — another page of the project — is left alone and navigates
-in the frame.
+in the frame. An agent page has no URL of its own to navigate within: a
+relative link resolves against
+[the project's base](tool-call-ui.md#project-files), when it has one, to a raw
+file of the project, which opens in a new tab like any other. A link into
+the document itself (`href="#section"`) is followed in place on both kinds of
+page; in a `srcdoc` document, whose base is not its URL, the browser would
+otherwise take it for another document's, so the reporter sets
+`location.hash` itself.
 
 Unlike a diagram's, that report can be forged — the page's own scripts share
 the document — so a report alone opens nothing. The app opens the URL at once
@@ -392,12 +399,14 @@ form-action 'none'                         (workspace: <own>)
   wss://h`: a source with a scheme does not reach `ws:` from `https:` in every
   engine, and one without takes its scheme from an origin a sandboxed document
   does not have.
-- `<own>` is nothing on an agent page, which has no files of its own. On a
-  workspace page it is the page's capability path in full —
-  `<base_url>/api/raw/<capability>/` — and not the app's origin, so the page
-  reaches its project, less what the root scope withholds
+- `<own>` is a capability for the root of the worktree or commit, its path in
+  full — `<base_url>/api/raw/<capability>/` — and not the app's origin, so the
+  page reaches its project, less what the root scope withholds
   ([why](code/authentication.md#raw-capabilities-urls-a-browser-element-loads-by-itself)),
-  and none of the rest of the server. No `'self'`
+  and none of the rest of the server. A workspace page is loaded through it; an
+  agent page is drawn with it as its `<base>`, and with no `<own>` at all when
+  there is no capability to be had
+  ([project files](tool-call-ui.md#project-files)). No `'self'`
   anywhere: in the opaque origin the sandbox gives the document it names
   nothing the page can be held to, and in a `srcdoc` it may name the app's
   origin.
@@ -470,8 +479,8 @@ URL — the browser's own reading, not a guess from the source — to the app's
 window, two frames up:
 
 - **Agent page:** written by the app at the start of the `srcdoc`, right after
-  the policy, so it hears what the head is refused while it is still being
-  parsed (`pageReporterScript`).
+  the policy and the `<base>`, so it hears what the head is refused while it
+  is still being parsed (`pageReporterScript`).
 - **Workspace page:** injected by the server, only into HTML it serves to a
   frame — `GET`, `Sec-Fetch-Dest: iframe` or `frame`, no `Range`, no
   `?download` — so Save and the page's own `fetch()` get the file's bytes
@@ -538,7 +547,8 @@ one document the app gave it.
     cannot leave by script, `open(_self)`, form, its own subframe, refresh, or
     to a host already allowed; it cannot embed a document from an allowed host;
     a link opens on a real tap and not on the activation a Load leaves or a tap
-    in another frame.
+    in another frame; project files load by relative and absolute path, and
+    without a capability the page is drawn without them under its notice.
   - `Files/PagePreview.browser.test.tsx` — its own files load and another host
     only after Load; links within the project, `../` included, navigate and
     others ask first;
@@ -589,6 +599,13 @@ says only what was refused.
   reporter in every document loaded into that frame afterwards — the name is
   read once, as each document starts — until a new capability brings a new
   wrapper. It loses only its own strip.
+- **A page can carry the project's files away** — any file its capability
+  reaches, through a popup opened on the reader's tap (the first limit above).
+  An agent page can too, now that it reaches project files
+  ([why that is accepted](code/authentication.md#raw-capabilities-urls-a-browser-element-loads-by-itself)).
+- **An agent page's capability is not renewed while it is on screen**: once it
+  expires, its project requests fail with no strip or notice until the page is
+  drawn again ([project files](tool-call-ui.md#project-files)).
 - **An app reached over an IPv6 literal** cannot be named in a policy, so a
   workspace page gets none of its own files there.
 - **A chorded mouse press** — one button held more than 5 seconds, then

@@ -26,7 +26,9 @@ function hostSources(hosts: readonly string[]): string[] {
  * everything else a page does stays possible — inline scripts and styles and
  * `eval`, which agent pages and chart libraries need, and `data:` and `blob:`,
  * which are no request. No `'self'`: a `srcdoc` document may name the app's
- * origin by it.
+ * origin by it. `projectRoot`, when given, is the URL of a raw capability for
+ * the root of the worktree, whose files the page may load as its own — named
+ * in full, path and all, so nothing else of the app's server is reached.
  *
  * `frame-src 'none'` whatever is allowed, because in the document that embeds
  * the page it is the one directive the browser checks when the page navigates
@@ -35,8 +37,16 @@ function hostSources(hosts: readonly string[]): string[] {
  * `<object>` or `<embed>` from a host `default-src` allows, and what it loads
  * runs under no policy of ours.
  */
-export function pagePolicy(allowedHosts: readonly string[]): string {
-	const reach = ["data:", "blob:", ...hostSources(allowedHosts)].join(" ");
+export function pagePolicy(
+	allowedHosts: readonly string[],
+	projectRoot?: string,
+): string {
+	const reach = [
+		...(projectRoot ? [projectRoot] : []),
+		"data:",
+		"blob:",
+		...hostSources(allowedHosts),
+	].join(" ");
 	return [
 		`default-src ${reach}`,
 		`script-src 'unsafe-inline' 'unsafe-eval' ${reach}`,
@@ -48,8 +58,11 @@ export function pagePolicy(allowedHosts: readonly string[]): string {
 }
 
 /** The policy as the first thing in a document, before anything that runs. */
-export function pagePolicyMeta(allowedHosts: readonly string[]): string {
-	return `<meta http-equiv="Content-Security-Policy" content="${pagePolicy(allowedHosts)}"><meta http-equiv="x-dns-prefetch-control" content="off">`;
+export function pagePolicyMeta(
+	allowedHosts: readonly string[],
+	projectRoot?: string,
+): string {
+	return `<meta http-equiv="Content-Security-Policy" content="${escapeAttribute(pagePolicy(allowedHosts, projectRoot))}"><meta http-equiv="x-dns-prefetch-control" content="off">`;
 }
 
 /** A host a page was refused, as the strip names it. */
@@ -190,11 +203,16 @@ export type PageReport =
  * click on a link that would navigate the frame, which the policy would only
  * refuse, and hands it to the app to open.
  *
+ * A link into the page itself (`href="#section"`) is followed in place, as
+ * the fragment it is: a `srcdoc` document's URL is `about:srcdoc`, and its
+ * base — the app's, or the project's (`HtmlFrame`) — is not, so the browser
+ * would take the link for another document's.
+ *
  * Neither is ever more than a report: the page shares this document and can
  * send the same messages itself.
  */
 export function pageReporterScript(target: string): string {
-	return `<script>(function(){var app=${target};document.addEventListener("securitypolicyviolation",function(e){app.postMessage({type:"${REFUSED}",url:String(e.blockedURI),directive:String(e.effectiveDirective)},"*");});addEventListener("click",function(e){if(e.defaultPrevented||e.button!==0||e.metaKey||e.ctrlKey||e.shiftKey||e.altKey)return;var t=e.target;var a=t&&t.closest?t.closest("a[href],area[href]"):null;if(!a)return;var w=(a.getAttribute("target")||"").toLowerCase();if(w&&w!=="_self"&&w!=="_parent"&&w!=="_top")return;var u;try{u=new URL(a.href);}catch(x){return;}if(u.protocol!=="http:"&&u.protocol!=="https:")return;e.preventDefault();app.postMessage({type:"${LINK}",href:u.href},"*");});})();</script>`;
+	return `<script>(function(){var app=${target};document.addEventListener("securitypolicyviolation",function(e){app.postMessage({type:"${REFUSED}",url:String(e.blockedURI),directive:String(e.effectiveDirective)},"*");});addEventListener("click",function(e){if(e.defaultPrevented||e.button!==0||e.metaKey||e.ctrlKey||e.shiftKey||e.altKey)return;var t=e.target;var a=t&&t.closest?t.closest("a[href],area[href]"):null;if(!a)return;var w=(a.getAttribute("target")||"").toLowerCase();if(w&&w!=="_self"&&w!=="_parent"&&w!=="_top")return;var u;try{u=new URL(a.href);}catch(x){return;}if(a.href.indexOf("#")>=0&&u.href.split("#")[0]===document.baseURI.split("#")[0]){e.preventDefault();location.hash=u.hash;return;}if(u.protocol!=="http:"&&u.protocol!=="https:")return;e.preventDefault();app.postMessage({type:"${LINK}",href:u.href},"*");});})();</script>`;
 }
 
 /** `data` if it is a report a page's reporter sends, else null. */

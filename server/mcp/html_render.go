@@ -30,7 +30,7 @@ func htmlRender(args json.RawMessage) (string, error) {
 		return "", userErrorf("html is required: pass the page to render")
 	}
 	if len(params.HTML) > maxHTMLRenderBytes {
-		return "", userErrorf("html is %d bytes, over the %d-byte (256KB) limit: trim it, e.g. by loading large libraries from a CDN instead of inlining them (the user is asked once to allow the CDN's host)", len(params.HTML), maxHTMLRenderBytes)
+		return "", userErrorf("html is %d bytes, over the %d-byte (256KB) limit: write large data or libraries to a project file and reference it by path instead of inlining it", len(params.HTML), maxHTMLRenderBytes)
 	}
 	return fmt.Sprintf("Page %q is shown to the user; do not repeat its content in your reply.", params.Title), nil
 }

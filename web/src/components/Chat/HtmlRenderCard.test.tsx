@@ -1,3 +1,4 @@
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
@@ -17,9 +18,11 @@ describe("HtmlRenderCard full screen", () => {
 	it("offers find on the source alone, and Escape still closes after it", async () => {
 		const user = userEvent.setup();
 		render(
-			<FullScreenHost>
-				<HtmlRenderCard run={RUN} />
-			</FullScreenHost>,
+			<QueryClientProvider client={new QueryClient()}>
+				<FullScreenHost>
+					<HtmlRenderCard run={RUN} />
+				</FullScreenHost>
+			</QueryClientProvider>,
 		);
 		await user.click(
 			screen.getByRole("button", { name: "Open page in full screen" }),

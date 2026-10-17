@@ -37,6 +37,16 @@ describe("pagePolicy", () => {
 		expect(policy).not.toContain("*");
 	});
 
+	it("names the project by its capability's path, nothing else of the server", () => {
+		const root = "https://pockode.example/api/raw/cap/";
+		const policy = pagePolicy([], root);
+
+		for (const name of ["default-src", "script-src", "style-src"]) {
+			expect(directive(policy, name)).toContain(root);
+		}
+		expect(policy).not.toContain("https://pockode.example ");
+	});
+
 	it("names an allowed host over every scheme, for every kind of request", () => {
 		const policy = pagePolicy(["cdn.example:8443"]);
 		const sources = [

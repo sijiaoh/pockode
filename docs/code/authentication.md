@@ -334,7 +334,8 @@ that the path is now a secret. The relay proxy's error log masks it
 the `Referer` of anything the page loads from elsewhere.
 
 **A page can read its own URL — and, through CORS (below), what it
-reaches.** A previewed page's scripts can read `location`, capability included, and send it
+reaches.** A previewed page's scripts can read `location` (an agent's page, its
+`document.baseURI` or its policy), capability included, and send it
 to any host the reader has allowed for the page — or, after any tap in the
 page, open a tab anywhere with it
 ([what a page can reach](../page-external-hosts-ui.md#known-limits)). They can
@@ -350,7 +351,11 @@ inside it. So a capability reaches one of two things:
   is opened at its own path beneath the capability,
   `<capability>/docs/site/index.html`, so its relative stylesheets, scripts and
   images, its `../` links and its `fetch()`es resolve to the project files they
-  name ([file.md](../file.md#html-pages)).
+  name ([file.md](../file.md#html-pages)). A page an agent shows with
+  `html_render` is drawn from `srcdoc` and has no path, so it gets the same
+  capability as its `<base>` instead: its relative URLs resolve from the
+  root, and its policy, which the app writes, names the capability's path
+  ([tool-call-ui.md](../tool-call-ui.md#project-files)).
 - An attachment is always one file. An attachment store is flat, not a tree of
   files that refer to each other.
 
