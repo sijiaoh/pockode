@@ -1,7 +1,7 @@
 import { Maximize2 } from "lucide-react";
 import { useMemo, useState } from "react";
 import { useInView } from "../../hooks/useInView";
-import { type PageIsolation, pageIsolation } from "../../lib/rpc/raw";
+import { isHiddenPage } from "../../lib/rpc/raw";
 import type { TreeOrigin } from "../../types/contents";
 import { formatMediaCaption } from "../../utils/fileView";
 import { hasRelativeReferences } from "../../utils/pageReferences";
@@ -12,13 +12,6 @@ import { PageReloadButton } from "../Media/PageReloadButton";
 import { usePageFrame } from "../Media/usePageFrame";
 import { headerButtonClass, Spinner } from "../ui";
 import { PageHostsStrip } from "../ui/PageHostsStrip";
-
-const UNREACHABLE_FOLDER: PageIsolation = {
-	root: false,
-	hiddenFolder: false,
-	hiddenName: false,
-	unreachableFolder: true,
-};
 
 interface Props {
 	origin: TreeOrigin;
@@ -72,15 +65,12 @@ function PagePreview({
 	const { frameProps } = page;
 	// A page that links to nothing loses nothing by being shown on its own, so
 	// it is not nagged; one too large to read is assumed to.
-	const { unreachableFolder } = page;
-	const notice = useMemo(() => {
-		const isolation =
-			pageIsolation(origin.path) ??
-			(unreachableFolder ? UNREACHABLE_FOLDER : null);
-		return isolation && (content === null || hasRelativeReferences(content))
-			? isolation
-			: undefined;
-	}, [origin.path, unreachableFolder, content]);
+	const notice = useMemo(
+		() =>
+			isHiddenPage(origin.path) &&
+			(content === null || hasRelativeReferences(content)),
+		[origin.path, content],
+	);
 
 	return (
 		<div className="flex min-h-0 flex-1 flex-col">
@@ -106,7 +96,7 @@ function PagePreview({
 					</button>
 				)}
 			</div>
-			{notice && <PageNotice isolation={notice} origin={origin.kind} />}
+			{notice && <PageNotice />}
 			{frameProps && !page.failure && (
 				<PageHostsStrip key={page.stripKey} {...page.strip} />
 			)}
@@ -146,7 +136,6 @@ function PagePreview({
 						origin,
 						revision,
 						notice,
-						unreachableFolder,
 					}}
 					onClose={() => setViewing(false)}
 					afterClose={() => setHeld(null)}

@@ -64,7 +64,7 @@ func newTestServer(t *testing.T, serverPassword, mcpToken string) (http.Handler,
 	workOps.SetSessionDeleter(scopeManager)
 	transferHandler := filetransfer.NewHandler(registry, slog.Default())
 	attachmentHandler := filetransfer.NewAttachmentHandler(scopeManager, worktree.ErrWorktreeNotFound, worktree.ErrSessionNotFound, slog.Default())
-	rawHandler := filetransfer.NewRawHandler(sessions, transferHandler, attachmentHandler)
+	rawHandler := filetransfer.NewRawHandler(sessions, transferHandler, attachmentHandler, dataDir)
 	wsHandler := ws.NewRPCHandler(serverPassword, authguard.New(), sessions, "test", func() string { return "" }, authsession.NewTickets(), rawHandler, true, cmdStore, scopeManager, settingsStore, workStore, workOps, work.NewEngine(workStore, work.DefaultMaxNudges), agentRoleStore, cliauth.NewService(slog.Default()), cliupdate.NewService(slog.Default(), nil, nil))
 	mcpHandler := mcp.NewAPIHandler(mcp.NewExecutor(workStore, agentRoleStore, workOps, settingsStore, registry, scopeManager), mcpToken)
 	return newHandler(serverPassword, authguard.New(), sessions, true, wsHandler, mcpHandler, transferHandler, attachmentHandler, rawHandler), workDir, sessions, rawHandler
@@ -318,13 +318,13 @@ func TestRawCapabilityRPC(t *testing.T) {
 		t.Fatalf("auth: %v", rpcErr)
 	}
 
-	// The root is refused by the RawHandler itself, so this also shows the RPC
-	// reached the real one.
-	if _, rpcErr := call(2, "raw.capability", rpc.RawCapabilityParams{Origin: "file", Scope: "directory", Path: "."}); rpcErr == nil || rpcErr.Code != jsonrpc2.CodeInvalidParams {
-		t.Errorf("directory capability for the root: error = %v, want invalid params", rpcErr)
+	// A root scope with a path is refused by the RawHandler itself, so this
+	// also shows the RPC reached the real one.
+	if _, rpcErr := call(2, "raw.capability", rpc.RawCapabilityParams{Origin: "file", Scope: "root", Path: "site"}); rpcErr == nil || rpcErr.Code != jsonrpc2.CodeInvalidParams {
+		t.Errorf("root capability with a path: error = %v, want invalid params", rpcErr)
 	}
 
-	raw, rpcErr := call(3, "raw.capability", rpc.RawCapabilityParams{Origin: "file", Scope: "directory", Path: "site"})
+	raw, rpcErr := call(3, "raw.capability", rpc.RawCapabilityParams{Origin: "file", Scope: "root"})
 	if rpcErr != nil {
 		t.Fatalf("raw.capability: %v", rpcErr)
 	}
@@ -333,14 +333,14 @@ func TestRawCapabilityRPC(t *testing.T) {
 		t.Fatalf("unmarshal: %v", err)
 	}
 
-	resp, err := http.Get(server.URL + result.Path + "style.css")
+	resp, err := http.Get(server.URL + result.Path + "site/style.css")
 	if err != nil {
 		t.Fatalf("GET: %v", err)
 	}
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK || string(body) != "p{}" {
-		t.Errorf("GET %sstyle.css = %d %q, want 200 \"p{}\"", result.Path, resp.StatusCode, body)
+		t.Errorf("GET %ssite/style.css = %d %q, want 200 \"p{}\"", result.Path, resp.StatusCode, body)
 	}
 	// Over a real connection the body goes out through ReadFrom rather than
 	// Write, which must not lose the sandbox either.

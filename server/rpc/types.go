@@ -1576,9 +1576,9 @@ type PortPreviewTicketResult struct {
 //     the worktree it was described from ("" is the main one), not
 //     necessarily the connection's — as for session_view.attachment.
 //
-// Scope is "file" for Path alone, or "directory" for Path as a directory and
-// everything beneath it: a page's directory, so that its relative URLs load.
-// A directory is never the root of the work directory or the commit; an
+// Scope is "file" for Path alone, or "root" for the whole work directory or
+// commit, Path empty, except anything with a dot-prefixed component: a page is
+// opened at its own path beneath the root, so that its relative URLs load. An
 // attachment is always a file.
 //
 // For a page, Hosts are the hosts beyond this server it may reach, as the
@@ -1600,8 +1600,8 @@ type RawCapabilityParams struct {
 // RawCapabilityResult is where the granted content is read.
 //
 // Path is a URL path on this server: for a file scope the file itself, for a
-// directory scope the directory with a trailing slash, against which a path
-// beneath it resolves as a relative URL — each segment percent-encoded. A
+// root scope the root with a trailing slash, against which a path beneath it
+// resolves as a relative URL — each segment percent-encoded. A
 // request after ExpiresAt, or after the session that asked has ended, answers
 // 404 capability_not_found; the remedy is to ask again.
 //

@@ -33,6 +33,14 @@ func (r resolver) Resolve(name string) (string, error) {
 	return dir, nil
 }
 
+func (r resolver) WorkDirs() []string {
+	dirs := make([]string, 0, len(r.dirs))
+	for _, dir := range r.dirs {
+		dirs = append(dirs, dir)
+	}
+	return dirs
+}
+
 func newTestHandler(t *testing.T) (*Handler, string) {
 	t.Helper()
 	workDir := t.TempDir()

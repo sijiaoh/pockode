@@ -140,25 +140,25 @@ func TestHandler_RawCapability_Grants(t *testing.T) {
 			wantPath: "/api/raw/cap/my%20clip.mp4",
 		},
 		{
-			name:     "directory is given with a trailing slash",
-			params:   rpc.RawCapabilityParams{Origin: "file", Scope: "directory", Path: "site"},
-			want:     filetransfer.RawGrant{Origin: filetransfer.RawOriginFile, Scope: filetransfer.RawScopeDirectory, Path: "site"},
+			name:     "root is given with a trailing slash",
+			params:   rpc.RawCapabilityParams{Origin: "file", Scope: "root"},
+			want:     filetransfer.RawGrant{Origin: filetransfer.RawOriginFile, Scope: filetransfer.RawScopeRoot},
 			wantPath: "/api/raw/cap/",
 		},
 		{
 			// An abbreviation is resolved now: it may stop being unique while
 			// the capability lives.
 			name:     "commit hash is resolved to the full one",
-			params:   rpc.RawCapabilityParams{Origin: "commit", Scope: "directory", Hash: full[:7], Path: "site"},
-			want:     filetransfer.RawGrant{Origin: filetransfer.RawOriginCommit, Scope: filetransfer.RawScopeDirectory, Hash: full, Path: "site"},
+			params:   rpc.RawCapabilityParams{Origin: "commit", Scope: "root", Hash: full[:7]},
+			want:     filetransfer.RawGrant{Origin: filetransfer.RawOriginCommit, Scope: filetransfer.RawScopeRoot, Hash: full},
 			wantPath: "/api/raw/cap/",
 		},
 		{
 			// What only the reader allows travels with the capability, never in
 			// its URL.
 			name:     "page with hosts allowed",
-			params:   rpc.RawCapabilityParams{Origin: "file", Scope: "directory", Path: "site", Hosts: []string{"cdn.example"}, BaseURL: "https://app.example"},
-			want:     filetransfer.RawGrant{Origin: filetransfer.RawOriginFile, Scope: filetransfer.RawScopeDirectory, Path: "site", Hosts: []string{"cdn.example"}, BaseURL: "https://app.example"},
+			params:   rpc.RawCapabilityParams{Origin: "file", Scope: "root", Hosts: []string{"cdn.example"}, BaseURL: "https://app.example"},
+			want:     filetransfer.RawGrant{Origin: filetransfer.RawOriginFile, Scope: filetransfer.RawScopeRoot, Hosts: []string{"cdn.example"}, BaseURL: "https://app.example"},
 			wantPath: "/api/raw/cap/",
 		},
 		{
@@ -216,13 +216,13 @@ func TestHandler_RawCapability_RefusesParams(t *testing.T) {
 	}
 }
 
-// What the grant itself is refused for — a directory at the root, say — is
+// What the grant itself is refused for — a file scope at the root, say — is
 // the client's mistake, and says what was wrong rather than reading as a fault.
 func TestHandler_RawCapability_InvalidGrantIsInvalidParams(t *testing.T) {
 	env := newTestEnv(t, &mockAgent{})
-	env.raw.fail(errors.Join(filetransfer.ErrInvalidGrant, errors.New("path \"\" must name something beneath the root")))
+	env.raw.fail(errors.Join(filetransfer.ErrInvalidGrant, errors.New("path \"\" must name a file beneath the root")))
 
-	resp := env.call("raw.capability", rpc.RawCapabilityParams{Origin: "file", Scope: "directory", Path: ""})
+	resp := env.call("raw.capability", rpc.RawCapabilityParams{Origin: "file", Scope: "file", Path: ""})
 	if resp.Error == nil || resp.Error.Code != jsonrpc2.CodeInvalidParams {
 		t.Fatalf("error = %+v, want invalid params", resp.Error)
 	}

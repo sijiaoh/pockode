@@ -333,54 +333,82 @@ that the path is now a secret. The relay proxy's error log masks it
 (`apiroute.LoggablePath`), and `Referrer-Policy: no-referrer` keeps it out of
 the `Referer` of anything the page loads from elsewhere.
 
-**Scope is least privilege, because the page can read its own URL — and,
-through CORS (below), what it reaches.** A
-previewed page's scripts can read `location`, capability included, and send it
+**A page can read its own URL — and, through CORS (below), what it
+reaches.** A previewed page's scripts can read `location`, capability included, and send it
 to any host the reader has allowed for the page — or, after any tap in the
 page, open a tab anywhere with it
 ([what a page can reach](../page-external-hosts-ui.md#known-limits)). They can
 also fetch every file the capability reaches and send the bytes out the same
 way, which matters even where the URL alone would not: a server kept to its
 LAN is out of reach of whoever receives the URL, but not of the page running
-inside it. So a capability reaches as little as its use needs:
+inside it. So a capability reaches one of two things:
 
-- **One file** for a video, a sound, or a page its directory may not be
-  granted for (below). A request for any other name is refused with `403 outside_scope`.
-- **One directory and everything beneath it, dotfiles excepted** for an HTML
-  page: the page's own directory. The page is opened as
-  `<capability>/<name>`, so its relative stylesheets, scripts and images
-  resolve against the capability's path ([file.md](../file.md#html-pages)). A directory scope is
-  never the root of the work directory or the commit. At the root it would
-  reach the project's `.env`, its `.git` and, by default, Pockode's own data
-  directory: every session, every chat transcript.
+- **One file** for a video, a sound, or a page the root scope withholds
+  (below). A request for any other name is refused with `403 outside_scope`.
+- **The whole work directory or commit, withheld names excepted** for an HTML
+  page (`scope: "root"`, with no path; `filetransfer.RawScopeRoot`). The page
+  is opened at its own path beneath the capability,
+  `<capability>/docs/site/index.html`, so its relative stylesheets, scripts and
+  images, its `../` links and its `fetch()`es resolve to the project files they
+  name ([file.md](../file.md#html-pages)).
 - An attachment is always one file. An attachment store is flat, not a tree of
   files that refer to each other.
 
-**A directory scope never reaches a dot component**, above it or beneath it
-(`filetransfer.RawScopeDirectory`). A page usually sits beside the `.env` of
-the app it belongs to, and a page inside `.git` or `.pockode` would hand its
-scripts the repository or Pockode's own data. So the rule is checked twice:
+**The root, not the page's folder, because the page is the agent's.** A page
+previewed here was written by the agent working in this project, and that agent
+can already read every file in it. Holding the page to its own directory kept
+nothing from the author that wrote it, and broke every page that reaches
+`../shared/style.css` or a sibling folder's data. So the root scope trusts the
+page as far as the agent is trusted and keeps the conventional limits instead:
+what no web server serves from a tree it publishes, and what is not this
+worktree's at all. The session and worktree binding above and the sandbox
+below hold as before.
 
-- **At issue.** A directory whose cleaned path has any component starting
-  with `.` — `.pockode`, `docs/.vitepress`, `site/../.pockode` — is refused as
-  `InvalidParams`, as the root is.
-- **At each request.** A path beneath a directory scope with such a component
-  — `.env`, `sub/.git/config`, `%2eenv` once decoded, and `sub/./x` too, which
-  no browser sends — is `403 outside_scope`. For a work-directory file it is
-  asked again of the name the file system resolved the open file to, from the
-  work directory down, scope included: on Windows an 8.3 short name such as
-  `ENV~1` is another spelling of `.env`, and `GIT~1` of `.git`
-  (`resolvedName`, `server/filetransfer/realname_windows.go`; a no-op
-  elsewhere). A name that
-  cannot be resolved is refused the same way, with the host path kept in the
-  log, since the error body is readable by the page. A volume whose file
-  system cannot report the name refuses every directory scope on it; the app
-  then loads each page on its own, as below.
+**What the root scope withholds**, each answered `403 outside_scope`:
+
+- **Any path with a dot-prefixed component** — `.env`, `sub/.git/config`,
+  `.pockode/…`, `%2eenv` once decoded, and `sub/./x` too, which no browser
+  sends. A page usually sits beside the `.env` of the app it belongs to, and
+  `.git` or `.pockode` would hand its scripts the repository or Pockode's own
+  data.
+- **Pockode's data directory, wherever `--data` puts it.** By default it is
+  `.pockode` and the dot rule covers it, but `--data ./pockode-data` puts every
+  session, `server.json` with the local API token, and the attachments under a
+  plain name inside the project.
+- **Every other registered worktree inside this one.** A worktrees base
+  directory configured inside the project puts another worktree's files under a
+  plain name; a worktree's capability reads its own files only. The list of
+  worktrees is cached for up to three seconds, so one just added is readable
+  for at most that long.
+
+The last two are directories on disk, so they hold for a work-directory file;
+a commit's root scope is held to the first.
+
+For a work-directory file each rule is asked again of the name the file system
+resolved the open file to (`resolvedName`,
+`server/filetransfer/realname_{unix,windows}.go`), because `os.Root` follows a
+link that stays inside it, and on Windows a name can be another spelling of a
+different one. On darwin and linux every link on the way is followed, so
+`site/env -> .env` is `.env` and a link into another worktree is that worktree;
+the resolving is by path after the open, and the file found there has to be the
+one opened, so a link swapped in between is refused rather than believed. On
+Windows the long final path of the open handle is used, which also turns an 8.3
+short name such as `ENV~1` or `GIT~1` back into `.env` or `.git`. A name that
+cannot be resolved is refused the same way, with the host path kept in the log,
+since the error body is readable by the page.
+
+The data directory and the worktrees are matched by identity (`os.SameFile` on
+each directory up the resolved path, `inWithheldDir`), not by spelling: a
+case-insensitive file system — macOS by default — opens `Worktrees/other` as
+`worktrees/other`. Only directories strictly beneath the work directory are
+compared, so the main worktree, which a nested one lies inside, never counts
+against the nested one's pages. A withheld directory that is gone or cannot be
+stat'ed is skipped, logged unless it is simply gone, so that one stale worktree
+does not refuse every page.
 
 A dotfile the user opens on purpose still gets a file scope of its own, and a
-page that is itself a dotfile or sits under a dot directory gets only that.
-The price is that such a page's relative assets do not load, as for a page at
-the root of a project — a build output inside a dot directory
+page whose own path has a dot component gets only that. The price is that such
+a page's relative assets do not load — a build output inside a dot directory
 (`docs/.vitepress/dist`, `.output/public`) is one. That is accepted; the app
 says so above the page ([file.md](../file.md#html-pages)).
 
@@ -388,26 +416,14 @@ says so above the page ([file.md](../file.md#html-pages)).
 surface, which [does not resolve symlinks](#accepted-limitations). The
 difference is the holder: a capability may be in the hands of a page's script,
 not of the developer. A work-directory file is opened through an `os.Root`, so
-a link that leads out of the scope is refused. Every component of a directory
-scope must itself be a plain directory, checked with `Lstat`, because `os.Root`
-follows a link that stays inside it: `site -> .` would otherwise turn a
-directory scope into the work directory itself. A Windows junction is refused
-the same way. A file scope is held to the work directory rather than the file's
-own directory, so a file that is itself a link elsewhere in the project still
-opens: that file is what the user opened. A page whose directory is a link,
-or lies under one, is shown on a file scope instead: the app cannot tell from
-the path, so it falls back once a request answers `outside_scope`
-([file.md](../file.md#html-pages)). A link swapped in between the `Lstat`
-and the open is not caught. Doing that takes write access to the work
-directory, which is already more than any capability grants. A commit needs
-none of this: git looks a path up in the tree without following links.
-
-The dotfile rule is on names, not on what a link leads to. A link inside a
-directory scope with a plain name that leads to a dotfile also inside it
-(`site/env -> .env`) is served on darwin and linux, as anything a link inside
-the scope leads to is; on Windows the resolved name is the target's, so it is
-refused. Making such a link takes write access to the work directory, as
-above.
+a link that leads out of the work directory is refused, and a link that stays
+inside it lands on a name checked as above: it can lead elsewhere in the
+project, never to what the root scope withholds. A file scope is held to the
+work directory alone, so a file that is itself a link elsewhere in the project
+still opens: that file is what the user opened. A commit needs none of this:
+git looks a path up in the tree without following links — a link is a blob
+holding its target's name — so the checks on the name asked for are all a
+commit's root scope needs.
 
 **Every response carries the same seven headers, errors included:**
 
@@ -469,8 +485,8 @@ origin, and none allows credentials: there is no
 `Authorization` header anyway. The capability that authorizes a read is in the
 URL, so a caller from any origin can read only what anyone holding the URL
 could already fetch with a plain GET. What it does add — the page's script
-reading the bytes rather than only the URL — is why the scope is held to least
-privilege above.
+reading the bytes rather than only the URL — is why the root scope withholds
+what it does above.
 
 A **preflight** (`OPTIONS` on any `/api/raw` path) is answered `204` before any
 capability check: it reads nothing, so there is nothing for a capability to
@@ -644,7 +660,9 @@ model (e.g. multi-user hosting) revisits them rather than rediscovering them:
   file RPCs. Under the single-developer model this is not a privilege escalation —
   the same developer
   already has shell and agent access — and the data directory can be relocated
-  with `--data`. `sessions.json` adds an *availability* consequence rather than a
+  with `--data`. The raw endpoint is the exception: a page's script is not the
+  credential-holder, so a root scope withholds the data directory wherever it
+  is. `sessions.json` adds an *availability* consequence rather than a
   confidentiality one: neither the token hashes nor the password fingerprint can
   be read back into a usable credential, but anything that can write the file —
   including a prompt-injected agent — can log every other browser out. The
@@ -672,7 +690,7 @@ model (e.g. multi-user hosting) revisits them rather than rediscovering them:
 | Port preview login (password & ticket) & cookie | `server/relay/preview_auth.go` |
 | Preview ticket issue | `server/ws/rpc_port_preview.go` |
 | Raw capability issue | `server/ws/rpc_raw.go` |
-| Raw endpoint: scope, path safety, CORS and response headers | `server/filetransfer/raw.go`; resolved names for the dotfile rule in `realname_{unix,windows}.go` |
+| Raw endpoint: scope, path safety, CORS and response headers | `server/filetransfer/raw.go`; resolved names for what the root scope withholds in `realname_{unix,windows}.go` |
 | Raw endpoint routed ahead of auth; capability masked in logs | `server/main.go` (`newHandler`), `server/apiroute/`, `server/relay/proxy.go` |
 | Wire types and refusal reasons | `server/rpc/types.go` |
 | Frontend credential store | `packages/shared/src/stores/createAuthStore.ts`, `packages/shared/src/utils/auth.ts` |

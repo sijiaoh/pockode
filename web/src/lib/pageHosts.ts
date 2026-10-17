@@ -264,13 +264,12 @@ export function escapeAttribute(value: string): string {
 }
 
 /**
- * The capability a raw page URL is under, as the prefix of every URL it
- * reaches: the page's own name is the URL's last segment, and the capability
- * the one before it, or — for a directory — the one its relative URLs resolve
- * beneath.
+ * The prefix of every URL a raw capability reaches, from the URL it was
+ * issued with: a root capability's own, which ends in `/`, or a file
+ * capability's up to the file's name.
  */
-export function capabilityRoot(pageUrl: string): string {
-	return pageUrl.slice(0, pageUrl.lastIndexOf("/") + 1);
+export function capabilityRoot(capabilityUrl: string): string {
+	return capabilityUrl.slice(0, capabilityUrl.lastIndexOf("/") + 1);
 }
 
 /**
@@ -285,10 +284,11 @@ const PAGE_FRAME_NAME = "pockode-page";
  * The document a workspace page's frame sits in, one per capability, which
  * exists for its `frame-src`: the browser checks the embedding document's
  * policy on every navigation of a frame, those the frame starts included, so
- * the page can follow links within its capability — its own directory — and
- * go nowhere else: not to a host, which no policy of ours would hold, and not
- * to another capability, whose hosts are another page's. The app's own
- * document cannot be the embedder, being every page's at once.
+ * the page can follow links within its capability — `root`, as
+ * `capabilityRoot` gives it — and go nowhere else: not to a host, which no
+ * policy of ours would hold, and not to another capability, whose hosts are
+ * another page's. The app's own document cannot be the embedder, being every
+ * page's at once.
  *
  * Unlike an agent's page, the page is a URL and so inherits nothing: its own
  * policy is the response's (`/api/raw`). The wrapper says when the page has
@@ -298,10 +298,11 @@ const PAGE_FRAME_NAME = "pockode-page";
  */
 export function rawPageWrapper(
 	pageUrl: string,
+	root: string,
 	title: string,
 	sandbox: string,
 ): string {
-	const policy = `default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; frame-src ${capabilityRoot(pageUrl)}`;
+	const policy = `default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; frame-src ${root}`;
 	return `<meta http-equiv="Content-Security-Policy" content="${escapeAttribute(policy)}"><meta http-equiv="x-dns-prefetch-control" content="off">${WRAPPER_STYLE}<iframe name="${PAGE_FRAME_NAME}" title="${escapeAttribute(title)}" sandbox="${sandbox}" referrerpolicy="no-referrer" src="${escapeAttribute(pageUrl)}"></iframe><script>${LEFT_LISTENER}var f=document.querySelector("iframe");f.addEventListener("load",function(){parent.postMessage({type:"${LOADED}"},"*");});addEventListener("message",function(e){var d=e.data;if(e.source===parent&&d&&d.type==="${NAVIGATE}"&&typeof d.url==="string")f.src=d.url;});</script>`;
 }
 

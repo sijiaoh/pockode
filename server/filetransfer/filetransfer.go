@@ -54,10 +54,12 @@ const (
 	CodeInternal        = "internal"
 )
 
-// WorkDirResolver maps a worktree name ("" for the main one) to its directory.
+// WorkDirResolver maps a worktree name ("" for the main one) to its directory,
+// and lists the directories of every worktree, which may sit inside another's.
 // worktree.Registry implements it.
 type WorkDirResolver interface {
 	Resolve(name string) (string, error)
+	WorkDirs() []string
 }
 
 type Handler struct {

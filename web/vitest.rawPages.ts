@@ -24,9 +24,9 @@ const TYPES: Record<string, string> = {
 };
 
 /**
- * `/api/raw` for the real-browser tests: the pages in
- * `src/test/page-hosts/site/`, each under a capability as the server serves
- * it — with its sandbox, its policy and, framed, its reporter, all read from
+ * `/api/raw` for the real-browser tests: `src/test/page-hosts/` as the root
+ * of a project, read under a capability as the server serves it — with its
+ * sandbox, its policy and, framed, its reporter, all read from
  * `raw-contract.json`, which the server's own tests keep in step with what it
  * sends. So what the engines enforce is the server's, not a copy of it.
  *
@@ -70,7 +70,7 @@ export function rawPages(): Plugin {
 
 				let body: string;
 				try {
-					body = readFileSync(new URL(`site/${file}`, HERE), "utf8");
+					body = readFileSync(new URL(file, HERE), "utf8");
 				} catch {
 					res.statusCode = 404;
 					res.end(JSON.stringify({ code: "not_found" }));

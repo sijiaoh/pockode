@@ -64,21 +64,28 @@ describe("pagePolicy", () => {
 	});
 });
 
+describe("capabilityRoot", () => {
+	it.each([
+		["a root capability", "https://app.example/api/raw/cap1/"],
+		["a file capability", "https://app.example/api/raw/cap1/a%20b.html"],
+	])("is the prefix of what %s reaches", (_, url) => {
+		expect(capabilityRoot(url)).toBe("https://app.example/api/raw/cap1/");
+	});
+});
+
 describe("rawPageWrapper", () => {
 	// The page's own frame may go anywhere its capability reaches, and nowhere
-	// else: not to a host, nor to another capability.
-	it.each([
-		["its page", "https://app.example/api/raw/cap1/page.html"],
-		[
-			"a name that needs encoding",
-			"https://app.example/api/raw/cap1/a%20b.html",
-		],
-	])("holds the page to its capability, from %s", (_, url) => {
-		expect(capabilityRoot(url)).toBe("https://app.example/api/raw/cap1/");
-
+	// else: not to a host, nor to another capability — however deep the page
+	// sits beneath it.
+	it("holds the page to its capability", () => {
 		const meta = new DOMParser()
 			.parseFromString(
-				rawPageWrapper(url, "Page", "allow-scripts"),
+				rawPageWrapper(
+					"https://app.example/api/raw/cap1/docs/site/page.html",
+					"https://app.example/api/raw/cap1/",
+					"Page",
+					"allow-scripts",
+				),
 				"text/html",
 			)
 			.querySelector('meta[http-equiv="Content-Security-Policy"]');

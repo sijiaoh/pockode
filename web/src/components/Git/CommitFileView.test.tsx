@@ -286,13 +286,13 @@ describe("CommitFileView", () => {
 			);
 		}
 
-		it("renders the page as of the commit, from the commit's folder", async () => {
+		it("renders the page as of the commit, from the commit's root", async () => {
 			renderPage();
 
 			expect(await screen.findByTitle("index.html")).toHaveAttribute("sandbox");
 			expect(wsActions.rawCapability).toHaveBeenCalledWith({
-				origin: { kind: "commit", hash: "abc1234def", path: "site" },
-				scope: "directory",
+				origin: { kind: "commit", hash: "abc1234def" },
+				scope: "root",
 				page: { hosts: [] },
 			});
 		});

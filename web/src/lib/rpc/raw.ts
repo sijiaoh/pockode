@@ -1,103 +1,81 @@
 import type { JSONRPCRequester } from "json-rpc-2.0";
 import type { ContentOrigin, TreeOrigin } from "../../types/contents";
 import { getApiBaseUrl } from "../../utils/config";
-import { parentDir, splitPath } from "../../utils/path";
 import { requireClient } from "./client";
 
 /**
+ * The tree a root capability reaches: the work directory, or a commit.
+ */
+export type TreeRoot = { kind: "file" } | { kind: "commit"; hash: string };
+
+/**
  * What a raw capability reaches: the one file, or — for a page whose relative
- * URLs load its stylesheets, scripts and images — a directory and everything
- * beneath it. An attachment store is flat, so an attachment is always a file;
- * and the server refuses a directory at the root of the work directory or the
- * commit, or one with a component starting with `.`, since a page's scripts
- * can read the capability out of its own URL — and with it `.env` or `.git`.
- * A directory capability never serves a dotfile beneath it either.
+ * URLs load its stylesheets, scripts and images — the whole tree, so that
+ * `../` and a script's `fetch("data.json")` resolve as they would on disk. An
+ * attachment store is flat, so an attachment is always a file. Since a page's
+ * scripts can read the capability out of its own URL, the server's root scope
+ * withholds every path with a component starting with `.` (`.env`, `.git`),
+ * other worktrees and Pockode's own data.
  */
 export type RawTarget = (
 	| { origin: ContentOrigin; scope: "file" }
-	| { origin: TreeOrigin; scope: "directory" }
+	| { origin: TreeRoot; scope: "root" }
 ) & {
 	/**
 	 * Set when what is read is shown as a page: the hosts beyond the server
 	 * the reader has allowed it to reach (docs/page-external-hosts-ui.md). The
 	 * server binds them to the capability and refuses the page everything
-	 * else, so a capability for a page is never the one for its siblings
+	 * else, so a capability for a page is never the one for another page
 	 * unless their hosts are the same.
 	 */
 	page?: { hosts: readonly string[] };
 };
 
 /**
- * What a page at `origin` is loaded through: the directory it sits in, so its
- * relative URLs reach its assets — or, where the server would refuse that
- * directory or the page itself (see `RawTarget`), the page alone. Decided
- * here rather than by asking and falling back, since a refused grant is an
- * error like any other.
+ * Whether a page at `path` has to be shown on its own: the root scope
+ * withholds it, having a component that starts with `.`.
+ */
+export function isHiddenPage(path: string): boolean {
+	return path.split("/").some((part) => part.startsWith("."));
+}
+
+/**
+ * What a page at `origin` is loaded through: the root of its tree — or, for a
+ * page the root scope withholds (`isHiddenPage`), the page alone. Decided here
+ * rather than by asking and falling back, since a refused grant is an error
+ * like any other.
  */
 export function pageRawTarget(origin: TreeOrigin): RawTarget {
-	if (pageIsolation(origin.path)) return { origin, scope: "file" };
+	if (isHiddenPage(origin.path)) return { origin, scope: "file" };
 	return {
-		origin: { ...origin, path: parentDir(origin.path) },
-		scope: "directory",
+		origin:
+			origin.kind === "commit"
+				? { kind: "commit", hash: origin.hash }
+				: { kind: "file" },
+		scope: "root",
 	};
 }
 
 /**
- * Why a page gets a capability for itself alone, and so cannot load the files
- * it links to — or null when its directory's capability reaches them. Each
- * flag is a reason on its own; more than one can hold.
- */
-export interface PageIsolation {
-	/** At the root of the work directory or the commit. */
-	root: boolean;
-	/** Beneath a directory whose name starts with `.`. */
-	hiddenFolder: boolean;
-	/**
-	 * Its own name starts with `.`: a directory capability serves no dotfile
-	 * beneath it, the page included.
-	 */
-	hiddenName: boolean;
-	/**
-	 * Its directory's capability could not reach it: the directory or one
-	 * above it is a link, which a directory scope never follows, the page is a
-	 * link out of it, or the folder could not be read. Known only once the
-	 * server has said so (`usePageFrame`), never from the path.
-	 */
-	unreachableFolder: boolean;
-}
-
-export function pageIsolation(path: string): PageIsolation | null {
-	const dir = parentDir(path);
-	const isolation = {
-		root: dir === "",
-		hiddenFolder: dir.split("/").some((part) => part.startsWith(".")),
-		hiddenName: splitPath(path).fileName.startsWith("."),
-		unreachableFolder: false,
-	};
-	return isolation.root || isolation.hiddenFolder || isolation.hiddenName
-		? isolation
-		: null;
-}
-
-/**
- * The page's own URL under the capability `pageRawTarget` asked for: the
- * capability itself for a file, the page's name beneath it for a directory.
+ * The URL of the page at `path` under a capability for `target`: the
+ * capability itself for a file, the path beneath it — each segment encoded, as
+ * the server's own paths are — for a root.
  */
 export function pageRawUrl(
 	target: RawTarget,
 	capabilityUrl: string,
-	fileName: string,
+	path: string,
 ): string {
-	return target.scope === "directory"
-		? capabilityUrl + encodeURIComponent(fileName)
+	return target.scope === "root"
+		? capabilityUrl + path.split("/").map(encodeURIComponent).join("/")
 		: capabilityUrl;
 }
 
 export interface RawCapability {
 	/**
 	 * A URL path on the server (put it through `apiUrl`). For a file, the file
-	 * itself; for a directory, the directory with a trailing slash, against
-	 * which a path beneath it resolves as a relative URL.
+	 * itself; for a root, the root with a trailing slash, against which a path
+	 * beneath it resolves as a relative URL (`pageRawUrl`).
 	 */
 	path: string;
 	/** Epoch milliseconds. */
@@ -150,7 +128,15 @@ function toParams(target: RawTarget): RawCapabilityParams {
 	return { ...originParams(target), ...page };
 }
 
-function originParams({ origin, scope }: RawTarget): RawCapabilityParams {
+function originParams(target: RawTarget): RawCapabilityParams {
+	const { scope } = target;
+	if (target.scope === "root") {
+		const { origin } = target;
+		return origin.kind === "commit"
+			? { origin: "commit", scope, hash: origin.hash }
+			: { origin: "file", scope };
+	}
+	const { origin } = target;
 	switch (origin.kind) {
 		case "file":
 			return { origin: "file", scope, path: origin.path };

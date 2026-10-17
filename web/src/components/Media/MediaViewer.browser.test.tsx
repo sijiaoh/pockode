@@ -14,7 +14,7 @@ import { useWSStore, wsActions } from "../../lib/wsStore";
 // A 64×36 VP9 clip, served by the test server as a capability path would be.
 import clipPath from "../../test/clip-64x36.webm?url";
 // A page linking to a second one beside it, served the same way: their folder
-// stands for a directory capability.
+// stands for a root capability, with the page at its root.
 import pagePath from "../../test/page/index.htm?url";
 import { MediaViewer } from "./MediaViewer";
 import type { HtmlMediaItem, ImageMediaItem, VideoMediaItem } from "./types";
@@ -390,7 +390,7 @@ describe("MediaViewer html stage", () => {
 		saveAs: "index.htm",
 		mime: "text/html",
 		size: 64,
-		origin: { kind: "file", path: "site/index.htm" },
+		origin: { kind: "file", path: "index.htm" },
 	};
 	const cleanups: (() => void)[] = [];
 

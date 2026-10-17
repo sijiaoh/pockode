@@ -56,7 +56,7 @@ export type ContentOrigin =
 
 /**
  * Content with a tree around it — a work directory or a commit — which is what
- * a page needs for its assets and a directory capability reaches. An
+ * a page needs for its assets and a root capability reaches. An
  * attachment store is flat.
  */
 export type TreeOrigin = Exclude<ContentOrigin, { kind: "attachment" }>;

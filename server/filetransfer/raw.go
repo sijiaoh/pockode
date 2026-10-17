@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/fs"
 	"net/http"
 	"net/url"
 	"os"
@@ -62,29 +61,24 @@ type RawScope string
 const (
 	// RawScopeFile reaches the one file Path names.
 	RawScopeFile RawScope = "file"
-	// RawScopeDirectory reaches directory Path and everything beneath it
-	// except dotfiles. It is for a page whose relative URLs load its
-	// stylesheets, scripts and images; the page's own directory, never more,
-	// so that the page's scripts cannot read anything else in the project.
+	// RawScopeRoot reaches the whole work directory or commit, Path empty,
+	// except dotfiles. It is for a page, which is opened at its own path
+	// beneath the root so that its relative URLs — `../` and script-built
+	// ones included — load whatever project file they name.
 	//
-	// Nothing whose path has a dot-prefixed component, beneath the scope or
-	// above it: a page sits beside the .env of its app, and a page inside
-	// .git or .pockode would hand its scripts the repository or Pockode's own
-	// data. A dotfile the user means to see takes a file scope of its own. The
-	// price is that a build inside a dot directory (docs/.vitepress/dist,
-	// .output/public) gets only a file scope, as a page at the root does.
+	// Nothing whose path has a dot-prefixed component: a page sits beside the
+	// .env of its app, and .git and .pockode would hand its scripts the
+	// repository or Pockode's own data. A dotfile the user means to see takes
+	// a file scope of its own, as does a page inside a dot directory
+	// (docs/.vitepress/dist).
 	//
-	// The check is on the name asked for and, for a work-directory file, on
-	// the name the file system resolves it to (resolvedName): on Windows a
-	// short name such as ENV~1 is another spelling of .env. A link beneath
-	// the scope that leads to a dotfile also beneath it is served on unix, as
-	// anything a link inside the scope leads to is.
-	//
-	// Never the root of the origin, even for a page that sits there. The
-	// capability is in the page's own URL, where its scripts can read it and
-	// send it anywhere; at the root it would reach the project's secrets, its
-	// .git and — by default — Pockode's own data directory, sessions included.
-	RawScopeDirectory RawScope = "directory"
+	// For a work-directory file the checks are on the name asked for and on
+	// the name the file system resolves it to (resolvedName), so that neither
+	// a link nor, on Windows, a short name such as ENV~1 is another way to
+	// .env. The resolved name is also held out of Pockode's data directory
+	// and of every other worktree, wherever settings put them: a worktree's
+	// capability reads its own files only (inWithheldDir).
+	RawScopeRoot RawScope = "root"
 )
 
 // RawGrant is what one capability lets its bearer read.
@@ -98,7 +92,7 @@ type RawGrant struct {
 	// RawOriginAttachment.
 	SessionID string
 	// Path is, with forward slashes, the work-directory path, the repository
-	// path in the commit, or the attachment id.
+	// path in the commit, or the attachment id; empty for a root scope.
 	Path string
 	// Hosts are the hosts beyond this server that a page served under the
 	// capability may reach (docs/page-external-hosts-ui.md), each as URL.host
@@ -157,16 +151,19 @@ var grantBaseURL = regexp.MustCompile(`^https?://[a-z0-9.-]+(:[0-9]{1,5})?(/[A-Z
 var ErrInvalidGrant = errors.New("invalid raw grant")
 
 func (g RawGrant) validate() error {
-	if g.Scope != RawScopeFile && g.Scope != RawScopeDirectory {
+	switch g.Scope {
+	case RawScopeFile:
+		// IsLocal refuses "" and a way out; the root, which is no file, is what
+		// the path cleans to in every other spelling.
+		if !filepath.IsLocal(filepath.FromSlash(g.Path)) || cleanGrantPath(g.Path) == "." {
+			return fmt.Errorf("%w: path %q must name a file beneath the root of its origin", ErrInvalidGrant, g.Path)
+		}
+	case RawScopeRoot:
+		if g.Path != "" {
+			return fmt.Errorf("%w: a root scope takes no path, got %q", ErrInvalidGrant, g.Path)
+		}
+	default:
 		return fmt.Errorf("%w: unknown scope %q", ErrInvalidGrant, g.Scope)
-	}
-	// IsLocal refuses "" and a way out; the root itself, which a directory
-	// scope must never be, is what the path cleans to in every spelling.
-	if !filepath.IsLocal(filepath.FromSlash(g.Path)) || cleanGrantPath(g.Path) == "." {
-		return fmt.Errorf("%w: path %q must name something beneath the root of its origin", ErrInvalidGrant, g.Path)
-	}
-	if g.Scope == RawScopeDirectory && hasDotComponent(cleanGrantPath(g.Path)) {
-		return fmt.Errorf("%w: directory %q is or lies within a dot directory", ErrInvalidGrant, g.Path)
 	}
 
 	if len(g.Hosts) > MaxRawGrantHosts {
@@ -223,8 +220,8 @@ func cleanGrantPath(p string) string {
 }
 
 // hasDotComponent reports whether any component of p, a slash path, starts
-// with a dot. Split on the native separator as well, as openScope does: on
-// Windows "site\.env" is "site/.env".
+// with a dot. Split on the native separator as well: on Windows "site\.env"
+// is "site/.env".
 func hasDotComponent(p string) bool {
 	for _, name := range strings.Split(filepath.FromSlash(p), string(filepath.Separator)) {
 		if strings.HasPrefix(name, ".") {
@@ -235,17 +232,17 @@ func hasDotComponent(p string) bool {
 }
 
 // RawEntryPath is the URL path a grant issued as capability is opened at: the
-// file itself for a file scope, the directory with a trailing slash for a
-// directory scope, against which a path beneath it resolves as a relative URL.
+// file itself for a file scope, the root with a trailing slash for a root
+// scope, against which a path beneath it resolves as a relative URL.
 func RawEntryPath(capability string, grant RawGrant) string {
-	if grant.Scope == RawScopeDirectory {
+	if grant.Scope == RawScopeRoot {
 		return RawPath(capability, "")
 	}
 	return RawPath(capability, path.Base(cleanGrantPath(grant.Path)))
 }
 
 // RawPath is the URL path that reads rel within a capability: the file's own
-// name for a file scope, a path beneath the directory for a directory scope.
+// name for a file scope, a path beneath the root for a root scope.
 func RawPath(capability, rel string) string {
 	segments := strings.Split(rel, "/")
 	for i, s := range segments {
@@ -274,19 +271,22 @@ func RawPath(capability, rel string) string {
 // own scripts read what the scope reaches and — to a host the reader has
 // allowed for the page (pagePolicy) — send the bytes out, where without it
 // they could send only the URL, useless to whoever cannot reach this server,
-// as on a server kept to its LAN. That is why a scope reaches as little as it
-// does, dotfiles included.
+// as on a server kept to its LAN. That is why no scope reaches a dotfile.
 type RawHandler struct {
 	files        *Handler
 	attachments  *AttachmentHandler
 	capabilities *authsession.Capabilities[RawGrant]
+	// dataDir is Pockode's own data directory, withheld from a root scope
+	// wherever it is.
+	dataDir string
 }
 
-func NewRawHandler(sessions *authsession.Store, files *Handler, attachments *AttachmentHandler) *RawHandler {
+func NewRawHandler(sessions *authsession.Store, files *Handler, attachments *AttachmentHandler, dataDir string) *RawHandler {
 	return &RawHandler{
 		files:        files,
 		attachments:  attachments,
 		capabilities: authsession.NewCapabilities[RawGrant](sessions),
+		dataDir:      dataDir,
 	}
 }
 
@@ -302,7 +302,9 @@ func (h *RawHandler) Issue(sessionToken string, grant RawGrant) (string, time.Ti
 	}
 	// Kept clean, so that a file is matched by the base name RawEntryPath
 	// gives it: "dir/a.mp4/." is "a.mp4", not ".".
-	grant.Path = cleanGrantPath(grant.Path)
+	if grant.Scope == RawScopeFile {
+		grant.Path = cleanGrantPath(grant.Path)
+	}
 	grant.BaseURL = lowerOrigin(grant.BaseURL)
 	return h.capabilities.Issue(sessionToken, grant)
 }
@@ -351,7 +353,7 @@ func (h *RawHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if grant.Scope == RawScopeFile && rel != path.Base(grant.Path) ||
-		grant.Scope == RawScopeDirectory && hasDotComponent(rel) {
+		grant.Scope == RawScopeRoot && hasDotComponent(rel) {
 		h.files.writeError(w, errf(http.StatusForbidden, CodeOutsideScope, "%s is outside this capability", rel), nil)
 		return
 	}
@@ -571,7 +573,8 @@ func reporterOffset(head []byte) int {
 
 // serveWorkDirFile reads through an os.Root rather than checking a path and
 // then opening it, so that a symlink — or a directory swapped for one after a
-// check — cannot lead out of the scope: the root refuses to follow it there.
+// check — cannot lead out of the work directory: the root refuses to follow it
+// there.
 func (h *RawHandler) serveWorkDirFile(w *rawResponseWriter, r *http.Request, grant RawGrant, rel string) {
 	workDir, apiErr := h.files.resolveWorkDir(grant.Worktree)
 	if apiErr != nil {
@@ -586,23 +589,11 @@ func (h *RawHandler) serveWorkDirFile(w *rawResponseWriter, r *http.Request, gra
 	}
 	defer root.Close()
 
-	// A file scope is held to the work directory, not to the file's own
-	// directory: the file is what the user opened, and if it is a link to
-	// elsewhere in the project, that is the file they asked for.
+	// A file scope is held to the work directory alone: the file is what the
+	// user opened, and if it is a link to elsewhere in the project, that is
+	// the file they asked for.
 	name := filepath.FromSlash(grant.Path)
-	workRoot := root
-	if grant.Scope == RawScopeDirectory {
-		scope, err := openScope(root, grant.Path)
-		if err != nil {
-			if os.IsNotExist(err) {
-				h.files.writeError(w, errf(http.StatusNotFound, CodeNotFound, "not found: %s", grant.Path), nil)
-				return
-			}
-			h.files.writeError(w, outsideScope("open", grant.Path, err), nil)
-			return
-		}
-		defer scope.Close()
-		root = scope
+	if grant.Scope == RawScopeRoot {
 		name = filepath.FromSlash(rel)
 	}
 
@@ -613,53 +604,73 @@ func (h *RawHandler) serveWorkDirFile(w *rawResponseWriter, r *http.Request, gra
 	}
 	defer f.Close()
 
-	// Asked of the whole path from the work directory, since the scope's own
-	// name is a spelling too.
-	if grant.Scope == RawScopeDirectory {
-		resolved, err := resolvedName(workRoot, filepath.Join(filepath.FromSlash(grant.Path), name), f)
-		if err != nil {
-			// Logged rather than answered: the error holds host paths, and the
-			// answer is readable by the page.
-			h.files.log.Warn("cannot resolve raw file name", "worktree", grant.Worktree, "path", rel, "error", err)
-			h.files.writeError(w, errf(http.StatusForbidden, CodeOutsideScope, "cannot resolve %s within this capability", rel), nil)
-			return
-		}
-		if hasDotComponent(filepath.ToSlash(resolved)) {
-			h.files.writeError(w, errf(http.StatusForbidden, CodeOutsideScope, "%s is outside this capability", rel), nil)
+	if grant.Scope == RawScopeRoot {
+		if apiErr := h.withinRootScope(root, workDir, grant.Worktree, name, rel, f); apiErr != nil {
+			h.files.writeError(w, apiErr, nil)
 			return
 		}
 	}
 	h.serveContent(w, r, rel, fi.ModTime(), "", f)
 }
 
-// openScope opens dir, a clean slash path beneath root, as a root of its own,
-// refusing it if anything on the way is not a plain directory. os.Root follows
-// a link that stays within it, so "site -> ." would otherwise scope a
-// capability to the whole work directory — the root a directory scope must
-// never be — and "site -> .pockode" to Pockode's own data. A repository can
-// ship such a link.
-//
-// A link swapped in between the Lstat and the open is not caught; doing that
-// takes writing to the work directory, which is already more than a
-// capability grants.
-func openScope(root *os.Root, dir string) (*os.Root, error) {
-	// Split on the native separator: on Windows a "\" in a grant's path is
-	// one too, and a component hidden inside another would go unchecked.
-	native := filepath.FromSlash(dir)
-	walked := ""
-	for _, name := range strings.Split(native, string(filepath.Separator)) {
-		walked = filepath.Join(walked, name)
-		info, err := root.Lstat(walked)
+// withinRootScope refuses f, opened in root (workDir) as name, if what the file
+// system resolved it to is a dotfile or lies inside a withheld directory.
+func (h *RawHandler) withinRootScope(root *os.Root, workDir, worktree, name, rel string, f *os.File) *apiError {
+	resolved, err := resolvedName(root, name, f)
+	if err != nil {
+		// Logged rather than answered: the error holds host paths, and the
+		// answer is readable by the page.
+		h.files.log.Warn("cannot resolve raw file name", "worktree", worktree, "path", rel, "error", err)
+		return errf(http.StatusForbidden, CodeOutsideScope, "cannot resolve %s within this capability", rel)
+	}
+	if hasDotComponent(filepath.ToSlash(resolved)) {
+		return errf(http.StatusForbidden, CodeOutsideScope, "%s is outside this capability", rel)
+	}
+	withheld, err := h.inWithheldDir(workDir, resolved)
+	if err != nil {
+		h.files.log.Warn("cannot check raw file against withheld directories", "worktree", worktree, "path", rel, "error", err)
+		return errf(http.StatusForbidden, CodeOutsideScope, "cannot resolve %s within this capability", rel)
+	}
+	if withheld {
+		return errf(http.StatusForbidden, CodeOutsideScope, "%s is outside this capability", rel)
+	}
+	return nil
+}
+
+// inWithheldDir reports whether resolved, a resolved path beneath workDir,
+// lies inside Pockode's data directory or another worktree, either of which a
+// setting can put inside the project under a name with no leading dot (--data,
+// the worktrees' base directory). Directories are matched by identity rather
+// than by spelling: a case-insensitive file system (macOS by default) opens
+// "Worktrees/other" as "worktrees/other". Only the directories strictly
+// beneath workDir are compared, so a worktree that workDir itself lies inside
+// — the main one, for a nested worktree — and workDir's own never match.
+func (h *RawHandler) inWithheldDir(workDir, resolved string) (bool, error) {
+	var withheld []os.FileInfo
+	for _, dir := range append(h.files.resolver.WorkDirs(), h.dataDir) {
+		info, err := os.Stat(dir)
 		if err != nil {
-			return nil, err
+			// What cannot be found or stat'ed is no directory anything is
+			// served from either; one bad worktree must not refuse every page.
+			if !os.IsNotExist(err) {
+				h.files.log.Warn("cannot stat directory withheld from raw capabilities", "dir", dir, "error", err)
+			}
+			continue
 		}
-		// Anything but a plain directory, not only a symlink: Lstat reports a
-		// Windows junction as irregular, and os.Root may follow it all the same.
-		if info.Mode().Type() != fs.ModeDir {
-			return nil, fmt.Errorf("%s is not a plain directory (%s)", filepath.ToSlash(walked), info.Mode().Type())
+		withheld = append(withheld, info)
+	}
+	for dir := filepath.Dir(resolved); dir != "."; dir = filepath.Dir(dir) {
+		info, err := os.Stat(filepath.Join(workDir, dir))
+		if err != nil {
+			return false, err
+		}
+		for _, other := range withheld {
+			if os.SameFile(info, other) {
+				return true, nil
+			}
 		}
 	}
-	return root.OpenRoot(native)
+	return false, nil
 }
 
 // outsideScope answers a name the os.Root would not open. The root reports a
@@ -702,11 +713,11 @@ func (h *RawHandler) serveCommitFile(w *rawResponseWriter, r *http.Request, gran
 	}
 
 	// git looks a path up in the commit's tree without following symlinks — a
-	// link is a blob holding its target's name — so joining is all a directory
-	// scope needs: what is beneath it in the tree is beneath it.
+	// link is a blob holding its target's name — so the lexical checks are
+	// all a root scope needs.
 	repoPath := grant.Path
-	if grant.Scope == RawScopeDirectory {
-		repoPath = path.Join(grant.Path, rel)
+	if grant.Scope == RawScopeRoot {
+		repoPath = rel
 	}
 
 	open := func() (*git.Blob, error) { return git.OpenFile(r.Context(), workDir, grant.Hash, repoPath) }

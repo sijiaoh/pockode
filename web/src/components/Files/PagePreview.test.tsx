@@ -23,19 +23,17 @@ vi.mock("../../lib/pageHosts", async (importOriginal) => ({
 }));
 
 let issued = 0;
-const rawCapability = vi.fn(
-	async ({ scope }: { scope: "file" | "directory" }) => ({
-		path:
-			scope === "directory"
-				? `/api/raw/cap${++issued}/`
-				: `/api/raw/cap${++issued}/index.html`,
-		expiresAt: Date.now() + 4 * 60 * 60 * 1000,
-		worktree: "",
-	}),
-);
+const rawCapability = vi.fn(async ({ scope }: { scope: "file" | "root" }) => ({
+	path:
+		scope === "root"
+			? `/api/raw/cap${++issued}/`
+			: `/api/raw/cap${++issued}/index.html`,
+	expiresAt: Date.now() + 4 * 60 * 60 * 1000,
+	worktree: "",
+}));
 
 function renderPage(
-	origin: TreeOrigin = { kind: "file", path: "coverage/index.html" },
+	origin: TreeOrigin = { kind: "file", path: "index.html" },
 	revision: unknown = "v1",
 	content: string | null = "<p>A page</p>",
 ) {
@@ -114,17 +112,19 @@ describe("PagePreview", () => {
 		rawCapability.mockClear();
 	});
 
-	it("loads the page from its folder in a sandboxed frame", async () => {
+	it("loads the page at its path under the root in a sandboxed frame", async () => {
 		stubProbe();
 		renderPage({ kind: "file", path: "reports/cov erage/index.html" });
 
 		const element = await frame();
 		expect(rawCapability).toHaveBeenCalledWith({
-			origin: { kind: "file", path: "reports/cov erage" },
-			scope: "directory",
+			origin: { kind: "file" },
+			scope: "root",
 			page: { hosts: [] },
 		});
-		expect(pageUrlOf(element)).toBe(apiUrl("/api/raw/cap1/index.html"));
+		expect(pageUrlOf(element)).toBe(
+			apiUrl("/api/raw/cap1/reports/cov%20erage/index.html"),
+		);
 		// The page and the wrapper holding it to its capability: the sandbox on
 		// both, and the page's own policy is the server's.
 		expect(element.getAttribute("sandbox")).toBe(HTML_FRAME_SANDBOX);
@@ -137,21 +137,58 @@ describe("PagePreview", () => {
 		expect(screen.getByText("HTML · 2 KB")).toBeInTheDocument();
 	});
 
-	it("asks for the commit's folder for a page in a commit", async () => {
+	it("loads a page at the root through the root, with nothing to say", async () => {
+		stubProbe();
+		renderPage(
+			{ kind: "file", path: "index.html" },
+			"v1",
+			'<link rel="stylesheet" href="style.css">',
+		);
+
+		const element = await frame();
+		expect(rawCapability).toHaveBeenCalledWith({
+			origin: { kind: "file" },
+			scope: "root",
+			page: { hosts: [] },
+		});
+		expect(pageUrlOf(element)).toBe(apiUrl("/api/raw/cap1/index.html"));
+		expect(screen.queryByRole("note")).not.toBeInTheDocument();
+	});
+
+	// What the frame may navigate to is the root, not the page's folder, so a
+	// `../` reference stays under the capability.
+	it("holds a page's `../` references under its capability", async () => {
+		stubProbe();
+		renderPage({ kind: "file", path: "docs/site/index.html" });
+
+		const element = await frame();
+		const policy =
+			new DOMParser()
+				.parseFromString(element.srcdoc, "text/html")
+				.querySelector('meta[http-equiv="Content-Security-Policy"]')
+				?.getAttribute("content") ?? "";
+		const root = apiUrl("/api/raw/cap1/");
+		expect(policy).toContain(`frame-src ${root}`);
+		expect(new URL("../shared/style.css", pageUrlOf(element) ?? "").href).toBe(
+			`${root}docs/shared/style.css`,
+		);
+	});
+
+	it("asks for the commit's root for a page in a commit", async () => {
 		stubProbe();
 		renderPage({ kind: "commit", hash: "abc", path: "site/index.html" });
 
-		await frame();
+		const element = await frame();
 		expect(rawCapability).toHaveBeenCalledWith({
-			origin: { kind: "commit", hash: "abc", path: "site" },
-			scope: "directory",
+			origin: { kind: "commit", hash: "abc" },
+			scope: "root",
 			page: { hosts: [] },
 		});
+		expect(pageUrlOf(element)).toBe(apiUrl("/api/raw/cap1/site/index.html"));
 	});
 
-	// The server refuses a directory scope for both, so asking would fail.
+	// The server's root scope withholds them, so asking through it would fail.
 	it.each([
-		["at the root", "index.html"],
 		["in a hidden folder", "docs/.vitepress/dist/index.html"],
 		["named as a hidden file", "docs/.draft.html"],
 	])("asks for the page alone %s", async (_, path) => {
@@ -167,45 +204,21 @@ describe("PagePreview", () => {
 		expect(pageUrlOf(element)).toBe(apiUrl("/api/raw/cap1/index.html"));
 	});
 
-	// The server's directory scope never follows a link on its way: a folder
-	// that is one could not serve even the page.
-	it("falls back to the page alone, and says so, when its folder's capability cannot reach it", async () => {
+	it("shows a page the root does not reach as a failure, not on its own", async () => {
 		stubProbe(
 			Response.json(
-				{ error: "site is not a plain directory", code: "outside_scope" },
+				{ error: "outside the capability's scope", code: "outside_scope" },
 				{ status: 403 },
 			),
 		);
-		renderPage(
-			{ kind: "file", path: "site/index.html" },
-			"v1",
-			'<script type="module" src="app.js"></script>',
-		);
+		renderPage({ kind: "file", path: "site/index.html" });
 
 		pageLoaded(await frame());
-		await vi.waitFor(async () =>
-			expect(capabilityOf(await frame())).toBe("cap2"),
-		);
-		expect(rawCapability).toHaveBeenLastCalledWith({
-			origin: { kind: "file", path: "site/index.html" },
-			scope: "file",
-			page: { hosts: [] },
-		});
-		expect(pageUrlOf(await frame())).toBe(apiUrl("/api/raw/cap2/index.html"));
-		expect(screen.getByRole("note")).toHaveTextContent(
-			"A page whose folder can't be opened for it is shown on its own",
-		);
-		expect(screen.queryByText("Couldn't load page")).not.toBeInTheDocument();
-
-		// The viewer starts where this frame ended up, rather than trying again.
-		await userEvent.click(
-			screen.getByRole("button", { name: "View full screen" }),
-		);
-		const staged = await within(
-			await screen.findByRole("dialog"),
-		).findByTitle<HTMLIFrameElement>("index.html");
-		expect(pageUrlOf(staged)).toBe(apiUrl("/api/raw/cap2/index.html"));
-		expect(rawCapability).toHaveBeenCalledTimes(2);
+		expect(await screen.findByText("Couldn't load page")).toBeInTheDocument();
+		expect(
+			screen.getByText(/Pages can't be shown from here/),
+		).toBeInTheDocument();
+		expect(rawCapability).toHaveBeenCalledTimes(1);
 	});
 
 	it("checks the page's first load with one byte, and nothing it navigates to", async () => {
@@ -523,88 +536,35 @@ describe("PagePreview", () => {
 
 	describe("notice for a page shown on its own", () => {
 		const LINKED = '<link rel="stylesheet" href="style.css"><p>A page</p>';
+		const HIDDEN: TreeOrigin = {
+			kind: "file",
+			path: "docs/.vitepress/index.html",
+		};
 		const notice = () => screen.queryByRole("note");
 
-		afterEach(() => {
-			useWSStore.setState({ remoteUrl: "" });
-		});
-
 		it.each([
+			["in a hidden folder", HIDDEN],
+			["named as a hidden file", { kind: "file", path: "docs/.draft.html" }],
 			[
-				"at the worktree root",
-				{ kind: "file", path: "index.html" },
-				"A page at the root of the project is shown on its own",
-			],
-			[
-				"at the commit root",
-				{ kind: "commit", hash: "abc", path: "index.html" },
-				"A page at the root of the repository is shown on its own",
-			],
-			[
-				"in a hidden folder",
-				{ kind: "file", path: "docs/.vitepress/index.html" },
-				"A page inside a hidden folder is shown on its own",
-			],
-			[
-				"named as a hidden file",
-				{ kind: "file", path: "docs/.draft.html" },
-				"A hidden page is shown on its own",
-			],
-		] satisfies [
-			string,
-			TreeOrigin,
-			string,
-		][])("says why its linked files won't load %s", async (_, origin, why) => {
-			stubProbe();
-			renderPage(origin, "v1", LINKED);
-
-			expect(await screen.findByRole("note")).toHaveTextContent(why);
-		});
-
-		it.each([
-			[
-				"a root page with a hidden name",
-				{ kind: "file", path: ".draft.html" },
-				"Move it into a folder and rename it without the leading dot to load them.",
-			],
-			[
-				"a page in a hidden folder",
-				{ kind: "file", path: "docs/.vitepress/index.html" },
-				"Move it out of the hidden folder to load them.",
-			],
-			[
-				"a page with a hidden name",
-				{ kind: "file", path: "docs/.draft.html" },
-				"Rename it without the leading dot to load them.",
-			],
-			[
-				"a commit's page in a hidden folder",
+				"in a commit's hidden folder",
 				{ kind: "commit", hash: "abc", path: ".github/index.html" },
-				"can't reach the rest of the repository (.env, .git). Move it out of the hidden folder to load them.",
 			],
 		] satisfies [
 			string,
 			TreeOrigin,
-			string,
-		][])("says what frees %s", async (_, origin, text) => {
+		][])("says its linked files won't load %s", async (_, origin) => {
 			stubProbe();
 			renderPage(origin, "v1", LINKED);
 
-			expect(await screen.findByRole("note")).toHaveTextContent(text);
-		});
-
-		it("is not shown for a page its folder's capability reaches", async () => {
-			stubProbe();
-			renderPage({ kind: "file", path: "site/index.html" }, "v1", LINKED);
-
-			await frame();
-			expect(notice()).not.toBeInTheDocument();
+			expect(await screen.findByRole("note")).toHaveTextContent(
+				"Files this page links to won't load",
+			);
 		});
 
 		it("is not shown for a page that links to nothing", async () => {
 			stubProbe();
 			renderPage(
-				{ kind: "file", path: "index.html" },
+				HIDDEN,
 				"v1",
 				'<a href="#top">Top</a><img src="data:image/png;base64,AA==">',
 			);
@@ -615,67 +575,23 @@ describe("PagePreview", () => {
 
 		it("is shown for a page too large to read", async () => {
 			stubProbe();
-			renderPage({ kind: "file", path: "index.html" }, "v1", null);
+			renderPage(HIDDEN, "v1", null);
 
 			expect(await screen.findByRole("note")).toBeInTheDocument();
 		});
 
-		it("offers Port Preview only while the relay is there", async () => {
+		it("shows in the viewer too", async () => {
 			stubProbe();
 			const user = userEvent.setup();
-			useWSStore.setState({ remoteUrl: "" });
-			renderPage({ kind: "file", path: "index.html" }, "v1", LINKED);
-
-			expect(await screen.findByRole("note")).toHaveTextContent(
-				"Move it into a folder to load them.",
-			);
-			expect(
-				screen.queryByRole("button", { name: "Port Preview" }),
-			).not.toBeInTheDocument();
-
-			act(() => {
-				useWSStore.setState({ remoteUrl: "https://abc.cloud.pockode.com" });
-			});
-			expect(screen.getByRole("note")).toHaveTextContent(
-				"Move it into a folder, or serve it and use Port Preview ›.",
-			);
-			await user.click(screen.getByRole("button", { name: "Port Preview" }));
-			expect(await screen.findByRole("dialog")).toBeInTheDocument();
-		});
-
-		it("offers no Port Preview for a page in a commit", async () => {
-			stubProbe();
-			useWSStore.setState({ remoteUrl: "https://abc.cloud.pockode.com" });
-			renderPage(
-				{ kind: "commit", hash: "abc", path: "index.html" },
-				"v1",
-				LINKED,
-			);
-
-			expect(await screen.findByRole("note")).toHaveTextContent(
-				"Move it into a folder to load them.",
-			);
-			expect(
-				screen.queryByRole("button", { name: "Port Preview" }),
-			).not.toBeInTheDocument();
-		});
-
-		it("shows in the viewer as text only", async () => {
-			stubProbe();
-			const user = userEvent.setup();
-			useWSStore.setState({ remoteUrl: "https://abc.cloud.pockode.com" });
-			renderPage({ kind: "file", path: "index.html" }, "v1", LINKED);
+			renderPage(HIDDEN, "v1", LINKED);
 
 			await user.click(
 				await screen.findByRole("button", { name: "View full screen" }),
 			);
 			const dialog = await screen.findByRole("dialog");
 			expect(within(dialog).getByRole("note")).toHaveTextContent(
-				"Move it into a folder to load them.",
+				"Files this page links to won't load",
 			);
-			expect(
-				within(dialog).queryByRole("button", { name: "Port Preview" }),
-			).not.toBeInTheDocument();
 		});
 	});
 });
