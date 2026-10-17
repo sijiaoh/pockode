@@ -21,6 +21,9 @@ function hostSources(host: string) {
 const TYPES: Record<string, string> = {
 	htm: "text/html; charset=utf-8",
 	js: "text/javascript; charset=utf-8",
+	png: "image/png",
+	webm: "video/webm",
+	wav: "audio/wav",
 };
 
 /**
@@ -33,7 +36,8 @@ const TYPES: Record<string, string> = {
  * A capability names the hosts the server would have bound to it, since
  * nothing here keeps any: `<id>~<host>~<host>`, a host's `:` written `_`.
  * `{{OTHER}}` in a page is the test server's other name (`otherHost` in
- * `src/test/testServerHosts.ts`), which stands in for another host.
+ * `src/test/testServerHosts.ts`), which stands in for another host. Media is
+ * served whole or by a byte range, as WebKit asks for it.
  */
 export function rawPages(): Plugin {
 	return {
@@ -68,17 +72,48 @@ export function rawPages(): Plugin {
 				res.setHeader("Access-Control-Allow-Origin", "*");
 				res.setHeader("Cache-Control", "no-store");
 
-				let body: string;
+				let bytes: Buffer;
 				try {
-					body = readFileSync(new URL(file, HERE), "utf8");
+					bytes = readFileSync(new URL(file, HERE));
 				} catch {
 					res.statusCode = 404;
 					res.end(JSON.stringify({ code: "not_found" }));
 					return;
 				}
-				body = body.replaceAll("{{OTHER}}", otherHost(host.split(":")[1]));
 				const type = TYPES[file.split(".").pop() ?? ""] ?? "text/plain";
 				res.setHeader("Content-Type", type);
+				if (!type.startsWith("text/")) {
+					res.setHeader("Accept-Ranges", "bytes");
+					const range = req.headers.range?.match(/^bytes=(\d*)-(\d*)$/);
+					if (!range) {
+						res.end(bytes);
+						return;
+					}
+					// `bytes=-N` is the last N bytes.
+					const start = range[1]
+						? Number(range[1])
+						: Math.max(0, bytes.length - Number(range[2]));
+					const end =
+						range[1] && range[2]
+							? Math.min(Number(range[2]), bytes.length - 1)
+							: bytes.length - 1;
+					if (start >= bytes.length || start > end) {
+						res.statusCode = 416;
+						res.setHeader("Content-Range", `bytes */${bytes.length}`);
+						res.end();
+						return;
+					}
+					res.statusCode = 206;
+					res.setHeader(
+						"Content-Range",
+						`bytes ${start}-${end}/${bytes.length}`,
+					);
+					res.end(bytes.subarray(start, end + 1));
+					return;
+				}
+				let body = bytes
+					.toString("utf8")
+					.replaceAll("{{OTHER}}", otherHost(host.split(":")[1]));
 				if (
 					type.startsWith("text/html") &&
 					req.headers["sec-fetch-dest"] === "iframe"

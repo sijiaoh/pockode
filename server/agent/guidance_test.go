@@ -30,13 +30,14 @@ func TestGuidance_CarriesTheAskingRulesNeededBeforeLoading(t *testing.T) {
 }
 
 // html_render is only a name until loaded, like question_post, so when to
-// reach for it — and that the reply does not repeat what it showed — has to
-// be seen before then too.
+// reach for it — that it can show project files, and that the reply does not
+// repeat what it showed — has to be seen before then too.
 func TestGuidance_CarriesTheRenderingRulesNeededBeforeLoading(t *testing.T) {
 	for _, want := range []string{
 		"html_render",
 		"tool search",
 		"richer than Markdown",
+		"project files",
 		"Do not repeat",
 	} {
 		if !strings.Contains(renderingGuidance, want) {

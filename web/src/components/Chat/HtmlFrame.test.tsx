@@ -1,4 +1,6 @@
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen } from "@testing-library/react";
+import type { ReactNode } from "react";
 import { describe, expect, it } from "vitest";
 import { pagePolicy } from "../../lib/pageHosts";
 import { HTML_FRAME_SANDBOX, HtmlFrame } from "./HtmlFrame";
@@ -16,11 +18,21 @@ function pageFrame(wrapper: HTMLIFrameElement): HTMLIFrameElement {
 	return inner;
 }
 
+// Offline, as the WebSocket starts in tests: drawn at once, with no capability
+// for the project to wait for.
+const withQueryClient = ({ children }: { children: ReactNode }) => (
+	<QueryClientProvider client={new QueryClient()}>
+		{children}
+	</QueryClientProvider>
+);
+
 describe("HtmlFrame", () => {
 	// The card and the full screen viewer both draw a page through this frame,
 	// so this is the one place the security floor is held.
 	it("lets scripts and popups run, and never same-origin or modals", () => {
-		render(<HtmlFrame html="<p>hi</p>" title="Page" pageKey="call" />);
+		render(<HtmlFrame html="<p>hi</p>" title="Page" pageKey="call" />, {
+			wrapper: withQueryClient,
+		});
 		const wrapper = screen.getByTitle<HTMLIFrameElement>("Page");
 
 		for (const frame of [wrapper, pageFrame(wrapper)]) {
@@ -47,6 +59,7 @@ describe("HtmlFrame", () => {
 				title="Page"
 				pageKey="call"
 			/>,
+			{ wrapper: withQueryClient },
 		);
 		const wrapper = screen.getByTitle<HTMLIFrameElement>("Page");
 		const meta = `<meta http-equiv="Content-Security-Policy" content="${pagePolicy([])}">`;

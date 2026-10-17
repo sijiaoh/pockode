@@ -8,6 +8,8 @@ import {
 	useState,
 } from "react";
 import { usePageReports } from "../../hooks/usePageReports";
+import { useRawMediaSource } from "../../hooks/useRawMediaSource";
+import { projectRelativeHtml } from "../../lib/htmlRender";
 import {
 	allowedPageHosts,
 	allowPageHosts,
@@ -18,6 +20,10 @@ import {
 	useAllowedPageHosts,
 	WRAPPER_STYLE,
 } from "../../lib/pageHosts";
+import type { RawTarget } from "../../lib/rpc/raw";
+import { useWSStore } from "../../lib/wsStore";
+import { asError } from "../../utils/errorMessage";
+import PageNotice from "../Media/PageNotice";
 import { PageHostsStrip } from "../ui/PageHostsStrip";
 
 /**
@@ -53,13 +59,49 @@ const APP_FROM_PAGE = "parent.parent";
 const HEIGHT_REPORTER = `<script>(function(){var last=-1;function report(){var d=document.documentElement;var h=Math.ceil(d.scrollHeight>innerHeight?d.scrollHeight:d.getBoundingClientRect().height);if(h!==last){last=h;${APP_FROM_PAGE}.postMessage({type:"${HEIGHT_MESSAGE}",height:h},"*");}}new ResizeObserver(report).observe(document.documentElement);addEventListener("load",report);})();</script>`;
 
 /**
+ * What a page reaches of the project: a root capability for the worktree the
+ * connection is on — the one HTML file previews load through — under no hosts,
+ * since the page's own policy, written here, is what holds it to the reader's.
+ */
+const PROJECT_TARGET: RawTarget = {
+	origin: { kind: "file" },
+	scope: "root",
+	page: { hosts: [] },
+};
+
+/**
+ * The project a page is drawn under: `root` the capability's absolute URL,
+ * ending in `/`, and `workDir` the directory absolute paths in the page are
+ * made relative to.
+ */
+interface Project {
+	root: string;
+	workDir: string;
+}
+
+const OWN_BASE = /<base\b[^>]*\bhref\s*=/i;
+
+/**
  * The page as the frame draws it: the policy at byte 0, before anything the
  * agent wrote — a `srcdoc` document is never in quirks mode, so a doctype
- * after it changes nothing — then the reporter, so it hears what the head is
- * refused, then the page as written.
+ * after it changes nothing — then the base its relative URLs resolve
+ * against, the root of the worktree, unless it sets its own, then the
+ * reporter, so it hears what the head is refused, then the page as written.
  */
-function pageDocument(html: string, hosts: readonly string[], sized: boolean) {
-	return `${pagePolicyMeta(hosts)}${pageReporterScript(APP_FROM_PAGE)}${html}${sized ? `\n${HEIGHT_REPORTER}` : ""}`;
+function pageDocument(
+	html: string,
+	hosts: readonly string[],
+	sized: boolean,
+	project: Project | null,
+) {
+	// A page's own base is the one it was written against; ours would only
+	// take its place, the first `<base href>` being the one that counts.
+	const base =
+		project && !OWN_BASE.test(html)
+			? `<base href="${escapeAttribute(project.root)}">`
+			: "";
+	const page = project ? projectRelativeHtml(html, project.workDir) : html;
+	return `${pagePolicyMeta(hosts, project?.root)}${base}${pageReporterScript(APP_FROM_PAGE)}${page}${sized ? `\n${HEIGHT_REPORTER}` : ""}`;
 }
 
 /**
@@ -77,8 +119,9 @@ function wrapperDocument(
 	title: string,
 	hosts: readonly string[],
 	sized: boolean,
+	project: Project | null,
 ) {
-	return `${pagePolicyMeta(hosts)}<script>${LEFT_LISTENER}</script>${WRAPPER_STYLE}<iframe title="${escapeAttribute(title)}" sandbox="${HTML_FRAME_SANDBOX}" srcdoc="${escapeAttribute(pageDocument(html, hosts, sized))}"></iframe>`;
+	return `${pagePolicyMeta(hosts, project?.root)}<script>${LEFT_LISTENER}</script>${WRAPPER_STYLE}<iframe title="${escapeAttribute(title)}" sandbox="${HTML_FRAME_SANDBOX}" srcdoc="${escapeAttribute(pageDocument(html, hosts, sized, project))}"></iframe>`;
 }
 
 /** What a page is drawn from; another of any of these is another document. */
@@ -96,6 +139,14 @@ interface DrawnDocument {
 	hosts: readonly string[];
 	/** Drawn by a Load, which hands the frame the focus. */
 	byLoad: boolean;
+	/**
+	 * Undefined while the capability is being asked for, and the frame waits
+	 * for it; null when there is none to be had, and the page is drawn as it
+	 * was before it could reach the project.
+	 */
+	project: Project | null | undefined;
+	/** Why there is no project to be had, when asking for it failed. */
+	projectError: Error | null;
 }
 
 function drawn(source: Source, id: number, byLoad: boolean): DrawnDocument {
@@ -104,6 +155,10 @@ function drawn(source: Source, id: number, byLoad: boolean): DrawnDocument {
 		source,
 		hosts: [...allowedPageHosts(source.pageKey)].sort(),
 		byLoad,
+		// Offline there is no capability to wait for, and a page that reaches
+		// no project file is as readable without one.
+		project: useWSStore.getState().status === "connected" ? undefined : null,
+		projectError: null,
 	};
 }
 
@@ -183,6 +238,7 @@ export function HtmlFrame({
 		},
 	});
 	const { clear } = reports;
+	const { fresh } = useRawMediaSource(PROJECT_TARGET, false);
 
 	const redraw = useCallback(
 		(next: Source, byLoad: boolean) => {
@@ -196,14 +252,44 @@ export function HtmlFrame({
 	// document's strip over the new one.
 	if (!sameSource(doc.source, source)) redraw(source, false);
 
+	// Each document takes a capability with time left on it (`fresh`), so a
+	// Reload after hours is not drawn under one that has expired. Failing, the
+	// page is drawn without one, under a notice that says why.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: asked for once per document, which `doc.id` names
+	useEffect(() => {
+		if (doc.project !== undefined) return;
+		const controller = new AbortController();
+		const settle = (project: Project | null, projectError: Error | null) => {
+			if (controller.signal.aborted) return;
+			setDoc((current) =>
+				current.id === doc.id ? { ...current, project, projectError } : current,
+			);
+		};
+		fresh(controller.signal).then(
+			({ src }) =>
+				settle(
+					{
+						root: new URL(src, location.href).href,
+						workDir: useWSStore.getState().workDir,
+					},
+					null,
+				),
+			(error: unknown) => settle(null, asError(error)),
+		);
+		return () => controller.abort();
+	}, [doc.id]);
+
 	const srcDoc = useMemo(
 		() =>
-			wrapperDocument(
-				doc.source.html,
-				doc.source.title,
-				doc.hosts,
-				doc.source.sized,
-			),
+			doc.project === undefined
+				? null
+				: wrapperDocument(
+						doc.source.html,
+						doc.source.title,
+						doc.hosts,
+						doc.source.sized,
+						doc.project,
+					),
 		[doc],
 	);
 
@@ -232,20 +318,27 @@ export function HtmlFrame({
 					onOpenLink={reports.openLink}
 				/>
 			)}
+			{doc.projectError && (
+				<PageNotice>
+					Project files won't load on this page: {doc.projectError.message}
+				</PageNotice>
+			)}
 			<div ref={boxRef} className={boxClassName} style={boxStyle}>
 				{/* A new frame for a new document, rather than a new `srcdoc`
 				    in the old one, which would add a history entry that Back —
 				    and the full-screen viewer's back-to-close — would step
 				    through with nothing visible happening. */}
-				<iframe
-					key={doc.id}
-					ref={ref}
-					title={doc.source.title}
-					srcDoc={srcDoc}
-					sandbox={HTML_FRAME_SANDBOX}
-					className="block h-full w-full border-0 bg-white"
-					style={{ colorScheme: "light" }}
-				/>
+				{srcDoc !== null && (
+					<iframe
+						key={doc.id}
+						ref={ref}
+						title={doc.source.title}
+						srcDoc={srcDoc}
+						sandbox={HTML_FRAME_SANDBOX}
+						className="block h-full w-full border-0 bg-white"
+						style={{ colorScheme: "light" }}
+					/>
+				)}
 			</div>
 		</div>
 	);

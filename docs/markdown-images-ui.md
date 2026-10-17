@@ -48,6 +48,13 @@ path's `?query` and `#fragment` are dropped and its percent-escapes decoded
 before it is resolved, so `my%20shot.png` and `<my shot.png>` name the same
 file.
 
+HTML pages get project files another way, by URL from a [raw
+capability](code/authentication.md#raw-capabilities-urls-a-browser-element-loads-by-itself)
+rather than through this pipeline, but from the same places: an `.html` file
+resolves against its own path ([file.md](file.md#html-pages)), and an
+`html_render` page against the root of the worktree, an absolute path under the
+work directory included ([tool-call-ui.md](tool-call-ui.md#project-files)).
+
 Absolute paths are here because an agent names the file it just wrote by its
 full path as often as by a relative one, and the transcript must show both. A
 path outside the work directory is not read even when the server could reach

@@ -537,15 +537,20 @@ the input schema, and nothing else:
 - `title` — required; a short name for what the page shows.
 - `html` — required; a full document or a fragment, rendered as written in a
   sandboxed iframe, where it reaches no other host until the user allows it
-  ([page-external-hosts-ui.md](../page-external-hosts-ui.md)).
+  ([page-external-hosts-ui.md](../page-external-hosts-ui.md)) but does reach
+  project files, by a relative path from the worktree root or an absolute one
+  under the work directory
+  ([tool-call-ui.md](../tool-call-ui.md#project-files)).
 
 Either one empty or whitespace-only is refused as a user error — blank HTML is
 a blank frame, not a page, and a page with no title leaves the user nothing to
 tell it by. `html` over 256KB
 (`maxHTMLRenderBytes`) is refused too, naming the size: that history keeps the
 whole input, so the cap is what it can afford to carry, not what a browser could
-draw. The reply on success tells the agent the page is shown and not to repeat
-its content, which is the one rule worth restating at the moment it applies.
+draw. The refusal points the agent at a project file for large data or
+libraries — referenced, it costs the history a path instead of its bytes. The
+reply on success tells the agent the page is shown and not to repeat its
+content, which is the one rule worth restating at the moment it applies.
 When to reach for the tool at all is in the guidance every session gets before
 it has loaded one
 ([agent-integration.md](agent-integration.md#telling-the-agent-when-to-ask)).

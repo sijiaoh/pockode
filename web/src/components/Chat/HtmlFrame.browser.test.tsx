@@ -1,5 +1,12 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import {
+	render as renderUi,
+	screen,
+	waitFor,
+	within,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import type { ReactElement } from "react";
 import {
 	afterEach,
 	beforeAll,
@@ -16,6 +23,8 @@ import {
 	resetPageHosts,
 	watchAppInput,
 } from "../../lib/pageHosts";
+import type { RawTarget } from "../../lib/rpc/raw";
+import { useWSStore, wsActions } from "../../lib/wsStore";
 // Says, from inside the page, that a request to another host went through.
 import landedPath from "../../test/page-hosts/landed.htm?url";
 import signalPath from "../../test/page-hosts/signal.js?url";
@@ -31,6 +40,12 @@ const OTHER_HOST = otherHost(location.port);
 const SIGNAL_URL = `http://${OTHER_HOST}${signalPath}`;
 const LANDED_URL = `http://${OTHER_HOST}${landedPath}`;
 const KEY = "call-under-test";
+
+function render(ui: ReactElement) {
+	return renderUi(
+		<QueryClientProvider client={new QueryClient()}>{ui}</QueryClientProvider>,
+	);
+}
 
 /** Every `signal` a page posts the test, as it arrives. */
 let signals: string[] = [];
@@ -452,5 +467,101 @@ addEventListener("message", function(e){ if (e.data === "go") location.href = "$
 			);
 			expect(signals).not.toContain("landed");
 		});
+	});
+});
+
+// `src/test/page-hosts/` stands in for the worktree, served under a root
+// capability as the server serves it (`vitest.rawPages.ts`).
+describe("an agent's page reaching the project", () => {
+	const WORK_DIR = "/home/me/project";
+	const rawCapability = vi.fn(async (_target: RawTarget) => ({
+		path: "/api/raw/root/",
+		expiresAt: Date.now() + 60 * 60 * 1000,
+		worktree: "",
+	}));
+	const signal = (name: string) =>
+		`parent.parent.postMessage({signal:${name}},'*')`;
+
+	beforeEach(() => {
+		signals = [];
+		window.addEventListener("message", onSignal);
+		useWSStore.setState({ status: "connected", workDir: WORK_DIR });
+		vi.spyOn(wsActions, "rawCapability").mockImplementation(rawCapability);
+	});
+	afterEach(() => {
+		window.removeEventListener("message", onSignal);
+		useWSStore.setState({ status: "disconnected", workDir: "" });
+		resetPageHosts();
+		vi.restoreAllMocks();
+		rawCapability.mockClear();
+	});
+
+	async function signalled(...names: string[]) {
+		await waitFor(
+			() => expect(signals).toEqual(expect.arrayContaining(names)),
+			{
+				timeout: 5000,
+			},
+		);
+	}
+
+	it("loads images, video, audio, scripts and data by paths from the root", async () => {
+		renderPage(`<img src="media/shot.png" onload="${signal("'image'+this.naturalWidth")}">
+<video src="media/clip.webm" preload="auto" onloadedmetadata="${signal("'video'+this.videoWidth")}"></video>
+<audio src="media/tone.wav" preload="auto" onloadedmetadata="${signal("'audio'")}"></audio>
+<script src="site/own.js"></script>
+<script>fetch("site/own.js").then(function(r){if(r.ok)${signal("'data'")}})</script>`);
+
+		await signalled("image8", "video64", "audio", "own", "data");
+		expect(rawCapability).toHaveBeenCalledWith({
+			origin: { kind: "file" },
+			scope: "root",
+			page: { hosts: [] },
+		});
+		expect(screen.queryByRole("group")).toBeNull();
+	});
+
+	it("takes an absolute path under the work directory for the file it names", async () => {
+		renderPage(`<img src="${WORK_DIR}/media/shot.png" onload="${signal("'image'")}">
+<img src="file://${WORK_DIR}/media/shot.png" onload="${signal("'file'")}">
+<p id="text">Saved to ${WORK_DIR}/media/shot.png</p>
+<script>${signal("document.getElementById('text').textContent")}</script>`);
+
+		await signalled("image", "file");
+		// The path the page shows the reader is theirs to read as written.
+		expect(signals).toContain(`Saved to ${WORK_DIR}/media/shot.png`);
+	});
+
+	it("follows a link into the page in place", async () => {
+		renderPage(`<a id="down" href="#end">Down</a>
+<div style="height: 2000px"></div>
+<p id="end">End</p>
+<script>
+addEventListener("hashchange", function () { ${signal("location.hash+(scrollY>0?' scrolled':'')")} });
+addEventListener("load", function () { document.getElementById("down").click(); });
+</script>`);
+
+		await signalled("#end scrolled");
+		await settle(500);
+		expect(screen.queryByRole("group")).toBeNull();
+	});
+
+	it("is drawn as before when no capability can be had", async () => {
+		rawCapability.mockRejectedValueOnce(new Error("no capability"));
+		renderPage(`<img src="media/shot.png" onload="${signal("'image'")}" onerror="${signal("'refused'")}">
+<script>${signal("'ran'")}</script>`);
+
+		await signalled("ran", "refused");
+		expect(signals).not.toContain("image");
+		expect(screen.getByRole("note")).toHaveTextContent(
+			"Project files won't load on this page: no capability",
+		);
+	});
+
+	it("keeps a base the page sets itself", async () => {
+		renderPage(`<base href="https://cdn.example/lib/">
+<script>${signal("document.baseURI")}</script>`);
+
+		await signalled("https://cdn.example/lib/");
 	});
 });
