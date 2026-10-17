@@ -229,8 +229,8 @@ show it.
     frame is part of the same preview and is allowed the same hosts — the
     reader cannot see which inner page the frame is on (its location belongs
     to another origin), so the allowance cannot be narrower than what the
-    frame shows. Opening a sibling file separately is a different page and
-    asks for itself.
+    frame shows. Opening another file of the project separately is a
+    different page and asks for itself.
 - **It survives the file being rewritten.** An agent iterating on
   `dashboard.html` while the reader watches would otherwise re-ask on every
   save. This is the Markdown rule's streaming case
@@ -324,7 +324,7 @@ is: the reporter in the page takes a plain click on an `<a>` or `<area>` that
 would navigate the frame (no `target`, or `_self`, `_parent`, `_top`) to an
 `http(s)` URL, stops it, and reports it, and the app opens the URL in a new
 tab, `noopener` and `noreferrer`. On a workspace page a link within the page's
-own capability — another page of its directory — is left alone and navigates
+own capability — another page of the project — is left alone and navigates
 in the frame.
 
 Unlike a diagram's, that report can be forged — the page's own scripts share
@@ -395,7 +395,9 @@ form-action 'none'                         (workspace: <own>)
 - `<own>` is nothing on an agent page, which has no files of its own. On a
   workspace page it is the page's capability path in full —
   `<base_url>/api/raw/<capability>/` — and not the app's origin, so the page
-  reaches its own directory and none of the rest of the server. No `'self'`
+  reaches its project, less what the root scope withholds
+  ([why](code/authentication.md#raw-capabilities-urls-a-browser-element-loads-by-itself)),
+  and none of the rest of the server. No `'self'`
   anywhere: in the opaque origin the sandbox gives the document it names
   nothing the page can be held to, and in a `srcdoc` it may name the app's
   origin.
@@ -443,9 +445,12 @@ own:
   frame-src <capability prefix>` — its own listener and style need the two
   in the middle — holding the page by URL,
   in a frame named `pockode-page`, with `referrerpolicy="no-referrer"`. The
-  page follows links within its directory and goes nowhere else — not to a
-  host, and not to another capability, whose hosts are another page's. One
-  wrapper per capability, which is why a new capability is a new frame. The
+  prefix is the capability's own URL, the root's with its trailing `/`
+  (`capabilityRoot`, handed to `rawPageWrapper` beside the page's URL), not
+  the page's folder, so a `../` link stays inside it. The page follows links
+  within its capability and goes nowhere else — not to a host, and not to
+  another capability, whose hosts are another page's. One wrapper per page
+  and capability, which is why a new capability is a new frame. The
   wrapper says when its page has loaded — the `load` event the app could hear
   is the wrapper's, not the page's — and loads the page again only when the app asks
   (`navigateWrapper`) — a navigation of the same frame, so Back steps through
@@ -514,11 +519,10 @@ Load writes to it. From there it reaches a policy through the app alone:
   `base_url` that is not `http(s)`, and a host on the `base_url`'s own
   hostname; it drops, when serving, any host that matches the `Host` the request came in on, on any port
   or with a trailing dot. A capability with hosts is never the shared one other
-  pages of the same directory open on: the client's cache keys on the host
-  set. Every capability the app asks for that page carries them — a renewal
-  after `capability_not_found`, a Retry, the fallback to a capability for the
-  page alone, the media viewer's — or the allowance would be lost on the next
-  renewal.
+  pages of the same worktree or commit open on: the client's cache keys on the
+  host set. Every capability the app asks for that page carries them — a
+  renewal after `capability_not_found`, a Retry, the media viewer's — or the
+  allowance would be lost on the next renewal.
 
 So nothing the page can do widens its own policy: what it posts is only ever
 shown, the allowance is a variable it has no handle on, the capability's hosts
@@ -536,7 +540,8 @@ one document the app gave it.
     a link opens on a real tap and not on the activation a Load leaves or a tap
     in another frame.
   - `Files/PagePreview.browser.test.tsx` — its own files load and another host
-    only after Load; links within the directory navigate and others ask first;
+    only after Load; links within the project, `../` included, navigate and
+    others ask first;
     it never frames a document from an allowed host; it cannot leave for
     another host, for a capability that grants the host, by `open(_self)` or
     by form, cannot widen its policy through its own capability's URL, and gets

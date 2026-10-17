@@ -210,6 +210,16 @@ func (r *Registry) ListState() ([]Info, bool) {
 	return result, r.isGitRepo
 }
 
+// WorkDirs is the directory of every worktree List gives, main included.
+func (r *Registry) WorkDirs() []string {
+	list := r.List()
+	dirs := make([]string, len(list))
+	for i, info := range list {
+		dirs[i] = info.Path
+	}
+	return dirs
+}
+
 // Create adds a worktree and runs the setup hook in it. The returned
 // SetupHookSkip is non-nil when the worktree exists but its setup hook could not
 // run, which the caller must report: the worktree is otherwise indistinguishable

@@ -42,7 +42,7 @@ capability for) in place of `source`, the `dimensions` and `duration` the
 opener's player already knows, and an optional `handoff` (see
 [Handover](#handover)). A page is `kind: "html"` with an `origin` (a work
 directory or commit file, loaded through the same kind of capability as the
-page in place — [its directory's, or its own](file.md#html-pages)), no
+page in place — [the project root's, or its own](file.md#html-pages)), no
 dimensions, and an optional `revision` (see [the HTML stage](#the-html-stage)).
 
 The host owns the open state and renders the viewer while it is open. Pass
@@ -329,19 +329,19 @@ Download, since Save is in the toolbar.
   page bar's): it spins until the load the app started has finished and stays
   pressable, and on a failure card it is Retry.
 - **Caption.** `HTML · 18.2 KB`; a page reports nothing to add.
-- **The notice.** A page whose linked files won't load
-  ([file.md](file.md#html-pages)) carries the opener's notice in the item
-  (`notice`), and the viewer shows the same strip under its toolbar — text
-  only, with no Port Preview, since that is a sheet and sheets do not nest.
+- **The notice.** A page whose linked files won't load — one with a hidden
+  name in its path, shown on its own ([file.md](file.md#html-pages)) — carries
+  the opener's notice in the item (`notice`), and the viewer shows the same
+  strip under its toolbar.
 - **Hosts not loaded.** The strip sits at the top of the stage, under the
   toolbar and the notice, as in place
   ([page-external-hosts-ui.md](page-external-hosts-ui.md)). It is no overlay,
   so it works inside the viewer's sheet. A Load here reloads the viewer's page
   only; the page in place underneath offers *Reload* when the viewer closes.
 - **Save** downloads the URL the stage loaded the page from — for a page
-  loaded through its directory, the capability plus the file name — through
-  `saveUrlRef`, not `saveRawFile`, which would ask for a second capability for
-  the file alone. Only the `.html`
+  loaded through the project root, the capability plus the page's path —
+  through `saveUrlRef`, not `saveRawFile`, which would ask for a second
+  capability for the file alone. Only the `.html`
   is saved, not its assets. It checks one byte first (`saveCheckedUrl`), as
   every streamed save does ([file.md](file.md#downloading)), but does not
   renew: the capability is the stage's, so a dead one is reported. Before the

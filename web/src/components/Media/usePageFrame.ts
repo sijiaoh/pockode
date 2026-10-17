@@ -34,6 +34,8 @@ interface State {
 	identity: string;
 	/** What the frame loads; set once and then only by the app's own loads. */
 	url: string | null;
+	/** The capability `url` is under, as `capabilityRoot` gives it. */
+	root: string | null;
 	/** Bumped for every load the app starts. */
 	generation: number;
 	/** The load the app started has finished. */
@@ -49,6 +51,7 @@ function initialState(identity: string): State {
 	return {
 		identity,
 		url: null,
+		root: null,
 		generation: 0,
 		loaded: false,
 		epoch: 0,
@@ -57,15 +60,23 @@ function initialState(identity: string): State {
 	};
 }
 
+/**
+ * The root scope's refusal of the page itself, said in the user's terms: the
+ * server's wording is about capabilities.
+ */
+const OUTSIDE_ROOT = new Error(
+	"Pages can't be shown from here: this file is in another worktree or in Pockode's data folder, or is a link to outside the project or into a hidden folder. Open it from where it really is.",
+);
+
 function sorted(hosts: ReadonlySet<string>): readonly string[] {
 	return [...hosts].sort();
 }
 
 /**
- * An HTML page in a sandboxed frame, loaded from a raw capability for the
- * directory it sits in so its relative assets load too (docs/file.md, "HTML
- * pages"). Spread `frameProps` on the `<iframe>`, and `strip` on a
- * `PageHostsStrip` above it.
+ * An HTML page in a sandboxed frame, loaded at its own path under a raw
+ * capability for the root of its tree, so its relative assets load too —
+ * `../` included (docs/file.md, "HTML pages"). Spread `frameProps` on the
+ * `<iframe>`, and `strip` on a `PageHostsStrip` above it.
  *
  * The page reaches no host the reader has not allowed for it
  * (docs/page-external-hosts-ui.md): the server binds the hosts to the
@@ -92,25 +103,19 @@ function sorted(hosts: ReadonlySet<string>): readonly string[] {
  *
  * `revision` stands for the page's content: a change reloads the page from
  * the start, which is what an edit to it calls for.
- *
- * A directory capability that cannot reach the page — its directory is
- * behind a link, which a directory scope never follows, or unreadable — is
- * given up for one for the page alone, which can still show it
- * (`unreachableFolder`). A caller that already knows, as the viewer does from
- * its opener, passes it in and skips the try.
  */
 export function usePageFrame(
-	page: { origin: TreeOrigin; fileName: string; unreachableFolder?: boolean },
+	page: { origin: TreeOrigin; fileName: string },
 	enabled: boolean,
 	revision?: unknown,
 ) {
 	const { origin, fileName } = page;
 	const worktree = useWorktreeStore((s) => s.current);
-	// Per worktree: the same path in another one may well be a plain folder.
-	const folderKey = `${worktree}:${JSON.stringify(origin)}`;
+	// Per worktree: the same path in another one is another file.
+	const originKey = `${worktree}:${JSON.stringify(origin)}`;
 	// What the reader's allowance is for: this file, wherever it is shown, and
-	// whatever the frame goes on to inside its directory.
-	const pageKey = `file:${folderKey}`;
+	// whatever the frame goes on to under its capability.
+	const pageKey = `file:${originKey}`;
 	const allowed = useAllowedPageHosts(pageKey);
 	const [drawn, setDrawn] = useState(() => ({
 		pageKey,
@@ -121,22 +126,16 @@ export function usePageFrame(
 		hosts = sorted(allowed);
 		setDrawn({ pageKey, hosts });
 	}
-	const [unreachableFor, setUnreachableFor] = useState<string | null>(null);
-	const unreachableFolder =
-		page.unreachableFolder === true || unreachableFor === folderKey;
-	// biome-ignore lint/correctness/useExhaustiveDependencies: `folderKey` is the identity of `origin`, which callers rebuild every render
+	// biome-ignore lint/correctness/useExhaustiveDependencies: `originKey` is the identity of `origin`, which callers rebuild every render
 	const target = useMemo<RawTarget>(
-		() => ({
-			...(unreachableFolder
-				? { origin, scope: "file" as const }
-				: pageRawTarget(origin)),
-			page: { hosts },
-		}),
-		[folderKey, unreachableFolder, hosts],
+		() => ({ ...pageRawTarget(origin), page: { hosts } }),
+		[originKey, hosts],
 	);
 	const source = useRawMediaSource(target, enabled);
 	const { refresh, fresh } = source;
-	const identity = `${source.key}:${fileName}`;
+	// The capability is the whole tree's, so the page is what tells two apart.
+	const path = origin.path;
+	const identity = `${source.key}:${path}`;
 
 	const [stored, setState] = useState(() => initialState(identity));
 	let state = stored;
@@ -146,8 +145,11 @@ export function usePageFrame(
 	}
 
 	const toPage = useCallback(
-		(capabilityUrl: string) => pageRawUrl(target, capabilityUrl, fileName),
-		[target, fileName],
+		(capabilityUrl: string) => ({
+			url: pageRawUrl(target, capabilityUrl, path),
+			root: capabilityRoot(capabilityUrl),
+		}),
+		[target, path],
 	);
 
 	// The first capability is taken as it comes; later ones only after a
@@ -165,7 +167,7 @@ export function usePageFrame(
 	) {
 		state = {
 			...state,
-			url: toPage(source.src),
+			...toPage(source.src),
 			epoch: source.epoch,
 			generation: state.url === null ? state.generation : state.generation + 1,
 			loaded: false,
@@ -236,7 +238,7 @@ export function usePageFrame(
 					asking.current = false;
 					update((current) => ({
 						busy: false,
-						url: toPage(src),
+						...toPage(src),
 						epoch,
 						generation: current.generation + 1,
 						loaded: false,
@@ -265,12 +267,6 @@ export function usePageFrame(
 		const signal = start();
 		probeRaw(url, signal).then((answer) => {
 			if (signal.aborted || answer.ok) return;
-			// Another capability, so another frame: this one's history ends with
-			// its first load, which adds no entry.
-			if (target.scope === "directory" && isOutsideScope(answer)) {
-				setUnreachableFor(folderKey);
-				return;
-			}
 			const last = recovery.current;
 			if (
 				isDeadCapability(answer) &&
@@ -283,7 +279,10 @@ export function usePageFrame(
 			update(() => ({
 				failure: isGone(answer)
 					? { kind: "gone" }
-					: { kind: "load", error: answer.error },
+					: {
+							kind: "load",
+							error: isOutsideScope(answer) ? OUTSIDE_ROOT : answer.error,
+						},
 			}));
 		});
 	};
@@ -327,14 +326,14 @@ export function usePageFrame(
 		navigateWrapper(element, state.url);
 	}, [state.generation, state.url]);
 
-	const root = state.url === null ? null : capabilityRoot(state.url);
+	const root = state.url === null ? null : state.root;
 	const frameKey = `${identity}:${root}`;
 	// biome-ignore lint/correctness/useExhaustiveDependencies: written once per wrapper, which `frameKey` names; a load under it navigates instead
 	const srcDoc = useMemo(
 		() =>
-			state.url === null
+			state.url === null || root === null
 				? null
-				: rawPageWrapper(state.url, fileName, HTML_FRAME_SANDBOX),
+				: rawPageWrapper(state.url, root, fileName, HTML_FRAME_SANDBOX),
 		[frameKey],
 	);
 
@@ -406,8 +405,6 @@ export function usePageFrame(
 			recovery.current = Date.now();
 			load(true);
 		},
-		/** Loaded on its own after its directory's capability could not reach it. */
-		unreachableFolder,
 		/** The URL the page was loaded from, for saving it. */
 		url: state.url,
 		/**

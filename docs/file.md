@@ -556,11 +556,11 @@ There are no params and no `Authorization` header. The capability comes from
 `raw.capability` ([code/websocket-rpc.md](code/websocket-rpc.md#raw-capabilities)),
 which also gives the path to open. It names the origin, which is a work-directory
 file, a file in a commit or a chat attachment. It also names the scope, which is
-one file or one directory and everything beneath it. `<path>` is the file's own
-name for a file scope, and a path beneath the directory for a directory scope.
-What a capability is bound to, how long it lives, why it is in the path, why a
-directory scope never serves a dotfile, what keeps a symlink from widening its
-scope and why any origin may read it are in
+one file or the whole work directory or commit. `<path>` is the file's own
+name for a file scope, and the project path for a root scope. What a capability
+is bound to, how long it lives, why it is in the path, why a page gets the root
+and what the root scope withholds, what keeps a symlink from widening its scope
+and why any origin may read it are in
 [code/authentication.md](code/authentication.md#raw-capabilities-urls-a-browser-element-loads-by-itself).
 
 Unlike the download endpoint, the content is served **as what it is**, since the
@@ -607,9 +607,9 @@ content at a path never changes.
 
 | Status | Code | When |
 |--------|------|------|
-| `400` | `invalid_path` | An empty or absolute path, or one that `..` leads out of, encoded or not — the directory scope's own trailing-`/` path included |
+| `400` | `invalid_path` | An empty or absolute path, or one that `..` leads out of, encoded or not — the root scope's own trailing-`/` path included |
 | `400` | `not_a_file` | A directory, a fifo, a device node, or a directory or submodule in the commit |
-| `403` | `outside_scope` | A name other than the file's for a file scope; a path with any component starting with `.` for a directory scope — a dotfile, a dot directory, `.` or `..`, and for a work-directory file on Windows a short name that resolves to one; for a work-directory file, a path that leaves the scope through a symlink, a scope directory with anything but a plain directory on its way, or any other failure to open either — a permission, a link loop. `os.Root` reports a link out of it with an error that cannot be told apart from those, so all of them are answered as out of reach, with the reason in the message |
+| `403` | `outside_scope` | A name other than the file's for a file scope. For a root scope, a path with any component starting with `.` — a dotfile, a dot directory, `.` or `..` — and, for a work-directory file, one whose resolved name has one (through a symlink, or on Windows a short name) or lies inside Pockode's data directory or another registered worktree, or whose name cannot be resolved. For a work-directory file, a path that leaves the work directory through a symlink, or any other failure to open it — a permission, a link loop. `os.Root` reports a link out of it with an error that cannot be told apart from those, so all of them are answered as out of reach, with the reason in the message |
 | `404` | `capability_not_found` | The capability was never issued, has expired, or its session has ended; ask `raw.capability` again |
 | `404` | `not_found` | No such file, commit path or attachment, or a commit that no longer exists. A hash git would refuse never gets this far: `raw.capability` resolved it when it issued the capability |
 | `404` | `worktree_not_found` / `session_not_found` | As for the endpoints above |
@@ -933,8 +933,9 @@ agent was sent is no different, once streaming, from one opened in Files.
   waits with the spinner up instead of failing: a relay reconnect is not
   something to make the user Retry.
 - **One capability per file.** The capability is cached in react-query under
-  `"raw-capability"`, the worktree, the origin and the scope (a page's
-  directory capability reaches more than a file one), and stays fresh until five
+  `"raw-capability"`, the worktree, the origin and the scope (a page's root
+  capability reaches the whole tree, so every page of a worktree or a commit
+  shares one; with a page's hosts too), and stays fresh until five
   minutes before it expires — so the preview and the viewer share one and the
   server's cap of 256 is not spent per mount. It is deliberately *not* under the
   description's key, where an image's bytes live: the description is
@@ -1033,40 +1034,36 @@ over `Media/usePageFrame.ts`). Diffs and chat attachments still show text.
   say, the notice below and then the strip of hosts not loaded. The frame is a
   wrapper holding the page, both `HTML_FRAME_SANDBOX`, the page
   `referrerpolicy="no-referrer"`, white under a light color scheme, as an
-  agent's page is. Links within the page's directory navigate inside it, so a
-  report can be browsed — and each page opened there is a Back entry of the
-  browser's, which Back steps through before it leaves the file. A link
-  anywhere else opens in a new tab.
-- **External hosts.** The page reaches its own directory and no other host
+  agent's page is. Links within the project navigate inside it, so a
+  report or a site can be browsed — and each page opened there is a Back
+  entry of the browser's, which Back steps through before it leaves the file.
+  A link anywhere else opens in a new tab.
+- **External hosts.** The page reaches the project and no other host
   until the reader allows it: what it was refused, a strip above it names and
   offers to load, and the hosts allowed are bound to the capability the page
   is loaded through. The rule, the strip and the security boundary are
   [page-external-hosts-ui.md](page-external-hosts-ui.md).
-- **Through the page's directory.** The frame loads a [raw
+- **Through the project's root.** The frame loads a [raw
   capability](code/authentication.md#raw-capabilities-urls-a-browser-element-loads-by-itself)
-  scoped to the directory the page is in, so its relative stylesheets,
-  scripts and images load from beside it; the page's URL is the capability
-  plus its encoded name. The client derives the scope from the path, mirroring
-  the server's grant rule (`pageRawTarget`): a page at the root of the worktree
-  or the commit, under any directory whose name starts with `.`, or named
-  with a leading `.` itself, gets a capability for itself alone
-  (`pageIsolation`), since the server refuses a directory scope there and
-  serves no dotfile under one — its relative assets do not load. Nor can
-  the path tell when the directory, or one above it, is a link — a directory
-  scope never follows one — or cannot be read: its capability cannot reach
-  even the page. The probe below says so (`403 outside_scope`), and the page
-  is loaded again, in a new frame, on a capability for itself alone
-  (`usePageFrame`'s `unreachableFolder`, remembered per worktree and handed
-  to the viewer so it starts there) rather than shown as a failure.
-- **Saying so.** Such a page still renders — many single-file pages work —
-  under a notice strip between the page bar and the frame
-  (`Media/PageNotice.tsx`): its linked files won't load, why (the root of the
-  project, or of the repository for a commit; a hidden folder; a hidden name;
-  a folder that could not be opened for it), and what frees it (move it into
-  a folder or out of the hidden one, rename it without the dot, open it from
-  a readable folder that is not a link). While the relay is there it ends "or serve it and use
-  Port Preview ›", which opens `PortPreviewSheet` — never inside a sheet, since
-  sheets do not nest, and never for a commit, since serving runs the worktree.
+  for the root of the worktree or the commit, and the page's URL is the
+  capability plus its encoded project path, so its relative stylesheets,
+  scripts and images, its `../` links and a script's `fetch("data.json")` load
+  what they would on disk (`pageRawTarget`, `pageRawUrl`). The page was written
+  by the agent working in the project, which can already read all of it, so it
+  is not held to its own folder; what the server withholds — dotfiles, other
+  worktrees, Pockode's data — is in the link above. A page whose own path has
+  a component starting with `.` — under `docs/.vitepress/dist`, or named with a
+  leading `.` itself — is one the root scope withholds, so the client asks for
+  a capability for that page alone instead (`isHiddenPage`); its relative
+  assets do not load. Anything else the root scope refuses (`403
+  outside_scope`: a page reached through a link out of the project or into a
+  hidden folder, one in another worktree or in Pockode's data folder) is shown
+  as a failure that says so, with no fallback: the page is to be opened from
+  where it really is.
+- **Saying so.** A page shown on its own still renders — many single-file
+  pages work — under a notice strip between the page bar and the frame
+  (`Media/PageNotice.tsx`): files it links to won't load, since its path has a
+  hidden name.
   It is shown only when it matters: the text is scanned with `DOMParser`,
   which runs nothing (`utils/pageReferences.ts`), for a relative `src`,
   `srcset`, `href`, `xlink:href` or `poster` on any element (and `data` on
@@ -1074,7 +1071,7 @@ over `Media/usePageFrame.ts`). Diffs and chat attachments still show text.
   `image-set(...)` or `@import` in a `<style>` or `style` attribute. Empty,
   fragment, absolute, protocol-relative, root-relative and
   `data:`/`blob:`/`mailto:`/`javascript:` values do not count, and a
-  `<base href>` that leaves the page's directory means nothing is relative. A
+  `<base href>` that is absolute or root-relative means nothing is relative. A
   URL only a script builds (`fetch("data.json")`) is beyond a scan that runs
   nothing, so such a page goes without the notice. A page too large to have
   been sent is assumed to link to something. The strip has no dismiss: it

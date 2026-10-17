@@ -296,7 +296,8 @@ are not real.
 
 The config also loads a stand-in for `/api/raw` (`web/vitest.rawPages.ts`), so
 workspace pages can be tested where an engine enforces their policy. It serves
-the pages under `web/src/test/page-hosts/site/` with the sandbox, policy and
+`web/src/test/page-hosts/` as the root of a project, a page in `site/` and one
+above it so that `../` is exercised, with the sandbox, policy and
 reporter read from `web/src/test/page-hosts/raw-contract.json`, which the Go
 test `TestRawPageContract` writes from the server's own code and checks on
 every run. So what the browsers enforce is the server's, not a copy: after

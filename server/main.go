@@ -452,7 +452,7 @@ Flags:
 	transferHandler := filetransfer.NewHandler(registry, slog.Default())
 	attachmentHandler := filetransfer.NewAttachmentHandler(worktreeManager, worktree.ErrWorktreeNotFound, worktree.ErrSessionNotFound, slog.Default())
 	// Issued over the WebSocket and resolved over HTTP: one instance for both.
-	rawHandler := filetransfer.NewRawHandler(sessions, transferHandler, attachmentHandler)
+	rawHandler := filetransfer.NewRawHandler(sessions, transferHandler, attachmentHandler, dataDir)
 
 	// The remote URL is read live wherever it is exposed: renewing the relay
 	// credentials mid-run can move the server to a new subdomain.

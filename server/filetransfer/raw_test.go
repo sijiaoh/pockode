@@ -9,6 +9,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -41,7 +42,7 @@ func newRawFixture(t *testing.T) rawFixture {
 		t.Fatalf("Issue session: %v", err)
 	}
 	return rawFixture{
-		h:       NewRawHandler(sessions, files, attachmentHandler),
+		h:       NewRawHandler(sessions, files, attachmentHandler, dataDir),
 		workDir: workDir,
 		dataDir: dataDir,
 		session: session,
@@ -109,26 +110,15 @@ func TestRawIssue(t *testing.T) {
 		"unknown origin":             {Origin: "elsewhere", Scope: RawScopeFile, Path: "a.txt"},
 		"unknown scope":              {Origin: RawOriginFile, Scope: "everything", Path: "a.txt"},
 		"file path escaping":         {Origin: RawOriginFile, Scope: RawScopeFile, Path: "../a.txt"},
-		"absolute directory":         {Origin: RawOriginFile, Scope: RawScopeDirectory, Path: "/etc"},
 		"file scope without a file":  {Origin: RawOriginFile, Scope: RawScopeFile, Path: ""},
+		"file scope at the root":     {Origin: RawOriginFile, Scope: RawScopeFile, Path: "site/.."},
 		"commit without a hash":      {Origin: RawOriginCommit, Scope: RawScopeFile, Path: "a.txt"},
-		"attachment directory":       {Origin: RawOriginAttachment, Scope: RawScopeDirectory, SessionID: "sess", Path: "id"},
+		"attachment root":            {Origin: RawOriginAttachment, Scope: RawScopeRoot, SessionID: "sess"},
 		"attachment without session": {Origin: RawOriginAttachment, Scope: RawScopeFile, Path: "id"},
-		// A page at the root of the project gets no directory scope: the root
-		// holds .git, secrets and Pockode's own data directory.
-		"the work directory itself":   {Origin: RawOriginFile, Scope: RawScopeDirectory, Path: ""},
-		"the work directory as .":     {Origin: RawOriginFile, Scope: RawScopeDirectory, Path: "."},
-		"the work directory, cleaned": {Origin: RawOriginFile, Scope: RawScopeDirectory, Path: "site/.."},
-		// A "\" on Windows, where it separates as well as "/" does.
-		"the work directory, natively":   {Origin: RawOriginFile, Scope: RawScopeDirectory, Path: "site" + string(filepath.Separator) + ".."},
-		"the work directory as native .": {Origin: RawOriginFile, Scope: RawScopeDirectory, Path: "." + string(filepath.Separator)},
-		"the commit's root":              {Origin: RawOriginCommit, Scope: RawScopeDirectory, Hash: "abcdef0", Path: ""},
-		// A directory scope never reaches a dotfile, so it cannot be one.
-		"a dot directory":           {Origin: RawOriginFile, Scope: RawScopeDirectory, Path: ".pockode"},
-		"within a dot directory":    {Origin: RawOriginFile, Scope: RawScopeDirectory, Path: ".git/hooks"},
-		"a dot directory, cleaned":  {Origin: RawOriginFile, Scope: RawScopeDirectory, Path: "site/../.pockode"},
-		"a dot directory, natively": {Origin: RawOriginFile, Scope: RawScopeDirectory, Path: "site" + string(filepath.Separator) + ".git"},
-		"a commit's dot directory":  {Origin: RawOriginCommit, Scope: RawScopeDirectory, Hash: "abcdef0", Path: "docs/.vitepress"},
+		// A root scope has one spelling, so that no path in it is mistaken for
+		// one the scope is held to.
+		"root scope with a path": {Origin: RawOriginFile, Scope: RawScopeRoot, Path: "site"},
+		"root scope as .":        {Origin: RawOriginFile, Scope: RawScopeRoot, Path: "."},
 		// A host goes into a header as written, so nothing in it may end a
 		// source or a directive.
 		"a host ending the directive":   {Origin: RawOriginFile, Scope: RawScopeFile, Path: "a.html", Hosts: []string{"cdn.example; script-src *"}},
@@ -152,6 +142,11 @@ func TestRawIssue(t *testing.T) {
 		f.issue(t, RawGrant{Origin: RawOriginFile, Scope: RawScopeFile, Path: ".github/page.html"})
 	})
 
+	t.Run("the root of the work directory or a commit", func(t *testing.T) {
+		f.issue(t, RawGrant{Origin: RawOriginFile, Scope: RawScopeRoot})
+		f.issue(t, RawGrant{Origin: RawOriginCommit, Scope: RawScopeRoot, Hash: "abcdef0"})
+	})
+
 	t.Run("for a session that is not live", func(t *testing.T) {
 		grant := RawGrant{Origin: RawOriginFile, Scope: RawScopeFile, Path: "a.txt"}
 		if _, _, err := f.h.Issue("not-a-session", grant); !errors.Is(err, authsession.ErrSessionNotLive) {
@@ -171,8 +166,8 @@ func manyHosts(n int) []string {
 func TestRawPagePolicy(t *testing.T) {
 	newPage := func(t *testing.T, grant RawGrant) (rawFixture, string) {
 		f := newRawFixture(t)
-		writeFile(t, f.workDir, "site/index.html", []byte("<!doctype html><p>hi"))
-		grant.Origin, grant.Scope, grant.Path = RawOriginFile, RawScopeDirectory, "site"
+		writeFile(t, f.workDir, "index.html", []byte("<!doctype html><p>hi"))
+		grant.Origin, grant.Scope = RawOriginFile, RawScopeRoot
 		return f, f.issue(t, grant)
 	}
 	policy := func(rec *httptest.ResponseRecorder) string {
@@ -285,8 +280,8 @@ func TestRawPageReporter(t *testing.T) {
 	serve := func(t *testing.T, name, body string, header http.Header, query string) (*httptest.ResponseRecorder, string) {
 		t.Helper()
 		f := newRawFixture(t)
-		writeFile(t, f.workDir, "site/"+name, []byte(body))
-		capability := f.issue(t, RawGrant{Origin: RawOriginFile, Scope: RawScopeDirectory, Path: "site"})
+		writeFile(t, f.workDir, name, []byte(body))
+		capability := f.issue(t, RawGrant{Origin: RawOriginFile, Scope: RawScopeRoot})
 		return f.get(t, RawPath(capability, name)+query, header), pageReporter(capability)
 	}
 
@@ -363,7 +358,7 @@ func TestRawWorkDirFile(t *testing.T) {
 		writeFile(t, f.workDir, "site/app.js", []byte("console.log(1)"))
 		writeFile(t, f.workDir, "site/clip.mov", []byte("\x00\x00\x00\x14moov-not-sniffable"))
 		writeFile(t, f.workDir, "site/image.png", []byte("\x89PNG\r\n\x1a\nrest"))
-		capability := f.issue(t, RawGrant{Origin: RawOriginFile, Scope: RawScopeDirectory, Path: "site"})
+		capability := f.issue(t, RawGrant{Origin: RawOriginFile, Scope: RawScopeRoot})
 
 		for name, want := range map[string]string{
 			"index.html": "text/html; charset=utf-8",
@@ -374,7 +369,7 @@ func TestRawWorkDirFile(t *testing.T) {
 			"clip.mov":  "video/quicktime",
 			"image.png": "image/png",
 		} {
-			rec := f.get(t, RawPath(capability, name), nil)
+			rec := f.get(t, RawPath(capability, "site/"+name), nil)
 			if rec.Code != http.StatusOK {
 				t.Fatalf("%s: status %d: %s", name, rec.Code, rec.Body.String())
 			}
@@ -475,14 +470,45 @@ func TestRawWorkDirFile(t *testing.T) {
 func TestRawScope(t *testing.T) {
 	f := newRawFixture(t)
 	writeFile(t, f.workDir, ".env", []byte("SECRET=1"))
-	writeFile(t, f.workDir, "site/index.html", []byte("index"))
+	writeFile(t, f.workDir, "index.html", []byte("index"))
+	writeFile(t, f.workDir, "assets/style.css", []byte("style"))
 	writeFile(t, f.workDir, "site/sub/page.html", []byte("page"))
-	directory := f.issue(t, RawGrant{Origin: RawOriginFile, Scope: RawScopeDirectory, Path: "site"})
+	root := f.issue(t, RawGrant{Origin: RawOriginFile, Scope: RawScopeRoot})
 	file := f.issue(t, RawGrant{Origin: RawOriginFile, Scope: RawScopeFile, Path: "site/sub/page.html"})
 
-	t.Run("a directory scope reaches its descendants", func(t *testing.T) {
-		assertBody(t, f.get(t, RawPath(directory, "index.html"), nil), http.StatusOK, "index")
-		assertBody(t, f.get(t, RawPath(directory, "sub/page.html"), nil), http.StatusOK, "page")
+	t.Run("a root scope is opened at the root and reaches the whole project", func(t *testing.T) {
+		if got, want := RawEntryPath(root, RawGrant{Scope: RawScopeRoot}), RawPathPrefix+root+"/"; got != want {
+			t.Errorf("entry path = %q, want %q", got, want)
+		}
+		assertBody(t, f.get(t, RawPath(root, "index.html"), nil), http.StatusOK, "index")
+		assertBody(t, f.get(t, RawPath(root, "site/sub/page.html"), nil), http.StatusOK, "page")
+	})
+
+	// What a page's relative URL resolves to in the browser, which is what
+	// reaches the server: a page opened at its full path climbs out of its
+	// own directory and stays in the capability.
+	t.Run("a page's ../ reference resolves beneath the root", func(t *testing.T) {
+		page, err := url.Parse("http://pockode.test" + RawPath(root, "site/sub/page.html"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for ref, body := range map[string]string{
+			"../../assets/style.css":    "style",
+			"../../index.html":          "index",
+			RawPath(root, "index.html"): "index",
+		} {
+			resolved, err := page.Parse(ref)
+			if err != nil {
+				t.Fatal(err)
+			}
+			assertBody(t, f.get(t, resolved.Path, nil), http.StatusOK, body)
+		}
+		// Past the root it leaves the capability, which is no longer in the path.
+		resolved, err := page.Parse("../../../index.html")
+		if err != nil {
+			t.Fatal(err)
+		}
+		assertError(t, f.get(t, resolved.Path, nil), http.StatusNotFound, CodeCapabilityUnknown)
 	})
 
 	t.Run("a file scope reaches its file alone", func(t *testing.T) {
@@ -493,23 +519,25 @@ func TestRawScope(t *testing.T) {
 
 	t.Run("refuses .. however it is spelled", func(t *testing.T) {
 		for _, target := range []string{
-			RawPathPrefix + directory + "/../.env",
-			RawPathPrefix + directory + "/sub/../../.env",
-			RawPathPrefix + directory + "/%2e%2e/.env",
-			RawPathPrefix + directory + "/..%2f.env",
+			RawPathPrefix + root + "/../.env",
+			RawPathPrefix + root + "/site/../../.env",
+			RawPathPrefix + root + "/%2e%2e/.env",
+			RawPathPrefix + root + "/..%2f.env",
 			RawPathPrefix + file + "/../index.html",
 		} {
 			assertError(t, f.get(t, target, nil), http.StatusBadRequest, CodeInvalidPath)
 		}
 	})
 
-	t.Run("a directory scope refuses dotfiles beneath it", func(t *testing.T) {
+	t.Run("a root scope refuses dotfiles", func(t *testing.T) {
+		writeFile(t, f.workDir, ".git/config", []byte("config"))
+		writeFile(t, f.workDir, ".pockode/sessions.json", []byte("{}"))
 		writeFile(t, f.workDir, "site/.env", []byte("SECRET=2"))
-		writeFile(t, f.workDir, "site/.git/config", []byte("config"))
-		for _, rel := range []string{".env", ".git/config", "sub/.hidden.css", "sub/../.env", "sub/./page.html"} {
-			assertError(t, f.get(t, RawPath(directory, rel), nil), http.StatusForbidden, CodeOutsideScope)
+		writeFile(t, f.workDir, "docs/.vitepress/dist/index.html", []byte("built"))
+		for _, rel := range []string{".env", ".git/config", ".pockode/sessions.json", "site/.env", "docs/.vitepress/dist/index.html", "site/sub/../page.html", "site/./sub/page.html"} {
+			assertError(t, f.get(t, RawPath(root, rel), nil), http.StatusForbidden, CodeOutsideScope)
 		}
-		assertError(t, f.get(t, RawPathPrefix+directory+"/%2eenv", nil), http.StatusForbidden, CodeOutsideScope)
+		assertError(t, f.get(t, RawPathPrefix+root+"/%2eenv", nil), http.StatusForbidden, CodeOutsideScope)
 	})
 
 	t.Run("a file scope serves the dotfile it names", func(t *testing.T) {
@@ -517,44 +545,76 @@ func TestRawScope(t *testing.T) {
 		assertBody(t, f.get(t, RawPath(env, ".env"), nil), http.StatusOK, "SECRET=1")
 	})
 
-	t.Run("refuses a directory or the scope itself", func(t *testing.T) {
-		assertError(t, f.get(t, RawPath(directory, "sub"), nil), http.StatusBadRequest, CodeNotAFile)
-		assertError(t, f.get(t, RawPathPrefix+directory+"/", nil), http.StatusBadRequest, CodeInvalidPath)
-		assertError(t, f.get(t, RawPathPrefix+directory, nil), http.StatusBadRequest, CodeInvalidPath)
+	t.Run("refuses a directory or the root itself", func(t *testing.T) {
+		assertError(t, f.get(t, RawPath(root, "site"), nil), http.StatusBadRequest, CodeNotAFile)
+		assertError(t, f.get(t, RawPathPrefix+root+"/", nil), http.StatusBadRequest, CodeInvalidPath)
+		assertError(t, f.get(t, RawPathPrefix+root, nil), http.StatusBadRequest, CodeInvalidPath)
 	})
 
-	t.Run("refuses a symlink out of the scope", func(t *testing.T) {
+	t.Run("refuses a symlink out of the project or to a dotfile", func(t *testing.T) {
 		outside := filepath.Join(t.TempDir(), "outside.txt")
 		writeFile(t, filepath.Dir(outside), "outside.txt", []byte("outside"))
 		symlinktest.Make(t, filepath.Join("..", ".env"), filepath.Join(f.workDir, "site", "env"))
-		symlinktest.Make(t, outside, filepath.Join(f.workDir, "site", "abs"))
-		symlinktest.Make(t, "index.html", filepath.Join(f.workDir, "site", "alias.html"))
+		symlinktest.Make(t, ".pockode", filepath.Join(f.workDir, "data"))
+		symlinktest.Make(t, outside, filepath.Join(f.workDir, "abs"))
 		symlinktest.Make(t, filepath.Dir(outside), filepath.Join(f.workDir, "elsewhere"))
-		symlinktest.Make(t, outside, filepath.Join(f.workDir, "linked.txt"))
+		symlinktest.Make(t, filepath.Join("..", "index.html"), filepath.Join(f.workDir, "site", "alias.html"))
 
-		// Out of the directory, though still in the project.
-		assertError(t, f.get(t, RawPath(directory, "env"), nil), http.StatusForbidden, CodeOutsideScope)
-		assertError(t, f.get(t, RawPath(directory, "abs"), nil), http.StatusForbidden, CodeOutsideScope)
+		// A link inside the project to what the scope does not serve.
+		assertError(t, f.get(t, RawPath(root, "site/env"), nil), http.StatusForbidden, CodeOutsideScope)
+		assertError(t, f.get(t, RawPath(root, "data/sessions.json"), nil), http.StatusForbidden, CodeOutsideScope)
+		// Out of the project, directly or through a linked directory.
+		assertError(t, f.get(t, RawPath(root, "abs"), nil), http.StatusForbidden, CodeOutsideScope)
+		assertError(t, f.get(t, RawPath(root, "elsewhere/outside.txt"), nil), http.StatusForbidden, CodeOutsideScope)
+		// A file scope is held to the project too.
+		linkedFile := f.issue(t, RawGrant{Origin: RawOriginFile, Scope: RawScopeFile, Path: "abs"})
+		assertError(t, f.get(t, RawPath(linkedFile, "abs"), nil), http.StatusForbidden, CodeOutsideScope)
 		// A link that stays inside is just another name for a file there.
-		assertBody(t, f.get(t, RawPath(directory, "alias.html"), nil), http.StatusOK, "index")
+		assertBody(t, f.get(t, RawPath(root, "site/alias.html"), nil), http.StatusOK, "index")
+	})
+}
 
-		// The scope directory itself a link out of the project.
-		linkedDir := f.issue(t, RawGrant{Origin: RawOriginFile, Scope: RawScopeDirectory, Path: "elsewhere"})
-		assertError(t, f.get(t, RawPath(linkedDir, "outside.txt"), nil), http.StatusForbidden, CodeOutsideScope)
-		// A file scope is held to the project.
-		linkedFile := f.issue(t, RawGrant{Origin: RawOriginFile, Scope: RawScopeFile, Path: "linked.txt"})
-		assertError(t, f.get(t, RawPath(linkedFile, "linked.txt"), nil), http.StatusForbidden, CodeOutsideScope)
-		// A link that stays in the project but leads to its root would give the
-		// directory scope the root it must never have, however deep it sits.
-		// The file asked for is no dotfile, which is refused before the scope
-		// is opened at all.
-		writeFile(t, f.workDir, "root.txt", []byte("root"))
-		symlinktest.Make(t, ".", filepath.Join(f.workDir, "root"))
-		symlinktest.Make(t, "..", filepath.Join(f.workDir, "site", "up"))
-		for _, dir := range []string{"root", "site/up", "site/up/site"} {
-			linked := f.issue(t, RawGrant{Origin: RawOriginFile, Scope: RawScopeDirectory, Path: dir})
-			assertError(t, f.get(t, RawPath(linked, "root.txt"), nil), http.StatusForbidden, CodeOutsideScope)
-		}
+// A worktree's capability reads its own files only, even where the worktrees'
+// base directory or Pockode's data directory is configured inside the main one
+// under a name with no leading dot.
+func TestRawRootScopeWithholdsDataAndNestedWorktrees(t *testing.T) {
+	f := newRawFixture(t)
+	mainDir := f.workDir
+	nested := filepath.Join(mainDir, "worktrees", "other")
+	// A worktree whose directory is gone, as a prunable one is, withholds
+	// nothing and refuses nothing.
+	gone := filepath.Join(mainDir, "worktrees", "gone")
+	f.h.files.resolver = resolver{dirs: map[string]string{"": mainDir, "other": nested, "gone": gone}}
+	f.h.dataDir = filepath.Join(mainDir, "pockode-data")
+	writeFile(t, mainDir, "index.html", []byte("main"))
+	writeFile(t, mainDir, "worktrees/notes.txt", []byte("beside"))
+	writeFile(t, mainDir, "pockode-data/sessions.json", []byte("{}"))
+	writeFile(t, nested, "index.html", []byte("other"))
+	main := f.issue(t, RawGrant{Origin: RawOriginFile, Scope: RawScopeRoot})
+
+	t.Run("the main worktree's root reaches all but those", func(t *testing.T) {
+		assertBody(t, f.get(t, RawPath(main, "index.html"), nil), http.StatusOK, "main")
+		assertBody(t, f.get(t, RawPath(main, "worktrees/notes.txt"), nil), http.StatusOK, "beside")
+		assertError(t, f.get(t, RawPath(main, "worktrees/other/index.html"), nil), http.StatusForbidden, CodeOutsideScope)
+		assertError(t, f.get(t, RawPath(main, "pockode-data/sessions.json"), nil), http.StatusForbidden, CodeOutsideScope)
+	})
+
+	t.Run("the nested worktree's root reaches its own files", func(t *testing.T) {
+		other := f.issue(t, RawGrant{Origin: RawOriginFile, Scope: RawScopeRoot, Worktree: "other"})
+		assertBody(t, f.get(t, RawPath(other, "index.html"), nil), http.StatusOK, "other")
+	})
+
+	// Whichever spelling leads there: through a link in the project, or with
+	// the worktree registered under another name for its directory, as a
+	// case-insensitive file system gives one.
+	t.Run("however the nested worktree is reached or named", func(t *testing.T) {
+		symlinktest.Make(t, filepath.Join("worktrees", "other"), filepath.Join(mainDir, "linked"))
+		assertError(t, f.get(t, RawPath(main, "linked/index.html"), nil), http.StatusForbidden, CodeOutsideScope)
+
+		alias := filepath.Join(t.TempDir(), "alias")
+		symlinktest.Make(t, nested, alias)
+		f.h.files.resolver = resolver{dirs: map[string]string{"": mainDir, "other": alias}}
+		assertError(t, f.get(t, RawPath(main, "worktrees/other/index.html"), nil), http.StatusForbidden, CodeOutsideScope)
 	})
 }
 
@@ -631,21 +691,21 @@ func TestRawCommitFile(t *testing.T) {
 	hash := commitFile(t, f.workDir, "site/clip.mp4", []byte(committed))
 	// The working copy has moved on; the responses are the commit's version.
 	writeFile(t, f.workDir, "site/clip.mp4", []byte("edited"))
-	capability := f.issue(t, RawGrant{Origin: RawOriginCommit, Scope: RawScopeDirectory, Hash: hash, Path: "site"})
+	capability := f.issue(t, RawGrant{Origin: RawOriginCommit, Scope: RawScopeRoot, Hash: hash})
 
 	t.Run("serves the committed bytes", func(t *testing.T) {
-		assertBody(t, f.get(t, RawPath(capability, "clip.mp4"), nil), http.StatusOK, committed)
+		assertBody(t, f.get(t, RawPath(capability, "site/clip.mp4"), nil), http.StatusOK, committed)
 	})
 
 	t.Run("answers a range", func(t *testing.T) {
-		rec := f.get(t, RawPath(capability, "clip.mp4"), http.Header{"Range": {"bytes=996-"}})
+		rec := f.get(t, RawPath(capability, "site/clip.mp4"), http.Header{"Range": {"bytes=996-"}})
 		assertBody(t, rec, http.StatusPartialContent, "6789")
 	})
 
 	// A multi-range answer reads the blob out of order, which is the case that
 	// has to run git again.
 	t.Run("answers several ranges", func(t *testing.T) {
-		rec := f.get(t, RawPath(capability, "clip.mp4"), http.Header{"Range": {"bytes=907-908,601-602"}})
+		rec := f.get(t, RawPath(capability, "site/clip.mp4"), http.Header{"Range": {"bytes=907-908,601-602"}})
 		if rec.Code != http.StatusPartialContent {
 			t.Fatalf("status %d: %s", rec.Code, rec.Body.String())
 		}
@@ -675,18 +735,18 @@ func TestRawCommitFile(t *testing.T) {
 	})
 
 	t.Run("revalidates by ETag", func(t *testing.T) {
-		etag := f.get(t, RawPath(capability, "clip.mp4"), nil).Header().Get("ETag")
+		etag := f.get(t, RawPath(capability, "site/clip.mp4"), nil).Header().Get("ETag")
 		if etag == "" {
 			t.Fatal("no ETag")
 		}
-		rec := f.get(t, RawPath(capability, "clip.mp4"), http.Header{"If-None-Match": {etag}})
+		rec := f.get(t, RawPath(capability, "site/clip.mp4"), http.Header{"If-None-Match": {etag}})
 		if rec.Code != http.StatusNotModified {
 			t.Errorf("status %d, want 304", rec.Code)
 		}
 	})
 
 	t.Run("refuses what is not in the commit or the scope", func(t *testing.T) {
-		assertError(t, f.get(t, RawPath(capability, "missing.mp4"), nil), http.StatusNotFound, CodeNotFound)
+		assertError(t, f.get(t, RawPath(capability, "site/missing.mp4"), nil), http.StatusNotFound, CodeNotFound)
 		assertError(t, f.get(t, RawPathPrefix+capability+"/../site/clip.mp4", nil), http.StatusBadRequest, CodeInvalidPath)
 		assertError(t, f.get(t, RawPath(capability, ".env"), nil), http.StatusForbidden, CodeOutsideScope)
 	})

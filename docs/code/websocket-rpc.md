@@ -74,19 +74,21 @@ without the session token, when it stops working, and the worktree it reads
 from (`""` = main). Why it exists and what bounds it are in
 [Raw capabilities](authentication.md#raw-capabilities-urls-a-browser-element-loads-by-itself).
 The params name the content the way the client already reads it, by `origin`
-(the frontend's `ContentOrigin`), plus a `scope` of `file` or `directory`:
+(the frontend's `ContentOrigin`), plus a `scope` of `file` or `root`. A
+`root` scope is the whole work directory or commit, for a page, and takes no
+`path` — the page's own path goes on the URL instead:
 
 | `origin` | Params | Read from |
 |---|---|---|
-| `file` | `path` | The connection's worktree |
-| `commit` | `hash`, `path` | The connection's repository; an abbreviated `hash` is resolved to the full one now, since the capability outlives the request and an abbreviation unique today need not stay so |
+| `file` | `path` (none for `root`) | The connection's worktree |
+| `commit` | `hash`, `path` (none for `root`) | The connection's repository; an abbreviated `hash` is resolved to the full one now, since the capability outlives the request and an abbreviation unique today need not stay so |
 | `attachment` | `session_id`, `id`, `worktree` (`""` = main) | The worktree it names, which need not be the connection's — as for `session_view.attachment`. Always `scope: "file"` |
 
 A param that belongs to another origin is refused with `CodeInvalidParams`, not
 ignored: a `worktree` sent with a `file` origin would otherwise read the
 connection's worktree while the client believed it had chosen another. So are an
-unknown origin or scope, a missing `session_id`, a path that is not local, a
-directory scope at the root or one that is or lies within a dot directory
+unknown origin or scope, a missing `session_id`, a file scope whose path is not
+local or is the root itself, a root scope with any `path`
 ([why](authentication.md#raw-capabilities-urls-a-browser-element-loads-by-itself)), a malformed, unknown, ambiguous or non-commit
 `hash`, and an attachment `worktree` that cannot be a worktree's name; the
 message says which. A `commit` origin outside a git repository gets
@@ -110,10 +112,12 @@ nothing: the page then gets none of its own files. A capability is a different o
 client's cache keys on it too.
 
 `path` is where to open the content, already percent-encoded: the file for a
-file scope, and for a directory scope the directory with a trailing `/`, a base
-for relative URLs rather than something to load — there is no index file, and
-the directory itself answers `400`
-([what a path under it may be](../file.md#transfer)). A client must pass it
+file scope, and for a root scope the root with a trailing `/`, a base for
+relative URLs rather than something to load — there is no index file, and the
+root itself answers `400`
+([what a path under it may be](../file.md#transfer)). A page at project path
+`docs/site/index.html` is opened at `path` + `docs/site/index.html`, each
+segment percent-encoded the same way. A client must pass it
 through `apiUrl()` like any other HTTP path. The method is dispatched ahead of
 the bound-worktree gate, because an attachment needs no binding; a `file` or
 `commit` origin applies the gate's check itself.

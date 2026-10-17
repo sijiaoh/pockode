@@ -5,8 +5,8 @@ const URL_ATTRIBUTES = ["src", "href", "xlink:href", "poster"];
 
 // `scheme:` covers `data:`, `blob:`, `mailto:` and `javascript:` along with
 // every absolute URL; `//host`, `/path` and their backslash spellings, which
-// a browser reads the same way, leave the page's directory too.
-const LEAVES_DIRECTORY = /^(?:[a-z][a-z\d+.-]*:|[/\\])/i;
+// a browser reads the same way, leave the capability too.
+const LEAVES_CAPABILITY = /^(?:[a-z][a-z\d+.-]*:|[/\\])/i;
 
 const CSS_URL = /url\(\s*(?:"([^"]*)"|'([^']*)'|([^)\s]*))\s*\)/gi;
 const CSS_IMPORT = /@import\s+(?:"([^"]*)"|'([^']*)')/gi;
@@ -21,7 +21,7 @@ function clean(value: string): string {
 
 function isRelative(value: string): boolean {
 	const url = clean(value);
-	return url !== "" && !url.startsWith("#") && !LEAVES_DIRECTORY.test(url);
+	return url !== "" && !url.startsWith("#") && !LEAVES_CAPABILITY.test(url);
 }
 
 /**
@@ -86,10 +86,10 @@ function collectUrls(root: ParentNode, urls: string[]) {
 }
 
 /**
- * Whether an HTML page refers to a file beside or beneath it by a relative
- * URL — what a page loaded through a capability for itself alone cannot
+ * Whether an HTML page refers to another file by a relative URL, `../`
+ * included — what a page loaded through a capability for itself alone cannot
  * reach (docs/file.md, "HTML pages"). A URL from the root (`/x`) is not
- * counted: it misses the page's directory under any capability. A URL only a
+ * counted: it leaves the capability, whatever its scope. A URL only a
  * script builds — `fetch("data.json")`, an inline `import` — is out of reach
  * of a scan that runs nothing.
  *
@@ -100,9 +100,9 @@ export function hasRelativeReferences(html: string): boolean {
 	const doc = new DOMParser().parseFromString(html, "text/html");
 
 	// Only the first `<base>` counts, as in a browser; one that leaves the
-	// page's directory sends every relative URL with it.
+	// capability sends every relative URL with it.
 	const base = doc.querySelector("base[href]")?.getAttribute("href");
-	if (base != null && LEAVES_DIRECTORY.test(clean(base))) return false;
+	if (base != null && LEAVES_CAPABILITY.test(clean(base))) return false;
 
 	const urls: string[] = [];
 	collectUrls(doc, urls);

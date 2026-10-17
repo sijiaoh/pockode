@@ -110,7 +110,7 @@ function caption(item: MediaItem, loaded: MediaMetadata | null): string {
  * cache hit on what the `<img>` already read. A video goes to disk straight
  * from its capability as it arrives (`saveRawFile`): a long recording does
  * not belong in a Blob. A page is saved from the URL its stage loaded it
- * from, under the directory capability it already holds, rather than a second
+ * from, under the root capability it already holds, rather than a second
  * capability for the file alone; only the `.html`, not its assets.
  */
 async function saveItem(
@@ -257,9 +257,7 @@ export function MediaViewer({
 						)}
 					</div>
 				</div>
-				{item.kind === "html" && item.notice && (
-					<PageNotice isolation={item.notice} origin={item.origin.kind} />
-				)}
+				{item.kind === "html" && item.notice && <PageNotice />}
 				{saveError && (
 					<div
 						role="alert"

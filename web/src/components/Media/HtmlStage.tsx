@@ -52,7 +52,6 @@ export default function HtmlStage({
 		{
 			origin: item.origin,
 			fileName: splitPath(item.origin.path).fileName,
-			unreachableFolder: item.unreachableFolder,
 		},
 		true,
 		item.revision,

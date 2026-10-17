@@ -1,5 +1,4 @@
 import type { ComponentType, KeyboardEvent, RefObject } from "react";
-import type { PageIsolation } from "../../lib/rpc/raw";
 import type { ContentOrigin, TreeOrigin } from "../../types/contents";
 import type { ImageDimensions, ImageSource } from "../../utils/fileView";
 
@@ -52,18 +51,13 @@ export interface HtmlMediaItem {
 	size: number;
 	/**
 	 * The page, loaded through the same capability as the opener's frame — its
-	 * directory's, so the page's assets load too.
+	 * tree's root, so the page's assets load too.
 	 */
 	origin: TreeOrigin;
 	/** See `usePageFrame`: a change loads the page again, as in place. */
 	revision?: unknown;
 	/** Set when the opener shows `PageNotice`, for the viewer to show it too. */
-	notice?: PageIsolation;
-	/**
-	 * The opener found the page's directory capability cannot reach it, so the
-	 * viewer loads it on its own straight away (`usePageFrame`).
-	 */
-	unreachableFolder?: boolean;
+	notice?: boolean;
 }
 
 /** A position passed between two players of the same file. Mutable. */

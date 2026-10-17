@@ -29,30 +29,29 @@ func shortName(t *testing.T, path string) string {
 	return short
 }
 
-func TestRawDirectoryScopeRefusesDotfilesByTheirShortNames(t *testing.T) {
+func TestRawRootScopeRefusesDotfilesByTheirShortNames(t *testing.T) {
 	f := newRawFixture(t)
 	writeFile(t, f.workDir, "site/.env", []byte("SECRET=1"))
 	writeFile(t, f.workDir, "site/index.html", []byte("site"))
 	writeFile(t, f.workDir, ".hidden/index.html", []byte("index"))
+	root := f.issue(t, RawGrant{Origin: RawOriginFile, Scope: RawScopeRoot})
 
-	t.Run("beneath the scope", func(t *testing.T) {
-		directory := f.issue(t, RawGrant{Origin: RawOriginFile, Scope: RawScopeDirectory, Path: "site"})
+	t.Run("as a file", func(t *testing.T) {
 		// Short names do open, so the refusal below is the dot rule's.
 		page := shortName(t, filepath.Join(f.workDir, "site", "index.html"))
-		assertBody(t, f.get(t, RawPath(directory, page), nil), http.StatusOK, "site")
+		assertBody(t, f.get(t, RawPath(root, "site/"+page), nil), http.StatusOK, "site")
 
 		alias := shortName(t, filepath.Join(f.workDir, "site", ".env"))
-		rec := f.get(t, RawPath(directory, alias), nil)
+		rec := f.get(t, RawPath(root, "site/"+alias), nil)
 		assertError(t, rec, http.StatusForbidden, CodeOutsideScope)
 		if !strings.Contains(rec.Body.String(), "is outside this capability") {
 			t.Errorf("refused for another reason: %s", rec.Body.String())
 		}
 	})
 
-	t.Run("as the scope", func(t *testing.T) {
+	t.Run("as a directory on the way", func(t *testing.T) {
 		alias := shortName(t, filepath.Join(f.workDir, ".hidden"))
-		directory := f.issue(t, RawGrant{Origin: RawOriginFile, Scope: RawScopeDirectory, Path: alias})
-		rec := f.get(t, RawPath(directory, "index.html"), nil)
+		rec := f.get(t, RawPath(root, alias+"/index.html"), nil)
 		assertError(t, rec, http.StatusForbidden, CodeOutsideScope)
 		if !strings.Contains(rec.Body.String(), "is outside this capability") {
 			t.Errorf("refused for another reason: %s", rec.Body.String())

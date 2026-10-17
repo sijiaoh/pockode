@@ -53,18 +53,19 @@ export function invalidateWorkspaceCapabilities(queryClient: QueryClient) {
 }
 
 /**
- * A capability is worth one per file, however many players show it: the
- * preview and the viewer share it, and the server holds a bounded number.
+ * A capability is worth one per file — for pages, one per tree — however many
+ * players show it: the preview and the viewer share it, and the server holds
+ * a bounded number.
  *
  * Its own root rather than under the description's key, where an image's
  * bytes live: the description is invalidated whenever its watch is
  * re-established — every relay reconnect — and a new capability is a new
  * `src`, which drops a playing video's buffer for a file that did not change.
  *
- * The scope is part of it: a page's directory capability and a file
- * capability for the same path reach different things. An attachment is
+ * The scope is part of it: a root capability reaches every page in its tree,
+ * which all share it, and a file capability its one file. An attachment is
  * always a file. So are a page's hosts: a capability with hosts allowed must
- * not be the one a sibling page opened on its own is handed.
+ * not be the one another page opened without them is handed.
  */
 function rawCapabilityKey(
 	target: RawTarget,
@@ -74,10 +75,19 @@ function rawCapabilityKey(
 	return target.page ? [...key, "page", ...target.page.hosts] : key;
 }
 
-function originKey(
-	{ origin, scope }: RawTarget,
-	worktree: string,
-): readonly unknown[] {
+function originKey(target: RawTarget, worktree: string): readonly unknown[] {
+	const { scope } = target;
+	if (target.scope === "root") {
+		const { origin } = target;
+		return [
+			...WORKSPACE_RAW_CAPABILITY_KEY,
+			worktree,
+			origin.kind,
+			scope,
+			...(origin.kind === "commit" ? [origin.hash] : []),
+		];
+	}
+	const { origin } = target;
 	switch (origin.kind) {
 		case "file":
 			return [

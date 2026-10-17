@@ -151,7 +151,7 @@ describe("a workspace page in a real browser", () => {
 		expect(document.activeElement).toBe(frame());
 	});
 
-	it("follows a link inside its own directory in the frame", async () => {
+	it("follows a link inside its own folder in the frame", async () => {
 		renderPage();
 		const wrapper = await started();
 
@@ -163,7 +163,18 @@ describe("a workspace page in a real browser", () => {
 		expect(screen.queryByText(/Page left/)).toBeNull();
 	});
 
-	it("asks before opening a link out of its directory that no tap followed", async () => {
+	// The capability is the project's root, not the page's folder.
+	it("follows a link up out of its own folder in the frame", async () => {
+		renderPage();
+		const wrapper = await started();
+
+		ask(wrapper, { click: "up" });
+
+		await waitFor(() => expect(signals).toContain("up"), { timeout: 5000 });
+		expect(screen.queryByText(/Page left/)).toBeNull();
+	});
+
+	it("asks before opening a link to another host that no tap followed", async () => {
 		const open = vi.spyOn(window, "open");
 		renderPage();
 		const wrapper = await started();
