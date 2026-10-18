@@ -234,12 +234,17 @@ pixel per CSS pixel, not the two decimals the library's own zoom rounds to.
 
 The zero-length moves — the first fit, new bytes, a scale brought under a
 lowered ceiling — go through the same path, and replace a running animation
-rather than leave it to carry the view off on the next frame. The first fit
-is the stage's own, before the first paint, not the library's `centerOnInit`;
-and the stage tells the library about the image's new size there and then.
-WebKit delivers the library's ResizeObserver a few frames late, and the
-library realigns on it by cancelling whatever animation is running — the first
-key pressed after opening would otherwise stop short.
+rather than leave it to carry the view off on the next frame. Showing an
+image from fit is the stage's own, before the first paint, not the library's
+`centerOnInit`: once per image, and again for the library instance a retry
+after a failed load mounts; a frame that collapses to nothing and comes back
+keeps the scale, though not where the image was panned to.
+
+Whenever the frame or the fit changes size, the stage tells the library there
+and then. WebKit delivers the library's ResizeObserver a few frames late, and
+the library realigns on it by cancelling whatever animation is running — a key
+pressed just after opening, or just after the frame turned, would otherwise
+stop short.
 
 ### Keys
 

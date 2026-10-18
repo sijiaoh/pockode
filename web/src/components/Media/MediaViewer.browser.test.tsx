@@ -67,9 +67,8 @@ async function openViewer(item: ImageMediaItem) {
 }
 
 /**
- * The image's size at fit — its layout box, which the transform leaves alone.
- * Read from the computed style, since `offsetWidth` rounds to whole pixels and
- * at actual size the transform multiplies that error several times over.
+ * The image's size at fit: its layout box, which the transform leaves alone,
+ * as the stage set it in its style.
  */
 function fitOf(image: HTMLElement) {
 	const style = getComputedStyle(image);
@@ -260,6 +259,23 @@ describe("MediaViewer image stage", () => {
 		).toBeLessThan(1);
 		// Centred in the same commit the readout appears in, so already now.
 		expect(boxOf(image)).toEqual(near(restingPlaces(image, wrapper)(1)));
+	});
+
+	it("shows the image centred again after a failed load is retried", async () => {
+		// With the size known up front the fit never changes: only the retry
+		// itself can tell the stage to centre the library's new instance.
+		const { image } = await openViewer({
+			...imageItem("big.png", BIG),
+			dimensions: BIG,
+		});
+		image.dispatchEvent(new Event("error"));
+		await userEvent.click(await screen.findByRole("button", { name: "Retry" }));
+
+		const retried = await screen.findByRole("img", { name: "big.png" });
+		await screen.findByRole("button", { name: /^Zoom: Fit/ });
+		const wrapper = retried.closest<HTMLElement>(".react-transform-wrapper");
+		if (!wrapper) throw new Error("no transform wrapper");
+		expect(boxOf(retried)).toEqual(near(restingPlaces(retried, wrapper)(1)));
 	});
 
 	it("never enlarges a small image to fit", async () => {
@@ -459,6 +475,22 @@ describe("MediaViewer image stage", () => {
 			frame.getBoundingClientRect().height + 0.5,
 		);
 		await settlesAt(image, 1);
+	});
+
+	it("a key pressed just after the frame turns goes all the way", async () => {
+		// It fails only in WebKit, which tells the library of the new size a
+		// few frames late; elsewhere it guards the same behaviour.
+		const { image, wrapper } = await openViewer(imageItem("big.png", BIG));
+		await page.viewport(896, 414);
+		await expect
+			.poll(() => fitOf(image).height)
+			.toBeCloseTo(wrapper.clientHeight, 0);
+
+		await userEvent.setup().keyboard("1");
+		await restsAt(
+			image,
+			restingPlaces(image, wrapper)(BIG.width / fitOf(image).width),
+		);
 	});
 });
 

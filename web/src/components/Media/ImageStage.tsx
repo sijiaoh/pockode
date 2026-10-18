@@ -217,18 +217,33 @@ export default function ImageStage({
 		onMetadata(null);
 	}, [src, onMetadata]);
 
-	// New bytes, and the first fit, are shown from fit — centred, wherever the
-	// image was. Before the frame is painted, so it never shows uncentred.
-	const hasFit = fit !== null;
+	const failed = image.error || status === "error";
+
+	// The library learns of a new size from its ResizeObserver, which WebKit
+	// delivers a few frames late, and realigns by cancelling whatever animation
+	// is running: a key pressed just after opening, or just after the frame
+	// turned, would stop short. Told now, the observer has nothing left to
+	// tell it.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: the sizes are what it runs for; the library measures them itself
 	useLayoutEffect(() => {
-		if (!src || !hasFit) return;
-		// The library learns of a new size from its ResizeObserver, which WebKit
-		// delivers a few frames late, and realigns by cancelling whatever
-		// animation is running: a key pressed just after opening would stop
-		// short. Told now, the observer has nothing left to tell it.
 		apiRef.current?.instance.onSizeChange();
+	}, [frame?.width, frame?.height, fit?.width, fit?.height]);
+
+	// Each image is shown from fit, centred, before the frame is painted: new
+	// bytes, and the same bytes in a library instance of its own after a
+	// failed load. Once each — a frame that collapses to nothing and comes back
+	// keeps the reader's scale.
+	const hasFit = fit !== null;
+	const centredRef = useRef<string | null>(null);
+	useLayoutEffect(() => {
+		if (failed) {
+			centredRef.current = null;
+			return;
+		}
+		if (!src || !hasFit || centredRef.current === src) return;
+		centredRef.current = src;
 		move((_, layout) => bounded({ scale: 1, x: 0, y: 0 }, layout), 0);
-	}, [src, hasFit, move]);
+	}, [src, hasFit, failed, move]);
 
 	// A smaller frame lowers the ceiling; a scale left above it is brought down.
 	useEffect(() => {
@@ -335,7 +350,6 @@ export default function ImageStage({
 		};
 	}, [keysRef]);
 
-	const failed = image.error || status === "error";
 	const cursor = atFit
 		? "cursor-zoom-in"
 		: panning
