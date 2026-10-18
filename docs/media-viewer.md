@@ -160,14 +160,16 @@ reloading the page is then the way out.
 ### Scales
 
 - **Fit = scale 1.** The `<img>` is laid out at explicit pixels:
-  `natural × min(1, frameW / naturalW, frameH / naturalH)`. The image is
-  contained and never enlarged. That makes the library's `minScale: 1` and
-  `centerView(1)` both mean "fit". The size is in explicit pixels because the
+  `natural × min(1, frameW / naturalW, frameH / naturalH)`, rounded to whole
+  pixels. The image is contained and never enlarged. That makes the library's
+  `minScale: 1` mean "fit". The size is in explicit pixels because the
   library's wrapper and content are `fit-content` boxes, which a percentage
-  limit has nothing to resolve against. Until the fit is known the image is held
-  at 0×0. If it were laid out at its natural size first, the library would
-  centre on that size and then animate after the shrink, and the first zoom
-  would fight that animation.
+  limit has nothing to resolve against. It is in whole pixels because the
+  library measures the image with `offsetWidth`, which rounds: its bounds have
+  to be about the image that is drawn. Until the fit is known the image is held
+  at 0×0. If it were laid out at its natural size first, it would be centred on
+  that size and then realigned after the shrink, and the first zoom would
+  fight that realignment.
 - **Actual size** is `naturalW / fitW`: one image pixel per CSS pixel, what a
   browser's own image view calls 100%. It is never below 1. It is not measured
   per device pixel: a phone screenshot on a phone would then be about the size
@@ -202,6 +204,47 @@ not a zoom gesture on macOS (pinch is), so it pans.
 **Edges.** The image cannot be dragged off the frame (`limitToBounds`). On an
 axis where it is narrower than the frame it stays centred (`centerZoomedOut`).
 An edge neither pages to another item nor dismisses the viewer.
+
+### Where a move starts
+
+The keys, the toggle and the stage's own re-centring are programmatic moves;
+dragging, pinching and the wheel are direct manipulation. They start from
+different places, as Core Animation's model and presentation values do:
+
+- **A programmatic move composes from where the view is heading.** While one
+  of the stage's animations runs, the next move starts from its destination,
+  not from the frame it has reached. So `1` then `→` pressed inside the 200 ms
+  ends at actual size panned by 10%, and `+` `+` ends at 1.5². The library
+  itself would not: it starts a new animation from wherever it cut the last one
+  off, and reading its state mid-flight reads a half-drawn scale.
+- **Direct manipulation starts from what is on screen.** Every gesture cancels
+  the running animation, and with it the destination; the next key composes
+  from the view as shown, within the bounds the library brings it back to
+  after a gesture.
+
+`ImageStage`'s `useMoves` keeps the destination: it is set when a move starts
+and dropped when the animation ends or anything interrupts it (the library
+settles the move's promise either way). The moves themselves — zoom about a
+point, pan, and the bounds `limitToBounds` and `centerZoomedOut` produce — are
+pure functions in `imageScale.ts`, worked out from the library's own
+measurements (`clientWidth` of its wrapper, `offsetWidth` of its content), so
+the edge a key stops at is the edge a following drag is held to. The library
+is driven with `setTransform`, so scales are exact: actual size is one image
+pixel per CSS pixel, not the two decimals the library's own zoom rounds to.
+
+The zero-length moves — the first fit, new bytes, a scale brought under a
+lowered ceiling — go through the same path, and replace a running animation
+rather than leave it to carry the view off on the next frame. Showing an
+image from fit is the stage's own, before the first paint, not the library's
+`centerOnInit`: once per image, and again for the library instance a retry
+after a failed load mounts; a frame that collapses to nothing and comes back
+keeps the scale, though not where the image was panned to.
+
+Whenever the frame or the fit changes size, the stage tells the library there
+and then. WebKit delivers the library's ResizeObserver a few frames late, and
+the library realigns on it by cancelling whatever animation is running — a key
+pressed just after opening, or just after the frame turned, would otherwise
+stop short.
 
 ### Keys
 
@@ -523,8 +566,11 @@ phone.
 - `MediaViewer.browser.test.tsx` (real browser, see
   [testing.md](testing.md#frontend-the-real-browser-entry)) covers fit layout,
   the double-click and double-tap toggles, pinch limits, the pan edge, the wheel,
-  the keys, and refitting after a resize. Gestures are asserted on where the
-  image lands on screen, relative to the measured frame.
+  the keys (including one pressed while the last still animates and one just
+  after the frame turns), a drag picking up where the keys left the image,
+  refitting after a resize, and centring again after a retried load. Gestures
+  are asserted on where the image comes to rest on screen, relative to the
+  measured frame.
   Its video case plays a 64×36 VP9 clip (`src/test/clip-64x36.webm`) and checks
   the element spans the frame, so the picture is fitted and enlarged. Its HTML
   cases open two linked pages (`src/test/page/`) on the window's own history:

@@ -253,6 +253,17 @@ appear only once `listCommands` answers.
   and "not loaded yet" render the same thing, so no query can tell them apart.
   Wait for the answer itself: `InputBar`'s `commandsLoaded()` asserts the mock
   was called, then awaits the promise it returned inside `act`.
+- **Something animated is waited for at rest, not near its target.** An
+  animation passes through values close to where it ends, so a poll that
+  accepts "close" can pass a frame early and leave the next line measuring
+  something still moving. Wait for it to be stable, as Playwright's
+  actionability checks mean it — the same box on two consecutive animation
+  frames — *and* at the expected place, since before an animation's first frame
+  the box is just as still where it started. Work that place out from the
+  sizes; a baseline read off the screen in between may itself be mid-flight.
+  `settlesAt` and `restsAt` in
+  `web/src/components/Media/MediaViewer.browser.test.tsx` are the worked
+  example.
 - **To reproduce it deterministically, delay the mock.** Make the mock resolve
   after a real delay of about 100ms. Every test with this shape then fails on
   an idle machine, which shows you all of them at once instead of whichever one

@@ -16,6 +16,7 @@ import clipPath from "../../test/clip-64x36.webm?url";
 // A page linking to a second one beside it, served the same way: their folder
 // stands for a root capability, with the page at its root.
 import pagePath from "../../test/page/index.htm?url";
+import { KEY_ZOOM_FACTOR } from "./imageScale";
 import { MediaViewer } from "./MediaViewer";
 import type { HtmlMediaItem, ImageMediaItem, VideoMediaItem } from "./types";
 
@@ -65,13 +66,101 @@ async function openViewer(item: ImageMediaItem) {
 	return { image, frame, wrapper };
 }
 
-function scaleOf(image: HTMLElement): number {
-	return image.getBoundingClientRect().width / image.offsetWidth;
+/**
+ * The image's size at fit: its layout box, which the transform leaves alone,
+ * as the stage set it in its style.
+ */
+function fitOf(image: HTMLElement) {
+	const style = getComputedStyle(image);
+	return { width: parseFloat(style.width), height: parseFloat(style.height) };
 }
 
-/** Waits for the transform to come to rest at `scale`. */
+function scaleOf(image: HTMLElement): number {
+	return image.getBoundingClientRect().width / fitOf(image).width;
+}
+
+type Box = { left: number; top: number; width: number; height: number };
+
+function boxOf(element: HTMLElement): Box {
+	const { left, top, width, height } = element.getBoundingClientRect();
+	return { left, top, width, height };
+}
+
+/**
+ * The image's box if it holds still from one animation frame to the next, or
+ * null while it moves — "stable" as Playwright's actionability checks mean it.
+ * Being near a target is not being at rest: an animation's last frames are
+ * already close to where it ends, and still moving.
+ */
+async function stillBoxOf(image: HTMLElement): Promise<Box | null> {
+	const before = boxOf(image);
+	await new Promise(requestAnimationFrame);
+	const after = boxOf(image);
+	const still = (Object.keys(after) as (keyof Box)[]).every(
+		(side) => before[side] === after[side],
+	);
+	return still ? after : null;
+}
+
+/**
+ * Waits for the transform to come to rest at `scale`. Rest alone is not
+ * enough: before an animation's first frame the image is still at rest where
+ * it was.
+ */
 async function settlesAt(image: HTMLElement, scale: number) {
-	await expect.poll(() => scaleOf(image)).toBeCloseTo(scale, 1);
+	const width = fitOf(image).width;
+	await expect
+		.poll(async () => {
+			const box = await stillBoxOf(image);
+			return box && box.width / width;
+		})
+		.toBeCloseTo(scale, 2);
+}
+
+/** Matches a box within half a pixel of `box` on every edge. */
+function near(box: Box) {
+	return {
+		left: expect.closeTo(box.left, 0),
+		top: expect.closeTo(box.top, 0),
+		width: expect.closeTo(box.width, 0),
+		height: expect.closeTo(box.height, 0),
+	};
+}
+
+/** Waits for the image to come to rest at `box`, to within half a pixel. */
+async function restsAt(image: HTMLElement, box: Box) {
+	await expect.poll(() => stillBoxOf(image)).toEqual(near(box));
+}
+
+/** Waits for the image to come to rest wherever that is, and says where. */
+function restingBoxOf(image: HTMLElement): Promise<Box> {
+	return vi.waitFor(async () => {
+		const box = await stillBoxOf(image);
+		if (!box) throw new Error("the image is still moving");
+		return box;
+	});
+}
+
+/**
+ * Where the image rests at `scale`, moved left by `panned` of the frame's
+ * width, worked out from the sizes alone. It holds for zooms about the frame's
+ * centre from a centred image, which end centred: larger than the frame the
+ * bounds leave it there, smaller it is centred anyway. Scales are exact:
+ * actual size draws the image at its own width to the pixel.
+ */
+function restingPlaces(image: HTMLElement, wrapper: HTMLElement) {
+	const fit = fitOf(image);
+	const view = wrapper.getBoundingClientRect();
+	return (scale: number, panned = 0): Box => {
+		const width = fit.width * scale;
+		const height = fit.height * scale;
+		return {
+			left: view.left + (view.width - width) / 2 - panned * view.width,
+			top: view.top + (view.height - height) / 2,
+			width,
+			height,
+		};
+	};
 }
 
 function centre(element: HTMLElement) {
@@ -154,7 +243,9 @@ describe("MediaViewer image stage", () => {
 	});
 
 	it("lays the image out contained in the frame and centred", async () => {
-		const { image, frame } = await openViewer(imageItem("big.png", BIG));
+		const { image, frame, wrapper } = await openViewer(
+			imageItem("big.png", BIG),
+		);
 		const box = frame.getBoundingClientRect();
 
 		expect(image.offsetWidth).toBeLessThanOrEqual(box.width + 0.5);
@@ -166,10 +257,25 @@ describe("MediaViewer image stage", () => {
 				Math.abs(image.offsetHeight - box.height),
 			),
 		).toBeLessThan(1);
-		// Centred by the library once its observer sees the laid-out size,
-		// which is before the next paint but can be after the readout appears.
-		await expect.poll(() => centre(image).x).toBeCloseTo(centre(frame).x, 0);
-		await expect.poll(() => centre(image).y).toBeCloseTo(centre(frame).y, 0);
+		// Centred in the same commit the readout appears in, so already now.
+		expect(boxOf(image)).toEqual(near(restingPlaces(image, wrapper)(1)));
+	});
+
+	it("shows the image centred again after a failed load is retried", async () => {
+		// With the size known up front the fit never changes: only the retry
+		// itself can tell the stage to centre the library's new instance.
+		const { image } = await openViewer({
+			...imageItem("big.png", BIG),
+			dimensions: BIG,
+		});
+		image.dispatchEvent(new Event("error"));
+		await userEvent.click(await screen.findByRole("button", { name: "Retry" }));
+
+		const retried = await screen.findByRole("img", { name: "big.png" });
+		await screen.findByRole("button", { name: /^Zoom: Fit/ });
+		const wrapper = retried.closest<HTMLElement>(".react-transform-wrapper");
+		if (!wrapper) throw new Error("no transform wrapper");
+		expect(boxOf(retried)).toEqual(near(restingPlaces(retried, wrapper)(1)));
 	});
 
 	it("never enlarges a small image to fit", async () => {
@@ -213,7 +319,7 @@ describe("MediaViewer image stage", () => {
 
 	it("pinching springs back to fit below it and stops at the ceiling above it", async () => {
 		const { image, wrapper } = await openViewer(imageItem("big.png", BIG));
-		const actual = BIG.width / image.offsetWidth;
+		const actual = BIG.width / fitOf(image).width;
 		const ceiling = Math.max(4, actual * 4);
 
 		pinch(wrapper, 200, 40);
@@ -255,8 +361,8 @@ describe("MediaViewer image stage", () => {
 
 		for (let i = 0; i < 5; i++) wheel(wrapper, { deltaY: -100, ctrlKey: true });
 		await expect.poll(() => scaleOf(image)).toBeGreaterThan(1.2);
-		const zoomed = scaleOf(image);
-		const left = image.getBoundingClientRect().left;
+		const { left, width } = await restingBoxOf(image);
+		const zoomed = width / fitOf(image).width;
 
 		wheel(wrapper, { deltaX: 80, deltaY: 0 });
 		await expect
@@ -266,27 +372,64 @@ describe("MediaViewer image stage", () => {
 	});
 
 	it("keys zoom and pan", async () => {
-		const { image, frame } = await openViewer(imageItem("big.png", BIG));
-		const actual = BIG.width / image.offsetWidth;
+		const { image, frame, wrapper } = await openViewer(
+			imageItem("big.png", BIG),
+		);
+		const actual = BIG.width / fitOf(image).width;
+		const at = restingPlaces(image, wrapper);
 		const user = userEvent.setup();
 		expect(frame).toHaveFocus();
 
-		await user.keyboard("1");
-		await settlesAt(image, actual);
-		await user.keyboard("0");
-		await settlesAt(image, 1);
-		await user.keyboard("+");
-		await settlesAt(image, 1.5);
-		await user.keyboard("-");
-		await settlesAt(image, 1);
-
-		await user.keyboard("1");
-		await settlesAt(image, actual);
-		const left = image.getBoundingClientRect().left;
+		for (const [key, scale] of [
+			["1", actual],
+			["0", 1],
+			["+", 1.5],
+			["-", 1],
+			["1", actual],
+		] as const) {
+			await user.keyboard(key);
+			await restsAt(image, at(scale));
+		}
 		await user.keyboard("{ArrowRight}");
-		await expect
-			.poll(() => image.getBoundingClientRect().left)
-			.toBeCloseTo(left - frame.clientWidth * 0.1, 0);
+		await restsAt(image, at(actual, 0.1));
+	});
+
+	it("a key pressed while the last one animates adds to where that one was going", async () => {
+		const { image, wrapper } = await openViewer(imageItem("big.png", BIG));
+		const actual = BIG.width / fitOf(image).width;
+		const at = restingPlaces(image, wrapper);
+		const user = userEvent.setup();
+
+		// Pressed together, the second well inside the first's 200ms.
+		await user.keyboard("1{ArrowRight}");
+		await restsAt(image, at(actual, 0.1));
+		await user.keyboard("0");
+		await restsAt(image, at(1));
+		await user.keyboard("++");
+		await restsAt(image, at(KEY_ZOOM_FACTOR ** 2));
+	});
+
+	it("a drag after the keys picks the image up where they left it", async () => {
+		const { image, wrapper } = await openViewer(imageItem("big.png", BIG));
+		const zoomed = restingPlaces(image, wrapper)(1.5);
+		const user = userEvent.setup();
+		// At 1.5× the image is wider than the frame and no taller: three
+		// presses of → take its right edge to the frame's. The right edge, as
+		// where it stops depends on the image's width.
+		await user.keyboard("+{ArrowRight}{ArrowRight}{ArrowRight}");
+		const edge = wrapper.getBoundingClientRect().right - zoomed.width;
+		await restsAt(image, { ...zoomed, left: edge });
+
+		// Against the edge the drag holds it there; away from it, the image
+		// follows the pointer exactly. Bounds of the stage's own that missed
+		// the library's would show here as a jump.
+		const { x, y } = centre(wrapper);
+		mouse(wrapper, "mousedown", x, y);
+		mouse(window, "mousemove", x - 40, y);
+		expect(boxOf(image).left).toBeCloseTo(edge, 1);
+		mouse(window, "mousemove", x + 40, y);
+		expect(boxOf(image).left).toBeCloseTo(edge + 40, 1);
+		mouse(window, "mouseup", x + 40, y);
 	});
 
 	it("takes the keys back after a press on the image", async () => {
@@ -332,6 +475,22 @@ describe("MediaViewer image stage", () => {
 			frame.getBoundingClientRect().height + 0.5,
 		);
 		await settlesAt(image, 1);
+	});
+
+	it("a key pressed just after the frame turns goes all the way", async () => {
+		// It fails only in WebKit, which tells the library of the new size a
+		// few frames late; elsewhere it guards the same behaviour.
+		const { image, wrapper } = await openViewer(imageItem("big.png", BIG));
+		await page.viewport(896, 414);
+		await expect
+			.poll(() => fitOf(image).height)
+			.toBeCloseTo(wrapper.clientHeight, 0);
+
+		await userEvent.setup().keyboard("1");
+		await restsAt(
+			image,
+			restingPlaces(image, wrapper)(BIG.width / fitOf(image).width),
+		);
 	});
 });
 
