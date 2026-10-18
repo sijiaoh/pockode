@@ -8,8 +8,15 @@ import (
 	"github.com/pockode/server/agent"
 )
 
+// newCodexAgent pins the approval settings the shared suite's approval
+// scenarios are written against. Default mode sends none, so without this a
+// developer whose own config.toml says otherwise would see them fail for a
+// reason that is not a defect. Yolo still overrides these per thread.
 func newCodexAgent() agent.Agent {
-	return New()
+	return &Agent{configOverrides: []string{
+		`approval_policy="on-request"`,
+		`sandbox_mode="workspace-write"`,
+	}}
 }
 
 func TestCodexIntegration(t *testing.T) {

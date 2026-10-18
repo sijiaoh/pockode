@@ -337,7 +337,8 @@ func runChatScenario(t *testing.T, a Agent, tc chatCase) {
 // sandbox escape rather than a command that merely looks risky. A t.TempDir()
 // path would sit inside /tmp and need no approval at all, which is how prompts
 // that only looked dangerous ended up depending on a broken sandbox to produce
-// an approval. Checked against codex-cli 0.153.0 on Linux.
+// an approval. Checked against codex-cli 0.153.0 on Linux. Default mode leaves
+// the sandbox to the CLI's config, so newCodexAgent pins workspace-write.
 const approvalTargetRoot = "/var/tmp"
 
 // newApprovalTarget returns a path the agent can only create by escaping its

@@ -70,16 +70,16 @@ between the last two ([lifecycle-ui.md §2.2](lifecycle-ui.md#22-chat-the-attent
 `MainContainer` as its `heading`). The title is one button with a second line
 under it: the model — the agent's name when the model is Auto, since "Auto" says
 only that the CLI decides — and the permission mode in `getSessionModeInfo`'s
-words. The engine truncates first; the mode, which decides whether the next turn
-asks before it acts, stays whole. Until the session has described itself the
-second line is a skeleton rather than a placeholder "Default", so a session
-running without prompts never wears the name of one that asks. A session still
-called `New Chat` reads as a placeholder (secondary colour), and one whose title
-has not arrived yet is a skeleton too; one read out of another worktree says
-`Read-only` instead of an engine, and `Unavailable session` if it cannot be read
-at all. A route naming no session has nothing to describe, so the header keeps
-the project's name and offers no button. The project's name otherwise lives in
-the sidebar's worktree switcher.
+words. The engine truncates first; the mode, which says whether the agent's own
+permission settings still stand, stays whole. Until the session has described
+itself the second line is a skeleton rather than a placeholder "Default", so a
+session with every gate down never wears the name of one that keeps them. A
+session still called `New Chat` reads as a placeholder (secondary colour), and
+one whose title has not arrived yet is a skeleton too; one read out of another
+worktree says `Read-only` instead of an engine, and `Unavailable session` if it
+cannot be read at all. A route naming no session has nothing to describe, so the
+header keeps the project's name and offers no button. The project's name
+otherwise lives in the sidebar's worktree switcher.
 The preview button (`▭`) is there only when the relay is on
 ([port-preview.md](port-preview.md)).
 
@@ -137,13 +137,14 @@ about a choice made on purpose is one they learn to look past while it goes on
 pulling at the eye from the top of every screen. So the second line is one muted
 line (`text-xs text-th-text-muted`) in every mode, and the only colour on it is
 the mode's glyph: YOLO's `Zap`, `size-3`, in `text-th-warning`, with the word
-beside it muted like the engine's; Default has no glyph, since the mode that asks
-needs no mark. That is less than the old mode bar's button spent — it tinted
-the word as well, on a bordered button down by the composer — and that much was
-already enough: one small spot of colour is findable by anyone who looks for it
-and too small to catch an eye that is not looking. Nothing more is added: no
-tinted word, no pill, background or border, no extra line, and nothing that
-differs by width — the phone header and the desktop one carry the same line.
+beside it muted like the engine's; Default has no glyph, since the mode that
+changes nothing needs no mark. That is less than the old mode bar's button
+spent — it tinted the word as well, on a bordered button down by the composer —
+and that much was already enough: one small spot of colour is findable by
+anyone who looks for it and too small to catch an eye that is not looking.
+Nothing more is added: no tinted word, no pill, background or border, no extra
+line, and nothing that differs by width — the phone header and the desktop one
+carry the same line.
 The glyph is `aria-hidden` and the word is what the accessible name says, so the
 colour carries nothing the text does not — which is what lets it stand in the
 light themes, where `th-warning` is too pale to clear the non-text 3:1

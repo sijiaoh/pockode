@@ -1529,7 +1529,7 @@ args := []string{
     "--permission-prompt-tool", "stdio",
 }
 
-if opts.Mode == ModeYolo {
+if opts.Mode == session.ModeYolo {
     args = append(args, "--permission-mode", "bypassPermissions")
 }
 
@@ -2632,8 +2632,8 @@ which is answered with one `decision` string: `accept`, `acceptForSession` (the
 *Always Allow* answer, which lasts as long as the thread) or `decline`. There is
 no externally tagged enum and no rejection payload; the MCP channel's
 `{"denied": {"rejection": …}}` shape is gone with it. Which actions get this far
-at all is a question of the session mode rather than of this path (see
-[Session Modes](#session-modes)).
+at all is decided by the approval policy in force, which Pockode sets only in
+`yolo` (see [Session Modes](#session-modes)), rather than by this path.
 
 Each request is handled on its own goroutine, because everything else the CLI has
 to say keeps arriving while the user decides.
@@ -2940,9 +2940,10 @@ These are choices, recorded so they do not become blanks nobody knows about.
   restarted process resumes the thread ([Session Models](#session-models)).
 - **The `granular` approval policy** (`AskForApproval` is `untrusted`,
   `on-request`, `never` or a `granular` object) would let individual approval
-  classes be turned on one at a time. Not adopted: the product question it answers
-  is the one [Session Modes](#session-modes) settles, and a third mode needs a
-  reason in the UI before it needs a policy value.
+  classes be turned on one at a time. Pockode sets no policy outside `yolo`
+  ([Session Modes](#session-modes)), so choosing one is the user's, in their own
+  Codex config; a third mode needs a reason in the UI before it needs a policy
+  value.
 - **The app-server's session-management surface** — listing, naming and searching
   threads — is not used at all. Pockode *is* the session manager; a second index
   of the same conversations could only disagree with the one the user sees.
@@ -3219,10 +3220,10 @@ behind its copied history were spent by the session it came from.
 
 A session runs in one of two modes, `default` or `yolo`, and each CLI is told
 which one at startup and only there — Claude through its arguments, Codex through
-the `approvalPolicy` / `sandbox` pair on `thread/start`, `thread/resume` and
-`thread/fork`. `session.set_mode` therefore closes the running process instead of
-retuning it. For Codex that now costs exactly a restart: the new process resumes
-the same thread with the new pair, so the agent keeps the conversation
+the thread parameters of `thread/start`, `thread/resume` and `thread/fork`.
+`session.set_mode` therefore closes the running process instead of retuning it.
+For Codex that now costs exactly a restart: the new process resumes the same
+thread under the new mode, so the agent keeps the conversation
 ([Thread Recovery](#thread-recovery)). It used to cost the conversation with it,
 which is the single largest thing the channel move bought
 ([Why the app-server Channel](#why-the-app-server-channel)). Codex could avoid even
@@ -3231,34 +3232,42 @@ would buy one agent a path the other cannot have.
 
 | Mode | Claude | Codex |
 |---|---|---|
-| `default` | `--permission-prompt-tool stdio`, no allowlist | `approvalPolicy: on-request`, `sandbox: workspace-write` |
-| `yolo` | adds `--permission-mode bypassPermissions` | `approvalPolicy: never`, `sandbox: danger-full-access` |
+| `default` | no `--permission-mode` | no `approvalPolicy`, no `sandbox` |
+| `yolo` | `--permission-mode bypassPermissions` | `approvalPolicy: never`, `sandbox: danger-full-access` |
 
-Read as a promise to the user, those two `default` cells say different things.
-Claude's puts everything its own rules gate — file edits and commands among
-them — in front of the user as a `PermissionRequestEvent`, since Pockode adds no
-allowlist of its own. Codex's gates nothing inside its sandbox: the working
-directory, `$TMPDIR` and `/tmp` are writable (checked on Linux, codex-cli
-0.153.0) and work there simply happens. Only what the sandbox refuses — writing
-outside those roots, reaching the network — can produce a prompt at all.
+**`default` overrides nothing.** Each CLI applies its user's own permission
+settings, and whatever those send for approval reaches the user — Claude's
+through `--permission-prompt-tool stdio`, which it gets in both modes, as a
+`PermissionRequestEvent`; Codex's as an approval request
+([Approvals](#approvals)). Pockode adds no allowlist, policy or sandbox of its
+own.
 
-**That gap is now a choice, not a limit.** It used to be both: the MCP channel
-rejected `untrusted` — the policy that asks before every command — outright, so
-the wording here said the gap could not be closed. The app-server channel accepts
-it, and it is a real gate rather than an after-the-fact escalation: asked to run
-`touch SHOULD_NOT_EXIST` and declined, the file was **not created** (measured on
-codex-cli 0.153.0). The schema the CLI generates lists `untrusted`, `on-request`,
-`never` and a `granular` object.
+That is what lets one mode mean the same thing on both agents. `default` used to
+pick a pairing for Codex — `on-request` + `workspace-write` — while leaving Claude
+to its own rules, so the two `default`s promised different things and the
+frontend copy had to be keyed on agent to say which. It also overrode a choice
+the user had already made: someone who had told Codex to ask before every command
+got Pockode's pairing instead. Deferring removes both. The settings a user tuned
+in their terminal are the ones their phone session runs under, and
+`web/src/lib/sessionMode.ts` holds one description per mode, because there is
+now one thing to say.
 
-The mapping stays where it was anyway, because the argument that decided it was
-never a technical one: on a phone, tapping approve for every write of a multi-file
-edit is not a safety feature, it is an unusable session. That applies to
-`untrusted` exactly as it applied to a `read-only` sandbox. So `default` maps to
-`on-request` + `workspace-write` — the pairing Codex itself runs by default, which
-`codex doctor` reports as `approval policy OnRequest` with a restricted filesystem
-and network sandbox — and "Codex changed files without asking" remains the
-accepted cost of that trade. **What changed is why**: this is a difference Pockode
-chooses knowing it could be removed, not one it cannot reach.
+What a CLI does with the settings Pockode leaves unset is that CLI's business and
+deliberately not part of this contract: it is the CLI's to change, and
+describing it here would turn it into a promise Pockode has no means to keep.
+
+`yolo` is the one place Pockode overrides: the user asking for every gate to come
+down, so each CLI is told to drop its own, Codex additionally dropping its
+sandbox. The mechanisms differ, but what the user is promised does not — nothing
+prompts, on either agent.
+
+**The integration suite pins what production leaves unset.** Its Codex approval
+scenarios are written against `on-request` + `workspace-write`, and with
+production sending neither, a developer whose own `config.toml` said otherwise
+would see them fail for a reason that is not a defect. So the agent the shared
+suite runs (`newCodexAgent` in `server/agent/codex/codex_test.go`) passes both
+as `-c` flags to `codex app-server`, the layer above `config.toml`; `New()`
+passes none, and `yolo` still overrides them per thread.
 
 **Under `on-request` the prompt is a model decision, not a gate.** The CLI
 describes the policy as "the model decides when to ask the user for approval"
@@ -3268,14 +3277,6 @@ is enforced is the sandbox; the prompt is how the model asks for it to be lifted
 for one action. The integration suite holds that line: a first approval preceded
 by any tool result means the CLI asked only after something failed, and the suite
 fails such a run rather than counting it as a boundary that worked.
-
-`yolo` needs no such distinction — nothing prompts, on either agent — even though
-the mechanisms differ, Codex additionally dropping the sandbox it otherwise runs
-under. That difference does not change what the user is promised, which is why
-only `default` has to be told apart. The frontend copy is therefore keyed on
-agent as well as mode (`web/src/lib/sessionMode.ts`); one shared string would
-have to describe the looser of the two `default`s, which is how a UI ends up
-promising more protection than the session actually has.
 
 ### Permission Options
 

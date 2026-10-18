@@ -45,7 +45,9 @@ func (a AgentType) DisplayName() string {
 type Mode string
 
 const (
-	ModeDefault Mode = "default" // Normal mode with permission prompts
+	// Pockode overrides nothing: each agent CLI applies its user's own
+	// permission settings, whatever prompts those lead to.
+	ModeDefault Mode = "default"
 	// Each agent gives up its own gate: Claude runs with
 	// --permission-mode bypassPermissions, Codex with approval-policy "never"
 	// and its sandbox at danger-full-access. See claude.buildArgs and
