@@ -65,13 +65,77 @@ async function openViewer(item: ImageMediaItem) {
 	return { image, frame, wrapper };
 }
 
-function scaleOf(image: HTMLElement): number {
-	return image.getBoundingClientRect().width / image.offsetWidth;
+/**
+ * The image's size at fit — its layout box, which the transform leaves alone.
+ * Read from the computed style, since `offsetWidth` rounds to whole pixels and
+ * at actual size the transform multiplies that error several times over.
+ */
+function fitOf(image: HTMLElement) {
+	const style = getComputedStyle(image);
+	return { width: parseFloat(style.width), height: parseFloat(style.height) };
 }
 
-/** Waits for the transform to come to rest at `scale`. */
+function scaleOf(image: HTMLElement): number {
+	return image.getBoundingClientRect().width / fitOf(image).width;
+}
+
+type Box = { left: number; top: number; width: number; height: number };
+
+function boxOf(element: HTMLElement): Box {
+	const { left, top, width, height } = element.getBoundingClientRect();
+	return { left, top, width, height };
+}
+
+/**
+ * The image's box if it holds still from one animation frame to the next, or
+ * null while it moves — "stable" as Playwright's actionability checks mean it.
+ * Being near a target is not being at rest: an animation's last frames are
+ * already close to where it ends, and still moving.
+ */
+async function stillBoxOf(image: HTMLElement): Promise<Box | null> {
+	const before = boxOf(image);
+	await new Promise(requestAnimationFrame);
+	const after = boxOf(image);
+	const still = (Object.keys(after) as (keyof Box)[]).every(
+		(side) => before[side] === after[side],
+	);
+	return still ? after : null;
+}
+
+/**
+ * Waits for the transform to come to rest at `scale`. Rest alone is not
+ * enough: before an animation's first frame the image is still at rest where
+ * it was.
+ */
 async function settlesAt(image: HTMLElement, scale: number) {
-	await expect.poll(() => scaleOf(image)).toBeCloseTo(scale, 1);
+	const width = fitOf(image).width;
+	await expect
+		.poll(async () => {
+			const box = await stillBoxOf(image);
+			return box && box.width / width;
+		})
+		.toBeCloseTo(scale, 2);
+}
+
+/** Waits for the image to come to rest at `box`, to within half a pixel. */
+async function restsAt(image: HTMLElement, box: Box) {
+	await expect
+		.poll(() => stillBoxOf(image))
+		.toEqual({
+			left: expect.closeTo(box.left, 0),
+			top: expect.closeTo(box.top, 0),
+			width: expect.closeTo(box.width, 0),
+			height: expect.closeTo(box.height, 0),
+		});
+}
+
+/** Waits for the image to come to rest wherever that is, and says where. */
+function restingBoxOf(image: HTMLElement): Promise<Box> {
+	return vi.waitFor(async () => {
+		const box = await stillBoxOf(image);
+		if (!box) throw new Error("the image is still moving");
+		return box;
+	});
 }
 
 function centre(element: HTMLElement) {
@@ -213,7 +277,7 @@ describe("MediaViewer image stage", () => {
 
 	it("pinching springs back to fit below it and stops at the ceiling above it", async () => {
 		const { image, wrapper } = await openViewer(imageItem("big.png", BIG));
-		const actual = BIG.width / image.offsetWidth;
+		const actual = BIG.width / fitOf(image).width;
 		const ceiling = Math.max(4, actual * 4);
 
 		pinch(wrapper, 200, 40);
@@ -255,8 +319,8 @@ describe("MediaViewer image stage", () => {
 
 		for (let i = 0; i < 5; i++) wheel(wrapper, { deltaY: -100, ctrlKey: true });
 		await expect.poll(() => scaleOf(image)).toBeGreaterThan(1.2);
-		const zoomed = scaleOf(image);
-		const left = image.getBoundingClientRect().left;
+		const { left, width } = await restingBoxOf(image);
+		const zoomed = width / fitOf(image).width;
 
 		wheel(wrapper, { deltaX: 80, deltaY: 0 });
 		await expect
@@ -266,27 +330,47 @@ describe("MediaViewer image stage", () => {
 	});
 
 	it("keys zoom and pan", async () => {
-		const { image, frame } = await openViewer(imageItem("big.png", BIG));
-		const actual = BIG.width / image.offsetWidth;
+		const { image, frame, wrapper } = await openViewer(
+			imageItem("big.png", BIG),
+		);
+		const fit = fitOf(image);
+		const actual = BIG.width / fit.width;
 		const user = userEvent.setup();
 		expect(frame).toHaveFocus();
 
-		await user.keyboard("1");
-		await settlesAt(image, actual);
-		await user.keyboard("0");
-		await settlesAt(image, 1);
-		await user.keyboard("+");
-		await settlesAt(image, 1.5);
-		await user.keyboard("-");
-		await settlesAt(image, 1);
+		// Every zoom here is about the frame's centre and starts centred, so it
+		// ends centred: larger than the frame the bounds leave it there, smaller
+		// it is centred anyway. A pan then moves it by a tenth of the frame. The
+		// library keeps a zoom's scale to two decimals, so actual size is drawn
+		// a pixel or so off the image's own width.
+		const view = wrapper.getBoundingClientRect();
+		const at = (scale: number, panned = 0): Box => {
+			const drawn = Math.round(scale * 100) / 100;
+			const width = fit.width * drawn;
+			const height = fit.height * drawn;
+			return {
+				left: view.left + (view.width - width) / 2 - panned,
+				top: view.top + (view.height - height) / 2,
+				width,
+				height,
+			};
+		};
 
-		await user.keyboard("1");
-		await settlesAt(image, actual);
-		const left = image.getBoundingClientRect().left;
+		// The library centres the image a few frames after the readout appears,
+		// and a key pressed before that zooms from wherever it was.
+		await restsAt(image, at(1));
+		for (const [key, scale] of [
+			["1", actual],
+			["0", 1],
+			["+", 1.5],
+			["-", 1],
+			["1", actual],
+		] as const) {
+			await user.keyboard(key);
+			await restsAt(image, at(scale));
+		}
 		await user.keyboard("{ArrowRight}");
-		await expect
-			.poll(() => image.getBoundingClientRect().left)
-			.toBeCloseTo(left - frame.clientWidth * 0.1, 0);
+		await restsAt(image, at(actual, view.width * 0.1));
 	});
 
 	it("takes the keys back after a press on the image", async () => {
