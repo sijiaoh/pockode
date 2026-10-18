@@ -21,12 +21,17 @@ import { DoubleTapTracker } from "./doubleTap";
 import { ImageFailureCard } from "./ImageFailureCard";
 import {
 	actualScale,
+	bounded,
 	fitSize,
 	isAtFit,
 	KEY_PAN_SHARE,
 	KEY_ZOOM_FACTOR,
+	type Layout,
 	maxScale,
+	pannedBy,
 	toggleTarget,
+	type View,
+	zoomedTo,
 	zoomLabel,
 } from "./imageScale";
 import type { ImageMediaItem, StageKeyHandler, StageProps } from "./types";
@@ -35,6 +40,72 @@ import type { ImageMediaItem, StageKeyHandler, StageProps } from "./types";
 const ZOOM_ANIMATION_MS = 200;
 
 type Status = "loading" | "loaded" | "error";
+
+/**
+ * The stage's own moves of the transform — the keys, the toggle, the
+ * re-centring — and where they are taking it. Each one composes from where the
+ * view is heading, not from the frame an animation has reached: the library
+ * starts a new animation from wherever it cut the last one off, so a key
+ * pressed inside an animation would otherwise lose part of the one before.
+ * Dragging, pinching and the wheel cancel the animation, and from then on
+ * what is on screen is where the view is heading
+ * (docs/media-viewer.md#where-a-move-starts).
+ */
+function useMoves(apiRef: React.RefObject<ReactZoomPanPinchContentRef | null>) {
+	const headingRef = useRef<View | null>(null);
+	/**
+	 * Moves to what `to` makes of where the view is heading, unless it returns
+	 * null. `to` is handed the library's own measurements, so the bounds it
+	 * works out are the ones the library holds a drag to.
+	 */
+	return useCallback(
+		(to: (from: View, layout: Layout) => View | null, ms: number) => {
+			const api = apiRef.current;
+			const wrapper = api?.instance.wrapperComponent;
+			const content = api?.instance.contentComponent;
+			if (!api || !wrapper || !content) return;
+			const layout: Layout = {
+				frame: { width: wrapper.clientWidth, height: wrapper.clientHeight },
+				image: { width: content.offsetWidth, height: content.offsetHeight },
+			};
+			const { scale, positionX, positionY } = api.instance.state;
+			const shown = { scale, x: positionX, y: positionY };
+			const heading = headingRef.current ?? shown;
+			// Not heading anywhere of ours, the view still ends inside the
+			// bounds: the library brings it back to them after a gesture.
+			const target = to(headingRef.current ?? bounded(shown, layout), layout);
+			if (
+				!target ||
+				(target.scale === heading.scale &&
+					target.x === heading.x &&
+					target.y === heading.y)
+			) {
+				return;
+			}
+			headingRef.current = target;
+			// Settled when the animation ends or anything interrupts it.
+			const arrived = () => {
+				if (headingRef.current === target) headingRef.current = null;
+			};
+			const { x, y } = target;
+			if (ms > 0) {
+				void api.setTransform(x, y, target.scale, ms).then(arrived);
+				return;
+			}
+			// The library applies a zero-length move at once but leaves a running
+			// animation running, to carry the view off to its own target on the
+			// next frame. Any new animation replaces it; this one stays put.
+			void api.setTransform(x, y, target.scale, 0);
+			void api.setTransform(x, y, target.scale, 1).then(arrived);
+		},
+		[apiRef],
+	);
+}
+
+const centreOf = ({ width, height }: ImageDimensions) => ({
+	x: width / 2,
+	y: height / 2,
+});
 
 /** The frame's size, followed through rotation and window resizes. */
 function useElementSize(ref: React.RefObject<HTMLElement | null>) {
@@ -136,56 +207,72 @@ export default function ImageStage({
 	const max = maxScale(actual);
 
 	const apiRef = useRef<ReactZoomPanPinchContentRef>(null);
+	const move = useMoves(apiRef);
 	const reducedMotion = useMediaQuery("(prefers-reduced-motion: reduce)");
 	const animationMs = reducedMotion ? 0 : ZOOM_ANIMATION_MS;
 
 	// A layout effect, so it runs before the new bytes' `onLoad` can report.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: new bytes are what it runs for
 	useLayoutEffect(() => {
 		onMetadata(null);
-		if (src) apiRef.current?.centerView(1, 0);
 	}, [src, onMetadata]);
+
+	// New bytes, and the first fit, are shown from fit — centred, wherever the
+	// image was. Before the frame is painted, so it never shows uncentred.
+	const hasFit = fit !== null;
+	useLayoutEffect(() => {
+		if (!src || !hasFit) return;
+		// The library learns of a new size from its ResizeObserver, which WebKit
+		// delivers a few frames late, and realigns by cancelling whatever
+		// animation is running: a key pressed just after opening would stop
+		// short. Told now, the observer has nothing left to tell it.
+		apiRef.current?.instance.onSizeChange();
+		move((_, layout) => bounded({ scale: 1, x: 0, y: 0 }, layout), 0);
+	}, [src, hasFit, move]);
 
 	// A smaller frame lowers the ceiling; a scale left above it is brought down.
 	useEffect(() => {
-		const api = apiRef.current;
-		const wrapper = api?.instance.wrapperComponent;
-		if (!api || !wrapper || api.instance.state.scale <= max) return;
-		const rect = wrapper.getBoundingClientRect();
-		void api.zoomToPoint(
-			max,
-			rect.left + rect.width / 2,
-			rect.top + rect.height / 2,
+		move(
+			(from, layout) =>
+				from.scale > max
+					? zoomedTo(from, max, centreOf(layout.frame), layout)
+					: null,
 			0,
 		);
-	}, [max]);
+	}, [max, move]);
 
-	const zoomAt = (scale: number, clientX?: number, clientY?: number) => {
-		const api = apiRef.current;
-		const wrapper = api?.instance.wrapperComponent;
-		if (!api || !wrapper) return;
-		if (isAtFit(scale)) {
-			void api.centerView(1, animationMs);
-			return;
-		}
-		const rect = wrapper.getBoundingClientRect();
-		void api.zoomToPoint(
-			scale,
-			clientX ?? rect.left + rect.width / 2,
-			clientY ?? rect.top + rect.height / 2,
+	/** Zooms to what `scale` makes of the scale the view is heading to. */
+	const zoomTo = (
+		scale: (from: number) => number,
+		point?: { clientX: number; clientY: number },
+	) => {
+		const rect =
+			apiRef.current?.instance.wrapperComponent?.getBoundingClientRect();
+		move(
+			(from, layout) =>
+				zoomedTo(
+					from,
+					scale(from.scale),
+					point && rect
+						? { x: point.clientX - rect.left, y: point.clientY - rect.top }
+						: centreOf(layout.frame),
+					layout,
+				),
 			animationMs,
 		);
 	};
 
-	const toggle = (clientX?: number, clientY?: number) => {
-		const api = apiRef.current;
-		if (!api) return;
-		zoomAt(toggleTarget(api.instance.state.scale, actual), clientX, clientY);
+	const toggle = (point?: { clientX: number; clientY: number }) => {
+		zoomTo((from) => toggleTarget(from, actual), point);
 	};
 	const toggleRef = useRef(toggle);
 	toggleRef.current = toggle;
 
 	const [doubleTap] = useState(
-		() => new DoubleTapTracker((x, y) => toggleRef.current(x, y)),
+		() =>
+			new DoubleTapTracker((clientX, clientY) =>
+				toggleRef.current({ clientX, clientY }),
+			),
 	);
 	// `dblclick` is the mouse's; a touch's comes through `doubleTap`, and a
 	// browser that synthesises one for touch as well must not toggle twice.
@@ -193,42 +280,44 @@ export default function ImageStage({
 
 	const onKey: StageKeyHandler = (event) => {
 		if (event.ctrlKey || event.metaKey || event.altKey) return;
-		const api = apiRef.current;
-		const wrapper = api?.instance.wrapperComponent;
-		if (!api || !wrapper) return;
-		const { scale } = api.instance.state;
-		const panX = wrapper.clientWidth * KEY_PAN_SHARE;
-		const panY = wrapper.clientHeight * KEY_PAN_SHARE;
 		// Arrows move the view, as scrolling does: → reveals what is to the
-		// right, so the image itself moves left.
-		const pan = (dx: number, dy: number) => {
-			if (!isAtFit(scale)) void api.panBy(dx, dy, animationMs);
-		};
+		// right, so the image itself moves left. At fit the bounds hold it.
+		const pan = (shareX: number, shareY: number) =>
+			move(
+				(from, layout) =>
+					pannedBy(
+						from,
+						shareX * layout.frame.width,
+						shareY * layout.frame.height,
+						layout,
+					),
+				animationMs,
+			);
 		switch (event.key) {
 			case "+":
 			case "=":
-				zoomAt(Math.min(scale * KEY_ZOOM_FACTOR, max));
+				zoomTo((from) => Math.min(from * KEY_ZOOM_FACTOR, max));
 				break;
 			case "-":
-				zoomAt(Math.max(scale / KEY_ZOOM_FACTOR, 1));
+				zoomTo((from) => Math.max(from / KEY_ZOOM_FACTOR, 1));
 				break;
 			case "0":
-				zoomAt(1);
+				zoomTo(() => 1);
 				break;
 			case "1":
-				zoomAt(actual);
+				zoomTo(() => actual);
 				break;
 			case "ArrowLeft":
-				pan(panX, 0);
+				pan(KEY_PAN_SHARE, 0);
 				break;
 			case "ArrowRight":
-				pan(-panX, 0);
+				pan(-KEY_PAN_SHARE, 0);
 				break;
 			case "ArrowUp":
-				pan(0, panY);
+				pan(0, KEY_PAN_SHARE);
 				break;
 			case "ArrowDown":
-				pan(0, -panY);
+				pan(0, -KEY_PAN_SHARE);
 				break;
 			default:
 				return;
@@ -281,7 +370,8 @@ export default function ImageStage({
 					ref={apiRef}
 					minScale={1}
 					maxScale={max}
-					centerOnInit
+					// Centred by the stage itself, before the first paint: the
+					// library's own centring lands a few frames late in WebKit.
 					centerZoomedOut
 					limitToBounds
 					// The toggle is ours: the library's zooms by a fixed step rather
@@ -296,9 +386,8 @@ export default function ImageStage({
 					velocityAnimation={{ disabled: reducedMotion }}
 					onTransform={(_, state) => setAtFit(isAtFit(state.scale))}
 					// Grabbing is a held mouse button. The library reports wheel
-					// pans, its own animated pans (as a buttonless MouseEvent) and
-					// touch pans here too, and a pinch taking over a one-finger pan
-					// never reports its stop.
+					// pans and touch pans here too, and a pinch taking over a
+					// one-finger pan never reports its stop.
 					onPanningStart={(_, event) =>
 						setPanning(event instanceof MouseEvent && event.buttons !== 0)
 					}
@@ -315,7 +404,7 @@ export default function ImageStage({
 							onPointerCancel: doubleTap.pointerCancel,
 							onDoubleClick: (event) => {
 								if (lastPointerTypeRef.current === "mouse") {
-									toggle(event.clientX, event.clientY);
+									toggle(event);
 								}
 							},
 						}}
