@@ -43,12 +43,8 @@ type Status = "loading" | "loaded" | "error";
 
 /**
  * The stage's own moves of the transform — the keys, the toggle, the
- * re-centring — and where they are taking it. Each one composes from where the
- * view is heading, not from the frame an animation has reached: the library
- * starts a new animation from wherever it cut the last one off, so a key
- * pressed inside an animation would otherwise lose part of the one before.
- * Dragging, pinching and the wheel cancel the animation, and from then on
- * what is on screen is where the view is heading
+ * re-centring — each composed from where the view is heading rather than from
+ * the frame an animation has reached; a gesture drops the destination
  * (docs/media-viewer.md#where-a-move-starts).
  */
 function useMoves(apiRef: React.RefObject<ReactZoomPanPinchContentRef | null>) {
@@ -219,11 +215,9 @@ export default function ImageStage({
 
 	const failed = image.error || status === "error";
 
-	// The library learns of a new size from its ResizeObserver, which WebKit
-	// delivers a few frames late, and realigns by cancelling whatever animation
-	// is running: a key pressed just after opening, or just after the frame
-	// turned, would stop short. Told now, the observer has nothing left to
-	// tell it.
+	// The library hears of a new size here, not from its ResizeObserver: WebKit
+	// delivers that late, and the library realigns on it by cancelling a key's
+	// running animation (docs/media-viewer.md#where-a-move-starts).
 	// biome-ignore lint/correctness/useExhaustiveDependencies: the sizes are what it runs for; the library measures them itself
 	useLayoutEffect(() => {
 		apiRef.current?.instance.onSizeChange();

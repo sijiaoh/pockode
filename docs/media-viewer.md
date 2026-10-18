@@ -566,8 +566,11 @@ phone.
 - `MediaViewer.browser.test.tsx` (real browser, see
   [testing.md](testing.md#frontend-the-real-browser-entry)) covers fit layout,
   the double-click and double-tap toggles, pinch limits, the pan edge, the wheel,
-  the keys, and refitting after a resize. Gestures are asserted on where the
-  image lands on screen, relative to the measured frame.
+  the keys (including one pressed while the last still animates and one just
+  after the frame turns), a drag picking up where the keys left the image,
+  refitting after a resize, and centring again after a retried load. Gestures
+  are asserted on where the image comes to rest on screen, relative to the
+  measured frame.
   Its video case plays a 64×36 VP9 clip (`src/test/clip-64x36.webm`) and checks
   the element spans the frame, so the picture is fitted and enlarged. Its HTML
   cases open two linked pages (`src/test/page/`) on the window's own history:

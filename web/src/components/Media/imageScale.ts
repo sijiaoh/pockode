@@ -2,8 +2,7 @@ import type { ImageDimensions } from "../../utils/fileView";
 
 /**
  * The image stage's scales. Scale 1 is the image laid out to fit the frame —
- * contained, never enlarged — so the library's own `minScale: 1` and
- * `centerView(1)` both mean "fit".
+ * contained, never enlarged — so the library's own `minScale: 1` means "fit".
  */
 
 /** How near 1 a scale has to be to count as fit: pinching leaves residue. */
