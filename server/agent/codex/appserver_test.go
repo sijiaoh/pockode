@@ -252,12 +252,12 @@ func TestBuildThreadParams_DisableMCP(t *testing.T) {
 
 func TestBuildThreadParams_ApprovalPolicy(t *testing.T) {
 	tests := []struct {
-		mode        session.Mode
-		wantPolicy  string
-		wantSandbox string
+		mode session.Mode
+		want map[string]string
 	}{
-		{session.ModeDefault, "on-request", "workspace-write"},
-		{session.ModeYolo, "never", "danger-full-access"},
+		// Default omits both, leaving them to the user's Codex config.
+		{session.ModeDefault, map[string]string{}},
+		{session.ModeYolo, map[string]string{"approvalPolicy": "never", "sandbox": "danger-full-access"}},
 	}
 
 	for _, tt := range tests {
@@ -268,11 +268,12 @@ func TestBuildThreadParams_ApprovalPolicy(t *testing.T) {
 			}
 
 			params := sess.buildThreadParams()
-			if params["approvalPolicy"] != tt.wantPolicy {
-				t.Errorf("approvalPolicy = %v, want %q", params["approvalPolicy"], tt.wantPolicy)
-			}
-			if params["sandbox"] != tt.wantSandbox {
-				t.Errorf("sandbox = %v, want %q", params["sandbox"], tt.wantSandbox)
+			for _, key := range []string{"approvalPolicy", "sandbox"} {
+				got, sent := params[key]
+				want, wantSent := tt.want[key]
+				if sent != wantSent || (sent && got != want) {
+					t.Errorf("%s = %v (sent: %v), want %q (sent: %v)", key, got, sent, want, wantSent)
+				}
 			}
 		})
 	}

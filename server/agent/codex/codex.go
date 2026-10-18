@@ -88,7 +88,12 @@ const (
 const threadSource = "pockode"
 
 // Agent implements agent.Agent using the Codex CLI app-server.
-type Agent struct{}
+type Agent struct {
+	// configOverrides are `-c key=value` flags for the app-server, the layer
+	// that sits above the user's config.toml. Production sends none; the
+	// integration suite uses them to pin settings over a developer's own config.
+	configOverrides []string
+}
 
 // New creates a new Codex Agent.
 func New() *Agent {
@@ -113,7 +118,11 @@ func (a *Agent) Start(ctx context.Context, opts agent.StartOptions) (agent.Sessi
 
 	log := slog.With("sessionId", opts.SessionID, "agent", "codex")
 
-	proc, err := agent.StartProcess(procCtx, log, Binary, []string{appServerSubcommand}, opts.WorkDir)
+	args := []string{appServerSubcommand}
+	for _, kv := range a.configOverrides {
+		args = append(args, "-c", kv)
+	}
+	proc, err := agent.StartProcess(procCtx, log, Binary, args, opts.WorkDir)
 	if err != nil {
 		cancel()
 		return nil, fmt.Errorf("failed to start codex: %w", err)
@@ -643,22 +652,11 @@ func (s *appSession) buildThreadParams() map[string]interface{} {
 		params["model"] = s.opts.Model
 	}
 
-	switch s.opts.Mode {
-	case session.ModeYolo:
+	// Default mode sends neither, so Codex applies the user's own config and
+	// defaults; only yolo overrides them.
+	if s.opts.Mode == session.ModeYolo {
 		params["approvalPolicy"] = "never"
 		params["sandbox"] = "danger-full-access"
-	default:
-		// "on-request" + "workspace-write" is Codex's own auto mode: work inside
-		// the sandbox runs unprompted, only escapes from it (writes outside
-		// WorkDir, network) ask for approval.
-		//
-		// Not "untrusted", which asks before every command. This channel does
-		// accept it — unlike the MCP one, which rejected it outright — so the
-		// choice is now a product one rather than a limit of the CLI: approving
-		// every command one at a time on a phone is not a session anyone can
-		// use. See docs/code/agent-integration.md.
-		params["approvalPolicy"] = "on-request"
-		params["sandbox"] = "workspace-write"
 	}
 
 	return params

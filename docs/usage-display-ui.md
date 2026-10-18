@@ -216,11 +216,11 @@ The header carries **no number, no percentage, no badge and no colour** from the
 session's usage. When the window is nearly full, the user learns it by opening the
 panel rather than by glancing up. Worth paying, because a figure in the header
 would compete for width with the session's name and its mode — the one warning
-colour the header does carry, which says whether the next turn asks before it
-acts. If context pressure later turns out to need announcing without a tap, the
-honest way to do it is its own signal (an inline warning above the input bar,
-where the app already puts things the user must see), not a number bolted onto
-the title.
+colour the header does carry, which says whether the agent's own permission
+gates are down. If context pressure later turns out to need announcing without a
+tap, the honest way to do it is its own signal (an inline warning above the
+input bar, where the app already puts things the user must see), not a number
+bolted onto the title.
 
 The panel is a `ResponsivePanel` — a drawer below the expanded tier, a dropdown
 under the title at and above it. Two facts about that container a section has to

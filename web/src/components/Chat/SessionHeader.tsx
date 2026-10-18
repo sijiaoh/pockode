@@ -104,7 +104,7 @@ function SessionHeader({
 		effort,
 		hasSessionSettings,
 	});
-	const modeInfo = getSessionModeInfo(mode, agentType);
+	const modeInfo = getSessionModeInfo(mode);
 	const isYolo = mode === "yolo";
 
 	const handleClose = useCallback(() => {
@@ -267,7 +267,7 @@ function SessionHeader({
 						className={`min-w-0 ${settingsLocked ? "opacity-50" : ""}`}
 					>
 						{SESSION_MODES.map((modeKey) => {
-							const info = getSessionModeInfo(modeKey, agentType);
+							const info = getSessionModeInfo(modeKey);
 							return (
 								<ChoiceRow
 									key={modeKey}
@@ -346,14 +346,16 @@ function SessionHeader({
 							/>
 						}
 						// Not a placeholder "Default": a session running in YOLO must
-						// not wear the safe mode's name for a round trip.
+						// not wear the name of the mode that keeps its gates for a
+						// round trip.
 						subtitle={
 							!subtitleReady ? null : readOnly ? (
 								"Read-only"
 							) : (
 								<>
 									{/* The engine gives way first: the mode is the one that
-									    decides whether the next turn asks before it acts. */}
+									    says whether the agent's own permission settings
+									    still stand. */}
 									<span className="min-w-0 truncate">{engineText}</span>
 									<span className="shrink-0 px-1">·</span>
 									<span className="flex shrink-0 items-center gap-0.5">

@@ -63,8 +63,8 @@ export default function SessionSection() {
 				items={SESSION_MODES}
 				selected={defaultMode}
 				onSelect={selectMode}
-				getInfo={(mode) => getSessionModeInfo(mode, engine.agentType)}
-				hint={getSessionModeInfo(defaultMode, engine.agentType).description}
+				getInfo={getSessionModeInfo}
+				hint={getSessionModeInfo(defaultMode).description}
 				error={modeError}
 				valueState={valueState}
 			/>

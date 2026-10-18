@@ -33,8 +33,9 @@ func (s *appSession) handleServerRequest(msg rpcMessage) {
 
 	case "item/permissions/requestApproval":
 		// Only reachable under the `granular` approval policy, which Pockode
-		// does not set (see buildThreadParams). Granting nothing is the refusal:
-		// the reply's shape is the permissions handed over, not a decision.
+		// never sets but a user's own Codex config can. Granting nothing is the
+		// refusal: the reply's shape is the permissions handed over, not a
+		// decision.
 		s.log.Warn("codex asked for a permission grant Pockode has no surface for; granting nothing",
 			"params", string(msg.Params))
 		s.sendRPCResponse(*msg.ID, map[string]interface{}{"permissions": map[string]interface{}{}}, nil)
