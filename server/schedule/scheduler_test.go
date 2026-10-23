@@ -1,0 +1,372 @@
+package schedule
+
+import (
+	"context"
+	"errors"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/pockode/server/work"
+)
+
+// fakeClock hands the scheduler a clock the test moves by hand. Every timer
+// the scheduler sets is published on timers, which is how a test knows the
+// loop has finished what it was doing and gone back to waiting.
+type fakeClock struct {
+	nowMu  sync.Mutex
+	now    time.Time
+	timers chan fakeTimer
+}
+
+type fakeTimer struct {
+	at time.Time
+	c  chan time.Time
+}
+
+func (c *fakeClock) Now() time.Time {
+	c.nowMu.Lock()
+	defer c.nowMu.Unlock()
+	return c.now
+}
+
+func (c *fakeClock) set(t time.Time) {
+	c.nowMu.Lock()
+	defer c.nowMu.Unlock()
+	c.now = t
+}
+
+func (c *fakeClock) newTimer(d time.Duration) (<-chan time.Time, func()) {
+	t := fakeTimer{at: c.Now().Add(d), c: make(chan time.Time, 1)}
+	c.timers <- t
+	return t.c, func() {}
+}
+
+// starter records the works it is asked to start and fails when told to.
+type starter struct {
+	startedMu sync.Mutex
+	started   []string
+	fail      error
+}
+
+func (s *starter) HandleWorkStart(_ context.Context, w work.Work) error {
+	s.startedMu.Lock()
+	defer s.startedMu.Unlock()
+	if s.fail != nil {
+		return s.fail
+	}
+	s.started = append(s.started, w.ID)
+	return nil
+}
+
+func (s *starter) count() int {
+	s.startedMu.Lock()
+	defer s.startedMu.Unlock()
+	return len(s.started)
+}
+
+// failingRuns is a run store that cannot make a run.
+type failingRuns struct {
+	RunStore
+	err error
+}
+
+func (f failingRuns) CreateJob(context.Context, work.Work) (work.Work, error) {
+	return work.Work{}, f.err
+}
+
+// unrecordedRuns is a schedule store that cannot write a run down.
+type unrecordedRuns struct {
+	Store
+}
+
+func (unrecordedRuns) RecordRun(context.Context, string, string) (Schedule, error) {
+	return Schedule{}, errors.New("disk full")
+}
+
+type schedulerEnv struct {
+	*testEnv
+	clock     *fakeClock
+	works     *work.FileStore
+	starter   *starter
+	scheduler *Scheduler
+}
+
+func newSchedulerEnv(t *testing.T) *schedulerEnv {
+	t.Helper()
+	env := &schedulerEnv{testEnv: newTestEnv(t), starter: &starter{}}
+	env.clock = &fakeClock{now: env.testEnv.clock, timers: make(chan fakeTimer, 16)}
+	env.store.now = env.clock.Now
+
+	works, err := work.NewFileStore(env.dataDir)
+	if err != nil {
+		t.Fatalf("work.NewFileStore: %v", err)
+	}
+	env.works = works
+	ops := work.NewOperations(works, env.starter, nil, nil)
+
+	env.scheduler = NewScheduler(env.store, works, ops)
+	env.scheduler.now = env.clock.Now
+	env.scheduler.newTimer = env.clock.newTimer
+	// Far enough out that every timer the loop sets is for a real firing.
+	env.scheduler.recheck = 365 * 24 * time.Hour
+	return env
+}
+
+func (env *schedulerEnv) get(t *testing.T, id string) Schedule {
+	t.Helper()
+	s, found, err := env.store.Get(id)
+	if err != nil || !found {
+		t.Fatalf("Get %s: found=%v err=%v", id, found, err)
+	}
+	return s
+}
+
+func (env *schedulerEnv) runs(t *testing.T, id string) []work.Work {
+	t.Helper()
+	runs, err := env.works.ListBySchedule(id)
+	if err != nil {
+		t.Fatalf("ListBySchedule: %v", err)
+	}
+	return runs
+}
+
+// fireAt moves the clock to t and fires whatever is due then, as the loop
+// does when its timer goes off.
+func (env *schedulerEnv) fireAt(t time.Time) {
+	env.clock.set(t)
+	env.scheduler.fireDue(bgCtx)
+}
+
+// nextTimer waits for the loop to set its next timer.
+func (env *schedulerEnv) nextTimer(t *testing.T) fakeTimer {
+	t.Helper()
+	select {
+	case timer := <-env.clock.timers:
+		return timer
+	case <-time.After(5 * time.Second):
+		t.Fatal("the scheduler set no timer")
+		return fakeTimer{}
+	}
+}
+
+func day(d, hour, minute int) time.Time {
+	return time.Date(2026, 1, d, hour, minute, 0, 0, time.UTC)
+}
+
+func TestFire_MakesAndStartsAJobAndAdvances(t *testing.T) {
+	env := newSchedulerEnv(t)
+	in := env.valid()
+	in.Worktree = "feature"
+	s := env.create(t, in)
+
+	env.fireAt(day(1, 8, 59))
+	if runs := env.runs(t, s.ID); len(runs) != 0 {
+		t.Fatalf("runs before the firing = %v, want none", runs)
+	}
+
+	env.fireAt(day(1, 9, 0))
+	runs := env.runs(t, s.ID)
+	if len(runs) != 1 {
+		t.Fatalf("runs = %v, want one", runs)
+	}
+	run := runs[0]
+	if run.Title != in.Title || run.Body != in.Prompt || run.AgentRoleID != in.AgentRoleID || run.Worktree != "feature" {
+		t.Errorf("run = %+v, want it made from the schedule", run)
+	}
+	if run.Status != work.StatusActive || run.SessionID == "" || env.starter.count() != 1 {
+		t.Errorf("run status=%s session=%q starts=%d, want it started", run.Status, run.SessionID, env.starter.count())
+	}
+	got := env.get(t, s.ID)
+	if got.LastRunWorkID != run.ID || !sameTime(got.NextRunAt, at(day(2, 9, 0))) {
+		t.Errorf("schedule = %+v, want the run recorded and next run tomorrow", got)
+	}
+
+	// Firing again at the same moment makes nothing: the firing has moved on.
+	env.scheduler.fireDue(bgCtx)
+	if runs := env.runs(t, s.ID); len(runs) != 1 {
+		t.Errorf("runs after a second look = %d, want 1", len(runs))
+	}
+}
+
+func TestFire_SkipsWhileThePreviousRunIsActive(t *testing.T) {
+	env := newSchedulerEnv(t)
+	s := env.create(t, env.valid())
+
+	env.fireAt(day(1, 9, 0))
+	first := env.get(t, s.ID).LastRunWorkID
+
+	env.fireAt(day(2, 9, 0))
+	got := env.get(t, s.ID)
+	if runs := env.runs(t, s.ID); len(runs) != 1 {
+		t.Fatalf("runs = %d, want the firing skipped", len(runs))
+	}
+	if !sameTime(got.LastSkippedAt, at(day(2, 9, 0))) || got.LastRunWorkID != first || !sameTime(got.NextRunAt, at(day(3, 9, 0))) {
+		t.Errorf("schedule = %+v, want the skip recorded and next run the day after", got)
+	}
+
+	if err := env.works.Stop(bgCtx, first); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+	env.fireAt(day(3, 9, 0))
+	if runs := env.runs(t, s.ID); len(runs) != 2 {
+		t.Errorf("runs = %d once the previous run is no longer active, want 2", len(runs))
+	}
+}
+
+func TestFire_DisabledDoesNotFire(t *testing.T) {
+	env := newSchedulerEnv(t)
+	in := env.valid()
+	in.Enabled = false
+	s := env.create(t, in)
+
+	env.fireAt(day(5, 9, 0))
+	if runs := env.runs(t, s.ID); len(runs) != 0 {
+		t.Errorf("runs = %v, want none from a disabled schedule", runs)
+	}
+}
+
+func TestFire_StartFailureIsRecorded(t *testing.T) {
+	env := newSchedulerEnv(t)
+	s := env.create(t, env.valid())
+	env.starter.fail = errors.New("worktree not found")
+
+	env.fireAt(day(1, 9, 0))
+	runs := env.runs(t, s.ID)
+	if len(runs) != 1 || runs[0].Status != work.StatusOpen {
+		t.Fatalf("runs = %+v, want one job left open", runs)
+	}
+	got := env.get(t, s.ID)
+	if got.LastFailure == nil || got.LastFailure.WorkID != runs[0].ID || got.LastFailure.Error == "" {
+		t.Errorf("failure = %+v, want the job that failed to start and why", got.LastFailure)
+	}
+	if got.LastRunWorkID != "" || !sameTime(got.NextRunAt, at(day(2, 9, 0))) {
+		t.Errorf("schedule = %+v, want no run recorded and next run tomorrow", got)
+	}
+}
+
+func TestFire_CreateFailureIsRecorded(t *testing.T) {
+	env := newSchedulerEnv(t)
+	s := env.create(t, env.valid())
+	env.scheduler.runs = failingRuns{RunStore: env.works, err: errors.New("disk full")}
+
+	env.fireAt(day(1, 9, 0))
+	if runs := env.runs(t, s.ID); len(runs) != 0 {
+		t.Fatalf("runs = %v, want none", runs)
+	}
+	got := env.get(t, s.ID)
+	if got.LastFailure == nil || got.LastFailure.WorkID != "" || !strings.Contains(got.LastFailure.Error, "disk full") {
+		t.Errorf("failure = %+v, want the cause with no job", got.LastFailure)
+	}
+}
+
+func TestRunNow(t *testing.T) {
+	env := newSchedulerEnv(t)
+	in := env.valid()
+	in.Enabled = false
+	s := env.create(t, in)
+
+	run, err := env.scheduler.RunNow(bgCtx, s.ID)
+	if err != nil {
+		t.Fatalf("RunNow on a disabled schedule: %v", err)
+	}
+	if run.ScheduleID != s.ID || run.Status != work.StatusActive {
+		t.Errorf("run = %+v, want an active job of the schedule", run)
+	}
+	got := env.get(t, s.ID)
+	if got.LastRunWorkID != run.ID || got.NextRunAt != nil {
+		t.Errorf("schedule = %+v, want the run recorded and still no next run", got)
+	}
+
+	if _, err := env.scheduler.RunNow(bgCtx, s.ID); !errors.Is(err, ErrRunActive) {
+		t.Errorf("RunNow while the run is active: err = %v, want ErrRunActive", err)
+	}
+	if runs := env.runs(t, s.ID); len(runs) != 1 {
+		t.Errorf("runs = %d, want the refused run not made", len(runs))
+	}
+
+	if _, err := env.scheduler.RunNow(bgCtx, "missing"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("RunNow on a missing schedule: err = %v, want ErrNotFound", err)
+	}
+}
+
+func TestStart_SkipsMissedRuns(t *testing.T) {
+	env := newSchedulerEnv(t)
+	s := env.create(t, env.valid())
+
+	// The server comes back three days after the schedule was due.
+	env.clock.set(day(4, 12, 0))
+	if err := env.scheduler.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer env.scheduler.Stop()
+
+	if timer := env.nextTimer(t); !timer.at.Equal(day(5, 9, 0)) {
+		t.Errorf("first timer at %v, want the next firing after now", timer.at)
+	}
+	if runs := env.runs(t, s.ID); len(runs) != 0 {
+		t.Errorf("runs = %v, want the missed firings not caught up", runs)
+	}
+}
+
+func TestLoop_FiresOnTimeAndFollowsEdits(t *testing.T) {
+	env := newSchedulerEnv(t)
+	s := env.create(t, env.valid())
+	if err := env.scheduler.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer env.scheduler.Stop()
+
+	if timer := env.nextTimer(t); !timer.at.Equal(day(1, 9, 0)) {
+		t.Fatalf("timer at %v, want 09:00", timer.at)
+	}
+
+	// An edit moves the wait without the old timer going off.
+	cron := "30 8 * * *"
+	if _, err := env.store.Update(bgCtx, s.ID, UpdateFields{Cron: &cron}); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	timer := env.nextTimer(t)
+	if !timer.at.Equal(day(1, 8, 30)) {
+		t.Fatalf("timer after the edit at %v, want 08:30", timer.at)
+	}
+
+	env.clock.set(timer.at)
+	timer.c <- timer.at
+	if next := env.nextTimer(t); !next.at.Equal(day(2, 8, 30)) {
+		t.Errorf("timer after the firing at %v, want tomorrow 08:30", next.at)
+	}
+	if runs := env.runs(t, s.ID); len(runs) != 1 {
+		t.Errorf("runs = %d, want the firing made one", len(runs))
+	}
+
+	disabled := false
+	if _, err := env.store.Update(bgCtx, s.ID, UpdateFields{Enabled: &disabled}); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if next := env.nextTimer(t); !next.at.Equal(env.clock.Now().Add(env.scheduler.recheck)) {
+		t.Errorf("timer after disabling at %v, want only the recheck", next.at)
+	}
+}
+
+func TestRunNow_RefusedWhileAnUnrecordedRunIsActive(t *testing.T) {
+	env := newSchedulerEnv(t)
+	s := env.create(t, env.valid())
+	env.scheduler.store = unrecordedRuns{Store: env.store}
+
+	env.fireAt(day(1, 9, 0))
+	if got := env.get(t, s.ID); got.LastRunWorkID != "" {
+		t.Fatalf("LastRunWorkID = %q, want the run left unrecorded", got.LastRunWorkID)
+	}
+	if runs := env.runs(t, s.ID); len(runs) != 1 {
+		t.Fatalf("runs = %d, want the firing to have started one", len(runs))
+	}
+
+	if _, err := env.scheduler.RunNow(bgCtx, s.ID); !errors.Is(err, ErrRunActive) {
+		t.Errorf("RunNow: err = %v, want ErrRunActive for the run the schedule does not name", err)
+	}
+	if runs := env.runs(t, s.ID); len(runs) != 1 {
+		t.Errorf("runs = %d, want no second run alongside the first", len(runs))
+	}
+}

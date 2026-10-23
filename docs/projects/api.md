@@ -65,7 +65,7 @@ Similarly, `agent_role_list` excludes `role_prompt` — use `agent_role_get` to 
 
 ## WebSocket RPC
 
-All methods use JSON-RPC 2.0 over WebSocket. Work and agent_role methods are **app-level** (no worktree binding required).
+All methods use JSON-RPC 2.0 over WebSocket. Work, agent_role and schedule methods are **app-level** (no worktree binding required).
 
 ### Method Reference
 
@@ -104,6 +104,34 @@ nothing left to tell the two apart ([frontend.md](frontend.md#workdetailoverlay)
 | `agent_role.list.subscribe` | `SubscribeParams` | `{items: AgentRole[], work_ref_counts: {[roleId]: number}}` | Subscribe + get current snapshot; `work_ref_counts` says how many work items name each role, and is refreshed whole by the `ref_counts` notification |
 | `agent_role.list.unsubscribe` | `{id}` | `{}` | Unsubscribe |
 
+#### Schedule
+
+| Method | Params | Result | Description |
+|--------|--------|--------|-------------|
+| `schedule.create` | `ScheduleCreateParams` | `Schedule` | Create a schedule; `enabled` absent = `true` |
+| `schedule.update` | `ScheduleUpdateParams` | `{}` | Update settings (pointer semantics); `next_run_at` is recomputed when `cron` or `enabled` changes |
+| `schedule.delete` | `{id}` | `{}` | Delete the schedule alone; its runs stay |
+| `schedule.run` | `{id}` | `WorkDetailItem` | Make and start a run now, enabled or not; the started job, as `work.start` replies |
+| `schedule.list.subscribe` | `SubscribeParams` | `{items: Schedule[]}` | Subscribe + every schedule, run bookkeeping included |
+| `schedule.list.unsubscribe` | `{id}` | `{}` | Unsubscribe |
+| `schedule.detail.subscribe` | `ScheduleDetailSubscribeParams` | `{schedule, runs: ScheduleRunPage}` | Subscribe to one schedule and the newest page of its runs ([Schedule Runs](#schedule-runs)) |
+| `schedule.detail.runs` | `ScheduleDetailRunsParams` | `ScheduleRunPage` | A page of older runs, served against an open detail subscription |
+| `schedule.detail.unsubscribe` | `{id}` | `{}` | Unsubscribe |
+
+Every refusal the user can act on is `InvalidParams` with a message that says
+what to fix: `schedule not found`; `invalid schedule: …` for a missing field, an
+unparsable cron (`invalid schedule: cron expression "61 * * * *": minute field
+"61": 61 is out of range 0-59`) or a role that does not take jobs;
+`schedule.run` while the previous run is still active (`previous run is still
+active: run <work-id> of schedule <id>`). A run the work store refuses to make
+or start — the schedule's role no longer takes jobs, say — is `InvalidParams`
+too, with the store's reason (`create run: invalid work: …`). Any other failure
+to make or start a run is `InternalError` carrying the cause. Either way the
+failure is also recorded on the schedule as `last_failure`, which is where a
+firing nobody watched reports it. `schedule.create` and `schedule.update`
+refuse a `worktree` that does not exist, rather than leaving every firing to
+fail on it.
+
 ### Wire Types
 
 ```
@@ -125,7 +153,18 @@ SubscribeParams           { id }   // the whole of a subscribe with no other arg
 AgentRoleCreateParams   { name, role_prompt, steps?, work_type? }
 AgentRoleUpdateParams   { id, name?, role_prompt?, steps?, agent_type?, model?, effort?, work_type? }   // work_type "" clears the restriction
 AgentRoleDeleteParams   { id }
+
+Schedule                      { id, title, prompt, agent_role_id, cron, enabled, worktree?, next_run_at?, last_run_at?, last_run_work_id?, last_skipped_at?, last_failure?: {at, work_id?, error}, created_at, updated_at }
+ScheduleCreateParams          { title, prompt, agent_role_id, cron, enabled?, worktree? }
+ScheduleUpdateParams          { id, title?, prompt?, agent_role_id?, cron?, enabled?, worktree? }   // worktree "" = main
+ScheduleDetailSubscribeParams { id, schedule_id }
+ScheduleDetailRunsParams      { id, cursor?, limit? }   // id names the detail subscription
+ScheduleRunPage               { items: ScheduleRunItem[], next_cursor?, has_more? }
+ScheduleRunItem               WorkListItem & { created_at }
 ```
+
+`Schedule` is the stored record as it stands — it derives nothing, so there is
+no narrowing to put between it and the wire ([data-model](data-model.md#schedule)).
 
 Defined in `server/rpc/types.go`.
 
@@ -206,6 +245,33 @@ Why the relation is resolved on this side rather than inverted out of the work
 list by the client is in
 [code/subscription-system.md](../code/subscription-system.md#which-sessions-belong-to-work).
 
+### Schedule Runs
+
+A schedule's runs are its job works, listed on `schedule.detail` rather than on
+a call of their own, because the page that shows them has to stay live: a run
+starts, its agent goes from running to idle, it closes. They arrive as
+`WorkListItem` rows — the row every work list draws, with the activity derived
+on the server — plus `created_at`.
+
+- **Newest made first, ordered by `created_at`**, not by `updated_at` as a work
+  list is: a run list paged by its last change would reorder under the pager
+  every time a run moved.
+- **Paged, because runs accumulate.** A schedule firing every minute makes
+  1,440 runs a day. The subscription carries the newest page
+  (`session.DefaultListPageSize`, 30); `schedule.detail.runs` walks older ones
+  with the opaque `next_cursor`, against the detail subscription, so a page
+  and the detail it extends cannot name different schedules — and an id the
+  server no longer holds is `InvalidParams`, telling the client to subscribe
+  afresh. `limit` 0 takes the default; oversized is clamped.
+- **A notification replaces the newest page; the client merges by id.** A new
+  run pushes the oldest row off the first page, and a client that dropped it
+  would lose the run between its first page and the page it loaded after it.
+  Rows of older pages are not re-sent: they are almost all closed runs, and
+  one that changes anyway stays as the client loaded it until it reads that
+  page again — the cost of not pushing a schedule's whole history on every
+  change.
+- A run's own page is `work.detail`, as any work's is.
+
 ### `work.start` Atomicity
 
 `work.start` performs a two-phase operation:
@@ -261,7 +327,7 @@ Can't delete: 3 work items still use this role. Change their role, or delete the
 
 ## Real-time Subscription System
 
-Both `work.list` and `agent_role.list` support subscriptions for real-time updates.
+`work.list`, `agent_role.list` and `schedule.list` support subscriptions for real-time updates; `work.detail` and `schedule.detail` follow one item each.
 
 ### Pattern
 
@@ -296,7 +362,20 @@ For `delete`, only the deleted item's ID:
 { "id": "<sub-id>", "operation": "delete", "workId": "<id>" }
 ```
 
-For `agent_role.list.changed`, the fields are `role` / `roleId` instead of `work` / `workId`.
+For `agent_role.list.changed`, the fields are `role` / `roleId` instead of `work` / `workId`; for `schedule.list.changed`, `schedule` / `scheduleId`.
+
+`schedule.list.changed` is sent for **every** change the store makes, the run
+bookkeeping included — a firing moves `next_run_at`, a run moves `last_run_at`,
+a skip or a failure records itself — so a row showing "next run" or "last
+failed" never needs a refresh.
+
+**Detail** (`schedule.detail.changed`) is always whole, like
+`work.detail.changed`: `{ "id": "<sub-id>", "schedule": {...}, "runs": {...} }`.
+It is sent when the schedule changes (settings or bookkeeping), when one of its
+runs is made, changes or is deleted, and when a run's session changes in a way
+that moves the run page — a turn starting, say; a session touched without
+moving any row sends nothing. A deleted schedule sends nothing here; the
+deletion arrives on `schedule.list`.
 
 **Reference counts** (`agent_role.list.changed` only) — a fifth operation, sent
 when the number of work items naming a role moves. Always the whole map, which
@@ -313,6 +392,8 @@ the role store — the watcher listens to both
 ```json
 { "id": "<sub-id>", "operation": "sync", "works": [...] }
 ```
+`roles` for `agent_role.list`, `schedules` for `schedule.list`. A detail
+subscription's sync is simply its whole detail again.
 
 ### Backpressure Handling
 

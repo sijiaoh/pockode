@@ -26,6 +26,7 @@ import (
 	"github.com/pockode/server/filetransfer"
 	"github.com/pockode/server/mcp"
 	"github.com/pockode/server/rpc"
+	"github.com/pockode/server/schedule"
 	"github.com/pockode/server/session"
 	"github.com/pockode/server/settings"
 	"github.com/pockode/server/work"
@@ -62,10 +63,12 @@ func newTestServer(t *testing.T, serverPassword, mcpToken string) (http.Handler,
 	workStarter := worktree.NewWorkStarter(scopeManager, agentRoleStore, settingsStore)
 	workOps := work.NewOperations(workStore, workStarter, nil, nil)
 	workOps.SetSessionDeleter(scopeManager)
+	scheduleStore, _ := schedule.NewFileStore(dataDir, agentRoleStore)
+	scheduler := schedule.NewScheduler(scheduleStore, workStore, workOps)
 	transferHandler := filetransfer.NewHandler(registry, slog.Default())
 	attachmentHandler := filetransfer.NewAttachmentHandler(scopeManager, worktree.ErrWorktreeNotFound, worktree.ErrSessionNotFound, slog.Default())
 	rawHandler := filetransfer.NewRawHandler(sessions, transferHandler, attachmentHandler, dataDir)
-	wsHandler := ws.NewRPCHandler(serverPassword, authguard.New(), sessions, "test", func() string { return "" }, authsession.NewTickets(), rawHandler, true, cmdStore, scopeManager, settingsStore, workStore, workOps, work.NewEngine(workStore, work.DefaultMaxNudges), agentRoleStore, cliauth.NewService(slog.Default()), cliupdate.NewService(slog.Default(), nil, nil))
+	wsHandler := ws.NewRPCHandler(serverPassword, authguard.New(), sessions, "test", func() string { return "" }, authsession.NewTickets(), rawHandler, true, cmdStore, scopeManager, settingsStore, workStore, workOps, work.NewEngine(workStore, work.DefaultMaxNudges), agentRoleStore, scheduleStore, scheduler, cliauth.NewService(slog.Default()), cliupdate.NewService(slog.Default(), nil, nil))
 	mcpHandler := mcp.NewAPIHandler(mcp.NewExecutor(workStore, agentRoleStore, workOps, settingsStore, registry, scopeManager), mcpToken)
 	return newHandler(serverPassword, authguard.New(), sessions, true, wsHandler, mcpHandler, transferHandler, attachmentHandler, rawHandler), workDir, sessions, rawHandler
 }

@@ -38,6 +38,7 @@ import (
 	"github.com/pockode/server/middleware"
 	"github.com/pockode/server/password"
 	"github.com/pockode/server/relay"
+	"github.com/pockode/server/schedule"
 	"github.com/pockode/server/serverinfo"
 	"github.com/pockode/server/session"
 	"github.com/pockode/server/settings"
@@ -430,6 +431,19 @@ Flags:
 		slog.Warn("failed to start worktree manager", "error", err)
 	}
 
+	scheduleStore, err := schedule.NewFileStore(dataDir, agentRoleStore)
+	if err != nil {
+		slog.Error("failed to initialize schedule store", "error", err)
+		os.Exit(1)
+	}
+	// Runs are started through workOps like any other work, so the scheduler
+	// starts only once the worktree manager can create their sessions.
+	scheduler := schedule.NewScheduler(scheduleStore, workStore, workOps)
+	if err := scheduler.Start(); err != nil {
+		slog.Error("failed to start scheduler", "error", err)
+		os.Exit(1)
+	}
+
 	// Local API token for the MCP subprocess. Randomly generated per startup and
 	// published to server.json, so it never outlives the process and is distinct
 	// from the user-facing password.
@@ -489,7 +503,7 @@ Flags:
 	// Both assigned before the relay starts, so the reconnect loop that calls
 	// OnRemoteURLChange never sees them unset.
 	serverInfo = serverinfo.NewPublisher(dataDir, port, localURL, mcpToken, remoteURL)
-	wsHandler = ws.NewRPCHandler(cred.Password, passwordGuard, sessions, version, remoteURL, previewTickets, rawHandler, devMode, commandStore, worktreeManager, settingsStore, workStore, workOps, workEngine, agentRoleStore, cliAuth, cliUpdate)
+	wsHandler = ws.NewRPCHandler(cred.Password, passwordGuard, sessions, version, remoteURL, previewTickets, rawHandler, devMode, commandStore, worktreeManager, settingsStore, workStore, workOps, workEngine, agentRoleStore, scheduleStore, scheduler, cliAuth, cliUpdate)
 
 	if relayManager != nil {
 		url, err := relayManager.Start(context.Background())
@@ -542,6 +556,9 @@ Flags:
 			slog.Error("server shutdown error", "error", err)
 		}
 		wsHandler.Stop()
+		// Before the worktree manager: a firing in progress is still starting
+		// a session through it.
+		scheduler.Stop()
 		// An update still running is killed rather than waited for: a download
 		// on a slow connection would hold the shutdown for minutes. Closed
 		// before sign-ins, so that a start in between is refused as the

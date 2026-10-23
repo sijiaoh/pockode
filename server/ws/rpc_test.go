@@ -31,6 +31,7 @@ import (
 	"github.com/pockode/server/internal/authsessiontest"
 	"github.com/pockode/server/internal/unwritabletest"
 	"github.com/pockode/server/rpc"
+	"github.com/pockode/server/schedule"
 	"github.com/pockode/server/session"
 	"github.com/pockode/server/settings"
 	"github.com/pockode/server/work"
@@ -86,6 +87,7 @@ type testEnv struct {
 	mock            *mockAgent
 	worktreeManager *worktree.Manager
 	workStore       work.Store
+	scheduleStore   schedule.Store
 	testRoleID      string                // pre-created agent role ID for tests
 	cliAuth         *cliauthtest.Provider // the claude CLI as cli_auth.* sees it
 	handler         *RPCHandler
@@ -169,13 +171,19 @@ func newTestEnvWithAgent(t *testing.T, mock *mockAgent, ag agent.Agent, workDir 
 	workStarter := worktree.NewWorkStarter(worktreeManager, agentRoleStore, settingsStore)
 	workOps := work.NewOperations(workStore, workStarter, workEngine, agentrole.Steps{Store: agentRoleStore})
 	workOps.SetSessionDeleter(worktreeManager)
+	scheduleStore, err := schedule.NewFileStore(dataDir, agentRoleStore)
+	if err != nil {
+		t.Fatalf("failed to create schedule store: %v", err)
+	}
+	// Not started: a test fires nothing on a clock, and schedule.run needs no loop.
+	scheduler := schedule.NewScheduler(scheduleStore, workStore, workOps)
 
 	cliAuth := cliauthtest.New(cliauthtest.State{})
 	cliAuthService := cliauth.NewService(slog.Default())
 	cliAuthService.Register(session.AgentTypeClaude, cliAuth)
 
 	raw := &rawCapabilitiesStub{}
-	h := NewRPCHandler(testPassword, authguard.New(), authsessiontest.New(), "test", func() string { return "" }, authsession.NewTickets(), raw, true, cmdStore, worktreeManager, settingsStore, workStore, workOps, workEngine, agentRoleStore, cliAuthService, cliupdate.NewService(slog.Default(), nil, nil))
+	h := NewRPCHandler(testPassword, authguard.New(), authsessiontest.New(), "test", func() string { return "" }, authsession.NewTickets(), raw, true, cmdStore, worktreeManager, settingsStore, workStore, workOps, workEngine, agentRoleStore, scheduleStore, scheduler, cliAuthService, cliupdate.NewService(slog.Default(), nil, nil))
 	server := httptest.NewServer(h)
 
 	// No deadline of its own: every read and write is bounded individually (see
@@ -196,6 +204,7 @@ func newTestEnvWithAgent(t *testing.T, mock *mockAgent, ag agent.Agent, workDir 
 		mock:            mock,
 		worktreeManager: worktreeManager,
 		workStore:       workStore,
+		scheduleStore:   scheduleStore,
 		testRoleID:      testRole.ID,
 		cliAuth:         cliAuth,
 		handler:         h,
@@ -561,8 +570,10 @@ func newMinimalTestHandler(t *testing.T, password string, remoteURL func() strin
 	agentRoleStore, _ := agentrole.NewFileStore(dataDir)
 	workStarter := worktree.NewWorkStarter(worktreeManager, agentRoleStore, settingsStore)
 	workOps := work.NewOperations(workStore, workStarter, nil, nil)
+	scheduleStore, _ := schedule.NewFileStore(dataDir, agentRoleStore)
+	scheduler := schedule.NewScheduler(scheduleStore, workStore, workOps)
 
-	h := NewRPCHandler(password, authguard.NewFrozen(), sessions, "test", remoteURL, tickets, &rawCapabilitiesStub{}, true, cmdStore, worktreeManager, settingsStore, workStore, workOps, work.NewEngine(workStore, work.DefaultMaxNudges), agentRoleStore, cliauth.NewService(slog.Default()), cliupdate.NewService(slog.Default(), nil, nil))
+	h := NewRPCHandler(password, authguard.NewFrozen(), sessions, "test", remoteURL, tickets, &rawCapabilitiesStub{}, true, cmdStore, worktreeManager, settingsStore, workStore, workOps, work.NewEngine(workStore, work.DefaultMaxNudges), agentRoleStore, scheduleStore, scheduler, cliauth.NewService(slog.Default()), cliupdate.NewService(slog.Default(), nil, nil))
 	t.Cleanup(h.Stop)
 	return h
 }

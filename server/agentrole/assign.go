@@ -15,15 +15,23 @@ import (
 // transports already report that sentinel as one. Any other error is a store
 // fault.
 func CheckAssignment(roles Store, roleID string, t work.WorkType) error {
+	return CheckAssignmentWith(roles, roleID, t, work.ErrInvalidWork)
+}
+
+// CheckAssignmentWith is CheckAssignment for a caller that is not assigning a
+// role to a work item itself but to something that will make them — a
+// schedule, whose runs are jobs. Its refusals wrap refusal, that caller's own
+// user-error sentinel, so they read and are reported as its mistakes.
+func CheckAssignmentWith(roles Store, roleID string, t work.WorkType, refusal error) error {
 	if roleID == "" {
-		return fmt.Errorf("%w: agent_role_id is required", work.ErrInvalidWork)
+		return fmt.Errorf("%w: agent_role_id is required", refusal)
 	}
 	role, found, err := roles.Get(roleID)
 	if err != nil {
 		return fmt.Errorf("look up agent role %s: %w", roleID, err)
 	}
 	if !found {
-		return fmt.Errorf("%w: agent role not found: %s", work.ErrInvalidWork, roleID)
+		return fmt.Errorf("%w: agent role not found: %s", refusal, roleID)
 	}
 	if role.AcceptsWorkType(t) {
 		return nil
@@ -46,7 +54,7 @@ func CheckAssignment(roles Store, roleID string, t work.WorkType) error {
 		alternatives = strings.Join(accepting, ", ")
 	}
 	return fmt.Errorf("%w: agent role %q (ID: %s) only takes %s work, not %s; roles that take %s work: %s",
-		work.ErrInvalidWork, role.Name, role.ID, role.WorkType, t, t, alternatives)
+		refusal, role.Name, role.ID, role.WorkType, t, t, alternatives)
 }
 
 // CheckReassignment is CheckAssignment for an update of work workID that sets

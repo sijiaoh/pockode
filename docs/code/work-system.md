@@ -77,6 +77,52 @@ than treating it as whichever of story or task it happens to resemble — see
 [Work Tools](#work-tools). How a job is told what it is lives in its own prompt
 templates ([Prompt Format](#prompt-format)).
 
+### Schedules
+
+A schedule (`server/schedule/`) is what makes jobs: a prompt, a role and a cron
+expression, with a `Scheduler` that fires it. Its fields are
+[data-model](../projects/data-model.md#schedule)'s; what follows is why the
+scheduler behaves the way it does.
+
+- **One run at a time, per schedule.** A firing that finds the previous run
+  still `active` makes no run and records a skip (`last_skipped_at`) instead.
+  Queuing it would pile up runs behind one that is stuck, and running two at
+  once would have two agents doing the same prompt's work over each other. A
+  run that is `stopped`, `closed` or `open` does not block — a stopped run is a
+  person's to deal with, and the schedule carries on. Run-now follows the same
+  rule and is *refused* (`ErrRunActive`), not queued, so the person pressing it
+  learns why nothing happened and can stop the run they are waiting on.
+- **Missed firings are not caught up.** `Start` calls `SkipMissedRuns` before
+  anything fires, moving every past-due firing to the next one after now. A
+  server that was off overnight starting eight hourly runs at once is never what
+  anyone wanted; the next firing is.
+- **A run is a fresh job, started through `work.Operations.StartWork`.** Each
+  firing calls `CreateJob` with the schedule's title, its prompt as the body,
+  its role and its worktree, then starts that work by the path `work.start` and
+  `story_start` take, so a run gets the same claim, kickoff and rollback — there
+  is no second start path to keep in step. Firings and run-now share one lock,
+  so the two cannot both pass the one-run check and start a run each. A failure
+  to make or start a run is recorded on the schedule (`last_failure`) as well as
+  logged, because nobody is watching when a firing fails; a start that failed
+  leaves its job `open`, where a person can start it by hand.
+- **The bookkeeping lives on the schedule, not on its runs.** `next_run_at`,
+  `last_run_at`, `last_skipped_at` and `last_failure` are the schedule's own
+  state and are written by its store; the runs are works that know nothing of
+  why they were made. "Is a run going now" is not stored at all — it is the
+  status of the run `last_run_work_id` names, read where it is needed.
+- **Times are the server's local time.** A cron expression means what the
+  machine's clock means, which is what a person writing `0 9 * * *` expects.
+  Across a DST change a skipped wall time fires at the jump and a repeated one
+  fires once (`Cron.Next`).
+- **The wait is re-read, not trusted.** Every schedule change wakes the loop,
+  and the wait is capped at a minute, because a timer counts elapsed time and a
+  machine that sleeps or has its clock set forward would otherwise fire late. A
+  clock set back is waited out: the next firing is not recomputed from it, since
+  that would fire again a time that has already fired.
+
+The schedule RPC — and why a run list is paged under the schedule's detail —
+is [api.md](../projects/api.md#schedule-runs).
+
 ### Worktree Binding
 
 Every work runs its AI session inside exactly one worktree, recorded in
