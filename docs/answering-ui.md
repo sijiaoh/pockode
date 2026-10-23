@@ -1206,7 +1206,7 @@ them:
 
 | Surface | Where it listens | What it does with the press |
 |---|---|---|
-| `ConfirmDialog` | `document`, and it calls `stopPropagation` | closes itself, and the press never reaches `window` at all |
+| `ConfirmDialog` | `document`, and it calls `stopPropagation` | closes itself — or, while the action it confirmed is still running, swallows the press without closing — and the press never reaches `window` at all |
 | `Sheet` — a message's menu, and every other sheet | `document`, and it calls `stopPropagation` | the same, and it claims the press even while it is refusing to be dismissed — then it swallows without closing |
 | the full screen viewer's find bar | the viewer's column inside its `Sheet`, and it calls `stopPropagation` | while the bar is open, closes the bar — or, mid-composition, only cancels the composition — and the press never reaches the `Sheet`'s `document` listener, so the next press is the one that closes the viewer |
 | `ResponsivePanel` — the header's session panel, the worktree and session-filter dropdowns | `document`, and it calls `preventDefault` | closes itself and **marks the press handled**; while open, at every width, it counts itself as covering the page |
@@ -1356,11 +1356,14 @@ the open flag belongs to the host and coming back has to hand the user the
 conversation they left, not a sheet they had open before going elsewhere. It
 ignores `dismissible`, which exists to refuse an accidental dismissal mid-flight
 and would otherwise leave a sheet over the overlay with its backdrop, its Escape
-and its close button all dead. And it is **covered**, not dimmed: the answer
-panel is a layer of this conversation — the transcript stays on screen, the user
-has gone nowhere, and the forty `…` glyphs and anything raised from one are still
-theirs — which is why `transcriptCovered` names only the overlay while
-`transcriptInert` names both (§3).
+and its close button all dead. `ConfirmDialog` does the same while the action
+it confirmed is still running, when it otherwise refuses to be cancelled: the
+action carries on, and its outcome is the caller's to report. And it is
+**covered**, not dimmed: the answer panel is a layer of this conversation —
+the transcript stays on screen, the user has gone nowhere, and the forty `…`
+glyphs and anything raised from one are still theirs — which is why
+`transcriptCovered` names only the overlay while `transcriptInert` names both
+(§3).
 
 Nothing has to be registered for this. A new sheet is covered by having been
 written as a `Sheet`, and `useCloseWhenCovered` is deliberately not exported from
