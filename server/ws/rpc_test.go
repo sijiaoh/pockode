@@ -176,7 +176,8 @@ func newTestEnvWithAgent(t *testing.T, mock *mockAgent, ag agent.Agent, workDir 
 		t.Fatalf("failed to create schedule store: %v", err)
 	}
 	// Not started: a test fires nothing on a clock, and schedule.run needs no loop.
-	scheduler := schedule.NewScheduler(scheduleStore, workStore, workOps)
+	scheduler := schedule.NewScheduler(scheduleStore, workOps)
+	workOps.SetRunRecorder(scheduler)
 
 	cliAuth := cliauthtest.New(cliauthtest.State{})
 	cliAuthService := cliauth.NewService(slog.Default())
@@ -571,7 +572,8 @@ func newMinimalTestHandler(t *testing.T, password string, remoteURL func() strin
 	workStarter := worktree.NewWorkStarter(worktreeManager, agentRoleStore, settingsStore)
 	workOps := work.NewOperations(workStore, workStarter, nil, nil)
 	scheduleStore, _ := schedule.NewFileStore(dataDir, agentRoleStore)
-	scheduler := schedule.NewScheduler(scheduleStore, workStore, workOps)
+	scheduler := schedule.NewScheduler(scheduleStore, workOps)
+	workOps.SetRunRecorder(scheduler)
 
 	h := NewRPCHandler(password, authguard.NewFrozen(), sessions, "test", remoteURL, tickets, &rawCapabilitiesStub{}, true, cmdStore, worktreeManager, settingsStore, workStore, workOps, work.NewEngine(workStore, work.DefaultMaxNudges), agentRoleStore, scheduleStore, scheduler, cliauth.NewService(slog.Default()), cliupdate.NewService(slog.Default(), nil, nil))
 	t.Cleanup(h.Stop)

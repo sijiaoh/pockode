@@ -7,9 +7,16 @@ import (
 	"sync/atomic"
 
 	"github.com/pockode/server/rpc"
+	"github.com/pockode/server/schedule"
 	"github.com/pockode/server/session"
 	"github.com/pockode/server/work"
 )
+
+// ScheduleSource is where a job's schedule is looked up. Satisfied by the
+// schedule store.
+type ScheduleSource interface {
+	Get(id string) (schedule.Schedule, bool, error)
+}
 
 // WorkDetailWatcher notifies subscribers when a work item, its comments, or the
 // usage of a session anywhere in its subtree changes. Subscriptions are keyed by
@@ -19,6 +26,7 @@ type WorkDetailWatcher struct {
 	store       work.Store
 	usageSource work.SessionUsageSource
 	turnSource  work.TurnSource
+	schedules   ScheduleSource
 	eventCh     chan detailEvent
 	dirty       atomic.Bool
 
@@ -55,8 +63,8 @@ type detailEvent struct {
 }
 
 // WorkDetail is everything a work.detail subscriber is sent: the work item, its
-// comments, what its subtree consumed, what it is doing, and the two relations
-// its page draws.
+// comments, what its subtree consumed, what it is doing, and the relations its
+// page draws.
 //
 // Children and Parent ride here rather than being looked up in the work list,
 // because that list is the `Current` segment and closed work is not in it: a
@@ -75,17 +83,27 @@ type WorkDetail struct {
 	PendingQuestions []session.PendingQuestion
 	Children         []rpc.WorkListItem
 	Parent           *rpc.WorkListItem
+	// Schedule is what a job is a run of; see rpc.WorkDetailSubscribeResult.
+	Schedule *rpc.WorkSchedule
+}
+
+// workRelatives is what a detail page draws besides the item itself.
+type workRelatives struct {
+	children []rpc.WorkListItem
+	parent   *rpc.WorkListItem
+	schedule *rpc.WorkSchedule
 }
 
 // relatives reads the rows a detail page draws besides the item itself: the
-// item's children, and the story it belongs to.
+// item's children, the story it belongs to, and the schedule it is a run of.
 //
-// Allocated to zero length rather than left nil, so a work with no children is
-// sent `[]`, which a client can iterate, and not `null`, which it cannot.
-func (w *WorkDetailWatcher) relatives(item work.Work) ([]rpc.WorkListItem, *rpc.WorkListItem, error) {
+// Children are allocated to zero length rather than left nil, so a work with
+// no children is sent `[]`, which a client can iterate, and not `null`, which
+// it cannot.
+func (w *WorkDetailWatcher) relatives(item work.Work) (workRelatives, error) {
 	items, err := w.store.List()
 	if err != nil {
-		return nil, nil, err
+		return workRelatives{}, err
 	}
 
 	resolver := work.NewActivityResolver(w.turnSource)
@@ -100,20 +118,33 @@ func (w *WorkDetailWatcher) relatives(item work.Work) ([]rpc.WorkListItem, *rpc.
 			parent = &row
 		}
 	}
-	return children, parent, nil
+
+	var sched *rpc.WorkSchedule
+	if item.ScheduleID != "" && w.schedules != nil {
+		found, ok, err := w.schedules.Get(item.ScheduleID)
+		if err != nil {
+			return workRelatives{}, err
+		}
+		if ok {
+			sched = &rpc.WorkSchedule{ID: found.ID, Title: found.Title}
+		}
+	}
+	return workRelatives{children: children, parent: parent, schedule: sched}, nil
 }
 
 // NewWorkDetailWatcher builds the watcher. usageSource is where the subtree's
 // consumption is read from (worktree.Manager in the server); it is required, and
 // a work detail without it would silently report that nothing was ever spent.
 // turnSource is where the work's own activity is derived from; nil reads it as
-// idle, which is what a narrow test wants and nothing else.
-func NewWorkDetailWatcher(store work.Store, usageSource work.SessionUsageSource, turnSource work.TurnSource) *WorkDetailWatcher {
+// idle, which is what a narrow test wants and nothing else. schedules is where
+// a job's schedule is named from; nil names none, likewise for narrow tests.
+func NewWorkDetailWatcher(store work.Store, usageSource work.SessionUsageSource, turnSource work.TurnSource, schedules ScheduleSource) *WorkDetailWatcher {
 	w := &WorkDetailWatcher{
 		BaseWatcher: NewBaseWatcher(),
 		store:       store,
 		usageSource: usageSource,
 		turnSource:  turnSource,
+		schedules:   schedules,
 		eventCh:     make(chan detailEvent, 64),
 		sentUsage:   make(map[string]sentDetail),
 	}
@@ -210,6 +241,7 @@ func (w *WorkDetailWatcher) notifyDetail(sub *Subscription, detail WorkDetail) {
 		PendingQuestions: detail.PendingQuestions,
 		Children:         detail.Children,
 		Parent:           detail.Parent,
+		Schedule:         detail.Schedule,
 	}}
 	if err := sub.Notifier.Notify(w.Context(), n); err != nil {
 		slog.Debug("failed to notify detail subscriber", "id", sub.ID, "error", err)
@@ -264,7 +296,7 @@ func (w *WorkDetailWatcher) buildDetail(workID string) (WorkDetail, bool) {
 		return WorkDetail{}, false
 	}
 
-	children, parent, err := w.relatives(item)
+	relatives, err := w.relatives(item)
 	if err != nil {
 		slog.Error("failed to read work relatives for detail notification", "error", err, "workId", workID)
 		return WorkDetail{}, false
@@ -277,8 +309,9 @@ func (w *WorkDetailWatcher) buildDetail(workID string) (WorkDetail, bool) {
 		Usage:            usage,
 		Activity:         resolver.Activity(item),
 		PendingQuestions: resolver.PendingQuestions(item),
-		Children:         children,
-		Parent:           parent,
+		Children:         relatives.children,
+		Parent:           relatives.parent,
+		Schedule:         relatives.schedule,
 	}, true
 }
 
@@ -409,7 +442,7 @@ func (w *WorkDetailWatcher) Subscribe(id, workID string, notifier Notifier) (Wor
 
 	resolver := work.NewActivityResolver(w.turnSource)
 
-	children, parent, err := w.relatives(item)
+	relatives, err := w.relatives(item)
 	if err != nil {
 		w.RemoveSubscription(id)
 		return WorkDetail{}, err
@@ -421,8 +454,9 @@ func (w *WorkDetailWatcher) Subscribe(id, workID string, notifier Notifier) (Wor
 		Usage:            usage,
 		Activity:         resolver.Activity(item),
 		PendingQuestions: resolver.PendingQuestions(item),
-		Children:         children,
-		Parent:           parent,
+		Children:         relatives.children,
+		Parent:           relatives.parent,
+		Schedule:         relatives.schedule,
 	}
 	// The reply carries every derived part, so the subscriber already has them:
 	// a session change that moves none of them is then not worth a notification.
@@ -445,10 +479,11 @@ type workDetailChangedParams struct {
 	// PendingQuestions is the same field, and the same rule, as
 	// rpc.WorkDetailSubscribeResult.PendingQuestions.
 	PendingQuestions []session.PendingQuestion `json:"pending_questions,omitempty"`
-	// Children and Parent are the two relations the page draws, and are here
-	// rather than looked up in the work list for the reason WorkDetail gives.
+	// Children, Parent and Schedule are the relations the page draws, and are
+	// here rather than looked up elsewhere for the reason WorkDetail gives.
 	Children []rpc.WorkListItem `json:"children"`
 	Parent   *rpc.WorkListItem  `json:"parent,omitempty"`
+	Schedule *rpc.WorkSchedule  `json:"schedule,omitempty"`
 }
 
 // OnWorkChange implements work.OnChangeListener.

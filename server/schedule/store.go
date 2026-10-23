@@ -47,6 +47,9 @@ type Store interface {
 	// before anything fires.
 	SkipMissedRuns(ctx context.Context) error
 
+	// Zone is the zone the store evaluates cron expressions in, at this moment.
+	Zone() Zone
+
 	AddOnChangeListener(listener OnChangeListener)
 }
 
@@ -365,6 +368,11 @@ func reschedule(sched *Schedule, now time.Time) {
 		return
 	}
 	sched.NextRunAt = &next
+}
+
+func (s *FileStore) Zone() Zone {
+	name, offset := s.now().Zone()
+	return Zone{Name: name, OffsetSeconds: offset}
 }
 
 // --- Listener management ---

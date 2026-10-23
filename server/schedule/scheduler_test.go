@@ -66,9 +66,9 @@ func (s *starter) count() int {
 	return len(s.started)
 }
 
-// failingRuns is a run store that cannot make a run.
+// failingRuns is a work store that cannot make a run.
 type failingRuns struct {
-	RunStore
+	work.Store
 	err error
 }
 
@@ -89,6 +89,7 @@ type schedulerEnv struct {
 	*testEnv
 	clock     *fakeClock
 	works     *work.FileStore
+	ops       *work.Operations
 	starter   *starter
 	scheduler *Scheduler
 }
@@ -104,9 +105,10 @@ func newSchedulerEnv(t *testing.T) *schedulerEnv {
 		t.Fatalf("work.NewFileStore: %v", err)
 	}
 	env.works = works
-	ops := work.NewOperations(works, env.starter, nil, nil)
+	env.ops = work.NewOperations(works, env.starter, nil, nil)
 
-	env.scheduler = NewScheduler(env.store, works, ops)
+	env.scheduler = NewScheduler(env.store, env.ops)
+	env.ops.SetRunRecorder(env.scheduler)
 	env.scheduler.now = env.clock.Now
 	env.scheduler.newTimer = env.clock.newTimer
 	// Far enough out that every timer the loop sets is for a real firing.
@@ -249,7 +251,9 @@ func TestFire_StartFailureIsRecorded(t *testing.T) {
 func TestFire_CreateFailureIsRecorded(t *testing.T) {
 	env := newSchedulerEnv(t)
 	s := env.create(t, env.valid())
-	env.scheduler.runs = failingRuns{RunStore: env.works, err: errors.New("disk full")}
+	ops := work.NewOperations(failingRuns{Store: env.works, err: errors.New("disk full")}, env.starter, nil, nil)
+	ops.SetRunRecorder(env.scheduler)
+	env.scheduler.starter = ops
 
 	env.fireAt(day(1, 9, 0))
 	if runs := env.runs(t, s.ID); len(runs) != 0 {
@@ -279,7 +283,7 @@ func TestRunNow(t *testing.T) {
 		t.Errorf("schedule = %+v, want the run recorded and still no next run", got)
 	}
 
-	if _, err := env.scheduler.RunNow(bgCtx, s.ID); !errors.Is(err, ErrRunActive) {
+	if _, err := env.scheduler.RunNow(bgCtx, s.ID); !errors.Is(err, work.ErrRunActive) {
 		t.Errorf("RunNow while the run is active: err = %v, want ErrRunActive", err)
 	}
 	if runs := env.runs(t, s.ID); len(runs) != 1 {
@@ -363,10 +367,236 @@ func TestRunNow_RefusedWhileAnUnrecordedRunIsActive(t *testing.T) {
 		t.Fatalf("runs = %d, want the firing to have started one", len(runs))
 	}
 
-	if _, err := env.scheduler.RunNow(bgCtx, s.ID); !errors.Is(err, ErrRunActive) {
+	if _, err := env.scheduler.RunNow(bgCtx, s.ID); !errors.Is(err, work.ErrRunActive) {
 		t.Errorf("RunNow: err = %v, want ErrRunActive for the run the schedule does not name", err)
 	}
 	if runs := env.runs(t, s.ID); len(runs) != 1 {
 		t.Errorf("runs = %d, want no second run alongside the first", len(runs))
+	}
+}
+
+// countingRuns is a schedule store that counts the runs written down.
+type countingRuns struct {
+	Store
+	recordedMu sync.Mutex
+	recorded   []string
+}
+
+func (c *countingRuns) RecordRun(ctx context.Context, id string, workID string) (Schedule, error) {
+	c.recordedMu.Lock()
+	c.recorded = append(c.recorded, workID)
+	c.recordedMu.Unlock()
+	return c.Store.RecordRun(ctx, id, workID)
+}
+
+func TestFire_RecordsTheRunOnce(t *testing.T) {
+	env := newSchedulerEnv(t)
+	s := env.create(t, env.valid())
+	counting := &countingRuns{Store: env.store}
+	env.scheduler.store = counting
+
+	env.fireAt(day(1, 9, 0))
+	runs := env.runs(t, s.ID)
+	if len(runs) != 1 {
+		t.Fatalf("runs = %d, want 1", len(runs))
+	}
+	if len(counting.recorded) != 1 || counting.recorded[0] != runs[0].ID {
+		t.Errorf("recorded = %v, want the one run recorded once", counting.recorded)
+	}
+}
+
+// A run that failed to start is left open for a person to start; starting it
+// is a run like any other, so the schedule records it and the next firing sees
+// it going.
+func TestStartWork_AJobThatFailedToStartIsRecordedWhenStartedByHand(t *testing.T) {
+	env := newSchedulerEnv(t)
+	s := env.create(t, env.valid())
+	env.starter.fail = errors.New("worktree not found")
+	env.fireAt(day(1, 9, 0))
+	failed := env.get(t, s.ID).LastFailure
+	if failed == nil || failed.WorkID == "" {
+		t.Fatalf("failure = %+v, want the job that failed to start", failed)
+	}
+
+	env.starter.fail = nil
+	if _, err := env.ops.StartWork(bgCtx, failed.WorkID, nil); err != nil {
+		t.Fatalf("StartWork: %v", err)
+	}
+	got := env.get(t, s.ID)
+	if got.LastFailure != nil || got.LastRunWorkID != failed.WorkID {
+		t.Errorf("schedule = %+v, want the failure cleared and the job recorded as the latest run", got)
+	}
+
+	env.fireAt(day(2, 9, 0))
+	if runs := env.runs(t, s.ID); len(runs) != 1 {
+		t.Errorf("runs = %d, want the firing skipped while the job started by hand runs", len(runs))
+	}
+	if got := env.get(t, s.ID); !sameTime(got.LastSkippedAt, at(day(2, 9, 0))) {
+		t.Errorf("LastSkippedAt = %v, want the firing recorded as skipped", got.LastSkippedAt)
+	}
+}
+
+func TestStartWork_AnOlderRunIsRefusedWhileAnotherIsActive(t *testing.T) {
+	env := newSchedulerEnv(t)
+	s := env.create(t, env.valid())
+	env.fireAt(day(1, 9, 0))
+	older := env.get(t, s.ID).LastRunWorkID
+	if err := env.works.Stop(bgCtx, older); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+	env.fireAt(day(2, 9, 0))
+	latest := env.get(t, s.ID).LastRunWorkID
+
+	if _, err := env.ops.StartWork(bgCtx, older, nil); !errors.Is(err, work.ErrRunActive) {
+		t.Fatalf("restarting the older run: err = %v, want ErrRunActive", err)
+	}
+	if got := env.get(t, s.ID); got.LastRunWorkID != latest {
+		t.Errorf("LastRunWorkID = %s, want the refused restart not recorded", got.LastRunWorkID)
+	}
+
+	// Once nothing else is going, the restart is a run and becomes the latest.
+	if err := env.works.Stop(bgCtx, latest); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+	if _, err := env.ops.StartWork(bgCtx, older, nil); err != nil {
+		t.Fatalf("restarting the older run once nothing is active: %v", err)
+	}
+	if got := env.get(t, s.ID); got.LastRunWorkID != older {
+		t.Errorf("LastRunWorkID = %s, want the restarted run %s", got.LastRunWorkID, older)
+	}
+}
+
+func TestReopenWork_AClosedRunIsRefusedWhileAnotherIsActive(t *testing.T) {
+	env := newSchedulerEnv(t)
+	s := env.create(t, env.valid())
+	env.fireAt(day(1, 9, 0))
+	older := env.get(t, s.ID).LastRunWorkID
+	if _, _, err := env.ops.StepDone(bgCtx, older); err != nil {
+		t.Fatalf("StepDone: %v", err)
+	}
+	env.fireAt(day(2, 9, 0))
+
+	if err := env.ops.ReopenWork(bgCtx, older); !errors.Is(err, work.ErrRunActive) {
+		t.Fatalf("ReopenWork: err = %v, want ErrRunActive", err)
+	}
+	if w, _, _ := env.works.Get(older); w.Status != work.StatusClosed {
+		t.Errorf("older run status = %s, want it left closed", w.Status)
+	}
+}
+
+// A run made active some other way than being started — here reopened while
+// nothing else was going — is not the schedule's latest run, and is still the
+// run a firing must not start a second one beside.
+func TestFire_SkipsWhileARunThatIsNotTheLatestIsActive(t *testing.T) {
+	env := newSchedulerEnv(t)
+	s := env.create(t, env.valid())
+	env.fireAt(day(1, 9, 0))
+	older := env.get(t, s.ID).LastRunWorkID
+	if _, _, err := env.ops.StepDone(bgCtx, older); err != nil {
+		t.Fatalf("StepDone: %v", err)
+	}
+	env.fireAt(day(2, 9, 0))
+	latest := env.get(t, s.ID).LastRunWorkID
+	if _, _, err := env.ops.StepDone(bgCtx, latest); err != nil {
+		t.Fatalf("StepDone: %v", err)
+	}
+	if err := env.ops.ReopenWork(bgCtx, older); err != nil {
+		t.Fatalf("ReopenWork: %v", err)
+	}
+
+	env.fireAt(day(3, 9, 0))
+	if runs := env.runs(t, s.ID); len(runs) != 2 {
+		t.Errorf("runs = %d, want the firing skipped beside the reopened run", len(runs))
+	}
+}
+
+// overtakingStarter starts a run by hand just before the firing's own start
+// reaches the guard: the order a work.start wins when it lands while a firing
+// is between reading its schedule and starting.
+type overtakingStarter struct {
+	ops    *work.Operations
+	byHand string
+}
+
+func (o overtakingStarter) StartRun(ctx context.Context, job work.Work) (work.Work, error) {
+	if _, err := o.ops.StartWork(ctx, o.byHand, nil); err != nil {
+		return work.Work{}, err
+	}
+	return o.ops.StartRun(ctx, job)
+}
+
+func TestFire_OvertakenByARunStartedByHandIsNotASkip(t *testing.T) {
+	env := newSchedulerEnv(t)
+	s := env.create(t, env.valid())
+	env.fireAt(day(1, 9, 0))
+	older := env.get(t, s.ID).LastRunWorkID
+	if err := env.works.Stop(bgCtx, older); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+	env.scheduler.starter = overtakingStarter{ops: env.ops, byHand: older}
+
+	env.fireAt(day(2, 9, 0))
+	got := env.get(t, s.ID)
+	if got.LastSkippedAt != nil {
+		t.Errorf("LastSkippedAt = %v, want no skip: the run started by hand is the firing's run", got.LastSkippedAt)
+	}
+	if got.LastRunWorkID != older || !sameTime(got.NextRunAt, at(day(3, 9, 0))) {
+		t.Errorf("schedule = %+v, want the run by hand recorded and the firing moved on", got)
+	}
+	if runs := env.runs(t, s.ID); len(runs) != 1 {
+		t.Errorf("runs = %d, want no second run", len(runs))
+	}
+}
+
+// The guard is what keeps a start by hand and a Run now from both passing the
+// check; racing them must always end with exactly one run going.
+func TestStartWork_RacingRunNowLeavesOneRunActive(t *testing.T) {
+	for i := range 20 {
+		env := newSchedulerEnv(t)
+		s := env.create(t, env.valid())
+		first, err := env.scheduler.RunNow(bgCtx, s.ID)
+		if err != nil {
+			t.Fatalf("RunNow: %v", err)
+		}
+		if err := env.works.Stop(bgCtx, first.ID); err != nil {
+			t.Fatalf("Stop: %v", err)
+		}
+
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() { defer wg.Done(); _, _ = env.ops.StartWork(bgCtx, first.ID, nil) }()
+		go func() { defer wg.Done(); _, _ = env.scheduler.RunNow(bgCtx, s.ID) }()
+		wg.Wait()
+
+		var active []string
+		for _, run := range env.runs(t, s.ID) {
+			if run.Status == work.StatusActive {
+				active = append(active, run.ID)
+			}
+		}
+		if len(active) != 1 {
+			t.Fatalf("attempt %d: active runs = %v, want exactly one", i, active)
+		}
+		if got := env.get(t, s.ID).LastRunWorkID; got != active[0] {
+			t.Fatalf("attempt %d: LastRunWorkID = %s, want the active run %s", i, got, active[0])
+		}
+	}
+}
+
+func TestRecordRun_ARunOfADeletedScheduleIsNotAFailure(t *testing.T) {
+	env := newSchedulerEnv(t)
+	s := env.create(t, env.valid())
+	run, err := env.scheduler.RunNow(bgCtx, s.ID)
+	if err != nil {
+		t.Fatalf("RunNow: %v", err)
+	}
+	if err := env.works.Stop(bgCtx, run.ID); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+	if err := env.store.Delete(bgCtx, s.ID); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	if _, err := env.ops.StartWork(bgCtx, run.ID, nil); err != nil {
+		t.Errorf("restarting a run of a deleted schedule: %v", err)
 	}
 }

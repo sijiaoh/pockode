@@ -45,6 +45,8 @@ func isUserError(err error) bool {
 	return errors.Is(err, work.ErrWorkNotFound) ||
 		errors.Is(err, work.ErrInvalidWork) ||
 		errors.Is(err, work.ErrCommentNotFound) ||
+		// work_reopen on a run while another run of its schedule is going.
+		errors.Is(err, work.ErrRunActive) ||
 		// A question the agent asked about is gone, or it asked one nobody
 		// could have answered. Both are things an agent gets wrong in the
 		// ordinary course of running, not faults of this server.

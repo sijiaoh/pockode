@@ -193,15 +193,16 @@ Each firing makes a [job](#jobs); the schedule itself never runs anything.
 | enabled          | bool        | A disabled schedule never fires, and can still be run by hand |
 | worktree         | string?     | Worktree each run is made in (empty = main); must exist when set — a worktree removed later fails the next firing, recorded as `last_failure` |
 | next_run_at      | time?       | The next firing; absent exactly when the schedule is disabled |
-| last_run_at      | time?       | The latest run *started*, by a firing or by hand |
+| last_run_at      | time?       | The latest run *started*: by a firing, by Run now, or by `work.start` on one of its runs |
 | last_run_work_id | string?     | That run's work id |
-| last_skipped_at  | time?       | The latest firing skipped because the previous run was still active; older than `last_run_at` once a later run has been made |
+| last_skipped_at  | time?       | The latest firing skipped because another run was still active; older than `last_run_at` once a later run has been made |
 | last_failure     | RunFailure? | `{at, work_id?, error}`: the latest run that could not be made (`work_id` absent) or started (`work_id` names the job, left `open`); cleared by the next run that starts |
 | created_at       | time        | Creation timestamp |
 | updated_at       | time        | Moves with edits to the settings above `next_run_at`, never with the run bookkeeping |
 
 The bookkeeping fields (`next_run_at` down to `last_failure`) are the
-schedule's own live state, written only by the store as the scheduler reports
+schedule's own live state, written only by the store as the scheduler — and,
+for a run started, the work operations every start goes through — report
 what happened; a client reads them and never sends them. Deleting a schedule
 deletes it alone: its runs are works with their own sessions and history, and
 stay where they are.

@@ -11,21 +11,13 @@ import (
 	"github.com/pockode/server/work"
 )
 
-// ErrRunActive refuses a run by hand while the schedule's previous run is
-// still active: a schedule has at most one run going at a time, whoever asked.
-var ErrRunActive = errors.New("previous run is still active")
-
-// RunStore is where a schedule's runs are made and looked up. Satisfied by the
-// work FileStore.
-type RunStore interface {
-	Get(id string) (work.Work, bool, error)
-	CreateJob(ctx context.Context, w work.Work) (work.Work, error)
-}
-
-// RunStarter starts a run once it is made. Satisfied by work.Operations, so a
-// run is started exactly as any other work is.
+// RunStarter makes and starts a run, refusing with work.ErrRunActive while
+// another run of the schedule is active, and records it on the schedule through
+// the RunRecorder it was given. Satisfied by work.Operations, so a run is
+// started exactly as any other work is — and through the same guard a run
+// started by hand goes through.
 type RunStarter interface {
-	StartWork(ctx context.Context, id string, watcher *work.Watcher) (work.Work, error)
+	StartRun(ctx context.Context, job work.Work) (work.Work, error)
 }
 
 // recheckInterval caps how long the scheduler sleeps before looking at the
@@ -41,11 +33,13 @@ const recheckInterval = time.Minute
 // operations.
 type Scheduler struct {
 	store   Store
-	runs    RunStore
 	starter RunStarter
 
-	// runMu serialises making runs, so a firing and a run by hand cannot both
-	// find the previous run finished and start two.
+	// runMu serialises the scheduler's own decisions to run, so a firing re-reads
+	// a schedule after a Run now has moved its firing on. A work.start by hand
+	// does not take it; fire looks again when refused instead (stoodDown).
+	// Keeping two runs from going at once is not its job: that is the starter's
+	// guard, which every start of a job goes through.
 	runMu sync.Mutex
 
 	// wake is signalled by every schedule change, so an edit reschedules the
@@ -56,11 +50,6 @@ type Scheduler struct {
 	// NextRunAt stays in the past, and without this every loop would make
 	// another run. Only the loop goroutine touches it.
 	handled map[string]time.Time
-	// started is the run each schedule last started, by schedule id. It
-	// backs up LastRunWorkID for the overlap check: a run whose RecordRun could
-	// not be written is still going, and the schedule's record does not name
-	// it. Guarded by runMu.
-	started map[string]string
 
 	cancel context.CancelFunc
 	done   chan struct{}
@@ -70,14 +59,14 @@ type Scheduler struct {
 	recheck  time.Duration
 }
 
-func NewScheduler(store Store, runs RunStore, starter RunStarter) *Scheduler {
+// NewScheduler builds the scheduler. The starter is expected to record the
+// runs it starts on the scheduler (work.Operations.SetRunRecorder).
+func NewScheduler(store Store, starter RunStarter) *Scheduler {
 	s := &Scheduler{
 		store:    store,
-		runs:     runs,
 		starter:  starter,
 		wake:     make(chan struct{}, 1),
 		handled:  map[string]time.Time{},
-		started:  map[string]string{},
 		now:      time.Now,
 		newTimer: realTimer,
 		recheck:  recheckInterval,
@@ -212,25 +201,35 @@ func (s *Scheduler) fire(ctx context.Context, id string, at time.Time) {
 		return
 	}
 
-	activeRun, err := s.activeRun(sched)
-	if err != nil {
-		s.recordFailure(ctx, sched.ID, "", err)
-		return
-	}
-	if activeRun != "" {
-		slog.Info("schedule firing skipped: previous run still active", "scheduleId", sched.ID, "workId", activeRun)
+	_, err = s.startRun(ctx, sched)
+	if errors.Is(err, work.ErrRunActive) {
+		if s.stoodDown(sched.ID, at) {
+			return
+		}
+		slog.Info("schedule firing skipped: previous run still active", "scheduleId", sched.ID, "error", err)
 		if _, err := s.store.RecordSkip(ctx, sched.ID); err != nil {
 			slog.Error("failed to record skipped schedule firing", "scheduleId", sched.ID, "error", err)
 		}
-		return
 	}
-	// A failure is already logged and recorded on the schedule by startRun;
-	// there is nobody else to report it to.
-	_, _ = s.startRun(ctx, sched)
+	// Any other failure is already logged and recorded on the schedule by
+	// startRun; there is nobody else to report it to.
+}
+
+// stoodDown reports whether a firing refused for an active run was overtaken
+// rather than skipped: a run started by hand while the firing waited for the
+// starter's guard was recorded, which moved the firing on. That run is the
+// firing's run, and recording a skip beside it would say one was missed.
+func (s *Scheduler) stoodDown(id string, at time.Time) bool {
+	sched, found, err := s.store.Get(id)
+	if err != nil {
+		slog.Error("failed to read schedule", "scheduleId", id, "error", err)
+		return false
+	}
+	return !found || sched.NextRunAt == nil || !sched.NextRunAt.Equal(at)
 }
 
 // RunNow makes and starts a run of schedule id now, whether or not the
-// schedule is enabled. It is refused with ErrRunActive while the previous run
+// schedule is enabled. It is refused with work.ErrRunActive while another run
 // is still active, the same rule a firing follows; the schedule's next firing
 // is unaffected unless it was already due.
 func (s *Scheduler) RunNow(ctx context.Context, id string) (work.Work, error) {
@@ -244,65 +243,46 @@ func (s *Scheduler) RunNow(ctx context.Context, id string) (work.Work, error) {
 	if !found {
 		return work.Work{}, ErrNotFound
 	}
-	activeRun, err := s.activeRun(sched)
-	if err != nil {
-		return work.Work{}, err
-	}
-	if activeRun != "" {
-		return work.Work{}, fmt.Errorf("%w: run %s of schedule %s", ErrRunActive, activeRun, sched.ID)
-	}
 	return s.startRun(ctx, sched)
 }
 
-// activeRun is the id of the schedule's previous run if it is still active,
-// or "" if there is none or it has finished.
+// startRun makes a job from sched and starts it. A failure other than the
+// refusal of an active run is recorded on the schedule as well as returned.
 // Caller holds runMu.
-func (s *Scheduler) activeRun(sched Schedule) (string, error) {
-	for _, id := range []string{sched.LastRunWorkID, s.started[sched.ID]} {
-		if id == "" {
-			continue
-		}
-		w, found, err := s.runs.Get(id)
-		if err != nil {
-			return "", fmt.Errorf("look up previous run %s: %w", id, err)
-		}
-		if found && w.Status == work.StatusActive {
-			return w.ID, nil
-		}
-	}
-	return "", nil
-}
-
-// startRun makes a job from sched and starts it. A failure is recorded on the
-// schedule as well as returned. Caller holds runMu.
 func (s *Scheduler) startRun(ctx context.Context, sched Schedule) (work.Work, error) {
-	job, err := s.runs.CreateJob(ctx, work.Work{
+	started, err := s.starter.StartRun(ctx, work.Work{
 		ScheduleID:  sched.ID,
 		AgentRoleID: sched.AgentRoleID,
 		Title:       sched.Title,
 		Body:        sched.Prompt,
 		Worktree:    sched.Worktree,
 	})
-	if err != nil {
+	switch {
+	case errors.Is(err, work.ErrRunActive):
+		return work.Work{}, err
+	case err != nil && started.ID == "":
 		err = fmt.Errorf("create run: %w", err)
 		s.recordFailure(ctx, sched.ID, "", err)
 		return work.Work{}, err
-	}
-	started, err := s.starter.StartWork(ctx, job.ID, nil)
-	if err != nil {
-		err = fmt.Errorf("start run %s: %w", job.ID, err)
-		s.recordFailure(ctx, sched.ID, job.ID, err)
+	case err != nil:
+		err = fmt.Errorf("start run %s: %w", started.ID, err)
+		s.recordFailure(ctx, sched.ID, started.ID, err)
 		return work.Work{}, err
 	}
-	s.started[sched.ID] = job.ID
-	// The run is going whatever happens to the bookkeeping, so a failure to
-	// write it is logged rather than returned: reporting the run as failed
-	// would invite a retry that starts a second one.
-	if _, err := s.store.RecordRun(ctx, sched.ID, job.ID); err != nil {
-		slog.Error("failed to record schedule run", "scheduleId", sched.ID, "workId", job.ID, "error", err)
-	}
-	slog.Info("schedule run started", "scheduleId", sched.ID, "workId", job.ID)
+	slog.Info("schedule run started", "scheduleId", sched.ID, "workId", started.ID)
 	return started, nil
+}
+
+// RecordRun implements work.RunRecorder: every job that starts, fired or by
+// hand, is recorded here as its schedule's latest run. A run of a deleted
+// schedule has nothing to be recorded on — deleting a schedule keeps its runs,
+// and they can still be started — so that is not a failure.
+func (s *Scheduler) RecordRun(ctx context.Context, scheduleID, workID string) {
+	if _, err := s.store.RecordRun(ctx, scheduleID, workID); errors.Is(err, ErrNotFound) {
+		slog.Debug("run started for a deleted schedule", "scheduleId", scheduleID, "workId", workID)
+	} else if err != nil {
+		slog.Error("failed to record schedule run", "scheduleId", scheduleID, "workId", workID, "error", err)
+	}
 }
 
 func (s *Scheduler) recordFailure(ctx context.Context, id, workID string, cause error) {

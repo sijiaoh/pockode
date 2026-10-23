@@ -62,6 +62,18 @@ type RunFailure struct {
 	Error  string `json:"error"`
 }
 
+// Zone is the time zone cron expressions are evaluated in — the server's
+// local one — as it stands now. A client in another zone needs it to say when
+// a period's wall-clock time falls for it; it is sent beside the schedules
+// rather than on each, since every schedule shares it.
+type Zone struct {
+	// Name is the zone's abbreviation (time.Time.Zone), such as "JST"; it can
+	// be ambiguous ("IST"), which OffsetSeconds never is.
+	Name string `json:"name"`
+	// OffsetSeconds is east of UTC, and moves with daylight saving time.
+	OffsetSeconds int `json:"offset_seconds"`
+}
+
 type Operation string
 
 const (

@@ -437,8 +437,11 @@ Flags:
 		os.Exit(1)
 	}
 	// Runs are started through workOps like any other work, so the scheduler
-	// starts only once the worktree manager can create their sessions.
-	scheduler := schedule.NewScheduler(scheduleStore, workStore, workOps)
+	// starts only once the worktree manager can create their sessions. Every
+	// job workOps starts — fired, Run now, or work.start by hand — is recorded
+	// on its schedule through the scheduler.
+	scheduler := schedule.NewScheduler(scheduleStore, workOps)
+	workOps.SetRunRecorder(scheduler)
 	if err := scheduler.Start(); err != nil {
 		slog.Error("failed to start scheduler", "error", err)
 		os.Exit(1)

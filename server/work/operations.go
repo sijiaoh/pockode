@@ -71,6 +71,9 @@ type Operations struct {
 	steps     StepCounter
 	sessions  SessionDeleter
 	questions QuestionWithdrawer
+	runs      RunRecorder
+
+	runGuard runGuard
 }
 
 // NewOperations builds an Operations. A nil notifier is tolerated (the reopen
@@ -149,12 +152,17 @@ func (o *Operations) subtreeSessions(id string) (worktree string, sessionIDs []s
 // claim is rolled back so the work never gets stuck active with a dangling
 // session. The returned Work is the claimed item.
 //
+// A job goes through its schedule's guard (runGuard): refused with
+// ErrRunActive while another run of the schedule is active, and recorded as
+// the schedule's latest run once it starts.
+//
 // watcher, when non-nil, is recorded on the story with the claim (Store.Claim);
 // nil starts it without touching who is watching it.
 func (o *Operations) StartWork(ctx context.Context, id string, watcher *Watcher) (Work, error) {
 	// Precondition: a startable work must have an agent role. Checked before the
 	// claim; a stale read here is harmless (worst case a rare spurious reject),
 	// unlike the status/session decision which Claim makes under the store lock.
+	// ScheduleID never changes, so the read is good for routing a job too.
 	current, found, err := o.store.Get(id)
 	if err != nil {
 		return Work{}, err
@@ -165,7 +173,15 @@ func (o *Operations) StartWork(ctx context.Context, id string, watcher *Watcher)
 	if current.AgentRoleID == "" {
 		return Work{}, fmt.Errorf("%w: work %s has no agent_role_id", ErrInvalidWork, id)
 	}
+	if current.ScheduleID != "" {
+		return o.startJob(ctx, current, watcher)
+	}
+	return o.start(ctx, id, watcher)
+}
 
+// start is StartWork past its preconditions: the claim, the kickoff and the
+// rollback when the kickoff fails.
+func (o *Operations) start(ctx context.Context, id string, watcher *Watcher) (Work, error) {
 	// Detach from the caller's context: an HTTP request timeout or a disconnected
 	// client/AI CLI must not cancel session creation midway, which would orphan a
 	// half-created session. The claim and kickoff run to completion regardless.
@@ -203,8 +219,23 @@ func (o *Operations) Unwatch(ctx context.Context, id string, by Watcher) (prev *
 }
 
 // ReopenWork transitions a closed work item back to active and delivers the
-// reopen nudge to its agent session.
+// reopen nudge to its agent session. A job is refused with ErrRunActive while
+// another run of its schedule is active, as starting one is.
 func (o *Operations) ReopenWork(ctx context.Context, id string) error {
+	current, found, err := o.store.Get(id)
+	if err != nil {
+		return err
+	}
+	if !found {
+		return ErrWorkNotFound
+	}
+	if current.ScheduleID != "" {
+		return o.reopenJob(ctx, current)
+	}
+	return o.reopen(ctx, id)
+}
+
+func (o *Operations) reopen(ctx context.Context, id string) error {
 	if err := o.store.Reopen(ctx, id); err != nil {
 		return err
 	}

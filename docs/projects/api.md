@@ -76,10 +76,10 @@ All methods use JSON-RPC 2.0 over WebSocket. Work, agent_role and schedule metho
 | `work.create` | `WorkCreateParams` | `WorkDetailItem` | Create a story. A person creates stories only; a task is created by its story's agent with MCP `task_create`, so a request naming a `story_id` is refused with InvalidParams rather than ignored — ignoring it would answer a request for a task with a new story. No method creates a job: a run is made by its schedule ([data-model](data-model.md#jobs)) |
 | `work.update` | `WorkUpdateParams` | `{}` | Update data fields (pointer semantics) |
 | `work.delete` | `WorkDeleteParams` | `{}` | Delete a work item (cascade-deletes children and sessions) |
-| `work.start` | `WorkStartParams` | `WorkDetailItem` | Atomic claim + session creation |
+| `work.start` | `WorkStartParams` | `WorkDetailItem` | Atomic claim + session creation; a job is refused while another run of its schedule is active ([why](#a-schedule-has-one-run-going)) |
 | `work.stop` | `WorkStopParams` | `{}` | Stop a work item (any started, unclosed work → stopped) |
-| `work.reopen` | `WorkReopenParams` | `{}` | Reopen a closed work item (closed → active) |
-| `work.detail.subscribe` | `WorkDetailSubscribeParams` | `{work, comments, usage, activity, pending_questions?, children, parent?}` | Subscribe to a single work item + comments + the token usage of it and its tasks ([why usage is here and not on `Work`](../code/work-system.md#usage-aggregation)) and the two relations its page draws ([why they are not read off the list](../code/work-system.md#the-list-holds-rows-the-detail-page-holds-the-item)) |
+| `work.reopen` | `WorkReopenParams` | `{}` | Reopen a closed work item (closed → active); a job is refused as `work.start` refuses one |
+| `work.detail.subscribe` | `WorkDetailSubscribeParams` | `{work, comments, usage, activity, pending_questions?, children, parent?, schedule?: {id, title}}` | Subscribe to a single work item + comments + the token usage of it and its tasks ([why usage is here and not on `Work`](../code/work-system.md#usage-aggregation)) and the relations its page draws ([why they are not read off the list](../code/work-system.md#the-list-holds-rows-the-detail-page-holds-the-item)): its tasks, the story above it, and for a job the schedule it is a run of — absent once that schedule is deleted. A schedule renamed reaches an open job page with the job's next change |
 | `work.detail.unsubscribe` | `{id}` | `{}` | Unsubscribe from work detail |
 | `work.list.subscribe` | `SubscribeParams` | `{items: WorkListItem[], stopped_hidden?, open_hidden?}` | Subscribe + get the **`Current` segment**, which holds no closed work and — on every path, pushes included — no job ([what a row carries](#work-list-rows-vs-work-detail), [why it is a segment](#the-list-is-two-segments)) |
 | `work.list.archive` | `WorkListArchiveParams` | `{items: WorkListItem[], next_cursor?, has_more?}` | One page of closed work, served against an open list subscription |
@@ -112,9 +112,9 @@ nothing left to tell the two apart ([frontend.md](frontend.md#workdetailoverlay)
 | `schedule.update` | `ScheduleUpdateParams` | `{}` | Update settings (pointer semantics); `next_run_at` is recomputed when `cron` or `enabled` changes |
 | `schedule.delete` | `{id}` | `{}` | Delete the schedule alone; its runs stay |
 | `schedule.run` | `{id}` | `WorkDetailItem` | Make and start a run now, enabled or not; the started job, as `work.start` replies |
-| `schedule.list.subscribe` | `SubscribeParams` | `{items: Schedule[]}` | Subscribe + every schedule, run bookkeeping included |
+| `schedule.list.subscribe` | `SubscribeParams` | `{items: ScheduleListItem[], server_zone: Zone}` | Subscribe + every schedule, run bookkeeping included, each with the row of its latest run; and the zone cron is evaluated in ([Server Zone](#server-zone)) |
 | `schedule.list.unsubscribe` | `{id}` | `{}` | Unsubscribe |
-| `schedule.detail.subscribe` | `ScheduleDetailSubscribeParams` | `{schedule, runs: ScheduleRunPage}` | Subscribe to one schedule and the newest page of its runs ([Schedule Runs](#schedule-runs)) |
+| `schedule.detail.subscribe` | `ScheduleDetailSubscribeParams` | `{schedule, runs: ScheduleRunPage, server_zone: Zone}` | Subscribe to one schedule and the newest page of its runs ([Schedule Runs](#schedule-runs)), with the zone the list carries too — a detail page is reachable by URL without the list |
 | `schedule.detail.runs` | `ScheduleDetailRunsParams` | `ScheduleRunPage` | A page of older runs, served against an open detail subscription |
 | `schedule.detail.unsubscribe` | `{id}` | `{}` | Unsubscribe |
 
@@ -122,10 +122,13 @@ Every refusal the user can act on is `InvalidParams` with a message that says
 what to fix: `schedule not found`; `invalid schedule: …` for a missing field, an
 unparsable cron (`invalid schedule: cron expression "61 * * * *": minute field
 "61": 61 is out of range 0-59`) or a role that does not take jobs;
-`schedule.run` while the previous run is still active (`previous run is still
-active: run <work-id> of schedule <id>`). A run the work store refuses to make
-or start — the schedule's role no longer takes jobs, say — is `InvalidParams`
-too, with the store's reason (`create run: invalid work: …`). Any other failure
+`schedule.run` — and `work.start` or `work.reopen` on one of its runs — while
+another run is still active (`previous run is still active: run <work-id> of
+schedule <id>`). A run the work store refuses to make or start — a field it
+requires that the schedule lacks, say — is `InvalidParams` too, with the
+store's reason (`create run: invalid work: …`). Whether the schedule's role still takes jobs
+is not checked on the way: the kind is checked when a schedule is saved, and a
+role narrowed since goes on running the schedule's runs. Any other failure
 to make or start a run is `InternalError` carrying the cause. Either way the
 failure is also recorded on the schedule as `last_failure`, which is where a
 firing nobody watched reports it. `schedule.create` and `schedule.update`
@@ -161,10 +164,58 @@ ScheduleDetailSubscribeParams { id, schedule_id }
 ScheduleDetailRunsParams      { id, cursor?, limit? }   // id names the detail subscription
 ScheduleRunPage               { items: ScheduleRunItem[], next_cursor?, has_more? }
 ScheduleRunItem               WorkListItem & { created_at }
+ScheduleListItem              Schedule & { last_run?: WorkListItem }   // the row of last_run_work_id; absent when none or deleted
+Zone                          { name, offset_seconds }   // time.Time.Zone(): abbreviation, seconds east of UTC
 ```
 
 `Schedule` is the stored record as it stands — it derives nothing, so there is
 no narrowing to put between it and the wire ([data-model](data-model.md#schedule)).
+`last_run` is derived, and rides *beside* the record on a list item rather than
+in it, the way `activity` rides beside a work on its detail: the record names
+its latest run, the item says what that run is doing now. It is there because a
+schedule's row draws the run's activity, status and questions, and no other
+subscription a client holds carries a job's row — the work list leaves jobs
+out.
+
+### Server Zone
+
+Cron is evaluated in the server's local time zone
+([data-model](data-model.md#schedule)), and a client reaching it through the
+relay may be in another. Both schedule subscriptions therefore carry
+`server_zone` — the zone's abbreviation and its offset now — so a client can
+show a period in the server's wall-clock time and say so when its own offset
+differs. The offset is read when the subscription answers (and on a list's sync
+and every detail notification); it moves with daylight saving time, so a
+client that has held a list across a DST change has an offset an hour out until
+it subscribes again. The instants — `next_run_at` and the rest — are absolute
+and never wrong.
+
+### A Schedule Has One Run Going
+
+At most one run of a schedule is active at a time, whoever starts it and
+whichever run they start: a firing, `schedule.run`, `work.start` on a run that
+failed to start or on an older stopped one, and `work.reopen` on a closed one
+are all refused — a firing as a skip (`last_skipped_at`), the others with
+`previous run is still active` — while another run of the schedule is
+`active`. Every run is checked, not only the one `last_run_work_id` names: a
+run can be active without being the latest (reopened, or woken by a message in
+its chat).
+
+The check, the start and the recording of the start are one critical section
+per schedule, on the start path every caller shares (`work.Operations`), so a
+`work.start` cannot pass the check while a firing is between its own check and
+its start. A job that starts — fired, run now or started by hand — is recorded
+there as the schedule's latest run: `last_run_at` and `last_run_work_id` move to
+it and `last_failure` clears. A run that failed to start and is then started by
+hand is therefore the schedule's current run from that moment, and the next
+firing sees it going. A reopened run is checked but not recorded: the record is
+of the latest run started.
+
+A run woken by a message in its chat is the one way round the rule — the
+message has been sent, and there is nothing to refuse. If it is an older run, it
+is not `last_run`, so the list row does not show it; the firings it causes to
+be skipped show as `last_skipped_at`, and the run itself, `active`, is on the
+detail's run page.
 
 Defined in `server/rpc/types.go`.
 
@@ -281,6 +332,10 @@ on the server — plus `created_at`.
 
 If step 2 fails, `Operations.StartWork` calls `Store.RollbackStart` with the sessionID it claimed — fresh starts revert to `open` (clears sessionID); restarts revert to `stopped` (preserves sessionID).
 
+A job adds a step on either side, under its schedule's lock: before the claim,
+the refusal while another run is active; after a successful start, the record
+on the schedule ([A Schedule Has One Run Going](#a-schedule-has-one-run-going)).
+
 ### `agent_role.update` Engine Fields
 
 `agent_type`, `model` and `effort` follow the same "absent = unchanged" rule as
@@ -367,10 +422,14 @@ For `agent_role.list.changed`, the fields are `role` / `roleId` instead of `work
 `schedule.list.changed` is sent for **every** change the store makes, the run
 bookkeeping included — a firing moves `next_run_at`, a run moves `last_run_at`,
 a skip or a failure records itself — so a row showing "next run" or "last
-failed" never needs a refresh.
+failed" never needs a refresh. Its `schedule` is a `ScheduleListItem`, and it is
+also sent, as an `update`, when the schedule's latest run changes or is deleted
+and when that run's session moves its row — a turn starting, say; the same
+triggers the detail follows for its run page. A change to any other run sends
+nothing here.
 
 **Detail** (`schedule.detail.changed`) is always whole, like
-`work.detail.changed`: `{ "id": "<sub-id>", "schedule": {...}, "runs": {...} }`.
+`work.detail.changed`: `{ "id": "<sub-id>", "schedule": {...}, "runs": {...}, "server_zone": {...} }`.
 It is sent when the schedule changes (settings or bookkeeping), when one of its
 runs is made, changes or is deleted, and when a run's session changes in a way
 that moves the run page — a turn starting, say; a session touched without
@@ -392,8 +451,9 @@ the role store — the watcher listens to both
 ```json
 { "id": "<sub-id>", "operation": "sync", "works": [...] }
 ```
-`roles` for `agent_role.list`, `schedules` for `schedule.list`. A detail
-subscription's sync is simply its whole detail again.
+`roles` for `agent_role.list`, `schedules` for `schedule.list` (with
+`server_zone` beside it). A detail subscription's sync is simply its whole
+detail again.
 
 ### Backpressure Handling
 

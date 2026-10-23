@@ -1391,6 +1391,18 @@ type WorkDetailSubscribeResult struct {
 	// are listed, so it answers for them itself.
 	Children []WorkListItem `json:"children"`
 	Parent   *WorkListItem  `json:"parent,omitempty"`
+	// Schedule is what a job is a run of, beside Parent and for the same
+	// reason: the page names what the work belongs to without a second
+	// subscription. Absent for every other work, and for a job whose schedule
+	// has been deleted. A rename reaches an open page with the job's next
+	// change; the title is a label, and that staleness is accepted.
+	Schedule *WorkSchedule `json:"schedule,omitempty"`
+}
+
+// WorkSchedule names the schedule a job is a run of.
+type WorkSchedule struct {
+	ID    string `json:"id"`
+	Title string `json:"title"`
 }
 
 // AgentRole namespace
@@ -1465,8 +1477,23 @@ type ScheduleRunParams struct {
 	ID string `json:"id"`
 }
 
+// ScheduleListItem is a schedule as its list row draws it: the stored record,
+// and beside it the row of its latest run. LastRun is derived — the run
+// LastRunWorkID names, as it is now — and absent when there is none or that
+// work has been deleted. The row draws the run's activity, status and
+// questions, and nothing else on a client holds a job's row: the work list
+// leaves jobs out.
+type ScheduleListItem struct {
+	schedule.Schedule
+	LastRun *WorkListItem `json:"last_run,omitempty"`
+}
+
 type ScheduleListSubscribeResult struct {
-	Items []schedule.Schedule `json:"items"`
+	Items []ScheduleListItem `json:"items"`
+	// ServerZone is the zone every schedule's cron is evaluated in, read at
+	// subscribe time: a period is the server's wall-clock time, and the client
+	// may be in another zone.
+	ServerZone schedule.Zone `json:"server_zone"`
 }
 
 type ScheduleDetailSubscribeParams struct {
@@ -1505,6 +1532,9 @@ type ScheduleDetailSubscribeResult struct {
 	// Runs is the newest page of the schedule's runs. Every schedule.detail.changed
 	// replaces it whole; older pages are read with schedule.detail.runs.
 	Runs ScheduleRunPage `json:"runs"`
+	// ServerZone is ScheduleListSubscribeResult.ServerZone, here too because a
+	// detail page is reachable by URL without the list.
+	ServerZone schedule.Zone `json:"server_zone"`
 }
 
 // ScheduleDetailRunsParams asks for a page of runs older than Cursor, against
