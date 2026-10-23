@@ -20,6 +20,8 @@ type questionFixture struct {
 	client     *Client
 	agent      *mockAgent
 	broadcasts []agent.EventRecord
+	// settled is every call QuestionsSettledFunc received, in order.
+	settled [][]agent.SettledQuestion
 }
 
 func newQuestionFixture(t *testing.T) *questionFixture {
@@ -40,6 +42,12 @@ func newQuestionFixture(t *testing.T) *questionFixture {
 	f := &questionFixture{store: store, client: NewClient(store, pm), agent: ag}
 	f.client.SetBroadcaster(func(_ string, record agent.EventRecord, _ session.HistorySeq, _ any) {
 		f.broadcasts = append(f.broadcasts, record)
+	})
+	f.client.SetOnQuestionsSettled(func(sessionID string, settled []agent.SettledQuestion) {
+		if sessionID != "sess" {
+			t.Errorf("settled reported for session %q, want sess", sessionID)
+		}
+		f.settled = append(f.settled, settled)
 	})
 	return f
 }
@@ -247,9 +255,9 @@ func TestPostQuestion_UnknownSession(t *testing.T) {
 	}
 }
 
-// TestCancelQuestion_WithdrawsWithoutTellingAnyone is the difference from a
-// decline: the agent took its own question back, so there is nothing to send.
-func TestCancelQuestion_WithdrawsWithoutTellingAnyone(t *testing.T) {
+// TestCancelQuestion_WithdrawsWithoutTellingTheAgent is the difference from a
+// decline: the agent took its own question back, so there is nothing to send it.
+func TestCancelQuestion_WithdrawsWithoutTellingTheAgent(t *testing.T) {
 	f := newQuestionFixture(t)
 	id := f.post(t, "Database")
 
@@ -1151,6 +1159,133 @@ func TestWithdrawQuestions_LetsGoOfAnswersInFlight(t *testing.T) {
 	})
 	if got := f.unanswered(t); len(got) != 0 {
 		t.Errorf("unanswered = %+v, want the question to stay settled", got)
+	}
+	// It was settled once, by the answer; letting go of it is no second news.
+	if len(f.settled) != 1 || f.settled[0][0].Answer == nil {
+		t.Errorf("settled = %+v, want only the answer reported", f.settled)
+	}
+}
+
+// TestQuestionsSettled_EveryWayAQuestionStopsWaitingIsTold: whoever passed a
+// question on has to hear it stopped waiting, so every path that settles one
+// reports it — with the answer, or with why it was withdrawn — and questions
+// settled by one act are reported in one call.
+func TestQuestionsSettled_EveryWayAQuestionStopsWaitingIsTold(t *testing.T) {
+	ctx := context.Background()
+	tests := []struct {
+		name   string
+		settle func(t *testing.T, f *questionFixture, ids []string)
+		check  func(t *testing.T, settled []agent.SettledQuestion)
+	}{
+		{
+			name: "answered and declined by the user in one message",
+			settle: func(t *testing.T, f *questionFixture, ids []string) {
+				if _, _, err := f.client.SendAnswers(ctx, "sess", []Answer{
+					{RequestID: ids[0], Answers: []string{"Postgres"}},
+					{RequestID: ids[1], Declined: true},
+				}, nil); err != nil {
+					t.Fatalf("SendAnswers: %v", err)
+				}
+			},
+			check: func(t *testing.T, settled []agent.SettledQuestion) {
+				if len(settled) != 2 || settled[0].Answer == nil || settled[1].Answer == nil {
+					t.Fatalf("settled = %+v, want both answers", settled)
+				}
+				if got := settled[0].Answer.Answers; len(got) != 1 || got[0] != "Postgres" {
+					t.Errorf("answer = %v, want Postgres", got)
+				}
+				if !settled[1].Answer.Declined {
+					t.Error("the decline was not reported as one")
+				}
+				if by := settled[0].Answer.ResolvedBy; by == nil || by.Kind != agent.ResolverUser {
+					t.Errorf("resolved by %+v, want the user", by)
+				}
+			},
+		},
+		{
+			name: "answered by another agent",
+			settle: func(t *testing.T, f *questionFixture, ids []string) {
+				if err := f.client.AnswerQuestion(ctx, "sess", Answer{RequestID: ids[0], Answers: []string{"SQLite"}}, otherAgent); err != nil {
+					t.Fatalf("AnswerQuestion: %v", err)
+				}
+			},
+			check: func(t *testing.T, settled []agent.SettledQuestion) {
+				if len(settled) != 1 || settled[0].Answer == nil {
+					t.Fatalf("settled = %+v, want the one answer", settled)
+				}
+				if by := settled[0].Answer.ResolvedBy; by == nil || by.WorkID != otherAgent.WorkID {
+					t.Errorf("resolved by %+v, want the answering agent", by)
+				}
+			},
+		},
+		{
+			name: "withdrawn by the agent that asked",
+			settle: func(t *testing.T, f *questionFixture, ids []string) {
+				if err := f.client.CancelQuestion(ctx, "sess", ids[0]); err != nil {
+					t.Fatalf("CancelQuestion: %v", err)
+				}
+			},
+			check: func(t *testing.T, settled []agent.SettledQuestion) {
+				if len(settled) != 1 || settled[0].Answer != nil || settled[0].Reason != "" {
+					t.Fatalf("settled = %+v, want one withdrawal with no reason", settled)
+				}
+			},
+		},
+		{
+			name: "withdrawn together by the work",
+			settle: func(t *testing.T, f *questionFixture, _ []string) {
+				f.client.WithdrawQuestions(ctx, "sess", agent.ReasonStepDone)
+			},
+			check: func(t *testing.T, settled []agent.SettledQuestion) {
+				if len(settled) != 2 {
+					t.Fatalf("settled = %+v, want both withdrawals in one call", settled)
+				}
+				for _, q := range settled {
+					if q.Answer != nil || q.Reason != agent.ReasonStepDone {
+						t.Errorf("settled = %+v, want a step_done withdrawal", q)
+					}
+				}
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f := newQuestionFixture(t)
+			headers := []string{"Database", "Runtime"}
+			ids := []string{f.post(t, headers[0]), f.post(t, headers[1])}
+
+			tt.settle(t, f, ids)
+
+			if len(f.settled) != 1 {
+				t.Fatalf("told %d times, want once", len(f.settled))
+			}
+			for i, q := range f.settled[0] {
+				// The question as it was asked travels with its fate: whoever is
+				// told may not have it to hand.
+				if q.Question.RequestID != ids[i] || q.Question.Header != headers[i] || q.Question.Question != "Which database?" {
+					t.Errorf("settled[%d].Question = %+v, want the question as asked", i, q.Question)
+				}
+			}
+			tt.check(t, f.settled[0])
+		})
+	}
+}
+
+// A refused settle settled nothing, so there is nothing to tell.
+func TestQuestionsSettled_ARefusalTellsNobody(t *testing.T) {
+	f := newQuestionFixture(t)
+	id := f.post(t, "Database")
+
+	if _, _, err := f.client.SendAnswers(context.Background(), "sess", []Answer{
+		{RequestID: id, Answers: []string{"MySQL"}},
+	}, nil); !errors.Is(err, ErrAnswerShape) {
+		t.Fatalf("SendAnswers error = %v, want a shape refusal", err)
+	}
+	if err := f.client.CancelQuestion(context.Background(), "sess", "req-nobody"); !errors.Is(err, ErrQuestionNotPending) {
+		t.Fatalf("CancelQuestion error = %v, want ErrQuestionNotPending", err)
+	}
+	if len(f.settled) != 0 {
+		t.Errorf("settled = %+v, want nothing reported", f.settled)
 	}
 }
 

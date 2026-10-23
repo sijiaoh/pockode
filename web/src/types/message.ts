@@ -676,11 +676,14 @@ export interface PendingQuestion {
  * the same reason the header and the question are: the reader is a bubble in
  * someone else's transcript, and that work is not one it can look up. Both are
  * absent for a user, and for an agent running in a session no work owns.
+ * `session_id` is the answering agent's session; the server reads it, nothing
+ * here does.
  */
 export interface QuestionResolver {
 	kind: "user" | "agent";
 	work_id?: string;
 	title?: string;
+	session_id?: string;
 }
 
 /**

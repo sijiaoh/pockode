@@ -810,10 +810,15 @@ const (
 // a bubble in someone else's transcript, and the work that answered is not one
 // it can look up. They are empty for a user, and also for an agent running in a
 // session no work owns — a plain chat can answer too, and has no title to give.
+//
+// SessionID is the answering session, for an agent. It is what names a plain
+// chat that answered, which no work id can: the session watching a story is
+// not told of an answer it gave itself (work.Engine.HandleQuestionsSettled).
 type QuestionResolver struct {
-	Kind   ResolverKind `json:"kind"`
-	WorkID string       `json:"work_id,omitempty"`
-	Title  string       `json:"title,omitempty"`
+	Kind      ResolverKind `json:"kind"`
+	WorkID    string       `json:"work_id,omitempty"`
+	Title     string       `json:"title,omitempty"`
+	SessionID string       `json:"session_id,omitempty"`
 }
 
 // UserResolver is who a question answered in the chat was answered by.

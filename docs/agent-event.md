@@ -293,8 +293,9 @@ words: …"* rather than beside the labels unmarked, and a `note` as *"— note:
 ([code/agent-integration.md](code/agent-integration.md#answering)).
 
 An entry also carries `resolved_by` — `{"kind": "user"}`, or `{"kind": "agent",
-"work_id": "...", "title": "..."}` when another agent answered through
-`question_answer`. It is a field rather than an inference because it used to be
+"work_id": "...", "title": "...", "session_id": "..."}` when another agent
+answered through `question_answer` (`work_id` and `title` absent for an agent
+running no work). It is a field rather than an inference because it used to be
 one: while only a person could answer, the *record type* said who — an `answering`
 entry meant the user and a `request_cancelled` record meant the agent. Absent on
 records written before that stopped being true, which were all the user's. A

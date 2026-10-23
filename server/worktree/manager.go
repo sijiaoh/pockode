@@ -844,6 +844,12 @@ func (m *Manager) create(name, workDir string) (*Worktree, error) {
 		}
 		chatMessagesWatcher.NotifyRecord(sessionID, record, seq, n)
 	})
+	if m.workEngine != nil {
+		// Every way a posted question stops waiting goes through the chat
+		// client, whichever caller asked for it, so this is where the engine
+		// learns of it — not at each of those callers.
+		chatClient.SetOnQuestionsSettled(m.workEngine.HandleQuestionsSettled)
+	}
 
 	wt := &Worktree{
 		Name:                 name,

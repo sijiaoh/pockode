@@ -13,10 +13,12 @@ const SYSTEM_MESSAGE_LABELS: Record<string, string> = {
 	reopen: "Reopened",
 	child_done: "Subtask done",
 	child_question: "Subtask asked",
+	child_question_settled: "Question settled",
 	wait_stranded: "Wait cleared",
 	watched_story_closed: "Story done",
 	watched_story_stopped: "Story stopped",
 	watched_story_question: "Story asked",
+	watched_story_question_settled: "Question settled",
 };
 
 /** How one work event reads in the stream. */
@@ -52,6 +54,7 @@ export function workEventWording(
 	if (
 		subtype === "child_done" ||
 		subtype === "child_question" ||
+		subtype === "child_question_settled" ||
 		subtype === "wait_stranded"
 	) {
 		return { label, summary: meta?.child?.title ?? "" };

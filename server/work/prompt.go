@@ -3,6 +3,7 @@ package work
 import (
 	"bytes"
 	_ "embed"
+	"fmt"
 	"strings"
 	"sync"
 	"text/template"
@@ -26,6 +27,10 @@ const (
 	// Unlike the two below it, it clears no wait: the subtask carries on, and
 	// nothing the story was waiting for has happened.
 	MessageSubtypeChildQuestion = "child_question"
+	// MessageSubtypeChildQuestionSettled is a subtask's question that stopped
+	// waiting — answered, declined or withdrawn — so that a story that
+	// forwarded it can withdraw its copy. It clears no wait either.
+	MessageSubtypeChildQuestionSettled = "child_question_settled"
 	// MessageSubtypeWaitStranded is the counterpart of child_done for the case
 	// where nothing is going to close: the parent's wait on its subtasks has
 	// nothing left that could end it.
@@ -36,6 +41,10 @@ const (
 	MessageSubtypeWatchedStoryClosed   = "watched_story_closed"
 	MessageSubtypeWatchedStoryStopped  = "watched_story_stopped"
 	MessageSubtypeWatchedStoryQuestion = "watched_story_question"
+	// MessageSubtypeWatchedStoryQuestionSettled is the watcher's counterpart of
+	// child_question_settled: a question watched_story_question told it about
+	// stopped waiting, so a copy it forwarded can be withdrawn.
+	MessageSubtypeWatchedStoryQuestionSettled = "watched_story_question_settled"
 )
 
 // NewMessageMeta builds the summary metadata for a system message.
@@ -61,28 +70,30 @@ var promptsYAML []byte
 
 // promptTemplates holds parsed templates from prompts.yaml.
 type promptTemplates struct {
-	PockodeMCPPrefix           string `yaml:"pockode_mcp_prefix"`
-	RoleReference              string `yaml:"role_reference"`
-	WorkContext                string `yaml:"work_context"`
-	StoryBehaviorRules         string `yaml:"story_behavior_rules"`
-	TaskRules                  string `yaml:"task_rules"`
-	LifecycleRules             string `yaml:"lifecycle_rules"`
-	StoryRestartNudge          string `yaml:"story_restart_nudge"`
-	TaskRestartNudge           string `yaml:"task_restart_nudge"`
-	StoryReopenNudge           string `yaml:"story_reopen_nudge"`
-	TaskReopenNudge            string `yaml:"task_reopen_nudge"`
-	StoryAutoContinueNudge     string `yaml:"story_auto_continue_nudge"`
-	TaskAutoContinueNudge      string `yaml:"task_auto_continue_nudge"`
-	StepAutoContinueNudge      string `yaml:"step_auto_continue_nudge"`
-	ChildCompletionNudge       string `yaml:"child_completion_nudge"`
-	ChildQuestionNudge         string `yaml:"child_question_nudge"`
-	ChildQuestionReminderNudge string `yaml:"child_question_reminder_nudge"`
-	StrandedWaitNudge          string `yaml:"stranded_wait_nudge"`
-	WatchedStoryEnded          string `yaml:"watched_story_ended"`
-	WatchedStoryQuestion       string `yaml:"watched_story_question"`
-	StepAdvanceSection         string `yaml:"step_advance_section"`
-	CurrentStepSection         string `yaml:"current_step_section"`
-	PockodeLeadCommand         string `yaml:"pockode_lead_command"`
+	PockodeMCPPrefix            string `yaml:"pockode_mcp_prefix"`
+	RoleReference               string `yaml:"role_reference"`
+	WorkContext                 string `yaml:"work_context"`
+	StoryBehaviorRules          string `yaml:"story_behavior_rules"`
+	TaskRules                   string `yaml:"task_rules"`
+	LifecycleRules              string `yaml:"lifecycle_rules"`
+	StoryRestartNudge           string `yaml:"story_restart_nudge"`
+	TaskRestartNudge            string `yaml:"task_restart_nudge"`
+	StoryReopenNudge            string `yaml:"story_reopen_nudge"`
+	TaskReopenNudge             string `yaml:"task_reopen_nudge"`
+	StoryAutoContinueNudge      string `yaml:"story_auto_continue_nudge"`
+	TaskAutoContinueNudge       string `yaml:"task_auto_continue_nudge"`
+	StepAutoContinueNudge       string `yaml:"step_auto_continue_nudge"`
+	ChildCompletionNudge        string `yaml:"child_completion_nudge"`
+	ChildQuestionNudge          string `yaml:"child_question_nudge"`
+	ChildQuestionReminderNudge  string `yaml:"child_question_reminder_nudge"`
+	ChildQuestionSettledNudge   string `yaml:"child_question_settled_nudge"`
+	StrandedWaitNudge           string `yaml:"stranded_wait_nudge"`
+	WatchedStoryEnded           string `yaml:"watched_story_ended"`
+	WatchedStoryQuestion        string `yaml:"watched_story_question"`
+	WatchedStoryQuestionSettled string `yaml:"watched_story_question_settled"`
+	StepAdvanceSection          string `yaml:"step_advance_section"`
+	CurrentStepSection          string `yaml:"current_step_section"`
+	PockodeLeadCommand          string `yaml:"pockode_lead_command"`
 }
 
 var prompts promptTemplates
@@ -360,6 +371,86 @@ func quotedQuestions(qs []session.PendingQuestion) []quotedQuestion {
 	return out
 }
 
+// settledQuestion is a question that stopped waiting, as a message tells an
+// agent that may have forwarded it: which question, and how it was settled in
+// one phrase. The phrase is written here rather than in the template because
+// it carries the answer, and an answer has one wording (agent.QuestionAnswer.Line).
+type settledQuestion struct {
+	Header    string
+	Question  string
+	RequestID string
+	Outcome   string
+}
+
+// asker is what the message calls the work that asked: "task" or "story".
+func describeSettled(qs []agent.SettledQuestion, asker string) []settledQuestion {
+	out := make([]settledQuestion, len(qs))
+	for i, q := range qs {
+		out[i] = settledQuestion{
+			Header:    q.Question.Header,
+			Question:  q.Question.Question,
+			RequestID: q.Question.RequestID,
+			Outcome:   settledOutcome(q, asker),
+		}
+	}
+	return out
+}
+
+func settledOutcome(q agent.SettledQuestion, asker string) string {
+	if a := q.Answer; a != nil {
+		if a.Declined {
+			// "Declined" already says what Line's "(not answering)" would; only
+			// a note is left to quote.
+			outcome := "Declined by " + a.ResolvedBy.Describe()
+			if a.Note != "" {
+				outcome += " — note: " + a.Note
+			}
+			return outcome
+		}
+		return fmt.Sprintf("Answered by %s: %s", a.ResolvedBy.Describe(), a.Line())
+	}
+	switch q.Reason {
+	case agent.ReasonStepDone:
+		return "Withdrawn: the " + asker + " completed the step it was asked in"
+	case agent.ReasonWorkClosed:
+		return "Withdrawn: the " + asker + " was closed"
+	case "":
+		return "Withdrawn by the " + asker + " itself"
+	default:
+		return "Withdrawn: " + string(q.Reason)
+	}
+}
+
+// BuildChildQuestionSettledMessage tells a story that questions one of its
+// subtasks asked are no longer waiting, and how each was settled, so that a
+// story asking the user a copy of one withdraws it. qs are the questions one
+// act settled.
+func BuildChildQuestionSettledMessage(parent Work, childTitle, childID, childSessionID string, qs []agent.SettledQuestion) string {
+	base := buildBase(parent)
+
+	nudge := render(prompts.ChildQuestionSettledNudge, map[string]any{
+		"ChildTitle":     childTitle,
+		"ChildID":        childID,
+		"ChildSessionID": childSessionID,
+		"Questions":      describeSettled(qs, "task"),
+		"AnyAnswered":    anyAnswered(qs),
+	})
+
+	return base + "\n\n" + nudge
+}
+
+// anyAnswered reports whether any of qs was settled with an answer, which is
+// whether there is anything to carry on with: a withdrawal settles a question
+// without saying what the answer would have been.
+func anyAnswered(qs []agent.SettledQuestion) bool {
+	for _, q := range qs {
+		if q.Answer != nil && !q.Answer.Declined {
+			return true
+		}
+	}
+	return false
+}
+
 // BuildChildQuestionReminderMessage tells a story that its subtasks are still
 // waiting on questions it has neither answered nor taken to the user.
 //
@@ -419,6 +510,19 @@ func BuildWatchedStoryQuestionMessage(story Work, qs []session.PendingQuestion) 
 		"SessionID":  story.SessionID,
 		"Questions":  quotedQuestions(qs),
 		"AnyOptions": anyOptions(qs),
+	})
+}
+
+// BuildWatchedStoryQuestionSettledMessage tells a watcher that questions the
+// story it watches asked are no longer waiting, and how each was settled, so
+// that a watcher asking the user a copy of one withdraws it. No buildBase, for
+// the reason BuildWatchedStoryEndedMessage gives.
+func BuildWatchedStoryQuestionSettledMessage(story Work, qs []agent.SettledQuestion) string {
+	return render(prompts.WatchedStoryQuestionSettled, map[string]any{
+		"Title":     story.Title,
+		"ID":        story.ID,
+		"SessionID": story.SessionID,
+		"Questions": describeSettled(qs, "story"),
 	})
 }
 

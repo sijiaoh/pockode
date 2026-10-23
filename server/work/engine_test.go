@@ -90,19 +90,22 @@ func (r *recordingTerminator) snapshot() []terminated {
 }
 
 // stubTurns is the session layer as the engine sees it: which sessions have
-// questions nobody has answered. Locked, because the engine reads it from the
-// follow-up goroutines as well as from the caller's.
+// questions nobody has answered, which have a turn running, and which worktree
+// each lives in — "" unless placed elsewhere. Locked, because the engine reads
+// it from the follow-up goroutines as well as from the caller's.
 type stubTurns struct {
 	mu         sync.Mutex
 	unanswered map[string]int
+	running    map[string]bool
+	worktreeOf map[string]string
 	err        error
 }
 
 func newStubTurns() *stubTurns {
-	return &stubTurns{unanswered: make(map[string]int)}
+	return &stubTurns{unanswered: make(map[string]int), running: make(map[string]bool), worktreeOf: make(map[string]string)}
 }
 
-func (s *stubTurns) SessionTurns(string) (map[string]session.TurnState, error) {
+func (s *stubTurns) SessionTurns(worktree string) (map[string]session.TurnState, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.err != nil {
@@ -116,7 +119,31 @@ func (s *stubTurns) SessionTurns(string) (map[string]session.TurnState, error) {
 		}
 		turns[sessionID] = session.TurnState{Phase: session.PhaseIdle, Unanswered: questions}
 	}
+	for sessionID := range s.running {
+		turn := turns[sessionID]
+		turn.Phase = session.PhaseRunning
+		turns[sessionID] = turn
+	}
+	for sessionID := range turns {
+		if s.worktreeOf[sessionID] != worktree {
+			delete(turns, sessionID)
+		}
+	}
 	return turns, nil
+}
+
+// run makes sessionID look like one whose turn is being worked on.
+func (s *stubTurns) run(sessionID string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.running[sessionID] = true
+}
+
+// place puts sessionID in a worktree other than the main one.
+func (s *stubTurns) place(sessionID, worktree string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.worktreeOf[sessionID] = worktree
 }
 
 // post makes sessionID look like one whose agent asked the user something and
@@ -1356,6 +1383,147 @@ func TestEngine_AnUndeliverableSubtaskQuestionChangesNothing(t *testing.T) {
 	}
 }
 
+// --- a subtask's question stopping waiting ---
+
+func settledBy(resolver agent.QuestionResolver, answers ...string) agent.SettledQuestion {
+	return agent.SettledQuestion{
+		Question: subtaskQuestion(),
+		Answer: &agent.QuestionAnswer{
+			RequestID: "req-1", Header: "Database", Question: "Which database?",
+			Answers: answers, ResolvedBy: &resolver,
+		},
+	}
+}
+
+// TestEngine_ASubtasksSettledQuestionReachesItsStory: a story that forwarded a
+// subtask's question is asking the user a copy, and nothing else would ever
+// tell it the original stopped waiting. So every way it stops is passed up —
+// which question, how, and that the story's copy is now its to withdraw. Only
+// an answer gives the story something to carry on with.
+func TestEngine_ASubtasksSettledQuestionReachesItsStory(t *testing.T) {
+	const carryOn = "carry on with the answer"
+	tests := []struct {
+		name     string
+		settled  agent.SettledQuestion
+		want     string
+		answered bool
+	}{
+		{"answered by the user", settledBy(agent.UserResolver(), "Postgres"), "Answered by the user: Postgres", true},
+		{"declined by the user", agent.SettledQuestion{Question: subtaskQuestion(), Answer: &agent.QuestionAnswer{
+			RequestID: "req-1", Declined: true, ResolvedBy: &agent.QuestionResolver{Kind: agent.ResolverUser},
+		}}, "Declined by the user", false},
+		{"answered by another agent", settledBy(agent.QuestionResolver{
+			Kind: agent.ResolverAgent, WorkID: "w-other", Title: "Other",
+		}, "SQLite"), `Answered by the agent working on "Other" (w-other): SQLite`, true},
+		{"withdrawn by the task", agent.SettledQuestion{Question: subtaskQuestion()}, "Withdrawn by the task itself", false},
+		{"withdrawn by step_done", agent.SettledQuestion{Question: subtaskQuestion(), Reason: agent.ReasonStepDone}, "completed the step", false},
+		{"withdrawn by the task closing", agent.SettledQuestion{Question: subtaskQuestion(), Reason: agent.ReasonWorkClosed}, "the task was closed", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f := newEngineFixture(t)
+			story := f.startedStory(t, "sess-parent")
+			f.startedSubtask(t, story.ID, "Wire the store", "sess-child")
+			setChildWait(t, f.store, story.ID)
+			f.turns.post("sess-parent") // the copy it may have forwarded
+
+			f.engine.HandleQuestionsSettled("sess-child", []agent.SettledQuestion{tt.settled})
+			f.engine.Stop()
+
+			if got := f.sender.subtypes(); len(got) != 1 || got[0] != MessageSubtypeChildQuestionSettled {
+				t.Fatalf("sent %v, want one settled message", got)
+			}
+			body := f.sender.contents()[0]
+			for _, want := range []string{tt.want, "Which database?", "req-1", "question_cancel", "you still are"} {
+				if !strings.Contains(body, want) {
+					t.Errorf("message does not contain %q:\n%s", want, body)
+				}
+			}
+			if got := strings.Contains(body, carryOn); got != tt.answered {
+				t.Errorf("says %q = %v, want %v", carryOn, got, tt.answered)
+			}
+			// Like a subtask's question, its settling is not a subtask closing.
+			if got := getWork(t, f.store, story.ID); got.Wait != WaitChild {
+				t.Errorf("story wait = %q, want it still waiting on its subtasks", got.Wait)
+			}
+		})
+	}
+}
+
+// The story answering its subtask's question is the one settle that is no news
+// to it: it gave the answer. Only the rest of the batch is passed up, and a
+// batch of nothing but its own answers is not passed up at all.
+func TestEngine_AStoryIsNotToldOfItsOwnAnswer(t *testing.T) {
+	f := newEngineFixture(t)
+	story := f.startedStory(t, "sess-parent")
+	f.startedSubtask(t, story.ID, "Wire the store", "sess-child")
+	f.turns.post("sess-parent")
+	byStory := agent.QuestionResolver{Kind: agent.ResolverAgent, WorkID: story.ID}
+
+	f.engine.HandleQuestionsSettled("sess-child", []agent.SettledQuestion{settledBy(byStory, "Postgres")})
+	other := agent.SettledQuestion{Question: session.PendingQuestion{RequestID: "req-2", Header: "Name", Question: "What name?"}}
+	f.engine.HandleQuestionsSettled("sess-child", []agent.SettledQuestion{settledBy(byStory, "Postgres"), other})
+	f.engine.Stop()
+
+	if got := f.sender.subtypes(); len(got) != 1 {
+		t.Fatalf("sent %v, want only the batch with somebody else's news in it", got)
+	}
+	body := f.sender.contents()[0]
+	if strings.Contains(body, "req-1") || !strings.Contains(body, "req-2") {
+		t.Errorf("message = %q, want only the question the story did not answer", body)
+	}
+}
+
+// A story asking the user nothing holds no copy of the question, so there is
+// nothing for it to withdraw — and a message would start a turn to say so,
+// typically on a story idle in story_wait. The same goes for a story the engine
+// is not driving.
+func TestEngine_ASettledQuestionIsNotToldToAStoryWithNoCopy(t *testing.T) {
+	t.Run("asking nothing", func(t *testing.T) {
+		f := newEngineFixture(t)
+		story := f.startedStory(t, "sess-parent")
+		f.startedSubtask(t, story.ID, "Wire the store", "sess-child")
+
+		f.engine.HandleQuestionsSettled("sess-child", []agent.SettledQuestion{settledBy(agent.UserResolver(), "Postgres")})
+		f.engine.Stop()
+
+		if got := f.sender.subtypes(); len(got) != 0 {
+			t.Errorf("sent %v, want nothing to a story with no question up", got)
+		}
+	})
+	// Its turn running is the exception: told the subtask's question, it may be
+	// about to forward it, and the original can be settled before it does.
+	t.Run("mid-turn", func(t *testing.T) {
+		f := newEngineFixture(t)
+		story := f.startedStory(t, "sess-parent")
+		f.startedSubtask(t, story.ID, "Wire the store", "sess-child")
+		f.turns.run("sess-parent")
+
+		f.engine.HandleQuestionsSettled("sess-child", []agent.SettledQuestion{settledBy(agent.UserResolver(), "Postgres")})
+		f.engine.Stop()
+
+		if got := f.sender.subtypes(); len(got) != 1 {
+			t.Errorf("sent %v, want the settled message to a story mid-turn", got)
+		}
+	})
+	t.Run("stopped", func(t *testing.T) {
+		f := newEngineFixture(t)
+		story := f.startedStory(t, "sess-parent")
+		f.startedSubtask(t, story.ID, "Wire the store", "sess-child")
+		f.turns.post("sess-parent")
+		if err := f.store.Stop(context.Background(), story.ID); err != nil {
+			t.Fatalf("Stop: %v", err)
+		}
+
+		f.engine.HandleQuestionsSettled("sess-child", []agent.SettledQuestion{settledBy(agent.UserResolver(), "Postgres")})
+		f.engine.Stop()
+
+		if got := f.sender.subtypes(); len(got) != 0 {
+			t.Errorf("sent %v, want nothing into a stopped story", got)
+		}
+	})
+}
+
 // --- input 1, continued: a subtask of this story is waiting on an answer ---
 
 // startedSubtask gives the story a running subtask on a known session, which is
@@ -1655,6 +1823,11 @@ func TestEngine_AWatchedStorysQuestionReachesItsWatcher(t *testing.T) {
 			t.Errorf("message does not contain %q; it is the watcher's only copy of the question", want)
 		}
 	}
+	// A watcher that forwards it will be told when the story's is settled, and
+	// has to know that is its cue to withdraw the copy.
+	if !strings.Contains(sent[0].content, "question_cancel") {
+		t.Errorf("message = %q, want it to say a forwarded copy is withdrawn once settled", sent[0].content)
+	}
 }
 
 // Nobody asked to watch this story, so its ending is nobody's news.
@@ -1686,6 +1859,153 @@ func TestEngine_AWatchedStorysTasksAreNotReportedToItsWatcher(t *testing.T) {
 
 	if sent := f.sender.sentTo("sess-watcher"); len(sent) != 0 {
 		t.Errorf("watcher got %v, want nothing about the story's tasks", sent)
+	}
+}
+
+// --- a watched story's question stopping waiting ---
+
+// A watcher handed a story's question may have forwarded it — asked the user a
+// copy — and nothing else would tell it the story's original stopped waiting.
+// So it is told the way a story is told of its subtask's: which question, how
+// it was settled, and that its copy is now its to withdraw.
+func TestEngine_AWatchedStorysSettledQuestionReachesItsWatcher(t *testing.T) {
+	tests := []struct {
+		name    string
+		settled agent.SettledQuestion
+		want    string
+	}{
+		{"answered by the user", settledBy(agent.UserResolver(), "Postgres"), "Answered by the user: Postgres"},
+		{"answered by another agent", settledBy(agent.QuestionResolver{
+			Kind: agent.ResolverAgent, WorkID: "w-other", Title: "Other",
+		}, "SQLite"), `Answered by the agent working on "Other" (w-other): SQLite`},
+		{"withdrawn by the story", agent.SettledQuestion{Question: subtaskQuestion()}, "Withdrawn by the story itself"},
+		{"withdrawn by step_done", agent.SettledQuestion{Question: subtaskQuestion(), Reason: agent.ReasonStepDone}, "the story completed the step"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f := newEngineFixture(t)
+			story := f.watchedStory(t, "sess-watcher")
+			f.turns.post("sess-watcher") // the copy it may have forwarded
+
+			f.engine.HandleQuestionsSettled(story.SessionID, []agent.SettledQuestion{tt.settled})
+			f.engine.Stop()
+
+			sent := f.sender.sentTo("sess-watcher")
+			if len(sent) != 1 || sent[0].subtype != MessageSubtypeWatchedStoryQuestionSettled {
+				t.Fatalf("watcher got %v, want one %s message", sent, MessageSubtypeWatchedStoryQuestionSettled)
+			}
+			for _, want := range []string{tt.want, "Which database?", "req-1", story.ID, "question_cancel"} {
+				if !strings.Contains(sent[0].content, want) {
+					t.Errorf("message does not contain %q:\n%s", want, sent[0].content)
+				}
+			}
+		})
+	}
+}
+
+// A watcher can hold a copy only if it is asking something itself, or its turn
+// is running and may be posting one now; and its own answer is no news to it.
+// The same filters a story's leg applies, with the watcher named by its session,
+// because a plain chat has no work to be named by.
+func TestEngine_AWatcherIsToldOnlyWhatItMayHoldACopyOf(t *testing.T) {
+	answer := settledBy(agent.UserResolver(), "Postgres")
+	tests := []struct {
+		name    string
+		prepare func(f *engineFixture)
+		settled agent.SettledQuestion
+		told    bool
+	}{
+		{"asking nothing", func(*engineFixture) {}, answer, false},
+		{"asking something", func(f *engineFixture) { f.turns.post("sess-watcher") }, answer, true},
+		// Handed the question, it starts a turn to read it, and the user can
+		// answer the story's original before that turn gets to question_post.
+		{"mid-turn", func(f *engineFixture) { f.turns.run("sess-watcher") }, answer, true},
+		{"its own answer", func(f *engineFixture) { f.turns.post("sess-watcher") },
+			settledBy(agent.QuestionResolver{Kind: agent.ResolverAgent, SessionID: "sess-watcher"}, "Postgres"), false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f := newEngineFixture(t)
+			story := createStory(t, f.store, "Watched")
+			if _, _, err := f.store.Claim(context.Background(), story.ID, &Watcher{SessionID: "sess-watcher", Worktree: "wt-watcher"}); err != nil {
+				t.Fatalf("Claim: %v", err)
+			}
+			story = getWork(t, f.store, story.ID)
+			// What it holds is read in its own worktree, not the story's.
+			f.turns.place("sess-watcher", "wt-watcher")
+			tt.prepare(f)
+
+			f.engine.HandleQuestionsSettled(story.SessionID, []agent.SettledQuestion{tt.settled})
+			f.engine.Stop()
+
+			if got := len(f.sender.sentTo("sess-watcher")) == 1; got != tt.told {
+				t.Errorf("watcher told = %v, want %v (sent %v)", got, tt.told, f.sender.sentTo("sess-watcher"))
+			}
+		})
+	}
+}
+
+// Closing a story withdraws its questions after the close has already released
+// the watch, so the settle finds no watcher to tell. The closed message is
+// where the watcher hears it, once, for every question at once.
+func TestEngine_AWatchedStoryClosingWithAQuestionUpTellsItsWatcherOnce(t *testing.T) {
+	f := newEngineFixture(t)
+	story := f.watchedStory(t, "sess-watcher")
+	f.turns.post("sess-watcher")
+
+	if _, err := f.store.StepDone(context.Background(), story.ID, 0); err != nil {
+		t.Fatalf("StepDone: %v", err)
+	}
+	f.engine.HandleQuestionsSettled(story.SessionID, []agent.SettledQuestion{
+		{Question: subtaskQuestion(), Reason: agent.ReasonWorkClosed},
+	})
+	f.engine.Stop()
+
+	sent := f.sender.sentTo("sess-watcher")
+	if len(sent) != 1 || sent[0].subtype != MessageSubtypeWatchedStoryClosed {
+		t.Fatalf("watcher got %v, want only the closed message", sent)
+	}
+	if !strings.Contains(sent[0].content, "question_cancel") {
+		t.Errorf("message = %q, want it to say a forwarded copy is to be withdrawn", sent[0].content)
+	}
+}
+
+// The whole chain: a task asks, its story forwards it to the user and so does
+// the session watching the story. The user answers on the task. The story is
+// told and withdraws its copy, and that withdrawal is what tells the watcher to
+// withdraw its own — nobody is left asking the user a settled question.
+func TestEngine_ASettledQuestionTravelsTheWholeChain(t *testing.T) {
+	f := newEngineFixture(t)
+	story := f.watchedStory(t, "sess-watcher")
+	f.startedSubtask(t, story.ID, "Wire the store", "sess-child")
+
+	f.engine.HandleQuestionsPosted("sess-child", []session.PendingQuestion{subtaskQuestion()})
+	storyCopy := session.PendingQuestion{RequestID: "req-story", Header: "Database", Question: "Which database?"}
+	f.turns.post(story.SessionID)
+	f.engine.HandleQuestionsPosted(story.SessionID, []session.PendingQuestion{storyCopy})
+	f.turns.post("sess-watcher")
+	waitFor(t, func() bool {
+		return len(f.sender.sentTo(story.SessionID)) == 1 && len(f.sender.sentTo("sess-watcher")) == 1
+	})
+
+	f.engine.HandleQuestionsSettled("sess-child", []agent.SettledQuestion{settledBy(agent.UserResolver(), "Postgres")})
+	waitFor(t, func() bool { return len(f.sender.sentTo(story.SessionID)) == 2 })
+	if got := f.sender.sentTo(story.SessionID)[1]; got.subtype != MessageSubtypeChildQuestionSettled {
+		t.Fatalf("story got %s, want %s", got.subtype, MessageSubtypeChildQuestionSettled)
+	}
+
+	f.turns.answer(story.SessionID)
+	f.engine.HandleQuestionsSettled(story.SessionID, []agent.SettledQuestion{{Question: storyCopy}})
+	f.engine.Stop()
+
+	sent := f.sender.sentTo("sess-watcher")
+	if len(sent) != 2 || sent[1].subtype != MessageSubtypeWatchedStoryQuestionSettled {
+		t.Fatalf("watcher got %v, want the question and then its settling", sent)
+	}
+	for _, want := range []string{"req-story", "Withdrawn by the story itself", "question_cancel"} {
+		if !strings.Contains(sent[1].content, want) {
+			t.Errorf("message does not contain %q:\n%s", want, sent[1].content)
+		}
 	}
 }
 

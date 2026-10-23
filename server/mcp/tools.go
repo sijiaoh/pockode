@@ -336,7 +336,7 @@ var toolDefinitions = []toolDefinition{
 	{
 		Name: "question_cancel",
 		Description: "Withdraw a question you posted with question_post, because you no longer need the answer — you worked it out, or the user already answered it in the chat. " +
-			"The card stops asking and nothing is sent to anyone. A question that has already been answered, declined or withdrawn cannot be withdrawn again, and the error says what became of it. " +
+			"The card stops asking. Nothing is sent to you or to the user; if you are working on a task, its story — or if you are a story, the session watching you — is told it was withdrawn when it may be asking the user a copy. A question that has already been answered, declined or withdrawn cannot be withdrawn again, and the error says what became of it. " +
 			"It withdraws the copy in your own session, which is the only one it can: a fork carries an unanswered question into the new session with its id unchanged, and that copy belongs to that session's agent.",
 		InputSchema: inputSchema{
 			Type: "object",

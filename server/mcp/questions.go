@@ -307,10 +307,10 @@ func (e *Executor) answerTarget(params questionAnswerParams) (worktree.QuestionL
 	}
 }
 
-// answerer is the identity an answer is recorded under: the work the answering
-// agent is running, when it is running one at all.
+// answerer is the identity an answer is recorded under: the answering session,
+// and the work it is running, when it is running one at all.
 func (e *Executor) answerer(sessionID string) (agent.QuestionResolver, error) {
-	by := agent.QuestionResolver{Kind: agent.ResolverAgent}
+	by := agent.QuestionResolver{Kind: agent.ResolverAgent, SessionID: sessionID}
 	w, found, err := e.workStore.FindBySessionID(sessionID)
 	if err != nil {
 		return by, fmt.Errorf("find the work answering: %w", err)
