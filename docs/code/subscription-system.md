@@ -474,6 +474,43 @@ and the first one is never told. Per subscription id, then, and deleted on
 Suppression is worth having only where the trigger is noisier than the news, and
 never for the watcher's own store — there the payload *is* the news.
 
+The two detail watchers, work and schedule, keep the per-subscription record in
+one type, `sentRecord` (`server/watch/sent_record.go`), because keeping it true
+takes two rules that are easy to leave out of a hand-written map — a watcher
+with a map of its own would have to get both right again.
+
+- **Subscribe's reply only fills an empty entry.** The subscription is registered
+  before `Subscribe` reads the store, so the loop can send it a notification
+  built from an *earlier* read than the reply's. The two are written by
+  different goroutines, so that notification can reach the client *after* the
+  reply. That is the
+  [ordering gap](#why-nothing-is-lost-while-a-subscription-is-being-opened) seen
+  from the server's side, and the client's replay cannot close it: the
+  notification is not early, it is late and stale. The client then holds the
+  older state. Recording the reply over the loop's entry would claim it holds
+  the newer one, and the change that would correct it is dropped as already
+  sent — the page stays stale with nothing left to fix it. Keeping the loop's
+  entry costs, when the order is the other way round, one repeated notification.
+- **Every write checks the subscription after writing.** The loop works from a
+  snapshot of the subscriptions, so an `Unsubscribe` can land between the
+  snapshot and the write. If it came first, the check finds the subscription
+  gone and deletes what was just written; if it comes after, it deletes the
+  entry itself. Either way nothing outlives the subscription. For the same
+  reason a `Subscribe` whose read fails backs out through `Unsubscribe`, not
+  `RemoveSubscription`: the loop may already have recorded a send to it.
+
+Everything the loop sends goes through the record — the sync after a dropped
+event included — so the next comparison is against what the client was actually
+last told. `TestWorkDetailWatcher_SubscribeKeepsWhatTheLoopAlreadySent`,
+`TestWorkDetailWatcher_UnsubscribeMidNotificationDropsItsRecord` and
+`TestWorkDetailWatcher_FailedSubscribeLeavesNoRecord` hold the three cases.
+
+The schedule list keeps a record of its own, per schedule rather than per
+subscription, and that is sound there only because every subscriber is sent the
+same notifications and `Subscribe` clears the record instead of writing its reply
+into it: a newcomer can never be taken to hold a row it was not sent, and the
+cost is at most one repeated row.
+
 ### Why One Channel Carries Two Stores' Changes
 
 The section above is about a payload that needs a second store to be *complete*:
