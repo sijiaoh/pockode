@@ -1,6 +1,6 @@
 # Work/Project Management System
 
-The Work system enables AI agents to coordinate complex tasks through a two-level tree structure. A coordinator agent breaks high-level stories into executable tasks, while worker agents implement each task and report back.
+The Work system enables AI agents to coordinate complex tasks through a two-level tree structure. A coordinator agent breaks high-level stories into executable tasks, while worker agents implement each task and report back. Beside the tree stands a third kind, the [job](#jobs): one run of a schedule, done by a single agent on its own.
 
 ## Data Model
 
@@ -33,6 +33,7 @@ copy of the fact went.
 type Work struct {
     ID          string     // UUID v7
     StoryID     string     // Empty for a Story; the story's ID for a Task
+    ScheduleID  string     // The schedule a Job is a run of; empty for a Story or Task
     AgentRoleID string     // The AI role that executes this work
     Title       string
     Body        string     // Detailed instructions (optional)
@@ -46,13 +47,43 @@ type Work struct {
 }
 ```
 
+### Jobs
+
+A job is one run of a schedule's fixed prompt, and it is a `Work` rather than a
+record of its own so that the whole of the machinery below — claiming, kickoff,
+nudging, stop and restart, reopen, the session lease, startup recovery, the
+work↔session link the UI draws — applies to a run with nothing added. What it
+must *not* get is the story/task coordination, and the design is about keeping
+that out:
+
+- **The kind is derived, as before.** `ScheduleID` makes a work a job, and
+  `Type()` reads it first, so a job never also reads as a story because its
+  `StoryID` is empty. How a job comes into being, and why its kind can never
+  change, are [data-model](../projects/data-model.md#jobs)'s.
+- **It stands outside the tree.** It never carries a `StoryID`, and
+  `ValidateStory` refuses it as a task's story, so it has neither a parent to
+  notify nor children to wait for — the engine's parent, child and watcher
+  paths skip it because the fields they key on are empty, not because of a
+  branch for jobs.
+- **Each run is fresh**, never a reused work, so a run has its own session and
+  history, and a schedule's past runs are simply the works naming it
+  (`Store.ListBySchedule`).
+- **Runs are never on the Stories list** (see [The List Is the `Current`
+  Segment](#the-list-is-the-current-segment)); they belong under their
+  schedule.
+
+The operations that only make sense inside the tree refuse a job by name rather
+than treating it as whichever of story or task it happens to resemble — see
+[Work Tools](#work-tools). How a job is told what it is lives in its own prompt
+templates ([Prompt Format](#prompt-format)).
+
 ### Worktree Binding
 
 Every work runs its AI session inside exactly one worktree, recorded in
 `Worktree` (empty means the main worktree). The binding is decided once and then
 frozen:
 
-- **Top-level work** captures the frontend's *current* worktree the first time
+- **A story** captures the frontend's *current* worktree the first time
   it starts (`handleWorkStart` → `store.SetWorktree`). It is not captured at
   create time, because a story may be created long before the user picks the
   worktree they want it to run in. An agent has no current worktree to capture,
@@ -75,6 +106,10 @@ frozen:
   tasks stay together. The one gap is a task started *before* its story
   (nothing forbids it): it is no longer open by then, so propagation skips it and
   it keeps whatever it inherited at create time.
+- **A job** is given its worktree by its schedule when the run is created
+  (`CreateJob`). `work.start` therefore pins the frontend's current worktree
+  onto an open *story* only: doing it for any work with no `StoryID` would
+  overwrite the worktree the schedule chose.
 - **Immutable once started** — `SetWorktree` only mutates a work while its status
   is still `open`; any later call is rejected. Assigning the *same* value is a
   no-op, so a main-worktree story that goes open → start → stop → start does not
@@ -107,6 +142,7 @@ On creation (`FileStore.Create` in `server/work/store.go`):
 2. **`StoryID` names a story** — when set, it must name a work that exists and is itself a story (`ValidateStory`); this is the one hierarchy rule [above](#two-level-tree-structure) leaves
 3. **Story not closed** — cannot add tasks to a closed story; reopen it first
 4. **AgentRoleID required** — non-empty here; that the role exists and takes the work's type is checked one layer up, by `agentrole.CheckAssignment`, which MCP and WebSocket both call before `Create` ([Work Type Field](../projects/data-model.md#work-type-field))
+5. **No `ScheduleID`** — a job is made by `CreateJob` alone ([Jobs](#jobs))
 
 There is no type to validate: it is not an input (see above).
 
@@ -459,6 +495,18 @@ to list or to wait for; a creation names a story or it is one. The rest —
 the same thing for both kinds, and splitting them would only double what an agent
 has to remember. The point is that an agent reads which kind a tool is for off
 the name, instead of finding out from a runtime refusal.
+
+**A job is on the `work_` side of that fork.** The `work_*` tools and
+`step_done` apply to it as to any work; every `story_*` and `task_*` tool
+refuses it, as a user error that says it is a job:
+`story_start` / `task_start` before any worktree is pinned or watcher claimed (a
+run is started by its schedule), `task_create` and `task_list` because it holds
+no tasks — `task_list` refuses any `story_id` that names a non-story, rather than
+answering an empty list that reads as "no tasks yet" — `story_wait` because no
+subtask could end the wait, and `story_unwatch` and a watched start because only
+a story has a watcher. `story_list` lists stories only, so a job never appears
+in it. The refusals name the actual type instead of assuming that whatever is
+not a story is a task.
 
 The split replaced `work_create`, `work_list`, `work_start` and `work_wait`.
 For the release that shipped it they stayed registered as stubs answering with
@@ -1763,6 +1811,15 @@ fetch ([websocket-rpc.md](websocket-rpc.md#paging-a-subscribed-list)), and
 pushed to and one never
 ([subscription-system.md](subscription-system.md#the-two-lists-update-live-in-opposite-ways)).
 
+**A job is never on this list**, in `Current` or in the archive. The Stories
+list is the tree; a run belongs under its schedule
+([Jobs](#jobs)). `onStoriesList` (`server/watch/work_list.go`) drops jobs on
+every path a row takes to a subscriber — the snapshot, sync, the archive and
+earlier pages, change pushes (deletes included) and session-turn pushes — rather
+than relying on `hasCurrentRow` happening not to draw one: a filter applied on
+one path and forgotten on another is a job appearing in the list on its first
+push.
+
 Three consequences worth stating on their own, because each is easy to undo:
 
 - **A page is not a set of rows; it is a set of rows plus everything they
@@ -2028,8 +2085,18 @@ Start (step 0)
 Every message the engine sends is the same base plus one nudge. The base is: the
 MCP prefix, the agent role reference, the work context, the one section that
 differs by type — a story's coordinator rules, a task's "report to your story
-with `work_comment_add`" — and then `lifecycle_rules`, which every work driven by
-Pockode gets verbatim.
+with `work_comment_add`", a job's `job_rules` — and then `lifecycle_rules`, which
+every work driven by Pockode gets verbatim.
+
+**A job is told what it is not as well as what it is.** The MCP prefix names the
+story and task tools, and an agent with no other cue reaches for them: it splits
+the work into tasks or looks for a story to report to. So `job_rules` says the
+run has no story above it and no tasks below it, that it does the work itself,
+and that whoever checks on the run reads this chat — the only place a job
+reports to. Its restart, auto-continue and reopen nudges are its own for the
+same reason: a task's would send it to its story's comments. `buildBase` and
+`byType` switch over all three types and panic on any other, so a fourth kind
+cannot silently borrow another's wording.
 
 **`lifecycle_rules` is the single place the agent-facing lifecycle is written.**
 It says what the four statuses mean, that `question_post` is how the agent
@@ -2071,9 +2138,10 @@ deadline to tell it about. `--answer-timeout` now governs permission requests
 alone, which the agent is not the one waiting on.
 
 `IsStory` gates the sections about a story's tasks: only a story has any, so a
-task is never offered `story_wait` nor told about subtasks — here or in
+task or a job is never offered `story_wait` nor told about subtasks — here or in
 `step_auto_continue_nudge`, which is gated the same way. `prompt_test.go` checks
-both over every message a task can be sent.
+both over every message a task or a job can be sent, and holds a job's messages
+to naming none of the story/task tools.
 
 **Asking is one sentence here, and one fact the tool cannot carry.** How to
 ask — when, and that the CLI's own ask-the-user tool does not reach the user
@@ -2186,7 +2254,7 @@ Check if you have completed the current step:
 
 ### Design Notes
 
-- **Steps apply to both Stories and Tasks**: Any work item with an agent role that has steps defined will display step progress.
+- **Steps apply to every kind of work**: Any work item with an agent role that has steps defined will display step progress.
 - **Step state persists**: `CurrentStep` is preserved through every status change.
 - **Nudge counter resets per step**: Each new step gets a fresh allowance.
 - **Explicit step control**: Agents call `step_done` to advance steps, giving them control over when steps complete.
@@ -2322,15 +2390,19 @@ work_context: |
 | `work_context` | All messages | `Title`, `ID` |
 | `story_behavior_rules` | Story kickoff | (none) |
 | `task_rules` | Task kickoff | `StoryID` |
+| `job_rules` | Job kickoff | (none) |
 | `lifecycle_rules` | All messages | `ID`, `IsStory`, `MaxNudges` |
 | `story_restart_nudge` | Story restart | (none) |
 | `task_restart_nudge` | Task restart | (none) |
+| `job_restart_nudge` | Job restart | (none) |
 | `story_auto_continue_nudge` | Story auto-continuation | (none) |
 | `task_auto_continue_nudge` | Task auto-continuation | (none) |
+| `job_auto_continue_nudge` | Job auto-continuation | (none) |
 | `step_auto_continue_nudge` | Step auto-continuation | `CurrentStep`, `TotalSteps`, `ID`, `IsStory` |
 | `child_completion_nudge` | Waiting parent resume | `ChildTitle`, `ChildID`, `ID` |
 | `story_reopen_nudge` | Story reopen | (none) |
 | `task_reopen_nudge` | Task reopen | (none) |
+| `job_reopen_nudge` | Job reopen | (none) |
 | `child_question_nudge` | A subtask's question passed up | `ChildTitle`, `ChildID`, `ChildSessionID`, `Header`, `Question`, `RequestID`, `Options`, `MultiSelect` |
 | `child_question_reminder_nudge` | A story nudged to settle its subtasks' questions | `Questions` (each: `ChildTitle`, `ChildID`, `SessionID`, `RequestID`, `Header`, `Question`) |
 | `child_question_settled_nudge` | A subtask's question stopped waiting | `ChildTitle`, `ChildID`, `ChildSessionID`, `AnyAnswered`, `Questions` (each: `Header`, `Question`, `RequestID`, `Outcome`) |

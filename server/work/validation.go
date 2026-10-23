@@ -58,9 +58,16 @@ func ValidateStartable(status WorkStatus) error {
 // field is called StoryID, so the only thing left to check is that it holds a
 // story. A task naming a task is how a third level would be built, and this is
 // where it is refused.
+//
+// A job is refused too: it is one run of a schedule and does its own work, so
+// there is no story above it and none it could become.
 func ValidateStory(story Work) error {
-	if story.Type() != WorkTypeStory {
+	switch story.Type() {
+	case WorkTypeStory:
+		return nil
+	case WorkTypeJob:
+		return fmt.Errorf("%w: %s is a job and cannot hold tasks; only a story can", ErrInvalidWork, story.ID)
+	default:
 		return fmt.Errorf("%w: %s is a task and cannot hold tasks of its own; name its story %s instead", ErrInvalidWork, story.ID, story.StoryID)
 	}
-	return nil
 }

@@ -163,8 +163,8 @@ detail page's collapsed engine row draws that same one-tier drop.
 
 ### The groups
 
-`Story roles`, `Task roles`, then `Story & task roles` — the order `RUNS_CHOICES`
-in `web/src/lib/roleWorkType.ts` gives, which is also the order the detail page's
+`Story roles`, `Task roles`, `Job roles`, then `Roles for any work` — the order
+`RUNS_CHOICES` in `web/src/lib/roleWorkType.ts` gives, which is also the order the detail page's
 Runs control offers them (§8). An empty group is not drawn. Each heading is
 `ui/ListGroupHeading.tsx`, the work list's own sticky heading with its count
 pill, so the two lists group alike. Roles are not sorted within a group: the
@@ -319,7 +319,7 @@ screen, and is not decided here.
 New Role
 ───────────────────────────────
 Name   [ Role name              ]
-Runs   [ Stories | Tasks | Both ]
+Runs   [ Stories | Tasks | Jobs | Any ]
        Picked by story agents for the tasks they create.
 ───────────────────────────────
 [ Cancel ]            [ Create ]
@@ -403,7 +403,7 @@ actually do**, landing on one of six outcomes:
 | The stored default can run stories, and is what the sheet starts on | `New stories start with this role.` |
 | Exactly one role can run stories, and it is not the stored default | `New stories use PM, the only role that runs stories.` |
 | Several can, and none is the default | `New stories ask which role to use.` |
-| None can | `No role runs stories. Set a role to run Stories (or Both), or add one.` |
+| None can | `No role runs stories. Set a role to run Stories (or Any), or add one.` |
 | The stored id names no role | `The saved default no longer exists. New stories ask which role to use.` |
 | The stored id names a task-only role | `Engineer can't run stories, so new stories ignore it. Pick a story role.` |
 
@@ -444,11 +444,11 @@ before the role was restricted — and every surface below is written around tha
 being a legal state, not an error.
 
 **One rule.** `roleAcceptsWorkType` in `web/src/lib/roleWorkType.ts` is the
-client's copy of the server's `AgentRole.AcceptsWorkType` — empty takes either —
+client's copy of the server's `AgentRole.AcceptsWorkType` — empty takes any —
 and every filter and check here asks it. Beside it: `workTypeSuffix`, the one
-wording of a restriction beside a role's name (`stories only` / `tasks only`)
-in the pickers; `WORK_TYPE_PLURAL`, where the work detail's sentences below get
-`stories` and `tasks` from; and `RUNS_CHOICES` / `RUNS_LABEL` / `RUNS_HINT`, the
+wording of a restriction beside a role's name (`stories only` / `tasks only` /
+`jobs only`) in the pickers; `WORK_TYPE_PLURAL`, where the work detail's sentences below get
+`stories`, `tasks` and `jobs` from; and `RUNS_CHOICES` / `RUNS_LABEL` / `RUNS_HINT`, the
 choices, their order and their hints, shared by the detail page and the
 New Role sheet.
 
@@ -456,8 +456,8 @@ New Role sheet.
 the name — before the engine, and both before the role prompt, because one short
 row after an arbitrarily long markdown block is off the first screen on a phone.
 A segmented control (`components/ui/ToggleGroup.tsx`, the one Settings' Session
-section uses), `Stories` / `Tasks` / `Both`, in the order the list groups by.
-`Both` sends `work_type: ""`, which is how `agent_role.update` clears the
+section uses), `Stories` / `Tasks` / `Jobs` / `Any`, in the order the list
+groups by. `Any` sends `work_type: ""`, which is how `agent_role.update` clears the
 restriction. It applies on tap like the engine does; the lit segment is the
 server's record, not the tap, and a refused write leaves it where it was with the
 server's message under it, cleared on the next tap. The line under it says what
@@ -467,7 +467,8 @@ the value means:
 |---|---|
 | Stories | `Runs stories. Can be the default story role.` |
 | Tasks | `Picked by story agents for the tasks they create.` |
-| Both | `Can run stories and tasks.` |
+| Jobs | `Runs the scheduled jobs it is given.` |
+| Any | `Can run stories, tasks and jobs.` |
 
 Nothing here mentions a person creating a task, because none does
 ([project-ui.md §4](project-ui.md#4-creating-work-lands-you-on-its-detail-page)).
@@ -475,11 +476,12 @@ When the role is restricted and anything uses it (the card's `{n} work items`
 count), the line adds `Work items already using it keep it.` That states the
 rule, not a finding about those items, so it is true whatever kind they are.
 
-**Making the default story role task-only asks first.** The server accepts it
-and clears the default ([data-model.md](projects/data-model.md#work-type-field)) —
+**Making the default story role task-only or job-only asks first.** The server
+accepts it and clears the default ([data-model.md](projects/data-model.md#work-type-field)) —
 a second setting changing as a side effect of this one — so the tap opens a
 confirm dialog, `Make PM task-only?` / `PM is the default story role. Making it
-task-only clears that default.`, and sends nothing unless confirmed. Every other
+task-only clears that default.` (`job-only` for Jobs), and sends nothing unless
+confirmed. Every other
 change applies at once: it is reversible and takes nothing off existing work.
 
 **In a picker tied to a kind**, `RoleSelect` is given `workType` and offers only
@@ -503,6 +505,9 @@ muted, not the error colour, since the server holds it legal:
 
 > `PM only takes stories. It stays on this task until you change it.`
 
+The kind it names is the role's own `work_type`, never "the other one": with
+three kinds, a role that does not fit a task may take stories or jobs.
+
 and with roles listed but none taking the work's kind, the open picker says
 where to go: `No role takes tasks. Set one to take tasks in Agent Roles.` An empty
 list says nothing — it is what a reconnect looks like while roles reload.
@@ -517,7 +522,7 @@ restricted.
 ├ scroll region (max-w-2xl) ───────────────────────────────┤
 │ PM                                               ✎      │  name, edited in place
 │ Default story role · Used by 12 work items              │  summary, read-only
-│ RUNS      [ Stories | Tasks | Both ]                    │  §8
+│ RUNS      [ Stories | Tasks | Jobs | Any ]              │  §8
 │ ENGINE    [ ◆ Claude · Opus · High                ▾ ]   │  §3
 │ ROLE PROMPT                                      ✎      │
 │ STEPS                                            ✎      │
@@ -574,7 +579,7 @@ as the way out.
 | # | Check | Held by |
 |---|---|---|
 | 1 | No card offers a delete control; a card is one button that opens the detail page | `AgentRoleListOverlay.test.tsx` |
-| 2 | Roles are grouped Story → Task → Story & task, empty groups left out | `AgentRoleListOverlay.test.tsx` |
+| 2 | Roles are grouped Story → Task → Job → any work, empty groups left out | `AgentRoleListOverlay.test.tsx` |
 | 3 | Line 2 is the prompt's first line without markdown, or `No role prompt` | `AgentRoleListOverlay.test.tsx`; `markdownExcerpt.test.ts` for the stripping rules |
 | 4 | The card reads as it is drawn, with spoken separators and no `aria-label` | `AgentRoleListOverlay.test.tsx` |
 | 5 | The engine line for an unset agent, an unset model, and an unset effort — each printing what §3 says | `AgentRoleListOverlay.test.tsx` for the card, `AgentRoleEngineSelector.test.tsx` for the detail page, and `agentOptions.test.ts` for the two rules neither component can reach: `Follow settings` not being resolved, and an unlisted id printing as itself |
@@ -583,11 +588,11 @@ as the way out.
 | 8 | The field offers only roles that run stories, reaches `None`, keeps a dangling or task-only stored id visible, and reports a failed change under itself | `AgentRoleListOverlay.test.tsx`; the `Unknown role` and suffixed options themselves in `RoleSelect.test.tsx` |
 | 9 | The sentence matches the create-story sheet (§7), in each outcome | `AgentRoleListOverlay.test.tsx`; `initialRole.test.ts` for `resolveInitialRole`, the shared rule the sentence and the sheet both read |
 | 10 | Before the settings snapshot nothing claims a default either way; an unavailable snapshot says why | `AgentRoleListOverlay.test.tsx`, and `AgentRoleDetailOverlay.test.tsx` for the summary |
-| 11 | `New Role` opens the sheet, stays available while the list loads, and lands on the role it made — already in the role store, whether or not the list notification has arrived; the sheet sends Tasks unless told otherwise, nothing for Both, needs a name, and keeps its input on a refusal | `AgentRoleListOverlay.test.tsx`, `CreateAgentRoleSheet.test.tsx` |
+| 11 | `New Role` opens the sheet, stays available while the list loads, and lands on the role it made — already in the role store, whether or not the list notification has arrived; the sheet sends Tasks unless told otherwise, nothing for Any, needs a name, and keeps its input on a refusal | `AgentRoleListOverlay.test.tsx`, `CreateAgentRoleSheet.test.tsx` |
 | 12 | Reset confirms first, is withheld while the list is not there, reports a failure on its own line, and the empty list offers it | `AgentRoleListOverlay.test.tsx` |
 | 13 | The server's refusal is worded exactly as §5 quotes it, in both plural forms; the client prints that sentence and nothing around it, does not refuse ahead of the server, says the count ahead of time, and does not leave a stale refusal standing through a retry | `rpc_agent_role_test.go` holds the wording, table-driven, character for character. `AgentRoleDetailOverlay.test.tsx` holds the other end: it asserts the alert's whole text **equals** the server's sentence, which is the only shape of assertion a prefix cannot survive |
-| 14 | Deleting or making task-only the default story role says it clears the default; the server does clear it | `AgentRoleDetailOverlay.test.tsx`; `TestAgentRole_LosingStoriesClearsTheDefault` on the server |
-| 15 | Runs offers Stories, Tasks, Both in the list's order, sends `""` for Both, lights the server's record and keeps it through a refusal, and adds the keep-it line only for a restricted role in use | `AgentRoleDetailOverlay.test.tsx` |
+| 14 | Deleting or making task-only or job-only the default story role says it clears the default; the server does clear it | `AgentRoleDetailOverlay.test.tsx`; `TestAgentRole_LosingStoriesClearsTheDefault` on the server |
+| 15 | Runs offers Stories, Tasks, Jobs, Any in the list's order, sends `""` for Any, lights the server's record and keeps it through a refusal, and adds the keep-it line only for a restricted role in use | `AgentRoleDetailOverlay.test.tsx` |
 | 16 | The detail page waits for the list instead of saying `not found` | `AgentRoleDetailOverlay.test.tsx` |
 | 17 | The counts arrive with the snapshot and are replaced whole by `ref_counts` | `useAgentRoleSubscription.test.ts`, and `agent_role_list_test.go` on the server side |
 | 18 | A picker for one kind offers only roles that take it and keeps a stored one that does not with its suffix | `RoleSelect.test.tsx` |

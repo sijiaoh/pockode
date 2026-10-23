@@ -12,6 +12,7 @@ interface Props {
 const ownLabels: Record<WorkType, string> = {
 	story: "This story",
 	task: "This task",
+	job: "This job",
 };
 
 interface Column {

@@ -1156,7 +1156,7 @@ type WorkReopenParams struct {
 // list to find out which of its sessions belong to work.
 type WorkListItem struct {
 	ID string `json:"id"`
-	// Type is derived from StoryID rather than stored (work.Work.Type), and is
+	// Type is derived rather than stored (work.Work.Type), and is
 	// sent because a row draws it: the server derives it once per row instead
 	// of every client doing it per row. Clients read it and never send it.
 	Type        work.WorkType   `json:"type"`
@@ -1313,11 +1313,12 @@ type WorkDetailSubscribeParams struct {
 // empty in everything the store hands out.
 type WorkDetailItem struct {
 	ID string `json:"id"`
-	// Type is derived, never stored: work.Work.Type reads it off StoryID. Both
-	// keys are sent because a reader that groups, labels or routes by kind
-	// should not have to know which field encodes it.
+	// Type is derived, never stored: work.Work.Type reads it off ScheduleID and
+	// StoryID. All three keys are sent because a reader that groups, labels or
+	// routes by kind should not have to know which field encodes it.
 	Type        work.WorkType   `json:"type"`
 	StoryID     string          `json:"story_id,omitempty"`
+	ScheduleID  string          `json:"schedule_id,omitempty"`
 	AgentRoleID string          `json:"agent_role_id,omitempty"`
 	Title       string          `json:"title"`
 	Body        string          `json:"body,omitempty"`
@@ -1340,6 +1341,7 @@ func NewWorkDetailItem(w work.Work) WorkDetailItem {
 		ID:          w.ID,
 		Type:        w.Type(),
 		StoryID:     w.StoryID,
+		ScheduleID:  w.ScheduleID,
 		AgentRoleID: w.AgentRoleID,
 		Title:       w.Title,
 		Body:        w.Body,
@@ -1396,7 +1398,7 @@ type AgentRoleCreateParams struct {
 	Name       string   `json:"name"`
 	RolePrompt string   `json:"role_prompt"`
 	Steps      []string `json:"steps,omitempty"`
-	// WorkType is "story", "task", or empty for a role that takes either.
+	// WorkType is "story", "task", "job", or empty for a role that takes any.
 	WorkType work.WorkType `json:"work_type,omitempty"`
 }
 

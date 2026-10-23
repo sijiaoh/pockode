@@ -61,12 +61,12 @@ describe("CreateAgentRoleSheet", () => {
 		expect(useAgentRoleStore.getState().roles.map((r) => r.id)).toEqual(["r9"]);
 	});
 
-	it("sends no work type for Both, the value that means either", async () => {
+	it("sends no work type for Any, the value that means any kind", async () => {
 		const user = userEvent.setup();
 		createAgentRole.mockResolvedValue(created("r9"));
 		renderSheet();
 
-		await user.click(screen.getByRole("button", { name: "Both" }));
+		await user.click(screen.getByRole("button", { name: "Any" }));
 		await user.type(screen.getByLabelText("Name"), "Generalist");
 		await user.click(screen.getByRole("button", { name: "Create" }));
 

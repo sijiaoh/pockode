@@ -75,13 +75,17 @@ type promptTemplates struct {
 	WorkContext                 string `yaml:"work_context"`
 	StoryBehaviorRules          string `yaml:"story_behavior_rules"`
 	TaskRules                   string `yaml:"task_rules"`
+	JobRules                    string `yaml:"job_rules"`
 	LifecycleRules              string `yaml:"lifecycle_rules"`
 	StoryRestartNudge           string `yaml:"story_restart_nudge"`
 	TaskRestartNudge            string `yaml:"task_restart_nudge"`
+	JobRestartNudge             string `yaml:"job_restart_nudge"`
 	StoryReopenNudge            string `yaml:"story_reopen_nudge"`
 	TaskReopenNudge             string `yaml:"task_reopen_nudge"`
+	JobReopenNudge              string `yaml:"job_reopen_nudge"`
 	StoryAutoContinueNudge      string `yaml:"story_auto_continue_nudge"`
 	TaskAutoContinueNudge       string `yaml:"task_auto_continue_nudge"`
+	JobAutoContinueNudge        string `yaml:"job_auto_continue_nudge"`
 	StepAutoContinueNudge       string `yaml:"step_auto_continue_nudge"`
 	ChildCompletionNudge        string `yaml:"child_completion_nudge"`
 	ChildQuestionNudge          string `yaml:"child_question_nudge"`
@@ -147,8 +151,8 @@ func roleReference(agentRoleID string) string {
 }
 
 // lifecycleRules is the one explanation of how the engine drives a work, told to
-// story and task alike. The numbers in it are read from the constants that
-// actually govern the behaviour, so a prompt cannot promise an allowance or a
+// every type alike. The numbers in it are read from the constants that actually
+// govern the behaviour, so a prompt cannot promise an allowance or a
 // deadline the server does not keep.
 func lifecycleRules(w Work) string {
 	return render(prompts.LifecycleRules, map[string]any{
@@ -162,9 +166,9 @@ func lifecycleRules(w Work) string {
 //
 // Everything that is true of every work Pockode drives lives in the lifecycle
 // section; what is left in the per-type rules is only what differs — how a
-// coordinator splits a story up, and where a task reports to. Saying step_done
-// twice in one message was how the old prompts drifted: each send site repeated
-// its own half-remembered version of the rule.
+// coordinator splits a story up, where a task reports to, and that a job has
+// neither. Saying step_done twice in one message was how the old prompts
+// drifted: each send site repeated its own half-remembered version of the rule.
 func buildBase(w Work) string {
 	role := roleReference(w.AgentRoleID)
 
@@ -174,16 +178,42 @@ func buildBase(w Work) string {
 	})
 
 	sections := []string{render(prompts.PockodeMCPPrefix, nil), role, workCtx}
-	if w.Type() == WorkTypeStory {
+	switch w.Type() {
+	case WorkTypeStory:
 		sections = append(sections, storyBehaviorRules())
-	} else {
+	case WorkTypeTask:
 		sections = append(sections, render(prompts.TaskRules, map[string]string{
 			"StoryID": w.StoryID,
 		}))
+	case WorkTypeJob:
+		sections = append(sections, render(prompts.JobRules, nil))
+	default:
+		panicNoTemplate(w.Type())
 	}
 	sections = append(sections, lifecycleRules(w))
 
 	return strings.Join(sections, "\n\n")
+}
+
+// byType picks the template written for w's type. Every type is named here and
+// in buildBase, so a type added later cannot fall through to another's wording
+// unnoticed: it panics on the first message built for it.
+func byType(w Work, story, task, job string) string {
+	switch w.Type() {
+	case WorkTypeStory:
+		return story
+	case WorkTypeTask:
+		return task
+	case WorkTypeJob:
+		return job
+	default:
+		panicNoTemplate(w.Type())
+		return ""
+	}
+}
+
+func panicNoTemplate(t WorkType) {
+	panic("no prompt template for work type " + string(t))
 }
 
 func BuildKickoffMessage(w Work) string {
@@ -222,12 +252,7 @@ func BuildKickoffMessageWithSteps(w Work, steps []string, currentStep int) strin
 func BuildRestartMessage(w Work) string {
 	base := buildBase(w)
 
-	var nudge string
-	if w.Type() == WorkTypeStory {
-		nudge = render(prompts.StoryRestartNudge, nil)
-	} else {
-		nudge = render(prompts.TaskRestartNudge, nil)
-	}
+	nudge := render(byType(w, prompts.StoryRestartNudge, prompts.TaskRestartNudge, prompts.JobRestartNudge), nil)
 
 	return base + "\n\n" + nudge
 }
@@ -239,12 +264,7 @@ func BuildRestartMessage(w Work) string {
 func BuildAutoContinuationMessage(w Work) string {
 	base := buildBase(w)
 
-	var nudge string
-	if w.Type() == WorkTypeStory {
-		nudge = render(prompts.StoryAutoContinueNudge, nil)
-	} else {
-		nudge = render(prompts.TaskAutoContinueNudge, nil)
-	}
+	nudge := render(byType(w, prompts.StoryAutoContinueNudge, prompts.TaskAutoContinueNudge, prompts.JobAutoContinueNudge), nil)
 
 	return base + "\n\n" + nudge
 }
@@ -547,12 +567,7 @@ func BuildStepAdvanceMessage(w Work, stepPrompt string, stepNum, totalSteps int)
 func BuildReopenMessage(w Work) string {
 	base := buildBase(w)
 
-	var nudge string
-	if w.Type() == WorkTypeStory {
-		nudge = render(prompts.StoryReopenNudge, nil)
-	} else {
-		nudge = render(prompts.TaskReopenNudge, nil)
-	}
+	nudge := render(byType(w, prompts.StoryReopenNudge, prompts.TaskReopenNudge, prompts.JobReopenNudge), nil)
 
 	return base + "\n\n" + nudge
 }

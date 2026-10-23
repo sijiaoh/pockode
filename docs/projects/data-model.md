@@ -4,12 +4,13 @@
 
 ### Work
 
-A unit of work — either a **story** (no `story_id`) or a **task** (the `story_id` names the story it belongs to).
+A unit of work — a **story** (no `story_id`), a **task** (the `story_id` names the story it belongs to), or a **job** (the `schedule_id` names the schedule it is a run of; [Jobs](#jobs)).
 
 | Field         | Type         | Description                                            |
 | ------------- | ------------ | ------------------------------------------------------ |
 | id            | string       | UUIDv7 (time-ordered)                                  |
 | story_id      | string?      | The story this work is a task of; absent means it *is* a story ([Hierarchy](#hierarchy)) |
+| schedule_id   | string?      | The schedule this work is a run of, which makes it a job; never set beside `story_id`, and never changed once set ([Jobs](#jobs)) |
 | agent_role_id | string       | Agent role assigned to this work                       |
 | title         | string       | Short description (required)                           |
 | body          | string?      | Detailed description or instructions                   |
@@ -18,19 +19,20 @@ A unit of work — either a **story** (no `story_id`) or a **task** (the `story_
 | nudge_count   | int?         | Consecutive nudges with no progress; reset by anything that counts as progress |
 | session_id    | string?      | Agent session ID (set on start, preserved through stop/closed) |
 | current_step  | int?         | 0-indexed step index (only when agent role has steps)  |
-| worktree      | string?      | Worktree the session runs in (empty = main); captured on a story's first start, inherited by its tasks, immutable once started |
+| worktree      | string?      | Worktree the session runs in (empty = main); captured on a story's first start, inherited by its tasks, given to a job by its schedule when the run is created, immutable once started |
 | watcher       | Watcher?     | Stories only: `{session_id, worktree?}` of the session that started it with `story_start`'s `watch` and is sent its news; kept across stops and restarts, cleared by the write that closes the story, or earlier by `story_unwatch` or the watching session's deletion ([work-system.md](../code/work-system.md#a-storys-watcher)) |
 | created_at    | time         | Creation timestamp                                     |
 | updated_at    | time         | Last modification timestamp                            |
 
-`type` (`"story"` / `"task"`) is not stored. It is derived from `story_id`
-(`work.Work.Type()`) and still sent everywhere a work item is reported — the
-list row (`rpc.NewWorkListItem`), the detail and the replies to `work.create` /
-`work.start` (`rpc.NewWorkDetailItem`), and the MCP summary (`newWorkSummary`)
-— as a display field the client reads and never writes, the same standing as
-`activity`. It must not reach `index.json`, where it would be a second copy of
-the fact `story_id` holds; `TestPersistedIndexCarriesNoType` reads the file's
-bytes to hold that. Why the wire keeps it off the domain record is
+`type` (`"story"` / `"task"` / `"job"`) is not stored. It is derived from
+`schedule_id` first and `story_id` second (`work.Work.Type()`) and still sent
+everywhere a work item is reported — the list row (`rpc.NewWorkListItem`), the
+detail and the replies to `work.create` / `work.start`
+(`rpc.NewWorkDetailItem`), and the MCP summary (`newWorkSummary`) — as a display
+field the client reads and never writes, the same standing as `activity`. It
+must not reach `index.json`, where it would be a second copy of the fact
+`schedule_id` and `story_id` hold; `TestPersistedIndexCarriesNoType` reads the
+file's bytes to hold that. Why the wire keeps it off the domain record is
 [api.md](api.md#work-list-rows-vs-work-detail).
 
 ### Comment
@@ -58,7 +60,7 @@ engine its sessions run on.
 | agent_type  | AgentType  | Agent to run on; empty = the global default  |
 | model       | string     | Agent-specific model id; empty = CLI decides |
 | effort      | string     | Agent-specific effort; empty = CLI decides   |
-| work_type   | WorkType   | `story` / `task` it may be assigned to; empty = either |
+| work_type   | WorkType   | `story` / `task` / `job` it may be assigned to; empty = any |
 | created_at  | time       | Creation timestamp                           |
 | updated_at  | time       | Last modification timestamp                  |
 
@@ -107,11 +109,12 @@ role to fix.
 #### Work Type Field
 
 `work_type` says which kind of work item the role may be put on: `story`,
-`task`, or empty for either. A story wants a role whose steps break it into
+`task`, `job`, or empty for any. A story wants a role whose steps break it into
 tasks, drive them and commit; a task wants one that executes and does not
-commit. Written only in the role prompt, that constraint was invisible to the
-agent doing the assigning — it reads its own prompt, not the candidates' — so a story
-handed to an engineer was never split and never committed. The system therefore
+commit; a job wants one that does a scheduled prompt's work itself, with no
+story to coordinate or report to. Written only in the role prompt, that
+constraint was invisible to the agent doing the assigning — it reads its own
+prompt, not the candidates' — so a story handed to an engineer was never split and never committed. The system therefore
 declares the type, filters `agent_role_list` by it, and refuses an assignment
 that breaks it.
 
@@ -127,8 +130,10 @@ with `ErrInvalidRole`, the whole update rolled back as for the engine fields.
 `agentrole.CheckAssignment`, and `CheckReassignment` for an update, in
 `server/agentrole/assign.go` — runs on every write that sets a role: MCP
 `story_create` / `task_create` / `work_update` and WebSocket `work.create` /
-`work.update`. Starting, stepping, reopening, and an update that leaves the role
-alone or names the role the work already has are not judged by it. The reason is
+`work.update` — at the transport, not in the store. So `Store.CreateJob`, which
+no transport reaches, does not run it either: whatever creates a run has to
+call `CheckAssignment` with `job` itself. Starting, stepping, reopening, and an
+update that leaves the role alone or names the role the work already has are not judged by it. The reason is
 the same as for a retired model above: restricting a role must not make the work
 that already uses it read-only or unstartable. A work keeps the role it was
 legitimately given; the restriction governs what is assigned from then on. A
@@ -137,9 +142,11 @@ caller's mistake, and its message lists the roles that would have been
 accepted, so an agent can retry without another listing.
 
 **Defaults.** The built-in roles carry a type: `PM` takes stories; the engineer,
-UI designer, documentation writer and reviewer take tasks. That applies only to
-roles the defaults create — the first seed of a data dir and
-`ResetDefaults` — and never rewrites a role that already exists.
+UI designer, documentation writer and reviewer take tasks; `执行者` takes jobs.
+The types apply only to roles the defaults create — the first seed of a data
+dir and `ResetDefaults` — and never rewrite a role that already exists. `执行者`
+has no steps on purpose: a job's prompt is the whole of its work, so the one
+`step_done` that finishes it is the one that closes the run.
 
 **The default role (`settings.default_agent_role_id`) is the default *story*
 role.** The server never assigns work from it: it only names the role the create
@@ -154,9 +161,9 @@ too. So it must name a role that can run stories, and one rule keeps it so:
   value that went stale outside the server — a hand-edited `settings.json` —
   must not make every unrelated setting unsavable.
 - **A role that stops being able to run stories takes the default with it.**
-  Narrowing the default role to tasks (`agent_role.update` with
-  `work_type: "task"`) and deleting it are both *accepted*, and the default is
-  cleared to none. Refusing the role change instead would make editing a role
+  Narrowing the default role to tasks or jobs (`agent_role.update` with
+  `work_type: "task"` or `"job"`) and deleting it are all *accepted*, and the
+  default is cleared to none. Refusing the role change instead would make editing a role
   wait on a trip to a different setting; the default only ever names a
   preselection, so losing it costs one pick in the create form.
 
@@ -173,8 +180,9 @@ the create refused by the server, visibly, rather than accepted.
 
 ## Hierarchy
 
-`story_id` *is* the hierarchy. A work without one is a story; a work with one is
-that story's task. Two levels, and the shape is what holds them there: a task's
+`story_id` *is* the hierarchy. A work without one is a story — unless it is a
+[job](#jobs), which stands outside the hierarchy; a work with one is that
+story's task. Two levels, and the shape is what holds them there: a task's
 own `story_id` would have to be empty for it to be a story, so a third level
 cannot be written down at all.
 
@@ -185,6 +193,30 @@ cannot be written down at all.
   work's type when it is assigned ([Work Type Field](#work-type-field)).
 - Deleting a story cascade-deletes its tasks.
 - "What is below this work" is one query, `work.TasksOf`, not a walk.
+
+### Jobs
+
+A job is one run of a schedule: an agent doing a fixed prompt's work itself.
+`schedule_id` is what makes a work one, and `Type()` reads it before `story_id`,
+so the type stays derived for all three kinds. A job stands **beside** the
+hierarchy rather than in it — no story above it, no tasks below it — so that
+everything else about a work (session creation, kickoff, nudging, stop,
+restart, reopen, startup recovery, the session link) applies to a run
+unchanged, and none of the story/task coordination does.
+
+- **Only `Store.CreateJob` makes one**, as a fresh `open` work with a new id,
+  every time: a run is never reused, so each has its own session and its own
+  history. It requires `schedule_id`, `title` and `agent_role_id`, and refuses a
+  `story_id`. It is a Go method only — no RPC or MCP tool reaches it, because
+  runs are made by their schedule, never by hand — and `Store.Create` refuses any
+  work carrying a `schedule_id`, so there is no second way in.
+- **`schedule_id` never changes.** Nothing but `CreateJob` writes it, so a
+  work's kind is fixed for its whole life, and a check on it cannot be raced.
+- **It cannot hold tasks**: `ValidateStory` refuses a job as a task's story.
+  Nor can it be watched — `Claim` with a watcher and `Unwatch` refuse it.
+- **Its runs are listed under their schedule** (`Store.ListBySchedule`, oldest
+  first), never among the stories: the Stories list leaves jobs out
+  ([work-system.md](../code/work-system.md#jobs)).
 
 ## Status Lifecycle
 
@@ -351,7 +383,9 @@ If `persistIndex` fails, the in-memory state is reverted to match the on-disk st
 | List         | `() → ([]Work, error)`                | Returns all work items                                      |
 | Get          | `(id) → (Work, bool, error)`          | Returns a single item; bool indicates found                 |
 | FindBySessionID | `(sessionID) → (Work, bool, error)` | Finds a work item by its active session ID                  |
-| Create       | `(ctx, Work) → (Work, error)`         | Validates title/story/agent_role, assigns ID and timestamps |
+| ListBySchedule | `(scheduleID) → ([]Work, error)`    | Returns a schedule's runs, oldest first; `""` names no schedule and returns none |
+| Create       | `(ctx, Work) → (Work, error)`         | Validates title/story/agent_role, assigns ID and timestamps; refuses a `schedule_id` |
+| CreateJob    | `(ctx, Work) → (Work, error)`         | Adds one run of `schedule_id` as a fresh open work; takes only `schedule_id`, `agent_role_id`, `title`, `body`, `worktree` ([Jobs](#jobs)) |
 | Update       | `(ctx, id, UpdateFields) → error`     | Partial update of data fields (title, body, agent_role_id)  |
 | Delete       | `(ctx, id) → error`                   | Cascade-deletes a story's tasks                             |
 

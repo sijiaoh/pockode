@@ -398,3 +398,37 @@ func TestWorkListWatcher_IgnoresASessionWithNoWork(t *testing.T) {
 		t.Errorf("sent %d notifications, want only the work change", got)
 	}
 }
+
+// A job is a run of a schedule and is listed under it, never among the stories:
+// not in the snapshot, and not by any push — its own changes, its deletion, or
+// its session's turn moving. A story change sent last proves the job's events
+// were processed and dropped rather than merely slow.
+func TestWorkListWatcher_LeavesJobsOut(t *testing.T) {
+	job := work.Work{ID: "job1", Title: "Nightly run", ScheduleID: "sch1", Status: work.StatusActive, SessionID: "s-job"}
+	store := &mockWorkStore{works: []work.Work{{ID: "w1", Title: "Story"}, job}}
+	w := NewWorkListWatcher(store, nil)
+	w.Start()
+	defer w.Stop()
+
+	notifier := &captureNotifier{}
+	snapshot, err := w.Subscribe("client-1", notifier)
+	if err != nil {
+		t.Fatalf("subscribe: %v", err)
+	}
+	if len(snapshot.Items) != 1 || snapshot.Items[0].ID != "w1" {
+		t.Errorf("snapshot = %+v, want only the story", snapshot.Items)
+	}
+
+	w.OnWorkChange(work.ChangeEvent{Op: work.OperationUpdate, Work: job})
+	w.OnSessionChange(session.SessionChangeEvent{
+		Op:      session.OperationUpdate,
+		Session: session.SessionMeta{ID: "s-job", Turn: session.TurnState{Phase: session.PhaseRunning, Open: true}},
+	})
+	w.OnWorkChange(work.ChangeEvent{Op: work.OperationDelete, Work: job})
+	w.OnWorkChange(work.ChangeEvent{Op: work.OperationUpdate, Work: work.Work{ID: "w1", Title: "Story"}})
+
+	waitFor(t, func() bool { return notifier.count() >= 1 })
+	if got := notifier.count(); got != 1 {
+		t.Errorf("sent %d notifications, want only the story's: %s", got, notifier.all())
+	}
+}

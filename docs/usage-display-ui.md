@@ -395,9 +395,9 @@ figure the page is about: `text-th-text-primary font-medium`. Own is context:
 `text-th-text-secondary`. The header row is mandatory whenever both columns show
 — `text-[10px] uppercase text-th-text-muted`, first column empty.
 
-**Copy.** The own column is named after what the user is looking at: `This story`
-or `This task`, derived from `story_id`. The total column is `Incl. 5 tasks`,
-from `task_count` — singular `1 task`, and the count, not a vague "subtasks",
+**Copy.** The own column is named after what the user is looking at: `This story`,
+`This task` or `This job`, read off the work's derived `type`. The total column
+is `Incl. 5 tasks`, from `task_count` — singular `1 task`, and the count, not a vague "subtasks",
 because the number is the one thing that makes the second column's scope
 checkable against the Tasks list on the same page. The footnote
 below the card, `text-xs text-th-text-muted`, is always present when two columns

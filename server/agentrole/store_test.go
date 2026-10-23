@@ -905,6 +905,10 @@ func TestAcceptsWorkType(t *testing.T) {
 		{work.WorkTypeStory, work.WorkTypeTask, false},
 		{work.WorkTypeTask, work.WorkTypeTask, true},
 		{work.WorkTypeTask, work.WorkTypeStory, false},
+		{"", work.WorkTypeJob, true},
+		{work.WorkTypeJob, work.WorkTypeJob, true},
+		{work.WorkTypeJob, work.WorkTypeTask, false},
+		{work.WorkTypeStory, work.WorkTypeJob, false},
 	}
 	for _, tt := range tests {
 		if got := (AgentRole{WorkType: tt.role}).AcceptsWorkType(tt.work); got != tt.want {
@@ -921,8 +925,11 @@ func TestSeed_DefaultWorkTypes(t *testing.T) {
 	}
 	for _, r := range roles {
 		want := work.WorkTypeTask
-		if r.Name == "PM" {
+		switch r.Name {
+		case "PM":
 			want = work.WorkTypeStory
+		case "执行者":
+			want = work.WorkTypeJob
 		}
 		if r.WorkType != want {
 			t.Errorf("default role %q work type = %q, want %q", r.Name, r.WorkType, want)
@@ -939,6 +946,10 @@ func TestCreate_WorkType(t *testing.T) {
 	}
 	if got := getRole(t, s, r.ID).WorkType; got != work.WorkTypeStory {
 		t.Errorf("work type = %q, want %q", got, work.WorkTypeStory)
+	}
+
+	if _, err := s.Create(context.Background(), AgentRole{Name: "Runner", WorkType: work.WorkTypeJob}); err != nil {
+		t.Errorf("job work type: %v", err)
 	}
 
 	if _, err := s.Create(context.Background(), AgentRole{Name: "Bad", WorkType: "epic"}); !errors.Is(err, ErrInvalidRole) {

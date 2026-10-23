@@ -4,7 +4,7 @@ import type { WorkType } from "../types/work";
 /**
  * Whether `role` may be assigned to a work item of `type` — the client's copy
  * of the server's `AgentRole.AcceptsWorkType`. Every filter and check here
- * asks this, so "absent means either" is written once.
+ * asks this, so "absent means any" is written once.
  */
 export function roleAcceptsWorkType(role: AgentRole, type: WorkType): boolean {
 	return !role.work_type || role.work_type === type;
@@ -14,26 +14,28 @@ export function roleAcceptsWorkType(role: AgentRole, type: WorkType): boolean {
 export const WORK_TYPE_PLURAL: Record<WorkType, string> = {
 	story: "stories",
 	task: "tasks",
+	job: "jobs",
 };
 
 /**
- * `stories only` / `tasks only`, or `null` for a role that takes either. The
- * one wording for a restriction, wherever a role is named beside it.
+ * `stories only` / `tasks only` / `jobs only`, or `null` for a role that takes
+ * any. The one wording for a restriction, wherever a role is named beside it.
  */
 export function workTypeSuffix(role: AgentRole): string | null {
 	return role.work_type ? `${WORK_TYPE_PLURAL[role.work_type]} only` : null;
 }
 
-/** What a role may run, as `agent_role.update` writes it: `""` is "Both". */
+/** What a role may run, as `agent_role.update` writes it: `""` is "Any". */
 export type RunsChoice = WorkType | "";
 
 /** The order the choices are offered in, and the order the role list groups by. */
-export const RUNS_CHOICES: readonly RunsChoice[] = ["story", "task", ""];
+export const RUNS_CHOICES: readonly RunsChoice[] = ["story", "task", "job", ""];
 
 export const RUNS_LABEL: Record<RunsChoice, string> = {
 	story: "Stories",
 	task: "Tasks",
-	"": "Both",
+	job: "Jobs",
+	"": "Any",
 };
 
 /**
@@ -43,5 +45,6 @@ export const RUNS_LABEL: Record<RunsChoice, string> = {
 export const RUNS_HINT: Record<RunsChoice, string> = {
 	story: "Runs stories. Can be the default story role.",
 	task: "Picked by story agents for the tasks they create.",
-	"": "Can run stories and tasks.",
+	job: "Runs the scheduled jobs it is given.",
+	"": "Can run stories, tasks and jobs.",
 };

@@ -21,8 +21,18 @@ type Store interface {
 	// (WatchedBySession), in listing order: what a session's row counts as
 	// `watching`.
 	WatchedBy(sessionID string) ([]Work, error)
+	// ListBySchedule returns the runs of a schedule — the jobs whose ScheduleID
+	// it is — oldest first.
+	ListBySchedule(scheduleID string) ([]Work, error)
 
+	// Create adds a story, or a task when w names a story. It refuses a
+	// ScheduleID: a job is a run of its schedule and is made by CreateJob.
 	Create(ctx context.Context, w Work) (Work, error)
+	// CreateJob adds one run of schedule w.ScheduleID as a fresh, open work. It
+	// is the only way a job comes into being, and is deliberately not reachable
+	// from RPC or MCP: runs are made by their schedule, never by hand. A job has
+	// no story, so a StoryID is refused.
+	CreateJob(ctx context.Context, w Work) (Work, error)
 	Update(ctx context.Context, id string, fields UpdateFields) error
 	Delete(ctx context.Context, id string) error
 
@@ -245,9 +255,29 @@ func (s *FileStore) WatchedBy(sessionID string) ([]Work, error) {
 	return WatchedBySession(s.works)[sessionID], nil
 }
 
+func (s *FileStore) ListBySchedule(scheduleID string) ([]Work, error) {
+	s.worksMu.RLock()
+	defer s.worksMu.RUnlock()
+
+	// "" is how every non-job spells its ScheduleID, so it names no schedule.
+	if scheduleID == "" {
+		return nil, nil
+	}
+	var runs []Work
+	for _, w := range s.works {
+		if w.ScheduleID == scheduleID {
+			runs = append(runs, w)
+		}
+	}
+	return runs, nil
+}
+
 // --- Write operations ---
 
 func (s *FileStore) Create(_ context.Context, w Work) (Work, error) {
+	if w.ScheduleID != "" {
+		return Work{}, fmt.Errorf("%w: a job is created by its schedule, not directly", ErrInvalidWork)
+	}
 	if w.Title == "" {
 		return Work{}, fmt.Errorf("%w: title is required", ErrInvalidWork)
 	}
@@ -288,18 +318,48 @@ func (s *FileStore) Create(_ context.Context, w Work) (Work, error) {
 		worktree = story.Worktree
 	}
 
-	now := time.Now()
-	work := Work{
-		ID:          uuid.Must(uuid.NewV7()).String(),
+	return s.insertLocked(Work{
 		StoryID:     w.StoryID,
 		AgentRoleID: w.AgentRoleID,
 		Title:       w.Title,
 		Body:        w.Body,
-		Status:      StatusOpen,
 		Worktree:    worktree,
-		CreatedAt:   now,
-		UpdatedAt:   now,
+	})
+}
+
+func (s *FileStore) CreateJob(_ context.Context, w Work) (Work, error) {
+	if w.ScheduleID == "" {
+		return Work{}, fmt.Errorf("%w: schedule_id is required for a job", ErrInvalidWork)
 	}
+	if w.StoryID != "" {
+		return Work{}, fmt.Errorf("%w: a job belongs to its schedule and cannot name story %s", ErrInvalidWork, w.StoryID)
+	}
+	if w.Title == "" {
+		return Work{}, fmt.Errorf("%w: title is required", ErrInvalidWork)
+	}
+	if w.AgentRoleID == "" {
+		return Work{}, fmt.Errorf("%w: agent_role_id is required", ErrInvalidWork)
+	}
+
+	s.worksMu.Lock()
+	return s.insertLocked(Work{
+		ScheduleID:  w.ScheduleID,
+		AgentRoleID: w.AgentRoleID,
+		Title:       w.Title,
+		Body:        w.Body,
+		Worktree:    w.Worktree,
+	})
+}
+
+// insertLocked adds w as a new open work under a fresh id, then releases
+// worksMu, which the caller must hold.
+func (s *FileStore) insertLocked(w Work) (Work, error) {
+	now := time.Now()
+	work := w
+	work.ID = uuid.Must(uuid.NewV7()).String()
+	work.Status = StatusOpen
+	work.CreatedAt = now
+	work.UpdatedAt = now
 
 	s.works = append(s.works, work)
 
@@ -435,7 +495,7 @@ func (s *FileStore) Claim(_ context.Context, id string, watcher *Watcher) (Work,
 	}
 	if watcher != nil && w.Type() != WorkTypeStory {
 		s.worksMu.Unlock()
-		return Work{}, false, fmt.Errorf("%w: work %s is a task, and only a story can be watched", ErrInvalidWork, id)
+		return Work{}, false, fmt.Errorf("%w: work %s is a %s, and only a story can be watched", ErrInvalidWork, id, w.Type())
 	}
 
 	// Any work that already owns a session is a restart: reusing that session
@@ -480,7 +540,7 @@ func (s *FileStore) Unwatch(_ context.Context, id string, watcher Watcher) (*Wat
 	w := &s.works[idx]
 	if w.Type() != WorkTypeStory {
 		s.worksMu.Unlock()
-		return nil, false, fmt.Errorf("%w: work %s is a task, and only a story can be watched", ErrInvalidWork, id)
+		return nil, false, fmt.Errorf("%w: work %s is a %s, and only a story can be watched", ErrInvalidWork, id, w.Type())
 	}
 	if w.Watcher == nil {
 		s.worksMu.Unlock()

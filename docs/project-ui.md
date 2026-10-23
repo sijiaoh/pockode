@@ -53,7 +53,7 @@ document is what it expands to.
 |---|---|---|
 | Project | `/works` | Every work that needs a person or is under way. One column. |
 | Project, archive | `/works?segment=closed` | The same screen filtered to finished work (§5). |
-| Work detail | `/works/$workId` | One story or task, its children, its comments. |
+| Work detail | `/works/$workId` | One story, task or job, its children, its comments. |
 
 Both routes carry the usual `/w/<worktree>` prefix outside main, as every route
 in the app does; the list itself is global across worktrees either way.

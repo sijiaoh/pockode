@@ -67,7 +67,7 @@ func (h *rpcMethodHandler) handleAgentRoleUpdate(ctx context.Context, conn *json
 		return
 	}
 
-	if params.WorkType != nil && *params.WorkType == work.WorkTypeTask {
+	if params.WorkType != nil && *params.WorkType != "" && *params.WorkType != work.WorkTypeStory {
 		h.dropDefaultStoryRole(params.ID)
 	}
 
@@ -121,7 +121,8 @@ func (h *rpcMethodHandler) handleAgentRoleDelete(ctx context.Context, conn *json
 }
 
 // dropDefaultStoryRole clears the default story role if it is roleID: called
-// once that role can no longer start a story — deleted, or narrowed to tasks.
+// once that role can no longer start a story — deleted, or narrowed to tasks
+// or jobs.
 // The role change is accepted and the default goes with it, rather than the
 // change being refused, so that editing a role never has to be preceded by a
 // trip to a different setting. See docs/projects/data-model.md.

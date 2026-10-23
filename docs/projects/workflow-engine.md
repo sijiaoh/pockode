@@ -238,10 +238,11 @@ The prompt builders generate messages for different lifecycle events. All share 
 **Base (`buildBase`):**
 - Agent role reference (instructs agent to fetch its role via `agent_role_get`)
 - Work context (title, ID, instruction to read full details via `work_get`)
-- What differs by work type — derived from `story_id`, so the two cases below are
-  the only ones there are:
+- What differs by work type — derived from `schedule_id` and `story_id`, so the
+  three cases below are the only ones there are (any other panics):
   - **Story:** Coordinator rules — break the story into tasks, start them, do not implement anything yourself, do not call `step_done` on a task, read a task's report as a comment on the story.
   - **Task:** Read the story's comments before starting, and report results back with `work_comment_add`, because the story agent does not read this chat.
+  - **Job:** One run of a scheduled prompt — do the work yourself; there is no story above and no tasks below, so create none and report to none; say in this chat what you did and found, because whoever checks on the run reads it ([work-system.md](../code/work-system.md#jobs)).
 - The lifecycle rules (`lifecycle_rules`), identical for every work Pockode
   drives: what the four statuses mean, that `question_post` is how the agent
   reaches a person (one sentence, leaving when and how to the asking guidance

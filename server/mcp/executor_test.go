@@ -947,8 +947,8 @@ func TestAgentRoleList(t *testing.T) {
 }
 
 // TestAgentRoleList_FilterByWorkType relies on the seeded defaults (PM takes
-// stories, the rest tasks) beside the unrestricted test role, which must appear
-// under either filter.
+// stories, 执行者 jobs, the rest tasks) beside the unrestricted test role, which
+// must appear under every filter.
 func TestAgentRoleList_FilterByWorkType(t *testing.T) {
 	ts := newTestExec(t)
 
@@ -983,7 +983,12 @@ func TestAgentRoleList_FilterByWorkType(t *testing.T) {
 	if _, ok := tasks["Test Engineer"]; !ok || tasks["工程师"] != "task" {
 		t.Errorf("task roles = %v, want 工程师 (task) and Test Engineer", tasks)
 	}
-	if all := names(""); len(all) != len(stories)+len(tasks)-1 {
+	jobs := names("job")
+	if len(jobs) != 2 || jobs["执行者"] != "job" || jobs["Test Engineer"] != "" {
+		t.Errorf("job roles = %v, want 执行者 (job) and Test Engineer (unrestricted)", jobs)
+	}
+	// Test Engineer is under every filter; every other role is under one.
+	if all := names(""); len(all) != len(stories)+len(tasks)+len(jobs)-2 {
 		t.Errorf("unfiltered roles = %v, want every role", all)
 	}
 }
@@ -1825,5 +1830,67 @@ func TestStoryStart_WorktreeCreationFailureDoesNotStart(t *testing.T) {
 
 	if w, _, _ := store.Get(storyID); w.Status != work.StatusOpen {
 		t.Errorf("story status = %q, want open (not started)", w.Status)
+	}
+}
+
+// --- Jobs ---
+
+// A job is a run of a schedule: no story/task tool may take one, and each
+// refusal says what the work is so the agent does not retry the same call. The
+// generic tools still reach it, since its own agent runs on them.
+func TestStoryAndTaskTools_RefuseAJob(t *testing.T) {
+	exec, store, roleID, worktrees := newExecWithWorktrees(t)
+	job, err := store.CreateJob(context.Background(), work.Work{ScheduleID: "sch1", Title: "Nightly run", AgentRoleID: roleID})
+	if err != nil {
+		t.Fatalf("CreateJob: %v", err)
+	}
+	// Running, as it is whenever its own agent is the one calling.
+	if job, err = exec.workOps.StartWork(context.Background(), job.ID, nil); err != nil {
+		t.Fatalf("StartWork: %v", err)
+	}
+	caller := Caller{SessionID: "sess-caller"}
+
+	for _, tc := range []struct {
+		tool string
+		args map[string]any
+	}{
+		{"task_create", map[string]any{"story_id": job.ID, "title": "T", "agent_role_id": roleID}},
+		{"task_list", map[string]any{"story_id": job.ID}},
+		{"story_start", map[string]any{"id": job.ID}},
+		{"story_start", map[string]any{"id": job.ID, "worktree": "feature-x"}},
+		{"story_start", map[string]any{"id": job.ID, "watch": true}},
+		{"task_start", map[string]any{"id": job.ID}},
+		{"story_wait", map[string]any{"id": job.ID}},
+		{"story_unwatch", map[string]any{"id": job.ID}},
+	} {
+		t.Run(fmt.Sprintf("%s %v", tc.tool, tc.args), func(t *testing.T) {
+			out, err := callAs(t, exec, caller, tc.tool, tc.args)
+			if err == nil {
+				t.Fatalf("%s accepted a job: %q", tc.tool, out)
+			}
+			if !isUserError(err) {
+				t.Errorf("refusal is logged as a server fault: %v", err)
+			}
+			if !strings.Contains(err.Error(), "is a job") {
+				t.Errorf("refusal does not say the work is a job: %v", err)
+			}
+		})
+	}
+
+	got, _, _ := store.Get(job.ID)
+	if got.Status != work.StatusActive || got.Worktree != job.Worktree || got.Watcher != nil || got.Wait != work.WaitNone {
+		t.Errorf("job after the refusals = %+v, want it untouched", got)
+	}
+	if len(worktrees.asked) != 0 {
+		t.Errorf("prepared %v, want no worktree for a refused start", worktrees.asked)
+	}
+	if titles := listedTitles(t, toolText(callTool(t, exec, "story_list", map[string]any{}))); len(titles) != 0 {
+		t.Errorf("story_list = %v, want no job in it", titles)
+	}
+	if detail := decodeObject(t, toolText(callTool(t, exec, "work_get", map[string]string{"id": job.ID}))); stringField(t, detail, "type") != "job" {
+		t.Errorf("work_get type = %v, want job", detail["type"])
+	}
+	if res := callTool(t, exec, "work_comment_add", map[string]string{"work_id": job.ID, "body": "Report"}); res.IsError {
+		t.Errorf("work_comment_add on a job: %s", toolText(res))
 	}
 }

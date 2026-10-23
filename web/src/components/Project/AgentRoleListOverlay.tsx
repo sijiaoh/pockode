@@ -37,7 +37,8 @@ interface Props {
 const GROUP_LABEL: Record<RunsChoice, string> = {
 	story: "Story roles",
 	task: "Task roles",
-	"": "Story & task roles",
+	job: "Job roles",
+	"": "Roles for any work",
 };
 
 /**
@@ -329,7 +330,7 @@ function describeNewStory(roles: AgentRole[], defaultRoleId: string): string {
 		return `New stories use ${name}, the only role that runs stories.`;
 	}
 	if (!roles.some((r) => roleAcceptsWorkType(r, "story")))
-		return "No role runs stories. Set a role to run Stories (or Both), or add one.";
+		return "No role runs stories. Set a role to run Stories (or Any), or add one.";
 	if (defaultRoleId) {
 		// Both from a settings file edited by hand: the server clears the default
 		// whenever a role stops running stories or is deleted.

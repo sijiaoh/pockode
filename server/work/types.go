@@ -24,12 +24,15 @@ type WorkType string
 const (
 	WorkTypeStory WorkType = "story"
 	WorkTypeTask  WorkType = "task"
+	// WorkTypeJob is one run of a schedule: an agent doing a fixed prompt's work
+	// itself, outside any story.
+	WorkTypeJob WorkType = "job"
 )
 
 // Valid reports whether t names a work type. A work item's own type is always
 // derived and never needs this; it is for a type that arrives from outside.
 func (t WorkType) Valid() bool {
-	return t == WorkTypeStory || t == WorkTypeTask
+	return t == WorkTypeStory || t == WorkTypeTask || t == WorkTypeJob
 }
 
 // WorkStatus is what the engine is allowed to do with a work item, and nothing
@@ -101,11 +104,16 @@ type Work struct {
 	// alternative restates all of Work's fields and tags, where forgetting one
 	// silently drops it on load. The cost is this one field; the benefit is that
 	// the migration stays in Normalize, where the status migration already is.
-	LegacyParentID string     `json:"parent_id,omitempty"`
-	AgentRoleID    string     `json:"agent_role_id,omitempty"`
-	Title          string     `json:"title"`
-	Body           string     `json:"body,omitempty"`
-	Status         WorkStatus `json:"status"`
+	LegacyParentID string `json:"parent_id,omitempty"`
+	// ScheduleID names the schedule this work is a run of, and makes it a job.
+	// A job stands outside the story hierarchy — it has no story and holds no
+	// tasks — so it is never set beside StoryID. Only CreateJob sets it, and
+	// nothing changes it afterwards: each run is a fresh work, never reused.
+	ScheduleID  string     `json:"schedule_id,omitempty"`
+	AgentRoleID string     `json:"agent_role_id,omitempty"`
+	Title       string     `json:"title"`
+	Body        string     `json:"body,omitempty"`
+	Status      WorkStatus `json:"status"`
 	// Wait is what this work is waiting for while active; empty when it is
 	// waiting for nothing. Meaningless on any other status, and cleared by every
 	// transition that leaves active.
@@ -160,11 +168,15 @@ type Watcher struct {
 	Worktree  string `json:"worktree,omitempty"`
 }
 
-// Type is derived rather than stored: a work that names a story is that story's
-// task, and one that names none is a story itself. It stays a WorkType because
-// that is what the wire, the prompts and the list rows all still say — what went
-// away is the *second copy of the fact*, not the vocabulary.
+// Type is derived rather than stored: a work that names a schedule is a run of
+// it, a work that names a story is that story's task, and one that names
+// neither is a story itself. It stays a WorkType because that is what the wire,
+// the prompts and the list rows all still say — what went away is the *second
+// copy of the fact*, not the vocabulary.
 func (w Work) Type() WorkType {
+	if w.ScheduleID != "" {
+		return WorkTypeJob
+	}
 	if w.StoryID == "" {
 		return WorkTypeStory
 	}
