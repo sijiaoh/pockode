@@ -92,6 +92,9 @@ func (w *WorkListWatcher) eventLoop() {
 }
 
 func (w *WorkListWatcher) notifyChange(event work.ChangeEvent) {
+	if !onStoriesList(event.Work) {
+		return
+	}
 	if event.Op == work.OperationDelete {
 		w.forget(event.Work.ID)
 	}
@@ -126,6 +129,9 @@ func (w *WorkListWatcher) notifySessionChange(meta session.SessionMeta) {
 	}
 	if !found {
 		return // A plain chat session, belonging to no work item.
+	}
+	if !onStoriesList(item) {
+		return
 	}
 
 	state := work.RowStateFor(item, meta.Turn)
@@ -211,9 +217,8 @@ func (w *WorkListWatcher) notifySync() {
 // listRows reads the whole list and derives each row's activity, reading every
 // worktree's turn state at most once.
 //
-// Allocated to length rather than appended to, so an empty store yields an empty
-// slice and not nil: a client with no work items is sent `[]`, which it can
-// iterate, rather than `null`, which it cannot.
+// readRows starts from an empty slice rather than a nil one, so an empty store
+// yields `[]`, which a client can iterate, rather than `null`, which it cannot.
 func (w *WorkListWatcher) listRows() ([]rpc.WorkListItem, error) {
 	items, err := w.readRows()
 	if err != nil {
@@ -242,11 +247,22 @@ func (w *WorkListWatcher) readRows() ([]rpc.WorkListItem, error) {
 	}
 
 	resolver := work.NewActivityResolver(w.turnSource)
-	items := make([]rpc.WorkListItem, len(works))
-	for i, item := range works {
-		items[i] = rpc.NewWorkListItem(item, resolver.RowState(item))
+	items := make([]rpc.WorkListItem, 0, len(works))
+	for _, item := range works {
+		if onStoriesList(item) {
+			items = append(items, rpc.NewWorkListItem(item, resolver.RowState(item)))
+		}
 	}
 	return items, nil
+}
+
+// onStoriesList reports whether a work item belongs on this list at all. A job
+// does not: it is one run of a schedule, and runs are listed under their
+// schedule (work.Store.ListBySchedule), never among the stories. It is applied
+// on every path a row takes to a subscriber — the read and both kinds of push —
+// so that no job reaches the client's list.
+func onStoriesList(w work.Work) bool {
+	return w.Type() != work.WorkTypeJob
 }
 
 // Subscribe registers a subscriber under the client-chosen id and returns the

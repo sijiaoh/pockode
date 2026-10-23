@@ -35,14 +35,21 @@ task_rules: |
 
   When you have results or status for your story, report them by calling work_comment_add with work_id {{.StoryID}} (the story). That comment is how the story learns what you did — the story agent does not read this chat.
 
-# The lifecycle rules, told to every agent Pockode drives, story or task.
+# Job rules: a job is one run of a schedule's prompt. It has no story above it
+# and no tasks below it, so it is told both, or it reaches for the story/task
+# tools the MCP prefix names and splits the work up or looks for a story to
+# report to.
+job_rules: |
+  This work is a job: one run of a scheduled prompt. Do the work it asks for yourself, in this session. A job has no story above it and no tasks below it: do not create stories or tasks to hand the work to, and there is no story to report to. Whoever checks on this run reads this chat, so before you finish, say in it what you did and what you found.
+
+# The lifecycle rules, told to every agent Pockode drives: story, task or job.
 # This is the single place they are written: every message the work engine sends
 # carries it, because a follow-up can land in a conversation that has lost all
 # memory of this work.
 #
 # IsStory gates the sections about a story's tasks. Only a story has tasks, so
-# telling a task about story_wait would offer it a tool it has nothing to point
-# at.
+# telling a task or a job about story_wait would offer it a tool it has nothing
+# to point at.
 # Placeholders: {{.ID}}, {{.IsStory}}, {{.MaxNudges}}
 lifecycle_rules: |
   ## How Pockode drives this work
@@ -98,6 +105,11 @@ story_restart_nudge: |
 task_restart_nudge: |
   Your task was stopped and is now being restarted. Review what you have done so far — the worktree, and anything you have already reported — then continue according to your agent role instructions.
 
+# Job restart nudge. A job reports nowhere but this chat, so that and the
+# worktree are all there is to review.
+job_restart_nudge: |
+  Your job was stopped and is now being restarted. Review what you have done so far — this chat and the worktree — then continue according to your agent role instructions.
+
 # Nudge sent when a turn ended without the agent saying anything about the work.
 story_auto_continue_nudge: |
   Your last turn ended without moving this story along: no step_done, no story_wait, and no question waiting for an answer — yours or a subtask's. Review your tasks and carry on — or, if you are blocked on the user, ask them with question_post. Pockode cannot tell the difference between the two on its own, and stops the story if this keeps repeating.
@@ -105,9 +117,13 @@ story_auto_continue_nudge: |
 task_auto_continue_nudge: |
   Your last turn ended without moving this task along: no step_done, and no question waiting for an answer. Review what you have done so far and carry on — or, if you are blocked on the user, ask them with question_post. Pockode cannot tell the difference between the two on its own, and stops the task if this keeps repeating.
 
+job_auto_continue_nudge: |
+  Your last turn ended without moving this job along: no step_done, and no question waiting for an answer. Review what you have done so far and carry on — or, if you are blocked on the user, ask them with question_post. Pockode cannot tell the difference between the two on its own, and stops the job if this keeps repeating.
+
 # Step auto-continuation nudge (for work items with steps)
 # IsStory gates the wait line for the same reason it gates lifecycle_rules: a
-# task has no tasks, so story_wait would be a tool it has nothing to point at.
+# task or a job has no tasks, so story_wait would be a tool it has nothing to
+# point at.
 # Placeholders: {{.CurrentStep}}, {{.TotalSteps}}, {{.ID}}, {{.IsStory}}
 step_auto_continue_nudge: |
   That turn ended on step {{.CurrentStep}} of {{.TotalSteps}} without saying where the work stands.
@@ -128,6 +144,10 @@ story_reopen_nudge: |
 # Task reopen nudge (when a closed task is reopened)
 task_reopen_nudge: |
   This task has been reopened: it was closed, and someone wants more from it. Review your previous work, determine what additional changes are needed, then continue according to your agent role instructions.
+
+# Job reopen nudge (when a closed job is reopened)
+job_reopen_nudge: |
+  This job has been reopened: it was closed, and someone wants more from it. Review your previous work in this chat and the worktree, determine what is still needed, then continue according to your agent role instructions.
 
 # Child completion nudge for a story whose task just closed.
 # The wait is cleared by this message, which is the trap worth naming: a story

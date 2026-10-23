@@ -145,6 +145,11 @@ func TestBuildAutoContinuationMessage_ContainsBaseAndNudge(t *testing.T) {
 			Work{ID: "s1", AgentRoleID: testRoleID, Title: "S"},
 			"Your last turn ended without moving this story along",
 		},
+		{
+			"job",
+			Work{ID: "j1", ScheduleID: "sched-1", AgentRoleID: testRoleID, Title: "J"},
+			"Your last turn ended without moving this job along",
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			base := BuildKickoffMessage(tc.w)
@@ -175,6 +180,29 @@ func TestBuildKickoffMessage_TaskReportsViaComment(t *testing.T) {
 	assertContains(t, msg, "`step_done` with ID task-1", "step_done instruction")
 }
 
+// A job does the work itself and has nobody above it, so its kickoff tells it
+// so and carries none of what a story or a task is told about the other.
+func TestBuildKickoffMessage_Job(t *testing.T) {
+	w := Work{
+		ID:          "job-1",
+		ScheduleID:  "sched-1",
+		AgentRoleID: testRoleID,
+		Title:       "Nightly report",
+	}
+
+	msg := BuildKickoffMessage(w)
+
+	assertContains(t, msg, "Nightly report", "job title")
+	assertContains(t, msg, "This work is a job", "job rules")
+	assertContains(t, msg, "Do the work it asks for yourself", "that a job does the work itself")
+	assertContains(t, msg, "`step_done` with ID job-1", "step_done instruction")
+	for _, wrong := range []string{"COORDINATOR", "work_comment_list with work_id", "work_comment_add with work_id"} {
+		if strings.Contains(msg, wrong) {
+			t.Errorf("job message says %q", wrong)
+		}
+	}
+}
+
 func TestBuildRestartMessage_ContainsBaseAndNudge(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
@@ -190,6 +218,11 @@ func TestBuildRestartMessage_ContainsBaseAndNudge(t *testing.T) {
 			"story",
 			Work{ID: "s1", AgentRoleID: testRoleID, Title: "S"},
 			"Your story was stopped and is now being restarted",
+		},
+		{
+			"job",
+			Work{ID: "j1", ScheduleID: "sched-1", AgentRoleID: testRoleID, Title: "J"},
+			"Your job was stopped and is now being restarted",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -388,6 +421,11 @@ func TestBuildReopenMessage_ContainsBaseAndNudge(t *testing.T) {
 			Work{ID: "s1", AgentRoleID: testRoleID, Title: "S"},
 			"This story has been reopened",
 		},
+		{
+			"job",
+			Work{ID: "j1", ScheduleID: "sched-1", AgentRoleID: testRoleID, Title: "J"},
+			"This job has been reopened",
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			base := BuildKickoffMessage(tc.w)
@@ -410,10 +448,11 @@ func TestBuildReopenMessage_ContainsBaseAndNudge(t *testing.T) {
 func TestEverySystemMessage_SpeaksTheCurrentVocabulary(t *testing.T) {
 	story := Work{ID: "s1", AgentRoleID: testRoleID, Title: "S"}
 	task := Work{ID: "t1", StoryID: "s1", AgentRoleID: testRoleID, Title: "T"}
+	job := Work{ID: "j1", ScheduleID: "sched-1", AgentRoleID: testRoleID, Title: "J"}
 	steps := []string{"Do A", "Do B"}
 
 	messages := map[string]string{}
-	for _, w := range []Work{story, task} {
+	for _, w := range []Work{story, task, job} {
 		prefix := string(w.Type())
 		messages[prefix+" kickoff"] = BuildKickoffMessageWithSteps(w, steps, 0)
 		messages[prefix+" restart"] = BuildRestartMessage(w)
@@ -455,11 +494,20 @@ func TestEverySystemMessage_SpeaksTheCurrentVocabulary(t *testing.T) {
 		// A task has no tasks to wait for, so no message to one may offer the
 		// tool — the step nudge offered it to tasks while the lifecycle section
 		// was already careful not to — nor speak of its subtasks at all, which
-		// the lifecycle section's "ask and wait for your subtasks" did.
-		if strings.HasPrefix(name, "task ") {
+		// the lifecycle section's "ask and wait for your subtasks" did. A job
+		// has no tasks either, and no story: it is offered neither the tools
+		// that make one nor a story to report to.
+		if strings.HasPrefix(name, "task ") || strings.HasPrefix(name, "job ") {
 			for _, storyOnly := range []string{"story_wait", "subtask"} {
 				if strings.Contains(msg, storyOnly) {
-					t.Errorf("%s message says %q to a task", name, storyOnly)
+					t.Errorf("%s message says %q", name, storyOnly)
+				}
+			}
+		}
+		if strings.HasPrefix(name, "job ") {
+			for _, notForAJob := range []string{"task_create", "task_start", "task_list", "story_start", "work_comment_add", "your story", "your tasks"} {
+				if strings.Contains(msg, notForAJob) {
+					t.Errorf("%s message says %q", name, notForAJob)
 				}
 			}
 		}

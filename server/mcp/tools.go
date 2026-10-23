@@ -223,12 +223,12 @@ var toolDefinitions = []toolDefinition{
 	{
 		Name: "agent_role_list",
 		Description: "List all available agent roles. Use this to find which roles can be assigned to work items. " +
-			"A role's work_type says which kind of work item it takes (story or task); a role without one takes either. " +
+			"A role's work_type says which kind of work item it takes (story, task or job); a role without one takes any. " +
 			"Use agent_role_get for full details including role_prompt.",
 		InputSchema: inputSchema{
 			Type: "object",
 			Properties: map[string]propertySchema{
-				"work_type": {Type: "string", Enum: []string{"story", "task"}, Description: "Only list roles that can take this kind of work item, including roles that take either"},
+				"work_type": {Type: "string", Enum: []string{"story", "task", "job"}, Description: "Only list roles that can take this kind of work item, including roles that take any"},
 			},
 		},
 	},

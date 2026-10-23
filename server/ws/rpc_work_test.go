@@ -1,6 +1,7 @@
 package ws
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -53,6 +54,30 @@ func TestHandler_WorkCreate_Story(t *testing.T) {
 // A task is created by its story's agent (MCP task_create); work.create is the
 // human's door and makes stories only. Naming a story is refused rather than
 // ignored: ignoring it would answer a request for a task with a new story.
+// Only a schedule makes a job. work.create has no schedule_id to take, and a
+// client that sends one anyway gets the story it asked for everything else of,
+// never a job.
+func TestHandler_WorkCreate_CannotMakeAJob(t *testing.T) {
+	env := newTestEnv(t, &mockAgent{})
+
+	resp := env.call("work.create", map[string]string{
+		"schedule_id":   "sch1",
+		"agent_role_id": env.testRoleID,
+		"title":         "Sneaky run",
+	})
+	if resp.Error != nil {
+		t.Fatalf("unexpected error: %s", resp.Error.Message)
+	}
+
+	works, err := env.workStore.List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(works) != 1 || works[0].ScheduleID != "" || works[0].Type() != work.WorkTypeStory {
+		t.Errorf("works = %+v, want one story and no job", works)
+	}
+}
+
 func TestHandler_WorkCreate_RefusesATask(t *testing.T) {
 	env := newTestEnv(t, &mockAgent{})
 	story := createStory(t, env, "Parent story")
@@ -553,6 +578,45 @@ func TestHandler_WorkStart_CapturesFrontendWorktree(t *testing.T) {
 	task := createTask(t, env, story.ID, "Feature task")
 	if task.Worktree != "feature" {
 		t.Errorf("child worktree = %q, want inherited %q", task.Worktree, "feature")
+	}
+}
+
+// A job runs where its schedule put it, not wherever the frontend happens to
+// be when someone starts it by hand.
+func TestHandler_WorkStart_JobKeepsItsWorktree(t *testing.T) {
+	dir := setupGitRepo(t)
+	os.WriteFile(filepath.Join(dir, "README.md"), []byte("# Test"), 0644)
+	runGitIn(t, dir, "add", ".")
+	runGitIn(t, dir, "commit", "-m", "initial")
+
+	env := newWorkDirTestEnv(t, dir)
+
+	if resp := env.call("worktree.create", rpc.WorktreeCreateParams{Name: "feature", Branch: "feature-branch"}); resp.Error != nil {
+		t.Fatalf("worktree create failed: %s", resp.Error.Message)
+	}
+	if resp := env.call("worktree.switch", rpc.WorktreeSwitchParams{Name: "feature"}); resp.Error != nil {
+		t.Fatalf("worktree switch failed: %s", resp.Error.Message)
+	}
+
+	job, err := env.workStore.CreateJob(context.Background(), work.Work{
+		ScheduleID:  "sch1",
+		AgentRoleID: env.testRoleID,
+		Title:       "Nightly run",
+	})
+	if err != nil {
+		t.Fatalf("CreateJob: %v", err)
+	}
+
+	if resp := env.call("work.start", rpc.WorkStartParams{ID: job.ID}); resp.Error != nil {
+		t.Fatalf("start failed: %s", resp.Error.Message)
+	}
+
+	got, _, _ := env.workStore.Get(job.ID)
+	if got.Worktree != "" {
+		t.Errorf("job worktree = %q, want the schedule's (main)", got.Worktree)
+	}
+	if got.Status != work.StatusActive {
+		t.Errorf("job status = %q, want active", got.Status)
 	}
 }
 

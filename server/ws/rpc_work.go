@@ -114,11 +114,12 @@ func (h *rpcMethodHandler) handleWorkStart(ctx context.Context, conn *jsonrpc2.C
 	}
 
 	// Capture the frontend's current worktree onto a top-level work the first
-	// time it starts. Children inherit their worktree at create time, and a
-	// restart keeps the worktree it already has (SetWorktree only applies while
-	// the work is still open), so this only ever pins a brand-new story.
+	// time it starts. Children inherit their worktree at create time, a job is
+	// given its schedule's when it is created, and a restart keeps the worktree
+	// it already has (SetWorktree only applies while the work is still open), so
+	// this only ever pins a brand-new story.
 	if current, found, err := h.workStore.Get(params.ID); err == nil && found &&
-		current.StoryID == "" && current.Status == work.StatusOpen {
+		current.Type() == work.WorkTypeStory && current.Status == work.StatusOpen {
 		name := ""
 		if wt := h.state.getWorktree(); wt != nil {
 			name = wt.Name

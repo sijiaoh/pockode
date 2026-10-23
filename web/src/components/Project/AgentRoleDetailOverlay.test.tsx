@@ -223,12 +223,13 @@ describe("the Runs field", () => {
 	const segment = (name: string) =>
 		within(group()).getByRole("button", { name });
 
-	// "Both" is the cleared restriction, which the server reads from `""`;
+	// "Any" is the cleared restriction, which the server reads from `""`;
 	// leaving the field out would leave the old restriction in place.
 	it.each([
 		["Stories", "story"],
 		["Tasks", "task"],
-		["Both", ""],
+		["Jobs", "job"],
+		["Any", ""],
 	])("sends %s as work_type %j", async (label, workType) => {
 		const user = userEvent.setup();
 		useAgentRoleStore.setState({
@@ -251,10 +252,10 @@ describe("the Runs field", () => {
 		updateAgentRole.mockRejectedValue(new Error("nope"));
 		renderOverlay();
 
-		expect(segment("Both")).toHaveAttribute("aria-pressed", "true");
+		expect(segment("Any")).toHaveAttribute("aria-pressed", "true");
 		await user.click(segment("Tasks"));
 
-		expect(segment("Both")).toHaveAttribute("aria-pressed", "true");
+		expect(segment("Any")).toHaveAttribute("aria-pressed", "true");
 		expect(screen.getByRole("alert").textContent).toBe("nope");
 
 		updateAgentRole.mockResolvedValue(undefined);
@@ -262,14 +263,14 @@ describe("the Runs field", () => {
 		expect(screen.queryByRole("alert")).not.toBeInTheDocument();
 	});
 
-	it("offers Stories, Tasks and Both, in the order the list groups by", () => {
+	it("offers Stories, Tasks, Jobs and Any, in the order the list groups by", () => {
 		renderOverlay();
 
 		expect(
 			within(group())
 				.getAllByRole("button")
 				.map((b) => b.textContent),
-		).toEqual(["Stories", "Tasks", "Both"]);
+		).toEqual(["Stories", "Tasks", "Jobs", "Any"]);
 	});
 
 	it("says where a role that runs stories turns up", () => {
@@ -283,27 +284,32 @@ describe("the Runs field", () => {
 
 	// The server accepts it and clears the default: a second setting changing
 	// as a side effect is worth one question first.
-	it("asks before making the default story role task-only", async () => {
+	it.each([
+		["Tasks", "task"],
+		["Jobs", "job"],
+	])("asks before making the default story role %s-only", async (label, workType) => {
 		const user = userEvent.setup();
 		useSettingsStore.setState({ settings: { default_agent_role_id: "r1" } });
 		renderOverlay();
 
-		await user.click(segment("Tasks"));
+		await user.click(segment(label));
 		expect(updateAgentRole).not.toHaveBeenCalled();
 		expect(
 			screen.getByText(
-				"Reviewer is the default story role. Making it task-only clears that default.",
+				`Reviewer is the default story role. Making it ${workType}-only clears that default.`,
 			),
 		).toBeInTheDocument();
 
 		await user.click(screen.getByRole("button", { name: "Cancel" }));
 		expect(updateAgentRole).not.toHaveBeenCalled();
 
-		await user.click(segment("Tasks"));
-		await user.click(screen.getByRole("button", { name: "Make task-only" }));
+		await user.click(segment(label));
+		await user.click(
+			screen.getByRole("button", { name: `Make ${workType}-only` }),
+		);
 		expect(updateAgentRole).toHaveBeenCalledWith({
 			id: "r1",
-			work_type: "task",
+			work_type: workType,
 		});
 	});
 
@@ -327,6 +333,8 @@ describe("the Runs field", () => {
 		useAgentRoleStore.setState({ workRefCounts: { r1: 2 } });
 		renderOverlay();
 
-		expect(screen.getByText("Can run stories and tasks.")).toBeInTheDocument();
+		expect(
+			screen.getByText("Can run stories, tasks and jobs."),
+		).toBeInTheDocument();
 	});
 });

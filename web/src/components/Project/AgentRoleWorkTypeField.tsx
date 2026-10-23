@@ -9,6 +9,7 @@ import {
 } from "../../lib/roleWorkType";
 import { useWSStore } from "../../lib/wsStore";
 import type { AgentRole } from "../../types/agentRole";
+import type { WorkType } from "../../types/work";
 import ToggleGroup from "../ui/ToggleGroup";
 
 /**
@@ -16,9 +17,9 @@ import ToggleGroup from "../ui/ToggleGroup";
  * and shows the server's record rather than the tap: the lit segment moves
  * when the update comes back.
  *
- * The one tap that asks first is the default story role going task-only: the
- * server accepts it and clears the default, and that is a second setting
- * changing as a side effect of this one.
+ * The one tap that asks first is the default story role going task-only or
+ * job-only: the server accepts it and clears the default, and that is a second
+ * setting changing as a side effect of this one.
  */
 export default function AgentRoleWorkTypeField({
 	role,
@@ -30,7 +31,7 @@ export default function AgentRoleWorkTypeField({
 	const updateAgentRole = useWSStore((s) => s.actions.updateAgentRole);
 	const workRefCount = useAgentRoleStore((s) => s.workRefCounts[role.id] ?? 0);
 	const [error, setError] = useState<string | null>(null);
-	const [confirmTaskOnly, setConfirmTaskOnly] = useState(false);
+	const [confirmNarrowTo, setConfirmNarrowTo] = useState<WorkType | null>(null);
 
 	const selected: RunsChoice = role.work_type ?? "";
 
@@ -45,8 +46,8 @@ export default function AgentRoleWorkTypeField({
 
 	const select = (workType: RunsChoice) => {
 		if (workType === selected) return;
-		if (workType === "task" && isDefaultStoryRole) {
-			setConfirmTaskOnly(true);
+		if (workType && workType !== "story" && isDefaultStoryRole) {
+			setConfirmNarrowTo(workType);
 			return;
 		}
 		apply(workType);
@@ -72,16 +73,16 @@ export default function AgentRoleWorkTypeField({
 				hint={hint}
 				error={error}
 			/>
-			{confirmTaskOnly && (
+			{confirmNarrowTo && (
 				<ConfirmDialog
-					title={`Make ${role.name} task-only?`}
-					message={`${role.name} is the default story role. Making it task-only clears that default.`}
-					confirmLabel="Make task-only"
+					title={`Make ${role.name} ${confirmNarrowTo}-only?`}
+					message={`${role.name} is the default story role. Making it ${confirmNarrowTo}-only clears that default.`}
+					confirmLabel={`Make ${confirmNarrowTo}-only`}
 					onConfirm={() => {
-						setConfirmTaskOnly(false);
-						apply("task");
+						setConfirmNarrowTo(null);
+						apply(confirmNarrowTo);
 					}}
-					onCancel={() => setConfirmTaskOnly(false)}
+					onCancel={() => setConfirmNarrowTo(null)}
 				/>
 			)}
 		</>

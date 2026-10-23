@@ -203,7 +203,7 @@ func (e *Executor) Execute(ctx context.Context, caller Caller, name string, args
 // badge widen every agent's list output.
 type workSummary struct {
 	ID string `json:"id"`
-	// Type is derived from StoryID, never stored, and is sent beside it so an
+	// Type is derived (work.Work.Type), never stored, and is sent beside it so an
 	// agent reads a work item's kind the same way here as the web client does on
 	// a row (rpc.WorkListItem).
 	Type        string `json:"type"`
@@ -293,6 +293,17 @@ func (e *Executor) taskList(args json.RawMessage) (string, error) {
 	works, err := e.workStore.List()
 	if err != nil {
 		return "", err
+	}
+	// A task or a job named here has no tasks, so the empty list would be true
+	// and still mislead: the agent asked a story question of something that is
+	// not one. An id that names nothing keeps the empty answer it always had.
+	for _, w := range works {
+		if w.ID == params.StoryID {
+			if err := work.ValidateStory(w); err != nil {
+				return "", err
+			}
+			break
+		}
 	}
 	return marshalSummaries(work.TasksOf(works, params.StoryID))
 }
@@ -553,16 +564,30 @@ func (e *Executor) taskStart(ctx context.Context, args json.RawMessage) (string,
 // story_start on a task would reject a call whose outcome is correct — an id is
 // a string, and an agent that reached for the neighbouring tool still asked for
 // something this can do.
+//
+// A job is the exception, because neither tool names it: a job is a run of its
+// schedule, which decides when it starts and where it runs, so an agent asking
+// to start one has asked for something no tool here offers.
 func (e *Executor) startWork(ctx context.Context, id, worktree string, watcher *work.Watcher) (string, error) {
+	w, found, err := e.workStore.Get(id)
+	if err != nil {
+		return "", err
+	}
+	if !found {
+		return "", userErrorf("work %s not found", id)
+	}
+	if w.Type() == work.WorkTypeJob {
+		return "", userErrorf("work %s is a job: a job is a run of its schedule and is started by it, while story_start and task_start start stories and tasks only", id)
+	}
+
 	var note string
 	if worktree != "" {
-		var err error
-		if note, err = e.assignWorktree(ctx, id, worktree); err != nil {
+		if note, err = e.assignWorktree(ctx, w, worktree); err != nil {
 			return "", err
 		}
 	}
 
-	w, err := e.workOps.StartWork(ctx, id, watcher)
+	w, err = e.workOps.StartWork(ctx, id, watcher)
 	if err != nil {
 		return "", err
 	}
@@ -582,14 +607,8 @@ func (e *Executor) startWork(ctx context.Context, id, worktree string, watcher *
 // store stays the only place that decides whether a work may still change
 // worktree; a work left pinned by a failed creation is still open, and the next
 // start retries the creation.
-func (e *Executor) assignWorktree(ctx context.Context, id, name string) (string, error) {
-	w, found, err := e.workStore.Get(id)
-	if err != nil {
-		return "", err
-	}
-	if !found {
-		return "", userErrorf("work %s not found", id)
-	}
+func (e *Executor) assignWorktree(ctx context.Context, w work.Work, name string) (string, error) {
+	id := w.ID
 	// A story and its tasks share one worktree: a task runs where its story
 	// runs, decided when the story started, and there is nothing left here to
 	// choose.
@@ -782,7 +801,7 @@ func (e *Executor) agentRoleList(args json.RawMessage) (string, error) {
 		}
 	}
 	if params.WorkType != "" && !params.WorkType.Valid() {
-		return "", userErrorf("work_type must be %q or %q, got %q", work.WorkTypeStory, work.WorkTypeTask, params.WorkType)
+		return "", userErrorf("work_type must be %q, %q or %q, got %q", work.WorkTypeStory, work.WorkTypeTask, work.WorkTypeJob, params.WorkType)
 	}
 
 	roles, err := e.agentRoleStore.List()

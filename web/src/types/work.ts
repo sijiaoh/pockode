@@ -2,14 +2,15 @@ import type { Activity } from "../lib/activity";
 import type { PendingQuestion, TokenUsage } from "./message";
 
 /**
- * Which kind of work an item is. The server derives it from `story_id` — an
- * item that names a story is that story's task, one that names none is a story
- * — and sends it on every work item it reports: rows, the detail, and the
+ * Which kind of work an item is. The server derives it from `schedule_id` and
+ * `story_id` — an item that names a schedule is a run of it (a job), one that
+ * names a story is that story's task, one that names neither is a story — and
+ * sends it on every work item it reports: rows, the detail, and the
  * replies to `work.create` / `work.start`. It is never sent back: `work.create`
  * takes a `story_id` and nothing else, so a request cannot state a kind that
  * contradicts the story it picked.
  */
-export type WorkType = "story" | "task";
+export type WorkType = "story" | "task" | "job";
 
 /**
  * What the engine is allowed to do with a work item, and nothing else:

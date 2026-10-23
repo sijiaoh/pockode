@@ -196,6 +196,7 @@ function WorkDetailPage({
 const typeLabels: Record<WorkType, string> = {
 	story: "Story",
 	task: "Task",
+	job: "Job",
 };
 
 function DetailHeader({
@@ -279,7 +280,7 @@ function ActionBar({
 	const ActionIcon = ACTION_ICON[action];
 	const isStop = action === "stop";
 
-	const typeLabel = work.type === "story" ? "Story" : "Task";
+	const typeLabel = typeLabels[work.type];
 	const childCount = tasks.length;
 	// Deleting an active work is the one destructive action here that also kills
 	// a process, and the dialog has to say the whole of what it does.
@@ -626,12 +627,11 @@ function RoleSection({ work }: { work: Work }) {
 				: undefined,
 		[work.agent_role_id, roles],
 	);
-	const otherType: WorkType = work.type === "story" ? "task" : "story";
 	// Legal on the server's side — assignments are checked when made, not kept
 	// in step with later restrictions — so this is said, not flagged as wrong.
 	const mismatch =
-		role && !roleAcceptsWorkType(role, work.type)
-			? `${role.name} only takes ${WORK_TYPE_PLURAL[otherType]}. It stays on this ${work.type} until you change it.`
+		role?.work_type && !roleAcceptsWorkType(role, work.type)
+			? `${role.name} only takes ${WORK_TYPE_PLURAL[role.work_type]}. It stays on this ${work.type} until you change it.`
 			: null;
 	// An empty list says nothing: the store empties it on every reconnect, and
 	// with no roles at all "set one to take tasks" names a role that is not there.

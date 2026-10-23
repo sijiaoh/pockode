@@ -168,7 +168,7 @@ there before it can decide where the separator dots go.
 
 ### WorkDetailOverlay
 
-Shows the detail view for a single work item (story or task).
+Shows the detail view for a single work item (story, task or job).
 
 **What changes goes above what does not.** It is the list page's rule — what
 needs the user comes first ([project-ui.md §2.3](../project-ui.md#23-four-groups-and-why-four))
@@ -275,7 +275,7 @@ Activates `useAgentRoleSubscription`. At the top of the scroll region, the
 default story role `RoleSelect` with a line saying what a new story starts with
 (from `resolveInitialRole`, the rule `CreateStorySheet` preselects with). Below
 it the roles, grouped under `ListGroupHeading` by what they run — Story, Task,
-then Story & task roles. Each role is one card, a single button opening the
+Job, then roles for any work. Each role is one card, a single button opening the
 detail page: name and a `Default` tag, the first line of its prompt
 (`lib/markdownExcerpt.ts`), then its engine, step count and how many work items
 use it. Deleting has one home, at the bottom of that detail page. Reset to
@@ -290,10 +290,10 @@ id back so the page navigates to its detail.
 Shows detail for a single agent role:
 - **Name** — Inline-editable, with a read-only summary under it (`Default story
   role` tag, how many work items use it)
-- **Runs** — `Stories` / `Tasks` / `Both`, applied on tap
+- **Runs** — `Stories` / `Tasks` / `Jobs` / `Any`, applied on tap
   (`AgentRoleWorkTypeField`, drawn with `components/ui/ToggleGroup.tsx`, which
   Settings' Session section uses too); making the default story role task-only
-  asks first, because the server clears the default along with it
+  or job-only asks first, because the server clears the default along with it
 - **Engine** — Collapsed summary row opening a `ResponsivePanel` with Agent /
   Model / Effort choices (`AgentRoleEngineSelector`)
 - **Role Prompt** — Inline-editable textarea with Markdown rendering

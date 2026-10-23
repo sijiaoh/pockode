@@ -14,7 +14,7 @@ export interface AgentRole {
 	effort?: string;
 	/**
 	 * The one kind of work this role may be assigned to; absent means it takes
-	 * either. Checked only when an assignment changes, so work already on the
+	 * any. Checked only when an assignment changes, so work already on the
 	 * role keeps it after a restriction is set. Ask `roleAcceptsWorkType`
 	 * rather than reading this directly.
 	 */
@@ -27,7 +27,7 @@ export interface AgentRoleCreateParams {
 	name: string;
 	role_prompt: string;
 	steps?: string[];
-	/** Omitted makes a role that takes either kind. */
+	/** Omitted makes a role that takes any kind. */
 	work_type?: WorkType;
 }
 

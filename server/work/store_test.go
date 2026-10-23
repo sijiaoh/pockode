@@ -151,6 +151,142 @@ func TestCreate_StoryIDMustNameAStory(t *testing.T) {
 	}
 }
 
+// --- Jobs ---
+
+func createJob(t *testing.T, s *FileStore, scheduleID, title string) Work {
+	t.Helper()
+	w, err := s.CreateJob(context.Background(), Work{ScheduleID: scheduleID, Title: title, AgentRoleID: testRoleID})
+	if err != nil {
+		t.Fatalf("CreateJob %q: %v", title, err)
+	}
+	return w
+}
+
+func TestType_IsDerived(t *testing.T) {
+	for _, tc := range []struct {
+		w    Work
+		want WorkType
+	}{
+		{Work{}, WorkTypeStory},
+		{Work{StoryID: "s1"}, WorkTypeTask},
+		{Work{ScheduleID: "sch1"}, WorkTypeJob},
+	} {
+		if got := tc.w.Type(); got != tc.want {
+			t.Errorf("%+v.Type() = %q, want %q", tc.w, got, tc.want)
+		}
+	}
+}
+
+// A run is a fresh open work that keeps what its schedule gave it, the
+// schedule_id that makes it a job included, across a reload.
+func TestCreateJob(t *testing.T) {
+	dir := t.TempDir()
+	s, err := NewFileStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	job, err := s.CreateJob(context.Background(), Work{
+		ScheduleID:  "sch1",
+		AgentRoleID: testRoleID,
+		Title:       "Nightly",
+		Body:        "Check the dependencies",
+		Worktree:    "feature",
+	})
+	if err != nil {
+		t.Fatalf("CreateJob: %v", err)
+	}
+	if job.Type() != WorkTypeJob || job.Status != StatusOpen || job.ID == "" || job.SessionID != "" {
+		t.Errorf("job = type %q status %q id %q session %q, want a fresh open job", job.Type(), job.Status, job.ID, job.SessionID)
+	}
+
+	reloaded, err := NewFileStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := getWork(t, reloaded, job.ID)
+	if got.ScheduleID != "sch1" || got.Type() != WorkTypeJob || got.Body != "Check the dependencies" || got.Worktree != "feature" {
+		t.Errorf("reloaded job = %+v, want the run as created", got)
+	}
+}
+
+func TestCreateJob_Refusals(t *testing.T) {
+	s := newTestStore(t)
+	story := createStory(t, s, "Story")
+
+	for _, tc := range []struct {
+		name string
+		w    Work
+	}{
+		{"no schedule", Work{Title: "Run", AgentRoleID: testRoleID}},
+		{"names a story", Work{ScheduleID: "sch1", StoryID: story.ID, Title: "Run", AgentRoleID: testRoleID}},
+		{"no title", Work{ScheduleID: "sch1", AgentRoleID: testRoleID}},
+		{"no role", Work{ScheduleID: "sch1", Title: "Run"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := s.CreateJob(context.Background(), tc.w); !errors.Is(err, ErrInvalidWork) {
+				t.Errorf("err = %v, want ErrInvalidWork", err)
+			}
+		})
+	}
+	if runs, _ := s.ListBySchedule("sch1"); len(runs) != 0 {
+		t.Errorf("runs = %+v, want none created", runs)
+	}
+}
+
+// Only a schedule makes a job: Create — what RPC and MCP reach — refuses one
+// rather than quietly making a story out of it.
+func TestCreate_RefusesAJob(t *testing.T) {
+	s := newTestStore(t)
+
+	if _, err := s.Create(context.Background(), Work{ScheduleID: "sch1", Title: "Run", AgentRoleID: testRoleID}); !errors.Is(err, ErrInvalidWork) {
+		t.Fatalf("err = %v, want ErrInvalidWork", err)
+	}
+	if works, _ := s.List(); len(works) != 0 {
+		t.Errorf("works = %+v, want none created", works)
+	}
+}
+
+func TestCreate_AJobCannotHoldTasks(t *testing.T) {
+	s := newTestStore(t)
+	job := createJob(t, s, "sch1", "Run")
+
+	if _, err := s.Create(context.Background(), Work{StoryID: job.ID, Title: "Task", AgentRoleID: testRoleID}); !errors.Is(err, ErrInvalidWork) {
+		t.Fatalf("err = %v, want ErrInvalidWork", err)
+	}
+}
+
+// Each run is its own work, listed under its schedule only, oldest first.
+func TestListBySchedule(t *testing.T) {
+	s := newTestStore(t)
+	first := createJob(t, s, "sch1", "Run 1")
+	createJob(t, s, "sch2", "Other schedule")
+	createStory(t, s, "Story")
+	second := createJob(t, s, "sch1", "Run 2")
+
+	runs, err := s.ListBySchedule("sch1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(runs) != 2 || runs[0].ID != first.ID || runs[1].ID != second.ID {
+		t.Errorf("runs = %+v, want Run 1 then Run 2", runs)
+	}
+
+	// "" is every non-job's ScheduleID, not a schedule of its own.
+	if runs, _ := s.ListBySchedule(""); len(runs) != 0 {
+		t.Errorf("runs of \"\" = %+v, want none", runs)
+	}
+}
+
+func TestClaim_RefusesToWatchAJob(t *testing.T) {
+	s := newTestStore(t)
+	job := createJob(t, s, "sch1", "Run")
+
+	if _, _, err := s.Claim(context.Background(), job.ID, &Watcher{SessionID: "sess-watcher"}); !errors.Is(err, ErrInvalidWork) {
+		t.Fatalf("err = %v, want ErrInvalidWork", err)
+	}
+}
+
 func TestCreate_StoryIDMustExist(t *testing.T) {
 	s := newTestStore(t)
 

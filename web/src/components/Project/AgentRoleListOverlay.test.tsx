@@ -145,7 +145,7 @@ describe("AgentRoleListOverlay", () => {
 			}
 		});
 
-		it("puts roles that run either kind last", () => {
+		it("puts roles that run any kind last", () => {
 			setRoles([
 				createRole({ id: "r1", name: "Reviewer" }),
 				createRole({ id: "e1", name: "Engineer", work_type: "task" }),
@@ -155,7 +155,7 @@ describe("AgentRoleListOverlay", () => {
 			const headings = screen
 				.getAllByRole("heading", { level: 2 })
 				.map((h) => h.textContent);
-			expect(headings.slice(1)).toEqual(["Task roles1", "Story & task roles1"]);
+			expect(headings.slice(1)).toEqual(["Task roles1", "Roles for any work1"]);
 		});
 	});
 
@@ -339,7 +339,7 @@ describe("AgentRoleListOverlay", () => {
 
 			expect(
 				screen.getByText(
-					"No role runs stories. Set a role to run Stories (or Both), or add one.",
+					"No role runs stories. Set a role to run Stories (or Any), or add one.",
 				),
 			).toBeInTheDocument();
 			expect(field()).toBeDisabled();

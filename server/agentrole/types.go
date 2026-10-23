@@ -32,7 +32,7 @@ type AgentRole struct {
 	Effort string `json:"effort,omitempty"`
 	// WorkType is the kind of work item this role may be assigned to. Empty —
 	// what every role created before this field existed carries — means the role
-	// takes either kind. Judge it with AcceptsWorkType, never by comparing it.
+	// takes any kind. Judge it with AcceptsWorkType, never by comparing it.
 	WorkType  work.WorkType `json:"work_type,omitempty"`
 	CreatedAt time.Time     `json:"created_at"`
 	UpdatedAt time.Time     `json:"updated_at"`
@@ -62,7 +62,7 @@ func ValidateWorkType(t work.WorkType) error {
 	if t == "" || t.Valid() {
 		return nil
 	}
-	return fmt.Errorf("%w: work_type must be %q, %q or empty, got %q", ErrInvalidRole, work.WorkTypeStory, work.WorkTypeTask, t)
+	return fmt.Errorf("%w: work_type must be %q, %q, %q or empty, got %q", ErrInvalidRole, work.WorkTypeStory, work.WorkTypeTask, work.WorkTypeJob, t)
 }
 
 type Operation string

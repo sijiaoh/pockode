@@ -358,13 +358,13 @@ func (o *Operations) waitRefusal(id string) error {
 		return err
 	}
 
-	// story_wait takes an id, and an id can name a task. A task has no tasks
-	// of its own, so every way out below would send it to create a third level
+	// story_wait takes an id, and an id can name a task or a job. Neither has
+	// tasks of its own, so every way out below would send it to create tasks
 	// that ValidateStory refuses; it gets the two ways out that are real.
 	for _, w := range works {
-		if w.ID == id && w.Type() == WorkTypeTask {
-			return fmt.Errorf("%w: %s is a task, and only a story has tasks to wait for — so nothing would ever end this wait. Call question_post if you need something from the user, or step_done if there is nothing left to do. The wait was not set",
-				ErrInvalidWork, id)
+		if w.ID == id && w.Type() != WorkTypeStory {
+			return fmt.Errorf("%w: %s is a %s, and only a story has tasks to wait for — so nothing would ever end this wait. Call question_post if you need something from the user, or step_done if there is nothing left to do. The wait was not set",
+				ErrInvalidWork, id, w.Type())
 		}
 	}
 

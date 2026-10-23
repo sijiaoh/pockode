@@ -144,6 +144,13 @@ var defaultRoles = []struct {
 		Steps:    []string{"审查，小问题可以直接修复", "审查并且修复到没有问题", "投稿"},
 		WorkType: work.WorkTypeTask,
 	},
+	{
+		// Stepless on purpose: a job's prompt is the whole of its work, so the
+		// one step_done that finishes it is the one that closes the run.
+		Name:       "执行者",
+		RolePrompt: "世界级的工程师\n亲自完成要求的工作",
+		WorkType:   work.WorkTypeJob,
+	},
 }
 
 func (s *FileStore) seedDefaults() (string, error) {

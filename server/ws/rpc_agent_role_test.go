@@ -190,7 +190,8 @@ func TestAgentRoleDelete_RefusalIsPrintedVerbatim(t *testing.T) {
 }
 
 // The default story role is accepted-and-cleared, never a reason to refuse: a
-// role that stops being able to run stories — narrowed to tasks, or deleted —
+// role that stops being able to run stories — narrowed to tasks or jobs, or
+// deleted —
 // takes the default with it, and any other change leaves the default alone.
 func TestAgentRole_LosingStoriesClearsTheDefault(t *testing.T) {
 	for _, tc := range []struct {
@@ -202,6 +203,13 @@ func TestAgentRole_LosingStoriesClearsTheDefault(t *testing.T) {
 			name: "narrowed to tasks",
 			call: func(env *testEnv, id string) rpcResponse {
 				return env.call("agent_role.update", map[string]any{"id": id, "work_type": "task"})
+			},
+			wantClear: true,
+		},
+		{
+			name: "narrowed to jobs",
+			call: func(env *testEnv, id string) rpcResponse {
+				return env.call("agent_role.update", map[string]any{"id": id, "work_type": "job"})
 			},
 			wantClear: true,
 		},

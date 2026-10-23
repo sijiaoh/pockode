@@ -23,6 +23,7 @@ func TestCheckAssignment(t *testing.T) {
 	planner := createTypedRole(t, roles, "Planner", work.WorkTypeStory)
 	engineer := createTypedRole(t, roles, "Engineer", work.WorkTypeTask)
 	anyone := createTypedRole(t, roles, "Anyone", "")
+	runner := createTypedRole(t, roles, "Runner", work.WorkTypeJob)
 
 	for _, tc := range []struct {
 		name   string
@@ -35,6 +36,10 @@ func TestCheckAssignment(t *testing.T) {
 		{"unrestricted role, task", anyone.ID, work.WorkTypeTask, true},
 		{"story role on a task", planner.ID, work.WorkTypeTask, false},
 		{"task role on a story", engineer.ID, work.WorkTypeStory, false},
+		{"job role on a job", runner.ID, work.WorkTypeJob, true},
+		{"unrestricted role, job", anyone.ID, work.WorkTypeJob, true},
+		{"task role on a job", engineer.ID, work.WorkTypeJob, false},
+		{"job role on a task", runner.ID, work.WorkTypeTask, false},
 		{"unknown role", "nope", work.WorkTypeStory, false},
 		{"no role", "", work.WorkTypeStory, false},
 	} {
