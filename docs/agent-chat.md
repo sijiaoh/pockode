@@ -359,10 +359,11 @@ and the name only travels beside the id
 
 A folder cannot be attached. Dropped (or, where the browser exposes one,
 pasted), it is split out by the same `readDropped` the Files tab uses
-([why](file.md#dropping-files-onto-the-tree)): the files beside it are attached
-and the folder is reported in an error bar above the composer, with the Files
-tab's own wording (`FOLDER_DROP_REFUSED` — which says "Drop" even after a paste;
-it is rare enough there not to earn a second string). Unlike the session
+([why](file.md#dropping-a-folder)): the files beside it are attached
+and the folder is reported in an error bar above the composer, in words of the
+chat's own (`FOLDER_ATTACH_REFUSED` in `ChatPanel.tsx`), which point to the
+Files tab — the place a folder *can* go, since it uploads folders
+([Uploading a folder](file.md#dropping-a-folder)). Unlike the session
 settings' and commands' bars, this one **stays up over a page**: it shows
 whenever the composer does, since a drop is taken over a file or a diff and a
 refusal there must still be heard. It sits closest to the composer, below the

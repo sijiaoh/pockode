@@ -28,7 +28,7 @@ served through it; it is addressed by id in the session's own attachment store
 |-------|------|------|
 | RPC handlers | `server/ws/rpc_file.go` | `file.get`, `file.write`, `file.create`, `file.delete`, `file.rename`, `file.search` |
 | File operations | `server/contents/contents.go` | Path validation, read, write (upsert), create, delete, rename |
-| HTTP transfer | `server/filetransfer/filetransfer.go` | Upload / download of whole files (see [Transfer](#transfer)) |
+| HTTP transfer | `server/filetransfer/filetransfer.go`, `server/filetransfer/folder.go` | Upload / download of whole files, upload of a folder (see [Transfer](#transfer)) |
 | Search | `server/search/` | Candidate listing (`list.go`), content grep (`scan.go`) |
 | Frontend components | `web/src/components/Files/` | FileTree, FileEditor, FileView, FileTreeNode, FileSearchBar, FileSearchResults, FileEntryMenu, EntryNameDialog, UploadQueue, UploadConflictDialog |
 | Entry-action helpers | `web/src/hooks/useTakenNames.ts`, `web/src/lib/fileCache.ts` | Which names a directory has spoken for; the cache work a rename or a delete implies |
@@ -38,6 +38,7 @@ served through it; it is addressed by id in the session's own attachment store
 | Media playback | `web/src/components/Files/MediaPreview.tsx`, `web/src/components/Media/useMediaPlayback.ts`, `web/src/hooks/useRawMediaSource.ts`, `web/src/components/Media/exclusivePlayback.ts` | Inline audio and video streamed from a raw capability, its recovery, and one sound at a time (see [Playing audio and video](#playing-audio-and-video)) |
 | Download action | `web/src/hooks/useFileDownload.ts`, `web/src/components/Files/FileDownloadControls.tsx`, `saveRawFile` in `web/src/hooks/useRawMediaSource.ts` | The viewer's Download — check, hand-over, cancel, error — shared by `FileView` and `CommitFileView`; `saveRawFile` is every streamed Save that gets its own capability |
 | Upload queue state | `web/src/lib/uploadStore.ts` | Queue, concurrency, retry, worktree scope |
+| Reading a folder | `web/src/lib/folderRead.ts` | Walking a dropped folder, a picked folder's paths, the client's file cap (see [Uploading a folder](#dropping-a-folder)) |
 | Drag and drop | `web/src/hooks/useFileDragZone.ts`, `web/src/components/Files/useFileDrop.ts`, `web/src/hooks/useFileDropGuard.ts` | What every drop zone shares (file detection, the depth count, folder splitting, claiming the drag); the tree's drop target resolution on top of it; the window-level drop backstop |
 
 ## Operations
@@ -311,9 +312,10 @@ empty = the main worktree), matching the worktree a WebSocket connection binds a
 Errors are JSON — `{ "error": "<message>", "code": "<code>" }` — with the code
 naming the cause: `invalid_path`, `invalid_request`, `not_found`, `not_a_file`,
 `not_a_directory`, `worktree_not_found`, `session_not_found`, `conflict`,
-`too_large`, `internal`, and for `/api/raw` alone `capability_not_found` and
+`too_large`, `too_many_entries`, `internal`, and for `/api/raw` alone `capability_not_found` and
 `outside_scope`.
-Two more fields appear where they mean something: `limit` on `too_large`, and
+Two more fields appear where they mean something: `limit` on `too_large` and
+`too_many_entries`, and
 `written` on a partly-completed upload.
 
 What follows here is the contract and the two size limits that govern it. What
@@ -402,8 +404,8 @@ number of files can travel in one request (the field name is not significant,
 and parts without a filename are ignored). Parts are streamed to disk one at a
 time — nothing is spooled first — and file names never carry directory
 information (RFC 7578 §4.2 requires it be dropped, and Go's parser does), so an
-upload always lands directly in `path`. A client uploading a folder sends one
-request per directory.
+upload always lands directly in `path`. A folder goes to
+[its own endpoint](#uploading-a-folder) instead.
 
 The destination directory must already exist: creating it implicitly would turn
 a typo into a stray directory in the user's project.
@@ -418,7 +420,7 @@ carries `written`, the same shape as `files`, listing what was already stored.
 | Status | Code | When |
 |--------|------|------|
 | `400` | `invalid_path` | `path` escapes the work directory, or a file name that is not one (`.`, `..`, `/`) |
-| `400` | `invalid_request` | Not `multipart/form-data`, malformed body, a body cut short mid-file, an unreadable `overwrite`, or no file parts |
+| `400` | `invalid_request` | Not `multipart/form-data`, malformed body, a body cut short — mid-file, or after a whole file but before the closing boundary — an unreadable `overwrite`, or no file parts |
 | `400` | `not_a_directory` | `path` names an existing file |
 | `404` | `not_found` | Destination directory does not exist |
 | `404` | `worktree_not_found` | Unknown `worktree` |
@@ -428,7 +430,13 @@ carries `written`, the same shape as `files`, listing what was already stored.
 
 A connection that dies mid-upload is reported as `invalid_request`, not
 `internal`: nothing is wrong on this side, and saying otherwise sends the client
-looking for a problem it cannot find.
+looking for a problem it cannot find. A body that stops just after a part's
+boundary is cut short too, though Go's multipart parser reads it as a body that
+ended: the server watches for the closing delimiter (`--<boundary>--` at the
+start of a line, with the line ending the body's first boundary line used, as
+the parser reads it) and refuses a body that never carried it, since otherwise
+the files after the cut would simply be missing from a `200`. All three multipart endpoints share that
+check (`filetransfer/multipart.go`).
 
 The size limit covers the content of every file in one request together, not
 each file, and is refused as soon as the budget is exceeded rather than after
@@ -470,6 +478,158 @@ upload at 7 MiB, and crossing that cap dropped the tunnel rather than returning
 a `413`. `max_upload_size` still travels on the `auth` reply — a client should
 not carry its own copy of a server-side number — but it is now the same value on
 every route.
+
+**`POST /api/files/upload-folder`** — store a whole tree of files as a
+folder: a new one, or with `merge`, one that already exists. <a id="uploading-a-folder"></a>
+
+| Param | Required | Meaning |
+|-------|:--------:|---------|
+| `path` | | Destination **directory**, relative to the work directory; empty means its root. Must exist, as for `/api/files/upload` |
+| `name` | ✓ | Name of the folder in it — a name, not a path: the rule `file.rename`'s `new_name` follows |
+| `merge` | | `true` writes into an existing folder of that name (see [Merging](#merging-a-folder)); read like `/api/files/upload`'s `overwrite`, so an unreadable value is refused |
+| `worktree` | | Worktree name |
+
+There is no `overwrite`: sending one at all is refused, since replacing files is
+what `merge` does.
+
+Body is `multipart/form-data`, streamed part by part as `/api/files/upload`'s is.
+Two kinds of part count, and any other is refused rather than skipped — a file
+part whose `Content-Disposition` did not parse looks just like one, and
+skipping it would answer `200` for a folder missing that file:
+
+- **A file part** — any part with a filename. The filename is the file's path
+  **relative to the folder**, `/`-separated: `src/lib/a.ts`, not
+  `myproject/src/lib/a.ts`. Here, unlike `/api/files/upload`, the directory part
+  of the filename is the point, so the server reads it from the
+  `Content-Disposition` header itself rather than through Go's `FileName()`,
+  which strips it. `FormData.append(field, file, relativePath)` sends exactly
+  this; the field name is not significant.
+- **A directory part** — a field named `dir` (no filename) whose value is a
+  path relative to the folder. It creates that directory, so an empty
+  directory survives the upload. A directory that holds files needs no part
+  of its own: a file's parents are created on the way, and declaring one that
+  already exists, before or after its files, is harmless.
+
+Every component of every path is held to the same rule as `name`: no `""`
+(so no leading, trailing or doubled `/`), no `.`, no `..`, no separator of the
+platform's (`\` on Windows), no reserved device name on Windows (`CON`,
+`NUL.txt`), no NUL, no more than 255
+bytes, and no trailing `.` or space; a whole path is at most 4096 bytes. The
+trailing `.` and space are refused on every platform, because Windows drops
+them — `a.` would be stored as `a`, `...` would name the folder itself — and a
+folder should upload the same wherever the server runs. Nothing is cleaned or
+rewritten — `a/../b` is refused, not read as `b` — so the paths the client sees
+in the response are exactly the ones it sent, under the folder's path.
+
+Success is `200` with
+`{ "folder": { "path", "name" }, "files": [{ "path", "name", "size" }] }`, paths
+relative to the work directory as for `/api/files/upload`. A request with no
+parts at all creates an empty folder.
+
+**Without `merge`, all or nothing.** The folder is created first, with `mkdir`,
+and is the request's own: the `mkdir` is what decides the name is free, exactly as `O_EXCL`
+decides it for a file, so an agent creating the same name a moment earlier
+wins and the upload is refused rather than mixed into it. Every file beneath it
+is therefore new, and if anything fails — a bad path, the size limit, a body
+cut short, the disk — the folder is removed whole and the error carries no
+`written`. If the folder cannot be removed, the message says so and `written`
+lists what the request had stored, some or all of which is still on disk, so
+a partial result is never silent.
+
+The entry cap exists because the size limit cannot bound what costs no
+content — an empty file, a directory — while every entry costs the request
+memory to keep track of and a line in the response. It sits far above a folder
+anyone drops on purpose, as a backstop: a client is expected to refuse a large
+folder itself, before sending, in words of its own.
+
+| Status | Code | When |
+|--------|------|------|
+| `400` | `invalid_path` | `path` escapes the work directory, lexically or through a symlink; `name` is not a name; an entry path breaks the rule above; an entry named twice, or as both a file and a folder (`a` as a file and `a/b.txt`); two entries — files or folders — that this file system holds to be one name (`README.md` and `readme.md`, `Src/` and `src/` on macOS or Windows); a name the file system itself rejects (`<>:"\|?*` on Windows) |
+| `400` | `invalid_request` | Not `multipart/form-data`, malformed body, a part that is neither a file nor a `dir` field or whose `Content-Disposition` does not parse, a body cut short (mid-file or before the closing boundary), `overwrite` present, or an unreadable `merge` |
+| `400` | `not_a_directory` | `path` names an existing file |
+| `404` | `not_found` | Destination directory does not exist |
+| `404` | `worktree_not_found` | Unknown `worktree` |
+| `409` | `conflict` | Without `merge`: `name` is already taken in the destination — by a folder, a file, or a symlink, dangling or not. With it: `name` is a file or a symlink, or an entry inside is in the way (below). Either way: the name was swapped while the upload opened it |
+| `413` | `too_large` | Over `filetransfer.MaxUploadSize`, **1 GiB**, counted over every file of the folder together; `limit` as for `/api/files/upload` |
+| `413` | `too_many_entries` | Over `filetransfer.MaxFolderEntries`, **10,000** files and directories in one request; `limit` is that count |
+| `500` | `internal` | Creating, writing or removing on disk failed |
+
+Every `409` names the path in the way, relative to the work directory, and
+reads as a sentence the client can show as it is, as `/api/files/upload`'s do;
+where the cause is the same (`… is a directory`, `… exists and is not a regular
+file …`) so are the words.
+
+**One request per folder**, not per file. A folder is one thing the user asked
+for, and only a single request can make it appear whole or not at all; a folder
+of a few hundred small files sent one request each would also spend most of its
+time on round trips. The cost is the one `/api/files/upload` names for several
+files in a request: progress belongs to the request, not to a file in it.
+
+**Per-file parts, not an archive.** A client-built zip would have to be built
+in the browser — which has no zip encoder of its own, so a library, and on a
+phone the CPU and memory to hold it — and could not be extracted on arrival:
+a zip's index is at its end, so the server would have to spool the whole body
+to disk first, then extract it, and then answer for every way an archive can
+lie (entry paths, symlink entries, sizes that inflate a thousandfold). Multipart
+parts arrive as files already, stream straight to their place, and leave
+nothing but the paths to validate. The size limit keeps its meaning — bytes of
+file content — instead of becoming a limit on compressed bytes.
+
+**Conflicts are decided for the folder as a whole.** A taken `name` is `409`
+and nothing happens, whatever the existing entry is: no folder is ever
+replaced — that takes its whole subtree — and none is merged into unless the
+client asks. The `409` names the two ways on: choose another name
+(`assets (1)`, chosen in the client as for a file), or send again with
+`merge=true`.
+
+<a id="merging-a-folder"></a>**Merging** is the folder's counterpart of a
+single file's `overwrite`, and follows its rules entry by entry:
+
+- `name` must be a folder. A file or a symlink there is `409` — a merge
+  through a link would write wherever it points. A `name` that does not exist
+  yet is created, and is then the request's own exactly as without `merge`:
+  removed whole if the request fails.
+- A file whose path is a **regular file** is replaced in place, as `overwrite`
+  replaces one (same inode, mode and hard links). Anything else at that path —
+  a directory, a symlink, a fifo — is `409` rather than written through
+  (decided by an `Lstat` before the open; a link swapped in between can lead
+  only within the folder, [below](#uploading-a-folder-symlinks)).
+- A directory the upload needs that exists as something other than a
+  directory — a file, or a symlink, even one to a directory inside the same
+  folder, which would store the file somewhere other than the path it is
+  reported under — is `409` naming it. Nothing already there is ever removed.
+- **Not a transaction.** A replaced file cannot be restored, so a failure stops
+  where it is and the error carries `written`, the files this request stored
+  before it — the same shape and meaning as on `/api/files/upload`. A file the
+  failure left half-written is removed if the request created it and kept if it
+  replaced one, also as there. Directories created on the way stay.
+- A retry with `merge=true` can always continue into the folder a failed upload
+  left behind: the upload's own earlier files are simply replaced again.
+- Two entries of one merge that the file system holds to be one name are
+  caught when they differ in letter case, as without `merge`; those it folds by
+  other rules — Unicode normalization on macOS (`café` composed and
+  decomposed), a Windows 8.3 short name — are not, and the later one replaces
+  the earlier. Without `merge` every such pair is caught, since in a new folder
+  any name already there is one the request made.
+
+`overwrite` is refused rather than ignored, because a client that sends it
+expects files replaced, which only a merge does.
+
+<a id="uploading-a-folder-symlinks"></a>**Symlinks.** The destination is opened
+with every link followed and must then lie inside the work directory — a link
+that stays in the project (a pnpm workspace's `node_modules/@pockode/shared`, a
+junction on Windows) leads where it points, one out of it is `invalid_path`.
+Where it leads is read off the opened directory, not the path, by the check
+`/api/raw` makes (`resolvedName`): `filepath.EvalSymlinks` does not resolve a
+Windows junction, so a path check would let one pointing out of the project
+through. From there every write goes through an `os.Root`: the folder's name is
+created in the destination, which refuses a link on the name, and each file is
+written through a root opened on the folder, so nothing beneath it can lead out
+even if a link were planted inside it while the upload ran — such a link,
+swapped in after a merge checked the path, is followed, but only to somewhere
+inside the folder. The payload itself carries no links — a multipart part is
+bytes — so a link on the user's device arrives as whatever the browser read
+through it.
 
 **`POST /api/chat/attachments`** — store files a chat message is about to carry.
 
@@ -1438,7 +1598,9 @@ shared with uploads) — the same bar a creation's other failures leave for.
 before.** There are two ways to ask, and each carries its own answer to "into
 which folder":
 
-- **A folder's `…` → Upload files** (the project root's `…` for the top level).
+- **A folder's `…` → Upload files** (the project root's `…` for the top level),
+  or **Upload folder** beside it where a folder picker is offered
+  ([below](#dropping-a-folder)).
   The destination is the entry the menu was opened from, handed straight to
   `uploadInto`; the picker it opens is the tab's own hidden input, for the
   reasons in [Entry actions](#entry-actions). This is the only entry point a
@@ -1522,7 +1684,7 @@ tree**; the scroller is the element `PullToRefreshify` renders, not the window,
 and since it forwards no ref the tab reaches it as the single child of the
 wrapper around `PullToRefresh`.
 
-**Two states refuse a drop outright**, saying so on the bar rather than aiming
+**Three states refuse a drop outright**, saying so on the bar rather than aiming
 it somewhere:
 
 - **Search results.** A flat list of matches from everywhere has no answer to
@@ -1531,6 +1693,8 @@ it somewhere:
   travel the React tree, so its overlay stops clicks but not drops. (The chat
   meets the same trap from the other side and answers it with `ownDomOnly`,
   ignoring every drag whose DOM target is outside its element.)
+- **A folder still being read** — the same one-slot rule as the dialog
+  ([Uploading a folder](#dropping-a-folder)).
 
 **An unanswered dialog turns away every batch, whatever it arrived through.** A
 drag has already been turned away on the bar; every other way in is refused
@@ -1550,15 +1714,10 @@ The banner says the picked files were not uploaded, since they are gone from the
 picker and would otherwise be looked for in a queue they never reached, and it
 clears itself the moment the answer arrives — it was an instruction, and one
 still standing afterwards would read as an answer that did not register. Only
-that one clears: a folder turned away on the way in is still true after the
-dialog is closed.
+that one clears: anything else the banner says — a create or a rename that
+failed, say — is still true after the dialog is closed.
 
-**A dropped folder is refused, not flattened.** This version uploads files, and
-a folder also appears in `dataTransfer.files` as a zero-byte entry that would be
-stored as an empty file of that name; `webkitGetAsEntry` on the items is what
-tells the two apart (`readDropped`, shared with the chat, as is the wording,
-`FOLDER_DROP_REFUSED`). Files dropped alongside it are still taken, and the
-banner says what was left behind.
+A dropped folder is uploaded with its structure, below.
 
 Visually the panel takes a **ring**, not a border — a border takes a pixel from
 the layout and would nudge the whole tree sideways the moment a drag arrives —
@@ -1567,8 +1726,9 @@ destination takes only its left bar. The difference in kind is the point: the
 fill is answering a cursor that is moving right now, the bar is a state that
 holds until it is changed.
 
-**One request per file** (`lib/fileUpload.ts`), though the endpoint accepts any
-number of parts. Progress is reported for a request as a whole and could not be
+**One request per file** (`lib/fileUpload.ts`) — a folder is one request of
+its own, [below](#dropping-a-folder) — though the endpoint accepts any number of
+parts. Progress is reported for a request as a whole and could not be
 attributed to a file inside it; `overwrite` applies to a whole request, so a
 mixed decision has to be split anyway; and a failure then belongs to the one row
 it is shown against. It also makes the non-transactional upload moot in
@@ -1668,6 +1828,120 @@ commit still closes it: the queue is invisible from those tabs anyway — which 
 the whole reason for the badge — so keeping the drawer open there would only
 read as a tap that did nothing.
 
+### Uploading a folder <a id="dropping-a-folder"></a>
+
+A folder is **one thing to the user**: one queue row, one conflict decision, one
+outcome — and one request, to [`/api/files/upload-folder`](#uploading-a-folder),
+so a new folder appears whole or not at all. There are two ways in:
+
+- **Dropping it on the tree**, alone or among files and other folders. A folder
+  appears in `dataTransfer.files` as a zero-byte entry that would be stored as an
+  empty file of its name; `webkitGetAsEntry` on the items is what tells the two
+  apart (`readDropped`, shared with the chat, which still refuses folders in its
+  own words — [agent-chat.md](agent-chat.md#folders)). The entry has to be taken
+  while the drop event is dispatched; reading through it can happen later.
+- **`…` → Upload folder**, a second hidden input of the tab's with
+  `webkitdirectory`, opened the same synchronous way as the file picker. Each
+  file's `webkitRelativePath` is its path, the first segment the folder's name
+  (`folderFromPicked`). The row is offered only where the input supports the
+  attribute **and** the pointer is fine: mobile browsers carry the property while
+  their directory picking is missing or opens a plain file picker, and a row that
+  opens the wrong picker is worse than none. On a touch screen there is no folder
+  upload at all — there is no drag there either. Should a picker hand over files
+  with no relative path after all, they are uploaded as files.
+
+**Reading comes first, and is on screen.** Walking a large folder takes seconds,
+so each dropped folder gets its row at once — `Reading… 325 files` with a
+spinner — before its contents are known (`uploadActions.addFolders`). The walk
+calls `readEntries` until it returns an empty batch, since Chromium hands over at
+most 100 entries a call and asking once silently loses the rest. Empty
+directories are recorded and sent as `dir` parts; a picker never reports them, a
+platform limit. A reading row is unfinished like a running one: it lights the
+badge, guards a reload, and is cancelled by the header ✕ or a worktree switch
+(`Cancelled · Nothing was uploaded`). **While it reads, no other batch is taken**
+— the same one-slot rule as the conflict dialog, said on the drop bar (`Wait for
+the folder being read`) or in the banner for a picked batch, which takes the
+banner back once the reading is over. A walk is raced against its cancellation
+rather than only checked between steps, so a browser callback that never comes
+cannot hold that gate shut.
+
+**Cancelling a folder cancels its batch.** The header ✕ or a worktree switch
+while a folder is read or asked about cancels every unfinished row, and the
+loose files dropped beside it — which have no row yet to be cancelled on — are
+named in the banner as not uploaded, rather than sent beside a folder the user
+just stopped. The batch waiting for an answer is the tab's own state, and the
+sidebar remounts the tab across the `lg` breakpoint. A batch read to the end
+after that is still sent when it raises no question; one that would have asked
+— or was already asking — fails its folders as `Interrupted before it was sent`
+instead of leaving them waiting for ever on a question nobody can show. Its
+loose files go with the tab unsent, as a file batch waiting on the dialog
+always has.
+
+**Then the checks, before anything is sent.** A folder that fails one becomes a
+failed row naming why, and nothing of it is sent:
+
+- **A file or directory that cannot be read** fails the whole folder (`Couldn't
+  read assets/secret.key`), rather than sending it without that file. Dropping
+  it again is the retry.
+- **More than `MAX_FOLDER_FILES` (1,000) files** — a `node_modules` or `.git`
+  along for the ride, nearly always. The walk stops counting there rather than
+  reading the rest. Nothing is excluded automatically: dotfiles and `.git` go up
+  like anything else, since quietly leaving files out is what must not happen.
+  The server's `too_many_entries` cap is far above this and only a backstop.
+- **Size**, against `max_upload_size` as for a file — but the limit is the
+  request's, so for a folder it is the **total** (`assets is 1.8 GB (max 1 GB)`).
+
+The 50-files cap stays for loose files, and is still a banner: that batch never
+had a row.
+
+**Conflicts are the batch's one question**, asked once every folder in it has
+been read. A folder's name is checked against the destination's cached listing
+like a file's:
+
+| Incoming | In the way | What happens |
+|---|---|---|
+| folder | folder | Asked: **Keep both / Merge / Skip** |
+| folder | file | Refused before sending; the row offers **Keep both** only |
+
+A folder is never replaced: that would take the subtree already there with it.
+**Merge** sends `merge=true` — files at the same path are replaced, nothing else
+is removed ([Merging](#merging-a-folder)) — and is the dialog's middle button,
+red-outlined like Replace; with files and folders both colliding it reads
+`Replace & merge`, and the title and count switch to "items". **Keep both** picks
+`assets (1)` the way it does for a file, but without splitting off an extension:
+`v1.2` → `v1.2 (1)`. **Skip** takes the folder's row away; skipping is not a
+failure.
+
+Where the listing could not say — nothing cached, or the folder appeared since —
+the server's `409` is the backstop: without `merge` it refuses a taken name and
+writes nothing, and the row offers **Merge** and **Keep both**. A `409` *inside*
+a merge (a file where a folder is needed, or the reverse) is final: no choice on
+the row gets past it. The one exception is a merge refused because a file holds
+the folder's own name — the row then still offers **Keep both**.
+
+**The row.** A folder icon and `assets/`, a byte-weighted bar and a percentage
+while it goes. The request is one body, so progress cannot be told per file. A
+folder that stops short **always says what it left on disk**, after the reason:
+
+- Without `merge`, a failure removes the folder whole, so `Nothing was uploaded`.
+  So does a cancellation: the server takes a body cut short as a failure —
+  unless the body had been sent in full, which the server may be storing whole;
+  that row says `Files already sent may be in assets`.
+- With `merge`, the error's `written` names what was stored: `12 of 120 files
+  were uploaded`. A merge cancelled mid-request can say only `Files already sent
+  may be in assets` — the server keeps what it wrote, and no response arrives to
+  say what that was.
+- A request that ends with no `{error, code}` body at all — the connection
+  dropped, or a proxy answered — is the same unknown as a cancellation, and the
+  row says the same.
+- Whenever a row says files may be on disk, the tree refreshes the destination
+  and the folder, as it does for a finished upload.
+
+**Retry** sends the files not yet stored, and **always with `merge=true` once
+any are**: the folder is then this upload's own, and claiming it afresh would be
+refused as a conflict with itself. Stored files are never sent twice. A new name
+from Keep both starts over with nothing stored.
+
 ## Known transfer limits
 
 Two gaps rather than decisions, collected here because each of them is easy to
@@ -1679,12 +1953,13 @@ rediscover as a bug:
   unaffected where an open file can be renamed — see
   [Downloading](#downloading). Catching it would mean reading
   in validated pieces again, which is the in-memory download this replaced.
-- **An upload's destination directory still follows symlinks**, though the file
-  being written does not — see [Security](#security).
+- **A file upload's destination directory still follows symlinks**, though the
+  file being written does not — see [Security](#security). A folder upload's
+  may follow one only to somewhere inside the work directory.
 
-Not in this version, and scope rather than limits: uploading a folder, moving
-files by dragging within the tree, resuming an interrupted transfer, a queue
-that survives a reload, uploading into a worktree the user has left, and
+Not in this version, and scope rather than limits: moving files by dragging
+within the tree, resuming an interrupted transfer, a queue that survives a
+reload, uploading into a worktree the user has left, and
 downloading a folder as one archive.
 
 ## Security
@@ -1724,7 +1999,11 @@ That covers the file being written, not the directory it goes in: the upload's
 `path` is validated lexically and then used, so a symlinked directory is
 followed just as `file.write` follows one on the way to its target. It is the
 same long-standing trade-off as above, not a new one — closing it belongs with
-the decision that closes it for `file.get` and `file.write`.
+the decision that closes it for `file.get` and `file.write`. A folder upload is
+stricter, because it is new code with no existing behavior to keep: its
+destination may follow a link only to somewhere inside the work directory, a
+merge refuses a link it finds inside the folder, and nothing it writes can lead
+out of the folder ([Uploading a folder](#uploading-a-folder)).
 
 `file.create` will not create *through* a symlink on the name it is given.
 `O_EXCL` and `os.Mkdir` both fail on a name that is already taken, and a
