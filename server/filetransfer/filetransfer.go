@@ -107,6 +107,9 @@ type apiError struct {
 	code    string
 	message string
 	limit   int64
+	// folderLeft marks a failed folder upload whose folder could not be
+	// removed, so what it stored is still on disk and has to be reported.
+	folderLeft bool
 }
 
 func (e *apiError) Error() string { return e.message }
@@ -266,7 +269,7 @@ func (h *Handler) Upload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	reader, err := r.MultipartReader()
+	reader, err := newMultipartBody(r)
 	if err != nil {
 		h.writeError(w, errf(http.StatusBadRequest, CodeInvalidRequest, "expected a multipart/form-data body: %v", err), nil)
 		return
@@ -338,9 +341,9 @@ func (h *Handler) storePart(part *multipart.Part, destDir, destRel string, overw
 	fileName := part.FileName()
 
 	// Part.FileName has already dropped any directory part of the name (RFC
-	// 7578 §4.2), so an upload always lands directly in the destination — a
-	// client uploading a folder sends one request per directory. Validated
-	// anyway, since what is left can still be "..".
+	// 7578 §4.2), so an upload always lands directly in the destination; a
+	// folder keeps its paths through UploadFolder instead. Validated anyway,
+	// since what is left can still be "..".
 	if err := contents.ValidatePath(destDir, fileName); err != nil {
 		return UploadedFile{}, 0, errf(http.StatusBadRequest, CodeInvalidPath, "invalid file name: %s", fileName)
 	}
@@ -384,9 +387,7 @@ func (h *Handler) storePart(part *multipart.Part, destDir, destRel string, overw
 		return UploadedFile{}, 0, errf(http.StatusInternalServerError, CodeInternal, "failed to write %s: %v", relPath, err)
 	}
 
-	// One byte past the budget is enough to tell "exactly at the limit" from
-	// "over it" without reading the rest of what the client is still sending.
-	size, copyErr := io.Copy(f, io.LimitReader(part, remaining+1))
+	size, copyErr := h.copyPart(f, part, relPath, remaining)
 	closeErr := f.Close()
 
 	discard := func() {
@@ -400,24 +401,9 @@ func (h *Handler) storePart(part *multipart.Part, destDir, destRel string, overw
 		}
 	}
 
-	if size > remaining {
-		discard()
-		tooLarge := errf(http.StatusRequestEntityTooLarge, CodeTooLarge,
-			"upload exceeds the %s limit for a single request", formatSize(h.maxUpload))
-		tooLarge.limit = h.maxUpload
-		return UploadedFile{}, 0, tooLarge
-	}
 	if copyErr != nil {
 		discard()
-		// A body that stops mid-part is the connection's doing, not the disk's:
-		// reporting it as a server fault would send the client looking for a
-		// problem on this side, and log an error nobody can act on.
-		if errors.Is(copyErr, io.ErrUnexpectedEOF) || errors.Is(copyErr, io.EOF) {
-			return UploadedFile{}, 0, errf(http.StatusBadRequest, CodeInvalidRequest,
-				"upload of %s was cut short before the file ended", relPath)
-		}
-		h.log.Error("failed to write uploaded file", "path", relPath, "error", copyErr)
-		return UploadedFile{}, 0, errf(http.StatusInternalServerError, CodeInternal, "failed to write %s: %v", relPath, copyErr)
+		return UploadedFile{}, 0, copyErr
 	}
 	if closeErr != nil {
 		discard()
@@ -426,6 +412,33 @@ func (h *Handler) storePart(part *multipart.Part, destDir, destRel string, overw
 	}
 
 	return UploadedFile{Path: relPath, Name: filepath.Base(fullPath), Size: size}, size, nil
+}
+
+// copyPart streams one uploaded file into f, spending no more than remaining
+// bytes of the request's budget, and phrases a failure for the client. Removing
+// what was written is left to the caller, which alone knows whether it may.
+func (h *Handler) copyPart(f io.Writer, part io.Reader, relPath string, remaining int64) (int64, *apiError) {
+	// One byte past the budget is enough to tell "exactly at the limit" from
+	// "over it" without reading the rest of what the client is still sending.
+	size, err := io.Copy(f, io.LimitReader(part, remaining+1))
+	if size > remaining {
+		tooLarge := errf(http.StatusRequestEntityTooLarge, CodeTooLarge,
+			"upload exceeds the %s limit for a single request", formatSize(h.maxUpload))
+		tooLarge.limit = h.maxUpload
+		return 0, tooLarge
+	}
+	if err != nil {
+		// A body that stops mid-part is the connection's doing, not the disk's:
+		// reporting it as a server fault would send the client looking for a
+		// problem on this side, and log an error nobody can act on.
+		if errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, io.EOF) {
+			return 0, errf(http.StatusBadRequest, CodeInvalidRequest,
+				"upload of %s was cut short before the file ended", relPath)
+		}
+		h.log.Error("failed to write uploaded file", "path", relPath, "error", err)
+		return 0, errf(http.StatusInternalServerError, CodeInternal, "failed to write %s: %v", relPath, err)
+	}
+	return size, nil
 }
 
 func (h *Handler) workDir(r *http.Request) (string, *apiError) {

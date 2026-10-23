@@ -14,14 +14,14 @@ import {
  */
 const LOST_DRAG_MS = 1000;
 
-/** v1 uploads files, so a folder has to be refused rather than flattened. */
-export const FOLDER_DROP_REFUSED =
-	"Folders can't be uploaded. Drop individual files instead.";
-
 export interface DroppedFiles {
 	files: File[];
-	/** Whether the drag also held a folder, which is refused rather than sent. */
-	hadFolder: boolean;
+	/**
+	 * Folders the drag held, still to be read. They are entries rather than
+	 * files: a folder's contents can only be walked through the entry, which
+	 * stays valid after the event that handed it over.
+	 */
+	folders: FileSystemDirectoryEntry[];
 }
 
 export function carriesFiles(dataTransfer: DataTransfer | null): boolean {
@@ -32,7 +32,7 @@ export function carriesFiles(dataTransfer: DataTransfer | null): boolean {
 }
 
 /**
- * Splits what was dropped into files to send and folders to refuse.
+ * Splits what was dropped into files and folders.
  *
  * A dropped folder also turns up in `files`, as a zero-byte entry that would be
  * uploaded as an empty file of that name. `webkitGetAsEntry` is the only thing
@@ -41,7 +41,7 @@ export function carriesFiles(dataTransfer: DataTransfer | null): boolean {
  */
 export function readDropped(dataTransfer: DataTransfer): DroppedFiles {
 	const files: File[] = [];
-	let hadFolder = false;
+	const folders: FileSystemDirectoryEntry[] = [];
 	let sawItem = false;
 
 	for (const item of Array.from(dataTransfer.items)) {
@@ -52,7 +52,7 @@ export function readDropped(dataTransfer: DataTransfer): DroppedFiles {
 				? item.webkitGetAsEntry()
 				: null;
 		if (entry?.isDirectory) {
-			hadFolder = true;
+			folders.push(entry as FileSystemDirectoryEntry);
 			continue;
 		}
 		const file = item.getAsFile();
@@ -61,8 +61,8 @@ export function readDropped(dataTransfer: DataTransfer): DroppedFiles {
 
 	// Without `items` a folder cannot be recognised, so the plain list is all
 	// there is; the server refuses a zero-byte name that is a directory anyway.
-	if (!sawItem) return { files: Array.from(dataTransfer.files), hadFolder };
-	return { files, hadFolder };
+	if (!sawItem) return { files: Array.from(dataTransfer.files), folders };
+	return { files, folders };
 }
 
 /**
@@ -125,13 +125,13 @@ function namesCarriedFiles(text: string, clipboardData: DataTransfer): boolean {
  * over only Finder's icon for the file pasting the name: the icon is not it.
  *
  * Browsers rarely put a folder on the clipboard as anything `webkitGetAsEntry`
- * recognises, so a pasted folder is refused only where they do.
+ * recognises, so a pasted folder is one only where they do.
  */
 export function readPasted(clipboardData: DataTransfer): DroppedFiles | null {
 	const text = clipboardData.getData("text/plain");
 	if (text !== "" && !namesCarriedFiles(text, clipboardData)) return null;
 	const pasted = readDropped(clipboardData);
-	if (pasted.files.length === 0 && !pasted.hadFolder) return null;
+	if (pasted.files.length === 0 && pasted.folders.length === 0) return null;
 	return pasted;
 }
 

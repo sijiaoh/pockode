@@ -1,14 +1,22 @@
+import { Spinner } from "@pockode/shared";
 import {
 	AlertCircle,
 	Check,
 	ChevronDown,
 	ChevronUp,
 	File,
+	Folder,
 	Upload,
 	X,
 } from "lucide-react";
 import { useEffect, useState } from "react";
-import { type UploadItem, uploadActions } from "../../lib/uploadStore";
+import {
+	canOverwrite,
+	isUnfinished,
+	storedSummary,
+	type UploadItem,
+	uploadActions,
+} from "../../lib/uploadStore";
 
 interface Props {
 	/** Entries of the worktree on screen, in the order they were queued. */
@@ -20,17 +28,18 @@ interface Props {
 }
 
 function isRunning(item: UploadItem): boolean {
-	return item.status === "queued" || item.status === "uploading";
+	return isUnfinished(item.status);
 }
 
 /**
  * Bytes sent across the whole queue, so one big file does not read as one file.
+ * A folder weighs every file in it, and nothing until it has been read.
  *
- * Every file counts for at least a byte: a queue of empty ones weighs nothing
+ * Every entry counts for at least a byte: a queue of empty ones weighs nothing
  * and would otherwise sit at 0% from start to finish.
  */
 function overallProgress(items: UploadItem[]): number {
-	const weight = (item: UploadItem) => Math.max(item.file.size, 1);
+	const weight = (item: UploadItem) => Math.max(item.size, 1);
 	const total = items.reduce((sum, item) => sum + weight(item), 0);
 	const sent = items.reduce((sum, item) => {
 		if (item.status === "done") return sum + weight(item);
@@ -58,6 +67,8 @@ function summarize(items: UploadItem[]): string {
 
 function statusText(item: UploadItem): string {
 	switch (item.status) {
+		case "held":
+			return "—";
 		case "queued":
 			return "—";
 		case "uploading":
@@ -70,6 +81,19 @@ function statusText(item: UploadItem): string {
 	}
 }
 
+/** What a row says under its name, beside any buttons it offers. */
+function detailText(item: UploadItem): string | null {
+	if (item.status === "reading") {
+		const count = item.folder?.readCount ?? 0;
+		return `Reading… ${count} ${count === 1 ? "file" : "files"}`;
+	}
+	if (item.status === "held") return "Read · waiting for your answer";
+	if (item.status !== "failed" && item.status !== "cancelled") return null;
+	if (!item.folder) return item.error;
+	// A folder that stopped short always says what it left on disk.
+	return [item.error, storedSummary(item)].filter(Boolean).join(" · ");
+}
+
 interface RowProps {
 	item: UploadItem;
 	onReplace: (item: UploadItem) => void;
@@ -77,15 +101,17 @@ interface RowProps {
 }
 
 function UploadRow({ item, onReplace, onKeepBoth }: RowProps) {
+	const Icon = item.folder ? Folder : File;
+	const detail = detailText(item);
 	return (
 		<li className="px-3 py-1.5">
 			<div className="flex items-center gap-2 text-xs">
-				<File
+				<Icon
 					className="h-3.5 w-3.5 shrink-0 text-th-text-muted"
 					aria-hidden="true"
 				/>
 				<span className="min-w-0 flex-1 truncate text-th-text-primary">
-					{item.name}
+					{item.folder ? `${item.name}/` : item.name}
 				</span>
 				{/* A dot for the root: the destination column is only useful when the
 				    queue holds files bound for different folders. */}
@@ -108,6 +134,10 @@ function UploadRow({ item, onReplace, onKeepBoth }: RowProps) {
 						/>
 						<span className="sr-only">Failed</span>
 					</>
+				) : item.status === "reading" ? (
+					<span className="flex w-9 shrink-0 justify-end">
+						<Spinner size="h-3.5 w-3.5" srText="Reading" />
+					</span>
 				) : (
 					<span className="w-9 shrink-0 text-right text-th-text-muted">
 						{statusText(item)}
@@ -126,54 +156,57 @@ function UploadRow({ item, onReplace, onKeepBoth }: RowProps) {
 
 			{/* Cancelled rows carry a reason too: "worktree changed" is the only
 			    account the user gets of uploads a switch abandoned. */}
-			{(item.status === "failed" || item.status === "cancelled") &&
-				item.error && (
-					<div className="mt-0.5 flex flex-wrap items-center gap-2 pl-5">
-						{/* `break-words` and not `truncate`: the messages the server
+			{detail && (
+				<div className="mt-0.5 flex flex-wrap items-center gap-2 pl-5">
+					{/* `break-words` and not `truncate`: the messages the server
 						    phrases itself — a `409`, an `internal` fault — name a path
 						    from the workspace root, and a path offers no space to wrap
 						    at. Left to overflow it runs over the buttons beside it. */}
-						<span
-							className={`min-w-0 flex-1 break-words text-xs ${item.status === "failed" ? "text-th-error" : "text-th-text-muted"}`}
-						>
-							{item.error}
-						</span>
-						{/* The file's name is in every label: several failed rows would
+					<span
+						className={`min-w-0 flex-1 break-words text-xs ${item.status === "failed" ? "text-th-error" : "text-th-text-muted"}`}
+					>
+						{detail}
+					</span>
+					{/* The file's name is in every label: several failed rows would
 						    otherwise offer a screen reader a column of "Retry". */}
-						{item.status === "failed" && item.conflict === "file" && (
+					{item.status === "failed" && canOverwrite(item) && (
+						<button
+							type="button"
+							onClick={() => onReplace(item)}
+							aria-label={
+								item.folder
+									? `Merge into the existing ${item.name}`
+									: `Replace ${item.name}`
+							}
+							className="inline-flex min-h-9 shrink-0 items-center justify-center rounded px-2 text-xs text-th-error pointer-coarse:min-h-11 pointer-coarse:min-w-11 hover:bg-th-error/10"
+						>
+							{item.folder ? "Merge" : "Replace"}
+						</button>
+					)}
+					{item.status === "failed" && item.conflict !== "none" && (
+						<button
+							type="button"
+							onClick={() => onKeepBoth(item)}
+							aria-label={`Keep both copies of ${item.name}`}
+							className="inline-flex min-h-9 shrink-0 items-center justify-center rounded px-2 text-xs text-th-accent pointer-coarse:min-h-11 pointer-coarse:min-w-11 hover:text-th-accent-hover"
+						>
+							Keep both
+						</button>
+					)}
+					{item.status === "failed" &&
+						item.conflict === "none" &&
+						item.canRetry && (
 							<button
 								type="button"
-								onClick={() => onReplace(item)}
-								aria-label={`Replace ${item.name}`}
-								className="inline-flex min-h-9 shrink-0 items-center justify-center rounded px-2 text-xs text-th-error pointer-coarse:min-h-11 pointer-coarse:min-w-11 hover:bg-th-error/10"
-							>
-								Replace
-							</button>
-						)}
-						{item.status === "failed" && item.conflict !== "none" && (
-							<button
-								type="button"
-								onClick={() => onKeepBoth(item)}
-								aria-label={`Keep both copies of ${item.name}`}
+								onClick={() => uploadActions.retry(item.id)}
+								aria-label={`Retry ${item.name}`}
 								className="inline-flex min-h-9 shrink-0 items-center justify-center rounded px-2 text-xs text-th-accent pointer-coarse:min-h-11 pointer-coarse:min-w-11 hover:text-th-accent-hover"
 							>
-								Keep both
+								Retry
 							</button>
 						)}
-						{item.status === "failed" &&
-							item.conflict === "none" &&
-							item.canRetry && (
-								<button
-									type="button"
-									onClick={() => uploadActions.retry(item.id)}
-									aria-label={`Retry ${item.name}`}
-									className="inline-flex min-h-9 shrink-0 items-center justify-center rounded px-2 text-xs text-th-accent pointer-coarse:min-h-11 pointer-coarse:min-w-11 hover:text-th-accent-hover"
-								>
-									Retry
-								</button>
-							)}
-					</div>
-				)}
+				</div>
+			)}
 		</li>
 	);
 }

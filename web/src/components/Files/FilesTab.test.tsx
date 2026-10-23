@@ -12,9 +12,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { contentsQueryKey } from "../../hooks/useContents";
 import { FILE_SEARCH_DEBOUNCE_MS } from "../../hooks/useFileSearch";
 import { useFilesSearchStore } from "../../lib/filesSearchStore";
-import { UploadError, uploadFile } from "../../lib/fileUpload";
-import { uploadActions } from "../../lib/uploadStore";
+import {
+	type FolderUploadRequest,
+	UploadError,
+	uploadFile,
+	uploadFolder,
+} from "../../lib/fileUpload";
+import { uploadActions, useUploadStore } from "../../lib/uploadStore";
 import { worktreeActions } from "../../lib/worktreeStore";
+import { folderEntry } from "../../test/folderEntry";
 import type { Entry } from "../../types/contents";
 import type { FileSearchResult } from "../../types/search";
 import { SidebarContext } from "../Layout/SidebarContext";
@@ -41,6 +47,7 @@ vi.mock("../../lib/wsStore", () => ({
 vi.mock("../../lib/fileUpload", async (importOriginal) => ({
 	...(await importOriginal<typeof import("../../lib/fileUpload")>()),
 	uploadFile: vi.fn(),
+	uploadFolder: vi.fn(),
 }));
 
 /**
@@ -623,6 +630,8 @@ describe("FilesTab uploads", () => {
 interface DraggedItem {
 	file: File | null;
 	isDirectory: boolean;
+	/** What `webkitGetAsEntry` gives for a folder that is read. */
+	entry?: FileSystemDirectoryEntry;
 }
 
 /**
@@ -640,7 +649,7 @@ function fileDrag(items: DraggedItem[] = []) {
 		items: items.map((item) => ({
 			kind: "file",
 			getAsFile: () => item.file,
-			webkitGetAsEntry: () => ({ isDirectory: item.isDirectory }),
+			webkitGetAsEntry: () => item.entry ?? { isDirectory: item.isDirectory },
 		})),
 	};
 }
@@ -649,7 +658,9 @@ function dragged(...files: File[]): DraggedItem[] {
 	return files.map((file) => ({ file, isDirectory: false }));
 }
 
-const A_FOLDER: DraggedItem = { file: null, isDirectory: true };
+function draggedFolder(entry: FileSystemDirectoryEntry): DraggedItem {
+	return { file: null, isDirectory: true, entry };
+}
 
 function dragOver(target: Element, dataTransfer: ReturnType<typeof fileDrag>) {
 	fireEvent.dragEnter(target, { dataTransfer });
@@ -776,22 +787,6 @@ describe("FilesTab drag and drop", () => {
 		).not.toBeInTheDocument();
 	});
 
-	it("refuses a folder and still takes the files dropped beside it", () => {
-		renderFilesTab();
-
-		drop(panel(), [...dragged(new File(["x"], "hero.png")), A_FOLDER]);
-
-		expect(
-			screen.getByText(
-				"Folders can't be uploaded. Drop individual files instead.",
-			),
-		).toBeInTheDocument();
-		// The folder is refused rather than sent as the empty file it looks like in
-		// `dataTransfer.files`.
-		expect(vi.mocked(uploadFile).mock.calls).toHaveLength(1);
-		expect(lastUpload()).toMatchObject({ name: "hero.png" });
-	});
-
 	it("opens a folder held under the cursor long enough", () => {
 		vi.useFakeTimers();
 		renderFilesTab();
@@ -871,6 +866,466 @@ describe("FilesTab drag and drop", () => {
 
 		expect(await screen.findByText("Files already exist")).toBeInTheDocument();
 		expect(uploadFile).not.toHaveBeenCalled();
+	});
+});
+
+function lastFolderUpload(): FolderUploadRequest {
+	const calls = vi.mocked(uploadFolder).mock.calls;
+	return calls[calls.length - 1][0];
+}
+
+function sentPaths(request: FolderUploadRequest): string[] {
+	return request.contents.files.map(({ path }) => path);
+}
+
+describe("FilesTab folder upload", () => {
+	beforeEach(() => {
+		treeEntries = [...DEFAULT_TREE_ENTRIES];
+		searchFiles.mockResolvedValue(result([]));
+		uploadActions.reset();
+		wsState.maxUploadSize = 0;
+		vi.mocked(uploadFile).mockReset();
+		vi.mocked(uploadFile).mockImplementation(() => new Promise(() => {}));
+		vi.mocked(uploadFolder).mockReset();
+		vi.mocked(uploadFolder).mockImplementation(() => new Promise(() => {}));
+	});
+
+	const assets = () =>
+		folderEntry("assets", {
+			"logo.png": new File(["x"], "logo.png"),
+			img: { "a.png": new File(["x"], "a.png") },
+			empty: {},
+		});
+
+	it("uploads a dropped folder whole, beside the files dropped with it", async () => {
+		renderFilesTab({ src: [] });
+
+		drop(folderRow(), [
+			...dragged(new File(["x"], "hero.png")),
+			draggedFolder(assets()),
+		]);
+
+		await waitFor(() => expect(uploadFolder).toHaveBeenCalledTimes(1));
+		expect(lastFolderUpload()).toMatchObject({
+			name: "assets",
+			destPath: "src",
+			merge: false,
+			contents: { dirs: ["empty"] },
+		});
+		expect(sentPaths(lastFolderUpload())).toEqual(["logo.png", "img/a.png"]);
+		expect(lastUpload()).toMatchObject({ name: "hero.png", destPath: "src" });
+	});
+
+	it("asks once about a folder that exists, and merges only when told to", async () => {
+		const user = userEvent.setup();
+		renderFilesTab({ src: [entry("assets", "dir", "src")] });
+
+		drop(folderRow(), [draggedFolder(assets())]);
+
+		expect(
+			await screen.findByText("Folders already exist"),
+		).toBeInTheDocument();
+		// A folder is merged into, never replaced: the button says which.
+		expect(
+			screen.queryByRole("button", { name: "Replace" }),
+		).not.toBeInTheDocument();
+		expect(uploadFolder).not.toHaveBeenCalled();
+
+		await user.click(screen.getByRole("button", { name: "Merge" }));
+
+		expect(lastFolderUpload()).toMatchObject({ name: "assets", merge: true });
+	});
+
+	it("keeps both by naming the new folder, without splitting off an extension", async () => {
+		const user = userEvent.setup();
+		renderFilesTab({ src: [entry("v1.2", "dir", "src")] });
+
+		drop(folderRow(), [draggedFolder(folderEntry("v1.2", {}))]);
+		await user.click(await screen.findByRole("button", { name: "Keep both" }));
+
+		expect(lastFolderUpload()).toMatchObject({
+			name: "v1.2 (1)",
+			merge: false,
+		});
+	});
+
+	it("takes Skip as leaving the folder out, not as a failure", async () => {
+		const user = userEvent.setup();
+		renderFilesTab({ src: [entry("assets", "dir", "src")] });
+
+		drop(folderRow(), [draggedFolder(assets())]);
+		await user.click(await screen.findByRole("button", { name: "Skip" }));
+
+		expect(uploadFolder).not.toHaveBeenCalled();
+		expect(screen.queryByText(/failed/)).not.toBeInTheDocument();
+		expect(screen.queryByText(/Uploading/)).not.toBeInTheDocument();
+	});
+
+	it("refuses a folder whose name a file holds, offering only Keep both", async () => {
+		const user = userEvent.setup();
+		renderFilesTab({ src: [entry("assets", "file", "src")] });
+
+		drop(folderRow(), [draggedFolder(assets())]);
+
+		expect(
+			await screen.findByText(
+				"A file with this name exists · Nothing was uploaded",
+			),
+		).toBeInTheDocument();
+		expect(screen.queryByText("Folders already exist")).not.toBeInTheDocument();
+		expect(
+			screen.queryByRole("button", { name: /Merge/ }),
+		).not.toBeInTheDocument();
+		expect(uploadFolder).not.toHaveBeenCalled();
+
+		await user.click(
+			screen.getByRole("button", { name: "Keep both copies of assets" }),
+		);
+
+		expect(lastFolderUpload()).toMatchObject({ name: "assets (1)" });
+	});
+
+	it("offers Merge and Keep both when the server, not the listing, finds the folder", async () => {
+		const user = userEvent.setup();
+		vi.mocked(uploadFolder).mockRejectedValueOnce(
+			new UploadError("src/assets already exists", {
+				code: "conflict",
+				canRetry: false,
+			}),
+		);
+		renderFilesTab({ src: [] });
+
+		drop(folderRow(), [draggedFolder(assets())]);
+
+		await user.click(
+			await screen.findByRole("button", {
+				name: "Merge into the existing assets",
+			}),
+		);
+
+		expect(lastFolderUpload()).toMatchObject({ name: "assets", merge: true });
+	});
+
+	it("says which file could not be read, and sends nothing of the folder", async () => {
+		renderFilesTab({ src: [] });
+
+		drop(folderRow(), [
+			draggedFolder(
+				folderEntry("assets", {
+					"ok.txt": new File(["x"], "ok.txt"),
+					"secret.key": new Error("NotReadableError"),
+				}),
+			),
+		]);
+
+		expect(
+			await screen.findByText(
+				"Couldn't read assets/secret.key · Nothing was uploaded",
+			),
+		).toBeInTheDocument();
+		expect(uploadFolder).not.toHaveBeenCalled();
+	});
+
+	it("refuses a folder over the size limit as a whole", async () => {
+		wsState.maxUploadSize = 1;
+		renderFilesTab({ src: [] });
+
+		drop(folderRow(), [draggedFolder(assets())]);
+
+		expect(
+			await screen.findByText("assets is 2 B (max 1 B) · Nothing was uploaded"),
+		).toBeInTheDocument();
+		expect(uploadFolder).not.toHaveBeenCalled();
+	});
+
+	it("shows the folder while it is read, and turns new drops away until then", async () => {
+		const user = userEvent.setup();
+		let finishReading = () => {};
+		const slow = {
+			name: "big",
+			isDirectory: true,
+			createReader: () => ({
+				readEntries: (resolve: (entries: unknown[]) => void) => {
+					finishReading = () => resolve([]);
+				},
+			}),
+		} as unknown as FileSystemDirectoryEntry;
+		renderFilesTab({ src: [] });
+
+		drop(folderRow(), [draggedFolder(slow)]);
+
+		await user.click(
+			screen.getByRole("button", { name: "Expand upload queue" }),
+		);
+		expect(screen.getByText("Reading… 0 files")).toBeInTheDocument();
+
+		dragOver(panel(), fileDrag(dragged(new File(["x"], "hero.png"))));
+		expect(
+			screen.getByText("Wait for the folder being read"),
+		).toBeInTheDocument();
+		fireEvent.drop(panel(), {
+			dataTransfer: fileDrag(dragged(new File(["x"], "hero.png"))),
+		});
+		expect(uploadFile).not.toHaveBeenCalled();
+
+		await act(async () => finishReading());
+
+		expect(lastFolderUpload()).toMatchObject({ name: "big" });
+	});
+
+	it("drops the reading when the header ✕ cancels it, and says so on the row", async () => {
+		const user = userEvent.setup();
+		const slow = {
+			name: "big",
+			isDirectory: true,
+			createReader: () => ({ readEntries: () => {} }),
+		} as unknown as FileSystemDirectoryEntry;
+		renderFilesTab({ src: [] });
+
+		drop(folderRow(), [draggedFolder(slow)]);
+		await user.click(
+			screen.getByRole("button", { name: "Cancel all uploads" }),
+		);
+		await user.click(
+			screen.getByRole("button", { name: "Expand upload queue" }),
+		);
+
+		expect(
+			screen.getByText("Cancelled · Nothing was uploaded"),
+		).toBeInTheDocument();
+
+		// The walk that never answered does not hold the gate shut after it.
+		await waitFor(() =>
+			expect(
+				screen.queryByText("Wait for the folder being read"),
+			).not.toBeInTheDocument(),
+		);
+		drop(panel(), dragged(new File(["x"], "hero.png")));
+		expect(lastUpload()).toMatchObject({ name: "hero.png" });
+	});
+});
+
+describe("FilesTab folder upload, interrupted", () => {
+	beforeEach(() => {
+		treeEntries = [...DEFAULT_TREE_ENTRIES];
+		searchFiles.mockResolvedValue(result([]));
+		uploadActions.reset();
+		worktreeActions.setCurrent("");
+		wsState.maxUploadSize = 0;
+		vi.mocked(uploadFile).mockReset();
+		vi.mocked(uploadFile).mockImplementation(() => new Promise(() => {}));
+		vi.mocked(uploadFolder).mockReset();
+		vi.mocked(uploadFolder).mockImplementation(() => new Promise(() => {}));
+	});
+
+	afterEach(() => {
+		worktreeActions.setCurrent("");
+	});
+
+	/** A folder whose walk waits until `finish` is called. */
+	function slowFolder(name: string) {
+		let finish = () => {};
+		const entry = {
+			name,
+			isDirectory: true,
+			createReader: () => ({
+				readEntries: (resolve: (entries: unknown[]) => void) => {
+					finish = () => resolve([]);
+				},
+			}),
+		} as unknown as FileSystemDirectoryEntry;
+		return { entry, finish: () => finish() };
+	}
+
+	it("still sends a folder whose tab went away while reading it, when nothing needs asking", async () => {
+		const slow = slowFolder("assets");
+		const { unmount } = renderFilesTab({ src: [] });
+
+		drop(folderRow(), [draggedFolder(slow.entry)]);
+		unmount();
+		await act(async () => slow.finish());
+
+		expect(lastFolderUpload()).toMatchObject({ name: "assets" });
+	});
+
+	it("lets go of a folder whose tab went away while reading it, when it needed an answer", async () => {
+		const slow = slowFolder("assets");
+		const { unmount } = renderFilesTab({
+			src: [entry("assets", "dir", "src")],
+		});
+
+		drop(folderRow(), [draggedFolder(slow.entry)]);
+		unmount();
+		await act(async () => slow.finish());
+
+		// Held, it would wait for ever for a dialog nobody can show.
+		expect(useUploadStore.getState().items[0]).toMatchObject({
+			status: "failed",
+			error: "Interrupted before it was sent. Upload it again.",
+		});
+		expect(uploadFolder).not.toHaveBeenCalled();
+	});
+
+	it("lets go of a folder the dialog was asking about when the tab goes away", async () => {
+		const { unmount } = renderFilesTab({
+			src: [entry("assets", "dir", "src")],
+		});
+
+		drop(folderRow(), [draggedFolder(folderEntry("assets", {}))]);
+		await screen.findByText("Folders already exist");
+		unmount();
+
+		expect(useUploadStore.getState().items[0].status).toBe("failed");
+	});
+
+	it("names the files dropped beside a folder a worktree switch cancelled", async () => {
+		const slow = slowFolder("assets");
+		renderFilesTab({ src: [] });
+
+		drop(folderRow(), [
+			...dragged(new File(["x"], "hero.png")),
+			draggedFolder(slow.entry),
+		]);
+		act(() => worktreeActions.setCurrent("feature"));
+
+		expect(
+			await screen.findByText(
+				"Cancelled while reading. The files dropped beside the folder were not uploaded.",
+			),
+		).toBeInTheDocument();
+		expect(uploadFile).not.toHaveBeenCalled();
+	});
+
+	it("drops the whole batch when the folder being asked about is cancelled", async () => {
+		const user = userEvent.setup();
+		renderFilesTab({ src: [entry("assets", "dir", "src")] });
+
+		drop(folderRow(), [
+			...dragged(new File(["x"], "hero.png")),
+			draggedFolder(folderEntry("assets", {})),
+		]);
+		await screen.findByText("Folders already exist");
+		act(() => uploadActions.cancelAll());
+
+		expect(
+			await screen.findByText(
+				"Cancelled. The files dropped beside the folder were not uploaded.",
+			),
+		).toBeInTheDocument();
+		expect(screen.queryByText("Folders already exist")).not.toBeInTheDocument();
+		expect(uploadFile).not.toHaveBeenCalled();
+		await user.click(
+			screen.getByRole("button", { name: "Expand upload queue" }),
+		);
+		expect(
+			screen.getByText("Cancelled · Nothing was uploaded"),
+		).toBeInTheDocument();
+	});
+
+	it("takes back the banner that said to wait once the reading is over", async () => {
+		const user = userEvent.setup();
+		const slow = slowFolder("assets");
+		const { container } = renderFilesTab({ src: [] });
+
+		drop(folderRow(), [draggedFolder(slow.entry)]);
+		await user.upload(fileInput(container), [new File(["x"], "hero.png")]);
+		expect(
+			screen.getByText(
+				"Still reading the folder just dropped. Nothing new was uploaded.",
+			),
+		).toBeInTheDocument();
+
+		await act(async () => slow.finish());
+
+		expect(
+			screen.queryByText(/Still reading the folder/),
+		).not.toBeInTheDocument();
+	});
+});
+
+describe("FilesTab folder picker", () => {
+	const originalMatchMedia = window.matchMedia;
+
+	function useFinePointer() {
+		Object.defineProperty(window, "matchMedia", {
+			writable: true,
+			value: (query: string) => ({
+				...originalMatchMedia(query),
+				matches: query === "(hover: hover) and (pointer: fine)",
+			}),
+		});
+	}
+
+	beforeEach(() => {
+		treeEntries = [...DEFAULT_TREE_ENTRIES];
+		searchFiles.mockResolvedValue(result([]));
+		uploadActions.reset();
+		vi.mocked(uploadFile).mockReset();
+		vi.mocked(uploadFile).mockImplementation(() => new Promise(() => {}));
+		vi.mocked(uploadFolder).mockReset();
+		vi.mocked(uploadFolder).mockImplementation(() => new Promise(() => {}));
+		// jsdom has no directory picker; a desktop browser does.
+		Object.defineProperty(HTMLInputElement.prototype, "webkitdirectory", {
+			configurable: true,
+			value: false,
+			writable: true,
+		});
+	});
+
+	afterEach(() => {
+		Object.defineProperty(window, "matchMedia", {
+			writable: true,
+			value: originalMatchMedia,
+		});
+		Reflect.deleteProperty(HTMLInputElement.prototype, "webkitdirectory");
+	});
+
+	function picked(relativePath: string): File {
+		const file = new File(["x"], relativePath.split("/").pop() ?? "");
+		Object.defineProperty(file, "webkitRelativePath", { value: relativePath });
+		return file;
+	}
+
+	function folderInput(container: HTMLElement): HTMLInputElement {
+		const input = container.querySelector<HTMLInputElement>(
+			"input[webkitdirectory]",
+		);
+		if (!input) throw new Error("no folder input rendered");
+		return input;
+	}
+
+	it("uploads the picked folder into the folder the menu came from", async () => {
+		useFinePointer();
+		const user = userEvent.setup();
+		const { container } = renderFilesTab({ src: [] });
+
+		await user.click(screen.getByRole("button", { name: "menu for src" }));
+		await user.click(screen.getByRole("button", { name: "Upload folder" }));
+		await user.upload(folderInput(container), [
+			picked("assets/a.png"),
+			picked("assets/img/b.png"),
+		]);
+
+		await waitFor(() => expect(uploadFolder).toHaveBeenCalled());
+		expect(lastFolderUpload()).toMatchObject({
+			name: "assets",
+			destPath: "src",
+		});
+		expect(sentPaths(lastFolderUpload())).toEqual(["a.png", "img/b.png"]);
+	});
+
+	it("is not offered on a touch screen, where directory picking is unreliable", async () => {
+		const user = userEvent.setup();
+		renderFilesTab();
+
+		await user.click(screen.getByRole("button", { name: "menu for src" }));
+
+		expect(
+			screen.getByRole("button", { name: "Upload files" }),
+		).toBeInTheDocument();
+		expect(
+			screen.queryByRole("button", { name: "Upload folder" }),
+		).not.toBeInTheDocument();
 	});
 });
 

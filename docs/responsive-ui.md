@@ -855,7 +855,7 @@ Nine controls in five files, all now `min-h-9 pointer-coarse:min-h-11`:
 
 | File | Controls | Level |
 |---|---|---|
-| `Files/UploadQueue` | Replace, Keep both, Retry on a failed row | R0 (a) |
+| `Files/UploadQueue` | Replace (Merge on a folder row), Keep both, Retry on a failed row | R0 (a) |
 | `Files/UploadQueue` | Retry failed, in the queue header | R0 (a) |
 | `Git/ErrorBanner` | Details | R0 (a) |
 | `ReconnectBanner` (since promoted to `@pockode/shared`) | Retry now | R0 (a) |

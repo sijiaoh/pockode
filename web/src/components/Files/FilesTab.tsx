@@ -1,4 +1,4 @@
-import { ConfirmDialog } from "@pockode/shared";
+import { ConfirmDialog, useHasFinePointer } from "@pockode/shared";
 import { useQueryClient } from "@tanstack/react-query";
 import { MoreHorizontal, Upload } from "lucide-react";
 import {
@@ -9,18 +9,24 @@ import {
 	useState,
 } from "react";
 import { contentsQueryKey } from "../../hooks/useContents";
-import { FOLDER_DROP_REFUSED } from "../../hooks/useFileDragZone";
 import {
 	FILE_SEARCH_QUERY_KEY,
 	useFileSearch,
 } from "../../hooks/useFileSearch";
 import { useTakenNames, useTakenNamesIn } from "../../hooks/useTakenNames";
+import { isAbortError } from "../../lib/api";
 import { applyEntryGone } from "../../lib/fileCache";
 import {
+	type FolderContents,
 	type NameCollision,
 	nameCollision,
 	nextAvailableName,
 } from "../../lib/fileUpload";
+import {
+	FolderReadError,
+	folderFromPicked,
+	readFolderEntry,
+} from "../../lib/folderRead";
 import { isAlreadyExistsError } from "../../lib/rpc/file";
 import {
 	MAX_FILES_PER_UPLOAD,
@@ -67,12 +73,33 @@ interface Naming {
 	type: EntryType;
 }
 
+/** A folder of a batch, read in full and `held` in the queue under `id`. */
+interface HeldFolder {
+	id: string;
+	name: string;
+}
+
 /** A batch held back until the user says what to do about the names taken. */
 interface PendingUpload {
 	destPath: string;
 	files: File[];
-	/** Collisions with regular files; a folder's name is never replaceable. */
+	/** What each loose file collides with; a folder's collision is on `folders`. */
 	conflicts: Map<File, NameCollision>;
+	folders: (HeldFolder & { collision: NameCollision })[];
+}
+
+/** A folder that has arrived, and how to get at its contents. */
+interface ArrivingFolder {
+	name: string;
+	read: (
+		signal: AbortSignal,
+		onCount: (files: number) => void,
+	) => Promise<FolderContents>;
+}
+
+/** Read when rendering, not at import, so a test can supply the property. */
+function supportsFolderPicker(): boolean {
+	return "webkitdirectory" in HTMLInputElement.prototype;
 }
 
 /**
@@ -84,6 +111,19 @@ interface PendingUpload {
  */
 const BATCH_AWAITING_ANSWER =
 	"Finish answering about the files already picked. Nothing was uploaded.";
+
+/** The same for a batch arriving while a dropped folder is still being read. */
+const BATCH_AWAITING_READ =
+	"Still reading the folder just dropped. Nothing new was uploaded.";
+
+const CANCELLED_WHILE_READING =
+	"Cancelled while reading. The files dropped beside the folder were not uploaded.";
+
+const CANCELLED_WHILE_ASKING =
+	"Cancelled. The files dropped beside the folder were not uploaded.";
+
+/** Said on a folder whose batch was lost with the tab before it was sent. */
+const INTERRUPTED = "Interrupted before it was sent. Upload it again.";
 
 /** `src/components/ui` -> `…/components/ui`, so the tail stays readable. */
 function shortenPath(path: string): string {
@@ -154,6 +194,15 @@ function FilesTab({
 	const [query, setQuery] = useState("");
 	const [actionError, setActionError] = useState<string | null>(null);
 	const [pending, setPending] = useState<PendingUpload | null>(null);
+	// Folders of the last batch still being walked. One gate with `pending`: the
+	// batch they belong to is not settled, and the question it may raise is
+	// still to come.
+	const [reading, setReading] = useState(false);
+	// The property alone says too little: mobile browsers carry it while their
+	// directory picking is missing or opens a plain file picker instead, and a
+	// menu row that opens the wrong picker is worse than none. A fine pointer is
+	// the stand-in for "a desktop browser", where it works.
+	const canPickFolder = useHasFinePointer() && supportsFolderPicker();
 	const [menuTarget, setMenuTarget] = useState<Entry | null>(null);
 	const [naming, setNaming] = useState<Naming | null>(null);
 	const [creating, setCreating] = useState(false);
@@ -213,6 +262,46 @@ function FilesTab({
 		setForceOpenPath(null);
 	}, [worktree]);
 
+	// What the batch waiting for an answer holds, for the cleanup below, which
+	// cannot read state.
+	const mountedRef = useRef(true);
+	const pendingRef = useRef(pending);
+	pendingRef.current = pending;
+	useEffect(() => {
+		mountedRef.current = true;
+		return () => {
+			mountedRef.current = false;
+			// The question goes with the tab; its folders must not stay `held`.
+			for (const folder of pendingRef.current?.folders ?? []) {
+				uploadActions.failFolder(folder.id, INTERRUPTED);
+			}
+		};
+	}, []);
+
+	// The header ✕ (or a switch) took a folder the dialog is asking about. That
+	// cancels the batch, as it does while reading: answering for the rest would
+	// send files beside a folder the user just stopped.
+	useEffect(() => {
+		if (!pending || pending.folders.length === 0) return;
+		const cancelled = pending.folders.some(
+			(folder) =>
+				!uploads.some(
+					(item) => item.id === folder.id && item.status === "held",
+				),
+		);
+		// Both cancel every unfinished row at once, so the batch's other folders
+		// are already cancelled too and say so on their rows.
+		if (!cancelled) return;
+		setPending(null);
+		setActionError((shown) =>
+			pending.files.length > 0
+				? CANCELLED_WHILE_ASKING
+				: shown === BATCH_AWAITING_ANSWER
+					? null
+					: shown,
+		);
+	}, [pending, uploads]);
+
 	// A watcher covers the destination only while its folder is expanded, so a
 	// file dropped into a collapsed one would otherwise not appear until the
 	// next refresh.
@@ -240,6 +329,31 @@ function FilesTab({
 		(batch: PendingUpload, choice: "skip" | "replace" | "keep-both") => {
 			const taken = takenNames(batch.destPath);
 			const uploadsToStart: NewUpload[] = [];
+
+			for (const folder of batch.folders) {
+				// A file of that name cannot be merged into, and a folder is never
+				// written over one: refused before sending, with Keep both on the row.
+				if (folder.collision === "file") {
+					uploadActions.failFolder(folder.id, "", "file");
+					continue;
+				}
+				if (folder.collision === "none") {
+					taken.add(folder.name);
+					uploadActions.queueFolder(folder.id);
+					continue;
+				}
+				if (choice === "skip") {
+					uploadActions.dropFolder(folder.id);
+					continue;
+				}
+				if (choice === "replace") {
+					uploadActions.queueFolder(folder.id, { overwrite: true });
+					continue;
+				}
+				const name = nextAvailableName(folder.name, taken, "folder");
+				taken.add(name);
+				uploadActions.queueFolder(folder.id, { name });
+			}
 
 			for (const file of batch.files) {
 				const collision = batch.conflicts.get(file) ?? "none";
@@ -279,73 +393,172 @@ function FilesTab({
 		[takenNames],
 	);
 
-	/**
-	 * Takes a batch as far as the queue, or as far as the question it raises.
-	 *
-	 * `refusal` is what the batch already lost on the way in — a dropped folder,
-	 * say — and is shown unless something worse about the batch replaces it.
-	 */
-	const uploadInto = useCallback(
-		(files: File[], destPath: string, refusal: string | null) => {
-			// There is one place to hold a batch waiting on an answer, so a second
-			// one would take the first's place without a word, dropping the files it
-			// was holding. Refused here rather than at each entry point: every batch
-			// arrives through this function, including the ones no dialog can stand
-			// in front of — the picker is reachable by tabbing past the overlay.
-			if (pending) {
-				setActionError(BATCH_AWAITING_ANSWER);
-				return;
-			}
-			setActionError(refusal);
-			if (files.length === 0) return;
-			if (files.length > MAX_FILES_PER_UPLOAD) {
-				setActionError(
-					`Too many files. Upload up to ${MAX_FILES_PER_UPLOAD} at a time.`,
-				);
-				return;
-			}
-
+	/** Checks a batch that is all in hand against the listing, and asks or sends. */
+	const settleBatch = useCallback(
+		(files: File[], folders: HeldFolder[], destPath: string) => {
 			const entries = cachedEntries(destPath);
 			const conflicts = new Map<File, NameCollision>();
 			for (const file of files) {
 				conflicts.set(file, nameCollision(file.name, entries));
 			}
 
-			const batch: PendingUpload = { destPath, files, conflicts };
+			const batch: PendingUpload = {
+				destPath,
+				files,
+				conflicts,
+				folders: folders.map((folder) => ({
+					...folder,
+					collision: nameCollision(folder.name, entries),
+				})),
+			};
 			// Asked once, before anything is sent, rather than interrupting a
 			// transfer already in flight.
-			if (files.some((file) => conflicts.get(file) === "file")) {
+			if (
+				files.some((file) => conflicts.get(file) === "file") ||
+				batch.folders.some((folder) => folder.collision === "folder")
+			) {
+				// The tab went away while the batch was read — the sidebar remounts
+				// it across the `lg` breakpoint — and with it the dialog. Left
+				// `held`, a folder would wait for ever on a question nobody can ask.
+				if (!mountedRef.current) {
+					for (const folder of batch.folders) {
+						uploadActions.failFolder(folder.id, INTERRUPTED);
+					}
+					return;
+				}
 				setPending(batch);
 				return;
 			}
 			queueBatch(batch, "skip");
 		},
-		[cachedEntries, queueBatch, pending],
+		[cachedEntries, queueBatch],
 	);
 
-	// The picker opened from the menu, which unmounts with the sheet the moment
+	/**
+	 * Why a batch arriving now has to be turned away, if it does.
+	 *
+	 * There is one place to hold a batch waiting on an answer, so a second one
+	 * would take the first's place without a word, dropping the files it was
+	 * holding. Refused where every batch passes through rather than at each
+	 * entry point, which covers the ones no dialog can stand in front of — the
+	 * picker is reachable by tabbing past the overlay.
+	 */
+	const batchRefusal = (fileCount: number): string | null => {
+		if (pending) return BATCH_AWAITING_ANSWER;
+		if (reading) return BATCH_AWAITING_READ;
+		if (fileCount > MAX_FILES_PER_UPLOAD) {
+			return `Too many files. Upload up to ${MAX_FILES_PER_UPLOAD} at a time.`;
+		}
+		return null;
+	};
+
+	/** Takes a batch of files as far as the queue, or as far as the question it raises. */
+	const uploadInto = (files: File[], destPath: string) => {
+		const refusal = batchRefusal(files.length);
+		setActionError(refusal);
+		if (refusal || files.length === 0) return;
+		settleBatch(files, [], destPath);
+	};
+
+	/**
+	 * Takes a batch holding folders: each gets its queue row at once, is read,
+	 * and the batch is settled as a whole once every folder is in hand — so it
+	 * still asks one question, about files and folders together.
+	 */
+	const uploadWithFolders = async (
+		files: File[],
+		folders: ArrivingFolder[],
+		destPath: string,
+	) => {
+		const refusal = batchRefusal(files.length);
+		setActionError(refusal);
+		if (refusal) return;
+
+		const added = uploadActions.addFolders(
+			folders.map(({ name }) => ({ name, destPath })),
+		);
+		setReading(true);
+		const held = await Promise.all(
+			folders.map(async (folder, i): Promise<HeldFolder | null> => {
+				const { id, signal } = added[i];
+				try {
+					const contents = await folder.read(signal, (count) =>
+						uploadActions.readProgress(id, count),
+					);
+					return uploadActions.holdFolder(id, contents)
+						? { id, name: folder.name }
+						: null;
+				} catch (error) {
+					if (isAbortError(error)) return null;
+					uploadActions.failFolder(
+						id,
+						error instanceof FolderReadError
+							? error.message
+							: `Couldn't read ${folder.name}: ${error instanceof Error ? error.message : String(error)}`,
+					);
+					return null;
+				}
+			}),
+		);
+		const ready = held.filter(
+			(folder): folder is HeldFolder => folder !== null,
+		);
+		setReading(false);
+		setActionError((shown) => (shown === BATCH_AWAITING_READ ? null : shown));
+
+		// The header ✕ or a worktree switch while reading cancels the batch, the
+		// files beside the folders included: they had no row yet to be cancelled
+		// on, so they are named.
+		if (added.some(({ signal }) => signal.aborted)) {
+			if (files.length > 0) setActionError(CANCELLED_WHILE_READING);
+			return;
+		}
+		if (files.length === 0 && ready.length === 0) return;
+		settleBatch(files, ready, destPath);
+	};
+
+	// The pickers opened from the menu, which unmounts with the sheet the moment
 	// it is chosen from and so cannot hold an input of its own.
 	const menuPickerRef = useRef<HTMLInputElement>(null);
+	const folderPickerRef = useRef<HTMLInputElement>(null);
 	const menuDestRef = useRef("");
 
-	const handleMenuPicked = useCallback(
-		(event: ChangeEvent<HTMLInputElement>) => {
-			const files = Array.from(event.target.files ?? []);
-			// Cleared so that picking the same file twice in a row still fires.
-			event.target.value = "";
-			if (files.length > 0) uploadInto(files, menuDestRef.current, null);
-		},
-		[uploadInto],
-	);
+	const handleMenuPicked = (event: ChangeEvent<HTMLInputElement>) => {
+		const files = Array.from(event.target.files ?? []);
+		// Cleared so that picking the same file twice in a row still fires.
+		event.target.value = "";
+		if (files.length > 0) uploadInto(files, menuDestRef.current);
+	};
 
-	const handleMenuUpload = useCallback(() => {
-		if (!menuTarget) return;
-		menuDestRef.current = menuTarget.path;
-		// Opened before the sheet closes and without awaiting anything: iOS Safari
-		// only lets a picker open from the same synchronous stack as the tap.
-		menuPickerRef.current?.click();
-		setMenuTarget(null);
-	}, [menuTarget]);
+	const handleFolderPicked = (event: ChangeEvent<HTMLInputElement>) => {
+		const files = Array.from(event.target.files ?? []);
+		event.target.value = "";
+		if (files.length === 0) return;
+		const picked = folderFromPicked(files);
+		// A browser that opened a plain file picker after all handed over files.
+		if (!picked) {
+			uploadInto(files, menuDestRef.current);
+			return;
+		}
+		void uploadWithFolders(
+			[],
+			[{ name: picked.name, read: async () => picked.contents }],
+			menuDestRef.current,
+		);
+	};
+
+	const openMenuPicker = useCallback(
+		(picker: HTMLInputElement | null) => {
+			if (!menuTarget) return;
+			menuDestRef.current = menuTarget.path;
+			// Opened before the sheet closes and without awaiting anything: iOS
+			// Safari only lets a picker open from the same synchronous stack as the
+			// tap.
+			picker?.click();
+			setMenuTarget(null);
+		},
+		[menuTarget],
+	);
 
 	const openNaming = useCallback(
 		(type: EntryType) => {
@@ -499,17 +712,28 @@ function FilesTab({
 		? "Exit search to upload files"
 		: pending
 			? "Finish answering before dropping more"
-			: null;
+			: reading
+				? "Wait for the folder being read"
+				: null;
 
 	const treeWrapperRef = useRef<HTMLDivElement>(null);
 	const drop = useFileDrop({
 		enabled: dropRefusal === null,
-		onDrop: useCallback(
-			({ files, hadFolder, destPath }) => {
-				uploadInto(files, destPath, hadFolder ? FOLDER_DROP_REFUSED : null);
-			},
-			[uploadInto],
-		),
+		onDrop: ({ files, folders, destPath }) => {
+			if (folders.length === 0) {
+				uploadInto(files, destPath);
+				return;
+			}
+			void uploadWithFolders(
+				files,
+				folders.map((entry) => ({
+					name: entry.name,
+					read: (signal, onCount) =>
+						readFolderEntry(entry, { signal, onCount }),
+				})),
+				destPath,
+			);
+		},
 		// `PullToRefreshify` owns the element that scrolls and does not forward a
 		// ref to it; it is the single child this wrapper renders.
 		getScrollContainer: useCallback(() => {
@@ -524,7 +748,7 @@ function FilesTab({
 			setPending(null);
 			// That refusal was an instruction, and this is it being carried out;
 			// left standing it would read as an answer that did not register. Only
-			// that one: a folder turned away on the way in is still true afterwards.
+			// that one: anything else the banner says is still true afterwards.
 			setActionError((shown) =>
 				shown === BATCH_AWAITING_ANSWER ? null : shown,
 			);
@@ -546,7 +770,11 @@ function FilesTab({
 			// the very same name, and "Keep both" would fail again on every press.
 			taken.add(item.name);
 			uploadActions.retry(item.id, {
-				name: nextAvailableName(item.name, taken),
+				name: nextAvailableName(
+					item.name,
+					taken,
+					item.folder ? "folder" : "file",
+				),
 				overwrite: false,
 			});
 		},
@@ -554,9 +782,14 @@ function FilesTab({
 	);
 
 	const pendingNames = pending
-		? pending.files
-				.filter((file) => pending.conflicts.get(file) === "file")
-				.map((file) => file.name)
+		? [
+				...pending.folders
+					.filter((folder) => folder.collision === "folder")
+					.map((folder) => ({ name: folder.name, isFolder: true })),
+				...pending.files
+					.filter((file) => pending.conflicts.get(file) === "file")
+					.map((file) => ({ name: file.name, isFolder: false })),
+			]
 		: [];
 
 	const acceptsDrop = drop.isDragging && dropRefusal === null;
@@ -662,12 +895,30 @@ function FilesTab({
 				tabIndex={-1}
 				aria-hidden="true"
 			/>
+			{canPickFolder && (
+				<input
+					ref={folderPickerRef}
+					type="file"
+					multiple
+					// React has no typed prop for it; any value turns it on.
+					{...{ webkitdirectory: "" }}
+					onChange={handleFolderPicked}
+					className="hidden"
+					tabIndex={-1}
+					aria-hidden="true"
+				/>
+			)}
 
 			{menuTarget && (
 				<FileEntryMenu
 					entry={menuTarget}
 					onClose={() => setMenuTarget(null)}
-					onUpload={handleMenuUpload}
+					onUpload={() => openMenuPicker(menuPickerRef.current)}
+					onUploadFolder={
+						canPickFolder
+							? () => openMenuPicker(folderPickerRef.current)
+							: undefined
+					}
 					onNewFile={() => openNaming("file")}
 					onNewFolder={() => openNaming("dir")}
 					onRename={openRename}
@@ -729,8 +980,8 @@ function FilesTab({
 
 			{pending && (
 				<UploadConflictDialog
-					names={pendingNames}
-					total={pending.files.length}
+					items={pendingNames}
+					total={pending.files.length + pending.folders.length}
 					destPath={pending.destPath}
 					onKeepBoth={() => answerConflict("keep-both")}
 					onReplace={() => answerConflict("replace")}

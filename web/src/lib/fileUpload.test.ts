@@ -6,6 +6,7 @@ import {
 	nextAvailableName,
 	UploadError,
 	uploadFile,
+	uploadFolder,
 } from "./fileUpload";
 
 vi.mock("../utils/config", () => ({
@@ -278,6 +279,111 @@ describe("uploadFile", () => {
 	});
 });
 
+describe("uploadFolder", () => {
+	beforeEach(() => {
+		FakeXHR.instances = [];
+		vi.stubGlobal("XMLHttpRequest", FakeXHR);
+	});
+
+	afterEach(() => {
+		vi.unstubAllGlobals();
+	});
+
+	function folderRequest(
+		overrides: Partial<Parameters<typeof uploadFolder>[0]> = {},
+	) {
+		return {
+			name: "assets",
+			destPath: "src",
+			worktree: "",
+			merge: false,
+			contents: {
+				files: [{ file: new File(["x"], "a.ts"), path: "lib/a.ts" }],
+				dirs: ["empty"],
+			},
+			...overrides,
+		};
+	}
+
+	it("sends the folder in one request, each file under its path inside it", async () => {
+		const done = uploadFolder(folderRequest());
+		const xhr = only();
+
+		const url = new URL(xhr.url);
+		expect(url.pathname).toBe("/api/files/upload-folder");
+		expect(url.searchParams.get("path")).toBe("src");
+		expect(url.searchParams.get("name")).toBe("assets");
+		// A folder is claimed afresh unless merging was asked for.
+		expect(url.searchParams.has("merge")).toBe(false);
+		expect((xhr.body?.get("file") as File).name).toBe("lib/a.ts");
+		expect(xhr.body?.get("dir")).toBe("empty");
+
+		xhr.respond(200, "{}");
+		await done;
+	});
+
+	it("asks to merge only when told to", async () => {
+		const done = uploadFolder(folderRequest({ merge: true }));
+		expect(new URL(only().url).searchParams.get("merge")).toBe("true");
+		only().respond(200, "{}");
+		await done;
+	});
+
+	it("keeps the server's words for a bad entry, which name the path at fault", async () => {
+		const done = uploadFolder(folderRequest());
+		only().respond(
+			400,
+			errorBody("invalid_path", 'invalid entry path "a/../b"'),
+		);
+		await expect(done).rejects.toMatchObject({
+			message: 'invalid entry path "a/../b"',
+			// The same names sent again are refused the same way.
+			canRetry: false,
+		});
+	});
+
+	it("drops the half of a 409 addressed to an API caller", async () => {
+		const done = uploadFolder(folderRequest());
+		only().respond(
+			409,
+			errorBody(
+				"conflict",
+				"src/assets already exists; retry with merge=true to write into it, or upload it under another name",
+			),
+		);
+		await expect(done).rejects.toMatchObject({
+			message: "src/assets already exists",
+			code: "conflict",
+			canRetry: false,
+		});
+	});
+
+	it("hands back which files a failed merge had already stored", async () => {
+		const done = uploadFolder(folderRequest({ merge: true }));
+		only().respond(
+			500,
+			errorBody("internal", "disk full", {
+				written: [{ path: "src/assets/lib/a.ts", name: "a.ts", size: 1 }],
+			}),
+		);
+		await expect(done).rejects.toMatchObject({
+			written: ["src/assets/lib/a.ts"],
+		});
+	});
+
+	it("says what the entry cap is when a folder is over it", async () => {
+		const done = uploadFolder(folderRequest());
+		only().respond(
+			413,
+			errorBody("too_many_entries", "too many", { limit: 10000 }),
+		);
+		await expect(done).rejects.toMatchObject({
+			message: "Too many files and folders (max 10,000)",
+			canRetry: false,
+		});
+	});
+});
+
 describe("nameCollision", () => {
 	const entries = [
 		{ name: "logo.png", type: "file" as const, path: "assets/logo.png" },
@@ -323,6 +429,15 @@ describe("nextAvailableName", () => {
 		expect(nextAvailableName("logo (1).png", new Set(["logo.png"]))).toBe(
 			"logo (1).png",
 		);
+	});
+
+	it("keeps a folder's dots where they are", () => {
+		expect(nextAvailableName("v1.2", new Set(["v1.2"]), "folder")).toBe(
+			"v1.2 (1)",
+		);
+		expect(
+			nextAvailableName("assets (1)", new Set(["assets (1)"]), "folder"),
+		).toBe("assets (2)");
 	});
 
 	it("treats a dotfile's name as a name, not an extension", () => {

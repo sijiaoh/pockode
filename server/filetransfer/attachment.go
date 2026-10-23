@@ -104,7 +104,7 @@ func (a *AttachmentHandler) Upload(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, h.maxUpload+attachmentBodyAllowance)
 	var overBody *http.MaxBytesError
 
-	reader, err := r.MultipartReader()
+	reader, err := newMultipartBody(r)
 	if err != nil {
 		h.writeError(w, errf(http.StatusBadRequest, CodeInvalidRequest, "expected a multipart/form-data body: %v", err), nil)
 		return

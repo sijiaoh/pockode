@@ -2450,7 +2450,7 @@ describe("ChatPanel", () => {
 			]).drop();
 
 			expect(await screen.findByRole("alert")).toHaveTextContent(
-				"Folders can't be uploaded",
+				"Folders can't be attached",
 			);
 			expect(uploadChatAttachment).toHaveBeenCalledTimes(1);
 
@@ -2581,7 +2581,7 @@ describe("ChatPanel", () => {
 
 				paste([dropItem(file()), dropItem(new File([], "src"), true)]);
 				expect(await screen.findByRole("alert")).toHaveTextContent(
-					"Folders can't be uploaded",
+					"Folders can't be attached",
 				);
 				expect(uploadChatAttachment).toHaveBeenCalledTimes(1);
 			});

@@ -123,6 +123,8 @@ describe("MainContainer", () => {
 			return {
 				id: "u1",
 				file: new File([""], "a.txt"),
+				folder: null,
+				size: 0,
 				name: "a.txt",
 				destPath: "",
 				worktree: useWorktreeStore.getState().current,

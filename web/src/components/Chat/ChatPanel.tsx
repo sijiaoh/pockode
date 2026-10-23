@@ -18,7 +18,6 @@ import { readDraft } from "../../hooks/useComposerDraft";
 import { SKELETON_DELAY_MS, useDelayedFlag } from "../../hooks/useDelayedFlag";
 import {
 	type DroppedFiles,
-	FOLDER_DROP_REFUSED,
 	useFileDragZone,
 } from "../../hooks/useFileDragZone";
 import { useForkSession } from "../../hooks/useForkSession";
@@ -103,6 +102,13 @@ import SessionHeader from "./SessionHeader";
 import SessionOriginBar from "./SessionOriginBar";
 
 const noop = () => {};
+
+/**
+ * An attachment is a file the agent is handed whole, and a folder is not one;
+ * the Files tab is where a folder can go into the project instead.
+ */
+const FOLDER_ATTACH_REFUSED =
+	"Folders can't be attached. Upload them in the Files tab.";
 
 const inputBarHiddenOverlays: NonNullable<OverlayState>["type"][] = [
 	"work-list",
@@ -985,10 +991,12 @@ function ChatPanel({
 							: null;
 	// Shared by a drop and a paste, which are the same shortcut taken two ways.
 	const attachFiles = useCallback(
-		({ files, hadFolder }: DroppedFiles) => {
+		({ files, folders }: DroppedFiles) => {
 			if (files.length > 0) attachmentActions.add(sessionId, files);
 			setAttachError(
-				hadFolder ? { sessionId, message: FOLDER_DROP_REFUSED } : null,
+				folders.length > 0
+					? { sessionId, message: FOLDER_ATTACH_REFUSED }
+					: null,
 			);
 		},
 		[sessionId],

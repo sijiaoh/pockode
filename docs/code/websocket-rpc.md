@@ -499,7 +499,8 @@ Client                              Server
 - Optionally specify worktree; uses main worktree if not specified
 - Authentication response includes version number for detecting client/server version mismatch
 - `max_upload_size` is the ceiling on one HTTP upload request in bytes, sent so a
-  client can refuse an oversized file before spending a slow link on it instead
+  client can refuse an oversized file — or folder, whose files share one
+  request and so one ceiling — before spending a slow link on it instead
   of keeping its own copy of the number ([File § Transfer](../file.md#transfer)).
   A client reads it from its own `auth` reply rather than hard-coding it: the
   server is free to change what it accepts, and the client that has to respect
