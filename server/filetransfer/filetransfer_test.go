@@ -559,6 +559,31 @@ func TestUpload(t *testing.T) {
 		assertError(t, rec, http.StatusBadRequest, CodeInvalidRequest)
 	})
 
+	// Cut just after a whole part, the body parses as one that ended; the
+	// files after it never came, and the reply must not say otherwise.
+	t.Run("reports a body that ends after a whole file", func(t *testing.T) {
+		h, _ := newTestHandler(t)
+
+		req := newUploadRequest(t, "",
+			uploadFile{name: "a.txt", content: []byte("done")},
+			uploadFile{name: "b.txt", content: []byte("lost")})
+		whole, err := io.ReadAll(req.Body)
+		if err != nil {
+			t.Fatalf("failed to read request body: %v", err)
+		}
+		cut := bytes.Index(whole, []byte("done")) + len("done\r\n")
+		boundary := bytes.Index(whole[cut:], []byte("\r\n"))
+		req.Body = io.NopCloser(bytes.NewReader(whole[:cut+boundary]))
+
+		rec := httptest.NewRecorder()
+		h.Upload(rec, req)
+
+		body := assertError(t, rec, http.StatusBadRequest, CodeInvalidRequest)
+		if len(body.Written) != 1 || body.Written[0].Name != "a.txt" {
+			t.Errorf("got written %+v, want a.txt", body.Written)
+		}
+	})
+
 	t.Run("reports an unknown worktree", func(t *testing.T) {
 		h, _ := newTestHandler(t)
 

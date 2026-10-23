@@ -1002,7 +1002,7 @@ func Rename(workDir, path, newName string) error {
 		return err
 	}
 
-	if err := validateName(newName); err != nil {
+	if err := ValidateName(newName); err != nil {
 		return err
 	}
 
@@ -1066,13 +1066,13 @@ func Rename(workDir, path, newName string) error {
 	return nil
 }
 
-// validateName checks that name can stand as a single entry in a directory.
+// ValidateName checks that name can stand as a single entry in a directory.
 //
 // The separator test is what keeps Rename from moving anything; IsLocal is the
 // same gate ValidatePath applies to whole paths, so a name this accepts is a
 // path component ValidatePath would accept too — one rule about what a name may
 // be, not two that can drift apart.
-func validateName(name string) error {
+func ValidateName(name string) error {
 	if name == "" {
 		return fmt.Errorf("%w: empty name", ErrInvalidPath)
 	}
