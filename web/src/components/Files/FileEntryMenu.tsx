@@ -1,4 +1,11 @@
-import { FilePlus, FolderPlus, PencilLine, Trash2, Upload } from "lucide-react";
+import {
+	FilePlus,
+	FolderPlus,
+	FolderUp,
+	PencilLine,
+	Trash2,
+	Upload,
+} from "lucide-react";
 import type { Entry } from "../../types/contents";
 import MenuRow from "../common/MenuRow";
 import { Sheet } from "../ui";
@@ -16,6 +23,8 @@ interface Props {
 	entry: Entry;
 	onClose: () => void;
 	onUpload: () => void;
+	/** Absent where no folder picker is offered (see `FilesTab`). */
+	onUploadFolder?: () => void;
 	onNewFile: () => void;
 	onNewFolder: () => void;
 	onRename: () => void;
@@ -45,6 +54,7 @@ function FileEntryMenu({
 	entry,
 	onClose,
 	onUpload,
+	onUploadFolder,
 	onNewFile,
 	onNewFolder,
 	onRename,
@@ -60,6 +70,13 @@ function FileEntryMenu({
 				{isDirectory && (
 					<>
 						<MenuRow icon={Upload} label="Upload files" onClick={onUpload} />
+						{onUploadFolder && (
+							<MenuRow
+								icon={FolderUp}
+								label="Upload folder"
+								onClick={onUploadFolder}
+							/>
+						)}
 						<MenuRow icon={FilePlus} label="New file" onClick={onNewFile} />
 						<MenuRow
 							icon={FolderPlus}

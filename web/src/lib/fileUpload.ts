@@ -28,6 +28,17 @@ const ERROR_MESSAGES = new Map([
 ]);
 
 /**
+ * Codes the folder endpoint words better than any phrasing here could.
+ *
+ * On `/api/files/upload` both mean one thing — a name that is not a name, a
+ * body cut short — but a folder's paths are the user's own, and its
+ * `invalid_request` covers a malformed part as well as a cut. The server names
+ * the entry at fault; "Invalid path" alone would leave the user to guess which
+ * of a few hundred it was.
+ */
+const FOLDER_OWN_WORDS = new Set(["invalid_path", "invalid_request"]);
+
+/**
  * A `409` in the server's own words, minus the half addressed to an API caller.
  *
  * `conflict` is not phrased here like the codes above are, because the server
@@ -36,13 +47,13 @@ const ERROR_MESSAGES = new Map([
  * user pressing Replace on something the endpoint will refuse again for the
  * same reason, with no way to find out why.
  *
- * What does not carry over is `retry with overwrite=true`: a query parameter is
- * not an action anyone can take from the queue, and the two buttons beside the
- * message already are.
+ * What does not carry over is `retry with overwrite=true` (or `merge=true`, for
+ * a folder): a query parameter is not an action anyone can take from the queue,
+ * and the two buttons beside the message already are.
  */
 function conflictMessage(serverMessage: string): string {
 	const trimmed = serverMessage.replace(
-		/;\s*retry with overwrite=true.*$/i,
+		/;\s*retry with (?:overwrite|merge)=true.*$/i,
 		"",
 	);
 	return trimmed || "Already exists";
@@ -52,27 +63,40 @@ function conflictMessage(serverMessage: string): string {
  * Failures that sending the identical request again cannot get past.
  *
  * `too_large` cannot pass on a second attempt: the same file is the same size,
- * and the ceiling is the endpoint's. A `conflict` is offered its own two
+ * and the ceiling is the endpoint's. `invalid_path` is about the names sent,
+ * which a retry sends again unchanged. A `conflict` is offered its own two
  * resolutions instead of a plain retry.
  */
-const TERMINAL_CODES = new Set(["too_large", "conflict"]);
+const TERMINAL_CODES = new Set([
+	"too_large",
+	"too_many_entries",
+	"invalid_path",
+	"conflict",
+]);
 
 /** A failure the endpoint described in its `{error, code}` body. */
 export class UploadError extends Error {
 	readonly code: string;
-	/** How many files this same request stored before it failed (`written`). */
-	readonly storedCount: number;
+	/**
+	 * Paths, relative to the work directory, of the files this same request
+	 * stored before it failed (`written`).
+	 */
+	readonly written: string[];
 	readonly canRetry: boolean;
 
 	constructor(
 		message: string,
-		options: { code?: string; storedCount?: number; canRetry?: boolean } = {},
+		options: { code?: string; written?: string[]; canRetry?: boolean } = {},
 	) {
 		super(message);
 		this.name = "UploadError";
 		this.code = options.code ?? "";
-		this.storedCount = options.storedCount ?? 0;
+		this.written = options.written ?? [];
 		this.canRetry = options.canRetry ?? true;
+	}
+
+	get storedCount(): number {
+		return this.written.length;
 	}
 }
 
@@ -103,7 +127,7 @@ interface ErrorBody {
 	error: string;
 	code: string;
 	limit: number | null;
-	storedCount: number;
+	written: string[];
 }
 
 /**
@@ -118,7 +142,7 @@ function parseErrorBody(text: string): ErrorBody {
 		error: "",
 		code: "",
 		limit: null,
-		storedCount: 0,
+		written: [],
 	};
 
 	let parsed: unknown;
@@ -139,11 +163,20 @@ function parseErrorBody(text: string): ErrorBody {
 		error: typeof fields.error === "string" ? fields.error : "",
 		code: typeof fields.code === "string" ? fields.code : "",
 		limit: typeof fields.limit === "number" ? fields.limit : null,
-		storedCount: Array.isArray(fields.written) ? fields.written.length : 0,
+		written: Array.isArray(fields.written)
+			? fields.written.flatMap((entry: unknown) => {
+					const path = (entry as { path?: unknown } | null)?.path;
+					return typeof path === "string" ? [path] : [];
+				})
+			: [],
 	};
 }
 
-function toUploadError(status: number, text: string): UploadError {
+function toUploadError(
+	status: number,
+	text: string,
+	ownWords: ReadonlySet<string>,
+): UploadError {
 	// A rejected credential is the end of the session rather than of this upload;
 	// saying so and returning to login beats a banner naming a status code.
 	if (logoutIfUnauthorized(status)) {
@@ -162,19 +195,28 @@ function toUploadError(status: number, text: string): UploadError {
 			body.limit === null ? "" : ` (max ${formatBytes(body.limit)})`;
 		return new UploadError(`Too large${limit}`, {
 			code: body.code,
-			storedCount: body.storedCount,
+			written: body.written,
 			canRetry,
 		});
 	}
 
 	const rest = {
 		code: body.code,
-		storedCount: body.storedCount,
+		written: body.written,
 		canRetry,
 	};
 
+	if (body.code === "too_many_entries") {
+		const limit =
+			body.limit === null ? "" : ` (max ${body.limit.toLocaleString("en-US")})`;
+		return new UploadError(`Too many files and folders${limit}`, rest);
+	}
+
 	if (body.code === "conflict") {
 		return new UploadError(conflictMessage(body.error), rest);
+	}
+	if (body.error && ownWords.has(body.code)) {
+		return new UploadError(body.error, rest);
 	}
 
 	const known = ERROR_MESSAGES.get(body.code);
@@ -224,6 +266,58 @@ export async function uploadFile(request: UploadRequest): Promise<void> {
 	});
 }
 
+/** A folder's contents as read from a drop or a folder picker. */
+export interface FolderContents {
+	/** Each file with its path relative to the folder, `/`-separated. */
+	files: { file: File; path: string }[];
+	/**
+	 * Directories with nothing in them, relative to the folder. Only these need
+	 * a part of their own: a file's parents are created on the way.
+	 */
+	dirs: string[];
+}
+
+export interface FolderUploadRequest {
+	/** Name of the folder in the destination; differs after "Keep both". */
+	name: string;
+	destPath: string;
+	worktree: string;
+	contents: FolderContents;
+	/** Write into a folder of that name that already exists. */
+	merge: boolean;
+	onProgress?: (fraction: number) => void;
+	signal?: AbortSignal;
+}
+
+/**
+ * Sends one folder, whole, to `/api/files/upload-folder`.
+ *
+ * One request for the folder rather than one per file: only a single request
+ * lets the server make a new folder appear whole or not at all (see
+ * docs/file.md#uploading-a-folder).
+ */
+export async function uploadFolder(
+	request: FolderUploadRequest,
+): Promise<void> {
+	const { name, destPath, worktree, contents, merge, onProgress, signal } =
+		request;
+	const params = new URLSearchParams();
+	if (destPath) params.set("path", destPath);
+	params.set("name", name);
+	if (merge) params.set("merge", "true");
+	if (worktree) params.set("worktree", worktree);
+
+	const body = new FormData();
+	for (const dir of contents.dirs) body.append("dir", dir);
+	for (const { file, path } of contents.files) body.append("file", file, path);
+
+	await postUpload(apiUrl(`/api/files/upload-folder?${params}`), body, {
+		onProgress,
+		signal,
+		ownWords: FOLDER_OWN_WORDS,
+	});
+}
+
 /**
  * POSTs a multipart body to one of the upload endpoints and resolves with the
  * response text, rejecting with an `UploadError` phrased from the endpoints'
@@ -239,9 +333,11 @@ export function postUpload(
 		/** Fraction of the body sent so far, 0 to 1. */
 		onProgress?: (fraction: number) => void;
 		signal?: AbortSignal;
+		/** Codes whose message is shown as the server wrote it. */
+		ownWords?: ReadonlySet<string>;
 	} = {},
 ): Promise<string> {
-	const { onProgress, signal } = options;
+	const { onProgress, signal, ownWords = new Set() } = options;
 
 	return new Promise((resolve, reject) => {
 		if (signal?.aborted) {
@@ -274,7 +370,7 @@ export function postUpload(
 					resolve(xhr.responseText);
 					return;
 				}
-				reject(toUploadError(xhr.status, xhr.responseText));
+				reject(toUploadError(xhr.status, xhr.responseText, ownWords));
 			});
 
 		// The browser reports a dropped connection, a DNS failure and a blocked
@@ -307,12 +403,17 @@ export function nameCollision(
  * `logo.png` -> `logo (1).png`, the name "Keep both" stores a file under.
  *
  * The endpoint cannot rename, so a second copy is a matter of choosing the name
- * before sending rather than asking the server for one.
+ * before sending rather than asking the server for one. A folder has no
+ * extension to keep at the end, so `v1.2` becomes `v1.2 (1)`, not `v1 (1).2`.
  */
-export function nextAvailableName(name: string, taken: Set<string>): string {
+export function nextAvailableName(
+	name: string,
+	taken: Set<string>,
+	kind: "file" | "folder" = "file",
+): string {
 	if (!taken.has(name)) return name;
 
-	const dot = name.lastIndexOf(".");
+	const dot = kind === "folder" ? -1 : name.lastIndexOf(".");
 	// `> 0`, not `>= 0`: a leading dot is the whole name of a dotfile rather
 	// than an extension, so `.env` becomes `.env (1)` and not ` (1).env`.
 	const stem = dot > 0 ? name.slice(0, dot) : name;

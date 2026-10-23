@@ -35,10 +35,11 @@ function Zone({
 
 /** One dropped entry, as `DataTransferItem` describes it. */
 function item(file: File, isDirectory = false) {
+	const entry = { isDirectory, name: file.name };
 	return {
 		kind: "file",
 		getAsFile: () => file,
-		webkitGetAsEntry: () => ({ isDirectory }),
+		webkitGetAsEntry: () => entry,
 	};
 }
 
@@ -84,11 +85,14 @@ describe("useFileDragZone", () => {
 		expect(over.dataTransfer.dropEffect).toBe("copy");
 		expect(screen.getByText("dragging")).toBeInTheDocument();
 
-		const drop = fireDrag(target, "drop", {
-			items: [item(a), item(new File([], "src"), true)],
-		});
+		const src = item(new File([], "src"), true);
+		const drop = fireDrag(target, "drop", { items: [item(a), src] });
 		expect(drop.event.defaultPrevented).toBe(true);
-		expect(onDrop).toHaveBeenCalledWith({ files: [a], hadFolder: true });
+		// The folder as its entry, the one handle its contents can be read through.
+		expect(onDrop).toHaveBeenCalledWith({
+			files: [a],
+			folders: [src.webkitGetAsEntry()],
+		});
 		expect(screen.queryByText("dragging")).not.toBeInTheDocument();
 	});
 
@@ -230,7 +234,7 @@ describe("readPasted", () => {
 	it("takes a clipboard that holds only files", () => {
 		expect(readPasted(clipboard("", [shot]))).toEqual({
 			files: [shot],
-			hadFolder: false,
+			folders: [],
 		});
 	});
 
@@ -255,11 +259,11 @@ describe("readPasted", () => {
 		]);
 	});
 
-	it("counts a folder's name as carried, and still refuses the folder", () => {
+	it("counts a folder's name as carried, and hands the folder over apart", () => {
 		const src = item(new File([], "src"), true);
 		expect(
 			readPasted(clipboard("/home/u/notes.txt\n/home/u/src/", [notes, src])),
-		).toEqual({ files: [notes], hadFolder: true });
+		).toEqual({ files: [notes], folders: [src.webkitGetAsEntry()] });
 	});
 
 	it.each([

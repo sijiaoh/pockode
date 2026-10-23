@@ -1,10 +1,11 @@
+import { File, Folder } from "lucide-react";
 import { useEffect, useId, useRef } from "react";
 import { createPortal } from "react-dom";
 
 interface Props {
-	/** Names that already exist in the destination. */
-	names: string[];
-	/** Total files in the batch, so the count reads as "3 of 5". */
+	/** What already exists in the destination, by name. */
+	items: { name: string; isFolder: boolean }[];
+	/** Total items in the batch, so the count reads as "3 of 5". */
 	total: number;
 	/** Destination directory; empty is the workspace root. */
 	destPath: string;
@@ -22,7 +23,7 @@ interface Props {
  * to extract the shell itself.
  */
 function UploadConflictDialog({
-	names,
+	items,
 	total,
 	destPath,
 	onKeepBoth,
@@ -70,9 +71,24 @@ function UploadConflictDialog({
 
 	const stopEvent = (e: React.SyntheticEvent) => e.stopPropagation();
 	const destination = destPath || "the project root";
-	// One entry per name: two files cannot share one in a directory, and a
+	// One entry per name: two entries cannot share one in a directory, and a
 	// repeat here would be both a confusing list and a duplicate React key.
-	const listed = [...new Set(names)];
+	const listed = [...new Map(items.map((item) => [item.name, item])).values()];
+	const folders = listed.some((item) => item.isFolder);
+	const files = listed.some((item) => !item.isFolder);
+	// A folder is merged, never replaced: replacing it would take the subtree
+	// already there with it. The one answer covers both kinds in a mixed batch.
+	const overwriteLabel =
+		folders && files ? "Replace & merge" : folders ? "Merge" : "Replace";
+	const title =
+		folders && files
+			? "Items already exist"
+			: folders
+				? "Folders already exist"
+				: "Files already exist";
+	// "Files" while there is nothing but files, which is what the batch is to the
+	// user; once a folder is involved, everything counts as one item.
+	const noun = folders ? "item" : "file";
 
 	return createPortal(
 		/* biome-ignore lint/a11y/useKeyWithClickEvents: keyboard handled in useEffect */
@@ -88,19 +104,32 @@ function UploadConflictDialog({
 			<div className="absolute inset-0 z-0" onClick={onSkip} />
 			<div className="relative z-10 mx-4 w-full max-w-sm rounded-lg bg-th-bg-secondary p-4 shadow-xl">
 				<h2 id={titleId} className="text-lg font-bold text-th-text-primary">
-					Files already exist
+					{title}
 				</h2>
 				<p className="mt-2 text-sm text-th-text-muted">
-					{names.length} of {total} {total === 1 ? "file" : "files"} already
-					{names.length === 1 ? " exists" : " exist"} in {destination}:
+					{items.length} of {total} {total === 1 ? noun : `${noun}s`} already
+					{items.length === 1 ? " exists" : " exist"} in {destination}:
 				</p>
 				<ul className="mt-2 max-h-40 overflow-auto rounded-lg border border-th-border px-3 py-2 text-sm text-th-text-secondary">
-					{listed.map((name) => (
-						<li key={name} className="truncate py-0.5">
-							{name}
-						</li>
-					))}
+					{listed.map(({ name, isFolder }) => {
+						const Icon = isFolder ? Folder : File;
+						return (
+							<li key={name} className="flex items-center gap-1.5 py-0.5">
+								<Icon
+									className="h-3.5 w-3.5 shrink-0 text-th-text-muted"
+									aria-hidden="true"
+								/>
+								<span className="truncate">{isFolder ? `${name}/` : name}</span>
+							</li>
+						);
+					})}
 				</ul>
+				{folders && (
+					<p className="mt-2 text-xs text-th-text-muted">
+						Merge adds the folder's files to the existing one and replaces files
+						with the same path. Nothing else is removed.
+					</p>
+				)}
 
 				<div className="mt-4 flex flex-wrap justify-end gap-2">
 					<button
@@ -115,7 +144,7 @@ function UploadConflictDialog({
 						onClick={onReplace}
 						className="rounded-lg border border-th-error px-4 py-2 text-sm text-th-error transition-colors hover:bg-th-error/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-th-accent"
 					>
-						Replace
+						{overwriteLabel}
 					</button>
 					<button
 						ref={keepBothRef}
