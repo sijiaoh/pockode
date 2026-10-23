@@ -67,7 +67,7 @@ lifecycle_rules: |
   Pockode passes your subtasks' questions up to you, because you often know the answer already — you decided it, or a sibling task settled it. You are their coordinator, so settling it is yours to do, in one of exactly two ways:
 
   - You know the answer: give it with `question_answer` (a question is named by the session it is waiting in and its request id, both of which come with it). The subtask is told the answer came from you and not from the user.
-  - You do not know it: do not guess, and do not leave it sitting there. Ask the user yourself with `question_post`. That is what deciding you cannot decide looks like, and it is an ordinary thing to do.
+  - You do not know it: do not guess, and do not leave it sitting there. Ask the user yourself with `question_post`. That is what deciding you cannot decide looks like, and it is an ordinary thing to do. When the user answers your copy, pass the answer on with `question_answer`. The subtask's own question stays up meanwhile and may be settled there first — answered, or withdrawn — and Pockode tells you when it is: then withdraw your copy with `question_cancel`, so the user is not left being asked something already settled.
 
   Ignoring it is not a third way. If a turn of yours ends while a subtask is still waiting on a question and you have none of your own outstanding, Pockode nudges you for it and spends your allowance — so a story that keeps ignoring one is stopped. Asking the user takes you out of that: while a question of yours is unanswered, Pockode reads your subtask's question as one you are handling.
 
@@ -168,9 +168,33 @@ child_question_nudge: |
   {{end}}{{end}}Request ID: {{.RequestID}}
   {{end}}
   - If you know an answer, give it with question_answer (its request_id and the session_id above — naming both saves a refused call when a fork left the same request id waiting in two sessions; {{if .AnyOptions}}`answers` for the labels you pick from a question's options, `text` for anything in your own words, which is the whole answer to a question that offered nothing to pick{{else}}`text` — {{if eq (len .Questions) 1}}this question{{else}}these questions{{end}} offered nothing to pick, so the answer is your own words{{end}}). The task is told the answer came from you, not from the user.
-  - If you do not know, do not guess — and do not leave it: ask the user yourself with question_post. Your own question is how a story says "I cannot decide this", and it is what tells Pockode you are handling this one.
+  - If you do not know, do not guess — and do not leave it: ask the user yourself with question_post. Your own question is how a story says "I cannot decide this", and it is what tells Pockode you are handling this one. If the user answers your copy, pass the answer on with question_answer. The task's own question stays up meanwhile and may be settled there first; you will be told when it is, and should then withdraw your copy with question_cancel (your copy's request_id, not the task's), so the user is not left being asked something already settled.
 
   This message changes nothing else: the task is still running, and if you were waiting for your subtasks you still are. Answering is not a reason to stop waiting.
+
+# Sent to a story when questions one of its subtasks posted stop waiting:
+# answered or declined by the user or by another agent, or withdrawn — by the
+# task itself, by its step_done, or by its closing. An answer the story gave
+# itself is not sent: the story already knows.
+#
+# It exists so that a story that forwarded a question (its own question_post)
+# withdraws its copy rather than leaving the user asked something already
+# settled. Like child_question_nudge it clears nothing.
+# Placeholders: {{.ChildTitle}}, {{.ChildID}}, {{.ChildSessionID}},
+# {{.AnyAnswered}}, {{.Questions}} (Header, Question, RequestID, Outcome)
+#
+# Sent only to a story that may be holding a copy — a question of its own up,
+# or a turn running that may be posting one (Engine.mayHoldCopy).
+child_question_settled_nudge: |
+  Task "{{.ChildTitle}}" (ID: {{.ChildID}}, session ID: {{.ChildSessionID}}) is no longer asking {{if eq (len .Questions) 1}}this question{{else}}these {{len .Questions}} questions{{end}}:
+  {{range .Questions}}
+  {{.Header}}: {{.Question}}
+  Request ID: {{.RequestID}}
+  {{.Outcome}}
+  {{end}}
+  If you forwarded {{if eq (len .Questions) 1}}it{{else}}any of them{{end}} to the user with your own question_post, withdraw that copy now with question_cancel, naming the request_id your question_post gave you (not the task's above): the user would otherwise go on being asked something already settled.{{if .AnyAnswered}} If you were holding off on something until an answer came, carry on with the answer above.{{end}}
+
+  This message changes nothing else: if you were waiting for your subtasks you still are.
 
 # Sent to a story whose turn ended while a subtask of its is still waiting on a
 # question, and the story has posted none of its own. It is a nudge, not news:
@@ -224,10 +248,16 @@ stranded_wait_nudge: |
 # A stopped story is the one to explain. Nothing happens to it until it is
 # restarted, which is exactly the news a watcher waiting for it to finish
 # would otherwise never get.
+#
+# Closing withdraws every question the story was still asking, and this is
+# where the watcher hears it, rather than in watched_story_question_settled:
+# the close releases the watch in the same write, so by the time the
+# withdrawal happens the story names no watcher to tell. Stopping withdraws
+# nothing — the question still waits, and answering it restarts the story.
 # Placeholders: {{.Title}}, {{.ID}}, {{.Status}} (closed or stopped)
 watched_story_ended: |
   {{if eq .Status "closed" -}}
-  Story "{{.Title}}" (ID: {{.ID}}), which you started and were watching, has been closed, and your watch of it ends here. Use work_comment_list with work_id {{.ID}} to read what it reported.
+  Story "{{.Title}}" (ID: {{.ID}}), which you started and were watching, has been closed, and your watch of it ends here. Use work_comment_list with work_id {{.ID}} to read what it reported. Closing withdrew any question it was still asking: if you forwarded one to the user with your own question_post, withdraw that copy with question_cancel.
   {{- else -}}
   Story "{{.Title}}" (ID: {{.ID}}), which you started and are watching, has been stopped: it was handed back to a person, and nothing happens to it until it is restarted. Use work_comment_list with work_id {{.ID}} to see why — a story is stopped when a person stops it, when its agent keeps going quiet without finishing, or when its chat is deleted. Restart it with story_start if what stopped it is settled, or leave it to the user.
   {{- end}}
@@ -250,7 +280,27 @@ watched_story_question: |
   {{if .Recommended}}The story would pick: {{.Recommended}}
   {{end}}{{end}}Request ID: {{.RequestID}}
   {{end}}
-  If you know an answer, you may give it with question_answer (its request_id and the session_id above; {{if .AnyOptions}}`answers` for the labels you pick from a question's options, `text` for anything in your own words, which is the whole answer to a question that offered nothing to pick{{else}}`text`, since {{if eq (len .Questions) 1}}this question{{else}}these questions{{end}} offered nothing to pick{{end}}). The story is told the answer came from you, not from the user. If you do not know it, do not guess: the user is being asked already, and the story carries on either way.
+  If you know an answer, you may give it with question_answer (its request_id and the session_id above; {{if .AnyOptions}}`answers` for the labels you pick from a question's options, `text` for anything in your own words, which is the whole answer to a question that offered nothing to pick{{else}}`text`, since {{if eq (len .Questions) 1}}this question{{else}}these questions{{end}} offered nothing to pick{{end}}). The story is told the answer came from you, not from the user. If you do not know it, do not guess: the user is being asked already, and the story carries on either way. If you ask the user a copy yourself with question_post anyway, pass the answer on with question_answer when it comes. The story's own question stays up meanwhile and may be settled there first — answered, or withdrawn — and you will be told when it is: then withdraw your copy with question_cancel (your copy's request_id, not the story's), so the user is not left being asked something already settled.
+
+# Sent to the session watching a story when questions the story itself posted
+# stop waiting: answered or declined by the user or by another agent, or
+# withdrawn by the story (question_cancel) or by its step_done. The watcher's
+# counterpart of child_question_settled_nudge, for the same reason: a watcher
+# that forwarded a question withdraws its copy. The story closing is not sent
+# here: watched_story_ended says it for every question at once.
+# Placeholders: {{.Title}}, {{.ID}}, {{.SessionID}},
+# {{.Questions}} (Header, Question, RequestID, Outcome)
+#
+# Sent only to a watcher that may be holding a copy (Engine.mayHoldCopy), and
+# never for an answer the watcher gave itself (Engine.HandleQuestionsSettled).
+watched_story_question_settled: |
+  Story "{{.Title}}" (ID: {{.ID}}, session ID: {{.SessionID}}), which you started and are watching, is no longer asking {{if eq (len .Questions) 1}}this question{{else}}these {{len .Questions}} questions{{end}}:
+  {{range .Questions}}
+  {{.Header}}: {{.Question}}
+  Request ID: {{.RequestID}}
+  {{.Outcome}}
+  {{end}}
+  If you forwarded {{if eq (len .Questions) 1}}it{{else}}any of them{{end}} to the user with your own question_post, withdraw that copy now with question_cancel, naming the request_id your question_post gave you (not the story's above): the user would otherwise go on being asked something already settled.
 
 # Step advance section (shown when advancing to the next step)
 # Placeholders: {{.PrevStep}}, {{.TotalSteps}}, {{.CurrentStep}}, {{.StepPrompt}}, {{.ID}}

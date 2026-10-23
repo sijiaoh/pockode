@@ -45,7 +45,7 @@ running, and a wait whose last running child leaves *without* closing is cleared
 by the engine with a message saying what became of it. Either case would
 otherwise leave a coordinator waiting forever, and waiting quietly — the engine
 does not nudge a waiting work
-([work-system.md](../code/work-system.md#input-5-a-child-work-left-active)).
+([work-system.md](../code/work-system.md#input-6-a-child-work-left-active)).
 
 ## Status Transitions
 
@@ -110,7 +110,7 @@ and continue orchestration.
 ## The Work Engine
 
 `work.Engine` is the only thing that moves a work item without being asked to. It
-has seven inputs and no special cases beside them:
+has eight inputs and no special cases beside them:
 
 | Input | What it does |
 |---|---|
@@ -118,6 +118,7 @@ has seven inputs and no special cases beside them:
 | A user message | back to `active`, wait and nudges cleared |
 | A posted question was answered, by the user or by another agent (`question_answer`) | nudges cleared and a `stopped` work woken, the same either way; a `child` wait deliberately left standing — no subtask closed |
 | An agent posted a question | passed up to an *active* parent story as `child_question`, which clears nothing and is never retried; a story's own question goes to its watcher, if any, as `watched_story_question` |
+| A posted question stopped waiting — answered, declined, or withdrawn by `question_cancel`, `step_done` or a close | passed back down the path it went up, as `child_question_settled` / `watched_story_question_settled`, so a copy forwarded to the user can be withdrawn; only to one that may hold a copy, never for its own answer; clears nothing, is never retried; a close reaches a watcher as `watched_story_ended` instead |
 | A child work left `active` | a child that *closed*: tell an *active* parent and clear a `child` wait; a child that left any other way: clear a `child` wait nothing is left to end, and wake the parent to decide; a watched story closing or being stopped tells its watcher |
 | The session was deleted | → `stopped`; every story it was watching is released |
 | Server startup | `active` with no wait → `stopped` + comment; a work with an unanswered question is preserved; a work waiting on children is preserved only while one of them is still `active`, and otherwise `stopped` + comment |
@@ -300,8 +301,20 @@ spend finding that out
 
 The story is offered the two ways forward for each question — answer it, or ask
 the user itself — and told which two are not on offer: guessing, and leaving it.
+Asking the user comes with the duty to pass the answer on and to withdraw the
+copy if the original is settled first, which the message below is for.
 The last line says the message changed nothing else, because an agent handed
 something to do otherwise assumes its wait is over, and this one clears no wait.
+
+### BuildChildQuestionSettledMessage
+
+Base + the questions of a subtask that one act settled, each with its
+`request_id` and one line saying how it was settled, and the instruction to
+withdraw any copy the story forwarded. What it says, which settlings are sent
+and to which stories are all
+[work-system.md](../code/work-system.md#input-5-a-posted-question-stopped-waiting).
+`BuildWatchedStoryQuestionSettledMessage` is the watcher's counterpart, without
+the base, as every `watched_story_*` message is.
 
 ### BuildChildQuestionReminderMessage
 

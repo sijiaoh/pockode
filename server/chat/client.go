@@ -98,6 +98,7 @@ type Client struct {
 	store     session.Store
 	pm        *process.Manager
 	broadcast EventBroadcastFunc
+	settled   QuestionsSettledFunc
 	// postMu keeps each PostQuestions call's questions contiguous; see there.
 	postMu sync.Mutex
 }
@@ -110,6 +111,29 @@ func NewClient(store session.Store, pm *process.Manager) *Client {
 // subscribers.
 func (c *Client) SetBroadcaster(fn EventBroadcastFunc) {
 	c.broadcast = fn
+}
+
+// QuestionsSettledFunc is told when posted questions stop waiting in a session,
+// however that happened: answered, declined, or withdrawn. Questions settled
+// together arrive in one call — one message answering several, one work closing
+// over several — so that whoever passes the news on can pass it on as one.
+//
+// It is called after the session's state already says so, on the caller's
+// goroutine, and must not block.
+type QuestionsSettledFunc func(sessionID string, settled []agent.SettledQuestion)
+
+// SetOnQuestionsSettled sets what is told when posted questions stop waiting.
+// It is the one place a question leaves the unanswered list on purpose, so it
+// is the one place to learn it from — every way of settling one goes through
+// this client.
+func (c *Client) SetOnQuestionsSettled(fn QuestionsSettledFunc) {
+	c.settled = fn
+}
+
+func (c *Client) notifySettled(sessionID string, settled []agent.SettledQuestion) {
+	if c.settled != nil && len(settled) > 0 {
+		c.settled(sessionID, settled)
+	}
 }
 
 // SendMessageExcluding sends a user message to the agent process, persists it to

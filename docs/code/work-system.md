@@ -151,13 +151,13 @@ time one was missed, and four separate mechanisms existed to repair them.
 | Wait | Set by | Cleared by |
 |------|--------|------------|
 | none | every transition into active | — |
-| `child` | `story_wait` | a child work closing, or a user message — or the engine, when no child is left that could close ([input 5](#input-5-a-child-work-left-active)) |
+| `child` | `story_wait` | a child work closing, or a user message — or the engine, when no child is left that could close ([input 6](#input-6-a-child-work-left-active)) |
 
 A wait is orthogonal to the status: a waiting work is still **active** — the
 engine still owns it — it simply must not be nudged to carry on. It is cleared
 by something that arrives from *outside* the session, which is why it survives a
 server restart while a work with nothing outstanding does not
-([startup](#input-7-startup)).
+([startup](#input-8-startup)).
 
 **There was a second value, `user`, and it is gone** — with `WaitReason`, the
 free-text line that went with it. An agent that needs something from a person
@@ -211,7 +211,7 @@ encapsulates its validation and its bookkeeping.
 | `SetWait(id, wait, reason)` | live → active with that wait | Record what the agent is waiting for (`WaitNone` clears it) |
 | `SetChildWait(id, reason)` | live with an active child → active + `child` | The same for a wait on subtasks, which is refused — *reported*, not an error — when no subtask is running |
 | `Activate(id)` | live → active, wait and nudges cleared | Someone handed the work something to go on |
-| `ClearChildWaitIfStranded(id)` | `active` + `child` with no active child → active, wait and nudges cleared | The same, for a wait nothing could end — and it *reports* whether this call was the one that ended it, which is what it is for ([input 5](#a-wait-nothing-could-end)) |
+| `ClearChildWaitIfStranded(id)` | `active` + `child` with no active child → active, wait and nudges cleared | The same, for a wait nothing could end — and it *reports* whether this call was the one that ended it, which is what it is for ([input 6](#a-wait-nothing-could-end)) |
 | `RecordNudge(id)` | counts one nudge, returns the total | The engine compares it against its own limit |
 | `Reopen(id)` | closed → active | Reopen a closed item to add children or continue |
 | `RollbackStart(id, wasRestart)` | active → open/stopped | Undo a failed start |
@@ -224,7 +224,7 @@ written through `setLiveStatus`, and for one reason: their condition is about th
 work *and its children*, while `setLiveStatus` hands a mutate func the single
 record it is changing. Written that way each would have to read the children
 outside the lock, and that read is the bug they exist to remove — see
-[input 5](#a-wait-nothing-could-end). They share one predicate,
+[input 6](#a-wait-nothing-could-end). They share one predicate,
 `work.HasActiveTask`: "is there still something that could close" is one
 question, and a wait set on one answer and cleared on another would be a wait
 that argues with itself.
@@ -251,7 +251,7 @@ refused.
 
 `stopped` is admitted beside `active` there for a reason that is not
 hypothetical. A kickoff that fails deletes the session it created, and the engine
-stops the work of a deleted session ([input 6](#input-6-the-session-was-deleted))
+stops the work of a deleted session ([input 7](#input-7-the-session-was-deleted))
 — so that stop and this rollback race, in either order. With the session id as
 the identity both orders converge: the stop lands first and the rollback still
 undoes it, or the rollback lands first and the stop finds no work owning that
@@ -513,6 +513,13 @@ withdraws the copy in the *caller's* session, and a copy a fork carried
 elsewhere is that session's agent's to withdraw. When the caller is not among
 the sessions waiting, the refusal names the candidates the same way.
 
+Neither an answer nor a withdrawal stops at the session it settles. A question
+that was passed up — a task's to its story, a story's to its watcher — may have
+been forwarded to the user as a copy, so its settling is passed back down the
+same path ([input 5](#input-5-a-posted-question-stopped-waiting)) — which the
+`question_cancel` description tells the agent, so it does not withdraw a
+question believing nobody hears of it.
+
 There is deliberately **no tool that lists questions**: the answer arrives as a
 message, so a list would only invite an agent to poll for it inside the turn it
 was told not to wait in. The mechanism and how to word a question are in the
@@ -645,7 +652,7 @@ auth failures are surfaced to the AI rather than failing silently.
 ## The Work Engine
 
 `work.Engine` is the only thing that moves a work item without being told to by a
-person or by an agent. It has exactly seven inputs, and no special cases beside
+person or by an agent. It has exactly eight inputs, and no special cases beside
 them. What the old `AutoResumer` and `StatusSyncer` did with process state
 changes is gone: a process state is not a work state, and every rule that read
 one turned out to be a rule about a turn ending — which is what the engine reads
@@ -657,6 +664,7 @@ instead.
 | The user handed the session something to go on | the three chat RPCs |
 | A posted question was answered | `chat.message` with `answering`, or the `question_answer` MCP tool |
 | An agent posted a question | the `question_post` MCP tool |
+| A posted question stopped waiting — answered, declined or withdrawn | `chat.Client.SetOnQuestionsSettled`, wired per worktree by `worktree.Manager` |
 | A child work left active (and a watched story closed or stopped) | the work store's own change event |
 | The session was deleted | `Engine.OnSessionDeleted`, wired per worktree by `worktree.Manager` |
 | The server started | `RecoverStartup`, before any session exists |
@@ -848,7 +856,10 @@ fork.
 The story answers with `question_answer`, or asks the user itself with
 `question_post`. **Leaving it is not a third way** — the story is the subtask's
 coordinator, and a question left sitting there is what [input
-1](#input-1-a-turn-ended) nudges the story for.
+1](#input-1-a-turn-ended) nudges the story for. A story that asks the user is
+told to pass the answer on with `question_answer`, and to withdraw its copy if
+the subtask's original is settled first — which it hears from
+[input 5](#input-5-a-posted-question-stopped-waiting).
 
 A question's options are quoted with it, and the ones the subtask recommended go
 on a line of their own beneath — "The task would pick: …" — rather than being
@@ -860,15 +871,16 @@ quote a question the same way (`work.quoteQuestion`).
 **It clears no wait.** A `child` wait ends when a subtask *closes*, and a subtask
 asking a question is not that — the subtask carries on either way. So a story
 that answers and ends its turn is still waiting for exactly what it was waiting
-for, and is not nudged for it. That is the mirror of input 5, which does clear
+for, and is not nudged for it. That is the mirror of input 6, which does clear
 the wait, because there the thing being waited for has happened. The message says
 so in words, because an agent handed something to do otherwise assumes its wait
 is over.
 
 **Nothing is retried and nothing is stopped when it cannot be delivered** — a
 stopped or closed story, one whose turn is held open by a permission request.
-That is the other half of the same difference: the two notifications below carry
-news a waiting parent is *owed*, so an undelivered one leaves it waiting for
+That is the other half of the same difference: the two notifications of
+[input 6](#input-6-a-child-work-left-active) carry news a waiting parent is
+*owed*, so an undelivered one leaves it waiting for
 something that already happened. This one takes nothing away. The question stays
 on the subtask, where the user can see it and answer it.
 
@@ -882,7 +894,99 @@ same thing sooner, by telling a story to read its subtasks' unanswered questions
 A question posted by a *story* has no parent to go to; it goes to the story's
 watcher, if it has one ([A story's watcher](#a-storys-watcher)).
 
-### Input 5: a child work left active
+### Input 5: a posted question stopped waiting
+
+Input 4 and [a story's watcher](#a-storys-watcher) pass a question *up*; this
+input passes its settling back down the same path — task → story → watching
+session. A story passed a subtask's question may have forwarded it: posted its
+own copy to the user, because it could not decide. Nothing else would ever tell
+it the original was settled, so the copy would go on asking the user something
+nobody is asking any more, and the story would go on counting as having a
+question outstanding — which is also what silences
+[input 1](#input-1-a-turn-ended)'s nudges.
+
+It is reached as `Engine.HandleQuestionsSettled(sessionID, settled)`, from the
+one place a question leaves the unanswered list on purpose: the chat client
+([agent-integration.md](agent-integration.md#who-is-told-a-question-stopped-waiting)).
+Answering in the chat, `question_answer`, `question_cancel`, `step_done` and a
+close all settle a question through that client, so none of them is a caller of
+the engine's. The questions one act settled travel as one message, for the
+reason [input 4](#input-4-a-subtasks-question-reaches-its-story)'s do.
+
+**Every way of stopping is news but one**, because whatever stopped the
+question, the copy is now asking something nobody is:
+
+| How the question stopped waiting | Passed on | Why |
+|---|---|---|
+| answered or declined — by the user, or by another agent | yes, with the answer | the copy can go, and the answer may be what the story needed too |
+| answered by the agent being told | no | it gave the answer, so it knows |
+| withdrawn by its asker (`question_cancel`) | yes | nobody is asking any more, whatever the reason |
+| withdrawn by the asker's `step_done` | yes | the asker carries on, and nothing else would say so |
+| withdrawn by the asker closing | yes to a story; a watcher hears it from `watched_story_ended` | `child_done` arrives too, but says nothing about questions |
+| the asker was stopped | — nothing was settled | stopping withdraws nothing: the question still waits, and answering it restarts the work ([input 3](#input-3-a-posted-question-was-answered)) |
+
+**The answerer's own answer is recognised differently on the two legs.** A story
+is recognised by its work id (`ResolvedBy.WorkID`); a watcher by the answering
+session (`ResolvedBy.SessionID`), because a watcher is often a plain chat with
+no work id to compare. That is what the resolver's `session_id` is recorded for
+([agent-integration.md](agent-integration.md#an-agent-may-answer-and-the-record-says-who-did)).
+
+**The watcher leg does not see its story close.** Closing releases the watch in
+the same write as the close ([A story's watcher](#a-storys-watcher)), so by the
+time the session is retired and its questions withdrawn the story names nobody
+to tell. `watched_story_ended` says it instead, for every question at once — one
+message rather than two, and none to order against each other.
+
+**Only someone who may be holding a copy is told** (`Engine.mayHoldCopy`): a
+session with a question of its own up, or one whose turn is running. Anything
+else would be told for nothing, and a message starts a turn: a story idle in
+`story_wait` would wake just to read "if you forwarded it…". The running turn
+counts to close a race rather than to save a cost: a session passed a
+question starts a turn to read it, and the user can answer the original before
+that turn reaches `question_post`, so a check that found no copy yet would drop
+the news the copy is about to need. A session that cannot be read is told — an
+extra message costs a turn, a missed one leaves the user asked a settled
+question. Beyond that, the usual gates apply: a story is told only while
+`active`, as for `child_question`; a watcher by `work.WakesWatcher`. The
+watched story's own status is not read — a stopped story's question answered by
+the user is still a copy the watcher should withdraw.
+
+**A chain carries itself to its end.** The user answers a task's question; its
+story is told and withdraws its forwarded copy with `question_cancel`; that
+withdrawal is itself a story's question settling, so the watcher is told
+"withdrawn by the story itself" and withdraws its own. No step of it knows the
+chain is there.
+
+**What the agents are told** (`child_question_settled_nudge`,
+`watched_story_question_settled`): each question with its request id and how it
+was settled in one line — "Answered by the user: Postgres", "Withdrawn: the
+task completed the step it was asked in" — and to withdraw its own copy with
+`question_cancel`, by the request id *its* `question_post` returned, not the
+original's. Only when something was answered does a story's message add that it
+may carry on with the answer; a withdrawal or a decline gives it nothing to
+carry on with. The story's message says its wait is unchanged, for the reason
+input 4's does. The other half of the instruction is given where a question is
+first passed up — `child_question_nudge`, `watched_story_question` and the
+story's lifecycle rules all say to pass the user's answer on with
+`question_answer`, and that the original may be settled first.
+
+**Like input 4 it clears no wait and is retried nowhere — but nothing makes up
+for an undelivered one.** Input 4 has the story's turn end reading the live
+list behind it; here the question has *left* that list, so a story that missed
+the message keeps its copy up until the user answers it or the story's step
+ends, and a watcher, which has no turn-end reminder at all, until the user
+answers it. Three narrower gaps are known and left:
+
+- **A question posted and withdrawn within an instant** can be told settled
+  before it is told asked — to someone who holds no copy yet and so is not told
+  at all — and then be offered to forward. Nothing orders the two messages.
+- **An answer a Stop discards** puts the question back on the asker's list, but
+  the story was already told it was answered; only the turn-end reminder
+  (`childrenAwaitingAnswers`) brings it back to the story's attention.
+- **Deleting the asker's session** takes its questions with it without going
+  through the chat client, so nobody is told.
+
+### Input 6: a child work left active
 
 The engine hears every work change, and a child leaving `active` is one of three
 things it reads off them (the others are
@@ -939,7 +1043,7 @@ with the news. **Stopping a parent whose agent is reachable would be worse than
 the bug**: it takes away the recovery that costs nobody anything — the agent
 restarting the subtask itself — and makes a user who stopped one subtask restart
 two things. That holds exactly as long as there *is* an agent to wake, which is
-why the two cases below, and [input 7](#input-7-startup), stop instead.
+why the two cases below, and [input 8](#input-8-startup), stop instead.
 
 Three ways a child can leave without closing, and the message names which,
 because the way back differs:
@@ -988,7 +1092,7 @@ that never could have ended. Both decisions are taken in the store, by the same
 predicate, for the same reason — neither may be assembled from a read and a
 write.
 
-### Input 6: the session was deleted
+### Input 7: the session was deleted
 
 A deleted session takes away the place every answer and every nudge would have
 gone, so the work above it stops — including one that was *waiting*, which is the
@@ -1011,7 +1115,7 @@ that was actually there, since the id is the caller's and could otherwise name
 a live session elsewhere. Deleting a *work* needs no such rule: it cascades into
 its sessions, so no work is left behind to lie about its status.
 
-### Input 7: startup
+### Input 8: startup
 
 `RecoverStartup` runs once, before any session exists.
 
@@ -1065,7 +1169,7 @@ in this pass, so no stop in it can strand another wait. A third level is what
 would turn this into a loop to a fixed point, and the model cannot express one
 — `TestCreate_StoryIDMustNameAStory` is where that is held.
 
-**Startup stops where [input 5](#a-wait-nothing-could-end) wakes, and the two
+**Startup stops where [input 6](#a-wait-nothing-could-end) wakes, and the two
 agree rather than contradict.** Waking hands the decision to the agent, which
 presumes there is an agent: at startup every process died with the last run, so
 there is nobody to decide and nothing to tell. Stopping is also what keeps it
@@ -1125,13 +1229,14 @@ work a restart stops.
 `story_start` with `watch: true` records the calling session as the story's
 `Watcher` (`{session_id, worktree}`), and the engine sends that session the
 story's news — often into a plain chat that runs no work at all. It adds no
-input: the news is read off inputs 4 and 5.
+input: the news is read off inputs 4, 5 and 6.
 
 | What happened to the story | Subtype |
 |---|---|
 | it closed | `watched_story_closed` |
 | it was stopped | `watched_story_stopped` |
 | it posted a question of its own | `watched_story_question` |
+| a question of its own stopped waiting | `watched_story_question_settled` ([input 5](#input-5-a-posted-question-stopped-waiting)) |
 
 **The watch is a flag, not a session id.** The session woken is always the
 caller's own ([MCP caller identity](agent-integration.md#mcp-caller-identity)),
@@ -1164,7 +1269,7 @@ a write would otherwise be released by a call meant for its predecessor:
 | Who lets go | Through | Releases |
 |---|---|---|
 | the watcher itself | `story_unwatch` | only the caller's own watch (`{session_id, worktree}` must match exactly) |
-| nobody — the watching session was deleted | [input 6](#input-6-the-session-was-deleted) | every watch held by exactly that session |
+| nobody — the watching session was deleted | [input 7](#input-7-the-session-was-deleted) | every watch held by exactly that session |
 
 An agent lowers only the flag it raised: another chat's watch is that chat's,
 and finding one, or none, is not an error — the caller wanted not to be told,
@@ -1212,7 +1317,7 @@ watch (the send fails with `session.ErrSessionNotFound`, which
 importing `chat`). The other is whatever `work.WakesWatcher` rules out: the
 story's own session — it is the one doing the telling — and a session running a
 work that is not `active`, because a message starts a turn — the reason
-[a stopped parent](#input-5-a-child-work-left-active) is told nothing either.
+[a stopped parent](#input-6-a-child-work-left-active) is told nothing either.
 Anything else is logged as a fault — including a watcher whose turn is holding
 a request on screen, which refuses every message: that news is lost, not
 queued, and the story's status and comments are where it is found again.
@@ -1314,7 +1419,7 @@ step_done ──► Operations.StepDone()
             yes        no
               │        │
               ▼        ▼
-       CurrentStep++   Close work ──► the parent is told (input 5)
+       CurrentStep++   Close work ──► the parent is told (input 6)
               │                       the session is retired (the lease)
               ▼
        Engine.NotifyStepDone() ──► send next-step prompt
@@ -1495,7 +1600,7 @@ before it was leaves nothing behind either.
 No subscriber is notified along the on-disk path, and there is nobody to notify:
 the worktree's watchers stopped with it. A client that deletes this way re-reads
 instead of waiting to be told. The work engine is still told
-([input 6](#input-6-the-session-was-deleted)): there is no work waiting in such
+([input 7](#input-7-the-session-was-deleted)): there is no work waiting in such
 a session for it to stop — the protection above means none can exist — but a
 chat there may have been watching a story that lives elsewhere and is still
 open.
@@ -2122,11 +2227,13 @@ A system-driven message is refused in exactly one state, like any other: while t
 | `step_advance` | `Engine.NotifyStepDone` | Step N/M | work title |
 | `reopen` | `Engine.NotifyReopen` | Reopened | work title |
 | `child_question` | the engine passing a subtask's question up | Subtask asked | child title |
+| `child_question_settled` | the engine passing on that a subtask's question stopped waiting | Question settled | child title |
 | `child_done` | the engine telling a parent | Subtask done | child title |
 | `wait_stranded` | the engine clearing a wait nothing could end | Wait cleared | child title |
 | `watched_story_closed` | the engine telling a story's watcher | Story done | watched story title |
 | `watched_story_stopped` | the engine telling a story's watcher | Story stopped | watched story title |
 | `watched_story_question` | the engine passing a watched story's question on | Story asked | watched story title |
+| `watched_story_question_settled` | the engine passing on that a watched story's question stopped waiting | Question settled | watched story title |
 | *(unknown or absent)* | — | System Message | work title |
 
 Every action word states a finished fact — something started, continued, reached step 2 — because by the time anyone reads it the event is over. Wording it that way is the cheapest guard there is against the rule at the top of this section: a word that can only describe a moment cannot be mistaken for a live status.
@@ -2137,9 +2244,10 @@ Every action word states a finished fact — something started, continued, reach
 - **`child_done` names the child.** The message is delivered to the parent but reports on the subtask, so the parent's own title is noise next to it.
 
 - **`child_question` names the child for the same reason**, and its action word is what the subtask did rather than what the story must do: the story either answers it or asks the user itself, and a line promising either would be wrong half the time. The story's *reminder* to settle one is an `auto_continue` rather than a second `child_question` — it is a nudge, spending the allowance and ending in a stop, not news — and one of them may be about several subtasks at once, while `meta.child` holds one.
+- **`child_question_settled` and `watched_story_question_settled` share one action word**, and it says what happened to the question rather than how: answered, declined and withdrawn all reach the receiver as the same news — its copy can go — and the line would otherwise have to pick one outcome for a message that may carry several.
 - **The `watched_story_*` subtypes name the watched story**, for the reason `child_done` names the child — and more so, since the receiver is often a plain chat with no title of its own.
 
-**Meta summary** — `NewMessageMeta(w, step, total)` builds that data so the UI never has to read the prompt body (whose first lines are always the MCP boilerplate prefix). It carries `work_id` / `work_type` / `title` from `w`, plus `step` when the send site has real step context (`total > 0` and `1 <= step <= total`); `child_done`, `child_question` and `wait_stranded` additionally carry `child: {id, title}`, so the line can name the subtask without parsing the prompt; the `watched_story_*` subtypes carry `story: {id, title}` instead. A watcher running no work gets a `meta` holding only `story` — there is no receiving work to describe.
+**Meta summary** — `NewMessageMeta(w, step, total)` builds that data so the UI never has to read the prompt body (whose first lines are always the MCP boilerplate prefix). It carries `work_id` / `work_type` / `title` from `w`, plus `step` when the send site has real step context (`total > 0` and `1 <= step <= total`); `child_done`, `child_question`, `child_question_settled` and `wait_stranded` additionally carry `child: {id, title}`, so the line can name the subtask without parsing the prompt; the `watched_story_*` subtypes carry `story: {id, title}` instead. A watcher running no work gets a `meta` holding only `story` — there is no receiving work to describe.
 
 Every subtype fills `step`, including the three whose prompt body never restates one — `restart`, `reopen` and `child_done` append only their nudge (see *Prompt Format*). Summary and body answer different questions: the body says what the agent has to act on, the summary says where the work stood, and the UI needs the latter even when the prompt withholds it. `step` is omitted only when there is genuinely no position to report — a stepless role, a failed step lookup (`stepCount` answers 0 for both, since a missing step provider must not block a message), or a `current_step` left out of range by a role whose steps were shortened afterwards.
 
@@ -2225,9 +2333,11 @@ work_context: |
 | `task_reopen_nudge` | Task reopen | (none) |
 | `child_question_nudge` | A subtask's question passed up | `ChildTitle`, `ChildID`, `ChildSessionID`, `Header`, `Question`, `RequestID`, `Options`, `MultiSelect` |
 | `child_question_reminder_nudge` | A story nudged to settle its subtasks' questions | `Questions` (each: `ChildTitle`, `ChildID`, `SessionID`, `RequestID`, `Header`, `Question`) |
+| `child_question_settled_nudge` | A subtask's question stopped waiting | `ChildTitle`, `ChildID`, `ChildSessionID`, `AnyAnswered`, `Questions` (each: `Header`, `Question`, `RequestID`, `Outcome`) |
 | `stranded_wait_nudge` | A wait nothing could end | `ChildTitle`, `ChildID`, `ID`, `Exit` |
 | `watched_story_ended` | A watched story closed or was stopped | `Title`, `ID`, `Status` |
 | `watched_story_question` | A watched story's question passed on | `Title`, `ID`, `SessionID`, `Header`, `Question`, `RequestID`, `Options`, `MultiSelect` |
+| `watched_story_question_settled` | A watched story's question stopped waiting | `Title`, `ID`, `SessionID`, `Questions` (each: `Header`, `Question`, `RequestID`, `Outcome`) |
 | `step_advance_section` | Step advance | `PrevStep`, `TotalSteps`, `CurrentStep`, `StepPrompt`, `ID` |
 | `current_step_section` | Initial step display | `CurrentStep`, `TotalSteps`, `StepPrompt`, `ID` |
 | `pockode_lead_command` | The [`/pockode-lead`](../pockode-commands.md#pockode-lead) command, sent as the user's message | `Branch`, `Args` |

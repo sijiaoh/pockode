@@ -169,12 +169,18 @@ func (c *Client) postQuestion(ctx context.Context, sessionID string, spec Questi
 
 // CancelQuestion withdraws a question that is still waiting for an answer.
 //
-// Nothing is sent anywhere: a withdrawal is the agent saying it no longer needs
-// the answer, and there is nobody to tell but the user, who learns it from the
-// card going quiet. That is the difference from a decline, which is a person
-// answering "I will not answer this" and does reach the agent.
+// Nothing is sent to the agent: a withdrawal is the agent saying it no longer
+// needs the answer, and the user learns it from the card going quiet. That is
+// the difference from a decline, which is a person answering "I will not answer
+// this" and does reach the agent. Whoever the question was passed on to is told
+// all the same (QuestionsSettledFunc): it may be asking the user a copy.
 func (c *Client) CancelQuestion(ctx context.Context, sessionID, requestID string) error {
-	return c.withdraw(ctx, sessionID, requestID, "")
+	q, err := c.withdraw(ctx, sessionID, requestID, "")
+	if err != nil {
+		return err
+	}
+	c.notifySettled(sessionID, []agent.SettledQuestion{{Question: q}})
+	return nil
 }
 
 // WithdrawQuestions takes back every question a session is still waiting on,
@@ -200,24 +206,31 @@ func (c *Client) WithdrawQuestions(ctx context.Context, sessionID string, reason
 				"sessionId", sessionID, "requestId", d.Question.RequestID, "reason", reason, "error", err)
 		}
 	}
+	var withdrawn []agent.SettledQuestion
 	for _, q := range meta.Turn.Unanswered {
-		if err := c.withdraw(ctx, sessionID, q.RequestID, reason); err != nil {
+		if _, err := c.withdraw(ctx, sessionID, q.RequestID, reason); err != nil {
 			slog.Warn("failed to withdraw a question",
 				"sessionId", sessionID, "requestId", q.RequestID, "reason", reason, "error", err)
+			continue
 		}
+		withdrawn = append(withdrawn, agent.SettledQuestion{Question: q, Reason: reason})
 	}
+	c.notifySettled(sessionID, withdrawn)
 }
 
-func (c *Client) withdraw(ctx context.Context, sessionID, requestID string, reason agent.CancelReason) error {
+// withdraw takes back one question and returns it as it was asked. Telling
+// anyone is the caller's, so that a batch is told as one.
+func (c *Client) withdraw(ctx context.Context, sessionID, requestID string, reason agent.CancelReason) (session.PendingQuestion, error) {
 	meta, found, err := c.store.Get(sessionID)
 	if err != nil {
-		return fmt.Errorf("get session: %w", err)
+		return session.PendingQuestion{}, fmt.Errorf("get session: %w", err)
 	}
 	if !found {
-		return ErrSessionNotFound
+		return session.PendingQuestion{}, ErrSessionNotFound
 	}
-	if _, pending := meta.Turn.PendingQuestionFor(requestID); !pending {
-		return c.notPending(ctx, sessionID, requestID)
+	q, pending := meta.Turn.PendingQuestionFor(requestID)
+	if !pending {
+		return session.PendingQuestion{}, c.notPending(ctx, sessionID, requestID)
 	}
 
 	now := time.Now()
@@ -226,17 +239,17 @@ func (c *Client) withdraw(ctx context.Context, sessionID, requestID string, reas
 	})
 	seq, err := c.store.AppendToHistory(ctx, sessionID, record)
 	if err != nil {
-		return fmt.Errorf("record withdrawal: %w", err)
+		return session.PendingQuestion{}, fmt.Errorf("record withdrawal: %w", err)
 	}
 	if _, err := c.store.ApplyTurn(ctx, sessionID, session.TurnInput{
 		Signal: session.SignalQuestionResolved, RequestID: requestID, At: now,
 	}); err != nil {
-		return fmt.Errorf("stop waiting for the answer: %w", err)
+		return session.PendingQuestion{}, fmt.Errorf("stop waiting for the answer: %w", err)
 	}
 
 	c.broadcastRecord(sessionID, record, seq)
 	slog.Info("question withdrawn", "sessionId", sessionID, "requestId", requestID, "reason", reason)
-	return nil
+	return q, nil
 }
 
 // SendAnswers sends a message that answers posted questions, and is the only
@@ -325,7 +338,10 @@ func (c *Client) deliverAnswers(ctx context.Context, sessionID string, answers [
 		return sent, "", err
 	}
 
+	settled := make([]agent.SettledQuestion, 0, len(answering))
 	for _, a := range answering {
+		q, _ := meta.Turn.PendingQuestionFor(a.RequestID)
+		settled = append(settled, agent.SettledQuestion{Question: q, Answer: &a})
 		if _, err := c.store.ApplyTurn(ctx, sessionID, session.TurnInput{
 			Signal: session.SignalQuestionResolved, RequestID: a.RequestID,
 			MessageID: sent.MessageID, At: now,
@@ -338,6 +354,9 @@ func (c *Client) deliverAnswers(ctx context.Context, sessionID string, answers [
 				"sessionId", sessionID, "requestId", a.RequestID, "error", err)
 		}
 	}
+	// Told even where the list fell behind: the agent has the answer, and that
+	// is what settled the question.
+	c.notifySettled(sessionID, settled)
 	return sent, content, nil
 }
 
@@ -370,73 +389,14 @@ func originOf(by agent.QuestionResolver) agent.MessageOrigin {
 func answerMessage(answering []agent.QuestionAnswer, by agent.QuestionResolver) string {
 	var b strings.Builder
 	if by.Kind == agent.ResolverAgent {
-		fmt.Fprintf(&b, "Answering — from %s, not from the user.\n", describeResolver(&by))
+		fmt.Fprintf(&b, "Answering — from %s, not from the user.\n", by.Describe())
 	} else {
 		b.WriteString("Answering:\n")
 	}
 	for _, a := range answering {
-		fmt.Fprintf(&b, "\nQ: %s\nA: %s\n", a.Question, answerLine(a, by))
+		fmt.Fprintf(&b, "\nQ: %s\nA: %s\n", a.Question, a.Line())
 	}
 	return strings.TrimRight(b.String(), "\n")
-}
-
-// answerLine is what follows "A:".
-//
-// A decline is written as a phrase rather than left blank, because a blank
-// answer reads to the agent as "the user said nothing" — which is what it was
-// already looking at before the message arrived.
-//
-// The answerer's own words are marked as such when they sit beside a label: the
-// record keeps `answers` and `text` apart, but the CLI reads only this, and an
-// unmarked sentence next to two labels would read as a third option the agent
-// had offered. A lone free text carries no marker, deliberately: there is
-// nothing beside it to be mistaken for, and every answer to a question with no
-// options is that shape.
-//
-// The note is marked for the same reason, and always: unmarked after a label
-// it would read as part of the label, and after a decline as a reason nobody
-// can tell from an answer.
-func answerLine(a agent.QuestionAnswer, by agent.QuestionResolver) string {
-	var line string
-	if a.Declined {
-		line = "(not answering)"
-	} else {
-		parts := append([]string(nil), a.Answers...)
-		if a.Text != "" {
-			text := a.Text
-			if len(a.Answers) > 0 {
-				text = fmt.Sprintf("and, in %s own words: %s", possessive(by), text)
-			}
-			parts = append(parts, text)
-		}
-		line = strings.Join(parts, " \u00b7 ")
-	}
-	if a.Note != "" {
-		line += " — note: " + a.Note
-	}
-	return line
-}
-
-func possessive(by agent.QuestionResolver) string {
-	if by.Kind == agent.ResolverAgent {
-		return "its"
-	}
-	return "their"
-}
-
-// describeResolver names an answerer in a sentence, for the message an answer
-// arrives in and for the refusal a second answer gets.
-func describeResolver(by *agent.QuestionResolver) string {
-	if by == nil || by.Kind != agent.ResolverAgent {
-		return "the user"
-	}
-	if by.WorkID == "" {
-		return "another agent"
-	}
-	if by.Title == "" {
-		return fmt.Sprintf("the agent working on %s", by.WorkID)
-	}
-	return fmt.Sprintf("the agent working on %q (%s)", by.Title, by.WorkID)
 }
 
 // resolveAnswers checks every answer against the questions the session is
@@ -604,7 +564,7 @@ type resolution struct {
 	// By is who answered, as a sentence names them: the user, or the agent that
 	// answered for them. Read off the record (QuestionAnswer.ResolvedBy) rather
 	// than inferred from Kind, which stopped being possible when an agent could
-	// answer — see describeResolver.
+	// answer — see agent.QuestionResolver.Describe.
 	By string
 	At time.Time
 	// Reason is the withdrawal's reason, empty when the agent gave none.
@@ -674,7 +634,7 @@ func (c *Client) readResolutions(ctx context.Context, sessionID string, requestI
 				if a.Declined {
 					kind = "declined"
 				}
-				out[a.RequestID] = resolution{Kind: kind, By: describeResolver(a.ResolvedBy), At: a.AnsweredAt}
+				out[a.RequestID] = resolution{Kind: kind, By: a.ResolvedBy.Describe(), At: a.AnsweredAt}
 				delete(wanted, a.RequestID)
 			}
 		case agent.EventTypeRequestCancelled:

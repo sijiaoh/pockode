@@ -262,26 +262,30 @@ is one the other admits. `child` is the only wait there is, so this check has
 nothing else to cover: a question needs none of it, because nothing about it is
 on the work record and a person can always be asked.
 
-**The engine has seven inputs and no special cases beside them**: a turn ended,
+**The engine has eight inputs and no special cases beside them**: a turn ended,
 a user handed the session something to go on, a posted question was answered, an
-agent posted one, a child work left `active`, a session was deleted, the server
-started. Everything the old `AutoResumer` and `StatusSyncer` did with process
-state changes turned out to be a rule about a turn ending, which is what the
-engine reads instead.
+agent posted one, a posted question stopped waiting, a child work left `active`,
+a session was deleted, the server started. Everything the old `AutoResumer` and
+`StatusSyncer` did with process state changes turned out to be a rule about a
+turn ending, which is what the engine reads instead.
 
-The two about questions are inputs rather than commands, and the distinction
+The three about questions are inputs rather than commands, and the distinction
 is the one the list is built on: a command is somebody telling a work what to
 be, while an input is something that *happened to its session* and that the
 engine alone decides what to do about
 ([code/work-system.md](code/work-system.md#the-work-engine)).
 
-**Answering is one of those two, not two of them, whoever answered.** The user's
-answer and another agent's (`question_answer`) reach the work as the same event,
-because either one hands the agent what it stopped for and a turn starts on the
-back of it — and a work whose session is running has to be `active` or nothing
-is driving it. Who answered is a fact the transcript keeps; it is not a fact
+**Whoever answered, the answer reaches the asking work as one input, not
+two.** The user's answer and another agent's (`question_answer`) are the same
+event, because either one hands the agent what it stopped for and a turn starts
+on the back of it — and a work whose session is running has to be `active` or
+nothing is driving it. Who answered is a fact the transcript keeps; it is not a fact
 about the status. It was two inputs once, and what the split cost is
 [code/work-system.md](code/work-system.md#input-3-a-posted-question-was-answered).
+Separately, the same answer is a question that stopped waiting, and that input
+passes it to whoever the question was passed up to, when they may be holding a
+copy they forwarded to the user, so that copy can be withdrawn
+([code/work-system.md](code/work-system.md#input-5-a-posted-question-stopped-waiting)).
 
 Two of them decide more than the rest:
 
@@ -556,6 +560,6 @@ reader recognises a decision rather than a gap.
 |---|---|
 | [lifecycle-ui.md](lifecycle-ui.md) | The presentation layer: the eight activities, the attention strip, unanswered questions as a second dimension, work list grouping, button rules |
 | [code/agent-integration.md](code/agent-integration.md) | The process and session layers in code: the reducer, the lease table, expiry records, retirement, restart repair, and both CLI adapters |
-| [code/work-system.md](code/work-system.md) | The work layer in code: statuses and transitions, the engine's seven inputs, the command surface, prompts |
+| [code/work-system.md](code/work-system.md) | The work layer in code: statuses and transitions, the engine's eight inputs, the command surface, prompts |
 | [projects/workflow-engine.md](projects/workflow-engine.md) | The same engine from the project system's side, with the prompt builders |
 | [agent-event.md](agent-event.md) | The event stream the reducer's signals are translated from |

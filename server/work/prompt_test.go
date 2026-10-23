@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/pockode/server/agent"
 	"github.com/pockode/server/session"
 )
 
@@ -426,6 +427,8 @@ func TestEverySystemMessage_SpeaksTheCurrentVocabulary(t *testing.T) {
 	messages["child_question_reminder"] = BuildChildQuestionReminderMessage(story, []childQuestion{
 		{ChildID: "c1", ChildTitle: "Child", SessionID: "sess-c1", quotedQuestion: quotedQuestion{RequestID: "req-1", Header: "Database", Question: "Which?"}},
 	})
+	messages["child_question_settled"] = BuildChildQuestionSettledMessage(story, "Child", "c1", "sess-c1",
+		[]agent.SettledQuestion{{Question: session.PendingQuestion{RequestID: "req-1", Header: "Database", Question: "Which?"}}})
 	messages["child_done"] = BuildChildCompletionMessage(story, "Child", "c1", true)
 	messages["child_done, wait standing"] = BuildChildCompletionMessage(story, "Child", "c1", false)
 	for _, exit := range []childExit{childDeleted, childStopped, childNotStarted} {

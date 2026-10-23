@@ -69,7 +69,7 @@ type SessionTerminator interface {
 const DefaultMaxNudges = 3
 
 // Engine drives work items. It is the only thing that moves a work item without
-// being told to by a person or by an agent, and it has exactly seven inputs:
+// being told to by a person or by an agent, and it has exactly eight inputs:
 //
 //   - HandleTurnEnded — a turn of the work's session settled.
 //   - HandleUserMessage — the user handed the session something to go on.
@@ -78,6 +78,8 @@ const DefaultMaxNudges = 3
 //   - HandleQuestionsPosted — this session's agent posted questions, which the
 //     story above it may be able to answer, or — a story's own questions — the
 //     session watching the story may.
+//   - HandleQuestionsSettled — questions this session's agent posted stopped
+//     waiting, which whoever HandleQuestionsPosted told about them has to hear.
 //   - OnWorkChange (a child leaving active) — a subtask finished, or stopped
 //     being something its parent's wait could be waiting for. A watched story
 //     closing or stopping is read off the same event.
@@ -230,19 +232,7 @@ func (e *Engine) getTurnSource() TurnSource {
 // back for the settle delay, and a question answered inside it must not still
 // look outstanding — nor must one posted inside it look absent.
 func (e *Engine) awaitingAnswers(w Work) bool {
-	if w.SessionID == "" {
-		return false
-	}
-	source := e.getTurnSource()
-	if source == nil {
-		// No source is not the same as a source that failed, and the two answer
-		// oppositely on purpose. A missing source is a deliberate configuration —
-		// the narrow tests in this package — and reading it as "everything has
-		// questions" would switch nudging off entirely. A source that *failed* is
-		// a session that exists and cannot be read, below.
-		return false
-	}
-	turns, err := source.SessionTurns(w.Worktree)
+	turn, err := e.sessionTurn(w.Worktree, w.SessionID)
 	if err != nil {
 		// Not knowing is not a reason to nudge: a nudge that should not have
 		// been sent spends the allowance that ends in a stop. The honest answer
@@ -252,7 +242,45 @@ func (e *Engine) awaitingAnswers(w Work) bool {
 			"workId", w.ID, "sessionId", w.SessionID, "worktree", w.Worktree, "error", err)
 		return true
 	}
-	return len(turns[w.SessionID].Unanswered) > 0
+	return len(turn.Unanswered) > 0
+}
+
+// mayHoldCopy reports whether a session passed someone else's question could
+// be asking the user a copy of it: it has a question of its own up, or its turn
+// is running and may be posting one now. The second is what keeps news of the
+// original being settled from slipping past a copy still on its way — passed
+// the question, the session starts a turn to read it, and the user can answer
+// the original before that turn gets to question_post.
+//
+// Read like awaitingAnswers, and a session that cannot be read is told: an
+// extra message costs a turn, a missed one leaves the user being asked a
+// settled question.
+func (e *Engine) mayHoldCopy(worktree, sessionID string) bool {
+	turn, err := e.sessionTurn(worktree, sessionID)
+	if err != nil {
+		slog.Warn("could not read a session's questions to tell it of a settled one",
+			"sessionId", sessionID, "worktree", worktree, "error", err)
+		return true
+	}
+	return len(turn.Unanswered) > 0 || turn.Phase == session.PhaseRunning
+}
+
+// sessionTurn reads a session's turn state live. No session, and no source,
+// read as a session with nothing going on — the latter on purpose: a missing
+// source is a deliberate configuration (the narrow tests in this package), and
+// reading it as "everything has questions" would switch nudging off entirely.
+// A source that *failed* is a session that exists and cannot be read, and is
+// returned as the error it is.
+func (e *Engine) sessionTurn(worktree, sessionID string) (session.TurnState, error) {
+	source := e.getTurnSource()
+	if sessionID == "" || source == nil {
+		return session.TurnState{}, nil
+	}
+	turns, err := source.SessionTurns(worktree)
+	if err != nil {
+		return session.TurnState{}, err
+	}
+	return turns[sessionID], nil
 }
 
 // childQuestion is one question a subtask of some work has posted and nobody
@@ -732,7 +760,8 @@ func (e *Engine) HandleQuestionsPosted(sessionID string, qs []session.PendingQue
 //
 // Nothing is retried and nothing is stopped when it cannot be delivered — a
 // stopped or closed parent, a parent whose turn is held open by a permission
-// request — and that is the difference from the two notifications below it.
+// request — and that is the difference from notifyParentOfChild and
+// notifyParentOfStrandedWait.
 // Those two carry news a waiting parent is *owed*: the wait is cleared by them,
 // so an undelivered one leaves a work waiting for something that already
 // happened. This one clears nothing. The questions stay on the subtask, where
@@ -743,6 +772,15 @@ func (e *Engine) HandleQuestionsPosted(sessionID string, qs []session.PendingQue
 // asked to settle them. Restarting or reopening the story says the same thing
 // sooner.
 func (e *Engine) notifyParentOfChildQuestions(child Work, qs []session.PendingQuestion) {
+	e.tellParentAboutQuestions(child, "asked", len(qs), MessageSubtypeChildQuestion, func(parent Work) (string, bool) {
+		return BuildChildQuestionMessage(parent, child.Title, child.ID, child.SessionID, qs), true
+	})
+}
+
+// tellParentAboutQuestions is the one way news about a subtask's questions
+// reaches its story — asked, or settled. what is the log's word for which.
+// build may decline to send, having seen the parent.
+func (e *Engine) tellParentAboutQuestions(child Work, what string, count int, subtype string, build func(parent Work) (string, bool)) {
 	parent, found, err := e.store.Get(child.StoryID)
 	if err != nil {
 		slog.Warn("failed to get parent work for a child's question", "parentId", child.StoryID, "error", err)
@@ -752,37 +790,186 @@ func (e *Engine) notifyParentOfChildQuestions(child Work, qs []session.PendingQu
 		return
 	}
 	if parent.Status != StatusActive {
-		slog.Debug("a subtask asked a question under a parent the engine is not driving",
-			"parentId", parent.ID, "parentStatus", parent.Status, "childId", child.ID)
+		slog.Debug("a subtask's question news under a parent the engine is not driving",
+			"parentId", parent.ID, "parentStatus", parent.Status, "childId", child.ID, "questions", what)
+		return
+	}
+
+	msg, send := build(parent)
+	if !send {
 		return
 	}
 
 	sender, release, ok := e.resolveSender(parent.Worktree)
 	if !ok {
-		slog.Warn("could not reach a story with its subtask's question",
-			"parentId", parent.ID, "childId", child.ID, "questions", len(qs))
+		slog.Warn("could not reach a story with its subtask's question news",
+			"parentId", parent.ID, "childId", child.ID, "questions", what, "count", count)
 		return
 	}
 	defer release()
 
-	msg := BuildChildQuestionMessage(parent, child.Title, child.ID, child.SessionID, qs)
 	meta := NewMessageMeta(parent, parent.CurrentStep+1, e.stepCount(parent))
 	meta.Child = &agent.ChildInfo{ID: child.ID, Title: child.Title}
-	if err := sender.SendSystemMessage(e.ctx, parent.SessionID, msg, MessageSubtypeChildQuestion, meta); err != nil {
+	if err := sender.SendSystemMessage(e.ctx, parent.SessionID, msg, subtype, meta); err != nil {
 		if e.ctx.Err() != nil {
 			return
 		}
-		// Warn and stop there: the user can still answer these questions, and
-		// the parent has lost nothing it was holding.
-		slog.Warn("failed to pass a subtask's question to its story",
-			"parentId", parent.ID, "childId", child.ID, "questions", len(qs), "error", err)
+		// Warn and stop there: no wait of the parent's hangs on this. What an
+		// undelivered message costs differs by kind, and each says so where it
+		// is sent.
+		slog.Warn("failed to pass a subtask's question news to its story",
+			"parentId", parent.ID, "childId", child.ID, "questions", what, "count", count, "error", err)
 		return
 	}
-	slog.Info("subtask question passed to its story",
-		"parentId", parent.ID, "childId", child.ID, "questions", len(qs))
+	slog.Info("subtask question news passed to its story",
+		"parentId", parent.ID, "childId", child.ID, "questions", what, "count", count)
 }
 
-// --- Input 5: a child work left active ---
+// --- Input 5: an agent's posted questions stopped waiting ---
+
+// HandleQuestionsSettled passes on that questions this session's agent posted
+// are no longer being asked, along the path HandleQuestionsPosted passed them up.
+//
+// A story told a subtask's question may have forwarded it — posted its own copy
+// to the user, because it could not decide. Nothing else would ever tell it the
+// original is settled, so its copy would go on asking the user something nobody
+// is asking any more, and the story would go on counting as having a question
+// outstanding. So whoever was told a question was asked is told when it stops
+// waiting, however it stopped:
+//
+//   - Answered or declined, by the user or by an agent: news, with the answer —
+//     the story's copy can be withdrawn, and the answer may be what the story
+//     needed too. The one exception is an answer given by the agent working on
+//     the story itself: it already knows, having given it.
+//   - Withdrawn by the asking agent (question_cancel), by step_done, or by the
+//     work closing: news — nobody is asking any more, whatever the reason. A
+//     subtask closing reports to its story separately (notifyParentOfChild),
+//     but that report says nothing about questions, and a copy left open is
+//     the very failure this exists for.
+//
+// Stopping a work is not here because it withdraws nothing: a stopped work's
+// question still waits, and answering it is what restarts the work.
+//
+// It is told only to a story that may be holding a copy (mayHoldCopy): one
+// with a question of its own up, or one whose turn is running and may be
+// posting it now.
+//
+// A story's own questions went to the session watching it, and go back there
+// by the same rules but one: the story closing reaches the watcher as
+// watched_story_ended instead (notifyWatcherOfSettledQuestions). That is what
+// carries a chain to its end: a user answering a task's question tells the
+// story, the story withdrawing its forwarded copy is itself a settling, and
+// that tells the watcher, which withdraws its own.
+//
+// Nothing orders this against the other news of the same moment: a subtask
+// that closes with a question up sends child_done beside this, and each stands
+// on its own, which is what makes either order readable. Nor is it ordered
+// against the "asked" message, and there the order can matter: a question
+// posted and withdrawn within the instant before its "asked" goes out can be
+// told settled first, to someone who holds no copy yet and so is not told at
+// all — and then be offered to forward. A copy forwarded then stays up like an
+// undelivered one, below.
+//
+// settled are the questions one act settled, and they travel as one message,
+// for the reason HandleQuestionsPosted's travel together. Like that one, this
+// clears no wait and is retried nowhere — but unlike that one, nothing makes up
+// for an undelivered one later: the question has left the subtask's live list,
+// which is what the story's turn end reads, so a copy the story forwarded stays
+// up until the user answers it or the story's step ends. The reverse is not
+// told either: an answer a Stop discards puts the question back on the
+// subtask's list, and the story learns of it only from the turn-end reminder
+// (childrenAwaitingAnswers).
+func (e *Engine) HandleQuestionsSettled(sessionID string, settled []agent.SettledQuestion) {
+	if len(settled) == 0 || !e.enter() {
+		return
+	}
+	defer e.leave()
+
+	w, found := e.findWork(sessionID)
+	if !found {
+		return
+	}
+	if w.StoryID == "" {
+		if w.Watcher != nil {
+			watcher := *w.Watcher
+			e.goFollowUp(func() { e.notifyWatcherOfSettledQuestions(watcher, w, settled) })
+		}
+		return
+	}
+	news := make([]agent.SettledQuestion, 0, len(settled))
+	for _, q := range settled {
+		if !answeredBy(q, w.StoryID) {
+			news = append(news, q)
+		}
+	}
+	if len(news) == 0 {
+		return
+	}
+	e.goFollowUp(func() {
+		e.tellParentAboutQuestions(w, "settled", len(news), MessageSubtypeChildQuestionSettled, func(parent Work) (string, bool) {
+			// A story that can be holding no copy has none to withdraw, and a
+			// message would start a turn — often on a story idle in
+			// story_wait — to say so. The subtask already has its answer; the
+			// story is not the one waiting for it.
+			if !e.mayHoldCopy(parent.Worktree, parent.SessionID) {
+				return "", false
+			}
+			return BuildChildQuestionSettledMessage(parent, w.Title, w.ID, w.SessionID, news), true
+		})
+	})
+}
+
+// notifyWatcherOfSettledQuestions is HandleQuestionsSettled's leg for a
+// story's own questions, which HandleQuestionsPosted passed to its watcher. It
+// tells the watcher by the rules the story is told by, with two differences
+// that come from the watcher not being a work of the story's:
+//
+//   - Whether it may hold a copy is read off its session, not off a work: a
+//     plain chat can forward a question as well as a story can.
+//   - Its own answer is recognised by the answering session rather than by a
+//     work id, which a plain chat does not have.
+//
+// The story closing never comes this way: closing releases the watch in the
+// same write as the close, so by the time its questions are withdrawn the
+// story names no watcher. watched_story_ended says it for them instead.
+func (e *Engine) notifyWatcherOfSettledQuestions(watcher Watcher, story Work, settled []agent.SettledQuestion) {
+	e.tellWatcher(watcher, story, MessageSubtypeWatchedStoryQuestionSettled, func() (string, bool) {
+		if !e.mayHoldCopy(watcher.Worktree, watcher.SessionID) {
+			return "", false
+		}
+		news := make([]agent.SettledQuestion, 0, len(settled))
+		for _, q := range settled {
+			if !answeredFromSession(q, watcher.SessionID) {
+				news = append(news, q)
+			}
+		}
+		if len(news) == 0 {
+			return "", false
+		}
+		return BuildWatchedStoryQuestionSettledMessage(story, news), true
+	})
+}
+
+// answeredBy reports whether q was answered by the agent working on workID.
+func answeredBy(q agent.SettledQuestion, workID string) bool {
+	by := agentResolver(q)
+	return by != nil && by.WorkID == workID
+}
+
+// answeredFromSession reports whether q was answered by the agent in sessionID.
+func answeredFromSession(q agent.SettledQuestion, sessionID string) bool {
+	by := agentResolver(q)
+	return by != nil && by.SessionID == sessionID
+}
+
+func agentResolver(q agent.SettledQuestion) *agent.QuestionResolver {
+	if q.Answer == nil || q.Answer.ResolvedBy == nil || q.Answer.ResolvedBy.Kind != agent.ResolverAgent {
+		return nil
+	}
+	return q.Answer.ResolvedBy
+}
+
+// --- Input 6: a child work left active ---
 
 // OnWorkChange implements OnChangeListener. Two things are read off a work
 // changing: a child leaving active, which its parent may have to be told about,
@@ -884,6 +1071,12 @@ func (e *Engine) notifyWatcherOfEnd(event ChangeEvent) {
 // watcher whose turn is holding a request on screen, which refuses every
 // message: the news is lost there, not queued.
 func (e *Engine) notifyWatcher(watcher Watcher, story Work, msg, subtype string) {
+	e.tellWatcher(watcher, story, subtype, func() (string, bool) { return msg, true })
+}
+
+// tellWatcher is notifyWatcher for news the watcher may turn out not to need:
+// build runs once the watcher is known to be one news reaches, and may decline.
+func (e *Engine) tellWatcher(watcher Watcher, story Work, subtype string, build func() (string, bool)) {
 	w, found, err := e.store.FindBySessionID(watcher.SessionID)
 	if err != nil {
 		slog.Warn("failed to find the work of a story's watcher",
@@ -897,6 +1090,10 @@ func (e *Engine) notifyWatcher(watcher Watcher, story Work, msg, subtype string)
 	if !WakesWatcher(story, watcher.SessionID, own) {
 		slog.Debug("a watched story's news for a session it does not wake",
 			"storyId", story.ID, "watcherSessionId", watcher.SessionID)
+		return
+	}
+	msg, send := build()
+	if !send {
 		return
 	}
 
@@ -1170,7 +1367,7 @@ func (e *Engine) failedToReach(parentID, reason, comment string) {
 	e.stop(parentID, reason, comment)
 }
 
-// --- Input 6: the session was deleted ---
+// --- Input 7: the session was deleted ---
 
 // deletedSessionComment explains a stop whose cause is no longer on screen: the
 // chat the work ran in is gone, so there is nothing for the user to open and
@@ -1231,7 +1428,7 @@ func (e *Engine) releaseWatchesOf(watcher Watcher) {
 	}
 }
 
-// --- Input 7: startup ---
+// --- Input 8: startup ---
 
 // orphanedWorkComment explains a stop nobody asked for. Background tasks are
 // called out because they are the part a user is least likely to expect to have

@@ -1367,8 +1367,12 @@ agent) rather than listed beside the labels, and a `note` as *"— note: …"* a
 them. An unmarked sentence there would undo structurally what the check guards:
 free text would read as a third option, and a note as part of the label before
 it, or as an answer rather than a decline's reason. The prose is written by the
-server from the answers (`chat.answerMessage`), for a person's answer and an
-agent's alike, so the wording has one home; a `chat.message` carrying
+server from the answers (`chat.answerMessage`, each answer's line by
+`agent.QuestionAnswer.Line`), for a person's answer and an agent's alike, so the
+wording has one home — the engine quotes an answer through the same line when it
+tells a story or a watcher the question was settled
+([work-system.md](work-system.md#input-5-a-posted-question-stopped-waiting)),
+which is why it lives in `agent` and not in `chat`; a `chat.message` carrying
 `answering` sends empty `content` and is refused if it does not, and the reply's
 `content` hands the written body back to the sender, which the broadcast skips.
 
@@ -1423,7 +1427,7 @@ stop one specific misreading:
 
 | | What it is | Why |
 |---|---|---|
-| `QuestionAnswer.ResolvedBy` | `{kind, work_id, title}` on the answer entry | who answered used to be derivable from the record type — an `answering` entry meant the user, a `request_cancelled` record meant the agent — and this tool is what broke that inference. Absent on records written before it existed, which were all the user's; every record written now sets it, the user's included. |
+| `QuestionAnswer.ResolvedBy` | `{kind, work_id, title, session_id}` on the answer entry | who answered used to be derivable from the record type — an `answering` entry meant the user, a `request_cancelled` record meant the agent — and this tool is what broke that inference. Absent on records written before it existed, which were all the user's; every record written now sets it, the user's included. `session_id` is the answering agent's session: a plain chat runs no work, so it is the only thing that names one, and it is how a watcher is recognised as having given an answer it need not be told about. |
 | `MessageOriginAgent` on the message | the `agent` origin | a user bubble would claim the person said something they never saw; the system line would read as Pockode annotating itself. The client draws it as a named block instead ([answering-ui.md](../answering-ui.md#an-answer-another-agent-gave)). |
 
 **The prose leads with who answered**, because the prose is the whole of what the
@@ -1454,9 +1458,12 @@ tool returns only once the answer is with the agent.
 ### Withdrawing
 
 `question_cancel` is the agent taking its own question back — it worked the
-answer out, or the user answered in the chat instead. Nothing is sent to anyone;
-the card simply stops asking. That is the difference from a *decline*, which is
-a person answering "I will not answer this" and does reach the agent.
+answer out, or the user answered in the chat instead. Nothing is sent to the
+agent or to the user; the card simply stops asking. That is the difference from
+a *decline*, which is a person answering "I will not answer this" and does
+reach the agent. Whoever the question was passed on to is told when it may be
+holding a copy, as for every other way a question stops waiting
+([below](#who-is-told-a-question-stopped-waiting)).
 
 Pockode also withdraws on the agent's behalf, in two cases, and each says which
 on the record:
@@ -1477,6 +1484,39 @@ draws nothing extra for an absent reason, which is the `question_cancel` case.
 
 So a card has four states and only four: **pending**, **answered**, **declined**,
 **cancelled**.
+
+### Who is told a question stopped waiting
+
+A question the work engine passed on — a task's to its story, a story's to its
+watcher — may have been forwarded to the user as a copy, and that copy has to
+hear when the original stops waiting. Every way of stopping one ends in
+`chat.Client`: `deliverAnswers` (a person's answer and an agent's), `CancelQuestion`,
+and `WithdrawQuestions` (`step_done` and a close). It is the one thing that
+moves a question off the unanswered list on purpose, so it is the one place to
+learn it from: `Client.SetOnQuestionsSettled` takes a `chat.QuestionsSettledFunc`,
+and `worktree.Manager` wires it to `work.Engine.HandleQuestionsSettled` where it
+builds the client. Hooking each caller instead — the answer RPC,
+`question_answer`, `question_cancel`, `step_done`, `RetireSession` — would be
+five places to remember and one to forget.
+
+What it hands on is an `agent.SettledQuestion`: the question as it was asked,
+and the answer, or the withdrawal's reason. That is an event value — handed on
+and dropped, never stored; whether a question is still waiting is the turn
+state, never this. Three rules shape it:
+
+- **One act, one call.** A message answering three questions, or a close over
+  three, is told as one batch, so the engine can pass it on as one message.
+- **A refusal tells nobody.** An answer or a withdrawal that was refused
+  settled nothing.
+- **It is told after the state already says so**, on the caller's goroutine, so
+  anything that reads the list on hearing it reads the question gone. An answer
+  whose list update failed is told all the same: the agent has the answer, and
+  that is what settled it.
+
+Deleting a session takes its questions with it without going through the
+client, so it is the one ending nobody is told of. What the engine does with the
+news is
+[work-system.md](work-system.md#input-5-a-posted-question-stopped-waiting).
 
 ### Finding a question by id alone
 
@@ -3604,7 +3644,7 @@ opposite directions for the same reason:
   session rather than to the process, so a work whose agent asked something is
   kept active at startup and a message answers it whenever the user gets to it —
   while a work that was merely being carried by the dead process is stopped
-  ([work-system.md](work-system.md#input-7-startup)).
+  ([work-system.md](work-system.md#input-8-startup)).
 
 **Both rules stand on this premise and have to be revisited if it changes.** The
 change to watch for is a CLI re-offering its outstanding prompts to a resumed

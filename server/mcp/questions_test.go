@@ -561,7 +561,7 @@ func TestQuestionAnswer_AnswersAnotherSessionsQuestion(t *testing.T) {
 	if got := delivered[0].answer; !slices.Equal(got.Answers, []string{"Postgres"}) || got.Note != "pin it to 16" {
 		t.Errorf("answer = %+v, want the labels and the note passed on", got)
 	}
-	want := agent.QuestionResolver{Kind: agent.ResolverAgent, WorkID: workID, Title: "Ship the API"}
+	want := agent.QuestionResolver{Kind: agent.ResolverAgent, WorkID: workID, Title: "Ship the API", SessionID: "sess-1"}
 	if delivered[0].by != want {
 		t.Errorf("answered by %+v, want %+v", delivered[0].by, want)
 	}
@@ -571,7 +571,7 @@ func TestQuestionAnswer_AnswersAnotherSessionsQuestion(t *testing.T) {
 }
 
 // An agent running no work at all can still answer; there is simply no work to
-// name as the answerer.
+// name as the answerer, and its session is what names it.
 func TestQuestionAnswer_FromASessionWithNoWork(t *testing.T) {
 	exec, sessions, _, _ := newQuestionExec(t)
 	sessions.located = map[string][]worktree.QuestionLocation{
@@ -583,8 +583,8 @@ func TestQuestionAnswer_FromASessionWithNoWork(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("question_answer: %v", err)
 	}
-	if by := sessions.questions.answered[0].by; by.Kind != agent.ResolverAgent || by.WorkID != "" {
-		t.Errorf("answered by %+v, want an agent with no work", by)
+	if by := sessions.questions.answered[0].by; by.Kind != agent.ResolverAgent || by.WorkID != "" || by.SessionID != callerInMain.SessionID {
+		t.Errorf("answered by %+v, want an agent with no work, named by its session", by)
 	}
 }
 

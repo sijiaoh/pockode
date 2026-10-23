@@ -239,8 +239,8 @@ is the source of truth, and this summary does not replace it.
 ### Known limitation: the rules live only in the lead's context
 
 The lead's rules are in one message only: the expanded `/pockode-lead` prompt.
-The messages that wake the lead later — a watched story closed, stopped, or
-asked a question (the `watched_story_*` subtypes, see
+The messages that wake the lead later — a watched story closed, stopped,
+asked a question, or stopped asking one (the `watched_story_*` subtypes, see
 [code/work-system.md](code/work-system.md#a-storys-watcher)) — say what
 happened and how to act on that one event. They do not repeat the lead's rules.
 
