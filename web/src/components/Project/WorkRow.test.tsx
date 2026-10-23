@@ -266,15 +266,15 @@ describe("WorkRow", () => {
 
 		renderRow({
 			work: work({ status: "closed", activity: "closed" }),
-			showUpdatedAt: true,
+			dateAt: new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString(),
 		});
-		expect(screen.getByText(/ago|just now|yesterday/)).toBeInTheDocument();
+		expect(screen.getByText("3h ago")).toBeInTheDocument();
 	});
 
 	// The sort key is what says why the row is where it is, so a line too long
 	// for the screen clips the other slots and never it.
 	it("keeps the date out of the line's clip", () => {
-		renderRow({ roleName: "Engineer", showUpdatedAt: true });
+		renderRow({ roleName: "Engineer", dateAt: new Date().toISOString() });
 
 		const role = screen.getByText("Engineer");
 		const date = screen.getByText(/ago|just now|yesterday/);

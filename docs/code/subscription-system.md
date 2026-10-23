@@ -428,8 +428,9 @@ detail must absorb too, or every burst would send detail alone into a full sync.
 A watcher's usual shape is one store, one kind of event: the work store changes,
 work detail goes out. That breaks as soon as a payload includes something the
 watcher's own store does not own. Two of the work watchers are in that position,
-for the same reason and with the same shape — and so is schedule detail, whose
-run rows are work rows:
+for the same reason and with the same shape — and so are schedule detail, whose
+run rows are work rows, and the schedule list, whose items carry the row of
+their latest run:
 
 - **Work detail** carries the usage of every session beneath the work item, and a
   session spending tokens changes no work item at all
@@ -439,10 +440,11 @@ run rows are work rows:
   on a question or settling changes what a row says while the work record itself
   is untouched ([work-system.md](work-system.md#activity)).
 
-So all three also subscribe to every worktree's session store and re-send from
-there. Schedule detail listens to the work store as well, for its runs being
+So all of them also subscribe to every worktree's session store and re-send from
+there. Both schedule watchers listen to the work store as well, for runs being
 made and finished: a run is a work, and nothing about the schedule changes when
-one closes.
+one closes. The list re-sends only for the run a schedule names as its latest;
+no other run is on a row.
 
 Two rules generalise out of it, and the case that produced them is written up
 where the aggregation is. Both are about the second source rather than about the

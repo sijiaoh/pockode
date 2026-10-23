@@ -697,9 +697,9 @@ noticed. One representation with a test on it is the only thing that ends that.
      paste the expected side of its diff. Do not edit by hand. -->
 
 ```text
-44 controls render text, state no height of their own and carry no touch-target.
+45 controls render text, state no height of their own and carry no touch-target.
 
-28 state their own font size, so the height below is exact: 16–40px.
+29 state their own font size, so the height below is exact: 16–40px.
 16 inherit it, so the height below is an upper bound — the ancestor that
   sets it may well set a smaller one: 24–48px.
 
@@ -729,7 +729,7 @@ noticed. One representation with a test on it is the only thing that ends that.
   40px  exact  web/src/components/Git/CommitSheet.tsx ×2
   40px  exact  web/src/components/Git/NewBranchSheet.tsx ×2
   40px  exact  web/src/components/PortPreview/PortPreviewSheet.tsx ×2
-  40px  exact  web/src/components/Project/ProjectTab.tsx ×2
+  40px  exact  web/src/components/Project/ProjectTab.tsx ×3
   40px  exact  web/src/components/Worktree/WorktreeCreateSheet.tsx ×3
   40px  exact  web/src/extensions/ExampleExtension/sidebarUI/CustomSidebarContent.tsx
   44px  bound  web/src/components/Worktree/WorktreeDropdown.tsx
@@ -775,10 +775,11 @@ name does not say what a control is for:
 - **`Chat/MessageItem`** — the Details link out to a work item. (Allow, Always
   Allow and Deny on a permission request were here; they now state
   `min-h-9 pointer-coarse:min-h-11` and left the list.)
-- **`Project/WorkDetailOverlay`** — the link up to the parent work, under the
-  heading of a task. The app header's Back button on that same screen goes to
-  the same place and is already 44 (`headerIconButtonClass`, labelled "Back to
-  parent story"), so this is a second route rather than the route.
+- **`Project/WorkDetailOverlay`** — the link up to the story or schedule the
+  work belongs to, above the title of a task or a job. The app header's Back
+  button on that same screen goes to the same place and is already 44
+  (`headerIconButtonClass`, labelled "Back to parent story" or "Back to
+  schedule"), so this is a second route rather than the route.
 - **`Settings/sections/AppearanceSections`** — the theme card, which is the
   over-report described above and needs nothing done to it.
 - **`Worktree/WorktreeCreateSheet`** — the link out of the setup-script note.

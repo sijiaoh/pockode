@@ -42,6 +42,13 @@ import type {
 	WorktreeSubscribeResult,
 } from "../types/message";
 import type {
+	ScheduleDetailChangedNotification,
+	ScheduleDetailSubscribeResult,
+	ScheduleListChangedNotification,
+	ScheduleListSubscribeResult,
+	ScheduleRunPage,
+} from "../types/schedule";
+import type {
 	AgentType,
 	Settings,
 	SettingsChangedNotification,
@@ -77,6 +84,7 @@ import {
 	createGitActions,
 	createPortPreviewActions,
 	createRawActions,
+	createScheduleActions,
 	createSessionActions,
 	createSessionViewActions,
 	createSettingsActions,
@@ -86,6 +94,7 @@ import {
 	type GitActions,
 	type PortPreviewActions,
 	type RawActions,
+	type ScheduleActions,
 	type SessionActions,
 	type SessionViewActions,
 	type SettingsActions,
@@ -207,6 +216,21 @@ export interface WatchActions {
 		callback: (params: AgentRoleListChangedNotification) => void,
 	) => Promise<WatchSubscribeResult<AgentRoleListSubscribeResult>>;
 	agentRoleListUnsubscribe: (id: string) => Promise<void>;
+	scheduleListSubscribe: (
+		callback: (params: ScheduleListChangedNotification) => void,
+	) => Promise<WatchSubscribeResult<ScheduleListSubscribeResult>>;
+	scheduleListUnsubscribe: (id: string) => Promise<void>;
+	scheduleDetailSubscribe: (
+		scheduleId: string,
+		callback: (params: ScheduleDetailChangedNotification) => void,
+	) => Promise<WatchSubscribeResult<ScheduleDetailSubscribeResult>>;
+	/** A page of runs older than `cursor`, against an open detail subscription. */
+	scheduleDetailRuns: (
+		subscriptionId: string,
+		cursor: string,
+		limit?: number,
+	) => Promise<ScheduleRunPage>;
+	scheduleDetailUnsubscribe: (id: string) => Promise<void>;
 	/** The CLI's latest sign-in, running or last ended, or null if none. */
 	cliLoginSubscribe: (
 		agent: AgentType,
@@ -236,6 +260,7 @@ type RPCActions = ConnectionActions &
 	CommandActions &
 	PortPreviewActions &
 	RawActions &
+	ScheduleActions &
 	SessionActions &
 	SessionViewActions &
 	SettingsActions &
@@ -329,6 +354,14 @@ const agentRoleListWatchCallbacks = new Map<
 	string,
 	(params: AgentRoleListChangedNotification) => void
 >();
+const scheduleListWatchCallbacks = new Map<
+	string,
+	(params: ScheduleListChangedNotification) => void
+>();
+const scheduleDetailWatchCallbacks = new Map<
+	string,
+	(params: ScheduleDetailChangedNotification) => void
+>();
 const cliLoginWatchCallbacks = new Map<
 	string,
 	(params: CliLoginChangedNotification) => void
@@ -345,8 +378,8 @@ const remoteUrlWatchCallbacks = new Map<
 /**
  * Clear worktree-scoped watch subscriptions. Called when switching worktrees.
  *
- * App-level subscriptions (work list/detail, agent role list, settings,
- * worktree list) are intentionally preserved: their server watchers are global
+ * App-level subscriptions (work list/detail, agent role list, schedule
+ * list/detail, settings, worktree list) are intentionally preserved: their server watchers are global
  * and keep pushing across worktrees, so clearing them here would silently drop
  * notifications for hooks that don't resubscribe on switch.
  *
@@ -374,6 +407,8 @@ function clearAllWatchSubscriptions(): void {
 	workListWatchCallbacks.clear();
 	workDetailWatchCallbacks.clear();
 	agentRoleListWatchCallbacks.clear();
+	scheduleListWatchCallbacks.clear();
+	scheduleDetailWatchCallbacks.clear();
 	cliLoginWatchCallbacks.clear();
 	cliUpdateWatchCallbacks.clear();
 	remoteUrlWatchCallbacks.clear();
@@ -654,6 +689,16 @@ const watchNotificationHandlers: Record<string, WatchNotificationHandler> = {
 		agentRoleListWatchCallbacks.get(changedParams.id)?.(changedParams);
 		return true;
 	},
+	"schedule.list.changed": (params) => {
+		const changedParams = params as ScheduleListChangedNotification;
+		scheduleListWatchCallbacks.get(changedParams.id)?.(changedParams);
+		return true;
+	},
+	"schedule.detail.changed": (params) => {
+		const changedParams = params as ScheduleDetailChangedNotification;
+		scheduleDetailWatchCallbacks.get(changedParams.id)?.(changedParams);
+		return true;
+	},
 	"cli_auth.login.changed": (params) => {
 		const changedParams = params as CliLoginChangedNotification;
 		cliLoginWatchCallbacks.get(changedParams.id)?.(changedParams);
@@ -782,6 +827,7 @@ const chatActions = createChatActions(getClient, getAgentStartClient);
 const commandActions = createCommandActions(getClient);
 const portPreviewRpcActions = createPortPreviewActions(getClient);
 const rawActions = createRawActions(getClient);
+const scheduleActions = createScheduleActions(getClient);
 const sessionActions = createSessionActions(getClient);
 const sessionViewActions = createSessionViewActions(getClient);
 const settingsActions = createSettingsActions(getClient);
@@ -1300,6 +1346,63 @@ export const useWSStore = create<WSState>((set, get) => ({
 				agentRoleListWatchCallbacks,
 			),
 
+		scheduleListSubscribe: async (
+			callback: (params: ScheduleListChangedNotification) => void,
+		) => {
+			const { id, result } = await openSubscription(
+				"schedule.list.subscribe",
+				{},
+				scheduleListWatchCallbacks,
+				callback,
+			);
+			return { id, initial: result as ScheduleListSubscribeResult };
+		},
+
+		scheduleListUnsubscribe: (id: string) =>
+			closeSubscription(
+				"schedule.list.unsubscribe",
+				id,
+				scheduleListWatchCallbacks,
+			),
+
+		scheduleDetailSubscribe: async (
+			scheduleId: string,
+			callback: (params: ScheduleDetailChangedNotification) => void,
+		) => {
+			const { id, result } = await openSubscription(
+				"schedule.detail.subscribe",
+				{ schedule_id: scheduleId },
+				scheduleDetailWatchCallbacks,
+				callback,
+			);
+			return { id, initial: result as ScheduleDetailSubscribeResult };
+		},
+
+		// By subscription id, as the work list's pages are: the subscription names
+		// the schedule, so a page and the detail it extends cannot come apart.
+		scheduleDetailRuns: async (
+			subscriptionId: string,
+			cursor: string,
+			limit?: number,
+		) => {
+			const client = getClient();
+			if (!client) {
+				throw new Error("Not connected");
+			}
+			return (await client.request("schedule.detail.runs", {
+				id: subscriptionId,
+				cursor,
+				...(limit === undefined ? {} : { limit }),
+			})) as ScheduleRunPage;
+		},
+
+		scheduleDetailUnsubscribe: (id: string) =>
+			closeSubscription(
+				"schedule.detail.unsubscribe",
+				id,
+				scheduleDetailWatchCallbacks,
+			),
+
 		cliLoginSubscribe: async (
 			agent: AgentType,
 			callback: (params: CliLoginChangedNotification) => void,
@@ -1364,6 +1467,7 @@ export const useWSStore = create<WSState>((set, get) => ({
 		...commandActions,
 		...portPreviewRpcActions,
 		...rawActions,
+		...scheduleActions,
 		...sessionActions,
 		...sessionViewActions,
 		...settingsActions,

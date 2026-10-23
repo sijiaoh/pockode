@@ -48,8 +48,9 @@ type scheduleDetailEvent struct {
 
 // ScheduleDetail is everything a schedule.detail subscriber is sent.
 type ScheduleDetail struct {
-	Schedule schedule.Schedule
-	Runs     rpc.ScheduleRunPage
+	Schedule   schedule.Schedule
+	Runs       rpc.ScheduleRunPage
+	ServerZone schedule.Zone
 }
 
 // NewScheduleDetailWatcher builds the watcher. workStore is where the runs are
@@ -164,9 +165,10 @@ func (w *ScheduleDetailWatcher) notifySyncAll() {
 func (w *ScheduleDetailWatcher) notifyDetail(sub *Subscription, detail ScheduleDetail) {
 	w.rememberRuns(sub.ID, detail.Runs.Items)
 	n := Notification{Method: "schedule.detail.changed", Params: scheduleDetailChangedParams{
-		ID:       sub.ID,
-		Schedule: detail.Schedule,
-		Runs:     detail.Runs,
+		ID:         sub.ID,
+		Schedule:   detail.Schedule,
+		Runs:       detail.Runs,
+		ServerZone: detail.ServerZone,
 	}}
 	if err := sub.Notifier.Notify(w.Context(), n); err != nil {
 		slog.Debug("failed to notify schedule detail subscriber", "id", sub.ID, "error", err)
@@ -199,7 +201,7 @@ func (w *ScheduleDetailWatcher) readDetail(scheduleID string) (ScheduleDetail, e
 	if err != nil {
 		return ScheduleDetail{}, err
 	}
-	return ScheduleDetail{Schedule: sched, Runs: runs}, nil
+	return ScheduleDetail{Schedule: sched, Runs: runs, ServerZone: w.store.Zone()}, nil
 }
 
 // runPage reads one page of a schedule's runs, newest made first.
@@ -313,10 +315,13 @@ func (w *ScheduleDetailWatcher) Unsubscribe(id string) {
 	delete(w.sentRuns, id)
 }
 
+// scheduleDetailChangedParams is the whole detail every time, so it carries the
+// zone as the subscribe result does.
 type scheduleDetailChangedParams struct {
-	ID       string              `json:"id"`
-	Schedule schedule.Schedule   `json:"schedule"`
-	Runs     rpc.ScheduleRunPage `json:"runs"`
+	ID         string              `json:"id"`
+	Schedule   schedule.Schedule   `json:"schedule"`
+	Runs       rpc.ScheduleRunPage `json:"runs"`
+	ServerZone schedule.Zone       `json:"server_zone"`
 }
 
 // OnScheduleChange implements schedule.OnChangeListener.

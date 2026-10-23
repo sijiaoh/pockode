@@ -83,6 +83,8 @@ import PageHeader, {
 import {
 	AgentRoleDetailOverlay,
 	AgentRoleListOverlay,
+	ScheduleDetailOverlay,
+	ScheduleListOverlay,
 	WorkDetailOverlay,
 	WorkListOverlay,
 } from "../Project";
@@ -107,6 +109,8 @@ const inputBarHiddenOverlays: NonNullable<OverlayState>["type"][] = [
 	"work-detail",
 	"agent-role-list",
 	"agent-role-detail",
+	"schedule-list",
+	"schedule-detail",
 ];
 
 function isInputBarHidden(overlay: OverlayState | undefined): boolean {
@@ -197,6 +201,8 @@ interface Props {
 	onSelectWorkSegment?: (segment: WorkSegment) => void;
 	onOpenAgentRoleList?: () => void;
 	onOpenAgentRoleDetail?: (roleId: string) => void;
+	onOpenScheduleList?: () => void;
+	onOpenScheduleDetail?: (scheduleId: string) => void;
 	/**
 	 * Set when the session's data is being read out of another worktree, which
 	 * is the whole of what makes this screen read-only: the data comes from
@@ -228,6 +234,8 @@ function ChatPanel({
 	onSelectWorkSegment,
 	onOpenAgentRoleList,
 	onOpenAgentRoleDetail,
+	onOpenScheduleList,
+	onOpenScheduleDetail,
 	view = null,
 	onOpenSessionThere,
 }: Props) {
@@ -1290,6 +1298,8 @@ function ChatPanel({
 						onBack={onOpenWorkList ?? onCloseOverlay ?? noop}
 						onNavigateToSession={onNavigateToSession ?? noop}
 						onOpenWorkDetail={onOpenWorkDetail ?? noop}
+						onOpenScheduleDetail={onOpenScheduleDetail ?? noop}
+						onOpenScheduleList={onOpenScheduleList ?? noop}
 					/>
 				);
 			case "agent-role-list":
@@ -1304,6 +1314,22 @@ function ChatPanel({
 					<AgentRoleDetailOverlay
 						roleId={overlay.roleId}
 						onBack={onOpenAgentRoleList ?? onCloseOverlay ?? noop}
+					/>
+				);
+			case "schedule-list":
+				return (
+					<ScheduleListOverlay
+						onBack={onCloseOverlay ?? noop}
+						onOpenScheduleDetail={onOpenScheduleDetail ?? noop}
+					/>
+				);
+			case "schedule-detail":
+				return (
+					<ScheduleDetailOverlay
+						scheduleId={overlay.scheduleId}
+						onBack={onOpenScheduleList ?? onCloseOverlay ?? noop}
+						onOpenWorkDetail={onOpenWorkDetail ?? noop}
+						onNavigateToSession={onNavigateToSession ?? noop}
 					/>
 				);
 		}

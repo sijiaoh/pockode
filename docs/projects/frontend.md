@@ -6,19 +6,23 @@ How the Project system is integrated into the React frontend: state management, 
 
 ### Zustand Stores
 
-Two Zustand stores hold entity state:
+Three Zustand stores hold entity state:
 
 | Store | State | File |
 |---|---|---|
 | `useWorkStore` | `works: WorkListItem[]`, `isLoading`, `error` | `web/src/lib/workStore.ts` |
 | `useAgentRoleStore` | `roles: AgentRole[]`, `workRefCounts: Record<string, number>`, `isLoading`, `error` | `web/src/lib/agentRoleStore.ts` |
+| `useScheduleStore` | `schedules: ScheduleListItem[]` (each with its latest run's row), `serverZone`, `isLoading`, `error` | `web/src/lib/scheduleStore.ts` |
 
-Both stores expose the same action pattern:
+All three expose the same action pattern:
 
 - `set[Items]` — Replace entire list (used for initial load and sync)
 - `update[Items]` — Apply a transform function to the list (used for incremental updates)
 - `setError` — Set error state
 - `reset` — Reset to initial loading state
+
+`useScheduleStore` adds `addCreatedSchedule`, which the create sheet calls with
+the `schedule.create` reply and which never replaces a schedule already held.
 
 ### RPC Action Creators
 
@@ -30,6 +34,9 @@ Mutation operations are defined as RPC action creators, injected into `wsStore.a
 **AgentRole** (`web/src/lib/rpc/agentRole.ts`):
 `createAgentRole`, `updateAgentRole`, `deleteAgentRole`, `resetAgentRoleDefaults`
 
+**Schedule** (`web/src/lib/rpc/schedule.ts`):
+`createSchedule`, `updateSchedule`, `deleteSchedule`, `runSchedule`
+
 Each creator takes a `getClient` thunk that returns the JSON-RPC requester. The creator calls `requireClient()` to throw if not connected, then delegates to `client.request()`.
 
 ### Subscription Wiring in wsStore
@@ -39,19 +46,21 @@ Each creator takes a `getClient` thunk that returns the JSON-RPC requester. The 
 - `workListSubscribe` / `workListUnsubscribe` — `work.list.*` RPCs, callbacks in `workListWatchCallbacks` map
 - `workDetailSubscribe` / `workDetailUnsubscribe` — `work.detail.*` RPCs, callbacks in `workDetailWatchCallbacks` map
 - `agentRoleListSubscribe` / `agentRoleListUnsubscribe` — `agent_role.list.*` RPCs, callbacks in `agentRoleListWatchCallbacks` map
+- `scheduleListSubscribe` / `scheduleListUnsubscribe` — `schedule.list.*` RPCs, callbacks in `scheduleListWatchCallbacks` map
+- `scheduleDetailSubscribe` / `scheduleDetailUnsubscribe` — `schedule.detail.*` RPCs, callbacks in `scheduleDetailWatchCallbacks` map; `scheduleDetailRuns` reads an older page of runs against an open detail subscription, by its id
 
 Incoming notifications are routed by method name in `handleNotification()`:
 
 - `work.list.changed` → dispatches to the callback registered for that subscription ID
 - `work.detail.changed` → same pattern
-- `agent_role.list.changed` → same pattern
+- `agent_role.list.changed`, `schedule.list.changed`, `schedule.detail.changed` → same pattern
 
 wsStore splits its watch callbacks into two groups, mirroring where the server keeps the matching watchers:
 
 - **Worktree-scoped** (file, git, git-diff, session list, session detail, chat messages) — the server tears down these watchers when the connection switches worktree. Which group a callback map belongs to follows the server's watcher, not the hook's `resubscribeOnWorktreeChange` — session detail is worktree-scoped and still does not resubscribe ([why](../code/subscription-system.md#why-sessiondetail-is-worktree-scoped-but-never-resubscribes)).
-- **App-level / global** (work list, work detail, agent role list, settings, worktree list) — these watchers are Manager-level and keep pushing across worktree switches.
+- **App-level / global** (work list, work detail, agent role list, schedule list, schedule detail, settings, worktree list) — these watchers are Manager-level and keep pushing across worktree switches.
 
-On worktree switch, `switchWorktreeRPC()` calls `clearWorktreeWatchSubscriptions()`, which clears only the worktree-scoped maps. App-level callbacks are deliberately preserved: Work and AgentRole subscriptions set `resubscribeOnWorktreeChange: false` (they never resubscribe on switch), so clearing their callbacks would leave the server pushing `work.list.changed` and similar notifications into a connection with no local handler — silently dropping updates.
+On worktree switch, `switchWorktreeRPC()` calls `clearWorktreeWatchSubscriptions()`, which clears only the worktree-scoped maps. App-level callbacks are deliberately preserved: Work, AgentRole and Schedule subscriptions set `resubscribeOnWorktreeChange: false` (they never resubscribe on switch), so clearing their callbacks would leave the server pushing `work.list.changed` and similar notifications into a connection with no local handler — silently dropping updates.
 
 On WebSocket close, `clearAllWatchSubscriptions()` clears every callback map (including app-level), since the connection and all its server-side subscriptions are gone. When the connection is re-established, `useSubscription` detects the `connected` status change and resubscribes automatically.
 
@@ -59,7 +68,7 @@ On WebSocket close, `clearAllWatchSubscriptions()` clears every callback map (in
 
 ### useSubscription Hook
 
-Both subscription hooks use the generic `useSubscription` hook (`web/src/hooks/useSubscription.ts`), which manages the full lifecycle:
+Every subscription hook here uses the generic `useSubscription` hook (`web/src/hooks/useSubscription.ts`), which manages the full lifecycle:
 
 1. **Subscribe** — On mount (when `enabled && connected`), calls the subscribe function — which registers the callback under the id it generated *before* sending the RPC — and invokes `onSubscribed` with the initial data, replaying anything that arrived in the meantime ([why](../code/subscription-system.md#why-nothing-is-lost-while-a-subscription-is-being-opened))
 2. **Receive notifications** — Routes incremental changes through the notification callback
@@ -69,7 +78,7 @@ Both subscription hooks use the generic `useSubscription` hook (`web/src/hooks/u
 
 ### Notification Handling
 
-Both `useWorkSubscription` and `useAgentRoleSubscription` follow the same update pattern:
+`useWorkSubscription`, `useAgentRoleSubscription` and `useScheduleSubscription` follow the same update pattern:
 
 | Operation | Behavior |
 |---|---|
@@ -77,6 +86,9 @@ Both `useWorkSubscription` and `useAgentRoleSubscription` follow the same update
 | `create` | Append to list; deduplicate if item already exists (race between subscribe and initial fetch) |
 | `update` | Replace item by ID |
 | `delete` | Remove item by ID |
+
+`useScheduleSubscription` upserts on `create` as well as `update`, since
+`addCreatedSchedule` may already hold the item the create sheet made.
 
 `useAgentRoleSubscription` handles one more, `ref_counts`, which replaces
 `workRefCounts` wholesale. It is never patched and `sync` never clears it: the
@@ -95,23 +107,33 @@ and what it reads, and it does not restate either.
 
 ```
 ProjectTab
-  ├── "Project"         → WorkListOverlay
+  ├── "Stories"         → WorkListOverlay
   │                         ├── (tap row)     → WorkDetailOverlay
   │                         │                     ├── (tap task row) → WorkDetailOverlay
   │                         │                     ├── (row chat icon)→ Chat session
   │                         │                     └── "Open Chat"    → Chat session
   │                         ├── (row chat icon)→ Chat session
   │                         └── "New Story"   → CreateStorySheet → WorkDetailOverlay
+  ├── "Schedules"       → ScheduleListOverlay
+  │                         ├── (tap row)     → ScheduleDetailOverlay
+  │                         │                     ├── (tap run row)  → WorkDetailOverlay (job)
+  │                         │                     └── (row chat icon)→ Chat session
+  │                         └── "New Schedule"→ CreateScheduleSheet → ScheduleDetailOverlay
   └── "Agent Roles"     → AgentRoleListOverlay
                              └── (tap role) → AgentRoleDetailOverlay
 ```
+
+The schedule screens, and the paths between a run and its schedule, are
+[schedule-ui.md §2](../schedule-ui.md#2-routes-and-navigation).
 
 Creating a story always ends on its detail page: `CreateStorySheet` hands
 its caller the created `id` and the caller calls the `onOpenWorkDetail` it
 already has. No component routes itself — `AppShell` owns every navigation in
 this app ([project-ui.md §4](../project-ui.md#4-creating-work-lands-you-on-its-detail-page)).
 
-`ProjectTab` is the sidebar entry point. It renders two buttons that open their respective overlay screens via callbacks (`onOpenWorkList`, `onOpenAgentRoleList`).
+`ProjectTab` is the sidebar entry point. It renders three buttons that open their respective overlay screens via callbacks (`onOpenWorkList`, `onOpenScheduleList`, `onOpenAgentRoleList`). The tab keeps the name Project — it is the place — while its first entry is `Stories`, the list it opens ([schedule-ui.md §1](../schedule-ui.md#1-the-project-tab)).
+
+The schedule data is app-wide, like the agent roles: `AppShell` mounts `useScheduleSubscription`, which fills `scheduleStore` (every schedule, each with its latest run's row, and the server's zone), because the Project tab's dot reads it whichever screen is open. A schedule's detail and its pages of runs are `useScheduleDetailSubscription`, held by the page; the merge of the newest page into what is loaded is `lib/scheduleRuns.ts`.
 
 Opening a work's chat (the `Chat` / `Open Chat` shortcuts) navigates to the session URL of **the work's own worktree** (`/w/<worktree>/s/<sessionId>`), not the currently active one — the list is global across worktrees, so a shortcut may switch worktrees. See [work-system.md](../code/work-system.md#cross-worktree-chat-navigation) for the rationale.
 
@@ -130,7 +152,8 @@ Activates both `useWorkSubscription` and `useAgentRoleSubscription`.
 **What the screen resolves for its rows**, because a row is given facts rather
 than looking them up: the story's tasks (indexed by `story_id` into a
 `Map<string, WorkListItem[]>`), the role name out of
-`useRoleNameMap`, and `showUpdatedAt` in the `Closed` segment.
+`useRoleNameMap`, and `dateAt={work.updated_at}` — slot 7, the key both
+segments are sorted by.
 
 ### WorkRow
 
@@ -166,6 +189,13 @@ change carries none. Whether it is visible is `useWorktreeBadgeVisible(work)`,
 exported beside the badge because the meta line has to know whether the slot is
 there before it can decide where the separator dots go.
 
+The left edge's hue is `workEdgeClass(work)`, exported from `WorkRow.tsx` for
+the schedule list, whose card edge is its latest run's.
+
+Slot 7 is `dateAt`, a timestamp the screen picks rather than a flag: the
+stories list passes `updated_at`, a schedule's Runs `created_at` — each the key
+its rows are sorted by — and a story's Tasks nothing.
+
 ### WorkDetailOverlay
 
 Shows the detail view for a single work item (story, task or job).
@@ -182,16 +212,22 @@ Usage do move, but checking them is not why the page was opened, and Comments
 is a log, read from the end it grows at. A task's page is a story's without
 Tasks, not an order of its own:
 
-1. **Parent link** — If the item is a task, shows a tappable link to the parent story
-2. **Title** — Inline-editable (tap pencil icon to enter edit mode)
+1. **What it belongs to** — `BelongsToLink`, one element for both kinds of parent: a task's story, or a job's schedule (`CalendarClock` and the schedule's title, from `schedule` on the `work.detail` result). A job whose schedule has been deleted gets the muted `Its schedule has been deleted.` instead
+2. **Title** — `ui/InlineEditableHeading` (tap the pencil; Enter saves, Escape cancels), the one page-title editor the work, role and schedule pages share
 3. **Status** — Read-only `ActivityBadge`, with a `WorktreeBadge` alongside it: the worktree binding isn't editable, but the badge is a link that navigates to that worktree's root (shown for both stories and tasks, since a task detail can be opened directly; hidden while neither the work nor its story has started, because only then can the worktree still change). Under them, the `child`-only wait line ([lifecycle-ui.md §6.2](../lifecycle-ui.md#62-detail-page))
 4. **Unanswered questions** — A read-only block, present whenever `pending_questions` is non-empty, with one Answer button into the chat when the work has a session ([lifecycle-ui.md §6.2](../lifecycle-ui.md#62-detail-page))
 5. **Tasks** (story only) — The story's child tasks as `WorkRow`s, the one place a story's tasks are listed. There is no control to add one: tasks are created by the story's agent with `task_create`, never by hand ([why](../project-ui.md#4-creating-work-lands-you-on-its-detail-page)). The rows differ from the list's in one slot only: they carry no date, because this list is in creation order and has no sort key to show (docs/project-ui.md §3.1). The heading carries `closed/total` and, whenever any child is `active`, an "{n} active" count — the same count that makes a refused `step_done` legible (docs/lifecycle-ui.md §6.2)
-6. **Description** — Inline-editable textarea with Markdown rendering. Shown in full in every status: it is the part users read most, and hidden behind one line it would cost a tap every time. The card scrolls wide content (a long code line, a table) sideways itself, since `.code-block` leaves that to an ancestor and the next one up is the whole page
+6. **Description** — Inline-editable textarea with Markdown rendering. A job's carries a muted line saying it is this run's copy of the schedule's prompt. Shown in full in every status: it is the part users read most, and hidden behind one line it would cost a tap every time. The card scrolls wide content (a long code line, a table) sideways itself, since `.code-block` leaves that to an ancestor and the next one up is the whole page
 7. **Role** — Inline-editable `RoleSelect` (tap to switch role), offering only roles that take the work's kind. A kept role that no longer takes it gets a muted line under its name rather than an error ([agent-roles-ui.md §8](../agent-roles-ui.md#8-which-kind-of-work-a-role-runs))
 8. **Steps** — Step progress indicator showing current step position (if agent role has steps defined). Each step's text renders as Markdown, like the role page's copy of it ([lifecycle-ui.md §6.3](../lifecycle-ui.md#63-steplist))
 9. **Usage** — Tokens and cost, this item's own beside the total over it and its tasks, from the same `work.detail` subscription and updating live as its sessions spend ([usage-display-ui.md](../usage-display-ui.md), [aggregation](../code/work-system.md#usage-aggregation))
 10. **Comments** — Loaded via `work.detail.subscribe` (real-time), and read-only: the list is the record agents and the engine write about what happened, and nothing here writes or edits one. A comment carries no author field ([data-model.md](data-model.md#comment)), so an edit would leave nothing to tell a user's wording from the agent's — and the next agent to read the story with `work_comment_list` would take the rewrite as its predecessor's report
+
+**Back is what the work belongs to**, worked out once by `backTarget` and handed
+to both the header and Delete: a task's story, a job's schedule (or the
+schedules list once it is deleted), else the stories list
+([schedule-ui.md §2, §7](../schedule-ui.md#7-a-runs-own-page)). So deleting a
+task lands on its story, and deleting a job on its schedule.
 
 The page is keyed by work id inside the component (`WorkDetailOverlay` renders
 `WorkDetailPage key={workId}`). Moving to a parent or child, or between two
@@ -241,6 +277,8 @@ arriving, and only an empty list that is neither says "No agent roles
 registered". Telling a user whose roles are in flight that they have none is the
 kind of silent failure the project forbids. A list whose roles all take tasks
 only is a fourth state with its own message ("No agent role takes stories.").
+The four are drawn by `NoEligibleRoleSheet`, which `CreateScheduleSheet` opens
+as too, so the two sheets word them alike.
 
 On failure the sheet stays open with the error under the fields and the typed
 title intact; on success it hands the new `id` to `onCreated` and leaves closing
@@ -250,9 +288,9 @@ it, and releasing early would allow a second work to be created.
 
 ### RoleSelect
 
-The one control for choosing an agent role, used by all three places that ask
-for one: `CreateStorySheet`'s Role field, the work detail's Role field, and the
-default story role field of `AgentRoleListOverlay`. It reads the roles from
+The one control for choosing an agent role, used by every place that asks for
+one: the Role fields of `CreateStorySheet`, `CreateScheduleSheet` (`workType="job"`)
+and the work detail, and the default story role field of `AgentRoleListOverlay`. It reads the roles from
 `useAgentRoleStore` itself, so a caller hands it the stored id and an
 `onChange` rather than the list. `emptyLabel` adds a `""` choice under that
 label — the `Select role...` placeholder while nothing is picked, or the
@@ -264,6 +302,68 @@ default story role field's `None`, which is a real answer there. An id with no r
 stored role that does not as the selected option with its suffix (`PM — stories
 only`)
 ([agent-roles-ui.md §8](../agent-roles-ui.md#8-which-kind-of-work-a-role-runs)).
+
+### ScheduleListOverlay
+
+Every schedule, read from the app-wide `scheduleStore`, sorted newest made
+first (`compareNewestFirst` in `lib/scheduleRuns.ts`, the server's run order)
+and never re-sorted by state
+([schedule-ui.md §3](../schedule-ui.md#3-the-schedules-list)). Each card is
+`WorkRow`'s card: the title button covers it and opens the detail, and the one
+control lifted above it is the enable switch. Line 2 is the period in words
+(`lib/schedulePeriod.ts`, with the server's offset when the device is on
+another) and `Next in …` (`formatRelativeFuture`) or `Off`; line 3 is the
+latest run — a failure, the run's activity, a deleted run, or none. The edge is
+error while `last_failure` is set, otherwise `workEdgeClass` of `last_run`.
+
+The switch is `ui/Switch`, a `role="switch"` button sized by `touch-target`. It
+sends `schedule.update {enabled}` and moves only when the store does, so it
+shows what the server stored; a refusal is the card's last line, which the
+switch is described by and which clears on a retry or when the value changes.
+
+`New Schedule` sits in a `BottomActionBar`, usable while the list loads or
+fails, and opens `CreateScheduleSheet`, which hands the new id back; the
+overlay passes it to `onOpenScheduleDetail` and `AppShell` lands on the detail.
+
+### ScheduleDetailOverlay
+
+One schedule, from `useScheduleDetailSubscription`, keyed by id inside the
+component (`ScheduleDetailPage key={scheduleId}`) for the work detail's reason
+([schedule-ui.md §4](../schedule-ui.md#4-the-schedule-detail)). Top to bottom:
+the title (inline edit), the `Switch` with the next firing (`formatNextRun` and
+`formatRelativeFuture`), at most one notice (a failed firing, a run going now,
+a skipped firing), **Runs**, then the settings — Prompt, Period
+(`PeriodField` behind a pencil; Save sends `cron` only when it differs from the
+stored string), Role (`RoleSelect workType="job"`, applied on change), Worktree
+(git repositories only) — and `Delete schedule` at the end. `Run now` is the
+bottom bar and stays on the page.
+
+The runs are `WorkRow`s unchanged, at `headingLevel={4}` and dated by
+`created_at`, so a run is stopped, restarted, reopened and opened exactly as a
+story is. The first five show; `Show more runs` reveals twenty more and reads
+the next page with `loadMore` once the loaded rows run out.
+
+`Schedule not found` is read off the detail subscription and off the loaded
+`scheduleStore` no longer holding the id — the detail subscription sends
+nothing on delete, so the store is how a deletion reaches an open page; the
+triggers are [schedule-ui.md §4.4](../schedule-ui.md#44-run-now-and-delete). The enable toggle is
+`useScheduleEnabledToggle`, shared with the list's switch.
+
+### CreateScheduleSheet
+
+`CreateStorySheet`'s shape with the four fields a schedule cannot run without —
+title, prompt, role and period
+([schedule-ui.md §5](../schedule-ui.md#5-creating-a-schedule)). The role is
+`RoleSelect workType="job"`, preselected by `resolveInitialJobRole`; the period
+is `PeriodField`, and the sheet starts its cron at `DEFAULT_CRON` because the
+field reports nothing until it is touched. The worktree is the current URL's,
+stated as `Runs in …` rather than asked. Once the form has been shown it stays
+through a role reload (a reconnect empties the role store): swapping to
+`NoEligibleRoleSheet` would remount `PeriodField` on its default period, so
+when the swap does happen — the reload failed — the cron goes back to the
+default with it. On success the reply is added to `scheduleStore` before
+`onCreated`, so the detail page it lands on does not read
+the new id as deleted while the list notification is still on its way.
 
 ### AgentRoleListOverlay
 

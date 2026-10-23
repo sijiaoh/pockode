@@ -14,7 +14,7 @@ import (
 func (h *rpcMethodHandler) replyWorkError(ctx context.Context, conn *jsonrpc2.Conn, id jsonrpc2.ID, err error, fallbackMsg string) {
 	if errors.Is(err, work.ErrWorkNotFound) {
 		h.replyError(ctx, conn, id, jsonrpc2.CodeInvalidParams, "work not found")
-	} else if errors.Is(err, work.ErrInvalidWork) {
+	} else if errors.Is(err, work.ErrInvalidWork) || errors.Is(err, work.ErrRunActive) {
 		h.replyError(ctx, conn, id, jsonrpc2.CodeInvalidParams, err.Error())
 	} else {
 		h.replyError(ctx, conn, id, jsonrpc2.CodeInternalError, fallbackMsg)
@@ -132,10 +132,10 @@ func (h *rpcMethodHandler) handleWorkStart(ctx context.Context, conn *jsonrpc2.C
 
 	w, err := h.workOps.StartWork(ctx, params.ID, nil)
 	if err != nil {
-		// ErrWorkNotFound / ErrInvalidWork map to client errors; a kickoff failure
-		// (e.g. "send kickoff message: ...") is surfaced verbatim so the user sees
-		// why the agent did not start.
-		if errors.Is(err, work.ErrWorkNotFound) || errors.Is(err, work.ErrInvalidWork) {
+		// ErrWorkNotFound / ErrInvalidWork / ErrRunActive map to client errors; a
+		// kickoff failure (e.g. "send kickoff message: ...") is surfaced verbatim
+		// so the user sees why the agent did not start.
+		if errors.Is(err, work.ErrWorkNotFound) || errors.Is(err, work.ErrInvalidWork) || errors.Is(err, work.ErrRunActive) {
 			h.replyWorkError(ctx, conn, req.ID, err, "failed to start work")
 		} else {
 			h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInternalError, err.Error())
@@ -219,6 +219,7 @@ func (h *rpcMethodHandler) handleWorkDetailSubscribe(ctx context.Context, conn *
 		PendingQuestions: detail.PendingQuestions,
 		Children:         detail.Children,
 		Parent:           detail.Parent,
+		Schedule:         detail.Schedule,
 	}
 
 	if err := conn.Reply(ctx, req.ID, result); err != nil {

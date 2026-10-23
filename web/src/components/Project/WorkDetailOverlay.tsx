@@ -1,13 +1,14 @@
 import { ConfirmDialog } from "@pockode/shared";
 import {
 	AlertCircle,
-	Check,
+	CalendarClock,
 	Eye,
+	ListChecks,
 	Loader2,
+	type LucideIcon,
 	MessageSquare,
 	Pencil,
 	Trash2,
-	X,
 } from "lucide-react";
 import { Fragment, useCallback, useMemo, useState } from "react";
 import TextareaAutosize from "react-textarea-autosize";
@@ -27,11 +28,18 @@ import { useWorktreeStore } from "../../lib/worktreeStore";
 import { useWSStore } from "../../lib/wsStore";
 import type { AgentRole } from "../../types/agentRole";
 import type { PendingQuestion } from "../../types/message";
-import type { Comment, Work, WorkListItem, WorkType } from "../../types/work";
+import type {
+	Comment,
+	Work,
+	WorkListItem,
+	WorkSchedule,
+	WorkType,
+} from "../../types/work";
 import { formatStepCount, getStepProgress } from "../../utils/workSteps";
 import PageHeader from "../Layout/PageHeader";
 import { ActivityBadge, MarkdownContent, RecommendedTag } from "../ui";
 import BottomActionBar from "../ui/BottomActionBar";
+import InlineEditableHeading from "../ui/InlineEditableHeading";
 import { inputClass } from "../ui/inputClass";
 import { WorktreeBadge } from "../Worktree";
 import RoleSelect from "./RoleSelect";
@@ -51,6 +59,8 @@ interface Props {
 	onBack: () => void;
 	onNavigateToSession: (sessionId: string, worktree: string) => void;
 	onOpenWorkDetail: (workId: string) => void;
+	onOpenScheduleDetail: (scheduleId: string) => void;
+	onOpenScheduleList: () => void;
 }
 
 /**
@@ -68,6 +78,8 @@ function WorkDetailPage({
 	onBack,
 	onNavigateToSession,
 	onOpenWorkDetail,
+	onOpenScheduleDetail,
+	onOpenScheduleList,
 }: Props) {
 	// Children and parent come with the detail, not out of the work list: that
 	// list is the `Current` segment and holds no closed work, so a closed story
@@ -79,6 +91,7 @@ function WorkDetailPage({
 		usage,
 		children,
 		parent,
+		schedule,
 		pendingQuestions,
 		loading,
 		error,
@@ -120,26 +133,45 @@ function WorkDetailPage({
 		);
 	}
 
+	const back = backTarget(work, parent, schedule, {
+		onBack,
+		onOpenWorkDetail,
+		onOpenScheduleDetail,
+		onOpenScheduleList,
+	});
+
 	return (
 		<div className="flex min-h-0 flex-1 flex-col">
 			<DetailHeader
-				onBack={parent ? () => onOpenWorkDetail(parent.id) : onBack}
+				onBack={back.onClick}
 				title={typeLabels[work.type]}
-				backLabel={parent ? "Back to parent story" : "Back to project"}
+				backLabel={back.label}
 			/>
 			<div className="min-h-0 flex-1 overflow-auto">
 				<div className="space-y-5 p-4">
 					<div>
 						{parent && (
-							<button
-								type="button"
+							<BelongsToLink
+								kind="Story"
+								icon={ListChecks}
+								label={parent.title}
 								onClick={() => onOpenWorkDetail(parent.id)}
-								className="mb-1 text-xs text-th-text-muted hover:text-th-accent"
-							>
-								{parent.title}
-							</button>
+							/>
 						)}
-						<InlineEditableTitle work={work} />
+						{work.type === "job" &&
+							(schedule ? (
+								<BelongsToLink
+									kind="Schedule"
+									icon={CalendarClock}
+									label={schedule.title}
+									onClick={() => onOpenScheduleDetail(schedule.id)}
+								/>
+							) : (
+								<p className="mb-1 text-xs text-th-text-muted">
+									Its schedule has been deleted.
+								</p>
+							))}
+						<WorkTitle work={work} />
 						<div className="mt-2 flex flex-wrap items-center gap-2">
 							<ActivityBadge activity={activity} />
 							<WorktreeBadge work={work} className="max-w-[16rem]" />
@@ -187,7 +219,7 @@ function WorkDetailPage({
 				activity={activity}
 				tasks={children}
 				onNavigateToSession={onNavigateToSession}
-				onBack={onBack}
+				onBack={back.onClick}
 			/>
 		</div>
 	);
@@ -199,10 +231,74 @@ const typeLabels: Record<WorkType, string> = {
 	job: "Job",
 };
 
+/**
+ * Where Back goes, worked out once and handed to the header and to Delete
+ * alike: what the work belongs to, read off the data — never where the user
+ * came from (docs/schedule-ui.md §2, §7).
+ */
+function backTarget(
+	work: Work,
+	parent: WorkListItem | null,
+	schedule: WorkSchedule | null,
+	nav: Pick<
+		Props,
+		| "onBack"
+		| "onOpenWorkDetail"
+		| "onOpenScheduleDetail"
+		| "onOpenScheduleList"
+	>,
+): { onClick: () => void; label: string } {
+	if (parent) {
+		return {
+			onClick: () => nav.onOpenWorkDetail(parent.id),
+			label: "Back to parent story",
+		};
+	}
+	if (work.type === "job") {
+		return schedule
+			? {
+					onClick: () => nav.onOpenScheduleDetail(schedule.id),
+					label: "Back to schedule",
+				}
+			: { onClick: nav.onOpenScheduleList, label: "Back to schedules" };
+	}
+	return { onClick: nav.onBack, label: "Back to stories" };
+}
+
+/**
+ * The story or schedule the work belongs to, above its title. One element for
+ * both so the two cannot drift; its size is the register's entry for this file
+ * (docs/responsive-ui.md), since the header's Back goes to the same place.
+ */
+function BelongsToLink({
+	kind,
+	icon: Icon,
+	label,
+	onClick,
+}: {
+	/** Said to a screen reader in place of the glyph, which is what says it to the eye. */
+	kind: "Story" | "Schedule";
+	icon: LucideIcon;
+	label: string;
+	onClick: () => void;
+}) {
+	return (
+		<button
+			type="button"
+			onClick={onClick}
+			aria-label={`${kind}: ${label}`}
+			className="mb-1 flex items-center gap-1 text-xs text-th-text-muted hover:text-th-accent"
+		>
+			<Icon className="size-3 shrink-0" aria-hidden="true" />
+			{label}
+		</button>
+	);
+}
+
 function DetailHeader({
 	onBack,
 	title,
-	backLabel = "Back to project",
+	backLabel = "Back to stories",
 }: {
 	onBack: () => void;
 	/** `null` while the work has not arrived. */
@@ -528,88 +624,17 @@ function PendingQuestionsSection({
 	);
 }
 
-function InlineEditableTitle({ work }: { work: Work }) {
+function WorkTitle({ work }: { work: Work }) {
 	const updateWork = useWSStore((s) => s.actions.updateWork);
-	const {
-		editing,
-		setEditing,
-		value,
-		setValue,
-		saving,
-		error,
-		ref,
-		save,
-		cancel,
-	} = useInlineEdit<HTMLInputElement>({
-		initialValue: work.title,
-		onSave: useCallback(
-			(trimmed: string) => updateWork({ id: work.id, title: trimmed }),
-			[updateWork, work.id],
-		),
-	});
-
-	if (editing) {
-		return (
-			<div>
-				<div className="flex items-center gap-2">
-					<input
-						ref={ref}
-						type="text"
-						value={value}
-						onChange={(e) => setValue(e.target.value)}
-						onKeyDown={(e) => {
-							if (e.key === "Enter") save();
-							if (e.key === "Escape") cancel();
-						}}
-						disabled={saving}
-						className={`min-w-0 flex-1 rounded-lg bg-th-bg-primary px-3 py-2 text-lg font-bold text-th-text-primary ${inputClass}`}
-					/>
-					<button
-						type="button"
-						onClick={save}
-						disabled={saving || !value.trim()}
-						className="flex min-h-[44px] min-w-[44px] items-center justify-center rounded-lg text-th-success hover:bg-th-bg-tertiary disabled:opacity-50"
-						aria-label="Save"
-					>
-						{saving ? (
-							<Loader2 className="size-4 animate-spin" />
-						) : (
-							<Check className="size-4" />
-						)}
-					</button>
-					<button
-						type="button"
-						onClick={cancel}
-						disabled={saving}
-						className="flex min-h-[44px] min-w-[44px] items-center justify-center rounded-lg text-th-text-muted hover:bg-th-bg-tertiary"
-						aria-label="Cancel"
-					>
-						<X className="size-4" />
-					</button>
-				</div>
-				{error && (
-					<p className="mt-1 text-xs text-th-error" role="alert">
-						{error}
-					</p>
-				)}
-			</div>
-		);
-	}
-
 	return (
-		<div className="group flex items-start gap-1">
-			<h2 className="min-w-0 flex-1 text-lg font-bold text-th-text-primary">
-				{work.title}
-			</h2>
-			<button
-				type="button"
-				onClick={() => setEditing(true)}
-				className="flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center rounded-lg text-th-text-muted opacity-80 transition-opacity hover:opacity-100 hover:bg-th-bg-tertiary hover:text-th-text-primary"
-				aria-label="Edit title"
-			>
-				<Pencil className="size-4" />
-			</button>
-		</div>
+		<InlineEditableHeading
+			value={work.title}
+			onSave={useCallback(
+				(trimmed: string) => updateWork({ id: work.id, title: trimmed }),
+				[updateWork, work.id],
+			)}
+			label="Title"
+		/>
 	);
 }
 
@@ -710,6 +735,21 @@ function RoleSection({ work }: { work: Work }) {
 	);
 }
 
+/**
+ * A job's body is its own copy of the schedule's prompt: still the brief this
+ * run's agent reads, and still editable, but a user editing it to fix the job
+ * needs to know it fixes one run (docs/schedule-ui.md §7).
+ */
+function DescriptionNote({ work }: { work: Work }) {
+	if (work.type !== "job" || !work.body) return null;
+	return (
+		<p className="mb-1.5 text-xs text-th-text-muted">
+			This run's copy of its schedule's prompt: editing it changes this run
+			only.
+		</p>
+	);
+}
+
 function InlineEditableBody({ work }: { work: Work }) {
 	const updateWork = useWSStore((s) => s.actions.updateWork);
 	const {
@@ -737,6 +777,7 @@ function InlineEditableBody({ work }: { work: Work }) {
 				<h3 className="mb-1 text-xs font-medium text-th-text-muted uppercase">
 					Description
 				</h3>
+				<DescriptionNote work={work} />
 				<TextareaAutosize
 					ref={ref}
 					value={value}
@@ -808,6 +849,7 @@ function InlineEditableBody({ work }: { work: Work }) {
 					<Pencil className="size-3.5" />
 				</button>
 			</div>
+			<DescriptionNote work={work} />
 			{/* `.code-block` leaves sideways scrolling to an ancestor; without this
 			    one a wide line would slide the whole page. */}
 			<div className="overflow-x-auto rounded-lg bg-th-bg-secondary px-3 py-2">

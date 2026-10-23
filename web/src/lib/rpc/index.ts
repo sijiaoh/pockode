@@ -31,6 +31,7 @@ export {
 	type RawCapability,
 	type RawTarget,
 } from "./raw";
+export { createScheduleActions, type ScheduleActions } from "./schedule";
 export { createSessionActions, type SessionActions } from "./session";
 export {
 	createSessionViewActions,

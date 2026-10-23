@@ -135,6 +135,14 @@ describe("WorkListOverlay", () => {
 		setArchivePage([]);
 	});
 
+	it("is headed Stories, the list its entry is named for", () => {
+		renderList();
+
+		expect(
+			screen.getByRole("heading", { level: 1, name: "Stories" }),
+		).toBeInTheDocument();
+	});
+
 	// §2.2: a task row sorted among unrelated stories read as hanging under the
 	// wrong one, so a task is never a row — not even one waiting on a person —
 	// and its state does not move its story to another group either. The story

@@ -84,36 +84,62 @@ expression, with a `Scheduler` that fires it. Its fields are
 [data-model](../projects/data-model.md#schedule)'s; what follows is why the
 scheduler behaves the way it does.
 
-- **One run at a time, per schedule.** A firing that finds the previous run
+- **One run at a time, per schedule.** A firing that finds another run
   still `active` makes no run and records a skip (`last_skipped_at`) instead.
   Queuing it would pile up runs behind one that is stuck, and running two at
   once would have two agents doing the same prompt's work over each other. A
   run that is `stopped`, `closed` or `open` does not block — a stopped run is a
   person's to deal with, and the schedule carries on. Run-now follows the same
-  rule and is *refused* (`ErrRunActive`), not queued, so the person pressing it
-  learns why nothing happened and can stop the run they are waiting on.
+  rule and is *refused* (`work.ErrRunActive`), not queued, so the person
+  pressing it learns why nothing happened and can stop the run they are waiting
+  on. So is every other way of making a run active that can be refused:
+  `work.start` on a run (one that failed to start, or an older stopped one) and
+  `work.reopen` on a closed one. The rule is the schedule's, not the
+  scheduler's, so it is enforced where all of them meet (next point).
+  "Another run" is every run of the schedule (`ListBySchedule`), not only the
+  one `last_run_work_id` names: a run can be active without being the latest —
+  reopened, or woken by a message in its chat, which no rule can refuse — and
+  the record of the latest run is only as good as its last write.
 - **Missed firings are not caught up.** `Start` calls `SkipMissedRuns` before
   anything fires, moving every past-due firing to the next one after now. A
   server that was off overnight starting eight hourly runs at once is never what
   anyone wanted; the next firing is.
-- **A run is a fresh job, started through `work.Operations.StartWork`.** Each
-  firing calls `CreateJob` with the schedule's title, its prompt as the body,
-  its role and its worktree, then starts that work by the path `work.start` and
-  `story_start` take, so a run gets the same claim, kickoff and rollback — there
-  is no second start path to keep in step. Firings and run-now share one lock,
-  so the two cannot both pass the one-run check and start a run each. A failure
-  to make or start a run is recorded on the schedule (`last_failure`) as well as
-  logged, because nobody is watching when a firing fails; a start that failed
-  leaves its job `open`, where a person can start it by hand.
+- **A run is a fresh job, started through `work.Operations`.** Each firing and
+  each run-now calls `Operations.StartRun` with the schedule's title, its prompt
+  as the body, its role and its worktree; it makes the job (`CreateJob`) and
+  starts it by the path `work.start` and `story_start` take, so a run gets the
+  same claim, kickoff and rollback — there is no second start path to keep in
+  step. A failure to make or start a run is recorded on the schedule
+  (`last_failure`) as well as logged, because nobody is watching when a firing
+  fails; a start that failed leaves its job `open`, where a person can start it
+  by hand.
+- **Check, start and record are one critical section, on the shared start
+  path.** Every start of a job — `StartRun`, and `StartWork` on an existing
+  job — takes its schedule's lock in `work.Operations` (`runGuard`,
+  `server/work/runs.go`), checks for another active run, starts, and records the
+  start as the schedule's latest run, before letting go. `ReopenWork` on a job
+  takes the lock and the check but records nothing: the record is of the latest
+  run started. The scheduler used to
+  hold its own lock across its check and start; a `work.start` checked outside
+  it could pass while a firing sat between the two, and its start was never
+  recorded — so the schedule went on reporting a failure for a run that was
+  going, and the next firing's check, reading `last_run_work_id`, could not see
+  it. Recording lives in exactly one place for the same reason: the work
+  package names a `RunRecorder` (satisfied by the `Scheduler`, wired in
+  `main.go`) and calls it after every successful start, so a fired run is
+  recorded once and a run started by hand is recorded at all. The lock is per
+  schedule, so one schedule's slow session start does not hold up another's.
 - **The bookkeeping lives on the schedule, not on its runs.** `next_run_at`,
   `last_run_at`, `last_skipped_at` and `last_failure` are the schedule's own
   state and are written by its store; the runs are works that know nothing of
   why they were made. "Is a run going now" is not stored at all — it is the
-  status of the run `last_run_work_id` names, read where it is needed.
+  status of the schedule's runs, read where it is needed.
 - **Times are the server's local time.** A cron expression means what the
   machine's clock means, which is what a person writing `0 9 * * *` expects.
   Across a DST change a skipped wall time fires at the jump and a repeated one
-  fires once (`Cron.Next`).
+  fires once (`Cron.Next`). The zone is sent to clients with both schedule
+  subscriptions (`Store.Zone`, read off the store's own clock), since a client
+  may be in another one ([api.md](../projects/api.md#server-zone)).
 - **The wait is re-read, not trusted.** Every schedule change wakes the loop,
   and the wait is capped at a minute, because a timer counts elapsed time and a
   machine that sleeps or has its clock set forward would otherwise fire late. A
@@ -121,7 +147,12 @@ scheduler behaves the way it does.
   that would fire again a time that has already fired.
 
 The schedule RPC — and why a run list is paged under the schedule's detail —
-is [api.md](../projects/api.md#schedule-runs).
+is [api.md](../projects/api.md#schedule-runs). A list item carries the row of
+the schedule's latest run beside the record (`last_run`), and
+`ScheduleListWatcher` re-sends it when that run or its session's turn moves,
+on the triggers `ScheduleDetailWatcher` follows for its run page; a job's
+`work.detail` names its schedule (`WorkDetailWatcher` reads it through a
+`ScheduleSource`).
 
 ### Worktree Binding
 
@@ -1943,7 +1974,7 @@ The split decides where each surface reads from:
   page. The cost is a few extra rows on every detail notification, bounded by
   one story's task count.
 - **The list side never wanted the dropped fields.** `WorkListOverlay`,
-  `useWorkNeedsAttention` (the Project tab's dot, its tab badge and the header's sidebar button),
+  `useWorkNeedsAttention` (the Stories entry's dot, and half of the Project tab's badge and the header's sidebar button),
   `WorktreeBadge` / `isWorktreeBound` and the session row's wait lookup read
   none of them, which is why narrowing the store changed no behaviour.
 

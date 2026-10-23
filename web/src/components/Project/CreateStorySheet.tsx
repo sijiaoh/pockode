@@ -7,6 +7,7 @@ import { useSettingsStore } from "../../lib/settingsStore";
 import { useWSStore } from "../../lib/wsStore";
 import { Sheet } from "../ui";
 import { inputClass } from "../ui/inputClass";
+import NoEligibleRoleSheet from "./NoEligibleRoleSheet";
 import RoleSelect from "./RoleSelect";
 
 interface Props {
@@ -48,8 +49,6 @@ export default function CreateStorySheet({ onClose, onCreated }: Props) {
 	const [isSubmitting, setIsSubmitting] = useState(false);
 	const createWork = useWSStore((s) => s.actions.createWork);
 	const roles = useAgentRoleStore((s) => s.roles);
-	const rolesLoading = useAgentRoleStore((s) => s.isLoading);
-	const rolesError = useAgentRoleStore((s) => s.error);
 	const defaultRoleId = useSettingsStore(
 		(s) => s.settings?.default_agent_role_id ?? "",
 	);
@@ -106,69 +105,9 @@ export default function CreateStorySheet({ onClose, onCreated }: Props) {
 		[title, agentRoleId, selectedRoleFits, createWork, isSubmitting, onCreated],
 	);
 
-	// An empty list of roles is three different facts, and only one of them is
-	// "there are none": the app-wide subscription starts out loading and goes
-	// back to loading on every reconnect, and it can fail outright. Saying "no
-	// agent roles registered" to a user whose roles are merely on their way is
-	// the same lie either of the other two states would tell.
-	//
-	// Roles that all take tasks only are a fourth fact, with its own
-	// way out: the fix is a restriction to change, not a role to create.
 	if (!hasEligibleRole) {
 		return (
-			<Sheet
-				title={TITLE}
-				onClose={onClose}
-				footer={
-					<button
-						type="button"
-						onClick={onClose}
-						className="min-h-[44px] flex-1 rounded-lg bg-th-bg-tertiary px-4 text-sm text-th-text-primary transition-opacity hover:opacity-90"
-					>
-						Close
-					</button>
-				}
-			>
-				<div className="space-y-1 p-4 text-sm text-th-text-secondary">
-					{rolesError ? (
-						<p className="text-th-error" role="alert">
-							{rolesError}
-						</p>
-					) : rolesLoading ? (
-						<div className="flex items-center gap-2 text-th-text-muted">
-							<Loader2 className="size-4 animate-spin" />
-							<p>Loading roles...</p>
-						</div>
-					) : roles.length > 0 ? (
-						<>
-							<p>No agent role takes stories.</p>
-							<p className="text-th-text-muted">
-								Set a role to take stories in{" "}
-								<span className="font-medium text-th-text-secondary">
-									Agent Roles
-								</span>{" "}
-								first.
-							</p>
-						</>
-					) : (
-						<>
-							{/* The control opened rather than refusing to: a disabled
-							    button with no explanation is the one version of this
-							    that tells the user nothing (§4). */}
-							<p>No agent roles registered.</p>
-							{/* Where to go next: the list this opens from is not
-							    where roles are made. */}
-							<p className="text-th-text-muted">
-								Create a role in{" "}
-								<span className="font-medium text-th-text-secondary">
-									Agent Roles
-								</span>{" "}
-								first.
-							</p>
-						</>
-					)}
-				</div>
-			</Sheet>
+			<NoEligibleRoleSheet title={TITLE} workType="story" onClose={onClose} />
 		);
 	}
 

@@ -100,7 +100,7 @@ func NewRPCHandler(password string, passwordGuard *authguard.Guard, sessions Ses
 
 	// It is also the usage source: a work item's subtree can reach into
 	// worktrees other than the one it runs in.
-	workDetailWatcher := watch.NewWorkDetailWatcher(workStore, worktreeManager, worktreeManager)
+	workDetailWatcher := watch.NewWorkDetailWatcher(workStore, worktreeManager, worktreeManager, scheduleStore)
 	workDetailWatcher.Start()
 	// A session's usage and its turn both change without anything about the work
 	// item changing, so both subscriptions hear about it from the session stores
@@ -113,8 +113,9 @@ func NewRPCHandler(password string, passwordGuard *authguard.Guard, sessions Ses
 	agentRoleListWatcher := watch.NewAgentRoleListWatcher(agentRoleStore, workStore)
 	agentRoleListWatcher.Start()
 
-	scheduleListWatcher := watch.NewScheduleListWatcher(scheduleStore)
+	scheduleListWatcher := watch.NewScheduleListWatcher(scheduleStore, workStore, worktreeManager)
 	scheduleListWatcher.Start()
+	worktreeManager.AddSessionChangeListener(scheduleListWatcher)
 	// A run's activity, like a work row's, comes from the turn of its session.
 	scheduleDetailWatcher := watch.NewScheduleDetailWatcher(scheduleStore, workStore, worktreeManager)
 	scheduleDetailWatcher.Start()

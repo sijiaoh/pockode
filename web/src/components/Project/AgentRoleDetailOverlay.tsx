@@ -1,15 +1,12 @@
 import { ConfirmDialog, useHasFinePointer } from "@pockode/shared";
 import {
 	AlertCircle,
-	Check,
 	ChevronDown,
 	ChevronUp,
 	GripVertical,
-	Loader2,
 	Pencil,
 	Plus,
 	Trash2,
-	X,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import TextareaAutosize from "react-textarea-autosize";
@@ -23,6 +20,7 @@ import type { AgentRole } from "../../types/agentRole";
 import { countOf } from "../../utils/plural";
 import PageHeader from "../Layout/PageHeader";
 import { MarkdownContent } from "../ui";
+import InlineEditableHeading from "../ui/InlineEditableHeading";
 import { inputClass, inputFocusWithinClass } from "../ui/inputClass";
 import Skeleton from "../ui/Skeleton";
 import Tag from "../ui/Tag";
@@ -82,7 +80,7 @@ export default function AgentRoleDetailOverlay({ roleId, onBack }: Props) {
 			<div className="min-h-0 flex-1 overflow-auto">
 				<div className="mx-auto max-w-2xl space-y-6 px-4 py-4">
 					<div>
-						<InlineEditableName role={role} />
+						<RoleName role={role} />
 						<Summary
 							isDefaultStoryRole={isDefault}
 							workRefCount={workRefCount}
@@ -152,88 +150,17 @@ function DetailHeader({ onBack }: { onBack: () => void }) {
 	);
 }
 
-function InlineEditableName({ role }: { role: AgentRole }) {
+function RoleName({ role }: { role: AgentRole }) {
 	const updateAgentRole = useWSStore((s) => s.actions.updateAgentRole);
-	const {
-		editing,
-		setEditing,
-		value,
-		setValue,
-		saving,
-		error,
-		ref,
-		save,
-		cancel,
-	} = useInlineEdit<HTMLInputElement>({
-		initialValue: role.name,
-		onSave: useCallback(
-			(trimmed: string) => updateAgentRole({ id: role.id, name: trimmed }),
-			[updateAgentRole, role.id],
-		),
-	});
-
-	if (editing) {
-		return (
-			<div>
-				<div className="flex items-center gap-2">
-					<input
-						ref={ref}
-						type="text"
-						value={value}
-						onChange={(e) => setValue(e.target.value)}
-						onKeyDown={(e) => {
-							if (e.key === "Enter") save();
-							if (e.key === "Escape") cancel();
-						}}
-						disabled={saving}
-						className={`min-w-0 flex-1 rounded-lg bg-th-bg-primary px-3 py-2 text-lg font-bold text-th-text-primary ${inputClass}`}
-					/>
-					<button
-						type="button"
-						onClick={save}
-						disabled={saving || !value.trim()}
-						className="flex min-h-[44px] min-w-[44px] items-center justify-center rounded-lg text-th-success hover:bg-th-bg-tertiary disabled:opacity-50"
-						aria-label="Save"
-					>
-						{saving ? (
-							<Loader2 className="size-4 animate-spin" />
-						) : (
-							<Check className="size-4" />
-						)}
-					</button>
-					<button
-						type="button"
-						onClick={cancel}
-						disabled={saving}
-						className="flex min-h-[44px] min-w-[44px] items-center justify-center rounded-lg text-th-text-muted hover:bg-th-bg-tertiary"
-						aria-label="Cancel"
-					>
-						<X className="size-4" />
-					</button>
-				</div>
-				{error && (
-					<p className="mt-1 text-xs text-th-error" role="alert">
-						{error}
-					</p>
-				)}
-			</div>
-		);
-	}
-
 	return (
-		<div className="group flex items-start gap-1">
-			<h2 className="min-w-0 flex-1 text-lg font-bold text-th-text-primary">
-				{role.name}
-			</h2>
-			<button
-				type="button"
-				onClick={() => setEditing(true)}
-				className="flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center rounded-lg text-th-text-muted opacity-80 transition-opacity hover:opacity-100 hover:bg-th-bg-tertiary hover:text-th-text-primary"
-				aria-label="Edit name"
-			>
-				<Pencil className="size-4" />
-			</button>
-		</div>
+		<InlineEditableHeading
+			value={role.name}
+			onSave={useCallback(
+				(trimmed: string) => updateAgentRole({ id: role.id, name: trimmed }),
+				[updateAgentRole, role.id],
+			)}
+			label="Name"
+		/>
 	);
 }
 

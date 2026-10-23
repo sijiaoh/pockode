@@ -332,7 +332,7 @@ describe("overlayToNavigation", () => {
 });
 
 // docs/project-ui.md §5. `Current` is the absence of the parameter, so that one
-// state has one URL and the Project button's plain `/works` means `Current`.
+// state has one URL and the Stories button's plain `/works` means `Current`.
 describe("the work list segment in the URL", () => {
 	it("writes nothing for Current and the word for Closed", () => {
 		expect(
@@ -355,6 +355,35 @@ describe("the work list segment in the URL", () => {
 			to: "/w/$worktree/works/$workId",
 			params: { workId: "w1", worktree: "feature-x" },
 			search: { session: "sess123", segment: "closed" },
+		});
+	});
+});
+
+describe("the schedule routes", () => {
+	it("builds the list in main and in a worktree", () => {
+		expect(overlayToNavigation({ type: "schedule-list" }, "", null)).toEqual({
+			to: "/schedules",
+		});
+		expect(
+			overlayToNavigation({ type: "schedule-list" }, "feature-x", "sess123"),
+		).toEqual({
+			to: "/w/$worktree/schedules",
+			params: { worktree: "feature-x" },
+			search: { session: "sess123" },
+		});
+	});
+
+	it("builds a detail in main and in a worktree", () => {
+		const detail = { type: "schedule-detail", scheduleId: "s1" } as const;
+
+		expect(overlayToNavigation(detail, "", null)).toEqual({
+			to: "/schedules/$scheduleId",
+			params: { scheduleId: "s1" },
+		});
+		expect(overlayToNavigation(detail, "feature-x", "sess123")).toEqual({
+			to: "/w/$worktree/schedules/$scheduleId",
+			params: { worktree: "feature-x", scheduleId: "s1" },
+			search: { session: "sess123" },
 		});
 	});
 });

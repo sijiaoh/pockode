@@ -8,6 +8,7 @@ import type {
 	WorkDetailChangedNotification,
 	WorkDetailSubscribeResult,
 	WorkListItem,
+	WorkSchedule,
 	WorkUsage,
 } from "../types/work";
 import { useSubscription } from "./useSubscription";
@@ -33,6 +34,8 @@ export function useWorkDetailSubscription(workId: string) {
 	// no closed work (docs/list-paging-ui.md §2.2).
 	const [children, setChildren] = useState<WorkListItem[]>([]);
 	const [parent, setParent] = useState<WorkListItem | null>(null);
+	// What a job is a run of: the third relation, for the third kind of work.
+	const [schedule, setSchedule] = useState<WorkSchedule | null>(null);
 	// The questions this item's session is waiting on. Beside the work for the
 	// same reason `activity` is: they belong to the session, which the stored
 	// record knows nothing about (docs/answering-ui.md §1).
@@ -53,6 +56,7 @@ export function useWorkDetailSubscription(workId: string) {
 			setUsage(null);
 			setChildren([]);
 			setParent(null);
+			setSchedule(null);
 			setPendingQuestions([]);
 			setLoading(true);
 			setError(null);
@@ -73,6 +77,7 @@ export function useWorkDetailSubscription(workId: string) {
 			setUsage(params.usage);
 			setChildren(params.children ?? []);
 			setParent(params.parent ?? null);
+			setSchedule(params.schedule ?? null);
 			setPendingQuestions(params.pending_questions ?? []);
 		},
 		[],
@@ -85,6 +90,7 @@ export function useWorkDetailSubscription(workId: string) {
 		setUsage(initial.usage);
 		setChildren(initial.children ?? []);
 		setParent(initial.parent ?? null);
+		setSchedule(initial.schedule ?? null);
 		setPendingQuestions(initial.pending_questions ?? []);
 		setLoading(false);
 		setError(null);
@@ -97,6 +103,7 @@ export function useWorkDetailSubscription(workId: string) {
 		setUsage(null);
 		setChildren([]);
 		setParent(null);
+		setSchedule(null);
 		setPendingQuestions([]);
 		setLoading(true);
 		setError(null);
@@ -128,6 +135,7 @@ export function useWorkDetailSubscription(workId: string) {
 			usage,
 			children,
 			parent,
+			schedule,
 			pendingQuestions,
 			loading,
 			error,
@@ -139,6 +147,7 @@ export function useWorkDetailSubscription(workId: string) {
 			usage,
 			children,
 			parent,
+			schedule,
 			pendingQuestions,
 			loading,
 			error,

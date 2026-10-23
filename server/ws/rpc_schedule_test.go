@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/pockode/server/agentrole"
 	"github.com/pockode/server/rpc"
@@ -15,16 +16,17 @@ import (
 )
 
 type scheduleListChanged struct {
-	ID         string             `json:"id"`
-	Operation  string             `json:"operation"`
-	Schedule   *schedule.Schedule `json:"schedule"`
-	ScheduleID string             `json:"scheduleId"`
+	ID         string                `json:"id"`
+	Operation  string                `json:"operation"`
+	Schedule   *rpc.ScheduleListItem `json:"schedule"`
+	ScheduleID string                `json:"scheduleId"`
 }
 
 type scheduleDetailChanged struct {
-	ID       string              `json:"id"`
-	Schedule schedule.Schedule   `json:"schedule"`
-	Runs     rpc.ScheduleRunPage `json:"runs"`
+	ID         string              `json:"id"`
+	Schedule   schedule.Schedule   `json:"schedule"`
+	Runs       rpc.ScheduleRunPage `json:"runs"`
+	ServerZone schedule.Zone       `json:"server_zone"`
 }
 
 func createSchedule(t *testing.T, env *testEnv, params rpc.ScheduleCreateParams) schedule.Schedule {
@@ -81,15 +83,46 @@ func awaitScheduleDetail(t *testing.T, env *testEnv, ok func(scheduleDetailChang
 
 func awaitScheduleList(t *testing.T, env *testEnv, operation string) scheduleListChanged {
 	t.Helper()
+	return awaitScheduleListWhere(t, env, func(c scheduleListChanged) bool { return c.Operation == operation })
+}
+
+func awaitScheduleListWhere(t *testing.T, env *testEnv, ok func(scheduleListChanged) bool) scheduleListChanged {
+	t.Helper()
 	for {
 		var params scheduleListChanged
 		if err := json.Unmarshal(env.awaitNotification("schedule.list.changed").Params, &params); err != nil {
 			t.Fatalf("unmarshal schedule.list.changed: %v", err)
 		}
-		if params.Operation == operation {
+		if ok(params) {
 			return params
 		}
 	}
+}
+
+func subscribeScheduleList(t *testing.T, env *testEnv) rpc.ScheduleListSubscribeResult {
+	t.Helper()
+	resp := env.call("schedule.list.subscribe", rpc.SubscribeParams{ID: env.nextSubID()})
+	if resp.Error != nil {
+		t.Fatalf("schedule.list.subscribe: %s", resp.Error.Message)
+	}
+	var result rpc.ScheduleListSubscribeResult
+	if err := json.Unmarshal(resp.Result, &result); err != nil {
+		t.Fatalf("unmarshal schedule list: %v", err)
+	}
+	return result
+}
+
+func runSchedule(t *testing.T, env *testEnv, scheduleID string) rpc.WorkDetailItem {
+	t.Helper()
+	resp := env.call("schedule.run", rpc.ScheduleRunParams{ID: scheduleID})
+	if resp.Error != nil {
+		t.Fatalf("schedule.run: %s", resp.Error.Message)
+	}
+	var run rpc.WorkDetailItem
+	if err := json.Unmarshal(resp.Result, &run); err != nil {
+		t.Fatalf("unmarshal run: %v", err)
+	}
+	return run
 }
 
 func TestHandler_ScheduleCreate_EnabledByDefault(t *testing.T) {
@@ -181,9 +214,7 @@ func TestHandler_ScheduleList_NotifiesEditsAndDeletes(t *testing.T) {
 	env := newTestEnv(t, &mockAgent{})
 	sched := createSchedule(t, env, rpc.ScheduleCreateParams{})
 
-	if resp := env.call("schedule.list.subscribe", rpc.SubscribeParams{ID: env.nextSubID()}); resp.Error != nil {
-		t.Fatalf("schedule.list.subscribe: %s", resp.Error.Message)
-	}
+	subscribeScheduleList(t, env)
 
 	title := "Weekly report"
 	disabled := false
@@ -317,5 +348,66 @@ func TestHandler_ScheduleDetail_PagesRunsNewestFirst(t *testing.T) {
 		if want := made[total-1-i]; id != want {
 			t.Fatalf("run %d = %s, want %s (newest made first)", i, id, want)
 		}
+	}
+}
+
+// The server's zone rides on both subscriptions, because a period is the
+// server's wall-clock time and the detail page is reachable without the list.
+func TestHandler_ScheduleSubscriptions_CarryTheServerZone(t *testing.T) {
+	env := newTestEnv(t, &mockAgent{})
+	sched := createSchedule(t, env, rpc.ScheduleCreateParams{})
+	name, offset := time.Now().Zone()
+	want := schedule.Zone{Name: name, OffsetSeconds: offset}
+
+	if got := subscribeScheduleList(t, env).ServerZone; got != want {
+		t.Errorf("list server_zone = %+v, want %+v", got, want)
+	}
+	if _, detail := subscribeScheduleDetail(t, env, sched.ID); detail.ServerZone != want {
+		t.Errorf("detail server_zone = %+v, want %+v", detail.ServerZone, want)
+	}
+
+	// A detail notification is the whole detail, so it carries the zone too.
+	if _, err := env.scheduleStore.RecordSkip(context.Background(), sched.ID); err != nil {
+		t.Fatalf("RecordSkip: %v", err)
+	}
+	changed := awaitScheduleDetail(t, env, func(d scheduleDetailChanged) bool { return d.Schedule.LastSkippedAt != nil })
+	if changed.ServerZone != want {
+		t.Errorf("schedule.detail.changed server_zone = %+v, want %+v", changed.ServerZone, want)
+	}
+}
+
+// A list row draws its latest run, which nothing else on a client holds: the
+// row arrives with the run and follows it as it moves, and is dropped with it.
+func TestHandler_ScheduleList_CarriesTheLatestRun(t *testing.T) {
+	env := newTestEnv(t, &mockAgent{})
+	sched := createSchedule(t, env, rpc.ScheduleCreateParams{})
+	if items := subscribeScheduleList(t, env).Items; len(items) != 1 || items[0].LastRun != nil {
+		t.Fatalf("items = %+v, want the schedule with no run", items)
+	}
+
+	run := runSchedule(t, env, sched.ID)
+	awaitScheduleListWhere(t, env, func(c scheduleListChanged) bool {
+		return c.Schedule != nil && c.Schedule.LastRun != nil && c.Schedule.LastRun.ID == run.ID &&
+			c.Schedule.LastRun.Status == work.StatusActive
+	})
+
+	if resp := env.call("work.stop", rpc.WorkStopParams{ID: run.ID}); resp.Error != nil {
+		t.Fatalf("work.stop: %s", resp.Error.Message)
+	}
+	awaitScheduleListWhere(t, env, func(c scheduleListChanged) bool {
+		return c.Schedule != nil && c.Schedule.LastRun != nil && c.Schedule.LastRun.Status == work.StatusStopped
+	})
+
+	if resp := env.call("work.delete", rpc.WorkDeleteParams{ID: run.ID}); resp.Error != nil {
+		t.Fatalf("work.delete: %s", resp.Error.Message)
+	}
+	deleted := awaitScheduleListWhere(t, env, func(c scheduleListChanged) bool {
+		return c.Schedule != nil && c.Schedule.LastRun == nil
+	})
+	if deleted.Schedule.LastRunWorkID != run.ID {
+		t.Errorf("last_run_work_id = %q, want the deleted run still named by the record", deleted.Schedule.LastRunWorkID)
+	}
+	if items := subscribeScheduleList(t, env).Items; len(items) != 1 || items[0].LastRun != nil {
+		t.Errorf("items after the delete = %+v, want no last_run", items)
 	}
 }

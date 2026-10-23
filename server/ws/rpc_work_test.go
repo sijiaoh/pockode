@@ -843,3 +843,69 @@ func TestHandler_WorkStop_EndsTheProcessAndKeepsTheSession(t *testing.T) {
 		t.Error("stopping a work deleted its session; only its process should end")
 	}
 }
+
+func subscribeWorkDetail(t *testing.T, env *testEnv, workID string) rpc.WorkDetailSubscribeResult {
+	t.Helper()
+	resp := env.call("work.detail.subscribe", rpc.WorkDetailSubscribeParams{ID: env.nextSubID(), WorkID: workID})
+	if resp.Error != nil {
+		t.Fatalf("work.detail.subscribe: %s", resp.Error.Message)
+	}
+	var result rpc.WorkDetailSubscribeResult
+	if err := json.Unmarshal(resp.Result, &result); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	return result
+}
+
+// A job's page names the schedule it is a run of, and stops naming it once the
+// schedule is gone; nothing else is a run of anything.
+func TestHandler_WorkDetailSubscribe_NamesAJobsSchedule(t *testing.T) {
+	env := newTestEnv(t, &mockAgent{})
+	sched := createSchedule(t, env, rpc.ScheduleCreateParams{Title: "Nightly report"})
+	run := runSchedule(t, env, sched.ID)
+
+	got := subscribeWorkDetail(t, env, run.ID).Schedule
+	if got == nil || got.ID != sched.ID || got.Title != "Nightly report" {
+		t.Errorf("schedule = %+v, want the run's schedule by id and title", got)
+	}
+
+	if resp := env.call("schedule.delete", rpc.ScheduleDeleteParams{ID: sched.ID}); resp.Error != nil {
+		t.Fatalf("schedule.delete: %s", resp.Error.Message)
+	}
+	if got := subscribeWorkDetail(t, env, run.ID).Schedule; got != nil {
+		t.Errorf("schedule after its delete = %+v, want none", got)
+	}
+
+	story := createStory(t, env, "A story")
+	if got := subscribeWorkDetail(t, env, story.ID).Schedule; got != nil {
+		t.Errorf("a story's schedule = %+v, want none", got)
+	}
+}
+
+// work.start on a job is the schedule's run rule, not only the scheduler's: an
+// older run is refused while another is active, as Run now is, and the message
+// is the user's to read.
+func TestHandler_WorkStart_RefusesAJobWhileAnotherRunIsActive(t *testing.T) {
+	env := newTestEnv(t, &mockAgent{})
+	sched := createSchedule(t, env, rpc.ScheduleCreateParams{})
+	older := runSchedule(t, env, sched.ID)
+	if resp := env.call("work.stop", rpc.WorkStopParams{ID: older.ID}); resp.Error != nil {
+		t.Fatalf("work.stop: %s", resp.Error.Message)
+	}
+	latest := runSchedule(t, env, sched.ID)
+
+	resp := env.call("work.start", rpc.WorkStartParams{ID: older.ID})
+	if resp.Error == nil || resp.Error.Code != jsonrpc2.CodeInvalidParams || !strings.Contains(resp.Error.Message, "still active") {
+		t.Fatalf("work.start: error = %+v, want InvalidParams saying a run is still active", resp.Error)
+	}
+
+	if resp := env.call("work.stop", rpc.WorkStopParams{ID: latest.ID}); resp.Error != nil {
+		t.Fatalf("work.stop: %s", resp.Error.Message)
+	}
+	if resp := env.call("work.start", rpc.WorkStartParams{ID: older.ID}); resp.Error != nil {
+		t.Fatalf("work.start once nothing else runs: %s", resp.Error.Message)
+	}
+	if got, _, _ := env.scheduleStore.Get(sched.ID); got.LastRunWorkID != older.ID {
+		t.Errorf("last_run_work_id = %q, want the restarted run %q", got.LastRunWorkID, older.ID)
+	}
+}

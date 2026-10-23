@@ -10,6 +10,7 @@ import { useDocumentTitle } from "../hooks/useDocumentTitle";
 import { useFileDropGuard } from "../hooks/useFileDropGuard";
 import { useRemoteUrlSubscription } from "../hooks/useRemoteUrlSubscription";
 import { useRouteState } from "../hooks/useRouteState";
+import { useScheduleSubscription } from "../hooks/useScheduleSubscription";
 import { useSession } from "../hooks/useSession";
 import { useSessionDetailSubscription } from "../hooks/useSessionDetailSubscription";
 import { useSettingsSubscription } from "../hooks/useSettingsSubscription";
@@ -145,6 +146,9 @@ function AppShell() {
 	useRemoteUrlSubscription(isAuthenticated);
 	useWorkSubscription(isAuthenticated);
 	useAgentRoleSubscription(isAuthenticated);
+	// App-wide rather than the schedules screen's: the Project tab's attention
+	// dot reads it (docs/schedule-ui.md §1).
+	useScheduleSubscription(isAuthenticated);
 	useAgentOptions(isAuthenticated);
 
 	const isUrlWorktreeMissing =
@@ -666,7 +670,7 @@ function AppShell() {
 			? overlay.segment
 			: "current";
 
-	// The Project entry button. Always `Current`: the button is an entrance, and
+	// The Stories entry button. Always `Current`: the button is an entrance, and
 	// an entrance that lands somewhere different depending on what the user last
 	// tapped is an entrance nobody can predict.
 	const handleOpenWorkList = useCallback(() => {
@@ -734,6 +738,30 @@ function AppShell() {
 			navigate(
 				overlayToNavigation(
 					{ type: "agent-role-detail", roleId },
+					urlWorktree,
+					currentSessionId,
+				),
+			);
+		},
+		[navigate, urlWorktree, currentSessionId],
+	);
+
+	const handleOpenScheduleList = useCallback(() => {
+		setDrawerOpen(false);
+		navigate(
+			overlayToNavigation(
+				{ type: "schedule-list" },
+				urlWorktree,
+				currentSessionId,
+			),
+		);
+	}, [navigate, urlWorktree, currentSessionId]);
+
+	const handleOpenScheduleDetail = useCallback(
+		(scheduleId: string) => {
+			navigate(
+				overlayToNavigation(
+					{ type: "schedule-detail", scheduleId },
 					urlWorktree,
 					currentSessionId,
 				),
@@ -934,6 +962,7 @@ function AppShell() {
 					onRepointFile={handleRepointFile}
 					onCloseFile={handleCloseOverlay}
 					onOpenWorkList={handleOpenWorkList}
+					onOpenScheduleList={handleOpenScheduleList}
 					onOpenAgentRoleList={handleOpenAgentRoleList}
 					isExpanded={isExpanded}
 					isSwitchingWorktree={worktreeSwitchInFlight}
@@ -970,6 +999,8 @@ function AppShell() {
 						onSelectWorkSegment={handleSelectWorkSegment}
 						onOpenAgentRoleList={handleOpenAgentRoleList}
 						onOpenAgentRoleDetail={handleOpenAgentRoleDetail}
+						onOpenScheduleList={handleOpenScheduleList}
+						onOpenScheduleDetail={handleOpenScheduleDetail}
 					/>
 				</div>
 			</div>

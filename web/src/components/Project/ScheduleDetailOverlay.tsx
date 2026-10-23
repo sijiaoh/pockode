@@ -1,0 +1,870 @@
+import { ConfirmDialog } from "@pockode/shared";
+import { AlertCircle, Loader2, Pencil, Play, Trash2 } from "lucide-react";
+import { type ReactNode, useCallback, useId, useMemo, useState } from "react";
+import TextareaAutosize from "react-textarea-autosize";
+import { useInlineEdit } from "../../hooks/useInlineEdit";
+import { useRoleNameMap } from "../../hooks/useRoleNameMap";
+import { useScheduleDetailSubscription } from "../../hooks/useScheduleDetailSubscription";
+import { useScheduleEnabledToggle } from "../../hooks/useScheduleEnabledToggle";
+import { useWorktreeList } from "../../hooks/useWorktreeList";
+import { useAgentRoleStore } from "../../lib/agentRoleStore";
+import { roleAcceptsWorkType, WORK_TYPE_PLURAL } from "../../lib/roleWorkType";
+import { deviceOffsetSeconds, periodZoneLine } from "../../lib/schedulePeriod";
+import { useScheduleStore } from "../../lib/scheduleStore";
+import { useIsGitRepo } from "../../lib/worktreeStore";
+import { useWSStore } from "../../lib/wsStore";
+import type {
+	Schedule,
+	ScheduleRunItem,
+	ServerZone,
+} from "../../types/schedule";
+import { formatNextRun, formatRelativeFuture } from "../../utils/relativeTime";
+import PageHeader from "../Layout/PageHeader";
+import { MarkdownContent } from "../ui";
+import BottomActionBar from "../ui/BottomActionBar";
+import InlineEditableHeading from "../ui/InlineEditableHeading";
+import { inputClass } from "../ui/inputClass";
+import Skeleton from "../ui/Skeleton";
+import Switch from "../ui/Switch";
+import PeriodField from "./PeriodField";
+import PeriodWords from "./PeriodWords";
+import RoleSelect from "./RoleSelect";
+import WorkRow from "./WorkRow";
+
+interface Props {
+	scheduleId: string;
+	onBack: () => void;
+	onOpenWorkDetail: (workId: string) => void;
+	onNavigateToSession: (sessionId: string, worktree: string) => void;
+}
+
+/**
+ * One schedule. Keyed by id, as the work detail is, so that a page reused for
+ * another schedule cannot carry the first one's half-made edits across. What
+ * the page holds is docs/schedule-ui.md §4.
+ */
+export default function ScheduleDetailOverlay({ scheduleId, ...rest }: Props) {
+	return (
+		<div className="flex min-h-0 flex-1 flex-col">
+			<PageHeader
+				back={{
+					to: "parent",
+					label: "Back to schedules",
+					onClick: rest.onBack,
+				}}
+				title="Schedule"
+			/>
+			<ScheduleDetailPage key={scheduleId} scheduleId={scheduleId} {...rest} />
+		</div>
+	);
+}
+
+/** Runs shown before the first `Show more runs`: Prompt stays in reach on a phone. */
+const FIRST_RUNS = 5;
+const MORE_RUNS = 20;
+
+function ScheduleDetailPage({
+	scheduleId,
+	onBack,
+	onOpenWorkDetail,
+	onNavigateToSession,
+}: Props) {
+	const detail = useScheduleDetailSubscription(scheduleId);
+	const { schedule, serverZone, loading, error } = detail;
+
+	// The detail subscription sends nothing on delete, so a deletion reaches an
+	// open page through the list (docs/schedule-ui.md §4.4). Only a loaded list
+	// can say so: it starts out loading and goes back to loading on reconnect.
+	const goneFromList = useScheduleStore(
+		(s) =>
+			!s.isLoading &&
+			!s.error &&
+			!s.schedules.some((item) => item.id === scheduleId),
+	);
+
+	if (loading && !goneFromList) return <DetailSkeleton />;
+
+	if (error || !schedule || goneFromList) {
+		const notFound =
+			goneFromList || !error || /schedule not found/i.test(error);
+		return (
+			<div
+				className={`flex flex-1 flex-col items-center justify-center gap-2 text-sm ${notFound ? "text-th-text-muted" : "text-th-error"}`}
+			>
+				<AlertCircle className="size-5" />
+				<p>{notFound ? "Schedule not found" : error}</p>
+			</div>
+		);
+	}
+
+	return (
+		<>
+			<div className="min-h-0 flex-1 overflow-auto">
+				{/* What changes goes above what does not, the work detail's rule:
+				    the state and the runs are what a schedule is opened for. */}
+				<div className="mx-auto max-w-2xl space-y-5 px-4 py-4">
+					<div>
+						<ScheduleTitle schedule={schedule} />
+						<EnabledLine schedule={schedule} />
+						<Notice
+							schedule={schedule}
+							runs={detail.runs}
+							onOpenWorkDetail={onOpenWorkDetail}
+						/>
+					</div>
+					<RunsSection
+						schedule={schedule}
+						runs={detail.runs}
+						hasMoreRuns={detail.hasMoreRuns}
+						loadMore={detail.loadMore}
+						isLoadingMore={detail.isLoadingMore}
+						loadMoreError={detail.loadMoreError}
+						onOpenWorkDetail={onOpenWorkDetail}
+						onNavigateToSession={onNavigateToSession}
+					/>
+					<PromptSection schedule={schedule} />
+					<PeriodSection schedule={schedule} serverZone={serverZone} />
+					<RoleSection schedule={schedule} />
+					<WorktreeSection schedule={schedule} />
+					<DeleteSection schedule={schedule} onDeleted={onBack} />
+				</div>
+			</div>
+			<RunNowBar schedule={schedule} />
+		</>
+	);
+}
+
+function DetailSkeleton() {
+	return (
+		<div className="mx-auto w-full max-w-2xl space-y-5 px-4 py-4">
+			<Skeleton className="h-7 w-40 rounded" label="Schedule: loading" />
+			<Skeleton className="h-5 w-56 rounded" />
+			<Skeleton className="h-24 w-full rounded-lg" />
+			<Skeleton className="h-16 w-full rounded-lg" />
+		</div>
+	);
+}
+
+function SectionHeading({ children }: { children: ReactNode }) {
+	return (
+		<h3 className="text-xs font-medium uppercase text-th-text-muted">
+			{children}
+		</h3>
+	);
+}
+
+function useUpdateSchedule() {
+	return useWSStore((s) => s.actions.updateSchedule);
+}
+
+function ScheduleTitle({ schedule }: { schedule: Schedule }) {
+	const updateSchedule = useUpdateSchedule();
+	return (
+		<InlineEditableHeading
+			value={schedule.title}
+			onSave={useCallback(
+				(trimmed: string) =>
+					updateSchedule({ id: schedule.id, title: trimmed }),
+				[updateSchedule, schedule.id],
+			)}
+			label="Title"
+		/>
+	);
+}
+
+/** The switch and what it means right now: when the next firing is, or that there is none. */
+function EnabledLine({ schedule }: { schedule: Schedule }) {
+	const { busy, error, toggle } = useScheduleEnabledToggle(schedule);
+	const errorId = useId();
+
+	const state = !schedule.enabled
+		? "Off · Runs only when you press Run now"
+		: schedule.next_run_at
+			? `On · Next run ${formatNextRun(schedule.next_run_at)} (${formatRelativeFuture(schedule.next_run_at)})`
+			: "On";
+
+	return (
+		<div className="mt-1">
+			<div className="flex min-h-[44px] items-center gap-3">
+				<Switch
+					checked={schedule.enabled}
+					onToggle={toggle}
+					busy={busy}
+					label={`Run "${schedule.title}" on schedule`}
+					describedBy={error ? errorId : undefined}
+				/>
+				<span className="min-w-0 text-sm text-th-text-secondary">{state}</span>
+			</div>
+			{error && (
+				<p id={errorId} className="text-xs text-th-error" role="alert">
+					{error}
+				</p>
+			)}
+		</div>
+	);
+}
+
+/**
+ * At most one line about the schedule's state, in order of precedence: a run
+ * that could not be made or started, a run going now, a firing skipped
+ * (docs/schedule-ui.md §4.1).
+ */
+function Notice({
+	schedule,
+	runs,
+	onOpenWorkDetail,
+}: {
+	schedule: Schedule;
+	runs: ScheduleRunItem[];
+	onOpenWorkDetail: (workId: string) => void;
+}) {
+	const failure = schedule.last_failure;
+	if (failure) {
+		const workId = failure.work_id;
+		return (
+			<div
+				className="mt-2 rounded-lg border border-th-error px-3 py-2 text-sm"
+				role="alert"
+			>
+				<p className="flex items-center gap-1.5 text-th-text-primary">
+					<AlertCircle
+						className="size-4 shrink-0 text-th-error"
+						aria-hidden="true"
+					/>
+					{workId
+						? `The run at ${formatNextRun(failure.at)} could not be started.`
+						: `The run at ${formatNextRun(failure.at)} could not be made.`}
+				</p>
+				<p className="mt-1 break-words text-xs text-th-text-secondary">
+					{failure.error}
+				</p>
+				{workId && (
+					<button
+						type="button"
+						onClick={() => onOpenWorkDetail(workId)}
+						className="mt-1 flex min-h-[44px] items-center text-sm text-th-accent hover:underline"
+					>
+						Open the run
+					</button>
+				)}
+			</div>
+		);
+	}
+
+	// The latest run as the loaded page has it: it is the newest made, so it
+	// is on the first page whenever it still exists.
+	const latest = runs.find((run) => run.id === schedule.last_run_work_id);
+	if (latest?.status === "active") {
+		// Said ahead and not enforced: the server decides, and Run now stays
+		// enabled (the agent-role delete rule).
+		return (
+			<p className="mt-2 text-xs text-th-text-muted">
+				A run is going now. Run now is refused until it ends.
+			</p>
+		);
+	}
+
+	const skipped = schedule.last_skipped_at;
+	if (
+		skipped &&
+		(!schedule.last_run_at ||
+			Date.parse(skipped) > Date.parse(schedule.last_run_at))
+	) {
+		return (
+			<p className="mt-2 text-xs text-th-text-muted">
+				Skipped the run at {formatNextRun(skipped)}: the previous one was still
+				going.
+			</p>
+		);
+	}
+
+	return null;
+}
+
+/**
+ * Runs once made and since deleted are not "no runs yet": `last_run_at` says
+ * one was made (the list row's `Latest run deleted`, docs/schedule-ui.md §11).
+ */
+function emptyRunsText(schedule: Schedule): string {
+	if (schedule.last_run_at) return "Its runs have been deleted.";
+	return schedule.enabled && schedule.next_run_at
+		? `No runs yet. The first is due ${formatNextRun(schedule.next_run_at)}.`
+		: "No runs yet. Press Run now to make one.";
+}
+
+/**
+ * The runs, each a `WorkRow` unchanged: a run is a work, so it is stopped,
+ * restarted, reopened and chatted with from here exactly as a story is from
+ * the list (docs/schedule-ui.md §4.2).
+ */
+function RunsSection({
+	schedule,
+	runs,
+	hasMoreRuns,
+	loadMore,
+	isLoadingMore,
+	loadMoreError,
+	onOpenWorkDetail,
+	onNavigateToSession,
+}: {
+	schedule: Schedule;
+	runs: ScheduleRunItem[];
+	hasMoreRuns: boolean;
+	loadMore: () => Promise<void>;
+	isLoadingMore: boolean;
+	loadMoreError: string | null;
+	onOpenWorkDetail: (workId: string) => void;
+	onNavigateToSession: (sessionId: string, worktree: string) => void;
+}) {
+	const roleNameMap = useRoleNameMap();
+	const [shown, setShown] = useState(FIRST_RUNS);
+
+	const showMore = useCallback(() => {
+		if (isLoadingMore) return;
+		const next = shown + MORE_RUNS;
+		setShown(next);
+		if (next > runs.length && hasMoreRuns) void loadMore();
+	}, [isLoadingMore, shown, runs.length, hasMoreRuns, loadMore]);
+
+	const visible = runs.slice(0, shown);
+	const canShowMore = shown < runs.length || hasMoreRuns;
+
+	return (
+		<div>
+			<div className="mb-1">
+				<SectionHeading>Runs</SectionHeading>
+			</div>
+			{runs.length === 0 ? (
+				<p className="py-2 text-sm text-th-text-muted">
+					{emptyRunsText(schedule)}
+				</p>
+			) : (
+				<div className="space-y-2">
+					{visible.map((run) => (
+						// Under the Runs heading, so `h4`, as a story's Tasks rows are.
+						// Dated by when each was made: the order the runs are in.
+						<WorkRow
+							key={run.id}
+							work={run}
+							roleName={
+								run.agent_role_id
+									? roleNameMap.get(run.agent_role_id)
+									: undefined
+							}
+							dateAt={run.created_at}
+							headingLevel={4}
+							onOpen={onOpenWorkDetail}
+							onOpenChat={onNavigateToSession}
+						/>
+					))}
+				</div>
+			)}
+			{loadMoreError ? (
+				<div className="mt-2 flex items-center gap-2">
+					<p className="min-w-0 flex-1 text-xs text-th-error" role="alert">
+						{loadMoreError}
+					</p>
+					<button
+						type="button"
+						onClick={() => void loadMore()}
+						className="flex min-h-[44px] shrink-0 items-center rounded-lg px-3 text-sm text-th-accent hover:bg-th-bg-tertiary"
+					>
+						Retry
+					</button>
+				</div>
+			) : (
+				canShowMore && (
+					// Its own 8px clearance from the last card, as `Show earlier
+					// work` has (docs/project-ui.md §2.3). Busy, never disabled, so
+					// the focus a keyboard press put here stays here.
+					<button
+						type="button"
+						onClick={showMore}
+						aria-busy={isLoadingMore || undefined}
+						className={`mt-2 flex min-h-[44px] w-full items-center justify-center gap-2 rounded-lg text-sm text-th-text-secondary hover:bg-th-bg-tertiary${isLoadingMore ? " cursor-wait" : ""}`}
+					>
+						{isLoadingMore && <Loader2 className="size-4 animate-spin" />}
+						Show more runs
+					</button>
+				)
+			)}
+		</div>
+	);
+}
+
+function PromptSection({ schedule }: { schedule: Schedule }) {
+	const updateSchedule = useUpdateSchedule();
+	const {
+		editing,
+		setEditing,
+		value,
+		setValue,
+		saving,
+		error,
+		ref,
+		save,
+		cancel,
+	} = useInlineEdit<HTMLTextAreaElement>({
+		initialValue: schedule.prompt,
+		onSave: useCallback(
+			(trimmed: string) => updateSchedule({ id: schedule.id, prompt: trimmed }),
+			[updateSchedule, schedule.id],
+		),
+	});
+
+	return (
+		<div>
+			<div className="flex items-center justify-between">
+				<SectionHeading>Prompt</SectionHeading>
+				{!editing && (
+					<button
+						type="button"
+						onClick={() => setEditing(true)}
+						className="flex min-h-[44px] min-w-[44px] items-center justify-center rounded-lg text-th-text-muted opacity-80 transition-opacity hover:opacity-100 hover:bg-th-bg-tertiary hover:text-th-text-primary"
+						aria-label="Edit prompt"
+					>
+						<Pencil className="size-3.5" />
+					</button>
+				)}
+			</div>
+			<p className="mb-1.5 text-xs text-th-text-muted">
+				Every run starts with this prompt.
+			</p>
+			{editing ? (
+				<>
+					<TextareaAutosize
+						ref={ref}
+						value={value}
+						onChange={(e) => setValue(e.target.value)}
+						onKeyDown={(e) => {
+							if (e.key === "Escape") cancel();
+						}}
+						disabled={saving}
+						aria-label="Prompt"
+						minRows={4}
+						className={`w-full resize-none rounded-lg bg-th-bg-primary px-3 py-2 text-sm text-th-text-primary placeholder:text-th-text-muted ${inputClass}`}
+					/>
+					<SaveCancel
+						onSave={save}
+						onCancel={cancel}
+						saving={saving}
+						// The server requires a prompt: an empty one is not a save.
+						canSave={value.trim() !== ""}
+					/>
+					{error && (
+						<p className="mt-1 text-xs text-th-error" role="alert">
+							{error}
+						</p>
+					)}
+				</>
+			) : (
+				// `.code-block` leaves sideways scrolling to an ancestor; without
+				// this one a wide line would slide the whole page.
+				<div className="overflow-x-auto rounded-lg bg-th-bg-secondary px-3 py-2">
+					<MarkdownContent content={schedule.prompt} />
+				</div>
+			)}
+		</div>
+	);
+}
+
+function SaveCancel({
+	onSave,
+	onCancel,
+	saving,
+	canSave,
+}: {
+	onSave: () => void;
+	onCancel: () => void;
+	saving: boolean;
+	canSave: boolean;
+}) {
+	return (
+		<div className="mt-2 flex items-center gap-2">
+			<button
+				type="button"
+				onClick={onSave}
+				disabled={saving || !canSave}
+				className="min-h-[44px] rounded-lg bg-th-accent px-4 text-sm font-medium text-th-accent-text disabled:opacity-50"
+			>
+				{saving ? "Saving..." : "Save"}
+			</button>
+			<button
+				type="button"
+				onClick={onCancel}
+				disabled={saving}
+				className="min-h-[44px] rounded-lg px-4 text-sm text-th-text-muted hover:bg-th-bg-tertiary"
+			>
+				Cancel
+			</button>
+		</div>
+	);
+}
+
+/**
+ * The period in words, in the server's zone, and the one editor for it. Save
+ * sends `cron` only when the field wrote something other than what is stored:
+ * a period opened and saved untouched sends nothing, whatever spelling it is
+ * stored in (docs/schedule-ui.md §6.1).
+ */
+function PeriodSection({
+	schedule,
+	serverZone,
+}: {
+	schedule: Schedule;
+	serverZone: ServerZone | null;
+}) {
+	const updateSchedule = useUpdateSchedule();
+	const [editing, setEditing] = useState(false);
+	// `undefined` until the field reports an edit; `null` while it spells nothing.
+	const [draft, setDraft] = useState<string | null | undefined>(undefined);
+	const [saving, setSaving] = useState(false);
+	const [error, setError] = useState<string | null>(null);
+
+	const close = useCallback(() => {
+		setEditing(false);
+		setDraft(undefined);
+		setError(null);
+	}, []);
+
+	const save = useCallback(async () => {
+		if (draft === null) return;
+		if (draft === undefined || draft === schedule.cron) {
+			close();
+			return;
+		}
+		setError(null);
+		setSaving(true);
+		try {
+			await updateSchedule({ id: schedule.id, cron: draft });
+			close();
+		} catch (err) {
+			setError(err instanceof Error ? err.message : "Failed to save");
+		} finally {
+			setSaving(false);
+		}
+	}, [draft, schedule.cron, schedule.id, updateSchedule, close]);
+
+	return (
+		<div>
+			{/* While editing, the field's own "Period" label shows as the heading:
+			    both would print the same word twice. The heading stays for the
+			    outline a screen reader navigates by. */}
+			{editing ? (
+				<h3 className="sr-only">Period</h3>
+			) : (
+				<div className="flex items-center justify-between">
+					<SectionHeading>Period</SectionHeading>
+					<button
+						type="button"
+						onClick={() => setEditing(true)}
+						className="flex min-h-[44px] min-w-[44px] items-center justify-center rounded-lg text-th-text-muted opacity-80 transition-opacity hover:opacity-100 hover:bg-th-bg-tertiary hover:text-th-text-primary"
+						aria-label="Edit period"
+					>
+						<Pencil className="size-3.5" />
+					</button>
+				</div>
+			)}
+			{editing ? (
+				<>
+					{/* Held still while saving: closing on success would otherwise drop
+					    an edit made during the request without a word. */}
+					<fieldset disabled={saving} className="min-w-0">
+						<PeriodField
+							initial={schedule.cron}
+							onChange={setDraft}
+							serverZone={serverZone ?? undefined}
+						/>
+					</fieldset>
+					<SaveCancel
+						onSave={save}
+						onCancel={close}
+						saving={saving}
+						canSave={draft !== null}
+					/>
+					{error && (
+						<p className="mt-1 break-words text-xs text-th-error" role="alert">
+							{error}
+						</p>
+					)}
+				</>
+			) : (
+				<>
+					<p className="text-sm text-th-text-primary">
+						<PeriodWords cron={schedule.cron} />
+					</p>
+					{serverZone && (
+						<p className="text-xs text-th-text-muted">
+							{periodZoneLine(serverZone, deviceOffsetSeconds())}
+						</p>
+					)}
+				</>
+			)}
+		</div>
+	);
+}
+
+/**
+ * Applied on change, like the work detail's Role. The kind of work a role
+ * takes is judged when it is assigned and never again on the run path, so a
+ * kept role that no longer takes jobs is said, not flagged; a deleted one is
+ * what makes the next firing fail (docs/schedule-ui.md §4.3).
+ */
+function RoleSection({ schedule }: { schedule: Schedule }) {
+	const updateSchedule = useUpdateSchedule();
+	const roles = useAgentRoleStore((s) => s.roles);
+	const rolesLoading = useAgentRoleStore((s) => s.isLoading);
+	const rolesError = useAgentRoleStore((s) => s.error);
+	const [saving, setSaving] = useState(false);
+	const [error, setError] = useState<string | null>(null);
+	const fieldId = useId();
+
+	const role = useMemo(
+		() => roles.find((r) => r.id === schedule.agent_role_id),
+		[roles, schedule.agent_role_id],
+	);
+
+	const handleChange = useCallback(
+		async (roleId: string) => {
+			if (!roleId || roleId === schedule.agent_role_id) return;
+			setError(null);
+			setSaving(true);
+			try {
+				await updateSchedule({ id: schedule.id, agent_role_id: roleId });
+			} catch (err) {
+				setError(err instanceof Error ? err.message : "Failed to update role");
+			} finally {
+				setSaving(false);
+			}
+		},
+		[schedule.id, schedule.agent_role_id, updateSchedule],
+	);
+
+	// A role list that has not arrived says nothing about whether the role exists.
+	const note = !role
+		? !rolesLoading && !rolesError
+			? "This role has been deleted. Runs will fail until you pick another."
+			: null
+		: role.work_type && !roleAcceptsWorkType(role, "job")
+			? `${role.name} only takes ${WORK_TYPE_PLURAL[role.work_type]}. Runs keep using it until you change it.`
+			: null;
+
+	return (
+		<div>
+			<div className="mb-1">
+				<SectionHeading>
+					<label htmlFor={fieldId}>Role</label>
+				</SectionHeading>
+			</div>
+			<div className="flex items-center gap-2">
+				<RoleSelect
+					id={fieldId}
+					value={schedule.agent_role_id}
+					workType="job"
+					onChange={handleChange}
+					disabled={saving}
+				/>
+				{saving && (
+					<Loader2 className="size-4 shrink-0 animate-spin text-th-text-muted" />
+				)}
+			</div>
+			{note && <p className="mt-1 text-xs text-th-text-muted">{note}</p>}
+			{error && (
+				<p className="mt-1 text-xs text-th-error" role="alert">
+					{error}
+				</p>
+			)}
+		</div>
+	);
+}
+
+/**
+ * Drawn only in a git repository: outside one the server takes no worktree
+ * but main, so there is nothing to choose.
+ */
+function WorktreeSection({ schedule }: { schedule: Schedule }) {
+	const isGitRepo = useIsGitRepo();
+	const worktrees = useWorktreeList();
+	const updateSchedule = useUpdateSchedule();
+	const [saving, setSaving] = useState(false);
+	const [error, setError] = useState<string | null>(null);
+	const fieldId = useId();
+
+	const stored = schedule.worktree ?? "";
+	const others = worktrees.filter((w) => !w.is_main).map((w) => w.name);
+	// An empty list is one that has not arrived — main is always in a loaded one.
+	const isDeleted =
+		stored !== "" && worktrees.length > 0 && !others.includes(stored);
+
+	const handleChange = useCallback(
+		async (worktree: string) => {
+			if (worktree === stored) return;
+			setError(null);
+			setSaving(true);
+			try {
+				await updateSchedule({ id: schedule.id, worktree });
+			} catch (err) {
+				setError(
+					err instanceof Error ? err.message : "Failed to update worktree",
+				);
+			} finally {
+				setSaving(false);
+			}
+		},
+		[schedule.id, stored, updateSchedule],
+	);
+
+	if (isGitRepo !== true) return null;
+
+	return (
+		<div>
+			<div className="mb-1">
+				<SectionHeading>
+					<label htmlFor={fieldId}>Worktree</label>
+				</SectionHeading>
+			</div>
+			<div className="flex items-center gap-2">
+				<select
+					id={fieldId}
+					value={stored}
+					onChange={(e) => handleChange(e.target.value)}
+					disabled={saving}
+					className={`min-h-[44px] w-full rounded-lg bg-th-bg-primary px-3 py-2 text-sm text-th-text-primary ${inputClass}`}
+				>
+					<option value="">main</option>
+					{others.map((name) => (
+						<option key={name} value={name}>
+							{name}
+						</option>
+					))}
+					{/* Before the list arrives the stored one is offered as itself,
+					    so the field never shows a worktree that is not the stored one. */}
+					{stored !== "" && !others.includes(stored) && (
+						<option value={stored}>
+							{isDeleted ? `${stored} (deleted)` : stored}
+						</option>
+					)}
+				</select>
+				{saving && (
+					<Loader2 className="size-4 shrink-0 animate-spin text-th-text-muted" />
+				)}
+			</div>
+			{isDeleted && (
+				<p className="mt-1 text-xs text-th-text-muted">
+					Runs will fail until you pick a worktree that exists.
+				</p>
+			)}
+			{error && (
+				<p className="mt-1 text-xs text-th-error" role="alert">
+					{error}
+				</p>
+			)}
+		</div>
+	);
+}
+
+/**
+ * At the end and in a plain text button, as `Delete role` is: deleting is
+ * rare, and weight follows frequency. The server deletes the schedule alone,
+ * which the dialog says because it is true and surprising.
+ */
+function DeleteSection({
+	schedule,
+	onDeleted,
+}: {
+	schedule: Schedule;
+	onDeleted: () => void;
+}) {
+	const deleteSchedule = useWSStore((s) => s.actions.deleteSchedule);
+	const [showConfirm, setShowConfirm] = useState(false);
+	const [error, setError] = useState<string | null>(null);
+
+	const handleDelete = useCallback(async () => {
+		setError(null);
+		try {
+			await deleteSchedule(schedule.id);
+			onDeleted();
+		} catch (err) {
+			setError(
+				`Failed to delete: ${err instanceof Error ? err.message : String(err)}`,
+			);
+			setShowConfirm(false);
+		}
+	}, [deleteSchedule, schedule.id, onDeleted]);
+
+	return (
+		<div className="border-t border-th-border pt-5">
+			<button
+				type="button"
+				onClick={() => setShowConfirm(true)}
+				className="flex min-h-[44px] items-center gap-2 rounded-lg px-3 text-sm text-th-error hover:bg-th-error/10"
+			>
+				<Trash2 className="size-4" />
+				Delete schedule
+			</button>
+			{error && (
+				<p className="mt-1 text-xs text-th-error" role="alert">
+					{error}
+				</p>
+			)}
+			{showConfirm && (
+				<ConfirmDialog
+					title={`Delete "${schedule.title}"?`}
+					message="It will not run again. The runs it already made stay, each with its chat, and a run in progress keeps going."
+					confirmLabel="Delete"
+					variant="danger"
+					onConfirm={handleDelete}
+					onCancel={() => setShowConfirm(false)}
+				/>
+			)}
+		</div>
+	);
+}
+
+/**
+ * Run now stays on the page: the new run arrives at the top of Runs with the
+ * detail's next notification, Chat icon and all. It works on a disabled
+ * schedule too — the server allows it, and the Off line says so.
+ */
+function RunNowBar({ schedule }: { schedule: Schedule }) {
+	const runSchedule = useWSStore((s) => s.actions.runSchedule);
+	const [busy, setBusy] = useState(false);
+	const [error, setError] = useState<string | null>(null);
+
+	const run = useCallback(async () => {
+		setError(null);
+		setBusy(true);
+		try {
+			await runSchedule(schedule.id);
+		} catch (err) {
+			setError(err instanceof Error ? err.message : "Failed to run");
+		} finally {
+			setBusy(false);
+		}
+	}, [runSchedule, schedule.id]);
+
+	return (
+		<BottomActionBar>
+			<div className="mx-auto max-w-2xl">
+				{error && (
+					<p className="mb-1.5 text-xs text-th-error" role="alert">
+						{error}
+					</p>
+				)}
+				<button
+					type="button"
+					onClick={run}
+					disabled={busy}
+					className="flex min-h-[44px] w-full items-center justify-center gap-2 rounded-lg bg-th-accent text-sm font-medium text-th-accent-text disabled:opacity-50"
+				>
+					{busy ? (
+						<Loader2 className="size-4 animate-spin" />
+					) : (
+						<Play className="size-4" />
+					)}
+					Run now
+				</button>
+			</div>
+		</BottomActionBar>
+	);
+}

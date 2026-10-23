@@ -143,9 +143,9 @@ func (h *rpcMethodHandler) handleScheduleRun(ctx context.Context, conn *jsonrpc2
 		switch {
 		case errors.Is(err, schedule.ErrNotFound):
 			h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "schedule not found")
-		case errors.Is(err, schedule.ErrRunActive), errors.Is(err, work.ErrInvalidWork):
-			// A run still going, or a role that no longer takes jobs: the
-			// user's to resolve, so the message is theirs to read.
+		case errors.Is(err, work.ErrRunActive), errors.Is(err, work.ErrInvalidWork):
+			// A run still going, or a job the work store refuses to make or
+			// start: the user's to resolve, so the message is theirs to read.
 			h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, err.Error())
 		default:
 			// Surfaced verbatim, as work.start does, so the user sees why the
@@ -169,7 +169,7 @@ func (h *rpcMethodHandler) handleScheduleListSubscribe(ctx context.Context, conn
 		return
 	}
 
-	items, err := h.scheduleListWatcher.Subscribe(id, h.state.getNotifier())
+	list, err := h.scheduleListWatcher.Subscribe(id, h.state.getNotifier())
 	if err != nil {
 		h.replySubscriptionError(ctx, conn, req.ID, err, "failed to subscribe to schedule list")
 		return
@@ -177,7 +177,7 @@ func (h *rpcMethodHandler) handleScheduleListSubscribe(ctx context.Context, conn
 	h.state.trackSubscription(id, h.scheduleListWatcher)
 	h.log.Debug("subscribed", "watcher", "schedule list", "watchId", id)
 
-	if err := conn.Reply(ctx, req.ID, rpc.ScheduleListSubscribeResult{Items: items}); err != nil {
+	if err := conn.Reply(ctx, req.ID, rpc.ScheduleListSubscribeResult{Items: list.Items, ServerZone: list.ServerZone}); err != nil {
 		h.log.Error("failed to send schedule list subscribe response", "error", err)
 	}
 }
@@ -205,8 +205,9 @@ func (h *rpcMethodHandler) handleScheduleDetailSubscribe(ctx context.Context, co
 	h.log.Debug("subscribed", "watcher", "schedule detail", "watchId", params.ID, "scheduleId", params.ScheduleID)
 
 	result := rpc.ScheduleDetailSubscribeResult{
-		Schedule: detail.Schedule,
-		Runs:     detail.Runs,
+		Schedule:   detail.Schedule,
+		Runs:       detail.Runs,
+		ServerZone: detail.ServerZone,
 	}
 	if err := conn.Reply(ctx, req.ID, result); err != nil {
 		h.log.Error("failed to send schedule detail subscribe response", "error", err)

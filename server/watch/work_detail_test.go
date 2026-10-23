@@ -107,7 +107,7 @@ func TestWorkDetailWatcher_Subscribe(t *testing.T) {
 			{ID: "c3", WorkID: "w2", Body: "other"},
 		},
 	}
-	w := NewWorkDetailWatcher(store, newMockUsageSource(), nil)
+	w := NewWorkDetailWatcher(store, newMockUsageSource(), nil, nil)
 
 	detail, err := w.Subscribe("client-1", "w1", nil)
 	if err != nil {
@@ -126,7 +126,7 @@ func TestWorkDetailWatcher_Subscribe(t *testing.T) {
 
 func TestWorkDetailWatcher_SubscribeNotFound(t *testing.T) {
 	store := &mockDetailStore{}
-	w := NewWorkDetailWatcher(store, newMockUsageSource(), nil)
+	w := NewWorkDetailWatcher(store, newMockUsageSource(), nil, nil)
 
 	_, err := w.Subscribe("client-1", "nonexistent", nil)
 	if err == nil {
@@ -138,7 +138,7 @@ func TestWorkDetailWatcher_Unsubscribe(t *testing.T) {
 	store := &mockDetailStore{
 		works: []work.Work{{ID: "w1"}},
 	}
-	w := NewWorkDetailWatcher(store, newMockUsageSource(), nil)
+	w := NewWorkDetailWatcher(store, newMockUsageSource(), nil, nil)
 
 	w.Subscribe("client-1", "w1", nil)
 	w.Unsubscribe("client-1")
@@ -152,7 +152,7 @@ func TestWorkDetailWatcher_NotifyOnCommentChange(t *testing.T) {
 	store := &mockDetailStore{
 		works: []work.Work{{ID: "w1", Title: "task 1"}},
 	}
-	w := NewWorkDetailWatcher(store, newMockUsageSource(), nil)
+	w := NewWorkDetailWatcher(store, newMockUsageSource(), nil, nil)
 	w.Start()
 	defer w.Stop()
 
@@ -186,7 +186,7 @@ func TestWorkDetailWatcher_NotifyOnWorkChange(t *testing.T) {
 	store := &mockDetailStore{
 		works: []work.Work{{ID: "w1", Title: "task 1"}},
 	}
-	w := NewWorkDetailWatcher(store, newMockUsageSource(), nil)
+	w := NewWorkDetailWatcher(store, newMockUsageSource(), nil, nil)
 	w.Start()
 	defer w.Stop()
 
@@ -234,7 +234,7 @@ func TestWorkDetailWatcher_NotificationCarriesTheDerivedType(t *testing.T) {
 				{ID: "s1", Title: "a story"},
 				{ID: "t1", StoryID: "s1", Title: "a task"},
 			}}
-			w := NewWorkDetailWatcher(store, newMockUsageSource(), nil)
+			w := NewWorkDetailWatcher(store, newMockUsageSource(), nil, nil)
 			w.Start()
 			defer w.Stop()
 
@@ -271,7 +271,7 @@ func TestWorkDetailWatcher_NotifyFilteredByWorkID(t *testing.T) {
 			{ID: "w2", Title: "task 2"},
 		},
 	}
-	w := NewWorkDetailWatcher(store, newMockUsageSource(), nil)
+	w := NewWorkDetailWatcher(store, newMockUsageSource(), nil, nil)
 	w.Start()
 	defer w.Stop()
 
@@ -307,7 +307,7 @@ func TestWorkDetailWatcher_DirtyFlag_SyncsAll(t *testing.T) {
 	}
 	// Built through the constructor rather than field by field: a literal here
 	// silently skipped state the watcher needs (and did).
-	w := NewWorkDetailWatcher(store, newMockUsageSource(), nil)
+	w := NewWorkDetailWatcher(store, newMockUsageSource(), nil, nil)
 
 	n1 := &captureNotifier{}
 	n2 := &captureNotifier{}
@@ -351,7 +351,7 @@ func TestWorkDetailWatcher_DirtyFlag_SyncsAll(t *testing.T) {
 
 func TestWorkDetailWatcher_OnCommentChange_AfterStop(t *testing.T) {
 	store := &mockDetailStore{}
-	w := NewWorkDetailWatcher(store, newMockUsageSource(), nil)
+	w := NewWorkDetailWatcher(store, newMockUsageSource(), nil, nil)
 	w.Start()
 	w.Stop()
 
@@ -363,7 +363,7 @@ func TestWorkDetailWatcher_OnCommentChange_AfterStop(t *testing.T) {
 
 func TestWorkDetailWatcher_OnWorkChange_AfterStop(t *testing.T) {
 	store := &mockDetailStore{}
-	w := NewWorkDetailWatcher(store, newMockUsageSource(), nil)
+	w := NewWorkDetailWatcher(store, newMockUsageSource(), nil, nil)
 	w.Start()
 	w.Stop()
 
@@ -389,7 +389,7 @@ func TestWorkDetailWatcher_SubscribeCarriesSubtreeUsage(t *testing.T) {
 	src.set("", "s1", inputTokens(1))
 	src.set("", "s2", inputTokens(10))
 	src.set("", "s3", inputTokens(100))
-	w := NewWorkDetailWatcher(store, src, nil)
+	w := NewWorkDetailWatcher(store, src, nil, nil)
 
 	detail, err := w.Subscribe("client-1", "w1", nil)
 	if err != nil {
@@ -419,7 +419,7 @@ func TestWorkDetailWatcher_NotifyOnSessionUsageChange(t *testing.T) {
 		},
 	}
 	src := newMockUsageSource()
-	w := NewWorkDetailWatcher(store, src, nil)
+	w := NewWorkDetailWatcher(store, src, nil, nil)
 	w.Start()
 	defer w.Stop()
 
@@ -459,7 +459,7 @@ func TestWorkDetailWatcher_NotifyOnSessionUsageChange(t *testing.T) {
 // in the app, and must not cost a work detail push each.
 func TestWorkDetailWatcher_IgnoresSessionOutsideAnyWork(t *testing.T) {
 	store := &mockDetailStore{works: []work.Work{{ID: "w1"}}}
-	w := NewWorkDetailWatcher(store, newMockUsageSource(), nil)
+	w := NewWorkDetailWatcher(store, newMockUsageSource(), nil, nil)
 	w.Start()
 	defer w.Stop()
 
@@ -488,7 +488,7 @@ func TestWorkDetailWatcher_IgnoresSessionOutsideAnyWork(t *testing.T) {
 func TestWorkDetailWatcher_SessionChangeWithoutNewUsageSendsNothing(t *testing.T) {
 	store := &mockDetailStore{works: []work.Work{{ID: "w1", SessionID: "s1"}}}
 	src := newMockUsageSource().set("", "s1", inputTokens(7))
-	w := NewWorkDetailWatcher(store, src, nil)
+	w := NewWorkDetailWatcher(store, src, nil, nil)
 	w.Start()
 	defer w.Stop()
 
@@ -532,7 +532,7 @@ func TestWorkDetailWatcher_SessionChangeWithoutNewUsageSendsNothing(t *testing.T
 // client has to get it whether or not any money moved.
 func TestWorkDetailWatcher_WorkChangeSendsEvenWithUnchangedUsage(t *testing.T) {
 	store := &mockDetailStore{works: []work.Work{{ID: "w1", SessionID: "s1"}}}
-	w := NewWorkDetailWatcher(store, newMockUsageSource().set("", "s1", inputTokens(7)), nil)
+	w := NewWorkDetailWatcher(store, newMockUsageSource().set("", "s1", inputTokens(7)), nil, nil)
 	w.Start()
 	defer w.Stop()
 
@@ -556,7 +556,7 @@ func TestWorkDetailWatcher_WorkChangeSendsEvenWithUnchangedUsage(t *testing.T) {
 func TestWorkDetailWatcher_SessionChangeReachesEverySubscriber(t *testing.T) {
 	store := &mockDetailStore{works: []work.Work{{ID: "w1", SessionID: "s1"}}}
 	src := newMockUsageSource().set("", "s1", inputTokens(1))
-	w := NewWorkDetailWatcher(store, src, nil)
+	w := NewWorkDetailWatcher(store, src, nil, nil)
 	w.Start()
 	defer w.Stop()
 
@@ -579,7 +579,7 @@ func TestWorkDetailWatcher_SessionChangeReachesEverySubscriber(t *testing.T) {
 // long as the server runs.
 func TestWorkDetailWatcher_UnsubscribeForgetsSentUsage(t *testing.T) {
 	store := &mockDetailStore{works: []work.Work{{ID: "w1", SessionID: "s1"}}}
-	w := NewWorkDetailWatcher(store, newMockUsageSource().set("", "s1", inputTokens(1)), nil)
+	w := NewWorkDetailWatcher(store, newMockUsageSource().set("", "s1", inputTokens(1)), nil, nil)
 
 	w.Subscribe("client-1", "w1", &captureNotifier{})
 	w.Unsubscribe("client-1")
@@ -627,7 +627,7 @@ func TestWorkDetailWatcher_ResendsWhenOnlyTheActivityMoved(t *testing.T) {
 		{ID: "w1", Status: work.StatusActive, SessionID: "s1"},
 	}}
 	turns := &turnSourceStub{}
-	w := NewWorkDetailWatcher(store, newMockUsageSource(), turns)
+	w := NewWorkDetailWatcher(store, newMockUsageSource(), turns, nil)
 	w.Start()
 	defer w.Stop()
 
@@ -667,7 +667,7 @@ func TestWorkDetailWatcher_CarriesItsChildrenAndItsParent(t *testing.T) {
 		{ID: "t2", StoryID: "story", Status: work.StatusClosed, Title: "Two"},
 		{ID: "other", Status: work.StatusOpen, Title: "Other"},
 	}}
-	w := NewWorkDetailWatcher(store, newMockUsageSource(), nil)
+	w := NewWorkDetailWatcher(store, newMockUsageSource(), nil, nil)
 
 	detail, err := w.Subscribe("client-1", "story", nil)
 	if err != nil {
