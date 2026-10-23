@@ -125,6 +125,22 @@ export function useRouteState(): RouteInfo {
 		from: WT_ROUTES.agentRoles,
 		shouldThrow: false,
 	});
+	const scheduleDetailMatch = useMatch({
+		from: ROUTES.scheduleDetail,
+		shouldThrow: false,
+	});
+	const wtScheduleDetailMatch = useMatch({
+		from: WT_ROUTES.scheduleDetail,
+		shouldThrow: false,
+	});
+	const schedulesMatch = useMatch({
+		from: ROUTES.schedules,
+		shouldThrow: false,
+	});
+	const wtSchedulesMatch = useMatch({
+		from: WT_ROUTES.schedules,
+		shouldThrow: false,
+	});
 
 	const sessionId =
 		sessionMatch?.params.sessionId ?? wtSessionMatch?.params.sessionId ?? null;
@@ -270,6 +286,32 @@ export function useRouteState(): RouteInfo {
 			wtAgentRolesMatch?.search) as OverlaySearchParams;
 		return {
 			overlay: { type: "agent-role-list" },
+			sessionId: search.session ?? null,
+			worktree,
+			viewWorktree: null,
+		};
+	}
+
+	const scheduleDetailParams =
+		scheduleDetailMatch?.params ?? wtScheduleDetailMatch?.params;
+	if (scheduleDetailParams) {
+		const scheduleId = (scheduleDetailParams as { scheduleId: string })
+			.scheduleId;
+		const search = (scheduleDetailMatch?.search ??
+			wtScheduleDetailMatch?.search) as OverlaySearchParams;
+		return {
+			overlay: { type: "schedule-detail", scheduleId },
+			sessionId: search.session ?? null,
+			worktree,
+			viewWorktree: null,
+		};
+	}
+
+	if (schedulesMatch || wtSchedulesMatch) {
+		const search = (schedulesMatch?.search ??
+			wtSchedulesMatch?.search) as OverlaySearchParams;
+		return {
+			overlay: { type: "schedule-list" },
 			sessionId: search.session ?? null,
 			worktree,
 			viewWorktree: null,

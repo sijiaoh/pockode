@@ -1,8 +1,8 @@
 import type { BadgeDotTone } from "../components/ui/BadgeDot";
 import { useSidebarUIConfig } from "../lib/registries/sidebarUIRegistry";
+import { useProjectNeedsAttention } from "../lib/scheduleStore";
 import { useSessionStore } from "../lib/sessionStore";
 import { useHasUploadActivity } from "../lib/uploadStore";
-import { useWorkNeedsAttention } from "../lib/workStore";
 
 export interface SidebarAttention {
 	sessionsUnread: boolean;
@@ -11,7 +11,8 @@ export interface SidebarAttention {
 	 * one, so this is the only sign an upload is still running or has failed.
 	 */
 	uploadActivity: boolean;
-	worksNeedAttention: boolean;
+	/** Stories or schedules waiting on the user: the Project tab's badge. */
+	projectNeedsAttention: boolean;
 	/** Whether the button that brings the sidebar back should wear a dot. */
 	show: boolean;
 	tone: BadgeDotTone;
@@ -32,17 +33,17 @@ export function useSidebarAttention(): SidebarAttention {
 	// (docs/list-paging-ui.md §2.1).
 	const sessionsUnread = useSessionStore((s) => s.hasUnread);
 	const uploadActivity = useHasUploadActivity();
-	const worksNeedAttention = useWorkNeedsAttention();
+	const projectNeedsAttention = useProjectNeedsAttention();
 	const { SidebarContent } = useSidebarUIConfig();
 
 	return {
 		sessionsUnread,
 		uploadActivity,
-		worksNeedAttention,
+		projectNeedsAttention,
 		show:
 			!SidebarContent &&
-			(sessionsUnread || uploadActivity || worksNeedAttention),
+			(sessionsUnread || uploadActivity || projectNeedsAttention),
 		// A person being waited on outranks news, as it does on the tabs.
-		tone: worksNeedAttention ? "attention" : "news",
+		tone: projectNeedsAttention ? "attention" : "news",
 	};
 }

@@ -39,3 +39,18 @@ export function isDefaultStoryRole(
 ): boolean {
 	return role.id === defaultRoleId && roleAcceptsWorkType(role, "story");
 }
+
+/**
+ * Which role a new schedule starts out on, or `""` when the user has to pick
+ * one (docs/schedule-ui.md §5). There is no stored default for jobs, so the
+ * rule is the story rule's first half, plus one step for the usual shape of a
+ * role list: several roles that take any work, and one restricted to jobs —
+ * the seeded job role — which is the one meant.
+ */
+export function resolveInitialJobRole(roles: AgentRole[]): string {
+	const eligible = roles.filter((r) => roleAcceptsWorkType(r, "job"));
+	if (eligible.length === 1) return eligible[0].id;
+	const jobsOnly = eligible.filter((r) => r.work_type === "job");
+	if (jobsOnly.length === 1) return jobsOnly[0].id;
+	return "";
+}

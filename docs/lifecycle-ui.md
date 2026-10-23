@@ -843,7 +843,9 @@ dimensions folded back into the one question a dot can ask.
 
 | Surface | Condition |
 |---|---|
-| The sidebar's Project tab, and its panel | any work in the list satisfies `needsAttention` |
+| The sidebar's Project tab | either entry's bit below |
+| The Project tab's `Stories` entry | any work in the list satisfies `needsAttention` |
+| The Project tab's `Schedules` entry | some schedule's latest run (`last_run`) satisfies `needsAttention` — jobs are kept out of the work list, so this is the only way a run's question reaches a dot ([schedule-ui.md §1](schedule-ui.md#1-the-project-tab)) |
 | The header button that brings the sidebar back | the same bit, while the sidebar is off screen ([responsive-ui.md](responsive-ui.md#at-expanded-the-column-collapses)) |
 | Session row | the row's own two facts (it *is* the leaf) — §2.1 |
 
@@ -855,9 +857,11 @@ dot in the panel says where to look once it is open. With the sidebar closed
 or collapsed the tab bar is off screen too, so the header button that brings it
 back carries the bit a step further out — in this hue, outranking the accent of
 the other tabs it also stands for. None of them derives the bit for itself:
-all read `useWorkNeedsAttention` (`workStore.ts`; the tab badge and the header
-button by way of `useSidebarAttention`), which is where the rule lives so that
-no call site can restate it, following `isWorktreeBound`
+the `Stories` entry reads `useWorkNeedsAttention` (`workStore.ts`), the
+`Schedules` entry `useScheduleNeedsAttention`, and the tab badge and the header
+button their OR, `useProjectNeedsAttention` (both in `scheduleStore.ts`, by way
+of `useSidebarAttention`) — which is where the rule lives so that no call site
+can restate it, following `isWorktreeBound`
 ([work-system.md § Displaying a Work's Worktree](code/work-system.md#displaying-a-works-worktree)).
 A second copy of *is anyone waiting on me* is a copy that can disagree, and what
 the user would see is a badge for a dot that is not there.
@@ -1023,7 +1027,7 @@ shout in; the banner says it in words.
 ### 6.1 List grouping
 
 Which groups the list has, which work gets a row and what a row holds is
-[project-ui.md §2](project-ui.md#2-the-project-screen), which owns the project
+[project-ui.md §2](project-ui.md#2-the-stories-screen), which owns the project
 page's information architecture. Only the part that is about *this* vocabulary
 is here.
 
@@ -1402,6 +1406,6 @@ controls are what they will land on:
 | `web/src/components/Project/WorkDetailOverlay.tsx` | `ActivityBadge`, the `child`-only wait line, the "Watched by" line, the unanswered-questions block, four-status button table |
 | `web/src/components/Project/WorkPrimaryAction.tsx` | new — the four-status table and the Stop confirmation. The row renders it; the action bar writes its own labelled button from the same hook and tables, which is why this has no labelled form of its own. It absorbs `WorkListOverlay`'s exported `StartButton`, which was the second answer to "which button does this row get" |
 | `web/src/components/Project/StepList.tsx` | §6.3 |
-| `web/src/components/Project/ProjectTab.tsx` | dot from `useWorkNeedsAttention` (`workStore.ts`) — the same bit `SessionSidebar` badges the tab itself with (§4) |
+| `web/src/components/Project/ProjectTab.tsx` | one dot per entry, from `useWorkNeedsAttention` (`workStore.ts`) and `useScheduleNeedsAttention` (`scheduleStore.ts`) — the two halves of the bit `SessionSidebar` badges the tab itself with (§4) |
 | `web/src/utils/systemMessage.ts` | the `wait_stranded` work event (§7.2), laid out like `child_done` |
 | `web/src/types/{message,work}.ts` | `turn`; `status` / `activity` / `wait`; `unanswered_questions`, `PendingQuestion`; `watching`, `WatchedStory`, `Work.watcher` |

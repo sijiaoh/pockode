@@ -114,6 +114,18 @@ const agentRoleDetailRoute = createRoute({
 	validateSearch: (search) => overlaySearchSchema.parse(search),
 });
 
+const schedulesRoute = createRoute({
+	getParentRoute: () => rootRoute,
+	path: ROUTES.schedules,
+	validateSearch: (search) => overlaySearchSchema.parse(search),
+});
+
+const scheduleDetailRoute = createRoute({
+	getParentRoute: () => rootRoute,
+	path: ROUTES.scheduleDetail,
+	validateSearch: (search) => overlaySearchSchema.parse(search),
+});
+
 // Worktree-prefixed routes
 const worktreeLayoutRoute = createRoute({
 	getParentRoute: () => rootRoute,
@@ -197,6 +209,18 @@ const wtAgentRoleDetailRoute = createRoute({
 	validateSearch: (search) => overlaySearchSchema.parse(search),
 });
 
+const wtSchedulesRoute = createRoute({
+	getParentRoute: () => worktreeLayoutRoute,
+	path: WT_CHILD_ROUTES.schedules,
+	validateSearch: (search) => overlaySearchSchema.parse(search),
+});
+
+const wtScheduleDetailRoute = createRoute({
+	getParentRoute: () => worktreeLayoutRoute,
+	path: WT_CHILD_ROUTES.scheduleDetail,
+	validateSearch: (search) => overlaySearchSchema.parse(search),
+});
+
 export const routeTree = rootRoute.addChildren([
 	indexRoute,
 	sessionRoute,
@@ -211,6 +235,8 @@ export const routeTree = rootRoute.addChildren([
 	worksRoute,
 	agentRoleDetailRoute, // Must be before agentRolesRoute (more specific path)
 	agentRolesRoute,
+	scheduleDetailRoute, // Must be before schedulesRoute (more specific path)
+	schedulesRoute,
 	worktreeLayoutRoute.addChildren([
 		wtIndexRoute,
 		wtSessionRoute,
@@ -225,6 +251,8 @@ export const routeTree = rootRoute.addChildren([
 		wtWorksRoute,
 		wtAgentRoleDetailRoute, // Must be before wtAgentRolesRoute (more specific path)
 		wtAgentRolesRoute,
+		wtScheduleDetailRoute, // Must be before wtSchedulesRoute (more specific path)
+		wtSchedulesRoute,
 	]),
 ]);
 

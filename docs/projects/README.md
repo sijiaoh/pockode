@@ -23,9 +23,10 @@ Zustand stores ◄─── WebSocket ───► RPC handlers ──┐       
 
 | Document | Contents |
 |----------|----------|
-| [Data Model](data-model.md) | Entities (Work, Comment, AgentRole), hierarchy rules, persistence (JSON files, atomic writes, cross-process safety), store interfaces |
+| [Data Model](data-model.md) | Entities (Work, Comment, AgentRole, Schedule), hierarchy rules, persistence (JSON files, atomic writes, cross-process safety), store interfaces |
 | [Workflow Engine](workflow-engine.md) | Status machine and transitions, the work engine's eight inputs, the command surface, WorkStarter sequence, prompt builders |
 | [API](api.md) | MCP tools (agent-facing), WebSocket RPC (client-facing), real-time subscription system with backpressure |
 | [Frontend](frontend.md) | Zustand stores, RPC actions, subscription hooks, UI overlay components |
 | [Project UI](../project-ui.md) | The project page's information architecture: the two segments, the four groups, which work gets a row, the row itself, and where creating work lands |
 | [Agent Roles UI](../agent-roles-ui.md) | The agent-role screens: the list grouped by what a role runs, what a card says about a role, the one control for the default story role, creating a role, and where deleting lives |
+| [Schedules UI](../schedule-ui.md) | The schedule screens: the Project tab's entries, the list and its enable switch, the detail page and its runs, creating a schedule, the period input and its time zones, and the way from a job run back to its schedule |

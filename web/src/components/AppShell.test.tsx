@@ -46,6 +46,9 @@ vi.mock("./Chat", () => ({
 		onOpenWorkDetail,
 		onOpenWorkList,
 		onNavigateToSession,
+		onOpenScheduleList,
+		onOpenScheduleDetail,
+		overlay,
 		view,
 	}: {
 		sessionId: string;
@@ -58,6 +61,9 @@ vi.mock("./Chat", () => ({
 		onOpenWorkDetail?: (workId: string) => void;
 		onOpenWorkList?: () => void;
 		onNavigateToSession?: (sessionId: string, worktree: string) => void;
+		onOpenScheduleList?: () => void;
+		onOpenScheduleDetail?: (scheduleId: string) => void;
+		overlay?: { type: string; scheduleId?: string } | null;
 		view?: { worktree: string; exists: boolean } | null;
 	}) => (
 		<div
@@ -65,6 +71,8 @@ vi.mock("./Chat", () => ({
 			data-resolved={String(isSessionResolved)}
 			data-can-open-sidebar={String(Boolean(onOpenSidebar))}
 			data-work-segment={workSegment}
+			data-overlay={overlay?.type}
+			data-schedule-id={overlay?.scheduleId}
 			// Absent rather than empty when there is no view: "" is a worktree here.
 			data-view-worktree={view?.worktree}
 			data-view-exists={view ? String(view.exists) : undefined}
@@ -93,6 +101,12 @@ vi.mock("./Chat", () => ({
 			<button type="button" onClick={() => onOpenWorkList?.()}>
 				Back to list
 			</button>
+			<button type="button" onClick={() => onOpenScheduleDetail?.("s1")}>
+				Open s1
+			</button>
+			<button type="button" onClick={() => onOpenScheduleList?.()}>
+				Back to schedules
+			</button>
 		</div>
 	),
 }));
@@ -110,6 +124,7 @@ vi.mock("./Session", () => ({
 		onSelectSession,
 		onDeleteSession,
 		onOpenWorkList,
+		onOpenScheduleList,
 		isExpanded,
 	}: {
 		isOpen: boolean;
@@ -119,6 +134,7 @@ vi.mock("./Session", () => ({
 		onSelectSession: (id: string, worktree: string | null) => void;
 		onDeleteSession: (id: string, worktree: string | null) => void;
 		onOpenWorkList: () => void;
+		onOpenScheduleList: () => void;
 		isExpanded: boolean;
 	}) => (
 		<div
@@ -134,7 +150,10 @@ vi.mock("./Session", () => ({
 				New Chat
 			</button>
 			<button type="button" onClick={onOpenWorkList}>
-				Project
+				Stories
+			</button>
+			<button type="button" onClick={onOpenScheduleList}>
+				Schedules
 			</button>
 			<button
 				type="button"
@@ -177,6 +196,9 @@ vi.mock("../hooks/useWorkSubscription", () => ({
 }));
 vi.mock("../hooks/useAgentRoleSubscription", () => ({
 	useAgentRoleSubscription: () => {},
+}));
+vi.mock("../hooks/useScheduleSubscription", () => ({
+	useScheduleSubscription: () => {},
 }));
 
 const session = (id: string, workId?: string) =>
@@ -790,12 +812,12 @@ describe("AppShell work list segment", () => {
 
 	// The entrance is an entrance: it goes to `Current` whatever the reader was
 	// last looking at, which is the whole reason nothing remembers the choice.
-	it("lands on Current from the Project button even while the archive is open", async () => {
+	it("lands on Current from the Stories button even while the archive is open", async () => {
 		const user = userEvent.setup();
 		const router = renderAppShell("/w/A/works?segment=closed");
 
 		await waitFor(() => expect(segmentOnScreen()).toBe("closed"));
-		await user.click(screen.getByRole("button", { name: "Project" }));
+		await user.click(screen.getByRole("button", { name: "Stories" }));
 
 		await waitFor(() => expect(segmentOnScreen()).toBe("current"));
 		expect(router.state.location.pathname).toBe("/w/A/works");
@@ -822,6 +844,68 @@ describe("AppShell work list segment", () => {
 			expect(router.state.location.pathname).toBe("/w/A/works"),
 		);
 		expect(segmentInUrl(router)).toBe("closed");
+	});
+});
+
+describe("AppShell schedule routes", () => {
+	beforeEach(() => {
+		vi.clearAllMocks();
+		resetWorktreeStore();
+		useSessionDetailStore.getState().clear();
+		useSessionStore.setState({
+			sessions: [],
+			isLoading: true,
+			isSuccess: false,
+			showTaskSessions: false,
+		});
+		useWorkStore.setState({ works: [] });
+		useAuthStore.setState({ sessionToken: "test-session-token" });
+		// Main has no sessions elsewhere in this file, which makes the shell
+		// create one; the routes under test have nothing to do with that.
+		worktreeSessions[""] = [session("m1")];
+		return () => {
+			delete worktreeSessions[""];
+		};
+	});
+
+	const overlayOnScreen = () =>
+		screen.getByTestId("chat-panel").getAttribute("data-overlay");
+	const scheduleOnScreen = () =>
+		screen.getByTestId("chat-panel").getAttribute("data-schedule-id");
+
+	it.each([
+		["/schedules", "schedule-list", null],
+		["/w/A/schedules", "schedule-list", null],
+		["/schedules/s1", "schedule-detail", "s1"],
+		["/w/A/schedules/s1", "schedule-detail", "s1"],
+	])("resolves %s", async (path, overlay, scheduleId) => {
+		const router = renderAppShell(path);
+
+		await waitFor(() => expect(overlayOnScreen()).toBe(overlay));
+		expect(scheduleOnScreen()).toBe(scheduleId);
+		expect(router.state.location.pathname).toBe(path);
+	});
+
+	it("goes from the sidebar to the list, into a schedule and back, in the worktree it is in", async () => {
+		const user = userEvent.setup();
+		const router = renderAppShell("/w/A/s/a1");
+
+		await waitFor(() => expect(scheduleOnScreen()).toBeNull());
+		await user.click(screen.getByRole("button", { name: "Schedules" }));
+		await waitFor(() =>
+			expect(router.state.location.pathname).toBe("/w/A/schedules"),
+		);
+
+		await user.click(screen.getByRole("button", { name: "Open s1" }));
+		await waitFor(() =>
+			expect(router.state.location.pathname).toBe("/w/A/schedules/s1"),
+		);
+		expect(scheduleOnScreen()).toBe("s1");
+
+		await user.click(screen.getByRole("button", { name: "Back to schedules" }));
+		await waitFor(() =>
+			expect(router.state.location.pathname).toBe("/w/A/schedules"),
+		);
 	});
 });
 

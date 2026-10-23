@@ -18,6 +18,8 @@ const BASE = {
 	workDetail: "/works/$workId",
 	agentRoles: "/agent-roles",
 	agentRoleDetail: "/agent-roles/$roleId",
+	schedules: "/schedules",
+	scheduleDetail: "/schedules/$scheduleId",
 } as const;
 
 const WT_PREFIX = "/w/$worktree";
@@ -44,4 +46,6 @@ export const WT_ROUTES = {
 	workDetail: `${WT_PREFIX}${BASE.workDetail}`,
 	agentRoles: `${WT_PREFIX}${BASE.agentRoles}`,
 	agentRoleDetail: `${WT_PREFIX}${BASE.agentRoleDetail}`,
+	schedules: `${WT_PREFIX}${BASE.schedules}`,
+	scheduleDetail: `${WT_PREFIX}${BASE.scheduleDetail}`,
 } as const;

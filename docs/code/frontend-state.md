@@ -28,6 +28,7 @@ Pockode uses Zustand for state management, pure reducers for event processing, a
 │  ├─ sessionStore ◀───┬── wsStore notifications              │   │
 │  ├─ workStore        │                                      │   │
 │  ├─ agentRoleStore   │                                      │   │
+│  ├─ scheduleStore    │                                      │   │
 │  ├─ agentOptionsStore│ (one fetch per connection)           │   │
 │  ├─ settingsStore    │                                      │   │
 │  ├─ cliLoginStore    │ (status read, not pushed)            │   │
@@ -52,6 +53,7 @@ Pockode uses Zustand for state management, pure reducers for event processing, a
 | sessionDetailStore | The open session's own metadata, and whether it exists at all | One session at a time, read through a selector that checks whose it is |
 | workStore | The project list's `Current` segment, and the one archive page on screen | State/Actions interface split; the two halves are separate fields because only one of them is pushed to |
 | agentRoleStore | AI roles | State/Actions interface split |
+| scheduleStore | Every schedule, each with its latest run's row, and the server's zone | State/Actions interface split; app-wide because the Project tab's dot reads it ([schedule-ui.md §1](../schedule-ui.md#1-the-project-tab)) |
 | agentOptionsStore | Selectable models and effort levels per agent | Fetched once per connection, not subscribed |
 | settingsStore | App settings, and why they are missing when they are | Holds the subscription's `refresh` too: the Retry is far below the hook that owns it |
 | cliLoginStore | Each AI CLI's sign-in status and update check on the server machine, and its latest sign-in flow and update or install ([cli-update.md](cli-update.md#the-web-client)) | Status is read on demand, never pushed ([why](cli-auth.md#no-subscription)); a flow outlives the sheet showing it. In memory only: a flow's link and codes are secrets |

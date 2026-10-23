@@ -19,6 +19,8 @@ export type OverlayState =
 	| { type: "work-detail"; workId: string; segment: WorkSegment }
 	| { type: "agent-role-list" }
 	| { type: "agent-role-detail"; roleId: string }
+	| { type: "schedule-list" }
+	| { type: "schedule-detail"; scheduleId: string }
 	| null;
 
 /** The overlays that read the repository, and so have nothing to show without one. */

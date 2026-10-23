@@ -1,12 +1,13 @@
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Activity } from "../../lib/activity";
 import { useAgentRoleStore } from "../../lib/agentRoleStore";
 import { clearAnswerIntent, takeAnswerIntent } from "../../lib/answerIntent";
 import { useSessionStore } from "../../lib/sessionStore";
 import { useWorkStore } from "../../lib/workStore";
 import { useWorktreeStore } from "../../lib/worktreeStore";
+import { useWSStore } from "../../lib/wsStore";
 import { makeSessionListItem } from "../../test/sessionFixtures";
 import type { AgentRole } from "../../types/agentRole";
 import type { PendingQuestion } from "../../types/message";
@@ -79,6 +80,8 @@ const renderWithWork = (
 			onBack={vi.fn()}
 			onNavigateToSession={vi.fn()}
 			onOpenWorkDetail={vi.fn()}
+			onOpenScheduleDetail={vi.fn()}
+			onOpenScheduleList={vi.fn()}
 		/>,
 	);
 };
@@ -199,6 +202,8 @@ describe("WorkDetailOverlay", () => {
 				onBack={vi.fn()}
 				onNavigateToSession={vi.fn()}
 				onOpenWorkDetail={vi.fn()}
+				onOpenScheduleDetail={vi.fn()}
+				onOpenScheduleList={vi.fn()}
 			/>,
 		);
 
@@ -243,6 +248,8 @@ describe("WorkDetailOverlay", () => {
 				onBack={vi.fn()}
 				onNavigateToSession={vi.fn()}
 				onOpenWorkDetail={onOpenWorkDetail}
+				onOpenScheduleDetail={vi.fn()}
+				onOpenScheduleList={vi.fn()}
 			/>,
 		);
 
@@ -279,6 +286,8 @@ describe("WorkDetailOverlay", () => {
 				onBack={vi.fn()}
 				onNavigateToSession={vi.fn()}
 				onOpenWorkDetail={vi.fn()}
+				onOpenScheduleDetail={vi.fn()}
+				onOpenScheduleList={vi.fn()}
 			/>,
 		);
 
@@ -306,6 +315,8 @@ describe("WorkDetailOverlay", () => {
 				onBack={vi.fn()}
 				onNavigateToSession={vi.fn()}
 				onOpenWorkDetail={vi.fn()}
+				onOpenScheduleDetail={vi.fn()}
+				onOpenScheduleList={vi.fn()}
 			/>,
 		);
 
@@ -333,6 +344,8 @@ describe("WorkDetailOverlay", () => {
 				onBack={vi.fn()}
 				onNavigateToSession={vi.fn()}
 				onOpenWorkDetail={vi.fn()}
+				onOpenScheduleDetail={vi.fn()}
+				onOpenScheduleList={vi.fn()}
 			/>,
 		);
 		const heading = screen.getByRole("heading", { level: 1 });
@@ -354,6 +367,8 @@ describe("WorkDetailOverlay", () => {
 				onBack={vi.fn()}
 				onNavigateToSession={vi.fn()}
 				onOpenWorkDetail={vi.fn()}
+				onOpenScheduleDetail={vi.fn()}
+				onOpenScheduleList={vi.fn()}
 			/>,
 		);
 		expect(
@@ -386,10 +401,12 @@ describe("WorkDetailOverlay", () => {
 					onBack={onBack}
 					onNavigateToSession={vi.fn()}
 					onOpenWorkDetail={onOpenWorkDetail}
+					onOpenScheduleDetail={vi.fn()}
+					onOpenScheduleList={vi.fn()}
 				/>,
 			);
 
-			await user.click(screen.getByRole("button", { name: "Back to project" }));
+			await user.click(screen.getByRole("button", { name: "Back to stories" }));
 			expect(onBack).toHaveBeenCalled();
 			expect(onOpenWorkDetail).not.toHaveBeenCalled();
 		});
@@ -423,6 +440,8 @@ describe("WorkDetailOverlay", () => {
 					onBack={onBack}
 					onNavigateToSession={vi.fn()}
 					onOpenWorkDetail={onOpenWorkDetail}
+					onOpenScheduleDetail={vi.fn()}
+					onOpenScheduleList={vi.fn()}
 				/>,
 			);
 
@@ -431,6 +450,156 @@ describe("WorkDetailOverlay", () => {
 			);
 			expect(onOpenWorkDetail).toHaveBeenCalledWith("story-1");
 			expect(onBack).not.toHaveBeenCalled();
+		});
+	});
+
+	// A job belongs to a schedule as a task belongs to its story: Back, the link
+	// above the title and Delete all go to what the work belongs to, read off
+	// the data (docs/schedule-ui.md §2, §7).
+	describe("what the work belongs to", () => {
+		const parentStory = {
+			id: "story-1",
+			type: "story" as const,
+			agent_role_id: "role-1",
+			title: "Cluster mode",
+			status: "active" as const,
+			activity: "running" as const,
+			updated_at: "2026-03-04T00:00:00Z",
+		};
+		const job = createWork({
+			type: "job",
+			title: "Nightly audit",
+			schedule_id: "sched-1",
+		});
+
+		function renderDetail(detail: Record<string, unknown>, work: Work = job) {
+			mockUseWorkDetailSubscription.mockReturnValue({
+				work,
+				activity: "idle",
+				comments: [],
+				pendingQuestions: [],
+				loading: false,
+				error: null,
+				children: [],
+				parent: null,
+				schedule: null,
+				...detail,
+			});
+			const nav = {
+				onBack: vi.fn(),
+				onOpenWorkDetail: vi.fn(),
+				onOpenScheduleDetail: vi.fn(),
+				onOpenScheduleList: vi.fn(),
+			};
+			render(
+				<WorkDetailOverlay
+					workId="work-1"
+					onNavigateToSession={vi.fn()}
+					{...nav}
+				/>,
+			);
+			return nav;
+		}
+
+		async function deleteFromPage() {
+			const user = userEvent.setup();
+			await user.click(screen.getByRole("button", { name: /^Delete / }));
+			await user.click(
+				within(screen.getByRole("dialog")).getByRole("button", {
+					name: "Delete",
+				}),
+			);
+		}
+
+		const realActions = useWSStore.getState().actions;
+		beforeEach(() => {
+			useWSStore.setState({
+				actions: {
+					...realActions,
+					deleteWork: vi.fn().mockResolvedValue(undefined),
+				},
+			});
+		});
+		afterEach(() => {
+			useWSStore.setState({ actions: realActions });
+		});
+
+		it("links a job to its schedule and goes back to it", async () => {
+			const user = userEvent.setup();
+			const nav = renderDetail({
+				schedule: { id: "sched-1", title: "Nightly audit schedule" },
+			});
+
+			await user.click(
+				screen.getByRole("button", {
+					name: "Schedule: Nightly audit schedule",
+				}),
+			);
+			expect(nav.onOpenScheduleDetail).toHaveBeenCalledWith("sched-1");
+
+			nav.onOpenScheduleDetail.mockClear();
+			await user.click(
+				screen.getByRole("button", { name: "Back to schedule" }),
+			);
+			expect(nav.onOpenScheduleDetail).toHaveBeenCalledWith("sched-1");
+			expect(nav.onBack).not.toHaveBeenCalled();
+		});
+
+		it("says a deleted schedule is gone, and goes back to the schedules", async () => {
+			const user = userEvent.setup();
+			const nav = renderDetail({ schedule: null });
+
+			expect(
+				screen.getByText("Its schedule has been deleted."),
+			).toBeInTheDocument();
+			await user.click(
+				screen.getByRole("button", { name: "Back to schedules" }),
+			);
+			expect(nav.onOpenScheduleList).toHaveBeenCalled();
+			expect(nav.onBack).not.toHaveBeenCalled();
+		});
+
+		it("tells a job's description apart from its schedule's prompt", () => {
+			renderDetail({ schedule: { id: "sched-1", title: "Nightly" } });
+			expect(
+				screen.getByText(/This run's copy of its schedule's prompt/),
+			).toBeInTheDocument();
+		});
+
+		it("drops the note once the job's copy has been cleared", () => {
+			renderDetail(
+				{ schedule: { id: "sched-1", title: "Nightly" } },
+				{ ...job, body: "" },
+			);
+			expect(
+				screen.queryByText(/This run's copy of its schedule's prompt/),
+			).toBeNull();
+		});
+
+		it("says nothing of schedules on a story", () => {
+			renderDetail({}, createWork());
+			expect(screen.queryByText(/schedule/i)).toBeNull();
+		});
+
+		it("lands a deleted job on its schedule", async () => {
+			const nav = renderDetail({
+				schedule: { id: "sched-1", title: "Nightly" },
+			});
+			await deleteFromPage();
+			expect(nav.onOpenScheduleDetail).toHaveBeenCalledWith("sched-1");
+			expect(nav.onBack).not.toHaveBeenCalled();
+		});
+
+		// A behaviour change, named in the design: Delete used to land a task on
+		// the list while Back went to its story.
+		it("lands a deleted task on its story, where Back goes", async () => {
+			const nav = renderDetail(
+				{ parent: parentStory },
+				createWork({ type: "task", story_id: "story-1" }),
+			);
+			await deleteFromPage();
+			expect(nav.onOpenWorkDetail).toHaveBeenCalledWith("story-1");
+			expect(nav.onBack).not.toHaveBeenCalled();
 		});
 	});
 
@@ -468,6 +637,8 @@ describe("WorkDetailOverlay", () => {
 				onBack={vi.fn()}
 				onNavigateToSession={vi.fn()}
 				onOpenWorkDetail={vi.fn()}
+				onOpenScheduleDetail={vi.fn()}
+				onOpenScheduleList={vi.fn()}
 			/>,
 		);
 
@@ -497,6 +668,8 @@ describe("WorkDetailOverlay", () => {
 				onBack={vi.fn()}
 				onNavigateToSession={vi.fn()}
 				onOpenWorkDetail={vi.fn()}
+				onOpenScheduleDetail={vi.fn()}
+				onOpenScheduleList={vi.fn()}
 			/>,
 		);
 
@@ -526,6 +699,8 @@ describe("WorkDetailOverlay", () => {
 				onBack={vi.fn()}
 				onNavigateToSession={vi.fn()}
 				onOpenWorkDetail={vi.fn()}
+				onOpenScheduleDetail={vi.fn()}
+				onOpenScheduleList={vi.fn()}
 			/>,
 		);
 
@@ -589,6 +764,8 @@ describe("WorkDetailOverlay", () => {
 					onBack={vi.fn()}
 					onNavigateToSession={vi.fn()}
 					onOpenWorkDetail={vi.fn()}
+					onOpenScheduleDetail={vi.fn()}
+					onOpenScheduleList={vi.fn()}
 				/>,
 			);
 		};
@@ -773,6 +950,8 @@ describe("the unanswered questions section", () => {
 				onBack={vi.fn()}
 				onNavigateToSession={onNavigateToSession}
 				onOpenWorkDetail={vi.fn()}
+				onOpenScheduleDetail={vi.fn()}
+				onOpenScheduleList={vi.fn()}
 			/>,
 		);
 
@@ -829,6 +1008,8 @@ describe("the watcher line", () => {
 				onBack={vi.fn()}
 				onNavigateToSession={onNavigateToSession}
 				onOpenWorkDetail={vi.fn()}
+				onOpenScheduleDetail={vi.fn()}
+				onOpenScheduleList={vi.fn()}
 			/>,
 		);
 

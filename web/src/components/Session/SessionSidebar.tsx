@@ -53,6 +53,7 @@ interface Props {
 	/** Closes the content area when the file it shows is deleted from the tree. */
 	onCloseFile: () => void;
 	onOpenWorkList: () => void;
+	onOpenScheduleList: () => void;
 	onOpenAgentRoleList: () => void;
 	isExpanded: boolean;
 	/**
@@ -80,6 +81,7 @@ function SessionSidebar({
 	onRepointFile,
 	onCloseFile,
 	onOpenWorkList,
+	onOpenScheduleList,
 	onOpenAgentRoleList,
 	isExpanded,
 	isSwitchingWorktree,
@@ -87,9 +89,10 @@ function SessionSidebar({
 	const { SidebarContent } = useSidebarUIConfig();
 	// The same bits light the dot on the header button that brings the sidebar
 	// back, so a badge out of sight behind a closed drawer or a collapsed column
-	// is still seen from outside. `worksNeedAttention` also lights the dot inside
-	// the Project tab, which is what makes the two agree (see `ProjectTab`).
-	const { sessionsUnread, uploadActivity, worksNeedAttention } =
+	// is still seen from outside. `projectNeedsAttention` is the OR of the two
+	// dots inside the Project tab, which is what makes them agree (see
+	// `ProjectTab`).
+	const { sessionsUnread, uploadActivity, projectNeedsAttention } =
 		useSidebarAttention();
 	// Narrower than the badge, and deliberately so — see `handleSelectFile`.
 	const hasUnfinishedUploads = useHasUnfinishedUploads();
@@ -158,7 +161,7 @@ function SessionSidebar({
 				id: "project",
 				label: "Project",
 				icon: ListChecks,
-				showBadge: worksNeedAttention,
+				showBadge: projectNeedsAttention,
 				// Not the other tabs' "there is news here": this one means a person
 				// is being waited on, and it wears the same hue as the dot it stands
 				// for inside the tab (docs/lifecycle-ui.md §4).
@@ -170,7 +173,7 @@ function SessionSidebar({
 			uploadActivity,
 			isGitRepo,
 			gitCountBadge,
-			worksNeedAttention,
+			projectNeedsAttention,
 		],
 	);
 
@@ -266,6 +269,7 @@ function SessionSidebar({
 			)}
 			<ProjectTab
 				onOpenWorkList={onOpenWorkList}
+				onOpenScheduleList={onOpenScheduleList}
 				onOpenAgentRoleList={onOpenAgentRoleList}
 			/>
 		</TabbedSidebar>

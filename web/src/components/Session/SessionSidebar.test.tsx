@@ -4,9 +4,11 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Activity } from "../../lib/activity";
 import { uploadFile } from "../../lib/fileUpload";
+import { useScheduleStore } from "../../lib/scheduleStore";
 import { uploadActions } from "../../lib/uploadStore";
 import { useWorkStore } from "../../lib/workStore";
 import { worktreeActions } from "../../lib/worktreeStore";
+import { makeSchedule } from "../../test/scheduleFixtures";
 import type { WorkListItem } from "../../types/work";
 import SessionSidebar from "./SessionSidebar";
 
@@ -123,6 +125,7 @@ function renderSidebar(
 				onRepointFile={vi.fn()}
 				onCloseFile={vi.fn()}
 				onOpenWorkList={vi.fn()}
+				onOpenScheduleList={vi.fn()}
 				onOpenAgentRoleList={vi.fn()}
 				isSwitchingWorktree={false}
 				isExpanded={isExpanded}
@@ -144,9 +147,11 @@ function tabBadge(label: string): Element | null {
 // inheriting one from whichever ran before it.
 beforeEach(() => {
 	gitChangeCount = undefined;
-	// Same reason, and in both directions: the work list feeds the Project tab's
-	// badge, so a case that leaves rows behind would badge a later case's sidebar.
+	// Same reason, and in both directions: the work and schedule lists feed the
+	// Project tab's badge, so a case that leaves rows behind would badge a later
+	// case's sidebar.
 	useWorkStore.getState().reset();
+	useScheduleStore.getState().reset();
 });
 
 describe("SessionSidebar on a phone", () => {
@@ -282,6 +287,27 @@ describe("the Project tab's attention badge", () => {
 		// The hue the other tabs use means "there is news here". This one means a
 		// person is being waited on, and has to match the dot it stands for inside
 		// the tab — one dot, one hue, one meaning (docs/lifecycle-ui.md §4).
+		expect(tabBadge("Project")).toHaveClass("bg-th-warning");
+	});
+
+	// Jobs are kept out of the work list, so a run asking a question reaches the
+	// badge through its schedule or not at all (docs/schedule-ui.md §1).
+	it("lights while a schedule's latest run is waiting on the user", () => {
+		useScheduleStore.getState().setSchedules(
+			[
+				makeSchedule({
+					last_run: {
+						...work("running"),
+						type: "job",
+						unanswered_questions: 1,
+					},
+				}),
+			],
+			{ name: "UTC", offset_seconds: 0 },
+		);
+
+		renderSidebar(vi.fn());
+
 		expect(tabBadge("Project")).toHaveClass("bg-th-warning");
 	});
 

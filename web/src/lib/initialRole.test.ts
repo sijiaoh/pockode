@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { AgentRole } from "../types/agentRole";
-import { resolveInitialRole } from "./initialRole";
+import { resolveInitialJobRole, resolveInitialRole } from "./initialRole";
 import { roleAcceptsWorkType } from "./roleWorkType";
 
 const role = (id: string, work_type?: AgentRole["work_type"]): AgentRole => ({
@@ -47,5 +47,23 @@ describe("resolveInitialRole", () => {
 
 	it("does not preselect a default that is no longer in the list", () => {
 		expect(resolveInitialRole([role("a"), role("b")], "gone")).toBe("");
+	});
+});
+
+describe("resolveInitialJobRole", () => {
+	it("picks the only role that takes jobs", () => {
+		expect(resolveInitialJobRole([role("a"), role("s", "story")])).toBe("a");
+	});
+
+	it("picks the one jobs-only role beside roles that take anything", () => {
+		const roles = [role("a"), role("b"), role("job", "job")];
+		expect(resolveInitialJobRole(roles)).toBe("job");
+	});
+
+	it("asks when there is nothing to tell the candidates apart", () => {
+		expect(resolveInitialJobRole([role("a"), role("b")])).toBe("");
+		expect(
+			resolveInitialJobRole([role("a"), role("j1", "job"), role("j2", "job")]),
+		).toBe("");
 	});
 });

@@ -9,7 +9,9 @@ It does **not** restate the state vocabulary. `Activity`, its glyphs, tones and
 labels, which lifecycle button exists for which `status`, and the attention dot
 are [lifecycle-ui.md](lifecycle-ui.md) §§1–4, and this document only ever names
 those leaves. It does not cover the agent-role screens, which are
-[agent-roles-ui.md](agent-roles-ui.md).
+[agent-roles-ui.md](agent-roles-ui.md), nor the schedules, which share the
+Project tab with this list (its `Stories` entry opens it) and are
+[schedule-ui.md](schedule-ui.md).
 
 **What it replaces.** This has landed, and it is the page: what the list holds
 and how it is grouped is here rather than in
@@ -51,8 +53,8 @@ document is what it expands to.
 
 | Screen | Route | What it is |
 |---|---|---|
-| Project | `/works` | Every work that needs a person or is under way. One column. |
-| Project, archive | `/works?segment=closed` | The same screen filtered to finished work (§5). |
+| Stories | `/works` | Every work that needs a person or is under way. One column. |
+| Stories, archive | `/works?segment=closed` | The same screen filtered to finished work (§5). |
 | Work detail | `/works/$workId` | One story, task or job, its children, its comments. |
 
 Both routes carry the usual `/w/<worktree>` prefix outside main, as every route
@@ -73,17 +75,19 @@ The filter is still spelled in the URL — `/works?segment=closed` — because a
 filter nobody can link to or step back out of is a filter the browser cannot
 help with (§5).
 
-**Back from a work detail returns to the list**, and from a task to its parent
-story's detail first — both already true and both kept. It is worth writing down
+**Back from a work detail returns to the list**, from a task to its parent
+story's detail first, and from a job to its schedule
+([schedule-ui.md §2](schedule-ui.md#2-routes-and-navigation)). Delete on the
+detail page lands where Back goes. It is worth writing down
 because the trip into a detail and out again is the one thing the *Current* /
 *Closed* choice has to survive, and §5 says how: the detail's URL carries the
 segment it was opened from.
 
-## 2. The Project screen
+## 2. The Stories screen
 
 ```
 ┌──────────────────────────────────────┐
-│ 💬 Project                          │  the app header
+│ 💬 Stories                          │  the app header
 ├──────────────────────────────────────┤
 │  [ Current ]   Closed                │  segmented control, sticky
 ├──────────────────────────────────────┤
@@ -110,7 +114,7 @@ the tables below, and every one of them already exists in `ActivityIcon`.
 The header is the app's own, not a bar of the page's: the page names itself in
 it with the way back to the chat, as every page over the chat does
 ([agent-chat.md](agent-chat.md#the-session-screen)). A work item's detail page
-is headed there the same way, as `Story` or `Task`.
+is headed there the same way, as `Story`, `Task` or `Job`.
 
 ### 2.1 The segmented control
 
@@ -464,7 +468,7 @@ weight, not one tier reaching for legibility the other gives up.
 | 4 | Role name | the work has a role | attribute | Who is doing it. |
 | 5 | `{n} active` | the row is a story with active children | attribute | The only thing lost by not nesting tasks is "something under here is moving", and this is it — in the same words the detail page's children header uses. |
 | 6 | `{closed}/{total} tasks` | the row is a story with children | attribute | Progress. |
-| 7 | Relative `updated_at`, outside the clip, at the right edge | **both segments** of the list | attribute | Every list here is sorted by it (§2.3), and a sort key the user cannot see is a list in no order at all — which is also why it is the one slot the clip never reaches: as the last slot it would be the first thing a narrow line lost. It is drawn after the clipping container rather than inside it, and that container's `flex-1` pushes it to the right edge so it reads as a column: a date at a different x on every row is a sort order the user has to reconstruct. It is the one slot with no leading `·` — the gap already separates it, and a middot left floating mid-line reads as a slot that failed. That gap is twice the one either side of a `·`, because the clip cuts mid-glyph with no ellipsis: at the slots' spacing a cut-off `2 act` and the date `3m` read as one word. The story detail's Tasks list does not draw it: that list is in creation order (§2.3), so there is no sort key there to show. |
+| 7 | Relative `updated_at` (the `dateAt` the screen passes, §3.1), outside the clip, at the right edge | **both segments** of the list | attribute | Every list here is sorted by it (§2.3), and a sort key the user cannot see is a list in no order at all — which is also why it is the one slot the clip never reaches: as the last slot it would be the first thing a narrow line lost. It is drawn after the clipping container rather than inside it, and that container's `flex-1` pushes it to the right edge so it reads as a column: a date at a different x on every row is a sort order the user has to reconstruct. It is the one slot with no leading `·` — the gap already separates it, and a middot left floating mid-line reads as a slot that failed. That gap is twice the one either side of a `·`, because the clip cuts mid-glyph with no ellipsis: at the slots' spacing a cut-off `2 act` and the date `3m` read as one word. The story detail's Tasks list does not draw it: that list is in creation order (§2.3), so there is no sort key there to show. |
 
 **There is no slot 1, and the numbers are kept.** Slot 1 was `↳ <story
 title>`, the parent a task row named because it had left its story; with task
@@ -644,7 +648,10 @@ a task under its story carry the same kind of glyph, the same two controls and
 the same facts, which is what makes the two screens feel like one place.
 
 The one thing the screen decides is slot 7, and only by the order the screen is
-in: the Tasks section is in creation order, so it has no sort key to show.
+in: the row prints whatever timestamp it is handed as `dateAt`. The list hands
+it `updated_at`, a schedule's Runs list `created_at`
+([schedule-ui.md §4.2](schedule-ui.md#42-runs)), and the Tasks section, in
+creation order, nothing — it has no sort key to show.
 Nothing about a row is decided by which group it is in.
 
 ## 4. Creating work lands you on its detail page
@@ -753,9 +760,9 @@ wrong in use:
 Three consequences, each of which is a rule rather than an accident:
 
 - **`Current` is the absence of the parameter, never `segment=current`.** One
-  state, one URL — and it is what makes the Project entry button's plain
+  state, one URL — and it is what makes the Stories entry button's plain
   `/works` mean `Current` without the button having to say so.
-- **The Project entry button always lands on `Current`.** It is an entrance, and
+- **The Stories entry button always lands on `Current`.** It is an entrance, and
   an entrance that opens somewhere different depending on what the user last
   tapped is an entrance nobody can predict. This is the behaviour the store's
   "nothing persists it" gave on a reload only; now it holds on every tap.

@@ -50,7 +50,7 @@ export type WorkWait = "child";
  */
 export interface WorkListItem {
 	id: string;
-	/** Derived by the server from `story_id`; read, never sent (`WorkType`). */
+	/** Derived by the server from `schedule_id` and `story_id`; read, never sent (`WorkType`). */
 	type: WorkType;
 	/** The story this task belongs to; absent on a story. */
 	story_id?: string;
@@ -92,12 +92,14 @@ export interface WorkListItem {
  * which the work record knows nothing about, so it rides beside the item on the
  * detail result the way usage does; `unanswered_questions` is a count a row
  * paints, and the detail carries the questions themselves as
- * `pending_questions`. `type` is derived too, but from `story_id` — a field of
- * the item itself — so it arrives here with everything else, and a reader asks
+ * `pending_questions`. `type` is derived too, but from `schedule_id` and
+ * `story_id` — fields of the item itself — so it arrives here with everything else, and a reader asks
  * for a kind the same way on a row and on a detail.
  */
 export interface Work
 	extends Omit<WorkListItem, "activity" | "unanswered_questions"> {
+	/** The schedule this job is a run of; absent on a story or task. */
+	schedule_id?: string;
 	body?: string;
 	current_step?: number;
 	/**
@@ -237,6 +239,19 @@ export interface WorkDetailSubscribeResult {
 	 */
 	children: WorkListItem[];
 	parent?: WorkListItem;
+	/**
+	 * The schedule a job is a run of, beside `parent` and for the same reason:
+	 * the page names what the work belongs to without a second subscription.
+	 * Absent for every other work, and once the schedule has been deleted. A
+	 * rename reaches an open page with the job's next change.
+	 */
+	schedule?: WorkSchedule;
+}
+
+/** Names the schedule a job is a run of. */
+export interface WorkSchedule {
+	id: string;
+	title: string;
 }
 
 export interface WorkDetailChangedNotification {
@@ -249,4 +264,5 @@ export interface WorkDetailChangedNotification {
 	pending_questions?: PendingQuestion[];
 	children: WorkListItem[];
 	parent?: WorkListItem;
+	schedule?: WorkSchedule;
 }

@@ -223,7 +223,7 @@ export default function WorkListOverlay({
 			// In both segments: `Current` is sorted by it now, and a sort key the
 			// user cannot see is not an order they can read
 			// (docs/project-ui.md §3).
-			showUpdatedAt
+			dateAt={work.updated_at}
 			onOpen={onOpenWorkDetail}
 			onOpenChat={onNavigateToSession}
 		/>
@@ -231,7 +231,7 @@ export default function WorkListOverlay({
 
 	return (
 		<div className="flex min-h-0 flex-1 flex-col">
-			<PageHeader back={{ to: "chat", onClick: onBack }} title="Project" />
+			<PageHeader back={{ to: "chat", onClick: onBack }} title="Stories" />
 
 			{/* Outside the scroll area on purpose: the archive is one tap away from
 			    wherever the list has been scrolled to. */}

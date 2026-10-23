@@ -21,11 +21,12 @@ interface Props {
 	/** Slot 4, resolved by the screen from the role map it already holds. */
 	roleName?: string;
 	/**
-	 * Slot 7. Shown wherever the rows are sorted by it — both segments of the
-	 * list — and not on the story detail's Tasks section, which is in the order
-	 * the story was broken down in (docs/project-ui.md §3, slot 7).
+	 * Slot 7: the timestamp the rows are sorted by, which the screen picks — the
+	 * list's `updated_at`, a schedule's runs' `created_at` — and nothing on the
+	 * story detail's Tasks section, which is in the order the story was broken
+	 * down in (docs/project-ui.md §3, slot 7; docs/schedule-ui.md §4.2).
 	 */
-	showUpdatedAt?: boolean;
+	dateAt?: string;
 	/**
 	 * What the title is a heading of: `h3` under the list's group headings, `h4`
 	 * under the detail page's Tasks heading. A row cannot know its own depth, and
@@ -55,14 +56,12 @@ export default function WorkRow({
 	work,
 	tasks,
 	roleName,
-	showUpdatedAt,
+	dateAt,
 	headingLevel = 3,
 	onOpen,
 	onOpenChat,
 }: Props) {
 	const unanswered = work.unanswered_questions ?? 0;
-	const isNeedsUser = needsAttention(work.activity, unanswered);
-	const isStopped = work.status === "stopped";
 	const sessionId = work.session_id;
 	const totalTasks = tasks?.length ?? 0;
 	const closedTasks = tasks?.filter((t) => t.status === "closed").length ?? 0;
@@ -72,23 +71,7 @@ export default function WorkRow({
 		useWorkCommand(work, activeTasks);
 	const errorId = useId();
 
-	// The left edge is always drawn and only its hue changes: warning for either
-	// way a work waits on the user — a blocking prompt, or a question it posted
-	// and carried on from — error for one the engine has let go of, the card's
-	// own border colour otherwise. One coloured edge in a column
-	// of neutral ones is what reads before a word does; a *transparent* edge in a
-	// column of bordered cards reads as a card missing a side instead.
-	//
-	// It carries no tint behind it. The `/5` fills it used to be paired with drew
-	// nothing in any theme variant (docs/project-ui.md §3 holds the measurements,
-	// once), and they would now collide with the card's own `bg-th-bg-secondary`:
-	// two `background-color` declarations on one element, whose winner is decided
-	// by stylesheet order rather than by this file.
-	const edgeClass = isNeedsUser
-		? "border-l-th-warning"
-		: isStopped
-			? "border-l-th-error"
-			: "border-l-th-border";
+	const edgeClass = workEdgeClass(work);
 
 	// Fixed order, one appearance rule each, and the line clips from the right —
 	// which is what puts the state first. The timestamp is not one of
@@ -266,10 +249,8 @@ export default function WorkRow({
 				    floating mid-line reads as a slot that failed to render. It is
 				    widened because the clip cuts mid-glyph with no ellipsis: at the
 				    slots' own spacing, `2 act` and `3m` read as one word. */}
-				{showUpdatedAt && (
-					<span className="shrink-0 pl-1.5">
-						{formatRelativeDate(work.updated_at)}
-					</span>
+				{dateAt && (
+					<span className="shrink-0 pl-1.5">{formatRelativeDate(dateAt)}</span>
 				)}
 			</div>
 
@@ -298,4 +279,34 @@ export default function WorkRow({
 			)}
 		</div>
 	);
+}
+
+/**
+ * The row's 2px left edge. It is always drawn and only its hue changes: warning
+ * for either way a work waits on the user — a blocking prompt, or a question it
+ * posted and carried on from — error for one the engine has let go of, the
+ * card's own border colour otherwise. One coloured edge in a column of neutral
+ * ones is what reads before a word does; a *transparent* edge in a column of
+ * bordered cards reads as a card missing a side instead.
+ *
+ * It carries no tint behind it. The `/5` fills it used to be paired with drew
+ * nothing in any theme variant (docs/project-ui.md §3 holds the measurements,
+ * once), and they would now collide with the card's own `bg-th-bg-secondary`:
+ * two `background-color` declarations on one element, whose winner is decided
+ * by stylesheet order rather than by this file.
+ *
+ * Last in the file because the class scans in tests/ read a top-level
+ * helper's body up to the next declaration, and `export default function` is
+ * not one: above the component, this helper would be read as all of it.
+ *
+ * Exported for the schedule list, whose card edge is its latest run's
+ * (docs/schedule-ui.md §3.1): one predicate for both surfaces.
+ */
+export function workEdgeClass(
+	work: Pick<WorkListItem, "activity" | "unanswered_questions" | "status">,
+): string {
+	if (needsAttention(work.activity, work.unanswered_questions ?? 0))
+		return "border-l-th-warning";
+	if (work.status === "stopped") return "border-l-th-error";
+	return "border-l-th-border";
 }
