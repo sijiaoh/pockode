@@ -23,6 +23,7 @@ import (
 	"github.com/pockode/server/logger"
 	"github.com/pockode/server/password"
 	"github.com/pockode/server/rpc"
+	"github.com/pockode/server/schedule"
 	"github.com/pockode/server/session"
 	"github.com/pockode/server/settings"
 	"github.com/pockode/server/watch"
@@ -58,33 +59,37 @@ type RawCapabilities interface {
 
 // RPCHandler handles JSON-RPC 2.0 over WebSocket.
 type RPCHandler struct {
-	password             string
-	passwordGuard        *authguard.Guard
-	sessions             SessionStore
-	version              string
-	remoteURL            func() string // live: renewing the relay credentials can change it
-	remoteURLWatcher     *watch.RemoteURLWatcher
-	previewTickets       PreviewTickets
-	rawCapabilities      RawCapabilities
-	devMode              bool
-	commandStore         *command.Store
-	worktreeManager      *worktree.Manager
-	settingsStore        *settings.Store
-	settingsWatcher      *watch.SettingsWatcher
-	workStore            work.Store
-	workListWatcher      *watch.WorkListWatcher
-	workDetailWatcher    *watch.WorkDetailWatcher
-	workOps              *work.Operations
-	workEngine           *work.Engine
-	agentRoleStore       agentrole.Store
-	agentRoleListWatcher *watch.AgentRoleListWatcher
-	cliAuth              *cliauth.Service
-	cliLoginWatcher      *watch.CLILoginWatcher
-	cliUpdate            *cliupdate.Service
-	cliUpdateWatcher     *watch.CLIUpdateWatcher
+	password              string
+	passwordGuard         *authguard.Guard
+	sessions              SessionStore
+	version               string
+	remoteURL             func() string // live: renewing the relay credentials can change it
+	remoteURLWatcher      *watch.RemoteURLWatcher
+	previewTickets        PreviewTickets
+	rawCapabilities       RawCapabilities
+	devMode               bool
+	commandStore          *command.Store
+	worktreeManager       *worktree.Manager
+	settingsStore         *settings.Store
+	settingsWatcher       *watch.SettingsWatcher
+	workStore             work.Store
+	workListWatcher       *watch.WorkListWatcher
+	workDetailWatcher     *watch.WorkDetailWatcher
+	workOps               *work.Operations
+	workEngine            *work.Engine
+	agentRoleStore        agentrole.Store
+	agentRoleListWatcher  *watch.AgentRoleListWatcher
+	scheduleStore         schedule.Store
+	scheduler             *schedule.Scheduler
+	scheduleListWatcher   *watch.ScheduleListWatcher
+	scheduleDetailWatcher *watch.ScheduleDetailWatcher
+	cliAuth               *cliauth.Service
+	cliLoginWatcher       *watch.CLILoginWatcher
+	cliUpdate             *cliupdate.Service
+	cliUpdateWatcher      *watch.CLIUpdateWatcher
 }
 
-func NewRPCHandler(password string, passwordGuard *authguard.Guard, sessions SessionStore, version string, remoteURL func() string, previewTickets PreviewTickets, rawCapabilities RawCapabilities, devMode bool, commandStore *command.Store, worktreeManager *worktree.Manager, settingsStore *settings.Store, workStore work.Store, workOps *work.Operations, workEngine *work.Engine, agentRoleStore agentrole.Store, cliAuth *cliauth.Service, cliUpdate *cliupdate.Service) *RPCHandler {
+func NewRPCHandler(password string, passwordGuard *authguard.Guard, sessions SessionStore, version string, remoteURL func() string, previewTickets PreviewTickets, rawCapabilities RawCapabilities, devMode bool, commandStore *command.Store, worktreeManager *worktree.Manager, settingsStore *settings.Store, workStore work.Store, workOps *work.Operations, workEngine *work.Engine, agentRoleStore agentrole.Store, scheduleStore schedule.Store, scheduler *schedule.Scheduler, cliAuth *cliauth.Service, cliUpdate *cliupdate.Service) *RPCHandler {
 	settingsWatcher := watch.NewSettingsWatcher(settingsStore)
 	settingsWatcher.Start()
 
@@ -108,6 +113,13 @@ func NewRPCHandler(password string, passwordGuard *authguard.Guard, sessions Ses
 	agentRoleListWatcher := watch.NewAgentRoleListWatcher(agentRoleStore, workStore)
 	agentRoleListWatcher.Start()
 
+	scheduleListWatcher := watch.NewScheduleListWatcher(scheduleStore)
+	scheduleListWatcher.Start()
+	// A run's activity, like a work row's, comes from the turn of its session.
+	scheduleDetailWatcher := watch.NewScheduleDetailWatcher(scheduleStore, workStore, worktreeManager)
+	scheduleDetailWatcher.Start()
+	worktreeManager.AddSessionChangeListener(scheduleDetailWatcher)
+
 	cliLoginWatcher := watch.NewCLILoginWatcher(cliAuth)
 	cliLoginWatcher.Start()
 
@@ -118,30 +130,34 @@ func NewRPCHandler(password string, passwordGuard *authguard.Guard, sessions Ses
 	remoteURLWatcher.Start()
 
 	return &RPCHandler{
-		password:             password,
-		passwordGuard:        passwordGuard,
-		sessions:             sessions,
-		version:              version,
-		remoteURL:            remoteURL,
-		remoteURLWatcher:     remoteURLWatcher,
-		previewTickets:       previewTickets,
-		rawCapabilities:      rawCapabilities,
-		devMode:              devMode,
-		commandStore:         commandStore,
-		worktreeManager:      worktreeManager,
-		settingsStore:        settingsStore,
-		settingsWatcher:      settingsWatcher,
-		workStore:            workStore,
-		workListWatcher:      workListWatcher,
-		workDetailWatcher:    workDetailWatcher,
-		workOps:              workOps,
-		workEngine:           workEngine,
-		agentRoleStore:       agentRoleStore,
-		agentRoleListWatcher: agentRoleListWatcher,
-		cliAuth:              cliAuth,
-		cliLoginWatcher:      cliLoginWatcher,
-		cliUpdate:            cliUpdate,
-		cliUpdateWatcher:     cliUpdateWatcher,
+		password:              password,
+		passwordGuard:         passwordGuard,
+		sessions:              sessions,
+		version:               version,
+		remoteURL:             remoteURL,
+		remoteURLWatcher:      remoteURLWatcher,
+		previewTickets:        previewTickets,
+		rawCapabilities:       rawCapabilities,
+		devMode:               devMode,
+		commandStore:          commandStore,
+		worktreeManager:       worktreeManager,
+		settingsStore:         settingsStore,
+		settingsWatcher:       settingsWatcher,
+		workStore:             workStore,
+		workListWatcher:       workListWatcher,
+		workDetailWatcher:     workDetailWatcher,
+		workOps:               workOps,
+		workEngine:            workEngine,
+		agentRoleStore:        agentRoleStore,
+		agentRoleListWatcher:  agentRoleListWatcher,
+		scheduleStore:         scheduleStore,
+		scheduler:             scheduler,
+		scheduleListWatcher:   scheduleListWatcher,
+		scheduleDetailWatcher: scheduleDetailWatcher,
+		cliAuth:               cliAuth,
+		cliLoginWatcher:       cliLoginWatcher,
+		cliUpdate:             cliUpdate,
+		cliUpdateWatcher:      cliUpdateWatcher,
 	}
 }
 
@@ -151,6 +167,8 @@ func (h *RPCHandler) Stop() {
 	h.workListWatcher.Stop()
 	h.workDetailWatcher.Stop()
 	h.agentRoleListWatcher.Stop()
+	h.scheduleListWatcher.Stop()
+	h.scheduleDetailWatcher.Stop()
 	h.cliLoginWatcher.Stop()
 	h.cliUpdateWatcher.Stop()
 	h.remoteURLWatcher.Stop()
@@ -597,6 +615,34 @@ func (h *rpcMethodHandler) Handle(ctx context.Context, conn *jsonrpc2.Conn, req 
 	case "agent_role.list.unsubscribe":
 		h.handleWatcherUnsubscribe(ctx, conn, req, h.agentRoleListWatcher, "agent role list")
 		return
+	// schedule namespace (app-level)
+	case "schedule.create":
+		h.handleScheduleCreate(ctx, conn, req)
+		return
+	case "schedule.update":
+		h.handleScheduleUpdate(ctx, conn, req)
+		return
+	case "schedule.delete":
+		h.handleScheduleDelete(ctx, conn, req)
+		return
+	case "schedule.run":
+		h.handleScheduleRun(ctx, conn, req)
+		return
+	case "schedule.list.subscribe":
+		h.handleScheduleListSubscribe(ctx, conn, req)
+		return
+	case "schedule.list.unsubscribe":
+		h.handleWatcherUnsubscribe(ctx, conn, req, h.scheduleListWatcher, "schedule list")
+		return
+	case "schedule.detail.subscribe":
+		h.handleScheduleDetailSubscribe(ctx, conn, req)
+		return
+	case "schedule.detail.runs":
+		h.handleScheduleDetailRuns(ctx, conn, req)
+		return
+	case "schedule.detail.unsubscribe":
+		h.handleWatcherUnsubscribe(ctx, conn, req, h.scheduleDetailWatcher, "schedule detail")
+		return
 	// session_view namespace (app-level): another worktree's sessions, read-only
 	// but for the delete that keeps what a deleted worktree left from being kept
 	// forever (see rpc.SessionViewDeleteParams)
@@ -922,8 +968,8 @@ func (h *rpcMethodHandler) replyAuthError(ctx context.Context, conn *jsonrpc2.Co
 
 // replyListPageError splits the two kinds of refusal a request for a page of a
 // list gets, and is shared by every one of them (session.list.page,
-// work.list.archive, work.list.earlier) so that the three cannot drift into
-// disagreeing about which failures a client may retry.
+// work.list.archive, work.list.earlier, schedule.detail.runs) so that they
+// cannot drift into disagreeing about which failures a client may retry.
 //
 // A subscription the server no longer holds, a cursor it did not hand out and a
 // negative page size are the client's to get right and will refuse the same way

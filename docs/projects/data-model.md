@@ -178,6 +178,37 @@ web client's `resolveInitialRole` filters by `roleAcceptsWorkType`
 — because a hand-edited file can still produce one. A client that does not has
 the create refused by the server, visibly, rather than accepted.
 
+### Schedule
+
+A fixed prompt, the agent role that runs it, and a cron expression saying when.
+Each firing makes a [job](#jobs); the schedule itself never runs anything.
+
+| Field            | Type        | Description |
+| ---------------- | ----------- | ----------- |
+| id               | string      | UUIDv7 |
+| title            | string      | Required; becomes each run's title |
+| prompt           | string      | Required; becomes each run's body |
+| agent_role_id    | string      | Required; the role must take `job` works, judged on create and whenever it changes ([Work Type Field](#work-type-field)) |
+| cron             | string      | Standard 5 fields, stored trimmed, evaluated in the **server's local time zone** |
+| enabled          | bool        | A disabled schedule never fires, and can still be run by hand |
+| worktree         | string?     | Worktree each run is made in (empty = main); must exist when set — a worktree removed later fails the next firing, recorded as `last_failure` |
+| next_run_at      | time?       | The next firing; absent exactly when the schedule is disabled |
+| last_run_at      | time?       | The latest run *started*, by a firing or by hand |
+| last_run_work_id | string?     | That run's work id |
+| last_skipped_at  | time?       | The latest firing skipped because the previous run was still active; older than `last_run_at` once a later run has been made |
+| last_failure     | RunFailure? | `{at, work_id?, error}`: the latest run that could not be made (`work_id` absent) or started (`work_id` names the job, left `open`); cleared by the next run that starts |
+| created_at       | time        | Creation timestamp |
+| updated_at       | time        | Moves with edits to the settings above `next_run_at`, never with the run bookkeeping |
+
+The bookkeeping fields (`next_run_at` down to `last_failure`) are the
+schedule's own live state, written only by the store as the scheduler reports
+what happened; a client reads them and never sends them. Deleting a schedule
+deletes it alone: its runs are works with their own sessions and history, and
+stay where they are.
+
+How firings, overlap and missed runs behave is
+[work-system.md](../code/work-system.md#schedules).
+
 ## Hierarchy
 
 `story_id` *is* the hierarchy. A work without one is a story — unless it is a
@@ -239,15 +270,18 @@ dropped. There is no migration script.
 
 ### Storage format
 
-Both Work and AgentRole stores use JSON files:
+The Work, AgentRole and Schedule stores use JSON files:
 
 ```
 <dataDir>/
 ├── works/
 │   ├── index.json        # all Work items + Comments
 │   └── index.json.lock   # lock coordination file
-└── agent-roles/
-    ├── index.json        # all AgentRole items
+├── agent-roles/
+│   ├── index.json        # all AgentRole items
+│   └── index.json.lock   # lock coordination file
+└── schedules/
+    ├── index.json        # all Schedule items
     └── index.json.lock   # lock coordination file
 ```
 
@@ -259,6 +293,9 @@ The index files contain all items in a flat array:
 
 // agent-roles/index.json
 { "roles": [...] }
+
+// schedules/index.json
+{ "schedules": [...] }
 ```
 
 ### What the project's git sees

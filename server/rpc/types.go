@@ -37,6 +37,7 @@ import (
 	"github.com/pockode/server/command"
 	"github.com/pockode/server/contents"
 	"github.com/pockode/server/git"
+	"github.com/pockode/server/schedule"
 	"github.com/pockode/server/session"
 	"github.com/pockode/server/settings"
 	"github.com/pockode/server/work"
@@ -1429,6 +1430,92 @@ type AgentRoleListSubscribeResult struct {
 	// `ref_counts` notification — see watch.AgentRoleListWatcher. A role absent
 	// from the map is referenced by nothing.
 	WorkRefCounts map[string]int `json:"work_ref_counts"`
+}
+
+// Schedule namespace
+
+type ScheduleCreateParams struct {
+	Title       string `json:"title"`
+	Prompt      string `json:"prompt"`
+	AgentRoleID string `json:"agent_role_id"`
+	Cron        string `json:"cron"`
+	// Enabled defaults to true: a schedule is made to run, and one that has to
+	// be switched on after it is created is a second step nobody asked for.
+	Enabled  *bool  `json:"enabled,omitempty"`
+	Worktree string `json:"worktree,omitempty"`
+}
+
+// ScheduleUpdateParams follows "absent = unchanged" for every field. An empty
+// worktree moves the runs back to the main one.
+type ScheduleUpdateParams struct {
+	ID          string  `json:"id"`
+	Title       *string `json:"title,omitempty"`
+	Prompt      *string `json:"prompt,omitempty"`
+	AgentRoleID *string `json:"agent_role_id,omitempty"`
+	Cron        *string `json:"cron,omitempty"`
+	Enabled     *bool   `json:"enabled,omitempty"`
+	Worktree    *string `json:"worktree,omitempty"`
+}
+
+type ScheduleDeleteParams struct {
+	ID string `json:"id"`
+}
+
+type ScheduleRunParams struct {
+	ID string `json:"id"`
+}
+
+type ScheduleListSubscribeResult struct {
+	Items []schedule.Schedule `json:"items"`
+}
+
+type ScheduleDetailSubscribeParams struct {
+	// ID is the subscription id; see SubscribeParams.
+	ID         string `json:"id"`
+	ScheduleID string `json:"schedule_id"`
+}
+
+// ScheduleRunItem is one run of a schedule as its run list draws it: the row
+// every work list draws, plus when the run was made. A run list is ordered and
+// labelled by when each run was made, not by its last change as a work list is:
+// paged by the last change, the list would reorder under the pager every time a
+// run moved (watch.ScheduleDetailWatcher pages it).
+type ScheduleRunItem struct {
+	WorkListItem
+	CreatedAt time.Time `json:"created_at"`
+}
+
+func NewScheduleRunItem(w work.Work, state work.RowState) ScheduleRunItem {
+	return ScheduleRunItem{
+		WorkListItem: NewWorkListItem(w, state),
+		CreatedAt:    w.CreatedAt,
+	}
+}
+
+// ScheduleRunPage is a page of a schedule's runs, newest first: the first page
+// on schedule.detail, every later one from schedule.detail.runs.
+type ScheduleRunPage struct {
+	Items      []ScheduleRunItem `json:"items"`
+	NextCursor string            `json:"next_cursor,omitempty"`
+	HasMore    bool              `json:"has_more,omitempty"`
+}
+
+type ScheduleDetailSubscribeResult struct {
+	Schedule schedule.Schedule `json:"schedule"`
+	// Runs is the newest page of the schedule's runs. Every schedule.detail.changed
+	// replaces it whole; older pages are read with schedule.detail.runs.
+	Runs ScheduleRunPage `json:"runs"`
+}
+
+// ScheduleDetailRunsParams asks for a page of runs older than Cursor, against
+// an open schedule.detail subscription — which names the schedule, so that a
+// page and the detail it extends cannot come apart.
+type ScheduleDetailRunsParams struct {
+	ID string `json:"id"`
+	// Cursor is a NextCursor this server handed out. Opaque (session.ListCursor).
+	Cursor string `json:"cursor,omitempty"`
+	// Limit is the page size; zero takes the default, oversized is clamped.
+	Limit int `json:"limit,omitempty"`
 }
 
 // SessionView namespace

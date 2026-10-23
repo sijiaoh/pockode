@@ -41,6 +41,7 @@ Method names are organized using the `namespace.method` format, solving two prob
 | `settings.*` | app | `ws/rpc_settings.go` |
 | `work.*` | app | `ws/rpc_work.go` |
 | `agent_role.*` | app | `ws/rpc_agent_role.go` |
+| `schedule.*` | app | `ws/rpc_schedule.go` |
 | `agent.*` | app | `ws/rpc_agent.go` |
 | `cli_auth.*` | app | `ws/rpc_cli_auth.go` |
 | `cli_update.*` | app | `ws/rpc_cli_update.go` |
@@ -341,8 +342,8 @@ Key design points:
 
 ### Paging a Subscribed List
 
-Two of the subscribed lists grow without limit — the session sidebar and the
-project screen's closed archive — and neither is sent whole any more. Each grew
+Three of the subscribed lists grow without limit — the session sidebar, the
+project screen's closed archive and a schedule's runs — and none is sent whole. Each grew
 a *fetch* beside its push: an ordinary request the client makes when it wants
 more, answered once. Nothing here is a second subscription, and no page is ever
 pushed.
@@ -352,6 +353,7 @@ pushed.
 | `session.list.page` | worktree | `id`, `cursor?`, `limit?` | `sessions`, `next_cursor?`, `has_more?` |
 | `work.list.archive` | app | `id`, `cursor?`, `limit?` | `items`, `next_cursor?`, `has_more?` |
 | `work.list.earlier` | app | `id` | `items` |
+| `schedule.detail.runs` | app | `id`, `cursor?`, `limit?` | `items`, `next_cursor?`, `has_more?` |
 
 **`id` names a subscription, and is not a repeat of its parameters.** The
 session list is narrowed by `exclude_work_sessions`, and that narrowing is held
@@ -370,8 +372,8 @@ client needs to subscribe afresh
 - **`cursor`** is opaque. It comes from a previous `next_cursor` and goes back
   unread; empty asks for the first page. `next_cursor` is absent exactly when
   `has_more` is false, so "no next page" is one value on the wire and not two.
-- **`limit`** is optional: zero takes the server's default (30 for sessions, 20
-  for the archive), and anything above the cap is clamped rather than refused —
+- **`limit`** is optional: zero takes the server's default (30 for sessions and
+  for runs, 20 for the archive), and anything above the cap is clamped rather than refused —
   the same bargain as [history paging](../agent-chat.md#history-paging), where
   the page a client gets is still correct and the cursor still says there is
   more.
@@ -384,7 +386,7 @@ client needs to subscribe afresh
 
 **Three things are refused as `InvalidParams`**: a subscription id the server no
 longer holds, a cursor it did not hand out, and a negative page size — the last
-two only on the two methods that take them. They are grouped because a client
+two only on the methods that take them. They are grouped because a client
 does the same thing with all three, which is subscribe afresh, and the opposite
 of what it does with any other error, which is offer a Retry. A Retry over a
 request that will be refused the same way forever is a button that cannot work.
@@ -444,6 +446,8 @@ This pattern ensures:
 | `settings.subscribe` | ✅ Full settings | `onSubscribed` replaces state |
 | `remote_url.subscribe` | ✅ Current remote URL | `onSubscribed` replaces state; a reset keeps it ([why](#following-the-remote-url)) |
 | `agent_role.list.subscribe` | ✅ Full list | `onSubscribed` replaces state |
+| `schedule.list.subscribe` | ✅ Full list | `onSubscribed` replaces state |
+| `schedule.detail.subscribe` | ✅ The schedule and its newest run page | `onSubscribed` replaces state ([run paging](../projects/api.md#schedule-runs)) |
 | `chat.messages.subscribe` | ✅ Newest history page | `onSubscribed` replaces state ([paging](../agent-chat.md#history-paging)) |
 | `git.diff.subscribe` | ✅ Diff data | `onSubscribed` updates state |
 | `fs.subscribe` | ❌ Empty reply | `onSubscribed` triggers refresh |

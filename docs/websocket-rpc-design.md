@@ -45,6 +45,7 @@ Method names use the `namespace.method` format with namespaces.
 | `settings.*` | app | `ws/rpc_settings.go` |
 | `work.*` | app | `ws/rpc_work.go` |
 | `agent_role.*` | app | `ws/rpc_agent_role.go` |
+| `schedule.*` | app | `ws/rpc_schedule.go` |
 | `agent.*` | app | `ws/rpc_agent.go` |
 | `cli_auth.*` | app | `ws/rpc_cli_auth.go` |
 | `cli_update.*` | app | `ws/rpc_cli_update.go` |
