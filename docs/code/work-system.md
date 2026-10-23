@@ -1829,12 +1829,16 @@ case — the rules are in
   wiring itself up — so the main worktree can predate the call. Missing it would
   freeze that worktree's work usage for the whole process, with nothing to show
   that it happened.
-- **A session change that moved no number sends nothing.** A session is touched
-  at the end of every turn, marked unread, marked as needing input; a detail
+- **A session change that left the detail as it was sends nothing.** A session
+  is touched at the end of every turn, marked unread, marked as needing input; a detail
   notification carries the work item and its *entire* comment list. So the
-  watcher compares the fresh aggregation against the last one it sent to that
-  subscription (`work.Usage.Equal`) and stays quiet when they match. Work and
-  comment changes are never filtered this way — their payload is the news.
+  watcher compares what a session change can move — the aggregated usage, the
+  activity and the pending questions — against what it last sent to that
+  subscription, and stays quiet when they match. Work and comment changes are
+  never filtered this way — their payload is the news. The record of what was
+  sent is shared with the schedule detail, and the rules that keep it true
+  against a racing subscribe or unsubscribe are in
+  [subscription-system.md](subscription-system.md#why-a-watcher-sometimes-listens-to-a-second-store).
 
 ## Frontend Integration
 

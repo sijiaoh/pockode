@@ -1,9 +1,10 @@
 package watch
 
 import (
+	"errors"
+	"fmt"
 	"log/slog"
 	"strings"
-	"sync"
 	"sync/atomic"
 
 	"github.com/pockode/server/rpc"
@@ -30,19 +31,15 @@ type WorkDetailWatcher struct {
 	eventCh     chan detailEvent
 	dirty       atomic.Bool
 
-	// sentUsageMu guards sentUsage: what was last sent to each subscription of
-	// the two things a session change can move, which is what makes a session
-	// change that moved neither cost nothing. Keyed by subscription id and
-	// dropped on unsubscribe, so it is bounded by what clients are watching
-	// right now.
-	sentUsageMu sync.Mutex
-	sentUsage   map[string]sentDetail
+	// sent is what was last sent to each subscription of the things a session
+	// change can move, which is what makes a session change that moved none of
+	// them cost nothing. Dropped on unsubscribe, so it is bounded by what
+	// clients are watching right now.
+	sent *sentRecord[sentDetail]
 }
 
-// sentDetail is what a subscription has already been told about the two derived
-// parts of a detail. Judged per subscription, not per work item: two clients can
-// be on the same work item at different states, and telling one must not leave
-// the other stale.
+// sentDetail is what a subscription has already been told about the derived
+// parts of a detail.
 type sentDetail struct {
 	sentUsage    work.Usage
 	sentActivity work.Activity
@@ -139,14 +136,15 @@ func (w *WorkDetailWatcher) relatives(item work.Work) (workRelatives, error) {
 // idle, which is what a narrow test wants and nothing else. schedules is where
 // a job's schedule is named from; nil names none, likewise for narrow tests.
 func NewWorkDetailWatcher(store work.Store, usageSource work.SessionUsageSource, turnSource work.TurnSource, schedules ScheduleSource) *WorkDetailWatcher {
+	base := NewBaseWatcher()
 	w := &WorkDetailWatcher{
-		BaseWatcher: NewBaseWatcher(),
+		BaseWatcher: base,
 		store:       store,
 		usageSource: usageSource,
 		turnSource:  turnSource,
 		schedules:   schedules,
 		eventCh:     make(chan detailEvent, 64),
-		sentUsage:   make(map[string]sentDetail),
+		sent:        newSentRecord[sentDetail](base),
 	}
 	store.AddOnChangeListener(w)
 	store.AddOnCommentChangeListener(w)
@@ -201,7 +199,7 @@ func (w *WorkDetailWatcher) notifyChange(event detailEvent) {
 // or its comments. Those changes are frequent and mostly not about money — a
 // session is touched at the end of every turn, marked unread, marked as needing
 // input — while a detail notification carries the work item and its *entire*
-// comment list. So one is only sent if the aggregation actually moved.
+// comment list. So one is only sent if it moved something (alreadySent).
 func (w *WorkDetailWatcher) notifyForWorkID(workID string, fromSession bool) {
 	// This watcher receives every work/comment change in the app, but detail
 	// subscriptions normally exist only for the one work item a client has open.
@@ -220,18 +218,15 @@ func (w *WorkDetailWatcher) notifyForWorkID(workID string, fromSession bool) {
 		if sub.Key != workID {
 			continue
 		}
-		// Judged per subscription, not per work_id: two clients can be on the same
-		// work item at different aggregations, and telling one of them must not
-		// leave the other stale.
-		if fromSession && w.usageAlreadySent(sub.ID, detail.Usage) && !w.derivedMoved(sub.ID, detail) {
+		if fromSession && w.alreadySent(sub.ID, detail) {
 			continue
 		}
-		w.rememberSent(sub.ID, detail)
 		w.notifyDetail(sub, detail)
 	}
 }
 
 func (w *WorkDetailWatcher) notifyDetail(sub *Subscription, detail WorkDetail) {
+	w.sent.remember(sub.ID, newSentDetail(detail))
 	n := Notification{Method: "work.detail.changed", Params: workDetailChangedParams{
 		ID:               sub.ID,
 		Work:             rpc.NewWorkDetailItem(detail.Work),
@@ -275,31 +270,38 @@ func (w *WorkDetailWatcher) notifyForSessionID(sessionID string) {
 // buildDetail reads a work item's current detail, or reports that there is none
 // to send — the work item was deleted between the event and this read.
 func (w *WorkDetailWatcher) buildDetail(workID string) (WorkDetail, bool) {
-	item, found, err := w.store.Get(workID)
+	detail, err := w.readDetail(workID)
 	if err != nil {
-		slog.Error("failed to get work for detail notification", "error", err, "workId", workID)
+		if !errors.Is(err, work.ErrWorkNotFound) {
+			slog.Error("failed to read work detail", "error", err, "workId", workID)
+		}
 		return WorkDetail{}, false
 	}
+	return detail, true
+}
+
+func (w *WorkDetailWatcher) readDetail(workID string) (WorkDetail, error) {
+	item, found, err := w.store.Get(workID)
+	if err != nil {
+		return WorkDetail{}, fmt.Errorf("get work: %w", err)
+	}
 	if !found {
-		return WorkDetail{}, false
+		return WorkDetail{}, work.ErrWorkNotFound
 	}
 
 	comments, err := w.store.ListComments(workID)
 	if err != nil {
-		slog.Error("failed to list comments for detail notification", "error", err, "workId", workID)
-		return WorkDetail{}, false
+		return WorkDetail{}, fmt.Errorf("list comments: %w", err)
 	}
 
 	usage, err := work.AggregateUsage(w.store, w.usageSource, item)
 	if err != nil {
-		slog.Error("failed to aggregate work usage", "error", err, "workId", workID)
-		return WorkDetail{}, false
+		return WorkDetail{}, fmt.Errorf("aggregate usage: %w", err)
 	}
 
 	relatives, err := w.relatives(item)
 	if err != nil {
-		slog.Error("failed to read work relatives for detail notification", "error", err, "workId", workID)
-		return WorkDetail{}, false
+		return WorkDetail{}, fmt.Errorf("read relatives: %w", err)
 	}
 
 	resolver := work.NewActivityResolver(w.turnSource)
@@ -312,37 +314,26 @@ func (w *WorkDetailWatcher) buildDetail(workID string) (WorkDetail, bool) {
 		Children:         relatives.children,
 		Parent:           relatives.parent,
 		Schedule:         relatives.schedule,
-	}, true
+	}, nil
 }
 
-// usageAlreadySent reports whether this subscription has the aggregation
-// already. A subscription we have recorded nothing for counts as not having it.
-func (w *WorkDetailWatcher) usageAlreadySent(subID string, usage work.Usage) bool {
-	w.sentUsageMu.Lock()
-	defer w.sentUsageMu.Unlock()
-	sent, found := w.sentUsage[subID]
-	return found && sent.sentUsage.Equal(usage)
-}
-
-// derivedMoved is the other half of the same question, and the reason a session
-// change is not judged on money alone: a turn starting spends nothing and is the
-// most visible thing that can happen to an open work item — and so is a question
-// appearing on it.
-func (w *WorkDetailWatcher) derivedMoved(subID string, detail WorkDetail) bool {
-	w.sentUsageMu.Lock()
-	defer w.sentUsageMu.Unlock()
-	sent, found := w.sentUsage[subID]
+// alreadySent reports whether this subscription has every part of detail a
+// session change can move. Not money alone: a turn starting spends nothing and
+// is the most visible thing that can happen to an open work item — and so is a
+// question appearing on it.
+func (w *WorkDetailWatcher) alreadySent(subID string, detail WorkDetail) bool {
+	sent, found := w.sent.get(subID)
 	if !found {
 		return false
 	}
-	return sent.sentActivity != detail.Activity ||
-		sent.sentQuestions != questionFingerprint(detail.PendingQuestions)
+	now := newSentDetail(detail)
+	return sent.sentUsage.Equal(now.sentUsage) &&
+		sent.sentActivity == now.sentActivity &&
+		sent.sentQuestions == now.sentQuestions
 }
 
-func (w *WorkDetailWatcher) rememberSent(subID string, detail WorkDetail) {
-	w.sentUsageMu.Lock()
-	defer w.sentUsageMu.Unlock()
-	w.sentUsage[subID] = sentDetail{
+func newSentDetail(detail WorkDetail) sentDetail {
+	return sentDetail{
 		sentUsage:     detail.Usage,
 		sentActivity:  detail.Activity,
 		sentQuestions: questionFingerprint(detail.PendingQuestions),
@@ -359,13 +350,11 @@ func questionFingerprint(questions []session.PendingQuestion) string {
 	return strings.Join(ids, "\n")
 }
 
-// Unsubscribe also forgets what that subscription was sent — otherwise the map
+// Unsubscribe also forgets what that subscription was sent — otherwise the record
 // would keep an entry per work item ever opened, for the life of the process.
 func (w *WorkDetailWatcher) Unsubscribe(id string) {
 	w.RemoveSubscription(id)
-	w.sentUsageMu.Lock()
-	defer w.sentUsageMu.Unlock()
-	delete(w.sentUsage, id)
+	w.sent.forget(id)
 }
 
 // notifySyncAll sends the full detail for every subscribed work_id.
@@ -396,7 +385,6 @@ func (w *WorkDetailWatcher) notifySyncAll() {
 		if !ok {
 			continue
 		}
-		w.rememberSent(sub.ID, d)
 		w.notifyDetail(sub, d)
 	}
 
@@ -418,49 +406,16 @@ func (w *WorkDetailWatcher) Subscribe(id, workID string, notifier Notifier) (Wor
 		return WorkDetail{}, err
 	}
 
-	item, found, err := w.store.Get(workID)
+	detail, err := w.readDetail(workID)
 	if err != nil {
-		w.RemoveSubscription(id)
+		// Unsubscribe, not RemoveSubscription: the loop may have sent this
+		// subscription something already, and recorded it.
+		w.Unsubscribe(id)
 		return WorkDetail{}, err
-	}
-	if !found {
-		w.RemoveSubscription(id)
-		return WorkDetail{}, work.ErrWorkNotFound
-	}
-
-	comments, err := w.store.ListComments(workID)
-	if err != nil {
-		w.RemoveSubscription(id)
-		return WorkDetail{}, err
-	}
-
-	usage, err := work.AggregateUsage(w.store, w.usageSource, item)
-	if err != nil {
-		w.RemoveSubscription(id)
-		return WorkDetail{}, err
-	}
-
-	resolver := work.NewActivityResolver(w.turnSource)
-
-	relatives, err := w.relatives(item)
-	if err != nil {
-		w.RemoveSubscription(id)
-		return WorkDetail{}, err
-	}
-
-	detail := WorkDetail{
-		Work:             item,
-		Comments:         comments,
-		Usage:            usage,
-		Activity:         resolver.Activity(item),
-		PendingQuestions: resolver.PendingQuestions(item),
-		Children:         relatives.children,
-		Parent:           relatives.parent,
-		Schedule:         relatives.schedule,
 	}
 	// The reply carries every derived part, so the subscriber already has them:
 	// a session change that moves none of them is then not worth a notification.
-	w.rememberSent(id, detail)
+	w.sent.rememberReply(id, newSentDetail(detail))
 	return detail, nil
 }
 

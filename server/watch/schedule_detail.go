@@ -5,7 +5,6 @@ import (
 	"log/slog"
 	"slices"
 	"sort"
-	"sync"
 	"sync/atomic"
 
 	"github.com/pockode/server/rpc"
@@ -29,13 +28,11 @@ type ScheduleDetailWatcher struct {
 	eventCh    chan scheduleDetailEvent
 	dirty      atomic.Bool
 
-	// sentRunsMu guards sentRuns: the run page last sent to each subscription.
-	// A session is touched at the end of every turn, marked unread, credited
-	// with usage, and almost none of that moves a run's row — so a session change
-	// is only sent on when the page it would send differs from this. Keyed by
-	// subscription id and dropped on unsubscribe.
-	sentRunsMu sync.Mutex
-	sentRuns   map[string][]rpc.ScheduleRunItem
+	// sentRuns is the run page last sent to each subscription. A session is
+	// touched at the end of every turn, marked unread, credited with usage, and
+	// almost none of that moves a run's row — so a session change is only sent
+	// on when the page it would send differs from this.
+	sentRuns *sentRecord[[]rpc.ScheduleRunItem]
 }
 
 // scheduleDetailEvent is a union of what alters a detail: the schedule or one
@@ -57,13 +54,14 @@ type ScheduleDetail struct {
 // read from; turnSource is where their activity is derived from (nil reads
 // every run as idle, which only a narrow test wants).
 func NewScheduleDetailWatcher(store schedule.Store, workStore work.Store, turnSource work.TurnSource) *ScheduleDetailWatcher {
+	base := NewBaseWatcher()
 	w := &ScheduleDetailWatcher{
-		BaseWatcher: NewBaseWatcher(),
+		BaseWatcher: base,
 		store:       store,
 		workStore:   workStore,
 		turnSource:  turnSource,
 		eventCh:     make(chan scheduleDetailEvent, 64),
-		sentRuns:    make(map[string][]rpc.ScheduleRunItem),
+		sentRuns:    newSentRecord[[]rpc.ScheduleRunItem](base),
 	}
 	store.AddOnChangeListener(w)
 	workStore.AddOnChangeListener(w)
@@ -163,7 +161,7 @@ func (w *ScheduleDetailWatcher) notifySyncAll() {
 }
 
 func (w *ScheduleDetailWatcher) notifyDetail(sub *Subscription, detail ScheduleDetail) {
-	w.rememberRuns(sub.ID, detail.Runs.Items)
+	w.sentRuns.remember(sub.ID, detail.Runs.Items)
 	n := Notification{Method: "schedule.detail.changed", Params: scheduleDetailChangedParams{
 		ID:         sub.ID,
 		Schedule:   detail.Schedule,
@@ -240,25 +238,8 @@ func runCursor(run work.Work) session.ListCursor {
 }
 
 func (w *ScheduleDetailWatcher) runsAlreadySent(subID string, runs []rpc.ScheduleRunItem) bool {
-	w.sentRunsMu.Lock()
-	defer w.sentRunsMu.Unlock()
-	sent, found := w.sentRuns[subID]
+	sent, found := w.sentRuns.get(subID)
 	return found && slices.Equal(sent, runs)
-}
-
-// rememberRuns records what the loop just sent subID.
-//
-// The subscription is looked up after the write, not before: an unsubscribe
-// that removed it before the lookup is undone here, and one that removes it
-// after deletes this entry itself — either way nothing is left behind for a
-// subscription that is gone.
-func (w *ScheduleDetailWatcher) rememberRuns(subID string, runs []rpc.ScheduleRunItem) {
-	w.sentRunsMu.Lock()
-	defer w.sentRunsMu.Unlock()
-	w.sentRuns[subID] = runs
-	if w.GetSubscription(subID) == nil {
-		delete(w.sentRuns, subID)
-	}
 }
 
 // Subscribe registers a subscriber for one schedule's detail, under the
@@ -278,21 +259,14 @@ func (w *ScheduleDetailWatcher) Subscribe(id, scheduleID string, notifier Notifi
 
 	detail, err := w.readDetail(scheduleID)
 	if err != nil {
-		w.RemoveSubscription(id)
+		// Unsubscribe, not RemoveSubscription: the loop may have sent this
+		// subscription something already, and recorded it.
+		w.Unsubscribe(id)
 		return ScheduleDetail{}, err
 	}
 	// The reply carries the page, so a session change that leaves it as it is
-	// is not news to this subscriber — unless the loop has already sent it
-	// something since it was registered. That notification may have been built
-	// from an earlier read than this one and still reach the client after the
-	// reply, leaving it holding the older page; recording the reply over it
-	// would then suppress the change that corrects it. Keeping the loop's record
-	// costs at most one repeated page when the order is the other way round.
-	w.sentRunsMu.Lock()
-	if _, sent := w.sentRuns[id]; !sent {
-		w.sentRuns[id] = detail.Runs.Items
-	}
-	w.sentRunsMu.Unlock()
+	// is not news to this subscriber.
+	w.sentRuns.rememberReply(id, detail.Runs.Items)
 	return detail, nil
 }
 
@@ -310,9 +284,7 @@ func (w *ScheduleDetailWatcher) Runs(id, cursor string, limit int) (rpc.Schedule
 // Unsubscribe also forgets what that subscription was sent.
 func (w *ScheduleDetailWatcher) Unsubscribe(id string) {
 	w.RemoveSubscription(id)
-	w.sentRunsMu.Lock()
-	defer w.sentRunsMu.Unlock()
-	delete(w.sentRuns, id)
+	w.sentRuns.forget(id)
 }
 
 // scheduleDetailChangedParams is the whole detail every time, so it carries the

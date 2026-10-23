@@ -1,7 +1,9 @@
 package watch
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"sync"
 	"testing"
 
@@ -584,10 +586,114 @@ func TestWorkDetailWatcher_UnsubscribeForgetsSentUsage(t *testing.T) {
 	w.Subscribe("client-1", "w1", &captureNotifier{})
 	w.Unsubscribe("client-1")
 
-	w.sentUsageMu.Lock()
-	defer w.sentUsageMu.Unlock()
-	if len(w.sentUsage) != 0 {
-		t.Errorf("sentUsage still holds %d entries after unsubscribe", len(w.sentUsage))
+	if n := w.sent.size(); n != 0 {
+		t.Errorf("sent still holds %d entries after unsubscribe", n)
+	}
+}
+
+func (r *sentRecord[T]) size() int {
+	r.sentMu.Lock()
+	defer r.sentMu.Unlock()
+	return len(r.sent)
+}
+
+// readHookStore runs onGet before each read of a work item, which is where a
+// test puts what has to happen between a subscription being registered and
+// Subscribe reading the store.
+type readHookStore struct {
+	*mockDetailStore
+	onGet func()
+}
+
+func (s *readHookStore) Get(id string) (work.Work, bool, error) {
+	if hook := s.onGet; hook != nil {
+		s.onGet = nil
+		hook()
+	}
+	return s.mockDetailStore.Get(id)
+}
+
+// The loop can send a new subscription a notification built from a read older
+// than the subscribe reply's, and that notification can reach the client after
+// the reply — leaving it on the older usage. The next session change has to
+// correct it, even though it leaves the usage where the reply had it.
+func TestWorkDetailWatcher_SubscribeKeepsWhatTheLoopAlreadySent(t *testing.T) {
+	src := newMockUsageSource().set("", "s1", inputTokens(1))
+	store := &readHookStore{mockDetailStore: &mockDetailStore{works: []work.Work{{ID: "w1", SessionID: "s1"}}}}
+	// Not started: the test plays the loop itself, so the interleaving is fixed.
+	w := NewWorkDetailWatcher(store, src, nil, nil)
+
+	notifier := &captureNotifier{}
+	store.onGet = func() {
+		w.notifyForSessionID("s1")
+		src.set("", "s1", inputTokens(2))
+	}
+	detail, err := w.Subscribe("client-1", "w1", notifier)
+	if err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+	if detail.Usage.Own == nil || detail.Usage.Own.InputTokens != 2 {
+		t.Fatalf("subscribe reply usage = %+v, want 2", detail.Usage.Own)
+	}
+	if notifier.count() != 1 {
+		t.Fatalf("got %d notifications from the loop, want the one built before the reply", notifier.count())
+	}
+
+	w.notifyForSessionID("s1")
+
+	if notifier.count() != 2 {
+		t.Fatalf("got %d notifications, want the stale one corrected", notifier.count())
+	}
+	var params workDetailChangedParams
+	if err := json.Unmarshal(notifier.last(), &params); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if params.Usage.Own == nil || params.Usage.Own.InputTokens != 2 {
+		t.Errorf("notified usage = %+v, want 2", params.Usage.Own)
+	}
+}
+
+// unsubscribingNotifier unsubscribes another subscription the first time it is
+// notified, the way a client leaving a page can while the loop is mid-way
+// through notifying the subscriptions it snapshotted.
+type unsubscribingNotifier struct {
+	captureNotifier
+	unsubscribe func()
+}
+
+func (n *unsubscribingNotifier) Notify(ctx context.Context, notif Notification) error {
+	if u := n.unsubscribe; u != nil {
+		n.unsubscribe = nil
+		u()
+	}
+	return n.captureNotifier.Notify(ctx, notif)
+}
+
+// An unsubscribe can land after the loop snapshotted the subscriptions and
+// before it recorded what it sent one of them. That record must not outlive the
+// subscription.
+func TestWorkDetailWatcher_UnsubscribeMidNotificationDropsItsRecord(t *testing.T) {
+	store := &mockDetailStore{works: []work.Work{{ID: "w1", SessionID: "s1"}}}
+	w := NewWorkDetailWatcher(store, newMockUsageSource(), nil, nil)
+
+	// Whichever of the two is notified first unsubscribes the other, which the
+	// loop then still reaches from its snapshot.
+	var once sync.Once
+	first := &unsubscribingNotifier{}
+	second := &unsubscribingNotifier{}
+	first.unsubscribe = func() { once.Do(func() { w.Unsubscribe("client-2") }) }
+	second.unsubscribe = func() { once.Do(func() { w.Unsubscribe("client-1") }) }
+	if _, err := w.Subscribe("client-1", "w1", first); err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+	if _, err := w.Subscribe("client-2", "w1", second); err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+
+	w.notifyForWorkID("w1", false)
+
+	if n := w.sent.size(); n != 1 {
+		t.Errorf("sent holds %d entries, want only the remaining subscription's", n)
 	}
 }
 
@@ -689,5 +795,24 @@ func TestWorkDetailWatcher_CarriesItsChildrenAndItsParent(t *testing.T) {
 	}
 	if child.Parent == nil || child.Parent.ID != "story" {
 		t.Errorf("parent = %+v, want the story", child.Parent)
+	}
+}
+
+// A subscribe that fails after the loop already sent the subscription something
+// must not leave that record behind: the client never got an id to unsubscribe.
+func TestWorkDetailWatcher_FailedSubscribeLeavesNoRecord(t *testing.T) {
+	store := &readHookStore{mockDetailStore: &mockDetailStore{works: []work.Work{{ID: "w1", SessionID: "s1"}}}}
+	w := NewWorkDetailWatcher(store, newMockUsageSource(), nil, nil)
+
+	store.onGet = func() {
+		w.notifyForWorkID("w1", false)
+		store.works = nil
+	}
+	if _, err := w.Subscribe("client-1", "w1", &captureNotifier{}); !errors.Is(err, work.ErrWorkNotFound) {
+		t.Fatalf("Subscribe error = %v, want ErrWorkNotFound", err)
+	}
+
+	if n := w.sent.size(); n != 0 {
+		t.Errorf("sent still holds %d entries after a failed subscribe", n)
 	}
 }
