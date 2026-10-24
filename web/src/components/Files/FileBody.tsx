@@ -109,7 +109,6 @@ function FileBody({
 					fileName={splitPath(path).fileName}
 					mime={state.mime}
 					size={state.size}
-					content={state.source.kind === "text" ? state.source.content : null}
 					// What a rewrite changes. A commit never changes, so its page is
 					// never reloaded by this.
 					revision={

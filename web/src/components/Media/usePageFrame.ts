@@ -65,7 +65,7 @@ function initialState(identity: string): State {
  * server's wording is about capabilities.
  */
 const OUTSIDE_ROOT = new Error(
-	"Pages can't be shown from here: this file is in another worktree or in Pockode's data folder, or is a link to outside the project or into a hidden folder. Open it from where it really is.",
+	"Pages can't be shown from here: this file is in another worktree, in Pockode's data folder or in .git, is a .env file, or is a link to outside the project or to one of those. Open a link from where it really is.",
 );
 
 function sorted(hosts: ReadonlySet<string>): readonly string[] {
@@ -146,10 +146,10 @@ export function usePageFrame(
 
 	const toPage = useCallback(
 		(capabilityUrl: string) => ({
-			url: pageRawUrl(target, capabilityUrl, path),
+			url: pageRawUrl(capabilityUrl, path),
 			root: capabilityRoot(capabilityUrl),
 		}),
-		[target, path],
+		[path],
 	);
 
 	// The first capability is taken as it comes; later ones only after a

@@ -35,7 +35,6 @@ const rawCapability = vi.fn(async ({ scope }: { scope: "file" | "root" }) => ({
 function renderPage(
 	origin: TreeOrigin = { kind: "file", path: "index.html" },
 	revision: unknown = "v1",
-	content: string | null = "<p>A page</p>",
 ) {
 	const queryClient = new QueryClient({
 		defaultOptions: { queries: { retry: false } },
@@ -47,7 +46,6 @@ function renderPage(
 				fileName={origin.path.split("/").pop() ?? ""}
 				mime="text/html; charset=utf-8"
 				size={2048}
-				content={content}
 				revision={rev}
 			/>
 		</QueryClientProvider>
@@ -137,13 +135,10 @@ describe("PagePreview", () => {
 		expect(screen.getByText("HTML · 2 KB")).toBeInTheDocument();
 	});
 
-	it("loads a page at the root through the root, with nothing to say", async () => {
+	// A build in a dot folder loads its own assets like any other page.
+	it("loads a page in a dot folder through the root, with nothing to say", async () => {
 		stubProbe();
-		renderPage(
-			{ kind: "file", path: "index.html" },
-			"v1",
-			'<link rel="stylesheet" href="style.css">',
-		);
+		renderPage({ kind: "file", path: "docs/.vitepress/dist/index.html" });
 
 		const element = await frame();
 		expect(rawCapability).toHaveBeenCalledWith({
@@ -151,7 +146,9 @@ describe("PagePreview", () => {
 			scope: "root",
 			page: { hosts: [] },
 		});
-		expect(pageUrlOf(element)).toBe(apiUrl("/api/raw/cap1/index.html"));
+		expect(pageUrlOf(element)).toBe(
+			apiUrl("/api/raw/cap1/docs/.vitepress/dist/index.html"),
+		);
 		expect(screen.queryByRole("note")).not.toBeInTheDocument();
 	});
 
@@ -187,24 +184,7 @@ describe("PagePreview", () => {
 		expect(pageUrlOf(element)).toBe(apiUrl("/api/raw/cap1/site/index.html"));
 	});
 
-	// The server's root scope withholds them, so asking through it would fail.
-	it.each([
-		["in a hidden folder", "docs/.vitepress/dist/index.html"],
-		["named as a hidden file", "docs/.draft.html"],
-	])("asks for the page alone %s", async (_, path) => {
-		stubProbe();
-		renderPage({ kind: "file", path });
-
-		const element = await frame();
-		expect(rawCapability).toHaveBeenCalledWith({
-			origin: { kind: "file", path },
-			scope: "file",
-			page: { hosts: [] },
-		});
-		expect(pageUrlOf(element)).toBe(apiUrl("/api/raw/cap1/index.html"));
-	});
-
-	it("shows a page the root does not reach as a failure, not on its own", async () => {
+	it("shows a page the root does not reach as a failure", async () => {
 		stubProbe(
 			Response.json(
 				{ error: "outside the capability's scope", code: "outside_scope" },
@@ -531,67 +511,6 @@ describe("PagePreview", () => {
 			expect(
 				screen.queryByRole("button", { name: "View full screen" }),
 			).not.toBeInTheDocument();
-		});
-	});
-
-	describe("notice for a page shown on its own", () => {
-		const LINKED = '<link rel="stylesheet" href="style.css"><p>A page</p>';
-		const HIDDEN: TreeOrigin = {
-			kind: "file",
-			path: "docs/.vitepress/index.html",
-		};
-		const notice = () => screen.queryByRole("note");
-
-		it.each([
-			["in a hidden folder", HIDDEN],
-			["named as a hidden file", { kind: "file", path: "docs/.draft.html" }],
-			[
-				"in a commit's hidden folder",
-				{ kind: "commit", hash: "abc", path: ".github/index.html" },
-			],
-		] satisfies [
-			string,
-			TreeOrigin,
-		][])("says its linked files won't load %s", async (_, origin) => {
-			stubProbe();
-			renderPage(origin, "v1", LINKED);
-
-			expect(await screen.findByRole("note")).toHaveTextContent(
-				"Files this page links to won't load",
-			);
-		});
-
-		it("is not shown for a page that links to nothing", async () => {
-			stubProbe();
-			renderPage(
-				HIDDEN,
-				"v1",
-				'<a href="#top">Top</a><img src="data:image/png;base64,AA==">',
-			);
-
-			await frame();
-			expect(notice()).not.toBeInTheDocument();
-		});
-
-		it("is shown for a page too large to read", async () => {
-			stubProbe();
-			renderPage(HIDDEN, "v1", null);
-
-			expect(await screen.findByRole("note")).toBeInTheDocument();
-		});
-
-		it("shows in the viewer too", async () => {
-			stubProbe();
-			const user = userEvent.setup();
-			renderPage(HIDDEN, "v1", LINKED);
-
-			await user.click(
-				await screen.findByRole("button", { name: "View full screen" }),
-			);
-			const dialog = await screen.findByRole("dialog");
-			expect(within(dialog).getByRole("note")).toHaveTextContent(
-				"Files this page links to won't load",
-			);
 		});
 	});
 });

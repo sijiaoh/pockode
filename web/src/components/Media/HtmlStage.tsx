@@ -86,7 +86,7 @@ export default function HtmlStage({
 					/>
 				</div>
 			) : frameProps ? (
-				// The strip is under the toolbar and the notice, as in place.
+				// The strip is under the toolbar, as in place.
 				<div className="absolute inset-0 flex flex-col">
 					<PageHostsStrip key={page.stripKey} {...page.strip} />
 					<div className="relative min-h-0 flex-1">
