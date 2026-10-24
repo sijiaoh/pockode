@@ -62,22 +62,28 @@ const (
 	// RawScopeFile reaches the one file Path names.
 	RawScopeFile RawScope = "file"
 	// RawScopeRoot reaches the whole work directory or commit, Path empty,
-	// except dotfiles. It is for a page, which is opened at its own path
-	// beneath the root so that its relative URLs — `../` and script-built
+	// except what holds secrets. It is for a page, which is opened at its own
+	// path beneath the root so that its relative URLs — `../` and script-built
 	// ones included — load whatever project file they name.
 	//
-	// Nothing whose path has a dot-prefixed component: a page sits beside the
-	// .env of its app, and .git and .pockode would hand its scripts the
-	// repository or Pockode's own data. A dotfile the user means to see takes
-	// a file scope of its own, as does a page inside a dot directory
-	// (docs/.vitepress/dist).
+	// What it withholds is a short list, not every dot path: a page's scripts
+	// read without asking anyone, and the page may be a third party's (a
+	// cloned repository, node_modules, an upload), so the list is what costs
+	// most once it leaks and that no ordinary page needs — .git (the
+	// repository token with --git), .env and .env.* (sensitiveName), Pockode's
+	// data directory, whose tokens take over the server, and every other
+	// worktree. Everything else is a file like any other, the build output
+	// in docs/.vitepress/dist or .output/public included, which would
+	// otherwise load nothing of its own. A withheld file the user means to see
+	// takes a file scope of its own.
 	//
 	// For a work-directory file the checks are on the name asked for and on
 	// the name the file system resolves it to (contents.ResolvedName), so
 	// that neither a link nor, on Windows, a short name such as ENV~1 is
-	// another way to .env. The resolved name is also held out of Pockode's
-	// data directory and of every other worktree, wherever settings put them:
-	// a worktree's capability reads its own files only (inWithheldDir).
+	// another way to .env. The data directory and the other worktrees are
+	// matched on the resolved name only, by identity rather than by name,
+	// wherever settings put them: a worktree's capability reads its own files
+	// only (inWithheldDir).
 	RawScopeRoot RawScope = "root"
 	// RawScopeFolder reaches the folder Path names in a work directory — the
 	// work directory itself for an empty Path — as one zip archive, served as
@@ -235,16 +241,27 @@ func cleanGrantPath(p string) string {
 	return filepath.ToSlash(filepath.Clean(filepath.FromSlash(p)))
 }
 
-// hasDotComponent reports whether any component of p, a slash path, starts
-// with a dot. Split on the native separator as well: on Windows "site\.env"
-// is "site/.env".
-func hasDotComponent(p string) bool {
+// hasSensitiveComponent reports whether any component of p, a slash path, is
+// a sensitiveName. Split on the native separator as well: on Windows
+// "site\.env" is "site/.env".
+func hasSensitiveComponent(p string) bool {
 	for _, name := range strings.Split(filepath.FromSlash(p), string(filepath.Separator)) {
-		if strings.HasPrefix(name, ".") {
+		if sensitiveName(name) {
 			return true
 		}
 	}
 	return false
+}
+
+// sensitiveName reports whether name, one path component, is withheld from a
+// root scope wherever it appears. At any depth, not only at the root: a
+// nested repository or a submodule has a .git of its own, and an app in a
+// subdirectory its own .env. Without regard to case on every platform: the
+// resolved name keeps the spelling it was asked by on a case-insensitive file
+// system (macOS by default), so .GIT/config is .git/config there.
+func sensitiveName(name string) bool {
+	name = strings.ToLower(name)
+	return name == ".git" || name == ".env" || strings.HasPrefix(name, ".env.")
 }
 
 // RawEntryPath is the URL path a grant issued as capability is opened at: the
@@ -289,7 +306,8 @@ func RawPath(capability, rel string) string {
 // own scripts read what the scope reaches and — to a host the reader has
 // allowed for the page (pagePolicy) — send the bytes out, where without it
 // they could send only the URL, useless to whoever cannot reach this server,
-// as on a server kept to its LAN. That is why no scope reaches a dotfile.
+// as on a server kept to its LAN. That is why a root scope withholds what
+// holds secrets (RawScopeRoot).
 type RawHandler struct {
 	files        *Handler
 	attachments  *AttachmentHandler
@@ -382,7 +400,7 @@ func (h *RawHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if grant.Scope == RawScopeFile && rel != path.Base(grant.Path) ||
-		grant.Scope == RawScopeRoot && hasDotComponent(rel) {
+		grant.Scope == RawScopeRoot && hasSensitiveComponent(rel) {
 		h.files.writeError(w, errf(http.StatusForbidden, CodeOutsideScope, "%s is outside this capability", rel), nil)
 		return
 	}
@@ -664,7 +682,8 @@ func (h *RawHandler) serveWorkDirFile(w *rawResponseWriter, r *http.Request, gra
 }
 
 // withinRootScope refuses f, opened in root (workDir) as name, if what the file
-// system resolved it to is a dotfile or lies inside a withheld directory.
+// system resolved it to has a sensitive name or lies inside a withheld
+// directory.
 func (h *RawHandler) withinRootScope(root *os.Root, workDir, worktree, name, rel string, f *os.File) *apiError {
 	resolved, err := contents.ResolvedName(root, name, f)
 	if err != nil {
@@ -673,7 +692,7 @@ func (h *RawHandler) withinRootScope(root *os.Root, workDir, worktree, name, rel
 		h.files.log.Warn("cannot resolve raw file name", "worktree", worktree, "path", rel, "error", err)
 		return errf(http.StatusForbidden, CodeOutsideScope, "cannot resolve %s within this capability", rel)
 	}
-	if hasDotComponent(filepath.ToSlash(resolved)) {
+	if hasSensitiveComponent(filepath.ToSlash(resolved)) {
 		return errf(http.StatusForbidden, CodeOutsideScope, "%s is outside this capability", rel)
 	}
 	withheld, err := h.inWithheldDir(workDir, resolved)

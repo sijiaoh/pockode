@@ -475,6 +475,8 @@ func TestRawWorkDirFile(t *testing.T) {
 
 func TestRawScope(t *testing.T) {
 	f := newRawFixture(t)
+	// Where the data directory is by default, under a name no rule withholds.
+	f.h.files.dataDir = filepath.Join(f.workDir, ".pockode")
 	writeFile(t, f.workDir, ".env", []byte("SECRET=1"))
 	writeFile(t, f.workDir, "index.html", []byte("index"))
 	writeFile(t, f.workDir, "assets/style.css", []byte("style"))
@@ -535,15 +537,36 @@ func TestRawScope(t *testing.T) {
 		}
 	})
 
-	t.Run("a root scope refuses dotfiles", func(t *testing.T) {
+	t.Run("a root scope withholds the sensitive names, at any depth and in any case", func(t *testing.T) {
+		writeFile(t, f.workDir, ".env.local", []byte("SECRET=2"))
+		writeFile(t, f.workDir, "site/.env", []byte("SECRET=3"))
+		writeFile(t, f.workDir, "site/.Env.Production", []byte("SECRET=4"))
 		writeFile(t, f.workDir, ".git/config", []byte("config"))
-		writeFile(t, f.workDir, ".pockode/sessions.json", []byte("{}"))
-		writeFile(t, f.workDir, "site/.env", []byte("SECRET=2"))
-		writeFile(t, f.workDir, "docs/.vitepress/dist/index.html", []byte("built"))
-		for _, rel := range []string{".env", ".git/config", ".pockode/sessions.json", "site/.env", "docs/.vitepress/dist/index.html", "site/sub/../page.html", "site/./sub/page.html"} {
+		writeFile(t, f.workDir, "vendor/repo/.git/config", []byte("nested"))
+		writeFile(t, f.workDir, "vendor/module/.git", []byte("gitdir: ../../.git/modules/module"))
+		writeFile(t, f.workDir, ".GIT/HEAD", []byte("ref"))
+		for _, rel := range []string{".env", ".env.local", "site/.env", "site/.Env.Production", ".git/config", "vendor/repo/.git/config", "vendor/module/.git", ".GIT/HEAD"} {
 			assertError(t, f.get(t, RawPath(root, rel), nil), http.StatusForbidden, CodeOutsideScope)
 		}
 		assertError(t, f.get(t, RawPathPrefix+root+"/%2eenv", nil), http.StatusForbidden, CodeOutsideScope)
+	})
+
+	t.Run("a root scope withholds the data directory", func(t *testing.T) {
+		writeFile(t, f.workDir, ".pockode/sessions.json", []byte("{}"))
+		assertError(t, f.get(t, RawPath(root, ".pockode/sessions.json"), nil), http.StatusForbidden, CodeOutsideScope)
+	})
+
+	t.Run("a root scope serves every other dot path", func(t *testing.T) {
+		for rel, body := range map[string]string{
+			"docs/.vitepress/dist/index.html": "built",
+			".output/public/app.js":           "app",
+			".github/workflows/ci.yml":        "ci",
+			".well-known/security.txt":        "contact",
+			"site/.environment.json":          "env",
+		} {
+			writeFile(t, f.workDir, rel, []byte(body))
+			assertBody(t, f.get(t, RawPath(root, rel), nil), http.StatusOK, body)
+		}
 	})
 
 	t.Run("a file scope serves the dotfile it names", func(t *testing.T) {
@@ -557,11 +580,13 @@ func TestRawScope(t *testing.T) {
 		assertError(t, f.get(t, RawPathPrefix+root, nil), http.StatusBadRequest, CodeInvalidPath)
 	})
 
-	t.Run("refuses a symlink out of the project or to a dotfile", func(t *testing.T) {
+	t.Run("refuses a symlink out of the project or to what it withholds", func(t *testing.T) {
 		outside := filepath.Join(t.TempDir(), "outside.txt")
 		writeFile(t, filepath.Dir(outside), "outside.txt", []byte("outside"))
 		symlinktest.Make(t, filepath.Join("..", ".env"), filepath.Join(f.workDir, "site", "env"))
 		symlinktest.Make(t, ".pockode", filepath.Join(f.workDir, "data"))
+		symlinktest.Make(t, ".git", filepath.Join(f.workDir, "repo"))
+		symlinktest.Make(t, filepath.Join("..", ".env.local"), filepath.Join(f.workDir, "site", "local.css"))
 		symlinktest.Make(t, outside, filepath.Join(f.workDir, "abs"))
 		symlinktest.Make(t, filepath.Dir(outside), filepath.Join(f.workDir, "elsewhere"))
 		symlinktest.Make(t, filepath.Join("..", "index.html"), filepath.Join(f.workDir, "site", "alias.html"))
@@ -569,6 +594,8 @@ func TestRawScope(t *testing.T) {
 		// A link inside the project to what the scope does not serve.
 		assertError(t, f.get(t, RawPath(root, "site/env"), nil), http.StatusForbidden, CodeOutsideScope)
 		assertError(t, f.get(t, RawPath(root, "data/sessions.json"), nil), http.StatusForbidden, CodeOutsideScope)
+		assertError(t, f.get(t, RawPath(root, "repo/config"), nil), http.StatusForbidden, CodeOutsideScope)
+		assertError(t, f.get(t, RawPath(root, "site/local.css"), nil), http.StatusForbidden, CodeOutsideScope)
 		// Out of the project, directly or through a linked directory.
 		assertError(t, f.get(t, RawPath(root, "abs"), nil), http.StatusForbidden, CodeOutsideScope)
 		assertError(t, f.get(t, RawPath(root, "elsewhere/outside.txt"), nil), http.StatusForbidden, CodeOutsideScope)
@@ -582,7 +609,7 @@ func TestRawScope(t *testing.T) {
 
 // A worktree's capability reads its own files only, even where the worktrees'
 // base directory or Pockode's data directory is configured inside the main one
-// under a name with no leading dot.
+// under a name of its own.
 func TestRawRootScopeWithholdsDataAndNestedWorktrees(t *testing.T) {
 	f := newRawFixture(t)
 	mainDir := f.workDir

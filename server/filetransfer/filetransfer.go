@@ -249,8 +249,10 @@ func (w withheld) has(info os.FileInfo) bool {
 
 // withheldDirs is Pockode's data directory and the directory of every
 // worktree: what a transfer reaching beyond the one file it names leaves out
-// of a work directory, since a setting can put any of them inside the project
-// under a name with no leading dot (--data, the worktrees' base directory).
+// of a work directory. Matched by identity rather than by any name, since a
+// setting can put any of them inside the project under a name of its choosing
+// (--data, the worktrees' base directory); for a root raw capability this is
+// what withholds even the default .pockode, which its name rule leaves alone.
 // Callers compare only directories beneath the work directory, so a worktree
 // that one lies inside — the main one, for a nested worktree — and its own
 // never match.

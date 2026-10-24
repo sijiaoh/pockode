@@ -29,15 +29,15 @@ func shortName(t *testing.T, path string) string {
 	return short
 }
 
-func TestRawRootScopeRefusesDotfilesByTheirShortNames(t *testing.T) {
+func TestRawRootScopeRefusesSensitiveNamesByTheirShortNames(t *testing.T) {
 	f := newRawFixture(t)
 	writeFile(t, f.workDir, "site/.env", []byte("SECRET=1"))
 	writeFile(t, f.workDir, "site/index.html", []byte("site"))
-	writeFile(t, f.workDir, ".hidden/index.html", []byte("index"))
+	writeFile(t, f.workDir, ".git/config", []byte("config"))
 	root := f.issue(t, RawGrant{Origin: RawOriginFile, Scope: RawScopeRoot})
 
 	t.Run("as a file", func(t *testing.T) {
-		// Short names do open, so the refusal below is the dot rule's.
+		// Short names do open, so the refusal below is the name rule's.
 		page := shortName(t, filepath.Join(f.workDir, "site", "index.html"))
 		assertBody(t, f.get(t, RawPath(root, "site/"+page), nil), http.StatusOK, "site")
 
@@ -50,8 +50,8 @@ func TestRawRootScopeRefusesDotfilesByTheirShortNames(t *testing.T) {
 	})
 
 	t.Run("as a directory on the way", func(t *testing.T) {
-		alias := shortName(t, filepath.Join(f.workDir, ".hidden"))
-		rec := f.get(t, RawPath(root, alias+"/index.html"), nil)
+		alias := shortName(t, filepath.Join(f.workDir, ".git"))
+		rec := f.get(t, RawPath(root, alias+"/config"), nil)
 		assertError(t, rec, http.StatusForbidden, CodeOutsideScope)
 		if !strings.Contains(rec.Body.String(), "is outside this capability") {
 			t.Errorf("refused for another reason: %s", rec.Body.String())
