@@ -706,25 +706,24 @@ path segment is the folder. There is **no `Content-Length`** and **no
 until it ends and it has no byte offsets to resume from. A browser shows bytes
 received with no total, and an interrupted download starts over.
 
-**What is archived** is what is on disk, less everything a [root raw
+**What is archived** is what is on disk — what the Files tab shows beneath
+the folder, nothing left out: `.git`, `.env`, `.github`, Pockode's data
+directory, other worktrees nested inside. What a user can open they can
+download. A [root raw
 capability](code/authentication.md#raw-capabilities-urls-a-browser-element-loads-by-itself)
-withholds beneath the folder — so that what a root scope keeps out of a page's
-reach never comes along unless the user named it — and more: every dot entry,
-not only the root scope's short list:
+withholds a list of names from a page because a page's scripts read whatever
+the scope reaches and can send it out; none of that holds here. The download
+is the user's own act, from their own app, and lands on their own device, and
+every file in it is one they could already open in Files, so a list of
+exclusions would only stand between them and their own project. The cost is
+accepted and stated: a download of the project root carries the data
+directory, whose `server.json` and `relay.json` hold the MCP local token and
+the relay token in cleartext
+([credentials on disk](code/authentication.md#credentials-on-disk)), and
+`.git`, which holds the repository token under `--git` (`.git-credentials`) —
+a zip is the user's to look through before handing it on. What shapes the
+archive is technical:
 
-- **Every name starting with a dot beneath the folder is left out**, at any
-  depth: `.git`, `.env`, `.github`, `.pockode`. Dotfiles are where secrets
-  live; `.git` holds the repository token under `--git` (`.git-credentials`)
-  and objects that can be most of a project's size — a repository is cloned,
-  not downloaded — and a worktree's `.git` file only points at a path on this
-  machine. A folder that is itself a dot directory, asked for by name, is
-  archived, less the dot entries beneath it, as a dotfile gets a file scope of
-  its own.
-- **Pockode's data directory and every other worktree are left out**, wherever
-  settings put them, under a dot or not, matched by identity rather than by
-  name (`Handler.withheldDirs`, the set the root capability withholds): the one
-  holds session tokens, the others are checkouts of their own. Asked for by
-  name, either is archived.
 - **A symlink is archived as a link and never followed** — its target text, with
   the link mode; on Windows a junction is treated the same. A link out of the
   folder therefore reads nothing outside it, and a link to a folder inside it
@@ -739,10 +738,9 @@ not only the root scope's short list:
 - **Fifos, sockets and devices are skipped**: they have no content, and none is
   ever opened in a way that could block. Empty folders are kept, as are the
   executable bit and modification times.
-- **Ignored files are not left out.** `node_modules` and build output are on
-  disk and are downloaded; the limits below are the backstop. A download never
-  quietly leaves files out — the rule folder upload keeps — and the exclusions
-  above are fixed, few and stated here rather than read from the project.
+- **Ignored files are not left out either.** `node_modules` and build output
+  are on disk and are downloaded; the limits below are the backstop. A download
+  never quietly leaves files out — the rule folder upload keeps.
 
 Entries are in name order, so the same folder gives the same archive. Deflate
 runs at its fastest level, with compressors pooled across entries: over the
@@ -2437,9 +2435,11 @@ A folder download is new code on the read side, and as strict: it archives a
 symlink as a link and never follows one, opens every entry through the folder's
 own directory handles, and follows a link only on the requested path itself,
 and only to inside the work directory ([the archive](#folder-archive)).
-Beneath the folder it leaves out what a root raw capability withholds and
-more — every dot entry, the data directory, other worktrees — so those come
-along only when the user names them, as a single file there would be.
+It leaves nothing out beneath the folder — not what a root raw capability
+withholds from a page, nor the data directory or other worktrees: it is the
+user's own download of what Files already lets them open, and a project root's
+carries the data directory's live tokens with it ([why, and the
+cost](#folder-archive)).
 
 `file.create` will not create *through* a symlink on the name it is given.
 `O_EXCL` and `os.Mkdir` both fail on a name that is already taken, and a

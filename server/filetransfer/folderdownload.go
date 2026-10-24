@@ -37,28 +37,24 @@ const (
 // name, so unpacking it gives back the folder rather than scattering its
 // contents.
 //
-// What the archive leaves out, and why — all a root raw capability withholds
-// and more, so that a link to a folder's archive reaches no more than a page
-// could:
-//   - Everything whose name starts with a dot, beneath the folder: .env and
-//     its kin hold secrets; .git holds the repository token with --git
-//     (.git-credentials) and objects that can be most of a project's size,
-//     and a repository is cloned rather than downloaded; .pockode is
-//     Pockode's own data. A folder that is itself a dot directory, asked for
-//     by name, is downloaded, less the dot entries beneath it.
-//   - Pockode's data directory and every other worktree, wherever settings put
-//     them (withheldDirs), which may be under names with no dot: the one holds
-//     session tokens, the others are checkouts of their own. Asked for by
-//     name, either is downloaded, as a single file in it is.
-//   - What is neither a file, a folder nor a link — a fifo, a socket, a
-//     device — since it has no content to archive.
+// The archive holds what Files shows: everything on disk under the folder —
+// .env, .git, Pockode's data directory, a worktree nested in the project —
+// since what the user can open there they can download. A download is the
+// user's own act, with no third party's script in it, and lands on their own
+// device; leaving something out would stop no one but them. Unlike a root raw
+// capability, which withholds a list of sensitive names from pages
+// (sensitiveName), it withholds nothing. The cost is accepted: the archive of
+// the project root can hold the data directory's live tokens, and passing it
+// on is the user's call.
 //
-// A symlink — or on Windows a junction — is archived as a link, holding its
-// target, and never followed: a
-// link out of the folder reads nothing outside it, and a link to a folder
-// inside it neither duplicates that folder nor loops. Every entry is opened
-// through the folder's own directory handles, never by joined path, for the
-// same reason.
+// Only two rules shape it, neither about what may be read:
+//   - A symlink — or on Windows a junction — is archived as a link, holding
+//     its target, and never followed: a link out of the folder reads nothing
+//     outside it, and a link to a folder inside it neither duplicates that
+//     folder nor loops. Every entry is opened through the folder's own
+//     directory handles, never by joined path, for the same reason.
+//   - What is neither a file, a folder nor a link — a fifo, a socket, a
+//     device — is left out, since it has no content to archive.
 //
 // The folder is walked twice: once before the response starts, so that the
 // limits, an unreadable file and a missing folder are answered as JSON errors
@@ -111,7 +107,6 @@ func (h *Handler) serveFolderArchive(w http.ResponseWriter, r *http.Request, wor
 		h:         h,
 		ctx:       r.Context(),
 		folderRel: filepath.ToSlash(relPath),
-		withheld:  h.withheldDirs(),
 	}
 	if apiErr := walk.run(root, walk.survey); apiErr != nil {
 		h.writeError(w, apiErr, nil)
@@ -200,7 +195,6 @@ type folderWalk struct {
 	// folderRel is the folder's path in the work directory, which errors name
 	// entries by.
 	folderRel string
-	withheld  withheld
 	entries   int
 	size      int64
 }
@@ -222,9 +216,6 @@ func (fw *folderWalk) walk(dir *os.Root, rel string, visit func(archiveEntry) *a
 	for _, name := range list {
 		if err := fw.ctx.Err(); err != nil {
 			return errf(http.StatusInternalServerError, CodeInternal, "download cancelled: %v", err)
-		}
-		if strings.HasPrefix(name, ".") {
-			continue
 		}
 		entryRel := path.Join(rel, name)
 		// Refused rather than archived: zip separates with "/" alone, but an
@@ -300,8 +291,8 @@ func (fw *folderWalk) list(dir *os.Root, rel string) ([]string, *apiError) {
 	return names, nil
 }
 
-// openSubdir opens the directory entry names, or returns nil for one the
-// archive leaves out: withheld, or gone since it was listed.
+// openSubdir opens the directory entry names, or returns nil for one gone
+// since it was listed.
 //
 // OpenRoot follows a link on the name, so what it opened is checked against
 // what Lstat found there: had the directory been swapped for a link since, the
@@ -322,10 +313,6 @@ func (fw *folderWalk) openSubdir(entry archiveEntry) (*os.Root, *apiError) {
 	if !os.SameFile(opened, entry.info) {
 		sub.Close()
 		return nil, fw.changed(entry.rel)
-	}
-	if fw.withheld.has(opened) {
-		sub.Close()
-		return nil, nil
 	}
 	return sub, nil
 }
@@ -383,7 +370,7 @@ func (fw *folderWalk) survey(entry archiveEntry) *apiError {
 // The name is looked at again once it is open, and has to be the regular file
 // opened: a fifo swapped in after the Lstat would be opened (without blocking)
 // and refused, and a link swapped in would be followed — within dir, but
-// possibly into a directory the archive leaves out.
+// archiving as a file what is now a link.
 func (fw *folderWalk) open(entry archiveEntry) (*os.File, os.FileInfo, *apiError) {
 	display := fw.display(entry.rel)
 	f, err := entry.dir.OpenFile(entry.name, os.O_RDONLY|openNonBlock, 0)
