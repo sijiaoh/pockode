@@ -931,6 +931,7 @@ function FilesTab({
 						setDeleteTarget(menuTarget);
 						setMenuTarget(null);
 					}}
+					onDownloadError={setActionError}
 				/>
 			)}
 

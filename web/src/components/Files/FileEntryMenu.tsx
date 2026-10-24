@@ -1,11 +1,13 @@
 import {
 	FilePlus,
+	FolderDown,
 	FolderPlus,
 	FolderUp,
 	PencilLine,
 	Trash2,
 	Upload,
 } from "lucide-react";
+import { useFolderDownload } from "../../hooks/useFileDownload";
 import type { Entry } from "../../types/contents";
 import MenuRow from "../common/MenuRow";
 import { Sheet } from "../ui";
@@ -36,6 +38,12 @@ interface Props {
 	 */
 	renameBlockedByEditor?: boolean;
 	onDelete: () => void;
+	/**
+	 * Where a folder download's failure goes, and is cleared when one starts.
+	 * The menu closes either way once the download is out of its hands —
+	 * reported here, or handed to the browser.
+	 */
+	onDownloadError: (message: string | null) => void;
 }
 
 /**
@@ -60,9 +68,20 @@ function FileEntryMenu({
 	onRename,
 	renameBlockedByEditor,
 	onDelete,
+	onDownloadError,
 }: Props) {
 	const isRoot = entry.path === "";
 	const isDirectory = entry.type === "dir";
+	// Lives with the sheet, so closing it any way — or a worktree switch, which
+	// closes it — cancels a download still being prepared.
+	const download = useFolderDownload({
+		path: entry.path,
+		onError: (message) => {
+			onDownloadError(message);
+			if (message) onClose();
+		},
+		onSaved: onClose,
+	});
 
 	return (
 		<Sheet title={isRoot ? "Project root" : entry.name} onClose={onClose}>
@@ -82,6 +101,15 @@ function FileEntryMenu({
 							icon={FolderPlus}
 							label="New folder"
 							onClick={onNewFolder}
+						/>
+						<MenuRow
+							icon={FolderDown}
+							label={download.label}
+							busy={download.isDownloading}
+							description={
+								download.isDownloading ? "Preparing zip…" : undefined
+							}
+							onClick={download.toggle}
 						/>
 					</>
 				)}

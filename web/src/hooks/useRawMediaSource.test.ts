@@ -2,16 +2,20 @@ import { QueryClient } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { saveUrl } from "../lib/fileDownload";
 import { useWorktreeStore } from "../lib/worktreeStore";
-import { saveRawFile } from "./useRawMediaSource";
+import { saveRawFile, saveRawFolder } from "./useRawMediaSource";
 
 const rawCapability = vi.fn();
+const rawFolderCapability = vi.fn();
 
 vi.mock("../utils/config", () => ({
 	getApiBaseUrl: () => "http://localhost:8080",
 }));
 
 vi.mock("../lib/wsStore", () => ({
-	wsActions: { rawCapability: (...args: unknown[]) => rawCapability(...args) },
+	wsActions: {
+		rawCapability: (...args: unknown[]) => rawCapability(...args),
+		rawFolderCapability: (...args: unknown[]) => rawFolderCapability(...args),
+	},
 	useWSStore: { getState: () => ({ status: "connected" }) },
 }));
 
@@ -189,6 +193,113 @@ describe("saveRawFile", () => {
 
 		expect(error).toBeInstanceOf(Error);
 		expect((error as Error).name).toBe("AbortError");
+		expect(saveUrl).not.toHaveBeenCalled();
+	});
+});
+
+describe("saveRawFolder", () => {
+	const archive = {
+		path: "/api/raw/cap1/",
+		expiresAt: Date.now() + 3600e3,
+		worktree: "",
+	};
+
+	beforeEach(() => {
+		rawFolderCapability.mockReset();
+		vi.mocked(saveUrl).mockReset();
+		vi.stubGlobal("fetch", vi.fn());
+	});
+
+	afterEach(() => {
+		vi.unstubAllGlobals();
+		useWorktreeStore.setState({ current: "" });
+	});
+
+	// A GET would have the server build and send the whole archive just to be
+	// cancelled; a HEAD runs the same checks for nothing.
+	it("checks the archive with a HEAD and leaves its name to the server", async () => {
+		rawFolderCapability.mockResolvedValue(archive);
+		vi.mocked(fetch).mockResolvedValueOnce(new Response(null, { status: 200 }));
+
+		await saveRawFolder("assets", new AbortController().signal);
+
+		expect(rawFolderCapability).toHaveBeenCalledWith("assets");
+		expect(fetch).toHaveBeenCalledTimes(1);
+		expect(vi.mocked(fetch).mock.calls[0][1]).toMatchObject({
+			method: "HEAD",
+		});
+		expect(saveUrl).toHaveBeenCalledWith(
+			expect.stringContaining("/api/raw/cap1/"),
+			"",
+		);
+	});
+
+	// A HEAD refusal has no body, so the reason has to be asked for.
+	it.each([
+		[
+			"a folder that is gone",
+			jsonError(404, "not_found", "folder does not exist: assets"),
+			"Folder not found — it may have been moved or deleted",
+		],
+		[
+			"a folder over the limit, in the server's words",
+			jsonError(
+				413,
+				"too_large",
+				"assets holds more than 2 GiB of files, the most a folder download takes",
+			),
+			"assets holds more than 2 GiB of files, the most a folder download takes",
+		],
+		[
+			"a name that would unpack elsewhere, which a file's wording would hide",
+			jsonError(
+				400,
+				"invalid_path",
+				"assets/a\\b has a backslash in its name, which unpacks as a path on Windows; rename it to download this folder",
+			),
+			"assets/a\\b has a backslash in its name, which unpacks as a path on Windows; rename it to download this folder",
+		],
+		[
+			"an unreadable file",
+			jsonError(
+				500,
+				"internal",
+				"failed to open assets/key: permission denied",
+			),
+			"Server error: failed to open assets/key: permission denied",
+		],
+	])("reports %s instead of handing it to the browser", async (_, body, message) => {
+		rawFolderCapability.mockResolvedValue(archive);
+		vi.mocked(fetch)
+			.mockResolvedValueOnce(new Response(null, { status: body.status }))
+			.mockResolvedValueOnce(body);
+
+		await expect(
+			saveRawFolder("assets", new AbortController().signal),
+		).rejects.toThrow(message);
+		expect(saveUrl).not.toHaveBeenCalled();
+	});
+
+	it("saves nothing from a capability bound to the worktree being left", async () => {
+		useWorktreeStore.setState({ current: "feature" });
+		rawFolderCapability.mockResolvedValue(archive);
+
+		await expect(
+			saveRawFolder("assets", new AbortController().signal),
+		).rejects.toThrow("still switching");
+		expect(fetch).not.toHaveBeenCalled();
+		expect(saveUrl).not.toHaveBeenCalled();
+	});
+
+	it("saves nothing once the user has cancelled", async () => {
+		const controller = new AbortController();
+		rawFolderCapability.mockResolvedValue(archive);
+		vi.mocked(fetch).mockImplementationOnce(async () => {
+			controller.abort();
+			return new Response(null, { status: 200 });
+		});
+
+		await expect(saveRawFolder("assets", controller.signal)).rejects.toThrow();
 		expect(saveUrl).not.toHaveBeenCalled();
 	});
 });

@@ -1,4 +1,4 @@
-import type { LucideIcon } from "lucide-react";
+import { Loader2, type LucideIcon } from "lucide-react";
 
 /**
  * One full-bleed row of a menu sheet: 48px tall, flush to the sheet's edges
@@ -34,6 +34,12 @@ interface Props {
 	 */
 	disabled?: boolean;
 	/**
+	 * Its action is running: the icon turns into a spinner. The row stays
+	 * pressable, so whatever pressing it again means — such as cancelling —
+	 * is the caller's `label` to say.
+	 */
+	busy?: boolean;
+	/**
 	 * Set when the rows sit in a `role="menu"` rather than a sheet. The menu
 	 * then moves focus between rows with the arrow keys, so a row is not a
 	 * Tab stop of its own.
@@ -48,6 +54,7 @@ function MenuRow({
 	danger,
 	description,
 	disabled,
+	busy,
 	role,
 	onClick,
 }: Props) {
@@ -58,13 +65,18 @@ function MenuRow({
 			tabIndex={role === "menuitem" ? -1 : undefined}
 			onClick={disabled ? undefined : onClick}
 			aria-disabled={disabled || undefined}
+			aria-busy={busy || undefined}
 			className={`${menuRowClass} ${focusClass} ${
 				danger ? "text-th-error" : "text-th-text-primary"
 			} ${
 				disabled ? "cursor-not-allowed opacity-50" : "hover:bg-th-bg-tertiary"
 			}`}
 		>
-			<Icon className="h-4 w-4 shrink-0" aria-hidden="true" />
+			{busy ? (
+				<Loader2 className="h-4 w-4 shrink-0 animate-spin" aria-hidden="true" />
+			) : (
+				<Icon className="h-4 w-4 shrink-0" aria-hidden="true" />
+			)}
 			<span className="min-w-0">
 				{label}
 				{description && (

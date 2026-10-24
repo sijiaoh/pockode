@@ -75,7 +75,8 @@ export interface RawCapability {
 	/**
 	 * A URL path on the server (put it through `apiUrl`). For a file, the file
 	 * itself; for a root, the root with a trailing slash, against which a path
-	 * beneath it resolves as a relative URL (`pageRawUrl`).
+	 * beneath it resolves as a relative URL (`pageRawUrl`); for a folder, the
+	 * archive.
 	 */
 	path: string;
 	/** Epoch milliseconds. */
@@ -90,7 +91,7 @@ export interface RawCapability {
 
 interface RawCapabilityParams {
 	origin: ContentOrigin["kind"];
-	scope: RawTarget["scope"];
+	scope: RawTarget["scope"] | "folder";
 	path?: string;
 	hash?: string;
 	session_id?: string;
@@ -116,6 +117,14 @@ export interface RawActions {
 	 * one it names.
 	 */
 	rawCapability: (target: RawTarget) => Promise<RawCapability>;
+	/**
+	 * A URL the browser saves the folder at `path` from as one zip archive —
+	 * `path` empty for the work directory itself — with what a root capability
+	 * withholds left out beneath it. Read from the connection's worktree, as a
+	 * file is. Asked for once per download rather than held like a player's:
+	 * nothing plays from it.
+	 */
+	rawFolderCapability: (path: string) => Promise<RawCapability>;
 }
 
 function toParams(target: RawTarget): RawCapabilityParams {
@@ -156,16 +165,22 @@ function originParams(target: RawTarget): RawCapabilityParams {
 export function createRawActions(
 	getClient: () => JSONRPCRequester<void> | null,
 ): RawActions {
+	const request = async (
+		params: RawCapabilityParams,
+	): Promise<RawCapability> => {
+		const result: RawCapabilityResult = await requireClient(getClient).request(
+			"raw.capability",
+			params,
+		);
+		return {
+			path: result.path,
+			expiresAt: Date.parse(result.expires_at),
+			worktree: result.worktree,
+		};
+	};
 	return {
-		rawCapability: async (target) => {
-			const result: RawCapabilityResult = await requireClient(
-				getClient,
-			).request("raw.capability", toParams(target));
-			return {
-				path: result.path,
-				expiresAt: Date.parse(result.expires_at),
-				worktree: result.worktree,
-			};
-		},
+		rawCapability: (target) => request(toParams(target)),
+		rawFolderCapability: (path) =>
+			request({ origin: "file", scope: "folder", path }),
 	};
 }
