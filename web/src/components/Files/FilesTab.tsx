@@ -1,8 +1,14 @@
 import { ConfirmDialog, useHasFinePointer } from "@pockode/shared";
 import { useQueryClient } from "@tanstack/react-query";
-import { MoreHorizontal, Upload } from "lucide-react";
+import {
+	FolderInput,
+	type LucideIcon,
+	MoreHorizontal,
+	Upload,
+} from "lucide-react";
 import {
 	type ChangeEvent,
+	type ReactNode,
 	useCallback,
 	useEffect,
 	useRef,
@@ -15,7 +21,7 @@ import {
 } from "../../hooks/useFileSearch";
 import { useTakenNames, useTakenNamesIn } from "../../hooks/useTakenNames";
 import { isAbortError } from "../../lib/api";
-import { applyEntryGone } from "../../lib/fileCache";
+import { applyEntryGone, applyEntryMoved } from "../../lib/fileCache";
 import {
 	type FolderContents,
 	type NameCollision,
@@ -47,6 +53,7 @@ import FileEntryMenu, { ROOT_ENTRY } from "./FileEntryMenu";
 import FileSearchBar from "./FileSearchBar";
 import FileSearchResults from "./FileSearchResults";
 import FileTree from "./FileTree";
+import type { EntryDragStart } from "./FileTreeNode";
 import UploadConflictDialog from "./UploadConflictDialog";
 import UploadQueue from "./UploadQueue";
 import { useFileDrop } from "./useFileDrop";
@@ -72,6 +79,9 @@ interface Naming {
 	dir: string;
 	type: EntryType;
 }
+
+/** The entry a row's drag is moving, recorded when the drag starts. */
+interface DragSource extends Entry, EntryDragStart {}
 
 /** A folder of a batch, read in full and `held` in the queue under `id`. */
 interface HeldFolder {
@@ -131,18 +141,26 @@ function shortenPath(path: string): string {
 	return parts.length <= 2 ? path : `…/${parts.slice(-2).join("/")}`;
 }
 
+/** "src/a" -> "…/src/a", "" -> "project root", for the drop bar. */
+function dirLabel(dir: string): string {
+	return dir ? shortenPath(dir) : "project root";
+}
+
 /**
- * Says where the file under the cursor would land, for as long as it is held.
+ * Says what letting go of the drag would do — upload or move, and where — for
+ * as long as it is held.
  *
  * Docked at the bottom rather than drawn as an overlay: an overlay would cover
  * the tree, which is exactly what the user is aiming at. Always transparent to
  * the pointer, or crossing it would change the answer it is displaying.
  */
 function DropTargetBar({
-	destPath,
+	icon: Icon,
+	label,
 	refusal,
 }: {
-	destPath: string;
+	icon: LucideIcon;
+	label: ReactNode;
 	/** Why this drag will not be taken, when it will not be. */
 	refusal: string | null;
 }) {
@@ -162,16 +180,11 @@ function DropTargetBar({
 			 * the non-text floor rather than AA, and clears it on every surface
 			 * in every variant (3.76:1 at worst).
 			 */}
-			<Upload
+			<Icon
 				className={`h-3.5 w-3.5 shrink-0 ${refusal ? "" : "text-th-accent"}`}
 				aria-hidden="true"
 			/>
-			<span className="truncate">
-				{refusal ??
-					(destPath
-						? `Upload to ${shortenPath(destPath)}`
-						: "Upload to project root")}
-			</span>
+			<span className="truncate">{refusal ?? label}</span>
 		</div>
 	);
 }
@@ -187,6 +200,7 @@ function FilesTab({
 	const createFile = useWSStore((state) => state.actions.createFile);
 	const deleteFile = useWSStore((state) => state.actions.deleteFile);
 	const renameFile = useWSStore((state) => state.actions.renameFile);
+	const moveFile = useWSStore((state) => state.actions.moveFile);
 	// The same value the queue pins each upload to, rather than the router's copy
 	// of it, so the tab and the store cannot disagree about which tree is current.
 	const worktree = useWorktreeStore((state) => state.current);
@@ -202,7 +216,8 @@ function FilesTab({
 	// directory picking is missing or opens a plain file picker instead, and a
 	// menu row that opens the wrong picker is worse than none. A fine pointer is
 	// the stand-in for "a desktop browser", where it works.
-	const canPickFolder = useHasFinePointer() && supportsFolderPicker();
+	const hasFinePointer = useHasFinePointer();
+	const canPickFolder = hasFinePointer && supportsFolderPicker();
 	const [menuTarget, setMenuTarget] = useState<Entry | null>(null);
 	const [naming, setNaming] = useState<Naming | null>(null);
 	const [creating, setCreating] = useState(false);
@@ -211,8 +226,16 @@ function FilesTab({
 	const [renaming, setRenaming] = useState(false);
 	const [renameError, setRenameError] = useState<string | null>(null);
 	const [deleteTarget, setDeleteTarget] = useState<Entry | null>(null);
-	// A folder the tree has to open to show what was just created in it.
-	const [forceOpenPath, setForceOpenPath] = useState<string | null>(null);
+	// Folders the tree has to open to show what was just created or moved there.
+	const [forceOpenPaths, setForceOpenPaths] = useState<readonly string[]>([]);
+	// Mirrored in a ref because the drop zone asks about it from inside drag
+	// events, which can arrive before the render that `dragstart` set off.
+	const [dragSource, setDragSource] = useState<DragSource | null>(null);
+	const dragSourceRef = useRef<DragSource | null>(null);
+	const [dimSource, setDimSource] = useState(false);
+	const [movingPaths, setMovingPaths] = useState<ReadonlySet<string>>(
+		() => new Set(),
+	);
 	const uploads = useWorktreeUploads();
 
 	const handleRefresh = useCallback(() => {
@@ -259,7 +282,13 @@ function FilesTab({
 		setRenameTarget(null);
 		setRenameError(null);
 		setDeleteTarget(null);
-		setForceOpenPath(null);
+		setForceOpenPaths([]);
+		// A move still in flight is the old tree's: its answer is dropped on
+		// arrival, and nothing in this tree is waiting on it.
+		setMovingPaths(new Set());
+		dragSourceRef.current = null;
+		setDragSource(null);
+		setDimSource(false);
 	}, [worktree]);
 
 	// What the batch waiting for an answer holds, for the cleanup below, which
@@ -565,10 +594,6 @@ function FilesTab({
 			if (!menuTarget) return;
 			setMenuTarget(null);
 			setCreateError(null);
-			// Retired before the next one is asked for: assigning the same path
-			// twice does not re-run the tree's effect, so a folder collapsed since
-			// the last creation would stay shut over this one.
-			setForceOpenPath(null);
 			setNaming({ dir: menuTarget.path, type });
 		},
 		[menuTarget],
@@ -610,7 +635,7 @@ function FilesTab({
 			queryClient.invalidateQueries({ queryKey: contentsQueryKey(dir) });
 			// A folder that stays closed over what was just made in it is the same
 			// as the creation having done nothing.
-			if (dir) setForceOpenPath(dir);
+			if (dir) setForceOpenPaths([dir]);
 		},
 		[naming, creating, createFile, queryClient],
 	);
@@ -619,9 +644,6 @@ function FilesTab({
 		if (!menuTarget) return;
 		setMenuTarget(null);
 		setRenameError(null);
-		// Same reason as `openNaming`: a path assigned twice does not re-run the
-		// tree's effect, so a folder collapsed since would stay shut.
-		setForceOpenPath(null);
 		setRenameTarget(menuTarget);
 	}, [menuTarget]);
 
@@ -659,7 +681,7 @@ function FilesTab({
 			// component with its own collapsed state. Forcing it open puts back what
 			// the remount took; the expansion of its own children is not recoverable
 			// this way and is let go.
-			if (type === "dir") setForceOpenPath(newPath);
+			if (type === "dir") setForceOpenPaths([newPath]);
 			// Pointed at the new path rather than closed. Closing is right for a
 			// delete, where the content is gone; here nothing was lost, and closing
 			// the viewer would say otherwise.
@@ -716,10 +738,145 @@ function FilesTab({
 				? "Wait for the folder being read"
 				: null;
 
+	const endEntryDrag = useCallback(() => {
+		dragSourceRef.current = null;
+		setDragSource(null);
+		setDimSource(false);
+	}, []);
+
+	const startEntryDrag = useCallback(
+		(entry: Entry, drag: EntryDragStart) => {
+			const source = { ...entry, ...drag };
+			dragSourceRef.current = source;
+			setDragSource(source);
+			// On the row, not the window: `dragend` is sent to the row however the
+			// drag ends — dropped, cancelled, let go outside the window — and when
+			// the row has left the page under the drag (its folder refreshed) it is
+			// still sent there but bubbles nowhere. Checked in Firefox and Chromium.
+			drag.element.addEventListener("dragend", endEntryDrag, { once: true });
+			// The row's snapshot for the drag image is taken once `dragstart` has
+			// been handled, and React's commit of an update made in it can land
+			// first, which would fade the image too. A task later it cannot; a drag
+			// cancelled before then is not dimmed after the fact.
+			window.setTimeout(() => {
+				if (dragSourceRef.current === source) setDimSource(true);
+			}, 0);
+		},
+		[endEntryDrag],
+	);
+
+	/**
+	 * Why moving `source` into `dest` is turned away, if it is, in the first
+	 * reason that applies. Only an immediate answer: a folder never expanded has
+	 * no listing to check a name against, so the server has the last word.
+	 */
+	const moveRefusal = (source: DragSource, dest: string): string | null => {
+		// The same rule as rename: the editor holds the path it is saving to.
+		if (
+			activeFileEdit &&
+			activeFilePath !== null &&
+			isAtOrUnder(activeFilePath, source.path)
+		) {
+			return "Close the editor first";
+		}
+		// A move in flight is about to vacate its path, so anything at or under
+		// it is about to be somewhere else, as a source or as a destination.
+		for (const moving of movingPaths) {
+			if (isAtOrUnder(source.path, moving) || isAtOrUnder(dest, moving)) {
+				return "Wait for the move in progress";
+			}
+		}
+		if (source.type === "dir" && isAtOrUnder(dest, source.path)) {
+			return "Can't move a folder into itself";
+		}
+		if (dest === parentDir(source.path)) {
+			return `Already in ${dirLabel(dest)}`;
+		}
+		if (takenNames(dest).has(source.name)) {
+			return dest
+				? `${shortenPath(dest)} already has ${source.name}`
+				: `Project root already has ${source.name}`;
+		}
+		return null;
+	};
+
+	// The view is read when the answer arrives rather than when the drop did, so
+	// a file opened in the meantime is the one followed or left alone — and
+	// followed in the session shown then, which `onRepointFile` carries.
+	const viewRef = useRef({ activeFilePath, onRepointFile });
+	viewRef.current = { activeFilePath, onRepointFile };
+
+	const moveEntry = async (source: DragSource, destPath: string) => {
+		if (moveRefusal(source, destPath)) return;
+
+		// Pinned as an upload is: answered after a switch, the move is about
+		// another tree, whose paths may well be spelled the same as this one's.
+		// The switch refetches every listing anyway.
+		const movedIn = useWorktreeStore.getState().current;
+		const switched = () => useWorktreeStore.getState().current !== movedIn;
+
+		setMovingPaths((paths) => new Set(paths).add(source.path));
+		let newPath: string;
+		try {
+			newPath = await moveFile(source.path, destPath);
+		} catch (error) {
+			if (switched()) return;
+			setActionError(
+				`Move failed: ${error instanceof Error ? error.message : String(error)}`,
+			);
+			// Every refusal — the name taken, either folder gone — means one of the
+			// two listings was out of date. Refetching both makes the tree agree
+			// with the banner whichever it was, without branching on the reason.
+			queryClient.invalidateQueries({
+				queryKey: contentsQueryKey(parentDir(source.path)),
+			});
+			queryClient.invalidateQueries({ queryKey: contentsQueryKey(destPath) });
+			return;
+		} finally {
+			// After a switch the set is the new tree's, which the switch emptied;
+			// a path of its own spelled the same is not this move's to release.
+			if (!switched()) {
+				setMovingPaths((paths) => {
+					const next = new Set(paths);
+					next.delete(source.path);
+					return next;
+				});
+			}
+		}
+
+		if (switched()) return;
+		applyEntryMoved(queryClient, source.path, destPath);
+		// The destination is opened, as after a create: a quick drop on a closed
+		// folder would otherwise look like the entry vanished. A moved folder is a
+		// new `key`, so its own open state went with the old row; reopening it
+		// brings back its top level, the same as after a rename.
+		const toOpen = [
+			...(destPath ? [destPath] : []),
+			...(source.type === "dir" && source.wasExpanded ? [newPath] : []),
+		];
+		if (toOpen.length > 0) setForceOpenPaths(toOpen);
+		const view = viewRef.current;
+		const viewed = view.activeFilePath;
+		if (viewed && isAtOrUnder(viewed, source.path)) {
+			view.onRepointFile(newPath + viewed.slice(source.path.length));
+		}
+	};
+
 	const treeWrapperRef = useRef<HTMLDivElement>(null);
 	const drop = useFileDrop({
-		enabled: dropRefusal === null,
-		onDrop: ({ files, folders, destPath }) => {
+		accepts: (kind, destPath) => {
+			if (kind === "files") return dropRefusal === null;
+			const source = dragSourceRef.current;
+			return source !== null && moveRefusal(source, destPath) === null;
+		},
+		ownsEntryDrag: useCallback(() => dragSourceRef.current !== null, []),
+		onDrop: (dropped) => {
+			if (dropped.kind === "entry") {
+				const source = dragSourceRef.current;
+				if (source) void moveEntry(source, dropped.destPath);
+				return;
+			}
+			const { files, folders, destPath } = dropped;
 			if (folders.length === 0) {
 				uploadInto(files, destPath);
 				return;
@@ -792,18 +949,33 @@ function FilesTab({
 			]
 		: [];
 
-	const acceptsDrop = drop.isDragging && dropRefusal === null;
+	const destPath = drop.destPath ?? "";
+	const movingSource = drop.dragKind === "entry" ? dragSource : null;
+	const refusal = movingSource
+		? moveRefusal(movingSource, destPath)
+		: drop.dragKind === "files"
+			? dropRefusal
+			: null;
+	const acceptsFiles = drop.dragKind === "files" && dropRefusal === null;
+	// A row's drag whose source has gone — its row left the page and the drag
+	// ended — is no longer anything's, though the zone may hold on to it for a
+	// moment yet.
+	const acceptsDrop =
+		acceptsFiles || (movingSource !== null && refusal === null);
 	// While a drag is up, everything that is not the tree has to be transparent to
 	// it: the cursor crossing a bar would otherwise resolve the destination back
 	// to the root, with the bar still reading "Upload to src".
-	const inertWhileDragging = drop.isDragging ? "pointer-events-none" : "";
+	const inertWhileDragging =
+		drop.dragKind !== null ? "pointer-events-none" : "";
 
 	return (
 		<div
 			className={
 				isActive
 					? `flex flex-1 flex-col overflow-hidden ${
-							acceptsDrop
+							// Files only: the ring says something arrived from outside. A
+							// drag that started in the panel has the row fill and the bar.
+							acceptsFiles
 								? // A ring rather than a border: a border takes a pixel from
 									// the layout and would nudge the whole tree sideways the
 									// moment a drag arrives.
@@ -861,7 +1033,10 @@ function FilesTab({
 						menuPath={menuTarget?.path ?? null}
 						dropTargetPath={acceptsDrop ? drop.destPath : null}
 						springOpenPath={drop.springOpenPath}
-						forceOpenPath={forceOpenPath}
+						forceOpenPaths={forceOpenPaths}
+						onEntryDragStart={hasFinePointer ? startEntryDrag : undefined}
+						dragSourcePath={dimSource ? (dragSource?.path ?? null) : null}
+						movingPaths={movingPaths}
 					/>
 				</PullToRefresh>
 			</div>
@@ -882,8 +1057,20 @@ function FilesTab({
 				/>
 			</div>
 
-			{drop.isDragging && (
-				<DropTargetBar destPath={drop.destPath ?? ""} refusal={dropRefusal} />
+			{movingSource ? (
+				<DropTargetBar
+					icon={FolderInput}
+					label={`Move ${movingSource.name} to ${dirLabel(destPath)}`}
+					refusal={refusal}
+				/>
+			) : (
+				drop.dragKind === "files" && (
+					<DropTargetBar
+						icon={Upload}
+						label={`Upload to ${dirLabel(destPath)}`}
+						refusal={refusal}
+					/>
+				)
 			)}
 
 			<input

@@ -102,7 +102,7 @@ func (h *Handler) serveFolderArchive(w http.ResponseWriter, r *http.Request, wor
 	// directory — can be called "..\evil".
 	name := archiveName(workDir, relPath)
 	if strings.ContainsRune(name, '\\') {
-		h.writeError(w, backslashName(displayDir(relPath)), nil)
+		h.writeError(w, backslashName(contents.DisplayDir(relPath)), nil)
 		return
 	}
 
@@ -423,7 +423,7 @@ func (fw *folderWalk) changed(rel string) *apiError {
 
 // display names rel, a path in the folder, by its path in the work directory.
 func (fw *folderWalk) display(rel string) string {
-	return displayDir(path.Join(fw.folderRel, rel))
+	return contents.DisplayDir(path.Join(fw.folderRel, rel))
 }
 
 // folderArchive is the second walk of a folder download, writing the archive.

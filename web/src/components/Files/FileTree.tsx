@@ -4,7 +4,7 @@ import { contentsQueryKey, useContents } from "../../hooks/useContents";
 import { useFSWatch } from "../../hooks/useFSWatch";
 import type { Entry } from "../../types/contents";
 import { Spinner } from "../ui";
-import FileTreeNode from "./FileTreeNode";
+import FileTreeNode, { type EntryDragStart } from "./FileTreeNode";
 
 interface Props {
 	onSelectFile: (path: string) => void;
@@ -18,8 +18,21 @@ interface Props {
 	dropTargetPath: string | null;
 	/** Folder a drag has hovered long enough to open. */
 	springOpenPath: string | null;
-	/** Folder something outside the tree — a new entry — needs open. */
-	forceOpenPath: string | null;
+	/**
+	 * Folders something outside the tree — a new or moved entry — needs open.
+	 * A new array is a new request, even for paths asked for before.
+	 */
+	forceOpenPaths: readonly string[];
+	/**
+	 * Starts a row's drag, and with it the move of that entry. Left out where
+	 * rows must not be dragged: on a touch screen, where a long press is not a
+	 * drag but the start of a scroll or a menu.
+	 */
+	onEntryDragStart?: (entry: Entry, drag: EntryDragStart) => void;
+	/** Entry being dragged right now. */
+	dragSourcePath: string | null;
+	/** Entries whose move has been sent and not yet answered. */
+	movingPaths: ReadonlySet<string>;
 }
 
 function FileTree({
@@ -31,7 +44,10 @@ function FileTree({
 	menuPath,
 	dropTargetPath,
 	springOpenPath,
-	forceOpenPath,
+	forceOpenPaths,
+	onEntryDragStart,
+	dragSourcePath,
+	movingPaths,
 }: Props) {
 	const queryClient = useQueryClient();
 	const { data, isLoading, error } = useContents();
@@ -88,7 +104,10 @@ function FileTree({
 					menuPath={menuPath}
 					dropTargetPath={dropTargetPath}
 					springOpenPath={springOpenPath}
-					forceOpenPath={forceOpenPath}
+					forceOpenPaths={forceOpenPaths}
+					onEntryDragStart={onEntryDragStart}
+					dragSourcePath={dragSourcePath}
+					movingPaths={movingPaths}
 				/>
 			))}
 		</div>

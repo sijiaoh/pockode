@@ -6,8 +6,10 @@ import {
 	screen,
 	waitFor,
 } from "@testing-library/react";
+import { useRef } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { contentsQueryKey } from "../../hooks/useContents";
+import { ENTRY_DRAG_TYPE } from "../../lib/entryDrag";
 import type { Entry } from "../../types/contents";
 import FileTree from "./FileTree";
 import { useFileDrop } from "./useFileDrop";
@@ -26,7 +28,10 @@ vi.mock("../../lib/wsStore", () => ({
 vi.mock("../../hooks/useFSWatch", () => ({ useFSWatch: () => {} }));
 
 const onDrop = vi.fn();
+const onEntryDragStart = vi.fn();
 let scrollContainer: HTMLElement | null = null;
+const NO_PATHS: readonly string[] = [];
+const NOTHING_MOVING: ReadonlySet<string> = new Set();
 
 /**
  * The tree wired to the real drag hook.
@@ -37,11 +42,18 @@ let scrollContainer: HTMLElement | null = null;
  */
 function Panel({
 	onOpenMenu = vi.fn(),
+	canDrag = true,
+	movingPaths = NOTHING_MOVING,
 }: {
 	onOpenMenu?: (entry: Entry) => void;
+	canDrag?: boolean;
+	movingPaths?: ReadonlySet<string>;
 }) {
+	// What the tab keeps: which row's drag is this panel's own.
+	const sourceRef = useRef<string | null>(null);
 	const drop = useFileDrop({
-		enabled: true,
+		accepts: () => true,
+		ownsEntryDrag: () => sourceRef.current !== null,
 		onDrop,
 		getScrollContainer: () => scrollContainer,
 	});
@@ -56,7 +68,17 @@ function Panel({
 				menuPath={null}
 				dropTargetPath={drop.destPath}
 				springOpenPath={drop.springOpenPath}
-				forceOpenPath={null}
+				forceOpenPaths={NO_PATHS}
+				onEntryDragStart={
+					canDrag
+						? (entry, drag) => {
+								sourceRef.current = entry.path;
+								onEntryDragStart(entry, drag);
+							}
+						: undefined
+				}
+				dragSourcePath={null}
+				movingPaths={movingPaths}
 			/>
 		</div>
 	);
@@ -69,6 +91,7 @@ function entry(name: string, type: "file" | "dir", dir = ""): Entry {
 function renderTree(
 	listings: Record<string, Entry[]>,
 	onOpenMenu?: (entry: Entry) => void,
+	panel: { canDrag?: boolean; movingPaths?: ReadonlySet<string> } = {},
 ) {
 	const queryClient = new QueryClient({
 		defaultOptions: { queries: { retry: false } },
@@ -78,7 +101,7 @@ function renderTree(
 	}
 	return render(
 		<QueryClientProvider client={queryClient}>
-			<Panel onOpenMenu={onOpenMenu} />
+			<Panel onOpenMenu={onOpenMenu} {...panel} />
 		</QueryClientProvider>,
 	);
 }
@@ -98,14 +121,34 @@ const FILE_DRAG = {
  * auto-scroll is made of. `MouseEvent` carries it, and React dispatches on the
  * type name rather than the constructor.
  */
-function fireDrag(target: Element, type: string, clientY = 0) {
+function fireDrag(
+	target: Element,
+	type: string,
+	clientY = 0,
+	dataTransfer: unknown = FILE_DRAG,
+) {
 	const event = new MouseEvent(type, {
 		bubbles: true,
 		cancelable: true,
 		clientY,
 	});
-	Object.defineProperty(event, "dataTransfer", { value: FILE_DRAG });
+	Object.defineProperty(event, "dataTransfer", { value: dataTransfer });
 	fireEvent(target, event);
+}
+
+/** A row's drag as `dragstart` hands it over: empty, for the row to fill in. */
+function entryDrag() {
+	const data: Record<string, string> = {};
+	return {
+		types: [] as string[],
+		effectAllowed: "uninitialized",
+		dropEffect: "none",
+		data,
+		setData(type: string, value: string) {
+			data[type] = value;
+			this.types.push(type);
+		},
+	};
 }
 
 function dragOver(target: Element, clientY = 0) {
@@ -276,5 +319,142 @@ describe("FileTree row actions", () => {
 		expect(
 			screen.getByRole("button", { name: "Expand folder: src" }),
 		).toHaveAttribute("aria-expanded", "false");
+	});
+});
+
+describe("FileTree as a drag source", () => {
+	beforeEach(() => {
+		onDrop.mockReset();
+		onEntryDragStart.mockReset();
+		getFile.mockReset();
+		getFile.mockReturnValue(new Promise(() => {}));
+	});
+
+	it("carries the entry as a move, and nothing a text field would take", () => {
+		renderTree({ "": [entry("src", "dir")] });
+		const row = rowOf(
+			screen.getByRole("button", { name: "Expand folder: src" }),
+		);
+		const dataTransfer = entryDrag();
+
+		expect(row).toHaveAttribute("draggable", "true");
+		fireDrag(row, "dragstart", 0, dataTransfer);
+
+		expect(dataTransfer.effectAllowed).toBe("move");
+		// With `text/plain` a row let go over the chat composer would type its
+		// path there.
+		expect(dataTransfer.types).toEqual([ENTRY_DRAG_TYPE]);
+		expect(JSON.parse(dataTransfer.data[ENTRY_DRAG_TYPE])).toEqual({
+			path: "src",
+			type: "dir",
+		});
+		expect(onEntryDragStart).toHaveBeenCalledWith(
+			expect.objectContaining({ path: "src" }),
+			expect.objectContaining({ wasExpanded: false, element: row }),
+		);
+	});
+
+	it("drops a dragged row into the folder it is let go over", () => {
+		renderTree({ "": [entry("src", "dir"), entry("readme.md", "file")] });
+		const dataTransfer = entryDrag();
+		fireDrag(
+			rowOf(screen.getByRole("button", { name: "Open file: readme.md" })),
+			"dragstart",
+			0,
+			dataTransfer,
+		);
+
+		const folder = screen.getByRole("button", { name: "Expand folder: src" });
+		fireDrag(folder, "dragenter", 0, dataTransfer);
+		fireDrag(folder, "dragover", 0, dataTransfer);
+		expect(dataTransfer.dropEffect).toBe("move");
+		expect(rowOf(folder)).toHaveClass("bg-th-accent/10");
+		fireDrag(folder, "drop", 0, dataTransfer);
+
+		expect(onDrop).toHaveBeenCalledWith({ kind: "entry", destPath: "src" });
+	});
+
+	it("ignores a row dragged in from another window", () => {
+		renderTree({ "": [entry("src", "dir")] });
+		// The type is there, but no row of this tree started the drag.
+		const dataTransfer = { types: [ENTRY_DRAG_TYPE], dropEffect: "none" };
+		const folder = screen.getByRole("button", { name: "Expand folder: src" });
+
+		fireDrag(folder, "dragenter", 0, dataTransfer);
+		fireDrag(folder, "dragover", 0, dataTransfer);
+		fireDrag(folder, "drop", 0, dataTransfer);
+
+		expect(rowOf(folder)).not.toHaveClass("bg-th-accent/10");
+		expect(onDrop).not.toHaveBeenCalled();
+	});
+
+	it("offers no drag where the tab gives rows none", () => {
+		renderTree({ "": [entry("src", "dir")] }, undefined, { canDrag: false });
+
+		// A touch screen: a long press there is a scroll or a menu, not a drag.
+		expect(
+			rowOf(screen.getByRole("button", { name: "Expand folder: src" })),
+		).not.toHaveAttribute("draggable");
+	});
+
+	it("dims a row whose move is in flight and drags nothing in it again", () => {
+		vi.useFakeTimers();
+		renderTree(
+			{
+				"": [entry("src", "dir"), entry("readme.md", "file")],
+				src: [entry("main.tsx", "file", "src")],
+			},
+			undefined,
+			{ movingPaths: new Set(["src"]) },
+		);
+		const row = rowOf(
+			screen.getByRole("button", { name: "Expand folder: src" }),
+		);
+		fireEvent.click(screen.getByRole("button", { name: "Expand folder: src" }));
+
+		expect(row).not.toHaveAttribute("draggable");
+		expect(row.closest("[data-entry-path]")).toHaveClass("opacity-50");
+		expect(
+			rowOf(screen.getByRole("button", { name: "Open file: main.tsx" })),
+		).not.toHaveAttribute("draggable");
+		expect(
+			rowOf(screen.getByRole("button", { name: "Open file: readme.md" })),
+		).toHaveAttribute("draggable", "true");
+		vi.useRealTimers();
+	});
+});
+
+describe("FileTree forced open", () => {
+	it("reopens a folder collapsed since, on a new request for the same path", async () => {
+		getFile.mockReturnValue(new Promise(() => {}));
+		const queryClient = new QueryClient();
+		queryClient.setQueryData(contentsQueryKey(""), [entry("src", "dir")]);
+		const tree = (forceOpenPaths: readonly string[]) => (
+			<QueryClientProvider client={queryClient}>
+				<FileTree
+					onSelectFile={vi.fn()}
+					activeFilePath={null}
+					expandSignal={0}
+					watchEnabled={false}
+					onOpenMenu={vi.fn()}
+					menuPath={null}
+					dropTargetPath={null}
+					springOpenPath={null}
+					forceOpenPaths={forceOpenPaths}
+					dragSourcePath={null}
+					movingPaths={new Set()}
+				/>
+			</QueryClientProvider>
+		);
+		const { rerender } = render(tree(["src"]));
+		const folder = () => screen.getByRole("button", { name: /folder: src/ });
+		expect(folder()).toHaveAttribute("aria-expanded", "true");
+
+		fireEvent.click(folder());
+		expect(folder()).toHaveAttribute("aria-expanded", "false");
+
+		// Created into, or moved into, a second time: the same path, asked again.
+		rerender(tree(["src"]));
+		expect(folder()).toHaveAttribute("aria-expanded", "true");
 	});
 });

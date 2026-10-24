@@ -158,6 +158,42 @@ func (h *rpcMethodHandler) handleFileRename(ctx context.Context, conn *jsonrpc2.
 	}
 }
 
+func (h *rpcMethodHandler) handleFileMove(ctx context.Context, conn *jsonrpc2.Conn, req *jsonrpc2.Request, wt *worktree.Worktree) {
+	var params rpc.FileMoveParams
+	if err := unmarshalParams(req, &params); err != nil || params.Destination == nil {
+		h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, "invalid params")
+		return
+	}
+
+	newPath, err := contents.Move(wt.WorkDir, params.Path, *params.Destination)
+	if err != nil {
+		refuse := func(reason, message string) {
+			h.replyErrorData(ctx, conn, req.ID, jsonrpc2.CodeInvalidParams, message, rpc.FileMoveErrorData{Reason: reason})
+		}
+		switch {
+		case errors.Is(err, contents.ErrInvalidPath):
+			refuse(rpc.FileMoveReasonInvalidPath, "invalid path")
+		case errors.Is(err, contents.ErrNotFound):
+			refuse(rpc.FileMoveReasonNotFound, err.Error())
+		case errors.Is(err, contents.ErrDestinationNotFound):
+			refuse(rpc.FileMoveReasonDestinationNotFound, err.Error())
+		case errors.Is(err, contents.ErrNotADirectory):
+			refuse(rpc.FileMoveReasonNotADirectory, err.Error())
+		case errors.Is(err, contents.ErrIntoItself):
+			refuse(rpc.FileMoveReasonIntoItself, err.Error())
+		case errors.Is(err, contents.ErrExists):
+			refuse(rpc.FileMoveReasonExists, err.Error())
+		default:
+			h.replyError(ctx, conn, req.ID, jsonrpc2.CodeInternalError, err.Error())
+		}
+		return
+	}
+
+	if err := conn.Reply(ctx, req.ID, rpc.FileMoveResult{Path: newPath}); err != nil {
+		h.log.Error("failed to send file move response", "error", err)
+	}
+}
+
 func (h *rpcMethodHandler) handleFileSearch(ctx context.Context, conn *jsonrpc2.Conn, req *jsonrpc2.Request, wt *worktree.Worktree) {
 	var params rpc.FileSearchParams
 	if err := unmarshalParams(req, &params); err != nil {

@@ -101,7 +101,7 @@ Windows 与 darwin/linux 一样是发布目标（产物见 [docs/platforms.md](.
 | `cluster/node/process.go` | `process_{unix,windows}.go` — 与终端脱钩（`Setsid` / `CREATE_NO_WINDOW`）、优雅关闭与强杀的等待方式 |
 | `internal/shutdown/shutdown.go` | `request_{unix,windows}.go` — SIGTERM / 命名事件 |
 | `filetransfer/folder.go` | `folder_{unix,windows}.go` — 文件夹上传 merge 覆盖文件、文件夹下载读取文件时以非阻塞方式打开（防止换成 fifo 后卡死；Windows 工作目录里没有 fifo）、识别文件系统自己拒绝的名字（unix 的 `ENAMETOOLONG` / `EINVAL` / `EILSEQ`，Windows 的 `ERROR_INVALID_NAME` / `ERROR_FILENAME_EXCED_RANGE`）|
-| `filetransfer/raw.go` | `realname_{unix,windows}.go` — 根 capability（`scope: "root"`）拒绝 dotfile、数据目录和其他 worktree 时看文件系统解析出的真实路径：unix 上 `EvalSymlinks` 跟完所有链接再核对与打开的是同一个文件；Windows 取句柄的最终长名，8.3 短名（`ENV~1`）是 `.env` 的另一种写法 |
+| `contents/within.go`、`filetransfer/raw.go` | `contents/realname_{unix,windows}.go`（`contents.ResolvedName`）— `contents.OpenDirWithin` 要求跟随链接后的真实路径仍在工作目录内（`file.move` 的两个目录、文件夹上传的目标目录与文件夹下载的文件夹）；根 capability（`scope: "root"`）拒绝 dotfile、数据目录和其他 worktree 时也看它：unix 上 `EvalSymlinks` 跟完所有链接再核对与打开的是同一个文件；Windows 取句柄的最终长名，8.3 短名（`ENV~1`）是 `.env` 的另一种写法 |
 
 **路径处理统一走 `internal/pathutil`**，不要在各包里重新实现一遍：
 
@@ -137,11 +137,11 @@ Windows 与 darwin/linux 一样是发布目标（产物见 [docs/platforms.md](.
   | 来源 | 调用点 | 为什么 Windows 上做不到 |
   |---|---|---|
   | `internal/fifotest` | `agent/codex`×1、`contents`×1、`filetransfer`×3 | 命名管道只存在于 `\\.\pipe`，根本进不了工作目录，被测的阻塞隐患在那里不成立 |
-  | `internal/symlinktest` | `contents`×2、`filetransfer`×13、`git`×1、`search`×1 | 未开开发者模式时建符号链接要特权；开了就一条都不 skip |
+  | `internal/symlinktest` | `contents`×4、`filetransfer`×13、`git`×1、`search`×1 | 未开开发者模式时建符号链接要特权；开了就一条都不 skip |
   | `internal/unwritabletest` | `filestore`×1、`ws`×1 | 目录忽略只读属性，`os.Chmod` 挡不住写入；要真挡住得给当前用户的 SID 加一条 deny ACE |
   | `filetransfer/realname_windows_test.go` 的 `shortName` | `filetransfer`×0~2 | 临时目录所在的卷关掉了 8.3 短名（`fsutil 8dot3name`）时没有别名可测；开着就一条都不 skip |
 
-  **合计 7~25 条**，两个区间端点都是对的：`filetransfer` 的「refuses to overwrite anything but a regular file」一个子测试里同时要符号链接和 fifo，谁先 skip 就记在谁名下，于是前两行的条数此消彼长——没开开发者模式是 4+17，开了是 5+0。别按单行的数去对账，按合计。
+  **合计 7~27 条**，两个区间端点都是对的：`filetransfer` 的「refuses to overwrite anything but a regular file」一个子测试里同时要符号链接和 fifo，谁先 skip 就记在谁名下，于是前两行的条数此消彼长——没开开发者模式是 4+19，开了是 5+0。别按单行的数去对账，按合计。
 
   能用平台分表（如 `settings_test.go` 的路径用例）就不要 skip；断言本身在两个平台上形状不同时，把它抽成平台分文件的测试辅助（如 `internal/fspermtest`、`internal/termtest`、`internal/fifotest`），而不是在 Windows 上 skip 掉——权限测试恰恰在权限有问题的那个平台上 skip，等于什么都没证明。
 

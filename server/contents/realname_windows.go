@@ -1,4 +1,4 @@
-package filetransfer
+package contents
 
 import (
 	"fmt"
@@ -8,11 +8,11 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-// resolvedName is the path beneath root that f, opened there as name, has in
+// ResolvedName is the path beneath root that f, opened there as name, has in
 // the file system. On Windows a name can be another spelling of a different
 // one: an 8.3 short name such as ENV~1 opens .env, and GIT~1 is .git. So what
 // is checked is the long name the file system resolved, never the one asked.
-func resolvedName(root *os.Root, name string, f *os.File) (string, error) {
+func ResolvedName(root *os.Root, name string, f *os.File) (string, error) {
 	dir, err := root.Open(".")
 	if err != nil {
 		return "", err

@@ -148,62 +148,35 @@ func (h *Handler) UploadFolder(w http.ResponseWriter, r *http.Request) {
 
 // openDir opens the existing directory rel names — what names it in errors —
 // with every link on the way followed, provided where it leads is still inside
-// the work directory; from there everything goes through roots rather than
-// joined paths.
-//
-// Following links rather than refusing them is what lets a link that stays in
-// the project lead somewhere — a pnpm workspace links packages into
-// node_modules, and on Windows by a junction, whose target is always absolute —
-// which an os.Root opened on the work directory refuses outright. Where it
-// leads is read off the opened directory itself (resolvedName, the check the
-// raw endpoint makes), not off the path: filepath.EvalSymlinks does not resolve
-// a junction, so a path check would wave one pointing out of the project
-// through.
+// the work directory (contents.OpenDirWithin); from there everything goes
+// through roots rather than joined paths.
 func (h *Handler) openDir(workDir, rel, what string) (*os.Root, *apiError) {
-	full := filepath.Join(workDir, rel)
-	info, err := os.Stat(full)
-	if err != nil {
-		// ENOTDIR is a file where the path has a directory on the way.
-		if errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.ENOTDIR) {
-			return nil, errf(http.StatusNotFound, CodeNotFound, "%s does not exist: %s", what, displayDir(rel))
-		}
-		h.log.Error("failed to stat directory for transfer", "path", rel, "error", err)
-		return nil, errf(http.StatusInternalServerError, CodeInternal, "failed to stat %s", displayDir(rel))
-	}
-	if !info.IsDir() {
-		return nil, errf(http.StatusBadRequest, CodeNotADirectory, "%s is a file, not a directory: %s", what, displayDir(rel))
-	}
-
-	dest, err := os.OpenRoot(full)
-	if err != nil {
-		h.log.Error("failed to open directory for transfer", "path", rel, "error", err)
-		return nil, errf(http.StatusInternalServerError, CodeInternal, "failed to open %s", displayDir(rel))
-	}
-	opened, err := dest.Open(".")
-	if err != nil {
-		dest.Close()
-		h.log.Error("failed to open directory for transfer", "path", rel, "error", err)
-		return nil, errf(http.StatusInternalServerError, CodeInternal, "failed to open %s", displayDir(rel))
-	}
-	defer opened.Close()
-
 	work, err := os.OpenRoot(workDir)
 	if err != nil {
-		dest.Close()
 		return nil, h.internalFailure("open", "the work directory", err)
 	}
 	defer work.Close()
-	if _, err := resolvedName(work, filepath.Join(".", rel), opened); err != nil {
-		dest.Close()
+
+	dest, _, _, err := contents.OpenDirWithin(work, rel)
+	switch {
+	case err == nil:
+		return dest, nil
+	case errors.Is(err, contents.ErrNotFound):
+		return nil, errf(http.StatusNotFound, CodeNotFound, "%s does not exist: %s", what, contents.DisplayDir(rel))
+	case errors.Is(err, contents.ErrNotADirectory):
+		return nil, errf(http.StatusBadRequest, CodeNotADirectory, "%s is a file, not a directory: %s", what, contents.DisplayDir(rel))
+	case errors.Is(err, contents.ErrInvalidPath):
 		// Logged rather than answered: the reason holds host paths. One answer
-		// for all of them, since resolvedName does not say which it was — a link
-		// out, the directory swapped while it was opened, or a resolution that
+		// for all of them, since it does not matter which it was — a link out,
+		// the directory swapped while it was opened, or a resolution that
 		// failed — and none of them is a directory this request can use.
 		h.log.Warn("directory for transfer does not resolve inside the work directory", "path", rel, "error", err)
 		return nil, errf(http.StatusBadRequest, CodeInvalidPath,
-			"%s is outside the work directory or could not be resolved within it: %s", what, displayDir(rel))
+			"%s is outside the work directory or could not be resolved within it: %s", what, contents.DisplayDir(rel))
+	default:
+		h.log.Error("failed to open directory for transfer", "path", rel, "error", err)
+		return nil, errf(http.StatusInternalServerError, CodeInternal, "failed to open %s", contents.DisplayDir(rel))
 	}
-	return dest, nil
 }
 
 // claimFolder opens the folder an upload writes into, and reports whether this

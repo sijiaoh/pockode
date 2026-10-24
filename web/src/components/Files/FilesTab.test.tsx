@@ -11,6 +11,7 @@ import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { contentsQueryKey } from "../../hooks/useContents";
 import { FILE_SEARCH_DEBOUNCE_MS } from "../../hooks/useFileSearch";
+import { ENTRY_DRAG_TYPE } from "../../lib/entryDrag";
 import { useFilesSearchStore } from "../../lib/filesSearchStore";
 import {
 	type FolderUploadRequest,
@@ -25,14 +26,23 @@ import type { Entry } from "../../types/contents";
 import type { FileSearchResult } from "../../types/search";
 import { SidebarContext } from "../Layout/SidebarContext";
 import FilesTab from "./FilesTab";
+import type { EntryDragStart } from "./FileTreeNode";
 
 const searchFiles = vi.fn();
 const createFile = vi.fn();
 const deleteFile = vi.fn();
 const renameFile = vi.fn();
+const moveFile = vi.fn();
 const getFile = vi.fn();
 const wsState = {
-	actions: { searchFiles, createFile, deleteFile, renameFile, getFile },
+	actions: {
+		searchFiles,
+		createFile,
+		deleteFile,
+		renameFile,
+		moveFile,
+		getFile,
+	},
 	maxUploadSize: 0,
 };
 
@@ -72,41 +82,83 @@ const DEFAULT_TREE_ENTRIES: Entry[] = [
 	{ name: "main.tsx", type: "file", path: "src/main.tsx" },
 ];
 let treeEntries: Entry[] = [...DEFAULT_TREE_ENTRIES];
+/** Whether a folder row dragged from the stand-in tree was open at the time. */
+let dragStartsExpanded = false;
 
 vi.mock("./FileTree", () => ({
 	default: ({
 		onOpenMenu,
 		dropTargetPath,
 		springOpenPath,
-		forceOpenPath,
+		forceOpenPaths,
+		onEntryDragStart,
+		dragSourcePath,
+		movingPaths,
 	}: {
 		onOpenMenu: (entry: Entry) => void;
 		dropTargetPath: string | null;
 		springOpenPath: string | null;
-		forceOpenPath: string | null;
-	}) => (
-		<div>
-			file tree
-			{treeEntries.map((entry) => (
-				<button
-					key={entry.path}
-					type="button"
-					onClick={() => onOpenMenu(entry)}
+		forceOpenPaths: readonly string[];
+		onEntryDragStart?: (entry: Entry, drag: EntryDragStart) => void;
+		dragSourcePath: string | null;
+		movingPaths: ReadonlySet<string>;
+	}) => {
+		// What a real row does at `dragstart`, minus the payload, which is the
+		// row's own business and is tested with it.
+		const dragStart = (entry: Entry) =>
+			onEntryDragStart
+				? (event: React.DragEvent<HTMLElement>) => {
+						event.stopPropagation();
+						onEntryDragStart(entry, {
+							wasExpanded: dragStartsExpanded,
+							element: event.currentTarget,
+						});
+					}
+				: undefined;
+		return (
+			<div>
+				file tree
+				{treeEntries.map((entry) => (
+					<button
+						key={entry.path}
+						type="button"
+						onClick={() => onOpenMenu(entry)}
+					>
+						{`menu for ${entry.path}`}
+					</button>
+				))}
+				<div>{`force open: ${forceOpenPaths.join(", ") || "none"}`}</div>
+				{/* biome-ignore lint/a11y/noStaticElementInteractions: stands in for a row's drag source */}
+				<div
+					data-entry-path="src"
+					data-entry-type="dir"
+					onDragStart={dragStart({ name: "src", type: "dir", path: "src" })}
 				>
-					{`menu for ${entry.path}`}
-				</button>
-			))}
-			<div>{`force open: ${forceOpenPath ?? "none"}`}</div>
-			<div data-entry-path="src" data-entry-type="dir">
-				src
-				<div data-entry-path="src/main.tsx" data-entry-type="file">
-					main.tsx
+					src
+					{/* biome-ignore lint/a11y/noStaticElementInteractions: stands in for a row's drag source */}
+					<div
+						data-entry-path="src/main.tsx"
+						data-entry-type="file"
+						onDragStart={dragStart({
+							name: "main.tsx",
+							type: "file",
+							path: "src/main.tsx",
+						})}
+					>
+						main.tsx
+					</div>
 				</div>
+				<div data-entry-path="lib" data-entry-type="dir">
+					lib
+				</div>
+				<div>{`drop target: ${dropTargetPath === null ? "none" : dropTargetPath || "root"}`}</div>
+				<div>{`spring open: ${springOpenPath ?? "none"}`}</div>
+				<div>{`rows draggable: ${onEntryDragStart ? "yes" : "no"}`}</div>
+				<div>{`dragging: ${dragSourcePath ?? "none"}`}</div>
+				<div>{`moving: ${[...movingPaths].join(", ") || "none"}`}</div>
 			</div>
-			<div>{`drop target: ${dropTargetPath === null ? "none" : dropTargetPath || "root"}`}</div>
-			<div>{`spring open: ${springOpenPath ?? "none"}`}</div>
-		</div>
-	),
+		);
+	},
 }));
 
 interface SearchParams {
@@ -1447,38 +1499,6 @@ describe("FilesTab entry menu", () => {
 		expect(screen.getByText("force open: src")).toBeInTheDocument();
 	});
 
-	it("asks for the same folder to open again on the next creation", async () => {
-		const user = userEvent.setup();
-		renderFilesTab({ src: [] });
-
-		const create = async (name: string) => {
-			await user.click(screen.getByRole("button", { name: "menu for src" }));
-			await user.click(screen.getByRole("button", { name: "New file" }));
-			await user.type(screen.getByLabelText("Name"), name);
-			await user.click(screen.getByRole("button", { name: "Create" }));
-			await waitFor(() =>
-				expect(screen.queryByLabelText("Name")).not.toBeInTheDocument(),
-			);
-		};
-
-		await create("a.md");
-		expect(screen.getByText("force open: src")).toBeInTheDocument();
-
-		await user.click(screen.getByRole("button", { name: "menu for src" }));
-		await user.click(screen.getByRole("button", { name: "New file" }));
-		// Retired while the next name is being typed. Left standing, assigning the
-		// same path again would not re-run the tree's effect, and a folder the user
-		// collapsed in between would stay shut over what was just made in it.
-		expect(screen.getByText("force open: none")).toBeInTheDocument();
-
-		await user.type(screen.getByLabelText("Name"), "b.md");
-		await user.click(screen.getByRole("button", { name: "Create" }));
-
-		await waitFor(() =>
-			expect(screen.getByText("force open: src")).toBeInTheDocument(),
-		);
-	});
-
 	it("refuses a name the listing already holds without asking the server", async () => {
 		const user = userEvent.setup();
 		renderFilesTab({ src: [entry("main.tsx", "file", "src")] });
@@ -1941,5 +1961,328 @@ describe("FilesTab renaming", () => {
 		await user.click(screen.getByRole("button", { name: "Rename" }));
 
 		expect(screen.getByLabelText("Name")).toBeInTheDocument();
+	});
+});
+
+describe("FilesTab moving by dragging", () => {
+	const originalMatchMedia = window.matchMedia;
+
+	beforeEach(() => {
+		searchFiles.mockResolvedValue(result([]));
+		uploadActions.reset();
+		moveFile.mockReset();
+		getFile.mockReset();
+		getFile.mockReturnValue(new Promise(() => {}));
+		vi.mocked(uploadFile).mockReset();
+		dragStartsExpanded = false;
+		// Rows are dragged with a mouse, so only a fine pointer gets the gesture.
+		Object.defineProperty(window, "matchMedia", {
+			writable: true,
+			value: (query: string) => ({
+				...originalMatchMedia(query),
+				matches: query === "(hover: hover) and (pointer: fine)",
+			}),
+		});
+	});
+
+	afterEach(() => {
+		Object.defineProperty(window, "matchMedia", {
+			writable: true,
+			value: originalMatchMedia,
+		});
+		vi.useRealTimers();
+	});
+
+	function rowDrag() {
+		return { types: [ENTRY_DRAG_TYPE], dropEffect: "none" };
+	}
+
+	function libRow(): Element {
+		const row = document.querySelector('[data-entry-path="lib"]');
+		if (!row) throw new Error("no lib row rendered");
+		return row;
+	}
+
+	/** Picks `source` up and holds it over `target`; the drag, to go on with. */
+	function dragRow(source: Element, target: Element) {
+		const dataTransfer = rowDrag();
+		fireEvent.dragStart(source, { dataTransfer });
+		fireEvent.dragEnter(target, { dataTransfer });
+		fireEvent.dragOver(target, { dataTransfer });
+		return dataTransfer;
+	}
+
+	function moveRow(source: Element, target: Element) {
+		const dataTransfer = dragRow(source, target);
+		fireEvent.drop(target, { dataTransfer });
+		// Sent to the row the drag started from, as a browser does.
+		fireEvent.dragEnd(source, { dataTransfer });
+	}
+
+	it("moves a row to where it is let go, never uploading it", async () => {
+		moveFile.mockResolvedValue("main.tsx");
+		renderFilesTab({ "": [entry("src", "dir")] });
+
+		const dataTransfer = dragRow(fileRow(), panel());
+
+		expect(
+			screen.getByText("Move main.tsx to project root"),
+		).toBeInTheDocument();
+		expect(screen.getByText("drop target: root")).toBeInTheDocument();
+		expect(dataTransfer.dropEffect).toBe("move");
+		expect(
+			await screen.findByText("dragging: src/main.tsx"),
+		).toBeInTheDocument();
+
+		fireEvent.drop(panel(), { dataTransfer });
+		fireEvent.dragEnd(fileRow(), { dataTransfer });
+
+		expect(moveFile).toHaveBeenCalledWith("src/main.tsx", "");
+		expect(uploadFile).not.toHaveBeenCalled();
+		expect(screen.queryByText(/^Move main/)).not.toBeInTheDocument();
+		await waitFor(() =>
+			expect(screen.getByText("moving: none")).toBeInTheDocument(),
+		);
+	});
+
+	it("dims the row until the move is answered", async () => {
+		let answer: (path: string) => void = () => {};
+		moveFile.mockReturnValue(
+			new Promise<string>((resolve) => {
+				answer = resolve;
+			}),
+		);
+		renderFilesTab({ "": [entry("src", "dir")] });
+
+		moveRow(fileRow(), panel());
+
+		// The drag is over but the request is not: the row stays faded and cannot
+		// be picked up again for a second move of a path about to be vacated.
+		expect(screen.getByText("dragging: none")).toBeInTheDocument();
+		expect(screen.getByText("moving: src/main.tsx")).toBeInTheDocument();
+
+		await act(async () => answer("main.tsx"));
+
+		expect(screen.getByText("moving: none")).toBeInTheDocument();
+	});
+
+	it.each<{
+		name: string;
+		source: () => Element;
+		target: () => Element;
+		listings: Record<string, Entry[]>;
+		reason: string;
+	}>([
+		{
+			name: "a folder into itself",
+			source: () => folderRow(),
+			target: () => fileRow(),
+			listings: {},
+			reason: "Can't move a folder into itself",
+		},
+		{
+			name: "an entry into the folder it is already in",
+			source: () => fileRow(),
+			target: () => folderRow(),
+			listings: {},
+			reason: "Already in src",
+		},
+		{
+			name: "onto a name the destination already holds",
+			source: () => fileRow(),
+			target: () => panel(),
+			listings: { "": [entry("main.tsx", "file")] },
+			reason: "Project root already has main.tsx",
+		},
+	])("turns away $name and says why", ({
+		source,
+		target,
+		listings,
+		reason,
+	}) => {
+		vi.useFakeTimers();
+		renderFilesTab(listings);
+
+		const dataTransfer = dragRow(source(), target());
+
+		expect(screen.getByText(reason)).toBeInTheDocument();
+		expect(dataTransfer.dropEffect).toBe("none");
+		expect(screen.getByText("drop target: none")).toBeInTheDocument();
+		// Hovering does not open anything that would turn the drop away, which
+		// for a moved folder is the folder itself.
+		act(() => vi.advanceTimersByTime(700));
+		expect(screen.getByText("spring open: none")).toBeInTheDocument();
+
+		fireEvent.drop(target(), { dataTransfer });
+		expect(moveFile).not.toHaveBeenCalled();
+	});
+
+	it("turns away a move of the file being edited, wherever it is aimed", () => {
+		renderFilesTab(
+			{},
+			{ activeFilePath: "src/main.tsx", activeFileEdit: true },
+		);
+
+		const dataTransfer = dragRow(folderRow(), libRow());
+
+		expect(screen.getByText("Close the editor first")).toBeInTheDocument();
+		fireEvent.drop(libRow(), { dataTransfer });
+		expect(moveFile).not.toHaveBeenCalled();
+	});
+
+	it("follows the file being read and reopens the folder where it landed", async () => {
+		moveFile.mockResolvedValue("lib/src");
+		dragStartsExpanded = true;
+		const onRepointFile = vi.fn();
+		const onCloseFile = vi.fn();
+		renderFilesTab(
+			{},
+			{ activeFilePath: "src/main.tsx", onRepointFile, onCloseFile },
+		);
+
+		moveRow(folderRow(), libRow());
+
+		expect(moveFile).toHaveBeenCalledWith("src", "lib");
+		await waitFor(() =>
+			expect(onRepointFile).toHaveBeenCalledWith("lib/src/main.tsx"),
+		);
+		expect(onCloseFile).not.toHaveBeenCalled();
+		// The destination, so the entry is seen arriving, and the folder itself,
+		// a new key in the tree that was open when it was picked up.
+		expect(screen.getByText("force open: lib, lib/src")).toBeInTheDocument();
+	});
+
+	it("reports a refusal and refetches both folders it involved", async () => {
+		moveFile.mockRejectedValue(new Error("lib/main.tsx already exists"));
+		// The stand-in tree observes no listing, so a refetch is never started;
+		// what is asked of the cache is what there is to check.
+		const invalidate = vi.spyOn(QueryClient.prototype, "invalidateQueries");
+		const remove = vi.spyOn(QueryClient.prototype, "removeQueries");
+		renderFilesTab();
+
+		moveRow(fileRow(), libRow());
+
+		expect(
+			await screen.findByText("Move failed: lib/main.tsx already exists"),
+		).toBeInTheDocument();
+		// Either listing may have been the stale one, and the message cannot say
+		// which; both are fetched again rather than dropped.
+		expect(invalidate).toHaveBeenCalledWith({
+			queryKey: contentsQueryKey("src"),
+		});
+		expect(invalidate).toHaveBeenCalledWith({
+			queryKey: contentsQueryKey("lib"),
+		});
+		expect(remove).not.toHaveBeenCalled();
+		expect(screen.getByText("force open: none")).toBeInTheDocument();
+		invalidate.mockRestore();
+		remove.mockRestore();
+	});
+
+	it("leaves rows undraggable on a touch screen", () => {
+		Object.defineProperty(window, "matchMedia", {
+			writable: true,
+			value: originalMatchMedia,
+		});
+		renderFilesTab();
+
+		expect(screen.getByText("rows draggable: no")).toBeInTheDocument();
+	});
+
+	it("lets go of a drag whose row left the page under it", async () => {
+		renderFilesTab();
+		const row = fileRow();
+		const dataTransfer = dragRow(row, panel());
+		expect(
+			await screen.findByText("dragging: src/main.tsx"),
+		).toBeInTheDocument();
+		// The folder refreshed and the row went with it. Its `dragend` still goes
+		// to it, but no longer bubbles to anything above.
+		row.remove();
+
+		fireEvent.dragEnd(row, { dataTransfer });
+
+		expect(screen.getByText("dragging: none")).toBeInTheDocument();
+		// Nor does the panel go on taking it for one of its own.
+		dataTransfer.dropEffect = "none";
+		fireEvent.dragEnter(panel(), { dataTransfer });
+		fireEvent.dragOver(panel(), { dataTransfer });
+		expect(screen.queryByText(/^Move main/)).not.toBeInTheDocument();
+		expect(screen.getByText("drop target: none")).toBeInTheDocument();
+		expect(dataTransfer.dropEffect).toBe("none");
+	});
+
+	it("turns away a move into or out of one still in flight", () => {
+		moveFile.mockReturnValue(new Promise(() => {}));
+		renderFilesTab();
+
+		moveRow(folderRow(), libRow());
+		// `src` is about to be somewhere else, so neither what is in it nor it as
+		// a destination is where it seems to be.
+		dragRow(fileRow(), libRow());
+
+		expect(
+			screen.getByText("Wait for the move in progress"),
+		).toBeInTheDocument();
+		expect(moveFile).toHaveBeenCalledTimes(1);
+	});
+
+	it("drops the answer to a move made before a worktree switch", async () => {
+		let answer: (path: string) => void = () => {};
+		moveFile.mockReturnValue(
+			new Promise<string>((resolve) => {
+				answer = resolve;
+			}),
+		);
+		dragStartsExpanded = true;
+		const onRepointFile = vi.fn();
+		renderFilesTab({}, { activeFilePath: "src/main.tsx", onRepointFile });
+		worktreeActions.setCurrent("");
+
+		moveRow(folderRow(), libRow());
+		act(() => worktreeActions.setCurrent("feature-x"));
+		// The row in the new tree that happens to share the path is not held.
+		expect(screen.getByText("moving: none")).toBeInTheDocument();
+
+		await act(async () => answer("lib/src"));
+
+		// About the other tree: following it would navigate back there, and the
+		// paths opened here would be this tree's namesakes.
+		expect(onRepointFile).not.toHaveBeenCalled();
+		expect(screen.getByText("force open: none")).toBeInTheDocument();
+		worktreeActions.setCurrent("");
+	});
+
+	it("follows the file with the view shown when the move is answered", async () => {
+		let answer: (path: string) => void = () => {};
+		moveFile.mockReturnValue(
+			new Promise<string>((resolve) => {
+				answer = resolve;
+			}),
+		);
+		const repointBefore = vi.fn();
+		const { rerender } = renderFilesTab(
+			{},
+			{ activeFilePath: "src/main.tsx", onRepointFile: repointBefore },
+		);
+
+		moveRow(folderRow(), libRow());
+		// Another session opened while the move was out: the callback the shell
+		// hands down now navigates within that one.
+		const repointAfter = vi.fn();
+		rerender(
+			<FilesTab
+				onSelectFile={vi.fn()}
+				activeFilePath="src/main.tsx"
+				activeFileEdit={false}
+				onRepointFile={repointAfter}
+				onCloseFile={vi.fn()}
+			/>,
+		);
+
+		await act(async () => answer("lib/src"));
+
+		expect(repointBefore).not.toHaveBeenCalled();
+		expect(repointAfter).toHaveBeenCalledWith("lib/src/main.tsx");
 	});
 });

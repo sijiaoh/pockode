@@ -26,20 +26,20 @@ served through it; it is addressed by id in the session's own attachment store
 
 | Layer | Path | Role |
 |-------|------|------|
-| RPC handlers | `server/ws/rpc_file.go` | `file.get`, `file.write`, `file.create`, `file.delete`, `file.rename`, `file.search` |
-| File operations | `server/contents/contents.go` | Path validation, read, write (upsert), create, delete, rename |
+| RPC handlers | `server/ws/rpc_file.go` | `file.get`, `file.write`, `file.create`, `file.delete`, `file.rename`, `file.move`, `file.search` |
+| File operations | `server/contents/contents.go`, `server/contents/move.go`, `server/contents/within.go` | Path validation, read, write (upsert), create, delete, rename, move; opening a directory only where its links lead inside the work directory (`OpenDirWithin`, shared with the folder upload and download) |
 | HTTP transfer | `server/filetransfer/filetransfer.go`, `server/filetransfer/folder.go`, `server/filetransfer/folderdownload.go` | Upload / download of whole files, upload of a folder, download of a folder as a zip archive (see [Transfer](#transfer)) |
 | Search | `server/search/` | Candidate listing (`list.go`), content grep (`scan.go`) |
 | Frontend components | `web/src/components/Files/` | FileTree, FileEditor, FileView, FileTreeNode, FileSearchBar, FileSearchResults, FileEntryMenu, EntryNameDialog, UploadQueue, UploadConflictDialog |
-| Entry-action helpers | `web/src/hooks/useTakenNames.ts`, `web/src/lib/fileCache.ts` | Which names a directory has spoken for; the cache work a rename or a delete implies |
+| Entry-action helpers | `web/src/hooks/useTakenNames.ts`, `web/src/lib/fileCache.ts` | Which names a directory has spoken for; the cache work a rename, a move or a delete implies |
 | Search UI state | `web/src/hooks/useFileSearch.ts`, `web/src/lib/filesSearchStore.ts` | Debounce + query cache, persisted options |
-| RPC actions | `web/src/lib/rpc/file.ts` | `getFile`, `writeFile`, `createFile`, `deleteFile`, `renameFile`, `searchFiles`, `isAlreadyExistsError` |
+| RPC actions | `web/src/lib/rpc/file.ts` | `getFile`, `writeFile`, `createFile`, `deleteFile`, `renameFile`, `moveFile`, `searchFiles`, `isAlreadyExistsError`, `fileMoveRefusedReason` |
 | HTTP transfer client | `web/src/lib/fileDownload.ts`, `web/src/lib/rawProbe.ts`, `web/src/lib/fileUpload.ts` | Handing a download to the browser and wording its failures, upload (see [Downloading](#downloading), [Uploading](#uploading)) |
 | Media playback | `web/src/components/Files/MediaPreview.tsx`, `web/src/components/Media/useMediaPlayback.ts`, `web/src/hooks/useRawMediaSource.ts`, `web/src/components/Media/exclusivePlayback.ts` | Inline audio and video streamed from a raw capability, its recovery, and one sound at a time (see [Playing audio and video](#playing-audio-and-video)) |
 | Download action | `web/src/hooks/useFileDownload.ts`, `web/src/components/Files/FileDownloadControls.tsx`, `saveRawFile` / `saveRawFolder` in `web/src/hooks/useRawMediaSource.ts` | The viewer's Download — check, hand-over, cancel, error — shared by `FileView` and `CommitFileView`, and the menu's Download as zip (`useFolderDownload`, the same core); `saveRawFile` is every streamed Save that gets its own capability, `saveRawFolder` a folder's |
 | Upload queue state | `web/src/lib/uploadStore.ts` | Queue, concurrency, retry, worktree scope |
 | Reading a folder | `web/src/lib/folderRead.ts` | Walking a dropped folder, a picked folder's paths, the client's file cap (see [Uploading a folder](#dropping-a-folder)) |
-| Drag and drop | `web/src/hooks/useFileDragZone.ts`, `web/src/components/Files/useFileDrop.ts`, `web/src/hooks/useFileDropGuard.ts` | What every drop zone shares (file detection, the depth count, folder splitting, claiming the drag); the tree's drop target resolution on top of it; the window-level drop backstop |
+| Drag and drop | `web/src/hooks/useFileDragZone.ts`, `web/src/components/Files/useFileDrop.ts`, `web/src/hooks/useFileDropGuard.ts`, `web/src/lib/entryDrag.ts` | What every drop zone shares (`useDragZone`: the depth count, the resets, claiming the drag; file detection and folder splitting on top for files); the tree's drop target resolution, for uploads and moves alike; the window-level drop backstop; what a tree row's drag carries (see [Moving](#moving)) |
 
 ## Operations
 
@@ -213,7 +213,7 @@ one would fold "move this" and "create the parents on the way" into the same
 text field the UI names things in, and its failures — target directory missing,
 target is a file, a directory moved into its own subtree, a cross-directory
 overwrite — are ones the user cannot see coming while typing a name. Moving
-belongs to a gesture that shows the destination. The naming sheet in the UI
+belongs to a gesture that shows the destination ([Moving](#moving)). The naming sheet in the UI
 rejects a separator for the same reason, so both halves say one thing about
 what a name may be.
 
@@ -248,6 +248,50 @@ listing is read, and only in the narrow case where it decides anything. Leaving
 it out would not lose data — POSIX makes `rename(2)` a no-op when both names
 resolve to the same file — but it would report success for a rename that did
 nothing, which is worse than refusing.
+
+**`file.move`** — Put an entry into another directory, keeping its name.
+
+Params `path` (the entry; `""` is refused) and `destination` (an existing
+directory; `""` is the work directory, so the field is required — leaving it
+out is `invalid params` rather than a move to the root). Result `{ "path": "<new path>" }`,
+slash-separated and cleaned (`./out/` becomes `out`), but otherwise spelled as
+`destination` was: through a link it is the link's path, not its target's. A
+move that changes nothing (below) answers with `path` itself, cleaned, instead.
+
+Every refusal is `InvalidParams` with `data.reason`, which is what a client
+branches on (`fileMoveRefusedReason`); the message says the same in prose:
+
+| `data.reason` | Message | When |
+|---|---|---|
+| `invalid_path` | `invalid path` | Either path escapes the work directory, lexically or through a link |
+| `not_found` | `not found: <path>` | No entry at `path` |
+| `destination_not_found` | `destination not found: <destination>` | No directory at `destination` |
+| `not_a_directory` | `destination is not a directory: <destination>` | `destination` is a file |
+| `into_itself` | `cannot move a directory into itself: <path> into <destination>` | `destination` is the directory itself or beneath it |
+| `exists` | `<new path> already exists` | The name is taken in `destination` — the sentence `file.create` and `file.rename` send, so `isAlreadyExistsError` holds too |
+
+- Moving an entry into the directory it is already in succeeds and does
+  nothing, returning its path — the requested state holds, as with renaming to
+  the same name
+- The destination is never created on the way: a move's destination is picked
+  in the UI, not typed, so a missing one is a stale view to report, not a
+  directory to make
+- Nothing is ever replaced. The "already exists" check is before the
+  `os.Rename`, with the window `file.rename` describes
+
+It is one `os.Rename`, for the reasons `file.rename` gives. Unlike rename, both
+directories — the source's parent and the destination — are resolved with
+every link followed and must still be inside the work directory
+(`contents.OpenDirWithin`, the check the folder upload makes), and the rename
+is then given the resolved paths. The source itself is looked up only after
+that, through its resolved parent and with `Lstat`, so a symlink is moved as
+the link, and nothing is ever looked up through a link that leads out — a
+"not found" there would tell which names exist outside. A link that stays in the project, such as a
+pnpm workspace's, is a valid destination; one that leads out is refused either
+way, so a move can neither hand a project file to a directory outside nor pull
+one in. Whether the destination is beneath the source is decided by file
+identity up the destination's ancestry rather than by comparing strings, so
+neither a link nor a case-insensitive file system's other spelling hides it.
 
 **`file.search`** — Find files by name or content.
 
@@ -554,7 +598,7 @@ folder itself, before sending, in words of its own.
 | `409` | `conflict` | Without `merge`: `name` is already taken in the destination — by a folder, a file, or a symlink, dangling or not. With it: `name` is a file or a symlink, or an entry inside is in the way (below). Either way: the name was swapped while the upload opened it |
 | `413` | `too_large` | Over `filetransfer.MaxUploadSize`, **1 GiB**, counted over every file of the folder together; `limit` as for `/api/files/upload` |
 | `413` | `too_many_entries` | Over `filetransfer.MaxFolderEntries`, **10,000** files and directories in one request; `limit` is that count |
-| `500` | `internal` | Creating, writing or removing on disk failed |
+| `500` | `internal` | The work directory cannot be opened; creating, writing or removing on disk failed |
 
 Every `409` names the path in the way, relative to the work directory, and
 reads as a sentence the client can show as it is, as `/api/files/upload`'s do;
@@ -622,7 +666,7 @@ with every link followed and must then lie inside the work directory — a link
 that stays in the project (a pnpm workspace's `node_modules/@pockode/shared`, a
 junction on Windows) leads where it points, one out of it is `invalid_path`.
 Where it leads is read off the opened directory, not the path, by the check
-`/api/raw` makes (`resolvedName`): `filepath.EvalSymlinks` does not resolve a
+`/api/raw` makes (`contents.ResolvedName`): `filepath.EvalSymlinks` does not resolve a
 Windows junction, so a path check would let one pointing out of the project
 through. From there every write goes through an `os.Root`: the folder's name is
 created in the destination, which refuses a link on the name, and each file is
@@ -740,7 +784,7 @@ dependencies installed, which a user downloads on purpose.
 | `409` | `conflict` | A folder inside was swapped for something else — a link — while the check was reading it; the message says to try again. A file swapped once the archive has started aborts it instead (above) |
 | `413` | `too_large` | Over `filetransfer.MaxFolderDownloadSize`, **2 GiB** of file content; `limit` in bytes |
 | `413` | `too_many_entries` | Over `filetransfer.MaxFolderDownloadEntries`, **100,000** files, folders and links; `limit` is that count |
-| `500` | `internal` | A file or directory that cannot be read — a permission, say; the message names it |
+| `500` | `internal` | The work directory cannot be opened; a file or directory that cannot be read — a permission, say; the message names it |
 
 **`POST /api/chat/attachments`** — store files a chat message is about to carry.
 
@@ -1496,7 +1540,8 @@ Every row of the tree keeps its one obvious gesture — a folder expands or
 collapses, a file opens — and everything else hangs off a `…` button at the end
 of the row. The project root has no row, so its `…` sits in the search bar; it
 stays usable under search, where the tree is hidden but the target is not in
-doubt.
+doubt. The one action that is not in the menu is [moving](#moving), which is
+the row itself dragged onto a folder, on a desktop only.
 
 The `…` is a **sibling** of the row button, never nested in it: nested, every
 tap on it would also open the file or toggle the folder. That split is why the
@@ -1565,11 +1610,12 @@ rather than the name, and leaves with the dialog for the error bar. Empty
 names, `/`, `.` and `..` are refused client-side.
 
 On success the destination's listing is invalidated and the folder is forced
-open through `forceOpenPath`, consumed by the same effect as the drag's
+open through `forceOpenPaths`, consumed by the same kind of effect as the drag's
 `springOpenPath`. It cannot reuse `expandSignal`, which only opens the ancestors
-of the file currently being read. Opening the dialog clears `forceOpenPath`
-first: assigning the same path twice does not re-run the effect, so a folder the
-user collapsed between two creations would otherwise stay shut over the second.
+of the file currently being read. It is a list because a move can need two
+folders open at once, and every request is a new array: the effect runs on the
+array's identity, so asking for the same folder twice still reopens one the user
+collapsed between two creations.
 A new file is **not** opened automatically: on a phone that would replace the
 sidebar the user is still working in.
 
@@ -1620,7 +1666,7 @@ Nothing is prefetched under the new path, and a renamed file is not opened.
 
 A renamed **folder collapses**: `FileTreeNode` keeps `isExpanded` in component
 state and the list is keyed by `entry.path`, so the new name is a new component.
-`FilesTab` answers with `forceOpenPath(newPath)`. Its children's expansion is
+`FilesTab` answers with `forceOpenPaths([newPath])`. Its children's expansion is
 still lost, and that is accepted — carrying it across would mean lifting
 expansion into a path-keyed store, which is a rework of the tree's state
 ownership for an occasional action. A renamed *file* needs nothing: the folder
@@ -1678,6 +1724,105 @@ listed impossible. The local check is the immediate answer only; `file.create`
 and `file.rename` were the real defence all along, and their refusal lands in
 this same sheet under this same field.
 
+### Moving
+
+On a desktop, a tree row is moved by **dragging it onto a folder**, or onto
+anywhere that means the project root. There is no menu item for it, so a touch
+screen still has no way to move an entry, and neither does a keyboard; a
+`Move to…` item with a folder picker would cover both and is left for later.
+Until it exists the drag is the only path to a move, which makes it a P1 that a
+coarse pointer goes without — an exception to
+[responsive-ui.md](responsive-ui.md#what-may-be-hidden-three-levels), where a
+drag is only ever a P2 beside a control that stays.
+
+**The drag is aimed exactly as [a file drop](#dropping-files-onto-the-tree)
+is**, through the same `useFileDrop`: a folder row or its subtree is that
+folder, a file row its parent, anything else the root; hovering a folder for
+700 ms opens it; resting at an edge scrolls. The folder under the cursor takes
+the same fill, and the docked bar reads `Move <name> to <folder>` with a
+`FolderInput` icon instead of `Upload to …`. The panel takes **no ring**: the
+ring says "files from outside", and a drag that started in the panel needs
+nothing to show where the panel is.
+
+**The source** is the row's highlight `div` in `FileTreeNode` — the same element
+that carries the drop fill — so the drag starts anywhere on the row, the name
+button and the `…` included. A drag never fires `click`, so a press still opens
+the file or toggles the folder; both were checked in Firefox 157 and Chromium
+156, Firefox having once refused to start a drag from a `<button>` inside a
+draggable element. The row is `draggable` only where `FilesTab` passes
+`onEntryDragStart`, which it does only with a fine primary pointer
+(`useHasFinePointer`), the same gate as the step reorder handle: on a phone a
+long press is a scroll, a menu or pull-to-refresh, and stays one. A row whose
+move is still in flight is not draggable, nor is anything inside it, and it
+and its subtree stay at half opacity from `dragstart` until the move is
+answered; the dimming is applied a task after `dragstart`, because a commit
+landing before the browser's snapshot would fade the drag image too. Search
+results are not draggable: they have no tree to be dropped into.
+
+`lib/entryDrag.ts` is **the one place what a row's drag carries is written**:
+`effectAllowed = "move"` and the entry's path and type under
+`application/x-pockode-entry`, nothing else. No `text/plain` and no
+`text/uri-list`, because with either a row let go over the chat composer or the
+search field would type itself in. Dragging a row out of the window as a
+download is an addition there (`DownloadURL`, a widened `effectAllowed`), and
+the tree's own `dropEffect = "move"` stays right after it.
+
+**Telling a move from an upload** is by type and by origin. A row's drag never
+carries `Files`, so the upload path, the chat's drop zone and
+`useFileDropGuard` all let it pass; an outside drag never carries the row type.
+The tree takes a row drag only while `FilesTab` holds a **drag source** —
+recorded at `dragstart`, because during `dragover` a page can read a drag's
+`types` and nothing else — so a row dragged from another Pockode window or tab
+is nobody's here: nothing claims it, the cursor says not allowed, and letting
+go does nothing. The source is kept in a ref beside the state, since the zone
+asks about it from drag events that can arrive before the render `dragstart`
+set off. It is cleared by the row's own `dragend`, listened for on the row
+itself from `dragstart`: a browser sends it there however the drag ends, and
+when the row has left the page under the drag — its folder refreshed — it is
+still sent there but bubbles nowhere, so a listener on the window would never
+hear it (checked in Firefox and Chromium). The zone's own resets do not clear
+it, since a drag that leaves the panel may come back.
+
+**What is turned away**, said on the bar in its refusal look, with
+`dropEffect = "none"` and no hover-to-open, first reason first:
+
+| Case | Bar |
+|---|---|
+| The source is the file open in the editor, or a folder above it — wherever it is aimed, by the same rule as [renaming](#renaming) | `Close the editor first` |
+| The source or the destination is at or under an entry whose move is still in flight, and so about to be somewhere else | `Wait for the move in progress` |
+| A folder onto itself or anything inside it | `Can't move a folder into itself` |
+| The folder the entry is already in — for a file, its own row and its sibling files | `Already in src` / `Already in project root` |
+| A destination whose listing (or upload queue) already has the name | `src already has a.md` / `Project root already has a.md` |
+
+Whether a drag is taken is asked **per target**, on every `dragover` and again
+at the drop, where uploads decide once per drag. The name check reads only
+what is already on hand — the cached listing and the upload queue, through the
+`useTakenNamesIn` the naming sheets use — so a folder never expanded is left to
+the server.
+
+**On a drop** `file.move` is sent with no confirmation and no optimistic
+update: a move overwrites nothing and is undone by dragging back. On success
+`applyEntryMoved` (`lib/fileCache.ts`) does what `applyEntryGone` does for the
+old path and invalidates the destination's listing too, which a rename never
+needs. The destination folder is forced open, so a quick drop on a closed folder
+does not look like the entry vanished; a moved folder that was open when it was
+picked up is reopened at its new path, its top level only, as after a rename. A
+file being read at or under the moved path is followed with `onRepointFile`,
+exactly as a rename follows it. Uploads still queued for a moved folder get
+`not_found` on their rows, as after a rename or a delete. A move answered after
+a worktree switch is dropped, success or failure: it is about the other tree,
+whose paths may be spelled the same as this one's, and the switch refetches
+every listing anyway.
+
+**A failure** lands in the tab's error bar as `Move failed: <server message>`,
+and both the source's parent and the destination are **refetched**. Every
+refusal — the name taken, either folder gone, a folder into itself — means one
+of the two listings was out of date. Refetching both makes the tree agree with
+the banner whichever it was, without branching on the reason or matching any
+text. There is no Replace
+or Keep both: replacing by drag would be destructive and easy to do by
+accident, and renaming first is always there.
+
 ### Deleting
 
 `ConfirmDialog` (`variant="danger"`) asks first, naming the full path. A
@@ -1692,8 +1837,9 @@ and refetching them would collect one "not found" per folder — and invalidates
 the whole file search cache, because every result carries the path it was found
 at and a stale list is one that opens nothing.
 
-All three of them go through that one function: the tree's delete, the viewer's
-delete and [a rename](#renaming). Splitting the work per action is what let a
+All of them go through that one function: the tree's delete, the viewer's
+delete, [a rename](#renaming), and [a move](#moving), whose `applyEntryMoved` is
+this plus the listing it landed in. Splitting the work per action is what let a
 rename invalidate the search cache while a delete did not, and what let the
 viewer's delete invalidate the *root* listing instead of the folder the file was
 actually in — which left the deleted row on screen in every folder but the root.
@@ -1828,8 +1974,11 @@ rather than the row itself, so a folder answers for its whole subtree.
 
 The app has two drop zones, this tree and the chat
 ([agent-chat.md](agent-chat.md#attaching-by-drop-or-paste)), and what they have
-in common is one hook, `hooks/useFileDragZone.ts`; `useFileDrop` is that hook
-plus the aiming, the spring-loading and the edge scrolling below. Four things
+in common is one hook, `useDragZone` in `hooks/useFileDragZone.ts`, which the
+chat takes as `useFileDragZone`. `useFileDrop` is that hook plus the aiming,
+the spring-loading and the edge scrolling below, for files and for
+[rows moved within the tree](#moving) alike: the zone is told which drags it
+tracks, what letting go would do at each target, and what a drop hands over. Four things
 about drag and drop are not optional; the counter and the resets are the shared
 hook's, so the chat has them too:
 
@@ -2146,8 +2295,8 @@ rediscover as a bug:
   file being written does not — see [Security](#security). A folder upload's
   may follow one only to somewhere inside the work directory.
 
-Not in this version, and scope rather than limits: moving files by dragging
-within the tree, resuming an interrupted transfer, a queue that survives a
+Not in this version, and scope rather than limits: resuming an interrupted
+transfer, a queue that survives a
 reload, and uploading into a worktree the user has left.
 
 ## Security
@@ -2221,6 +2370,11 @@ the source it would report a link the tree is plainly showing as not found. The
 parent directory is a different matter — it comes from the source path, which is
 validated lexically, so a symlinked directory on the way there is followed
 exactly as it is for `file.write`.
+
+`file.move` treats the entry it moves the same way, but is stricter about the
+directories: it is new code, as the folder upload is, so both the source's
+parent and the destination may follow a link only to somewhere inside the work
+directory ([`file.move`](#operations)).
 
 `file.get` does follow them: it stats with `Stat`, so a symlink pointing outside
 the workspace reads the target. This is long-standing behavior, not a property

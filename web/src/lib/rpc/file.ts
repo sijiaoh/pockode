@@ -1,4 +1,8 @@
-import type { JSONRPCRequester } from "json-rpc-2.0";
+import {
+	JSONRPCErrorCode,
+	JSONRPCErrorException,
+	type JSONRPCRequester,
+} from "json-rpc-2.0";
 import type { Entry, EntryType, FileContent } from "../../types/contents";
 import type { FileSearchMode, FileSearchResult } from "../../types/search";
 
@@ -37,6 +41,20 @@ interface FileRenameParams {
 	new_name: string;
 }
 
+/**
+ * Rename's other half: the entry keeps its name and changes directory.
+ * `destination` is an existing directory — "" for the work directory — and is
+ * never created on the way.
+ */
+interface FileMoveParams {
+	path: string;
+	destination: string;
+}
+
+interface FileMoveResult {
+	path: string;
+}
+
 export interface FileSearchParams {
 	/** Literal substring, not a pattern. */
 	query: string;
@@ -71,6 +89,37 @@ export function isAlreadyExistsError(error: unknown): boolean {
 	return message.endsWith(" already exists");
 }
 
+/** Where: server/rpc/types.go's FileMoveReason* constants. */
+const MOVE_REFUSED_REASONS = [
+	"invalid_path",
+	"not_found",
+	"destination_not_found",
+	"not_a_directory",
+	"into_itself",
+	"exists",
+] as const;
+
+export type FileMoveRefusedReason = (typeof MOVE_REFUSED_REASONS)[number];
+
+/**
+ * Why the server refused a `file.move`, or null if the failure is anything
+ * else. Recognised by the code and `data.reason`, never the message, which is prose the
+ * server may reword. "exists" is the same refusal `isAlreadyExistsError`
+ * recognises, and its message is the same sentence.
+ */
+export function fileMoveRefusedReason(
+	error: unknown,
+): FileMoveRefusedReason | null {
+	if (
+		!(error instanceof JSONRPCErrorException) ||
+		error.code !== JSONRPCErrorCode.InvalidParams
+	) {
+		return null;
+	}
+	const reason = (error.data as { reason?: unknown } | undefined)?.reason;
+	return MOVE_REFUSED_REASONS.find((r) => r === reason) ?? null;
+}
+
 export interface FileActions {
 	getFile: (path?: string) => Promise<FileGetResult>;
 	writeFile: (path: string, content: string) => Promise<void>;
@@ -79,6 +128,12 @@ export interface FileActions {
 	deleteFile: (path: string) => Promise<void>;
 	/** Renames within the entry's own directory; rejects if the name is taken. */
 	renameFile: (path: string, newName: string) => Promise<void>;
+	/**
+	 * Moves into an existing directory, keeping the name, and resolves to the
+	 * entry's new path. Moving into the directory it is already in resolves
+	 * to its path unchanged; see `fileMoveRefusedReason` for the refusals.
+	 */
+	moveFile: (path: string, destination: string) => Promise<string>;
 	searchFiles: (params: FileSearchParams) => Promise<FileSearchResult>;
 }
 
@@ -121,6 +176,13 @@ export function createFileActions(
 				path,
 				new_name: newName,
 			} as FileRenameParams);
+		},
+		moveFile: async (path: string, destination: string): Promise<string> => {
+			const result: FileMoveResult = await requireClient().request(
+				"file.move",
+				{ path, destination } as FileMoveParams,
+			);
+			return result.path;
 		},
 		searchFiles: async (
 			params: FileSearchParams,

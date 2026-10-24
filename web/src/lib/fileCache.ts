@@ -33,10 +33,10 @@ function removeContentsUnder(queryClient: QueryClient, path: string): void {
  * action is what let a rename invalidate the search cache while a delete did
  * not, and what let one caller invalidate the wrong folder's listing.
  *
- * Only the vacated path is needed, even for a rename: a rename never leaves its
- * own directory, so the listing invalidated here is the one the new name
- * appears in too. Nothing is prefetched under a new path, which is read when it
- * is opened.
+ * Only the vacated path is needed for a rename: a rename never leaves its own
+ * directory, so the listing invalidated here is the one the new name appears in
+ * too. A move does leave it, which is `applyEntryMoved`. Nothing is prefetched
+ * under a new path, which is read when it is opened.
  *
  * Search results are dropped wholesale rather than filtered: every match
  * carries the path it was found at, and telling which of them sat under this
@@ -48,4 +48,18 @@ export function applyEntryGone(queryClient: QueryClient, path: string): void {
 	});
 	removeContentsUnder(queryClient, path);
 	queryClient.invalidateQueries({ queryKey: [FILE_SEARCH_QUERY_KEY] });
+}
+
+/**
+ * Brings the cache in line with an entry moved from `from` into `toDir`: gone
+ * from where it was, as after a rename, and one more row in the listing it
+ * landed in.
+ */
+export function applyEntryMoved(
+	queryClient: QueryClient,
+	from: string,
+	toDir: string,
+): void {
+	applyEntryGone(queryClient, from);
+	queryClient.invalidateQueries({ queryKey: contentsQueryKey(toDir) });
 }
