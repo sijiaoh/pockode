@@ -44,7 +44,7 @@ func (r resolver) WorkDirs() []string {
 func newTestHandler(t *testing.T) (*Handler, string) {
 	t.Helper()
 	workDir := t.TempDir()
-	h := NewHandler(resolver{dirs: map[string]string{"": workDir}}, slog.New(slog.DiscardHandler))
+	h := NewHandler(resolver{dirs: map[string]string{"": workDir}}, t.TempDir(), slog.New(slog.DiscardHandler))
 	return h, workDir
 }
 

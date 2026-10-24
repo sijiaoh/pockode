@@ -64,14 +64,33 @@ type WorkDirResolver interface {
 
 type Handler struct {
 	resolver WorkDirResolver
-	log      *slog.Logger
+	// dataDir is Pockode's own data directory, which no transfer reaching
+	// more than the one file it names — a root raw capability, a folder
+	// download — takes in, wherever settings put it.
+	dataDir string
+	log     *slog.Logger
 	// maxUpload is MaxUploadSize outside tests, which lower it rather than
 	// pushing 1 GiB through a request to see the limit refuse it.
 	maxUpload int64
+	// maxFolderDownload and maxFolderDownloadEntries are MaxFolderDownloadSize
+	// and MaxFolderDownloadEntries outside tests, for the same reason.
+	maxFolderDownload        int64
+	maxFolderDownloadEntries int
+	// folderSurveyed, when set, runs between the two walks of a folder
+	// download: what tests change the folder in, to reach the failures that
+	// can only happen once the archive has started.
+	folderSurveyed func()
 }
 
-func NewHandler(resolver WorkDirResolver, log *slog.Logger) *Handler {
-	return &Handler{resolver: resolver, log: log, maxUpload: MaxUploadSize}
+func NewHandler(resolver WorkDirResolver, dataDir string, log *slog.Logger) *Handler {
+	return &Handler{
+		resolver:                 resolver,
+		dataDir:                  dataDir,
+		log:                      log,
+		maxUpload:                MaxUploadSize,
+		maxFolderDownload:        MaxFolderDownloadSize,
+		maxFolderDownloadEntries: MaxFolderDownloadEntries,
+	}
 }
 
 // UploadedFile describes one stored file in an upload response.
@@ -212,6 +231,45 @@ func (h *Handler) openRegular(fsys fileOpener, name, display string, failed func
 		return nil, nil, errf(http.StatusBadRequest, CodeNotAFile, "%s is not a regular file", display)
 	}
 	return f, fi, nil
+}
+
+// withheld is a set of directories, matched by identity rather than by
+// spelling: a case-insensitive file system (macOS by default) opens
+// "Worktrees/other" as "worktrees/other".
+type withheld []os.FileInfo
+
+func (w withheld) has(info os.FileInfo) bool {
+	for _, dir := range w {
+		if os.SameFile(info, dir) {
+			return true
+		}
+	}
+	return false
+}
+
+// withheldDirs is Pockode's data directory and the directory of every
+// worktree: what a transfer reaching beyond the one file it names leaves out
+// of a work directory, since a setting can put any of them inside the project
+// under a name with no leading dot (--data, the worktrees' base directory).
+// Callers compare only directories beneath the work directory, so a worktree
+// that one lies inside — the main one, for a nested worktree — and its own
+// never match.
+func (h *Handler) withheldDirs() withheld {
+	var dirs withheld
+	for _, dir := range append(h.resolver.WorkDirs(), h.dataDir) {
+		info, err := os.Stat(dir)
+		if err != nil {
+			// What cannot be found or stat'ed is no directory anything is
+			// served from either; one bad worktree must not refuse every
+			// transfer.
+			if !os.IsNotExist(err) {
+				h.log.Warn("cannot stat directory withheld from transfers", "dir", dir, "error", err)
+			}
+			continue
+		}
+		dirs = append(dirs, info)
+	}
+	return dirs
 }
 
 // internalFailure reports a file that exists but could not be read as a fault

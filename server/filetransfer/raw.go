@@ -79,6 +79,13 @@ const (
 	// and of every other worktree, wherever settings put them: a worktree's
 	// capability reads its own files only (inWithheldDir).
 	RawScopeRoot RawScope = "root"
+	// RawScopeFolder reaches the folder Path names in a work directory — the
+	// work directory itself for an empty Path — as one zip archive, served as
+	// an attachment at the capability's own path (DownloadFolder). It is how
+	// the app saves a folder: a link carries no Authorization header, and the
+	// archive can be more than a phone's tab survives holding. What a root
+	// scope withholds, the archive leaves out.
+	RawScopeFolder RawScope = "folder"
 )
 
 // RawGrant is what one capability lets its bearer read.
@@ -162,6 +169,15 @@ func (g RawGrant) validate() error {
 		if g.Path != "" {
 			return fmt.Errorf("%w: a root scope takes no path, got %q", ErrInvalidGrant, g.Path)
 		}
+	case RawScopeFolder:
+		if g.Path != "" && !filepath.IsLocal(filepath.FromSlash(g.Path)) {
+			return fmt.Errorf("%w: path %q must name a folder beneath the root of its origin", ErrInvalidGrant, g.Path)
+		}
+		// A commit's tree is not walked from disk; an attachment store is
+		// flat.
+		if g.Origin != RawOriginFile {
+			return fmt.Errorf("%w: a folder scope reaches a work directory only", ErrInvalidGrant)
+		}
 	default:
 		return fmt.Errorf("%w: unknown scope %q", ErrInvalidGrant, g.Scope)
 	}
@@ -233,9 +249,11 @@ func hasDotComponent(p string) bool {
 
 // RawEntryPath is the URL path a grant issued as capability is opened at: the
 // file itself for a file scope, the root with a trailing slash for a root
-// scope, against which a path beneath it resolves as a relative URL.
+// scope, against which a path beneath it resolves as a relative URL, and the
+// capability with a trailing slash for a folder scope, whose archive is named
+// by its Content-Disposition — only the server knows a work directory's name.
 func RawEntryPath(capability string, grant RawGrant) string {
-	if grant.Scope == RawScopeRoot {
+	if grant.Scope == RawScopeRoot || grant.Scope == RawScopeFolder {
 		return RawPath(capability, "")
 	}
 	return RawPath(capability, path.Base(cleanGrantPath(grant.Path)))
@@ -276,17 +294,13 @@ type RawHandler struct {
 	files        *Handler
 	attachments  *AttachmentHandler
 	capabilities *authsession.Capabilities[RawGrant]
-	// dataDir is Pockode's own data directory, withheld from a root scope
-	// wherever it is.
-	dataDir string
 }
 
-func NewRawHandler(sessions *authsession.Store, files *Handler, attachments *AttachmentHandler, dataDir string) *RawHandler {
+func NewRawHandler(sessions *authsession.Store, files *Handler, attachments *AttachmentHandler) *RawHandler {
 	return &RawHandler{
 		files:        files,
 		attachments:  attachments,
 		capabilities: authsession.NewCapabilities[RawGrant](sessions),
-		dataDir:      dataDir,
 	}
 }
 
@@ -302,8 +316,14 @@ func (h *RawHandler) Issue(sessionToken string, grant RawGrant) (string, time.Ti
 	}
 	// Kept clean, so that a file is matched by the base name RawEntryPath
 	// gives it: "dir/a.mp4/." is "a.mp4", not ".".
-	if grant.Scope == RawScopeFile {
+	switch grant.Scope {
+	case RawScopeFile:
 		grant.Path = cleanGrantPath(grant.Path)
+	case RawScopeFolder:
+		// The work directory has one spelling, the empty one.
+		if grant.Path = cleanGrantPath(grant.Path); grant.Path == "." {
+			grant.Path = ""
+		}
 	}
 	grant.BaseURL = lowerOrigin(grant.BaseURL)
 	return h.capabilities.Issue(sessionToken, grant)
@@ -344,6 +364,15 @@ func (h *RawHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 	w.policy = pagePolicy(grant, capability, r.Host)
 	if wantsReporter(r) {
 		w.reporter = pageReporter(capability)
+	}
+
+	if grant.Scope == RawScopeFolder {
+		if rel != "" {
+			h.files.writeError(w, errf(http.StatusForbidden, CodeOutsideScope, "%s is outside this capability", rel), nil)
+			return
+		}
+		h.serveFolder(w, r, grant)
+		return
 	}
 
 	// The lexical check comes first for every origin, so `..` is refused the
@@ -428,6 +457,15 @@ func (w *rawResponseWriter) ReadFrom(r io.Reader) (int64, error) {
 		w.WriteHeader(http.StatusOK)
 	}
 	return io.Copy(w.ResponseWriter, r)
+}
+
+// FlushError puts the headers on before a flush sends them, which reaching the
+// writer beneath through Unwrap would do without them.
+func (w *rawResponseWriter) FlushError() error {
+	if !w.wroteHeader {
+		w.WriteHeader(http.StatusOK)
+	}
+	return http.NewResponseController(w.ResponseWriter).Flush()
 }
 
 // Unwrap lets http.ResponseController reach the connection beneath.
@@ -571,6 +609,18 @@ func reporterOffset(head []byte) int {
 	return start
 }
 
+// serveFolder serves a folder scope's archive. Any Range is ignored, as an
+// archive made while it streams has no byte offsets to resume from; HEAD is
+// how a client checks it before handing the link to the browser.
+func (h *RawHandler) serveFolder(w *rawResponseWriter, r *http.Request, grant RawGrant) {
+	workDir, apiErr := h.files.resolveWorkDir(grant.Worktree)
+	if apiErr != nil {
+		h.files.writeError(w, apiErr, nil)
+		return
+	}
+	h.files.serveFolderArchive(w, r, workDir, grant.Path)
+}
+
 // serveWorkDirFile reads through an os.Root rather than checking a path and
 // then opening it, so that a symlink — or a directory swapped for one after a
 // check — cannot lead out of the work directory: the root refuses to follow it
@@ -638,36 +688,17 @@ func (h *RawHandler) withinRootScope(root *os.Root, workDir, worktree, name, rel
 }
 
 // inWithheldDir reports whether resolved, a resolved path beneath workDir,
-// lies inside Pockode's data directory or another worktree, either of which a
-// setting can put inside the project under a name with no leading dot (--data,
-// the worktrees' base directory). Directories are matched by identity rather
-// than by spelling: a case-insensitive file system (macOS by default) opens
-// "Worktrees/other" as "worktrees/other". Only the directories strictly
-// beneath workDir are compared, so a worktree that workDir itself lies inside
-// — the main one, for a nested worktree — and workDir's own never match.
+// lies inside one of withheldDirs. Only the directories strictly beneath
+// workDir are compared.
 func (h *RawHandler) inWithheldDir(workDir, resolved string) (bool, error) {
-	var withheld []os.FileInfo
-	for _, dir := range append(h.files.resolver.WorkDirs(), h.dataDir) {
-		info, err := os.Stat(dir)
-		if err != nil {
-			// What cannot be found or stat'ed is no directory anything is
-			// served from either; one bad worktree must not refuse every page.
-			if !os.IsNotExist(err) {
-				h.files.log.Warn("cannot stat directory withheld from raw capabilities", "dir", dir, "error", err)
-			}
-			continue
-		}
-		withheld = append(withheld, info)
-	}
+	dirs := h.files.withheldDirs()
 	for dir := filepath.Dir(resolved); dir != "."; dir = filepath.Dir(dir) {
 		info, err := os.Stat(filepath.Join(workDir, dir))
 		if err != nil {
 			return false, err
 		}
-		for _, other := range withheld {
-			if os.SameFile(info, other) {
-				return true, nil
-			}
+		if dirs.has(info) {
+			return true, nil
 		}
 	}
 	return false, nil
