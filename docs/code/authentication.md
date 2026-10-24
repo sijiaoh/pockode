@@ -400,8 +400,8 @@ The last two are directories on disk, so they hold for a work-directory file;
 a commit's root scope is held to the first.
 
 For a work-directory file each rule is asked again of the name the file system
-resolved the open file to (`resolvedName`,
-`server/filetransfer/realname_{unix,windows}.go`), because `os.Root` follows a
+resolved the open file to (`contents.ResolvedName`,
+`server/contents/realname_{unix,windows}.go`), because `os.Root` follows a
 link that stays inside it, and on Windows a name can be another spelling of a
 different one. On darwin and linux every link on the way is followed, so
 `site/env -> .env` is `.env` and a link into another worktree is that worktree;
@@ -705,7 +705,7 @@ model (e.g. multi-user hosting) revisits them rather than rediscovering them:
 | Port preview login (password & ticket) & cookie | `server/relay/preview_auth.go` |
 | Preview ticket issue | `server/ws/rpc_port_preview.go` |
 | Raw capability issue | `server/ws/rpc_raw.go` |
-| Raw endpoint: scope, path safety, CORS and response headers | `server/filetransfer/raw.go`; resolved names for what the root scope withholds in `realname_{unix,windows}.go` |
+| Raw endpoint: scope, path safety, CORS and response headers | `server/filetransfer/raw.go`; resolved names for what the root scope withholds in `server/contents/realname_{unix,windows}.go` |
 | Raw endpoint routed ahead of auth; capability masked in logs | `server/main.go` (`newHandler`), `server/apiroute/`, `server/relay/proxy.go` |
 | Wire types and refusal reasons | `server/rpc/types.go` |
 | Frontend credential store | `packages/shared/src/stores/createAuthStore.ts`, `packages/shared/src/utils/auth.ts` |

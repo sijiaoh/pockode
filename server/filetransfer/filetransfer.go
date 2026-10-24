@@ -315,15 +315,15 @@ func (h *Handler) Upload(w http.ResponseWriter, r *http.Request) {
 	info, statErr := os.Stat(destDir)
 	if statErr != nil {
 		if os.IsNotExist(statErr) {
-			h.writeError(w, errf(http.StatusNotFound, CodeNotFound, "destination directory does not exist: %s", displayDir(destRel)), nil)
+			h.writeError(w, errf(http.StatusNotFound, CodeNotFound, "destination directory does not exist: %s", contents.DisplayDir(destRel)), nil)
 			return
 		}
 		h.log.Error("failed to stat upload destination", "path", destRel, "error", statErr)
-		h.writeError(w, errf(http.StatusInternalServerError, CodeInternal, "failed to stat %s: %v", displayDir(destRel), statErr), nil)
+		h.writeError(w, errf(http.StatusInternalServerError, CodeInternal, "failed to stat %s: %v", contents.DisplayDir(destRel), statErr), nil)
 		return
 	}
 	if !info.IsDir() {
-		h.writeError(w, errf(http.StatusBadRequest, CodeNotADirectory, "destination is a file, not a directory: %s", displayDir(destRel)), nil)
+		h.writeError(w, errf(http.StatusBadRequest, CodeNotADirectory, "destination is a file, not a directory: %s", contents.DisplayDir(destRel)), nil)
 		return
 	}
 
@@ -572,13 +572,4 @@ func contentDisposition(name string) string {
 		return formatted
 	}
 	return "attachment"
-}
-
-// displayDir names the work directory itself in an error message, since the
-// empty path that means it would otherwise read as a missing value.
-func displayDir(relPath string) string {
-	if relPath == "" {
-		return "the work directory"
-	}
-	return relPath
 }

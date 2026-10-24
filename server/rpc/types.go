@@ -381,6 +381,40 @@ type FileRenameParams struct {
 	NewName string `json:"new_name"`
 }
 
+// FileMoveParams moves the entry at Path into the existing directory
+// Destination ("" for the work directory), keeping its name. The counterpart
+// of FileRenameParams, which keeps the directory and changes the name; see
+// contents.Move.
+//
+// Destination is a pointer so that leaving it out is refused rather than read
+// as "": a client that forgot it would otherwise move the entry to the root.
+type FileMoveParams struct {
+	Path        string  `json:"path"`
+	Destination *string `json:"destination"`
+}
+
+// FileMoveResult is the path the entry has after the move.
+type FileMoveResult struct {
+	Path string `json:"path"`
+}
+
+// Reasons a file.move is refused, carried as FileMoveErrorData. The message
+// says the same thing in prose; the reason is what a client branches on.
+const (
+	FileMoveReasonInvalidPath         = "invalid_path"
+	FileMoveReasonNotFound            = "not_found"
+	FileMoveReasonDestinationNotFound = "destination_not_found"
+	FileMoveReasonNotADirectory       = "not_a_directory"
+	FileMoveReasonIntoItself          = "into_itself"
+	FileMoveReasonExists              = "exists"
+)
+
+// FileMoveErrorData is the data member of every InvalidParams error file.move
+// replies with.
+type FileMoveErrorData struct {
+	Reason string `json:"reason"`
+}
+
 type FileSearchParams struct {
 	Query string `json:"query"`
 	// Mode is "name" (default) or "content".

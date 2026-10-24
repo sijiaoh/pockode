@@ -73,11 +73,11 @@ const (
 	// (docs/.vitepress/dist).
 	//
 	// For a work-directory file the checks are on the name asked for and on
-	// the name the file system resolves it to (resolvedName), so that neither
-	// a link nor, on Windows, a short name such as ENV~1 is another way to
-	// .env. The resolved name is also held out of Pockode's data directory
-	// and of every other worktree, wherever settings put them: a worktree's
-	// capability reads its own files only (inWithheldDir).
+	// the name the file system resolves it to (contents.ResolvedName), so
+	// that neither a link nor, on Windows, a short name such as ENV~1 is
+	// another way to .env. The resolved name is also held out of Pockode's
+	// data directory and of every other worktree, wherever settings put them:
+	// a worktree's capability reads its own files only (inWithheldDir).
 	RawScopeRoot RawScope = "root"
 	// RawScopeFolder reaches the folder Path names in a work directory — the
 	// work directory itself for an empty Path — as one zip archive, served as
@@ -666,7 +666,7 @@ func (h *RawHandler) serveWorkDirFile(w *rawResponseWriter, r *http.Request, gra
 // withinRootScope refuses f, opened in root (workDir) as name, if what the file
 // system resolved it to is a dotfile or lies inside a withheld directory.
 func (h *RawHandler) withinRootScope(root *os.Root, workDir, worktree, name, rel string, f *os.File) *apiError {
-	resolved, err := resolvedName(root, name, f)
+	resolved, err := contents.ResolvedName(root, name, f)
 	if err != nil {
 		// Logged rather than answered: the error holds host paths, and the
 		// answer is readable by the page.

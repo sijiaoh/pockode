@@ -2276,6 +2276,110 @@ func TestHandler_FileRename_InvalidPath(t *testing.T) {
 	}
 }
 
+func TestHandler_FileMove(t *testing.T) {
+	workDir := t.TempDir()
+	env := newWorkDirTestEnv(t, workDir)
+	os.MkdirAll(filepath.Join(workDir, "docs"), 0755)
+	os.MkdirAll(filepath.Join(workDir, "archive"), 0755)
+	os.WriteFile(filepath.Join(workDir, "docs/a.md"), []byte("content"), 0644)
+
+	resp := env.call("file.move", rpc.FileMoveParams{Path: "docs/a.md", Destination: new("archive")})
+
+	if resp.Error != nil {
+		t.Fatalf("unexpected error: %s", resp.Error.Message)
+	}
+	var result rpc.FileMoveResult
+	if err := json.Unmarshal(resp.Result, &result); err != nil {
+		t.Fatalf("unmarshal result: %v", err)
+	}
+	if result.Path != "archive/a.md" {
+		t.Errorf("path = %q, want %q", result.Path, "archive/a.md")
+	}
+	if _, err := os.Stat(filepath.Join(workDir, "archive/a.md")); err != nil {
+		t.Fatalf("failed to stat moved file: %v", err)
+	}
+}
+
+// "" is the work directory, so a missing destination must not decode as one.
+func TestHandler_FileMove_RequiresDestination(t *testing.T) {
+	workDir := t.TempDir()
+	env := newWorkDirTestEnv(t, workDir)
+	os.MkdirAll(filepath.Join(workDir, "docs"), 0755)
+	os.WriteFile(filepath.Join(workDir, "docs/a.md"), []byte("content"), 0644)
+
+	resp := env.call("file.move", map[string]string{"path": "docs/a.md"})
+
+	if resp.Error == nil || resp.Error.Code != jsonrpc2.CodeInvalidParams {
+		t.Fatalf("got %+v, want an invalid-params error", resp.Error)
+	}
+	if _, err := os.Stat(filepath.Join(workDir, "docs/a.md")); err != nil {
+		t.Errorf("the entry moved anyway: %v", err)
+	}
+}
+
+// Every refusal carries its own data.reason, because the UI words each one
+// differently and the message is prose the server may reword.
+func TestHandler_FileMove_Refusals(t *testing.T) {
+	workDir := t.TempDir()
+	env := newWorkDirTestEnv(t, workDir)
+	os.MkdirAll(filepath.Join(workDir, "docs/sub"), 0755)
+	os.MkdirAll(filepath.Join(workDir, "archive"), 0755)
+	os.WriteFile(filepath.Join(workDir, "docs/a.md"), []byte("source"), 0644)
+	os.WriteFile(filepath.Join(workDir, "archive/a.md"), []byte("keep me"), 0644)
+
+	tests := []struct {
+		name        string
+		params      rpc.FileMoveParams
+		wantReason  string
+		wantMessage string
+	}{
+		{"escaping path", rpc.FileMoveParams{Path: "../etc/passwd", Destination: new("docs")},
+			rpc.FileMoveReasonInvalidPath, "invalid path"},
+		{"escaping destination", rpc.FileMoveParams{Path: "docs/a.md", Destination: new("..")},
+			rpc.FileMoveReasonInvalidPath, "invalid path"},
+		{"missing source", rpc.FileMoveParams{Path: "ghost.md", Destination: new("docs")},
+			rpc.FileMoveReasonNotFound, "not found: ghost.md"},
+		{"missing destination", rpc.FileMoveParams{Path: "docs/a.md", Destination: new("nowhere")},
+			rpc.FileMoveReasonDestinationNotFound, "destination not found: nowhere"},
+		{"file as destination", rpc.FileMoveParams{Path: "archive/a.md", Destination: new("docs/a.md")},
+			rpc.FileMoveReasonNotADirectory, "destination is not a directory: docs/a.md"},
+		{"into its own subtree", rpc.FileMoveParams{Path: "docs", Destination: new("docs/sub")},
+			rpc.FileMoveReasonIntoItself, "cannot move a directory into itself: docs into docs/sub"},
+		{"taken name", rpc.FileMoveParams{Path: "docs/a.md", Destination: new("archive")},
+			rpc.FileMoveReasonExists, "archive/a.md already exists"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			resp := env.call("file.move", tt.params)
+
+			if resp.Error == nil {
+				t.Fatalf("expected an error reply, got result %s", resp.Result)
+			}
+			if resp.Error.Code != jsonrpc2.CodeInvalidParams {
+				t.Errorf("code = %d, want %d", resp.Error.Code, jsonrpc2.CodeInvalidParams)
+			}
+			if resp.Error.Message != tt.wantMessage {
+				t.Errorf("message = %q, want %q", resp.Error.Message, tt.wantMessage)
+			}
+			if resp.Error.Data == nil {
+				t.Fatal("error carries no data; clients branch on data.reason")
+			}
+			var data rpc.FileMoveErrorData
+			if err := json.Unmarshal(*resp.Error.Data, &data); err != nil {
+				t.Fatalf("unmarshal error data: %v", err)
+			}
+			if data.Reason != tt.wantReason {
+				t.Errorf("reason = %q, want %q", data.Reason, tt.wantReason)
+			}
+		})
+	}
+
+	data, _ := os.ReadFile(filepath.Join(workDir, "archive/a.md"))
+	if string(data) != "keep me" {
+		t.Errorf("a refused move changed archive/a.md: %q", data)
+	}
+}
+
 // Git RPC tests
 
 func setupGitRepo(t *testing.T) string {

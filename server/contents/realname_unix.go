@@ -1,6 +1,6 @@
 //go:build !windows
 
-package filetransfer
+package contents
 
 import (
 	"fmt"
@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 )
 
-// resolvedName is the path beneath root that f, opened there as name, has in
+// ResolvedName is the path beneath root that f, opened there as name, has in
 // the file system: name with every link on the way followed, since os.Root
 // follows a link that stays within it, and "page.css -> .env" or a link into
 // another worktree is the dotfile or the other worktree all the same. A case-
@@ -18,7 +18,7 @@ import (
 //
 // The resolving is by path, after the open; the file found there has to be the
 // one opened, so a link swapped in between is refused rather than believed.
-func resolvedName(root *os.Root, name string, f *os.File) (string, error) {
+func ResolvedName(root *os.Root, name string, f *os.File) (string, error) {
 	base, err := filepath.EvalSymlinks(root.Name())
 	if err != nil {
 		return "", err
