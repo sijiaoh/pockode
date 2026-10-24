@@ -1,7 +1,7 @@
 # File
 
-Users browse directories, search, view/edit files, and transfer whole files in
-and out of the workspace. Path traversal is validated on every request.
+Users browse directories, search, view/edit files, and transfer whole files —
+and whole folders — in and out of the workspace. Path traversal is validated on every request.
 
 ## Architecture
 
@@ -28,7 +28,7 @@ served through it; it is addressed by id in the session's own attachment store
 |-------|------|------|
 | RPC handlers | `server/ws/rpc_file.go` | `file.get`, `file.write`, `file.create`, `file.delete`, `file.rename`, `file.search` |
 | File operations | `server/contents/contents.go` | Path validation, read, write (upsert), create, delete, rename |
-| HTTP transfer | `server/filetransfer/filetransfer.go`, `server/filetransfer/folder.go` | Upload / download of whole files, upload of a folder (see [Transfer](#transfer)) |
+| HTTP transfer | `server/filetransfer/filetransfer.go`, `server/filetransfer/folder.go`, `server/filetransfer/folderdownload.go` | Upload / download of whole files, upload of a folder, download of a folder as a zip archive (see [Transfer](#transfer)) |
 | Search | `server/search/` | Candidate listing (`list.go`), content grep (`scan.go`) |
 | Frontend components | `web/src/components/Files/` | FileTree, FileEditor, FileView, FileTreeNode, FileSearchBar, FileSearchResults, FileEntryMenu, EntryNameDialog, UploadQueue, UploadConflictDialog |
 | Entry-action helpers | `web/src/hooks/useTakenNames.ts`, `web/src/lib/fileCache.ts` | Which names a directory has spoken for; the cache work a rename or a delete implies |
@@ -36,7 +36,7 @@ served through it; it is addressed by id in the session's own attachment store
 | RPC actions | `web/src/lib/rpc/file.ts` | `getFile`, `writeFile`, `createFile`, `deleteFile`, `renameFile`, `searchFiles`, `isAlreadyExistsError` |
 | HTTP transfer client | `web/src/lib/fileDownload.ts`, `web/src/lib/rawProbe.ts`, `web/src/lib/fileUpload.ts` | Handing a download to the browser and wording its failures, upload (see [Downloading](#downloading), [Uploading](#uploading)) |
 | Media playback | `web/src/components/Files/MediaPreview.tsx`, `web/src/components/Media/useMediaPlayback.ts`, `web/src/hooks/useRawMediaSource.ts`, `web/src/components/Media/exclusivePlayback.ts` | Inline audio and video streamed from a raw capability, its recovery, and one sound at a time (see [Playing audio and video](#playing-audio-and-video)) |
-| Download action | `web/src/hooks/useFileDownload.ts`, `web/src/components/Files/FileDownloadControls.tsx`, `saveRawFile` in `web/src/hooks/useRawMediaSource.ts` | The viewer's Download — check, hand-over, cancel, error — shared by `FileView` and `CommitFileView`; `saveRawFile` is every streamed Save that gets its own capability |
+| Download action | `web/src/hooks/useFileDownload.ts`, `web/src/components/Files/FileDownloadControls.tsx`, `saveRawFile` / `saveRawFolder` in `web/src/hooks/useRawMediaSource.ts` | The viewer's Download — check, hand-over, cancel, error — shared by `FileView` and `CommitFileView`, and the menu's Download as zip (`useFolderDownload`, the same core); `saveRawFile` is every streamed Save that gets its own capability, `saveRawFolder` a folder's |
 | Upload queue state | `web/src/lib/uploadStore.ts` | Queue, concurrency, retry, worktree scope |
 | Reading a folder | `web/src/lib/folderRead.ts` | Walking a dropped folder, a picked folder's paths, the client's file cap (see [Uploading a folder](#dropping-a-folder)) |
 | Drag and drop | `web/src/hooks/useFileDragZone.ts`, `web/src/components/Files/useFileDrop.ts`, `web/src/hooks/useFileDropGuard.ts` | What every drop zone shares (file detection, the depth count, folder splitting, claiming the drag); the tree's drop target resolution on top of it; the window-level drop backstop |
@@ -303,7 +303,8 @@ rest of `/api` (`Authorization: Bearer <credential>` — a session token from th
 app, the password from a script) — they carry no auth of their own, so a
 plain `<a href>` or a `<video src>` cannot reach them. `/api/raw` exists for
 what cannot send a header — a player, a page's frame, and the link the app's
-own Download clicks ([Downloading](#downloading)): its credential is a
+own Download and Download as zip click ([Downloading](#downloading),
+[Downloading a folder](#downloading-a-folder)): its credential is a
 capability in the path.
 
 Each but `/api/raw` takes an optional `worktree` query parameter (omitted or
@@ -323,8 +324,9 @@ the clients make of it is the rest of the story, in order:
 [Loading image bytes](#loading-image-bytes) for the viewer's images,
 [Playing audio and video](#playing-audio-and-video) for its players,
 [HTML pages](#html-pages) for a page and the files it links to,
-[Downloading](#downloading) for the viewer's action, [Uploading](#uploading) for
-the Files tab and its queue,
+[Downloading](#downloading) for the viewer's action,
+[Downloading a folder](#downloading-a-folder) for the menu's,
+[Uploading](#uploading) for the Files tab and its queue,
 [Dropping files onto the tree](#dropping-files-onto-the-tree) for the desktop
 drag, and [Known transfer limits](#known-transfer-limits) for what this version
 leaves open.
@@ -631,6 +633,115 @@ inside the folder. The payload itself carries no links — a multipart part is
 bytes — so a link on the user's device arrives as whatever the browser read
 through it.
 
+**`GET /api/files/download-folder`** — send one folder as a zip archive.
+<a id="folder-archive"></a>
+
+| Param | Required | Meaning |
+|-------|:--------:|---------|
+| `path` | | Folder path relative to the work directory; empty or omitted means the work directory itself |
+| `worktree` | | Worktree name |
+
+The app does not call this route — a link cannot carry its bearer header — but
+a folder raw capability (`scope: "folder"`, on `/api/raw`, the last route
+below), which serves
+the same archive from the same code (`serveFolderArchive`); this one is for
+scripts. `HEAD` runs every check the archive would and sends no body.
+
+The response carries the download endpoint's headers — `Content-Type:
+application/octet-stream`, `nosniff`, `Cache-Control: no-store` — and
+`Content-Disposition: attachment` with `<name>.zip`; through `/api/raw` the
+raw endpoint's own headers go on top, its `Cache-Control` replacing this one. `<name>` is the folder's
+own name, and for the work directory the work directory's (`pockode.zip`, or
+the worktree directory's name); `workspace` where there is none, a work
+directory at the root of a file system. Only the server knows that name, which
+is why it names the file rather than the client. Every entry sits under one
+top-level folder `<name>/`, so unpacking gives back the folder rather than
+scattering its contents — the same shape a folder upload takes, whose first
+path segment is the folder. There is **no `Content-Length`** and **no
+`Range`**: the archive is compressed while it streams, so its size is not known
+until it ends and it has no byte offsets to resume from. A browser shows bytes
+received with no total, and an interrupted download starts over.
+
+**What is archived** is what is on disk, less what a [root raw
+capability](code/authentication.md#raw-capabilities-urls-a-browser-element-loads-by-itself)
+withholds beneath the folder — so that what a root scope keeps out of a page's
+reach never comes along unless the user named it:
+
+- **Every name starting with a dot beneath the folder is left out**, at any
+  depth: `.git`, `.env`, `.github`, `.pockode`. Dotfiles are where secrets
+  live; `.git` holds the repository token under `--git` (`.git-credentials`)
+  and objects that can be most of a project's size — a repository is cloned,
+  not downloaded — and a worktree's `.git` file only points at a path on this
+  machine. A folder that is itself a dot directory, asked for by name, is
+  archived, less the dot entries beneath it, as a dotfile gets a file scope of
+  its own.
+- **Pockode's data directory and every other worktree are left out**, wherever
+  settings put them, under a dot or not, matched by identity rather than by
+  name (`Handler.withheldDirs`, the set the root capability withholds): the one
+  holds session tokens, the others are checkouts of their own. Asked for by
+  name, either is archived.
+- **A symlink is archived as a link and never followed** — its target text, with
+  the link mode; on Windows a junction is treated the same. A link out of the
+  folder therefore reads nothing outside it, and a link to a folder inside it
+  neither duplicates that folder nor loops. unzip on macOS and Linux restores
+  it as a link; Windows Explorer extracts it as a small text file. Every entry
+  is opened through the folder's own directory handles (`os.Root`), never by a
+  joined path, and checked to be what was listed there: one swapped for a link
+  mid-walk is refused rather than followed. A link anywhere on the requested
+  path itself is followed, only to somewhere inside the work directory — the rule, and
+  the code (`openDir`), of a folder upload's destination, so a pnpm package
+  under `node_modules` downloads.
+- **Fifos, sockets and devices are skipped**: they have no content, and none is
+  ever opened in a way that could block. Empty folders are kept, as are the
+  executable bit and modification times.
+- **Ignored files are not left out.** `node_modules` and build output are on
+  disk and are downloaded; the limits below are the backstop. A download never
+  quietly leaves files out — the rule folder upload keeps — and the exclusions
+  above are fixed, few and stated here rather than read from the project.
+
+Entries are in name order, so the same folder gives the same archive. Deflate
+runs at its fastest level, with compressors pooled across entries: over the
+relay the bytes cost more than the CPU, source text shrinks to a fraction at
+any level, and media and archives shrink at none.
+
+**Two walks.** The first runs before anything is sent: it counts against the
+limits and opens every file once, so a folder that is gone, too large, or holds
+a file that cannot be read is a JSON error the app can show rather than a
+download that breaks. It opens and nothing more — no header goes out until it
+is done, and through the relay this server's proxy gives a local response 30
+seconds to start ([relay-system.md](code/relay-system.md#timeouts)). The
+headers are flushed the moment it passes, so the browser starts the download
+under its name while the first files compress. The second walk writes the
+archive, and what changed in between is archived as it then is: a file removed
+is left out, one created is taken in, and each holds at most the bytes it had
+when opened.
+
+**A failure once the archive has started aborts the connection**
+(`http.ErrAbortHandler`) rather than closing the zip: closing would write the
+central directory and turn what was sent into a valid archive silently missing
+the rest. The browser marks the download failed, and a `fetch` sees its body
+fail. That covers a file that fails to read, a client that stops reading, an
+entry swapped for something else once the archive has started, and a folder
+that grew past either limit between the walks.
+
+The limits are a folder download's own, apart from upload's, because they
+guard against something else. Memory is not it: the archive streams, and
+nothing per entry outlives its directory. They catch a folder picked by
+mistake — a project root with gigabytes of build output — before it streams
+for an hour over a phone connection, and sit above a project with its
+dependencies installed, which a user downloads on purpose.
+
+| Status | Code | When |
+|--------|------|------|
+| `400` | `invalid_path` | An absolute path or `../` traversal; the folder is a link that resolves out of the work directory; a name beneath it, or the folder's own name (the work directory's, for the root), holds a `\` — zip separates with `/` alone, but an unarchiver on Windows splits there too, so `..\x` would unpack outside the folder; the message names it and says to rename it |
+| `400` | `not_a_directory` | The path is a file |
+| `404` | `not_found` | No such folder |
+| `404` | `worktree_not_found` | Unknown `worktree` |
+| `409` | `conflict` | A folder inside was swapped for something else — a link — while the check was reading it; the message says to try again. A file swapped once the archive has started aborts it instead (above) |
+| `413` | `too_large` | Over `filetransfer.MaxFolderDownloadSize`, **2 GiB** of file content; `limit` in bytes |
+| `413` | `too_many_entries` | Over `filetransfer.MaxFolderDownloadEntries`, **100,000** files, folders and links; `limit` is that count |
+| `500` | `internal` | A file or directory that cannot be read — a permission, say; the message names it |
+
 **`POST /api/chat/attachments`** — store files a chat message is about to carry.
 
 | Param | Required | Meaning |
@@ -716,15 +827,20 @@ There are no params and no `Authorization` header. The capability comes from
 `raw.capability` ([code/websocket-rpc.md](code/websocket-rpc.md#raw-capabilities)),
 which also gives the path to open. It names the origin, which is a work-directory
 file, a file in a commit or a chat attachment. It also names the scope, which is
-one file or the whole work directory or commit. `<path>` is the file's own
-name for a file scope, and the project path for a root scope. What a capability
+one file, the whole work directory or commit, or a work-directory folder.
+`<path>` is the file's own name for a file scope, and the project path for a
+root scope. A folder scope has none: the capability's own path, with its
+trailing `/`, is the folder's [archive](#folder-archive), served as that route
+serves it, `Range` ignored — so a client checks it with `HEAD`, since a `GET`
+with `Range: bytes=0-0` would start the whole archive. What a capability
 is bound to, how long it lives, why it is in the path, why a page gets the root
 and what the root scope withholds, what keeps a symlink from widening its scope
 and why any origin may read it are in
 [code/authentication.md](code/authentication.md#raw-capabilities-urls-a-browser-element-loads-by-itself).
 
 Unlike the download endpoint, the content is served **as what it is**, since the
-element has to play or render it. A `download` query parameter
+element has to play or render it — all but a folder scope's archive, which is
+always `application/octet-stream` and an attachment. A `download` query parameter
 (`filetransfer.RawDownloadParam`, any value) adds `Content-Disposition:
 attachment` to any response that reaches the content, for the link that saves
 a file rather than an element that shows it ([Downloading](#downloading)). It
@@ -756,7 +872,8 @@ every HTML response. Save and a page's own `fetch()` are not framed loads, so
 they get the file as it is
 ([page-external-hosts-ui.md](page-external-hosts-ui.md#hearing-what-was-refused)).
 
-**`Range` works for every origin**, a commit's file included. A video player
+**`Range` works for every origin**, a commit's file included — for every scope
+but a folder's. A video player
 will not play without it. The commit endpoint above declines that cost. Here a
 commit's file is a `ReadSeeker` over git's stream: seeking forward discards up
 to the offset, and seeking backward runs git again. A player asks for a handful
@@ -767,15 +884,16 @@ content at a path never changes.
 
 | Status | Code | When |
 |--------|------|------|
-| `400` | `invalid_path` | An empty or absolute path, or one that `..` leads out of, encoded or not — the root scope's own trailing-`/` path included |
+| `400` | `invalid_path` | An empty or absolute path, or one that `..` leads out of, encoded or not — the root scope's own trailing-`/` path included (a folder scope's is its archive) |
 | `400` | `not_a_file` | A directory, a fifo, a device node, or a directory or submodule in the commit |
-| `403` | `outside_scope` | A name other than the file's for a file scope. For a root scope, a path with any component starting with `.` — a dotfile, a dot directory, `.` or `..` — and, for a work-directory file, one whose resolved name has one (through a symlink, or on Windows a short name) or lies inside Pockode's data directory or another registered worktree, or whose name cannot be resolved. For a work-directory file, a path that leaves the work directory through a symlink, or any other failure to open it — a permission, a link loop. `os.Root` reports a link out of it with an error that cannot be told apart from those, so all of them are answered as out of reach, with the reason in the message |
+| `403` | `outside_scope` | A name other than the file's for a file scope, and any path at all beneath a folder scope. For a root scope, a path with any component starting with `.` — a dotfile, a dot directory, `.` or `..` — and, for a work-directory file, one whose resolved name has one (through a symlink, or on Windows a short name) or lies inside Pockode's data directory or another registered worktree, or whose name cannot be resolved. For a work-directory file, a path that leaves the work directory through a symlink, or any other failure to open it — a permission, a link loop. `os.Root` reports a link out of it with an error that cannot be told apart from those, so all of them are answered as out of reach, with the reason in the message |
 | `404` | `capability_not_found` | The capability was never issued, has expired, or its session has ended; ask `raw.capability` again |
 | `404` | `not_found` | No such file, commit path or attachment, or a commit that no longer exists. A hash git would refuse never gets this far: `raw.capability` resolved it when it issued the capability |
 | `404` | `worktree_not_found` / `session_not_found` | As for the endpoints above |
 | `405` | `invalid_request` | Any method but `GET`, `HEAD` and `OPTIONS` (a CORS preflight, answered `204`; see [code/authentication.md](code/authentication.md#raw-capabilities-urls-a-browser-element-loads-by-itself)) |
 | `416` | | A `Range` the content cannot satisfy |
 | `500` | `internal` | Opening the work directory or an attachment, reading the content, or running git failed |
+| `400` / `409` / `413` | the archive's | A folder scope also answers [the archive's](#folder-archive) codes: `not_a_directory`, `conflict`, `too_large`, `too_many_entries`, and `invalid_path` for a name inside it or a link out |
 
 ## Search behavior
 
@@ -1404,8 +1522,8 @@ current, rather than a portal per row. The project has no popover to build a
 dropdown on, and one anchored to a row of a scrolling tree would mean
 positioning, flipping and scroll tracking for a menu opened a few times a day; a
 sheet is anchored to the viewport instead, so none of that arises. A folder
-offers upload, new file, new folder, rename and delete, a file offers rename and
-delete, and the root offers everything but those last two — it is the work
+offers upload, new file, new folder, download as zip, rename and delete, a file
+offers rename and delete, and the root offers everything but those last two — it is the work
 directory itself rather than an entry of the file namespace, so neither renaming
 nor deleting is ever about it. Delete is last, `text-th-error`, and separated by
 a rule: everything above it adds to the entry or leaves it where it is, and it
@@ -1591,6 +1709,74 @@ longer exists.
 A failed delete has no sheet to stay in and no name to be answered by, so all
 of them land straight in the Files tab's single error bar (`actionError`,
 shared with uploads) — the same bar a creation's other failures leave for.
+
+### Downloading a folder
+
+**Download as zip** (`FolderDown`) is the last row of a folder's group in the
+`…` menu — after Upload files, Upload folder, New file and New folder, above
+Rename — for every folder and for the project root. It changes nothing, so it
+stays above Delete's rule. It is the only way in: search results list only
+files, and no viewer or chat surface shows a folder. Unlike Upload folder it is
+offered on a touch screen too: it needs no picker and no drag, and a phone can
+save a zip. Files get no menu row; they keep the viewer's
+[Download](#downloading).
+
+It works as a file's Download does, through a raw capability and a link the
+browser streams to disk (`saveRawFolder`, `hooks/useRawMediaSource.ts`), for the
+same reasons — an archive can be far larger than a tab survives holding, and a
+link carries no header. What differs:
+
+- **A `folder` scope**, asked for afresh each time (`wsActions.rawFolderCapability`,
+  `lib/rpc/raw.ts`): `raw.capability` with `{ origin: "file", scope: "folder", path }`,
+  `""` for the root. It is an action of its own rather than another
+  `RawTarget`, because nothing plays it and nothing caches it; with no cached
+  one there is nothing to renew either.
+- **Checked with `HEAD`** (`probeArchive`, `lib/rawProbe.ts`), not the one-byte
+  probe: the archive ignores `Range`, so that `GET` would make the server build
+  the whole of it. A refusal to a `HEAD` has no body, though, so only a refused
+  one is asked again with a `GET` (`probeRaw`), whose body names the `code`;
+  without it every failure would read as a bare status. A download that
+  succeeds never sends that `GET`.
+- **Named by the server.** The link's `download` attribute is left empty, so
+  the file takes the `Content-Disposition` name (`<folder>.zip`, the work
+  directory's own name for the root), which the client does not know.
+- **Worded for a folder.** `FOLDER_ERROR_MESSAGES` (`lib/fileDownload.ts`)
+  replaces only `not_found` ("Folder not found — it may have been moved or
+  deleted") and `worktree_not_found`. Every other code keeps the server's own
+  message, which names the folder and the limit: `too_large`,
+  `too_many_entries`, `conflict`, `not_a_directory`, and `invalid_path`
+  deliberately — its message says which name to rename, or that the folder
+  links out of the project, where a file's "Invalid file path" would hide it.
+  `internal` stays `Server error: <detail>`, as for a file.
+- **The worktree** is held as `saveRawFile` holds it, with the same two
+  messages: a capability bound to a worktree a switch is leaving, or a switch
+  during the check, fails rather than saving the other worktree's folder.
+
+**Preparing** lasts from the tap to the hand-over, and the sheet stays open for
+it: the row's icon becomes a spinner (`MenuRow`'s `busy`), its label **Cancel
+download**, its description **Preparing zip…** — the viewer's model, with the
+feedback where the user tapped. The download hook (`useFolderDownload`) lives
+inside the sheet, so pressing the row again, closing the sheet any way, or a
+worktree switch (which closes it) all cancel it, and say nothing, as leaving a
+file's download does. A cancelled download reports nothing even if its
+`raw.capability` call — which cannot be cancelled — fails afterwards; that
+holds for a file's too, through the shared core. The sheet covers the page, so
+only one folder can be preparing at a time.
+
+**Handed over**, the sheet closes by itself, with no toast and no progress of
+the app's own: from there progress, cancelling and completion are the
+browser's, which shows bytes received with no total (iOS Safari asks first). A
+failure before the hand-over closes the sheet too and shows in the tab's
+`actionError` banner, shared with Delete and upload, prefixed `Download failed:`
+like a file's. A failure after it — a dropped connection, a file that fails
+mid-read — is the browser's to show, and shows: the server
+[aborts the connection](#folder-archive) rather than finish a zip that looks
+complete. There is no resume; the retry is pressing Download as zip again.
+
+There is no confirmation, for a file's reason: nothing is held in memory, the
+browser lets the user watch and cancel, and a folder that is too large gets a
+refusal naming the limit. Downloading the root will often meet that limit —
+`node_modules` and build output are included — and that message is the answer.
 
 ## Uploading
 
@@ -1953,14 +2139,16 @@ rediscover as a bug:
   unaffected where an open file can be renamed — see
   [Downloading](#downloading). Catching it would mean reading
   in validated pieces again, which is the in-memory download this replaced.
+  A folder's archive is the same, per file and across the folder: each file is
+  read once as it then is, and nothing makes the archive one moment's
+  snapshot of the folder ([Two walks](#folder-archive)).
 - **A file upload's destination directory still follows symlinks**, though the
   file being written does not — see [Security](#security). A folder upload's
   may follow one only to somewhere inside the work directory.
 
 Not in this version, and scope rather than limits: moving files by dragging
 within the tree, resuming an interrupted transfer, a queue that survives a
-reload, uploading into a worktree the user has left, and
-downloading a folder as one archive.
+reload, and uploading into a worktree the user has left.
 
 ## Security
 
@@ -2004,6 +2192,14 @@ stricter, because it is new code with no existing behavior to keep: its
 destination may follow a link only to somewhere inside the work directory, a
 merge refuses a link it finds inside the folder, and nothing it writes can lead
 out of the folder ([Uploading a folder](#uploading-a-folder)).
+
+A folder download is new code on the read side, and as strict: it archives a
+symlink as a link and never follows one, opens every entry through the folder's
+own directory handles, and follows a link only on the requested path itself,
+and only to inside the work directory ([the archive](#folder-archive)).
+Beneath the folder it leaves out what a root raw capability withholds — dot
+entries, the data directory, other worktrees — so those come along only when
+the user names them, as a single file there would be.
 
 `file.create` will not create *through* a symlink on the name it is given.
 `O_EXCL` and `os.Mkdir` both fail on a name that is already taken, and a
