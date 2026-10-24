@@ -15,9 +15,7 @@ interface Props {
  * job, and it is the only row that should read like one.
  *
  * Sticky within the group it labels, so a long list keeps its count and its
- * actions reachable while it scrolls. Sticky resolves against the scroll
- * container rather than the transformed box `PullToRefresh` puts it in, so the
- * pull gesture carries the header along with the content.
+ * actions reachable while it scrolls.
  */
 function GroupHeader({ label, isExpanded, onToggle, actions }: Props) {
 	const text = (

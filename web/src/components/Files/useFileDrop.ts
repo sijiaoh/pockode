@@ -158,9 +158,9 @@ export function useFileDrop({
 	/**
 	 * Scrolls the tree while the cursor rests near its top or bottom edge.
 	 *
-	 * The scroller is the element `PullToRefresh` renders, not the window: the
-	 * panel itself never scrolls, so without this only the folders already on
-	 * screen could be aimed at.
+	 * The scroller is the tree's own box, not the window: the panel itself never
+	 * scrolls, so without this only the folders already on screen could be aimed
+	 * at.
 	 */
 	const updateEdgeScroll = useCallback(
 		(clientY: number) => {

@@ -19,18 +19,10 @@ const SESSION_VIEW_SOURCES_KEY = ["session-view-worktrees"];
  * Invalidated rather than reset: an active list keeps its rows on screen and is
  * asked again for every round the reader had pulled in, so a refresh neither
  * blanks the sidebar nor costs them their depth.
- *
- * Returns when both re-reads have landed, so a pull-to-refresh holds its
- * spinner for as long as the refresh actually takes rather than snapping back
- * on a list that has not changed yet.
  */
-export function invalidateSessionViewQueries(
-	queryClient: QueryClient,
-): Promise<void> {
-	return Promise.all([
-		queryClient.invalidateQueries({ queryKey: [SESSION_VIEW_LIST_KEY] }),
-		queryClient.invalidateQueries({ queryKey: SESSION_VIEW_SOURCES_KEY }),
-	]).then(() => undefined);
+export function invalidateSessionViewQueries(queryClient: QueryClient): void {
+	queryClient.invalidateQueries({ queryKey: [SESSION_VIEW_LIST_KEY] });
+	queryClient.invalidateQueries({ queryKey: SESSION_VIEW_SOURCES_KEY });
 }
 
 export interface SessionViewSources {

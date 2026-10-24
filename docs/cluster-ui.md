@@ -131,7 +131,7 @@ rest diverge.
 | `ConfirmDialog` | **Shared, but unused here.** Both of its cluster call sites became in-sheet confirmations (above); `web` is unaffected. |
 | `ResponsivePanel` (anchored dropdown) | **Stays in `web`.** No cluster use case; do not promote it here later either. |
 | `ActivityBadge` | **Not reused.** Typed to `Activity`, which is derived from a work and a session's turn — neither of which the cluster panel has. Cluster keeps its own three-state dot/pill. Its *contrast* reasoning — hue on the border, not on the letters — is worth copying; the component is not. |
-| `PullToRefresh`, `BottomActionBar`, `PanelSection` | **Not reused.** They would drag `web`'s complexity, and one of them a dependency, into a panel whose whole argument is that it is small. |
+| `BottomActionBar`, `PanelSection` | **Not reused.** They would drag `web`'s complexity into a panel whose whole argument is that it is small. |
 
 Two obligations follow from anything living in `@pockode/shared` and are easy to
 miss because both fail silently and can fail in one project while the other is
@@ -148,6 +148,5 @@ evidence rather than on taste.
 | Deferred | Add it when |
 |---|---|
 | A search field over the list | A real cluster passes roughly 20 nodes. Groups plus sticky headers carry a few dozen fine. |
-| Pull-to-refresh | Somebody asks. It needs `react-pull-to-refreshify`; the 5 s poll and the visibility catch-up cover the same ground for free. |
 | `node.check_path` | The "I only find out at submit" friction is reported in real use — and then only with the duplicated rule and the check/submit gap above accepted openly. |
 | Migrating `web`'s two remaining hand-rolled body-scroll locks (`web/src/components/Files/UploadConflictDialog.tsx`, `web/src/components/ui/ResponsivePanel.tsx`) to `useLockBodyScroll` | It is pure `web` work, not cluster work. Correct today only because neither has an overlay it can stack with — which is fragile, not safe. Whether the page is covered no longer rides on it: `ResponsivePanel` registers with `useCoverPage` in both tiers ([answering-ui.md](answering-ui.md#who-owns-escape)). |

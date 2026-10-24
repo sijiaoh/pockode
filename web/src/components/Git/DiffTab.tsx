@@ -16,7 +16,7 @@ import {
 } from "../../types/git";
 import { describeGitFailure, type GitFailure } from "../../utils/gitErrors";
 import { useSidebarRefresh } from "../Layout";
-import { PullToRefresh, Spinner } from "../ui";
+import { Spinner } from "../ui";
 import BranchBar from "./BranchBar";
 import CommitBar from "./CommitBar";
 import DiffFileList from "./DiffFileList";
@@ -173,7 +173,7 @@ function DiffTab({
 				/>
 			)}
 
-			<PullToRefresh onRefresh={refreshAll}>
+			<div className="min-h-0 flex-1 overflow-y-auto">
 				{isLoading ? (
 					<div className="flex items-center justify-center p-8">
 						<Spinner variant="current" className="text-th-text-muted" />
@@ -241,7 +241,7 @@ function DiffTab({
 						</div>
 					</div>
 				)}
-			</PullToRefresh>
+			</div>
 
 			<CommitBar />
 

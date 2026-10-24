@@ -11,18 +11,14 @@ export const gitBranchesQueryKey = ["git-branches"] as const;
  * poll, and moving HEAD invalidates all three at once — a checkout changes the
  * status, the history and the branch list together.
  */
-export function invalidateGitQueries(queryClient: QueryClient): Promise<void> {
-	const refetched = [
+export function invalidateGitQueries(queryClient: QueryClient): void {
+	for (const queryKey of [
 		gitStatusQueryKey,
 		gitLogQueryKey,
 		gitBranchesQueryKey,
-	].map((queryKey) => queryClient.invalidateQueries({ queryKey }));
-
-	// Awaitable so PullToRefresh's spinner can track the refetch rather than
-	// stopping the moment the request is sent. Settles rather than rejects: a
-	// failed refetch is already surfaced by that query's own error state, and an
-	// awaiting caller only needs to know the refresh finished.
-	return Promise.allSettled(refetched).then(() => undefined);
+	]) {
+		queryClient.invalidateQueries({ queryKey });
+	}
 }
 
 /**

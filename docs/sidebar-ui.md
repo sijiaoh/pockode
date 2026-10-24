@@ -63,7 +63,7 @@ author had. Two of them broke; the search row broke visibly.
 6. **Nothing new is introduced to fix layout.** No new dependency, no new token,
    no new component. Both panels are composed from what the sidebar already
    has: `Sheet`, `ConfirmDialog`, `BottomActionBar`, `SidebarListItem`,
-   `PullToRefresh`, `ToggleChip`, the `th-*` tokens and lucide icons.
+   `ToggleChip`, the `th-*` tokens and lucide icons.
 
 ## How these panels look elsewhere
 
@@ -412,6 +412,42 @@ taller.
   straight onto an accent fill cannot be seen. The row keeps the search row's
   `p-2`, and `gap-2` keeps 8px between the two 44px hit areas on a coarse
   pointer.
+
+## No manual refresh
+
+The sidebar has no refresh control — no button, no pull-to-refresh — because
+almost everything in it is pushed or re-read without one:
+
+- **Files**: FS watch pushes changes.
+- **Git**: the `git.changed` subscription, plus the watcher's poll.
+- **Sessions of the current worktree**: a live subscription, which a worktree
+  switch rebinds.
+- **All three, on top of that**: the sidebar coming on screen (the drawer
+  opening, or the desktop column expanding) and clicking a tab — the one already
+  open included — fire `refreshSignal`, which the open tab hears through
+  `useSidebarRefresh` and answers by re-reading its list. On a phone the sidebar
+  is a drawer, so every open is a refresh.
+
+A list that failed to load still offers Retry; that is recovery from an error,
+not a refresh.
+
+The one list nothing pushes to is the Sessions list of *other* worktrees
+(`session_view.*`). Opening the sidebar, clicking the tab, changing the filter
+and deleting a row still re-read it
+([cross-worktree-session-ui.md](cross-worktree-session-ui.md#refreshing-and-why-it-is-never-automatic));
+between those it can be behind, and that is accepted — it is what desktop,
+which never had any other refresh control, always lived with.
+
+Pull-to-refresh used to sit on all three tabs and was removed. Its library
+read mouse drags as well as touch, so on desktop pressing a Files row and
+dragging it down — to [move it](file.md#moving) or
+[drag it out](file.md#dragging-out-to-download) — was taken for
+a pull, and an HTML5 drag, which stops `mousemove` / `mouseup`, could leave the
+gesture stuck halfway. Disabling it on desktop alone would have kept a control
+that only duplicated the refreshes above. The `overscroll-behavior-y: contain`
+on `html, body` is a different thing and stays: it stops the *browser's own*
+pull-to-refresh from reloading the app
+([responsive-ui.md](responsive-ui.md#who-owns-the-scroll-boundary)).
 
 ## Where each panel is described
 

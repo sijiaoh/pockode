@@ -31,7 +31,6 @@
 		"react": "^19.2.0",
 		"react-dom": "^19.2.0",
 		"react-markdown": "^10.1.0",
-		"react-pull-to-refreshify": "^0.1.0",
 		"react-shiki": "^0.9.1",
 		"react-simple-code-editor": "^0.14.1",
 		"react-textarea-autosize": "^8.5.9",
