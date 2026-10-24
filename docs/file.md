@@ -706,10 +706,11 @@ path segment is the folder. There is **no `Content-Length`** and **no
 until it ends and it has no byte offsets to resume from. A browser shows bytes
 received with no total, and an interrupted download starts over.
 
-**What is archived** is what is on disk, less what a [root raw
+**What is archived** is what is on disk, less everything a [root raw
 capability](code/authentication.md#raw-capabilities-urls-a-browser-element-loads-by-itself)
 withholds beneath the folder — so that what a root scope keeps out of a page's
-reach never comes along unless the user named it:
+reach never comes along unless the user named it — and more: every dot entry,
+not only the root scope's short list:
 
 - **Every name starting with a dot beneath the folder is left out**, at any
   depth: `.git`, `.env`, `.github`, `.pockode`. Dotfiles are where secrets
@@ -930,7 +931,7 @@ content at a path never changes.
 |--------|------|------|
 | `400` | `invalid_path` | An empty or absolute path, or one that `..` leads out of, encoded or not — the root scope's own trailing-`/` path included (a folder scope's is its archive) |
 | `400` | `not_a_file` | A directory, a fifo, a device node, or a directory or submodule in the commit |
-| `403` | `outside_scope` | A name other than the file's for a file scope, and any path at all beneath a folder scope. For a root scope, a path with any component starting with `.` — a dotfile, a dot directory, `.` or `..` — and, for a work-directory file, one whose resolved name has one (through a symlink, or on Windows a short name) or lies inside Pockode's data directory or another registered worktree, or whose name cannot be resolved. For a work-directory file, a path that leaves the work directory through a symlink, or any other failure to open it — a permission, a link loop. `os.Root` reports a link out of it with an error that cannot be told apart from those, so all of them are answered as out of reach, with the reason in the message |
+| `403` | `outside_scope` | A name other than the file's for a file scope, and any path at all beneath a folder scope. For a root scope, a path with a component named `.git`, `.env` or `.env.*`, at any depth and in any case — and, for a work-directory file, one whose resolved name has one (through a symlink, or on Windows a short name) or lies inside Pockode's data directory or another registered worktree, or whose name cannot be resolved. Any other dot path is served as any file is. For a work-directory file, a path that leaves the work directory through a symlink, or any other failure to open it — a permission, a link loop. `os.Root` reports a link out of it with an error that cannot be told apart from those, so all of them are answered as out of reach, with the reason in the message |
 | `404` | `capability_not_found` | The capability was never issued, has expired, or its session has ended; ask `raw.capability` again |
 | `404` | `not_found` | No such file, commit path or attachment, or a commit that no longer exists. A hash git would refuse never gets this far: `raw.capability` resolved it when it issued the capability |
 | `404` | `worktree_not_found` / `session_not_found` | As for the endpoints above |
@@ -1351,8 +1352,8 @@ over `Media/usePageFrame.ts`). Diffs and chat attachments still show text.
 - **Layout.** A page bar (`HTML · 18.2 KB`, ↻ Reload page, ⤢ View full
   screen — the [media viewer](media-viewer.md#files-and-git-pagepreview)) over a frame that
   fills the rest down to the bottom bar; nothing scrolls around it, so the
-  page's own scroll is the only one. Between them, when there is something to
-  say, the notice below and then the strip of hosts not loaded. The frame is a
+  page's own scroll is the only one. Between them, when the page was refused
+  a host, the strip of hosts not loaded. The frame is a
   wrapper holding the page, both `HTML_FRAME_SANDBOX`, the page
   `referrerpolicy="no-referrer"`, white under a light color scheme, as an
   agent's page is. Links within the project navigate inside it, so a
@@ -1371,32 +1372,16 @@ over `Media/usePageFrame.ts`). Diffs and chat attachments still show text.
   scripts and images, its `../` links and a script's `fetch("data.json")` load
   what they would on disk (`pageRawTarget`, `pageRawUrl`). The page was written
   by the agent working in the project, which can already read all of it, so it
-  is not held to its own folder; what the server withholds — dotfiles, other
-  worktrees, Pockode's data — is in the link above. A page whose own path has
-  a component starting with `.` — under `docs/.vitepress/dist`, or named with a
-  leading `.` itself — is one the root scope withholds, so the client asks for
-  a capability for that page alone instead (`isHiddenPage`); its relative
-  assets do not load. Anything else the root scope refuses (`403
-  outside_scope`: a page reached through a link out of the project or into a
-  hidden folder, one in another worktree or in Pockode's data folder) is shown
-  as a failure that says so, with no fallback: the page is to be opened from
-  where it really is.
-- **Saying so.** A page shown on its own still renders — many single-file
-  pages work — under a notice strip between the page bar and the frame
-  (`Media/PageNotice.tsx`): files it links to won't load, since its path has a
-  hidden name.
-  It is shown only when it matters: the text is scanned with `DOMParser`,
-  which runs nothing (`utils/pageReferences.ts`), for a relative `src`,
-  `srcset`, `href`, `xlink:href` or `poster` on any element (and `data` on
-  `object`), templates included and `<noscript>` left out, or `url(...)`,
-  `image-set(...)` or `@import` in a `<style>` or `style` attribute. Empty,
-  fragment, absolute, protocol-relative, root-relative and
-  `data:`/`blob:`/`mailto:`/`javascript:` values do not count, and a
-  `<base href>` that is absolute or root-relative means nothing is relative. A
-  URL only a script builds (`fetch("data.json")`) is beyond a scan that runs
-  nothing, so such a page goes without the notice. A page too large to have
-  been sent is assumed to link to something. The strip has no dismiss: it
-  states where the file lives, which a tap does not change.
+  is not held to its own folder; what the server withholds — `.git`, `.env`
+  and `.env.*`, other worktrees, Pockode's data — and why only those, is in
+  the link above. Any other dot path is an ordinary file, so a build output
+  under `docs/.vitepress/dist` or `.output/public` loads its own stylesheets,
+  scripts and images, with nothing said above it. Whatever the root scope
+  refuses (`403 outside_scope`: a page reached through a link out of the
+  project or to something withheld, one in another worktree or in Pockode's
+  data folder, and a page that is itself withheld — under `.git`, or named
+  `.env.html`) is shown as a failure that says so, with no fallback: the page
+  is to be opened from where it really is.
 - **Loading.** The capability is asked for once the frame is in view and the
   WebSocket is up, as for video, with a spinner until then. The frame shows as soon as it has a
   URL, not on `load` — a page waiting on one slow asset may be readable
@@ -2452,9 +2437,9 @@ A folder download is new code on the read side, and as strict: it archives a
 symlink as a link and never follows one, opens every entry through the folder's
 own directory handles, and follows a link only on the requested path itself,
 and only to inside the work directory ([the archive](#folder-archive)).
-Beneath the folder it leaves out what a root raw capability withholds — dot
-entries, the data directory, other worktrees — so those come along only when
-the user names them, as a single file there would be.
+Beneath the folder it leaves out what a root raw capability withholds and
+more — every dot entry, the data directory, other worktrees — so those come
+along only when the user names them, as a single file there would be.
 
 `file.create` will not create *through* a symlink on the name it is given.
 `O_EXCL` and `os.Mkdir` both fail on a name that is already taken, and a

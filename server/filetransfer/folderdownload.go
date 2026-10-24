@@ -37,8 +37,9 @@ const (
 // name, so unpacking it gives back the folder rather than scattering its
 // contents.
 //
-// What the archive leaves out, and why — the rules of a root raw capability,
-// so that a link to a folder's archive reaches no more than a page could:
+// What the archive leaves out, and why — all a root raw capability withholds
+// and more, so that a link to a folder's archive reaches no more than a page
+// could:
 //   - Everything whose name starts with a dot, beneath the folder: .env and
 //     its kin hold secrets; .git holds the repository token with --git
 //     (.git-credentials) and objects that can be most of a project's size,

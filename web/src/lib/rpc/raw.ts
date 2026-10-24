@@ -14,8 +14,8 @@ export type TreeRoot = { kind: "file" } | { kind: "commit"; hash: string };
  * `../` and a script's `fetch("data.json")` resolve as they would on disk. An
  * attachment store is flat, so an attachment is always a file. Since a page's
  * scripts can read the capability out of its own URL, the server's root scope
- * withholds every path with a component starting with `.` (`.env`, `.git`),
- * other worktrees and Pockode's own data.
+ * withholds what a page has no use for and would cost dearly to leak: `.git`,
+ * `.env` and `.env.*`, other worktrees and Pockode's own data.
  */
 export type RawTarget = (
 	| { origin: ContentOrigin; scope: "file" }
@@ -31,22 +31,10 @@ export type RawTarget = (
 	page?: { hosts: readonly string[] };
 };
 
-/**
- * Whether a page at `path` has to be shown on its own: the root scope
- * withholds it, having a component that starts with `.`.
- */
-export function isHiddenPage(path: string): boolean {
-	return path.split("/").some((part) => part.startsWith("."));
-}
-
-/**
- * What a page at `origin` is loaded through: the root of its tree — or, for a
- * page the root scope withholds (`isHiddenPage`), the page alone. Decided here
- * rather than by asking and falling back, since a refused grant is an error
- * like any other.
- */
-export function pageRawTarget(origin: TreeOrigin): RawTarget {
-	if (isHiddenPage(origin.path)) return { origin, scope: "file" };
+/** What a page at `origin` is loaded through: the root of its tree. */
+export function pageRawTarget(
+	origin: TreeOrigin,
+): RawTarget & { scope: "root" } {
 	return {
 		origin:
 			origin.kind === "commit"
@@ -57,18 +45,11 @@ export function pageRawTarget(origin: TreeOrigin): RawTarget {
 }
 
 /**
- * The URL of the page at `path` under a capability for `target`: the
- * capability itself for a file, the path beneath it — each segment encoded, as
- * the server's own paths are — for a root.
+ * The URL of the page at `path` under a root capability: the path beneath it,
+ * each segment encoded, as the server's own paths are.
  */
-export function pageRawUrl(
-	target: RawTarget,
-	capabilityUrl: string,
-	path: string,
-): string {
-	return target.scope === "root"
-		? capabilityUrl + path.split("/").map(encodeURIComponent).join("/")
-		: capabilityUrl;
+export function pageRawUrl(capabilityUrl: string, path: string): string {
+	return capabilityUrl + path.split("/").map(encodeURIComponent).join("/");
 }
 
 export interface RawCapability {

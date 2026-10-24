@@ -2,12 +2,11 @@ import { TriangleAlert } from "lucide-react";
 import type { ReactNode } from "react";
 
 /**
- * Why the files a page links to will not load — by default, for a page shown
- * on its own (`isHiddenPage`). The page still renders — many single-file pages
- * work — so this sits above it and stays: there is no dismissing a fact about
- * where the file lives.
+ * Why the files a page links to will not load. The page still renders — many
+ * single-file pages work — so this sits above it and stays while that is
+ * true: hiding it would leave a page that looks broken for no stated reason.
  */
-function PageNotice({ children }: { children?: ReactNode }) {
+function PageNotice({ children }: { children: ReactNode }) {
 	return (
 		<div
 			role="note"
@@ -17,10 +16,7 @@ function PageNotice({ children }: { children?: ReactNode }) {
 				className="mt-0.5 size-3.5 shrink-0 text-th-warning"
 				aria-hidden="true"
 			/>
-			<p className="min-w-0">
-				{children ??
-					"Files this page links to won't load: its path has a hidden name (starting with a dot), so it is shown on its own."}
-			</p>
+			<p className="min-w-0">{children}</p>
 		</div>
 	);
 }

@@ -68,9 +68,14 @@ describe("pageRawTarget", () => {
 	const capability = "https://app.example/api/raw/cap/";
 
 	// Where the page sits decides nothing: its relative URLs resolve against
-	// its own path under the one root, `../` and a page at the root included.
+	// its own path under the one root, `../`, a page at the root and one in a
+	// dot folder included.
 	it.each([
 		["index.html", "https://app.example/api/raw/cap/index.html"],
+		[
+			"docs/.vitepress/dist/index.html",
+			"https://app.example/api/raw/cap/docs/.vitepress/dist/index.html",
+		],
 		[
 			"docs/site/a b.html",
 			"https://app.example/api/raw/cap/docs/site/a%20b.html",
@@ -79,7 +84,7 @@ describe("pageRawTarget", () => {
 		const target = pageRawTarget({ kind: "file", path });
 
 		expect(target).toEqual({ origin: { kind: "file" }, scope: "root" });
-		expect(pageRawUrl(target, capability, path)).toBe(url);
+		expect(pageRawUrl(capability, path)).toBe(url);
 	});
 
 	it("roots a commit's page in the commit", () => {
@@ -90,19 +95,5 @@ describe("pageRawTarget", () => {
 				path: "site/index.html",
 			}),
 		).toEqual({ origin: { kind: "commit", hash: "abc1234" }, scope: "root" });
-	});
-
-	// The root scope withholds any dot-prefixed component.
-	it.each([
-		"docs/.vitepress/dist/index.html",
-		".hidden.html",
-	])("shows %s on its own", (path) => {
-		const origin = { kind: "file", path } as const;
-		const target = pageRawTarget(origin);
-
-		expect(target).toEqual({ origin, scope: "file" });
-		expect(pageRawUrl(target, "/api/raw/cap/x.html", path)).toBe(
-			"/api/raw/cap/x.html",
-		);
 	});
 });

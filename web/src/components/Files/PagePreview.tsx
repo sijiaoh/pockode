@@ -1,13 +1,10 @@
 import { Maximize2 } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import { useInView } from "../../hooks/useInView";
-import { isHiddenPage } from "../../lib/rpc/raw";
 import type { TreeOrigin } from "../../types/contents";
 import { formatMediaCaption } from "../../utils/fileView";
-import { hasRelativeReferences } from "../../utils/pageReferences";
 import { MediaViewer } from "../Media";
 import { MediaFailureCard } from "../Media/MediaFailureCard";
-import PageNotice from "../Media/PageNotice";
 import { PageReloadButton } from "../Media/PageReloadButton";
 import { usePageFrame } from "../Media/usePageFrame";
 import { headerButtonClass, Spinner } from "../ui";
@@ -18,11 +15,6 @@ interface Props {
 	fileName: string;
 	mime: string;
 	size: number;
-	/**
-	 * The page's text, to tell whether it links to anything; null when it is
-	 * too large to have been sent.
-	 */
-	content: string | null;
 	/** See `usePageFrame`. */
 	revision?: unknown;
 }
@@ -42,14 +34,7 @@ interface Props {
  * to their place in it (docs/media-viewer.md#files-and-git-pagepreview).
  * Never render it inside a sheet — the viewer is one, and sheets do not nest.
  */
-function PagePreview({
-	origin,
-	fileName,
-	mime,
-	size,
-	content,
-	revision,
-}: Props) {
+function PagePreview({ origin, fileName, mime, size, revision }: Props) {
 	const { ref, inView } = useInView<HTMLDivElement>();
 	const [viewing, setViewing] = useState(false);
 	// The revision this frame keeps to while the viewer is up, and until the
@@ -63,14 +48,6 @@ function PagePreview({
 		held ? held.revision : revision,
 	);
 	const { frameProps } = page;
-	// A page that links to nothing loses nothing by being shown on its own, so
-	// it is not nagged; one too large to read is assumed to.
-	const notice = useMemo(
-		() =>
-			isHiddenPage(origin.path) &&
-			(content === null || hasRelativeReferences(content)),
-		[origin.path, content],
-	);
 
 	return (
 		<div className="flex min-h-0 flex-1 flex-col">
@@ -96,7 +73,6 @@ function PagePreview({
 					</button>
 				)}
 			</div>
-			{notice && <PageNotice />}
 			{frameProps && !page.failure && (
 				<PageHostsStrip key={page.stripKey} {...page.strip} />
 			)}
@@ -135,7 +111,6 @@ function PagePreview({
 						size,
 						origin,
 						revision,
-						notice,
 					}}
 					onClose={() => setViewing(false)}
 					afterClose={() => setHeld(null)}

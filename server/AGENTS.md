@@ -101,7 +101,7 @@ Windows 与 darwin/linux 一样是发布目标（产物见 [docs/platforms.md](.
 | `cluster/node/process.go` | `process_{unix,windows}.go` — 与终端脱钩（`Setsid` / `CREATE_NO_WINDOW`）、优雅关闭与强杀的等待方式 |
 | `internal/shutdown/shutdown.go` | `request_{unix,windows}.go` — SIGTERM / 命名事件 |
 | `filetransfer/folder.go` | `folder_{unix,windows}.go` — 文件夹上传 merge 覆盖文件、文件夹下载读取文件时以非阻塞方式打开（防止换成 fifo 后卡死；Windows 工作目录里没有 fifo）、识别文件系统自己拒绝的名字（unix 的 `ENAMETOOLONG` / `EINVAL` / `EILSEQ`，Windows 的 `ERROR_INVALID_NAME` / `ERROR_FILENAME_EXCED_RANGE`）|
-| `contents/within.go`、`filetransfer/raw.go` | `contents/realname_{unix,windows}.go`（`contents.ResolvedName`）— `contents.OpenDirWithin` 要求跟随链接后的真实路径仍在工作目录内（`file.move` 的两个目录、文件夹上传的目标目录与文件夹下载的文件夹）；根 capability（`scope: "root"`）拒绝 dotfile、数据目录和其他 worktree 时也看它：unix 上 `EvalSymlinks` 跟完所有链接再核对与打开的是同一个文件；Windows 取句柄的最终长名，8.3 短名（`ENV~1`）是 `.env` 的另一种写法 |
+| `contents/within.go`、`filetransfer/raw.go` | `contents/realname_{unix,windows}.go`（`contents.ResolvedName`）— `contents.OpenDirWithin` 要求跟随链接后的真实路径仍在工作目录内（`file.move` 的两个目录、文件夹上传的目标目录与文件夹下载的文件夹）；根 capability（`scope: "root"`）拒绝敏感名单（任意层级的 `.git`、`.env`、`.env.*`，所有平台都不区分大小写）、数据目录和其他 worktree 时也看它：unix 上 `EvalSymlinks` 跟完所有链接再核对与打开的是同一个文件；Windows 取句柄的最终长名，8.3 短名（`ENV~1`）是 `.env` 的另一种写法 |
 
 **路径处理统一走 `internal/pathutil`**，不要在各包里重新实现一遍：
 

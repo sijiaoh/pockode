@@ -12,7 +12,6 @@ import {
 	formatMediaCaption,
 } from "../../utils/fileView";
 import { FileStateCard, headerButtonClass, Sheet, Spinner } from "../ui";
-import PageNotice from "./PageNotice";
 import { loadedStage, loadStage } from "./stages";
 import type {
 	MediaItem,
@@ -257,7 +256,6 @@ export function MediaViewer({
 						)}
 					</div>
 				</div>
-				{item.kind === "html" && item.notice && <PageNotice />}
 				{saveError && (
 					<div
 						role="alert"

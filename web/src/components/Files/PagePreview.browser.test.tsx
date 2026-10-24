@@ -58,7 +58,6 @@ function renderPage() {
 					fileName="page.htm"
 					mime="text/html; charset=utf-8"
 					size={1024}
-					content="<p>page</p>"
 				/>
 			</div>
 		</QueryClientProvider>,

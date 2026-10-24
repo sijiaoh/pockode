@@ -56,8 +56,6 @@ export interface HtmlMediaItem {
 	origin: TreeOrigin;
 	/** See `usePageFrame`: a change loads the page again, as in place. */
 	revision?: unknown;
-	/** Set when the opener shows `PageNotice`, for the viewer to show it too. */
-	notice?: boolean;
 }
 
 /** A position passed between two players of the same file. Mutable. */

@@ -11,10 +11,11 @@ import (
 // ResolvedName is the path beneath root that f, opened there as name, has in
 // the file system: name with every link on the way followed, since os.Root
 // follows a link that stays within it, and "page.css -> .env" or a link into
-// another worktree is the dotfile or the other worktree all the same. A case-
-// or normalization-insensitive file system may spell a name another way, but
-// never with a leading dot added or dropped, so the name is not canonicalized
-// beyond that.
+// another worktree is the .env or the other worktree all the same. A case- or
+// normalization-insensitive file system may spell a name another way, and the
+// name is not canonicalized: a caller matching it against names compares
+// without regard to case (normalization leaves an ASCII name such as .git
+// alone).
 //
 // The resolving is by path, after the open; the file found there has to be the
 // one opened, so a link swapped in between is refused rather than believed.
