@@ -17,7 +17,7 @@ narrow-width rule every fixed row below obeys — are in
 
 ## Layout
 
-`DiffTab`'s root is a flex column with `overflow-hidden`, and `PullToRefresh` inside it is `flex-1` with its own scroll. That gives three bands: a fixed header, the scroll area, and a fixed footer, with the bars as siblings of `PullToRefresh` rather than content inside it.
+`DiffTab`'s root is a flex column with `overflow-hidden`, and the scroll area inside it is a plain `min-h-0 flex-1 overflow-y-auto` box. That gives three bands: a fixed header, the scroll area, and a fixed footer, with the bars as siblings of the scroll area rather than content inside it.
 
 ```
 ┌──────────────────────────────────┐
@@ -48,8 +48,6 @@ Both bars sit outside the scroll area, so branch identity and the commit action 
 **The headers are 36px, not the 32px the ladder names.** The container is `min-h-[32px]`, but a group with actions contains 36px L5 buttons and flex grows the row to fit them. Only `HISTORY`, which has no actions, is 32px. Shrinking the row would mean shrinking the touch targets, and the touch target is the one of the two that a thumb can miss. On a coarse pointer the container is `min-h-11` and the whole header goes to 44 — grown behind the pointer gate, so the rung is untouched for a mouse ([responsive-ui.md](responsive-ui.md#hit-areas-and-spacing)).
 
 Each group header is `sticky top-0` inside its own `flex flex-col` box, so it pins only over the list it labels and gives way as the next group arrives. That is the need the deleted collapse toggle was actually serving — collapsing `Changes` was how you scrolled past a long list to reach History.
-
-> **Not yet verified on a device.** The scroll area is `PullToRefreshify`, which transforms its content during the pull gesture. `sticky` is expected to hold, since it resolves against the scrollport rather than the transformed box, and the gesture only starts at `scrollTop === 0` where the header is at its natural position anyway. That reasoning is from the library's source and the CSS spec, not from a rendered page — the sandbox has no browser and jsdom does no layout. **Confirm it on a real device.** If it does not hold, the fallback is removing `sticky top-0 z-10 bg-th-bg-secondary` from the one row of classes in `Git/GroupHeader.tsx`; nothing else in this section depends on it.
 
 `Unstaged` is renamed **`Changes`**, matching VS Code's source-control naming — with the parent header gone there is nothing left for it to be confused with. The group actions are icon-only (`Plus` / `Minus`, the same icons the per-row stage buttons use) rather than the previous `Stage All` / `Unstage All` text, so their labels moved into `aria-label`: `Stage all files` / `Unstage all files`, derived from `staged`, and a constant `Discard all changes`. The discard label used to be built from the group title, which the rename would have turned into `Discard all changes changes`.
 

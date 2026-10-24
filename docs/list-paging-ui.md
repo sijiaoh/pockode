@@ -164,10 +164,6 @@ also the only way on in the two states where the observer is not going to fire
 again by itself: after a failure, and after a page that did not fill a tall
 viewport.
 
-Pull-to-refresh stays where it is, at the top. It and the sentinel are at
-opposite ends of the same scroll container and cannot be reached in the same
-gesture.
-
 ### 3.2 Live updates, once the list is longer than a page
 
 The subscription keeps pushing. The rules:
@@ -206,9 +202,9 @@ touched more recently is not a list in no order — it is two visible dates, and
 the user can see which of them the list was sorted on.
 
 The order is recomputed, and the list collapses back to one page, on exactly
-these: opening the sidebar, pull-to-refresh, switching worktree, flipping the
-task-session filter, and reconnecting. All five are things the user did, and all
-five already reset this list today.
+these: opening the sidebar, clicking the Sessions tab, switching worktree,
+flipping the task-session filter, and reconnecting. All five are things the user
+did, and all five already reset this list today.
 
 **The open session may be outside the loaded range, and nothing is invented to
 fix that.** Reading a session does not touch its `updated_at` — neither

@@ -1081,8 +1081,7 @@ worse.
 Results are cached by react-query under the `file-search` key, registered in
 `WORKTREE_DEPENDENT_QUERY_KEYS` so a worktree switch discards them — see
 [code/frontend-state.md](code/frontend-state.md#server-cache-vs-store).
-Refreshing the files tab re-runs the current search instead of clearing it; only
-the tree carries pull-to-refresh, since the gesture would fight with typing.
+Refreshing the files tab re-runs the current search instead of clearing it.
 
 Known limits: results do not follow FS watch notifications, because rescanning
 the repository on every file change is expensive and would reshuffle the list
@@ -1755,7 +1754,7 @@ the file or toggles the folder; both were checked in Firefox 157 and Chromium
 draggable element. The row is `draggable` only where `FilesTab` passes
 `onEntryDragStart`, which it does only with a fine primary pointer
 (`useHasFinePointer`), the same gate as the step reorder handle: on a phone a
-long press is a scroll, a menu or pull-to-refresh, and stays one. A row whose
+long press is a scroll or a menu, and stays one. A row whose
 move is still in flight is not draggable, nor is anything inside it, and it
 and its subtree stay at half opacity from `dragstart` until the move is
 answered; the dimming is applied a task after `dragstart`, because a commit
@@ -2124,9 +2123,7 @@ Two affordances exist because a drag cannot click or scroll. **Hovering a folder
 for 700 ms opens it** — otherwise a collapsed folder could never receive a drop
 — and it never closes again, since a folder snapping shut under the cursor would
 move every row below it. **Resting near the top or bottom edge scrolls the
-tree**; the scroller is the element `PullToRefreshify` renders, not the window,
-and since it forwards no ref the tab reaches it as the single child of the
-wrapper around `PullToRefresh`.
+tree**; the scroller is the tree's own box (`treeScrollerRef`), not the window.
 
 **Three states refuse a drop outright**, saying so on the bar rather than aiming
 it somewhere:

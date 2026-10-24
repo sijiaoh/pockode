@@ -1050,7 +1050,7 @@ be in is not what holds the page still, and reaching for it there leaves the
 scrollable ancestor in place for the next list to find. Where it does earn its
 keep is a chain that legitimately reaches the page: the
 `overscroll-behavior-y: contain` both stylesheets put on `html, body`, which
-stops pull-to-refresh from reloading the app mid-scroll. That is a browser
+stops the browser's own pull-to-refresh from reloading the app mid-scroll. That is a browser
 gesture, not a layout mistake. (`MessageList` carries `overscroll-y-contain`
 too. It predates the clip and is harmless, but it is not what holds the
 boundary, and copying it onto the next list would not hold one either.) So when

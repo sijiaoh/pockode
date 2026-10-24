@@ -217,10 +217,12 @@ never truncates.
 ### Refreshing, and why it is never automatic
 
 These lists are one-shot reads, so they are re-read only when the user does
-something that asks for it: opening the sidebar, pulling to refresh, changing the
-filter, deleting a row. Installing a round replaces the list and restarts paging,
-so a background refetch would silently cost a reader every earlier page they had
-pulled in and the position they were at.
+something that asks for it: opening the sidebar, clicking the Sessions tab
+(the open one included), changing the filter, deleting a row. Switching worktree
+is not among them: it rebinds the current worktree's live list, which these are
+not. Installing a round replaces the list and restarts paging, so a background
+refetch would silently cost a reader every earlier page they had pulled in and
+the position they were at.
 
 A refresh **invalidates rather than resets**: the rows stay on screen and every
 round the reader had pulled in is asked again. There is no store holding these
