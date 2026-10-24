@@ -408,6 +408,15 @@ stylesheets and scripts, while what is truly sensitive fits in a few names.
   `site/.env.production`, and a `.env` directory too: the most common place an
   app keeps its secrets, and a page usually sits beside the `.env` of the app
   it belongs to.
+- **`.envrc` and `.envrc.*`, at any depth** — direnv's `.envrc` is a shell
+  script that exports secrets as often as a `.env` holds them, and
+  `.envrc.local` is the usual name for the personal half it sources. The
+  variants are matched by prefix as `.env`'s are, so `.envrc.example` is
+  withheld along with `.envrc.local`: telling a harmless suffix from a secret
+  one would take a list of suffixes that is never complete, and a user who
+  means to read the example opens it with a file scope of its own. Only the
+  name itself and names beginning `.envrc.` match; `.environment.json` is an
+  ordinary file.
 - **Pockode's data directory, wherever `--data` puts it** — `.pockode` by
   default, or `--data ./pockode-data` under a plain name: every session,
   `server.json` with the local API token, and the attachments. Its tokens take
@@ -418,7 +427,7 @@ stylesheets and scripts, while what is truly sensitive fits in a few names.
   list of worktrees is cached for up to three seconds, so one just added is
   readable for at most that long.
 
-The two names are matched on every component of the path, case-insensitively
+The names are matched on every component of the path, case-insensitively
 on every platform (`sensitiveName`, `server/filetransfer/raw.go`): on a
 case-insensitive file system — macOS by default — `.GIT/config` opens
 `.git/config`, and the name resolved for it keeps the spelling it was asked by.

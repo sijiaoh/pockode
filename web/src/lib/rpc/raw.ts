@@ -15,7 +15,8 @@ export type TreeRoot = { kind: "file" } | { kind: "commit"; hash: string };
  * attachment store is flat, so an attachment is always a file. Since a page's
  * scripts can read the capability out of its own URL, the server's root scope
  * withholds what a page has no use for and would cost dearly to leak: `.git`,
- * `.env` and `.env.*`, other worktrees and Pockode's own data.
+ * `.env`, `.envrc` and their `.*` variants, other worktrees and Pockode's own
+ * data.
  */
 export type RawTarget = (
 	| { origin: ContentOrigin; scope: "file" }

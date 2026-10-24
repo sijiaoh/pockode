@@ -929,7 +929,7 @@ content at a path never changes.
 |--------|------|------|
 | `400` | `invalid_path` | An empty or absolute path, or one that `..` leads out of, encoded or not — the root scope's own trailing-`/` path included (a folder scope's is its archive) |
 | `400` | `not_a_file` | A directory, a fifo, a device node, or a directory or submodule in the commit |
-| `403` | `outside_scope` | A name other than the file's for a file scope, and any path at all beneath a folder scope. For a root scope, a path with a component named `.git`, `.env` or `.env.*`, at any depth and in any case — and, for a work-directory file, one whose resolved name has one (through a symlink, or on Windows a short name) or lies inside Pockode's data directory or another registered worktree, or whose name cannot be resolved. Any other dot path is served as any file is. For a work-directory file, a path that leaves the work directory through a symlink, or any other failure to open it — a permission, a link loop. `os.Root` reports a link out of it with an error that cannot be told apart from those, so all of them are answered as out of reach, with the reason in the message |
+| `403` | `outside_scope` | A name other than the file's for a file scope, and any path at all beneath a folder scope. For a root scope, a path with a component named `.git`, `.env`, `.env.*`, `.envrc` or `.envrc.*`, at any depth and in any case — and, for a work-directory file, one whose resolved name has one (through a symlink, or on Windows a short name) or lies inside Pockode's data directory or another registered worktree, or whose name cannot be resolved. Any other dot path is served as any file is. For a work-directory file, a path that leaves the work directory through a symlink, or any other failure to open it — a permission, a link loop. `os.Root` reports a link out of it with an error that cannot be told apart from those, so all of them are answered as out of reach, with the reason in the message |
 | `404` | `capability_not_found` | The capability was never issued, has expired, or its session has ended; ask `raw.capability` again |
 | `404` | `not_found` | No such file, commit path or attachment, or a commit that no longer exists. A hash git would refuse never gets this far: `raw.capability` resolved it when it issued the capability |
 | `404` | `worktree_not_found` / `session_not_found` | As for the endpoints above |
@@ -1370,16 +1370,16 @@ over `Media/usePageFrame.ts`). Diffs and chat attachments still show text.
   scripts and images, its `../` links and a script's `fetch("data.json")` load
   what they would on disk (`pageRawTarget`, `pageRawUrl`). The page was written
   by the agent working in the project, which can already read all of it, so it
-  is not held to its own folder; what the server withholds — `.git`, `.env`
-  and `.env.*`, other worktrees, Pockode's data — and why only those, is in
-  the link above. Any other dot path is an ordinary file, so a build output
-  under `docs/.vitepress/dist` or `.output/public` loads its own stylesheets,
-  scripts and images, with nothing said above it. Whatever the root scope
-  refuses (`403 outside_scope`: a page reached through a link out of the
-  project or to something withheld, one in another worktree or in Pockode's
-  data folder, and a page that is itself withheld — under `.git`, or named
-  `.env.html`) is shown as a failure that says so, with no fallback: the page
-  is to be opened from where it really is.
+  is not held to its own folder; what the server withholds — `.git`, `.env`,
+  `.envrc` and their `.*` variants, other worktrees, Pockode's data — and why
+  only those, is in the link above. Any other dot path is an ordinary file,
+  so a build output under `docs/.vitepress/dist` or `.output/public` loads
+  its own stylesheets, scripts and images, with nothing said above it.
+  Whatever the root scope refuses (`403 outside_scope`: a page reached
+  through a link out of the project or to something withheld, one in another
+  worktree or in Pockode's data folder, and a page that is itself withheld —
+  under `.git`, or named `.env.html`) is shown as a failure that says so,
+  with no fallback: the page is to be opened from where it really is.
 - **Loading.** The capability is asked for once the frame is in view and the
   WebSocket is up, as for video, with a spinner until then. The frame shows as soon as it has a
   URL, not on `load` — a page waiting on one slow asset may be readable

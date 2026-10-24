@@ -255,7 +255,7 @@ var toolDefinitions = []toolDefinition{
 		Name: "html_render",
 		Description: "Show the user something richer than Markdown can carry — a comparison, a chart, a structured report — as an HTML page. " +
 			"The HTML is rendered as written in a sandboxed iframe in the chat. Scripts run, but every request to another host (a CDN script, a font, an image, an API) is blocked until the user allows that host, so prefer a self-contained page or project files. " +
-			"The page can reference project files — images, video, audio, stylesheets, scripts, data, fetch() — and they load without asking: a relative path resolves against the worktree root, and an absolute path under the work directory works too in an attribute or CSS url(), though not inside a script; .git, .env and .env.*, Pockode's data directory and other worktrees are never served. " +
+			"The page can reference project files — images, video, audio, stylesheets, scripts, data, fetch() — and they load without asking: a relative path resolves against the worktree root, and an absolute path under the work directory works too in an attribute or CSS url(), though not inside a script; .git, .env, .env.*, .envrc and .envrc.*, Pockode's data directory and other worktrees are never served. " +
 			"The user already sees the rendered result, so do not repeat or summarize its content in your reply.",
 		InputSchema: inputSchema{
 			Type: "object",

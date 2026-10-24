@@ -70,12 +70,12 @@ const (
 	// read without asking anyone, and the page may be a third party's (a
 	// cloned repository, node_modules, an upload), so the list is what costs
 	// most once it leaks and that no ordinary page needs — .git (the
-	// repository token with --git), .env and .env.* (sensitiveName), Pockode's
-	// data directory, whose tokens take over the server, and every other
-	// worktree. Everything else is a file like any other, the build output
-	// in docs/.vitepress/dist or .output/public included, which would
-	// otherwise load nothing of its own. A withheld file the user means to see
-	// takes a file scope of its own.
+	// repository token with --git), .env, .envrc and their .* variants
+	// (sensitiveName), Pockode's data directory, whose tokens take over the
+	// server, and every other worktree. Everything else is a file like any
+	// other, the build output in docs/.vitepress/dist or .output/public
+	// included, which would otherwise load nothing of its own. A withheld file
+	// the user means to see takes a file scope of its own.
 	//
 	// For a work-directory file the checks are on the name asked for and on
 	// the name the file system resolves it to (contents.ResolvedName), so
@@ -259,9 +259,22 @@ func hasSensitiveComponent(p string) bool {
 // subdirectory its own .env. Without regard to case on every platform: the
 // resolved name keeps the spelling it was asked by on a case-insensitive file
 // system (macOS by default), so .GIT/config is .git/config there.
+//
+// .envrc is direnv's, a shell script that exports secrets as often as .env
+// holds them. Its variants go with it as .env's do: .envrc.local is the usual
+// name for the personal half it sources, and an .example is withheld along
+// with the rest rather than told apart by a list of harmless suffixes.
 func sensitiveName(name string) bool {
 	name = strings.ToLower(name)
-	return name == ".git" || name == ".env" || strings.HasPrefix(name, ".env.")
+	if name == ".git" {
+		return true
+	}
+	for _, env := range []string{".env", ".envrc"} {
+		if name == env || strings.HasPrefix(name, env+".") {
+			return true
+		}
+	}
+	return false
 }
 
 // RawEntryPath is the URL path a grant issued as capability is opened at: the
