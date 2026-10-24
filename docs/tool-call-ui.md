@@ -2774,8 +2774,9 @@ path instead of carrying their bytes, which the transcript would keep for good
   resolves against the root of the worktree, the base a Markdown image in chat
   resolves against too. The policy names the capability and nothing else of
   the server ([the policy](page-external-hosts-ui.md#the-policy)), and what the
-  root scope withholds — `.git`, `.env` and `.env.*`, other worktrees,
-  Pockode's data — does not load; any other dot path does, as any file would.
+  root scope withholds — `.git`, `.env`, `.envrc` and their `.*` variants,
+  other worktrees, Pockode's data — does not load; any other dot path does,
+  as any file would.
 - **Absolute paths under the work directory** are made relative before the
   page is drawn (`projectRelativeHtml`, `lib/htmlRender.ts`), since an agent
   names the file it saved by its full path as often as not: bare, as a
@@ -3184,7 +3185,7 @@ the virtualizer measures it.
 55. A page that shows a screenshot, a recording and a sound from the project,
     named once by a relative path and once by its absolute path: all load with
     no strip, as does an image under a dot directory
-    (`docs/.vitepress/dist/logo.png`); a `.env`, `.env.local` or
+    (`docs/.vitepress/dist/logo.png`); a `.env`, `.env.local`, `.envrc` or
     `.git/config` it fetches does not. A `#section` link scrolls the page.
     Offline, the page draws without them and the strip names the app's host.
 

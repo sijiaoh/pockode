@@ -545,7 +545,10 @@ func TestRawScope(t *testing.T) {
 		writeFile(t, f.workDir, "vendor/repo/.git/config", []byte("nested"))
 		writeFile(t, f.workDir, "vendor/module/.git", []byte("gitdir: ../../.git/modules/module"))
 		writeFile(t, f.workDir, ".GIT/HEAD", []byte("ref"))
-		for _, rel := range []string{".env", ".env.local", "site/.env", "site/.Env.Production", ".git/config", "vendor/repo/.git/config", "vendor/module/.git", ".GIT/HEAD"} {
+		writeFile(t, f.workDir, ".envrc", []byte("export SECRET=5"))
+		writeFile(t, f.workDir, "sub/.ENVRC", []byte("export SECRET=6"))
+		writeFile(t, f.workDir, ".envrc.local", []byte("export SECRET=7"))
+		for _, rel := range []string{".env", ".env.local", "site/.env", "site/.Env.Production", ".git/config", "vendor/repo/.git/config", "vendor/module/.git", ".GIT/HEAD", ".envrc", "sub/.ENVRC", ".envrc.local"} {
 			assertError(t, f.get(t, RawPath(root, rel), nil), http.StatusForbidden, CodeOutsideScope)
 		}
 		assertError(t, f.get(t, RawPathPrefix+root+"/%2eenv", nil), http.StatusForbidden, CodeOutsideScope)
@@ -587,6 +590,8 @@ func TestRawScope(t *testing.T) {
 		symlinktest.Make(t, ".pockode", filepath.Join(f.workDir, "data"))
 		symlinktest.Make(t, ".git", filepath.Join(f.workDir, "repo"))
 		symlinktest.Make(t, filepath.Join("..", ".env.local"), filepath.Join(f.workDir, "site", "local.css"))
+		writeFile(t, f.workDir, ".envrc", []byte("export SECRET=5"))
+		symlinktest.Make(t, filepath.Join("..", ".envrc"), filepath.Join(f.workDir, "site", "envrc.js"))
 		symlinktest.Make(t, outside, filepath.Join(f.workDir, "abs"))
 		symlinktest.Make(t, filepath.Dir(outside), filepath.Join(f.workDir, "elsewhere"))
 		symlinktest.Make(t, filepath.Join("..", "index.html"), filepath.Join(f.workDir, "site", "alias.html"))
@@ -596,6 +601,7 @@ func TestRawScope(t *testing.T) {
 		assertError(t, f.get(t, RawPath(root, "data/sessions.json"), nil), http.StatusForbidden, CodeOutsideScope)
 		assertError(t, f.get(t, RawPath(root, "repo/config"), nil), http.StatusForbidden, CodeOutsideScope)
 		assertError(t, f.get(t, RawPath(root, "site/local.css"), nil), http.StatusForbidden, CodeOutsideScope)
+		assertError(t, f.get(t, RawPath(root, "site/envrc.js"), nil), http.StatusForbidden, CodeOutsideScope)
 		// Out of the project, directly or through a linked directory.
 		assertError(t, f.get(t, RawPath(root, "abs"), nil), http.StatusForbidden, CodeOutsideScope)
 		assertError(t, f.get(t, RawPath(root, "elsewhere/outside.txt"), nil), http.StatusForbidden, CodeOutsideScope)
