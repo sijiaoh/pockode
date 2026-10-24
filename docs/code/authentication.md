@@ -363,41 +363,70 @@ A third scope, `folder` (`filetransfer.RawScopeFolder`, work-directory origin
 only), is no page at all: it serves one folder — `path`, or the work directory
 for none — as a zip archive at the capability's own path, for the Files tab's
 "Download as zip", which needs a link for the same reason a file's Download
-does. Beneath the folder it reaches nothing a root scope does not: the archive
-leaves out every dot-prefixed name, the data directory and other worktrees,
-and never follows a symlink ([file.md](../file.md#folder-archive)). The folder
-named is archived whatever it is — a dot directory, the data directory, another
-worktree — as a file there named by itself gets a file scope of its own.
+does. Beneath the folder it reaches nothing a root scope does not, and less:
+the archive leaves out every dot-prefixed name, the data directory and other
+worktrees, and never follows a symlink ([file.md](../file.md#folder-archive)).
+The folder named is archived whatever it is — a dot directory, the data
+directory, another worktree — as a file there named by itself gets a file
+scope of its own.
 
 **The root, not the page's folder, because the page is the agent's.** A page
 previewed here was written by the agent working in this project, and that agent
 can already read every file in it. Holding the page to its own directory kept
 nothing from the author that wrote it, and broke every page that reaches
-`../shared/style.css` or a sibling folder's data. So the root scope trusts the
-page as far as the agent is trusted and keeps the conventional limits instead:
-what no web server serves from a tree it publishes, and what is not this
-worktree's at all. The session and worktree binding above and the sandbox
-below hold as before.
+`../shared/style.css` or a sibling folder's data. So the root scope reaches
+the whole project and withholds only a short list. The session and worktree
+binding above and the sandbox below hold as before.
+
+**Why a short list, and not every dot path.** The list does not guard against
+the agent, which reads the whole project anyway. It guards against a page the
+agent did not write: an `.html` file previewed in Files may come from a cloned
+repository, `node_modules`, someone else's commit or an upload, and its
+scripts read what the scope reaches without any approval the agent's own reads
+go through. What they read they can also send out: the
+[external-host rule](../page-external-hosts-ui.md#the-policy) keeps a page off
+other hosts until the reader allows one, but not every way out can be closed
+([known limits](../page-external-hosts-ui.md#known-limits)). So the list is
+what costs most once it leaks and what no ordinary page needs. Withholding
+every dot-prefixed name would cost more than it buys: a build output inside a
+dot directory (`docs/.vitepress/dist`, `.output/public`) could not load its own
+stylesheets and scripts, while what is truly sensitive fits in a few names.
 
 **What the root scope withholds**, each answered `403 outside_scope`:
 
-- **Any path with a dot-prefixed component** — `.env`, `sub/.git/config`,
-  `.pockode/…`, `%2eenv` once decoded, and `sub/./x` too, which no browser
-  sends. A page usually sits beside the `.env` of the app it belongs to, and
-  `.git` or `.pockode` would hand its scripts the repository or Pockode's own
-  data.
-- **Pockode's data directory, wherever `--data` puts it.** By default it is
-  `.pockode` and the dot rule covers it, but `--data ./pockode-data` puts every
-  session, `server.json` with the local API token, and the attachments under a
-  plain name inside the project.
-- **Every other registered worktree inside this one.** A worktrees base
-  directory configured inside the project puts another worktree's files under a
-  plain name; a worktree's capability reads its own files only. The list of
-  worktrees is cached for up to three seconds, so one just added is readable
-  for at most that long.
+- **`.git`, at any depth** — `.git/config`, `vendor/repo/.git/…`, a submodule's
+  `.git` file. Under `--git` it holds the repository token
+  (`.git-credentials`, [below](#credentials-on-disk)), and
+  a page has no use for the repository's internals. Any depth, because a
+  nested repository, a clone under `vendor` and a submodule each have one.
+- **`.env` and `.env.*`, at any depth** — `.env`, `.env.local`,
+  `site/.env.production`, and a `.env` directory too: the most common place an
+  app keeps its secrets, and a page usually sits beside the `.env` of the app
+  it belongs to.
+- **Pockode's data directory, wherever `--data` puts it** — `.pockode` by
+  default, or `--data ./pockode-data` under a plain name: every session,
+  `server.json` with the local API token, and the attachments. Its tokens take
+  over the server.
+- **Every other registered worktree inside this one.** A worktree's capability
+  reads its own files only, whether the worktrees base directory is the
+  default inside the data directory or a plain name inside the project. The
+  list of worktrees is cached for up to three seconds, so one just added is
+  readable for at most that long.
 
-The last two are directories on disk, so they hold for a work-directory file;
-a commit's root scope is held to the first.
+The two names are matched on every component of the path, case-insensitively
+on every platform (`sensitiveName`, `server/filetransfer/raw.go`): on a
+case-insensitive file system — macOS by default — `.GIT/config` opens
+`.git/config`, and the name resolved for it keeps the spelling it was asked by.
+They are checked on the path asked for, for both origins, `%2eenv` once
+decoded included. The data directory and the worktrees are directories on
+disk, so they are held for a work-directory file only.
+
+**Accepted risk.** A dot file outside the list is a file like any other: a
+page can read `.npmrc`, `.github/`, `.well-known/`. A common secret-bearing
+name found later is added to the list. A commit's root scope has no identity
+check for the data directory, since a commit holds no live directory; a
+commit that does contain the data directory's files — which its own
+`.gitignore` keeps out by default — is readable by its pages.
 
 For a work-directory file each rule is asked again of the name the file system
 resolved the open file to (`contents.ResolvedName`,
@@ -408,24 +437,25 @@ different one. On darwin and linux every link on the way is followed, so
 the resolving is by path after the open, and the file found there has to be the
 one opened, so a link swapped in between is refused rather than believed. On
 Windows the long final path of the open handle is used, which also turns an 8.3
-short name such as `ENV~1` or `GIT~1` back into `.env` or `.git`. A name that
+short name such as `ENV~1` or `GIT~1` back into `.env` or `.git`, and a
+trailing dot or space back into the name it decorates. A name that
 cannot be resolved is refused the same way, with the host path kept in the log,
 since the error body is readable by the page.
 
 The data directory and the worktrees are matched by identity (`os.SameFile` on
 each directory up the resolved path, `inWithheldDir`), not by spelling: a
-case-insensitive file system — macOS by default — opens `Worktrees/other` as
-`worktrees/other`. Only directories strictly beneath the work directory are
-compared, so the main worktree, which a nested one lies inside, never counts
-against the nested one's pages. A withheld directory that is gone or cannot be
-stat'ed is skipped, logged unless it is simply gone, so that one stale worktree
-does not refuse every page.
+case-insensitive file system opens `Worktrees/other` as `worktrees/other`, and
+`--data` may give the data directory any name. For the default `.pockode` this
+is the only check, since no name rule covers it. Only directories strictly
+beneath the work directory are compared, so the main worktree, which a nested
+one lies inside, never counts against the nested one's pages. A withheld
+directory that is gone or cannot be stat'ed is skipped, logged unless it is
+simply gone, so that one stale worktree does not refuse every page.
 
-A dotfile the user opens on purpose still gets a file scope of its own, and a
-page whose own path has a dot component gets only that. The price is that such
-a page's relative assets do not load — a build output inside a dot directory
-(`docs/.vitepress/dist`, `.output/public`) is one. That is accepted; the app
-says so above the page ([file.md](../file.md#html-pages)).
+A withheld file the user opens on purpose still gets a file scope of its own.
+A page that is itself withheld — an `.html` file under `.git`, or one named
+`.env.html` — gets no fallback: the root scope refuses it and the app shows
+the failure ([file.md](../file.md#html-pages)).
 
 **Symlinks cannot widen a scope.** This is stricter than the rest of the file
 surface, which [does not resolve symlinks](#accepted-limitations). The

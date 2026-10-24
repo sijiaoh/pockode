@@ -60,12 +60,12 @@ Agent page (card)                          Workspace page (Files)
 ┌────────────────────────────────────┐      ┌────────────────────────────────────┐
 │ ▢ Q3 Latency Report         </> ⤢  │      │ HTML · 18.2 KB               ↻  ⤢  │ page bar
 ├────────────────────────────────────┤      ├────────────────────────────────────┤
-│ ⊘ Not loaded · cdn.jsdelivr.net,   │      │ ⚠ Files this page links to won't…  │ PageNotice, when there is one
-│   fonts.googleapis.com      [Load] │      ├────────────────────────────────────┤
-├────────────────────────────────────┤      │ ⊘ Not loaded · cdn.jsdelivr.net    │
-│                                    │      │                            [Load] │ this strip
-│   the page, without its chart      │      ├────────────────────────────────────┤
-│                                    │      │   the page                         │
+│ ⊘ Not loaded · cdn.jsdelivr.net,   │      │ ⊘ Not loaded · cdn.jsdelivr.net    │
+│   fonts.googleapis.com      [Load] │      │                            [Load] │ this strip
+├────────────────────────────────────┤      ├────────────────────────────────────┤
+│                                    │      │                                    │
+│   the page, without its chart      │      │   the page                         │
+│                                    │      │                                    │
 └────────────────────────────────────┘      └────────────────────────────────────┘
 ```
 
@@ -73,8 +73,8 @@ Agent page (card)                          Workspace page (Files)
 |---|---|
 | `HtmlRenderCard` | Under the header, above the frame, inside the part hidden by `</>` — the strip is about the page, and the source view has nothing to load |
 | `FullScreenViewer` (agent page) | Under the viewer's header, above the frame; hidden while the source is shown |
-| `PagePreview` (Files, commit) | Under the page bar, and under `PageNotice` when both are up: the notice is about where the file lives, which comes first |
-| `HtmlStage` (media viewer) | Under the toolbar, and under the notice when both are up, as in `PagePreview` |
+| `PagePreview` (Files, commit) | Under the page bar, above the frame |
+| `HtmlStage` (media viewer) | Under the toolbar, above the frame, as in `PagePreview` |
 
 **Look.** It is an offer, not a warning, as the Markdown placeholder is: muted,
 never the warning or error colour, so it does not read as "this page is
@@ -197,7 +197,7 @@ drawn outside the frame. Nothing the page draws can allow anything, however
 much it looks like this strip.
 
 **No dismiss.** The strip states what the page is missing in a line or two,
-and like `PageNotice` it stays while that is true: hiding it would leave a
+and it stays while that is true: hiding it would leave a
 page that looks broken for no stated reason. A page that keeps retrying a host
 the reader will not load keeps its strip; that is the page's doing, and the
 strip is its whole cost.

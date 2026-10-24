@@ -372,12 +372,8 @@ Download, since Save is in the toolbar.
   page bar's): it spins until the load the app started has finished and stays
   pressable, and on a failure card it is Retry.
 - **Caption.** `HTML · 18.2 KB`; a page reports nothing to add.
-- **The notice.** A page whose linked files won't load — one with a hidden
-  name in its path, shown on its own ([file.md](file.md#html-pages)) — carries
-  the opener's notice in the item (`notice`), and the viewer shows the same
-  strip under its toolbar.
 - **Hosts not loaded.** The strip sits at the top of the stage, under the
-  toolbar and the notice, as in place
+  toolbar, as in place
   ([page-external-hosts-ui.md](page-external-hosts-ui.md)). It is no overlay,
   so it works inside the viewer's sheet. A Load here reloads the viewer's page
   only; the page in place underneath offers *Reload* when the viewer closes.
@@ -606,5 +602,4 @@ phone.
   has a URL and never on a failure card, the viewer loading through the same
   capability with the in-place frame left mounted and no Open in Files, Save
   from the stage's own URL, and a rewrite reloading the viewer's page at once
-  and the in-place one only once the viewer has closed, and the notice shown
-  in the viewer as text only.
+  and the in-place one only once the viewer has closed.
