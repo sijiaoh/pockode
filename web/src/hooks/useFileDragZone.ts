@@ -5,6 +5,7 @@ import {
 	useRef,
 	useState,
 } from "react";
+import { ENTRY_DRAG_TYPE } from "../lib/entryDrag";
 
 /**
  * How long a drag that left for nowhere may go without a `dragover` before it
@@ -27,8 +28,11 @@ export interface DroppedFiles {
 export function carriesFiles(dataTransfer: DataTransfer | null): boolean {
 	if (!dataTransfer) return false;
 	// What a drag carries is only readable as `types` until it is dropped;
-	// `items` has no contents during `dragover`.
-	return Array.from(dataTransfer.types).includes("Files");
+	// `items` has no contents during `dragover`. A tree row's drag is never an
+	// upload, whatever else a browser lists beside it for the file it saves
+	// when let go outside (`writeEntryDrag`).
+	const types = Array.from(dataTransfer.types);
+	return types.includes("Files") && !types.includes(ENTRY_DRAG_TYPE);
 }
 
 /**

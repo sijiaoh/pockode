@@ -27,6 +27,13 @@ vi.mock("../../lib/wsStore", () => ({
 
 vi.mock("../../hooks/useFSWatch", () => ({ useFSWatch: () => {} }));
 
+const prepareDragDownload = vi.fn();
+const heldDragDownloadUrl = vi.fn((..._args: unknown[]): string | null => null);
+vi.mock("../../hooks/useRawMediaSource", () => ({
+	prepareDragDownload: (...args: unknown[]) => prepareDragDownload(...args),
+	heldDragDownloadUrl: (...args: unknown[]) => heldDragDownloadUrl(...args),
+}));
+
 const onDrop = vi.fn();
 const onEntryDragStart = vi.fn();
 let scrollContainer: HTMLElement | null = null;
@@ -324,6 +331,8 @@ describe("FileTree row actions", () => {
 
 describe("FileTree as a drag source", () => {
 	beforeEach(() => {
+		prepareDragDownload.mockReset();
+		heldDragDownloadUrl.mockReset();
 		onDrop.mockReset();
 		onEntryDragStart.mockReset();
 		getFile.mockReset();
@@ -369,6 +378,60 @@ describe("FileTree as a drag source", () => {
 		fireDrag(folder, "dragover", 0, dataTransfer);
 		expect(dataTransfer.dropEffect).toBe("move");
 		expect(rowOf(folder)).toHaveClass("bg-th-accent/10");
+		fireDrag(folder, "drop", 0, dataTransfer);
+
+		expect(onDrop).toHaveBeenCalledWith({ kind: "entry", destPath: "src" });
+	});
+
+	// `dragstart` cannot wait for a capability, so the press asks for it.
+	it("saves the entry where it is let go outside, once the press has asked ahead", () => {
+		renderTree({ "": [entry("src", "dir")] });
+		const row = rowOf(
+			screen.getByRole("button", { name: "Expand folder: src" }),
+		);
+		const dataTransfer = entryDrag();
+		heldDragDownloadUrl.mockReturnValueOnce("/api/raw/cap/");
+
+		fireEvent.pointerDown(row, { button: 0 });
+		expect(prepareDragDownload).toHaveBeenCalledWith(
+			expect.anything(),
+			expect.objectContaining({ path: "src", type: "dir" }),
+		);
+		fireDrag(row, "dragstart", 0, dataTransfer);
+
+		expect(dataTransfer.effectAllowed).toBe("copyMove");
+		expect(dataTransfer.data.DownloadURL).toMatch(
+			/^application\/zip:src\.zip:.*\/api\/raw\/cap\/\?download=1$/,
+		);
+	});
+
+	it("asks nothing ahead for a press on the row's menu", () => {
+		renderTree({ "": [entry("readme.md", "file")] });
+
+		fireEvent.pointerDown(
+			screen.getByRole("button", { name: "More actions for readme.md" }),
+			{ button: 0 },
+		);
+
+		expect(prepareDragDownload).not.toHaveBeenCalled();
+	});
+
+	// Whatever a browser lists beside the file a row's drag saves outside.
+	it("moves, not uploads, a row's drag that also lists files", () => {
+		renderTree({ "": [entry("src", "dir"), entry("readme.md", "file")] });
+		const dataTransfer = entryDrag();
+		fireDrag(
+			rowOf(screen.getByRole("button", { name: "Open file: readme.md" })),
+			"dragstart",
+			0,
+			dataTransfer,
+		);
+		dataTransfer.types.push("Files");
+
+		const folder = screen.getByRole("button", { name: "Expand folder: src" });
+		fireDrag(folder, "dragenter", 0, dataTransfer);
+		fireDrag(folder, "dragover", 0, dataTransfer);
+		expect(dataTransfer.dropEffect).toBe("move");
 		fireDrag(folder, "drop", 0, dataTransfer);
 
 		expect(onDrop).toHaveBeenCalledWith({ kind: "entry", destPath: "src" });

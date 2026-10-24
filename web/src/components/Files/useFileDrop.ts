@@ -193,7 +193,6 @@ export function useFileDrop({
 	);
 
 	const zone = useDragZone<Dropped>({
-		// Files first: a drag carrying both is not one this tree started.
 		accepts: useCallback(
 			(dataTransfer: DataTransfer) =>
 				carriesFiles(dataTransfer) ||
