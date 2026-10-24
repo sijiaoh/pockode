@@ -116,34 +116,31 @@ func TestDownloadFolder(t *testing.T) {
 		assertNames(t, entries, base+"/", base+"/a.txt")
 	})
 
-	t.Run("leaves out dot entries, the data directory and other worktrees", func(t *testing.T) {
+	t.Run("archives everything Files shows, secrets and Pockode's own data included", func(t *testing.T) {
 		h, workDir := newTestHandler(t)
 		nested := filepath.Join(workDir, "worktrees", "other")
 		h.resolver = resolver{dirs: map[string]string{"": workDir, "other": nested}}
-		h.dataDir = filepath.Join(workDir, "pockode-data")
+		h.dataDir = filepath.Join(workDir, ".pockode")
 		writeFile(t, workDir, "src/main.go", []byte("package main"))
+		writeFile(t, workDir, ".env", []byte("SECRET=1"))
 		writeFile(t, workDir, ".git/config", []byte("[core]"))
-		writeFile(t, workDir, "vendor/lib/.git", []byte("gitdir: elsewhere"))
-		writeFile(t, workDir, "src/.env", []byte("SECRET=1"))
 		writeFile(t, workDir, ".github/workflows/ci.yml", []byte("on: push"))
-		writeFile(t, workDir, ".github/.hidden", []byte("x"))
-		writeFile(t, workDir, "pockode-data/sessions.json", []byte("{}"))
-		writeFile(t, workDir, "worktrees/notes.txt", []byte("beside"))
+		writeFile(t, workDir, ".pockode/sessions.json", []byte("{}"))
+		writeFile(t, nested, ".git", []byte("gitdir: elsewhere"))
 		writeFile(t, nested, "main.go", []byte("other"))
 		base := filepath.Base(workDir)
 
 		entries := readArchive(t, h, "")
 		assertNames(t, entries,
 			base+"/", base+"/src/", base+"/src/main.go",
-			base+"/vendor/", base+"/vendor/lib/",
-			base+"/worktrees/", base+"/worktrees/notes.txt")
-
-		// Asked for by name, a withheld directory or a dot directory is
-		// downloaded, less the dot entries beneath it.
-		entries = readArchive(t, h, "path=pockode-data")
-		assertNames(t, entries, "pockode-data/", "pockode-data/sessions.json")
-		entries = readArchive(t, h, "path=.github")
-		assertNames(t, entries, ".github/", ".github/workflows/", ".github/workflows/ci.yml")
+			base+"/.env",
+			base+"/.git/", base+"/.git/config",
+			base+"/.github/", base+"/.github/workflows/", base+"/.github/workflows/ci.yml",
+			base+"/.pockode/", base+"/.pockode/sessions.json",
+			base+"/worktrees/", base+"/worktrees/other/", base+"/worktrees/other/.git", base+"/worktrees/other/main.go")
+		if got := entries[base+"/.env"].content; got != "SECRET=1" {
+			t.Errorf("got .env %q, want %q", got, "SECRET=1")
+		}
 	})
 
 	t.Run("downloads a worktree's folder", func(t *testing.T) {

@@ -100,10 +100,10 @@ export interface RawActions {
 	rawCapability: (target: RawTarget) => Promise<RawCapability>;
 	/**
 	 * A URL the browser saves the folder at `path` from as one zip archive —
-	 * `path` empty for the work directory itself — with what a root capability
-	 * withholds left out beneath it. Read from the connection's worktree, as a
-	 * file is. Asked for once per download rather than held like a player's:
-	 * nothing plays from it.
+	 * `path` empty for the work directory itself — holding everything beneath
+	 * it, what a root capability withholds included. Read from the connection's
+	 * worktree, as a file is. Asked for once per download rather than held like
+	 * a player's: nothing plays from it.
 	 */
 	rawFolderCapability: (path: string) => Promise<RawCapability>;
 }

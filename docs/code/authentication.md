@@ -363,12 +363,17 @@ A third scope, `folder` (`filetransfer.RawScopeFolder`, work-directory origin
 only), is no page at all: it serves one folder — `path`, or the work directory
 for none — as a zip archive at the capability's own path, for the Files tab's
 "Download as zip", which needs a link for the same reason a file's Download
-does. Beneath the folder it reaches nothing a root scope does not, and less:
-the archive leaves out every dot-prefixed name, the data directory and other
-worktrees, and never follows a symlink ([file.md](../file.md#folder-archive)).
-The folder named is archived whatever it is — a dot directory, the data
-directory, another worktree — as a file there named by itself gets a file
-scope of its own.
+does. Unlike a root scope it withholds nothing: the archive is what the Files
+tab shows beneath the folder, dot names, the data directory and nested
+worktrees included, and only a symlink is held back from being followed
+([file.md](../file.md#folder-archive)). The reasons a root scope withholds
+names are about a page — scripts that may not be the agent's, reading what
+the scope reaches and able to send it out — and none applies to a download
+the user started, onto their own device, of files they can already open. What
+they can open they can download; the cost, a project root's archive carrying
+the data directory's live tokens ([Credentials on
+Disk](#credentials-on-disk)), is theirs to mind before passing it on. A folder capability is issued only through the
+signed-in `raw.capability` RPC, so this is never something a page can ask for.
 
 **The root, not the page's folder, because the page is the agent's.** A page
 previewed here was written by the agent working in this project, and that agent

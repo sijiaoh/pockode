@@ -64,9 +64,8 @@ type WorkDirResolver interface {
 
 type Handler struct {
 	resolver WorkDirResolver
-	// dataDir is Pockode's own data directory, which no transfer reaching
-	// more than the one file it names — a root raw capability, a folder
-	// download — takes in, wherever settings put it.
+	// dataDir is Pockode's own data directory, which a root raw capability
+	// withholds from pages wherever settings put it.
 	dataDir string
 	log     *slog.Logger
 	// maxUpload is MaxUploadSize outside tests, which lower it rather than
@@ -248,11 +247,11 @@ func (w withheld) has(info os.FileInfo) bool {
 }
 
 // withheldDirs is Pockode's data directory and the directory of every
-// worktree: what a transfer reaching beyond the one file it names leaves out
-// of a work directory. Matched by identity rather than by any name, since a
-// setting can put any of them inside the project under a name of its choosing
-// (--data, the worktrees' base directory); for a root raw capability this is
-// what withholds even the default .pockode, which its name rule leaves alone.
+// worktree: what a root raw capability withholds from pages beneath a work
+// directory. Matched by identity rather than by any name, since a setting can
+// put any of them inside the project under a name of its choosing (--data, the
+// worktrees' base directory); this is what withholds even the default
+// .pockode, which the name rule leaves alone.
 // Callers compare only directories beneath the work directory, so a worktree
 // that one lies inside — the main one, for a nested worktree — and its own
 // never match.
@@ -263,9 +262,9 @@ func (h *Handler) withheldDirs() withheld {
 		if err != nil {
 			// What cannot be found or stat'ed is no directory anything is
 			// served from either; one bad worktree must not refuse every
-			// transfer.
+			// page.
 			if !os.IsNotExist(err) {
-				h.log.Warn("cannot stat directory withheld from transfers", "dir", dir, "error", err)
+				h.log.Warn("cannot stat directory withheld from pages", "dir", dir, "error", err)
 			}
 			continue
 		}

@@ -1730,11 +1730,12 @@ type PortPreviewTicketResult struct {
 //     necessarily the connection's — as for session_view.attachment.
 //
 // Scope is "file" for Path alone, or "root" for the whole work directory or
-// commit, Path empty, except anything with a dot-prefixed component: a page is
-// opened at its own path beneath the root, so that its relative URLs load. An
+// commit, Path empty, less what it withholds (filetransfer.RawScopeRoot): a
+// page is opened at its own path beneath the root, so that its relative URLs
+// load. An
 // attachment is always a file. "folder" is a file origin's folder at Path (the
-// work directory for none), served as one zip archive with what a root scope
-// withholds left out.
+// work directory for none), served as one zip archive of everything in it —
+// unlike a root scope, it withholds nothing.
 //
 // For a page, Hosts are the hosts beyond this server it may reach, as the
 // reader allowed them, and BaseURL is what the app puts the capability's path

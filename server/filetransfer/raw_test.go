@@ -900,7 +900,8 @@ func TestRawFolderScope(t *testing.T) {
 		for _, file := range zr.File {
 			got = append(got, file.Name)
 		}
-		if want := []string{"site/", "site/index.html"}; !slices.Equal(got, want) {
+		// What a root scope withholds from pages, the archive holds.
+		if want := []string{"site/", "site/.env", "site/index.html"}; !slices.Equal(got, want) {
 			t.Errorf("%q: archive holds %q, want %q", path, got, want)
 		}
 

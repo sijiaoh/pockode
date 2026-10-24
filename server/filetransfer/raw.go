@@ -89,8 +89,8 @@ const (
 	// work directory itself for an empty Path — as one zip archive, served as
 	// an attachment at the capability's own path (DownloadFolder). It is how
 	// the app saves a folder: a link carries no Authorization header, and the
-	// archive can be more than a phone's tab survives holding. What a root
-	// scope withholds, the archive leaves out.
+	// archive can be more than a phone's tab survives holding. Unlike a root
+	// scope, it withholds nothing: the archive holds what Files shows.
 	RawScopeFolder RawScope = "folder"
 )
 
