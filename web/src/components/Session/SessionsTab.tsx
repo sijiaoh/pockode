@@ -21,7 +21,6 @@ import { describeWorktree } from "../../lib/sessionView";
 import { useWorktreeStore } from "../../lib/worktreeStore";
 import type { WorktreeInfo } from "../../types/message";
 import { useSidebarRefresh } from "../Layout";
-import { PullToRefresh } from "../ui";
 import SessionFilterButton from "./SessionFilterButton";
 import SessionList from "./SessionList";
 import SessionListSkeleton from "./SessionListSkeleton";
@@ -194,7 +193,7 @@ function SessionsTab({
 				<SessionFilterButton disabled={isStale} />
 			</div>
 			{isViewing && <FilterContextLine filter={filter} worktrees={worktrees} />}
-			<PullToRefresh onRefresh={refreshUnlessStale}>
+			<div className="min-h-0 flex-1 overflow-y-auto">
 				{showSkeleton ? (
 					<SessionListSkeleton />
 				) : loadError ? (
@@ -234,7 +233,7 @@ function SessionsTab({
 						/>
 					</div>
 				)}
-			</PullToRefresh>
+			</div>
 		</div>
 	);
 }

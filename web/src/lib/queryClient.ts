@@ -69,7 +69,7 @@ export function createQueryClient(): QueryClient {
 	// Invalidating on the way in refetches only once a reader is enabled, since
 	// readers are gated on isGitRepo and this runs before they re-render.
 	worktreeActions.onGitRepoChange((isGitRepo) => {
-		if (isGitRepo) void invalidateGitQueries(queryClient);
+		if (isGitRepo) invalidateGitQueries(queryClient);
 		else removeGitQueries(queryClient);
 	});
 

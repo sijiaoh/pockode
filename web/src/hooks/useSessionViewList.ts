@@ -39,11 +39,12 @@ export interface SessionViewList {
  * not update itself, and deliberately does not re-fetch in the background
  * either: installing a round replaces the list and would throw away the depth a
  * reader had scrolled to. It is re-read when the user does something that says
- * so: opening the sidebar, pulling to refresh, changing the filter, deleting a
- * row. All of those but the filter go through `invalidateSessionViewQueries`,
- * which asks again for every round the reader had pulled in rather than
- * dropping back to a first page — there is no store holding these rows, so a
- * drop would blank the sidebar every time it opened.
+ * so: opening the sidebar or clicking its tab, retrying a list that failed to
+ * load, changing the filter, deleting a row. All of those but the filter go
+ * through `invalidateSessionViewQueries`, which asks again for every round the
+ * reader had pulled in rather than dropping back to a first page — there is no
+ * store holding these rows, so a drop would blank the sidebar every time it
+ * opened.
  *
  * @param sources The worktrees to read, or null for "the current worktree",
  * which is the live subscribed list and not this hook's business.

@@ -903,21 +903,6 @@ describe("FilesTab drag and drop", () => {
 		expect(lastUpload()).toMatchObject({ name: "logo (1).png" });
 	});
 
-	it("can still find the element the tree scrolls in", () => {
-		const { container } = renderFilesTab();
-
-		// `PullToRefreshify` owns the scroller and forwards no ref to it, so the
-		// tab reaches it as the single child of the wrapper around `PullToRefresh`.
-		// Should a version of it grow a second wrapper, edge auto-scroll would
-		// quietly stop working and nothing else would notice.
-		const scroller = container.querySelector<HTMLElement>(
-			'[style*="overflow-y: auto"]',
-		);
-		expect(scroller).not.toBeNull();
-		expect(scroller?.parentElement?.firstElementChild).toBe(scroller);
-		expect(scroller?.contains(screen.getByText("file tree"))).toBe(true);
-	});
-
 	it("asks about a name a drop would take, in the folder it landed in", async () => {
 		renderFilesTab({ src: [entry("logo.png", "file", "src")] });
 

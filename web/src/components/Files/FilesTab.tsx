@@ -47,7 +47,6 @@ import { useWSStore } from "../../lib/wsStore";
 import type { ContentsResponse, Entry, EntryType } from "../../types/contents";
 import { isAtOrUnder, parentDir } from "../../utils/path";
 import { useSidebarRefresh } from "../Layout";
-import { PullToRefresh } from "../ui";
 import EntryNameDialog from "./EntryNameDialog";
 import FileEntryMenu, { ROOT_ENTRY } from "./FileEntryMenu";
 import FileSearchBar from "./FileSearchBar";
@@ -862,7 +861,7 @@ function FilesTab({
 		}
 	};
 
-	const treeWrapperRef = useRef<HTMLDivElement>(null);
+	const treeScrollerRef = useRef<HTMLDivElement>(null);
 	const drop = useFileDrop({
 		accepts: (kind, destPath) => {
 			if (kind === "files") return dropRefusal === null;
@@ -891,12 +890,7 @@ function FilesTab({
 				destPath,
 			);
 		},
-		// `PullToRefreshify` owns the element that scrolls and does not forward a
-		// ref to it; it is the single child this wrapper renders.
-		getScrollContainer: useCallback(() => {
-			const child = treeWrapperRef.current?.firstElementChild;
-			return child instanceof HTMLElement ? child : null;
-		}, []),
+		getScrollContainer: useCallback(() => treeScrollerRef.current, []),
 	});
 
 	const answerConflict = useCallback(
@@ -1020,25 +1014,23 @@ function FilesTab({
 			{/* Both branches stay mounted so leaving search restores the tree's
 			    expansion state, scroll position and FS watch subscriptions. */}
 			<div
-				ref={treeWrapperRef}
-				className={inSearchMode ? "hidden" : "flex min-h-0 flex-1 flex-col"}
+				ref={treeScrollerRef}
+				className={inSearchMode ? "hidden" : "min-h-0 flex-1 overflow-y-auto"}
 			>
-				<PullToRefresh onRefresh={handleRefresh}>
-					<FileTree
-						onSelectFile={onSelectFile}
-						activeFilePath={activeFilePath}
-						expandSignal={expandSignal}
-						watchEnabled={isActive}
-						onOpenMenu={setMenuTarget}
-						menuPath={menuTarget?.path ?? null}
-						dropTargetPath={acceptsDrop ? drop.destPath : null}
-						springOpenPath={drop.springOpenPath}
-						forceOpenPaths={forceOpenPaths}
-						onEntryDragStart={hasFinePointer ? startEntryDrag : undefined}
-						dragSourcePath={dimSource ? (dragSource?.path ?? null) : null}
-						movingPaths={movingPaths}
-					/>
-				</PullToRefresh>
+				<FileTree
+					onSelectFile={onSelectFile}
+					activeFilePath={activeFilePath}
+					expandSignal={expandSignal}
+					watchEnabled={isActive}
+					onOpenMenu={setMenuTarget}
+					menuPath={menuTarget?.path ?? null}
+					dropTargetPath={acceptsDrop ? drop.destPath : null}
+					springOpenPath={drop.springOpenPath}
+					forceOpenPaths={forceOpenPaths}
+					onEntryDragStart={hasFinePointer ? startEntryDrag : undefined}
+					dragSourcePath={dimSource ? (dragSource?.path ?? null) : null}
+					movingPaths={movingPaths}
+				/>
 			</div>
 
 			<div className={inSearchMode ? "flex min-h-0 flex-1 flex-col" : "hidden"}>
